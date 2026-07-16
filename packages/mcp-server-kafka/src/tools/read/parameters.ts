@@ -60,10 +60,14 @@ export const ListDlqTopicsParams = z.object({
 		.number()
 		.int()
 		.min(100)
-		.max(60_000)
+		// Capped well under the kafka-mcp client's 30s defaultToolTimeout (mcp-bridge.ts
+		// KAFKA_TOOL_TIMEOUT_DEFAULT_MS): the sleep plus the listTopics()/two
+		// sampleDlqOffsets() round trips it wraps must fit inside that budget, or the
+		// call times out (-32001) with no data returned. 60_000 previously exceeded it.
+		.max(15_000)
 		.optional()
 		.describe(
-			"Milliseconds between the two listOffsets samples used to compute recentDelta. Defaults to 30_000 (30s). Lower values run faster but recentDelta becomes noisier.",
+			"Milliseconds between the two listOffsets samples used to compute recentDelta. Defaults to 10_000 (10s). Lower values run faster but recentDelta becomes noisier. Capped at 15_000 to stay within the tool call timeout.",
 		),
 	skipDelta: z
 		.boolean()

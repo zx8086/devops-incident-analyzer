@@ -176,7 +176,9 @@ export function buildRecentDeploysQuery(params: {
 				},
 			],
 			relationships: [{ type: "IN_PROJECT", from: "mr", to: "p" }],
-			order_by: { node: "mr", property: "merged_at", direction: "DESC" },
+			// SIO-1123: Orbit order_by is a string "-node.property" (desc) / "node.property" (asc),
+			// not an object -- confirmed against Orbit's own validation regex.
+			order_by: "-mr.merged_at",
 			limit: clampLimit(params.limit, 50),
 		},
 	};
@@ -251,7 +253,8 @@ export function buildRecentVulnerabilitiesQuery(params: { groupPath: string; lim
 				},
 			],
 			relationships: [{ type: "IN_PROJECT", from: "v", to: "p" }],
-			order_by: { node: "v", property: "severity", direction: "DESC" },
+			// SIO-1123: Orbit order_by is a string "-node.property" (desc) / "node.property" (asc).
+			order_by: "-v.severity",
 			limit: clampLimit(params.limit, 50),
 		},
 	};
@@ -292,7 +295,8 @@ export function buildMrForFileQuery(params: { sourceFile: string; limit?: number
 				{ type: "HAS_FILE", from: "d", to: "f" },
 				{ type: "HAS_DIFF", from: "mr", to: "d" },
 			],
-			order_by: { node: "mr", property: "merged_at", direction: "DESC" },
+			// SIO-1123: Orbit order_by is a string "-node.property" (desc) / "node.property" (asc).
+			order_by: "-mr.merged_at",
 			limit: clampLimit(params.limit, 10),
 		},
 	};

@@ -49,6 +49,7 @@ describe("Orbit DSL builders", () => {
 		expect(s).toContain("pvhcorp/");
 		expect(s).toContain("2026-06-01T00:00:00Z");
 		expect(s).toContain("merged");
+		expect(dsl.order_by).toBe("-mr.merged_at");
 	});
 
 	test("pipeline failures: MUST filter source=merge_request_event", () => {
@@ -84,6 +85,7 @@ describe("Orbit DSL builders", () => {
 		const s = JSON.stringify(dsl);
 		expect(s).toContain("critical");
 		expect(s).toContain("high");
+		expect(dsl.order_by).toBe("-v.severity");
 	});
 
 	test("MR-for-file enrichment: selective on old_path, merged, tagged as blast_radius", () => {
@@ -96,6 +98,24 @@ describe("Orbit DSL builders", () => {
 		expect(s).toContain("pvhcorp/auth-lib/verify.rb");
 		expect(s).toContain("merged");
 		expect(s).not.toContain("HAS_LATEST_DIFF");
+		expect(dsl.order_by).toBe("-mr.merged_at");
+	});
+
+	// SIO-1123: Orbit rejects order_by as an object -- it MUST be a string matching
+	// ^(-)?node.property$ (confirmed against Orbit's own schema-validation error
+	// while live-testing gitlab_recent_deploys / gitlab_recent_vulnerabilities).
+	test("every order_by is a '-node.property'/'node.property' string, never an object", () => {
+		const ORDER_BY_RE = /^-?[a-zA-Z_][a-zA-Z0-9_]{0,63}\.[a-zA-Z_][a-zA-Z0-9_]{0,63}$/;
+		const queries = [
+			buildRecentDeploysQuery({ groupPath: "g", since: "2026-01-01" }),
+			buildRecentVulnerabilitiesQuery({ groupPath: "g" }),
+			buildMrForFileQuery({ sourceFile: "g/f.rb" }),
+		];
+		for (const { dsl } of queries) {
+			if (dsl.order_by === undefined) continue;
+			expect(typeof dsl.order_by).toBe("string");
+			expect(dsl.order_by as string).toMatch(ORDER_BY_RE);
+		}
 	});
 });
 

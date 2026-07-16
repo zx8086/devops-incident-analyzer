@@ -8,7 +8,9 @@ const logger = getLogger("agent:confidence-gate");
 
 const DEFAULT_CONFIDENCE_THRESHOLD = 0.6;
 
-function getConfidenceThreshold(): number {
+// Exported so validator.ts can flag lowConfidence against the same threshold
+// when it applies its own post-checkConfidence cap (SIO-1123).
+export function getConfidenceThreshold(): number {
 	try {
 		const agent = getAgent();
 		const triggers = agent.manifest.compliance?.supervision?.escalation_triggers;
