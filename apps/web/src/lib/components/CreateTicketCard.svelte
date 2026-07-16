@@ -1,5 +1,9 @@
 <script lang="ts">
 // apps/web/src/lib/components/CreateTicketCard.svelte
+// Deep import, NOT the barrel: this component ships to the browser, and a
+// value import of the @devops-agent/shared index drags server-only modules
+// (request-context's AsyncLocalStorage, telemetry, MCP server code) into the
+// client bundle, crashing the app at load (white screen).
 import {
 	type CreatedTicket,
 	CreatedTicketSchema,
@@ -12,7 +16,7 @@ import {
 	type TicketProject,
 	TicketProjectSchema,
 	type TicketProviderInfo,
-} from "@devops-agent/shared";
+} from "@devops-agent/shared/src/ticket-types.ts";
 import { z } from "zod";
 import { prefillDescription, prefillSummary } from "$lib/ticket-prefill";
 import Icon from "./Icon.svelte";
