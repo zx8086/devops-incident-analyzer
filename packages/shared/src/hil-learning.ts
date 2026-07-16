@@ -93,6 +93,8 @@ export const HilMatchCandidateSchema = z.object({
 	severity: z.string(),
 	distance: z.number(),
 	hasRootCause: z.boolean(),
-	via: z.enum(["vector", "ticket-mention"]),
+	// SIO-1134: "ticket-link" = exact curated linkage (Incident.ticketKey), the
+	// strongest signal; "ticket-mention" = key found in the stored summary.
+	via: z.enum(["vector", "ticket-mention", "ticket-link"]),
 });
 export type HilMatchCandidate = z.infer<typeof HilMatchCandidateSchema>;

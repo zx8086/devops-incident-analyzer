@@ -475,7 +475,7 @@ describe("reader", () => {
 		expect(buildGraphContext([], [])).toBe("");
 		const ctx = buildGraphContext(
 			[{ from: "svc-a", to: "svc-b" }],
-			[{ id: "inc1", summary: "kafka lag outage", severity: "high", distance: 0.1 }],
+			[{ id: "inc1", summary: "kafka lag outage", severity: "high", distance: 0.1, ticketKey: "" }],
 		);
 		expect(ctx).toContain("## Knowledge Graph");
 		expect(ctx).toContain("svc-a -> svc-b");
@@ -492,6 +492,7 @@ describe("reader", () => {
 					summary: "kafka lag outage",
 					severity: "high",
 					distance: 0.1,
+					ticketKey: "",
 					rootCause: { class: "kafka-significant-lag", description: "consumer lag > 10K" },
 				},
 			],
@@ -510,6 +511,7 @@ describe("reader", () => {
 					summary: "kafka lag outage",
 					severity: "high",
 					distance: 0.1,
+					ticketKey: "",
 					rootCause: { class: "kafka-significant-lag", description: "consumer lag > 10K" },
 					resolvedBy: ["rb-1.md", "rb-2.md", "rb-3.md", "rb-4.md"],
 				},
@@ -528,6 +530,7 @@ describe("reader", () => {
 					summary: "kafka lag outage",
 					severity: "high",
 					distance: 0.1,
+					ticketKey: "",
 					rootCause: { class: "kafka-significant-lag", description: "consumer lag > 10K" },
 					resolvedBy: [],
 				},

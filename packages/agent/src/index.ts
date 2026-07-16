@@ -1,5 +1,8 @@
 // agent/src/index.ts
 
+// SIO-1134: apps/web curates incidents (ticket creation) but has no direct
+// knowledge-graph dependency -- KG access from the web app goes through here.
+export { getGraphStore, isKnowledgeGraphEnabled, linkIncidentTicket } from "@devops-agent/knowledge-graph";
 export type { MemoryPrProposal, OpenMemoryPrResult } from "@devops-agent/memory-pr";
 export { executeAction, getAvailableActionTools } from "./action-tools/executor.ts";
 export { installAgentMemory } from "./agent-memory-install.ts";

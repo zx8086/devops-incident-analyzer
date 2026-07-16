@@ -252,6 +252,9 @@ export interface SimilarIncident {
 	summary: string;
 	severity: string;
 	distance: number;
+	// SIO-1134: "" = uncurated run; non-empty = the Jira ticket this incident is
+	// the canonical record for. graphEnrich surfaces curated incidents only.
+	ticketKey: string;
 }
 
 // Vector-similarity search over Incident.embedding via Ladybug's native index.
@@ -269,8 +272,14 @@ export async function similarIncidents(
 	if (embedding.length === 0) return [];
 	try {
 		const fetch = excludeId ? limit + 1 : limit;
-		const rows = await store.run<{ id: string; summary: string; severity: string; distance: number }>(
-			"CALL QUERY_VECTOR_INDEX('Incident', 'incident_embedding_idx', $embedding, $limit) RETURN node.id AS id, node.summary AS summary, node.severity AS severity, distance AS distance",
+		const rows = await store.run<{
+			id: string;
+			summary: string;
+			severity: string;
+			distance: number;
+			ticketKey: string | null;
+		}>(
+			"CALL QUERY_VECTOR_INDEX('Incident', 'incident_embedding_idx', $embedding, $limit) RETURN node.id AS id, node.summary AS summary, node.severity AS severity, node.ticketKey AS ticketKey, distance AS distance",
 			{ embedding, limit: fetch },
 		);
 		return rows
@@ -279,12 +288,29 @@ export async function similarIncidents(
 				summary: String(r.summary),
 				severity: String(r.severity),
 				distance: Number(r.distance),
+				ticketKey: r.ticketKey ? String(r.ticketKey) : "",
 			}))
 			.filter((r) => r.id !== excludeId)
 			.slice(0, limit);
 	} catch {
 		return [];
 	}
+}
+
+// SIO-1134: exact curated lookup -- the incident this ticket is the canonical
+// record for (set by ticket creation or a confirmed learn-from match).
+export async function incidentByTicketKey(
+	store: GraphStore,
+	ticketKey: string,
+): Promise<{ id: string; summary: string; severity: string } | null> {
+	if (!ticketKey) return null;
+	const rows = await store.run<{ id: string; summary: string; severity: string }>(
+		"MATCH (i:Incident) WHERE i.ticketKey = $ticketKey RETURN i.id AS id, i.summary AS summary, i.severity AS severity LIMIT 1",
+		{ ticketKey },
+	);
+	const row = rows[0];
+	if (!row) return null;
+	return { id: String(row.id), summary: String(row.summary ?? ""), severity: String(row.severity ?? "") };
 }
 
 // SIO-1026: the root cause linked to one incident (0 or 1 via HAS_ROOT_CAUSE).

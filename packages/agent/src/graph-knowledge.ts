@@ -161,7 +161,12 @@ export async function graphEnrich(state: AgentStateType): Promise<Partial<AgentS
 				await setIncidentEmbedding(store, state.requestId, embedding);
 				// Exclude this turn's own incident: we just wrote its embedding, so an
 				// unfiltered lookup would return it at distance ~0 (SIO-1100).
-				const nearest = await similarIncidents(store, embedding, 3, state.requestId);
+				// SIO-1134: only CURATED incidents (a human created/linked a Jira ticket
+				// from them) surface as prior knowledge -- un-ticketed runs are scratch,
+				// not memory. Over-fetch, then keep the closest curated three.
+				const nearest = (await similarIncidents(store, embedding, 12, state.requestId))
+					.filter((inc) => inc.ticketKey.length > 0)
+					.slice(0, 3);
 				// SIO-1026: annotate each similar incident with its recorded root cause
 				// so the aggregator can reuse prior analysis ("we've seen this before").
 				// SIO-1104 (5b): when a cause exists, join RootCause -> its incidents ->

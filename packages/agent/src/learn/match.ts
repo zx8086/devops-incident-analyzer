@@ -6,7 +6,12 @@
 // confirms the match in the learnMatchGate interrupt (ticket.ts); "none of
 // these" makes applyLearnings create a fresh Incident keyed jira:<key>.
 
-import { getGraphStore, rootCauseForIncident, similarIncidents } from "@devops-agent/knowledge-graph";
+import {
+	getGraphStore,
+	incidentByTicketKey,
+	rootCauseForIncident,
+	similarIncidents,
+} from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
 import { truncateForEmbedding } from "@devops-agent/shared";
 import { AIMessage } from "@langchain/core/messages";
@@ -77,6 +82,40 @@ export async function learnMatchIncident(state: AgentStateType): Promise<Partial
 	let vectorFailed = false;
 	try {
 		const store = await getGraphStore();
+
+		// SIO-1134: exact curated lookup FIRST. When a Jira ticket was created from
+		// this incident's report (or a prior learn confirmed the match), the key is
+		// on the Incident node -- a traditional exact search, no embeddings needed.
+		try {
+			const curated = await incidentByTicketKey(store, ticket.key);
+			if (curated) {
+				let hasRootCause = false;
+				try {
+					hasRootCause = (await rootCauseForIncident(store, curated.id)) !== null;
+				} catch {
+					// annotation only
+				}
+				logger.info({ ticket: ticket.key, incidentId: curated.id }, "HIL match resolved by curated ticket link");
+				return {
+					hilMatchCandidates: [
+						{
+							id: curated.id,
+							summary: curated.summary,
+							severity: curated.severity,
+							distance: 0,
+							hasRootCause,
+							via: "ticket-link",
+						},
+					],
+					hilTicketEmbedding: [],
+				};
+			}
+		} catch (error) {
+			logger.warn(
+				{ error: error instanceof Error ? error.message : String(error) },
+				"curated ticket-link lookup failed; falling back to matching",
+			);
+		}
 
 		// Deterministic pin: the original investigation prompt may have mentioned
 		// the ticket key, in which case its Incident summary carries it verbatim.

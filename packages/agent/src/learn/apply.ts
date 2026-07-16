@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import {
 	getGraphStore,
 	isKnowledgeGraphEnabled,
+	linkIncidentTicket,
 	linkResolution,
 	recordIncident,
 	recordRootCause,
@@ -30,6 +31,7 @@ export interface HilApplyReport {
 	incidentId: string;
 	incidentCreated: boolean;
 	rootCauseWritten: boolean;
+	curated?: boolean;
 	runbookLinked?: string;
 	factsWritten: number;
 	skipped: Array<{ id: string; reason: string }>;
@@ -60,6 +62,11 @@ export function buildApplySummary(report: HilApplyReport, ticketKey: string): st
 	if (report.runbookLinked) {
 		lines.push(
 			`- Linked the resolution to runbook ${report.runbookLinked}; similar future incidents will surface "resolved by ${report.runbookLinked}".`,
+		);
+	}
+	if (report.curated) {
+		lines.push(
+			`- Linked this investigation to ${ticketKey} as its canonical record; future "learn from ${ticketKey}" resolves it directly.`,
 		);
 	}
 	if (report.factsWritten > 0) {
@@ -101,6 +108,7 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 	};
 	const failures: Array<{ node: string; reason: string }> = [];
 
+	let curated = false;
 	if (isKnowledgeGraphEnabled()) {
 		try {
 			const store = await getGraphStore();
@@ -186,6 +194,20 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 			} else if (rc) {
 				report.skipped.push({ id: rc.id, reason: "rejected" });
 			}
+			// SIO-1134: applying learnings CURATES the matched incident -- the
+			// confirmed ticket linkage is written so this ticket resolves by exact
+			// lookup forever after, and the incident counts as durable memory.
+			await linkIncidentTicket(store, match.incidentId, ticketKey);
+			curated = true;
+			recordKeyDecision({
+				requestId: state.requestId,
+				decision: `Incident ${match.incidentId} is the canonical record for ${ticketKey} (curated via HIL learning)`,
+				annotations: {
+					kind: "kg-incident-ticket",
+					incident_id: match.incidentId,
+					ticket: ticketKey,
+				},
+			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			logger.warn({ ticket: ticketKey, error: message }, "HIL graph writes failed");
@@ -253,6 +275,7 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 		}
 	}
 
+	report.curated = curated;
 	logger.info(
 		{
 			ticket: ticketKey,

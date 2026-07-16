@@ -105,6 +105,33 @@ describe("SIO-1126 learnMatchIncident", () => {
 	});
 });
 
+// SIO-1134: a curated linkage (Incident.ticketKey) resolves by exact lookup.
+describe("SIO-1134 curated ticket-link lookup", () => {
+	test("returns a single ticket-link candidate without embedding", async () => {
+		let embedCalled = false;
+		_setEmbedderForTesting(async () => {
+			embedCalled = true;
+			return [0.1];
+		});
+		const store: GraphStore = {
+			init: async () => undefined,
+			close: async () => undefined,
+			run: async <T>(cypher: string): Promise<T[]> => {
+				if (cypher.includes("i.ticketKey = $ticketKey")) {
+					return [{ id: "inc-curated", summary: "the canonical investigation", severity: "high" }] as T[];
+				}
+				return [] as T[];
+			},
+		};
+		_setGraphStoreForTesting(store);
+
+		const result = await learnMatchIncident(stateWith({ hilTicket: ticket() }));
+		expect(result.hilMatchCandidates).toHaveLength(1);
+		expect(result.hilMatchCandidates?.[0]).toMatchObject({ id: "inc-curated", via: "ticket-link", distance: 0 });
+		expect(embedCalled).toBe(false);
+	});
+});
+
 // SIO-1132: the embedding input prefers the ticket's Executive Summary -- the
 // stored Incident vectors are short user-query embeddings, so summary-vs-summary
 // is the aligned pair; whole-report embeddings drown in shared boilerplate.

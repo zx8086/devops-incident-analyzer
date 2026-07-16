@@ -53,6 +53,8 @@ export interface ChatMessage {
 	dataSourceFindings?: Map<string, DataSourceFindings>;
 	feedback?: "up" | "down" | null;
 	runId?: string;
+	// SIO-1134: the turn's requestId (== KG incident id) for ticket-creation curation.
+	requestId?: string;
 	confidence?: number;
 	// SIO-930: per-turn outcome for the IaC completion chip (rejected/declined/etc.).
 	// SIO-1110: "error" marks a turn whose stream ended in an error event.
@@ -103,6 +105,7 @@ function createAgentStore() {
 	let lastResponseTime = $state<number | undefined>(undefined);
 	let lastToolsUsed = $state<string[]>([]);
 	let lastRunId = $state<string | undefined>(undefined);
+	let lastRequestId = $state<string | undefined>(undefined);
 	let lastConfidence = $state<number | undefined>(undefined);
 	let lastOutcome = $state<
 		"completed" | "rejected" | "declined" | "no-op" | "blocked" | "unsupported" | "pipeline-failed" | "error"
@@ -156,6 +159,7 @@ function createAgentStore() {
 			dataSourceFindings: new Map(dataSourceFindings),
 			feedback: null,
 			runId: lastRunId,
+			requestId: lastRequestId,
 			confidence: lastConfidence,
 			outcome: lastOutcome,
 			// SIO-991: pin the GitOps pipeline-log snapshot to THIS message so it persists across
@@ -292,6 +296,7 @@ function createAgentStore() {
 			lastResponseTime,
 			lastToolsUsed,
 			lastRunId,
+			lastRequestId,
 			lastConfidence,
 			lastOutcome,
 			lastDataSourceContext,
@@ -325,6 +330,7 @@ function createAgentStore() {
 		lastResponseTime = next.lastResponseTime;
 		lastToolsUsed = next.lastToolsUsed;
 		lastRunId = next.lastRunId;
+		lastRequestId = next.lastRequestId;
 		lastConfidence = next.lastConfidence;
 		lastOutcome = next.lastOutcome;
 		lastDataSourceContext = next.lastDataSourceContext;

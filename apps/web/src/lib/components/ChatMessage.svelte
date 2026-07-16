@@ -129,7 +129,7 @@ let showTicketCard = $state(false);
         {/if}
 
         {#if !isStreaming && showTicketCard && ticketProviders.length > 0}
-          <CreateTicketCard content={message.content} providers={ticketProviders} onClose={() => (showTicketCard = false)} />
+          <CreateTicketCard content={message.content} requestId={message.requestId} providers={ticketProviders} onClose={() => (showTicketCard = false)} />
         {/if}
 
         {#if !isStreaming && isLast && pendingActions.length > 0 && onActionApprove && onActionDismiss}
