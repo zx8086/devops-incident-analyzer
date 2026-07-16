@@ -18,8 +18,49 @@ const logger = getLogger("agent:learn:match");
 
 const MAX_CANDIDATES = 3;
 
+// SIO-1132: prefer the ticket's Executive Summary section as the embedding
+// input. The stored Incident.embedding vectors are embeddings of the ORIGINAL
+// USER QUERY (short symptom text, graphEnrich), so summary-vs-summary is the
+// correctly aligned pair -- embedding the whole pasted report dilutes the
+// vector with boilerplate (headers, findings tables, estate lists) that every
+// report shares, hurting discrimination between different incidents.
+//
+// After ADF flattening the heading may arrive as "## Executive Summary",
+// "**Executive Summary**", or a BARE "Executive Summary" line. Capture the
+// prose that follows until the next heading-like line, bounded by a char cap.
+const EXEC_SUMMARY_MAX_CHARS = 2_000;
+const HEADING_LINE = /^(#{1,6}\s|-{3,}\s*$|\*\*[^*]+\*\*:?\s*$)/;
+
+export function extractExecutiveSummary(description: string): string | null {
+	const lines = description.split("\n");
+	const isExecHeading = (line: string) =>
+		/^executive summary:?$/i.test(
+			line
+				.trim()
+				.replace(/^#{1,6}\s*/, "")
+				.replace(/[*_]/g, "")
+				.trim(),
+		);
+	const start = lines.findIndex(isExecHeading);
+	if (start === -1) return null;
+
+	const captured: string[] = [];
+	let length = 0;
+	for (const line of lines.slice(start + 1)) {
+		if (HEADING_LINE.test(line.trim())) break;
+		captured.push(line);
+		length += line.length + 1;
+		if (length >= EXEC_SUMMARY_MAX_CHARS) break;
+	}
+	const text = captured.join("\n").trim().slice(0, EXEC_SUMMARY_MAX_CHARS);
+	return text.length > 0 ? text : null;
+}
+
 export function buildMatchEmbedText(summary: string, description: string): string {
-	return truncateForEmbedding(`${summary}\n${description}`);
+	const execSummary = extractExecutiveSummary(description);
+	// Fallback (no Executive Summary section, e.g. a non-agent ticket): the
+	// original head-truncated summary+description behavior.
+	return truncateForEmbedding(`${summary}\n${execSummary ?? description}`);
 }
 
 // learnMatchIncident node: compute candidates + the ticket embedding. Pure

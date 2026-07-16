@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { _setGraphStoreForTesting, type GraphStore } from "@devops-agent/knowledge-graph";
 import { _setEmbedderForTesting } from "../graph-knowledge.ts";
 import type { AgentStateType } from "../state.ts";
-import { buildMatchEmbedText, learnMatchIncident } from "./match.ts";
+import { buildMatchEmbedText, extractExecutiveSummary, learnMatchIncident } from "./match.ts";
 import type { TicketResolution } from "./ticket.ts";
 
 function ticket(): TicketResolution {
@@ -102,5 +102,72 @@ describe("SIO-1126 learnMatchIncident", () => {
 
 	test("returns {} without a fetched ticket", async () => {
 		expect(await learnMatchIncident(stateWith({}))).toEqual({});
+	});
+});
+
+// SIO-1132: the embedding input prefers the ticket's Executive Summary -- the
+// stored Incident vectors are short user-query embeddings, so summary-vs-summary
+// is the aligned pair; whole-report embeddings drown in shared boilerplate.
+describe("SIO-1132 extractExecutiveSummary", () => {
+	const REPORT = [
+		"# Incident Report -- consumer-service Couchbase Connectivity Failures",
+		"",
+		"**Generated:** 2026-06-02T10:31:29.730Z",
+		"",
+		"## Executive Summary",
+		"",
+		"consumer-service is throwing BaseEndpoint exceptions exclusively for this",
+		"service while all other services remain healthy. The primary root cause",
+		"hypothesis is a security group missing from the private endpoint allowlist.",
+		"",
+		"## Current State Assessment",
+		"",
+		"| Time | Datasource | Finding |",
+	].join("\n");
+
+	test("captures the section under a ## heading, stopping at the next heading", () => {
+		const out = extractExecutiveSummary(REPORT);
+		expect(out).toContain("BaseEndpoint exceptions exclusively");
+		expect(out).toContain("private endpoint allowlist");
+		expect(out).not.toContain("Current State Assessment");
+		expect(out).not.toContain("| Time |");
+	});
+
+	test("matches a BARE heading line (post-ADF flattening strips # markers)", () => {
+		const flattened = [
+			"Some header text",
+			"Executive Summary",
+			"The cluster itself is healthy.",
+			"---",
+			"Findings",
+		].join("\n");
+		expect(extractExecutiveSummary(flattened)).toBe("The cluster itself is healthy.");
+	});
+
+	test("matches a **bold** heading variant", () => {
+		const text = ["**Executive Summary**", "Bold-heading style summary body.", "**Findings**", "table..."].join("\n");
+		expect(extractExecutiveSummary(text)).toBe("Bold-heading style summary body.");
+	});
+
+	test("caps the captured section length", () => {
+		const long = `## Executive Summary\n${"x".repeat(10_000)}`;
+		const out = extractExecutiveSummary(long);
+		expect(out).not.toBeNull();
+		expect((out ?? "").length).toBeLessThanOrEqual(2_000);
+	});
+
+	test("returns null when no section exists or it is empty", () => {
+		expect(extractExecutiveSummary("just a plain ticket body without sections")).toBeNull();
+		expect(extractExecutiveSummary("## Executive Summary\n## Next Section\nbody")).toBeNull();
+	});
+
+	test("buildMatchEmbedText embeds summary + exec summary when present, full text otherwise", () => {
+		const withSection = buildMatchEmbedText("Ticket title", REPORT);
+		expect(withSection).toContain("Ticket title");
+		expect(withSection).toContain("BaseEndpoint exceptions exclusively");
+		expect(withSection).not.toContain("| Time |");
+
+		const withoutSection = buildMatchEmbedText("Ticket title", "plain body text");
+		expect(withoutSection).toBe("Ticket title\nplain body text");
 	});
 });
