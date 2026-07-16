@@ -438,6 +438,10 @@ export function emitHilLearningInterrupt(send: SendFn, threadId: string, interru
 		candidates?: unknown;
 		proposal?: unknown;
 		alreadyLearned?: unknown;
+		// SIO-1130: matched-investigation context for the review card.
+		matchedIncidentSummary?: unknown;
+		autoMatched?: unknown;
+		matchCreated?: unknown;
 		message?: unknown;
 	};
 
@@ -486,6 +490,11 @@ export function emitHilLearningInterrupt(send: SendFn, threadId: string, interru
 			ticketKey: typeof obj.ticketKey === "string" ? obj.ticketKey : "",
 			proposal: obj.proposal,
 			alreadyLearned: obj.alreadyLearned === true,
+			// SIO-1130: the review card shows which investigation the ticket was
+			// linked to, including auto-confirmed (ticket-mention pin) matches.
+			...(typeof obj.matchedIncidentSummary === "string" && { matchedIncidentSummary: obj.matchedIncidentSummary }),
+			autoMatched: obj.autoMatched === true,
+			matchCreated: obj.matchCreated === true,
 			message:
 				typeof obj.message === "string"
 					? obj.message

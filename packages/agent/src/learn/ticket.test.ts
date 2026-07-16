@@ -4,7 +4,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentStateType } from "../state.ts";
-import { capTicketForPrompt, flattenAtlassianText, learnFetchTicket, parseJiraIssuePayload } from "./ticket.ts";
+import {
+	capTicketForPrompt,
+	flattenAtlassianText,
+	learnFetchTicket,
+	learnMatchGate,
+	parseJiraIssuePayload,
+} from "./ticket.ts";
 
 const FIXTURE_JSON = readFileSync(join(import.meta.dir, "__fixtures__", "devops-1355-jira-issue.json"), "utf8");
 
@@ -117,5 +123,76 @@ describe("SIO-1126 learnFetchTicket gates", () => {
 		expect(result.hilTicket).toBeUndefined();
 		expect(result.partialFailures?.[0]?.reason).toBe("knowledge-graph-disabled");
 		expect(result.messages).toHaveLength(1);
+	});
+});
+
+// SIO-1130: the match gate only interrupts when the match is genuinely ambiguous.
+describe("SIO-1130 learnMatchGate auto-confirm", () => {
+	const baseTicket = {
+		key: "DEVOPS-1353",
+		summary: "s",
+		status: "Open",
+		description: "d",
+		comments: [],
+	};
+	const pin = (id: string) => ({
+		id,
+		summary: `investigation mentioning DEVOPS-1353 (${id})`,
+		severity: "high",
+		distance: 0,
+		hasRootCause: false,
+		via: "ticket-mention" as const,
+	});
+	const vector = (id: string) => ({
+		id,
+		summary: `similar incident ${id}`,
+		severity: "medium",
+		distance: 0.3,
+		hasRootCause: false,
+		via: "vector" as const,
+	});
+
+	test("a single ticket-mention pin auto-confirms without interrupting", () => {
+		const result = learnMatchGate(
+			stateWith({
+				hilLearnTicketKey: "DEVOPS-1353",
+				hilTicket: baseTicket,
+				hilMatchCandidates: [pin("inc-pin"), vector("inc-v1")],
+			}),
+		);
+		expect(result.hilMatch).toEqual({ incidentId: "inc-pin", created: false, auto: true });
+	});
+
+	test("zero candidates auto-proceeds to a new incident record", () => {
+		const result = learnMatchGate(
+			stateWith({ hilLearnTicketKey: "DEVOPS-1353", hilTicket: baseTicket, hilMatchCandidates: [] }),
+		);
+		expect(result.hilMatch).toEqual({ incidentId: "jira:DEVOPS-1353", created: true, auto: true });
+	});
+
+	test("vector-only candidates still interrupt (fuzzy match needs a human)", () => {
+		// interrupt() outside a LangGraph run throws -- reaching it proves the
+		// gate chose to ask rather than auto-confirm.
+		expect(() =>
+			learnMatchGate(
+				stateWith({
+					hilLearnTicketKey: "DEVOPS-1353",
+					hilTicket: baseTicket,
+					hilMatchCandidates: [vector("inc-v1"), vector("inc-v2")],
+				}),
+			),
+		).toThrow();
+	});
+
+	test("two ticket-mention pins are ambiguous and still interrupt", () => {
+		expect(() =>
+			learnMatchGate(
+				stateWith({
+					hilLearnTicketKey: "DEVOPS-1353",
+					hilTicket: baseTicket,
+					hilMatchCandidates: [pin("inc-a"), pin("inc-b")],
+				}),
+			),
+		).toThrow();
 	});
 });

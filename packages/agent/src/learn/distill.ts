@@ -243,15 +243,26 @@ export interface HilReviewDecision {
 }
 
 // learnReviewGate node: interrupt #2 -- per-item approve/reject. Gate only.
+// SIO-1130: the payload carries the matched investigation (and whether it was
+// auto-confirmed by the ticket-mention pin) so the human still SEES the linkage
+// before anything is written, even when the match gate never interrupted.
 export function learnReviewGate(state: AgentStateType): Partial<AgentStateType> {
 	const proposal = state.hilProposal;
 	if (!proposal) return {};
+
+	const match = state.hilMatch;
+	const matchedIncidentSummary = match?.created
+		? undefined
+		: state.hilMatchCandidates.find((c) => c.id === match?.incidentId)?.summary;
 
 	const decision = interrupt({
 		type: "hil_learning_review",
 		ticketKey: proposal.ticketKey,
 		proposal,
 		alreadyLearned: state.hilAlreadyLearned === true,
+		...(matchedIncidentSummary !== undefined && { matchedIncidentSummary }),
+		autoMatched: match?.auto === true,
+		matchCreated: match?.created === true,
 		message: `Review the learnings distilled from ${proposal.ticketKey}. Approved items are written to the knowledge graph and agent memory.`,
 	}) as HilReviewDecision;
 

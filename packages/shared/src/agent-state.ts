@@ -655,6 +655,12 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		ticketKey: z.string(),
 		proposal: LearningProposalSchema,
 		alreadyLearned: z.boolean(),
+		// SIO-1130: the matched investigation surfaced on the review card -- the
+		// match gate may have auto-confirmed (single ticket-mention pin) or
+		// auto-created (zero candidates) without interrupting.
+		matchedIncidentSummary: z.string().optional(),
+		autoMatched: z.boolean().optional(),
+		matchCreated: z.boolean().optional(),
 		message: z.string(),
 	}),
 	z.object({ type: z.literal("hil_learning_resolved") }),
