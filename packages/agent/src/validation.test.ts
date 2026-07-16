@@ -15,7 +15,7 @@ mock.module("./mcp-bridge.ts", () => ({
 import { checkAlignment, routeAfterAlignment } from "./alignment.ts";
 import { classify } from "./classifier.ts";
 import { supervise } from "./supervisor.ts";
-import { shouldRetryValidation, validate } from "./validator.ts";
+import { shouldRetryValidation, validate, validationWarningConfidenceCap } from "./validator.ts";
 
 // Helper to build minimal state for testing
 function makeState(overrides: Record<string, unknown> = {}) {
@@ -416,6 +416,34 @@ describe("validator: anti-hallucination checks", () => {
 		expect(result.confidenceScore).toBe(0.3);
 		expect(result.confidenceCap).toBe(0.59);
 		expect(result.lowConfidence).toBe(true);
+	});
+
+	// SIO-1123 review fix: a hardcoded 0.59 cap is only "strictly below the HITL
+	// threshold" when that threshold is the default 0.6. A manifest configuring a
+	// lower confidence_below (e.g. 0.5) would make the fixed 0.59 cap read as
+	// PASSING (0.59 >= 0.5), contradicting the "capped run can't pass" guarantee.
+	// validationWarningConfidenceCap must derive the cap from the actual threshold.
+	describe("validationWarningConfidenceCap: derives from the configured HITL threshold", () => {
+		test("uses the 0.59 default ceiling when threshold is the standard 0.6", () => {
+			expect(validationWarningConfidenceCap(0.6)).toBe(0.59);
+		});
+
+		test("derives a lower cap when threshold is below 0.59, staying strictly under it", () => {
+			const threshold = 0.5;
+			const cap = validationWarningConfidenceCap(threshold);
+			expect(cap).toBeLessThan(threshold);
+		});
+
+		test("derives a lower cap for a threshold just above 0.59", () => {
+			const threshold = 0.595;
+			const cap = validationWarningConfidenceCap(threshold);
+			expect(cap).toBeLessThan(threshold);
+			expect(cap).toBeLessThanOrEqual(0.59);
+		});
+
+		test("never exceeds the 0.59 default even for a high threshold", () => {
+			expect(validationWarningConfidenceCap(0.9)).toBe(0.59);
+		});
 	});
 
 	test("datasource-not-referenced warning alone does not cap confidence", () => {

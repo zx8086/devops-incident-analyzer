@@ -101,7 +101,7 @@ describe("Orbit DSL builders", () => {
 		expect(dsl.order_by).toBe("-mr.merged_at");
 	});
 
-	// Orbit rejects order_by as an object -- it MUST be a string matching
+	// SIO-1123: Orbit rejects order_by as an object -- it MUST be a string matching
 	// ^(-)?node.property$ (confirmed against Orbit's own schema-validation error
 	// while live-testing gitlab_recent_deploys / gitlab_recent_vulnerabilities).
 	test("every order_by is a '-node.property'/'node.property' string, never an object", () => {
