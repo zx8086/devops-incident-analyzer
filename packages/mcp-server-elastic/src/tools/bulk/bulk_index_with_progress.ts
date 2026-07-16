@@ -139,7 +139,7 @@ export const registerBulkIndexWithProgress = (server: McpServer, esClient: Clien
 					// Small delay to allow progress to be visible
 					await new Promise((resolve) => setTimeout(resolve, 100));
 				} catch (batchError) {
-					logger.error(
+					logger.warn(
 						{
 							batchIndex,
 							error: batchError instanceof Error ? batchError.message : String(batchError),

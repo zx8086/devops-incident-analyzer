@@ -106,7 +106,7 @@ async function buildDeploymentClient(spec: DeploymentSpec, config: Config): Prom
 			emitter.on("connection:dead", (...args: unknown[]) => {
 				const connection = args[0] as { url?: string; id?: string } | undefined;
 				const error = args[1] as { message?: string } | undefined;
-				logger.error(
+				logger.warn(
 					{
 						deploymentId: spec.id,
 						url: connection?.url,

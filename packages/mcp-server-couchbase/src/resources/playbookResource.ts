@@ -86,7 +86,7 @@ export class PlaybookHandler {
 	async getPlaybook(playbookId: string) {
 		try {
 			if (!playbookId || playbookId === "undefined") {
-				logger.error(`Invalid playbook ID: ${playbookId}`);
+				logger.warn(`Invalid playbook ID: ${playbookId}`);
 				return {
 					contents: [
 						{
@@ -103,7 +103,7 @@ export class PlaybookHandler {
 
 			// Verify this is an allowed playbook file
 			if (!this.playbookFiles.includes(fileName)) {
-				logger.error(`Playbook not found: ${playbookId}`);
+				logger.warn(`Playbook not found: ${playbookId}`);
 				return {
 					contents: [
 						{

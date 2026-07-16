@@ -102,7 +102,7 @@ export class SecurityEnhancer {
 					blocked: true,
 				});
 
-				logger.warn(
+				logger.error(
 					{
 						tool: toolName,
 						size: inputSize,
@@ -427,7 +427,7 @@ export class SecurityEnhancer {
 			}
 		}
 
-		logger.warn({ clientIp, allowedRanges: this.config.allowedIpRanges }, "IP access denied");
+		logger.error({ clientIp, allowedRanges: this.config.allowedIpRanges }, "IP access denied");
 		return false;
 	}
 

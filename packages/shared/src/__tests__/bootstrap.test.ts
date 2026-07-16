@@ -196,8 +196,8 @@ describe("createMcpApplication", () => {
 
 			expect(shutdownOrder).toEqual(["closeAll", "cleanupDatasource"]);
 
-			const errorCalls = logger.calls.filter((c) => c.method === "error");
-			expect(errorCalls.some((c) => (c.args[0] as string).includes("Error closing transport"))).toBe(true);
+			const warnCalls = logger.calls.filter((c) => c.method === "warn");
+			expect(warnCalls.some((c) => (c.args[0] as string).includes("Error closing transport"))).toBe(true);
 			expect(exitCode).toBe(0);
 		});
 

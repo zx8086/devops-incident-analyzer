@@ -37,7 +37,7 @@ async function connectWithBackoffAndCircuitBreaker(
 			return;
 		} catch (err) {
 			failures++;
-			logger.error(
+			logger.warn(
 				`Couchbase connection failed (attempt ${attempt}/${maxAttempts}): ${err instanceof Error ? err.message : String(err)}`,
 			);
 			if (failures >= circuitBreakerThreshold) {
