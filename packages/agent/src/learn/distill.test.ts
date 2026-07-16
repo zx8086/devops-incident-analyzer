@@ -2,7 +2,12 @@
 
 import { describe, expect, test } from "bun:test";
 import type { LearningProposal } from "@devops-agent/shared";
-import { buildDistillerMessages, parseLearningProposal, verifyProposalEvidence } from "./distill.ts";
+import {
+	buildDistillerHumanText,
+	buildDistillerMessages,
+	parseLearningProposal,
+	verifyProposalEvidence,
+} from "./distill.ts";
 import type { TicketResolution } from "./ticket.ts";
 
 function ticket(overrides: Partial<TicketResolution> = {}): TicketResolution {
@@ -121,13 +126,17 @@ describe("SIO-1126 parseLearningProposal", () => {
 	});
 });
 
-describe("SIO-1126 verifyProposalEvidence", () => {
-	// Hallucinated "verbatim" quotes must not survive to the review card
-	// (CodeRabbit, PR #392). Comparison is whitespace/case-normalized.
-	test("keeps items whose evidence occurs in the ticket text", () => {
+describe("SIO-1126/SIO-1131 verifyProposalEvidence", () => {
+	// SIO-1131: verification runs against EXACTLY the prompt text the model saw
+	// (buildDistillerHumanText), never a re-rendered/re-redacted copy -- a
+	// diverging haystack rejected every honest quote in production.
+	const promptText = () =>
+		buildDistillerHumanText({ ticket: ticket(), incidentSummary: "", existingRootCause: null, runbookCatalog: [] });
+
+	test("keeps items whose evidence occurs in the prompt text", () => {
 		const proposal = parseLearningProposal(CANNED_RESPONSE);
 		if (!proposal) throw new Error("fixture must parse");
-		const { proposal: verified, droppedIds } = verifyProposalEvidence(proposal, ticket());
+		const { proposal: verified, droppedIds } = verifyProposalEvidence(proposal, promptText());
 		expect(droppedIds).toEqual([]);
 		expect(verified.rootCause?.causeClass).toBe("route53-resolver-rule-vpc-association-missing");
 		expect(verified.memoryFacts).toHaveLength(1);
@@ -137,7 +146,7 @@ describe("SIO-1126 verifyProposalEvidence", () => {
 		const parsed = JSON.parse(CANNED_RESPONSE) as LearningProposal;
 		if (!parsed.rootCause) throw new Error("fixture must have a root cause");
 		parsed.rootCause.evidence = ["this quote appears nowhere in the ticket"];
-		const { proposal: verified, droppedIds } = verifyProposalEvidence(parsed, ticket());
+		const { proposal: verified, droppedIds } = verifyProposalEvidence(parsed, promptText());
 		expect(droppedIds).toEqual(["rc-1"]);
 		expect(verified.rootCause).toBeNull();
 		// The grounded memory fact survives.
@@ -149,7 +158,78 @@ describe("SIO-1126 verifyProposalEvidence", () => {
 		const fact = parsed.memoryFacts[0];
 		if (!fact) throw new Error("fixture must have a memory fact");
 		fact.evidence = ["RESOLVER   associations are\nper-vpc and not transitive over the tgw."];
-		const { droppedIds } = verifyProposalEvidence(parsed, ticket());
+		const { droppedIds } = verifyProposalEvidence(parsed, promptText());
+		expect(droppedIds).toEqual([]);
+	});
+
+	test("SIO-1131: quotes with markdown emphasis stripped still ground (**bold** source)", () => {
+		const parsed = JSON.parse(CANNED_RESPONSE) as LearningProposal;
+		const fact = parsed.memoryFacts[0];
+		if (!fact) throw new Error("fixture must have a memory fact");
+		// Source description says "**Generated:** 2026-06-01..."-style markdown; the
+		// model quotes it without the asterisks.
+		fact.evidence = ["Agent report: SASL credential failure suspected."];
+		const text = buildDistillerHumanText({
+			ticket: ticket({ description: "**Agent report:** SASL credential failure _suspected_." }),
+			incidentSummary: "",
+			existingRootCause: null,
+			runbookCatalog: [],
+		});
+		const { droppedIds } = verifyProposalEvidence(parsed, text);
+		expect(droppedIds).toEqual([]);
+	});
+
+	test("SIO-1131: unicode punctuation folds (curly quotes, em-dash, ellipsis)", () => {
+		const parsed = JSON.parse(CANNED_RESPONSE) as LearningProposal;
+		const fact = parsed.memoryFacts[0];
+		if (!fact) throw new Error("fixture must have a memory fact");
+		fact.evidence = ["the atom is “exhausting” its pool - permanently"];
+		const base = ticket();
+		const text = buildDistillerHumanText({
+			ticket: ticket({
+				comments: [
+					...base.comments,
+					{ author: "Ops Engineer", createdAt: "", body: 'the atom is "exhausting" its pool — permanently' },
+				],
+			}),
+			incidentSummary: "",
+			existingRootCause: null,
+			runbookCatalog: [],
+		});
+		const { droppedIds } = verifyProposalEvidence(parsed, text);
+		expect(droppedIds).toEqual([]);
+	});
+
+	test("SIO-1131: '...'-elided quotes ground when each substantial fragment occurs", () => {
+		const parsed = JSON.parse(CANNED_RESPONSE) as LearningProposal;
+		const fact = parsed.memoryFacts[0];
+		if (!fact) throw new Error("fixture must have a memory fact");
+		fact.evidence = ["Root cause found: it's a DNS/network gap ... not transitive over the TGW."];
+		const { droppedIds } = verifyProposalEvidence(parsed, promptText());
+		expect(droppedIds).toEqual([]);
+	});
+
+	test("SIO-1131: elided quotes with a hallucinated fragment still drop", () => {
+		const parsed = JSON.parse(CANNED_RESPONSE) as LearningProposal;
+		const fact = parsed.memoryFacts[0];
+		if (!fact) throw new Error("fixture must have a memory fact");
+		fact.evidence = ["Root cause found: it's a DNS/network gap ... the moon phase was unfavourable."];
+		const { droppedIds } = verifyProposalEvidence(parsed, promptText());
+		expect(droppedIds).toEqual(["fact-1"]);
+	});
+
+	test("SIO-1131: quotes from the context block ground too (same prompt text)", () => {
+		const parsed = JSON.parse(CANNED_RESPONSE) as LearningProposal;
+		const fact = parsed.memoryFacts[0];
+		if (!fact) throw new Error("fixture must have a memory fact");
+		fact.evidence = ["Matched stored incident: prior investigation of the consumer service"];
+		const text = buildDistillerHumanText({
+			ticket: ticket(),
+			incidentSummary: "prior investigation of the consumer service",
+			existingRootCause: null,
+			runbookCatalog: [],
+		});
+		const { droppedIds } = verifyProposalEvidence(parsed, text);
 		expect(droppedIds).toEqual([]);
 	});
 });
