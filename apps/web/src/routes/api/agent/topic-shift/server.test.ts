@@ -48,6 +48,9 @@ mock.module("@devops-agent/agent", () => ({
 	promoteToMemory: mock(() => Promise.resolve()),
 	executeAction: mock(() => Promise.resolve()),
 	getAvailableActionTools: mock(() => [] as unknown[]),
+	// SIO-1124: the /api/tickets routes import these from this same specifier.
+	getTicketProvider: mock(() => undefined),
+	listAvailableTicketProviders: mock(() => [] as unknown[]),
 }));
 
 const sharedLogger = {

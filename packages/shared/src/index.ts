@@ -241,6 +241,22 @@ export {
 	type TelemetryConfig,
 	traceSpan,
 } from "./telemetry/telemetry.ts";
+export {
+	type CreatedTicket,
+	CreatedTicketSchema,
+	type CreateTicketRequest,
+	CreateTicketRequestSchema,
+	type TicketAssignee,
+	TicketAssigneeSchema,
+	type TicketIssueType,
+	TicketIssueTypeSchema,
+	type TicketProject,
+	TicketProjectSchema,
+	type TicketProviderId,
+	TicketProviderIdSchema,
+	type TicketProviderInfo,
+	TicketProviderInfoSchema,
+} from "./ticket-types.ts";
 export { installToolCallLogging, type ToolCallLogger } from "./tool-call-logging.ts";
 export {
 	buildToolErrorEnvelope,

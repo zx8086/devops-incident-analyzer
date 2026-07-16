@@ -1,6 +1,12 @@
 // apps/web/src/lib/stores/agent.svelte.ts
 
-import type { ActionResult, DataSourceContext, PendingAction, StreamEvent } from "@devops-agent/shared";
+import type {
+	ActionResult,
+	DataSourceContext,
+	PendingAction,
+	StreamEvent,
+	TicketProviderInfo,
+} from "@devops-agent/shared";
 import type { AttachmentBlock } from "@devops-agent/shared/src/attachments.ts";
 import {
 	applyStreamEvent,
@@ -78,6 +84,8 @@ function createAgentStore() {
 	// SIO-836: Available is populated from GET /api/aws/estates on mount; selected defaults to all.
 	let availableAwsEstates = $state<{ id: string; region: string }[]>([]);
 	let selectedAwsEstates = $state<string[]>([]);
+	// SIO-1124: populated from GET /api/tickets/providers on mount; empty hides the Create-ticket button.
+	let availableTicketProviders = $state<TicketProviderInfo[]>([]);
 	let activeNodes = $state<Set<string>>(new Set());
 	let completedNodes = $state<Map<string, { duration: number }>>(new Map());
 	let lastSuggestions = $state<string[]>([]);
@@ -405,6 +413,14 @@ function createAgentStore() {
 			availableAwsEstates = [];
 			selectedAwsEstates = [];
 		}
+		// SIO-1124: Best-effort ticket-provider fetch. A failure here just hides the Create-ticket button.
+		try {
+			const res = await fetch("/api/tickets/providers");
+			const data: { providers?: TicketProviderInfo[] } = await res.json();
+			availableTicketProviders = data.providers ?? [];
+		} catch {
+			availableTicketProviders = [];
+		}
 		startHealthPolling();
 	}
 
@@ -707,6 +723,9 @@ function createAgentStore() {
 		},
 		get availableAwsEstates() {
 			return availableAwsEstates;
+		},
+		get availableTicketProviders() {
+			return availableTicketProviders;
 		},
 		get selectedAwsEstates() {
 			return selectedAwsEstates;

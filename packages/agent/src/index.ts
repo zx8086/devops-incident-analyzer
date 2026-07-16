@@ -121,6 +121,18 @@ export { AgentState, type AgentStateType } from "./state.ts";
 export { DEFAULT_PRUNING_CONFIG, needsPruning, type PruningConfig, pruneState } from "./state-pruning.ts";
 export { classifyToolError, queryDataSource } from "./sub-agent.ts";
 export { supervise } from "./supervisor.ts";
+export {
+	__resetTicketProvidersForTest,
+	__setTicketProviderForTest,
+	buildCreateIssueArgs,
+	createBridgeToolInvoker,
+	createJiraTicketProvider,
+	getTicketProvider,
+	listAvailableTicketProviders,
+	type McpToolInvoker,
+	type TicketProvider,
+	TicketProviderError,
+} from "./ticket-providers/index.ts";
 export { withRetry } from "./tool-retry.ts";
 export { shouldRetryValidation, validate } from "./validator.ts";
 export { proposeWikiUpdate, type WikiFileProposal, type WikiUpdateInput } from "./wiki/ingest.ts";

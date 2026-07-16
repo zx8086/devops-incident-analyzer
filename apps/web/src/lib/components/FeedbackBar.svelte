@@ -6,10 +6,12 @@ let {
 	content,
 	feedback = null,
 	onFeedback,
+	onCreateTicket,
 }: {
 	content: string;
 	feedback?: "up" | "down" | null;
 	onFeedback: (value: "up" | "down") => void;
+	onCreateTicket?: () => void;
 } = $props();
 
 let copied = $state(false);
@@ -35,6 +37,16 @@ async function handleCopy() {
     <Icon name="copy" class="w-3 h-3" />
     {copied ? "Copied" : "Copy"}
   </button>
+
+  {#if onCreateTicket}
+    <button
+      onclick={onCreateTicket}
+      class="flex items-center gap-1 text-xs px-2 py-1 rounded transition-colors text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+    >
+      <Icon name="ticket" class="w-3 h-3" />
+      Create ticket
+    </button>
+  {/if}
 
   <div class="w-px h-4 bg-gray-200"></div>
 

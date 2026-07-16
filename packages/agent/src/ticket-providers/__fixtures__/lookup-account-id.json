@@ -1,0 +1,28 @@
+{
+	"data": {
+		"users": {
+			"users": [
+				{
+					"accountId": "70121:86ec4ccf-9601-42a5-ab81-d15240b5de71",
+					"accountType": "atlassian",
+					"html": "<strong>Simon Owusu</strong> - simon.owusu@tommy.com",
+					"displayName": "Simon Owusu"
+				},
+				{
+					"accountId": "557058:00000000-1111-2222-3333-444444444444",
+					"accountType": "atlassian",
+					"html": "Sample User - ",
+					"displayName": "Sample User"
+				}
+			],
+			"total": 18,
+			"header": "Showing 2 of 18 matching users"
+		},
+		"groups": {
+			"header": "Showing 0 of 0 matching groups",
+			"total": 0,
+			"groups": []
+		}
+	},
+	"statusCode": 200
+}

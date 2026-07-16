@@ -52,6 +52,9 @@ mock.module("@devops-agent/agent", () => ({
 	promoteToMemory: () => Promise.resolve(),
 	executeAction: () => Promise.resolve(),
 	getAvailableActionTools: () => [] as unknown[],
+	// SIO-1124: the /api/tickets routes import these from this same specifier.
+	getTicketProvider: () => undefined,
+	listAvailableTicketProviders: () => [] as unknown[],
 }));
 
 const { GET } = await import("./+server.ts");

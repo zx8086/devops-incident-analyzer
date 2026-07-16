@@ -42,6 +42,9 @@ mock.module("@devops-agent/agent", () => ({
 	runTopologySweep: () => Promise.resolve({ sources: {} }),
 	topologyCronEnabled: () => false,
 	selectedBackend: () => "file" as const,
+	// SIO-1124: the /api/tickets routes import these from this same specifier.
+	getTicketProvider: () => undefined,
+	listAvailableTicketProviders: () => [] as unknown[],
 }));
 // SIO-780: sibling tests register additional exports on $lib/server/agent; mirror
 // them here so the global mock cache stays link-compatible across files.
