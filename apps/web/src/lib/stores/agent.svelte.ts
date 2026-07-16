@@ -1,14 +1,18 @@
 // apps/web/src/lib/stores/agent.svelte.ts
 
-import {
-	type ActionResult,
-	type DataSourceContext,
-	type PendingAction,
-	type StreamEvent,
-	type TicketProviderInfo,
-	TicketProviderInfoSchema,
+import type {
+	ActionResult,
+	DataSourceContext,
+	PendingAction,
+	StreamEvent,
+	TicketProviderInfo,
 } from "@devops-agent/shared";
 import type { AttachmentBlock } from "@devops-agent/shared/src/attachments.ts";
+// Deep import, NOT the barrel: this file ships to the browser, and a value
+// import of the @devops-agent/shared index drags server-only modules
+// (request-context's AsyncLocalStorage, telemetry, MCP server code) into the
+// client bundle, crashing the app at load (white screen).
+import { TicketProviderInfoSchema } from "@devops-agent/shared/src/ticket-types.ts";
 import { z } from "zod";
 import {
 	applyStreamEvent,
