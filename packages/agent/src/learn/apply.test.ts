@@ -30,7 +30,7 @@ function proposal(overrides: Partial<LearningProposal> = {}): LearningProposal {
 			kind: "root-cause",
 			causeClass: "route53-resolver-rule-vpc-association-missing",
 			description: "Missing per-VPC resolver rule association; timeout mimicked an auth failure.",
-			resolution: "Associate resolver rule via oit.terraform.",
+			resolution: "Associate the resolver rule via the infrastructure repo.",
 			invalidatedHypotheses: [{ hypothesis: "invalid SSM credential", reason: "client never connects" }],
 			evidence: ["Root cause found: it's a DNS/network gap, not credentials."],
 		},
@@ -64,7 +64,7 @@ describe("SIO-1126 composeRootCauseDescription", () => {
 		if (!rc) throw new Error("fixture must have a root cause");
 		const text = composeRootCauseDescription(rc, "DEVOPS-1355");
 		expect(text).toContain("Missing per-VPC resolver rule association");
-		expect(text).toContain("Resolution: Associate resolver rule");
+		expect(text).toContain("Resolution: Associate the resolver rule");
 		expect(text).toContain("Ruled out: invalid SSM credential -- client never connects");
 		expect(text).toContain("(human-corrected via DEVOPS-1355)");
 	});

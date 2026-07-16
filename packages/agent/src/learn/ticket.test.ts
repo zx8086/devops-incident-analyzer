@@ -22,12 +22,12 @@ describe("SIO-1126 parseJiraIssuePayload", () => {
 		const ticket = parseJiraIssuePayload(FIXTURE_JSON, "DEVOPS-1355");
 		expect(ticket).not.toBeNull();
 		expect(ticket?.key).toBe("DEVOPS-1355");
-		expect(ticket?.summary).toBe("MSK Kafka controller election storm");
+		expect(ticket?.summary).toBe("Kafka controller election storm");
 		expect(ticket?.status).toBe("In Progress");
 		expect(ticket?.description).toContain("controller election storm");
 		expect(ticket?.comments).toHaveLength(3);
 		// The HIL correction is a plain string body.
-		expect(ticket?.comments[1]?.author).toBe("Zeljko Urban");
+		expect(ticket?.comments[1]?.author).toBe("Ops Engineer");
 		expect(ticket?.comments[1]?.body).toContain("Route53 resolver rule");
 		// The last comment is an ADF document; the flattener extracts its text.
 		expect(ticket?.comments[2]?.body).toContain("Devs confirmed this was parked");
@@ -36,7 +36,7 @@ describe("SIO-1126 parseJiraIssuePayload", () => {
 	test("strips Rovo <custom> mention tags but keeps the inner text", () => {
 		const ticket = parseJiraIssuePayload(FIXTURE_JSON, "DEVOPS-1355");
 		expect(ticket?.comments[0]?.body).not.toContain("<custom");
-		expect(ticket?.comments[0]?.body).toContain("@Zeljko Urban");
+		expect(ticket?.comments[0]?.body).toContain("@Ops Engineer");
 	});
 
 	test("returns null for non-JSON, non-object, and empty-fields payloads", () => {

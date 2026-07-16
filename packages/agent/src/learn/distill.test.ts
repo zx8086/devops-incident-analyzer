@@ -7,12 +7,12 @@ import type { TicketResolution } from "./ticket.ts";
 function ticket(overrides: Partial<TicketResolution> = {}): TicketResolution {
 	return {
 		key: "DEVOPS-1355",
-		summary: "MSK Kafka controller election storm",
+		summary: "Kafka controller election storm",
 		status: "In Progress",
-		description: "Agent report: SASL credential failure suspected. Contact simon.owusu@tommy.com.",
+		description: "Agent report: SASL credential failure suspected. Contact oncall@example.test.",
 		comments: [
 			{
-				author: "Zeljko Urban",
+				author: "Ops Engineer",
 				createdAt: "2026-07-16T12:44:22Z",
 				body: "Root cause found: it's a DNS/network gap, not credentials. Resolver associations are per-VPC and not transitive over the TGW.",
 			},
@@ -29,8 +29,9 @@ const CANNED_RESPONSE = JSON.stringify({
 		kind: "root-cause",
 		causeClass: "route53-resolver-rule-vpc-association-missing",
 		description:
-			"The oit-prd VPC has no Confluent Route53 resolver rule associated, so the broker hostname resolves to non-routable IPs and the TCP timeout mimics an auth failure.",
-		resolution: "Associate resolver rule rslvr-rr-b8729ffeed604a26a with vpc-0cfdebf02337d59fd via oit.terraform.",
+			"The workload VPC has no Confluent Route53 resolver rule associated, so the broker hostname resolves to non-routable IPs and the TCP timeout mimics an auth failure.",
+		resolution:
+			"Associate resolver rule rslvr-rr-0example000000001 with vpc-0example1234567890a via the infrastructure repo.",
 		invalidatedHypotheses: [
 			{
 				hypothesis: "Confluent API key or secret invalid in SSM",
@@ -60,7 +61,7 @@ describe("SIO-1126 buildDistillerMessages", () => {
 	test("includes ticket, matched-incident context, and the runbook catalog", () => {
 		const messages = buildDistillerMessages({
 			ticket: ticket(),
-			incidentSummary: "prior investigation of localcore-service",
+			incidentSummary: "prior investigation of example-consumer-service",
 			existingRootCause: {
 				id: "abc",
 				class: "kafka-significant-lag",
