@@ -265,3 +265,46 @@ describe("createTicket", () => {
 		expect((err as TicketProviderError).message).toContain("unexpected shape");
 	});
 });
+
+describe("addComment", () => {
+	test("posts markdown with the pinned upstream arg names and returns the comment id", async () => {
+		const calls: RecordedCall[] = [];
+		const provider = createJiraTicketProvider({
+			invoker: fakeInvoker({ atlassian_addCommentToJiraIssue: JSON.stringify({ id: "10501" }) }, calls),
+		});
+		expect(await provider.addComment("DEVOPS-1382", "Follow-up analysis")).toEqual({ id: "10501" });
+		expect(calls[0]?.toolName).toBe("atlassian_addCommentToJiraIssue");
+		expect(calls[0]?.args).toEqual({
+			issueIdOrKey: "DEVOPS-1382",
+			commentBody: "Follow-up analysis",
+			contentFormat: "markdown",
+		});
+	});
+
+	test("wraps tool errors in TicketProviderError with the upstream message", async () => {
+		const provider = createJiraTicketProvider({
+			invoker: fakeInvoker({ atlassian_addCommentToJiraIssue: new Error("Error: comment forbidden") }),
+		});
+		const err = await provider.addComment("DEVOPS-1382", "body").catch((e: unknown) => e);
+		expect(err).toBeInstanceOf(TicketProviderError);
+		expect((err as TicketProviderError).message).toContain("comment forbidden");
+	});
+
+	test("rejects non-JSON payloads with a truncated excerpt", async () => {
+		const provider = createJiraTicketProvider({
+			invoker: fakeInvoker({ atlassian_addCommentToJiraIssue: "upstream exploded" }),
+		});
+		const err = await provider.addComment("DEVOPS-1382", "body").catch((e: unknown) => e);
+		expect(err).toBeInstanceOf(TicketProviderError);
+		expect((err as TicketProviderError).message).toContain("non-JSON");
+	});
+
+	test("rejects unexpected shapes (missing id)", async () => {
+		const provider = createJiraTicketProvider({
+			invoker: fakeInvoker({ atlassian_addCommentToJiraIssue: JSON.stringify({ key: "DEVOPS-1" }) }),
+		});
+		const err = await provider.addComment("DEVOPS-1382", "body").catch((e: unknown) => e);
+		expect(err).toBeInstanceOf(TicketProviderError);
+		expect((err as TicketProviderError).message).toContain("unexpected shape");
+	});
+});

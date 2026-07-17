@@ -13,7 +13,7 @@ import type { AttachmentBlock } from "@devops-agent/shared/src/attachments.ts";
 // import of the @devops-agent/shared index drags server-only modules
 // (request-context's AsyncLocalStorage, telemetry, MCP server code) into the
 // client bundle, crashing the app at load (white screen).
-import { TicketProviderInfoSchema } from "@devops-agent/shared/src/ticket-types.ts";
+import { type CreatedTicket, TicketProviderInfoSchema } from "@devops-agent/shared/src/ticket-types.ts";
 import { z } from "zod";
 import {
 	applyStreamEvent,
@@ -100,6 +100,12 @@ function createAgentStore() {
 	let selectedAwsEstates = $state<string[]>([]);
 	// SIO-1124: populated from GET /api/tickets/providers on mount; empty hides the Create-ticket button.
 	let availableTicketProviders = $state<TicketProviderInfo[]>([]);
+	// SIO-1145: thread-level ticket state (in-memory; lost on reload, acceptable). Set
+	// when ANY answer creates a ticket. Answers appended AFTER threadTicketCreatedAtIndex
+	// show "Add as comment" instead of "Create ticket" -- one ticket per thread that
+	// later follow-ups comment on.
+	let threadTicket = $state<CreatedTicket | null>(null);
+	let threadTicketCreatedAtIndex = $state<number>(-1);
 	let activeNodes = $state<Set<string>>(new Set());
 	let completedNodes = $state<Map<string, { duration: number }>>(new Map());
 	let lastSuggestions = $state<string[]>([]);
@@ -358,6 +364,18 @@ function createAgentStore() {
 		fleetUpgradeResult = next.fleetUpgradeResult;
 	}
 
+	// SIO-1145: record the FIRST ticket created in this thread (called from ChatMessage's
+	// onCreated). Idempotent: a later creation on an EARLIER answer won't move the marker,
+	// so only answers appended after this one enter comment-mode; earlier answers keep
+	// their own component-local createdTicket.
+	function setThreadTicket(messageId: string, ticket: CreatedTicket) {
+		if (threadTicket) return;
+		const idx = messages.findIndex((m) => m.id === messageId);
+		if (idx < 0) return;
+		threadTicket = ticket;
+		threadTicketCreatedAtIndex = idx;
+	}
+
 	async function setFeedback(messageIndex: number, score: "up" | "down") {
 		const msg = messages[messageIndex];
 		if (!msg || msg.role !== "assistant") return;
@@ -560,6 +578,9 @@ function createAgentStore() {
 		fleetUpgradeChoice = null;
 		fleetUpgradeResult = null;
 		iacPipelineLog = undefined; // SIO-982: clear the prior GitOps pipeline log on a new turn
+		// SIO-1145: a new conversation has no thread ticket yet.
+		threadTicket = null;
+		threadTicketCreatedAtIndex = -1;
 	}
 
 	// Flip the UI between the incident-analyzer and the elastic-iac agent. Switching
@@ -821,6 +842,14 @@ function createAgentStore() {
 		get availableTicketProviders() {
 			return availableTicketProviders;
 		},
+		// SIO-1145: thread-level ticket + the index it was created at, so later answers
+		// can decide whether to comment on it instead of creating a new ticket.
+		get threadTicket() {
+			return threadTicket;
+		},
+		get threadTicketCreatedAtIndex() {
+			return threadTicketCreatedAtIndex;
+		},
 		get selectedAwsEstates() {
 			return selectedAwsEstates;
 		},
@@ -901,6 +930,7 @@ function createAgentStore() {
 		},
 		sendMessage,
 		setFeedback,
+		setThreadTicket,
 		cancelStream,
 		executeAction,
 		dismissAction,

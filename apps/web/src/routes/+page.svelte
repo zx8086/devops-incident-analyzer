@@ -249,6 +249,9 @@ function handleSuggestionClick(suggestion: string) {
             onActionApprove={(action) => agentStore.executeAction(action, msg.content)}
             onActionDismiss={(id) => agentStore.dismissAction(id)}
             ticketProviders={agentStore.availableTicketProviders}
+            threadTicket={agentStore.threadTicket}
+            canCommentOnThreadTicket={agentStore.threadTicket !== null && i > agentStore.threadTicketCreatedAtIndex}
+            onTicketCreated={(ticket) => agentStore.setThreadTicket(msg.id, ticket)}
           />
         {/if}
       {/each}
@@ -315,6 +318,9 @@ function handleSuggestionClick(suggestion: string) {
               onActionApprove={(action) => agentStore.executeAction(action, summaryMsg.content)}
               onActionDismiss={(id) => agentStore.dismissAction(id)}
               ticketProviders={agentStore.availableTicketProviders}
+              threadTicket={agentStore.threadTicket}
+              canCommentOnThreadTicket={agentStore.threadTicket !== null && driftSummaryIndex > agentStore.threadTicketCreatedAtIndex}
+              onTicketCreated={(ticket) => agentStore.setThreadTicket(summaryMsg.id, ticket)}
             />
           {/if}
         {/if}
@@ -345,6 +351,9 @@ function handleSuggestionClick(suggestion: string) {
               onActionApprove={(action) => agentStore.executeAction(action, synthSummaryMsg.content)}
               onActionDismiss={(id) => agentStore.dismissAction(id)}
               ticketProviders={agentStore.availableTicketProviders}
+              threadTicket={agentStore.threadTicket}
+              canCommentOnThreadTicket={agentStore.threadTicket !== null && syntheticsSummaryIndex > agentStore.threadTicketCreatedAtIndex}
+              onTicketCreated={(ticket) => agentStore.setThreadTicket(synthSummaryMsg.id, ticket)}
             />
           {/if}
         {/if}

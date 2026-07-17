@@ -11,6 +11,7 @@ import { createBridgeToolInvoker } from "./bridge-invoker.ts";
 import { type McpToolInvoker, type TicketProvider, TicketProviderError } from "./types.ts";
 
 const CREATE_TOOL = "atlassian_createJiraIssue";
+const ADD_COMMENT_TOOL = "atlassian_addCommentToJiraIssue";
 const PROJECTS_TOOL = "atlassian_getVisibleJiraProjects";
 const LOOKUP_TOOL = "atlassian_lookupJiraAccountId";
 const ISSUE_TYPES_TOOL = "atlassian_getJiraProjectIssueTypesMetadata";
@@ -50,6 +51,10 @@ const EpicSearchResponseSchema = z.object({
 	issues: z.array(z.object({ key: z.string(), fields: z.object({ summary: z.string() }) })),
 });
 const CreateIssueResponseSchema = z.object({ key: z.string() });
+// SIO-1145: atlassian_addCommentToJiraIssue returns the created comment; only
+// `id` is pinned (Jira Cloud comment ids are strings). z.object strips unknown
+// keys, matching the strict, fail-loudly convention of the schemas above.
+const AddCommentResponseSchema = z.object({ id: z.string() });
 
 // Single place that maps the provider-agnostic request onto the pinned
 // atlassian_createJiraIssue schema (required: projectKey, issueTypeName,
@@ -194,6 +199,19 @@ export function createJiraTicketProvider(options: JiraTicketProviderOptions = {}
 			const parsed = await call(CREATE_TOOL, buildCreateIssueArgs(req), CreateIssueResponseSchema, "issue create");
 			const site = env.ATLASSIAN_SITE_NAME;
 			return { key: parsed.key, ...(site ? { url: `https://${site}.atlassian.net/browse/${parsed.key}` } : {}) };
+		},
+		// SIO-1145: comment-mode is only reachable after a ticket was created (which
+		// required CREATE_TOOL), so isAvailable() need not also gate on this tool --
+		// when write tools are registered (ATLASSIAN_READ_ONLY=false) both are present.
+		// Upstream arg names are issueIdOrKey/commentBody; contentFormat mirrors create.
+		async addComment(issueKey, body) {
+			const parsed = await call(
+				ADD_COMMENT_TOOL,
+				{ issueIdOrKey: issueKey, commentBody: body, contentFormat: "markdown" },
+				AddCommentResponseSchema,
+				"comment add",
+			);
+			return { id: parsed.id };
 		},
 	};
 }

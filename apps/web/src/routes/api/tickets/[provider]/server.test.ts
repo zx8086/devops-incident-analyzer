@@ -11,6 +11,7 @@ interface FakeProvider {
 	listIssueTypes: (projectKey: string) => Promise<unknown[]>;
 	listEpics: (projectKey: string) => Promise<unknown[]>;
 	createTicket: (req: unknown) => Promise<unknown>;
+	addComment: (issueKey: string, body: string) => Promise<{ id: string }>;
 }
 
 function baseProvider(overrides: Partial<FakeProvider> = {}): FakeProvider {
@@ -23,6 +24,7 @@ function baseProvider(overrides: Partial<FakeProvider> = {}): FakeProvider {
 		listIssueTypes: () => Promise.resolve([]),
 		listEpics: () => Promise.resolve([]),
 		createTicket: () => Promise.resolve({ key: "X-1" }),
+		addComment: () => Promise.resolve({ id: "c1" }),
 		...overrides,
 	};
 }
@@ -103,6 +105,7 @@ mock.module("$lib/server/agent", () => ({
 }));
 
 const { POST } = await import("./+server.ts");
+const { POST: postComment } = await import("./comment/+server.ts");
 const { GET: getProjects } = await import("./projects/+server.ts");
 const { GET: getAssignees } = await import("./assignees/+server.ts");
 const { GET: getIssueTypes } = await import("./issue-types/+server.ts");
@@ -121,6 +124,17 @@ function postEvent(provider: string, body: unknown) {
 	return {
 		params: { provider },
 		request: new Request(`http://localhost/api/tickets/${provider}`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(body),
+		}),
+	} as never;
+}
+
+function postCommentEvent(provider: string, body: unknown) {
+	return {
+		params: { provider },
+		request: new Request(`http://localhost/api/tickets/${provider}/comment`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(body),
@@ -228,6 +242,64 @@ describe("POST /api/tickets/[provider]", () => {
 			expect(keyDecisions).toEqual([]);
 		} finally {
 			curationError = null;
+		}
+	});
+});
+
+describe("POST /api/tickets/[provider]/comment", () => {
+	const validComment = { issueKey: "DEVOPS-1382", body: "Follow-up analysis markdown" };
+
+	test("404 for an unknown provider id", async () => {
+		mockProvider = baseProvider();
+		const res = await postComment(postCommentEvent("linear", validComment));
+		expect(res.status).toBe(404);
+	});
+
+	test("404 when the provider is unavailable", async () => {
+		mockProvider = baseProvider({ isAvailable: () => false });
+		const res = await postComment(postCommentEvent("jira", validComment));
+		expect(res.status).toBe(404);
+	});
+
+	test("400 on an invalid body (empty issueKey)", async () => {
+		mockProvider = baseProvider();
+		const res = await postComment(postCommentEvent("jira", { ...validComment, issueKey: "" }));
+		expect(res.status).toBe(400);
+		expect((await res.json()).error).toBe("Invalid request");
+	});
+
+	test("posts the comment and returns { ok, id }", async () => {
+		const received: Array<{ issueKey: string; body: string }> = [];
+		mockProvider = baseProvider({
+			addComment: (issueKey, body) => {
+				received.push({ issueKey, body });
+				return Promise.resolve({ id: "10501" });
+			},
+		});
+		const res = await postComment(postCommentEvent("jira", validComment));
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ ok: true, id: "10501" });
+		expect(received).toEqual([{ issueKey: "DEVOPS-1382", body: "Follow-up analysis markdown" }]);
+	});
+
+	test("502 when the provider fails", async () => {
+		mockProvider = baseProvider({
+			addComment: () => Promise.reject(new Error("comment forbidden")),
+		});
+		const res = await postComment(postCommentEvent("jira", validComment));
+		expect(res.status).toBe(502);
+		expect((await res.json()).error).toContain("comment forbidden");
+	});
+
+	test("502 JSON when MCP connect fails (resolution sits inside the error boundary)", async () => {
+		mockProvider = baseProvider();
+		mcpConnectError = new Error("connect ECONNREFUSED");
+		try {
+			const res = await postComment(postCommentEvent("jira", validComment));
+			expect(res.status).toBe(502);
+			expect((await res.json()).error).toContain("ECONNREFUSED");
+		} finally {
+			mcpConnectError = null;
 		}
 	});
 });

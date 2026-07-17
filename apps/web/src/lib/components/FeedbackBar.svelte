@@ -8,6 +8,9 @@ let {
 	onFeedback,
 	onCreateTicket,
 	ticketCreated = false,
+	onAddComment,
+	commentPosted = false,
+	commentTargetKey,
 }: {
 	content: string;
 	feedback?: "up" | "down" | null;
@@ -16,6 +19,11 @@ let {
 	// SIO-1139: once this answer has a ticket, the button reflects that and is
 	// disabled -- an answer produces at most one ticket.
 	ticketCreated?: boolean;
+	// SIO-1145: comment-mode (the thread already has a ticket and this is a later
+	// answer). Only one of onCreateTicket / onAddComment is ever passed.
+	onAddComment?: () => void;
+	commentPosted?: boolean;
+	commentTargetKey?: string;
 } = $props();
 
 let copied = $state(false);
@@ -49,6 +57,17 @@ async function handleCopy() {
     >
       <Icon name={ticketCreated ? "check" : "ticket"} class="w-3 h-3" />
       {ticketCreated ? "Ticket created" : "Create ticket"}
+    </button>
+  {/if}
+
+  {#if onAddComment}
+    <button
+      onclick={onAddComment}
+      disabled={commentPosted}
+      class="flex items-center gap-1 text-xs px-2 py-1 rounded transition-colors {commentPosted ? 'text-green-600 bg-green-50' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'} disabled:cursor-default"
+    >
+      <Icon name={commentPosted ? "check" : "message-square"} class="w-3 h-3" />
+      {commentPosted ? "Comment added" : `Add as comment to ${commentTargetKey}`}
     </button>
   {/if}
 
