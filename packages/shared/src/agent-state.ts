@@ -1,7 +1,7 @@
 // shared/src/agent-state.ts
 import { z } from "zod";
 import { PendingActionSchema } from "./action-types.ts";
-import { HilMatchCandidateSchema, LearningProposalSchema } from "./hil-learning.ts";
+import { HilApplyReportSchema, HilMatchCandidateSchema, LearningProposalSchema } from "./hil-learning.ts";
 
 export const ToolOutputSchema = z.object({
 	toolName: z.string(),
@@ -676,6 +676,9 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		message: z.string(),
 	}),
 	z.object({ type: z.literal("hil_learning_resolved") }),
+	// SIO-1146: structured apply outcome for the terminal learning card, emitted
+	// from applyLearnings' node output before the prose summary message.
+	z.object({ type: z.literal("hil_learning_applied"), report: HilApplyReportSchema }),
 	// elastic-iac maker graph: a one-line clarification the planner needs, or the
 	// plan-review gate. The UI POSTs the resume value to /api/agent/iac/resume.
 	z.object({

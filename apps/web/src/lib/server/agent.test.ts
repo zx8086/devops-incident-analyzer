@@ -159,6 +159,9 @@ mock.module("@devops-agent/shared", () => {
 		AttachmentBlockSchema: z.any(),
 		DataSourceContextSchema: z.any(),
 		PendingActionSchema: z.any(),
+		// SIO-1146: sse-pump value-imports this for the hil_learning_applied forward
+		// (same last-wins mock-cache race as the SIO-1045 note below).
+		HilApplyReportSchema: z.any(),
 		redactPiiContent: (s: string) => s,
 		// SIO-1045: agent.ts imports startKnowledgeGraphServer from
 		// @devops-agent/mcp-server-knowledge-graph (unmocked, real module), whose

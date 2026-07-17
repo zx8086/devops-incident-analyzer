@@ -5,7 +5,7 @@
 // Previously the routing lived inline in stream/+server.ts.
 
 import type { InvestigationFocus } from "@devops-agent/shared";
-import { redactPiiContent } from "@devops-agent/shared";
+import { HilApplyReportSchema, redactPiiContent } from "@devops-agent/shared";
 
 type SendFn = (event: Record<string, unknown>) => void;
 type EventStream = AsyncIterable<{
@@ -86,6 +86,8 @@ const PARTIAL_FAILURE_SOURCES = new Set([
 	"proposeEscalate",
 	"aggregateMitigation",
 	"followUp",
+	// SIO-1146: surface applyLearnings' soft-failed KG/memory writes.
+	"applyLearnings",
 ]);
 
 // SIO-935: tolerant pass-through of the fleet-upgrade version partition. Returns undefined unless
@@ -258,6 +260,19 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 				const pendingActions = (event.data?.output as { pendingActions?: unknown })?.pendingActions;
 				if (Array.isArray(pendingActions) && pendingActions.length > 0) {
 					send({ type: "pending_actions", actions: pendingActions });
+				}
+			}
+
+			// SIO-1146: forward the structured apply outcome for the terminal learning
+			// card. Reading the node output (not getState) means the event only fires
+			// when applyLearnings actually ran this leg -- a stale report from a prior
+			// learn turn can never leak into a later resume.
+			if (event.name === "applyLearnings") {
+				const parsed = HilApplyReportSchema.safeParse(
+					(event.data?.output as { hilApplyReport?: unknown })?.hilApplyReport,
+				);
+				if (parsed.success) {
+					send({ type: "hil_learning_applied", report: parsed.data });
 				}
 			}
 

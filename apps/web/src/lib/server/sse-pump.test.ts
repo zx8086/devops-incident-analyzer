@@ -360,3 +360,78 @@ describe("pumpEventStream finalAnswer/confidenceScore capture", () => {
 		expect(result.confidenceScore).toBeUndefined();
 	});
 });
+
+// SIO-1146: the structured apply outcome is forwarded from applyLearnings' node
+// output as hil_learning_applied for the terminal learning card.
+describe("pumpEventStream hil_learning_applied", () => {
+	const validReport = {
+		ticketKey: "DEVOPS-1375",
+		incidentId: "jira:DEVOPS-1375",
+		incidentCreated: true,
+		rootCauseWritten: true,
+		factsWritten: 2,
+		bindingsConfirmed: 0,
+		bindingsInvalidated: 0,
+		heuristicsProposed: 0,
+		skipped: [{ id: "fact-3", reason: "rejected" }],
+		items: [
+			{ id: "rc-1", kind: "root-cause", label: "nlb-stale-target-capella-side", status: "applied" },
+			{ id: "fact-3", kind: "memory-fact", label: "some fact", status: "rejected" },
+		],
+	};
+
+	test("forwards a valid hilApplyReport from applyLearnings on_chain_end", async () => {
+		const captured: Array<Record<string, unknown>> = [];
+		await pumpEventStream(
+			fromArray([
+				{
+					event: "on_chain_end",
+					name: "applyLearnings",
+					data: { output: { hilApplyReport: validReport } },
+				},
+			]),
+			(event) => {
+				captured.push(event);
+			},
+		);
+		const applied = captured.find((e) => e.type === "hil_learning_applied");
+		expect(applied).toBeDefined();
+		expect((applied?.report as { ticketKey?: string })?.ticketKey).toBe("DEVOPS-1375");
+	});
+
+	test("does not emit for a malformed report or a missing output field", async () => {
+		const captured: Array<Record<string, unknown>> = [];
+		await pumpEventStream(
+			fromArray([
+				{
+					event: "on_chain_end",
+					name: "applyLearnings",
+					data: { output: { hilApplyReport: { ticketKey: "X" } } },
+				},
+				{ event: "on_chain_end", name: "applyLearnings", data: { output: {} } },
+			]),
+			(event) => {
+				captured.push(event);
+			},
+		);
+		expect(captured.some((e) => e.type === "hil_learning_applied")).toBe(false);
+	});
+
+	test("surfaces applyLearnings partialFailures as partial_failure events", async () => {
+		const captured: Array<Record<string, unknown>> = [];
+		await pumpEventStream(
+			fromArray([
+				{
+					event: "on_chain_end",
+					name: "applyLearnings",
+					data: { output: { partialFailures: [{ node: "applyLearnings", reason: "binding-write-failed" }] } },
+				},
+			]),
+			(event) => {
+				captured.push(event);
+			},
+		);
+		const failure = captured.find((e) => e.type === "partial_failure");
+		expect(failure?.reason).toBe("binding-write-failed");
+	});
+});

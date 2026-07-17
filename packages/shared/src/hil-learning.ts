@@ -101,6 +101,40 @@ export type HilItemEdits = Record<string, Record<string, string>>;
 
 export const HilItemEditsSchema: z.ZodType<HilItemEdits> = z.record(z.string(), z.record(z.string(), z.string()));
 
+// SIO-1146: per-item outcome row for the terminal learning card. `status` reflects
+// what applyLearnings actually did -- a rejected decision wins over any skip entry,
+// and "skipped" carries the real write-time reason (dedup, disabled flag, soft
+// failure) that the client cannot reconstruct from the review prompt.
+export const HilApplyItemSchema = z.object({
+	id: z.string().min(1),
+	kind: z.enum(["root-cause", "binding", "heuristic", "memory-fact"]),
+	label: z.string(),
+	status: z.enum(["applied", "rejected", "skipped"]),
+	reason: z.string().optional(),
+});
+export type HilApplyItem = z.infer<typeof HilApplyItemSchema>;
+
+// SIO-1146: the structured apply outcome, streamed as hil_learning_applied so the
+// UI can render a terminal outcome card instead of only the prose summary bubble.
+// `skipped` keeps the report-level entries (curation/graph/facts) that
+// buildApplySummary renders; rows whose id matches no item become card footnotes.
+export const HilApplyReportSchema = z.object({
+	ticketKey: z.string().min(1),
+	incidentId: z.string(),
+	incidentCreated: z.boolean(),
+	rootCauseWritten: z.boolean(),
+	curated: z.boolean().optional(),
+	runbookLinked: z.string().optional(),
+	factsWritten: z.number(),
+	bindingsConfirmed: z.number(),
+	bindingsInvalidated: z.number(),
+	heuristicsProposed: z.number(),
+	draftRunbookUrl: z.string().optional(),
+	skipped: z.array(z.object({ id: z.string(), reason: z.string() })),
+	items: z.array(HilApplyItemSchema),
+});
+export type HilApplyReport = z.infer<typeof HilApplyReportSchema>;
+
 // The match-gate candidate surfaced to the UI. `via` distinguishes vector KNN
 // hits from the deterministic ticket-mention pin.
 export const HilMatchCandidateSchema = z.object({

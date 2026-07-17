@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { _setGraphStoreForTesting, type GraphStore } from "@devops-agent/knowledge-graph";
 import type { LearningProposal } from "@devops-agent/shared";
 import type { AgentStateType } from "../state.ts";
-import { applyLearnings, buildApplySummary, composeRootCauseDescription } from "./apply.ts";
+import { applyLearnings, buildApplyItems, buildApplySummary, composeRootCauseDescription } from "./apply.ts";
 
 interface RunCall {
 	cypher: string;
@@ -522,6 +522,7 @@ describe("SIO-1126 applyLearnings", () => {
 
 describe("SIO-1126 buildApplySummary", () => {
 	const emptyReport = {
+		ticketKey: "DEVOPS-1355",
 		incidentId: "inc-1",
 		incidentCreated: false,
 		rootCauseWritten: false,
@@ -530,6 +531,7 @@ describe("SIO-1126 buildApplySummary", () => {
 		bindingsInvalidated: 0,
 		heuristicsProposed: 0,
 		skipped: [],
+		items: [],
 	};
 
 	test("reports the empty case", () => {
@@ -553,5 +555,98 @@ describe("SIO-1126 buildApplySummary", () => {
 		expect(text).toContain("Invalidated 1 stale telemetry binding");
 		expect(text).toContain("Proposed 1 diagnostic skill");
 		expect(text).toContain("DRAFT runbook PR for review: https://gitlab.com/x/-/merge_requests/7");
+	});
+});
+
+// SIO-1146: the structured report returned as hilApplyReport drives the terminal
+// outcome card; per-item statuses must reflect actual writes, not just decisions.
+describe("SIO-1146 hilApplyReport items", () => {
+	test("returns hilApplyReport with ticketKey and mixed applied/rejected statuses", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const calls: RunCall[] = [];
+		_setGraphStoreForTesting(stubStore(calls));
+
+		const result = await applyLearnings(
+			stateWith({
+				hilProposal: proposal(),
+				hilMatch: { incidentId: "inc-1", created: false },
+				hilDecisions: { "rc-1": "approve", "fact-1": "reject" },
+			}),
+		);
+
+		const report = result.hilApplyReport;
+		expect(report).toBeDefined();
+		if (!report) throw new Error("narrow");
+		expect(report.ticketKey).toBe("DEVOPS-1355");
+		expect(report.items.map((i) => [i.id, i.status])).toEqual([
+			["rc-1", "applied"],
+			["fact-1", "rejected"],
+		]);
+		// A rejected decision wins over the same-id "rejected" skip entry (no double-count).
+		expect(report.items[1]?.reason).toBeUndefined();
+	});
+
+	test("KG disabled: approved root cause is skipped with the graph block reason", async () => {
+		const result = await applyLearnings(
+			stateWith({
+				hilProposal: proposal(),
+				hilMatch: { incidentId: "inc-1", created: false },
+				hilDecisions: { "rc-1": "approve", "fact-1": "reject" },
+			}),
+		);
+
+		const report = result.hilApplyReport;
+		if (!report) throw new Error("narrow");
+		const rcItem = report.items.find((i) => i.id === "rc-1");
+		expect(rcItem?.status).toBe("skipped");
+		expect(rcItem?.reason).toBe("knowledge graph disabled");
+		expect(report.skipped.some((s) => s.id === "graph")).toBe(true);
+	});
+
+	test("live memory off: approved fact is skipped with the facts block reason", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const calls: RunCall[] = [];
+		_setGraphStoreForTesting(stubStore(calls));
+
+		const result = await applyLearnings(
+			stateWith({
+				hilProposal: proposal(),
+				hilMatch: { incidentId: "inc-1", created: false },
+				hilDecisions: { "rc-1": "reject", "fact-1": "approve" },
+			}),
+		);
+
+		const report = result.hilApplyReport;
+		if (!report) throw new Error("narrow");
+		const factItem = report.items.find((i) => i.id === "fact-1");
+		expect(factItem?.status).toBe("skipped");
+		expect(factItem?.reason).toContain("live memory disabled");
+	});
+
+	test("buildApplyItems: applied wins over a same-id skip entry and keeps it as reason; labels truncate", () => {
+		const longText = "x".repeat(300);
+		const p = proposal({
+			memoryFacts: [{ id: "fact-1", kind: "memory-fact", text: longText, evidence: ["e"] }],
+		});
+		const report = {
+			ticketKey: "DEVOPS-1355",
+			incidentId: "inc-1",
+			incidentCreated: false,
+			rootCauseWritten: true,
+			factsWritten: 0,
+			bindingsConfirmed: 0,
+			bindingsInvalidated: 0,
+			heuristicsProposed: 0,
+			skipped: [{ id: "rc-1", reason: "draft runbook PR not opened (failed)" }],
+			items: [],
+		};
+		const items = buildApplyItems(p, { "rc-1": "approve", "fact-1": "approve" }, report, new Set(["rc-1", "fact-1"]));
+		const rcItem = items.find((i) => i.id === "rc-1");
+		expect(rcItem?.status).toBe("applied");
+		expect(rcItem?.reason).toBe("draft runbook PR not opened (failed)");
+		const factItem = items.find((i) => i.id === "fact-1");
+		expect(factItem?.status).toBe("applied");
+		expect(factItem?.label.length).toBe(120);
+		expect(factItem?.label.endsWith("...")).toBe(true);
 	});
 });

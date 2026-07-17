@@ -7,6 +7,7 @@ import type {
 	DataSourceContext,
 	ElasticFindings,
 	GitLabFindings,
+	HilApplyReport,
 	HilMatchCandidate,
 	KafkaFindings,
 	LearningProposal,
@@ -364,6 +365,10 @@ export interface ReducerState {
 	// the graph pauses on one gate at a time).
 	hilLearningMatch: HilLearningMatchPrompt | null;
 	hilLearningReview: HilLearningReviewPrompt | null;
+	// SIO-1146: terminal outcome card after apply. Persists through done (the
+	// syntheticsPushResult idiom); cleared by dismiss, the next sendMessage,
+	// clearChat, or a fresh learning gate event.
+	hilLearningOutcome: HilApplyReport | null;
 	// elastic-iac maker graph interrupts.
 	iacClarify: IacClarifyPrompt | null;
 	iacPlanReview: IacPlanReviewPrompt | null;
@@ -413,6 +418,7 @@ export function initialReducerState(): ReducerState {
 		topicShiftPrompt: null,
 		hilLearningMatch: null,
 		hilLearningReview: null,
+		hilLearningOutcome: null,
 		iacClarify: null,
 		iacPlanReview: null,
 		iacPipelineProgress: [],
@@ -536,6 +542,8 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 					message: event.message,
 				},
 				hilLearningReview: null,
+				// A fresh learn turn replaces a stale outcome card.
+				hilLearningOutcome: null,
 			};
 		case "hil_learning_review":
 			return {
@@ -553,9 +561,14 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 					message: event.message,
 				},
 				hilLearningMatch: null,
+				hilLearningOutcome: null,
 			};
 		case "hil_learning_resolved":
 			return { ...state, hilLearningMatch: null, hilLearningReview: null };
+		// SIO-1146: the structured apply outcome arrives mid-stream (before the prose
+		// summary message); it becomes the terminal outcome card and survives done.
+		case "hil_learning_applied":
+			return { ...state, hilLearningOutcome: event.report, hilLearningMatch: null, hilLearningReview: null };
 		case "iac_clarify":
 			return {
 				...state,

@@ -151,6 +151,7 @@ export async function classify(state: AgentStateType, config?: RunnableConfig): 
 		hilAlreadyLearned: false,
 		hilDecisions: undefined,
 		hilEdits: {},
+		hilApplyReport: undefined,
 	};
 
 	const lastMessage = state.messages[state.messages.length - 1];
