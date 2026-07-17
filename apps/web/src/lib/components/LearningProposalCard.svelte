@@ -12,7 +12,7 @@ let {
 }: {
 	prompt: HilLearningReviewPrompt;
 	disabled?: boolean;
-	onApply: (decisions: Record<string, "approve" | "reject">) => void;
+	onApply: (decisions: Record<string, "approve" | "reject">, edits: Record<string, Record<string, string>>) => void;
 } = $props();
 
 const proposal = $derived(prompt.proposal);
@@ -29,6 +29,32 @@ const itemIds = $derived(
 );
 
 let rejected = $state<Set<string>>(new Set());
+
+// SIO-1128: local per-item text edits, keyed by id -> field -> value. Seeded lazily
+// from the distiller value; only fields that differ from the original are emitted.
+let edits = $state<Record<string, Record<string, string>>>({});
+
+function editValue(id: string, field: string, original: string): string {
+	return edits[id]?.[field] ?? original;
+}
+
+function setEdit(id: string, field: string, value: string) {
+	edits = { ...edits, [id]: { ...(edits[id] ?? {}), [field]: value } };
+}
+
+// Emit only edits that (a) belong to an APPROVED item and (b) differ from the original.
+function emittedEdits(): Record<string, Record<string, string>> {
+	const out: Record<string, Record<string, string>> = {};
+	for (const [id, fields] of Object.entries(edits)) {
+		if (rejected.has(id)) continue;
+		const changed: Record<string, string> = {};
+		for (const [field, value] of Object.entries(fields)) {
+			if (value.trim().length > 0) changed[field] = value;
+		}
+		if (Object.keys(changed).length > 0) out[id] = changed;
+	}
+	return out;
+}
 
 function toggle(id: string) {
 	const next = new Set(rejected);
@@ -109,27 +135,41 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
     {/if}
 
     {#if proposal.rootCause}
+      {@const rootCause = proposal.rootCause}
       <div class="mt-2 rounded border border-tommy-accent-blue/30 bg-white px-2 py-1.5">
         <div class="flex items-start justify-between gap-2">
           <div class="text-xs text-tommy-navy">
-            <p class="font-semibold">Corrected root cause: {proposal.rootCause.causeClass}</p>
-            <p class="mt-0.5">{proposal.rootCause.description}</p>
-            <p class="mt-0.5"><span class="font-semibold">Resolution:</span> {proposal.rootCause.resolution}</p>
-            {#if proposal.rootCause.invalidatedHypotheses.length > 0}
+            <p class="font-semibold">Corrected root cause: {rootCause.causeClass}</p>
+            <textarea
+              class="mt-0.5 w-full rounded border border-tommy-accent-blue/30 bg-white px-2 py-1 text-xs text-tommy-navy"
+              rows="2"
+              {disabled}
+              value={editValue(rootCause.id, "description", rootCause.description)}
+              oninput={(e) => setEdit(rootCause.id, "description", e.currentTarget.value)}
+            ></textarea>
+            <p class="mt-0.5 font-semibold">Resolution:</p>
+            <textarea
+              class="mt-0.5 w-full rounded border border-tommy-accent-blue/30 bg-white px-2 py-1 text-xs text-tommy-navy"
+              rows="2"
+              {disabled}
+              value={editValue(rootCause.id, "resolution", rootCause.resolution)}
+              oninput={(e) => setEdit(rootCause.id, "resolution", e.currentTarget.value)}
+            ></textarea>
+            {#if rootCause.invalidatedHypotheses.length > 0}
               <p class="mt-0.5 font-semibold">Ruled out:</p>
               <ul class="list-disc list-inside">
-                {#each proposal.rootCause.invalidatedHypotheses as hyp}
+                {#each rootCause.invalidatedHypotheses as hyp}
                   <li>{hyp.hypothesis} -- {hyp.reason}</li>
                 {/each}
               </ul>
             {/if}
-            {#if proposal.rootCause.runbookFilename}
-              <p class="mt-0.5 text-gray-600">Links resolution to runbook {proposal.rootCause.runbookFilename}</p>
+            {#if rootCause.runbookFilename}
+              <p class="mt-0.5 text-gray-600">Links resolution to runbook {rootCause.runbookFilename}</p>
             {/if}
           </div>
-          {@render itemToggle(proposal.rootCause.id)}
+          {@render itemToggle(rootCause.id)}
         </div>
-        {@render evidence(proposal.rootCause.evidence)}
+        {@render evidence(rootCause.evidence)}
       </div>
     {/if}
 
@@ -139,7 +179,13 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
         {#each proposal.memoryFacts as fact (fact.id)}
           <div class="rounded border border-tommy-accent-blue/30 bg-white px-2 py-1.5">
             <div class="flex items-start justify-between gap-2">
-              <p class="text-xs text-tommy-navy">{fact.text}</p>
+              <textarea
+                class="w-full rounded border border-tommy-accent-blue/30 bg-white px-2 py-1 text-xs text-tommy-navy"
+                rows="2"
+                {disabled}
+                value={editValue(fact.id, "text", fact.text)}
+                oninput={(e) => setEdit(fact.id, "text", e.currentTarget.value)}
+              ></textarea>
               {@render itemToggle(fact.id)}
             </div>
             {@render evidence(fact.evidence)}
@@ -162,7 +208,13 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
                   {binding.datasource}
                   {binding.bindingKind}=<span class="font-mono">{binding.resourceId}</span>
                 </p>
-                <p class="mt-0.5 text-gray-600">{binding.reason}</p>
+                <textarea
+                  class="mt-0.5 w-full rounded border border-tommy-accent-blue/30 bg-white px-2 py-1 text-xs text-tommy-navy"
+                  rows="2"
+                  {disabled}
+                  value={editValue(binding.id, "reason", binding.reason)}
+                  oninput={(e) => setEdit(binding.id, "reason", e.currentTarget.value)}
+                ></textarea>
               </div>
               {@render itemToggle(binding.id)}
             </div>
@@ -180,9 +232,29 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
             <div class="flex items-start justify-between gap-2">
               <div class="text-xs text-tommy-navy">
                 <p class="font-semibold">{heuristic.name}</p>
-                <p class="mt-0.5">{heuristic.description}</p>
-                <p class="mt-0.5"><span class="font-semibold">When to use:</span> {heuristic.whenToUse}</p>
-                <p class="mt-0.5"><span class="font-semibold">Procedure:</span> {heuristic.procedure}</p>
+                <textarea
+                  class="mt-0.5 w-full rounded border border-tommy-accent-blue/30 bg-white px-2 py-1 text-xs text-tommy-navy"
+                  rows="2"
+                  {disabled}
+                  value={editValue(heuristic.id, "description", heuristic.description)}
+                  oninput={(e) => setEdit(heuristic.id, "description", e.currentTarget.value)}
+                ></textarea>
+                <p class="mt-0.5 font-semibold">When to use:</p>
+                <textarea
+                  class="w-full rounded border border-tommy-accent-blue/30 bg-white px-2 py-1 text-xs text-tommy-navy"
+                  rows="2"
+                  {disabled}
+                  value={editValue(heuristic.id, "whenToUse", heuristic.whenToUse)}
+                  oninput={(e) => setEdit(heuristic.id, "whenToUse", e.currentTarget.value)}
+                ></textarea>
+                <p class="mt-0.5 font-semibold">Procedure:</p>
+                <textarea
+                  class="w-full rounded border border-tommy-accent-blue/30 bg-white px-2 py-1 text-xs text-tommy-navy"
+                  rows="2"
+                  {disabled}
+                  value={editValue(heuristic.id, "procedure", heuristic.procedure)}
+                  oninput={(e) => setEdit(heuristic.id, "procedure", e.currentTarget.value)}
+                ></textarea>
               </div>
               {@render itemToggle(heuristic.id)}
             </div>
@@ -195,7 +267,7 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
     <div class="mt-3 flex gap-2 items-center">
       <button
         type="button"
-        onclick={() => onApply(decisions(false))}
+        onclick={() => onApply(decisions(false), emittedEdits())}
         disabled={disabled || approvedCount === 0}
         class="px-3 py-1.5 text-sm font-medium bg-tommy-navy text-white rounded-md hover:bg-tommy-navy/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
       >
@@ -203,7 +275,7 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
       </button>
       <button
         type="button"
-        onclick={() => onApply(decisions(true))}
+        onclick={() => onApply(decisions(true), {})}
         {disabled}
         class="px-3 py-1.5 text-sm font-medium bg-white text-tommy-navy border border-tommy-navy rounded-md hover:bg-tommy-cream disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
       >
