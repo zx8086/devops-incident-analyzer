@@ -12,6 +12,7 @@ import {
 	flagBindingForReview,
 	hasBinding,
 	InMemoryGraphStore,
+	incidentById,
 	invalidateBinding,
 	isKnowledgeGraphEnabled,
 	linkCorrelation,
@@ -22,6 +23,7 @@ import {
 	priorRelationshipsForServices,
 	priorRootCauses,
 	proposedChangesWithMr,
+	purgeUncuratedIncidents,
 	recordIacChange,
 	recordIacPrompt,
 	recordIncident,
@@ -438,6 +440,60 @@ describe("writer (parameterized, injection-safe)", () => {
 		// every write is MERGE (re-runnable), never CREATE
 		expect(store.calls.every((c) => !c.cypher.includes("CREATE "))).toBe(true);
 	});
+
+	// SIO-1135: the in-memory fake can't execute DELETE, but it can assert the STATEMENT
+	// SHAPE -- edges (one per Incident-touching type) before nodes, all bound to $cutoff,
+	// all filtered on ticketKey = '' -- and the guards. Real deletion is covered by the
+	// ladybug integration test.
+	test("purgeUncuratedIncidents deletes edges-then-node, filtered on uncurated + cutoff", async () => {
+		const store = new InMemoryGraphStore();
+		// The count query must report doomed incidents or the purge early-returns.
+		store.stub("count(i) AS n", [{ n: 2 }]);
+		const result = await purgeUncuratedIncidents(store, "2025-01-01T00:00:00.000Z");
+		expect(result.incidents).toBe(2);
+
+		const deletes = store.calls.filter((c) => c.cypher.includes("DELETE"));
+		// four edge DELETEs (one per Incident-touching type) + one node DELETE.
+		const edgeDeletes = deletes.filter((c) => c.cypher.includes("DELETE r"));
+		expect(edgeDeletes.map((c) => c.cypher)).toEqual([
+			expect.stringContaining("[r:AFFECTED_BY]"),
+			expect.stringContaining("[r:DISCOVERED_DURING]"),
+			expect.stringContaining("[r:RESOLVED_BY]"),
+			expect.stringContaining("[r:HAS_ROOT_CAUSE]"),
+		]);
+		expect(edgeDeletes).toHaveLength(4);
+		expect(deletes.some((c) => c.cypher.trim().endsWith("DELETE i"))).toBe(true);
+		// every delete is bound to $cutoff and scoped to uncurated rows -- never interpolated.
+		// SIO-1136: the uncurated predicate matches BOTH ticketKey = '' and NULL (legacy rows).
+		for (const c of deletes) {
+			expect(c.params?.cutoff).toBe("2025-01-01T00:00:00.000Z");
+			expect(c.cypher).toContain("i.ticketKey IS NULL OR i.ticketKey = ''");
+			expect(c.cypher).toContain("i.createdAt < $cutoff");
+			expect(c.cypher).not.toContain("DETACH");
+		}
+		// The node DELETE runs AFTER every edge DELETE (edges-then-node ordering).
+		const cyphers = store.calls.map((c) => c.cypher);
+		const lastEdgeIdx = cyphers.findLastIndex((cy) => cy.includes("DELETE r"));
+		const nodeIdx = cyphers.findIndex((cy) => cy.trim().endsWith("DELETE i"));
+		expect(nodeIdx).toBeGreaterThan(lastEdgeIdx);
+	});
+
+	test("purgeUncuratedIncidents is a no-op on an empty or invalid cutoff", async () => {
+		const store = new InMemoryGraphStore();
+		expect(await purgeUncuratedIncidents(store, "")).toEqual({ incidents: 0, edges: 0 });
+		expect(await purgeUncuratedIncidents(store, "not-a-date")).toEqual({ incidents: 0, edges: 0 });
+		// Neither the count nor any DELETE ran.
+		expect(store.calls).toHaveLength(0);
+	});
+
+	test("purgeUncuratedIncidents no-ops when nothing is stale (count 0)", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("count(i) AS n", [{ n: 0 }]);
+		const result = await purgeUncuratedIncidents(store, "2025-01-01T00:00:00.000Z");
+		expect(result).toEqual({ incidents: 0, edges: 0 });
+		// only the count query ran; no DELETE.
+		expect(store.calls.some((c) => c.cypher.includes("DELETE"))).toBe(false);
+	});
 });
 
 describe("reader", () => {
@@ -453,6 +509,30 @@ describe("reader", () => {
 		const result = await similarIncidents(store, []);
 		expect(result).toEqual([]);
 		expect(store.calls).toEqual([]);
+	});
+
+	// SIO-1135/1133: incidentById returns the node fields + services (via AFFECTED_BY) so
+	// a curation-time kg-incident mirror fact matches incidentFromAnnotations byte-for-byte.
+	test("incidentById returns node fields and services from AFFECTED_BY", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("RETURN i.id AS id, i.summary AS summary, i.severity AS severity LIMIT 1", [
+			{ id: "inc-1", summary: "kafka lag", severity: "high" },
+		]);
+		store.stub("-[:AFFECTED_BY]->(i:Incident {id: $id}) RETURN s.name AS name", [{ name: "svc-a" }, { name: "svc-b" }]);
+		expect(await incidentById(store, "inc-1")).toEqual({
+			id: "inc-1",
+			summary: "kafka lag",
+			severity: "high",
+			services: ["svc-a", "svc-b"],
+		});
+	});
+
+	test("incidentById returns null when the id is missing or the node is absent", async () => {
+		const store = new InMemoryGraphStore();
+		expect(await incidentById(store, "")).toBeNull();
+		expect(store.calls).toHaveLength(0);
+		// no stub for the node query -> [] -> null
+		expect(await incidentById(store, "nope")).toBeNull();
 	});
 
 	// SIO-1100: graphEnrich writes this turn's embedding before the lookup, so the

@@ -125,6 +125,10 @@ mock.module("@devops-agent/agent", () => ({
 	// the stub must export its imports too. topologyCronEnabled() false keeps the cron unregistered.
 	runTopologySweep: mock(() => Promise.resolve({ sources: {} })),
 	topologyCronEnabled: mock(() => false),
+	// SIO-1135: purge-cron.ts is imported transitively via agent.ts too -- stub its imports.
+	// purgeCronEnabled() false keeps the retention sweep unregistered under test.
+	runUncuratedPurgeSweep: mock(() => Promise.resolve({ incidents: 0, edges: 0 })),
+	purgeCronEnabled: mock(() => false),
 	selectedBackend: mock(() => "file" as const),
 	// SIO-1124: the /api/tickets routes import these from this same specifier.
 	getTicketProvider: mock(() => undefined),

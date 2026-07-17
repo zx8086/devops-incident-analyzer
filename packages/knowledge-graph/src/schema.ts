@@ -263,7 +263,12 @@ export const MIGRATIONS: readonly string[] = [
 	"CREATE NODE TABLE IF NOT EXISTS Bucket(name STRING, PRIMARY KEY(name))",
 	"CREATE NODE TABLE IF NOT EXISTS AwsAccount(id STRING, PRIMARY KEY(id))",
 	"CREATE NODE TABLE IF NOT EXISTS AwsResource(arn STRING, PRIMARY KEY(arn))",
-	`CREATE NODE TABLE IF NOT EXISTS Incident(id STRING, severity STRING, summary STRING, createdAt STRING, ticketKey STRING, embedding DOUBLE[${EMBEDDING_DIM}], PRIMARY KEY(id))`,
+	// SIO-1136: ticketKey MUST carry the same DEFAULT '' as its ALTER_MIGRATIONS entry.
+	// On a fresh store the column exists from CREATE (so the ALTER throws "already exists"
+	// and is swallowed) -- without the default here, recordIncident (which never SETs
+	// ticketKey) leaves it NULL, which the readers' and purge's `ticketKey = ''` uncurated
+	// filter silently misses (a NULL != '').
+	`CREATE NODE TABLE IF NOT EXISTS Incident(id STRING, severity STRING, summary STRING, createdAt STRING, ticketKey STRING DEFAULT '', embedding DOUBLE[${EMBEDDING_DIM}], PRIMARY KEY(id))`,
 	"CREATE NODE TABLE IF NOT EXISTS Finding(id STRING, kind STRING, summary STRING, PRIMARY KEY(id))",
 	"CREATE NODE TABLE IF NOT EXISTS Runbook(filename STRING, PRIMARY KEY(filename))",
 	"CREATE NODE TABLE IF NOT EXISTS WikiPage(slug STRING, PRIMARY KEY(slug))",

@@ -313,6 +313,37 @@ export async function incidentByTicketKey(
 	return { id: String(row.id), summary: String(row.summary ?? ""), severity: String(row.severity ?? "") };
 }
 
+// SIO-1135: fetch one incident's mirror-fact fields by node id (the id IS the turn's
+// requestId). Returns services too (via AFFECTED_BY) so a curation-time kg-incident fact
+// matches incidentFromAnnotations (rebuild.ts) byte-for-byte. services come from a
+// separate one-row-per-service query -- collect() is unused in this package, so assemble
+// the array in TS to stay on proven single-clause Cypher.
+export interface IncidentRow {
+	id: string;
+	summary: string;
+	severity: string;
+	services: string[];
+}
+
+export async function incidentById(store: GraphStore, id: string): Promise<IncidentRow | null> {
+	if (!id) return null;
+	const rows = await store.run<{ id: string; summary: string; severity: string }>(
+		"MATCH (i:Incident {id: $id}) RETURN i.id AS id, i.summary AS summary, i.severity AS severity LIMIT 1",
+		{ id },
+	);
+	const row = rows[0];
+	if (!row) return null;
+	// ORDER BY so the services list is deterministic (CodeRabbit PR #404): the curation
+	// mirror fact serializes services.join(","), and an unordered query would yield
+	// different kg-incident bytes for the same incident across rebuilds.
+	const serviceRows = await store.run<{ name: string }>(
+		"MATCH (s:Service)-[:AFFECTED_BY]->(i:Incident {id: $id}) RETURN s.name AS name ORDER BY s.name",
+		{ id },
+	);
+	const services = serviceRows.map((r) => String(r.name ?? "")).filter((n) => n.length > 0);
+	return { id: String(row.id), summary: String(row.summary ?? ""), severity: String(row.severity ?? ""), services };
+}
+
 // SIO-1026: the root cause linked to one incident (0 or 1 via HAS_ROOT_CAUSE).
 export interface RootCause {
 	id: string;

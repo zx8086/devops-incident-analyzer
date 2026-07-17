@@ -28,6 +28,13 @@ export { evaluateGuards } from "./iac/guards.ts";
 export { converseIac, type IacTurnOutcome, iacTurnOutcome } from "./iac/nodes.ts";
 export { type ReconcileOptions, type ReconcileSummary, reconcileAll, reconcileEnabled } from "./iac/reconcile.ts";
 export { type IacRequest, IacState, type IacStateType } from "./iac/state.ts";
+// SIO-1135: retention sweep (uncurated incident purge) wired beside the topology cron.
+export {
+	type PurgeSweepSummary,
+	purgeCronEnabled,
+	runUncuratedPurgeSweep,
+	uncuratedRetentionDays,
+} from "./kg-retention.ts";
 export {
 	runTopologySweep,
 	type TopologySourceSummary,
@@ -35,6 +42,13 @@ export {
 	topologyCronEnabled,
 } from "./kg-topology.ts";
 export { flushLangSmithCallbacks, initializeLangSmith } from "./langsmith.ts";
+// SIO-1135: apps/web writes curation-time mirror facts (ticket creation) through this
+// re-export -- it has no direct knowledge-graph dependency.
+export {
+	type CurationMirrorOptions,
+	type CurationMirrorResult,
+	writeCurationMirrorFacts,
+} from "./learn/curation-facts.ts";
 export {
 	type BootstrapContext,
 	type BootstrapResult,
