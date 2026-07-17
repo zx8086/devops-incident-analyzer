@@ -175,6 +175,24 @@ describe("POST /api/agent/learning/resume — validation", () => {
 		const nothingPending = await POST(makeRequest({ threadId: "t-1", match: { incidentId: "inc-1" } }));
 		expect(nothingPending.status).toBe(409);
 	});
+
+	test("SIO-1128: accepts review.edits past the schema (409, no pending interrupt) and rejects a non-string edit", async () => {
+		const wellFormed = await POST(
+			makeRequest({
+				threadId: "t-1",
+				review: { decisions: { "fact-1": "approve" }, edits: { "fact-1": { text: "edited" } } },
+			}),
+		);
+		expect(wellFormed.status).not.toBe(400); // passes schema; 409 for no pending review
+
+		const malformed = await POST(
+			makeRequest({
+				threadId: "t-1",
+				review: { decisions: { "fact-1": "approve" }, edits: { "fact-1": { text: 5 } } },
+			}),
+		);
+		expect(malformed.status).toBe(400); // HilItemEditsSchema rejects the non-string value
+	});
 });
 
 describe("POST /api/agent/learning/resume — happy path", () => {
@@ -213,8 +231,10 @@ describe("POST /api/agent/learning/resume — happy path", () => {
 		);
 		await collectSse(response);
 		const callArgs = resumeAgentMock.mock.calls as unknown as unknown[][];
-		const args = callArgs[0]?.[0] as { resumeValue?: { decisions?: Record<string, string> } };
-		expect(args.resumeValue).toEqual({ decisions: { "rc-1": "approve", "fact-1": "reject" } });
+		const args = callArgs[0]?.[0] as {
+			resumeValue?: { decisions?: Record<string, string>; edits?: Record<string, unknown> };
+		};
+		expect(args.resumeValue).toEqual({ decisions: { "rc-1": "approve", "fact-1": "reject" }, edits: {} });
 	});
 
 	test("a chained interrupt (match -> review) re-emits the gate and skips done", async () => {
