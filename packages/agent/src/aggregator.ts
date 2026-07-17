@@ -200,6 +200,15 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 	// of infrastructure managed in another.
 	const causalGroundingRule = `\n\nCAUSAL SCOPING: Do NOT assert an event observed in one account or one vendor's control plane as the CAUSE of a failure in infrastructure managed by a different account or vendor (e.g. an AWS Health event in our estate "triggering" a change on a third-party-managed service like Couchbase Capella, Confluent Cloud, or Kong Konnect). Such a link is at most a candidate correlation to confirm via that vendor's console/support -- phrase it as "candidate correlation, unconfirmed" and never place it as the head of a causal chain. Also check direction of time: an event that occurred AFTER the onset it supposedly caused is not the trigger.`;
 
+	// SIO-1140: multi-source synthesis paraphrased the Index Advisor's server-computed
+	// CREATE INDEX statements into a prose key list (couchbase-only reports kept them
+	// verbatim). The DDL is the one copy-paste artifact of the EXPLAIN/ADVISOR chain and
+	// hand-reconstruction is error-prone (GSI has no INCLUDE clause; key order matters).
+	// Injected only when the findings actually carry DDL so other turns pay no prompt tax.
+	const verbatimDdlRule = /CREATE\s+INDEX/i.test(resultsBlock)
+		? `\n\nVERBATIM DDL REQUIREMENT: The datasource findings below contain one or more CREATE INDEX statements (server-computed Index Advisor output). Reproduce EVERY such statement VERBATIM inside a fenced sql code block in your recommendations -- copy the exact text; do not reword it, reorder keys, or compress an index definition into a prose key list. Prose may explain the DDL, never replace it.`
+		: "";
+
 	// SIO-750: when an investigation focus is established AND we have a prior
 	// answer, replace the loose "do not repeat the full prior report" framing
 	// with continuation-aware guidance that names the anchored services + time
@@ -215,7 +224,7 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 
 	messages.push(
 		new HumanMessage(
-			`Aggregate these datasource findings into a unified incident report. Only reference data present below -- do not fabricate metrics or timestamps.${scopeNote}${unavailableNote}${timelineGuidance}${connectivityGuidance}${perDeploymentGuidance}${awsEstateScopeGuidance}${confidenceFormatRule}${defensiveProseRule}${groundedBlockerRule}${healthCheckGapRule}${numericGroundingRule}${causalGroundingRule}\n\nReport generation timestamp: ${new Date().toISOString()}. Use this exact value as the "Generated" date in the report header. Do not invent a different timestamp.\n\nIf no specific timestamps are available from the datasource findings (i.e., all observations are current-state snapshots rather than timestamped events), use "Current State Assessment" as the section heading instead of "Correlated Timeline", and use "Current" in the time column instead of fabricating timestamps.\n\n${resultsBlock}\n\nProvide: summary, ${hasEventSources ? "correlated timeline (markdown table), " : ""}findings per datasource${elasticDeployments.length > 1 ? " (with per-deployment sub-sections for elastic)" : ""}, confidence score (0.0-1.0), and any gaps.${continuationGuidance}`,
+			`Aggregate these datasource findings into a unified incident report. Only reference data present below -- do not fabricate metrics or timestamps.${scopeNote}${unavailableNote}${timelineGuidance}${connectivityGuidance}${perDeploymentGuidance}${awsEstateScopeGuidance}${confidenceFormatRule}${defensiveProseRule}${groundedBlockerRule}${healthCheckGapRule}${numericGroundingRule}${causalGroundingRule}${verbatimDdlRule}\n\nReport generation timestamp: ${new Date().toISOString()}. Use this exact value as the "Generated" date in the report header. Do not invent a different timestamp.\n\nIf no specific timestamps are available from the datasource findings (i.e., all observations are current-state snapshots rather than timestamped events), use "Current State Assessment" as the section heading instead of "Correlated Timeline", and use "Current" in the time column instead of fabricating timestamps.\n\n${resultsBlock}\n\nProvide: summary, ${hasEventSources ? "correlated timeline (markdown table), " : ""}findings per datasource${elasticDeployments.length > 1 ? " (with per-deployment sub-sections for elastic)" : ""}, confidence score (0.0-1.0), and any gaps.${continuationGuidance}`,
 		),
 	);
 
@@ -731,6 +740,84 @@ export function rewriteNoIndexMisread(answer: string, flagged: string[]): string
 		.join("\n");
 }
 
+// SIO-1140: the Index Advisor's CREATE INDEX DDL (SIO-1137 chain) is the report's one
+// copy-paste artifact, and multi-source synthesis compressed it into a prose key list.
+// The verbatimDdlRule prompt instruction is the primary fix; this deterministic backstop
+// guarantees the statements survive. A statement is real DDL only when it has the full
+// `CREATE INDEX <name> ON <keyspace>(<keys>)` shape with a key-list-looking paren group
+// -- prose mentioning "CREATE INDEX" never matches. A trailing semicolon is consumed so
+// terminated statements are reproduced verbatim.
+const CREATE_INDEX_RE = /CREATE\s+INDEX[\s\S]*?(?:;|(?=```|\n\s*\n|$))/gi;
+const CREATE_INDEX_SHAPE_RE = /^CREATE\s+INDEX\s+(?:`[^`]+`|[A-Za-z_][\w#-]*)\s+ON\s+[^(]*\(([^)]*)\)/i;
+const MAX_VERBATIM_DDL_STATEMENTS = 10;
+
+// Trailing-semicolon-insensitive so `...(a);` in prose matches `...(a)` in the answer.
+function normalizeDdl(s: string): string {
+	return s.replace(/\s+/g, " ").replace(/;\s*$/, "").trim();
+}
+
+// A paren group counts as a key list when it is backticked/dotted/comma-separated
+// (advisor output always is) or a single bare identifier. Multi-word English like
+// "(not production)" is rejected so prose mimicking DDL is never emitted as SQL.
+function looksLikeKeyList(inner: string): boolean {
+	const t = inner.trim();
+	if (t.length === 0) return false;
+	if (/[`,.[\]]/.test(t)) return true;
+	return /^[\w#-]+$/.test(t);
+}
+
+// The redactor is injectable (defaulting to the production redactPiiContent) so tests
+// can assert the redaction wiring deterministically -- sibling suites mock.module the
+// shared package to an identity redactor, which would make a dropped call invisible.
+export function extractCreateIndexStatements(
+	results: DataSourceResult[],
+	redact: (s: string) => string = redactPiiContent,
+): string[] {
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const r of results) {
+		if (typeof r.data !== "string" || r.data.length === 0) continue;
+		for (const m of r.data.match(CREATE_INDEX_RE) ?? []) {
+			// Redact BEFORE comparing/appending: the model answer already passed
+			// redactPiiContent, so sub-agent-derived DDL must cross the same boundary.
+			const stmt = redact(m.trim());
+			const shape = stmt.match(CREATE_INDEX_SHAPE_RE);
+			if (!shape || !looksLikeKeyList(shape[1] ?? "")) continue;
+			const key = normalizeDdl(stmt);
+			if (seen.has(key)) continue;
+			seen.add(key);
+			out.push(stmt);
+			if (out.length >= MAX_VERBATIM_DDL_STATEMENTS) return out;
+		}
+	}
+	return out;
+}
+
+// Whitespace-normalized containment: a reflowed-but-verbatim statement in the answer
+// counts as present; a paraphrase (reworded/reordered) does not.
+export function ensureVerbatimDdl(answer: string, results: DataSourceResult[]): { answer: string; appended: string[] } {
+	const statements = extractCreateIndexStatements(results);
+	if (statements.length === 0) return { answer, appended: [] };
+	const answerNorm = normalizeDdl(answer);
+	const missing = statements.filter((s) => !answerNorm.includes(normalizeDdl(s)));
+	if (missing.length === 0) return { answer, appended: [] };
+	const section = `## Server-computed index DDL (verbatim)\n\nThe Index Advisor returned the following statements; reproduced exactly as computed (recommendation only -- never execute without review):\n\n${missing.map((s) => `\`\`\`sql\n${s}\n\`\`\``).join("\n\n")}\n`;
+	// SIO-632 contract: the dedicated Confidence line stays last -- insert above it.
+	const lines = answer.split("\n");
+	let confIdx = -1;
+	for (let i = lines.length - 1; i >= 0; i--) {
+		if (STRICT_CONFIDENCE_RE.test(lines[i] ?? "")) {
+			confIdx = i;
+			break;
+		}
+	}
+	const rewritten =
+		confIdx >= 0
+			? [...lines.slice(0, confIdx), section, ...lines.slice(confIdx)].join("\n")
+			: `${answer}\n\n${section}`;
+	return { answer: rewritten, appended: missing };
+}
+
 export async function aggregate(state: AgentStateType, config?: RunnableConfig): Promise<Partial<AgentStateType>> {
 	const results = state.dataSourceResults;
 
@@ -1005,9 +1092,17 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	const rewrittenForNoIndex = noIndexMisreadCapTriggered
 		? rewriteNoIndexMisread(rewrittenForRootCause, detectNoIndexMisread(rewrittenForRootCause, results).flagged)
 		: rewrittenForRootCause;
-	const finalAnswer = anyCapTriggered
-		? rewriteConfidenceInAnswer(rewrittenForNoIndex, cappedScore)
-		: rewrittenForNoIndex;
+	// SIO-1140: deterministic backstop -- when a sub-agent report carried Index Advisor
+	// CREATE INDEX DDL that synthesis dropped or paraphrased, append it verbatim above
+	// the confidence line. Content-only; never touches the confidence score.
+	const ddlEnsured = ensureVerbatimDdl(rewrittenForNoIndex, results);
+	if (ddlEnsured.appended.length > 0) {
+		logger.warn(
+			{ appendedDdlCount: ddlEnsured.appended.length },
+			"Aggregated answer dropped advisor CREATE INDEX DDL; appended verbatim section",
+		);
+	}
+	const finalAnswer = anyCapTriggered ? rewriteConfidenceInAnswer(ddlEnsured.answer, cappedScore) : ddlEnsured.answer;
 
 	logger.info(
 		{ duration: Date.now() - startTime, answerLength: finalAnswer.length, confidenceScore: cappedScore },
