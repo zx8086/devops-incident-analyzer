@@ -111,7 +111,19 @@ export interface PumpResult {
 	// its user-facing output as AIMessages (the iac idiom) instead of streaming an
 	// output node, so the handlers read the final message from state when set.
 	hilLearningTurn: boolean;
+	// SIO-1141: the aggregate node's LLM output is streamed live (pre-cap), but the
+	// gate value + post-generation rewrites (confidence cap, ungrounded/expiry
+	// rewrites, verbatim DDL) are applied to finalAnswer AFTER the stream. Capture the
+	// LATEST finalAnswer / confidenceScore emitted by an answer-mutating node so the
+	// caller can re-emit the corrected body and the displayed report matches the gate.
+	finalAnswer?: string;
+	confidenceScore?: number;
 }
+
+// SIO-1141: nodes that can REWRITE finalAnswer / re-cap confidenceScore after aggregate.
+// enforceCorrelationsAggregate + validate run downstream of aggregate and can cap AGAIN
+// (e.g. a degraded correlation rule) -- the LAST writer wins, so we keep updating.
+const ANSWER_REWRITE_NODES = new Set(["aggregate", "enforceCorrelationsAggregate", "validate"]);
 
 const HIL_LEARNING_ENTRY_NODE = "learnFetchTicket";
 
@@ -120,6 +132,10 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 	const emittedFailures = new Set<string>();
 	let responseContent = "";
 	let hilLearningTurn = false;
+	// SIO-1141: latest rewritten finalAnswer / confidenceScore across the answer-mutating
+	// nodes (aggregate then any downstream re-cap). Undefined until an answer node emits.
+	let finalAnswer: string | undefined;
+	let confidenceScore: number | undefined;
 	const toolsUsed = new Set<string>();
 
 	for await (const event of eventStream) {
@@ -136,6 +152,25 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 					const content = redactPiiContent(String(chunkContent));
 					responseContent += content;
 					send({ type: "message", content });
+				}
+			}
+		}
+
+		// SIO-1141: capture the corrected report body + confidence from any answer-mutating
+		// node's output (aggregate streams pre-cap tokens live; the cap/rewrite lands on
+		// finalAnswer AFTER generation). enforceCorrelationsAggregate is NOT a PIPELINE_NODE, so
+		// this check is independent of the pill-emitting block below. Latest writer wins.
+		if (event.event === "on_chain_end" && event.name && ANSWER_REWRITE_NODES.has(event.name)) {
+			const output = event.data?.output as { finalAnswer?: unknown; confidenceScore?: unknown } | undefined;
+			if (output) {
+				if (typeof output.finalAnswer === "string" && output.finalAnswer.length > 0) {
+					// SIO-1141: redact PII here, exactly as the streamed chunks are (line above).
+					// finalAnswer is re-emitted verbatim as message_final and REPLACES the redacted
+					// stream, so an unredacted capture would leak PII the stream had already scrubbed.
+					finalAnswer = redactPiiContent(output.finalAnswer);
+				}
+				if (typeof output.confidenceScore === "number") {
+					confidenceScore = output.confidenceScore;
 				}
 			}
 		}
@@ -422,7 +457,7 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 		}
 	}
 
-	return { toolsUsed: [...toolsUsed], responseContent, hilLearningTurn };
+	return { toolsUsed: [...toolsUsed], responseContent, hilLearningTurn, finalAnswer, confidenceScore };
 }
 
 // SIO-1126: surface the HIL learning lane's interrupts. The match gate asks

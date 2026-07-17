@@ -60,7 +60,10 @@ export const POST: RequestHandler = async ({ request }) => {
 								metadata: { request_id: requestId, session_id: body.threadId },
 							});
 
-							const { toolsUsed } = await pumpEventStream(eventStream, send);
+							const { toolsUsed, finalAnswer, confidenceScore, responseContent } = await pumpEventStream(
+								eventStream,
+								send,
+							);
 							await flushLangSmithCallbacks();
 
 							// Defensive: a second topic shift could theoretically fire if
@@ -76,6 +79,12 @@ export const POST: RequestHandler = async ({ request }) => {
 								}
 							}
 
+							// SIO-1141: re-emit the corrected report body so the resumed turn's
+							// rendered confidence matches the gate (see stream/+server.ts).
+							if (finalAnswer && finalAnswer !== responseContent) {
+								send({ type: "message_final", content: finalAnswer });
+							}
+
 							await pruneThreadState(body.threadId);
 							// SIO-942: persist this turn's live-memory blocks (best-effort). Topic-shift
 							// is an incident-analyzer continuation, matching the default above.
@@ -87,6 +96,7 @@ export const POST: RequestHandler = async ({ request }) => {
 								threadId: body.threadId,
 								responseTime,
 								toolsUsed,
+								...(confidenceScore !== undefined && { confidence: confidenceScore }),
 							});
 						},
 						{

@@ -198,7 +198,10 @@ describe("SIO-1084 A2: aws_logs_start_query guard", () => {
 		expect(isUnproductiveResult(IAM_ERROR, "aws_logs_start_query")).toBe(false);
 	});
 
-	test("after a retention rejection, the next start_query is short-circuited until describe_log_groups runs", () => {
+	// SIO-1141: a retention rejection no longer blocks a DISTINCT (re-anchored) window. The
+	// pre-SIO-1141 latch blocked every subsequent start_query until a describe ran, which
+	// prevented the agent from correcting its window and left eu-oit-prd logs unretrieved.
+	test("after a retention rejection, a re-anchored (distinct-window) start_query is ALLOWED", () => {
 		const state = createLoopGuardState();
 		const sig1 = toolCallSignature("aws_logs_start_query", { logGroupName: "/ecs/x", startTime: 1, endTime: 2 });
 		const sig2 = toolCallSignature("aws_logs_start_query", { logGroupName: "/ecs/x", startTime: 3, endTime: 4 });
@@ -206,12 +209,38 @@ describe("SIO-1084 A2: aws_logs_start_query guard", () => {
 		expect(shouldShortCircuit(state, "aws_logs_start_query", sig1)).toBe(false);
 		recordResult(state, "aws_logs_start_query", sig1, RETENTION_ERROR);
 
-		// re-anchor gate is armed: even a DIFFERENT window is blocked until describe runs
-		expect(shouldShortCircuit(state, "aws_logs_start_query", sig2)).toBe(true);
-
-		// an intervening describe_log_groups clears the gate
-		recordResult(state, "aws_logs_describe_log_groups", "", "{}");
+		// A DIFFERENT window is a genuine re-anchor attempt -- allow it (no describe required).
 		expect(shouldShortCircuit(state, "aws_logs_start_query", sig2)).toBe(false);
+		// The exact-same failed window is still blocked.
+		expect(shouldShortCircuit(state, "aws_logs_start_query", sig1)).toBe(true);
+	});
+
+	// SIO-1141: describe -> corrected start_query still works (and resets the backstop counter).
+	test("describe_log_groups then a corrected start_query is allowed", () => {
+		const state = createLoopGuardState();
+		const sig1 = toolCallSignature("aws_logs_start_query", { logGroupName: "/ecs/x", startTime: 1, endTime: 2 });
+		const sig2 = toolCallSignature("aws_logs_start_query", { logGroupName: "/ecs/x", startRelative: "now-30d" });
+
+		recordResult(state, "aws_logs_start_query", sig1, RETENTION_ERROR);
+		recordResult(state, "aws_logs_describe_log_groups", "", "{}");
+		expect(state.awsStartQueryUnproductive).toBe(0);
+		expect(shouldShortCircuit(state, "aws_logs_start_query", sig2)).toBe(false);
+	});
+
+	// SIO-1141: termination backstop -- a permuter that keeps landing outside retention still
+	// stops once the total unproductive-attempt cap is hit, even with all-distinct windows.
+	test("distinct-window permuter stops at the unproductive-attempt cap", () => {
+		const state = createLoopGuardState();
+		let blocked = false;
+		for (let i = 0; i < 12 && !blocked; i++) {
+			const sig = toolCallSignature("aws_logs_start_query", { logGroupName: "/ecs/x", startTime: i, endTime: i + 1 });
+			if (shouldShortCircuit(state, "aws_logs_start_query", sig)) {
+				blocked = true;
+				break;
+			}
+			recordResult(state, "aws_logs_start_query", sig, RETENTION_ERROR);
+		}
+		expect(blocked).toBe(true);
 	});
 
 	test("an exact-duplicate start_query is short-circuited", () => {

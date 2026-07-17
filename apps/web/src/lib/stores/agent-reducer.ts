@@ -432,6 +432,11 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 	switch (event.type) {
 		case "message":
 			return { ...state, currentContent: state.currentContent + event.content };
+		// SIO-1141: the corrected report body (post-cap, post-rewrite). REPLACE the
+		// streamed accumulation so the rendered report shows the gate confidence and
+		// every post-generation rewrite, not the raw pre-cap tokens.
+		case "message_final":
+			return { ...state, currentContent: event.content };
 		case "tool_call":
 			return state;
 		case "datasource_progress": {

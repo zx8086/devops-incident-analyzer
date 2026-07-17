@@ -76,4 +76,29 @@ describe("mapAwsError retention-window handling (SIO-1078)", () => {
 		const mapped = mapAwsError(err);
 		expect(mapped.kind).toBe("aws-unknown");
 	});
+
+	// SIO-1141: an AMBIGUOUS MalformedQueryException -- message matches NEITHER the syntax nor
+	// the retention pattern -- must get advice naming BOTH failure modes (relative-window retry
+	// AND syntax simplification), not the pure re-anchor advice that looped the eu-oit-prd query.
+	test("ambiguous MalformedQueryException -> advice names both window and syntax recovery", () => {
+		const err = Object.assign(new Error("MalformedQueryException: the query could not be executed"), {
+			name: "MalformedQueryException",
+		});
+		const mapped = mapAwsError(err);
+		expect(mapped.kind).toBe("bad-input");
+		expect(mapped.advice).toBeDefined();
+		// names the drift-proof relative-window recovery...
+		expect(mapped.advice).toContain('startRelative:"now-30d"');
+		// ...AND the syntax fallback so a syntax error is not looped as a window error.
+		expect(mapped.advice).toContain("SYNTAX");
+		expect(mapped.advice).toContain("fields @timestamp");
+	});
+
+	// A generic ValidationException (NOT MalformedQueryException) must NOT get the dual-mode
+	// CloudWatch-Logs advice -- it keeps its own (absent) remediation.
+	test("a generic ValidationException does NOT get the dual-mode query advice", () => {
+		const err = Object.assign(new Error("some other bad input"), { name: "ValidationException" });
+		const mapped = mapAwsError(err);
+		expect(mapped.advice).toBeUndefined();
+	});
 });

@@ -402,8 +402,9 @@ describe("SIO-1029: elasticsearch_search loop guard", () => {
 	});
 });
 
-// SIO-1084: the AWS start_query guard stops re-issuing an identical retention-window
-// rejection and forces an intervening describe_log_groups re-anchor.
+// SIO-1084/SIO-1141: the AWS start_query guard stops re-issuing an IDENTICAL retention-window
+// rejection, but SIO-1141 now ALLOWS a distinct (re-anchored) window to retry so the agent can
+// correct its query. A total-attempt backstop still guarantees termination.
 describe("SIO-1084: aws_logs_start_query loop guard", () => {
 	const RETENTION_ERROR = JSON.stringify({ _error: { kind: "bad-input", advice: "outside retention" } });
 
@@ -429,61 +430,60 @@ describe("SIO-1084: aws_logs_start_query loop guard", () => {
 		return { tool: t, getCalls: () => calls };
 	}
 
-	function buildDescribeTool() {
-		let calls = 0;
-		const t = tool(
-			async () => {
-				calls += 1;
-				return JSON.stringify({ logGroups: [{ logGroupName: "/ecs/x", retentionInDays: 60 }] });
-			},
-			{
-				name: "aws_logs_describe_log_groups",
-				description: "Test fixture describe.",
-				schema: z.object({ logGroupNamePattern: z.string().optional() }).passthrough(),
-			},
-		);
-		return { tool: t, getCalls: () => calls };
-	}
-
-	test("blocks a second start_query after a retention rejection until describe runs", async () => {
-		const { entries, logger } = makeLog();
+	// SIO-1141: a distinct (re-anchored) window is ALLOWED to retry after a rejection -- the
+	// agent must be able to correct its window. Only the exact-duplicate window is blocked.
+	test("allows a re-anchored (distinct-window) start_query after a retention rejection", async () => {
+		const { logger } = makeLog();
 		const { tool: sq, getCalls: sqCalls } = buildStartQueryTool(RETENTION_ERROR);
-		const { tool: dlg } = buildDescribeTool();
-		const [wrappedSq, wrappedDlg] = instrumentTools([sq, dlg], { dataSourceId: "aws", log: logger });
-		if (!wrappedSq || !wrappedDlg) throw new Error("instrumentTools returned empty array");
+		const [wrappedSq] = instrumentTools([sq], { dataSourceId: "aws", log: logger });
+		if (!wrappedSq) throw new Error("instrumentTools returned empty array");
 
-		// first start_query -> retention rejection, arms the re-anchor gate
+		// first start_query -> retention rejection
 		await wrappedSq.invoke({
 			id: "s1",
 			name: "aws_logs_start_query",
 			args: { logGroupName: "/ecs/x", startTime: 1, endTime: 2 },
 			type: "tool_call",
 		});
-		// second start_query (different window) -> short-circuited
-		const blocked = await wrappedSq.invoke({
+		// second start_query with a DIFFERENT window -> allowed (a genuine re-anchor)
+		await wrappedSq.invoke({
 			id: "s2",
 			name: "aws_logs_start_query",
 			args: { logGroupName: "/ecs/x", startTime: 3, endTime: 4 },
 			type: "tool_call",
 		});
-		expect(sqCalls()).toBe(1); // underlying tool ran once
-		const stopText = blocked instanceof ToolMessage ? String(blocked.content) : String(blocked);
-		expect(stopText).toContain("re-anchor");
-		expect(entries.find((e) => e.event === "subagent.loop_guard_stop")).toBeDefined();
+		expect(sqCalls()).toBe(2); // both distinct windows ran
 
-		// describe clears the gate; the next start_query runs
-		await wrappedDlg.invoke({
-			id: "d1",
-			name: "aws_logs_describe_log_groups",
-			args: { logGroupNamePattern: "order" },
-			type: "tool_call",
-		});
-		await wrappedSq.invoke({
+		// re-issuing the IDENTICAL first window is still short-circuited
+		const blocked = await wrappedSq.invoke({
 			id: "s3",
 			name: "aws_logs_start_query",
-			args: { logGroupName: "/ecs/x", startTime: 5, endTime: 6 },
+			args: { logGroupName: "/ecs/x", startTime: 1, endTime: 2 },
 			type: "tool_call",
 		});
-		expect(sqCalls()).toBe(2); // ran again after re-anchor
+		expect(sqCalls()).toBe(2); // duplicate did NOT run
+		const stopText = blocked instanceof ToolMessage ? String(blocked.content) : String(blocked);
+		expect(stopText).toContain("re-anchor");
+	});
+
+	// SIO-1141: a permuter that keeps landing outside retention with ALL-distinct windows
+	// still terminates at the total-attempt backstop.
+	test("stops a distinct-window permuter at the unproductive-attempt cap", async () => {
+		const { entries, logger } = makeLog();
+		const { tool: sq, getCalls: sqCalls } = buildStartQueryTool(RETENTION_ERROR);
+		const [wrappedSq] = instrumentTools([sq], { dataSourceId: "aws", log: logger });
+		if (!wrappedSq) throw new Error("instrumentTools returned empty array");
+
+		for (let i = 0; i < 10; i++) {
+			await wrappedSq.invoke({
+				id: `s${i}`,
+				name: "aws_logs_start_query",
+				args: { logGroupName: "/ecs/x", startTime: i, endTime: i + 1 },
+				type: "tool_call",
+			});
+		}
+		// The backstop capped underlying invocations well under the 10 attempts.
+		expect(sqCalls()).toBeLessThan(10);
+		expect(entries.find((e) => e.event === "subagent.loop_guard_stop")).toBeDefined();
 	});
 });
