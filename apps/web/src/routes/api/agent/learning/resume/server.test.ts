@@ -97,13 +97,16 @@ mock.module("$lib/server/agent", () => ({
 }));
 
 const emitHilLearningInterruptMock = mock(() => false);
-mock.module("$lib/server/sse-pump", () => ({
-	pumpEventStream: mock(async (events: AsyncIterable<Record<string, unknown>>) => {
+const pumpEventStreamMock = mock(
+	async (events: AsyncIterable<Record<string, unknown>>, _send: (event: Record<string, unknown>) => void) => {
 		for await (const _ of events) {
 			// drain
 		}
 		return { toolsUsed: [] as string[], responseContent: "", hilLearningTurn: true };
-	}),
+	},
+);
+mock.module("$lib/server/sse-pump", () => ({
+	pumpEventStream: pumpEventStreamMock,
 	emitHilLearningInterrupt: emitHilLearningInterruptMock,
 	emitTopicShiftPrompt: mock(() => false),
 	emitIacInterrupt: mock(() => false),
@@ -257,5 +260,30 @@ describe("POST /api/agent/learning/resume — happy path", () => {
 
 		expect(events.some((e) => e.type === "error")).toBe(true);
 		expect(events.some((e) => e.type === "done")).toBe(false);
+	});
+
+	// SIO-1146: the pump forwards the structured apply outcome mid-stream; the
+	// terminal ordering the outcome card relies on is resolved -> applied ->
+	// message -> done.
+	test("terminal apply leg orders hil_learning_applied before message and done", async () => {
+		seedPending({ value: { type: "hil_learning_review" } }, undefined);
+		pumpEventStreamMock.mockImplementationOnce(
+			async (_events: AsyncIterable<Record<string, unknown>>, send: (event: Record<string, unknown>) => void) => {
+				send({
+					type: "hil_learning_applied",
+					report: { ticketKey: "DEVOPS-1355", items: [] },
+				});
+				return { toolsUsed: [] as string[], responseContent: "", hilLearningTurn: true };
+			},
+		);
+
+		const response = await POST(makeRequest({ threadId: "t-1", review: { decisions: { "rc-1": "approve" } } }));
+		const events = await collectSse(response);
+
+		const order = events.map((e) => e.type);
+		expect(order.indexOf("hil_learning_resolved")).toBe(0);
+		expect(order.indexOf("hil_learning_applied")).toBeGreaterThan(order.indexOf("hil_learning_resolved"));
+		expect(order.indexOf("message")).toBeGreaterThan(order.indexOf("hil_learning_applied"));
+		expect(order.at(-1)).toBe("done");
 	});
 });

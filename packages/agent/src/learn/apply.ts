@@ -23,7 +23,14 @@ import {
 	setIncidentEmbedding,
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
-import type { BindingCorrection, Heuristic } from "@devops-agent/shared";
+import type {
+	BindingCorrection,
+	Heuristic,
+	HilApplyItem,
+	HilApplyReport,
+	HilDecisions,
+	LearningProposal,
+} from "@devops-agent/shared";
 import { normalize } from "@devops-agent/shared";
 import { AIMessage } from "@langchain/core/messages";
 import { promoteToMemory } from "../memory-promotion.ts";
@@ -38,20 +45,9 @@ import type { RootCauseCorrection } from "./schema.ts";
 
 const logger = getLogger("agent:learn:apply");
 
-export interface HilApplyReport {
-	incidentId: string;
-	incidentCreated: boolean;
-	rootCauseWritten: boolean;
-	curated?: boolean;
-	runbookLinked?: string;
-	factsWritten: number;
-	// SIO-1127 Phase 2:
-	bindingsConfirmed: number;
-	bindingsInvalidated: number;
-	heuristicsProposed: number;
-	draftRunbookUrl?: string;
-	skipped: Array<{ id: string; reason: string }>;
-}
+// SIO-1146: the report shape moved to @devops-agent/shared (the UI renders it as
+// the terminal outcome card); re-exported so existing imports keep working.
+export type { HilApplyReport };
 
 // Compose the RootCause description the aggregator will render verbatim via the
 // existing "prior root cause: <description>" line -- cause, fix, and what was
@@ -120,6 +116,59 @@ function approved(decisions: Record<string, "approve" | "reject">, id: string): 
 	return decisions[id] === "approve";
 }
 
+const MAX_ITEM_LABEL_CHARS = 120;
+function truncateLabel(text: string): string {
+	const trimmed = text.trim();
+	return trimmed.length <= MAX_ITEM_LABEL_CHARS ? trimmed : `${trimmed.slice(0, MAX_ITEM_LABEL_CHARS - 3)}...`;
+}
+
+// SIO-1146: per-item outcome rows for the terminal learning card. Statuses come
+// from `appliedIds` (populated at the actual write points), NOT from `skipped`
+// alone -- block-level skips (KG disabled, live memory off, a mid-block graph
+// failure) leave no per-item entries, so a skipped-lookup would over-report
+// "applied". A rejected decision always wins over any same-id skip entry; an
+// applied root cause keeps a same-id skip entry (draft-runbook PR outcome) as
+// supplementary reason text.
+export function buildApplyItems(
+	proposal: LearningProposal,
+	decisions: HilDecisions,
+	report: HilApplyReport,
+	appliedIds: ReadonlySet<string>,
+): HilApplyItem[] {
+	const skipReason = (id: string): string | undefined => report.skipped.find((s) => s.id === id)?.reason;
+	const toItem = (id: string, kind: HilApplyItem["kind"], label: string, blockId?: string): HilApplyItem => {
+		if (!approved(decisions, id)) return { id, kind, label: truncateLabel(label), status: "rejected" };
+		if (appliedIds.has(id)) {
+			const reason = skipReason(id);
+			return { id, kind, label: truncateLabel(label), status: "applied", ...(reason ? { reason } : {}) };
+		}
+		const reason = skipReason(id) ?? (blockId ? skipReason(blockId) : undefined) ?? "not written";
+		return { id, kind, label: truncateLabel(label), status: "skipped", reason };
+	};
+
+	const items: HilApplyItem[] = [];
+	if (proposal.rootCause) {
+		items.push(toItem(proposal.rootCause.id, "root-cause", proposal.rootCause.causeClass, "graph"));
+	}
+	for (const fact of proposal.memoryFacts) {
+		items.push(toItem(fact.id, "memory-fact", fact.text, "facts"));
+	}
+	for (const binding of proposal.bindings) {
+		items.push(
+			toItem(
+				binding.id,
+				"binding",
+				`${binding.action} ${binding.service} -> ${binding.datasource} ${binding.bindingKind}=${binding.resourceId}`,
+				"graph",
+			),
+		);
+	}
+	for (const heuristic of proposal.heuristics) {
+		items.push(toItem(heuristic.id, "heuristic", heuristic.name));
+	}
+	return items;
+}
+
 // applyLearnings node: terminal writer for the lane. Appends the apply summary
 // as an AIMessage (the iac idiom -- the resume endpoint reads it back via
 // getLastAssistantText).
@@ -134,6 +183,7 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 	const ticketKey = proposal.ticketKey;
 	const alreadyLearned = state.hilAlreadyLearned === true;
 	const report: HilApplyReport = {
+		ticketKey,
 		incidentId: match.incidentId,
 		incidentCreated: false,
 		rootCauseWritten: false,
@@ -142,8 +192,12 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 		bindingsInvalidated: 0,
 		heuristicsProposed: 0,
 		skipped: [],
+		items: [],
 	};
 	const failures: Array<{ node: string; reason: string }> = [];
+	// SIO-1146: ids whose write actually landed, recorded at the write points --
+	// the source of truth for the outcome card's per-item statuses.
+	const appliedIds = new Set<string>();
 
 	let curated = false;
 	if (isKnowledgeGraphEnabled()) {
@@ -183,6 +237,7 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 					ruleName: rc.causeClass,
 				});
 				report.rootCauseWritten = true;
+				appliedIds.add(rc.id);
 				recordKeyDecision({
 					requestId: state.requestId,
 					decision: `Root cause for incident ${match.incidentId} (human-corrected via ${ticketKey}): ${rc.causeClass}`,
@@ -237,7 +292,9 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 				// Soft-fail each binding INDEPENDENTLY (CodeRabbit PR #406): a single throwing
 				// binding must not abort later bindings or the incident curation below.
 				try {
-					await applyBinding(store, binding, ticketKey, state.requestId, report);
+					if (await applyBinding(store, binding, ticketKey, state.requestId, report)) {
+						appliedIds.add(binding.id);
+					}
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					logger.warn({ ticket: ticketKey, binding: binding.id, error: message }, "HIL binding write failed");
@@ -287,6 +344,9 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			logger.warn({ ticket: ticketKey, error: message }, "HIL graph writes failed");
+			// SIO-1146 (CodeRabbit PR #412): block-level skip entry so approved items
+			// caught by the failure render the real reason, not the "not written" fallback.
+			report.skipped.push({ id: "graph", reason: "graph write failed" });
 			failures.push({ node: "applyLearnings", reason: "graph-write-failed" });
 		}
 	} else {
@@ -303,10 +363,13 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 				continue;
 			}
 			try {
-				await applyHeuristic(heuristic, ticketKey, state.requestId, report);
+				if (await applyHeuristic(heuristic, ticketKey, state.requestId, report)) {
+					appliedIds.add(heuristic.id);
+				}
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				logger.warn({ ticket: ticketKey, heuristic: heuristic.name, error: message }, "HIL heuristic write failed");
+				report.skipped.push({ id: heuristic.id, reason: "heuristic write failed" });
 				failures.push({ node: "applyLearnings", reason: "heuristic-write-failed" });
 			}
 		}
@@ -351,6 +414,7 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 					},
 				});
 				report.factsWritten += 1;
+				appliedIds.add(fact.id);
 			}
 			// Narrative summary fact: the deterministic dedup anchor for re-learns.
 			if (report.rootCauseWritten || report.factsWritten > 0) {
@@ -369,6 +433,7 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			logger.warn({ ticket: ticketKey, error: message }, "HIL memory fact writes failed");
+			report.skipped.push({ id: "facts", reason: "memory write failed" });
 			failures.push({ node: "applyLearnings", reason: "memory-write-failed" });
 		}
 	}
@@ -390,8 +455,11 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 		"HIL learnings applied",
 	);
 
+	report.items = buildApplyItems(proposal, decisions, report, appliedIds);
+
 	return {
 		messages: [new AIMessage(buildApplySummary(report, ticketKey))],
+		hilApplyReport: report,
 		...(failures.length > 0 ? { partialFailures: failures } : {}),
 	};
 }
@@ -417,11 +485,11 @@ async function applyBinding(
 	ticketKey: string,
 	requestId: string,
 	report: HilApplyReport,
-): Promise<void> {
+): Promise<boolean> {
 	const kind = BindingKindSchema.safeParse(binding.bindingKind);
 	if (!kind.success) {
 		report.skipped.push({ id: binding.id, reason: `unknown binding kind "${binding.bindingKind}"` });
-		return;
+		return false;
 	}
 	const serviceNormalized = normalize(binding.service);
 
@@ -450,7 +518,7 @@ async function applyBinding(
 				ticket: ticketKey,
 			},
 		});
-		return;
+		return true;
 	}
 
 	// action === "confirm"
@@ -489,6 +557,7 @@ async function applyBinding(
 			},
 		});
 	}
+	return true;
 }
 
 // SIO-1127: an approved heuristic becomes a kind:skill proposal fact (the SIO-1015
@@ -499,10 +568,10 @@ async function applyHeuristic(
 	ticketKey: string,
 	requestId: string,
 	report: HilApplyReport,
-): Promise<void> {
+): Promise<boolean> {
 	if (await skillProposalExists(heuristic.name)) {
 		report.skipped.push({ id: heuristic.id, reason: `skill "${heuristic.name}" already proposed` });
-		return;
+		return false;
 	}
 	const proposal = {
 		worthy: true,
@@ -519,6 +588,7 @@ async function applyHeuristic(
 		annotations: buildSkillAnnotations(proposal, requestId, nowIso, `ticket:${ticketKey}`),
 	});
 	report.heuristicsProposed += 1;
+	return true;
 }
 
 // SIO-1127: open a PR-gated DRAFT runbook for a cause with no catalog match. The file is

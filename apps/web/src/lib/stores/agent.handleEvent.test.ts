@@ -307,6 +307,53 @@ describe("applyStreamEvent", () => {
 		expect(cleared.hilLearningReview).toBeNull();
 	});
 
+	// SIO-1146: the structured apply outcome becomes the terminal card; it clears
+	// the gate cards, survives done, and a fresh learning gate replaces it.
+	const applyReport = {
+		ticketKey: "DEVOPS-1355",
+		incidentId: "inc-1",
+		incidentCreated: false,
+		rootCauseWritten: true,
+		factsWritten: 1,
+		bindingsConfirmed: 0,
+		bindingsInvalidated: 0,
+		heuristicsProposed: 0,
+		skipped: [],
+		items: [{ id: "rc-1", kind: "root-cause" as const, label: "cause-class", status: "applied" as const }],
+	};
+
+	test("hil_learning_applied sets the outcome card and clears the review card", () => {
+		let state = applyStreamEvent(initialReducerState(), {
+			type: "hil_learning_review",
+			threadId: "t-1",
+			ticketKey: "DEVOPS-1355",
+			proposal: { ticketKey: "DEVOPS-1355", rootCause: null, bindings: [], heuristics: [], memoryFacts: [] },
+			alreadyLearned: false,
+			message: "review",
+		});
+		state = applyStreamEvent(state, { type: "hil_learning_applied", report: applyReport });
+		expect(state.hilLearningOutcome?.ticketKey).toBe("DEVOPS-1355");
+		expect(state.hilLearningReview).toBeNull();
+		expect(state.hilLearningMatch).toBeNull();
+	});
+
+	test("the outcome card survives done but a fresh learning gate clears it", () => {
+		let state = applyStreamEvent(initialReducerState(), { type: "hil_learning_applied", report: applyReport });
+		state = applyStreamEvent(state, { type: "done", threadId: "t-1", responseTime: 100 });
+		expect(state.hilLearningOutcome).not.toBeNull();
+		state = applyStreamEvent(state, { type: "hil_learning_resolved" });
+		expect(state.hilLearningOutcome).not.toBeNull(); // resolved fires at resume-start, pre-apply
+		state = applyStreamEvent(state, {
+			type: "hil_learning_match",
+			threadId: "t-2",
+			ticketKey: "DEVOPS-1400",
+			ticketSummary: "summary",
+			candidates: [],
+			message: "pick",
+		});
+		expect(state.hilLearningOutcome).toBeNull();
+	});
+
 	// SIO-922: the fleet-upgrade gate was emitted by the backend but dropped by the UI; these
 	// pin the report -> choice -> result chain that renders the card and clears it on apply.
 	test("fleet_upgrade_preview_report populates the preview and clears any prior result", () => {

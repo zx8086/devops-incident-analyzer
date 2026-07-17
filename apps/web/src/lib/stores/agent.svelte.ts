@@ -3,6 +3,7 @@
 import type {
 	ActionResult,
 	DataSourceContext,
+	HilApplyReport,
 	HilItemEdits,
 	PendingAction,
 	StreamEvent,
@@ -126,6 +127,8 @@ function createAgentStore() {
 	// SIO-1126: HIL learning lane gate cards.
 	let hilLearningMatch = $state<HilLearningMatchPrompt | null>(null);
 	let hilLearningReview = $state<HilLearningReviewPrompt | null>(null);
+	// SIO-1146: terminal outcome card after apply (dismissed client-side).
+	let hilLearningOutcome = $state<HilApplyReport | null>(null);
 	// Which agent the UI is driving; toggled from the robot icon.
 	let currentAgent = $state<AgentId>("incident-analyzer");
 	// elastic-iac HITL banners.
@@ -228,6 +231,8 @@ function createAgentStore() {
 		fleetUpgradeChoice = null;
 		fleetUpgradeResult = null;
 		iacPipelineLog = undefined; // SIO-982: clear the prior GitOps pipeline log on a new turn
+		// SIO-1146: a new turn dismisses the prior learning outcome card.
+		hilLearningOutcome = null;
 
 		abortController = new AbortController();
 
@@ -315,6 +320,7 @@ function createAgentStore() {
 			topicShiftPrompt,
 			hilLearningMatch,
 			hilLearningReview,
+			hilLearningOutcome,
 			iacClarify,
 			iacPlanReview,
 			iacPipelineProgress,
@@ -349,6 +355,7 @@ function createAgentStore() {
 		topicShiftPrompt = next.topicShiftPrompt;
 		hilLearningMatch = next.hilLearningMatch;
 		hilLearningReview = next.hilLearningReview;
+		hilLearningOutcome = next.hilLearningOutcome;
 		iacClarify = next.iacClarify;
 		iacPlanReview = next.iacPlanReview;
 		iacPipelineProgress = next.iacPipelineProgress;
@@ -565,6 +572,7 @@ function createAgentStore() {
 		topicShiftPrompt = null;
 		hilLearningMatch = null;
 		hilLearningReview = null;
+		hilLearningOutcome = null;
 		iacClarify = null;
 		iacPlanReview = null;
 		iacPipelineProgress = [];
@@ -728,8 +736,13 @@ function createAgentStore() {
 				handleEvent(event);
 			}
 		} catch (error) {
-			hilLearningMatch = hilLearningMatch ?? pendingMatch;
-			hilLearningReview = hilLearningReview ?? pendingReview;
+			// SIO-1146: if the outcome card arrived before the stream died, the apply
+			// already committed -- restoring the review card would invite a re-apply
+			// that the endpoint's gate-binding check 409s.
+			if (hilLearningOutcome === null) {
+				hilLearningMatch = hilLearningMatch ?? pendingMatch;
+				hilLearningReview = hilLearningReview ?? pendingReview;
+			}
 			currentContent += `\n\n[Error resuming learning flow: ${error instanceof Error ? error.message : String(error)}]`;
 			lastOutcome = "error";
 		} finally {
@@ -755,6 +768,12 @@ function createAgentStore() {
 	function resolveHilReview(decisions: Record<string, "approve" | "reject">, edits: HilItemEdits = {}) {
 		if (!hilLearningReview) return;
 		return resumeHilLearning({ review: { decisions, edits } }, hilLearningReview.threadId);
+	}
+
+	// SIO-1146: the Done button on the terminal outcome card. Pure client-side --
+	// the thread already completed (pruned + done) when the outcome arrived.
+	function dismissHilLearningOutcome() {
+		hilLearningOutcome = null;
 	}
 
 	// SIO-751: POST the user's topic-shift decision to the resume endpoint and
@@ -886,6 +905,9 @@ function createAgentStore() {
 		get hilLearningReview() {
 			return hilLearningReview;
 		},
+		get hilLearningOutcome() {
+			return hilLearningOutcome;
+		},
 		get currentAgent() {
 			return currentAgent;
 		},
@@ -941,6 +963,7 @@ function createAgentStore() {
 		resolveTopicShift,
 		resolveHilMatch,
 		resolveHilReview,
+		dismissHilLearningOutcome,
 		switchAgent,
 		resolveIacPlanReview,
 		submitIacClarify,

@@ -7,6 +7,7 @@ import type {
 	DataSourceResult,
 	ExtractedEntities,
 	GraphBlastRadiusHit,
+	HilApplyReport,
 	HilItemEdits,
 	InvestigationFocus,
 	MitigationSteps,
@@ -369,6 +370,13 @@ export const AgentState = Annotation.Root({
 	hilEdits: Annotation<HilItemEdits>({
 		reducer: (_, next) => next,
 		default: () => ({}),
+	}),
+
+	// SIO-1146: structured apply outcome; the SSE pump forwards it from
+	// applyLearnings' node output as hil_learning_applied for the terminal card.
+	hilApplyReport: Annotation<HilApplyReport | undefined>({
+		reducer: (_, next) => next,
+		default: () => undefined,
 	}),
 });
 

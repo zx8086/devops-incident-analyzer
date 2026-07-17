@@ -10,6 +10,7 @@ import ElasticDeploymentSelector from "$lib/components/ElasticDeploymentSelector
 import FleetUpgradeChoiceCard from "$lib/components/FleetUpgradeChoiceCard.svelte";
 import Icon from "$lib/components/Icon.svelte";
 import LearningMatchCard from "$lib/components/LearningMatchCard.svelte";
+import LearningOutcomeCard from "$lib/components/LearningOutcomeCard.svelte";
 import LearningProposalCard from "$lib/components/LearningProposalCard.svelte";
 import PipelineProgressCard from "$lib/components/PipelineProgressCard.svelte";
 import PlanReviewCard from "$lib/components/PlanReviewCard.svelte";
@@ -421,6 +422,15 @@ function handleSuggestionClick(suggestion: string) {
       prompt={agentStore.hilLearningReview}
       disabled={agentStore.isStreaming}
       onApply={(decisions, edits) => agentStore.resolveHilReview(decisions, edits)}
+    />
+  {/if}
+
+  {#if agentStore.hilLearningOutcome}
+    <!-- SIO-1146: terminal outcome card after apply. Mutually exclusive with the
+         gate cards by construction (the reducer nulls them on hil_learning_applied). -->
+    <LearningOutcomeCard
+      outcome={agentStore.hilLearningOutcome}
+      onDone={() => agentStore.dismissHilLearningOutcome()}
     />
   {/if}
 

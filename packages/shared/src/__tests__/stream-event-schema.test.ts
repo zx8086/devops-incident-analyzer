@@ -256,3 +256,67 @@ describe("StreamEventSchema fleet_upgrade events (SIO-922)", () => {
 		expect(() => StreamEventSchema.parse({ type: "fleet_upgrade_apply_result", status: "pushed" })).toThrow();
 	});
 });
+
+describe("StreamEventSchema hil_learning_applied (SIO-1146)", () => {
+	const validReport = {
+		ticketKey: "DEVOPS-1375",
+		incidentId: "jira:DEVOPS-1375",
+		incidentCreated: true,
+		rootCauseWritten: true,
+		curated: true,
+		factsWritten: 3,
+		bindingsConfirmed: 1,
+		bindingsInvalidated: 0,
+		heuristicsProposed: 0,
+		skipped: [{ id: "fact-2", reason: "rejected" }],
+		items: [
+			{ id: "rc-1", kind: "root-cause", label: "nlb-stale-target-capella-side", status: "applied" },
+			{ id: "fact-2", kind: "memory-fact", label: "Cluster mn1... endpoint service", status: "rejected" },
+			{
+				id: "bind-1",
+				kind: "binding",
+				label: "confirm svc -> aws vpc-endpoint",
+				status: "skipped",
+				reason: "already recorded",
+			},
+		],
+	};
+
+	test("parses a well-formed report", () => {
+		const parsed = StreamEventSchema.parse({ type: "hil_learning_applied", report: validReport });
+		expect(parsed.type).toBe("hil_learning_applied");
+		if (parsed.type !== "hil_learning_applied") throw new Error("narrow");
+		expect(parsed.report.items).toHaveLength(3);
+		expect(parsed.report.items[1]?.status).toBe("rejected");
+		expect(parsed.report.items[2]?.reason).toBe("already recorded");
+	});
+
+	test("rejects an unknown item status", () => {
+		expect(() =>
+			StreamEventSchema.parse({
+				type: "hil_learning_applied",
+				report: { ...validReport, items: [{ id: "rc-1", kind: "root-cause", label: "x", status: "pending" }] },
+			}),
+		).toThrow();
+	});
+
+	test("rejects a report missing ticketKey", () => {
+		const { ticketKey: _omit, ...noTicket } = validReport;
+		expect(() => StreamEventSchema.parse({ type: "hil_learning_applied", report: noTicket })).toThrow();
+	});
+
+	// CodeRabbit PR #412: skipped items must carry the write-time reason.
+	test("rejects a skipped item without a reason; applied without reason is fine", () => {
+		expect(() =>
+			StreamEventSchema.parse({
+				type: "hil_learning_applied",
+				report: { ...validReport, items: [{ id: "fact-1", kind: "memory-fact", label: "x", status: "skipped" }] },
+			}),
+		).toThrow();
+		const ok = StreamEventSchema.parse({
+			type: "hil_learning_applied",
+			report: { ...validReport, items: [{ id: "rc-1", kind: "root-cause", label: "x", status: "applied" }] },
+		});
+		expect(ok.type).toBe("hil_learning_applied");
+	});
+});
