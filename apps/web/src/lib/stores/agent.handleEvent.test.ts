@@ -11,6 +11,22 @@ describe("applyStreamEvent", () => {
 		expect(next2.currentContent).toBe("hi world");
 	});
 
+	// SIO-1141: message_final REPLACES the accumulated stream (the aggregate tokens were
+	// streamed pre-cap; the corrected body carries the gate confidence + all rewrites).
+	test("message_final replaces accumulated streamed content", () => {
+		let state = applyStreamEvent(initialReducerState(), {
+			type: "message",
+			content: "# Report\n\nConfidence: 0.81",
+		});
+		expect(state.currentContent).toContain("0.81");
+		state = applyStreamEvent(state, {
+			type: "message_final",
+			content: "# Report\n\nConfidence: 0.59",
+		});
+		expect(state.currentContent).toBe("# Report\n\nConfidence: 0.59");
+		expect(state.currentContent).not.toContain("0.81");
+	});
+
 	// SIO-876: live pipeline-watch ticker accumulates status transitions.
 	test("accumulates iac_pipeline_progress lines", () => {
 		let state = initialReducerState();

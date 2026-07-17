@@ -33,3 +33,29 @@ report this as the authoritative ksqlDB cluster degradation finding. Do NOT
 re-derive worker liveness from `ksql_list_queries` response shape — the
 `/clusterStatus` endpoint is the ground truth. Cite the host map from
 `details.clusterStatus` so the reader can identify which workers are down.
+
+## Offset-growth when broker timestamps are unusable (SIO-1141)
+
+A **timestamp-based** offset lookup (`kafka_get_topic_offsets` with a `timestamp`
+argument) returns the offset of the first message whose broker-stored timestamp is
+`>= timestamp`. When a broker's stored timestamps are corrupt or far-future, NO
+stored timestamp exceeds a recent incident timestamp, so the broker returns the
+**current high-water mark** for every partition. Symptom: the timestamp lookup for a
+past incident window returns values identical to the LATEST offsets.
+
+When you see that symptom, DO NOT report offset-growth as "unavailable" or the
+backlog-drain hypothesis as unconfirmable. Timestamp lookups are only ONE way to
+measure growth. Pivot to a **timestamp-independent** measure before concluding
+anything:
+
+1. `kafka_get_consumer_group_lag({ groupId })` — committed offsets vs current
+   high-water marks. This is a real position-in-log measure and does not depend on
+   broker timestamps at all. Growing lag is the direct signal of a backlog.
+2. Two-sample delta over wall-clock time — call `kafka_get_topic_offsets` (no
+   `timestamp`; LATEST) once, wait ~30s, call it again; `secondSample - firstSample`
+   is live message inflow. This is exactly how `kafka_list_dlq_topics` computes
+   `recentDelta`; apply the same technique to any topic.
+
+Only after BOTH timestamp-independent measures are unavailable may you report an
+offset-growth gap — and phrase it as "historical per-window offset deltas could not
+be reconstructed because broker timestamps are unusable", never a flat "unavailable".

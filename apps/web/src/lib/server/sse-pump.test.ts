@@ -304,3 +304,59 @@ describe("pumpEventStream hilLearningTurn flag", () => {
 		expect(normal.hilLearningTurn).toBe(false);
 	});
 });
+
+// SIO-1141: the pump captures the corrected (post-cap) finalAnswer + confidenceScore
+// from answer-mutating nodes' on_chain_end, so the route can re-emit the corrected body.
+describe("pumpEventStream finalAnswer/confidenceScore capture", () => {
+	test("captures aggregate's rewritten finalAnswer + capped confidence", async () => {
+		const send = () => undefined;
+		const result = await pumpEventStream(
+			fromArray([
+				// The aggregate LLM streamed the pre-cap prose live (0.81)...
+				{
+					event: "on_chat_model_stream",
+					metadata: { langgraph_node: "aggregate" },
+					data: { chunk: { content: "# Report\n\nConfidence: 0.81" } },
+				},
+				// ...then aggregate returned the rewritten body (0.59) at chain end.
+				{
+					event: "on_chain_end",
+					name: "aggregate",
+					data: { output: { finalAnswer: "# Report\n\nConfidence: 0.59", confidenceScore: 0.59 } },
+				},
+			]),
+			send,
+		);
+		expect(result.responseContent).toContain("0.81");
+		expect(result.finalAnswer).toBe("# Report\n\nConfidence: 0.59");
+		expect(result.confidenceScore).toBe(0.59);
+	});
+
+	test("a downstream re-cap (enforceCorrelationsAggregate) wins over aggregate", async () => {
+		const send = () => undefined;
+		const result = await pumpEventStream(
+			fromArray([
+				{
+					event: "on_chain_end",
+					name: "aggregate",
+					data: { output: { finalAnswer: "body A\n\nConfidence: 0.72", confidenceScore: 0.72 } },
+				},
+				{
+					event: "on_chain_end",
+					name: "enforceCorrelationsAggregate",
+					data: { output: { finalAnswer: "body B\n\nConfidence: 0.59", confidenceScore: 0.59 } },
+				},
+			]),
+			send,
+		);
+		expect(result.finalAnswer).toBe("body B\n\nConfidence: 0.59");
+		expect(result.confidenceScore).toBe(0.59);
+	});
+
+	test("leaves finalAnswer/confidenceScore undefined when no answer node ran", async () => {
+		const send = () => undefined;
+		const result = await pumpEventStream(fromArray([{ event: "on_chain_start", name: "classify" }]), send);
+		expect(result.finalAnswer).toBeUndefined();
+		expect(result.confidenceScore).toBeUndefined();
+	});
+});

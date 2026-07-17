@@ -137,7 +137,10 @@ export const POST: RequestHandler = async ({ request }) => {
 								// SIO-751: shared event-routing helper. Both the initial stream
 								// handler (here) and the resume endpoint use the same logic so
 								// resumed graphs surface identical events.
-								const { toolsUsed, hilLearningTurn } = await pumpEventStream(eventStream, send);
+								// SIO-1141: finalAnswer/confidenceScore carry the post-cap corrected
+								// report; the aggregate tokens were streamed pre-cap.
+								const { toolsUsed, hilLearningTurn, finalAnswer, confidenceScore, responseContent } =
+									await pumpEventStream(eventStream, send);
 
 								await flushLangSmithCallbacks();
 
@@ -207,6 +210,15 @@ export const POST: RequestHandler = async ({ request }) => {
 											}
 										: undefined);
 
+								// SIO-1141: the aggregate LLM tokens were streamed live (pre-cap). Re-emit
+								// the graph's final rewritten body so the rendered report shows the capped
+								// confidence and every post-generation rewrite (grounding/expiry/DDL). Only
+								// when it actually differs from what was streamed, to avoid a needless
+								// full re-render.
+								if (finalAnswer && finalAnswer !== responseContent) {
+									send({ type: "message_final", content: finalAnswer });
+								}
+
 								const responseTime = Date.now() - startTime;
 								log.info({ responseTime, toolsUsed: toolsUsed.length, toolNames: toolsUsed }, "agent.request.end");
 								// SIO-476: prune the checkpoint after the turn completes (best-effort).
@@ -222,6 +234,7 @@ export const POST: RequestHandler = async ({ request }) => {
 									responseTime,
 									toolsUsed,
 									dataSourceContext,
+									...(confidenceScore !== undefined && { confidence: confidenceScore }),
 								});
 							},
 							{ "request.id": requestId, "thread.id": threadId, "run.id": runId },

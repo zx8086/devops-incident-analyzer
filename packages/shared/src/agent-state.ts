@@ -571,6 +571,12 @@ export const FleetVersionCrosstabSchema = z.object({
 
 export const StreamEventSchema = z.discriminatedUnion("type", [
 	z.object({ type: z.literal("message"), content: z.string() }),
+	// SIO-1141: terminal corrected report body. The aggregate node streams its LLM
+	// output live as `message` chunks (pre-cap), but the confidence cap + grounding/
+	// expiry/DDL rewrites land on finalAnswer AFTER generation. This event carries the
+	// final rewritten body; the reducer REPLACES the accumulated stream with it so the
+	// displayed report (and its confidence line) matches the gate value.
+	z.object({ type: z.literal("message_final"), content: z.string() }),
 	z.object({
 		type: z.literal("tool_call"),
 		toolName: z.string(),

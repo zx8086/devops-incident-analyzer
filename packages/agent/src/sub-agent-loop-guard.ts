@@ -30,6 +30,12 @@ const AWS_LOOPING_ERROR_KINDS = new Set<string>(["bad-input", "resource-not-foun
 // under recursionLimit 40. One broad query should suffice, so this is generous headroom.
 const MAX_UNPRODUCTIVE_SEARCHES = 5;
 
+// SIO-1141: absolute cap on TOTAL unproductive aws_logs_start_query calls in one sub-agent
+// run. Distinct (re-anchored) windows are allowed to retry, but a permuter that keeps landing
+// outside retention must still terminate. Generous enough to cover: initial fail -> describe ->
+// corrected retry -> (worst case) one more describe + corrected retry, before giving up.
+const MAX_AWS_START_QUERY_UNPRODUCTIVE = 4;
+
 export const LOOP_GUARD_STOP_MESSAGE =
 	"No results for this query, and equivalent searches have already returned nothing. " +
 	"Stop searching -- do not call this tool again with a similar query. Synthesize your " +
@@ -51,8 +57,16 @@ export interface LoopGuardState {
 	// MAX_UNPRODUCTIVE_SEARCHES backstop.
 	unproductiveSearches: number;
 	// SIO-1084: set when the last aws_logs_start_query returned a retention/bad-input
-	// _error; cleared by an intervening aws_logs_describe_log_groups.
+	// _error; cleared by an intervening aws_logs_describe_log_groups. Used only to select
+	// the stop MESSAGE (re-anchor advice); it no longer gates a distinct-window retry.
 	awsStartQueryNeedsReanchor: boolean;
+	// SIO-1141: TOTAL unproductive aws_logs_start_query calls this run. A retention/bad-input
+	// rejection used to latch awsStartQueryNeedsReanchor and block EVERY subsequent start_query
+	// -- even a genuinely re-anchored (distinct-window) retry -- until a describe ran. That is
+	// wrong: a changed window IS a re-anchor attempt and must be allowed. We now allow distinct
+	// windows and instead bound the total unproductive attempts (mirrors MAX_UNPRODUCTIVE_SEARCHES)
+	// so a permuter that keeps landing outside retention still terminates.
+	awsStartQueryUnproductive: number;
 }
 
 export function createLoopGuardState(): LoopGuardState {
@@ -60,6 +74,7 @@ export function createLoopGuardState(): LoopGuardState {
 		seenSignatures: new Set<string>(),
 		unproductiveSearches: 0,
 		awsStartQueryNeedsReanchor: false,
+		awsStartQueryUnproductive: 0,
 	};
 }
 
@@ -220,8 +235,15 @@ export function shouldShortCircuit(state: LoopGuardState, toolName: string, sign
 	if (!GUARDED_TOOLS.has(toolName)) return false;
 
 	if (toolName === "aws_logs_start_query") {
+		// Exact-duplicate window: never re-issue the identical call.
 		if (state.seenSignatures.has(signature)) return true;
-		if (state.awsStartQueryNeedsReanchor) return true;
+		// SIO-1141: hard termination backstop -- stop once total unproductive start_query
+		// attempts hit the cap (mirrors the elastic MAX_UNPRODUCTIVE_SEARCHES). A DISTINCT
+		// window below the cap is a legitimate re-anchor attempt and is allowed to proceed,
+		// so the agent can correct its window (or interleave a describe) instead of being
+		// blocked on the first bad-input. (Pre-SIO-1141 this returned true whenever the
+		// awsStartQueryNeedsReanchor latch was set, which blocked corrected retries too.)
+		if (state.awsStartQueryUnproductive >= MAX_AWS_START_QUERY_UNPRODUCTIVE) return true;
 		return false;
 	}
 
@@ -256,6 +278,10 @@ export function recordResult(
 ): void {
 	if (toolName === AWS_DESCRIBE_LOG_GROUPS) {
 		state.awsStartQueryNeedsReanchor = false;
+		// SIO-1141: a fresh describe gives the agent the retention/creation facts it needs to
+		// build a valid window, so reset the unproductive counter -- the post-describe retry
+		// is a genuine fresh start, not a continuation of the pre-describe permutation.
+		state.awsStartQueryUnproductive = 0;
 		return;
 	}
 	if (!GUARDED_TOOLS.has(toolName)) return;
@@ -263,7 +289,16 @@ export function recordResult(
 	state.seenSignatures.add(signature);
 
 	if (toolName === "aws_logs_start_query") {
-		state.awsStartQueryNeedsReanchor = isUnproductiveResult(content, toolName);
+		const unproductive = isUnproductiveResult(content, toolName);
+		// Keep the latch for stop-MESSAGE selection (re-anchor advice), and count total
+		// unproductive attempts for the SIO-1141 termination backstop. A productive result
+		// clears both so a later unrelated failure starts fresh.
+		state.awsStartQueryNeedsReanchor = unproductive;
+		if (unproductive) {
+			state.awsStartQueryUnproductive += 1;
+		} else {
+			state.awsStartQueryUnproductive = 0;
+		}
 		return;
 	}
 

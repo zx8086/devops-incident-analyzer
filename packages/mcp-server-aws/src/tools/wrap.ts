@@ -142,10 +142,7 @@ export function mapAwsError(err: unknown): ToolError {
 		// its message keeps its own remediation instead of being told to rewrite a query.
 		toolError.advice =
 			"This is a query SYNTAX error in queryString, NOT a time-window/retention problem -- do NOT re-anchor the window or retry the same query. Fix the CloudWatch Logs Insights syntax. A known-good minimal query is: `fields @timestamp, @message | filter @message like /THE1/ | sort @timestamp desc | limit 20` (each command on its own is separated by `|`; use `filter ... like /regex/` to match text, `fields` to select columns). If the account rejects standard Logs Insights syntax, drop the query to just `fields @timestamp, @message | limit 20` and filter client-side.";
-	} else if (
-		kind === "bad-input" &&
-		(err.name === "MalformedQueryException" || RETENTION_WINDOW_PATTERN.test(err.message))
-	) {
+	} else if (kind === "bad-input" && RETENTION_WINDOW_PATTERN.test(err.message)) {
 		// SIO-1078: distinguish a retention-window rejection from a generic validation error
 		// so the LLM stops retrying an unrecoverable window and pivots to another source.
 		// SIO-1079: a MalformedQueryException means the requested WINDOW is outside retention,
@@ -154,6 +151,15 @@ export function mapAwsError(err: unknown): ToolError {
 		// incident itself predates retention.
 		toolError.advice =
 			"The requested query window is outside the log group's retention or predates its creation -- this does NOT mean the incident's logs are expired. CloudWatch Logs Insights only returns data within the retention window. Call aws_logs_describe_log_groups to read retentionInDays and creationTime, then re-anchor startTime/endTime to the incident/event timestamp (usually recent) within [now - retentionInDays, now]. Do not retry the same window; only conclude the logs are expired if the incident itself predates retention.";
+	} else if (kind === "bad-input" && err.name === "MalformedQueryException") {
+		// SIO-1141: an AMBIGUOUS MalformedQueryException -- the message matched NEITHER the
+		// syntax pattern NOR the retention-window pattern. Previously this fell through to the
+		// pure re-anchor advice above, so a queryString SYNTAX error was handed window-recovery
+		// steps that can never fix it -> an endless re-anchor loop (the eu-oit-prd gap). Name
+		// BOTH failure modes so the agent tries the drift-proof relative window FIRST, then, if
+		// the window is already recent, fixes the query syntax -- rather than looping on one.
+		toolError.advice =
+			'MalformedQueryException has two causes; try them in order. (1) WINDOW: the requested time range may be outside the log group\'s retention/creation. Re-issue with the drift-proof relative window startRelative:"now-30d" (do NOT compute absolute epochs); call aws_logs_describe_log_groups for retentionInDays/creationTime if needed. (2) SYNTAX: if the window is already recent and it still fails, this is a queryString syntax error -- simplify to `fields @timestamp, @message | limit 20` and filter client-side. Do not re-issue the identical failed query; only conclude the logs are unavailable after BOTH a recent relative window AND a minimal query have failed.';
 	}
 
 	return toolError;
