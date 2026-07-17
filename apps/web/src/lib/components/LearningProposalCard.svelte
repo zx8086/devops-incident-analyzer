@@ -147,6 +147,7 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
               class="mt-0.5 w-full rounded border border-tommy-accent-blue/30 bg-white px-2 py-1 text-xs text-tommy-navy"
               rows="2"
               {disabled}
+              aria-label="Root cause description"
               value={editValue(rootCause.id, "description", rootCause.description)}
               oninput={(e) => setEdit(rootCause.id, "description", e.currentTarget.value)}
             ></textarea>
@@ -155,6 +156,7 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
               class="mt-0.5 w-full rounded border border-tommy-accent-blue/30 bg-white px-2 py-1 text-xs text-tommy-navy"
               rows="2"
               {disabled}
+              aria-label="Root cause resolution"
               value={editValue(rootCause.id, "resolution", rootCause.resolution)}
               oninput={(e) => setEdit(rootCause.id, "resolution", e.currentTarget.value)}
             ></textarea>
@@ -186,6 +188,7 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
                 class="w-full rounded border border-tommy-accent-blue/30 bg-white px-2 py-1 text-xs text-tommy-navy"
                 rows="2"
                 {disabled}
+                aria-label="Memory fact text"
                 value={editValue(fact.id, "text", fact.text)}
                 oninput={(e) => setEdit(fact.id, "text", e.currentTarget.value)}
               ></textarea>
@@ -215,6 +218,7 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
                   class="mt-0.5 w-full rounded border border-tommy-accent-blue/30 bg-white px-2 py-1 text-xs text-tommy-navy"
                   rows="2"
                   {disabled}
+                  aria-label="Binding correction reason"
                   value={editValue(binding.id, "reason", binding.reason)}
                   oninput={(e) => setEdit(binding.id, "reason", e.currentTarget.value)}
                 ></textarea>
@@ -239,6 +243,7 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
                   class="mt-0.5 w-full rounded border border-tommy-accent-blue/30 bg-white px-2 py-1 text-xs text-tommy-navy"
                   rows="2"
                   {disabled}
+                  aria-label="Heuristic description"
                   value={editValue(heuristic.id, "description", heuristic.description)}
                   oninput={(e) => setEdit(heuristic.id, "description", e.currentTarget.value)}
                 ></textarea>
@@ -247,6 +252,7 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
                   class="w-full rounded border border-tommy-accent-blue/30 bg-white px-2 py-1 text-xs text-tommy-navy"
                   rows="2"
                   {disabled}
+                  aria-label="Heuristic when to use"
                   value={editValue(heuristic.id, "whenToUse", heuristic.whenToUse)}
                   oninput={(e) => setEdit(heuristic.id, "whenToUse", e.currentTarget.value)}
                 ></textarea>
@@ -255,6 +261,7 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
                   class="w-full rounded border border-tommy-accent-blue/30 bg-white px-2 py-1 text-xs text-tommy-navy"
                   rows="2"
                   {disabled}
+                  aria-label="Heuristic procedure"
                   value={editValue(heuristic.id, "procedure", heuristic.procedure)}
                   oninput={(e) => setEdit(heuristic.id, "procedure", e.currentTarget.value)}
                 ></textarea>
