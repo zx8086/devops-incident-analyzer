@@ -253,6 +253,24 @@ function extractConfidenceScore(answer: string): number {
 	return 0;
 }
 
+// SIO-1133: stamp the turn's requestId into the report footer DETERMINISTICALLY (never via
+// a prompt instruction -- LLM-stamped values drift, see the Generated-timestamp lesson).
+// The requestId IS the KG Incident node id, so a report pasted by hand into a Jira ticket
+// carries a machine-readable key the learn-from lane scans for an exact match. Idempotent:
+// a re-render (e.g. a resumed turn) must not append a second footer.
+const REQUEST_ID_FOOTER_LABEL = "**Request-Id:**";
+export function appendRequestIdFooter(answer: string, requestId: string): string {
+	if (!requestId) return answer;
+	const trimmed = answer.replace(/\s+$/, "");
+	const footer = `${REQUEST_ID_FOOTER_LABEL} ${requestId}`;
+	// Idempotent on the FOOTER specifically (CodeRabbit PR #405): match the trimmed LAST
+	// line, not any occurrence -- a report that merely mentions the id in its body must not
+	// suppress the required bottom footer.
+	const lastLine = trimmed.slice(trimmed.lastIndexOf("\n") + 1);
+	if (lastLine === footer) return answer;
+	return `${trimmed}\n\n${footer}`;
+}
+
 // SIO-860: rewrite the dedicated "Confidence:" line in the report to `score` so the
 // printed value matches the gate's confidenceScore. Without this the LLM's pre-cap
 // prose (e.g. 0.90) contradicts a capped gate value (0.59), firing a low_confidence
@@ -1102,7 +1120,12 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 			"Aggregated answer dropped advisor CREATE INDEX DDL; appended verbatim section",
 		);
 	}
-	const finalAnswer = anyCapTriggered ? rewriteConfidenceInAnswer(ddlEnsured.answer, cappedScore) : ddlEnsured.answer;
+	const capped = anyCapTriggered ? rewriteConfidenceInAnswer(ddlEnsured.answer, cappedScore) : ddlEnsured.answer;
+	// SIO-1133: stamp the Request-Id LAST so it sits at the very bottom of the report,
+	// after every content/confidence rewrite. Deterministic (not a prompt field); post
+	// PII redaction (redactPiiContent ran on the raw LLM output far upstream), so the
+	// UUID is never mangled. This is the machine key the learn-from lane scans for.
+	const finalAnswer = appendRequestIdFooter(capped, state.requestId);
 
 	logger.info(
 		{ duration: Date.now() - startTime, answerLength: finalAnswer.length, confidenceScore: cappedScore },

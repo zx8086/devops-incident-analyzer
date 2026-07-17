@@ -260,6 +260,15 @@ export function learnMatchGate(state: AgentStateType): Partial<AgentStateType> {
 	const ticket = state.hilTicket;
 	if (!key || !ticket) return {};
 
+	// SIO-1133: the report's stamped Request-Id (== KG node id) found in the ticket
+	// text is authoritative -- take it without asking. On apply, SIO-1134 curation
+	// writes ticketKey, so the NEXT learn resolves via ticket-link without re-scanning.
+	const byRequestId = state.hilMatchCandidates.find((c) => c.via === "request-id");
+	if (byRequestId) {
+		logger.info({ key, incidentId: byRequestId.id }, "HIL match auto-confirmed via report Request-Id");
+		return { hilMatch: { incidentId: byRequestId.id, created: false, auto: true } };
+	}
+
 	// SIO-1134: an exact curated link (Incident.ticketKey) is authoritative --
 	// ticketKey is unique per incident, so take it without asking.
 	const linked = state.hilMatchCandidates.find((c) => c.via === "ticket-link");

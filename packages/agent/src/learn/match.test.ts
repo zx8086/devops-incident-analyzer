@@ -132,6 +132,151 @@ describe("SIO-1134 curated ticket-link lookup", () => {
 	});
 });
 
+const REQ_ID = "1f5b2c8a-0d3e-4a9b-8c7d-2e6f4a1b9c0d";
+
+function ticketWithRequestId(location: "description" | "comment"): TicketResolution {
+	const footer = `\n\n**Request-Id:** ${REQ_ID}`;
+	return {
+		key: "DEVOPS-9001",
+		summary: "pasted report ticket",
+		status: "Done",
+		description: location === "description" ? `Executive Summary\nThe report body.${footer}` : "The report body.",
+		comments:
+			location === "comment"
+				? [{ author: "human", createdAt: "2026-07-17T00:00:00.000Z", body: `Pasting the report:${footer}` }]
+				: [],
+	};
+}
+
+const REQ_ID_2 = "2a6c3d9b-1e4f-5b0a-9d8c-3f7e5b2c0a1d";
+
+describe("SIO-1133 extractRequestIds", () => {
+	test("pulls UUIDs after the Request-Id label, case-insensitive, tolerant of markers", async () => {
+		const { extractRequestIds } = await import("./match.ts");
+		expect(extractRequestIds(`**Request-Id:** ${REQ_ID}`)).toEqual([REQ_ID]);
+		expect(extractRequestIds(`request-id: ${REQ_ID.toUpperCase()}`)).toEqual([REQ_ID]);
+		expect(extractRequestIds(`noise\nRequest-Id:   ${REQ_ID}\nmore`)).toEqual([REQ_ID]);
+	});
+	test("returns ALL ids in text order, deduped", async () => {
+		const { extractRequestIds } = await import("./match.ts");
+		// CodeRabbit PR #405: a stale footer must not hide a later valid id.
+		expect(extractRequestIds(`Request-Id: ${REQ_ID}\n...\nRequest-Id: ${REQ_ID_2}`)).toEqual([REQ_ID, REQ_ID_2]);
+		// Same id twice -> one entry.
+		expect(extractRequestIds(`Request-Id: ${REQ_ID}\nRequest-Id: ${REQ_ID}`)).toEqual([REQ_ID]);
+	});
+	test("returns [] when absent or malformed", async () => {
+		const { extractRequestIds } = await import("./match.ts");
+		expect(extractRequestIds("no id here")).toEqual([]);
+		expect(extractRequestIds("Request-Id: not-a-uuid")).toEqual([]);
+		expect(extractRequestIds("Request-Id: 1f5b2c8a-0d3e-4a9b-8c7d")).toEqual([]); // truncated
+	});
+});
+
+describe("SIO-1133 request-id scan lane", () => {
+	function scanStore(incidentExists: boolean): GraphStore {
+		return {
+			init: async () => undefined,
+			close: async () => undefined,
+			run: async <T>(cypher: string): Promise<T[]> => {
+				// curated ticketKey lookup runs first and must miss so the scan is reached.
+				if (cypher.includes("i.ticketKey = $ticketKey")) return [] as T[];
+				// incidentById node query.
+				if (cypher.includes("MATCH (i:Incident {id: $id}) RETURN i.id AS id")) {
+					return incidentExists
+						? ([{ id: REQ_ID, summary: "the report incident", severity: "high" }] as T[])
+						: ([] as T[]);
+				}
+				return [] as T[];
+			},
+		};
+	}
+
+	test("resolves a request-id candidate without embedding (description footer)", async () => {
+		let embedCalled = false;
+		_setEmbedderForTesting(async () => {
+			embedCalled = true;
+			return [0.1];
+		});
+		_setGraphStoreForTesting(scanStore(true));
+
+		const result = await learnMatchIncident(stateWith({ hilTicket: ticketWithRequestId("description") }));
+		expect(result.hilMatchCandidates).toHaveLength(1);
+		expect(result.hilMatchCandidates?.[0]).toMatchObject({ id: REQ_ID, via: "request-id", distance: 0 });
+		expect(result.hilTicketEmbedding).toEqual([]);
+		expect(embedCalled).toBe(false);
+	});
+
+	test("scans comments too", async () => {
+		_setEmbedderForTesting(async () => [0.1]);
+		_setGraphStoreForTesting(scanStore(true));
+		const result = await learnMatchIncident(stateWith({ hilTicket: ticketWithRequestId("comment") }));
+		expect(result.hilMatchCandidates?.[0]).toMatchObject({ id: REQ_ID, via: "request-id" });
+	});
+
+	test("a request-id NOT in the KG falls through to pin/vector", async () => {
+		_setEmbedderForTesting(async () => [0.1, 0.2]);
+		// incidentById returns [] (not in KG); the vector fallback then runs.
+		const store: GraphStore = {
+			init: async () => undefined,
+			close: async () => undefined,
+			run: async <T>(cypher: string): Promise<T[]> => {
+				if (cypher.includes("i.ticketKey = $ticketKey")) return [] as T[];
+				if (cypher.includes("MATCH (i:Incident {id: $id}) RETURN i.id AS id")) return [] as T[];
+				if (cypher.includes("QUERY_VECTOR_INDEX")) {
+					return [{ id: "inc-vec", summary: "vector hit", severity: "low", distance: 0.3 }] as T[];
+				}
+				return [] as T[];
+			},
+		};
+		_setGraphStoreForTesting(store);
+
+		const result = await learnMatchIncident(stateWith({ hilTicket: ticketWithRequestId("description") }));
+		// No request-id candidate; the vector fallback supplied the candidate instead.
+		expect(result.hilMatchCandidates?.some((c) => c.via === "request-id")).toBe(false);
+		expect(result.hilMatchCandidates?.[0]).toMatchObject({ id: "inc-vec", via: "vector" });
+	});
+
+	test("no Request-Id in the ticket text -> no request-id candidate", async () => {
+		_setEmbedderForTesting(async () => [0.1]);
+		_setGraphStoreForTesting(scanStore(true));
+		const result = await learnMatchIncident(stateWith({ hilTicket: ticket() }));
+		expect(result.hilMatchCandidates?.some((c) => c.via === "request-id")).toBe(false);
+	});
+
+	// CodeRabbit PR #405: a STALE footer id (first) must not hide a VALID id (second). The
+	// scan queries each id in order until one resolves in the KG.
+	test("a stale first Request-Id falls through to a valid second one", async () => {
+		_setEmbedderForTesting(async () => [0.1]);
+		const ticketTwoIds: TicketResolution = {
+			key: "DEVOPS-9002",
+			summary: "pasted report with two ids",
+			status: "Done",
+			// First id is stale (not in KG); the second resolves.
+			description: `Old paste:\n**Request-Id:** ${REQ_ID}\n\nCorrected paste:\n**Request-Id:** ${REQ_ID_2}`,
+			comments: [],
+		};
+		const store: GraphStore = {
+			init: async () => undefined,
+			close: async () => undefined,
+			run: async <T>(cypher: string, params?: Record<string, unknown>): Promise<T[]> => {
+				if (cypher.includes("i.ticketKey = $ticketKey")) return [] as T[];
+				if (cypher.includes("MATCH (i:Incident {id: $id}) RETURN i.id AS id")) {
+					// Only the SECOND id exists in the KG.
+					return params?.id === REQ_ID_2
+						? ([{ id: REQ_ID_2, summary: "the valid incident", severity: "high" }] as T[])
+						: ([] as T[]);
+				}
+				return [] as T[];
+			},
+		};
+		_setGraphStoreForTesting(store);
+
+		const result = await learnMatchIncident(stateWith({ hilTicket: ticketTwoIds }));
+		expect(result.hilMatchCandidates).toHaveLength(1);
+		expect(result.hilMatchCandidates?.[0]).toMatchObject({ id: REQ_ID_2, via: "request-id" });
+	});
+});
+
 // SIO-1132: the embedding input prefers the ticket's Executive Summary -- the
 // stored Incident vectors are short user-query embeddings, so summary-vs-summary
 // is the aligned pair; whole-report embeddings drown in shared boilerplate.

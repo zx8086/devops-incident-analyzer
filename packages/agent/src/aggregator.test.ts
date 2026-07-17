@@ -42,6 +42,7 @@ import {
 	_setAggregatorLoggerForTesting,
 	aggregate,
 	aggregateResultBudget,
+	appendRequestIdFooter,
 	countDegradingGapBullets,
 	extractGapsBulletCount,
 	isDegradingGapBullet,
@@ -649,11 +650,77 @@ describe("rewriteConfidenceInAnswer (SIO-860)", () => {
 	});
 });
 
+// SIO-1133: the Request-Id footer is stamped DETERMINISTICALLY (== state.requestId), so a
+// report pasted into a Jira ticket carries the machine key the learn-from lane scans for.
+describe("appendRequestIdFooter (SIO-1133)", () => {
+	const REQ = "1f5b2c8a-0d3e-4a9b-8c7d-2e6f4a1b9c0d";
+
+	test("appends the footer with the exact requestId at the bottom", () => {
+		const out = appendRequestIdFooter("# Report\n\nConfidence: 0.9", REQ);
+		expect(out).toBe(`# Report\n\nConfidence: 0.9\n\n**Request-Id:** ${REQ}`);
+		expect(out.endsWith(REQ)).toBe(true);
+	});
+
+	test("is idempotent -- a re-render does not stamp a second footer", () => {
+		const once = appendRequestIdFooter("body", REQ);
+		expect(appendRequestIdFooter(once, REQ)).toBe(once);
+		expect(once.match(/\*\*Request-Id:\*\*/g)).toHaveLength(1);
+	});
+
+	// CodeRabbit PR #405: the idempotency check is footer-line-specific, so a report that
+	// MENTIONS the id in its body still gets the required bottom footer.
+	test("appends the footer even when the id appears in the body", () => {
+		const body = `# Report\n\nThe Request-Id ${REQ} was referenced in a comment.`;
+		const out = appendRequestIdFooter(body, REQ);
+		expect(out.endsWith(`**Request-Id:** ${REQ}`)).toBe(true);
+		// The body mention is not a `**Request-Id:**` footer line, so exactly one footer.
+		expect(out.match(/\*\*Request-Id:\*\*/g)).toHaveLength(1);
+	});
+
+	test("trims trailing whitespace before appending so the footer sits flush", () => {
+		expect(appendRequestIdFooter("body\n\n   \n", REQ)).toBe(`body\n\n**Request-Id:** ${REQ}`);
+	});
+
+	test("no-ops on an empty requestId (never stamps a blank footer)", () => {
+		expect(appendRequestIdFooter("body", "")).toBe("body");
+	});
+});
+
 function getUserPromptText(): string {
 	if (!lastInvokeMessages || lastInvokeMessages.length === 0) return "";
 	const humanMsgs = lastInvokeMessages.filter((m) => m._getType() === "human");
 	return humanMsgs.map((m) => String(m.content)).join("\n");
 }
+
+// SIO-1133: the full aggregate() stamps the Request-Id footer into the emitted report,
+// deterministically equal to state.requestId (not an LLM-rendered value).
+describe.skipIf(!hasRunbooks)("aggregate SIO-1133 Request-Id footer", () => {
+	beforeEach(() => {
+		_setAggregatorLoggerForTesting(makeAggregatorCaptureLogger([]));
+		lastInvokeMessages = null;
+	});
+	afterEach(() => {
+		_setAggregatorLoggerForTesting(null);
+	});
+
+	// CodeRabbit PR #405: use a canonical UUID so the footer round-trips through the learn
+	// matcher's extractRequestIds -- a non-UUID fixture could pass here while the real
+	// incident-matching path ignores the stamped value.
+	const REQ_ID = "1f5b2c8a-0d3e-4a9b-8c7d-2e6f4a1b9c0d";
+
+	test("stamps **Request-Id:** <state.requestId> as the report footer", async () => {
+		mockLlmContent = "Mock aggregator output. Confidence: 0.5";
+		const result = await aggregate(makeState({ requestId: REQ_ID }));
+		expect(result.finalAnswer).toContain(`**Request-Id:** ${REQ_ID}`);
+		// Deterministic: the footer equals the state value, and the emitted AIMessage
+		// carries the same text as the returned finalAnswer.
+		expect(result.finalAnswer?.trimEnd().endsWith(REQ_ID)).toBe(true);
+		expect(String(result.messages?.[0]?.content ?? "")).toContain(`**Request-Id:** ${REQ_ID}`);
+		// The stamped footer is extractable by the learn matcher (the whole point).
+		const { extractRequestIds } = await import("./learn/match.ts");
+		expect(extractRequestIds(result.finalAnswer ?? "")).toEqual([REQ_ID]);
+	});
+});
 
 // SIO-711: aggregator must not emit defensive phrases like "not fabricated"
 // or "I am not hallucinating". The styles-v3 transcript volunteered this kind

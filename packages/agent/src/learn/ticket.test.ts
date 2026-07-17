@@ -189,6 +189,46 @@ describe("SIO-1130 learnMatchGate auto-confirm", () => {
 		expect(result.hilMatch).toEqual({ incidentId: "inc-curated", created: false, auto: true });
 	});
 
+	test("SIO-1133: a request-id candidate auto-confirms (authoritative, checked first)", () => {
+		const byId = {
+			id: "inc-from-report-id",
+			summary: "the report incident",
+			severity: "high",
+			distance: 0,
+			hasRootCause: false,
+			via: "request-id" as const,
+		};
+		const result = learnMatchGate(
+			stateWith({ hilLearnTicketKey: "DEVOPS-1353", hilTicket: baseTicket, hilMatchCandidates: [byId] }),
+		);
+		expect(result.hilMatch).toEqual({ incidentId: "inc-from-report-id", created: false, auto: true });
+	});
+
+	// CodeRabbit PR #405: prove the PRECEDENCE -- request-id is checked before ticket-link, so
+	// even with a ticket-link candidate also present, the request-id one wins.
+	test("SIO-1133: request-id wins over a co-present ticket-link candidate", () => {
+		const byId = {
+			id: "inc-from-report-id",
+			summary: "the report incident",
+			severity: "high",
+			distance: 0,
+			hasRootCause: false,
+			via: "request-id" as const,
+		};
+		const link = {
+			id: "inc-ticket-link",
+			summary: "curated by ticketKey",
+			severity: "high",
+			distance: 0,
+			hasRootCause: true,
+			via: "ticket-link" as const,
+		};
+		const result = learnMatchGate(
+			stateWith({ hilLearnTicketKey: "DEVOPS-1353", hilTicket: baseTicket, hilMatchCandidates: [link, byId] }),
+		);
+		expect(result.hilMatch).toEqual({ incidentId: "inc-from-report-id", created: false, auto: true });
+	});
+
 	test("a single ticket-mention pin auto-confirms without interrupting", () => {
 		const result = learnMatchGate(
 			stateWith({

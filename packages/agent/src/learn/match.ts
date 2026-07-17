@@ -8,6 +8,7 @@
 
 import {
 	getGraphStore,
+	incidentById,
 	incidentByTicketKey,
 	rootCauseForIncident,
 	similarIncidents,
@@ -69,6 +70,26 @@ export function buildMatchEmbedText(summary: string, description: string): strin
 	return truncateForEmbedding(`${summary}\n${execSummary ?? description}`);
 }
 
+// SIO-1133: pull the stamped Request-Id(s) out of a pasted report. The aggregator footer is
+// `**Request-Id:** <uuid>`, but ADF flattening / markdown may leave or strip the bold `**`
+// markers, so tolerate any run of non-hex separators (asterisks, spaces, colons) between the
+// label and the UUID. Case-insensitive; returns ALL matches in text order, lowercased +
+// deduped -- a stale footer in an early comment must not hide a valid id in a later one
+// (CodeRabbit PR #405). The caller queries each until incidentById hits.
+const REQUEST_ID_RE = /Request-Id[:*\s]*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi;
+export function extractRequestIds(text: string): string[] {
+	const ids: string[] = [];
+	const seen = new Set<string>();
+	for (const match of text.matchAll(REQUEST_ID_RE)) {
+		const id = match[1]?.toLowerCase();
+		if (id && !seen.has(id)) {
+			seen.add(id);
+			ids.push(id);
+		}
+	}
+	return ids;
+}
+
 // learnMatchIncident node: compute candidates + the ticket embedding. Pure
 // compute -- the interrupt lives in learnMatchGate so a resume never re-runs
 // the embed/KNN. Soft-fails to zero candidates ("none" -> create incident).
@@ -114,6 +135,46 @@ export async function learnMatchIncident(state: AgentStateType): Promise<Partial
 			logger.warn(
 				{ error: error instanceof Error ? error.message : String(error) },
 				"curated ticket-link lookup failed; falling back to matching",
+			);
+		}
+
+		// SIO-1133: exact Request-Id lookup. A report pasted by hand into the ticket carries
+		// the deterministic footer `**Request-Id:** <uuid>`, and that uuid IS the KG Incident
+		// node id. Scan description + comments; on a hit that exists in the KG, resolve directly
+		// (no embeddings) -- authoritative like ticket-link. A stale/foreign id that is not in
+		// the KG falls through to the pin/vector fallback below.
+		try {
+			const haystack = [ticket.description, ...ticket.comments.map((c) => c.body)].join("\n");
+			// Query every stamped id in text order until one resolves in the KG -- a stale
+			// footer must not shadow a valid id in a later comment (CodeRabbit PR #405).
+			for (const requestId of extractRequestIds(haystack)) {
+				const incident = await incidentById(store, requestId);
+				if (!incident) continue;
+				let hasRootCause = false;
+				try {
+					hasRootCause = (await rootCauseForIncident(store, incident.id)) !== null;
+				} catch {
+					// annotation only
+				}
+				logger.info({ ticket: ticket.key, incidentId: incident.id }, "HIL match resolved by report Request-Id");
+				return {
+					hilMatchCandidates: [
+						{
+							id: incident.id,
+							summary: incident.summary,
+							severity: incident.severity,
+							distance: 0,
+							hasRootCause,
+							via: "request-id",
+						},
+					],
+					hilTicketEmbedding: [],
+				};
+			}
+		} catch (error) {
+			logger.warn(
+				{ error: error instanceof Error ? error.message : String(error) },
+				"Request-Id scan failed; falling back to matching",
 			);
 		}
 

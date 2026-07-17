@@ -244,6 +244,9 @@ describe("emitHilLearningInterrupt", () => {
 				// Malformed checkpoint entries must be filtered, not crash the emit.
 				null,
 				{ id: "inc-2", summary: "s2", severity: "", distance: 0, hasRootCause: false, via: "ticket-mention" },
+				// SIO-1133: request-id passes through; an unknown via still falls back to "vector".
+				{ id: "inc-3", summary: "s3", severity: "high", distance: 0, hasRootCause: false, via: "request-id" },
+				{ id: "inc-4", summary: "s4", severity: "low", distance: 0, hasRootCause: false, via: "bogus" },
 			],
 			message: "Pick one",
 		});
@@ -255,9 +258,11 @@ describe("emitHilLearningInterrupt", () => {
 			message: "Pick one",
 		});
 		const candidates = sent[0]?.candidates as Array<Record<string, unknown>>;
-		expect(candidates).toHaveLength(2);
+		expect(candidates).toHaveLength(4);
 		expect(candidates[0]).toMatchObject({ id: "inc-1", hasRootCause: true, via: "vector" });
 		expect(candidates[1]).toMatchObject({ id: "inc-2", via: "ticket-mention" });
+		expect(candidates[2]).toMatchObject({ id: "inc-3", via: "request-id" });
+		expect(candidates[3]).toMatchObject({ id: "inc-4", via: "vector" }); // unknown -> vector
 	});
 
 	test("translates the review-gate payload and passes the proposal through", async () => {

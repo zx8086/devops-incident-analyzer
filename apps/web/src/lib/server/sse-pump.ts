@@ -466,7 +466,9 @@ export function emitHilLearningInterrupt(send: SendFn, threadId: string, interru
 							severity: typeof x.severity === "string" ? x.severity : "",
 							distance: typeof x.distance === "number" ? x.distance : 0,
 							hasRootCause: x.hasRootCause === true,
-							via: x.via === "ticket-mention" || x.via === "ticket-link" ? x.via : "vector",
+							// SIO-1133: pass "request-id" through too (auto-confirmed, so it rarely
+							// reaches the card, but keep the enum handled end-to-end).
+							via: x.via === "ticket-mention" || x.via === "ticket-link" || x.via === "request-id" ? x.via : "vector",
 						};
 					})
 			: [];
