@@ -333,8 +333,11 @@ export async function incidentById(store: GraphStore, id: string): Promise<Incid
 	);
 	const row = rows[0];
 	if (!row) return null;
+	// ORDER BY so the services list is deterministic (CodeRabbit PR #404): the curation
+	// mirror fact serializes services.join(","), and an unordered query would yield
+	// different kg-incident bytes for the same incident across rebuilds.
 	const serviceRows = await store.run<{ name: string }>(
-		"MATCH (s:Service)-[:AFFECTED_BY]->(i:Incident {id: $id}) RETURN s.name AS name",
+		"MATCH (s:Service)-[:AFFECTED_BY]->(i:Incident {id: $id}) RETURN s.name AS name ORDER BY s.name",
 		{ id },
 	);
 	const services = serviceRows.map((r) => String(r.name ?? "")).filter((n) => n.length > 0);

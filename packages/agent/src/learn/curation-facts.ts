@@ -47,10 +47,12 @@ export async function writeCurationMirrorFacts(
 				annotations: {
 					// Byte-parity with incidentFromAnnotations (rebuild.ts): incident_id (required),
 					// severity, services (comma-joined), summary. source/ticket are extra provenance
-					// keys the mapper ignores.
+					// keys the mapper ignores. CodeRabbit PR #404: sort defensively so the fact bytes
+					// are deterministic even if a caller passes unordered services (incidentById
+					// already ORDER BYs, so this is belt-and-suspenders).
 					kind: "kg-incident",
 					incident_id: incidentId,
-					services: incident.services.join(","),
+					services: [...incident.services].sort().join(","),
 					severity: incident.severity,
 					summary: incident.summary,
 					source: "curation",

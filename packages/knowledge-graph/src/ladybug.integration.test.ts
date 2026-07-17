@@ -372,4 +372,32 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 
 		await store.close();
 	});
+
+	// SIO-1136 (CodeRabbit PR #404): legacy rows created before the CREATE-DDL default carry
+	// ticketKey = NULL (not ''). The purge predicate is `IS NULL OR = ''`, so the NULL path
+	// must be exercised on the real engine -- the '' path alone would miss the regression.
+	test("purgeUncuratedIncidents removes legacy NULL-ticketKey rows", async () => {
+		const store = new LadybugStore(join(dir, "db-purge-null"));
+		await store.init();
+
+		await recordIncident(store, {
+			id: "inc-null-legacy",
+			severity: "high",
+			summary: "legacy null ticketKey",
+			services: ["svc-n"],
+			createdAt: "2020-01-01T00:00:00.000Z",
+		});
+		// Force the legacy shape: an explicit NULL ticketKey (recordIncident now defaults to '').
+		await store.run("MATCH (i:Incident {id: 'inc-null-legacy'}) SET i.ticketKey = NULL");
+		const before = await store.run<{ tk: string | null }>(
+			"MATCH (i:Incident {id: 'inc-null-legacy'}) RETURN i.ticketKey AS tk",
+		);
+		expect(before[0]?.tk == null).toBe(true); // NULL, not ''
+
+		const result = await purgeUncuratedIncidents(store, "2025-01-01T00:00:00.000Z");
+		expect(result.incidents).toBe(1);
+		expect(await incidentById(store, "inc-null-legacy")).toBeNull();
+
+		await store.close();
+	});
 });

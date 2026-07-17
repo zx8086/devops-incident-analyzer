@@ -125,19 +125,10 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 					await setIncidentEmbedding(store, match.incidentId, state.hilTicketEmbedding);
 				}
 				report.incidentCreated = true;
-				recordKeyDecision({
-					requestId: state.requestId,
-					decision: `Incident ${match.incidentId}: ${ticketKey} (created by HIL learning)`,
-					annotations: {
-						kind: "kg-incident",
-						incident_id: match.incidentId,
-						services: "",
-						severity: "",
-						summary: `${ticketKey}: ${state.hilTicket?.summary ?? ""}`.slice(0, 280),
-						source: "hil",
-						ticket: ticketKey,
-					},
-				});
+				// SIO-1135 (CodeRabbit PR #404): the durable kg-incident fact is NOT written here.
+				// This block runs before anyApproved is known, so a "Reject all" would otherwise
+				// leave an immutable fact for an uncurated incident. The fact is written only in
+				// the anyApproved curation path below (writeCurationMirrorFacts reads THIS row).
 			}
 
 			const rc = proposal.rootCause;
@@ -219,16 +210,15 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 						ticket: ticketKey,
 					},
 				});
-				// SIO-1135: mirror the incident (+ its root cause) to durable facts now that
-				// it is curated. The create path (above) already wrote a kg-incident fact this
-				// turn, and an approved rootCause already wrote a kg-root-cause fact -- skip
-				// those to avoid a duplicate. For an EXISTING matched incident with no HIL
-				// rootCause, this is the only fact write (the per-run mirror moved to curation
-				// time, SIO-1135), so the incident survives rebuild-from-facts.
+				// SIO-1135: mirror the incident (+ its root cause) to durable facts now that it
+				// is curated -- for BOTH created and existing incidents (the create path no longer
+				// writes the fact pre-approval; CodeRabbit PR #404). An approved rootCause already
+				// wrote a kg-root-cause fact this turn, so skip only that to avoid a duplicate.
+				// writeCurationMirrorFacts reads the current graph row so the created incident's
+				// summary round-trips with byte-parity.
 				await writeCurationMirrorFacts(store, match.incidentId, {
 					requestId: state.requestId,
 					ticketKey,
-					skipIncidentFact: match.created,
 					skipRootCauseFact: report.rootCauseWritten,
 				});
 			} else {
