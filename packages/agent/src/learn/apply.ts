@@ -10,20 +10,29 @@
 
 import { createHash } from "node:crypto";
 import {
+	BindingKindSchema,
 	getGraphStore,
+	hasBinding,
+	invalidateBindingByHuman,
 	isKnowledgeGraphEnabled,
 	linkIncidentTicket,
 	linkResolution,
 	recordIncident,
 	recordRootCause,
+	recordServiceBinding,
 	setIncidentEmbedding,
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
+import type { BindingCorrection, Heuristic } from "@devops-agent/shared";
+import { normalize } from "@devops-agent/shared";
 import { AIMessage } from "@langchain/core/messages";
+import { promoteToMemory } from "../memory-promotion.ts";
 import { isLiveMemoryEnabled, recordKeyDecision } from "../memory-writer.ts";
 import { getRunbookCatalog } from "../prompt-context.ts";
+import { buildSkillAnnotations, buildSkillFactText, skillProposalExists } from "../skill-learner.ts";
 import type { AgentStateType } from "../state.ts";
 import { writeCurationMirrorFacts } from "./curation-facts.ts";
+import { draftRunbookFilename, RUNBOOK_DIR, renderRunbookMarkdown } from "./runbook.ts";
 import type { RootCauseCorrection } from "./schema.ts";
 
 const logger = getLogger("agent:learn:apply");
@@ -35,6 +44,11 @@ export interface HilApplyReport {
 	curated?: boolean;
 	runbookLinked?: string;
 	factsWritten: number;
+	// SIO-1127 Phase 2:
+	bindingsConfirmed: number;
+	bindingsInvalidated: number;
+	heuristicsProposed: number;
+	draftRunbookUrl?: string;
 	skipped: Array<{ id: string; reason: string }>;
 }
 
@@ -73,6 +87,22 @@ export function buildApplySummary(report: HilApplyReport, ticketKey: string): st
 	if (report.factsWritten > 0) {
 		lines.push(`- Wrote ${report.factsWritten} durable memory fact(s) for future recall.`);
 	}
+	if (report.bindingsConfirmed > 0) {
+		lines.push(
+			`- Confirmed ${report.bindingsConfirmed} telemetry binding(s) (human-verified; they re-seed identifier resolution).`,
+		);
+	}
+	if (report.bindingsInvalidated > 0) {
+		lines.push(`- Invalidated ${report.bindingsInvalidated} stale telemetry binding(s).`);
+	}
+	if (report.heuristicsProposed > 0) {
+		lines.push(
+			`- Proposed ${report.heuristicsProposed} diagnostic skill(s); promote with \`bun run skill:promote\` after review.`,
+		);
+	}
+	if (report.draftRunbookUrl) {
+		lines.push(`- Opened a DRAFT runbook PR for review: ${report.draftRunbookUrl}`);
+	}
 	for (const s of report.skipped) {
 		lines.push(`- Skipped ${s.id}: ${s.reason}.`);
 	}
@@ -105,6 +135,9 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 		incidentCreated: false,
 		rootCauseWritten: false,
 		factsWritten: 0,
+		bindingsConfirmed: 0,
+		bindingsInvalidated: 0,
+		heuristicsProposed: 0,
 		skipped: [],
 	};
 	const failures: Array<{ node: string; reason: string }> = [];
@@ -162,30 +195,45 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 					},
 				});
 
-				if (rc.runbookFilename) {
-					const catalogFilenames = new Set(safeCatalogFilenames());
-					if (catalogFilenames.has(rc.runbookFilename)) {
-						// First production caller of linkResolution: this is what makes
-						// graphEnrich's "resolved by X" line fire on similar incidents.
-						await linkResolution(store, match.incidentId, [rc.runbookFilename]);
-						report.runbookLinked = rc.runbookFilename;
-						recordKeyDecision({
-							requestId: state.requestId,
-							decision: `Incident ${match.incidentId} resolved by runbook ${rc.runbookFilename} (via ${ticketKey})`,
-							annotations: {
-								kind: "kg-resolution",
-								incident_id: match.incidentId,
-								runbook: rc.runbookFilename,
-								ticket: ticketKey,
-							},
-						});
-					} else {
-						report.skipped.push({ id: rc.id, reason: `runbook ${rc.runbookFilename} is not in the catalog` });
-					}
+				const catalogFilenames = new Set(safeCatalogFilenames());
+				if (rc.runbookFilename && catalogFilenames.has(rc.runbookFilename)) {
+					// A catalog runbook already covers the fix: link it (first production caller
+					// of linkResolution -- makes graphEnrich's "resolved by X" fire on similar
+					// incidents). No draft PR in this case (per SIO-1127 decision: draft only when
+					// no catalog runbook matches, to avoid duplicate-runbook PRs).
+					await linkResolution(store, match.incidentId, [rc.runbookFilename]);
+					report.runbookLinked = rc.runbookFilename;
+					recordKeyDecision({
+						requestId: state.requestId,
+						decision: `Incident ${match.incidentId} resolved by runbook ${rc.runbookFilename} (via ${ticketKey})`,
+						annotations: {
+							kind: "kg-resolution",
+							incident_id: match.incidentId,
+							runbook: rc.runbookFilename,
+							ticket: ticketKey,
+						},
+					});
+				} else {
+					// No catalog runbook covers this cause -> open a PR-gated DRAFT runbook. The
+					// file is NEVER written into the runbooks dir directly; the PR merge is the only
+					// control (the manifest loader auto-catalogs *.md there on the next load).
+					await draftRunbook(store, rc, ticketKey, state, report);
 				}
 			} else if (rc) {
 				report.skipped.push({ id: rc.id, reason: "rejected" });
 			}
+
+			// SIO-1127: telemetry binding corrections. Confirm (human-verified, byte-parity
+			// with the confirm-binding CLI) or invalidate (an explicit human verdict that
+			// overrides even a prior human confirmation). Each soft-fails independently.
+			for (const binding of proposal.bindings) {
+				if (!approved(decisions, binding.id)) {
+					report.skipped.push({ id: binding.id, reason: "rejected" });
+					continue;
+				}
+				await applyBinding(store, binding, ticketKey, state.requestId, report);
+			}
+
 			// SIO-1134: applying learnings CURATES the matched incident -- the
 			// confirmed ticket linkage is written so this ticket resolves by exact
 			// lookup forever after, and the incident counts as durable memory.
@@ -233,11 +281,33 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 		report.skipped.push({ id: "graph", reason: "knowledge graph disabled" });
 	}
 
-	// Phase 2 (SIO-1127) activates these classes; a Phase 1 distiller emits them
-	// empty, but a hand-crafted resume must not silently drop approved items.
-	for (const item of [...proposal.bindings, ...proposal.heuristics]) {
-		if (approved(decisions, item.id)) {
-			report.skipped.push({ id: item.id, reason: "class not applied until SIO-1127 (Phase 2)" });
+	// SIO-1127: heuristics become kind:skill proposal facts (the SIO-1015 pipeline).
+	// Promotion stays `bun run skill:promote`. Self-gates on live memory + dedups by
+	// skill_name so a re-learn never doubles the immutable fact.
+	if (!alreadyLearned && isLiveMemoryEnabled()) {
+		for (const heuristic of proposal.heuristics) {
+			if (!approved(decisions, heuristic.id)) {
+				report.skipped.push({ id: heuristic.id, reason: "rejected" });
+				continue;
+			}
+			try {
+				await applyHeuristic(heuristic, ticketKey, state.requestId, report);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				logger.warn({ ticket: ticketKey, heuristic: heuristic.name, error: message }, "HIL heuristic write failed");
+				failures.push({ node: "applyLearnings", reason: "heuristic-write-failed" });
+			}
+		}
+	} else {
+		for (const heuristic of proposal.heuristics) {
+			if (approved(decisions, heuristic.id)) {
+				report.skipped.push({
+					id: heuristic.id,
+					reason: alreadyLearned
+						? `already learned from ${ticketKey}; skill proposal not re-written`
+						: "live memory disabled (LIVE_MEMORY_ENABLED)",
+				});
+			}
 		}
 	}
 
@@ -298,7 +368,11 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 			incidentId: report.incidentId,
 			rootCauseWritten: report.rootCauseWritten,
 			runbookLinked: report.runbookLinked ?? null,
+			draftRunbookUrl: report.draftRunbookUrl ?? null,
 			factsWritten: report.factsWritten,
+			bindingsConfirmed: report.bindingsConfirmed,
+			bindingsInvalidated: report.bindingsInvalidated,
+			heuristicsProposed: report.heuristicsProposed,
 			skipped: report.skipped.length,
 		},
 		"HIL learnings applied",
@@ -315,5 +389,167 @@ function safeCatalogFilenames(): string[] {
 		return getRunbookCatalog().map((r) => r.filename);
 	} catch {
 		return [];
+	}
+}
+
+// SIO-1127: write one approved telemetry-binding correction. Confirm re-uses
+// recordServiceBinding with the confirm-binding CLI's byte-parity shape (confidence 1.0,
+// discoveredBy "human"); invalidate uses the human-explicit writer. bindingKind is
+// re-validated against BindingKindSchema (the shared schema promises this at write time);
+// an invalid kind is skipped, not written. The kg-binding / kg-binding-invalidated mirror
+// facts match the rebuild.ts mappers. Confirm dedups the fact via hasBinding so a re-learn
+// does not double the immutable fact.
+async function applyBinding(
+	store: Awaited<ReturnType<typeof getGraphStore>>,
+	binding: BindingCorrection,
+	ticketKey: string,
+	requestId: string,
+	report: HilApplyReport,
+): Promise<void> {
+	const kind = BindingKindSchema.safeParse(binding.bindingKind);
+	if (!kind.success) {
+		report.skipped.push({ id: binding.id, reason: `unknown binding kind "${binding.bindingKind}"` });
+		return;
+	}
+	const serviceNormalized = normalize(binding.service);
+
+	if (binding.action === "invalidate") {
+		await invalidateBindingByHuman(
+			store,
+			binding.service,
+			binding.datasource,
+			kind.data,
+			binding.resourceId,
+			`hil:${ticketKey} -- ${binding.reason}`,
+		);
+		report.bindingsInvalidated += 1;
+		recordKeyDecision({
+			requestId,
+			decision: `Invalidated telemetry binding (human, via ${ticketKey}): ${binding.service} !-> ${binding.datasource} ${kind.data}=${binding.resourceId}`,
+			annotations: {
+				kind: "kg-binding-invalidated",
+				service: binding.service,
+				service_normalized: serviceNormalized,
+				binding_kind: kind.data,
+				resource_id: binding.resourceId,
+				datasource: binding.datasource,
+				reason: binding.reason,
+				discovered_by: "human",
+				ticket: ticketKey,
+			},
+		});
+		return;
+	}
+
+	// action === "confirm"
+	const existed = await hasBinding(store, binding.service, kind.data, binding.resourceId);
+	await recordServiceBinding(store, {
+		service: binding.service,
+		serviceNormalized,
+		datasource: binding.datasource,
+		kind: kind.data,
+		resourceId: binding.resourceId,
+		locator: binding.locator,
+		confidence: 1.0,
+		discoveredBy: "human",
+		evidence: `hil:${ticketKey}`,
+	});
+	report.bindingsConfirmed += 1;
+	// Immutable-fact dedup: only mirror when the binding is genuinely new (matches the W8
+	// idiom -- a re-confirm still bumps the graph edge but must not double the fact).
+	if (!existed) {
+		recordKeyDecision({
+			requestId,
+			decision: `Human-confirmed telemetry binding (via ${ticketKey}): ${binding.service} observed in ${binding.datasource} as ${kind.data}=${binding.resourceId}`,
+			annotations: {
+				kind: "kg-binding",
+				service: binding.service,
+				service_normalized: serviceNormalized,
+				binding_kind: kind.data,
+				resource_id: binding.resourceId,
+				locator: binding.locator ?? "",
+				datasource: binding.datasource,
+				discovered_by: "human",
+				confidence: "1",
+				ticket: ticketKey,
+			},
+		});
+	}
+}
+
+// SIO-1127: an approved heuristic becomes a kind:skill proposal fact (the SIO-1015
+// pipeline), reusing buildSkillFactText/buildSkillAnnotations with learned_from:
+// "ticket:<key>". Dedups by skill_name so a re-learn never doubles the immutable fact.
+async function applyHeuristic(
+	heuristic: Heuristic,
+	ticketKey: string,
+	requestId: string,
+	report: HilApplyReport,
+): Promise<void> {
+	if (await skillProposalExists(heuristic.name)) {
+		report.skipped.push({ id: heuristic.id, reason: `skill "${heuristic.name}" already proposed` });
+		return;
+	}
+	const proposal = {
+		worthy: true,
+		name: heuristic.name,
+		description: heuristic.description,
+		when_to_use: heuristic.whenToUse,
+		procedure_summary: heuristic.procedure,
+		task_category: "",
+	};
+	const nowIso = new Date().toISOString();
+	recordKeyDecision({
+		requestId,
+		decision: buildSkillFactText(proposal),
+		annotations: buildSkillAnnotations(proposal, requestId, nowIso, `ticket:${ticketKey}`),
+	});
+	report.heuristicsProposed += 1;
+}
+
+// SIO-1127: open a PR-gated DRAFT runbook for a cause with no catalog match. The file is
+// staged ONLY in the memory PR (never written into the runbooks dir directly -- the
+// manifest loader auto-catalogs it on merge, so the PR gate is the only control). On a
+// successfully-opened PR, RESOLVED_BY links the draft filename so a rebuild reconstructs the
+// resolution edge and the URL lands in the apply summary.
+async function draftRunbook(
+	store: Awaited<ReturnType<typeof getGraphStore>>,
+	rc: RootCauseCorrection,
+	ticketKey: string,
+	state: AgentStateType,
+	report: HilApplyReport,
+): Promise<void> {
+	const filename = draftRunbookFilename(rc.causeClass);
+	// severity is not on the RootCauseCorrection; the renderer defaults to "high".
+	const contents = renderRunbookMarkdown(rc, ticketKey);
+	try {
+		const result = await promoteToMemory({
+			kind: "runbook",
+			branch: `agent/learn/runbook-${rc.causeClass}`,
+			title: `DRAFT runbook: ${rc.causeClass} (from ${ticketKey})`,
+			body: `Auto-distilled DRAFT runbook from the human resolution of ${ticketKey}. Review and edit before relying on it. Merging catalogs it for the incident-analyzer agent.`,
+			files: [{ path: `${RUNBOOK_DIR}/${filename}`, contents }],
+			labels: ["hil-learning", "runbook-draft"],
+		});
+		if (result.status === "opened" && result.url) {
+			report.draftRunbookUrl = result.url;
+			await linkResolution(store, report.incidentId, [filename]);
+			recordKeyDecision({
+				requestId: state.requestId,
+				decision: `Incident ${report.incidentId} resolved by DRAFT runbook ${filename} (PR ${result.url}, via ${ticketKey})`,
+				annotations: {
+					kind: "kg-resolution",
+					incident_id: report.incidentId,
+					runbook: filename,
+					ticket: ticketKey,
+				},
+			});
+		} else {
+			report.skipped.push({ id: rc.id, reason: `draft runbook PR not opened (${result.status})` });
+		}
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		logger.warn({ ticket: ticketKey, error: message }, "HIL draft-runbook PR failed");
+		report.skipped.push({ id: rc.id, reason: "draft runbook PR failed" });
 	}
 }

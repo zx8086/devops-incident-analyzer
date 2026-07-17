@@ -131,7 +131,9 @@ export async function judgeTurn(turn: SkillLearnerTurn): Promise<SkillProposal |
 // Dedup: agent-memory facts are durable + undeletable, so a re-record permanently
 // doubles a proposal. Skip if a kind:skill fact with this skill_name already exists
 // (deterministic filter-only lookup, same idiom as the iac-change recall).
-async function proposalExists(skillName: string): Promise<boolean> {
+// SIO-1127: exported as skillProposalExists so the HIL learning apply path dedups
+// heuristic-derived skill proposals against the same store.
+export async function skillProposalExists(skillName: string): Promise<boolean> {
 	const hits = await searchAgentMemory(LEARNER_AGENT, "", { kind: "skill", skill_name: skillName }, 1, {
 		deterministic: true,
 	});
@@ -142,17 +144,20 @@ async function proposalExists(skillName: string): Promise<boolean> {
 // All values are strings (AnnotationMap). confidence is SEEDED, not measured —
 // there is no live success/failure feedback loop against immutable facts (SIO-1015
 // known limit), so counts start at 0 and the human promoter owns the rest.
+// SIO-1127: learnedFrom overrides the default `thread:<id>` provenance so the HIL
+// learning path can stamp `ticket:<key>` instead. Omit it for the normal post-turn learner.
 export function buildSkillAnnotations(
 	proposal: SkillProposal,
 	threadId: string,
 	nowIso: string,
+	learnedFrom?: string,
 ): Record<string, string> {
 	return {
 		kind: "skill",
 		skill_name: proposal.name ?? "",
 		task_category: proposal.task_category ?? "",
 		confidence: "0.5",
-		learned_from: `thread:${threadId}`,
+		learned_from: learnedFrom ?? `thread:${threadId}`,
 		learned_at: nowIso,
 		usage_count: "0",
 		success_count: "0",
@@ -186,7 +191,7 @@ export async function learnFromTurn(turn: SkillLearnerTurn, nowIso: string): Pro
 	const proposal = await judgeTurn(turn);
 	if (!proposal?.name) return;
 
-	if (await proposalExists(proposal.name)) {
+	if (await skillProposalExists(proposal.name)) {
 		logger.debug({ skill: proposal.name }, "skill proposal already exists; skipping (dedup)");
 		return;
 	}

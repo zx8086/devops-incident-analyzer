@@ -153,6 +153,17 @@ describe("buildSkillAnnotations", () => {
 			failure_count: "0",
 		});
 	});
+
+	// SIO-1127: the HIL learning path overrides learned_from to ticket:<key>.
+	test("honors the learnedFrom override (ticket provenance for HIL learning)", () => {
+		const a = buildSkillAnnotations(
+			{ worthy: true, name: "resolver-check", description: "d" },
+			"ignored-thread",
+			NOW,
+			"ticket:DEVOPS-1355",
+		);
+		expect(a.learned_from).toBe("ticket:DEVOPS-1355");
+	});
 });
 
 describe("buildSkillFactText", () => {

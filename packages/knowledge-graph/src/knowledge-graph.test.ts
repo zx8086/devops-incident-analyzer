@@ -14,6 +14,7 @@ import {
 	InMemoryGraphStore,
 	incidentById,
 	invalidateBinding,
+	invalidateBindingByHuman,
 	isKnowledgeGraphEnabled,
 	linkCorrelation,
 	linkResolution,
@@ -1087,6 +1088,31 @@ describe("SIO-1103 staleness (invalidateBinding / flagBindingForReview)", () => 
 		expect(call?.cypher).toContain("flagged-for-review");
 		// crucially does NOT set tInvalid (edge stays valid)
 		expect(call?.cypher).not.toContain("tInvalid = $now");
+	});
+
+	// SIO-1127: a human explicit-invalidate sets tInvalid on ANY currently-valid edge --
+	// unlike invalidateBinding it does NOT exclude discoveredBy = 'human' (an explicit human
+	// verdict overrides a prior human confirmation).
+	test("invalidateBindingByHuman sets tInvalid on any edge, without the human exclusion", async () => {
+		const store = new InMemoryGraphStore();
+		await invalidateBindingByHuman(store, "orders", "aws", "logGroup", "/ecs/orders", "vestigial config");
+		const call = store.calls[0];
+		expect(call?.cypher).toContain("o.tInvalid = $now");
+		expect(call?.cypher).toContain("invalidated-by-human: ");
+		// The distinguishing property: NO discoveredBy filter (would refuse human edges).
+		expect(call?.cypher).not.toContain("o.discoveredBy");
+		expect(call?.cypher).toContain("datasource: $datasource"); // full-identity match preserved
+		expect(call?.params).toMatchObject({
+			service: "orders",
+			datasource: "aws",
+			kind: "logGroup",
+			resourceId: "/ecs/orders",
+			reason: "vestigial config",
+		});
+		// no-ops on missing required fields
+		const empty = new InMemoryGraphStore();
+		await invalidateBindingByHuman(empty, "", "aws", "logGroup", "", "x");
+		expect(empty.calls).toHaveLength(0);
 	});
 });
 

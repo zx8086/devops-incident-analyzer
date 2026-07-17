@@ -142,6 +142,98 @@ describe("SIO-1126/SIO-1131 verifyProposalEvidence", () => {
 		expect(verified.memoryFacts).toHaveLength(1);
 	});
 
+	// SIO-1127: a binding whose resourceId + evidence appear VERBATIM survives; a heuristic
+	// grounded in a quote survives. The binding's resourceId literal rule is enforced by the
+	// SAME evidence verifier (a paraphrased resourceId lands in evidence that won't ground).
+	const bindingTicket = () =>
+		ticket({
+			comments: [
+				{
+					author: "Ops Engineer",
+					createdAt: "2026-07-16T12:44:22Z",
+					body: "Confirmed: example-consumer-service now bootstraps against Confluent cluster lkc-9example, not the old MSK. Check per-VPC Route53 resolver associations first.",
+				},
+			],
+		});
+
+	test("keeps a binding + heuristic grounded verbatim (zero droppedIds)", () => {
+		const proposal: LearningProposal = {
+			ticketKey: "DEVOPS-1355",
+			rootCause: null,
+			bindings: [
+				{
+					id: "bind-1",
+					kind: "binding",
+					action: "confirm",
+					service: "example-consumer-service",
+					datasource: "kafka",
+					bindingKind: "cluster",
+					resourceId: "lkc-9example",
+					reason: "now bootstraps against Confluent",
+					evidence: ["bootstraps against Confluent cluster lkc-9example"],
+				},
+			],
+			heuristics: [
+				{
+					id: "heur-1",
+					kind: "heuristic",
+					name: "broker-bootstrap-check-resolver-rules",
+					description: "A broker bootstrap disconnect can be a DNS gap, not auth.",
+					whenToUse: "broker id -1 / bootstrap disconnect",
+					procedure: "Check per-VPC Route53 resolver associations first.",
+					evidence: ["Check per-VPC Route53 resolver associations first."],
+				},
+			],
+			memoryFacts: [],
+		};
+		const { proposal: verified, droppedIds } = verifyProposalEvidence(
+			proposal,
+			buildDistillerHumanText({
+				ticket: bindingTicket(),
+				incidentSummary: "",
+				existingRootCause: null,
+				runbookCatalog: [],
+			}),
+		);
+		expect(droppedIds).toEqual([]);
+		expect(verified.bindings).toHaveLength(1);
+		expect(verified.heuristics).toHaveLength(1);
+	});
+
+	test("drops a binding whose evidence (paraphrased resourceId) does not ground", () => {
+		const proposal: LearningProposal = {
+			ticketKey: "DEVOPS-1355",
+			rootCause: null,
+			bindings: [
+				{
+					id: "bind-1",
+					kind: "binding",
+					action: "confirm",
+					service: "example-consumer-service",
+					datasource: "kafka",
+					bindingKind: "cluster",
+					resourceId: "lkc-9example",
+					reason: "x",
+					// Paraphrased -- the exact cluster id string is not in this quote.
+					evidence: ["bootstraps against the Confluent cluster"],
+				},
+			],
+			heuristics: [],
+			memoryFacts: [],
+		};
+		const { proposal: verified, droppedIds } = verifyProposalEvidence(
+			proposal,
+			buildDistillerHumanText({
+				ticket: bindingTicket(),
+				incidentSummary: "",
+				existingRootCause: null,
+				runbookCatalog: [],
+			}),
+		);
+		expect(droppedIds).toEqual(["bind-1"]);
+		expect(verified.bindings).toHaveLength(0);
+	});
+
 	test("drops items with hallucinated evidence (root cause -> null)", () => {
 		const parsed = JSON.parse(CANNED_RESPONSE) as LearningProposal;
 		if (!parsed.rootCause) throw new Error("fixture must have a root cause");

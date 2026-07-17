@@ -30,9 +30,9 @@ export interface DistillerInput {
 	runbookCatalog: Array<{ filename: string; title: string }>;
 }
 
-// Phase 1 (SIO-1126) emits rootCause + memoryFacts; bindings/heuristics activate
-// in Phase 2 (SIO-1127) with their writers -- until then the distiller must
-// return them empty so the review card never shows items that cannot be applied.
+// Phase 2 (SIO-1127) activates bindings + heuristics with their writers. Every class is
+// still gated by the verbatim-evidence verifier (verifyProposalEvidence), and a binding's
+// resourceId must appear LITERALLY in the ticket or the verifier silently drops it.
 const DISTILLER_PROMPT = `You distill a HUMAN-RESOLVED incident ticket into structured learnings for a DevOps incident-analysis agent's knowledge graph and memory.
 
 The ticket description (and possibly some comments) contain the AGENT'S OWN incident reports. Later comments by humans contain the actual resolution: the corrected root cause, what fixed it, and which of the agent's hypotheses were wrong. Your job is to DIFF the agent's diagnosis against the human resolution.
@@ -41,12 +41,13 @@ Rules:
 - Ground EVERY item in 1-3 VERBATIM quotes from the ticket (the "evidence" array). If you cannot quote it, do not emit it.
 - rootCause: emit exactly one when the human comments establish (or correct) the cause; null when they do not. causeClass is a kebab-case class name for the cause pattern (not this specific ticket), e.g. "route53-resolver-rule-vpc-association-missing". description says what actually caused it; resolution says what fixed it (or the agreed fix). invalidatedHypotheses lists agent hypotheses the humans ruled out, with the reason.
 - rootCause.runbookFilename: set ONLY when one of the provided catalog runbooks genuinely covers the fix; otherwise omit it.
+- bindings: 0-10 telemetry-binding corrections the humans stated -- a service maps to (or NO LONGER maps to) a specific telemetry resource. action is "confirm" (the mapping is correct) or "invalidate" (the mapping is wrong/stale). service is the affected service name; datasource is one of elastic|aws|kafka|couchbase|konnect|gitlab|atlassian; bindingKind is the telemetry kind (e.g. logGroup, index, topic, cluster, bucket); resourceId is the concrete resource identifier. CRITICAL: resourceId MUST appear VERBATIM (character-for-character) in the ticket text -- copy it exactly, do not paraphrase, reformat, or infer it. locator is an optional scope (e.g. cluster id, region). reason states why, grounded in a quote. Omit any binding whose resourceId you cannot copy literally from the ticket.
+- heuristics: 0-3 transferable diagnostic rules the humans taught (e.g. "a symptom that mimicked a different cause -> check X first"). name is a kebab-case skill name; description summarizes it; whenToUse names the trigger; procedure is the check to run. Only emit a heuristic the humans explicitly stated.
 - memoryFacts: 1-6 durable, self-contained facts a future investigation of a SIMILAR incident should recall. Include transferable diagnostic lessons (e.g. why a symptom mimicked a different cause) and topology corrections stated by the humans. Each fact must stand alone without this ticket in front of the reader.
-- bindings and heuristics MUST be empty arrays in this version.
-- Item ids: rc-1 for the root cause, fact-1..fact-N for memory facts.
+- Item ids: rc-1 for the root cause, bind-1..bind-N for bindings, heur-1..heur-N for heuristics, fact-1..fact-N for memory facts.
 
 Return ONLY JSON, no prose:
-{"ticketKey": "...", "rootCause": {"id": "rc-1", "kind": "root-cause", "causeClass": "...", "description": "...", "resolution": "...", "invalidatedHypotheses": [{"hypothesis": "...", "reason": "..."}], "runbookFilename": "...", "evidence": ["..."]} | null, "bindings": [], "heuristics": [], "memoryFacts": [{"id": "fact-1", "kind": "memory-fact", "text": "...", "evidence": ["..."]}]}`;
+{"ticketKey": "...", "rootCause": {"id": "rc-1", "kind": "root-cause", "causeClass": "...", "description": "...", "resolution": "...", "invalidatedHypotheses": [{"hypothesis": "...", "reason": "..."}], "runbookFilename": "...", "evidence": ["..."]} | null, "bindings": [{"id": "bind-1", "kind": "binding", "action": "confirm", "service": "...", "datasource": "...", "bindingKind": "...", "resourceId": "...", "locator": "...", "reason": "...", "evidence": ["..."]}], "heuristics": [{"id": "heur-1", "kind": "heuristic", "name": "...", "description": "...", "whenToUse": "...", "procedure": "...", "evidence": ["..."]}], "memoryFacts": [{"id": "fact-1", "kind": "memory-fact", "text": "...", "evidence": ["..."]}]}`;
 
 function renderTicket(ticket: TicketResolution): string {
 	const lines = [
@@ -251,7 +252,14 @@ export async function learnDistill(state: AgentStateType): Promise<Partial<Agent
 				"HIL proposal items dropped: evidence quotes not found in the distiller prompt text",
 			);
 		}
-		if (!proposal.rootCause && proposal.memoryFacts.length === 0) {
+		// SIO-1127: bindings/heuristics count too -- a binding-only or heuristic-only
+		// proposal is real learning that must reach the review card, not be treated as empty.
+		const hasContent =
+			proposal.rootCause !== null ||
+			proposal.memoryFacts.length > 0 ||
+			proposal.bindings.length > 0 ||
+			proposal.heuristics.length > 0;
+		if (!hasContent) {
 			// SIO-1131: distinguish "verifier rejected everything" from "the ticket
 			// genuinely has no resolution content" -- the former is our fault and
 			// must not read like a ticket-lookup failure.

@@ -17,12 +17,13 @@ let {
 
 const proposal = $derived(prompt.proposal);
 
-// Only the classes applyLearnings actually writes in Phase 1 (root cause +
-// memory facts) get decision entries; binding/heuristic items are display-only
-// until SIO-1127 and must not inflate the approved count (CodeRabbit, PR #392).
+// SIO-1127: all four classes are now applied (root cause, bindings, heuristics,
+// memory facts), so every item gets a decision entry and counts toward the approved total.
 const itemIds = $derived(
 	[
 		...(prompt.proposal.rootCause ? [prompt.proposal.rootCause.id] : []),
+		...prompt.proposal.bindings.map((b) => b.id),
+		...prompt.proposal.heuristics.map((h) => h.id),
 		...prompt.proposal.memoryFacts.map((f) => f.id),
 	].filter((id) => id.length > 0),
 );
@@ -147,10 +148,48 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
       </div>
     {/if}
 
-    {#if proposal.bindings.length > 0 || proposal.heuristics.length > 0}
-      <p class="mt-2 text-xs text-gray-500">
-        Binding and heuristic learnings are not applied yet (SIO-1127); they are shown for reference only.
-      </p>
+    {#if proposal.bindings.length > 0}
+      <p class="mt-2 text-xs font-semibold text-tommy-navy">Telemetry binding corrections</p>
+      <div class="mt-1 space-y-1">
+        {#each proposal.bindings as binding (binding.id)}
+          <div class="rounded border border-tommy-accent-blue/30 bg-white px-2 py-1.5">
+            <div class="flex items-start justify-between gap-2">
+              <div class="text-xs text-tommy-navy">
+                <p>
+                  <span class="font-semibold uppercase">{binding.action}</span>
+                  {binding.service}
+                  {binding.action === "invalidate" ? "!->" : "->"}
+                  {binding.datasource}
+                  {binding.bindingKind}=<span class="font-mono">{binding.resourceId}</span>
+                </p>
+                <p class="mt-0.5 text-gray-600">{binding.reason}</p>
+              </div>
+              {@render itemToggle(binding.id)}
+            </div>
+            {@render evidence(binding.evidence)}
+          </div>
+        {/each}
+      </div>
+    {/if}
+
+    {#if proposal.heuristics.length > 0}
+      <p class="mt-2 text-xs font-semibold text-tommy-navy">Diagnostic heuristics (skill proposals)</p>
+      <div class="mt-1 space-y-1">
+        {#each proposal.heuristics as heuristic (heuristic.id)}
+          <div class="rounded border border-tommy-accent-blue/30 bg-white px-2 py-1.5">
+            <div class="flex items-start justify-between gap-2">
+              <div class="text-xs text-tommy-navy">
+                <p class="font-semibold">{heuristic.name}</p>
+                <p class="mt-0.5">{heuristic.description}</p>
+                <p class="mt-0.5"><span class="font-semibold">When to use:</span> {heuristic.whenToUse}</p>
+                <p class="mt-0.5"><span class="font-semibold">Procedure:</span> {heuristic.procedure}</p>
+              </div>
+              {@render itemToggle(heuristic.id)}
+            </div>
+            {@render evidence(heuristic.evidence)}
+          </div>
+        {/each}
+      </div>
     {/if}
 
     <div class="mt-3 flex gap-2 items-center">

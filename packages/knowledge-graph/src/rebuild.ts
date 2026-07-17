@@ -24,6 +24,7 @@ import { BindingKindSchema, MIGRATIONS, VECTOR_INDEX_SETUP } from "./schema.ts";
 import { type GraphStore, graphPath, isKnowledgeGraphEnabled, LadybugStore } from "./store.ts";
 import {
 	type IncidentRecord,
+	invalidateBindingByHuman,
 	linkIncidentTicket,
 	type RootCauseRecord,
 	recordIncident,
@@ -80,6 +81,33 @@ export function bindingFromAnnotations(a: AnnotationMap): ServiceBindingRecord |
 		discoveredBy: a.discovered_by ?? "resolve-identifiers",
 		incidentId: a.incident_id,
 	};
+}
+
+// SIO-1127: a kg-binding-invalidated fact -> the args of invalidateBindingByHuman. Returns
+// null on a missing required field (skipped + counted). Replays AFTER kg-binding so the
+// edge it invalidates already exists.
+export interface InvalidatedBindingRecord {
+	service: string;
+	datasource: string;
+	kind: string;
+	resourceId: string;
+	reason: string;
+}
+
+export function invalidatedBindingFromAnnotations(a: AnnotationMap): InvalidatedBindingRecord | null {
+	const kind = BindingKindSchema.safeParse(a.binding_kind);
+	if (!a.service || !a.resource_id || !a.datasource || !kind.success) return null;
+	return {
+		service: a.service,
+		datasource: a.datasource,
+		kind: kind.data,
+		resourceId: a.resource_id,
+		reason: a.reason ?? "",
+	};
+}
+
+async function applyInvalidatedBinding(store: GraphStore, rec: InvalidatedBindingRecord): Promise<void> {
+	await invalidateBindingByHuman(store, rec.service, rec.datasource, rec.kind, rec.resourceId, rec.reason);
 }
 
 // SIO-1103: incident mirror fact -> IncidentRecord. Embedding is intentionally NOT
@@ -181,6 +209,15 @@ async function rebuild(opts: RebuildOptions): Promise<void> {
 	await replayKind(store, "kg-incident-ticket", ticketLinkFromAnnotations, applyTicketLink, opts.dryRun);
 	await replayKind(store, "kg-root-cause", rootCauseFromAnnotations, recordRootCause, opts.dryRun);
 	await replayKind(store, "kg-binding", bindingFromAnnotations, recordServiceBinding, opts.dryRun);
+	// SIO-1127: human invalidations replay AFTER the kg-binding that created the edge, so
+	// tInvalid is set on an edge that already exists.
+	await replayKind(
+		store,
+		"kg-binding-invalidated",
+		invalidatedBindingFromAnnotations,
+		applyInvalidatedBinding,
+		opts.dryRun,
+	);
 
 	if (opts.dryRun) {
 		process.stdout.write("knowledge-graph rebuild: --dry-run, no writes.\n");
