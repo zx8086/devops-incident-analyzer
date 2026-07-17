@@ -18,7 +18,15 @@ export const POST: RequestHandler = async ({ params, request }) => {
 		if (!provider) {
 			return json({ error: `Unknown or unavailable ticket provider: ${params.provider}` }, { status: 404 });
 		}
-		const body = AddCommentRequestSchema.parse(await request.json());
+		// Parse JSON in an inner boundary so a malformed body is a 400 (client error),
+		// not a 502 (provider failure) from the outer catch.
+		let payload: unknown;
+		try {
+			payload = await request.json();
+		} catch {
+			return json({ error: "Invalid request" }, { status: 400 });
+		}
+		const body = AddCommentRequestSchema.parse(payload);
 		const { id } = await provider.addComment(body.issueKey, body.body);
 		log.info({ issueKey: body.issueKey, commentId: id }, "comment added to ticket");
 		return json({ ok: true, id });

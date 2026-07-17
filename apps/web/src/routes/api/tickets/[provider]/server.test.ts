@@ -268,6 +268,21 @@ describe("POST /api/tickets/[provider]/comment", () => {
 		expect((await res.json()).error).toBe("Invalid request");
 	});
 
+	test("400 (not 502) on malformed JSON", async () => {
+		mockProvider = baseProvider();
+		const event = {
+			params: { provider: "jira" },
+			request: new Request("http://localhost/api/tickets/jira/comment", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: "{ not json",
+			}),
+		} as never;
+		const res = await postComment(event);
+		expect(res.status).toBe(400);
+		expect((await res.json()).error).toBe("Invalid request");
+	});
+
 	test("posts the comment and returns { ok, id }", async () => {
 		const received: Array<{ issueKey: string; body: string }> = [];
 		mockProvider = baseProvider({

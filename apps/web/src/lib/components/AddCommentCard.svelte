@@ -33,6 +33,9 @@ let errorMessage = $state<string | null>(null);
 // Short header marks the comment as a follow-up, then the full answer markdown.
 const HEADER = "_Follow-up analysis added from the incident assistant._\n\n";
 const commentBody = $derived(`${HEADER}${content}`);
+// Mirror AddCommentRequestSchema's body cap so an over-long answer fails with a
+// clear message here instead of a generic 400 from the API.
+const MAX_COMMENT_BODY = 32_000;
 
 function errorFrom(data: unknown, status: number): string {
 	if (data && typeof data === "object" && "error" in data) {
@@ -44,6 +47,10 @@ function errorFrom(data: unknown, status: number): string {
 
 async function post() {
 	if (submitting || posted) return;
+	if (commentBody.length > MAX_COMMENT_BODY) {
+		errorMessage = `This answer is too long to post as a comment (${commentBody.length.toLocaleString()} of ${MAX_COMMENT_BODY.toLocaleString()} characters).`;
+		return;
+	}
 	submitting = true;
 	errorMessage = null;
 	try {
