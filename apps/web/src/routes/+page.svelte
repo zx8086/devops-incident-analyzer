@@ -223,8 +223,11 @@ function handleSuggestionClick(suggestion: string) {
       {/if}
 
       {#each agentStore.messages as msg, i (msg.id)}
-        <!-- SIO-901: skip the trailing drift summary here; it is re-rendered below the drift card. -->
-        {#if i !== driftSummaryIndex}
+        <!-- SIO-901/902: skip the trailing drift + synthetics summaries here; each is re-rendered
+             below its card. SIO-1145: the exclusion now also prevents a duplicate render from
+             offering a second "Add as comment" affordance (separate commentPosted state per
+             instance would let the same answer be posted twice). -->
+        {#if i !== driftSummaryIndex && i !== syntheticsSummaryIndex}
           <!-- SIO-941: render the collapsed pipeline log ABOVE the fleet-upgrade result message so
                the timeline reads chronologically (pipeline ran -> then completed). -->
           {#if i === fleetLogIndex}
@@ -249,6 +252,9 @@ function handleSuggestionClick(suggestion: string) {
             onActionApprove={(action) => agentStore.executeAction(action, msg.content)}
             onActionDismiss={(id) => agentStore.dismissAction(id)}
             ticketProviders={agentStore.availableTicketProviders}
+            threadTicket={agentStore.threadTicket}
+            canCommentOnThreadTicket={agentStore.threadTicket !== null && i > agentStore.threadTicketCreatedAtIndex}
+            onTicketCreated={(ticket) => agentStore.setThreadTicket(msg.id, ticket)}
           />
         {/if}
       {/each}
@@ -315,6 +321,9 @@ function handleSuggestionClick(suggestion: string) {
               onActionApprove={(action) => agentStore.executeAction(action, summaryMsg.content)}
               onActionDismiss={(id) => agentStore.dismissAction(id)}
               ticketProviders={agentStore.availableTicketProviders}
+              threadTicket={agentStore.threadTicket}
+              canCommentOnThreadTicket={agentStore.threadTicket !== null && driftSummaryIndex > agentStore.threadTicketCreatedAtIndex}
+              onTicketCreated={(ticket) => agentStore.setThreadTicket(summaryMsg.id, ticket)}
             />
           {/if}
         {/if}
@@ -345,6 +354,9 @@ function handleSuggestionClick(suggestion: string) {
               onActionApprove={(action) => agentStore.executeAction(action, synthSummaryMsg.content)}
               onActionDismiss={(id) => agentStore.dismissAction(id)}
               ticketProviders={agentStore.availableTicketProviders}
+              threadTicket={agentStore.threadTicket}
+              canCommentOnThreadTicket={agentStore.threadTicket !== null && syntheticsSummaryIndex > agentStore.threadTicketCreatedAtIndex}
+              onTicketCreated={(ticket) => agentStore.setThreadTicket(synthSummaryMsg.id, ticket)}
             />
           {/if}
         {/if}

@@ -261,6 +261,8 @@ export {
 	traceSpan,
 } from "./telemetry/telemetry.ts";
 export {
+	type AddCommentRequest,
+	AddCommentRequestSchema,
 	type CreatedTicket,
 	CreatedTicketSchema,
 	type CreateTicketRequest,

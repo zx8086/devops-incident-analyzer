@@ -7,6 +7,7 @@ import type { ActionResult, PendingAction, TicketProviderInfo } from "@devops-ag
 import type { CreatedTicket } from "@devops-agent/shared/src/ticket-types.ts";
 import type { ChatMessage } from "$lib/stores/agent.svelte";
 import ActionConfirmationCard from "./ActionConfirmationCard.svelte";
+import AddCommentCard from "./AddCommentCard.svelte";
 import AtlassianFindingsCard from "./AtlassianFindingsCard.svelte";
 import AWSFindingsCard from "./AWSFindingsCard.svelte";
 import CompletedProgress from "./CompletedProgress.svelte";
@@ -32,6 +33,9 @@ let {
 	onActionApprove,
 	onActionDismiss,
 	ticketProviders = [],
+	threadTicket = null,
+	canCommentOnThreadTicket = false,
+	onTicketCreated,
 }: {
 	message: ChatMessage;
 	index: number;
@@ -44,6 +48,13 @@ let {
 	onActionApprove?: (action: PendingAction) => void;
 	onActionDismiss?: (actionId: string) => void;
 	ticketProviders?: TicketProviderInfo[];
+	// SIO-1145: the thread's ticket (if one was created on an earlier answer) and
+	// whether THIS answer came after it -- both true => show "Add as comment"
+	// instead of "Create ticket". onTicketCreated reports this answer's created
+	// ticket up to the store so later answers enter comment-mode.
+	threadTicket?: CreatedTicket | null;
+	canCommentOnThreadTicket?: boolean;
+	onTicketCreated?: (ticket: CreatedTicket) => void;
 } = $props();
 
 let showTicketCard = $state(false);
@@ -51,6 +62,14 @@ let showTicketCard = $state(false);
 // survives the card unmounting. Once set, the answer already has a ticket:
 // reopening the card shows the confirmation and the button is disabled.
 let createdTicket = $state<CreatedTicket | null>(null);
+
+// SIO-1145: this answer comments on the thread's ticket instead of creating one
+// (the thread already has a ticket and this answer came after it). Per-answer
+// commentPosted mirrors createdTicket's local, reload-transient pattern so the
+// same follow-up can't be posted twice.
+let showCommentCard = $state(false);
+let commentPosted = $state(false);
+const commentMode = $derived(canCommentOnThreadTicket && threadTicket !== null);
 </script>
 
 {#if message.role === "user"}
@@ -132,19 +151,37 @@ let createdTicket = $state<CreatedTicket | null>(null);
             content={message.content}
             feedback={message.feedback}
             onFeedback={(score) => onFeedback?.(index, score)}
-            onCreateTicket={ticketProviders.length > 0 ? () => (showTicketCard = !showTicketCard) : undefined}
+            onCreateTicket={ticketProviders.length > 0 && !commentMode ? () => (showTicketCard = !showTicketCard) : undefined}
             ticketCreated={!!createdTicket}
+            onAddComment={commentMode ? () => (showCommentCard = !showCommentCard) : undefined}
+            {commentPosted}
+            commentTargetKey={threadTicket?.key}
           />
         {/if}
 
-        {#if !isStreaming && showTicketCard && ticketProviders.length > 0}
+        {#if !isStreaming && showTicketCard && ticketProviders.length > 0 && !commentMode}
           <CreateTicketCard
             content={message.content}
             requestId={message.requestId}
             providers={ticketProviders}
             {createdTicket}
-            onCreated={(ticket) => (createdTicket = ticket)}
+            onCreated={(ticket) => {
+              createdTicket = ticket;
+              onTicketCreated?.(ticket);
+            }}
             onClose={() => (showTicketCard = false)}
+          />
+        {/if}
+
+        {#if !isStreaming && showCommentCard && commentMode && threadTicket}
+          <AddCommentCard
+            ticketKey={threadTicket.key}
+            ticketUrl={threadTicket.url}
+            content={message.content}
+            providerId={ticketProviders[0]?.id ?? "jira"}
+            posted={commentPosted}
+            onPosted={() => (commentPosted = true)}
+            onClose={() => (showCommentCard = false)}
           />
         {/if}
 

@@ -1,6 +1,7 @@
 // shared/src/__tests__/ticket-types.test.ts
 import { describe, expect, test } from "bun:test";
 import {
+	AddCommentRequestSchema,
 	CreatedTicketSchema,
 	CreateTicketRequestSchema,
 	TicketProviderIdSchema,
@@ -59,6 +60,24 @@ describe("CreateTicketRequestSchema", () => {
 describe("CreatedTicketSchema", () => {
 	test("url is optional", () => {
 		expect(CreatedTicketSchema.parse({ key: "DEVOPS-1382" })).toEqual({ key: "DEVOPS-1382" });
+	});
+});
+
+describe("AddCommentRequestSchema", () => {
+	test("accepts a valid request", () => {
+		expect(AddCommentRequestSchema.parse({ issueKey: "DEVOPS-1382", body: "Follow-up analysis" })).toEqual({
+			issueKey: "DEVOPS-1382",
+			body: "Follow-up analysis",
+		});
+	});
+
+	test("rejects empty issueKey and empty body", () => {
+		expect(AddCommentRequestSchema.safeParse({ issueKey: "", body: "x" }).success).toBe(false);
+		expect(AddCommentRequestSchema.safeParse({ issueKey: "DEVOPS-1", body: "" }).success).toBe(false);
+	});
+
+	test("rejects body over 32k", () => {
+		expect(AddCommentRequestSchema.safeParse({ issueKey: "DEVOPS-1", body: "x".repeat(32_001) }).success).toBe(false);
 	});
 });
 

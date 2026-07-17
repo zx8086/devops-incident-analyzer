@@ -18,6 +18,7 @@ import {
 	type TicketProviderInfo,
 } from "@devops-agent/shared/src/ticket-types.ts";
 import { z } from "zod";
+import { errorFrom } from "$lib/ticket-errors";
 import { prefillDescription, prefillSummary } from "$lib/ticket-prefill";
 import Icon from "./Icon.svelte";
 
@@ -103,14 +104,6 @@ const projectSuggestions = $derived.by(() => {
 		.slice(0, MAX_PROJECT_SUGGESTIONS);
 });
 const selectedProject = $derived(allProjects.find((p) => p.key === selectedProjectKey) ?? null);
-
-function errorFrom(data: unknown, status: number): string {
-	if (data && typeof data === "object" && "error" in data) {
-		const message = (data as { error?: unknown }).error;
-		if (typeof message === "string") return message;
-	}
-	return `Request failed (${status})`;
-}
 
 async function fetchJson<T>(path: string, schema: z.ZodType<T>): Promise<T> {
 	const res = await fetch(path);

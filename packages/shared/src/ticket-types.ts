@@ -54,3 +54,14 @@ export const CreatedTicketSchema = z.object({
 	url: z.string().optional(),
 });
 export type CreatedTicket = z.infer<typeof CreatedTicketSchema>;
+
+// SIO-1145: request body for POST /api/tickets/[provider]/comment. `issueKey` is
+// the thread's existing ticket (resolved client-side from in-memory thread state);
+// `body` is the follow-up answer's full markdown. No requestId -- comments don't
+// re-curate the incident (curation happened at ticket creation). The 32k cap
+// matches CreateTicketRequest.description (Jira's field limit).
+export const AddCommentRequestSchema = z.object({
+	issueKey: z.string().min(1),
+	body: z.string().min(1).max(32_000),
+});
+export type AddCommentRequest = z.infer<typeof AddCommentRequestSchema>;

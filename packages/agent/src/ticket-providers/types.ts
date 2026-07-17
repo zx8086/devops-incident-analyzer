@@ -26,6 +26,10 @@ export interface TicketProvider {
 	listIssueTypes(projectKey: string): Promise<TicketIssueType[]>;
 	listEpics(projectKey: string): Promise<TicketEpic[]>;
 	createTicket(req: CreateTicketRequest): Promise<CreatedTicket>;
+	// SIO-1145: post a markdown comment onto an existing ticket. Returns the
+	// created comment id (best-effort identity for logging); success-only callers
+	// may ignore it.
+	addComment(issueKey: string, body: string): Promise<{ id: string }>;
 }
 
 export class TicketProviderError extends Error {

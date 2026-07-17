@@ -22,6 +22,7 @@ function stubProvider(available: boolean): TicketProvider {
 		listIssueTypes: () => Promise.resolve([]),
 		listEpics: () => Promise.resolve([]),
 		createTicket: () => Promise.resolve({ key: "X-1" }),
+		addComment: () => Promise.resolve({ id: "c1" }),
 	};
 }
 
