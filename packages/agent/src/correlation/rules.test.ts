@@ -2,6 +2,7 @@
 // Unit tests for the Phase 5 AWS correlation rules.
 import { describe, expect, test } from "bun:test";
 import type { AwsCloudWatchAlarm, ToolError } from "@devops-agent/shared";
+import type { AgentStateType } from "../state.ts";
 import { correlationRules } from "./rules.ts";
 
 function findRule(name: string) {
@@ -260,12 +261,12 @@ describe("gitlab-deploy-vs-datastore-runtime (SIO-1138 unscoped guard)", () => {
 	const mergedAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 	const observedAt = new Date(Date.now() - 30 * 60 * 1000).toISOString();
 
-	function makeState(unscoped: boolean) {
-		return {
+	function makeState(unscoped: boolean): AgentStateType {
+		const partial: Partial<AgentStateType> = {
 			dataSourceResults: [
 				{
 					dataSourceId: "gitlab",
-					status: "success" as const,
+					status: "success",
 					data: "",
 					gitlabFindings: {
 						mergedRequests: [{ id: 42, title: "fix pricelist paging", merged_at: mergedAt }],
@@ -273,7 +274,7 @@ describe("gitlab-deploy-vs-datastore-runtime (SIO-1138 unscoped guard)", () => {
 				},
 				{
 					dataSourceId: "couchbase",
-					status: "success" as const,
+					status: "success",
 					data: "",
 					couchbaseFindings: {
 						slowQueries: [
@@ -283,7 +284,8 @@ describe("gitlab-deploy-vs-datastore-runtime (SIO-1138 unscoped guard)", () => {
 					},
 				},
 			],
-		} as never;
+		};
+		return partial as unknown as AgentStateType;
 	}
 
 	test("fires for scoped couchbase slow queries post-merge", () => {
