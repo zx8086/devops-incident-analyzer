@@ -148,18 +148,27 @@ function ticketWithRequestId(location: "description" | "comment"): TicketResolut
 	};
 }
 
-describe("SIO-1133 extractRequestId", () => {
-	test("pulls a UUID after the Request-Id label, case-insensitive, first hit", async () => {
-		const { extractRequestId } = await import("./match.ts");
-		expect(extractRequestId(`**Request-Id:** ${REQ_ID}`)).toBe(REQ_ID);
-		expect(extractRequestId(`request-id: ${REQ_ID.toUpperCase()}`)).toBe(REQ_ID);
-		expect(extractRequestId(`noise\nRequest-Id:   ${REQ_ID}\nmore`)).toBe(REQ_ID);
+const REQ_ID_2 = "2a6c3d9b-1e4f-5b0a-9d8c-3f7e5b2c0a1d";
+
+describe("SIO-1133 extractRequestIds", () => {
+	test("pulls UUIDs after the Request-Id label, case-insensitive, tolerant of markers", async () => {
+		const { extractRequestIds } = await import("./match.ts");
+		expect(extractRequestIds(`**Request-Id:** ${REQ_ID}`)).toEqual([REQ_ID]);
+		expect(extractRequestIds(`request-id: ${REQ_ID.toUpperCase()}`)).toEqual([REQ_ID]);
+		expect(extractRequestIds(`noise\nRequest-Id:   ${REQ_ID}\nmore`)).toEqual([REQ_ID]);
 	});
-	test("returns null when absent or malformed", async () => {
-		const { extractRequestId } = await import("./match.ts");
-		expect(extractRequestId("no id here")).toBeNull();
-		expect(extractRequestId("Request-Id: not-a-uuid")).toBeNull();
-		expect(extractRequestId("Request-Id: 1f5b2c8a-0d3e-4a9b-8c7d")).toBeNull(); // truncated
+	test("returns ALL ids in text order, deduped", async () => {
+		const { extractRequestIds } = await import("./match.ts");
+		// CodeRabbit PR #405: a stale footer must not hide a later valid id.
+		expect(extractRequestIds(`Request-Id: ${REQ_ID}\n...\nRequest-Id: ${REQ_ID_2}`)).toEqual([REQ_ID, REQ_ID_2]);
+		// Same id twice -> one entry.
+		expect(extractRequestIds(`Request-Id: ${REQ_ID}\nRequest-Id: ${REQ_ID}`)).toEqual([REQ_ID]);
+	});
+	test("returns [] when absent or malformed", async () => {
+		const { extractRequestIds } = await import("./match.ts");
+		expect(extractRequestIds("no id here")).toEqual([]);
+		expect(extractRequestIds("Request-Id: not-a-uuid")).toEqual([]);
+		expect(extractRequestIds("Request-Id: 1f5b2c8a-0d3e-4a9b-8c7d")).toEqual([]); // truncated
 	});
 });
 
@@ -232,6 +241,39 @@ describe("SIO-1133 request-id scan lane", () => {
 		_setGraphStoreForTesting(scanStore(true));
 		const result = await learnMatchIncident(stateWith({ hilTicket: ticket() }));
 		expect(result.hilMatchCandidates?.some((c) => c.via === "request-id")).toBe(false);
+	});
+
+	// CodeRabbit PR #405: a STALE footer id (first) must not hide a VALID id (second). The
+	// scan queries each id in order until one resolves in the KG.
+	test("a stale first Request-Id falls through to a valid second one", async () => {
+		_setEmbedderForTesting(async () => [0.1]);
+		const ticketTwoIds: TicketResolution = {
+			key: "DEVOPS-9002",
+			summary: "pasted report with two ids",
+			status: "Done",
+			// First id is stale (not in KG); the second resolves.
+			description: `Old paste:\n**Request-Id:** ${REQ_ID}\n\nCorrected paste:\n**Request-Id:** ${REQ_ID_2}`,
+			comments: [],
+		};
+		const store: GraphStore = {
+			init: async () => undefined,
+			close: async () => undefined,
+			run: async <T>(cypher: string, params?: Record<string, unknown>): Promise<T[]> => {
+				if (cypher.includes("i.ticketKey = $ticketKey")) return [] as T[];
+				if (cypher.includes("MATCH (i:Incident {id: $id}) RETURN i.id AS id")) {
+					// Only the SECOND id exists in the KG.
+					return params?.id === REQ_ID_2
+						? ([{ id: REQ_ID_2, summary: "the valid incident", severity: "high" }] as T[])
+						: ([] as T[]);
+				}
+				return [] as T[];
+			},
+		};
+		_setGraphStoreForTesting(store);
+
+		const result = await learnMatchIncident(stateWith({ hilTicket: ticketTwoIds }));
+		expect(result.hilMatchCandidates).toHaveLength(1);
+		expect(result.hilMatchCandidates?.[0]).toMatchObject({ id: REQ_ID_2, via: "request-id" });
 	});
 });
 

@@ -260,9 +260,15 @@ function extractConfidenceScore(answer: string): number {
 // a re-render (e.g. a resumed turn) must not append a second footer.
 const REQUEST_ID_FOOTER_LABEL = "**Request-Id:**";
 export function appendRequestIdFooter(answer: string, requestId: string): string {
-	if (!requestId || answer.includes(`${REQUEST_ID_FOOTER_LABEL} ${requestId}`)) return answer;
+	if (!requestId) return answer;
 	const trimmed = answer.replace(/\s+$/, "");
-	return `${trimmed}\n\n${REQUEST_ID_FOOTER_LABEL} ${requestId}`;
+	const footer = `${REQUEST_ID_FOOTER_LABEL} ${requestId}`;
+	// Idempotent on the FOOTER specifically (CodeRabbit PR #405): match the trimmed LAST
+	// line, not any occurrence -- a report that merely mentions the id in its body must not
+	// suppress the required bottom footer.
+	const lastLine = trimmed.slice(trimmed.lastIndexOf("\n") + 1);
+	if (lastLine === footer) return answer;
+	return `${trimmed}\n\n${footer}`;
 }
 
 // SIO-860: rewrite the dedicated "Confidence:" line in the report to `score` so the
