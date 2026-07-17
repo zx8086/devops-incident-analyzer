@@ -3,6 +3,7 @@
 import type {
 	ActionResult,
 	DataSourceContext,
+	HilItemEdits,
 	PendingAction,
 	StreamEvent,
 	TicketProviderInfo,
@@ -679,7 +680,10 @@ function createAgentStore() {
 	// `hil_learning_resolved` first (clearing the card via the reducer); the
 	// match gate chains into the review gate, so a resume may repopulate a card.
 	async function resumeHilLearning(
-		payload: { match?: { incidentId: string | null }; review?: { decisions: Record<string, "approve" | "reject"> } },
+		payload: {
+			match?: { incidentId: string | null };
+			review?: { decisions: Record<string, "approve" | "reject">; edits?: HilItemEdits };
+		},
 		threadIdOverride: string,
 	) {
 		if (isStreaming) return;
@@ -727,9 +731,9 @@ function createAgentStore() {
 		return resumeHilLearning({ match: { incidentId } }, hilLearningMatch.threadId);
 	}
 
-	function resolveHilReview(decisions: Record<string, "approve" | "reject">) {
+	function resolveHilReview(decisions: Record<string, "approve" | "reject">, edits: HilItemEdits = {}) {
 		if (!hilLearningReview) return;
-		return resumeHilLearning({ review: { decisions } }, hilLearningReview.threadId);
+		return resumeHilLearning({ review: { decisions, edits } }, hilLearningReview.threadId);
 	}
 
 	// SIO-751: POST the user's topic-shift decision to the resume endpoint and

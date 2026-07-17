@@ -85,6 +85,22 @@ export type LearningProposal = z.infer<typeof LearningProposalSchema>;
 export type HilDecision = "approve" | "reject";
 export type HilDecisions = Record<string, HilDecision>;
 
+// SIO-1128: per-item text edits from the review card, keyed by item id -> field -> new
+// value. Only invariant-free PROSE fields are editable (see HIL_EDITABLE_FIELDS); grounded
+// or structured fields (resourceId, causeClass, bindingKind, datasource, heuristic name,
+// runbookFilename, evidence) stay read-only, so an edit can never break resourceId
+// grounding or a kebab-case regex. Kept separate from HilDecisions (approve/reject).
+export const HIL_EDITABLE_FIELDS = {
+	rootCause: ["description", "resolution"],
+	binding: ["reason"],
+	heuristic: ["description", "whenToUse", "procedure"],
+	memoryFact: ["text"],
+} as const;
+
+export type HilItemEdits = Record<string, Record<string, string>>;
+
+export const HilItemEditsSchema: z.ZodType<HilItemEdits> = z.record(z.string(), z.record(z.string(), z.string()));
+
 // The match-gate candidate surfaced to the UI. `via` distinguishes vector KNN
 // hits from the deterministic ticket-mention pin.
 export const HilMatchCandidateSchema = z.object({

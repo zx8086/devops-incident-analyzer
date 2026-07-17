@@ -16,7 +16,7 @@ import { createLlm, type InvokableLlm, invokeWithDeadline } from "../llm.ts";
 import { searchAgentMemory } from "../memory-backend.ts";
 import { getRunbookCatalog } from "../prompt-context.ts";
 import type { AgentStateType } from "../state.ts";
-import { type HilDecisions, type LearningProposal, LearningProposalSchema } from "./schema.ts";
+import { type HilDecisions, type HilItemEdits, type LearningProposal, LearningProposalSchema } from "./schema.ts";
 import type { TicketResolution } from "./ticket.ts";
 
 const logger = getLogger("agent:learn:distill");
@@ -305,6 +305,7 @@ export async function learnDistill(state: AgentStateType): Promise<Partial<Agent
 
 export interface HilReviewDecision {
 	decisions: HilDecisions;
+	edits?: HilItemEdits;
 }
 
 // learnReviewGate node: interrupt #2 -- per-item approve/reject. Gate only.
@@ -331,5 +332,5 @@ export function learnReviewGate(state: AgentStateType): Partial<AgentStateType> 
 		message: `Review the learnings distilled from ${proposal.ticketKey}. Approved items are written to the knowledge graph and agent memory.`,
 	}) as HilReviewDecision;
 
-	return { hilDecisions: decision?.decisions ?? {} };
+	return { hilDecisions: decision?.decisions ?? {}, hilEdits: decision?.edits ?? {} };
 }

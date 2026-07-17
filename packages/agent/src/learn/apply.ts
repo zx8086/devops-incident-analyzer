@@ -32,6 +32,7 @@ import { getRunbookCatalog } from "../prompt-context.ts";
 import { buildSkillAnnotations, buildSkillFactText, skillProposalExists } from "../skill-learner.ts";
 import type { AgentStateType } from "../state.ts";
 import { writeCurationMirrorFacts } from "./curation-facts.ts";
+import { applyEdits } from "./edits.ts";
 import { draftRunbookFilename, RUNBOOK_DIR, renderRunbookMarkdown } from "./runbook.ts";
 import type { RootCauseCorrection } from "./schema.ts";
 
@@ -123,10 +124,12 @@ function approved(decisions: Record<string, "approve" | "reject">, id: string): 
 // as an AIMessage (the iac idiom -- the resume endpoint reads it back via
 // getLastAssistantText).
 export async function applyLearnings(state: AgentStateType): Promise<Partial<AgentStateType>> {
-	const proposal = state.hilProposal;
 	const match = state.hilMatch;
 	const decisions = state.hilDecisions;
-	if (!proposal || !match || !decisions) return {};
+	if (!state.hilProposal || !match || !decisions) return {};
+	// SIO-1128: merge the human's text edits over the distiller proposal. applyEdits only
+	// touches invariant-free prose fields, so every downstream write/validation is unchanged.
+	const proposal = applyEdits(state.hilProposal, state.hilEdits ?? {});
 
 	const ticketKey = proposal.ticketKey;
 	const alreadyLearned = state.hilAlreadyLearned === true;

@@ -463,6 +463,28 @@ describe("SIO-1126 applyLearnings", () => {
 	// SIO-1127: heuristics self-gate on live memory (unset in tests) -> reported as skipped,
 	// never silently dropped. The skill-proposal write path itself is covered by the
 	// buildSkillAnnotations/buildSkillFactText reuse (skill-learner tests).
+	// SIO-1128: an edited rootCause.description is what lands in the recordRootCause write,
+	// not the distiller's original -- proves applyEdits(state.hilProposal, state.hilEdits) is
+	// actually merged before the graph write, not just carried in state unused.
+	test("SIO-1128: an edited root-cause description is written (not the distiller original)", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const calls: RunCall[] = [];
+		_setGraphStoreForTesting(stubStore(calls));
+
+		await applyLearnings(
+			stateWith({
+				hilProposal: proposal(),
+				hilMatch: { incidentId: "inc-1", created: false },
+				hilDecisions: { "rc-1": "approve" },
+				hilEdits: { "rc-1": { description: "EDITED-DESC" } },
+			}),
+		);
+
+		const nodeCall = calls.find((c) => c.cypher.includes("MERGE (rc:RootCause {id: $id})"));
+		expect(String(nodeCall?.params?.description ?? "")).toContain("EDITED-DESC");
+		expect(String(nodeCall?.params?.description ?? "")).not.toContain("Missing per-VPC resolver rule association");
+	});
+
 	test("SIO-1127: an approved heuristic is reported skipped when live memory is off", async () => {
 		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
 		delete process.env.LIVE_MEMORY_ENABLED;

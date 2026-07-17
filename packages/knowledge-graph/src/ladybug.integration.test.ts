@@ -24,6 +24,7 @@ import {
 	stacksUsingModule,
 	topology,
 } from "./reader.ts";
+import { resolutionFromAnnotations } from "./rebuild.ts";
 import { EMBEDDING_DIM } from "./schema.ts";
 import { LadybugStore } from "./store.ts";
 import {
@@ -429,6 +430,36 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 		// hasBinding filters tInvalid = '' -> now gone (a human edge invalidateBinding would refuse).
 		expect(await hasBinding(store, "localcore-service", "topic", "orders.events")).toBe(false);
 		expect(await bindingsForServices(store, ["localcore-service"], ["localcore-service"])).toHaveLength(0);
+
+		await store.close();
+	});
+
+	// SIO-1128: a kg-resolution fact replays into a RESOLVED_BY edge on the real engine --
+	// the round-trip the in-memory fake cannot exercise (it can't execute the MATCH/MERGE).
+	test("kg-resolution replays into a RESOLVED_BY edge", async () => {
+		const store = new LadybugStore(join(dir, "db-resolution"));
+		await store.init();
+
+		await recordIncident(store, {
+			id: "inc-res",
+			severity: "high",
+			summary: "resolved incident",
+			services: ["svc-r"],
+		});
+
+		const rec = resolutionFromAnnotations({
+			kind: "kg-resolution",
+			incident_id: "inc-res",
+			runbook: "kafka-consumer-lag.md",
+		});
+		expect(rec).not.toBeNull();
+		if (!rec) return;
+		await linkResolution(store, rec.incidentId, [rec.runbook]);
+
+		const rows = await store.run<{ n: number }>(
+			"MATCH (:Incident {id: 'inc-res'})-[:RESOLVED_BY]->(:Runbook {filename: 'kafka-consumer-lag.md'}) RETURN count(*) AS n",
+		);
+		expect(Number(rows[0]?.n ?? 0)).toBe(1);
 
 		await store.close();
 	});

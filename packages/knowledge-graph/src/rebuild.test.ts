@@ -5,6 +5,7 @@ import {
 	incidentFromAnnotations,
 	invalidatedBindingFromAnnotations,
 	parseArgs,
+	resolutionFromAnnotations,
 	rootCauseFromAnnotations,
 } from "./rebuild.ts";
 import { InMemoryGraphStore } from "./store.ts";
@@ -228,5 +229,27 @@ describe("SIO-1127 rebuild: invalidatedBindingFromAnnotations", () => {
 		expect(invalidatedBindingFromAnnotations({ ...base, service: "" })).toBeNull();
 		expect(invalidatedBindingFromAnnotations({ ...base, resource_id: "" })).toBeNull();
 		expect(invalidatedBindingFromAnnotations({ ...base, binding_kind: "not-a-kind" })).toBeNull();
+	});
+});
+
+// SIO-1128: the kg-resolution mapper reconstructs the linkResolution args so RESOLVED_BY
+// edges survive rebuild-from-facts.
+describe("SIO-1128 rebuild: resolutionFromAnnotations", () => {
+	test("maps a full kg-resolution fact", () => {
+		expect(
+			resolutionFromAnnotations({
+				kind: "kg-resolution",
+				incident_id: "inc-9",
+				runbook: "kafka-consumer-lag.md",
+				ticket: "DEVOPS-9",
+			}),
+		).toEqual({ incidentId: "inc-9", runbook: "kafka-consumer-lag.md" });
+	});
+
+	test("returns null on a missing required field", () => {
+		const base = { kind: "kg-resolution", incident_id: "inc-9", runbook: "x.md" };
+		expect(resolutionFromAnnotations(base)).not.toBeNull();
+		expect(resolutionFromAnnotations({ ...base, incident_id: "" })).toBeNull();
+		expect(resolutionFromAnnotations({ ...base, runbook: "" })).toBeNull();
 	});
 });

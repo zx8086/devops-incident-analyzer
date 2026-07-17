@@ -8,6 +8,7 @@
 
 import { flushLangSmithCallbacks } from "@devops-agent/agent";
 import { getLogger, runWithRequestContext, traceSpan } from "@devops-agent/observability";
+import { HilItemEditsSchema } from "@devops-agent/shared";
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
 import {
@@ -29,7 +30,12 @@ const ResumeRequestSchema = z
 	.object({
 		threadId: z.string().min(1),
 		match: z.object({ incidentId: z.string().min(1).nullable() }).optional(),
-		review: z.object({ decisions: z.record(z.string(), z.enum(["approve", "reject"])) }).optional(),
+		review: z
+			.object({
+				decisions: z.record(z.string(), z.enum(["approve", "reject"])),
+				edits: HilItemEditsSchema.optional(),
+			})
+			.optional(),
 	})
 	// Exactly one resume field -- a mixed payload could resume the wrong gate.
 	.superRefine((b, ctx) => {
@@ -48,7 +54,9 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	const resumeValue =
-		body.match !== undefined ? { incidentId: body.match.incidentId } : { decisions: body.review?.decisions ?? {} };
+		body.match !== undefined
+			? { incidentId: body.match.incidentId }
+			: { decisions: body.review?.decisions ?? {}, edits: body.review?.edits ?? {} };
 
 	// Bind the request variant to the thread's actual pending gate: a stale or
 	// hand-crafted payload must not resume the wrong interrupt (a match payload

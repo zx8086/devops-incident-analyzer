@@ -408,7 +408,7 @@ function handleSuggestionClick(suggestion: string) {
     <LearningProposalCard
       prompt={agentStore.hilLearningReview}
       disabled={agentStore.isStreaming}
-      onApply={(decisions) => agentStore.resolveHilReview(decisions)}
+      onApply={(decisions, edits) => agentStore.resolveHilReview(decisions, edits)}
     />
   {/if}
 
