@@ -23,6 +23,7 @@ import { AIMessage } from "@langchain/core/messages";
 import { isLiveMemoryEnabled, recordKeyDecision } from "../memory-writer.ts";
 import { getRunbookCatalog } from "../prompt-context.ts";
 import type { AgentStateType } from "../state.ts";
+import { writeCurationMirrorFacts } from "./curation-facts.ts";
 import type { RootCauseCorrection } from "./schema.ts";
 
 const logger = getLogger("agent:learn:apply");
@@ -217,6 +218,18 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 						incident_id: match.incidentId,
 						ticket: ticketKey,
 					},
+				});
+				// SIO-1135: mirror the incident (+ its root cause) to durable facts now that
+				// it is curated. The create path (above) already wrote a kg-incident fact this
+				// turn, and an approved rootCause already wrote a kg-root-cause fact -- skip
+				// those to avoid a duplicate. For an EXISTING matched incident with no HIL
+				// rootCause, this is the only fact write (the per-run mirror moved to curation
+				// time, SIO-1135), so the incident survives rebuild-from-facts.
+				await writeCurationMirrorFacts(store, match.incidentId, {
+					requestId: state.requestId,
+					ticketKey,
+					skipIncidentFact: match.created,
+					skipRootCauseFact: report.rootCauseWritten,
 				});
 			} else {
 				report.skipped.push({ id: "curation", reason: "nothing approved; ticket link not written" });

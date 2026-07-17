@@ -27,7 +27,6 @@ import { truncateForEmbedding } from "@devops-agent/shared";
 import { evaluate } from "./correlation/engine.ts";
 import { correlationRules } from "./correlation/rules.ts";
 import { registerGraphWarmer } from "./lifecycle.ts";
-import { recordKeyDecision } from "./memory-writer.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import type { AgentStateType } from "./state.ts";
 
@@ -102,22 +101,12 @@ export async function recordGraphEntities(state: AgentStateType): Promise<Partia
 			summary,
 			services,
 		});
-		// SIO-1103 (P1 forward-fill): mirror the incident to a durable Couchbase fact so
-		// the graph is rebuildable from the system of record. recordKeyDecision self-gates
-		// on the agent-memory backend (no-op on the file backend), independent of the graph
-		// write above (SIO-970). Annotations are the rebuild's replay source.
-		recordKeyDecision({
-			requestId: state.requestId,
-			decision: `Incident ${state.requestId}: ${summary}`,
-			annotations: {
-				kind: "kg-incident",
-				incident_id: state.requestId,
-				services: services.join(","),
-				severity: state.normalizedIncident.severity ?? "",
-				// SIO-1103 CodeRabbit: mirror summary too so a rebuilt incident keeps it.
-				summary,
-			},
-		});
+		// SIO-1135: the durable kg-incident mirror fact is NO LONGER written here. Only
+		// human-curated investigations become durable memory (SIO-1134), and facts are
+		// immutable, so a per-run mirror would let rebuild-from-facts resurrect every
+		// uncurated incident forever. The graph MERGE above still records the row (visible
+		// this session); the mirror fact is written at curation time instead (learn/apply.ts
+		// and the ticket-creation curateIncident endpoint), reading THIS row for parity.
 		return {};
 	} catch (error) {
 		logger.warn(
@@ -251,21 +240,11 @@ export async function recordRootCauseData(state: AgentStateType): Promise<Partia
 			confidence: state.confidenceScore,
 			ruleName: cause.ruleName,
 		});
-		// SIO-1103 (P1 forward-fill): mirror the root cause to a durable fact so a rebuild
-		// reconstructs the RootCause + HAS_ROOT_CAUSE edge. Self-gates on the agent-memory
-		// backend; independent of the graph write above (SIO-970).
-		recordKeyDecision({
-			requestId: state.requestId,
-			decision: `Root cause for incident ${state.requestId}: ${cause.ruleName}`,
-			annotations: {
-				kind: "kg-root-cause",
-				incident_id: state.requestId,
-				root_cause_id: id,
-				rule_name: cause.ruleName,
-				description: cause.description,
-				confidence: String(state.confidenceScore),
-			},
-		});
+		// SIO-1135: the durable kg-root-cause mirror fact is NO LONGER written here (same
+		// reasoning as recordGraphEntities: immutable facts + curated-only durable memory).
+		// The graph MERGE above still links HAS_ROOT_CAUSE for this session; the mirror fact
+		// is written at curation time (reading rootCauseForIncident) so a rebuild reconstructs
+		// only curated root causes.
 		return {};
 	} catch (error) {
 		logger.warn(

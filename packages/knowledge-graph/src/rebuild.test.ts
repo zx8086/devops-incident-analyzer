@@ -137,3 +137,58 @@ describe("SIO-1103 rebuild: rootCauseFromAnnotations", () => {
 		expect(rc?.confidence).toBe(0);
 	});
 });
+
+// SIO-1135: the curation-time mirror facts (agent/src/learn/curation-facts.ts) carry EXTRA
+// provenance keys (source, ticket) beyond what the rebuild mappers read. This asserts those
+// extra keys are ignored and the record maps IDENTICALLY to the canonical shape -- so a
+// rebuild-from-facts of a curated store reconstructs the same incidents/root causes. Legacy
+// per-run facts (without source/ticket) and curation facts must produce the same record.
+describe("SIO-1135 rebuild: curation-fact byte-parity", () => {
+	test("kg-incident with curation provenance keys maps like a plain kg-incident", () => {
+		const plain = incidentFromAnnotations({
+			kind: "kg-incident",
+			incident_id: "inc-9",
+			services: "orders,payments",
+			severity: "high",
+			summary: "orders failing",
+		});
+		const curation = incidentFromAnnotations({
+			kind: "kg-incident",
+			incident_id: "inc-9",
+			services: "orders,payments",
+			severity: "high",
+			summary: "orders failing",
+			source: "curation",
+			ticket: "DEVOPS-9",
+		});
+		expect(curation).toEqual(plain);
+		expect(curation).toEqual({
+			id: "inc-9",
+			severity: "high",
+			summary: "orders failing",
+			services: ["orders", "payments"],
+		});
+	});
+
+	test("kg-root-cause with curation provenance keys maps like a plain kg-root-cause", () => {
+		const base = {
+			kind: "kg-root-cause",
+			incident_id: "inc-9",
+			root_cause_id: "rc-hash",
+			rule_name: "route53-resolver-rule-missing",
+			description: "per-VPC resolver rule not associated",
+			confidence: "1",
+		};
+		const plain = rootCauseFromAnnotations(base);
+		const curation = rootCauseFromAnnotations({ ...base, source: "curation", ticket: "DEVOPS-9" });
+		expect(curation).toEqual(plain);
+		expect(curation).toEqual({
+			id: "rc-hash",
+			incidentId: "inc-9",
+			class: "route53-resolver-rule-missing",
+			description: "per-VPC resolver rule not associated",
+			confidence: 1,
+			ruleName: "route53-resolver-rule-missing",
+		});
+	});
+});

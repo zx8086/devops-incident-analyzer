@@ -33,6 +33,7 @@ import { isKillSwitchActive, KillSwitchError } from "@devops-agent/shared";
 import type { BaseMessage, MessageContentComplex } from "@langchain/core/messages";
 import { startIacReconcileCron } from "./iac-reconcile-cron.ts";
 import { startKgTopologyCron } from "./kg-topology-cron.ts";
+import { startPurgeCron } from "./purge-cron.ts";
 
 // SIO-849/SIO-850: wire the lifecycle teardown (open_memory_pr) and bootstrap
 // (warm_knowledge_graph) seams once, at module load. Both no-op until their
@@ -57,6 +58,10 @@ startIacReconcileCron();
 // process's MCP bridge + the single lbug store handle. Default OFF
 // (KG_TOPOLOGY_CRON_ENABLED) -- it does live MCP I/O on a schedule.
 startKgTopologyCron();
+// SIO-1135: start the in-process scheduled retention sweep that physically removes
+// uncurated Incident rows older than KG_UNCURATED_RETENTION_DAYS. DB-only (no MCP I/O);
+// default OFF (KG_PURGE_CRON_ENABLED). Shares the single lbug store handle.
+startPurgeCron();
 
 // SIO-987: is a TCP server already listening on host:port? A successful connect means yes (something
 // -- a standalone KG server -- already owns the port). Resolves false on connect refused/timeout.

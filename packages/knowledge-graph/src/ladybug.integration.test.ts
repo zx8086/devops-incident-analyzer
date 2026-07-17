@@ -16,19 +16,25 @@ import {
 	changeHistoryForStackInstance,
 	deploymentsRunningStack,
 	hasBinding,
+	incidentById,
 	priorChangesForDeployment,
 	priorRelationshipsForServices,
 	proposedChangesWithMr,
+	rootCauseForIncident,
 	stacksUsingModule,
 	topology,
 } from "./reader.ts";
 import { EMBEDDING_DIM } from "./schema.ts";
 import { LadybugStore } from "./store.ts";
 import {
+	linkIncidentTicket,
+	linkResolution,
 	linkStackModule,
+	purgeUncuratedIncidents,
 	recordIacChange,
 	recordIncident,
 	recordPipeline,
+	recordRootCause,
 	recordServiceBinding,
 	seedDeployments,
 	seedModules,
@@ -286,6 +292,83 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 		const history = await changeHistoryForStackInstance(store, "eu-b2b/lifecycle-policies");
 		const reconciled = history.find((c) => c.id === "req-a");
 		expect(reconciled?.outcome).toBe("applied");
+
+		await store.close();
+	});
+
+	// SIO-1135: purge removes only STALE + UNCURATED incidents, cascading their edges,
+	// while curated incidents and fresh uncurated incidents (and their edges) survive.
+	// Real-engine only: the in-memory fake cannot execute DELETE against the vector-indexed
+	// Incident table, which is exactly the risk this test guards.
+	test("purgeUncuratedIncidents deletes stale uncurated incidents + edges only", async () => {
+		const store = new LadybugStore(join(dir, "db-purge"));
+		await store.init();
+
+		// old + uncurated (should be purged), with an AFFECTED_BY, a HAS_ROOT_CAUSE, and a RESOLVED_BY.
+		await recordIncident(store, {
+			id: "inc-old-uncurated",
+			severity: "high",
+			summary: "old uncurated",
+			services: ["svc-x"],
+			createdAt: "2020-01-01T00:00:00.000Z",
+		});
+		await recordRootCause(store, {
+			id: "rc-old",
+			incidentId: "inc-old-uncurated",
+			class: "kafka-lag",
+			description: "old cause",
+			confidence: 0.8,
+			ruleName: "kafka-lag",
+		});
+		await linkResolution(store, "inc-old-uncurated", ["kafka-consumer-lag.md"]);
+
+		// old + curated (ticketKey set) -- must SURVIVE despite being old.
+		await recordIncident(store, {
+			id: "inc-old-curated",
+			severity: "high",
+			summary: "old curated",
+			services: ["svc-y"],
+			createdAt: "2020-01-01T00:00:00.000Z",
+		});
+		await linkIncidentTicket(store, "inc-old-curated", "DEVOPS-1");
+
+		// fresh + uncurated -- newer than the cutoff, must SURVIVE.
+		await recordIncident(store, {
+			id: "inc-fresh-uncurated",
+			severity: "low",
+			summary: "fresh uncurated",
+			services: ["svc-z"],
+			createdAt: "2030-01-01T00:00:00.000Z",
+		});
+
+		// incidentById returns services (SIO-1135/1133 mirror-fact + request-id lookup source).
+		expect(await incidentById(store, "inc-old-uncurated")).toEqual({
+			id: "inc-old-uncurated",
+			summary: "old uncurated",
+			severity: "high",
+			services: ["svc-x"],
+		});
+
+		const cutoff = "2025-01-01T00:00:00.000Z";
+		const result = await purgeUncuratedIncidents(store, cutoff);
+		expect(result.incidents).toBe(1); // only inc-old-uncurated
+		expect(result.edges).toBe(3); // AFFECTED_BY + HAS_ROOT_CAUSE + RESOLVED_BY
+
+		// The stale uncurated incident and ALL its edges are gone.
+		expect(await incidentById(store, "inc-old-uncurated")).toBeNull();
+		expect(await rootCauseForIncident(store, "inc-old-uncurated")).toBeNull();
+		const orphanEdges = await store.run<{ n: number }>(
+			"MATCH (:Service)-[r:AFFECTED_BY]->(:Incident {id: 'inc-old-uncurated'}) RETURN count(r) AS n",
+		);
+		expect(Number(orphanEdges[0]?.n ?? 0)).toBe(0);
+
+		// Curated (old) and fresh (uncurated) incidents survive untouched.
+		expect((await incidentById(store, "inc-old-curated"))?.id).toBe("inc-old-curated");
+		expect((await incidentById(store, "inc-fresh-uncurated"))?.id).toBe("inc-fresh-uncurated");
+
+		// An empty cutoff is a no-op guard (must never wipe everything).
+		expect(await purgeUncuratedIncidents(store, "")).toEqual({ incidents: 0, edges: 0 });
+		expect((await incidentById(store, "inc-fresh-uncurated"))?.id).toBe("inc-fresh-uncurated");
 
 		await store.close();
 	});

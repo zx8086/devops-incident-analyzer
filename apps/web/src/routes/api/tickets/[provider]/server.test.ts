@@ -73,6 +73,8 @@ mock.module("@devops-agent/agent", () => ({
 	recordKeyDecision: (entry: unknown) => {
 		keyDecisions.push(entry);
 	},
+	// SIO-1135: the tickets POST route also mirrors the curated incident to durable facts.
+	writeCurationMirrorFacts: () => Promise.resolve({ incidentFactWritten: false, rootCauseFactWritten: false }),
 }));
 let mcpConnectError: Error | null = null;
 

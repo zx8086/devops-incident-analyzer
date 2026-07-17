@@ -586,6 +586,61 @@ export async function linkResolution(store: GraphStore, incidentId: string, runb
 	}
 }
 
+export interface PurgeUncuratedResult {
+	incidents: number;
+	edges: number;
+}
+
+// SIO-1135: physically remove uncurated Incident rows older than a retention cutoff.
+// Uncurated == ticketKey empty (only human-curated investigations are durable memory,
+// SIO-1134); stale == createdAt < cutoff (createdAt is an ISO STRING, so a lexicographic
+// compare is chronological). SIO-1136: legacy rows created before the CREATE-DDL default
+// carry ticketKey = NULL (not ''), so the uncurated predicate must match BOTH. lbug 0.14.3
+// constraint: DETACH DELETE on a node is unverified (only relationship DELETE is proven,
+// see recordRootCause) -- so delete every Incident-touching edge first, each as its OWN
+// single-clause statement matching the edge's schema direction, then delete the now-orphaned
+// nodes. Additive/soft by nature: the caller owns soft-failing. Returns counts for logging.
+const UNCURATED_STALE_WHERE = "(i.ticketKey IS NULL OR i.ticketKey = '') AND i.createdAt < $cutoff";
+
+export async function purgeUncuratedIncidents(store: GraphStore, cutoffIso: string): Promise<PurgeUncuratedResult> {
+	// Guard: never run with an empty/invalid cutoff -- a blank cutoff string compares
+	// greater than every real createdAt and would delete EVERY uncurated incident.
+	if (!cutoffIso || Number.isNaN(Date.parse(cutoffIso))) return { incidents: 0, edges: 0 };
+
+	// Count the doomed nodes before deleting so the sweep can log what it removed.
+	const [countRow] = await store.run<{ n: number }>(
+		`MATCH (i:Incident) WHERE ${UNCURATED_STALE_WHERE} RETURN count(i) AS n`,
+		{ cutoff: cutoffIso },
+	);
+	const incidents = Number(countRow?.n ?? 0);
+	if (incidents === 0) return { incidents: 0, edges: 0 };
+
+	// Delete every Incident-touching edge, one type at a time, matching the schema
+	// direction (schema.ts): AFFECTED_BY Service->Incident, DISCOVERED_DURING
+	// TelemetrySource->Incident (inbound); RESOLVED_BY Incident->Runbook, HAS_ROOT_CAUSE
+	// Incident->RootCause (outbound). Count then DELETE as SEPARATE single-clause
+	// statements -- mixing count(r) aggregation with DELETE in one query is not a proven
+	// lbug shape, so keep each statement single-purpose.
+	const edgeMatches = [
+		"MATCH (:Service)-[r:AFFECTED_BY]->(i:Incident)",
+		"MATCH (:TelemetrySource)-[r:DISCOVERED_DURING]->(i:Incident)",
+		"MATCH (i:Incident)-[r:RESOLVED_BY]->(:Runbook)",
+		"MATCH (i:Incident)-[r:HAS_ROOT_CAUSE]->(:RootCause)",
+	];
+	let edges = 0;
+	for (const match of edgeMatches) {
+		const [row] = await store.run<{ n: number }>(`${match} WHERE ${UNCURATED_STALE_WHERE} RETURN count(r) AS n`, {
+			cutoff: cutoffIso,
+		});
+		edges += Number(row?.n ?? 0);
+		await store.run(`${match} WHERE ${UNCURATED_STALE_WHERE} DELETE r`, { cutoff: cutoffIso });
+	}
+
+	// Now the nodes are edge-free; a plain DELETE (not DETACH) succeeds.
+	await store.run(`MATCH (i:Incident) WHERE ${UNCURATED_STALE_WHERE} DELETE i`, { cutoff: cutoffIso });
+	return { incidents, edges };
+}
+
 // SIO-1104 (5a): topology-sweep writers. Pure and network-free -- the cron collector
 // (packages/agent/src/kg-topology.ts) owns all MCP I/O and feeds parsed edge lists.
 // Labels/keys come from the internal TOPOLOGY_KINDS map (never caller input); values

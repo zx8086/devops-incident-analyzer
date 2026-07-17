@@ -133,6 +133,39 @@ describe("SIO-1126 applyLearnings", () => {
 		expect(summary).toContain("canonical record");
 	});
 
+	test("SIO-1135: curating an EXISTING incident reads the row for the mirror fact", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const calls: RunCall[] = [];
+		// Return an incident row for the incidentById node query so writeCurationMirrorFacts
+		// has something to mirror; everything else returns []. The HIL rootCause path already
+		// wrote a kg-root-cause this turn, so the mirror helper must SKIP the root-cause read.
+		const store = {
+			init: async () => undefined,
+			run: async (cypher: string, params?: Record<string, unknown>) => {
+				calls.push({ cypher, params });
+				if (cypher.includes("RETURN i.id AS id, i.summary AS summary, i.severity AS severity LIMIT 1")) {
+					return [{ id: "inc-1", summary: "resolver rule gap", severity: "high" }];
+				}
+				return [];
+			},
+			close: async () => undefined,
+		} as GraphStore;
+		_setGraphStoreForTesting(store);
+
+		await applyLearnings(
+			stateWith({
+				hilProposal: proposal(),
+				hilMatch: { incidentId: "inc-1", created: false },
+				hilDecisions: { "rc-1": "approve" },
+			}),
+		);
+
+		// The mirror helper read the incident row by id (the kg-incident fact source).
+		expect(calls.some((c) => c.cypher.includes("MATCH (i:Incident {id: $id})") && c.params?.id === "inc-1")).toBe(true);
+		// It did NOT re-read the root cause: the HIL rootCause path wrote kg-root-cause already.
+		expect(calls.some((c) => c.cypher.includes("HAS_ROOT_CAUSE") && c.cypher.includes("RETURN rc.id"))).toBe(false);
+	});
+
 	test("a rejected root cause is skipped and reported", async () => {
 		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
 		const calls: RunCall[] = [];

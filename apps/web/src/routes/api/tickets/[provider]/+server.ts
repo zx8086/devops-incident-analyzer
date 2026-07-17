@@ -1,5 +1,11 @@
 // apps/web/src/routes/api/tickets/[provider]/+server.ts
-import { getGraphStore, isKnowledgeGraphEnabled, linkIncidentTicket, recordKeyDecision } from "@devops-agent/agent";
+import {
+	getGraphStore,
+	isKnowledgeGraphEnabled,
+	linkIncidentTicket,
+	recordKeyDecision,
+	writeCurationMirrorFacts,
+} from "@devops-agent/agent";
 import { getLogger } from "@devops-agent/observability";
 import { CreateTicketRequestSchema } from "@devops-agent/shared";
 import { json } from "@sveltejs/kit";
@@ -18,6 +24,11 @@ async function curateIncident(requestId: string, ticketKey: string): Promise<voi
 		if (isKnowledgeGraphEnabled()) {
 			const store = await getGraphStore();
 			await linkIncidentTicket(store, requestId, ticketKey);
+			// SIO-1135: mirror the now-curated incident (+ its root cause) to durable facts
+			// by reading the current graph row. The per-run mirror moved to curation time, so
+			// without this the incident would not survive a rebuild-from-facts. requestId IS
+			// the KG incident node id (graph-knowledge.ts).
+			await writeCurationMirrorFacts(store, requestId, { requestId, ticketKey });
 		}
 		recordKeyDecision({
 			requestId,
