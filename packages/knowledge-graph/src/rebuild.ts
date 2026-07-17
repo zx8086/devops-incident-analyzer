@@ -26,6 +26,7 @@ import {
 	type IncidentRecord,
 	invalidateBindingByHuman,
 	linkIncidentTicket,
+	linkResolution,
 	type RootCauseRecord,
 	recordIncident,
 	recordRootCause,
@@ -130,6 +131,23 @@ async function applyTicketLink(store: GraphStore, rec: TicketLinkRecord): Promis
 	await linkIncidentTicket(store, rec.incidentId, rec.ticketKey);
 }
 
+// SIO-1128: a kg-resolution fact -> the args of linkResolution. Replays AFTER kg-incident
+// so the Incident (which linkResolution MATCHes on) already exists. This closes the
+// rebuild gap for the RESOLVED_BY edge (the "resolved by X" read path).
+export interface ResolutionRecord {
+	incidentId: string;
+	runbook: string;
+}
+
+export function resolutionFromAnnotations(a: AnnotationMap): ResolutionRecord | null {
+	if (!a.incident_id || !a.runbook) return null;
+	return { incidentId: a.incident_id, runbook: a.runbook };
+}
+
+async function applyResolution(store: GraphStore, rec: ResolutionRecord): Promise<void> {
+	await linkResolution(store, rec.incidentId, [rec.runbook]);
+}
+
 export function incidentFromAnnotations(a: AnnotationMap): IncidentRecord | null {
 	if (!a.incident_id) return null;
 	return {
@@ -207,6 +225,8 @@ async function rebuild(opts: RebuildOptions): Promise<void> {
 	await replayKind(store, "kg-incident", incidentFromAnnotations, recordIncident, opts.dryRun);
 	// SIO-1134: curation links replay AFTER incidents exist.
 	await replayKind(store, "kg-incident-ticket", ticketLinkFromAnnotations, applyTicketLink, opts.dryRun);
+	// SIO-1128: resolution edges replay after the Incident exists (linkResolution MATCHes it).
+	await replayKind(store, "kg-resolution", resolutionFromAnnotations, applyResolution, opts.dryRun);
 	await replayKind(store, "kg-root-cause", rootCauseFromAnnotations, recordRootCause, opts.dryRun);
 	await replayKind(store, "kg-binding", bindingFromAnnotations, recordServiceBinding, opts.dryRun);
 	// SIO-1127: human invalidations replay AFTER the kg-binding that created the edge, so
@@ -234,7 +254,7 @@ function printGaps(): void {
 	process.stdout.write(
 		[
 			"knowledge-graph rebuild: rebuilt from Couchbase mirror facts (SIO-1103): Incident +",
-			"  AFFECTED_BY (kg-incident), RootCause + HAS_ROOT_CAUSE (kg-root-cause), telemetry",
+			"  AFFECTED_BY (kg-incident), RootCause + HAS_ROOT_CAUSE (kg-root-cause), RESOLVED_BY (kg-resolution), telemetry",
 			"  bindings (kg-binding). NOT rebuilt (no system-of-record fact):",
 			"  - Incident EMBEDDINGS (facts carry no vector; re-embed is a Bedrock cost, not default)",
 			"  - Finding / CORRELATES_WITH (graph-only)",
