@@ -68,6 +68,7 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		hilProposal: undefined,
 		hilAlreadyLearned: false,
 		hilDecisions: undefined,
+		hilEdits: {},
 		...overrides,
 	};
 }

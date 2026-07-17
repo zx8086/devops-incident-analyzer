@@ -7,6 +7,7 @@ import type {
 	DataSourceResult,
 	ExtractedEntities,
 	GraphBlastRadiusHit,
+	HilItemEdits,
 	InvestigationFocus,
 	MitigationSteps,
 	NormalizedIncident,
@@ -361,6 +362,13 @@ export const AgentState = Annotation.Root({
 	hilDecisions: Annotation<HilDecisions | undefined>({
 		reducer: (_, next) => next,
 		default: () => undefined,
+	}),
+
+	// SIO-1128: per-item text edits from the review card, merged over hilProposal by
+	// applyLearnings. Default {} so apply is a no-op when the human made no edits.
+	hilEdits: Annotation<HilItemEdits>({
+		reducer: (_, next) => next,
+		default: () => ({}),
 	}),
 });
 
