@@ -603,6 +603,35 @@ describe("SIO-1146 hilApplyReport items", () => {
 		expect(report.skipped.some((s) => s.id === "graph")).toBe(true);
 	});
 
+	// CodeRabbit PR #412: write FAILURES must surface as skip reasons, not the
+	// vague "not written" fallback.
+	test("graph write failure: approved root cause is skipped with the failure reason", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const throwingStore = {
+			init: async () => undefined,
+			run: async () => {
+				throw new Error("store exploded");
+			},
+			close: async () => undefined,
+		} as unknown as GraphStore;
+		_setGraphStoreForTesting(throwingStore);
+
+		const result = await applyLearnings(
+			stateWith({
+				hilProposal: proposal(),
+				hilMatch: { incidentId: "inc-1", created: false },
+				hilDecisions: { "rc-1": "approve", "fact-1": "reject" },
+			}),
+		);
+
+		const report = result.hilApplyReport;
+		if (!report) throw new Error("narrow");
+		const rcItem = report.items.find((i) => i.id === "rc-1");
+		expect(rcItem?.status).toBe("skipped");
+		expect(rcItem?.reason).toBe("graph write failed");
+		expect(result.partialFailures).toEqual([{ node: "applyLearnings", reason: "graph-write-failed" }]);
+	});
+
 	test("live memory off: approved fact is skipped with the facts block reason", async () => {
 		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
 		const calls: RunCall[] = [];

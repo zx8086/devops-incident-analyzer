@@ -33,7 +33,9 @@ const statusLabel: Record<string, string> = {
         {#if anyApplied}
           Learnings from {outcome.ticketKey} -- {appliedCount} item{appliedCount === 1 ? "" : "s"} applied
         {:else}
-          No learnings applied from {outcome.ticketKey} -- all items rejected
+          <!-- Neutral copy: items may be rejected OR skipped (KG/live memory off,
+               write failures); the row chips carry the exact statuses. -->
+          No learnings applied from {outcome.ticketKey}
         {/if}
       </h3>
       <p class="mt-0.5 text-xs {anyApplied ? 'text-green-700' : 'text-gray-600'}">

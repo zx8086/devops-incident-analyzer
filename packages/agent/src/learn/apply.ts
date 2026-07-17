@@ -344,6 +344,9 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			logger.warn({ ticket: ticketKey, error: message }, "HIL graph writes failed");
+			// SIO-1146 (CodeRabbit PR #412): block-level skip entry so approved items
+			// caught by the failure render the real reason, not the "not written" fallback.
+			report.skipped.push({ id: "graph", reason: "graph write failed" });
 			failures.push({ node: "applyLearnings", reason: "graph-write-failed" });
 		}
 	} else {
@@ -366,6 +369,7 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				logger.warn({ ticket: ticketKey, heuristic: heuristic.name, error: message }, "HIL heuristic write failed");
+				report.skipped.push({ id: heuristic.id, reason: "heuristic write failed" });
 				failures.push({ node: "applyLearnings", reason: "heuristic-write-failed" });
 			}
 		}
@@ -429,6 +433,7 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			logger.warn({ ticket: ticketKey, error: message }, "HIL memory fact writes failed");
+			report.skipped.push({ id: "facts", reason: "memory write failed" });
 			failures.push({ node: "applyLearnings", reason: "memory-write-failed" });
 		}
 	}

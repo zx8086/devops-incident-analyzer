@@ -304,4 +304,19 @@ describe("StreamEventSchema hil_learning_applied (SIO-1146)", () => {
 		const { ticketKey: _omit, ...noTicket } = validReport;
 		expect(() => StreamEventSchema.parse({ type: "hil_learning_applied", report: noTicket })).toThrow();
 	});
+
+	// CodeRabbit PR #412: skipped items must carry the write-time reason.
+	test("rejects a skipped item without a reason; applied without reason is fine", () => {
+		expect(() =>
+			StreamEventSchema.parse({
+				type: "hil_learning_applied",
+				report: { ...validReport, items: [{ id: "fact-1", kind: "memory-fact", label: "x", status: "skipped" }] },
+			}),
+		).toThrow();
+		const ok = StreamEventSchema.parse({
+			type: "hil_learning_applied",
+			report: { ...validReport, items: [{ id: "rc-1", kind: "root-cause", label: "x", status: "applied" }] },
+		});
+		expect(ok.type).toBe("hil_learning_applied");
+	});
 });

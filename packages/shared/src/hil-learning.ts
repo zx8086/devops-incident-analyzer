@@ -103,15 +103,20 @@ export const HilItemEditsSchema: z.ZodType<HilItemEdits> = z.record(z.string(), 
 
 // SIO-1146: per-item outcome row for the terminal learning card. `status` reflects
 // what applyLearnings actually did -- a rejected decision wins over any skip entry,
-// and "skipped" carries the real write-time reason (dedup, disabled flag, soft
-// failure) that the client cannot reconstruct from the review prompt.
-export const HilApplyItemSchema = z.object({
+// and "skipped" REQUIRES the real write-time reason (dedup, disabled flag, soft
+// failure) that the client cannot reconstruct from the review prompt; the
+// discriminated union pins that contract at the boundary (CodeRabbit PR #412).
+const HilApplyItemBase = z.object({
 	id: z.string().min(1),
 	kind: z.enum(["root-cause", "binding", "heuristic", "memory-fact"]),
 	label: z.string(),
-	status: z.enum(["applied", "rejected", "skipped"]),
-	reason: z.string().optional(),
 });
+export const HilApplyItemSchema = z.discriminatedUnion("status", [
+	// applied may still carry a supplementary note (e.g. draft-runbook PR outcome).
+	HilApplyItemBase.extend({ status: z.literal("applied"), reason: z.string().optional() }),
+	HilApplyItemBase.extend({ status: z.literal("rejected"), reason: z.string().optional() }),
+	HilApplyItemBase.extend({ status: z.literal("skipped"), reason: z.string() }),
+]);
 export type HilApplyItem = z.infer<typeof HilApplyItemSchema>;
 
 // SIO-1146: the structured apply outcome, streamed as hil_learning_applied so the

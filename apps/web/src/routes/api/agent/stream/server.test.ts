@@ -80,7 +80,7 @@ mock.module("@devops-agent/shared", () => ({
 	DataSourceContextSchema: z.any(),
 	PendingActionSchema: z.any(),
 	// SIO-1146: sse-pump value-imports this for the hil_learning_applied forward.
-	HilApplyReportSchema: z.any(),
+	HilApplyReportSchema: z.unknown(),
 	redactPiiContent: (s: string) => s,
 	isKillSwitchActive: () => false,
 	KillSwitchError: class KillSwitchError extends Error {},
