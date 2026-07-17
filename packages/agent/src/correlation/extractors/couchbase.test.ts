@@ -1,7 +1,7 @@
 // packages/agent/src/correlation/extractors/couchbase.test.ts
 import { describe, expect, test } from "bun:test";
-import type { ToolOutput } from "@devops-agent/shared";
-import { extractCouchbaseFindings } from "./couchbase.ts";
+import type { ResolvedIdentifiers, ToolOutput } from "@devops-agent/shared";
+import { collectCouchbaseKeyspaces, extractCouchbaseFindings } from "./couchbase.ts";
 
 describe("extractCouchbaseFindings", () => {
 	test("returns empty findings when no relevant tool outputs are present", () => {
@@ -86,13 +86,99 @@ describe("extractCouchbaseFindings focus scoping (SIO-1030)", () => {
 		expect(out.slowQueries?.[0]?.statement).toContain("prices-api-v2-service");
 	});
 
-	test("legitimately empties the card when no statement names the focus (strict, documented)", () => {
-		// A slow query often names a bucket/collection, not the focus service. Under
-		// the strict "no exceptions" policy this drops all rows — the honest result.
+	test("falls back to flagged unscoped rows when no statement names the focus (SIO-1138)", () => {
+		// A slow query often names a bucket/collection, not the focus service. The
+		// strict drop used to empty the card; the rows now surface flagged unscoped.
 		const out = extractCouchbaseFindings(
 			[queries([{ statement: "SELECT * FROM `product_catalog` WHERE k = $1" }])],
 			["prices-api-v2-service"],
 		);
-		expect(out.slowQueries ?? []).toHaveLength(0);
+		expect(out.slowQueries).toHaveLength(1);
+		expect(out.unscoped).toBe(true);
+	});
+});
+
+describe("extractCouchbaseFindings keyspace bridge + unscoped fallback (SIO-1138)", () => {
+	const queries = (rows: Array<Record<string, unknown>>): ToolOutput => ({
+		toolName: "capella_get_longest_running_queries",
+		rawJson: rows,
+	});
+
+	test("keeps statements touching a keyspace whose name matches the focus (service -> collection bridge)", () => {
+		const out = extractCouchbaseFindings(
+			[
+				queries([
+					{ statement: "SELECT * FROM orders WHERE status = 'OPEN'" },
+					{ statement: "SELECT * FROM articles WHERE x = 1" },
+				]),
+			],
+			["prana-order-service"],
+			["orders", "styles", "dates"],
+		);
+		expect(out.slowQueries).toHaveLength(1);
+		expect(out.slowQueries?.[0]?.statement).toContain("orders");
+		expect(out.unscoped).toBeUndefined();
+	});
+
+	test("resolved keyspaces whose names do NOT match the focus never un-scope the card", () => {
+		// The resolveIdentifiers scope tree is deliberately unfiltered; only
+		// focus-linked keyspace names may bridge. Everything else takes the
+		// flagged fallback path.
+		const out = extractCouchbaseFindings(
+			[queries([{ statement: "SELECT * FROM `styles`.`variant` v" }])],
+			["prana-order-service"],
+			["styles", "variant", "dates"],
+		);
+		expect(out.unscoped).toBe(true);
+		expect(out.slowQueries).toHaveLength(1);
+	});
+
+	test("fallback keeps the top 5 rows in arrival (impact) order", () => {
+		const rows = Array.from({ length: 7 }, (_, i) => ({ statement: `SELECT ${i} FROM product_catalog` }));
+		const out = extractCouchbaseFindings([queries(rows)], ["prana-order-service"], []);
+		expect(out.unscoped).toBe(true);
+		expect(out.slowQueries).toHaveLength(5);
+		expect(out.slowQueries?.[0]?.statement).toBe("SELECT 0 FROM product_catalog");
+	});
+
+	test("fallback excludes system: keyspace statements (analyzer's own introspection)", () => {
+		const out = extractCouchbaseFindings(
+			[
+				queries([
+					{ statement: "SELECT * FROM system:completed_requests WHERE node = 'x'" },
+					{ statement: "SELECT * FROM product_catalog" },
+				]),
+			],
+			["prana-order-service"],
+		);
+		expect(out.unscoped).toBe(true);
+		expect(out.slowQueries).toHaveLength(1);
+		expect(out.slowQueries?.[0]?.statement).toContain("product_catalog");
+	});
+
+	test("returns {} when only system: statements would remain for the fallback", () => {
+		const out = extractCouchbaseFindings(
+			[queries([{ statement: "SELECT ADVISOR($q) FROM system:dual" }])],
+			["prices-api-v2-service"],
+		);
+		expect(out).toEqual({});
+	});
+
+	test("collectCouchbaseKeyspaces flattens default-bucket scopes and otherBucketScopes", () => {
+		const resolved: ResolvedIdentifiers = {
+			resolvedForTurn: 1,
+			resolvedForServices: ["prana-order-service"],
+			couchbase: {
+				scopes: { styles: ["variant", "article"], seasons: ["dates"] },
+				otherBucketScopes: { b2c: { pricing: ["prices"] } },
+			},
+		};
+		expect(collectCouchbaseKeyspaces(resolved).sort()).toEqual(
+			["article", "dates", "prices", "pricing", "seasons", "styles", "variant"].sort(),
+		);
+	});
+
+	test("collectCouchbaseKeyspaces returns [] when resolution is absent", () => {
+		expect(collectCouchbaseKeyspaces(undefined)).toEqual([]);
 	});
 });

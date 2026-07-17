@@ -60,12 +60,19 @@ function singleLine(s: string): string {
   <div class="mt-2 rounded-lg border border-emerald-100 bg-emerald-50/40 px-3 py-2.5">
     <div class="flex items-center gap-1.5 mb-2">
       <span class="text-[0.5625rem] font-medium text-emerald-700 uppercase tracking-wider">Couchbase findings</span>
+      {#if findings.unscoped}
+        <!-- SIO-1138: slow queries are a cluster-wide fallback, not focus-scoped -->
+        <span class="text-[0.5625rem] font-medium text-amber-700 bg-amber-100 uppercase tracking-wider rounded px-1">Unscoped</span>
+      {/if}
     </div>
+    {#if findings.unscoped}
+      <p class="-mt-1 mb-2 text-[0.625rem] text-gray-500">No slow query referenced the focus services -- showing top cluster-wide queries.</p>
+    {/if}
 
     <div>
       <span class="text-[0.5625rem] font-medium text-gray-500 uppercase tracking-wider">Slow queries</span>
       <div class="mt-1 flex flex-col gap-1">
-        {#each slowQueries as q}
+        {#each slowQueries as q (q)}
           <div class="flex items-center gap-2 text-[0.6875rem]">
             <span class="font-mono text-gray-800 truncate max-w-[280px]" title={q.statement}>{singleLine(q.statement)}</span>
             <div class="flex-1 h-1.5 rounded-full bg-gray-100 overflow-hidden">

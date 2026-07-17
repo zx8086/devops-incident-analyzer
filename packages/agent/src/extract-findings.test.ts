@@ -793,6 +793,42 @@ describe("extractFindings focus scoping across datasources (SIO-1030)", () => {
 		expect(showAll.dataSourceResults?.[0]?.couchbaseFindings?.slowQueries).toHaveLength(2);
 	});
 
+	test("couchbase: resolved keyspace matching the focus bridges service -> collection (SIO-1138)", async () => {
+		const outputs: DataSourceResult["toolOutputs"] = [
+			{
+				toolName: "capella_get_longest_running_queries",
+				rawJson: [
+					{ statement: "SELECT * FROM orders o WHERE o.status = 'OPEN'" },
+					{ statement: "SELECT * FROM `product_catalog` c" },
+				],
+			},
+		];
+		const state = {
+			...stateFor("couchbase", outputs, ["prana-order-service"]),
+			resolvedIdentifiers: { couchbase: { scopes: { sales: ["orders"] } } },
+		} as unknown as AgentStateType;
+		const res = await extractFindings(state);
+		const findings = res.dataSourceResults?.[0]?.couchbaseFindings;
+		expect(findings?.slowQueries?.map((q) => q.statement)).toEqual(["SELECT * FROM orders o WHERE o.status = 'OPEN'"]);
+		expect(findings?.unscoped).toBeUndefined();
+	});
+
+	test("couchbase: unscoped fallback flags rows when nothing matches the focus (SIO-1138)", async () => {
+		const outputs: DataSourceResult["toolOutputs"] = [
+			{
+				toolName: "capella_get_longest_running_queries",
+				rawJson: [
+					{ statement: "SELECT * FROM `styles`.`variant` v" },
+					{ statement: "SELECT * FROM system:completed_requests" },
+				],
+			},
+		];
+		const res = await extractFindings(stateFor("couchbase", outputs, ["prana-order-service"]));
+		const findings = res.dataSourceResults?.[0]?.couchbaseFindings;
+		expect(findings?.unscoped).toBe(true);
+		expect(findings?.slowQueries?.map((q) => q.statement)).toEqual(["SELECT * FROM `styles`.`variant` v"]);
+	});
+
 	test("gitlab: focus reaches extractGitLabFindings (off-focus MR dropped)", async () => {
 		const outputs: DataSourceResult["toolOutputs"] = [
 			{

@@ -2,6 +2,7 @@
 // Unit tests for the Phase 5 AWS correlation rules.
 import { describe, expect, test } from "bun:test";
 import type { AwsCloudWatchAlarm, ToolError } from "@devops-agent/shared";
+import type { AgentStateType } from "../state.ts";
 import { correlationRules } from "./rules.ts";
 
 function findRule(name: string) {
@@ -250,5 +251,48 @@ describe("shared-infra-blast-radius", () => {
 		expect(match).not.toBeNull();
 		expect(match?.context.services as string[]).toContain("billing");
 		expect(match?.context.sharedResources as string[]).toContain(`aws-resource:${arn}`);
+	});
+});
+
+// SIO-1138: unscoped-fallback couchbase rows are display-only -- the datastore
+// contradiction rule must never correlate them against MRs.
+describe("gitlab-deploy-vs-datastore-runtime (SIO-1138 unscoped guard)", () => {
+	const rule = findRule("gitlab-deploy-vs-datastore-runtime");
+	const mergedAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+	const observedAt = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+
+	function makeState(unscoped: boolean): AgentStateType {
+		const partial: Partial<AgentStateType> = {
+			dataSourceResults: [
+				{
+					dataSourceId: "gitlab",
+					status: "success",
+					data: "",
+					gitlabFindings: {
+						mergedRequests: [{ id: 42, title: "fix pricelist paging", merged_at: mergedAt }],
+					},
+				},
+				{
+					dataSourceId: "couchbase",
+					status: "success",
+					data: "",
+					couchbaseFindings: {
+						slowQueries: [
+							{ statement: "SELECT * FROM pricelist WHERE k = $1 OFFSET 100000", lastExecutionTime: observedAt },
+						],
+						...(unscoped ? { unscoped: true } : {}),
+					},
+				},
+			],
+		};
+		return partial as unknown as AgentStateType;
+	}
+
+	test("fires for scoped couchbase slow queries post-merge", () => {
+		expect(rule.trigger(makeState(false))).not.toBeNull();
+	});
+
+	test("does not fire when couchbase findings are the unscoped fallback", () => {
+		expect(rule.trigger(makeState(true))).toBeNull();
 	});
 });
