@@ -43,6 +43,10 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		queryComplexity: "complex" as const,
 		targetDataSources: [] as string[],
 		targetDeployments: [] as string[],
+		// SIO-1142: AWS dispatch requires a resolved estate (supervise skips AWS when
+		// awsTargetEstates is empty). This suite exercises fan-out, so give it one.
+		awsTargetEstates: ["eu-oit-prd"] as string[],
+		uiAwsEstates: [] as string[],
 		retryDeployments: [] as string[],
 		dataSourceResults: [] as DataSourceResult[],
 		currentDataSource: "",
