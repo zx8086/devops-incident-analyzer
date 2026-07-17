@@ -31,6 +31,8 @@ let {
 	requestId,
 	providers,
 	onClose,
+	createdTicket = null,
+	onCreated,
 }: {
 	content: string;
 	// SIO-1134: the turn's requestId (== KG incident id); sent with creation so
@@ -38,16 +40,25 @@ let {
 	requestId?: string;
 	providers: TicketProviderInfo[];
 	onClose: () => void;
+	// SIO-1139: created-ticket state is owned by the parent (ChatMessage) so it
+	// survives this card unmounting -- reopening shows the confirmation, not a
+	// fresh form, so an answer can only ever produce one ticket.
+	createdTicket?: CreatedTicket | null;
+	onCreated?: (ticket: CreatedTicket) => void;
 } = $props();
 
 // Single provider today; a picker appears here once a second provider ships.
 const provider = $derived(providers[0]);
 
-let projects = $state<TicketProject[]>([]);
+// SIO-1139: full create-visible project list, fetched once on mount. The site
+// has ~70 projects, so we cache the whole list client-side and filter locally
+// as the user types -- no round-trip per keystroke.
+let allProjects = $state<TicketProject[]>([]);
 let projectsLoading = $state(false);
 let projectsError = $state<string | null>(null);
 let projectQuery = $state("");
 let selectedProjectKey = $state("");
+let projectListOpen = $state(false);
 
 let issueTypes = $state<TicketIssueType[]>([]);
 let issueTypesLoading = $state(false);
@@ -70,19 +81,28 @@ let summary = $state(prefillSummary(content));
 let description = $state(prefillDescription(content));
 
 let submitting = $state(false);
-let createdTicket = $state<CreatedTicket | null>(null);
 let errorMessage = $state<string | null>(null);
 
-let projectDebounce: ReturnType<typeof setTimeout> | undefined;
 let assigneeDebounce: ReturnType<typeof setTimeout> | undefined;
-// Sequence tokens: responses can resolve out of order; only the latest request
-// for each field may write state.
-let projectsSeq = 0;
+// Sequence token: assignee responses can resolve out of order; only the latest
+// request may write state. Projects are filtered locally, so no token needed.
 let assigneesSeq = 0;
 
 const canSubmit = $derived(
 	!submitting && !!provider && selectedProjectKey !== "" && selectedIssueType !== "" && summary.trim() !== "",
 );
+
+// Local project filtering: match the typed query against name or key, cap the
+// list so the dropdown stays scannable. Empty query shows the first few.
+const MAX_PROJECT_SUGGESTIONS = 8;
+const projectSuggestions = $derived.by(() => {
+	const q = projectQuery.trim().toLowerCase();
+	if (!q) return allProjects.slice(0, MAX_PROJECT_SUGGESTIONS);
+	return allProjects
+		.filter((p) => p.name.toLowerCase().includes(q) || p.key.toLowerCase().includes(q))
+		.slice(0, MAX_PROJECT_SUGGESTIONS);
+});
+const selectedProject = $derived(allProjects.find((p) => p.key === selectedProjectKey) ?? null);
 
 function errorFrom(data: unknown, status: number): string {
 	if (data && typeof data === "object" && "error" in data) {
@@ -101,22 +121,20 @@ async function fetchJson<T>(path: string, schema: z.ZodType<T>): Promise<T> {
 	return parsed.data;
 }
 
-async function loadProjects(query: string) {
+async function loadProjects() {
 	if (!provider) return;
-	const seq = ++projectsSeq;
 	projectsLoading = true;
 	projectsError = null;
 	try {
-		const search = query.trim() ? `?query=${encodeURIComponent(query.trim())}` : "";
-		const data = await fetchJson(`/api/tickets/${provider.id}/projects${search}`, ProjectsResponseSchema);
-		if (seq !== projectsSeq) return;
-		projects = data.projects;
+		// No query param: fetch the whole create-visible list once and filter it
+		// locally. The server caches this 5 min, so reopening the card is cheap.
+		const data = await fetchJson(`/api/tickets/${provider.id}/projects`, ProjectsResponseSchema);
+		allProjects = data.projects;
 	} catch (err) {
-		if (seq !== projectsSeq) return;
-		projects = [];
+		allProjects = [];
 		projectsError = err instanceof Error ? err.message : "Failed to load projects";
 	} finally {
-		if (seq === projectsSeq) projectsLoading = false;
+		projectsLoading = false;
 	}
 }
 
@@ -180,20 +198,26 @@ async function loadAssignees(query: string) {
 	}
 }
 
-function onProjectQueryInput() {
-	clearTimeout(projectDebounce);
-	projectDebounce = setTimeout(() => loadProjects(projectQuery), 300);
-}
-
-function onProjectChange() {
+function selectProject(project: TicketProject) {
+	selectedProjectKey = project.key;
+	projectQuery = "";
+	projectListOpen = false;
+	// Reset the dependent pickers, then load them for the newly chosen project.
 	issueTypes = [];
 	selectedIssueType = "";
 	epics = [];
 	selectedEpicKey = "";
-	if (selectedProjectKey) {
-		loadIssueTypes(selectedProjectKey);
-		loadEpics(selectedProjectKey);
-	}
+	loadIssueTypes(project.key);
+	loadEpics(project.key);
+}
+
+function clearProject() {
+	selectedProjectKey = "";
+	projectQuery = "";
+	issueTypes = [];
+	selectedIssueType = "";
+	epics = [];
+	selectedEpicKey = "";
 }
 
 function onAssigneeQueryInput() {
@@ -230,7 +254,8 @@ async function submit() {
 		if (!res.ok) throw new Error(errorFrom(data, res.status));
 		const parsed = CreatedTicketSchema.safeParse(data);
 		if (!parsed.success) throw new Error("Unexpected response shape from the ticket API");
-		createdTicket = parsed.data;
+		// The parent owns the created-ticket record so it outlives this card.
+		onCreated?.(parsed.data);
 	} catch (err) {
 		errorMessage = err instanceof Error ? err.message : "Failed to create the ticket";
 	} finally {
@@ -239,7 +264,8 @@ async function submit() {
 }
 
 $effect(() => {
-	loadProjects("");
+	// Only fetch when this card is showing the form (not the confirmation).
+	if (!createdTicket) loadProjects();
 });
 </script>
 
@@ -274,25 +300,43 @@ $effect(() => {
 		<div class="space-y-3">
 			<div>
 				<label for="ticket-project" class="block text-xs font-medium text-gray-600 mb-1">Project</label>
-				<input
-					type="text"
-					bind:value={projectQuery}
-					oninput={onProjectQueryInput}
-					placeholder="Search projects..."
-					class="w-full text-sm border border-gray-300 rounded px-2 py-1 mb-1 focus:outline-none focus:ring-1 focus:ring-tommy-accent-blue"
-				/>
-				<select
-					id="ticket-project"
-					bind:value={selectedProjectKey}
-					onchange={onProjectChange}
-					disabled={projectsLoading}
-					class="w-full text-sm border border-gray-300 rounded px-2 py-1 bg-white disabled:opacity-50 focus:outline-none focus:ring-1 focus:ring-tommy-accent-blue"
-				>
-					<option value="" disabled>{projectsLoading ? "Loading projects..." : "Select a project"}</option>
-					{#each projects as project (project.id)}
-						<option value={project.key}>{project.name} ({project.key})</option>
-					{/each}
-				</select>
+				{#if selectedProject}
+					<div class="flex items-center gap-2">
+						<span class="text-xs px-2 py-0.5 rounded-full border border-tommy-accent-blue/40 bg-blue-50 text-tommy-navy">
+							{selectedProject.name} ({selectedProject.key})
+						</span>
+						<button onclick={clearProject} class="text-xs text-gray-500 hover:text-gray-700 underline">
+							Change
+						</button>
+					</div>
+				{:else}
+					<input
+						id="ticket-project"
+						type="text"
+						bind:value={projectQuery}
+						onfocus={() => (projectListOpen = true)}
+						onblur={() => setTimeout(() => (projectListOpen = false), 150)}
+						disabled={projectsLoading}
+						placeholder={projectsLoading ? "Loading projects..." : "Search projects..."}
+						class="w-full text-sm border border-gray-300 rounded px-2 py-1 disabled:opacity-50 focus:outline-none focus:ring-1 focus:ring-tommy-accent-blue"
+					/>
+					{#if projectListOpen && projectSuggestions.length > 0}
+						<ul class="border border-gray-200 rounded mt-1 max-h-40 overflow-y-auto divide-y divide-gray-100">
+							{#each projectSuggestions as project (project.id)}
+								<li>
+									<button
+										onclick={() => selectProject(project)}
+										class="w-full text-left text-sm px-2 py-1 hover:bg-gray-50 transition-colors"
+									>
+										{project.name} <span class="text-gray-400">({project.key})</span>
+									</button>
+								</li>
+							{/each}
+						</ul>
+					{:else if projectListOpen && projectQuery.trim() !== "" && !projectsLoading}
+						<p class="text-xs text-gray-400 mt-1">No matching projects</p>
+					{/if}
+				{/if}
 				{#if projectsError}
 					<p class="text-xs text-red-600 mt-1">{projectsError}</p>
 				{/if}
