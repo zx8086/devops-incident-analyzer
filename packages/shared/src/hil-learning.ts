@@ -95,6 +95,8 @@ export const HilMatchCandidateSchema = z.object({
 	hasRootCause: z.boolean(),
 	// SIO-1134: "ticket-link" = exact curated linkage (Incident.ticketKey), the
 	// strongest signal; "ticket-mention" = key found in the stored summary.
-	via: z.enum(["vector", "ticket-mention", "ticket-link"]),
+	// SIO-1133: "request-id" = the report's stamped Request-Id (== KG node id) found
+	// in the ticket text -- authoritative, resolves without embeddings.
+	via: z.enum(["vector", "ticket-mention", "ticket-link", "request-id"]),
 });
 export type HilMatchCandidate = z.infer<typeof HilMatchCandidateSchema>;

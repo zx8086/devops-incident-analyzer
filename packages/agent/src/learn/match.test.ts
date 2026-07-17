@@ -132,6 +132,109 @@ describe("SIO-1134 curated ticket-link lookup", () => {
 	});
 });
 
+const REQ_ID = "1f5b2c8a-0d3e-4a9b-8c7d-2e6f4a1b9c0d";
+
+function ticketWithRequestId(location: "description" | "comment"): TicketResolution {
+	const footer = `\n\n**Request-Id:** ${REQ_ID}`;
+	return {
+		key: "DEVOPS-9001",
+		summary: "pasted report ticket",
+		status: "Done",
+		description: location === "description" ? `Executive Summary\nThe report body.${footer}` : "The report body.",
+		comments:
+			location === "comment"
+				? [{ author: "human", createdAt: "2026-07-17T00:00:00.000Z", body: `Pasting the report:${footer}` }]
+				: [],
+	};
+}
+
+describe("SIO-1133 extractRequestId", () => {
+	test("pulls a UUID after the Request-Id label, case-insensitive, first hit", async () => {
+		const { extractRequestId } = await import("./match.ts");
+		expect(extractRequestId(`**Request-Id:** ${REQ_ID}`)).toBe(REQ_ID);
+		expect(extractRequestId(`request-id: ${REQ_ID.toUpperCase()}`)).toBe(REQ_ID);
+		expect(extractRequestId(`noise\nRequest-Id:   ${REQ_ID}\nmore`)).toBe(REQ_ID);
+	});
+	test("returns null when absent or malformed", async () => {
+		const { extractRequestId } = await import("./match.ts");
+		expect(extractRequestId("no id here")).toBeNull();
+		expect(extractRequestId("Request-Id: not-a-uuid")).toBeNull();
+		expect(extractRequestId("Request-Id: 1f5b2c8a-0d3e-4a9b-8c7d")).toBeNull(); // truncated
+	});
+});
+
+describe("SIO-1133 request-id scan lane", () => {
+	function scanStore(incidentExists: boolean): GraphStore {
+		return {
+			init: async () => undefined,
+			close: async () => undefined,
+			run: async <T>(cypher: string): Promise<T[]> => {
+				// curated ticketKey lookup runs first and must miss so the scan is reached.
+				if (cypher.includes("i.ticketKey = $ticketKey")) return [] as T[];
+				// incidentById node query.
+				if (cypher.includes("MATCH (i:Incident {id: $id}) RETURN i.id AS id")) {
+					return incidentExists
+						? ([{ id: REQ_ID, summary: "the report incident", severity: "high" }] as T[])
+						: ([] as T[]);
+				}
+				return [] as T[];
+			},
+		};
+	}
+
+	test("resolves a request-id candidate without embedding (description footer)", async () => {
+		let embedCalled = false;
+		_setEmbedderForTesting(async () => {
+			embedCalled = true;
+			return [0.1];
+		});
+		_setGraphStoreForTesting(scanStore(true));
+
+		const result = await learnMatchIncident(stateWith({ hilTicket: ticketWithRequestId("description") }));
+		expect(result.hilMatchCandidates).toHaveLength(1);
+		expect(result.hilMatchCandidates?.[0]).toMatchObject({ id: REQ_ID, via: "request-id", distance: 0 });
+		expect(result.hilTicketEmbedding).toEqual([]);
+		expect(embedCalled).toBe(false);
+	});
+
+	test("scans comments too", async () => {
+		_setEmbedderForTesting(async () => [0.1]);
+		_setGraphStoreForTesting(scanStore(true));
+		const result = await learnMatchIncident(stateWith({ hilTicket: ticketWithRequestId("comment") }));
+		expect(result.hilMatchCandidates?.[0]).toMatchObject({ id: REQ_ID, via: "request-id" });
+	});
+
+	test("a request-id NOT in the KG falls through to pin/vector", async () => {
+		_setEmbedderForTesting(async () => [0.1, 0.2]);
+		// incidentById returns [] (not in KG); the vector fallback then runs.
+		const store: GraphStore = {
+			init: async () => undefined,
+			close: async () => undefined,
+			run: async <T>(cypher: string): Promise<T[]> => {
+				if (cypher.includes("i.ticketKey = $ticketKey")) return [] as T[];
+				if (cypher.includes("MATCH (i:Incident {id: $id}) RETURN i.id AS id")) return [] as T[];
+				if (cypher.includes("QUERY_VECTOR_INDEX")) {
+					return [{ id: "inc-vec", summary: "vector hit", severity: "low", distance: 0.3 }] as T[];
+				}
+				return [] as T[];
+			},
+		};
+		_setGraphStoreForTesting(store);
+
+		const result = await learnMatchIncident(stateWith({ hilTicket: ticketWithRequestId("description") }));
+		// No request-id candidate; the vector fallback supplied the candidate instead.
+		expect(result.hilMatchCandidates?.some((c) => c.via === "request-id")).toBe(false);
+		expect(result.hilMatchCandidates?.[0]).toMatchObject({ id: "inc-vec", via: "vector" });
+	});
+
+	test("no Request-Id in the ticket text -> no request-id candidate", async () => {
+		_setEmbedderForTesting(async () => [0.1]);
+		_setGraphStoreForTesting(scanStore(true));
+		const result = await learnMatchIncident(stateWith({ hilTicket: ticket() }));
+		expect(result.hilMatchCandidates?.some((c) => c.via === "request-id")).toBe(false);
+	});
+});
+
 // SIO-1132: the embedding input prefers the ticket's Executive Summary -- the
 // stored Incident vectors are short user-query embeddings, so summary-vs-summary
 // is the aligned pair; whole-report embeddings drown in shared boilerplate.
