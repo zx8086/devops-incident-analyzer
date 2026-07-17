@@ -1,6 +1,12 @@
 // knowledge-graph/src/rebuild.test.ts
 import { describe, expect, test } from "bun:test";
-import { bindingFromAnnotations, incidentFromAnnotations, parseArgs, rootCauseFromAnnotations } from "./rebuild.ts";
+import {
+	bindingFromAnnotations,
+	incidentFromAnnotations,
+	invalidatedBindingFromAnnotations,
+	parseArgs,
+	rootCauseFromAnnotations,
+} from "./rebuild.ts";
 import { InMemoryGraphStore } from "./store.ts";
 import { recordServiceBinding } from "./writer.ts";
 
@@ -190,5 +196,37 @@ describe("SIO-1135 rebuild: curation-fact byte-parity", () => {
 			confidence: 1,
 			ruleName: "route53-resolver-rule-missing",
 		});
+	});
+});
+
+// SIO-1127: the kg-binding-invalidated mapper reconstructs the invalidateBindingByHuman args.
+describe("SIO-1127 rebuild: invalidatedBindingFromAnnotations", () => {
+	test("maps a full kg-binding-invalidated fact", () => {
+		expect(
+			invalidatedBindingFromAnnotations({
+				kind: "kg-binding-invalidated",
+				service: "localcore-service",
+				service_normalized: "localcoreservice",
+				binding_kind: "topic",
+				resource_id: "orders.events",
+				datasource: "kafka",
+				reason: "vestigial config",
+				discovered_by: "human",
+			}),
+		).toEqual({
+			service: "localcore-service",
+			datasource: "kafka",
+			kind: "topic",
+			resourceId: "orders.events",
+			reason: "vestigial config",
+		});
+	});
+
+	test("returns null on a missing required field or unknown binding kind", () => {
+		const base = { service: "s", binding_kind: "topic", resource_id: "r", datasource: "kafka", reason: "x" };
+		expect(invalidatedBindingFromAnnotations(base)).not.toBeNull();
+		expect(invalidatedBindingFromAnnotations({ ...base, service: "" })).toBeNull();
+		expect(invalidatedBindingFromAnnotations({ ...base, resource_id: "" })).toBeNull();
+		expect(invalidatedBindingFromAnnotations({ ...base, binding_kind: "not-a-kind" })).toBeNull();
 	});
 });

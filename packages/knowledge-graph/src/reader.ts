@@ -233,16 +233,25 @@ export async function bindingsForServices(
 // (service, kind, resourceId)? The gate that keeps the W8 writer from enqueuing a
 // duplicate durable fact (facts are append-only/undeletable, SIO-973) -- a
 // re-confirmation bumps lastVerified graph-side only.
+// SIO-1127 (CodeRabbit PR #406): the persisted telemetry identity is
+// datasource:kind:resourceId, so pass `datasource` to scope to the FULL identity --
+// otherwise the same (kind, resourceId) under a different datasource is a distinct node
+// but this gate would report it as existing and suppress its mirror fact (rebuild loss).
+// datasource is optional for back-compat: omit it for the legacy (kind, resourceId) match.
 export async function hasBinding(
 	store: GraphStore,
 	service: string,
 	kind: string,
 	resourceId: string,
+	datasource?: string,
 ): Promise<boolean> {
 	if (!service || !resourceId) return false;
+	const sourceMatch = datasource
+		? "TelemetrySource {datasource: $datasource, kind: $kind, resourceId: $resourceId}"
+		: "TelemetrySource {kind: $kind, resourceId: $resourceId}";
 	const rows = await store.run<{ n: number }>(
-		"MATCH (s:Service {name: $service})-[o:OBSERVED_IN]->(t:TelemetrySource {kind: $kind, resourceId: $resourceId}) WHERE o.tInvalid = '' RETURN count(o) AS n",
-		{ service, kind, resourceId },
+		`MATCH (s:Service {name: $service})-[o:OBSERVED_IN]->(t:${sourceMatch}) WHERE o.tInvalid = '' RETURN count(o) AS n`,
+		datasource ? { service, kind, resourceId, datasource } : { service, kind, resourceId },
 	);
 	return Number(rows[0]?.n ?? 0) > 0;
 }

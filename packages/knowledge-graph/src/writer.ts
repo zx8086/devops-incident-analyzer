@@ -327,6 +327,29 @@ export async function flagBindingForReview(
 	);
 }
 
+// SIO-1127: a HUMAN explicit-invalidate of a telemetry binding (HIL learning
+// "action: invalidate"). Unlike invalidateBinding (which hard-filters human edges by
+// design, P5 -- an automatic single miss must not retire human knowledge) and
+// flagBindingForReview (which only annotates), this sets tInvalid on ANY currently-valid
+// edge regardless of discoveredBy: an explicit human verdict overrides even a prior
+// human confirmation. Single-clause lbug-safe Cypher; matches the FULL (datasource, kind,
+// resourceId) identity so sibling sources stay isolated. No-op if nothing currently valid.
+export async function invalidateBindingByHuman(
+	store: GraphStore,
+	service: string,
+	datasource: string,
+	kind: string,
+	resourceId: string,
+	reason: string,
+): Promise<void> {
+	if (!service || !resourceId || !datasource) return;
+	const now = new Date().toISOString();
+	await store.run(
+		"MATCH (s:Service {name: $service})-[o:OBSERVED_IN]->(t:TelemetrySource {datasource: $datasource, kind: $kind, resourceId: $resourceId}) WHERE o.tInvalid = '' SET o.tInvalid = $now, o.evidence = o.evidence + ' | invalidated-by-human: ' + $reason",
+		{ service, datasource, kind, resourceId, now, reason },
+	);
+}
+
 // SIO-965: the change-outcome lifecycle. A turn opens as "proposed"; the
 // recordIacOutcome node later promotes it to applied/rejected/failed.
 export type ChangeOutcome = "proposed" | "applied" | "rejected" | "failed";

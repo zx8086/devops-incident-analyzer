@@ -27,6 +27,7 @@ import {
 import { EMBEDDING_DIM } from "./schema.ts";
 import { LadybugStore } from "./store.ts";
 import {
+	invalidateBindingByHuman,
 	linkIncidentTicket,
 	linkResolution,
 	linkStackModule,
@@ -397,6 +398,37 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 		const result = await purgeUncuratedIncidents(store, "2025-01-01T00:00:00.000Z");
 		expect(result.incidents).toBe(1);
 		expect(await incidentById(store, "inc-null-legacy")).toBeNull();
+
+		await store.close();
+	});
+
+	// SIO-1127: invalidateBindingByHuman must retire even a HUMAN-confirmed edge (the
+	// distinguishing behavior vs invalidateBinding, which refuses discoveredBy = 'human').
+	// Real-engine only: proves the tInvalid SET lands and bindingsForServices stops surfacing
+	// it -- the in-memory fake cannot execute the WHERE/SET.
+	test("invalidateBindingByHuman retires a human-confirmed binding", async () => {
+		const store = new LadybugStore(join(dir, "db-inv-human"));
+		await store.init();
+
+		await recordServiceBinding(store, {
+			service: "localcore-service",
+			serviceNormalized: "localcoreservice",
+			datasource: "kafka",
+			kind: "topic",
+			resourceId: "orders.events",
+			locator: "",
+			confidence: 1.0,
+			discoveredBy: "human", // a HUMAN-confirmed edge
+			evidence: "human-confirmed",
+		});
+		// Present before invalidation.
+		expect(await hasBinding(store, "localcore-service", "topic", "orders.events")).toBe(true);
+
+		await invalidateBindingByHuman(store, "localcore-service", "kafka", "topic", "orders.events", "vestigial config");
+
+		// hasBinding filters tInvalid = '' -> now gone (a human edge invalidateBinding would refuse).
+		expect(await hasBinding(store, "localcore-service", "topic", "orders.events")).toBe(false);
+		expect(await bindingsForServices(store, ["localcore-service"], ["localcore-service"])).toHaveLength(0);
 
 		await store.close();
 	});

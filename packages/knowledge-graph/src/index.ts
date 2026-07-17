@@ -102,6 +102,7 @@ export {
 	type IacPromptRecord,
 	type IncidentRecord,
 	invalidateBinding,
+	invalidateBindingByHuman,
 	linkCorrelation,
 	linkIncidentTicket,
 	linkResolution,

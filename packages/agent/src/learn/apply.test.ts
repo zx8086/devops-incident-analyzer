@@ -189,13 +189,16 @@ describe("SIO-1126 applyLearnings", () => {
 		expect(summary).toContain("Skipped curation: nothing approved; ticket link not written");
 	});
 
-	test("an out-of-catalog runbook is not linked", async () => {
+	// SIO-1127: an out-of-catalog (or absent) runbook no longer just skips -- it drafts a
+	// PR-gated runbook. MEMORY_PR_ENABLED is unset in tests, so openMemoryPr self-skips
+	// (no network); the apply summary reports the draft was not opened rather than linking.
+	test("no catalog runbook -> a DRAFT runbook PR is attempted (self-skips without MEMORY_PR)", async () => {
 		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
 		const calls: RunCall[] = [];
 		_setGraphStoreForTesting(stubStore(calls));
 
 		const p = proposal();
-		if (p.rootCause) p.rootCause.runbookFilename = "not-in-catalog.md";
+		if (p.rootCause) p.rootCause.runbookFilename = undefined; // no catalog match at all
 		const result = await applyLearnings(
 			stateWith({
 				hilProposal: p,
@@ -204,9 +207,10 @@ describe("SIO-1126 applyLearnings", () => {
 			}),
 		);
 
+		// No RESOLVED_BY link (the PR self-skipped, so nothing to link).
 		expect(calls.some((c) => c.cypher.includes("RESOLVED_BY"))).toBe(false);
 		const summary = String(result.messages?.[0]?.content ?? "");
-		expect(summary).toContain("not-in-catalog.md is not in the catalog");
+		expect(summary).toContain("draft runbook PR not opened (skipped)");
 	});
 
 	test("a 'none of these' match creates the incident (embedding via the drop/set/recreate path)", async () => {
@@ -305,14 +309,227 @@ describe("SIO-1126 applyLearnings", () => {
 		expect(summary).toContain("already learned from DEVOPS-1355");
 		expect(summary).not.toContain("durable memory fact");
 	});
+
+	// SIO-1127: telemetry binding corrections. hasBinding returns [] from the stub (new
+	// binding), so a confirm both records the edge AND mirrors the kg-binding fact.
+	function bindingProposal(action: "confirm" | "invalidate"): LearningProposal {
+		return {
+			ticketKey: "DEVOPS-1355",
+			rootCause: null,
+			bindings: [
+				{
+					id: "bind-1",
+					kind: "binding",
+					action,
+					service: "example-consumer-service",
+					datasource: "kafka",
+					bindingKind: "topic",
+					resourceId: "orders.events",
+					reason: "confirmed by ops",
+					evidence: ["orders.events"],
+				},
+			],
+			heuristics: [],
+			memoryFacts: [],
+		};
+	}
+
+	test("SIO-1127: a confirmed binding writes the OBSERVED_IN edge (human, confidence 1.0)", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const calls: RunCall[] = [];
+		_setGraphStoreForTesting(stubStore(calls));
+
+		const result = await applyLearnings(
+			stateWith({
+				hilProposal: bindingProposal("confirm"),
+				hilMatch: { incidentId: "inc-1", created: false },
+				hilDecisions: { "bind-1": "approve" },
+			}),
+		);
+
+		// The SET query (not the hasBinding count query) carries discoveredBy/confidence.
+		const observed = calls.find((c) => c.cypher.includes("MERGE (s)-[o:OBSERVED_IN]"));
+		expect(observed?.params?.discoveredBy).toBe("human");
+		expect(observed?.params?.confidence).toBe(1.0);
+		expect(observed?.params?.service).toBe("example-consumer-service");
+		const summary = String(result.messages?.[0]?.content ?? "");
+		expect(summary).toContain("Confirmed 1 telemetry binding");
+	});
+
+	test("SIO-1127: an invalidated binding sets tInvalid without the human exclusion", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const calls: RunCall[] = [];
+		_setGraphStoreForTesting(stubStore(calls));
+
+		const result = await applyLearnings(
+			stateWith({
+				hilProposal: bindingProposal("invalidate"),
+				hilMatch: { incidentId: "inc-1", created: false },
+				hilDecisions: { "bind-1": "approve" },
+			}),
+		);
+
+		const invalidate = calls.find((c) => c.cypher.includes("invalidated-by-human"));
+		expect(invalidate).toBeDefined();
+		expect(invalidate?.cypher).not.toContain("o.discoveredBy");
+		const summary = String(result.messages?.[0]?.content ?? "");
+		expect(summary).toContain("Invalidated 1 stale telemetry binding");
+	});
+
+	test("SIO-1127: an unknown binding kind is skipped, not written", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const calls: RunCall[] = [];
+		_setGraphStoreForTesting(stubStore(calls));
+
+		const p = bindingProposal("confirm");
+		p.bindings = p.bindings.map((b) => ({ ...b, bindingKind: "not-a-real-kind" }));
+		const result = await applyLearnings(
+			stateWith({
+				hilProposal: p,
+				hilMatch: { incidentId: "inc-1", created: false },
+				hilDecisions: { "bind-1": "approve" },
+			}),
+		);
+
+		expect(calls.some((c) => c.cypher.includes("OBSERVED_IN"))).toBe(false);
+		const summary = String(result.messages?.[0]?.content ?? "");
+		expect(summary).toContain('unknown binding kind "not-a-real-kind"');
+	});
+
+	test("SIO-1127: a rejected binding is not written", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const calls: RunCall[] = [];
+		_setGraphStoreForTesting(stubStore(calls));
+
+		await applyLearnings(
+			stateWith({
+				hilProposal: bindingProposal("confirm"),
+				hilMatch: { incidentId: "inc-1", created: false },
+				hilDecisions: { "bind-1": "reject" },
+			}),
+		);
+		expect(calls.some((c) => c.cypher.includes("OBSERVED_IN"))).toBe(false);
+	});
+
+	// CodeRabbit PR #406: a throwing binding must soft-fail INDEPENDENTLY -- it is reported
+	// skipped, and the incident curation (ticketKey link) still proceeds.
+	test("SIO-1127: a throwing binding is skipped but curation still proceeds", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const calls: RunCall[] = [];
+		// The OBSERVED_IN write throws; everything else works.
+		const store = {
+			init: async () => undefined,
+			run: async (cypher: string, params?: Record<string, unknown>) => {
+				calls.push({ cypher, params });
+				if (cypher.includes("MERGE (s)-[o:OBSERVED_IN]")) throw new Error("boom");
+				return [];
+			},
+			close: async () => undefined,
+		} as GraphStore;
+		_setGraphStoreForTesting(store);
+
+		const result = await applyLearnings(
+			stateWith({
+				hilProposal: bindingProposal("confirm"),
+				hilMatch: { incidentId: "inc-1", created: false },
+				hilDecisions: { "bind-1": "approve" },
+			}),
+		);
+		const summary = String(result.messages?.[0]?.content ?? "");
+		expect(summary).toContain("Skipped bind-1: binding write failed");
+		// Curation (SET i.ticketKey) still ran -- the throw did not abort it.
+		expect(calls.some((c) => c.cypher.includes("SET i.ticketKey"))).toBe(true);
+	});
+
+	// CodeRabbit PR #406: the dedup check is scoped to the FULL datasource:kind:resourceId
+	// identity -- the hasBinding count query must carry $datasource.
+	test("SIO-1127: a confirmed binding dedups on the full datasource identity", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const calls: RunCall[] = [];
+		_setGraphStoreForTesting(stubStore(calls));
+
+		await applyLearnings(
+			stateWith({
+				hilProposal: bindingProposal("confirm"),
+				hilMatch: { incidentId: "inc-1", created: false },
+				hilDecisions: { "bind-1": "approve" },
+			}),
+		);
+		const countQuery = calls.find((c) => c.cypher.includes("count(o) AS n"));
+		expect(countQuery?.cypher).toContain("datasource: $datasource");
+		expect(countQuery?.params?.datasource).toBe("kafka");
+	});
+
+	// SIO-1127: heuristics self-gate on live memory (unset in tests) -> reported as skipped,
+	// never silently dropped. The skill-proposal write path itself is covered by the
+	// buildSkillAnnotations/buildSkillFactText reuse (skill-learner tests).
+	test("SIO-1127: an approved heuristic is reported skipped when live memory is off", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		delete process.env.LIVE_MEMORY_ENABLED;
+		const calls: RunCall[] = [];
+		_setGraphStoreForTesting(stubStore(calls));
+
+		const p: LearningProposal = {
+			ticketKey: "DEVOPS-1355",
+			rootCause: null,
+			bindings: [],
+			heuristics: [
+				{
+					id: "heur-1",
+					kind: "heuristic",
+					name: "resolver-check",
+					description: "d",
+					whenToUse: "broker id -1",
+					procedure: "check resolver rules",
+					evidence: ["check resolver rules"],
+				},
+			],
+			memoryFacts: [],
+		};
+		const result = await applyLearnings(
+			stateWith({
+				hilProposal: p,
+				hilMatch: { incidentId: "inc-1", created: false },
+				hilDecisions: { "heur-1": "approve" },
+			}),
+		);
+		const summary = String(result.messages?.[0]?.content ?? "");
+		expect(summary).toContain("Skipped heur-1: live memory disabled");
+	});
 });
 
 describe("SIO-1126 buildApplySummary", () => {
+	const emptyReport = {
+		incidentId: "inc-1",
+		incidentCreated: false,
+		rootCauseWritten: false,
+		factsWritten: 0,
+		bindingsConfirmed: 0,
+		bindingsInvalidated: 0,
+		heuristicsProposed: 0,
+		skipped: [],
+	};
+
 	test("reports the empty case", () => {
+		const text = buildApplySummary(emptyReport, "DEVOPS-1355");
+		expect(text).toContain("Nothing was approved");
+	});
+
+	// SIO-1127: Phase 2 lines render for bindings / heuristics / draft runbook.
+	test("renders Phase 2 lines (bindings, heuristics, draft runbook PR)", () => {
 		const text = buildApplySummary(
-			{ incidentId: "inc-1", incidentCreated: false, rootCauseWritten: false, factsWritten: 0, skipped: [] },
+			{
+				...emptyReport,
+				bindingsConfirmed: 2,
+				bindingsInvalidated: 1,
+				heuristicsProposed: 1,
+				draftRunbookUrl: "https://gitlab.com/x/-/merge_requests/7",
+			},
 			"DEVOPS-1355",
 		);
-		expect(text).toContain("Nothing was approved");
+		expect(text).toContain("Confirmed 2 telemetry binding");
+		expect(text).toContain("Invalidated 1 stale telemetry binding");
+		expect(text).toContain("Proposed 1 diagnostic skill");
+		expect(text).toContain("DRAFT runbook PR for review: https://gitlab.com/x/-/merge_requests/7");
 	});
 });

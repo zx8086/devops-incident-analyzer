@@ -12,7 +12,8 @@ export type MemoryPrFile = z.infer<typeof MemoryPrFileSchema>;
 
 export const MemoryPrProposalSchema = z
 	.object({
-		kind: z.enum(["wiki-page", "key-decision", "new-skill"]),
+		// SIO-1127: "runbook" = a PR-gated DRAFT runbook distilled from a HIL learning turn.
+		kind: z.enum(["wiki-page", "key-decision", "new-skill", "runbook"]),
 		// Fresh branch off base; must start with the agent/learn/ namespace.
 		branch: z.string().regex(/^agent\/learn\//, "branch must be under agent/learn/"),
 		title: z.string().min(1),
