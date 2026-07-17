@@ -234,6 +234,44 @@ describe("SIO-1126/SIO-1131 verifyProposalEvidence", () => {
 		expect(verified.bindings).toHaveLength(0);
 	});
 
+	// CodeRabbit PR #406: even with GROUNDED evidence, a binding whose resourceId does not
+	// appear literally in the ticket text is dropped (an inferred/context-derived id must
+	// not persist a resource the ticket never named).
+	test("drops a binding with grounded evidence but a resourceId absent from the ticket", () => {
+		const proposal: LearningProposal = {
+			ticketKey: "DEVOPS-1355",
+			rootCause: null,
+			bindings: [
+				{
+					id: "bind-1",
+					kind: "binding",
+					action: "confirm",
+					service: "example-consumer-service",
+					datasource: "kafka",
+					bindingKind: "cluster",
+					// This id is NOT in bindingTicket()'s text (that one names lkc-9example).
+					resourceId: "lkc-0inferred",
+					reason: "x",
+					// The evidence quote itself DOES ground (it's from the ticket).
+					evidence: ["Check per-VPC Route53 resolver associations first."],
+				},
+			],
+			heuristics: [],
+			memoryFacts: [],
+		};
+		const { proposal: verified, droppedIds } = verifyProposalEvidence(
+			proposal,
+			buildDistillerHumanText({
+				ticket: bindingTicket(),
+				incidentSummary: "",
+				existingRootCause: null,
+				runbookCatalog: [],
+			}),
+		);
+		expect(droppedIds).toEqual(["bind-1"]);
+		expect(verified.bindings).toHaveLength(0);
+	});
+
 	test("drops items with hallucinated evidence (root cause -> null)", () => {
 		const parsed = JSON.parse(CANNED_RESPONSE) as LearningProposal;
 		if (!parsed.rootCause) throw new Error("fixture must have a root cause");

@@ -411,6 +411,55 @@ describe("SIO-1126 applyLearnings", () => {
 		expect(calls.some((c) => c.cypher.includes("OBSERVED_IN"))).toBe(false);
 	});
 
+	// CodeRabbit PR #406: a throwing binding must soft-fail INDEPENDENTLY -- it is reported
+	// skipped, and the incident curation (ticketKey link) still proceeds.
+	test("SIO-1127: a throwing binding is skipped but curation still proceeds", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const calls: RunCall[] = [];
+		// The OBSERVED_IN write throws; everything else works.
+		const store = {
+			init: async () => undefined,
+			run: async (cypher: string, params?: Record<string, unknown>) => {
+				calls.push({ cypher, params });
+				if (cypher.includes("MERGE (s)-[o:OBSERVED_IN]")) throw new Error("boom");
+				return [];
+			},
+			close: async () => undefined,
+		} as GraphStore;
+		_setGraphStoreForTesting(store);
+
+		const result = await applyLearnings(
+			stateWith({
+				hilProposal: bindingProposal("confirm"),
+				hilMatch: { incidentId: "inc-1", created: false },
+				hilDecisions: { "bind-1": "approve" },
+			}),
+		);
+		const summary = String(result.messages?.[0]?.content ?? "");
+		expect(summary).toContain("Skipped bind-1: binding write failed");
+		// Curation (SET i.ticketKey) still ran -- the throw did not abort it.
+		expect(calls.some((c) => c.cypher.includes("SET i.ticketKey"))).toBe(true);
+	});
+
+	// CodeRabbit PR #406: the dedup check is scoped to the FULL datasource:kind:resourceId
+	// identity -- the hasBinding count query must carry $datasource.
+	test("SIO-1127: a confirmed binding dedups on the full datasource identity", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const calls: RunCall[] = [];
+		_setGraphStoreForTesting(stubStore(calls));
+
+		await applyLearnings(
+			stateWith({
+				hilProposal: bindingProposal("confirm"),
+				hilMatch: { incidentId: "inc-1", created: false },
+				hilDecisions: { "bind-1": "approve" },
+			}),
+		);
+		const countQuery = calls.find((c) => c.cypher.includes("count(o) AS n"));
+		expect(countQuery?.cypher).toContain("datasource: $datasource");
+		expect(countQuery?.params?.datasource).toBe("kafka");
+	});
+
 	// SIO-1127: heuristics self-gate on live memory (unset in tests) -> reported as skipped,
 	// never silently dropped. The skill-proposal write path itself is covered by the
 	// buildSkillAnnotations/buildSkillFactText reuse (skill-learner tests).

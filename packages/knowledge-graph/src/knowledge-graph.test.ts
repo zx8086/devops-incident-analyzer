@@ -1054,6 +1054,23 @@ describe("SIO-1100 telemetry bindings", () => {
 		expect(await hasBinding(store, "", "logGroup", "")).toBe(false);
 		expect(store.calls).toHaveLength(0);
 	});
+
+	// SIO-1127 (CodeRabbit PR #406): with a datasource, the query scopes to the FULL
+	// datasource:kind:resourceId identity; without one it keeps the legacy (kind, resourceId).
+	test("hasBinding scopes to datasource when provided", async () => {
+		const withDs = new InMemoryGraphStore();
+		withDs.stub("count(o)", [{ n: 1 }]);
+		await hasBinding(withDs, "orders", "topic", "orders.events", "kafka");
+		const dsCall = withDs.calls[0];
+		expect(dsCall?.cypher).toContain("datasource: $datasource");
+		expect(dsCall?.params).toMatchObject({ datasource: "kafka", kind: "topic", resourceId: "orders.events" });
+
+		const noDs = new InMemoryGraphStore();
+		noDs.stub("count(o)", [{ n: 1 }]);
+		await hasBinding(noDs, "orders", "topic", "orders.events");
+		expect(noDs.calls[0]?.cypher).not.toContain("datasource: $datasource");
+		expect(noDs.calls[0]?.params).not.toHaveProperty("datasource");
+	});
 });
 
 // SIO-1103: staleness writers.

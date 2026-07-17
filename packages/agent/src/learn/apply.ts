@@ -217,7 +217,7 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 					// No catalog runbook covers this cause -> open a PR-gated DRAFT runbook. The
 					// file is NEVER written into the runbooks dir directly; the PR merge is the only
 					// control (the manifest loader auto-catalogs *.md there on the next load).
-					await draftRunbook(store, rc, ticketKey, state, report);
+					await draftRunbook(rc, ticketKey, report);
 				}
 			} else if (rc) {
 				report.skipped.push({ id: rc.id, reason: "rejected" });
@@ -231,7 +231,16 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 					report.skipped.push({ id: binding.id, reason: "rejected" });
 					continue;
 				}
-				await applyBinding(store, binding, ticketKey, state.requestId, report);
+				// Soft-fail each binding INDEPENDENTLY (CodeRabbit PR #406): a single throwing
+				// binding must not abort later bindings or the incident curation below.
+				try {
+					await applyBinding(store, binding, ticketKey, state.requestId, report);
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					logger.warn({ ticket: ticketKey, binding: binding.id, error: message }, "HIL binding write failed");
+					report.skipped.push({ id: binding.id, reason: "binding write failed" });
+					failures.push({ node: "applyLearnings", reason: "binding-write-failed" });
+				}
 			}
 
 			// SIO-1134: applying learnings CURATES the matched incident -- the
@@ -442,7 +451,9 @@ async function applyBinding(
 	}
 
 	// action === "confirm"
-	const existed = await hasBinding(store, binding.service, kind.data, binding.resourceId);
+	// Scope the dedup to the FULL datasource:kind:resourceId identity (CodeRabbit PR #406)
+	// so the same coordinate under a different datasource still writes its mirror fact.
+	const existed = await hasBinding(store, binding.service, kind.data, binding.resourceId, binding.datasource);
 	await recordServiceBinding(store, {
 		service: binding.service,
 		serviceNormalized,
@@ -509,16 +520,10 @@ async function applyHeuristic(
 
 // SIO-1127: open a PR-gated DRAFT runbook for a cause with no catalog match. The file is
 // staged ONLY in the memory PR (never written into the runbooks dir directly -- the
-// manifest loader auto-catalogs it on merge, so the PR gate is the only control). On a
-// successfully-opened PR, RESOLVED_BY links the draft filename so a rebuild reconstructs the
-// resolution edge and the URL lands in the apply summary.
-async function draftRunbook(
-	store: Awaited<ReturnType<typeof getGraphStore>>,
-	rc: RootCauseCorrection,
-	ticketKey: string,
-	state: AgentStateType,
-	report: HilApplyReport,
-): Promise<void> {
+// manifest loader auto-catalogs it on merge, so the PR gate is the only control). The PR
+// URL lands in the apply summary; the RESOLVED_BY link is deliberately NOT written here
+// (CodeRabbit PR #406) -- the runbook is not in the catalog until the PR merges.
+async function draftRunbook(rc: RootCauseCorrection, ticketKey: string, report: HilApplyReport): Promise<void> {
 	const filename = draftRunbookFilename(rc.causeClass);
 	// severity is not on the RootCauseCorrection; the renderer defaults to "high".
 	const contents = renderRunbookMarkdown(rc, ticketKey);
@@ -532,18 +537,12 @@ async function draftRunbook(
 			labels: ["hil-learning", "runbook-draft"],
 		});
 		if (result.status === "opened" && result.url) {
+			// CodeRabbit PR #406: report the PR URL but do NOT link RESOLVED_BY / write the
+			// kg-resolution fact yet. The runbook file does not exist in the catalog until the
+			// PR merges (and it may be rejected), so linking now would surface "resolved by
+			// <draft>" on similar incidents for a runbook that isn't there. The resolution link
+			// is established once the runbook is catalogued (on merge), not at draft time.
 			report.draftRunbookUrl = result.url;
-			await linkResolution(store, report.incidentId, [filename]);
-			recordKeyDecision({
-				requestId: state.requestId,
-				decision: `Incident ${report.incidentId} resolved by DRAFT runbook ${filename} (PR ${result.url}, via ${ticketKey})`,
-				annotations: {
-					kind: "kg-resolution",
-					incident_id: report.incidentId,
-					runbook: filename,
-					ticket: ticketKey,
-				},
-			});
 		} else {
 			report.skipped.push({ id: rc.id, reason: `draft runbook PR not opened (${result.status})` });
 		}

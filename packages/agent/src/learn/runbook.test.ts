@@ -63,4 +63,16 @@ describe("SIO-1127 renderRunbookMarkdown", () => {
 		// severity round-trips through the parsed triggers.
 		expect(JSON.stringify(parsed.triggers)).toContain("critical");
 	});
+
+	// CodeRabbit PR #406: a short-token causeClass (every token <= 2 chars) filters metrics to
+	// [], which would render `metrics:` empty and fail RunbookFrontmatterSchema. Fall back to
+	// the whole class so triggers.metrics stays a non-empty array and the frontmatter parses.
+	test("a short-token causeClass keeps triggers.metrics non-empty and parses", () => {
+		const md = renderRunbookMarkdown(rc({ causeClass: "db-io" }), "DEVOPS-7");
+		expect(md).toContain("    - db-io"); // fallback to the whole class
+		const parsed = parseRunbookFrontmatter(md);
+		const triggers = parsed.triggers as { metrics?: unknown };
+		expect(Array.isArray(triggers.metrics)).toBe(true);
+		expect((triggers.metrics as unknown[]).length).toBeGreaterThan(0);
+	});
 });

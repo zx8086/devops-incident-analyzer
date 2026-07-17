@@ -179,12 +179,22 @@ export function verifyProposalEvidence(
 		if (!grounded) droppedIds.push(item.id);
 		return grounded;
 	};
+	// SIO-1127 (CodeRabbit PR #406): a binding is kept only if its evidence grounds AND its
+	// resourceId appears LITERALLY in the prompt text. The evidence quotes alone are
+	// insufficient -- a binding could carry grounded-but-unrelated evidence while its
+	// resourceId was inferred/context-derived, persisting a resource id the ticket never named.
+	const keepBinding = (b: (typeof proposal.bindings)[number]): boolean => {
+		if (!keep(b)) return false;
+		if (haystack.includes(normalizeForEvidence(b.resourceId))) return true;
+		droppedIds.push(b.id);
+		return false;
+	};
 	const rootCause = proposal.rootCause && keep(proposal.rootCause) ? proposal.rootCause : null;
 	return {
 		proposal: {
 			...proposal,
 			rootCause,
-			bindings: proposal.bindings.filter(keep),
+			bindings: proposal.bindings.filter(keepBinding),
 			heuristics: proposal.heuristics.filter(keep),
 			memoryFacts: proposal.memoryFacts.filter(keep),
 		},

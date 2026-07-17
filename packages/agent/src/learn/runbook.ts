@@ -35,11 +35,14 @@ export function renderRunbookMarkdown(rc: RootCauseCorrection, ticketKey: string
 			? rc.invalidatedHypotheses.map((h) => `- ${h.hypothesis} -- ruled out: ${h.reason}`).join("\n")
 			: "- (none recorded)";
 	// Frontmatter mirrors the catalog shape: triggers.metrics from the cause class tokens,
-	// triggers.severity from the incident severity, match: any.
-	const metrics = rc.causeClass
+	// triggers.severity from the incident severity, match: any. CodeRabbit PR #406: a
+	// short-token causeClass (e.g. "db-io") filters to an empty list, which would render
+	// `metrics:` as null and fail RunbookFrontmatterSchema -- fall back to the whole class.
+	const tokens = rc.causeClass
 		.split("-")
 		.filter((w) => w.length > 2)
 		.slice(0, 6);
+	const metrics = tokens.length > 0 ? tokens : [rc.causeClass];
 	return `---
 triggers:
   metrics:

@@ -306,7 +306,9 @@ export async function recordConfirmedBindings(state: AgentStateType): Promise<Pa
 		let newCount = 0;
 		let reconfirmed = 0;
 		for (const rec of records) {
-			const existed = await hasBinding(store, rec.service, rec.kind, rec.resourceId);
+			// SIO-1127 (CodeRabbit PR #406): scope dedup to the full datasource:kind:resourceId
+			// identity so the same coordinate under a different datasource still mirrors its fact.
+			const existed = await hasBinding(store, rec.service, rec.kind, rec.resourceId, rec.datasource);
 			await recordServiceBinding(store, rec);
 			if (existed) {
 				reconfirmed += 1;
