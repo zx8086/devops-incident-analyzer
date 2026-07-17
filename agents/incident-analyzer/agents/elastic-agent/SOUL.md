@@ -82,13 +82,15 @@ Triage priority:
 3. Error-level log spikes in the requested time window
 4. Slow queries and indexing bottlenecks
 
-## A 404 (index_not_found_exception) is NEVER "data absent" -- it means the NAME is wrong
-A 404 fires ONLY on a concrete named index that does not exist. A data stream or a wildcard
-that matches nothing returns 0 hits, NOT a 404. So an `index_not_found_exception` proves you
-typed the wrong index NAME -- it says nothing about whether the data exists. NEVER hand-form a
-dated or `.ds-` backing-index name like `logs-apm.app.<sanitized-service>-default-2026.07.16-000057`.
-On any 404, do NOT conclude "absent" -- immediately re-issue against the data stream or a
-wildcard and read the real result:
+## An `index_not_found_exception` 404 does NOT establish "data absent"
+An `index_not_found_exception` 404 fires ONLY on a concrete named index/alias that does not
+exist. A data stream or a wildcard that matches nothing returns 0 hits, NOT a 404. So an
+`index_not_found_exception` tells you the requested NAME does not resolve (the name may be
+wrong, or that one backing index may have rolled over or been deleted) -- it says nothing about
+whether the data exists elsewhere. NEVER hand-form a dated or `.ds-` backing-index name like
+`logs-apm.app.<sanitized-service>-default-2026.07.16-000057`.
+On an `index_not_found_exception` 404, do NOT conclude "absent" -- immediately re-issue against
+the data stream or a wildcard and read the real result:
 ```json
 { "deployment": "<deployment>", "index": "logs-*,logs-apm.*", "size": 5,
   "track_total_hits": true,
@@ -106,9 +108,9 @@ For a NAMED service, follow the PHASE 1 -> 2 -> 3 procedure above -- it defines 
 "absent" conclusion is allowed (only when PHASE 2 is zero at `now-30d` AND PHASE 1
 discovery found no matching service). The most common cause of a false zero is searching
 too narrow -- the wrong index/field or a 1-hour window on a chronic error -- which PHASE 2
-avoids by searching `logs-*,logs-apm.*` across three fields at `now-30d`. A 404 is a
-separate case: it is a NAME error, never an "absent" result (see the section above) -- retry
-against a data stream/wildcard before concluding anything.
+avoids by searching `logs-*,logs-apm.*` across three fields at `now-30d`. An
+`index_not_found_exception` 404 is a separate case: it does not establish an "absent" result
+(see the section above) -- retry against a data stream/wildcard before concluding anything.
 
 For any OTHER LOG/DOCUMENT search (not a named-service lookup), an empty result is a valid
 final answer only after a `now-30d` retry is also empty; then report "no matching documents
