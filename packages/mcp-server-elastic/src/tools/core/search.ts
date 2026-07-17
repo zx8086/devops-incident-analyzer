@@ -11,6 +11,7 @@ import { logger } from "../../utils/logger.js";
 import { createProgressTracker, notificationManager, withNotificationContext } from "../../utils/notifications.js";
 import { getSearchRequestOptions } from "../../utils/searchRequestOptions.js";
 import type { SearchResult, TextContent, ToolRegistrationFunction } from "../types.js";
+import { notFoundWildcardAdvice } from "./search-index-shape.js";
 
 interface MappingResponse {
 	[key: string]: {
@@ -493,9 +494,15 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 						suggestion: "Check query syntax and field names",
 					});
 				}
+				// SIO-1144: on a not-found against a concrete/dated backing-index name, attach
+				// retry-with-wildcard advice so the LLM re-issues against the data stream/wildcard
+				// instead of reporting the index (and its data) as "absent". Gated on the concrete
+				// shape -- a genuinely-absent wildcard gets no advice and reads as a clean absence.
+				const notFoundAdvice = notFoundWildcardAdvice(kind, params?.index);
 				const envelope = buildToolErrorEnvelope({
 					kind,
 					message: `[elasticsearch_search] ${errorMessage}`,
+					...(notFoundAdvice && { advice: notFoundAdvice }),
 					statusCode: esStatusCode(error),
 				});
 				throw new McpError(ErrorCode.InvalidParams, JSON.stringify(envelope), { params });
