@@ -4,6 +4,7 @@
 // import of the @devops-agent/shared index drags server-only modules into the
 // client bundle (see CreateTicketCard for the same convention).
 import type { TicketProviderId } from "@devops-agent/shared/src/ticket-types.ts";
+import { errorFrom } from "$lib/ticket-errors";
 import Icon from "./Icon.svelte";
 
 let {
@@ -36,14 +37,6 @@ const commentBody = $derived(`${HEADER}${content}`);
 // Mirror AddCommentRequestSchema's body cap so an over-long answer fails with a
 // clear message here instead of a generic 400 from the API.
 const MAX_COMMENT_BODY = 32_000;
-
-function errorFrom(data: unknown, status: number): string {
-	if (data && typeof data === "object" && "error" in data) {
-		const message = (data as { error?: unknown }).error;
-		if (typeof message === "string") return message;
-	}
-	return `Request failed (${status})`;
-}
 
 async function post() {
 	if (submitting || posted) return;
