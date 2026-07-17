@@ -1,6 +1,6 @@
 // packages/agent/src/aggregator-verbatim-ddl.test.ts
 import { describe, expect, test } from "bun:test";
-import type { DataSourceResult } from "@devops-agent/shared";
+import { type DataSourceResult, redactPiiContent } from "@devops-agent/shared";
 import { ensureVerbatimDdl, extractCreateIndexStatements } from "./aggregator.ts";
 
 const DDL_VARIANT = `CREATE INDEX adv_variant_fmsSeasonCode
@@ -55,6 +55,34 @@ describe("extractCreateIndexStatements (SIO-1140)", () => {
 	test("ignores non-string result data", () => {
 		expect(extractCreateIndexStatements([result({ data: {} })])).toHaveLength(0);
 	});
+
+	test("preserves a terminating semicolon and dedups against the unterminated form", () => {
+		const statements = extractCreateIndexStatements([
+			result({ data: "```sql\nCREATE INDEX idx_orders_status ON orders(status);\n```" }),
+			result({ data: "```sql\nCREATE INDEX idx_orders_status ON orders(status)\n```" }),
+		]);
+		expect(statements).toHaveLength(1);
+		expect(statements[0]).toBe("CREATE INDEX idx_orders_status ON orders(status);");
+	});
+
+	test("rejects prose that mimics the DDL shape without a key list", () => {
+		const statements = extractCreateIndexStatements([
+			result({ data: "CREATE INDEX guidance ON staging (not production) before the next release.\n\nMore prose." }),
+		]);
+		expect(statements).toHaveLength(0);
+	});
+
+	test("passes extracted DDL through the PII redaction boundary", () => {
+		const raw = 'CREATE INDEX adv_owner ON users(`ownerEmail`) WHERE ownerEmail = "jane.doe@example.com";';
+		const statements = extractCreateIndexStatements([result({ data: `\`\`\`sql\n${raw}\n\`\`\`` })]);
+		expect(statements).toHaveLength(1);
+		// Assert the wiring against the LIVE redactPiiContent binding: sibling aggregator
+		// test files mock.module @devops-agent/shared with an identity redactor and this
+		// package runs unisolated, so the concrete "[EMAIL_REDACTED]" replacement is only
+		// observable in solo runs. Equality with the live binding holds under both the
+		// real redactor and the stub, and catches a dropped redact call in solo runs.
+		expect(statements[0]).toBe(redactPiiContent(raw));
+	});
 });
 
 describe("ensureVerbatimDdl (SIO-1140)", () => {
@@ -100,6 +128,14 @@ Confidence: 0.74`;
 		const { answer, appended } = ensureVerbatimDdl(answerWithoutDdl, [result({ data: "healthy cluster" })]);
 		expect(appended).toHaveLength(0);
 		expect(answer).toBe(answerWithoutDdl);
+	});
+
+	test("semicolon-only difference between prose and answer does not trigger an append", () => {
+		const proseWithSemicolon = "```sql\nCREATE INDEX idx_orders_status ON orders(status);\n```";
+		const answerWithoutSemicolon = "Body.\n\nCREATE INDEX idx_orders_status ON orders(status)\n\nConfidence: 0.8";
+		const { answer, appended } = ensureVerbatimDdl(answerWithoutSemicolon, [result({ data: proseWithSemicolon })]);
+		expect(appended).toHaveLength(0);
+		expect(answer).toBe(answerWithoutSemicolon);
 	});
 
 	test("appends at the end when the answer has no Confidence line", () => {

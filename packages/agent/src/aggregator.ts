@@ -743,14 +743,27 @@ export function rewriteNoIndexMisread(answer: string, flagged: string[]): string
 // SIO-1140: the Index Advisor's CREATE INDEX DDL (SIO-1137 chain) is the report's one
 // copy-paste artifact, and multi-source synthesis compressed it into a prose key list.
 // The verbatimDdlRule prompt instruction is the primary fix; this deterministic backstop
-// guarantees the statements survive. A statement is real DDL only when it has the
-// `ON <keyspace>(<keys>)` shape -- a prose mention of "CREATE INDEX" never matches.
-const CREATE_INDEX_RE = /CREATE\s+INDEX[\s\S]*?(?=;|```|\n\s*\n|$)/gi;
-const CREATE_INDEX_SHAPE_RE = /\bON\b[\s\S]*\(/i;
+// guarantees the statements survive. A statement is real DDL only when it has the full
+// `CREATE INDEX <name> ON <keyspace>(<keys>)` shape with a key-list-looking paren group
+// -- prose mentioning "CREATE INDEX" never matches. A trailing semicolon is consumed so
+// terminated statements are reproduced verbatim.
+const CREATE_INDEX_RE = /CREATE\s+INDEX[\s\S]*?(?:;|(?=```|\n\s*\n|$))/gi;
+const CREATE_INDEX_SHAPE_RE = /^CREATE\s+INDEX\s+(?:`[^`]+`|[A-Za-z_][\w#-]*)\s+ON\s+[^(]*\(([^)]*)\)/i;
 const MAX_VERBATIM_DDL_STATEMENTS = 10;
 
+// Trailing-semicolon-insensitive so `...(a);` in prose matches `...(a)` in the answer.
 function normalizeDdl(s: string): string {
-	return s.replace(/\s+/g, " ").trim();
+	return s.replace(/\s+/g, " ").replace(/;\s*$/, "").trim();
+}
+
+// A paren group counts as a key list when it is backticked/dotted/comma-separated
+// (advisor output always is) or a single bare identifier. Multi-word English like
+// "(not production)" is rejected so prose mimicking DDL is never emitted as SQL.
+function looksLikeKeyList(inner: string): boolean {
+	const t = inner.trim();
+	if (t.length === 0) return false;
+	if (/[`,.[\]]/.test(t)) return true;
+	return /^[\w#-]+$/.test(t);
 }
 
 export function extractCreateIndexStatements(results: DataSourceResult[]): string[] {
@@ -759,8 +772,11 @@ export function extractCreateIndexStatements(results: DataSourceResult[]): strin
 	for (const r of results) {
 		if (typeof r.data !== "string" || r.data.length === 0) continue;
 		for (const m of r.data.match(CREATE_INDEX_RE) ?? []) {
-			const stmt = m.trim();
-			if (!CREATE_INDEX_SHAPE_RE.test(stmt)) continue;
+			// Redact BEFORE comparing/appending: the model answer already passed
+			// redactPiiContent, so sub-agent-derived DDL must cross the same boundary.
+			const stmt = redactPiiContent(m.trim());
+			const shape = stmt.match(CREATE_INDEX_SHAPE_RE);
+			if (!shape || !looksLikeKeyList(shape[1] ?? "")) continue;
 			const key = normalizeDdl(stmt);
 			if (seen.has(key)) continue;
 			seen.add(key);
