@@ -42,7 +42,10 @@ function setEdit(id: string, field: string, value: string) {
 	edits = { ...edits, [id]: { ...(edits[id] ?? {}), [field]: value } };
 }
 
-// Emit only edits that (a) belong to an APPROVED item and (b) differ from the original.
+// Emit any non-blank edit that belongs to an APPROVED item. A field retyped to its exact
+// original still emits -- harmless: the backend applyEdits overwrites with the same value
+// and re-gates persistence on approval, so the emit is idempotent (not diffed against the
+// original here to avoid threading the distiller value into this helper).
 function emittedEdits(): Record<string, Record<string, string>> {
 	const out: Record<string, Record<string, string>> = {};
 	for (const [id, fields] of Object.entries(edits)) {

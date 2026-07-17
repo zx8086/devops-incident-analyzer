@@ -6,6 +6,11 @@
 // break resourceId grounding, causeClass/name regexes, or bindingKind validation. Pure:
 // returns a new proposal, never mutates. A blank/whitespace edit falls back to the
 // original (a cleared textarea must not erase a field).
+//
+// The merged output is NOT re-validated against LearningProposalSchema: safety rests
+// ENTIRELY on the whitelist confining edits to unconstrained free-prose fields. If a future
+// change widens HIL_EDITABLE_FIELDS to a fielded/grounded value, it MUST add re-validation
+// here (or re-run verifyProposalEvidence) before applyLearnings consumes the result.
 
 import { HIL_EDITABLE_FIELDS, type HilItemEdits, type LearningProposal } from "./schema.ts";
 
