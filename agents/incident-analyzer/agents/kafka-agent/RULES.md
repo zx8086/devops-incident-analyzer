@@ -56,6 +56,9 @@ anything:
    is live message inflow. This is exactly how `kafka_list_dlq_topics` computes
    `recentDelta`; apply the same technique to any topic.
 
-Only after BOTH timestamp-independent measures are unavailable may you report an
-offset-growth gap — and phrase it as "historical per-window offset deltas could not
-be reconstructed because broker timestamps are unusable", never a flat "unavailable".
+Use whichever timestamp-independent measure is available: consumer-group lag
+supports a current-backlog finding (report the lag evidence you have), while two
+wall-clock samples support a recent-offset-growth finding. Either one alone is
+enough to draw a conclusion. Only when NEITHER measure is available may you report
+an offset-growth gap — and phrase it as "historical per-window offset deltas could
+not be reconstructed because broker timestamps are unusable", never a flat "unavailable".

@@ -161,10 +161,13 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 		// finalAnswer AFTER generation). enforceCorrelationsAggregate is NOT a PIPELINE_NODE, so
 		// this check is independent of the pill-emitting block below. Latest writer wins.
 		if (event.event === "on_chain_end" && event.name && ANSWER_REWRITE_NODES.has(event.name)) {
-			const output = event.data?.output;
+			const output = event.data?.output as { finalAnswer?: unknown; confidenceScore?: unknown } | undefined;
 			if (output) {
 				if (typeof output.finalAnswer === "string" && output.finalAnswer.length > 0) {
-					finalAnswer = output.finalAnswer;
+					// SIO-1141: redact PII here, exactly as the streamed chunks are (line above).
+					// finalAnswer is re-emitted verbatim as message_final and REPLACES the redacted
+					// stream, so an unredacted capture would leak PII the stream had already scrubbed.
+					finalAnswer = redactPiiContent(output.finalAnswer);
 				}
 				if (typeof output.confidenceScore === "number") {
 					confidenceScore = output.confidenceScore;
