@@ -7,11 +7,15 @@ let {
 	feedback = null,
 	onFeedback,
 	onCreateTicket,
+	ticketCreated = false,
 }: {
 	content: string;
 	feedback?: "up" | "down" | null;
 	onFeedback: (value: "up" | "down") => void;
 	onCreateTicket?: () => void;
+	// SIO-1139: once this answer has a ticket, the button reflects that and is
+	// disabled -- an answer produces at most one ticket.
+	ticketCreated?: boolean;
 } = $props();
 
 let copied = $state(false);
@@ -41,10 +45,10 @@ async function handleCopy() {
   {#if onCreateTicket}
     <button
       onclick={onCreateTicket}
-      class="flex items-center gap-1 text-xs px-2 py-1 rounded transition-colors text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+      class="flex items-center gap-1 text-xs px-2 py-1 rounded transition-colors {ticketCreated ? 'text-green-600 bg-green-50 hover:bg-green-100' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}"
     >
-      <Icon name="ticket" class="w-3 h-3" />
-      Create ticket
+      <Icon name={ticketCreated ? "check" : "ticket"} class="w-3 h-3" />
+      {ticketCreated ? "Ticket created" : "Create ticket"}
     </button>
   {/if}
 

@@ -1,6 +1,10 @@
 <script lang="ts">
 // apps/web/src/lib/components/ChatMessage.svelte
 import type { ActionResult, PendingAction, TicketProviderInfo } from "@devops-agent/shared";
+// Deep import, NOT the barrel: a value/type import of the shared index drags
+// server-only modules into the client bundle. Type-only, but kept on the deep
+// path to match CreateTicketCard's convention.
+import type { CreatedTicket } from "@devops-agent/shared/src/ticket-types.ts";
 import type { ChatMessage } from "$lib/stores/agent.svelte";
 import ActionConfirmationCard from "./ActionConfirmationCard.svelte";
 import AtlassianFindingsCard from "./AtlassianFindingsCard.svelte";
@@ -43,6 +47,10 @@ let {
 } = $props();
 
 let showTicketCard = $state(false);
+// SIO-1139: created-ticket state lives here (one ChatMessage per answer) so it
+// survives the card unmounting. Once set, the answer already has a ticket:
+// reopening the card shows the confirmation and the button is disabled.
+let createdTicket = $state<CreatedTicket | null>(null);
 </script>
 
 {#if message.role === "user"}
@@ -125,11 +133,19 @@ let showTicketCard = $state(false);
             feedback={message.feedback}
             onFeedback={(score) => onFeedback?.(index, score)}
             onCreateTicket={ticketProviders.length > 0 ? () => (showTicketCard = !showTicketCard) : undefined}
+            ticketCreated={!!createdTicket}
           />
         {/if}
 
         {#if !isStreaming && showTicketCard && ticketProviders.length > 0}
-          <CreateTicketCard content={message.content} requestId={message.requestId} providers={ticketProviders} onClose={() => (showTicketCard = false)} />
+          <CreateTicketCard
+            content={message.content}
+            requestId={message.requestId}
+            providers={ticketProviders}
+            {createdTicket}
+            onCreated={(ticket) => (createdTicket = ticket)}
+            onClose={() => (showTicketCard = false)}
+          />
         {/if}
 
         {#if !isStreaming && isLast && pendingActions.length > 0 && onActionApprove && onActionDismiss}
