@@ -68,13 +68,24 @@ export function supervise(state: AgentStateType): Send[] {
 	// Deduplicate, validate agent name, and skip datasources with no connected MCP tools
 	const deduped = [...new Set(targetSources)];
 	const toolCounts = new Map(deduped.map((id) => [id, getToolsForDataSource(id).length]));
-	const skipped = deduped.filter((id) => !AGENT_NAMES[id] || toolCounts.get(id) === 0);
-	const validSources = deduped.filter((id) => AGENT_NAMES[id] && (toolCounts.get(id) ?? 0) > 0);
+	// SIO-1142: AWS requires a resolved estate to dispatch into (queryDataSource only
+	// enters withAwsEstate when awsTargetEstates is non-empty; otherwise every AWS tool
+	// throws the estate-scope guard). Connected-but-estate-less AWS is skipped here so it
+	// surfaces as a Gaps entry rather than 13 tool errors + a confidence cap.
+	const awsHasNoEstates = (state.awsTargetEstates?.length ?? 0) === 0;
+	const isDispatchable = (id: string): boolean =>
+		Boolean(AGENT_NAMES[id]) && (toolCounts.get(id) ?? 0) > 0 && !(id === "aws" && awsHasNoEstates);
+	const skipped = deduped.filter((id) => !isDispatchable(id));
+	const validSources = deduped.filter((id) => isDispatchable(id));
 
 	// SIO-626: Build human-readable skip reasons for the aggregator
 	const skipReasons = skipped.map((id) => {
 		if (!AGENT_NAMES[id]) return `${id}: unknown datasource`;
 		if (toolCounts.get(id) === 0) return `${id}: MCP server not connected`;
+		// SIO-1142: AWS connected but no estate resolved (AWS_ESTATES unset or drift).
+		if (id === "aws" && awsHasNoEstates) {
+			return "aws: no estates resolved (AWS_ESTATES unset or no configured estate known to the server)";
+		}
 		return `${id}: skipped`;
 	});
 

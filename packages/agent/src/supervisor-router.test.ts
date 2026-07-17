@@ -2,7 +2,9 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { DataSourceResult } from "@devops-agent/shared";
 
-const VALID_DATASOURCES = new Set(["elastic", "kafka", "couchbase", "konnect"]);
+// SIO-1142: `aws` is connected here so the empty-estate skip can be exercised
+// (an unconnected AWS would already be skipped as "not connected", hiding the bug).
+const VALID_DATASOURCES = new Set(["elastic", "kafka", "couchbase", "konnect", "aws"]);
 mock.module("./mcp-bridge.ts", () => ({
 	getToolsForDataSource: (id: string) => (VALID_DATASOURCES.has(id) ? [{ name: `${id}_tool` }] : []),
 	getAllTools: () => [],
@@ -151,9 +153,42 @@ describe("supervisor router mode", () => {
 		const state = makeState({
 			extractedEntities: { dataSources: [] },
 			targetDataSources: [],
+			// SIO-1142: AWS is connected in this suite, so fallback-all includes it;
+			// give it an estate so the empty-estate skip doesn't drop it here.
+			awsTargetEstates: ["eu-oit-prd"],
 		});
 		const sends = supervise(state);
-		expect(sends).toHaveLength(4);
+		expect(sends).toHaveLength(5);
+		expect(sends.map((s) => s.args.currentDataSource)).toContain("aws");
+	});
+
+	// SIO-1142: AWS in scope + connected tools but empty awsTargetEstates must be
+	// skipped, not dispatched -- otherwise queryDataSource runs the sub-agent outside
+	// any withAwsEstate scope and every AWS tool throws the estate-scope guard.
+	test("skips AWS when awsTargetEstates is empty (no scope to dispatch into)", () => {
+		const state = makeState({
+			targetDataSources: ["elastic", "aws"],
+			awsTargetEstates: [],
+		});
+		const sends = supervise(state);
+		const dispatched = sends.map((s) => s.args.currentDataSource);
+		expect(dispatched).toContain("elastic");
+		expect(dispatched).not.toContain("aws");
+		// The skip reason is threaded to the aggregator via skippedDataSources.
+		const skipped = (sends[0]?.args as { skippedDataSources?: string[] }).skippedDataSources ?? [];
+		expect(skipped.some((r) => /aws: no estates resolved/.test(r))).toBe(true);
+	});
+
+	test("dispatches AWS when awsTargetEstates is non-empty", () => {
+		const state = makeState({
+			targetDataSources: ["elastic", "aws"],
+			awsTargetEstates: ["eu-oit-prd"],
+		});
+		const sends = supervise(state);
+		const dispatched = sends.map((s) => s.args.currentDataSource);
+		expect(dispatched).toContain("aws");
+		const skipped = (sends[0]?.args as { skippedDataSources?: string[] }).skippedDataSources ?? [];
+		expect(skipped.some((r) => /aws: no estates resolved/.test(r))).toBe(false);
 	});
 
 	test("filters multiple confident sources from mixed extractions", () => {
