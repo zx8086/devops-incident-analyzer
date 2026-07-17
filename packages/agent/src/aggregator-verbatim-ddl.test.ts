@@ -72,15 +72,24 @@ describe("extractCreateIndexStatements (SIO-1140)", () => {
 		expect(statements).toHaveLength(0);
 	});
 
-	test("passes extracted DDL through the PII redaction boundary", () => {
+	test("passes extracted DDL through the injected redactor (deterministic, order-independent)", () => {
+		// Sibling aggregator suites mock.module @devops-agent/shared with an identity
+		// redactor and this package runs unisolated, so asserting the real redactor's
+		// concrete output is file-order-dependent. Injecting a non-identity redactor
+		// makes a dropped redact call fail deterministically in any run order.
+		const raw = 'CREATE INDEX adv_owner ON users(`ownerEmail`) WHERE ownerEmail = "jane.doe@example.com";';
+		const statements = extractCreateIndexStatements([result({ data: `\`\`\`sql\n${raw}\n\`\`\`` })], (s) =>
+			s.replaceAll("jane.doe@example.com", "[EMAIL_REDACTED]"),
+		);
+		expect(statements).toHaveLength(1);
+		expect(statements[0]).toContain("[EMAIL_REDACTED]");
+		expect(statements[0]).not.toContain("jane.doe@example.com");
+	});
+
+	test("defaults to the live redactPiiContent binding when no redactor is injected", () => {
 		const raw = 'CREATE INDEX adv_owner ON users(`ownerEmail`) WHERE ownerEmail = "jane.doe@example.com";';
 		const statements = extractCreateIndexStatements([result({ data: `\`\`\`sql\n${raw}\n\`\`\`` })]);
 		expect(statements).toHaveLength(1);
-		// Assert the wiring against the LIVE redactPiiContent binding: sibling aggregator
-		// test files mock.module @devops-agent/shared with an identity redactor and this
-		// package runs unisolated, so the concrete "[EMAIL_REDACTED]" replacement is only
-		// observable in solo runs. Equality with the live binding holds under both the
-		// real redactor and the stub, and catches a dropped redact call in solo runs.
 		expect(statements[0]).toBe(redactPiiContent(raw));
 	});
 });

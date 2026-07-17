@@ -766,7 +766,13 @@ function looksLikeKeyList(inner: string): boolean {
 	return /^[\w#-]+$/.test(t);
 }
 
-export function extractCreateIndexStatements(results: DataSourceResult[]): string[] {
+// The redactor is injectable (defaulting to the production redactPiiContent) so tests
+// can assert the redaction wiring deterministically -- sibling suites mock.module the
+// shared package to an identity redactor, which would make a dropped call invisible.
+export function extractCreateIndexStatements(
+	results: DataSourceResult[],
+	redact: (s: string) => string = redactPiiContent,
+): string[] {
 	const seen = new Set<string>();
 	const out: string[] = [];
 	for (const r of results) {
@@ -774,7 +780,7 @@ export function extractCreateIndexStatements(results: DataSourceResult[]): strin
 		for (const m of r.data.match(CREATE_INDEX_RE) ?? []) {
 			// Redact BEFORE comparing/appending: the model answer already passed
 			// redactPiiContent, so sub-agent-derived DDL must cross the same boundary.
-			const stmt = redactPiiContent(m.trim());
+			const stmt = redact(m.trim());
 			const shape = stmt.match(CREATE_INDEX_SHAPE_RE);
 			if (!shape || !looksLikeKeyList(shape[1] ?? "")) continue;
 			const key = normalizeDdl(stmt);
