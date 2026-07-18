@@ -132,6 +132,16 @@ import { registerStopTool } from "./ilm/stop.js";
 // Field Mapping Tools (Get Field Mapping, Clear SQL Cursor)
 import { registerClearSqlCursorTool } from "./mapping/clear_sql_cursor.js";
 import { registerGetFieldMappingTool } from "./mapping/get_field_mapping.js";
+// SIO-1148: ML anomaly-detection tools (read stats/config + job/datafeed lifecycle).
+import { registerMlCloseJobTool } from "./ml/close_job.js";
+import { registerMlGetDatafeedStatsTool } from "./ml/get_datafeed_stats.js";
+import { registerMlGetDatafeedsTool } from "./ml/get_datafeeds.js";
+import { registerMlGetJobStatsTool } from "./ml/get_job_stats.js";
+import { registerMlListJobsTool } from "./ml/list_jobs.js";
+import { registerMlOpenJobTool } from "./ml/open_job.js";
+import { registerMlResetJobTool } from "./ml/reset_job.js";
+import { registerMlStartDatafeedTool } from "./ml/start_datafeed.js";
+import { registerMlStopDatafeedTool } from "./ml/stop_datafeed.js";
 // SIO-830: Transform tools.
 import { registerDeleteTransformTool } from "./transform/delete_transform.js";
 import { registerGetTransformTool } from "./transform/get_transform.js";
@@ -254,6 +264,13 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 	"elasticsearch_list_transforms",
 	"elasticsearch_preview_transform",
 	"elasticsearch_get_transform_notifications",
+	// SIO-1148: ML read tools (job/datafeed stats + config). Lifecycle write tools
+	// (open/close job, start/stop datafeed, reset job) are deliberately NOT listed here
+	// so withSecurityValidation runs for them.
+	"elasticsearch_ml_list_jobs",
+	"elasticsearch_ml_get_job_stats",
+	"elasticsearch_ml_get_datafeed_stats",
+	"elasticsearch_ml_get_datafeeds",
 	"elasticsearch_list_tasks",
 	"elasticsearch_tasks_get_task",
 	"elasticsearch_field_usage_stats",
@@ -506,6 +523,19 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 	registerDeleteTransformTool(server, esClient);
 	registerPreviewTransformTool(server, esClient);
 	registerGetTransformNotificationsTool(server, esClient);
+
+	// SIO-1148: Register ML anomaly-detection tools. Read tools (in READ_ONLY_TOOLS above)
+	// skip security validation; the 5 lifecycle write tools do not. reset_job carries its own
+	// force-confirmation gate.
+	registerMlListJobsTool(server, esClient);
+	registerMlGetJobStatsTool(server, esClient);
+	registerMlGetDatafeedsTool(server, esClient);
+	registerMlGetDatafeedStatsTool(server, esClient);
+	registerMlOpenJobTool(server, esClient);
+	registerMlCloseJobTool(server, esClient);
+	registerMlStartDatafeedTool(server, esClient);
+	registerMlStopDatafeedTool(server, esClient);
+	registerMlResetJobTool(server, esClient);
 
 	// // Register Enrich Tools
 	// registerEnrichGetPolicyTool(server, esClient);
