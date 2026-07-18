@@ -1,8 +1,11 @@
 <script lang="ts">
 // apps/web/src/lib/components/LearningProposalCard.svelte
 // SIO-1126: HIL learning review gate -- the distilled LearningProposal with
-// per-item approve/reject toggles (defaulting to approve). Approved items are
-// written to the knowledge graph and agent memory on Apply.
+// per-item Approve/Reject decisions. SIO-1147: items start UNDECIDED; deciding
+// collapses the item to a one-line row with Undo, and Apply unlocks once every
+// item is decided (guarantees the full decisions map the resume endpoint
+// requires). Approved items are written to the knowledge graph and agent
+// memory on Apply.
 import type { HilLearningReviewPrompt } from "$lib/stores/agent-reducer.ts";
 
 let {
@@ -28,7 +31,9 @@ const itemIds = $derived(
 	].filter((id) => id.length > 0),
 );
 
-let rejected = $state<Set<string>>(new Set());
+// SIO-1147: three-state decisions -- absent key = undecided; each click records
+// an explicit "approve" | "reject" and Undo removes the entry again.
+let decided = $state<Record<string, "approve" | "reject">>({});
 
 // SIO-1128: local per-item text edits, keyed by id -> field -> value. Seeded lazily
 // from the distiller value; only fields that differ from the original are emitted.
@@ -49,7 +54,7 @@ function setEdit(id: string, field: string, value: string) {
 function emittedEdits(): Record<string, Record<string, string>> {
 	const out: Record<string, Record<string, string>> = {};
 	for (const [id, fields] of Object.entries(edits)) {
-		if (rejected.has(id)) continue;
+		if (decided[id] !== "approve") continue;
 		const changed: Record<string, string> = {};
 		for (const [field, value] of Object.entries(fields)) {
 			if (value.trim().length > 0) changed[field] = value;
@@ -59,38 +64,77 @@ function emittedEdits(): Record<string, Record<string, string>> {
 	return out;
 }
 
-function toggle(id: string) {
-	const next = new Set(rejected);
-	if (next.has(id)) {
-		next.delete(id);
-	} else {
-		next.add(id);
-	}
-	rejected = next;
+function decide(id: string, decision: "approve" | "reject") {
+	decided = { ...decided, [id]: decision };
 }
 
+function undo(id: string) {
+	const { [id]: _removed, ...rest } = decided;
+	decided = rest;
+}
+
+// Full decisions map for the resume endpoint (explicit approval contract): every
+// item id gets an entry. Apply is gated on allDecided, so the "reject" fallback
+// for an undecided id is only reachable via Reject all.
 function decisions(rejectAll: boolean): Record<string, "approve" | "reject"> {
 	const out: Record<string, "approve" | "reject"> = {};
 	for (const id of itemIds) {
-		out[id] = rejectAll || rejected.has(id) ? "reject" : "approve";
+		out[id] = rejectAll ? "reject" : (decided[id] ?? "reject");
 	}
 	return out;
 }
 
-const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length);
+const decidedCount = $derived(itemIds.filter((id) => decided[id]).length);
+const allDecided = $derived(itemIds.every((id) => decided[id] !== undefined));
+const approvedCount = $derived(itemIds.filter((id) => decided[id] === "approve").length);
 </script>
 
-{#snippet itemToggle(id: string)}
-  <button
-    type="button"
-    onclick={() => toggle(id)}
-    {disabled}
-    class="shrink-0 px-2 py-0.5 text-xs font-medium rounded border transition-colors disabled:opacity-50 {rejected.has(id)
-      ? 'bg-white text-gray-500 border-gray-300'
-      : 'bg-tommy-navy text-white border-tommy-navy'}"
-  >
-    {rejected.has(id) ? "Rejected" : "Approved"}
-  </button>
+<!-- SIO-1147: explicit action pair -- the old single chip labeled the CURRENT state
+     ("Approved"/"Rejected") and clicking flipped it, which read as an action. An
+     undecided item shows both action buttons; clicking either collapses the item to
+     a compact decided row (see decidedRow) with an Undo affordance. -->
+{#snippet itemActions(id: string)}
+  <div class="shrink-0 flex gap-1" role="group" aria-label="Approve or reject this item">
+    <button
+      type="button"
+      onclick={() => decide(id, "approve")}
+      {disabled}
+      class="px-2 py-0.5 text-xs font-medium rounded border border-tommy-navy bg-tommy-navy text-white hover:bg-tommy-navy/90 transition-colors disabled:opacity-50"
+    >
+      Approve
+    </button>
+    <button
+      type="button"
+      onclick={() => decide(id, "reject")}
+      {disabled}
+      class="px-2 py-0.5 text-xs font-medium rounded border border-gray-300 bg-white text-gray-500 hover:bg-gray-50 transition-colors disabled:opacity-50"
+    >
+      Reject
+    </button>
+  </div>
+{/snippet}
+
+<!-- Decided items collapse to this one-line row so undecided items stay prominent.
+     The status chip mirrors LearningOutcomeCard's Applied/Rejected chip styling. -->
+{#snippet decidedRow(id: string, label: string, cls: string = "")}
+  <div class="flex items-center gap-2 rounded border border-tommy-accent-blue/30 bg-white px-2 py-1.5 {cls}">
+    <span
+      class="shrink-0 px-2 py-0.5 text-xs font-medium rounded border {decided[id] === 'approve'
+        ? 'bg-green-50 text-green-800 border-green-200'
+        : 'bg-white text-gray-500 border-gray-300'}"
+    >
+      {decided[id] === "approve" ? "Approved" : "Rejected"}
+    </span>
+    <span class="min-w-0 flex-1 truncate text-xs text-tommy-navy">{label}</span>
+    <button
+      type="button"
+      onclick={() => undo(id)}
+      {disabled}
+      class="shrink-0 text-xs font-medium text-tommy-navy underline hover:text-tommy-navy/80 transition-colors disabled:opacity-50"
+    >
+      Undo
+    </button>
+  </div>
 {/snippet}
 
 {#snippet evidence(quotes: string[])}
@@ -114,6 +158,11 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
       Learnings from {prompt.ticketKey}
     </h3>
     <p class="text-sm text-tommy-navy/80 mt-1">{prompt.message}</p>
+    <!-- SIO-1147: the review flow was previously explained nowhere in the UI. -->
+    <p class="mt-1 text-xs text-gray-600">
+      Decide each item: Approve writes it to the knowledge graph and agent memory on apply; Reject skips
+      it. Apply becomes available once every item is decided.
+    </p>
 
     <!-- SIO-1130: the linkage is shown here even when the match gate auto-confirmed
          (single ticket-mention pin) or auto-created, so the human always sees which
@@ -139,6 +188,9 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
 
     {#if proposal.rootCause}
       {@const rootCause = proposal.rootCause}
+      {#if decided[rootCause.id]}
+        {@render decidedRow(rootCause.id, `Corrected root cause: ${rootCause.causeClass}`, "mt-2")}
+      {:else}
       <div class="mt-2 rounded border border-tommy-accent-blue/30 bg-white px-2 py-1.5">
         <div class="flex items-start justify-between gap-2">
           <div class="text-xs text-tommy-navy">
@@ -172,16 +224,20 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
               <p class="mt-0.5 text-gray-600">Links resolution to runbook {rootCause.runbookFilename}</p>
             {/if}
           </div>
-          {@render itemToggle(rootCause.id)}
+          {@render itemActions(rootCause.id)}
         </div>
         {@render evidence(rootCause.evidence)}
       </div>
+      {/if}
     {/if}
 
     {#if proposal.memoryFacts.length > 0}
       <p class="mt-2 text-xs font-semibold text-tommy-navy">Durable memory facts</p>
       <div class="mt-1 space-y-1">
         {#each proposal.memoryFacts as fact (fact.id)}
+          {#if decided[fact.id]}
+            {@render decidedRow(fact.id, editValue(fact.id, "text", fact.text))}
+          {:else}
           <div class="rounded border border-tommy-accent-blue/30 bg-white px-2 py-1.5">
             <div class="flex items-start justify-between gap-2">
               <textarea
@@ -192,10 +248,11 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
                 value={editValue(fact.id, "text", fact.text)}
                 oninput={(e) => setEdit(fact.id, "text", e.currentTarget.value)}
               ></textarea>
-              {@render itemToggle(fact.id)}
+              {@render itemActions(fact.id)}
             </div>
             {@render evidence(fact.evidence)}
           </div>
+          {/if}
         {/each}
       </div>
     {/if}
@@ -204,6 +261,12 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
       <p class="mt-2 text-xs font-semibold text-tommy-navy">Telemetry binding corrections</p>
       <div class="mt-1 space-y-1">
         {#each proposal.bindings as binding (binding.id)}
+          {#if decided[binding.id]}
+            {@render decidedRow(
+              binding.id,
+              `${binding.action.toUpperCase()} ${binding.service} ${binding.action === "invalidate" ? "!->" : "->"} ${binding.datasource} ${binding.bindingKind}=${binding.resourceId}`,
+            )}
+          {:else}
           <div class="rounded border border-tommy-accent-blue/30 bg-white px-2 py-1.5">
             <div class="flex items-start justify-between gap-2">
               <div class="text-xs text-tommy-navy">
@@ -223,10 +286,11 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
                   oninput={(e) => setEdit(binding.id, "reason", e.currentTarget.value)}
                 ></textarea>
               </div>
-              {@render itemToggle(binding.id)}
+              {@render itemActions(binding.id)}
             </div>
             {@render evidence(binding.evidence)}
           </div>
+          {/if}
         {/each}
       </div>
     {/if}
@@ -235,6 +299,9 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
       <p class="mt-2 text-xs font-semibold text-tommy-navy">Diagnostic heuristics (skill proposals)</p>
       <div class="mt-1 space-y-1">
         {#each proposal.heuristics as heuristic (heuristic.id)}
+          {#if decided[heuristic.id]}
+            {@render decidedRow(heuristic.id, `Heuristic: ${heuristic.name}`)}
+          {:else}
           <div class="rounded border border-tommy-accent-blue/30 bg-white px-2 py-1.5">
             <div class="flex items-start justify-between gap-2">
               <div class="text-xs text-tommy-navy">
@@ -266,10 +333,11 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
                   oninput={(e) => setEdit(heuristic.id, "procedure", e.currentTarget.value)}
                 ></textarea>
               </div>
-              {@render itemToggle(heuristic.id)}
+              {@render itemActions(heuristic.id)}
             </div>
             {@render evidence(heuristic.evidence)}
           </div>
+          {/if}
         {/each}
       </div>
     {/if}
@@ -278,7 +346,7 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
       <button
         type="button"
         onclick={() => onApply(decisions(false), emittedEdits())}
-        disabled={disabled || approvedCount === 0}
+        disabled={disabled || !allDecided}
         class="px-3 py-1.5 text-sm font-medium bg-tommy-navy text-white rounded-md hover:bg-tommy-navy/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
       >
         Apply {approvedCount} approved item{approvedCount === 1 ? "" : "s"}
@@ -291,6 +359,9 @@ const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length)
       >
         Reject all
       </button>
+      {#if !allDecided}
+        <span class="text-xs text-gray-500">{decidedCount} of {itemIds.length} decided</span>
+      {/if}
     </div>
   </div>
 </div>
