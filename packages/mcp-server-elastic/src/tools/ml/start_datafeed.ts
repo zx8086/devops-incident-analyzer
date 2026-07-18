@@ -112,10 +112,13 @@ export const registerMlStartDatafeedTool: ToolRegistrationFunction = (server: Mc
 						{ type: "timeout", details: { datafeedId: params?.datafeedId, providedTimeout: params?.timeout } },
 					);
 				}
+				// Match only the actual "job not open" wording — a bare `includes("job")` is too
+				// broad (almost every ML error names a job) and would mislabel unrelated failures.
 				if (
-					error.message.includes("cannot start") ||
-					error.message.includes("job") ||
-					error.message.includes("closed")
+					error.message.includes("job is not open") ||
+					error.message.includes("is not opened") ||
+					error.message.includes("cannot start datafeed") ||
+					(error.message.includes("datafeed") && error.message.includes("closed"))
 				) {
 					throw createMlStartDatafeedMcpError(
 						`Cannot start datafeed '${params?.datafeedId ?? "<unset>"}' — its job must be open first. Call \`elasticsearch_ml_open_job\` before starting the datafeed.`,

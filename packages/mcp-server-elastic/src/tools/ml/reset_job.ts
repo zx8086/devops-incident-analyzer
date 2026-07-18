@@ -18,12 +18,9 @@ export const mlResetJobValidator = z.object({
 		.describe(
 			"Confirmation gate. Reset is DESTRUCTIVE and IRREVERSIBLE — it permanently discards ALL accumulated anomaly results and the entire trained model for the job. You MUST pass `force: true` to proceed; without it the tool refuses and does not touch the job. Only set true after confirming the underlying cause of the model degradation is resolved.",
 		),
-	waitForCompletion: z
-		.boolean()
-		.optional()
-		.describe(
-			"If true (default in ES), wait until the reset finishes before returning. If false, returns a task id and resets asynchronously.",
-		),
+	// waitForCompletion is intentionally NOT exposed: the async path (wait_for_completion:false)
+	// returns a task id, but this tool does not poll/track that task and would still report the
+	// reset as done and the job as ready to reopen. Always force a synchronous reset instead.
 	deleteUserAnnotations: z
 		.boolean()
 		.optional()
@@ -86,7 +83,9 @@ export const registerMlResetJobTool: ToolRegistrationFunction = (server: McpServ
 
 			const result = await esClient.ml.resetJob({
 				job_id: params.jobId,
-				wait_for_completion: params.waitForCompletion,
+				// Always synchronous: the success text below tells the caller the reset is done and
+				// the job is ready to reopen, which is only true once the reset actually completes.
+				wait_for_completion: true,
 				delete_user_annotations: params.deleteUserAnnotations,
 			});
 
