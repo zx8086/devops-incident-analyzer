@@ -437,3 +437,93 @@ describe("extractKafkaFindings", () => {
 		});
 	});
 });
+
+// SIO-1149: fallback DLQ derivation. When kafka_list_dlq_topics fails/times out and the
+// sub-agent inspects a DLQ topic directly (kafka_describe_topic / kafka_get_topic_offsets),
+// derive a dlqTopics row from the offset snapshot so the typed KafkaFindingsCard still
+// carries the headline (the localcore run: 113k messages, dlqTopics:0). Offsets and
+// timestamps are bigints serialized as STRINGS; partitions[].timestamp echoes the request
+// sentinel ("-1" LATEST, "-2" EARLIEST).
+describe("derived DLQ fallback (SIO-1149)", () => {
+	const DLQ_NAME = "DLQ_T_PRIVATE_VARIANT_RICH_NOTIFICATIONS";
+
+	function describeTopicOut(name: string, partitions: Array<Record<string, unknown>>): ToolOutput {
+		return {
+			toolName: "kafka_describe_topic",
+			rawJson: { name, offsets: { name, partitions }, configs: null },
+		};
+	}
+
+	function topicOffsetsOut(name: string, partitions: Array<Record<string, unknown>>): ToolOutput {
+		return { toolName: "kafka_get_topic_offsets", rawJson: { name, partitions } };
+	}
+
+	test("derives a DLQ row from kafka_describe_topic and bypasses focus scoping", () => {
+		const outputs: ToolOutput[] = [
+			describeTopicOut(DLQ_NAME, [
+				{ partitionIndex: 0, timestamp: "-1", offset: "60000" },
+				{ partitionIndex: 1, timestamp: "-1", offset: "53000" },
+			]),
+		];
+		// Focus does NOT fuzzy-match the DLQ name -- the derived row must survive anyway.
+		const findings = extractKafkaFindings(outputs, ["localcore-service"]);
+		expect(findings.dlqTopics).toEqual([{ name: DLQ_NAME, totalMessages: 113000, recentDelta: null }]);
+	});
+
+	test("uses latest - earliest when both sentinel snapshots were sampled", () => {
+		const outputs: ToolOutput[] = [
+			topicOffsetsOut(DLQ_NAME, [{ partitionIndex: 0, timestamp: "-2", offset: "1000" }]),
+			topicOffsetsOut(DLQ_NAME, [{ partitionIndex: 0, timestamp: "-1", offset: "114000" }]),
+		];
+		const findings = extractKafkaFindings(outputs, ["localcore-service"]);
+		expect(findings.dlqTopics).toEqual([{ name: DLQ_NAME, totalMessages: 113000, recentDelta: null }]);
+	});
+
+	test("a missing timestamp field is treated as the LATEST default", () => {
+		const outputs: ToolOutput[] = [topicOffsetsOut(DLQ_NAME, [{ partitionIndex: 0, offset: "500" }])];
+		const findings = extractKafkaFindings(outputs, []);
+		expect(findings.dlqTopics).toEqual([{ name: DLQ_NAME, totalMessages: 500, recentDelta: null }]);
+	});
+
+	test("a listed row for the same topic wins over the derived snapshot", () => {
+		const outputs: ToolOutput[] = [
+			{
+				toolName: "kafka_list_dlq_topics",
+				rawJson: [{ name: DLQ_NAME, totalMessages: 113092, recentDelta: 40 }],
+			},
+			describeTopicOut(DLQ_NAME, [{ partitionIndex: 0, timestamp: "-1", offset: "999999" }]),
+		];
+		const findings = extractKafkaFindings(outputs, []);
+		expect(findings.dlqTopics).toEqual([{ name: DLQ_NAME, totalMessages: 113092, recentDelta: 40 }]);
+	});
+
+	test("non-DLQ topic names are never derived", () => {
+		const outputs: ToolOutput[] = [
+			describeTopicOut("T_PRIVATE_STOCK_RICH_NOTIFICATIONS", [{ partitionIndex: 0, timestamp: "-1", offset: "500" }]),
+		];
+		expect(extractKafkaFindings(outputs, [])).toEqual({});
+	});
+
+	test("dead-letter and dotted/suffixed DLQ forms are derived", () => {
+		const outputs: ToolOutput[] = [
+			describeTopicOut("orders-dlq", [{ partitionIndex: 0, timestamp: "-1", offset: "5" }]),
+			describeTopicOut("payments.dead-letter.v1", [{ partitionIndex: 0, timestamp: "-1", offset: "7" }]),
+		];
+		const findings = extractKafkaFindings(outputs, []);
+		expect(findings.dlqTopics).toHaveLength(2);
+	});
+
+	test("null offsets, non-object payloads, and zero totals are ignored", () => {
+		const outputs: ToolOutput[] = [
+			{ toolName: "kafka_describe_topic", rawJson: { name: DLQ_NAME, offsets: null, configs: null } },
+			{ toolName: "kafka_get_topic_offsets", rawJson: "broker error" },
+			describeTopicOut("empty-dlq", [{ partitionIndex: 0, timestamp: "-1", offset: "0" }]),
+		];
+		expect(extractKafkaFindings(outputs, [])).toEqual({});
+	});
+
+	test("non-numeric offset strings fail the partition parse and are skipped", () => {
+		const outputs: ToolOutput[] = [describeTopicOut(DLQ_NAME, [{ partitionIndex: 0, timestamp: "-1", offset: "n/a" }])];
+		expect(extractKafkaFindings(outputs, [])).toEqual({});
+	});
+});

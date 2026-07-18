@@ -43,11 +43,13 @@ import {
 	aggregate,
 	aggregateResultBudget,
 	appendRequestIdFooter,
+	collectDegradingGapBullets,
 	countDegradingGapBullets,
 	extractGapsBulletCount,
 	isDegradingGapBullet,
 	rewriteConfidenceInAnswer,
 } from "./aggregator.ts";
+import { _setGapsJudgeLlmForTesting } from "./gaps-judge.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import { getAgentsDir } from "./paths.ts";
 import { getRunbookFilenames } from "./prompt-context.ts";
@@ -991,5 +993,272 @@ describe.skipIf(!hasRunbooks)("aggregator: AWS estate scope guidance", () => {
 			}),
 		);
 		expect(getUserPromptText()).not.toContain("AWS ESTATE SCOPE");
+	});
+});
+
+// SIO-1149: regression corpus from the localcore-service run (requestId 9554e8d7). The
+// pre-SIO-1149 classifier counted 6 of these 8 bullets as degrading (incident vocabulary
+// like "ERROR-level", "(failed)", "failure pattern" plus a recovered timeout), capping an
+// accurate 0.81 report to 0.59. Only the blast_radius bullet is a genuine unrecovered
+// coverage failure.
+const LOCALCORE_RUN_BULLETS: Array<[string, boolean]> = [
+	[
+		"- Stock-service did not log ERROR-level entries for the incident window; the internal cause of the HTTP 500 it returned is unconfirmed without WARN/DEBUG log access or X-Ray trace data.",
+		false,
+	],
+	[
+		"- The specific EAN list size sent by executor-thread-716 (failed) vs. threads 704 and 721 (succeeded) has not been retrieved; payload size as the discriminating factor is inferred, not confirmed.",
+		false,
+	],
+	[
+		"- gitlab_blast_radius was unavailable (Orbit knowledge graph schema violation on both invocations); cross-project impact of the filter removal on other consumers is unassessed.",
+		true,
+	],
+	[
+		"- kafka_list_dlq_topics timed out; DLQ analysis was completed via direct topic inspection but a full DLQ topic list was not retrieved.",
+		false,
+	],
+	[
+		"- bindplane-log-group in eu-shared-services-prd is not queryable with the current IAM role (confirmed authorization error on StartQuery); application logs routed via BindPlane are not accessible via CloudWatch Logs Insights.",
+		false,
+	],
+	[
+		"- localcore-service is not present in any ECS cluster in the eu-shared-services-prd estate; its deployment location within that estate is unconfirmed.",
+		false,
+	],
+	[
+		"- Couchbase Node 135 FFDC root cause is unknown; Couchbase support engagement is required to interpret the crash dumps.",
+		false,
+	],
+	[
+		"- No Jira incident ticket exists for this failure pattern; impact scope on downstream catalog data consumers has not been assessed.",
+		false,
+	],
+];
+
+describe("isDegradingGapBullet (SIO-1149 context gating + recovery exemption)", () => {
+	for (const [line, want] of LOCALCORE_RUN_BULLETS) {
+		test(`localcore corpus ${want ? "DOES" : "does NOT"} count: ${line.slice(2, 60)}`, () => {
+			expect(isDegradingGapBullet(line)).toBe(want);
+		});
+	}
+
+	test("recovery clause exempts a recovered tool failure", () => {
+		expect(
+			isDegradingGapBullet(
+				"- kafka_list_dlq_topics timed out; DLQ analysis was completed via direct topic inspection.",
+			),
+		).toBe(false);
+	});
+
+	test("same failure without the recovery clause stays degrading", () => {
+		expect(isDegradingGapBullet("- kafka_list_dlq_topics timed out; a full DLQ topic list was not retrieved.")).toBe(
+			true,
+		);
+	});
+
+	test("prompt's literal 'recovered via' phrase is honored by the classifier", () => {
+		expect(isDegradingGapBullet("- kafka_list_dlq_topics timed out; recovered via kafka_describe_topic.")).toBe(false);
+	});
+
+	test("negation guard: 'could not be completed via' is not a recovery clause", () => {
+		expect(isDegradingGapBullet("- Elastic: the export could not be completed via the API.")).toBe(true);
+	});
+
+	test("weak arms (fail/error/exception) need tool or query context", () => {
+		expect(isDegradingGapBullet("- The nightly sync job reported errors in its final run.")).toBe(false);
+		expect(isDegradingGapBullet("- Three Elasticsearch SQL queries failed during investigation.")).toBe(true);
+		expect(isDegradingGapBullet("- GitLab: pipeline lookups errored with HTTP 500.")).toBe(true);
+	});
+
+	test("SCREAMING_SNAKE data names are not tool context for the weak arms", () => {
+		expect(isDegradingGapBullet("- 113k messages failed into DLQ_T_PRIVATE_VARIANT_RICH_NOTIFICATIONS.")).toBe(false);
+	});
+
+	test("collectDegradingGapBullets returns the flagged bullet texts", () => {
+		const report = `## Gaps\n${LOCALCORE_RUN_BULLETS.map(([l]) => l).join("\n")}\n\nConfidence: 0.81`;
+		const flagged = collectDegradingGapBullets(report);
+		expect(flagged).toHaveLength(1);
+		expect(flagged[0]).toContain("gitlab_blast_radius");
+		expect(countDegradingGapBullets(report)).toBe(1);
+	});
+});
+
+// SIO-1149: the hybrid cap path. Regex flags candidates; at/above threshold a small-model
+// judge may veto false positives; any judge failure is fail-closed (the cap applies).
+describe.skipIf(!hasRunbooks)("aggregate SIO-1149 gaps judge veto", () => {
+	const TWO_FLAGGED_GAPS = `# Incident Report
+
+## Findings
+- elastic: strong evidence.
+
+## Gaps
+- gitlab_blast_radius was unavailable (Orbit schema violation); cross-project impact is unassessed.
+- kafka_list_dlq_topics timed out; a full DLQ topic list was not retrieved.
+
+Confidence: 0.85`;
+
+	beforeEach(() => {
+		_setAggregatorLoggerForTesting(makeAggregatorCaptureLogger([]));
+		lastInvokeMessages = null;
+	});
+
+	afterEach(() => {
+		_setAggregatorLoggerForTesting(null);
+		_setGapsJudgeLlmForTesting(null);
+		mockLlmContent = "Mock aggregator output. Confidence: 0.5";
+		delete process.env.GAPS_JUDGE_ENABLED;
+	});
+
+	test("localcore regression: the 8-bullet Gaps section no longer caps and the judge is not invoked", async () => {
+		let judgeCalls = 0;
+		_setGapsJudgeLlmForTesting({
+			invoke: async () => {
+				judgeCalls += 1;
+				return { content: "" };
+			},
+		});
+		mockLlmContent = `# Incident Report
+
+## Findings
+- aws: HTTP 500 from stock-service at 03:13:19 UTC.
+
+## Gaps
+${LOCALCORE_RUN_BULLETS.map(([l]) => l).join("\n")}
+
+Confidence: 0.81`;
+		const result = await aggregate(makeState({}));
+		expect(result.confidenceScore).toBe(0.81);
+		expect(result.confidenceCap).toBeUndefined();
+		expect(result.finalAnswer).toContain("Confidence: 0.81");
+		// Regex count is 1 (< threshold 2), so the judge must never be consulted.
+		expect(judgeCalls).toBe(0);
+	});
+
+	test("judge veto exempts a false positive: 2 flagged -> 1 confirmed -> no cap", async () => {
+		_setGapsJudgeLlmForTesting({
+			invoke: async () => ({
+				content: JSON.stringify({
+					verdicts: [
+						{ index: 0, genuineUnrecoveredFailure: true, reason: "blast radius data genuinely missing" },
+						{ index: 1, genuineUnrecoveredFailure: false, reason: "DLQ data recovered by direct inspection" },
+					],
+				}),
+			}),
+		});
+		mockLlmContent = TWO_FLAGGED_GAPS;
+		const result = await aggregate(makeState({}));
+		expect(result.confidenceScore).toBe(0.85);
+		expect(result.confidenceCap).toBeUndefined();
+	});
+
+	test("judge confirming both bullets keeps the cap", async () => {
+		_setGapsJudgeLlmForTesting({
+			invoke: async () => ({
+				content: JSON.stringify({
+					verdicts: [
+						{ index: 0, genuineUnrecoveredFailure: true, reason: "real" },
+						{ index: 1, genuineUnrecoveredFailure: true, reason: "real" },
+					],
+				}),
+			}),
+		});
+		mockLlmContent = TWO_FLAGGED_GAPS;
+		const result = await aggregate(makeState({}));
+		expect(result.confidenceScore).toBe(0.59);
+		expect(result.confidenceCap).toBe(0.59);
+	});
+
+	test("judge failure is fail-closed: the regex verdict stands and the cap applies", async () => {
+		_setGapsJudgeLlmForTesting({
+			invoke: async () => {
+				throw new Error("bedrock unavailable");
+			},
+		});
+		mockLlmContent = TWO_FLAGGED_GAPS;
+		const result = await aggregate(makeState({}));
+		expect(result.confidenceScore).toBe(0.59);
+		expect(result.confidenceCap).toBe(0.59);
+	});
+
+	test("malformed judge output (verdict count mismatch) is fail-closed", async () => {
+		_setGapsJudgeLlmForTesting({
+			invoke: async () => ({
+				content: JSON.stringify({
+					verdicts: [{ index: 0, genuineUnrecoveredFailure: false, reason: "only one verdict for two bullets" }],
+				}),
+			}),
+		});
+		mockLlmContent = TWO_FLAGGED_GAPS;
+		const result = await aggregate(makeState({}));
+		expect(result.confidenceScore).toBe(0.59);
+		expect(result.confidenceCap).toBe(0.59);
+	});
+
+	test("GAPS_JUDGE_ENABLED=false skips the judge entirely", async () => {
+		process.env.GAPS_JUDGE_ENABLED = "false";
+		let judgeCalls = 0;
+		_setGapsJudgeLlmForTesting({
+			invoke: async () => {
+				judgeCalls += 1;
+				return { content: "" };
+			},
+		});
+		mockLlmContent = TWO_FLAGGED_GAPS;
+		const result = await aggregate(makeState({}));
+		expect(judgeCalls).toBe(0);
+		expect(result.confidenceScore).toBe(0.59);
+		expect(result.confidenceCap).toBe(0.59);
+	});
+});
+
+// SIO-1149: prompt rules steering the LLM toward classifiable Gaps authoring and away
+// from cross-estate absence bullets.
+describe.skipIf(!hasRunbooks)("aggregator: SIO-1149 gaps authoring + cross-estate absence prompt rules", () => {
+	const awsResult = {
+		dataSourceId: "aws",
+		status: "success" as const,
+		data: "ecs services listed",
+		duration: 100,
+		deploymentId: "estate:eu-oit-prd",
+		toolErrors: [],
+	};
+
+	afterEach(() => {
+		mockLlmContent = "Mock aggregator output. Confidence: 0.5";
+	});
+
+	test("gaps authoring discipline is always injected, with the literal recovery phrase", async () => {
+		lastInvokeMessages = null;
+		await aggregate(makeState({}));
+		const prompt = getUserPromptText();
+		expect(prompt).toContain("GAPS AUTHORING DISCIPLINE");
+		expect(prompt).toContain("recovered via");
+	});
+
+	test("multi-estate assessment injects the cross-estate absence rule", async () => {
+		lastInvokeMessages = null;
+		await aggregate(
+			makeState({
+				targetDataSources: ["aws"],
+				awsTargetEstates: ["eu-oit-prd", "eu-shared-services-prd"],
+				dataSourceResults: [awsResult, { ...awsResult, deploymentId: "estate:eu-shared-services-prd" }],
+			}),
+		);
+		const prompt = getUserPromptText();
+		expect(prompt).toContain("CROSS-ESTATE ABSENCE IS A FINDING");
+		expect(prompt).toContain("not deployed in this estate");
+	});
+
+	test("single-estate assessment omits the cross-estate absence rule", async () => {
+		lastInvokeMessages = null;
+		await aggregate(
+			makeState({
+				targetDataSources: ["aws"],
+				awsTargetEstates: ["eu-oit-prd"],
+				dataSourceResults: [awsResult],
+			}),
+		);
+		expect(getUserPromptText()).not.toContain("CROSS-ESTATE ABSENCE IS A FINDING");
 	});
 });

@@ -37,8 +37,8 @@ Design invariants:
 - **Non-fatal and best-effort.** Probes race a per-probe timeout and are wrapped in `safeProbe`; any
   failure (timeout, unreachable MCP, parse miss) simply **omits that datasource's block** and the graph
   proceeds exactly as if the node were disabled.
-- **Gated OFF by default.** `RESOLVE_IDENTIFIERS_ENABLED` must be `true`/`1`. When disabled the node is a
-  pure no-op returning `{}`.
+- **Gated ON by default.** `RESOLVE_IDENTIFIERS_ENABLED` defaults to enabled; setting it to `false`/`0`
+  disables the node (a pure no-op returning `{}`).
 
 ---
 

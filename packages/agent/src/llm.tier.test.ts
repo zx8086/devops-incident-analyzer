@@ -10,6 +10,13 @@ describe("isLightweightRole defaults (SIO-1040)", () => {
 		expect(isLightweightRole("classifier", {})).toBe(true);
 	});
 
+	// SIO-1149: the gaps veto judge ships light by design (per-bullet boolean verdicts),
+	// overridable to standard via AGENT_LLM_TIER_GAPS_JUDGE=standard.
+	test("gapsJudge is light by default and overridable to standard", () => {
+		expect(isLightweightRole("gapsJudge", {})).toBe(true);
+		expect(isLightweightRole("gapsJudge", { AGENT_LLM_TIER_GAPS_JUDGE: "standard" })).toBe(false);
+	});
+
 	test("every other tierable role is standard by default (rollout is classifier-only)", () => {
 		for (const role of [
 			"entityExtractor",
