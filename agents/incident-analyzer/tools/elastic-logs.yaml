@@ -23,6 +23,7 @@ input_schema:
         - cloud_deployment
         - billing
         - transform_management
+        - ml_monitoring
       description: Type of Elasticsearch operation to perform
     service_name:
       type: string
@@ -189,6 +190,14 @@ tool_mapping:
       - elasticsearch_delete_transform
       - elasticsearch_preview_transform
       - elasticsearch_get_transform_notifications
+    # SIO-1148: Read-only ML anomaly-detection observability. The job/datafeed LIFECYCLE
+    # write tools (open/close/reset job, start/stop datafeed) are intentionally omitted --
+    # this agent is read-only; those are reachable only via a direct MCP connection.
+    ml_monitoring:
+      - elasticsearch_ml_list_jobs
+      - elasticsearch_ml_get_job_stats
+      - elasticsearch_ml_get_datafeeds
+      - elasticsearch_ml_get_datafeed_stats
   action_descriptions:
     search: >-
       when querying logs by service, time window, and search terms (the primary log-search
@@ -234,3 +243,10 @@ tool_mapping:
       Elasticsearch `_transform` (pivot or latest aggregation). Includes `_stats` polling for
       checkpoint progress and indexer state, and reading the `.transform-notifications-*` audit
       log. Use this action for transform lifecycle work and dormancy/split-brain investigations.
+    ml_monitoring: >-
+      when inspecting anomaly-detection job or datafeed HEALTH: job state (opened/closed/failed),
+      memory status, processing time, data-count drift (empty/sparse buckets, missing fields,
+      last_data_time), and datafeed state/lag. Also lists job and datafeed configuration
+      (`results_index_name`, source indices). READ-ONLY -- this action cannot open, close, reset,
+      or start/stop anything; ML job lifecycle changes are not available to this agent. Use it to
+      assess whether an anomaly-detection model has gone stale or numb, then report the finding.
