@@ -80,17 +80,36 @@ function decisions(rejectAll: boolean): Record<string, "approve" | "reject"> {
 const approvedCount = $derived(itemIds.filter((id) => !rejected.has(id)).length);
 </script>
 
+<!-- SIO-1147: explicit two-segment control -- the old single chip labeled the CURRENT
+     state ("Approved"/"Rejected") and clicking flipped it, which read as an action.
+     Clicking the already-active segment is a no-op; `relative` keeps the active
+     segment's navy border on top of the -ml-px overlap. -->
 {#snippet itemToggle(id: string)}
-  <button
-    type="button"
-    onclick={() => toggle(id)}
-    {disabled}
-    class="shrink-0 px-2 py-0.5 text-xs font-medium rounded border transition-colors disabled:opacity-50 {rejected.has(id)
-      ? 'bg-white text-gray-500 border-gray-300'
-      : 'bg-tommy-navy text-white border-tommy-navy'}"
-  >
-    {rejected.has(id) ? "Rejected" : "Approved"}
-  </button>
+  {@const isRejected = rejected.has(id)}
+  <div class="shrink-0 inline-flex" role="group" aria-label="Approve or reject this item">
+    <button
+      type="button"
+      onclick={() => isRejected && toggle(id)}
+      {disabled}
+      aria-pressed={!isRejected}
+      class="px-2 py-0.5 text-xs font-medium rounded-l border transition-colors disabled:opacity-50 {isRejected
+        ? 'bg-white text-gray-500 border-gray-300'
+        : 'relative bg-tommy-navy text-white border-tommy-navy'}"
+    >
+      Approve
+    </button>
+    <button
+      type="button"
+      onclick={() => !isRejected && toggle(id)}
+      {disabled}
+      aria-pressed={isRejected}
+      class="-ml-px px-2 py-0.5 text-xs font-medium rounded-r border transition-colors disabled:opacity-50 {isRejected
+        ? 'relative bg-tommy-navy text-white border-tommy-navy'
+        : 'bg-white text-gray-500 border-gray-300'}"
+    >
+      Reject
+    </button>
+  </div>
 {/snippet}
 
 {#snippet evidence(quotes: string[])}
