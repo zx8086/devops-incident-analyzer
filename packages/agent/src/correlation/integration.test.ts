@@ -118,6 +118,10 @@ describe("Phase 5 correlation rules — pipeline integration", () => {
 			mitigationSteps: { investigate: [], monitor: [], escalate: [], relatedRunbooks: [] },
 			mitigationFragments: [],
 			confidenceScore: 0,
+			confidencePreCap: undefined,
+			capReasons: [] as string[],
+			confirmedDegradingGapBullets: [] as string[],
+			correlationFetchDirective: undefined,
 			lowConfidence: false,
 			pendingActions: [],
 			actionResults: [],
@@ -134,5 +138,150 @@ describe("Phase 5 correlation rules — pipeline integration", () => {
 		// At least one Send must target the elastic datasource (the rule's requiredAgent).
 		const targets = result.map((s) => s.args.currentDataSource);
 		expect(targets).toContain("elastic");
+	});
+});
+
+// SIO-1155: the log-gap recovery path. A satisfied targeted elastic fetch rewrites
+// the recovered Gaps bullets and restores the pre-cap confidence only when the gaps
+// cap was the aggregate's sole cap reason and the judge-confirmed remainder falls
+// below the threshold.
+import { LOG_GAP_RULE_NAME } from "./rules.ts";
+
+const STOCK_BULLET =
+	"- `stock-service` internal logs at 03:09-03:20 UTC on failure nights were not retrieved; the exact internal error causing the HTTP 500 is unconfirmed";
+const ORBIT_BULLET =
+	"- GitLab Orbit knowledge graph was unavailable for all three `gitlab_blast_radius` calls; cross-project import edges were not derived";
+
+function makeLogGapState(overrides: Record<string, unknown> = {}) {
+	const finalAnswer = `# Incident Report
+
+## Findings
+- strong evidence.
+
+## Gaps
+
+${STOCK_BULLET}
+${ORBIT_BULLET}
+
+Confidence: 0.59`;
+	return {
+		messages: [],
+		dataSourceResults: [
+			// The targeted correlation fetch landed: elastic now covers stock-service.
+			{
+				dataSourceId: "elastic",
+				status: "success" as const,
+				data: "Targeted fetch: stock-service 4,812 error hits in logs-apm.error-*; latest 03:13:19Z.",
+				toolErrors: [],
+			},
+		],
+		extractedEntities: { dataSources: [] },
+		confidenceCap: 0.59,
+		degradedRules: [],
+		pendingCorrelations: [
+			{
+				ruleName: LOG_GAP_RULE_NAME,
+				requiredAgent: "elastic-agent" as const,
+				triggerContext: { services: ["stock-service"], bullets: [STOCK_BULLET] },
+				attemptsRemaining: 1,
+				timeoutMs: 30_000,
+			},
+		],
+		targetDataSources: [] as string[],
+		retryCount: 0,
+		alignmentRetries: 0,
+		skippedDataSources: [] as string[],
+		isFollowUp: false,
+		finalAnswer,
+		requestId: "test-sio1155",
+		attachmentMeta: [],
+		suggestions: [],
+		normalizedIncident: {},
+		mitigationSteps: { investigate: [], monitor: [], escalate: [], relatedRunbooks: [] },
+		mitigationFragments: [],
+		confidenceScore: 0.59,
+		confidencePreCap: 0.87,
+		capReasons: ["gaps"] as string[],
+		confirmedDegradingGapBullets: [STOCK_BULLET, ORBIT_BULLET] as string[],
+		correlationFetchDirective: undefined,
+		lowConfidence: false,
+		pendingActions: [],
+		actionResults: [],
+		selectedRunbooks: null,
+		partialFailures: [],
+		...overrides,
+	} as never;
+}
+
+describe("SIO-1155 log-gap recovery in enforceCorrelationsAggregate", () => {
+	test("satisfied fetch rewrites the recovered bullet and restores the pre-cap confidence", async () => {
+		const result = await enforceCorrelationsAggregate(makeLogGapState());
+		expect(result.finalAnswer).toContain(`${STOCK_BULLET} -- recovered via elastic`);
+		expect(result.finalAnswer).toContain(ORBIT_BULLET); // untouched
+		// stock recovered -> confirmed remainder is [orbit] = 1 < threshold 2 -> restore.
+		expect(result.confidenceScore).toBe(0.87);
+		expect(result.finalAnswer).toContain("Confidence: 0.87");
+		expect(result.finalAnswer).not.toContain("Confidence: 0.59");
+		expect(result.degradedRules).toEqual([]);
+	});
+
+	test("no restore when the gaps cap was not the sole cap reason", async () => {
+		const result = await enforceCorrelationsAggregate(makeLogGapState({ capReasons: ["gaps", "premature-absence"] }));
+		expect(result.finalAnswer).toContain("recovered via elastic");
+		expect(result.confidenceScore).toBeUndefined(); // score untouched (stays capped in state)
+	});
+
+	test("no restore when the confirmed remainder still meets the threshold", async () => {
+		const extra = "- `catalog-service` request logs query timed out and could not complete.";
+		const result = await enforceCorrelationsAggregate(
+			makeLogGapState({ confirmedDegradingGapBullets: [STOCK_BULLET, ORBIT_BULLET, extra] }),
+		);
+		expect(result.finalAnswer).toContain("recovered via elastic");
+		expect(result.confidenceScore).toBeUndefined();
+	});
+
+	test("unsatisfied fetch (no elastic coverage) degrades and caps instead of recovering", async () => {
+		const result = await enforceCorrelationsAggregate(
+			makeLogGapState({
+				dataSourceResults: [
+					{ dataSourceId: "elastic", status: "success" as const, data: "no matching services found", toolErrors: [] },
+				],
+				confidenceScore: 0.87,
+				capReasons: [] as string[],
+			}),
+		);
+		expect(result.degradedRules?.map((d) => d.ruleName)).toContain(LOG_GAP_RULE_NAME);
+		expect(result.confidenceScore).toBe(0.59);
+		expect(result.finalAnswer).not.toContain("recovered via elastic");
+	});
+
+	test("router attaches the targeted fetch directive to the elastic Send", () => {
+		const state = makeLogGapState({
+			pendingCorrelations: [],
+			dataSourceResults: [],
+		});
+		const result = enforceCorrelationsRouter(state);
+		expect(Array.isArray(result)).toBe(true);
+		if (!Array.isArray(result)) throw new Error("expected Send[]");
+		const elasticSend = result.find((s) => s.args.currentDataSource === "elastic");
+		expect(elasticSend).toBeDefined();
+		expect(String(elasticSend?.args.correlationFetchDirective)).toContain("CORRELATION FETCH (SIO-1155)");
+		expect(String(elasticSend?.args.correlationFetchDirective)).toContain("stock-service");
+	});
+});
+
+// SIO-1155: pendingCorrelations arrive via Send args (task input) and are not
+// persisted unless a node returns them -- correlationFetch must echo them so
+// enforceCorrelationsAggregate sees a non-empty list (a latent SIO-681 gap; the
+// aggregate silently early-returned in every production run before this).
+import type { PendingCorrelation } from "../state.ts";
+import { withPendingEcho } from "./enforce-node.ts";
+
+describe("SIO-1155 correlationFetch pending echo", () => {
+	test("echoes the Send's pendingCorrelations alongside the fetch update", () => {
+		const state = makeLogGapState() as { pendingCorrelations: PendingCorrelation[] };
+		const update = withPendingEcho(state as never, { dataSourceResults: [] });
+		expect(update.pendingCorrelations).toBe(state.pendingCorrelations);
+		expect(update.dataSourceResults).toEqual([]);
 	});
 });

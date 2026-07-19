@@ -391,6 +391,11 @@ const GAP_TOOL_WORDS_RE = /\b(?:tool|quer(?:y|ies)|api call|mcp|invocations?|loo
 const GAP_RECOVERY_RE =
 	/(?<!\bnot )(?<!\bnot be )(?<!n't )(?<!n't be )(?<!\bnever )(?<!\bnever be )\b(?:recovered|completed|obtained|retrieved|achieved|covered|answered|succeeded)\s+(?:via|using|through|from)\b|(?<!\bnot )(?<!\bnever )\bfell back to\b|(?<!\bno )(?<!\bwithout )\bfallback (?:to|succeeded)\b/i;
 
+// SIO-709 AC #2 / SIO-1155: >= this many counted degrading Gaps bullets triggers the
+// 0.59 cap. Exported so the correlation recovery path (enforce-node.ts) applies the
+// same threshold when re-checking after a recovered fetch.
+export const GAPS_BULLET_THRESHOLD = 2;
+
 export function isDegradingGapBullet(line: string): boolean {
 	const hasToolContext = GAP_TOOL_NAME_RE.test(line) || GAP_TOOL_WORDS_RE.test(line);
 	const degraded = DEGRADED_GAP_STRONG_RE.test(line) || (DEGRADED_GAP_WEAK_RE.test(line) && hasToolContext);
@@ -1067,19 +1072,21 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	// positives. The judge only sees flagged bullets, so it can lower the count but never raise
 	// it, and any judge failure keeps the regex verdict (fail-closed: the cap applies). Clean
 	// runs (below threshold) never pay the judge call.
-	const GAPS_BULLET_THRESHOLD = 2;
 	const gapsBulletCount = extractGapsBulletCount(answer);
 	const flaggedGapBullets = collectDegradingGapBullets(answer);
 	const regexFlaggedGapCount = flaggedGapBullets.length;
-	let degradingGapsBulletCount = regexFlaggedGapCount;
+	// SIO-1155: track the bullets that COUNT (post-veto) so the correlation recovery
+	// path can subtract recovered bullets without re-running the judge.
+	let confirmedGapBullets = flaggedGapBullets;
 	let gapsJudgeUsed = false;
 	if (regexFlaggedGapCount >= GAPS_BULLET_THRESHOLD && isGapsJudgeEnabled()) {
 		gapsJudgeUsed = true;
 		const verdicts = await judgeDegradingGapBullets(flaggedGapBullets, config);
 		if (verdicts !== null) {
-			degradingGapsBulletCount = verdicts.filter(Boolean).length;
+			confirmedGapBullets = flaggedGapBullets.filter((_, i) => verdicts[i]);
 		}
 	}
+	const degradingGapsBulletCount = confirmedGapBullets.length;
 	const gapsJudgeVetoedCount = regexFlaggedGapCount - degradingGapsBulletCount;
 	const gapsCapTriggered = degradingGapsBulletCount >= GAPS_BULLET_THRESHOLD;
 	if (gapsJudgeUsed && !gapsCapTriggered) {
@@ -1125,14 +1132,18 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	const { flagged: noIndexMisread } = detectNoIndexMisread(answer, results);
 	const noIndexMisreadCapTriggered = noIndexMisread.length > 0;
 
-	const anyCapTriggered =
-		degradedSubAgents.length > 0 ||
-		gapsCapTriggered ||
-		ungroundedCapTriggered ||
-		expiryCapTriggered ||
-		prematureAbsenceCapTriggered ||
-		ungroundedRootCauseCapTriggered ||
-		noIndexMisreadCapTriggered;
+	// SIO-1155: named cap reasons replace the boolean OR so the correlation recovery
+	// path can tell whether the gaps cap was the SOLE reason (only then may a cured
+	// gap restore the pre-cap score).
+	const capReasons: string[] = [];
+	if (degradedSubAgents.length > 0) capReasons.push("degraded-subagents");
+	if (gapsCapTriggered) capReasons.push("gaps");
+	if (ungroundedCapTriggered) capReasons.push("ungrounded-blocker");
+	if (expiryCapTriggered) capReasons.push("ungrounded-expiry");
+	if (prematureAbsenceCapTriggered) capReasons.push("premature-absence");
+	if (ungroundedRootCauseCapTriggered) capReasons.push("ungrounded-root-cause");
+	if (noIndexMisreadCapTriggered) capReasons.push("no-index-misread");
+	const anyCapTriggered = capReasons.length > 0;
 	const cappedScore = anyCapTriggered ? Math.min(confidenceScore, TOOL_ERROR_CONFIDENCE_CAP) : confidenceScore;
 
 	if (degradedSubAgents.length > 0) {
@@ -1269,6 +1280,10 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		finalAnswer,
 		confidenceScore: cappedScore,
 		skillsApplied,
+		// SIO-1155: cap metadata for the correlation recovery path (enforce-node.ts).
+		confidencePreCap: confidenceScore,
+		capReasons,
+		confirmedDegradingGapBullets: gapsCapTriggered ? confirmedGapBullets : [],
 		...(anyCapTriggered && { confidenceCap: TOOL_ERROR_CONFIDENCE_CAP }),
 	};
 }

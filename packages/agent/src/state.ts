@@ -269,6 +269,36 @@ export const AgentState = Annotation.Root({
 		default: () => false,
 	}),
 
+	// SIO-1155: the raw LLM confidence before any aggregate cap. Lets the correlation
+	// recovery path restore the score when the sole cap reason was later cured.
+	confidencePreCap: Annotation<number | undefined>({
+		reducer: (_, next) => next,
+		default: () => undefined,
+	}),
+
+	// SIO-1155: which aggregate caps fired this turn ("degraded-subagents", "gaps",
+	// "ungrounded-blocker", ...). Empty when no cap triggered.
+	capReasons: Annotation<string[]>({
+		reducer: (_, next) => next,
+		default: () => [],
+	}),
+
+	// SIO-1155: the Gaps bullet texts that actually COUNTED toward the gaps cap after
+	// the SIO-1149 judge veto (vetoed bullets excluded). The recovery path subtracts
+	// recovered bullets from this set instead of re-running the judge.
+	confirmedDegradingGapBullets: Annotation<string[]>({
+		reducer: (_, next) => next,
+		default: () => [],
+	}),
+
+	// SIO-1155: targeted instruction for a correlation refetch, set per-Send by the
+	// enforceCorrelations router and rendered into the sub-agent's volatile focus
+	// block. Undefined on every normal fan-out.
+	correlationFetchDirective: Annotation<string | undefined>({
+		reducer: (_, next) => next,
+		default: () => undefined,
+	}),
+
 	// SIO-681: Rules that fired but were not fully satisfied; surfaced in the final report
 	degradedRules: Annotation<DegradedRule[]>({
 		reducer: (_, next) => next,

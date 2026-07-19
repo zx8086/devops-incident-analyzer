@@ -101,6 +101,10 @@ function makeState(overrides: Partial<AgentStateType> = {}): AgentStateType {
 		normalizedIncident: {},
 		mitigationSteps: { investigate: [], monitor: [], escalate: [], relatedRunbooks: [] },
 		confidenceScore: 0,
+		confidencePreCap: undefined,
+		capReasons: [] as string[],
+		confirmedDegradingGapBullets: [] as string[],
+		correlationFetchDirective: undefined,
 		lowConfidence: false,
 		pendingActions: [],
 		actionResults: [],
@@ -1276,5 +1280,37 @@ describe.skipIf(!hasRunbooks)("aggregator: SIO-1149 gaps authoring + cross-estat
 			}),
 		);
 		expect(getUserPromptText()).not.toContain("CROSS-ESTATE ABSENCE IS A FINDING");
+	});
+});
+
+// SIO-1155: aggregate() exposes cap metadata for the correlation recovery path.
+describe.skipIf(!hasRunbooks)("aggregate SIO-1155 cap metadata", () => {
+	afterEach(() => {
+		mockLlmContent = "Mock aggregator output. Confidence: 0.5";
+	});
+
+	test("a gaps-capped run exposes capReasons, the pre-cap score, and confirmed bullets", async () => {
+		mockLlmContent = `# Report
+
+## Gaps
+- CloudWatch Logs query timed out after 30s and could not complete.
+- Three Elasticsearch SQL queries failed with index errors.
+
+Confidence: 0.85`;
+		const result = await aggregate(makeState({}));
+		expect(result.confidenceScore).toBe(0.59);
+		expect(result.confidencePreCap).toBe(0.85);
+		expect(result.capReasons).toEqual(["gaps"]);
+		expect(result.confirmedDegradingGapBullets?.length).toBe(2);
+		expect(result.confirmedDegradingGapBullets?.[0]).toContain("timed out");
+	});
+
+	test("an uncapped run exposes empty cap metadata", async () => {
+		mockLlmContent = "# Report\n\n## Findings\n- fine\n\nConfidence: 0.9";
+		const result = await aggregate(makeState({}));
+		expect(result.confidenceScore).toBe(0.9);
+		expect(result.capReasons).toEqual([]);
+		expect(result.confirmedDegradingGapBullets).toEqual([]);
+		expect(result.confidencePreCap).toBe(0.9);
 	});
 });

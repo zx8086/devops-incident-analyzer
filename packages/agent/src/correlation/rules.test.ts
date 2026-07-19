@@ -296,3 +296,122 @@ describe("gitlab-deploy-vs-datastore-runtime (SIO-1138 unscoped guard)", () => {
 		expect(rule.trigger(makeState(true))).toBeNull();
 	});
 });
+
+// SIO-1155: the log-gap recovery rule -- Gaps-bullet parsing, service-token
+// extraction, elastic-coverage suppression, and the targeted fetch directive.
+// Fixtures are the real bullets from the 2026-07-19 localcore replay.
+import { LOG_GAP_RULE_NAME, parseLogRetrievalGaps } from "./rules.ts";
+
+describe("cloudwatch-log-gap-needs-elastic (SIO-1155)", () => {
+	const rule = findRule(LOG_GAP_RULE_NAME);
+
+	const REPLAY_GAPS_ANSWER = `# Incident Report
+
+## Findings
+- strong evidence.
+
+## Gaps
+
+- \`stock-service\` internal logs at 03:09-03:20 UTC on failure nights were not retrieved; the exact internal error causing the HTTP 500 is unconfirmed
+- \`prices-producer-v2-service\` logs were identified in the log stream list but not queried; the mechanism is unconfirmed
+- GitLab Orbit knowledge graph was unavailable for all three \`gitlab_blast_radius\` calls; cross-project import edges were not derived
+- \`aws_logs_start_query\` returned authorization errors for \`bindplane-log-group\` in eu-shared-services-prd; access state is confirmed denied
+
+Confidence: 0.87`;
+
+	function stateWith(finalAnswer: string, elasticData?: string) {
+		return {
+			finalAnswer,
+			dataSourceResults: elasticData
+				? [{ dataSourceId: "elastic", status: "success" as const, data: elasticData }]
+				: [],
+		} as never;
+	}
+
+	test("parses service-scoped log-retrieval bullets from the replay Gaps section", () => {
+		const hits = parseLogRetrievalGaps(REPLAY_GAPS_ANSWER);
+		expect(hits.map((h) => h.service)).toEqual(["stock-service", "prices-producer-v2-service"]);
+		expect(hits[0]?.bullet).toContain("were not retrieved");
+		expect(hits[1]?.bullet).toContain("not queried");
+	});
+
+	test("excludes log-group names, estate ids, and snake_case tool tokens", () => {
+		const hits = parseLogRetrievalGaps(
+			"## Gaps\n- `bindplane-log-group` and `eu-shared-services-prd` logs were not retrieved via `aws_logs_start_query`.",
+		);
+		expect(hits).toHaveLength(0);
+	});
+
+	// Replay #4: the aggregator wrote the service name unbackticked and the gap
+	// went undetected. The bare -service/-api pattern recovers it; hyphenated
+	// English and stoplisted terms stay excluded.
+	test("extracts unbackticked -service tokens (replay #4 phrasing)", () => {
+		const hits = parseLogRetrievalGaps(
+			"## Gaps\n- `aws_logs_start_query` for the stock-service log group in `eu-oit-prd` returned a `MalformedQueryException`; the stock-service's own error logs for the exact cron window were not retrieved.",
+		);
+		expect(hits.map((h) => h.service)).toEqual(["stock-service"]);
+	});
+
+	test("stoplisted and hyphenated-English bare tokens never match", () => {
+		expect(
+			parseLogRetrievalGaps("## Gaps\n- self-service portal logs were not retrieved from the read-only mirror."),
+		).toHaveLength(0);
+	});
+
+	test("non-log gap bullets never match", () => {
+		const hits = parseLogRetrievalGaps(
+			"## Gaps\n- `stock-service` deployment manifest was not retrieved from the registry.",
+		);
+		expect(hits).toHaveLength(0);
+	});
+
+	test("trigger fires with uncovered services and carries bullets in context", () => {
+		const match = rule.trigger(stateWith(REPLAY_GAPS_ANSWER));
+		expect(match).not.toBeNull();
+		expect(match?.context.services).toEqual(["stock-service", "prices-producer-v2-service"]);
+		expect(Array.isArray(match?.context.bullets)).toBe(true);
+		expect((match?.context.bullets as string[]).length).toBe(2);
+	});
+
+	test("trigger is null when an elastic result already covers every gap service", () => {
+		const covered = stateWith(
+			REPLAY_GAPS_ANSWER,
+			"Targeted fetch: stock-service 4,812 error hits; prices-producer-v2-service 0 hits in logs-*.",
+		);
+		expect(rule.trigger(covered)).toBeNull();
+	});
+
+	test("trigger is null with no finalAnswer or no Gaps section", () => {
+		expect(rule.trigger(stateWith(""))).toBeNull();
+		expect(rule.trigger(stateWith("# Report\n\n## Findings\n- fine\n\nConfidence: 0.9"))).toBeNull();
+	});
+
+	test("caps the fan at three services", () => {
+		const many = `## Gaps
+- \`svc-a\` logs were not retrieved
+- \`svc-b\` logs were not retrieved
+- \`svc-c\` logs were not retrieved
+- \`svc-d\` logs were not retrieved`;
+		const match = rule.trigger(stateWith(many));
+		expect((match?.context.services as string[]).length).toBe(3);
+	});
+
+	// CodeRabbit (PR #419): the candidate set is fixed BEFORE coverage filtering, so a
+	// satisfied fetch converges instead of rotating in the fourth service and degrading.
+	test("converges after the fetch covers the capped candidates, even with a fourth gap service", () => {
+		const many = `## Gaps
+- \`svc-a\` logs were not retrieved
+- \`svc-b\` logs were not retrieved
+- \`svc-c\` logs were not retrieved
+- \`svc-d\` logs were not retrieved`;
+		const covered = stateWith(many, "Targeted fetch: svc-a, svc-b, svc-c error hits reported.");
+		expect(rule.trigger(covered)).toBeNull();
+	});
+
+	test("fetchDirective names the gap services and forbids re-investigating the focus", () => {
+		const directive = rule.fetchDirective?.({ services: ["stock-service"], bullets: [] }) ?? "";
+		expect(directive).toContain("CORRELATION FETCH (SIO-1155)");
+		expect(directive).toContain("stock-service");
+		expect(directive).toContain("do NOT re-investigate the focus service");
+	});
+});

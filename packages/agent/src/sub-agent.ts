@@ -699,10 +699,18 @@ async function runSubAgent(
 		// (from the resolveIdentifiers node), so the sub-agent queries the real
 		// service.name / log group / scope that exists instead of guessing the token.
 		const focusBlock = buildFocusBlock(focus, new Date().toISOString(), state.resolvedIdentifiers, dataSourceId);
+		// SIO-1155: a correlation refetch carries a targeted directive (set per-Send by
+		// the enforceCorrelations router); append it to the volatile block so the
+		// sub-agent fetches the rule's entities instead of re-running the focus anchor.
+		const volatileBlock = state.correlationFetchDirective
+			? `${focusBlock}
+
+${state.correlationFetchDirective}`
+			: focusBlock;
 		// SIO-1040: cache the base sub-agent prompt (stable) so the up-to-40 ReAct
 		// iterations and per-deployment fan-out share the Bedrock cache prefix within
 		// the 5-min TTL; the per-turn investigation focus stays volatile (uncached).
-		const systemPrompt = buildCachedSystemMessage(baseSystemPrompt, focusBlock);
+		const systemPrompt = buildCachedSystemMessage(baseSystemPrompt, volatileBlock);
 		const llm = createLlm("subAgent");
 
 		if (allTools.length === 0) {

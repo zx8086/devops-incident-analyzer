@@ -1,4 +1,5 @@
 // agent/src/correlation/rules.ts
+
 import type {
 	AwsCloudWatchAlarm,
 	AwsFindings,
@@ -8,6 +9,7 @@ import type {
 	OrbitFindings,
 	ToolError,
 } from "@devops-agent/shared";
+import { z } from "zod";
 import type { AgentName, AgentStateType } from "../state";
 import { matchesFocus } from "./focus-match.ts";
 
@@ -23,6 +25,12 @@ export interface CorrelationRule {
 	// (a contradiction within already-collected data) -- there's nothing to
 	// re-fan-out to, the cap is the entire purpose.
 	skipCoverageCheck?: boolean;
+	// SIO-1155: optional targeted instruction for the refetch. Without it a
+	// correlationFetch re-runs the sub-agent on the ORIGINAL incident prompt, which
+	// repeats the focus-anchored behaviour and rarely covers the rule's entities.
+	// The router renders this into the Send's correlationFetchDirective, which the
+	// sub-agent appends to its volatile focus block.
+	fetchDirective?: (context: Record<string, unknown>) => string;
 }
 
 export interface TriggerMatch {
@@ -800,4 +808,137 @@ correlationRules.push({
 	},
 	requiredAgent: "elastic-agent",
 	retry: { attempts: 1, timeoutMs: 30_000 },
+});
+
+// SIO-1155: deterministic recovery for the "logs not retrieved" gap class. These
+// estates dual-ship ECS application logs via BindPlane to Elasticsearch (SIO-1154),
+// so a Gaps bullet reporting a service's logs as not retrieved/queried is almost
+// always recoverable from elastic. Neighbour services emerge DURING the
+// investigation (not before fan-out), so the earliest deterministic signal is the
+// aggregate answer's "## Gaps" section; this rule parses it, dispatches a TARGETED
+// elastic fetch (fetchDirective), and enforce-node's recovery path rewrites
+// recovered bullets + restores the pre-cap confidence when the gaps cap was the
+// sole cap reason. Replay evidence on the ticket: prompt-level SOUL guidance alone
+// did not change the one-hop behaviour; this is the graph-level enforcement.
+
+export const LOG_GAP_RULE_NAME = "cloudwatch-log-gap-needs-elastic";
+const MAX_LOG_GAP_SERVICES = 3;
+
+// CodeRabbit (PR #419): one schema for the trigger context both consumers parse
+// (the fetchDirective builder here and the recovery path in enforce-node.ts).
+export const LogGapTriggerContextSchema = z.object({
+	services: z.array(z.string()),
+	bullets: z.array(z.string()),
+});
+export type LogGapTriggerContext = z.infer<typeof LogGapTriggerContextSchema>;
+
+// Section parse mirrors the aggregator's Gaps parser (plain "## Gaps" heading is
+// pinned by the defensiveProseRule prompt contract).
+const LOG_GAP_GAPS_HEADING_RE = /^#{1,6}\s+gaps\s*$/im;
+const LOG_GAP_ANY_HEADING_RE = /^#{1,6}\s+\S/;
+const LOG_GAP_BULLET_RE = /^\s{0,1}[-*]\s+\S/;
+// A bullet is a log-retrieval gap when "logs" and a not-retrieved/queried verb
+// appear in either order within a bounded span (both replay shapes: "logs ... were
+// not retrieved" and "logs ... but not queried").
+const LOG_GAP_RE =
+	/\blogs?\b[^\n]{0,120}?\b(?:were\s+not|was\s+not|not)\s+(?:be\s+)?(?:retrieved|queried|obtained|inspected)\b|\b(?:not|never)\s+(?:retrieved|queried)\b[^\n]{0,60}\blogs?\b/i;
+// Service candidates: backticked, lowercase, hyphenated tokens (the aggregator
+// backticks code-ish identifiers). Excludes log-group names and estate ids, which
+// are hyphenated lowercase too but are not services elastic can search by
+// service.name.
+const LOG_GAP_SERVICE_TOKEN_RE = /`([a-z][a-z0-9]*(?:-[a-z0-9]+)+)`/g;
+// Secondary, unbackticked pattern (replay #4: the aggregator wrote "the
+// stock-service log group" WITHOUT backticks and the gap went undetected --
+// backticking is inconsistent night to night). Constrained to -service/-api
+// suffixed tokens so hyphenated English cannot match.
+const LOG_GAP_BARE_SERVICE_RE = /\b([a-z][a-z0-9]*(?:-[a-z0-9]+)*-(?:service|api)(?:-v\d+)?)\b/g;
+const BARE_SERVICE_STOPLIST = new Set(["self-service", "customer-service"]);
+
+function isServiceToken(token: string): boolean {
+	if (token.includes("log-group")) return false;
+	if (/^(?:eu|us|ap)-/.test(token)) return false;
+	if (BARE_SERVICE_STOPLIST.has(token)) return false;
+	return true;
+}
+
+export interface LogRetrievalGap {
+	service: string;
+	bullet: string;
+}
+
+export function parseLogRetrievalGaps(answer: string): LogRetrievalGap[] {
+	const out: LogRetrievalGap[] = [];
+	const seen = new Set<string>();
+	let inGaps = false;
+	for (const line of answer.split("\n")) {
+		if (inGaps && LOG_GAP_ANY_HEADING_RE.test(line)) break;
+		if (!inGaps && LOG_GAP_GAPS_HEADING_RE.test(line)) {
+			inGaps = true;
+			continue;
+		}
+		if (!inGaps || !LOG_GAP_BULLET_RE.test(line) || !LOG_GAP_RE.test(line)) continue;
+		const tokens: string[] = [];
+		for (const m of line.matchAll(LOG_GAP_SERVICE_TOKEN_RE)) tokens.push(m[1] ?? "");
+		for (const m of line.matchAll(LOG_GAP_BARE_SERVICE_RE)) tokens.push(m[1] ?? "");
+		for (const token of tokens) {
+			if (!isServiceToken(token)) continue;
+			const key = `${token}\n${line}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			out.push({ service: token, bullet: line });
+		}
+	}
+	return out;
+}
+
+// Coverage: an elastic result whose report text mentions the service. Post-fetch
+// this satisfies the rule (the targeted fetch reports on the services it queried);
+// pre-fetch a mention-without-log-query suppresses the fetch -- a deliberate
+// conservative trade documented on SIO-1155 (the replay's elastic reports did not
+// mention un-queried neighbours, so the suppression is rare in practice).
+function elasticMentionsService(state: AgentStateType, service: string): boolean {
+	const needle = service.toLowerCase();
+	return state.dataSourceResults.some(
+		(r) =>
+			r.dataSourceId === "elastic" &&
+			r.status === "success" &&
+			typeof r.data === "string" &&
+			r.data.toLowerCase().includes(needle),
+	);
+}
+
+correlationRules.push({
+	name: LOG_GAP_RULE_NAME,
+	description:
+		"Application-log gaps in the report are recoverable from Elasticsearch (BindPlane dual-ships ECS logs); fetch them before the report finalizes.",
+	trigger: (state) => {
+		if (!state.finalAnswer) return null;
+		const hits = parseLogRetrievalGaps(state.finalAnswer);
+		if (hits.length === 0) return null;
+		// CodeRabbit (PR #419): stabilize the candidate set BEFORE coverage filtering.
+		// Capping after the filter rotates a fourth service in once the first three are
+		// fetched, leaving the rule permanently degraded and recovery incomplete. The
+		// first three distinct services (document order) are the round's fixed targets;
+		// gaps beyond the cap stay honest un-recovered bullets and still count via
+		// confirmedDegradingGapBullets.
+		const candidateServices: string[] = [];
+		for (const h of hits) {
+			if (!candidateServices.includes(h.service) && candidateServices.length < MAX_LOG_GAP_SERVICES) {
+				candidateServices.push(h.service);
+			}
+		}
+		const candidates = hits.filter((h) => candidateServices.includes(h.service));
+		const uncovered = candidates.filter((h) => !elasticMentionsService(state, h.service));
+		if (uncovered.length === 0) return null;
+		const services = [...new Set(uncovered.map((h) => h.service))];
+		const bullets = [...new Set(uncovered.map((h) => h.bullet))];
+		return { context: { services, bullets } satisfies LogGapTriggerContext };
+	},
+	requiredAgent: "elastic-agent",
+	retry: { attempts: 1, timeoutMs: 30_000 },
+	fetchDirective: (context) => {
+		const parsed = LogGapTriggerContextSchema.safeParse(context);
+		const services = parsed.success ? parsed.data.services : [];
+		return `CORRELATION FETCH (SIO-1155): The report identified application-log gaps for: ${services.join(", ")}. These estates dual-ship ECS application logs via BindPlane into this cluster (logs-*), so retrieve them here. For EACH listed service: discover its real service.name variants (wildcard on the token), then run a wide error/log search over the incident window. Report per service: hit counts, matched indices, latest timestamps, and sample error messages/stack traces. This is a targeted fetch -- do NOT re-investigate the focus service.`;
+	},
 });

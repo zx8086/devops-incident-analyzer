@@ -1,11 +1,11 @@
 // agent/src/correlation/enforce-node.ts
 import { getLogger } from "@devops-agent/observability";
 import { Send } from "@langchain/langgraph";
-import { rewriteConfidenceInAnswer } from "../aggregator";
+import { GAPS_BULLET_THRESHOLD, rewriteConfidenceInAnswer } from "../aggregator";
 import type { AgentStateType, DegradedRule, PendingCorrelation } from "../state";
 import { queryDataSource } from "../sub-agent";
 import { evaluate } from "./engine";
-import { correlationRules } from "./rules";
+import { correlationRules, LOG_GAP_RULE_NAME, LogGapTriggerContextSchema } from "./rules";
 
 const logger = getLogger("agent:enforceCorrelations");
 
@@ -65,6 +65,9 @@ export function enforceCorrelationsRouter(state: AgentStateType): Send[] | "enfo
 			new Send("enforceCorrelationsAggregate", {
 				...state,
 				pendingCorrelations: skipCoveragePendings,
+				// CodeRabbit (PR #419): explicitly clear the transient directive on every
+				// Send so no spread can carry a stale instruction between rounds.
+				correlationFetchDirective: undefined,
 			}),
 		);
 	}
@@ -88,11 +91,23 @@ export function enforceCorrelationsRouter(state: AgentStateType): Send[] | "enfo
 
 	for (const [agent, pendings] of dedupedByAgent.entries()) {
 		const dataSourceId = agent.replace(/-agent$/, "");
+		// SIO-1155: rules may provide a targeted fetch directive; without one the
+		// refetch re-runs the original incident prompt and rarely covers the rule's
+		// entities. Multiple directives for one agent concatenate.
+		const directives = pendings
+			.map((p) => {
+				const ruleDef = correlationRules.find((r) => r.name === p.ruleName);
+				return ruleDef?.fetchDirective?.(p.triggerContext);
+			})
+			.filter((d): d is string => typeof d === "string" && d.length > 0);
 		sends.push(
 			new Send("correlationFetch", {
 				...state,
 				currentDataSource: dataSourceId,
 				pendingCorrelations: pendings,
+				// CodeRabbit (PR #419): always set (never conditionally spread) so a Send
+				// without directives cannot inherit a stale one.
+				correlationFetchDirective: directives.length > 0 ? directives.join("\n\n") : undefined,
 			}),
 		);
 	}
@@ -100,6 +115,9 @@ export function enforceCorrelationsRouter(state: AgentStateType): Send[] | "enfo
 	logger.info(
 		{
 			ruleCount: needsInvocation.length,
+			// SIO-1155: name the dispatched rules -- "ruleCount: 1" alone cannot be
+			// verified against a live run.
+			ruleNames: needsInvocation.map((d) => d.rule.name),
 			sendCount: sends.length,
 			skipCoverageCount: skipCoverageDecisions.length,
 			regularCount: regularDecisions.length,
@@ -107,6 +125,64 @@ export function enforceCorrelationsRouter(state: AgentStateType): Send[] | "enfo
 		"Correlation rules require dispatch; routing",
 	);
 	return sends;
+}
+
+// SIO-1155: after a satisfied log-gap fetch, the recovered Gaps bullets get an
+// explicit recovery clause (which also exempts them from the SIO-1149 classifier on
+// any later re-parse) and, when the gaps cap was the aggregate's SOLE cap reason and
+// the judge-confirmed remainder falls below the threshold, the pre-cap confidence is
+// restored. Any other cap reason, or a still-degraded rule, wins over restoration.
+const RECOVERED_BULLET_SUFFIX =
+	" -- recovered via elastic (post-report correlation fetch; see the elastic datasource findings)";
+
+interface LogGapRecovery {
+	answer: string;
+	recoveredBullets: string[];
+	restoredScore?: number;
+}
+
+function computeLogGapRecovery(state: AgentStateType, degraded: DegradedRule[]): LogGapRecovery | null {
+	const pending = state.pendingCorrelations.find((p) => p.ruleName === LOG_GAP_RULE_NAME);
+	if (!pending || !state.finalAnswer) return null;
+	// Fetch did not cover the services: the normal degraded-cap path handles it.
+	if (degraded.some((d) => d.ruleName === LOG_GAP_RULE_NAME)) return null;
+	// CodeRabbit (PR #419): both consumers of the trigger context parse one schema.
+	const parsedContext = LogGapTriggerContextSchema.safeParse(pending.triggerContext);
+	if (!parsedContext.success) return null;
+	const bullets = parsedContext.data.bullets;
+	if (bullets.length === 0) return null;
+
+	const flagged = new Set(bullets);
+	const answer = state.finalAnswer
+		.split("\n")
+		.map((line) =>
+			flagged.has(line) && !line.includes("recovered via elastic") ? line + RECOVERED_BULLET_SUFFIX : line,
+		)
+		.join("\n");
+
+	let restoredScore: number | undefined;
+	// Restoration requires: no OTHER rule degraded this round (their cap would win),
+	// the gaps cap was the aggregate's sole cap reason, and subtracting the recovered
+	// bullets drops the judge-confirmed count below the threshold. The ?? [] guards
+	// cover checkpoints resumed from graph versions predating these channels.
+	const capReasons = state.capReasons ?? [];
+	const soleGapsCap = capReasons.length === 1 && capReasons[0] === "gaps";
+	if (
+		degraded.length === 0 &&
+		soleGapsCap &&
+		typeof state.confidencePreCap === "number" &&
+		state.confidencePreCap > state.confidenceScore
+	) {
+		const remaining = (state.confirmedDegradingGapBullets ?? []).filter((b) => !flagged.has(b));
+		if (remaining.length < GAPS_BULLET_THRESHOLD) restoredScore = state.confidencePreCap;
+	}
+
+	const rewritten = restoredScore !== undefined ? rewriteConfidenceInAnswer(answer, restoredScore) : answer;
+	logger.info(
+		{ recoveredBullets: bullets.length, restored: restoredScore !== undefined, restoredScore },
+		"log-gap correlation fetch recovered report gaps",
+	);
+	return { answer: rewritten, recoveredBullets: bullets, restoredScore };
 }
 
 export async function enforceCorrelationsAggregate(state: AgentStateType): Promise<Partial<AgentStateType>> {
@@ -132,9 +208,18 @@ export async function enforceCorrelationsAggregate(state: AgentStateType): Promi
 		});
 	}
 
+	const recovery = computeLogGapRecovery(state, degraded);
+
 	if (degraded.length === 0) {
 		logger.info("All pending correlations satisfied after re-fan-out");
-		return { degradedRules: [], confidenceCap: undefined, pendingCorrelations: [] };
+		return {
+			degradedRules: [],
+			confidenceCap: undefined,
+			pendingCorrelations: [],
+			correlationFetchDirective: undefined,
+			...(recovery && { finalAnswer: recovery.answer }),
+			...(recovery?.restoredScore !== undefined && { confidenceScore: recovery.restoredScore }),
+		};
 	}
 
 	const cap = CONFIDENCE_CAP_ON_DEGRADATION;
@@ -154,7 +239,10 @@ export async function enforceCorrelationsAggregate(state: AgentStateType): Promi
 	// SIO-860: rewrite the printed confidence to the capped value so the report prose
 	// matches the gate's confidenceScore. Compose with (not replace) the banner,
 	// which is prepended above the rewritten body.
-	let updatedFinalAnswer = state.finalAnswer ? rewriteConfidenceInAnswer(state.finalAnswer, cappedScore) : undefined;
+	// SIO-1155: when the log-gap rule recovered its bullets while OTHER rules degraded,
+	// keep the bullet annotations but let the degraded cap win on the score.
+	const baseAnswer = recovery?.answer ?? state.finalAnswer;
+	let updatedFinalAnswer = baseAnswer ? rewriteConfidenceInAnswer(baseAnswer, cappedScore) : undefined;
 	if (bannerText && updatedFinalAnswer) {
 		updatedFinalAnswer = `${bannerText}\n\n${updatedFinalAnswer}`;
 	}
@@ -164,10 +252,24 @@ export async function enforceCorrelationsAggregate(state: AgentStateType): Promi
 		confidenceCap: cap,
 		confidenceScore: cappedScore,
 		pendingCorrelations: [],
+		correlationFetchDirective: undefined,
 		...(updatedFinalAnswer !== undefined && { finalAnswer: updatedFinalAnswer }),
 	};
 }
 
+// SIO-1155 (fixes a latent SIO-681 gap surfaced by the live replay): pendingCorrelations
+// arrive at correlationFetch via the Send ARGS -- the task input -- and Send args are NOT
+// persisted to the global state unless a node returns them. Without this echo the
+// downstream enforceCorrelationsAggregate always read an empty pendingCorrelations and
+// silently early-returned, making the entire re-evaluate-after-fetch path (rule
+// satisfaction, degradation cap, and the SIO-1155 recovery) a no-op in production.
+// Replay evidence: router logged a dispatch, the fetch sub-agent ran, and the aggregate
+// logged neither "satisfied" nor "degraded". With parallel Sends the overwrite reducer
+// keeps the last writer's list (pre-existing SIO-681 limitation, unchanged here).
+export function withPendingEcho(state: AgentStateType, update: Partial<AgentStateType>): Partial<AgentStateType> {
+	return { ...update, pendingCorrelations: state.pendingCorrelations };
+}
+
 export async function correlationFetch(state: AgentStateType): Promise<Partial<AgentStateType>> {
-	return queryDataSource(state);
+	return withPendingEcho(state, await queryDataSource(state));
 }
