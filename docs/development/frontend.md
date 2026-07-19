@@ -1,9 +1,9 @@
 # Frontend Development
 
 > **Targets:** SvelteKit 2.0 | Svelte 5 | Tailwind CSS v4 | Bun 1.3.9+
-> **Last updated:** 2026-04-23
+> **Last updated:** 2026-07-19
 
-The SvelteKit frontend provides the user interface for the DevOps Incident Analyzer. It renders chat-based interactions, streams agent responses via SSE, and displays pipeline progress across the six datasources (Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, GitLab, Atlassian).
+The SvelteKit frontend provides the user interface for the DevOps Incident Analyzer. It renders chat-based interactions, streams agent responses via SSE, and displays pipeline progress across the seven datasources (Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, GitLab, Atlassian, AWS).
 
 ---
 
@@ -51,17 +51,29 @@ lsof -i :5173
 
 ## Component Architecture
 
+The app has grown to 30 components (`ls apps/web/src/lib/components/*.svelte`). They fall into five families.
+
+**Chat shell** — the core conversation UI:
+
 | Component | Responsibility | Key Props |
 |-----------|---------------|-----------|
 | `ChatMessage` | Renders a single user or assistant message with markdown, progress, feedback, and follow-ups | `message`, `index`, `isLast`, `isStreaming`, `onSuggestionClick`, `onFeedback` |
 | `ChatInput` | Text input with auto-resize, Enter-to-submit (Shift+Enter for newline), file attachments, stop button during streaming | `onSend`, `isStreaming`, `onStop`, `attachments` |
-| `Icon` | SVG icon wrapper supporting 17 icon names with consistent stroke styling | `name` (typed union), `class` |
+| `Icon` | SVG icon wrapper with consistent stroke styling | `name` (typed union), `class` |
 | `MarkdownRenderer` | Converts markdown to HTML using `marked`, syntax highlighting via `highlight.js` (json, bash, javascript, yaml) | `content` |
 | `StreamingProgress` | Animated pipeline progress showing active/completed nodes during streaming | `activeNodes`, `completedNodes` |
 | `CompletedProgress` | Expandable summary of completed pipeline nodes, data source results, and tools used | `responseTime`, `toolsUsed`, `completedNodes`, `dataSourceResults` |
-| `FeedbackBar` | Thumbs up/down feedback with copy-to-clipboard, sends feedback to LangSmith | `content`, `feedback`, `onFeedback` |
+| `FeedbackBar` | Thumbs up/down feedback with copy-to-clipboard + a "Create ticket" action; sends feedback to LangSmith | `content`, `feedback`, `onFeedback` |
 | `FollowUpSuggestions` | Clickable follow-up question buttons after an agent response | `suggestions`, `onSelect` |
 | `DataSourceSelector` | Toggle bar for selecting active datasources, shows connection status | `dataSources`, `connected`, `selected` (bindable) |
+
+**Per-datasource findings cards** — one structured card per datasource result, plus the pipeline progress card: `ElasticFindingsCard`, `KafkaFindingsCard`, `CouchbaseFindingsCard`, `GitLabFindingsCard`, `AtlassianFindingsCard`, `AWSFindingsCard`, `PipelineProgressCard`.
+
+**IaC / HITL cards** — the elastic-iac proposer and its human-in-the-loop gates: `PlanReviewCard`, `DriftReportCard`, `ReconcileChoiceCard`, `SyntheticsDriftCard`, `SyntheticsPushChoiceCard`, `FleetUpgradeChoiceCard`, `ActionConfirmationCard`.
+
+**HIL-learning cards** — the learn-from-ticket lane (see [Agent Pipeline: HIL learning lane](../architecture/agent-pipeline.md#hil-learning-lane)): `LearningMatchCard` (confirm the matched incident), `LearningProposalCard` (per-item approve/reject/edit), `LearningOutcomeCard` (terminal done state).
+
+**Ticket / selectors** — `CreateTicketCard`, `AddCommentCard` (see below), and the scope selectors `AwsEstateSelector`, `ElasticDeploymentSelector`.
 
 ### Component Relationships
 
@@ -83,6 +95,16 @@ lsof -i :5173
         |
         +-- Icon             (buttons)
 ```
+
+---
+
+## Create ticket flow (SIO-1124/1139/1145)
+
+The `FeedbackBar` action row includes a **Create ticket** button that opens an inline `CreateTicketCard`. The card lets the user raise a Jira issue seeded from the message: it offers a project typeahead (with a client-side cache), issue type (default Task), an epic picker, and assignee search. The backend is a **provider-agnostic `TicketProvider`** (`packages/agent/src/ticket-providers/`): the Jira provider rides the already-connected Atlassian MCP bridge (`atlassian_createJiraIssue`), so no new credentials or transport are introduced, and the button self-gates on that write tool's presence — it is hidden while the Atlassian MCP is read-only (`ATLASSIAN_READ_ONLY=true`).
+
+Five thin route groups under `apps/web/src/routes/api/tickets/` back the card: provider discovery, project / epic / issue-type / assignee pickers, and issue creation. Once a thread has an associated ticket, the follow-up action becomes **Add as comment** (`AddCommentCard`) instead of Create ticket, posting the answer onto the existing Jira ticket via the same `TicketProvider` seam (SIO-1145). Adding a Linear or GitLab ticket provider later is one module plus one registry entry.
+
+These are the only two user-initiated write paths in the otherwise read-only UI (see the read-only nuance in [system-overview.md](../architecture/system-overview.md)).
 
 ---
 
@@ -335,3 +357,4 @@ Example skeleton:
 |------|--------|
 | 2026-04-04 | Initial version |
 | 2026-04-23 | Updated datasource count from 5 to 6 (added Atlassian alongside Elasticsearch, Kafka, Couchbase, Konnect, GitLab) |
+| 2026-07-19 | SIO-1039..1161 sync: datasource count 6 -> 7 (AWS); component list 9 -> 30, grouped into five families (chat shell, per-datasource findings cards, IaC/HITL cards, HIL-learning cards, ticket/selectors); added the Create ticket flow section (SIO-1124/1139/1145). |

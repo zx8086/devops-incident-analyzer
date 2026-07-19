@@ -1,9 +1,9 @@
 # Agent Pipeline
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-06-17
+> **Last updated:** 2026-07-19
 
-The agent pipeline is a LangGraph StateGraph that processes user queries through classification, normalization, optional runbook selection, entity extraction, optional AWS estate expansion, parallel datasource querying, cross-datasource alignment, aggregation, typed-findings extraction, mandatory cross-agent correlation enforcement, confidence gating, validation, branched mitigation proposal (investigate / monitor / escalate), follow-up generation, and topic-shift detection. The graph is defined in `packages/agent/src/graph.ts` and compiled with a checkpointer for conversation persistence. Node count: **21 base nodes, 25 with the knowledge graph enabled** — the four gated KG nodes (`recordEntities`, `graphEnrich`, `recordRootCause`, and SIO-1100 `recordBindings`) are always registered but edged only when `KNOWLEDGE_GRAPH_ENABLED` is set (the SIO-640 edge-gate idiom), so `grep -c addNode packages/agent/src/graph.ts` = 25. See [knowledge-graph.md](knowledge-graph.md) for those nodes.
+The agent pipeline is a LangGraph StateGraph that processes user queries through classification, normalization, optional runbook selection, entity extraction, optional AWS estate expansion, canonical identifier resolution, parallel datasource querying, cross-datasource alignment, aggregation, typed-findings extraction, mandatory cross-agent correlation enforcement, confidence gating, validation, branched mitigation proposal (investigate / monitor / escalate), follow-up generation, and topic-shift detection. A separate human-in-the-loop learning lane branches off `classify` on an explicit `learn from TICKET-123` command. The graph is defined in `packages/agent/src/graph.ts` and compiled with a checkpointer for conversation persistence. Node count: **31 total = 21 base nodes + 4 gated knowledge-graph nodes + 6 gated HIL-learning nodes**. The 4 KG nodes (`recordEntities`, `graphEnrich`, `recordRootCause`, SIO-1100 `recordBindings`) are always registered but edged only when `KNOWLEDGE_GRAPH_ENABLED` is exactly `"true"` or `"1"`; the 6 HIL-learning nodes (`learnFetchTicket`, `learnMatchIncident`, `learnMatchGate`, `learnDistill`, `learnReviewGate`, `applyLearnings`, SIO-1126) are always registered but routed only when `HIL_LEARNING_ENABLED` (default on) and a learn command is detected (the SIO-640 edge-gate idiom), so `grep -c addNode packages/agent/src/graph.ts` = 31. See [knowledge-graph.md](knowledge-graph.md) for the KG nodes and the [HIL learning lane](#hil-learning-lane) section below.
 
 ---
 
@@ -19,9 +19,16 @@ The agent pipeline is a LangGraph StateGraph that processes user queries through
 | classify |-------> queryComplexity === "simple"
 +----+-----+                    |
      |                          v
-     | (complex)          +-----------+     +----------+
-     v                    | responder |---->| followUp |---> END
-+-----------+             +-----------+     +----------+
+     |                    +-----------+     +----------+
+     |                    | responder |---->| followUp |---> END
+     |                    +-----------+     +----------+
+     |
+     | "learn from TICKET-123" (HIL_LEARNING_ENABLED)
+     +-------------------> [HIL learning lane] ---> END   (see below)
+     |
+     | (complex)
+     v
++-----------+
 | normalize |
 +-----+-----+
       |
@@ -40,6 +47,13 @@ The agent pipeline is a LangGraph StateGraph that processes user queries through
 | awsEstateRouter   |
 | Send per estate   |
 +--------+----------+
+         |
+         v (RESOLVE_IDENTIFIERS_ENABLED, default on)
++--------------------+
+| resolveIdentifiers |
+| loose svc -> canon |
+| per-datasource ids |
++--------+-----------+
          |
          v
 +------------+
@@ -617,7 +631,7 @@ Tool scoping is handled by `getToolsForDataSource()` in `mcp-bridge.ts`, which r
 
 ## Tool Selection
 
-Sub-agents can receive 30-67 MCP tools from their connected server. Passing all tools to a ReAct agent in a single prompt risks exceeding context window limits and degrades tool selection accuracy. The action-driven tool selection system reduces each sub-agent's tool set to 5-25 tools based on what the user's query actually needs.
+Sub-agents can receive anywhere from ~15 to 112 MCP tools from their connected server (the per-server totals in the table below). Passing all tools to a ReAct agent in a single prompt risks exceeding context window limits and degrades tool selection accuracy. The action-driven tool selection system reduces each sub-agent's tool set to 5-25 tools based on what the user's query actually needs.
 
 ### Selection Flow
 
@@ -631,7 +645,7 @@ Entity Extractor (buildActionCatalog -> LLM -> toolActions)
 Sub-Agent (selectToolsByAction -> resolveActionTools -> filtered tools)
     |
     v
-ReAct Agent (LLM with 5-25 tools instead of 30-67)
+ReAct Agent (LLM with 5-25 tools instead of the full ~15-112)
 ```
 
 ### How It Works
@@ -668,13 +682,13 @@ The `input_schema.properties.action.enum` array in the same YAML lists all valid
 
 | Datasource | Total MCP Tools | Action Categories | Typical Filtered Set |
 |------------|----------------|-------------------|---------------------|
-| elastic | 112 (96 cluster + 16 cloud/billing on `EC_API_KEY`) | 13 (search, cluster_health, node_info, index_management, shard_analysis, ingest_pipeline, template_management, alias_management, document_ops, snapshot, diagnostics, transform_management, ml_monitoring) plus cloud/billing (cloud_deployment, billing) | 3-15 |
+| elastic | 112 (96 cluster incl. 9 ML anomaly-detection + 16 cloud/billing on `EC_API_KEY`) | 13 (search, cluster_health, node_info, index_management, shard_analysis, ingest_pipeline, template_management, alias_management, document_ops, snapshot, diagnostics, transform_management, ml_monitoring) plus cloud/billing (cloud_deployment, billing) | 3-15 |
 | kafka | 15-55 (gated by SR/ksqlDB/Connect/REST Proxy + write/destructive flags) | 8 (consumer_lag, topic_throughput, dlq_messages, cluster_info, describe_topic, schema_registry, ksql, write_ops) | 3-10 |
-| couchbase | ~24 | 8 (system_vitals, fatal_requests, slow_queries, expensive_queries, index_analysis, node_status, document_ops, query_execution) | 3-8 |
+| couchbase | ~37 (SIO-1107 adopted the official Couchbase tools: buckets, INFER-based schema, EXPLAIN, Index Advisor, covering-index detectors) | 8 (system_vitals, fatal_requests, slow_queries, expensive_queries, index_analysis, node_status, document_ops, query_execution) | 3-8 |
 | konnect | 67+ | 9 (api_requests, service_config, route_config, plugin_chain, data_plane_health, certificate_status, control_plane_management, consumer_management, portal_management) | 3-12 |
 | gitlab | 21+ (proxy-discovered + 5 custom code-analysis) | 5 (issues, merge_requests, pipelines, search, code_analysis) | 3-12 |
 | atlassian | proxy-discovered (Jira + Confluence via Rovo OAuth) | jira_search, jira_get_issue, confluence_search, confluence_get_page, find_linked_incidents | 3-10 |
-| aws | per-estate (CloudWatch, EC2, ECS, Lambda, RDS, S3, X-Ray, CloudFormation, DynamoDB, ElastiCache, EventBridge/SNS/SQS, Step Functions, Config, Health, Tags) + `aws_list_estates` | logs_query, metrics_query, describe_alarms, describe_instances, describe_services, list_buckets, list_estates | 3-12 |
+| aws | per-estate (CloudWatch incl. Metrics Insights SQL + Logs Insights, EC2 + network-path tracing (route tables / NAT / NACLs / flow logs / TGW / VPC peering), ECS, Lambda, RDS, S3, X-Ray, CloudFormation, DynamoDB, ElastiCache, EventBridge/SNS/SQS, Step Functions, Config, Health, Tags) + `aws_list_estates` | logs_query, metrics_query, metrics_insights, describe_alarms, describe_instances, describe_services, list_buckets, list_estates | 3-12 |
 
 ### Fallback Chain
 
@@ -721,6 +735,29 @@ Model selection is driven by the gitagent bridge. The `llm.ts` module resolves m
 
 ---
 
+## HIL learning lane
+
+The investigation pipeline answers "what is wrong?". A separate **human-in-the-loop learning lane** (SIO-1126) closes the loop the other way: it teaches the agent from a resolved ticket. It is not a separate graph — it is six nodes inside the same StateGraph, reached only when `classify` sees an explicit `learn from TICKET-123` command (matched by a fixed regex in `packages/agent/src/learn/detect.ts`) and the `HIL_LEARNING_ENABLED` gate is on (default on; a kill-switch, since the lane never fires on normal traffic). The lane requires `KNOWLEDGE_GRAPH_ENABLED` because it reads and writes the knowledge graph.
+
+```text
+classify --(learn from TICKET-123)--> learnFetchTicket
+  -> learnMatchIncident -> learnMatchGate  [HITL interrupt #1: confirm the matching KG Incident]
+  -> learnDistill       -> learnReviewGate [HITL interrupt #2: per-item approve / reject / edit]
+  -> applyLearnings -> END
+```
+
+Compute and interrupt are split across node pairs (`learnMatchIncident`/`learnMatchGate`, `learnDistill`/`learnReviewGate`) because LangGraph re-executes an interrupted node from its top on resume — the same idiom the IaC `reviewPlan`/`reviewGate` split uses — so the embed/LLM work never re-runs on resume.
+
+- **`learnFetchTicket`** pulls the Jira ticket + comments via the Atlassian MCP; a fetch failure ends the lane with a user-facing message.
+- **`learnMatchIncident` / `learnMatchGate`** find the KG `Incident` the ticket describes (embedding KNN over past incidents) and ask the operator to confirm the match. SIO-1130 auto-confirms an unambiguous ticket-mention match.
+- **`learnDistill`** LLM-distills a `LearningProposal` — a human-corrected root cause + resolution, topology/binding corrections, transferable diagnostic heuristics, and durable memory facts — each grounded in verbatim ticket-comment quotes.
+- **`learnReviewGate`** renders the proposal as an editable review card (SIO-1128 per-item text edits; SIO-1147 explicit Approve/Reject with collapsing decided rows).
+- **`applyLearnings`** writes the approved items: the corrected root cause replaces the machine-derived one (`recordRootCause` + `linkResolution`), heuristics become `kind:skill` memory proposals, and a **PR-gated draft runbook** (SIO-1127) is opened via memory-pr (never auto-merged).
+
+Only ticketed investigations persist as durable memory — SIO-1134 curates memory so uncurated incidents are purged (SIO-1135) and confirmed facts are mirrored at curation time. Once a thread has an associated Jira ticket, follow-up answers offer "add as comment to the ticket" instead of "create ticket" (SIO-1145). Design specs (authoritative): [2026-07-16-hil-learning-loop-design.md](../superpowers/specs/2026-07-16-hil-learning-loop-design.md) and [2026-07-17-hil-learning-phase-3-design.md](../superpowers/specs/2026-07-17-hil-learning-phase-3-design.md). The durable-memory side is covered in [agent-memory.md](agent-memory.md).
+
+---
+
 ## Elastic IaC GitOps Proposer Graph
 
 The pipeline documented above answers "what is wrong?". A second, independent graph -- the **Elastic IaC GitOps proposer** (`packages/agent/src/iac/graph.ts`) -- answers "change it" for Elastic Cloud infrastructure. It is a peer, not a sub-agent: its own `IacState` annotation (`src/iac/state.ts`), its own checkpointer thread, and a separate `buildIacGraph()` entrypoint selected by the UI agent toggle (`agentName === "elastic-iac"`).
@@ -761,3 +798,4 @@ Seventeen config-edit workflows ride the `gitops` path -- version-upgrade, tier-
 | 2026-06-17 | Updated the Elastic IaC proposer summary to 24 nodes (SIO-911..932): twelve config-edit workflows + drift / synthetics-drift / Fleet-upgrade CI sub-flows + `converseIac` follow-ups; legacy local-terraform path removed (SIO-912). |
 | 2026-06-30 | Corrected node counts to verified greps: incident pipeline 20 base / 22 with the knowledge graph enabled (`recordEntities` + `graphEnrich`, SIO-850/954); elastic-iac proposer 24 -> 29 (`amendChange` + the KG/memory enrich nodes `graphEnrichIac`/`memoryEnrichIac`/`recordIacEntities`/`recordIacOutcome`, SIO-965/970/990); IaC workflow count 12 -> 16 (SIO-994/999/1019/1022/1024). New deep-dive [knowledge-graph.md](knowledge-graph.md). |
 | 2026-07-09 | SIO-1030..1038 window (SIO-1039). Documented focus-scoped finding cards (`matchesFocus()`, SIO-1030) and the grounded-blocker rule for IAM/permission gaps (SIO-1031) in `enforceCorrelations`; refreshed the Elastic IaC proposer summary for the new `ilm-delete` workflow (config-edit 16 -> 17, SIO-1037) and the `recordIacPrompt` verbatim-prompt-capture node (SIO-1038). Re-verified node counts: incident 22 -> **23** with KG (`recordRootCause` was already shipped in SIO-1026 but undercounted here); elastic-iac 29 -> **30** (`recordIacPrompt`). |
+| 2026-07-19 | SIO-1039..1161 window. Corrected the incident node count to the verified grep: **23 -> 31** — 21 base + 4 gated KG (`recordBindings` added, SIO-1100) + **6 gated HIL-learning nodes** (`learnFetchTicket`/`learnMatchIncident`/`learnMatchGate`/`learnDistill`/`learnReviewGate`/`applyLearnings`, SIO-1126). Added the [HIL learning lane](#hil-learning-lane) section (learn-from-ticket, root-cause correction, PR-gated draft runbook, curated memory SIO-1134, Jira follow-up comments SIO-1145) and the `resolveIdentifiers` node to the pipeline diagram. Refreshed tool-count rows: elastic ~93 -> **112** with `EC_API_KEY` (96 cluster incl. 9 ML anomaly-detection SIO-1148 + 16 cloud/billing; `ml_monitoring` action; the prior cluster figures were live-recount undercounts); couchbase ~24 -> **~37** (official Couchbase tools, SIO-1107); aws +CloudWatch Metrics Insights + network-path EC2 tracing (SIO-1161/1120). |

@@ -1,7 +1,7 @@
 # Troubleshooting
 
 > **Targets:** Bun 1.3.9+ | MCP SDK 1.27+ | TypeScript 5.x
-> **Last updated:** 2026-04-23
+> **Last updated:** 2026-07-19
 
 Symptom-based problem resolution for the DevOps Incident Analyzer. Issues are organized by subsystem: MCP servers, LangGraph agent, SvelteKit frontend, configuration, and AWS/AgentCore deployment.
 
@@ -22,6 +22,8 @@ lsof -i :9082    # Couchbase MCP
 lsof -i :9083    # Konnect MCP
 lsof -i :9084    # GitLab MCP
 lsof -i :9085    # Atlassian MCP
+lsof -i :9086    # Elastic IaC MCP
+lsof -i :9087    # Knowledge Graph MCP (in-process, only when KNOWLEDGE_GRAPH_ENABLED)
 lsof -i :9185    # Atlassian OAuth callback
 ```
 
@@ -158,7 +160,7 @@ KAFKA_CONSUME_TIMEOUT_MS=30000     # Default: 5000
 
 This means MCP servers are not connected or all sub-agents were skipped:
 
-1. Check that MCP servers are running on their expected ports (9080-9083)
+1. Check that MCP servers are running on their expected ports (9080-9086; 9087 only when `KNOWLEDGE_GRAPH_ENABLED`)
 2. Check that the agent's `MultiServerMCPClient` URLs are correct
 3. Check that the user selected at least one datasource in `DataSourceSelector`
 4. Check server logs for connection errors during the supervisor fan-out
@@ -456,7 +458,7 @@ Find and kill processes blocking MCP server ports:
 
 ```bash
 # Check all MCP ports
-for port in 9080 9081 9082 9083 9084 5173; do
+for port in 9080 9081 9082 9083 9084 9085 9086 9087 5173; do
   pid=$(lsof -ti :$port 2>/dev/null)
   if [ -n "$pid" ]; then
     echo "Port $port: PID $pid"
@@ -487,3 +489,4 @@ kill -9 <pid>
 |------|--------|
 | 2026-04-04 | Initial version |
 | 2026-04-23 | Added Atlassian MCP port (9085) and OAuth callback port (9185) to port-conflict checklist |
+| 2026-07-19 | Added Elastic IaC MCP (9086) and in-process Knowledge Graph MCP (9087) to the port-conflict checklist and port loop; corrected the "expected ports" range to 9080-9087. |

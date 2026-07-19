@@ -1,7 +1,7 @@
 # System Overview
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-06-17
+> **Last updated:** 2026-07-19
 
 The DevOps Incident Analyzer is a multi-datasource investigation agent that correlates production signals across Elasticsearch logs, Kafka event streams, Couchbase Capella datastores, Kong Konnect API gateway metrics, GitLab CI/CD pipelines, Atlassian (Jira/Confluence) ticket and runbook metadata, and AWS infrastructure (CloudWatch, EC2, ECS, Lambda, RDS, S3, X-Ray, etc.) across multiple accounts. A LangGraph supervisor orchestrates seven specialist sub-agents, each backed by a dedicated Model Context Protocol (MCP) server, to gather evidence and synthesize actionable incident reports with confidence scores.
 
@@ -20,7 +20,7 @@ The Incident Analyzer automates this correlation. Given a natural language query
 5. Validates the report against source data to catch hallucinations
 6. Generates follow-up suggestions for deeper investigation
 
-The agent is strictly read-only. It observes production systems but never mutates them. Write operations (Kafka produce, index deletion, gateway modification) are explicitly prohibited at the compliance layer.
+The agent's investigation is strictly read-only against production systems. It observes but never mutates them: write operations (Kafka produce, index deletion, gateway modification) are explicitly prohibited at the compliance layer. Two narrow, user-initiated, explicitly-gated write paths to Atlassian exist and are not production mutations: the "Create ticket" button raises a Jira issue (SIO-1124, provider-agnostic `TicketProvider`), and the HIL-learning lane can add follow-up answers as comments on the thread's Jira ticket (SIO-1145). Both write through the Atlassian MCP and are disabled while `ATLASSIAN_READ_ONLY=true` (the create-ticket button hides; the comment path is unavailable). Both are triggered by the user in the UI, not autonomously.
 
 ---
 
@@ -54,8 +54,8 @@ The agent is strictly read-only. It observes production systems but never mutate
 | ES   | | Kafka| | Capella| | Konnect| | GitLab | |Atlassian|
 | MCP  | | MCP  | | MCP    | | MCP    | | MCP    | | MCP     |
 | :9080| | :9081| | :9082  | | :9083  | | :9084  | | :9085   |
-| ~84  | | 15+15| | ~15    | | 15+prx | | proxy+ | | proxy+  |
-| tools| | opt  | | tools  | | tools  | | custom | | custom  |
+|96-112| | 15-55| | ~37    | | 67+    | | proxy+ | | proxy+  |
+| tools| | gated| | tools  | | tools  | | custom | | custom  |
 +------+ +------+ +--------+ +--------+ +--------+ +---------+
     |        |          |         |         |         |
     v        v          v         v         v         v
@@ -66,7 +66,7 @@ The agent is strictly read-only. It observes production systems but never mutate
 +------+ +------+ +--------+ +--------+ +--------+ +---------+
 ```
 
-Tool counts are dynamic -- they reflect connected MCP tools at runtime. Proxy-based servers (GitLab, Atlassian) discover tools from the remote native MCP endpoint at startup, so totals vary. The agent targets 210+ tools end-to-end when all servers are connected.
+Tool counts are dynamic -- they reflect connected MCP tools at runtime. The Elasticsearch `96-112` range depends on `EC_API_KEY`: 96 cluster tools always, plus 16 conditional cloud/billing tools only when that org-scoped key is set (see the component table below). Proxy-based servers (GitLab, Atlassian) discover tools from the remote native MCP endpoint at startup, so totals vary. The agent targets 210+ tools end-to-end when all servers are connected.
 
 ---
 
@@ -92,12 +92,14 @@ This architecture means tool updates happen in the MCP server packages without t
 
 ### Read-Only Analysis
 
-The agent is designed exclusively for investigation, not remediation. This constraint is enforced at multiple levels:
+The agent is designed exclusively for investigation, not remediation. This constraint targets **production systems and data sources** — the agent never mutates the systems it observes. It is enforced at multiple levels:
 
-- **Compliance config:** `agents/incident-analyzer/compliance/allowed-actions.yaml` lists permitted read operations and explicitly prohibits writes
+- **Compliance config:** `agents/incident-analyzer/compliance/allowed-actions.yaml` lists permitted read operations and explicitly prohibits writes to the observed data sources
 - **MCP server config:** write/destructive tools are disabled via feature gates (e.g., Kafka `KAFKA_ENABLE_WRITE_OPERATIONS=false`)
 - **RULES.md:** hard rule -- "Must Never write to any production system"
 - **Escalation triggers:** actions classified as `mutate_production` require human approval
+
+The only exceptions are the two user-initiated, `ATLASSIAN_READ_ONLY`-gated Atlassian write paths described above (create-ticket, SIO-1124; HIL-learning follow-up comments, SIO-1145). These write to Jira/Confluence, not to any observed production system, and only when the user clicks the control in the UI.
 
 ### Bun Workspace Monorepo
 
@@ -117,20 +119,20 @@ Each MCP server is an independent deployable package with its own entry point, c
 
 | Component | Package | Responsibility |
 |-----------|---------|---------------|
-| Agent Orchestrator | `packages/agent` | 20-node LangGraph StateGraph (23 with the knowledge graph enabled): classify, normalize, selectRunbooks, entityExtractor, awsEstateRouter, fan-out (queryDataSource), align, aggregate, extractFindings, enforceCorrelations (correlationFetch + enforceCorrelationsAggregate), checkConfidence, validate, mitigation split (proposeInvestigate / proposeMonitor / proposeEscalate + aggregateMitigation), followUp, detectTopicShift, + gated `recordEntities` / `graphEnrich` / `recordRootCause` |
+| Agent Orchestrator | `packages/agent` | 31-node LangGraph StateGraph (21 base + 4 gated KG + 6 gated HIL-learning): classify, normalize, selectRunbooks, entityExtractor, awsEstateRouter, resolveIdentifiers, fan-out (queryDataSource), align, aggregate, extractFindings, enforceCorrelations (correlationFetch + enforceCorrelationsAggregate), checkConfidence, validate, mitigation split (proposeInvestigate / proposeMonitor / proposeEscalate + aggregateMitigation), followUp, detectTopicShift, + gated KG `recordEntities` / `graphEnrich` / `recordRootCause` / `recordBindings`, + gated HIL-learning `learnFetchTicket` / `learnMatchIncident` / `learnMatchGate` / `learnDistill` / `learnReviewGate` / `applyLearnings` |
 | Knowledge Graph MCP Server | `packages/mcp-server-knowledge-graph` | In-process MCP server (:9087, SIO-967) over the embedded lbug graph: curated `kg_*` tools + read-only Cypher; gated on `KNOWLEDGE_GRAPH_ENABLED`. See [knowledge-graph.md](knowledge-graph.md) |
 | Gitagent Bridge | `packages/gitagent-bridge` | Compiles YAML/Markdown agent definitions into runtime config (prompts, models, compliance) |
 | Shared Library | `packages/shared` | Cross-package types, Zod schemas, bootstrap function, telemetry, logging |
 | Checkpointer | `packages/checkpointer` | LangGraph state persistence (memory or bun:sqlite) |
 | Observability | `packages/observability` | Pino logger factory, OpenTelemetry span helpers, request-scoped child loggers |
-| Elasticsearch MCP | `packages/mcp-server-elastic` | 112 tools (96 cluster + 16 conditional cloud/billing on `EC_API_KEY`) for cluster health, index management, search, snapshots, mappings, Elastic Cloud deployments, hardware profiles, plan auditing, and billing |
+| Elasticsearch MCP | `packages/mcp-server-elastic` | 112 tools (96 cluster incl. 9 ML anomaly-detection + 16 conditional cloud/billing on `EC_API_KEY`) for cluster health, index management, search, snapshots, mappings, ML jobs/datafeeds, Elastic Cloud deployments, hardware profiles, plan auditing, and billing |
 | Kafka MCP | `packages/mcp-server-kafka` | 15 base tools + up to 40 gated tools (Schema Registry + ksqlDB + Connect + REST Proxy) for cluster info, topic management, consumer groups, message consumption |
-| Couchbase MCP | `packages/mcp-server-couchbase` | ~15 tools for cluster health, bucket management, N1QL queries, index analysis, playbooks |
+| Couchbase MCP | `packages/mcp-server-couchbase` | ~37 tools (SIO-1107 official Couchbase tools) for cluster health, bucket listing, N1QL queries, INFER-based schema, EXPLAIN, Index Advisor + covering-index detectors, playbooks |
 | Konnect MCP | `packages/mcp-server-konnect` | 15 enhanced tools + proxy surface for services, routes, plugins, consumers, upstreams, analytics |
 | GitLab MCP | `packages/mcp-server-gitlab` | Proxy + 5-8 custom tools for CI/CD pipelines, merge requests, code analysis, issues |
 | Atlassian MCP | `packages/mcp-server-atlassian` | Proxy + custom tools for Jira issues, Confluence pages, projects, and ticket metadata |
-| AWS MCP | `packages/mcp-server-aws` | Multi-estate AWS read-only tools — CloudWatch (logs, metrics, alarms), EC2, ECS, Lambda, RDS, S3, X-Ray, CloudFormation, DynamoDB, ElastiCache, EventBridge/SNS/SQS, Step Functions, Config, Health, Tags. Cross-account `AssumeRole` per estate; `aws_list_estates` enumerates configured targets. See [AWS Estate Onboarding](../runbooks/aws-estate-onboarding.md). |
-| Web Frontend | `apps/web` | SvelteKit app with SSE streaming, 9 components, Tailwind CSS |
+| AWS MCP | `packages/mcp-server-aws` | Multi-estate AWS read-only tools — CloudWatch (logs, Logs Insights, metrics, Metrics Insights SQL, alarms), EC2 + network-path tracing (route tables, NAT gateways, NACLs, flow logs, transit gateways, VPC peering), ECS, Lambda, RDS, S3, X-Ray, CloudFormation, DynamoDB, ElastiCache, EventBridge/SNS/SQS, Step Functions, Config, Health, Tags. Cross-account `AssumeRole` per estate; `aws_list_estates` enumerates configured targets. See [AWS Estate Onboarding](../runbooks/aws-estate-onboarding.md). |
+| Web Frontend | `apps/web` | SvelteKit app with SSE streaming, 30 components (chat shell, per-datasource findings cards, IaC/HITL cards, HIL-learning cards, create-ticket), Tailwind CSS |
 | Agent Definitions | `agents/incident-analyzer` | YAML/Markdown: SOUL.md, RULES.md, agent.yaml, tools/*.yaml, skills/*.md, compliance/ |
 
 ### Package Dependency Graph
@@ -223,6 +225,11 @@ The `shared` package is the foundation -- it provides the `createMcpApplication(
 | entityExtractor|
 +-------+--------+
         |
+        v ([awsEstateRouter -> ] only when AWS targeted; then resolveIdentifiers, default on)
++--------------------+
+| resolveIdentifiers |
++--------+-----------+
+        |
         v
 +------------+
 | supervisor |
@@ -257,9 +264,11 @@ elastic kafka capella konnect gitlab atlassian aws
         |                 |
         | pass            | fail && retryCount < 2
         v                 |
-+------------------+      |
-| proposeMitigation| -----+ (retries go back to aggregate)
-+-------+----------+
++-------------------------------------------+   |
+| mitigation router (one of):               | --+ (retries go back to aggregate)
+|  proposeInvestigate / proposeMonitor /    |
+|  proposeEscalate  ->  aggregateMitigation |
++---------------------+---------------------+
         |
         v
 +-------+------+
@@ -272,12 +281,15 @@ elastic kafka capella konnect gitlab atlassian aws
     +-------+
 ```
 
+> This is a simplified overview. It omits the intermediate nodes (`extractFindings`, the `enforceCorrelations` router/aggregate pair, `detectTopicShift`) and the gated KG nodes — all covered in the numbered node reference below — plus the 6-node HIL learning lane that branches off `classify` on a `learn from TICKET-123` command, which is documented separately in [agent-pipeline.md](agent-pipeline.md#hil-learning-lane). See [agent-pipeline.md](agent-pipeline.md) for the full 31-node graph.
+
 1. **classify** -- Routes query as simple (greetings, help) or complex (infrastructure investigation). Uses regex patterns first, falls back to LLM.
 2. **normalize** -- Extracts a structured `NormalizedIncident` (severity, time window, affected services, metrics) from the user's query for downstream nodes.
 3. **selectRunbooks** (optional,) -- Picks 0-2 runbooks from the catalog via trigger grammar pre-filter then LLM selection. Enabled when `knowledge/index.yaml` has a `runbook_selection` block.
 4. **responder** -- Handles simple queries from general knowledge without querying datasources.
 5. **entityExtractor** -- Extracts services, time windows, severity, and target datasources from the query.
 6. **awsEstateRouter** -- When AWS is in target datasources, expands a single AWS dispatch into one Send per configured estate (cross-account AssumeRole). LLM never sees per-account credentials. Skipped when AWS is not targeted.
+6a. **resolveIdentifiers** (`RESOLVE_IDENTIFIERS_ENABLED`, default on) -- Resolves the loose incident service to canonical per-datasource identifiers before fan-out, seeded partly by confirmed knowledge-graph telemetry bindings (SIO-1084/1101). Self-skips when disabled or when there is nothing to resolve.
 7. **queryDataSource** -- Runs a ReAct agent with datasource-scoped MCP tools. Uses Claude Haiku for fast tool calling. Dispatched via `Send` messages from the supervisor edge, one per datasource (and per AWS estate when applicable).
 8. **align** -- Checks that all targeted datasources returned results. Retries missing or transiently-failed datasources (max 2 alignment retries). Non-retryable errors (auth, session) are skipped.
 9. **aggregate** -- Correlates findings into a unified incident report with timeline, confidence score, and per-datasource attribution.
@@ -291,7 +303,7 @@ elastic kafka capella konnect gitlab atlassian aws
 17. **followUp** -- Generates 3-4 follow-up question suggestions based on the response context.
 18. **detectTopicShift** -- On follow-up turns, detects whether the new question is a topic shift (warranting a fresh classify) or a continuation (carrying forward prior findings).
 
-Verified node count: `grep -c addNode packages/agent/src/graph.ts` = **22** — 20 base nodes (counting `proposeInvestigate`, `proposeMonitor`, `proposeEscalate` separately; 18 numbered groups above, with item 15 spanning three) plus the 2 always-registered knowledge-graph nodes (`recordEntities`, `graphEnrich`), which are edged only when `KNOWLEDGE_GRAPH_ENABLED` is set. See [knowledge-graph.md](knowledge-graph.md).
+Verified node count: `grep -c addNode packages/agent/src/graph.ts` = **31** — **21 base nodes** (the groups above, counting `resolveIdentifiers` and `proposeInvestigate` / `proposeMonitor` / `proposeEscalate` separately), plus **4 gated knowledge-graph nodes** (`recordEntities`, `graphEnrich`, `recordRootCause`, `recordBindings`) edged only when `KNOWLEDGE_GRAPH_ENABLED` is exactly `"true"` or `"1"`, plus **6 gated HIL-learning nodes** (`learnFetchTicket`, `learnMatchIncident`, `learnMatchGate`, `learnDistill`, `learnReviewGate`, `applyLearnings`) reachable only when `HIL_LEARNING_ENABLED` (default on) and an explicit `learn from TICKET-123` command routes off `classify`. See [knowledge-graph.md](knowledge-graph.md) for the KG nodes and [agent-pipeline.md](agent-pipeline.md#hil-learning-lane) for the learning lane.
 
 ---
 
@@ -340,7 +352,7 @@ Each MCP server exposes two HTTP endpoints:
 The system enforces several security boundaries:
 
 - **Network isolation:** MCP servers are internal services, not exposed to the internet. The SvelteKit frontend is the only user-facing endpoint.
-- **Read-only enforcement:** write operations are disabled at both the MCP server configuration level (feature gates) and the agent compliance level (allowed-actions.yaml).
+- **Read-only enforcement:** writes to observed production systems / data sources are disabled at both the MCP server configuration level (feature gates) and the agent compliance level (allowed-actions.yaml). The two user-initiated Atlassian write paths (create-ticket, HIL comments) are the only exceptions and are themselves gated by `ATLASSIAN_READ_ONLY`.
 - **PII redaction:** the compliance layer specifies `pii_handling: redact` for all agents, applied to data in transit.
 - **Audit logging:** all prompts, responses, tool calls, decision pathways, and model versions are logged to LangSmith with immutable, structured JSON logs and 1-year retention.
 - **Conditional HITL:** human-in-the-loop escalation triggers when confidence < 0.6, when errors are detected, or when a production mutation is attempted.
@@ -361,3 +373,4 @@ The system enforces several security boundaries:
 | 2026-06-17 | Added `aws` to the fan-out diagrams. Elastic IaC agent expanded (SIO-911..932): see [Elastic IaC GitOps Proposer](elastic-iac-proposer.md) — config-edit proposers, Fleet-upgrade sub-flow, conversational follow-ups (proposer graph now 24 nodes). |
 | 2026-06-30 | Added the in-process Knowledge Graph MCP server (port 9087, SIO-967) and the [Knowledge Graph](knowledge-graph.md) component; corrected verified node counts (incident 20/22-with-KG; elastic-iac proposer 24→29). Part of the SIO-1025 docs sync. |
 | 2026-07-09 | SIO-1030..1038 docs sync (SIO-1039): re-verified node counts to greps — incident 22→23 with KG (`recordRootCause` from SIO-1026, previously undercounted); elastic-iac proposer 29→30 (`recordIacPrompt`, SIO-1038). New `ilm-delete` workflow (SIO-1037). |
+| 2026-07-19 | SIO-1039..1161 docs sync. Reconciled the incident node count (the two conflicting 22/23 figures here) to the verified grep = **31** (21 base + 4 gated KG incl. `recordBindings` + 6 gated HIL-learning nodes); added `resolveIdentifiers` to the node list. Refreshed component-summary tool counts (elastic ~93→**112** with `EC_API_KEY` — 96 cluster incl. 9 ML anomaly tools SIO-1148 + 16 cloud/billing, a live recount that corrected the prior cluster undercount; couchbase (this doc's prior ~15, README's prior 24+)→~37 SIO-1107; AWS +CloudWatch Metrics Insights + network-path EC2 SIO-1161/1120). Frontend 9→30 components. Noted the two user-initiated Atlassian write paths (create-ticket SIO-1124, HIL Jira comments SIO-1145) alongside the read-only production stance. |

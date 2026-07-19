@@ -215,7 +215,7 @@ All three must pass. The CI pipeline runs the same checks and blocks merge on fa
 ## Where to Go Next
 
 - [Monorepo Structure](monorepo-structure.md) -- understand the package layout and dependency graph
-- [Agent Pipeline](../architecture/agent-pipeline.md) -- learn how the 20-node LangGraph pipeline processes incidents
+- [Agent Pipeline](../architecture/agent-pipeline.md) -- learn how the 31-node LangGraph pipeline processes incidents
 - [Adding MCP Tools](adding-mcp-tools.md) -- add or modify tools on any of the seven MCP servers
 - [Local Development](../deployment/local-development.md) -- Docker Compose configuration and hot reload setup
 
@@ -227,3 +227,4 @@ All three must pass. The CI pipeline runs the same checks and blocks merge on fa
 |------|--------|
 | 2026-04-04 | Initial getting started guide created |
 | 2026-04-23 | Added GitLab and Atlassian MCP servers to prerequisites, credentials table, and startup commands (6 servers total) |
+| 2026-07-19 | SIO-1039..1161 sync: updated the pipeline reference to the current 31-node LangGraph graph. |

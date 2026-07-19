@@ -239,7 +239,7 @@ Each MCP server traces to its own LangSmith project for isolation:
 
 ### Agent Eval Experiments
 
-The on-demand `bun run eval:agent` pipeline (`packages/agent/src/eval/`) runs the full 20-node graph against the `devops-incident-eval` LangSmith dataset and writes its results as a LangSmith experiment named `agent-eval-<git-sha>`. Each query produces three evaluator scores -- `datasources_covered` and `confidence_threshold` (deterministic) plus `response_quality` (gpt-4o-mini judge) -- visible in the dataset's "Experiments" tab.
+The on-demand `bun run eval:agent` pipeline (`packages/agent/src/eval/`) runs the full 31-node graph against the `devops-incident-eval` LangSmith dataset and writes its results as a LangSmith experiment named `agent-eval-<git-sha>`. Each query produces three evaluator scores -- `datasources_covered` and `confidence_threshold` (deterministic) plus `response_quality` (gpt-4o-mini judge) -- visible in the dataset's "Experiments" tab.
 
 The git-sha-tagged experiment prefix lets you compare runs across commits: filter the experiment list by prefix pattern to see whether a description tweak or graph change moved any score. Per-example breakdowns include the full agent trace, so node-level drift is debuggable from the same UI.
 

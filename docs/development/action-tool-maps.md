@@ -190,9 +190,9 @@ If an MCP tool is removed from the server, remove its name from all action categ
 
 | File | Role |
 |------|------|
-| `agents/incident-analyzer/tools/elastic-logs.yaml` | Elastic action map: 11 categories, 112 tools (96 cluster + 16 conditional cloud/billing on EC_API_KEY) |
+| `agents/incident-analyzer/tools/elastic-logs.yaml` | Elastic action map: 15 categories (incl. `transform_management`, `ml_monitoring`, `cloud_deployment`, `billing`), 112 tools (96 cluster incl. 9 ML anomaly-detection + 16 conditional cloud/billing on EC_API_KEY) |
 | `agents/incident-analyzer/tools/kafka-introspect.yaml` | Kafka action map: 12 categories, 15-55 tools (15 base + up to 40 gated SR + ksqlDB + Connect + REST Proxy; v2.0.0) |
-| `agents/incident-analyzer/tools/couchbase-health.yaml` | Couchbase action map: 8 categories, ~15 tools |
+| `agents/incident-analyzer/tools/couchbase-health.yaml` | Couchbase action map: 8 categories, ~37 tools (official Couchbase tools, SIO-1107) |
 | `agents/incident-analyzer/tools/konnect-gateway.yaml` | Konnect action map: 9 categories, 15 enhanced + proxy tools |
 | `agents/incident-analyzer/tools/gitlab-api.yaml` | GitLab action map: CI/CD, merge-request, code-analysis categories (proxy + custom) |
 | `agents/incident-analyzer/tools/atlassian-api.yaml` | Atlassian action map: Jira issue search, Confluence pages, ticket metadata (proxy + custom) |
