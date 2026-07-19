@@ -221,7 +221,7 @@ The `elasticsearch_search` tool uses a separate per-call timeout from the shared
 
 ### Elastic Cloud Deployment + Billing API
 
-These variables enable the 7 organization-scoped tools (`elasticsearch_cloud_*` and `elasticsearch_billing_*`) that talk to `https://api.elastic-cloud.com`. They are **independent** of the per-deployment cluster API keys above and use a separate Elastic Cloud organization API key. When `EC_API_KEY` is unset, those 7 tools simply do not register and the server boots normally for self-hosted users.
+These variables enable the 16 organization-scoped tools (`elasticsearch_cloud_*` and `elasticsearch_billing_*`) that talk to `https://api.elastic-cloud.com`. They are **independent** of the per-deployment cluster API keys above and use a separate Elastic Cloud organization API key. When `EC_API_KEY` is unset, those 16 tools simply do not register and the server boots normally for self-hosted users.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|

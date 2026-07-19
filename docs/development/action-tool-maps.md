@@ -190,7 +190,7 @@ If an MCP tool is removed from the server, remove its name from all action categ
 
 | File | Role |
 |------|------|
-| `agents/incident-analyzer/tools/elastic-logs.yaml` | Elastic action map: 15 categories (incl. `ml_monitoring`, `transform_management`, `cloud_deployment`, `billing`), ~102 tools (86 cluster incl. 9 ML anomaly-detection + 16 conditional cloud/billing on EC_API_KEY) |
+| `agents/incident-analyzer/tools/elastic-logs.yaml` | Elastic action map: 15 categories (incl. `ml_monitoring`, `transform_management`, `cloud_deployment`, `billing`), 112 tools with EC_API_KEY (96 cluster incl. 9 ML anomaly-detection + 16 conditional cloud/billing) |
 | `agents/incident-analyzer/tools/kafka-introspect.yaml` | Kafka action map: 12 categories, 15-55 tools (15 base + up to 40 gated SR + ksqlDB + Connect + REST Proxy; v2.0.0) |
 | `agents/incident-analyzer/tools/couchbase-health.yaml` | Couchbase action map: 8 categories, ~37 tools (official Couchbase tools, SIO-1107) |
 | `agents/incident-analyzer/tools/konnect-gateway.yaml` | Konnect action map: 9 categories, 15 enhanced + proxy tools |

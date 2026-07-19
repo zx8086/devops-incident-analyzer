@@ -28,7 +28,7 @@ The agent connects to seven MCP (Model Context Protocol) servers over Streamable
 | elastic | | kafka | |couchbase| | konnect | | gitlab  | |atlassian |
 |  -mcp   | | -mcp  | |  -mcp  | |  -mcp   | |  -mcp   | |  -mcp    |
 |         | |       | |        | |         | |         | |          |
-| ~102    | | 15-55 | | ~37    | | 67+     | | proxy+  | | proxy+   |
+| 112     | | 15-55 | | ~37    | | 67+     | | proxy+  | | proxy+   |
 | tools   | | gated | | tools  | | tools   | | custom  | | custom   |
 |         | |       | |        | |         | |         | |          |
 | :9080   | | :9081 | | :9082  | | :9083   | | :9084   | | :9085    |
@@ -101,7 +101,7 @@ The `getToolsForDataSource()` function routes datasource IDs to their correspond
 
 | DataSource ID | Server Name | MCP URL Env Var | Tool Count |
 |---------------|-------------|-----------------|------------|
-| `elastic` | `elastic-mcp` | `ELASTIC_MCP_URL` | ~102 (86 cluster incl. 9 ML anomaly-detection + 16 conditional cloud/billing on `EC_API_KEY`) |
+| `elastic` | `elastic-mcp` | `ELASTIC_MCP_URL` | 112 with `EC_API_KEY` (96 cluster incl. 9 ML anomaly-detection + 16 conditional cloud/billing) |
 | `kafka` | `kafka-mcp` | `KAFKA_MCP_URL` | 15-55 (15 base + up to 40 gated SR + ksqlDB + Connect + REST Proxy) |
 | `couchbase` | `couchbase-mcp` | `CAPELLA_MCP_URL` | ~37 (official Couchbase tools, SIO-1107) |
 | `konnect` | `konnect-mcp` | `KONNECT_MCP_URL` | 15 enhanced + proxy |
@@ -205,11 +205,11 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 
 ## MCP Server Summary
 
-### Elasticsearch MCP (~102 tools)
+### Elasticsearch MCP (112 tools with `EC_API_KEY`)
 
 **Purpose:** Read-only access to Elasticsearch clusters for log search, index management, cluster health, shard allocation, mapping inspection, and snapshot operations. When `EC_API_KEY` is set, also exposes Elastic Cloud organization tools (deployment topology, plan auditing, hardware-profile simulation, and billing).
 
-**Tool count:** 86 cluster tools always (incl. 9 ML anomaly-detection tools, SIO-1148); +16 cloud/billing tools registered conditionally on `EC_API_KEY` (SIO-822–826). ~102 total.
+**Tool count:** 96 cluster tools always (incl. 9 ML anomaly-detection tools, SIO-1148); +16 cloud/billing tools registered conditionally on `EC_API_KEY` (SIO-822–826) by `registerCloudAndBillingTools` in `server.ts` (which logs "Registered 16..."). 112 total with `EC_API_KEY`. Counts verified by a live `registerAllTools` recount, not a grep of tool-name literals.
 
 **Tool categories:**
 - Cluster operations: health, stats, settings, allocation explanation
@@ -218,7 +218,7 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 - Document operations: get, multi-get (read-only)
 - Snapshot: repository listing, snapshot status
 - Monitoring: node stats, hot threads, pending tasks
-- **Elastic Cloud + Billing (conditional on `EC_API_KEY`)** -- the `CLOUD_BILLING_TOOLS` set in `packages/mcp-server-elastic/src/tools/index.ts`, e.g. `elasticsearch_cloud_list_deployments`, `elasticsearch_cloud_get_deployment`, `elasticsearch_cloud_get_plan_activity`, `elasticsearch_cloud_get_hardware_profile`, `elasticsearch_billing_get_org_costs`, `elasticsearch_billing_get_deployment_costs`, `elasticsearch_billing_get_org_charts`. All hit `https://api.elastic-cloud.com` (`/api/v1/*` for cloud, `/api/v2/*` for billing) and use the org-scoped `EC_API_KEY`, distinct from per-deployment cluster keys.
+- **Elastic Cloud + Billing (16 tools, conditional on `EC_API_KEY`)** -- registered by `registerCloudAndBillingTools` in `packages/mcp-server-elastic/src/server.ts`, e.g. `elasticsearch_cloud_list_deployments`, `elasticsearch_cloud_get_deployment`, `elasticsearch_cloud_get_plan_activity`, `elasticsearch_cloud_get_hardware_profile`, `elasticsearch_billing_get_org_costs`, `elasticsearch_billing_get_deployment_costs`, `elasticsearch_billing_get_org_charts`. All hit `https://api.elastic-cloud.com` (`/api/v1/*` for cloud, `/api/v2/*` for billing) and use the org-scoped `EC_API_KEY`, distinct from per-deployment cluster keys. (Note: the `CLOUD_BILLING_TOOLS` set in `tools/index.ts` has only 10 names — it is a `deployment`-arg exclusion filter, NOT the registrar, so it undercounts the 16 registered.)
 
 **Configuration:** Multi-deployment pattern via `ELASTIC_DEPLOYMENTS=eu-cld,us-cld`. Per-deployment environment variables provide URL and API key (`ELASTIC_EU_CLD_URL`, `ELASTIC_EU_CLD_API_KEY`, etc.; hyphens become underscores). Cluster tools accept a per-call `deployment` arg with fallback chain: explicit arg -> `x-elastic-deployment` HTTP header -> `ELASTIC_DEFAULT_DEPLOYMENT` -> first ID in `ELASTIC_DEPLOYMENTS`. See `packages/mcp-server-elastic/src/tools/index.ts:302-391`.
 
@@ -370,4 +370,4 @@ The bridge's `buildRelatedToolsMap()` collects these into a lookup table, and `w
 | 2026-04-23 | Added Atlassian MCP as 6th server (Jira/Confluence, OAuth 2.0, read-only enforced, port 9085) |
 | 2026-05-07 | Documented Elastic Cloud + Billing tool family and per-call `deployment` arg fallback chain; updated tool count from ~78 to ~84 |
 | 2026-05-09 | Extracted shared OAuth provider base; GitLab MCP switched to public-client + PKCE (`auth_method: "none"`, `scope: "mcp"`); added `MCP_OAUTH_HEADLESS` env, `bun run oauth:seed:<service>` CLIs, stale-registration auto-discard, file-mode 0o600 enforcement |
-| 2026-07-19 | SIO-1039..1161 sync: refreshed stale tool counts — elastic ~84/~93 -> **~102** (86 cluster incl. 9 ML anomaly-detection tools, SIO-1148); couchbase ~15 -> **~37** (official Couchbase tools, SIO-1107). |
+| 2026-07-19 | SIO-1039..1161 sync: refreshed stale tool counts — elastic ~84/~93 -> **112** with `EC_API_KEY` (96 cluster incl. 9 ML anomaly-detection tools SIO-1148 + 16 cloud/billing; live-recount corrected the long-standing cluster undercount); couchbase ~15 -> **~37** (official Couchbase tools, SIO-1107). |

@@ -21,7 +21,7 @@ agents/                    Gitagent YAML/Markdown definitions
 packages/
   gitagent-bridge/         YAML-to-LangGraph adapter (manifest loading, tool mapping, prompt construction)
   agent/                   LangGraph supervisor + 21-node pipeline (incl. SIO-681 correlation enforcement, SIO-764 findings extraction, SIO-828 AWS estate router, SIO-1084 resolveIdentifiers, mitigation split into investigate/monitor/escalate, detectTopicShift)
-  mcp-server-elastic/      Elasticsearch MCP server (multi-deployment, ~102 tools: 86 cluster incl. 9 ML anomaly-detection (SIO-1148) + 16 conditional cloud/billing on EC_API_KEY)
+  mcp-server-elastic/      Elasticsearch MCP server (multi-deployment, 112 tools with EC_API_KEY: 96 cluster incl. 9 ML anomaly-detection (SIO-1148) + 16 conditional cloud/billing; the prior "86 cluster / ~102" was a live-recount undercount)
   mcp-server-kafka/        Kafka MCP server (local/MSK/Confluent, 15-55 tools gated: kafka-core + SR + ksqlDB + Connect + REST Proxy)
   mcp-server-couchbase/    Couchbase Capella MCP server (query analysis, playbooks, 24+ tools)
   mcp-server-konnect/      Kong Konnect MCP server (API gateway management, 67+ tools)

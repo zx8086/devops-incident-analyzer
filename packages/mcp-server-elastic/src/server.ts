@@ -303,7 +303,7 @@ function createBareServer(config: Config): McpServer {
 	);
 }
 
-// SIO-1041: record-once / replay-many factory. registerAll (~93 wrapped Zod schemas + closures,
+// SIO-1041: record-once / replay-many factory. registerAll (96 cluster wrapped Zod schemas + closures,
 // plus elastic's own tools/index.ts monkey-patch that binds the recorder as its delegate) runs
 // ONCE at boot; each request replays the recorded tool triples onto a fresh bare server. The boot
 // info lines that previously fired per request now fire once, during recording.

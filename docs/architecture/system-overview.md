@@ -54,7 +54,7 @@ The agent's investigation is strictly read-only against production systems. It o
 | ES   | | Kafka| | Capella| | Konnect| | GitLab | |Atlassian|
 | MCP  | | MCP  | | MCP    | | MCP    | | MCP    | | MCP     |
 | :9080| | :9081| | :9082  | | :9083  | | :9084  | | :9085   |
-| ~102 | | 15-55| | ~37    | | 67+    | | proxy+ | | proxy+  |
+| 112  | | 15-55| | ~37    | | 67+    | | proxy+ | | proxy+  |
 | tools| | gated| | tools  | | tools  | | custom | | custom  |
 +------+ +------+ +--------+ +--------+ +--------+ +---------+
     |        |          |         |         |         |
@@ -123,7 +123,7 @@ Each MCP server is an independent deployable package with its own entry point, c
 | Shared Library | `packages/shared` | Cross-package types, Zod schemas, bootstrap function, telemetry, logging |
 | Checkpointer | `packages/checkpointer` | LangGraph state persistence (memory or bun:sqlite) |
 | Observability | `packages/observability` | Pino logger factory, OpenTelemetry span helpers, request-scoped child loggers |
-| Elasticsearch MCP | `packages/mcp-server-elastic` | ~102 tools (86 cluster incl. 9 ML anomaly-detection + 16 conditional cloud/billing on `EC_API_KEY`) for cluster health, index management, search, snapshots, mappings, ML jobs/datafeeds, Elastic Cloud deployments, hardware profiles, plan auditing, and billing |
+| Elasticsearch MCP | `packages/mcp-server-elastic` | 112 tools with `EC_API_KEY` (96 cluster incl. 9 ML anomaly-detection + 16 conditional cloud/billing) for cluster health, index management, search, snapshots, mappings, ML jobs/datafeeds, Elastic Cloud deployments, hardware profiles, plan auditing, and billing |
 | Kafka MCP | `packages/mcp-server-kafka` | 15 base tools + up to 40 gated tools (Schema Registry + ksqlDB + Connect + REST Proxy) for cluster info, topic management, consumer groups, message consumption |
 | Couchbase MCP | `packages/mcp-server-couchbase` | ~37 tools (SIO-1107 official Couchbase tools) for cluster health, bucket listing, N1QL queries, INFER-based schema, EXPLAIN, Index Advisor + covering-index detectors, playbooks |
 | Konnect MCP | `packages/mcp-server-konnect` | 15 enhanced tools + proxy surface for services, routes, plugins, consumers, upstreams, analytics |
@@ -371,4 +371,4 @@ The system enforces several security boundaries:
 | 2026-06-17 | Added `aws` to the fan-out diagrams. Elastic IaC agent expanded (SIO-911..932): see [Elastic IaC GitOps Proposer](elastic-iac-proposer.md) — config-edit proposers, Fleet-upgrade sub-flow, conversational follow-ups (proposer graph now 24 nodes). |
 | 2026-06-30 | Added the in-process Knowledge Graph MCP server (port 9087, SIO-967) and the [Knowledge Graph](knowledge-graph.md) component; corrected verified node counts (incident 20/22-with-KG; elastic-iac proposer 24→29). Part of the SIO-1025 docs sync. |
 | 2026-07-09 | SIO-1030..1038 docs sync (SIO-1039): re-verified node counts to greps — incident 22→23 with KG (`recordRootCause` from SIO-1026, previously undercounted); elastic-iac proposer 29→30 (`recordIacPrompt`, SIO-1038). New `ilm-delete` workflow (SIO-1037). |
-| 2026-07-19 | SIO-1039..1161 docs sync. Reconciled the incident node count (the two conflicting 22/23 figures here) to the verified grep = **31** (21 base + 4 gated KG incl. `recordBindings` + 6 gated HIL-learning nodes); added `resolveIdentifiers` to the node list. Refreshed component-summary tool counts (elastic ~93→~102 with 9 ML anomaly tools SIO-1148; couchbase (this doc's prior ~15, README's prior 24+)→~37 SIO-1107; AWS +CloudWatch Metrics Insights + network-path EC2 SIO-1161/1120). Frontend 9→30 components. Noted the two user-initiated Atlassian write paths (create-ticket SIO-1124, HIL Jira comments SIO-1145) alongside the read-only production stance. |
+| 2026-07-19 | SIO-1039..1161 docs sync. Reconciled the incident node count (the two conflicting 22/23 figures here) to the verified grep = **31** (21 base + 4 gated KG incl. `recordBindings` + 6 gated HIL-learning nodes); added `resolveIdentifiers` to the node list. Refreshed component-summary tool counts (elastic ~93→**112** with `EC_API_KEY` — 96 cluster incl. 9 ML anomaly tools SIO-1148 + 16 cloud/billing, a live recount that corrected the prior cluster undercount; couchbase (this doc's prior ~15, README's prior 24+)→~37 SIO-1107; AWS +CloudWatch Metrics Insights + network-path EC2 SIO-1161/1120). Frontend 9→30 components. Noted the two user-initiated Atlassian write paths (create-ticket SIO-1124, HIL Jira comments SIO-1145) alongside the read-only production stance. |
