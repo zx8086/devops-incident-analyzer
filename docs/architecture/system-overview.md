@@ -223,7 +223,7 @@ The `shared` package is the foundation -- it provides the `createMcpApplication(
 | entityExtractor|
 +-------+--------+
         |
-        v ([awsEstateRouter ->] resolveIdentifiers, both default on)
+        v ([awsEstateRouter -> ] only when AWS targeted; then resolveIdentifiers, default on)
 +--------------------+
 | resolveIdentifiers |
 +--------+-----------+
