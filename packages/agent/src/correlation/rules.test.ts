@@ -342,6 +342,22 @@ Confidence: 0.87`;
 		expect(hits).toHaveLength(0);
 	});
 
+	// Replay #4: the aggregator wrote the service name unbackticked and the gap
+	// went undetected. The bare -service/-api pattern recovers it; hyphenated
+	// English and stoplisted terms stay excluded.
+	test("extracts unbackticked -service tokens (replay #4 phrasing)", () => {
+		const hits = parseLogRetrievalGaps(
+			"## Gaps\n- `aws_logs_start_query` for the stock-service log group in `eu-oit-prd` returned a `MalformedQueryException`; the stock-service's own error logs for the exact cron window were not retrieved.",
+		);
+		expect(hits.map((h) => h.service)).toEqual(["stock-service"]);
+	});
+
+	test("stoplisted and hyphenated-English bare tokens never match", () => {
+		expect(
+			parseLogRetrievalGaps("## Gaps\n- self-service portal logs were not retrieved from the read-only mirror."),
+		).toHaveLength(0);
+	});
+
 	test("non-log gap bullets never match", () => {
 		const hits = parseLogRetrievalGaps(
 			"## Gaps\n- `stock-service` deployment manifest was not retrieved from the registry.",

@@ -847,10 +847,17 @@ const LOG_GAP_RE =
 // are hyphenated lowercase too but are not services elastic can search by
 // service.name.
 const LOG_GAP_SERVICE_TOKEN_RE = /`([a-z][a-z0-9]*(?:-[a-z0-9]+)+)`/g;
+// Secondary, unbackticked pattern (replay #4: the aggregator wrote "the
+// stock-service log group" WITHOUT backticks and the gap went undetected --
+// backticking is inconsistent night to night). Constrained to -service/-api
+// suffixed tokens so hyphenated English cannot match.
+const LOG_GAP_BARE_SERVICE_RE = /\b([a-z][a-z0-9]*(?:-[a-z0-9]+)*-(?:service|api)(?:-v\d+)?)\b/g;
+const BARE_SERVICE_STOPLIST = new Set(["self-service", "customer-service"]);
 
 function isServiceToken(token: string): boolean {
 	if (token.includes("log-group")) return false;
 	if (/^(?:eu|us|ap)-/.test(token)) return false;
+	if (BARE_SERVICE_STOPLIST.has(token)) return false;
 	return true;
 }
 
@@ -870,8 +877,10 @@ export function parseLogRetrievalGaps(answer: string): LogRetrievalGap[] {
 			continue;
 		}
 		if (!inGaps || !LOG_GAP_BULLET_RE.test(line) || !LOG_GAP_RE.test(line)) continue;
-		for (const m of line.matchAll(LOG_GAP_SERVICE_TOKEN_RE)) {
-			const token = m[1] ?? "";
+		const tokens: string[] = [];
+		for (const m of line.matchAll(LOG_GAP_SERVICE_TOKEN_RE)) tokens.push(m[1] ?? "");
+		for (const m of line.matchAll(LOG_GAP_BARE_SERVICE_RE)) tokens.push(m[1] ?? "");
+		for (const token of tokens) {
 			if (!isServiceToken(token)) continue;
 			const key = `${token}\n${line}`;
 			if (seen.has(key)) continue;
