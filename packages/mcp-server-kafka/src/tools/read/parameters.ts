@@ -73,7 +73,13 @@ export const ListDlqTopicsParams = z.object({
 		.boolean()
 		.optional()
 		.describe(
-			"When true, take only one sample and return recentDelta:null for every topic. Use for fast probes where current totalMessages is enough and growth rate is not needed.",
+			"When true, take only one sample and return recentDelta:null for every topic. Use for fast probes where current totalMessages is enough and growth rate is not needed. NOTE: when more than 15 DLQ topics match, the delta window is skipped automatically (SIO-1150) to stay within the tool timeout.",
+		),
+	filter: z
+		.string()
+		.optional()
+		.describe(
+			"Case-insensitive substring to bound the DLQ candidate set (plain text, NOT a regex), e.g. 'variant' to sample only variant-related DLQ topics. Use on DLQ-heavy clusters to keep the call fast and preserve recentDelta.",
 		),
 });
 

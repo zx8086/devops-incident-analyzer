@@ -2,7 +2,11 @@
 import { describe, expect, mock, test } from "bun:test";
 import { type Admin, ListOffsetTimestamps } from "@platformatic/kafka";
 import type { KafkaClientManager } from "../../src/services/client-manager.ts";
-import { DEFAULT_DLQ_DELTA_WINDOW_MS, KafkaService } from "../../src/services/kafka-service.ts";
+import {
+	DEFAULT_DLQ_DELTA_WINDOW_MS,
+	DLQ_AUTO_SKIP_DELTA_THRESHOLD,
+	KafkaService,
+} from "../../src/services/kafka-service.ts";
 
 interface ListOffsetsCall {
 	topics: Array<{
@@ -341,10 +345,14 @@ describe("KafkaService.listDlqTopics", () => {
 			expect(result[0]?.recentDelta).toBeNull();
 		});
 
-		test("returns all 50 DLQ entries with correct deltas across batches", async () => {
+		// SIO-1150: above DLQ_AUTO_SKIP_DELTA_THRESHOLD the delta window is skipped
+		// automatically (single sample, recentDelta null) so a DLQ-heavy cluster
+		// cannot push the call past the client timeout. Batch coverage (50 topics =
+		// 3 parallel batches) is preserved via totalMessages.
+		test("auto-skips the delta window above the threshold: 50 topics, one sample, null deltas", async () => {
 			const topicNames = Array.from({ length: 50 }, (_, i) => `t${i}-dlq`);
 
-			const { manager } = buildClientManager({
+			const { manager, callCounts } = buildClientManager({
 				topicNames,
 				totalMessagesForTopic: () => 10,
 			});
@@ -353,15 +361,33 @@ describe("KafkaService.listDlqTopics", () => {
 			const result = await service.listDlqTopics({ windowMs: 1 });
 
 			expect(result).toHaveLength(50);
-			// Both samples return identical totals so recentDelta must be 0 for every entry.
 			for (const entry of result) {
 				expect(entry.totalMessages).toBe(10);
-				expect(entry.recentDelta).toBe(0);
+				expect(entry.recentDelta).toBeNull();
 			}
-			// All 50 topic names are present in the result.
 			const resultNames = new Set(result.map((r) => r.name));
 			for (const name of topicNames) {
 				expect(resultNames.has(name)).toBe(true);
+			}
+			// Single-sample path: exactly one listOffsets call per topic.
+			for (const name of topicNames) {
+				expect(callCounts.get(name)).toBe(1);
+			}
+		});
+
+		test("still computes deltas at the threshold boundary", async () => {
+			const topicNames = Array.from({ length: DLQ_AUTO_SKIP_DELTA_THRESHOLD }, (_, i) => `t${i}-dlq`);
+			const { manager } = buildClientManager({
+				topicNames,
+				totalMessagesForTopic: (_name, callIndex) => (callIndex === 1 ? 10 : 14),
+			});
+			const service = new KafkaService(manager);
+
+			const result = await service.listDlqTopics({ windowMs: 1 });
+
+			expect(result).toHaveLength(DLQ_AUTO_SKIP_DELTA_THRESHOLD);
+			for (const entry of result) {
+				expect(entry.recentDelta).toBe(4);
 			}
 		});
 
@@ -438,5 +464,63 @@ describe("KafkaService.listDlqTopics", () => {
 			expect(result[0]?.totalMessages).toBe(600);
 			expect(result[0]?.recentDelta).toBeNull();
 		});
+	});
+});
+
+// SIO-1150: pattern coverage (case-insensitive + the DLQ_-prefix convention),
+// the filter bound, and the batched partition-metadata RPC.
+describe("SIO-1150 DLQ listing", () => {
+	test("detects DLQ_-prefixed, dotted, and mixed-case DLQ names", async () => {
+		const topicNames = [
+			"DLQ_T_PRIVATE_VARIANT_RICH_NOTIFICATIONS",
+			"orders.DLQ",
+			"MY-SERVICE-DLQ",
+			"dlt-payments",
+			"dead-letter-images",
+			"T_PRIVATE_STOCK_RICH_NOTIFICATIONS",
+			"regular-topic",
+		];
+		const { manager } = buildClientManager({ topicNames, totalMessagesForTopic: () => 5 });
+		const service = new KafkaService(manager);
+
+		const result = await service.listDlqTopics({ skipDelta: true });
+		const names = new Set(result.map((r) => r.name));
+		expect(names).toEqual(
+			new Set([
+				"DLQ_T_PRIVATE_VARIANT_RICH_NOTIFICATIONS",
+				"orders.DLQ",
+				"MY-SERVICE-DLQ",
+				"dlt-payments",
+				"dead-letter-images",
+			]),
+		);
+	});
+
+	test("filter bounds the candidate set case-insensitively without regex semantics", async () => {
+		const topicNames = ["DLQ_T_PRIVATE_VARIANT_RICH_NOTIFICATIONS", "DLQ_T_PRIVATE_PRICE_NOTIFICATIONS", "orders-dlq"];
+		const { manager, callCounts } = buildClientManager({ topicNames, totalMessagesForTopic: () => 5 });
+		const service = new KafkaService(manager);
+
+		const result = await service.listDlqTopics({ skipDelta: true, filter: "variant" });
+		expect(result.map((r) => r.name)).toEqual(["DLQ_T_PRIVATE_VARIANT_RICH_NOTIFICATIONS"]);
+		// Unmatched candidates are never sampled.
+		expect(callCounts.has("orders-dlq")).toBe(false);
+		expect(callCounts.has("DLQ_T_PRIVATE_PRICE_NOTIFICATIONS")).toBe(false);
+	});
+
+	test("resolves partition indices with one batched metadata RPC per sample batch", async () => {
+		const topicNames = Array.from({ length: 5 }, (_, i) => `t${i}-dlq`);
+		const { manager } = buildClientManager({ topicNames, totalMessagesForTopic: () => 5 });
+		const service = new KafkaService(manager);
+		const admin = await (
+			manager as unknown as { withAdmin: <T>(fn: (a: unknown) => Promise<T>) => Promise<T> }
+		).withAdmin(async (a) => a);
+		const metadataMock = (admin as { metadata: { mock: { calls: unknown[][] } } }).metadata;
+		metadataMock.mock.calls.length = 0;
+
+		await service.listDlqTopics({ skipDelta: true });
+		// One batched call for the 5-topic batch, not one per topic.
+		expect(metadataMock.mock.calls.length).toBe(1);
+		expect((metadataMock.mock.calls[0]?.[0] as { topics: string[] }).topics).toHaveLength(5);
 	});
 });

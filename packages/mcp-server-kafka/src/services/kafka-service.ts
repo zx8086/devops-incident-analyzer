@@ -155,7 +155,10 @@ async function getClusterMetadata(admin: Admin): Promise<{
 	});
 }
 
-const DLQ_PATTERNS = [/-dlq$/, /^dlt-/, /-dead-letter$/, /^dead-letter-/, /\.DLQ$/];
+// SIO-1150: case-insensitive, plus the DLQ_-prefix convention used on the prod
+// cluster -- DLQ_T_PRIVATE_VARIANT_RICH_NOTIFICATIONS was invisible to every
+// prior (case-sensitive, suffix-oriented) pattern.
+const DLQ_PATTERNS = [/-dlq$/i, /^dlt-/i, /-dead-letter$/i, /^dead-letter-/i, /\.dlq$/i, /^dlq[._-]/i];
 
 // Number of DLQ topics sampled concurrently per batch to avoid overloading brokers.
 const DLQ_PARALLEL_BATCH_SIZE = 20;
@@ -167,9 +170,18 @@ const DLQ_PARALLEL_BATCH_SIZE = 20;
 // timeout with zero margin, which reliably timed out (-32001) under any real latency.
 export const DEFAULT_DLQ_DELTA_WINDOW_MS = 10_000;
 
+// SIO-1150: above this many matched DLQ topics the delta window is skipped
+// automatically (recentDelta: null) so a DLQ-heavy cluster cannot push the call
+// past the client's 30s timeout -- two full sample passes over a large set plus
+// the sleep is exactly the shape that produced the -32001 on the prod cluster.
+export const DLQ_AUTO_SKIP_DELTA_THRESHOLD = 15;
+
 export interface ListDlqTopicsOptions {
 	skipDelta?: boolean;
 	windowMs?: number;
+	// SIO-1150: case-insensitive substring bound on the pattern-matched candidate
+	// set (NOT a regex -- avoids the -32603 invalid-regex footgun of listTopics).
+	filter?: string;
 }
 
 export interface ConsumeMessagesOptions {
@@ -231,9 +243,36 @@ export type GetMessageByOffsetResult =
 			message: string;
 	  };
 
-async function sampleOneDlqTopic(clientManager: KafkaClientManager, name: string): Promise<number> {
+// SIO-1150: one metadata RPC for a whole batch of topics instead of one per topic.
+// Falls back to per-topic lookups (in sampleOneDlqTopic) when the batched call fails,
+// preserving per-topic failure isolation.
+async function getPartitionIndicesBatch(admin: Admin, names: string[]): Promise<Map<string, number[]>> {
+	const metadata = await new Promise<{
+		topics: Map<string, { partitions: Record<number, unknown> }>;
+	}>((resolve, reject) => {
+		(
+			admin as unknown as {
+				metadata: (opts: { topics: string[] }, cb: (err: Error | null, data: unknown) => void) => void;
+			}
+		).metadata({ topics: names }, (err, data) =>
+			err ? reject(err) : resolve(data as { topics: Map<string, { partitions: Record<number, unknown> }> }),
+		);
+	});
+	const out = new Map<string, number[]>();
+	for (const name of names) {
+		const topicMeta = metadata.topics.get(name);
+		out.set(name, topicMeta ? Object.keys(topicMeta.partitions).map(Number) : [0]);
+	}
+	return out;
+}
+
+async function sampleOneDlqTopic(
+	clientManager: KafkaClientManager,
+	name: string,
+	knownPartitionIndices?: number[],
+): Promise<number> {
 	return clientManager.withAdmin(async (admin) => {
-		const partitionIndices = await getPartitionIndices(admin, name);
+		const partitionIndices = knownPartitionIndices ?? (await getPartitionIndices(admin, name));
 		if (partitionIndices.length === 0) return 0;
 
 		// Single listOffsets call for all partitions (both EARLIEST and LATEST timestamps).
@@ -278,7 +317,18 @@ async function sampleDlqOffsets(clientManager: KafkaClientManager, names: string
 
 	for (let i = 0; i < names.length; i += DLQ_PARALLEL_BATCH_SIZE) {
 		const batch = names.slice(i, i + DLQ_PARALLEL_BATCH_SIZE);
-		const settled = await Promise.allSettled(batch.map((name) => sampleOneDlqTopic(clientManager, name)));
+		// SIO-1150: resolve all partition indices for the batch in ONE metadata RPC.
+		// Soft-fail to undefined so sampleOneDlqTopic's per-topic fallback keeps the
+		// original failure isolation.
+		let batchIndices: Map<string, number[]> | undefined;
+		try {
+			batchIndices = await clientManager.withAdmin((admin) => getPartitionIndicesBatch(admin, batch));
+		} catch {
+			batchIndices = undefined;
+		}
+		const settled = await Promise.allSettled(
+			batch.map((name) => sampleOneDlqTopic(clientManager, name, batchIndices?.get(name))),
+		);
 		for (let j = 0; j < batch.length; j++) {
 			const outcome = settled[j];
 			if (outcome?.status === "fulfilled") {
@@ -342,15 +392,31 @@ export class KafkaService {
 		logger.debug({ options: options ?? null }, "Listing DLQ topics");
 
 		const allTopics = await this.listTopics();
-		const dlqNames = allTopics.map((t) => t.name).filter((name) => DLQ_PATTERNS.some((p) => p.test(name)));
+		let dlqNames = allTopics.map((t) => t.name).filter((name) => DLQ_PATTERNS.some((p) => p.test(name)));
+		// SIO-1150: optional case-insensitive substring bound on the candidate set.
+		if (options?.filter) {
+			const needle = options.filter.toLowerCase();
+			dlqNames = dlqNames.filter((name) => name.toLowerCase().includes(needle));
+		}
 
 		if (dlqNames.length === 0) {
 			return [];
 		}
 
+		// SIO-1150: bound worst-case latency. Above the threshold, force the single-
+		// sample path (recentDelta: null) instead of sleeping the delta window and
+		// sampling a large set twice -- the shape that timed out on the prod cluster.
+		const autoSkipDelta = dlqNames.length > DLQ_AUTO_SKIP_DELTA_THRESHOLD;
+		if (autoSkipDelta && options?.skipDelta !== true) {
+			logger.info(
+				{ dlqTopicCount: dlqNames.length, threshold: DLQ_AUTO_SKIP_DELTA_THRESHOLD },
+				"DLQ topic count exceeds auto-skip threshold; skipping delta window",
+			);
+		}
+
 		const firstSample = await sampleDlqOffsets(this.clientManager, dlqNames);
 
-		if (options?.skipDelta === true) {
+		if (options?.skipDelta === true || autoSkipDelta) {
 			// Only emit topics that succeeded in the first sample; omit phantom entries.
 			return dlqNames
 				.filter((name) => firstSample.has(name))
