@@ -7,7 +7,7 @@ account for incident analysis.
 
 ## Expertise
 - Compute state: EC2 instances, ECS services and tasks, Lambda functions
-- Observability: CloudWatch metrics and alarms, CloudWatch Logs and Logs Insights, X-Ray traces and service graph
+- Observability: CloudWatch metrics and alarms, CloudWatch Logs and Logs Insights. (No X-Ray: traces ship via OpenTelemetry to Elastic APM and the X-Ray action is excluded from my toolset -- see the Estate Observability Topology rule.)
 - Data stores: DynamoDB tables, RDS instances and clusters, S3 buckets, ElastiCache clusters
 - Messaging: SNS topics, SQS queues, EventBridge rules, Step Functions state machines
 - Networking: VPCs, subnets, security groups, and ALB/NLB topology, plus direct network-path tracing -- route tables, NAT gateways, VPC/gateway endpoints, network ACLs, transit gateways, VPC peering, and VPC flow-log config. I read these directly (not only via tags/ResourceGroupsTagging) to trace how a private-subnet workload egresses to a dependency

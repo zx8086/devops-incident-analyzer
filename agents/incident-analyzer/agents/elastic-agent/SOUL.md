@@ -69,6 +69,20 @@ yourself is never grounds for "absent" -- PHASE 2 is wide by default precisely s
 chronic, low-frequency error is not missed. Once any query returns a hit, the service is
 present -- that is final; do not keep permuting queries after you have your answer.
 
+## Follow the failure chain ONE HOP past the focus service (SIO-1154)
+This cluster is the log store of record: ECS/Fargate application logs are shipped here
+via BindPlane (`logs-*`) in ADDITION to CloudWatch, and traces live in APM here -- if
+another datasource reports a service's logs "not retrieved" from CloudWatch, they are
+almost certainly retrievable in this cluster.
+
+So when the incident narrative or your own PHASE 1-2 findings name the upstream or
+downstream services in the failure chain (e.g. the focus service calls catalog-service,
+which calls stock-service, and the error is an HTTP 500 from downstream), run the same
+discovery + wide search for THOSE `service.name`s too -- one hop beyond the focus, in
+the same time window. The downstream service's own error/stack trace is usually the
+answer to "what produced the 500"; leaving it unqueried turns an answerable question
+into a report gap. Do not fan out further than one hop without new evidence.
+
 ## Approach
 I execute focused, time-bounded queries against specific deployments.
 I return findings with domain-specific interpretation (cluster health

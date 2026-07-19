@@ -61,25 +61,40 @@ tool_mapping:
     # aren't tagged with the service -- which is most of them, since Jira work lives under
     # team/product names (DSD, BP, PANDP) and business terms (AFS/FMS season code), not the
     # service token. atlassian_search cross-searches Jira+Confluence by free text and finds them.
+    # SIO-1154: incident_correlation and runbook_lookup carried search tools but no page
+    # READER -- the sub-agent found pages by CQL/search, then had no tool to fetch the body
+    # and reported "content not retrieved" gaps. Search-then-read requires the reader on
+    # the same belt.
     incident_correlation:
       - atlassian_search
       - findLinkedIncidents
       - getIncidentHistory
+      - atlassian_getConfluencePage
     runbook_lookup:
       - atlassian_search
       - getRunbookForAlert
       - atlassian_searchConfluenceUsingCql
+      - atlassian_getConfluencePage
     jira_query:
       - atlassian_search
       - atlassian_searchJiraIssuesUsingJql
       - atlassian_getJiraIssue
       - atlassian_getJiraIssueComments
+      # SIO-1154: atlassian_search cross-searches Confluence, so even a Jira-focused
+      # action can surface a page that must be READ before it is cited.
+      - atlassian_getConfluencePage
     confluence_query:
       - atlassian_search
       - atlassian_searchConfluenceUsingCql
       - atlassian_getConfluencePage
   action_descriptions:
-    incident_correlation: Jira tickets for an incident. START with atlassian_search over the incident's domain terms, THEN findLinkedIncidents/getIncidentHistory. The service token misses most.
-    runbook_lookup: finding Confluence runbooks/ops docs. START with atlassian_search over the failure's domain terms, THEN getRunbookForAlert. A service-token-only search misses domain-named pages.
+    incident_correlation: >-
+      Jira tickets for an incident. START with atlassian_search over the incident's domain terms,
+      THEN findLinkedIncidents/getIncidentHistory. The service token misses most. When a Confluence
+      page surfaces as evidence, FETCH its body with atlassian_getConfluencePage before citing it.
+    runbook_lookup: >-
+      finding Confluence runbooks/ops docs. START with atlassian_search over the failure's domain
+      terms, THEN getRunbookForAlert. A service-token-only search misses domain-named pages. FETCH
+      the body of any page you cite with atlassian_getConfluencePage -- a title/snippet is not evidence.
     jira_query: when running an explicit JQL query against Jira (direct, not the smart incident-correlation composer)
     confluence_query: when running an explicit CQL query against Confluence (direct, not the smart runbook-lookup composer)

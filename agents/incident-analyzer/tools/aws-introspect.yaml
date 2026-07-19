@@ -2,7 +2,7 @@ name: aws-introspect
 description: >
   Read-only inspection of AWS infrastructure state across estates for incident
   diagnosis: CloudWatch alarms/metrics, ECS services/tasks, EC2 instances, RDS,
-  Lambda, CloudWatch Logs Insights, X-Ray traces, Health events, GuardDuty /
+  Lambda, CloudWatch Logs Insights, Health events, GuardDuty /
   Security Hub findings, S3, SNS/SQS, DynamoDB, ElastiCache, EventBridge, Step
   Functions, CloudFormation, CloudTrail, Config, and resource tagging. All tools
   are read-only (SIO-859 keeps IP/CIDR detail; the deployed IAM role denies every
@@ -21,7 +21,6 @@ input_schema:
         - rds_state
         - lambda_state
         - logs_insights
-        - xray_traces
         - health_events
         - security_findings
         - storage_state
@@ -95,9 +94,6 @@ tool_mapping:
       - aws_logs_describe_log_groups
       - aws_logs_start_query
       - aws_logs_get_query_results
-    xray_traces:
-      - aws_xray_get_service_graph
-      - aws_xray_get_trace_summaries
     health_events:
       - aws_health_describe_events
     security_findings:
@@ -153,7 +149,6 @@ tool_mapping:
     rds_state: when a datastore-backed service is slow or erroring -- RDS instance/cluster status, engine, connection/storage state
     lambda_state: when a Lambda-backed path fails -- function list, runtime, memory/timeout config, last-update status
     logs_insights: when application or platform logs are needed -- discover log groups, run a Logs Insights query, fetch its results
-    xray_traces: when a latency or error path spans services -- the X-Ray service graph or recent trace summaries
     health_events: when an AWS-side event (scheduled maintenance, degradation, account notice) might explain the incident
     security_findings: when a security signal is in scope -- GuardDuty detectors/findings or Security Hub findings/standards
     storage_state: when S3, DynamoDB, or ElastiCache state is relevant -- bucket inventory/location/policy, table config, cache cluster/replication-group health
