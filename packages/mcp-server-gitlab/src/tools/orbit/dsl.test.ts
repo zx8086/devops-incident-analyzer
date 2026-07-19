@@ -151,7 +151,9 @@ describe("Orbit filter-grammar contract (SIO-1151)", () => {
 	function walkForLegacyOpShape(value: unknown, path = "$"): string[] {
 		const hits: string[] = [];
 		if (Array.isArray(value)) {
-			value.forEach((v, i) => hits.push(...walkForLegacyOpShape(v, `${path}[${i}]`)));
+			value.forEach((v, i) => {
+				hits.push(...walkForLegacyOpShape(v, `${path}[${i}]`));
+			});
 			return hits;
 		}
 		if (value && typeof value === "object") {
