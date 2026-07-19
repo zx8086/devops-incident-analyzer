@@ -215,4 +215,31 @@ describe("Orbit filter-grammar contract (SIO-1151)", () => {
 		const { dsl } = buildPipelineFailuresQuery({ groupPath: "pvhcorp", since: "2026-07-01T00:00:00Z" });
 		expect(dsl.aggregation_sort).toBe("-failures");
 	});
+
+	// CodeRabbit (PR #420): explicit fixtures for the remaining builders -- the
+	// walker rejects the legacy shape but would not catch a regression to bare
+	// implicit equality.
+	test("cross-project callers uses op-as-key eq on fqn", () => {
+		const { dsl } = buildCrossProjectCallersQuery({ fqn: "Gitlab::Auth::authenticate" });
+		const nodes = dsl.nodes as Array<{ filters?: Record<string, unknown> }>;
+		expect(nodes[0]?.filters).toEqual({ fqn: { eq: "Gitlab::Auth::authenticate" } });
+	});
+
+	test("pipeline failures uses op-as-key eq/gte filters on both nodes", () => {
+		const { dsl } = buildPipelineFailuresQuery({ groupPath: "pvhcorp", since: "2026-07-01T00:00:00Z" });
+		const nodes = dsl.nodes as Array<{ filters?: Record<string, unknown> }>;
+		expect(nodes[0]?.filters).toEqual({
+			status: { eq: "failed" },
+			source: { eq: "merge_request_event" },
+			created_at: { gte: "2026-07-01T00:00:00Z" },
+		});
+		expect(nodes[1]?.filters).toEqual({ full_path: { starts_with: "pvhcorp/" } });
+	});
+
+	test("MR-for-file uses op-as-key eq filters on old_path and state", () => {
+		const { dsl } = buildMrForFileQuery({ sourceFile: "src/app.ts" });
+		const nodes = dsl.nodes as Array<{ filters?: Record<string, unknown> }>;
+		expect(nodes[0]?.filters).toEqual({ old_path: { eq: "src/app.ts" } });
+		expect(nodes[2]?.filters).toEqual({ state: { eq: "merged" } });
+	});
 });
