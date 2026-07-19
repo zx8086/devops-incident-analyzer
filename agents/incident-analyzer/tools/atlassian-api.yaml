@@ -80,6 +80,9 @@ tool_mapping:
       - atlassian_searchJiraIssuesUsingJql
       - atlassian_getJiraIssue
       - atlassian_getJiraIssueComments
+      # SIO-1154: atlassian_search cross-searches Confluence, so even a Jira-focused
+      # action can surface a page that must be READ before it is cited.
+      - atlassian_getConfluencePage
     confluence_query:
       - atlassian_search
       - atlassian_searchConfluenceUsingCql

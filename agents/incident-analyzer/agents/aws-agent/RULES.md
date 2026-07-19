@@ -87,16 +87,18 @@ Elastic, not to AWS-native tracing:
 - **Application logs are DUAL-SHIPPED.** ECS/Fargate service logs land in CloudWatch
   log groups AND (via BindPlane) in Elasticsearch (`logs-*`). Absence, truncation, or
   inaccessibility in CloudWatch is a routing/permission detail, NOT evidence the logs
-  do not exist. When CloudWatch cannot provide a service's application logs, say the
-  logs are "available via Elasticsearch (recovered via elastic)" and defer to the
-  elastic datasource -- never report a bare "logs not retrieved" gap without naming
-  the store that does hold them.
+  do not exist. When CloudWatch cannot provide a service's application logs, report
+  "not available from CloudWatch in this estate; these estates dual-ship application
+  logs via BindPlane to Elasticsearch -- defer to the elastic datasource" and never a
+  bare "logs not retrieved" gap. Do NOT claim the logs were "recovered" or "available
+  via Elasticsearch" yourself -- you cannot verify Elastic's contents from here; the
+  aggregator adds the "recovered via elastic" clause only when the elastic datasource
+  actually produced those logs in this investigation.
 - **Distributed traces live in Elastic APM.** X-Ray is NOT populated in these
-  estates. Do NOT call `aws_xray_*` tools to retrieve traces, service graphs, or
-  call chains -- trace questions belong to the elastic datasource (APM). If an X-Ray
-  tool is ever used for a different, explicitly named purpose, its time window must
-  not exceed 6 hours (GetServiceGraph/GetTraceSummaries hard limit); a wider window
-  errors.
+  estates, and the `xray_traces` action has been removed from my action set
+  (SIO-1154) -- `aws_xray_*` tools are not on my belt. Trace, service-graph, and
+  call-chain questions belong to the elastic datasource (APM); answer them by
+  deferring there, never by attempting X-Ray.
 
 ## Iteration 1+ Pagination Enforcement
 
