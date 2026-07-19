@@ -275,37 +275,37 @@ async function sampleOneDlqTopic(
 		const partitionIndices = knownPartitionIndices ?? (await getPartitionIndices(admin, name));
 		if (partitionIndices.length === 0) return 0;
 
-		// Single listOffsets call for all partitions (both EARLIEST and LATEST timestamps).
-		// Avoids N round-trips per topic when a DLQ has many partitions.
-		const result = (await admin.listOffsets({
-			topics: [
-				{
-					name,
-					partitions: partitionIndices.flatMap((i) => [
-						{ partitionIndex: i, timestamp: ListOffsetTimestamps.EARLIEST },
-						{ partitionIndex: i, timestamp: ListOffsetTimestamps.LATEST },
-					]),
-				},
-			],
-		})) as unknown as Array<{
-			name: string;
-			partitions: Array<{ partitionIndex: number; timestamp: bigint; offset: bigint }>;
-		}>;
+		// SIO-1157: TWO single-sentinel calls instead of one dual-sentinel call.
+		// Requesting both sentinels for the same partition in ONE listOffsets call puts
+		// duplicate partitionIndex entries into a single broker request, which live
+		// brokers reject -- the per-topic rejection was then silently swallowed by
+		// sampleDlqOffsets and the tool returned []. The path was dead code in
+		// production until the SIO-1150 patterns matched anything (and the old test
+		// fake accepted the duplicate shape). Single-sentinel per call is the shape
+		// describeTopic uses successfully against the live cluster.
+		const offsetsAt = async (timestamp: bigint): Promise<Map<number, bigint>> => {
+			const result = (await admin.listOffsets({
+				topics: [{ name, partitions: partitionIndices.map((i) => ({ partitionIndex: i, timestamp })) }],
+			})) as unknown as Array<{
+				name: string;
+				partitions: Array<{ partitionIndex: number; offset: bigint }>;
+			}>;
+			const topicResult = result.find((t) => t.name === name);
+			const byPartition = new Map<number, bigint>();
+			for (const p of topicResult?.partitions ?? []) byPartition.set(p.partitionIndex, p.offset);
+			return byPartition;
+		};
 
-		const topicResult = result.find((t) => t.name === name);
-		if (!topicResult) return 0;
+		const earliest = await offsetsAt(ListOffsetTimestamps.EARLIEST);
+		const latest = await offsetsAt(ListOffsetTimestamps.LATEST);
 
 		// Accumulate in BigInt to match getConsumerGroupLag pattern; convert at return.
 		let total = 0n;
 		for (const i of partitionIndices) {
-			const earliest = topicResult.partitions.find(
-				(p) => p.partitionIndex === i && p.timestamp === ListOffsetTimestamps.EARLIEST,
-			);
-			const latest = topicResult.partitions.find(
-				(p) => p.partitionIndex === i && p.timestamp === ListOffsetTimestamps.LATEST,
-			);
-			if (earliest && latest) {
-				total += latest.offset - earliest.offset;
+			const e = earliest.get(i);
+			const l = latest.get(i);
+			if (e !== undefined && l !== undefined) {
+				total += l - e;
 			}
 		}
 		return Number(total);
@@ -314,6 +314,7 @@ async function sampleOneDlqTopic(
 
 async function sampleDlqOffsets(clientManager: KafkaClientManager, names: string[]): Promise<Map<string, number>> {
 	const result = new Map<string, number>();
+	const failures: Array<{ topic: string; error: string }> = [];
 
 	for (let i = 0; i < names.length; i += DLQ_PARALLEL_BATCH_SIZE) {
 		const batch = names.slice(i, i + DLQ_PARALLEL_BATCH_SIZE);
@@ -333,9 +334,20 @@ async function sampleDlqOffsets(clientManager: KafkaClientManager, names: string
 			const outcome = settled[j];
 			if (outcome?.status === "fulfilled") {
 				result.set(batch[j] as string, outcome.value);
+			} else if (outcome?.status === "rejected") {
+				// SIO-1157: rejected topics stay omitted (per-topic isolation, callers see
+				// the absence), but the failure is now VISIBLE -- the silent swallow made a
+				// systemic sampling failure indistinguishable from "no DLQ topics" in prod.
+				failures.push({ topic: batch[j] as string, error: String(outcome.reason) });
 			}
-			// Rejected outcomes are intentionally omitted so the caller can detect null delta.
 		}
+	}
+
+	if (failures.length > 0) {
+		logger.warn(
+			{ failedCount: failures.length, totalCount: names.length, sample: failures.slice(0, 3) },
+			"DLQ offset sampling failed for one or more topics",
+		);
 	}
 
 	return result;
