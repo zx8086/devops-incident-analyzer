@@ -25,6 +25,28 @@ interface FakeAdminOpts {
 	// tracks how many times listOffsets has been called per topic
 }
 
+// SIO-1157: mirrors the live broker -- duplicate partitionIndex entries within one
+// topic request are REJECTED. The old dual-sentinel shape passed only because the
+// previous fake accepted duplicates; every test now runs against broker semantics.
+function assertNoDuplicatePartitions(req: ListOffsetsCall): void {
+	for (const topic of req.topics) {
+		const seen = new Set<number>();
+		for (const p of topic.partitions) {
+			if (seen.has(p.partitionIndex)) {
+				throw new Error(`Duplicate partition ${p.partitionIndex} for topic ${topic.name} in ListOffsets request`);
+			}
+			seen.add(p.partitionIndex);
+		}
+	}
+}
+
+// A request is a LATEST-sentinel pass when every entry carries LATEST; sample
+// accounting (callIndex 1 = first sample, 2 = second) counts those passes only,
+// preserving the pre-SIO-1157 test semantics under the two-call shape.
+function isLatestPass(topic: ListOffsetsCall["topics"][number]): boolean {
+	return topic.partitions.every((p) => p.timestamp === ListOffsetTimestamps.LATEST);
+}
+
 function buildClientManager(opts: FakeAdminOpts): { manager: KafkaClientManager; callCounts: Map<string, number> } {
 	const callCounts = new Map<string, number>();
 
@@ -38,22 +60,27 @@ function buildClientManager(opts: FakeAdminOpts): { manager: KafkaClientManager;
 			cb(null, { topics: topicsMap });
 		}),
 		listOffsets: mock(async (req: ListOffsetsCall) => {
+			assertNoDuplicatePartitions(req);
 			const results: Array<{
 				name: string;
 				partitions: Array<{ partitionIndex: number; timestamp: bigint; offset: bigint }>;
 			}> = [];
 
 			for (const topic of req.topics) {
-				const count = (callCounts.get(topic.name) ?? 0) + 1;
-				callCounts.set(topic.name, count);
-				// callIndex is 1-based: first call = 1, second call = 2
-				const total = opts.totalMessagesForTopic(topic.name, count);
+				let total = 0;
+				if (isLatestPass(topic)) {
+					const count = (callCounts.get(topic.name) ?? 0) + 1;
+					callCounts.set(topic.name, count);
+					// callIndex is 1-based: first sample = 1, second sample = 2
+					total = opts.totalMessagesForTopic(topic.name, count);
+				}
 				results.push({
 					name: topic.name,
-					partitions: [
-						{ partitionIndex: 0, timestamp: ListOffsetTimestamps.EARLIEST, offset: 0n },
-						{ partitionIndex: 0, timestamp: ListOffsetTimestamps.LATEST, offset: BigInt(total) },
-					],
+					partitions: topic.partitions.map((p) => ({
+						partitionIndex: p.partitionIndex,
+						timestamp: p.timestamp,
+						offset: p.timestamp === ListOffsetTimestamps.EARLIEST ? 0n : BigInt(total),
+					})),
 				});
 			}
 
@@ -87,24 +114,28 @@ function buildClientManagerWithFirstSampleFailure(
 			cb(null, { topics: topicsMap });
 		}),
 		listOffsets: mock(async (req: ListOffsetsCall) => {
+			assertNoDuplicatePartitions(req);
 			const results: Array<{
 				name: string;
 				partitions: Array<{ partitionIndex: number; timestamp: bigint; offset: bigint }>;
 			}> = [];
 
 			for (const topic of req.topics) {
-				const count = (callCounts.get(topic.name) ?? 0) + 1;
-				callCounts.set(topic.name, count);
-				if (topic.name === failTopicOnFirstCall && count === 1) {
-					throw new Error(`Simulated first-sample failure for ${topic.name}`);
+				if (isLatestPass(topic)) {
+					const count = (callCounts.get(topic.name) ?? 0) + 1;
+					callCounts.set(topic.name, count);
+					if (topic.name === failTopicOnFirstCall && count === 1) {
+						throw new Error(`Simulated first-sample failure for ${topic.name}`);
+					}
 				}
 				const total = totals.get(topic.name) ?? 0;
 				results.push({
 					name: topic.name,
-					partitions: [
-						{ partitionIndex: 0, timestamp: ListOffsetTimestamps.EARLIEST, offset: 0n },
-						{ partitionIndex: 0, timestamp: ListOffsetTimestamps.LATEST, offset: BigInt(total) },
-					],
+					partitions: topic.partitions.map((p) => ({
+						partitionIndex: p.partitionIndex,
+						timestamp: p.timestamp,
+						offset: p.timestamp === ListOffsetTimestamps.EARLIEST ? 0n : BigInt(total),
+					})),
 				});
 			}
 
@@ -136,24 +167,28 @@ function buildClientManagerWithSecondSampleFailure(
 			cb(null, { topics: topicsMap });
 		}),
 		listOffsets: mock(async (req: ListOffsetsCall) => {
+			assertNoDuplicatePartitions(req);
 			const results: Array<{
 				name: string;
 				partitions: Array<{ partitionIndex: number; timestamp: bigint; offset: bigint }>;
 			}> = [];
 
 			for (const topic of req.topics) {
-				const count = (callCounts.get(topic.name) ?? 0) + 1;
-				callCounts.set(topic.name, count);
-				if (count > 1) {
-					throw new Error(`Topic ${topic.name} unavailable on second sample`);
+				if (isLatestPass(topic)) {
+					const count = (callCounts.get(topic.name) ?? 0) + 1;
+					callCounts.set(topic.name, count);
+					if (count > 1) {
+						throw new Error(`Topic ${topic.name} unavailable on second sample`);
+					}
 				}
 				const total = firstSampleTotals.get(topic.name) ?? 0;
 				results.push({
 					name: topic.name,
-					partitions: [
-						{ partitionIndex: 0, timestamp: ListOffsetTimestamps.EARLIEST, offset: 0n },
-						{ partitionIndex: 0, timestamp: ListOffsetTimestamps.LATEST, offset: BigInt(total) },
-					],
+					partitions: topic.partitions.map((p) => ({
+						partitionIndex: p.partitionIndex,
+						timestamp: p.timestamp,
+						offset: p.timestamp === ListOffsetTimestamps.EARLIEST ? 0n : BigInt(total),
+					})),
 				});
 			}
 
@@ -188,6 +223,7 @@ function buildClientManagerMultiPartition(
 			cb(null, { topics: topicsMap });
 		}),
 		listOffsets: mock(async (req: ListOffsetsCall) => {
+			assertNoDuplicatePartitions(req);
 			const results: Array<{
 				name: string;
 				partitions: Array<{ partitionIndex: number; timestamp: bigint; offset: bigint }>;
@@ -233,24 +269,28 @@ function buildClientManagerWithMixedSecondSampleFailure(
 			cb(null, { topics: topicsMap });
 		}),
 		listOffsets: mock(async (req: ListOffsetsCall) => {
+			assertNoDuplicatePartitions(req);
 			const results: Array<{
 				name: string;
 				partitions: Array<{ partitionIndex: number; timestamp: bigint; offset: bigint }>;
 			}> = [];
 
 			for (const topic of req.topics) {
-				const count = (callCounts.get(topic.name) ?? 0) + 1;
-				callCounts.set(topic.name, count);
-				if (topic.name === failSecondSampleTopic && count > 1) {
-					throw new Error(`Simulated second-sample failure for ${topic.name}`);
+				if (isLatestPass(topic)) {
+					const count = (callCounts.get(topic.name) ?? 0) + 1;
+					callCounts.set(topic.name, count);
+					if (topic.name === failSecondSampleTopic && count > 1) {
+						throw new Error(`Simulated second-sample failure for ${topic.name}`);
+					}
 				}
 				const total = firstSampleTotals.get(topic.name) ?? 0;
 				results.push({
 					name: topic.name,
-					partitions: [
-						{ partitionIndex: 0, timestamp: ListOffsetTimestamps.EARLIEST, offset: 0n },
-						{ partitionIndex: 0, timestamp: ListOffsetTimestamps.LATEST, offset: BigInt(total) },
-					],
+					partitions: topic.partitions.map((p) => ({
+						partitionIndex: p.partitionIndex,
+						timestamp: p.timestamp,
+						offset: p.timestamp === ListOffsetTimestamps.EARLIEST ? 0n : BigInt(total),
+					})),
 				});
 			}
 
@@ -522,6 +562,56 @@ describe("SIO-1150 DLQ listing", () => {
 		// One batched call for the 5-topic batch, not one per topic.
 		expect(metadataMock.mock.calls.length).toBe(1);
 		expect((metadataMock.mock.calls[0]?.[0] as { topics: string[] }).topics).toHaveLength(5);
+	});
+});
+
+// SIO-1157: the dual-sentinel shape put duplicate partitionIndex entries into one
+// broker ListOffsets request, which live brokers reject; the rejection was silently
+// swallowed and the tool returned []. Every fake above now rejects duplicates
+// (broker semantics), so the whole suite regresses on the old shape; this test
+// additionally locks the request shape itself.
+describe("SIO-1157 single-sentinel sampling", () => {
+	test("every listOffsets request is single-sentinel with unique partitions", async () => {
+		const requests: ListOffsetsCall[] = [];
+		const topicNames = ["orders-dlq"];
+		const fakeAdmin = {
+			listTopics: mock(async () => topicNames),
+			metadata: mock((metaOpts: { topics: string[] }, cb: MetadataCallback) => {
+				const topicsMap = new Map<string, { partitions: Record<number, unknown> }>();
+				for (const t of metaOpts.topics) topicsMap.set(t, { partitions: { 0: {}, 1: {} } });
+				cb(null, { topics: topicsMap });
+			}),
+			listOffsets: mock(async (req: ListOffsetsCall) => {
+				assertNoDuplicatePartitions(req);
+				requests.push(req);
+				return req.topics.map((topic) => ({
+					name: topic.name,
+					partitions: topic.partitions.map((p) => ({
+						partitionIndex: p.partitionIndex,
+						timestamp: p.timestamp,
+						offset: p.timestamp === ListOffsetTimestamps.EARLIEST ? 5n : 105n,
+					})),
+				}));
+			}),
+		} as unknown as Admin;
+		const manager = {
+			withAdmin: async <T>(fn: (admin: Admin) => Promise<T>): Promise<T> => fn(fakeAdmin),
+		} as unknown as KafkaClientManager;
+		const service = new KafkaService(manager);
+
+		const result = await service.listDlqTopics({ skipDelta: true });
+
+		// SIO-1159 merge: listDlqTopics now returns the diagnostics wrapper.
+		expect(result.topics).toEqual([{ name: "orders-dlq", totalMessages: 200, recentDelta: null }]);
+		// Two calls (EARLIEST pass, LATEST pass), each with one sentinel across both partitions.
+		expect(requests).toHaveLength(2);
+		for (const req of requests) {
+			for (const topic of req.topics) {
+				const sentinels = new Set(topic.partitions.map((p) => p.timestamp));
+				expect(sentinels.size).toBe(1);
+				expect(topic.partitions).toHaveLength(2);
+			}
+		}
 	});
 });
 

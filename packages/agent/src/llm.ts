@@ -57,7 +57,10 @@ export type LlmRole =
 	| "hilDistiller"
 	// SIO-1149: degrading-gaps veto judge -- confirms regex-flagged Gaps bullets
 	// before the confidence cap applies. Only runs on would-cap paths.
-	| "gapsJudge";
+	| "gapsJudge"
+	// SIO-1158: contradicted-absence veto judge -- confirms regex-flagged absence
+	// claims against the flagging datasource's returned data before the cap applies.
+	| "absenceJudge";
 
 const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	orchestrator: {},
@@ -92,6 +95,8 @@ const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	hilDistiller: { temperature: 0, maxTokens: 4096 },
 	// SIO-1149: deterministic per-bullet verdicts as compact JSON.
 	gapsJudge: { temperature: 0, maxTokens: 1024 },
+	// SIO-1158: deterministic per-claim verdicts as compact JSON.
+	absenceJudge: { temperature: 0, maxTokens: 1024 },
 };
 
 // SIO-739: Per-role wall-clock deadline for non-streaming llm.invoke calls. A
@@ -127,6 +132,8 @@ export const ROLE_DEADLINES_MS: Record<LlmRole, number> = {
 	// SIO-1149: on the aggregate critical path (would-cap runs only); a slow judge
 	// must never stall the report -- fail-closed to the regex verdict instead.
 	gapsJudge: 8_000,
+	// SIO-1158: same profile as gapsJudge -- would-cap runs only, fail-closed.
+	absenceJudge: 8_000,
 };
 
 // SIO-739: Convert camelCase LlmRole to SCREAMING_SNAKE for env-var keys.
@@ -180,7 +187,7 @@ const TOOL_BINDING_ROLES: ReadonlySet<LlmRole> = new Set(["subAgent"]);
 // replay eval, without a code change. Every tierable role is invoke-only (not in
 // TOOL_BINDING_ROLES), so withFallbacks is unchanged and a light-model failure falls
 // UP to the standard manifest model.
-const DEFAULT_LIGHTWEIGHT_ROLES: ReadonlySet<LlmRole> = new Set(["classifier", "gapsJudge"]);
+const DEFAULT_LIGHTWEIGHT_ROLES: ReadonlySet<LlmRole> = new Set(["classifier", "gapsJudge", "absenceJudge"]);
 const TIERABLE_ROLES: ReadonlySet<LlmRole> = new Set([
 	"classifier",
 	"entityExtractor",
@@ -190,6 +197,7 @@ const TIERABLE_ROLES: ReadonlySet<LlmRole> = new Set([
 	"followUp",
 	"actionProposal",
 	"gapsJudge",
+	"absenceJudge",
 ]);
 
 export function isLightweightRole(role: LlmRole, env: NodeJS.ProcessEnv = process.env): boolean {
