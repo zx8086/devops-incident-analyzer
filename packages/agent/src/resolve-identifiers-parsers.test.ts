@@ -2,6 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+	isEmptyBucketsEnvelope,
 	parseApmCompositeAggPage,
 	parseAwsEcsClusterArns,
 	parseAwsEcsServiceArns,
@@ -12,6 +13,7 @@ import {
 	parseCouchbaseSystemIndexes,
 	parseElasticServiceAgg,
 	parseGitlabProjects,
+	parseKafkaConsumerGroupEntries,
 	parseKafkaConsumerGroups,
 	parseKafkaGroupTopics,
 	parseKafkaTopics,
@@ -52,6 +54,31 @@ describe("parseElasticServiceAgg", () => {
 	test("dedupes repeated keys", () => {
 		const dup = JSON.stringify({ a: { buckets: [{ key: "x" }] }, b: { buckets: [{ key: "x" }] } });
 		expect(parseElasticServiceAgg(dup)).toEqual(["x"]);
+	});
+});
+
+describe("isEmptyBucketsEnvelope", () => {
+	// SIO-1153: the real MCP render for an index that exists with zero docs in the
+	// window (eu-onboarding) -- a full agg envelope with an empty buckets array.
+	const EMPTY_ENVELOPE = [
+		"Search results with aggregations (0 total hits, 0ms):",
+		JSON.stringify({ svc_names: { doc_count_error_upper_bound: 0, sum_other_doc_count: 0, buckets: [] } }),
+	].join("\n\n");
+
+	test("true for a valid zero-result agg envelope (empty buckets)", () => {
+		expect(isEmptyBucketsEnvelope(EMPTY_ENVELOPE)).toBe(true);
+	});
+
+	test("false for the bare {} / no-buckets / error envelopes (drift stays drift)", () => {
+		expect(isEmptyBucketsEnvelope("Search results with aggregations (0 total hits, 0ms):\n\n{}")).toBe(false);
+		expect(isEmptyBucketsEnvelope(JSON.stringify({ error: "boom" }))).toBe(false);
+		expect(isEmptyBucketsEnvelope("no json here")).toBe(false);
+	});
+
+	test("false when any buckets array is non-empty (even with unreadable keys)", () => {
+		// Non-string keys parse to zero names, but the buckets are NOT empty -> drift, not empty.
+		expect(isEmptyBucketsEnvelope(JSON.stringify({ svc_names: { buckets: [{ key: 42 }] } }))).toBe(false);
+		expect(isEmptyBucketsEnvelope(JSON.stringify({ a: { buckets: [] }, b: { buckets: [{ key: "x" }] } }))).toBe(false);
 	});
 });
 
@@ -304,6 +331,34 @@ describe("parseKafkaConsumerGroups", () => {
 
 	test("returns [] when not an array", () => {
 		expect(parseKafkaConsumerGroups({ groups: [] })).toEqual([]);
+	});
+});
+
+describe("parseKafkaConsumerGroupEntries", () => {
+	test("carries protocolType when present and non-blank (SIO-1153)", () => {
+		const json = [
+			{ id: "orders-cg", state: "STABLE", groupType: "Classic", protocolType: "consumer" },
+			{ id: "schema-registry", state: "STABLE", protocolType: "sr" },
+			{ id: "aws-connect-group", state: "STABLE", protocolType: "connect" },
+			// EMPTY classic group: no elected protocol -> blank reads as absent
+			{ id: "idle-cg", state: "EMPTY", protocolType: "" },
+			// provider shape without protocolType at all
+			{ groupId: "legacy-cg" },
+			"plain-string-cg",
+		];
+		expect(parseKafkaConsumerGroupEntries(json)).toEqual([
+			{ id: "orders-cg", protocolType: "consumer" },
+			{ id: "schema-registry", protocolType: "sr" },
+			{ id: "aws-connect-group", protocolType: "connect" },
+			{ id: "idle-cg" },
+			{ id: "legacy-cg" },
+			{ id: "plain-string-cg" },
+		]);
+	});
+
+	test("dedupes by id and returns [] on shape drift", () => {
+		expect(parseKafkaConsumerGroupEntries([{ id: "a" }, { id: "a", protocolType: "consumer" }])).toEqual([{ id: "a" }]);
+		expect(parseKafkaConsumerGroupEntries({ groups: [] })).toEqual([]);
 	});
 });
 

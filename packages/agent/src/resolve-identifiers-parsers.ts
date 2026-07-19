@@ -47,6 +47,30 @@ function collectBucketKeys(node: Record<string, unknown>): string[] {
 	return out;
 }
 
+// SIO-1153: true when the response is a VALID zero-result aggregation envelope -- it
+// carries at least one `buckets` array and every one is empty. An index that exists
+// but has no docs in the window renders {"svc_names":{...,"buckets":[]}}, NOT the
+// bare `{}` ES uses for a zero-hit wildcard search, and must read as authoritatively
+// empty. No `buckets` key anywhere (error envelope), or non-empty buckets that still
+// yielded no keys, stays drift for the caller to reject.
+export function isEmptyBucketsEnvelope(normalized: string): boolean {
+	const parsed = firstJson(normalized);
+	if (!parsed || typeof parsed !== "object") return false;
+	const arrays = collectBucketArrays(parsed as Record<string, unknown>);
+	return arrays.length > 0 && arrays.every((buckets) => buckets.length === 0);
+}
+
+function collectBucketArrays(node: Record<string, unknown>): unknown[][] {
+	const out: unknown[][] = [];
+	for (const value of Object.values(node)) {
+		if (!value || typeof value !== "object") continue;
+		const buckets = (value as Record<string, unknown>).buckets;
+		if (Array.isArray(buckets)) out.push(buckets);
+		out.push(...collectBucketArrays(value as Record<string, unknown>));
+	}
+	return out;
+}
+
 // COUCHBASE: capella_get_scopes_and_collections returns a text tree with a
 // "[folder icon] Scope: <name>" line per scope and an indented
 // "[page icon] Collection: <name>" line per collection ("(No collections)" for
@@ -232,22 +256,39 @@ export function parseKafkaTopics(json: unknown): string[] {
 	return dedupe(names);
 }
 
+export interface KafkaConsumerGroupEntry {
+	id: string;
+	protocolType?: string;
+}
+
 // KAFKA consumer groups: kafka_list_consumer_groups returns an array of
-// { id, state, ... } rows (or { groupId } shapes on some providers).
-export function parseKafkaConsumerGroups(json: unknown): string[] {
+// { id, state, protocolType, ... } rows (or { groupId } shapes on some providers).
+// SIO-1153: protocolType is carried when present and non-blank so callers can skip
+// coordination-only groups (Schema Registry "sr", Connect worker "connect"). A blank
+// protocolType reads as absent -- an EMPTY classic group has no elected protocol, so
+// callers must treat absent as describable, never as non-consumer.
+export function parseKafkaConsumerGroupEntries(json: unknown): KafkaConsumerGroupEntry[] {
 	if (!Array.isArray(json)) return [];
-	const ids = json
-		.map((g) => {
-			if (typeof g === "string") return g;
-			if (g && typeof g === "object") {
-				const rec = g as Record<string, unknown>;
-				const id = rec.id ?? rec.groupId;
-				return typeof id === "string" ? id : undefined;
-			}
-			return undefined;
-		})
-		.filter((s): s is string => typeof s === "string");
-	return dedupe(ids);
+	const out: KafkaConsumerGroupEntry[] = [];
+	const seen = new Set<string>();
+	for (const g of json) {
+		let id: unknown;
+		let protocolType: unknown;
+		if (typeof g === "string") id = g;
+		else if (g && typeof g === "object") {
+			const rec = g as Record<string, unknown>;
+			id = rec.id ?? rec.groupId;
+			protocolType = rec.protocolType;
+		}
+		if (typeof id !== "string" || seen.has(id)) continue;
+		seen.add(id);
+		out.push(typeof protocolType === "string" && protocolType !== "" ? { id, protocolType } : { id });
+	}
+	return out;
+}
+
+export function parseKafkaConsumerGroups(json: unknown): string[] {
+	return parseKafkaConsumerGroupEntries(json).map((g) => g.id);
 }
 
 export interface KonnectControlPlane {

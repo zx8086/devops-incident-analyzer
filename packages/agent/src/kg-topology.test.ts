@@ -723,4 +723,108 @@ describe("runTopologySweep", () => {
 			false,
 		);
 	});
+
+	// SIO-1153: an index that EXISTS but has zero docs in the window renders a full agg
+	// envelope with empty buckets (the live eu-onboarding shape), not the bare `{}`.
+	// It must read as an APM-less deployment (empty, no "query failed" WARN), exactly
+	// like the SIO-1121 bare-{} case: primary tries, fallback tries, both empty -> the
+	// deployment fulfills-empty. With a single all-empty deployment the callers.length>0
+	// guard still keeps the source sweepSkipped.
+	test("a valid-empty agg envelope (buckets: []) is an APM-less deployment, not drift (SIO-1153)", async () => {
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		connectedServers = ["elastic-mcp"];
+		let namesCall = 0;
+		toolRegistry.elastic = [
+			{
+				name: "elasticsearch_search",
+				invoke: async (args) => {
+					if (isServiceNamesRequest(args)) namesCall++;
+					return apmServiceNamesPage([]); // full envelope, buckets: []
+				},
+			},
+		];
+		const summary = await runTopologySweep();
+		expect(namesCall).toBe(2); // primary empty -> fallback pre-fetch also tried
+		expect(summary.sources.elastic).toMatchObject({ edges: 0, sweepSkipped: true });
+		expect(summary.sources.elastic?.error).toBeUndefined(); // NOT a failure
+		expect(
+			store.calls.some((c) => c.cypher.includes("(a:Service)-[r:DEPENDS_ON]") && c.cypher.includes("AS misses")),
+		).toBe(false);
+	});
+
+	// SIO-1153: one APM-less deployment (valid-empty envelope) among healthy ones no
+	// longer fails the source -- before the fix its rejection made complete=false every
+	// sweep, permanently suppressing the elastic staleness sweep.
+	test("an APM-less deployment among healthy ones keeps the source complete; sweep runs (SIO-1153)", async () => {
+		process.env.ELASTIC_DEPLOYMENTS = "prod, onboarding"; // owned in ORIG_ENV save/restore
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		connectedServers = ["elastic-mcp"];
+		let namesCall = 0;
+		toolRegistry.elastic = [
+			{
+				name: "elasticsearch_search",
+				invoke: async (args) => {
+					if (isServiceNamesRequest(args)) {
+						namesCall++;
+						// call 1 = prod primary (has services); calls 2+3 = onboarding primary+fallback (empty)
+						return namesCall === 1
+							? apmServiceNamesPage(["order-service", "payment-service"])
+							: apmServiceNamesPage([]);
+					}
+					return apmCompositePage([{ service: "order-service", destinations: ["payment-service"] }]);
+				},
+			},
+		];
+		const summary = await runTopologySweep();
+		expect(namesCall).toBe(3); // prod primary + onboarding primary + onboarding fallback
+		expect(summary.sources.elastic).toMatchObject({ edges: 1, invalidated: 0 });
+		expect(summary.sources.elastic?.sweepSkipped).toBeUndefined(); // complete -> swept
+		expect(summary.sources.elastic?.error).toBeUndefined();
+		expect(
+			store.calls.some((c) => c.cypher.includes("(a:Service)-[r:DEPENDS_ON]") && c.cypher.includes("AS misses")),
+		).toBe(true);
+	});
+
+	// SIO-1153: coordination-only groups (Schema Registry protocolType "sr", Connect
+	// worker "connect") fail describe at the broker and rode the 15s timeout every
+	// sweep. They are now skipped BEFORE the describe fan-out and do not penalize
+	// `complete`; a blank protocolType (EMPTY classic group) stays describable.
+	test("non-consumer-protocol kafka groups are skipped without penalizing the sweep (SIO-1153)", async () => {
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		connectedServers = ["kafka-mcp"];
+		const describedGroups: string[] = [];
+		toolRegistry.kafka = [
+			{
+				name: "kafka_list_consumer_groups",
+				invoke: async () =>
+					JSON.stringify([
+						{ id: "orders-cg", state: "STABLE", groupType: "Classic", protocolType: "consumer" },
+						{ id: "schema-registry", state: "STABLE", protocolType: "sr" },
+						{ id: "aws-connect-group", state: "STABLE", protocolType: "connect" },
+						{ id: "idle-cg", state: "EMPTY", protocolType: "" }, // no elected protocol -> describable
+					]),
+			},
+			{
+				name: "kafka_describe_consumer_group",
+				invoke: async (args) => {
+					const groupId = (args as { groupId: string }).groupId;
+					describedGroups.push(groupId);
+					if (groupId === "schema-registry" || groupId === "aws-connect-group") {
+						throw new Error("metadata failed 4 times."); // would fail the source if ever described
+					}
+					return JSON.stringify({ offsets: [{ topic: `topic-${groupId}` }] });
+				},
+			},
+		];
+		const summary = await runTopologySweep();
+		expect(describedGroups.sort()).toEqual(["idle-cg", "orders-cg"]); // sr/connect never described
+		expect(summary.sources.kafka).toMatchObject({ edges: 2, invalidated: 0 });
+		expect(summary.sources.kafka?.sweepSkipped).toBeUndefined(); // skipping does NOT penalize complete
+		expect(store.calls.some((c) => c.cypher.includes("[r:CONSUMES_FROM]") && c.cypher.includes("AS misses"))).toBe(
+			true,
+		);
+	});
 });
