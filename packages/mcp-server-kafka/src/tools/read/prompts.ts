@@ -10,13 +10,15 @@ export const DESCRIBE_TOPIC_DESCRIPTION = `[READ] Get detailed information about
 
 export const GET_TOPIC_OFFSETS_DESCRIPTION = `[READ] Get current offsets for all partitions of a topic. Optionally specify a timestamp to get offsets at a specific point in time. Useful for understanding data volume and time-based offset lookups.`;
 
-export const CONSUME_MESSAGES_DESCRIPTION = `[READ] Read messages from a Kafka topic. Creates an ephemeral consumer that does not affect existing consumer groups. Use this to inspect message content, verify data formats, or debug data flow issues. Returns up to maxMessages within the timeout period.`;
+export const CONSUME_MESSAGES_DESCRIPTION = `[READ] Read messages from a Kafka topic. Creates an ephemeral consumer that does not affect existing consumer groups. IMPORTANT: by default the consumer starts at the LATEST offset and only sees messages produced during the timeout window -- existing backlog is invisible. Pass fromBeginning:true to read historical messages, or use kafka_get_message_by_offset for a specific offset. An empty result returns { messages: [], mode, note } explaining the likely cause. Messages whose value is not valid UTF-8 text (Avro/Protobuf) are flagged valueLooksBinary:true.`;
 
 export const LIST_CONSUMER_GROUPS_DESCRIPTION = `[READ] List consumer groups in the cluster. Optionally filter by regex pattern or state. Use this to discover consumer groups and their current status.`;
 
 // SIO-770: drives the kafka-dlq-growth correlation rule. recentDelta > 0 across
 // any topic indicates live failure inflow (not historical noise).
-export const LIST_DLQ_TOPICS_DESCRIPTION = `[READ] List dead-letter queue topics (matched by suffix/prefix conventions like -dlq, dlt-, .DLQ) with totalMessages and recentDelta. By default, samples offsets twice ~30s apart so recentDelta = secondSample - firstSample reveals live message inflow vs. historical accumulation. Pass skipDelta:true for a fast single-sample probe (recentDelta:null). Use to detect DLQs growing right now, which often indicates a stalled consumer or repeated processing failures.`;
+// SIO-1159: description updated to the SIO-1150 reality (10s delta window,
+// auto-skip above 15 topics) and the diagnostics wrapper shape.
+export const LIST_DLQ_TOPICS_DESCRIPTION = `[READ] List dead-letter queue topics (matched by naming conventions -dlq, dlt-*, *-dead-letter, dead-letter-*, *.dlq, DLQ_*) with totalMessages and recentDelta. Returns { topics, matched, sampleFailed, sampleFailedTopics?, note? }: matched counts DLQ-named topics; sampleFailed counts those omitted because offset sampling failed (they still exist -- their names are in sampleFailedTopics; probe each with kafka_describe_topic). By default samples offsets twice ~10s apart so recentDelta = secondSample - firstSample reveals live inflow vs. historical accumulation; above 15 matched topics the delta window is auto-skipped (recentDelta:null). Pass skipDelta:true for a fast single-sample probe. Use to detect DLQs growing right now, which often indicates a stalled consumer or repeated processing failures.`;
 
 export const DESCRIBE_CONSUMER_GROUP_DESCRIPTION = `[READ] Get detailed information about a consumer group including members, assigned partitions, and committed offsets. Use this to debug consumer lag or group coordination issues.`;
 

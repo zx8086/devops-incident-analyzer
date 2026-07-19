@@ -65,11 +65,17 @@ tool_mapping:
     # READER -- the sub-agent found pages by CQL/search, then had no tool to fetch the body
     # and reported "content not retrieved" gaps. Search-then-read requires the reader on
     # the same belt.
+    # SIO-1159: same gap, Jira half. findLinkedIncidents returns only {key, summary,
+    # status, mttrMinutes} -- run 270378e0 surfaced a related ticket but had no tool to
+    # fetch its body and reported "content not fully retrieved". The Jira reader (and
+    # the JQL search for follow-ups) belongs on the incident belt, mirroring SIO-1154.
     incident_correlation:
       - atlassian_search
       - findLinkedIncidents
       - getIncidentHistory
       - atlassian_getConfluencePage
+      - atlassian_getJiraIssue
+      - atlassian_searchJiraIssuesUsingJql
     runbook_lookup:
       - atlassian_search
       - getRunbookForAlert
@@ -79,9 +85,10 @@ tool_mapping:
       - atlassian_search
       - atlassian_searchJiraIssuesUsingJql
       - atlassian_getJiraIssue
-      - atlassian_getJiraIssueComments
       # SIO-1154: atlassian_search cross-searches Confluence, so even a Jira-focused
       # action can surface a page that must be READ before it is cited.
+      # SIO-1159: dropped atlassian_getJiraIssueComments -- not a real upstream tool;
+      # comments arrive via atlassian_getJiraIssue's triage preset.
       - atlassian_getConfluencePage
     confluence_query:
       - atlassian_search
@@ -92,6 +99,8 @@ tool_mapping:
       Jira tickets for an incident. START with atlassian_search over the incident's domain terms,
       THEN findLinkedIncidents/getIncidentHistory. The service token misses most. When a Confluence
       page surfaces as evidence, FETCH its body with atlassian_getConfluencePage before citing it.
+      When a Jira ticket surfaces (e.g. via findLinkedIncidents), FETCH its description and comments
+      with atlassian_getJiraIssue before citing or scoping it -- key+summary alone is not evidence.
     runbook_lookup: >-
       finding Confluence runbooks/ops docs. START with atlassian_search over the failure's domain
       terms, THEN getRunbookForAlert. A service-token-only search misses domain-named pages. FETCH

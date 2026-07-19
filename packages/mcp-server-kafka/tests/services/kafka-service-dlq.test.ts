@@ -324,7 +324,7 @@ describe("KafkaService.listDlqTopics", () => {
 			});
 			const service = new KafkaService(manager);
 
-			const result = await service.listDlqTopics({ skipDelta: true });
+			const { topics: result } = await service.listDlqTopics({ skipDelta: true });
 			const names = result.map((r) => r.name).sort();
 
 			expect(names).toEqual(["dead-letter-payments", "dlt-payments", "orders-dlq", "orders.DLQ", "users-dead-letter"]);
@@ -337,7 +337,7 @@ describe("KafkaService.listDlqTopics", () => {
 			});
 			const service = new KafkaService(manager);
 
-			const result = await service.listDlqTopics({ skipDelta: true });
+			const { topics: result } = await service.listDlqTopics({ skipDelta: true });
 
 			expect(result).toEqual([]);
 		});
@@ -351,7 +351,7 @@ describe("KafkaService.listDlqTopics", () => {
 			});
 			const service = new KafkaService(manager);
 
-			const result = await service.listDlqTopics({ windowMs: 1 });
+			const { topics: result } = await service.listDlqTopics({ windowMs: 1 });
 
 			expect(result).toHaveLength(1);
 			expect(result[0]?.name).toBe("orders-dlq");
@@ -366,7 +366,7 @@ describe("KafkaService.listDlqTopics", () => {
 			});
 			const service = new KafkaService(manager);
 
-			const result = await service.listDlqTopics({ windowMs: 1 });
+			const { topics: result } = await service.listDlqTopics({ windowMs: 1 });
 
 			expect(result).toHaveLength(1);
 			expect(result[0]?.totalMessages).toBe(100);
@@ -378,7 +378,7 @@ describe("KafkaService.listDlqTopics", () => {
 			const { manager } = buildClientManagerWithSecondSampleFailure(["orders-dlq"], firstSampleTotals);
 			const service = new KafkaService(manager);
 
-			const result = await service.listDlqTopics({ windowMs: 1 });
+			const { topics: result } = await service.listDlqTopics({ windowMs: 1 });
 
 			expect(result).toHaveLength(1);
 			expect(result[0]?.totalMessages).toBe(100);
@@ -398,7 +398,7 @@ describe("KafkaService.listDlqTopics", () => {
 			});
 			const service = new KafkaService(manager);
 
-			const result = await service.listDlqTopics({ windowMs: 1 });
+			const { topics: result } = await service.listDlqTopics({ windowMs: 1 });
 
 			expect(result).toHaveLength(50);
 			for (const entry of result) {
@@ -423,7 +423,7 @@ describe("KafkaService.listDlqTopics", () => {
 			});
 			const service = new KafkaService(manager);
 
-			const result = await service.listDlqTopics({ windowMs: 1 });
+			const { topics: result } = await service.listDlqTopics({ windowMs: 1 });
 
 			expect(result).toHaveLength(DLQ_AUTO_SKIP_DELTA_THRESHOLD);
 			for (const entry of result) {
@@ -445,7 +445,7 @@ describe("KafkaService.listDlqTopics", () => {
 			);
 			const service = new KafkaService(manager);
 
-			const result = await service.listDlqTopics({ windowMs: 1 });
+			const { topics: result } = await service.listDlqTopics({ windowMs: 1 });
 			const names = result.map((r) => r.name);
 
 			expect(names).not.toContain("topic-a-dlq");
@@ -466,7 +466,7 @@ describe("KafkaService.listDlqTopics", () => {
 			);
 			const service = new KafkaService(manager);
 
-			const result = await service.listDlqTopics({ windowMs: 1 });
+			const { topics: result } = await service.listDlqTopics({ windowMs: 1 });
 
 			expect(result).toHaveLength(2);
 			const good = result.find((r) => r.name === "topic-good-dlq");
@@ -497,7 +497,7 @@ describe("KafkaService.listDlqTopics", () => {
 			const { manager } = buildClientManagerMultiPartition("orders-dlq", 3, [100, 200, 300]);
 			const service = new KafkaService(manager);
 
-			const result = await service.listDlqTopics({ skipDelta: true });
+			const { topics: result } = await service.listDlqTopics({ skipDelta: true });
 
 			expect(result).toHaveLength(1);
 			expect(result[0]?.name).toBe("orders-dlq");
@@ -523,7 +523,7 @@ describe("SIO-1150 DLQ listing", () => {
 		const { manager } = buildClientManager({ topicNames, totalMessagesForTopic: () => 5 });
 		const service = new KafkaService(manager);
 
-		const result = await service.listDlqTopics({ skipDelta: true });
+		const { topics: result } = await service.listDlqTopics({ skipDelta: true });
 		const names = new Set(result.map((r) => r.name));
 		expect(names).toEqual(
 			new Set([
@@ -541,7 +541,7 @@ describe("SIO-1150 DLQ listing", () => {
 		const { manager, callCounts } = buildClientManager({ topicNames, totalMessagesForTopic: () => 5 });
 		const service = new KafkaService(manager);
 
-		const result = await service.listDlqTopics({ skipDelta: true, filter: "variant" });
+		const { topics: result } = await service.listDlqTopics({ skipDelta: true, filter: "variant" });
 		expect(result.map((r) => r.name)).toEqual(["DLQ_T_PRIVATE_VARIANT_RICH_NOTIFICATIONS"]);
 		// Unmatched candidates are never sampled.
 		expect(callCounts.has("orders-dlq")).toBe(false);
@@ -601,7 +601,8 @@ describe("SIO-1157 single-sentinel sampling", () => {
 
 		const result = await service.listDlqTopics({ skipDelta: true });
 
-		expect(result).toEqual([{ name: "orders-dlq", totalMessages: 200, recentDelta: null }]);
+		// SIO-1159 merge: listDlqTopics now returns the diagnostics wrapper.
+		expect(result.topics).toEqual([{ name: "orders-dlq", totalMessages: 200, recentDelta: null }]);
 		// Two calls (EARLIEST pass, LATEST pass), each with one sentinel across both partitions.
 		expect(requests).toHaveLength(2);
 		for (const req of requests) {
@@ -611,5 +612,73 @@ describe("SIO-1157 single-sentinel sampling", () => {
 				expect(topic.partitions).toHaveLength(2);
 			}
 		}
+	});
+});
+
+// SIO-1159: diagnostics wrapper -- an empty topics list is never ambiguous. matched
+// counts DLQ-named topics, sampleFailed counts those silently omitted by failed
+// offset sampling (run 270378e0 could not tell "no DLQs" from "all samples failed").
+describe("SIO-1159 DLQ diagnostics wrapper", () => {
+	test("zero pattern matches: matched 0 with a naming-conventions note", async () => {
+		const { manager } = buildClientManager({
+			topicNames: ["orders", "payments"],
+			totalMessagesForTopic: () => 0,
+		});
+		const service = new KafkaService(manager);
+
+		const result = await service.listDlqTopics({ skipDelta: true });
+
+		expect(result.topics).toEqual([]);
+		expect(result.matched).toBe(0);
+		expect(result.sampleFailed).toBe(0);
+		expect(result.note).toContain("No topic names matched the DLQ naming conventions");
+	});
+
+	test("zero matches after a filter bound names the filter in the note", async () => {
+		const { manager } = buildClientManager({
+			topicNames: ["orders-dlq"],
+			totalMessagesForTopic: () => 0,
+		});
+		const service = new KafkaService(manager);
+
+		const result = await service.listDlqTopics({ skipDelta: true, filter: "variant" });
+
+		expect(result.topics).toEqual([]);
+		expect(result.matched).toBe(0);
+		expect(result.note).toContain('"variant"');
+	});
+
+	test("sample failure is surfaced: matched 2, sampleFailed 1 with the failed topic NAMED", async () => {
+		const totals = new Map([
+			["topic-a-dlq", 50],
+			["topic-b-dlq", 80],
+		]);
+		const { manager } = buildClientManagerWithFirstSampleFailure(["topic-a-dlq", "topic-b-dlq"], totals, "topic-a-dlq");
+		const service = new KafkaService(manager);
+
+		const result = await service.listDlqTopics({ windowMs: 1 });
+
+		expect(result.matched).toBe(2);
+		expect(result.sampleFailed).toBe(1);
+		expect(result.sampleFailedTopics).toEqual(["topic-a-dlq"]);
+		expect(result.topics.map((t) => t.name)).toEqual(["topic-b-dlq"]);
+		expect(result.note).toContain("1 of 2 DLQ-named topics were omitted");
+		expect(result.note).toContain("EXIST");
+		expect(result.note).toContain("sampleFailedTopics");
+	});
+
+	test("healthy result carries counts, no note, no sampleFailedTopics", async () => {
+		const { manager } = buildClientManager({
+			topicNames: ["orders-dlq"],
+			totalMessagesForTopic: () => 5,
+		});
+		const service = new KafkaService(manager);
+
+		const result = await service.listDlqTopics({ skipDelta: true });
+
+		expect(result.matched).toBe(1);
+		expect(result.sampleFailed).toBe(0);
+		expect(result.sampleFailedTopics).toBeUndefined();
+		expect(result.note).toBeUndefined();
 	});
 });

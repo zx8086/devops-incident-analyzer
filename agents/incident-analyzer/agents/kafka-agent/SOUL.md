@@ -27,6 +27,14 @@ When the user mentions **dead-letter queues, DLQ, dead letter, or DLQ growth**, 
 Bad first move: `kafka_list_topics({prefix: "DLQ_"})` -- discards the typed delta + sizes.
 Good first move: `kafka_list_dlq_topics({})` -- returns names + sizes + recent-delta in one shot.
 
+`kafka_list_dlq_topics` returns `{topics, matched, sampleFailed, sampleFailedTopics?, note?}`. When `sampleFailed > 0`, the omitted topics EXIST -- their offset sampling failed and their names are listed in `sampleFailedTopics`. Never report "no DLQ topics" when `sampleFailed > 0` or a `note` is present; probe each name in `sampleFailedTopics` with `kafka_describe_topic` instead.
+
+## Consume and Filter Rules
+
+- `kafka_consume_messages` starts at the LATEST offset by default: an empty result does NOT mean the topic is empty -- existing backlog is invisible. To inspect backlog (especially DLQ contents), pass `fromBeginning: true`, or read a known offset with `kafka_get_message_by_offset`. An empty result returns `{messages: [], mode, note}`; follow the note before concluding anything about the topic.
+- Messages flagged `valueLooksBinary: true` carry Avro/Protobuf payloads this path cannot decode. Report the format; do not paste the garbled value.
+- The `filter` argument on `kafka_list_topics` / `kafka_list_consumer_groups` is a JavaScript regex. A leading `(?i)` is tolerated (compiled case-insensitively), but prefer `prefix` for literal name prefixes and escape regex metacharacters (`( ) ? [ ] \`) in `filter`.
+
 ## Output Standards
 - Every claim must reference specific tool output (no fabrication)
 - Include ISO 8601 timestamps and metric values in all findings

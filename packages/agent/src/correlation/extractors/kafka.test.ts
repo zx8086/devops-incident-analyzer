@@ -150,6 +150,34 @@ describe("extractKafkaFindings", () => {
 		expect(findings.dlqTopics?.[0]?.recentDelta).toBeNull();
 	});
 
+	// SIO-1159: the tool now returns { topics, matched, sampleFailed, note? }. The bare
+	// array above remains supported (the AgentCore deployment lags the repo).
+	test("maps the SIO-1159 wrapped { topics } response to dlqTopics[]", () => {
+		const outputs: ToolOutput[] = [
+			{
+				toolName: "kafka_list_dlq_topics",
+				rawJson: {
+					topics: [{ name: "dlt-mendix-events", totalMessages: 519414, recentDelta: 0 }],
+					matched: 2,
+					sampleFailed: 1,
+					note: "1 of 2 DLQ-named topics were omitted because offset sampling failed",
+				},
+			},
+		];
+		const findings = extractKafkaFindings(outputs);
+		expect(findings.dlqTopics).toEqual([{ name: "dlt-mendix-events", totalMessages: 519414, recentDelta: 0 }]);
+	});
+
+	test("wrapped response with empty topics yields no dlqTopics", () => {
+		const outputs: ToolOutput[] = [
+			{
+				toolName: "kafka_list_dlq_topics",
+				rawJson: { topics: [], matched: 0, sampleFailed: 0, note: "No topic names matched" },
+			},
+		];
+		expect(extractKafkaFindings(outputs).dlqTopics).toBeUndefined();
+	});
+
 	// SIO-785 follow-up (2026-05-18): cluster summary tile from kafka_describe_cluster.
 	// Shape live-probed against c72-shared-services-msk on 2026-05-18.
 	test("maps kafka_describe_cluster to cluster summary", () => {

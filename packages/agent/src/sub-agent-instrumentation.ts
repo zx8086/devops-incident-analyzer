@@ -3,6 +3,7 @@
 import { ToolMessage } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import {
+	consumeEmptyAwsResultsAdvice,
 	createLoopGuardState,
 	isGuardedTool,
 	isObservedTool,
@@ -26,7 +27,10 @@ import { truncateToolOutput } from "./sub-agent-truncate-tool-output.ts";
 // Add a tool name to this set when (a) it feeds an extractor and (b) the
 // extractor reads structured JSON rather than raw text. Free-text tools
 // (e.g. consume_messages output, query results) can still be truncated.
-const TYPED_FINDING_TOOLS = new Set<string>([
+// SIO-1159: exported so the persistence path in sub-agent.ts applies the SAME
+// exemption when capping toolOutputs[].rawJson -- extractFindings reads the
+// persisted form, so truncating there defeats the in-flight skip below.
+export const TYPED_FINDING_TOOLS = new Set<string>([
 	// kafka extractor
 	"kafka_list_consumer_groups",
 	"kafka_get_consumer_group_lag",
@@ -127,7 +131,28 @@ function instrumentTool(
 					if (observed) {
 						recordResult(runState.loopGuard, tool.name, signature, extractContent(result), arg);
 					}
-					return processResult(result, tool.name, iteration, ctx);
+					const processed = processResult(result, tool.name, iteration, ctx);
+					// SIO-1159: a successful-but-empty CloudWatch result never errors, so
+					// nothing steers the LLM off a too-narrow window (run 270378e0: a 24h
+					// window silently missed a 2-day-old incident). After consecutive
+					// empty-success results, append one-shot widen advice to the result.
+					if (tool.name === "aws_logs_get_query_results") {
+						const advice = consumeEmptyAwsResultsAdvice(runState.loopGuard);
+						if (advice) {
+							ctx.log.info(
+								{
+									event: "subagent.aws_empty_results_advice",
+									dataSourceId: ctx.dataSourceId,
+									deploymentId: ctx.deploymentId,
+									toolName: tool.name,
+									iteration,
+								},
+								"Appending widen-window advice after consecutive empty CloudWatch results",
+							);
+							return rebuildResult(processed, `${stringifyContent(extractContent(processed))}\n\n${advice}`);
+						}
+					}
+					return processed;
 				};
 			}
 			const value = Reflect.get(target, prop, receiver);

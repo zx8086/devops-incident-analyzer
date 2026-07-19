@@ -17,6 +17,13 @@ const GUARDED_TOOLS = new Set<string>(["elasticsearch_search", "aws_logs_start_q
 
 const AWS_DESCRIBE_LOG_GROUPS = "aws_logs_describe_log_groups";
 
+// SIO-1159: a successful-but-empty CloudWatch query carries no _error, so the
+// SIO-1141 re-anchor machinery never fires on it -- run 270378e0 queried a 24h
+// window that silently missed a 2-day-old incident. Track consecutive
+// Complete-with-0-rows aws_logs_get_query_results and emit one-shot widen advice.
+const AWS_GET_QUERY_RESULTS = "aws_logs_get_query_results";
+const AWS_EMPTY_RESULTS_ADVICE_THRESHOLD = 2;
+
 // An empty elasticsearch_search renders as "Total results: 0, showing 0 ...".
 const EMPTY_SEARCH_RE = /Total results:\s*0\b/i;
 
@@ -44,6 +51,13 @@ export const LOOP_GUARD_STOP_MESSAGE =
 	"that name; only if discovery surfaced no matching service at all, report that the " +
 	"searched indices/patterns returned no matching documents.";
 
+export const AWS_EMPTY_RESULTS_ADVICE =
+	"[loop-guard advice] The last two aws_logs_get_query_results calls completed successfully " +
+	"with 0 rows. An empty result from a narrow time window looks identical to 'no logs exist'. " +
+	"Before concluding absence, re-run the query ONCE with startRelative now-30d (or a window " +
+	"that reaches back past the incident time); only report absence if the widened query is " +
+	"also empty.";
+
 export const AWS_START_QUERY_STOP_MESSAGE =
 	"The previous aws_logs_start_query window was rejected as outside the log group's " +
 	"retention window, and you have not re-anchored since. Do NOT re-issue the same query. " +
@@ -67,6 +81,9 @@ export interface LoopGuardState {
 	// windows and instead bound the total unproductive attempts (mirrors MAX_UNPRODUCTIVE_SEARCHES)
 	// so a permuter that keeps landing outside retention still terminates.
 	awsStartQueryUnproductive: number;
+	// SIO-1159: consecutive Complete-with-0-rows aws_logs_get_query_results. Reset by any
+	// non-empty result; consumed (reset) when the widen advice is emitted.
+	awsEmptyQueryResults: number;
 }
 
 export function createLoopGuardState(): LoopGuardState {
@@ -75,6 +92,7 @@ export function createLoopGuardState(): LoopGuardState {
 		unproductiveSearches: 0,
 		awsStartQueryNeedsReanchor: false,
 		awsStartQueryUnproductive: 0,
+		awsEmptyQueryResults: 0,
 	};
 }
 
@@ -148,6 +166,45 @@ export function awsErrorKind(content: unknown): string | null {
 		return null;
 	}
 	return null;
+}
+
+function parseAwsQueryResults(content: unknown): { status: string; resultCount: number } | null {
+	const text = typeof content === "string" ? content : safeStringify(content);
+	if (!text.includes('"status"')) return null;
+	const start = text.indexOf("{");
+	if (start === -1) return null;
+	try {
+		const parsed = JSON.parse(text.slice(start));
+		if (!parsed || typeof parsed !== "object") return null;
+		const obj = parsed as Record<string, unknown>;
+		if (typeof obj.status !== "string" || !Array.isArray(obj.results)) return null;
+		return { status: obj.status, resultCount: obj.results.length };
+	} catch {
+		return null;
+	}
+}
+
+// SIO-1159: detect a successful-but-empty CloudWatch Logs Insights result --
+// {status:"Complete", results:[]}. Distinct from isUnproductiveResult: this is a
+// SUCCESS shape (no _error), which the SIO-1141 machinery deliberately ignores.
+export function isEmptyAwsQueryResults(content: unknown): boolean {
+	const parsed = parseAwsQueryResults(content);
+	return parsed !== null && parsed.status === "Complete" && parsed.resultCount === 0;
+}
+
+// Scheduled/Running polls are in-flight, not outcomes -- they must be NEUTRAL for the
+// consecutive-empty counter, else the poll loop between two empty queries resets it.
+function isInFlightAwsQueryResults(content: unknown): boolean {
+	const parsed = parseAwsQueryResults(content);
+	return parsed !== null && (parsed.status === "Running" || parsed.status === "Scheduled");
+}
+
+// SIO-1159: one-shot widen advice after N consecutive empty-success results. Consuming
+// resets the counter so the advice is appended once, not to every subsequent call.
+export function consumeEmptyAwsResultsAdvice(state: LoopGuardState): string | null {
+	if (state.awsEmptyQueryResults < AWS_EMPTY_RESULTS_ADVICE_THRESHOLD) return null;
+	state.awsEmptyQueryResults = 0;
+	return AWS_EMPTY_RESULTS_ADVICE;
 }
 
 function safeStringify(value: unknown): string {
@@ -284,6 +341,16 @@ export function recordResult(
 		state.awsStartQueryUnproductive = 0;
 		return;
 	}
+	if (toolName === AWS_GET_QUERY_RESULTS) {
+		// SIO-1159: count consecutive empty-success outcomes. In-flight polls
+		// (Running/Scheduled) are neutral; a Complete with rows (or error) resets.
+		if (isEmptyAwsQueryResults(content)) {
+			state.awsEmptyQueryResults += 1;
+		} else if (!isInFlightAwsQueryResults(content)) {
+			state.awsEmptyQueryResults = 0;
+		}
+		return;
+	}
 	if (!GUARDED_TOOLS.has(toolName)) return;
 
 	state.seenSignatures.add(signature);
@@ -313,7 +380,7 @@ export function isGuardedTool(toolName: string): boolean {
 }
 
 export function isObservedTool(toolName: string): boolean {
-	return GUARDED_TOOLS.has(toolName) || toolName === AWS_DESCRIBE_LOG_GROUPS;
+	return GUARDED_TOOLS.has(toolName) || toolName === AWS_DESCRIBE_LOG_GROUPS || toolName === AWS_GET_QUERY_RESULTS;
 }
 
 // SIO-1084/1090: select the stop message for a guarded tool. `state` is accepted for a

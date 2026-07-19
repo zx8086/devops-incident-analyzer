@@ -84,3 +84,30 @@ describe("compileFilterOrThrow (SIO-1105)", () => {
 		expect(compileFilterOrThrow("^T_(dlq|retry)_[a-z]+$")).toBeInstanceOf(RegExp);
 	});
 });
+
+// SIO-1159: LLM callers habitually emit the PCRE inline flag "(?i)pattern", which JS
+// RegExp rejects. Run 270378e0 lost an iteration to "(?i)localcore|assignment|...".
+// A leading (?i) is stripped and compiled with the "i" flag instead of erroring.
+describe("compileFilterOrThrow (?i) leniency (SIO-1159)", () => {
+	test("accepts a leading (?i) and compiles case-insensitively", () => {
+		const re = compileFilterOrThrow("(?i)localcore|assignment|soldto|sold.to");
+		expect(re.flags).toContain("i");
+		expect(re.test("LOCALCORE-service")).toBe(true);
+		expect(re.test("customer-Assignments")).toBe(true);
+		expect(re.test("unrelated")).toBe(false);
+	});
+
+	test("plain patterns remain case-sensitive", () => {
+		const re = compileFilterOrThrow("localcore");
+		expect(re.flags).not.toContain("i");
+		expect(re.test("LOCALCORE")).toBe(false);
+	});
+
+	test("a NON-leading (?i) still throws the typed error", () => {
+		expect(() => compileFilterOrThrow("orders(?i)-dlq")).toThrow(InvalidFilterError);
+	});
+
+	test("ReDoS guard still applies to the stripped pattern", () => {
+		expect(() => compileFilterOrThrow("(?i)^(a+)+$")).toThrow(InvalidFilterError);
+	});
+});

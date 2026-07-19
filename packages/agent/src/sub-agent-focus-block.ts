@@ -177,6 +177,13 @@ function renderDatasourceLines(resolved: ResolvedIdentifiers, dataSourceId: stri
 			if (resolved.aws?.ecsServices?.length) {
 				lines.push(`- AWS ECS services: ${resolved.aws.ecsServices.join(", ")}`);
 			}
+			// SIO-1159: window guidance was missing for aws (the elastic case has its own
+			// now-30d rule). A successful-but-empty CloudWatch query never errors, so
+			// nothing downstream corrects a too-narrow window -- run 270378e0 queried
+			// now-24h and silently missed a 2-day-old incident that elastic had to recover.
+			lines.push(
+				"- CloudWatch Logs Insights windows: keep the default startRelative now-30d. Do NOT narrow to 1h/24h -- the incident may be days old, and an empty result from a narrow window looks identical to no logs. If a narrowed query returns 0 rows, re-run it once at now-30d before concluding absence.",
+			);
 			break;
 		case "kafka":
 			if (resolved.kafka?.topics.length) {

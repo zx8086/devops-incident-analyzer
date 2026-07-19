@@ -207,3 +207,50 @@ describe("KafkaService.consumeMessages SIO-699 timeout behavior", () => {
 		expect(stream.closed).toBe(true);
 	});
 });
+
+// SIO-1159: values that are not valid UTF-8 text (Avro/Protobuf payloads) decode to
+// mojibake via Buffer.toString(). Label them valueLooksBinary:true so the caller
+// knows the payload is binary rather than concluding the topic is unreadable.
+describe("KafkaService.consumeMessages SIO-1159 valueLooksBinary", () => {
+	function fakeMsg(value: Buffer) {
+		return {
+			topic: "topic-a",
+			partition: 0,
+			offset: 42n,
+			key: null,
+			value,
+			timestamp: 0n,
+			headers: new Map(),
+		};
+	}
+
+	async function consumeOne(value: Buffer) {
+		const stream = buildYieldingStream([fakeMsg(value)]);
+		const manager = buildClientManager(() => ({
+			closed: false,
+			consume: async () => stream,
+			close: async () => {},
+		}));
+		const service = new KafkaService(manager);
+		const messages = await service.consumeMessages({
+			topic: "topic-a",
+			maxMessages: 1,
+			timeoutMs: 5_000,
+			fromBeginning: true,
+		});
+		return messages[0];
+	}
+
+	test("an Avro-style binary payload is flagged", async () => {
+		// Magic byte + schema id + random high bytes: decodes to replacement chars.
+		const binary = Buffer.from([0x00, 0x00, 0x00, 0x01, 0xc3, 0x28, 0xa0, 0xa1, 0x80, 0x81, 0xfe, 0xff, 0x00, 0x9f]);
+		const msg = await consumeOne(binary);
+		expect(msg?.valueLooksBinary).toBe(true);
+	});
+
+	test("a JSON text payload is not flagged", async () => {
+		const msg = await consumeOne(Buffer.from(JSON.stringify({ id: null, soldToNumber: "0000000000" })));
+		expect(msg?.valueLooksBinary).toBeUndefined();
+		expect(msg?.value).toContain("soldToNumber");
+	});
+});
