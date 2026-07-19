@@ -272,3 +272,49 @@ describe("SIO-1137: couchbase query-diagnosis tools survive generic-incident act
 		expect(tools.length).toBeLessThanOrEqual(25);
 	});
 });
+
+// SIO-1161: the Metrics Insights + log-group-fields tools must survive the whole selection
+// chain with the REAL aws-introspect.yaml -- keyword augmentation picks cloudwatch_metrics for
+// fleet-triage phrasings, and the belt filter keeps the new tools under the 25-tool cap even
+// on a realistic multi-action incident.
+describe("SIO-1161: Metrics Insights tool selection with the real aws-introspect.yaml", () => {
+	const AGENTS_DIR = join(import.meta.dir, "../../../agents/incident-analyzer");
+
+	function loadAwsDef(): ToolDefinition {
+		const agent = loadAgent(AGENTS_DIR);
+		const awsDef = agent.tools.find((t) => t.name === "aws-introspect");
+		if (!awsDef) throw new Error("aws-introspect tool definition not found");
+		return awsDef;
+	}
+
+	test("fleet-triage phrasings keyword-match cloudwatch_metrics", () => {
+		const awsDef = loadAwsDef();
+		expect(matchActionsByKeywords("which service is noisiest right now", awsDef)).toContain("cloudwatch_metrics");
+		expect(matchActionsByKeywords("show the top 10 lambda functions by errors", awsDef)).toContain(
+			"cloudwatch_metrics",
+		);
+	});
+
+	test("a neutral query does NOT keyword-match cloudwatch_metrics", () => {
+		const awsDef = loadAwsDef();
+		expect(matchActionsByKeywords("check the rds instance status", awsDef)).not.toContain("cloudwatch_metrics");
+	});
+
+	test("a realistic multi-action union keeps both new tools inside the 25-tool belt", () => {
+		const awsDef = loadAwsDef();
+		const allTools = fakeTools(getAllActionToolNames(awsDef));
+		expect(allTools.length).toBeGreaterThan(25); // filter path must engage
+
+		const actions = ["cloudwatch_metrics", "ec2_state", "logs_insights", "ecs_state"];
+		const { tools, filtered } = selectToolsByAction(allTools, "aws", { aws: actions }, awsDef);
+
+		expect(filtered).toBe(true);
+		const names = tools.map((t) => t.name);
+		expect(names).toContain("aws_cloudwatch_metrics_insights_query");
+		expect(names).toContain("aws_logs_get_log_group_fields");
+		// The async Logs Insights pair must never be split by the cap.
+		expect(names).toContain("aws_logs_start_query");
+		expect(names).toContain("aws_logs_get_query_results");
+		expect(tools.length).toBeLessThanOrEqual(25);
+	});
+});

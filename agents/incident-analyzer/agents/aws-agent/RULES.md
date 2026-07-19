@@ -18,6 +18,15 @@ Do NOT add `aws_rds_describe_db_clusters` (Aurora-only) to iteration 1; it stays
 Service-Specific Drill-Downs and fires only when an alarm dimension or follow-up
 indicates Aurora.
 
+When the query asks WHICH service/resource is slow, noisy, or erroring WITHOUT
+naming one ("which service is noisiest", "what is eating CPU", "top errors"),
+ALSO include a Metrics Insights top-N probe in iteration 1:
+`aws_cloudwatch_metrics_insights_query` with
+`SELECT SUM(Errors) FROM SCHEMA("AWS/Lambda", FunctionName) GROUP BY FunctionName ORDER BY SUM() DESC LIMIT 10`
+(or the AWS/Logs IncomingLogEvents query from the Fleet-wide top-N triage
+section to find the loudest log group). This names the culprit in one call
+instead of enumerating resources one by one.
+
 Only after these complete should you call other list/describe tools to drill
 into specific services. This guarantees a status snapshot is established
 before downstream calls produce noise.
@@ -174,6 +183,17 @@ When the user names a specific service or resource:
 - ECS: `aws_ecs_list_clusters` -> `aws_ecs_list_services` (per cluster) -> `aws_ecs_describe_services` -> `aws_ecs_list_tasks` -> `aws_ecs_describe_tasks` (in that order; `aws_ecs_describe_services` REQUIRES service names from `aws_ecs_list_services` — never guess). When correlating a service incident to a backend datastore (e.g. a service timing out while an RDS instance is hot), call `aws_ecs_describe_task_definition` with the `taskDefinition` from `aws_ecs_describe_services` and read its `containerDefinitions[].environment` / `.secrets` to CONFIRM which DB endpoint the service uses — do not assert the link from temporal overlap alone.
 - Lambda: `aws_lambda_list_functions` (paginated) for inventory; `aws_lambda_get_function_configuration` for a single function's runtime/env/timeout
 - RDS: `aws_rds_describe_db_instances` (instances) or `aws_rds_describe_db_clusters` (Aurora clusters). When an RDS CPU alarm is firing (or CPU is sustained-high), follow up with `aws_cloudwatch_get_metric_data` for namespace `AWS/RDS` dimension `DBInstanceIdentifier`, metrics `DatabaseConnections`, `ReadLatency`, and `WriteLatency` over the same window — this distinguishes connection-count pressure from query-load pressure and is required before recommending pool-size vs query-optimization remediation.
+- **Fleet-wide top-N triage (Metrics Insights).** Two sibling metric tools; pick by whether the resource is known:
+    - Resource KNOWN (an alarm dimension, a named service) -> `aws_cloudwatch_get_metric_data` with a MetricStat query on its exact namespace + dimensions.
+    - Resource UNKNOWN ("which instance/function/queue is hot") -> `aws_cloudwatch_metrics_insights_query` with a top-N SQL query, then drill into the winner with `aws_cloudwatch_get_metric_data`.
+    - **Query library (copy these verbatim, substitute `<...>` only).** Grammar rules: ONE query per call; string values in SINGLE quotes; WHERE supports only `=`, `!=`, `AND` (no OR/LIKE/IN); `LIMIT` <= 500; window <= 14 days (`startRelative` defaults to `now-3h`; pass `now-14d` max).
+        1. Top-10 EC2 by CPU: `SELECT MAX(CPUUtilization) FROM SCHEMA("AWS/EC2", InstanceId) GROUP BY InstanceId ORDER BY MAX() DESC LIMIT 10`
+        2. Top-10 Lambda by errors: `SELECT SUM(Errors) FROM SCHEMA("AWS/Lambda", FunctionName) GROUP BY FunctionName ORDER BY SUM() DESC LIMIT 10`
+        3. Top-10 log groups by write volume (find the screaming service): `SELECT SUM(IncomingLogEvents) FROM SCHEMA("AWS/Logs", LogGroupName) GROUP BY LogGroupName ORDER BY SUM() DESC LIMIT 10`
+        4. Top-10 SQS backlogs: `SELECT MAX(ApproximateNumberOfMessagesVisible) FROM SCHEMA("AWS/SQS", QueueName) GROUP BY QueueName ORDER BY MAX() DESC LIMIT 10`
+        5. Top-10 RDS by CPU: `SELECT MAX(CPUUtilization) FROM SCHEMA("AWS/RDS", DBInstanceIdentifier) GROUP BY DBInstanceIdentifier ORDER BY MAX() DESC LIMIT 10`
+        6. One named resource (WHERE form): `SELECT MAX(ApproximateAgeOfOldestMessage) FROM SCHEMA("AWS/SQS", QueueName) WHERE QueueName = '<queue-name>'`
+    - On a `bad-input` error, copy a library query verbatim and substitute — never invent grammar. The `_error.advice` restates the grammar; follow it.
 - DynamoDB: `aws_dynamodb_list_tables` -> `aws_dynamodb_describe_table` for a specific table
 - S3: `aws_s3_list_buckets` -> `aws_s3_get_bucket_location` (region check) -> `aws_s3_get_bucket_policy_status` (public-access check)
 - Messaging: `aws_sns_list_topics`, `aws_sqs_list_queues`, `aws_eventbridge_list_rules`, `aws_stepfunctions_list_state_machines`
@@ -185,6 +205,15 @@ When the user names a specific service or resource:
         3. Otherwise match the token against `logGroupName` across the known conventions: `/ecs/<cluster>/<svc>`, `/ecs/fargate/<estate>-<svc>-log-group`, `/aws/lambda/<svc>`, `/app/<svc>`, `/platform/<svc>`. Prefer groups with recent ingestion / non-trivial `storedBytes` — a group with 0 bytes or no recent events holds no application logs for this service.
         4. Only after a group is matched do you `start_query` it. If the first pattern guess returns no application logs, WIDEN to a bare-token `logGroupNamePattern` and re-enumerate before concluding "logs not onboarded" — an empty guessed-prefix is not proof of absence.
     - **queryString syntax (copy this).** A known-good Logs Insights query to find a service's errors: `fields @timestamp, @message | filter @message like /THE1/ | sort @timestamp desc | limit 20`. Chain commands with `|`; use `filter @message like /regex/` for text. A `MalformedQueryException` saying "unexpected symbol"/"invalid syntax"/"query definition snippets" is a **query-STRING syntax error, NOT a window error** -- do NOT re-anchor the window; simplify the query to `fields @timestamp, @message | limit 20` and retry (then filter client-side).
+    - **Logs Insights query library (copy these verbatim, substitute `<...>` only).** All validated live:
+        1. Recent errors: `fields @timestamp, @message | filter @message like /<error-token>/ | sort @timestamp desc | limit 20`
+        2. Error-pattern clustering (what KINDS of errors): `filter @message like /(?i)(error|exception|fail)/ | pattern @message | limit 10`
+        3. Deploy comparison (did errors change vs the previous equal-length period): `filter @message like /(?i)error/ | pattern @message | diff` -- `diff` ONLY works after `pattern`; a bare `| diff` is a compile error ("Diff operation has to be used after Pattern").
+        4. Error-rate timeline (WHEN it started): `filter @message like /(?i)error/ | stats count(*) as errors by bin(5m)`
+        5. Latency percentiles: `filter ispresent(<duration-field>) | stats pct(<duration-field>, 50) as p50, pct(<duration-field>, 95) as p95, pct(<duration-field>, 99) as p99 by bin(5m)` -- for Lambda groups `<duration-field>` is `@duration`; for other groups discover the field name FIRST with `aws_logs_get_log_group_fields` (a query on a guessed field returns zero rows with no error, which falsely reads as "no logs").
+        6. Top error sources by task/container: `filter @message like /(?i)error/ | stats count(*) as errors by @logStream | sort errors desc | limit 10`
+        7. Collapse repeats: `filter @message like /(?i)error/ | dedup @message | limit 20`
+    - **Infrequent Access caveat.** `pattern` and `diff` are unsupported on Infrequent Access log-class groups. If such a query errors, fall back to library query 4 (stats by bin) -- do NOT re-anchor the window.
     - **time window (relative, wide by default).** Call `aws_logs_start_query` with `startRelative: "now-30d"` (the default) — do NOT compute absolute epochs. An incident is almost always recent, and a wide relative window cannot be mis-dated. Only pass an absolute `startTime`/`endTime` (Unix epoch SECONDS) if you have an exact incident epoch; even then, never shift its year. A `MalformedQueryException` about "unexpected symbol"/"invalid syntax" is a query-STRING error (simplify to `fields @timestamp, @message | limit 20`), not a window error — never re-anchor on it, and never conclude "logs expired".
     - **`MalformedQueryException` recovery — WORK THE SEQUENCE before reporting a gap.** A first `MalformedQueryException` is NOT a dead end. Do all of the following, in order, before you may write that logs "were not retrieved / are unavailable" for that estate:
         1. If your last `start_query` used an absolute `startTime`/`endTime`, RE-ISSUE with `startRelative: "now-30d"` (drift-proof) — a mis-dated or wrong-unit (ms-vs-seconds) absolute epoch lands ~50,000 years out and reads as "outside retention". A different window is a legitimate retry; the loop guard allows a distinct window.
