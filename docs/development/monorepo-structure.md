@@ -1,7 +1,7 @@
 # Monorepo Structure
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-06-17
+> **Last updated:** 2026-07-19
 
 Package map and dependency graph for the DevOps Incident Analyzer Bun workspace monorepo. This document covers the workspace layout, package relationships, and configuration. The monorepo contains 17 workspace packages (5 core, 9 MCP servers — including the in-process `mcp-server-knowledge-graph` — and 3 supporting packages: knowledge-graph, memory-pr, skillflow), 1 app, and a set of declarative agent definitions that the gitagent-bridge package compiles into LangGraph nodes at runtime.
 
@@ -46,14 +46,14 @@ devops-incident-analyzer/
     observability/               Pino logger, OpenTelemetry, LangSmith tracing
     checkpointer/                LangGraph state persistence (memory + bun:sqlite)
     gitagent-bridge/             YAML-to-LangGraph adapter
-    agent/                       LangGraph supervisor and 20-node pipeline (23 with the knowledge graph enabled: correlation enforcement, typed findings, AWS estate router, mitigation branch split, gated KG nodes) plus a separate 30-node elastic-iac proposer graph
+    agent/                       LangGraph supervisor and 31-node pipeline (21 base + 4 gated KG + 6 gated HIL-learning nodes: correlation enforcement, typed findings, AWS estate router, resolveIdentifiers, mitigation branch split, gated KG nodes, HIL learning lane) plus a separate 30-node elastic-iac proposer graph
     knowledge-graph/             Embedded entity + correlation knowledge graph (lbug/LadybugDB; SIO-850/954/965; gated on KNOWLEDGE_GRAPH_ENABLED). See architecture/knowledge-graph.md
     mcp-server-knowledge-graph/  In-process Knowledge Graph MCP server (:9087, SIO-967): curated kg_* tools + read-only Cypher over the embedded graph
     memory-pr/                   PR-based human-in-the-loop for durable agent learnings (SIO-849)
     skillflow/                   Declarative workflow (DAG) loader + executor (SIO-848)
-    mcp-server-elastic/          Elasticsearch MCP server (~93 tools: 77 cluster + 16 conditional cloud/billing on EC_API_KEY)
+    mcp-server-elastic/          Elasticsearch MCP server (~102 tools: 86 cluster incl. 9 ML anomaly-detection + 16 conditional cloud/billing on EC_API_KEY)
     mcp-server-kafka/            Kafka MCP server (15-55 tools gated: kafka-core + SR + ksqlDB + Connect + REST Proxy)
-    mcp-server-couchbase/        Couchbase Capella MCP server (~15 tools)
+    mcp-server-couchbase/        Couchbase Capella MCP server (~37 tools: official Couchbase tools, SIO-1107)
     mcp-server-konnect/          Kong Konnect MCP server (15 enhanced + proxy)
     mcp-server-gitlab/           GitLab MCP server (proxy + 5-8 custom code analysis tools)
     mcp-server-atlassian/        Atlassian MCP server (Jira + Confluence Rovo OAuth 2.1 proxy + incident filters)
@@ -195,7 +195,7 @@ Source: `packages/gitagent-bridge/src/`
 
 ### @devops-agent/agent
 
-LangGraph supervisor with a 20-node StateGraph pipeline. This is the core orchestration package that processes incident queries. See [Agent Pipeline](../architecture/agent-pipeline.md) for the canonical reference; the table below is a summary.
+LangGraph supervisor with a 31-node StateGraph pipeline (21 base + 4 gated KG + 6 gated HIL-learning). This is the core orchestration package that processes incident queries. See [Agent Pipeline](../architecture/agent-pipeline.md) for the canonical reference; the table below is a summary.
 
 | Node | Responsibility |
 |------|----------------|
@@ -238,11 +238,11 @@ Source: `packages/agent/src/`
 
 ### @devops-agent/mcp-server-elastic
 
-Elasticsearch MCP server with ~93 tools for querying and managing Elasticsearch deployments. The base set is 77 cluster tools (search, index, ILM, watcher, etc.) and an additional 16 Elastic Cloud + Billing tools register only when `EC_API_KEY` is set (SIO-822–826).
+Elasticsearch MCP server with ~102 tools for querying and managing Elasticsearch deployments. The base set is 86 cluster tools (search, index, ILM, watcher, ML anomaly-detection, etc.) and an additional 16 Elastic Cloud + Billing tools register only when `EC_API_KEY` is set (SIO-822–826).
 
 | Capability | Details |
 |------------|---------|
-| Tools | ~93 tools: 77 cluster (index management, search, aggregations, cluster health, templates, ILM, watcher) + 16 conditional cloud/billing (`EC_API_KEY`) covering deployment audit, plan history, hardware-profile simulation with `rate_source_confidence`, and per-instance billing |
+| Tools | ~102 tools: 86 cluster (index management, search, aggregations, cluster health, templates, ILM, watcher, 9 ML anomaly-detection tools per SIO-1148) + 16 conditional cloud/billing (`EC_API_KEY`) covering deployment audit, plan history, hardware-profile simulation with `rate_source_confidence`, and per-instance billing |
 | Multi-deployment | `ELASTIC_DEPLOYMENTS=eu-cld,us-cld` with per-deployment URL and API key; cluster tools accept a per-call `deployment` arg |
 | Transports | SSE, HTTP (Streamable HTTP), stdio, AgentCore |
 | Port | 9080 (default) |
@@ -269,11 +269,11 @@ Source: `packages/mcp-server-kafka/src/`
 
 ### @devops-agent/mcp-server-couchbase
 
-Couchbase Capella MCP server with ~15 tools for cluster management, query analysis, and operational playbooks.
+Couchbase Capella MCP server with ~37 tools for cluster management, query analysis, and operational playbooks (SIO-1107 adopted the official Couchbase tools).
 
 | Capability | Details |
 |------------|---------|
-| Tools | ~15 tools: N1QL query, index management, bucket operations, playbooks |
+| Tools | ~37 tools: N1QL query, INFER schema, EXPLAIN, Index Advisor, covering-index detectors, bucket operations, playbooks |
 | Configuration | Single cluster: `CB_HOSTNAME`, `CB_USERNAME`, `CB_PASSWORD` |
 | Transports | SSE, HTTP (Streamable HTTP), stdio, AgentCore |
 | Port | 9082 (default) |
@@ -374,7 +374,7 @@ agents/incident-analyzer/
   RULES.md               Behavioral constraints: no destructive actions, cite sources
   agents/
     elastic-agent/       Elasticsearch specialist
-      agent.yaml         Tools: ~93 ES tools via MCP port 9080 (77 cluster + 16 conditional cloud/billing on EC_API_KEY)
+      agent.yaml         Tools: ~102 ES tools via MCP port 9080 (86 cluster incl. 9 ML anomaly-detection + 16 conditional cloud/billing on EC_API_KEY)
       SOUL.md            Persona: log and metric analysis expert
     kafka-agent/         Kafka specialist
       agent.yaml         Tools: 15-55 Kafka tools via MCP port 9081 (15 base + up to 40 gated SR + ksqlDB + Connect + REST Proxy)

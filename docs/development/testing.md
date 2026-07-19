@@ -118,7 +118,7 @@ describe("manifest-loader", () => {
 
 ### agent
 
-The LangGraph agent package tests cover the 20-node pipeline (incl. correlation enforcement, typed findings, AWS estate router, mitigation branch split). Because tests should not require running MCP servers, MCP dependencies are mocked.
+The LangGraph agent package tests cover the 31-node pipeline (incl. correlation enforcement, typed findings, AWS estate router, resolveIdentifiers, mitigation branch split, gated KG and HIL-learning nodes). Because tests should not require running MCP servers, MCP dependencies are mocked.
 
 - **Graph compilation** -- StateGraph builds and compiles without error
 - **Node functions** -- classify, entityExtractor, supervise, align, aggregate, validate
@@ -287,7 +287,7 @@ test("loads all 6 tool definitions", () => {
 
 ## Agent Eval (LangSmith final_response)
 
-End-to-end regression for the full 20-node incident-analysis graph. 5 incident-shaped queries × 3 evaluators (datasources_covered, confidence_threshold, response_quality LLM judge). Lives at `packages/agent/src/eval/`; canonical README at `packages/agent/src/eval/README.md`.
+End-to-end regression for the full 31-node incident-analysis graph. 5 incident-shaped queries × 3 evaluators (datasources_covered, confidence_threshold, response_quality LLM judge). Lives at `packages/agent/src/eval/`; canonical README at `packages/agent/src/eval/README.md`.
 
 ```bash
 # 1. Sanity-check infra (free, fast). Probes :9080-:9085.

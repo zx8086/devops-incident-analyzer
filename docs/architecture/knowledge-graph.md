@@ -124,7 +124,7 @@ Edge sequence when enabled: `readClusterState -> graphEnrichIac -> memoryEnrichI
 
 The graph nodes are why the registered node counts exceed the base graphs:
 
-- **incident-analyzer:** `grep -c addNode packages/agent/src/graph.ts` = **25** — 21 base nodes + the 4 gated KG nodes (`recordEntities`, `graphEnrich`, `recordRootCause`, and SIO-1100 `recordBindings`).
+- **incident-analyzer:** `grep -c addNode packages/agent/src/graph.ts` = **31** — 21 base nodes + the 4 gated KG nodes (`recordEntities`, `graphEnrich`, `recordRootCause`, and SIO-1100 `recordBindings`) + the 6 gated HIL-learning nodes (`learnFetchTicket`, `learnMatchIncident`, `learnMatchGate`, `learnDistill`, `learnReviewGate`, `applyLearnings`, SIO-1126). The HIL nodes are unrelated to the knowledge graph — they gate on `HIL_LEARNING_ENABLED` (default on) and branch off `classify` on an explicit `learn from TICKET-123` command (see [agent-pipeline.md](agent-pipeline.md#hil-learning-lane)); they are listed here only so the total reconciles with the grep.
 - **elastic-iac:** `grep -c addNode packages/agent/src/iac/graph.ts` = **30** — base proposer/sub-flow nodes + `recordIacPrompt` (SIO-1038, always-edged pre-fan-out capture) + `graphEnrichIac`, `recordIacEntities`, `recordIacOutcome` (KG) + `memoryEnrichIac` (Agent Memory) + `amendChange`.
 
 ## Agent asymmetry

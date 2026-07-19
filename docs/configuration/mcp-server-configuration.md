@@ -56,7 +56,7 @@ schemas.ts (Zod) -------> configSchema.parse()
 
 **Package:** `packages/mcp-server-elastic`
 **Config directory:** `packages/mcp-server-elastic/src/config/`
-**Tool count:** ~93 (77 cluster + 16 conditional cloud/billing on `EC_API_KEY`)
+**Tool count:** ~102 (86 cluster incl. 9 ML anomaly-detection + 16 conditional cloud/billing on `EC_API_KEY`)
 
 ### Configuration Schema
 

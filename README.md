@@ -9,9 +9,10 @@ The repo also ships a second top-level agent, **elastic-iac** -- a GitOps propos
 ```
 User Query
     |
-[classify] -> simple: responder -> followUp -> END
+[classify] -> simple:        responder -> followUp -> END
+    |          learn cmd:     [HIL learning lane] -> END   (HIL_LEARNING_ENABLED)
     |          complex:
-[normalize] -> [selectRunbooks] -> [entityExtractor]
+[normalize] -> [selectRunbooks] -> [entityExtractor] -> [awsEstateRouter] -> [resolveIdentifiers]
     |
 [supervisor] -> fan-out via Send API
     |
@@ -19,20 +20,24 @@ User Query
     |         |         |          |         |          |          |
 [align] -> check cross-datasource consistency, retry if gaps
     |
-[aggregate] -> correlate timeline, causal chains, confidence score
+[aggregate] -> [extractFindings] -> correlate timeline, causal chains, confidence score
+    |
+[enforceCorrelations] -> mandatory cross-agent correlation, cap confidence if degraded
     |
 [checkConfidence] -> gate on minimum confidence threshold
     |
 [validate] -> anti-hallucination check, retry aggregate on fail
     |
-[proposeMitigation] -> actionable remediation steps
+[proposeInvestigate | proposeMonitor | proposeEscalate] -> [aggregateMitigation] -> remediation
     |
 [followUp] -> suggested next questions
     |
 Incident Report
 ```
 
-See [docs/architecture/agent-pipeline.md](docs/architecture/agent-pipeline.md) for the full 20-node StateGraph (23 with the knowledge graph enabled) including retry loops, conditional edges, the SIO-828 AWS estate router, and the SIO-681 cross-agent correlation enforcement detour. The separate 30-node elastic-iac proposer graph is documented in [docs/architecture/elastic-iac-proposer.md](docs/architecture/elastic-iac-proposer.md).
+An explicit `learn from TICKET-123` turn routes into the human-in-the-loop **learning lane** (`classify -> learnFetchTicket -> ... -> applyLearnings`, gated by `HIL_LEARNING_ENABLED`), which distills confirmed root causes and diagnostic knowledge from a resolved ticket back into the knowledge graph and durable memory. See [docs/architecture/agent-pipeline.md](docs/architecture/agent-pipeline.md#hil-learning-lane).
+
+See [docs/architecture/agent-pipeline.md](docs/architecture/agent-pipeline.md) for the full 31-node StateGraph (21 base nodes + 4 gated knowledge-graph nodes + 6 gated HIL-learning nodes; `grep -c addNode packages/agent/src/graph.ts` = 31) including retry loops, conditional edges, the SIO-828 AWS estate router, the SIO-681 cross-agent correlation enforcement detour, and the SIO-1126 human-in-the-loop learning lane. The separate 30-node elastic-iac proposer graph is documented in [docs/architecture/elastic-iac-proposer.md](docs/architecture/elastic-iac-proposer.md).
 
 ## Quick Start
 
@@ -67,7 +72,7 @@ agents/                          Gitagent declarative definitions (YAML/Markdown
 
 packages/
   gitagent-bridge/               YAML-to-LangGraph adapter
-  agent/                         LangGraph 20-node pipeline (+3 gated knowledge-graph nodes) plus a separate 30-node elastic-iac proposer graph
+  agent/                         LangGraph 31-node pipeline (21 base + 4 gated knowledge-graph + 6 gated HIL-learning nodes) plus a separate 30-node elastic-iac proposer graph
   shared/                        Cross-package types, Zod schemas, Agent Memory REST client (SIO-938)
   checkpointer/                  Transient per-thread LangGraph state (memory / bun:sqlite)
   observability/                 Pino logging, OpenTelemetry, LangSmith
@@ -85,20 +90,20 @@ packages/
   mcp-server-knowledge-graph/    In-process Knowledge Graph MCP (curated kg_* + read-only Cypher, port 9087)
 
 apps/
-  web/                           SvelteKit frontend (Svelte 5, Tailwind, SSE streaming)
+  web/                           SvelteKit frontend (Svelte 5, Tailwind, SSE streaming; 30 components)
 ```
 
 ## MCP Servers
 
 | Server | Port | Tools | Config |
 |--------|------|-------|--------|
-| Elasticsearch | 9080 | ~93 (77 cluster + 16 conditional cloud/billing on `EC_API_KEY`) | `ES_URL`, `ES_API_KEY`, multi-deployment via `ELASTIC_DEPLOYMENTS` |
+| Elasticsearch | 9080 | ~102 (86 cluster incl. 9 ML anomaly-detection + 16 conditional cloud/billing on `EC_API_KEY`) | `ES_URL`, `ES_API_KEY`, multi-deployment via `ELASTIC_DEPLOYMENTS` |
 | Kafka | 9081 | 15-55 (15 base + up to 40 gated: SR + ksqlDB + Connect + REST Proxy) | `KAFKA_PROVIDER` (local/msk/confluent), `KAFKA_BROKERS` |
-| Couchbase Capella | 9082 | 24+ | `COUCHBASE_URL`, `COUCHBASE_USERNAME`, `COUCHBASE_PASSWORD` |
+| Couchbase Capella | 9082 | ~37 (SIO-1107 official Couchbase tools: buckets, INFER, EXPLAIN, Index Advisor, covering-index detectors) | `COUCHBASE_URL`, `COUCHBASE_USERNAME`, `COUCHBASE_PASSWORD` |
 | Kong Konnect | 9083 | 67+ | `KONNECT_ACCESS_TOKEN`, `KONNECT_REGION` |
 | GitLab | 9084 | 21+ (proxy + code analysis) | `GITLAB_PERSONAL_ACCESS_TOKEN`, `GITLAB_INSTANCE_URL` |
 | Atlassian | 9085 (OAuth :9185) | proxy + custom | `ATLASSIAN_SITE_NAME`, `ATLASSIAN_UPSTREAM_MCP_URL`, `ATLASSIAN_READ_ONLY` |
-| AWS | 3001 (SigV4 proxy) | multi-estate read-only (CloudWatch, EC2, ECS, Lambda, RDS, S3, X-Ray) | `AWS_MCP_URL`, `AWS_ESTATES`, `AWS_DEFAULT_ESTATE` |
+| AWS | 3001 (SigV4 proxy) | multi-estate read-only (CloudWatch incl. Metrics Insights, EC2 + network-path tracing, ECS, Lambda, RDS, S3, X-Ray) | `AWS_MCP_URL`, `AWS_ESTATES`, `AWS_DEFAULT_ESTATE` |
 | Elastic IaC | 9086 | GitOps proposer tools (terraform/git/gitlab/elastic-cloud) | `ELASTIC_IAC_MCP_URL`, `ELASTIC_IAC_GITLAB_TOKEN` |
 | Knowledge Graph | 9087 (in-process) | curated `kg_*` graph readers + read-only Cypher (lbug); off unless enabled | `KNOWLEDGE_GRAPH_ENABLED`, `KG_MCP_ALLOW_CYPHER` |
 
@@ -117,7 +122,7 @@ Beyond the bootstrap recall + dailylog breadcrumb, the agents use memory in seve
 
 ## Knowledge Graph (lbug)
 
-An optional embedded entity-and-correlation graph (lbug/LadybugDB), gated on `KNOWLEDGE_GRAPH_ENABLED`. It records the services, incidents, deployments, and config changes a turn touches, so a later turn can recall service dependencies, vector-similar past incidents, and a deployment's change history. The graph is exposed to the elastic-iac agent through an **in-process MCP server on :9087** (it must run in-process because embedded lbug takes an exclusive file lock) with curated `kg_*` readers plus a read-only-guarded `kg_run_cypher`. Seven pipeline nodes write/enrich it across the two agents (`recordEntities`/`graphEnrich`/`recordRootCause`; `recordIacPrompt`/`graphEnrichIac`/`recordIacEntities`/`recordIacOutcome`). It joins to Agent Memory by shared annotation keys. Full deep-dive: [docs/architecture/knowledge-graph.md](docs/architecture/knowledge-graph.md).
+An optional embedded entity-and-correlation graph (lbug/LadybugDB), gated on `KNOWLEDGE_GRAPH_ENABLED`. It records the services, incidents, deployments, and config changes a turn touches, so a later turn can recall service dependencies, vector-similar past incidents, and a deployment's change history. The graph is exposed to the elastic-iac agent through an **in-process MCP server on :9087** (it must run in-process because embedded lbug takes an exclusive file lock) with curated `kg_*` readers plus a read-only-guarded `kg_run_cypher`. Eight pipeline nodes write/enrich it across the two agents (`recordEntities`/`graphEnrich`/`recordRootCause`/`recordBindings`; `recordIacPrompt`/`graphEnrichIac`/`recordIacEntities`/`recordIacOutcome`), plus a scheduled cron topology sweep (SIO-1104). `recordBindings` (SIO-1100 W8) writes the turn's confirmed telemetry-to-service bindings, which `resolveIdentifiers` reads back on later turns (SIO-1101 R7). It joins to Agent Memory by shared annotation keys. Full deep-dive: [docs/architecture/knowledge-graph.md](docs/architecture/knowledge-graph.md).
 
 ## Commands
 
@@ -151,6 +156,9 @@ Optional (live memory, all off/file by default):
 - `AGENT_MEMORY_BASE_URL`, `AGENT_MEMORY_ENABLED` -- the Agent Memory service (used only when `LIVE_MEMORY_BACKEND=agent-memory`)
 - `AGENT_MEMORY_BEARER_TOKEN` -- OIDC bearer token, only if the service runs with `OIDC_AUTH_ENABLED`
 - `AGENT_MEMORY_DAILYLOG_TTL_SECONDS` -- short TTL for dailylog breadcrumbs (omit for no decay; facts are always durable)
+- `HIL_LEARNING_ENABLED` -- human-in-the-loop learning lane; defaults ON (kill-switch semantics -- the lane only fires on an explicit `learn from TICKET-123` command, so it never triggers on normal traffic). Set to `false` to disable. Requires `KNOWLEDGE_GRAPH_ENABLED`.
+- `RESOLVE_IDENTIFIERS_ENABLED` -- resolve the incident service to canonical per-datasource identifiers before fan-out; defaults ON
+- `KG_BINDINGS_WRITE_ENABLED` / `KG_BINDINGS_READ_ENABLED` -- telemetry-binding write (W8) and read (R7) paths on the knowledge graph; both default ON when the graph is enabled
 
 See [docs/configuration/environment-variables.md](docs/configuration/environment-variables.md) for the full AWS estate and elastic-iac configuration.
 

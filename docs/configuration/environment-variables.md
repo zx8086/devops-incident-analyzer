@@ -1,7 +1,7 @@
 # Environment Variables Reference
 
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-05-28
+> **Last updated:** 2026-07-19
 
 Complete reference for all environment variables used across the DevOps Incident Analyzer monorepo. Variables are grouped by service. Each table lists the variable name, whether it is required, its default value (if any), and a description.
 
@@ -428,6 +428,8 @@ Settings for the LangGraph supervisor agent, including model selection and state
 | `GRAPH_BUDGET_MIN_RETRY_MS` | No | `60000` | SIO-1110: smallest remaining window (beyond the reserve) for which an alignment retry is still dispatched. Below `reserve + minRetry` remaining, alignment proceeds with partial results instead of retrying. |
 | `ATLASSIAN_TOOL_TIMEOUT_MS` | No | `120000` | SIO-1111: bridge-side tool-call timeout for atlassian-mcp. Covers upstream serialization queue wait under sub-agent fan-out (the 60s adapter default produced -32001 failures). |
 | `ELASTIC_IAC_TOOL_TIMEOUT_MS` | No | `120000` | SIO-893: bridge-side tool-call timeout for elastic-iac-mcp. Defaults to `ELASTIC_IAC_DRIFT_POLL_BUDGET_MS` (90 000) + 30 000 margin so the drift-check tool's internal CI poll is the binding constraint, not the transport. |
+| `RESOLVE_IDENTIFIERS_ENABLED` | No | on | SIO-1084: resolve the loose incident service to canonical per-datasource identifiers (elastic APM name, AWS log groups, kafka topics, ...) before fan-out. Default on (kill-switch); set `=false` to skip the bounded per-datasource probe round. See [Resolve Identifiers](../architecture/resolve-identifiers.md). |
+| `RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS` | No | `8000` | SIO-1084: per-datasource probe timeout in ms for the `resolveIdentifiers` node. |
 
 The agent uses two model tiers. The primary model handles complex reasoning tasks (supervision, aggregation, validation). The fast model handles classification and entity extraction where latency matters more than depth. Both models are accessed through AWS Bedrock.
 
@@ -453,6 +455,7 @@ Optional cross-session subsystems. All are off / file-backed by default; the dee
 | `AGENT_MEMORY_SYNC_WRITES` | No | `false` | `true` -> `async_processing=false`: a written block is searchable immediately |
 | `IAC_PROPOSAL_FACT_TTL_SECONDS` | No | 90d | TTL on the elastic-iac change proposal fact; it expires once reconciliation writes the terminal fact (SIO-1005) |
 | `SKILL_LEARNING_ENABLED` | No | off | incident-analyzer post-turn skill-proposal learner (writes `kind:skill` facts; agent-memory backend only, SIO-1015) |
+| `HIL_LEARNING_ENABLED` | No | on | SIO-1126: master gate for the human-in-the-loop learning lane (learn-from-ticket). Default on (kill-switch semantics — the lane only fires on an explicit `learn from TICKET-123` command, so it never triggers on normal traffic); set `=false` to disable the lane entirely. Requires `KNOWLEDGE_GRAPH_ENABLED`. See the [HIL learning lane](../architecture/agent-pipeline.md#hil-learning-lane). |
 
 ### Knowledge graph (lbug / in-process MCP server)
 
@@ -465,6 +468,10 @@ Optional cross-session subsystems. All are off / file-backed by default; the dee
 | `KNOWLEDGE_GRAPH_MCP_PATH` | No | `/mcp` | KG MCP endpoint path |
 | `KG_MCP_ALLOW_CYPHER` | No | on | Register the read-only-guarded `kg_run_cypher` tool; set `false` to disable |
 | `EMBEDDINGS_MODEL` | No | `amazon.titan-embed-text-v2:0` | Bedrock embedder for `Incident` similarity in `graphEnrich` |
+| `KG_BINDINGS_WRITE_ENABLED` | No | on | SIO-1100 (W8): MERGE each turn's confirmed telemetry-to-service bindings into the graph. Requires `KNOWLEDGE_GRAPH_ENABLED`; produces bindings only when `resolveIdentifiers` ran. Writes are additive + soft-failing (never change the answer). Set `=false` to disable. |
+| `KG_BINDINGS_READ_ENABLED` | No | on | SIO-1101 (R7): seed each sub-agent with the service's known coordinates from the graph before it probes (labelled "not probed this turn -- verify"; probes still always run). Requires `KNOWLEDGE_GRAPH_ENABLED`. Set `=false` to disable. |
+| `KG_BINDINGS_READ_DATASOURCES` | No | `elastic,aws` | SIO-1101: comma list of datasources that accept graph seeds (`all` = every datasource). Widen without a code change. |
+| `KG_BINDINGS_STALENESS_ENABLED` | No | on | SIO-1103: when a graph-seeded coordinate's datasource reports not-found this turn, retire the agent-discovered binding (human bindings are only flagged, never auto-invalidated). Set `=false` to disable auto-invalidation. |
 
 #### Scheduled topology sweep (SIO-1104 / SIO-1115)
 
