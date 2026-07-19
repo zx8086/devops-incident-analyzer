@@ -1,11 +1,11 @@
 // agent/src/correlation/enforce-node.ts
 import { getLogger } from "@devops-agent/observability";
 import { Send } from "@langchain/langgraph";
-import { rewriteConfidenceInAnswer } from "../aggregator";
+import { GAPS_BULLET_THRESHOLD, rewriteConfidenceInAnswer } from "../aggregator";
 import type { AgentStateType, DegradedRule, PendingCorrelation } from "../state";
 import { queryDataSource } from "../sub-agent";
 import { evaluate } from "./engine";
-import { correlationRules } from "./rules";
+import { correlationRules, LOG_GAP_RULE_NAME } from "./rules";
 
 const logger = getLogger("agent:enforceCorrelations");
 
@@ -88,11 +88,21 @@ export function enforceCorrelationsRouter(state: AgentStateType): Send[] | "enfo
 
 	for (const [agent, pendings] of dedupedByAgent.entries()) {
 		const dataSourceId = agent.replace(/-agent$/, "");
+		// SIO-1155: rules may provide a targeted fetch directive; without one the
+		// refetch re-runs the original incident prompt and rarely covers the rule's
+		// entities. Multiple directives for one agent concatenate.
+		const directives = pendings
+			.map((p) => {
+				const ruleDef = correlationRules.find((r) => r.name === p.ruleName);
+				return ruleDef?.fetchDirective?.(p.triggerContext);
+			})
+			.filter((d): d is string => typeof d === "string" && d.length > 0);
 		sends.push(
 			new Send("correlationFetch", {
 				...state,
 				currentDataSource: dataSourceId,
 				pendingCorrelations: pendings,
+				...(directives.length > 0 && { correlationFetchDirective: directives.join("\n\n") }),
 			}),
 		);
 	}
@@ -107,6 +117,63 @@ export function enforceCorrelationsRouter(state: AgentStateType): Send[] | "enfo
 		"Correlation rules require dispatch; routing",
 	);
 	return sends;
+}
+
+// SIO-1155: after a satisfied log-gap fetch, the recovered Gaps bullets get an
+// explicit recovery clause (which also exempts them from the SIO-1149 classifier on
+// any later re-parse) and, when the gaps cap was the aggregate's SOLE cap reason and
+// the judge-confirmed remainder falls below the threshold, the pre-cap confidence is
+// restored. Any other cap reason, or a still-degraded rule, wins over restoration.
+const RECOVERED_BULLET_SUFFIX =
+	" -- recovered via elastic (post-report correlation fetch; see the elastic datasource findings)";
+
+interface LogGapRecovery {
+	answer: string;
+	recoveredBullets: string[];
+	restoredScore?: number;
+}
+
+function computeLogGapRecovery(state: AgentStateType, degraded: DegradedRule[]): LogGapRecovery | null {
+	const pending = state.pendingCorrelations.find((p) => p.ruleName === LOG_GAP_RULE_NAME);
+	if (!pending || !state.finalAnswer) return null;
+	// Fetch did not cover the services: the normal degraded-cap path handles it.
+	if (degraded.some((d) => d.ruleName === LOG_GAP_RULE_NAME)) return null;
+	const bullets = Array.isArray(pending.triggerContext.bullets)
+		? (pending.triggerContext.bullets as unknown[]).filter((b): b is string => typeof b === "string")
+		: [];
+	if (bullets.length === 0) return null;
+
+	const flagged = new Set(bullets);
+	const answer = state.finalAnswer
+		.split("\n")
+		.map((line) =>
+			flagged.has(line) && !line.includes("recovered via elastic") ? line + RECOVERED_BULLET_SUFFIX : line,
+		)
+		.join("\n");
+
+	let restoredScore: number | undefined;
+	// Restoration requires: no OTHER rule degraded this round (their cap would win),
+	// the gaps cap was the aggregate's sole cap reason, and subtracting the recovered
+	// bullets drops the judge-confirmed count below the threshold. The ?? [] guards
+	// cover checkpoints resumed from graph versions predating these channels.
+	const capReasons = state.capReasons ?? [];
+	const soleGapsCap = capReasons.length === 1 && capReasons[0] === "gaps";
+	if (
+		degraded.length === 0 &&
+		soleGapsCap &&
+		typeof state.confidencePreCap === "number" &&
+		state.confidencePreCap > state.confidenceScore
+	) {
+		const remaining = (state.confirmedDegradingGapBullets ?? []).filter((b) => !flagged.has(b));
+		if (remaining.length < GAPS_BULLET_THRESHOLD) restoredScore = state.confidencePreCap;
+	}
+
+	const rewritten = restoredScore !== undefined ? rewriteConfidenceInAnswer(answer, restoredScore) : answer;
+	logger.info(
+		{ recoveredBullets: bullets.length, restored: restoredScore !== undefined, restoredScore },
+		"log-gap correlation fetch recovered report gaps",
+	);
+	return { answer: rewritten, recoveredBullets: bullets, restoredScore };
 }
 
 export async function enforceCorrelationsAggregate(state: AgentStateType): Promise<Partial<AgentStateType>> {
@@ -132,9 +199,17 @@ export async function enforceCorrelationsAggregate(state: AgentStateType): Promi
 		});
 	}
 
+	const recovery = computeLogGapRecovery(state, degraded);
+
 	if (degraded.length === 0) {
 		logger.info("All pending correlations satisfied after re-fan-out");
-		return { degradedRules: [], confidenceCap: undefined, pendingCorrelations: [] };
+		return {
+			degradedRules: [],
+			confidenceCap: undefined,
+			pendingCorrelations: [],
+			...(recovery && { finalAnswer: recovery.answer }),
+			...(recovery?.restoredScore !== undefined && { confidenceScore: recovery.restoredScore }),
+		};
 	}
 
 	const cap = CONFIDENCE_CAP_ON_DEGRADATION;
@@ -154,7 +229,10 @@ export async function enforceCorrelationsAggregate(state: AgentStateType): Promi
 	// SIO-860: rewrite the printed confidence to the capped value so the report prose
 	// matches the gate's confidenceScore. Compose with (not replace) the banner,
 	// which is prepended above the rewritten body.
-	let updatedFinalAnswer = state.finalAnswer ? rewriteConfidenceInAnswer(state.finalAnswer, cappedScore) : undefined;
+	// SIO-1155: when the log-gap rule recovered its bullets while OTHER rules degraded,
+	// keep the bullet annotations but let the degraded cap win on the score.
+	const baseAnswer = recovery?.answer ?? state.finalAnswer;
+	let updatedFinalAnswer = baseAnswer ? rewriteConfidenceInAnswer(baseAnswer, cappedScore) : undefined;
 	if (bannerText && updatedFinalAnswer) {
 		updatedFinalAnswer = `${bannerText}\n\n${updatedFinalAnswer}`;
 	}
