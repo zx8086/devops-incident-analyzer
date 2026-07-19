@@ -123,7 +123,7 @@ Each MCP server is an independent deployable package with its own entry point, c
 | Shared Library | `packages/shared` | Cross-package types, Zod schemas, bootstrap function, telemetry, logging |
 | Checkpointer | `packages/checkpointer` | LangGraph state persistence (memory or bun:sqlite) |
 | Observability | `packages/observability` | Pino logger factory, OpenTelemetry span helpers, request-scoped child loggers |
-| Elasticsearch MCP | `packages/mcp-server-elastic` | ~93 tools (77 cluster + 16 conditional cloud/billing on `EC_API_KEY`) for cluster health, index management, search, snapshots, mappings, Elastic Cloud deployments, hardware profiles, plan auditing, and billing |
+| Elasticsearch MCP | `packages/mcp-server-elastic` | 112 tools (96 cluster + 16 conditional cloud/billing on `EC_API_KEY`) for cluster health, index management, search, snapshots, mappings, Elastic Cloud deployments, hardware profiles, plan auditing, and billing |
 | Kafka MCP | `packages/mcp-server-kafka` | 15 base tools + up to 40 gated tools (Schema Registry + ksqlDB + Connect + REST Proxy) for cluster info, topic management, consumer groups, message consumption |
 | Couchbase MCP | `packages/mcp-server-couchbase` | ~15 tools for cluster health, bucket management, N1QL queries, index analysis, playbooks |
 | Konnect MCP | `packages/mcp-server-konnect` | 15 enhanced tools + proxy surface for services, routes, plugins, consumers, upstreams, analytics |

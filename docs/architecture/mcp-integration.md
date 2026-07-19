@@ -101,7 +101,7 @@ The `getToolsForDataSource()` function routes datasource IDs to their correspond
 
 | DataSource ID | Server Name | MCP URL Env Var | Tool Count |
 |---------------|-------------|-----------------|------------|
-| `elastic` | `elastic-mcp` | `ELASTIC_MCP_URL` | ~93 (77 cluster + 16 conditional cloud/billing on `EC_API_KEY`) |
+| `elastic` | `elastic-mcp` | `ELASTIC_MCP_URL` | 112 (96 cluster + 16 conditional cloud/billing on `EC_API_KEY`) |
 | `kafka` | `kafka-mcp` | `KAFKA_MCP_URL` | 15-55 (15 base + up to 40 gated SR + ksqlDB + Connect + REST Proxy) |
 | `couchbase` | `couchbase-mcp` | `CAPELLA_MCP_URL` | ~15 |
 | `konnect` | `konnect-mcp` | `KONNECT_MCP_URL` | 15 enhanced + proxy |
@@ -205,11 +205,11 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 
 ## MCP Server Summary
 
-### Elasticsearch MCP (~93 tools)
+### Elasticsearch MCP (112 tools)
 
 **Purpose:** Read-only access to Elasticsearch clusters for log search, index management, cluster health, shard allocation, mapping inspection, and snapshot operations. When `EC_API_KEY` is set, also exposes Elastic Cloud organization tools (deployment topology, plan auditing, hardware-profile simulation, and billing).
 
-**Tool count:** 77 cluster tools always; +16 cloud/billing tools registered conditionally on `EC_API_KEY` (SIO-822–826).
+**Tool count:** 96 cluster tools always; +16 cloud/billing tools registered conditionally on `EC_API_KEY` (SIO-822–826).
 
 **Tool categories:**
 - Cluster operations: health, stats, settings, allocation explanation

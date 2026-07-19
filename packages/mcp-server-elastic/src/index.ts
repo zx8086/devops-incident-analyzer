@@ -66,7 +66,7 @@ if (import.meta.main) {
 		// SIO-674: Build the Elastic Cloud client once per server (lazy auth -- no probe).
 		// initializeCloudClient returns null when EC_API_KEY is unset; the factory then records
 		// cluster tools only and the cloud + billing tools never appear.
-		// SIO-1041: createMcpServerFactory records the ~93 wrapped tool registrations ONCE at boot
+		// SIO-1041: createMcpServerFactory records the ~96 wrapped tool registrations ONCE at boot
 		// and replays them per request, instead of re-running registerAllTools on every request.
 		createServerFactory: (esClient) => {
 			const cloudClient = initializeCloudClient(config);
