@@ -2,10 +2,13 @@
 import { describe, expect, test } from "bun:test";
 import type { DataSourceResult } from "@devops-agent/shared";
 import {
+	appendSuffixToLine,
 	detectPrematureAbsence,
 	detectUngroundedBlockers,
+	rewriteNoIndexMisread,
 	rewritePrematureAbsence,
 	rewriteUngroundedBlockers,
+	rewriteUngroundedRootCause,
 } from "./aggregator.ts";
 
 const REPORT_TAIL = `## Gaps
@@ -336,6 +339,13 @@ describe("rewriteUngroundedBlockers", () => {
 	});
 });
 
+// SIO-1158: the shape of the 2026-07 production correlation-table false positive
+// (identifiers genericized). It is an AWS CloudWatch finding ("no records for season X")
+// that mentions "Elasticsearch APM" only incidentally; the naive suffix append after its
+// trailing pipe garbled the table.
+const PRODUCTION_TABLE_ROW =
+	"| Upstream data gap causes HTTP 500 | delivery-dates-service has no records for season 2031TEST (CloudWatch Logs, estate-b-prd) -> returns HTTP 500 -> catalog-sync-service wraps as StockSyncException (Elasticsearch APM, CloudWatch Logs estate-a-prd) |";
+
 // SIO-1085: guard against premature-conclusion absence claims.
 describe("detectPrematureAbsence", () => {
 	// A. CONTRADICTED: elastic reports "not present" but its sub-agent returned hits.
@@ -351,6 +361,38 @@ describe("detectPrematureAbsence", () => {
 		const { contradicted } = detectPrematureAbsence(answer, results);
 		expect(contradicted).toHaveLength(1);
 		expect(contradicted[0]).toContain("does not ship logs");
+	});
+
+	// SIO-1158: the flagging datasource travels with the line so the absence judge can
+	// weigh the claim against exactly that datasource's returned data.
+	test("returns contradictedDetails naming the flagging datasource", () => {
+		const answer =
+			"### Elasticsearch\n\norder-sync-service does not ship logs to the connected Elasticsearch cluster; 0 hits for the checkout error.\n\nConfidence: 0.8";
+		const results = [
+			result({
+				dataSourceId: "elastic",
+				toolOutputs: [{ toolName: "elasticsearch_search", rawJson: "Total results: 91, showing 5 from position 0" }],
+			}),
+		];
+		const { contradicted, contradictedDetails } = detectPrematureAbsence(answer, results);
+		expect(contradictedDetails).toHaveLength(1);
+		expect(contradictedDetails[0]?.dataSourceId).toBe("elastic");
+		expect(contradictedDetails[0]?.line).toBe(contradicted[0] as string);
+	});
+
+	// SIO-1158: production false positive #2 -- an AWS CloudWatch-grounded table row
+	// regex-flags via its incidental "Elasticsearch APM" mention. The regex arm SHOULD
+	// flag it (it cannot know better); the absence judge downstream is what exonerates it.
+	test("regex-flags the production correlation-table row via its incidental elastic keyword", () => {
+		const answer = `${PRODUCTION_TABLE_ROW}\n\nConfidence: 0.84`;
+		const results = [
+			result({
+				dataSourceId: "elastic",
+				toolOutputs: [{ toolName: "elasticsearch_search", rawJson: "Total results: 30, showing 5 from position 0" }],
+			}),
+		];
+		const { contradictedDetails } = detectPrematureAbsence(answer, results);
+		expect(contradictedDetails).toEqual([{ line: PRODUCTION_TABLE_ROW, dataSourceId: "elastic" }]);
 	});
 
 	test("does NOT flag an elastic absence claim when elastic genuinely returned nothing", () => {
@@ -404,5 +446,55 @@ describe("rewritePrematureAbsence", () => {
 	test("returns the answer unchanged when nothing is flagged", () => {
 		const answer = "### Elasticsearch\n\nall good.\n\nConfidence: 0.9";
 		expect(rewritePrematureAbsence(answer, [], [])).toBe(answer);
+	});
+
+	// SIO-1158: production false positive #2's structural half -- a confirmed contradiction
+	// inside a table row must land INSIDE the last cell, not after the trailing pipe.
+	test("keeps a corrected table row a structurally valid table row", () => {
+		const answer = `| Pattern | Evidence |\n|---|---|\n${PRODUCTION_TABLE_ROW}\n\nConfidence: 0.8`;
+		const out = rewritePrematureAbsence(answer, [PRODUCTION_TABLE_ROW], []);
+		const lines = out.split("\n");
+		expect(lines[0]).toBe("| Pattern | Evidence |");
+		expect(lines[1]).toBe("|---|---|");
+		const row = lines[2] ?? "";
+		expect(row).toContain("[CORRECTION");
+		expect(row.trimEnd().endsWith("|")).toBe(true);
+		expect(row.indexOf("[CORRECTION")).toBeLessThan(row.lastIndexOf("|"));
+		expect(row.split("|").length).toBe(PRODUCTION_TABLE_ROW.split("|").length);
+	});
+});
+
+// SIO-1158: markdown-safe suffix insertion, shared by the three append-based rewriters.
+describe("appendSuffixToLine", () => {
+	test("appends plainly to a non-table line", () => {
+		expect(appendSuffixToLine("plain claim.", " [X]")).toBe("plain claim. [X]");
+	});
+
+	test("inserts inside the last cell of a table row, before the trailing pipe", () => {
+		const out = appendSuffixToLine(PRODUCTION_TABLE_ROW, " [CORRECTION: test]");
+		expect(out).toMatch(/^\s*\|.*\|\s*$/);
+		expect(out.split("|").length).toBe(PRODUCTION_TABLE_ROW.split("|").length);
+		expect(out.indexOf("[CORRECTION: test]")).toBeLessThan(out.lastIndexOf("|"));
+		expect(out.endsWith("estate-a-prd)  [CORRECTION: test] |")).toBe(true);
+	});
+});
+
+describe("table-safe suffix adoption in sibling rewriters (SIO-1158)", () => {
+	test("rewriteUngroundedRootCause keeps a flagged table row structurally valid", () => {
+		const row = "| cause | schema mismatch in the article collection |";
+		const out = rewriteUngroundedRootCause(`${row}\nConfidence: 0.8`, [row]);
+		const rewritten = out.split("\n")[0] ?? "";
+		expect(rewritten).toContain("[UNVERIFIED");
+		expect(rewritten.trimEnd().endsWith("|")).toBe(true);
+		expect(rewritten.indexOf("[UNVERIFIED")).toBeLessThan(rewritten.lastIndexOf("|"));
+	});
+
+	test("rewriteNoIndexMisread keeps a flagged table row structurally valid", () => {
+		const row = "| couchbase | the article collection has no data |";
+		const out = rewriteNoIndexMisread(`${row}\nConfidence: 0.8`, [row]);
+		const rewritten = out.split("\n")[0] ?? "";
+		expect(rewritten).toContain("[CORRECTION");
+		expect(rewritten.trimEnd().endsWith("|")).toBe(true);
+		expect(rewritten.indexOf("[CORRECTION")).toBeLessThan(rewritten.lastIndexOf("|"));
 	});
 });

@@ -4,6 +4,7 @@ import { type DataSourceResult, isDegradingCategory, redactPiiContent } from "@d
 import type { BaseMessage } from "@langchain/core/messages";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
+import { type AbsenceClaim, isAbsenceJudgeEnabled, judgeContradictedAbsenceClaims } from "./absence-judge.ts";
 import { summarizeFirstAttempts } from "./alignment.ts";
 import { extractIamActions } from "./aws-policy-actions.ts";
 import { isGapsJudgeEnabled, judgeDegradingGapBullets } from "./gaps-judge.ts";
@@ -666,12 +667,14 @@ const DATASOURCE_KEYWORDS: Record<string, RegExp> = {
 export function detectPrematureAbsence(
 	answer: string,
 	results: DataSourceResult[],
-): { contradicted: string[]; overgeneralized: string[] } {
+): { contradicted: string[]; overgeneralized: string[]; contradictedDetails: AbsenceClaim[] } {
 	const dataByDs = new Map<string, boolean>();
 	for (const r of results) {
 		dataByDs.set(r.dataSourceId, (dataByDs.get(r.dataSourceId) ?? false) || dataSourceReturnedData(r));
 	}
-	const contradicted: string[] = [];
+	// SIO-1158: keep the flagging datasource with each contradicted line so the absence
+	// judge can weigh the claim against exactly that datasource's returned data.
+	const contradictedDetails: AbsenceClaim[] = [];
 	const overgeneralized: string[] = [];
 	for (const line of answer.split("\n")) {
 		if (headingLevel(line) !== null) continue;
@@ -682,17 +685,33 @@ export function detectPrematureAbsence(
 		if (isAbsence) {
 			for (const [ds, kw] of Object.entries(DATASOURCE_KEYWORDS)) {
 				if (kw.test(line) && dataByDs.get(ds)) {
-					contradicted.push(line);
+					contradictedDetails.push({ line, dataSourceId: ds });
 					break;
 				}
 			}
 		}
 		// (B) over-generalized: a sweeping absence/completeness claim (any datasource).
 		if (isSweeping && (isAbsence || /\b(absent|empty|missing|no )\b/i.test(line))) {
-			if (!contradicted.includes(line)) overgeneralized.push(line);
+			if (!contradictedDetails.some((c) => c.line === line)) overgeneralized.push(line);
 		}
 	}
-	return { contradicted, overgeneralized };
+	return { contradicted: contradictedDetails.map((c) => c.line), overgeneralized, contradictedDetails };
+}
+
+// SIO-1158: a markdown table row (leading and trailing pipe) is a single physical line;
+// appending a suffix AFTER the trailing pipe creates a phantom column and garbles the
+// table (2026-07 production correlation-table incident). Insert the suffix INSIDE the
+// last cell instead. Rows without a trailing pipe fall through to plain append, which
+// already lands inside the last cell. Only the append-based rewriters (premature-absence,
+// ungrounded-root-cause, no-index-misread) need this; the blocker/expiry rewriters are
+// replacement-based and their detectors are bullet-gated, so table rows are unreachable
+// there. Code fences are out of scope (no detector flags a fence line today).
+const TABLE_ROW_RE = /^\s*\|.*\|\s*$/;
+
+export function appendSuffixToLine(line: string, suffix: string): string {
+	if (!TABLE_ROW_RE.test(line)) return line + suffix;
+	const lastPipe = line.lastIndexOf("|");
+	return `${line.slice(0, lastPipe)}${suffix} ${line.slice(lastPipe)}`;
 }
 
 const CONTRADICTED_ABSENCE_SUFFIX =
@@ -707,8 +726,8 @@ export function rewritePrematureAbsence(answer: string, contradicted: string[], 
 	return answer
 		.split("\n")
 		.map((line) => {
-			if (contra.has(line)) return line + CONTRADICTED_ABSENCE_SUFFIX;
-			if (over.has(line)) return line + OVERGENERALIZED_ABSENCE_SUFFIX;
+			if (contra.has(line)) return appendSuffixToLine(line, CONTRADICTED_ABSENCE_SUFFIX);
+			if (over.has(line)) return appendSuffixToLine(line, OVERGENERALIZED_ABSENCE_SUFFIX);
 			return line;
 		})
 		.join("\n");
@@ -760,7 +779,7 @@ export function rewriteUngroundedRootCause(answer: string, ungrounded: string[])
 	const flagged = new Set(ungrounded);
 	return answer
 		.split("\n")
-		.map((line) => (flagged.has(line) ? line + UNGROUNDED_ROOT_CAUSE_SUFFIX : line))
+		.map((line) => (flagged.has(line) ? appendSuffixToLine(line, UNGROUNDED_ROOT_CAUSE_SUFFIX) : line))
 		.join("\n");
 }
 
@@ -810,7 +829,7 @@ export function rewriteNoIndexMisread(answer: string, flagged: string[]): string
 	const set = new Set(flagged);
 	return answer
 		.split("\n")
-		.map((line) => (set.has(line) ? line + NO_INDEX_MISREAD_SUFFIX : line))
+		.map((line) => (set.has(line) ? appendSuffixToLine(line, NO_INDEX_MISREAD_SUFFIX) : line))
 		.join("\n");
 }
 
@@ -1117,7 +1136,34 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	// (elastic "not present" after fetching hits), and (B) a sweeping "all records / whole
 	// pipeline" absence claim that a partial query can't support (couchbase generalizing
 	// from one of several seasonal collections). Rewrite to honest scoped text + cap.
-	const { contradicted, overgeneralized } = detectPrematureAbsence(answer, results);
+	// SIO-1158: hybrid classification for the CONTRADICTED arm, mirroring the SIO-1149
+	// gaps judge. dataSourceReturnedData is a datasource-LEVEL boolean with no scope
+	// matching, so a correctly-scoped zero-hit finding ("zero hits for the HTTP 500
+	// phrase") or a claim grounded in a DIFFERENT datasource (an AWS finding naming
+	// "Elasticsearch APM" incidentally) regex-flags as contradicted. The judge re-examines
+	// exactly the flagged lines against a digest of what the flagging datasource returned;
+	// it can shrink the set, never grow it, and any judge failure keeps the regex verdict
+	// (fail-closed: the cap applies). The OVERGENERALIZED arm stays deterministic (it did
+	// not misfire in production; its SCOPE softening is also less destructive than the
+	// CORRECTION assertion).
+	const absenceDetection = detectPrematureAbsence(answer, results);
+	const { overgeneralized } = absenceDetection;
+	let contradicted = absenceDetection.contradicted;
+	let absenceJudgeUsed = false;
+	if (contradicted.length > 0 && isAbsenceJudgeEnabled()) {
+		absenceJudgeUsed = true;
+		const verdicts = await judgeContradictedAbsenceClaims(absenceDetection.contradictedDetails, results, config);
+		if (verdicts !== null) {
+			contradicted = absenceDetection.contradictedDetails.filter((_, i) => verdicts[i]).map((c) => c.line);
+		}
+	}
+	const absenceJudgeVetoedCount = absenceDetection.contradicted.length - contradicted.length;
+	if (absenceJudgeUsed && contradicted.length === 0) {
+		logger.info(
+			{ regexContradictedCount: absenceDetection.contradicted.length, absenceJudgeVetoedCount },
+			"Absence judge vetoed all regex-contradicted absence lines (scoped or cross-datasource findings)",
+		);
+	}
 	const prematureAbsenceCapTriggered = contradicted.length > 0 || overgeneralized.length > 0;
 
 	// SIO-1087 (Fix D): a Root Cause line asserting a specific mechanism (schema mismatch, field
@@ -1195,6 +1241,9 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 			{
 				contradicted: contradicted.length,
 				overgeneralized: overgeneralized.length,
+				regexContradictedCount: absenceDetection.contradicted.length,
+				absenceJudgeUsed,
+				absenceJudgeVetoedCount,
 				cap: TOOL_ERROR_CONFIDENCE_CAP,
 				originalScore: confidenceScore,
 				cappedScore,

@@ -17,6 +17,13 @@ describe("isLightweightRole defaults (SIO-1040)", () => {
 		expect(isLightweightRole("gapsJudge", { AGENT_LLM_TIER_GAPS_JUDGE: "standard" })).toBe(false);
 	});
 
+	// SIO-1158: the absence veto judge ships light by design (per-claim boolean verdicts),
+	// overridable to standard via AGENT_LLM_TIER_ABSENCE_JUDGE=standard.
+	test("absenceJudge is light by default and overridable to standard", () => {
+		expect(isLightweightRole("absenceJudge", {})).toBe(true);
+		expect(isLightweightRole("absenceJudge", { AGENT_LLM_TIER_ABSENCE_JUDGE: "standard" })).toBe(false);
+	});
+
 	test("every other tierable role is standard by default (rollout is classifier-only)", () => {
 		for (const role of [
 			"entityExtractor",
