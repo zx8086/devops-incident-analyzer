@@ -192,7 +192,13 @@ else
   SMOKE_ENV_ARGS=()
   case "$MCP_SERVER_PACKAGE" in
     mcp-server-kafka)
-      SMOKE_ENV_ARGS=(-e KAFKA_PROVIDER=local -e LOCAL_BOOTSTRAP_SERVERS=localhost:9092)
+      # Kafka's config defaults transport to stdio on 127.0.0.1:9081 (dev
+      # defaults); without these overrides the container never opens :8000
+      # and /ping can't be reached.
+      SMOKE_ENV_ARGS=(
+        -e KAFKA_PROVIDER=local -e LOCAL_BOOTSTRAP_SERVERS=localhost:9092
+        -e MCP_TRANSPORT=agentcore -e MCP_PORT=8000 -e MCP_HOST=0.0.0.0
+      )
       ;;
     mcp-server-aws)
       # SIO-828: AWS MCP requires AWS_ESTATES (Zod min-1 estate) at boot or the
@@ -234,7 +240,7 @@ else
   else
     echo "  WARNING: /ping returned ${PING_STATUS} after 15s (expected 200)"
     echo "  Container logs (first 30 lines):"
-    docker logs "$CONTAINER_ID" 2>&1 | head -30 | sed 's/^/    /'
+    docker logs "$CONTAINER_ID" 2>&1 | head -30 | sed 's/^/    /' || true
     echo "  The container may still work in production. Continuing..."
   fi
 
