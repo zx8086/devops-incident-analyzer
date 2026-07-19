@@ -54,7 +54,10 @@ export type LlmRole =
 	// SIO-1015: post-turn worthiness judge for the skill-learning subsystem.
 	| "skillLearner"
 	// SIO-1126: HIL learning distiller (diff agent diagnosis vs human resolution).
-	| "hilDistiller";
+	| "hilDistiller"
+	// SIO-1149: degrading-gaps veto judge -- confirms regex-flagged Gaps bullets
+	// before the confidence cap applies. Only runs on would-cap paths.
+	| "gapsJudge";
 
 const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	orchestrator: {},
@@ -87,6 +90,8 @@ const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	// SIO-1126: deterministic distillation of a resolved ticket into a structured
 	// LearningProposal (root cause + facts as JSON).
 	hilDistiller: { temperature: 0, maxTokens: 4096 },
+	// SIO-1149: deterministic per-bullet verdicts as compact JSON.
+	gapsJudge: { temperature: 0, maxTokens: 1024 },
 };
 
 // SIO-739: Per-role wall-clock deadline for non-streaming llm.invoke calls. A
@@ -119,6 +124,9 @@ export const ROLE_DEADLINES_MS: Record<LlmRole, number> = {
 	skillLearner: 60_000,
 	// SIO-1126: user-facing but interactive (the review gate follows); bound it.
 	hilDistiller: 120_000,
+	// SIO-1149: on the aggregate critical path (would-cap runs only); a slow judge
+	// must never stall the report -- fail-closed to the regex verdict instead.
+	gapsJudge: 8_000,
 };
 
 // SIO-739: Convert camelCase LlmRole to SCREAMING_SNAKE for env-var keys.
@@ -166,12 +174,13 @@ const TOOL_BINDING_ROLES: ReadonlySet<LlmRole> = new Set(["subAgent"]);
 
 // SIO-1040: model tiering. A role in DEFAULT_LIGHTWEIGHT_ROLES runs on the light
 // model (the borrowed elastic-agent manifest -> haiku) unless an env override says
-// otherwise. Rollout ships classifier-only (status quo); the others are eligible to
+// otherwise. Rollout shipped classifier-only; gapsJudge (SIO-1149) is light by design
+// (a per-bullet boolean verdict needs no frontier model). The others are eligible to
 // be flipped to light per-role via AGENT_LLM_TIER_<ROLE>=light after a LangSmith
 // replay eval, without a code change. Every tierable role is invoke-only (not in
 // TOOL_BINDING_ROLES), so withFallbacks is unchanged and a light-model failure falls
 // UP to the standard manifest model.
-const DEFAULT_LIGHTWEIGHT_ROLES: ReadonlySet<LlmRole> = new Set(["classifier"]);
+const DEFAULT_LIGHTWEIGHT_ROLES: ReadonlySet<LlmRole> = new Set(["classifier", "gapsJudge"]);
 const TIERABLE_ROLES: ReadonlySet<LlmRole> = new Set([
 	"classifier",
 	"entityExtractor",
@@ -180,6 +189,7 @@ const TIERABLE_ROLES: ReadonlySet<LlmRole> = new Set([
 	"runbookSelector",
 	"followUp",
 	"actionProposal",
+	"gapsJudge",
 ]);
 
 export function isLightweightRole(role: LlmRole, env: NodeJS.ProcessEnv = process.env): boolean {

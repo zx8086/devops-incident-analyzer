@@ -45,6 +45,68 @@ const ListDlqTopicsRowSchema = z.object({
 	recentDelta: z.number().nullable(),
 });
 
+// SIO-1149: fallback DLQ derivation for when kafka_list_dlq_topics fails/times out and
+// the sub-agent inspects a DLQ topic directly (the localcore run: 113k-message DLQ,
+// dlqTopics:0). Shapes from mcp-server-kafka kafka-service.ts: kafka_describe_topic
+// returns { name, offsets: ListedOffsetsTopic|null, configs }; kafka_get_topic_offsets
+// returns a bare ListedOffsetsTopic|null. Offsets and timestamps are BIGINTS SERIALIZED
+// AS STRINGS (response-builder bigintReplacer); partitions[].timestamp echoes the
+// REQUESTED sentinel ("-1" LATEST -- the describe_topic default -- or "-2" EARLIEST).
+const OffsetsPartitionSchema = z.object({
+	partitionIndex: z.number(),
+	timestamp: z.union([z.string(), z.number()]).optional(),
+	offset: z.union([z.string(), z.number()]).transform((v, ctx) => {
+		const n = Number(v);
+		// CodeRabbit (PR #416): offsets are int64 -- above MAX_SAFE_INTEGER Number() rounds
+		// and distinct offsets collapse into equal totals. Fail closed on unsafe/negative.
+		if (!Number.isSafeInteger(n) || n < 0) {
+			ctx.addIssue({ code: "custom", message: "offset is not a safe non-negative integer" });
+			return z.NEVER;
+		}
+		return n;
+	}),
+});
+const OffsetsTopicSchema = z.object({ name: z.string(), partitions: z.array(OffsetsPartitionSchema) });
+const DescribeTopicSchema = z.object({ name: z.string(), offsets: OffsetsTopicSchema.nullable() });
+// Broad on purpose: covers the DLQ_ prefix (this incident), -dlq, .DLQ, and dead-letter
+// forms. mcp-server-kafka's own DLQ_PATTERNS misses DLQ_-prefixed names (SIO-1150).
+const DLQ_NAME_RE = /(^|[._-])dlq([._-]|$)|dead.?letter/i;
+const EARLIEST_SENTINEL = "-2";
+const LATEST_SENTINEL = "-1";
+
+type DerivedOffsets = { latest: Map<number, number>; earliest: Map<number, number> };
+
+function accumulateDerivedDlq(derived: Map<string, DerivedOffsets>, topic: z.infer<typeof OffsetsTopicSchema>): void {
+	if (!DLQ_NAME_RE.test(topic.name)) return;
+	const entry = derived.get(topic.name) ?? { latest: new Map(), earliest: new Map() };
+	for (const p of topic.partitions) {
+		// Sentinel echo decides which bound this row is. An absent timestamp means the
+		// default request (LATEST). A real (time-anchored) timestamp is neither bound.
+		const ts = p.timestamp === undefined ? LATEST_SENTINEL : String(p.timestamp);
+		if (ts === EARLIEST_SENTINEL) entry.earliest.set(p.partitionIndex, p.offset);
+		else if (ts === LATEST_SENTINEL) entry.latest.set(p.partitionIndex, p.offset);
+	}
+	derived.set(topic.name, entry);
+}
+
+// totalMessages per derived topic: sum(latest - earliest) when EVERY latest partition
+// has an earliest bound, else sum of high watermarks -- an UPPER BOUND on retained
+// messages (retention-truncated topics start above offset 0). Snapshot-only, so
+// recentDelta is unknowable: emitted as null.
+function derivedDlqRows(derived: Map<string, DerivedOffsets>): Array<z.infer<typeof ListDlqTopicsRowSchema>> {
+	const rows: Array<z.infer<typeof ListDlqTopicsRowSchema>> = [];
+	for (const [name, { latest, earliest }] of derived) {
+		if (latest.size === 0) continue;
+		const haveAllEarliest = Array.from(latest.keys()).every((i) => earliest.has(i));
+		let total = 0;
+		for (const [i, high] of latest) {
+			total += haveAllEarliest ? high - (earliest.get(i) ?? 0) : high;
+		}
+		if (total > 0) rows.push({ name, totalMessages: total, recentDelta: null });
+	}
+	return rows;
+}
+
 // SIO-785 follow-up (2026-05-18): shape from kafka_describe_cluster.
 // Live-probed against c72-shared-services-msk on 2026-05-18; matches MSK admin API.
 const DescribeClusterSchema = z.object({
@@ -120,6 +182,7 @@ function isRelevantDlq(name: string, recentDelta: number | null, focusServices: 
 export function extractKafkaFindings(outputs: ToolOutput[], focusServices: string[] = []): KafkaFindings {
 	const byId = new Map<string, { id: string; state?: string; totalLag?: number }>();
 	const dlqTopics: Array<z.infer<typeof ListDlqTopicsRowSchema>> = [];
+	const derivedDlq = new Map<string, DerivedOffsets>();
 	let cluster: NonNullable<KafkaFindings["cluster"]> | undefined;
 	const connectorsByName = new Map<string, NonNullable<KafkaFindings["connectors"]>[number]>();
 	const ksqlQueries: NonNullable<KafkaFindings["ksqlQueries"]> = [];
@@ -155,6 +218,15 @@ export function extractKafkaFindings(outputs: ToolOutput[], focusServices: strin
 				const parsed = ListDlqTopicsRowSchema.safeParse(t);
 				if (parsed.success) dlqTopics.push(parsed.data);
 			}
+		} else if (o.toolName === "kafka_describe_topic") {
+			// SIO-1149: fallback DLQ derivation (see accumulateDerivedDlq above).
+			const parsed = DescribeTopicSchema.safeParse(o.rawJson);
+			if (!parsed.success || parsed.data.offsets === null) continue;
+			accumulateDerivedDlq(derivedDlq, parsed.data.offsets);
+		} else if (o.toolName === "kafka_get_topic_offsets") {
+			const parsed = OffsetsTopicSchema.safeParse(o.rawJson);
+			if (!parsed.success) continue;
+			accumulateDerivedDlq(derivedDlq, parsed.data);
 		} else if (o.toolName === "kafka_describe_cluster" || o.toolName === "kafka_get_cluster_info") {
 			// Cluster summary tile. Both tools return overlapping shapes; merge.
 			const parsed = DescribeClusterSchema.safeParse(o.rawJson);
@@ -205,10 +277,18 @@ export function extractKafkaFindings(outputs: ToolOutput[], focusServices: strin
 		isRelevantById(g.id, g.state, g.totalLag, focusServices),
 	);
 	const filteredDlqs = dlqTopics.filter((d) => isRelevantDlq(d.name, d.recentDelta, focusServices));
+	// SIO-1149: derived rows fill in only for topics the listing did not cover (listed rows
+	// win -- they carry a real recentDelta). They BYPASS isRelevantDlq deliberately: the
+	// sub-agent targeted the topic by name, which is itself the relevance signal, and a
+	// snapshot-derived row (recentDelta null) would otherwise be dropped unless its name
+	// happened to fuzzy-match the focus service (DLQ_T_PRIVATE_... does not match localcore).
+	const listedNames = new Set(dlqTopics.map((d) => d.name));
+	const derivedRows = derivedDlqRows(derivedDlq).filter((d) => !listedNames.has(d.name));
 
 	const findings: KafkaFindings = {};
 	if (filteredGroups.length > 0) findings.consumerGroups = filteredGroups;
-	if (filteredDlqs.length > 0) findings.dlqTopics = filteredDlqs;
+	const allDlqs = [...filteredDlqs, ...derivedRows];
+	if (allDlqs.length > 0) findings.dlqTopics = allDlqs;
 	if (cluster) findings.cluster = cluster;
 	if (connectorsByName.size > 0) findings.connectors = Array.from(connectorsByName.values());
 	if (ksqlQueries.length > 0) findings.ksqlQueries = ksqlQueries;

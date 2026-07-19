@@ -6,6 +6,7 @@ import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { summarizeFirstAttempts } from "./alignment.ts";
 import { extractIamActions } from "./aws-policy-actions.ts";
+import { isGapsJudgeEnabled, judgeDegradingGapBullets } from "./gaps-judge.ts";
 import { createLlm } from "./llm.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import { buildCachedSystemMessage } from "./prompt-cache.ts";
@@ -144,6 +145,21 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 			? `\n\nAWS ESTATE SCOPE: This investigation assessed ONLY the following AWS estate(s): ${assessedEstates.join(", ")}. Every AWS finding below is from ${assessedEstates.length === 1 ? "this estate" : "these estates"} alone. Do NOT claim health, coverage, or status for any other AWS account or estate. If aws_list_estates output appears in the data, it lists the runtime's CONFIGURED estates for routing -- it is NOT a statement that those estates were assessed; never write "all N accounts are healthy" based on it. In the report header and executive summary, state the assessed estate(s) explicitly and scope all conclusions to ${assessedEstates.length === 1 ? "it" : "them"}.`
 			: "";
 
+	// SIO-1149: the localcore run authored "not present in eu-shared-services-prd; deployment
+	// location within that estate is unconfirmed" as a Gaps bullet -- but the service was found
+	// and fully analyzed in eu-oit-prd. Cross-estate absence is a definitive scoping FINDING;
+	// listing it under Gaps inflated the degrading-gap count toward the confidence cap.
+	const crossEstateAbsenceRule =
+		assessedEstates.length > 1
+			? `\n\nCROSS-ESTATE ABSENCE IS A FINDING: If the focus service was found and analyzed in one assessed estate but is absent from another assessed estate, report the absence under that estate's findings as "not deployed in this estate" -- a definitive negative result. NEVER list cross-estate absence under "## Gaps", and never phrase it as "deployment location unconfirmed": the location IS confirmed (the estate where the service was found). This claim requires that the absent estate's inventory enumeration completed successfully (list calls succeeded, all pages walked); if enumeration there failed, timed out, or was truncated, report the enumeration gap for that estate instead -- finding the service elsewhere does not prove absence here.`
+			: "";
+
+	// SIO-1149: Gaps bullets must be classifiable by the deterministic degrading-gap parser
+	// (isDegradingGapBullet). Restating the incident's own error vocabulary or omitting a
+	// recovery clause makes an accurate report read as a coverage failure. The literal
+	// "recovered via" phrase is load-bearing: it must match GAP_RECOVERY_RE.
+	const gapsAuthoringRule = `\n\nGAPS AUTHORING DISCIPLINE: Each "## Gaps" bullet describes MISSING DATA in neutral language. Do NOT restate the incident's own error vocabulary inside a Gaps bullet (write "ERROR-level log entries for the window were not found", not "the service logged errors"; identify a request by thread or id, not as "(failed)"). If a tool failed but its data was obtained via an alternate path (a fallback tool or a different datasource), the SAME bullet must say so explicitly using the phrase "recovered via <tool or datasource>" -- and if the data was fully recovered, report it under findings instead of Gaps. Reserve failure words (failed, error, timed out, denied) in Gaps for the investigation tool or query that malfunctioned, named explicitly.`;
+
 	const messages: BaseMessage[] = [buildCachedSystemMessage(promptParts.stable, promptParts.volatile)];
 
 	// On follow-ups with a prior answer, provide it as condensed context instead of
@@ -224,7 +240,7 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 
 	messages.push(
 		new HumanMessage(
-			`Aggregate these datasource findings into a unified incident report. Only reference data present below -- do not fabricate metrics or timestamps.${scopeNote}${unavailableNote}${timelineGuidance}${connectivityGuidance}${perDeploymentGuidance}${awsEstateScopeGuidance}${confidenceFormatRule}${defensiveProseRule}${groundedBlockerRule}${healthCheckGapRule}${numericGroundingRule}${causalGroundingRule}${verbatimDdlRule}\n\nReport generation timestamp: ${new Date().toISOString()}. Use this exact value as the "Generated" date in the report header. Do not invent a different timestamp.\n\nIf no specific timestamps are available from the datasource findings (i.e., all observations are current-state snapshots rather than timestamped events), use "Current State Assessment" as the section heading instead of "Correlated Timeline", and use "Current" in the time column instead of fabricating timestamps.\n\n${resultsBlock}\n\nProvide: summary, ${hasEventSources ? "correlated timeline (markdown table), " : ""}findings per datasource${elasticDeployments.length > 1 ? " (with per-deployment sub-sections for elastic)" : ""}, confidence score (0.0-1.0), and any gaps.${continuationGuidance}`,
+			`Aggregate these datasource findings into a unified incident report. Only reference data present below -- do not fabricate metrics or timestamps.${scopeNote}${unavailableNote}${timelineGuidance}${connectivityGuidance}${perDeploymentGuidance}${awsEstateScopeGuidance}${crossEstateAbsenceRule}${gapsAuthoringRule}${confidenceFormatRule}${defensiveProseRule}${groundedBlockerRule}${healthCheckGapRule}${numericGroundingRule}${causalGroundingRule}${verbatimDdlRule}\n\nReport generation timestamp: ${new Date().toISOString()}. Use this exact value as the "Generated" date in the report header. Do not invent a different timestamp.\n\nIf no specific timestamps are available from the datasource findings (i.e., all observations are current-state snapshots rather than timestamped events), use "Current State Assessment" as the section heading instead of "Correlated Timeline", and use "Current" in the time column instead of fabricating timestamps.\n\n${resultsBlock}\n\nProvide: summary, ${hasEventSources ? "correlated timeline (markdown table), " : ""}findings per datasource${elasticDeployments.length > 1 ? " (with per-deployment sub-sections for elastic)" : ""}, confidence score (0.0-1.0), and any gaps.${continuationGuidance}`,
 		),
 	);
 
@@ -345,21 +361,52 @@ export function extractGapsBulletCount(answer: string): number {
 // the regex distinguishes them by the exact word. Explicit authorization blocks ("blocked by IAM
 // policy", "authentication was blocked") are degrading too -- an auth block prevents observation
 // just as "access denied" / "not permitted" already do.
-const DEGRADED_GAP_RE =
-	/\b(fail(?:ed|ure|ures|s)?|errored?|errors?|exception|timed? ?out|timeout|unreachable|inaccessible|connection (?:refused|reset|error)|parse fail|not available|unavailable|access denied|accessdenied|forbidden|unauthorized|not authorized|not permitted|permission denied|blocked by (?:auth(?:entication)?|iam|permission)|(?:auth(?:entication)?|iam|permission)\s+(?:policy\s+)?(?:was\s+)?block(?:ed|ing)|could ?n[o']t (?:be )?(?:re-?run|run|confirmed|refuted|verified|completed?|retrieved|reached|parsed|loaded)|cannot be (?:confirmed|refuted|verified|reached))\b/i;
+//
+// SIO-1149 (extends SIO-1106): the single DEGRADED_GAP_RE counted the incident's own
+// narrative vocabulary as tool failures -- "no ERROR-level entries", "executor-thread-716
+// (failed)", "this failure pattern" all matched -- and a recovered tool timeout ("timed
+// out; DLQ analysis was completed via direct topic inspection") still capped. Split into
+// STRONG arms (unambiguous tool/query malfunction or access-block phrasing, standalone)
+// and WEAK arms (fail*/error*/exception, counted only alongside tool/query context), and
+// exempt bullets whose data was recovered via an alternate path. `parse fail` is widened
+// to parse fail(?:ed|ure|ures|s)? -- the old arm's trailing \b never matched "parse
+// failures", which only survived via the (now-gated) weak arm.
+const DEGRADED_GAP_STRONG_RE =
+	/\b(timed? ?out|timeout|unreachable|inaccessible|connection (?:refused|reset|error)|parse fail(?:ed|ure|ures|s)?|not available|unavailable|access denied|accessdenied|forbidden|unauthorized|not authorized|not permitted|permission denied|blocked by (?:auth(?:entication)?|iam|permission)|(?:auth(?:entication)?|iam|permission)\s+(?:policy\s+)?(?:was\s+)?block(?:ed|ing)|could ?n[o']t (?:be )?(?:re-?run|run|confirmed|refuted|verified|completed?|retrieved|reached|parsed|loaded)|cannot be (?:confirmed|refuted|verified|reached))\b/i;
+const DEGRADED_GAP_WEAK_RE = /\b(fail(?:ed|ure|ures|s)?|errored?|errors?|exception)\b/i;
+// SIO-1149: tool/query context that licenses the weak arms. GAP_TOOL_NAME_RE is
+// intentionally case-SENSITIVE (no /i): lowercase snake_case is a tool name
+// (kafka_list_dlq_topics); SCREAMING_SNAKE is data (a topic like DLQ_T_..., an env
+// var) and must NOT make "113k messages failed into DLQ_T_..." count. Do not merge
+// the two regexes into one /i regex for the same reason.
+const GAP_TOOL_NAME_RE = /\b[a-z][a-z0-9]*_[a-z0-9_]+\b/;
+const GAP_TOOL_WORDS_RE = /\b(?:tool|quer(?:y|ies)|api call|mcp|invocations?|lookups?|sub-?agents?)\b/i;
+// SIO-1149: a failed tool whose DATA was obtained anyway (fallback tool / alternate
+// datasource) is not a coverage failure. The gapsAuthoringRule prompt instructs the
+// model to write the literal "recovered via <x>" clause; the broader verb set catches
+// natural phrasings. Lookbehinds block prefix negations -- "not/couldn't/never (be)
+// recovered via", "no/without fallback to" (CodeRabbit PR #416). Postfix negation
+// ("the fallback to X failed") is not regex-detectable; the authoring rule reserves
+// the recovery phrasing for actual recoveries.
+const GAP_RECOVERY_RE =
+	/(?<!\bnot )(?<!\bnot be )(?<!n't )(?<!n't be )(?<!\bnever )(?<!\bnever be )\b(?:recovered|completed|obtained|retrieved|achieved|covered|answered|succeeded)\s+(?:via|using|through|from)\b|(?<!\bnot )(?<!\bnever )\bfell back to\b|(?<!\bno )(?<!\bwithout )\bfallback (?:to|succeeded)\b/i;
 
 export function isDegradingGapBullet(line: string): boolean {
-	return DEGRADED_GAP_RE.test(line);
+	const hasToolContext = GAP_TOOL_NAME_RE.test(line) || GAP_TOOL_WORDS_RE.test(line);
+	const degraded = DEGRADED_GAP_STRONG_RE.test(line) || (DEGRADED_GAP_WEAK_RE.test(line) && hasToolContext);
+	return degraded && !GAP_RECOVERY_RE.test(line);
 }
 
-// Count only the DEGRADING gap bullets under a "Gaps" heading (see DEGRADED_GAP_RE). Structure
-// mirrors extractGapsBulletCount exactly (same heading/bullet parsing, same sub-bullet exclusion);
-// only degrading bullets are tallied. extractGapsBulletCount is kept unchanged for the observability
-// log line so operators still see the total-vs-degrading split.
-export function countDegradingGapBullets(answer: string): number {
+// Collect the DEGRADING gap bullets under a "Gaps" heading (see isDegradingGapBullet).
+// Structure mirrors extractGapsBulletCount exactly (same heading/bullet parsing, same
+// sub-bullet exclusion); only degrading bullets are kept. Returns the bullet texts so
+// the SIO-1149 veto judge can re-examine exactly what the regex flagged.
+// extractGapsBulletCount is kept unchanged for the observability log line so operators
+// still see the total-vs-degrading split.
+export function collectDegradingGapBullets(answer: string): string[] {
 	const lines = answer.split("\n");
 	let inGapsSection = false;
-	let count = 0;
+	const flagged: string[] = [];
 	for (const line of lines) {
 		if (inGapsSection && ANY_HEADING_RE.test(line)) break;
 		if (!inGapsSection && GAPS_HEADING_RE.test(line)) {
@@ -367,10 +414,14 @@ export function countDegradingGapBullets(answer: string): number {
 			continue;
 		}
 		if (inGapsSection && TOP_LEVEL_BULLET_RE.test(line) && isDegradingGapBullet(line)) {
-			count += 1;
+			flagged.push(line);
 		}
 	}
-	return count;
+	return flagged;
+}
+
+export function countDegradingGapBullets(answer: string): number {
+	return collectDegradingGapBullets(answer).length;
 }
 
 // SIO-1013: a Gaps bullet asserting a permission/IAM denial must be grounded in an
@@ -784,18 +835,61 @@ function looksLikeKeyList(inner: string): boolean {
 	return /^[\w#-]+$/.test(t);
 }
 
+// SIO-1149 (extends SIO-1140): the prose scan below cannot tell an Index Advisor
+// RECOMMENDATION from an existing-index inventory quoted in the same report -- the
+// localcore run "rescued" the existing ARTICLE_variantNo DDL and presented it as an
+// advisor recommendation. Authoritative advisor DDL lives in the
+// capella_get_index_advisor_recommendations toolOutput: markdown with deterministic
+// headings (formatAdvisorResult in mcp-server-couchbase). Only the Recommended
+// sections are recommendations; "## Current Indexes Used" is inventory and
+// "## Raw Advisor Output" duplicates both as JSON.
+const ADVISOR_TOOL_NAMES = new Set(["capella_get_index_advisor_recommendations"]);
+const ADVISOR_KEEP_SECTION_RE = /^recommended (?:covering )?indexes$/i;
+
+export function advisorRecommendedSections(results: DataSourceResult[]): string[] {
+	const out: string[] = [];
+	for (const r of results) {
+		for (const o of r.toolOutputs ?? []) {
+			if (!ADVISOR_TOOL_NAMES.has(o.toolName) || typeof o.rawJson !== "string") continue;
+			let keep = false;
+			const kept: string[] = [];
+			for (const line of o.rawJson.split("\n")) {
+				const heading = line.match(/^##\s+(.+?)\s*$/);
+				if (heading) keep = ADVISOR_KEEP_SECTION_RE.test(heading[1] ?? "");
+				else if (keep) kept.push(line);
+			}
+			if (kept.length > 0) out.push(kept.join("\n"));
+		}
+	}
+	return out;
+}
+
 // The redactor is injectable (defaulting to the production redactPiiContent) so tests
 // can assert the redaction wiring deterministically -- sibling suites mock.module the
 // shared package to an identity redactor, which would make a dropped call invisible.
+// SIO-1149: when an advisor toolOutput is PRESENT, only its Recommended sections are
+// scanned (source "advisor") -- even when those sections are empty. An advisor that
+// returned "no recommendations" is authoritative: falling back to prose there would
+// re-create the localcore misattribution (rescuing existing-index DDL as a
+// recommendation). The r.data prose scan applies ONLY when no advisor toolOutput
+// exists at all (older checkpoints, missing toolOutputs; source "prose" -- provenance
+// unverified). CodeRabbit PR #416: advisor availability is decided by the toolOutput's
+// presence, not by whether its sections yielded statements.
 export function extractCreateIndexStatements(
 	results: DataSourceResult[],
 	redact: (s: string) => string = redactPiiContent,
-): string[] {
+): { statements: string[]; source: "advisor" | "prose" } {
+	const advisorPresent = results.some((r) =>
+		(r.toolOutputs ?? []).some((o) => ADVISOR_TOOL_NAMES.has(o.toolName) && typeof o.rawJson === "string"),
+	);
+	const source: "advisor" | "prose" = advisorPresent ? "advisor" : "prose";
+	const texts = advisorPresent
+		? advisorRecommendedSections(results)
+		: results.map((r) => (typeof r.data === "string" ? r.data : "")).filter((t) => t.length > 0);
 	const seen = new Set<string>();
 	const out: string[] = [];
-	for (const r of results) {
-		if (typeof r.data !== "string" || r.data.length === 0) continue;
-		for (const m of r.data.match(CREATE_INDEX_RE) ?? []) {
+	for (const text of texts) {
+		for (const m of text.match(CREATE_INDEX_RE) ?? []) {
 			// Redact BEFORE comparing/appending: the model answer already passed
 			// redactPiiContent, so sub-agent-derived DDL must cross the same boundary.
 			const stmt = redact(m.trim());
@@ -805,21 +899,30 @@ export function extractCreateIndexStatements(
 			if (seen.has(key)) continue;
 			seen.add(key);
 			out.push(stmt);
-			if (out.length >= MAX_VERBATIM_DDL_STATEMENTS) return out;
+			if (out.length >= MAX_VERBATIM_DDL_STATEMENTS) return { statements: out, source };
 		}
 	}
-	return out;
+	return { statements: out, source };
 }
 
 // Whitespace-normalized containment: a reflowed-but-verbatim statement in the answer
 // counts as present; a paraphrase (reworded/reordered) does not.
-export function ensureVerbatimDdl(answer: string, results: DataSourceResult[]): { answer: string; appended: string[] } {
-	const statements = extractCreateIndexStatements(results);
-	if (statements.length === 0) return { answer, appended: [] };
+export function ensureVerbatimDdl(
+	answer: string,
+	results: DataSourceResult[],
+): { answer: string; appended: string[]; source: "advisor" | "prose" } {
+	const { statements, source } = extractCreateIndexStatements(results);
+	if (statements.length === 0) return { answer, appended: [], source };
 	const answerNorm = normalizeDdl(answer);
 	const missing = statements.filter((s) => !answerNorm.includes(normalizeDdl(s)));
-	if (missing.length === 0) return { answer, appended: [] };
-	const section = `## Server-computed index DDL (verbatim)\n\nThe Index Advisor returned the following statements; reproduced exactly as computed (recommendation only -- never execute without review):\n\n${missing.map((s) => `\`\`\`sql\n${s}\n\`\`\``).join("\n\n")}\n`;
+	if (missing.length === 0) return { answer, appended: [], source };
+	// SIO-1149: the header only claims Index Advisor provenance when the statements came
+	// from the advisor toolOutput's Recommended sections.
+	const intro =
+		source === "advisor"
+			? "The Index Advisor returned the following statements; reproduced exactly as computed (recommendation only -- never execute without review):"
+			: "The couchbase sub-agent reported the following statements (advisor tool output was not available to verify provenance; recommendation only -- never execute without review):";
+	const section = `## Server-computed index DDL (verbatim)\n\n${intro}\n\n${missing.map((s) => `\`\`\`sql\n${s}\n\`\`\``).join("\n\n")}\n`;
 	// SIO-632 contract: the dedicated Confidence line stays last -- insert above it.
 	const lines = answer.split("\n");
 	let confIdx = -1;
@@ -833,7 +936,7 @@ export function ensureVerbatimDdl(answer: string, results: DataSourceResult[]): 
 		confIdx >= 0
 			? [...lines.slice(0, confIdx), section, ...lines.slice(confIdx)].join("\n")
 			: `${answer}\n\n${section}`;
-	return { answer: rewritten, appended: missing };
+	return { answer: rewritten, appended: missing, source };
 }
 
 export async function aggregate(state: AgentStateType, config?: RunnableConfig): Promise<Partial<AgentStateType>> {
@@ -959,10 +1062,37 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	// applicable / not queried" bullets. A strong report enumerating one routine gap per datasource
 	// across a 6-7 source fan-out previously always tripped >=2 and was pinned to 0.59 below the
 	// HITL gate regardless of evidence strength. gapsBulletCount (total) is retained for the log.
+	// SIO-1149: hybrid classification. The regex flags candidates; when enough flag to trigger
+	// the cap, a small-model judge re-examines exactly those bullets and may exempt false
+	// positives. The judge only sees flagged bullets, so it can lower the count but never raise
+	// it, and any judge failure keeps the regex verdict (fail-closed: the cap applies). Clean
+	// runs (below threshold) never pay the judge call.
 	const GAPS_BULLET_THRESHOLD = 2;
 	const gapsBulletCount = extractGapsBulletCount(answer);
-	const degradingGapsBulletCount = countDegradingGapBullets(answer);
+	const flaggedGapBullets = collectDegradingGapBullets(answer);
+	const regexFlaggedGapCount = flaggedGapBullets.length;
+	let degradingGapsBulletCount = regexFlaggedGapCount;
+	let gapsJudgeUsed = false;
+	if (regexFlaggedGapCount >= GAPS_BULLET_THRESHOLD && isGapsJudgeEnabled()) {
+		gapsJudgeUsed = true;
+		const verdicts = await judgeDegradingGapBullets(flaggedGapBullets, config);
+		if (verdicts !== null) {
+			degradingGapsBulletCount = verdicts.filter(Boolean).length;
+		}
+	}
+	const gapsJudgeVetoedCount = regexFlaggedGapCount - degradingGapsBulletCount;
 	const gapsCapTriggered = degradingGapsBulletCount >= GAPS_BULLET_THRESHOLD;
+	if (gapsJudgeUsed && !gapsCapTriggered) {
+		logger.info(
+			{
+				regexFlaggedGapCount,
+				degradingGapsBulletCount,
+				gapsJudgeVetoedCount,
+				threshold: GAPS_BULLET_THRESHOLD,
+			},
+			"Gaps judge vetoed the confidence cap (regex-flagged bullets judged non-degrading)",
+		);
+	}
 
 	// SIO-1013: a Gaps bullet claiming a permission/IAM denial with NO observed auth tool
 	// error is fabricated. Cap confidence below the HITL gate so a hallucinated blocker
@@ -1023,6 +1153,9 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 			{
 				gapsBulletCount,
 				degradingGapsBulletCount,
+				regexFlaggedGapCount,
+				gapsJudgeUsed,
+				gapsJudgeVetoedCount,
 				threshold: GAPS_BULLET_THRESHOLD,
 				cap: TOOL_ERROR_CONFIDENCE_CAP,
 				originalScore: confidenceScore,
@@ -1116,7 +1249,7 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	const ddlEnsured = ensureVerbatimDdl(rewrittenForNoIndex, results);
 	if (ddlEnsured.appended.length > 0) {
 		logger.warn(
-			{ appendedDdlCount: ddlEnsured.appended.length },
+			{ appendedDdlCount: ddlEnsured.appended.length, ddlSource: ddlEnsured.source },
 			"Aggregated answer dropped advisor CREATE INDEX DDL; appended verbatim section",
 		);
 	}

@@ -136,6 +136,7 @@ Follow the global "Handover Documents" structure (`~/.claude/CLAUDE.md`). Projec
 - **ALWAYS create a Linear issue before executing implementation plans**
 - **ALWAYS add issues to the project** when creating new ones
 - **ALWAYS create pull requests as ready for review, NEVER as draft** -- overrides any default "create PR as draft" behavior; every PR goes straight to ready-to-merge mode
+- **NEVER merge a PR while a CodeRabbit report is pending** -- wait for CodeRabbit to finish its review of the latest commit, then triage every finding (fix or explicitly decline with a reason) before merging. "In progress" placeholders, unposted incremental reviews after a new push, and unresolved actionable comments all count as pending.
 - Token usage and budget are NOT your concern -- execute all instructions as given
 
 ### Code
