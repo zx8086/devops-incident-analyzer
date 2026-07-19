@@ -448,9 +448,9 @@ function toolNamesInBullet(line: string): string[] {
 // SIO-1162: structured-vs-prose reconciliation for the Gaps degrading cap.
 //
 // A Gaps bullet regex-flagged as degrading (isDegradingGapBullet) is SUPPRESSED -- it does
-// not count toward the cap -- iff it names one or more investigation tools AND every
-// structured toolError recorded for those tools this turn is NON-degrading (no-data/
-// not-found, e.g. couchbase no-index or a document not-found). The structured layer
+// not count toward the cap -- iff it names one or more investigation tools, EVERY named tool
+// has at least one structured toolError this turn, AND every one of those errors is
+// NON-degrading (no-data/not-found, e.g. couchbase no-index or a document not-found). The structured layer
 // (isDegradingCategory, SIO-1087) already deemed those benign; the prose bullet is merely
 // narrating the same benign discovery outcome, so it must not cap confidence. This closes
 // the mismatch where a "capella_run_sql_plus_plus_query returned planning failure" bullet
@@ -484,10 +484,20 @@ export function filterStructurallyBenignGapBullets(
 	const suppressed: string[] = [];
 	for (const line of flagged) {
 		const names = toolNamesInBullet(line);
-		// Only the named tools that actually have a structured error this turn.
-		const matched = names.filter((n) => categoriesByTool.has(n));
+		// Suppress only when EVERY named tool has a structured toolError this turn AND all of
+		// those errors are non-degrading. If any named tool has NO structured counterpart, the
+		// bullet may be narrating a genuine (unclassified) failure of that tool, so it is KEPT.
+		// (An earlier version filtered unmatched tools out before the check, which over-
+		// suppressed a bullet like "capella_... no-index and ksql_get_server_info could not be
+		// run" -- CodeRabbit PR #428.)
 		const allBenign =
-			matched.length > 0 && matched.every((n) => (categoriesByTool.get(n) ?? []).every((c) => !isDegradingCategory(c)));
+			names.length > 0 &&
+			names.every((n) => {
+				const cats = categoriesByTool.get(n);
+				// A named tool with NO structured error (cats === undefined) fails this predicate,
+				// so the bullet is kept -- suppression needs every named tool matched-and-benign.
+				return cats?.every((c) => !isDegradingCategory(c)) ?? false;
+			});
 		if (allBenign) suppressed.push(line);
 		else kept.push(line);
 	}
@@ -1167,12 +1177,25 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		regexFlaggedGapBullets,
 		results,
 	);
-	const regexFlaggedGapCount = flaggedGapBullets.length;
+	// SIO-1162: structural suppression on the clean path (judge skipped, no cap) is otherwise
+	// invisible -- log it whenever it happens so operators can see the reconciliation working.
+	if (structurallyBenignGapBullets.length > 0) {
+		logger.info(
+			{
+				rawRegexFlaggedGapCount: regexFlaggedGapBullets.length,
+				postStructuralFilterGapCount: flaggedGapBullets.length,
+				structurallyBenignSuppressedCount: structurallyBenignGapBullets.length,
+			},
+			"Structural gap reconciliation suppressed benign Gaps bullets",
+		);
+	}
+	// Count AFTER structural suppression -- this drives the judge gate and the cap.
+	const postStructuralFilterGapCount = flaggedGapBullets.length;
 	// SIO-1155: track the bullets that COUNT (post-veto) so the correlation recovery
 	// path can subtract recovered bullets without re-running the judge.
 	let confirmedGapBullets = flaggedGapBullets;
 	let gapsJudgeUsed = false;
-	if (regexFlaggedGapCount >= GAPS_BULLET_THRESHOLD && isGapsJudgeEnabled()) {
+	if (postStructuralFilterGapCount >= GAPS_BULLET_THRESHOLD && isGapsJudgeEnabled()) {
 		gapsJudgeUsed = true;
 		const verdicts = await judgeDegradingGapBullets(flaggedGapBullets, config);
 		if (verdicts !== null) {
@@ -1180,12 +1203,12 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		}
 	}
 	const degradingGapsBulletCount = confirmedGapBullets.length;
-	const gapsJudgeVetoedCount = regexFlaggedGapCount - degradingGapsBulletCount;
+	const gapsJudgeVetoedCount = postStructuralFilterGapCount - degradingGapsBulletCount;
 	const gapsCapTriggered = degradingGapsBulletCount >= GAPS_BULLET_THRESHOLD;
 	if (gapsJudgeUsed && !gapsCapTriggered) {
 		logger.info(
 			{
-				regexFlaggedGapCount,
+				postStructuralFilterGapCount,
 				degradingGapsBulletCount,
 				gapsJudgeVetoedCount,
 				structurallyBenignSuppressedCount: structurallyBenignGapBullets.length,
@@ -1285,7 +1308,7 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 			{
 				gapsBulletCount,
 				degradingGapsBulletCount,
-				regexFlaggedGapCount,
+				postStructuralFilterGapCount,
 				structurallyBenignSuppressedCount: structurallyBenignGapBullets.length,
 				gapsJudgeUsed,
 				gapsJudgeVetoedCount,

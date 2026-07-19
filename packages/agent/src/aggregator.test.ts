@@ -647,6 +647,25 @@ describe("filterStructurallyBenignGapBullets (SIO-1162 structured reconciliation
 		expect(kept).toHaveLength(1);
 		expect(suppressed).toHaveLength(0);
 	});
+
+	// CodeRabbit PR #428: a bullet naming one benign-matched tool AND one tool with NO
+	// structured error must be KEPT -- the unmatched tool may be a genuine unclassified
+	// failure, so suppression requires EVERY named tool to be matched-and-benign.
+	test("keeps a multi-tool bullet when one named tool has NO structured error (mixed matched/unmatched)", () => {
+		const results = resultWith([
+			{
+				toolName: "capella_run_sql_plus_plus_query",
+				category: "no-data",
+				kind: "no-index",
+				message: "no index",
+				retryable: false,
+			},
+		]);
+		const flagged = ["- capella_run_sql_plus_plus_query returned no-index and ksql_get_server_info could not be run"];
+		const { kept, suppressed } = filterStructurallyBenignGapBullets(flagged, results);
+		expect(kept).toHaveLength(1);
+		expect(suppressed).toHaveLength(0);
+	});
 });
 
 // SIO-709 AC #2: Gaps-section parser must trigger the same 0.59 cap when the
