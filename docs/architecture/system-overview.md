@@ -54,7 +54,7 @@ The agent's investigation is strictly read-only against production systems. It o
 | ES   | | Kafka| | Capella| | Konnect| | GitLab | |Atlassian|
 | MCP  | | MCP  | | MCP    | | MCP    | | MCP    | | MCP     |
 | :9080| | :9081| | :9082  | | :9083  | | :9084  | | :9085   |
-| 112  | | 15-55| | ~37    | | 67+    | | proxy+ | | proxy+  |
+|96-112| | 15-55| | ~37    | | 67+    | | proxy+ | | proxy+  |
 | tools| | gated| | tools  | | tools  | | custom | | custom  |
 +------+ +------+ +--------+ +--------+ +--------+ +---------+
     |        |          |         |         |         |
@@ -279,7 +279,7 @@ elastic kafka capella konnect gitlab atlassian aws
     +-------+
 ```
 
-> This is a simplified overview. It omits the intermediate nodes (`extractFindings`, the `enforceCorrelations` router/aggregate pair, `detectTopicShift`), the gated KG nodes, and the HIL learning lane that branches off `classify` on a `learn from TICKET-123` command — see the numbered node reference below and [agent-pipeline.md](agent-pipeline.md) for the full 31-node graph.
+> This is a simplified overview. It omits the intermediate nodes (`extractFindings`, the `enforceCorrelations` router/aggregate pair, `detectTopicShift`) and the gated KG nodes — all covered in the numbered node reference below — plus the 6-node HIL learning lane that branches off `classify` on a `learn from TICKET-123` command, which is documented separately in [agent-pipeline.md](agent-pipeline.md#hil-learning-lane). See [agent-pipeline.md](agent-pipeline.md) for the full 31-node graph.
 
 1. **classify** -- Routes query as simple (greetings, help) or complex (infrastructure investigation). Uses regex patterns first, falls back to LLM.
 2. **normalize** -- Extracts a structured `NormalizedIncident` (severity, time window, affected services, metrics) from the user's query for downstream nodes.
@@ -301,7 +301,7 @@ elastic kafka capella konnect gitlab atlassian aws
 17. **followUp** -- Generates 3-4 follow-up question suggestions based on the response context.
 18. **detectTopicShift** -- On follow-up turns, detects whether the new question is a topic shift (warranting a fresh classify) or a continuation (carrying forward prior findings).
 
-Verified node count: `grep -c addNode packages/agent/src/graph.ts` = **31** — **21 base nodes** (the groups above, counting `resolveIdentifiers` and `proposeInvestigate` / `proposeMonitor` / `proposeEscalate` separately), plus **4 gated knowledge-graph nodes** (`recordEntities`, `graphEnrich`, `recordRootCause`, `recordBindings`) edged only when `KNOWLEDGE_GRAPH_ENABLED` is set, plus **6 gated HIL-learning nodes** (`learnFetchTicket`, `learnMatchIncident`, `learnMatchGate`, `learnDistill`, `learnReviewGate`, `applyLearnings`) reachable only when `HIL_LEARNING_ENABLED` (default on) and an explicit `learn from TICKET-123` command routes off `classify`. See [knowledge-graph.md](knowledge-graph.md) for the KG nodes and [agent-pipeline.md](agent-pipeline.md#hil-learning-lane) for the learning lane.
+Verified node count: `grep -c addNode packages/agent/src/graph.ts` = **31** — **21 base nodes** (the groups above, counting `resolveIdentifiers` and `proposeInvestigate` / `proposeMonitor` / `proposeEscalate` separately), plus **4 gated knowledge-graph nodes** (`recordEntities`, `graphEnrich`, `recordRootCause`, `recordBindings`) edged only when `KNOWLEDGE_GRAPH_ENABLED` is exactly `"true"` or `"1"`, plus **6 gated HIL-learning nodes** (`learnFetchTicket`, `learnMatchIncident`, `learnMatchGate`, `learnDistill`, `learnReviewGate`, `applyLearnings`) reachable only when `HIL_LEARNING_ENABLED` (default on) and an explicit `learn from TICKET-123` command routes off `classify`. See [knowledge-graph.md](knowledge-graph.md) for the KG nodes and [agent-pipeline.md](agent-pipeline.md#hil-learning-lane) for the learning lane.
 
 ---
 

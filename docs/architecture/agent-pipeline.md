@@ -631,7 +631,7 @@ Tool scoping is handled by `getToolsForDataSource()` in `mcp-bridge.ts`, which r
 
 ## Tool Selection
 
-Sub-agents can receive 30-67 MCP tools from their connected server. Passing all tools to a ReAct agent in a single prompt risks exceeding context window limits and degrades tool selection accuracy. The action-driven tool selection system reduces each sub-agent's tool set to 5-25 tools based on what the user's query actually needs.
+Sub-agents can receive anywhere from ~15 to 112 MCP tools from their connected server (the per-server totals in the table below). Passing all tools to a ReAct agent in a single prompt risks exceeding context window limits and degrades tool selection accuracy. The action-driven tool selection system reduces each sub-agent's tool set to 5-25 tools based on what the user's query actually needs.
 
 ### Selection Flow
 
@@ -645,7 +645,7 @@ Entity Extractor (buildActionCatalog -> LLM -> toolActions)
 Sub-Agent (selectToolsByAction -> resolveActionTools -> filtered tools)
     |
     v
-ReAct Agent (LLM with 5-25 tools instead of 30-67)
+ReAct Agent (LLM with 5-25 tools instead of the full ~15-112)
 ```
 
 ### How It Works

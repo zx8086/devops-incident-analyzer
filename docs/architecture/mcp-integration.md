@@ -28,7 +28,7 @@ The agent connects to seven MCP (Model Context Protocol) servers over Streamable
 | elastic | | kafka | |couchbase| | konnect | | gitlab  | |atlassian |
 |  -mcp   | | -mcp  | |  -mcp  | |  -mcp   | |  -mcp   | |  -mcp    |
 |         | |       | |        | |         | |         | |          |
-| 112     | | 15-55 | | ~37    | | 67+     | | proxy+  | | proxy+   |
+| 96-112  | | 15-55 | | ~37    | | 67+     | | proxy+  | | proxy+   |
 | tools   | | gated | | tools  | | tools   | | custom  | | custom   |
 |         | |       | |        | |         | |         | |          |
 | :9080   | | :9081 | | :9082  | | :9083   | | :9084   | | :9085    |
