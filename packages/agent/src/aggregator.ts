@@ -1,6 +1,11 @@
 // agent/src/aggregator.ts
 import { getLogger } from "@devops-agent/observability";
-import { type DataSourceResult, isDegradingCategory, redactPiiContent } from "@devops-agent/shared";
+import {
+	type DataSourceResult,
+	isDegradingCategory,
+	redactPiiContent,
+	type ToolErrorCategory,
+} from "@devops-agent/shared";
 import type { BaseMessage } from "@langchain/core/messages";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
@@ -201,7 +206,7 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 	// that component as a gap. Gaps is for missing data; a confirmed-up health
 	// probe is the OPPOSITE of missing data. This stops the Gaps-cap loop where
 	// healthy components fill the Gaps section and pin confidence below 0.6.
-	const healthCheckGapRule = `\n\nHEALTH-CHECK GAPS RULE: If a *_health_check or ksql_cluster_status tool returned status:"up" for a component, do NOT list that component under "## Gaps". Do NOT write "REST Proxy NOT DETECTED" or "deployment status is unconfirmed" for a component whose health-check returned up. Gaps is reserved for genuinely missing data, never for components that were probed and found healthy.`;
+	const healthCheckGapRule = `\n\nHEALTH-CHECK GAPS RULE: If a *_health_check or ksql_cluster_status tool returned status:"up" for a component, do NOT list that component under "## Gaps". Do NOT write "REST Proxy NOT DETECTED" or "deployment status is unconfirmed" for a component whose health-check returned up. Gaps is reserved for genuinely missing data, never for components that were probed and found healthy. A tool that returned a routine BENIGN outcome -- a Couchbase no-index planning failure (the collection exists but has no queryable index), or a not-found for a named document/index/log-group/topic -- is a discovery FINDING, not a coverage gap: report it under findings or omit it, and never phrase it in "## Gaps" as a "failure", "error", "no data", or "schema mismatch". Reserve Gaps for tools that genuinely malfunctioned (bad query, auth denied, timeout, server error, unavailable).`;
 
 	// SIO-1059: the Couchbase PrivateLink report paired a cumulative-time figure (38m47s, from the
 	// expensive-query tool, count 1,829) with an execution count from a DIFFERENT tool row (2,604,
@@ -428,6 +433,65 @@ export function collectDegradingGapBullets(answer: string): string[] {
 
 export function countDegradingGapBullets(answer: string): number {
 	return collectDegradingGapBullets(answer).length;
+}
+
+// SIO-1162: GAP_TOOL_NAME_RE is non-global (a bare .match returns only the FIRST tool
+// name). A global clone lets one bullet name multiple tools (e.g. it mentions both
+// capella_run_sql_plus_plus_query and capella_get_system_indexes). Stays case-SENSITIVE
+// for the same reason GAP_TOOL_NAME_RE is (SCREAMING_SNAKE is data, not a tool name).
+const GAP_TOOL_NAME_RE_G = new RegExp(GAP_TOOL_NAME_RE.source, "g");
+
+function toolNamesInBullet(line: string): string[] {
+	return [...line.matchAll(GAP_TOOL_NAME_RE_G)].map((m) => m[0]);
+}
+
+// SIO-1162: structured-vs-prose reconciliation for the Gaps degrading cap.
+//
+// A Gaps bullet regex-flagged as degrading (isDegradingGapBullet) is SUPPRESSED -- it does
+// not count toward the cap -- iff it names one or more investigation tools AND every
+// structured toolError recorded for those tools this turn is NON-degrading (no-data/
+// not-found, e.g. couchbase no-index or a document not-found). The structured layer
+// (isDegradingCategory, SIO-1087) already deemed those benign; the prose bullet is merely
+// narrating the same benign discovery outcome, so it must not cap confidence. This closes
+// the mismatch where a "capella_run_sql_plus_plus_query returned planning failure" bullet
+// counted as a malfunction even though every matching error was a benign no-index.
+//
+// A bullet is KEPT (still counts) when ANY of:
+//   - it names a tool that has a DEGRADING structured error (bad-query/unknown/auth/
+//     server-error/transient/session) -- a real malfunction;
+//   - it names a tool with NO structured toolError this turn (a pure prose claim with no
+//     structural counterpart -- the guard must not invent an exemption);
+//   - it names NO tool at all (nothing to reconcile against).
+// Suppression requires a POSITIVE, all-benign match, so this can only ever REMOVE bullets
+// from the degrading set -- it can never manufacture a cap or lower a genuine one.
+export function filterStructurallyBenignGapBullets(
+	flagged: string[],
+	results: DataSourceResult[],
+): { kept: string[]; suppressed: string[] } {
+	// Index every observed toolError by toolName -> the categories seen for it. toolName is
+	// the bare MCP tool name (ToolMessage.name), which matches the snake_case token the LLM
+	// writes in prose -- so exact-equality lookup is correct (no namespacing).
+	const categoriesByTool = new Map<string, ToolErrorCategory[]>();
+	for (const r of results) {
+		for (const e of r.toolErrors ?? []) {
+			const list = categoriesByTool.get(e.toolName) ?? [];
+			list.push(e.category);
+			categoriesByTool.set(e.toolName, list);
+		}
+	}
+
+	const kept: string[] = [];
+	const suppressed: string[] = [];
+	for (const line of flagged) {
+		const names = toolNamesInBullet(line);
+		// Only the named tools that actually have a structured error this turn.
+		const matched = names.filter((n) => categoriesByTool.has(n));
+		const allBenign =
+			matched.length > 0 && matched.every((n) => (categoriesByTool.get(n) ?? []).every((c) => !isDegradingCategory(c)));
+		if (allBenign) suppressed.push(line);
+		else kept.push(line);
+	}
+	return { kept, suppressed };
 }
 
 // SIO-1013: a Gaps bullet asserting a permission/IAM denial must be grounded in an
@@ -1092,7 +1156,17 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	// it, and any judge failure keeps the regex verdict (fail-closed: the cap applies). Clean
 	// runs (below threshold) never pay the judge call.
 	const gapsBulletCount = extractGapsBulletCount(answer);
-	const flaggedGapBullets = collectDegradingGapBullets(answer);
+	const regexFlaggedGapBullets = collectDegradingGapBullets(answer);
+	// SIO-1162: structured-vs-prose reconciliation. A regex-flagged bullet whose named
+	// tool(s) are fully explained by NON-degrading structured toolErrors (no-index/not-found
+	// = no-data/not-found categories) is benign -- the structured layer already classified it
+	// as a routine discovery outcome. Drop it BEFORE the count gate so it neither trips the
+	// cap nor pays for a judge call. Deterministic and fail-safe: an LLM judge upholding a
+	// benign bullet (exactly the failure we saw) can no longer cause a cap.
+	const { kept: flaggedGapBullets, suppressed: structurallyBenignGapBullets } = filterStructurallyBenignGapBullets(
+		regexFlaggedGapBullets,
+		results,
+	);
 	const regexFlaggedGapCount = flaggedGapBullets.length;
 	// SIO-1155: track the bullets that COUNT (post-veto) so the correlation recovery
 	// path can subtract recovered bullets without re-running the judge.
@@ -1114,6 +1188,7 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 				regexFlaggedGapCount,
 				degradingGapsBulletCount,
 				gapsJudgeVetoedCount,
+				structurallyBenignSuppressedCount: structurallyBenignGapBullets.length,
 				threshold: GAPS_BULLET_THRESHOLD,
 			},
 			"Gaps judge vetoed the confidence cap (regex-flagged bullets judged non-degrading)",
@@ -1211,6 +1286,7 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 				gapsBulletCount,
 				degradingGapsBulletCount,
 				regexFlaggedGapCount,
+				structurallyBenignSuppressedCount: structurallyBenignGapBullets.length,
 				gapsJudgeUsed,
 				gapsJudgeVetoedCount,
 				threshold: GAPS_BULLET_THRESHOLD,

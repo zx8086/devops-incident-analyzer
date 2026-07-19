@@ -42,3 +42,24 @@ describe("runSqlPlusPlusQuery error surfacing (SIO-744)", () => {
 		expect(result.isError).toBe(true);
 	});
 });
+
+describe("runSqlPlusPlusQuery bucket-path guardrail (SIO-1162)", () => {
+	test("full bucket.scope.collection path returns a structured bad-query envelope with advice", async () => {
+		// The guardrail short-circuits before touching the bucket, so no query impl is needed.
+		const bucket = makeBucket(() => {
+			throw new Error("should not reach the cluster");
+		});
+
+		const result = await runQuery(
+			{ scope_name: "inventory", query: "SELECT COUNT(*) FROM `travel`.`inventory`.`airline`" },
+			bucket,
+		);
+
+		expect(result.isError).toBe(true);
+		const text = (result.content[0] as { text: string }).text;
+		const parsed = JSON.parse(text) as { _error: { kind: string; category: string; advice?: string } };
+		expect(parsed._error.kind).toBe("bad-query");
+		expect(parsed._error.category).toBe("bad-query");
+		expect(parsed._error.advice).toContain("scope_name");
+	});
+});

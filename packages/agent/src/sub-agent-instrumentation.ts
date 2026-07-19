@@ -4,6 +4,7 @@ import { ToolMessage } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import {
 	consumeEmptyAwsResultsAdvice,
+	consumeInvalidQueryIdAdvice,
 	createLoopGuardState,
 	isGuardedTool,
 	isObservedTool,
@@ -137,17 +138,24 @@ function instrumentTool(
 					// window silently missed a 2-day-old incident). After consecutive
 					// empty-success results, append one-shot widen advice to the result.
 					if (tool.name === "aws_logs_get_query_results") {
-						const advice = consumeEmptyAwsResultsAdvice(runState.loopGuard);
+						// SIO-1162: an invalid/expired queryId takes precedence over the widen advice
+						// (an invalid id is never also an empty-success, and re-polling it is always
+						// wasted). Both are appended to the tool result via rebuildResult so the
+						// ToolMessage/AIMessage tool_call pairing Bedrock requires stays intact.
+						const invalidIdAdvice = consumeInvalidQueryIdAdvice(runState.loopGuard);
+						const advice = invalidIdAdvice ?? consumeEmptyAwsResultsAdvice(runState.loopGuard);
 						if (advice) {
 							ctx.log.info(
 								{
-									event: "subagent.aws_empty_results_advice",
+									event: invalidIdAdvice ? "subagent.aws_invalid_query_id_advice" : "subagent.aws_empty_results_advice",
 									dataSourceId: ctx.dataSourceId,
 									deploymentId: ctx.deploymentId,
 									toolName: tool.name,
 									iteration,
 								},
-								"Appending widen-window advice after consecutive empty CloudWatch results",
+								invalidIdAdvice
+									? "Appending re-anchor advice after invalid CloudWatch queryId"
+									: "Appending widen-window advice after consecutive empty CloudWatch results",
 							);
 							return rebuildResult(processed, `${stringifyContent(extractContent(processed))}\n\n${advice}`);
 						}

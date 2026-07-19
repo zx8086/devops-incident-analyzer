@@ -38,6 +38,7 @@ mock.module("@devops-agent/shared", () => ({
 }));
 
 import { loadAgent } from "@devops-agent/gitagent-bridge";
+import type { DataSourceResult } from "@devops-agent/shared";
 import {
 	_setAggregatorLoggerForTesting,
 	aggregate,
@@ -46,6 +47,7 @@ import {
 	collectDegradingGapBullets,
 	countDegradingGapBullets,
 	extractGapsBulletCount,
+	filterStructurallyBenignGapBullets,
 	isDegradingGapBullet,
 	rewriteConfidenceInAnswer,
 } from "./aggregator.ts";
@@ -536,6 +538,117 @@ Confidence: 0.7`;
 	});
 });
 
+describe("filterStructurallyBenignGapBullets (SIO-1162 structured reconciliation)", () => {
+	function resultWith(toolErrors: DataSourceResult["toolErrors"]): DataSourceResult[] {
+		return [{ dataSourceId: "couchbase", status: "success", data: "x", duration: 1, toolErrors }];
+	}
+
+	test("suppresses a benign no-index bullet (every matching error is no-data)", () => {
+		const results = resultWith([
+			{
+				toolName: "capella_run_sql_plus_plus_query",
+				category: "no-data",
+				kind: "no-index",
+				message: "no index",
+				retryable: false,
+			},
+		]);
+		const flagged = ["- capella_run_sql_plus_plus_query returned planning failure on 6 of 9 Couchbase tool calls"];
+		const { kept, suppressed } = filterStructurallyBenignGapBullets(flagged, results);
+		expect(suppressed).toHaveLength(1);
+		expect(kept).toHaveLength(0);
+	});
+
+	test("suppresses a benign not-found bullet", () => {
+		const results = resultWith([
+			{
+				toolName: "capella_get_document_by_id",
+				category: "not-found",
+				message: "document not found",
+				retryable: false,
+			},
+		]);
+		const flagged = ["- capella_get_document_by_id failed: document not found for UUID fe7c08d1"];
+		const { kept, suppressed } = filterStructurallyBenignGapBullets(flagged, results);
+		expect(suppressed).toHaveLength(1);
+		expect(kept).toHaveLength(0);
+	});
+
+	test("keeps a bullet whose matching tool has a DEGRADING (bad-query) error", () => {
+		const results = resultWith([
+			{
+				toolName: "capella_run_sql_plus_plus_query",
+				category: "bad-query",
+				kind: "bad-query",
+				message: "parse fail",
+				retryable: false,
+			},
+		]);
+		const flagged = ["- capella_run_sql_plus_plus_query returned a parsing failure"];
+		const { kept, suppressed } = filterStructurallyBenignGapBullets(flagged, results);
+		expect(kept).toHaveLength(1);
+		expect(suppressed).toHaveLength(0);
+	});
+
+	test("multi-tool bullet: kept if ANY named tool has a degrading error", () => {
+		const results = resultWith([
+			{
+				toolName: "capella_run_sql_plus_plus_query",
+				category: "no-data",
+				kind: "no-index",
+				message: "no index",
+				retryable: false,
+			},
+			{ toolName: "capella_get_system_indexes", category: "unknown", message: "server error", retryable: false },
+		]);
+		const flagged = ["- capella_run_sql_plus_plus_query and capella_get_system_indexes both failed"];
+		const { kept, suppressed } = filterStructurallyBenignGapBullets(flagged, results);
+		expect(kept).toHaveLength(1);
+		expect(suppressed).toHaveLength(0);
+	});
+
+	test("multi-tool bullet: suppressed if EVERY named tool is all-benign", () => {
+		const results = resultWith([
+			{
+				toolName: "capella_run_sql_plus_plus_query",
+				category: "no-data",
+				kind: "no-index",
+				message: "no index",
+				retryable: false,
+			},
+			{ toolName: "capella_get_system_indexes", category: "not-found", message: "no rows", retryable: false },
+		]);
+		const flagged = ["- capella_run_sql_plus_plus_query and capella_get_system_indexes both returned failures"];
+		const { kept, suppressed } = filterStructurallyBenignGapBullets(flagged, results);
+		expect(suppressed).toHaveLength(1);
+		expect(kept).toHaveLength(0);
+	});
+
+	test("keeps a bullet that names NO tool (nothing to reconcile against)", () => {
+		const results = resultWith([
+			{
+				toolName: "capella_run_sql_plus_plus_query",
+				category: "no-data",
+				kind: "no-index",
+				message: "no index",
+				retryable: false,
+			},
+		]);
+		const flagged = ["- CloudWatch retention exceeded; logs were unavailable for this estate"];
+		const { kept, suppressed } = filterStructurallyBenignGapBullets(flagged, results);
+		expect(kept).toHaveLength(1);
+		expect(suppressed).toHaveLength(0);
+	});
+
+	test("keeps a bullet naming a tool with NO structured error this turn (pure prose)", () => {
+		const results = resultWith([]);
+		const flagged = ["- ksql_get_server_info could not be run this turn"];
+		const { kept, suppressed } = filterStructurallyBenignGapBullets(flagged, results);
+		expect(kept).toHaveLength(1);
+		expect(suppressed).toHaveLength(0);
+	});
+});
+
 // SIO-709 AC #2: Gaps-section parser must trigger the same 0.59 cap when the
 // LLM lists >= 2 gap bullets, regardless of tool-error rate. The styles-v3
 // transcript had 5 gap bullets and was the original failure mode.
@@ -621,6 +734,101 @@ Confidence: 0.72`;
 
 Confidence: 0.85`;
 		const result = await aggregate(makeState({}));
+		expect(result.confidenceScore).toBe(0.59);
+		expect(result.confidenceCap).toBe(0.59);
+	});
+
+	// SIO-1162: two Gaps bullets that regex-flag as degrading but whose named tools' every
+	// structured toolError is benign (no-index) must NOT cap -- the structured filter drops
+	// them before the count gate. This is the exact localcore-service failure (2 benign
+	// Couchbase bullets capped an 0.72 report to 0.59).
+	test("does NOT cap benign no-index Gaps bullets backed by no-data toolErrors (SIO-1162)", async () => {
+		mockLlmContent = `# Incident Report
+
+## Findings
+- elastic: strong evidence.
+
+## Gaps
+- capella_run_sql_plus_plus_query returned planning failure on 6 of 9 Couchbase tool calls.
+- capella_get_system_indexes returned a no-index planning failure.
+
+Confidence: 0.72`;
+		const result = await aggregate(
+			makeState({
+				dataSourceResults: [
+					{
+						dataSourceId: "couchbase",
+						status: "success",
+						data: "result",
+						duration: 100,
+						toolErrors: [
+							{
+								toolName: "capella_run_sql_plus_plus_query",
+								category: "no-data",
+								kind: "no-index",
+								message: "no index",
+								retryable: false,
+							},
+							{
+								toolName: "capella_get_system_indexes",
+								category: "no-data",
+								kind: "no-index",
+								message: "no index",
+								retryable: false,
+							},
+						],
+					},
+				],
+			}),
+		);
+		expect(result.confidenceScore).toBe(0.72);
+		expect(result.confidenceCap).toBeUndefined();
+		expect(result.finalAnswer).toContain("Confidence: 0.72");
+	});
+
+	// SIO-1162: the guard NARROWS rather than disables the cap. One benign no-index bullet is
+	// suppressed, but two genuine degrading bullets (backed by a bad-query error + a
+	// tool-context timeout) still push the count to the threshold and cap at 0.59.
+	test("STILL caps when a benign bullet is suppressed but >= 2 genuine degrading remain (SIO-1162)", async () => {
+		mockLlmContent = `# Incident Report
+
+## Findings
+- elastic: strong evidence.
+
+## Gaps
+- capella_run_sql_plus_plus_query returned a no-index planning failure.
+- capella_get_system_indexes returned a parsing failure and could not be run.
+- CloudWatch Logs query timed out after 30s and could not complete.
+
+Confidence: 0.85`;
+		const result = await aggregate(
+			makeState({
+				dataSourceResults: [
+					{
+						dataSourceId: "couchbase",
+						status: "success",
+						data: "result",
+						duration: 100,
+						toolErrors: [
+							{
+								toolName: "capella_run_sql_plus_plus_query",
+								category: "no-data",
+								kind: "no-index",
+								message: "no index",
+								retryable: false,
+							},
+							{
+								toolName: "capella_get_system_indexes",
+								category: "bad-query",
+								kind: "bad-query",
+								message: "parse fail",
+								retryable: false,
+							},
+						],
+					},
+				],
+			}),
+		);
 		expect(result.confidenceScore).toBe(0.59);
 		expect(result.confidenceCap).toBe(0.59);
 	});

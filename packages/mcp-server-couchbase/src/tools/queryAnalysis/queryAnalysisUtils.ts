@@ -1,6 +1,9 @@
 /* src/tools/queryAnalysis/queryAnalysisUtils.ts */
 
+import { buildToolErrorEnvelope } from "@devops-agent/shared";
 import type { Bucket, QueryMetaData } from "couchbase";
+import { adviseCouchbaseError } from "../../lib/adviseCouchbaseError";
+import { classifyCouchbaseError } from "../../lib/classifyCouchbaseError";
 import type { ToolResponse } from "../../types";
 import { logger } from "../../utils/logger";
 
@@ -72,11 +75,27 @@ function formatAnalysisError(error: unknown): ToolResponse {
 	logger.error({ error }, "Error executing analysis query");
 	const message = error instanceof Error ? error.message : String(error);
 
+	// SIO-1162: emit the shared { _error: { kind, category } } envelope like the other
+	// query tools, instead of plain markdown. Plain markdown carried no kind, so every
+	// queryAnalysis failure (e.g. capella_get_system_indexes) reached the agent as
+	// category "unknown" = DEGRADING and capped confidence -- even a benign no-index. Now a
+	// no-index planning failure classifies as no-data (non-degrading) and a real parse
+	// failure as bad-query (degrading but actionable, with copy-paste advice). Only the
+	// error branch changes; the success renderer (formatAnalysisResponse) is untouched, so
+	// the resolve-identifiers probe's fenced-JSON contract still holds.
+	const kind = classifyCouchbaseError(error);
+	const advice = adviseCouchbaseError(kind);
+	const envelope = buildToolErrorEnvelope({
+		kind,
+		message: `Error executing query: ${message}`,
+		...(advice ? { advice } : {}),
+	});
+
 	return {
 		content: [
 			{
 				type: "text",
-				text: `## Error Executing Query\n\n${message}`,
+				text: JSON.stringify(envelope),
 			},
 		],
 		isError: true,
@@ -183,8 +202,18 @@ export async function executeAnalysisQueryStructured(
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		logger.error(`Error executing structured analysis query: ${message}`);
+		// SIO-1162: emit the shared { _error } envelope here too (previously { error: message },
+		// an unstructured shape that the agent read as category "unknown" = degrading). A
+		// no-index failure here now classifies as no-data (non-degrading).
+		const kind = classifyCouchbaseError(error);
+		const advice = adviseCouchbaseError(kind);
+		const envelope = buildToolErrorEnvelope({
+			kind,
+			message: `Error executing query: ${message}`,
+			...(advice ? { advice } : {}),
+		});
 		return {
-			content: [{ type: "text", text: JSON.stringify({ error: message }) }],
+			content: [{ type: "text", text: JSON.stringify(envelope) }],
 			isError: true,
 		};
 	}

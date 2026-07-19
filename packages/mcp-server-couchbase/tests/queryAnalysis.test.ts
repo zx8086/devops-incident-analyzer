@@ -264,11 +264,17 @@ describe("getSystemIndexes.buildQuery", () => {
 		expect(query).not.toContain("t.`namespace` != 'system'");
 	});
 
-	test("inner sub-SELECT WHERE preserved (no collision with outer WHERE)", () => {
+	test("total_count sub-SELECT is a bare COUNT(*) over system:indexes (SIO-1162)", () => {
 		const { query } = buildSystemIndexes({ bucket_name: "b" });
-		// The inner sub-SELECT WHERE filtering UPPER(statement) NOT LIKE '...' must remain.
-		expect(query).toContain("UPPER(statement) NOT LIKE '% SYSTEM:%'");
-		expect(query).toContain("UPPER(statement) NOT LIKE 'CREATE INDEX%'");
+		// SIO-1162: the total_count sub-SELECT must be a plain catalog count. It previously
+		// filtered UPPER(statement) against system:indexes, which has no `statement` column,
+		// so the statement failed to parse on every run. Assert the corrected shape and that
+		// no `statement` reference leaks back in.
+		expect(query).toContain("(SELECT COUNT(*) FROM system:indexes) AS total_count");
+		expect(query).not.toMatch(/statement/i);
+		// The outer WHERE (system-namespace exclusion) still splices into the marker, not the
+		// inner sub-SELECT -- the bucket_name binding and namespace clause remain on the outer t.
+		expect(query).toContain("t.`namespace` != 'system'");
 	});
 
 	test("no /* WHERE_CLAUSES */ marker leaks into output", () => {

@@ -24,6 +24,15 @@ const AWS_DESCRIBE_LOG_GROUPS = "aws_logs_describe_log_groups";
 const AWS_GET_QUERY_RESULTS = "aws_logs_get_query_results";
 const AWS_EMPTY_RESULTS_ADVICE_THRESHOLD = 2;
 
+// SIO-1162: an invalid/expired queryId polled via aws_logs_get_query_results returns a
+// bad-input _error ("The provided queryId = ... is invalid"). A queryId is estate/region
+// scoped and short-lived: it only works when polled with the SAME estate passed to
+// aws_logs_start_query, and it expires. Re-polling the same id never succeeds, so we emit a
+// one-shot corrective hint telling the agent to re-issue start_query for the SAME estate and
+// poll the fresh id. resource-not-found is included in case an expired id ever surfaces that
+// way rather than as bad-input.
+const AWS_INVALID_QUERY_ID_KINDS = new Set<string>(["bad-input", "resource-not-found"]);
+
 // An empty elasticsearch_search renders as "Total results: 0, showing 0 ...".
 const EMPTY_SEARCH_RE = /Total results:\s*0\b/i;
 
@@ -58,6 +67,12 @@ export const AWS_EMPTY_RESULTS_ADVICE =
 	"that reaches back past the incident time); only report absence if the widened query is " +
 	"also empty.";
 
+export const AWS_INVALID_QUERY_ID_ADVICE =
+	"[loop-guard advice] aws_logs_get_query_results rejected the queryId as invalid. A queryId is " +
+	"estate/region-scoped and short-lived: it only works when polled with the SAME estate you passed " +
+	"to aws_logs_start_query, and it expires. Do NOT re-poll this id. Re-issue aws_logs_start_query " +
+	"for the SAME estate and log group, then poll the NEW queryId it returns.";
+
 export const AWS_START_QUERY_STOP_MESSAGE =
 	"The previous aws_logs_start_query window was rejected as outside the log group's " +
 	"retention window, and you have not re-anchored since. Do NOT re-issue the same query. " +
@@ -84,6 +99,10 @@ export interface LoopGuardState {
 	// SIO-1159: consecutive Complete-with-0-rows aws_logs_get_query_results. Reset by any
 	// non-empty result; consumed (reset) when the widen advice is emitted.
 	awsEmptyQueryResults: number;
+	// SIO-1162: set when the last aws_logs_get_query_results returned an invalid/expired
+	// queryId (bad-input/resource-not-found _error); consumed (cleared) when the corrective
+	// advice is emitted once.
+	awsInvalidQueryId: boolean;
 }
 
 export function createLoopGuardState(): LoopGuardState {
@@ -93,6 +112,7 @@ export function createLoopGuardState(): LoopGuardState {
 		awsStartQueryNeedsReanchor: false,
 		awsStartQueryUnproductive: 0,
 		awsEmptyQueryResults: 0,
+		awsInvalidQueryId: false,
 	};
 }
 
@@ -199,12 +219,29 @@ function isInFlightAwsQueryResults(content: unknown): boolean {
 	return parsed !== null && (parsed.status === "Running" || parsed.status === "Scheduled");
 }
 
+// SIO-1162: detect an invalid/expired queryId error on aws_logs_get_query_results. Keyed on
+// the resulting _error.kind (bad-input/resource-not-found), which is stable regardless of the
+// exact SDK error name AWS uses for the invalid-queryId message.
+export function isInvalidQueryIdResult(content: unknown): boolean {
+	const kind = awsErrorKind(content);
+	return kind !== null && AWS_INVALID_QUERY_ID_KINDS.has(kind);
+}
+
 // SIO-1159: one-shot widen advice after N consecutive empty-success results. Consuming
 // resets the counter so the advice is appended once, not to every subsequent call.
 export function consumeEmptyAwsResultsAdvice(state: LoopGuardState): string | null {
 	if (state.awsEmptyQueryResults < AWS_EMPTY_RESULTS_ADVICE_THRESHOLD) return null;
 	state.awsEmptyQueryResults = 0;
 	return AWS_EMPTY_RESULTS_ADVICE;
+}
+
+// SIO-1162: one-shot invalid-queryId advice. Fires on the FIRST invalid-id result (unlike the
+// empty-results advice, which needs two consecutive empties -- a single invalid id already
+// means every re-poll of it is wasted). Consuming clears the flag so it is appended once.
+export function consumeInvalidQueryIdAdvice(state: LoopGuardState): string | null {
+	if (!state.awsInvalidQueryId) return null;
+	state.awsInvalidQueryId = false;
+	return AWS_INVALID_QUERY_ID_ADVICE;
 }
 
 function safeStringify(value: unknown): string {
@@ -342,6 +379,15 @@ export function recordResult(
 		return;
 	}
 	if (toolName === AWS_GET_QUERY_RESULTS) {
+		// SIO-1162: an invalid/expired queryId is never also an empty-success; flag it so the
+		// corrective advice fires. It resets the consecutive-empty counter (an error is not an
+		// empty-success outcome), matching the existing "Complete with rows (or error) resets"
+		// contract.
+		if (isInvalidQueryIdResult(content)) {
+			state.awsInvalidQueryId = true;
+			state.awsEmptyQueryResults = 0;
+			return;
+		}
 		// SIO-1159: count consecutive empty-success outcomes. In-flight polls
 		// (Running/Scheduled) are neutral; a Complete with rows (or error) resets.
 		if (isEmptyAwsQueryResults(content)) {
