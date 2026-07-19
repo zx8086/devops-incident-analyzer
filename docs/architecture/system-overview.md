@@ -66,7 +66,7 @@ The agent's investigation is strictly read-only against production systems. It o
 +------+ +------+ +--------+ +--------+ +--------+ +---------+
 ```
 
-Tool counts are dynamic -- they reflect connected MCP tools at runtime. Proxy-based servers (GitLab, Atlassian) discover tools from the remote native MCP endpoint at startup, so totals vary. The agent targets 210+ tools end-to-end when all servers are connected.
+Tool counts are dynamic -- they reflect connected MCP tools at runtime. The Elasticsearch `96-112` range depends on `EC_API_KEY`: 96 cluster tools always, plus 16 conditional cloud/billing tools only when that org-scoped key is set (see the component table below). Proxy-based servers (GitLab, Atlassian) discover tools from the remote native MCP endpoint at startup, so totals vary. The agent targets 210+ tools end-to-end when all servers are connected.
 
 ---
 
@@ -92,12 +92,14 @@ This architecture means tool updates happen in the MCP server packages without t
 
 ### Read-Only Analysis
 
-The agent is designed exclusively for investigation, not remediation. This constraint is enforced at multiple levels:
+The agent is designed exclusively for investigation, not remediation. This constraint targets **production systems and data sources** — the agent never mutates the systems it observes. It is enforced at multiple levels:
 
-- **Compliance config:** `agents/incident-analyzer/compliance/allowed-actions.yaml` lists permitted read operations and explicitly prohibits writes
+- **Compliance config:** `agents/incident-analyzer/compliance/allowed-actions.yaml` lists permitted read operations and explicitly prohibits writes to the observed data sources
 - **MCP server config:** write/destructive tools are disabled via feature gates (e.g., Kafka `KAFKA_ENABLE_WRITE_OPERATIONS=false`)
 - **RULES.md:** hard rule -- "Must Never write to any production system"
 - **Escalation triggers:** actions classified as `mutate_production` require human approval
+
+The only exceptions are the two user-initiated, `ATLASSIAN_READ_ONLY`-gated Atlassian write paths described above (create-ticket, SIO-1124; HIL-learning follow-up comments, SIO-1145). These write to Jira/Confluence, not to any observed production system, and only when the user clicks the control in the UI.
 
 ### Bun Workspace Monorepo
 
@@ -350,7 +352,7 @@ Each MCP server exposes two HTTP endpoints:
 The system enforces several security boundaries:
 
 - **Network isolation:** MCP servers are internal services, not exposed to the internet. The SvelteKit frontend is the only user-facing endpoint.
-- **Read-only enforcement:** write operations are disabled at both the MCP server configuration level (feature gates) and the agent compliance level (allowed-actions.yaml).
+- **Read-only enforcement:** writes to observed production systems / data sources are disabled at both the MCP server configuration level (feature gates) and the agent compliance level (allowed-actions.yaml). The two user-initiated Atlassian write paths (create-ticket, HIL comments) are the only exceptions and are themselves gated by `ATLASSIAN_READ_ONLY`.
 - **PII redaction:** the compliance layer specifies `pii_handling: redact` for all agents, applied to data in transit.
 - **Audit logging:** all prompts, responses, tool calls, decision pathways, and model versions are logged to LangSmith with immutable, structured JSON logs and 1-year retention.
 - **Conditional HITL:** human-in-the-loop escalation triggers when confidence < 0.6, when errors are detected, or when a production mutation is attempted.
