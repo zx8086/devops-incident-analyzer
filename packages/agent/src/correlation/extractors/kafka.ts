@@ -57,8 +57,10 @@ const OffsetsPartitionSchema = z.object({
 	timestamp: z.union([z.string(), z.number()]).optional(),
 	offset: z.union([z.string(), z.number()]).transform((v, ctx) => {
 		const n = Number(v);
-		if (!Number.isFinite(n)) {
-			ctx.addIssue({ code: "custom", message: "offset is not a finite number" });
+		// CodeRabbit (PR #416): offsets are int64 -- above MAX_SAFE_INTEGER Number() rounds
+		// and distinct offsets collapse into equal totals. Fail closed on unsafe/negative.
+		if (!Number.isSafeInteger(n) || n < 0) {
+			ctx.addIssue({ code: "custom", message: "offset is not a safe non-negative integer" });
 			return z.NEVER;
 		}
 		return n;

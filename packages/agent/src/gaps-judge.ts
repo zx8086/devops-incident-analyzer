@@ -105,6 +105,11 @@ export async function judgeDegradingGapBullets(
 		logger.info({ verdicts: parsed.data.verdicts }, "gaps judge verdicts");
 		return out as boolean[];
 	} catch (error) {
+		// CodeRabbit (PR #416): a caller-requested cancellation must propagate -- only
+		// judge-local failures (including the 8s role deadline) fail closed to the
+		// regex verdict. Swallowing an external abort would let aggregate() keep
+		// running after its request signal was cancelled.
+		if (config?.signal?.aborted) throw error;
 		logger.warn({ error: error instanceof Error ? error.message : String(error) }, "gaps judge failed");
 		return null;
 	}

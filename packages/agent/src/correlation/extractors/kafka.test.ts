@@ -526,4 +526,21 @@ describe("derived DLQ fallback (SIO-1149)", () => {
 		const outputs: ToolOutput[] = [describeTopicOut(DLQ_NAME, [{ partitionIndex: 0, timestamp: "-1", offset: "n/a" }])];
 		expect(extractKafkaFindings(outputs, [])).toEqual({});
 	});
+
+	// CodeRabbit (PR #416): int64 offsets above MAX_SAFE_INTEGER round under Number();
+	// unsafe or negative values fail closed instead of collapsing into equal totals.
+	test("offsets beyond MAX_SAFE_INTEGER or negative fail closed; the boundary value passes", () => {
+		const unsafe: ToolOutput[] = [
+			describeTopicOut(DLQ_NAME, [{ partitionIndex: 0, timestamp: "-1", offset: "9007199254740993" }]),
+		];
+		expect(extractKafkaFindings(unsafe, [])).toEqual({});
+		const negative: ToolOutput[] = [describeTopicOut(DLQ_NAME, [{ partitionIndex: 0, timestamp: "-1", offset: "-1" }])];
+		expect(extractKafkaFindings(negative, [])).toEqual({});
+		const boundary: ToolOutput[] = [
+			describeTopicOut(DLQ_NAME, [{ partitionIndex: 0, timestamp: "-1", offset: "9007199254740991" }]),
+		];
+		expect(extractKafkaFindings(boundary, [])).toEqual({
+			dlqTopics: [{ name: DLQ_NAME, totalMessages: 9007199254740991, recentDelta: null }],
+		});
+	});
 });

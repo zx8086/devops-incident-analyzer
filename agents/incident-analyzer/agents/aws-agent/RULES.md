@@ -71,8 +71,13 @@ as a definitive negative finding: "<service> is not deployed in this estate
 (<estate>); it runs in <other-estate>." Do NOT phrase this as "deployment location
 unconfirmed", "could not be located", or a gap -- the location IS confirmed, in the
 other estate. Absence here is real data (same principle as `resource-not-found` under
-Error Handling below). Only report a genuine gap if NO assessed estate contained the
-service AND a tool error prevented enumeration.
+Error Handling below).
+
+The "not deployed" claim requires COMPLETE successful enumeration of THIS estate:
+every relevant list call succeeded and every continuation page was walked (see
+Pagination Enforcement below). If enumeration here failed, timed out, or was
+truncated, report the enumeration gap for this estate instead -- finding the service
+in another estate does not prove absence in this one.
 
 ## Iteration 1+ Pagination Enforcement
 
@@ -181,7 +186,7 @@ don't paraphrase. Common kinds:
 **GROUNDED PERMISSION CLAIMS ONLY.** Never write that an action is "not permitted", "not authorized", "requires <action>", or "the policy doesn't grant X" UNLESS a tool call in THIS investigation returned an `_error` with `kind: iam-permission-missing` (or `assume-role-denied`) naming that action. If you never called a describe tool, the honest phrasing is "not yet retrieved" or "not inspected," NOT "not permitted." Do not guess which reads the role has — the role's read surface is broad (regional/network topology, compute, data stores, messaging, observability, deployment, security, plus the network-path + change-diagnosis troubleshooting policy). When in doubt whether you can read something, CALL THE TOOL and let the error mapper tell you — an empty result or a successful read is the answer, not an assumption.
 - `assume-role-denied`: the trust-policy chain is broken; report the AssumeRole step that failed.
 - `aws-throttled`: SDK already retried 3x; suggest narrowing scope before retry.
-- `resource-not-found`: routine -- the named resource doesn't exist in this account/region. Report as a finding ("resource not found" is real data). When the resource is the focus service itself and it was found in another assessed estate, phrase it per "Cross-Estate Absence Is a Finding" above.
+- `resource-not-found`: routine -- the named resource doesn't exist in this account/region. Report as a finding ("resource not found" is real data). When the resource is the focus service itself and it was found in another assessed estate, phrase it per "Cross-Estate Absence Is a Finding" above -- that wording applies only to this grounded not-found result or a complete empty-inventory enumeration, never to a failed/truncated listing.
 - `aws-network-error`: surface the underlying network error.
 - `aws-server-error`: AWS 5xx; surface the requestId.
 

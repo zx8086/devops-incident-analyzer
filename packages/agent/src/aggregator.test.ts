@@ -1065,6 +1065,20 @@ describe("isDegradingGapBullet (SIO-1149 context gating + recovery exemption)", 
 		expect(isDegradingGapBullet("- Elastic: the export could not be completed via the API.")).toBe(true);
 	});
 
+	// CodeRabbit (PR #416): contraction and no-fallback negations must not read as recovery.
+	test("negation guard: contractions and 'no fallback' are not recovery clauses", () => {
+		expect(isDegradingGapBullet("- kafka_list_dlq_topics timed out; couldn't be recovered via replay.")).toBe(true);
+		expect(
+			isDegradingGapBullet("- kafka_list_dlq_topics timed out; no fallback to direct inspection was available."),
+		).toBe(true);
+		expect(isDegradingGapBullet("- The CloudWatch query timed out and was never recovered via re-anchoring.")).toBe(
+			true,
+		);
+		expect(isDegradingGapBullet("- gitlab_blast_radius errored; the query never fell back to semantic search.")).toBe(
+			true,
+		);
+	});
+
 	test("weak arms (fail/error/exception) need tool or query context", () => {
 		expect(isDegradingGapBullet("- The nightly sync job reported errors in its final run.")).toBe(false);
 		expect(isDegradingGapBullet("- Three Elasticsearch SQL queries failed during investigation.")).toBe(true);
@@ -1248,6 +1262,8 @@ describe.skipIf(!hasRunbooks)("aggregator: SIO-1149 gaps authoring + cross-estat
 		const prompt = getUserPromptText();
 		expect(prompt).toContain("CROSS-ESTATE ABSENCE IS A FINDING");
 		expect(prompt).toContain("not deployed in this estate");
+		// CodeRabbit (PR #416): the claim requires complete successful enumeration.
+		expect(prompt).toContain("enumeration completed successfully");
 	});
 
 	test("single-estate assessment omits the cross-estate absence rule", async () => {

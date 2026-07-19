@@ -151,7 +151,7 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 	// listing it under Gaps inflated the degrading-gap count toward the confidence cap.
 	const crossEstateAbsenceRule =
 		assessedEstates.length > 1
-			? `\n\nCROSS-ESTATE ABSENCE IS A FINDING: If the focus service was found and analyzed in one assessed estate but is absent from another assessed estate, report the absence under that estate's findings as "not deployed in this estate" -- a definitive negative result. NEVER list cross-estate absence under "## Gaps", and never phrase it as "deployment location unconfirmed": the location IS confirmed (the estate where the service was found).`
+			? `\n\nCROSS-ESTATE ABSENCE IS A FINDING: If the focus service was found and analyzed in one assessed estate but is absent from another assessed estate, report the absence under that estate's findings as "not deployed in this estate" -- a definitive negative result. NEVER list cross-estate absence under "## Gaps", and never phrase it as "deployment location unconfirmed": the location IS confirmed (the estate where the service was found). This claim requires that the absent estate's inventory enumeration completed successfully (list calls succeeded, all pages walked); if enumeration there failed, timed out, or was truncated, report the enumeration gap for that estate instead -- finding the service elsewhere does not prove absence here.`
 			: "";
 
 	// SIO-1149: Gaps bullets must be classifiable by the deterministic degrading-gap parser
@@ -384,9 +384,12 @@ const GAP_TOOL_WORDS_RE = /\b(?:tool|quer(?:y|ies)|api call|mcp|invocations?|loo
 // SIO-1149: a failed tool whose DATA was obtained anyway (fallback tool / alternate
 // datasource) is not a coverage failure. The gapsAuthoringRule prompt instructs the
 // model to write the literal "recovered via <x>" clause; the broader verb set catches
-// natural phrasings. Lookbehinds block negations ("could not be completed via").
+// natural phrasings. Lookbehinds block prefix negations -- "not/couldn't/never (be)
+// recovered via", "no/without fallback to" (CodeRabbit PR #416). Postfix negation
+// ("the fallback to X failed") is not regex-detectable; the authoring rule reserves
+// the recovery phrasing for actual recoveries.
 const GAP_RECOVERY_RE =
-	/(?<!\bnot )(?<!\bnot be )\b(?:recovered|completed|obtained|retrieved|achieved|covered|answered|succeeded)\s+(?:via|using|through|from)\b|\bfell back to\b|\bfallback (?:to|succeeded)\b/i;
+	/(?<!\bnot )(?<!\bnot be )(?<!n't )(?<!n't be )(?<!\bnever )(?<!\bnever be )\b(?:recovered|completed|obtained|retrieved|achieved|covered|answered|succeeded)\s+(?:via|using|through|from)\b|(?<!\bnot )(?<!\bnever )\bfell back to\b|(?<!\bno )(?<!\bwithout )\bfallback (?:to|succeeded)\b/i;
 
 export function isDegradingGapBullet(line: string): boolean {
 	const hasToolContext = GAP_TOOL_NAME_RE.test(line) || GAP_TOOL_WORDS_RE.test(line);
@@ -864,19 +867,25 @@ export function advisorRecommendedSections(results: DataSourceResult[]): string[
 // The redactor is injectable (defaulting to the production redactPiiContent) so tests
 // can assert the redaction wiring deterministically -- sibling suites mock.module the
 // shared package to an identity redactor, which would make a dropped call invisible.
-// SIO-1149: when the advisor toolOutput is present, only its Recommended sections are
-// scanned (source "advisor"); the r.data prose scan is the fallback for older
-// checkpoints / truncated toolOutputs (source "prose" -- provenance unverified).
+// SIO-1149: when an advisor toolOutput is PRESENT, only its Recommended sections are
+// scanned (source "advisor") -- even when those sections are empty. An advisor that
+// returned "no recommendations" is authoritative: falling back to prose there would
+// re-create the localcore misattribution (rescuing existing-index DDL as a
+// recommendation). The r.data prose scan applies ONLY when no advisor toolOutput
+// exists at all (older checkpoints, missing toolOutputs; source "prose" -- provenance
+// unverified). CodeRabbit PR #416: advisor availability is decided by the toolOutput's
+// presence, not by whether its sections yielded statements.
 export function extractCreateIndexStatements(
 	results: DataSourceResult[],
 	redact: (s: string) => string = redactPiiContent,
 ): { statements: string[]; source: "advisor" | "prose" } {
-	const advisorTexts = advisorRecommendedSections(results);
-	const source: "advisor" | "prose" = advisorTexts.length > 0 ? "advisor" : "prose";
-	const texts =
-		source === "advisor"
-			? advisorTexts
-			: results.map((r) => (typeof r.data === "string" ? r.data : "")).filter((t) => t.length > 0);
+	const advisorPresent = results.some((r) =>
+		(r.toolOutputs ?? []).some((o) => ADVISOR_TOOL_NAMES.has(o.toolName) && typeof o.rawJson === "string"),
+	);
+	const source: "advisor" | "prose" = advisorPresent ? "advisor" : "prose";
+	const texts = advisorPresent
+		? advisorRecommendedSections(results)
+		: results.map((r) => (typeof r.data === "string" ? r.data : "")).filter((t) => t.length > 0);
 	const seen = new Set<string>();
 	const out: string[] = [];
 	for (const text of texts) {

@@ -241,6 +241,28 @@ describe("advisor-scoped DDL extraction (SIO-1149)", () => {
 		expect(answer).not.toContain("The Index Advisor returned the following statements");
 	});
 
+	// CodeRabbit (PR #416): an advisor that returned NO recommendations is authoritative --
+	// the prose scan must not rescue existing-index DDL just because the Recommended
+	// sections are empty (that would re-create the localcore misattribution).
+	test("does not fall back to prose when advisor output has no Recommended sections", () => {
+		const noRecommendations = `# Index Advisor Recommendations\n\n## Current Indexes Used\n\n\`\`\`sql\n${DDL_EXISTING}\n\`\`\`\n\nThe advisor returned no index recommendations -- the query may already be served by existing indexes.\n`;
+		const { statements, source } = extractCreateIndexStatements([
+			result({
+				data: COUCHBASE_PROSE,
+				toolOutputs: [{ toolName: "capella_get_index_advisor_recommendations", rawJson: noRecommendations }],
+			}),
+		]);
+		expect(source).toBe("advisor");
+		expect(statements).toHaveLength(0);
+		const ensured = ensureVerbatimDdl("Report body.\n\nConfidence: 0.8", [
+			result({
+				data: COUCHBASE_PROSE,
+				toolOutputs: [{ toolName: "capella_get_index_advisor_recommendations", rawJson: noRecommendations }],
+			}),
+		]);
+		expect(ensured.appended).toHaveLength(0);
+	});
+
 	test("non-string advisor rawJson falls back to the prose scan", () => {
 		const { source } = extractCreateIndexStatements([
 			result({

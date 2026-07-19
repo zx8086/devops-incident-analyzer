@@ -126,6 +126,26 @@ describe("judgeDegradingGapBullets (SIO-1149)", () => {
 		expect(await judgeDegradingGapBullets(BULLETS)).toBeNull();
 	});
 
+	// CodeRabbit (PR #416): a caller-requested cancellation must propagate; only
+	// judge-local failures fail closed.
+	test("an externally aborted signal rethrows instead of failing closed", async () => {
+		_setGapsJudgeLlmForTesting({
+			invoke: async () => {
+				throw new Error("request aborted");
+			},
+		});
+		const controller = new AbortController();
+		controller.abort();
+		let thrown: unknown = null;
+		try {
+			await judgeDegradingGapBullets(BULLETS, { signal: controller.signal });
+		} catch (e) {
+			thrown = e;
+		}
+		expect(thrown).toBeInstanceOf(Error);
+		expect((thrown as Error).message).toBe("request aborted");
+	});
+
 	test("the prompt hands the judge numbered bullets", async () => {
 		const { calls, llm } = fakeLlm(() =>
 			JSON.stringify({
