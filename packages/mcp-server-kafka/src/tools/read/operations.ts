@@ -45,6 +45,11 @@ export async function getTopicOffsets(service: KafkaService, params: { topic: st
 	return service.getTopicOffsets(params.topic, params.timestamp);
 }
 
+// SIO-1159: an empty consume result is returned as an annotated object, not a bare [].
+// Run 270378e0 read a bare [] from a 1M-message topic and (wrongly) concluded the
+// serialization format was unreadable -- the real cause was the default "latest" start
+// offset, which makes historical backlog invisible. The note names the actual cause
+// and the recovery path so the LLM does not have to guess.
 export async function consumeMessages(
 	service: KafkaService,
 	config: AppConfig,
@@ -55,12 +60,25 @@ export async function consumeMessages(
 		fromBeginning?: boolean;
 	},
 ) {
-	return service.consumeMessages({
+	const timeoutMs = params.timeoutMs ?? config.kafka.consumeTimeoutMs;
+	const messages = await service.consumeMessages({
 		topic: params.topic,
 		maxMessages: params.maxMessages ?? config.kafka.consumeMaxMessages,
-		timeoutMs: params.timeoutMs ?? config.kafka.consumeTimeoutMs,
+		timeoutMs,
 		fromBeginning: params.fromBeginning,
 	});
+	if (messages.length > 0) return messages;
+	const mode = params.fromBeginning ? "earliest" : "latest";
+	return {
+		messages: [],
+		consumed: 0,
+		mode,
+		timeoutMs,
+		note:
+			mode === "latest"
+				? `0 messages arrived within ${timeoutMs}ms. The ephemeral consumer starts at the LATEST offset, so existing backlog is invisible -- an empty result does NOT mean the topic is empty. To inspect backlog, retry with fromBeginning: true or read a specific offset with kafka_get_message_by_offset.`
+				: `0 messages read from the beginning within ${timeoutMs}ms. The topic may be empty, or the fetch did not complete in time -- verify with kafka_describe_topic offsets before concluding the topic is empty.`,
+	};
 }
 
 export async function listConsumerGroups(

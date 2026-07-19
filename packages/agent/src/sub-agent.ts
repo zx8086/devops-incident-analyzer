@@ -22,7 +22,7 @@ import { buildCachedSystemMessage } from "./prompt-cache.ts";
 import { buildSubAgentPrompt, getToolDefinitionForDataSource } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
 import { buildFocusBlock } from "./sub-agent-focus-block.ts";
-import { instrumentTools } from "./sub-agent-instrumentation.ts";
+import { instrumentTools, TYPED_FINDING_TOOLS } from "./sub-agent-instrumentation.ts";
 import {
 	getSubAgentStateOutputCapBytes,
 	getSubAgentToolCapBytes,
@@ -215,6 +215,45 @@ function tryParseJson(s: string): unknown {
 	}
 }
 
+// SIO-1159: exported for tests. Decides the persisted form of one tool output.
+// SIO-1043 caps toolOutputs[].rawJson so checkpoint state stays bounded, but
+// typed-finding tools bypass the cap entirely (mirroring the in-flight skip in
+// sub-agent-instrumentation.ts): extractFindings parses the persisted rawJson,
+// and truncateToolOutput's "text" fallback is NOT structure-preserving -- a
+// 500KB elastic "Document ID:" block string capped at 32KB parses to zero
+// findings (observed live: ElasticFindingsCard rawCount 0 in run 270378e0).
+// Bounded regardless: pruneThreadState resets dataSourceResults every turn.
+export function buildPersistedToolOutput(
+	toolName: string,
+	text: string,
+	stateCapBytes: number | null,
+): {
+	rawJson: unknown;
+	capSkippedBytes: number | null;
+	truncation: { strategy: string; originalBytes: number; finalBytes: number } | null;
+} {
+	if (stateCapBytes == null) {
+		return { rawJson: tryParseJson(text), capSkippedBytes: null, truncation: null };
+	}
+	if (TYPED_FINDING_TOOLS.has(toolName)) {
+		const bytes = Buffer.byteLength(text, "utf8");
+		return {
+			rawJson: tryParseJson(text),
+			capSkippedBytes: bytes > stateCapBytes ? bytes : null,
+			truncation: null,
+		};
+	}
+	const capped = truncateToolOutput(text, stateCapBytes);
+	return {
+		rawJson: tryParseJson(capped.content),
+		capSkippedBytes: null,
+		truncation:
+			capped.strategy === "none"
+				? null
+				: { strategy: capped.strategy, originalBytes: capped.originalBytes, finalBytes: capped.finalBytes },
+	};
+}
+
 // SIO-786: when an MCP tool returns multiple content blocks (e.g. elastic's
 // elasticsearch_search emits a summary block + one block per hit),
 // @langchain/mcp-adapters delivers them as an array of {type:"text", text:"..."}
@@ -329,6 +368,41 @@ const RETENTION_WINDOW_ERROR_RE = /end date and time is either before the log gr
 // atlassian now emit. Classification is by the structured `kind`/`category`, never by message regex.
 // Returns null when the content is not a shared envelope (falls through to AWS-specific or regex).
 // Distinct from extractAwsError: AWS keeps its own reader for the retention-message special-case.
+// SIO-1159: brace-balanced extraction of the {"_error":...} object embedded inside a
+// wrapper string. Tracks JSON string literals and escapes so braces inside messages
+// don't derail the scan. Returns the parsed object or null.
+function extractEmbeddedErrorObject(raw: string): unknown {
+	const anchor = raw.indexOf('"_error"');
+	if (anchor === -1) return null;
+	const start = raw.lastIndexOf("{", anchor);
+	if (start === -1) return null;
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+	for (let i = start; i < raw.length; i++) {
+		const ch = raw[i];
+		if (inString) {
+			if (escaped) escaped = false;
+			else if (ch === "\\") escaped = true;
+			else if (ch === '"') inString = false;
+			continue;
+		}
+		if (ch === '"') inString = true;
+		else if (ch === "{") depth += 1;
+		else if (ch === "}") {
+			depth -= 1;
+			if (depth === 0) {
+				try {
+					return JSON.parse(raw.slice(start, i + 1));
+				} catch {
+					return null;
+				}
+			}
+		}
+	}
+	return null;
+}
+
 function extractStructuredToolError(content: unknown): {
 	category: ToolErrorCategory;
 	kind: ToolErrorKind;
@@ -343,7 +417,14 @@ function extractStructuredToolError(content: unknown): {
 	try {
 		parsed = JSON.parse(raw);
 	} catch {
-		return null;
+		// SIO-1159: an isError:true MCP result reaches us wrapped by the LangChain adapter
+		// ("Error: MCP tool 'x' on server 'y' returned an error: {...}\n Please fix your
+		// mistakes."), so the whole-string parse fails and every expected outcome (not-found,
+		// no-index) fell through to the regex path as "unknown"/degrading -- falsely tripping
+		// the tool-error-rate confidence cap (run 270378e0: 10 expected couchbase errors ->
+		// 0.59). Recover the embedded envelope instead of giving up.
+		parsed = extractEmbeddedErrorObject(raw);
+		if (parsed == null) return null;
 	}
 	if (parsed == null || typeof parsed !== "object") return null;
 	const err = (parsed as { _error?: unknown })._error;
@@ -854,32 +935,29 @@ ${state.correlationFetchDirective}`
 		);
 
 		// SIO-1043: cap toolOutputs[].rawJson at creation so the persisted checkpoint state
-		// doesn't grow unboundedly. Capped on the STRING form then re-parsed -- safe because
-		// truncateToolOutput's strategies are JSON-structure-preserving (extractors' safeParse
-		// still succeeds, just fewer items), and the extractFindings node runs on these same
-		// objects afterwards anyway.
+		// doesn't grow unboundedly. SIO-1159: typed-finding tools are EXEMPT, mirroring the
+		// in-flight skip in sub-agent-instrumentation.ts -- extractFindings runs on these
+		// persisted objects, and truncateToolOutput's "text" fallback is NOT structure-
+		// preserving (a 500KB elastic "Document ID:" block string capped at 32KB parses to
+		// zero findings; observed live as ElasticFindingsCard rawCount 0 in run 270378e0).
+		// Bounded regardless: pruneThreadState resets dataSourceResults after every turn.
 		const stateCapBytes = getSubAgentStateOutputCapBytes();
 		const toolOutputs = toolMessages.map((m: { name?: string; content: unknown }) => {
 			const toolName = m.name ?? "unknown";
-			const text = normalizeToolContent(m.content);
-			if (stateCapBytes == null) {
-				return { toolName, rawJson: tryParseJson(text) };
-			}
-			const capped = truncateToolOutput(text, stateCapBytes);
-			if (capped.strategy !== "none") {
+			const out = buildPersistedToolOutput(toolName, normalizeToolContent(m.content), stateCapBytes);
+			if (out.capSkippedBytes != null) {
 				log.info(
-					{
-						event: "subagent.state_output_truncated",
-						deploymentId,
-						toolName,
-						originalBytes: capped.originalBytes,
-						finalBytes: capped.finalBytes,
-						strategy: capped.strategy,
-					},
+					{ event: "subagent.state_output_cap_skipped", deploymentId, toolName, bytes: out.capSkippedBytes },
+					"Persisted tool output cap skipped to preserve typed-finding JSON",
+				);
+			}
+			if (out.truncation) {
+				log.info(
+					{ event: "subagent.state_output_truncated", deploymentId, toolName, ...out.truncation },
 					"Persisted tool output truncated",
 				);
 			}
-			return { toolName, rawJson: tryParseJson(capped.content) };
+			return { toolName, rawJson: out.rawJson };
 		});
 
 		// SIO-1029: a truncated run that still gathered tool data is partial-success,

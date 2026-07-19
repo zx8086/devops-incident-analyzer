@@ -220,6 +220,36 @@ export interface FormattedMessage {
 	value: string | null;
 	timestamp: string;
 	headers: Record<string, string>;
+	// SIO-1159: set when the decoded value looks like a non-UTF-8/binary payload
+	// (Avro/Protobuf). There is no schema-registry decode on this path, so the
+	// value string is mojibake -- label it instead of presenting it as text.
+	valueLooksBinary?: true;
+}
+
+// SIO-1159: heuristic binary detector. Buffer.toString("utf8") replaces invalid
+// byte sequences with U+FFFD, so a high ratio of replacement/control characters
+// in the head of the string marks an undecodable payload.
+function looksBinary(s: string): boolean {
+	if (s.length === 0) return false;
+	const sample = s.slice(0, 512);
+	let suspicious = 0;
+	for (const ch of sample) {
+		const code = ch.codePointAt(0) ?? 0;
+		if (code === 0xfffd || (code < 32 && code !== 9 && code !== 10 && code !== 13)) suspicious += 1;
+	}
+	return suspicious / sample.length > 0.1;
+}
+
+// SIO-1159: diagnostics wrapper so an empty topics list is never ambiguous --
+// run 270378e0 could not distinguish "no DLQs exist" from "offset sampling
+// failed for every matched topic" (sampleDlqOffsets omits rejected topics).
+export interface ListDlqTopicsResult {
+	topics: DlqTopic[];
+	// Topic names matching the DLQ naming patterns (after the optional filter bound).
+	matched: number;
+	// Matched names omitted from `topics` because offset sampling failed for them.
+	sampleFailed: number;
+	note?: string;
 }
 
 export type GetMessageByOffsetResult =
@@ -388,7 +418,11 @@ export class KafkaService {
 		});
 	}
 
-	async listDlqTopics(options?: ListDlqTopicsOptions): Promise<DlqTopic[]> {
+	// SIO-1159: returns a diagnostics wrapper instead of a bare array. `matched` vs
+	// `sampleFailed` disambiguates the previously-silent case where every matched
+	// topic's offset sampling failed and the tool returned [] (indistinguishable
+	// from "no DLQs exist" -- run 270378e0).
+	async listDlqTopics(options?: ListDlqTopicsOptions): Promise<ListDlqTopicsResult> {
 		logger.debug({ options: options ?? null }, "Listing DLQ topics");
 
 		const allTopics = await this.listTopics();
@@ -400,7 +434,15 @@ export class KafkaService {
 		}
 
 		if (dlqNames.length === 0) {
-			return [];
+			return {
+				topics: [],
+				matched: 0,
+				sampleFailed: 0,
+				note:
+					"No topic names matched the DLQ naming conventions (-dlq, dlt-*, *-dead-letter, dead-letter-*, *.dlq, DLQ_*)" +
+					(options?.filter ? ` after applying filter ${JSON.stringify(options.filter)}` : "") +
+					". This cluster may use a different convention -- inspect candidate topics directly with kafka_describe_topic.",
+			};
 		}
 
 		// SIO-1150: bound worst-case latency. Above the threshold, force the single-
@@ -418,13 +460,14 @@ export class KafkaService {
 
 		if (options?.skipDelta === true || autoSkipDelta) {
 			// Only emit topics that succeeded in the first sample; omit phantom entries.
-			return dlqNames
+			const topics = dlqNames
 				.filter((name) => firstSample.has(name))
 				.map((name) => ({
 					name,
 					totalMessages: firstSample.get(name) as number,
 					recentDelta: null,
 				}));
+			return this.buildDlqResult(topics, dlqNames.length);
 		}
 
 		const windowMs = options?.windowMs ?? DEFAULT_DLQ_DELTA_WINDOW_MS;
@@ -434,7 +477,7 @@ export class KafkaService {
 
 		// Only iterate topics that succeeded in the first sample. If first failed, we
 		// have no baseline so the delta would be fabricated (SIO-681 critical fix).
-		return dlqNames
+		const topics = dlqNames
 			.filter((name) => firstSample.has(name))
 			.map((name) => {
 				const first = firstSample.get(name) as number;
@@ -443,6 +486,25 @@ export class KafkaService {
 				const recentDelta = second !== undefined ? second - first : null;
 				return { name, totalMessages: first, recentDelta };
 			});
+		return this.buildDlqResult(topics, dlqNames.length);
+	}
+
+	private buildDlqResult(topics: DlqTopic[], matched: number): ListDlqTopicsResult {
+		const sampleFailed = matched - topics.length;
+		return {
+			topics,
+			matched,
+			sampleFailed,
+			...(sampleFailed > 0 && {
+				note:
+					`${sampleFailed} of ${matched} DLQ-named topics were omitted because offset sampling failed; ` +
+					"the omitted topics EXIST but their message counts are unknown. " +
+					(topics.length === 0
+						? "An empty topics list here does NOT mean no DLQs exist -- retry, or probe specific topics with kafka_describe_topic. "
+						: "") +
+					"Probe individual topics with kafka_describe_topic if their counts matter.",
+			}),
+		};
 	}
 
 	async describeTopic(topicName: string): Promise<{
@@ -504,17 +566,7 @@ export class KafkaService {
 		});
 	}
 
-	async consumeMessages(options: ConsumeMessagesOptions): Promise<
-		Array<{
-			topic: string;
-			partition: number;
-			offset: string;
-			key: string | null;
-			value: string | null;
-			timestamp: string;
-			headers: Record<string, string>;
-		}>
-	> {
+	async consumeMessages(options: ConsumeMessagesOptions): Promise<FormattedMessage[]> {
 		logger.debug(
 			{
 				topic: options.topic,
@@ -525,15 +577,7 @@ export class KafkaService {
 		);
 		const groupId = `mcp-consume-${crypto.randomUUID()}`;
 		const consumer = await this.clientManager.createConsumer(groupId);
-		const messages: Array<{
-			topic: string;
-			partition: number;
-			offset: string;
-			key: string | null;
-			value: string | null;
-			timestamp: string;
-			headers: Record<string, string>;
-		}> = [];
+		const messages: FormattedMessage[] = [];
 
 		try {
 			const mode = options.fromBeginning ? "earliest" : "latest";
@@ -1094,13 +1138,15 @@ function formatMessage(msg: Message<Buffer, Buffer, Buffer, Buffer>): FormattedM
 		}
 	}
 
+	const value = msg.value?.toString() ?? null;
 	return {
 		topic: msg.topic,
 		partition: msg.partition,
 		offset: msg.offset.toString(),
 		key: msg.key?.toString() ?? null,
-		value: msg.value?.toString() ?? null,
+		value,
 		timestamp: msg.timestamp.toString(),
 		headers,
+		...(value !== null && looksBinary(value) && { valueLooksBinary: true as const }),
 	};
 }

@@ -33,10 +33,10 @@ Use `kafka_get_consumer_group_lag` to get per-partition lag. If lag is concentra
 Use `kafka_describe_topic` to check partition count, replication factor, and retention settings. Low partition count relative to consumer count means some consumers are idle. Check `kafka_get_topic_offsets` to compare latest vs committed offsets.
 
 ### 5. Sample Recent Messages
-Use `kafka_consume_messages` with a small limit on the lagging partition to inspect message content. Look for unusually large messages, malformed payloads, or patterns that might cause processing failures.
+Use `kafka_consume_messages` with a small limit on the lagging partition to inspect message content. Look for unusually large messages, malformed payloads, or patterns that might cause processing failures. The ephemeral consumer starts at the LATEST offset by default -- pass `fromBeginning: true` to inspect existing backlog, and fall back to `kafka_get_message_by_offset` when consume returns empty. Values flagged `valueLooksBinary: true` are Avro/Protobuf payloads this path cannot decode.
 
 ### 6. Check for Dead Letter Topic Activity
-Use `kafka_list_topics` to find DLQ topics (typically suffixed with `.dlq` or `.dead-letter`). Use `kafka_get_topic_offsets` to check message count. Use `kafka_consume_messages` to sample recent DLQ entries for poison message patterns.
+Use `kafka_list_dlq_topics` (NEVER `kafka_list_topics` -- per SOUL rule, the specialized tool returns typed sizes + recent-delta that drive the DLQ findings card). It matches the naming conventions `-dlq`, `dlt-*`, `*-dead-letter`, `dead-letter-*`, `*.dlq`, and `DLQ_*`, and returns `{topics, matched, sampleFailed, note?}` -- a non-zero `sampleFailed` means DLQ topics EXIST but their counts could not be sampled. Use `kafka_consume_messages` with `fromBeginning: true` to sample DLQ entries for poison message patterns.
 
 ### 7. Cross-Reference with Application Logs (MANDATORY when any group is Empty/Dead)
 Use `elasticsearch_search` and `elasticsearch_count_documents` filtered by the consumer application's service name over a 24h window. Look for deserialization errors, external dependency timeouts, out-of-memory patterns, rebalance failures, and authorization exceptions.
@@ -84,4 +84,4 @@ Other clusters not yet mapped here -- ask the operator before guessing.
 - Temporarily increase partition count
 
 ## All Tools Used Are Read-Only
-kafka_list_consumer_groups, kafka_get_consumer_group_lag, kafka_describe_consumer_group, kafka_describe_topic, kafka_get_topic_offsets, kafka_consume_messages, kafka_list_topics, kafka_describe_cluster, ksql_get_server_info, ksql_list_queries, elasticsearch_search, elasticsearch_count_documents, capella_get_completed_requests, capella_get_fatal_requests
+kafka_list_consumer_groups, kafka_get_consumer_group_lag, kafka_describe_consumer_group, kafka_describe_topic, kafka_get_topic_offsets, kafka_consume_messages, kafka_get_message_by_offset, kafka_list_topics, kafka_list_dlq_topics, kafka_describe_cluster, ksql_get_server_info, ksql_list_queries, elasticsearch_search, elasticsearch_count_documents, capella_get_completed_requests, capella_get_fatal_requests

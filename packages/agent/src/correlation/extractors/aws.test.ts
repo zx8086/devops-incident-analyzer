@@ -140,11 +140,13 @@ describe("extractAwsFindings focus scoping (SIO-1030)", () => {
 		expect(out.alarms?.map((a) => a.name)).toEqual(["prices-api-v2-service-CPU-Utilization-High"]);
 	});
 
-	test("NO high-signal pass-through: an off-focus ALARM-state alarm is still dropped", () => {
-		// Product decision is strict drop, no exceptions — assert we did NOT copy
-		// kafka's degraded pass-through into the AWS card.
+	test("NO silent pass-through: an off-focus ALARM-state alarm only surfaces flagged unscoped", () => {
+		// SIO-1030 product decision preserved: no off-focus alarm masquerades as a
+		// scoped finding. SIO-1159 adds an EXPLICIT fallback instead -- rows return
+		// flagged unscoped:true and rule-engine consumers skip them (rules.ts guard).
 		const out = extractAwsFindings([alarms([{ AlarmName: "storytelling-service-CPU", StateValue: "ALARM" }])], FOCUS);
-		expect(out.alarms ?? []).toHaveLength(0);
+		expect(out.unscoped).toBe(true);
+		expect(out.alarms).toHaveLength(1);
 	});
 
 	test("matches on namespace, not only alarm name", () => {
@@ -153,5 +155,58 @@ describe("extractAwsFindings focus scoping (SIO-1030)", () => {
 			FOCUS,
 		);
 		expect(out.alarms).toHaveLength(1);
+	});
+});
+
+// SIO-1159: unscoped top-N fallback (mirrors couchbase SIO-1138). Run 270378e0:
+// the companion-service estate's 35 alarms were all focus-dropped and the card
+// shipped blank; now they return as an explicit estate-wide fallback.
+describe("extractAwsFindings unscoped fallback (SIO-1159)", () => {
+	const alarms = (rows: Array<Record<string, unknown>>): ToolOutput => ({
+		toolName: "aws_cloudwatch_describe_alarms",
+		rawJson: { MetricAlarms: rows },
+	});
+	const FOCUS = ["localcore-service"];
+
+	test("droppedAll with focus returns top-5 flagged unscoped, firing alarms first", () => {
+		const rows = [
+			{ AlarmName: "companion-a-CPU-Low", StateValue: "OK" },
+			{ AlarmName: "companion-b-Memory-Low", StateValue: "OK" },
+			{ AlarmName: "companion-c-Errors-High", StateValue: "ALARM" },
+			{ AlarmName: "companion-d-Depth", StateValue: "INSUFFICIENT_DATA" },
+			{ AlarmName: "companion-e-CPU", StateValue: "OK" },
+			{ AlarmName: "companion-f-Latency", StateValue: "ALARM" },
+			{ AlarmName: "companion-g-Disk", StateValue: "OK" },
+		];
+		const out = extractAwsFindings([alarms(rows)], FOCUS);
+		expect(out.unscoped).toBe(true);
+		expect(out.alarms).toHaveLength(5);
+		expect(out.alarms?.[0]?.state).toBe("ALARM");
+		expect(out.alarms?.[1]?.state).toBe("ALARM");
+		expect(out.alarms?.[2]?.state).toBe("INSUFFICIENT_DATA");
+	});
+
+	test("scoped hits suppress the fallback and carry no unscoped flag", () => {
+		const out = extractAwsFindings(
+			[
+				alarms([
+					{ AlarmName: "localcore-service-CPU-Low", StateValue: "OK" },
+					{ AlarmName: "companion-c-Errors-High", StateValue: "ALARM" },
+				]),
+			],
+			FOCUS,
+		);
+		expect(out.unscoped).toBeUndefined();
+		expect(out.alarms?.map((a) => a.name)).toEqual(["localcore-service-CPU-Low"]);
+	});
+
+	test("empty focus never engages the fallback (show-all has no unscoped flag)", () => {
+		const out = extractAwsFindings([alarms([{ AlarmName: "anything", StateValue: "OK" }])], []);
+		expect(out.unscoped).toBeUndefined();
+		expect(out.alarms).toHaveLength(1);
+	});
+
+	test("no alarms at all stays empty even with focus", () => {
+		expect(extractAwsFindings([alarms([])], FOCUS)).toEqual({});
 	});
 });

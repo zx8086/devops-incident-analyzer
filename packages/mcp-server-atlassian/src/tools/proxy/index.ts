@@ -1,5 +1,6 @@
 // src/tools/proxy/index.ts
 
+import { buildToolErrorEnvelope } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { AtlassianMcpProxy, ProxyToolInfo } from "../../atlassian-client/index.js";
@@ -11,6 +12,30 @@ import { isWriteTool } from "./write-tools.js";
 const log = createContextLogger("proxy-tools");
 
 const TOOL_PREFIX = "atlassian_";
+
+// SIO-1159: CQL's `type` field accepts only content types; LLM callers point it at
+// Jira with `type = issue` and get an opaque upstream 400 (run 270378e0). Reject it
+// up front with a structured bad-input envelope steering to the JQL tool. Matches
+// `type = issue` / `type=issue` / `type IN (issue, ...)` case-insensitively.
+const CQL_ISSUE_TYPE_RE = /\btype\s*(?:=|in\s*\()\s*["']?issues?\b/i;
+
+// Exported for tests. Returns the rejection envelope when the cql arg targets Jira
+// issues, null otherwise.
+export function cqlIssueTypeRejection(
+	toolName: string,
+	args: Record<string, unknown>,
+): ReturnType<typeof buildToolErrorEnvelope> | null {
+	if (toolName !== "searchConfluenceUsingCql") return null;
+	const cql = args.cql;
+	if (typeof cql !== "string" || !CQL_ISSUE_TYPE_RE.test(cql)) return null;
+	return buildToolErrorEnvelope({
+		kind: "bad-input",
+		message: "CQL rejected before upstream: 'type = issue' is not a valid Confluence content type.",
+		advice:
+			"Confluence CQL `type` accepts only: space, user, page, blogpost, comment, attachment. " +
+			"Jira issues are searched with JQL -- use atlassian_searchJiraIssuesUsingJql (or free-text atlassian_search) instead.",
+	});
+}
 
 interface ProxyCallResult {
 	content?: Array<{ type: string; text: string }>;
@@ -75,6 +100,13 @@ export function registerProxyTools(
 		const handler = async (args: Record<string, unknown>) => {
 			return traceToolCall(prefixedName, async () => {
 				try {
+					// SIO-1159: reject Jira-targeted CQL before the upstream round trip. The
+					// envelope rides a RESOLVED result (isError:false) per the SIO-1087
+					// convention so the agent classifies it structurally, not as a malfunction.
+					const rejection = cqlIssueTypeRejection(tool.name, args);
+					if (rejection) {
+						return { content: [{ type: "text" as const, text: JSON.stringify(rejection) }] };
+					}
 					const result = (await proxy.callTool(tool.name, args)) as ProxyCallResult;
 					const content = (result.content ?? []).map((c) => ({
 						type: "text" as const,

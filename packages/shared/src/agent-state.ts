@@ -361,6 +361,12 @@ export type AwsCloudWatchAlarm = z.infer<typeof AwsCloudWatchAlarmSchema>;
 
 export const AwsFindingsSchema = z.object({
 	alarms: z.array(AwsCloudWatchAlarmSchema).optional(),
+	unscoped: z
+		.boolean()
+		.optional()
+		.describe(
+			"SIO-1159: true when no alarm matched the focus services and alarms is a top-N estate-wide fallback (mirrors SIO-1138 couchbase); rule-engine consumers must skip unscoped rows",
+		),
 });
 export type AwsFindings = z.infer<typeof AwsFindingsSchema>;
 

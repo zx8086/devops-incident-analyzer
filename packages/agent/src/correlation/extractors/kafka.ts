@@ -213,8 +213,14 @@ export function extractKafkaFindings(outputs: ToolOutput[], focusServices: strin
 			existing.totalLag = parsed.data.totalLag;
 			byId.set(parsed.data.groupId, existing);
 		} else if (o.toolName === "kafka_list_dlq_topics") {
-			if (!Array.isArray(o.rawJson)) continue;
-			for (const t of o.rawJson) {
+			// SIO-1159: the tool now returns { topics, matched, sampleFailed, note? };
+			// bare arrays are the pre-SIO-1159 live shape (AgentCore lags the repo).
+			const rows = Array.isArray(o.rawJson)
+				? o.rawJson
+				: typeof o.rawJson === "object" && o.rawJson && "topics" in o.rawJson && Array.isArray(o.rawJson.topics)
+					? o.rawJson.topics
+					: [];
+			for (const t of rows) {
 				const parsed = ListDlqTopicsRowSchema.safeParse(t);
 				if (parsed.success) dlqTopics.push(parsed.data);
 			}

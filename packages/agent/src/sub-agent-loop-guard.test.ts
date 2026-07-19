@@ -2,10 +2,13 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+	AWS_EMPTY_RESULTS_ADVICE,
 	AWS_START_QUERY_STOP_MESSAGE,
 	awsErrorKind,
+	consumeEmptyAwsResultsAdvice,
 	createLoopGuardState,
 	isDiscoveryCall,
+	isEmptyAwsQueryResults,
 	isGuardedTool,
 	isObservedTool,
 	isUnproductiveResult,
@@ -263,5 +266,73 @@ describe("non-guarded tools", () => {
 		recordResult(state, "kafka_list_topics", sig, EMPTY_SEARCH);
 		recordResult(state, "kafka_list_topics", sig, EMPTY_SEARCH);
 		expect(shouldShortCircuit(state, "kafka_list_topics", sig)).toBe(false);
+	});
+});
+
+// SIO-1159: a successful-but-empty CloudWatch result ({status:"Complete",results:[]})
+// carries no _error, so the SIO-1141 machinery ignores it -- run 270378e0 queried a
+// 24h window that silently missed a 2-day-old incident. After 2 consecutive empties
+// the guard emits one-shot widen advice.
+describe("SIO-1159: empty-success aws_logs_get_query_results advice", () => {
+	const TOOL = "aws_logs_get_query_results";
+	const EMPTY_RESULT = JSON.stringify({
+		queryLanguage: "CWLI",
+		results: [],
+		statistics: { recordsMatched: 0 },
+		status: "Complete",
+		$metadata: {},
+	});
+	const NONEMPTY_RESULT = JSON.stringify({
+		results: [[{ field: "@message", value: "CatalogException" }]],
+		status: "Complete",
+	});
+	const RUNNING_RESULT = JSON.stringify({ results: [], status: "Running" });
+
+	test("detects Complete-with-0-rows; Running and non-empty are not empty-success", () => {
+		expect(isEmptyAwsQueryResults(EMPTY_RESULT)).toBe(true);
+		expect(isEmptyAwsQueryResults(NONEMPTY_RESULT)).toBe(false);
+		expect(isEmptyAwsQueryResults(RUNNING_RESULT)).toBe(false);
+	});
+
+	test("tool is observed so recordResult sees its outcomes", () => {
+		expect(isObservedTool(TOOL)).toBe(true);
+		expect(isGuardedTool(TOOL)).toBe(false); // nudge-only: never short-circuits
+	});
+
+	test("advice fires after 2 consecutive empties and only once", () => {
+		const state = createLoopGuardState();
+		recordResult(state, TOOL, "", EMPTY_RESULT);
+		expect(consumeEmptyAwsResultsAdvice(state)).toBeNull();
+		recordResult(state, TOOL, "", EMPTY_RESULT);
+		expect(consumeEmptyAwsResultsAdvice(state)).toBe(AWS_EMPTY_RESULTS_ADVICE);
+		// consumed -- the next call without new empties gets no advice
+		expect(consumeEmptyAwsResultsAdvice(state)).toBeNull();
+	});
+
+	test("a non-empty result resets the consecutive counter", () => {
+		const state = createLoopGuardState();
+		recordResult(state, TOOL, "", EMPTY_RESULT);
+		recordResult(state, TOOL, "", NONEMPTY_RESULT);
+		recordResult(state, TOOL, "", EMPTY_RESULT);
+		expect(consumeEmptyAwsResultsAdvice(state)).toBeNull();
+	});
+
+	test("a Running poll is NEUTRAL: interleaved polling neither counts nor resets", () => {
+		// The real call pattern is start_query -> get_query_results(Running)* ->
+		// get_query_results(Complete). If Running reset the counter, two consecutive
+		// empty queries with interleaved polls could never reach the threshold.
+		const state = createLoopGuardState();
+		recordResult(state, TOOL, "", EMPTY_RESULT);
+		recordResult(state, TOOL, "", RUNNING_RESULT);
+		recordResult(state, TOOL, "", EMPTY_RESULT);
+		expect(consumeEmptyAwsResultsAdvice(state)).toBe(AWS_EMPTY_RESULTS_ADVICE);
+	});
+
+	test("get_query_results outcomes do not disturb the start_query re-anchor state", () => {
+		const state = createLoopGuardState();
+		recordResult(state, TOOL, "", EMPTY_RESULT);
+		recordResult(state, TOOL, "", EMPTY_RESULT);
+		expect(state.awsStartQueryUnproductive).toBe(0);
+		expect(state.awsStartQueryNeedsReanchor).toBe(false);
 	});
 });

@@ -46,14 +46,24 @@ export function compileFilterOrThrow(filter: string): RegExp {
 	if (filter.length > MAX_FILTER_LENGTH) {
 		throw new InvalidFilterError(filter, `filter is too long (${filter.length} > ${MAX_FILTER_LENGTH} chars)`);
 	}
-	if (NESTED_QUANTIFIER.test(filter) || QUANTIFIED_ALTERNATION.test(filter)) {
+	// SIO-1159: LLM callers habitually emit the PCRE inline case-insensitivity flag
+	// ("(?i)pattern"), which JS RegExp rejects with "Invalid group" -- run 270378e0
+	// lost an iteration to exactly this. Accept the idiom: strip a LEADING (?i) and
+	// compile with the "i" flag instead of erroring.
+	let pattern = filter;
+	let flags = "";
+	if (pattern.startsWith("(?i)")) {
+		pattern = pattern.slice("(?i)".length);
+		flags = "i";
+	}
+	if (NESTED_QUANTIFIER.test(pattern) || QUANTIFIED_ALTERNATION.test(pattern)) {
 		throw new InvalidFilterError(
 			filter,
 			"pattern risks catastrophic backtracking (ReDoS): a quantified nested/alternation group; simplify it or use 'prefix'",
 		);
 	}
 	try {
-		return new RegExp(filter);
+		return new RegExp(pattern, flags);
 	} catch (error) {
 		const reason = error instanceof Error ? error.message : String(error);
 		throw new InvalidFilterError(filter, reason);

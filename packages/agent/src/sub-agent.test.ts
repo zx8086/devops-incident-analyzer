@@ -2,6 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { redactPiiContent } from "@devops-agent/shared";
 import {
+	buildPersistedToolOutput,
 	classifyToolError,
 	extractToolErrors,
 	getSubAgentRecursionLimit,
@@ -510,5 +511,106 @@ describe("SIO-1029: invokeSubAgentWithSalvage", () => {
 		await invokeSubAgentWithSalvage((opts) => stream(opts), { recursionLimit: 40 });
 		expect(seenOpts.streamMode).toBe("values");
 		expect(seenOpts.recursionLimit).toBe(40);
+	});
+});
+
+// SIO-1159: an isError:true MCP result reaches extractToolErrors wrapped by the
+// LangChain adapter ("Error: MCP tool 'x' on server 'y' returned an error: {...}\n
+// Please fix your mistakes."), so the whole-string JSON.parse fails. Run 270378e0
+// stamped all 10 expected couchbase outcomes "unknown" (degrading) because of this,
+// falsely tripping the tool-error-rate confidence cap. These strings are verbatim
+// from that run.
+describe("extractToolErrors SIO-1159 wrapped envelope extraction", () => {
+	const wrappedNotFound =
+		"Error: MCP tool 'capella_get_document_by_id' on server 'couchbase-mcp' returned an error: " +
+		'{"_error":{"kind":"not-found","message":"Failed to get document by id: document not found","category":"not-found"}}' +
+		"\n Please fix your mistakes.";
+	const wrappedNoIndex =
+		"Error: MCP tool 'capella_run_sql_plus_plus_query' on server 'couchbase-mcp' returned an error: " +
+		'{"_error":{"kind":"no-index","message":"Failed to execute query: planning failure","category":"no-data"}}' +
+		"\n Please fix your mistakes.";
+
+	test("wrapped not-found envelope classifies as not-found, not unknown", () => {
+		const errors = extractToolErrors([toolMsg(wrappedNotFound, "capella_get_document_by_id", "error")]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.category).toBe("not-found");
+		expect(errors[0]?.kind).toBe("not-found");
+		expect(errors[0]?.retryable).toBe(false);
+	});
+
+	test("wrapped no-index envelope classifies as no-data (non-degrading)", () => {
+		const errors = extractToolErrors([toolMsg(wrappedNoIndex, "capella_run_sql_plus_plus_query", "error")]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.category).toBe("no-data");
+		expect(errors[0]?.kind).toBe("no-index");
+	});
+
+	test("braces inside the envelope message string do not derail the brace scan", () => {
+		const tricky =
+			"Error: MCP tool 't' on server 's' returned an error: " +
+			'{"_error":{"kind":"no-index","message":"planner said {oops} and \\"{quoted}\\" }","category":"no-data"}}' +
+			"\n Please fix your mistakes.";
+		const errors = extractToolErrors([toolMsg(tricky, "capella_run_sql_plus_plus_query", "error")]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.category).toBe("no-data");
+	});
+
+	test("wrapper without an envelope still falls through to regex classification", () => {
+		const errors = extractToolErrors([
+			toolMsg(
+				"Error: MCP tool 'kafka_list_dlq_topics' returned an error: MCP error -32001: TimeoutError: The operation was aborted due to timeout\n Please fix your mistakes.",
+				"kafka_list_dlq_topics",
+				"error",
+			),
+		]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.category).toBe("transient");
+	});
+
+	test("'_error' text with unparseable surroundings falls through without throwing", () => {
+		const errors = extractToolErrors([toolMsg('boom "_error" but "kind" of not JSON at all {', "some_tool", "error")]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.category).toBe("unknown");
+	});
+});
+
+// SIO-1159: the persistence path must apply the same typed-finding exemption as the
+// in-flight path -- extractFindings reads the PERSISTED rawJson, and the "text"
+// truncation fallback corrupts elastic's block-string payloads (run 270378e0:
+// three 353-553KB elasticsearch_search results were capped to 32,804 bytes and
+// ElasticFindingsCard extracted rawCount 0).
+describe("buildPersistedToolOutput SIO-1159 typed-finding exemption", () => {
+	const CAP = 1024;
+
+	test("typed-finding tool over the cap is persisted un-truncated with capSkippedBytes set", () => {
+		const bigBlockText = `Total results: 100\n\n${"Document ID: abc\nmessage: error occurred\n\n".repeat(100)}`;
+		const out = buildPersistedToolOutput("elasticsearch_search", bigBlockText, CAP);
+		expect(out.rawJson).toBe(bigBlockText);
+		expect(out.capSkippedBytes).toBe(Buffer.byteLength(bigBlockText, "utf8"));
+		expect(out.truncation).toBeNull();
+	});
+
+	test("typed-finding tool under the cap has no capSkippedBytes", () => {
+		const out = buildPersistedToolOutput("kafka_list_dlq_topics", '[{"name":"orders-dlq"}]', CAP);
+		expect(out.rawJson).toEqual([{ name: "orders-dlq" }]);
+		expect(out.capSkippedBytes).toBeNull();
+		expect(out.truncation).toBeNull();
+	});
+
+	test("non-typed tool over the cap is still truncated", () => {
+		const big = "x".repeat(CAP * 4);
+		const out = buildPersistedToolOutput("gitlab_get_blame", big, CAP);
+		expect(String(out.rawJson).length).toBeLessThan(big.length);
+		expect(out.capSkippedBytes).toBeNull();
+		expect(out.truncation).not.toBeNull();
+		expect(out.truncation?.originalBytes).toBe(CAP * 4);
+	});
+
+	test("null cap disables truncation for every tool", () => {
+		const big = "y".repeat(CAP * 4);
+		const out = buildPersistedToolOutput("gitlab_get_blame", big, null);
+		expect(out.rawJson).toBe(big);
+		expect(out.capSkippedBytes).toBeNull();
+		expect(out.truncation).toBeNull();
 	});
 });

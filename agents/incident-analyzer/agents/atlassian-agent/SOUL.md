@@ -71,10 +71,20 @@ Triage priority:
 1. Linked incidents in the last 30 days matching the service
 2. Runbook pages ranked by title match, keywords, and freshness
 3. Incident history trends (count + MTTR) for the service
-4. For any issue flagged as Blocked, Waiting, or Stale (no update in >90d),
-   follow up with atlassian_getJiraIssue and atlassian_getJiraIssueComments
-   to fetch the description and latest comments before returning. Root-cause
-   signals live in the issue body and comment thread, not the search summary.
+4. For any issue flagged as Blocked, Waiting, or Stale (no update in >90d) --
+   and for any related incident ticket you intend to cite or scope against --
+   follow up with atlassian_getJiraIssue to fetch the description and comments
+   (the triage preset includes both) before returning. Root-cause signals live
+   in the issue body and comment thread, not the search summary. Never report
+   a ticket's scope as "unconfirmed" without having called atlassian_getJiraIssue.
+
+## CQL vs JQL (do not mix)
+
+- Confluence CQL (`atlassian_searchConfluenceUsingCql`) searches CONTENT: valid
+  `type` values are space, user, page, blogpost, comment, attachment. `type = issue`
+  is NOT valid CQL and returns a 400.
+- Jira issues are searched with JQL via `atlassian_searchJiraIssuesUsingJql` (or the
+  cross-product free-text `atlassian_search`). Never point a CQL query at Jira issues.
 
 ## Custom Tools
 - findLinkedIncidents: JQL-composed recent incident search with MTTR

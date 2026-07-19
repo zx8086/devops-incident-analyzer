@@ -188,7 +188,23 @@ export async function extractFindings(state: AgentStateType): Promise<Partial<Ag
 			const outs = r.toolOutputs ?? [];
 			const awsFindings = extractAwsFindings(outs, focusServices);
 			const rawCount = extractAwsFindings(outs).alarms?.length ?? 0;
-			logCard("AWSFindingsCard", focusServices, rawCount, awsFindings.alarms?.length ?? 0);
+			if (awsFindings.unscoped) {
+				// SIO-1159: fallback engaged -- the card is populated but the rows are
+				// not focus-linked. Distinct info line instead of the droppedAll warn
+				// (mirrors the SIO-1138 couchbase branch above).
+				logger.info(
+					{
+						tag: "AWSFindingsCard",
+						focusServices,
+						rawCount,
+						fallbackCount: awsFindings.alarms?.length ?? 0,
+						filterMode: "unscoped-fallback",
+					},
+					"findings card fell back to unscoped top-N",
+				);
+			} else {
+				logCard("AWSFindingsCard", focusServices, rawCount, awsFindings.alarms?.length ?? 0);
+			}
 			return { awsFindings };
 		},
 		// SIO-785 Phase 2 (2026-05-18): Atlassian linked incidents.

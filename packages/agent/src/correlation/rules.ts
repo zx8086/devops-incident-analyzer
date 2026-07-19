@@ -54,6 +54,9 @@ function getKafkaData(state: AgentStateType): {
 function getAwsFindings(state: AgentStateType): AwsFindings {
 	const result = state.dataSourceResults.find((r) => r.dataSourceId === "aws");
 	if (!result || result.status !== "success") return {};
+	// SIO-1159: unscoped-fallback rows are display-only (mirrors SIO-1138 couchbase
+	// guard) -- they are NOT linked to the focus services and must not drive rules.
+	if (result.awsFindings?.unscoped) return {};
 	return result.awsFindings ?? {};
 }
 
