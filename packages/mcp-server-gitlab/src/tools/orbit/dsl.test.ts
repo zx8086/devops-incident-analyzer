@@ -140,3 +140,77 @@ describe("hasSelectiveAnchor", () => {
 		expect(hasSelectiveAnchor({ node: { entity: "Project", id_range: { start: 1 } } })).toBe(false);
 	});
 });
+
+// SIO-1151: filter-grammar contract, live-validated against Orbit format_version
+// 3.0.1 on 2026-07-19. Filters are op-AS-KEY objects; the former { op, value }
+// shape is rejected with compile_error "schema violation ... oneOf" for EVERY op
+// (eq included), and aggregation_sort is a string mirroring order_by. These
+// fixtures lock the shape so the next upstream drift fails here, not in
+// production sub-agent turns.
+describe("Orbit filter-grammar contract (SIO-1151)", () => {
+	function walkForLegacyOpShape(value: unknown, path = "$"): string[] {
+		const hits: string[] = [];
+		if (Array.isArray(value)) {
+			value.forEach((v, i) => hits.push(...walkForLegacyOpShape(v, `${path}[${i}]`)));
+			return hits;
+		}
+		if (value && typeof value === "object") {
+			const rec = value as Record<string, unknown>;
+			if ("op" in rec && "value" in rec) hits.push(path);
+			for (const [k, v] of Object.entries(rec)) hits.push(...walkForLegacyOpShape(v, `${path}.${k}`));
+		}
+		return hits;
+	}
+
+	const ALL_BUILT = [
+		buildBlastRadiusQuery({ symbol: "authenticate", groupPath: "pvhcorp" }),
+		buildCrossProjectCallersQuery({ fqn: "Gitlab::Auth::authenticate" }),
+		buildRecentDeploysQuery({ groupPath: "pvhcorp", since: "2026-07-01T00:00:00Z" }),
+		buildPipelineFailuresQuery({ groupPath: "pvhcorp", since: "2026-07-01T00:00:00Z" }),
+		buildRecentVulnerabilitiesQuery({ groupPath: "pvhcorp" }),
+		buildMrForFileQuery({ sourceFile: "src/app.ts" }),
+	];
+
+	test("no builder emits the rejected legacy { op, value } filter shape", () => {
+		for (const { queryTag, dsl } of ALL_BUILT) {
+			expect({ tag: queryTag, legacySites: walkForLegacyOpShape(dsl) }).toEqual({
+				tag: queryTag,
+				legacySites: [],
+			});
+		}
+	});
+
+	test("blast radius uses op-as-key text filters", () => {
+		const { dsl } = buildBlastRadiusQuery({ symbol: "authenticate", groupPath: "pvhcorp" });
+		const nodes = dsl.nodes as Array<{ filters?: Record<string, unknown> }>;
+		expect(nodes[0]?.filters).toEqual({ name: { token_match: "authenticate" } });
+		expect(nodes[1]?.filters).toEqual({
+			import_path: { any_tokens: "authenticate" },
+			file_path: { contains: "pvhcorp" },
+		});
+	});
+
+	test("recent deploys uses op-as-key eq/gte/starts_with filters", () => {
+		const { dsl } = buildRecentDeploysQuery({ groupPath: "pvhcorp", since: "2026-07-01T00:00:00Z" });
+		const nodes = dsl.nodes as Array<{ filters?: Record<string, unknown> }>;
+		expect(nodes[0]?.filters).toEqual({ full_path: { starts_with: "pvhcorp/" } });
+		expect(nodes[1]?.filters).toEqual({
+			state: { eq: "merged" },
+			merged_at: { gte: "2026-07-01T00:00:00Z" },
+		});
+	});
+
+	test("vulnerabilities uses op-as-key in/eq filters", () => {
+		const { dsl } = buildRecentVulnerabilitiesQuery({ groupPath: "pvhcorp" });
+		const nodes = dsl.nodes as Array<{ filters?: Record<string, unknown> }>;
+		expect(nodes[0]?.filters).toEqual({
+			severity: { in: ["critical", "high"] },
+			state: { eq: "detected" },
+		});
+	});
+
+	test("pipeline failures uses string aggregation_sort mirroring order_by", () => {
+		const { dsl } = buildPipelineFailuresQuery({ groupPath: "pvhcorp", since: "2026-07-01T00:00:00Z" });
+		expect(dsl.aggregation_sort).toBe("-failures");
+	});
+});

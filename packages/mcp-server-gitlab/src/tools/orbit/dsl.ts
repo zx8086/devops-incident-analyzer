@@ -15,6 +15,13 @@
 //  - File identity uses MergeRequestDiffFile.old_path (stable across renames).
 //  - Text-indexed props only: Definition.{fqn,name,file_path},
 //    ImportedSymbol.{file_path,import_path} -- use token_match/any_tokens there.
+//  - FILTER SHAPE (SIO-1151, live-validated against Orbit format_version 3.0.1):
+//    filters are op-AS-KEY objects -- { prop: { eq: v } }, { prop: { token_match: v } },
+//    { prop: { gte: v } }, { prop: { in: [v] } } etc. The former { prop: { op, value } }
+//    shape is REJECTED with compile_error "schema violation ... oneOf" for EVERY op.
+//    A bare value ({ prop: v }) is an implicit eq. aggregation_sort is a string
+//    ("-alias" desc / "alias" asc), same convention as order_by -- the former
+//    { column, direction } object is rejected.
 
 import type { OrbitQuery } from "../../gitlab-client/orbit.js";
 
@@ -34,7 +41,7 @@ export interface TaggedOrbitQuery {
 }
 
 const MAX_LIMIT = 1000;
-const PIPELINE_SOURCE_FILTER = { op: "eq", value: "merge_request_event" } as const;
+const PIPELINE_SOURCE_FILTER = { eq: "merge_request_event" } as const;
 
 function clampLimit(limit: number | undefined, fallback: number): number {
 	if (limit === undefined || !Number.isFinite(limit) || limit <= 0) return fallback;
@@ -88,10 +95,10 @@ export function buildBlastRadiusQuery(params: {
 	const symbol = requireSelector(params.symbol, "symbol");
 	const importFilter: Record<string, unknown> = {
 		// text-indexed on ImportedSymbol.import_path
-		import_path: { op: "any_tokens", value: symbol },
+		import_path: { any_tokens: symbol },
 	};
 	if (params.groupPath) {
-		importFilter.file_path = { op: "contains", value: params.groupPath };
+		importFilter.file_path = { contains: params.groupPath };
 	}
 	return {
 		queryTag: ORBIT_QUERY_TAGS.blastRadius,
@@ -103,7 +110,7 @@ export function buildBlastRadiusQuery(params: {
 					entity: "Definition",
 					columns: ["name", "fqn", "file_path", "definition_type", "start_line", "end_line"],
 					// text-indexed on Definition.name for selectivity
-					filters: { name: { op: "token_match", value: symbol } },
+					filters: { name: { token_match: symbol } },
 				},
 				{
 					id: "sym",
@@ -131,7 +138,7 @@ export function buildCrossProjectCallersQuery(params: { fqn: string; limit?: num
 					id: "def",
 					entity: "Definition",
 					columns: ["name", "fqn", "file_path"],
-					filters: { fqn: { op: "eq", value: fqn } },
+					filters: { fqn: { eq: fqn } },
 				},
 				{
 					id: "sym",
@@ -163,15 +170,15 @@ export function buildRecentDeploysQuery(params: {
 					id: "p",
 					entity: "Project",
 					columns: ["name", "full_path"],
-					filters: { full_path: { op: "starts_with", value: `${groupPath}/` } },
+					filters: { full_path: { starts_with: `${groupPath}/` } },
 				},
 				{
 					id: "mr",
 					entity: "MergeRequest",
 					columns: ["iid", "id", "title", "state", "merged_at", "target_branch"],
 					filters: {
-						state: { op: "eq", value: "merged" },
-						merged_at: { op: "gte", value: since },
+						state: { eq: "merged" },
+						merged_at: { gte: since },
 					},
 				},
 			],
@@ -202,16 +209,16 @@ export function buildPipelineFailuresQuery(params: {
 					id: "pl",
 					entity: "Pipeline",
 					filters: {
-						status: { op: "eq", value: "failed" },
+						status: { eq: "failed" },
 						source: PIPELINE_SOURCE_FILTER,
-						created_at: { op: "gte", value: since },
+						created_at: { gte: since },
 					},
 				},
 				{
 					id: "p",
 					entity: "Project",
 					columns: ["name", "full_path"],
-					filters: { full_path: { op: "starts_with", value: `${groupPath}/` } },
+					filters: { full_path: { starts_with: `${groupPath}/` } },
 				},
 			],
 			relationships: [{ type: "IN_PROJECT", from: "pl", to: "p" }],
@@ -220,7 +227,8 @@ export function buildPipelineFailuresQuery(params: {
 				{ kind: "property", node: "pl", property: "ref", alias: "ref" },
 			],
 			aggregations: [{ function: "count", target: "pl", alias: "failures" }],
-			aggregation_sort: { column: "failures", direction: "DESC" },
+			// SIO-1151: string form ("-alias" = desc), mirroring order_by.
+			aggregation_sort: "-failures",
 			limit: clampLimit(params.limit, 50),
 		},
 	};
@@ -241,15 +249,15 @@ export function buildRecentVulnerabilitiesQuery(params: { groupPath: string; lim
 					entity: "Vulnerability",
 					columns: ["title", "severity", "state", "report_type"],
 					filters: {
-						severity: { op: "in", value: ["critical", "high"] },
-						state: { op: "eq", value: "detected" },
+						severity: { in: ["critical", "high"] },
+						state: { eq: "detected" },
 					},
 				},
 				{
 					id: "p",
 					entity: "Project",
 					columns: ["name", "full_path"],
-					filters: { full_path: { op: "starts_with", value: `${groupPath}/` } },
+					filters: { full_path: { starts_with: `${groupPath}/` } },
 				},
 			],
 			relationships: [{ type: "IN_PROJECT", from: "v", to: "p" }],
@@ -281,14 +289,14 @@ export function buildMrForFileQuery(params: { sourceFile: string; limit?: number
 					entity: "MergeRequestDiffFile",
 					columns: ["old_path", "new_path"],
 					// old_path is stable across renames (dsl correctness rules).
-					filters: { old_path: { op: "eq", value: sourceFile } },
+					filters: { old_path: { eq: sourceFile } },
 				},
 				{ id: "d", entity: "MergeRequestDiff", columns: ["id"] },
 				{
 					id: "mr",
 					entity: "MergeRequest",
 					columns: ["id", "iid", "title", "state", "merged_at"],
-					filters: { state: { op: "eq", value: "merged" } },
+					filters: { state: { eq: "merged" } },
 				},
 			],
 			relationships: [
