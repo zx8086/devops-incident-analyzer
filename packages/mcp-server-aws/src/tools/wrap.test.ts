@@ -102,3 +102,45 @@ describe("mapAwsError retention-window handling (SIO-1078)", () => {
 		expect(mapped.advice).toBeUndefined();
 	});
 });
+
+// SIO-1161: Metrics Insights SQL errors. CloudWatch's Query protocol rejects a malformed SELECT
+// with the bare name "ValidationError"; the advice is gated on the CALLING tool name so Logs
+// Insights advice is never displaced and AWS message drift cannot silence it.
+describe("mapAwsError Metrics Insights SQL handling (SIO-1161)", () => {
+	const sqlErr = () =>
+		Object.assign(new Error("Invalid Metrics Insights query: mismatched input 'FROM'"), {
+			name: "ValidationError",
+			$fault: "client" as const,
+		});
+
+	test("ValidationError name -> bad-input (not aws-unknown)", () => {
+		expect(mapAwsError(sqlErr()).kind).toBe("bad-input");
+	});
+
+	test("from aws_cloudwatch_metrics_insights_query -> SQL-grammar advice with a copyable query", () => {
+		const mapped = mapAwsError(sqlErr(), "aws_cloudwatch_metrics_insights_query");
+		expect(mapped.kind).toBe("bad-input");
+		expect(mapped.advice).toBeDefined();
+		expect(mapped.advice).toContain("SCHEMA(");
+		expect(mapped.advice).toContain("SINGLE quotes");
+		expect(mapped.advice).toContain("SELECT MAX(CPUUtilization)");
+	});
+
+	test("the same error WITHOUT the tool name gets no SQL advice", () => {
+		expect(mapAwsError(sqlErr()).advice).toBeUndefined();
+	});
+
+	test("the same error from a DIFFERENT tool gets no SQL advice", () => {
+		expect(mapAwsError(sqlErr(), "aws_cloudwatch_get_metric_data").advice).toBeUndefined();
+	});
+
+	// Regression: threading toolName must not displace the Logs Insights advice branches.
+	test("MalformedQueryException from aws_logs_start_query keeps its dual-mode advice", () => {
+		const err = Object.assign(new Error("MalformedQueryException: the query could not be executed"), {
+			name: "MalformedQueryException",
+		});
+		const mapped = mapAwsError(err, "aws_logs_start_query");
+		expect(mapped.advice).toContain('startRelative:"now-30d"');
+		expect(mapped.advice).toContain("SYNTAX");
+	});
+});

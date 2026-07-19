@@ -44,7 +44,10 @@ const RETENTION_WINDOW_PATTERN = /end date and time is either before the log gro
 const QUERY_SYNTAX_PATTERN =
 	/invalid syntax|unexpected symbol|unexpected token|unknown function|parse error|query definition snippets/i;
 
-export function mapAwsError(err: unknown): ToolError {
+// SIO-1161: toolName lets bad-input advice be gated on the CALLING tool deterministically
+// (immune to AWS message-text drift) -- currently used to attach Metrics Insights SQL-grammar
+// advice only when the error came from aws_cloudwatch_metrics_insights_query.
+export function mapAwsError(err: unknown, toolName?: string): ToolError {
 	if (!isAwsError(err)) {
 		return { kind: "aws-unknown", awsErrorMessage: String(err) };
 	}
@@ -89,6 +92,10 @@ export function mapAwsError(err: unknown): ToolError {
 			kind = "bad-input";
 			break;
 		case "ValidationException":
+		// SIO-1161: CloudWatch (Query protocol) rejects a malformed Metrics Insights SELECT with
+		// the bare name "ValidationError" (not ValidationException); previously it only classified
+		// via the SIO-1087 $fault/4xx fallback.
+		case "ValidationError":
 		case "InvalidParameterValue":
 		case "InvalidParameterException":
 			kind = "bad-input";
@@ -160,6 +167,13 @@ export function mapAwsError(err: unknown): ToolError {
 		// the window is already recent, fixes the query syntax -- rather than looping on one.
 		toolError.advice =
 			'MalformedQueryException has two causes; try them in order. (1) WINDOW: the requested time range may be outside the log group\'s retention/creation. Re-issue with the drift-proof relative window startRelative:"now-30d" (do NOT compute absolute epochs); call aws_logs_describe_log_groups for retentionInDays/creationTime if needed. (2) SYNTAX: if the window is already recent and it still fails, this is a queryString syntax error -- simplify to `fields @timestamp, @message | limit 20` and filter client-side. Do not re-issue the identical failed query; only conclude the logs are unavailable after BOTH a recent relative window AND a minimal query have failed.';
+	} else if (kind === "bad-input" && toolName === "aws_cloudwatch_metrics_insights_query") {
+		// SIO-1161: a rejected Metrics Insights SELECT. Gated on the calling tool name (not message
+		// text) so Logs Insights MalformedQueryException advice above is never displaced and AWS
+		// message drift cannot silence it. Hand the LLM the grammar plus a known-good query to copy
+		// so it fixes the SQL instead of re-anchoring windows or retrying verbatim.
+		toolError.advice =
+			'This is a Metrics Insights SQL error in `query`. Grammar: SELECT FUNC(MetricName) FROM "Namespace" | SCHEMA("Namespace", DimKey1, ...) [WHERE DimKey = \'value\' AND DimKey2 = \'v2\'] [GROUP BY DimKey] [ORDER BY FUNC() DESC|ASC] [LIMIT n] (n <= 500; FUNC is AVG|COUNT|MAX|MIN|SUM). String values use SINGLE quotes; WHERE supports ONLY = != AND (no OR/LIKE/IN); max lookback is 14 days. Copy this known-good query and substitute: SELECT MAX(CPUUtilization) FROM SCHEMA("AWS/EC2", InstanceId) GROUP BY InstanceId ORDER BY MAX() DESC LIMIT 10';
 	}
 
 	return toolError;
@@ -252,7 +266,7 @@ export function wrapListTool<TResponse, TParams>(
 		try {
 			response = await args.fn(params);
 		} catch (err) {
-			const mapped = mapAwsError(err);
+			const mapped = mapAwsError(err, args.name);
 			logError(args.name, err, mapped, Date.now() - start);
 			return { _error: mapped };
 		}
@@ -326,7 +340,7 @@ export function wrapBlobTool<TResponse, TParams>(
 		try {
 			response = await args.fn(params);
 		} catch (err) {
-			const mapped = mapAwsError(err);
+			const mapped = mapAwsError(err, args.name);
 			logError(args.name, err, mapped, Date.now() - start);
 			return { _error: mapped };
 		}

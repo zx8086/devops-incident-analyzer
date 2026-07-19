@@ -65,6 +65,7 @@ tool_mapping:
       - aws_cloudwatch_describe_alarms
     cloudwatch_metrics:
       - aws_cloudwatch_get_metric_data
+      - aws_cloudwatch_metrics_insights_query
     ecs_state:
       - aws_ecs_list_clusters
       - aws_ecs_list_services
@@ -92,6 +93,7 @@ tool_mapping:
       - aws_lambda_get_function_configuration
     logs_insights:
       - aws_logs_describe_log_groups
+      - aws_logs_get_log_group_fields
       - aws_logs_start_query
       - aws_logs_get_query_results
     health_events:
@@ -136,7 +138,11 @@ tool_mapping:
       - aws_list_estates
   action_descriptions:
     cloudwatch_alarms: when triaging which CloudWatch alarms are in ALARM/INSUFFICIENT_DATA state for an estate or service
-    cloudwatch_metrics: when pulling time-series metric data (CPU, memory, latency, error count) to confirm or quantify a degradation
+    cloudwatch_metrics: >-
+      when pulling time-series metric data (CPU, memory, latency, error count) to confirm or
+      quantify a degradation -- or, when the noisy resource is UNKNOWN, running a Metrics Insights
+      SQL top-N query (top-10 by CPU / errors / queue depth) across a whole namespace without
+      enumerating instance/function/queue ids first
     ecs_state: when an ECS service is unhealthy -- task counts, stopped-task reasons (CannotPullContainerError, OOM), service events, or task-definition config
     ec2_state: >-
       when investigating EC2 instance health, instance state/type, security-group rules, or VPC
@@ -162,6 +168,15 @@ tool_mapping:
       - alarm state
       - in alarm
       - triage alarms
+    cloudwatch_metrics:
+      - noisiest
+      - top 10
+      - top n
+      - metrics insights
+      - fleet-wide
+      - most cpu
+      - most errors
+      - highest latency
     logs_insights:
       - log insights
       - logs insights

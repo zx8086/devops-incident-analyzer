@@ -10,6 +10,7 @@ import { getTrailStatusSchema } from "../tools/cloudtrail/get-trail-status.ts";
 import { listTrailsSchema } from "../tools/cloudtrail/list-trails.ts";
 import { describeAlarmsSchema } from "../tools/cloudwatch/describe-alarms.ts";
 import { getMetricDataSchema } from "../tools/cloudwatch/get-metric-data.ts";
+import { metricsInsightsQuerySchema } from "../tools/cloudwatch/metrics-insights-query.ts";
 import { describeConfigRulesSchema } from "../tools/config/describe-config-rules.ts";
 import { getDiscoveredResourceCountsSchema } from "../tools/config/get-discovered-resource-counts.ts";
 import { listDiscoveredResourcesSchema } from "../tools/config/list-discovered-resources.ts";
@@ -42,6 +43,7 @@ import { describeEventsSchema } from "../tools/health/describe-events.ts";
 import { getFunctionConfigurationSchema } from "../tools/lambda/get-function-configuration.ts";
 import { listFunctionsSchema } from "../tools/lambda/list-functions.ts";
 import { describeLogGroupsSchema } from "../tools/logs/describe-log-groups.ts";
+import { getLogGroupFieldsSchema } from "../tools/logs/get-log-group-fields.ts";
 import { getQueryResultsSchema } from "../tools/logs/get-query-results.ts";
 import { startQuerySchema } from "../tools/logs/start-query.ts";
 import { describeRuleSchema } from "../tools/messaging/eventbridge/describe-rule.ts";
@@ -257,6 +259,17 @@ describe("cloudwatch tool param schemas", () => {
 	test("describeAlarms rejects non-array AlarmNames", () => {
 		expect(describeAlarmsSchema.safeParse({ AlarmNames: "my-alarm" }).success).toBe(false);
 	});
+	test("metricsInsightsQuery accepts a bare SQL query (SIO-1161)", () => {
+		expect(
+			metricsInsightsQuerySchema.safeParse({
+				query:
+					'SELECT SUM(Errors) FROM SCHEMA("AWS/Lambda", FunctionName) GROUP BY FunctionName ORDER BY SUM() DESC LIMIT 10',
+			}).success,
+		).toBe(true);
+	});
+	test("metricsInsightsQuery rejects a sub-60s period", () => {
+		expect(metricsInsightsQuerySchema.safeParse({ query: "SELECT AVG(x) FROM y", period: 30 }).success).toBe(false);
+	});
 });
 
 describe("logs tool param schemas", () => {
@@ -291,6 +304,17 @@ describe("logs tool param schemas", () => {
 	});
 	test("getQueryResults rejects missing queryId", () => {
 		expect(getQueryResultsSchema.safeParse({}).success).toBe(false);
+	});
+	test("getLogGroupFields accepts a log group name (SIO-1161)", () => {
+		expect(getLogGroupFieldsSchema.safeParse({ logGroupName: "/ecs/prod/orders" }).success).toBe(true);
+	});
+	test("getLogGroupFields rejects a missing logGroupName", () => {
+		expect(getLogGroupFieldsSchema.safeParse({ atRelative: "now-1h" }).success).toBe(false);
+	});
+	test("getLogGroupFields rejects a malformed atRelative token", () => {
+		expect(
+			getLogGroupFieldsSchema.safeParse({ logGroupName: "/ecs/prod/orders", atRelative: "yesterday" }).success,
+		).toBe(false);
 	});
 });
 

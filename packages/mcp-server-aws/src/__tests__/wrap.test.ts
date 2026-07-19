@@ -152,6 +152,26 @@ describe("wrapListTool", () => {
 		expect(result._error.action).toBe("rds:DescribeDBInstances");
 	});
 
+	// SIO-1161: the wrapper threads its tool name into mapAwsError, so a rejected Metrics
+	// Insights SELECT surfaces the SQL-grammar advice end-to-end.
+	test("threads the tool name so a ValidationError from the Metrics Insights tool gets SQL advice", async () => {
+		const err = Object.assign(new Error("Invalid Metrics Insights query: mismatched input 'FROM'"), {
+			name: "ValidationError",
+			$fault: "client" as const,
+			$metadata: { httpStatusCode: 400 },
+		});
+		const wrapped = wrapListTool({
+			name: "aws_cloudwatch_metrics_insights_query",
+			listField: "MetricDataResults",
+			fn: async () => {
+				throw err;
+			},
+		});
+		const result = (await wrapped({})) as { _error: { kind: string; advice?: string } };
+		expect(result._error.kind).toBe("bad-input");
+		expect(result._error.advice).toContain("SCHEMA(");
+	});
+
 	// SIO-841: the security-findings projection (Id/Severity/Type) must survive truncation
 	// so the model still sees complete severity coverage when the heavy Findings[] is sliced.
 	test("preserves a complete findings severity projection in _summary when truncating", async () => {

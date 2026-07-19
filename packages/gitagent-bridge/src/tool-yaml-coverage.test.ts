@@ -233,3 +233,43 @@ describe("couchbase-health.yaml query-diagnosis chaining coverage (SIO-1137)", (
 		expect(getAllActionToolNames(couchbase).length).toBe(29);
 	});
 });
+
+// SIO-1161: the Metrics Insights + log-group-fields tools must be wired into the aws-introspect
+// action map (the belt filter only surfaces tools named there), and the new cloudwatch_metrics
+// keyword block must validate against the action map (types.ts superRefine).
+describe("aws-introspect.yaml SIO-1161 coverage", () => {
+	test("cloudwatch_metrics maps to both the MetricStat and the Metrics Insights tools", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const aws = agent.tools.find((t) => t.name === "aws-introspect");
+		expect(aws).toBeDefined();
+		if (!aws) return;
+		const map = aws.tool_mapping?.action_tool_map;
+		expect(map).toBeDefined();
+		if (!map) return;
+		expect(map.cloudwatch_metrics).toEqual(["aws_cloudwatch_get_metric_data", "aws_cloudwatch_metrics_insights_query"]);
+	});
+
+	test("logs_insights includes the field-discovery tool alongside the query trio", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const aws = agent.tools.find((t) => t.name === "aws-introspect");
+		expect(aws).toBeDefined();
+		if (!aws) return;
+		expect(aws.tool_mapping?.action_tool_map?.logs_insights).toEqual([
+			"aws_logs_describe_log_groups",
+			"aws_logs_get_log_group_fields",
+			"aws_logs_start_query",
+			"aws_logs_get_query_results",
+		]);
+	});
+
+	test("cloudwatch_metrics has fleet-triage keywords for the deterministic augmenter", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const aws = agent.tools.find((t) => t.name === "aws-introspect");
+		expect(aws).toBeDefined();
+		if (!aws) return;
+		const keywords = aws.tool_mapping?.action_keywords?.cloudwatch_metrics ?? [];
+		expect(keywords).toContain("noisiest");
+		expect(keywords).toContain("top 10");
+		expect(keywords).toContain("metrics insights");
+	});
+});

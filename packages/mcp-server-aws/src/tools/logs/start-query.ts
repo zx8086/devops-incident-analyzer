@@ -27,7 +27,9 @@ export const startQueryObjectSchema = z.object({
 		.string()
 		.min(1)
 		.describe(
-			"CloudWatch Logs Insights query string. Commands are chained with `|`. Known-good example to find a service's errors: `fields @timestamp, @message | filter @message like /THE1/ | sort @timestamp desc | limit 20`. Use `filter @message like /regex/` for text matching. A MalformedQueryException about syntax/'unexpected symbol' is a SYNTAX error -- simplify to `fields @timestamp, @message | limit 20`.",
+			"CloudWatch Logs Insights query string. Commands are chained with `|`. Known-good example to find a service's errors: `fields @timestamp, @message | filter @message like /THE1/ | sort @timestamp desc | limit 20`. Use `filter @message like /regex/` for text matching. " +
+				"Also useful: error-pattern clustering `filter @message like /(?i)(error|exception|fail)/ | pattern @message` (groups similar errors -- what KINDS are failing) and error timeline `filter @message like /(?i)error/ | stats count(*) as errors by bin(5m)` (WHEN it started). " +
+				"`pattern`/`diff` are unsupported on Infrequent Access log-class groups -- on such an error fall back to the stats-by-bin query, do NOT re-anchor the window. A MalformedQueryException about syntax/'unexpected symbol' is a SYNTAX error -- simplify to `fields @timestamp, @message | limit 20`.",
 		),
 	startRelative: z
 		.string()
