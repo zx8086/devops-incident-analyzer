@@ -15,8 +15,18 @@ describe("cqlIssueTypeRejection", () => {
 		expect(rejection?._error.advice).toContain("blogpost");
 	});
 
-	test("rejects compact and IN-clause variants case-insensitively", () => {
-		for (const cql of ["type=issue", "TYPE = Issue", 'type IN (issue, page) AND space = "OPS"', "type = issues"]) {
+	test("rejects compact, quoted, and IN-clause variants case-insensitively", () => {
+		for (const cql of [
+			"type=issue",
+			"TYPE = Issue",
+			'type = "issue"',
+			"type = 'issue'",
+			'type IN (issue, page) AND space = "OPS"',
+			// issue NOT first in the IN list (regression: substring regex missed it)
+			"type IN (page, issue)",
+			'type IN ("page", "issue")',
+			"type = issues",
+		]) {
 			expect(cqlIssueTypeRejection("searchConfluenceUsingCql", { cql })).not.toBeNull();
 		}
 	});
@@ -28,6 +38,10 @@ describe("cqlIssueTypeRejection", () => {
 			'type IN (page, attachment) AND space = "OPS"',
 			// "issue" as free text, not a type value
 			'text ~ "issue with sync" AND type = page',
+			// the whole predicate inside quoted search text is NOT a type clause
+			// (regression: substring regex false-fired on this)
+			'text ~ "type = issue"',
+			'text ~ "type IN (page, issue)" AND type = page',
 		]) {
 			expect(cqlIssueTypeRejection("searchConfluenceUsingCql", { cql })).toBeNull();
 		}

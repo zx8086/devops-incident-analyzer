@@ -45,6 +45,9 @@ const ListDlqTopicsRowSchema = z.object({
 	recentDelta: z.number().nullable(),
 });
 
+// SIO-1159: kafka_list_dlq_topics now returns { topics, matched, sampleFailed, note? }.
+const ListDlqTopicsWrapperSchema = z.object({ topics: z.array(z.unknown()) });
+
 // SIO-1149: fallback DLQ derivation for when kafka_list_dlq_topics fails/times out and
 // the sub-agent inspects a DLQ topic directly (the localcore run: 113k-message DLQ,
 // dlqTopics:0). Shapes from mcp-server-kafka kafka-service.ts: kafka_describe_topic
@@ -215,11 +218,8 @@ export function extractKafkaFindings(outputs: ToolOutput[], focusServices: strin
 		} else if (o.toolName === "kafka_list_dlq_topics") {
 			// SIO-1159: the tool now returns { topics, matched, sampleFailed, note? };
 			// bare arrays are the pre-SIO-1159 live shape (AgentCore lags the repo).
-			const rows = Array.isArray(o.rawJson)
-				? o.rawJson
-				: typeof o.rawJson === "object" && o.rawJson && "topics" in o.rawJson && Array.isArray(o.rawJson.topics)
-					? o.rawJson.topics
-					: [];
+			const wrapper = ListDlqTopicsWrapperSchema.safeParse(o.rawJson);
+			const rows = Array.isArray(o.rawJson) ? o.rawJson : wrapper.success ? wrapper.data.topics : [];
 			for (const t of rows) {
 				const parsed = ListDlqTopicsRowSchema.safeParse(t);
 				if (parsed.success) dlqTopics.push(parsed.data);

@@ -558,7 +558,7 @@ describe("SIO-1159 DLQ diagnostics wrapper", () => {
 		expect(result.note).toContain('"variant"');
 	});
 
-	test("sample failure is surfaced: matched 2, sampleFailed 1, note says the topic EXISTS", async () => {
+	test("sample failure is surfaced: matched 2, sampleFailed 1 with the failed topic NAMED", async () => {
 		const totals = new Map([
 			["topic-a-dlq", 50],
 			["topic-b-dlq", 80],
@@ -570,12 +570,14 @@ describe("SIO-1159 DLQ diagnostics wrapper", () => {
 
 		expect(result.matched).toBe(2);
 		expect(result.sampleFailed).toBe(1);
+		expect(result.sampleFailedTopics).toEqual(["topic-a-dlq"]);
 		expect(result.topics.map((t) => t.name)).toEqual(["topic-b-dlq"]);
 		expect(result.note).toContain("1 of 2 DLQ-named topics were omitted");
 		expect(result.note).toContain("EXIST");
+		expect(result.note).toContain("sampleFailedTopics");
 	});
 
-	test("healthy result carries counts and no note", async () => {
+	test("healthy result carries counts, no note, no sampleFailedTopics", async () => {
 		const { manager } = buildClientManager({
 			topicNames: ["orders-dlq"],
 			totalMessagesForTopic: () => 5,
@@ -586,6 +588,7 @@ describe("SIO-1159 DLQ diagnostics wrapper", () => {
 
 		expect(result.matched).toBe(1);
 		expect(result.sampleFailed).toBe(0);
+		expect(result.sampleFailedTopics).toBeUndefined();
 		expect(result.note).toBeUndefined();
 	});
 });

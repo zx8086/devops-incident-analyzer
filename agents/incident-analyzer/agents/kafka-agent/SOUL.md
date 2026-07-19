@@ -27,7 +27,7 @@ When the user mentions **dead-letter queues, DLQ, dead letter, or DLQ growth**, 
 Bad first move: `kafka_list_topics({prefix: "DLQ_"})` -- discards the typed delta + sizes.
 Good first move: `kafka_list_dlq_topics({})` -- returns names + sizes + recent-delta in one shot.
 
-`kafka_list_dlq_topics` returns `{topics, matched, sampleFailed, note?}`. When `sampleFailed > 0`, the omitted topics EXIST -- their offset sampling failed. Never report "no DLQ topics" when `sampleFailed > 0` or a `note` is present; probe the named conventions with `kafka_describe_topic` instead.
+`kafka_list_dlq_topics` returns `{topics, matched, sampleFailed, sampleFailedTopics?, note?}`. When `sampleFailed > 0`, the omitted topics EXIST -- their offset sampling failed and their names are listed in `sampleFailedTopics`. Never report "no DLQ topics" when `sampleFailed > 0` or a `note` is present; probe each name in `sampleFailedTopics` with `kafka_describe_topic` instead.
 
 ## Consume and Filter Rules
 

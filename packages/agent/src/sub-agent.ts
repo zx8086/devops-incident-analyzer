@@ -370,11 +370,41 @@ const RETENTION_WINDOW_ERROR_RE = /end date and time is either before the log gr
 // Distinct from extractAwsError: AWS keeps its own reader for the retention-message special-case.
 // SIO-1159: brace-balanced extraction of the {"_error":...} object embedded inside a
 // wrapper string. Tracks JSON string literals and escapes so braces inside messages
-// don't derail the scan. Returns the parsed object or null.
+// don't derail the scan. The forward depth-at-position pass finds the brace that
+// actually ENCLOSES the "_error" anchor -- a plain lastIndexOf("{") would land on a
+// preceding SIBLING key's nested object (e.g. {"meta":{...},"_error":{...}}) and
+// silently lose the envelope. Returns the parsed object or null.
 function extractEmbeddedErrorObject(raw: string): unknown {
 	const anchor = raw.indexOf('"_error"');
 	if (anchor === -1) return null;
-	const start = raw.lastIndexOf("{", anchor);
+	const depths: number[] = new Array(raw.length);
+	{
+		let d = 0;
+		let inStr = false;
+		let esc = false;
+		for (let i = 0; i < raw.length; i++) {
+			depths[i] = d;
+			const c = raw[i];
+			if (inStr) {
+				if (esc) esc = false;
+				else if (c === "\\") esc = true;
+				else if (c === '"') inStr = false;
+				continue;
+			}
+			if (c === '"') inStr = true;
+			else if (c === "{") d += 1;
+			else if (c === "}") d -= 1;
+		}
+	}
+	const anchorDepth = depths[anchor];
+	if (anchorDepth === undefined || anchorDepth < 1) return null;
+	let start = -1;
+	for (let i = anchor; i >= 0; i--) {
+		if (raw[i] === "{" && depths[i] === anchorDepth - 1) {
+			start = i;
+			break;
+		}
+	}
 	if (start === -1) return null;
 	let depth = 0;
 	let inString = false;

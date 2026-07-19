@@ -249,6 +249,9 @@ export interface ListDlqTopicsResult {
 	matched: number;
 	// Matched names omitted from `topics` because offset sampling failed for them.
 	sampleFailed: number;
+	// The omitted names themselves, so callers can run the per-topic
+	// kafka_describe_topic recovery without re-deriving the candidate set.
+	sampleFailedTopics?: string[];
 	note?: string;
 }
 
@@ -467,7 +470,7 @@ export class KafkaService {
 					totalMessages: firstSample.get(name) as number,
 					recentDelta: null,
 				}));
-			return this.buildDlqResult(topics, dlqNames.length);
+			return this.buildDlqResult(topics, dlqNames, firstSample);
 		}
 
 		const windowMs = options?.windowMs ?? DEFAULT_DLQ_DELTA_WINDOW_MS;
@@ -486,23 +489,28 @@ export class KafkaService {
 				const recentDelta = second !== undefined ? second - first : null;
 				return { name, totalMessages: first, recentDelta };
 			});
-		return this.buildDlqResult(topics, dlqNames.length);
+		return this.buildDlqResult(topics, dlqNames, firstSample);
 	}
 
-	private buildDlqResult(topics: DlqTopic[], matched: number): ListDlqTopicsResult {
-		const sampleFailed = matched - topics.length;
+	private buildDlqResult(
+		topics: DlqTopic[],
+		dlqNames: string[],
+		firstSample: Map<string, number>,
+	): ListDlqTopicsResult {
+		const matched = dlqNames.length;
+		const sampleFailedTopics = dlqNames.filter((name) => !firstSample.has(name));
+		const sampleFailed = sampleFailedTopics.length;
 		return {
 			topics,
 			matched,
 			sampleFailed,
 			...(sampleFailed > 0 && {
+				sampleFailedTopics,
 				note:
 					`${sampleFailed} of ${matched} DLQ-named topics were omitted because offset sampling failed; ` +
-					"the omitted topics EXIST but their message counts are unknown. " +
-					(topics.length === 0
-						? "An empty topics list here does NOT mean no DLQs exist -- retry, or probe specific topics with kafka_describe_topic. "
-						: "") +
-					"Probe individual topics with kafka_describe_topic if their counts matter.",
+					"the omitted topics EXIST (named in sampleFailedTopics) but their message counts are unknown. " +
+					(topics.length === 0 ? "An empty topics list here does NOT mean no DLQs exist. " : "") +
+					"Probe each name in sampleFailedTopics with kafka_describe_topic.",
 			}),
 		};
 	}

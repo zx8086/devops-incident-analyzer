@@ -572,6 +572,19 @@ describe("extractToolErrors SIO-1159 wrapped envelope extraction", () => {
 		expect(errors).toHaveLength(1);
 		expect(errors[0]?.category).toBe("unknown");
 	});
+
+	test("a sibling object key BEFORE _error still resolves the enclosing envelope", () => {
+		// A backward nearest-"{" heuristic would land on {"ts":123} and lose the
+		// envelope; the depth-tracking scan must find the enclosing object instead.
+		const wrapped =
+			"Error: MCP tool 't' on server 's' returned an error: " +
+			'{"meta":{"ts":123},"_error":{"kind":"no-index","message":"planning failure","category":"no-data"}}' +
+			"\n Please fix your mistakes.";
+		const errors = extractToolErrors([toolMsg(wrapped, "capella_run_sql_plus_plus_query", "error")]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.category).toBe("no-data");
+		expect(errors[0]?.kind).toBe("no-index");
+	});
 });
 
 // SIO-1159: the persistence path must apply the same typed-finding exemption as the

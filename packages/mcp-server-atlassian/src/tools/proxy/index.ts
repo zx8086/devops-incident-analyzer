@@ -15,9 +15,52 @@ const TOOL_PREFIX = "atlassian_";
 
 // SIO-1159: CQL's `type` field accepts only content types; LLM callers point it at
 // Jira with `type = issue` and get an opaque upstream 400 (run 270378e0). Reject it
-// up front with a structured bad-input envelope steering to the JQL tool. Matches
-// `type = issue` / `type=issue` / `type IN (issue, ...)` case-insensitively.
-const CQL_ISSUE_TYPE_RE = /\btype\s*(?:=|in\s*\()\s*["']?issues?\b/i;
+// up front with a structured bad-input envelope steering to the JQL tool. Handles
+// `type = issue`, `type = "issue"`, and `issue` anywhere inside `type IN (...)`,
+// case-insensitively -- while ignoring occurrences inside quoted search text
+// (e.g. `text ~ "type = issue"` is valid CQL and must pass through).
+const CQL_TYPE_EQ_RE = /\btype\s*=\s*(?:"([^"]*)"|'([^']*)'|([\w-]+))/gi;
+const CQL_TYPE_IN_RE = /\btype\s+in\s*\(([^)]*)\)/gi;
+
+function quotedRanges(s: string): Array<[number, number]> {
+	const ranges: Array<[number, number]> = [];
+	const re = /"[^"]*"|'[^']*'/g;
+	let m: RegExpExecArray | null = re.exec(s);
+	while (m !== null) {
+		ranges.push([m.index, m.index + m[0].length]);
+		m = re.exec(s);
+	}
+	return ranges;
+}
+
+function insideQuotes(pos: number, ranges: Array<[number, number]>): boolean {
+	return ranges.some(([start, end]) => pos > start && pos < end);
+}
+
+function isIssueValue(value: string): boolean {
+	const v = value
+		.trim()
+		.replace(/^["']|["']$/g, "")
+		.toLowerCase();
+	return v === "issue" || v === "issues";
+}
+
+function cqlTargetsIssueType(cql: string): boolean {
+	const ranges = quotedRanges(cql);
+	CQL_TYPE_EQ_RE.lastIndex = 0;
+	let m: RegExpExecArray | null = CQL_TYPE_EQ_RE.exec(cql);
+	while (m !== null) {
+		if (!insideQuotes(m.index, ranges) && isIssueValue(m[1] ?? m[2] ?? m[3] ?? "")) return true;
+		m = CQL_TYPE_EQ_RE.exec(cql);
+	}
+	CQL_TYPE_IN_RE.lastIndex = 0;
+	m = CQL_TYPE_IN_RE.exec(cql);
+	while (m !== null) {
+		if (!insideQuotes(m.index, ranges) && (m[1] ?? "").split(",").some(isIssueValue)) return true;
+		m = CQL_TYPE_IN_RE.exec(cql);
+	}
+	return false;
+}
 
 // Exported for tests. Returns the rejection envelope when the cql arg targets Jira
 // issues, null otherwise.
@@ -27,7 +70,7 @@ export function cqlIssueTypeRejection(
 ): ReturnType<typeof buildToolErrorEnvelope> | null {
 	if (toolName !== "searchConfluenceUsingCql") return null;
 	const cql = args.cql;
-	if (typeof cql !== "string" || !CQL_ISSUE_TYPE_RE.test(cql)) return null;
+	if (typeof cql !== "string" || !cqlTargetsIssueType(cql)) return null;
 	return buildToolErrorEnvelope({
 		kind: "bad-input",
 		message: "CQL rejected before upstream: 'type = issue' is not a valid Confluence content type.",
