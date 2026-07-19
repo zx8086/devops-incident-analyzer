@@ -17,6 +17,11 @@ export const getLogGroupFieldsSchema = z.object({
 		.describe("Exact log group name (resolve it first via aws_logs_describe_log_groups; never guess)."),
 	atRelative: z
 		.string()
+		// Reject a malformed token at the schema layer -- omitting `time` on a bad token would
+		// silently search the most recent 15 minutes instead of the requested incident window.
+		.refine((value) => parseRelative(value, 0) !== null, {
+			message: 'Use "now" or "now-<n><unit>" where unit is s/m/h/d/w (e.g. "now-1h").',
+		})
 		.optional()
 		.describe(
 			'Center of the ~16-minute discovery window, RELATIVE to now (e.g. "now-1h"). Format "now" or "now-<n><unit>", unit s/m/h/d/w. Omit to search the most recent 15 minutes.',

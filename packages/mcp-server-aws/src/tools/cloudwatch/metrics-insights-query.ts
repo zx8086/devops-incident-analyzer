@@ -11,10 +11,24 @@ import { wrapListTool } from "../wrap.ts";
 // flat-schema tool rather than a MetricDataQueries record on aws_cloudwatch_get_metric_data: the
 // Haiku sub-agent composes `{query, period, startRelative}` reliably but not a nested query-object
 // array, and a distinct tool name lets mapAwsError gate SQL-grammar advice deterministically.
+// Reject a malformed relative token at the SCHEMA layer (clear per-field error) instead of
+// silently substituting a default window -- a wrong-window result reads as a false incident
+// conclusion. parseRelative is pure, so probing it with nowSeconds=0 is a validity check.
+const RELATIVE_TOKEN_MESSAGE = 'Use "now" or "now-<n><unit>" where unit is s/m/h/d/w (e.g. "now-3h").';
+const relativeToken = (describeText: string) =>
+	z
+		.string()
+		.refine((value) => parseRelative(value, 0) !== null, { message: RELATIVE_TOKEN_MESSAGE })
+		.optional()
+		.describe(describeText);
+
 export const metricsInsightsQuerySchema = z.object({
 	query: z
 		.string()
+		.trim()
 		.min(1)
+		// GetMetricData caps Expression at 2,048 characters; reject before AWS does.
+		.max(2_048)
 		.describe(
 			'Metrics Insights SQL query (ONE per call). Copy-paste template: SELECT MAX(CPUUtilization) FROM SCHEMA("AWS/EC2", InstanceId) GROUP BY InstanceId ORDER BY MAX() DESC LIMIT 10. ' +
 				'Grammar: SELECT FUNC(MetricName) FROM "Namespace" | SCHEMA("Namespace", DimKey1, ...) [WHERE DimKey = \'value\' AND ...] [GROUP BY DimKey] [ORDER BY FUNC() DESC|ASC] [LIMIT n] (n <= 500; FUNC is AVG|COUNT|MAX|MIN|SUM). ' +
@@ -27,13 +41,10 @@ export const metricsInsightsQuerySchema = z.object({
 		.max(86_400)
 		.optional()
 		.describe("Aggregation period in seconds (default 300; minimum 60 -- Metrics Insights granularity floor)."),
-	startRelative: z
-		.string()
-		.optional()
-		.describe(
-			'Window start, RELATIVE to now (default "now-3h"). Format "now" or "now-<n><unit>", unit s/m/h/d/w. Metrics Insights max lookback is 14 days ("now-14d"); older data is not queryable via SQL.',
-		),
-	endRelative: z.string().optional().describe('Window end, RELATIVE to now (default "now"). Same format.'),
+	startRelative: relativeToken(
+		'Window start, RELATIVE to now (default "now-3h"). Format "now" or "now-<n><unit>", unit s/m/h/d/w. Metrics Insights max lookback is 14 days ("now-14d"); older data is not queryable via SQL.',
+	),
+	endRelative: relativeToken('Window end, RELATIVE to now (default "now"). Same format.'),
 });
 
 export type MetricsInsightsQueryParams = WithEstate<z.infer<typeof metricsInsightsQuerySchema>>;

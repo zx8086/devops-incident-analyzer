@@ -311,6 +311,11 @@ describe("logs tool param schemas", () => {
 	test("getLogGroupFields rejects a missing logGroupName", () => {
 		expect(getLogGroupFieldsSchema.safeParse({ atRelative: "now-1h" }).success).toBe(false);
 	});
+	test("getLogGroupFields rejects a malformed atRelative token", () => {
+		expect(
+			getLogGroupFieldsSchema.safeParse({ logGroupName: "/ecs/prod/orders", atRelative: "yesterday" }).success,
+		).toBe(false);
+	});
 });
 
 describe("xray tool param schemas", () => {

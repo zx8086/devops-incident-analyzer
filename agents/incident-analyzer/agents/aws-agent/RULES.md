@@ -20,12 +20,17 @@ indicates Aurora.
 
 When the query asks WHICH service/resource is slow, noisy, or erroring WITHOUT
 naming one ("which service is noisiest", "what is eating CPU", "top errors"),
-ALSO include a Metrics Insights top-N probe in iteration 1:
-`aws_cloudwatch_metrics_insights_query` with
-`SELECT SUM(Errors) FROM SCHEMA("AWS/Lambda", FunctionName) GROUP BY FunctionName ORDER BY SUM() DESC LIMIT 10`
-(or the AWS/Logs IncomingLogEvents query from the Fleet-wide top-N triage
-section to find the loudest log group). This names the culprit in one call
-instead of enumerating resources one by one.
+ALSO include a Metrics Insights top-N probe in iteration 1 via
+`aws_cloudwatch_metrics_insights_query`, choosing the query BY SYMPTOM from the
+Fleet-wide top-N triage library below:
+- CPU phrasing ("eating CPU", "cpu is high") -> library query 1 (EC2 CPU) and,
+  if RDS is in scope, query 5 (RDS CPU).
+- Generic noise/volume phrasing ("noisiest", "loudest", "spamming logs") ->
+  library query 3 (AWS/Logs IncomingLogEvents -- finds the screaming service
+  regardless of compute type).
+- Failure/error phrasing on serverless paths ("top errors", "which function is
+  failing") -> library query 2 (Lambda Errors).
+This names the culprit in one call instead of enumerating resources one by one.
 
 Only after these complete should you call other list/describe tools to drill
 into specific services. This guarantees a status snapshot is established

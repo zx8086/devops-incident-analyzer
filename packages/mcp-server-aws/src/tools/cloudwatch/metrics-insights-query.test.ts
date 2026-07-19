@@ -1,7 +1,4 @@
 // src/tools/cloudwatch/metrics-insights-query.test.ts
-//
-// SIO-1161: schema and pure-helper tests for the Metrics Insights SQL tool. No live SDK calls --
-// the handler is exercised end-to-end by the wrap tests and the live MCP probe.
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -10,6 +7,8 @@ import {
 	summarizeMetricsInsights,
 } from "./metrics-insights-query.ts";
 
+// SIO-1161: schema and pure-helper tests for the Metrics Insights SQL tool. No live SDK calls --
+// the handler is exercised end-to-end by the wrap tests and the live MCP probe.
 const NOW = 1_760_000_000;
 
 describe("metricsInsightsQuerySchema", () => {
@@ -38,6 +37,25 @@ describe("metricsInsightsQuerySchema", () => {
 		expect(metricsInsightsQuerySchema.safeParse({ query: "" }).success).toBe(false);
 	});
 
+	test("rejects a whitespace-only query", () => {
+		expect(metricsInsightsQuerySchema.safeParse({ query: "   " }).success).toBe(false);
+	});
+
+	test("rejects a query over the 2048-character Expression cap", () => {
+		expect(metricsInsightsQuerySchema.safeParse({ query: `SELECT AVG(x) FROM y${"!".repeat(2_048)}` }).success).toBe(
+			false,
+		);
+	});
+
+	test("rejects a malformed startRelative token at the schema layer", () => {
+		expect(
+			metricsInsightsQuerySchema.safeParse({ query: "SELECT AVG(x) FROM y", startRelative: "yesterday" }).success,
+		).toBe(false);
+		expect(metricsInsightsQuerySchema.safeParse({ query: "SELECT AVG(x) FROM y", endRelative: "3h-ago" }).success).toBe(
+			false,
+		);
+	});
+
 	test("rejects a period below the 60s Metrics Insights floor", () => {
 		expect(metricsInsightsQuerySchema.safeParse({ query: "SELECT AVG(x) FROM y", period: 30 }).success).toBe(false);
 	});
@@ -59,9 +77,8 @@ describe("resolveInsightsWindow", () => {
 		});
 	});
 
-	test("an unparseable startRelative falls back to the 3h default, not the logs 30d default", () => {
-		expect(resolveInsightsWindow({ startRelative: "yesterday" }, NOW)).toEqual({ start: NOW - 3 * 3_600, end: NOW });
-	});
+	// Malformed tokens are rejected at the schema layer (see above); the ?? fallback inside
+	// resolveInsightsWindow is defensive only and deliberately mirrors the 3h default.
 });
 
 describe("summarizeMetricsInsights", () => {
