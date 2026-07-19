@@ -28,11 +28,13 @@ import { normalize } from "@devops-agent/shared";
 import { availableAwsEstates } from "./aws-estate-router.ts";
 import { getConnectedServers, getToolsForDataSource, withAwsEstate, withElasticDeployment } from "./mcp-bridge.ts";
 import {
+	isEmptyBucketsEnvelope,
+	type KafkaConsumerGroupEntry,
 	parseApmCompositeAggPage,
 	parseAwsEcsClusterArns,
 	parseAwsEcsServices,
 	parseElasticServiceAgg,
-	parseKafkaConsumerGroups,
+	parseKafkaConsumerGroupEntries,
 	parseKafkaGroupTopics,
 	parseKonnectControlPlanes,
 	parseKonnectRoutes,
@@ -248,9 +250,15 @@ export async function collectElasticDependencies(): Promise<CollectorResult & { 
 		const { text, emptyAggs } = await runSearch(deploymentId, args);
 		if (emptyAggs) return { names: [], capped: false }; // zero-hit / missing index -> no APM data
 		const names = parseElasticServiceAgg(text);
-		// JSON parsed, not the bare `{}`, but carried no terms buckets = drift / error envelope.
-		// Fail the deployment rather than read it as authoritatively empty (would retire edges).
-		if (names.length === 0) throw new Error("unparseable apm service_names response");
+		if (names.length === 0) {
+			// SIO-1153: an index that EXISTS but has zero docs in the window renders a full
+			// envelope with empty buckets ({"svc_names":{...,"buckets":[]}}), not the bare `{}`
+			// -- the same authoritative-empty case as emptyAggs (eu-onboarding is APM-less).
+			if (isEmptyBucketsEnvelope(text)) return { names: [], capped: false };
+			// JSON parsed, not bare `{}`, no buckets at all = drift / error envelope. Fail the
+			// deployment rather than read it as authoritatively empty (would retire edges).
+			throw new Error("unparseable apm service_names response");
+		}
 		return { names, capped: serviceNamesTruncated(text) };
 	};
 	// SIO-1121: phase 2 -- composite agg over [service.name, span.destination.service.resource]
@@ -436,20 +444,32 @@ export async function collectKafkaConsumption(): Promise<CollectorResult> {
 	// broker -32603 "Listing groups failed") logs a kafka-specific message instead of the
 	// generic `topology collector failed`, making the list case as diagnosable as a describe
 	// failure. Behavior is unchanged: it still rethrows -> the source fails, no sweep.
-	let all: string[];
+	let all: KafkaConsumerGroupEntry[];
 	try {
-		all = parseKafkaConsumerGroups(
+		all = parseKafkaConsumerGroupEntries(
 			parseJsonOrThrow(normalizeToolContent(await groupsTool.invoke({})), "kafka consumer-group list"),
 		);
 	} catch (error) {
 		logger.warn({ error: msg(error) }, "kafka consumer-group list failed");
 		throw error;
 	}
+	// SIO-1153: coordination-only groups (Schema Registry protocolType "sr", Connect
+	// worker "connect") are not consumers; describing them fails/hangs at the broker and
+	// rode the 15s timeout every sweep, permanently suppressing the staleness sweep.
+	// Skip them WITHOUT penalizing `complete`. A blank/missing protocolType (an EMPTY
+	// classic group, or a provider list without the field) stays describable -- its
+	// committed offsets still yield CONSUMES_FROM edges.
+	const isDescribable = (g: KafkaConsumerGroupEntry): boolean =>
+		g.protocolType === undefined || g.protocolType === "consumer";
+	const skipped = all.filter((g) => !isDescribable(g));
+	if (skipped.length > 0) {
+		logger.info({ groups: skipped.map((g) => g.id) }, "kafka non-consumer-protocol groups skipped");
+	}
 	let complete = true;
-	let groups = all;
-	if (all.length > KAFKA_GROUP_CAP) {
-		logger.warn({ total: all.length, cap: KAFKA_GROUP_CAP }, "kafka group list exceeds describe cap; sweep skipped");
-		groups = all.slice(0, KAFKA_GROUP_CAP);
+	let groups = all.filter(isDescribable).map((g) => g.id);
+	if (groups.length > KAFKA_GROUP_CAP) {
+		logger.warn({ total: groups.length, cap: KAFKA_GROUP_CAP }, "kafka group list exceeds describe cap; sweep skipped");
+		groups = groups.slice(0, KAFKA_GROUP_CAP);
 		complete = false;
 	}
 	// SIO-1115: describe groups via a small worker pool with a per-describe timeout.
