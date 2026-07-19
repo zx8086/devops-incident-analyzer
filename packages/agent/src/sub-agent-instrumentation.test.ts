@@ -487,3 +487,39 @@ describe("SIO-1084: aws_logs_start_query loop guard", () => {
 		expect(entries.find((e) => e.event === "subagent.loop_guard_stop")).toBeDefined();
 	});
 });
+
+describe("SIO-1162: aws_logs_get_query_results invalid-queryId advice injection", () => {
+	const INVALID_ID_RESULT = JSON.stringify({
+		_error: { kind: "bad-input", category: "unknown", message: "The provided queryId = 8f33ec7e-... is invalid" },
+	});
+
+	function buildGetResultsTool(payload: string) {
+		return tool(async () => payload, {
+			name: "aws_logs_get_query_results",
+			description: "Test fixture returning a fixed get_query_results payload.",
+			schema: z.object({ queryId: z.string() }).passthrough(),
+		});
+	}
+
+	test("appends re-anchor advice to the result and preserves tool_call_id", async () => {
+		const { entries, logger } = makeLog();
+		const [wrapped] = instrumentTools([buildGetResultsTool(INVALID_ID_RESULT)], { dataSourceId: "aws", log: logger });
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+		const result = await wrapped.invoke({
+			id: "g1",
+			name: "aws_logs_get_query_results",
+			args: { queryId: "8f33ec7e-...", estate: "eu-mendix-platform-prd" },
+			type: "tool_call",
+		});
+
+		const content = result instanceof ToolMessage ? String(result.content) : String(result);
+		expect(content).toContain("Re-issue aws_logs_start_query");
+		expect(content).toContain("estate/region-scoped");
+		// the ToolMessage/AIMessage pairing Bedrock requires must survive rebuildResult
+		if (result instanceof ToolMessage) {
+			expect(result.tool_call_id).toBe("g1");
+		}
+		expect(entries.find((e) => e.event === "subagent.aws_invalid_query_id_advice")).toBeDefined();
+	});
+});

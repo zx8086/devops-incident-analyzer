@@ -97,7 +97,7 @@ apps/
 
 | Server | Port | Tools | Config |
 |--------|------|-------|--------|
-| Elasticsearch | 9080 | 112 with `EC_API_KEY` (96 cluster incl. 9 ML anomaly-detection + 16 conditional cloud/billing) | `ES_URL`, `ES_API_KEY`, multi-deployment via `ELASTIC_DEPLOYMENTS` |
+| Elasticsearch | 9080 | 112 (96 cluster incl. 9 ML anomaly-detection + 16 conditional cloud/billing on `EC_API_KEY`) | `ES_URL`, `ES_API_KEY`, multi-deployment via `ELASTIC_DEPLOYMENTS` |
 | Kafka | 9081 | 15-55 (15 base + up to 40 gated: SR + ksqlDB + Connect + REST Proxy) | `KAFKA_PROVIDER` (local/msk/confluent), `KAFKA_BROKERS` |
 | Couchbase Capella | 9082 | ~37 (SIO-1107 official Couchbase tools: buckets, INFER, EXPLAIN, Index Advisor, covering-index detectors) | `COUCHBASE_URL`, `COUCHBASE_USERNAME`, `COUCHBASE_PASSWORD` |
 | Kong Konnect | 9083 | 67+ | `KONNECT_ACCESS_TOKEN`, `KONNECT_REGION` |

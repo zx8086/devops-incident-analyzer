@@ -7,6 +7,7 @@ import { buildToolErrorEnvelope } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
+import { adviseCouchbaseError } from "../lib/adviseCouchbaseError";
 import { classifyCouchbaseError } from "../lib/classifyCouchbaseError";
 import { AppError } from "../lib/errors";
 import { runSqlPlusPlusQuery } from "../lib/runSqlPlusPlusQuery";
@@ -31,13 +32,20 @@ export const runQuery = async (params: { scope_name: string; query: string }, bu
 			{ query },
 			"Query uses full bucket.scope.collection path. When using scope context, only use the collection name in the query.",
 		);
+		// SIO-1162: emit the structured bad-query envelope (previously a plain { text } error,
+		// which the agent read as category "unknown" = degrading even though this is a trivially
+		// fixable query mistake). bad-query is degrading but ACTIONABLE, and the advice tells the
+		// agent exactly how to correct it -- so it stops re-issuing the same broken path.
+		const envelope = buildToolErrorEnvelope({
+			kind: "bad-query",
+			message:
+				"Query uses a full bucket.scope.collection path in the FROM clause. Under scope context, reference only the collection name.",
+			advice:
+				"Drop the bucket.scope prefix from the FROM clause and pass the scope via the scope_name argument. " +
+				'Example: scope_name="inventory", query="SELECT COUNT(*) FROM `airline`" (NOT FROM `bucket`.`inventory`.`airline`).',
+		});
 		return {
-			content: [
-				{
-					type: "text" as const,
-					text: "Error: Query uses full bucket.scope.collection path. When using scope context, only use the collection name in the query. For example: SELECT COUNT(*) FROM `_default`",
-				},
-			],
+			content: [{ type: "text" as const, text: JSON.stringify(envelope) }],
 			isError: true,
 		};
 	}
@@ -76,7 +84,15 @@ export const runQuery = async (params: { scope_name: string; query: string }, bu
 		// treats it as a routine discovery outcome that does NOT cap confidence, rather than a
 		// generic "unknown" tool malfunction. The human text still carries the N1QL detail.
 		const kind = classifyCouchbaseError(error);
-		const envelope = buildToolErrorEnvelope({ kind, message: `Failed to execute query: ${message}` });
+		// SIO-1162: attach copy-paste remediation so a no-index becomes a "filter on the
+		// leading key" steer and a parse failure a "fix the FROM clause" steer, instead of a
+		// silent re-issue loop. The agent reads _error.advice structurally.
+		const advice = adviseCouchbaseError(kind);
+		const envelope = buildToolErrorEnvelope({
+			kind,
+			message: `Failed to execute query: ${message}`,
+			...(advice ? { advice } : {}),
+		});
 		return {
 			content: [{ type: "text" as const, text: JSON.stringify(envelope) }],
 			isError: true,

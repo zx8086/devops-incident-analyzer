@@ -107,15 +107,16 @@ ORDER BY resultCount DESC;
 
 // SIO-667: outer WHERE goes into the /* WHERE_CLAUSES */ marker so callers
 // don't replace the inner sub-SELECT WHERE by accident.
+// SIO-1162: the inner sub-SELECT previously filtered `UPPER(statement) NOT LIKE ...`
+// against system:indexes, which has NO `statement` column (that column lives on
+// system:completed_requests -- cf. n1qlPrimaryIndexes above). Those predicates were
+// copy-pasted from a request-history query and made this statement fail to parse on
+// every run ("parsing failure / Please fix your mistakes"). total_count is just the
+// catalog size, so a bare COUNT(*) over system:indexes is both valid and correct; the
+// outer buildQuery still handles any system-namespace exclusion via /* WHERE_CLAUSES */.
 export const n1qlSystemIndexes: string = `
 SELECT
-    (SELECT
-        COUNT(*)
-    FROM system:indexes
-    WHERE UPPER(statement) NOT LIKE '% SYSTEM:%'
-    AND UPPER(statement) NOT LIKE 'INFER %'
-    AND UPPER(statement) NOT LIKE 'CREATE INDEX%'
-) AS total_count,
+    (SELECT COUNT(*) FROM system:indexes) AS total_count,
 t.*
 FROM system:indexes t /* WHERE_CLAUSES */;
 `;

@@ -682,7 +682,7 @@ The `input_schema.properties.action.enum` array in the same YAML lists all valid
 
 | Datasource | Total MCP Tools | Action Categories | Typical Filtered Set |
 |------------|----------------|-------------------|---------------------|
-| elastic | 112 with `EC_API_KEY` (96 cluster incl. 9 ML anomaly-detection + 16 cloud/billing) | 12 (search, cluster_health, node_info, index_management, shard_analysis, ingest_pipeline, template_management, alias_management, document_ops, snapshot, diagnostics, ml_monitoring) plus cloud/billing (deployment_audit, plan_history, hardware_profile_simulation, cost_attribution) | 3-15 |
+| elastic | 112 (96 cluster incl. 9 ML anomaly-detection + 16 cloud/billing on `EC_API_KEY`) | 13 (search, cluster_health, node_info, index_management, shard_analysis, ingest_pipeline, template_management, alias_management, document_ops, snapshot, diagnostics, transform_management, ml_monitoring) plus cloud/billing (cloud_deployment, billing) | 3-15 |
 | kafka | 15-55 (gated by SR/ksqlDB/Connect/REST Proxy + write/destructive flags) | 8 (consumer_lag, topic_throughput, dlq_messages, cluster_info, describe_topic, schema_registry, ksql, write_ops) | 3-10 |
 | couchbase | ~37 (SIO-1107 adopted the official Couchbase tools: buckets, INFER-based schema, EXPLAIN, Index Advisor, covering-index detectors) | 8 (system_vitals, fatal_requests, slow_queries, expensive_queries, index_analysis, node_status, document_ops, query_execution) | 3-8 |
 | konnect | 67+ | 9 (api_requests, service_config, route_config, plugin_chain, data_plane_health, certificate_status, control_plane_management, consumer_management, portal_management) | 3-12 |

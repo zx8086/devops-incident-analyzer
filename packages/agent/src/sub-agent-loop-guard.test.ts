@@ -3,13 +3,16 @@
 import { describe, expect, test } from "bun:test";
 import {
 	AWS_EMPTY_RESULTS_ADVICE,
+	AWS_INVALID_QUERY_ID_ADVICE,
 	AWS_START_QUERY_STOP_MESSAGE,
 	awsErrorKind,
 	consumeEmptyAwsResultsAdvice,
+	consumeInvalidQueryIdAdvice,
 	createLoopGuardState,
 	isDiscoveryCall,
 	isEmptyAwsQueryResults,
 	isGuardedTool,
+	isInvalidQueryIdResult,
 	isObservedTool,
 	isUnproductiveResult,
 	LOOP_GUARD_STOP_MESSAGE,
@@ -334,5 +337,49 @@ describe("SIO-1159: empty-success aws_logs_get_query_results advice", () => {
 		recordResult(state, TOOL, "", EMPTY_RESULT);
 		expect(state.awsStartQueryUnproductive).toBe(0);
 		expect(state.awsStartQueryNeedsReanchor).toBe(false);
+	});
+});
+
+describe("SIO-1162: invalid-queryId aws_logs_get_query_results advice", () => {
+	const TOOL = "aws_logs_get_query_results";
+	const INVALID_ID_RESULT = JSON.stringify({
+		_error: { kind: "bad-input", category: "unknown", message: "The provided queryId = 8f33ec7e-... is invalid" },
+	});
+	const RESOURCE_NOT_FOUND_RESULT = JSON.stringify({
+		_error: { kind: "resource-not-found", category: "not-found", message: "queryId expired" },
+	});
+	const EMPTY_RESULT = JSON.stringify({ results: [], status: "Complete" });
+	const RUNNING_RESULT = JSON.stringify({ results: [], status: "Running" });
+
+	test("detects invalid-queryId on bad-input and resource-not-found _error kinds only", () => {
+		expect(isInvalidQueryIdResult(INVALID_ID_RESULT)).toBe(true);
+		expect(isInvalidQueryIdResult(RESOURCE_NOT_FOUND_RESULT)).toBe(true);
+		expect(isInvalidQueryIdResult(EMPTY_RESULT)).toBe(false);
+		expect(isInvalidQueryIdResult(RUNNING_RESULT)).toBe(false);
+	});
+
+	test("advice fires on the FIRST invalid-id result and only once", () => {
+		const state = createLoopGuardState();
+		recordResult(state, TOOL, "", INVALID_ID_RESULT);
+		expect(consumeInvalidQueryIdAdvice(state)).toBe(AWS_INVALID_QUERY_ID_ADVICE);
+		// consumed -- a subsequent call without a new invalid id gets no advice
+		expect(consumeInvalidQueryIdAdvice(state)).toBeNull();
+	});
+
+	test("an invalid id resets the consecutive-empty counter (error is not empty-success)", () => {
+		const state = createLoopGuardState();
+		recordResult(state, TOOL, "", EMPTY_RESULT);
+		recordResult(state, TOOL, "", INVALID_ID_RESULT);
+		recordResult(state, TOOL, "", EMPTY_RESULT);
+		// only one empty since the reset -> widen advice must NOT fire
+		expect(consumeEmptyAwsResultsAdvice(state)).toBeNull();
+		// but the invalid-id advice from the middle call is still pending
+		expect(consumeInvalidQueryIdAdvice(state)).toBe(AWS_INVALID_QUERY_ID_ADVICE);
+	});
+
+	test("no invalid id -> no advice", () => {
+		const state = createLoopGuardState();
+		recordResult(state, TOOL, "", EMPTY_RESULT);
+		expect(consumeInvalidQueryIdAdvice(state)).toBeNull();
 	});
 });

@@ -101,7 +101,7 @@ The `getToolsForDataSource()` function routes datasource IDs to their correspond
 
 | DataSource ID | Server Name | MCP URL Env Var | Tool Count |
 |---------------|-------------|-----------------|------------|
-| `elastic` | `elastic-mcp` | `ELASTIC_MCP_URL` | 112 with `EC_API_KEY` (96 cluster incl. 9 ML anomaly-detection + 16 conditional cloud/billing) |
+| `elastic` | `elastic-mcp` | `ELASTIC_MCP_URL` | 112 (96 cluster incl. 9 ML anomaly-detection + 16 conditional cloud/billing on `EC_API_KEY`) |
 | `kafka` | `kafka-mcp` | `KAFKA_MCP_URL` | 15-55 (15 base + up to 40 gated SR + ksqlDB + Connect + REST Proxy) |
 | `couchbase` | `couchbase-mcp` | `CAPELLA_MCP_URL` | ~37 (official Couchbase tools, SIO-1107) |
 | `konnect` | `konnect-mcp` | `KONNECT_MCP_URL` | 15 enhanced + proxy |
@@ -205,7 +205,7 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 
 ## MCP Server Summary
 
-### Elasticsearch MCP (112 tools with `EC_API_KEY`)
+### Elasticsearch MCP (112 tools)
 
 **Purpose:** Read-only access to Elasticsearch clusters for log search, index management, cluster health, shard allocation, mapping inspection, and snapshot operations. When `EC_API_KEY` is set, also exposes Elastic Cloud organization tools (deployment topology, plan auditing, hardware-profile simulation, and billing).
 
@@ -218,7 +218,10 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 - Document operations: get, multi-get (read-only)
 - Snapshot: repository listing, snapshot status
 - Monitoring: node stats, hot threads, pending tasks
-- **Elastic Cloud + Billing (16 tools, conditional on `EC_API_KEY`)** -- registered by `registerCloudAndBillingTools` in `packages/mcp-server-elastic/src/server.ts`, e.g. `elasticsearch_cloud_list_deployments`, `elasticsearch_cloud_get_deployment`, `elasticsearch_cloud_get_plan_activity`, `elasticsearch_cloud_get_hardware_profile`, `elasticsearch_billing_get_org_costs`, `elasticsearch_billing_get_deployment_costs`, `elasticsearch_billing_get_org_charts`. All hit `https://api.elastic-cloud.com` (`/api/v1/*` for cloud, `/api/v2/*` for billing) and use the org-scoped `EC_API_KEY`, distinct from per-deployment cluster keys. (Note: the `CLOUD_BILLING_TOOLS` set in `tools/index.ts` has only 10 names — it is a `deployment`-arg exclusion filter, NOT the registrar, so it undercounts the 16 registered.)
+- **Elastic Cloud + Billing (16, conditional on `EC_API_KEY`)** -- registered by `registerCloudAndBillingTools` in `packages/mcp-server-elastic/src/server.ts`:
+  - Cloud (10): `elasticsearch_cloud_list_deployments`, `elasticsearch_cloud_get_deployment`, `elasticsearch_cloud_get_es_resource`, `elasticsearch_cloud_get_plan_activity`, `elasticsearch_cloud_get_plan_history`, `elasticsearch_cloud_get_account`, `elasticsearch_cloud_cancel_pending_plan`, `elasticsearch_cloud_list_hardware_profiles`, `elasticsearch_cloud_get_hardware_profile`, `elasticsearch_cloud_simulate_hardware_profile_change`
+  - Billing (6): `elasticsearch_billing_get_org_costs`, `elasticsearch_billing_get_deployment_costs`, `elasticsearch_billing_get_org_charts`, `elasticsearch_billing_list_instances`, `elasticsearch_billing_get_instance_items`, `elasticsearch_billing_get_instance_charts`
+  - All hit `https://api.elastic-cloud.com` and use the org-scoped `EC_API_KEY`, distinct from per-deployment cluster keys. (Note: the `CLOUD_BILLING_TOOLS` set in `tools/index.ts` has only 10 names — it is a `deployment`-arg exclusion filter, NOT the registrar, so it undercounts the 16 registered here.)
 
 **Configuration:** Multi-deployment pattern via `ELASTIC_DEPLOYMENTS=eu-cld,us-cld`. Per-deployment environment variables provide URL and API key (`ELASTIC_EU_CLD_URL`, `ELASTIC_EU_CLD_API_KEY`, etc.; hyphens become underscores). Cluster tools accept a per-call `deployment` arg with fallback chain: explicit arg -> `x-elastic-deployment` HTTP header -> `ELASTIC_DEFAULT_DEPLOYMENT` -> first ID in `ELASTIC_DEPLOYMENTS`. See `packages/mcp-server-elastic/src/tools/index.ts:302-391`.
 
