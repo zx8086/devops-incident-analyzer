@@ -269,3 +269,19 @@ describe("SIO-1155 log-gap recovery in enforceCorrelationsAggregate", () => {
 		expect(String(elasticSend?.args.correlationFetchDirective)).toContain("stock-service");
 	});
 });
+
+// SIO-1155: pendingCorrelations arrive via Send args (task input) and are not
+// persisted unless a node returns them -- correlationFetch must echo them so
+// enforceCorrelationsAggregate sees a non-empty list (a latent SIO-681 gap; the
+// aggregate silently early-returned in every production run before this).
+import type { PendingCorrelation } from "../state.ts";
+import { withPendingEcho } from "./enforce-node.ts";
+
+describe("SIO-1155 correlationFetch pending echo", () => {
+	test("echoes the Send's pendingCorrelations alongside the fetch update", () => {
+		const state = makeLogGapState() as { pendingCorrelations: PendingCorrelation[] };
+		const update = withPendingEcho(state as never, { dataSourceResults: [] });
+		expect(update.pendingCorrelations).toBe(state.pendingCorrelations);
+		expect(update.dataSourceResults).toEqual([]);
+	});
+});
