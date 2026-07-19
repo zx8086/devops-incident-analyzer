@@ -41,6 +41,15 @@ division code (THE1) -- NOT a Jira label equal to the service. So:
   runbook". A 0 from a service-token-only query is a query-construction artifact, not a
   finding.
 
+## READ the page you cite (SIO-1154)
+A search hit gives you a title, snippet, and metadata -- that is a LEAD, not evidence.
+When a Confluence page's content bears on the incident (a change record, a DB-upgrade
+note, an architecture page you plan to reference), FETCH its body with
+`atlassian_getConfluencePage` before drawing or reporting any conclusion from it. Never
+write "content was not retrieved" for a page you cite: either read it, or do not rest a
+finding on it. (The page reader is on your belt for every action -- if a fetch genuinely
+fails, report the tool error, not an unexamined citation.)
+
 ## NEVER claim a fixed project scope you did not use (READ FIRST)
 `findLinkedIncidents` / `getIncidentHistory` search whatever projects the server is
 configured with (`ATLASSIAN_INCIDENT_PROJECTS`); when that is unset they search ALL

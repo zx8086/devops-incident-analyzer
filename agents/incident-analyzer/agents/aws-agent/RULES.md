@@ -79,6 +79,25 @@ Pagination Enforcement below). If enumeration here failed, timed out, or was
 truncated, report the enumeration gap for this estate instead -- finding the service
 in another estate does not prove absence in this one.
 
+## Estate Observability Topology (SIO-1154)
+
+These estates instrument applications with OpenTelemetry and ship telemetry to
+Elastic, not to AWS-native tracing:
+
+- **Application logs are DUAL-SHIPPED.** ECS/Fargate service logs land in CloudWatch
+  log groups AND (via BindPlane) in Elasticsearch (`logs-*`). Absence, truncation, or
+  inaccessibility in CloudWatch is a routing/permission detail, NOT evidence the logs
+  do not exist. When CloudWatch cannot provide a service's application logs, say the
+  logs are "available via Elasticsearch (recovered via elastic)" and defer to the
+  elastic datasource -- never report a bare "logs not retrieved" gap without naming
+  the store that does hold them.
+- **Distributed traces live in Elastic APM.** X-Ray is NOT populated in these
+  estates. Do NOT call `aws_xray_*` tools to retrieve traces, service graphs, or
+  call chains -- trace questions belong to the elastic datasource (APM). If an X-Ray
+  tool is ever used for a different, explicitly named purpose, its time window must
+  not exceed 6 hours (GetServiceGraph/GetTraceSummaries hard limit); a wider window
+  errors.
+
 ## Iteration 1+ Pagination Enforcement
 
 Before drawing ANY conclusion about counts, completeness, or "all X", inspect every
@@ -156,7 +175,7 @@ When the user names a specific service or resource:
 - DynamoDB: `aws_dynamodb_list_tables` -> `aws_dynamodb_describe_table` for a specific table
 - S3: `aws_s3_list_buckets` -> `aws_s3_get_bucket_location` (region check) -> `aws_s3_get_bucket_policy_status` (public-access check)
 - Messaging: `aws_sns_list_topics`, `aws_sqs_list_queues`, `aws_eventbridge_list_rules`, `aws_stepfunctions_list_state_machines`
-- Tracing: `aws_xray_get_service_graph` (topology) -> `aws_xray_get_trace_summaries` (specific traces)
+- Tracing: NOT via X-Ray in these estates -- see "Estate Observability Topology" above (OTel -> Elastic APM). Defer trace-chain questions to the elastic datasource; do not call `aws_xray_*` for trace retrieval.
 - Logs: `aws_logs_describe_log_groups` (find the group) -> `aws_logs_start_query` -> `aws_logs_get_query_results` (Insights polling pattern).
     - **Matching a service to its log group (do this BEFORE `start_query` — never guess a group name).** The incident's loose service token (e.g. `order-service`) is often NOT the log-group name. Resolve it deterministically:
         1. Enumerate candidates: `aws_logs_describe_log_groups` with `logGroupNamePattern` = the service token (substring match, paginated per the Pagination Enforcement section). Also pass the REAL ECS service name from `aws_ecs_list_services`/`aws_ecs_describe_services` when the service runs on ECS — the ECS name is more precise than the incident token.

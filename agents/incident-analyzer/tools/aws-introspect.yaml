@@ -153,7 +153,11 @@ tool_mapping:
     rds_state: when a datastore-backed service is slow or erroring -- RDS instance/cluster status, engine, connection/storage state
     lambda_state: when a Lambda-backed path fails -- function list, runtime, memory/timeout config, last-update status
     logs_insights: when application or platform logs are needed -- discover log groups, run a Logs Insights query, fetch its results
-    xray_traces: when a latency or error path spans services -- the X-Ray service graph or recent trace summaries
+    xray_traces: >-
+      AVOID for distributed tracing in these estates (SIO-1154): services instrument with
+      OpenTelemetry shipping to Elastic APM, so X-Ray is NOT populated -- trace-chain questions
+      belong to the elastic datasource. Select only for a non-tracing purpose you can name,
+      and keep any window <= 6 hours (API hard limit)
     health_events: when an AWS-side event (scheduled maintenance, degradation, account notice) might explain the incident
     security_findings: when a security signal is in scope -- GuardDuty detectors/findings or Security Hub findings/standards
     storage_state: when S3, DynamoDB, or ElastiCache state is relevant -- bucket inventory/location/policy, table config, cache cluster/replication-group health
