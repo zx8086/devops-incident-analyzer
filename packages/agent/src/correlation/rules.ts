@@ -1,4 +1,5 @@
 // agent/src/correlation/rules.ts
+
 import type {
 	AwsCloudWatchAlarm,
 	AwsFindings,
@@ -8,6 +9,7 @@ import type {
 	OrbitFindings,
 	ToolError,
 } from "@devops-agent/shared";
+import { z } from "zod";
 import type { AgentName, AgentStateType } from "../state";
 import { matchesFocus } from "./focus-match.ts";
 
@@ -822,6 +824,14 @@ correlationRules.push({
 export const LOG_GAP_RULE_NAME = "cloudwatch-log-gap-needs-elastic";
 const MAX_LOG_GAP_SERVICES = 3;
 
+// CodeRabbit (PR #419): one schema for the trigger context both consumers parse
+// (the fetchDirective builder here and the recovery path in enforce-node.ts).
+export const LogGapTriggerContextSchema = z.object({
+	services: z.array(z.string()),
+	bullets: z.array(z.string()),
+});
+export type LogGapTriggerContext = z.infer<typeof LogGapTriggerContextSchema>;
+
 // Section parse mirrors the aggregator's Gaps parser (plain "## Gaps" heading is
 // pinned by the defensiveProseRule prompt contract).
 const LOG_GAP_GAPS_HEADING_RE = /^#{1,6}\s+gaps\s*$/im;
@@ -896,26 +906,30 @@ correlationRules.push({
 		if (!state.finalAnswer) return null;
 		const hits = parseLogRetrievalGaps(state.finalAnswer);
 		if (hits.length === 0) return null;
-		const uncovered = hits.filter((h) => !elasticMentionsService(state, h.service));
-		if (uncovered.length === 0) return null;
-		// Cap the fan so a gap-heavy report cannot balloon the extra round.
-		const services: string[] = [];
-		const bullets: string[] = [];
-		for (const h of uncovered) {
-			if (!services.includes(h.service)) {
-				if (services.length >= MAX_LOG_GAP_SERVICES) continue;
-				services.push(h.service);
+		// CodeRabbit (PR #419): stabilize the candidate set BEFORE coverage filtering.
+		// Capping after the filter rotates a fourth service in once the first three are
+		// fetched, leaving the rule permanently degraded and recovery incomplete. The
+		// first three distinct services (document order) are the round's fixed targets;
+		// gaps beyond the cap stay honest un-recovered bullets and still count via
+		// confirmedDegradingGapBullets.
+		const candidateServices: string[] = [];
+		for (const h of hits) {
+			if (!candidateServices.includes(h.service) && candidateServices.length < MAX_LOG_GAP_SERVICES) {
+				candidateServices.push(h.service);
 			}
-			if (!bullets.includes(h.bullet) && services.includes(h.service)) bullets.push(h.bullet);
 		}
-		return { context: { services, bullets } };
+		const candidates = hits.filter((h) => candidateServices.includes(h.service));
+		const uncovered = candidates.filter((h) => !elasticMentionsService(state, h.service));
+		if (uncovered.length === 0) return null;
+		const services = [...new Set(uncovered.map((h) => h.service))];
+		const bullets = [...new Set(uncovered.map((h) => h.bullet))];
+		return { context: { services, bullets } satisfies LogGapTriggerContext };
 	},
 	requiredAgent: "elastic-agent",
 	retry: { attempts: 1, timeoutMs: 30_000 },
 	fetchDirective: (context) => {
-		const services = Array.isArray(context.services)
-			? context.services.filter((s): s is string => typeof s === "string")
-			: [];
+		const parsed = LogGapTriggerContextSchema.safeParse(context);
+		const services = parsed.success ? parsed.data.services : [];
 		return `CORRELATION FETCH (SIO-1155): The report identified application-log gaps for: ${services.join(", ")}. These estates dual-ship ECS application logs via BindPlane into this cluster (logs-*), so retrieve them here. For EACH listed service: discover its real service.name variants (wildcard on the token), then run a wide error/log search over the incident window. Report per service: hit counts, matched indices, latest timestamps, and sample error messages/stack traces. This is a targeted fetch -- do NOT re-investigate the focus service.`;
 	},
 });

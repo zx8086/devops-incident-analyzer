@@ -380,6 +380,18 @@ Confidence: 0.87`;
 		expect((match?.context.services as string[]).length).toBe(3);
 	});
 
+	// CodeRabbit (PR #419): the candidate set is fixed BEFORE coverage filtering, so a
+	// satisfied fetch converges instead of rotating in the fourth service and degrading.
+	test("converges after the fetch covers the capped candidates, even with a fourth gap service", () => {
+		const many = `## Gaps
+- \`svc-a\` logs were not retrieved
+- \`svc-b\` logs were not retrieved
+- \`svc-c\` logs were not retrieved
+- \`svc-d\` logs were not retrieved`;
+		const covered = stateWith(many, "Targeted fetch: svc-a, svc-b, svc-c error hits reported.");
+		expect(rule.trigger(covered)).toBeNull();
+	});
+
 	test("fetchDirective names the gap services and forbids re-investigating the focus", () => {
 		const directive = rule.fetchDirective?.({ services: ["stock-service"], bullets: [] }) ?? "";
 		expect(directive).toContain("CORRELATION FETCH (SIO-1155)");

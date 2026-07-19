@@ -5,7 +5,7 @@ import { GAPS_BULLET_THRESHOLD, rewriteConfidenceInAnswer } from "../aggregator"
 import type { AgentStateType, DegradedRule, PendingCorrelation } from "../state";
 import { queryDataSource } from "../sub-agent";
 import { evaluate } from "./engine";
-import { correlationRules, LOG_GAP_RULE_NAME } from "./rules";
+import { correlationRules, LOG_GAP_RULE_NAME, LogGapTriggerContextSchema } from "./rules";
 
 const logger = getLogger("agent:enforceCorrelations");
 
@@ -65,6 +65,9 @@ export function enforceCorrelationsRouter(state: AgentStateType): Send[] | "enfo
 			new Send("enforceCorrelationsAggregate", {
 				...state,
 				pendingCorrelations: skipCoveragePendings,
+				// CodeRabbit (PR #419): explicitly clear the transient directive on every
+				// Send so no spread can carry a stale instruction between rounds.
+				correlationFetchDirective: undefined,
 			}),
 		);
 	}
@@ -102,7 +105,9 @@ export function enforceCorrelationsRouter(state: AgentStateType): Send[] | "enfo
 				...state,
 				currentDataSource: dataSourceId,
 				pendingCorrelations: pendings,
-				...(directives.length > 0 && { correlationFetchDirective: directives.join("\n\n") }),
+				// CodeRabbit (PR #419): always set (never conditionally spread) so a Send
+				// without directives cannot inherit a stale one.
+				correlationFetchDirective: directives.length > 0 ? directives.join("\n\n") : undefined,
 			}),
 		);
 	}
@@ -138,9 +143,10 @@ function computeLogGapRecovery(state: AgentStateType, degraded: DegradedRule[]):
 	if (!pending || !state.finalAnswer) return null;
 	// Fetch did not cover the services: the normal degraded-cap path handles it.
 	if (degraded.some((d) => d.ruleName === LOG_GAP_RULE_NAME)) return null;
-	const bullets = Array.isArray(pending.triggerContext.bullets)
-		? (pending.triggerContext.bullets as unknown[]).filter((b): b is string => typeof b === "string")
-		: [];
+	// CodeRabbit (PR #419): both consumers of the trigger context parse one schema.
+	const parsedContext = LogGapTriggerContextSchema.safeParse(pending.triggerContext);
+	if (!parsedContext.success) return null;
+	const bullets = parsedContext.data.bullets;
 	if (bullets.length === 0) return null;
 
 	const flagged = new Set(bullets);
@@ -207,6 +213,7 @@ export async function enforceCorrelationsAggregate(state: AgentStateType): Promi
 			degradedRules: [],
 			confidenceCap: undefined,
 			pendingCorrelations: [],
+			correlationFetchDirective: undefined,
 			...(recovery && { finalAnswer: recovery.answer }),
 			...(recovery?.restoredScore !== undefined && { confidenceScore: recovery.restoredScore }),
 		};
@@ -242,6 +249,7 @@ export async function enforceCorrelationsAggregate(state: AgentStateType): Promi
 		confidenceCap: cap,
 		confidenceScore: cappedScore,
 		pendingCorrelations: [],
+		correlationFetchDirective: undefined,
 		...(updatedFinalAnswer !== undefined && { finalAnswer: updatedFinalAnswer }),
 	};
 }
