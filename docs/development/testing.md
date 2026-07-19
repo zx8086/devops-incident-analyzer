@@ -129,7 +129,7 @@ The LangGraph agent package tests cover the 31-node pipeline (incl. correlation 
 
 ```typescript
 // Example: agent/src/index.test.ts -- mocking MCP bridge
-const VALID_DATASOURCES = new Set(["elastic", "kafka", "couchbase", "konnect", "gitlab", "atlassian"]);
+const VALID_DATASOURCES = new Set(["elastic", "kafka", "couchbase", "konnect", "gitlab", "atlassian", "aws"]);
 mock.module("./mcp-bridge.ts", () => ({
   getToolsForDataSource: (id: string) =>
     VALID_DATASOURCES.has(id) ? [{ name: `${id}_tool` }] : [],

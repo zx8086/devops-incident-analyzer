@@ -1,7 +1,7 @@
 # Troubleshooting
 
 > **Targets:** Bun 1.3.9+ | MCP SDK 1.27+ | TypeScript 5.x
-> **Last updated:** 2026-04-23
+> **Last updated:** 2026-07-19
 
 Symptom-based problem resolution for the DevOps Incident Analyzer. Issues are organized by subsystem: MCP servers, LangGraph agent, SvelteKit frontend, configuration, and AWS/AgentCore deployment.
 
@@ -160,7 +160,7 @@ KAFKA_CONSUME_TIMEOUT_MS=30000     # Default: 5000
 
 This means MCP servers are not connected or all sub-agents were skipped:
 
-1. Check that MCP servers are running on their expected ports (9080-9087)
+1. Check that MCP servers are running on their expected ports (9080-9086; 9087 only when `KNOWLEDGE_GRAPH_ENABLED`)
 2. Check that the agent's `MultiServerMCPClient` URLs are correct
 3. Check that the user selected at least one datasource in `DataSourceSelector`
 4. Check server logs for connection errors during the supervisor fan-out

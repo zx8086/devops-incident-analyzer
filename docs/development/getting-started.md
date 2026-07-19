@@ -227,3 +227,4 @@ All three must pass. The CI pipeline runs the same checks and blocks merge on fa
 |------|--------|
 | 2026-04-04 | Initial getting started guide created |
 | 2026-04-23 | Added GitLab and Atlassian MCP servers to prerequisites, credentials table, and startup commands (6 servers total) |
+| 2026-07-19 | SIO-1039..1161 sync: updated the pipeline reference to the current 31-node LangGraph graph. |

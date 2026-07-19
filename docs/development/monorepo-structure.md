@@ -46,7 +46,7 @@ devops-incident-analyzer/
     observability/               Pino logger, OpenTelemetry, LangSmith tracing
     checkpointer/                LangGraph state persistence (memory + bun:sqlite)
     gitagent-bridge/             YAML-to-LangGraph adapter
-    agent/                       LangGraph supervisor and 31-node pipeline (21 base + 4 gated KG + 6 gated HIL-learning nodes: correlation enforcement, typed findings, AWS estate router, resolveIdentifiers, mitigation branch split, gated KG nodes, HIL learning lane) plus a separate 30-node elastic-iac proposer graph
+    agent/                       LangGraph supervisor and 31-node pipeline (21 base + 4 gated KG + 6 gated HIL-learning nodes). The 21 base nodes include correlation enforcement, typed findings, the AWS estate router, resolveIdentifiers, and the mitigation branch split; the 6 HIL-learning nodes (learnFetchTicket..applyLearnings) form the learn-from-ticket lane. Plus a separate 30-node elastic-iac proposer graph
     knowledge-graph/             Embedded entity + correlation knowledge graph (lbug/LadybugDB; SIO-850/954/965; gated on KNOWLEDGE_GRAPH_ENABLED). See architecture/knowledge-graph.md
     mcp-server-knowledge-graph/  In-process Knowledge Graph MCP server (:9087, SIO-967): curated kg_* tools + read-only Cypher over the embedded graph
     memory-pr/                   PR-based human-in-the-loop for durable agent learnings (SIO-849)
@@ -380,7 +380,7 @@ agents/incident-analyzer/
       agent.yaml         Tools: 15-55 Kafka tools via MCP port 9081 (15 base + up to 40 gated SR + ksqlDB + Connect + REST Proxy)
       SOUL.md            Persona: event streaming and consumer group analyst
     capella-agent/       Couchbase Capella specialist
-      agent.yaml         Tools: ~15 Capella tools via MCP port 9082
+      agent.yaml         Tools: ~37 Capella tools via MCP port 9082 (SIO-1107 official Couchbase tools)
       SOUL.md            Persona: document database and query optimization expert
     konnect-agent/       Kong Konnect specialist
       agent.yaml         Tools: 15 enhanced + proxy Konnect tools via MCP port 9083

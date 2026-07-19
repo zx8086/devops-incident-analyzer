@@ -20,7 +20,7 @@ The Incident Analyzer automates this correlation. Given a natural language query
 5. Validates the report against source data to catch hallucinations
 6. Generates follow-up suggestions for deeper investigation
 
-The agent's investigation is strictly read-only against production systems. It observes but never mutates them: write operations (Kafka produce, index deletion, gateway modification) are explicitly prohibited at the compliance layer. Two narrow, user-initiated, explicitly-gated write paths to Atlassian exist and are not production mutations: the "Create ticket" button raises a Jira issue (SIO-1124, provider-agnostic `TicketProvider`; hidden while `ATLASSIAN_READ_ONLY=true`), and the HIL-learning lane can add follow-up answers as comments on the thread's Jira ticket (SIO-1145). Both are triggered by the user in the UI, not autonomously.
+The agent's investigation is strictly read-only against production systems. It observes but never mutates them: write operations (Kafka produce, index deletion, gateway modification) are explicitly prohibited at the compliance layer. Two narrow, user-initiated, explicitly-gated write paths to Atlassian exist and are not production mutations: the "Create ticket" button raises a Jira issue (SIO-1124, provider-agnostic `TicketProvider`), and the HIL-learning lane can add follow-up answers as comments on the thread's Jira ticket (SIO-1145). Both write through the Atlassian MCP and are disabled while `ATLASSIAN_READ_ONLY=true` (the create-ticket button hides; the comment path is unavailable). Both are triggered by the user in the UI, not autonomously.
 
 ---
 
@@ -223,6 +223,11 @@ The `shared` package is the foundation -- it provides the `createMcpApplication(
 | entityExtractor|
 +-------+--------+
         |
+        v ([awsEstateRouter ->] resolveIdentifiers, both default on)
++--------------------+
+| resolveIdentifiers |
++--------+-----------+
+        |
         v
 +------------+
 | supervisor |
@@ -257,9 +262,11 @@ elastic kafka capella konnect gitlab atlassian aws
         |                 |
         | pass            | fail && retryCount < 2
         v                 |
-+------------------+      |
-| proposeMitigation| -----+ (retries go back to aggregate)
-+-------+----------+
++-------------------------------------------+   |
+| mitigation router (one of):               | --+ (retries go back to aggregate)
+|  proposeInvestigate / proposeMonitor /    |
+|  proposeEscalate  ->  aggregateMitigation |
++---------------------+---------------------+
         |
         v
 +-------+------+
@@ -271,6 +278,8 @@ elastic kafka capella konnect gitlab atlassian aws
     |  END  |
     +-------+
 ```
+
+> This is a simplified overview. It omits the intermediate nodes (`extractFindings`, the `enforceCorrelations` router/aggregate pair, `detectTopicShift`), the gated KG nodes, and the HIL learning lane that branches off `classify` on a `learn from TICKET-123` command — see the numbered node reference below and [agent-pipeline.md](agent-pipeline.md) for the full 31-node graph.
 
 1. **classify** -- Routes query as simple (greetings, help) or complex (infrastructure investigation). Uses regex patterns first, falls back to LLM.
 2. **normalize** -- Extracts a structured `NormalizedIncident` (severity, time window, affected services, metrics) from the user's query for downstream nodes.
@@ -362,4 +371,4 @@ The system enforces several security boundaries:
 | 2026-06-17 | Added `aws` to the fan-out diagrams. Elastic IaC agent expanded (SIO-911..932): see [Elastic IaC GitOps Proposer](elastic-iac-proposer.md) — config-edit proposers, Fleet-upgrade sub-flow, conversational follow-ups (proposer graph now 24 nodes). |
 | 2026-06-30 | Added the in-process Knowledge Graph MCP server (port 9087, SIO-967) and the [Knowledge Graph](knowledge-graph.md) component; corrected verified node counts (incident 20/22-with-KG; elastic-iac proposer 24→29). Part of the SIO-1025 docs sync. |
 | 2026-07-09 | SIO-1030..1038 docs sync (SIO-1039): re-verified node counts to greps — incident 22→23 with KG (`recordRootCause` from SIO-1026, previously undercounted); elastic-iac proposer 29→30 (`recordIacPrompt`, SIO-1038). New `ilm-delete` workflow (SIO-1037). |
-| 2026-07-19 | SIO-1039..1161 docs sync. Reconciled the incident node count (the two conflicting 22/23 figures here) to the verified grep = **31** (21 base + 4 gated KG incl. `recordBindings` + 6 gated HIL-learning nodes); added `resolveIdentifiers` to the node list. Refreshed component-summary tool counts (elastic ~93→~102 with 9 ML anomaly tools SIO-1148; couchbase ~15→~37 SIO-1107; AWS +CloudWatch Metrics Insights + network-path EC2 SIO-1161/1120). Frontend 9→30 components. Noted the two user-initiated Atlassian write paths (create-ticket SIO-1124, HIL Jira comments SIO-1145) alongside the read-only production stance. |
+| 2026-07-19 | SIO-1039..1161 docs sync. Reconciled the incident node count (the two conflicting 22/23 figures here) to the verified grep = **31** (21 base + 4 gated KG incl. `recordBindings` + 6 gated HIL-learning nodes); added `resolveIdentifiers` to the node list. Refreshed component-summary tool counts (elastic ~93→~102 with 9 ML anomaly tools SIO-1148; couchbase (this doc's prior ~15, README's prior 24+)→~37 SIO-1107; AWS +CloudWatch Metrics Insights + network-path EC2 SIO-1161/1120). Frontend 9→30 components. Noted the two user-initiated Atlassian write paths (create-ticket SIO-1124, HIL Jira comments SIO-1145) alongside the read-only production stance. |
