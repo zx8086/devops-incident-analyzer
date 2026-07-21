@@ -81,6 +81,20 @@ mock.module("@devops-agent/shared", () => ({
 	PendingActionSchema: z.any(),
 	// SIO-1146: sse-pump value-imports this for the hil_learning_applied forward.
 	HilApplyReportSchema: z.unknown(),
+	// sse-pump value-imports this to validate the subagent_progress custom event
+	// before forwarding. A z.any() stub would accept malformed payloads and mask
+	// a forwarding regression, so this mirrors the real StreamEventSchema's
+	// subagent_progress variant (packages/shared/src/agent-state.ts) closely
+	// enough to actually reject bad shapes, without pulling in the full union.
+	StreamEventSchema: z.discriminatedUnion("type", [
+		z.object({
+			type: z.literal("subagent_progress"),
+			dataSourceId: z.string(),
+			deploymentId: z.string().optional(),
+			status: z.enum(["running", "done"]),
+			toolCallCount: z.number().optional(),
+		}),
+	]),
 	redactPiiContent: (s: string) => s,
 	isKillSwitchActive: () => false,
 	KillSwitchError: class KillSwitchError extends Error {},

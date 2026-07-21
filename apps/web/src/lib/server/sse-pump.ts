@@ -5,7 +5,7 @@
 // Previously the routing lived inline in stream/+server.ts.
 
 import type { InvestigationFocus } from "@devops-agent/shared";
-import { HilApplyReportSchema, redactPiiContent } from "@devops-agent/shared";
+import { HilApplyReportSchema, redactPiiContent, StreamEventSchema } from "@devops-agent/shared";
 
 type SendFn = (event: Record<string, unknown>) => void;
 type EventStream = AsyncIterable<{
@@ -303,6 +303,14 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 			const toolName = event.name ?? "unknown";
 			toolsUsed.add(toolName);
 			send({ type: "tool_call", toolName, args: event.data?.input ?? {} });
+		}
+
+		// Forward the queryDataSource fan-out's live per-sub-agent signal (start +
+		// per-tool-call tick) so the UI can show progress during the multi-minute gap
+		// between the "Querying..." and "Aligning" pipeline pills.
+		if (event.event === "on_custom_event" && event.name === "subagent_progress") {
+			const parsed = StreamEventSchema.safeParse({ type: "subagent_progress", ...event.data });
+			if (parsed.success) send(parsed.data);
 		}
 
 		// SIO-876: forward watchPipeline's live status transitions to the UI.

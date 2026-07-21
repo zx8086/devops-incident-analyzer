@@ -1,6 +1,8 @@
 // packages/agent/src/sub-agent-instrumentation.ts
 
+import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch";
 import { ToolMessage } from "@langchain/core/messages";
+import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import {
 	consumeEmptyAwsResultsAdvice,
@@ -65,6 +67,9 @@ export interface InstrumentContext {
 	// SIO-686: when set, ToolMessage content exceeding capBytes is JSON-aware truncated
 	// before re-entering the ReAct loop. Disabled when null/undefined (current default).
 	capBytes?: number | null;
+	// Live progress signal: forwarded on each tool-call resolution so the UI can show
+	// a running tool-call count under the "Querying..." pill during the fan-out.
+	config?: RunnableConfig;
 }
 
 // Wraps each tool so we can observe what flows back from MCP into the ReAct loop.
@@ -132,6 +137,16 @@ function instrumentTool(
 					if (observed) {
 						recordResult(runState.loopGuard, tool.name, signature, extractContent(result), arg);
 					}
+					await dispatchCustomEvent(
+						"subagent_progress",
+						{
+							dataSourceId: ctx.dataSourceId,
+							deploymentId: ctx.deploymentId,
+							status: "running",
+							toolCallCount: iteration,
+						},
+						ctx.config,
+					);
 					const processed = processResult(result, tool.name, iteration, ctx);
 					// SIO-1159: a successful-but-empty CloudWatch result never errors, so
 					// nothing steers the LLM off a too-narrow window (run 270378e0: a 24h

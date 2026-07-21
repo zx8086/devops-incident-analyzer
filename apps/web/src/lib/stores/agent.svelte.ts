@@ -85,6 +85,9 @@ function createAgentStore() {
 	let messages = $state<ChatMessage[]>([]);
 	let dataSourceProgress = $state<Map<string, { status: string; message?: string }>>(new Map());
 	let dataSourceFindings = $state<Map<string, DataSourceFindings>>(new Map());
+	let subAgentProgress = $state<
+		Map<string, { status: "running" | "done"; toolCallCount?: number; deploymentId?: string }>
+	>(new Map());
 	let isStreaming = $state(false);
 	let threadId = $state<string>("");
 	let currentContent = $state("");
@@ -205,6 +208,7 @@ function createAgentStore() {
 		currentContent = "";
 		dataSourceProgress = new Map();
 		dataSourceFindings = new Map();
+		subAgentProgress = new Map();
 		activeNodes = new Set();
 		completedNodes = new Map();
 		lastSuggestions = [];
@@ -307,6 +311,7 @@ function createAgentStore() {
 			completedNodes,
 			dataSourceProgress,
 			dataSourceFindings,
+			subAgentProgress,
 			lastSuggestions,
 			lastResponseTime,
 			lastToolsUsed,
@@ -342,6 +347,7 @@ function createAgentStore() {
 		completedNodes = next.completedNodes;
 		dataSourceProgress = next.dataSourceProgress;
 		dataSourceFindings = next.dataSourceFindings;
+		subAgentProgress = next.subAgentProgress;
 		lastSuggestions = next.lastSuggestions;
 		lastResponseTime = next.lastResponseTime;
 		lastToolsUsed = next.lastToolsUsed;
@@ -562,6 +568,7 @@ function createAgentStore() {
 		currentContent = "";
 		dataSourceProgress = new Map();
 		dataSourceFindings = new Map();
+		subAgentProgress = new Map();
 		activeNodes = new Set();
 		completedNodes = new Map();
 		lastSuggestions = [];
@@ -812,6 +819,7 @@ function createAgentStore() {
 			lastSuggestions = [];
 			dataSourceProgress = new Map();
 			dataSourceFindings = new Map();
+			subAgentProgress = new Map();
 		}
 	}
 
@@ -821,6 +829,9 @@ function createAgentStore() {
 		},
 		get dataSourceProgress() {
 			return dataSourceProgress;
+		},
+		get subAgentProgress() {
+			return subAgentProgress;
 		},
 		get isStreaming() {
 			return isStreaming;

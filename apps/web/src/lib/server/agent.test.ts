@@ -162,6 +162,20 @@ mock.module("@devops-agent/shared", () => {
 		// SIO-1146: sse-pump value-imports this for the hil_learning_applied forward
 		// (same last-wins mock-cache race as the SIO-1045 note below).
 		HilApplyReportSchema: z.unknown(),
+		// sse-pump value-imports this to validate the subagent_progress custom event
+		// before forwarding. A z.any() stub would accept malformed payloads and mask
+		// a forwarding regression, so this mirrors the real StreamEventSchema's
+		// subagent_progress variant (packages/shared/src/agent-state.ts) closely
+		// enough to actually reject bad shapes, without pulling in the full union.
+		StreamEventSchema: z.discriminatedUnion("type", [
+			z.object({
+				type: z.literal("subagent_progress"),
+				dataSourceId: z.string(),
+				deploymentId: z.string().optional(),
+				status: z.enum(["running", "done"]),
+				toolCallCount: z.number().optional(),
+			}),
+		]),
 		redactPiiContent: (s: string) => s,
 		// SIO-1045: agent.ts imports startKnowledgeGraphServer from
 		// @devops-agent/mcp-server-knowledge-graph (unmocked, real module), whose
