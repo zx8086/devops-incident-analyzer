@@ -5,11 +5,13 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { config } from "../config";
+import { adviseCouchbaseError } from "../lib/adviseCouchbaseError";
 import { classifyCouchbaseError } from "../lib/classifyCouchbaseError";
 import { evaluateQueryPlan, formatPlanFindings } from "../lib/queryPlan";
 import { resolveBucket } from "../lib/resolveBucket";
 import { sqlppParser } from "../lib/sqlppParser";
 import { logger } from "../utils/logger";
+import { adviseQuery } from "./queryAnalysis/getIndexAdvisor";
 
 // Strip any leading EXPLAIN token (and trailing semicolon), then prepend exactly one.
 export function buildExplainStatement(query: string): string {
@@ -78,7 +80,27 @@ export const explainQuery = async (
 		logger.error({ error, statement }, "Failed to explain query");
 		const message = error instanceof Error ? error.message : String(error);
 		const kind = classifyCouchbaseError(error);
-		const envelope = buildToolErrorEnvelope({ kind, message: `Failed to explain query: ${message}` });
+		let advice = adviseCouchbaseError(kind);
+		// Fold the advisor's real DDL into this same response instead of just telling the
+		// agent to go call capella_get_index_advisor_recommendations itself -- one round
+		// trip instead of two. Never let a secondary advisor failure mask the original
+		// EXPLAIN error: swallow and fall back to the plain advice string.
+		if (kind === "no-index") {
+			try {
+				const advisorResult = await adviseQuery({ scope_name, query, bucket_name }, bucket);
+				const advisorText = advisorResult.content[0]?.text;
+				if (!advisorResult.isError && advisorText) {
+					advice = `${advice ? `${advice} ` : ""}Index advisor recommendations:\n\n${advisorText}`;
+				}
+			} catch (advisorError) {
+				logger.warn({ advisorError }, "Index advisor auto-enrichment failed; returning plain no-index advice");
+			}
+		}
+		const envelope = buildToolErrorEnvelope({
+			kind,
+			message: `Failed to explain query: ${message}`,
+			...(advice ? { advice } : {}),
+		});
 		return {
 			content: [{ type: "text" as const, text: JSON.stringify(envelope) }],
 			isError: true,

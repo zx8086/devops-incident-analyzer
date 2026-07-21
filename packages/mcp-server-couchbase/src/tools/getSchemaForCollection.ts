@@ -25,14 +25,17 @@ interface Document {
 	[key: string]: unknown;
 }
 
-const formatSchema = (doc: Document): string => {
+// Exported for unit testing (SIO-1168).
+export const formatSchema = (doc: Document): string => {
 	let formattedText = "📋 Collection Schema:\n\n";
 
 	const formatField = (key: string, value: unknown, indent: number = 0): string => {
 		const padding = "  ".repeat(indent);
 		const type = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
 
-		let fieldText = `${padding}${key}: ${type}`;
+		// Backtick-wrap so a reserved-word field (e.g. `option`) is never copied
+		// unescaped from schema output straight into a N1QL query.
+		let fieldText = `${padding}\`${key}\`: ${type}`;
 
 		if (typeof value === "object" && value !== null) {
 			if (Array.isArray(value)) {
@@ -88,14 +91,16 @@ export const formatInferSchema = (rows: unknown): string | null => {
 		text += `\nFlavor ${i + 1}${flavorName}${docs}:\n`;
 
 		for (const [field, spec] of Object.entries(properties as Record<string, unknown>)) {
+			// Backtick-wrap so a reserved-word field (e.g. `option`) is never copied
+			// unescaped from schema output straight into a N1QL query.
 			if (spec === null || typeof spec !== "object") {
-				text += `  ${field}: unknown\n`;
+				text += `  \`${field}\`: unknown\n`;
 				continue;
 			}
 			const specRecord = spec as Record<string, unknown>;
 			const samples = Array.isArray(specRecord.samples) ? specRecord.samples.slice(0, 2) : [];
 			const sampleText = samples.length > 0 ? ` (samples: ${JSON.stringify(samples)})` : "";
-			text += `  ${field}: ${renderType(specRecord.type)}${sampleText}\n`;
+			text += `  \`${field}\`: ${renderType(specRecord.type)}${sampleText}\n`;
 		}
 	});
 	return renderedAny ? text : null;

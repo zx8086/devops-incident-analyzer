@@ -346,7 +346,9 @@ describe("SIO-1107 Adopted Tool Tests", () => {
 		});
 		expect(result.content[0].text).toContain("Collection Schema (INFER, sampled)");
 		expect(result.content[0].text).toContain("Flavor 1");
-		expect(result.content[0].text).toContain("orderId: string");
+		// SIO-1168: field names are backtick-wrapped so a reserved word (e.g. `option`)
+		// is never copied unescaped from schema output straight into a N1QL query.
+		expect(result.content[0].text).toContain("`orderId`: string");
 	});
 
 	test("capella_get_schema_for_collection falls back to sampling when INFER fails", async () => {
