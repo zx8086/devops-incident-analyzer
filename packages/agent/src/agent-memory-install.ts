@@ -5,9 +5,12 @@
 // process startup. Both registrations are no-ops unless LIVE_MEMORY_BACKEND is
 // "agent-memory", so the default file backend is untouched.
 
+import { getLogger } from "@devops-agent/observability";
 import { registerMemoryFlusher, registerMemoryRecaller, registerPostTurnFlusher } from "./lifecycle.ts";
 import {
+	agentMemoryBaseUrl,
 	agentMemoryHealthy,
+	checkAgentMemoryHealth,
 	endAgentMemorySession,
 	flushAgentMemoryAfterTurn,
 	recallAgentMemory,
@@ -15,7 +18,26 @@ import {
 	setActiveMemorySession,
 } from "./memory-backend.ts";
 
+const logger = getLogger("agent:memory-backend");
+
+// SIO-1170: a single loud probe at install time, instead of discovering an
+// unreachable backend turn-by-turn via scattered per-call warns. Fire-and-forget
+// so a slow/dead backend never delays session bootstrap; failures here are
+// informational only (every call site already degrades gracefully on its own).
+function probeAgentMemoryAtStartup(): void {
+	if (selectedBackend() !== "agent-memory") return;
+	void checkAgentMemoryHealth().then((health) => {
+		if (health.ok) return;
+		logger.error(
+			{ baseUrl: agentMemoryBaseUrl(), status: health.status, detail: health.detail },
+			"agent-memory backend unreachable at startup; writes and recall will be dropped for this session",
+		);
+	});
+}
+
 export function installAgentMemory(): void {
+	probeAgentMemoryAtStartup();
+
 	registerMemoryRecaller(async ({ agentName, threadId, query }) => {
 		if (selectedBackend() !== "agent-memory") return undefined;
 		// Bind the active session so subsequent writer enqueues attach to it even

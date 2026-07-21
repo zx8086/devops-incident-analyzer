@@ -10,6 +10,7 @@
 import { getLogger } from "@devops-agent/observability";
 import {
 	type AgentMemoryClient,
+	type AgentMemoryHealth,
 	type AgentMemoryUserRef,
 	type AnnotationMap,
 	type ChatMessageBlock,
@@ -20,6 +21,31 @@ import {
 } from "@devops-agent/shared";
 
 const logger = getLogger("agent:memory-backend");
+
+// SIO-1170: pino's default JSON serializer drops non-enumerable Error fields
+// (message/stack), and Node's fetch() throws a bare "fetch failed" TypeError
+// whose real cause (ECONNREFUSED, DNS failure, etc.) lives one level deeper in
+// `.cause` (and in `.errors` when it's an AggregateError). Mirrors
+// serializeMcpConnectError in mcp-bridge.ts so a total-outage flush failure
+// logs the actual reason instead of the opaque "fetch failed" string.
+function isNetworkFailure(error: unknown): boolean {
+	return error instanceof TypeError && error.message === "fetch failed";
+}
+function describeError(error: unknown): { error: string; cause?: string } {
+	if (error instanceof Error) {
+		const candidates: unknown[] = [];
+		if ("cause" in error && error.cause !== undefined) candidates.push(error.cause);
+		if (error instanceof AggregateError) candidates.push(...error.errors);
+		const causeMessages = candidates
+			.map((c) => (c instanceof Error ? c.message : typeof c === "string" ? c : ""))
+			.filter(Boolean);
+		return {
+			error: error.message || error.name || "unknown error",
+			...(causeMessages.length > 0 && { cause: causeMessages.join("; ") }),
+		};
+	}
+	return { error: typeof error === "string" ? error : JSON.stringify(error) };
+}
 
 export type LiveMemoryBackend = "file" | "agent-memory";
 
@@ -238,6 +264,17 @@ export async function flushAgentMemory(): Promise<void> {
 			// quietly — this is expected after a conversation ends, not a failure.
 			clearActiveMemorySession();
 			logger.debug({ dropped: batch.length }, "agent-memory flush after session end; writes discarded");
+			return;
+		}
+		if (isNetworkFailure(error)) {
+			// SIO-1170: a total-outage fetch failure is not transient like a 503, so still
+			// drop the batch, but log loudly with the unwrapped cause -- this is the case
+			// that previously read as an opaque "fetch failed" warn with no signal that the
+			// backend itself was unreachable for the whole session.
+			logger.error(
+				{ dropped: batch.length, ...describeError(error) },
+				"agent-memory unreachable; flush dropped writes",
+			);
 			return;
 		}
 		logger.warn(
@@ -583,9 +620,28 @@ export async function endAgentMemorySession(agentName?: string, threadId?: strin
 // dead/saturated service while still binding the session so writes queue for a
 // later retry.
 export async function agentMemoryHealthy(): Promise<boolean> {
+	return (await checkAgentMemoryHealth()).ok;
+}
+
+// SIO-1170: like agentMemoryHealthy, but returns the full status/detail so a
+// caller (the startup probe) can log WHY the backend is unreachable instead of
+// just that it is. Never throws.
+export async function checkAgentMemoryHealth(): Promise<AgentMemoryHealth> {
 	try {
-		return (await client().checkHealth()).ok;
+		return await client().checkHealth();
+	} catch (error) {
+		const { error: message, cause } = describeError(error);
+		return { ok: false, detail: cause ? `${message} (${cause})` : message };
+	}
+}
+
+// SIO-1170: the configured Agent Memory base URL, for logging context on a
+// startup-probe failure. Best-effort -- returns undefined if config resolution
+// itself throws (e.g. AGENT_MEMORY_BASE_URL missing/invalid).
+export function agentMemoryBaseUrl(): string | undefined {
+	try {
+		return resolveAgentMemoryConfig().baseUrl;
 	} catch {
-		return false;
+		return undefined;
 	}
 }

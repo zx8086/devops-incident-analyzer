@@ -575,6 +575,74 @@ describe("annotations + metadata (SIO-952)", () => {
 		expect(accepted).toEqual(["scale consumers"]);
 		expect(pendingWriteCount()).toBe(0);
 	});
+
+	test("SIO-1170: a total-outage fetch failure on flush still drops the batch (not requeued)", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		setActiveMemorySession("incident-analyzer", "t-outage");
+		const client: AgentMemoryClient = {
+			async ensureUser() {
+				throw new TypeError("fetch failed", { cause: new Error("ECONNREFUSED") });
+			},
+			async ensureSession() {},
+			async addFacts() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async addMessages() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async searchMemory() {
+				return [];
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true };
+			},
+		};
+		__setAgentMemoryClient(client);
+		recordKeyDecision({ requestId: "r1", decision: "irrelevant" });
+		await flushAgentMemory();
+		// Unlike a 503, a network-level outage is not transient in a way a requeue fixes -- the batch
+		// is still dropped; this test locks in that behavior is unchanged even though the log level
+		// escalated to error with an unwrapped cause (SIO-1170).
+		expect(pendingWriteCount()).toBe(0);
+	});
+});
+
+describe("checkAgentMemoryHealth (SIO-1170)", () => {
+	test("unwraps a fetch-failure TypeError's cause into detail", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const client: AgentMemoryClient = {
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async addMessages() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async searchMemory() {
+				return [];
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				throw new TypeError("fetch failed", { cause: new Error("ECONNREFUSED 127.0.0.1:8091") });
+			},
+		};
+		__setAgentMemoryClient(client);
+		const health = await realMemoryBackend.checkAgentMemoryHealth();
+		expect(health.ok).toBe(false);
+		expect(health.detail).toContain("ECONNREFUSED");
+	});
+
+	test("passes through a healthy result unchanged", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { client } = makeFakeClient();
+		__setAgentMemoryClient(client);
+		const health = await realMemoryBackend.checkAgentMemoryHealth();
+		expect(health.ok).toBe(true);
+	});
 });
 
 // SIO-973: dedup recall hits by a stable annotation key so a re-recorded fact (durable +
