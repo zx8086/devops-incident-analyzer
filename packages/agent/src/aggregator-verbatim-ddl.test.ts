@@ -1,7 +1,9 @@
 // packages/agent/src/aggregator-verbatim-ddl.test.ts
 import { describe, expect, test } from "bun:test";
 import { type DataSourceResult, redactPiiContent } from "@devops-agent/shared";
-import { ensureVerbatimDdl, extractCreateIndexStatements } from "./aggregator.ts";
+import { buildAggregatorMessages, ensureVerbatimDdl, extractCreateIndexStatements } from "./aggregator.ts";
+import { extractTextFromContent } from "./message-utils.ts";
+import type { AgentStateType } from "./state.ts";
 
 const DDL_VARIANT = `CREATE INDEX adv_variant_fmsSeasonCode
 ON \`default\`:\`default\`.\`styles\`.\`variant\`
@@ -271,5 +273,86 @@ describe("advisor-scoped DDL extraction (SIO-1149)", () => {
 			}),
 		]);
 		expect(source).toBe("prose");
+	});
+});
+
+// SIO-1169: the verbatimDdlRule prompt nudge previously checked resultsBlock (built from
+// r.data prose) for the literal string "CREATE INDEX" -- missing cases where the sub-agent's
+// own prose already dropped the DDL before r.data was set, even though toolOutputs[].rawJson
+// still had it. The fix routes the trigger through extractCreateIndexStatements(results), the
+// same source ensureVerbatimDdl already reads, so the prompt nudge and the backstop agree.
+function makeState(overrides: Partial<AgentStateType> = {}): AgentStateType {
+	return {
+		messages: [],
+		queryComplexity: "complex",
+		targetDataSources: ["capella"],
+		targetDeployments: [],
+		retryDeployments: [],
+		dataSourceResults: [],
+		currentDataSource: "",
+		extractedEntities: { dataSources: [] },
+		previousEntities: { dataSources: [] },
+		toolPlanMode: "autonomous",
+		toolPlan: [],
+		validationResult: "pass",
+		retryCount: 0,
+		alignmentRetries: 0,
+		alignmentHints: [],
+		skippedDataSources: [],
+		isFollowUp: false,
+		finalAnswer: "",
+		graphContext: "",
+		graphBlastRadius: [],
+		dataSourceContext: undefined,
+		requestId: "test",
+		attachmentMeta: [],
+		suggestions: [],
+		normalizedIncident: {},
+		mitigationSteps: { investigate: [], monitor: [], escalate: [], relatedRunbooks: [] },
+		confidenceScore: 0,
+		confidencePreCap: undefined,
+		capReasons: [] as string[],
+		confirmedDegradingGapBullets: [] as string[],
+		correlationFetchDirective: undefined,
+		lowConfidence: false,
+		pendingActions: [],
+		actionResults: [],
+		selectedRunbooks: null,
+		skillsApplied: null,
+		investigationFocus: undefined,
+		resolvedIdentifiers: undefined,
+		pendingTopicShiftPrompt: undefined,
+		...overrides,
+	} as AgentStateType;
+}
+
+function getHumanPromptText(messages: ReturnType<typeof buildAggregatorMessages>): string {
+	const humanMsg = messages.find((m) => m._getType() === "human");
+	return humanMsg ? extractTextFromContent(humanMsg.content) : "";
+}
+
+describe("verbatimDdlRule prompt trigger (SIO-1169)", () => {
+	test("fires when DDL is only in toolOutputs, not yet dropped from r.data by the sub-agent's own prose", () => {
+		const results = [advisorResult({ data: "Query optimization complete. See recommendations below." })];
+		const messages = buildAggregatorMessages(makeState({ dataSourceResults: results }), "irrelevant block", results);
+		expect(getHumanPromptText(messages)).toContain("VERBATIM DDL REQUIREMENT");
+	});
+
+	test("does not fire when no result carries DDL anywhere (no added prompt tax)", () => {
+		const results = [result({ data: "Cluster is healthy, no recommendations." })];
+		const messages = buildAggregatorMessages(makeState({ dataSourceResults: results }), "irrelevant block", results);
+		expect(getHumanPromptText(messages)).not.toContain("VERBATIM DDL REQUIREMENT");
+	});
+
+	test("does not fire merely because resultsBlock contains DDL-looking prose", () => {
+		// Proves the trigger reads `results` (extractCreateIndexStatements), not resultsBlock:
+		// this would still pass under the old buggy /CREATE\s+INDEX/i.test(resultsBlock) check.
+		const results = [result({ data: "Cluster is healthy, no recommendations." })];
+		const messages = buildAggregatorMessages(
+			makeState({ dataSourceResults: results }),
+			"CREATE INDEX idx ON bucket(field);",
+			results,
+		);
+		expect(getHumanPromptText(messages)).not.toContain("VERBATIM DDL REQUIREMENT");
 	});
 });

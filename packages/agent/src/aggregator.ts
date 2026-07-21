@@ -78,7 +78,13 @@ export function aggregateResultBudget(resultCount: number, env: NodeJS.ProcessEn
 	return Math.max(AGGREGATE_RESULT_CAP_FLOOR, Math.min(per, fairShare));
 }
 
-function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): BaseMessage[] {
+// Exported for SIO-1169: aggregator-verbatim-ddl.test.ts asserts the verbatimDdlRule
+// prompt nudge is present/absent based on toolOutputs, independent of resultsBlock prose.
+export function buildAggregatorMessages(
+	state: AgentStateType,
+	resultsBlock: string,
+	results: DataSourceResult[],
+): BaseMessage[] {
 	// SIO-640: Tri-state selectedRunbooks field drives the runbook filter.
 	//   null      -> no filter (preserve current behavior)
 	//   []        -> filter to zero runbooks (selector chose none)
@@ -227,10 +233,15 @@ function buildAggregatorMessages(state: AgentStateType, resultsBlock: string): B
 	// CREATE INDEX statements into a prose key list (couchbase-only reports kept them
 	// verbatim). The DDL is the one copy-paste artifact of the EXPLAIN/ADVISOR chain and
 	// hand-reconstruction is error-prone (GSI has no INCLUDE clause; key order matters).
-	// Injected only when the findings actually carry DDL so other turns pay no prompt tax.
-	const verbatimDdlRule = /CREATE\s+INDEX/i.test(resultsBlock)
-		? `\n\nVERBATIM DDL REQUIREMENT: The datasource findings below contain one or more CREATE INDEX statements (server-computed Index Advisor output). Reproduce EVERY such statement VERBATIM inside a fenced sql code block in your recommendations -- copy the exact text; do not reword it, reorder keys, or compress an index definition into a prose key list. Prose may explain the DDL, never replace it.`
-		: "";
+	// SIO-1169: checking resultsBlock alone missed cases where the sub-agent's own prose
+	// already dropped the DDL before r.data was set, even though toolOutputs[].rawJson
+	// still had it -- use the same extraction extractCreateIndexStatements/ensureVerbatimDdl
+	// already rely on, so the prompt nudge and the deterministic backstop share one source
+	// of truth. Injected only when DDL is actually available so other turns pay no prompt tax.
+	const verbatimDdlRule =
+		extractCreateIndexStatements(results).statements.length > 0
+			? `\n\nVERBATIM DDL REQUIREMENT: The datasource findings below contain one or more CREATE INDEX statements (server-computed Index Advisor output). Reproduce EVERY such statement VERBATIM inside a fenced sql code block in your recommendations -- copy the exact text; do not reword it, reorder keys, or compress an index definition into a prose key list. Prose may explain the DDL, never replace it.`
+			: "";
 
 	// SIO-750: when an investigation focus is established AND we have a prior
 	// answer, replace the loose "do not repeat the full prior report" framing
@@ -1107,7 +1118,7 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		.join("\n\n");
 
 	const llm = createLlm("aggregator");
-	const messages = buildAggregatorMessages(state, resultsBlock);
+	const messages = buildAggregatorMessages(state, resultsBlock, results);
 
 	logger.info("Invoking LLM for aggregation");
 	const startTime = Date.now();
