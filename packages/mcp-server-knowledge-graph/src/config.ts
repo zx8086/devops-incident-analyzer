@@ -1,4 +1,5 @@
 // src/config.ts
+import { graphPath } from "@devops-agent/knowledge-graph";
 import { z } from "zod";
 
 // Per project rules, no .default() inside the schema; the loader supplies explicit
@@ -13,7 +14,10 @@ export const ConfigSchema = z.object({
 	}),
 	// SIO-967: the graph is opened in-process via getGraphStore() (one lbug lock
 	// holder per process); the path here is only surfaced for the readiness probe
-	// and identity fingerprint. The store itself reads KNOWLEDGE_GRAPH_PATH.
+	// and identity fingerprint. SIO-1167: must call the SAME graphPath() the store
+	// itself resolves via -- a separately-hardcoded fallback here silently drifted
+	// from the real resolved path and misled diagnosis (this field looked correct
+	// while the store had actually redirected to a different directory).
 	graphPath: z.string(),
 	knowledgeGraphEnabled: z.boolean(),
 	// SIO-967: raw Cypher is ON by default (set KG_MCP_ALLOW_CYPHER=false to disable).
@@ -37,7 +41,7 @@ export function loadConfig(): Config {
 			host: process.env.KNOWLEDGE_GRAPH_MCP_HOST ?? "0.0.0.0",
 			path: process.env.KNOWLEDGE_GRAPH_MCP_PATH ?? "/mcp",
 		},
-		graphPath: process.env.KNOWLEDGE_GRAPH_PATH || ".data/knowledge-graph",
+		graphPath: graphPath(process.env),
 		// SIO-968: default ON. The KG MCP server only runs when it is meant to serve the
 		// graph, so its tools should treat the graph as enabled unless explicitly disabled
 		// (KNOWLEDGE_GRAPH_ENABLED=false/0). This is the server-layer default; the shared
