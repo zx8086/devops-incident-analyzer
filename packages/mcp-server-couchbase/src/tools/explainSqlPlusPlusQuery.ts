@@ -87,7 +87,11 @@ export const explainQuery = async (
 		// EXPLAIN error: swallow and fall back to the plain advice string.
 		if (kind === "no-index") {
 			try {
-				const advisorResult = await adviseQuery({ scope_name, query, bucket_name }, bucket);
+				// ADVISOR() cannot analyze a statement that still carries the EXPLAIN keyword --
+				// it silently returns zero recommendations instead of erroring, so this must pass
+				// the already-stripped inner statement (computed above for the read-only gate),
+				// not the raw query param.
+				const advisorResult = await adviseQuery({ scope_name, query: inner, bucket_name }, bucket);
 				const advisorText = advisorResult.content[0]?.text;
 				if (!advisorResult.isError && advisorText) {
 					advice = `${advice ? `${advice} ` : ""}Index advisor recommendations:\n\n${advisorText}`;
