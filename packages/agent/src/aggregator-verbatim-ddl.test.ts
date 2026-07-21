@@ -343,4 +343,16 @@ describe("verbatimDdlRule prompt trigger (SIO-1169)", () => {
 		const messages = buildAggregatorMessages(makeState({ dataSourceResults: results }), "irrelevant block", results);
 		expect(getHumanPromptText(messages)).not.toContain("VERBATIM DDL REQUIREMENT");
 	});
+
+	test("does not fire merely because resultsBlock contains DDL-looking prose", () => {
+		// Proves the trigger reads `results` (extractCreateIndexStatements), not resultsBlock:
+		// this would still pass under the old buggy /CREATE\s+INDEX/i.test(resultsBlock) check.
+		const results = [result({ data: "Cluster is healthy, no recommendations." })];
+		const messages = buildAggregatorMessages(
+			makeState({ dataSourceResults: results }),
+			"CREATE INDEX idx ON bucket(field);",
+			results,
+		);
+		expect(getHumanPromptText(messages)).not.toContain("VERBATIM DDL REQUIREMENT");
+	});
 });
