@@ -5,7 +5,7 @@
 // Previously the routing lived inline in stream/+server.ts.
 
 import type { InvestigationFocus } from "@devops-agent/shared";
-import { HilApplyReportSchema, redactPiiContent } from "@devops-agent/shared";
+import { HilApplyReportSchema, redactPiiContent, StreamEventSchema } from "@devops-agent/shared";
 
 type SendFn = (event: Record<string, unknown>) => void;
 type EventStream = AsyncIterable<{
@@ -309,21 +309,8 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 		// per-tool-call tick) so the UI can show progress during the multi-minute gap
 		// between the "Querying..." and "Aligning" pipeline pills.
 		if (event.event === "on_custom_event" && event.name === "subagent_progress") {
-			const data = event.data as {
-				dataSourceId?: unknown;
-				deploymentId?: unknown;
-				status?: unknown;
-				toolCallCount?: unknown;
-			};
-			if (typeof data?.dataSourceId === "string") {
-				send({
-					type: "subagent_progress",
-					dataSourceId: data.dataSourceId,
-					...(typeof data.deploymentId === "string" && { deploymentId: data.deploymentId }),
-					status: data.status === "done" ? "done" : "running",
-					...(typeof data.toolCallCount === "number" && { toolCallCount: data.toolCallCount }),
-				});
-			}
+			const parsed = StreamEventSchema.safeParse({ type: "subagent_progress", ...event.data });
+			if (parsed.success) send(parsed.data);
 		}
 
 		// SIO-876: forward watchPipeline's live status transitions to the UI.

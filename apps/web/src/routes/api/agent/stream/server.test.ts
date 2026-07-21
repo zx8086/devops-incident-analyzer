@@ -81,6 +81,9 @@ mock.module("@devops-agent/shared", () => ({
 	PendingActionSchema: z.any(),
 	// SIO-1146: sse-pump value-imports this for the hil_learning_applied forward.
 	HilApplyReportSchema: z.unknown(),
+	// sse-pump value-imports this to validate the subagent_progress custom event
+	// before forwarding; z.any() still exposes a real .safeParse.
+	StreamEventSchema: z.any(),
 	redactPiiContent: (s: string) => s,
 	isKillSwitchActive: () => false,
 	KillSwitchError: class KillSwitchError extends Error {},

@@ -116,7 +116,7 @@ function pillClass(nodeId: string): string {
       {/each}
     </div>
 
-    {#if activeNodes.has("queryDataSource") && subAgentRows.length > 0}
+    {#if subAgentRows.some((row) => row.status === "running")}
       <div class="flex flex-col gap-1 mt-2 pt-2 border-t border-gray-200/70">
         {#each subAgentRows as row (row.key)}
           <div class="flex items-center gap-1.5 text-[0.625rem] text-gray-500">

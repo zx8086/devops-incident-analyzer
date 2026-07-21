@@ -455,7 +455,12 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 		case "subagent_progress": {
 			const next = new Map(state.subAgentProgress);
 			const key = event.deploymentId ? `${event.dataSourceId}:${event.deploymentId}` : event.dataSourceId;
-			next.set(key, { status: event.status, toolCallCount: event.toolCallCount, deploymentId: event.deploymentId });
+			const previous = next.get(key);
+			next.set(key, {
+				status: event.status,
+				toolCallCount: event.toolCallCount ?? previous?.toolCallCount,
+				deploymentId: event.deploymentId,
+			});
 			return { ...state, subAgentProgress: next };
 		}
 		case "datasource_progress": {
