@@ -44,11 +44,13 @@ describe("explainSqlPlusPlusQuery advice wiring (SIO-1168)", () => {
 	});
 
 	test("no-index failure folds in live advisor DDL from a successful advisor call", async () => {
+		const advisorStatements: string[] = [];
 		const bucket = makeBucket((statement: string) => {
 			if (statement.startsWith("EXPLAIN")) {
 				throw makePlanningFailureError(4000);
 			}
-			// The internal adviseQuery() call issues the ADVISOR() statement.
+			// The internal adviseQuery() call issues the ADVISOR() statement -- capture what
+			// it actually analyzed via its bound parameter, not the outer statement string.
 			return Promise.resolve({
 				rows: Promise.resolve([
 					{
@@ -59,9 +61,21 @@ describe("explainSqlPlusPlusQuery advice wiring (SIO-1168)", () => {
 				]),
 			});
 		});
+		// Intercept the parameterized ADVISOR() call to assert it received the EXPLAIN-stripped
+		// statement (SIO-1168 regression: ADVISOR() silently returns zero recommendations --
+		// not an error -- when given a statement that still carries the EXPLAIN keyword).
+		const scope = bucket.scope("order") as unknown as {
+			query: (statement: string, opts?: { parameters?: { advise_statement?: string } }) => Promise<unknown>;
+		};
+		const originalQuery = scope.query.bind(scope);
+		scope.query = (statement: string, opts?: { parameters?: { advise_statement?: string } }) => {
+			if (opts?.parameters?.advise_statement) advisorStatements.push(opts.parameters.advise_statement);
+			return originalQuery(statement, opts);
+		};
+		(bucket.scope as unknown as (name: string) => typeof scope) = () => scope;
 
 		const result = await explainQuery(
-			{ scope_name: "order", query: "SELECT soldToNumber FROM `archived-orders` WHERE soldToNumber = '1'" },
+			{ scope_name: "order", query: "EXPLAIN SELECT soldToNumber FROM `archived-orders` WHERE soldToNumber = '1'" },
 			bucket,
 		);
 
@@ -70,6 +84,7 @@ describe("explainSqlPlusPlusQuery advice wiring (SIO-1168)", () => {
 		const parsed = JSON.parse(text) as { _error: { kind: string; advice?: string } };
 		expect(parsed._error.kind).toBe("no-index");
 		expect(parsed._error.advice).toContain("CREATE INDEX idx1 ON `archived-orders`(soldToNumber)");
+		expect(advisorStatements).toEqual(["SELECT soldToNumber FROM `archived-orders` WHERE soldToNumber = '1'"]);
 	});
 
 	test("no-index failure still returns clean advice when the internal advisor call throws", async () => {
