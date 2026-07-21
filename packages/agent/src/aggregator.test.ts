@@ -420,6 +420,120 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-709 tool-error-rate confidence cap"
 	});
 });
 
+// SIO-1164: a tool error later followed by a successful call to the SAME tool is marked
+// `recovered: true` by extractToolErrors (sub-agent.ts). The aggregator's degraded-rate cap must
+// exclude recovered errors, since they reflect normal self-correction (retried query, retried
+// after a timeout), not an unrecovered malfunction.
+describe.skipIf(!hasRunbooks)("aggregate SIO-1164 recovery-aware tool-error-rate cap", () => {
+	let captured: CapturedAggregatorLog[] = [];
+
+	beforeEach(() => {
+		captured = [];
+		_setAggregatorLoggerForTesting(makeAggregatorCaptureLogger(captured));
+		lastInvokeMessages = null;
+	});
+
+	afterEach(() => {
+		_setAggregatorLoggerForTesting(null);
+		mockLlmContent = "Mock aggregator output. Confidence: 0.5";
+	});
+
+	test("does NOT cap when recovered errors drop the rate at/below 15% (6 total, 2 recovered -> 4/38 = 10.5%)", async () => {
+		// Mirrors the reported prana-import-export-service incident: 6 Couchbase tool errors
+		// out of 38 messages (15.8%, over threshold), but 2 were followed by a later success on
+		// the same tool (self-corrected query), leaving 4 genuinely unrecovered (10.5%, under).
+		mockLlmContent = "Mock aggregator output. Confidence: 0.87";
+		const result = await aggregate(
+			makeState({
+				dataSourceResults: [
+					{
+						dataSourceId: "couchbase",
+						status: "success",
+						data: "result",
+						messageCount: 38,
+						toolErrors: [
+							{
+								toolName: "capella_run_sql_plus_plus_query",
+								category: "bad-query",
+								message: "no index",
+								retryable: false,
+							},
+							{
+								toolName: "capella_run_sql_plus_plus_query",
+								category: "bad-query",
+								message: "no index",
+								retryable: false,
+								recovered: true,
+							},
+							{
+								toolName: "capella_run_sql_plus_plus_query",
+								category: "transient",
+								message: "timeout",
+								retryable: true,
+								recovered: true,
+							},
+							{
+								toolName: "capella_run_sql_plus_plus_query",
+								category: "bad-query",
+								message: "no index",
+								retryable: false,
+							},
+							{
+								toolName: "capella_get_system_indexes",
+								category: "bad-query",
+								message: "parse error",
+								retryable: false,
+							},
+							{
+								toolName: "capella_get_document_type_examples",
+								category: "unknown",
+								message: "invalid identifier",
+								retryable: false,
+							},
+						],
+					},
+				],
+			}),
+		);
+
+		expect(result.confidenceScore).toBe(0.87);
+		expect(result.confidenceCap).toBeUndefined();
+		const warnCall = captured.find(
+			(c) => c.level === "warn" && typeof c.msg === "string" && c.msg.includes("tool-error rate exceeded threshold"),
+		);
+		expect(warnCall).toBeUndefined();
+	});
+
+	test("still caps when errors are genuinely unrecovered (6/38 = 15.8%, none recovered)", async () => {
+		mockLlmContent = "Mock aggregator output. Confidence: 0.87";
+		const result = await aggregate(
+			makeState({
+				dataSourceResults: [
+					{
+						dataSourceId: "couchbase",
+						status: "success",
+						data: "result",
+						messageCount: 38,
+						toolErrors: Array.from({ length: 6 }, (_, i) => ({
+							toolName: `capella_tool_${i}`,
+							category: "bad-query" as const,
+							message: "no index",
+							retryable: false,
+						})),
+					},
+				],
+			}),
+		);
+
+		expect(result.confidenceScore).toBe(0.59);
+		expect(result.confidenceCap).toBe(0.59);
+		const warnCall = captured.find(
+			(c) => c.level === "warn" && typeof c.msg === "string" && c.msg.includes("tool-error rate exceeded threshold"),
+		);
+		expect(warnCall).toBeDefined();
+	});
+});
+
 describe("extractGapsBulletCount", () => {
 	test("counts bullets under a top-level Gaps heading", () => {
 		const report = `# Report\n\n## Findings\n- finding A\n\n## Gaps\n- gap 1\n- gap 2\n- gap 3\n\nConfidence: 0.7`;

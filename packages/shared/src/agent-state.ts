@@ -109,8 +109,19 @@ export const ToolErrorSchema = z.object({
 	upstreamContentType: z.string().nullish(),
 	// SIO-728: real HTTP status from the upstream, so rules don't have to regex 5\d\d out of message.
 	statusCode: z.number().int().nullish(),
+	// SIO-1164: true when a later tool call (same toolName) in the same sub-agent trajectory
+	// succeeded after this error -- the sub-agent self-corrected. Optional for backward-compat
+	// with any persisted/replayed state predating this field.
+	recovered: z.boolean().nullish(),
 });
 export type ToolError = z.infer<typeof ToolErrorSchema>;
+
+// SIO-1164: an error only counts toward the degraded-subagent confidence cap if it is degrading
+// AND was never followed by a same-tool success. A recovered bad-query or transient timeout
+// reflects normal self-correction, not a malfunction.
+export function countsTowardDegradedRate(e: Pick<ToolError, "category" | "recovered">): boolean {
+	return isDegradingCategory(e.category) && !e.recovered;
+}
 
 // SIO-764: Per-domain structured findings derived from toolOutputs[] by the
 // extractFindings graph node. Optional; absence = no extraction ran or

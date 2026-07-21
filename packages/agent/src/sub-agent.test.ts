@@ -177,6 +177,83 @@ describe("extractToolErrors SIO-707 PII redaction", () => {
 	});
 });
 
+// SIO-1164: a tool error followed by a later successful call to the SAME tool reflects normal
+// self-correction (retried query, retried after a timeout), not an unrecovered malfunction --
+// extractToolErrors marks it `recovered: true` so the aggregator's degraded-rate cap can exclude
+// it. Tool name is the only "intent" signal used (no arg-diffing); see agent-state.ts comments.
+describe("extractToolErrors SIO-1164 recovery detection", () => {
+	test("error followed by a later success on the SAME tool -> recovered: true", () => {
+		const errors = extractToolErrors([
+			toolMsg("no queryable index for that predicate", "capella_run_sql_plus_plus_query"),
+			toolMsg("{}", "capella_run_sql_plus_plus_query", "success"),
+		]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.recovered).toBe(true);
+	});
+
+	test("error with no later call at all -> recovered stays falsy", () => {
+		const errors = extractToolErrors([
+			toolMsg("no queryable index for that predicate", "capella_run_sql_plus_plus_query"),
+		]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.recovered).toBeFalsy();
+	});
+
+	test("error followed by a later success on a DIFFERENT tool -> does not cross-credit", () => {
+		const errors = extractToolErrors([
+			toolMsg("no queryable index for that predicate", "capella_run_sql_plus_plus_query"),
+			toolMsg("{}", "capella_get_schema_for_collection", "success"),
+		]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.recovered).toBeFalsy();
+	});
+
+	test("two errors on the same tool, then one success -> both prior errors recovered", () => {
+		const errors = extractToolErrors([
+			toolMsg("timeout", "capella_run_sql_plus_plus_query"),
+			toolMsg("bad query", "capella_run_sql_plus_plus_query"),
+			toolMsg("{}", "capella_run_sql_plus_plus_query", "success"),
+		]);
+		expect(errors).toHaveLength(2);
+		expect(errors[0]?.recovered).toBe(true);
+		expect(errors[1]?.recovered).toBe(true);
+	});
+
+	test("error on a tool that never succeeds, interleaved with a different tool's success -> stays unrecovered", () => {
+		const errors = extractToolErrors([
+			toolMsg("no queryable index for that predicate", "capella_run_sql_plus_plus_query"),
+			toolMsg("{}", "capella_get_schema_for_collection", "success"),
+			toolMsg("still no index", "capella_run_sql_plus_plus_query"),
+		]);
+		expect(errors).toHaveLength(2);
+		expect(errors[0]?.recovered).toBeFalsy();
+		expect(errors[1]?.recovered).toBeFalsy();
+	});
+
+	// SIO-1164 CodeRabbit review: an EARLIER success on the same tool (e.g. a schema check that
+	// succeeded) must not excuse a LATER, distinct failure on that tool (e.g. the actual
+	// investigative query). Recovery requires a success strictly AFTER the error, not just any
+	// success anywhere in the trajectory.
+	test("a success that PRECEDES an error on the same tool does not recover it", () => {
+		const errors = extractToolErrors([
+			toolMsg("{}", "capella_run_sql_plus_plus_query", "success"),
+			toolMsg("no queryable index for that predicate", "capella_run_sql_plus_plus_query"),
+		]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.recovered).toBeFalsy();
+	});
+
+	test("success, then error, then a further later success -> the error IS recovered", () => {
+		const errors = extractToolErrors([
+			toolMsg("{}", "capella_run_sql_plus_plus_query", "success"),
+			toolMsg("no queryable index for that predicate", "capella_run_sql_plus_plus_query"),
+			toolMsg("{}", "capella_run_sql_plus_plus_query", "success"),
+		]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.recovered).toBe(true);
+	});
+});
+
 // SIO-1054: the AWS MCP wrap layer returns tool errors as a SUCCESSFUL MCP payload
 // carrying { "_error": { kind, ... } } (no isError), so LangGraph sets status="success"
 // and the pre-1054 status!=="error" gate dropped them entirely -- the _error blob leaked
