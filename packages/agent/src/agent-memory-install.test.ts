@@ -4,9 +4,12 @@ import type { AgentMemoryClient } from "@devops-agent/shared";
 import { installAgentMemory } from "./agent-memory-install.ts";
 import { __resetMemoryQueue, __setAgentMemoryClient, clearActiveMemorySession } from "./memory-backend.ts";
 
-const prevBackend = process.env.LIVE_MEMORY_BACKEND;
+// No module-scope Bun.env/process.env reads in packages/agent (Vite SSR safety) -- captured
+// per-test in beforeEach instead.
+let prevBackend: string | undefined;
 
 beforeEach(() => {
+	prevBackend = process.env.LIVE_MEMORY_BACKEND;
 	clearActiveMemorySession();
 	__resetMemoryQueue();
 });
