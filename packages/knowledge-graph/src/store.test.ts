@@ -11,7 +11,41 @@ import {
 	graphPath,
 	InMemoryGraphStore,
 	LadybugStore,
+	type LbugConnection,
+	type LbugDatabase,
+	type LbugModule,
 } from "./store.ts";
+
+// Builds a fake lbug module whose Database constructor throws when throwOnCall(n)
+// returns an Error for the nth construction attempt (1-indexed), and otherwise
+// succeeds with a Connection that answers empty result sets.
+function mockLbugLoader(throwOnCall: (call: number) => Error | undefined): () => Promise<LbugModule> {
+	let calls = 0;
+	return async () => ({
+		Database: class {
+			constructor(_dbPath: string) {
+				calls += 1;
+				const err = throwOnCall(calls);
+				if (err) throw err;
+			}
+		} as unknown as new (
+			dbPath: string,
+		) => LbugDatabase,
+		Connection: class {
+			async query() {
+				return { getAll: async () => [] };
+			}
+			async prepare() {
+				return {};
+			}
+			async execute() {
+				return { getAll: async () => [] };
+			}
+		} as unknown as new (
+			db: LbugDatabase,
+		) => LbugConnection,
+	});
+}
 
 describe("graphPath", () => {
 	test("returns the env override verbatim when set", () => {
@@ -79,66 +113,38 @@ describe("LadybugStore WAL-corruption recovery", () => {
 		}
 	}
 
+	const CORRUPT_WAL_ERROR = "Runtime exception: Corrupted wal file. Read out invalid WAL record type.";
+
 	test("quarantines the .wal file and retries once on a corrupt-WAL error", async () =>
 		withTempDir(async (dir) => {
 			const path = join(dir, "knowledge-graph");
 			const walPath = `${path}.wal`;
 			writeFileSync(walPath, "not a real wal file");
 
-			let constructCalls = 0;
-			_setLbugLoaderForTesting(async () => ({
-				Database: class {
-					constructor(_dbPath: string) {
-						constructCalls += 1;
-						if (constructCalls === 1) {
-							throw new Error("Runtime exception: Corrupted wal file. Read out invalid WAL record type.");
-						}
-					}
-				} as unknown as new (
-					dbPath: string,
-				) => import("./store.ts").LbugDatabase,
-				Connection: class {
-					async query() {
-						return { getAll: async () => [] };
-					}
-					async prepare() {
-						return {};
-					}
-					async execute() {
-						return { getAll: async () => [] };
-					}
-				} as unknown as new (
-					db: import("./store.ts").LbugDatabase,
-				) => never,
-			}));
+			_setLbugLoaderForTesting(mockLbugLoader((call) => (call === 1 ? new Error(CORRUPT_WAL_ERROR) : undefined)));
 
 			const store = new LadybugStore(path);
 			await store.run("MATCH (n) RETURN n");
 
-			expect(constructCalls).toBe(2);
 			expect(existsSync(walPath)).toBe(false);
 			const quarantined = readdirSync(dir).filter((f) => f.startsWith("knowledge-graph.wal.corrupt-"));
 			expect(quarantined.length).toBe(1);
 		}));
 
-	test("rethrows unchanged when the retry also fails", async () =>
+	test("rethrows unchanged when the retry also fails, but still quarantines the .wal first", async () =>
 		withTempDir(async (dir) => {
 			const path = join(dir, "knowledge-graph");
-			writeFileSync(`${path}.wal`, "not a real wal file");
+			const walPath = `${path}.wal`;
+			writeFileSync(walPath, "not a real wal file");
 
-			_setLbugLoaderForTesting(async () => ({
-				Database: class {
-					constructor(_dbPath: string) {
-						throw new Error("Runtime exception: Corrupted wal file. Read out invalid WAL record type.");
-					}
-				} as unknown as new (
-					dbPath: string,
-				) => import("./store.ts").LbugDatabase,
-				Connection: class {} as unknown as new (db: import("./store.ts").LbugDatabase) => never,
-			}));
+			_setLbugLoaderForTesting(mockLbugLoader(() => new Error(CORRUPT_WAL_ERROR)));
 
 			const store = new LadybugStore(path);
 			await expect(store.run("MATCH (n) RETURN n")).rejects.toThrow(/corrupted wal file/i);
+			// quarantine runs before the retry, independent of whether the retry succeeds
+			expect(existsSync(walPath)).toBe(false);
+			const quarantined = readdirSync(dir).filter((f) => f.startsWith("knowledge-graph.wal.corrupt-"));
+			expect(quarantined.length).toBe(1);
 		}));
 
 	test("rethrows a non-WAL error immediately without touching the .wal file", async () =>
@@ -148,17 +154,12 @@ describe("LadybugStore WAL-corruption recovery", () => {
 			writeFileSync(walPath, "not a real wal file");
 
 			let constructCalls = 0;
-			_setLbugLoaderForTesting(async () => ({
-				Database: class {
-					constructor(_dbPath: string) {
-						constructCalls += 1;
-						throw new Error("IO exception: Could not set lock on file");
-					}
-				} as unknown as new (
-					dbPath: string,
-				) => import("./store.ts").LbugDatabase,
-				Connection: class {} as unknown as new (db: import("./store.ts").LbugDatabase) => never,
-			}));
+			_setLbugLoaderForTesting(
+				mockLbugLoader((call) => {
+					constructCalls = call;
+					return new Error("IO exception: Could not set lock on file");
+				}),
+			);
 
 			const store = new LadybugStore(path);
 			await expect(store.run("MATCH (n) RETURN n")).rejects.toThrow(/could not set lock/i);

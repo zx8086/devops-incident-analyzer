@@ -75,7 +75,7 @@ interface LbugPreparedStatement {
 // lbug's query(statement, progressCallback?) does NOT take params; parameterized
 // queries go through prepare() + execute(prepared, params). The store uses the
 // param-less query() for DDL and prepare/execute for everything with bindings.
-interface LbugConnection {
+export interface LbugConnection {
 	query(cypher: string): Promise<LbugQueryResult>;
 	prepare(cypher: string): Promise<LbugPreparedStatement>;
 	execute(prepared: LbugPreparedStatement, params: Record<string, unknown>): Promise<LbugQueryResult>;
