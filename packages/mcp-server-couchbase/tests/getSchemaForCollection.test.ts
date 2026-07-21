@@ -1,5 +1,4 @@
 // tests/getSchemaForCollection.test.ts
-//
 // SIO-1168: regression tests asserting rendered field names are backtick-wrapped
 // so a reserved word (e.g. `option`) is never copied unescaped into a query.
 
@@ -16,6 +15,11 @@ describe("formatSchema field-name escaping (SIO-1168)", () => {
 	test("backtick-wraps nested field names", () => {
 		const text = formatSchema({ nested: { option: "value" } });
 		expect(text).toContain("`option`: string");
+	});
+
+	test("escapes an embedded backtick in a field name by doubling it", () => {
+		const text = formatSchema({ "a`b": "value" });
+		expect(text).toContain("`a``b`: string");
 	});
 });
 
@@ -54,5 +58,22 @@ describe("formatInferSchema field-name escaping (SIO-1168)", () => {
 		const text = formatInferSchema(rows);
 		expect(text).not.toBeNull();
 		expect(text).toContain("`option`: unknown");
+	});
+
+	test("escapes an embedded backtick in a field name by doubling it", () => {
+		const rows = [
+			[
+				{
+					"#docs": 10,
+					properties: {
+						"a`b": { type: "string", samples: ["x"] },
+					},
+				},
+			],
+		];
+
+		const text = formatInferSchema(rows);
+		expect(text).not.toBeNull();
+		expect(text).toContain("`a``b`: string");
 	});
 });

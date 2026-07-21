@@ -54,7 +54,7 @@ exact shapes and substitute your names/values:
   document is missing. If you don't already have the exact key from a prior
   query result or the incident context, call `capella_get_document_type_examples`
   first to see REAL example keys for that collection's document types:
-  ```
+  ```text
   capella_get_document_type_examples(scope_name="<scope>", collection_name="<collection>")
   ```
   or run the `META(d).id LIKE` scan shape below. Only call

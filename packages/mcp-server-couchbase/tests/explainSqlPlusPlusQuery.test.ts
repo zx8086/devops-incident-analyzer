@@ -1,5 +1,4 @@
 // tests/explainSqlPlusPlusQuery.test.ts
-//
 // SIO-1168: regression tests for wiring adviseCouchbaseError into the EXPLAIN
 // catch path and auto-enriching "no-index" failures with real advisor DDL.
 
