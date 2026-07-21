@@ -57,15 +57,24 @@ function findWebAppRoot(): string {
 	return process.cwd();
 }
 
+let loggedResolvedPath = false;
+
 export function graphPath(env: NodeJS.ProcessEnv = process.env): string {
-	if (env.KNOWLEDGE_GRAPH_PATH && env.KNOWLEDGE_GRAPH_PATH !== "") return env.KNOWLEDGE_GRAPH_PATH;
-	const path = join(findWebAppRoot(), ".data/knowledge-graph");
+	const path =
+		env.KNOWLEDGE_GRAPH_PATH && env.KNOWLEDGE_GRAPH_PATH !== ""
+			? env.KNOWLEDGE_GRAPH_PATH
+			: join(findWebAppRoot(), ".data/knowledge-graph");
 	// SIO-1167: log the resolved path once per process at the point of decision,
 	// not buried inside getGraphStore()'s IIFE -- SIO-1166's investigation lost
 	// real time because nothing surfaced WHICH directory a live process had
 	// actually opened; this one line would have made the repo-root misdirection
 	// obvious immediately instead of requiring temporary source instrumentation.
-	logger.info({ path }, "resolved knowledge-graph store path");
+	// Guarded to fire once (graphPath() is called from several places, incl. on
+	// every test), not once per call.
+	if (!loggedResolvedPath) {
+		loggedResolvedPath = true;
+		logger.info({ path }, "resolved knowledge-graph store path");
+	}
 	return path;
 }
 
