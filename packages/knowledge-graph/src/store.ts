@@ -6,8 +6,9 @@
 // embedded (in-process) implementation; a future Neo4jStore implements the same
 // three methods and is the ONLY file that changes for the swap.
 
-import { existsSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync, renameSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { getLogger } from "@devops-agent/observability";
 import { ALTER_MIGRATIONS, MIGRATIONS, VECTOR_INDEX_SETUP } from "./schema.ts";
 
@@ -29,11 +30,34 @@ export function isKnowledgeGraphEnabled(env: NodeJS.ProcessEnv = process.env): b
 	return v === "true" || v === "1";
 }
 
-export function graphPath(env: NodeJS.ProcessEnv = process.env): string {
-	return env.KNOWLEDGE_GRAPH_PATH && env.KNOWLEDGE_GRAPH_PATH !== ""
-		? env.KNOWLEDGE_GRAPH_PATH
-		: ".data/knowledge-graph";
+// SIO-1163: anchor at the repo root (found by walking up from this file's own
+// location, not process.cwd()), because cwd varies by launcher -- apps/web's dev
+// server runs from apps/web, cron/CLI scripts often run from the repo root -- and
+// a cwd-relative default silently resolved to two different directories with no
+// indication which one a given process had open (SIO-1129). Mirrors the same
+// walk-up-for-a-marker-file strategy as packages/agent/src/paths.ts, duplicated
+// locally (not imported) because agent depends on knowledge-graph, not vice versa.
+function findRepoRoot(): string {
+	try {
+		let dir = dirname(fileURLToPath(import.meta.url));
+		for (let i = 0; i < 10; i++) {
+			if (existsSync(join(dir, "bun.lock"))) return dir;
+			const parent = resolve(dir, "..");
+			if (parent === dir) break;
+			dir = parent;
+		}
+	} catch {
+		// import.meta.url may not resolve in all environments
+	}
+	return process.cwd();
 }
+
+export function graphPath(env: NodeJS.ProcessEnv = process.env): string {
+	if (env.KNOWLEDGE_GRAPH_PATH && env.KNOWLEDGE_GRAPH_PATH !== "") return env.KNOWLEDGE_GRAPH_PATH;
+	return join(findRepoRoot(), ".data/knowledge-graph");
+}
+
+const WAL_CORRUPTION_PATTERN = /corrupted wal file/i;
 
 // --- LadybugDB (lbug) embedded implementation -------------------------------
 //
@@ -51,20 +75,20 @@ interface LbugPreparedStatement {
 // lbug's query(statement, progressCallback?) does NOT take params; parameterized
 // queries go through prepare() + execute(prepared, params). The store uses the
 // param-less query() for DDL and prepare/execute for everything with bindings.
-interface LbugConnection {
+export interface LbugConnection {
 	query(cypher: string): Promise<LbugQueryResult>;
 	prepare(cypher: string): Promise<LbugPreparedStatement>;
 	execute(prepared: LbugPreparedStatement, params: Record<string, unknown>): Promise<LbugQueryResult>;
 }
-interface LbugDatabase {
+export interface LbugDatabase {
 	close?(): Promise<void> | void;
 }
-interface LbugModule {
+export interface LbugModule {
 	Database: new (path: string) => LbugDatabase;
 	Connection: new (db: LbugDatabase) => LbugConnection;
 }
 
-async function loadLbug(): Promise<LbugModule> {
+async function loadRealLbug(): Promise<LbugModule> {
 	const specifier: string = "lbug";
 	// Non-literal specifier -> TS does not statically resolve the module, so this
 	// compiles without lbug installed. Resolved at runtime only when enabled.
@@ -72,6 +96,14 @@ async function loadLbug(): Promise<LbugModule> {
 	// "dynamic import cannot be analyzed" SSR warning (lbug is an optional dep).
 	const mod = (await import(/* @vite-ignore */ specifier)) as unknown as LbugModule;
 	return mod;
+}
+
+// Test seam: override the lbug module LadybugStore loads, so the WAL-corruption
+// classify/quarantine/retry path in openDatabase() below is exercisable without
+// the native module installed. Pass undefined to restore the real loader.
+let loadLbug: () => Promise<LbugModule> = loadRealLbug;
+export function _setLbugLoaderForTesting(loader?: () => Promise<LbugModule>): void {
+	loadLbug = loader ?? loadRealLbug;
 }
 
 export class LadybugStore implements GraphStore {
@@ -85,9 +117,33 @@ export class LadybugStore implements GraphStore {
 		const dir = dirname(this.path);
 		if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true });
 		const lbug = await loadLbug();
-		this.db = new lbug.Database(this.path);
+		this.db = await this.openDatabase(lbug);
 		this.conn = new lbug.Connection(this.db);
 		return this.conn;
+	}
+
+	// SIO-1163: a crash mid-write can leave the WAL in a state lbug's replay can't
+	// parse, which otherwise poisons every future open of this store (SIO-1129).
+	// Quarantine the unreplayable WAL and retry once against the base file -- the
+	// same recovery already proven safe manually, just automatic. A second failure
+	// (or a non-WAL error) rethrows unchanged; we never mask a genuinely different problem.
+	private async openDatabase(lbug: LbugModule): Promise<LbugDatabase> {
+		try {
+			return new lbug.Database(this.path);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			if (!WAL_CORRUPTION_PATTERN.test(message)) throw error;
+			const walPath = `${this.path}.wal`;
+			if (existsSync(walPath)) {
+				const quarantinePath = `${walPath}.corrupt-${Date.now()}`;
+				renameSync(walPath, quarantinePath);
+				logger.warn(
+					{ path: this.path, quarantinePath, error: message },
+					"corrupt WAL quarantined; retrying open against base file",
+				);
+			}
+			return new lbug.Database(this.path);
+		}
 	}
 
 	async init(): Promise<void> {
@@ -193,15 +249,31 @@ export class InMemoryGraphStore implements GraphStore {
 
 let storePromise: Promise<GraphStore> | null = null;
 
+async function openRealStore(): Promise<GraphStore> {
+	const path = graphPath();
+	logger.debug({ path }, "opening knowledge-graph store");
+	const store = new LadybugStore(path);
+	await store.init();
+	return store;
+}
+
+// Test seam: override how a fresh store is constructed (default: openRealStore).
+// Lets tests exercise the reset-on-failure control flow in getGraphStore()
+// without the native lbug module installed.
+let storeFactory: () => Promise<GraphStore> = openRealStore;
+
 // Returns the process-wide embedded store, initializing the schema on first
 // use. Mirrors the agent's mcpReady/graphPromise memoization.
 export function getGraphStore(): Promise<GraphStore> {
 	if (!storePromise) {
-		storePromise = (async () => {
-			const store = new LadybugStore(graphPath());
-			await store.init();
-			return store;
-		})();
+		storePromise = storeFactory().catch((error) => {
+			// SIO-1163: a rejected promise is a permanently cached rejection in JS --
+			// without this reset, one transient failure (e.g. a WAL the auto-recovery
+			// above couldn't repair) would poison every caller for the rest of the
+			// process lifetime instead of getting a fresh attempt next time.
+			storePromise = null;
+			throw error;
+		});
 	}
 	return storePromise;
 }
@@ -209,4 +281,12 @@ export function getGraphStore(): Promise<GraphStore> {
 // Test seam: inject a store (e.g. InMemoryGraphStore) and reset the singleton.
 export function _setGraphStoreForTesting(store: GraphStore | null): void {
 	storePromise = store ? Promise.resolve(store) : null;
+}
+
+// Test seam: override the factory getGraphStore() uses on a cache miss, and
+// reset the singleton so the next call invokes it. Pass undefined to restore
+// the real LadybugStore factory.
+export function _setGraphStoreFactoryForTesting(factory?: () => Promise<GraphStore>): void {
+	storeFactory = factory ?? openRealStore;
+	storePromise = null;
 }
