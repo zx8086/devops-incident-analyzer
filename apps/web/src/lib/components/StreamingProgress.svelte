@@ -1,55 +1,14 @@
 <script lang="ts">
 // apps/web/src/lib/components/StreamingProgress.svelte
+import {
+	HIL_LEARNING_NODES,
+	IAC_DRIFT_NODES,
+	IAC_FLEET_NODES,
+	IAC_MAKER_NODES,
+	INCIDENT_MITIGATION_NODES,
+	INCIDENT_NODES,
+} from "$lib/node-labels";
 import Icon from "./Icon.svelte";
-
-// The incident pipeline and the elastic-iac maker graph run different node ids, so the
-// step labels are selected per agent. Both id sets are already emitted by the server SSE
-// pump (PIPELINE_NODES) into activeNodes/completedNodes; only the matching labels differ.
-const INCIDENT_NODES = [
-	{ id: "classify", activeLabel: "Classifying", completeLabel: "Classified" },
-	{ id: "entityExtractor", activeLabel: "Extracting", completeLabel: "Extracted" },
-	{ id: "queryDataSource", activeLabel: "Querying", completeLabel: "Queried" },
-	{ id: "align", activeLabel: "Aligning", completeLabel: "Aligned" },
-	{ id: "aggregate", activeLabel: "Analyzing", completeLabel: "Analyzed" },
-	{ id: "validate", activeLabel: "Validating", completeLabel: "Validated" },
-] as const;
-
-// elastic-iac maker happy path (version-upgrade / tier-resize / ilm-rollout). bootstrap,
-// classifyIacIntent and teardown are plumbing/covered elsewhere and omitted. SIO-984: watchPipeline
-// is now a first-class step (the post-MR poll-to-terminal phase).
-const IAC_MAKER_NODES = [
-	{ id: "parseIntent", activeLabel: "Parsing", completeLabel: "Parsed" },
-	{ id: "readClusterState", activeLabel: "Reading state", completeLabel: "Read state" },
-	{ id: "guard", activeLabel: "Checking", completeLabel: "Checked" },
-	{ id: "draftChange", activeLabel: "Drafting", completeLabel: "Drafted" },
-	{ id: "reviewPlan", activeLabel: "Preparing review", completeLabel: "Prepared" },
-	{ id: "openMr", activeLabel: "Opening MR", completeLabel: "MR opened" },
-	{ id: "watchPipeline", activeLabel: "Watching pipeline", completeLabel: "Pipeline done" },
-] as const;
-
-// SIO-903: drift (SIO-882) + synthetics-drift (SIO-902) sub-flow. A drift run never executes
-// the maker nodes (and vice versa), so the two lists are rendered exclusively -- pick whichever
-// the live node events match, so a drift audit leads with "Detecting drift" rather than six grey
-// maker pills that never light up.
-const IAC_DRIFT_NODES = [
-	{ id: "detectDrift", activeLabel: "Detecting drift", completeLabel: "Drift detected" },
-	{ id: "reconcileGate", activeLabel: "Reviewing drift", completeLabel: "Reviewed" },
-	{ id: "reconcileStack", activeLabel: "Reconciling", completeLabel: "Reconciled" },
-	{ id: "advanceDrift", activeLabel: "Advancing", completeLabel: "Advanced" },
-	{ id: "detectSyntheticsDrift", activeLabel: "Checking synthetics", completeLabel: "Synthetics checked" },
-	{ id: "syntheticsPushGate", activeLabel: "Reviewing push", completeLabel: "Reviewed" },
-	{ id: "pushSynthetics", activeLabel: "Pushing synthetics", completeLabel: "Pushed" },
-] as const;
-
-// SIO-935: fleet-upgrade (binary bulk_upgrade) sub-flow. A fleet run executes ONLY these three
-// and never the maker/drift nodes, so it is rendered exclusively -- same mutual-exclusion idiom.
-// fleetUpgradeGate is an interrupt (HITL pause): its on_chain_end fires only after resume, so the
-// pill rests in the active "Awaiting approval" state during the pause, then flips to "Approved".
-const IAC_FLEET_NODES = [
-	{ id: "detectFleetUpgrade", activeLabel: "Assessing fleet", completeLabel: "Assessed" },
-	{ id: "fleetUpgradeGate", activeLabel: "Awaiting approval", completeLabel: "Approved" },
-	{ id: "applyFleetUpgrade", activeLabel: "Upgrading", completeLabel: "Upgraded" },
-] as const;
 
 let {
 	activeNodes,
@@ -72,7 +31,20 @@ const iacNodes = $derived.by(() => {
 	return isDrift ? IAC_DRIFT_NODES : IAC_MAKER_NODES;
 });
 
-const NODES = $derived(variant === "iac" ? iacNodes : INCIDENT_NODES);
+// Incident flow: mitigationRouter picks exactly one of proposeInvestigate/
+// proposeMonitor/proposeEscalate per turn -- show all three until one is seen,
+// then collapse to just that one, same idiom as the IaC sub-flow selection.
+// The HIL learning lane only runs on an explicit "learn from TICKET-123"
+// command, so it's hidden entirely unless learnFetchTicket is seen.
+const incidentNodes = $derived.by(() => {
+	const seen = (id: string) => activeNodes.has(id) || completedNodes.has(id);
+	const mitigationNode = INCIDENT_MITIGATION_NODES.find((n) => seen(n.id));
+	const mitigation = mitigationNode ? [mitigationNode] : INCIDENT_MITIGATION_NODES;
+	const learning = HIL_LEARNING_NODES.some((n) => seen(n.id)) ? HIL_LEARNING_NODES : [];
+	return [...INCIDENT_NODES, ...mitigation, ...learning];
+});
+
+const NODES = $derived(variant === "iac" ? iacNodes : incidentNodes);
 
 const currentActiveLabel = $derived.by(() => {
 	for (const node of NODES) {

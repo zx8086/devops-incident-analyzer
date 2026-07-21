@@ -1,45 +1,8 @@
 <script lang="ts">
 // apps/web/src/lib/components/CompletedProgress.svelte
+import { ALL_NODE_LABELS } from "$lib/node-labels";
 import type { DataSourceFindings } from "$lib/stores/agent-reducer";
 import Icon from "./Icon.svelte";
-
-// SIO-934: incident-graph + elastic-iac node labels. IaC completed-labels mirror
-// StreamingProgress's IAC_MAKER_NODES/IAC_DRIFT_NODES completeLabels so the live and historical
-// panels read identically. Unmapped ids fall back to the raw id (NODE_LABELS[id] ?? id).
-const NODE_LABELS: Record<string, string> = {
-	// incident pipeline
-	classify: "Classified",
-	entityExtractor: "Extracted",
-	queryDataSource: "Queried",
-	align: "Aligned",
-	aggregate: "Analyzed",
-	extractFindings: "Findings",
-	validate: "Validated",
-	// elastic-iac maker graph
-	bootstrap: "Bootstrapped",
-	parseIntent: "Parsed",
-	readClusterState: "Read state",
-	guard: "Checked",
-	draftChange: "Drafted",
-	reviewPlan: "Prepared",
-	reviewGate: "Reviewed",
-	openMr: "MR opened",
-	watchPipeline: "Pipeline", // SIO-984: the post-MR poll-to-terminal watch phase
-	teardown: "Finished",
-	// elastic-iac drift sub-flow
-	detectDrift: "Drift detected",
-	reconcileGate: "Reviewed",
-	reconcileStack: "Reconciled",
-	advanceDrift: "Advanced",
-	// elastic-iac synthetics drift sub-flow
-	detectSyntheticsDrift: "Synthetics checked",
-	syntheticsPushGate: "Reviewed",
-	pushSynthetics: "Pushed",
-	// elastic-iac fleet upgrade sub-flow
-	detectFleetUpgrade: "Upgrade checked",
-	fleetUpgradeGate: "Reviewed",
-	applyFleetUpgrade: "Upgrade applied",
-};
 
 interface DataSourceStatus {
 	status: string;
@@ -236,7 +199,7 @@ function statusDotClass(status: string): string {
               {#each [...completedNodes.entries()] as [nodeId, data]}
                 <span class="inline-flex items-center gap-1 py-0.5 px-2 rounded-full bg-green-100 text-green-700 text-[0.625rem] font-medium">
                   <Icon name="check" class="w-2.5 h-2.5" />
-                  {NODE_LABELS[nodeId] ?? nodeId}
+                  {ALL_NODE_LABELS[nodeId]?.completeLabel ?? nodeId}
                   <span class="text-green-500 text-[0.5rem]">{(data.duration / 1000).toFixed(1)}s</span>
                 </span>
               {/each}
