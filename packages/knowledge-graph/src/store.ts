@@ -7,7 +7,8 @@
 // three methods and is the ONLY file that changes for the swap.
 
 import { existsSync, mkdirSync, renameSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { getLogger } from "@devops-agent/observability";
 import { ALTER_MIGRATIONS, MIGRATIONS, VECTOR_INDEX_SETUP } from "./schema.ts";
 
@@ -29,13 +30,31 @@ export function isKnowledgeGraphEnabled(env: NodeJS.ProcessEnv = process.env): b
 	return v === "true" || v === "1";
 }
 
+// SIO-1163: anchor at the repo root (found by walking up from this file's own
+// location, not process.cwd()), because cwd varies by launcher -- apps/web's dev
+// server runs from apps/web, cron/CLI scripts often run from the repo root -- and
+// a cwd-relative default silently resolved to two different directories with no
+// indication which one a given process had open (SIO-1129). Mirrors the same
+// walk-up-for-a-marker-file strategy as packages/agent/src/paths.ts, duplicated
+// locally (not imported) because agent depends on knowledge-graph, not vice versa.
+function findRepoRoot(): string {
+	try {
+		let dir = dirname(fileURLToPath(import.meta.url));
+		for (let i = 0; i < 10; i++) {
+			if (existsSync(join(dir, "bun.lock"))) return dir;
+			const parent = resolve(dir, "..");
+			if (parent === dir) break;
+			dir = parent;
+		}
+	} catch {
+		// import.meta.url may not resolve in all environments
+	}
+	return process.cwd();
+}
+
 export function graphPath(env: NodeJS.ProcessEnv = process.env): string {
 	if (env.KNOWLEDGE_GRAPH_PATH && env.KNOWLEDGE_GRAPH_PATH !== "") return env.KNOWLEDGE_GRAPH_PATH;
-	// SIO-1163: absolute, not cwd-relative -- a bare ".data/knowledge-graph" resolved
-	// differently depending on which directory the process happened to start in
-	// (apps/web vs repo root), leaving two divergent stores and no way to tell which
-	// one a given process had open (SIO-1129).
-	return resolve(process.cwd(), ".data/knowledge-graph");
+	return join(findRepoRoot(), ".data/knowledge-graph");
 }
 
 const WAL_CORRUPTION_PATTERN = /corrupted wal file/i;
@@ -61,15 +80,15 @@ interface LbugConnection {
 	prepare(cypher: string): Promise<LbugPreparedStatement>;
 	execute(prepared: LbugPreparedStatement, params: Record<string, unknown>): Promise<LbugQueryResult>;
 }
-interface LbugDatabase {
+export interface LbugDatabase {
 	close?(): Promise<void> | void;
 }
-interface LbugModule {
+export interface LbugModule {
 	Database: new (path: string) => LbugDatabase;
 	Connection: new (db: LbugDatabase) => LbugConnection;
 }
 
-async function loadLbug(): Promise<LbugModule> {
+async function loadRealLbug(): Promise<LbugModule> {
 	const specifier: string = "lbug";
 	// Non-literal specifier -> TS does not statically resolve the module, so this
 	// compiles without lbug installed. Resolved at runtime only when enabled.
@@ -77,6 +96,14 @@ async function loadLbug(): Promise<LbugModule> {
 	// "dynamic import cannot be analyzed" SSR warning (lbug is an optional dep).
 	const mod = (await import(/* @vite-ignore */ specifier)) as unknown as LbugModule;
 	return mod;
+}
+
+// Test seam: override the lbug module LadybugStore loads, so the WAL-corruption
+// classify/quarantine/retry path in openDatabase() below is exercisable without
+// the native module installed. Pass undefined to restore the real loader.
+let loadLbug: () => Promise<LbugModule> = loadRealLbug;
+export function _setLbugLoaderForTesting(loader?: () => Promise<LbugModule>): void {
+	loadLbug = loader ?? loadRealLbug;
 }
 
 export class LadybugStore implements GraphStore {
