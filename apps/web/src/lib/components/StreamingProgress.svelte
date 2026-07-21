@@ -13,10 +13,16 @@ import Icon from "./Icon.svelte";
 let {
 	activeNodes,
 	completedNodes,
+	subAgentProgress = new Map(),
 	variant = "incident",
 }: {
 	activeNodes: Set<string>;
 	completedNodes: Map<string, { duration: number }>;
+	// Live per-sub-agent status during the queryDataSource fan-out (see
+	// node-labels.ts / sse-pump.ts's "subagent_progress" event) -- fills the
+	// multi-minute gap between the "Querying..." and "Aligning" pills with
+	// visible per-datasource activity instead of a single static pill.
+	subAgentProgress?: Map<string, { status: "running" | "done"; toolCallCount?: number; deploymentId?: string }>;
 	variant?: "incident" | "iac";
 } = $props();
 
@@ -53,6 +59,17 @@ const currentActiveLabel = $derived.by(() => {
 	if (activeNodes.size > 0) return "Processing...";
 	return "Starting...";
 });
+
+// Sort running entries first (most relevant while queryDataSource is active),
+// then by dataSourceId for stable ordering as entries arrive out of order.
+const subAgentRows = $derived(
+	[...subAgentProgress.entries()]
+		.map(([key, v]) => ({ key, ...v }))
+		.sort((a, b) => {
+			if (a.status !== b.status) return a.status === "running" ? -1 : 1;
+			return a.key.localeCompare(b.key);
+		}),
+);
 
 function pillClass(nodeId: string): string {
 	const completed = completedNodes.has(nodeId);
@@ -98,5 +115,24 @@ function pillClass(nodeId: string): string {
         </span>
       {/each}
     </div>
+
+    {#if activeNodes.has("queryDataSource") && subAgentRows.length > 0}
+      <div class="flex flex-col gap-1 mt-2 pt-2 border-t border-gray-200/70">
+        {#each subAgentRows as row (row.key)}
+          <div class="flex items-center gap-1.5 text-[0.625rem] text-gray-500">
+            {#if row.status === "running"}
+              <Icon name="spinner" class="w-2.5 h-2.5 animate-spin text-tommy-accent-blue" />
+            {:else}
+              <Icon name="check" class="w-2.5 h-2.5 text-green-500" />
+            {/if}
+            <span class="font-medium text-gray-700">{row.key}</span>
+            <span>{row.status === "running" ? "running" : "done"}</span>
+            {#if row.toolCallCount}
+              <span>&middot; {row.toolCallCount} tool{row.toolCallCount !== 1 ? "s" : ""}</span>
+            {/if}
+          </div>
+        {/each}
+      </div>
+    {/if}
   </div>
 {/if}

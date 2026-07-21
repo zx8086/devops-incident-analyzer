@@ -11,6 +11,7 @@ import {
 	ToolErrorCategorySchema,
 	ToolErrorKindSchema,
 } from "@devops-agent/shared";
+import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
@@ -891,7 +892,7 @@ ${state.correlationFetchDirective}`
 		// When SUBAGENT_TOOL_RESULT_CAP_BYTES is set, oversized ToolMessage.content is
 		// JSON-aware truncated before re-entering the ReAct loop.
 		const capBytes = getSubAgentToolCapBytes();
-		const instrumentedTools = instrumentTools(tools, { dataSourceId, deploymentId, log, capBytes });
+		const instrumentedTools = instrumentTools(tools, { dataSourceId, deploymentId, log, capBytes, config });
 
 		const agent = createReactAgent({
 			llm,
@@ -911,6 +912,11 @@ ${state.correlationFetchDirective}`
 			{ deploymentId, recursionLimit, ...(timeoutMs < baseTimeoutMs && { cappedTimeoutMs: timeoutMs }) },
 			"Invoking sub-agent",
 		);
+		// Live progress signal: fires once at the true start of this sub-agent branch
+		// (each queryDataSource Send is a distinct branch, so this fills the gap the
+		// shared node-level node_start/node_end can't -- see sse-pump.ts's
+		// "subagent_progress" forwarding).
+		await dispatchCustomEvent("subagent_progress", { dataSourceId, deploymentId, status: "running" }, config);
 		// SIO-1029: stream so a recursion-limit blow-up salvages partial findings
 		// (see invokeSubAgentWithSalvage) instead of returning a hard error with
 		// no data. Behaviour on normal completion is unchanged (final { messages }).
@@ -1026,6 +1032,11 @@ ${state.correlationFetchDirective}`
 			...(deploymentId && { deploymentId }),
 			error: error instanceof Error ? error.message : String(error),
 		};
+	} finally {
+		// Live progress signal: marks this branch done regardless of exit path
+		// (success, all-tools-failed, or thrown error) so the UI's live sub-agent
+		// line flips from "running" to "done" instead of sticking forever.
+		await dispatchCustomEvent("subagent_progress", { dataSourceId, deploymentId, status: "done" }, config);
 	}
 }
 

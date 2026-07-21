@@ -595,6 +595,19 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		status: z.enum(["pending", "running", "success", "error"]),
 		message: z.string().optional(),
 	}),
+	// Live in-flight signal for the queryDataSource fan-out: fired once when a
+	// sub-agent's ReAct loop starts, then again after each tool call resolves.
+	// Distinct from datasource_progress (which only ever reports success/error
+	// once, after the whole turn's aggregation completes) -- this exists purely
+	// to fill the multi-minute gap between "Querying..." and "Aligning" with a
+	// live per-sub-agent status instead of a static pill.
+	z.object({
+		type: z.literal("subagent_progress"),
+		dataSourceId: z.string(),
+		deploymentId: z.string().optional(),
+		status: z.enum(["running", "done"]),
+		toolCallCount: z.number().optional(),
+	}),
 	// SIO-775: terminal per-datasource result with typed findings. Emitted once
 	// per sub-agent at aggregate on_chain_end so the UI can render typed cards
 	// (KafkaFindingsCard, etc.) inline. Distinct from datasource_progress

@@ -305,6 +305,27 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 			send({ type: "tool_call", toolName, args: event.data?.input ?? {} });
 		}
 
+		// Forward the queryDataSource fan-out's live per-sub-agent signal (start +
+		// per-tool-call tick) so the UI can show progress during the multi-minute gap
+		// between the "Querying..." and "Aligning" pipeline pills.
+		if (event.event === "on_custom_event" && event.name === "subagent_progress") {
+			const data = event.data as {
+				dataSourceId?: unknown;
+				deploymentId?: unknown;
+				status?: unknown;
+				toolCallCount?: unknown;
+			};
+			if (typeof data?.dataSourceId === "string") {
+				send({
+					type: "subagent_progress",
+					dataSourceId: data.dataSourceId,
+					...(typeof data.deploymentId === "string" && { deploymentId: data.deploymentId }),
+					status: data.status === "done" ? "done" : "running",
+					...(typeof data.toolCallCount === "number" && { toolCallCount: data.toolCallCount }),
+				});
+			}
+		}
+
 		// SIO-876: forward watchPipeline's live status transitions to the UI.
 		if (event.event === "on_custom_event" && event.name === "iac_pipeline_progress") {
 			const data = event.data as { pipelineId?: number | null; status?: unknown; url?: unknown };

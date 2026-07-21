@@ -335,6 +335,12 @@ export interface ReducerState {
 	completedNodes: Map<string, { duration: number }>;
 	dataSourceProgress: Map<string, { status: string; message?: string }>;
 	dataSourceFindings: Map<string, DataSourceFindings>;
+	// Live in-flight status during the queryDataSource fan-out (running/done +
+	// tool-call count), keyed by dataSourceId, or dataSourceId:deploymentId when
+	// deploymentId is set (distinguishes concurrent AWS multi-estate branches).
+	// Populated well before dataSourceProgress/dataSourceFindings (which only
+	// arrive once at the very end of the whole turn's aggregation).
+	subAgentProgress: Map<string, { status: "running" | "done"; toolCallCount?: number; deploymentId?: string }>;
 	lastSuggestions: string[];
 	lastResponseTime: number | undefined;
 	lastToolsUsed: string[];
@@ -405,6 +411,7 @@ export function initialReducerState(): ReducerState {
 		completedNodes: new Map(),
 		dataSourceProgress: new Map(),
 		dataSourceFindings: new Map(),
+		subAgentProgress: new Map(),
 		lastSuggestions: [],
 		lastResponseTime: undefined,
 		lastToolsUsed: [],
@@ -445,6 +452,12 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 			return { ...state, currentContent: event.content };
 		case "tool_call":
 			return state;
+		case "subagent_progress": {
+			const next = new Map(state.subAgentProgress);
+			const key = event.deploymentId ? `${event.dataSourceId}:${event.deploymentId}` : event.dataSourceId;
+			next.set(key, { status: event.status, toolCallCount: event.toolCallCount, deploymentId: event.deploymentId });
+			return { ...state, subAgentProgress: next };
+		}
 		case "datasource_progress": {
 			const next = new Map(state.dataSourceProgress);
 			next.set(event.dataSourceId, { status: event.status, message: event.message });
