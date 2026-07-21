@@ -30,18 +30,23 @@ export function isKnowledgeGraphEnabled(env: NodeJS.ProcessEnv = process.env): b
 	return v === "true" || v === "1";
 }
 
-// SIO-1163: anchor at the repo root (found by walking up from this file's own
-// location, not process.cwd()), because cwd varies by launcher -- apps/web's dev
-// server runs from apps/web, cron/CLI scripts often run from the repo root -- and
-// a cwd-relative default silently resolved to two different directories with no
-// indication which one a given process had open (SIO-1129). Mirrors the same
-// walk-up-for-a-marker-file strategy as packages/agent/src/paths.ts, duplicated
-// locally (not imported) because agent depends on knowledge-graph, not vice versa.
-function findRepoRoot(): string {
+// SIO-1163 anchored the bare default at the repo root (found by walking up from
+// this file's own location) to kill cwd ambiguity -- but that pointed at the
+// WRONG directory: the app's real, historically-populated store has always
+// lived at apps/web/.data/knowledge-graph, not <repo-root>/.data/knowledge-graph.
+// SIO-1167 corrects this: anchor at apps/web specifically, still via a stable
+// walk-up-for-a-marker-file (apps/web/package.json), not process.cwd() -- cwd
+// still varies by launcher (apps/web's dev server runs from apps/web, cron/CLI
+// scripts often run from the repo root), so a bare cwd-relative default would
+// silently resolve to two different directories with no indication which one a
+// given process had open (SIO-1129). Mirrors packages/agent/src/paths.ts's
+// strategy, duplicated locally (not imported) because agent depends on
+// knowledge-graph, not vice versa.
+function findWebAppRoot(): string {
 	try {
 		let dir = dirname(fileURLToPath(import.meta.url));
 		for (let i = 0; i < 10; i++) {
-			if (existsSync(join(dir, "bun.lock"))) return dir;
+			if (existsSync(join(dir, "apps", "web", "package.json"))) return join(dir, "apps", "web");
 			const parent = resolve(dir, "..");
 			if (parent === dir) break;
 			dir = parent;
@@ -52,9 +57,25 @@ function findRepoRoot(): string {
 	return process.cwd();
 }
 
+let loggedResolvedPath = false;
+
 export function graphPath(env: NodeJS.ProcessEnv = process.env): string {
-	if (env.KNOWLEDGE_GRAPH_PATH && env.KNOWLEDGE_GRAPH_PATH !== "") return env.KNOWLEDGE_GRAPH_PATH;
-	return join(findRepoRoot(), ".data/knowledge-graph");
+	const path =
+		env.KNOWLEDGE_GRAPH_PATH && env.KNOWLEDGE_GRAPH_PATH !== ""
+			? env.KNOWLEDGE_GRAPH_PATH
+			: join(findWebAppRoot(), ".data/knowledge-graph");
+	// SIO-1167: log the resolved path once per process at the point of decision,
+	// not buried inside getGraphStore()'s IIFE -- SIO-1166's investigation lost
+	// real time because nothing surfaced WHICH directory a live process had
+	// actually opened; this one line would have made the repo-root misdirection
+	// obvious immediately instead of requiring temporary source instrumentation.
+	// Guarded to fire once (graphPath() is called from several places, incl. on
+	// every test), not once per call.
+	if (!loggedResolvedPath) {
+		loggedResolvedPath = true;
+		logger.info({ path }, "resolved knowledge-graph store path");
+	}
+	return path;
 }
 
 const WAL_CORRUPTION_PATTERN = /corrupted wal file/i;

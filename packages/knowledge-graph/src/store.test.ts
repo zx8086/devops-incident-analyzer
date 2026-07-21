@@ -52,10 +52,13 @@ describe("graphPath", () => {
 		expect(graphPath({ KNOWLEDGE_GRAPH_PATH: "/custom/path" } as NodeJS.ProcessEnv)).toBe("/custom/path");
 	});
 
-	test("resolves the bare default to an absolute path anchored at the repo root, not cwd", () => {
+	test("resolves the bare default to an absolute path anchored at apps/web, not the repo root or cwd", () => {
+		// SIO-1167: an earlier anchor at the repo root (not apps/web) silently
+		// redirected the whole app to a different, stale store with no error --
+		// assert the actual expected directory, not just "some absolute path".
 		const path = graphPath({} as NodeJS.ProcessEnv);
 		expect(isAbsolute(path)).toBe(true);
-		expect(path.endsWith(".data/knowledge-graph")).toBe(true);
+		expect(path.endsWith(join("apps", "web", ".data", "knowledge-graph"))).toBe(true);
 		expect(path).not.toBe(join(process.cwd(), ".data/knowledge-graph"));
 	});
 
