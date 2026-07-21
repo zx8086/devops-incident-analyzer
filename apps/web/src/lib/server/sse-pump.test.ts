@@ -139,6 +139,98 @@ describe("pumpEventStream datasource_result", () => {
 	});
 });
 
+describe("pumpEventStream subagent_progress", () => {
+	test("forwards a valid running event with a tool-call count", async () => {
+		const captured: Array<Record<string, unknown>> = [];
+		const send = (event: Record<string, unknown>) => {
+			captured.push(event);
+		};
+
+		await pumpEventStream(
+			fromArray([
+				{
+					event: "on_custom_event",
+					name: "subagent_progress",
+					data: { dataSourceId: "kafka", status: "running", toolCallCount: 3 } as unknown as {
+						output?: Record<string, unknown>;
+					},
+				},
+			]),
+			send,
+		);
+
+		const events = captured.filter((e) => e.type === "subagent_progress");
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({ dataSourceId: "kafka", status: "running", toolCallCount: 3 });
+	});
+
+	test("forwards a done event scoped to a deployment (AWS multi-estate branch)", async () => {
+		const captured: Array<Record<string, unknown>> = [];
+		const send = (event: Record<string, unknown>) => {
+			captured.push(event);
+		};
+
+		await pumpEventStream(
+			fromArray([
+				{
+					event: "on_custom_event",
+					name: "subagent_progress",
+					data: { dataSourceId: "aws", deploymentId: "estate:eu-oit-prd", status: "done" } as unknown as {
+						output?: Record<string, unknown>;
+					},
+				},
+			]),
+			send,
+		);
+
+		expect(captured.filter((e) => e.type === "subagent_progress")).toEqual([
+			{ type: "subagent_progress", dataSourceId: "aws", deploymentId: "estate:eu-oit-prd", status: "done" },
+		]);
+	});
+
+	test("drops a malformed payload (invalid status) instead of forwarding it", async () => {
+		const captured: Array<Record<string, unknown>> = [];
+		const send = (event: Record<string, unknown>) => {
+			captured.push(event);
+		};
+
+		await pumpEventStream(
+			fromArray([
+				{
+					event: "on_custom_event",
+					name: "subagent_progress",
+					data: { dataSourceId: "kafka", status: "not-a-real-status" } as unknown as {
+						output?: Record<string, unknown>;
+					},
+				},
+			]),
+			send,
+		);
+
+		expect(captured.filter((e) => e.type === "subagent_progress")).toHaveLength(0);
+	});
+
+	test("drops a payload missing the required dataSourceId", async () => {
+		const captured: Array<Record<string, unknown>> = [];
+		const send = (event: Record<string, unknown>) => {
+			captured.push(event);
+		};
+
+		await pumpEventStream(
+			fromArray([
+				{
+					event: "on_custom_event",
+					name: "subagent_progress",
+					data: { status: "running" } as unknown as { output?: Record<string, unknown> },
+				},
+			]),
+			send,
+		);
+
+		expect(captured.filter((e) => e.type === "subagent_progress")).toHaveLength(0);
+	});
+});
+
 // SIO-935: the fleet-upgrade nodes were missing from PIPELINE_NODES, so their on_chain_start/
 // on_chain_end events were dropped and the tracing pills never lit up. This pins the emission.
 describe("pumpEventStream fleet-upgrade node progress", () => {
