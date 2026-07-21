@@ -31,20 +31,42 @@ const logger = getLogger("agent:memory-backend");
 function isNetworkFailure(error: unknown): boolean {
 	return error instanceof TypeError && error.message === "fetch failed";
 }
+// CodeRabbit (PR #437): a single-level unwrap missed an AggregateError nested inside `.cause`
+// (or a `.errors` member with its own `.cause`) -- e.g. Node's fetch() can throw a TypeError
+// whose `.cause` is itself an AggregateError of per-address connection attempts. Recurse with a
+// depth cap so a pathological/cyclic cause chain can't loop forever.
+const MAX_CAUSE_DEPTH = 5;
+function collectCauseMessages(candidate: unknown, depth: number, out: string[]): void {
+	if (depth > MAX_CAUSE_DEPTH) return;
+	if (candidate instanceof AggregateError) {
+		for (const child of candidate.errors) collectCauseMessages(child, depth + 1, out);
+		return;
+	}
+	if (candidate instanceof Error) {
+		if (candidate.message) out.push(candidate.message);
+		if ("cause" in candidate && candidate.cause !== undefined) collectCauseMessages(candidate.cause, depth + 1, out);
+		return;
+	}
+	if (typeof candidate === "string" && candidate) out.push(candidate);
+}
 function describeError(error: unknown): { error: string; cause?: string } {
 	if (error instanceof Error) {
-		const candidates: unknown[] = [];
-		if ("cause" in error && error.cause !== undefined) candidates.push(error.cause);
-		if (error instanceof AggregateError) candidates.push(...error.errors);
-		const causeMessages = candidates
-			.map((c) => (c instanceof Error ? c.message : typeof c === "string" ? c : ""))
-			.filter(Boolean);
+		const causeMessages: string[] = [];
+		if ("cause" in error && error.cause !== undefined) collectCauseMessages(error.cause, 1, causeMessages);
+		if (error instanceof AggregateError) {
+			for (const child of error.errors) collectCauseMessages(child, 1, causeMessages);
+		}
 		return {
 			error: error.message || error.name || "unknown error",
-			...(causeMessages.length > 0 && { cause: causeMessages.join("; ") }),
+			...(causeMessages.length > 0 && { cause: [...new Set(causeMessages)].join("; ") }),
 		};
 	}
-	return { error: typeof error === "string" ? error : JSON.stringify(error) };
+	if (typeof error === "string") return { error };
+	try {
+		return { error: JSON.stringify(error) ?? String(error) };
+	} catch {
+		return { error: String(error) };
+	}
 }
 
 export type LiveMemoryBackend = "file" | "agent-memory";

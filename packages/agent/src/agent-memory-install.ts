@@ -28,9 +28,11 @@ function probeAgentMemoryAtStartup(): void {
 	if (selectedBackend() !== "agent-memory") return;
 	void checkAgentMemoryHealth().then((health) => {
 		if (health.ok) return;
+		// CodeRabbit (PR #437): the probe only reflects THIS moment -- a backend that recovers can
+		// still service later recall/flush calls, so the message must not assert session-wide fate.
 		logger.error(
 			{ baseUrl: agentMemoryBaseUrl(), status: health.status, detail: health.detail },
-			"agent-memory backend unreachable at startup; writes and recall will be dropped for this session",
+			"agent-memory backend unreachable at startup",
 		);
 	});
 }

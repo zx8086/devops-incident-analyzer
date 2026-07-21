@@ -643,6 +643,42 @@ describe("checkAgentMemoryHealth (SIO-1170)", () => {
 		const health = await realMemoryBackend.checkAgentMemoryHealth();
 		expect(health.ok).toBe(true);
 	});
+
+	test("unwraps an AggregateError nested inside .cause (CodeRabbit PR #437)", async () => {
+		// Node's fetch() can throw a TypeError("fetch failed") whose .cause is itself an
+		// AggregateError of per-address connection attempts (e.g. dual-stack IPv4/IPv6 failures).
+		// A single-level unwrap previously dropped these and just reported "AggregateError" with no
+		// detail; describeError must recurse into .errors and each child's own .cause.
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const client: AgentMemoryClient = {
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async addMessages() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async searchMemory() {
+				return [];
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				throw new TypeError("fetch failed", {
+					cause: new AggregateError(
+						[new Error("connect ECONNREFUSED 127.0.0.1:8091"), new Error("getaddrinfo ENOTFOUND agent-memory.local")],
+						"all attempts failed",
+					),
+				});
+			},
+		};
+		__setAgentMemoryClient(client);
+		const health = await realMemoryBackend.checkAgentMemoryHealth();
+		expect(health.ok).toBe(false);
+		expect(health.detail).toContain("ECONNREFUSED");
+		expect(health.detail).toContain("ENOTFOUND");
+	});
 });
 
 // SIO-973: dedup recall hits by a stable annotation key so a re-recorded fact (durable +
