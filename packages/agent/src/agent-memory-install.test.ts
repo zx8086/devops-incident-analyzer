@@ -1,12 +1,4 @@
 // agent/src/agent-memory-install.test.ts
-//
-// SIO-1170: installAgentMemory() fires an unawaited startup health probe when the backend is
-// agent-memory. These tests assert the probe actually DISPATCHES a checkHealth() call for the
-// agent-memory backend (not merely that installAgentMemory doesn't throw, which would also pass
-// if the probe were never wired up at all -- CodeRabbit PR #437), and that it never calls
-// checkHealth() for the default file backend. The probe's log output is not asserted (pino is not
-// spy-friendly here, and no sibling suite in this package asserts on logger calls either -- see
-// memory-backend.test.ts for the established pattern).
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { AgentMemoryClient } from "@devops-agent/shared";
 import { installAgentMemory } from "./agent-memory-install.ts";
@@ -25,6 +17,11 @@ afterEach(() => {
 	__setAgentMemoryClient(null);
 });
 
+// SIO-1170: these tests assert the probe actually DISPATCHES a checkHealth() call for the
+// agent-memory backend (not merely that installAgentMemory doesn't throw, which would also pass
+// if the probe were never wired up at all), and that it never calls checkHealth() for the default
+// file backend. The probe's log output is not asserted (pino is not spy-friendly here, and no
+// sibling suite in this package asserts on logger calls either -- see memory-backend.test.ts).
 describe("installAgentMemory startup probe (SIO-1170)", () => {
 	test("dispatches exactly one checkHealth() call for the agent-memory backend, without blocking install", async () => {
 		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
