@@ -595,22 +595,41 @@ function isToolSuccessMessage(msg: { _getType(): string; content: unknown; statu
 	return extractStructuredToolError(msg.content) === null && extractAwsError(msg.content) === null;
 }
 
-// SIO-1164: marks each ToolError `recovered: true` when that tool name had at least one
-// successful call anywhere in the trajectory. Tool name is the only "category of intent" signal
+// SIO-1164: marks each ToolError `recovered: true` when a LATER message in the trajectory is a
+// successful call to the same tool name. Tool name is the only "category of intent" signal
 // available without inspecting heterogeneous per-datasource arguments (raw SQL, log-group names,
-// query DSL), so ANY success for a tool recovers ALL of that tool's errors -- this reflects
-// normal self-correction (retried query, retried after a timeout) rather than an unrecovered
-// malfunction. A tool that never once succeeded in the trajectory keeps every error unrecovered.
+// query DSL), so any later same-tool success recovers all earlier same-tool errors -- this
+// reflects normal self-correction (retried query, retried after a timeout) rather than an
+// unrecovered malfunction. Ordering matters: a success that occurred BEFORE an error (e.g. an
+// early schema check succeeds, then the actual investigative query on the same tool fails) must
+// NOT excuse that later, distinct failure -- CodeRabbit caught this in review.
 function markRecoveredToolErrors(
 	errors: ToolError[],
 	messages: Array<{ _getType(): string; content: unknown; name?: string; status?: string }>,
 ): ToolError[] {
-	const toolsWithAnySuccess = new Set<string>();
-	for (const msg of messages) {
-		if (isToolSuccessMessage(msg)) toolsWithAnySuccess.add(msg.name ?? "unknown");
-	}
-	if (toolsWithAnySuccess.size === 0) return errors;
-	return errors.map((error) => (toolsWithAnySuccess.has(error.toolName) ? { ...error, recovered: true } : error));
+	// Highest message index, per tool name, at which a success occurred.
+	const lastSuccessIndexByTool = new Map<string, number>();
+	messages.forEach((msg, index) => {
+		if (isToolSuccessMessage(msg)) lastSuccessIndexByTool.set(msg.name ?? "unknown", index);
+	});
+	if (lastSuccessIndexByTool.size === 0) return errors;
+
+	// Errors are produced by the loop above in the same left-to-right order as `messages`, one
+	// per erroring tool message, so replaying that same classification here recovers each error's
+	// original message index without needing to thread it through the ToolError object.
+	let errorCursor = 0;
+	return errors.map((error) => {
+		while (errorCursor < messages.length) {
+			const msg = messages[errorCursor];
+			const isThisError = msg?._getType() === "tool" && !isToolSuccessMessage(msg) && msg.name === error.toolName;
+			if (isThisError) break;
+			errorCursor++;
+		}
+		const errorIndex = errorCursor;
+		errorCursor++;
+		const lastSuccessIndex = lastSuccessIndexByTool.get(error.toolName);
+		return lastSuccessIndex !== undefined && lastSuccessIndex > errorIndex ? { ...error, recovered: true } : error;
+	});
 }
 
 const MAX_TOOLS_PER_AGENT = 25;

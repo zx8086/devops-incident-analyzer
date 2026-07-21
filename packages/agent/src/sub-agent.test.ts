@@ -229,6 +229,29 @@ describe("extractToolErrors SIO-1164 recovery detection", () => {
 		expect(errors[0]?.recovered).toBeFalsy();
 		expect(errors[1]?.recovered).toBeFalsy();
 	});
+
+	// SIO-1164 CodeRabbit review: an EARLIER success on the same tool (e.g. a schema check that
+	// succeeded) must not excuse a LATER, distinct failure on that tool (e.g. the actual
+	// investigative query). Recovery requires a success strictly AFTER the error, not just any
+	// success anywhere in the trajectory.
+	test("a success that PRECEDES an error on the same tool does not recover it", () => {
+		const errors = extractToolErrors([
+			toolMsg("{}", "capella_run_sql_plus_plus_query", "success"),
+			toolMsg("no queryable index for that predicate", "capella_run_sql_plus_plus_query"),
+		]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.recovered).toBeFalsy();
+	});
+
+	test("success, then error, then a further later success -> the error IS recovered", () => {
+		const errors = extractToolErrors([
+			toolMsg("{}", "capella_run_sql_plus_plus_query", "success"),
+			toolMsg("no queryable index for that predicate", "capella_run_sql_plus_plus_query"),
+			toolMsg("{}", "capella_run_sql_plus_plus_query", "success"),
+		]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.recovered).toBe(true);
+	});
 });
 
 // SIO-1054: the AWS MCP wrap layer returns tool errors as a SUCCESSFUL MCP payload
