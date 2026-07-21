@@ -48,6 +48,17 @@ exact shapes and substitute your names/values:
   ```
   (multiple keys: `USE KEYS ["k1", "k2"]`). Prefer `capella_get_document_by_id`
   when you already know the exact key.
+- Do NOT guess a document key's format (e.g. `SEASON_CK07_69_2027SUFASU` vs
+  `2027SUFASU_CK07` vs bare `CK07`) -- a guessed key almost always returns
+  `DocumentNotFoundError`, which is a wasted round trip, not evidence the
+  document is missing. If you don't already have the exact key from a prior
+  query result or the incident context, call `capella_get_document_type_examples`
+  first to see REAL example keys for that collection's document types:
+  ```text
+  capella_get_document_type_examples(scope_name="<scope>", collection_name="<collection>")
+  ```
+  or run the `META(d).id LIKE` scan shape below. Only call
+  `capella_get_document_by_id` once you have a real key string, never a guess.
 - Scan by document-id pattern -- `META().id`, aliasing the collection:
   ```sql
   SELECT META(d).id FROM myCollection d WHERE META(d).id LIKE "PRICE::THE1::%" LIMIT 30
