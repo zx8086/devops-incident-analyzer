@@ -1,6 +1,7 @@
 // agent/src/aggregator.ts
 import { getLogger } from "@devops-agent/observability";
 import {
+	countsTowardDegradedRate,
 	type DataSourceResult,
 	isDegradingCategory,
 	redactPiiContent,
@@ -1139,7 +1140,10 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 			// (not-found) -- is a finding, not a malfunction, and must not drag confidence below
 			// the HITL gate. isDegradingCategory excludes those; a toolError with no category
 			// (regex-fallback path) still counts, preserving prior behaviour.
-			const errorCount = (r.toolErrors ?? []).filter((e) => isDegradingCategory(e.category)).length;
+			// SIO-1164: also exclude errors marked `recovered` -- a later same-tool success means
+			// the sub-agent self-corrected (retried query, retried after a timeout), which is not
+			// the malfunction this cap is meant to catch.
+			const errorCount = (r.toolErrors ?? []).filter((e) => countsTowardDegradedRate(e)).length;
 			const messageCount = r.messageCount ?? 0;
 			if (messageCount === 0 || errorCount === 0) return null;
 			const rate = errorCount / messageCount;

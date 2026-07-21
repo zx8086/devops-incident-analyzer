@@ -582,7 +582,35 @@ export function extractToolErrors(
 			...extra,
 		});
 	}
-	return errors;
+	return markRecoveredToolErrors(errors, messages);
+}
+
+// SIO-1164: a tool message counts as a "success" for recovery purposes when it is a tool
+// message that extractToolErrors would NOT have classified as an error -- i.e. status !== "error"
+// and it carries no structured/AWS _error envelope. Mirrors the exact gates in the loop above so
+// recovery detection can never disagree with error classification about what failed.
+function isToolSuccessMessage(msg: { _getType(): string; content: unknown; status?: string }): boolean {
+	if (msg._getType() !== "tool") return false;
+	if (msg.status === "error") return false;
+	return extractStructuredToolError(msg.content) === null && extractAwsError(msg.content) === null;
+}
+
+// SIO-1164: marks each ToolError `recovered: true` when that tool name had at least one
+// successful call anywhere in the trajectory. Tool name is the only "category of intent" signal
+// available without inspecting heterogeneous per-datasource arguments (raw SQL, log-group names,
+// query DSL), so ANY success for a tool recovers ALL of that tool's errors -- this reflects
+// normal self-correction (retried query, retried after a timeout) rather than an unrecovered
+// malfunction. A tool that never once succeeded in the trajectory keeps every error unrecovered.
+function markRecoveredToolErrors(
+	errors: ToolError[],
+	messages: Array<{ _getType(): string; content: unknown; name?: string; status?: string }>,
+): ToolError[] {
+	const toolsWithAnySuccess = new Set<string>();
+	for (const msg of messages) {
+		if (isToolSuccessMessage(msg)) toolsWithAnySuccess.add(msg.name ?? "unknown");
+	}
+	if (toolsWithAnySuccess.size === 0) return errors;
+	return errors.map((error) => (toolsWithAnySuccess.has(error.toolName) ? { ...error, recovered: true } : error));
 }
 
 const MAX_TOOLS_PER_AGENT = 25;

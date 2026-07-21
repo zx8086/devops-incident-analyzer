@@ -34,6 +34,7 @@ export {
 	CouchbaseFindingsSchema,
 	type CouchbaseSlowQuery,
 	CouchbaseSlowQuerySchema,
+	countsTowardDegradedRate,
 	type DataSourceContext,
 	DataSourceContextSchema,
 	type DataSourceResult,
