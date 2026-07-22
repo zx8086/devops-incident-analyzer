@@ -26,6 +26,8 @@ let clarifyAnswer = $state("");
 const isIac = $derived(agentStore.currentAgent === "elastic-iac");
 const agentTitle = $derived(isIac ? "Elastic IaC Agent" : "Incident Analyzer");
 const agentSubtitle = $derived(isIac ? "Elastic Cloud IaC change assistant" : "DevOps Incident Analysis Assistant");
+// SIO-1172: Create ticket is only relevant for agents that support it (allow-listed in agentStore).
+const ticketProviders = $derived(agentStore.supportsTicketCreation ? agentStore.availableTicketProviders : []);
 
 // SIO-901: when a drift report is showing and the run has finished, the trailing assistant message
 // is the "Drift reconcile summary" (MR links). Render it BELOW the drift card (the consolidation
@@ -252,7 +254,7 @@ function handleSuggestionClick(suggestion: string) {
             actionResults={i === agentStore.messages.length - 1 ? agentStore.actionResults : []}
             onActionApprove={(action) => agentStore.executeAction(action, msg.content)}
             onActionDismiss={(id) => agentStore.dismissAction(id)}
-            ticketProviders={agentStore.availableTicketProviders}
+            ticketProviders={ticketProviders}
             threadTicket={agentStore.threadTicket}
             canCommentOnThreadTicket={agentStore.threadTicket !== null && i > agentStore.threadTicketCreatedAtIndex}
             onTicketCreated={(ticket) => agentStore.setThreadTicket(msg.id, ticket)}
@@ -326,7 +328,7 @@ function handleSuggestionClick(suggestion: string) {
               actionResults={agentStore.actionResults}
               onActionApprove={(action) => agentStore.executeAction(action, summaryMsg.content)}
               onActionDismiss={(id) => agentStore.dismissAction(id)}
-              ticketProviders={agentStore.availableTicketProviders}
+              ticketProviders={ticketProviders}
               threadTicket={agentStore.threadTicket}
               canCommentOnThreadTicket={agentStore.threadTicket !== null && driftSummaryIndex > agentStore.threadTicketCreatedAtIndex}
               onTicketCreated={(ticket) => agentStore.setThreadTicket(summaryMsg.id, ticket)}
@@ -359,7 +361,7 @@ function handleSuggestionClick(suggestion: string) {
               actionResults={agentStore.actionResults}
               onActionApprove={(action) => agentStore.executeAction(action, synthSummaryMsg.content)}
               onActionDismiss={(id) => agentStore.dismissAction(id)}
-              ticketProviders={agentStore.availableTicketProviders}
+              ticketProviders={ticketProviders}
               threadTicket={agentStore.threadTicket}
               canCommentOnThreadTicket={agentStore.threadTicket !== null && syntheticsSummaryIndex > agentStore.threadTicketCreatedAtIndex}
               onTicketCreated={(ticket) => agentStore.setThreadTicket(synthSummaryMsg.id, ticket)}
