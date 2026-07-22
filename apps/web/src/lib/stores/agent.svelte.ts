@@ -40,6 +40,10 @@ import { parseSseChunks } from "./sse-buffer.ts";
 
 export type AgentId = "incident-analyzer" | "elastic-iac";
 
+// SIO-1172: allow-list, not exclude-list -- a new AgentId added here defaults to
+// hiding "Create ticket" until explicitly opted in.
+const TICKET_CREATION_AGENTS: ReadonlySet<AgentId> = new Set(["incident-analyzer"]);
+
 export interface ChatMessage {
 	// SIO-1042: stable identity for {#each} keying (was index-based, causing DOM node reuse
 	// glitches across message list mutations). Assigned once at creation, never regenerated.
@@ -921,6 +925,9 @@ function createAgentStore() {
 		},
 		get currentAgent() {
 			return currentAgent;
+		},
+		get supportsTicketCreation() {
+			return TICKET_CREATION_AGENTS.has(currentAgent);
 		},
 		get iacClarify() {
 			return iacClarify;
