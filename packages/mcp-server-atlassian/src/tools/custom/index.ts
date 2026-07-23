@@ -17,10 +17,14 @@ export interface CustomToolsOptions {
 // versions land on the McpServer and the second registration throws.
 export const CUSTOM_OVERRIDDEN_UPSTREAM_TOOLS = new Set<string>(["getJiraIssue"]);
 
+// SIO-1183: single source of truth for the custom-tool count -- index.ts's onStarted log
+// hardcoded 3 while four tools were registered (the atlassian_getJiraIssue override).
+export const CUSTOM_TOOL_COUNT = 4;
+
 export function registerCustomTools(server: McpServer, proxy: AtlassianMcpProxy, opts: CustomToolsOptions): number {
 	registerFindLinkedIncidents(server, proxy, opts.incidentProjects, opts.siteUrl);
 	registerGetRunbookForAlert(server, proxy, opts.siteUrl);
 	registerGetIncidentHistory(server, proxy, opts.incidentProjects);
 	registerGetJiraIssue(server, proxy);
-	return 4;
+	return CUSTOM_TOOL_COUNT;
 }

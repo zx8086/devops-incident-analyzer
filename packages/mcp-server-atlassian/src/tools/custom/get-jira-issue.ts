@@ -17,6 +17,7 @@ import { z } from "zod";
 import type { AtlassianMcpProxy } from "../../atlassian-client/index.js";
 import { createContextLogger } from "../../utils/logger.js";
 import { traceToolCall } from "../../utils/tracing.js";
+import { toolErrorResult } from "../error-envelope.js";
 import { parseAtlassianTextContent } from "./parse-atlassian-content.js";
 
 const log = createContextLogger("get-jira-issue");
@@ -174,7 +175,9 @@ export function registerGetJiraIssue(server: McpServer, proxy: AtlassianMcpProxy
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					log.error({ error: message }, "atlassian_getJiraIssue tool failed");
-					return { content: [{ type: "text" as const, text: `Error: ${message}` }], isError: true };
+					// SIO-1183: envelope the failure (auth-expired / upstream-status kinds) instead of
+					// raw prose the agent classifies as "unknown".
+					return toolErrorResult(error);
 				}
 			});
 		},
