@@ -6,6 +6,7 @@ import type { AtlassianMcpProxy } from "../../atlassian-client/index.js";
 import { createContextLogger } from "../../utils/logger.js";
 import { traceToolCall } from "../../utils/tracing.js";
 import { parseAtlassianTextContent } from "./parse-atlassian-content.js";
+import { resolveEffectiveProjects } from "./validate-incident-projects.js";
 
 const log = createContextLogger("find-linked-incidents");
 
@@ -70,6 +71,10 @@ export const OutputSchema = z.object({
 	jql: z.string(),
 	count: z.number(),
 	issues: z.array(ShapedIssueSchema),
+	configWarning: z
+		.string()
+		.optional()
+		.describe("SIO-1184: set when ATLASSIAN_INCIDENT_PROJECTS named projects that do not exist on this site"),
 });
 
 export type FindLinkedIncidentsInput = z.infer<typeof InputSchema>;
@@ -232,16 +237,22 @@ export function registerFindLinkedIncidents(
 		async (args) => {
 			return traceToolCall("findLinkedIncidents", async () => {
 				try {
+					// SIO-1184: drop configured project keys that do not exist on the site (INC,OPS shipped
+					// dead for months); when none remain the empty list IS the all-projects wildcard.
+					const effective = await resolveEffectiveProjects(proxy, incidentProjects);
 					const output = await findLinkedIncidents(proxy, {
 						service: args.service,
 						componentLabel: args.componentLabel,
 						errorKeywords: args.errorKeywords ?? [],
 						withinDays: args.withinDays ?? 30,
 						limit: args.limit ?? 10,
-						incidentProjects,
+						incidentProjects: effective.projects,
 						siteUrl,
 					});
-					return { content: [{ type: "text" as const, text: JSON.stringify(output, null, 2) }] };
+					const payload: FindLinkedIncidentsOutput = effective.configWarning
+						? { ...output, configWarning: effective.configWarning }
+						: output;
+					return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }] };
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					log.error({ error: message }, "findLinkedIncidents tool failed");
