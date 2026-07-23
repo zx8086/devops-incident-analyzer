@@ -23,8 +23,11 @@ export const RESTPROXY_CREATE_CONSUMER_DESCRIPTION =
 export const RESTPROXY_SUBSCRIBE_DESCRIPTION =
 	"[WRITE] Subscribe a consumer instance to one or more topics. Must call restproxy_create_consumer first. Next step: restproxy_consume.";
 
+// SIO-1193: tagged [WRITE] to match its registration gate -- fetching via REST
+// Proxy requires a stateful consumer instance (create/subscribe first), so the
+// whole flow is gated by KAFKA_ALLOW_WRITES and this tool disappears with it.
 export const RESTPROXY_CONSUME_DESCRIPTION =
-	"[READ] Fetch records for a subscribed consumer instance. Returns up to maxBytes within timeoutMs. Returns empty array if no records are available.";
+	"[WRITE] Fetch records for a subscribed consumer instance (requires restproxy_create_consumer + restproxy_subscribe first; the stateful consumer flow is why this is write-gated). Returns up to maxBytes within timeoutMs. Returns empty array if no records are available.";
 
 export const RESTPROXY_COMMIT_OFFSETS_DESCRIPTION =
 	"[WRITE] Commit consumed offsets for a consumer instance. Pass an explicit offsets array to commit specific positions, or omit to commit all offsets consumed in the current session.";

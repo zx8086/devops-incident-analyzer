@@ -7,7 +7,11 @@
 
 import { KafkaToolError } from "../../lib/errors.ts";
 
-export type HealthStatus = "up" | "down" | "unreachable";
+// SIO-1193: "not-enabled" = the service is reachable but the probed endpoint is
+// feature-gated off upstream (e.g. ksqlDB /clusterStatus without
+// ksql.heartbeat.enable). Distinct from "down" so a disabled optional endpoint
+// does not read as a service outage.
+export type HealthStatus = "up" | "down" | "unreachable" | "not-enabled";
 
 export interface HealthEnvelope {
 	status: HealthStatus;

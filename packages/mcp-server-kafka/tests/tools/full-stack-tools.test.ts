@@ -7,7 +7,7 @@ import type { KafkaService } from "../../src/services/kafka-service.ts";
 import { KsqlService } from "../../src/services/ksql-service.ts";
 import { RestProxyService } from "../../src/services/restproxy-service.ts";
 import { SchemaRegistryService } from "../../src/services/schema-registry-service.ts";
-import { registerAllTools } from "../../src/tools/index.ts";
+import { computeRegisteredToolCount, registerAllTools } from "../../src/tools/index.ts";
 
 function buildFullStackConfig(kafkaOverrides: Partial<AppConfig["kafka"]> = {}): AppConfig {
 	return {
@@ -137,5 +137,52 @@ describe("Full Confluent stack tool registration (B4 combo 5)", () => {
 		expect(tools).toContain("kafka_register_schema");
 		expect(tools).toContain("ksql_execute_statement");
 		expect(tools).toContain("restproxy_produce");
+	});
+
+	// SIO-1193: the startup toolCount log math previously drifted from registration
+	// (coreReads 10, SIO-742 health tools omitted) and under-reported vs tools/list.
+	// Pin the now-single computeRegisteredToolCount to the ACTUAL registered set for
+	// every gate combination so the log can never silently diverge again.
+	describe("computeRegisteredToolCount matches actual registration (SIO-1193)", () => {
+		const combos: Array<{ label: string; allowWrites: boolean; allowDestructive: boolean; addOns: boolean }> = [
+			{ label: "baseline", allowWrites: false, allowDestructive: false, addOns: false },
+			{ label: "reads + add-ons", allowWrites: false, allowDestructive: false, addOns: true },
+			{ label: "writes only", allowWrites: true, allowDestructive: false, addOns: true },
+			{ label: "full", allowWrites: true, allowDestructive: true, addOns: true },
+		];
+		test.each(combos)("$label", ({ allowWrites, allowDestructive, addOns }) => {
+			const server = new McpServer({ name: "test", version: "0" });
+			const config = buildFullStackConfig({ allowWrites, allowDestructive });
+			const effective = addOns
+				? config
+				: {
+						...config,
+						schemaRegistry: { ...config.schemaRegistry, enabled: false },
+						ksql: { ...config.ksql, enabled: false },
+						connect: { ...config.connect, enabled: false },
+						restproxy: { ...config.restproxy, enabled: false },
+					};
+			registerAllTools(
+				server,
+				fakeKafka,
+				effective,
+				addOns
+					? {
+							schemaRegistryService: new SchemaRegistryService(config),
+							ksqlService: new KsqlService(config),
+							connectService: new ConnectService(config),
+							restProxyService: new RestProxyService(config),
+						}
+					: undefined,
+			);
+			const actual = listToolNames(server).length;
+			const computed = computeRegisteredToolCount(effective, {
+				schemaRegistry: addOns,
+				ksql: addOns,
+				connect: addOns,
+				restProxy: addOns,
+			});
+			expect(computed).toBe(actual);
+		});
 	});
 });

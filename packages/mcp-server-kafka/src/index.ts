@@ -19,7 +19,7 @@ import { KafkaService } from "./services/kafka-service.ts";
 import { KsqlService } from "./services/ksql-service.ts";
 import { RestProxyService } from "./services/restproxy-service.ts";
 import { SchemaRegistryService } from "./services/schema-registry-service.ts";
-import { registerAllTools, type ToolRegistrationOptions } from "./tools/index.ts";
+import { computeRegisteredToolCount, registerAllTools, type ToolRegistrationOptions } from "./tools/index.ts";
 import { createTransport } from "./transport/factory.ts";
 import { logger } from "./utils/logger.ts";
 import { initializeTracing } from "./utils/tracing.ts";
@@ -213,40 +213,15 @@ if (import.meta.main) {
 			},
 
 			onStarted: () => {
-				// SIO-732: core writes/destructive and one ksql + 3 schema kafka_*
-				// tools are gated at registration; reflect that in the reported count
-				// so observability matches what's actually visible in tools/list.
-				const coreReads = 10;
-				const coreWrites = config.kafka.allowWrites ? 3 : 0;
-				const coreDestructive = config.kafka.allowDestructive ? 2 : 0;
-				const schemaReads = config.schemaRegistry.enabled ? 5 : 0;
-				const schemaKafkaWrites = config.schemaRegistry.enabled && config.kafka.allowWrites ? 2 : 0;
-				const schemaKafkaDestructive = config.schemaRegistry.enabled && config.kafka.allowDestructive ? 1 : 0;
-				const ksqlReads = config.ksql.enabled ? 6 : 0;
-				const ksqlWrites = config.ksql.enabled && config.kafka.allowWrites ? 1 : 0;
-				const connectReads = config.connect.enabled ? 4 : 0;
-				const connectWrites = config.connect.enabled && config.kafka.allowWrites ? 3 : 0;
-				const connectDestructive = config.connect.enabled && config.kafka.allowDestructive ? 2 : 0;
-				const srWrites = config.schemaRegistry.enabled && config.kafka.allowWrites ? 3 : 0;
-				const srDestructive = config.schemaRegistry.enabled && config.kafka.allowDestructive ? 4 : 0;
-				const restProxyReads = config.restproxy.enabled ? 3 : 0;
-				const restProxyWrites = config.restproxy.enabled && config.kafka.allowWrites ? 6 : 0;
-				const toolCount =
-					coreReads +
-					coreWrites +
-					coreDestructive +
-					schemaReads +
-					schemaKafkaWrites +
-					schemaKafkaDestructive +
-					ksqlReads +
-					ksqlWrites +
-					connectReads +
-					connectWrites +
-					connectDestructive +
-					srWrites +
-					srDestructive +
-					restProxyReads +
-					restProxyWrites;
+				// SIO-1193: single source of truth for the count -- the previous inline
+				// copy drifted from registration (coreReads 10, SIO-742 health tools
+				// omitted) and under-reported vs tools/list.
+				const toolCount = computeRegisteredToolCount(config, {
+					schemaRegistry: config.schemaRegistry.enabled,
+					ksql: config.ksql.enabled,
+					connect: config.connect.enabled,
+					restProxy: config.restproxy.enabled,
+				});
 				logger.info(
 					{
 						provider: config.kafka.provider,
