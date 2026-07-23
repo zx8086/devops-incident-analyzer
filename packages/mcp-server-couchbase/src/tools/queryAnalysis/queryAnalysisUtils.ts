@@ -3,7 +3,7 @@
 import { buildToolErrorEnvelope } from "@devops-agent/shared";
 import type { Bucket, QueryMetaData } from "couchbase";
 import { adviseCouchbaseError } from "../../lib/adviseCouchbaseError";
-import { classifyCouchbaseError } from "../../lib/classifyCouchbaseError";
+import { classifyCouchbaseError, summarizeCouchbaseError } from "../../lib/classifyCouchbaseError";
 import type { ToolResponse } from "../../types";
 import { logger } from "../../utils/logger";
 
@@ -76,7 +76,7 @@ function formatAnalysisResponse(
 // planning failure classifies as no-data (non-degrading) and a real parse failure as
 // bad-query (degrading but actionable, with copy-paste advice). Shared by both error paths
 // so future envelope changes stay consistent (CodeRabbit PR #428).
-function buildAnalysisErrorResponse(error: unknown, message: string): ToolResponse {
+export function buildAnalysisErrorResponse(error: unknown, message: string): ToolResponse {
 	const kind = classifyCouchbaseError(error);
 	const advice = adviseCouchbaseError(kind);
 	const envelope = buildToolErrorEnvelope({
@@ -91,9 +91,9 @@ function buildAnalysisErrorResponse(error: unknown, message: string): ToolRespon
 }
 
 function formatAnalysisError(error: unknown): ToolResponse {
-	// Full error (incl. stack) stays server-side; the client gets only the message.
-	// Stack traces leak paths and waste sub-agent context (CodeRabbit, PR #378).
-	logger.error({ error }, "Error executing analysis query");
+	// Log a compact summary, not the raw SDK object -- the full error carries
+	// cpp_core_span traces and whole HTTP bodies that bloat every log line.
+	logger.error({ error: summarizeCouchbaseError(error) }, "Error executing analysis query");
 	const message = error instanceof Error ? error.message : String(error);
 	// Only the error branch changes; the success renderer (formatAnalysisResponse) is
 	// untouched, so the resolve-identifiers probe's fenced-JSON contract still holds.

@@ -4,7 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { logger } from "../../utils/logger";
-import { n1qlCompletedRequests } from "./analysisQueries";
+import { DEFAULT_ANALYSIS_LIMIT, n1qlCompletedRequests } from "./analysisQueries";
 import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export type CompletedRequestsInput = {
@@ -61,12 +61,13 @@ export function buildQuery(input: CompletedRequestsInput): {
 		parameters.status = status;
 	}
 
-	if (limit && limit > 0) {
-		if (query.includes("LIMIT")) {
-			query = query.replace(/LIMIT \d+/i, `LIMIT ${limit}`);
-		} else {
-			query = `${query.replace(";", "")} LIMIT ${limit};`;
-		}
+	// Always bound the result set: an unbounded query materialized and sorted the
+	// whole 8-week completed_requests window (~3.7s per call).
+	const effectiveLimit = limit && limit > 0 ? limit : DEFAULT_ANALYSIS_LIMIT;
+	if (query.includes("LIMIT")) {
+		query = query.replace(/LIMIT \d+/i, `LIMIT ${effectiveLimit}`);
+	} else {
+		query = `${query.replace(";", "")} LIMIT ${effectiveLimit};`;
 	}
 
 	return { query, parameters };

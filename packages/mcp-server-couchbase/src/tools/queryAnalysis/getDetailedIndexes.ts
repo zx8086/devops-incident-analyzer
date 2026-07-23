@@ -53,7 +53,9 @@ export function buildQuery(input: DetailedIndexesInput): {
 		whereClauses.push("(t.is_primary IS MISSING OR t.is_primary = false)");
 	}
 	if (index_type) {
-		whereClauses.push("t.using = $index_type");
+		// `using` is a SQL++ reserved word -- unescaped it fails to parse. The catalog
+		// stores lowercase ("gsi") while callers pass "GSI"; compare case-insensitively.
+		whereClauses.push("LOWER(t.`using`) = LOWER($index_type)");
 		parameters.index_type = index_type;
 	}
 

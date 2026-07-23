@@ -214,6 +214,10 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 				process.exit(1);
 			});
 
+			// Log-and-continue: a stray background rejection (e.g. an SDK promise resolving
+			// after its caller moved on) must not take down a long-running MCP server and
+			// every tool it serves. uncaughtException above still exits -- a thrown
+			// exception mid-stack means corrupted state; an orphaned rejection does not.
 			process.on("unhandledRejection", (reason) => {
 				if (isBenignStreamCancel(reason)) {
 					logger.warn(`Ignoring benign stream-cancel in ${name}`, {
@@ -221,12 +225,12 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 					});
 					return;
 				}
-				logger.error(`Unhandled rejection in ${name}`, {
+				logger.error(`Unhandled rejection in ${name} (continuing)`, {
 					reason: reason instanceof Error ? reason.message : String(reason),
+					name: reason instanceof Error ? reason.name : undefined,
 					stack: reason instanceof Error ? reason.stack : undefined,
 				});
 				if (logger.flush) logger.flush();
-				process.exit(1);
 			});
 		}
 

@@ -50,17 +50,17 @@ export default (server: McpServer, bucket: Bucket) => {
 				.string()
 				.optional()
 				.default("_default")
-				.describe("Scope name to query (must match /^[A-Za-z_][A-Za-z0-9_]*$/)"),
+				.describe("Scope name to query (must match /^[A-Za-z0-9_][A-Za-z0-9_%-]*$/)"),
 			collection_name: z
 				.string()
 				.optional()
 				.default("_default")
-				.describe("Collection name to query (must match /^[A-Za-z_][A-Za-z0-9_]*$/)"),
+				.describe("Collection name to query, hyphens allowed (must match /^[A-Za-z0-9_][A-Za-z0-9_%-]*$/)"),
 			type_field: z
 				.string()
 				.optional()
 				.default("documentType")
-				.describe("Field name that contains the document type (must match /^[A-Za-z_][A-Za-z0-9_]*$/)"),
+				.describe("Field name that contains the document type (must match /^[A-Za-z0-9_][A-Za-z0-9_%-]*$/)"),
 		},
 		async (input) => {
 			logger.info(input, "Getting document type examples");

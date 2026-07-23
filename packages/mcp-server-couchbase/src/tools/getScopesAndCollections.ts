@@ -1,9 +1,15 @@
 /* src/tools/getScopesAndCollections.ts */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { Bucket } from "couchbase";
+import type { Bucket, ScopeSpec } from "couchbase";
 import { z } from "zod";
 import { resolveBucket } from "../lib/resolveBucket";
+import { TtlCache } from "../lib/ttlCache";
+
+// Topology changes rarely, but agents call this tool multiple times per turn
+// (often back-to-back). A short TTL keeps duplicates off the cluster while
+// staying fresh enough to see new collections within half a minute.
+const scopesCache = new TtlCache<ScopeSpec[]>(30_000);
 
 // SIO-1107: the `Scope:` / `Collection:` line prefixes are a parser contract
 // with the agent's resolveIdentifiers probe (parseCouchbaseScopeTree) -- extra
@@ -11,7 +17,7 @@ import { resolveBucket } from "../lib/resolveBucket";
 // must not change.
 const getScopesAndCollectionsHandler = async (params: { bucket_name?: string }, bucket: Bucket) => {
 	const resolved = resolveBucket(bucket, params.bucket_name);
-	const scopes = await resolved.collections().getAllScopes();
+	const scopes = await scopesCache.getOrLoad(resolved.name, () => resolved.collections().getAllScopes());
 	const scopesCollections: Record<string, string[]> = {};
 
 	for (const scope of scopes) {

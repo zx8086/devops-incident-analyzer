@@ -3,7 +3,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
+import { summarizeCouchbaseError } from "../../lib/classifyCouchbaseError";
 import { logger } from "../../utils/logger";
+import { buildAnalysisErrorResponse } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
@@ -35,16 +37,12 @@ export default (server: McpServer, bucket: Bucket) => {
 					],
 				};
 			} catch (error) {
-				logger.error(`Error analyzing document structure: ${error instanceof Error ? error.message : String(error)}`);
-
-				return {
-					content: [
-						{
-							type: "text",
-							text: `## Error Analyzing Document Structure\n\n${error instanceof Error ? error.message : String(error)}`,
-						},
-					],
-				};
+				logger.error({ error: summarizeCouchbaseError(error) }, "Error analyzing document structure");
+				// Shared { _error: { kind, category } } envelope with isError, like every
+				// sibling tool -- a missing document classifies as not-found instead of
+				// reaching the agent as an unstructured "success".
+				const message = error instanceof Error ? error.message : String(error);
+				return buildAnalysisErrorResponse(error, `Error analyzing document structure: ${message}`);
 			}
 		},
 	);

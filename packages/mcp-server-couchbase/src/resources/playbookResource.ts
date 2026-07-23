@@ -161,11 +161,16 @@ export async function loadPlaybooks(): Promise<PlaybookRegistry | null> {
 	}
 
 	try {
-		// Find the playbook directory from possible locations
+		// Find the playbook directory from possible locations. The first three are
+		// cwd/-dist-relative and miss when the process launches from the monorepo
+		// root, so also probe the package root itself (source layout: src/resources/
+		// -> two levels up).
+		const packageRoot = path.resolve(import.meta.dir, "../..");
 		const possibleDirs = [
 			config.playbooks?.baseDirectory,
 			path.join(process.cwd(), "playbook"),
 			path.join(__dirname, "../../playbook"),
+			path.join(packageRoot, "playbook"),
 		].filter((dir): dir is string => !!dir);
 
 		logger.debug({ possibleDirs }, "Checking possible playbook directories");
@@ -193,7 +198,8 @@ export async function loadPlaybooks(): Promise<PlaybookRegistry | null> {
 		}
 
 		if (!playbookDir) {
-			logger.error("No playbook directory found with markdown files");
+			// Expected configuration state (no playbooks shipped), not a fault -- warn, not error.
+			logger.warn("No playbook directory found with markdown files; playbook resources disabled");
 			return null;
 		}
 
