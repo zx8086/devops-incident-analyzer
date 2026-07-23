@@ -19,4 +19,9 @@ describe("deriveConfidenceCap (SIO-1194)", () => {
 		expect(deriveConfidenceCap(0.75)).toBe(0.59);
 		expect(deriveConfidenceCap(0.9)).toBe(0.59);
 	});
+
+	test("never goes negative for a pathological sub-0.01 threshold (CodeRabbit PR #455)", () => {
+		expect(deriveConfidenceCap(0.005)).toBe(0);
+		expect(deriveConfidenceCap(0)).toBe(0);
+	});
 });
