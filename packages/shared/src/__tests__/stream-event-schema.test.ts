@@ -83,6 +83,11 @@ describe("StreamEventSchema done cap-transparency fields", () => {
 		expect(parsed.capReasons).toBeUndefined();
 		expect(parsed.lowConfidence).toBeUndefined();
 	});
+
+	test("rejects a confidencePreCap outside the [0, 1] score domain (CodeRabbit PR #455)", () => {
+		expect(() => StreamEventSchema.parse({ type: "done", threadId: "t-1", confidencePreCap: 1.5 })).toThrow();
+		expect(() => StreamEventSchema.parse({ type: "done", threadId: "t-1", confidencePreCap: -0.1 })).toThrow();
+	});
 });
 
 // SIO-902: synthetics drift events round-trip through the discriminated union.

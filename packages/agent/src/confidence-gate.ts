@@ -36,7 +36,9 @@ const CONFIDENCE_CAP_DEFAULT = 0.59;
 const CONFIDENCE_CAP_MARGIN = 0.01;
 
 export function deriveConfidenceCap(threshold: number = getConfidenceThreshold()): number {
-	return Math.min(CONFIDENCE_CAP_DEFAULT, threshold - CONFIDENCE_CAP_MARGIN);
+	// Clamp at 0: a pathological manifest threshold below the margin must not
+	// produce a negative cap (CodeRabbit PR #455).
+	return Math.max(0, Math.min(CONFIDENCE_CAP_DEFAULT, threshold - CONFIDENCE_CAP_MARGIN));
 }
 
 // SIO-632: Non-blocking confidence check. Flags low confidence via state so the
