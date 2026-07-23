@@ -9,11 +9,15 @@ description: Trace a runtime incident to a code change -- merged-MR listing, MR 
 This is the primary evidence path linking an incident to a code change. Run it
 in order; every id comes from the PREVIOUS call's response, never guessed.
 
-1. `gitlab_list_merge_requests(project_id: <numeric id>, state: "merged", updated_after: <incident window start>, per_page: 20)`
+1. `gitlab_list_merge_requests(project_id: <numeric id>, state: "merged", updated_after: <incident window start>, per_page: 100)`
    -- the correlation anchor. `project_id` MUST be numeric (from project
    resolution); the default state is already `merged`. `updated_after` is only
    a lower bound, so filter the response client-side to MRs whose `merged_at`
-   falls inside the incident window.
+   falls inside the incident window. The tool returns a SINGLE page (no
+   pagination), so always request the maximum `per_page: 100`; if exactly 100
+   MRs come back the window may be under-covered -- narrow `updated_after` to
+   the incident window and re-issue once, and if still full, state "MR list
+   truncated at 100" in the finding instead of assuming completeness.
 2. Rank the in-window MRs by merge time and pick AT MOST the 3 closest before
    the incident as candidates. For each candidate:
    `gitlab_get_merge_request` -> `gitlab_get_merge_request_diffs` (what changed)
