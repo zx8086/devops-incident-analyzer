@@ -155,17 +155,119 @@ function buildFleetPartialNote(outcome: FleetApplyOutcome): string {
 // SIO-904: the MCP now greps the FULL trace and returns a `stateLocked` verdict; prefer it when
 // present, since the signature can sit beyond the returned tail. When the flag is absent (e.g. the
 // gitlab_get_pipeline_plan_log caller), fall back to substring-matching the supplied log.
-export function classifyPipelineFailure(planLog: string, stateLocked?: boolean): string {
+//
+// SIO-1185: taxonomy adapted from gitlab-org/ai/skills gitlab-babysit-mr
+// (FLAKY / MASTER_BROKEN / LINT / REAL), mapped onto this repo's CI reality
+// (terraform + tflint + task/bun tool bootstrap on k8s runners). Each class
+// implies a different next action, so the hint names it: flaky -> retry the
+// pipeline; lint -> task fmt; environment (master-broken analogue: shared
+// CI/env breakage, e.g. the SIO-905 env-scope credential class) -> operator
+// fixes CI, not the MR; real -> fix the change, never blind-retry.
+export type PipelineFailureClass = "state-lock" | "flaky" | "lint" | "environment" | "real" | "unknown";
+
+export interface PipelineFailureClassification {
+	failureClass: PipelineFailureClass;
+	hint: string;
+}
+
+// Ordered signal tables: first match wins within a class; classes are checked
+// specific-first (state-lock, lint, environment) before the broad transient
+// bucket, with terraform config errors (real) last so infra noise never
+// masquerades as a change bug.
+const LINT_SIGNALS = ["not properly formatted", "terraform fmt", "fmt check", "lint-fmt-changed", "tflint"];
+const ENVIRONMENT_SIGNALS = [
+	// SIO-905 class: env-scoped provider credentials missing for the stack.
+	// NOTE: "does not match configured version constraint" is deliberately NOT
+	// here (CodeRabbit, PR #444): an MR that bumps provider/module constraints
+	// causes that error itself, so labeling it environment would tell the user
+	// "not this change" about their own change. It falls through to unknown.
+	"one of apikey or username and password must be specified",
+	"required plugins are not installed",
+	"invalid provider configuration",
+];
+const FLAKY_SIGNALS = [
+	"timed out",
+	"timeout",
+	"connection reset",
+	"connection refused",
+	"could not connect",
+	"econnreset",
+	"eaddrinuse",
+	"i/o timeout",
+	"no such host",
+	"temporary failure in name resolution",
+	"tls handshake",
+	"oomkilled",
+	"signal: killed",
+	"system failure",
+	"registry unavailable",
+	"failed to download",
+	"failed to query available provider packages",
+];
+const REAL_SIGNALS = [
+	"error: invalid",
+	"error: unsupported",
+	"error: missing required argument",
+	"error: reference to undeclared",
+	"error: duplicate",
+	"error: incorrect attribute",
+	"unsupported argument",
+	"unsupported block type",
+	"error: cycle",
+];
+
+function firstMatch(lower: string, signals: string[]): string | undefined {
+	return signals.find((s) => lower.includes(s));
+}
+
+export function classifyPipelineFailureDetail(planLog: string, stateLocked?: boolean): PipelineFailureClassification {
 	const lower = planLog.toLowerCase();
 	if (stateLocked === true || lower.includes("error acquiring the state lock") || lower.includes("already locked")) {
-		return (
-			"Likely cause: a Terraform state-lock on the shared deployments stack (all 10 clusters share one " +
-			"state, so concurrent MRs contend on a single lock). An operator can force-unlock in GitLab or wait " +
-			"for the holding pipeline to finish, then re-run the plan."
-		);
+		return {
+			failureClass: "state-lock",
+			hint:
+				"Likely cause: a Terraform state-lock on the shared deployments stack (all 10 clusters share one " +
+				"state, so concurrent MRs contend on a single lock). An operator can force-unlock in GitLab or wait " +
+				"for the holding pipeline to finish, then re-run the plan.",
+		};
 	}
-	if (!planLog || planLog.startsWith("[")) return "The plan job log was not available to diagnose the failure.";
-	return "The plan job failed for another reason -- review the job log.";
+	if (!planLog || planLog.startsWith("[")) {
+		return { failureClass: "unknown", hint: "The plan job log was not available to diagnose the failure." };
+	}
+	const lint = firstMatch(lower, LINT_SIGNALS);
+	if (lint) {
+		return {
+			failureClass: "lint",
+			hint: `Likely cause: formatting/lint ("${lint}") -- not a config bug. Run \`task fmt\` locally and push the result; tflint findings are advisory.`,
+		};
+	}
+	const env = firstMatch(lower, ENVIRONMENT_SIGNALS);
+	if (env) {
+		return {
+			failureClass: "environment",
+			hint: `Likely cause: a shared CI/environment issue ("${env}") -- credentials or provider setup, not this change. An operator should fix the CI environment, then re-run the pipeline.`,
+		};
+	}
+	const flaky = firstMatch(lower, FLAKY_SIGNALS);
+	if (flaky) {
+		return {
+			failureClass: "flaky",
+			hint: `Likely cause: a transient CI/infra failure ("${flaky}") unrelated to this change. Retry the pipeline; if it recurs, treat it as real.`,
+		};
+	}
+	const real = firstMatch(lower, REAL_SIGNALS);
+	if (real) {
+		return {
+			failureClass: "real",
+			hint: `Likely cause: a Terraform error in the changed configuration ("${real}"). Review the plan log and fix the change before merging -- retrying will not help.`,
+		};
+	}
+	return { failureClass: "unknown", hint: "The plan job failed for another reason -- review the job log." };
+}
+
+// Back-compat string form; existing callers/tests consume the hint only.
+export function classifyPipelineFailure(planLog: string, stateLocked?: boolean): string {
+	return classifyPipelineFailureDetail(planLog, stateLocked).hint;
 }
 
 // SIO-975: classify a TERMINAL fleet-apply outcome into applied | partial | failed + a note.

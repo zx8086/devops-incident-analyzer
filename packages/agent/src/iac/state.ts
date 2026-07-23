@@ -1,5 +1,6 @@
 // agent/src/iac/state.ts
 import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
+import type { PipelineFailureClass } from "./fleet-apply-result.ts";
 
 // SIO-1003: the single source of truth for the IaC workflow enum. The IacRequest.workflow type, the
 // parseIntent zod schema, AND the parseIntent instruction's "workflow (...)" prose are all derived from
@@ -638,6 +639,9 @@ export const IacState = Annotation.Root({
 	// SIO-878: when the pipeline failed, a human-readable cause hint (e.g. a Terraform
 	// state-lock on the shared deployments stack) derived from the plan job log.
 	failureHint: Annotation<string>({ reducer: last, default: () => "" }),
+	// SIO-1185: the failure taxonomy class behind failureHint, driving the
+	// class-specific closing line. Typed so invalid classes cannot enter state.
+	failureClass: Annotation<PipelineFailureClass | "">({ reducer: last, default: () => "" }),
 	// SIO-880: when an ilm-rollout reduces delete.min_age, the from/to surfaced as a
 	// HIGH-risk line in the review card + MR body (data deletion is irreversible).
 	retentionChange: Annotation<{ from: string; to: string } | null>({ reducer: last, default: () => null }),

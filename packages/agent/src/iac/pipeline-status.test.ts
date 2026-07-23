@@ -184,8 +184,16 @@ describe("classifyPipelineFailure", () => {
 		expect(hint).toContain("force-unlock");
 	});
 
-	test("generic hint for an unrecognised failure", () => {
+	// SIO-1185: a terraform config error now classifies as a REAL failure with
+	// never-retry advice instead of the generic "another reason" hint.
+	test("terraform config error yields the real-failure hint", () => {
 		const hint = classifyPipelineFailure('Error: invalid resource attribute "foo" in main.tf');
+		expect(hint).toContain("changed configuration");
+		expect(hint).toContain("retrying will not help");
+	});
+
+	test("generic hint for an unrecognised failure", () => {
+		const hint = classifyPipelineFailure("ERROR: Job failed: exit code 1");
 		expect(hint).toContain("another reason");
 	});
 
@@ -200,7 +208,9 @@ describe("classifyPipelineFailure", () => {
 
 	test("stateLocked=false does not force the lock hint on an unrelated failure", () => {
 		const hint = classifyPipelineFailure('Error: invalid resource attribute "foo" in main.tf', false);
-		expect(hint).toContain("another reason");
+		// SIO-1185: classifies as a real config error, NOT as a state lock.
+		expect(hint).not.toContain("state-lock");
+		expect(hint).toContain("changed configuration");
 	});
 
 	test("no-log hint when the log was unavailable", () => {
