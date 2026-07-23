@@ -4,14 +4,18 @@
 // 0 reported vs 142 live). The count now comes from admin.listTopics().
 import { describe, expect, mock, test } from "bun:test";
 import type { Admin } from "@platformatic/kafka";
+import type { KafkaProvider } from "../../src/providers/types.ts";
 import type { KafkaClientManager } from "../../src/services/client-manager.ts";
 import { KafkaService } from "../../src/services/kafka-service.ts";
 
 type MetadataCallback = (err: Error | null, data: unknown) => void;
 
-function buildManager(topicNames: string[]): KafkaClientManager {
-	const fakeAdmin = {
-		listTopics: mock(async () => topicNames),
+function buildAdmin(topicNames: string[], opts?: { failListTopics?: boolean }): Admin {
+	const fakeAdmin: Partial<Admin> = {
+		listTopics: mock(async () => {
+			if (opts?.failListTopics) throw new Error("Listing topics failed.");
+			return topicNames;
+		}),
 		// Mirror the real client: empty opts -> brokers populated, topics EMPTY.
 		metadata: mock((_opts: { topics?: string[] }, cb: MetadataCallback) => {
 			cb(null, {
@@ -23,17 +27,22 @@ function buildManager(topicNames: string[]): KafkaClientManager {
 				topics: new Map(),
 			});
 		}),
-	} as unknown as Admin;
+	};
+	return fakeAdmin as unknown as Admin;
+}
 
-	return {
-		withAdmin: async <T>(fn: (admin: Admin) => Promise<T>): Promise<T> => fn(fakeAdmin),
-		getProvider: () => ({ type: "msk", name: "AWS MSK (none)" }),
-	} as unknown as KafkaClientManager;
+function buildManager(admin: Admin): KafkaClientManager {
+	const provider: Partial<KafkaProvider> = { type: "msk", name: "AWS MSK (none)" };
+	const manager: Partial<KafkaClientManager> = {
+		withAdmin: async <T>(fn: (a: Admin) => Promise<T>): Promise<T> => fn(admin),
+		getProvider: () => provider as KafkaProvider,
+	};
+	return manager as unknown as KafkaClientManager;
 }
 
 describe("describeCluster topicCount (SIO-1193)", () => {
 	test("counts topics via listTopics instead of the empty metadata map", async () => {
-		const service = new KafkaService(buildManager(["topic-a", "topic-b", "topic-c"]));
+		const service = new KafkaService(buildManager(buildAdmin(["topic-a", "topic-b", "topic-c"])));
 		const result = await service.describeCluster();
 		expect(result.topicCount).toBe(3);
 		expect(result.brokerCount).toBe(2);
@@ -42,20 +51,9 @@ describe("describeCluster topicCount (SIO-1193)", () => {
 	});
 
 	test("falls back to 0 when listTopics fails, without failing the describe", async () => {
-		const manager = buildManager([]);
-		const admin = {
-			listTopics: mock(async () => {
-				throw new Error("Listing topics failed.");
-			}),
-			metadata: mock((_opts: { topics?: string[] }, cb: MetadataCallback) => {
-				cb(null, { brokers: new Map([[1, { host: "b-1", port: 9092 }]]), controllerId: 1, topics: new Map() });
-			}),
-		} as unknown as Admin;
-		(manager as unknown as { withAdmin: <T>(fn: (a: Admin) => Promise<T>) => Promise<T> }).withAdmin = async (fn) =>
-			fn(admin);
-		const service = new KafkaService(manager);
+		const service = new KafkaService(buildManager(buildAdmin([], { failListTopics: true })));
 		const result = await service.describeCluster();
 		expect(result.topicCount).toBe(0);
-		expect(result.brokerCount).toBe(1);
+		expect(result.brokerCount).toBe(2);
 	});
 });
