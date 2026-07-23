@@ -27,7 +27,6 @@ const DatabaseConfigSchema = z.object({
 	password: z.string().min(1),
 	bucketName: z.string().min(1),
 	defaultScope: z.string().default("_default"),
-	maxConnections: z.number().min(1).max(100).default(10),
 	connectionTimeout: z.number().min(1000).max(30000).default(5000),
 });
 

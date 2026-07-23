@@ -24,7 +24,6 @@ export const defaultConfig: Config = {
 		password: "password",
 		bucketName: "default",
 		defaultScope: "_default",
-		maxConnections: 10,
 		connectionTimeout: 5000,
 	},
 	logging: {
