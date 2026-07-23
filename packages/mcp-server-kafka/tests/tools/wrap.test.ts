@@ -1,5 +1,7 @@
 // tests/tools/wrap.test.ts
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { MultipleErrors } from "@platformatic/kafka";
+import { z } from "zod";
 import type { AppConfig } from "../../src/config/schemas.ts";
 import { upstreamError } from "../../src/lib/errors.ts";
 import { wrapHandler } from "../../src/tools/wrap.ts";
@@ -281,6 +283,101 @@ describe("wrapHandler", () => {
 
 			expect(result.isError).toBe(true);
 			expect(result.content[0]?.text).not.toContain("---STRUCTURED---");
+		});
+	});
+
+	// SIO-1190: the general throw path now appends the shared { _error } envelope when
+	// the error classifies unambiguously (protocol code, HTTP status, validation, or a
+	// conservative message shape). Prose stays FIRST; the SIO-728 sentinel stays LAST
+	// so its split()[1] remains pure JSON. Unclassifiable errors stay unwrapped.
+	describe("SIO-1190: shared _error envelope on the throw path", () => {
+		function parseEnvelope(text: string): { kind: string; category: string; advice?: string; statusCode?: number } {
+			const match = text.match(/\{"_error":.*?\}\}/);
+			expect(match).not.toBeNull();
+			return (JSON.parse(match?.[0] ?? "{}") as { _error: never })._error;
+		}
+
+		test("kafka protocol code (UNKNOWN_TOPIC_OR_PARTITION) -> not-found envelope, prose first", async () => {
+			const child = Object.assign(new Error("protocol error 3"), { apiCode: 3 });
+			const failingHandler = async () => {
+				throw new MultipleErrors("Unknown topic audit-nonexistent.", [child]);
+			};
+			const handler = wrapHandler("kafka_describe_topic", makeConfig({}), failingHandler);
+			const result = await handler({});
+
+			expect(result.isError).toBe(true);
+			const text = result.content[0]?.text ?? "";
+			// normalizeError wraps via McpError, whose constructor bakes in the
+			// "MCP error -32603: " prefix -- the prose still leads the text block.
+			expect(text.startsWith("MCP error -32603: Unknown topic audit-nonexistent.")).toBe(true);
+			const env = parseEnvelope(text);
+			expect(env.kind).toBe("not-found");
+			expect(env.category).toBe("not-found");
+			expect(env.advice).toContain("Unknown topic");
+		});
+
+		test("client-side 'Unknown topic X.' message (no protocol code) -> not-found envelope", async () => {
+			const failingHandler = async () => {
+				throw new Error("Unknown topic zz-audit-nonexistent-topic-999999.");
+			};
+			const handler = wrapHandler("kafka_describe_topic", makeConfig({}), failingHandler);
+			const result = await handler({});
+			expect(parseEnvelope(result.content[0]?.text ?? "").kind).toBe("not-found");
+		});
+
+		test("'metadata failed N times' -> network envelope", async () => {
+			const failingHandler = async () => {
+				throw new Error("metadata failed 4 times");
+			};
+			const handler = wrapHandler("kafka_list_topics", makeConfig({}), failingHandler);
+			const result = await handler({});
+			expect(parseEnvelope(result.content[0]?.text ?? "").kind).toBe("network");
+		});
+
+		test("zod validation error -> bad-input envelope", async () => {
+			const failingHandler = async () => {
+				z.object({ topic: z.string() }).parse({});
+				return { content: [{ type: "text" as const, text: "unreachable" }] };
+			};
+			const handler = wrapHandler("kafka_describe_topic", makeConfig({}), failingHandler);
+			const result = await handler({});
+			expect(parseEnvelope(result.content[0]?.text ?? "").kind).toBe("bad-input");
+		});
+
+		test("upstream 503 -> server-error envelope WITH statusCode, sentinel still last and parseable", async () => {
+			const failingHandler = async () => {
+				throw upstreamError("ksqlDB (ksql.prd.shared-services.eu.pvh.cloud) returned text/html error 503", {
+					hostname: "ksql.prd.shared-services.eu.pvh.cloud",
+					upstreamContentType: "text/html",
+					statusCode: 503,
+				});
+			};
+			const handler = wrapHandler("ksql_list_queries", makeConfig({ ksqlEnabled: true }), failingHandler);
+			const result = await handler({});
+
+			const text = result.content[0]?.text ?? "";
+			const env = parseEnvelope(text);
+			expect(env.kind).toBe("server-error");
+			expect(env.statusCode).toBe(503);
+			// SIO-728 wire contract preserved: sentinel LAST, split()[1] is pure JSON.
+			const jsonPart = text.split("\n---STRUCTURED---\n")[1] ?? "";
+			const parsed = JSON.parse(jsonPart) as Record<string, unknown>;
+			expect(parsed.statusCode).toBe(503);
+			expect(parsed.hostname).toBe("ksql.prd.shared-services.eu.pvh.cloud");
+			// The envelope must come BEFORE the sentinel.
+			expect(text.indexOf('"_error"')).toBeLessThan(text.indexOf("---STRUCTURED---"));
+		});
+
+		test("unclassifiable generic error stays unwrapped (no _error, no sentinel)", async () => {
+			const failingHandler = async () => {
+				throw new Error("Describing groups failed.");
+			};
+			const handler = wrapHandler("kafka_describe_consumer_group", makeConfig({}), failingHandler);
+			const result = await handler({});
+			const text = result.content[0]?.text ?? "";
+			expect(text).toBe("MCP error -32603: Describing groups failed.");
+			expect(text).not.toContain("_error");
+			expect(text).not.toContain("---STRUCTURED---");
 		});
 	});
 });

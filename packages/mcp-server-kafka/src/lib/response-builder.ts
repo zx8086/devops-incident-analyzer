@@ -1,5 +1,7 @@
 // src/lib/response-builder.ts
 
+import { buildToolErrorEnvelope, type StructuredToolError } from "@devops-agent/shared";
+
 interface ToolResponse {
 	[key: string]: unknown;
 	content: Array<{ type: "text"; text: string }>;
@@ -30,5 +32,17 @@ export class ResponseBuilder {
 	static error(message: string, structured?: Record<string, unknown>): ToolResponse {
 		const text = structured === undefined ? message : `${message}${STRUCTURED_SENTINEL}${JSON.stringify(structured)}`;
 		return { content: [{ type: "text", text }], isError: true };
+	}
+
+	// SIO-1190: shared { _error } envelope adoption (SIO-1087). Layout is load-bearing:
+	// steering prose FIRST (the sub-agent LLM reads it), the envelope JSON next (the
+	// agent's SIO-1159 brace-recovery finds the object enclosing the "_error" anchor
+	// anywhere in the text), and the SIO-728 sentinel LAST so its split()[1] remains
+	// pure JSON for the legacy parser. Prose is duplicated into _error.advice unless
+	// the caller supplies more specific advice.
+	static errorWithKind(message: string, err: StructuredToolError, structured?: Record<string, unknown>): ToolResponse {
+		const envelope = JSON.stringify(buildToolErrorEnvelope({ advice: message, ...err }));
+		const sentinelPart = structured === undefined ? "" : `${STRUCTURED_SENTINEL}${JSON.stringify(structured)}`;
+		return { content: [{ type: "text", text: `${message}\n\n${envelope}${sentinelPart}` }], isError: true };
 	}
 }
