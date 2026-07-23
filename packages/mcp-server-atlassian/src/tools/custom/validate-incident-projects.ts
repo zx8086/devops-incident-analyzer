@@ -29,7 +29,13 @@ async function projectExists(proxy: AtlassianMcpProxy, key: string): Promise<boo
 		context: { searchString: key },
 		log,
 	});
-	const values = parsed?.values ?? [];
+	// CodeRabbit (PR #445): a null parse is a SUCCESSFUL response we could not read -- inconclusive,
+	// not "project does not exist". Throw so the outer catch keeps the configured list as-is instead
+	// of dropping a valid key with a misleading configWarning.
+	if (!parsed) {
+		throw new Error(`Unparseable getVisibleJiraProjects response while validating "${key}"`);
+	}
+	const values = parsed.values ?? [];
 	return values.some((p) => typeof p.key === "string" && p.key.toUpperCase() === key.toUpperCase());
 }
 

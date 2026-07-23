@@ -81,6 +81,16 @@ describe("SIO-1184: resolveEffectiveProjects", () => {
 		expect(calls.length).toBe(countAfterFirst);
 	});
 
+	test("unparseable response is inconclusive: configured list kept, key NOT dropped", async () => {
+		// CodeRabbit (PR #445): a successful-but-unparseable getVisibleJiraProjects response must not
+		// read as "project does not exist" -- that would drop a valid key with a misleading warning.
+		const proxy = {
+			callTool: async () => ({ content: [{ type: "text", text: "not json at all" }] }),
+		} as unknown as AtlassianMcpProxy;
+		const result = await resolveEffectiveProjects(proxy, ["DEVOPS"]);
+		expect(result).toEqual({ projects: ["DEVOPS"] });
+	});
+
 	test("a failed validation is NOT memoized: next call retries", async () => {
 		let attempts = 0;
 		const proxy = {
