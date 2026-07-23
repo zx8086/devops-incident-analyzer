@@ -173,9 +173,17 @@ function isRelevantById(
 	return matchesFocus(id, focusServices);
 }
 
-function isRelevantDlq(name: string, recentDelta: number | null, focusServices: string[]): boolean {
-	if (recentDelta !== null && recentDelta > 0) return true;
-	return matchesFocus(name, focusServices);
+function isRelevantDlq(row: z.infer<typeof ListDlqTopicsRowSchema>, focusServices: string[]): boolean {
+	if (row.recentDelta !== null && row.recentDelta > 0) return true;
+	// SIO-1189: a DLQ with standing backlog is an operational signal regardless of
+	// name match -- and it is the COMMON case: auto-skip-delta (SIO-1150, >= 15
+	// matched topics) returns recentDelta null on any sizable cluster, and DLQ_T_*
+	// names structurally never fuzzy-match service-focus terms (the same rationale
+	// the SIO-1149 derived-row bypass below documents). Audit SIO-1186 probe: a
+	// direct DLQ question emitted dlqTopics=[] while 3 DLQs held 1916/1302/1281
+	// messages. Empty DLQs (totalMessages 0) still scope by focus.
+	if (row.totalMessages > 0) return true;
+	return matchesFocus(row.name, focusServices);
 }
 
 // SIO-785: focusServices is an optional list of service names from the
@@ -282,7 +290,7 @@ export function extractKafkaFindings(outputs: ToolOutput[], focusServices: strin
 	const filteredGroups = Array.from(byId.values()).filter((g) =>
 		isRelevantById(g.id, g.state, g.totalLag, focusServices),
 	);
-	const filteredDlqs = dlqTopics.filter((d) => isRelevantDlq(d.name, d.recentDelta, focusServices));
+	const filteredDlqs = dlqTopics.filter((d) => isRelevantDlq(d, focusServices));
 	// SIO-1149: derived rows fill in only for topics the listing did not cover (listed rows
 	// win -- they carry a real recentDelta). They BYPASS isRelevantDlq deliberately: the
 	// sub-agent targeted the topic by name, which is itself the relevance signal, and a

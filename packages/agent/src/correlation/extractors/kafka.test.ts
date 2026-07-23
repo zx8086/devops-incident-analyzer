@@ -408,13 +408,13 @@ describe("extractKafkaFindings", () => {
 			expect(findings.dlqTopics).toHaveLength(1);
 		});
 
-		test("DLQ with recentDelta = 0 / null and no name match is filtered out", () => {
+		test("DLQ with zero backlog, no growth, and no name match is filtered out", () => {
 			const outputs: ToolOutput[] = [
 				{
 					toolName: "kafka_list_dlq_topics",
 					rawJson: [
-						{ name: "unrelated-dlq-a", totalMessages: 50, recentDelta: 0 },
-						{ name: "unrelated-dlq-b", totalMessages: 50, recentDelta: null },
+						{ name: "unrelated-dlq-a", totalMessages: 0, recentDelta: 0 },
+						{ name: "unrelated-dlq-b", totalMessages: 0, recentDelta: null },
 					],
 				},
 			];
@@ -422,13 +422,52 @@ describe("extractKafkaFindings", () => {
 			expect(findings.dlqTopics).toBeUndefined();
 		});
 
+		// SIO-1189: standing backlog is an operational signal regardless of name match.
+		// recentDelta null is the COMMON live case (SIO-1150 auto-skip-delta engages at
+		// >= 15 matched topics), and DLQ_T_* names never fuzzy-match service focus --
+		// the audit probe emitted dlqTopics=[] while 3 DLQs held 1916/1302/1281 messages.
+		test("DLQ with standing backlog passes through on recentDelta null (SIO-1189, live wrapper shape)", () => {
+			const outputs: ToolOutput[] = [
+				{
+					toolName: "kafka_list_dlq_topics",
+					rawJson: {
+						topics: [
+							{ name: "DLQ_T_NOTIFICATION_SUBSCRIPTION_UPDATE_EVENTS", totalMessages: 1916, recentDelta: null },
+							{ name: "DLQ_T_PRIVATE_VARIANT_RICH_NOTIFICATIONS", totalMessages: 1302, recentDelta: null },
+							{ name: "DLQ_T_EMPTY_ONE", totalMessages: 0, recentDelta: null },
+						],
+						matched: 47,
+						sampleFailed: 0,
+					},
+				},
+			];
+			const findings = extractKafkaFindings(outputs, ["kafka"]);
+			expect(findings.dlqTopics?.map((d) => d.name)).toEqual([
+				"DLQ_T_NOTIFICATION_SUBSCRIPTION_UPDATE_EVENTS",
+				"DLQ_T_PRIVATE_VARIANT_RICH_NOTIFICATIONS",
+			]);
+		});
+
+		test("DLQ with standing backlog passes through on recentDelta 0 (SIO-1189)", () => {
+			const outputs: ToolOutput[] = [
+				{
+					toolName: "kafka_list_dlq_topics",
+					rawJson: [{ name: "dlt-mendix-customer-assignments", totalMessages: 1281, recentDelta: 0 }],
+				},
+			];
+			const findings = extractKafkaFindings(outputs, ["notification-service"]);
+			expect(findings.dlqTopics).toHaveLength(1);
+		});
+
 		test("DLQ name fuzzy-matches focus service via token overlap", () => {
+			// totalMessages 0 so the SIO-1189 backlog pass-through stays out of the way
+			// and this exercises the name-match path alone.
 			const outputs: ToolOutput[] = [
 				{
 					toolName: "kafka_list_dlq_topics",
 					rawJson: [
-						{ name: "notification-service-dlq", totalMessages: 50, recentDelta: 0 },
-						{ name: "unrelated-dlq", totalMessages: 50, recentDelta: 0 },
+						{ name: "notification-service-dlq", totalMessages: 0, recentDelta: 0 },
+						{ name: "unrelated-dlq", totalMessages: 0, recentDelta: 0 },
 					],
 				},
 			];
