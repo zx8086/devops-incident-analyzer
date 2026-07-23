@@ -24,7 +24,6 @@ export const envVarMapping = {
 		password: "COUCHBASE_PASSWORD",
 		bucketName: "COUCHBASE_BUCKET",
 		defaultScope: "COUCHBASE_SCOPE",
-		maxConnections: "COUCHBASE_MAX_CONNECTIONS",
 		connectionTimeout: "COUCHBASE_CONNECTION_TIMEOUT",
 	},
 	logging: {

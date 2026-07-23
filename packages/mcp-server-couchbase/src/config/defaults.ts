@@ -24,7 +24,6 @@ export const defaultConfig: Config = {
 		password: "password",
 		bucketName: "default",
 		defaultScope: "_default",
-		maxConnections: 10,
 		connectionTimeout: 5000,
 	},
 	logging: {
@@ -40,8 +39,13 @@ export const defaultConfig: Config = {
 		baseDirectory: "/tmp/docs",
 		fileExtension: ".md",
 	},
+	// SIO-1177: disabled by default (matches the schema default). No playbook
+	// markdown ships in the package -- the enabled:true default made every boot
+	// warn "No playbook directory found". Couchbase incident procedures live as
+	// gitagent skills on the capella-agent instead. Opt in with
+	// PLAYBOOKS_ENABLED=true (PLAYBOOKS_BASE_DIR optional; defaults to ./playbook).
 	playbooks: {
-		enabled: true,
+		enabled: false,
 		baseDirectory: "./playbook",
 		fileExtension: ".md",
 	},

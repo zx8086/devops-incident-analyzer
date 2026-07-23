@@ -50,7 +50,11 @@ Requirements:
 3. Make the query readable with proper formatting
 4. Apply any limit specified, or use a reasonable default limit if none specified
 5. Use SQL++ syntax (not N1QL) and follow Couchbase best practices
-6. Provide a brief explanation of how the query works`,
+6. NEVER use a leading-wildcard LIKE -- LIKE '%...%' defeats index range scans and fails with "no index available" on unindexed collections.
+   Bad:  SELECT META(o).id FROM \`orders\` o WHERE META(o).id LIKE "%0003307479%"
+   Good: SELECT META(o).id FROM \`orders\` o WHERE META(o).id LIKE "ORDER::0003307479%"
+   Prefer an exact match on an indexed field, a prefix LIKE ('abc%'), USE KEYS ["ORDER::0003307479"], or capella_get_document_by_id when the document key is known.
+7. Provide a brief explanation of how the query works`,
 						},
 					},
 				],

@@ -64,9 +64,6 @@ function loadConfigFromEnv(): Partial<Config> {
 		defaultScope:
 			(parseEnvVar(Bun.env[envVarMapping.database.defaultScope], "string") as string) ||
 			defaultConfig.database.defaultScope,
-		maxConnections:
-			(parseEnvVar(Bun.env[envVarMapping.database.maxConnections], "number") as number) ||
-			defaultConfig.database.maxConnections,
 		connectionTimeout:
 			(parseEnvVar(Bun.env[envVarMapping.database.connectionTimeout], "number") as number) ||
 			defaultConfig.database.connectionTimeout,

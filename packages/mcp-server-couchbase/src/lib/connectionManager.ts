@@ -9,7 +9,6 @@ export class CouchbaseConnectionManager {
 	private static instance: CouchbaseConnectionManager;
 	private cluster: Cluster | null = null;
 	private bucket: Bucket | null = null;
-	private connectionPool: Bucket[] = [];
 	private isHealthy = false;
 	private healthCheckInterval: NodeJS.Timeout | null = null;
 	private healthCheckInFlight = false;
@@ -57,7 +56,6 @@ export class CouchbaseConnectionManager {
 			});
 
 			this.bucket = this.cluster.bucket(config.database.bucketName);
-			await this.initializeConnectionPool();
 			this.isHealthy = true;
 			this.startHealthCheck();
 
@@ -73,35 +71,6 @@ export class CouchbaseConnectionManager {
 			throw createError(
 				"DB_ERROR",
 				"Failed to initialize database connection",
-				error instanceof Error ? error : new Error(String(error)),
-			);
-		}
-	}
-
-	private async initializeConnectionPool(): Promise<void> {
-		try {
-			// Initialize the connection pool with the configured number of connections
-			for (let i = 0; i < config.database.maxConnections; i++) {
-				const bucket = this.cluster?.bucket(config.database.bucketName);
-				if (bucket) this.connectionPool.push(bucket);
-			}
-			logger.info(
-				{
-					poolSize: this.connectionPool.length,
-					maxConnections: config.database.maxConnections,
-				},
-				"Connection pool initialized",
-			);
-		} catch (error) {
-			logger.error(
-				{
-					error: error instanceof Error ? error.message : String(error),
-				},
-				"Failed to initialize connection pool",
-			);
-			throw createError(
-				"DB_ERROR",
-				"Failed to initialize connection pool",
 				error instanceof Error ? error : new Error(String(error)),
 			);
 		}
@@ -195,16 +164,13 @@ export class CouchbaseConnectionManager {
 			throw createError("DB_ERROR", "Database connection is not healthy");
 		}
 
-		// Get a connection from the pool using round-robin
-		const connection = this.connectionPool.shift();
-		if (!connection) {
-			logger.error("No available connections in the pool");
-			throw createError("DB_ERROR", "No available connections in the pool");
+		// SIO-1174: the SDK multiplexes internally, so a single bucket handle is the
+		// whole "pool" -- the former round-robin cycled identical references.
+		if (!this.bucket) {
+			logger.error("No bucket handle available");
+			throw createError("DB_ERROR", "No bucket handle available");
 		}
-
-		// Add the connection back to the pool
-		this.connectionPool.push(connection);
-		return connection;
+		return this.bucket;
 	}
 
 	public async close(): Promise<void> {
@@ -220,11 +186,18 @@ export class CouchbaseConnectionManager {
 			if (this.cluster) {
 				await this.cluster.close();
 			}
-			this.connectionPool = [];
+			this.cluster = null;
+			this.bucket = null;
 			this.isHealthy = false;
 			this.initializationPromise = null;
 			logger.info("Couchbase connection closed successfully");
 		} catch (error) {
+			// A failed close still invalidates the handles -- getCluster() must not
+			// hand out a half-closed SDK object after shutdown.
+			this.cluster = null;
+			this.bucket = null;
+			this.isHealthy = false;
+			this.initializationPromise = null;
 			logger.error(
 				{
 					error: error instanceof Error ? error.message : String(error),
@@ -241,10 +214,6 @@ export class CouchbaseConnectionManager {
 
 	public isConnectionHealthy(): boolean {
 		return this.isHealthy;
-	}
-
-	public getPoolSize(): number {
-		return this.connectionPool.length;
 	}
 
 	public getCluster(): Cluster | null {

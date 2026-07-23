@@ -76,4 +76,22 @@ describe("generate_sqlpp_query prompt (SIO-1078 scope-context)", () => {
 		expect(text).not.toContain("`travel-sample`.`_default`.`hotel`");
 		expect(text).toContain("hotel");
 	});
+
+	// SIO-1176: steer away from non-sargable leading-wildcard LIKE with a
+	// copy-paste good/bad pair (Haiku sub-agents need concrete examples).
+	test("includes leading-wildcard LIKE guidance with good/bad examples", () => {
+		const { getText } = capturePrompt();
+		const text = getText({
+			description: "count hotels",
+			bucket: "travel-sample",
+			scope: "inventory",
+			collection: "hotel",
+		});
+
+		expect(text).toContain("leading-wildcard LIKE");
+		expect(text).toContain('LIKE "%0003307479%"');
+		expect(text).toContain('LIKE "ORDER::0003307479%"');
+		expect(text).toContain("USE KEYS");
+		expect(text).toContain("capella_get_document_by_id");
+	});
 });
