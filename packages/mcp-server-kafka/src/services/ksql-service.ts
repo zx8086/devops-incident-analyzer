@@ -100,13 +100,20 @@ export class KsqlService {
 		return (await response.json()) as KsqlClusterStatus;
 	}
 
+	// SIO-1188: MUST stay non-EXTENDED. `LIST STREAMS EXTENDED;` returns a
+	// SourceDescriptionList (@type "sourceDescriptions", key sourceDescriptions)
+	// which extractSourceList can never match, so the tool returned [] against
+	// every cluster since inception (audit SIO-1186 found 0 streams vs ~30 live).
+	// The plain statement returns @type "streams"/"tables" whose rows are exactly
+	// KsqlStreamOrTable. Detail lives behind ksql_describe (DESCRIBE ... EXTENDED
+	// uses the singular sourceDescription shape, which parses correctly).
 	async listStreams(): Promise<KsqlStreamOrTable[]> {
-		const result = await this.executeStatement("LIST STREAMS EXTENDED;");
+		const result = await this.executeStatement("LIST STREAMS;");
 		return this.extractSourceList(result, "streams");
 	}
 
 	async listTables(): Promise<KsqlStreamOrTable[]> {
-		const result = await this.executeStatement("LIST TABLES EXTENDED;");
+		const result = await this.executeStatement("LIST TABLES;");
 		return this.extractSourceList(result, "tables");
 	}
 
