@@ -36,7 +36,7 @@ search.
 
 | Need | Use | Not |
 |------|-----|-----|
-| Where is this stack-trace symbol DEFINED? (exact project/file/line) | `gitlab_blast_radius` / `gitlab_cross_project_callers` (Orbit `Definition`) | semantic (ranked guess) |
+| Where is this stack-trace symbol DEFINED? (exact project/file/line) | `gitlab_blast_radius` FIRST (`gitlab_cross_project_callers` only with an exact fqn taken from a prior blast-radius def row -- its `eq` match fails on hand-composed names) | semantic (ranked guess) |
 | WHO IMPORTS/CALLS this function across repos? / blast radius | Orbit graph tools (`IMPORTS` traversal) | semantic (single-project, can't traverse) |
 | Find code that SEMANTICALLY RESEMBLES this error/behaviour | `gitlab_semantic_code_search` (Duo embeddings) | Orbit (structural, no fuzzy match) |
 | Symbol on a NON-DEFAULT branch, or Terraform/YAML | `gitlab_semantic_code_search` + REST reads | Orbit (default-branch source only; no HCL/YAML) |
@@ -46,11 +46,14 @@ imports, blast radius) deterministically and group-wide; semantic search answers
 fuzzy "code that looks like X" within a project.
 
 ## Orbit Availability
-Whenever a graph tool returns an ERROR or guidance result -- not only "graph not
-available / still indexing", but ALSO authentication/permission failures, network
-errors, a rejected (unselective) query, or an exhausted query budget -- fall back
-to `gitlab_semantic_code_search` + `gitlab_list_commits` for the same question and
-SAY SO in the finding (state which fallback you used and why). In every case, do
-NOT fabricate cross-project import edges from an unavailable graph. Orbit indexes
-the DEFAULT BRANCH only and excludes Terraform/YAML, so IaC-change questions stay
-on the REST / commit path regardless.
+When a graph tool returns an ERROR or guidance result, act on the structured
+`_error.kind` per the ONE policy defined in the `code-change-correlation` skill
+("Reading structured tool errors"): `bad-query` gets exactly one corrected
+retry, `throttled` stops ALL further graph calls this turn, and every other
+kind (`no-index`, network, server, auth) goes straight to the fallback. The
+fallback is always `gitlab_semantic_code_search` + `gitlab_list_commits` for
+the same question -- and SAY SO in the finding (state which fallback you used
+and why). In every case, do NOT fabricate cross-project import edges from an
+unavailable graph. Orbit indexes the DEFAULT BRANCH only and excludes
+Terraform/YAML, so IaC-change questions stay on the REST / commit path
+regardless.
