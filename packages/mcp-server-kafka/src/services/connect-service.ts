@@ -33,6 +33,25 @@ export interface ConnectConnectorListEntry {
 	};
 }
 
+// SIO-1187: Connect's expand=info echoes raw connector configs, which on real
+// clusters carry plaintext credentials (couchbase.password, sasl.jaas.config,
+// aws.secret.access.key). Tool output reaches the sub-agent LLM context and
+// LangSmith traces, so redact by key shape before returning. The agent-side
+// extractor consumes only `status`, so redaction loses nothing it uses.
+// Deliberately NOT a bare /key/ match: key.converter, key.ignore etc. are benign.
+const SENSITIVE_CONFIG_KEY =
+	/password|secret|token|credential|sasl\.jaas\.config|basic\.auth\.user\.info|api[._-]?key|private[._-]?key/i;
+
+export const REDACTED_VALUE = "***REDACTED***";
+
+export function redactConnectorConfig(config: Record<string, string>): Record<string, string> {
+	const out: Record<string, string> = {};
+	for (const [key, value] of Object.entries(config)) {
+		out[key] = value !== "" && SENSITIVE_CONFIG_KEY.test(key) ? REDACTED_VALUE : value;
+	}
+	return out;
+}
+
 export class ConnectService {
 	private readonly baseUrl: string;
 	private readonly headers: Record<string, string>;
@@ -71,6 +90,10 @@ export class ConnectService {
 			"GET",
 			"/connectors?expand=status&expand=info",
 		);
+		// SIO-1187: strip credential values from the echoed configs.
+		for (const entry of Object.values(result)) {
+			if (entry.info?.config) entry.info.config = redactConnectorConfig(entry.info.config);
+		}
 		return { connectors: result, count: Object.keys(result).length };
 	}
 
