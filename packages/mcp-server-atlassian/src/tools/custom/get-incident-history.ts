@@ -7,6 +7,7 @@ import { createContextLogger } from "../../utils/logger.js";
 import { traceToolCall } from "../../utils/tracing.js";
 import { buildJql, errorKeywordsField } from "./find-linked-incidents.js";
 import { parseAtlassianTextContent } from "./parse-atlassian-content.js";
+import { resolveEffectiveProjects } from "./validate-incident-projects.js";
 
 const log = createContextLogger("get-incident-history");
 
@@ -39,6 +40,10 @@ export const OutputSchema = z.object({
 	groupBy: z.enum(["week", "month"]),
 	totals: TotalsSchema,
 	buckets: z.array(BucketSchema),
+	configWarning: z
+		.string()
+		.optional()
+		.describe("SIO-1184: set when ATLASSIAN_INCIDENT_PROJECTS named projects that do not exist on this site"),
 });
 
 export type GetIncidentHistoryInput = z.infer<typeof InputSchema>;
@@ -202,14 +207,20 @@ export function registerGetIncidentHistory(
 		async (args) => {
 			return traceToolCall("getIncidentHistory", async () => {
 				try {
+					// SIO-1184: see find-linked-incidents.ts -- nonexistent configured projects are dropped,
+					// and an empty remainder searches all projects.
+					const effective = await resolveEffectiveProjects(proxy, incidentProjects);
 					const output = await getIncidentHistory(proxy, {
 						service: args.service,
 						errorKeywords: args.errorKeywords ?? [],
 						windowDays: args.windowDays ?? 30,
 						groupBy: args.groupBy ?? "week",
-						incidentProjects,
+						incidentProjects: effective.projects,
 					});
-					return { content: [{ type: "text" as const, text: JSON.stringify(output, null, 2) }] };
+					const payload: GetIncidentHistoryOutput = effective.configWarning
+						? { ...output, configWarning: effective.configWarning }
+						: output;
+					return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }] };
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					log.error({ error: message }, "getIncidentHistory tool failed");

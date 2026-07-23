@@ -69,8 +69,16 @@ tool_mapping:
     # status, mttrMinutes} -- run 270378e0 surfaced a related ticket but had no tool to
     # fetch its body and reported "content not fully retrieved". The Jira reader (and
     # the JQL search for follow-ups) belongs on the incident belt, mirroring SIO-1154.
+    # SIO-1182: third round of the same class. atlassian_search results carry an ARI in
+    # `id`; the matching reader atlassian_fetch was on NO belt, so the model either
+    # reported "content not fully retrieved" (silent) or guessed the wrong reader
+    # (getConfluencePage fed a Jira key -> upstream 400). atlassian_fetch goes on EVERY
+    # belt -- the ARI self-describes the entity type, so no reader guessing -- and the
+    # two belts that had no Jira reader (runbook_lookup, confluence_query) get
+    # atlassian_getJiraIssue for bare issue keys.
     incident_correlation:
       - atlassian_search
+      - atlassian_fetch
       - findLinkedIncidents
       - getIncidentHistory
       - atlassian_getConfluencePage
@@ -78,11 +86,14 @@ tool_mapping:
       - atlassian_searchJiraIssuesUsingJql
     runbook_lookup:
       - atlassian_search
+      - atlassian_fetch
       - getRunbookForAlert
       - atlassian_searchConfluenceUsingCql
       - atlassian_getConfluencePage
+      - atlassian_getJiraIssue
     jira_query:
       - atlassian_search
+      - atlassian_fetch
       - atlassian_searchJiraIssuesUsingJql
       - atlassian_getJiraIssue
       # SIO-1154: atlassian_search cross-searches Confluence, so even a Jira-focused
@@ -92,18 +103,31 @@ tool_mapping:
       - atlassian_getConfluencePage
     confluence_query:
       - atlassian_search
+      - atlassian_fetch
       - atlassian_searchConfluenceUsingCql
       - atlassian_getConfluencePage
+      - atlassian_getJiraIssue
   action_descriptions:
+    # SIO-1182: pick the reader by the id you HOLD -- an `id` from atlassian_search results is an
+    # ARI (ari:cloud:...) and goes to atlassian_fetch; a bare issue key (ABC-123) goes to
+    # atlassian_getJiraIssue; a numeric pageId goes to atlassian_getConfluencePage. Never feed an
+    # issue key to the Confluence page reader or a URL to atlassian_fetch.
     incident_correlation: >-
       Jira tickets for an incident. START with atlassian_search over the incident's domain terms,
-      THEN findLinkedIncidents/getIncidentHistory. The service token misses most. When a Confluence
-      page surfaces as evidence, FETCH its body with atlassian_getConfluencePage before citing it.
-      When a Jira ticket surfaces (e.g. via findLinkedIncidents), FETCH its description and comments
-      with atlassian_getJiraIssue before citing or scoping it -- key+summary alone is not evidence.
+      THEN findLinkedIncidents/getIncidentHistory. The service token misses most. READ every search
+      hit you cite via its `id` (an ARI) with atlassian_fetch. For a bare issue key use
+      atlassian_getJiraIssue; for a numeric Confluence pageId use atlassian_getConfluencePage --
+      key+summary alone is not evidence.
     runbook_lookup: >-
       finding Confluence runbooks/ops docs. START with atlassian_search over the failure's domain
-      terms, THEN getRunbookForAlert. A service-token-only search misses domain-named pages. FETCH
-      the body of any page you cite with atlassian_getConfluencePage -- a title/snippet is not evidence.
-    jira_query: when running an explicit JQL query against Jira (direct, not the smart incident-correlation composer)
-    confluence_query: when running an explicit CQL query against Confluence (direct, not the smart runbook-lookup composer)
+      terms, THEN getRunbookForAlert. A service-token-only search misses domain-named pages. READ
+      the body of anything you cite: search-hit `id` (ARI) -> atlassian_fetch, numeric pageId ->
+      atlassian_getConfluencePage, Jira issue key -> atlassian_getJiraIssue -- a title/snippet is
+      not evidence.
+    jira_query: >-
+      when running an explicit JQL query against Jira (direct, not the smart incident-correlation
+      composer). Read result bodies: ARI -> atlassian_fetch, issue key -> atlassian_getJiraIssue.
+    confluence_query: >-
+      when running an explicit CQL query against Confluence (direct, not the smart runbook-lookup
+      composer). Read result bodies: ARI -> atlassian_fetch, numeric pageId ->
+      atlassian_getConfluencePage, Jira issue key -> atlassian_getJiraIssue.
