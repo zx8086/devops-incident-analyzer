@@ -24,7 +24,7 @@ export async function healthCheck(service: KsqlService, config: AppConfig): Prom
 // give correlation rules a flat shape to trigger on.
 export async function clusterStatus(service: KsqlService, config: AppConfig): Promise<HealthEnvelope> {
 	const endpoint = `${config.ksql.endpoint.replace(/\/$/, "")}/clusterStatus`;
-	return runHealthProbe("ksqlDB", endpoint, async () => {
+	const envelope = await runHealthProbe("ksqlDB", endpoint, async () => {
 		const result = await service.getClusterStatus();
 		const hosts = Object.entries(result.clusterStatus ?? {});
 		const aliveHosts = hosts.filter(([, info]) => info.hostAlive).length;
@@ -36,6 +36,20 @@ export async function clusterStatus(service: KsqlService, config: AppConfig): Pr
 			clusterStatus: result.clusterStatus,
 		};
 	});
+	// SIO-1193: /clusterStatus is feature-gated upstream (ksql.heartbeat.enable);
+	// a 404 means the endpoint is not enabled, NOT that ksqlDB is down. Audit
+	// SIO-1186 saw this report "down" while ksql_health_check was up and the
+	// server was RUNNING -- a false input to ksql-cluster-status-degraded.
+	if (envelope.status === "down" && envelope.error?.statusCode === 404) {
+		return {
+			...envelope,
+			status: "not-enabled",
+			details: {
+				note: "/clusterStatus requires ksql.heartbeat.enable=true on the ksqlDB server. This is NOT an outage signal; use ksql_health_check for liveness.",
+			},
+		};
+	}
+	return envelope;
 }
 
 export async function listStreams(service: KsqlService) {

@@ -853,7 +853,14 @@ export class KafkaService {
 		const provider = this.clientManager.getProvider();
 
 		return this.clientManager.withAdmin(async (admin) => {
-			const metadata = await getClusterMetadata(admin);
+			// SIO-1193: admin.metadata({}) returns brokers/controller but an EMPTY topics
+			// map with this client (explicit-topics requests populate it; empty opts do
+			// not), so metadata.topics.size was always 0 (audit SIO-1186: 0 vs 142 live).
+			// Count via listTopics, the same source getClusterInfo uses.
+			const [metadata, topics] = await Promise.all([
+				getClusterMetadata(admin),
+				admin.listTopics().catch(() => [] as string[]),
+			]);
 
 			const brokers = Array.from(metadata.brokers.entries()).map(([id, info]) => ({
 				id,
@@ -867,7 +874,7 @@ export class KafkaService {
 				brokers,
 				controllerId: metadata.controllerId,
 				brokerCount: brokers.length,
-				topicCount: metadata.topics.size,
+				topicCount: topics.length,
 				provider: provider.type,
 			};
 		});

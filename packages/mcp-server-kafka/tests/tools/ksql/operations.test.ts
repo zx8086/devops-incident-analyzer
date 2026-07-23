@@ -1,6 +1,7 @@
 // tests/tools/ksql/operations.test.ts
 import { describe, expect, mock, test } from "bun:test";
 import type { AppConfig } from "../../../src/config/schemas.ts";
+import { upstreamError } from "../../../src/lib/errors.ts";
 import type { KsqlService } from "../../../src/services/ksql-service.ts";
 import * as ops from "../../../src/tools/ksql/operations.ts";
 
@@ -154,5 +155,43 @@ describe("ksql operations", () => {
 		expect(env.details?.aliveHosts).toBe(2);
 		expect(env.details?.totalHosts).toBe(2);
 		expect(env.details?.degraded).toBe(false);
+	});
+
+	// SIO-1193: /clusterStatus is feature-gated upstream (ksql.heartbeat.enable).
+	// A 404 means the endpoint is off, not that ksqlDB is down -- audit SIO-1186
+	// saw "down" here while ksql_health_check was up and the server RUNNING.
+	test("clusterStatus maps a 404 to not-enabled instead of down", async () => {
+		const service = mockService({
+			getClusterStatus: mock(() =>
+				Promise.reject(
+					upstreamError("ksqlDB (ksql.prd.example) error 404", {
+						hostname: "ksql.prd.example",
+						statusCode: 404,
+						upstreamContentType: "application/json",
+					}),
+				),
+			),
+		});
+		const env = await ops.clusterStatus(service, mockConfig);
+		expect(env.status).toBe("not-enabled");
+		expect(env.error?.statusCode).toBe(404);
+		expect(String(env.details?.note)).toContain("ksql.heartbeat.enable");
+	});
+
+	test("clusterStatus still reports down on a real 5xx", async () => {
+		const service = mockService({
+			getClusterStatus: mock(() =>
+				Promise.reject(
+					upstreamError("ksqlDB (ksql.prd.example) error 503", {
+						hostname: "ksql.prd.example",
+						statusCode: 503,
+						upstreamContentType: "text/html",
+					}),
+				),
+			),
+		});
+		const env = await ops.clusterStatus(service, mockConfig);
+		expect(env.status).toBe("down");
+		expect(env.error?.statusCode).toBe(503);
 	});
 });

@@ -58,40 +58,58 @@ export function registerAllTools(
 		registerRestProxyTools(server, options.restProxyService, config);
 	}
 
-	// SIO-732: core writes/destructive + 1 ksql + 3 kafka_* schema tools are gated
-	// at registration; mirror that in the reported count so the log line matches
-	// what's actually visible in tools/list.
-	const coreReads = 10;
-	const coreWrites = config.kafka.allowWrites ? 3 : 0;
-	const coreDestructive = config.kafka.allowDestructive ? 2 : 0;
-	// SIO-742: each component adds +1 health-check tool (ksql adds +2: health + cluster_status).
-	const schemaReads = options?.schemaRegistryService ? 6 : 0;
-	const schemaKafkaWrites = options?.schemaRegistryService && config.kafka.allowWrites ? 2 : 0;
-	const schemaKafkaDestructive = options?.schemaRegistryService && config.kafka.allowDestructive ? 1 : 0;
-	const ksqlReads = options?.ksqlService ? 8 : 0;
-	const ksqlWrites = options?.ksqlService && config.kafka.allowWrites ? 1 : 0;
-	const connectReads = options?.connectService ? 5 : 0;
-	const connectWrites = options?.connectService && config.kafka.allowWrites ? 3 : 0;
-	const connectDestructive = options?.connectService && config.kafka.allowDestructive ? 2 : 0;
-	const srWrites = options?.schemaRegistryService && config.kafka.allowWrites ? 3 : 0;
-	const srDestructive = options?.schemaRegistryService && config.kafka.allowDestructive ? 4 : 0;
-	const restProxyReads = options?.restProxyService ? 4 : 0;
-	const restProxyWrites = options?.restProxyService && config.kafka.allowWrites ? 6 : 0;
-	const toolCount =
+	const toolCount = computeRegisteredToolCount(config, {
+		schemaRegistry: Boolean(options?.schemaRegistryService),
+		ksql: Boolean(options?.ksqlService),
+		connect: Boolean(options?.connectService),
+		restProxy: Boolean(options?.restProxyService),
+	});
+	logger.info({ toolCount }, "All tools registered successfully");
+}
+
+// SIO-1193: the ONE copy of the registered-tool-count math -- the two previous
+// hand-maintained copies (here and src/index.ts) drifted (coreReads 10 vs 11,
+// health-check tools omitted) and the startup log under-reported vs tools/list
+// (audit SIO-1186: logged < 61 while the live server registered 61). Per-family
+// constants mirror src/tools/*/tools.ts registration and are pinned to the real
+// registered sets by tests/tools/full-stack-tools.test.ts (baseline 11 /
+// writes-only 52 / full 61).
+export function computeRegisteredToolCount(
+	config: AppConfig,
+	enabled: { schemaRegistry: boolean; ksql: boolean; connect: boolean; restProxy: boolean },
+): number {
+	const writes = config.kafka.allowWrites;
+	const destructive = config.kafka.allowDestructive;
+	const coreReads = 11;
+	const coreWrites = writes ? 3 : 0;
+	const coreDestructive = destructive ? 2 : 0;
+	const schemaReads = enabled.schemaRegistry ? 6 : 0;
+	const schemaKafkaWrites = enabled.schemaRegistry && writes ? 2 : 0;
+	const schemaKafkaDestructive = enabled.schemaRegistry && destructive ? 1 : 0;
+	const srWrites = enabled.schemaRegistry && writes ? 3 : 0;
+	const srDestructive = enabled.schemaRegistry && destructive ? 4 : 0;
+	const ksqlReads = enabled.ksql ? 8 : 0;
+	const ksqlWrites = enabled.ksql && writes ? 1 : 0;
+	const connectReads = enabled.connect ? 5 : 0;
+	const connectWrites = enabled.connect && writes ? 3 : 0;
+	const connectDestructive = enabled.connect && destructive ? 2 : 0;
+	const restProxyReads = enabled.restProxy ? 4 : 0;
+	const restProxyWrites = enabled.restProxy && writes ? 6 : 0;
+	return (
 		coreReads +
 		coreWrites +
 		coreDestructive +
 		schemaReads +
 		schemaKafkaWrites +
 		schemaKafkaDestructive +
+		srWrites +
+		srDestructive +
 		ksqlReads +
 		ksqlWrites +
 		connectReads +
 		connectWrites +
 		connectDestructive +
-		srWrites +
-		srDestructive +
 		restProxyReads +
-		restProxyWrites;
-	logger.info({ toolCount }, "All tools registered successfully");
+		restProxyWrites
+	);
 }
