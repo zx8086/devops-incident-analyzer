@@ -681,7 +681,10 @@ const RESOLUTION_TOOLS_BY_DATASOURCE: Record<string, string[]> = {
 	// are team/org-named (DSD, BP, PANDP), so getVisibleJiraProjects + name-match resolves nothing
 	// and the model kept reporting "no prana project / 0 incidents". atlassian_search cross-searches
 	// Jira+Confluence by the incident's domain terms and returns the tickets/runbooks in one call.
-	atlassian: ["atlassian_search"],
+	// SIO-1182: findLinkedIncidents is the sole input to extractAtlassianFindings (same class as
+	// gitlab_list_merge_requests above) -- force-include it so typed Atlassian findings survive
+	// every action selection, not just incident_correlation.
+	atlassian: ["atlassian_search", "findLinkedIncidents"],
 	// NOTE: kafka is deliberately NOT here. Force-including kafka_list_topics would
 	// reintroduce the SIO-785 regression -- the broad topic-listing tool crowds out
 	// the specialized dlq_messages tools (kafka_list_dlq_topics), breaking the typed
