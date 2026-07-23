@@ -37,21 +37,26 @@ describe("TtlCache", () => {
 	test("a load slower than the TTL stays deduplicated while pending", async () => {
 		const cache = new TtlCache<number>(10);
 		let loads = 0;
-		let release: (v: number) => void = () => {};
+		let releaseFirst: ((v: number) => void) | undefined;
 		const slow = () => {
 			loads++;
 			return new Promise<number>((resolve) => {
-				release = resolve;
+				// Retain only the FIRST resolver: if a duplicate load starts, the test
+				// must fail on the loads assertion below, not hang on an unresolved first.
+				if (loads === 1) {
+					releaseFirst = resolve;
+				}
 			});
 		};
 		const first = cache.getOrLoad("k", slow);
 		// Wait past the TTL while the load is still pending -- must NOT re-trigger.
 		await new Promise((resolve) => setTimeout(resolve, 25));
 		const second = cache.getOrLoad("k", slow);
-		release(9);
+		expect(loads).toBe(1);
+		if (!releaseFirst) throw new Error("first load was not started");
+		releaseFirst(9);
 		expect(await first).toBe(9);
 		expect(await second).toBe(9);
-		expect(loads).toBe(1);
 	});
 
 	test("failed loads are evicted immediately, not cached for the TTL", async () => {
@@ -73,9 +78,14 @@ describe("TtlCache", () => {
 		let loads = 0;
 		const load = async () => ++loads;
 		await cache.getOrLoad("k", load);
+		await cache.getOrLoad("other", load);
+		// Targeted invalidation reloads only "k"; "other" stays cached.
 		cache.invalidate("k");
-		expect(await cache.getOrLoad("k", load)).toBe(2);
-		cache.invalidate();
 		expect(await cache.getOrLoad("k", load)).toBe(3);
+		expect(await cache.getOrLoad("other", load)).toBe(2);
+		// Global invalidation reloads BOTH keys.
+		cache.invalidate();
+		expect(await cache.getOrLoad("k", load)).toBe(4);
+		expect(await cache.getOrLoad("other", load)).toBe(5);
 	});
 });

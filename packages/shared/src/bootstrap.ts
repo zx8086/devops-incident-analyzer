@@ -99,10 +99,13 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 	// mode; these are process-GLOBAL and the host app owns them there.
 	if (!options.embedded) {
 		process.on("uncaughtException", (error) => {
+			// Runtime can pass non-Error values (throw "string", throw null); accessing
+			// .message on those would throw inside the crash handler itself.
+			const err = error instanceof Error ? error : new Error(String(error));
 			logger.error(`Uncaught exception in ${name}`, {
-				error: error.message,
-				stack: error.stack,
-				name: error.name,
+				error: err.message,
+				stack: err.stack,
+				name: err.name,
 			});
 			if (logger.flush) logger.flush();
 			process.exit(1);
