@@ -27,7 +27,7 @@ const gitlabToolDef: ToolDefinition = ToolDefinitionSchema.parse({
 				"gitlab_get_merge_request_commits",
 				"gitlab_get_merge_request_notes",
 			],
-			pipelines: ["gitlab_manage_pipeline", "gitlab_get_pipeline_jobs", "gitlab_get_job_log"],
+			pipelines: ["gitlab_get_pipeline_jobs", "gitlab_get_job_log"],
 			search: ["gitlab_search", "gitlab_search_labels", "gitlab_semantic_code_search"],
 			code_analysis: [
 				"gitlab_get_file_content",
@@ -183,6 +183,9 @@ describe("SIO-1178: gitlab-api.yaml action map carries the critical tools", () =
 			"gitlab_create_workitem_note",
 			"gitlab_link_work_items",
 			"gitlab_attach_scan_profile",
+			// CodeRabbit (PR #441): manage_pipeline creates/retries/cancels/deletes
+			// pipelines despite its list action -- write-capable, so unmapped.
+			"gitlab_manage_pipeline",
 		];
 		for (const name of writeTools) {
 			expect(allMapped).not.toContain(name);
