@@ -6,13 +6,14 @@ import { cqlIssueTypeRejection, registerProxyTools } from "../src/tools/proxy/in
 
 // SIO-1159: CQL `type` accepts only Confluence content types. LLM callers point it
 // at Jira with `type = issue` and get an opaque upstream 400 (run 270378e0). The
-// proxy rejects it up front with a bad-input envelope steering to the JQL tool.
+// proxy rejects it up front with a bad-query envelope steering to the JQL tool
+// (SIO-1183: kind bad-query -- a rejected query string is do-not-blind-retry).
 describe("cqlIssueTypeRejection", () => {
-	test("rejects type = issue with a bad-input envelope naming the JQL tool", () => {
+	test("rejects type = issue with a bad-query envelope naming the JQL tool", () => {
 		const rejection = cqlIssueTypeRejection("searchConfluenceUsingCql", {
 			cql: 'type = issue AND text ~ "sync failure"',
 		});
-		expect(rejection?._error.kind).toBe("bad-input");
+		expect(rejection?._error.kind).toBe("bad-query");
 		expect(rejection?._error.advice).toContain("atlassian_searchJiraIssuesUsingJql");
 		expect(rejection?._error.advice).toContain("blogpost");
 	});
@@ -86,7 +87,7 @@ describe("registered atlassian_searchConfluenceUsingCql handler (e2e)", () => {
 		return handler;
 	}
 
-	test("type = issue returns the bad-input envelope WITHOUT calling upstream", async () => {
+	test("type = issue returns the bad-query envelope WITHOUT calling upstream", async () => {
 		const callTool = mock(async () => ({ content: [{ type: "text", text: "should not be reached" }] }));
 		const handler = registerAndGetHandler(callTool);
 
@@ -97,7 +98,7 @@ describe("registered atlassian_searchConfluenceUsingCql handler (e2e)", () => {
 		const parsed = JSON.parse(result.content[0]?.text ?? "{}") as {
 			_error?: { kind?: string; advice?: string };
 		};
-		expect(parsed._error?.kind).toBe("bad-input");
+		expect(parsed._error?.kind).toBe("bad-query");
 		expect(parsed._error?.advice).toContain("atlassian_searchJiraIssuesUsingJql");
 	});
 

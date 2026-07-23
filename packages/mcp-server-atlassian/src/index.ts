@@ -11,6 +11,7 @@ import pkg from "../package.json" with { type: "json" };
 import { AtlassianMcpProxy } from "./atlassian-client/index.js";
 import { loadConfiguration } from "./config/index.js";
 import { type AtlassianDatasource, createMcpServerFactory, discoverRemoteTools } from "./server.js";
+import { CUSTOM_TOOL_COUNT } from "./tools/custom/index.js";
 import { createTransport } from "./transport/index.js";
 import { getRuntimeInfo } from "./utils/env.js";
 import { createContextLogger, logger } from "./utils/logger.js";
@@ -103,12 +104,12 @@ if (import.meta.main) {
 					cloudId: ds.proxy.getCloudId(),
 					site: ds.config.atlassian.siteName,
 					proxyTools: proxyCount,
-					customTools: 3,
+					customTools: CUSTOM_TOOL_COUNT,
 					readOnly: ds.config.atlassian.readOnly,
 					transport: ds.config.transport.mode,
 					port: ds.config.transport.mode !== "stdio" ? ds.config.transport.port : undefined,
 				},
-				`Atlassian MCP ready: cloudId=${ds.proxy.getCloudId()}, site=${ds.config.atlassian.siteName ?? "(default)"}, tools=${proxyCount}+3, readOnly=${ds.config.atlassian.readOnly}`,
+				`Atlassian MCP ready: cloudId=${ds.proxy.getCloudId()}, site=${ds.config.atlassian.siteName ?? "(default)"}, tools=${proxyCount}+${CUSTOM_TOOL_COUNT}, readOnly=${ds.config.atlassian.readOnly}`,
 			);
 		},
 	});
