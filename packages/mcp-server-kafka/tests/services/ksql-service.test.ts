@@ -103,6 +103,12 @@ describe("KsqlService", () => {
 		const service = new KsqlService(mockConfig);
 		const result = await service.listStreams();
 		expect(result).toEqual(streams);
+		// SIO-1188: the statement MUST stay non-EXTENDED -- EXTENDED responses come
+		// back as @type "sourceDescriptions", which this parser (and this fixture)
+		// does not model, and the tool silently returns [] forever.
+		const call = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0];
+		const body = JSON.parse((call?.[1] as RequestInit)?.body as string) as { ksql: string };
+		expect(body.ksql).toBe("LIST STREAMS;");
 	});
 
 	test("listTables parses tables from response", async () => {
@@ -120,6 +126,20 @@ describe("KsqlService", () => {
 		const service = new KsqlService(mockConfig);
 		const result = await service.listTables();
 		expect(result).toEqual(tables);
+		// SIO-1188: see listStreams -- non-EXTENDED statement is load-bearing.
+		const call = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0];
+		const body = JSON.parse((call?.[1] as RequestInit)?.body as string) as { ksql: string };
+		expect(body.ksql).toBe("LIST TABLES;");
+	});
+
+	test("listStreams returns [] when the response shape is a SourceDescriptionList (EXTENDED regression, SIO-1188)", async () => {
+		// If someone reintroduces `LIST STREAMS EXTENDED;`, the upstream answers with
+		// this shape and extraction yields [] -- the statement assertions above are the
+		// real guard; this documents WHY.
+		mockFetch(200, [{ "@type": "sourceDescriptions", sourceDescriptions: [{ name: "ORDERS" }] }]);
+		const service = new KsqlService(mockConfig);
+		const result = await service.listStreams();
+		expect(result).toEqual([]);
 	});
 
 	test("listQueries parses queries from response", async () => {
