@@ -12,6 +12,13 @@ describe("adviseCouchbaseError (SIO-1162)", () => {
 		expect(advice).toContain("capella_get_document_by_id");
 	});
 
+	// SIO-1176: production logs showed repeated non-sargable LIKE "%...%" retries.
+	test("no-index calls out leading-wildcard LIKE with the prefix alternative", () => {
+		const advice = adviseCouchbaseError("no-index");
+		expect(advice).toContain('leading-wildcard LIKE ("%...%")');
+		expect(advice).toContain('prefix LIKE ("abc%")');
+	});
+
 	test("bad-query advises fixing the FROM clause / scope_name", () => {
 		const advice = adviseCouchbaseError("bad-query");
 		expect(advice).toBeDefined();
