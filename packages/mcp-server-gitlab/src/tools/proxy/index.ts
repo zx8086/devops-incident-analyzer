@@ -6,6 +6,7 @@ import type { GitLabRestClient } from "../../gitlab-client/index.js";
 import type { GitLabMcpProxy, ProxyToolInfo } from "../../gitlab-client/proxy.js";
 import { createContextLogger } from "../../utils/logger.js";
 import { traceToolCall } from "../../utils/tracing.js";
+import { classifyErrorMessage, envelopeText } from "../error-envelope.js";
 
 const log = createContextLogger("proxy-tools");
 
@@ -64,21 +65,23 @@ function isRetryableError(error: unknown): boolean {
 	return TIMEOUT_PATTERN.test(message);
 }
 
-async function callWithEmbeddingsRetry(
+// Exported for unit tests; retryDelayMs is injectable so the test does not sleep 15s.
+export async function callWithEmbeddingsRetry(
 	proxy: GitLabMcpProxy,
 	toolName: string,
 	prefixedName: string,
 	args: Record<string, unknown>,
+	retryDelayMs: number = EMBEDDINGS_RETRY_DELAY_MS,
 ): Promise<ProxyCallResult> {
 	const callOpts = { timeout: SEMANTIC_SEARCH_TIMEOUT_MS };
 
 	for (let attempt = 0; attempt <= EMBEDDINGS_MAX_RETRIES; attempt++) {
 		if (attempt > 0) {
 			log.warn(
-				{ tool: prefixedName, attempt, delayMs: EMBEDDINGS_RETRY_DELAY_MS },
+				{ tool: prefixedName, attempt, delayMs: retryDelayMs },
 				"Semantic search not available, waiting before retry",
 			);
-			await new Promise((resolve) => setTimeout(resolve, EMBEDDINGS_RETRY_DELAY_MS));
+			await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
 		}
 
 		try {
@@ -94,12 +97,11 @@ async function callWithEmbeddingsRetry(
 				"Semantic search timed out",
 			);
 			// On timeout, skip directly to guidance -- further retries won't help if embeddings aren't built
+			const prose =
+				"Semantic code search timed out. Embeddings may still be indexing for this project (first-time indexing takes 10-20 minutes). Use gitlab_get_repository_tree and gitlab_get_file_content to browse code directly instead.";
 			return {
 				content: [
-					{
-						type: "text",
-						text: "Semantic code search timed out. Embeddings may still be indexing for this project (first-time indexing takes 10-20 minutes). Use gitlab_get_repository_tree and gitlab_get_file_content to browse code directly instead.",
-					},
+					{ type: "text", text: envelopeText(prose, { kind: "timeout", message: "Semantic code search timed out" }) },
 				],
 				isError: true,
 			};
@@ -107,13 +109,12 @@ async function callWithEmbeddingsRetry(
 	}
 
 	log.warn({ tool: prefixedName }, "Embeddings still not ready after retry");
+	// SIO-1179: kind no-index (category no-data, non-degrading) -- embeddings still
+	// indexing is a routine environment state, not a tool malfunction.
+	const prose =
+		"Embeddings not ready -- indexing is still in progress for this project (typically 10-20 minutes on first use). Use gitlab_get_repository_tree and gitlab_get_file_content to browse code directly instead.";
 	return {
-		content: [
-			{
-				type: "text",
-				text: "Embeddings not ready -- indexing is still in progress for this project (typically 10-20 minutes on first use). Use gitlab_get_repository_tree and gitlab_get_file_content to browse code directly instead.",
-			},
-		],
+		content: [{ type: "text", text: envelopeText(prose, { kind: "no-index", message: "Embeddings not ready" }) }],
 		isError: true,
 	};
 }
@@ -202,8 +203,16 @@ export function registerProxyTools(
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					log.error({ tool: prefixedName, error: message }, "Proxy tool call failed");
+					// SIO-1179: thrown transport/SDK failures get the structured envelope.
+					// Upstream isError:true content is passed through UNwrapped above -- we
+					// cannot classify upstream prose better than the agent's fallback.
 					return {
-						content: [{ type: "text" as const, text: `Error: ${message}` }],
+						content: [
+							{
+								type: "text" as const,
+								text: envelopeText(`Error: ${message}`, { kind: classifyErrorMessage(message), message }),
+							},
+						],
 						isError: true,
 					};
 				}

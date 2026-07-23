@@ -85,21 +85,14 @@ export function hasSelectiveAnchor(query: OrbitQuery): boolean {
 
 // Blast radius: a changed Definition (by symbol) and the cross-project files that
 // IMPORT it. Anchored on the symbol name (text-indexed) for selectivity.
-// Definition -[DEFINES]- File -[IN_PROJECT]- Project (source side); the importer
-// side is resolved via ImportedSymbol whose import_path/identifier matches.
-export function buildBlastRadiusQuery(params: {
-	symbol: string;
-	groupPath?: string;
-	limit?: number;
-}): TaggedOrbitQuery {
+// SIO-1179: NO group filter on the import side. ImportedSymbol.file_path is
+// REPO-RELATIVE (e.g. "src/lambdas/lambda.ts") and never contains the group path,
+// so the previous `file_path: { contains: groupPath }` filter matched nothing and
+// the tool returned 0 rows for every symbol (live-proven). Group scoping is not
+// expressible here anyway -- source_code entities have no IN_PROJECT edge -- and
+// the Orbit index is already scoped to the configured group.
+export function buildBlastRadiusQuery(params: { symbol: string; limit?: number }): TaggedOrbitQuery {
 	const symbol = requireSelector(params.symbol, "symbol");
-	const importFilter: Record<string, unknown> = {
-		// text-indexed on ImportedSymbol.import_path
-		import_path: { any_tokens: symbol },
-	};
-	if (params.groupPath) {
-		importFilter.file_path = { contains: params.groupPath };
-	}
 	return {
 		queryTag: ORBIT_QUERY_TAGS.blastRadius,
 		dsl: {
@@ -116,7 +109,8 @@ export function buildBlastRadiusQuery(params: {
 					id: "sym",
 					entity: "ImportedSymbol",
 					columns: ["file_path", "import_path", "identifier_name"],
-					filters: importFilter,
+					// text-indexed on ImportedSymbol.import_path
+					filters: { import_path: { any_tokens: symbol } },
 				},
 			],
 			relationships: [{ type: "IMPORTS", from: "sym", to: "def" }],

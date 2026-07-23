@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { GitLabRestClient } from "../../gitlab-client/index.js";
 import { traceToolCall } from "../../utils/tracing.js";
+import { restErrorResult } from "../error-envelope.js";
 
 const GetFileContentParams = z.object({
 	project_id: z.string().describe("GitLab project ID or URL-encoded path"),
@@ -42,7 +43,7 @@ export function registerGetFileContentTool(server: McpServer, client: GitLabRest
 						},
 					],
 				};
-			});
+			}).catch((error) => restErrorResult(error));
 		},
 	);
 }

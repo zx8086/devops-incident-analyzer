@@ -1,5 +1,6 @@
 // src/tools/orbit/index.ts
 
+import { mapHttpStatusToKind, type ToolErrorKind } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
@@ -10,6 +11,7 @@ import {
 } from "../../gitlab-client/orbit.js";
 import { createContextLogger } from "../../utils/logger.js";
 import { traceToolCall } from "../../utils/tracing.js";
+import { envelopeText } from "../error-envelope.js";
 import {
 	buildBlastRadiusQuery,
 	buildCrossProjectCallersQuery,
@@ -54,6 +56,33 @@ const QUERY_WINDOW_MS = 60_000;
 
 function textResult(text: string, isError = false) {
 	return { content: [{ type: "text" as const, text }], isError };
+}
+
+// SIO-1179: Orbit-off/unindexed is a routine environment state, not a malfunction --
+// kind "no-index" (category no-data, non-degrading) so it never trips the
+// tool-error-rate confidence cap. Prose stays first for the LLM's fallback steering.
+function unavailableResult() {
+	return textResult(
+		envelopeText(UNAVAILABLE_GUIDANCE, { kind: "no-index", message: "GitLab Orbit knowledge graph unavailable" }),
+		true,
+	);
+}
+
+// SIO-1179: classify an Orbit failure structurally. compile_error = a query the
+// server rejected (fix the DSL, do not blind-retry); an HTTP status maps through
+// the shared table; anything else from OrbitUnavailableError's wrapping is a
+// timeout/network-shaped transport failure.
+function orbitErrorResult(error: unknown) {
+	const isOrbitErr = error instanceof OrbitUnavailableError;
+	const detail = isOrbitErr ? error.message : String(error);
+	const status = isOrbitErr ? error.status : undefined;
+	let kind: ToolErrorKind;
+	if (/compile_error/i.test(detail)) kind = "bad-query";
+	else if (status !== undefined) kind = mapHttpStatusToKind(status);
+	else if (/timed?\s*out|ETIMEDOUT|abort/i.test(detail)) kind = "timeout";
+	else kind = "network";
+	const prose = `${UNAVAILABLE_GUIDANCE}\n\n(Orbit error: ${detail})`;
+	return textResult(envelopeText(prose, { kind, message: detail, statusCode: status }), true);
 }
 
 // Wrap a tagged DSL result plus the raw Orbit rows so the Layer-B extractor can
@@ -124,7 +153,7 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 	// boot saw "indexing". Returns a guidance result to short-circuit, or null when
 	// Orbit is usable.
 	async function ensureAvailable() {
-		if (!ctx.client) return textResult(UNAVAILABLE_GUIDANCE, true);
+		if (!ctx.client) return unavailableResult();
 		if (ctx.available) return null;
 		if (ctx.indexing) {
 			try {
@@ -137,7 +166,7 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 				// fall through to guidance
 			}
 		}
-		return ctx.available ? null : textResult(UNAVAILABLE_GUIDANCE, true);
+		return ctx.available ? null : unavailableResult();
 	}
 
 	// Shared executor for the composed (billed) wrappers. Enforces availability,
@@ -146,14 +175,13 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 		const unavailable = await ensureAvailable();
 		if (unavailable) return unavailable;
 		const client = ctx.client;
-		if (!client) return textResult(UNAVAILABLE_GUIDANCE, true);
+		if (!client) return unavailableResult();
 
 		if (!tryConsumeBudget()) {
-			return textResult(
+			const prose =
 				`Orbit query budget (${ctx.maxQueriesPerRun}/${QUERY_WINDOW_MS / 1000}s) reached; skipping ${toolName}. ` +
-					"Use the results already gathered or the per-project REST tools.",
-				true,
-			);
+				"Use the results already gathered or the per-project REST tools.";
+			return textResult(envelopeText(prose, { kind: "throttled", message: "Orbit query budget reached" }), true);
 		}
 
 		try {
@@ -162,7 +190,7 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 		} catch (error) {
 			const detail = error instanceof OrbitUnavailableError ? error.message : String(error);
 			log.warn({ toolName, error: detail }, "Orbit query failed; soft-failing to guidance");
-			return textResult(`${UNAVAILABLE_GUIDANCE}\n\n(Orbit error: ${detail})`, true);
+			return orbitErrorResult(error);
 		}
 	}
 
@@ -173,25 +201,23 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 	// by source file so the Layer-B extractor can attach mrId/mrMergedAt/mrWebUrl to
 	// each blast-radius finding -- without which the flagship deploy-vs-elastic rule
 	// (gated on mrMergedAt) can never fire.
-	async function runBlastRadius(symbol: string, groupPath: string, limit?: number) {
+	async function runBlastRadius(symbol: string, limit?: number) {
 		const unavailable = await ensureAvailable();
 		if (unavailable) return unavailable;
 		const client = ctx.client;
-		if (!client) return textResult(UNAVAILABLE_GUIDANCE, true);
+		if (!client) return unavailableResult();
 		if (!tryConsumeBudget()) {
-			return textResult(
-				`Orbit query budget (${ctx.maxQueriesPerRun}/${QUERY_WINDOW_MS / 1000}s) reached; skipping gitlab_blast_radius.`,
-				true,
-			);
+			const prose = `Orbit query budget (${ctx.maxQueriesPerRun}/${QUERY_WINDOW_MS / 1000}s) reached; skipping gitlab_blast_radius.`;
+			return textResult(envelopeText(prose, { kind: "throttled", message: "Orbit query budget reached" }), true);
 		}
 
 		let raw: unknown;
 		try {
-			raw = await client.query(buildBlastRadiusQuery({ symbol, groupPath, limit }).dsl, "raw");
+			raw = await client.query(buildBlastRadiusQuery({ symbol, limit }).dsl, "raw");
 		} catch (error) {
 			const detail = error instanceof OrbitUnavailableError ? error.message : String(error);
 			log.warn({ tool: "gitlab_blast_radius", error: detail }, "Orbit query failed; soft-failing to guidance");
-			return textResult(`${UNAVAILABLE_GUIDANCE}\n\n(Orbit error: ${detail})`, true);
+			return orbitErrorResult(error);
 		}
 
 		// Enrich: resolve the recent merged MR per distinct changed-definition file.
@@ -223,21 +249,22 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 		{},
 		async () =>
 			traceToolCall("gitlab_graph_schema", async () => {
-				if (!ctx.client) return textResult(UNAVAILABLE_GUIDANCE, true);
+				if (!ctx.client) return unavailableResult();
 				try {
 					const schema = await ctx.client.getSchema();
 					return textResult(JSON.stringify(schema, null, 2));
 				} catch (error) {
-					const detail = error instanceof OrbitUnavailableError ? error.message : String(error);
-					return textResult(`${UNAVAILABLE_GUIDANCE}\n\n(Orbit error: ${detail})`, true);
+					return orbitErrorResult(error);
 				}
 			}),
 	);
 
 	// -- gitlab_blast_radius (BILLED) --
+	// SIO-1179: no group_path param -- the old one only injected a dead
+	// ImportedSymbol.file_path filter (repo-relative paths never contain the group
+	// path), which made every call return 0 rows. The index is group-scoped already.
 	const BlastRadiusParams = z.object({
 		symbol: z.string().describe("Function/class/module name or symbol to trace (from a stack trace or a changed file)"),
-		group_path: z.string().optional().describe("Top-level group path to scope to (default: pvhcorp)"),
 		limit: z.number().int().optional().describe("Max import sites to return (default 200, max 1000)"),
 	});
 	server.tool(
@@ -248,7 +275,7 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 		async (args) =>
 			traceToolCall("gitlab_blast_radius", async () => {
 				const p = BlastRadiusParams.parse(args);
-				return runBlastRadius(p.symbol, p.group_path ?? ctx.defaultGroupPath, p.limit);
+				return runBlastRadius(p.symbol, p.limit);
 			}),
 	);
 
@@ -356,26 +383,28 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 				const unavailable = await ensureAvailable();
 				if (unavailable) return unavailable;
 				const client = ctx.client;
-				if (!client) return textResult(UNAVAILABLE_GUIDANCE, true);
+				if (!client) return unavailableResult();
 				// Selectivity guard: Orbit rejects (but still bills for) an unselective
 				// query. The purpose-built tools enforce this via requireSelector; the
 				// raw path must validate the LLM's query before the billed call.
 				if (!hasSelectiveAnchor(query)) {
-					return textResult(
+					const prose =
 						"Orbit query rejected: every query must include a selective node (a `filters` object, " +
-							"`node_ids`, or `id_range`). Call gitlab_graph_schema to ground the query, then retry.",
+						"`node_ids`, or `id_range`). Call gitlab_graph_schema to ground the query, then retry.";
+					return textResult(
+						envelopeText(prose, { kind: "bad-query", message: "Unselective Orbit query rejected" }),
 						true,
 					);
 				}
 				if (!tryConsumeBudget()) {
-					return textResult(`Orbit query budget (${ctx.maxQueriesPerRun}/${QUERY_WINDOW_MS / 1000}s) reached.`, true);
+					const prose = `Orbit query budget (${ctx.maxQueriesPerRun}/${QUERY_WINDOW_MS / 1000}s) reached.`;
+					return textResult(envelopeText(prose, { kind: "throttled", message: "Orbit query budget reached" }), true);
 				}
 				try {
 					const raw = await client.query(query, "raw");
 					return textResult(JSON.stringify(raw, null, 2));
 				} catch (error) {
-					const detail = error instanceof OrbitUnavailableError ? error.message : String(error);
-					return textResult(`${UNAVAILABLE_GUIDANCE}\n\n(Orbit error: ${detail})`, true);
+					return orbitErrorResult(error);
 				}
 			}),
 	);
