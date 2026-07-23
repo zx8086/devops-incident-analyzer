@@ -458,19 +458,39 @@ describe("getMostExpensiveQueries.buildQuery", () => {
 		expect(query).not.toContain("${");
 	});
 
-	test("period: 'day' substitutes constant clause", () => {
+	// SIO-1175: the query must never scan the full completed_requests keyspace.
+	test("default query carries the 8-week window and DEFAULT_ANALYSIS_LIMIT", () => {
+		const { query } = buildMostExpensiveQueries({});
+		expect(query).toContain("requestTime >= DATE_ADD_STR(NOW_STR(), -8, 'week')");
+		expect(query).toMatch(/LIMIT 50;/);
+	});
+
+	test("period: 'day' REPLACES the default window (single requestTime predicate)", () => {
 		const { query } = buildMostExpensiveQueries({ period: "day" });
 		expect(query).toContain("requestTime >= DATE_ADD_STR(NOW_STR(), -1, 'day')");
+		expect(query.match(/requestTime >=/g)).toHaveLength(1);
 	});
 
 	test("period: 'month' substitutes constant clause", () => {
 		const { query } = buildMostExpensiveQueries({ period: "month" });
 		expect(query).toContain("requestTime >= DATE_ADD_STR(NOW_STR(), -1, 'month')");
+		expect(query.match(/requestTime >=/g)).toHaveLength(1);
 	});
 
-	test("limit splices LIMIT N into output", () => {
-		const { query } = buildMostExpensiveQueries({ limit: 50 });
-		expect(query).toMatch(/LIMIT 50/);
+	test("explicit limit overrides the default (single LIMIT clause)", () => {
+		const { query } = buildMostExpensiveQueries({ limit: 10 });
+		expect(query).toMatch(/LIMIT 10;/);
+		expect(query.match(/LIMIT \d+/g)).toHaveLength(1);
+	});
+
+	// SIO-1175: duration strings are converted once per row via LET, not once per
+	// aggregate. A regression back to inline-per-aggregate conversion would push
+	// the STR_TO_DURATION count far above the LET variable count.
+	test("duration conversions are LET-based, pct_ columns dropped", () => {
+		const { query } = buildMostExpensiveQueries({});
+		expect(query).toContain("LET svc = STR_TO_DURATION(serviceTime)");
+		expect(query.match(/STR_TO_DURATION/g)).toHaveLength(6);
+		expect(query).not.toContain("pct_");
 	});
 
 	test("parameters bag is always empty (no user literals to bind)", () => {

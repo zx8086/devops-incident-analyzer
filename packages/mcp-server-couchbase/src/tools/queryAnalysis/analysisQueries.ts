@@ -146,6 +146,10 @@ FROM system:indexes AS i
 WHERE i.metadata.last_scan_time IS NULL AND ANY v IN ["default", "prices"] SATISFIES i.keyspace_id LIKE v || "%" END;
 `;
 
+// SIO-1175: durations are converted once per row via LET instead of per-aggregate,
+// the default window matches n1qlCompletedRequests (8 weeks; buildQuery rewrites it
+// for the period parameter), and the pct_* / authorize / project / stream / filter
+// columns were dropped -- percentages are derivable client-side from the avg pairs.
 export const mostExpensiveQueries: string = `
 SELECT
        COUNT(*) AS count,
@@ -157,50 +161,38 @@ SELECT
        AVG(phaseCounts['fetch']) AS avg_fetches,
        AVG(phaseCounts.indexScan) AS avg_indexScanResults,
        AVG(phaseOperators.indexScan) AS avg_indexesScanned,
-       SUM(STR_TO_DURATION(serviceTime)) as sum_serviceTimeMs,
+       SUM(svc) as sum_serviceTimeMs,
 
-       DURATION_TO_STR(AVG(STR_TO_DURATION(serviceTime))) AS avg_serviceTime,
-       DURATION_TO_STR(SUM(STR_TO_DURATION(serviceTime))) AS sum_serviceTime,
+       DURATION_TO_STR(AVG(svc)) AS avg_serviceTime,
+       DURATION_TO_STR(SUM(svc)) AS sum_serviceTime,
 
-       DURATION_TO_STR(AVG(STR_TO_DURATION(elapsedTime))) AS avg_elapsedTime,
-       DURATION_TO_STR(SUM(STR_TO_DURATION(elapsedTime))) AS sum_elapsedTime,
+       DURATION_TO_STR(AVG(ela)) AS avg_elapsedTime,
+       DURATION_TO_STR(SUM(ela)) AS sum_elapsedTime,
 
-       DURATION_TO_STR(AVG(STR_TO_DURATION(phaseTimes.run))) AS avg_runTime,
-       DURATION_TO_STR(SUM(STR_TO_DURATION(phaseTimes.run))) AS sum_runTime,
+       DURATION_TO_STR(AVG(runT)) AS avg_runTime,
+       DURATION_TO_STR(SUM(runT)) AS sum_runTime,
 
-       DURATION_TO_STR(AVG(STR_TO_DURATION(phaseTimes['fetch']))) AS avg_fetchTime,
-       DURATION_TO_STR(SUM(STR_TO_DURATION(phaseTimes['fetch']))) AS sum_fetchTime,
-       TOSTRING(ROUND(AVG(STR_TO_DURATION(phaseTimes['fetch']))/AVG(STR_TO_DURATION(elapsedTime))*100,2)) || "%" AS pct_fetchTime,
+       DURATION_TO_STR(AVG(fetchT)) AS avg_fetchTime,
+       DURATION_TO_STR(SUM(fetchT)) AS sum_fetchTime,
 
-       DURATION_TO_STR(AVG(STR_TO_DURATION(phaseTimes.plan))) AS avg_planTime,
-       DURATION_TO_STR(SUM(STR_TO_DURATION(phaseTimes.plan))) AS sum_planTime,
-       TOSTRING(ROUND(AVG(STR_TO_DURATION(phaseTimes.plan))/AVG(STR_TO_DURATION(elapsedTime))*100,2)) || "%" AS pct_planTime,
+       DURATION_TO_STR(AVG(planT)) AS avg_planTime,
+       DURATION_TO_STR(SUM(planT)) AS sum_planTime,
 
-       DURATION_TO_STR(AVG(STR_TO_DURATION(phaseTimes['filter']))) AS avg_filterTime,
-       DURATION_TO_STR(SUM(STR_TO_DURATION(phaseTimes['filter']))) AS sum_filterTime,
-       TOSTRING(ROUND(AVG(STR_TO_DURATION(phaseTimes['filter']))/AVG(STR_TO_DURATION(elapsedTime))*100,2)) || "%" AS pct_filterTime,
+       DURATION_TO_STR(AVG(scanT)) AS avg_indexScanTime,
+       DURATION_TO_STR(SUM(scanT)) AS sum_indexScanTime,
 
-       DURATION_TO_STR(AVG(STR_TO_DURATION(phaseTimes.indexScan))) AS avg_indexScanTime,
-       DURATION_TO_STR(SUM(STR_TO_DURATION(phaseTimes.indexScan))) AS sum_indexScanTime,
-       TOSTRING(ROUND(AVG(STR_TO_DURATION(phaseTimes.indexScan))/AVG(STR_TO_DURATION(elapsedTime))*100,2)) || "%" AS pct_indexScanTime,
-
-       DURATION_TO_STR(AVG(STR_TO_DURATION(phaseTimes.authorize))) AS avg_authorizeTime,
-       DURATION_TO_STR(SUM(STR_TO_DURATION(phaseTimes.authorize))) AS sum_authorizeTime,
-       TOSTRING(ROUND(AVG(STR_TO_DURATION(phaseTimes.authorize))/AVG(STR_TO_DURATION(elapsedTime))*100,2)) || "%" AS pct_authorizeTime,
-
-       DURATION_TO_STR(AVG(STR_TO_DURATION(phaseTimes.project))) AS avg_projectTime,
-       DURATION_TO_STR(SUM(STR_TO_DURATION(phaseTimes.project))) AS sum_projectTime,
-       TOSTRING(ROUND(AVG(STR_TO_DURATION(phaseTimes.project))/AVG(STR_TO_DURATION(elapsedTime))*100,2)) || "%" AS pct_projectTime,
-
-       DURATION_TO_STR(AVG(STR_TO_DURATION(phaseTimes.stream))) AS avg_streamTime,
-       DURATION_TO_STR(SUM(STR_TO_DURATION(phaseTimes.stream))) AS sum_streamTime,
-       TOSTRING(ROUND(AVG(STR_TO_DURATION(phaseTimes.stream))/AVG(STR_TO_DURATION(elapsedTime))*100,2)) || "%" AS pct_streamTime,
-       
        MIN(requestTime) as requestTimeFirst,
        MAX(requestTime) as requestTimeLast
 
 FROM system:completed_requests
-WHERE LOWER(statement) IS NOT NULL AND LOWER(statement) NOT LIKE "%advise %" AND LOWER(statement) NOT LIKE "%infer %"
+LET svc = STR_TO_DURATION(serviceTime),
+    ela = STR_TO_DURATION(elapsedTime),
+    runT = STR_TO_DURATION(phaseTimes.run),
+    fetchT = STR_TO_DURATION(phaseTimes['fetch']),
+    planT = STR_TO_DURATION(phaseTimes.plan),
+    scanT = STR_TO_DURATION(phaseTimes.indexScan)
+WHERE requestTime >= DATE_ADD_STR(NOW_STR(), -8, 'week')
+  AND LOWER(statement) IS NOT NULL AND LOWER(statement) NOT LIKE "%advise %" AND LOWER(statement) NOT LIKE "%infer %"
 GROUP BY statement,preparedText
 ORDER BY sum_serviceTimeMs DESC;
 `;
