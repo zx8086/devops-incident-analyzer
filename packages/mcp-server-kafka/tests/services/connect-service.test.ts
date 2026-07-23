@@ -1,7 +1,7 @@
 // tests/services/connect-service.test.ts
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { AppConfig } from "../../src/config/schemas.ts";
-import { ConnectService } from "../../src/services/connect-service.ts";
+import { ConnectService, REDACTED_VALUE, redactConnectorConfig } from "../../src/services/connect-service.ts";
 
 const mockConfig = {
 	connect: {
@@ -182,6 +182,102 @@ describe("ConnectService", () => {
 			globalThis.fetch = mock(() => Promise.reject(new Error("ENOTFOUND"))) as unknown as typeof globalThis.fetch;
 			const service = new ConnectService(mockConfig);
 			await expect(service.probeReachability()).rejects.toThrow("ENOTFOUND");
+		});
+	});
+
+	// SIO-1187: expand=info configs carry plaintext credentials on real clusters;
+	// they must never survive into tool output (LLM context + traces).
+	describe("credential redaction (SIO-1187)", () => {
+		const SECRETS = ["cb-secret-pw", "jaas-secret-value", "aws-secret-access", "sr-user:sr-pass", "api-key-value"];
+
+		function connectorsWithConfig() {
+			return {
+				"sink-couchbase-prices": {
+					status: {
+						name: "sink-couchbase-prices",
+						type: "sink",
+						connector: { state: "RUNNING", worker_id: "worker-1" },
+						tasks: [{ id: 0, state: "RUNNING", worker_id: "worker-1" }],
+					},
+					info: {
+						name: "sink-couchbase-prices",
+						type: "sink",
+						config: {
+							"connector.class": "com.couchbase.connect.kafka.CouchbaseSinkConnector",
+							topics: "T_PRIVATE_PRICES",
+							"key.converter": "org.apache.kafka.connect.storage.StringConverter",
+							"tasks.max": "2",
+							"couchbase.username": "svc-user",
+							"couchbase.password": SECRETS[0] as string,
+							"confluent.topic.sasl.jaas.config": SECRETS[1] as string,
+							"aws.secret.access.key": SECRETS[2] as string,
+							"schema.registry.basic.auth.user.info": SECRETS[3] as string,
+							"api.key": SECRETS[4] as string,
+							"empty.password": "",
+						},
+						tasks: [{ connector: "sink-couchbase-prices", task: 0 }],
+					},
+				},
+			};
+		}
+
+		test("listConnectors redacts credential-shaped config values and keeps benign keys", async () => {
+			mockFetch(200, connectorsWithConfig());
+			const service = new ConnectService(mockConfig);
+			const result = await service.listConnectors();
+			const config = result.connectors["sink-couchbase-prices"]?.info?.config as Record<string, string>;
+
+			expect(config["couchbase.password"]).toBe(REDACTED_VALUE);
+			expect(config["confluent.topic.sasl.jaas.config"]).toBe(REDACTED_VALUE);
+			expect(config["aws.secret.access.key"]).toBe(REDACTED_VALUE);
+			expect(config["schema.registry.basic.auth.user.info"]).toBe(REDACTED_VALUE);
+			expect(config["api.key"]).toBe(REDACTED_VALUE);
+
+			expect(config["connector.class"]).toBe("com.couchbase.connect.kafka.CouchbaseSinkConnector");
+			expect(config.topics).toBe("T_PRIVATE_PRICES");
+			expect(config["key.converter"]).toBe("org.apache.kafka.connect.storage.StringConverter");
+			expect(config["tasks.max"]).toBe("2");
+			expect(config["couchbase.username"]).toBe("svc-user");
+			expect(config["empty.password"]).toBe("");
+		});
+
+		test("no secret literal survives serialization of the full result", async () => {
+			mockFetch(200, connectorsWithConfig());
+			const service = new ConnectService(mockConfig);
+			const result = await service.listConnectors();
+			const serialized = JSON.stringify(result);
+			for (const secret of SECRETS) {
+				expect(serialized).not.toContain(secret as string);
+			}
+		});
+
+		test("redactConnectorConfig does not false-positive bare 'key' config names", () => {
+			const config = redactConnectorConfig({
+				"key.converter": "StringConverter",
+				"key.ignore": "true",
+				"value.converter.schema.registry.url": "http://sr:8081",
+			});
+			expect(config["key.converter"]).toBe("StringConverter");
+			expect(config["key.ignore"]).toBe("true");
+			expect(config["value.converter.schema.registry.url"]).toBe("http://sr:8081");
+		});
+
+		test("entries without info config pass through untouched", async () => {
+			const bare = {
+				"sink-a": {
+					status: {
+						name: "sink-a",
+						type: "sink",
+						connector: { state: "RUNNING", worker_id: "w1" },
+						tasks: [],
+					},
+				},
+			};
+			mockFetch(200, bare);
+			const service = new ConnectService(mockConfig);
+			const result = await service.listConnectors();
+			expect(result.count).toBe(1);
+			expect(result.connectors["sink-a"]?.info).toBeUndefined();
 		});
 	});
 });
