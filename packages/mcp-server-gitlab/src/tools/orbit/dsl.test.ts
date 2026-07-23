@@ -23,7 +23,7 @@ function hasSelectiveNode(dsl: Record<string, unknown>): boolean {
 
 describe("Orbit DSL builders", () => {
 	test("blast radius: tagged, selective, anchored on the symbol", () => {
-		const { queryTag, dsl } = buildBlastRadiusQuery({ symbol: "authenticate", groupPath: "pvhcorp" });
+		const { queryTag, dsl } = buildBlastRadiusQuery({ symbol: "authenticate" });
 		expect(queryTag).toBe(ORBIT_QUERY_TAGS.blastRadius);
 		expect(hasSelectiveNode(dsl)).toBe(true);
 		expect(JSON.stringify(dsl)).toContain("authenticate");
@@ -165,7 +165,7 @@ describe("Orbit filter-grammar contract (SIO-1151)", () => {
 	}
 
 	const ALL_BUILT = [
-		buildBlastRadiusQuery({ symbol: "authenticate", groupPath: "pvhcorp" }),
+		buildBlastRadiusQuery({ symbol: "authenticate" }),
 		buildCrossProjectCallersQuery({ fqn: "Gitlab::Auth::authenticate" }),
 		buildRecentDeploysQuery({ groupPath: "pvhcorp", since: "2026-07-01T00:00:00Z" }),
 		buildPipelineFailuresQuery({ groupPath: "pvhcorp", since: "2026-07-01T00:00:00Z" }),
@@ -183,12 +183,13 @@ describe("Orbit filter-grammar contract (SIO-1151)", () => {
 	});
 
 	test("blast radius uses op-as-key text filters", () => {
-		const { dsl } = buildBlastRadiusQuery({ symbol: "authenticate", groupPath: "pvhcorp" });
+		const { dsl } = buildBlastRadiusQuery({ symbol: "authenticate" });
 		const nodes = dsl.nodes as Array<{ filters?: Record<string, unknown> }>;
 		expect(nodes[0]?.filters).toEqual({ name: { token_match: "authenticate" } });
+		// SIO-1179: NO file_path group filter -- ImportedSymbol.file_path is repo-relative
+		// and a `contains: groupPath` filter matched nothing (guaranteed-empty results).
 		expect(nodes[1]?.filters).toEqual({
 			import_path: { any_tokens: "authenticate" },
-			file_path: { contains: "pvhcorp" },
 		});
 	});
 

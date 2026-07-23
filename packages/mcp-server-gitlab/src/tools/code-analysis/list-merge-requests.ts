@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { GitLabRestClient } from "../../gitlab-client/index.js";
 import { traceToolCall } from "../../utils/tracing.js";
+import { restErrorResult } from "../error-envelope.js";
 
 // SIO-771: numeric project_id is required -- URL-encoded paths 404 against
 // /api/v4 endpoints. See memory: reference_gitlab_internal_vs_public.
@@ -42,7 +43,7 @@ export function registerListMergeRequestsTool(server: McpServer, client: GitLabR
 						},
 					],
 				};
-			});
+			}).catch((error) => restErrorResult(error));
 		},
 	);
 }
