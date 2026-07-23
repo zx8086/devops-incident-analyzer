@@ -12,6 +12,11 @@ model:
 tools:
   - couchbase-health
 
+skills:
+  - slow-query-triage
+  - no-index-diagnosis
+  - fatal-request-investigation
+
 compliance:
   risk_tier: low
   data_governance:
