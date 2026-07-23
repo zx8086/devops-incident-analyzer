@@ -28,11 +28,12 @@ First run: browser opens for consent. Tokens persist at `~/.mcp-auth/atlassian/<
 
 ## Tools
 
-Proxied read-only Rovo tools plus three custom correlation tools:
+Proxied Rovo tools (write tools filtered when `ATLASSIAN_READ_ONLY=true`) plus four custom tools:
 
 - `findLinkedIncidents` -- JQL-composed recent incident search with MTTR
 - `getRunbookForAlert` -- CQL search with client-side relevance ranking
 - `getIncidentHistory` -- time-bucketed incident count and MTTR
+- `atlassian_getJiraIssue` -- overrides the upstream getJiraIssue with a triage-preset field projection (the raw upstream payload is 60-122KB and exceeds the sub-agent result cap)
 
 ## Testing
 

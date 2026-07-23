@@ -7,6 +7,7 @@ import type { AtlassianMcpProxy, ProxyToolInfo } from "../../atlassian-client/in
 import { createContextLogger } from "../../utils/logger.js";
 import { traceToolCall } from "../../utils/tracing.js";
 import { CUSTOM_OVERRIDDEN_UPSTREAM_TOOLS } from "../custom/index.js";
+import { toolErrorResult } from "../error-envelope.js";
 import { isWriteTool } from "./write-tools.js";
 
 const log = createContextLogger("proxy-tools");
@@ -71,12 +72,36 @@ export function cqlIssueTypeRejection(
 	if (toolName !== "searchConfluenceUsingCql") return null;
 	const cql = args.cql;
 	if (typeof cql !== "string" || !cqlTargetsIssueType(cql)) return null;
+	// SIO-1183: kind bad-query (was bad-input, which maps to category "unknown" = degrading).
+	// A rejected query string is the textbook bad-query do-not-blind-retry case.
 	return buildToolErrorEnvelope({
-		kind: "bad-input",
+		kind: "bad-query",
 		message: "CQL rejected before upstream: 'type = issue' is not a valid Confluence content type.",
 		advice:
 			"Confluence CQL `type` accepts only: space, user, page, blogpost, comment, attachment. " +
 			"Jira issues are searched with JQL -- use atlassian_searchJiraIssuesUsingJql (or free-text atlassian_search) instead.",
+	});
+}
+
+// SIO-1183: a Jira issue key fed to the Confluence page reader guarantees an upstream 400
+// (observed live 07-21: getConfluencePage(pageId: "DEVOPS-1396"), SIO-1181 audit). Reject
+// locally with steering instead of burning the round trip. Same resolved-result convention
+// as the CQL guard. Exported for tests.
+const JIRA_ISSUE_KEY_RE = /^[A-Z][A-Z0-9]*-\d+$/;
+
+export function confluencePageIdRejection(
+	toolName: string,
+	args: Record<string, unknown>,
+): ReturnType<typeof buildToolErrorEnvelope> | null {
+	if (toolName !== "getConfluencePage") return null;
+	const pageId = args.pageId;
+	if (typeof pageId !== "string" || !JIRA_ISSUE_KEY_RE.test(pageId.trim())) return null;
+	return buildToolErrorEnvelope({
+		kind: "bad-input",
+		message: `pageId rejected before upstream: "${pageId}" is a Jira issue key, not a Confluence page id.`,
+		advice:
+			"atlassian_getConfluencePage takes a numeric Confluence pageId (or tiny-link id). " +
+			`For a Jira issue key like "${pageId}" use atlassian_getJiraIssue; for an ARI from atlassian_search results use atlassian_fetch.`,
 	});
 }
 
@@ -143,10 +168,10 @@ export function registerProxyTools(
 		const handler = async (args: Record<string, unknown>) => {
 			return traceToolCall(prefixedName, async () => {
 				try {
-					// SIO-1159: reject Jira-targeted CQL before the upstream round trip. The
+					// SIO-1159/SIO-1183: reject doomed calls before the upstream round trip. The
 					// envelope rides a RESOLVED result (isError:false) per the SIO-1087
 					// convention so the agent classifies it structurally, not as a malfunction.
-					const rejection = cqlIssueTypeRejection(tool.name, args);
+					const rejection = cqlIssueTypeRejection(tool.name, args) ?? confluencePageIdRejection(tool.name, args);
 					if (rejection) {
 						return { content: [{ type: "text" as const, text: JSON.stringify(rejection) }] };
 					}
@@ -155,15 +180,16 @@ export function registerProxyTools(
 						type: "text" as const,
 						text: typeof c.text === "string" ? c.text : JSON.stringify(c),
 					}));
+					// Upstream isError prose passes through UNWRAPPED (SIO-1181 runbook): we cannot
+					// classify upstream prose better than the agent's fallback.
 					if (result.isError) return { content, isError: true };
 					return { content };
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					log.error({ tool: prefixedName, error: message }, "Proxy tool call failed");
-					return {
-						content: [{ type: "text" as const, text: `Error: ${message}` }],
-						isError: true,
-					};
+					// SIO-1183: envelope the locally-thrown path (-32001 timeouts, fetch failed)
+					// so the agent stops classifying these as "unknown".
+					return toolErrorResult(error);
 				}
 			});
 		};
