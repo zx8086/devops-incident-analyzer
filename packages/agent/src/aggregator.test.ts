@@ -1760,3 +1760,121 @@ Confidence: 0.85`;
 		expect(result.confidencePreCap).toBe(0.9);
 	});
 });
+
+// SIO-1195: relevance-scoped coverage caps. Coverage degradation (tool errors /
+// gaps) in datasources disjoint from the root-cause evidence soft-caps ABOVE the
+// HITL gate with an explanatory coverage note; overlap, unattributable signals,
+// or a missing Root Cause section fail closed to the hard 0.59 cap.
+describe.skipIf(!hasRunbooks)("aggregate SIO-1195 relevance-scoped coverage caps", () => {
+	beforeEach(() => {
+		_setAggregatorLoggerForTesting(makeAggregatorCaptureLogger([]));
+		lastInvokeMessages = null;
+	});
+
+	afterEach(() => {
+		_setAggregatorLoggerForTesting(null);
+		mockLlmContent = "Mock aggregator output. Confidence: 0.5";
+		delete process.env.COVERAGE_CAP_SCOPING_ENABLED;
+	});
+
+	const SOFT_ANSWER = `# Report
+
+## Root Cause
+
+The kafka consumer group order-sink stalled on partition 3; broker offsets confirm the backlog.
+
+Confidence: 0.9`;
+
+	function softCapState() {
+		return makeState({
+			dataSourceResults: [
+				{
+					dataSourceId: "kafka",
+					status: "success",
+					data: "kafka result",
+					duration: 100,
+					toolErrors: [],
+					kafkaFindings: { consumerGroups: [{ id: "order-sink", state: "STABLE", totalLag: 50000 }] },
+				},
+				{
+					dataSourceId: "konnect",
+					status: "success",
+					data: "konnect result",
+					duration: 100,
+					messageCount: 40,
+					toolErrors: Array.from({ length: 7 }, (_, i) => ({
+						toolName: `konnect_tool_${i}`,
+						category: "transient" as const,
+						message: "ECONNRESET",
+						retryable: true,
+					})),
+				},
+			],
+		});
+	}
+
+	test("disjoint coverage degradation soft-caps at 0.75 with a coverage note", async () => {
+		mockLlmContent = SOFT_ANSWER;
+		const result = await aggregate(softCapState());
+		expect(result.confidenceScore).toBe(0.75);
+		expect(result.confidenceCapMode).toBe("soft");
+		expect(result.capReasons).toEqual(["degraded-subagents"]);
+		expect(result.rootCauseDataSources).toEqual(["kafka"]);
+		expect(result.degradedDataSources).toEqual(["konnect"]);
+		expect(result.finalAnswer).toContain("Confidence: 0.75 (capped from evidence score 0.9 -- datasource tool errors)");
+		expect(result.finalAnswer).toContain("_Coverage note:_");
+		expect(result.finalAnswer).toContain("konnect");
+	});
+
+	test("overlapping degradation (root-cause datasource itself degraded) stays hard at 0.59", async () => {
+		mockLlmContent = SOFT_ANSWER;
+		const state = makeState({
+			dataSourceResults: [
+				{
+					dataSourceId: "kafka",
+					status: "success",
+					data: "kafka result",
+					duration: 100,
+					messageCount: 40,
+					toolErrors: Array.from({ length: 7 }, (_, i) => ({
+						toolName: `kafka_tool_${i}`,
+						category: "transient" as const,
+						message: "ECONNRESET",
+						retryable: true,
+					})),
+					kafkaFindings: { consumerGroups: [{ id: "order-sink", state: "STABLE", totalLag: 50000 }] },
+				},
+			],
+		});
+		const result = await aggregate(state);
+		expect(result.confidenceScore).toBe(0.59);
+		expect(result.confidenceCapMode).toBe("hard");
+		expect(result.finalAnswer).not.toContain("_Coverage note:_");
+	});
+
+	test("missing Root Cause section stays hard at 0.59 (fail-closed)", async () => {
+		mockLlmContent = "# Report\n\n## Findings\n- konnect was flaky\n\nConfidence: 0.9";
+		const result = await aggregate(softCapState());
+		expect(result.confidenceScore).toBe(0.59);
+		expect(result.confidenceCapMode).toBe("hard");
+	});
+
+	test("COVERAGE_CAP_SCOPING_ENABLED=false restores the hard-cap behavior", async () => {
+		process.env.COVERAGE_CAP_SCOPING_ENABLED = "false";
+		mockLlmContent = SOFT_ANSWER;
+		const result = await aggregate(softCapState());
+		expect(result.confidenceScore).toBe(0.59);
+		expect(result.confidenceCapMode).toBe("hard");
+		expect(result.finalAnswer).not.toContain("_Coverage note:_");
+	});
+
+	test("prompt nudge asks for a Root Cause heading naming supporting datasources", async () => {
+		mockLlmContent = "Mock aggregator output.\nConfidence: 0.5";
+		await aggregate(makeState({}));
+		const humanMsg = (lastInvokeMessages ?? []).find(
+			(m) => m._getType() === "human" && extractTextFromContent(m.content).includes("Aggregate these datasource"),
+		);
+		const text = humanMsg ? extractTextFromContent(humanMsg.content) : "";
+		expect(text).toContain('root cause (under a "## Root Cause" heading');
+	});
+});

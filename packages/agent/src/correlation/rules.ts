@@ -31,6 +31,13 @@ export interface CorrelationRule {
 	// The router renders this into the Send's correlationFetchDirective, which the
 	// sub-agent appends to its volatile focus block.
 	fetchDirective?: (context: Record<string, unknown>) => string;
+	// SIO-1195: datasources whose evidence this rule's DEGRADATION impugns (the
+	// trigger side AND the required side, e.g. ["kafka", "elastic"] for a kafka-lag
+	// rule requiring elastic corroboration). The cap policy soft-caps a degraded
+	// rule only when this set is declared AND disjoint from the root-cause evidence;
+	// absent => unattributable => fail-closed hard cap. Deliberately populated for
+	// NO rule in v1 -- opting a rule into soft eligibility is a one-field change.
+	relevanceDataSources?: string[];
 }
 
 export interface TriggerMatch {

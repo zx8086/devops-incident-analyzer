@@ -291,6 +291,27 @@ export const AgentState = Annotation.Root({
 		default: () => [],
 	}),
 
+	// SIO-1195: datasources whose returned evidence supports the Root Cause section
+	// (prose attribution intersected with datasources that actually returned data).
+	// undefined = unidentifiable, which the cap policy treats as fail-closed hard.
+	rootCauseDataSources: Annotation<string[] | undefined>({
+		reducer: (_, next) => next,
+		default: () => undefined,
+	}),
+
+	// SIO-1195: union of datasources the coverage-class cap signals attributed.
+	degradedDataSources: Annotation<string[]>({
+		reducer: (_, next) => next,
+		default: () => [],
+	}),
+
+	// SIO-1195: which cap class applied this turn. "soft" = coverage degradation
+	// disjoint from the root-cause evidence (score stays above the HITL gate).
+	confidenceCapMode: Annotation<"hard" | "soft" | undefined>({
+		reducer: (_, next) => next,
+		default: () => undefined,
+	}),
+
 	// SIO-1155: targeted instruction for a correlation refetch, set per-Send by the
 	// enforceCorrelations router and rendered into the sub-agent's volatile focus
 	// block. Undefined on every normal fan-out.

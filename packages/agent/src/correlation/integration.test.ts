@@ -118,6 +118,38 @@ describe("enforceCorrelationsAggregate confidence rewrite (SIO-860)", () => {
 		);
 		expect(result.finalAnswer?.match(/\(capped from/g)?.length).toBe(1);
 	});
+
+	// SIO-1195: correlation degradation is a coverage-class reason, but no rule
+	// declares relevanceDataSources in v1, so it always fails closed to the hard cap.
+	test("SIO-1195: degraded rule without relevanceDataSources stays hard", async () => {
+		const state = makeDegradingState("# Report\n\nConfidence: 0.9", 0.9, {
+			capReasons: [] as string[],
+			confidencePreCap: 0.9,
+			rootCauseDataSources: ["kafka"],
+		});
+		const result = await enforceCorrelationsAggregate(state);
+		expect(result.confidenceScore).toBe(0.59);
+		expect(result.confidenceCapMode).toBe("hard");
+	});
+
+	// SIO-1195: a hard correlation re-cap over an aggregate SOFT cap must win and
+	// remove the coverage note (prose must never claim moderation next to a 0.59).
+	test("SIO-1195: hard re-cap over an aggregate soft cap removes the coverage note", async () => {
+		const softAnswer =
+			"# Report\n\nConfidence: 0.75 (capped from evidence score 0.9 -- datasource tool errors)\n_Coverage note:_ tool degradation affected konnect, which did not supply the root-cause evidence (kafka); confidence was moderated rather than capped below the review threshold.";
+		const state = makeDegradingState(softAnswer, 0.75, {
+			capReasons: ["degraded-subagents"] as string[],
+			confidencePreCap: 0.9,
+			confidenceCapMode: "soft" as const,
+			degradedDataSources: ["konnect"] as string[],
+			rootCauseDataSources: ["kafka"] as string[],
+		});
+		const result = await enforceCorrelationsAggregate(state);
+		expect(result.confidenceScore).toBe(0.59);
+		expect(result.confidenceCapMode).toBe("hard");
+		expect(result.finalAnswer).not.toContain("_Coverage note:_");
+		expect(result.finalAnswer).toContain("Confidence: 0.59");
+	});
 });
 
 describe("Phase 5 correlation rules — pipeline integration", () => {

@@ -422,14 +422,16 @@ All four severity keys are required; the schema rejects partial configs. Filenam
 
 **Predicate-error fail-open:** If a rule's trigger predicate throws, the rule is marked satisfied and logged. One bad rule cannot break the pipeline.
 
-**Confidence cap mechanism:** The aggregator caps `confidenceScore` at `0.59` (strictly below the 0.6 HITL gate) whenever any of these inputs fire — independent of which one:
+**Confidence cap mechanism (two-class policy, SIO-1195):** Cap triggers are classified in `packages/agent/src/confidence-policy.ts` into two classes with different severities:
 
-1. **Degraded correlation rules.** After re-fan-out, one or more rules remain unsatisfied. The aggregator writes `degradedRules` entries with `{ ruleId, agent, services, reason }`.
-2. **Tool-error rate >= 15%**. When the sub-agents' aggregated tool-call failure rate crosses 15% (originally 25%, tightened by). The styles-v3 transcript at kafka 9/40 (22.5%) and elastic 4/27 (14.8%) was the motivating signal — both now cap, where neither did under the 25% bar.
-3. **Gaps section >= 2 bullets**. The aggregator output's `## Gaps` section (exact heading, pinned by) parses for bullets. >= 2 entries caps confidence regardless of `degradedRules`.
-4. **`skipCoverageCheck` rule degraded**. The contradiction banner described above also caps.
+- **INTEGRITY** (fabrication guards: `ungrounded-blocker`, `ungrounded-expiry`, `premature-absence`, `ungrounded-root-cause`, `no-index-misread`, the validator's `ungrounded-metrics`, and any unknown reason code) — always hard-cap at `min(0.59, threshold - 0.01)` (`deriveConfidenceCap`, strictly below the HITL gate).
+- **COVERAGE** (`degraded-subagents` tool-error rate >= 15%, `gaps` >= 2 degrading bullets, `correlation-degraded`) — soft-cap at `min(0.95, max(threshold + 0.1, 0.75))` (0.75 at the default 0.6 gate, PASSES the gate) **only when** every coverage signal is deterministically attributable to datasources provably disjoint from the root-cause evidence. Attribution uses snake_case tool prefixes + a keyword map; the root-cause evidence set is parsed from the `## Root Cause` section and intersected with datasources that actually returned data. A soft-capped report carries a `_Coverage note:_` line under the confidence line.
 
-The 0.59 value is deliberate: `checkConfidence` uses strict `<`, so 0.6 == 0.6 would otherwise ship. The cap distinguishes "we tried, infra failed" or "we found a contradiction" (acceptable, surfaced) from "we didn't try" (forbidden by the rule engine).
+**Fail-closed matrix:** missing/unattributable `## Root Cause` section, a root-cause datasource that returned no data, a gap bullet with zero attributions, overlap between the degraded set and the root-cause set (including a root-cause datasource that itself degraded), any integrity reason mixed in, an unknown reason code — all resolve to the hard cap. Attribution false positives only widen the degraded set, which biases toward overlap and therefore toward hard. Kill switch: `COVERAGE_CAP_SCOPING_ENABLED` (default ON, read at call time); OFF restores the pre-SIO-1195 single-clamp behavior.
+
+**Historical note (revised SIO-709 AC#4):** the original design capped every trigger to 0.59 so no degraded run could pass the gate. SIO-1195 deliberately revises that for the coverage class only: an accurate kafka+elastic-grounded diagnosis is no longer pinned below the gate because konnect/atlassian tooling was flaky. The hard value stays `checkConfidence`-safe (strict `<`, so 0.6 == 0.6 would otherwise ship). Correlation degradation is coverage-class but soft-eligible only via a rule's explicit `relevanceDataSources` declaration (populated for no rule in v1, so its practical behavior is unchanged); `skipCoverageCheck` rules are integrity-adjacent and always hard.
+
+**Cap transparency (SIO-1194):** a capped run's printed line explains itself — `Confidence: 0.59 (capped from evidence score 0.84 -- datasource tool errors, unresolved data gaps)` — using the shared label map in `packages/shared/src/confidence.ts`; the same codes ride the `done` SSE event (`confidencePreCap`, `capReasons`, `lowConfidence`) into the web ConfidenceBadge. The aggregate prompt also carries a CONFIDENCE RUBRIC (anchor bands mapping evidence strength to score ranges) so the raw LLM score is calibrated before any cap applies.
 
 **Grounded-blocker rule (SIO-1031):** A `## Gaps` bullet may name a permission/IAM blocker (e.g. "IAM gap", "logs:DescribeLogGroups not permitted") only when the turn observed a matching auth tool error — never inferred from missing data. The aggregator's `PERMISSION_DENIAL_RE` (`packages/agent/src/aggregator.ts`) was widened to catch "IAM gap"/"IAM access" phrasing (`iam (?:permission|gap|access)`), and `rewriteUngroundedBlockers` swaps an ungrounded blocker for honest "not investigated" text; a `groundedBlockerRule` in the aggregator prompt states the constraint up front. This stopped the agent fabricating a `logs:DescribeLogGroups` blocker that the deployed IAM policy actually granted.
 
@@ -437,7 +439,7 @@ The 0.59 value is deliberate: `checkConfidence` uses strict `<`, so 0.6 == 0.6 w
 
 **Inputs consumed:** `dataSourceResults`, `pendingCorrelations`, current `confidenceScore` (from prior aggregate output)
 
-**Outputs produced:** `degradedRules`, `confidenceCap`, `pendingCorrelations`, on re-fan-out path additional `dataSourceResults` (appended via reducer)
+**Outputs produced:** `degradedRules`, `confidenceCap`, `confidenceCapMode`, `capReasons`, `confidencePreCap`, `pendingCorrelations`, on re-fan-out path additional `dataSourceResults` (appended via reducer)
 
 **LLM model:** None (deterministic rule engine)
 
