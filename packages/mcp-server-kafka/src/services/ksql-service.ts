@@ -145,12 +145,29 @@ export class KsqlService {
 		return (describeResponse?.sourceDescription as Record<string, unknown>) ?? {};
 	}
 
+	// SIO-1191: ksql push queries default to auto.offset.reset=latest upstream, so
+	// `EMIT CHANGES LIMIT n` waits for NEW events -- on a quiet stream the request
+	// hangs into the SigV4 proxy's 30s per-attempt abort (which then RETRIES the
+	// query) and surfaces as a platform-phrased -32000 (audit SIO-1186: 60s 502;
+	// with earliest the same query returned in ~2s). Default earliest so bounded
+	// queries complete on historical data; caller-supplied properties always win.
+	// The 25s server-side signal stays under the proxy's 30s so timeouts return as
+	// a classified tool error instead of a proxy -32000.
+	static readonly RUN_QUERY_TIMEOUT_MS = 25_000;
+	static readonly RUN_QUERY_DEFAULT_PROPERTIES: Record<string, string> = {
+		"ksql.streams.auto.offset.reset": "earliest",
+	};
+
 	async runQuery(ksql: string, properties?: Record<string, string>): Promise<unknown[]> {
 		const body: Record<string, unknown> = {
 			ksql: ksql.trim().endsWith(";") ? ksql : `${ksql};`,
-			streamsProperties: properties ?? {},
+			streamsProperties: { ...KsqlService.RUN_QUERY_DEFAULT_PROPERTIES, ...(properties ?? {}) },
 		};
-		const response = await this.request("/query", { method: "POST", body: JSON.stringify(body) });
+		const response = await this.request("/query", {
+			method: "POST",
+			body: JSON.stringify(body),
+			signal: AbortSignal.timeout(KsqlService.RUN_QUERY_TIMEOUT_MS),
+		});
 		return (await response.json()) as unknown[];
 	}
 
