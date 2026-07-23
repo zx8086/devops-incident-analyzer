@@ -120,6 +120,12 @@ export interface PumpResult {
 	// caller can re-emit the corrected body and the displayed report matches the gate.
 	finalAnswer?: string;
 	confidenceScore?: number;
+	// SIO-1194: cap transparency for the done event / UI badge. Same last-writer-wins
+	// capture; an empty capReasons from the correlation restore path clears an earlier
+	// non-empty capture (the sole "gaps" cap was cured).
+	confidencePreCap?: number;
+	capReasons?: string[];
+	lowConfidence?: boolean;
 }
 
 // SIO-1141: nodes that can REWRITE finalAnswer / re-cap confidenceScore after aggregate.
@@ -138,6 +144,10 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 	// nodes (aggregate then any downstream re-cap). Undefined until an answer node emits.
 	let finalAnswer: string | undefined;
 	let confidenceScore: number | undefined;
+	// SIO-1194: cap-transparency capture (same last-writer-wins discipline).
+	let confidencePreCap: number | undefined;
+	let capReasons: string[] | undefined;
+	let lowConfidence: boolean | undefined;
 	const toolsUsed = new Set<string>();
 
 	for await (const event of eventStream) {
@@ -163,7 +173,15 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 		// finalAnswer AFTER generation). enforceCorrelationsAggregate is NOT a PIPELINE_NODE, so
 		// this check is independent of the pill-emitting block below. Latest writer wins.
 		if (event.event === "on_chain_end" && event.name && ANSWER_REWRITE_NODES.has(event.name)) {
-			const output = event.data?.output as { finalAnswer?: unknown; confidenceScore?: unknown } | undefined;
+			const output = event.data?.output as
+				| {
+						finalAnswer?: unknown;
+						confidenceScore?: unknown;
+						confidencePreCap?: unknown;
+						capReasons?: unknown;
+						lowConfidence?: unknown;
+				  }
+				| undefined;
 			if (output) {
 				if (typeof output.finalAnswer === "string" && output.finalAnswer.length > 0) {
 					// SIO-1141: redact PII here, exactly as the streamed chunks are (line above).
@@ -173,6 +191,17 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 				}
 				if (typeof output.confidenceScore === "number") {
 					confidenceScore = output.confidenceScore;
+				}
+				// SIO-1194: an empty array is a meaningful write (restore path cleared the
+				// caps), so present-and-valid wins over any earlier capture.
+				if (Array.isArray(output.capReasons) && output.capReasons.every((r) => typeof r === "string")) {
+					capReasons = output.capReasons as string[];
+				}
+				if (typeof output.confidencePreCap === "number") {
+					confidencePreCap = output.confidencePreCap;
+				}
+				if (typeof output.lowConfidence === "boolean") {
+					lowConfidence = output.lowConfidence;
 				}
 			}
 		}
@@ -196,8 +225,13 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 			}
 
 			if (event.name === "checkConfidence") {
-				const lowConfidence = (event.data?.output as { lowConfidence?: unknown })?.lowConfidence;
-				if (lowConfidence === true) {
+				const gateLowConfidence = (event.data?.output as { lowConfidence?: unknown })?.lowConfidence;
+				// SIO-1194: record the gate verdict for the done event (validate may
+				// overwrite it downstream when it applies its own cap).
+				if (typeof gateLowConfidence === "boolean") {
+					lowConfidence = gateLowConfidence;
+				}
+				if (gateLowConfidence === true) {
 					send({
 						type: "low_confidence",
 						message: "Report confidence is below the review threshold. Results may be incomplete.",
@@ -480,7 +514,16 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 		}
 	}
 
-	return { toolsUsed: [...toolsUsed], responseContent, hilLearningTurn, finalAnswer, confidenceScore };
+	return {
+		toolsUsed: [...toolsUsed],
+		responseContent,
+		hilLearningTurn,
+		finalAnswer,
+		confidenceScore,
+		confidencePreCap,
+		capReasons,
+		lowConfidence,
+	};
 }
 
 // SIO-1126: surface the HIL learning lane's interrupts. The match gate asks

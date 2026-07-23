@@ -2,16 +2,13 @@
 import { getLogger } from "@devops-agent/observability";
 import { Send } from "@langchain/langgraph";
 import { GAPS_BULLET_THRESHOLD, rewriteConfidenceInAnswer } from "../aggregator";
+import { deriveConfidenceCap } from "../confidence-gate";
 import type { AgentStateType, DegradedRule, PendingCorrelation } from "../state";
 import { queryDataSource } from "../sub-agent";
 import { evaluate } from "./engine";
 import { correlationRules, LOG_GAP_RULE_NAME, LogGapTriggerContextSchema } from "./rules";
 
 const logger = getLogger("agent:enforceCorrelations");
-
-// SIO-709 AC #4: cap must be strictly below the HITL threshold (0.6 from
-// confidence-gate.ts) so a capped run does not pass the gate.
-const CONFIDENCE_CAP_ON_DEGRADATION = 0.59;
 
 // SIO-1076: per-rule top-of-report banners for degraded skipCoverageCheck rules.
 // Keyed by rule name so each self-signalling rule reads correctly (a security
@@ -177,7 +174,9 @@ function computeLogGapRecovery(state: AgentStateType, degraded: DegradedRule[]):
 		if (remaining.length < GAPS_BULLET_THRESHOLD) restoredScore = state.confidencePreCap;
 	}
 
-	const rewritten = restoredScore !== undefined ? rewriteConfidenceInAnswer(answer, restoredScore) : answer;
+	// SIO-1194: "strip" removes the aggregate's stale cap annotation -- a restored
+	// score must not read "(capped from ...)" next to the recovered value.
+	const rewritten = restoredScore !== undefined ? rewriteConfidenceInAnswer(answer, restoredScore, "strip") : answer;
 	logger.info(
 		{ recoveredBullets: bullets.length, restored: restoredScore !== undefined, restoredScore },
 		"log-gap correlation fetch recovered report gaps",
@@ -219,10 +218,16 @@ export async function enforceCorrelationsAggregate(state: AgentStateType): Promi
 			correlationFetchDirective: undefined,
 			...(recovery && { finalAnswer: recovery.answer }),
 			...(recovery?.restoredScore !== undefined && { confidenceScore: recovery.restoredScore }),
+			// SIO-1194: a restore means the sole cap reason ("gaps") is cured -- clear
+			// capReasons so the SSE last-writer capture reports the run as uncapped.
+			// Without a restore the aggregate's capReasons must stand untouched.
+			...(recovery?.restoredScore !== undefined && { capReasons: [] }),
 		};
 	}
 
-	const cap = CONFIDENCE_CAP_ON_DEGRADATION;
+	// SIO-709 AC #4: cap must be strictly below the HITL threshold so a capped run
+	// does not pass the gate. SIO-1194: threshold-derived (0.59 at the default 0.6).
+	const cap = deriveConfidenceCap();
 	const cappedScore = Math.min(state.confidenceScore, cap);
 	logger.warn(
 		{ degradedCount: degraded.length, cap, originalScore: state.confidenceScore, cappedScore },
@@ -241,8 +246,15 @@ export async function enforceCorrelationsAggregate(state: AgentStateType): Promi
 	// which is prepended above the rewritten body.
 	// SIO-1155: when the log-gap rule recovered its bullets while OTHER rules degraded,
 	// keep the bullet annotations but let the degraded cap win on the score.
+	// SIO-1194: merge correlation-degraded into the aggregate's capReasons and
+	// re-annotate the printed line (strip-before-append keeps a single annotation);
+	// echo confidencePreCap so this node's output is self-contained for SSE capture.
+	const mergedReasons = [...new Set([...(state.capReasons ?? []), "correlation-degraded"])];
+	const preCap = state.confidencePreCap ?? state.confidenceScore;
 	const baseAnswer = recovery?.answer ?? state.finalAnswer;
-	let updatedFinalAnswer = baseAnswer ? rewriteConfidenceInAnswer(baseAnswer, cappedScore) : undefined;
+	let updatedFinalAnswer = baseAnswer
+		? rewriteConfidenceInAnswer(baseAnswer, cappedScore, { preCap, capReasons: mergedReasons })
+		: undefined;
 	if (bannerText && updatedFinalAnswer) {
 		updatedFinalAnswer = `${bannerText}\n\n${updatedFinalAnswer}`;
 	}
@@ -251,6 +263,8 @@ export async function enforceCorrelationsAggregate(state: AgentStateType): Promi
 		degradedRules: degraded,
 		confidenceCap: cap,
 		confidenceScore: cappedScore,
+		capReasons: mergedReasons,
+		confidencePreCap: preCap,
 		pendingCorrelations: [],
 		correlationFetchDirective: undefined,
 		...(updatedFinalAnswer !== undefined && { finalAnswer: updatedFinalAnswer }),

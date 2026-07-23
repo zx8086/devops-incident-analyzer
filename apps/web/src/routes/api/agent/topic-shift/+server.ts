@@ -60,10 +60,15 @@ export const POST: RequestHandler = async ({ request }) => {
 								metadata: { request_id: requestId, session_id: body.threadId },
 							});
 
-							const { toolsUsed, finalAnswer, confidenceScore, responseContent } = await pumpEventStream(
-								eventStream,
-								send,
-							);
+							const {
+								toolsUsed,
+								finalAnswer,
+								confidenceScore,
+								confidencePreCap,
+								capReasons,
+								lowConfidence,
+								responseContent,
+							} = await pumpEventStream(eventStream, send);
 							await flushLangSmithCallbacks();
 
 							// Defensive: a second topic shift could theoretically fire if
@@ -97,6 +102,10 @@ export const POST: RequestHandler = async ({ request }) => {
 								responseTime,
 								toolsUsed,
 								...(confidenceScore !== undefined && { confidence: confidenceScore }),
+								// SIO-1194: cap transparency, matching stream/+server.ts.
+								...(confidencePreCap !== undefined && { confidencePreCap }),
+								...(capReasons && capReasons.length > 0 && { capReasons }),
+								...(lowConfidence !== undefined && { lowConfidence }),
 							});
 						},
 						{

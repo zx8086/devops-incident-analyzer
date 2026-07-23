@@ -58,6 +58,33 @@ describe("StreamEventSchema datasource_result", () => {
 	});
 });
 
+// SIO-1194: done carries the cap-transparency fields so the UI can explain a
+// capped confidence (pre-cap evidence score + machine-readable reasons).
+describe("StreamEventSchema done cap-transparency fields", () => {
+	test("parses done with confidencePreCap, capReasons, and lowConfidence", () => {
+		const parsed = StreamEventSchema.parse({
+			type: "done",
+			threadId: "t-1",
+			confidence: 0.59,
+			confidencePreCap: 0.84,
+			capReasons: ["degraded-subagents", "gaps"],
+			lowConfidence: true,
+		});
+		if (parsed.type !== "done") throw new Error("narrow");
+		expect(parsed.confidencePreCap).toBe(0.84);
+		expect(parsed.capReasons).toEqual(["degraded-subagents", "gaps"]);
+		expect(parsed.lowConfidence).toBe(true);
+	});
+
+	test("done without the new fields still parses (backward compatible)", () => {
+		const parsed = StreamEventSchema.parse({ type: "done", threadId: "t-1" });
+		if (parsed.type !== "done") throw new Error("narrow");
+		expect(parsed.confidencePreCap).toBeUndefined();
+		expect(parsed.capReasons).toBeUndefined();
+		expect(parsed.lowConfidence).toBeUndefined();
+	});
+});
+
 // SIO-902: synthetics drift events round-trip through the discriminated union.
 describe("StreamEventSchema synthetics events", () => {
 	const validReport = {

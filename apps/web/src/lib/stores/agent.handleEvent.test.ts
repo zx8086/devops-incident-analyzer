@@ -27,6 +27,47 @@ describe("applyStreamEvent", () => {
 		expect(state.currentContent).not.toContain("0.81");
 	});
 
+	// SIO-1194: cap-transparency fields ride the done event into reducer state so the
+	// ConfidenceBadge can explain a capped score.
+	test("done carries confidencePreCap, capReasons, and lowConfidence", () => {
+		const next = applyStreamEvent(initialReducerState(), {
+			type: "done",
+			threadId: "t-1",
+			confidence: 0.59,
+			confidencePreCap: 0.84,
+			capReasons: ["degraded-subagents", "gaps"],
+			lowConfidence: true,
+		});
+		expect(next.lastConfidence).toBe(0.59);
+		expect(next.lastConfidencePreCap).toBe(0.84);
+		expect(next.lastCapReasons).toEqual(["degraded-subagents", "gaps"]);
+		expect(next.lastLowConfidence).toBe(true);
+	});
+
+	test("done without the cap fields resets them (no stale carryover across turns)", () => {
+		let state = applyStreamEvent(initialReducerState(), {
+			type: "done",
+			threadId: "t-1",
+			confidencePreCap: 0.84,
+			capReasons: ["gaps"],
+			lowConfidence: true,
+		});
+		state = applyStreamEvent(state, { type: "done", threadId: "t-1", confidence: 0.9 });
+		expect(state.lastConfidencePreCap).toBeUndefined();
+		expect(state.lastCapReasons).toEqual([]);
+		expect(state.lastLowConfidence).toBeUndefined();
+	});
+
+	// SIO-1194: low_confidence was a silent no-op -- the one live signal the backend
+	// sent about a below-threshold report was dropped on the floor.
+	test("low_confidence sets lastLowConfidence instead of being a no-op", () => {
+		const next = applyStreamEvent(initialReducerState(), {
+			type: "low_confidence",
+			message: "Report confidence is below the review threshold.",
+		});
+		expect(next.lastLowConfidence).toBe(true);
+	});
+
 	// SIO-876: live pipeline-watch ticker accumulates status transitions.
 	test("accumulates iac_pipeline_progress lines", () => {
 		let state = initialReducerState();

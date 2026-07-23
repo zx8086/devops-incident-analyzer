@@ -62,6 +62,11 @@ export interface ChatMessage {
 	// SIO-1134: the turn's requestId (== KG incident id) for ticket-creation curation.
 	requestId?: string;
 	confidence?: number;
+	// SIO-1194: cap transparency for the ConfidenceBadge -- pre-cap evidence score,
+	// machine-readable cap reason codes, and the HITL gate verdict.
+	confidencePreCap?: number;
+	capReasons?: string[];
+	lowConfidence?: boolean;
 	// SIO-930: per-turn outcome for the IaC completion chip (rejected/declined/etc.).
 	// SIO-1110: "error" marks a turn whose stream ended in an error event.
 	outcome?: "completed" | "rejected" | "declined" | "no-op" | "blocked" | "unsupported" | "pipeline-failed" | "error";
@@ -122,6 +127,10 @@ function createAgentStore() {
 	let lastRunId = $state<string | undefined>(undefined);
 	let lastRequestId = $state<string | undefined>(undefined);
 	let lastConfidence = $state<number | undefined>(undefined);
+	// SIO-1194: cap transparency (see agent-reducer.ts ReducerState).
+	let lastConfidencePreCap = $state<number | undefined>(undefined);
+	let lastCapReasons = $state<string[]>([]);
+	let lastLowConfidence = $state<boolean | undefined>(undefined);
 	let lastOutcome = $state<
 		"completed" | "rejected" | "declined" | "no-op" | "blocked" | "unsupported" | "pipeline-failed" | "error"
 	>("completed");
@@ -178,6 +187,9 @@ function createAgentStore() {
 			runId: lastRunId,
 			requestId: lastRequestId,
 			confidence: lastConfidence,
+			confidencePreCap: lastConfidencePreCap,
+			...(lastCapReasons.length > 0 && { capReasons: [...lastCapReasons] }),
+			lowConfidence: lastLowConfidence,
 			outcome: lastOutcome,
 			// SIO-991: pin the GitOps pipeline-log snapshot to THIS message so it persists across
 			// later turns (the global iacPipelineLog is cleared on the next sendMessage). Only the
@@ -220,6 +232,9 @@ function createAgentStore() {
 		lastToolsUsed = [];
 		lastRunId = undefined;
 		lastConfidence = undefined;
+		lastConfidencePreCap = undefined;
+		lastCapReasons = [];
+		lastLowConfidence = undefined;
 		// SIO-1134: a stale requestId would curate the WRONG incident if this turn's
 		// stream dies before its done event; the new turn must re-earn it.
 		lastRequestId = undefined;
@@ -322,6 +337,9 @@ function createAgentStore() {
 			lastRunId,
 			lastRequestId,
 			lastConfidence,
+			lastConfidencePreCap,
+			lastCapReasons,
+			lastLowConfidence,
 			lastOutcome,
 			lastDataSourceContext,
 			pendingActions,
@@ -358,6 +376,9 @@ function createAgentStore() {
 		lastRunId = next.lastRunId;
 		lastRequestId = next.lastRequestId;
 		lastConfidence = next.lastConfidence;
+		lastConfidencePreCap = next.lastConfidencePreCap;
+		lastCapReasons = next.lastCapReasons;
+		lastLowConfidence = next.lastLowConfidence;
 		lastOutcome = next.lastOutcome;
 		lastDataSourceContext = next.lastDataSourceContext;
 		pendingActions = next.pendingActions;

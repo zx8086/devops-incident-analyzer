@@ -11,6 +11,7 @@ import AddCommentCard from "./AddCommentCard.svelte";
 import AtlassianFindingsCard from "./AtlassianFindingsCard.svelte";
 import AWSFindingsCard from "./AWSFindingsCard.svelte";
 import CompletedProgress from "./CompletedProgress.svelte";
+import ConfidenceBadge from "./ConfidenceBadge.svelte";
 import CouchbaseFindingsCard from "./CouchbaseFindingsCard.svelte";
 import CreateTicketCard from "./CreateTicketCard.svelte";
 import ElasticFindingsCard from "./ElasticFindingsCard.svelte";
@@ -136,6 +137,12 @@ const commentMode = $derived(canCommentOnThreadTicket && threadTicket !== null);
         {/if}
 
         {#if !isStreaming}
+          <ConfidenceBadge
+            confidence={message.confidence}
+            confidencePreCap={message.confidencePreCap}
+            capReasons={message.capReasons}
+            lowConfidence={message.lowConfidence}
+          />
           <CompletedProgress
             responseTime={message.responseTime}
             toolsUsed={message.toolsUsed}

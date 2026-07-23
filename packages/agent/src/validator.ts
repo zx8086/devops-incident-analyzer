@@ -1,6 +1,7 @@
 // agent/src/validator.ts
 import { getLogger } from "@devops-agent/observability";
-import { getConfidenceThreshold } from "./confidence-gate.ts";
+import { rewriteConfidenceInAnswer } from "./aggregator.ts";
+import { deriveConfidenceCap, getConfidenceThreshold } from "./confidence-gate.ts";
 import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:validator");
@@ -10,21 +11,11 @@ const MAX_VALIDATION_RETRIES = 2;
 // informational only, so a pass_with_warnings result (unlike a hard "fail") never
 // loops back into aggregate -- the ungrounded-metric warning below was previously
 // computed, logged, and discarded, never affecting confidenceScore or the HITL
-// lowConfidence flag. Mirrors aggregator.ts's TOOL_ERROR_CONFIDENCE_CAP pattern,
-// but a hardcoded 0.59 is only "strictly below the HITL threshold" when that
-// threshold is the default 0.6 -- a manifest configuring confidence_below below
-// 0.59 (e.g. 0.5) would make a hardcoded cap read as PASSING. The cap must be
-// derived from the actual configured threshold with a safety margin instead.
-const VALIDATION_WARNING_CONFIDENCE_CAP_DEFAULT = 0.59;
-const VALIDATION_WARNING_CONFIDENCE_MARGIN = 0.01;
-
-// SIO-1123: cap strictly below `threshold` (not just below the 0.6 default) so a
-// capped run can never read as passing the HITL gate, whatever the configured
-// threshold is. Falls back to the 0.59 default when threshold is the standard 0.6.
-// Exported for direct unit testing without mocking the agent manifest.
+// lowConfidence flag. SIO-1194: the threshold-derived cap now lives in
+// confidence-gate.ts (deriveConfidenceCap) and is shared with the aggregator and
+// the correlation enforce node; this wrapper is kept for its existing test seam.
 export function validationWarningConfidenceCap(threshold: number): number {
-	const derived = threshold - VALIDATION_WARNING_CONFIDENCE_MARGIN;
-	return Math.min(VALIDATION_WARNING_CONFIDENCE_CAP_DEFAULT, derived);
+	return deriveConfidenceCap(threshold);
 }
 
 // Only cap on a real hallucination signal, not the softer "datasource not
@@ -126,6 +117,16 @@ export function validate(state: AgentStateType): Partial<AgentStateType> {
 			const cap = validationWarningConfidenceCap(threshold);
 			const cappedScore = Math.min(state.confidenceScore, cap);
 			const lowConfidence = cappedScore > 0 && cappedScore < threshold;
+			// SIO-1194: rewrite the printed line too (SIO-860 prose==gate invariant --
+			// this path previously capped the gate value while the prose kept the
+			// pre-cap number). validate is in the SSE ANSWER_REWRITE_NODES set and runs
+			// last, so the rewritten finalAnswer reaches the client via message_final.
+			const mergedReasons = [...new Set([...(state.capReasons ?? []), "ungrounded-metrics"])];
+			const preCap = state.confidencePreCap ?? state.confidenceScore;
+			const finalAnswer = rewriteConfidenceInAnswer(answer, cappedScore, {
+				preCap,
+				capReasons: mergedReasons,
+			});
 			logger.warn(
 				{
 					cap,
@@ -133,6 +134,7 @@ export function validate(state: AgentStateType): Partial<AgentStateType> {
 					originalScore: state.confidenceScore,
 					cappedScore,
 					lowConfidence,
+					capReasons: mergedReasons,
 				},
 				"Ungrounded metrics in answer; capping confidence",
 			);
@@ -141,6 +143,9 @@ export function validate(state: AgentStateType): Partial<AgentStateType> {
 				confidenceScore: cappedScore,
 				confidenceCap: cap,
 				lowConfidence,
+				finalAnswer,
+				capReasons: mergedReasons,
+				confidencePreCap: preCap,
 			};
 		}
 

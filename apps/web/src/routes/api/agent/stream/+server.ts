@@ -139,8 +139,16 @@ export const POST: RequestHandler = async ({ request }) => {
 								// resumed graphs surface identical events.
 								// SIO-1141: finalAnswer/confidenceScore carry the post-cap corrected
 								// report; the aggregate tokens were streamed pre-cap.
-								const { toolsUsed, hilLearningTurn, finalAnswer, confidenceScore, responseContent } =
-									await pumpEventStream(eventStream, send);
+								const {
+									toolsUsed,
+									hilLearningTurn,
+									finalAnswer,
+									confidenceScore,
+									confidencePreCap,
+									capReasons,
+									lowConfidence,
+									responseContent,
+								} = await pumpEventStream(eventStream, send);
 
 								await flushLangSmithCallbacks();
 
@@ -235,6 +243,11 @@ export const POST: RequestHandler = async ({ request }) => {
 									toolsUsed,
 									dataSourceContext,
 									...(confidenceScore !== undefined && { confidence: confidenceScore }),
+									// SIO-1194: cap transparency for the UI badge. Numbers + fixed
+									// enum codes only -- nothing user-derived, so no PII concern.
+									...(confidencePreCap !== undefined && { confidencePreCap }),
+									...(capReasons && capReasons.length > 0 && { capReasons }),
+									...(lowConfidence !== undefined && { lowConfidence }),
 								});
 							},
 							{ "request.id": requestId, "thread.id": threadId, "run.id": runId },

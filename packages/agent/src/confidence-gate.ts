@@ -28,6 +28,17 @@ export function getConfidenceThreshold(): number {
 	return DEFAULT_CONFIDENCE_THRESHOLD;
 }
 
+// SIO-1194: single threshold-derived cap shared by the aggregator, the correlation
+// enforce node, and the validator. min(0.59, threshold - 0.01) keeps a capped run
+// strictly below the HITL gate whatever the manifest configures (a hardcoded 0.59
+// would read as PASSING under a manifest threshold below 0.59 -- SIO-1123 rationale).
+const CONFIDENCE_CAP_DEFAULT = 0.59;
+const CONFIDENCE_CAP_MARGIN = 0.01;
+
+export function deriveConfidenceCap(threshold: number = getConfidenceThreshold()): number {
+	return Math.min(CONFIDENCE_CAP_DEFAULT, threshold - CONFIDENCE_CAP_MARGIN);
+}
+
 // SIO-632: Non-blocking confidence check. Flags low confidence via state so the
 // SSE handler can send a warning to the frontend, but does NOT interrupt the
 // pipeline. Read-only analysis reports should always be delivered to the user --
