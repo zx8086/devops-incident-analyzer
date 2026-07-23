@@ -6,6 +6,17 @@
 
 import type { InvestigationFocus } from "@devops-agent/shared";
 import { HilApplyReportSchema, redactPiiContent, StreamEventSchema } from "@devops-agent/shared";
+import { z } from "zod";
+
+// SIO-1194 (CodeRabbit PR #455): validate the cap-transparency fields with Zod
+// instead of manual narrowing. Parsed per-field so one malformed field drops only
+// itself. Codes stay open strings by design -- unknown reason codes must flow
+// through (capReasonLabel falls back to the raw code and the cap policy treats
+// unknown codes as integrity/fail-closed), so an enum here would silently drop
+// forward-compatible codes emitted by a newer agent.
+const CapReasonsFieldSchema = z.array(z.string());
+const ConfidencePreCapFieldSchema = z.number().min(0).max(1);
+const LowConfidenceFieldSchema = z.boolean();
 
 type SendFn = (event: Record<string, unknown>) => void;
 type EventStream = AsyncIterable<{
@@ -193,16 +204,14 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 					confidenceScore = output.confidenceScore;
 				}
 				// SIO-1194: an empty array is a meaningful write (restore path cleared the
-				// caps), so present-and-valid wins over any earlier capture.
-				if (Array.isArray(output.capReasons) && output.capReasons.every((r) => typeof r === "string")) {
-					capReasons = output.capReasons as string[];
-				}
-				if (typeof output.confidencePreCap === "number") {
-					confidencePreCap = output.confidencePreCap;
-				}
-				if (typeof output.lowConfidence === "boolean") {
-					lowConfidence = output.lowConfidence;
-				}
+				// caps), so present-and-valid wins over any earlier capture. Zod-parsed
+				// per field; a malformed or absent field drops only itself.
+				const capReasonsParsed = CapReasonsFieldSchema.safeParse(output.capReasons);
+				if (capReasonsParsed.success) capReasons = capReasonsParsed.data;
+				const preCapParsed = ConfidencePreCapFieldSchema.safeParse(output.confidencePreCap);
+				if (preCapParsed.success) confidencePreCap = preCapParsed.data;
+				const lowConfidenceParsed = LowConfidenceFieldSchema.safeParse(output.lowConfidence);
+				if (lowConfidenceParsed.success) lowConfidence = lowConfidenceParsed.data;
 			}
 		}
 
