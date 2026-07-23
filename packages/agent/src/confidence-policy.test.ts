@@ -305,3 +305,10 @@ describe("isCoverageScopingEnabled", () => {
 		expect(isCoverageScopingEnabled({ COVERAGE_CAP_SCOPING_ENABLED: "0" })).toBe(false);
 	});
 });
+
+describe("hardCapFor parity with deriveConfidenceCap (CodeRabbit PR #455 clamp)", () => {
+	test("never goes negative for a pathological sub-0.01 threshold", () => {
+		expect(hardCapFor(0.005)).toBe(0);
+		expect(hardCapFor(0)).toBe(0);
+	});
+});

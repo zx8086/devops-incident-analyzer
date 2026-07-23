@@ -24,9 +24,10 @@ export const CAP_REASON_CLASS: Record<string, CapClass> = {
 };
 
 // Same derivation as deriveConfidenceCap (confidence-gate.ts) -- duplicated here to
-// keep this module import-free; the parity is pinned by tests on both sides.
+// keep this module import-free; the parity is pinned by tests on both sides,
+// including the 0-clamp for pathological sub-margin thresholds (CodeRabbit PR #455).
 export function hardCapFor(threshold: number): number {
-	return Math.min(0.59, threshold - 0.01);
+	return Math.max(0, Math.min(0.59, threshold - 0.01));
 }
 
 // Soft cap: partial coverage forbids near-certainty (ceiling 0.95) but must pass
