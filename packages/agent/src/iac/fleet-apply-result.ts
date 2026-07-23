@@ -177,9 +177,12 @@ export interface PipelineFailureClassification {
 const LINT_SIGNALS = ["not properly formatted", "terraform fmt", "fmt check", "lint-fmt-changed", "tflint"];
 const ENVIRONMENT_SIGNALS = [
 	// SIO-905 class: env-scoped provider credentials missing for the stack.
+	// NOTE: "does not match configured version constraint" is deliberately NOT
+	// here (CodeRabbit, PR #444): an MR that bumps provider/module constraints
+	// causes that error itself, so labeling it environment would tell the user
+	// "not this change" about their own change. It falls through to unknown.
 	"one of apikey or username and password must be specified",
 	"required plugins are not installed",
-	"does not match configured version constraint",
 	"invalid provider configuration",
 ];
 const FLAKY_SIGNALS = [

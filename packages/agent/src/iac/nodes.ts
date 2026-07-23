@@ -29,6 +29,7 @@ import { formatCommitSubject } from "./commit-style.ts";
 // leaf, mirroring SIO-1047's mr-live-state.ts extraction) so reconcile.ts's fleet-settlement pass
 // shares the SAME classification without importing nodes.ts (nodes.ts imports reconcile.ts -- a
 // cycle). Re-exported below for existing external importers (pipeline-status.test.ts).
+import type { PipelineFailureClass } from "./fleet-apply-result.ts";
 import {
 	classifyFleetApplyResult,
 	classifyPipelineFailure,
@@ -7585,7 +7586,7 @@ export async function watchPipeline(state: IacStateType): Promise<Partial<IacSta
 	// SIO-878: on failure, read the plan job log and classify the cause (e.g. state-lock).
 	// SIO-1185: the detail form also yields the taxonomy class (flaky/lint/environment/real).
 	let failureHint = "";
-	let failureClass = "";
+	let failureClass: PipelineFailureClass | "" = "";
 	if (status === "failed" && pipelineId) {
 		const classified = classifyPipelineFailureDetail(await callTool("gitlab_get_pipeline_plan_log", { pipelineId }));
 		failureHint = classified.hint;

@@ -21,6 +21,11 @@ describe("formatCommitSubject (SIO-1185)", () => {
 		expect(formatCommitSubject("eu-b2b: bind template\n\nbody text here")).toBe("eu-b2b: bind template");
 	});
 
+	test("tiny max still honors the cap (hard slice, no ellipsis room)", () => {
+		expect(formatCommitSubject("abcdef", 3)).toBe("abc");
+		expect(formatCommitSubject("abcdef", 2).length).toBeLessThanOrEqual(2);
+	});
+
 	test("exact-72 subject is not truncated", () => {
 		const s = "x".repeat(COMMIT_SUBJECT_MAX);
 		expect(formatCommitSubject(s)).toBe(s);

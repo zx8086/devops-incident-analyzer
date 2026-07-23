@@ -12,7 +12,11 @@ export const COMMIT_SUBJECT_MAX = 72;
 export function formatCommitSubject(subject: string, max: number = COMMIT_SUBJECT_MAX): string {
 	const oneLine = subject.replace(/\s*\n[\s\S]*$/, "").trim();
 	if (oneLine.length <= max) return oneLine;
-	// Truncate on a word boundary where possible; ASCII ellipsis per no-emoji policy.
+	// A max below ellipsis room degrades to a hard slice -- the cap always holds.
+	if (max < 4) return oneLine.slice(0, Math.max(0, max));
+	// Truncate on a word boundary where one exists past the halfway floor (the
+	// floor keeps the house "<cluster>: " prefix from being all that survives);
+	// otherwise mid-word cut. ASCII ellipsis per no-emoji policy.
 	const cut = oneLine.slice(0, max - 3);
 	const lastSpace = cut.lastIndexOf(" ");
 	const base = lastSpace > max / 2 ? cut.slice(0, lastSpace) : cut;

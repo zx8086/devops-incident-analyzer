@@ -55,6 +55,15 @@ describe("classifyPipelineFailureDetail (SIO-1185)", () => {
 		expect(r.hint).toContain("retrying will not help");
 	});
 
+	// CodeRabbit (PR #444): an MR bumping provider constraints causes this error
+	// itself, so it must NOT be labeled environment ("not this change").
+	test("version-constraint conflict is NOT classified as environment", () => {
+		const r = classifyPipelineFailureDetail(
+			"Error: Failed to query available provider packages: locked provider does not match configured version constraint",
+		);
+		expect(r.failureClass).not.toBe("environment");
+	});
+
 	test("undiagnosable tail -> unknown with the review-the-log hint", () => {
 		const r = classifyPipelineFailureDetail("Job succeeded... wait no it did not");
 		expect(r.failureClass).toBe("unknown");
