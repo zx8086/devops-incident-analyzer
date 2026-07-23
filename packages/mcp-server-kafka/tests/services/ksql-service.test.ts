@@ -153,6 +153,50 @@ describe("KsqlService", () => {
 		expect(result).toHaveLength(1);
 	});
 
+	// SIO-1191: default-latest offset reset makes push queries hang on quiet streams
+	// into the SigV4 proxy's 30s abort (which retries the query). The service now
+	// defaults earliest and bounds the request under the proxy budget.
+	describe("runQuery steering defaults (SIO-1191)", () => {
+		function queryBody(): { streamsProperties: Record<string, string> } {
+			const call = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0];
+			return JSON.parse((call?.[1] as RequestInit)?.body as string);
+		}
+
+		test("injects ksql.streams.auto.offset.reset=earliest when no properties given", async () => {
+			mockFetch(200, []);
+			const service = new KsqlService(mockConfig);
+			await service.runQuery("SELECT ID FROM S_ORDERS EMIT CHANGES LIMIT 1;");
+			expect(queryBody().streamsProperties["ksql.streams.auto.offset.reset"]).toBe("earliest");
+		});
+
+		test("caller-supplied properties override the earliest default", async () => {
+			mockFetch(200, []);
+			const service = new KsqlService(mockConfig);
+			await service.runQuery("SELECT ID FROM S_ORDERS EMIT CHANGES LIMIT 1;", {
+				"ksql.streams.auto.offset.reset": "latest",
+			});
+			expect(queryBody().streamsProperties["ksql.streams.auto.offset.reset"]).toBe("latest");
+		});
+
+		test("unrelated caller properties merge alongside the default", async () => {
+			mockFetch(200, []);
+			const service = new KsqlService(mockConfig);
+			await service.runQuery("SELECT ID FROM S_ORDERS EMIT CHANGES LIMIT 1;", { "custom.prop": "x" });
+			const props = queryBody().streamsProperties;
+			expect(props["ksql.streams.auto.offset.reset"]).toBe("earliest");
+			expect(props["custom.prop"]).toBe("x");
+		});
+
+		test("bounds the request with an AbortSignal under the proxy's 30s budget", async () => {
+			mockFetch(200, []);
+			const service = new KsqlService(mockConfig);
+			await service.runQuery("SELECT 1 FROM T LIMIT 1;");
+			const call = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0];
+			expect((call?.[1] as RequestInit).signal).toBeInstanceOf(AbortSignal);
+			expect(KsqlService.RUN_QUERY_TIMEOUT_MS).toBeLessThan(30_000);
+		});
+	});
+
 	test("executeStatement sends to /ksql endpoint", async () => {
 		mockFetch(200, [{ "@type": "currentStatus", commandStatus: { status: "SUCCESS" } }]);
 		const service = new KsqlService(mockConfig);
