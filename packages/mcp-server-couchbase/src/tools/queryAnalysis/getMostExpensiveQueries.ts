@@ -55,7 +55,11 @@ export default (server: McpServer, bucket: Bucket) => {
 		"capella_get_most_expensive_queries",
 		"Get the most expensive queries based on execution time and resource usage (defaults: last 8 weeks, limit 50)",
 		{
-			limit: z.number().optional().describe("Optional limit for the number of results to return (default 50)"),
+			limit: z
+				.number()
+				.int()
+				.optional()
+				.describe("Optional integer limit for the number of results to return (default 50)"),
 			period: z
 				.enum(["day", "week", "month"])
 				.optional()

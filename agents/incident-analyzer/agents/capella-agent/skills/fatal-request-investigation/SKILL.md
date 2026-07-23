@@ -14,15 +14,18 @@ datasource reports Couchbase errors in application logs.
    error messages, statements, and timings.
 2. Classify each error code BEFORE reporting:
    - 3000-3999 parsing: SYNTAX bug in the issuing client -- not data, not cluster
-   - 4000-4999 planning / no index: predicate does not match an index
-     (apply no-index-diagnosis)
+   - 4000-4999 planning family (no-index, reprepare, alias, GSI failures):
+     route by the exact message -- apply no-index-diagnosis ONLY when it
+     explicitly says no index is available
    - 1080 timeout: correlate with cluster load and queue depth
    - 5000+ execution: check node memory/CPU pressure
 3. Separate SELF-INFLICTED failures (this analyzer's own malformed probes,
    statements on `system:` keyspaces) from application failures -- only
    application failures are incident findings.
-4. For the top failing APPLICATION statements, run the mandatory
-   EXPLAIN + Index Advisor pass (Soul "Query optimization").
+4. For the top failing PARSEABLE application statements, run the mandatory
+   EXPLAIN + Index Advisor pass (Soul "Query optimization"). Syntax-invalid
+   statements (3000-family) cannot be explained -- skip them and record the
+   skip in the report.
 5. Cross-check timing against `capella_get_system_vitals` /
    `capella_get_system_nodes` when they are in your current tool set (memory,
    queue depth, node status at the failure timestamps); otherwise recommend

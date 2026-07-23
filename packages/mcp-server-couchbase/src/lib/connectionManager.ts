@@ -186,11 +186,18 @@ export class CouchbaseConnectionManager {
 			if (this.cluster) {
 				await this.cluster.close();
 			}
+			this.cluster = null;
 			this.bucket = null;
 			this.isHealthy = false;
 			this.initializationPromise = null;
 			logger.info("Couchbase connection closed successfully");
 		} catch (error) {
+			// A failed close still invalidates the handles -- getCluster() must not
+			// hand out a half-closed SDK object after shutdown.
+			this.cluster = null;
+			this.bucket = null;
+			this.isHealthy = false;
+			this.initializationPromise = null;
 			logger.error(
 				{
 					error: error instanceof Error ? error.message : String(error),

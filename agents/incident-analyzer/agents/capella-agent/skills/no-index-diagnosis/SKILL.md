@@ -15,15 +15,19 @@ tool result carries `_error.kind: "no-index"`.
 2. Discover the index key order: `capella_get_detailed_indexes` (or
    `capella_get_system_indexes`) for the keyspace; note the FIRST key field
    of each index.
-3. Re-issue with the WHERE clause leading on that first key field (equality
-   match), or fetch by key (`USE KEYS` / `capella_get_document_by_id`).
+3. Re-issue with the WHERE clause leading on that first key field, using a
+   predicate taken from the original query or `_error.advice` (equality or
+   range -- do NOT invent an equality that changes the result set). When the
+   full document key is known, fetch by key instead
+   (`USE KEYS` / `capella_get_document_by_id`).
 4. If only a trailing key's value is known and no index leads on it, report
    "collection has no usable index for this predicate" as a finding -- it is
    NOT evidence of missing data (Soul "Querying collections").
 
 ## LIKE discipline (copy-paste)
-A leading-wildcard LIKE defeats index range scans and triggers code 4000 on
-secondary-only collections:
+A leading-wildcard LIKE cannot use a selective index range scan -- at best it
+degrades to a broad or full index scan, and on a collection with no index
+usable for the predicate it fails with code 4000:
 
 ```sql
 -- Bad: leading wildcard, cannot use any index

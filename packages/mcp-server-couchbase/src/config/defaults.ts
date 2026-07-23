@@ -43,7 +43,7 @@ export const defaultConfig: Config = {
 	// markdown ships in the package -- the enabled:true default made every boot
 	// warn "No playbook directory found". Couchbase incident procedures live as
 	// gitagent skills on the capella-agent instead. Opt in with
-	// PLAYBOOKS_ENABLED=true + PLAYBOOKS_BASE_DIR.
+	// PLAYBOOKS_ENABLED=true (PLAYBOOKS_BASE_DIR optional; defaults to ./playbook).
 	playbooks: {
 		enabled: false,
 		baseDirectory: "./playbook",
