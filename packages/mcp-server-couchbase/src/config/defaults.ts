@@ -32,8 +32,11 @@ export const defaultConfig: Config = {
 		format: "json",
 		includeMetadata: true,
 	},
+	// Disabled by default (matches the schema default): with enabled: true every
+	// deployment silently registered markdown docs resources against /tmp/docs.
+	// Opt in with DOCS_ENABLED=true + DOCS_BASE_DIR.
 	documentation: {
-		enabled: true,
+		enabled: false,
 		baseDirectory: "/tmp/docs",
 		fileExtension: ".md",
 	},

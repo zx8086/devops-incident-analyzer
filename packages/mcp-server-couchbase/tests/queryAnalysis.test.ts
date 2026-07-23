@@ -11,6 +11,7 @@ import { buildQuery as buildCompletedRequests } from "../src/tools/queryAnalysis
 import { buildQuery as buildDetailedIndexes } from "../src/tools/queryAnalysis/getDetailedIndexes";
 import { buildQuery as buildDetailedPreparedStatements } from "../src/tools/queryAnalysis/getDetailedPreparedStatements";
 import { buildQuery as buildDocumentTypeExamples } from "../src/tools/queryAnalysis/getDocumentTypeExamples";
+import { buildQuery as buildFatalRequests } from "../src/tools/queryAnalysis/getFatalRequests";
 import { buildQuery as buildIndexAdvisor, extractAdvisorSections } from "../src/tools/queryAnalysis/getIndexAdvisor";
 import { buildQuery as buildIndexesToDrop } from "../src/tools/queryAnalysis/getIndexesToDrop";
 import { buildQuery as buildLowSelectivity } from "../src/tools/queryAnalysis/getLowSelectivityQueries";
@@ -24,29 +25,33 @@ const INJECTION_LITERAL = "foo' OR 1=1 --";
 const INJECTION_DQ = 'foo" OR 1=1 --';
 
 describe("assertIdentifier", () => {
-	test.each(["_default", "documentType", "Type1", "_a_b", "a", "Z9", "_"])("accepts %p", (v) => {
+	// Hyphens/percent are legal in Couchbase scope/collection names (e.g. archived-orders)
+	// and safe here because every consumer splices the value backtick-wrapped.
+	test.each([
+		"_default",
+		"documentType",
+		"Type1",
+		"_a_b",
+		"a",
+		"Z9",
+		"_",
+		"a-b",
+		"archived-orders",
+		"archived-order-items",
+		"a%b",
+		"1abc",
+	])("accepts %p", (v) => {
 		expect(assertIdentifier(v, "x")).toBe(v);
 	});
 
-	test.each([
-		"",
-		"1abc",
-		"a-b",
-		"a.b",
-		"a;b",
-		"a b",
-		"a`b",
-		"a'b",
-		'a"b',
-		"a%b",
-		"_default; DROP --",
-	])("rejects %p", (v) => {
+	test.each(["", "-abc", "%abc", "a.b", "a;b", "a b", "a`b", "a'b", 'a"b', "_default; DROP --"])("rejects %p", (v) => {
 		expect(() => assertIdentifier(v, "x")).toThrow(/Invalid identifier for x/);
 	});
 
 	test("regex constant exposed for callers", () => {
 		expect(COUCHBASE_IDENTIFIER_RE.test("_default")).toBe(true);
-		expect(COUCHBASE_IDENTIFIER_RE.test("a-b")).toBe(false);
+		expect(COUCHBASE_IDENTIFIER_RE.test("archived-orders")).toBe(true);
+		expect(COUCHBASE_IDENTIFIER_RE.test("a`b")).toBe(false);
 	});
 });
 
@@ -85,9 +90,10 @@ describe("getDetailedIndexes.buildQuery", () => {
 		expect(parameters.state).toBe(INJECTION_LITERAL);
 	});
 
-	test("index_type binds as parameter", () => {
+	test("index_type binds as parameter with `using` backtick-escaped (reserved word)", () => {
 		const { query, parameters } = buildDetailedIndexes({ index_type: INJECTION_LITERAL });
-		expect(query).toContain("$index_type");
+		expect(query).toContain("LOWER(t.`using`) = LOWER($index_type)");
+		expect(query).not.toMatch(/t\.using\s/);
 		expect(query).not.toContain(INJECTION_LITERAL);
 		expect(parameters.index_type).toBe(INJECTION_LITERAL);
 	});
@@ -236,6 +242,16 @@ describe("getDocumentTypeExamples.buildQuery", () => {
 			}),
 		).toThrow(/Invalid identifier for type_field/);
 	});
+
+	test("hyphenated collection names are accepted and splice backtick-wrapped", () => {
+		const { query } = buildDocumentTypeExamples({
+			scope_name: "order",
+			collection_name: "archived-orders",
+			type_field: "orderType",
+		});
+		expect(query).toContain("FROM default.`order`.`archived-orders`");
+		expect(query).toContain("d.`orderType`");
+	});
 });
 
 describe("getSystemIndexes.buildQuery", () => {
@@ -252,9 +268,10 @@ describe("getSystemIndexes.buildQuery", () => {
 		expect(parameters.bucket_name).toBe(INJECTION_LITERAL);
 	});
 
-	test("index_type binds as parameter", () => {
+	test("index_type binds as parameter with `using` backtick-escaped (reserved word)", () => {
 		const { query, parameters } = buildSystemIndexes({ index_type: INJECTION_LITERAL });
-		expect(query).toContain("$index_type");
+		expect(query).toContain("LOWER(t.`using`) = LOWER($index_type)");
+		expect(query).not.toMatch(/t\.using\s/);
 		expect(query).not.toContain(INJECTION_LITERAL);
 		expect(parameters.index_type).toBe(INJECTION_LITERAL);
 	});
@@ -264,13 +281,12 @@ describe("getSystemIndexes.buildQuery", () => {
 		expect(query).not.toContain("t.`namespace` != 'system'");
 	});
 
-	test("total_count sub-SELECT is a bare COUNT(*) over system:indexes (SIO-1162)", () => {
+	test("total_count is a WITH binding evaluated once, no statement column (SIO-1162)", () => {
 		const { query } = buildSystemIndexes({ bucket_name: "b" });
-		// SIO-1162: the total_count sub-SELECT must be a plain catalog count. It previously
-		// filtered UPPER(statement) against system:indexes, which has no `statement` column,
-		// so the statement failed to parse on every run. Assert the corrected shape and that
-		// no `statement` reference leaks back in.
-		expect(query).toContain("(SELECT COUNT(*) FROM system:indexes) AS total_count");
+		// SIO-1162: the count must be a plain catalog count (system:indexes has no `statement`
+		// column). It now lives in a WITH binding so it evaluates once instead of per row.
+		expect(query).toContain("WITH total AS (SELECT RAW COUNT(*) FROM system:indexes)");
+		expect(query).toContain("total[0] AS total_count");
 		expect(query).not.toMatch(/statement/i);
 		// The outer WHERE (system-namespace exclusion) still splices into the marker, not the
 		// inner sub-SELECT -- the bucket_name binding and namespace clause remain on the outer t.
@@ -366,9 +382,16 @@ describe("getDetailedPreparedStatements.buildQuery", () => {
 });
 
 describe("getCompletedRequests.buildQuery", () => {
-	test("empty input returns base query with empty parameters", () => {
-		const { parameters } = buildCompletedRequests({});
+	test("empty input applies the default LIMIT (full 8-week scan+sort otherwise)", () => {
+		const { query, parameters } = buildCompletedRequests({});
 		expect(parameters).toEqual({});
+		expect(query).toMatch(/LIMIT 50;?\s*$/);
+	});
+
+	test("explicit limit overrides the default", () => {
+		const { query } = buildCompletedRequests({ limit: 7 });
+		expect(query).toMatch(/LIMIT 7;?\s*$/);
+		expect(query).not.toMatch(/LIMIT 50/);
 	});
 
 	test("status: 'fatal' binds as $status -- raw value not spliced", () => {
@@ -402,6 +425,24 @@ describe("getCompletedRequests.buildQuery", () => {
 		expect(query).toContain("DATE_ADD_STR(NOW_STR(), -1, 'week')");
 		expect(query).toMatch(/LIMIT 100/);
 		expect(parameters.status).toBe("success");
+	});
+});
+
+describe("getFatalRequests.buildQuery", () => {
+	test("empty input applies the default LIMIT", () => {
+		const { query } = buildFatalRequests({});
+		expect(query).toMatch(/ORDER BY requestTime DESC LIMIT 50;/);
+	});
+
+	test("explicit limit overrides the default", () => {
+		const { query } = buildFatalRequests({ limit: 5 });
+		expect(query).toMatch(/ORDER BY requestTime DESC LIMIT 5;/);
+		expect(query).not.toMatch(/LIMIT 50/);
+	});
+
+	test("period: 'day' rewrites DATE_ADD_STR", () => {
+		const { query } = buildFatalRequests({ period: "day" });
+		expect(query).toContain("DATE_ADD_STR(NOW_STR(), -1, 'day')");
 	});
 });
 

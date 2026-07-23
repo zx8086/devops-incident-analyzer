@@ -77,6 +77,25 @@ export function isNoIndexError(error: unknown): boolean {
 	return classifyCouchbaseError(error) === "no-index";
 }
 
+// Compact log-side summary of a Couchbase SDK error. The raw SDK object carries
+// cpp_core_span traces, dispatch endpoints, and full HTTP bodies -- logging it
+// verbatim bloats every error line by kilobytes. Client-facing envelopes are
+// built separately (buildToolErrorEnvelope); this is only for logger payloads.
+export function summarizeCouchbaseError(error: unknown): {
+	name: string;
+	message: string;
+	kind: ToolErrorKind;
+	code?: number;
+} {
+	const err = unwrapCouchbaseError(error);
+	const kind = classifyCouchbaseError(error);
+	if (err instanceof Error) {
+		const code = "cause" in err ? readFirstErrorCode(err as CouchbaseError) : undefined;
+		return { name: err.name, message: err.message, kind, ...(code !== undefined ? { code } : {}) };
+	}
+	return { name: "UnknownError", message: String(err), kind };
+}
+
 // SIO-1087: structural replacement for `err.message.includes("not found")` -- a document/scope/
 // collection that does not exist.
 export function isNotFoundError(error: unknown): boolean {

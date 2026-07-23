@@ -8,7 +8,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { adviseCouchbaseError } from "../lib/adviseCouchbaseError";
-import { classifyCouchbaseError } from "../lib/classifyCouchbaseError";
+import { classifyCouchbaseError, summarizeCouchbaseError } from "../lib/classifyCouchbaseError";
 import { AppError } from "../lib/errors";
 import { runSqlPlusPlusQuery } from "../lib/runSqlPlusPlusQuery";
 import { sqlppParser } from "../lib/sqlppParser";
@@ -68,7 +68,9 @@ export const runQuery = async (params: { scope_name: string; query: string }, bu
 			isError: false,
 		};
 	} catch (error) {
-		logger.error({ error }, "Failed to execute query");
+		// Compact summary only -- the raw SDK error dumps cpp_core_span traces and
+		// full HTTP bodies into every log line.
+		logger.error({ error: summarizeCouchbaseError(error) }, "Failed to execute query");
 		// SIO-744/SIO-1078: surface the underlying N1QL error so the LLM can recover (e.g.
 		// fix a syntax issue or drop an unindexed predicate) instead of looping. The lib
 		// layer wraps the real error via createError("QUERY_ERROR", "Failed to execute

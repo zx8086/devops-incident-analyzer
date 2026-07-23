@@ -12,6 +12,7 @@ export class CouchbaseConnectionManager {
 	private connectionPool: Bucket[] = [];
 	private isHealthy = false;
 	private healthCheckInterval: NodeJS.Timeout | null = null;
+	private healthCheckInFlight = false;
 	private initializationPromise: Promise<void> | null = null;
 
 	private constructor() {
@@ -46,6 +47,13 @@ export class CouchbaseConnectionManager {
 			this.cluster = await connect(config.database.connectionString, {
 				username: config.database.username,
 				password: config.database.password,
+				// Cluster-wide timeouts: connectTimeout was previously dead config, and without
+				// queryTimeout every SQL++ statement inherited the SDK's 75s default -- analysis
+				// tools should fail fast at maxQueryTimeout (30s) instead.
+				timeouts: {
+					connectTimeout: config.database.connectionTimeout,
+					queryTimeout: config.server.maxQueryTimeout,
+				},
 			});
 
 			this.bucket = this.cluster.bucket(config.database.bucketName);
@@ -100,10 +108,32 @@ export class CouchbaseConnectionManager {
 	}
 
 	private startHealthCheck(): void {
+		// Reconnects re-enter here via initializeConnection; without this guard each
+		// reconnect leaked the previous timer and health checks stacked up.
+		if (this.healthCheckInterval) {
+			clearInterval(this.healthCheckInterval);
+		}
 		logger.info("Starting health check monitor");
-		// Run health check every 30 seconds
-		this.healthCheckInterval = setInterval(async () => {
-			await this.checkHealth();
+		// Run health check every 30 seconds. The callback must never produce an
+		// unhandled rejection -- a rejecting async interval callback has no awaiter.
+		// clearInterval only stops FUTURE ticks, so a slow probe (or a reconnect's
+		// replacement interval) could otherwise overlap an in-flight check.
+		this.healthCheckInterval = setInterval(() => {
+			if (this.healthCheckInFlight) {
+				logger.debug("Skipping health check tick: previous check still in flight");
+				return;
+			}
+			this.healthCheckInFlight = true;
+			this.checkHealth()
+				.catch((error) => {
+					logger.warn(
+						{ error: error instanceof Error ? error.message : String(error) },
+						"Health check tick failed unexpectedly",
+					);
+				})
+				.finally(() => {
+					this.healthCheckInFlight = false;
+				});
 		}, 30000);
 	}
 
@@ -119,13 +149,10 @@ export class CouchbaseConnectionManager {
 			// Perform a simple ping operation
 			await this.cluster.ping();
 
-			// Check if we can access the bucket
-			await this.bucket
-				.defaultCollection()
-				.get("health_check_key")
-				.catch(() => {
-					// Ignore not found error, we just want to verify bucket access
-				});
+			// Check if we can access the bucket. exists() RESOLVES ({exists:false}) for a
+			// missing doc -- unlike get(), which rejected with DocumentNotFoundError on
+			// every tick and could surface as an unhandled rejection from the SDK binding.
+			await this.bucket.defaultCollection().exists("health_check_key");
 
 			this.isHealthy = true;
 			logger.debug(
@@ -185,6 +212,7 @@ export class CouchbaseConnectionManager {
 
 		if (this.healthCheckInterval) {
 			clearInterval(this.healthCheckInterval);
+			this.healthCheckInterval = null;
 			logger.debug("Health check monitor stopped");
 		}
 

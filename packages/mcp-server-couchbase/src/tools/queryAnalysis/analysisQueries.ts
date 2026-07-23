@@ -107,25 +107,30 @@ ORDER BY resultCount DESC;
 
 // SIO-667: outer WHERE goes into the /* WHERE_CLAUSES */ marker so callers
 // don't replace the inner sub-SELECT WHERE by accident.
-// SIO-1162: the inner sub-SELECT previously filtered `UPPER(statement) NOT LIKE ...`
-// against system:indexes, which has NO `statement` column (that column lives on
-// system:completed_requests -- cf. n1qlPrimaryIndexes above). Those predicates were
-// copy-pasted from a request-history query and made this statement fail to parse on
-// every run ("parsing failure / Please fix your mistakes"). total_count is just the
-// catalog size, so a bare COUNT(*) over system:indexes is both valid and correct; the
-// outer buildQuery still handles any system-namespace exclusion via /* WHERE_CLAUSES */.
+// SIO-1162: total_count is just the catalog size -- a bare COUNT(*) over
+// system:indexes (system:indexes has no `statement` column; request-history
+// predicates here made the statement fail to parse on every run). The count
+// lives in a WITH binding so it evaluates ONCE, not per projected row.
 export const n1qlSystemIndexes: string = `
+WITH total AS (SELECT RAW COUNT(*) FROM system:indexes)
 SELECT
-    (SELECT COUNT(*) FROM system:indexes) AS total_count,
+    total[0] AS total_count,
 t.*
 FROM system:indexes t /* WHERE_CLAUSES */;
 `;
 
+// LIMIT-free base: getCompletedRequests.buildQuery ALWAYS appends a LIMIT
+// (caller value or DEFAULT_ANALYSIS_LIMIT) -- an unbounded 8-week scan+sort
+// with meta().plan per row took ~3.7s and bloated responses.
 export const n1qlCompletedRequests: string = `
 SELECT *, meta().plan FROM system:completed_requests
 WHERE requestTime >= DATE_ADD_STR(NOW_STR(), -8, 'week')
 ORDER BY elapsedTime DESC;
 `;
+
+// Default row cap for the completed/fatal request-history tools when the
+// caller passes no limit. Keeps the ORDER BY sort bounded server-side.
+export const DEFAULT_ANALYSIS_LIMIT = 50;
 
 export const n1qlPreparedStatements: string = `
 SELECT * FROM system:prepareds;

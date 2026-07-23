@@ -4,8 +4,57 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { logger } from "../../utils/logger";
-import { n1qlQueryFatalRequests } from "./analysisQueries";
+import { DEFAULT_ANALYSIS_LIMIT, n1qlQueryFatalRequests } from "./analysisQueries";
 import { executeAnalysisQuery } from "./queryAnalysisUtils";
+
+export type FatalRequestsInput = {
+	period?: "day" | "week" | "month" | "quarter";
+	limit?: number;
+};
+
+export function buildQuery(input: FatalRequestsInput): {
+	query: string;
+	parameters: Record<string, unknown>;
+} {
+	const { period, limit } = input;
+	let query = n1qlQueryFatalRequests;
+
+	if (period) {
+		// Closed switch over a Zod enum -- replacement string never includes user input.
+		let periodValue: number;
+		let periodUnit: string;
+		switch (period) {
+			case "day":
+				periodValue = 1;
+				periodUnit = "day";
+				break;
+			case "week":
+				periodValue = 1;
+				periodUnit = "week";
+				break;
+			case "month":
+				periodValue = 1;
+				periodUnit = "month";
+				break;
+			case "quarter":
+				periodValue = 3;
+				periodUnit = "month";
+				break;
+		}
+		query = query.replace(
+			/DATE_ADD_STR\(NOW_STR\(\), -\d+, '\w+'\)/,
+			`DATE_ADD_STR(NOW_STR(), -${periodValue}, '${periodUnit}')`,
+		);
+	}
+
+	// Always bound the result set: without a LIMIT the trailing ORDER BY sorted the
+	// full 8-week fatal-request window on every call (~3.7s). The LIMIT goes after
+	// the UNION ALL, so it caps the combined row set.
+	const effectiveLimit = limit && limit > 0 ? limit : DEFAULT_ANALYSIS_LIMIT;
+	query = query.replace("ORDER BY requestTime DESC;", `ORDER BY requestTime DESC LIMIT ${effectiveLimit};`);
+
+	return { query, parameters: {} };
+}
 
 export default (server: McpServer, bucket: Bucket) => {
 	server.tool(
@@ -20,56 +69,7 @@ export default (server: McpServer, bucket: Bucket) => {
 		},
 		async ({ period, limit }) => {
 			logger.info({ period, limit }, "Getting fatal query requests");
-
-			// Modify query based on parameters
-			let query = n1qlQueryFatalRequests;
-
-			// Apply period filter if specified
-			if (period) {
-				let periodValue: number;
-				let periodUnit: string;
-
-				switch (period) {
-					case "day":
-						periodValue = 1;
-						periodUnit = "day";
-						break;
-					case "week":
-						periodValue = 1;
-						periodUnit = "week";
-						break;
-					case "month":
-						periodValue = 1;
-						periodUnit = "month";
-						break;
-					case "quarter":
-						periodValue = 3;
-						periodUnit = "month";
-						break;
-					default:
-						periodValue = 1;
-						periodUnit = "week";
-				}
-
-				// Replace the DATE_ADD_STR period in the query
-				query = query.replace(
-					/DATE_ADD_STR\(NOW_STR\(\), -\d+, '\w+'\)/,
-					`DATE_ADD_STR(NOW_STR(), -${periodValue}, '${periodUnit}')`,
-				);
-			}
-
-			// Apply limit if specified
-			if (limit && limit > 0) {
-				// Add or replace LIMIT clause
-				if (query.includes("LIMIT")) {
-					query = query.replace(/LIMIT \d+/i, `LIMIT ${limit}`);
-				} else {
-					// For this specific query, we need to be careful with the UNION
-					// Add limit to the end of the query
-					query = query.replace("ORDER BY requestTime DESC;", `ORDER BY requestTime DESC LIMIT ${limit};`);
-				}
-			}
-
+			const { query } = buildQuery({ period, limit });
 			return executeAnalysisQuery(bucket, query, "Fatal Query Requests", limit);
 		},
 	);
