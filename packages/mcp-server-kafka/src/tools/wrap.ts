@@ -1,7 +1,11 @@
 // src/tools/wrap.ts
+import { mapHttpStatusToKind, type ToolErrorKind } from "@devops-agent/shared";
+import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 import type { AppConfig } from "../config/schemas.ts";
 import { KafkaToolError, normalizeError } from "../lib/errors.ts";
 import { ResponseBuilder } from "../lib/response-builder.ts";
+import { classifyKafkaError } from "../services/kafka-service.ts";
 import { logger } from "../utils/logger.ts";
 import { traceToolCall } from "../utils/tracing.ts";
 
@@ -81,11 +85,59 @@ export function wrapHandler<T>(
 				// metadata (populated by fetchUpstream in SIO-725/729), forward it through
 				// the ---STRUCTURED--- sentinel so the agent can lift it into a ToolError.
 				const structured = error instanceof KafkaToolError ? extractStructuredFields(error) : undefined;
-				logger.error({ tool: toolName, error: mcpError.message, ...structured }, "Tool call error");
-				return ResponseBuilder.error(mcpError.message, structured);
+				// SIO-1190: classify into the shared kind where the source is unambiguous
+				// (protocol code, HTTP status, validation, or a conservative message shape).
+				// Unclassifiable errors stay on the legacy prose/sentinel path -- the agent's
+				// fallback regex cannot be improved on by guessing here.
+				const kind = classifyThrownError(error);
+				logger.error(
+					{ tool: toolName, error: mcpError.message, ...(kind && { kind }), ...structured },
+					"Tool call error",
+				);
+				if (kind === null) {
+					return ResponseBuilder.error(mcpError.message, structured);
+				}
+				return ResponseBuilder.errorWithKind(
+					mcpError.message,
+					{
+						kind,
+						message: mcpError.message,
+						...(error instanceof KafkaToolError && error.statusCode !== undefined && { statusCode: error.statusCode }),
+						...(error instanceof KafkaToolError && error.hostname !== undefined && { hostname: error.hostname }),
+						...(error instanceof KafkaToolError &&
+							error.upstreamContentType !== undefined && { upstreamContentType: error.upstreamContentType }),
+					},
+					structured,
+				);
 			}
 		});
 	};
+}
+
+// SIO-1190: conservative message-shape classifier for errors that carry no protocol
+// code or HTTP status (e.g. @platformatic/kafka client-side "Unknown topic X.").
+// Returns null when nothing matches -- the caller then leaves the error unwrapped.
+function classifyErrorMessage(message: string): ToolErrorKind | null {
+	if (/^unknown topic\b/i.test(message)) return "not-found";
+	if (/timed?\s*out|ETIMEDOUT/i.test(message)) return "timeout";
+	if (/ECONNREFUSED|ECONNRESET|socket hang up|fetch failed|metadata failed/i.test(message)) return "network";
+	return null;
+}
+
+function classifyThrownError(error: unknown): ToolErrorKind | null {
+	if (error instanceof z.ZodError) return "bad-input";
+	if (error instanceof KafkaToolError) {
+		if (error.statusCode !== undefined) {
+			const kind = mapHttpStatusToKind(error.statusCode);
+			return kind === "unknown" ? classifyErrorMessage(error.message) : kind;
+		}
+		if (error.code === ErrorCode.InvalidParams || error.code === ErrorCode.InvalidRequest) return "bad-input";
+		return classifyErrorMessage(error.message);
+	}
+	// Protocol-code path (SIO-1087): MultipleErrors children carrying apiCode/errorCode.
+	const { kind } = classifyKafkaError(error);
+	if (kind !== null) return kind;
+	return classifyErrorMessage(error instanceof Error ? error.message : String(error));
 }
 
 // SIO-728: lift the upstream-metadata fields off a KafkaToolError into the
