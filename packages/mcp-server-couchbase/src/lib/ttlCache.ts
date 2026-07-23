@@ -10,20 +10,27 @@ export class TtlCache<T> {
 	constructor(private readonly ttlMs: number) {}
 
 	getOrLoad(key: string, load: () => Promise<T>): Promise<T> {
-		const now = Date.now();
 		const hit = this.entries.get(key);
-		if (hit && hit.expiresAt > now) {
+		if (hit && hit.expiresAt > Date.now()) {
 			return hit.value;
 		}
 		const value = load();
-		this.entries.set(key, { value, expiresAt: now + this.ttlMs });
-		value.catch(() => {
-			// Only evict if this exact promise is still the cached one.
-			const current = this.entries.get(key);
-			if (current?.value === value) {
-				this.entries.delete(key);
-			}
-		});
+		// The TTL countdown starts when the load SETTLES, not when it starts:
+		// Infinity while pending keeps a slow load deduplicated instead of being
+		// treated as expired and re-triggered by the next caller.
+		const entry = { value, expiresAt: Number.POSITIVE_INFINITY };
+		this.entries.set(key, entry);
+		value.then(
+			() => {
+				entry.expiresAt = Date.now() + this.ttlMs;
+			},
+			() => {
+				// Only evict if this exact promise is still the cached one.
+				if (this.entries.get(key) === entry) {
+					this.entries.delete(key);
+				}
+			},
+		);
 		return value;
 	}
 

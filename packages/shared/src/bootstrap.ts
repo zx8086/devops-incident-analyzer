@@ -93,6 +93,41 @@ export interface McpApplication<T> {
 export async function createMcpApplication<T>(options: McpApplicationOptions<T>): Promise<McpApplication<T>> {
 	const { logger, name } = options;
 
+	// Process-level error handlers install BEFORE any startup await -- a background
+	// rejection during initDatasource/createTransport would otherwise hit the runtime
+	// default (crash) in the window before registration. SIO-986: skip in embedded
+	// mode; these are process-GLOBAL and the host app owns them there.
+	if (!options.embedded) {
+		process.on("uncaughtException", (error) => {
+			logger.error(`Uncaught exception in ${name}`, {
+				error: error.message,
+				stack: error.stack,
+				name: error.name,
+			});
+			if (logger.flush) logger.flush();
+			process.exit(1);
+		});
+
+		// Log-and-continue: a stray background rejection (e.g. an SDK promise resolving
+		// after its caller moved on) must not take down a long-running MCP server and
+		// every tool it serves. uncaughtException above still exits -- a thrown
+		// exception mid-stack means corrupted state; an orphaned rejection does not.
+		process.on("unhandledRejection", (reason) => {
+			if (isBenignStreamCancel(reason)) {
+				logger.warn(`Ignoring benign stream-cancel in ${name}`, {
+					reason: reason instanceof Error ? reason.message : String(reason),
+				});
+				return;
+			}
+			logger.error(`Unhandled rejection in ${name} (continuing)`, {
+				reason: reason instanceof Error ? reason.message : String(reason),
+				name: reason instanceof Error ? reason.name : undefined,
+				stack: reason instanceof Error ? reason.stack : undefined,
+			});
+			if (logger.flush) logger.flush();
+		});
+	}
+
 	try {
 		// Step 1: LangSmith tracing (must be first -- sets env vars before anything reads them)
 		options.initTracing();
@@ -197,41 +232,13 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 			process.exit(0);
 		};
 
-		// Step 7: Register process-level signal handlers. SIO-986: skip in embedded mode -- these are
-		// process-GLOBAL, so an in-process server would hijack the host app's SIGINT/SIGTERM and call
-		// process.exit() on any uncaught exception/rejection anywhere in the app. The host owns these.
+		// Step 7: Register signal handlers (need `shutdown`, so they cannot install earlier).
+		// The uncaughtException/unhandledRejection handlers are registered at function entry,
+		// before any startup await. SIO-986: skip in embedded mode -- process-GLOBAL; an
+		// in-process server would hijack the host app's SIGINT/SIGTERM. The host owns these.
 		if (!options.embedded) {
 			process.on("SIGINT", () => shutdown());
 			process.on("SIGTERM", () => shutdown());
-
-			process.on("uncaughtException", (error) => {
-				logger.error(`Uncaught exception in ${name}`, {
-					error: error.message,
-					stack: error.stack,
-					name: error.name,
-				});
-				if (logger.flush) logger.flush();
-				process.exit(1);
-			});
-
-			// Log-and-continue: a stray background rejection (e.g. an SDK promise resolving
-			// after its caller moved on) must not take down a long-running MCP server and
-			// every tool it serves. uncaughtException above still exits -- a thrown
-			// exception mid-stack means corrupted state; an orphaned rejection does not.
-			process.on("unhandledRejection", (reason) => {
-				if (isBenignStreamCancel(reason)) {
-					logger.warn(`Ignoring benign stream-cancel in ${name}`, {
-						reason: reason instanceof Error ? reason.message : String(reason),
-					});
-					return;
-				}
-				logger.error(`Unhandled rejection in ${name} (continuing)`, {
-					reason: reason instanceof Error ? reason.message : String(reason),
-					name: reason instanceof Error ? reason.name : undefined,
-					stack: reason instanceof Error ? reason.stack : undefined,
-				});
-				if (logger.flush) logger.flush();
-			});
 		}
 
 		// Step 8: Notify startup complete

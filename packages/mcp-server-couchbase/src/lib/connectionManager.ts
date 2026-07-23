@@ -12,6 +12,7 @@ export class CouchbaseConnectionManager {
 	private connectionPool: Bucket[] = [];
 	private isHealthy = false;
 	private healthCheckInterval: NodeJS.Timeout | null = null;
+	private healthCheckInFlight = false;
 	private initializationPromise: Promise<void> | null = null;
 
 	private constructor() {
@@ -115,13 +116,24 @@ export class CouchbaseConnectionManager {
 		logger.info("Starting health check monitor");
 		// Run health check every 30 seconds. The callback must never produce an
 		// unhandled rejection -- a rejecting async interval callback has no awaiter.
+		// clearInterval only stops FUTURE ticks, so a slow probe (or a reconnect's
+		// replacement interval) could otherwise overlap an in-flight check.
 		this.healthCheckInterval = setInterval(() => {
-			this.checkHealth().catch((error) => {
-				logger.warn(
-					{ error: error instanceof Error ? error.message : String(error) },
-					"Health check tick failed unexpectedly",
-				);
-			});
+			if (this.healthCheckInFlight) {
+				logger.debug("Skipping health check tick: previous check still in flight");
+				return;
+			}
+			this.healthCheckInFlight = true;
+			this.checkHealth()
+				.catch((error) => {
+					logger.warn(
+						{ error: error instanceof Error ? error.message : String(error) },
+						"Health check tick failed unexpectedly",
+					);
+				})
+				.finally(() => {
+					this.healthCheckInFlight = false;
+				});
 		}, 30000);
 	}
 
