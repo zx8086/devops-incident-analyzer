@@ -67,23 +67,31 @@ tool_mapping:
   mcp_server: gitlab
   mcp_patterns:
     - "gitlab_*"
+  # SIO-1178: read-only map (annotations.read_only: true). Write tools
+  # (gitlab_create_issue, gitlab_create_workitem_note, gitlab_create_merge_request,
+  # gitlab_create_merge_request_note, gitlab_link_work_items,
+  # gitlab_attach_scan_profile) are deliberately unmapped -- the incident analyzer
+  # investigates, it does not mutate GitLab; ticket creation runs through the
+  # atlassian-backed create-ticket tool. Also deliberately unmapped:
+  # gitlab_get_mcp_server_version (diagnostic) and gitlab_get_work_item_types
+  # (creation-flow metadata).
   action_tool_map:
     issues:
-      - gitlab_create_issue
       - gitlab_get_issue
-      - gitlab_create_workitem_note
       - gitlab_get_workitem_notes
       - gitlab_get_saved_view_work_items
     merge_requests:
+      - gitlab_list_merge_requests
       - gitlab_get_merge_request
       - gitlab_get_merge_request_commits
       - gitlab_get_merge_request_diffs
       - gitlab_get_merge_request_pipelines
       - gitlab_get_merge_request_conflicts
-      - gitlab_create_merge_request
+      - gitlab_get_merge_request_notes
     pipelines:
       - gitlab_manage_pipeline
       - gitlab_get_pipeline_jobs
+      - gitlab_get_job_log
       - gitlab_pipeline_failures
     search:
       - gitlab_search
@@ -104,8 +112,8 @@ tool_mapping:
       - gitlab_orbit_query_graph
   action_descriptions:
     issues: when querying GitLab issues, comments, labels, or saved views in a project
-    merge_requests: when querying merge requests, their commits/diffs/pipelines/conflicts, or MR notes (the primary code-change correlation path)
-    pipelines: when checking CI/CD pipeline status, jobs, or recent pipeline failures for a project (or ranking pipeline failures group-wide via Orbit)
+    merge_requests: when listing or querying merge requests, their commits/diffs/pipelines/conflicts, or MR notes (gitlab_list_merge_requests is the primary code-change correlation path)
+    pipelines: when checking CI/CD pipeline status, jobs, or job logs, or recent pipeline failures for a project (or ranking pipeline failures group-wide via Orbit)
     search: when running global text or semantic search across GitLab projects (issues, MRs, commits, blobs), or listing recent deploy MRs group-wide via Orbit
     code_analysis: when reading file content, blame, commit diffs, commit listings, or repository tree (custom REST tools, not the proxied search)
     graph_analysis: >

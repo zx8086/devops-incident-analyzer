@@ -666,7 +666,10 @@ const MIN_FILTERED_TOOLS = 1;
 // names, not service.name. Each set is tiny, keeping the datasource under
 // MAX_TOOLS_PER_AGENT (25).
 const RESOLUTION_TOOLS_BY_DATASOURCE: Record<string, string[]> = {
-	gitlab: ["gitlab_search", "gitlab_graph_schema", "gitlab_blast_radius"],
+	// SIO-1178: gitlab_list_merge_requests is the sole input to extractGitLabFindings
+	// and the gitlab-deploy-vs-datastore-runtime rule -- force-include it so the
+	// flagship correlation path survives every action selection under the 25-tool cap.
+	gitlab: ["gitlab_search", "gitlab_graph_schema", "gitlab_blast_radius", "gitlab_list_merge_requests"],
 	// SIO-1087: include the index-check + key-lookup tools so the sub-agent can act on the
 	// [indexed]/[NO INDEX] tags the focus block injects -- verify an index before SELECT, and fall
 	// back to capella_get_document_by_id on an index-less collection instead of a doomed SELECT *.

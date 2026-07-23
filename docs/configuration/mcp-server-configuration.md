@@ -444,7 +444,7 @@ Unlike other MCP servers that implement all tools directly, the GitLab MCP serve
 
 1. **Proxy tools** -- At startup, the server connects to GitLab's native MCP endpoint (`{instanceUrl}/api/v4/mcp`), discovers available tools, and re-registers them locally with a `gitlab_` prefix. These tools forward requests through the proxy client.
 
-2. **Custom code-analysis tools** -- Five tools implemented as direct REST API calls to GitLab's API v4: `gitlab_get_file_content`, `gitlab_get_blame`, `gitlab_get_commit_diff`, `gitlab_list_commits`, `gitlab_get_repository_tree`.
+2. **Custom code-analysis tools** -- Six tools implemented as direct REST API calls to GitLab's API v4: `gitlab_get_file_content`, `gitlab_get_blame`, `gitlab_get_commit_diff`, `gitlab_list_commits`, `gitlab_get_repository_tree`, `gitlab_list_merge_requests`.
 
 Both categories are registered on the same `McpServer` instance and appear as a unified tool set to the agent.
 
@@ -459,7 +459,7 @@ The token requires the `api` scope. For self-hosted GitLab instances, set the in
 
 ### Deferred Retry for Embeddings
 
-The proxy layer includes special handling for GitLab's `semantic_code_search` tool. When a project's code embeddings haven't been indexed yet, GitLab returns an error indicating indexing is in progress. The proxy detects this pattern and retries with exponential backoff (10s, 20s, 40s) up to 3 times, giving the indexing process time to complete.
+The proxy layer includes special handling for GitLab's `semantic_code_search` tool. When a project's code embeddings haven't been indexed yet, GitLab returns an error indicating indexing is in progress. The proxy detects this pattern and retries once after 15 seconds, under a 120-second per-call timeout. If embeddings are still not ready (or the call times out), the tool returns guidance steering the agent to `gitlab_get_repository_tree` and `gitlab_get_file_content` instead. First-time indexing of a project typically takes 10-20 minutes.
 
 ---
 
