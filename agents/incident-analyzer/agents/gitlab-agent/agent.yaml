@@ -12,6 +12,15 @@ model:
 tools:
   - gitlab-api
 
+# SIO-1180: tool-usage/investigation procedures, refactored out of SOUL.md
+# (identity stays in SOUL; procedures are modular skills, mirroring how
+# gitlab-org/ai/skills encodes glab workflows). All three render into the
+# system prompt via the SIO-1014 catalog + body mechanism.
+skills:
+  - project-resolution
+  - code-search-selection
+  - code-change-correlation
+
 compliance:
   risk_tier: low
   data_governance:
