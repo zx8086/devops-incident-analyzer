@@ -4,6 +4,8 @@ A repeatable method for auditing any of this repo's MCP servers (elastic, kafka,
 
 Core principle: a tool that "works" in isolation can still be broken in three other places -- the query it builds, the agent's ability to select it, and the way its errors classify. Audit all four layers.
 
+Skill form: `.agents/skills/mcp-tool-audit/SKILL.md` carries this runbook as a condensed checklist in the [Agent Skills](https://agentskills.io) open format (the cross-tool discovery location used by gitlab-org/ai/skills), so GitLab Duo CLI, Zed, Claude Code, and OpenCode-class assistants can load it on demand. It is deliberately NOT listed in `agents/incident-analyzer/agent.yaml` `skills:` -- gitagent renders listed skills into the system prompt on every turn, and this is an operator workflow, not an incident-time skill.
+
 ## Phase 0: Inventory and ground truth
 
 1. Identify the tool families. Every server here has up to three: custom REST tools (implemented in-repo), proxied tools (forwarded from an upstream MCP endpoint, discovered at boot), and graph/analytics-backed tools (billed or index-dependent). Bugs cluster differently per family: custom tools break on API drift, proxied tools on upstream behavior changes, graph tools on query-grammar drift.
