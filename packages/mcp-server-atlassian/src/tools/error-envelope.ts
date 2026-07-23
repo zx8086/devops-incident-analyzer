@@ -25,7 +25,9 @@ const NETWORK_PATTERN = /ECONNREFUSED|ECONNRESET|socket hang up|fetch failed|net
 const BAD_INPUT_PATTERN = /-32602|input validation error|invalid arguments/i;
 // AtlassianUpstreamError samples carry the upstream HTTP status inside prose like
 // "Search failed: 403 Forbidden" -- extract it so 401/403/404/429/5xx map correctly.
-const HTTP_STATUS_PATTERN = /\b([45]\d\d)\b/;
+// CodeRabbit (PR #447): the lookbehind excludes 3-digit runs that are the tail of a
+// hyphenated issue key (e.g. "PROJ-404" must not classify as not-found).
+const HTTP_STATUS_PATTERN = /(?<![A-Z0-9]-)\b([45]\d\d)\b/;
 
 export function classifyErrorMessage(message: string): ToolErrorKind {
 	if (TIMEOUT_PATTERN.test(message)) return "timeout";

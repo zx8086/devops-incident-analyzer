@@ -53,6 +53,11 @@ describe("SIO-1183: toolErrorResult classification", () => {
 		["Upstream searchJiraIssuesUsingJql error: 500 Internal Server Error", "server-error"],
 		// no status, no recognizable shape: a rejected upstream call defaults to bad-input
 		["Upstream searchJiraIssuesUsingJql error: no content blocks", "bad-input"],
+		// CodeRabbit (PR #447): an embedded issue key is NOT an HTTP status
+		["Upstream searchJiraIssuesUsingJql error: issue PROJ-404 could not be indexed", "bad-input"],
+		["Upstream getJiraIssue error: DEVOPS-500 is archived", "bad-input"],
+		// a real status still wins even when an issue key is also present
+		["Upstream getJiraIssue error: 404 Not Found for PROJ-404", "not-found"],
 	])("AtlassianUpstreamError %s -> %s", (message, kind) => {
 		const result = toolErrorResult(new AtlassianUpstreamError("someTool", message));
 		expect(extractEnvelope(result.content[0]?.text ?? "")?.kind).toBe(kind);
