@@ -42,6 +42,21 @@ Requires: 1 approval from CODEOWNERS for stacks/<cluster>/
 - remove_source_branch: true
 - squash: true
 
+## Commit and title style
+
+House convention (SIO-1185; adapted from gitlab-org/ai/skills commit-messages --
+their own rule is that project convention wins, and this IS the convention):
+
+- Commit subject: `<cluster-or-deployment>: <lowercase verb phrase>` -- e.g.
+  `us-cld: upgrade Elasticsearch 9.4.3 -> 9.4.4`. One line, hard cap 72
+  characters (code-enforced by `formatCommitSubject`; interpolated lists get
+  truncated with `...`, so lead with the discriminating words).
+- MR title mirrors it as `[<cluster>] <descriptor>: <workflow>` and becomes the
+  squash-commit subject on merge -- keep it meaningful standalone and near the
+  72-character cap.
+- Bodies (MR description sections) explain WHY, not what -- the diff shows what
+  changed; the Why section carries the driver.
+
 ## Post
 
 Return `{mr_iid, mr_url}`. Caller posts to user and writes to `memory/runtime/context.md`.

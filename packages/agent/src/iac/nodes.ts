@@ -24,6 +24,7 @@ import {
 } from "../memory-backend.ts";
 import { appendDailyLog, recordKeyDecision } from "../memory-writer.ts";
 import { getAgentByName } from "../prompt-context.ts";
+import { formatCommitSubject } from "./commit-style.ts";
 // SIO-1072: the pure fleet-apply parsers/classifiers moved to fleet-apply-result.ts (dependency-free
 // leaf, mirroring SIO-1047's mr-live-state.ts extraction) so reconcile.ts's fleet-settlement pass
 // shares the SAME classification without importing nodes.ts (nodes.ts imports reconcile.ts -- a
@@ -31,6 +32,7 @@ import { getAgentByName } from "../prompt-context.ts";
 import {
 	classifyFleetApplyResult,
 	classifyPipelineFailure,
+	classifyPipelineFailureDetail,
 	isTerminalPipelineStatus,
 	parseDriftCheckResult,
 	parseFleetApplyOutcome,
@@ -3185,7 +3187,7 @@ async function proposeVersionUpgrade(_state: IacStateType, req: IacRequest): Pro
 		branch,
 		file_path: filePath,
 		content: updated.content,
-		commit_message: `${cluster}: upgrade Elasticsearch ${updated.previous ?? "?"} -> ${version}`,
+		commit_message: formatCommitSubject(`${cluster}: upgrade Elasticsearch ${updated.previous ?? "?"} -> ${version}`),
 	});
 	// SIO-921: a clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]")
 	// or non-2xx must NOT reach the review gate as a committed change.
@@ -3272,7 +3274,7 @@ async function proposeTierResize(_state: IacStateType, req: IacRequest): Promise
 		branch,
 		file_path: filePath,
 		content: updated.content,
-		commit_message: `${cluster}: resize ${tier} tier (${target})`,
+		commit_message: formatCommitSubject(`${cluster}: resize ${tier} tier (${target})`),
 	});
 	// SIO-921: a clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]")
 	// or non-2xx must NOT reach the review gate as a committed change.
@@ -3493,7 +3495,7 @@ async function commitOneIlmPolicy(
 		branch,
 		file_path: filePath,
 		content: updated.content,
-		commit_message: `${cluster}: ${policyCreated ? "create " : ""}ILM ${policy} (${fields})`,
+		commit_message: formatCommitSubject(`${cluster}: ${policyCreated ? "create " : ""}ILM ${policy} (${fields})`),
 		// SIO-899: gitlab_commit_file upserts (flips update<->create on a file-exists
 		// mismatch), but pass the right action up front to skip the wasted first attempt.
 		action: policyCreated ? "create" : "update",
@@ -3639,7 +3641,7 @@ async function commitBoundTemplate(
 		branch,
 		file_path: filePath,
 		content: updated.content,
-		commit_message: `${cluster}: bind ${bindTemplate} lifecycle -> ${policyName}`,
+		commit_message: formatCommitSubject(`${cluster}: bind ${bindTemplate} lifecycle -> ${policyName}`),
 		action: "update",
 	});
 	if (!isGitlabSuccess(commit)) {
@@ -3952,7 +3954,7 @@ async function proposeFleetIntegration(_state: IacStateType, req: IacRequest): P
 		branch,
 		file_path: filePath,
 		content: updated.content,
-		commit_message: `${cluster}: pin ${alias} integration to ${version}`,
+		commit_message: formatCommitSubject(`${cluster}: pin ${alias} integration to ${version}`),
 		action: "update",
 	});
 	// SIO-921: a clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]")
@@ -4069,8 +4071,9 @@ async function proposeSloChange(_state: IacStateType, req: IacRequest): Promise<
 		branch,
 		file_path: filePath,
 		content: updated.content,
-		commit_message:
-			`${cluster}: SLO ${slo} ${target !== undefined ? `target -> ${target}` : ""}${req.sloWindow ? ` window -> ${req.sloWindow}` : ""}`.trim(),
+		commit_message: formatCommitSubject(
+			`${cluster}: SLO ${slo} ${target !== undefined ? `target -> ${target}` : ""}${req.sloWindow ? ` window -> ${req.sloWindow}` : ""}`,
+		),
 		action: "update",
 	});
 	// SIO-921: a clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]")
@@ -4194,7 +4197,9 @@ async function proposeAlertingChange(_state: IacStateType, req: IacRequest): Pro
 		branch,
 		file_path: filePath,
 		content: updated.content,
-		commit_message: `${cluster}: alert ${rule}${req.alertThreshold !== undefined ? ` threshold -> ${req.alertThreshold}` : ""}${req.alertEnabled === false ? " (disabled)" : req.alertEnabled === true ? " (enabled)" : ""}`,
+		commit_message: formatCommitSubject(
+			`${cluster}: alert ${rule}${req.alertThreshold !== undefined ? ` threshold -> ${req.alertThreshold}` : ""}${req.alertEnabled === false ? " (disabled)" : req.alertEnabled === true ? " (enabled)" : ""}`,
+		),
 		action: "update",
 	});
 	// SIO-921: a clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]")
@@ -4331,7 +4336,9 @@ async function proposeDataviewChange(_state: IacStateType, req: IacRequest): Pro
 		branch,
 		file_path: filePath,
 		content: updated.content,
-		commit_message: `${cluster}: data view ${dataview}${runtimeField ? ` ${updated.runtimeFieldExisted ? "update" : "add"} runtime field ${runtimeField.name}` : ""}`,
+		commit_message: formatCommitSubject(
+			`${cluster}: data view ${dataview}${runtimeField ? ` ${updated.runtimeFieldExisted ? "update" : "add"} runtime field ${runtimeField.name}` : ""}`,
+		),
 		action: "update",
 	});
 	// SIO-921: a clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]")
@@ -4520,7 +4527,9 @@ async function proposeClusterDefaultChanges(_state: IacStateType, req: IacReques
 	const commit = await callTool("gitlab_commit_files", {
 		branch,
 		files: prepared.map((f) => ({ file_path: f.filePath, content: f.content, action: "update" })),
-		commit_message: `${cluster}: cluster-defaults ${entries.map((e) => e.templateName).join("/")} (${fields})`,
+		commit_message: formatCommitSubject(
+			`${cluster}: cluster-defaults ${entries.map((e) => e.templateName).join("/")} (${fields})`,
+		),
 	});
 	if (!isGitlabSuccess(commit)) {
 		return {
@@ -4623,7 +4632,9 @@ async function proposeClusterDefaultDelete(_state: IacStateType, req: IacRequest
 	const commit = await callTool("gitlab_commit_files", {
 		branch,
 		files: toDelete.map((file_path) => ({ file_path, action: "delete" })),
-		commit_message: `${cluster}: remove cluster-defaults override ${entries.map((e) => e.templateName).join("/")}`,
+		commit_message: formatCommitSubject(
+			`${cluster}: remove cluster-defaults override ${entries.map((e) => e.templateName).join("/")}`,
+		),
 	});
 	if (!isGitlabSuccess(commit)) {
 		return {
@@ -4724,7 +4735,7 @@ async function proposeIlmDelete(_state: IacStateType, req: IacRequest): Promise<
 	const commit = await callTool("gitlab_commit_files", {
 		branch,
 		files: toDelete.map((file_path) => ({ file_path, action: "delete" })),
-		commit_message: `${cluster}: remove ILM policy ${entries.map((e) => e.policyName).join("/")}`,
+		commit_message: formatCommitSubject(`${cluster}: remove ILM policy ${entries.map((e) => e.policyName).join("/")}`),
 	});
 	if (!isGitlabSuccess(commit)) {
 		return {
@@ -4819,7 +4830,9 @@ async function proposeClusterDefaultChange(_state: IacStateType, req: IacRequest
 		branch,
 		file_path: filePath,
 		content: updated.content,
-		commit_message: `${cluster}: cluster-defaults ${template} total_shards_per_node -> ${req.totalShardsPerNode}`,
+		commit_message: formatCommitSubject(
+			`${cluster}: cluster-defaults ${template} total_shards_per_node -> ${req.totalShardsPerNode}`,
+		),
 		action: "update",
 	});
 	// SIO-921: a clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]")
@@ -4947,7 +4960,7 @@ async function proposeClusterSettingsChange(_state: IacStateType, req: IacReques
 		branch,
 		file_path: filePath,
 		content: updated.content,
-		commit_message: `${cluster}: cluster-settings (${keys})`,
+		commit_message: formatCommitSubject(`${cluster}: cluster-settings (${keys})`),
 		action: "update",
 	});
 	if (!isGitlabSuccess(commit)) {
@@ -5048,7 +5061,7 @@ async function proposeSpaceChange(_state: IacStateType, req: IacRequest): Promis
 		branch,
 		file_path: filePath,
 		content: updated.content,
-		commit_message: `${cluster}: space ${space} update`,
+		commit_message: formatCommitSubject(`${cluster}: space ${space} update`),
 		action: "update",
 	});
 	// SIO-921: a clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]")
@@ -5182,7 +5195,7 @@ async function proposeSecurityRoleChange(_state: IacStateType, req: IacRequest):
 		branch,
 		file_path: filePath,
 		content: updated.content,
-		commit_message: `${cluster}: security role ${roleName} grant privileges`,
+		commit_message: formatCommitSubject(`${cluster}: security role ${roleName} grant privileges`),
 		action: "update",
 	});
 	// SIO-921: a clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]")
@@ -5773,7 +5786,7 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 		branch,
 		file_path: filePath,
 		content,
-		commit_message: `${cluster}: deployment topology edit`,
+		commit_message: formatCommitSubject(`${cluster}: deployment topology edit`),
 		action: "update",
 	});
 	// SIO-921: a clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]")
@@ -5994,7 +6007,7 @@ async function proposeDashboardChange(_state: IacStateType, req: IacRequest): Pr
 		file_path: filePath,
 		// Commit the ORIGINAL NDJSON string verbatim -- no re-serialization, no reformatting.
 		content: ndjson,
-		commit_message: `${cluster}: ${action} dashboard ${space}__${name}`,
+		commit_message: formatCommitSubject(`${cluster}: ${action} dashboard ${space}__${name}`),
 		action: action === "add" ? "create" : "update",
 	});
 	// A clean 2xx is the only success; a tool-error placeholder ("[<tool> error: ...]") or non-2xx
@@ -6080,7 +6093,7 @@ async function proposeIndexTemplateCreate(_state: IacStateType, req: IacRequest)
 			branch,
 			file_path: filePath,
 			content,
-			commit_message: `${cluster}: add index template ${e.name}`,
+			commit_message: formatCommitSubject(`${cluster}: add index template ${e.name}`),
 			action: "create",
 		});
 		if (!isGitlabSuccess(commit)) {
@@ -6242,7 +6255,7 @@ async function proposeIngestPipelineCreate(_state: IacStateType, req: IacRequest
 			branch,
 			file_path: filePath,
 			content,
-			commit_message: `${cluster}: add ingest pipeline ${e.name}`,
+			commit_message: formatCommitSubject(`${cluster}: add ingest pipeline ${e.name}`),
 			action: "create",
 		});
 		if (!isGitlabSuccess(commit)) {
@@ -6374,7 +6387,7 @@ async function proposeIngestPipelineEdit(_state: IacStateType, req: IacRequest):
 			branch,
 			file_path: filePath,
 			content,
-			commit_message: `${cluster}: edit ingest pipeline ${e.name}`,
+			commit_message: formatCommitSubject(`${cluster}: edit ingest pipeline ${e.name}`),
 			action: "update",
 		});
 		if (!isGitlabSuccess(commit)) {
@@ -7570,9 +7583,13 @@ export async function watchPipeline(state: IacStateType): Promise<Partial<IacSta
 	}
 
 	// SIO-878: on failure, read the plan job log and classify the cause (e.g. state-lock).
+	// SIO-1185: the detail form also yields the taxonomy class (flaky/lint/environment/real).
 	let failureHint = "";
+	let failureClass = "";
 	if (status === "failed" && pipelineId) {
-		failureHint = classifyPipelineFailure(await callTool("gitlab_get_pipeline_plan_log", { pipelineId }));
+		const classified = classifyPipelineFailureDetail(await callTool("gitlab_get_pipeline_plan_log", { pipelineId }));
+		failureHint = classified.hint;
+		failureClass = classified.failureClass;
 	}
 	return {
 		...withPipeline(status),
@@ -7585,6 +7602,7 @@ export async function watchPipeline(state: IacStateType): Promise<Partial<IacSta
 		planReport,
 		approvalState,
 		failureHint,
+		failureClass,
 	};
 }
 
@@ -8659,7 +8677,7 @@ async function openReconcileMr(
 		const built = await buildLiveReconcile(deployment, stack);
 		if ("blocked" in built) return { stack: stack.stack, direction, status: "blocked", note: built.blocked, branch };
 		commits = built.files.map((f) => ({ path: f.path, content: f.content, action: "update" as const }));
-		commitMessage = `${deployment}: reconcile ${stack.stack} to live (${built.summary})`;
+		commitMessage = formatCommitSubject(`${deployment}: reconcile ${stack.stack} to live (${built.summary})`);
 		title = `[${deployment}] reconcile ${stack.stack} to live`;
 		mrNote = built.note;
 	} else {
@@ -8671,7 +8689,7 @@ async function openReconcileMr(
 				action: "create",
 			},
 		];
-		commitMessage = `${deployment}: reconcile ${stack.stack} to declared config`;
+		commitMessage = formatCommitSubject(`${deployment}: reconcile ${stack.stack} to declared config`);
 		title = `[${deployment}] reconcile ${stack.stack} to declared config`;
 	}
 
@@ -9551,7 +9569,19 @@ function iacClosingLine(state: IacStateType): string {
 			: `The plan CI succeeded: the plan is clean and approved, so the change is staged and ready to merge. ${openNote} Merge in GitLab to trigger the apply. ${merge}`;
 	}
 	if (isTerminalPipelineStatus(state.pipelineStatus) && state.pipelineStatus === "failed") {
-		return `Pipeline failed — review the plan log and fix before merging. ${merge}`;
+		// SIO-1185: the next action depends on the failure class, so say it.
+		switch (state.failureClass) {
+			case "flaky":
+				return `Pipeline failed on a transient CI/infra error — retry the pipeline in GitLab; the change itself is likely fine. ${merge}`;
+			case "lint":
+				return `Pipeline failed on formatting/lint — run task fmt, push, and re-check. ${merge}`;
+			case "environment":
+				return `Pipeline failed on a shared CI/environment issue — not this change; an operator should fix CI, then re-run the plan. ${merge}`;
+			case "state-lock":
+				return `Pipeline failed on a Terraform state lock — wait for the holding pipeline (or force-unlock), then re-run the plan. ${merge}`;
+			default:
+				return `Pipeline failed — review the plan log and fix before merging. ${merge}`;
+		}
 	}
 	return `Review and apply manually in GitLab. ${merge}`;
 }
