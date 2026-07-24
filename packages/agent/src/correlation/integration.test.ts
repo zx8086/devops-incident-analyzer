@@ -32,7 +32,7 @@ mock.module("../prompt-context.ts", () => ({
 	getToolDefinitionForDataSource: () => undefined,
 }));
 
-import { enforceCorrelationsAggregate, enforceCorrelationsRouter } from "./enforce-node.ts";
+import { correlationCoverageSignals, enforceCorrelationsAggregate, enforceCorrelationsRouter } from "./enforce-node.ts";
 
 function makeDegradingState(finalAnswer: string, confidenceScore: number, overrides: Record<string, unknown> = {}) {
 	// A pending correlation for a rule that stays unsatisfied (no elastic findings
@@ -370,5 +370,28 @@ describe("SIO-1155 correlationFetch pending echo", () => {
 		const update = withPendingEcho(state as never, { dataSourceResults: [] });
 		expect(update.pendingCorrelations).toBe(state.pendingCorrelations);
 		expect(update.dataSourceResults).toEqual([]);
+	});
+});
+
+// SIO-1195 (CodeRabbit PR #456): pure signal builder, unit-tested with a synthetic
+// rules array because no production rule declares relevanceDataSources in v1.
+describe("correlationCoverageSignals", () => {
+	const degraded = [
+		{ ruleName: "rule-with-relevance", requiredAgent: "elastic-agent" as const, reason: "r", triggerContext: {} },
+		{ ruleName: "rule-without", requiredAgent: "elastic-agent" as const, reason: "r", triggerContext: {} },
+		{ ruleName: "rule-unknown", requiredAgent: "elastic-agent" as const, reason: "r", triggerContext: {} },
+	];
+	const rules = [
+		{ name: "rule-with-relevance", relevanceDataSources: ["aws", "elastic"] },
+		{ name: "rule-without" },
+	];
+
+	test("declared relevanceDataSources become the signal; missing/unknown are unattributable", () => {
+		const signals = correlationCoverageSignals(degraded, rules);
+		expect(signals).toEqual([
+			{ reason: "correlation-degraded", dataSources: ["aws", "elastic"] },
+			{ reason: "correlation-degraded", dataSources: null },
+			{ reason: "correlation-degraded", dataSources: null },
+		]);
 	});
 });

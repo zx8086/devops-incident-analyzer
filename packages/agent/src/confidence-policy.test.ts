@@ -312,3 +312,21 @@ describe("hardCapFor parity with deriveConfidenceCap (CodeRabbit PR #455 clamp)"
 		expect(hardCapFor(0)).toBe(0);
 	});
 });
+
+// CodeRabbit PR #456: several degraded correlation rules produce several signals
+// sharing one reason -- .every fail-closes when ANY of them overlaps.
+describe("decideConfidenceCap same-reason multi-signal (CodeRabbit PR #456)", () => {
+	test("two signals sharing the same reason, one disjoint one overlapping -> hard", () => {
+		const d = decideConfidenceCap({
+			capReasons: ["correlation-degraded"],
+			coverageSignals: [
+				{ reason: "correlation-degraded", dataSources: ["konnect"] },
+				{ reason: "correlation-degraded", dataSources: ["kafka"] },
+			],
+			rootCauseDataSources: ["kafka", "elastic"],
+			threshold: 0.6,
+		});
+		expect(d.mode).toBe("hard");
+		expect(d.cap).toBe(0.59);
+	});
+});
