@@ -474,9 +474,7 @@ describe("draftChange -- version-upgrade three-way live check (SIO-1196)", () =>
 			gitlab_get_merge_commit_apply_result: () =>
 				'{"applyStatus":"running","pipelineId":2698484619,"webUrl":"https://gitlab.com/x/-/jobs/15509964312","parentStatus":"running"}',
 			gitlab_get_commit_merge_requests: () =>
-				`[200] ${JSON.stringify([
-					{ iid: 346, state: "merged", merge_commit_sha: MERGE_SHA_1196 },
-				])}`,
+				`[200] ${JSON.stringify([{ iid: 346, state: "merged", merge_commit_sha: MERGE_SHA_1196 }])}`,
 		});
 		const result = await draftChange(vuAsState({ iacRequest: vuRequest, clusterState: vuClusterState("9.4.3") }));
 		expect(result.noopReason).toBeTruthy();
