@@ -146,6 +146,42 @@ export function applyJob(jobsJson: unknown): { id: number; status: string; webUr
 	return null;
 }
 
+// SIO-1196: the merge-commit pipeline to walk for the apply job. GitLab lists EVERY pipeline for
+// a sha (newest first); an api-source pipeline (a SYNTH_PUSH/SYNTH_DRIFT_CHECK trigger landing at
+// the same sha) can be NEWER than the real push pipeline whose child holds the apply job -- the
+// us-cld 9.4.4 incident: pipelines[0] picked the api no-op pipeline and reported "apply job not
+// started" against the wrong pipeline. Prefer source === "push"; fall back to the newest. (Pure.)
+export function pickMergeCommitPipeline(
+	pipelinesJson: unknown,
+): { id: number; status: string; webUrl?: string } | null {
+	if (!Array.isArray(pipelinesJson)) return null;
+	const parsed = pipelinesJson.flatMap((p) => {
+		const id = (p as { id?: unknown }).id;
+		if (typeof id !== "number") return [];
+		const status = (p as { status?: unknown }).status;
+		const source = (p as { source?: unknown }).source;
+		const webUrl = (p as { web_url?: unknown }).web_url;
+		return [
+			{
+				id,
+				status: typeof status === "string" ? status : "",
+				source: typeof source === "string" ? source : "",
+				...(typeof webUrl === "string" ? { webUrl } : {}),
+			},
+		];
+	});
+	const chosen = parsed.find((p) => p.source === "push") ?? parsed[0];
+	if (!chosen) return null;
+	const { source: _source, ...rest } = chosen;
+	return rest;
+}
+
+// SIO-1196: GitLab's /pipelines?sha= filter matches only the FULL 40-char sha; a short sha
+// silently returns []. (Pure.)
+export function isFullSha(sha: string): boolean {
+	return /^[0-9a-f]{40}$/i.test(sha);
+}
+
 // SIO-904: detect a Terraform state-lock anywhere in the FULL job trace. Terraform prints the
 // lock-info block + retries after the error, so the signature can sit far from the trace tail --
 // grep the whole body here (not the returned tail) so the agent never misclassifies a recoverable
@@ -390,6 +426,20 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		return res.json();
 	}
 
+	// SIO-1196: the pipelines?sha= filter matches only the full 40-char sha (a short sha silently
+	// returns []); resolve short shas via the commits API, degrading to the input on any error.
+	async function resolveFullSha(sha: string): Promise<string> {
+		if (isFullSha(sha)) return sha;
+		try {
+			const commit = (await glJson(`/projects/${project}/repository/commits/${encodeURIComponent(sha)}`)) as {
+				id?: unknown;
+			};
+			return typeof commit.id === "string" ? commit.id : sha;
+		} catch {
+			return sha;
+		}
+	}
+
 	server.tool(
 		"gitlab_get_pipeline",
 		"Read a single pipeline's status (read-only GitOps status). Use the id from gitlab_get_merge_request_pipelines.",
@@ -406,14 +456,17 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 	server.tool(
 		"gitlab_list_pipelines_for_sha",
 		"List CI pipelines for a commit sha on a ref (default main). Used to find the post-merge terraform " +
-			"APPLY pipeline (which runs on main, not on the MR) via the MR's merge_commit_sha. Read-only; newest first.",
+			"APPLY pipeline (which runs on main, not on the MR) via the MR's merge_commit_sha. Short shas are " +
+			"resolved to the full 40-char sha (the GitLab filter matches full shas only). Read-only; newest first; " +
+			"an api-source pipeline at the same sha is NOT the apply pipeline (prefer source=push).",
 		{
-			sha: z.string().describe("Commit sha (the MR's merge_commit_sha after merge)."),
+			sha: z.string().describe("Commit sha (the MR's merge_commit_sha after merge; short shas are resolved)."),
 			ref: z.string().optional().describe("Branch ref to scope to (default 'main')."),
 		},
 		async ({ sha, ref }) => {
 			const branch = ref ?? "main";
-			const qs = `sha=${encodeURIComponent(sha)}&ref=${encodeURIComponent(branch)}&order_by=id&sort=desc`;
+			const fullSha = await resolveFullSha(sha);
+			const qs = `sha=${encodeURIComponent(fullSha)}&ref=${encodeURIComponent(branch)}&order_by=id&sort=desc`;
 			return text(await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/pipelines?${qs}`));
 		},
 	);
@@ -430,27 +483,28 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		"gitlab_get_merge_commit_apply_result",
 		"Resolve the REAL post-merge terraform APPLY outcome for a merge-commit sha: walk parent pipeline " +
 			"-> child -> the apply:* job and return that JOB's status (success=live, running=applying, failed=not " +
-			"live). Use the parent pipeline status here is NOT reliable. Read-only. Returns JSON.",
+			"live, manual=waiting for an operator to start it). Prefers the push-source pipeline (an api-source " +
+			"pipeline at the same sha is a synthetics trigger, not the apply). Short shas are resolved to the " +
+			"full sha. The parent pipeline status alone is NOT reliable. Read-only. Returns JSON.",
 		{
-			sha: z.string().describe("The MR's merge_commit_sha (after merge)."),
+			sha: z.string().describe("The MR's merge_commit_sha (after merge; short shas are resolved)."),
 			ref: z.string().optional().describe("Branch ref to scope to (default 'main')."),
 		},
 		async ({ sha, ref }) => {
 			const branch = ref ?? "main";
 			try {
-				const qs = `sha=${encodeURIComponent(sha)}&ref=${encodeURIComponent(branch)}&order_by=id&sort=desc`;
-				const pipelines = (await glJson(`/projects/${project}/pipelines?${qs}`)) as Array<{
-					id?: unknown;
-					status?: unknown;
-					web_url?: unknown;
-				}>;
-				const parent = Array.isArray(pipelines) ? pipelines[0] : undefined;
-				if (!parent || typeof parent.id !== "number") {
+				const fullSha = await resolveFullSha(sha);
+				const qs = `sha=${encodeURIComponent(fullSha)}&ref=${encodeURIComponent(branch)}&order_by=id&sort=desc`;
+				const pipelines = await glJson(`/projects/${project}/pipelines?${qs}`);
+				// SIO-1196: prefer the push pipeline -- a newer api-source pipeline (synthetics trigger
+				// at the same sha) does not carry the apply job and must not shadow the real one.
+				const parent = pickMergeCommitPipeline(pipelines);
+				if (!parent) {
 					return text(JSON.stringify({ applyStatus: "", reason: "no merge-commit pipeline yet" }));
 				}
 				const parentId = parent.id;
-				const parentStatus = typeof parent.status === "string" ? parent.status : "";
-				const parentUrl = typeof parent.web_url === "string" ? parent.web_url : undefined;
+				const parentStatus = parent.status;
+				const parentUrl = parent.webUrl;
 				const childId = childPipelineId(await glJson(`/projects/${project}/pipelines/${parentId}/bridges`));
 				if (childId === null) {
 					// Parent exists but no child yet -- the apply job hasn't been triggered. NOT success.
@@ -494,6 +548,23 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 				);
 			}
 		},
+	);
+
+	// SIO-1196: MR attribution for the version-drift precheck -- given a file's last_commit_id,
+	// name the merged MR that landed it ("MR !346 merged <date> but its apply never ran").
+	server.tool(
+		"gitlab_get_commit_merge_requests",
+		"List the merge requests associated with a commit sha (GET /repository/commits/:sha/merge_requests). " +
+			"Used to attribute a merged-but-unapplied change to its MR (iid, state, merged_at, web_url). Read-only.",
+		{ sha: z.string().describe("Commit sha (e.g. the file's last_commit_id from the files API).") },
+		async ({ sha }) =>
+			text(
+				await gitlabFetch(
+					gitlabBaseUrl,
+					token,
+					`/projects/${project}/repository/commits/${encodeURIComponent(sha)}/merge_requests`,
+				),
+			),
 	);
 
 	server.tool(

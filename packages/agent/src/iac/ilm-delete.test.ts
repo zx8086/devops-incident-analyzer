@@ -128,6 +128,7 @@ describe("draftChange -> proposeIlmDelete", () => {
 		};
 		const result = await draftChange(asIacState(state));
 		expect(result.noopReason).toContain("already absent");
+		expect(String(result.messages?.[0]?.content ?? "")).toContain("REPO file only"); // SIO-1196
 		expect(result.blockedReason).toBeFalsy();
 		expect(commits).toBe(0);
 	});

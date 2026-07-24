@@ -17,6 +17,7 @@ repository:
   default_branch: main
 
 skills:
+  - id: version-upgrade
   - id: resize-tier
   - id: add-ilm-policy
   - id: pin-fleet-integration

@@ -15,6 +15,7 @@ describe("loadAgent(elastic-iac) — GAP dialect", () => {
 		expect(agent.manifest.name).toBe("pvh-elastic-iac-agent");
 		// skills/tools given as [{ id }] normalize to string[]
 		expect(agent.manifest.skills).toEqual([
+			"version-upgrade",
 			"resize-tier",
 			"add-ilm-policy",
 			"pin-fleet-integration",

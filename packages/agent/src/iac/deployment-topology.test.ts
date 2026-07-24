@@ -1954,3 +1954,64 @@ function mockTools(handlers: Record<string, (args: Record<string, unknown>) => s
 		getConnectedServers: () => ["elastic-iac-mcp"],
 	}));
 }
+
+// SIO-1196 Tier 2: the deployment-JSON proposers surface a non-blocking live-parity advisory on
+// the review card when the live deployment disagrees with the repo file.
+describe("draftChange -- deployment-JSON live-parity advisory (SIO-1196)", () => {
+	const fileOk = `[200] ${JSON.stringify({ content: Buffer.from(DEPLOYMENT).toString("base64"), encoding: "base64" })}`;
+	const liveRaw = (version: string, hotSizeMb: number, hotZones: number): string =>
+		`[200] ${JSON.stringify({
+			resources: {
+				elasticsearch: [
+					{
+						info: {
+							version,
+							plan_info: {
+								current: {
+									plan: {
+										cluster_topology: [
+											{ id: "hot_content", size: { value: hotSizeMb, resource: "memory" }, zone_count: hotZones },
+										],
+									},
+								},
+							},
+						},
+					},
+				],
+			},
+		})}`;
+	const clusterState = (raw: string) => ({ cluster: "eu-b2b", summary: "", alertsManaged: false, raw });
+
+	test("tier-resize with a differing live topology sets the liveParity advisory", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		mockTools({
+			gitlab_get_file_content: () => fileOk,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => "[201] {}",
+		});
+		const state = {
+			iacRequest: { workflow: "tier-resize" as const, isProd: false, cluster: "eu-b2b", tier: "hot", newSizeGb: 8 },
+			clusterState: clusterState(liveRaw("8.15.0", 32768, 3)),
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.precheckPassed).toBe(true);
+		expect(result.liveParity).toContain("hot");
+		expect(result.liveParity).toContain("32g");
+	});
+
+	test("topology-edit with live in sync leaves liveParity unset", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		mockTools({
+			gitlab_get_file_content: () => fileOk,
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => "[201] {}",
+		});
+		const state = {
+			iacRequest: { workflow: "topology-edit" as const, isProd: false, cluster: "eu-b2b", autoscaleEnabled: true },
+			clusterState: clusterState(liveRaw("8.15.0", 65536, 2)),
+		};
+		const result = await draftChange(asIacState(state));
+		expect(result.precheckPassed).toBe(true);
+		expect(result.liveParity ?? "").toBe("");
+	});
+});

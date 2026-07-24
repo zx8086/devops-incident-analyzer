@@ -822,7 +822,7 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 // is the only node that clears blockedReason). So a prior turn's blockedReason/noopReason would
 // short-circuit the next unrelated follow-up. Reset both at turn start (bootstrap runs first on every
 // turn) so each turn re-derives its own terminal state. (guardNode still clears blockedReason mid-lane.)
-const TURN_START_RESET = { blockedReason: "", noopReason: "" } as const;
+const TURN_START_RESET = { blockedReason: "", noopReason: "", versionDrift: null } as const;
 
 // (context the turn's response weaves in), once per session, best-effort, never blocking.
 export async function bootstrapIac(state: IacStateType, config?: RunnableConfig): Promise<Partial<IacStateType>> {
@@ -3139,7 +3139,7 @@ async function isStackInstanceMissing(cluster: string, stack: string): Promise<b
 
 // version-upgrade: propose the change as a GitLab config edit + branch + commit via
 // the API (no clone, no terraform, no local git). CI computes the plan on the MR.
-async function proposeVersionUpgrade(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+async function proposeVersionUpgrade(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
 	const cluster = req.cluster ?? "";
 	const version = req.version ?? "";
 	const filePath = deploymentJsonPath(deploymentJsonTemplate(), cluster);
@@ -3170,18 +3170,108 @@ async function proposeVersionUpgrade(_state: IacStateType, req: IacRequest): Pro
 		};
 	}
 
-	// No-op guard: already at the target version, so an MR would have an empty diff.
-	// Surface immediate feedback and open nothing (no branch, no commit, no review gate).
+	// SIO-1196: the no-op decision must be grounded in the LIVE deployment, not just the repo
+	// file -- a merged-but-never-applied MR leaves the repo at the target while live lags (the
+	// us-cld 9.4.4 incident). Three-way decision on repo==target: verified no-op / repo-only
+	// caveat / drift (routed into the drift-reconcile lane by routeAfterDraft).
+	const liveDetail = await readLiveDeploymentDetail(state, cluster);
+	const parity = computeVersionLiveParity(liveDetail, version);
+
 	if (updated.previous === version) {
+		if (parity.kind === "match") {
+			return {
+				noopReason: `${cluster} is already on ${version} (repo and live); no change needed.`,
+				messages: [
+					new AIMessage(
+						`No change needed: ${cluster} is already on Elasticsearch ${version} in the GitOps repo, and I ` +
+							`verified the LIVE deployment is running ${version}. There is nothing to merge.`,
+					),
+				],
+			};
+		}
+		if (parity.kind === "unknown") {
+			return {
+				noopReason: `${cluster} already declares ${version} in the repo (live unverified); no change needed.`,
+				messages: [
+					new AIMessage(
+						`No change needed in the repo: ${cluster} already declares Elasticsearch ${version} in the GitOps ` +
+							`file. NOTE: I could NOT read the live deployment to verify it actually runs ${version} -- this ` +
+							`confirms the REPO file only. If you suspect the upgrade never applied, ask me to ` +
+							`"check ${cluster} for drift".`,
+					),
+				],
+			};
+		}
+		// parity.kind === "drift": the repo says <target> but live runs something else. Attribute
+		// the unapplied change (which MR, what happened to its apply job) before deciding. The MR
+		// lookup comes FIRST: the file's last_commit_id is the squash/branch commit, but pipelines
+		// (and the apply job) run on the MERGE commit -- reading the apply with the squash sha
+		// returns "no pipeline yet" even when a manual apply is sitting there (live-verified).
+		const lastCommit = extractLastCommitId(raw);
+		const mr = lastCommit
+			? parseCommitMergeRequests(await callTool("gitlab_get_commit_merge_requests", { sha: lastCommit }))
+			: null;
+		const applySha = mr?.mergeCommitSha ?? lastCommit;
+		const apply = applySha
+			? parseApplyResult(await callTool("gitlab_get_merge_commit_apply_result", { sha: applySha }))
+			: null;
+		const applyStatus = apply?.applyStatus ?? "";
+		if (applyStatus === "running" || applyStatus === "pending" || applyStatus === "created") {
+			return {
+				noopReason: `${cluster} upgrade to ${version} is merged and its apply is ${applyStatus}.`,
+				messages: [
+					new AIMessage(
+						`No new change needed: the upgrade of ${cluster} to ${version} is already merged and its apply ` +
+							`job is currently RUNNING -- live (${parity.liveVersion}) should reach ${version} when it ` +
+							`completes. Ask me "did the pipeline pass?" to re-check.`,
+					),
+				],
+			};
+		}
+		const attribution = buildVersionDriftAttribution(apply, mr);
+		const driftStack = buildVersionDriftStack({
+			cluster,
+			repoVersion: updated.previous,
+			liveVersion: parity.liveVersion,
+			configPath: filePath,
+			attribution,
+		});
 		return {
-			noopReason: `${cluster} is already on ${version}; no change needed.`,
+			// teardownIac renders formatDriftSummary for intent "drift" -- the turn closes like an
+			// operator-initiated drift audit (chip, summary), not like a gitops proposal.
+			intent: "drift",
+			versionDrift: {
+				cluster,
+				targetVersion: version,
+				liveVersion: parity.liveVersion,
+				...(mr ? { mrRef: `!${mr.iid}` } : {}),
+				...(apply?.webUrl ? { applyJobUrl: apply.webUrl } : {}),
+			},
+			targetDeployment: cluster,
+			driftReport: { deployment: cluster, stacks: [driftStack], generatedAt: new Date().toISOString() },
+			driftIndex: 0,
+			reconcileResults: [],
 			messages: [
 				new AIMessage(
-					`No change needed: ${cluster} is already on Elasticsearch ${version}, so there is nothing to merge.`,
+					`Version drift detected on ${cluster}: the GitOps repo already declares Elasticsearch ${version}, ` +
+						`but the LIVE deployment is still running ${parity.liveVersion}. ${attribution} No new MR is ` +
+						`needed -- the change is merged but was never applied. I am routing this into the ` +
+						`drift-reconcile flow; nothing will be applied without your explicit approval at the gate.`,
 				),
 			],
 		};
 	}
+
+	// repo != target: normal propose path. If live also disagrees with the repo BASELINE, the
+	// previous change may never have applied -- surface a non-blocking advisory on the review card.
+	const baselineParity = computeVersionLiveParity(liveDetail, updated.previous ?? "");
+	const liveParityAdvisory =
+		baselineParity.kind === "drift"
+			? `Live-version check: the live deployment runs ${baselineParity.liveVersion} but the repo file says ` +
+				`${updated.previous ?? "?"} -- the previous repo change may never have applied (an earlier merge's ` +
+				`apply job may be pending). Merging this MR moves live from ${baselineParity.liveVersion} directly ` +
+				`to ${version} at apply; confirm that jump is intended.`
+			: "";
 
 	await callTool("gitlab_create_branch", { branch, ref: "main" });
 	const commit = await callTool("gitlab_commit_file", {
@@ -3208,12 +3298,13 @@ async function proposeVersionUpgrade(_state: IacStateType, req: IacRequest): Pro
 		previousVersion: updated.previous ?? "",
 		proposedDiff: diff,
 		precheckPassed: committed,
+		...(liveParityAdvisory ? { liveParity: liveParityAdvisory } : {}),
 	};
 }
 
 // SIO-879: tier-resize via the GitOps proposer -- edit elasticsearch.<tier>.size/max_size
 // in the deployment JSON and open an MR via the API. Mirrors proposeVersionUpgrade.
-async function proposeTierResize(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+async function proposeTierResize(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
 	const cluster = req.cluster ?? "";
 	const tier = req.tier ?? "";
 	const filePath = deploymentJsonPath(deploymentJsonTemplate(), cluster);
@@ -3258,11 +3349,19 @@ async function proposeTierResize(_state: IacStateType, req: IacRequest): Promise
 			noopReason: `${tier} tier already has the requested sizing; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: the ${tier} tier already has the requested sizing, so there is nothing to merge.`,
+					`No change needed: the ${tier} tier already has the requested sizing, so there is nothing to merge.${repoOnlyCaveat(cluster)}`,
 				),
 			],
 		};
 	}
+
+	// SIO-1196: non-blocking live-parity advisory for the review card (live deployment vs the
+	// repo file this edit is based on -- a mismatch means an earlier change may never have applied).
+	const tierLiveParity = renderDeploymentJsonLiveParity(
+		extractFileContent(raw),
+		await readLiveDeploymentDetail(state, cluster),
+		{ tier, includeVersion: true },
+	);
 
 	await callTool("gitlab_create_branch", { branch, ref: "main" });
 	const target = [
@@ -3298,6 +3397,7 @@ async function proposeTierResize(_state: IacStateType, req: IacRequest): Promise
 		proposedFiles: [filePath],
 		proposedDiff: diffLines.join("\n"),
 		precheckPassed: committed,
+		...(tierLiveParity ? { liveParity: tierLiveParity } : {}),
 	};
 }
 
@@ -3459,7 +3559,7 @@ async function commitOneIlmPolicy(
 				ok: false,
 				noop: true, // SIO-933: distinguishes "nothing to change" from a real failure (bind-only path).
 				blockedReason: `Policy '${policy}' on '${cluster}' already has the requested phase values; no change needed.`,
-				message: `No change needed: policy '${policy}' on '${cluster}' already has the requested phase values, so there is nothing to merge.`,
+				message: `No change needed: policy '${policy}' on '${cluster}' already has the requested phase values, so there is nothing to merge.${repoOnlyCaveat(cluster)}`,
 			};
 		}
 	}
@@ -3759,7 +3859,7 @@ export async function proposeIlmChange(state: IacStateType, req: IacRequest): Pr
 			noopReason: `Policy '${policy}' on '${cluster}' already has the requested values; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: '${policy}' on '${cluster}' is already as requested, so there is nothing to merge.`,
+					`No change needed: '${policy}' on '${cluster}' is already as requested, so there is nothing to merge.${repoOnlyCaveat(cluster)}`,
 				),
 			],
 		};
@@ -3944,7 +4044,7 @@ async function proposeFleetIntegration(_state: IacStateType, req: IacRequest): P
 			noopReason: `Integration '${alias}' on '${cluster}' is already at ${version}; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: integration '${alias}' on '${cluster}' is already pinned to ${version}, so there is nothing to merge.`,
+					`No change needed: integration '${alias}' on '${cluster}' is already pinned to ${version}, so there is nothing to merge.${repoOnlyCaveat(cluster)}`,
 				),
 			],
 		};
@@ -4061,7 +4161,7 @@ async function proposeSloChange(_state: IacStateType, req: IacRequest): Promise<
 			noopReason: `SLO '${slo}' on '${cluster}' already has the requested values; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: SLO '${slo}' on '${cluster}' already has the requested values, so there is nothing to merge.`,
+					`No change needed: SLO '${slo}' on '${cluster}' already has the requested values, so there is nothing to merge.${repoOnlyCaveat(cluster)}`,
 				),
 			],
 		};
@@ -4187,7 +4287,7 @@ async function proposeAlertingChange(_state: IacStateType, req: IacRequest): Pro
 			noopReason: `Alert rule '${rule}' on '${cluster}' already has the requested values; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: alert rule '${rule}' on '${cluster}' already has the requested values, so there is nothing to merge.`,
+					`No change needed: alert rule '${rule}' on '${cluster}' already has the requested values, so there is nothing to merge.${repoOnlyCaveat(cluster)}`,
 				),
 			],
 		};
@@ -4326,7 +4426,7 @@ async function proposeDataviewChange(_state: IacStateType, req: IacRequest): Pro
 			noopReason: `Data view '${dataview}' on '${cluster}' already has the requested values; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: data view '${dataview}' on '${cluster}' already has the requested values, so there is nothing to merge.`,
+					`No change needed: data view '${dataview}' on '${cluster}' already has the requested values, so there is nothing to merge.${repoOnlyCaveat(cluster)}`,
 				),
 			],
 		};
@@ -4437,7 +4537,7 @@ async function prepareOneClusterDefaultFile(
 			ok: false,
 			noop: true,
 			blockedReason: `Template '${template}' on '${cluster}' already has the requested settings; no change needed.`,
-			message: `No change needed: template '${template}' on '${cluster}' already has the requested settings, so there is nothing to merge.`,
+			message: `No change needed: template '${template}' on '${cluster}' already has the requested settings, so there is nothing to merge.${repoOnlyCaveat(cluster)}`,
 		};
 	}
 
@@ -4518,7 +4618,7 @@ async function proposeClusterDefaultChanges(_state: IacStateType, req: IacReques
 			noopReason: `Cluster-defaults templates on '${cluster}' already have the requested settings; no change needed (${skippedNoops.join(", ")}).`,
 			messages: [
 				new AIMessage(
-					`No change needed: the requested cluster-defaults templates on '${cluster}' already have the requested settings, so there is nothing to merge.`,
+					`No change needed: the requested cluster-defaults templates on '${cluster}' already have the requested settings, so there is nothing to merge.${repoOnlyCaveat(cluster)}`,
 				),
 			],
 		};
@@ -4619,7 +4719,7 @@ async function proposeClusterDefaultDelete(_state: IacStateType, req: IacRequest
 			noopReason: `Cluster-defaults override file(s) on '${cluster}' are already absent; nothing to delete (${skippedAbsent.join(", ")}).`,
 			messages: [
 				new AIMessage(
-					`No change needed: the requested cluster-defaults override file(s) on '${cluster}' are already absent, so there is nothing to merge.`,
+					`No change needed: the requested cluster-defaults override file(s) on '${cluster}' are already absent, so there is nothing to merge.${repoOnlyCaveat(cluster)}`,
 				),
 			],
 		};
@@ -4722,7 +4822,7 @@ async function proposeIlmDelete(_state: IacStateType, req: IacRequest): Promise<
 			noopReason: `ILM policy file(s) on '${cluster}' are already absent; nothing to delete (${skippedAbsent.join(", ")}).`,
 			messages: [
 				new AIMessage(
-					`No change needed: the requested ILM policy file(s) on '${cluster}' are already absent, so there is nothing to merge.`,
+					`No change needed: the requested ILM policy file(s) on '${cluster}' are already absent, so there is nothing to merge.${repoOnlyCaveat(cluster)}`,
 				),
 			],
 		};
@@ -4820,7 +4920,7 @@ async function proposeClusterDefaultChange(_state: IacStateType, req: IacRequest
 			noopReason: `Template '${template}' on '${cluster}' already has total_shards_per_node=${req.totalShardsPerNode}; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: template '${template}' on '${cluster}' already has total_shards_per_node=${req.totalShardsPerNode}, so there is nothing to merge.`,
+					`No change needed: template '${template}' on '${cluster}' already has total_shards_per_node=${req.totalShardsPerNode}, so there is nothing to merge.${repoOnlyCaveat(cluster)}`,
 				),
 			],
 		};
@@ -4940,7 +5040,7 @@ async function proposeClusterSettingsChange(_state: IacStateType, req: IacReques
 			noopReason: `Cluster settings on '${cluster}' already match the request; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: the cluster settings on '${cluster}' already match the request (the keys to set already have those values, and any keys to remove are already absent), so there is nothing to merge.`,
+					`No change needed: the cluster settings on '${cluster}' already match the request (the keys to set already have those values, and any keys to remove are already absent), so there is nothing to merge.${repoOnlyCaveat(cluster)}`,
 				),
 			],
 		};
@@ -5051,7 +5151,7 @@ async function proposeSpaceChange(_state: IacStateType, req: IacRequest): Promis
 			noopReason: `Space '${space}' on '${cluster}' already has the requested values; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: space '${space}' on '${cluster}' already has the requested values, so there is nothing to merge.`,
+					`No change needed: space '${space}' on '${cluster}' already has the requested values, so there is nothing to merge.${repoOnlyCaveat(cluster)}`,
 				),
 			],
 		};
@@ -5185,7 +5285,7 @@ async function proposeSecurityRoleChange(_state: IacStateType, req: IacRequest):
 			noopReason: `Role '${roleName}' on '${cluster}' already has the requested privileges; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: role '${roleName}' on '${cluster}' already has the requested privileges, so there is nothing to merge.`,
+					`No change needed: role '${roleName}' on '${cluster}' already has the requested privileges, so there is nothing to merge.${repoOnlyCaveat(cluster)}`,
 				),
 			],
 		};
@@ -5245,7 +5345,7 @@ async function proposeSecurityRoleChange(_state: IacStateType, req: IacRequest):
 // version-upgrade / tier-resize). Mirrors proposeVersionUpgrade (same _deployments file path) but
 // edits topology scalars. ALWAYS HIGH risk: the deployments stack is one shared state across all 10
 // clusters and applies can take hours. Never proposes a deployment delete.
-async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
+async function proposeTopologyChange(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
 	const cluster = req.cluster ?? "";
 
 	// SIO-1073: any observability set field (id, name, ref_id, logs, metrics) counts as a change.
@@ -5776,7 +5876,7 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 			noopReason: `Deployment '${cluster}' already has the requested topology values; no change needed.`,
 			messages: [
 				new AIMessage(
-					`No change needed: deployment '${cluster}' already has the requested topology values, so there is nothing to merge.`,
+					`No change needed: deployment '${cluster}' already has the requested topology values, so there is nothing to merge.${repoOnlyCaveat(cluster)}`,
 				),
 			],
 		};
@@ -5810,12 +5910,20 @@ async function proposeTopologyChange(_state: IacStateType, req: IacRequest): Pro
 	];
 	const diffWithDrift =
 		trailingNotes.length > 0 ? `${diffLines.join("\n")}\n\n${trailingNotes.join("\n\n")}` : diffLines.join("\n");
+	// SIO-1196: non-blocking live-parity advisory for the review card (live deployment vs the
+	// repo file this edit is based on -- a mismatch means an earlier change may never have applied).
+	const topologyLiveParity = renderDeploymentJsonLiveParity(
+		extractFileContent(raw),
+		await readLiveDeploymentDetail(state, cluster),
+		{ ...(req.topologyTier ? { tier: req.topologyTier } : {}), includeVersion: true },
+	);
 	return {
 		branch,
 		proposedFilePath: filePath,
 		proposedFiles: [filePath],
 		proposedDiff: diffWithDrift,
 		precheckPassed: committed,
+		...(topologyLiveParity ? { liveParity: topologyLiveParity } : {}),
 	};
 }
 
@@ -6116,7 +6224,7 @@ async function proposeIndexTemplateCreate(_state: IacStateType, req: IacRequest)
 			noopReason: `Index template(s) already exist on '${cluster}'; nothing to create (${skipped.join(", ")}).`,
 			messages: [
 				new AIMessage(
-					`No change needed: the requested index template file(s) already exist on '${cluster}', so there is nothing to merge.`,
+					`No change needed: the requested index template file(s) already exist on '${cluster}', so there is nothing to merge.${repoOnlyCaveat(cluster)}`,
 				),
 			],
 		};
@@ -6278,7 +6386,7 @@ async function proposeIngestPipelineCreate(_state: IacStateType, req: IacRequest
 			noopReason: `Ingest pipeline(s) already exist on '${cluster}'; nothing to create (${skipped.join(", ")}).`,
 			messages: [
 				new AIMessage(
-					`No change needed: the requested ingest-pipeline file(s) already exist on '${cluster}', so there is nothing to merge.`,
+					`No change needed: the requested ingest-pipeline file(s) already exist on '${cluster}', so there is nothing to merge.${repoOnlyCaveat(cluster)}`,
 				),
 			],
 		};
@@ -8024,6 +8132,164 @@ export function extractLiveVersion(deploymentDetail: string): string {
 	return m?.[1] ?? "";
 }
 
+// ---------- SIO-1196: version-upgrade live-vs-repo drift pre-check ----------
+// The us-cld 9.4.4 incident: the repo file said 9.4.4 (MR merged) while live still ran 9.4.3
+// (the manual CI apply was never started), and the proposer's repo-only no-op guard answered
+// "No change needed". These helpers ground the no-op decision in the LIVE deployment.
+
+export type VersionLiveParity = { kind: "match" } | { kind: "drift"; liveVersion: string } | { kind: "unknown" };
+
+// Live-vs-target version comparison from an elastic_cloud_get_deployment body. "unknown" when
+// the live detail is missing/unreadable -- callers degrade to the repo-only path with a caveat,
+// never block on it. (Pure; unit-tested.)
+export function computeVersionLiveParity(liveDetail: string | undefined, targetVersion: string): VersionLiveParity {
+	if (!liveDetail) return { kind: "unknown" };
+	const live = extractLiveVersion(liveDetail);
+	if (!live) return { kind: "unknown" };
+	return live === targetVersion ? { kind: "match" } : { kind: "drift", liveVersion: live };
+}
+
+// The GitLab files API's last_commit_id from a gitlab_get_file_content "[2xx] {json}" body --
+// the FULL sha of the commit that last touched the file (sidesteps the short-sha pipelines-API
+// pitfall; feeds the applied-check). (Pure; unit-tested.)
+export function extractLastCommitId(toolResult: string): string {
+	const jsonStart = toolResult.indexOf("{");
+	if (jsonStart < 0) return "";
+	try {
+		const parsed = JSON.parse(toolResult.slice(jsonStart)) as { last_commit_id?: unknown };
+		return typeof parsed.last_commit_id === "string" ? parsed.last_commit_id : "";
+	} catch {
+		return "";
+	}
+}
+
+// The merged MR from a gitlab_get_commit_merge_requests "[2xx] [...]" body; null when none of
+// the associated MRs merged or the body is unreadable. (Pure; unit-tested.)
+export function parseCommitMergeRequests(
+	toolResult: string,
+): { iid: number; mergedAt?: string; webUrl?: string; title?: string; mergeCommitSha?: string } | null {
+	const body = toolResult.replace(/^\[[^\]]*\]\s*/, "");
+	try {
+		const arr: unknown = JSON.parse(body);
+		if (!Array.isArray(arr)) return null;
+		for (const m of arr) {
+			const iid = (m as { iid?: unknown }).iid;
+			if ((m as { state?: unknown }).state !== "merged" || typeof iid !== "number") continue;
+			const mergedAt = (m as { merged_at?: unknown }).merged_at;
+			const webUrl = (m as { web_url?: unknown }).web_url;
+			const title = (m as { title?: unknown }).title;
+			// Pipelines (and the apply job) run on the MERGE commit, not the squash/branch commit
+			// this lookup started from -- carry the merge_commit_sha for the apply-result read.
+			const mergeCommitSha = (m as { merge_commit_sha?: unknown }).merge_commit_sha;
+			return {
+				iid,
+				...(typeof mergedAt === "string" ? { mergedAt } : {}),
+				...(typeof webUrl === "string" ? { webUrl } : {}),
+				...(typeof title === "string" ? { title } : {}),
+				...(typeof mergeCommitSha === "string" ? { mergeCommitSha } : {}),
+			};
+		}
+		return null;
+	} catch {
+		return null;
+	}
+}
+
+// Human attribution line for the drift explanation: WHICH merged MR bumped the repo and WHY the
+// change never reached live (manual apply never started / apply failed). Degrades gracefully when
+// the MR or apply lookup failed. (Pure; unit-tested.)
+export function buildVersionDriftAttribution(
+	apply: ReturnType<typeof parseApplyResult>,
+	mr: ReturnType<typeof parseCommitMergeRequests>,
+): string {
+	const mrRef = mr ? `MR !${mr.iid}${mr.mergedAt ? ` (merged ${mr.mergedAt.slice(0, 10)})` : ""}` : "";
+	const status = apply?.applyStatus ?? "";
+	if (status === "manual") {
+		const lead = mrRef ? `${mrRef} bumped the repo, but its` : "The merged change's";
+		return `${lead} apply job is still waiting for a MANUAL start (it was never run)${
+			apply?.webUrl ? `: ${apply.webUrl}` : "."
+		}`;
+	}
+	if (status === "failed" || status === "canceled") {
+		const lead = mrRef ? `${mrRef}'s` : "The merged change's";
+		return `${lead} apply job ${status.toUpperCase()} -- live never received the change${
+			apply?.webUrl ? `: ${apply.webUrl}` : "."
+		}`;
+	}
+	if (apply && status === "") {
+		const lead = mrRef ? `${mrRef} bumped the repo, but the` : "The merged change's";
+		return `${lead} apply job never started${apply.reason ? ` (${apply.reason})` : ""}.`;
+	}
+	if (mrRef) return `${mrRef} bumped the repo, but I could not read its apply job status.`;
+	return "The repo file's last change merged, but I could not attribute it to a specific MR or apply job.";
+}
+
+// The synthesized one-stack drift report entry for a version drift (before = live, after =
+// declared, matching the CI drift-report semantics). liveReconcilable is ALWAYS false here:
+// reconcile-to-live would write the stale live version back into the repo and UNDO the intended
+// upgrade -- the only offered direction is the reconcile-to-json marker MR (live catches up to
+// repo via the re-run stack plan + manual apply). (Pure; unit-tested.)
+export function buildVersionDriftStack(opts: {
+	cluster: string;
+	repoVersion: string;
+	liveVersion: string;
+	configPath: string;
+	attribution: string;
+}): StackDrift {
+	const stack = stackForWorkflow("version-upgrade");
+	return {
+		stack,
+		drifted: true,
+		kind: "config-json",
+		create: 0,
+		update: 1,
+		delete: 0,
+		configPath: opts.configPath,
+		liveReconcilable: false,
+		resources: [
+			{
+				address: `module.${stack}["${opts.cluster}"].ec_deployment.this`,
+				actions: ["update"],
+				category: "update",
+				reason: "attributes changed: version (declared in repo, never applied to live)",
+				changedKeys: ["version"],
+				values: { version: { before: opts.liveVersion, after: opts.repoVersion } },
+				changes: [{ path: "version", op: "update", before: opts.liveVersion, after: opts.repoVersion }],
+			},
+		],
+		explanation:
+			`0 create / 1 update / 0 destroy\n` +
+			`- update ec_deployment.this ["${opts.cluster}"] (version: live ${opts.liveVersion} -> declared ${opts.repoVersion})\n` +
+			`${opts.attribution}\n` +
+			`Remediation: "Reconcile to GitLab" opens a marker MR; merging it re-runs the ${stack} stack plan for ` +
+			`${opts.cluster} -- the apply job is still MANUAL, so an operator must start it. (Writing the live ` +
+			`version back into the repo is deliberately not offered: it would undo the upgrade.)`,
+	};
+}
+
+// SIO-1196: appended to a no-op message whose check read ONLY the GitOps repo file (no live
+// verification), so a merged-but-never-applied change is never mistaken for "done". (Pure.)
+export function repoOnlyCaveat(cluster: string): string {
+	return (
+		` NOTE: this confirms the GitOps REPO file only -- I did not verify the live cluster. ` +
+		`If live behaves differently, that is drift; ask me to "check ${cluster} for drift".`
+	);
+}
+
+// Live EC deployment detail for the parity check. Prefers state.clusterState.raw -- readClusterState
+// already fetched it THIS turn for THIS cluster (zero extra API calls) -- and falls back to one
+// direct read. undefined on any failure so callers degrade to repo-only.
+async function readLiveDeploymentDetail(state: IacStateType, cluster: string): Promise<string | undefined> {
+	const cached = state.clusterState;
+	if (cached && cached.cluster === cluster && typeof cached.raw === "string" && cached.raw.length > 0) {
+		return cached.raw;
+	}
+	const deploymentId = await resolveDeploymentId(cluster);
+	if (!deploymentId) return undefined;
+	const detail = await callTool("elastic_cloud_get_deployment", { deploymentId });
+	return detail.startsWith("[elastic") || detail.startsWith("[4") || detail.startsWith("[5") ? undefined : detail;
+}
+
 // Per-tier sizing from the live EC deployment GET body (resources.elasticsearch[0].info.plan_info
 // .current.plan.cluster_topology[]). Maps EC node-role ids -> repo tier keys (hot_content -> hot;
 // warm/cold/frozen pass through) and MB-RAM size.value -> GB. Empty when the body lacks topology.
@@ -8068,6 +8334,56 @@ export function extractLiveTopology(deploymentDetail: string): Record<string, { 
 		// best-effort: return whatever parsed cleanly
 	}
 	return out;
+}
+
+// SIO-1196 Tier 2: repo deployment-JSON vs live EC deployment advisory for the review card.
+// Compares the version (when includeVersion) and a named tier's live autoscaling ceiling/zones
+// against the repo file's max_size/zone_count (same live->repo mapping as applyLiveTopology).
+// Returns "" when in sync or live is unreadable -- advisory only, never blocks. Deliberately
+// avoids the phrase "not in live": reviewPlan promotes that phrase to a HIGH risk, and a sizing
+// mismatch here is informational. (Pure; unit-tested.)
+export function renderDeploymentJsonLiveParity(
+	repoJson: string,
+	liveDetail: string | undefined,
+	scope: { tier?: string; includeVersion?: boolean },
+): string {
+	if (!liveDetail) return "";
+	let repo: { version?: unknown; elasticsearch?: Record<string, unknown> };
+	try {
+		const parsed: unknown = JSON.parse(repoJson);
+		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return "";
+		repo = parsed as { version?: unknown; elasticsearch?: Record<string, unknown> };
+	} catch {
+		return "";
+	}
+	const lines: string[] = [];
+	if (scope.includeVersion) {
+		const liveVersion = extractLiveVersion(liveDetail);
+		const repoVersion = typeof repo.version === "string" ? repo.version : "";
+		if (liveVersion && repoVersion && liveVersion !== repoVersion) {
+			lines.push(
+				`- version: live ${liveVersion} vs repo ${repoVersion} -- an earlier merged change may never have applied.`,
+			);
+		}
+	}
+	if (scope.tier) {
+		const live = extractLiveTopology(liveDetail)[scope.tier];
+		const t = repo.elasticsearch?.[scope.tier];
+		if (live && t && typeof t === "object") {
+			const tier = t as { max_size?: unknown; zone_count?: unknown };
+			if (live.sizeGb !== undefined && typeof tier.max_size === "string") {
+				const liveSize = `${live.sizeGb}g`;
+				if (liveSize !== tier.max_size) {
+					lines.push(`- ${scope.tier} max_size: live ${liveSize} vs repo ${tier.max_size}.`);
+				}
+			}
+			if (live.zoneCount !== undefined && typeof tier.zone_count === "number" && live.zoneCount !== tier.zone_count) {
+				lines.push(`- ${scope.tier} zone_count: live ${live.zoneCount} vs repo ${tier.zone_count}.`);
+			}
+		}
+	}
+	if (lines.length === 0) return "";
+	return `Live-parity check (advisory -- live deployment vs repo file):\n${lines.join("\n")}`;
 }
 
 // Agent-side path template for the reconcile-to-json marker. ${stack}/${deployment} are
@@ -9077,10 +9393,16 @@ export function explainStackDrift(stack: StackDrift): string {
 // SIO-886: dedicated drift-explainer node. Attaches a grounded per-stack explanation to the
 // drift report and emits the enriched iac_drift_report once for the UI (the overview card +
 // the per-resource detail). No writes; runs between detectDrift and the reconcile loop.
+// SIO-1196: pre-set explanations (the version-drift seed carries MR/apply attribution the
+// generic explainer cannot reconstruct) survive; only unset ones are computed. (Pure; unit-tested.)
+export function attachDriftExplanations(stacks: StackDrift[]): StackDrift[] {
+	return stacks.map((s) => ({ ...s, explanation: s.explanation || explainStackDrift(s) }));
+}
+
 export async function explainDrift(state: IacStateType): Promise<Partial<IacStateType>> {
 	const report = state.driftReport;
 	if (!report) return {};
-	const stacks = report.stacks.map((s) => ({ ...s, explanation: explainStackDrift(s) }));
+	const stacks = attachDriftExplanations(report.stacks);
 	log.info(
 		{
 			deployment: report.deployment,

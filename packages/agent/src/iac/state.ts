@@ -686,6 +686,17 @@ export const IacState = Annotation.Root({
 	// from blockedReason (a real guard rejection) so the turn renders as a neutral "No change
 	// needed" instead of an amber "Blocked". Set by every GitOps proposer's no-op guard.
 	noopReason: Annotation<string>({ reducer: last, default: () => "" }),
+	// SIO-1196: version-upgrade live-drift detection. Set ONLY by proposeVersionUpgrade in the
+	// turn it detects repo==target but live!=target (a merged-but-never-applied change); routes
+	// draftChange -> explainDrift (the drift-reconcile lane) instead of END. Turn-scoped: reset
+	// by bootstrapIac's TURN_START_RESET so a prior turn's drift never re-routes a follow-up.
+	versionDrift: Annotation<{
+		cluster: string;
+		targetVersion: string;
+		liveVersion: string;
+		mrRef?: string;
+		applyJobUrl?: string;
+	} | null>({ reducer: last, default: () => null }),
 	// SIO-882: drift reconcile sub-flow. targetDeployment scopes the audit to one
 	// deployment; driftReport holds the per-stack plan; driftIndex walks the drifted
 	// stacks sequentially; currentDirection is the gate's chosen direction for the

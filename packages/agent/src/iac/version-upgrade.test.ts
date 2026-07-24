@@ -353,3 +353,171 @@ describe("applyLiveTopology", () => {
 		expect(() => applyLiveTopology('{"name":"x"}', { warm: { sizeGb: 4 } })).toThrow("no elasticsearch block");
 	});
 });
+
+import { mock } from "bun:test";
+import type { IacStateType } from "./state.ts";
+
+// SIO-1196: draftChange -- version-upgrade three-way live check. The no-op decision must be
+// grounded in the LIVE deployment, not just the repo file (the us-cld 9.4.4 incident: repo said
+// 9.4.4, live ran 9.4.3, agent answered "No change needed").
+function mockVersionTools(handlers: Record<string, (args: Record<string, unknown>) => string>) {
+	const calls: Record<string, number> = {};
+	const tools = Object.entries(handlers).map(([name, fn]) => ({
+		name,
+		invoke: async (args: Record<string, unknown>) => {
+			calls[name] = (calls[name] ?? 0) + 1;
+			return fn(args);
+		},
+	}));
+	mock.module("../mcp-bridge.ts", () => ({
+		getToolsForDataSource: () => tools,
+		getConnectedServers: () => ["elastic-iac-mcp"],
+	}));
+	return calls;
+}
+
+const vuAsState = (partial: Record<string, unknown>): IacStateType => partial as unknown as IacStateType;
+
+const MERGE_SHA_1196 = "ab78971fbccf99841110e1d0aa98d3266cc15edc";
+// The file's last_commit_id is the SQUASH commit (branch tip), NOT the merge commit -- pipelines
+// run on the merge commit, so the apply lookup must go through the MR's merge_commit_sha.
+const SQUASH_SHA_1196 = "f155b0673fcf6524c95c3c4a6e480d4da6e7893d";
+const vuFile = (version: string): string =>
+	`[200] ${JSON.stringify({
+		content: Buffer.from(`{\n  "name": "us-cld",\n  "version": "${version}"\n}\n`).toString("base64"),
+		encoding: "base64",
+		last_commit_id: SQUASH_SHA_1196,
+	})}`;
+const vuLive = (version: string): string => `[200] {"resources":{"elasticsearch":[{"info":{"version":"${version}"}}]}}`;
+const vuClusterState = (version: string) => ({
+	cluster: "us-cld",
+	summary: "us-cld healthy",
+	alertsManaged: false,
+	raw: vuLive(version),
+});
+const vuRequest = { workflow: "version-upgrade" as const, isProd: false, cluster: "us-cld", version: "9.4.4" };
+
+describe("draftChange -- version-upgrade three-way live check (SIO-1196)", () => {
+	test("repo==target AND live==target -> genuine no-op, message says verified live", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		const calls = mockVersionTools({ gitlab_get_file_content: () => vuFile("9.4.4") });
+		const result = await draftChange(vuAsState({ iacRequest: vuRequest, clusterState: vuClusterState("9.4.4") }));
+		expect(result.noopReason).toBeTruthy();
+		const msg = String(result.messages?.[0]?.content ?? "");
+		expect(msg).toContain("verified");
+		expect(msg).toContain("9.4.4");
+		expect(calls.gitlab_create_branch ?? 0).toBe(0);
+	});
+
+	test("repo==target AND live!=target -> drift seeded into the drift lane, NO write tools called", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		const applyShas: string[] = [];
+		const calls = mockVersionTools({
+			gitlab_get_file_content: () => vuFile("9.4.4"),
+			gitlab_get_merge_commit_apply_result: (args) => {
+				applyShas.push(String(args.sha));
+				return '{"applyStatus":"manual","pipelineId":2698482841,"webUrl":"https://gitlab.com/x/-/jobs/15486522999","parentStatus":"success"}';
+			},
+			gitlab_get_commit_merge_requests: () =>
+				`[200] ${JSON.stringify([
+					{
+						iid: 346,
+						state: "merged",
+						merged_at: "2026-07-22T21:49:07.000Z",
+						web_url: "https://gitlab.com/x/-/merge_requests/346",
+						merge_commit_sha: MERGE_SHA_1196,
+					},
+				])}`,
+		});
+		const result = await draftChange(vuAsState({ iacRequest: vuRequest, clusterState: vuClusterState("9.4.3") }));
+		// The apply lookup must use the MR's merge_commit_sha, not the file's squash commit.
+		expect(applyShas).toEqual([MERGE_SHA_1196]);
+		expect(result.noopReason ?? "").toBe("");
+		expect(result.intent).toBe("drift");
+		expect(result.versionDrift).toMatchObject({
+			cluster: "us-cld",
+			targetVersion: "9.4.4",
+			liveVersion: "9.4.3",
+			mrRef: "!346",
+		});
+		expect(result.targetDeployment).toBe("us-cld");
+		expect(result.driftReport?.stacks).toHaveLength(1);
+		const stack = result.driftReport?.stacks[0];
+		expect(stack?.stack).toBe("deployments");
+		expect(stack?.liveReconcilable).toBe(false);
+		expect(stack?.explanation).toContain("MR !346");
+		expect(stack?.explanation).toContain("MANUAL");
+		const msg = String(result.messages?.[0]?.content ?? "");
+		expect(msg).toContain("Version drift detected");
+		expect(msg).toContain("9.4.3");
+		expect(calls.gitlab_create_branch ?? 0).toBe(0);
+		expect(calls.gitlab_commit_file ?? 0).toBe(0);
+	});
+
+	test("repo==target AND live unknown -> no-op with repo-only caveat", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		mockVersionTools({
+			gitlab_get_file_content: () => vuFile("9.4.4"),
+			elastic_cloud_list_deployments: () => "[elastic cloud request failed: timeout]",
+		});
+		const result = await draftChange(vuAsState({ iacRequest: vuRequest }));
+		expect(result.noopReason).toBeTruthy();
+		const msg = String(result.messages?.[0]?.content ?? "");
+		expect(msg).toContain("REPO file only");
+		expect(result.versionDrift ?? null).toBeNull();
+	});
+
+	test("repo==target AND apply currently running -> no-op says RUNNING, no drift lane", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		mockVersionTools({
+			gitlab_get_file_content: () => vuFile("9.4.4"),
+			gitlab_get_merge_commit_apply_result: () => '{"applyStatus":"running","pipelineId":1,"parentStatus":"running"}',
+		});
+		const result = await draftChange(vuAsState({ iacRequest: vuRequest, clusterState: vuClusterState("9.4.3") }));
+		expect(result.noopReason).toBeTruthy();
+		expect(result.versionDrift ?? null).toBeNull();
+		const msg = String(result.messages?.[0]?.content ?? "");
+		expect(msg).toContain("RUNNING");
+	});
+
+	test("repo!=target AND live==repo baseline -> normal propose, no advisory", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		const calls = mockVersionTools({
+			gitlab_get_file_content: () => vuFile("9.4.3"),
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => "[201] {}",
+		});
+		const result = await draftChange(vuAsState({ iacRequest: vuRequest, clusterState: vuClusterState("9.4.3") }));
+		expect(result.precheckPassed).toBe(true);
+		expect(calls.gitlab_create_branch).toBe(1);
+		expect(result.liveParity ?? "").toBe("");
+	});
+
+	test("repo!=target AND live!=repo baseline -> propose + review-card advisory", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		mockVersionTools({
+			gitlab_get_file_content: () => vuFile("9.4.3"),
+			gitlab_create_branch: () => "[201] {}",
+			gitlab_commit_file: () => "[201] {}",
+		});
+		const result = await draftChange(vuAsState({ iacRequest: vuRequest, clusterState: vuClusterState("9.4.2") }));
+		expect(result.precheckPassed).toBe(true);
+		expect(result.liveParity).toContain("9.4.2");
+		expect(result.liveParity).toContain("never have applied");
+	});
+
+	test("fallback: clusterState missing -> direct elastic_cloud_get_deployment read is used", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		const calls = mockVersionTools({
+			gitlab_get_file_content: () => vuFile("9.4.4"),
+			elastic_cloud_list_deployments: () =>
+				'[200] {"deployments":[{"id":"971a5b57d61d494ebf7bc144a5cf27b7","name":"us-cld"}]}',
+			elastic_cloud_get_deployment: () => vuLive("9.4.4"),
+		});
+		const result = await draftChange(vuAsState({ iacRequest: vuRequest }));
+		expect(result.noopReason).toBeTruthy();
+		expect(calls.elastic_cloud_get_deployment).toBe(1);
+		const msg = String(result.messages?.[0]?.content ?? "");
+		expect(msg).toContain("verified");
+	});
+});

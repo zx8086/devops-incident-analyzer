@@ -243,6 +243,7 @@ describe("draftChange -> proposeSloChange", () => {
 		const result = await draftChange(asIacState(state));
 		// SIO-1020: a no-op surfaces as noopReason (neutral "No change needed"), not blockedReason.
 		expect(result.noopReason).toContain("already has the requested values");
+		expect(String(result.messages?.[0]?.content ?? "")).toContain("REPO file only"); // SIO-1196
 		expect(result.blockedReason).toBeFalsy();
 	});
 });
