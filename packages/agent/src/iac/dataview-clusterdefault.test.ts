@@ -456,6 +456,7 @@ describe("draftChange -> proposeClusterDefaultChange", () => {
 		const result = await draftChange(asIacState(state));
 		// SIO-1020: a no-op surfaces as noopReason (neutral "No change needed"), not blockedReason.
 		expect(result.noopReason).toContain("already has total_shards_per_node");
+		expect(String(result.messages?.[0]?.content ?? "")).toContain("REPO file only"); // SIO-1196
 		expect(result.blockedReason).toBeFalsy();
 	});
 

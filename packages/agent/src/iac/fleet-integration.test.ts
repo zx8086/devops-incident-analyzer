@@ -233,6 +233,7 @@ describe("draftChange -> proposeFleetIntegration", () => {
 		const result = await draftChange(asIacState(state));
 		// SIO-1020: a no-op surfaces as noopReason (neutral "No change needed"), not blockedReason.
 		expect(result.noopReason).toContain("already at 6.14.2");
+		expect(String(result.messages?.[0]?.content ?? "")).toContain("REPO file only"); // SIO-1196
 		expect(result.blockedReason).toBeFalsy();
 	});
 

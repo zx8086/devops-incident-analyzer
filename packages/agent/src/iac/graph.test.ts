@@ -90,3 +90,31 @@ describe("buildIacGraph", () => {
 		expect(nodeNames).toContain("recordIacPrompt");
 	});
 });
+
+import { END } from "@langchain/langgraph";
+import { routeAfterDraft } from "./graph.ts";
+import type { IacStateType } from "./state.ts";
+
+// SIO-1196: draftChange exits. Terminal block/no-op -> END; a version live-drift (repo already
+// at target, live behind) -> the drift lane's explainDrift; else the review gate.
+describe("routeAfterDraft (SIO-1196)", () => {
+	const s = (over: Partial<IacStateType>): IacStateType => over as unknown as IacStateType;
+	const drift = { cluster: "us-cld", targetVersion: "9.4.4", liveVersion: "9.4.3" };
+
+	test("blockedReason and noopReason end the turn", () => {
+		expect(routeAfterDraft(s({ blockedReason: "nope" }))).toBe(END);
+		expect(routeAfterDraft(s({ noopReason: "already there" }))).toBe(END);
+	});
+
+	test("versionDrift routes into the drift lane at explainDrift", () => {
+		expect(routeAfterDraft(s({ versionDrift: drift }))).toBe("explainDrift");
+	});
+
+	test("default routes to the review gate", () => {
+		expect(routeAfterDraft(s({}))).toBe("reviewPlan");
+	});
+
+	test("blockedReason wins over versionDrift -- never enter the lane on a blocked turn", () => {
+		expect(routeAfterDraft(s({ blockedReason: "nope", versionDrift: drift }))).toBe(END);
+	});
+});

@@ -299,6 +299,7 @@ describe("draftChange -> proposeClusterSettingsChange (SIO-994)", () => {
 		const result = await draftChange(asIacState(state));
 		// SIO-1020: a no-op surfaces as noopReason (neutral "No change needed"), not blockedReason.
 		expect(result.noopReason).toContain("already match the request");
+		expect(String(result.messages?.[0]?.content ?? "")).toContain("REPO file only"); // SIO-1196
 		expect(result.blockedReason).toBeFalsy();
 		expect(branchCreated).toBe(false);
 	});

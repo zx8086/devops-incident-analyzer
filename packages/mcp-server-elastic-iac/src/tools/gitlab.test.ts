@@ -260,3 +260,67 @@ describe("buildSyntheticsPipelineVars", () => {
 		expect(vars.some((v) => v.key === "STACK")).toBe(false);
 	});
 });
+
+import { isFullSha, pickMergeCommitPipeline } from "./gitlab.ts";
+
+// SIO-1196: the merge-commit pipeline to walk for the apply job. An api-source pipeline
+// (SYNTH_PUSH trigger at the same sha) can be NEWER than the real push pipeline whose child
+// holds the apply job -- the us-cld 9.4.4 incident: pipelines[0] picked the api no-op pipeline
+// and reported "apply job not started" against the wrong pipeline.
+describe("pickMergeCommitPipeline (SIO-1196)", () => {
+	const pushPipeline = {
+		id: 2698482840,
+		status: "success",
+		source: "push",
+		web_url: "https://gitlab.com/x/-/pipelines/2698482840",
+	};
+	const apiPipeline = {
+		id: 2698489197,
+		status: "success",
+		source: "api",
+		web_url: "https://gitlab.com/x/-/pipelines/2698489197",
+	};
+
+	test("prefers the source=push pipeline over a NEWER api-source pipeline", () => {
+		// GitLab returns newest first: the api shadow pipeline sits at index 0.
+		expect(pickMergeCommitPipeline([apiPipeline, pushPipeline])).toEqual({
+			id: 2698482840,
+			status: "success",
+			webUrl: "https://gitlab.com/x/-/pipelines/2698482840",
+		});
+	});
+
+	test("falls back to the newest pipeline when no push-source pipeline exists", () => {
+		expect(pickMergeCommitPipeline([apiPipeline])).toEqual({
+			id: 2698489197,
+			status: "success",
+			webUrl: "https://gitlab.com/x/-/pipelines/2698489197",
+		});
+	});
+
+	test("null on non-array, empty array, and entries without a numeric id", () => {
+		expect(pickMergeCommitPipeline("[401] unauthorized")).toBeNull();
+		expect(pickMergeCommitPipeline([])).toBeNull();
+		expect(pickMergeCommitPipeline([{ status: "success", source: "push" }])).toBeNull();
+	});
+
+	test("tolerates missing status/web_url on the picked pipeline", () => {
+		expect(pickMergeCommitPipeline([{ id: 7, source: "push" }])).toEqual({ id: 7, status: "" });
+	});
+});
+
+// SIO-1196: GitLab's /pipelines?sha= filter needs the FULL 40-char sha; a short sha silently
+// returns [] (verified live: ab78971f -> [], full sha -> 2 pipelines).
+describe("isFullSha (SIO-1196)", () => {
+	test("true for a 40-char hex sha", () => {
+		expect(isFullSha("ab78971fbccf99841110e1d0aa98d3266cc15edc")).toBe(true);
+		expect(isFullSha("AB78971FBCCF99841110E1D0AA98D3266CC15EDC")).toBe(true);
+	});
+
+	test("false for short shas and non-hex input", () => {
+		expect(isFullSha("ab78971f")).toBe(false);
+		expect(isFullSha("")).toBe(false);
+		expect(isFullSha("zz78971fbccf99841110e1d0aa98d3266cc15edc")).toBe(false);
+		expect(isFullSha("ab78971fbccf99841110e1d0aa98d3266cc15edc00")).toBe(false);
+	});
+});

@@ -42,6 +42,13 @@ import {
 } from "./nodes.ts";
 import { IacState } from "./state.ts";
 
+// SIO-1196: draftChange exits. Terminal block/no-op -> END; a version live-drift (repo already at
+// target, live behind -- versionDrift is turn-scoped, set only by proposeVersionUpgrade) -> the
+// drift lane's explainDrift (drift card + reconcileGate interrupt; the seed's liveReconcilable:false
+// hides reconcile-to-live); else the review gate. (Pure; unit-tested.)
+export const routeAfterDraft = (s: typeof IacState.State): string =>
+	s.blockedReason || s.noopReason ? END : s.versionDrift ? "explainDrift" : "reviewPlan";
+
 // Dedicated Elastic Cloud IaC maker graph. Every mutating/external step is gated;
 // the planReview node is a human interrupt and the graph never applies (a human
 // merges + applies from GitLab). Separate from the incident pipeline (buildGraph).
@@ -193,11 +200,10 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		// SIO-873: the GitOps proposer (draftChange) can block too (e.g. missing token,
 		// unparseable JSON) -> stop before the review gate. SIO-1020: a no-op (noopReason -- the
 		// requested config already matches current state) is also terminal here; the turn ends with a
-		// neutral "No change needed" outcome instead of opening an empty-diff MR.
-		.addConditionalEdges("draftChange", (s) => (s.blockedReason || s.noopReason ? END : "reviewPlan"), [
-			"reviewPlan",
-			END,
-		])
+		// neutral "No change needed" outcome instead of opening an empty-diff MR. SIO-1196: a version
+		// live-drift (repo already at target, live behind -- a merged-but-never-applied change) routes
+		// into the drift lane at explainDrift (drift card + reconcileGate interrupt) instead of END.
+		.addConditionalEdges("draftChange", routeAfterDraft, ["reviewPlan", "explainDrift", END])
 		.addEdge("reviewPlan", "reviewGate")
 		// Human decision from the planReview interrupt routes to MR-open or stop.
 		// SIO-990: on an APPROVED amend that already has an open MR, the corrected commit landed on the

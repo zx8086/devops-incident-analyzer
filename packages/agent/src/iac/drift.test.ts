@@ -1408,3 +1408,39 @@ describe("buildReportSourcedReconcile — skip-on-unreadable (SIO-901)", () => {
 		}
 	});
 });
+
+import { attachDriftExplanations } from "./nodes.ts";
+
+// SIO-1196: a pre-set explanation (the version-drift seed carries MR/apply attribution the
+// generic explainer cannot reconstruct) must survive explainDrift; unset ones are computed.
+describe("attachDriftExplanations (SIO-1196)", () => {
+	const base: StackDrift = {
+		stack: "deployments",
+		drifted: true,
+		kind: "config-json",
+		create: 0,
+		update: 1,
+		delete: 0,
+		liveReconcilable: false,
+		resources: [
+			{
+				address: 'module.deployments["us-cld"].ec_deployment.this',
+				actions: ["update"],
+				reason: "attributes changed: version",
+				changedKeys: ["version"],
+				category: "update",
+			},
+		],
+	};
+
+	test("keeps a pre-set explanation verbatim", () => {
+		const seeded = { ...base, explanation: "MR !346 merged but its apply never ran." };
+		const [out] = attachDriftExplanations([seeded]);
+		expect(out?.explanation).toBe("MR !346 merged but its apply never ran.");
+	});
+
+	test("computes the explanation for stacks without one", () => {
+		const [out] = attachDriftExplanations([base]);
+		expect(out?.explanation).toContain("0 create / 1 update / 0 destroy");
+	});
+});
