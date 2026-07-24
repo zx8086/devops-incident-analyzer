@@ -16,7 +16,15 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import { type AbsenceClaim, isAbsenceJudgeEnabled, judgeContradictedAbsenceClaims } from "./absence-judge.ts";
 import { summarizeFirstAttempts } from "./alignment.ts";
 import { extractIamActions } from "./aws-policy-actions.ts";
-import { deriveConfidenceCap } from "./confidence-gate.ts";
+import { deriveConfidenceCap, getConfidenceThreshold } from "./confidence-gate.ts";
+import {
+	attributeGapBullets,
+	type CoverageSignal,
+	decideConfidenceCap,
+	extractRootCauseDataSources,
+	isCoverageScopingEnabled,
+	upsertCoverageNote,
+} from "./confidence-policy.ts";
 import { isGapsJudgeEnabled, judgeDegradingGapBullets } from "./gaps-judge.ts";
 import { createLlm } from "./llm.ts";
 import { extractTextFromContent } from "./message-utils.ts";
@@ -269,7 +277,7 @@ export function buildAggregatorMessages(
 
 	messages.push(
 		new HumanMessage(
-			`Aggregate these datasource findings into a unified incident report. Only reference data present below -- do not fabricate metrics or timestamps.${scopeNote}${unavailableNote}${timelineGuidance}${connectivityGuidance}${perDeploymentGuidance}${awsEstateScopeGuidance}${crossEstateAbsenceRule}${gapsAuthoringRule}${confidenceFormatRule}${confidenceRubricRule}${defensiveProseRule}${groundedBlockerRule}${healthCheckGapRule}${numericGroundingRule}${causalGroundingRule}${verbatimDdlRule}\n\nReport generation timestamp: ${new Date().toISOString()}. Use this exact value as the "Generated" date in the report header. Do not invent a different timestamp.\n\nIf no specific timestamps are available from the datasource findings (i.e., all observations are current-state snapshots rather than timestamped events), use "Current State Assessment" as the section heading instead of "Correlated Timeline", and use "Current" in the time column instead of fabricating timestamps.\n\n${resultsBlock}\n\nProvide: summary, ${hasEventSources ? "correlated timeline (markdown table), " : ""}findings per datasource${elasticDeployments.length > 1 ? " (with per-deployment sub-sections for elastic)" : ""}, confidence score (0.0-1.0), and any gaps.${continuationGuidance}`,
+			`Aggregate these datasource findings into a unified incident report. Only reference data present below -- do not fabricate metrics or timestamps.${scopeNote}${unavailableNote}${timelineGuidance}${connectivityGuidance}${perDeploymentGuidance}${awsEstateScopeGuidance}${crossEstateAbsenceRule}${gapsAuthoringRule}${confidenceFormatRule}${confidenceRubricRule}${defensiveProseRule}${groundedBlockerRule}${healthCheckGapRule}${numericGroundingRule}${causalGroundingRule}${verbatimDdlRule}\n\nReport generation timestamp: ${new Date().toISOString()}. Use this exact value as the "Generated" date in the report header. Do not invent a different timestamp.\n\nIf no specific timestamps are available from the datasource findings (i.e., all observations are current-state snapshots rather than timestamped events), use "Current State Assessment" as the section heading instead of "Correlated Timeline", and use "Current" in the time column instead of fabricating timestamps.\n\n${resultsBlock}\n\nProvide: summary, ${hasEventSources ? "correlated timeline (markdown table), " : ""}findings per datasource${elasticDeployments.length > 1 ? " (with per-deployment sub-sections for elastic)" : ""}, root cause (under a "## Root Cause" heading, naming the datasource(s) whose returned evidence supports it), confidence score (0.0-1.0), and any gaps.${continuationGuidance}`,
 		),
 	);
 
@@ -1351,14 +1359,59 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	if (ungroundedRootCauseCapTriggered) capReasons.push("ungrounded-root-cause");
 	if (noIndexMisreadCapTriggered) capReasons.push("no-index-misread");
 	const anyCapTriggered = capReasons.length > 0;
-	const cappedScore = anyCapTriggered ? Math.min(confidenceScore, TOOL_ERROR_CONFIDENCE_CAP) : confidenceScore;
+
+	// SIO-1195: two-class cap policy. Integrity reasons keep the hard cap; coverage
+	// reasons (degraded-subagents / gaps) soft-cap ABOVE the gate when every signal
+	// is deterministically attributable to datasources disjoint from the root-cause
+	// evidence. Fail-closed: any uncertainty resolves to the hard cap, and the
+	// COVERAGE_CAP_SCOPING_ENABLED kill switch (default ON, read at call time)
+	// restores the exact single-clamp behavior when off.
+	const scopingEnabled = isCoverageScopingEnabled(process.env);
+	const dataSourcesWithData = [...new Set(results.filter((r) => dataSourceReturnedData(r)).map((r) => r.dataSourceId))];
+	const rootCauseDataSources = scopingEnabled ? extractRootCauseDataSources(answer, dataSourcesWithData) : null;
+	const coverageSignals: CoverageSignal[] = [];
+	if (degradedSubAgents.length > 0) {
+		coverageSignals.push({
+			reason: "degraded-subagents",
+			dataSources: [...new Set(degradedSubAgents.map((d) => d.dataSourceId))],
+		});
+	}
+	if (gapsCapTriggered) {
+		const attr = attributeGapBullets(confirmedGapBullets);
+		coverageSignals.push({ reason: "gaps", dataSources: attr.allAttributed ? attr.dataSources : null });
+	}
+	const capDecision = decideConfidenceCap({
+		capReasons,
+		coverageSignals,
+		// With scoping disabled, a null root cause forces every decision to hard --
+		// byte-for-byte the pre-SIO-1195 behavior.
+		rootCauseDataSources,
+		threshold: getConfidenceThreshold(),
+	});
+	const appliedCap = capDecision.cap ?? TOOL_ERROR_CONFIDENCE_CAP;
+	const cappedScore = anyCapTriggered ? Math.min(confidenceScore, appliedCap) : confidenceScore;
+	if (anyCapTriggered) {
+		logger.warn(
+			{
+				capMode: capDecision.mode,
+				capReasons,
+				appliedCap,
+				coverageScopingEnabled: scopingEnabled,
+				rootCauseDataSources,
+				degradedDataSources: capDecision.degradedDataSources,
+				originalScore: confidenceScore,
+				cappedScore,
+			},
+			"Confidence cap decision",
+		);
+	}
 
 	if (degradedSubAgents.length > 0) {
 		logger.warn(
 			{
 				degradedSubAgents,
 				threshold: TOOL_ERROR_RATE_THRESHOLD,
-				cap: TOOL_ERROR_CONFIDENCE_CAP,
+				cap: appliedCap,
 				originalScore: confidenceScore,
 				cappedScore,
 			},
@@ -1376,7 +1429,7 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 				gapsJudgeUsed,
 				gapsJudgeVetoedCount,
 				threshold: GAPS_BULLET_THRESHOLD,
-				cap: TOOL_ERROR_CONFIDENCE_CAP,
+				cap: appliedCap,
 				originalScore: confidenceScore,
 				cappedScore,
 			},
@@ -1386,14 +1439,14 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 
 	if (ungroundedCapTriggered) {
 		logger.warn(
-			{ ungrounded, cap: TOOL_ERROR_CONFIDENCE_CAP, originalScore: confidenceScore, cappedScore },
+			{ ungrounded, cap: appliedCap, originalScore: confidenceScore, cappedScore },
 			"Aggregator Gaps section claimed a permission blocker with no observed auth tool error; capping confidence",
 		);
 	}
 
 	if (expiryCapTriggered) {
 		logger.warn(
-			{ ungroundedExpiry, cap: TOOL_ERROR_CONFIDENCE_CAP, originalScore: confidenceScore, cappedScore },
+			{ ungroundedExpiry, cap: appliedCap, originalScore: confidenceScore, cappedScore },
 			"Aggregator Gaps section claimed logs expired/retention exceeded with no observed absence; capping confidence",
 		);
 	}
@@ -1406,7 +1459,7 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 				regexContradictedCount: absenceDetection.contradicted.length,
 				absenceJudgeUsed,
 				absenceJudgeVetoedCount,
-				cap: TOOL_ERROR_CONFIDENCE_CAP,
+				cap: appliedCap,
 				originalScore: confidenceScore,
 				cappedScore,
 			},
@@ -1418,7 +1471,7 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		logger.warn(
 			{
 				ungroundedRootCause: ungroundedRootCause.length,
-				cap: TOOL_ERROR_CONFIDENCE_CAP,
+				cap: appliedCap,
 				originalScore: confidenceScore,
 				cappedScore,
 			},
@@ -1430,7 +1483,7 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		logger.warn(
 			{
 				noIndexMisread: noIndexMisread.length,
-				cap: TOOL_ERROR_CONFIDENCE_CAP,
+				cap: appliedCap,
 				originalScore: confidenceScore,
 				cappedScore,
 			},
@@ -1480,11 +1533,20 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	const capped = anyCapTriggered
 		? rewriteConfidenceInAnswer(ddlEnsured.answer, cappedScore, { preCap: confidenceScore, capReasons })
 		: ddlEnsured.answer;
+	// SIO-1195: a soft cap explains itself with a coverage note under the confidence
+	// line (no numbers in the note -- a later hard re-cap removes it cleanly).
+	const withCoverageNote =
+		capDecision.mode === "soft" && rootCauseDataSources
+			? upsertCoverageNote(
+					capped,
+					`tool degradation affected ${capDecision.degradedDataSources.join(", ")}, which did not supply the root-cause evidence (${rootCauseDataSources.join(", ")}); confidence was moderated rather than capped below the review threshold.`,
+				)
+			: capped;
 	// SIO-1133: stamp the Request-Id LAST so it sits at the very bottom of the report,
 	// after every content/confidence rewrite. Deterministic (not a prompt field); post
 	// PII redaction (redactPiiContent ran on the raw LLM output far upstream), so the
 	// UUID is never mangled. This is the machine key the learn-from lane scans for.
-	const finalAnswer = appendRequestIdFooter(capped, state.requestId);
+	const finalAnswer = appendRequestIdFooter(withCoverageNote, state.requestId);
 
 	logger.info(
 		{ duration: Date.now() - startTime, answerLength: finalAnswer.length, confidenceScore: cappedScore },
@@ -1499,6 +1561,12 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		confidencePreCap: confidenceScore,
 		capReasons,
 		confirmedDegradingGapBullets: gapsCapTriggered ? confirmedGapBullets : [],
-		...(anyCapTriggered && { confidenceCap: TOOL_ERROR_CONFIDENCE_CAP }),
+		// SIO-1195: cap-policy metadata (mode, attribution) for logs/state consumers.
+		rootCauseDataSources: rootCauseDataSources ?? undefined,
+		degradedDataSources: capDecision.degradedDataSources,
+		...(anyCapTriggered && {
+			confidenceCap: appliedCap,
+			confidenceCapMode: capDecision.mode === "soft" ? ("soft" as const) : ("hard" as const),
+		}),
 	};
 }

@@ -2,11 +2,18 @@
 import { getLogger } from "@devops-agent/observability";
 import { Send } from "@langchain/langgraph";
 import { GAPS_BULLET_THRESHOLD, rewriteConfidenceInAnswer } from "../aggregator";
-import { deriveConfidenceCap } from "../confidence-gate";
+import { deriveConfidenceCap, getConfidenceThreshold } from "../confidence-gate";
+import {
+	CAP_REASON_CLASS,
+	type CoverageSignal,
+	decideConfidenceCap,
+	isCoverageScopingEnabled,
+	upsertCoverageNote,
+} from "../confidence-policy.ts";
 import type { AgentStateType, DegradedRule, PendingCorrelation } from "../state";
 import { queryDataSource } from "../sub-agent";
 import { evaluate } from "./engine";
-import { correlationRules, LOG_GAP_RULE_NAME, LogGapTriggerContextSchema } from "./rules";
+import { type CorrelationRule, correlationRules, LOG_GAP_RULE_NAME, LogGapTriggerContextSchema } from "./rules";
 
 const logger = getLogger("agent:enforceCorrelations");
 
@@ -176,12 +183,30 @@ function computeLogGapRecovery(state: AgentStateType, degraded: DegradedRule[]):
 
 	// SIO-1194: "strip" removes the aggregate's stale cap annotation -- a restored
 	// score must not read "(capped from ...)" next to the recovered value.
-	const rewritten = restoredScore !== undefined ? rewriteConfidenceInAnswer(answer, restoredScore, "strip") : answer;
+	// SIO-1195: the coverage note goes with it (the sole "gaps" reason was cured).
+	const rewritten =
+		restoredScore !== undefined
+			? rewriteConfidenceInAnswer(upsertCoverageNote(answer, null), restoredScore, "strip")
+			: answer;
 	logger.info(
 		{ recoveredBullets: bullets.length, restored: restoredScore !== undefined, restoredScore },
 		"log-gap correlation fetch recovered report gaps",
 	);
 	return { answer: rewritten, recoveredBullets: bullets, restoredScore };
+}
+
+// SIO-1195 (CodeRabbit PR #456): pure + exported for unit tests -- a real soft
+// correlation needs a rule declaring relevanceDataSources, which no production
+// rule does in v1, so the seam is tested with a synthetic rules array instead of
+// mocking the rules module.
+export function correlationCoverageSignals(
+	degraded: DegradedRule[],
+	rules: ReadonlyArray<Pick<CorrelationRule, "name" | "relevanceDataSources">>,
+): CoverageSignal[] {
+	return degraded.map((d) => ({
+		reason: "correlation-degraded",
+		dataSources: rules.find((r) => r.name === d.ruleName)?.relevanceDataSources ?? null,
+	}));
 }
 
 export async function enforceCorrelationsAggregate(state: AgentStateType): Promise<Partial<AgentStateType>> {
@@ -227,10 +252,42 @@ export async function enforceCorrelationsAggregate(state: AgentStateType): Promi
 
 	// SIO-709 AC #4: cap must be strictly below the HITL threshold so a capped run
 	// does not pass the gate. SIO-1194: threshold-derived (0.59 at the default 0.6).
-	const cap = deriveConfidenceCap();
+	// SIO-1195: correlation degradation is coverage-class -- soft-eligible only when
+	// every degraded rule declares relevanceDataSources disjoint from the root-cause
+	// evidence (v1: no rule declares it, so this path always resolves hard).
+	// skipCoverageCheck rules (contradiction/security) are integrity-adjacent and
+	// always hard. Signals for the aggregate's own coverage reasons are re-supplied
+	// from state only when the aggregate itself verified them (soft mode) -- a prior
+	// hard cap stays hard.
+	const anySkipCoverage = degraded.some(
+		(d) => correlationRules.find((r) => r.name === d.ruleName)?.skipCoverageCheck === true,
+	);
+	const mergedReasons = [...new Set([...(state.capReasons ?? []), "correlation-degraded"])];
+	const coverageSignals: CoverageSignal[] = correlationCoverageSignals(degraded, correlationRules);
+	for (const reason of state.capReasons ?? []) {
+		if (CAP_REASON_CLASS[reason] !== "coverage") continue;
+		coverageSignals.push({
+			reason,
+			dataSources:
+				state.confidenceCapMode === "soft" && (state.degradedDataSources ?? []).length > 0
+					? state.degradedDataSources
+					: null,
+		});
+	}
+	const decision =
+		anySkipCoverage || !isCoverageScopingEnabled(process.env)
+			? null
+			: decideConfidenceCap({
+					capReasons: mergedReasons,
+					coverageSignals,
+					rootCauseDataSources: state.rootCauseDataSources ?? null,
+					threshold: getConfidenceThreshold(),
+				});
+	const capMode: "hard" | "soft" = decision?.mode === "soft" ? "soft" : "hard";
+	const cap = capMode === "soft" && decision?.cap !== undefined ? decision.cap : deriveConfidenceCap();
 	const cappedScore = Math.min(state.confidenceScore, cap);
 	logger.warn(
-		{ degradedCount: degraded.length, cap, originalScore: state.confidenceScore, cappedScore },
+		{ degradedCount: degraded.length, cap, capMode, originalScore: state.confidenceScore, cappedScore },
 		"One or more correlation rules degraded; capping confidence",
 	);
 
@@ -249,12 +306,24 @@ export async function enforceCorrelationsAggregate(state: AgentStateType): Promi
 	// SIO-1194: merge correlation-degraded into the aggregate's capReasons and
 	// re-annotate the printed line (strip-before-append keeps a single annotation);
 	// echo confidencePreCap so this node's output is self-contained for SSE capture.
-	const mergedReasons = [...new Set([...(state.capReasons ?? []), "correlation-degraded"])];
+	// SIO-1195: a hard re-cap over an aggregate soft cap removes the coverage note
+	// (prose must never claim moderation next to a below-gate score).
 	const preCap = state.confidencePreCap ?? state.confidenceScore;
-	const baseAnswer = recovery?.answer ?? state.finalAnswer;
+	const rawBase = recovery?.answer ?? state.finalAnswer;
+	const baseAnswer = rawBase !== undefined && capMode === "hard" ? upsertCoverageNote(rawBase, null) : rawBase;
 	let updatedFinalAnswer = baseAnswer
 		? rewriteConfidenceInAnswer(baseAnswer, cappedScore, { preCap, capReasons: mergedReasons })
 		: undefined;
+	// SIO-1195 (CodeRabbit PR #456): a soft correlation cap explains itself like the
+	// aggregate's soft path does (upsert replaces any prior note). Unreachable until
+	// a rule declares relevanceDataSources, but implemented now so opting a rule in
+	// cannot create a prose/state divergence.
+	if (capMode === "soft" && updatedFinalAnswer && (state.rootCauseDataSources ?? []).length > 0) {
+		updatedFinalAnswer = upsertCoverageNote(
+			updatedFinalAnswer,
+			`cross-source correlation degradation affected ${(decision?.degradedDataSources ?? []).join(", ")}, which did not supply the root-cause evidence (${(state.rootCauseDataSources ?? []).join(", ")}); confidence was moderated rather than capped below the review threshold.`,
+		);
+	}
 	if (bannerText && updatedFinalAnswer) {
 		updatedFinalAnswer = `${bannerText}\n\n${updatedFinalAnswer}`;
 	}
@@ -265,6 +334,7 @@ export async function enforceCorrelationsAggregate(state: AgentStateType): Promi
 		confidenceScore: cappedScore,
 		capReasons: mergedReasons,
 		confidencePreCap: preCap,
+		confidenceCapMode: capMode,
 		pendingCorrelations: [],
 		correlationFetchDirective: undefined,
 		...(updatedFinalAnswer !== undefined && { finalAnswer: updatedFinalAnswer }),
