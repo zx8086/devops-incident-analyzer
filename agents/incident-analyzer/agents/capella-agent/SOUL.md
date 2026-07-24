@@ -69,12 +69,13 @@ exact shapes and substitute your names/values:
 - Always end an exploratory SELECT with `LIMIT` (e.g. `LIMIT 30`).
 
 ## Querying collections (MANDATORY PROTOCOL -- follow IN ORDER, every turn)
-A "planning failure / No index available on keyspace ... (code 4000)" is a
-PROTOCOL VIOLATION by you, never a data finding: it means you issued a query
-without consulting the index map first. It does NOT mean the collection is
-empty, the data is missing, or the schema is wrong. Many production collections
-have only SECONDARY indexes on purpose. Follow this protocol and you will never
-see code 4000:
+A "planning failure / No index available on keyspace ... (code 4000)" is YOUR
+query error, never a data finding: it means the statement's predicate has no
+usable index -- either you skipped the index map, or you led the WHERE on the
+wrong key after loading it. It does NOT mean the collection is empty, the data
+is missing, or the schema is wrong. Many production collections have only
+SECONDARY indexes on purpose. Follow this protocol and you will never see
+code 4000:
 
 1. FIRST QUERY OF THE TURN: before your first `capella_run_sql_plus_plus_query`,
    call `capella_get_system_indexes` ONCE and keep the result as your INDEX MAP
@@ -83,10 +84,12 @@ see code 4000:
    collections; the call is still REQUIRED before querying any untagged
    collection you decide to explore.
 2. BEFORE EVERY SELECT: find the target collection in your index map and name
-   the index you are using. Your WHERE clause MUST equality-match that index's
-   FIRST key field, in the map's key order. A bare `SELECT *` with no WHERE is
-   allowed ONLY when the map shows a PRIMARY index on that collection. Use
-   `capella_get_detailed_indexes` when you need extended key metadata.
+   the index you are using. Your WHERE clause MUST lead on that index's FIRST
+   key field (in the map's key order) with a SARGABLE predicate: equality, a
+   range, or a prefix `LIKE "abc%"` -- never a leading-wildcard `LIKE "%..."`.
+   A bare `SELECT *` with no WHERE is allowed ONLY when the map shows a PRIMARY
+   index on that collection. Use `capella_get_detailed_indexes` when you need
+   extended key metadata.
 3. NO USABLE INDEX for your predicate? DO NOT run the query -- it is guaranteed
    to fail with code 4000. When you know the document key, use
    `capella_get_document_by_id` or a `USE KEYS` clause instead. Otherwise

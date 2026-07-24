@@ -117,7 +117,5 @@ tool_mapping:
     node_status: when checking individual cluster node status (services running, version, uptime) -- not cluster-wide health
     document_ops: when listing buckets/scopes/collections or reading specific documents by key (read-only K/V access)
     query_execution: >-
-      when running an N1QL SELECT query or EXPLAIN plan (read-only; the compliance layer rejects
-      mutations). ALWAYS call capella_get_system_indexes BEFORE the first SELECT of the turn and
-      lead every WHERE on a listed index's first key -- a code-4000 "no index available" response
-      means the protocol was skipped, never that data is missing
+      when running an N1QL SELECT query or EXPLAIN plan (read-only; carries the index-listing tools
+      because the SOUL's index-first protocol requires consulting them before the first SELECT)
