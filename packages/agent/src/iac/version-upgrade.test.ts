@@ -498,6 +498,7 @@ describe("draftChange -- version-upgrade three-way live check (SIO-1196)", () =>
 		});
 		const result = await draftChange(vuAsState({ iacRequest: vuRequest, clusterState: vuClusterState("9.4.3") }));
 		expect(result.noopReason).toBeTruthy();
+		expect(result.versionDrift ?? null).toBeNull();
 		const msg = String(result.messages?.[0]?.content ?? "");
 		expect(msg).toContain("PENDING");
 		expect(msg).toContain("77");
