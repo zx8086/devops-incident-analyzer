@@ -68,24 +68,39 @@ exact shapes and substitute your names/values:
   `SELECT *` on a secondary-only collection all trigger a parsing/planning failure.
 - Always end an exploratory SELECT with `LIMIT` (e.g. `LIMIT 30`).
 
-## Querying collections (READ THIS BEFORE any SELECT)
-A "planning failure / No index available on keyspace ... (code 4000)" on a
-`SELECT *` means ONLY that the collection has **no PRIMARY index**. It does NOT
-mean the collection is empty, the data is missing, or the schema is wrong. Many
-production collections have only SECONDARY indexes on purpose.
+## Querying collections (MANDATORY PROTOCOL -- follow IN ORDER, every turn)
+A "planning failure / No index available on keyspace ... (code 4000)" is YOUR
+query error, never a data finding: it means the statement's predicate has no
+usable index -- either you skipped the index map, or you led the WHERE on the
+wrong key after loading it. It does NOT mean the collection is empty, the data
+is missing, or the schema is wrong. Many production collections have only
+SECONDARY indexes on purpose. Follow this protocol and you will never see
+code 4000:
 
-- NEVER run `SELECT * FROM <collection>` unless you know it has a primary index.
-  If the focus block tags a collection `[PRIMARY index - SELECT * ok]`, a plain
-  SELECT is fine. If it is tagged `[SECONDARY ONLY - lead WHERE on: <fields>]`,
-  you MUST query with a WHERE clause that LEADS on the FIRST listed field.
-- DISCOVER THE INDEX FIRST (do this before composing any WHERE on a secondary-only
-  collection). If the focus block did not already give you the key order, call
-  `capella_get_detailed_indexes` (or `capella_get_system_indexes`) for the keyspace
-  and read the index's key list IN ORDER. The WHERE predicate MUST equality-match
-  the index's FIRST key field. Filtering only on a trailing key (e.g.
-  `salesOrganizationCode` when the index is
-  `styleSeasonCodeFms, divisionCode, salesOrganizationCode, articleType`) still
-  fails with "no index available" — that is a wrong-predicate error, NOT "no data".
+1. FIRST QUERY OF THE TURN: before your first `capella_run_sql_plus_plus_query`,
+   call `capella_get_system_indexes` ONCE and keep the result as your INDEX MAP
+   for the whole turn. Focus-block tags (`[PRIMARY index - SELECT * ok]`,
+   `[SECONDARY ONLY - lead WHERE on: <fields>]`) are the map for THOSE
+   collections; the call is still REQUIRED before querying any untagged
+   collection you decide to explore.
+2. BEFORE EVERY SELECT: find the target collection in your index map and name
+   the index you are using. Your WHERE clause MUST lead on that index's FIRST
+   key field (in the map's key order) with a SARGABLE predicate: equality, a
+   range, or a prefix `LIKE "abc%"` -- never a leading-wildcard `LIKE "%..."`.
+   A bare `SELECT *` with no WHERE is allowed ONLY when the map shows a PRIMARY
+   index on that collection. Use `capella_get_detailed_indexes` when you need
+   extended key metadata.
+3. NO USABLE INDEX for your predicate? DO NOT run the query -- it is guaranteed
+   to fail with code 4000. When you know the document key, use
+   `capella_get_document_by_id` or a `USE KEYS` clause instead. Otherwise
+   report "collection not queryable on <field> (no usable index)" as a benign
+   finding and move on -- that sentence, not a failed query, is the correct
+   evidence.
+
+- Filtering only on a TRAILING key (e.g. `salesOrganizationCode` when the index
+  is `styleSeasonCodeFms, divisionCode, salesOrganizationCode, articleType`)
+  still fails with "no index available" — that is a wrong-predicate error,
+  NOT "no data".
 - If you only have a value for a TRAILING key (e.g. you know `salesOrganizationCode
   = 'THE1'` but not the leading `styleSeasonCodeFms`), you cannot use that index.
   Either supply the leading key's value from the incident context (season codes and

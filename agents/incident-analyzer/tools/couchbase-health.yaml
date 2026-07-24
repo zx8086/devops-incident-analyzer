@@ -92,6 +92,12 @@ tool_mapping:
     query_execution:
       - capella_run_sql_plus_plus_query
       - capella_explain_sql_plus_plus_query
+      # SIO-1198: index discovery MUST be on the same belt as query execution --
+      # the SOUL's mandatory protocol requires listing indexes BEFORE the first
+      # SELECT, which is impossible if these only ship with index_analysis.
+      - capella_get_system_indexes
+      - capella_get_detailed_indexes
+      - capella_get_document_by_id
       - capella_get_prepared_statements
       - capella_get_detailed_prepared_statements
       - capella_suggest_query_optimizations
@@ -110,4 +116,6 @@ tool_mapping:
     index_analysis: when reading GSI/secondary index definitions or stats, running the server-computed Index Advisor on a query, or sweeping for non-covering / low-selectivity query patterns
     node_status: when checking individual cluster node status (services running, version, uptime) -- not cluster-wide health
     document_ops: when listing buckets/scopes/collections or reading specific documents by key (read-only K/V access)
-    query_execution: when running an N1QL SELECT query or EXPLAIN plan (read-only; the compliance layer rejects mutations)
+    query_execution: >-
+      when running an N1QL SELECT query or EXPLAIN plan (read-only; carries the index-listing tools
+      because the SOUL's index-first protocol requires consulting them before the first SELECT)

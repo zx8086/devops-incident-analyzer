@@ -6,6 +6,7 @@ import {
 	buildAbsenceEvidenceDigest,
 	isAbsenceJudgeEnabled,
 	judgeContradictedAbsenceClaims,
+	judgeOvergeneralizedAbsenceClaims,
 } from "./absence-judge.ts";
 
 // No module mocks here: the judge exposes an LLM seam (_setAbsenceJudgeLlmForTesting) so
@@ -233,5 +234,59 @@ describe("judgeContradictedAbsenceClaims (SIO-1158)", () => {
 		expect(human).toContain("1: [datasource: elastic] order-sync-service");
 		expect(human).toContain("--- datasource elastic returned this turn ---");
 		expect(human).toContain("Total results: 91");
+	});
+});
+
+// SIO-1198 Part A: the OVERGENERALIZED arm gets the same veto treatment. The judgment
+// is textual (universal assertion vs explicitly scoped enumeration) -- tool INPUTS are
+// not persisted in state, and the flag is about claim phrasing, not data contradiction.
+describe("judgeOvergeneralizedAbsenceClaims (SIO-1198)", () => {
+	afterEach(() => _setAbsenceJudgeLlmForTesting(null));
+
+	const LINES = [
+		"Style code TH1037 absent from all queried collections: styles.product2g, styles.variant, styles.archived_styles",
+		"The AFS mapping is entirely absent from all records anywhere in the pipeline",
+	];
+
+	test("returns [] for an empty list without invoking the LLM", async () => {
+		const { calls, llm } = fakeLlm(() => "{}");
+		_setAbsenceJudgeLlmForTesting(llm);
+		expect(await judgeOvergeneralizedAbsenceClaims([])).toEqual([]);
+		expect(calls.length).toBe(0);
+	});
+
+	test("maps verdicts by index: scoped enumeration vetoed, universal claim confirmed", async () => {
+		const { llm } = fakeLlm(() =>
+			JSON.stringify({
+				verdicts: [
+					{ index: 1, overgeneralizedAbsence: true, reason: "universal, no enumeration" },
+					{ index: 0, overgeneralizedAbsence: false, reason: "explicitly scoped to enumerated collections" },
+				],
+			}),
+		);
+		_setAbsenceJudgeLlmForTesting(llm);
+		expect(await judgeOvergeneralizedAbsenceClaims(LINES)).toEqual([false, true]);
+	});
+
+	test("verdict count mismatch returns null (fail-closed)", async () => {
+		const { llm } = fakeLlm(() =>
+			JSON.stringify({ verdicts: [{ index: 0, overgeneralizedAbsence: true, reason: "r" }] }),
+		);
+		_setAbsenceJudgeLlmForTesting(llm);
+		expect(await judgeOvergeneralizedAbsenceClaims(LINES)).toBeNull();
+	});
+
+	test("non-JSON content returns null (fail-closed)", async () => {
+		const { llm } = fakeLlm(() => "the claims look fine to me");
+		_setAbsenceJudgeLlmForTesting(llm);
+		expect(await judgeOvergeneralizedAbsenceClaims(LINES)).toBeNull();
+	});
+
+	test("LLM throw returns null (fail-closed) unless the caller aborted", async () => {
+		const { llm } = fakeLlm(() => {
+			throw new Error("bedrock unavailable");
+		});
+		_setAbsenceJudgeLlmForTesting(llm);
+		expect(await judgeOvergeneralizedAbsenceClaims(LINES)).toBeNull();
 	});
 });

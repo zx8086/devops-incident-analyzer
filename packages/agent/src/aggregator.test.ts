@@ -1878,3 +1878,108 @@ Confidence: 0.9`;
 		expect(text).toContain('root cause (under a "## Root Cause" heading');
 	});
 });
+
+// SIO-1198 Part B: integrity severity tiers end-to-end. A rewritten, non-load-bearing
+// integrity flag soft-caps at 0.75 with an integrity note; the same flag echoed by the
+// Root Cause section (load-bearing) or with tiering disabled stays hard at 0.59.
+describe.skipIf(!hasRunbooks)("aggregate SIO-1198 integrity tiers", () => {
+	beforeEach(() => {
+		_setAggregatorLoggerForTesting(makeAggregatorCaptureLogger([]));
+		lastInvokeMessages = null;
+	});
+
+	afterEach(() => {
+		_setAggregatorLoggerForTesting(null);
+		mockLlmContent = "Mock aggregator output. Confidence: 0.5";
+		delete process.env.INTEGRITY_CAP_TIERING_ENABLED;
+	});
+
+	const NO_INDEX_CLAIM = "- The couchbase styles.variant collection returned no data (SELECT * planning failure)";
+
+	const SOFT_ANSWER = `# Report
+
+## Findings
+
+### Couchbase
+${NO_INDEX_CLAIM}
+
+## Root Cause
+
+The kafka consumer group order-sink stalled on partition 3; broker offsets confirm the backlog.
+
+Confidence: 0.9`;
+
+	const LOAD_BEARING_ANSWER = `# Report
+
+## Findings
+
+### Couchbase
+${NO_INDEX_CLAIM}
+
+## Root Cause
+
+The kafka consumer group order-sink stalled; the couchbase season mapping absence contributed.
+
+Confidence: 0.9`;
+
+	function noIndexState() {
+		return makeState({
+			dataSourceResults: [
+				{
+					dataSourceId: "kafka",
+					status: "success",
+					data: "kafka result",
+					duration: 100,
+					toolErrors: [],
+					kafkaFindings: { consumerGroups: [{ id: "order-sink", state: "STABLE", totalLag: 50000 }] },
+				},
+				{
+					dataSourceId: "couchbase",
+					status: "success",
+					data: "couchbase result",
+					duration: 100,
+					toolErrors: [
+						{
+							toolName: "capella_run_sql_plus_plus_query",
+							category: "no-data" as const,
+							kind: "no-index" as const,
+							message: "No index available on keyspace (code 4000)",
+							retryable: false,
+						},
+					],
+				},
+			],
+		});
+	}
+
+	test("rewritten, non-load-bearing no-index misread soft-caps at 0.75 with an integrity note", async () => {
+		mockLlmContent = SOFT_ANSWER;
+		const result = await aggregate(noIndexState());
+		expect(result.capReasons).toEqual(["no-index-misread"]);
+		expect(result.confidenceScore).toBe(0.75);
+		expect(result.confidenceCapMode).toBe("soft");
+		expect(result.finalAnswer).toContain(
+			"Confidence: 0.75 (capped from evidence score 0.9 -- misread no-index result)",
+		);
+		expect(result.finalAnswer).toContain("_Integrity note:_");
+		expect(result.finalAnswer).toContain("[CORRECTION");
+	});
+
+	test("the same flag echoed by the Root Cause section stays hard at 0.59", async () => {
+		mockLlmContent = LOAD_BEARING_ANSWER;
+		const result = await aggregate(noIndexState());
+		expect(result.capReasons).toEqual(["no-index-misread"]);
+		expect(result.confidenceScore).toBe(0.59);
+		expect(result.confidenceCapMode).toBe("hard");
+		expect(result.finalAnswer).not.toContain("_Integrity note:_");
+	});
+
+	test("INTEGRITY_CAP_TIERING_ENABLED=false restores the hard cap", async () => {
+		process.env.INTEGRITY_CAP_TIERING_ENABLED = "false";
+		mockLlmContent = SOFT_ANSWER;
+		const result = await aggregate(noIndexState());
+		expect(result.confidenceScore).toBe(0.59);
+		expect(result.confidenceCapMode).toBe("hard");
+		expect(result.finalAnswer).not.toContain("_Integrity note:_");
+	});
+});

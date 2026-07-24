@@ -344,3 +344,58 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-1158 premature-absence judge veto",
 		expect(out.finalAnswer).toContain("[CORRECTION");
 	});
 });
+
+// SIO-1198 Part A: aggregate()-level veto over the OVERGENERALIZED arm. The regex flags
+// both universal assertions and explicitly scoped enumerations; the judge separates them.
+// Fixture answers avoid ABSENCE_CLAIM_RE phrasing so the contradicted arm stays silent.
+const SCOPED_ENUM_CONTENT =
+	"### Couchbase\n\nStyle code TH1037 is absent from all queried collections: styles.product2g, styles.variant, styles.archived_styles.\n\nConfidence: 0.82";
+
+const UNIVERSAL_CONTENT =
+	"### Pipeline\n\nThe AFS season mapping is entirely absent from all records anywhere in the pipeline.\n\nConfidence: 0.8";
+
+function overVerdictLlm(bools: boolean[]) {
+	return {
+		invoke: async () => ({
+			content: JSON.stringify({
+				verdicts: bools.map((b, index) => ({ index, overgeneralizedAbsence: b, reason: "r" })),
+			}),
+		}),
+	};
+}
+
+describe.skipIf(!hasRunbooks)("aggregate SIO-1198 overgeneralized-absence judge veto", () => {
+	afterEach(() => {
+		_setAbsenceJudgeLlmForTesting(null);
+		delete process.env.ABSENCE_JUDGE_ENABLED;
+	});
+
+	test("judge-vetoed scoped enumeration does not cap or get a SCOPE suffix", async () => {
+		mockLlmOverride = SCOPED_ENUM_CONTENT;
+		_setAbsenceJudgeLlmForTesting(overVerdictLlm([false]));
+
+		const out = await aggregate(makeState([ELASTIC_RESULT], "test-overgen-judge-veto"));
+		expect(out.confidenceScore).toBeCloseTo(0.82);
+		expect(out.capReasons).not.toContain("premature-absence");
+		expect(out.finalAnswer).not.toContain("[SCOPE");
+	});
+
+	test("judge-confirmed universal claim still caps and gets the SCOPE suffix", async () => {
+		mockLlmOverride = UNIVERSAL_CONTENT;
+		_setAbsenceJudgeLlmForTesting(overVerdictLlm([true]));
+
+		const out = await aggregate(makeState([ELASTIC_RESULT], "test-overgen-judge-confirm"));
+		expect(out.confidenceScore).toBeLessThanOrEqual(0.59);
+		expect(out.capReasons).toContain("premature-absence");
+		expect(out.finalAnswer).toContain("[SCOPE");
+	});
+
+	test("judge failure keeps the regex verdict (fail-closed: cap applies)", async () => {
+		mockLlmOverride = SCOPED_ENUM_CONTENT;
+		_setAbsenceJudgeLlmForTesting({ invoke: async () => ({ content: "not json at all" }) });
+
+		const out = await aggregate(makeState([ELASTIC_RESULT], "test-overgen-judge-fail"));
+		expect(out.confidenceScore).toBeLessThanOrEqual(0.59);
+		expect(out.capReasons).toContain("premature-absence");
+	});
+});
