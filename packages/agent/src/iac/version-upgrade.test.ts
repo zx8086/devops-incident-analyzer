@@ -467,17 +467,39 @@ describe("draftChange -- version-upgrade three-way live check (SIO-1196)", () =>
 		expect(result.versionDrift ?? null).toBeNull();
 	});
 
-	test("repo==target AND apply currently running -> no-op says RUNNING, no drift lane", async () => {
+	test("repo==target AND apply currently running -> no-op says RUNNING with pipeline evidence, no drift lane", async () => {
 		const { draftChange } = await import("./nodes.ts");
 		mockVersionTools({
 			gitlab_get_file_content: () => vuFile("9.4.4"),
-			gitlab_get_merge_commit_apply_result: () => '{"applyStatus":"running","pipelineId":1,"parentStatus":"running"}',
+			gitlab_get_merge_commit_apply_result: () =>
+				'{"applyStatus":"running","pipelineId":2698484619,"webUrl":"https://gitlab.com/x/-/jobs/15509964312","parentStatus":"running"}',
+			gitlab_get_commit_merge_requests: () =>
+				`[200] ${JSON.stringify([{ iid: 346, state: "merged", merge_commit_sha: MERGE_SHA_1196 }])}`,
 		});
 		const result = await draftChange(vuAsState({ iacRequest: vuRequest, clusterState: vuClusterState("9.4.3") }));
 		expect(result.noopReason).toBeTruthy();
 		expect(result.versionDrift ?? null).toBeNull();
 		const msg = String(result.messages?.[0]?.content ?? "");
 		expect(msg).toContain("RUNNING");
+		// SIO-1196 follow-up: the claim must carry its proof -- the live apply job URL, the child
+		// pipeline id, and the MR it belongs to, all read from the ACTUAL pipeline via the GitLab API.
+		expect(msg).toContain("MR !346");
+		expect(msg).toContain("https://gitlab.com/x/-/jobs/15509964312");
+		expect(msg).toContain("2698484619");
+	});
+
+	test("apply running but unverifiable (no job URL) still cites the pipeline id", async () => {
+		const { draftChange } = await import("./nodes.ts");
+		mockVersionTools({
+			gitlab_get_file_content: () => vuFile("9.4.4"),
+			gitlab_get_merge_commit_apply_result: () => '{"applyStatus":"pending","pipelineId":77,"parentStatus":"running"}',
+		});
+		const result = await draftChange(vuAsState({ iacRequest: vuRequest, clusterState: vuClusterState("9.4.3") }));
+		expect(result.noopReason).toBeTruthy();
+		expect(result.versionDrift ?? null).toBeNull();
+		const msg = String(result.messages?.[0]?.content ?? "");
+		expect(msg).toContain("PENDING");
+		expect(msg).toContain("77");
 	});
 
 	test("repo!=target AND live==repo baseline -> normal propose, no advisory", async () => {

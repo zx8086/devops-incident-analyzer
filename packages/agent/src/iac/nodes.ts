@@ -3217,13 +3217,23 @@ async function proposeVersionUpgrade(state: IacStateType, req: IacRequest): Prom
 			: null;
 		const applyStatus = apply?.applyStatus ?? "";
 		if (applyStatus === "running" || applyStatus === "pending" || applyStatus === "created") {
+			// The claim must carry its proof: the live apply job URL + child pipeline id come from
+			// gitlab_get_merge_commit_apply_result (the ACTUAL pipeline via the GitLab API), so the
+			// operator can verify instead of trusting the sentence.
+			const evidence = [
+				apply?.webUrl ? `apply job ${apply.webUrl}` : "",
+				apply?.pipelineId ? `child pipeline ${apply.pipelineId}` : "",
+			]
+				.filter(Boolean)
+				.join(", ");
 			return {
 				noopReason: `${cluster} upgrade to ${version} is merged and its apply is ${applyStatus}.`,
 				messages: [
 					new AIMessage(
-						`No new change needed: the upgrade of ${cluster} to ${version} is already merged and its apply ` +
-							`job is currently RUNNING -- live (${parity.liveVersion}) should reach ${version} when it ` +
-							`completes. Ask me "did the pipeline pass?" to re-check.`,
+						`No new change needed: the upgrade of ${cluster} to ${version} is already merged` +
+							`${mr ? ` (MR !${mr.iid})` : ""} and its apply job is currently ${applyStatus.toUpperCase()}` +
+							`${evidence ? ` (${evidence})` : ""} -- live (${parity.liveVersion}) should reach ${version} ` +
+							`when it completes. Ask me "did the pipeline pass?" to re-check.`,
 					),
 				],
 			};
