@@ -131,6 +131,7 @@ Follow the global "Handover Documents" structure (`~/.claude/CLAUDE.md`). Projec
 ## Critical Rules
 
 ### Workflow
+- **ALWAYS KILL EVERY SERVICE YOU START -- NON-NEGOTIABLE, NO EXCEPTIONS.** Any server, dev process, proxy, watcher, or MCP instance you launch (foreground, `timeout`-wrapped, or background) MUST be terminated before you end the turn or declare the task complete. Track the PID at spawn time and kill by that tracked PID -- never a blanket `pkill`. Then PROVE the ports are free: `lsof -nP -iTCP:<port> -sTCP:LISTEN` must return nothing for every port you touched. An orphaned listener you started is a task failure even if the code change shipped. The inverse also holds: NEVER kill processes you did not start (user's dev servers, other sessions' processes, browsers, system daemons) without explicit user approval -- and note that `lsof -ti :<port>` without `-sTCP:LISTEN` also lists CLIENT connections (e.g. a browser tab), so filter to LISTEN state before killing anything.
 - **NEVER commit** without explicit user authorization (slash commands ARE authorization)
 - **NEVER set Linear issues to "Done"** without user approval
 - **ALWAYS create a Linear issue before executing implementation plans**
@@ -167,7 +168,7 @@ ALWAYS KEEP: Zod `.describe()` calls, business logic "why" comments, ticket refe
 ### Servers
 - Elastic MCP: 9080 | Kafka MCP: 9081 | Couchbase MCP: 9082 | Konnect MCP: 9083 | GitLab MCP: 9084 | Atlassian MCP: 9085 | AWS MCP (SigV4 proxy): 3001 | Elastic IaC MCP: 9086 | Knowledge Graph MCP: 9087 (SIO-967, in-process in the web app) | Web: 5173
 - Check ports before starting: `lsof -i :<port>`
-- Kill background processes after testing
+- Kill background processes after testing -- see the MANDATORY kill rule at the top of Critical Rules > Workflow: every service you start dies before the turn ends, verified with `lsof -nP -iTCP:<port> -sTCP:LISTEN`
 - `/health` (SIO-482, `apps/web/src/routes/health/+server.ts`): always HTTP 200 (liveness/info, not a k8s readiness gate); `status` is `"ok"` or `"degraded"` (any probed MCP server not `"ready"`). Reports live MCP states (`getServerStates`/`getConnectedServers`), graph readiness + checkpointer type (`getAgentRuntimeStatus()` in `apps/web/src/lib/server/agent.ts`), and `activeSseConnections` (counter inc/dec in the stream route's ReadableStream start/close/cancel). `status`/`timestamp`/`services` (env-presence) preserved for backward compat.
 
 ### Testing
