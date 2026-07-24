@@ -485,7 +485,7 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 			"-> child -> the apply:* job and return that JOB's status (success=live, running=applying, failed=not " +
 			"live, manual=waiting for an operator to start it). Prefers the push-source pipeline (an api-source " +
 			"pipeline at the same sha is a synthetics trigger, not the apply). Short shas are resolved to the " +
-			"full sha. Use the parent pipeline status here is NOT reliable. Read-only. Returns JSON.",
+			"full sha. The parent pipeline status alone is NOT reliable. Read-only. Returns JSON.",
 		{
 			sha: z.string().describe("The MR's merge_commit_sha (after merge; short shas are resolved)."),
 			ref: z.string().optional().describe("Branch ref to scope to (default 'main')."),

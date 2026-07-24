@@ -16,7 +16,7 @@ The change is one field: `.version` in `environments/_deployments/<cluster>.json
 
 ## The three-way live check (RULES.md Must-always #8)
 
-Before deciding anything, read the repo file AND the live deployment (`elastic_cloud_get_deployment`; the live version sits at `resources.elasticsearch[0].info.version`). Then:
+Before deciding anything, read the repo file AND the live state per RULES.md Must-always #1: `elastic_cloud_get_deployment` (the live version sits at `resources.elasticsearch[0].info.version`), `elastic_cloud_get_plan_history` (the previous plan_id is the rollback anchor cited in the MR body), and `elastic_get_cluster_health` (do not propose an upgrade against a RED cluster). Then:
 
 | Repo `.version` | Live version | Verdict |
 |---|---|---|

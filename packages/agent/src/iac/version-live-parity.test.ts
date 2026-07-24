@@ -1,4 +1,4 @@
-// packages/agent/src/iac/version-live-parity.test.ts
+// agent/src/iac/version-live-parity.test.ts
 import { describe, expect, test } from "bun:test";
 import {
 	buildVersionDriftAttribution,
