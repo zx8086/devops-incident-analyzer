@@ -252,7 +252,7 @@ async function rebuild(opts: RebuildOptions): Promise<void> {
 // bindings ARE rebuildable from their mirror facts; what remains graph-only is listed.
 function printGaps(): void {
 	process.stdout.write(
-		[
+		`${[
 			"knowledge-graph rebuild: rebuilt from Couchbase mirror facts (SIO-1103): Incident +",
 			"  AFFECTED_BY (kg-incident), RootCause + HAS_ROOT_CAUSE (kg-root-cause), RESOLVED_BY (kg-resolution), telemetry",
 			"  bindings (kg-binding). NOT rebuilt (no system-of-record fact):",
@@ -261,7 +261,7 @@ function printGaps(): void {
 			"  Static topology re-seeds via `knowledge-graph:seed` / `knowledge-graph:seed-iac`.",
 			`  Vector index setup: run ${VECTOR_INDEX_SETUP.length} CALL(s) + re-embed if similarity search is needed.`,
 			`  (schema = ${MIGRATIONS.length} tables applied by store.init())`,
-		].join("\n") + "\n",
+		].join("\n")}\n`,
 	);
 }
 
