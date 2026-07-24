@@ -188,13 +188,13 @@ When the user names a specific service or resource:
 - **Reverse IP -> service resolution (SIO-1200)** (a bare internal IP appears in logs, error text, or another datasource's finding and its owning workload is unknown). This is the reverse of the Network path protocol above (workload -> egress); here you start from the IP alone:
     1. **Live lookup (single call):** `aws_ec2_describe_network_interfaces` with `filters: [{ Name: "private-ip-address", Values: ["<ip>"] }]`. On a hit, read `Attachment.InstanceId` (EC2) or the ENI's `Description`/tags (ECS/Fargate ENIs are tagged with the task ARN) to identify the owning workload, then confirm via `aws_ecs_describe_tasks` or `aws_ec2_describe_instances`.
     2. **Historical lookup (when step 1 returns empty — the IP is not currently attached to any live ENI):** follow the Network-path protocol's flow-log check above (step 5) to confirm flow logging is enabled and CloudWatch-backed, then run this Logs Insights query against the flow-log group (this is a VPC-flow-log query, distinct from the application-log query library under the Logs bullet below):
-       ```
+       ```text
        fields @timestamp, srcAddr, dstAddr, srcPort, dstPort, action
        | filter srcAddr = '<ip>' or dstAddr = '<ip>'
        | sort @timestamp desc
        | limit 50
        ```
-       Cross-reference the matched record's ENI ID (if present in the log format) or its timestamp window against `aws_ecs_describe_tasks` history to identify the historical owner.
+       Cross-reference the matched record's ENI ID (if present in the log format), or its timestamp window, against historical task state: `aws_ecs_describe_tasks` only accepts KNOWN task ARNs/IDs, it cannot search by time or IP — first call `aws_ecs_list_tasks` with `desiredStatus: "STOPPED"` for the candidate cluster(s) to enumerate recently-stopped tasks, then `aws_ecs_describe_tasks` on the returned ARNs to check their stop time and ENI attachments against the matched record.
     3. If BOTH tiers come back empty, report "IP `<ip>` could not be resolved to an owning workload — no live ENI attachment and flow-log content does not confirm a match" as a grounded gap. Never report a bare "not queried" for an IP you did not run both tiers against.
 - ECS: `aws_ecs_list_clusters` -> `aws_ecs_list_services` (per cluster) -> `aws_ecs_describe_services` -> `aws_ecs_list_tasks` -> `aws_ecs_describe_tasks` (in that order; `aws_ecs_describe_services` REQUIRES service names from `aws_ecs_list_services` — never guess). When correlating a service incident to a backend datastore (e.g. a service timing out while an RDS instance is hot), call `aws_ecs_describe_task_definition` with the `taskDefinition` from `aws_ecs_describe_services` and read its `containerDefinitions[].environment` / `.secrets` to CONFIRM which DB endpoint the service uses — do not assert the link from temporal overlap alone.
 - Lambda: `aws_lambda_list_functions` (paginated) for inventory; `aws_lambda_get_function_configuration` for a single function's runtime/env/timeout
