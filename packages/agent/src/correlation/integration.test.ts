@@ -381,10 +381,7 @@ describe("correlationCoverageSignals", () => {
 		{ ruleName: "rule-without", requiredAgent: "elastic-agent" as const, reason: "r", triggerContext: {} },
 		{ ruleName: "rule-unknown", requiredAgent: "elastic-agent" as const, reason: "r", triggerContext: {} },
 	];
-	const rules = [
-		{ name: "rule-with-relevance", relevanceDataSources: ["aws", "elastic"] },
-		{ name: "rule-without" },
-	];
+	const rules = [{ name: "rule-with-relevance", relevanceDataSources: ["aws", "elastic"] }, { name: "rule-without" }];
 
 	test("declared relevanceDataSources become the signal; missing/unknown are unattributable", () => {
 		const signals = correlationCoverageSignals(degraded, rules);
