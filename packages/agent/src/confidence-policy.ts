@@ -44,6 +44,17 @@ export interface CoverageSignal {
 	dataSources: string[] | null;
 }
 
+// SIO-1198 Part B: one signal per flagged CLAIM behind an integrity reason.
+// rewritten = the guard's rewriter actually mutated the claim line in place;
+// loadBearing = the claim sits in, or is attributed by, the Root Cause section
+// (location-based -- see isClaimLoadBearing). An integrity reason is soft-eligible
+// only when every one of its signals is rewritten and not load-bearing.
+export interface IntegritySignal {
+	reason: string;
+	rewritten: boolean;
+	loadBearing: boolean;
+}
+
 export interface CapDecision {
 	mode: "none" | "hard" | "soft";
 	cap?: number;
@@ -55,6 +66,10 @@ export interface CapDecision {
 export function decideConfidenceCap(input: {
 	capReasons: string[];
 	coverageSignals: CoverageSignal[];
+	// SIO-1198: per-claim signals for integrity reasons; an integrity reason with no
+	// signal (or tiering disabled) is ineligible for softening -- fail-closed hard.
+	integritySignals?: IntegritySignal[];
+	integrityTieringEnabled?: boolean;
 	rootCauseDataSources: string[] | null;
 	threshold: number;
 }): CapDecision {
@@ -65,7 +80,21 @@ export function decideConfidenceCap(input: {
 	if (input.capReasons.length === 0) {
 		return { mode: "none", hardReasons: [], scopedReasons: [], degradedDataSources };
 	}
-	if (integrity.length > 0) {
+
+	// SIO-1198 Part B: integrity reasons are soft-eligible only when tiering is on and
+	// EVERY reason has at least one signal with every signal rewritten-in-place and
+	// not load-bearing for the Root Cause. Anything else (unsignalled reason, failed
+	// rewrite, load-bearing claim, tiering off) keeps the SIO-1195 hard cap.
+	const tiering = input.integrityTieringEnabled ?? true;
+	const integritySignals = input.integritySignals ?? [];
+	const integrityEligible =
+		integrity.length === 0 ||
+		(tiering &&
+			integrity.every((r) => {
+				const signals = integritySignals.filter((s) => s.reason === r);
+				return signals.length > 0 && signals.every((s) => s.rewritten && !s.loadBearing);
+			}));
+	if (!integrityEligible) {
 		return {
 			mode: "hard",
 			cap: hardCapFor(input.threshold),
@@ -76,9 +105,10 @@ export function decideConfidenceCap(input: {
 	}
 
 	const rc = input.rootCauseDataSources;
-	// Soft requires: an identified root-cause evidence set, every coverage reason
-	// backed by at least one signal, and every signal attributable to datasources
-	// none of which supplied the root-cause evidence.
+	// Coverage soft requires: an identified root-cause evidence set, every coverage
+	// reason backed by at least one signal, and every signal attributable to
+	// datasources none of which supplied the root-cause evidence. No coverage
+	// reasons at all passes trivially (integrity-only soft path).
 	const everyReasonSignalled = coverage.every((r) => input.coverageSignals.some((s) => s.reason === r));
 	const disjoint =
 		rc !== null &&
@@ -88,13 +118,14 @@ export function decideConfidenceCap(input: {
 		input.coverageSignals.every(
 			(s) => s.dataSources !== null && s.dataSources.length > 0 && s.dataSources.every((ds) => !rc.includes(ds)),
 		);
+	const coverageOk = coverage.length === 0 || disjoint;
 
-	return disjoint
+	return coverageOk
 		? {
 				mode: "soft",
 				cap: softCapFor(input.threshold),
 				hardReasons: [],
-				scopedReasons: coverage,
+				scopedReasons: input.capReasons,
 				degradedDataSources,
 			}
 		: {
@@ -188,24 +219,64 @@ export function extractRootCauseDataSources(answer: string, dataSourcesWithRetur
 	return grounded.length > 0 ? grounded : null;
 }
 
-// --- Coverage note --------------------------------------------------------------
+// --- Root-cause load-bearing test (SIO-1198) -------------------------------------
 
-// The note carries NO numbers so a later hard re-cap (enforce-node) can remove it
+// Location-based, deliberately NOT the coverage disjointness test: a datasource can
+// be absent from rootCauseDataSources precisely BECAUSE it returned nothing while the
+// Root Cause prose still cites it -- returned-data intersection would soften exactly
+// that case. A flagged claim is load-bearing when its line lies inside the Root Cause
+// section, or the section's raw prose attribution includes the claim's datasource.
+// Missing section or unattributable claim => load-bearing (fail-closed hard).
+export function isClaimLoadBearing(answer: string, claimLine: string): boolean {
+	const lines = answer.split("\n");
+	let sectionLevel: number | null = null;
+	const sectionLines: string[] = [];
+	for (const line of lines) {
+		if (sectionLevel === null) {
+			const m = line.match(ROOT_CAUSE_SECTION_HEADING_RE);
+			if (m?.[1]) sectionLevel = m[1].length;
+			continue;
+		}
+		const heading = line.match(ANY_HEADING_LINE_RE);
+		if (heading?.[1] && heading[1].length <= sectionLevel) break;
+		sectionLines.push(line);
+	}
+	if (sectionLevel === null) return true;
+	const needle = claimLine.trim();
+	if (sectionLines.some((l) => l.trim() === needle)) return true;
+	const claimDataSources = attributeLineDataSources(claimLine);
+	if (claimDataSources.length === 0) return true;
+	const rootCauseAttribution = new Set(sectionLines.flatMap((l) => attributeLineDataSources(l)));
+	return claimDataSources.some((ds) => rootCauseAttribution.has(ds));
+}
+
+// --- Coverage / integrity notes ----------------------------------------------------
+
+// Notes carry NO numbers so a later hard re-cap (enforce-node) can remove them
 // without ever having printed a contradictory value.
 export const COVERAGE_NOTE_PREFIX = "_Coverage note:_";
+export const INTEGRITY_NOTE_PREFIX = "_Integrity note:_";
 
 const CONFIDENCE_LINE_ONLY_RE = /^\s*[*_>\-\s]*\**\s*confidence(?:\s+score)?\s*:?\**\s*[0-1](?:\.\d+)?[^\r\n]*$/i;
 
-export function upsertCoverageNote(answer: string, note: string | null): string {
+function upsertPrefixedNote(answer: string, prefix: string, note: string | null): string {
 	// Remove any existing note first (idempotent upsert / removal).
-	const lines = answer.split("\n").filter((line) => !line.startsWith(COVERAGE_NOTE_PREFIX));
+	const lines = answer.split("\n").filter((line) => !line.startsWith(prefix));
 	if (note === null) return lines.join("\n");
-	const noteLine = `${COVERAGE_NOTE_PREFIX} ${note}`;
+	const noteLine = `${prefix} ${note}`;
 	const idx = lines.findIndex((line) => CONFIDENCE_LINE_ONLY_RE.test(line));
 	if (idx === -1) {
 		return `${lines.join("\n").replace(/\s+$/, "")}\n\n${noteLine}`;
 	}
 	return [...lines.slice(0, idx + 1), noteLine, ...lines.slice(idx + 1)].join("\n");
+}
+
+export function upsertCoverageNote(answer: string, note: string | null): string {
+	return upsertPrefixedNote(answer, COVERAGE_NOTE_PREFIX, note);
+}
+
+export function upsertIntegrityNote(answer: string, note: string | null): string {
+	return upsertPrefixedNote(answer, INTEGRITY_NOTE_PREFIX, note);
 }
 
 // --- Kill switch ------------------------------------------------------------------
@@ -215,5 +286,12 @@ export function upsertCoverageNote(answer: string, note: string | null): string 
 // behavior: any cap reason yields the hard cap.
 export function isCoverageScopingEnabled(env: Record<string, string | undefined>): boolean {
 	const raw = env.COVERAGE_CAP_SCOPING_ENABLED?.trim().toLowerCase();
+	return !(raw === "false" || raw === "0");
+}
+
+// SIO-1198: INTEGRITY_CAP_TIERING_ENABLED defaults ON. OFF = the pre-SIO-1198
+// behavior: every integrity reason hard-caps regardless of signals.
+export function isIntegrityCapTieringEnabled(env: Record<string, string | undefined>): boolean {
+	const raw = env.INTEGRITY_CAP_TIERING_ENABLED?.trim().toLowerCase();
 	return !(raw === "false" || raw === "0");
 }

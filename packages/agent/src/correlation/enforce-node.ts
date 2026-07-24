@@ -9,6 +9,7 @@ import {
 	decideConfidenceCap,
 	isCoverageScopingEnabled,
 	upsertCoverageNote,
+	upsertIntegrityNote,
 } from "../confidence-policy.ts";
 import type { AgentStateType, DegradedRule, PendingCorrelation } from "../state";
 import { queryDataSource } from "../sub-agent";
@@ -186,7 +187,7 @@ function computeLogGapRecovery(state: AgentStateType, degraded: DegradedRule[]):
 	// SIO-1195: the coverage note goes with it (the sole "gaps" reason was cured).
 	const rewritten =
 		restoredScore !== undefined
-			? rewriteConfidenceInAnswer(upsertCoverageNote(answer, null), restoredScore, "strip")
+			? rewriteConfidenceInAnswer(upsertIntegrityNote(upsertCoverageNote(answer, null), null), restoredScore, "strip")
 			: answer;
 	logger.info(
 		{ recoveredBullets: bullets.length, restored: restoredScore !== undefined, restoredScore },
@@ -310,7 +311,10 @@ export async function enforceCorrelationsAggregate(state: AgentStateType): Promi
 	// (prose must never claim moderation next to a below-gate score).
 	const preCap = state.confidencePreCap ?? state.confidenceScore;
 	const rawBase = recovery?.answer ?? state.finalAnswer;
-	const baseAnswer = rawBase !== undefined && capMode === "hard" ? upsertCoverageNote(rawBase, null) : rawBase;
+	const baseAnswer =
+		rawBase !== undefined && capMode === "hard"
+			? upsertIntegrityNote(upsertCoverageNote(rawBase, null), null)
+			: rawBase;
 	let updatedFinalAnswer = baseAnswer
 		? rewriteConfidenceInAnswer(baseAnswer, cappedScore, { preCap, capReasons: mergedReasons })
 		: undefined;

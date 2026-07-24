@@ -53,6 +53,18 @@ export const AbsenceJudgeResponseSchema = z.object({
 	),
 });
 
+// SIO-1198: verdict schema for the OVERGENERALIZED arm (true = genuinely universal
+// absence assertion, keep flagged; false = explicitly scoped claim, veto the flag).
+export const OvergeneralizedJudgeResponseSchema = z.object({
+	verdicts: z.array(
+		z.object({
+			index: z.number().int().min(0),
+			overgeneralizedAbsence: z.boolean(),
+			reason: z.string(),
+		}),
+	),
+});
+
 const JUDGE_PROMPT = `You review flagged sentences from a DevOps incident report. Each sentence makes an ABSENCE claim (zero hits, no records, not present, does not ship) and mentions a datasource whose own sub-agent returned SOME data this turn. A keyword filter flagged the sentence as possibly contradicted by that data. Decide for EACH sentence whether the returned data ACTUALLY CONTRADICTS that sentence's specific claim.
 
 contradictedByData = true ONLY when the evidence for the sentence's labelled datasource contains the very data the sentence declares absent -- for example the sentence says "0 hits for X" or "service does not ship logs" while the evidence shows matching hits for X or log documents from that service.
@@ -129,44 +141,108 @@ export async function judgeContradictedAbsenceClaims(
 			[new SystemMessage(JUDGE_PROMPT), new HumanMessage(`Evidence:\n${evidence}\n\nFlagged sentences:\n${numbered}`)],
 			config,
 		);
-		const content = typeof result.content === "string" ? result.content : "";
-		// Tolerate fenced/garnished JSON: pull the first {...} block (skill-learner idiom).
-		const match = content.match(/\{[\s\S]*\}/);
-		if (!match) {
-			logger.warn({ contentLength: content.length }, "absence judge returned no JSON object");
-			return null;
-		}
-		const parsed = AbsenceJudgeResponseSchema.safeParse(JSON.parse(match[0]));
-		if (!parsed.success) {
-			logger.warn({ issueCount: parsed.error.issues.length }, "absence judge response failed schema validation");
-			return null;
-		}
-		// Exactly one verdict per claim, indexes in range, no duplicates -- anything
-		// else is malformed and the deterministic verdict must stand.
-		if (parsed.data.verdicts.length !== claims.length) {
-			logger.warn(
-				{ expected: claims.length, got: parsed.data.verdicts.length },
-				"absence judge verdict count mismatch",
-			);
-			return null;
-		}
-		const out: Array<boolean | undefined> = new Array(claims.length).fill(undefined);
-		for (const v of parsed.data.verdicts) {
-			if (v.index >= claims.length || out[v.index] !== undefined) {
-				logger.warn({ index: v.index }, "absence judge verdict index out of range or duplicated");
-				return null;
-			}
-			out[v.index] = v.contradictedByData;
-		}
-		// Reasons are logged for audit: a vetoed cap must be explainable after the fact.
-		logger.info({ verdicts: parsed.data.verdicts }, "absence judge verdicts");
-		return out as boolean[];
+		return mapVerdicts(
+			typeof result.content === "string" ? result.content : "",
+			claims.length,
+			(raw) => {
+				const parsed = AbsenceJudgeResponseSchema.safeParse(raw);
+				return parsed.success
+					? parsed.data.verdicts.map((v) => ({ index: v.index, keep: v.contradictedByData }))
+					: null;
+			},
+			"absence judge",
+		);
 	} catch (error) {
 		// Parity with gaps-judge (CodeRabbit, PR #416): a caller-requested cancellation
 		// must propagate -- only judge-local failures (including the 8s role deadline)
 		// fail closed to the regex verdict.
 		if (config?.signal?.aborted) throw error;
 		logger.warn({ error: error instanceof Error ? error.message : String(error) }, "absence judge failed");
+		return null;
+	}
+}
+
+// Shared verdict extraction: tolerate fenced/garnished JSON, require exactly one
+// verdict per claim, indexes in range, no duplicates -- anything else is malformed
+// and the deterministic verdict must stand (fail-closed).
+function mapVerdicts(
+	content: string,
+	claimCount: number,
+	extract: (raw: unknown) => Array<{ index: number; keep: boolean }> | null,
+	label: string,
+): boolean[] | null {
+	const match = content.match(/\{[\s\S]*\}/);
+	if (!match) {
+		logger.warn({ contentLength: content.length }, `${label} returned no JSON object`);
+		return null;
+	}
+	const verdicts = extract(JSON.parse(match[0]));
+	if (verdicts === null) {
+		logger.warn({ label }, `${label} response failed schema validation`);
+		return null;
+	}
+	if (verdicts.length !== claimCount) {
+		logger.warn({ expected: claimCount, got: verdicts.length }, `${label} verdict count mismatch`);
+		return null;
+	}
+	const out: Array<boolean | undefined> = new Array(claimCount).fill(undefined);
+	for (const v of verdicts) {
+		if (v.index >= claimCount || out[v.index] !== undefined) {
+			logger.warn({ index: v.index }, `${label} verdict index out of range or duplicated`);
+			return null;
+		}
+		out[v.index] = v.keep;
+	}
+	// Reasons are logged upstream of extraction; keep flags logged for audit here.
+	logger.info({ label, verdicts }, "judge verdicts");
+	return out as boolean[];
+}
+
+// SIO-1198 Part A: veto judge for the OVERGENERALIZED arm. The question is TEXTUAL --
+// is the claim a genuinely universal absence assertion, or is it explicitly scoped to
+// what was actually checked? Tool INPUTS are not persisted in state (toolOutputs hold
+// results only), and this arm's regex fires on phrasing, not data contradiction, so no
+// evidence digest is sent. Same safety contract: shrink-only, fail-closed on any error.
+const OVERGENERALIZED_JUDGE_PROMPT = `You review flagged sentences from a DevOps incident report. Each was flagged by a keyword filter as a possibly OVER-GENERALIZED absence claim (phrases like "absent from all", "all records", "entirely absent", "whole pipeline"). Decide for EACH sentence whether it truly asserts a UNIVERSAL absence beyond what could have been verified.
+
+overgeneralizedAbsence = true ONLY when the sentence asserts absence universally with no stated scope -- "entirely absent from all records", "never populated anywhere", "the whole pipeline is empty" -- claims that a partial investigation cannot support.
+
+overgeneralizedAbsence = false when the sentence explicitly SCOPES its claim to what was checked: it enumerates the specific collections, indexes, tables, or windows examined (e.g. "absent from all queried collections: a.b, c.d, e.f"), or qualifies with words like "queried", "sampled", "checked", "examined", "in the N collections listed". A scoped negative over an enumerated set is a valid finding, not an over-generalization.
+
+Return ONLY JSON, no prose, with exactly one verdict per sentence index:
+{"verdicts": [{"index": 0, "overgeneralizedAbsence": true, "reason": "..."}]}`;
+
+export async function judgeOvergeneralizedAbsenceClaims(
+	lines: string[],
+	config?: { signal?: AbortSignal },
+): Promise<boolean[] | null> {
+	if (lines.length === 0) return [];
+	try {
+		const llm = overrideLlm ?? (createLlm("absenceJudge") as unknown as InvokableLlm);
+		const numbered = lines.map((line, i) => `${i}: ${line}`).join("\n");
+		const result = await invokeWithDeadline(
+			llm,
+			"absenceJudge",
+			[new SystemMessage(OVERGENERALIZED_JUDGE_PROMPT), new HumanMessage(`Flagged sentences:\n${numbered}`)],
+			config,
+		);
+		return mapVerdicts(
+			typeof result.content === "string" ? result.content : "",
+			lines.length,
+			(raw) => {
+				const parsed = OvergeneralizedJudgeResponseSchema.safeParse(raw);
+				return parsed.success
+					? parsed.data.verdicts.map((v) => ({ index: v.index, keep: v.overgeneralizedAbsence }))
+					: null;
+			},
+			"overgeneralized-absence judge",
+		);
+	} catch (error) {
+		if (config?.signal?.aborted) throw error;
+		logger.warn(
+			{ error: error instanceof Error ? error.message : String(error) },
+			"overgeneralized-absence judge failed",
+		);
 		return null;
 	}
 }

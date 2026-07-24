@@ -10,7 +10,9 @@ import {
 	decideConfidenceCap,
 	extractRootCauseDataSources,
 	hardCapFor,
+	isClaimLoadBearing,
 	isCoverageScopingEnabled,
+	isIntegrityCapTieringEnabled,
 	softCapFor,
 	upsertCoverageNote,
 } from "./confidence-policy.ts";
@@ -328,5 +330,192 @@ describe("decideConfidenceCap same-reason multi-signal (CodeRabbit PR #456)", ()
 		});
 		expect(d.mode).toBe("hard");
 		expect(d.cap).toBe(0.59);
+	});
+});
+
+// SIO-1198 Part B: severity tiers within the integrity class. An integrity reason is
+// soft-eligible only when EVERY flagged claim behind it was rewritten in place AND is
+// not load-bearing for the Root Cause; all uncertainty resolves to hard.
+describe("decideConfidenceCap integrity tiers (SIO-1198)", () => {
+	const rc = ["kafka", "elastic"];
+
+	test("integrity reason with all-rewritten, non-load-bearing signals -> soft 0.75", () => {
+		const d = decideConfidenceCap({
+			capReasons: ["no-index-misread"],
+			coverageSignals: [],
+			integritySignals: [{ reason: "no-index-misread", rewritten: true, loadBearing: false }],
+			rootCauseDataSources: rc,
+			threshold: 0.6,
+		});
+		expect(d.mode).toBe("soft");
+		expect(d.cap).toBe(0.75);
+		expect(d.scopedReasons).toEqual(["no-index-misread"]);
+	});
+
+	test("load-bearing integrity signal -> hard", () => {
+		const d = decideConfidenceCap({
+			capReasons: ["no-index-misread"],
+			coverageSignals: [],
+			integritySignals: [{ reason: "no-index-misread", rewritten: true, loadBearing: true }],
+			rootCauseDataSources: rc,
+			threshold: 0.6,
+		});
+		expect(d.mode).toBe("hard");
+		expect(d.cap).toBe(0.59);
+	});
+
+	test("unrewritten integrity signal -> hard", () => {
+		const d = decideConfidenceCap({
+			capReasons: ["premature-absence"],
+			coverageSignals: [],
+			integritySignals: [{ reason: "premature-absence", rewritten: false, loadBearing: false }],
+			rootCauseDataSources: rc,
+			threshold: 0.6,
+		});
+		expect(d.mode).toBe("hard");
+	});
+
+	test("integrity reason with NO signal stays hard (unsignalled = fail-closed)", () => {
+		const d = decideConfidenceCap({
+			capReasons: ["ungrounded-metrics"],
+			coverageSignals: [],
+			integritySignals: [],
+			rootCauseDataSources: rc,
+			threshold: 0.6,
+		});
+		expect(d.mode).toBe("hard");
+	});
+
+	test("one eligible + one ineligible integrity reason -> hard", () => {
+		const d = decideConfidenceCap({
+			capReasons: ["no-index-misread", "premature-absence"],
+			coverageSignals: [],
+			integritySignals: [
+				{ reason: "no-index-misread", rewritten: true, loadBearing: false },
+				{ reason: "premature-absence", rewritten: true, loadBearing: true },
+			],
+			rootCauseDataSources: rc,
+			threshold: 0.6,
+		});
+		expect(d.mode).toBe("hard");
+	});
+
+	test("multiple signals for one reason: every one must be eligible", () => {
+		const d = decideConfidenceCap({
+			capReasons: ["premature-absence"],
+			coverageSignals: [],
+			integritySignals: [
+				{ reason: "premature-absence", rewritten: true, loadBearing: false },
+				{ reason: "premature-absence", rewritten: true, loadBearing: true },
+			],
+			rootCauseDataSources: rc,
+			threshold: 0.6,
+		});
+		expect(d.mode).toBe("hard");
+	});
+
+	test("eligible integrity + disjoint coverage -> soft; overlapping coverage -> hard", () => {
+		const base = {
+			capReasons: ["no-index-misread", "degraded-subagents"],
+			integritySignals: [{ reason: "no-index-misread", rewritten: true, loadBearing: false }],
+			rootCauseDataSources: rc,
+			threshold: 0.6,
+		};
+		const soft = decideConfidenceCap({
+			...base,
+			coverageSignals: [{ reason: "degraded-subagents", dataSources: ["konnect"] }],
+		});
+		expect(soft.mode).toBe("soft");
+		const hard = decideConfidenceCap({
+			...base,
+			coverageSignals: [{ reason: "degraded-subagents", dataSources: ["kafka"] }],
+		});
+		expect(hard.mode).toBe("hard");
+	});
+
+	test("threshold plumbs through the integrity-soft cap", () => {
+		const d = decideConfidenceCap({
+			capReasons: ["ungrounded-expiry"],
+			coverageSignals: [],
+			integritySignals: [{ reason: "ungrounded-expiry", rewritten: true, loadBearing: false }],
+			rootCauseDataSources: rc,
+			threshold: 0.75,
+		});
+		expect(d.cap).toBeCloseTo(0.85, 10);
+	});
+});
+
+describe("isClaimLoadBearing (SIO-1198)", () => {
+	const answer = `# Report
+
+## Findings
+
+### Couchbase
+- Style TH1037 zero rows in styles.variant (SELECT * failed, no index)
+
+## Root Cause
+
+The kafka consumer group stalled; couchbase season mapping absence contributed.
+
+## Recommendations
+
+- fix things
+
+Confidence: 0.8`;
+
+	test("flagged line inside the Root Cause section -> load-bearing", () => {
+		expect(
+			isClaimLoadBearing(answer, "The kafka consumer group stalled; couchbase season mapping absence contributed."),
+		).toBe(true);
+	});
+
+	test("flagged line outside Root Cause whose datasource the Root Cause prose attributes -> load-bearing", () => {
+		expect(isClaimLoadBearing(answer, "- Style TH1037 zero rows in styles.variant (SELECT * failed, no index)")).toBe(
+			true,
+		);
+	});
+
+	test("flagged line outside Root Cause with a datasource the Root Cause never mentions -> not load-bearing", () => {
+		const a = `# Report
+
+### Couchbase
+- Style TH1037 zero rows in styles.variant (couchbase SELECT * failed)
+
+## Root Cause
+
+The kafka consumer group order-sink stalled on partition 3; elasticsearch traces confirm it.
+
+Confidence: 0.8`;
+		expect(isClaimLoadBearing(a, "- Style TH1037 zero rows in styles.variant (couchbase SELECT * failed)")).toBe(false);
+	});
+
+	test("no Root Cause section -> load-bearing (fail-closed)", () => {
+		expect(isClaimLoadBearing("# Report\n\n- couchbase claim here\n\nConfidence: 0.8", "- couchbase claim here")).toBe(
+			true,
+		);
+	});
+
+	test("unattributable flagged line -> load-bearing (fail-closed)", () => {
+		expect(isClaimLoadBearing(answer, "- the follow-up verification could not be re-run")).toBe(true);
+	});
+});
+
+describe("isIntegrityCapTieringEnabled", () => {
+	test("defaults ON; only explicit false/0 disable", () => {
+		expect(isIntegrityCapTieringEnabled({})).toBe(true);
+		expect(isIntegrityCapTieringEnabled({ INTEGRITY_CAP_TIERING_ENABLED: "false" })).toBe(false);
+		expect(isIntegrityCapTieringEnabled({ INTEGRITY_CAP_TIERING_ENABLED: "0" })).toBe(false);
+	});
+
+	test("kill switch off -> integrity signals ignored, hard cap", () => {
+		const d = decideConfidenceCap({
+			capReasons: ["no-index-misread"],
+			coverageSignals: [],
+			integritySignals: [{ reason: "no-index-misread", rewritten: true, loadBearing: false }],
+			integrityTieringEnabled: false,
+			rootCauseDataSources: ["kafka"],
+			threshold: 0.6,
+		});
+		expect(d.mode).toBe("hard");
 	});
 });

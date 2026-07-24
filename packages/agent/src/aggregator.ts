@@ -13,17 +13,27 @@ import { capReasonLabel } from "@devops-agent/shared/src/confidence.ts";
 import type { BaseMessage } from "@langchain/core/messages";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
-import { type AbsenceClaim, isAbsenceJudgeEnabled, judgeContradictedAbsenceClaims } from "./absence-judge.ts";
+import {
+	type AbsenceClaim,
+	isAbsenceJudgeEnabled,
+	judgeContradictedAbsenceClaims,
+	judgeOvergeneralizedAbsenceClaims,
+} from "./absence-judge.ts";
 import { summarizeFirstAttempts } from "./alignment.ts";
 import { extractIamActions } from "./aws-policy-actions.ts";
 import { deriveConfidenceCap, getConfidenceThreshold } from "./confidence-gate.ts";
 import {
 	attributeGapBullets,
+	CAP_REASON_CLASS,
 	type CoverageSignal,
 	decideConfidenceCap,
 	extractRootCauseDataSources,
+	type IntegritySignal,
+	isClaimLoadBearing,
 	isCoverageScopingEnabled,
+	isIntegrityCapTieringEnabled,
 	upsertCoverageNote,
+	upsertIntegrityNote,
 } from "./confidence-policy.ts";
 import { isGapsJudgeEnabled, judgeDegradingGapBullets } from "./gaps-judge.ts";
 import { createLlm } from "./llm.ts";
@@ -1316,7 +1326,6 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	// not misfire in production; its SCOPE softening is also less destructive than the
 	// CORRECTION assertion).
 	const absenceDetection = detectPrematureAbsence(answer, results);
-	const { overgeneralized } = absenceDetection;
 	let contradicted = absenceDetection.contradicted;
 	let absenceJudgeUsed = false;
 	if (contradicted.length > 0 && isAbsenceJudgeEnabled()) {
@@ -1333,6 +1342,27 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 			"Absence judge vetoed all regex-contradicted absence lines (scoped or cross-datasource findings)",
 		);
 	}
+	// SIO-1198 Part A: the OVERGENERALIZED arm gets the same veto treatment. The regex
+	// (`absent from all` etc.) also fires on explicitly SCOPED enumerations ("absent
+	// from all queried collections: a.b, c.d"), which are valid findings -- the judge
+	// separates universal assertions from scoped ones. Same flag, shrink-only,
+	// fail-closed (judge failure keeps the regex verdict).
+	let overgeneralized = absenceDetection.overgeneralized;
+	let overgeneralizedJudgeUsed = false;
+	if (overgeneralized.length > 0 && isAbsenceJudgeEnabled()) {
+		overgeneralizedJudgeUsed = true;
+		const overVerdicts = await judgeOvergeneralizedAbsenceClaims(overgeneralized, config);
+		if (overVerdicts !== null) {
+			overgeneralized = overgeneralized.filter((_, i) => overVerdicts[i]);
+		}
+	}
+	const overgeneralizedJudgeVetoedCount = absenceDetection.overgeneralized.length - overgeneralized.length;
+	if (overgeneralizedJudgeUsed && overgeneralized.length === 0) {
+		logger.info(
+			{ regexOvergeneralizedCount: absenceDetection.overgeneralized.length, overgeneralizedJudgeVetoedCount },
+			"Overgeneralized-absence judge vetoed all regex-flagged lines (explicitly scoped claims)",
+		);
+	}
 	const prematureAbsenceCapTriggered = contradicted.length > 0 || overgeneralized.length > 0;
 
 	// SIO-1087 (Fix D): a Root Cause line asserting a specific mechanism (schema mismatch, field
@@ -1346,6 +1376,56 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	// mismatch / gap" from a SELECT * failure. Validated: seasons.dates has 878+ rows.
 	const { flagged: noIndexMisread } = detectNoIndexMisread(answer, results);
 	const noIndexMisreadCapTriggered = noIndexMisread.length > 0;
+
+	// SIO-860/1013/1079/1085/1087/1088 content rewrites. SIO-1198 moved this chain
+	// BEFORE the cap decision so the per-claim `rewritten` signals reflect what the
+	// rewriters actually did (not an assumption). The chain depends only on the
+	// detection outputs above; the confidence-line rewrite still happens at the end.
+	const groundedBlockers = ungroundedCapTriggered ? rewriteUngroundedBlockers(answer, ungrounded) : answer;
+	const rewrittenForExpiry = expiryCapTriggered
+		? rewriteUngroundedExpiry(groundedBlockers, ungroundedExpiry)
+		: groundedBlockers;
+	// SIO-1085: chain the premature-absence rewrite after the expiry/blocker rewrites.
+	const rewrittenForGrounding = prematureAbsenceCapTriggered
+		? rewritePrematureAbsence(rewrittenForExpiry, contradicted, overgeneralized)
+		: rewrittenForExpiry;
+	// SIO-1087 (Fix D): chain the ungrounded-root-cause softening after the absence rewrites.
+	// RE-DETECT against the already-rewritten text: an earlier blocker/expiry/absence guard may
+	// have appended a suffix to a flagged root-cause line, so matching the ORIGINAL line strings
+	// against rewrittenForGrounding would miss it (exact-string Set lookup) -- the cap would apply
+	// with no visible "[UNVERIFIED...]" annotation on that line. Detecting on the mutated text
+	// keeps the match set aligned with what is actually being rewritten.
+	const rewrittenForRootCause = ungroundedRootCauseCapTriggered
+		? rewriteUngroundedRootCause(
+				rewrittenForGrounding,
+				detectUngroundedRootCause(rewrittenForGrounding, results).ungrounded,
+			)
+		: rewrittenForGrounding;
+	// SIO-1088: chain the no-index-misread correction last, re-detecting against the mutated text.
+	const rewrittenForNoIndex = noIndexMisreadCapTriggered
+		? rewriteNoIndexMisread(rewrittenForRootCause, detectNoIndexMisread(rewrittenForRootCause, results).flagged)
+		: rewrittenForRootCause;
+
+	// SIO-1198 Part B: per-claim integrity signals for the tier decision. rewritten =
+	// the chain actually mutated the flagged line (the exact original line is gone);
+	// loadBearing = location-based Root Cause test on the PRE-rewrite answer.
+	const rewrittenLineSet = new Set(rewrittenForNoIndex.split("\n"));
+	const toIntegritySignals = (reason: string, lines: string[]): IntegritySignal[] =>
+		lines.map((line) => ({
+			reason,
+			rewritten: !rewrittenLineSet.has(line),
+			loadBearing: isClaimLoadBearing(answer, line),
+		}));
+	const integritySignals: IntegritySignal[] = [
+		...toIntegritySignals("ungrounded-blocker", ungroundedCapTriggered ? ungrounded : []),
+		...toIntegritySignals("ungrounded-expiry", expiryCapTriggered ? ungroundedExpiry : []),
+		...toIntegritySignals(
+			"premature-absence",
+			prematureAbsenceCapTriggered ? [...contradicted, ...overgeneralized] : [],
+		),
+		...toIntegritySignals("ungrounded-root-cause", ungroundedRootCauseCapTriggered ? ungroundedRootCause : []),
+		...toIntegritySignals("no-index-misread", noIndexMisreadCapTriggered ? noIndexMisread : []),
+	];
 
 	// SIO-1155: named cap reasons replace the boolean OR so the correlation recovery
 	// path can tell whether the gaps cap was the SOLE reason (only then may a cured
@@ -1383,6 +1463,10 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	const capDecision = decideConfidenceCap({
 		capReasons,
 		coverageSignals,
+		// SIO-1198: per-claim signals let rewritten, non-load-bearing integrity flags
+		// soften; the kill switch restores the SIO-1195 always-hard integrity behavior.
+		integritySignals,
+		integrityTieringEnabled: isIntegrityCapTieringEnabled(process.env),
 		// With scoping disabled, a null root cause forces every decision to hard --
 		// byte-for-byte the pre-SIO-1195 behavior.
 		rootCauseDataSources,
@@ -1457,8 +1541,11 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 				contradicted: contradicted.length,
 				overgeneralized: overgeneralized.length,
 				regexContradictedCount: absenceDetection.contradicted.length,
+				regexOvergeneralizedCount: absenceDetection.overgeneralized.length,
 				absenceJudgeUsed,
 				absenceJudgeVetoedCount,
+				overgeneralizedJudgeUsed,
+				overgeneralizedJudgeVetoedCount,
 				cap: appliedCap,
 				originalScore: confidenceScore,
 				cappedScore,
@@ -1491,33 +1578,8 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		);
 	}
 
-	// SIO-860: when a cap triggered, rewrite the printed confidence to the capped value.
-	// SIO-1013: also rewrite any ungrounded permission-blocker bullets to honest text first.
-	// SIO-1079: and rewrite any ungrounded "logs expired" bullets. Chain both rewrites.
-	const groundedBlockers = ungroundedCapTriggered ? rewriteUngroundedBlockers(answer, ungrounded) : answer;
-	const rewrittenForExpiry = expiryCapTriggered
-		? rewriteUngroundedExpiry(groundedBlockers, ungroundedExpiry)
-		: groundedBlockers;
-	// SIO-1085: chain the premature-absence rewrite after the expiry/blocker rewrites.
-	const rewrittenForGrounding = prematureAbsenceCapTriggered
-		? rewritePrematureAbsence(rewrittenForExpiry, contradicted, overgeneralized)
-		: rewrittenForExpiry;
-	// SIO-1087 (Fix D): chain the ungrounded-root-cause softening after the absence rewrites.
-	// RE-DETECT against the already-rewritten text: an earlier blocker/expiry/absence guard may
-	// have appended a suffix to a flagged root-cause line, so matching the ORIGINAL line strings
-	// against rewrittenForGrounding would miss it (exact-string Set lookup) -- the cap would apply
-	// with no visible "[UNVERIFIED...]" annotation on that line. Detecting on the mutated text
-	// keeps the match set aligned with what is actually being rewritten.
-	const rewrittenForRootCause = ungroundedRootCauseCapTriggered
-		? rewriteUngroundedRootCause(
-				rewrittenForGrounding,
-				detectUngroundedRootCause(rewrittenForGrounding, results).ungrounded,
-			)
-		: rewrittenForGrounding;
-	// SIO-1088: chain the no-index-misread correction last, re-detecting against the mutated text.
-	const rewrittenForNoIndex = noIndexMisreadCapTriggered
-		? rewriteNoIndexMisread(rewrittenForRootCause, detectNoIndexMisread(rewrittenForRootCause, results).flagged)
-		: rewrittenForRootCause;
+	// SIO-1198: the content rewrite chain ran BEFORE the cap decision (see above);
+	// rewrittenForNoIndex carries every bullet/line correction already.
 	// SIO-1140: deterministic backstop -- when a sub-agent report carried Index Advisor
 	// CREATE INDEX DDL that synthesis dropped or paraphrased, append it verbatim above
 	// the confidence line. Content-only; never touches the confidence score.
@@ -1536,17 +1598,28 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	// SIO-1195: a soft cap explains itself with a coverage note under the confidence
 	// line (no numbers in the note -- a later hard re-cap removes it cleanly).
 	const withCoverageNote =
-		capDecision.mode === "soft" && rootCauseDataSources
+		capDecision.mode === "soft" && rootCauseDataSources && capDecision.degradedDataSources.length > 0
 			? upsertCoverageNote(
 					capped,
 					`tool degradation affected ${capDecision.degradedDataSources.join(", ")}, which did not supply the root-cause evidence (${rootCauseDataSources.join(", ")}); confidence was moderated rather than capped below the review threshold.`,
 				)
 			: capped;
+	// SIO-1198: a soft cap that includes integrity reasons explains those too -- the
+	// flagged claims carry inline corrections and none support the root cause.
+	const softIntegrityReasons =
+		capDecision.mode === "soft" ? capReasons.filter((r) => CAP_REASON_CLASS[r] !== "coverage") : [];
+	const withIntegrityNote =
+		softIntegrityReasons.length > 0
+			? upsertIntegrityNote(
+					withCoverageNote,
+					"flagged claims were corrected inline and do not support the root cause; confidence was moderated rather than capped below the review threshold.",
+				)
+			: withCoverageNote;
 	// SIO-1133: stamp the Request-Id LAST so it sits at the very bottom of the report,
 	// after every content/confidence rewrite. Deterministic (not a prompt field); post
 	// PII redaction (redactPiiContent ran on the raw LLM output far upstream), so the
 	// UUID is never mangled. This is the machine key the learn-from lane scans for.
-	const finalAnswer = appendRequestIdFooter(withCoverageNote, state.requestId);
+	const finalAnswer = appendRequestIdFooter(withIntegrityNote, state.requestId);
 
 	logger.info(
 		{ duration: Date.now() - startTime, answerLength: finalAnswer.length, confidenceScore: cappedScore },
