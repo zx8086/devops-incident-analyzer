@@ -7,12 +7,16 @@ import {
 	redactPiiContent,
 	type ToolErrorCategory,
 } from "@devops-agent/shared";
+// SIO-1194: subpath import (not the barrel) so aggregator.test.ts's minimal
+// mock.module("@devops-agent/shared") namespace does not have to re-export it.
+import { capReasonLabel } from "@devops-agent/shared/src/confidence.ts";
 import type { BaseMessage } from "@langchain/core/messages";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { type AbsenceClaim, isAbsenceJudgeEnabled, judgeContradictedAbsenceClaims } from "./absence-judge.ts";
 import { summarizeFirstAttempts } from "./alignment.ts";
 import { extractIamActions } from "./aws-policy-actions.ts";
+import { deriveConfidenceCap } from "./confidence-gate.ts";
 import { isGapsJudgeEnabled, judgeDegradingGapBullets } from "./gaps-judge.ts";
 import { createLlm } from "./llm.ts";
 import { extractTextFromContent } from "./message-utils.ts";
@@ -194,6 +198,13 @@ export function buildAggregatorMessages(
 	// may surface it as low-confidence to the user, which is worse than a real score.
 	const confidenceFormatRule = `\n\nCONFIDENCE LINE REQUIREMENT: End the report with a line in this EXACT format on its own line: "Confidence: 0.XX" where 0.XX is a decimal between 0.0 and 1.0 (e.g. "Confidence: 0.82"). This line MUST be present. Do not use percentages, ranges, or qualitative words like "high"/"medium"/"low" -- a parseable decimal is required for downstream routing.`;
 
+	// SIO-1194: anchor bands calibrate the raw score to evidence strength. Without a
+	// rubric the LLM freestyles the number and conflates prose completeness with
+	// diagnostic certainty. Coverage penalties belong to the deterministic caps, so
+	// the rubric forbids double-punishing routine gaps (which gapsAuthoringRule and
+	// the SIO-1106/1149 classifier already treat as non-degrading).
+	const confidenceRubricRule = `\n\nCONFIDENCE RUBRIC: Score evidence strength for the diagnosis, not prose completeness. Bands: 0.85-0.95 = root cause identified AND confirmed by direct evidence from two or more independent datasources agreeing on mechanism and timing (never exceed 0.95). 0.70-0.84 = root cause identified with direct evidence from a single datasource, or multi-source evidence with exactly one unconfirmed link in the causal chain. 0.40-0.60 = a plausible hypothesis consistent with the data, but the causal mechanism itself is not directly evidenced. 0.21-0.39 = fragmentary evidence or multiple competing hypotheses with nothing decisive. 0.20 or below = no meaningful findings. Pick a value INSIDE the matching band. Do NOT lower the score below the matching band merely because routine gaps or scope notes are listed -- deterministic downstream checks handle coverage penalties separately. Do NOT raise the score to compensate for expected downstream adjustments.`;
+
 	// SIO-711: The styles-v3 aggregator volunteered "not fabricated" -- a meta-signal
 	// that the LLM perceived a non-trivial risk a reader would suspect fabrication.
 	// Forbid the self-defensive register; require structured "[partial: <field>]"
@@ -258,7 +269,7 @@ export function buildAggregatorMessages(
 
 	messages.push(
 		new HumanMessage(
-			`Aggregate these datasource findings into a unified incident report. Only reference data present below -- do not fabricate metrics or timestamps.${scopeNote}${unavailableNote}${timelineGuidance}${connectivityGuidance}${perDeploymentGuidance}${awsEstateScopeGuidance}${crossEstateAbsenceRule}${gapsAuthoringRule}${confidenceFormatRule}${defensiveProseRule}${groundedBlockerRule}${healthCheckGapRule}${numericGroundingRule}${causalGroundingRule}${verbatimDdlRule}\n\nReport generation timestamp: ${new Date().toISOString()}. Use this exact value as the "Generated" date in the report header. Do not invent a different timestamp.\n\nIf no specific timestamps are available from the datasource findings (i.e., all observations are current-state snapshots rather than timestamped events), use "Current State Assessment" as the section heading instead of "Correlated Timeline", and use "Current" in the time column instead of fabricating timestamps.\n\n${resultsBlock}\n\nProvide: summary, ${hasEventSources ? "correlated timeline (markdown table), " : ""}findings per datasource${elasticDeployments.length > 1 ? " (with per-deployment sub-sections for elastic)" : ""}, confidence score (0.0-1.0), and any gaps.${continuationGuidance}`,
+			`Aggregate these datasource findings into a unified incident report. Only reference data present below -- do not fabricate metrics or timestamps.${scopeNote}${unavailableNote}${timelineGuidance}${connectivityGuidance}${perDeploymentGuidance}${awsEstateScopeGuidance}${crossEstateAbsenceRule}${gapsAuthoringRule}${confidenceFormatRule}${confidenceRubricRule}${defensiveProseRule}${groundedBlockerRule}${healthCheckGapRule}${numericGroundingRule}${causalGroundingRule}${verbatimDdlRule}\n\nReport generation timestamp: ${new Date().toISOString()}. Use this exact value as the "Generated" date in the report header. Do not invent a different timestamp.\n\nIf no specific timestamps are available from the datasource findings (i.e., all observations are current-state snapshots rather than timestamped events), use "Current State Assessment" as the section heading instead of "Correlated Timeline", and use "Current" in the time column instead of fabricating timestamps.\n\n${resultsBlock}\n\nProvide: summary, ${hasEventSources ? "correlated timeline (markdown table), " : ""}findings per datasource${elasticDeployments.length > 1 ? " (with per-deployment sub-sections for elastic)" : ""}, confidence score (0.0-1.0), and any gaps.${continuationGuidance}`,
 		),
 	);
 
@@ -272,7 +283,9 @@ const STRICT_CONFIDENCE_RE = /^\s*[*_>\-\s]*\**\s*confidence(?:\s+score)?\s*:?\*
 // Loose fallback: old pattern, but we additionally require the number to be in [0, 1].
 const LOOSE_CONFIDENCE_RE = /confidence[^0-9]{0,20}([0-9]+(?:\.[0-9]+)?)/i;
 
-function extractConfidenceScore(answer: string): number {
+// SIO-1194: exported for the annotation-safety tests (the cap annotation must never
+// change what the gate extracts).
+export function extractConfidenceScore(answer: string): number {
 	const strict = answer.match(STRICT_CONFIDENCE_RE);
 	if (strict) {
 		const n = Number.parseFloat(strict[1] ?? "");
@@ -312,8 +325,42 @@ export function appendRequestIdFooter(answer: string, requestId: string): string
 // as extractConfidenceScore so it rewrites exactly the line that was read. Only the
 // captured number is replaced; surrounding markup ("**Confidence:**") is preserved.
 // No confidence line present -> answer returned unchanged (gate still uses the number).
-export function rewriteConfidenceInAnswer(answer: string, score: number): string {
+//
+// SIO-1194 annotation: when a cap fires, the same line explains itself --
+//   "Confidence: 0.59 (capped from evidence score 0.84 -- datasource tool errors)".
+// The fixed phrase keeps every digit beyond LOOSE_CONFIDENCE_RE's 20-non-digit
+// window, so the pre-cap number can never be extracted by the fallback regex.
+// Strip-before-append keeps the rewrite idempotent across the aggregate ->
+// enforceCorrelationsAggregate -> validate chain; "strip" removes a stale
+// annotation on the correlation recovery restore path.
+export interface ConfidenceCapAnnotation {
+	preCap: number;
+	capReasons: string[];
+}
+
+const CAP_ANNOTATION_RE = /\s*\(capped from evidence score [^)\r\n]*\)/i;
+// Full-line variant of STRICT_CONFIDENCE_RE: adds a rest-of-line tail group so the
+// annotation can be stripped/appended on the line the number lives on.
+const STRICT_CONFIDENCE_LINE_RE =
+	/^(\s*[*_>\-\s]*\**\s*confidence(?:\s+score)?\s*:?\**\s*)([0-1](?:\.\d+)?)([^\r\n]*)/im;
+
+export function rewriteConfidenceInAnswer(
+	answer: string,
+	score: number,
+	annotation?: ConfidenceCapAnnotation | "strip",
+): string {
 	const formatted = String(score);
+	if (annotation !== undefined && STRICT_CONFIDENCE_LINE_RE.test(answer)) {
+		const labels = annotation === "strip" ? "" : annotation.capReasons.map(capReasonLabel).join(", ");
+		const suffix =
+			annotation !== "strip" && annotation.preCap > score
+				? ` (capped from evidence score ${annotation.preCap}${labels ? ` -- ${labels}` : ""})`
+				: "";
+		return answer.replace(STRICT_CONFIDENCE_LINE_RE, (_m, prefix: string, _num: string, rest: string) => {
+			const cleanedRest = rest.replace(CAP_ANNOTATION_RE, "");
+			return `${prefix}${formatted}${cleanedRest}${suffix}`;
+		});
+	}
 	const replaceCapturedNumber = (match: string, captured: string): string => {
 		const idx = match.lastIndexOf(captured);
 		if (idx === -1) return match;
@@ -1140,10 +1187,11 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	// still reads coherently; this is a deterministic guardrail. Reuses the cap value
 	// from correlation/enforce-node.ts for consistency.
 	const TOOL_ERROR_RATE_THRESHOLD = 0.15;
-	// SIO-709 AC #4: cap must be strictly below the HITL threshold (0.6 from
-	// confidence-gate.ts) so a capped run does not pass the gate. 0.59 keeps
-	// the cap visually close to the threshold without bleeding the HITL value.
-	const TOOL_ERROR_CONFIDENCE_CAP = 0.59;
+	// SIO-709 AC #4: cap must be strictly below the HITL threshold so a capped run
+	// does not pass the gate. SIO-1194: derived from the manifest threshold via
+	// deriveConfidenceCap (0.59 at the default 0.6) instead of a hardcoded 0.59,
+	// which would read as PASSING under a manifest threshold below 0.59.
+	const TOOL_ERROR_CONFIDENCE_CAP = deriveConfidenceCap();
 	const degradedSubAgents = results
 		.map((r) => {
 			// SIO-1087: only count DEGRADING tool errors toward the rate. A routine discovery
@@ -1427,7 +1475,11 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 			"Aggregated answer dropped advisor CREATE INDEX DDL; appended verbatim section",
 		);
 	}
-	const capped = anyCapTriggered ? rewriteConfidenceInAnswer(ddlEnsured.answer, cappedScore) : ddlEnsured.answer;
+	// SIO-1194: the capped line carries the pre-cap evidence score + reason labels
+	// so the user never sees a bare 0.59 with no explanation.
+	const capped = anyCapTriggered
+		? rewriteConfidenceInAnswer(ddlEnsured.answer, cappedScore, { preCap: confidenceScore, capReasons })
+		: ddlEnsured.answer;
 	// SIO-1133: stamp the Request-Id LAST so it sits at the very bottom of the report,
 	// after every content/confidence rewrite. Deterministic (not a prompt field); post
 	// PII redaction (redactPiiContent ran on the raw LLM output far upstream), so the

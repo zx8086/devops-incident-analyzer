@@ -34,7 +34,7 @@ mock.module("../prompt-context.ts", () => ({
 
 import { enforceCorrelationsAggregate, enforceCorrelationsRouter } from "./enforce-node.ts";
 
-function makeDegradingState(finalAnswer: string, confidenceScore: number) {
+function makeDegradingState(finalAnswer: string, confidenceScore: number, overrides: Record<string, unknown> = {}) {
 	// A pending correlation for a rule that stays unsatisfied (no elastic findings
 	// cover the triggered AWS entity), so enforceCorrelationsAggregate caps confidence.
 	return {
@@ -75,6 +75,7 @@ function makeDegradingState(finalAnswer: string, confidenceScore: number) {
 		actionResults: [],
 		selectedRunbooks: null,
 		partialFailures: [],
+		...overrides,
 	} as never;
 }
 
@@ -86,6 +87,36 @@ describe("enforceCorrelationsAggregate confidence rewrite (SIO-860)", () => {
 		expect(result.confidenceCap).toBe(0.59);
 		expect(result.finalAnswer).toContain("Confidence: 0.59");
 		expect(result.finalAnswer).not.toContain("Confidence: 0.9");
+	});
+
+	// SIO-1194: the degraded cap merges correlation-degraded into the aggregate's
+	// capReasons, annotates the printed line with the shared labels, and echoes
+	// confidencePreCap so the node output is self-contained for the SSE capture.
+	test("SIO-1194: annotates the capped line with merged reasons and echoes confidencePreCap", async () => {
+		const state = makeDegradingState("# Report\n\nConfidence: 0.9", 0.9, {
+			capReasons: [] as string[],
+			confidencePreCap: 0.9,
+		});
+		const result = await enforceCorrelationsAggregate(state);
+		expect(result.finalAnswer).toContain(
+			"Confidence: 0.59 (capped from evidence score 0.9 -- unresolved cross-source correlation)",
+		);
+		expect(result.capReasons).toEqual(["correlation-degraded"]);
+		expect(result.confidencePreCap).toBe(0.9);
+	});
+
+	test("SIO-1194: re-annotates (never stacks) an answer the aggregate already annotated", async () => {
+		const annotated = "# Report\n\nConfidence: 0.59 (capped from evidence score 0.9 -- unresolved data gaps)";
+		const state = makeDegradingState(annotated, 0.59, {
+			capReasons: ["gaps"] as string[],
+			confidencePreCap: 0.9,
+		});
+		const result = await enforceCorrelationsAggregate(state);
+		expect(result.capReasons).toEqual(["gaps", "correlation-degraded"]);
+		expect(result.finalAnswer).toContain(
+			"Confidence: 0.59 (capped from evidence score 0.9 -- unresolved data gaps, unresolved cross-source correlation)",
+		);
+		expect(result.finalAnswer?.match(/\(capped from/g)?.length).toBe(1);
 	});
 });
 
@@ -225,10 +256,34 @@ describe("SIO-1155 log-gap recovery in enforceCorrelationsAggregate", () => {
 		expect(result.degradedRules).toEqual([]);
 	});
 
+	// SIO-1194: restoration must also strip the aggregate's stale cap annotation and
+	// clear capReasons so the SSE last-writer capture reports the run as uncapped.
+	test("SIO-1194: restore strips the stale cap annotation and clears capReasons", async () => {
+		const annotatedAnswer = `# Incident Report
+
+## Findings
+- strong evidence.
+
+## Gaps
+
+${STOCK_BULLET}
+${ORBIT_BULLET}
+
+Confidence: 0.59 (capped from evidence score 0.87 -- unresolved data gaps)`;
+		const result = await enforceCorrelationsAggregate(makeLogGapState({ finalAnswer: annotatedAnswer }));
+		expect(result.confidenceScore).toBe(0.87);
+		expect(result.finalAnswer).toContain("Confidence: 0.87");
+		expect(result.finalAnswer).not.toContain("(capped from");
+		expect(result.capReasons).toEqual([]);
+	});
+
 	test("no restore when the gaps cap was not the sole cap reason", async () => {
 		const result = await enforceCorrelationsAggregate(makeLogGapState({ capReasons: ["gaps", "premature-absence"] }));
 		expect(result.finalAnswer).toContain("recovered via elastic");
 		expect(result.confidenceScore).toBeUndefined(); // score untouched (stays capped in state)
+		// SIO-1194: without a restore the aggregate's capReasons must stand (the
+		// premature-absence cap is still real) -- no clearing on this path.
+		expect(result.capReasons).toBeUndefined();
 	});
 
 	test("no restore when the confirmed remainder still meets the threshold", async () => {

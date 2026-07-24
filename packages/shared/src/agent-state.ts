@@ -647,6 +647,12 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		requestId: z.string().optional(),
 		runId: z.string().optional(),
 		confidence: z.number().optional(),
+		// SIO-1194: cap transparency. confidencePreCap = the LLM's raw evidence score
+		// before any deterministic cap; capReasons = machine-readable trigger codes
+		// (label/detail map in packages/shared/src/confidence.ts).
+		confidencePreCap: z.number().min(0).max(1).optional(),
+		capReasons: z.array(z.string()).optional(),
+		lowConfidence: z.boolean().optional(),
 		responseTime: z.number().optional(),
 		toolsUsed: z.array(z.string()).optional(),
 		dataSourceContext: DataSourceContextSchema.optional(),

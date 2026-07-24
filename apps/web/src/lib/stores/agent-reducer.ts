@@ -349,6 +349,12 @@ export interface ReducerState {
 	// event; the Create-ticket flow sends it so creation curates the incident.
 	lastRequestId: string | undefined;
 	lastConfidence: number | undefined;
+	// SIO-1194: cap transparency from the done event (and the live low_confidence
+	// signal). Drives the ConfidenceBadge: pre-cap evidence score + machine-readable
+	// cap reason codes (label/detail map in @devops-agent/shared confidence.ts).
+	lastConfidencePreCap: number | undefined;
+	lastCapReasons: string[];
+	lastLowConfidence: boolean | undefined;
 	// SIO-930: per-turn outcome from the IaC done event ("rejected"/"declined"/etc.); drives the
 	// completion chip color/label. "completed" for the incident agent (which omits the field).
 	// SIO-1110: "error" is set client-side by the error event (no endpoint emits done after error).
@@ -418,6 +424,9 @@ export function initialReducerState(): ReducerState {
 		lastRunId: undefined,
 		lastRequestId: undefined,
 		lastConfidence: undefined,
+		lastConfidencePreCap: undefined,
+		lastCapReasons: [],
+		lastLowConfidence: undefined,
 		lastOutcome: "completed",
 		lastDataSourceContext: undefined,
 		pendingActions: [],
@@ -509,6 +518,12 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 				lastRunId: event.runId,
 				lastRequestId: event.requestId,
 				lastConfidence: event.confidence,
+				// SIO-1194: absent fields RESET (an uncapped turn must not inherit a
+				// prior turn's cap explanation; checkConfidence always contributes the
+				// lowConfidence flag when it ran, so absence means the gate never ran).
+				lastConfidencePreCap: event.confidencePreCap,
+				lastCapReasons: event.capReasons ?? [],
+				lastLowConfidence: event.lowConfidence,
 				lastDataSourceContext: event.dataSourceContext,
 				lastOutcome: event.outcome ?? "completed",
 				// SIO-982: snapshot the live pipeline progress so a GitOps MR turn keeps a persistent
@@ -528,7 +543,9 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 				lastOutcome: "error",
 			};
 		case "low_confidence":
-			return state;
+			// SIO-1194: was a silent no-op -- record the live signal so the streaming
+			// UI (and the persisted message) can flag a below-threshold report.
+			return { ...state, lastLowConfidence: true };
 		case "run_id":
 			// Server emits run_id before graph output so feedback can be submitted early
 			return { ...state, lastRunId: event.runId };

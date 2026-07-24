@@ -6,6 +6,17 @@
 
 import type { InvestigationFocus } from "@devops-agent/shared";
 import { HilApplyReportSchema, redactPiiContent, StreamEventSchema } from "@devops-agent/shared";
+import { z } from "zod";
+
+// SIO-1194 (CodeRabbit PR #455): validate the cap-transparency fields with Zod
+// instead of manual narrowing. Parsed per-field so one malformed field drops only
+// itself. Codes stay open strings by design -- unknown reason codes must flow
+// through (capReasonLabel falls back to the raw code and the cap policy treats
+// unknown codes as integrity/fail-closed), so an enum here would silently drop
+// forward-compatible codes emitted by a newer agent.
+const CapReasonsFieldSchema = z.array(z.string());
+const ConfidencePreCapFieldSchema = z.number().min(0).max(1);
+const LowConfidenceFieldSchema = z.boolean();
 
 type SendFn = (event: Record<string, unknown>) => void;
 type EventStream = AsyncIterable<{
@@ -120,6 +131,12 @@ export interface PumpResult {
 	// caller can re-emit the corrected body and the displayed report matches the gate.
 	finalAnswer?: string;
 	confidenceScore?: number;
+	// SIO-1194: cap transparency for the done event / UI badge. Same last-writer-wins
+	// capture; an empty capReasons from the correlation restore path clears an earlier
+	// non-empty capture (the sole "gaps" cap was cured).
+	confidencePreCap?: number;
+	capReasons?: string[];
+	lowConfidence?: boolean;
 }
 
 // SIO-1141: nodes that can REWRITE finalAnswer / re-cap confidenceScore after aggregate.
@@ -138,6 +155,10 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 	// nodes (aggregate then any downstream re-cap). Undefined until an answer node emits.
 	let finalAnswer: string | undefined;
 	let confidenceScore: number | undefined;
+	// SIO-1194: cap-transparency capture (same last-writer-wins discipline).
+	let confidencePreCap: number | undefined;
+	let capReasons: string[] | undefined;
+	let lowConfidence: boolean | undefined;
 	const toolsUsed = new Set<string>();
 
 	for await (const event of eventStream) {
@@ -163,7 +184,15 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 		// finalAnswer AFTER generation). enforceCorrelationsAggregate is NOT a PIPELINE_NODE, so
 		// this check is independent of the pill-emitting block below. Latest writer wins.
 		if (event.event === "on_chain_end" && event.name && ANSWER_REWRITE_NODES.has(event.name)) {
-			const output = event.data?.output as { finalAnswer?: unknown; confidenceScore?: unknown } | undefined;
+			const output = event.data?.output as
+				| {
+						finalAnswer?: unknown;
+						confidenceScore?: unknown;
+						confidencePreCap?: unknown;
+						capReasons?: unknown;
+						lowConfidence?: unknown;
+				  }
+				| undefined;
 			if (output) {
 				if (typeof output.finalAnswer === "string" && output.finalAnswer.length > 0) {
 					// SIO-1141: redact PII here, exactly as the streamed chunks are (line above).
@@ -174,6 +203,15 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 				if (typeof output.confidenceScore === "number") {
 					confidenceScore = output.confidenceScore;
 				}
+				// SIO-1194: an empty array is a meaningful write (restore path cleared the
+				// caps), so present-and-valid wins over any earlier capture. Zod-parsed
+				// per field; a malformed or absent field drops only itself.
+				const capReasonsParsed = CapReasonsFieldSchema.safeParse(output.capReasons);
+				if (capReasonsParsed.success) capReasons = capReasonsParsed.data;
+				const preCapParsed = ConfidencePreCapFieldSchema.safeParse(output.confidencePreCap);
+				if (preCapParsed.success) confidencePreCap = preCapParsed.data;
+				const lowConfidenceParsed = LowConfidenceFieldSchema.safeParse(output.lowConfidence);
+				if (lowConfidenceParsed.success) lowConfidence = lowConfidenceParsed.data;
 			}
 		}
 
@@ -196,8 +234,13 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 			}
 
 			if (event.name === "checkConfidence") {
-				const lowConfidence = (event.data?.output as { lowConfidence?: unknown })?.lowConfidence;
-				if (lowConfidence === true) {
+				const gateLowConfidence = (event.data?.output as { lowConfidence?: unknown })?.lowConfidence;
+				// SIO-1194: record the gate verdict for the done event (validate may
+				// overwrite it downstream when it applies its own cap).
+				if (typeof gateLowConfidence === "boolean") {
+					lowConfidence = gateLowConfidence;
+				}
+				if (gateLowConfidence === true) {
 					send({
 						type: "low_confidence",
 						message: "Report confidence is below the review threshold. Results may be incomplete.",
@@ -480,7 +523,16 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 		}
 	}
 
-	return { toolsUsed: [...toolsUsed], responseContent, hilLearningTurn, finalAnswer, confidenceScore };
+	return {
+		toolsUsed: [...toolsUsed],
+		responseContent,
+		hilLearningTurn,
+		finalAnswer,
+		confidenceScore,
+		confidencePreCap,
+		capReasons,
+		lowConfidence,
+	};
 }
 
 // SIO-1126: surface the HIL learning lane's interrupts. The match gate asks

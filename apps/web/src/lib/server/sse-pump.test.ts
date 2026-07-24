@@ -451,6 +451,68 @@ describe("pumpEventStream finalAnswer/confidenceScore capture", () => {
 		expect(result.finalAnswer).toBeUndefined();
 		expect(result.confidenceScore).toBeUndefined();
 	});
+
+	// SIO-1194: cap-transparency fields ride the same last-writer-wins capture so the
+	// done event can carry confidencePreCap + capReasons to the UI badge.
+	test("captures capReasons + confidencePreCap from answer-node output", async () => {
+		const send = () => undefined;
+		const result = await pumpEventStream(
+			fromArray([
+				{
+					event: "on_chain_end",
+					name: "aggregate",
+					data: {
+						output: {
+							finalAnswer: "body\n\nConfidence: 0.59",
+							confidenceScore: 0.59,
+							confidencePreCap: 0.84,
+							capReasons: ["degraded-subagents", "gaps"],
+						},
+					},
+				},
+			]),
+			send,
+		);
+		expect(result.capReasons).toEqual(["degraded-subagents", "gaps"]);
+		expect(result.confidencePreCap).toBe(0.84);
+	});
+
+	test("an empty capReasons from the correlation restore path clears an earlier capture", async () => {
+		const send = () => undefined;
+		const result = await pumpEventStream(
+			fromArray([
+				{
+					event: "on_chain_end",
+					name: "aggregate",
+					data: { output: { confidenceScore: 0.59, confidencePreCap: 0.87, capReasons: ["gaps"] } },
+				},
+				{
+					event: "on_chain_end",
+					name: "enforceCorrelationsAggregate",
+					data: { output: { confidenceScore: 0.87, capReasons: [] } },
+				},
+			]),
+			send,
+		);
+		expect(result.capReasons).toEqual([]);
+		expect(result.confidenceScore).toBe(0.87);
+	});
+
+	test("captures lowConfidence from checkConfidence and lets validate overwrite it", async () => {
+		const send = () => undefined;
+		const result = await pumpEventStream(
+			fromArray([
+				{ event: "on_chain_end", name: "checkConfidence", data: { output: { lowConfidence: false } } },
+				{
+					event: "on_chain_end",
+					name: "validate",
+					data: { output: { confidenceScore: 0.59, lowConfidence: true } },
+				},
+			]),
+			send,
+		);
+		expect(result.lowConfidence).toBe(true);
+	});
 });
 
 // SIO-1146: the structured apply outcome is forwarded from applyLearnings' node

@@ -46,6 +46,7 @@ import {
 	appendRequestIdFooter,
 	collectDegradingGapBullets,
 	countDegradingGapBullets,
+	extractConfidenceScore,
 	extractGapsBulletCount,
 	filterStructurallyBenignGapBullets,
 	isDegradingGapBullet,
@@ -290,7 +291,10 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-709 tool-error-rate confidence cap"
 	});
 
 	test("caps confidence at 0.59 when toolErrorCount/messageCount > 15% (7/40 = 17.5%)", async () => {
-		mockLlmContent = "Mock aggregator output. Confidence: 0.9";
+		// Dedicated confidence line (as confidenceFormatRule mandates) so the SIO-1194
+		// annotation path applies; a mid-line "Confidence:" takes the legacy loose
+		// number-only rewrite with no annotation.
+		mockLlmContent = "Mock aggregator output.\nConfidence: 0.9";
 		const result = await aggregate(
 			makeState({
 				dataSourceResults: [
@@ -317,10 +321,28 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-709 tool-error-rate confidence cap"
 		// LLM's pre-cap 0.9, so the HITL banner never contradicts the report prose.
 		expect(result.finalAnswer).toContain("Confidence: 0.59");
 		expect(result.finalAnswer).not.toContain("Confidence: 0.9");
+		// SIO-1194: the capped line explains itself with the pre-cap evidence score
+		// and the shared human-readable reason label.
+		expect(result.finalAnswer).toContain("Confidence: 0.59 (capped from evidence score 0.9 -- datasource tool errors)");
+		expect(result.capReasons).toEqual(["degraded-subagents"]);
+		expect(result.confidencePreCap).toBe(0.9);
 		const warnCall = captured.find(
 			(c) => c.level === "warn" && typeof c.msg === "string" && c.msg.includes("tool-error rate exceeded threshold"),
 		);
 		expect(warnCall).toBeDefined();
+	});
+
+	test("SIO-1194: aggregate prompt carries the confidence rubric alongside the format rule", async () => {
+		mockLlmContent = "Mock aggregator output. Confidence: 0.5";
+		await aggregate(makeState());
+		const humanMsg = (lastInvokeMessages ?? []).find(
+			(m) => m._getType() === "human" && extractTextFromContent(m.content).includes("Aggregate these datasource"),
+		);
+		expect(humanMsg).toBeDefined();
+		const text = humanMsg ? extractTextFromContent(humanMsg.content) : "";
+		expect(text).toContain("CONFIDENCE RUBRIC");
+		expect(text).toContain("0.85-0.95");
+		expect(text).toContain("CONFIDENCE LINE REQUIREMENT");
 	});
 
 	test("caps at the styles-v3 boundary (9/40 = 22.5% kafka rate)", async () => {
@@ -994,6 +1016,89 @@ describe("rewriteConfidenceInAnswer (SIO-860)", () => {
 	test("leaves the answer unchanged when no confidence line is present", () => {
 		const answer = "# Report\n\n## Findings\n- a";
 		expect(rewriteConfidenceInAnswer(answer, 0.59)).toBe(answer);
+	});
+});
+
+// SIO-1194: a capped confidence line explains itself -- the pre-cap evidence score
+// and human-readable cap reasons ride on the same line so the user never sees a
+// bare 0.59 with no context. The annotation must stay invisible to the extraction
+// regexes (the gate keeps reading the capped value).
+describe("rewriteConfidenceInAnswer cap annotation (SIO-1194)", () => {
+	const annotation = { preCap: 0.84, capReasons: ["degraded-subagents", "gaps"] };
+
+	test("appends pre-cap score and reason labels to the confidence line", () => {
+		const answer = "# Report\n\nConfidence: 0.84";
+		expect(rewriteConfidenceInAnswer(answer, 0.59, annotation)).toBe(
+			"# Report\n\nConfidence: 0.59 (capped from evidence score 0.84 -- datasource tool errors, unresolved data gaps)",
+		);
+	});
+
+	test("is idempotent: re-applying the same rewrite yields identical output", () => {
+		const answer = "Confidence: 0.84";
+		const once = rewriteConfidenceInAnswer(answer, 0.59, annotation);
+		expect(rewriteConfidenceInAnswer(once, 0.59, annotation)).toBe(once);
+	});
+
+	test("re-annotation replaces the previous parenthetical, never stacks", () => {
+		const answer = "Confidence: 0.84";
+		const first = rewriteConfidenceInAnswer(answer, 0.59, annotation);
+		const second = rewriteConfidenceInAnswer(first, 0.59, {
+			preCap: 0.84,
+			capReasons: ["degraded-subagents", "gaps", "correlation-degraded"],
+		});
+		expect(second).toBe(
+			"Confidence: 0.59 (capped from evidence score 0.84 -- datasource tool errors, unresolved data gaps, unresolved cross-source correlation)",
+		);
+		expect(second.match(/\(capped from/g)?.length).toBe(1);
+	});
+
+	test('"strip" removes a stale annotation (correlation recovery restore path)', () => {
+		const annotated = rewriteConfidenceInAnswer("Confidence: 0.84", 0.59, annotation);
+		expect(rewriteConfidenceInAnswer(annotated, 0.84, "strip")).toBe("Confidence: 0.84");
+	});
+
+	test("preserves bold markup around the line", () => {
+		const answer = "**Confidence:** 0.92\n";
+		expect(rewriteConfidenceInAnswer(answer, 0.59, { preCap: 0.92, capReasons: ["gaps"] })).toBe(
+			"**Confidence:** 0.59 (capped from evidence score 0.92 -- unresolved data gaps)\n",
+		);
+	});
+
+	test("adds no annotation when the LLM already scored at or below the cap", () => {
+		const answer = "Confidence: 0.55";
+		expect(rewriteConfidenceInAnswer(answer, 0.55, { preCap: 0.55, capReasons: ["gaps"] })).toBe("Confidence: 0.55");
+	});
+
+	test("unknown reason codes fall back to the raw code", () => {
+		const out = rewriteConfidenceInAnswer("Confidence: 0.9", 0.59, {
+			preCap: 0.9,
+			capReasons: ["future-new-cap"],
+		});
+		expect(out).toContain("-- future-new-cap)");
+	});
+});
+
+// SIO-1194: extraction safety. The annotation must never change what the regexes
+// extract -- STRICT reads the capped number before the parenthetical, and the fixed
+// phrase "(capped from evidence score " is longer than LOOSE_CONFIDENCE_RE's 20
+// non-digit window, so a malformed line can never leak the pre-cap number.
+describe("extractConfidenceScore annotation safety (SIO-1194)", () => {
+	test("reads the capped value from an annotated line", () => {
+		expect(extractConfidenceScore("Confidence: 0.59 (capped from evidence score 0.84 -- datasource tool errors)")).toBe(
+			0.59,
+		);
+	});
+
+	test("round-trips through an annotated rewrite", () => {
+		const rewritten = rewriteConfidenceInAnswer("Confidence: 0.84", 0.59, {
+			preCap: 0.84,
+			capReasons: ["degraded-subagents"],
+		});
+		expect(extractConfidenceScore(rewritten)).toBe(0.59);
+	});
+
+	test("degenerate line with no capped number yields 0, never the pre-cap number", () => {
+		expect(extractConfidenceScore("Confidence: (capped from evidence score 0.84 -- gaps)")).toBe(0);
 	});
 });
 

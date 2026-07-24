@@ -3,6 +3,7 @@
 import { getLogger } from "@devops-agent/observability";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
+import { getConfidenceThreshold } from "./confidence-gate.ts";
 import { createLlm, DeadlineExceededError, type InvokableLlm, invokeWithDeadline, type LlmRole } from "./llm.ts";
 import type { AgentStateType, MitigationFragment } from "./state.ts";
 
@@ -71,9 +72,12 @@ Return ONLY valid JSON matching: { items: string[] }`;
 
 function buildContextHints(state: AgentStateType): string {
 	const confidence = state.confidenceScore;
+	// SIO-1194: compare against the manifest threshold (was a hardcoded 0.6 that
+	// silently diverged from checkConfidence under a non-default manifest).
+	const threshold = getConfidenceThreshold();
 	const confidenceHint =
-		confidence > 0 && confidence < 0.6
-			? "\n\nNOTE: Report confidence is below 0.6. Lead with broader investigation steps and explicitly note data gaps."
+		confidence > 0 && confidence < threshold
+			? `\n\nNOTE: Report confidence is below ${threshold}. Lead with broader investigation steps and explicitly note data gaps.`
 			: "";
 	const queriedSources = state.targetDataSources;
 	const sourceContext = queriedSources.length > 0 ? `\nQueried datasources: ${queriedSources.join(", ")}` : "";

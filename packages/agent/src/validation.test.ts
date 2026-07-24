@@ -432,6 +432,41 @@ describe("validator: anti-hallucination checks", () => {
 		expect(result.lowConfidence).toBe(true);
 	});
 
+	// SIO-1194: the validator cap previously left the printed Confidence line at the
+	// pre-cap value (SIO-860 prose==gate invariant violation) -- it must rewrite the
+	// prose with the annotated capped value and merge its reason into capReasons.
+	test("SIO-1194: cap rewrites the printed confidence line with annotation and capReasons", () => {
+		const result = validate(
+			ungroundedMetricsState({
+				finalAnswer:
+					"The elastic cluster latency is 16.8ms, GC pause 2.7ms, queue depth 8.9ms, heap 2.8MB, and cache 3.1MB. elastic queried.\n\nConfidence: 0.72",
+				confidencePreCap: 0.72,
+				capReasons: [] as string[],
+			}),
+		);
+		expect(result.finalAnswer).toContain(
+			"Confidence: 0.59 (capped from evidence score 0.72 -- unverified metric values)",
+		);
+		expect(result.finalAnswer).not.toContain("Confidence: 0.72");
+		expect(result.capReasons).toEqual(["ungrounded-metrics"]);
+		expect(result.confidencePreCap).toBe(0.72);
+	});
+
+	test("SIO-1194: merges prior capReasons and keeps a single annotation", () => {
+		const result = validate(
+			ungroundedMetricsState({
+				finalAnswer:
+					"The elastic cluster latency is 16.8ms, GC pause 2.7ms, queue depth 8.9ms, heap 2.8MB, and cache 3.1MB. elastic queried.\n\nConfidence: 0.59 (capped from evidence score 0.72 -- unresolved data gaps)",
+				confidenceScore: 0.59,
+				confidencePreCap: 0.72,
+				capReasons: ["gaps"] as string[],
+			}),
+		);
+		expect(result.capReasons).toEqual(["gaps", "ungrounded-metrics"]);
+		expect(result.finalAnswer).toContain("unresolved data gaps, unverified metric values");
+		expect(result.finalAnswer?.match(/\(capped from/g)?.length).toBe(1);
+	});
+
 	// SIO-1123 review fix: a hardcoded 0.59 cap is only "strictly below the HITL
 	// threshold" when that threshold is the default 0.6. A manifest configuring a
 	// lower confidence_below (e.g. 0.5) would make the fixed 0.59 cap read as

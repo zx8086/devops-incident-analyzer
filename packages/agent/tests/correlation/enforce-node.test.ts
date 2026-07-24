@@ -310,7 +310,10 @@ describe("enforceCorrelationsAggregate banner for SIO-712 contradictions", () =>
 		// untouched -- the printed confidence is rewritten to the capped value so the
 		// report prose matches the HITL gate. The WARNING contradiction banner is still
 		// withheld (that's reserved for skipCoverageCheck rules).
-		expect(result.finalAnswer).toBe("# Report\n\nConfidence: 0.59");
+		// SIO-1194: the capped line now carries the self-explaining annotation.
+		expect(result.finalAnswer).toBe(
+			"# Report\n\nConfidence: 0.59 (capped from evidence score 0.8 -- unresolved cross-source correlation)",
+		);
 		expect(result.finalAnswer).not.toContain("WARNING: unresolved cross-source contradiction");
 	});
 });

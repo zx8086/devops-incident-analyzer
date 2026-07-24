@@ -137,6 +137,7 @@ export {
 	type TransportListenInfo,
 } from "./bootstrap.ts";
 export { type CachedServerFactoryOptions, createCachedServerFactory } from "./cached-server-factory.ts";
+export { CAP_REASON_INFO, type CapReasonInfo, capReasonDetail, capReasonLabel } from "./confidence.ts";
 export {
 	type AgentConfig,
 	AgentConfigSchema,
