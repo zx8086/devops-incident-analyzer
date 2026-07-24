@@ -62,3 +62,38 @@ wall-clock samples support a recent-offset-growth finding. Either one alone is
 enough to draw a conclusion. Only when NEITHER measure is available may you report
 an offset-growth gap — and phrase it as "historical per-window offset deltas could
 not be reconstructed because broker timestamps are unusable", never a flat "unavailable".
+
+## Targeted Message Lookup by Business Key (SIO-1201)
+
+When asked to confirm delivery or presence of an event referencing a specific
+business identifier (order ID, SKU, product/notification code, etc.) in a named
+topic, Kafka has no secondary content index -- there is no tool that searches a
+topic by key or payload content. The only way to answer this is a bounded scan
+across the topic's partitions:
+
+1. Call `kafka_consume_messages` with `fromBeginning: true` and an explicit bound
+   on both `maxMessages` (e.g. 500, the tool's max) and `timeoutMs` (at or below
+   the tool's 60s max). Match the business key against each returned message's
+   `key` with EXACT equality first. If the key does not carry the business
+   identifier (e.g. the key is a partition/routing key, not the business ID),
+   `JSON.parse` the `value` and compare the specific expected field to the
+   business key with exact equality. Do not substring-match the raw serialized
+   `value` string -- an unrelated field or nested object containing the same
+   digits/text as the business key produces a false positive.
+2. **There is no partition-narrowing shortcut.** `kafka_consume_messages` has no
+   partition parameter -- it always scans every partition of the topic, not one.
+   Kafka's admin/broker API also does not expose a topic's partitioning strategy
+   (key-hash vs. round-robin is a producer-side decision), so there is no way to
+   compute which single partition a business key would land in. Do not claim or
+   attempt a single-partition scan; every lookup under this protocol scans all
+   partitions from the beginning, bounded by `maxMessages`/`timeoutMs`.
+3. **This is a bounded scan, not an exhaustive one.** `maxMessages`/`timeoutMs`
+   caps mean the scan may stop before reaching the end of a large or high-volume
+   topic even with `fromBeginning: true`. Respect the existing `fromBeginning`
+   caveat above: an empty scan result within the bound means "not found within
+   this bounded scan," not "the topic is empty" or "the message does not exist" --
+   do not conflate the two.
+4. If the scan completes without a match, report "message for `<business-key>`
+   not found within a `<N>`-message / `<T>`-second bounded scan from the
+   beginning of `<topic>`" -- a falsifiable, bounded claim. Never report a bare
+   "not sampled" or "not queried".
