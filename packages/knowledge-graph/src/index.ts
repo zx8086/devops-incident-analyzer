@@ -1,6 +1,8 @@
 // knowledge-graph/src/index.ts
 
 export {
+	type AppliedChange,
+	appliedChanges,
 	type BlastRadiusHit,
 	bindingsForServices,
 	blastRadiusForServices,
