@@ -68,10 +68,63 @@ const DescribeSubnetsJson = z.object({
 const DescribeVpcsJson = z.object({
 	Vpcs: z.array(z.object({ VpcId: z.string().optional() })).optional(),
 });
+// EC2 instance fallback (EKS/non-ECS estates): mirrors the InstanceRow/
+// ReservationsEnvelope shape in network-topology.ts, kept local since those
+// are module-private there and this only needs the Name tag for matching.
+const InstanceTags = z.array(z.object({ Key: z.string().optional(), Value: z.string().optional() })).optional();
+const InstanceRow = z.object({
+	InstanceId: z.string(),
+	SubnetId: z.string().optional(),
+	Tags: InstanceTags,
+});
+const DescribeInstancesJson = z.object({
+	Reservations: z.array(z.object({ Instances: z.array(InstanceRow).optional() })).optional(),
+});
+
+function subnetIdsFromDescribeInstances(rawJson: unknown): string[] {
+	const parsed = DescribeInstancesJson.safeParse(rawJson);
+	if (!parsed.success) return [];
+	return (parsed.data.Reservations ?? [])
+		.flatMap((r) => r.Instances ?? [])
+		.map((i) => i.SubnetId)
+		.filter((id): id is string => typeof id === "string" && id.length > 0);
+}
+
+function instanceNameTag(t: z.infer<typeof InstanceTags>): string | undefined {
+	return t?.find((x) => x.Key === "Name")?.Value;
+}
+
+export type SkippedReason =
+	| "no-ecs-tools"
+	| "no-clusters"
+	| "no-focus-match"
+	| "no-tasks-running"
+	| "enumeration-incomplete";
+export type FallbackUsed = "ec2-instances";
+
+export interface NetworkBaselineDiagnostics {
+	candidatesFound: number;
+	candidatesMatched: number;
+	focusTokensTried: string[];
+	skippedReason?: SkippedReason;
+	fallbackUsed?: FallbackUsed;
+}
+
+export interface NetworkBaselineResult {
+	outputs: ToolOutput[];
+	diagnostics: NetworkBaselineDiagnostics;
+}
 
 interface CandidateService {
 	cluster: string;
 	service: string;
+}
+
+// EC2-instance candidate: no ECS cluster/service concept, so the "service" match
+// string is the instance's Name tag (falling back to the raw instance id).
+interface CandidateInstance {
+	instanceId: string;
+	name: string;
 }
 
 // ECS service ARN: arn:aws:ecs:<region>:<acct>:service/<cluster>/<name>.
@@ -126,13 +179,42 @@ function subnetIdsFromDescribeTasks(rawJson: unknown): string[] {
 	return ids;
 }
 
-function pickCandidates(candidates: CandidateService[], focusServices: string[]): CandidateService[] {
-	const matched = candidates.filter((c) => matchesFocus(c.service, focusServices));
+// Shared small-estate-cap selection: focus-matched candidates win; on zero
+// matches, a small enough estate takes everything rather than nothing (see
+// SMALL_ESTATE_CANDIDATE_CAP doc above).
+function pickByFocus<T>(candidates: T[], focusServices: string[], nameOf: (c: T) => string): T[] {
+	const matched = candidates.filter((c) => matchesFocus(nameOf(c), focusServices));
 	if (matched.length > 0) return matched.slice(0, MAX_SERVICES);
 	if (candidates.length > 0 && candidates.length <= SMALL_ESTATE_CANDIDATE_CAP) {
 		return candidates.slice(0, MAX_SERVICES);
 	}
 	return [];
+}
+
+function pickCandidates(candidates: CandidateService[], focusServices: string[]): CandidateService[] {
+	return pickByFocus(candidates, focusServices, (c) => c.service);
+}
+
+function pickInstanceCandidates(candidates: CandidateInstance[], focusServices: string[]): CandidateInstance[] {
+	return pickByFocus(candidates, focusServices, (c) => c.name);
+}
+
+// EKS (and any other non-ECS) estates have no ECS clusters to enumerate, so
+// list_clusters legitimately returns []. The only placement signal left is the
+// EC2 instances themselves -- reuses the same InstanceId/Name-tag shape
+// network-topology.ts already parses into workload nodes with IPs.
+async function fetchInstanceCandidates(
+	probe: (toolName: string, args: Record<string, unknown>) => Promise<unknown>,
+	focusServices: string[],
+): Promise<{ candidates: CandidateInstance[]; matched: CandidateInstance[] }> {
+	const instancesJson = await probe("aws_ec2_describe_instances", {});
+	const parsed = DescribeInstancesJson.safeParse(instancesJson);
+	const rows = (parsed.data?.Reservations ?? []).flatMap((r) => r.Instances ?? []);
+	const candidates: CandidateInstance[] = rows.map((row) => ({
+		instanceId: row.InstanceId,
+		name: instanceNameTag(row.Tags) ?? row.InstanceId,
+	}));
+	return { candidates, matched: pickInstanceCandidates(candidates, focusServices) };
 }
 
 export async function fetchNetworkBaseline(opts: {
@@ -141,11 +223,17 @@ export async function fetchNetworkBaseline(opts: {
 	existingOutputs: ToolOutput[];
 	focusServices: string[];
 	timeoutMs?: number;
-}): Promise<ToolOutput[]> {
+}): Promise<NetworkBaselineResult> {
 	const { invoke, hasTool, existingOutputs, focusServices } = opts;
+	const diagnostics: NetworkBaselineDiagnostics = {
+		candidatesFound: 0,
+		candidatesMatched: 0,
+		focusTokensTried: focusServices,
+	};
 	// Core map-feeding tools; without them the baseline cannot add anything.
 	if (!hasTool("aws_ecs_describe_tasks") || !hasTool("aws_ecs_list_tasks") || !hasTool("aws_ec2_describe_subnets")) {
-		return [];
+		diagnostics.skippedReason = "no-ecs-tools";
+		return { outputs: [], diagnostics };
 	}
 	const deadline = Date.now() + (opts.timeoutMs ?? networkBaselineTimeoutMs());
 	const out: ToolOutput[] = [];
@@ -171,11 +259,23 @@ export async function fetchNetworkBaseline(opts: {
 	const describeTasksJsons: unknown[] = existingOutputs
 		.filter((o) => o.toolName === "aws_ecs_describe_tasks")
 		.map((o) => o.rawJson);
+	// EC2-instance fallback (EKS estates) has no ECS task shape, so its subnet
+	// ids are tracked separately and merged into the subnet gap-fill in step 2.
+	const extraSubnetIds: string[] = [];
 	if (describeTasksJsons.length === 0) {
-		let candidates = pickCandidates(candidatesFromOutputs(existingOutputs), focusServices);
+		const existingCandidates = candidatesFromOutputs(existingOutputs);
+		let candidates = pickCandidates(existingCandidates, focusServices);
+		diagnostics.candidatesFound = existingCandidates.length;
+		diagnostics.candidatesMatched = candidates.length;
 		if (candidates.length === 0) {
 			// Enumeration fallback: the turn never touched ECS at all.
 			const clustersJson = await probe("aws_ecs_list_clusters", {});
+			// A probe failure/timeout also returns undefined, same as a genuinely
+			// empty clusterArns response -- distinguish "AWS confirmed zero clusters"
+			// from "we never found out" so a transient failure doesn't masquerade as
+			// a confirmed-empty estate (wrongly triggering the EC2 fallback or
+			// skippedReason: "no-clusters" below).
+			const clustersEnumerated = clustersJson !== undefined;
 			const clusters = (ListClustersJson.safeParse(clustersJson).data?.clusterArns ?? [])
 				.slice(0, MAX_CLUSTERS)
 				.map(clusterNameFromArn);
@@ -188,6 +288,35 @@ export async function fetchNetworkBaseline(opts: {
 				}
 			}
 			candidates = pickCandidates(discovered, focusServices);
+			diagnostics.candidatesFound += discovered.length;
+			diagnostics.candidatesMatched = candidates.length;
+			if (!clustersEnumerated) diagnostics.skippedReason = "enumeration-incomplete";
+
+			// EKS (and any other non-ECS) estate: list_clusters legitimately came
+			// back empty, so fall back to EC2 instances -- the only placement
+			// signal an EKS estate exposes via these tool names. Only when
+			// enumeration actually completed: a failed/timed-out probe is not
+			// evidence the estate is ECS-less.
+			if (
+				candidates.length === 0 &&
+				clustersEnumerated &&
+				clusters.length === 0 &&
+				hasTool("aws_ec2_describe_instances")
+			) {
+				const { candidates: instanceCandidates, matched: instanceMatches } = await fetchInstanceCandidates(
+					probe,
+					focusServices,
+				);
+				diagnostics.candidatesFound += instanceCandidates.length;
+				if (instanceMatches.length > 0) {
+					diagnostics.fallbackUsed = "ec2-instances";
+					diagnostics.candidatesMatched = instanceMatches.length;
+					const instancesJson = await record("aws_ec2_describe_instances", {
+						instanceIds: instanceMatches.map((c) => c.instanceId),
+					});
+					extraSubnetIds.push(...subnetIdsFromDescribeInstances(instancesJson));
+				}
+			}
 		}
 		for (const candidate of candidates) {
 			const tasksJson = await probe("aws_ecs_list_tasks", {
@@ -207,7 +336,7 @@ export async function fetchNetworkBaseline(opts: {
 	// is COVERAGE-based, not tool-name-based: the loop may have fetched subnets/
 	// VPCs for unrelated ids (the ingress protocol does exactly that), so only
 	// the ids missing from existing outputs are fetched.
-	const subnetIds = [...new Set(describeTasksJsons.flatMap(subnetIdsFromDescribeTasks))];
+	const subnetIds = [...new Set([...describeTasksJsons.flatMap(subnetIdsFromDescribeTasks), ...extraSubnetIds])];
 	const existingSubnetRows = existingOutputs
 		.filter((o) => o.toolName === "aws_ec2_describe_subnets")
 		.flatMap((o) => DescribeSubnetsJson.safeParse(o.rawJson).data?.Subnets ?? []);
@@ -235,5 +364,12 @@ export async function fetchNetworkBaseline(opts: {
 	if (missingVpcIds.length > 0) {
 		await record("aws_ec2_describe_vpcs", { vpcIds: missingVpcIds });
 	}
-	return out;
+
+	// Explain an empty/near-empty result: which stage produced nothing.
+	if (!diagnostics.skippedReason && out.length === 0) {
+		if (diagnostics.candidatesFound === 0) diagnostics.skippedReason = "no-clusters";
+		else if (diagnostics.candidatesMatched === 0) diagnostics.skippedReason = "no-focus-match";
+		else diagnostics.skippedReason = "no-tasks-running";
+	}
+	return { outputs: out, diagnostics };
 }

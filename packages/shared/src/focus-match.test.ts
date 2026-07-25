@@ -30,6 +30,29 @@ describe("tokenize", () => {
 		// "api" is length 3 -> dropped; nothing survives.
 		expect(tokenize("api")).toEqual(new Set());
 	});
+
+	// SIO-1210: PascalCase/camelCase focus tokens (e.g. from a ticket title or
+	// normalized entity name) must tokenize on the same word boundaries as their
+	// hyphenated infra-name counterparts, or token-overlap matching silently misses.
+	test("splits PascalCase into the same tokens as its hyphenated form", () => {
+		expect(tokenize("NotificationService")).toEqual(tokenize("notification-service"));
+	});
+	test("splits camelCase into the same tokens as its hyphenated form", () => {
+		expect(tokenize("notificationWebhookService")).toEqual(tokenize("notification-webhook-service"));
+	});
+	test("PascalCase multi-word focus overlaps a hyphenated multi-word name", () => {
+		expect(tokenize("NotificationWebhookService")).toEqual(new Set(["notification", "webhook"]));
+	});
+
+	// CodeRabbit (PR #467): a single lower/digit->upper split leaves acronym runs
+	// glued to the following word (APIGateway -> "apigateway", no split before
+	// "Gateway"). The second pass splits acronym->word boundaries too.
+	test("splits an acronym-prefixed PascalCase name at the acronym/word boundary", () => {
+		expect(tokenize("APIGateway")).toEqual(tokenize("api-gateway"));
+	});
+	test("splits an acronym-suffixed PascalCase name at the word/acronym boundary", () => {
+		expect(tokenize("NotificationHTTPService")).toEqual(tokenize("notification-http-service"));
+	});
 });
 
 describe("matchesFocus", () => {
@@ -91,5 +114,20 @@ describe("matchesFocus", () => {
 		expect(matchesFocus("orders-service", ["prod-service"])).toBe(false);
 		// ...but two genuinely-equal suffix-only names still match literally.
 		expect(matchesFocus("prod-service", ["prod-service"])).toBe(true);
+	});
+
+	// SIO-1210: run 0e222680 -- focus token "NotificationService" (PascalCase, from
+	// a normalized incident entity) failed to match real ECS service names
+	// "notification-service" / "notification-webhook-service" (hyphenated), so the
+	// network baseline silently discarded the estate's only real candidates.
+	test("PascalCase focus token matches its hyphenated ECS service-name equivalent", () => {
+		expect(matchesFocus("notification-service", ["NotificationService"])).toBe(true);
+		expect(matchesFocus("notification-webhook-service", ["NotificationService"])).toBe(true);
+	});
+	test("camelCase focus token matches its hyphenated equivalent", () => {
+		expect(matchesFocus("notification-webhook-service", ["notificationWebhookService"])).toBe(true);
+	});
+	test("PascalCase focus token still rejects an unrelated hyphenated name", () => {
+		expect(matchesFocus("billing-service", ["NotificationService"])).toBe(false);
 	});
 });
