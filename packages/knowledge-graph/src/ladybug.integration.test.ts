@@ -148,10 +148,13 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 		expect(await hasBinding(store, "svc-a", "logGroup", "/ecs/svc-a-prd")).toBe(true);
 		expect(await hasBinding(store, "svc-a", "logGroup", "/does/not/exist")).toBe(false);
 
-		// re-record bumps lastVerified + keeps a single edge (MERGE idempotency)
+		// re-record bumps lastVerified + keeps a single edge (MERGE idempotency);
+		// aliasRaw re-merges RESOLVES_TO too so its keep-first backfill is exercised
+		// against a non-empty tValid
 		await recordServiceBinding(store, {
 			service: "svc-a",
 			serviceNormalized: "svc-a",
+			aliasRaw: "svc-a-prd",
 			datasource: "aws",
 			kind: "logGroup",
 			resourceId: "/ecs/svc-a-prd",
@@ -169,6 +172,10 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 			"MATCH (:Service {name: 'svc-a'})-[o:OBSERVED_IN]->(:TelemetrySource {id: 'aws:logGroup:/ecs/svc-a-prd'}) RETURN o.tValid AS tValid",
 		);
 		expect(rerecorded[0]?.tValid).toBe(observedTValid[0]?.tValid ?? "");
+		const rerecordedResolves = await store.run<{ tValid: string }>(
+			"MATCH (:Alias {name: 'svc-a-prd'})-[r:RESOLVES_TO]->(:Service {name: 'svc-a'}) RETURN r.tValid AS tValid",
+		);
+		expect(rerecordedResolves[0]?.tValid).toBe(resolvesTValid[0]?.tValid ?? "");
 
 		await store.close();
 	});
