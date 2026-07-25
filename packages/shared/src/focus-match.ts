@@ -34,12 +34,21 @@ export function normalize(s: string): string {
 	return result.length > 0 ? result : s.toLowerCase();
 }
 
+// SIO-1210: incident-sourced focus tokens are often PascalCase/camelCase
+// (e.g. `NotificationService`, from a ticket title or normalized entity name)
+// while real infra names are hyphenated (`notification-service`). Insert a
+// hyphen at lower/digit -> upper transitions BEFORE normalize()'s lowercasing
+// so tokenize() sees the same word boundaries either style expresses.
+function splitCamelCase(s: string): string {
+	return s.replace(/([a-z0-9])([A-Z])/g, "$1-$2");
+}
+
 export function tokenize(s: string): Set<string> {
 	// SIO-785: depluralise per token so `articles` matches `article`. The whole-string
 	// normalize only strips a single trailing `s`, but kafka group ids embed plural
 	// nouns mid-string (e.g. `pim-sink-articles`).
 	return new Set(
-		normalize(s)
+		normalize(splitCamelCase(s))
 			.split(/[-_.]/)
 			.filter((t) => t.length >= MIN_TOKEN_LENGTH)
 			.map((t) => t.replace(/s$/, "")),

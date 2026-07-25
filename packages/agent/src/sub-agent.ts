@@ -1067,7 +1067,7 @@ ${state.correlationFetchDirective}`
 					),
 				];
 				const toolsByName = new Map(allTools.map((t) => [t.name, t]));
-				const baseline = await fetchNetworkBaseline({
+				const { outputs: baseline, diagnostics: baselineDiagnostics } = await fetchNetworkBaseline({
 					invoke: async (toolName, args) => {
 						const tool = toolsByName.get(toolName);
 						if (!tool) throw new Error(`tool unavailable: ${toolName}`);
@@ -1093,12 +1093,16 @@ ${state.correlationFetchDirective}`
 						})),
 					);
 				}
+				// SIO-1210: diagnostics explain an empty `added` -- distinguishes "nothing
+				// to find" (skippedReason) from "found candidates but rejected them" and
+				// flags the EKS EC2-instance fallback when it fired.
 				log.info(
 					{
 						event: "subagent.network_baseline",
 						deploymentId,
 						added: baseline.map((o) => o.toolName),
 						durationMs: Date.now() - baselineStart,
+						...baselineDiagnostics,
 					},
 					"Network placement baseline fetched",
 				);
