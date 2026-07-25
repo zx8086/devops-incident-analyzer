@@ -20,7 +20,12 @@ type IconName =
 	| "spinner-stop"
 	| "plus"
 	| "x"
-	| "ticket";
+	| "ticket"
+	| "zoom-in"
+	| "zoom-out"
+	| "fit-view"
+	| "expand"
+	| "collapse";
 
 let { name, class: className = "" }: { name: IconName; class?: string } = $props();
 </script>
@@ -97,5 +102,29 @@ let { name, class: className = "" }: { name: IconName; class?: string } = $props
     <path d="M13 5v2" />
     <path d="M13 17v2" />
     <path d="M13 11v2" />
+  {:else if name === "zoom-in"}
+    <circle cx="11" cy="11" r="8" />
+    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+    <line x1="11" y1="8" x2="11" y2="14" />
+    <line x1="8" y1="11" x2="14" y2="11" />
+  {:else if name === "zoom-out"}
+    <circle cx="11" cy="11" r="8" />
+    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+    <line x1="8" y1="11" x2="14" y2="11" />
+  {:else if name === "fit-view"}
+    <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+    <path d="M21 8V5a2 2 0 0 0-2-2h-3" />
+    <path d="M3 16v3a2 2 0 0 0 2 2h3" />
+    <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
+  {:else if name === "expand"}
+    <path d="M15 3h6v6" />
+    <path d="M9 21H3v-6" />
+    <path d="M21 3l-7 7" />
+    <path d="M3 21l7-7" />
+  {:else if name === "collapse"}
+    <path d="M4 14h6v6" />
+    <path d="M20 10h-6V4" />
+    <path d="M14 10l7-7" />
+    <path d="M10 14l-7 7" />
   {/if}
 </svg>
