@@ -63,7 +63,10 @@ const DescribeTasksJson = z.object({
 		.optional(),
 });
 const DescribeSubnetsJson = z.object({
-	Subnets: z.array(z.object({ VpcId: z.string().optional() })).optional(),
+	Subnets: z.array(z.object({ SubnetId: z.string().optional(), VpcId: z.string().optional() })).optional(),
+});
+const DescribeVpcsJson = z.object({
+	Vpcs: z.array(z.object({ VpcId: z.string().optional() })).optional(),
 });
 
 interface CandidateService {
@@ -200,20 +203,37 @@ export async function fetchNetworkBaseline(opts: {
 		}
 	}
 
-	// 2. Subnet CIDRs (the ipInCidr placement source), then their VPCs. Skipped
-	// when the loop already fetched them -- the baseline only fills gaps.
+	// 2. Subnet CIDRs (the ipInCidr placement source), then their VPCs. Gap-fill
+	// is COVERAGE-based, not tool-name-based: the loop may have fetched subnets/
+	// VPCs for unrelated ids (the ingress protocol does exactly that), so only
+	// the ids missing from existing outputs are fetched.
 	const subnetIds = [...new Set(describeTasksJsons.flatMap(subnetIdsFromDescribeTasks))];
-	const hasSubnets = existingOutputs.some((o) => o.toolName === "aws_ec2_describe_subnets");
+	const existingSubnetRows = existingOutputs
+		.filter((o) => o.toolName === "aws_ec2_describe_subnets")
+		.flatMap((o) => DescribeSubnetsJson.safeParse(o.rawJson).data?.Subnets ?? []);
+	const knownSubnetIds = new Set(existingSubnetRows.map((s) => s.SubnetId).filter((id) => id));
+	const missingSubnetIds = subnetIds.filter((id) => !knownSubnetIds.has(id));
 	let subnetsJson: unknown;
-	if (subnetIds.length > 0 && !hasSubnets) {
-		subnetsJson = await record("aws_ec2_describe_subnets", { subnetIds });
+	if (missingSubnetIds.length > 0) {
+		subnetsJson = await record("aws_ec2_describe_subnets", { subnetIds: missingSubnetIds });
 	}
-	const vpcIds = [
-		...new Set(DescribeSubnetsJson.safeParse(subnetsJson).data?.Subnets?.map((s) => s.VpcId) ?? []),
-	].filter((id): id is string => typeof id === "string" && id.length > 0);
-	const hasVpcs = existingOutputs.some((o) => o.toolName === "aws_ec2_describe_vpcs");
-	if (vpcIds.length > 0 && !hasVpcs) {
-		await record("aws_ec2_describe_vpcs", { vpcIds });
+	// VPC ids come from BOTH the fresh fetch and any existing rows covering our
+	// subnets, so a fully-covered subnet layer still resolves its VPCs.
+	const coveredExistingVpcIds = existingSubnetRows
+		.filter((s) => s.SubnetId && subnetIds.includes(s.SubnetId))
+		.map((s) => s.VpcId);
+	const freshVpcIds = DescribeSubnetsJson.safeParse(subnetsJson).data?.Subnets?.map((s) => s.VpcId) ?? [];
+	const vpcIds = [...new Set([...coveredExistingVpcIds, ...freshVpcIds])].filter(
+		(id): id is string => typeof id === "string" && id.length > 0,
+	);
+	const knownVpcIds = new Set(
+		existingOutputs
+			.filter((o) => o.toolName === "aws_ec2_describe_vpcs")
+			.flatMap((o) => DescribeVpcsJson.safeParse(o.rawJson).data?.Vpcs?.map((v) => v.VpcId) ?? []),
+	);
+	const missingVpcIds = vpcIds.filter((id) => !knownVpcIds.has(id));
+	if (missingVpcIds.length > 0) {
+		await record("aws_ec2_describe_vpcs", { vpcIds: missingVpcIds });
 	}
 	return out;
 }

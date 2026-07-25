@@ -1077,7 +1077,22 @@ ${state.correlationFetchDirective}`
 					existingOutputs: toolOutputs,
 					focusServices,
 				});
-				if (baseline.length > 0) toolOutputs.push(...baseline);
+				// SIO-1043 parity: baseline outputs go through the same persisted-state
+				// cap as every ReAct-loop output, so checkpoint state stays bounded.
+				if (baseline.length > 0) {
+					toolOutputs.push(
+						...baseline.map((o) => ({
+							toolName: o.toolName,
+							// buildPersistedToolOutput takes the raw content STRING; baseline
+							// rawJson is already parsed, so re-serialize for the byte cap.
+							rawJson: buildPersistedToolOutput(
+								o.toolName,
+								typeof o.rawJson === "string" ? o.rawJson : JSON.stringify(o.rawJson),
+								stateCapBytes,
+							).rawJson,
+						})),
+					);
+				}
 				log.info(
 					{
 						event: "subagent.network_baseline",

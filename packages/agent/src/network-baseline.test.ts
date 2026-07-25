@@ -176,6 +176,41 @@ describe("fetchNetworkBaseline", () => {
 		expect(calls[0]?.args).toMatchObject({ cluster: "shared", serviceName: "images-service" });
 	});
 
+	test("gap-fill is coverage-based: unrelated existing subnet output does not suppress the fetch", async () => {
+		const existing: ToolOutput[] = [
+			{ toolName: "aws_ecs_describe_tasks", rawJson: TASKS_JSON },
+			// The ingress protocol fetched OTHER subnets; ours (subnet-1) is not covered.
+			{
+				toolName: "aws_ec2_describe_subnets",
+				rawJson: { Subnets: [{ SubnetId: "subnet-other", VpcId: "vpc-9" }] },
+			},
+		];
+		const calls: Call[] = [];
+		await fetchNetworkBaseline({
+			invoke: makeInvoke({ aws_ec2_describe_subnets: SUBNETS_JSON, aws_ec2_describe_vpcs: { Vpcs: [] } }, calls),
+			hasTool: (n) => ALL_TOOLS.has(n),
+			existingOutputs: existing,
+			focusServices: ["order-service"],
+		});
+		expect(calls[0]?.args).toEqual({ subnetIds: ["subnet-1"] });
+	});
+
+	test("fully-covered subnets skip the fetch but still resolve their VPCs", async () => {
+		const existing: ToolOutput[] = [
+			{ toolName: "aws_ecs_describe_tasks", rawJson: TASKS_JSON },
+			{ toolName: "aws_ec2_describe_subnets", rawJson: SUBNETS_JSON },
+		];
+		const calls: Call[] = [];
+		await fetchNetworkBaseline({
+			invoke: makeInvoke({ aws_ec2_describe_vpcs: { Vpcs: [] } }, calls),
+			hasTool: (n) => ALL_TOOLS.has(n),
+			existingOutputs: existing,
+			focusServices: ["order-service"],
+		});
+		expect(calls.map((c) => c.toolName)).toEqual(["aws_ec2_describe_vpcs"]);
+		expect(calls[0]?.args).toEqual({ vpcIds: ["vpc-1"] });
+	});
+
 	test("missing core tools -> no calls, empty result", async () => {
 		const calls: Call[] = [];
 		const out = await fetchNetworkBaseline({
