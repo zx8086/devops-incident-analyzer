@@ -19,6 +19,7 @@ import { capSubAgentTimeoutMs, getGraphDeadlineAt } from "./graph-budget.ts";
 import { createLlm } from "./llm.ts";
 import { getToolsForDataSource, withAwsEstate, withElasticDeployment } from "./mcp-bridge.ts";
 import { extractTextFromContent } from "./message-utils.ts";
+import { fetchNetworkBaseline, isNetworkBaselineEnabled } from "./network-baseline.ts";
 import { buildCachedSystemMessage } from "./prompt-cache.ts";
 import { buildSubAgentPrompt, getToolDefinitionForDataSource } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
@@ -1048,6 +1049,70 @@ ${state.correlationFetchDirective}`
 			}
 			return { toolName, rawJson: out.rawJson };
 		});
+
+		// SIO-1208: deterministic placement baseline for the network map. The SIO-1204
+		// builder only renders what the loop fetched; guarantee the workload -> IP ->
+		// subnet -> VPC layer on every AWS turn (per estate -- this runs inside the
+		// withAwsEstate ALS scope). Reuses the loop's ECS outputs before spending
+		// calls; soft-failing so it can never degrade the sub-agent result.
+		if (dataSourceId === "aws" && isNetworkBaselineEnabled()) {
+			const baselineStart = Date.now();
+			try {
+				const focusServices = [
+					...new Set(
+						[
+							...(state.investigationFocus?.services ?? []),
+							...(state.normalizedIncident?.affectedServices?.map((s) => s.name) ?? []),
+						].filter((s): s is string => typeof s === "string" && s.length > 0),
+					),
+				];
+				const toolsByName = new Map(allTools.map((t) => [t.name, t]));
+				const baseline = await fetchNetworkBaseline({
+					invoke: async (toolName, args) => {
+						const tool = toolsByName.get(toolName);
+						if (!tool) throw new Error(`tool unavailable: ${toolName}`);
+						return normalizeToolContent(await tool.invoke(args));
+					},
+					hasTool: (name) => toolsByName.has(name),
+					existingOutputs: toolOutputs,
+					focusServices,
+				});
+				// SIO-1043 parity: baseline outputs go through the same persisted-state
+				// cap as every ReAct-loop output, so checkpoint state stays bounded.
+				if (baseline.length > 0) {
+					toolOutputs.push(
+						...baseline.map((o) => ({
+							toolName: o.toolName,
+							// buildPersistedToolOutput takes the raw content STRING; baseline
+							// rawJson is already parsed, so re-serialize for the byte cap.
+							rawJson: buildPersistedToolOutput(
+								o.toolName,
+								typeof o.rawJson === "string" ? o.rawJson : JSON.stringify(o.rawJson),
+								stateCapBytes,
+							).rawJson,
+						})),
+					);
+				}
+				log.info(
+					{
+						event: "subagent.network_baseline",
+						deploymentId,
+						added: baseline.map((o) => o.toolName),
+						durationMs: Date.now() - baselineStart,
+					},
+					"Network placement baseline fetched",
+				);
+			} catch (error) {
+				log.warn(
+					{
+						deploymentId,
+						durationMs: Date.now() - baselineStart,
+						error: error instanceof Error ? error.message : String(error),
+					},
+					"Network placement baseline failed; continuing without it",
+				);
+			}
+		}
 
 		// SIO-1029: a truncated run that still gathered tool data is partial-success,
 		// not error -- salvage what elastic observed rather than blanking the datasource.
