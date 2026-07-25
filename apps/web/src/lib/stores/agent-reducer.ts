@@ -11,6 +11,7 @@ import type {
 	HilMatchCandidate,
 	KafkaFindings,
 	LearningProposal,
+	NetworkTopology,
 	PendingAction,
 	StreamEvent,
 } from "@devops-agent/shared";
@@ -335,6 +336,9 @@ export interface ReducerState {
 	completedNodes: Map<string, { duration: number }>;
 	dataSourceProgress: Map<string, { status: string; message?: string }>;
 	dataSourceFindings: Map<string, DataSourceFindings>;
+	// SIO-1204: once-per-turn merged network map from the network_topology event.
+	// Replace semantics (a turn emits at most one); null until the event arrives.
+	networkTopology: NetworkTopology | null;
 	// Live in-flight status during the queryDataSource fan-out (running/done +
 	// tool-call count), keyed by dataSourceId, or dataSourceId:deploymentId when
 	// deploymentId is set (distinguishes concurrent AWS multi-estate branches).
@@ -417,6 +421,7 @@ export function initialReducerState(): ReducerState {
 		completedNodes: new Map(),
 		dataSourceProgress: new Map(),
 		dataSourceFindings: new Map(),
+		networkTopology: null,
 		subAgentProgress: new Map(),
 		lastSuggestions: [],
 		lastResponseTime: undefined,
@@ -493,6 +498,9 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 			});
 			return { ...state, dataSourceFindings: next };
 		}
+		// SIO-1204: merged per-turn network map.
+		case "network_topology":
+			return { ...state, networkTopology: event.topology };
 		case "node_start": {
 			const next = new Set(state.activeNodes);
 			next.add(event.nodeId);

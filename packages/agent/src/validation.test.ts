@@ -42,6 +42,7 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		finalAnswer: "",
 		graphContext: "",
 		graphBlastRadius: [],
+		networkTopology: undefined,
 		dataSourceContext: undefined,
 		requestId: "test-123",
 		attachmentMeta: [],

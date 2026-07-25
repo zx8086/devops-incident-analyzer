@@ -724,3 +724,341 @@ export function buildIacGraphContext(deployment: string, changes: IacChange[], e
 	}
 	return lines.join("\n");
 }
+
+// --- SIO-1204/SIO-1207 (slice 3a): network-map readers -----------------------
+//
+// Multi-query-assemble-in-TS idiom (bindingsForServices): each layer is one
+// single-MATCH statement (a chained multi-hop pattern is still ONE clause) and the
+// join/dedupe/cap happens in TS -- lbug's binder prefers separate simple queries
+// over correlated subqueries. Every bi-temporal hop goes through validityClause,
+// so `asOf` gives a postmortem time-travel read.
+
+export interface NetworkMapTargetGroup {
+	arn: string;
+	name: string;
+	port: number;
+	protocol: string;
+	workloadArn: string;
+}
+
+export interface NetworkMapLoadBalancer {
+	arn: string;
+	name: string;
+	dnsName: string;
+	type: string;
+	scheme: string;
+	targetGroupArn: string;
+}
+
+export interface NetworkMapDnsRecord {
+	name: string;
+	type: string;
+	target: string;
+	loadBalancerArn: string;
+}
+
+export interface NetworkMapPlacement {
+	loadBalancerArn: string;
+	subnetId: string;
+	subnetCidr: string;
+	az: string;
+	vpcId: string;
+	vpcCidr: string;
+	vpcName: string;
+}
+
+export interface NetworkMapIpAddress {
+	ip: string;
+	workloadArn: string;
+	subnetId: string;
+	lastVerified: string;
+	discoveredBy: string;
+}
+
+export interface NetworkMapEndpoint {
+	id: string;
+	host: string;
+	port: number;
+	protocol: string;
+	datasource: string;
+	confidence: number;
+	lastVerified: string;
+}
+
+export interface NetworkMap {
+	service: string;
+	// AwsResource arns the service RUNS_ON (the anchor for every AWS-side layer).
+	workloads: string[];
+	targetGroups: NetworkMapTargetGroup[];
+	loadBalancers: NetworkMapLoadBalancer[];
+	dnsRecords: NetworkMapDnsRecord[];
+	placements: NetworkMapPlacement[];
+	ipAddresses: NetworkMapIpAddress[];
+	endpoints: NetworkMapEndpoint[];
+}
+
+// Per-layer bound so a shared ALB with hundreds of TGs cannot flood the prompt.
+// Downstream LB/DNS/placement layers inherit the cap transitively: their anchor
+// sets derive from the capped tgArns, so no later layer can exceed it either.
+const NETWORK_MAP_CAP = 50;
+
+function dedupeAndCap<T>(rows: T[], key: (row: T) => string): T[] {
+	const seen = new Set<string>();
+	const out: T[] = [];
+	for (const row of rows) {
+		const k = key(row);
+		if (seen.has(k)) continue;
+		seen.add(k);
+		out.push(row);
+		if (out.length >= NETWORK_MAP_CAP) break;
+	}
+	return out;
+}
+
+// The service's ingress/placement chain: RUNS_ON workloads, the target groups
+// forwarding to them, their load balancers, DNS records, subnet/VPC placement, the
+// currently-bound IPs (with per-hit IN_SUBNET context), and the service's observed
+// endpoints. Layers whose anchor set is empty are skipped (no wasted queries);
+// endpoints hang off the Service directly, so they are read even with no workload.
+export async function networkMapForService(store: GraphStore, service: string, asOf?: string): Promise<NetworkMap> {
+	const map: NetworkMap = {
+		service,
+		workloads: [],
+		targetGroups: [],
+		loadBalancers: [],
+		dnsRecords: [],
+		placements: [],
+		ipAddresses: [],
+		endpoints: [],
+	};
+	if (!service) return map;
+	const params = (base: Record<string, unknown>): Record<string, unknown> => (asOf ? { ...base, asOf } : base);
+
+	const workloadRows = await store.run<{ arn: string }>(
+		`MATCH (s:Service {name: $name})-[r:RUNS_ON]->(x:AwsResource) WHERE ${validityClause("r", asOf)} RETURN x.arn AS arn`,
+		params({ name: service }),
+	);
+	map.workloads = dedupeAndCap(
+		workloadRows.map((row) => String(row.arn)).filter((arn) => arn.length > 0),
+		(arn) => arn,
+	);
+
+	if (map.workloads.length > 0) {
+		const tgRows = await store.run<{
+			arn: string;
+			name: string | null;
+			port: number | null;
+			protocol: string | null;
+			workloadArn: string;
+		}>(
+			`MATCH (tg:TargetGroup)-[f:FORWARDS_TO]->(x:AwsResource) WHERE ${validityClause("f", asOf)} AND x.arn IN $arns RETURN tg.arn AS arn, tg.name AS name, tg.port AS port, tg.protocol AS protocol, x.arn AS workloadArn`,
+			params({ arns: map.workloads }),
+		);
+		map.targetGroups = dedupeAndCap(
+			tgRows.map((row) => ({
+				arn: String(row.arn),
+				name: String(row.name ?? ""),
+				port: Number(row.port ?? 0),
+				protocol: String(row.protocol ?? ""),
+				workloadArn: String(row.workloadArn),
+			})),
+			(row) => `${row.arn} ${row.workloadArn}`,
+		);
+	}
+
+	const tgArns = [...new Set(map.targetGroups.map((row) => row.arn))];
+	if (tgArns.length > 0) {
+		const lbRows = await store.run<{
+			arn: string;
+			name: string | null;
+			dnsName: string | null;
+			type: string | null;
+			scheme: string | null;
+			targetGroupArn: string;
+		}>(
+			`MATCH (lb:LoadBalancer)-[h:HAS_TARGET_GROUP]->(tg:TargetGroup) WHERE ${validityClause("h", asOf)} AND tg.arn IN $tgArns RETURN lb.arn AS arn, lb.name AS name, lb.dnsName AS dnsName, lb.type AS type, lb.scheme AS scheme, tg.arn AS targetGroupArn`,
+			params({ tgArns }),
+		);
+		map.loadBalancers = dedupeAndCap(
+			lbRows.map((row) => ({
+				arn: String(row.arn),
+				name: String(row.name ?? ""),
+				dnsName: String(row.dnsName ?? ""),
+				type: String(row.type ?? ""),
+				scheme: String(row.scheme ?? ""),
+				targetGroupArn: String(row.targetGroupArn),
+			})),
+			(row) => `${row.arn} ${row.targetGroupArn}`,
+		);
+	}
+
+	const lbArns = [...new Set(map.loadBalancers.map((row) => row.arn))];
+	if (lbArns.length > 0) {
+		const dnsRows = await store.run<{ name: string; type: string; target: string | null; loadBalancerArn: string }>(
+			`MATCH (d:DnsRecord)-[rl:RESOLVES_TO_LB]->(lb:LoadBalancer) WHERE ${validityClause("rl", asOf)} AND lb.arn IN $lbArns RETURN d.name AS name, d.type AS type, d.target AS target, lb.arn AS loadBalancerArn`,
+			params({ lbArns }),
+		);
+		map.dnsRecords = dedupeAndCap(
+			dnsRows.map((row) => ({
+				name: String(row.name),
+				type: String(row.type),
+				target: String(row.target ?? ""),
+				loadBalancerArn: String(row.loadBalancerArn),
+			})),
+			(row) => `${row.name} ${row.type} ${row.loadBalancerArn}`,
+		);
+		// Placement is one chained single-MATCH clause (LB -> Subnet -> Vpc).
+		const placementRows = await store.run<{
+			loadBalancerArn: string;
+			subnetId: string;
+			subnetCidr: string | null;
+			az: string | null;
+			vpcId: string;
+			vpcCidr: string | null;
+			vpcName: string | null;
+		}>(
+			`MATCH (lb:LoadBalancer)-[at:ATTACHED_TO]->(sn:Subnet)-[iv:IN_VPC]->(v:Vpc) WHERE ${validityClause("at", asOf)} AND ${validityClause("iv", asOf)} AND lb.arn IN $lbArns RETURN lb.arn AS loadBalancerArn, sn.id AS subnetId, sn.cidr AS subnetCidr, sn.az AS az, v.id AS vpcId, v.cidr AS vpcCidr, v.name AS vpcName`,
+			params({ lbArns }),
+		);
+		map.placements = dedupeAndCap(
+			placementRows.map((row) => ({
+				loadBalancerArn: String(row.loadBalancerArn),
+				subnetId: String(row.subnetId),
+				subnetCidr: String(row.subnetCidr ?? ""),
+				az: String(row.az ?? ""),
+				vpcId: String(row.vpcId),
+				vpcCidr: String(row.vpcCidr ?? ""),
+				vpcName: String(row.vpcName ?? ""),
+			})),
+			(row) => `${row.loadBalancerArn} ${row.subnetId}`,
+		);
+	}
+
+	if (map.workloads.length > 0) {
+		const ipRows = await store.run<{
+			ip: string;
+			workloadArn: string;
+			lastVerified: string | null;
+			discoveredBy: string | null;
+		}>(
+			`MATCH (i:IpAddress)-[b:BOUND_TO]->(x:AwsResource) WHERE ${validityClause("b", asOf)} AND x.arn IN $arns RETURN i.ip AS ip, x.arn AS workloadArn, b.lastVerified AS lastVerified, b.discoveredBy AS discoveredBy`,
+			params({ arns: map.workloads }),
+		);
+		map.ipAddresses = dedupeAndCap(
+			ipRows.map((row) => ({
+				ip: String(row.ip),
+				workloadArn: String(row.workloadArn),
+				subnetId: "",
+				lastVerified: String(row.lastVerified ?? ""),
+				discoveredBy: String(row.discoveredBy ?? ""),
+			})),
+			(row) => `${row.ip} ${row.workloadArn}`,
+		);
+		const ips = [...new Set(map.ipAddresses.map((row) => row.ip))];
+		if (ips.length > 0) {
+			const subnetRows = await store.run<{ ip: string; subnetId: string }>(
+				`MATCH (i:IpAddress)-[sn:IN_SUBNET]->(s:Subnet) WHERE ${validityClause("sn", asOf)} AND i.ip IN $ips RETURN i.ip AS ip, s.id AS subnetId`,
+				params({ ips }),
+			);
+			const subnetByIp = new Map<string, string>();
+			for (const row of subnetRows) {
+				const key = String(row.ip);
+				if (!subnetByIp.has(key)) subnetByIp.set(key, String(row.subnetId ?? ""));
+			}
+			for (const hit of map.ipAddresses) hit.subnetId = subnetByIp.get(hit.ip) ?? "";
+		}
+	}
+
+	const endpointRows = await store.run<{
+		id: string;
+		host: string;
+		port: number | null;
+		protocol: string | null;
+		datasource: string | null;
+		confidence: number | null;
+		lastVerified: string | null;
+	}>(
+		`MATCH (s:Service {name: $name})-[h:HAS_ENDPOINT]->(e:Endpoint) WHERE ${validityClause("h", asOf)} RETURN e.id AS id, e.host AS host, e.port AS port, e.protocol AS protocol, e.datasource AS datasource, h.confidence AS confidence, h.lastVerified AS lastVerified`,
+		params({ name: service }),
+	);
+	map.endpoints = dedupeAndCap(
+		endpointRows.map((row) => ({
+			id: String(row.id),
+			host: String(row.host),
+			port: Number(row.port ?? 0),
+			protocol: String(row.protocol ?? ""),
+			datasource: String(row.datasource ?? ""),
+			confidence: Number(row.confidence ?? 0),
+			lastVerified: String(row.lastVerified ?? ""),
+		})),
+		(row) => row.id,
+	);
+
+	return map;
+}
+
+export interface IpWorkloadHit {
+	ip: string;
+	workloadArn: string;
+	service: string;
+	subnetId: string;
+	vpcId: string;
+	lastVerified: string;
+	discoveredBy: string;
+	tValid: string;
+	tInvalid: string;
+}
+
+// Reverse IP lookup: which workload owns this IP now (or at asOf)? Private IPs are
+// unique only per VPC, so ALL matching hits are returned with subnet/VPC context and
+// the caller disambiguates. Per-hit service context comes from separate single-MATCH
+// queries assembled in TS; the subnet/VPC placement is per-IP (IN_SUBNET hangs off
+// the IpAddress node, and vpcId is the Subnet.vpcId property the writer SET).
+export async function ipToWorkload(store: GraphStore, ip: string, asOf?: string): Promise<IpWorkloadHit[]> {
+	if (!ip) return [];
+	const params = (base: Record<string, unknown>): Record<string, unknown> => (asOf ? { ...base, asOf } : base);
+
+	const bound = await store.run<{
+		arn: string;
+		lastVerified: string | null;
+		discoveredBy: string | null;
+		tValid: string | null;
+		tInvalid: string | null;
+	}>(
+		`MATCH (i:IpAddress {ip: $ip})-[b:BOUND_TO]->(r:AwsResource) WHERE ${validityClause("b", asOf)} RETURN r.arn AS arn, b.lastVerified AS lastVerified, b.discoveredBy AS discoveredBy, b.tValid AS tValid, b.tInvalid AS tInvalid`,
+		params({ ip }),
+	);
+	if (bound.length === 0) return [];
+
+	const subnetRows = await store.run<{ subnetId: string; vpcId: string | null }>(
+		`MATCH (i:IpAddress {ip: $ip})-[sn:IN_SUBNET]->(s:Subnet) WHERE ${validityClause("sn", asOf)} RETURN s.id AS subnetId, s.vpcId AS vpcId`,
+		params({ ip }),
+	);
+	// Ambiguous multi-VPC placement emits no placement: the IpAddress node is keyed
+	// by the bare ip, so a reused private IP can carry valid IN_SUBNET edges from
+	// several VPCs -- stamping the first row onto every hit would misattribute them.
+	const uniqueSubnets = new Set(subnetRows.map((row) => String(row.subnetId ?? "")));
+	const subnetId = uniqueSubnets.size === 1 ? String(subnetRows[0]?.subnetId ?? "") : "";
+	const vpcId = uniqueSubnets.size === 1 ? String(subnetRows[0]?.vpcId ?? "") : "";
+
+	const hits: IpWorkloadHit[] = [];
+	for (const row of bound) {
+		const arn = String(row.arn);
+		const serviceRows = await store.run<{ name: string }>(
+			`MATCH (s:Service)-[r:RUNS_ON]->(x:AwsResource {arn: $arn}) WHERE ${validityClause("r", asOf)} RETURN s.name AS name`,
+			params({ arn }),
+		);
+		hits.push({
+			ip,
+			workloadArn: arn,
+			service: String(serviceRows[0]?.name ?? ""),
+			subnetId,
+			vpcId,
+			lastVerified: String(row.lastVerified ?? ""),
+			discoveredBy: String(row.discoveredBy ?? ""),
+			tValid: String(row.tValid ?? ""),
+			tInvalid: String(row.tInvalid ?? ""),
+		});
+	}
+	return hits;
+}

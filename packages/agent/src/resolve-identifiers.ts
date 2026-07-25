@@ -21,15 +21,17 @@
 import {
 	bindingsForServices,
 	getGraphStore,
+	ipToWorkload,
 	isKnowledgeGraphEnabled,
 	type ServiceBinding,
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
-import { DATA_SOURCE_IDS, type ResolvedIdentifiers } from "@devops-agent/shared";
+import { DATA_SOURCE_IDS, parseIpv4, type ResolvedIdentifiers } from "@devops-agent/shared";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { matchesFocus, normalize, tokenize } from "./correlation/focus-match.ts";
 import { getToolsForDataSource, withAwsEstate, withElasticDeployment } from "./mcp-bridge.ts";
+import { extractTextFromContent } from "./message-utils.ts";
 import {
 	type CouchbaseIndexMap,
 	parseAwsLogGroups,
@@ -140,6 +142,62 @@ export async function fetchGraphSeeds(services: string[], allowed: Set<string>):
 	}
 }
 
+// SIO-1204: reverse-IP KG cache (aws reverse-IP protocol step 0). Scan the turn's
+// query text + focus tokens for IPv4 literals and look up their currently-valid
+// BOUND_TO bindings, so a repeat IP investigation starts from the graph instead of
+// a cold describe_network_interfaces sweep. Hints are verify-then-trust: the focus
+// block tells the sub-agent to still confirm live and report contradictions.
+const IPV4_TOKEN = /\b\d{1,3}(?:\.\d{1,3}){3}\b/g;
+const MAX_IP_HINTS = 3;
+
+type AwsIpHint = NonNullable<NonNullable<ResolvedIdentifiers["aws"]>["ipHints"]>[number];
+
+export function extractIpv4Tokens(texts: string[]): string[] {
+	const out = new Set<string>();
+	for (const text of texts) {
+		for (const match of text.matchAll(IPV4_TOKEN)) {
+			// The regex is octet-shape only; parseIpv4 rejects >255 octets (a version
+			// string like 10.2.300.1 must not trigger a graph lookup).
+			if (parseIpv4(match[0]) !== null) out.add(match[0]);
+		}
+	}
+	return Array.from(out);
+}
+
+export async function fetchIpHints(texts: string[]): Promise<AwsIpHint[]> {
+	if (!isKnowledgeGraphEnabled() || !isBindingsReadEnabled()) return [];
+	const allowed = bindingsReadDatasources();
+	if (!allowed.has("all") && !allowed.has("aws")) return [];
+	const ips = extractIpv4Tokens(texts).slice(0, MAX_IP_HINTS);
+	if (ips.length === 0) return [];
+	try {
+		return await withTimeout(
+			(async () => {
+				const store = await getGraphStore();
+				const hints: AwsIpHint[] = [];
+				for (const ip of ips) {
+					// All currently-valid hits: a private IP is unique only per VPC, so
+					// multiple owners are surfaced for the sub-agent to disambiguate live.
+					for (const hit of await ipToWorkload(store, ip)) {
+						hints.push({
+							ip,
+							workloadArn: hit.workloadArn,
+							...(hit.service && { service: hit.service }),
+							...(hit.lastVerified && { lastVerified: hit.lastVerified }),
+						});
+						if (hints.length >= MAX_IP_HINTS) return hints;
+					}
+				}
+				return hints;
+			})(),
+			GRAPH_SEED_TIMEOUT_MS,
+		);
+	} catch (err) {
+		logger.warn({ error: err instanceof Error ? err.message : String(err) }, "ip-hint read failed; probing only");
+		return [];
+	}
+}
+
 // Mirror the supervisor's target-source resolution (supervisor.ts:41-66) so we
 // probe (roughly) the datasources that will fan out this turn. We deliberately
 // skip the router-mode narrowing: over-probing a datasource that the supervisor
@@ -236,6 +294,17 @@ export async function resolveIdentifiers(
 	if (graphSeeded.length > 0) {
 		merged.graphSeeded = graphSeeded;
 		any = true;
+	}
+
+	// SIO-1204: KG-cache-first reverse-IP hints (aws reverse-IP protocol step 0).
+	if (inScope.has("aws")) {
+		const lastHuman = state.messages.filter((m) => m._getType() === "human").pop();
+		const queryText = lastHuman ? extractTextFromContent(lastHuman.content) : "";
+		const ipHints = await fetchIpHints([queryText, ...focus.services]);
+		if (ipHints.length > 0) {
+			merged.aws = merged.aws ? { ...merged.aws, ipHints } : { logGroups: [], ipHints };
+			any = true;
+		}
 	}
 
 	if (!any) return { resolvedIdentifiers: undefined };

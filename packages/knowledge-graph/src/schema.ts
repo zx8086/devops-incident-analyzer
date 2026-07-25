@@ -57,6 +57,18 @@ export const NODE_LABELS = [
 	// writer and (Stage 2) the R7 pre-fan-out scoping read.
 	"TelemetrySource",
 	"Alias",
+	// SIO-1204/SIO-1207 (slice 3a): AWS network-map substrate. Vpc/Subnet place
+	// workloads and IPs; LoadBalancer/TargetGroup/DnsRecord model the ALB/NLB
+	// ingress chain; an IpAddress is a first-class node (reverse-lookup anchor +
+	// bi-temporal BOUND_TO history + the IN_SUBNET endpoint); an Endpoint is a
+	// host:port coordinate a Service exposes (Kafka bootstrap, ES URL, ...).
+	"Vpc",
+	"Subnet",
+	"LoadBalancer",
+	"TargetGroup",
+	"DnsRecord",
+	"IpAddress",
+	"Endpoint",
 ] as const;
 export type NodeLabel = (typeof NODE_LABELS)[number];
 
@@ -101,6 +113,22 @@ export const REL_TYPES = [
 	// (AWS ECS enumeration). Bi-temporal like OBSERVED_IN; consecutiveMisses drives
 	// the K-miss invalidation (invalidate-not-delete).
 	"RUNS_ON",
+	// SIO-1204/SIO-1207 (slice 3a): network-map edges. IN_VPC/IN_SUBNET/ATTACHED_TO
+	// place subnets, IPs and load balancers; HAS_TARGET_GROUP/FORWARDS_TO/
+	// FORWARDS_TO_IP model the target chain (FORWARDS_TO_IP is a separate table
+	// deliberately -- multi-pair rel groups are unverified on lbug 0.14.3);
+	// RESOLVES_TO_LB is DNS -> LB (the existing RESOLVES_TO is typed Alias ->
+	// Service and cannot be reused); HAS_ENDPOINT and BOUND_TO are bi-temporal
+	// (the OBSERVED_IN column set).
+	"IN_VPC",
+	"IN_SUBNET",
+	"ATTACHED_TO",
+	"HAS_TARGET_GROUP",
+	"FORWARDS_TO",
+	"FORWARDS_TO_IP",
+	"RESOLVES_TO_LB",
+	"HAS_ENDPOINT",
+	"BOUND_TO",
 ] as const;
 export type RelType = (typeof REL_TYPES)[number];
 
@@ -117,6 +145,12 @@ export type TopologyEdgeKind = z.infer<typeof TopologyEdgeKindSchema>;
 // never re-observes keep discoveredBy='' and are never touched.
 export const TOPOLOGY_DISCOVERED_BY = "topology-job";
 
+// SIO-1207: discoveredBy stamp for edges written by the per-incident network-map
+// writers (recordNetworkTopology / recordIpBinding structural edges). Distinct from
+// the topology sweep's stamp so a future network sweep collector can lifecycle-manage
+// its own edges without touching sweep- or agent-owned ones.
+export const NETWORK_DISCOVERED_BY = "network-map";
+
 // Writer-boundary shape for one observed topology edge (collector output is parsed
 // external data -- validate the WHOLE record, not just the kind).
 export const TopologyEdgeRecordSchema = z
@@ -129,6 +163,9 @@ export const TopologyEdgeRecordSchema = z
 	.strict();
 export type TopologyEdgeRecord = z.infer<typeof TopologyEdgeRecordSchema>;
 
+// SIO-1207: the network-map edges (IN_VPC..BOUND_TO) are deliberately NOT in this
+// registry -- v1 is per-incident-write only, and the sweep contract requires a
+// COMPLETE enumeration per kind, which the network collectors do not yet provide.
 export const TOPOLOGY_KINDS: Record<
 	TopologyEdgeKind,
 	{ rel: RelType; fromLabel: NodeLabel; fromKey: string; toLabel: NodeLabel; toKey: string }
@@ -236,6 +273,97 @@ export const TelemetrySourceNodeSchema = z
 // normalization -- same precedent as caller-owned embeddings -- so this package stays
 // free of the agent's focus-match module).
 export const AliasNodeSchema = z.object({ name: z.string().min(1), normalized: z.string().min(1) }).strict();
+// SIO-1204/SIO-1207: network-map writer boundary shapes. Collector output is parsed
+// external AWS data, so recordNetworkTopology validates the WHOLE record with
+// NetworkTopologyRecordSchema before writing anything.
+export const VpcNodeSchema = z
+	.object({
+		id: z.string().min(1),
+		cidr: z.string().optional(),
+		accountId: z.string().optional(),
+		region: z.string().optional(),
+		name: z.string().optional(),
+	})
+	.strict();
+export const SubnetNodeSchema = z
+	.object({
+		id: z.string().min(1),
+		cidr: z.string().optional(),
+		az: z.string().optional(),
+		// The containing VPC; when present the writer also MERGEs the IN_VPC edge.
+		vpcId: z.string().optional(),
+	})
+	.strict();
+export const LoadBalancerNodeSchema = z
+	.object({
+		arn: z.string().min(1),
+		name: z.string().optional(),
+		dnsName: z.string().optional(),
+		type: z.string().optional(),
+		scheme: z.string().optional(),
+		// One ATTACHED_TO edge per subnet id.
+		subnetIds: z.array(z.string().min(1)).optional(),
+	})
+	.strict();
+export const TargetGroupNodeSchema = z
+	.object({
+		arn: z.string().min(1),
+		name: z.string().optional(),
+		port: z.number().int().optional(),
+		protocol: z.string().optional(),
+		loadBalancerArn: z.string().optional(),
+		// isIp routes the target to FORWARDS_TO_IP (IpAddress) vs FORWARDS_TO (AwsResource).
+		targets: z.array(z.object({ id: z.string().min(1), isIp: z.boolean() }).strict()).optional(),
+	})
+	.strict();
+// DnsRecord identity is caller-composed as "<name>:<type>" by the writer -- one DNS
+// name legitimately carries A + AAAA + CNAME rows, so the name alone cannot key it.
+export const DnsRecordNodeSchema = z
+	.object({
+		name: z.string().min(1),
+		type: z.string().min(1),
+		target: z.string().optional(),
+		loadBalancerArn: z.string().optional(),
+	})
+	.strict();
+// Endpoint identity is "<host>:<port>", or bare "<host>" when portless.
+export const EndpointRecordSchema = z
+	.object({
+		service: z.string().min(1),
+		host: z.string().min(1),
+		port: z.number().int().optional(),
+		protocol: z.string().optional(),
+		datasource: z.string().min(1),
+	})
+	.strict();
+export const IpBindingRecordSchema = z
+	.object({
+		ip: z.string().min(1),
+		workloadArn: z.string().min(1),
+		// The CALLER computes CIDR placement (writers stay lookup-free); the IN_SUBNET
+		// edge is written only when this is provided.
+		subnetId: z.string().optional(),
+		confidence: z.number(),
+		discoveredBy: z.string().min(1),
+		evidence: z.string().optional(),
+		incidentId: z.string().optional(),
+		createdAt: z.string().optional(),
+	})
+	.strict();
+// All seven arrays are REQUIRED (callers pass []): this package's boundary schemas
+// carry no .default() (the TopologyEdgeRecordSchema precedent), so an omitted array
+// is a caller bug surfaced at the boundary, not silently defaulted away.
+export const NetworkTopologyRecordSchema = z
+	.object({
+		vpcs: z.array(VpcNodeSchema),
+		subnets: z.array(SubnetNodeSchema),
+		loadBalancers: z.array(LoadBalancerNodeSchema),
+		targetGroups: z.array(TargetGroupNodeSchema),
+		dnsRecords: z.array(DnsRecordNodeSchema),
+		endpoints: z.array(EndpointRecordSchema),
+		ipBindings: z.array(IpBindingRecordSchema),
+	})
+	.strict();
 export type ServiceNode = z.infer<typeof ServiceNodeSchema>;
 export type IncidentNode = z.infer<typeof IncidentNodeSchema>;
 export type FindingNode = z.infer<typeof FindingNodeSchema>;
@@ -251,6 +379,14 @@ export type PipelineNode = z.infer<typeof PipelineNodeSchema>;
 export type PromptNode = z.infer<typeof PromptNodeSchema>;
 export type TelemetrySourceNode = z.infer<typeof TelemetrySourceNodeSchema>;
 export type AliasNode = z.infer<typeof AliasNodeSchema>;
+export type VpcNode = z.infer<typeof VpcNodeSchema>;
+export type SubnetNode = z.infer<typeof SubnetNodeSchema>;
+export type LoadBalancerNode = z.infer<typeof LoadBalancerNodeSchema>;
+export type TargetGroupNode = z.infer<typeof TargetGroupNodeSchema>;
+export type DnsRecordNode = z.infer<typeof DnsRecordNodeSchema>;
+export type EndpointRecord = z.infer<typeof EndpointRecordSchema>;
+export type IpBindingRecord = z.infer<typeof IpBindingRecordSchema>;
+export type NetworkTopologyRecord = z.infer<typeof NetworkTopologyRecordSchema>;
 
 // Schema DDL. Kuzu/Ladybug node & rel tables, idempotent (IF NOT EXISTS). The
 // embedding column on Incident backs the native vector index (see VECTOR_INDEX).
@@ -335,6 +471,41 @@ export const MIGRATIONS: readonly string[] = [
 	// SIO-1104 (5a): runtime placement from the topology sweep's AWS ECS enumeration.
 	// Bi-temporal + K-miss counter, born with lifecycle columns (no ALTER needed).
 	"CREATE REL TABLE IF NOT EXISTS RUNS_ON(FROM Service TO AwsResource, discoveredBy STRING DEFAULT '', tValid STRING DEFAULT '', tInvalid STRING DEFAULT '', consecutiveMisses INT64 DEFAULT 0)",
+	// SIO-1204/SIO-1207 (slice 3a): AWS network-map substrate. Every table below is
+	// brand new and born COMPLETE -- there are NO ALTER_MIGRATIONS entries for them,
+	// so the SIO-1136 CREATE/ALTER default-parity rule is satisfied vacuously. Every
+	// rel table is born with the full RUNS_ON-style lifecycle column set: the columns
+	// are free at CREATE time and make a future sweep collector purely additive.
+	"CREATE NODE TABLE IF NOT EXISTS Vpc(id STRING, cidr STRING, accountId STRING, region STRING, name STRING, PRIMARY KEY(id))",
+	"CREATE NODE TABLE IF NOT EXISTS Subnet(id STRING, cidr STRING, az STRING, vpcId STRING, PRIMARY KEY(id))",
+	"CREATE NODE TABLE IF NOT EXISTS LoadBalancer(arn STRING, name STRING, dnsName STRING, type STRING, scheme STRING, PRIMARY KEY(arn))",
+	"CREATE NODE TABLE IF NOT EXISTS TargetGroup(arn STRING, name STRING, port INT64, protocol STRING, PRIMARY KEY(arn))",
+	// DnsRecord.id is CALLER-composed as "<name>:<type>" -- one DNS name legitimately
+	// carries A + AAAA + CNAME records, so the name alone cannot be the PK.
+	"CREATE NODE TABLE IF NOT EXISTS DnsRecord(id STRING, name STRING, type STRING, target STRING, PRIMARY KEY(id))",
+	// An IP is a NODE (reverse-lookup anchor + bi-temporal BOUND_TO history + the
+	// IN_SUBNET endpoint), not an edge property. Private IPs are unique only per
+	// VPC -- readers return ALL currently-valid hits with subnet/VPC context and
+	// let the caller disambiguate.
+	"CREATE NODE TABLE IF NOT EXISTS IpAddress(ip STRING, PRIMARY KEY(ip))",
+	// Endpoint.id is "<host>:<port>", or bare "<host>" when portless.
+	"CREATE NODE TABLE IF NOT EXISTS Endpoint(id STRING, host STRING, port INT64, protocol STRING, datasource STRING, PRIMARY KEY(id))",
+	"CREATE REL TABLE IF NOT EXISTS IN_VPC(FROM Subnet TO Vpc, discoveredBy STRING DEFAULT '', tValid STRING DEFAULT '', tInvalid STRING DEFAULT '', consecutiveMisses INT64 DEFAULT 0)",
+	"CREATE REL TABLE IF NOT EXISTS IN_SUBNET(FROM IpAddress TO Subnet, discoveredBy STRING DEFAULT '', tValid STRING DEFAULT '', tInvalid STRING DEFAULT '', consecutiveMisses INT64 DEFAULT 0)",
+	"CREATE REL TABLE IF NOT EXISTS ATTACHED_TO(FROM LoadBalancer TO Subnet, discoveredBy STRING DEFAULT '', tValid STRING DEFAULT '', tInvalid STRING DEFAULT '', consecutiveMisses INT64 DEFAULT 0)",
+	"CREATE REL TABLE IF NOT EXISTS HAS_TARGET_GROUP(FROM LoadBalancer TO TargetGroup, discoveredBy STRING DEFAULT '', tValid STRING DEFAULT '', tInvalid STRING DEFAULT '', consecutiveMisses INT64 DEFAULT 0)",
+	// FORWARDS_TO and FORWARDS_TO_IP are two tables DELIBERATELY: multi-pair rel
+	// groups (one rel table with several FROM/TO pairs) are unverified on lbug 0.14.3.
+	"CREATE REL TABLE IF NOT EXISTS FORWARDS_TO(FROM TargetGroup TO AwsResource, discoveredBy STRING DEFAULT '', tValid STRING DEFAULT '', tInvalid STRING DEFAULT '', consecutiveMisses INT64 DEFAULT 0)",
+	"CREATE REL TABLE IF NOT EXISTS FORWARDS_TO_IP(FROM TargetGroup TO IpAddress, discoveredBy STRING DEFAULT '', tValid STRING DEFAULT '', tInvalid STRING DEFAULT '', consecutiveMisses INT64 DEFAULT 0)",
+	// RESOLVES_TO_LB is DNS -> LB; the existing RESOLVES_TO is typed Alias -> Service
+	// and cannot be reused (lbug rel tables are endpoint-typed).
+	"CREATE REL TABLE IF NOT EXISTS RESOLVES_TO_LB(FROM DnsRecord TO LoadBalancer, discoveredBy STRING DEFAULT '', tValid STRING DEFAULT '', tInvalid STRING DEFAULT '', consecutiveMisses INT64 DEFAULT 0)",
+	// HAS_ENDPOINT / BOUND_TO mirror OBSERVED_IN's provenance columns (confidence/
+	// evidence/lastVerified) on top of the lifecycle set; BOUND_TO also records the
+	// incident that taught us the binding.
+	"CREATE REL TABLE IF NOT EXISTS HAS_ENDPOINT(FROM Service TO Endpoint, confidence DOUBLE, discoveredBy STRING DEFAULT '', evidence STRING, lastVerified STRING, tValid STRING DEFAULT '', tInvalid STRING DEFAULT '', consecutiveMisses INT64 DEFAULT 0)",
+	"CREATE REL TABLE IF NOT EXISTS BOUND_TO(FROM IpAddress TO AwsResource, confidence DOUBLE, discoveredBy STRING DEFAULT '', evidence STRING, lastVerified STRING, incidentId STRING DEFAULT '', tValid STRING DEFAULT '', tInvalid STRING DEFAULT '', consecutiveMisses INT64 DEFAULT 0)",
 ];
 
 // SIO-965: best-effort additive column migrations for graphs created before the

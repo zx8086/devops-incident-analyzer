@@ -23,6 +23,7 @@ import { describeNetworkAclsSchema } from "../tools/ec2/describe-network-acls.ts
 import { describeNetworkInterfacesSchema } from "../tools/ec2/describe-network-interfaces.ts";
 import { describeRouteTablesSchema } from "../tools/ec2/describe-route-tables.ts";
 import { describeSecurityGroupsSchema } from "../tools/ec2/describe-security-groups.ts";
+import { describeSubnetsSchema } from "../tools/ec2/describe-subnets.ts";
 import { describeTransitGatewaysSchema } from "../tools/ec2/describe-transit-gateways.ts";
 import { describeVpcEndpointsSchema } from "../tools/ec2/describe-vpc-endpoints.ts";
 import { describeVpcPeeringConnectionsSchema } from "../tools/ec2/describe-vpc-peering-connections.ts";
@@ -35,6 +36,10 @@ import { listServicesSchema } from "../tools/ecs/list-services.ts";
 import { listTasksSchema } from "../tools/ecs/list-tasks.ts";
 import { describeCacheClustersSchema } from "../tools/elasticache/describe-cache-clusters.ts";
 import { describeReplicationGroupsSchema } from "../tools/elasticache/describe-replication-groups.ts";
+import { describeListenersSchema } from "../tools/elbv2/describe-listeners.ts";
+import { describeLoadBalancersSchema } from "../tools/elbv2/describe-load-balancers.ts";
+import { describeTargetGroupsSchema } from "../tools/elbv2/describe-target-groups.ts";
+import { describeTargetHealthSchema } from "../tools/elbv2/describe-target-health.ts";
 import { getDetectorSchema } from "../tools/guardduty/get-detector.ts";
 import { getFindingsSchema as guardDutyGetFindingsSchema } from "../tools/guardduty/get-findings.ts";
 import { listDetectorsSchema } from "../tools/guardduty/list-detectors.ts";
@@ -55,6 +60,8 @@ import { listQueuesSchema } from "../tools/messaging/sqs/list-queues.ts";
 import { listStateMachinesSchema } from "../tools/messaging/stepfunctions/list-state-machines.ts";
 import { describeDbClustersSchema } from "../tools/rds/describe-db-clusters.ts";
 import { describeDbInstancesSchema } from "../tools/rds/describe-db-instances.ts";
+import { listHostedZonesSchema } from "../tools/route53/list-hosted-zones.ts";
+import { listResourceRecordSetsSchema } from "../tools/route53/list-resource-record-sets.ts";
 import { getBucketLocationSchema } from "../tools/s3/get-bucket-location.ts";
 import { getBucketPolicyStatusSchema } from "../tools/s3/get-bucket-policy-status.ts";
 import { listBucketsSchema } from "../tools/s3/list-buckets.ts";
@@ -87,6 +94,24 @@ describe("pagination alias schemas (SIO-838)", () => {
 		expect(listTopicsSchema.safeParse({ cursor: "tok" }).success).toBe(true);
 		expect(listStacksSchema.safeParse({ cursor: "tok" }).success).toBe(true);
 		expect(listDetectorsSchema.safeParse({ cursor: "tok" }).success).toBe(true);
+	});
+
+	// SIO-1205: the Marker-token families (ELBv2, Route53 hosted zones) accept both aliases.
+	test("elbv2 and route53 hosted-zones tools accept limit and cursor", () => {
+		expect(describeLoadBalancersSchema.safeParse({ limit: 50, cursor: "tok" }).success).toBe(true);
+		expect(describeTargetGroupsSchema.safeParse({ limit: 50, cursor: "tok" }).success).toBe(true);
+		expect(listHostedZonesSchema.safeParse({ limit: 50, cursor: "tok" }).success).toBe(true);
+	});
+
+	// SIO-1205: positional pagination (record sets) and unpaginated APIs (target health)
+	// must NOT grow a cursor alias -- Zod strips the unknown key.
+	test("record sets accept limit but have no cursor alias; target health has neither", () => {
+		expect(listResourceRecordSetsSchema.safeParse({ hostedZoneId: "Z123", limit: 100 }).success).toBe(true);
+		const recordSets = listResourceRecordSetsSchema.parse({ hostedZoneId: "Z123", cursor: "tok" });
+		expect("cursor" in recordSets).toBe(false);
+		const health = describeTargetHealthSchema.parse({ targetGroupArn: "arn:tg", limit: 10, cursor: "tok" });
+		expect("limit" in health).toBe(false);
+		expect("cursor" in health).toBe(false);
 	});
 
 	test("dynamodb list-tables accepts limit but has no cursor alias", () => {
@@ -160,6 +185,18 @@ describe("ec2 tool param schemas", () => {
 		expect(
 			describeVpcPeeringConnectionsSchema.safeParse({ filters: [{ Name: "status-code", Values: ["active"] }] }).success,
 		).toBe(true);
+	});
+	// SIO-1205: IP-to-subnet placement for the incident network map
+	test("describeSubnets accepts a vpc-id filter and subnet ids", () => {
+		expect(
+			describeSubnetsSchema.safeParse({
+				subnetIds: ["subnet-09242b1fe63d0b7b2"],
+				filters: [{ Name: "vpc-id", Values: ["vpc-1"] }],
+			}).success,
+		).toBe(true);
+	});
+	test("describeSubnets rejects non-array subnetIds", () => {
+		expect(describeSubnetsSchema.safeParse({ subnetIds: "subnet-1" }).success).toBe(false);
 	});
 	test("describeInstances accepts valid input", () => {
 		expect(describeInstancesSchema.safeParse({ instanceIds: ["i-abc"] }).success).toBe(true);
@@ -436,6 +473,58 @@ describe("elasticache tool param schemas", () => {
 	});
 	test("describeReplicationGroups accepts ReplicationGroupId", () => {
 		expect(describeReplicationGroupsSchema.safeParse({ ReplicationGroupId: "my-rg" }).success).toBe(true);
+	});
+});
+
+// SIO-1205: ingress-path tools (DNS -> ALB/NLB -> listener -> target group -> target health)
+describe("elbv2 tool param schemas", () => {
+	test("describeLoadBalancers accepts empty input", () => {
+		expect(describeLoadBalancersSchema.safeParse({}).success).toBe(true);
+	});
+	test("describeLoadBalancers rejects non-array names", () => {
+		expect(describeLoadBalancersSchema.safeParse({ names: "web-alb" }).success).toBe(false);
+	});
+	test("describeListeners accepts loadBalancerArn or listenerArns", () => {
+		expect(describeListenersSchema.safeParse({ loadBalancerArn: "arn:lb" }).success).toBe(true);
+		expect(describeListenersSchema.safeParse({ listenerArns: ["arn:l1"] }).success).toBe(true);
+	});
+	test("describeTargetGroups accepts loadBalancerArn, arns, and names", () => {
+		expect(
+			describeTargetGroupsSchema.safeParse({ loadBalancerArn: "arn:lb", targetGroupArns: ["arn:tg"], names: ["web"] })
+				.success,
+		).toBe(true);
+	});
+	test("describeTargetHealth requires targetGroupArn", () => {
+		expect(describeTargetHealthSchema.safeParse({}).success).toBe(false);
+		expect(describeTargetHealthSchema.safeParse({ targetGroupArn: "arn:tg" }).success).toBe(true);
+	});
+	test("describeTargetHealth rejects a target missing Id", () => {
+		expect(describeTargetHealthSchema.safeParse({ targetGroupArn: "arn:tg", targets: [{ Port: 80 }] }).success).toBe(
+			false,
+		);
+	});
+});
+
+// SIO-1205: the DNS edge of the incident network map
+describe("route53 tool param schemas", () => {
+	test("listHostedZones accepts empty input", () => {
+		expect(listHostedZonesSchema.safeParse({}).success).toBe(true);
+	});
+	test("listHostedZones rejects a non-integer maxItems", () => {
+		expect(listHostedZonesSchema.safeParse({ maxItems: 1.5 }).success).toBe(false);
+	});
+	test("listResourceRecordSets requires hostedZoneId", () => {
+		expect(listResourceRecordSetsSchema.safeParse({}).success).toBe(false);
+		expect(listResourceRecordSetsSchema.safeParse({ hostedZoneId: "Z123" }).success).toBe(true);
+	});
+	test("listResourceRecordSets accepts positional continuation inputs", () => {
+		expect(
+			listResourceRecordSetsSchema.safeParse({
+				hostedZoneId: "Z123",
+				startRecordName: "api.example.com.",
+				startRecordType: "A",
+			}).success,
+		).toBe(true);
 	});
 });
 

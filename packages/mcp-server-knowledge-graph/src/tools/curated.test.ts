@@ -44,6 +44,10 @@ describe("curated kg_* tools", () => {
 			"kg_applied_changes",
 			"kg_deployment_history",
 			"kg_deployments_running_stack",
+			// SIO-1204: reverse-IP cache lookup.
+			"kg_ip_to_workload",
+			// SIO-1204: persisted per-service network map.
+			"kg_network_map",
 			"kg_prior_root_causes",
 			"kg_stack_instance_history",
 			"kg_stacks_using_module",
@@ -198,5 +202,91 @@ describe("curated kg_* tools", () => {
 		_setGraphStoreForTesting(new InMemoryGraphStore());
 		const out = await call(await connectedClient(), "kg_applied_changes", {});
 		expect(out).toContain("no applied ConfigChange recorded");
+	});
+
+	// SIO-1204: the persisted network map + reverse-IP cache tools.
+	test("kg_network_map empty result names the accretion mechanism", async () => {
+		_setGraphStoreForTesting(new InMemoryGraphStore());
+		const out = await call(await connectedClient(), "kg_network_map", { service: "orders" });
+		expect(out).toContain("no persisted network map for orders");
+		expect(out).toContain("ec2_state/ingress_state");
+	});
+
+	test("kg_network_map renders the chain, placement, ips, and endpoints", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("RUNS_ON", [{ arn: "arn:task" }]);
+		store.stub("[f:FORWARDS_TO]", [
+			{ arn: "arn:tg-1", name: "orders-tg", port: 8080, protocol: "HTTP", workloadArn: "arn:task" },
+		]);
+		store.stub("HAS_TARGET_GROUP", [
+			{
+				arn: "arn:lb-1",
+				name: "orders-alb",
+				dnsName: "x.elb",
+				type: "application",
+				scheme: "internal",
+				targetGroupArn: "arn:tg-1",
+			},
+		]);
+		store.stub("RESOLVES_TO_LB", [
+			{ name: "orders.internal", type: "A", target: "x.elb", loadBalancerArn: "arn:lb-1" },
+		]);
+		store.stub("IN_VPC", [
+			{
+				loadBalancerArn: "arn:lb-1",
+				subnetId: "subnet-1",
+				subnetCidr: "10.0.1.0/24",
+				az: "eu-west-1a",
+				vpcId: "vpc-1",
+				vpcCidr: "10.0.0.0/16",
+				vpcName: "prod",
+			},
+		]);
+		store.stub("BOUND_TO", [
+			{ ip: "10.0.1.15", workloadArn: "arn:task", lastVerified: "t9", discoveredBy: "network-map" },
+		]);
+		store.stub("IN_SUBNET", [{ ip: "10.0.1.15", subnetId: "subnet-1" }]);
+		store.stub("HAS_ENDPOINT", [
+			{
+				id: "b-1:9092",
+				host: "b-1",
+				port: 9092,
+				protocol: "tcp",
+				datasource: "kafka",
+				confidence: 0.7,
+				lastVerified: "t9",
+			},
+		]);
+		_setGraphStoreForTesting(store);
+		const out = await call(await connectedClient(), "kg_network_map", { service: "orders" });
+		expect(out).toContain("Network map for orders");
+		expect(out).toContain("Workloads: arn:task");
+		expect(out).toContain("- dns orders.internal A -> orders-alb");
+		expect(out).toContain("- lb orders-alb (application/internal) -> tg orders-tg");
+		expect(out).toContain("- placement: subnet subnet-1 (10.0.1.0/24) eu-west-1a in vpc prod (10.0.0.0/16)");
+		expect(out).toContain("- ip 10.0.1.15 bound to arn:task (subnet subnet-1), verified t9");
+		expect(out).toContain("- endpoint [kafka] b-1:9092");
+	});
+
+	test("kg_ip_to_workload empty result points at the live reverse-IP protocol", async () => {
+		_setGraphStoreForTesting(new InMemoryGraphStore());
+		const out = await call(await connectedClient(), "kg_ip_to_workload", { ip: "10.0.1.15" });
+		expect(out).toContain("no cached binding for 10.0.1.15");
+		expect(out).toContain("aws_ec2_describe_network_interfaces");
+	});
+
+	test("kg_ip_to_workload flags multiple valid owners for live disambiguation", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("BOUND_TO", [
+			{ arn: "arn:task-a", lastVerified: "t9", discoveredBy: "network-map", tValid: "t0", tInvalid: "" },
+			{ arn: "arn:task-b", lastVerified: "t8", discoveredBy: "network-map", tValid: "t0", tInvalid: "" },
+		]);
+		store.stub("IN_SUBNET", [{ subnetId: "subnet-1", vpcId: "vpc-1" }]);
+		store.stub("RUNS_ON", [{ name: "orders" }]);
+		_setGraphStoreForTesting(store);
+		const out = await call(await connectedClient(), "kg_ip_to_workload", { ip: "10.0.1.15" });
+		expect(out).toContain("MULTIPLE valid owners");
+		expect(out).toContain("- arn:task-a, service orders, subnet subnet-1 / vpc vpc-1, verified t9");
+		expect(out).toContain("Verify live before acting on this.");
 	});
 });

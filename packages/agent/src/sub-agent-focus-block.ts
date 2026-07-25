@@ -177,6 +177,15 @@ function renderDatasourceLines(resolved: ResolvedIdentifiers, dataSourceId: stri
 			if (resolved.aws?.ecsServices?.length) {
 				lines.push(`- AWS ECS services: ${resolved.aws.ecsServices.join(", ")}`);
 			}
+			// SIO-1204: reverse-IP protocol step 0. Verify-then-trust: the sub-agent must
+			// still run the live confirm and report contradictions (RULES.md step 0).
+			for (const hint of resolved.aws?.ipHints ?? []) {
+				const service = hint.service ? `, service ${hint.service}` : "";
+				const verified = hint.lastVerified ? `, verified ${hint.lastVerified}` : "";
+				lines.push(
+					`- KG cache: ${hint.ip} last bound to ${hint.workloadArn}${service}${verified} -- verify live (reverse-IP protocol step 1) and report if the live answer contradicts this cache`,
+				);
+			}
 			// SIO-1159: window guidance was missing for aws (the elastic case has its own
 			// now-30d rule). A successful-but-empty CloudWatch query never errors, so
 			// nothing downstream corrects a too-narrow window -- run 270378e0 queried

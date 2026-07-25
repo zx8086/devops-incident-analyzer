@@ -186,6 +186,59 @@ describe("recordConfirmedBindings node", () => {
 		const out = await recordConfirmedBindings(baseState());
 		expect(out.partialFailures).toEqual([{ node: "recordBindings", reason: "graph-write-failed" }]);
 	});
+
+	// SIO-1204: the network-topology branch.
+	const NETWORK_TOPOLOGY = {
+		builtAtTurn: 1,
+		sources: ["aws"],
+		nodes: [
+			{ id: "vpc-0ab", kind: "vpc" as const, cidr: "10.34.0.0/16" },
+			{ id: "arn:ecs:task/orders/abc", kind: "workload" as const, privateIps: ["10.34.50.147"] },
+		],
+		edges: [],
+	};
+
+	test("persists the network map even when NO bindings were confirmed (relaxed early-return)", async () => {
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		const s = baseState({ resolvedIdentifiers: undefined, networkTopology: NETWORK_TOPOLOGY });
+		expect(await recordConfirmedBindings(s)).toEqual({});
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (v:Vpc"))).toBe(true);
+		expect(store.calls.some((c) => c.cypher.includes("BOUND_TO"))).toBe(true);
+		// the binding writer stayed idle: no telemetry-source writes happened.
+		expect(store.calls.some((c) => c.cypher.includes("TelemetrySource"))).toBe(false);
+	});
+
+	test("KG_NETWORK_WRITE_ENABLED=false suppresses only the network write", async () => {
+		const prior = process.env.KG_NETWORK_WRITE_ENABLED;
+		process.env.KG_NETWORK_WRITE_ENABLED = "false";
+		try {
+			const store = new InMemoryGraphStore();
+			_setGraphStoreForTesting(store);
+			const s = baseState({ networkTopology: NETWORK_TOPOLOGY });
+			expect(await recordConfirmedBindings(s)).toEqual({});
+			expect(store.calls.some((c) => c.cypher.includes("MERGE (v:Vpc"))).toBe(false);
+			// bindings still wrote.
+			expect(store.calls.some((c) => c.cypher.includes("OBSERVED_IN"))).toBe(true);
+		} finally {
+			if (prior === undefined) delete process.env.KG_NETWORK_WRITE_ENABLED;
+			else process.env.KG_NETWORK_WRITE_ENABLED = prior;
+		}
+	});
+
+	test("a network-write failure reports its own partial failure without sinking bindings", async () => {
+		const store = new InMemoryGraphStore();
+		const originalRun = store.run.bind(store);
+		store.run = async (cypher: string, params?: Record<string, unknown>) => {
+			if (cypher.includes("Vpc")) throw new Error("network boom");
+			return originalRun(cypher, params);
+		};
+		_setGraphStoreForTesting(store);
+		const out = await recordConfirmedBindings(baseState({ networkTopology: NETWORK_TOPOLOGY }));
+		expect(out.partialFailures).toEqual([{ node: "recordBindings", reason: "network-write-failed" }]);
+		// the binding writes before it succeeded.
+		expect(store.calls.some((c) => c.cypher.includes("OBSERVED_IN"))).toBe(true);
+	});
 });
 
 // SIO-1102: identifier-level confirmation.

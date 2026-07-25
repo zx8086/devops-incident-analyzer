@@ -95,6 +95,16 @@ mock.module("@devops-agent/shared", () => ({
 			toolCallCount: z.number().optional(),
 		}),
 	]),
+	// SIO-1204: sse-pump value-imports this to validate the network_topology payload
+	// before forwarding. Mirrors the real schema's load-bearing shape (nodes/edges
+	// arrays with ids) so a malformed map is still rejected, without the full enum set.
+	NetworkTopologySchema: z.object({
+		builtAtTurn: z.number(),
+		sources: z.array(z.string()),
+		nodes: z.array(z.object({ id: z.string(), kind: z.string() }).passthrough()),
+		edges: z.array(z.object({ from: z.string(), to: z.string(), kind: z.string() }).passthrough()),
+		truncated: z.boolean().optional(),
+	}),
 	redactPiiContent: (s: string) => s,
 	isKillSwitchActive: () => false,
 	KillSwitchError: class KillSwitchError extends Error {},

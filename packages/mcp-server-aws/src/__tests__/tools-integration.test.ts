@@ -19,6 +19,7 @@ import {
 	DescribeNetworkAclsCommand,
 	DescribeNetworkInterfacesCommand,
 	DescribeRouteTablesCommand,
+	DescribeSubnetsCommand,
 	DescribeTransitGatewaysCommand,
 	DescribeVpcEndpointsCommand,
 	DescribeVpcPeeringConnectionsCommand,
@@ -26,6 +27,13 @@ import {
 	EC2Client,
 } from "@aws-sdk/client-ec2";
 import { DescribeTaskDefinitionCommand, DescribeTasksCommand, ECSClient } from "@aws-sdk/client-ecs";
+import {
+	DescribeListenersCommand,
+	DescribeLoadBalancersCommand,
+	DescribeTargetGroupsCommand,
+	DescribeTargetHealthCommand,
+	ElasticLoadBalancingV2Client,
+} from "@aws-sdk/client-elastic-load-balancing-v2";
 import { DescribeCacheClustersCommand, ElastiCacheClient } from "@aws-sdk/client-elasticache";
 import {
 	GetDetectorCommand,
@@ -39,6 +47,7 @@ import { DescribeEventsCommand, HealthClient } from "@aws-sdk/client-health";
 import { LambdaClient, ListFunctionsCommand } from "@aws-sdk/client-lambda";
 import { DescribeDBInstancesCommand, RDSClient } from "@aws-sdk/client-rds";
 import { GetResourcesCommand, ResourceGroupsTaggingAPIClient } from "@aws-sdk/client-resource-groups-tagging-api";
+import { ListHostedZonesCommand, ListResourceRecordSetsCommand, Route53Client } from "@aws-sdk/client-route-53";
 import { ListBucketsCommand, S3Client } from "@aws-sdk/client-s3";
 import {
 	type AwsSecurityFinding,
@@ -65,6 +74,7 @@ import { describeNatGateways } from "../tools/ec2/describe-nat-gateways.ts";
 import { describeNetworkAcls } from "../tools/ec2/describe-network-acls.ts";
 import { describeNetworkInterfaces } from "../tools/ec2/describe-network-interfaces.ts";
 import { describeRouteTables } from "../tools/ec2/describe-route-tables.ts";
+import { describeSubnets } from "../tools/ec2/describe-subnets.ts";
 import { describeTransitGateways } from "../tools/ec2/describe-transit-gateways.ts";
 import { describeVpcEndpoints } from "../tools/ec2/describe-vpc-endpoints.ts";
 import { describeVpcPeeringConnections } from "../tools/ec2/describe-vpc-peering-connections.ts";
@@ -72,6 +82,10 @@ import { describeVpcs } from "../tools/ec2/describe-vpcs.ts";
 import { describeTaskDefinition } from "../tools/ecs/describe-task-definition.ts";
 import { describeTasks } from "../tools/ecs/describe-tasks.ts";
 import { describeCacheClusters } from "../tools/elasticache/describe-cache-clusters.ts";
+import { describeListeners } from "../tools/elbv2/describe-listeners.ts";
+import { describeLoadBalancers } from "../tools/elbv2/describe-load-balancers.ts";
+import { describeTargetGroups } from "../tools/elbv2/describe-target-groups.ts";
+import { describeTargetHealth } from "../tools/elbv2/describe-target-health.ts";
 import { getDetector } from "../tools/guardduty/get-detector.ts";
 import { getFindings as guardDutyGetFindings } from "../tools/guardduty/get-findings.ts";
 import { listDetectors } from "../tools/guardduty/list-detectors.ts";
@@ -81,6 +95,8 @@ import { listFunctions } from "../tools/lambda/list-functions.ts";
 import { describeLogGroups } from "../tools/logs/describe-log-groups.ts";
 import { listTopics } from "../tools/messaging/sns/list-topics.ts";
 import { describeDbInstances } from "../tools/rds/describe-db-instances.ts";
+import { listHostedZones } from "../tools/route53/list-hosted-zones.ts";
+import { listResourceRecordSets } from "../tools/route53/list-resource-record-sets.ts";
 import { listBuckets } from "../tools/s3/list-buckets.ts";
 import { describeHub } from "../tools/securityhub/describe-hub.ts";
 import { getEnabledStandards } from "../tools/securityhub/get-enabled-standards.ts";
@@ -227,6 +243,31 @@ describe("ec2 integration", () => {
 		const result = (await handler({ estate: E })) as { TransitGateways: { State: string }[] };
 		expect(result.TransitGateways).toHaveLength(1);
 		expect(result.TransitGateways[0]?.State).toBe("available");
+	});
+
+	// SIO-1205: CIDR source for IP-to-subnet placement in the incident network map
+	test("describeSubnets returns Subnets[] with CidrBlock and forwards the vpc-id filter", async () => {
+		const ec2Mock = mockClient(EC2Client);
+		ec2Mock.on(DescribeSubnetsCommand).resolves({
+			Subnets: [
+				{
+					SubnetId: "subnet-09242b1fe63d0b7b2",
+					VpcId: "vpc-1",
+					CidrBlock: "10.0.1.0/24",
+					AvailabilityZone: "eu-central-1a",
+				},
+			],
+		});
+
+		const handler = describeSubnets(config);
+		const result = (await handler({ estate: E, filters: [{ Name: "vpc-id", Values: ["vpc-1"] }] })) as {
+			Subnets: { CidrBlock: string }[];
+		};
+		expect(result.Subnets).toHaveLength(1);
+		expect(result.Subnets[0]?.CidrBlock).toBe("10.0.1.0/24");
+		expect(ec2Mock.commandCalls(DescribeSubnetsCommand)[0]?.args[0].input.Filters).toEqual([
+			{ Name: "vpc-id", Values: ["vpc-1"] },
+		]);
 	});
 
 	test("describeVpcPeeringConnections returns VpcPeeringConnections[] with Status", async () => {
@@ -459,6 +500,107 @@ describe("elasticache integration", () => {
 		const handler = describeCacheClusters(config);
 		const result = (await handler({ estate: E })) as { CacheClusters: unknown[] };
 		expect(result.CacheClusters).toHaveLength(1);
+	});
+});
+
+// SIO-1205: ingress-path chain -- LB -> listener -> target group -> target health
+describe("elbv2 integration", () => {
+	test("describeLoadBalancers returns LoadBalancers[] with DNSName", async () => {
+		const elbMock = mockClient(ElasticLoadBalancingV2Client);
+		elbMock.on(DescribeLoadBalancersCommand).resolves({
+			LoadBalancers: [
+				{ LoadBalancerArn: "arn:lb", DNSName: "web-123.eu-central-1.elb.amazonaws.com", Type: "application" },
+			],
+		});
+
+		const handler = describeLoadBalancers(config);
+		const result = (await handler({ estate: E })) as { LoadBalancers: { DNSName: string }[] };
+		expect(result.LoadBalancers).toHaveLength(1);
+		expect(result.LoadBalancers[0]?.DNSName).toBe("web-123.eu-central-1.elb.amazonaws.com");
+	});
+
+	test("describeListeners threads the listener-to-target-group link through", async () => {
+		const elbMock = mockClient(ElasticLoadBalancingV2Client);
+		elbMock.on(DescribeListenersCommand).resolves({
+			Listeners: [{ ListenerArn: "arn:l1", DefaultActions: [{ Type: "forward", TargetGroupArn: "arn:tg1" }] }],
+		});
+
+		const handler = describeListeners(config);
+		const result = (await handler({ estate: E, loadBalancerArn: "arn:lb" })) as {
+			Listeners: { DefaultActions: { TargetGroupArn: string }[] }[];
+		};
+		expect(result.Listeners[0]?.DefaultActions[0]?.TargetGroupArn).toBe("arn:tg1");
+	});
+
+	test("describeTargetGroups returns TargetGroups[] filtered by loadBalancerArn", async () => {
+		const elbMock = mockClient(ElasticLoadBalancingV2Client);
+		elbMock.on(DescribeTargetGroupsCommand).resolves({
+			TargetGroups: [{ TargetGroupArn: "arn:tg1", TargetType: "ip", Port: 8080 }],
+		});
+
+		const handler = describeTargetGroups(config);
+		const result = (await handler({ estate: E, loadBalancerArn: "arn:lb" })) as { TargetGroups: unknown[] };
+		expect(result.TargetGroups).toHaveLength(1);
+		expect(elbMock.commandCalls(DescribeTargetGroupsCommand)[0]?.args[0].input.LoadBalancerArn).toBe("arn:lb");
+	});
+
+	test("describeTargetHealth echoes TargetGroupArn alongside TargetHealthDescriptions[]", async () => {
+		const elbMock = mockClient(ElasticLoadBalancingV2Client);
+		elbMock.on(DescribeTargetHealthCommand).resolves({
+			TargetHealthDescriptions: [{ Target: { Id: "10.0.1.5", Port: 8080 }, TargetHealth: { State: "healthy" } }],
+		});
+
+		const handler = describeTargetHealth(config);
+		const result = (await handler({ estate: E, targetGroupArn: "arn:tg1" })) as {
+			TargetGroupArn: string;
+			TargetHealthDescriptions: unknown[];
+		};
+		expect(result.TargetGroupArn).toBe("arn:tg1");
+		expect(result.TargetHealthDescriptions).toHaveLength(1);
+	});
+});
+
+// SIO-1205: DNS edge of the incident network map
+describe("route53 integration", () => {
+	test("listHostedZones returns HostedZones[]", async () => {
+		const r53Mock = mockClient(Route53Client);
+		r53Mock.on(ListHostedZonesCommand).resolves({
+			HostedZones: [{ Id: "/hostedzone/Z123", Name: "example.com.", CallerReference: "ref-1" }],
+			Marker: undefined,
+			IsTruncated: false,
+			MaxItems: 100,
+		});
+
+		const handler = listHostedZones(config);
+		const result = (await handler({ estate: E })) as { HostedZones: unknown[] };
+		expect(result.HostedZones).toHaveLength(1);
+	});
+
+	test("listResourceRecordSets returns ResourceRecordSets[] for the hosted zone", async () => {
+		const r53Mock = mockClient(Route53Client);
+		r53Mock.on(ListResourceRecordSetsCommand).resolves({
+			ResourceRecordSets: [
+				{
+					Name: "api.example.com.",
+					Type: "A",
+					AliasTarget: {
+						HostedZoneId: "Z35SXDOTRQ7X7K",
+						DNSName: "web-123.eu-central-1.elb.amazonaws.com.",
+						EvaluateTargetHealth: false,
+					},
+				},
+			],
+			IsTruncated: false,
+			MaxItems: 300,
+		});
+
+		const handler = listResourceRecordSets(config);
+		const result = (await handler({ estate: E, hostedZoneId: "Z123" })) as {
+			ResourceRecordSets: { AliasTarget?: { DNSName: string } }[];
+		};
+		expect(result.ResourceRecordSets).toHaveLength(1);
+		expect(result.ResourceRecordSets[0]?.AliasTarget?.DNSName).toBe("web-123.eu-central-1.elb.amazonaws.com.");
+		expect(r53Mock.commandCalls(ListResourceRecordSetsCommand)[0]?.args[0].input.HostedZoneId).toBe("Z123");
 	});
 });
 

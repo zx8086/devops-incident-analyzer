@@ -30,6 +30,7 @@ import {
 	describeSecurityGroups,
 	describeSecurityGroupsSchema,
 } from "./describe-security-groups.ts";
+import { type DescribeSubnetsParams, describeSubnets, describeSubnetsSchema } from "./describe-subnets.ts";
 import {
 	type DescribeTransitGatewaysParams,
 	describeTransitGateways,
@@ -70,6 +71,15 @@ export function registerEc2Tools(server: McpServer, config: AwsConfig): void {
 		"List or describe EC2 security groups with ingress/egress rules.",
 		withEstate(config, describeSecurityGroupsSchema.shape),
 		async (params) => toMcp(await secGroups(params as DescribeSecurityGroupsParams)),
+	);
+
+	// SIO-1205: IP-to-subnet placement for the incident network map.
+	const subnets = describeSubnets(config);
+	server.tool(
+		"aws_ec2_describe_subnets",
+		"List or describe subnets. Returns Subnets[] with CidrBlock, VpcId, AvailabilityZone, AvailableIpAddressCount -- the CIDR source for IP-to-subnet placement in the incident network map. Filter by subnetIds or filters (e.g. vpc-id, subnet-id, cidr).",
+		withEstate(config, describeSubnetsSchema.shape),
+		async (params) => toMcp(await subnets(params as DescribeSubnetsParams)),
 	);
 
 	// SIO-1057: resolve a VPC endpoint (vpce-...) to its backing ENI IDs, to confirm whether a

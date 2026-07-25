@@ -38,6 +38,7 @@ import {
 import { isGapsJudgeEnabled, judgeDegradingGapBullets } from "./gaps-judge.ts";
 import { createLlm } from "./llm.ts";
 import { extractTextFromContent } from "./message-utils.ts";
+import { buildNetworkTopology, summarizeNetworkTopologyForPrompt } from "./network-topology.ts";
 import { buildCachedSystemMessage } from "./prompt-cache.ts";
 import { buildOrchestratorPromptParts, getActiveSkillNames } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
@@ -119,10 +120,27 @@ export function buildAggregatorMessages(
 		services: state.investigationFocus?.services ?? state.normalizedIncident.affectedServices?.map((s) => s.name) ?? [],
 		datasources: state.investigationFocus?.datasources ?? state.targetDataSources,
 	};
+	// SIO-1204: derive this turn's network map for the prompt. aggregate runs
+	// BEFORE extractFindings, so state.networkTopology is the PRIOR turn's value --
+	// re-run the pure builder over this turn's results instead (same double-build
+	// convention as the extractors' rawCount diagnostics).
+	let networkContext = "";
+	try {
+		const topology = buildNetworkTopology(state.dataSourceResults, wikiFocus.services, state.messages.length);
+		if (topology) networkContext = summarizeNetworkTopologyForPrompt(topology);
+	} catch {
+		// Builder is pure/total; belt-and-braces only -- a network summary must
+		// never sink report generation.
+	}
 	// SIO-1040: split the orchestrator prompt so the stable core (soul + rules +
 	// skills) is a Bedrock cache prefix and the volatile suffix (filtered
-	// knowledge + memory + wiki + graph) stays uncached.
-	const promptParts = buildOrchestratorPromptParts({ runbookFilter, wikiFocus, graphContext: state.graphContext });
+	// knowledge + memory + wiki + graph + network) stays uncached.
+	const promptParts = buildOrchestratorPromptParts({
+		runbookFilter,
+		wikiFocus,
+		graphContext: state.graphContext,
+		networkContext,
+	});
 	const priorAnswer = state.finalAnswer;
 	const lastUserMessage = state.messages.filter((m) => m._getType() === "human").pop();
 	const userQuery = lastUserMessage ? extractTextFromContent(lastUserMessage.content) : "";

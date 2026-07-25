@@ -258,6 +258,8 @@ function printGaps(): void {
 			"  bindings (kg-binding). NOT rebuilt (no system-of-record fact):",
 			"  - Incident EMBEDDINGS (facts carry no vector; re-embed is a Bedrock cost, not default)",
 			"  - Finding / CORRELATES_WITH (graph-only)",
+			"  - Network topology + IP bindings (SIO-1207: machine-rediscoverable from AWS, so",
+			"    deliberately NOT mirrored to durable memory -- the SIO-1135 curated-only rule)",
 			"  Static topology re-seeds via `knowledge-graph:seed` / `knowledge-graph:seed-iac`.",
 			`  Vector index setup: run ${VECTOR_INDEX_SETUP.length} CALL(s) + re-embed if similarity search is needed.`,
 			`  (schema = ${MIGRATIONS.length} tables applied by store.init())`,

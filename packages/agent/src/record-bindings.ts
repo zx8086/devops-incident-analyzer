@@ -19,6 +19,7 @@ import {
 	hasBinding,
 	invalidateBinding,
 	isKnowledgeGraphEnabled,
+	recordNetworkTopology,
 	recordServiceBinding,
 	type ServiceBinding,
 	type ServiceBindingRecord,
@@ -27,6 +28,7 @@ import { getLogger } from "@devops-agent/observability";
 import { type DataSourceResult, isDegradingCategory, type ResolvedIdentifiers } from "@devops-agent/shared";
 import { normalize } from "./correlation/focus-match.ts";
 import { recordKeyDecision } from "./memory-writer.ts";
+import { deriveNetworkTopology } from "./network-kg.ts";
 import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:record-bindings");
@@ -49,6 +51,14 @@ export function isBindingsWriteEnabled(env: NodeJS.ProcessEnv = process.env): bo
 // set KG_BINDINGS_STALENESS_ENABLED=false to disable.
 export function isStalenessEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 	const v = env.KG_BINDINGS_STALENESS_ENABLED;
+	return v !== "false" && v !== "0";
+}
+
+// SIO-1204: the network-topology persistence gate (same default-ON idiom). Inert
+// without KNOWLEDGE_GRAPH_ENABLED (the node-level master gate below), and inert
+// when the turn produced no state.networkTopology.
+export function isNetworkWriteEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+	const v = env.KG_NETWORK_WRITE_ENABLED;
 	return v !== "false" && v !== "0";
 }
 
@@ -300,7 +310,12 @@ export async function recordConfirmedBindings(state: AgentStateType): Promise<Pa
 		// Staleness can retire dead SEEDED bindings even on a turn that confirmed nothing
 		// new, so it must not be short-circuited by an empty records list.
 		const hasStalenessWork = isStalenessEnabled() && (state.resolvedIdentifiers?.graphSeeded?.length ?? 0) > 0;
-		if (records.length === 0 && !hasStalenessWork) return {};
+		// SIO-1204: the network map persists even on a turn that confirmed no telemetry
+		// bindings -- it is derived from toolOutputs, not from resolveIdentifiers.
+		const networkRecord = isNetworkWriteEnabled()
+			? deriveNetworkTopology(state.networkTopology, state.requestId)
+			: undefined;
+		if (records.length === 0 && !hasStalenessWork && !networkRecord) return {};
 		const store = await getGraphStore();
 		const contradicted = hasStalenessWork ? await applyStaleness(store, state) : 0;
 		let newCount = 0;
@@ -334,9 +349,43 @@ export async function recordConfirmedBindings(state: AgentStateType): Promise<Pa
 				},
 			});
 		}
+		// SIO-1204: the network write gets its OWN try/catch so a network failure never
+		// masks the binding telemetry above (and vice versa -- bindings already wrote).
+		let networkFailed = false;
+		if (networkRecord) {
+			try {
+				await recordNetworkTopology(store, networkRecord, state.requestId);
+			} catch (error) {
+				networkFailed = true;
+				logger.warn(
+					{ error: error instanceof Error ? error.message : String(error) },
+					"recordBindings network-topology write failed; continuing",
+				);
+			}
+		}
 		// SIO-1102/1103: per-turn telemetry. `contradicted` = seeded bindings retired this
 		// turn because their datasource reported not-found (staleness).
-		logger.info({ total: records.length, newBindings: newCount, reconfirmed, contradicted }, "agent:record-bindings");
+		logger.info(
+			{
+				total: records.length,
+				newBindings: newCount,
+				reconfirmed,
+				contradicted,
+				networkNodes: networkRecord
+					? networkRecord.vpcs.length +
+						networkRecord.subnets.length +
+						networkRecord.loadBalancers.length +
+						networkRecord.targetGroups.length +
+						networkRecord.dnsRecords.length +
+						networkRecord.endpoints.length
+					: 0,
+				networkIpBindings: networkRecord?.ipBindings.length ?? 0,
+			},
+			"agent:record-bindings",
+		);
+		if (networkFailed) {
+			return { partialFailures: [{ node: "recordBindings", reason: "network-write-failed" }] };
+		}
 		return {};
 	} catch (error) {
 		logger.warn(

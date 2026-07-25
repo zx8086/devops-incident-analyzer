@@ -12,6 +12,7 @@ import {
 	buildGraphContext,
 	getGraphStore,
 	isKnowledgeGraphEnabled,
+	networkMapForService,
 	priorRelationshipsForServices,
 	priorRootCauses,
 	recordIncident,
@@ -28,7 +29,27 @@ import { evaluate } from "./correlation/engine.ts";
 import { correlationRules } from "./correlation/rules.ts";
 import { registerGraphWarmer } from "./lifecycle.ts";
 import { extractTextFromContent } from "./message-utils.ts";
+import { renderNetworkContextLine } from "./network-kg.ts";
 import type { AgentStateType } from "./state.ts";
+
+// SIO-1204: graphContext is uncapped downstream, so the network render is bounded
+// at the source (services considered AND lines emitted).
+const NETWORK_CONTEXT_MAX_LINES = 5;
+// Per-read budget, mirroring GRAPH_SEED_TIMEOUT_MS in resolve-identifiers.ts.
+const NETWORK_CONTEXT_TIMEOUT_MS = 1000;
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<T>((_resolve, reject) => {
+		timer = setTimeout(() => reject(new Error(`network-map read timed out after ${ms}ms`)), ms);
+		timer.unref?.();
+	});
+	// Clear the timer once the race settles either way, so a resolved read leaves no
+	// dangling timer (and no late reject() on an already-settled branch).
+	return Promise.race([p, timeout]).finally(() => {
+		if (timer) clearTimeout(timer);
+	});
+}
 
 const logger = getLogger("agent:graph-knowledge");
 
@@ -189,7 +210,41 @@ export async function graphEnrich(state: AgentStateType): Promise<Partial<AgentS
 			}
 		}
 
-		return { graphContext: buildGraphContext(deps, similar), graphBlastRadius };
+		// SIO-1204: persisted network facts (prior incidents' maps) as bounded context
+		// lines. Own try/catch (the blast-radius pattern) and hard-capped at the source
+		// because graphContext is uncapped downstream. Reads run in parallel with a
+		// per-read timeout so one slow lbug query cannot stall the enrich node;
+		// allSettled preserves service order and a failed read only drops its own line.
+		let networkContext = "";
+		try {
+			const sliced = services.slice(0, NETWORK_CONTEXT_MAX_LINES);
+			const settled = await Promise.allSettled(
+				sliced.map((service) => withTimeout(networkMapForService(store, service), NETWORK_CONTEXT_TIMEOUT_MS)),
+			);
+			const lines: string[] = [];
+			for (const [i, res] of settled.entries()) {
+				const service = sliced[i];
+				if (service === undefined) continue;
+				if (res.status === "rejected") {
+					logger.warn(
+						{ service, error: res.reason instanceof Error ? res.reason.message : String(res.reason) },
+						"graphEnrich network-map read failed; continuing",
+					);
+					continue;
+				}
+				const line = renderNetworkContextLine(service, res.value);
+				if (line) lines.push(line);
+				if (lines.length >= NETWORK_CONTEXT_MAX_LINES) break;
+			}
+			if (lines.length > 0) networkContext = `\n${lines.join("\n")}`;
+		} catch (error) {
+			logger.warn(
+				{ error: error instanceof Error ? error.message : String(error) },
+				"graphEnrich network-map read failed; continuing",
+			);
+		}
+
+		return { graphContext: buildGraphContext(deps, similar) + networkContext, graphBlastRadius };
 	} catch (error) {
 		logger.warn(
 			{ error: error instanceof Error ? error.message : String(error) },

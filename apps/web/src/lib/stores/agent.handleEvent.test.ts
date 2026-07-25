@@ -233,6 +233,25 @@ describe("applyStreamEvent", () => {
 		expect(initial.dataSourceFindings.size).toBe(0);
 	});
 
+	// SIO-1204: once-per-turn merged network map for the NetworkTopologyCard.
+	test("records network_topology and replaces it on the next event", () => {
+		const topology = {
+			builtAtTurn: 2,
+			sources: ["aws"],
+			nodes: [{ id: "vpc-0ab", kind: "vpc" as const, cidr: "10.34.0.0/16" }],
+			edges: [],
+		};
+		const initial = initialReducerState();
+		const next = applyStreamEvent(initial, { type: "network_topology", topology });
+		expect(next.networkTopology?.nodes[0]?.id).toBe("vpc-0ab");
+		expect(initial.networkTopology).toBeNull();
+		const replaced = applyStreamEvent(next, {
+			type: "network_topology",
+			topology: { ...topology, nodes: [{ id: "vpc-9ff", kind: "vpc" as const }] },
+		});
+		expect(replaced.networkTopology?.nodes[0]?.id).toBe("vpc-9ff");
+	});
+
 	test("records datasource_result error without findings", () => {
 		const next = applyStreamEvent(initialReducerState(), {
 			type: "datasource_result",
