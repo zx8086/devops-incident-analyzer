@@ -165,10 +165,11 @@ export class DeadlineExceededError extends Error {
 // SIO-1214: Claude 4.7+/5-generation models (Sonnet 5, Opus 4.7, Opus 4.8, Fable 5,
 // Mythos) reject `temperature` (and `top_p`/`top_k`) outright -- "temperature is
 // deprecated for this model" -- rather than accepting and ignoring it like prior
-// generations. Match by Bedrock inference-profile id suffix so this stays correct
-// as MODEL_MAP grows; every current entry that must NOT get temperature is listed
+// generations. Match by substring (not endsWith) so this still catches versioned/dated
+// Bedrock ids (e.g. a future eu.anthropic.claude-sonnet-5-20260601-v1:0) if MODEL_MAP
+// ever adds one; every current entry that must NOT get temperature is listed
 // explicitly here since a false negative (sending it) hard-fails every call.
-const NO_TEMPERATURE_MODEL_SUFFIXES = [
+const NO_TEMPERATURE_MODEL_MARKERS = [
 	"claude-sonnet-5",
 	"claude-opus-4-7",
 	"claude-opus-4-8",
@@ -177,7 +178,7 @@ const NO_TEMPERATURE_MODEL_SUFFIXES = [
 ];
 
 export function modelAcceptsTemperature(bedrockModelId: string): boolean {
-	return !NO_TEMPERATURE_MODEL_SUFFIXES.some((suffix) => bedrockModelId.endsWith(suffix));
+	return !NO_TEMPERATURE_MODEL_MARKERS.some((marker) => bedrockModelId.includes(marker));
 }
 
 function buildChatModel(
