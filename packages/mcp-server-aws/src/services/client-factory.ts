@@ -7,6 +7,7 @@ import { ConfigServiceClient } from "@aws-sdk/client-config-service";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { EC2Client } from "@aws-sdk/client-ec2";
 import { ECSClient } from "@aws-sdk/client-ecs";
+import { ElasticLoadBalancingV2Client } from "@aws-sdk/client-elastic-load-balancing-v2";
 import { ElastiCacheClient } from "@aws-sdk/client-elasticache";
 import { EventBridgeClient } from "@aws-sdk/client-eventbridge";
 import { GuardDutyClient } from "@aws-sdk/client-guardduty";
@@ -14,6 +15,7 @@ import { HealthClient } from "@aws-sdk/client-health";
 import { LambdaClient } from "@aws-sdk/client-lambda";
 import { RDSClient } from "@aws-sdk/client-rds";
 import { ResourceGroupsTaggingAPIClient } from "@aws-sdk/client-resource-groups-tagging-api";
+import { Route53Client } from "@aws-sdk/client-route-53";
 import { S3Client } from "@aws-sdk/client-s3";
 import { SecurityHubClient } from "@aws-sdk/client-securityhub";
 import { SFNClient } from "@aws-sdk/client-sfn";
@@ -85,6 +87,9 @@ export function getEcsClient(config: AwsConfig, estate: string): ECSClient {
 export function getElastiCacheClient(config: AwsConfig, estate: string): ElastiCacheClient {
 	return lazyClient("elasticache", estate, () => new ElastiCacheClient(commonConfig(config, estate)));
 }
+export function getElbv2Client(config: AwsConfig, estate: string): ElasticLoadBalancingV2Client {
+	return lazyClient("elbv2", estate, () => new ElasticLoadBalancingV2Client(commonConfig(config, estate)));
+}
 export function getEventBridgeClient(config: AwsConfig, estate: string): EventBridgeClient {
 	return lazyClient("eventbridge", estate, () => new EventBridgeClient(commonConfig(config, estate)));
 }
@@ -104,6 +109,16 @@ export function getRdsClient(config: AwsConfig, estate: string): RDSClient {
 }
 export function getResourceGroupsTaggingClient(config: AwsConfig, estate: string): ResourceGroupsTaggingAPIClient {
 	return lazyClient("tags", estate, () => new ResourceGroupsTaggingAPIClient(commonConfig(config, estate)));
+}
+// SIO-1205: Route 53 is a global service; like AWS Health above, pin the us-east-1
+// endpoint here regardless of the deployment/estate region. Estate AssumeRole
+// credential scoping still applies via commonConfig.
+export function getRoute53Client(config: AwsConfig, estate: string): Route53Client {
+	return lazyClient(
+		"route53",
+		estate,
+		() => new Route53Client({ ...commonConfig(config, estate), region: "us-east-1" }),
+	);
 }
 export function getS3Client(config: AwsConfig, estate: string): S3Client {
 	return lazyClient("s3", estate, () => new S3Client(commonConfig(config, estate)));

@@ -11,13 +11,17 @@ export interface OrchestratorPromptParts {
 	volatile: string;
 }
 
-// The four turn-varying sections, already rendered by prompt-context.ts, in the
+// The turn-varying sections, already rendered by prompt-context.ts, in the
 // exact order the pre-split buildOrchestratorPrompt concatenated them.
 export interface VolatileSections {
 	compliance: string;
 	liveMemory: string;
 	wiki: string;
 	graph: string;
+	// SIO-1204: this turn's derived network-map summary. Optional and appended
+	// last so an empty/absent value keeps the assembly byte-identical to the
+	// pre-network output (the SIO-1040 byte-identity contract).
+	network?: string;
 }
 
 // Filter the knowledge array to remove non-selected runbooks when a filter is
@@ -47,6 +51,7 @@ export function assembleOrchestratorPromptParts(
 	sections: VolatileSections,
 ): OrchestratorPromptParts {
 	const { core, knowledge } = buildSystemPromptParts(agent);
-	const volatile = knowledge + sections.compliance + sections.liveMemory + sections.wiki + sections.graph;
+	const volatile =
+		knowledge + sections.compliance + sections.liveMemory + sections.wiki + sections.graph + (sections.network ?? "");
 	return { stable: core, volatile };
 }

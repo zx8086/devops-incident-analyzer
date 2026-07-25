@@ -7,6 +7,10 @@
 import { validTopologyEdges } from "./reader.ts";
 import {
 	type BindingKind,
+	type IpBindingRecord,
+	NETWORK_DISCOVERED_BY,
+	type NetworkTopologyRecord,
+	NetworkTopologyRecordSchema,
 	TOPOLOGY_DISCOVERED_BY,
 	TOPOLOGY_KINDS,
 	type TopologyEdgeKind,
@@ -746,4 +750,271 @@ export async function sweepStaleTopology(
 		}
 	}
 	return { checked: valid.length, missed, invalidated };
+}
+
+// --- SIO-1204/SIO-1207 (slice 3a): per-incident network-map writers ----------
+//
+// The aws-agent's collector owns all AWS I/O and CIDR math and feeds parsed
+// records; these writers are pure, parameterized and idempotent. Structural edges
+// (placement + ingress chain) get the RUNS_ON-style lifecycle stamp with
+// discoveredBy = NETWORK_DISCOVERED_BY; HAS_ENDPOINT / BOUND_TO carry the
+// OBSERVED_IN provenance SET (re-observation bumps lastVerified and revalidates).
+//
+// Keep-first tValid uses the recordTopologyEdges conditional-WHERE backfill, NOT
+// recordServiceBinding's coalesce-in-SET: every network rel table is born with
+// tValid STRING DEFAULT '', and on lbug 0.14.3 a MERGE-created edge materializes
+// that DEFAULT before the SET evaluates, so coalesce(r.tValid, $now) reads '' and
+// keeps it -- the edge would never gain a real tValid and as-of reads would treat
+// it as valid-from-the-beginning (verified against the real engine by the SIO-1207
+// integration test).
+
+// HAS_ENDPOINT default confidence: the 0.7 agent-observed convention from SIO-1100
+// (human confirmation would be 1.0 and is out of scope for slice 3a -- EndpointRecord
+// deliberately carries no confidence field).
+const NETWORK_ENDPOINT_CONFIDENCE = 0.7;
+
+// Keep-first tValid backfill for one just-merged edge (the SIO-1104 idiom): only an
+// edge whose tValid is still the column DEFAULT '' (or NULL) gets stamped, so a
+// re-observed edge keeps its FIRST tValid.
+async function backfillEdgeTValid(
+	store: GraphStore,
+	pattern: string,
+	edge: string,
+	params: Record<string, unknown>,
+	now: string,
+): Promise<void> {
+	await store.run(`MATCH ${pattern} WHERE coalesce(${edge}.tValid, '') = '' SET ${edge}.tValid = $now`, {
+		...params,
+		now,
+	});
+}
+
+// One structural network edge: MERGE both endpoints bare (never assume node
+// ordering), then MATCH + MERGE the edge with the lifecycle stamp. Labels/keys/rel
+// come from internal constants (never caller input); values are always bound.
+async function mergeNetworkEdge(
+	store: GraphStore,
+	rel: string,
+	from: { label: string; key: string; value: string },
+	to: { label: string; key: string; value: string },
+	now: string,
+): Promise<void> {
+	await store.run(`MERGE (a:${from.label} {${from.key}: $from})`, { from: from.value });
+	await store.run(`MERGE (b:${to.label} {${to.key}: $to})`, { to: to.value });
+	await store.run(
+		`MATCH (a:${from.label} {${from.key}: $from}), (b:${to.label} {${to.key}: $to}) MERGE (a)-[r:${rel}]->(b) SET r.discoveredBy = $discoveredBy, r.tInvalid = ''`,
+		{ from: from.value, to: to.value, discoveredBy: NETWORK_DISCOVERED_BY },
+	);
+	await backfillEdgeTValid(
+		store,
+		`(a:${from.label} {${from.key}: $from})-[r:${rel}]->(b:${to.label} {${to.key}: $to})`,
+		"r",
+		{ from: from.value, to: to.value },
+		now,
+	);
+}
+
+// One incident turn's observed AWS network map. Zod-parses the WHOLE record at the
+// boundary (collector output is parsed EXTERNAL data; throws before anything is
+// written). MERGE order is parents-before-children -- vpcs -> subnets -> load
+// balancers -> target groups -> targets -> dns -> endpoints -> ip bindings -- so
+// SET-carrying node MERGEs land before the bare edge-endpoint MERGEs reference them.
+export async function recordNetworkTopology(
+	store: GraphStore,
+	record: NetworkTopologyRecord,
+	incidentId?: string,
+): Promise<void> {
+	const r = NetworkTopologyRecordSchema.parse(record);
+	const now = new Date().toISOString();
+
+	for (const vpc of r.vpcs) {
+		await store.run(
+			"MERGE (v:Vpc {id: $id}) SET v.cidr = $cidr, v.accountId = $accountId, v.region = $region, v.name = $name",
+			{
+				id: vpc.id,
+				cidr: vpc.cidr ?? "",
+				accountId: vpc.accountId ?? "",
+				region: vpc.region ?? "",
+				name: vpc.name ?? "",
+			},
+		);
+	}
+	for (const subnet of r.subnets) {
+		await store.run("MERGE (s:Subnet {id: $id}) SET s.cidr = $cidr, s.az = $az, s.vpcId = $vpcId", {
+			id: subnet.id,
+			cidr: subnet.cidr ?? "",
+			az: subnet.az ?? "",
+			vpcId: subnet.vpcId ?? "",
+		});
+		if (subnet.vpcId) {
+			await mergeNetworkEdge(
+				store,
+				"IN_VPC",
+				{ label: "Subnet", key: "id", value: subnet.id },
+				{ label: "Vpc", key: "id", value: subnet.vpcId },
+				now,
+			);
+		}
+	}
+	for (const lb of r.loadBalancers) {
+		await store.run(
+			"MERGE (lb:LoadBalancer {arn: $arn}) SET lb.name = $name, lb.dnsName = $dnsName, lb.type = $type, lb.scheme = $scheme",
+			{ arn: lb.arn, name: lb.name ?? "", dnsName: lb.dnsName ?? "", type: lb.type ?? "", scheme: lb.scheme ?? "" },
+		);
+		for (const subnetId of lb.subnetIds ?? []) {
+			await mergeNetworkEdge(
+				store,
+				"ATTACHED_TO",
+				{ label: "LoadBalancer", key: "arn", value: lb.arn },
+				{ label: "Subnet", key: "id", value: subnetId },
+				now,
+			);
+		}
+	}
+	for (const tg of r.targetGroups) {
+		await store.run(
+			"MERGE (tg:TargetGroup {arn: $arn}) SET tg.name = $name, tg.port = $port, tg.protocol = $protocol",
+			{
+				arn: tg.arn,
+				name: tg.name ?? "",
+				port: tg.port ?? 0,
+				protocol: tg.protocol ?? "",
+			},
+		);
+		if (tg.loadBalancerArn) {
+			await mergeNetworkEdge(
+				store,
+				"HAS_TARGET_GROUP",
+				{ label: "LoadBalancer", key: "arn", value: tg.loadBalancerArn },
+				{ label: "TargetGroup", key: "arn", value: tg.arn },
+				now,
+			);
+		}
+		for (const target of tg.targets ?? []) {
+			// isIp routes to the FORWARDS_TO_IP table (two tables deliberately -- see schema.ts).
+			if (target.isIp) {
+				await mergeNetworkEdge(
+					store,
+					"FORWARDS_TO_IP",
+					{ label: "TargetGroup", key: "arn", value: tg.arn },
+					{ label: "IpAddress", key: "ip", value: target.id },
+					now,
+				);
+			} else {
+				await mergeNetworkEdge(
+					store,
+					"FORWARDS_TO",
+					{ label: "TargetGroup", key: "arn", value: tg.arn },
+					{ label: "AwsResource", key: "arn", value: target.id },
+					now,
+				);
+			}
+		}
+	}
+	for (const dns of r.dnsRecords) {
+		// id = "<name>:<type>": one DNS name legitimately carries A + AAAA + CNAME rows.
+		const id = `${dns.name}:${dns.type}`;
+		await store.run("MERGE (d:DnsRecord {id: $id}) SET d.name = $name, d.type = $type, d.target = $target", {
+			id,
+			name: dns.name,
+			type: dns.type,
+			target: dns.target ?? "",
+		});
+		if (dns.loadBalancerArn) {
+			await mergeNetworkEdge(
+				store,
+				"RESOLVES_TO_LB",
+				{ label: "DnsRecord", key: "id", value: id },
+				{ label: "LoadBalancer", key: "arn", value: dns.loadBalancerArn },
+				now,
+			);
+		}
+	}
+	for (const ep of r.endpoints) {
+		// MERGE the Service first -- never assume an earlier pipeline node created it.
+		await store.run("MERGE (s:Service {name: $name})", { name: ep.service });
+		const id = ep.port !== undefined ? `${ep.host}:${ep.port}` : ep.host;
+		await store.run(
+			"MERGE (e:Endpoint {id: $id}) SET e.host = $host, e.port = $port, e.protocol = $protocol, e.datasource = $datasource",
+			{ id, host: ep.host, port: ep.port ?? 0, protocol: ep.protocol ?? "", datasource: ep.datasource },
+		);
+		// The OBSERVED_IN provenance SET (recordServiceBinding): re-observation bumps
+		// lastVerified and clears tInvalid (revalidation). Keep-first tValid goes via
+		// the conditional backfill -- see the module comment above.
+		await store.run(
+			"MATCH (s:Service {name: $service}), (e:Endpoint {id: $id}) MERGE (s)-[o:HAS_ENDPOINT]->(e) SET o.confidence = $confidence, o.discoveredBy = $discoveredBy, o.evidence = $evidence, o.lastVerified = $now, o.tInvalid = ''",
+			{
+				service: ep.service,
+				id,
+				confidence: NETWORK_ENDPOINT_CONFIDENCE,
+				discoveredBy: NETWORK_DISCOVERED_BY,
+				evidence: "",
+				now,
+			},
+		);
+		await backfillEdgeTValid(
+			store,
+			"(s:Service {name: $service})-[o:HAS_ENDPOINT]->(e:Endpoint {id: $id})",
+			"o",
+			{ service: ep.service, id },
+			now,
+		);
+	}
+	for (const binding of r.ipBindings) {
+		// The call-level incidentId is provenance fallback for bindings without their own.
+		await recordIpBinding(store, { ...binding, incidentId: binding.incidentId ?? incidentId });
+	}
+}
+
+// One IP -> workload binding. ONE-OWNER rule (the RESOLVES_TO alias mechanism): an
+// IP is bound to exactly one workload at a time, so any still-valid BOUND_TO edge to
+// a DIFFERENT AwsResource is invalidated (with a supersession note appended to its
+// evidence) BEFORE the new edge is merged -- otherwise ipToWorkload would surface
+// both owners as currently valid. The IN_SUBNET edge is written only when the CALLER
+// provided subnetId (the caller computes CIDR placement -- writers stay lookup-free;
+// no CIDR code in this package).
+export async function recordIpBinding(store: GraphStore, b: IpBindingRecord): Promise<void> {
+	if (!b.ip || !b.workloadArn) return;
+	const now = b.createdAt ?? new Date().toISOString();
+	await store.run("MERGE (i:IpAddress {ip: $ip})", { ip: b.ip });
+	await store.run(
+		"MATCH (i:IpAddress {ip: $ip})-[b:BOUND_TO]->(r:AwsResource) WHERE r.arn <> $arn AND b.tInvalid = '' SET b.tInvalid = $now, b.evidence = b.evidence + ' | superseded: rebound to ' + $arn",
+		{ ip: b.ip, arn: b.workloadArn, now },
+	);
+	await store.run("MERGE (r:AwsResource {arn: $arn})", { arn: b.workloadArn });
+	// Re-MERGE always bumps lastVerified and clears tInvalid (re-observing a binding
+	// revalidates it); keep-first tValid goes via the conditional backfill.
+	await store.run(
+		"MATCH (i:IpAddress {ip: $ip}), (r:AwsResource {arn: $arn}) MERGE (i)-[b:BOUND_TO]->(r) SET b.confidence = $confidence, b.discoveredBy = $discoveredBy, b.evidence = $evidence, b.lastVerified = $now, b.incidentId = $incidentId, b.tInvalid = ''",
+		{
+			ip: b.ip,
+			arn: b.workloadArn,
+			confidence: b.confidence,
+			discoveredBy: b.discoveredBy,
+			evidence: b.evidence ?? "",
+			incidentId: b.incidentId ?? "",
+			now,
+		},
+	);
+	await backfillEdgeTValid(
+		store,
+		"(i:IpAddress {ip: $ip})-[b:BOUND_TO]->(r:AwsResource {arn: $arn})",
+		"b",
+		{ ip: b.ip, arn: b.workloadArn },
+		now,
+	);
+	if (b.subnetId) {
+		await store.run("MERGE (s:Subnet {id: $id})", { id: b.subnetId });
+		await store.run(
+			"MATCH (i:IpAddress {ip: $ip}), (s:Subnet {id: $id}) MERGE (i)-[r:IN_SUBNET]->(s) SET r.discoveredBy = $discoveredBy, r.tInvalid = ''",
+			{ ip: b.ip, id: b.subnetId, discoveredBy: b.discoveredBy },
+		);
+		await backfillEdgeTValid(
+			store,
+			"(i:IpAddress {ip: $ip})-[r:IN_SUBNET]->(s:Subnet {id: $id})",
+			"r",
+			{ ip: b.ip, id: b.subnetId },
+			now,
+		);
+	}
 }

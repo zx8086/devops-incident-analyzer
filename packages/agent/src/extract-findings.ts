@@ -8,6 +8,7 @@ import { extractElasticFindings } from "./correlation/extractors/elastic.ts";
 import { extractGitLabFindings } from "./correlation/extractors/gitlab.ts";
 import { extractKafkaFindings } from "./correlation/extractors/kafka.ts";
 import { extractOrbitFindings } from "./correlation/extractors/orbit.ts";
+import { buildNetworkTopology } from "./network-topology.ts";
 import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:extract-findings");
@@ -229,5 +230,22 @@ export async function extractFindings(state: AgentStateType): Promise<Partial<Ag
 			return r;
 		}
 	});
-	return { dataSourceResults };
+	// SIO-1204: per-turn network map. Pure and total (safeParse everywhere), but
+	// guarded anyway so a builder bug can never sink the findings extraction. The
+	// networkTopology key is ALWAYS returned (undefined included) so the replace
+	// reducer clears a stale prior-turn map on turns with no network data.
+	let networkTopology: ReturnType<typeof buildNetworkTopology>;
+	try {
+		networkTopology = buildNetworkTopology(dataSourceResults, focusServices, state.messages.length);
+		if (networkTopology) {
+			logCard("NetworkTopologyCard", focusServices, networkTopology.nodes.length, networkTopology.nodes.length, {
+				edges: networkTopology.edges.length,
+				sources: networkTopology.sources,
+				truncated: networkTopology.truncated ?? false,
+			});
+		}
+	} catch (err) {
+		logger.warn({ error: err instanceof Error ? err.message : String(err) }, "buildNetworkTopology failed");
+	}
+	return { dataSourceResults, networkTopology };
 }

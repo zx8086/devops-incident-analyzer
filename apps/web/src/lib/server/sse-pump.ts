@@ -5,7 +5,7 @@
 // Previously the routing lived inline in stream/+server.ts.
 
 import type { InvestigationFocus } from "@devops-agent/shared";
-import { HilApplyReportSchema, redactPiiContent, StreamEventSchema } from "@devops-agent/shared";
+import { HilApplyReportSchema, NetworkTopologySchema, redactPiiContent, StreamEventSchema } from "@devops-agent/shared";
 import { z } from "zod";
 
 // SIO-1194 (CodeRabbit PR #455): validate the cap-transparency fields with Zod
@@ -295,6 +295,16 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 							...(result.awsFindings !== undefined && { awsFindings: result.awsFindings }),
 							...(result.atlassianFindings !== undefined && { atlassianFindings: result.atlassianFindings }),
 						});
+					}
+				}
+				// SIO-1204: once-per-turn merged network map. Zod-validated here (unlike
+				// the per-field datasource_result narrowing above) because the payload is
+				// a single nested object; a malformed map drops the event, never the turn.
+				const rawTopology = (event.data?.output as { networkTopology?: unknown })?.networkTopology;
+				if (rawTopology !== undefined) {
+					const parsed = NetworkTopologySchema.safeParse(rawTopology);
+					if (parsed.success && parsed.data.nodes.length > 0) {
+						send({ type: "network_topology", topology: parsed.data });
 					}
 				}
 			}

@@ -523,7 +523,26 @@ export const ResolvedIdentifiersSchema = z.object({
 			otherBucketScopes: z.record(z.string(), z.record(z.string(), z.array(z.string()))).optional(),
 		})
 		.optional(),
-	aws: z.object({ logGroups: z.array(z.string()), ecsServices: z.array(z.string()).optional() }).optional(),
+	aws: z
+		.object({
+			logGroups: z.array(z.string()),
+			ecsServices: z.array(z.string()).optional(),
+			// SIO-1204: KG-cached IP-to-workload resolutions (BOUND_TO edges) for IPv4
+			// tokens found in the turn's query/focus. Rendered in the aws focus block as
+			// verify-then-trust hints (reverse-IP protocol step 0) -- the sub-agent must
+			// still confirm live and report if the live answer contradicts the cache.
+			ipHints: z
+				.array(
+					z.object({
+						ip: z.string(),
+						workloadArn: z.string(),
+						service: z.string().optional(),
+						lastVerified: z.string().optional(),
+					}),
+				)
+				.optional(),
+		})
+		.optional(),
 	kafka: z.object({ topics: z.array(z.string()), consumerGroups: z.array(z.string()) }).optional(),
 	konnect: z
 		.object({
@@ -559,6 +578,59 @@ export const GraphBlastRadiusHitSchema = z.object({
 	sharedResource: z.string(), // the shared thing (topic/telemetry id/arn); "" for depends-on
 });
 export type GraphBlastRadiusHit = z.infer<typeof GraphBlastRadiusHitSchema>;
+
+// SIO-1204: per-turn network map derived from the turn's toolOutputs[] by the pure
+// buildNetworkTopology builder (packages/agent/src/network-topology.ts). Deliberately
+// SEPARATE from AwsFindings: it is cross-datasource (aws + konnect/kafka/capella/elastic
+// endpoint overlay), lives on a per-turn state slot (not per-DataSourceResult), and is
+// dual-consumed (ECharts card via the network_topology stream event + the KG writer in
+// recordBindings). Node ids are stable natural keys (vpc-/subnet-/eni- ids, ARNs,
+// "dns:<name>:<type>", "ep:<datasource>:<host>:<port>") so edges can reference them
+// and the KG derivation can MERGE without remapping.
+export const NetworkTopologyNodeSchema = z.object({
+	id: z.string(),
+	kind: z.enum(["vpc", "subnet", "workload", "eni", "loadBalancer", "targetGroup", "dnsRecord", "serviceEndpoint"]),
+	name: z.string().optional(),
+	estate: z.string().optional(), // absent for non-AWS overlay endpoints
+	cidr: z.string().optional(), // vpc/subnet
+	availabilityZone: z.string().optional(),
+	privateIps: z.array(z.string()).optional(),
+	dnsName: z.string().optional(), // LB DNSName / DNS record target
+	scheme: z.string().optional(), // internet-facing | internal
+	lbType: z.string().optional(), // application | network
+	recordType: z.string().optional(), // A | AAAA | CNAME | ALIAS
+	health: z.object({ healthy: z.number().int(), total: z.number().int() }).optional(),
+	endpoint: z
+		.object({
+			host: z.string(),
+			port: z.number().int().optional(),
+			protocol: z.string().optional(),
+			datasource: z.string(),
+		})
+		.optional(),
+	service: z.string().optional(), // linked focus Service name, when resolved
+});
+export type NetworkTopologyNode = z.infer<typeof NetworkTopologyNodeSchema>;
+
+export const NetworkTopologyEdgeSchema = z.object({
+	from: z.string(),
+	to: z.string(),
+	kind: z.enum(["in-vpc", "in-subnet", "attached-to", "resolves-to", "routes-to", "targets", "serves"]),
+	detail: z.string().optional(), // listener "HTTPS:443", target port, route path
+	// true when in-subnet came from TS CIDR containment (ipInCidr), not an explicit
+	// SubnetId from the API. The card renders these dashed; the KG writer keeps them.
+	derived: z.boolean().optional(),
+});
+export type NetworkTopologyEdge = z.infer<typeof NetworkTopologyEdgeSchema>;
+
+export const NetworkTopologySchema = z.object({
+	builtAtTurn: z.number().int(),
+	sources: z.array(z.string()), // datasource ids that contributed nodes
+	nodes: z.array(NetworkTopologyNodeSchema),
+	edges: z.array(NetworkTopologyEdgeSchema),
+	truncated: z.boolean().optional(), // MAX_NODES/MAX_EDGES cap hit in the builder
+});
+export type NetworkTopology = z.infer<typeof NetworkTopologySchema>;
 
 // SIO-631: Mitigation steps produced by the propose-mitigation node
 export const MitigationStepsSchema = z.object({
@@ -638,6 +710,10 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		awsFindings: AwsFindingsSchema.optional(),
 		atlassianFindings: AtlassianFindingsSchema.optional(),
 	}),
+	// SIO-1204: once-per-turn merged network map (replace semantics in the UI store,
+	// unlike the per-datasource datasource_result above). Emitted from the
+	// extractFindings on_chain_end branch when the builder produced any nodes.
+	z.object({ type: z.literal("network_topology"), topology: NetworkTopologySchema }),
 	z.object({ type: z.literal("node_start"), nodeId: z.string() }),
 	z.object({ type: z.literal("node_end"), nodeId: z.string(), duration: z.number() }),
 	z.object({ type: z.literal("suggestions"), suggestions: z.array(z.string()) }),

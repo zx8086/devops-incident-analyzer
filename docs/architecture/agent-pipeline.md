@@ -460,6 +460,8 @@ All four severity keys are required; the schema rejects partial configs. Filenam
 
 **Source:** `packages/agent/src/findings-extractor.ts`
 
+SIO-1204: after the per-datasource extractor loop, the node also runs the pure `buildNetworkTopology` builder (`packages/agent/src/network-topology.ts`) over the turn's toolOutputs and returns the merged per-turn network map on the `networkTopology` state slot (replace reducer; the key is always returned so a no-network turn clears a stale prior map). The SSE pump emits it as the `network_topology` event for the ECharts `NetworkTopologyCard`. `aggregate` (which runs BEFORE this node) re-runs the same pure builder for its prompt summary rather than reading the stale slot. No new pipeline node -- the 31-node invariant is unchanged.
+
 **Purpose:** Pure-function extraction of typed findings from sub-agent tool outputs. Reads each `DataSourceResult.toolOutputs[]` (raw ReAct messages from sub-agent invocations) and derives structured, domain-specific findings onto sibling result fields for the rule engine to consume without casting/parsing prose.
 
 **Position in pipeline:** Runs immediately after `aggregate` and before `enforceCorrelationsRouter`. Stateless, no I/O, no LLM call.

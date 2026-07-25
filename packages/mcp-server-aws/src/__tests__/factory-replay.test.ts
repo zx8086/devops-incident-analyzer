@@ -78,6 +78,24 @@ describe("SIO-1044: aws-mcp-server cached factory replay", () => {
 		}
 	});
 
+	// SIO-1205: the seven ingress/network-map tools (ELBv2 chain, Route53 DNS edge, subnet
+	// CIDRs) must be registered and exposed via tools/list, or the aws-agent cannot trace
+	// DNS record -> ALB/NLB -> listener -> target group -> target health for the network map.
+	test("exposes the seven SIO-1205 ingress/network-map tools via tools/list", async () => {
+		const names = await toolNames(buildFactory()());
+		for (const tool of [
+			"aws_elbv2_describe_load_balancers",
+			"aws_elbv2_describe_listeners",
+			"aws_elbv2_describe_target_groups",
+			"aws_elbv2_describe_target_health",
+			"aws_route53_list_hosted_zones",
+			"aws_route53_list_resource_record_sets",
+			"aws_ec2_describe_subnets",
+		]) {
+			expect(names).toContain(tool);
+		}
+	});
+
 	test("registerAll runs exactly once across two factory() calls", () => {
 		// registerAllTools has no observable counter of its own, so we build a parallel factory
 		// here with a counting closure around the SAME package-composition registerAll

@@ -17,6 +17,8 @@ import {
 	deploymentsRunningStack,
 	hasBinding,
 	incidentById,
+	ipToWorkload,
+	networkMapForService,
 	priorChangesForDeployment,
 	priorRelationshipsForServices,
 	proposedChangesWithMr,
@@ -35,9 +37,12 @@ import {
 	purgeUncuratedIncidents,
 	recordIacChange,
 	recordIncident,
+	recordIpBinding,
+	recordNetworkTopology,
 	recordPipeline,
 	recordRootCause,
 	recordServiceBinding,
+	recordTopologyEdges,
 	seedDeployments,
 	seedModules,
 	seedStackInstances,
@@ -430,6 +435,178 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 		// hasBinding filters tInvalid = '' -> now gone (a human edge invalidateBinding would refuse).
 		expect(await hasBinding(store, "localcore-service", "topic", "orders.events")).toBe(false);
 		expect(await bindingsForServices(store, ["localcore-service"], ["localcore-service"])).toHaveLength(0);
+
+		await store.close();
+	});
+
+	// SIO-1207: network-map substrate round-trip. init runs TWICE to prove the 7 new
+	// node + 9 new rel tables apply idempotently; then a full topology record, the
+	// idempotent re-write, the one-owner IP re-bind invalidation, an as-of read of
+	// the OLD owner, and the service network-map chain -- all against the real binder.
+	test("SIO-1207 network topology + IP binding round-trip (init idempotent, one-owner rebind, as-of)", async () => {
+		const store = new LadybugStore(join(dir, "db-network"));
+		await store.init();
+		await store.init(); // idempotent: CREATE ... IF NOT EXISTS + tolerant ALTERs
+
+		// Every new table exists and is queryable (a missing table throws in the binder).
+		const tableProbes = [
+			"MATCH (n:Vpc) RETURN count(n) AS n",
+			"MATCH (n:Subnet) RETURN count(n) AS n",
+			"MATCH (n:LoadBalancer) RETURN count(n) AS n",
+			"MATCH (n:TargetGroup) RETURN count(n) AS n",
+			"MATCH (n:DnsRecord) RETURN count(n) AS n",
+			"MATCH (n:IpAddress) RETURN count(n) AS n",
+			"MATCH (n:Endpoint) RETURN count(n) AS n",
+			"MATCH (:Subnet)-[r:IN_VPC]->(:Vpc) RETURN count(r) AS n",
+			"MATCH (:IpAddress)-[r:IN_SUBNET]->(:Subnet) RETURN count(r) AS n",
+			"MATCH (:LoadBalancer)-[r:ATTACHED_TO]->(:Subnet) RETURN count(r) AS n",
+			"MATCH (:LoadBalancer)-[r:HAS_TARGET_GROUP]->(:TargetGroup) RETURN count(r) AS n",
+			"MATCH (:TargetGroup)-[r:FORWARDS_TO]->(:AwsResource) RETURN count(r) AS n",
+			"MATCH (:TargetGroup)-[r:FORWARDS_TO_IP]->(:IpAddress) RETURN count(r) AS n",
+			"MATCH (:DnsRecord)-[r:RESOLVES_TO_LB]->(:LoadBalancer) RETURN count(r) AS n",
+			"MATCH (:Service)-[r:HAS_ENDPOINT]->(:Endpoint) RETURN count(r) AS n",
+			"MATCH (:IpAddress)-[r:BOUND_TO]->(:AwsResource) RETURN count(r) AS n",
+		];
+		for (const probe of tableProbes) {
+			const rows = await store.run<{ n: number }>(probe);
+			expect(Number(rows[0]?.n ?? -1)).toBe(0);
+		}
+
+		// The Service + RUNS_ON anchor comes from the topology-sweep writer.
+		const workloadArn = "arn:aws:ecs:eu-west-1:1:service/prod/orders";
+		await recordTopologyEdges(store, [{ kind: "runs-on", from: "orders", to: workloadArn }]);
+
+		const t0 = new Date().toISOString();
+		const record = {
+			vpcs: [{ id: "vpc-1", cidr: "10.0.0.0/16", accountId: "111122223333", region: "eu-west-1", name: "prod" }],
+			subnets: [{ id: "subnet-1", cidr: "10.0.1.0/24", az: "eu-west-1a", vpcId: "vpc-1" }],
+			loadBalancers: [
+				{
+					arn: "arn:lb-1",
+					name: "orders-alb",
+					dnsName: "orders.eu.elb.amazonaws.com",
+					type: "application",
+					scheme: "internal",
+					subnetIds: ["subnet-1"],
+				},
+			],
+			targetGroups: [
+				{
+					arn: "arn:tg-1",
+					name: "orders-tg",
+					port: 8080,
+					protocol: "HTTP",
+					loadBalancerArn: "arn:lb-1",
+					targets: [
+						{ id: workloadArn, isIp: false },
+						{ id: "10.0.1.15", isIp: true },
+					],
+				},
+			],
+			dnsRecords: [
+				{ name: "orders.internal", type: "A", target: "orders.eu.elb.amazonaws.com", loadBalancerArn: "arn:lb-1" },
+			],
+			endpoints: [{ service: "orders", host: "b-1.kafka.eu", port: 9092, protocol: "tcp", datasource: "kafka" }],
+			ipBindings: [
+				{
+					ip: "10.0.1.15",
+					workloadArn,
+					subnetId: "subnet-1",
+					confidence: 0.9,
+					discoveredBy: "network-map",
+					createdAt: t0,
+				},
+			],
+		};
+		await recordNetworkTopology(store, record, "inc-net");
+		// Idempotent re-write: MERGE everywhere, so edge counts must stay 1.
+		await recordNetworkTopology(store, record, "inc-net");
+		for (const probe of [
+			"MATCH (:Subnet)-[r:IN_VPC]->(:Vpc) RETURN count(r) AS n",
+			"MATCH (:LoadBalancer)-[r:ATTACHED_TO]->(:Subnet) RETURN count(r) AS n",
+			"MATCH (:Service)-[r:HAS_ENDPOINT]->(:Endpoint) RETURN count(r) AS n",
+			"MATCH (:IpAddress)-[r:BOUND_TO]->(:AwsResource) RETURN count(r) AS n",
+		]) {
+			const rows = await store.run<{ n: number }>(probe);
+			expect(Number(rows[0]?.n)).toBe(1);
+		}
+
+		// The full chain read.
+		const map = await networkMapForService(store, "orders");
+		expect(map.workloads).toEqual([workloadArn]);
+		expect(map.targetGroups).toEqual([
+			{ arn: "arn:tg-1", name: "orders-tg", port: 8080, protocol: "HTTP", workloadArn },
+		]);
+		expect(map.loadBalancers).toEqual([
+			{
+				arn: "arn:lb-1",
+				name: "orders-alb",
+				dnsName: "orders.eu.elb.amazonaws.com",
+				type: "application",
+				scheme: "internal",
+				targetGroupArn: "arn:tg-1",
+			},
+		]);
+		expect(map.dnsRecords).toEqual([
+			{ name: "orders.internal", type: "A", target: "orders.eu.elb.amazonaws.com", loadBalancerArn: "arn:lb-1" },
+		]);
+		expect(map.placements).toEqual([
+			{
+				loadBalancerArn: "arn:lb-1",
+				subnetId: "subnet-1",
+				subnetCidr: "10.0.1.0/24",
+				az: "eu-west-1a",
+				vpcId: "vpc-1",
+				vpcCidr: "10.0.0.0/16",
+				vpcName: "prod",
+			},
+		]);
+		expect(map.ipAddresses).toHaveLength(1);
+		expect(map.ipAddresses[0]).toMatchObject({ ip: "10.0.1.15", workloadArn, subnetId: "subnet-1" });
+		expect(map.endpoints).toHaveLength(1);
+		expect(map.endpoints[0]).toMatchObject({
+			id: "b-1.kafka.eu:9092",
+			host: "b-1.kafka.eu",
+			port: 9092,
+			datasource: "kafka",
+			confidence: 0.7,
+		});
+
+		// One-owner re-bind: deterministic timestamps via createdAt (t0 < t1 < t2).
+		const t1 = new Date(Date.parse(t0) + 1).toISOString();
+		const t2 = new Date(Date.parse(t0) + 2).toISOString();
+		const newOwnerArn = "arn:aws:ecs:eu-west-1:1:task/prod/replacement";
+		await recordIpBinding(store, {
+			ip: "10.0.1.15",
+			workloadArn: newOwnerArn,
+			confidence: 0.9,
+			discoveredBy: "network-map",
+			createdAt: t2,
+		});
+
+		// The prior owner's edge is invalidated (tInvalid = t2) with a supersession note.
+		const oldEdge = await store.run<{ tInvalid: string; evidence: string }>(
+			"MATCH (:IpAddress {ip: $ip})-[b:BOUND_TO]->(:AwsResource {arn: $arn}) RETURN b.tInvalid AS tInvalid, b.evidence AS evidence",
+			{ ip: "10.0.1.15", arn: workloadArn },
+		);
+		expect(oldEdge[0]?.tInvalid).toBe(t2);
+		expect(String(oldEdge[0]?.evidence)).toContain("superseded: rebound to");
+
+		// Current read: exactly one valid owner -- the NEW one.
+		const current = await ipToWorkload(store, "10.0.1.15");
+		expect(current).toHaveLength(1);
+		expect(current[0]).toMatchObject({ ip: "10.0.1.15", workloadArn: newOwnerArn, tInvalid: "" });
+
+		// As-of read BEFORE the re-bind: the OLD owner, with its RUNS_ON service context.
+		const before = await ipToWorkload(store, "10.0.1.15", t1);
+		expect(before).toHaveLength(1);
+		expect(before[0]).toMatchObject({
+			ip: "10.0.1.15",
+			workloadArn,
+			service: "orders",
+			subnetId: "subnet-1",
+			vpcId: "vpc-1",
+		});
 
 		await store.close();
 	});

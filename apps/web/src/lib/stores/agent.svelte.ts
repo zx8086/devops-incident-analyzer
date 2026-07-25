@@ -5,6 +5,7 @@ import type {
 	DataSourceContext,
 	HilApplyReport,
 	HilItemEdits,
+	NetworkTopology,
 	PendingAction,
 	StreamEvent,
 	TicketProviderInfo,
@@ -57,6 +58,8 @@ export interface ChatMessage {
 	dataSourceResults?: Map<string, { status: string; message?: string }>;
 	// SIO-775: typed findings per datasource (keyed by bare id e.g. "kafka").
 	dataSourceFindings?: Map<string, DataSourceFindings>;
+	// SIO-1204: this turn's merged network map (NetworkTopologyCard).
+	networkTopology?: NetworkTopology;
 	feedback?: "up" | "down" | null;
 	runId?: string;
 	// SIO-1134: the turn's requestId (== KG incident id) for ticket-creation curation.
@@ -94,6 +97,7 @@ function createAgentStore() {
 	let messages = $state<ChatMessage[]>([]);
 	let dataSourceProgress = $state<Map<string, { status: string; message?: string }>>(new Map());
 	let dataSourceFindings = $state<Map<string, DataSourceFindings>>(new Map());
+	let networkTopology = $state<NetworkTopology | null>(null);
 	let subAgentProgress = $state<
 		Map<string, { status: "running" | "done"; toolCallCount?: number; deploymentId?: string }>
 	>(new Map());
@@ -183,6 +187,7 @@ function createAgentStore() {
 			completedNodes: new Map(completedNodes),
 			dataSourceResults: new Map(dataSourceProgress),
 			dataSourceFindings: new Map(dataSourceFindings),
+			...(networkTopology && { networkTopology }),
 			feedback: null,
 			runId: lastRunId,
 			requestId: lastRequestId,
@@ -224,6 +229,7 @@ function createAgentStore() {
 		currentContent = "";
 		dataSourceProgress = new Map();
 		dataSourceFindings = new Map();
+		networkTopology = null;
 		subAgentProgress = new Map();
 		activeNodes = new Set();
 		completedNodes = new Map();
@@ -310,6 +316,7 @@ function createAgentStore() {
 			lastSuggestions = [];
 			dataSourceProgress = new Map();
 			dataSourceFindings = new Map();
+			networkTopology = null;
 			// SIO-934: when this turn paused on an IaC interrupt, the resume leg continues the
 			// SAME turn -- keep the live pipeline ticker (completedNodes) + iacPipelineProgress so
 			// resumeIac accumulates onto it instead of resetting to just the post-resume nodes.
@@ -330,6 +337,7 @@ function createAgentStore() {
 			completedNodes,
 			dataSourceProgress,
 			dataSourceFindings,
+			networkTopology,
 			subAgentProgress,
 			lastSuggestions,
 			lastResponseTime,
@@ -369,6 +377,7 @@ function createAgentStore() {
 		completedNodes = next.completedNodes;
 		dataSourceProgress = next.dataSourceProgress;
 		dataSourceFindings = next.dataSourceFindings;
+		networkTopology = next.networkTopology;
 		subAgentProgress = next.subAgentProgress;
 		lastSuggestions = next.lastSuggestions;
 		lastResponseTime = next.lastResponseTime;
@@ -593,6 +602,7 @@ function createAgentStore() {
 		currentContent = "";
 		dataSourceProgress = new Map();
 		dataSourceFindings = new Map();
+		networkTopology = null;
 		subAgentProgress = new Map();
 		activeNodes = new Set();
 		completedNodes = new Map();
@@ -844,6 +854,7 @@ function createAgentStore() {
 			lastSuggestions = [];
 			dataSourceProgress = new Map();
 			dataSourceFindings = new Map();
+			networkTopology = null;
 			subAgentProgress = new Map();
 		}
 	}

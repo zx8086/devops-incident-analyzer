@@ -12,6 +12,7 @@ import {
 	buildGraphContext,
 	getGraphStore,
 	isKnowledgeGraphEnabled,
+	networkMapForService,
 	priorRelationshipsForServices,
 	priorRootCauses,
 	recordIncident,
@@ -28,7 +29,12 @@ import { evaluate } from "./correlation/engine.ts";
 import { correlationRules } from "./correlation/rules.ts";
 import { registerGraphWarmer } from "./lifecycle.ts";
 import { extractTextFromContent } from "./message-utils.ts";
+import { renderNetworkContextLine } from "./network-kg.ts";
 import type { AgentStateType } from "./state.ts";
+
+// SIO-1204: graphContext is uncapped downstream, so the network render is bounded
+// at the source (services considered AND lines emitted).
+const NETWORK_CONTEXT_MAX_LINES = 5;
 
 const logger = getLogger("agent:graph-knowledge");
 
@@ -189,7 +195,26 @@ export async function graphEnrich(state: AgentStateType): Promise<Partial<AgentS
 			}
 		}
 
-		return { graphContext: buildGraphContext(deps, similar), graphBlastRadius };
+		// SIO-1204: persisted network facts (prior incidents' maps) as bounded context
+		// lines. Own try/catch (the blast-radius pattern) and hard-capped at the source
+		// because graphContext is uncapped downstream.
+		let networkContext = "";
+		try {
+			const lines: string[] = [];
+			for (const service of services.slice(0, NETWORK_CONTEXT_MAX_LINES)) {
+				const line = renderNetworkContextLine(service, await networkMapForService(store, service));
+				if (line) lines.push(line);
+				if (lines.length >= NETWORK_CONTEXT_MAX_LINES) break;
+			}
+			if (lines.length > 0) networkContext = `\n${lines.join("\n")}`;
+		} catch (error) {
+			logger.warn(
+				{ error: error instanceof Error ? error.message : String(error) },
+				"graphEnrich network-map read failed; continuing",
+			);
+		}
+
+		return { graphContext: buildGraphContext(deps, similar) + networkContext, graphBlastRadius };
 	} catch (error) {
 		logger.warn(
 			{ error: error instanceof Error ? error.message : String(error) },

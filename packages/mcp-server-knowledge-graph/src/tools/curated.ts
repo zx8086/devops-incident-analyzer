@@ -13,6 +13,8 @@ import {
 	deploymentsRunningStack,
 	type GraphStore,
 	getGraphStore,
+	ipToWorkload,
+	networkMapForService,
 	priorChangesForDeployment,
 	priorRootCauses,
 	stacksUsingModule,
@@ -204,6 +206,85 @@ export function registerCuratedTools(server: McpServer, enabled: boolean): void 
 				return `- ${r.createdAt} — ${prompt} -> ${wf}${r.summary}${mr}`;
 			});
 			return text(`Applied changes:\n${lines.join("\n")}`);
+		},
+	);
+
+	// SIO-1204/SIO-1207: the persisted per-service network map (static topology +
+	// currently-valid IP bindings accreted from prior incident turns).
+	server.tool(
+		"kg_network_map",
+		"Persisted network map for one service: DNS -> load balancer -> target group -> workload chain, VPC/subnet placement, currently-valid IP bindings, and service endpoints (Kong/Kafka/Capella/Elastic). Accreted per incident; verify live before acting on IPs. Read-only; no Cypher.",
+		{
+			service: z.string().min(1).describe("Canonical service name, e.g. orders-service"),
+			asOf: z.string().optional().describe("ISO timestamp for a bi-temporal as-of read (default: currently valid)"),
+		},
+		async ({ service, asOf }) => {
+			const store = await resolveStore();
+			if (typeof store === "string") return text(store);
+			const map = await networkMapForService(store, service, asOf);
+			const lines: string[] = [];
+			for (const dns of map.dnsRecords) {
+				const lb = map.loadBalancers.find((l) => l.arn === dns.loadBalancerArn);
+				lines.push(`- dns ${dns.name} ${dns.type} -> ${lb ? lb.name || lb.arn : dns.target || "(unlinked)"}`);
+			}
+			for (const lb of map.loadBalancers) {
+				const tg = map.targetGroups.find((t) => t.arn === lb.targetGroupArn);
+				lines.push(
+					`- lb ${lb.name || lb.arn} (${[lb.type, lb.scheme].filter(Boolean).join("/") || "lb"})${tg ? ` -> tg ${tg.name || tg.arn}` : ""}`,
+				);
+			}
+			for (const p of map.placements) {
+				lines.push(
+					`- placement: subnet ${p.subnetId}${p.subnetCidr ? ` (${p.subnetCidr})` : ""}${p.az ? ` ${p.az}` : ""} in vpc ${p.vpcName || p.vpcId}${p.vpcCidr ? ` (${p.vpcCidr})` : ""}`,
+				);
+			}
+			for (const ip of map.ipAddresses) {
+				lines.push(
+					`- ip ${ip.ip} bound to ${ip.workloadArn}${ip.subnetId ? ` (subnet ${ip.subnetId})` : ""}${ip.lastVerified ? `, verified ${ip.lastVerified}` : ""}`,
+				);
+			}
+			for (const ep of map.endpoints) {
+				lines.push(`- endpoint [${ep.datasource}] ${ep.port ? `${ep.host}:${ep.port}` : ep.host}`);
+			}
+			if (lines.length === 0 && map.workloads.length === 0)
+				return text(
+					`Graph queried: no persisted network map for ${service}. Report this; the map accretes only from incident turns that fetched network data (ec2_state/ingress_state).`,
+				);
+			const workloads = map.workloads.length > 0 ? `\nWorkloads: ${map.workloads.join(", ")}` : "";
+			return text(`Network map for ${service}:${workloads}\n${lines.join("\n")}`);
+		},
+	);
+
+	// SIO-1204/SIO-1207: KG-cache-first reverse IP lookup (the SIO-1200 protocol's
+	// step 0). Returns ALL currently-valid owners: a private IP is unique only per
+	// VPC, so multiple hits need live disambiguation.
+	server.tool(
+		"kg_ip_to_workload",
+		"Cached reverse-IP lookup: which workload was this private IP last bound to (BOUND_TO edges from prior incidents). Verify-then-trust: always confirm live via the AWS reverse-IP protocol before relying on it. asOf gives a historical as-of read. Read-only; no Cypher.",
+		{
+			ip: z
+				.string()
+				.regex(/^\d{1,3}(?:\.\d{1,3}){3}$/, "IPv4 dotted-quad expected")
+				.describe("IPv4 address, e.g. 10.34.50.147"),
+			asOf: z.string().optional().describe("ISO timestamp for a bi-temporal as-of read (default: currently valid)"),
+		},
+		async ({ ip, asOf }) => {
+			const store = await resolveStore();
+			if (typeof store === "string") return text(store);
+			const hits = await ipToWorkload(store, ip, asOf);
+			if (hits.length === 0)
+				return text(
+					`Graph queried: no cached binding for ${ip}${asOf ? ` as of ${asOf}` : ""}. Resolve it live via the AWS reverse-IP protocol (aws_ec2_describe_network_interfaces filtered on private-ip-address).`,
+				);
+			const lines = hits.map((h) => {
+				const service = h.service ? `, service ${h.service}` : "";
+				const place = h.subnetId ? `, subnet ${h.subnetId}${h.vpcId ? ` / vpc ${h.vpcId}` : ""}` : "";
+				const verified = h.lastVerified ? `, verified ${h.lastVerified}` : "";
+				return `- ${h.workloadArn}${service}${place}${verified}`;
+			});
+			const plural =
+				hits.length > 1 ? " (MULTIPLE valid owners -- private IPs are unique only per VPC; disambiguate live)" : "";
+			return text(`Cached binding(s) for ${ip}${plural}:\n${lines.join("\n")}\nVerify live before acting on this.`);
 		},
 	);
 }

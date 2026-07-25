@@ -21,6 +21,7 @@ import GitLabFindingsCard from "./GitLabFindingsCard.svelte";
 import Icon from "./Icon.svelte";
 import KafkaFindingsCard from "./KafkaFindingsCard.svelte";
 import MarkdownRenderer from "./MarkdownRenderer.svelte";
+import NetworkTopologyCard from "./NetworkTopologyCard.svelte";
 
 let {
 	message,
@@ -134,6 +135,10 @@ const commentMode = $derived(canCommentOnThreadTicket && threadTicket !== null);
               <AtlassianFindingsCard findings={atlassianFindings} />
             </div>
           {/if}
+        {/if}
+
+        {#if !isStreaming && message.networkTopology}
+          <NetworkTopologyCard topology={message.networkTopology} />
         {/if}
 
         {#if !isStreaming}

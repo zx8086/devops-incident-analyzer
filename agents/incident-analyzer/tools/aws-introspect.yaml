@@ -4,7 +4,9 @@ description: >
   diagnosis: CloudWatch alarms/metrics, ECS services/tasks, EC2 instances, RDS,
   Lambda, CloudWatch Logs Insights, Health events, GuardDuty /
   Security Hub findings, S3, SNS/SQS, DynamoDB, ElastiCache, EventBridge, Step
-  Functions, CloudFormation, CloudTrail, Config, and resource tagging. All tools
+  Functions, CloudFormation, CloudTrail, Config, ELBv2 load balancers /
+  listeners / target groups, Route53 hosted zones / records, and resource
+  tagging. All tools
   are read-only (SIO-859 keeps IP/CIDR detail; the deployed IAM role denies every
   mutation). Estate routing is injected server-side; the LLM never sees credentials.
 version: 1.0.0
@@ -18,6 +20,7 @@ input_schema:
         - cloudwatch_metrics
         - ecs_state
         - ec2_state
+        - ingress_state
         - rds_state
         - lambda_state
         - logs_insights
@@ -77,6 +80,7 @@ tool_mapping:
       - aws_ec2_describe_instances
       - aws_ec2_describe_security_groups
       - aws_ec2_describe_vpcs
+      - aws_ec2_describe_subnets
       - aws_ec2_describe_vpc_endpoints
       - aws_ec2_describe_network_interfaces
       - aws_ec2_describe_route_tables
@@ -85,6 +89,13 @@ tool_mapping:
       - aws_ec2_describe_flow_logs
       - aws_ec2_describe_transit_gateways
       - aws_ec2_describe_vpc_peering_connections
+    ingress_state:
+      - aws_elbv2_describe_load_balancers
+      - aws_elbv2_describe_listeners
+      - aws_elbv2_describe_target_groups
+      - aws_elbv2_describe_target_health
+      - aws_route53_list_hosted_zones
+      - aws_route53_list_resource_record_sets
     rds_state:
       - aws_rds_describe_db_instances
       - aws_rds_describe_db_clusters
@@ -152,6 +163,9 @@ tool_mapping:
       egress via a NAT gateway, transit gateway, or VPC/gateway endpoint?), NAT gateways (egress path
       state), network ACLs (subnet-level deny an SG check misses), flow logs (is packet logging even
       enabled), transit gateways, and VPC peering connections
+    ingress_state: >-
+      when tracing how traffic reaches a workload from the edge -- DNS record -> ALB/NLB ->
+      listener -> target group -> target health -- or when building the incident network map
     rds_state: when a datastore-backed service is slow or erroring -- RDS instance/cluster status, engine, connection/storage state
     lambda_state: when a Lambda-backed path fails -- function list, runtime, memory/timeout config, last-update status
     logs_insights: when application or platform logs are needed -- discover log groups, run a Logs Insights query, fetch its results
@@ -199,6 +213,18 @@ tool_mapping:
       - network path
       - egress
       - connectivity
+    ingress_state:
+      - alb
+      - nlb
+      - load balancer
+      - target group
+      - target health
+      - listener
+      - route53
+      - dns record
+      - hosted zone
+      - ingress
+      - network map
     health_events:
       - aws health
       - phd

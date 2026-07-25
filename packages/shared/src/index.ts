@@ -63,6 +63,12 @@ export {
 	KafkaFindingsSchema,
 	type MitigationSteps,
 	MitigationStepsSchema,
+	type NetworkTopology,
+	type NetworkTopologyEdge,
+	NetworkTopologyEdgeSchema,
+	type NetworkTopologyNode,
+	NetworkTopologyNodeSchema,
+	NetworkTopologySchema,
 	type NormalizedIncident,
 	NormalizedIncidentSchema,
 	type OrbitBlastRadius,
@@ -188,6 +194,7 @@ export {
 	RootCauseCorrectionSchema,
 } from "./hil-learning.ts";
 export { createHashChainDestination, verifyHashChain } from "./immutable-log.ts";
+export { ipInCidr, parseIpv4 } from "./ip-cidr.ts";
 export { isKillSwitchActive, type KillSwitchConfig, KillSwitchError } from "./kill-switch.ts";
 export {
 	buildEcsOptions,

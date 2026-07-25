@@ -101,6 +101,15 @@ export interface OrchestratorPromptOptions {
 	// SIO-850: prior-knowledge context from the knowledge graph (state.graphContext).
 	// Already-rendered string; inlined verbatim. Empty when the graph is disabled.
 	graphContext?: string;
+	// SIO-1204: this turn's derived network-map summary (buildNetworkTopology ->
+	// summarizeNetworkTopologyForPrompt). Rendered as its own volatile section with
+	// a do-not-reproduce instruction: the full map reaches the user as a card.
+	networkContext?: string;
+}
+
+function buildNetworkSection(networkContext: string | undefined): string {
+	if (!networkContext) return "";
+	return `\n\n## Network Map (derived this turn)\n${networkContext}\nMention the network path in the report only where it bears on the root cause; the full map is rendered to the user as an interactive card -- do not reproduce it in the report body.\n`;
 }
 
 // SIO-847: the wiki section depends on the current turn's focus, so it is built
@@ -123,6 +132,7 @@ export function buildOrchestratorPromptParts(options: OrchestratorPromptOptions 
 		// SIO-1028: prepend a usage instruction to the raw graph block so recall
 		// questions answer from prior-incident entries instead of LLM inference.
 		graph: buildGraphSection(options.graphContext),
+		network: buildNetworkSection(options.networkContext),
 	});
 }
 

@@ -67,7 +67,7 @@ The app has grown to 30 components (`ls apps/web/src/lib/components/*.svelte`). 
 | `FollowUpSuggestions` | Clickable follow-up question buttons after an agent response | `suggestions`, `onSelect` |
 | `DataSourceSelector` | Toggle bar for selecting active datasources, shows connection status | `dataSources`, `connected`, `selected` (bindable) |
 
-**Per-datasource findings cards** — one structured card per datasource result, plus the pipeline progress card: `ElasticFindingsCard`, `KafkaFindingsCard`, `CouchbaseFindingsCard`, `GitLabFindingsCard`, `AtlassianFindingsCard`, `AWSFindingsCard`, `PipelineProgressCard`.
+**Per-datasource findings cards** — one structured card per datasource result, plus the pipeline progress card: `ElasticFindingsCard`, `KafkaFindingsCard`, `CouchbaseFindingsCard`, `GitLabFindingsCard`, `AtlassianFindingsCard`, `AWSFindingsCard`, `PipelineProgressCard`. SIO-1204 adds `NetworkTopologyCard` -- the per-turn network map rendered as an ECharts `graph` series (force layout, roam/zoom, category legend per node kind, dashed CIDR-derived edges, red ring on unhealthy target groups; SSR-guarded dynamic import of modular `echarts/core`, pure option transform in `src/lib/network-chart.ts`).
 
 **IaC / HITL cards** — the elastic-iac proposer and its human-in-the-loop gates: `PlanReviewCard`, `DriftReportCard`, `ReconcileChoiceCard`, `SyntheticsDriftCard`, `SyntheticsPushChoiceCard`, `FleetUpgradeChoiceCard`, `ActionConfirmationCard`.
 
@@ -226,6 +226,7 @@ The SSE stream emits events that the `agentStore` processes:
 - **Token events** -- append to `currentContent`, rendered incrementally by `ChatMessage`
 - **Node start/end events** -- update `activeNodes` and `completedNodes`, rendered by `StreamingProgress`
 - **Data source events** -- update `dataSourceProgress` with status per datasource
+- **`network_topology`** (SIO-1204) -- the once-per-turn merged network map (replace semantics); rendered by `NetworkTopologyCard` as an interactive ECharts force graph
 - **Completion events** -- finalize the message with `suggestions`, `responseTime`, `toolsUsed`, `runId`
 - **Error events** -- display error state in the UI
 

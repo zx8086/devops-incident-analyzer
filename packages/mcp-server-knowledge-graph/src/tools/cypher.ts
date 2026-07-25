@@ -116,6 +116,16 @@ const SCHEMA_CARD = [
 	"Examples:",
 	"  Which deployments run a stack:  MATCH (d:ElasticDeployment)<-[:ON_DEPLOYMENT]-(:StackInstance)-[:OF_STACK]->(s:Stack {name:$stack}) RETURN DISTINCT d.name AS deployment ORDER BY deployment",
 	"  Change history for a cell:      MATCH (c:ConfigChange)-[:TARGETS]->(:StackInstance {id:$sid}) RETURN c.summary, c.outcome, c.createdAt ORDER BY c.createdAt DESC LIMIT 5",
+	"Network subgraph (SIO-1204; accreted per incident, bi-temporal edges carry tValid/tInvalid -- currently-valid means tInvalid = ''):",
+	"Nodes:",
+	"  Vpc(id, cidr, accountId, region, name)  Subnet(id, cidr, az, vpcId)  IpAddress(ip)",
+	"  LoadBalancer(arn, name, dnsName, type, scheme)  TargetGroup(arn, name, port, protocol)",
+	"  DnsRecord(id, name, type, target)  -- id = '<name>:<type>'.  Endpoint(id, host, port, protocol, datasource)  -- id = '<host>:<port>'.",
+	"Relationships:",
+	"  (Subnet)-[:IN_VPC]->(Vpc)   (IpAddress)-[:IN_SUBNET]->(Subnet)   (LoadBalancer)-[:ATTACHED_TO]->(Subnet)",
+	"  (LoadBalancer)-[:HAS_TARGET_GROUP]->(TargetGroup)   (TargetGroup)-[:FORWARDS_TO]->(AwsResource)   (TargetGroup)-[:FORWARDS_TO_IP]->(IpAddress)",
+	"  (DnsRecord)-[:RESOLVES_TO_LB]->(LoadBalancer)   (Service)-[:HAS_ENDPOINT]->(Endpoint)   (IpAddress)-[:BOUND_TO]->(AwsResource)  -- one valid owner at a time; history via tInvalid.",
+	"Example (reverse IP, currently valid):  MATCH (i:IpAddress {ip:$ip})-[b:BOUND_TO]->(r:AwsResource) WHERE b.tInvalid = '' RETURN r.arn, b.lastVerified",
 ].join("\n");
 
 export function registerCypherTool(server: McpServer, enabled: boolean): void {
