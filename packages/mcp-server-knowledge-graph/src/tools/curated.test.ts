@@ -191,9 +191,7 @@ describe("curated kg_* tools", () => {
 		]);
 		_setGraphStoreForTesting(store);
 		const out = await call(await connectedClient(), "kg_applied_changes", {});
-		expect(out).toContain(
-			"2026-06-20 — (no prompt recorded -- predates SIO-1038) -> ilm-rollout: ilm retention widened (u1)",
-		);
+		expect(out).toContain("2026-06-20 — (no prompt recorded) -> ilm-rollout: ilm retention widened (u1)");
 	});
 
 	test("kg_applied_changes empty result is an authoritative graph result", async () => {

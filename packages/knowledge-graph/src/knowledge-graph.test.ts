@@ -748,6 +748,20 @@ describe("reader", () => {
 		]);
 	});
 
+	// CodeRabbit (PR #463): assert the actual query shape, not just formatted output --
+	// an OPTIONAL MATCH regression to an inner join would silently drop no-Prompt rows
+	// while every prior assertion here (output-shape only) would still pass.
+	test("appliedChanges' query OPTIONAL MATCHes Prompt, filters outcome = 'applied', and binds the limit", async () => {
+		const store = new InMemoryGraphStore();
+		await appliedChanges(store, 42);
+		const call = store.calls.at(-1);
+		expect(call?.cypher).toContain("MATCH (c:ConfigChange)-[:PROPOSED_IN]->(m:MergeRequest)");
+		expect(call?.cypher).toContain("WHERE c.outcome = 'applied'");
+		expect(call?.cypher).toContain("OPTIONAL MATCH (p:Prompt {id: c.id})");
+		expect(call?.cypher).toContain("ORDER BY c.createdAt DESC LIMIT $limit");
+		expect(call?.params).toEqual({ limit: 42 });
+	});
+
 	test("appliedChanges rejects an invalid limit", async () => {
 		const store = new InMemoryGraphStore();
 		await expect(appliedChanges(store, 0)).rejects.toThrow();
