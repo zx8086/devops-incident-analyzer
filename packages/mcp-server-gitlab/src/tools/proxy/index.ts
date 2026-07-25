@@ -32,6 +32,41 @@ function isEmbeddingsNotReady(result: ProxyCallResult): boolean {
 	return result.content.some((c) => typeof c.text === "string" && EMBEDDINGS_NOT_READY_PATTERN.test(c.text));
 }
 
+// SIO-1209: GitLab.com owns embeddings indexing entirely -- there is no status
+// API to poll (confirmed: the only documented status check is a self-managed
+// instance-admin Rake task, gitlab:semantic_search:code:info, inapplicable to a
+// SaaS MCP client). The only signal available is observing real search calls
+// fail, so this passively records the last-seen "not ready" project so /health
+// can surface it BEFORE an incident turn hits the same gap. In-memory only and
+// correctly so: this describes GitLab.com's indexing state, not anything this
+// process owns or could meaningfully persist across a restart.
+export interface EmbeddingsNotReadyEntry {
+	projectId: string;
+	lastNotReadyAt: string;
+}
+
+const embeddingsNotReadyProjects = new Map<string, EmbeddingsNotReadyEntry>();
+
+export function getEmbeddingsNotReadyProjects(): EmbeddingsNotReadyEntry[] {
+	return Array.from(embeddingsNotReadyProjects.values());
+}
+
+// Exported for test isolation only (module-level state persists across tests
+// in the same process, mirroring _resetExpectedIdentityForTest in mcp-bridge.ts).
+export function _resetEmbeddingsNotReadyForTest(): void {
+	embeddingsNotReadyProjects.clear();
+}
+
+function recordEmbeddingsNotReady(projectId: string | undefined, nowIso: string): void {
+	if (!projectId) return;
+	embeddingsNotReadyProjects.set(projectId, { projectId, lastNotReadyAt: nowIso });
+}
+
+function clearEmbeddingsNotReady(projectId: string | undefined): void {
+	if (!projectId) return;
+	embeddingsNotReadyProjects.delete(projectId);
+}
+
 function jsonSchemaTypeToZod(key: string, prop: Record<string, unknown>): z.ZodTypeAny {
 	const description = typeof prop.description === "string" ? prop.description : key;
 	switch (prop.type) {
@@ -74,6 +109,7 @@ export async function callWithEmbeddingsRetry(
 	retryDelayMs: number = EMBEDDINGS_RETRY_DELAY_MS,
 ): Promise<ProxyCallResult> {
 	const callOpts = { timeout: SEMANTIC_SEARCH_TIMEOUT_MS };
+	const projectId = typeof args.id === "string" || typeof args.id === "number" ? String(args.id) : undefined;
 
 	for (let attempt = 0; attempt <= EMBEDDINGS_MAX_RETRIES; attempt++) {
 		if (attempt > 0) {
@@ -88,6 +124,7 @@ export async function callWithEmbeddingsRetry(
 			const result = (await proxy.callTool(toolName, args, callOpts)) as ProxyCallResult;
 			if (!isEmbeddingsNotReady(result)) {
 				if (attempt > 0) log.info({ tool: prefixedName, attempt }, "Semantic search succeeded after retry");
+				clearEmbeddingsNotReady(projectId);
 				return result;
 			}
 		} catch (error) {
@@ -109,6 +146,9 @@ export async function callWithEmbeddingsRetry(
 	}
 
 	log.warn({ tool: prefixedName }, "Embeddings still not ready after retry");
+	// SIO-1209: record so /health can surface this project as a known indexing
+	// gap before the next incident turn hits the same "not ready" result.
+	recordEmbeddingsNotReady(projectId, new Date().toISOString());
 	// SIO-1179: kind no-index (category no-data, non-degrading) -- embeddings still
 	// indexing is a routine environment state, not a tool malfunction.
 	const prose =

@@ -23,6 +23,11 @@ interface HttpTransportConfig {
 	readinessProbe?: () => Promise<ReadinessSnapshot>;
 	// SIO-780: identity card returned by GET /identity
 	identityCard?: IdentityCard;
+	// SIO-1209: last-observed "embeddings not ready" projects, returned by
+	// GET /status/semantic-search. GitLab.com owns embeddings indexing and
+	// exposes no live status API, so this is passive/observational (populated
+	// from real search failures, not a probe) -- see tools/proxy/index.ts.
+	semanticSearchStatus?: () => Array<{ projectId: string; lastNotReadyAt: string }>;
 }
 
 type ServerFactory = () => McpServer;
@@ -217,6 +222,11 @@ export async function startHttpTransport(
 			// SIO-780: readiness route
 			"/ready": {
 				GET: readyHandler,
+			},
+			// SIO-1209: passive semantic-search-embeddings status (not a live probe --
+			// see semanticSearchStatus doc above).
+			"/status/semantic-search": {
+				GET: () => Response.json({ notReadyProjects: config.semanticSearchStatus?.() ?? [] }),
 			},
 		},
 		fetch: () => {

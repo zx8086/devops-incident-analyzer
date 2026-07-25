@@ -1,5 +1,5 @@
 // apps/web/src/routes/health/+server.ts
-import { getConnectedServers, getServerStates } from "@devops-agent/agent";
+import { getConnectedServers, getGitlabSemanticSearchStatus, getServerStates } from "@devops-agent/agent";
 import { json } from "@sveltejs/kit";
 import { getActiveSseConnections, getAgentRuntimeStatus } from "$lib/server/agent";
 import type { RequestHandler } from "./$types";
@@ -20,6 +20,9 @@ export const GET: RequestHandler = async () => {
 	const mcpServerStates = getServerStates();
 	const connectedServers = getConnectedServers();
 	const runtime = getAgentRuntimeStatus();
+	// SIO-1209: last-observed GitLab semantic-search-embeddings gaps (passive,
+	// not a live probe -- GitLab.com exposes no status API for this).
+	const gitlabSemanticSearchNotReady = await getGitlabSemanticSearchStatus();
 
 	// Degraded when any server the bridge has probed is not "ready".
 	const degraded = Object.values(mcpServerStates).some((state) => state !== "ready");
@@ -31,6 +34,11 @@ export const GET: RequestHandler = async () => {
 		mcp: {
 			connected: connectedServers,
 			states: mcpServerStates,
+		},
+		gitlab: {
+			semanticSearch: {
+				notReadyProjects: gitlabSemanticSearchNotReady,
+			},
 		},
 		agent: {
 			graphReady: runtime.graphReady,

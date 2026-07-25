@@ -50,6 +50,8 @@ export async function createTransport(
 	readinessProbe?: () => Promise<ReadinessSnapshot>,
 	// SIO-780: identity card threaded from createMcpApplication into /identity route
 	identityCard?: IdentityCard,
+	// SIO-1209: getter threaded into HTTP transport's /status/semantic-search route
+	semanticSearchStatus?: () => Array<{ projectId: string; lastNotReadyAt: string }>,
 ): Promise<TransportResult> {
 	const { stdio: useStdio, http: useHttp, agentcore: useAgentCore } = resolveTransportMode(config.mode);
 	log.info({ mode: config.mode, stdio: useStdio, http: useHttp, agentcore: useAgentCore }, "Resolving transport mode");
@@ -82,6 +84,7 @@ export async function createTransport(
 			allowedOrigins: allowedOrigins.length > 0 ? allowedOrigins : undefined,
 			readinessProbe,
 			identityCard,
+			semanticSearchStatus,
 		});
 	}
 
