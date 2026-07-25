@@ -33,6 +33,15 @@ let chart: EchartsHandle | null = null;
 let ready = $state(false);
 let expanded = $state(false);
 
+// SIO-1212 focus management for the fullscreen dialog: the trigger element is
+// captured at open time (not assumed to be the last-focused element, since a
+// keyboard user could tab away before the dialog opens) so focus can return to
+// it on close; dialogEl anchors both the open-time focus move and the Tab/
+// Shift+Tab trap while expanded.
+let dialogEl: HTMLDivElement | undefined = $state();
+let expandTrigger: HTMLButtonElement | undefined = $state();
+let lastFocused: HTMLElement | null = null;
+
 const option = $derived(buildNetworkChartOption(topology));
 
 // SIO-1212: zoom bounds for the +/- toolbar. Graph-series roam has no native
@@ -58,17 +67,51 @@ function resetView() {
 	chart?.setOption({ series: [{ zoom: 1, center: undefined }] });
 }
 
+function focusableToolbarButtons(): HTMLButtonElement[] {
+	if (!dialogEl) return [];
+	return Array.from(dialogEl.querySelectorAll("button"));
+}
+
 async function toggleExpanded() {
-	expanded = !expanded;
+	const opening = !expanded;
+	if (opening) lastFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+	expanded = opening;
 	// The container's Tailwind classes swap synchronously with this state
 	// write, but layout/ResizeObserver firing is async -- resize explicitly
 	// after the DOM settles so there's no stale-size flash on toggle.
 	await tick();
 	chart?.resize();
+	if (opening) {
+		dialogEl?.focus();
+	} else {
+		// Restore to the captured trigger, falling back to the expand button
+		// (post-collapse re-render) if the original trigger no longer exists.
+		(lastFocused ?? expandTrigger)?.focus();
+		lastFocused = null;
+	}
 }
 
 function onKeydown(event: KeyboardEvent) {
-	if (expanded && event.key === "Escape") toggleExpanded();
+	if (!expanded) return;
+	if (event.key === "Escape") {
+		toggleExpanded();
+		return;
+	}
+	if (event.key !== "Tab") return;
+	// Focus trap: while expanded, Tab/Shift+Tab cycles only within the
+	// toolbar's buttons instead of escaping to the rest of the page.
+	const focusable = focusableToolbarButtons();
+	if (focusable.length === 0) return;
+	const first = focusable[0];
+	const last = focusable[focusable.length - 1];
+	const active = document.activeElement;
+	if (event.shiftKey && active === first) {
+		event.preventDefault();
+		last?.focus();
+	} else if (!event.shiftKey && active === last) {
+		event.preventDefault();
+		first?.focus();
+	}
 }
 
 $effect(() => {
@@ -119,6 +162,7 @@ $effect(() => {
     ></div>
   {/if}
   <div
+    bind:this={dialogEl}
     class={expanded
       ? "fixed inset-4 z-50 flex flex-col rounded-lg border border-sky-100 bg-white px-3 py-2.5 shadow-2xl md:inset-10"
       : "mt-2 rounded-lg border border-sky-100 bg-sky-50/40 px-3 py-2.5"}
@@ -170,6 +214,7 @@ $effect(() => {
           <Icon name="fit-view" class="h-3.5 w-3.5" />
         </button>
         <button
+          bind:this={expandTrigger}
           type="button"
           onclick={toggleExpanded}
           class="p-1.5 text-gray-600 hover:bg-gray-100"
