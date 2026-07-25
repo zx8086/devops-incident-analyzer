@@ -220,18 +220,26 @@ export function createLlm(role: LlmRole, agentName = "incident-analyzer"): ChatB
 	const bedrockConfig = resolveBedrockConfig(modelConfig);
 	const overrides = ROLE_OVERRIDES[role];
 	const primary = buildChatModel(bedrockConfig, overrides);
-	logger.debug({ role, tier: isLightweight ? "light" : "standard", model: bedrockConfig.model }, "LLM tier resolved");
 
 	// SIO-621: Wrap with fallback model from gitagent manifest if available.
 	// Skip for tool-binding roles (subAgent) because createReactAgent requires
 	// bindTools() which RunnableWithFallbacks does not implement.
-	if (TOOL_BINDING_ROLES.has(role)) return primary;
+	if (TOOL_BINDING_ROLES.has(role)) {
+		logger.info({ role, tier: isLightweight ? "light" : "standard", model: bedrockConfig.model }, "LLM model selected");
+		return primary;
+	}
 
 	const fallbackConfig = resolveFallbackConfig(modelConfig);
-	if (!fallbackConfig) return primary;
+	if (!fallbackConfig) {
+		logger.info({ role, tier: isLightweight ? "light" : "standard", model: bedrockConfig.model }, "LLM model selected");
+		return primary;
+	}
 
 	const fallback = buildChatModel(fallbackConfig, overrides);
-	logger.debug({ role, primary: bedrockConfig.model, fallback: fallbackConfig.model }, "LLM created with fallback");
+	logger.info(
+		{ role, tier: isLightweight ? "light" : "standard", model: bedrockConfig.model, fallback: fallbackConfig.model },
+		"LLM model selected",
+	);
 	return primary.withFallbacks({ fallbacks: [fallback] }) as unknown as ChatBedrockConverse;
 }
 
@@ -249,11 +257,16 @@ export function createLlmWithTools(
 	const modelConfig = agent.manifest.model;
 	const overrides = ROLE_OVERRIDES[role];
 
-	const primary = buildChatModel(resolveBedrockConfig(modelConfig), overrides).bindTools(tools);
+	const bedrockConfig = resolveBedrockConfig(modelConfig);
+	const primary = buildChatModel(bedrockConfig, overrides).bindTools(tools);
 	const fallbackConfig = resolveFallbackConfig(modelConfig);
-	if (!fallbackConfig) return primary as unknown as Runnable<BaseMessage[], BaseMessage>;
+	if (!fallbackConfig) {
+		logger.info({ role, model: bedrockConfig.model }, "LLM model selected");
+		return primary as unknown as Runnable<BaseMessage[], BaseMessage>;
+	}
 
 	const fallback = buildChatModel(fallbackConfig, overrides).bindTools(tools);
+	logger.info({ role, model: bedrockConfig.model, fallback: fallbackConfig.model }, "LLM model selected");
 	return primary.withFallbacks({ fallbacks: [fallback] }) as unknown as Runnable<BaseMessage[], BaseMessage>;
 }
 
