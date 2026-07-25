@@ -513,6 +513,39 @@ export async function changeHistoryForStackInstance(
 	}));
 }
 
+// SIO-1202: prompts that produced a successfully APPLIED change, newest first --
+// "what to ask to get a working change" for documentation. recordIacPrompt and
+// recordIacChange both write with id == the turn's requestId (graph-knowledge.ts),
+// so Prompt.id == ConfigChange.id joins a turn's verbatim prompt to its change for
+// free, same idiom as the Prompt/ConfigChange linkage noted in schema.ts.
+export interface SuccessfulPrompt {
+	prompt: string;
+	summary: string;
+	workflow: string;
+	mrUrl: string;
+	createdAt: string;
+}
+
+export async function successfulPromptChanges(store: GraphStore, limit = 20): Promise<SuccessfulPrompt[]> {
+	const rows = await store.run<{
+		prompt: string;
+		summary: string | null;
+		workflow: string | null;
+		mrUrl: string;
+		createdAt: string;
+	}>(
+		"MATCH (p:Prompt) MATCH (c:ConfigChange {id: p.id})-[:PROPOSED_IN]->(m:MergeRequest) WHERE c.outcome = 'applied' RETURN p.text AS prompt, c.summary AS summary, c.workflow AS workflow, m.url AS mrUrl, c.createdAt AS createdAt ORDER BY c.createdAt DESC LIMIT $limit",
+		{ limit },
+	);
+	return rows.map((r) => ({
+		prompt: String(r.prompt ?? ""),
+		summary: String(r.summary ?? ""),
+		workflow: String(r.workflow ?? ""),
+		mrUrl: String(r.mrUrl ?? ""),
+		createdAt: String(r.createdAt ?? ""),
+	}));
+}
+
 // SIO-1053: every ConfigChange still at outcome 'proposed' (or with no outcome set) that
 // has an MR to re-check. The reconcile sweep derives the MR iid from mrUrl and advances the
 // outcome to its true merged+apply state -- terminal outcomes (applied/failed/rejected) are

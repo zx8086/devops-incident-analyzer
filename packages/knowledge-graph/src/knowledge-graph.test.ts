@@ -43,6 +43,7 @@ import {
 	setIncidentEmbedding,
 	similarIncidents,
 	stacksUsingModule,
+	successfulPromptChanges,
 	sweepStaleTopology,
 	upsertEntities,
 	validTopologyEdges,
@@ -675,6 +676,31 @@ describe("reader", () => {
 			{ id: "c1", workflow: "slo-edit", summary: "tighten", outcome: "proposed", mrUrl: "u9", createdAt: "2026-06-19" },
 		]);
 		expect(await changeHistoryForStackInstance(store, "")).toEqual([]);
+	});
+
+	// SIO-1202: prompts that produced an applied change (Prompt.id == ConfigChange.id join).
+	test("successfulPromptChanges maps rows, [] on an empty graph", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("MATCH (p:Prompt)", [
+			{
+				prompt: "widen the ILM policy retention to 30 days on eu-b2b",
+				summary: "ilm retention widened",
+				workflow: "ilm-rollout",
+				mrUrl: "u1",
+				createdAt: "2026-06-19",
+			},
+		]);
+		const rows = await successfulPromptChanges(store);
+		expect(rows).toEqual([
+			{
+				prompt: "widen the ILM policy retention to 30 days on eu-b2b",
+				summary: "ilm retention widened",
+				workflow: "ilm-rollout",
+				mrUrl: "u1",
+				createdAt: "2026-06-19",
+			},
+		]);
+		expect(await successfulPromptChanges(new InMemoryGraphStore())).toEqual([]);
 	});
 
 	// SIO-1053: enumeration source for the KG reconcile sweep.
