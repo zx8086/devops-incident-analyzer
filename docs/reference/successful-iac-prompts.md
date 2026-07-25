@@ -6,7 +6,7 @@ A catalog of real user prompts that produced a successfully **applied** elastic-
 
 This doc is generated from the live knowledge graph, not hand-written. Call the curated MCP tool against a running elastic-iac deployment that has `KNOWLEDGE_GRAPH_ENABLED=true` and real turn history:
 
-```
+```text
 kg_successful_prompts { "limit": 50 }
 ```
 

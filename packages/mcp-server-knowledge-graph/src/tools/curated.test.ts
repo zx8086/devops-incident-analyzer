@@ -153,7 +153,7 @@ describe("curated kg_* tools", () => {
 		const out = await call(await connectedClient(), "kg_successful_prompts", {});
 		expect(out).toContain("Prompts that produced applied changes");
 		expect(out).toContain(
-			'"widen the ILM policy retention to 30 days on eu-b2b" -> ilm-rollout: ilm retention widened (u1)',
+			'2026-06-19 — "widen the ILM policy retention to 30 days on eu-b2b" -> ilm-rollout: ilm retention widened (u1)',
 		);
 	});
 

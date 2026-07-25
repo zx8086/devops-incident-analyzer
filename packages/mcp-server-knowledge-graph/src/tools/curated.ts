@@ -173,7 +173,7 @@ export function registerCuratedTools(server: McpServer, enabled: boolean): void 
 			const lines = rows.map((r) => {
 				const wf = r.workflow ? `${r.workflow}: ` : "";
 				const mr = r.mrUrl ? ` (${r.mrUrl})` : "";
-				return `- "${r.prompt}" -> ${wf}${r.summary}${mr}`;
+				return `- ${r.createdAt} — "${r.prompt}" -> ${wf}${r.summary}${mr}`;
 			});
 			return text(`Prompts that produced applied changes:\n${lines.join("\n")}`);
 		},

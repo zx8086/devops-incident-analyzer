@@ -703,6 +703,19 @@ describe("reader", () => {
 		expect(await successfulPromptChanges(new InMemoryGraphStore())).toEqual([]);
 	});
 
+	// CodeRabbit (PR #462): the reader is exported package API, reached by direct
+	// callers as well as the Zod-guarded MCP tool, so it must reject an invalid
+	// limit itself rather than trusting the caller.
+	test("successfulPromptChanges rejects an invalid limit", async () => {
+		const store = new InMemoryGraphStore();
+		await expect(successfulPromptChanges(store, 0)).rejects.toThrow();
+		await expect(successfulPromptChanges(store, -1)).rejects.toThrow();
+		await expect(successfulPromptChanges(store, 1.5)).rejects.toThrow();
+		await expect(successfulPromptChanges(store, Number.NaN)).rejects.toThrow();
+		await expect(successfulPromptChanges(store, Number.POSITIVE_INFINITY)).rejects.toThrow();
+		await expect(successfulPromptChanges(store, 201)).rejects.toThrow();
+	});
+
 	// SIO-1053: enumeration source for the KG reconcile sweep.
 	test("proposedChangesWithMr filters proposed, joins PROPOSED_IN, drops mrUrl-less rows", async () => {
 		const store = new InMemoryGraphStore();
