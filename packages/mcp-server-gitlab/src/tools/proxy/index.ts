@@ -124,7 +124,12 @@ export async function callWithEmbeddingsRetry(
 			const result = (await proxy.callTool(toolName, args, callOpts)) as ProxyCallResult;
 			if (!isEmbeddingsNotReady(result)) {
 				if (attempt > 0) log.info({ tool: prefixedName, attempt }, "Semantic search succeeded after retry");
-				clearEmbeddingsNotReady(projectId);
+				// SIO-1209 (CodeRabbit): only a genuine success confirms embeddings are
+				// ready -- an unrelated upstream error (auth failure, 5xx, malformed
+				// response) also fails isEmbeddingsNotReady's regex match but is NOT
+				// evidence the project's embeddings are ready, so it must not clear
+				// tracking for a project that may still genuinely be indexing.
+				if (!result.isError) clearEmbeddingsNotReady(projectId);
 				return result;
 			}
 		} catch (error) {

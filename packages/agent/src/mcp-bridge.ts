@@ -567,6 +567,14 @@ export interface EmbeddingsNotReadyProject {
 	lastNotReadyAt: string;
 }
 
+const EmbeddingsNotReadyProjectSchema = z.object({
+	projectId: z.string(),
+	lastNotReadyAt: z.string(),
+});
+const SemanticSearchStatusResponseSchema = z.object({
+	notReadyProjects: z.array(EmbeddingsNotReadyProjectSchema).optional(),
+});
+
 // SIO-1209: GitLab.com owns semantic-search embeddings indexing with no live
 // status API (confirmed: only a self-managed instance-admin Rake task exists).
 // The GitLab MCP server passively tracks projects it has observed as
@@ -574,15 +582,15 @@ export interface EmbeddingsNotReadyProject {
 // index.ts); this fetches that snapshot cross-process the same way probeServer
 // fetches /health, /identity, /ready -- a plain HTTP GET against the server's
 // own port, not the MCP protocol. Soft-fails to [] so /health never breaks on
-// this being unreachable.
+// this being unreachable OR returning an unexpected/stale shape.
 export async function getGitlabSemanticSearchStatus(): Promise<EmbeddingsNotReadyProject[]> {
 	const gitlabUrl = process.env.GITLAB_MCP_URL;
 	if (!gitlabUrl) return [];
 	try {
 		const r = await fetch(`${gitlabUrl}/status/semantic-search`, { signal: AbortSignal.timeout(2_000) });
 		if (!r.ok) return [];
-		const body = (await r.json()) as { notReadyProjects?: EmbeddingsNotReadyProject[] };
-		return body.notReadyProjects ?? [];
+		const parsed = SemanticSearchStatusResponseSchema.safeParse(await r.json());
+		return parsed.success ? (parsed.data.notReadyProjects ?? []) : [];
 	} catch {
 		return [];
 	}
