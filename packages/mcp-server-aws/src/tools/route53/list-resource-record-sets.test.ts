@@ -4,6 +4,7 @@ import { ListResourceRecordSetsCommand, Route53Client } from "@aws-sdk/client-ro
 import { mockClient } from "aws-sdk-client-mock";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { _resetClientsForTests } from "../../services/client-factory.ts";
+import type { ToolError } from "../types.ts";
 import {
 	listResourceRecordSets,
 	listResourceRecordSetsSchema,
@@ -51,6 +52,21 @@ describe("listResourceRecordSetsSchema", () => {
 });
 
 describe("listResourceRecordSets handler", () => {
+	// The dependency guard lives in the handler (not a schema .refine) because only
+	// the schema's .shape survives registration.
+	test("startRecordType without startRecordName -> bad-input _error, no SDK call", async () => {
+		const r53Mock = mockClient(Route53Client);
+		r53Mock.on(ListResourceRecordSetsCommand).resolves({ ResourceRecordSets: [], IsTruncated: false, MaxItems: 300 });
+
+		const handler = listResourceRecordSets(config);
+		const result = (await handler({ estate: "prod", hostedZoneId: "Z123", startRecordType: "A" })) as {
+			_error: ToolError;
+		};
+		expect(result._error.kind).toBe("bad-input");
+		expect(result._error.awsErrorMessage).toContain("startRecordType requires startRecordName");
+		expect(r53Mock.commandCalls(ListResourceRecordSetsCommand)).toHaveLength(0);
+	});
+
 	test("forwards hostedZoneId, positional continuation, and limit->MaxItems to the SDK", async () => {
 		const r53Mock = mockClient(Route53Client);
 		r53Mock.on(ListResourceRecordSetsCommand).resolves({ ResourceRecordSets: [], IsTruncated: false, MaxItems: 300 });

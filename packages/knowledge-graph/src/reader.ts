@@ -798,6 +798,8 @@ export interface NetworkMap {
 }
 
 // Per-layer bound so a shared ALB with hundreds of TGs cannot flood the prompt.
+// Downstream LB/DNS/placement layers inherit the cap transitively: their anchor
+// sets derive from the capped tgArns, so no later layer can exceed it either.
 const NETWORK_MAP_CAP = 50;
 
 function dedupeAndCap<T>(rows: T[], key: (row: T) => string): T[] {
@@ -1032,8 +1034,12 @@ export async function ipToWorkload(store: GraphStore, ip: string, asOf?: string)
 		`MATCH (i:IpAddress {ip: $ip})-[sn:IN_SUBNET]->(s:Subnet) WHERE ${validityClause("sn", asOf)} RETURN s.id AS subnetId, s.vpcId AS vpcId`,
 		params({ ip }),
 	);
-	const subnetId = String(subnetRows[0]?.subnetId ?? "");
-	const vpcId = String(subnetRows[0]?.vpcId ?? "");
+	// Ambiguous multi-VPC placement emits no placement: the IpAddress node is keyed
+	// by the bare ip, so a reused private IP can carry valid IN_SUBNET edges from
+	// several VPCs -- stamping the first row onto every hit would misattribute them.
+	const uniqueSubnets = new Set(subnetRows.map((row) => String(row.subnetId ?? "")));
+	const subnetId = uniqueSubnets.size === 1 ? String(subnetRows[0]?.subnetId ?? "") : "";
+	const vpcId = uniqueSubnets.size === 1 ? String(subnetRows[0]?.vpcId ?? "") : "";
 
 	const hits: IpWorkloadHit[] = [];
 	for (const row of bound) {

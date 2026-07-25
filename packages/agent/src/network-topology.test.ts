@@ -258,6 +258,30 @@ describe("buildNetworkTopology - aws", () => {
 		expect(t?.nodes.map((n) => n.id).sort()).toEqual(["arn:lb/a", "arn:lb/b"]);
 	});
 
+	test("describe_instances with ONLY a _summary projection still yields workload nodes", () => {
+		// The all-optional ReservationsEnvelope parses a byte-truncated envelope that
+		// carries only `_summary`; the builder must not silently drop those rows.
+		const t = buildNetworkTopology(
+			[
+				awsResult([
+					{
+						toolName: "aws_ec2_describe_instances",
+						rawJson: {
+							_summary: [
+								{ InstanceId: "i-0aaa", PrivateIpAddress: "10.34.50.10", SubnetId: "subnet-1" },
+								{ InstanceId: "i-0bbb" },
+							],
+						},
+					},
+				]),
+			],
+			[],
+		);
+		const workloads = t?.nodes.filter((n) => n.kind === "workload").map((n) => n.id) ?? [];
+		expect(workloads.sort()).toEqual(["i-0aaa", "i-0bbb"]);
+		expect(t?.edges).toContainEqual({ from: "i-0aaa", to: "subnet-1", kind: "in-subnet" });
+	});
+
 	test("caps nodes at MAX_NODES and drops dangling edges", () => {
 		const manySubnets = Array.from({ length: MAX_NODES + 50 }, (_, i) => ({
 			SubnetId: `subnet-${i}`,

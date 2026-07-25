@@ -82,6 +82,23 @@ describe("buildNetworkChartOption", () => {
 		expect(option.legend.data.sort()).toEqual(["Endpoint", "Subnet", "Target group", "VPC", "Workload"].sort());
 	});
 
+	test("tooltip formatter escapes HTML in dynamic values (XSS)", () => {
+		// ECharts renders the tooltip formatter string as innerHTML; a hostile node
+		// name (e.g. an AWS Name tag) must never survive as live markup.
+		const evil: NetworkTopology = {
+			builtAtTurn: 1,
+			sources: ["aws"],
+			nodes: [{ id: "i-evil", kind: "workload", name: "<img src=x onerror=alert(1)>" }],
+			edges: [],
+		};
+		const node = graphSeries(buildNetworkChartOption(evil)).data[0];
+		expect(node?.tooltip?.formatter).not.toContain("<img");
+		expect(node?.tooltip?.formatter).toContain("&lt;img src=x onerror=alert(1)&gt;");
+		// The static markup stays raw HTML; canvas-rendered data[].name stays verbatim.
+		expect(node?.tooltip?.formatter).toContain("<b>");
+		expect(node?.name).toBe("<img src=x onerror=alert(1)>");
+	});
+
 	test("tooltips carry placement and health detail", () => {
 		const option = buildNetworkChartOption(TOPOLOGY);
 		const tg = graphSeries(option).data.find((d) => d.id === "arn:tg/orders");

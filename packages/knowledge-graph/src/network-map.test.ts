@@ -205,7 +205,8 @@ describe("SIO-1207 recordNetworkTopology", () => {
 			"RESOLVES_TO_LB",
 		]) {
 			const edge = store.calls.find((c) => c.cypher.includes(`MERGE (a)-[r:${rel}]->(b)`));
-			expect(edge?.cypher).toContain("SET r.discoveredBy = $discoveredBy, r.tInvalid = ''");
+			// consecutiveMisses = 0 is the revival stamp, matching recordTopologyEdges.
+			expect(edge?.cypher).toContain("SET r.discoveredBy = $discoveredBy, r.tInvalid = '', r.consecutiveMisses = 0");
 			expect(edge?.params?.discoveredBy).toBe(NETWORK_DISCOVERED_BY);
 			// keep-first tValid: the SIO-1104 conditional-WHERE backfill, NOT coalesce-in-SET
 			// (the columns are born DEFAULT '', where coalesce-in-SET is a proven no-op).
@@ -326,8 +327,9 @@ describe("SIO-1207 recordIpBinding", () => {
 		const inval = store.calls.find((c) => c.cypher.includes("r.arn <> $arn"));
 		expect(inval?.cypher).toContain("WHERE r.arn <> $arn AND b.tInvalid = ''");
 		expect(inval?.cypher).toContain("SET b.tInvalid = $now");
-		// supersession note appended to evidence, never silently dropped.
-		expect(inval?.cypher).toContain("b.evidence = b.evidence + ' | superseded: rebound to ' + $arn");
+		// supersession note appended to evidence, never silently dropped; coalesce
+		// guards a NULL evidence column from nulling the whole concatenation.
+		expect(inval?.cypher).toContain("b.evidence = coalesce(b.evidence, '') + ' | superseded: rebound to ' + $arn");
 		const invalIdx = store.calls.findIndex((c) => c.cypher.includes("r.arn <> $arn"));
 		const mergeIdx = store.calls.findIndex((c) => c.cypher.includes("MERGE (i)-[b:BOUND_TO]->(r)"));
 		expect(invalIdx).toBeGreaterThanOrEqual(0);
@@ -423,6 +425,24 @@ describe("SIO-1207 ipToWorkload", () => {
 		expect(subnet?.cypher).toContain("sn.tValid <= $asOf AND (sn.tInvalid = '' OR sn.tInvalid > $asOf)");
 		const runsOn = store.calls.find((c) => c.cypher.includes("RUNS_ON"));
 		expect(runsOn?.cypher).toContain("r.tValid <= $asOf AND (r.tInvalid = '' OR r.tInvalid > $asOf)");
+	});
+
+	test("ambiguous multi-subnet placement emits empty subnet/VPC context", async () => {
+		// The IpAddress node is keyed by the bare ip: a private IP reused across VPCs
+		// carries several valid IN_SUBNET edges, and no single placement is correct.
+		const store = new InMemoryGraphStore();
+		store.stub("BOUND_TO", [
+			{ arn: "arn:task-a", lastVerified: "t1", discoveredBy: "network-map", tValid: "t0", tInvalid: "" },
+		]);
+		store.stub("IN_SUBNET", [
+			{ subnetId: "subnet-1", vpcId: "vpc-1" },
+			{ subnetId: "subnet-9", vpcId: "vpc-9" },
+		]);
+		store.stub("RUNS_ON", [{ name: "orders" }]);
+		const hits = await ipToWorkload(store, "10.0.1.15");
+		expect(hits).toHaveLength(1);
+		expect(hits[0]?.subnetId).toBe("");
+		expect(hits[0]?.vpcId).toBe("");
 	});
 
 	test("shapes hits with per-hit service and subnet/VPC context, empty strings when absent", async () => {

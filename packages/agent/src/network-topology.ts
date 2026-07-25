@@ -30,12 +30,17 @@ function nameTag(t: z.infer<typeof tags>): string | undefined {
 
 // SIO-833: wrapListTool attaches a complete projected `_summary` when the primary
 // list field was byte-truncated server-side. Prefer it (same rule as extractors/aws.ts).
+function summaryRows(envelope: unknown): unknown[] | undefined {
+	if (typeof envelope !== "object" || envelope === null) return undefined;
+	const summary = (envelope as Record<string, unknown>)._summary;
+	return Array.isArray(summary) ? summary : undefined;
+}
+
 function rows(envelope: unknown, listField: string): unknown[] {
+	const summary = summaryRows(envelope);
+	if (summary) return summary;
 	if (typeof envelope !== "object" || envelope === null) return [];
-	const rec = envelope as Record<string, unknown>;
-	const summary = rec._summary;
-	if (Array.isArray(summary)) return summary;
-	const primary = rec[listField];
+	const primary = (envelope as Record<string, unknown>)[listField];
 	return Array.isArray(primary) ? primary : [];
 }
 
@@ -190,13 +195,6 @@ function addEdge(acc: Accumulator, edge: NetworkTopologyEdge): void {
 	});
 }
 
-function hasInSubnetEdge(acc: Accumulator, fromId: string): boolean {
-	for (const e of acc.edges.values()) {
-		if (e.kind === "in-subnet" && e.from === fromId) return true;
-	}
-	return false;
-}
-
 // DNS names compare case-insensitively and Route53 appends a trailing dot.
 function normalizeDns(name: string): string {
 	return name.toLowerCase().replace(/\.$/, "");
@@ -277,10 +275,13 @@ function parseAwsOutputs(acc: Accumulator, outputs: ToolOutput[], estate: string
 				break;
 			}
 			case "aws_ec2_describe_instances": {
+				// The `_summary` projection must be checked FIRST: the all-optional
+				// ReservationsEnvelope parses even when only `_summary` survived
+				// byte-truncation, which would otherwise drop every instance row.
+				const summary = summaryRows(o.rawJson);
 				const env = ReservationsEnvelope.safeParse(o.rawJson);
-				const instanceRows = env.success
-					? (env.data.Reservations ?? []).flatMap((r) => r.Instances ?? [])
-					: rows(o.rawJson, "Reservations");
+				const instanceRows =
+					summary ?? (env.success ? (env.data.Reservations ?? []).flatMap((r) => r.Instances ?? []) : []);
 				for (const raw of instanceRows) {
 					const p = InstanceRow.safeParse(raw);
 					if (!p.success) continue;
@@ -442,7 +443,7 @@ function addEndpoint(
 	protocol: string | undefined,
 	name: string | undefined,
 	focus: string[],
-): void {
+): string {
 	const id = port !== undefined ? `ep:${datasource}:${host}:${port}` : `ep:${datasource}:${host}`;
 	upsertNode(acc, {
 		id,
@@ -451,6 +452,7 @@ function addEndpoint(
 		endpoint: { host, port, protocol, datasource },
 		service: name && matchesFocus(name, focus) ? name : undefined,
 	});
+	return id;
 }
 
 function parseOverlayOutputs(acc: Accumulator, dataSourceId: string, outputs: ToolOutput[], focus: string[]): void {
@@ -478,9 +480,8 @@ function parseOverlayOutputs(acc: Accumulator, dataSourceId: string, outputs: To
 				if (!b.host) continue;
 				const brokerId = b.nodeId ?? b.id;
 				const label = brokerId !== undefined ? `broker-${brokerId}` : "broker";
-				addEndpoint(acc, "kafka", b.host, b.port, undefined, label, focus);
+				const id = addEndpoint(acc, "kafka", b.host, b.port, undefined, label, focus);
 				if (b.rack) {
-					const id = b.port !== undefined ? `ep:kafka:${b.host}:${b.port}` : `ep:kafka:${b.host}`;
 					const node = acc.nodes.get(id);
 					if (node) acc.nodes.set(id, { ...node, availabilityZone: b.rack });
 				}
@@ -533,6 +534,11 @@ function deriveEdges(acc: Accumulator): void {
 	for (const n of acc.nodes.values()) {
 		if (n.kind === "loadBalancer" && n.dnsName) lbsByDns.set(normalizeDns(n.dnsName), n.id);
 	}
+	// Precomputed once: nodes already placed by an explicit in-subnet edge.
+	const placedInSubnet = new Set<string>();
+	for (const e of acc.edges.values()) {
+		if (e.kind === "in-subnet") placedInSubnet.add(e.from);
+	}
 	for (const node of acc.nodes.values()) {
 		if (node.kind === "dnsRecord") {
 			if (!node.dnsName) continue;
@@ -543,7 +549,7 @@ function deriveEdges(acc: Accumulator): void {
 		if (node.kind === "subnet" || node.kind === "vpc" || node.kind === "loadBalancer" || node.kind === "targetGroup") {
 			continue;
 		}
-		if (hasInSubnetEdge(acc, node.id)) continue;
+		if (placedInSubnet.has(node.id)) continue;
 		const ips = [...(node.privateIps ?? [])];
 		if (node.endpoint && parseIpv4(node.endpoint.host) !== null) ips.push(node.endpoint.host);
 		for (const ip of ips) {

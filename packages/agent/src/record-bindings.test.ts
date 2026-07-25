@@ -210,6 +210,7 @@ describe("recordConfirmedBindings node", () => {
 	});
 
 	test("KG_NETWORK_WRITE_ENABLED=false suppresses only the network write", async () => {
+		const prior = process.env.KG_NETWORK_WRITE_ENABLED;
 		process.env.KG_NETWORK_WRITE_ENABLED = "false";
 		try {
 			const store = new InMemoryGraphStore();
@@ -220,7 +221,8 @@ describe("recordConfirmedBindings node", () => {
 			// bindings still wrote.
 			expect(store.calls.some((c) => c.cypher.includes("OBSERVED_IN"))).toBe(true);
 		} finally {
-			delete process.env.KG_NETWORK_WRITE_ENABLED;
+			if (prior === undefined) delete process.env.KG_NETWORK_WRITE_ENABLED;
+			else process.env.KG_NETWORK_WRITE_ENABLED = prior;
 		}
 	});
 

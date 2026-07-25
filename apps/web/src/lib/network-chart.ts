@@ -1,10 +1,11 @@
 // apps/web/src/lib/network-chart.ts
+import type { NetworkTopology, NetworkTopologyNode } from "@devops-agent/shared";
+
 // SIO-1204: pure NetworkTopology -> ECharts graph-series option transform. Kept
 // separate from the Svelte component (no echarts/DOM imports) so it is unit
 // testable; the component passes the result to chart.setOption verbatim. Local
 // structural types instead of echarts' Option types keep this module free of
 // the echarts dependency and its ambient types.
-import type { NetworkTopology, NetworkTopologyNode } from "@devops-agent/shared";
 
 export interface ChartGraphNode {
 	id: string;
@@ -92,20 +93,32 @@ function nodeLabel(node: NetworkTopologyNode): string {
 	return node.id;
 }
 
+// ECharts injects the tooltip formatter string as innerHTML, so every dynamic
+// value below must be escaped; only the static <b>/<br/> markup stays raw.
+// (Node `name` in data[].name is canvas-rendered text, never HTML -- no escape.)
+function escapeHtml(s: string): string {
+	return s
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&#39;");
+}
+
 function tooltipLines(node: NetworkTopologyNode): string[] {
-	const lines: string[] = [`<b>${nodeLabel(node)}</b>`];
-	lines.push(node.kind);
-	if (node.id !== nodeLabel(node)) lines.push(node.id);
-	if (node.cidr) lines.push(`cidr ${node.cidr}`);
-	if (node.availabilityZone) lines.push(node.availabilityZone);
-	if (node.privateIps?.length) lines.push(node.privateIps.join(", "));
-	if (node.dnsName) lines.push(node.dnsName);
-	if (node.recordType) lines.push(`type ${node.recordType}`);
-	if (node.scheme || node.lbType) lines.push([node.lbType, node.scheme].filter(Boolean).join(" / "));
-	if (node.health) lines.push(`${node.health.healthy}/${node.health.total} targets healthy`);
-	if (node.endpoint) lines.push(`via ${node.endpoint.datasource}`);
-	if (node.service) lines.push(`service: ${node.service}`);
-	if (node.estate) lines.push(`estate: ${node.estate}`);
+	const lines: string[] = [`<b>${escapeHtml(nodeLabel(node))}</b>`];
+	lines.push(escapeHtml(node.kind));
+	if (node.id !== nodeLabel(node)) lines.push(escapeHtml(node.id));
+	if (node.cidr) lines.push(escapeHtml(`cidr ${node.cidr}`));
+	if (node.availabilityZone) lines.push(escapeHtml(node.availabilityZone));
+	if (node.privateIps?.length) lines.push(escapeHtml(node.privateIps.join(", ")));
+	if (node.dnsName) lines.push(escapeHtml(node.dnsName));
+	if (node.recordType) lines.push(escapeHtml(`type ${node.recordType}`));
+	if (node.scheme || node.lbType) lines.push(escapeHtml([node.lbType, node.scheme].filter(Boolean).join(" / ")));
+	if (node.health) lines.push(escapeHtml(`${node.health.healthy}/${node.health.total} targets healthy`));
+	if (node.endpoint) lines.push(escapeHtml(`via ${node.endpoint.datasource}`));
+	if (node.service) lines.push(escapeHtml(`service: ${node.service}`));
+	if (node.estate) lines.push(escapeHtml(`estate: ${node.estate}`));
 	return lines;
 }
 

@@ -24,6 +24,19 @@ export function describeTargetGroups(config: AwsConfig) {
 		name: "aws_elbv2_describe_target_groups",
 		listField: "TargetGroups",
 		fn: async (params: DescribeTargetGroupsParams) => {
+			// The API accepts at most ONE selector (loadBalancerArn / targetGroupArns /
+			// names); combining them fails late at AWS. Enforced here rather than via a
+			// schema-level .refine because registration passes only the schema's .shape to
+			// server.tool, which drops object-level refinements. No selector stays valid
+			// (lists all target groups). The error name routes mapAwsError to "bad-input".
+			const selectors = [params.loadBalancerArn, params.targetGroupArns, params.names].filter(
+				(s) => s !== undefined,
+			).length;
+			if (selectors > 1) {
+				const err = new Error("Provide at most one of loadBalancerArn, targetGroupArns, or names.");
+				err.name = "ValidationError";
+				throw err;
+			}
 			const client = getElbv2Client(config, params.estate);
 			return client.send(
 				new DescribeTargetGroupsCommand({

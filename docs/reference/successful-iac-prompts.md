@@ -7,18 +7,12 @@ A catalog of real user prompts that produced a successfully **applied** elastic-
 This doc is generated from the live knowledge graph, not hand-written. Call the curated MCP tool against a running elastic-iac deployment that has `KNOWLEDGE_GRAPH_ENABLED=true` and real turn history:
 
 ```text
-kg_successful_prompts { "limit": 50 }
+kg_applied_changes { "limit": 200 }
 ```
 
-Reached at `http://127.0.0.1:9087/mcp` (in-process on the web app — see [knowledge-graph.md](../architecture/knowledge-graph.md#the-in-process-mcp-server-port-9087-sio-967)), or via the elastic-iac agent's tool belt directly. The tool returns rows shaped `{prompt, summary, workflow, mrUrl, createdAt}`; render each as one entry below, newest first.
+Reached at `http://127.0.0.1:9087/mcp` (in-process on the web app — see [knowledge-graph.md](../architecture/knowledge-graph.md#the-in-process-mcp-server-port-9087-sio-967)), or via the elastic-iac agent's tool belt directly. The tool returns rows shaped `{prompt, summary, workflow, mrUrl, createdAt}` — including applied changes with no linked `Prompt`, whose prompt renders as `(no prompt recorded)` so they are still counted and dated. Render each row as one entry below, newest first.
 
-**Known gap (SIO-1203): `kg_successful_prompts` misses changes with no linked Prompt.** The `Prompt` node was introduced in SIO-1038 (merged 2026-07-09); the knowledge graph itself was activated for elastic-iac earlier, in SIO-954 (merged 2026-06-19), which recorded `ConfigChange`/`MergeRequest` but never a prompt — so any change applied in that window is real and still in the graph, but has no `Prompt` to join, and `kg_successful_prompts`' strict join silently excludes it. A missing `Prompt` on a change recorded after SIO-1038 is also possible (the write is soft-failing), so an absent prompt means "not recorded", not a guaranteed date. For a complete historical count regardless of cause, call `kg_applied_changes` instead:
-
-```text
-kg_applied_changes { "limit": 50 }
-```
-
-It returns the same shape, but renders `(no prompt recorded)` in place of the prompt for rows with no linked `Prompt`, so they're still counted and dated even without the verbatim ask.
+**Why not `kg_successful_prompts` (SIO-1203)?** That tool's strict `Prompt` join silently excludes changes with no linked Prompt. The `Prompt` node was introduced in SIO-1038 (merged 2026-07-09); the knowledge graph itself was activated for elastic-iac earlier, in SIO-954 (merged 2026-06-19), which recorded `ConfigChange`/`MergeRequest` but never a prompt — so any change applied in that window is real and still in the graph, but has no `Prompt` to join. A missing `Prompt` on a change recorded after SIO-1038 is also possible (the write is soft-failing), so an absent prompt means "not recorded", not a guaranteed date. `kg_successful_prompts` remains useful only when you specifically want verbatim-prompt examples; this catalog uses `kg_applied_changes` for the complete history.
 
 This repository's own worktrees have no local `.data/knowledge-graph` and no `lbug` install, so there is nothing to query from a dev sandbox — this catalog can only be populated from a real deployment that has actually run elastic-iac turns to completion (an MR opened, merged, and its pipeline applied).
 

@@ -107,17 +107,11 @@ describe("pagination alias schemas (SIO-838)", () => {
 	// must NOT grow a cursor alias -- Zod strips the unknown key.
 	test("record sets accept limit but have no cursor alias; target health has neither", () => {
 		expect(listResourceRecordSetsSchema.safeParse({ hostedZoneId: "Z123", limit: 100 }).success).toBe(true);
-		const recordSets = listResourceRecordSetsSchema.parse({ hostedZoneId: "Z123", cursor: "tok" }) as Record<
-			string,
-			unknown
-		>;
-		expect(recordSets.cursor).toBeUndefined();
-		const health = describeTargetHealthSchema.parse({ targetGroupArn: "arn:tg", limit: 10, cursor: "tok" }) as Record<
-			string,
-			unknown
-		>;
-		expect(health.limit).toBeUndefined();
-		expect(health.cursor).toBeUndefined();
+		const recordSets = listResourceRecordSetsSchema.parse({ hostedZoneId: "Z123", cursor: "tok" });
+		expect("cursor" in recordSets).toBe(false);
+		const health = describeTargetHealthSchema.parse({ targetGroupArn: "arn:tg", limit: 10, cursor: "tok" });
+		expect("limit" in health).toBe(false);
+		expect("cursor" in health).toBe(false);
 	});
 
 	test("dynamodb list-tables accepts limit but has no cursor alias", () => {

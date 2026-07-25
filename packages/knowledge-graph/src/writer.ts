@@ -802,7 +802,7 @@ async function mergeNetworkEdge(
 	await store.run(`MERGE (a:${from.label} {${from.key}: $from})`, { from: from.value });
 	await store.run(`MERGE (b:${to.label} {${to.key}: $to})`, { to: to.value });
 	await store.run(
-		`MATCH (a:${from.label} {${from.key}: $from}), (b:${to.label} {${to.key}: $to}) MERGE (a)-[r:${rel}]->(b) SET r.discoveredBy = $discoveredBy, r.tInvalid = ''`,
+		`MATCH (a:${from.label} {${from.key}: $from}), (b:${to.label} {${to.key}: $to}) MERGE (a)-[r:${rel}]->(b) SET r.discoveredBy = $discoveredBy, r.tInvalid = '', r.consecutiveMisses = 0`,
 		{ from: from.value, to: to.value, discoveredBy: NETWORK_DISCOVERED_BY },
 	);
 	await backfillEdgeTValid(
@@ -978,7 +978,7 @@ export async function recordIpBinding(store: GraphStore, b: IpBindingRecord): Pr
 	const now = b.createdAt ?? new Date().toISOString();
 	await store.run("MERGE (i:IpAddress {ip: $ip})", { ip: b.ip });
 	await store.run(
-		"MATCH (i:IpAddress {ip: $ip})-[b:BOUND_TO]->(r:AwsResource) WHERE r.arn <> $arn AND b.tInvalid = '' SET b.tInvalid = $now, b.evidence = b.evidence + ' | superseded: rebound to ' + $arn",
+		"MATCH (i:IpAddress {ip: $ip})-[b:BOUND_TO]->(r:AwsResource) WHERE r.arn <> $arn AND b.tInvalid = '' SET b.tInvalid = $now, b.evidence = coalesce(b.evidence, '') + ' | superseded: rebound to ' + $arn",
 		{ ip: b.ip, arn: b.workloadArn, now },
 	);
 	await store.run("MERGE (r:AwsResource {arn: $arn})", { arn: b.workloadArn });

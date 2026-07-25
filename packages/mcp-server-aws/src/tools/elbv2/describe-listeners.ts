@@ -13,6 +13,7 @@ export const describeListenersSchema = z.object({
 		.describe("Load balancer ARN whose listeners to describe (exactly one of this or listenerArns)"),
 	listenerArns: z
 		.array(z.string())
+		.min(1)
 		.optional()
 		.describe("Specific listener ARNs to describe (exactly one of this or loadBalancerArn)"),
 	pageSize: z.number().int().min(1).max(400).optional().describe("Max results per page (1-400). Alias: limit."),

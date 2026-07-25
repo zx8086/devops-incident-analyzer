@@ -2,11 +2,12 @@
 // apps/web/src/lib/components/NetworkTopologyCard.svelte
 // SIO-1204: interactive ECharts force-graph of the turn's derived network map
 // (DNS -> LB -> target group -> workload chains, VPC/subnet placement, service
-// endpoints). The chart initializes behind onMount + dynamic import: echarts
-// needs the DOM (SvelteKit SSR must never touch it), and the modular
-// echarts/core bundle only loads when a map actually renders.
+// endpoints). The chart initializes behind an $effect keyed on the bound
+// container + dynamic import: echarts needs the DOM (SvelteKit SSR must never
+// touch it), the modular echarts/core bundle only loads when a map actually
+// renders, and the {#if}-gated container can appear AFTER first render (a
+// topology arriving on a later turn), which a one-shot onMount would miss.
 import type { NetworkTopology } from "@devops-agent/shared";
-import { onMount } from "svelte";
 import { buildNetworkChartOption } from "$lib/network-chart";
 
 let { topology }: { topology: NetworkTopology } = $props();
@@ -19,7 +20,12 @@ let ready = $state(false);
 
 const option = $derived(buildNetworkChartOption(topology));
 
-onMount(() => {
+$effect(() => {
+	// Reruns whenever the bound container element appears or changes (the {#if}
+	// can mount it late when the topology transitions 0 -> N nodes). The teardown
+	// disposes the previous chart first, so at most one chart exists per element.
+	const el = container;
+	if (!el) return;
 	let disposed = false;
 	let observer: ResizeObserver | undefined;
 	(async () => {
@@ -29,11 +35,11 @@ onMount(() => {
 			import("echarts/components"),
 			import("echarts/renderers"),
 		]);
-		if (disposed || !container) return;
+		if (disposed) return;
 		core.use([charts.GraphChart, components.TooltipComponent, components.LegendComponent, renderers.CanvasRenderer]);
-		chart = core.init(container);
+		chart = core.init(el);
 		observer = new ResizeObserver(() => chart?.resize());
-		observer.observe(container);
+		observer.observe(el);
 		ready = true;
 	})();
 	return () => {
@@ -41,6 +47,7 @@ onMount(() => {
 		observer?.disconnect();
 		chart?.dispose();
 		chart = null;
+		ready = false;
 	};
 });
 

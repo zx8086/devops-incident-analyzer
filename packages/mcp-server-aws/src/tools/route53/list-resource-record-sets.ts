@@ -47,6 +47,14 @@ export function listResourceRecordSets(config: AwsConfig) {
 		name: "aws_route53_list_resource_record_sets",
 		listField: "ResourceRecordSets",
 		fn: async (params: ListResourceRecordSetsParams) => {
+			// AWS returns InvalidInput when StartRecordType is set without StartRecordName.
+			// Guarded here because registration passes only the schema's .shape to
+			// server.tool, so an object-level .refine() is unavailable.
+			if (params.startRecordType !== undefined && params.startRecordName === undefined) {
+				const err = new Error("startRecordType requires startRecordName to also be set.");
+				err.name = "ValidationError";
+				throw err;
+			}
 			const client = getRoute53Client(config, params.estate);
 			return client.send(
 				new ListResourceRecordSetsCommand({

@@ -35,6 +35,10 @@ describe("describeListenersSchema", () => {
 	test("rejects non-array listenerArns", () => {
 		expect(describeListenersSchema.safeParse({ listenerArns: "arn:l1" }).success).toBe(false);
 	});
+
+	test("rejects an empty listenerArns array", () => {
+		expect(describeListenersSchema.safeParse({ listenerArns: [] }).success).toBe(false);
+	});
 });
 
 describe("describeListeners handler", () => {

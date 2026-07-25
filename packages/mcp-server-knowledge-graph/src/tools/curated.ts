@@ -262,10 +262,7 @@ export function registerCuratedTools(server: McpServer, enabled: boolean): void 
 		"kg_ip_to_workload",
 		"Cached reverse-IP lookup: which workload was this private IP last bound to (BOUND_TO edges from prior incidents). Verify-then-trust: always confirm live via the AWS reverse-IP protocol before relying on it. asOf gives a historical as-of read. Read-only; no Cypher.",
 		{
-			ip: z
-				.string()
-				.regex(/^\d{1,3}(?:\.\d{1,3}){3}$/, "IPv4 dotted-quad expected")
-				.describe("IPv4 address, e.g. 10.34.50.147"),
+			ip: z.ipv4().describe("IPv4 address, e.g. 10.34.50.147"),
 			asOf: z.string().optional().describe("ISO timestamp for a bi-temporal as-of read (default: currently valid)"),
 		},
 		async ({ ip, asOf }) => {

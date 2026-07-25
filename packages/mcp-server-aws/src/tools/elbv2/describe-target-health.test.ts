@@ -42,12 +42,9 @@ describe("describeTargetHealthSchema", () => {
 	// SIO-1205: the API has NO pagination, so the schema must not declare limit/cursor.
 	// Zod strips unknown keys, so parsing succeeds but the aliases must NOT survive.
 	test("has no limit/cursor pagination aliases (unknown keys are stripped)", () => {
-		const parsed = describeTargetHealthSchema.parse({ targetGroupArn: TG_ARN, limit: 10, cursor: "tok" }) as Record<
-			string,
-			unknown
-		>;
-		expect(parsed.limit).toBeUndefined();
-		expect(parsed.cursor).toBeUndefined();
+		const parsed = describeTargetHealthSchema.parse({ targetGroupArn: TG_ARN, limit: 10, cursor: "tok" });
+		expect("limit" in parsed).toBe(false);
+		expect("cursor" in parsed).toBe(false);
 	});
 });
 
