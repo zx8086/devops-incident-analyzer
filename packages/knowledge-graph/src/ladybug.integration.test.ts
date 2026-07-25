@@ -123,6 +123,22 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 			incidentId: "inc-1",
 		});
 
+		// SIO-1207 regression: OBSERVED_IN/RESOLVES_TO declare tValid STRING DEFAULT '',
+		// so a MERGE-created edge materializes '' BEFORE any SET evaluates and the old
+		// coalesce-in-SET keep-first idiom was a no-op -- the edge never gained a real
+		// tValid and every as-of read treated it as valid-from-the-beginning. A fresh
+		// edge must hold a real timestamp via the conditional-WHERE backfill.
+		const observedTValid = await store.run<{ tValid: string }>(
+			"MATCH (:Service {name: 'svc-a'})-[o:OBSERVED_IN]->(:TelemetrySource {id: 'aws:logGroup:/ecs/svc-a-prd'}) RETURN o.tValid AS tValid",
+		);
+		expect(observedTValid).toHaveLength(1);
+		expect(observedTValid[0]?.tValid).not.toBe("");
+		const resolvesTValid = await store.run<{ tValid: string }>(
+			"MATCH (:Alias {name: 'svc-a-prd'})-[r:RESOLVES_TO]->(:Service {name: 'svc-a'}) RETURN r.tValid AS tValid",
+		);
+		expect(resolvesTValid).toHaveLength(1);
+		expect(resolvesTValid[0]?.tValid).not.toBe("");
+
 		// direct-name lookup
 		const direct = await bindingsForServices(store, ["svc-a"], ["svc-a"]);
 		expect(direct).toHaveLength(1);
@@ -137,10 +153,13 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 		expect(await hasBinding(store, "svc-a", "logGroup", "/ecs/svc-a-prd")).toBe(true);
 		expect(await hasBinding(store, "svc-a", "logGroup", "/does/not/exist")).toBe(false);
 
-		// re-record bumps lastVerified + keeps a single edge (MERGE idempotency)
+		// re-record bumps lastVerified + keeps a single edge (MERGE idempotency);
+		// aliasRaw re-merges RESOLVES_TO too so its keep-first backfill is exercised
+		// against a non-empty tValid
 		await recordServiceBinding(store, {
 			service: "svc-a",
 			serviceNormalized: "svc-a",
+			aliasRaw: "svc-a-prd",
 			datasource: "aws",
 			kind: "logGroup",
 			resourceId: "/ecs/svc-a-prd",
@@ -152,6 +171,16 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 			"MATCH (:Service {name: 'svc-a'})-[o:OBSERVED_IN]->(:TelemetrySource {id: 'aws:logGroup:/ecs/svc-a-prd'}) RETURN count(o) AS n",
 		);
 		expect(Number(edgeCount[0]?.n)).toBe(1);
+		// keep-first: re-observation must NOT advance tValid (the backfill's WHERE
+		// only matches empty values)
+		const rerecorded = await store.run<{ tValid: string }>(
+			"MATCH (:Service {name: 'svc-a'})-[o:OBSERVED_IN]->(:TelemetrySource {id: 'aws:logGroup:/ecs/svc-a-prd'}) RETURN o.tValid AS tValid",
+		);
+		expect(rerecorded[0]?.tValid).toBe(observedTValid[0]?.tValid ?? "");
+		const rerecordedResolves = await store.run<{ tValid: string }>(
+			"MATCH (:Alias {name: 'svc-a-prd'})-[r:RESOLVES_TO]->(:Service {name: 'svc-a'}) RETURN r.tValid AS tValid",
+		);
+		expect(rerecordedResolves[0]?.tValid).toBe(resolvesTValid[0]?.tValid ?? "");
 
 		await store.close();
 	});

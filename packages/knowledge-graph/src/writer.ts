@@ -240,7 +240,7 @@ export async function recordServiceBinding(store: GraphStore, b: ServiceBindingR
 			{ name: b.aliasRaw, service: b.service, now },
 		);
 		await store.run(
-			"MATCH (a:Alias {name: $name}), (s:Service {name: $service}) MERGE (a)-[r:RESOLVES_TO]->(s) SET r.confidence = $confidence, r.discoveredBy = $discoveredBy, r.createdAt = coalesce(r.createdAt, $now), r.tValid = coalesce(r.tValid, $now), r.tInvalid = ''",
+			"MATCH (a:Alias {name: $name}), (s:Service {name: $service}) MERGE (a)-[r:RESOLVES_TO]->(s) SET r.confidence = $confidence, r.discoveredBy = $discoveredBy, r.createdAt = coalesce(r.createdAt, $now), r.tInvalid = ''",
 			{
 				name: b.aliasRaw,
 				service: b.service,
@@ -248,6 +248,16 @@ export async function recordServiceBinding(store: GraphStore, b: ServiceBindingR
 				discoveredBy: b.discoveredBy,
 				now,
 			},
+		);
+		// Keep-first tValid via conditional backfill, NOT coalesce-in-SET: the rel
+		// table declares tValid STRING DEFAULT '', so a MERGE-created edge already
+		// holds '' when SET evaluates and coalesce(r.tValid, $now) keeps '' forever
+		// (proven on lbug 0.14.3, SIO-1207). This also self-heals pre-fix edges
+		// still holding '' on their next re-observation. createdAt above is safe in
+		// coalesce because it has no DDL DEFAULT and materializes as NULL.
+		await store.run(
+			"MATCH (a:Alias {name: $name})-[r:RESOLVES_TO]->(s:Service {name: $service}) WHERE coalesce(r.tValid, '') = '' SET r.tValid = $now",
+			{ name: b.aliasRaw, service: b.service, now },
 		);
 	}
 
@@ -262,10 +272,10 @@ export async function recordServiceBinding(store: GraphStore, b: ServiceBindingR
 			locator: b.locator ?? "",
 		},
 	);
-	// Re-MERGE keeps the first tValid (coalesce) but always bumps lastVerified and
-	// clears tInvalid: re-observing a binding revalidates it.
+	// Re-MERGE always bumps lastVerified and clears tInvalid: re-observing a binding
+	// revalidates it. tValid is keep-first via the conditional backfill below.
 	await store.run(
-		"MATCH (s:Service {name: $service}), (t:TelemetrySource {id: $id}) MERGE (s)-[o:OBSERVED_IN]->(t) SET o.confidence = $confidence, o.discoveredBy = $discoveredBy, o.evidence = $evidence, o.lastVerified = $now, o.tValid = coalesce(o.tValid, $now), o.tInvalid = ''",
+		"MATCH (s:Service {name: $service}), (t:TelemetrySource {id: $id}) MERGE (s)-[o:OBSERVED_IN]->(t) SET o.confidence = $confidence, o.discoveredBy = $discoveredBy, o.evidence = $evidence, o.lastVerified = $now, o.tInvalid = ''",
 		{
 			service: b.service,
 			id: sourceId,
@@ -274,6 +284,14 @@ export async function recordServiceBinding(store: GraphStore, b: ServiceBindingR
 			evidence: b.evidence ?? "",
 			now,
 		},
+	);
+	// Same DDL-DEFAULT-'' trap as RESOLVES_TO above (SIO-1207): backfill tValid only
+	// when empty, so a fresh edge gets a real timestamp, a re-observed edge keeps its
+	// first one, and pre-fix edges in live graphs (all holding '') self-heal on their
+	// next re-observation.
+	await store.run(
+		"MATCH (s:Service {name: $service})-[o:OBSERVED_IN]->(t:TelemetrySource {id: $id}) WHERE coalesce(o.tValid, '') = '' SET o.tValid = $now",
+		{ service: b.service, id: sourceId, now },
 	);
 
 	if (b.incidentId) {
@@ -696,9 +714,9 @@ export async function recordTopologyEdges(store: GraphStore, edges: TopologyEdge
 			`MATCH (a:${fromLabel} {${fromKey}: $from}), (b:${toLabel} {${toKey}: $to}) MERGE (a)-[r:${rel}]->(b) SET r.discoveredBy = $discoveredBy, r.tInvalid = '', r.consecutiveMisses = 0`,
 			{ from: edge.from, to: edge.to, discoveredBy: TOPOLOGY_DISCOVERED_BY },
 		);
-		// Keep-first tValid. Pre-Stage-5 rows hold '' (the ALTER column DEFAULT), not
-		// NULL, so the coalesce-in-SET idiom from recordServiceBinding cannot apply --
-		// backfill via a conditional WHERE instead (verified on lbug 0.14.3).
+		// Keep-first tValid. Rows hold '' (the column DEFAULT), not NULL, so the
+		// coalesce-in-SET idiom cannot apply -- backfill via a conditional WHERE
+		// instead (verified on lbug 0.14.3; recordServiceBinding uses the same idiom).
 		await store.run(
 			`MATCH (a:${fromLabel} {${fromKey}: $from})-[r:${rel}]->(b:${toLabel} {${toKey}: $to}) WHERE coalesce(r.tValid, '') = '' SET r.tValid = $now`,
 			{ from: edge.from, to: edge.to, now },

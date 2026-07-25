@@ -20,6 +20,8 @@ This repository's own worktrees have no local `.data/knowledge-graph` and no `lb
 
 Populated via `kg_applied_changes { "limit": 200 }` (the 76-row full history, not just the 23 rows with a linked `Prompt`) so pre-SIO-1038 and any soft-failed-write changes are represented too, newest first:
 
+<!-- markdownlint-disable MD027 -- prompts below are quoted VERBATIM from the knowledge graph; their original indentation (multiple spaces after ">") is part of the captured ask and must not be normalized. Keep this disable when re-rendering the catalog. -->
+
 ### 2026-07-25T00:54:03.929Z — version-upgrade
 
 **Prompt:**
