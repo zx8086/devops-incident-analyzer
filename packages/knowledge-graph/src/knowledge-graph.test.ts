@@ -1000,6 +1000,13 @@ describe("SIO-1100 telemetry bindings", () => {
 		expect(edge?.cypher).toContain("o.tInvalid = ''");
 		expect(edge?.params?.service).toBe("orders");
 		expect(edge?.params?.confidence).toBe(0.7);
+		// keep-first tValid is a separate conditional backfill, NOT coalesce-in-SET
+		// (a no-op against the DDL DEFAULT ''; SIO-1207)
+		expect(edge?.cypher).not.toContain("coalesce(o.tValid");
+		const backfill = store.calls.find(
+			(c) => c.cypher.includes("[o:OBSERVED_IN]") && c.cypher.includes("coalesce(o.tValid, '') = ''"),
+		);
+		expect(backfill?.cypher).toContain("SET o.tValid = $now");
 		// provenance edge to the incident
 		expect(store.calls.some((c) => c.cypher.includes("DISCOVERED_DURING") && c.params?.iid === "inc-1")).toBe(true);
 		// no interpolation: the resourceId never appears raw in a cypher string
@@ -1022,6 +1029,14 @@ describe("SIO-1100 telemetry bindings", () => {
 			true,
 		);
 		expect(withAlias.calls.some((c) => c.cypher.includes("RESOLVES_TO"))).toBe(true);
+		// RESOLVES_TO gets the same conditional keep-first backfill as OBSERVED_IN
+		// (coalesce-in-SET is a no-op against the DDL DEFAULT ''; SIO-1207)
+		const resolvesMerge = withAlias.calls.find((c) => c.cypher.includes("MERGE (a)-[r:RESOLVES_TO]"));
+		expect(resolvesMerge?.cypher).not.toContain("coalesce(r.tValid");
+		const resolvesBackfill = withAlias.calls.find(
+			(c) => c.cypher.includes("[r:RESOLVES_TO]") && c.cypher.includes("coalesce(r.tValid, '') = ''"),
+		);
+		expect(resolvesBackfill?.cypher).toContain("SET r.tValid = $now");
 
 		const noAlias = new InMemoryGraphStore();
 		await recordServiceBinding(noAlias, {
