@@ -1,4 +1,4 @@
-// packages/agent/src/__tests__/mcp-bridge.gitlab-semantic-search.test.ts
+// agent/src/__tests__/mcp-bridge.gitlab-semantic-search.test.ts
 // SIO-1209: getGitlabSemanticSearchStatus soft-fails to [] on every non-happy
 // path (no URL configured, non-OK response, network error, malformed/
 // unexpected JSON shape) so /health can never break because of this.
@@ -6,16 +6,17 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { getGitlabSemanticSearchStatus } from "../mcp-bridge.ts";
 
 const ORIGINAL_FETCH = global.fetch;
-const ORIGINAL_URL = process.env.GITLAB_MCP_URL;
+let originalUrl: string | undefined;
 
 beforeEach(() => {
+	originalUrl = process.env.GITLAB_MCP_URL;
 	process.env.GITLAB_MCP_URL = "http://localhost:9084";
 });
 
 afterEach(() => {
 	global.fetch = ORIGINAL_FETCH;
-	if (ORIGINAL_URL === undefined) delete process.env.GITLAB_MCP_URL;
-	else process.env.GITLAB_MCP_URL = ORIGINAL_URL;
+	if (originalUrl === undefined) delete process.env.GITLAB_MCP_URL;
+	else process.env.GITLAB_MCP_URL = originalUrl;
 });
 
 describe("getGitlabSemanticSearchStatus", () => {
@@ -26,10 +27,15 @@ describe("getGitlabSemanticSearchStatus", () => {
 	});
 
 	test("returns the tracked projects on a valid response", async () => {
-		global.fetch = mock(async () =>
-			Response.json({ notReadyProjects: [{ projectId: "90000001", lastNotReadyAt: "2026-07-25T11:00:00.000Z" }] }),
-		) as unknown as typeof fetch;
+		let requestedUrl: RequestInfo | URL | undefined;
+		global.fetch = mock(async (input: RequestInfo | URL) => {
+			requestedUrl = input;
+			return Response.json({
+				notReadyProjects: [{ projectId: "90000001", lastNotReadyAt: "2026-07-25T11:00:00.000Z" }],
+			});
+		}) as unknown as typeof fetch;
 		const result = await getGitlabSemanticSearchStatus();
+		expect(requestedUrl).toBe("http://localhost:9084/status/semantic-search");
 		expect(result).toEqual([{ projectId: "90000001", lastNotReadyAt: "2026-07-25T11:00:00.000Z" }]);
 	});
 
