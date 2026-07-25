@@ -220,26 +220,34 @@ export function createLlm(role: LlmRole, agentName = "incident-analyzer"): ChatB
 	const bedrockConfig = resolveBedrockConfig(modelConfig);
 	const overrides = ROLE_OVERRIDES[role];
 	const primary = buildChatModel(bedrockConfig, overrides);
-	logger.debug({ role, tier: isLightweight ? "light" : "standard", model: bedrockConfig.model }, "LLM tier resolved");
 
 	// SIO-621: Wrap with fallback model from gitagent manifest if available.
 	// Skip for tool-binding roles (subAgent) because createReactAgent requires
 	// bindTools() which RunnableWithFallbacks does not implement.
-	if (TOOL_BINDING_ROLES.has(role)) return primary;
+	if (TOOL_BINDING_ROLES.has(role)) {
+		logger.info({ role, tier: isLightweight ? "light" : "standard", model: bedrockConfig.model }, "LLM model selected");
+		return primary;
+	}
 
 	const fallbackConfig = resolveFallbackConfig(modelConfig);
-	if (!fallbackConfig) return primary;
+	if (!fallbackConfig) {
+		logger.info({ role, tier: isLightweight ? "light" : "standard", model: bedrockConfig.model }, "LLM model selected");
+		return primary;
+	}
 
 	const fallback = buildChatModel(fallbackConfig, overrides);
-	logger.debug({ role, primary: bedrockConfig.model, fallback: fallbackConfig.model }, "LLM created with fallback");
+	logger.info(
+		{ role, tier: isLightweight ? "light" : "standard", model: bedrockConfig.model, fallback: fallbackConfig.model },
+		"LLM model selected",
+	);
 	return primary.withFallbacks({ fallbacks: [fallback] }) as unknown as ChatBedrockConverse;
 }
 
 // SIO-870: createLlm cannot return a tool-bound model with a fallback because
 // RunnableWithFallbacks has no bindTools. This binds the tools to BOTH the primary
 // and the manifest fallback first, then wraps -- so a tool-calling node (answerInfo)
-// keeps fallback resilience even when the manifest's preferred model is unusable
-// (elastic-iac prefers claude-opus-4-6, which is not a valid Bedrock id here).
+// keeps fallback resilience even if the manifest's preferred model is ever unusable
+// (see SIO-872: bare, non-suffixed model ids can be invalid Bedrock inference-profile ids).
 export function createLlmWithTools(
 	role: LlmRole,
 	tools: StructuredToolInterface[],
@@ -249,11 +257,16 @@ export function createLlmWithTools(
 	const modelConfig = agent.manifest.model;
 	const overrides = ROLE_OVERRIDES[role];
 
-	const primary = buildChatModel(resolveBedrockConfig(modelConfig), overrides).bindTools(tools);
+	const bedrockConfig = resolveBedrockConfig(modelConfig);
+	const primary = buildChatModel(bedrockConfig, overrides).bindTools(tools);
 	const fallbackConfig = resolveFallbackConfig(modelConfig);
-	if (!fallbackConfig) return primary as unknown as Runnable<BaseMessage[], BaseMessage>;
+	if (!fallbackConfig) {
+		logger.info({ role, model: bedrockConfig.model }, "LLM model selected");
+		return primary as unknown as Runnable<BaseMessage[], BaseMessage>;
+	}
 
 	const fallback = buildChatModel(fallbackConfig, overrides).bindTools(tools);
+	logger.info({ role, model: bedrockConfig.model, fallback: fallbackConfig.model }, "LLM model selected");
 	return primary.withFallbacks({ fallbacks: [fallback] }) as unknown as Runnable<BaseMessage[], BaseMessage>;
 }
 

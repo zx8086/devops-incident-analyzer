@@ -32,7 +32,7 @@ describe("manifest-loader", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		expect(agent.manifest.name).toBe("incident-analyzer");
 		expect(agent.manifest.version).toBe("0.1.0");
-		expect(agent.manifest.model?.preferred).toBe("claude-sonnet-4-6");
+		expect(agent.manifest.model?.preferred).toBe("claude-sonnet-5");
 		expect(agent.manifest.delegation?.mode).toBe("router");
 		expect(agent.manifest.compliance?.risk_tier).toBe("medium");
 	});
@@ -103,6 +103,17 @@ describe("model-factory", () => {
 	test("resolves claude-opus-4-6 to the -v1 inference profile", () => {
 		const config = resolveBedrockConfig({ preferred: "claude-opus-4-6" });
 		expect(config.model).toBe("eu.anthropic.claude-opus-4-6-v1");
+	});
+
+	// SIO-1213: Sonnet 5 / Opus 4.8 use the plain dateless EU cross-region id (no -v1 suffix).
+	test("resolves claude-sonnet-5 to Bedrock ID", () => {
+		const config = resolveBedrockConfig({ preferred: "claude-sonnet-5" });
+		expect(config.model).toBe("eu.anthropic.claude-sonnet-5");
+	});
+
+	test("resolves claude-opus-4-8 to Bedrock ID", () => {
+		const config = resolveBedrockConfig({ preferred: "claude-opus-4-8" });
+		expect(config.model).toBe("eu.anthropic.claude-opus-4-8");
 	});
 
 	test("applies temperature and maxTokens from constraints", () => {
