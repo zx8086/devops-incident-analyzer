@@ -98,6 +98,19 @@ const commentMode = $derived(canCommentOnThreadTicket && threadTicket !== null);
           {/if}
         </div>
 
+        {#if !isStreaming}
+          <!-- SIO-1211: rendered directly under the answer bubble (not after the
+               network map/findings cards) so it visually reads as elaborating
+               the answer's own "Confidence: ... (capped from ...)" line rather
+               than as a second, disconnected repetition of it. -->
+          <ConfidenceBadge
+            confidence={message.confidence}
+            confidencePreCap={message.confidencePreCap}
+            capReasons={message.capReasons}
+            lowConfidence={message.lowConfidence}
+          />
+        {/if}
+
         {#if !isStreaming && message.dataSourceFindings}
           {@const kafkaFindings = message.dataSourceFindings.get("kafka")?.kafkaFindings}
           {@const couchbaseFindings = message.dataSourceFindings.get("couchbase")?.couchbaseFindings}
@@ -142,12 +155,6 @@ const commentMode = $derived(canCommentOnThreadTicket && threadTicket !== null);
         {/if}
 
         {#if !isStreaming}
-          <ConfidenceBadge
-            confidence={message.confidence}
-            confidencePreCap={message.confidencePreCap}
-            capReasons={message.capReasons}
-            lowConfidence={message.lowConfidence}
-          />
           <CompletedProgress
             responseTime={message.responseTime}
             toolsUsed={message.toolsUsed}

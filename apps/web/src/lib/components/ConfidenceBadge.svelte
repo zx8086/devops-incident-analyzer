@@ -44,7 +44,15 @@ const showEvidence = $derived(
         <span class="text-amber-500">{expanded ? "-" : "+"}</span>
       </button>
       {#if expanded}
-        <ul class="mt-1.5 space-y-1 rounded-md border border-amber-200 bg-amber-50/60 px-3 py-2 text-amber-900">
+        <!-- SIO-1211: the answer's own "Confidence: ... (capped from evidence
+             score ...)" line already states this reason in prose (it must,
+             independent of this badge, so the text still explains itself once
+             copied into a ticket or clipboard -- see rewriteConfidenceInAnswer
+             in packages/agent/src/aggregator.ts). This dropdown is a lookup
+             aid, not a second independent explanation, hence the "as noted
+             above" framing instead of restating the sentence cold. -->
+        <p class="mt-1.5 text-[0.6875rem] text-amber-700">As noted above:</p>
+        <ul class="mt-1 space-y-1 rounded-md border border-amber-200 bg-amber-50/60 px-3 py-2 text-amber-900">
           {#each capReasons as reason (reason)}
             <li>
               <span class="font-medium">{capReasonLabel(reason)}:</span>
