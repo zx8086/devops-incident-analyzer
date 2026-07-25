@@ -43,6 +43,16 @@ describe("tokenize", () => {
 	test("PascalCase multi-word focus overlaps a hyphenated multi-word name", () => {
 		expect(tokenize("NotificationWebhookService")).toEqual(new Set(["notification", "webhook"]));
 	});
+
+	// CodeRabbit (PR #467): a single lower/digit->upper split leaves acronym runs
+	// glued to the following word (APIGateway -> "apigateway", no split before
+	// "Gateway"). The second pass splits acronym->word boundaries too.
+	test("splits an acronym-prefixed PascalCase name at the acronym/word boundary", () => {
+		expect(tokenize("APIGateway")).toEqual(tokenize("api-gateway"));
+	});
+	test("splits an acronym-suffixed PascalCase name at the word/acronym boundary", () => {
+		expect(tokenize("NotificationHTTPService")).toEqual(tokenize("notification-http-service"));
+	});
 });
 
 describe("matchesFocus", () => {

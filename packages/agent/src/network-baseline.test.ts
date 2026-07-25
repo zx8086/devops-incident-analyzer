@@ -380,5 +380,22 @@ describe("fetchNetworkBaseline", () => {
 			expect(diagnostics.candidatesMatched).toBe(0);
 			expect(diagnostics.skippedReason).toBe("no-focus-match");
 		});
+
+		// CodeRabbit (PR #467): a failed/timed-out list_clusters probe returns
+		// undefined, same as a genuinely empty {clusterArns: []} response -- must
+		// not be treated as confirmation the estate has zero ECS clusters.
+		test("a failing list_clusters probe -> skippedReason enumeration-incomplete, EC2 fallback NOT triggered", async () => {
+			const calls: Call[] = [];
+			const { outputs, diagnostics } = await fetchNetworkBaseline({
+				invoke: makeInvoke({ aws_ecs_list_clusters: new Error("throttled") }, calls),
+				hasTool: (n) => ALL_TOOLS.has(n),
+				existingOutputs: [],
+				focusServices: ["NotificationService"],
+			});
+			expect(calls.map((c) => c.toolName)).toEqual(["aws_ecs_list_clusters"]);
+			expect(outputs).toEqual([]);
+			expect(diagnostics.skippedReason).toBe("enumeration-incomplete");
+			expect(diagnostics.fallbackUsed).toBeUndefined();
+		});
 	});
 });

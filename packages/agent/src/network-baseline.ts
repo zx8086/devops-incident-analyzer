@@ -94,7 +94,12 @@ function instanceNameTag(t: z.infer<typeof InstanceTags>): string | undefined {
 	return t?.find((x) => x.Key === "Name")?.Value;
 }
 
-export type SkippedReason = "no-ecs-tools" | "no-clusters" | "no-focus-match" | "no-tasks-running";
+export type SkippedReason =
+	| "no-ecs-tools"
+	| "no-clusters"
+	| "no-focus-match"
+	| "no-tasks-running"
+	| "enumeration-incomplete";
 export type FallbackUsed = "ec2-instances";
 
 export interface NetworkBaselineDiagnostics {
@@ -174,8 +179,11 @@ function subnetIdsFromDescribeTasks(rawJson: unknown): string[] {
 	return ids;
 }
 
-function pickCandidates(candidates: CandidateService[], focusServices: string[]): CandidateService[] {
-	const matched = candidates.filter((c) => matchesFocus(c.service, focusServices));
+// Shared small-estate-cap selection: focus-matched candidates win; on zero
+// matches, a small enough estate takes everything rather than nothing (see
+// SMALL_ESTATE_CANDIDATE_CAP doc above).
+function pickByFocus<T>(candidates: T[], focusServices: string[], nameOf: (c: T) => string): T[] {
+	const matched = candidates.filter((c) => matchesFocus(nameOf(c), focusServices));
 	if (matched.length > 0) return matched.slice(0, MAX_SERVICES);
 	if (candidates.length > 0 && candidates.length <= SMALL_ESTATE_CANDIDATE_CAP) {
 		return candidates.slice(0, MAX_SERVICES);
@@ -183,13 +191,12 @@ function pickCandidates(candidates: CandidateService[], focusServices: string[])
 	return [];
 }
 
+function pickCandidates(candidates: CandidateService[], focusServices: string[]): CandidateService[] {
+	return pickByFocus(candidates, focusServices, (c) => c.service);
+}
+
 function pickInstanceCandidates(candidates: CandidateInstance[], focusServices: string[]): CandidateInstance[] {
-	const matched = candidates.filter((c) => matchesFocus(c.name, focusServices));
-	if (matched.length > 0) return matched.slice(0, MAX_SERVICES);
-	if (candidates.length > 0 && candidates.length <= SMALL_ESTATE_CANDIDATE_CAP) {
-		return candidates.slice(0, MAX_SERVICES);
-	}
-	return [];
+	return pickByFocus(candidates, focusServices, (c) => c.name);
 }
 
 // EKS (and any other non-ECS) estates have no ECS clusters to enumerate, so
@@ -263,6 +270,12 @@ export async function fetchNetworkBaseline(opts: {
 		if (candidates.length === 0) {
 			// Enumeration fallback: the turn never touched ECS at all.
 			const clustersJson = await probe("aws_ecs_list_clusters", {});
+			// A probe failure/timeout also returns undefined, same as a genuinely
+			// empty clusterArns response -- distinguish "AWS confirmed zero clusters"
+			// from "we never found out" so a transient failure doesn't masquerade as
+			// a confirmed-empty estate (wrongly triggering the EC2 fallback or
+			// skippedReason: "no-clusters" below).
+			const clustersEnumerated = clustersJson !== undefined;
 			const clusters = (ListClustersJson.safeParse(clustersJson).data?.clusterArns ?? [])
 				.slice(0, MAX_CLUSTERS)
 				.map(clusterNameFromArn);
@@ -277,11 +290,19 @@ export async function fetchNetworkBaseline(opts: {
 			candidates = pickCandidates(discovered, focusServices);
 			diagnostics.candidatesFound += discovered.length;
 			diagnostics.candidatesMatched = candidates.length;
+			if (!clustersEnumerated) diagnostics.skippedReason = "enumeration-incomplete";
 
 			// EKS (and any other non-ECS) estate: list_clusters legitimately came
 			// back empty, so fall back to EC2 instances -- the only placement
-			// signal an EKS estate exposes via these tool names.
-			if (candidates.length === 0 && clusters.length === 0 && hasTool("aws_ec2_describe_instances")) {
+			// signal an EKS estate exposes via these tool names. Only when
+			// enumeration actually completed: a failed/timed-out probe is not
+			// evidence the estate is ECS-less.
+			if (
+				candidates.length === 0 &&
+				clustersEnumerated &&
+				clusters.length === 0 &&
+				hasTool("aws_ec2_describe_instances")
+			) {
 				const { candidates: instanceCandidates, matched: instanceMatches } = await fetchInstanceCandidates(
 					probe,
 					focusServices,

@@ -38,9 +38,12 @@ export function normalize(s: string): string {
 // (e.g. `NotificationService`, from a ticket title or normalized entity name)
 // while real infra names are hyphenated (`notification-service`). Insert a
 // hyphen at lower/digit -> upper transitions BEFORE normalize()'s lowercasing
-// so tokenize() sees the same word boundaries either style expresses.
+// so tokenize() sees the same word boundaries either style expresses. Two
+// passes: lower/digit->upper (`fooBar`) and acronym->word (`APIGateway`,
+// `HTTPService`) -- a single pass leaves consecutive-capital acronyms glued
+// to the following word.
 function splitCamelCase(s: string): string {
-	return s.replace(/([a-z0-9])([A-Z])/g, "$1-$2");
+	return s.replace(/([a-z0-9])([A-Z])/g, "$1-$2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1-$2");
 }
 
 export function tokenize(s: string): Set<string> {
