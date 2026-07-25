@@ -8,6 +8,7 @@
 // erroring (mirrors the SIO-966 runKnowledgeGraphQuery wording).
 
 import {
+	appliedChanges,
 	changeHistoryForStackInstance,
 	deploymentsRunningStack,
 	type GraphStore,
@@ -176,6 +177,30 @@ export function registerCuratedTools(server: McpServer, enabled: boolean): void 
 				return `- ${r.createdAt} — "${r.prompt}" -> ${wf}${r.summary}${mr}`;
 			});
 			return text(`Prompts that produced applied changes:\n${lines.join("\n")}`);
+		},
+	);
+
+	// SIO-1203: fallback for kg_successful_prompts -- every applied change, whether or
+	// not it has a linked Prompt. The Prompt node only exists from SIO-1038 onward, so a
+	// change applied before then (KG activation was SIO-954, well before SIO-1038) has no
+	// prompt to join and is invisible to kg_successful_prompts even though it is real.
+	server.tool(
+		"kg_applied_changes",
+		"Every successfully applied elastic-iac change, newest first, whether or not it has a linked Prompt (Prompt nodes only exist from SIO-1038 onward -- older applied changes have no verbatim prompt recorded). Use this for full historical coverage; use kg_successful_prompts when you specifically need the prompt text. Read-only; no Cypher.",
+		{ limit: z.number().int().positive().max(200).optional().describe("Max rows to return (default 20)") },
+		async ({ limit }) => {
+			const store = await resolveStore();
+			if (typeof store === "string") return text(store);
+			const rows = await appliedChanges(store, limit ?? 20);
+			if (rows.length === 0)
+				return text("Graph queried: no applied ConfigChange recorded. Report this; do not invent examples from specs.");
+			const lines = rows.map((r) => {
+				const wf = r.workflow ? `${r.workflow}: ` : "";
+				const mr = r.mrUrl ? ` (${r.mrUrl})` : "";
+				const prompt = r.prompt ? `"${r.prompt}"` : "(no prompt recorded -- predates SIO-1038)";
+				return `- ${r.createdAt} — ${prompt} -> ${wf}${r.summary}${mr}`;
+			});
+			return text(`Applied changes:\n${lines.join("\n")}`);
 		},
 	);
 }

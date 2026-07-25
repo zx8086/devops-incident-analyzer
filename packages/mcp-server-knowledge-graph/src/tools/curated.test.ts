@@ -41,6 +41,7 @@ describe("curated kg_* tools", () => {
 		const client = await connectedClient();
 		const names = (await client.listTools()).tools.map((t) => t.name).sort();
 		expect(names).toEqual([
+			"kg_applied_changes",
 			"kg_deployment_history",
 			"kg_deployments_running_stack",
 			"kg_prior_root_causes",
@@ -161,5 +162,43 @@ describe("curated kg_* tools", () => {
 		_setGraphStoreForTesting(new InMemoryGraphStore());
 		const out = await call(await connectedClient(), "kg_successful_prompts", {});
 		expect(out).toContain("no applied ConfigChange has a linked Prompt");
+	});
+
+	// SIO-1203: fallback -- applied changes whether or not they have a linked Prompt.
+	test("kg_applied_changes renders a row with a prompt", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("MATCH (c:ConfigChange)-[:PROPOSED_IN]", [
+			{
+				prompt: "widen the ILM policy retention to 30 days on eu-b2b",
+				summary: "ilm retention widened",
+				workflow: "ilm-rollout",
+				mrUrl: "u1",
+				createdAt: "2026-07-10",
+			},
+		]);
+		_setGraphStoreForTesting(store);
+		const out = await call(await connectedClient(), "kg_applied_changes", {});
+		expect(out).toContain("Applied changes");
+		expect(out).toContain(
+			'2026-07-10 — "widen the ILM policy retention to 30 days on eu-b2b" -> ilm-rollout: ilm retention widened (u1)',
+		);
+	});
+
+	test("kg_applied_changes renders a pre-SIO-1038 row with no linked prompt", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("MATCH (c:ConfigChange)-[:PROPOSED_IN]", [
+			{ prompt: null, summary: "ilm retention widened", workflow: "ilm-rollout", mrUrl: "u1", createdAt: "2026-06-20" },
+		]);
+		_setGraphStoreForTesting(store);
+		const out = await call(await connectedClient(), "kg_applied_changes", {});
+		expect(out).toContain(
+			"2026-06-20 — (no prompt recorded -- predates SIO-1038) -> ilm-rollout: ilm retention widened (u1)",
+		);
+	});
+
+	test("kg_applied_changes empty result is an authoritative graph result", async () => {
+		_setGraphStoreForTesting(new InMemoryGraphStore());
+		const out = await call(await connectedClient(), "kg_applied_changes", {});
+		expect(out).toContain("no applied ConfigChange recorded");
 	});
 });

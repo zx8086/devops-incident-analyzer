@@ -556,6 +556,43 @@ export async function successfulPromptChanges(store: GraphStore, limit = 20): Pr
 	}));
 }
 
+// SIO-1203: every applied ConfigChange, newest first, WITHOUT requiring a linked
+// Prompt -- the fallback for successfulPromptChanges' INNER join. The Prompt node
+// only exists from SIO-1038 onward (recordIacPromptNode); ConfigChange/MergeRequest
+// have existed since SIO-954, so a change applied before SIO-1038 shipped has no
+// Prompt to join and is invisible to kg_successful_prompts even though it is a
+// perfectly real applied change. OPTIONAL MATCH on Prompt so a pre-SIO-1038 row still
+// surfaces (with prompt: "") instead of being dropped, while a post-SIO-1038 row still
+// gets its verbatim prompt text for free via the same Prompt.id == ConfigChange.id join.
+export interface AppliedChange {
+	prompt: string; // "" for a change recorded before the Prompt node existed (SIO-1038)
+	summary: string;
+	workflow: string;
+	mrUrl: string;
+	createdAt: string;
+}
+
+export async function appliedChanges(store: GraphStore, limit = 20): Promise<AppliedChange[]> {
+	const safeLimit = LIMIT_SCHEMA.parse(limit);
+	const rows = await store.run<{
+		prompt: string | null;
+		summary: string | null;
+		workflow: string | null;
+		mrUrl: string;
+		createdAt: string;
+	}>(
+		"MATCH (c:ConfigChange)-[:PROPOSED_IN]->(m:MergeRequest) WHERE c.outcome = 'applied' OPTIONAL MATCH (p:Prompt {id: c.id}) RETURN p.text AS prompt, c.summary AS summary, c.workflow AS workflow, m.url AS mrUrl, c.createdAt AS createdAt ORDER BY c.createdAt DESC LIMIT $limit",
+		{ limit: safeLimit },
+	);
+	return rows.map((r) => ({
+		prompt: String(r.prompt ?? ""),
+		summary: String(r.summary ?? ""),
+		workflow: String(r.workflow ?? ""),
+		mrUrl: String(r.mrUrl ?? ""),
+		createdAt: String(r.createdAt ?? ""),
+	}));
+}
+
 // SIO-1053: every ConfigChange still at outcome 'proposed' (or with no outcome set) that
 // has an MR to re-check. The reconcile sweep derives the MR iid from mrUrl and advances the
 // outcome to its true merged+apply state -- terminal outcomes (applied/failed/rejected) are
