@@ -13,6 +13,7 @@ import { GitLabRestClient } from "./gitlab-client/index.js";
 import { isOrbitIndexed, OrbitRestClient } from "./gitlab-client/orbit.js";
 import { GitLabMcpProxy } from "./gitlab-client/proxy.js";
 import { createMcpServerFactory, discoverRemoteTools, type GitLabDatasource } from "./server.ts";
+import { getEmbeddingsNotReadyProjects } from "./tools/proxy/index.ts";
 import { createTransport } from "./transport/index.ts";
 import { getRuntimeInfo } from "./utils/env.js";
 import { createContextLogger, logger } from "./utils/logger.js";
@@ -127,7 +128,8 @@ if (import.meta.main) {
 				},
 			});
 			// biome-ignore lint/style/noNonNullAssertion: SIO-779 - server mode always provides createServerFactory
-			return createTransport(ds.config.transport, serverFactory!, gitlabProbe, identityCard);
+			const factory = serverFactory!;
+			return createTransport(ds.config.transport, factory, gitlabProbe, identityCard, getEmbeddingsNotReadyProjects);
 		},
 
 		cleanupDatasource: async (ds) => {

@@ -66,8 +66,10 @@ export {
 export { createLlm, type LlmRole } from "./llm.ts";
 export {
 	createMcpClient,
+	type EmbeddingsNotReadyProject,
 	getAllTools,
 	getConnectedServers,
+	getGitlabSemanticSearchStatus,
 	getServerStates,
 	getToolsForDataSource,
 	type McpReplacedEvent,

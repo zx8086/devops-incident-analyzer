@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 let mockServerStates: Record<string, string> = {};
 let mockConnected: string[] = [];
 let mockActiveSse = 0;
+let mockGitlabSemanticSearchStatus: Array<{ projectId: string; lastNotReadyAt: string }> = [];
 let mockRuntime = {
 	graphReady: false,
 	iacGraphReady: false,
@@ -24,6 +25,8 @@ let mockRuntime = {
 mock.module("@devops-agent/agent", () => ({
 	getServerStates: () => mockServerStates,
 	getConnectedServers: () => mockConnected,
+	// SIO-1209: gitlab semantic-search embeddings passive-tracking snapshot.
+	getGitlabSemanticSearchStatus: () => Promise.resolve(mockGitlabSemanticSearchStatus),
 	AttachmentError: class AttachmentError extends Error {},
 	// SIO-1110: $lib/server/agent.ts imports GRAPH_DEADLINE_KEY at module scope.
 	GRAPH_DEADLINE_KEY: "graphDeadlineAt",
@@ -88,6 +91,7 @@ interface HealthBody {
 	timestamp: string;
 	services: Record<string, boolean>;
 	mcp: { connected: string[]; states: Record<string, string> };
+	gitlab: { semanticSearch: { notReadyProjects: Array<{ projectId: string; lastNotReadyAt: string }> } };
 	agent: { graphReady: boolean; iacGraphReady: boolean; mcpInitialized: boolean; checkpointerType: string };
 	activeSseConnections: number;
 }
@@ -104,6 +108,7 @@ describe("GET /health", () => {
 		mockServerStates = {};
 		mockConnected = [];
 		mockActiveSse = 0;
+		mockGitlabSemanticSearchStatus = [];
 		mockRuntime = { graphReady: false, iacGraphReady: false, mcpInitialized: false, checkpointerType: "memory" };
 	});
 
@@ -173,5 +178,23 @@ describe("GET /health", () => {
 		const response = await GET({} as Parameters<typeof GET>[0]);
 		const body = (await response.json()) as HealthBody;
 		expect(body.status).toBe("ok");
+	});
+
+	// --- SIO-1209 ---
+
+	test("gitlab.semanticSearch.notReadyProjects is empty when nothing is tracked", async () => {
+		mockGitlabSemanticSearchStatus = [];
+		const response = await GET({} as Parameters<typeof GET>[0]);
+		const body = (await response.json()) as HealthBody;
+		expect(body.gitlab.semanticSearch.notReadyProjects).toEqual([]);
+	});
+
+	test("surfaces last-observed embeddings-not-ready projects from the gitlab MCP server", async () => {
+		mockGitlabSemanticSearchStatus = [{ projectId: "41603223", lastNotReadyAt: "2026-07-25T11:00:00.000Z" }];
+		const response = await GET({} as Parameters<typeof GET>[0]);
+		const body = (await response.json()) as HealthBody;
+		expect(body.gitlab.semanticSearch.notReadyProjects).toEqual([
+			{ projectId: "41603223", lastNotReadyAt: "2026-07-25T11:00:00.000Z" },
+		]);
 	});
 });
