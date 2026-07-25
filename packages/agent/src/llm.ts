@@ -238,8 +238,8 @@ export function createLlm(role: LlmRole, agentName = "incident-analyzer"): ChatB
 // SIO-870: createLlm cannot return a tool-bound model with a fallback because
 // RunnableWithFallbacks has no bindTools. This binds the tools to BOTH the primary
 // and the manifest fallback first, then wraps -- so a tool-calling node (answerInfo)
-// keeps fallback resilience even when the manifest's preferred model is unusable
-// (elastic-iac prefers claude-opus-4-6, which is not a valid Bedrock id here).
+// keeps fallback resilience even if the manifest's preferred model is ever unusable
+// (see SIO-872: bare, non-suffixed model ids can be invalid Bedrock inference-profile ids).
 export function createLlmWithTools(
 	role: LlmRole,
 	tools: StructuredToolInterface[],

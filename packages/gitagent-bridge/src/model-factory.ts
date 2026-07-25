@@ -2,6 +2,9 @@
 import type { ModelConfig } from "./types.ts";
 
 const MODEL_MAP: Record<string, string> = {
+	// SIO-1213: Sonnet 5 / Opus 4.8 use the plain dateless EU cross-region id (no -v1 suffix).
+	"claude-sonnet-5": "eu.anthropic.claude-sonnet-5",
+	"claude-opus-4-8": "eu.anthropic.claude-opus-4-8",
 	"claude-sonnet-4-6": "eu.anthropic.claude-sonnet-4-6",
 	"claude-haiku-4-5": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
 	// SIO-872: the valid EU inference profile is ...-4-6-v1; the bare ...-4-6 is not a

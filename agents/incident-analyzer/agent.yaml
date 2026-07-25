@@ -6,7 +6,8 @@ description: >
   datastore health, and API gateway metrics to help humans triage incidents safely.
 
 model:
-  preferred: claude-sonnet-4-6
+  # SIO-1213: upgraded from claude-sonnet-4-6
+  preferred: claude-sonnet-5
   fallback:
     - claude-haiku-4-5
   constraints:
