@@ -43,6 +43,7 @@ import {
 	setIncidentEmbedding,
 	similarIncidents,
 	stacksUsingModule,
+	successfulPromptChanges,
 	sweepStaleTopology,
 	upsertEntities,
 	validTopologyEdges,
@@ -675,6 +676,44 @@ describe("reader", () => {
 			{ id: "c1", workflow: "slo-edit", summary: "tighten", outcome: "proposed", mrUrl: "u9", createdAt: "2026-06-19" },
 		]);
 		expect(await changeHistoryForStackInstance(store, "")).toEqual([]);
+	});
+
+	// SIO-1202: prompts that produced an applied change (Prompt.id == ConfigChange.id join).
+	test("successfulPromptChanges maps rows, [] on an empty graph", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("MATCH (p:Prompt)", [
+			{
+				prompt: "widen the ILM policy retention to 30 days on eu-b2b",
+				summary: "ilm retention widened",
+				workflow: "ilm-rollout",
+				mrUrl: "u1",
+				createdAt: "2026-06-19",
+			},
+		]);
+		const rows = await successfulPromptChanges(store);
+		expect(rows).toEqual([
+			{
+				prompt: "widen the ILM policy retention to 30 days on eu-b2b",
+				summary: "ilm retention widened",
+				workflow: "ilm-rollout",
+				mrUrl: "u1",
+				createdAt: "2026-06-19",
+			},
+		]);
+		expect(await successfulPromptChanges(new InMemoryGraphStore())).toEqual([]);
+	});
+
+	// CodeRabbit (PR #462): the reader is exported package API, reached by direct
+	// callers as well as the Zod-guarded MCP tool, so it must reject an invalid
+	// limit itself rather than trusting the caller.
+	test("successfulPromptChanges rejects an invalid limit", async () => {
+		const store = new InMemoryGraphStore();
+		await expect(successfulPromptChanges(store, 0)).rejects.toThrow();
+		await expect(successfulPromptChanges(store, -1)).rejects.toThrow();
+		await expect(successfulPromptChanges(store, 1.5)).rejects.toThrow();
+		await expect(successfulPromptChanges(store, Number.NaN)).rejects.toThrow();
+		await expect(successfulPromptChanges(store, Number.POSITIVE_INFINITY)).rejects.toThrow();
+		await expect(successfulPromptChanges(store, 201)).rejects.toThrow();
 	});
 
 	// SIO-1053: enumeration source for the KG reconcile sweep.

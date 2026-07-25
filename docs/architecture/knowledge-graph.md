@@ -41,7 +41,7 @@ GraphStore (interface)        init() | run<T>(cypher, params) | close()
 
 **Relationship types** (`REL_TYPES`): incident edges `DEPENDS_ON`, `PRODUCES_TO`, `CONSUMES_FROM`, `ROUTES_TO`, `AFFECTED_BY`, `CORRELATES_WITH`, `RESOLVED_BY`, `DOCUMENTED_IN`, `DEPLOYED_AS`, `HAS_ROOT_CAUSE` (SIO-1026); telemetry-binding edges (SIO-1100) `OBSERVED_IN` (`Service` -> `TelemetrySource`, bi-temporal: `confidence`, `discoveredBy`, `evidence`, `lastVerified`, `tValid`, `tInvalid`), `RESOLVES_TO` (`Alias` -> `Service`, bi-temporal), `DISCOVERED_DURING` (`TelemetrySource` -> `Incident`, provenance); topology edge (SIO-1104) `RUNS_ON` (`Service` -> `AwsResource`, bi-temporal + `consecutiveMisses`); as of SIO-1104 the four original topology rel tables (`DEPENDS_ON`, `PRODUCES_TO`, `CONSUMES_FROM`, `ROUTES_TO`) also carry lifecycle columns (`discoveredBy`, `tValid`, `tInvalid`, `consecutiveMisses` -- in the CREATE DDL for fresh graphs and tolerant rel-table `ALTER_MIGRATIONS` for existing ones); IaC edges `CHANGED_BY`, `PROPOSED_IN`, `USES_MODULE`, `OF_STACK`, `ON_DEPLOYMENT`, `TARGETS`, `VIA_WORKFLOW`, `IN_SESSION`, `RAN`, `PROMPTED_IN` (SIO-1038: `Prompt` -> `Session`).
 
-`reader.ts` exposes curated, parameterized read functions (`priorRelationshipsForServices`, `similarIncidents`, `rootCauseForIncident`, `priorRootCauses`, `priorChangesForDeployment`, `changeHistoryForStackInstance`, `deploymentsRunningStack`, `stacksUsingModule`, `topology`, `bindingsForServices`, `hasBinding`, …); `writer.ts` exposes MERGE-based writers (`upsertEntities`, `recordIncident`, `recordRootCause`, `recordServiceBinding`, `setIncidentEmbedding`, `recordIacChange`, `recordPipeline`, `setChangeOutcome`, `linkCorrelation`, the `seed*` functions, …).
+`reader.ts` exposes curated, parameterized read functions (`priorRelationshipsForServices`, `similarIncidents`, `rootCauseForIncident`, `priorRootCauses`, `priorChangesForDeployment`, `changeHistoryForStackInstance`, `deploymentsRunningStack`, `stacksUsingModule`, `successfulPromptChanges`, `topology`, `bindingsForServices`, `hasBinding`, …); `writer.ts` exposes MERGE-based writers (`upsertEntities`, `recordIncident`, `recordRootCause`, `recordServiceBinding`, `setIncidentEmbedding`, `recordIacChange`, `recordPipeline`, `setChangeOutcome`, `linkCorrelation`, the `seed*` functions, …).
 
 ### Service bindings — W8 write, R7 read (SIO-1100)
 
@@ -80,7 +80,7 @@ So `startKnowledgeGraphServer()` mounts a `Bun.serve` on `127.0.0.1:9087` **insi
 
 ### Tool surface
 
-Reached at `http://127.0.0.1:9087/mcp`. Four **curated** read-only tools are always registered (`tools/curated.ts`), each binding its args as params (injection-safe):
+Reached at `http://127.0.0.1:9087/mcp`. Six **curated** read-only tools are always registered (`tools/curated.ts`), each binding its args as params (injection-safe):
 
 | Tool | Input | Returns | Reader |
 |------|-------|---------|--------|
@@ -88,8 +88,10 @@ Reached at `http://127.0.0.1:9087/mcp`. Four **curated** read-only tools are alw
 | `kg_stacks_using_module` | `module` | stacks wiring that module (reuse blast radius) | `stacksUsingModule` |
 | `kg_stack_instance_history` | `deployment`, `stack` | recent change history for one cell, with outcome | `changeHistoryForStackInstance` |
 | `kg_deployment_history` | `deployment` | recent change history for a deployment, newest first | `priorChangesForDeployment` |
+| `kg_prior_root_causes` | `causeClass` | prior incidents sharing a root-cause class, with resolving runbooks (SIO-1026) | `priorRootCauses` |
+| `kg_successful_prompts` | `limit` (optional) | prompts that produced a successfully applied change, newest first (SIO-1202) — joins `Prompt.id == ConfigChange.id`, filtered to `outcome = 'applied'` | `successfulPromptChanges` |
 
-A fifth tool, **`kg_run_cypher`**, is registered **by default** (`KG_MCP_ALLOW_CYPHER=false` to disable) for ad-hoc questions the curated tools don't cover. It runs `validateReadOnlyCypher()`: it rejects any write/DDL keyword (`CREATE/MERGE/SET/DELETE/DETACH/REMOVE/DROP/ALTER/COPY/CALL/...`) after stripping comments and string literals, rejects multi-statement payloads, and binds `$params`. Its description embeds a **schema card** (node tables, relationship directions, the two lbug binder quirks, worked examples) so the model can author valid read queries; `agents/elastic-iac/skills/query-knowledge-graph/SKILL.md` holds a fuller version. Schema is deliberately NOT stored in Agent Memory — it is static and versioned with the code.
+A seventh tool, **`kg_run_cypher`**, is registered **by default** (`KG_MCP_ALLOW_CYPHER=false` to disable) for ad-hoc questions the curated tools don't cover. It runs `validateReadOnlyCypher()`: it rejects any write/DDL keyword (`CREATE/MERGE/SET/DELETE/DETACH/REMOVE/DROP/ALTER/COPY/CALL/...`) after stripping comments and string literals, rejects multi-statement payloads, and binds `$params`. Its description embeds a **schema card** (node tables, relationship directions, the two lbug binder quirks, worked examples) so the model can author valid read queries; `agents/elastic-iac/skills/query-knowledge-graph/SKILL.md` holds a fuller version. Schema is deliberately NOT stored in Agent Memory — it is static and versioned with the code.
 
 **Loud-fail (SIO-968):** when the graph is disabled or the store can't open, the tools return an explicit "KNOWLEDGE GRAPH UNAVAILABLE … do NOT answer from memory, specs, or runbooks" string instead of soft prose, so the agent reports the answer as unverified rather than fabricating a confident graph result.
 

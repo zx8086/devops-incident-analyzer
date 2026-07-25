@@ -46,6 +46,7 @@ describe("curated kg_* tools", () => {
 			"kg_prior_root_causes",
 			"kg_stack_instance_history",
 			"kg_stacks_using_module",
+			"kg_successful_prompts",
 		]);
 	});
 
@@ -134,5 +135,31 @@ describe("curated kg_* tools", () => {
 		_setGraphStoreForTesting(new InMemoryGraphStore());
 		const out = await call(await connectedClient(), "kg_prior_root_causes", { causeClass: "nope" });
 		expect(out).toContain("no prior incident recorded the nope root cause");
+	});
+
+	// SIO-1202: prompts that produced an applied change.
+	test("kg_successful_prompts renders prompt -> outcome lines", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("MATCH (p:Prompt)", [
+			{
+				prompt: "widen the ILM policy retention to 30 days on eu-b2b",
+				summary: "ilm retention widened",
+				workflow: "ilm-rollout",
+				mrUrl: "u1",
+				createdAt: "2026-06-19",
+			},
+		]);
+		_setGraphStoreForTesting(store);
+		const out = await call(await connectedClient(), "kg_successful_prompts", {});
+		expect(out).toContain("Prompts that produced applied changes");
+		expect(out).toContain(
+			'2026-06-19 — "widen the ILM policy retention to 30 days on eu-b2b" -> ilm-rollout: ilm retention widened (u1)',
+		);
+	});
+
+	test("kg_successful_prompts empty result is an authoritative graph result", async () => {
+		_setGraphStoreForTesting(new InMemoryGraphStore());
+		const out = await call(await connectedClient(), "kg_successful_prompts", {});
+		expect(out).toContain("no applied ConfigChange has a linked Prompt");
 	});
 });

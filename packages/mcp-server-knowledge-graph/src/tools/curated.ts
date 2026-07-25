@@ -15,6 +15,7 @@ import {
 	priorChangesForDeployment,
 	priorRootCauses,
 	stacksUsingModule,
+	successfulPromptChanges,
 } from "@devops-agent/knowledge-graph";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -152,6 +153,29 @@ export function registerCuratedTools(server: McpServer, enabled: boolean): void 
 				return `- ${severity}${summary} (incident ${r.incidentId})${rb}`;
 			});
 			return text(`Prior incidents with the ${causeClass} root cause:\n${lines.join("\n")}`);
+		},
+	);
+
+	// SIO-1202: prompts that produced a successfully APPLIED change -- "what to ask
+	// to get a working change", for a documentation catalog of validated examples.
+	server.tool(
+		"kg_successful_prompts",
+		"Prompts that produced a successfully applied elastic-iac change (Prompt joined to its ConfigChange via matching id, filtered to outcome = 'applied'), newest first. Read-only; no Cypher.",
+		{ limit: z.number().int().positive().max(200).optional().describe("Max rows to return (default 20)") },
+		async ({ limit }) => {
+			const store = await resolveStore();
+			if (typeof store === "string") return text(store);
+			const rows = await successfulPromptChanges(store, limit ?? 20);
+			if (rows.length === 0)
+				return text(
+					"Graph queried: no applied ConfigChange has a linked Prompt. Report this; do not invent examples from specs.",
+				);
+			const lines = rows.map((r) => {
+				const wf = r.workflow ? `${r.workflow}: ` : "";
+				const mr = r.mrUrl ? ` (${r.mrUrl})` : "";
+				return `- ${r.createdAt} — "${r.prompt}" -> ${wf}${r.summary}${mr}`;
+			});
+			return text(`Prompts that produced applied changes:\n${lines.join("\n")}`);
 		},
 	);
 }
