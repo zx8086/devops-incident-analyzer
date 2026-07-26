@@ -59,6 +59,20 @@ export function extractTextFromContent(content: unknown): string {
 	return isTextBlock(content) ? content.text : "";
 }
 
+// SIO-1233: the block TYPES present on a response, for diagnosing an empty text extraction.
+// Sonnet 5 emits reasoning blocks stochastically (MODEL_REGISTRY emitsReasoningContent, whose
+// own doc warns that `false` means "not seen in that run", never "cannot happen"), so a turn
+// can come back reasoning-only. extractTextFromContent then returns "" and a caller reads that
+// as "the model said nothing" -- which at entityExtractor means falling back to all 7
+// datasources. Logging the observed types distinguishes "reasoning-only turn" from "provider
+// renamed the text block" from "genuinely empty", which are three different bugs.
+// Type names only; block CONTENT is never returned.
+export function contentBlockTypes(content: unknown): string[] {
+	if (typeof content === "string") return ["string"];
+	const blocks = Array.isArray(content) ? content : [content];
+	return [...new Set(blocks.map((b) => (b as { type?: unknown })?.type ?? typeof b).map(String))];
+}
+
 // SIO-1218: sse-pump.ts calls this per streamed AIMessageChunk delta rather than on a complete
 // message. When one delta chunk carries more than one array block (Bedrock Converse can batch
 // adjacent text deltas under the 4.7+/5-generation models' adaptive thinking), a separator would
