@@ -52,6 +52,14 @@ agents:
     delegation: auto
   gitlab-agent:
     delegation: auto
+  # SIO-1229: these two dispatch by name via AGENT_NAMES (sub-agent.ts) but were
+  # never declared here, so loadAgent never built them into `subAgents` and
+  # buildSubAgentPrompt fell back to the ORCHESTRATOR prompt -- their SOUL.md and
+  # RULES.md had never run. Declaring them is what binds those files at runtime.
+  atlassian-agent:
+    delegation: auto
+  aws-agent:
+    delegation: auto
 
 delegation:
   mode: router
