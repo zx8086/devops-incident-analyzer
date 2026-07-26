@@ -209,6 +209,18 @@ describe("SIO-1232: isSubAgentAbort", () => {
 		expect(isSubAgentAbort("Request timeout after 30s")).toBe(false);
 		expect(isSubAgentAbort(undefined)).toBe(false);
 	});
+
+	// CodeRabbit (PR #482): the bare `abort(?:ed|error)` fallback matched INSIDE ECONNABORTED, so a
+	// transient connection abort -- which classifyToolError rightly treats as retryable, alongside
+	// ECONNRESET/ECONNREFUSED -- would be misread as a self-inflicted sub-agent timeout and lose its
+	// one legitimate retry. The fallback is now word-bounded.
+	test("does not treat a connection abort (ECONNABORTED) as a sub-agent timeout", () => {
+		expect(isSubAgentAbort("ECONNABORTED")).toBe(false);
+		expect(isSubAgentAbort("connect ECONNABORTED 10.0.0.1:443")).toBe(false);
+		// ...while a real abort worded as prose still matches.
+		expect(isSubAgentAbort("request aborted")).toBe(true);
+		expect(isSubAgentAbort("AbortError: The operation was aborted")).toBe(true);
+	});
 });
 
 describe("classifyToolError oauth typed errors", () => {

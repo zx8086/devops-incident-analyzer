@@ -38,13 +38,23 @@ const AWS_DESCRIBE_LOG_GROUPS = "aws_logs_describe_log_groups";
 const AWS_GET_QUERY_RESULTS = "aws_logs_get_query_results";
 const AWS_EMPTY_RESULTS_ADVICE_THRESHOLD = 2;
 
-// SIO-1232: polling is legitimately a duplicate call. aws_logs_get_query_results MUST be re-polled
-// with the SAME queryId while status is Running/Scheduled -- the AWS RULES.md protocol prescribes
-// it and the SIO-1159 consecutive-empty advice above depends on the repeat. Applying the generic
-// duplicate rule to it would break every CloudWatch Insights investigation, so it is exempt.
-// Declared here (not beside the other generic constants) because it references AWS_GET_QUERY_RESULTS,
-// which is initialised on the line above -- referencing it earlier would hit the const TDZ.
-const DUPLICATE_EXEMPT_TOOLS = new Set<string>([AWS_GET_QUERY_RESULTS]);
+// SIO-1232: the two AWS protocol/recovery tools are exempt from EVERY generic rule, not just the
+// duplicate check.
+//   - aws_logs_get_query_results MUST be re-polled with the SAME queryId while status is
+//     Running/Scheduled (the AWS RULES.md protocol prescribes it, and the SIO-1159 consecutive-empty
+//     advice above depends on the repeat).
+//   - aws_logs_describe_log_groups is the REQUIRED recovery call after a rejected
+//     aws_logs_start_query window (SIO-1141 re-anchor); blocking it strands that flow.
+//
+// CodeRabbit (PR #482) caught that an earlier version exempted these from the duplicate check only,
+// so the run-wide backstop could still block them. Neither tool can CONTRIBUTE to totalUnproductive
+// -- recordResult early-returns for both before the generic accounting -- so being blocked BY a
+// counter they cannot raise is incoherent. Worse, the trigger is another tool's runaway, i.e.
+// exactly the scenario this guard exists to bound: a gitlab spam reaching MAX_UNPRODUCTIVE_PER_RUN
+// would have silently killed the CloudWatch poll mid-query.
+// Declared here (not beside the other generic constants) because it references the two names
+// initialised just above -- referencing them earlier would hit the const TDZ.
+const GENERIC_GUARD_EXEMPT_TOOLS = new Set<string>([AWS_GET_QUERY_RESULTS, AWS_DESCRIBE_LOG_GROUPS]);
 
 // SIO-1162: an invalid/expired queryId polled via aws_logs_get_query_results returns a
 // bad-input _error ("The provided queryId = ... is invalid"). A queryId is estate/region
@@ -356,8 +366,10 @@ export function shouldShortCircuit(state: LoopGuardState, toolName: string, sign
 	// SIO-1232: generic guard for every tool without a bespoke ruleset. Previously this returned
 	// false immediately for anything outside GUARDED_TOOLS, i.e. no termination guarantee at all.
 	if (!GUARDED_TOOLS.has(toolName)) {
-		// Polling tools re-issue the identical call by design -- see DUPLICATE_EXEMPT_TOOLS.
-		if (!DUPLICATE_EXEMPT_TOOLS.has(toolName) && state.seenSignatures.has(signature)) return true;
+		// Protocol/recovery tools bypass EVERY generic rule, including the run-wide backstop --
+		// see GENERIC_GUARD_EXEMPT_TOOLS. This must stay the first check in this branch.
+		if (GENERIC_GUARD_EXEMPT_TOOLS.has(toolName)) return false;
+		if (state.seenSignatures.has(signature)) return true;
 		if ((state.unproductiveByTool.get(toolName) ?? 0) >= MAX_UNPRODUCTIVE_PER_TOOL) return true;
 		return state.totalUnproductive >= MAX_UNPRODUCTIVE_PER_RUN;
 	}

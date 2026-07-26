@@ -195,7 +195,11 @@ export function getSubAgentRetryTimeoutMs(env: NodeJS.ProcessEnv = process.env):
 // SIO-1232: AbortSignal.timeout rejects with a DOMException named "TimeoutError", but LangGraph may
 // re-wrap it on the way out of stream(), so match on name OR text. Exported so alignment.ts shares
 // one definition rather than growing a second, divergent regex.
-const SUB_AGENT_ABORT_RE = /aborted due to timeout|operation was aborted|signal timed out|abort(?:ed|error)/i;
+// The bare `abort(?:ed|error)` fallback is word-bounded: without \b it matches INSIDE
+// `ECONNABORTED`, so a transient connection abort (which classifyToolError rightly calls
+// retryable, alongside ECONNRESET/ECONNREFUSED) would be misread as a self-inflicted sub-agent
+// timeout and lose its one legitimate retry. Caught by CodeRabbit on PR #482.
+const SUB_AGENT_ABORT_RE = /aborted due to timeout|operation was aborted|signal timed out|\babort(?:ed|error)\b/i;
 
 export function isSubAgentAbort(message: string | undefined, errorName?: string): boolean {
 	if (errorName === "TimeoutError" || errorName === "AbortError") return true;

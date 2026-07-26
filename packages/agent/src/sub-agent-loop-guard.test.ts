@@ -348,6 +348,46 @@ describe("SIO-1232: generic loop guard for non-bespoke tools", () => {
 		expect(state.totalUnproductive).toBe(0);
 		expect(shouldShortCircuit(state, "aws_logs_get_query_results", sig)).toBe(false);
 	});
+
+	// CodeRabbit (PR #482): the exemption originally covered the duplicate check ONLY, so the
+	// run-wide backstop could still block these two. The test above could not catch it because it
+	// starts from a fresh state -- the leak only manifests from OTHER tools' activity, i.e. exactly
+	// the runaway this guard exists to bound. In the reported run the gitlab spam would have
+	// silently killed an in-flight CloudWatch poll and the SIO-1141 re-anchor recovery.
+	test("protocol/recovery tools stay callable after other tools exhaust the run-wide cap", () => {
+		const state = createLoopGuardState();
+		for (const tool of ["gitlab_search", "gitlab_list_commits", "gitlab_get_repository_tree", "gitlab_blast_radius"]) {
+			for (let i = 1; i <= 2; i++) {
+				recordResult(state, tool, toolCallSignature(tool, { q: `${tool}-${i}` }), "[]");
+			}
+		}
+		expect(state.totalUnproductive).toBe(8); // at MAX_UNPRODUCTIVE_PER_RUN
+
+		// The in-flight poll must still go through, or the Insights query is abandoned mid-flight.
+		const poll = toolCallSignature("aws_logs_get_query_results", { queryId: "q-123" });
+		expect(shouldShortCircuit(state, "aws_logs_get_query_results", poll)).toBe(false);
+
+		// ...and so must the re-anchor recovery call for a rejected start_query window.
+		const describe = toolCallSignature("aws_logs_describe_log_groups", { logGroupNamePrefix: "/aws/ecs" });
+		expect(shouldShortCircuit(state, "aws_logs_describe_log_groups", describe)).toBe(false);
+
+		// An ordinary tool is still stopped -- the exemption is targeted, not a hole in the cap.
+		expect(
+			shouldShortCircuit(state, "gitlab_pipeline_failures", toolCallSignature("gitlab_pipeline_failures", {})),
+		).toBe(true);
+	});
+
+	// Neither exempt tool can CONTRIBUTE to the counters (recordResult early-returns for both before
+	// the generic accounting), so being blocked BY a counter they cannot raise was incoherent.
+	test("exempt tools never contribute to the generic counters", () => {
+		const state = createLoopGuardState();
+		for (let i = 0; i < 5; i++) {
+			recordResult(state, "aws_logs_describe_log_groups", toolCallSignature("aws_logs_describe_log_groups", {}), "[]");
+			recordResult(state, "aws_logs_get_query_results", toolCallSignature("aws_logs_get_query_results", {}), "[]");
+		}
+		expect(state.totalUnproductive).toBe(0);
+		expect(state.unproductiveByTool.size).toBe(0);
+	});
 });
 
 // SIO-1159: a successful-but-empty CloudWatch result ({status:"Complete",results:[]})
