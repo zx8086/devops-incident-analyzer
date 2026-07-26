@@ -1009,7 +1009,7 @@ ${state.correlationFetchDirective}`
 				duration,
 				deploymentId,
 				messageCount: response.messages.length,
-				responseLength: String(lastResponse?.content ?? "").length,
+				responseLength: extractTextFromContent(lastResponse?.content ?? "").length,
 				toolErrorCount: toolErrors.length,
 				allToolsFailed,
 				...(truncated && { truncated: true }),
@@ -1124,7 +1124,7 @@ ${state.correlationFetchDirective}`
 		// synthesized answer, so append an explicit note when there is no clean final text.
 		const salvageNote =
 			"\n\n[Note: investigation was truncated at the sub-agent recursion limit; the above reflects partial findings.]";
-		const baseData = lastResponse ? String(lastResponse.content) : "No response from sub-agent";
+		const baseData = lastResponse ? extractTextFromContent(lastResponse.content) : "No response from sub-agent";
 		const data = truncated ? `${baseData}${salvageNote}` : baseData;
 
 		return {

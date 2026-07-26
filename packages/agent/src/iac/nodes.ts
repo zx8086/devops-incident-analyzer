@@ -23,6 +23,7 @@ import {
 	selectedBackend,
 } from "../memory-backend.ts";
 import { appendDailyLog, recordKeyDecision } from "../memory-writer.ts";
+import { extractTextFromContent } from "../message-utils.ts";
 import { getAgentByName } from "../prompt-context.ts";
 import { formatCommitSubject } from "./commit-style.ts";
 // SIO-1072: the pure fleet-apply parsers/classifiers moved to fleet-apply-result.ts (dependency-free
@@ -806,7 +807,7 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 	// prior AIMessage exists) OR the UI flag, so a follow-up still routes to converse when the client
 	// omits isFollowUp on a reload. The LLM can still mis-emit converse on a first message -> coerce.
 	const isFollowUp = state.isFollowUp || hasPriorAgentTurn(state);
-	const intent = coerceConverseIntent(intentFromText(String(res.content)), isFollowUp);
+	const intent = coerceConverseIntent(intentFromText(extractTextFromContent(res.content)), isFollowUp);
 	// SIO-877: pipeline-status resolves even without a thread-local mrIid -- watchPipeline
 	// falls back to the latest open agent MR (so "check my MR" survives a page reload).
 	log.info({ intent, query, hasMr: state.mrIid !== null }, "classified IaC intent");
@@ -1185,7 +1186,7 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 	const sysWithContext = `${sys}\n\n${instruction}${sessionContext}`;
 
 	const res = await llm.invoke([new SystemMessage(sysWithContext), new HumanMessage(query)]);
-	let request = parseIntentJson(String(res.content));
+	let request = parseIntentJson(extractTextFromContent(res.content));
 
 	// SIO-1001: belt-and-braces -- if the planner still left the cluster empty but this session
 	// already targets a deployment, inherit it rather than interrupting to re-ask. Suppress ONLY a
@@ -1210,7 +1211,7 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 			new AIMessage(request.clarification),
 			new HumanMessage(reply),
 		]);
-		request = { ...parseIntentJson(String(res2.content)), clarification: undefined };
+		request = { ...parseIntentJson(extractTextFromContent(res2.content)), clarification: undefined };
 		// SIO-1001: the user's clarification reply may itself omit the cluster ("yes, do it") -- keep
 		// inheriting the established deployment on the re-parse too.
 		if (!request.cluster?.trim() && known) request.cluster = known;
@@ -1303,7 +1304,7 @@ export async function answerInfo(state: IacStateType): Promise<Partial<IacStateT
 		const ai = (await llm.invoke(convo)) as AIMessage;
 		convo.push(ai);
 		const calls = ai.tool_calls ?? [];
-		if (calls.length === 0) return { messages: [new AIMessage(String(ai.content))] };
+		if (calls.length === 0) return { messages: [new AIMessage(extractTextFromContent(ai.content))] };
 		for (const call of calls) {
 			const result = await dispatchInfoToolCall(tools, call.name, (call.args ?? {}) as Record<string, unknown>);
 			convo.push(new ToolMessage({ content: result, tool_call_id: call.id ?? call.name }));
@@ -1314,7 +1315,7 @@ export async function answerInfo(state: IacStateType): Promise<Partial<IacStateT
 		...convo,
 		new HumanMessage("Summarize the answer now using what you've gathered."),
 	]);
-	return { messages: [new AIMessage(String(final.content))] };
+	return { messages: [new AIMessage(extractTextFromContent(final.content))] };
 }
 
 // SIO-930: conversational follow-up lane. Unlike every other IaC node (which reads only the latest
@@ -1337,7 +1338,7 @@ export async function converseIac(state: IacStateType): Promise<Partial<IacState
 	// No read tools available: answer from history alone (still useful -- it's an explanation).
 	if (tools.length === 0) {
 		const res = await createLlm("iacReader", AGENT).invoke([new SystemMessage(sys), ...state.messages]);
-		return { messages: [new AIMessage(String(res.content))] };
+		return { messages: [new AIMessage(extractTextFromContent(res.content))] };
 	}
 
 	const llm = createLlmWithTools("iacReader", tools, AGENT);
@@ -1348,7 +1349,7 @@ export async function converseIac(state: IacStateType): Promise<Partial<IacState
 		const ai = (await llm.invoke(convo)) as AIMessage;
 		convo.push(ai);
 		const calls = ai.tool_calls ?? [];
-		if (calls.length === 0) return { messages: [new AIMessage(String(ai.content))] };
+		if (calls.length === 0) return { messages: [new AIMessage(extractTextFromContent(ai.content))] };
 		for (const call of calls) {
 			const result = await dispatchInfoToolCall(tools, call.name, (call.args ?? {}) as Record<string, unknown>);
 			convo.push(new ToolMessage({ content: result, tool_call_id: call.id ?? call.name }));
@@ -1358,7 +1359,7 @@ export async function converseIac(state: IacStateType): Promise<Partial<IacState
 		...convo,
 		new HumanMessage("Answer the user's follow-up now using what you've gathered."),
 	]);
-	return { messages: [new AIMessage(String(final.content))] };
+	return { messages: [new AIMessage(extractTextFromContent(final.content))] };
 }
 
 // Parse the "[status] {json}" body callTool returns from elastic_cloud_list_deployments
@@ -7243,7 +7244,7 @@ async function buildMrDescription(state: IacStateType): Promise<string> {
 			"Append the open-mr skill footer. Output ONLY the final markdown.";
 		const llm = createLlm("iacDrafter", AGENT);
 		const res = await llm.invoke([new SystemMessage(`${sys}\n\n${instruction}`), new HumanMessage(context)]);
-		const body = String(res.content).trim();
+		const body = extractTextFromContent(res.content).trim();
 		return body.length > 0 ? body : fallbackMrDescription(review);
 	} catch (err) {
 		log.warn(

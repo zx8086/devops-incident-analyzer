@@ -3,9 +3,11 @@ import { describe, expect, test } from "bun:test";
 import {
 	capSubAgentTimeoutMs,
 	GRAPH_DEADLINE_KEY,
+	getAggregationMinRunwayMs,
 	getGraphBudgetMinRetryMs,
 	getGraphBudgetReserveMs,
 	getGraphDeadlineAt,
+	hasAggregationBudget,
 	hasRetryBudget,
 } from "./graph-budget.ts";
 
@@ -106,5 +108,49 @@ describe("capSubAgentTimeoutMs", () => {
 	test("floors at 1s when the budget is exhausted", () => {
 		expect(capSubAgentTimeoutMs(360_000, NOW + 100_000, NOW, EMPTY_ENV)).toBe(1_000);
 		expect(capSubAgentTimeoutMs(360_000, NOW - 100_000, NOW, EMPTY_ENV)).toBe(1_000);
+	});
+});
+
+describe("getAggregationMinRunwayMs", () => {
+	test("returns 30_000 when env unset", () => {
+		expect(getAggregationMinRunwayMs({})).toBe(30_000);
+	});
+
+	test("honors AGGREGATION_MIN_RUNWAY_MS override", () => {
+		expect(getAggregationMinRunwayMs({ AGGREGATION_MIN_RUNWAY_MS: "45000" })).toBe(45_000);
+	});
+
+	test("falls back to default on invalid env values", () => {
+		for (const raw of ["abc", "0", "-5", "0.5", ""]) {
+			expect(getAggregationMinRunwayMs({ AGGREGATION_MIN_RUNWAY_MS: raw })).toBe(30_000);
+		}
+	});
+});
+
+// SIO-1221: real-trace regression. A run where GitLab's alignment retry burned
+// its full 360s on top of the first attempt's 360s left only ~158s before the
+// graph-wide deadline -- aggregate() still attempted a full LLM call and was
+// hard-aborted mid-generation (needed 159s+, had no completion at all). This
+// verifies the budget check would have correctly identified "proceed" here
+// (158s > 30s runway floor -- the LLM call itself was the risk, not the
+// deterministic fallback path) and "skip" once the deadline is imminent.
+describe("hasAggregationBudget", () => {
+	test("true when no deadline is threaded (legacy/direct invocation)", () => {
+		expect(hasAggregationBudget(undefined, NOW, EMPTY_ENV)).toBe(true);
+	});
+
+	test("boundary: remaining must cover the 30s runway floor", () => {
+		expect(hasAggregationBudget(NOW + 29_999, NOW, EMPTY_ENV)).toBe(false);
+		expect(hasAggregationBudget(NOW + 30_000, NOW, EMPTY_ENV)).toBe(true);
+	});
+
+	test("false when the deadline already passed", () => {
+		expect(hasAggregationBudget(NOW - 1, NOW, EMPTY_ENV)).toBe(false);
+	});
+
+	test("env-shrunk runway floor flips the verdict", () => {
+		const env = { AGGREGATION_MIN_RUNWAY_MS: "10000" };
+		expect(hasAggregationBudget(NOW + 10_000, NOW, env)).toBe(true);
+		expect(hasAggregationBudget(NOW + 9_999, NOW, env)).toBe(false);
 	});
 });

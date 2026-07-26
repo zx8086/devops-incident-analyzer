@@ -138,7 +138,7 @@ If no specific datasource is mentioned, include all: ${DATA_SOURCE_IDS.join(", "
 	const isFollowUp = state.isFollowUp;
 
 	try {
-		const text = String(response.content);
+		const text = extractTextFromContent(response.content);
 		const jsonMatch = text.match(/\{[\s\S]*\}/);
 		if (jsonMatch) {
 			const parsed = ExtractionSchema.parse(JSON.parse(jsonMatch[0]));

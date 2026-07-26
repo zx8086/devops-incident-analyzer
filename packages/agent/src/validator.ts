@@ -2,6 +2,7 @@
 import { getLogger } from "@devops-agent/observability";
 import { rewriteConfidenceInAnswer } from "./aggregator.ts";
 import { deriveConfidenceCap, getConfidenceThreshold } from "./confidence-gate.ts";
+import { extractTextFromContent } from "./message-utils.ts";
 import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:validator");
@@ -55,8 +56,8 @@ export function validate(state: AgentStateType): Partial<AgentStateType> {
 	let sourceData = results.map((r) => String(r.data)).join(" ");
 	if (state.isFollowUp) {
 		const priorAssistantContent = state.messages
-			.filter((m) => m._getType() === "ai" && String(m.content) !== answer)
-			.map((m) => String(m.content))
+			.filter((m) => m._getType() === "ai" && extractTextFromContent(m.content) !== answer)
+			.map((m) => extractTextFromContent(m.content))
 			.join(" ");
 		sourceData = `${sourceData} ${priorAssistantContent}`;
 	}

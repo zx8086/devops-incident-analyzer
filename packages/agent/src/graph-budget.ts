@@ -63,3 +63,33 @@ export function capSubAgentTimeoutMs(
 	const affordable = deadlineAt - now - getGraphBudgetReserveMs(env);
 	return Math.max(1_000, Math.min(baseTimeoutMs, affordable));
 }
+
+// SIO-1221: aggregate()'s LLM call is deliberately exempt from the per-role
+// deadline (llm.ts ROLE_DEADLINES_MS.aggregator = 0) and relies solely on the
+// shared graph-wide AbortSignal. A slow fan-out (e.g. an alignment retry that
+// burns its full timeout) can leave less runway than aggregation actually
+// needs, so the hard AbortSignal kills the LLM call mid-generation with no
+// answer at all. This checks the ACTUAL remaining time (not a static guess)
+// against a floor sized for the fallback path itself: no LLM call, so it only
+// needs enough runway for the deterministic summary + downstream nodes
+// (extractFindings/checkConfidence/validate/mitigation) to run, not a full
+// aggregation LLM call.
+const AGGREGATION_MIN_RUNWAY_MS_DEFAULT = 30_000;
+
+export function getAggregationMinRunwayMs(env: NodeJS.ProcessEnv = process.env): number {
+	const raw = env.AGGREGATION_MIN_RUNWAY_MS;
+	if (raw == null || raw === "") return AGGREGATION_MIN_RUNWAY_MS_DEFAULT;
+	const parsed = Number(raw);
+	if (!Number.isFinite(parsed) || parsed < 1) return AGGREGATION_MIN_RUNWAY_MS_DEFAULT;
+	return Math.floor(parsed);
+}
+
+// Undefined deadline = no accounting (legacy/direct invocation) = always affordable.
+export function hasAggregationBudget(
+	deadlineAt: number | undefined,
+	now: number = Date.now(),
+	env: NodeJS.ProcessEnv = process.env,
+): boolean {
+	if (deadlineAt === undefined) return true;
+	return deadlineAt - now >= getAggregationMinRunwayMs(env);
+}

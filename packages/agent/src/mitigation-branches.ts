@@ -5,6 +5,7 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 import { getConfidenceThreshold } from "./confidence-gate.ts";
 import { createLlm, DeadlineExceededError, type InvokableLlm, invokeWithDeadline, type LlmRole } from "./llm.ts";
+import { extractTextFromContent } from "./message-utils.ts";
 import type { AgentStateType, MitigationFragment } from "./state.ts";
 
 const logger = getLogger("agent:mitigation-branches");
@@ -108,7 +109,7 @@ async function runBranch(
 			config as { signal?: AbortSignal; [key: string]: unknown } | undefined,
 		);
 
-		const text = String(response.content);
+		const text = extractTextFromContent(response.content);
 		const jsonMatch = text.match(/\{[\s\S]*\}/);
 		if (!jsonMatch) {
 			logger.warn({ kind: spec.kind }, "Failed to parse mitigation branch JSON");
