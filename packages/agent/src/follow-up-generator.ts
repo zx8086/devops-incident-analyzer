@@ -2,7 +2,9 @@
 import { getLogger } from "@devops-agent/observability";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
+import { z } from "zod";
 import { createLlm, DeadlineExceededError, type InvokableLlm, invokeWithDeadline } from "./llm.ts";
+import { parseLlmJson } from "./llm-json.ts";
 import { appendDailyLog } from "./memory-writer.ts";
 import type { AgentStateType } from "./state.ts";
 
@@ -76,22 +78,13 @@ function recordDailyLog(state: AgentStateType): void {
 	}
 }
 
+// The only array-shaped LLM-JSON site: the suggestions prompt asks for a bare JSON array,
+// not an object envelope.
 function parseSuggestions(content: string): string[] | null {
-	const match = content.match(/\[[\s\S]*\]/);
-	if (!match) return null;
-
-	try {
-		const parsed = JSON.parse(match[0]);
-		if (Array.isArray(parsed) && parsed.every((s) => typeof s === "string")) {
-			const filtered = parsed.filter(
-				(s: string) => s.length >= MIN_SUGGESTION_LENGTH && s.length <= MAX_SUGGESTION_LENGTH,
-			);
-			return filtered.length > 0 ? filtered.slice(0, 4) : null;
-		}
-	} catch {
-		return null;
-	}
-	return null;
+	const result = parseLlmJson(content, z.array(z.string()), { shape: "array" });
+	if (!result.ok) return null;
+	const filtered = result.data.filter((s) => s.length >= MIN_SUGGESTION_LENGTH && s.length <= MAX_SUGGESTION_LENGTH);
+	return filtered.length > 0 ? filtered.slice(0, 4) : null;
 }
 
 // LangGraph node function -- inherits trace context via RunnableConfig

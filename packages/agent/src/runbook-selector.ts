@@ -13,6 +13,7 @@ import type { NormalizedIncident } from "@devops-agent/shared";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 import { createLlm } from "./llm.ts";
+import { parseLlmJson } from "./llm-json.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import { getAgent, getRunbookCatalog, type RunbookCatalogEntry } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
@@ -38,9 +39,20 @@ class RunbookSelectionConfigError extends Error {
 	}
 }
 
+// SIO-1221: both fields were bare and required, so a single `"reasoning": null` -- which an
+// LLM emits routinely instead of omitting a field -- discarded the whole selection and fell
+// through to fallback.parse_error. `reasoning` is only ever logged, so it must not be able
+// to veto an otherwise-valid filename list.
 const RunbookSelectionResponseSchema = z.object({
-	filenames: z.array(z.string()).max(10),
-	reasoning: z.string(),
+	filenames: z
+		.array(z.string())
+		.max(10)
+		.nullish()
+		.transform((v) => v ?? []),
+	reasoning: z
+		.union([z.string(), z.number(), z.null()])
+		.optional()
+		.transform((v) => (v === null || v === undefined ? "" : String(v))),
 });
 
 export type RunbookSelectionResponse = z.infer<typeof RunbookSelectionResponseSchema>;
@@ -162,18 +174,12 @@ Rules:
 
 	// Step 4: parse response
 	const text = extractTextFromContent((response as { content: unknown }).content);
-	const jsonMatch = text.match(/\{[\s\S]*\}/);
-	if (!jsonMatch) {
+	const result = parseLlmJson(text, RunbookSelectionResponseSchema);
+	if (!result.ok) {
+		logger.warn({ reason: result.reason, detail: result.message }, "Runbook selection JSON unusable");
 		return enterFallback("fallback.parse_error", severity, fallbackConfig, startTime);
 	}
-
-	let parsed: RunbookSelectionResponse;
-	try {
-		const raw = JSON.parse(jsonMatch[0]);
-		parsed = RunbookSelectionResponseSchema.parse(raw);
-	} catch {
-		return enterFallback("fallback.parse_error", severity, fallbackConfig, startTime);
-	}
+	const parsed: RunbookSelectionResponse = result.data;
 
 	// Step 5: validate filenames against the catalog
 	const validPicks = parsed.filenames.filter((f) => validFilenames.has(f));

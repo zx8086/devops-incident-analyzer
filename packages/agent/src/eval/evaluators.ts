@@ -1,6 +1,21 @@
 // packages/agent/src/eval/evaluators.ts
 import type { Example, Run } from "langsmith/schemas";
 import OpenAI from "openai";
+import { z } from "zod";
+import { parseLlmJson } from "../llm-json.ts";
+
+// Tolerant by design: the judge's own shape drifting must score an example 0, not
+// abort the run.
+const GradeSchema = z.object({
+	meets_rubric: z
+		.boolean()
+		.nullish()
+		.transform((v) => v ?? false),
+	reasoning: z
+		.union([z.string(), z.number(), z.null()])
+		.optional()
+		.transform((v) => (v === null || v === undefined ? "" : String(v))),
+});
 
 export function datasourcesCovered(run: Run, example: Example) {
 	const expectedRaw = (example.outputs?.expectedDatasources ?? []) as unknown;
@@ -65,6 +80,16 @@ export async function responseQualityJudge(run: Run, example: Example) {
 			},
 		],
 	});
-	const grade = JSON.parse(r.choices[0]?.message?.content ?? '{"meets_rubric":false,"reasoning":"empty response"}');
-	return { key: "response_quality", score: grade.meets_rubric ? 1 : 0, comment: String(grade.reasoning ?? "") };
+	// SIO-1221: this was the only unwrapped JSON.parse of model output in the repo -- the
+	// `??` default only covered a null content, not malformed JSON, so a single bad judge
+	// response threw and killed the whole eval run rather than scoring that example 0.
+	const grade = parseLlmJson(r.choices[0]?.message?.content ?? "", GradeSchema);
+	if (!grade.ok) {
+		return {
+			key: "response_quality",
+			score: 0,
+			comment: `judge response unusable (${grade.reason}): ${grade.message}`,
+		};
+	}
+	return { key: "response_quality", score: grade.data.meets_rubric ? 1 : 0, comment: grade.data.reasoning };
 }
