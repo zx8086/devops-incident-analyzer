@@ -11,12 +11,14 @@ The orchestrator hands me a service NAME (e.g. `customer-assignments`), not
 a GitLab project id. A bare service name is NOT a valid `project_id` --
 `/api/v4/projects/{name}` returns `404 Project Not Found`.
 
-STEP 1 -- ALWAYS resolve the project FIRST. Before any project-scoped tool
-(`gitlab_list_commits`, `gitlab_get_repository_tree`, `gitlab_get_file_content`,
-`gitlab_get_blame`, `gitlab_get_commit_diff`, pipeline/MR tools), call
-`gitlab_search` scoped to `group_id: "pvhcorp"` to find the project. Use
-group-scoped search, never global search -- global project search returns
-unrelated public repos and global blob search returns 403 on GitLab.com.
+STEP 1 -- ALWAYS resolve the project FIRST. The rule is categorical: before ANY
+tool that takes a `project_id` argument -- with the single exception of the Orbit
+graph tools listed at the bottom of this skill -- call `gitlab_search` scoped to
+`group_id: "pvhcorp"` to find the project. Check the tool's own schema for a
+`project_id` parameter rather than matching against a remembered list; the tools
+bound on any given turn vary, and a tool absent from an example list still needs
+resolution. Use group-scoped search, never global search -- global project search
+returns unrelated public repos and global blob search returns 403 on GitLab.com.
 
 STEP 2 -- Use the resolved id. Take the `path_with_namespace` or numeric `id`
 from the search result (e.g. `pvhcorp/b2b/shared-services/pvh.services.styles`)
