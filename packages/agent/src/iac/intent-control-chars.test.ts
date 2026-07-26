@@ -1,13 +1,13 @@
 // agent/src/iac/intent-control-chars.test.ts
-//
-// SIO-1221: parseIntentJson has verbatim-copy fields (userSettingsYaml, phasesPatch,
-// ilmFullPolicy, ingest-pipeline bodies), so a user-pasted multi-line document is echoed
-// straight into a JSON string value. That is SIO-1219's failure shape, and here it did not
-// crash -- it silently degraded a valid gitops request into a "which cluster?" re-ask,
-// which is why it went unnoticed for the whole elastic-iac graph.
 
 import { describe, expect, test } from "bun:test";
 import { parseIntentJson } from "./nodes.ts";
+
+// SIO-1221: parseIntentJson has verbatim-copy fields (userSettingsYaml, phasesPatch,
+// ilmFullPolicy, ingest-pipeline bodies), so a user-pasted multi-line document is echoed straight
+// into a JSON string value. That is SIO-1219's failure shape, and here it did not crash -- it
+// silently degraded a valid gitops request into a "which cluster?" re-ask, which is why it went
+// unnoticed for the whole elastic-iac graph.
 
 describe("parseIntentJson — unescaped control chars in verbatim-copy fields", () => {
 	test("recovers a cluster-settings-edit whose userSettingsYaml carries raw newlines and a tab", () => {

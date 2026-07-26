@@ -22,23 +22,29 @@ interface Probe {
 	required: boolean;
 }
 
-function envUrl(key: string, fallbackPort: number): string {
-	const raw = process.env[key];
-	return raw && raw !== "" ? raw : `http://localhost:${fallbackPort}`;
+// Env is injected rather than read at module scope: this package's convention is that a
+// module import performs no process.env access, so configuration cannot be frozen at import
+// time (and the probe list stays unit-testable with a synthetic env).
+function buildProbes(env: NodeJS.ProcessEnv = process.env): Probe[] {
+	const envUrl = (key: string, fallbackPort: number): string => {
+		const raw = env[key];
+		return raw && raw !== "" ? raw : `http://localhost:${fallbackPort}`;
+	};
+	return [
+		{ name: "elastic", url: envUrl("ELASTIC_MCP_URL", 9080), required: true },
+		// Real path is the SigV4 proxy -> AgentCore, not a local broker-dialling process.
+		{ name: "kafka", url: envUrl("KAFKA_MCP_URL", 3000), required: true },
+		{ name: "couchbase", url: envUrl("COUCHBASE_MCP_URL", 9082), required: true },
+		{ name: "gitlab", url: envUrl("GITLAB_MCP_URL", 9084), required: true },
+		{ name: "atlassian", url: envUrl("ATLASSIAN_MCP_URL", 9085), required: true },
+		{ name: "aws", url: envUrl("AWS_MCP_URL", 3001), required: true },
+		// Intentionally disabled in this dev environment; the agent soft-skips it and a "degraded"
+		// /health for konnect alone is expected. Report it, do not block on it.
+		{ name: "konnect", url: envUrl("KONNECT_MCP_URL", 9083), required: false },
+	];
 }
 
-const PROBES: Probe[] = [
-	{ name: "elastic", url: envUrl("ELASTIC_MCP_URL", 9080), required: true },
-	// Real path is the SigV4 proxy -> AgentCore, not a local broker-dialling process.
-	{ name: "kafka", url: envUrl("KAFKA_MCP_URL", 3000), required: true },
-	{ name: "couchbase", url: envUrl("COUCHBASE_MCP_URL", 9082), required: true },
-	{ name: "gitlab", url: envUrl("GITLAB_MCP_URL", 9084), required: true },
-	{ name: "atlassian", url: envUrl("ATLASSIAN_MCP_URL", 9085), required: true },
-	{ name: "aws", url: envUrl("AWS_MCP_URL", 3001), required: true },
-	// Intentionally disabled in this dev environment; the agent soft-skips it and a "degraded"
-	// /health for konnect alone is expected. Report it, do not block on it.
-	{ name: "konnect", url: envUrl("KONNECT_MCP_URL", 9083), required: false },
-];
+const PROBES = buildProbes();
 
 const failures: string[] = [];
 const skipped: string[] = [];

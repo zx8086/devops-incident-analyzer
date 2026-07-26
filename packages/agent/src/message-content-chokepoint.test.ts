@@ -1,19 +1,19 @@
 // agent/src/message-content-chokepoint.test.ts
-//
-// SIO-1222: enforcement. SIO-1217/1218 added extractTextFromContent /
-// extractStreamDeltaText and converted most call sites, but nothing stopped the raw idiom
-// from regrowing -- and it did: ten sites survived that round, three of them reachable
-// with no model involvement at all (an attachment turn gives the last HumanMessage
-// block-array content, built in apps/web/src/lib/server/agent.ts).
-//
-// This test fails the build when a message's `content` is read raw. It is deliberately a
-// source scan rather than a lint rule: biome cannot tell a BaseMessage.content from an MCP
-// tool result's content, and the MCP servers read the latter legitimately.
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { getWorkspaceRoot } from "./paths.ts";
+
+// SIO-1222: enforcement. SIO-1217/1218 added extractTextFromContent / extractStreamDeltaText and
+// converted most call sites, but nothing stopped the raw idiom from regrowing -- and it did: ten
+// sites survived that round, three of them reachable with no model involvement at all (an
+// attachment turn gives the last HumanMessage block-array content, built in
+// apps/web/src/lib/server/agent.ts).
+//
+// This test fails the build when a message's `content` is read raw. It is deliberately a source
+// scan rather than a lint rule: biome cannot tell a BaseMessage.content from an MCP tool result's
+// content, and the MCP servers read the latter legitimately.
 
 const ROOT = getWorkspaceRoot();
 
@@ -71,6 +71,33 @@ function isOptedOut(lines: string[], index: number): boolean {
 // The chokepoint itself is the one whole-file exemption -- it is the implementation.
 const ALLOWED = new Set(["packages/agent/src/message-utils.ts"]);
 
+// Scans WHOLE-file text rather than line by line: a per-line scan misses
+// `String(\n  msg.content\n)`, and a formatter can produce that split at any time. Extracted so
+// the opt-out and line-attribution behaviour can be tested against synthetic sources instead of
+// only against whatever happens to be in the tree.
+function scanText(rel: string, text: string): string[] {
+	const found: string[] = [];
+	const lines = text.split("\n");
+	for (const { pattern, why } of FORBIDDEN) {
+		const rx = new RegExp(pattern.source, "gm");
+		for (const match of text.matchAll(rx)) {
+			const index = match.index ?? 0;
+			// Anchor the line number on the `content` token, NOT on match.index. For a call split
+			// across lines match.index points at `String(` / `JSON.stringify(`, so an opt-out marker
+			// beside `message.content` would be ignored and a commented-out `.content` on a later
+			// line could be reported. lastIndexOf is right for all three patterns: two end at the
+			// `content` token, and `.content as string` starts with it.
+			const contentOffset = Math.max(0, match[0].lastIndexOf("content"));
+			const lineNo = text.slice(0, index + contentOffset).split("\n").length - 1;
+			const line = lines[lineNo] ?? "";
+			if (line.trimStart().startsWith("//") || line.trimStart().startsWith("*")) continue;
+			if (isOptedOut(lines, lineNo)) continue;
+			found.push(`${rel}:${lineNo + 1}  ${why}\n    ${match[0].replace(/\s+/g, " ").trim()}`);
+		}
+	}
+	return found;
+}
+
 function walk(dir: string, out: string[] = []): string[] {
 	let entries: string[];
 	try {
@@ -99,28 +126,10 @@ describe("message content must go through message-utils", () => {
 	});
 
 	test("no source file reads a message's content raw", () => {
-		const violations: string[] = [];
-		for (const file of files) {
+		const violations = files.flatMap((file) => {
 			const rel = relative(ROOT, file);
-			if (ALLOWED.has(rel)) continue;
-			const text = readFileSync(file, "utf-8");
-			const lines = text.split("\n");
-			// SIO-1222 review: scan the WHOLE file text, not line by line. A per-line scan misses
-			// `String(\n  msg.content\n)` -- a formatter can split a long call across lines at any
-			// time, which would have been a silent bypass of this guard.
-			for (const { pattern, why } of FORBIDDEN) {
-				const rx = new RegExp(pattern.source, "gm");
-				for (const match of text.matchAll(rx)) {
-					const index = match.index ?? 0;
-					// Map the byte offset back to a 0-based line number for the opt-out check.
-					const lineNo = text.slice(0, index).split("\n").length - 1;
-					const line = lines[lineNo] ?? "";
-					if (line.trimStart().startsWith("//") || line.trimStart().startsWith("*")) continue;
-					if (isOptedOut(lines, lineNo)) continue;
-					violations.push(`${rel}:${lineNo + 1}  ${why}\n    ${match[0].replace(/\s+/g, " ").trim()}`);
-				}
-			}
-		}
+			return ALLOWED.has(rel) ? [] : scanText(rel, readFileSync(file, "utf-8"));
+		});
 		expect(
 			violations,
 			`Read message content via extractTextFromContent (complete messages) or extractStreamDeltaText\n` +
@@ -129,6 +138,41 @@ describe("message content must go through message-utils", () => {
 				`"// ${OPT_OUT} <reason>" on the line or the line above it.\n\n` +
 				violations.join("\n\n"),
 		).toEqual([]);
+	});
+
+	// SIO-1222 review: line attribution on a SPLIT call. match.index lands on `String(`, so
+	// anchoring there made an opt-out beside `message.content` invisible and let a commented-out
+	// `.content` further down be reported. These pin both directions.
+	describe("line attribution on a call split across lines", () => {
+		test("reports the line holding .content, not the line holding String(", () => {
+			const src = ["const a = 1;", "const text = String(", "\tmessage.content,", ");"].join("\n");
+			const found = scanText("synthetic.ts", src);
+			expect(found).toHaveLength(1);
+			// `message.content` is on line 3, `String(` on line 2.
+			expect(found[0]).toContain("synthetic.ts:3");
+		});
+
+		test("honours an opt-out marker on the .content line of a split call", () => {
+			const src = [
+				"const text = String(",
+				"\t// content-ok: ToolMessage body, not an AIMessage",
+				"\tmessage.content,",
+				");",
+			].join("\n");
+			expect(scanText("synthetic.ts", src)).toEqual([]);
+		});
+
+		test("still ignores a commented-out .content read", () => {
+			const src = ["// const text = String(message.content);", "const ok = 1;"].join("\n");
+			expect(scanText("synthetic.ts", src)).toEqual([]);
+		});
+
+		test("flags a split JSON.stringify on its .content line", () => {
+			const src = ["const t = JSON.stringify(", "\tlastMessage.content,", ");"].join("\n");
+			const found = scanText("synthetic.ts", src);
+			expect(found).toHaveLength(1);
+			expect(found[0]).toContain("synthetic.ts:2");
+		});
 	});
 
 	// The scan is only worth having if it actually catches the shapes that shipped as bugs.
