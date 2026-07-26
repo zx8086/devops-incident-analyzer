@@ -7,18 +7,26 @@ import type { MessageContentText } from "@langchain/core/messages";
 // instead of a plain string. String(content) on that array silently produces
 // "[object Object],[object Object],..." via Array.prototype.toString(). Always route
 // through this helper instead of String(x.content) at any LLM-response call site.
+function isTextBlock(block: unknown): block is MessageContentText {
+	return (
+		block !== null &&
+		typeof block === "object" &&
+		"type" in block &&
+		block.type === "text" &&
+		typeof (block as { text?: unknown }).text === "string"
+	);
+}
+
 export function extractTextFromContent(content: unknown): string {
 	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return String(content);
-	return (content as unknown[])
-		.filter(
-			(block): block is MessageContentText =>
-				block !== null &&
-				typeof block === "object" &&
-				"type" in block &&
-				block.type === "text" &&
-				typeof (block as { text?: unknown }).text === "string",
-		)
-		.map((block) => block.text)
-		.join("\n");
+	if (Array.isArray(content)) {
+		return content
+			.filter(isTextBlock)
+			.map((block) => block.text)
+			.join("\n");
+	}
+	// A single content block (not wrapped in an array) or any other unsupported shape --
+	// String(content) here would reproduce the exact "[object Object]" bug this helper
+	// exists to prevent. Extract text from a lone text block; otherwise empty string.
+	return isTextBlock(content) ? content.text : "";
 }

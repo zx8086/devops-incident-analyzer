@@ -48,8 +48,20 @@ describe("extractTextFromContent (SIO-1217)", () => {
 		expect(extractTextFromContent(raw)).toBe("streamed chunk");
 	});
 
-	test("falls back to String() for a non-string, non-array value", () => {
-		expect(extractTextFromContent(null)).toBe("null");
-		expect(extractTextFromContent(undefined)).toBe("undefined");
+	test("returns empty string for null/undefined instead of stringifying", () => {
+		expect(extractTextFromContent(null)).toBe("");
+		expect(extractTextFromContent(undefined)).toBe("");
+	});
+
+	// Regression for CodeRabbit comment_id=3652123185: a single content block not
+	// wrapped in an array, or any other unsupported object shape, must never fall
+	// through to String(content) -- that reproduces the exact "[object Object]" bug.
+	test("returns empty string for an unsupported object shape, never [object Object]", () => {
+		expect(extractTextFromContent({ foo: "bar" })).toBe("");
+		expect(extractTextFromContent(42)).toBe("");
+	});
+
+	test("extracts text from a single content block not wrapped in an array", () => {
+		expect(extractTextFromContent({ type: "text", text: "lone block" })).toBe("lone block");
 	});
 });
