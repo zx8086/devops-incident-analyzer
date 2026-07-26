@@ -15,7 +15,10 @@ describe("@langchain/aws reasoning-block guard (SIO-1216)", () => {
 	test("installed @langchain/aws version is at least 1.4.3", async () => {
 		const pkg = await import("@langchain/aws/package.json", { with: { type: "json" } });
 		const version = (pkg.default as { version: string }).version;
-		const parts = version.split(".").map(Number);
+		// Strip prerelease/build metadata (e.g. "1.4.3-beta.1", "1.4.3+build5") before
+		// parsing, so a prerelease of a fixed version doesn't fail this guard.
+		const core = version.split(/[-+]/)[0] ?? version;
+		const parts = core.split(".").map(Number);
 		const major = parts[0] ?? 0;
 		const minor = parts[1] ?? 0;
 		const patch = parts[2] ?? 0;
