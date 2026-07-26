@@ -7,13 +7,17 @@ import {
 	enforceCorrelationsAggregate,
 	enforceCorrelationsRouter,
 } from "../../src/correlation/enforce-node";
+import { agentToDataSourceId } from "../../src/correlation/engine";
+import { correlationRules } from "../../src/correlation/rules";
 import type { AgentStateType, PendingCorrelation } from "../../src/state";
 import {
 	baseState,
 	withCouchbaseFindings,
 	withElasticResult,
+	withElasticSyntheticUp,
 	withGitLabFindings,
 	withKafkaFindings,
+	withKafkaToolErrors,
 } from "./test-helpers";
 
 // ---------------------------------------------------------------------------
@@ -64,6 +68,74 @@ describe("enforceCorrelationsRouter — dedups by agent", () => {
 		const sends = result as Send[];
 		// All 4 rules target elastic-agent — must collapse to exactly 1 Send
 		expect(sends.length).toBe(1);
+	});
+});
+
+// SIO-1237: end-to-end through the router. The three things the cross-check needs -- that it
+// dispatches at all, that it goes to ELASTIC, and that it carries the procedure -- were each
+// broken before this ticket, and none of them is observable in a rules.ts unit test.
+describe("enforceCorrelationsRouter — synthetic cross-check reaches elastic with its procedure", () => {
+	const HOST = "ksql.prd.shared-services.eu.pvh.cloud";
+
+	function confluent503State(): AgentStateType {
+		return withKafkaToolErrors(baseState(), [
+			{
+				toolName: "ksql_get_server_info",
+				category: "transient",
+				retryable: true,
+				statusCode: 503,
+				hostname: HOST,
+				message: `MCP error -32603: ksqlDB error 503: upstream (target=${HOST})`,
+			} as never,
+		]);
+	}
+
+	function syntheticSend(sends: Send[]): Send | undefined {
+		return sends.find((s) => {
+			const args = s.args as { pendingCorrelations?: Array<{ ruleName: string }> };
+			return args.pendingCorrelations?.some((p) => p.ruleName === "infra-service-degraded-needs-synthetic-cross-check");
+		});
+	}
+
+	test("a Confluent 5xx dispatches the cross-check to the elastic datasource", () => {
+		const result = enforceCorrelationsRouter(confluent503State());
+		expect(Array.isArray(result)).toBe(true);
+		const send = syntheticSend(result as Send[]);
+		expect(send).toBeDefined();
+		const args = send?.args as { currentDataSource?: string } | undefined;
+		// The routing fix: canonical datasource id, not a bare "-agent" suffix strip.
+		expect(args?.currentDataSource).toBe("elastic");
+	});
+
+	test("the Send carries the fetchDirective naming the index, deployment and hostname", () => {
+		const result = enforceCorrelationsRouter(confluent503State());
+		const send = syntheticSend(result as Send[]);
+		expect(send).toBeDefined();
+		const args = send?.args as { correlationFetchDirective?: string } | undefined;
+		const directive = args?.correlationFetchDirective;
+		expect(directive).toBeDefined();
+		expect(directive).toContain("synthetics-*");
+		expect(directive).toContain("eu-b2b");
+		expect(directive).toContain(HOST);
+	});
+
+	// The coverage half of the fix: once the monitor for that host HAS been retrieved the
+	// rule is genuinely satisfied and must not re-dispatch.
+	test("does not re-dispatch once a synthetic monitor for that host was retrieved", () => {
+		const state = withElasticSyntheticUp(confluent503State(), HOST, "2026-07-26T12:00:00.000Z");
+		const result = enforceCorrelationsRouter(state);
+		const sends = Array.isArray(result) ? (result as Send[]) : [];
+		expect(syntheticSend(sends)).toBeUndefined();
+	});
+
+	// Guards the trap the routing fix closed: a rule whose requiredAgent does not map to a
+	// real datasource id silently falls back to elastic-agent with ALL tools bound.
+	// capella-agent -> "couchbase" is the live mismatch a suffix strip gets wrong.
+	test("every rule's requiredAgent maps to a known datasource id", () => {
+		const known = new Set(["elastic", "kafka", "couchbase", "konnect", "gitlab", "atlassian", "aws"]);
+		for (const rule of correlationRules) {
+			expect(known.has(agentToDataSourceId(rule.requiredAgent))).toBe(true);
+		}
 	});
 });
 

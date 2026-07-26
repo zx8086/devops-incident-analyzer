@@ -70,3 +70,127 @@ describe("extractEntityNames reads context.services[] (via evaluate idempotency)
 		expect(decision?.status).toBe("needs-invocation");
 	});
 });
+
+// SIO-1237: the synthetic cross-check rule keys its context on `hostnames`, which
+// extractEntityNames does not read. That dropped it into the "no entity granularity
+// available; presence of findings counts as covered" branch, so ANY successful elastic
+// result -- including one that never touched synthetics-* -- marked the rule satisfied and
+// the cross-check never dispatched. Coverage is now decided by the synthetic monitors
+// actually retrieved.
+describe("hostname-keyed coverage reads elasticFindings.syntheticMonitors (SIO-1237)", () => {
+	const HOST = "ksql.prd.shared-services.eu.pvh.cloud";
+
+	function hostnameRule(): CorrelationRule {
+		return {
+			name: "test-hostname-context",
+			description: "test",
+			trigger: () => ({ context: { hostnames: [HOST], signal: "confluent-5xx-needs-synthetic-crosscheck" } }),
+			requiredAgent: "elastic-agent",
+			retry: { attempts: 1, timeoutMs: 1000 },
+		};
+	}
+
+	function elasticState(result: Record<string, unknown>): AgentStateType {
+		return {
+			dataSourceResults: [{ dataSourceId: "elastic", status: "success", ...result }],
+		} as unknown as AgentStateType;
+	}
+
+	// The regression itself. A successful elastic result with no findings at all used to
+	// short-circuit to "satisfied", silently cancelling the fetch.
+	test("needs-invocation when elastic succeeded but retrieved no synthetic monitors", () => {
+		const state = elasticState({ data: "elastic ran and found nothing about synthetics" });
+		const [decision] = evaluate(state, [hostnameRule()]);
+		expect(decision?.status).toBe("needs-invocation");
+	});
+
+	test("needs-invocation when elastic returned unrelated findings only", () => {
+		const state = elasticState({
+			data: "APM summary for checkout",
+			elasticFindings: { apmServices: [{ serviceName: "checkout" }] },
+		});
+		const [decision] = evaluate(state, [hostnameRule()]);
+		expect(decision?.status).toBe("needs-invocation");
+	});
+
+	test("needs-invocation when a synthetic monitor was retrieved for a DIFFERENT host", () => {
+		const state = elasticState({
+			data: "synthetics",
+			elasticFindings: {
+				syntheticMonitors: [
+					{
+						name: "DS - Kafka Server - prd | Connect",
+						status: "up",
+						url: "https://connect.prd.shared-services.eu.pvh.cloud/healthcheck",
+					},
+				],
+			},
+		});
+		const [decision] = evaluate(state, [hostnameRule()]);
+		expect(decision?.status).toBe("needs-invocation");
+	});
+
+	// CodeRabbit (PR #487): the trigger batches EVERY failing endpoint into one context -- the
+	// c72 scenario 5xxs ksql + connect + schemaregistry together. Coverage must therefore be
+	// "all hosts checked", not "any host checked": with `some`, retrieving the ksql monitor
+	// alone marked the whole rule satisfied, so connect and schemaregistry were never
+	// cross-checked AND the 0.59 cap was lifted on a report that had only verified one third
+	// of its failing endpoints. Deliberately stricter than the services/topics branch below,
+	// which keeps `some` -- there, one covered entity is genuinely evidence the agent looked.
+	test("needs-invocation when only SOME of several triggered hostnames are covered", () => {
+		const multiHostRule = (): CorrelationRule => ({
+			name: "test-multi-hostname-context",
+			description: "test",
+			trigger: () => ({
+				context: {
+					hostnames: [HOST, "connect.prd.shared-services.eu.pvh.cloud"],
+					signal: "confluent-5xx-needs-synthetic-crosscheck",
+				},
+			}),
+			requiredAgent: "elastic-agent",
+			retry: { attempts: 1, timeoutMs: 1000 },
+		});
+		const state = elasticState({
+			data: "synthetics",
+			elasticFindings: { syntheticMonitors: [{ name: "ksql", status: "up", url: `https://${HOST}/healthcheck` }] },
+		});
+		const [decision] = evaluate(state, [multiHostRule()]);
+		expect(decision?.status).toBe("needs-invocation");
+	});
+
+	// url.full is a full URL, never equal to the bare hostname -- hence substring matching.
+	test("satisfied when a synthetic monitor URL contains the triggered hostname", () => {
+		const state = elasticState({
+			data: "synthetics",
+			elasticFindings: {
+				syntheticMonitors: [
+					{ name: "DS - Kafka Server - prd | KSQL Db", status: "up", url: `https://${HOST}/healthcheck` },
+				],
+			},
+		});
+		const [decision] = evaluate(state, [hostnameRule()]);
+		expect(decision?.status).toBe("satisfied");
+		expect(decision?.reason).toContain("already covered");
+	});
+
+	// A monitor can be named for its endpoint with url absent from the parsed document.
+	test("satisfied when the monitor NAME carries the hostname and url is absent", () => {
+		const state = elasticState({
+			data: "synthetics",
+			elasticFindings: { syntheticMonitors: [{ name: `healthcheck ${HOST}`, status: "down" }] },
+		});
+		const [decision] = evaluate(state, [hostnameRule()]);
+		expect(decision?.status).toBe("satisfied");
+	});
+
+	// Coverage means "we looked", not "the answer was reassuring" -- a DOWN monitor still
+	// answers the question the rule asked.
+	test("a DOWN monitor for the host counts as covered", () => {
+		const state = elasticState({
+			data: "synthetics",
+			elasticFindings: { syntheticMonitors: [{ name: "ksql", status: "down", url: `https://${HOST}/healthcheck` }] },
+		});
+		const [decision] = evaluate(state, [hostnameRule()]);
+		expect(decision?.status).toBe("satisfied");
+	});
+});

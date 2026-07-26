@@ -1,4 +1,5 @@
 // agent/src/correlation/engine.ts
+import type { DataSourceResult } from "@devops-agent/shared";
 import type { AgentStateType } from "../state";
 import type { CorrelationRule, TriggerMatch } from "./rules";
 
@@ -41,6 +42,29 @@ function alreadyCovered(state: AgentStateType, rule: CorrelationRule, match: Tri
 	const result = state.dataSourceResults.find((r) => r.dataSourceId === dataSourceId);
 	if (result?.status !== "success" || !result.data) return false;
 
+	// SIO-1237: hostname-keyed rules are checked against the synthetic monitors actually
+	// retrieved, BEFORE the generic fallback below. extractEntityNames reads only
+	// groupIds/services/topics, so a `hostnames` context yielded zero entities and fell into
+	// the "presence of findings counts as covered" branch -- marking
+	// infra-service-degraded-needs-synthetic-cross-check satisfied whenever ANY successful
+	// elastic result existed, including one that never touched synthetics-*. The cross-check
+	// therefore never dispatched. Substring rather than exact match because url.full is a
+	// full URL (https://ksql.prd.../healthcheck), never equal to the bare hostname.
+	//
+	// EVERY, not some (CodeRabbit on PR #487): the trigger batches all failing endpoints into
+	// one context -- the c72 scenario 5xxs ksql + connect + schemaregistry together -- and the
+	// fetchDirective asks for a lookup per hostname. With `some`, retrieving one monitor marked
+	// the whole rule satisfied, leaving the other endpoints never cross-checked and lifting the
+	// 0.59 cap on a report that had verified a third of its failing hosts. Partial coverage is
+	// not coverage. This is deliberately stricter than the services/topics branch below, which
+	// keeps `some`: an unresolvable host (no synthetic registered) leaves the rule degraded and
+	// capped, which is the documented intent for the missing-monitor case.
+	const triggeredHostnames = extractHostnames(match.context);
+	if (triggeredHostnames.length > 0) {
+		const targets = syntheticMonitorTargets(result);
+		return triggeredHostnames.every((host) => targets.some((target) => target.includes(host)));
+	}
+
 	const triggeredEntities = extractEntityNames(match.context);
 	if (triggeredEntities.length === 0) {
 		// no entity granularity available; presence of findings counts as covered
@@ -65,6 +89,21 @@ const AGENT_TO_DATASOURCE: Record<string, string> = {
 
 export function agentToDataSourceId(agent: string): string {
 	return AGENT_TO_DATASOURCE[agent] ?? agent.replace(/-agent$/, "");
+}
+
+// SIO-1237: kept separate from extractEntityNames because hostnames are matched by
+// substring against monitor URLs, not by exact name against data.services[].
+function extractHostnames(context: Record<string, unknown>): string[] {
+	if (!Array.isArray(context.hostnames)) return [];
+	return context.hostnames.filter((h): h is string => typeof h === "string" && h.length > 0);
+}
+
+// The endpoints a synthetic monitor result actually covers. `url` is the monitored
+// url.full; `name` is included because a monitor can be named for its endpoint even when
+// the URL field is absent from the parsed document.
+function syntheticMonitorTargets(result: DataSourceResult): string[] {
+	const monitors = result.elasticFindings?.syntheticMonitors ?? [];
+	return monitors.flatMap((m) => [m.url, m.name].filter((v): v is string => typeof v === "string"));
 }
 
 function extractEntityNames(context: Record<string, unknown>): string[] {

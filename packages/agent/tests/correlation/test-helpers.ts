@@ -143,12 +143,29 @@ export function withCouchbaseFindings(state: AgentStateType, couchbaseFindings: 
 	};
 }
 
+// SIO-1237: corrected to the shape production actually produces. This helper was unused and
+// had drifted on BOTH axes: extractFindings writes extractElasticFindings' output to
+// result.elasticFindings (result.data is the sub-agent's prose string), and the monitor fields
+// are ElasticSyntheticMonitorSchema's `name`/`observedAt` -- not `monitorName`/`timestamp`.
+// A state built the old way is invisible to the engine's hostname-coverage check.
 export function withElasticSyntheticUp(state: AgentStateType, hostname: string, when: string): AgentStateType {
-	return withElasticResult(state, {
-		syntheticMonitors: [
-			{ url: `https://${hostname}/healthcheck`, status: "up", timestamp: when, monitorName: `test-${hostname}` },
+	return {
+		...state,
+		dataSourceResults: [
+			...state.dataSourceResults,
+			{
+				dataSourceId: "elastic",
+				status: "success",
+				data: "prose summary placeholder",
+				duration: 100,
+				elasticFindings: {
+					syntheticMonitors: [
+						{ name: `test-${hostname}`, status: "up", url: `https://${hostname}/healthcheck`, observedAt: when },
+					],
+				},
+			} as never,
 		],
-	});
+	};
 }
 
 export function withElasticResult(state: AgentStateType, data: unknown): AgentStateType {
