@@ -12,6 +12,15 @@ export const GRAPH_DEADLINE_KEY = "graphDeadlineAt";
 // Wall-clock runway kept for aggregate + extractFindings + validate + mitigation
 // after the fan-out/retry phase. Sized from the incident trace: aggregation's
 // LLM call needs ~30-60s; 120s leaves margin for the downstream nodes.
+//
+// SIO-1225: RE-MEASURED after the SIO-1213 model change and deliberately left UNCHANGED. The
+// original 30-60s figure was a Sonnet 4.6 observation, so it could not be assumed to still
+// hold. SIO-1224's probe timed the aggregation-shaped call (16384-token budget, full six-section
+// report) on the current models: worst case 45.3s on Sonnet 5, 41.1s on Opus 4.8, 29.0s on
+// Haiku 4.5 -- still inside the original range, and 120s keeps ~2.7x headroom. Raising it would
+// take runway away from the fan-out for no measured reason. Reports:
+// docs/reference/model-probes/. Note this bounds ONE call; the end-to-end 900s graph budget is
+// still only verifiable by a real investigation (SIO-1220).
 const GRAPH_BUDGET_RESERVE_MS_DEFAULT = 120_000;
 // Smallest retry window still worth dispatching: less than a minute of sub-agent
 // runtime rarely recovers a source that just burned its full timeout.

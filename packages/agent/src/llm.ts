@@ -68,7 +68,12 @@ export type LlmRole =
 export const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	orchestrator: {},
 	classifier: { temperature: 0 },
-	subAgent: {},
+	// SIO-1225: was {} -- inheriting the orchestrator manifest's max_tokens: 4096. SIO-1224's
+	// probe measured Sonnet 5 (which is what this role resolves to) needing ~4,300-4,700 output
+	// tokens for a full report and TRUNCATING at 4096, where Haiku 4.5 finished in 3,874 and
+	// Opus 4.8 in 2,964. A truncated sub-agent report is the SIO-649 failure one layer down: the
+	// findings block is cut off and the aggregator silently correlates less than was found.
+	subAgent: { maxTokens: 8192 },
 	// SIO-649: Multi-deployment elastic fan-out produces reports with a per-deployment
 	// findings block (10 deployments = 10 tables) plus a mandatory trailing Confidence line.
 	// Default maxTokens was truncating the end of the report before the confidence line,
@@ -86,16 +91,29 @@ export const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	runbookSelector: { temperature: 0, maxTokens: 512 },
 	awsEstateRouter: { temperature: 0, maxTokens: 256 },
 	// elastic-iac: deterministic intent/guard parsing; the drafter writes Terraform diffs.
-	iacPlanner: { temperature: 0, maxTokens: 2048 },
+	// SIO-1225: iacPlanner raised 2048 -> 8192. Its intent JSON embeds VERBATIM user-pasted
+	// documents (ilmFullPolicy, phasesPatch, userSettingsYaml, ingest-pipeline bodies), so its
+	// output scales with whatever the operator pasted -- the least bounded output in the repo,
+	// and it had the smallest budget. Truncation here does not error: parseIntentJson falls
+	// through to "Which cluster and what change should I make?", silently turning a valid
+	// gitops request into a re-ask.
+	iacPlanner: { temperature: 0, maxTokens: 8192 },
 	iacDrafter: { temperature: 0.1, maxTokens: 8192 },
 	iacReviewer: { temperature: 0, maxTokens: 4096 },
 	iacClassifier: { temperature: 0, maxTokens: 16 },
-	iacReader: { temperature: 0, maxTokens: 4096 },
+	// SIO-1225: 4096 -> 8192. Primary is Opus 4.8 (measured floor 4096) but the manifest
+	// FALLBACK is Sonnet 5 (floor 8192), so the old budget truncated a long info answer
+	// whenever the chain failed over -- the failure mode a fallback is supposed to prevent.
+	iacReader: { temperature: 0, maxTokens: 8192 },
 	// SIO-1015: deterministic worthiness judgment + a compact skill proposal as JSON.
 	skillLearner: { temperature: 0, maxTokens: 1024 },
 	// SIO-1126: deterministic distillation of a resolved ticket into a structured
 	// LearningProposal (root cause + facts as JSON).
-	hilDistiller: { temperature: 0, maxTokens: 4096 },
+	// SIO-1225: 4096 -> 8192. The proposal carries a root cause, up to 10 bindings, 3 heuristics
+	// and 6 memory facts, each with 1-3 VERBATIM evidence quotes from the ticket, and it runs on
+	// Sonnet 5 (measured floor 8192). A truncated proposal fails the JSON parse and the user is
+	// told the ticket "could not be distilled".
+	hilDistiller: { temperature: 0, maxTokens: 8192 },
 	// SIO-1149: deterministic per-bullet verdicts as compact JSON.
 	gapsJudge: { temperature: 0, maxTokens: 1024 },
 	// SIO-1158: deterministic per-claim verdicts as compact JSON.
@@ -118,15 +136,15 @@ export const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 // entityExtractor (4096), mitigation + mitigate* (4096, bullet lists), skillLearner (1024,
 // a fixed five-field proposal capped at "1-4 sentences"), classifier, iacClassifier (16),
 // awsEstateRouter (256), followUp (256), actionProposal (512), runbookSelector (512),
-// gapsJudge (1024), absenceJudge (1024). `orchestrator` is excluded because it is declared
-// but never constructed (verified: no createLlm("orchestrator") call site exists).
+// gapsJudge (1024), absenceJudge (1024). `orchestrator` and `iacReviewer` are excluded because
+// they are declared but never constructed -- verified: no createLlm("orchestrator") or
+// createLlm("iacReviewer") call site exists outside tests, so budgeting them proves nothing.
 export const LONG_FORM_ROLES: ReadonlySet<LlmRole> = new Set<LlmRole>([
 	"aggregator",
 	"responder",
 	"subAgent",
 	"iacDrafter",
 	"iacReader",
-	"iacReviewer",
 	"hilDistiller",
 	// The sharpest case: iacPlanner's intent JSON embeds VERBATIM user-pasted documents
 	// (ilmFullPolicy, phasesPatch, userSettingsYaml), so its output scales with the paste --
@@ -228,9 +246,14 @@ const TOOL_BINDING_ROLES: ReadonlySet<LlmRole> = new Set(["subAgent"]);
 // otherwise. Rollout shipped classifier-only; gapsJudge (SIO-1149) is light by design
 // (a per-bullet boolean verdict needs no frontier model). The others are eligible to
 // be flipped to light per-role via AGENT_LLM_TIER_<ROLE>=light after a LangSmith
-// replay eval, without a code change. Every tierable role is invoke-only (not in
-// TOOL_BINDING_ROLES), so withFallbacks is unchanged and a light-model failure falls
-// UP to the standard manifest model.
+// replay eval, without a code change.
+//
+// SIO-1225 CORRECTION: this comment previously claimed "a light-model failure falls UP to the
+// standard manifest model". It does not. The light tier resolves its config from the borrowed
+// elastic-agent sub-agent manifest, and resolveFallbackConfig reads the fallback list from that
+// SAME config -- the sub-agent manifests declare no `fallback:` key, so it returns null and
+// light-tier roles have NO fallback at all. Flipping a role to light therefore trades a
+// Sonnet-5-with-Haiku-fallback for a bare Haiku.
 const DEFAULT_LIGHTWEIGHT_ROLES: ReadonlySet<LlmRole> = new Set(["classifier", "gapsJudge", "absenceJudge"]);
 const TIERABLE_ROLES: ReadonlySet<LlmRole> = new Set([
 	"classifier",
