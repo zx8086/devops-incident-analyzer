@@ -310,7 +310,7 @@ The filtered tool set is larger than expected.
 1. Check if the entity extractor returned too many action categories for the datasource
 2. Verify action categories are not overlapping excessively (same tools in multiple categories)
 3. Check `MAX_TOOLS_PER_AGENT` (25) -- even filtered results are capped at this limit
-4. Review whether the `MIN_FILTERED_TOOLS` (5) threshold is causing fallback to tier 2
+4. Review whether the `MIN_FILTERED_TOOLS` (1) threshold is causing fallback to tier 2
 
 ### Action Category Not Matching
 

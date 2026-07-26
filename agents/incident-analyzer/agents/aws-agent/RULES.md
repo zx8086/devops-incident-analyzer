@@ -126,10 +126,10 @@ that value IS the continuation token (equivalently, the response has a top-level
 tool with the SAME args plus that token value, passed in the tool's pagination input argument:
 
 - `nextToken`: `aws_ec2_*`, `aws_ecs_list_*`, `aws_config_list_discovered_resources`,
-  `aws_messaging_sfn_list_state_machines`, `aws_logs_describe_log_groups`,
+  `aws_stepfunctions_list_state_machines`, `aws_logs_describe_log_groups`,
   `aws_health_describe_events`
 - `NextToken`: `aws_cloudwatch_describe_alarms`, `aws_cloudformation_*`,
-  `aws_config_describe_config_rules`, `aws_messaging_sns_list_topics`
+  `aws_config_describe_config_rules`, `aws_sns_list_topics`
 - `Marker`: `aws_rds_describe_db_*`, `aws_elasticache_describe_*`,
   `aws_lambda_list_functions` (Lambda's response names the token `NextMarker`; pass it back as `Marker`)
 - `PaginationToken`: `aws_resourcegroupstagging_get_resources`

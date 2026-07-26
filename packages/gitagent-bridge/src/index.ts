@@ -31,7 +31,7 @@ export {
 export { getRelatedTools, withRelatedTools } from "./related-tools.ts";
 export { mergeShared, type SharedMergeResult } from "./shared-merge.ts";
 export { buildSystemPrompt, buildSystemPromptParts, type SystemPromptParts } from "./skill-loader.ts";
-export { extractSkillToolNames, type SkillSource } from "./skill-tools.ts";
+export { extractPromptToolNames, extractSkillToolNames, type SkillSource } from "./skill-tools.ts";
 export {
 	buildFacadeMap,
 	type FacadeMap,

@@ -20,9 +20,17 @@ const TOOL_TOKEN = /`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)`/g;
 
 // Structural subset of LoadedAgent -- keeps this pure and testable without building a
 // whole manifest. LoadedAgent satisfies it structurally.
+//
+// SIO-1234: widened with the four non-skill prompt bodies. They are optional so every
+// existing caller (and every test fixture that supplies only the two maps) still satisfies
+// the interface; only extractPromptToolNames reads them.
 export interface SkillSource {
 	skills: Map<string, string>;
 	sharedSkills: Map<string, string>;
+	soul?: string;
+	rules?: string;
+	duties?: string;
+	sharedContext?: string;
 }
 
 function collectFrom(body: string | undefined, into: Set<string>): void {
@@ -52,5 +60,28 @@ export function extractSkillToolNames(agent: SkillSource, activeSkills?: string[
 		collectFrom(agent.sharedSkills.get(name), names);
 	}
 
+	return [...names].sort();
+}
+
+// SIO-1234: every tool name the SYSTEM PROMPT names -- skills plus the four bodies
+// buildSystemPromptParts also concatenates (soul, sharedContext, rules, duties).
+//
+// This exists for the build-time CANARY, deliberately NOT for the bind path. Widening
+// extractSkillToolNames (which feeds withSkillPromisedTools) to cover RULES.md would
+// prepend 62 tools for aws-agent; the 25-tool slice would then keep 25 prepended names and
+// ZERO action-selected ones, and *which* 25 survived would be decided by MCP enumeration
+// order rather than by relevance to the query. The binding fix is composeBoundTools'
+// reserved action quota in sub-agent.ts; this function only measures the disagreement.
+//
+// aws-agent is the case that motivated this: it declares no `skills:` block at all, so
+// extractSkillToolNames returns [] for it while its 32.7KB RULES.md names 62 tools.
+export function extractPromptToolNames(agent: SkillSource, activeSkills?: string[]): string[] {
+	const names = new Set(extractSkillToolNames(agent, activeSkills));
+	// Order matches buildSystemPromptParts; irrelevant to a Set, but keeps the two readable
+	// side by side when checking that nothing in the prompt is missed.
+	collectFrom(agent.soul, names);
+	collectFrom(agent.sharedContext, names);
+	collectFrom(agent.rules, names);
+	collectFrom(agent.duties, names);
 	return [...names].sort();
 }

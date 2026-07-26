@@ -703,7 +703,7 @@ The `input_schema.properties.action.enum` array in the same YAML lists all valid
 
 `selectToolsByAction()` implements a 3-tier fallback to ensure every sub-agent receives a usable tool set:
 
-**Tier 1 -- Extracted actions:** If the entity extractor produced `toolActions` for this datasource and the resolved tool names match at least `MIN_FILTERED_TOOLS` (5) from the available MCP tools, use that filtered set (capped at `MAX_TOOLS_PER_AGENT` = 25).
+**Tier 1 -- Extracted actions:** If the entity extractor produced `toolActions` for this datasource and the resolved tool names match at least `MIN_FILTERED_TOOLS` (1) from the available MCP tools, use that filtered set (capped at `MAX_TOOLS_PER_AGENT` = 25).
 
 **Tier 2 -- All curated tools:** If tier 1 fails (no extracted actions, unresolvable actions, or fewer than 5 matches), fall back to all tool names listed across every action category in the YAML via `getAllActionToolNames()`. This provides the full curated set without action-based filtering, still excluding any MCP tools not mentioned in the YAML.
 
