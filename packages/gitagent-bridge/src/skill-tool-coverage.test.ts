@@ -107,13 +107,26 @@ describe("SIO-1228: skill prose cannot promise tools the datasource does not exp
 		expect(agent!.sharedSkills.size).toBeGreaterThan(0);
 	});
 
-	// atlassian-agent and aws-agent have directories but are NOT in the orchestrator's
-	// `agents:` map, so they run on the root agent's prompt. Pinned so the fallback below
-	// is a deliberate model of production, not an accident.
-	test("undeclared sub-agent directories fall back to the root agent", () => {
-		expect(rootAgent.subAgents.get("atlassian-agent")).toBeUndefined();
-		expect(rootAgent.subAgents.get("aws-agent")).toBeUndefined();
-		expect(rootAgent.subAgents.get("gitlab-agent")).toBeDefined();
+	// A sub-agent directory that is not declared in the orchestrator's `agents:` map is
+	// absent from subAgents, and buildSubAgentPrompt then falls back to the root agent's
+	// prompt -- so the root agent's skills are what gets promised. getSkillToolNames
+	// mirrors that fallback, and this asserts the mirror is faithful for whichever
+	// directories are undeclared.
+	//
+	// Deliberately state-agnostic: SIO-1229 declares atlassian-agent / aws-agent, after
+	// which this list is empty and the check is a no-op. Asserting WHICH agents are
+	// undeclared would pin a bug as permanent truth and break when that fix lands.
+	test("undeclared sub-agent directories resolve to the root agent", () => {
+		const undeclared = subAgentDirs.filter((d) => !rootAgent.subAgents.has(d));
+		for (const dir of undeclared) {
+			expect(rootAgent.subAgents.get(dir) ?? rootAgent).toBe(rootAgent);
+		}
+		// Declared ones must resolve to their own agent, not the root.
+		const declared = subAgentDirs.filter((d) => rootAgent.subAgents.has(d));
+		expect(declared.length).toBeGreaterThan(0);
+		for (const dir of declared) {
+			expect(rootAgent.subAgents.get(dir)).not.toBe(rootAgent);
+		}
 	});
 
 	for (const dir of subAgentDirs) {

@@ -193,11 +193,12 @@ export function getSkillToolNames(agentName: string): string[] {
 	let names: string[] = [];
 	try {
 		const rootAgent = getAgent();
-		// MUST mirror buildSubAgentPrompt's fallback exactly. atlassian-agent and aws-agent
-		// have directories but are NOT declared in the orchestrator's `agents:` map, so
-		// subAgents.get() misses and they run on the ROOT agent's prompt -- which promises
-		// the ROOT agent's skills. Resolving to [] here would leave those promises unbound,
-		// recreating the very divergence this fixes.
+		// MUST mirror buildSubAgentPrompt's fallback exactly: a sub-agent directory that is
+		// not declared in the orchestrator's `agents:` map is absent from subAgents, and the
+		// prompt builder then falls back to the ROOT agent -- so the ROOT agent's skills are
+		// what gets promised. Resolving to [] here would leave those promises unbound,
+		// recreating the very divergence this fixes. (SIO-1229 declares the two agents that
+		// hit this path today; the mirror stays correct either way.)
 		names = extractSkillToolNames(rootAgent.subAgents.get(agentName) ?? rootAgent);
 	} catch {
 		names = [];
