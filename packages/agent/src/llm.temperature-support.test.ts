@@ -82,3 +82,92 @@ describe("buildChatModel via createLlm (SIO-1214)", () => {
 		expect(primaryOptions).toHaveProperty("temperature");
 	});
 });
+
+// SIO-1235: the subAgent role now resolves from the SPECIALIST's manifest, not root's.
+// Before this, all 7 sub-agent manifests' `model.preferred: claude-haiku-4-5` was dead config
+// (since the 125b3f9e scaffold) -- which is why flipping one line in the root agent.yaml at
+// SIO-1213 silently moved every specialist onto Sonnet 5.
+describe("subAgent resolves its own manifest model (SIO-1235)", () => {
+	const HAIKU = "eu.anthropic.claude-haiku-4-5-20251001-v1:0";
+	const ROOT = "eu.anthropic.claude-sonnet-5";
+
+	beforeEach(() => {
+		constructorCalls = [];
+		delete process.env.SUB_AGENT_MANIFEST_MODEL_ENABLED;
+	});
+
+	afterEach(() => {
+		constructorCalls = [];
+		delete process.env.SUB_AGENT_MANIFEST_MODEL_ENABLED;
+	});
+
+	test.each([
+		"elastic-agent",
+		"kafka-agent",
+		"capella-agent",
+		"konnect-agent",
+		"gitlab-agent",
+		"atlassian-agent",
+		"aws-agent",
+	])("%s builds Haiku 4.5 from its own manifest", (subAgentName) => {
+		createLlm("subAgent", "incident-analyzer", subAgentName);
+		const options = optionsFor(HAIKU);
+		expect(options).toBeDefined();
+		// subAgent is a TOOL_BINDING_ROLE, so createLlm skips withFallbacks -- exactly one model
+		// is constructed. More than one would mean a fallback chain crept back in.
+		expect(constructorCalls).toHaveLength(1);
+	});
+
+	// temperature: 0.1 is declared in every sub-agent manifest and had NEVER applied, because the
+	// root model (Sonnet 5) has acceptsTemperature: false and llm.ts drops it. Haiku accepts it.
+	test("temperature 0.1 from the manifest now actually applies", () => {
+		createLlm("subAgent", "incident-analyzer", "gitlab-agent");
+		expect(optionsFor(HAIKU)).toHaveProperty("temperature", 0.1);
+	});
+
+	// ROLE_OVERRIDES.subAgent.maxTokens wins over the manifest's constraints.max_tokens: 2048,
+	// via `overrides.maxTokens ?? bedrockConfig.maxTokens`. 8192 clears haiku's 4096 floor;
+	// silently inheriting 2048 would truncate long sub-agent answers.
+	test("maxTokens stays 8192 -- the role override beats the manifest's 2048", () => {
+		createLlm("subAgent", "incident-analyzer", "kafka-agent");
+		expect(optionsFor(HAIKU)).toHaveProperty("maxTokens", 8192);
+	});
+
+	test("without a subAgentName it still resolves from the root manifest", () => {
+		createLlm("subAgent");
+		expect(optionsFor(ROOT)).toBeDefined();
+		expect(optionsFor(HAIKU)).toBeUndefined();
+	});
+
+	test.each([
+		["false", ROOT],
+		["0", ROOT],
+		["true", HAIKU],
+	])("SUB_AGENT_MANIFEST_MODEL_ENABLED=%s resolves %s", (value, expectedModel) => {
+		process.env.SUB_AGENT_MANIFEST_MODEL_ENABLED = value;
+		createLlm("subAgent", "incident-analyzer", "gitlab-agent");
+		expect(optionsFor(expectedModel)).toBeDefined();
+	});
+
+	// The kill switch must restore the PREVIOUS behaviour exactly, temperature included -- Sonnet 5
+	// rejects the key outright, so leaking it back would break every sub-agent call.
+	test("kill switch restores root model with no temperature key", () => {
+		process.env.SUB_AGENT_MANIFEST_MODEL_ENABLED = "false";
+		createLlm("subAgent", "incident-analyzer", "gitlab-agent");
+		expect(optionsFor(ROOT)).not.toHaveProperty("temperature");
+	});
+
+	// Degrade loudly, never fail: a name absent from the orchestrator's `agents:` map (the
+	// SIO-1229 class of bug) must not take that datasource offline.
+	test("an unknown sub-agent name falls back to root without throwing", () => {
+		expect(() => createLlm("subAgent", "incident-analyzer", "does-not-exist-agent")).not.toThrow();
+		expect(optionsFor(ROOT)).toBeDefined();
+	});
+
+	// Non-subAgent roles must ignore subAgentName entirely, or passing it anywhere else would
+	// silently re-point ~25 call sites.
+	test("a non-subAgent role ignores subAgentName", () => {
+		createLlm("aggregator", "incident-analyzer", "gitlab-agent");
+		expect(optionsFor(ROOT)).toBeDefined();
+	});
+});

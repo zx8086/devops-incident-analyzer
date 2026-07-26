@@ -120,3 +120,39 @@ Be honest about the limits, or the checklist becomes theatre:
 - **The probe measures single calls, not a whole graph run.** It cannot tell you whether the
   900s graph budget still holds end to end; only a real investigation can (SIO-1220).
 - **It does not measure answer quality.** That is what gate 8 is for.
+
+## Blast radius: which manifest actually moves what (SIO-1235)
+
+The 2026-07-26 incident was not caused by a bad model. It was caused by **one yaml line moving
+more than anyone expected**, so before editing any `model.preferred`, know what it moves.
+
+| Edit | Moves |
+|---|---|
+| root `agents/incident-analyzer/agent.yaml` | every non-lightweight orchestrator role (aggregator, responder, normalizer, entityExtractor, ...) |
+| `agents/incident-analyzer/agents/<x>-agent/agent.yaml` | **only** that specialist's ReAct loop |
+| `agents/incident-analyzer/agents/elastic-agent/agent.yaml` | the elastic specialist **AND every light-tier role** -- the light tier borrows this manifest and has no config of its own |
+
+Before SIO-1235, row 2 did nothing at all: `createLlm` resolved every non-lightweight role from
+the ROOT manifest, so all 7 sub-agent manifests were dead config from the original scaffold. That
+is why SIO-1213 flipping the root line silently moved all seven specialists onto Sonnet 5 with
+adaptive thinking on. Per-specialist tuning is now a one-line edit; the third row is the trap
+that remains.
+
+Check the `"LLM model selected"` log line to confirm what actually resolved -- it carries
+`source: "sub-agent-manifest" | "light-tier" | "root-manifest"` plus `subAgentName`.
+
+## Three failure modes this incident added to the checklist
+
+- **A content-shape change breaks extraction helpers, not the API call.** Sonnet 5's
+  `contentShapeWithTools: "blocks"` returned an array of content blocks where the previous model
+  returned a string. Nothing threw; `String(content)` yielded `"[object Object]"` and the report
+  came out garbled (SIO-1217/1231). When `contentShapeWithTools` changes, re-check every
+  `.content` reader -- `message-content-chokepoint.test.ts` enforces the chokepoint.
+- **`acceptsTemperature: false` silently voids `ROLE_OVERRIDES`.** `ROLE_OVERRIDES.entityExtractor
+  .temperature = 0` is computed then DISCARDED for a model that rejects the key, so two nodes
+  pinned as deterministic moved to default sampling with no warning and started drifting their
+  JSON envelopes (SIO-1233). There is no replacement lever: Bedrock Converse has no `seed`, and
+  `topP` is unprobed. Assume any role relying on `temperature: 0` becomes non-deterministic.
+- **Prompt caches are per model.** The first turn after a model change re-primes cold on every
+  affected role, so the first post-deploy investigation is slower and costlier than steady state.
+  Do not read that single run as a regression.

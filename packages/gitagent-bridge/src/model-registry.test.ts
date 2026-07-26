@@ -85,6 +85,16 @@ describe("MODEL_REGISTRY", () => {
 			const agent = loadAgent(dir);
 			if (agent.manifest.model?.preferred) inUse.add(agent.manifest.model.preferred);
 			for (const fb of agent.manifest.model?.fallback ?? []) inUse.add(fb);
+			// SIO-1235: sub-agent manifests are LIVE as of this ticket -- createLlm("subAgent", ...)
+			// resolves each specialist's own model.preferred instead of the root's. Before that they
+			// were dead config (since the 125b3f9e scaffold), so this loop covered root manifests
+			// only and a specialist could have been pointed at an unmeasured model with nothing to
+			// catch it. claude-haiku-4-5 has a probe report so this passes today; the point is to
+			// guard the NEXT per-specialist bump, which this ticket makes a one-line yaml edit.
+			for (const sub of agent.subAgents.values()) {
+				if (sub.manifest.model?.preferred) inUse.add(sub.manifest.model.preferred);
+				for (const fb of sub.manifest.model?.fallback ?? []) inUse.add(fb);
+			}
 		}
 		for (const name of inUse) {
 			const caps = getModelCapabilities(name);

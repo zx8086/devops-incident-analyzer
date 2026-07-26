@@ -1197,7 +1197,11 @@ async function runSubAgent(
 
 ${state.correlationFetchDirective}`
 			: focusBlock;
-		const llm = createLlm("subAgent");
+		// SIO-1235: pass the sub-agent identity so this specialist resolves ITS OWN manifest model
+		// instead of silently inheriting the root manifest's. Deliberately the same `agentName`
+		// that buildSubAgentPrompt (above) and getSkillToolNames (below) already use, so the
+		// prompt, the bound tools and the model can never be resolved from three different agents.
+		const llm = createLlm("subAgent", "incident-analyzer", agentName);
 
 		if (allTools.length === 0) {
 			log.warn({ deploymentId }, "No MCP tools available, skipping");
