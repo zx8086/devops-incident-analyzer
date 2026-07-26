@@ -83,6 +83,29 @@ const DATA_SOURCE_BY_AGENT: Record<string, string> = {
 
 const dataSourceTools = toolsByDataSource();
 
+// SIO-1234 (CodeRabbit on PR #485): a name belonging to ANOTHER datasource is dropped by the
+// per-datasource prefix filter below, so it escapes both checks -- yet at runtime it is exactly
+// the `Tool "X" not found` this ticket exists to prevent, since a sub-agent is bound only to its
+// own MCP server.
+//
+// Checked against the agent's OWN prose only (SOUL/RULES/duties/local skills), NOT shared bodies.
+// A blanket union filter fails 6 of the 7 agents on `elasticsearch_search`, which comes from the
+// SHARED cite-sources skill that is deliberately merged into every sub-agent (see the
+// "shared skills are merged" test below) -- a citation example, not a call instruction.
+const ALL_TOOL_PREFIXES = [...dataSourceTools.values()].flatMap(({ prefixes }) => prefixes);
+
+// Detected instances awaiting a product decision, same ratchet discipline as
+// KNOWN_OVERSUBSCRIBED: entries may be removed, never added without a linked follow-up.
+//
+// kafka-agent SOUL.md's SIO-717 "Synthetic-Monitor Cross-Check" tells the kafka sub-agent it
+// MUST `elasticsearch_search` the synthetics-* index -- a tool bound only to elastic-agent, so
+// the step can never execute. Whether that cross-check should move to elastic-agent, become a
+// recorded gap, or be dropped is a design decision about SIO-717's feature, not a mechanical
+// rename, so it is recorded here rather than silently rewritten.
+const KNOWN_CROSS_DATASOURCE_PROSE: Readonly<Record<string, readonly string[]>> = {
+	"kafka-agent": ["elasticsearch_search"],
+};
+
 // Load through the ROOT agent, exactly as prompt-context's getSkillToolNames does.
 // Loading a sub-agent directory standalone resolves sharedRoot to a path that does not
 // exist (agents/incident-analyzer/shared), so agents/shared/skills -- which the real
@@ -174,6 +197,22 @@ describe("SIO-1228: skill prose cannot promise tools the datasource does not exp
 			expect(ds).toBeDefined();
 			const missing = toolLike.filter((n) => !ds?.names.has(n));
 			expect(missing).toEqual([]);
+		});
+
+		test(`${dir}: own prose does not name another datasource's tools`, () => {
+			// sharedSkills/sharedContext excluded deliberately -- see KNOWN_CROSS_DATASOURCE_PROSE.
+			const own = extractPromptToolNames({
+				skills: agent.skills,
+				sharedSkills: new Map(),
+				soul: agent.soul,
+				rules: agent.rules,
+				duties: agent.duties,
+			});
+			const mine = ds?.prefixes ?? [];
+			const foreign = own.filter(
+				(n) => !mine.some((p) => n.startsWith(p)) && ALL_TOOL_PREFIXES.some((p) => n.startsWith(p)),
+			);
+			expect(foreign).toEqual([...(KNOWN_CROSS_DATASOURCE_PROSE[dir] ?? [])]);
 		});
 
 		test(`${dir}: prompt-promised tools fit inside the sub-agent tool budget`, () => {
