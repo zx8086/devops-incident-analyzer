@@ -5,7 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { loadAgent } from "@devops-agent/gitagent-bridge";
-import { isLightweightRole, isSubAgentManifestModelEnabled } from "./llm.ts";
+import { isLightweightRole, isSubAgentManifestModelEnabled, resolveRoleModelConfig } from "./llm.ts";
 import { AGENT_NAMES as SUB_AGENT_NAMES } from "./sub-agent.ts";
 
 describe("isLightweightRole defaults (SIO-1040)", () => {
@@ -110,5 +110,43 @@ describe("AGENT_NAMES all resolve to real sub-agent manifests (SIO-1235)", () =>
 	test.each(Object.entries(SUB_AGENT_NAMES))("%s -> %s is a loaded sub-agent", (_dataSourceId, agentName) => {
 		expect(subAgents.has(agentName), `${agentName} is not in the orchestrator's agents: map`).toBe(true);
 		expect(subAgents.get(agentName)?.manifest.model?.preferred).toBeDefined();
+	});
+});
+
+// SIO-1235 (CodeRabbit on PR #486): the light tier borrows the elastic-agent manifest and has no
+// config of its own. If that manifest goes missing, resolveBedrockConfig does NOT throw -- it
+// returns its built-in default (measured: eu.anthropic.claude-sonnet-4-6, not even the current
+// root model), so every light-tier role would run a stale model while still logging
+// source: "light-tier". These pin that the resolver reports light-tier provenance honestly.
+describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
+	const agent = loadAgent(join(import.meta.dir, "../../../agents/incident-analyzer"));
+
+	test("a light-tier role reports light-tier and borrows elastic-agent's model", () => {
+		const resolved = resolveRoleModelConfig("classifier", agent);
+		expect(resolved.source).toBe("light-tier");
+		expect(resolved.modelConfig?.preferred).toBe(agent.subAgents.get("elastic-agent")?.manifest.model?.preferred);
+	});
+
+	test("a subAgent role with a known specialist reports sub-agent-manifest", () => {
+		const resolved = resolveRoleModelConfig("subAgent", agent, "gitlab-agent");
+		expect(resolved.source).toBe("sub-agent-manifest");
+		expect(resolved.modelConfig?.preferred).toBe("claude-haiku-4-5");
+	});
+
+	test("a subAgent role with an unknown specialist reports root-manifest", () => {
+		expect(resolveRoleModelConfig("subAgent", agent, "nope-agent").source).toBe("root-manifest");
+	});
+
+	test("a standard role reports root-manifest and ignores subAgentName", () => {
+		const resolved = resolveRoleModelConfig("aggregator", agent, "gitlab-agent");
+		expect(resolved.source).toBe("root-manifest");
+		expect(resolved.modelConfig?.preferred).toBe(agent.manifest.model?.preferred);
+	});
+
+	// The light tier wins over the sub-agent branch: a role that is BOTH tierable-light and
+	// passed a subAgentName must still resolve light, or flipping a role to light would be
+	// silently overridden.
+	test("light tier takes precedence over a sub-agent name", () => {
+		expect(resolveRoleModelConfig("classifier", agent, "gitlab-agent").source).toBe("light-tier");
 	});
 });

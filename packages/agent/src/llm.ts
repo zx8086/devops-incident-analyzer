@@ -354,7 +354,20 @@ export function resolveRoleModelConfig(
 	// every light-tier role follows it -- and as of this ticket it also moves the elastic
 	// SUB-AGENT, so the two are now coupled. Decoupling is a follow-up.
 	if (isLightweightRole(role)) {
-		return { modelConfig: agent.subAgents.get("elastic-agent")?.manifest.model, source: "light-tier" };
+		const borrowed = agent.subAgents.get("elastic-agent");
+		// Warning parity with the sub-agent branch below (CodeRabbit on PR #486). Without this the
+		// light tier fails SILENTLY and worse than it looks: resolveBedrockConfig(undefined) does
+		// not throw, it returns the built-in default -- measured as eu.anthropic.claude-sonnet-4-6,
+		// which is not even the current root model. Every light-tier role would run a stale model
+		// while still reporting source: "light-tier", which is exactly the invisible drift this
+		// ticket exists to end.
+		if (!borrowed?.manifest.model) {
+			logger.warn(
+				{ role },
+				"Light tier's borrowed elastic-agent manifest is missing or declares no model; resolveBedrockConfig will use its built-in default",
+			);
+		}
+		return { modelConfig: borrowed?.manifest.model, source: "light-tier" };
 	}
 
 	if (role === "subAgent" && subAgentName && isSubAgentManifestModelEnabled()) {
