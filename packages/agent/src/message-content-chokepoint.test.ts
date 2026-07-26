@@ -269,3 +269,29 @@ describe("message content must go through message-utils", () => {
 		}
 	});
 });
+
+// SIO-1231: routing through the chokepoint is necessary but NOT sufficient -- SIO-1217 did route
+// the final report through extractTextFromContent and still shipped a garbled report, because the
+// helper injected "\n" between blocks. The scan above cannot catch that: the call site is correct,
+// the helper was wrong. Pin the join semantics at the helper instead.
+describe("the extraction helpers must not inject a separator between text blocks", () => {
+	const source = readFileSync(join(ROOT, "packages/agent/src/message-utils.ts"), "utf-8");
+
+	// Strip comments so the prose above the helpers (which quotes "\n" while explaining the bug)
+	// cannot satisfy or trip these assertions.
+	const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+	test("neither helper joins with a newline", () => {
+		expect(
+			code,
+			'A "\\n" join splices a separator at every Bedrock delta boundary (garbling the streamed\n' +
+				"report, SIO-1231) and breaks buildCachedSystemMessage's byte-identical guarantee, whose\n" +
+				"cache-disabled path is `stable + volatile`. Blocks must concatenate with no separator.",
+		).not.toMatch(/\.join\(\s*["'`]\\n["'`]\s*\)/);
+	});
+
+	test("both helpers join with the empty string", () => {
+		const emptyJoins = code.match(/\.join\(\s*["'`]["'`]\s*\)/g) ?? [];
+		expect(emptyJoins.length, "expected extractTextFromContent and extractStreamDeltaText to each join('')").toBe(2);
+	});
+});

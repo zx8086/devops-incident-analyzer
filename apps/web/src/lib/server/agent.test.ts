@@ -112,11 +112,14 @@ mock.module("@devops-agent/agent", () => ({
 		const textBlock = z.object({ type: z.literal("text"), text: z.string() }).passthrough();
 		const isTextBlock = (b: unknown): b is { type: "text"; text: string } => textBlock.safeParse(b).success;
 		if (typeof content === "string") return content;
+		// SIO-1231: no separator. Production joins with "" -- a "\n" here would let a test pass
+		// against a shape that renders garbled in the browser, which is the exact failure mode
+		// this mock's "mirror production EXACTLY" contract exists to prevent.
 		if (Array.isArray(content))
 			return content
 				.filter(isTextBlock)
 				.map((b) => b.text)
-				.join("\n");
+				.join("");
 		// A single content block that was never wrapped in an array.
 		return isTextBlock(content) ? content.text : "";
 	},

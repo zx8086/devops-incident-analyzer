@@ -55,6 +55,8 @@ mock.module("@devops-agent/agent", () => ({
 	// SIO-1217: sse-pump.ts imports this from the same specifier at module scope. Mirror
 	// the real helper's array-of-content-blocks extraction (not a plain String() coercion)
 	// so this mock can't mask the exact "[object Object]" regression it exists to prevent.
+	// SIO-1231: joins with "" like production. A "\n" here would mask the message_final
+	// garbling regression -- the report is chopped at every delta boundary, not per paragraph.
 	extractTextFromContent: (content: unknown): string => {
 		if (typeof content === "string") return content;
 		if (!Array.isArray(content)) return String(content);
@@ -64,7 +66,7 @@ mock.module("@devops-agent/agent", () => ({
 					block !== null && typeof block === "object" && block.type === "text" && typeof block.text === "string",
 			)
 			.map((block) => block.text)
-			.join("\n");
+			.join("");
 	},
 	// SIO-1218: sse-pump.ts calls this (not extractTextFromContent) on each streamed delta
 	// chunk. Same block extraction, but concatenated with NO separator -- mirror that exactly
