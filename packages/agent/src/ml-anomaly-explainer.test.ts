@@ -19,22 +19,22 @@ const RECORD_1 = {
 	recordScore: 97.66,
 	fieldName: "kubernetes.pod.memory.usage.bytes",
 	functionName: "high_mean",
-	entity: "mithena-db-5",
+	entity: "example-pod-1",
 	deviationPercent: 938,
-	actual: [7018553617],
-	typical: [676061024],
+	actual: [7000000000],
+	typical: [700000000],
 	timestamp: "2026-07-16T00:00:00.000Z",
 };
 
 const RECORD_2 = {
-	jobId: "mendix-error-rate-by-app",
+	jobId: "app-error-rate-by-service",
 	recordScore: 99.33,
 	fieldName: undefined,
 	functionName: "high_non_zero_count",
-	entity: "chargeb",
+	entity: "example-service",
 	deviationPercent: 104,
-	actual: [3963],
-	typical: [3.76],
+	actual: [4000],
+	typical: [4],
 	timestamp: "2026-07-17T00:00:00.000Z",
 };
 

@@ -149,7 +149,7 @@ widen the lookback and re-query on your own initiative; that is stricter than th
 log-search auto-retry elsewhere in this file, because anomaly records are inherently sparse at
 high scores and a genuine zero is a common, correct answer. Call this tool ONCE per turn.
 
-`entity` is a single plain field value (e.g. `checkout-service`, `mithena-db-5`), never a
+`entity` is a single plain field value (e.g. `checkout-service`, `pod-name-here`), never a
 composite `field=value; field=value` expression -- the tool matches it internally across
 by/partition/over field values and every influencer. Watch for a broad match: a low-cardinality
 entity (a shared namespace or environment tag) can match tens of thousands of records. If the
