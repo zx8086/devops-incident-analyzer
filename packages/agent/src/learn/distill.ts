@@ -15,6 +15,7 @@ import { interrupt } from "@langchain/langgraph";
 import { createLlm, type InvokableLlm, invokeWithDeadline } from "../llm.ts";
 import { parseLlmJson } from "../llm-json.ts";
 import { searchAgentMemory } from "../memory-backend.ts";
+import { extractTextFromContent } from "../message-utils.ts";
 import { getRunbookCatalog } from "../prompt-context.ts";
 import type { AgentStateType } from "../state.ts";
 import { type HilDecisions, type HilItemEdits, type LearningProposal, LearningProposalSchema } from "./schema.ts";
@@ -237,7 +238,9 @@ export async function learnDistill(state: AgentStateType): Promise<Partial<Agent
 			new SystemMessage(DISTILLER_PROMPT),
 			new HumanMessage(humanText),
 		]);
-		const content = typeof result.content === "string" ? result.content : "";
+		// SIO-1222: an empty string here surfaced "could not distill a well-formed learning
+		// proposal" to the user on every /learn invocation, with no error anywhere.
+		const content = extractTextFromContent(result.content);
 		const parsed = parseLearningProposal(content);
 		if (!parsed) {
 			return {

@@ -3,6 +3,7 @@ import { HumanMessage } from "@langchain/core/messages";
 import { type FirstAttemptSummary, summarizeFirstAttempts } from "../alignment.ts";
 import { buildGraph } from "../graph.ts";
 import { createMcpClient } from "../mcp-bridge.ts";
+import { extractTextFromContent } from "../message-utils.ts";
 
 let cachedGraph: Awaited<ReturnType<typeof buildGraph>> | undefined;
 let mcpReady: Promise<void> | undefined;
@@ -43,8 +44,11 @@ export async function runAgent(inputs: { query: string }): Promise<{
 		{ configurable: { thread_id: `eval-${crypto.randomUUID()}` } },
 	);
 	const lastMessage = finalState.messages.at(-1);
-	const responseText =
-		typeof lastMessage?.content === "string" ? lastMessage.content : JSON.stringify(lastMessage?.content ?? "");
+	// SIO-1222: was JSON.stringify for the array case, which handed LangSmith's output.response
+	// a JSON blob for the judge to grade -- so a content-shape change would read as a model
+	// QUALITY regression in the eval scores rather than a harness bug. That is a bad failure
+	// mode for the very harness meant to validate a model swap.
+	const responseText = extractTextFromContent(lastMessage?.content);
 	// SIO-691: attach per-source first-attempt summary so LangSmith traces distinguish
 	// retry-recovered runs from clean first-try runs without log inspection. Field name
 	// matches the alignment + aggregator log keys for cross-referencing.

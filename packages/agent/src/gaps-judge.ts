@@ -15,6 +15,7 @@ import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { z } from "zod";
 import { createLlm, type InvokableLlm, invokeWithDeadline } from "./llm.ts";
 import { parseLlmJson } from "./llm-json.ts";
+import { extractTextFromContent } from "./message-utils.ts";
 
 const logger = getLogger("agent:gaps-judge");
 
@@ -76,7 +77,10 @@ export async function judgeDegradingGapBullets(
 			[new SystemMessage(JUDGE_PROMPT), new HumanMessage(`Bullets:\n${numbered}`)],
 			config,
 		);
-		const content = typeof result.content === "string" ? result.content : "";
+		// SIO-1222: was `typeof result.content === "string" ? ... : ""`, which silently
+		// degraded a block-array response to an empty string -- indistinguishable from "the
+		// judge returned nothing", so the veto would fail closed forever with no signal.
+		const content = extractTextFromContent(result.content);
 		// Tolerate fenced/garnished JSON and control chars echoed into string values.
 		const parsed = parseLlmJson(content, GapsJudgeResponseSchema);
 		if (!parsed.ok) {

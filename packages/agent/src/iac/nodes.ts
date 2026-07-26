@@ -96,7 +96,10 @@ const IAC_SERVER = "elastic-iac-mcp";
 export function lastHumanText(state: IacStateType): string {
 	for (let i = state.messages.length - 1; i >= 0; i--) {
 		const m = state.messages[i];
-		if (m?.getType() === "human") return typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+		// SIO-1222: was JSON.stringify(m.content) for the non-string case, which fed a raw
+		// JSON blob of content blocks (attachment payloads included) into the iacPlanner /
+		// iacClassifier / graph-knowledge prompts instead of the user's actual question.
+		if (m?.getType() === "human") return extractTextFromContent(m.content);
 	}
 	return "";
 }

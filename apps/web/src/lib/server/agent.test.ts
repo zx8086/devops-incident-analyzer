@@ -98,6 +98,24 @@ mock.module("@devops-agent/agent", () => ({
 	pruneState: () => ({ removeIds: ["old1"] }),
 	// SIO-1110: agent.ts threads the graph deadline into configurable under this key.
 	GRAPH_DEADLINE_KEY: "graphDeadlineAt",
+	// SIO-1222: agent.ts now routes both of its message-content reads through this helper
+	// (readCompletedTurn's transcript and getLastAssistantText). Mirrors the real
+	// implementation's shape handling -- string passthrough, text blocks joined, everything
+	// else dropped -- so transcript assertions stay meaningful rather than asserting on a stub.
+	extractTextFromContent: (content: unknown): string => {
+		if (typeof content === "string") return content;
+		if (!Array.isArray(content)) return "";
+		return content
+			.filter(
+				(b): b is { type: "text"; text: string } =>
+					typeof b === "object" &&
+					b !== null &&
+					(b as { type?: unknown }).type === "text" &&
+					typeof (b as { text?: unknown }).text === "string",
+			)
+			.map((b) => b.text)
+			.join("\n");
+	},
 	// SIO-780: datasources route test runs later and imports these from the same
 	// @devops-agent/agent module; include them here so the cached namespace has
 	// the symbols when the cross-test mock pollution kicks in.

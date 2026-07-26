@@ -27,6 +27,7 @@ import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { z } from "zod";
 import { createLlm, type InvokableLlm, invokeWithDeadline } from "./llm.ts";
 import { parseLlmJson } from "./llm-json.ts";
+import { extractTextFromContent } from "./message-utils.ts";
 import { truncateToolOutput } from "./sub-agent-truncate-tool-output.ts";
 
 const logger = getLogger("agent:absence-judge");
@@ -143,7 +144,7 @@ export async function judgeContradictedAbsenceClaims(
 			config,
 		);
 		return mapVerdicts(
-			typeof result.content === "string" ? result.content : "",
+			extractTextFromContent(result.content),
 			claims.length,
 			(raw) => {
 				const parsed = AbsenceJudgeResponseSchema.safeParse(raw);
@@ -236,7 +237,7 @@ export async function judgeOvergeneralizedAbsenceClaims(
 			config,
 		);
 		return mapVerdicts(
-			typeof result.content === "string" ? result.content : "",
+			extractTextFromContent(result.content),
 			lines.length,
 			(raw) => {
 				const parsed = OvergeneralizedJudgeResponseSchema.safeParse(raw);

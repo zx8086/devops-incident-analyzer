@@ -6,6 +6,7 @@ import { z } from "zod";
 import { createLlm, DeadlineExceededError, type InvokableLlm, invokeWithDeadline } from "./llm.ts";
 import { parseLlmJson } from "./llm-json.ts";
 import { appendDailyLog } from "./memory-writer.ts";
+import { extractTextFromContent } from "./message-utils.ts";
 import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:follow-up-generator");
@@ -114,7 +115,8 @@ export async function generateSuggestions(
 			config as { signal?: AbortSignal; [key: string]: unknown } | undefined,
 		);
 
-		const content = typeof result.content === "string" ? result.content : "";
+		// SIO-1222: an empty string here silently produced fallback suggestions on every turn.
+		const content = extractTextFromContent(result.content);
 		const suggestions = parseSuggestions(content);
 		if (suggestions) {
 			logger.info({ count: suggestions.length }, "Generated follow-up suggestions");

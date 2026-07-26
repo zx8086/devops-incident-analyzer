@@ -479,10 +479,16 @@ describe("normalizeToolContent SIO-786", () => {
 		expect(normalizeToolContent([])).toBe("");
 	});
 
-	test("falls back to String() for plain objects (kafka MCP returns single string in object wrapper rarely)", () => {
-		const result = normalizeToolContent({ foo: "bar" });
-		// String({foo:"bar"}) returns "[object Object]"; this is the safe fallback
-		expect(result).toBe("[object Object]");
+	// SIO-1222: this previously asserted "[object Object]" and called it "the safe fallback".
+	// It is not safe -- it destroys the payload, and that string was then persisted into
+	// checkpointed toolOutputs[].rawJson. Serializing preserves the kafka object wrapper the
+	// test name describes. The non-lossy String() outcomes below are unchanged.
+	test("serializes plain objects rather than mangling them to [object Object]", () => {
+		expect(normalizeToolContent({ foo: "bar" })).toBe('{"foo":"bar"}');
+	});
+
+	test("serializes an array of non-text blocks instead of [object Object],[object Object]", () => {
+		expect(normalizeToolContent([{ type: "image", data: "x" }])).toBe('[{"type":"image","data":"x"}]');
 	});
 
 	test("handles null/undefined gracefully", () => {

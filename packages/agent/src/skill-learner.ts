@@ -15,6 +15,7 @@ import { z } from "zod";
 import { createLlm, type InvokableLlm, invokeWithDeadline } from "./llm.ts";
 import { parseLlmJson } from "./llm-json.ts";
 import { enqueueFact, searchAgentMemory, selectedBackend } from "./memory-backend.ts";
+import { extractTextFromContent } from "./message-utils.ts";
 
 const logger = getLogger("agent:skill-learner");
 
@@ -114,7 +115,8 @@ export async function judgeTurn(turn: SkillLearnerTurn): Promise<SkillProposal |
 			new SystemMessage(JUDGE_PROMPT),
 			new HumanMessage(redactForJudge(turn.transcript)),
 		]);
-		const content = typeof result.content === "string" ? result.content : "";
+		// SIO-1222: an empty string here silently disabled skill learning entirely.
+		const content = extractTextFromContent(result.content);
 		const proposal = parseProposal(content);
 		if (!proposal?.worthy) return null;
 		// A worthy verdict must carry at least a name + description to be useful.

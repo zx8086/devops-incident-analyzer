@@ -276,7 +276,23 @@ export function normalizeToolContent(content: unknown): string {
 		}
 		if (texts.length > 0) return texts.join("\n\n");
 	}
-	return String(content);
+	// SIO-1222: this fall-through was a bare String(content). For a plain object, or an array
+	// whose blocks carry no `text` field, that produced the literal "[object Object]" this
+	// function's own header warns about -- and it was persisted into checkpointed
+	// toolOutputs[].rawJson, destroying the payload. Serialize only in that case: probing the
+	// String() result keeps every non-lossy legacy outcome exactly as SIO-786 pinned it
+	// (empty array -> "", null -> "null", undefined -> "undefined", primitives unchanged).
+	// content-ok: ToolMessage result body, not an AIMessage. String() is the intended
+	// representation here for everything it does not mangle.
+	const stringified = String(content);
+	if (!stringified.includes("[object ")) return stringified;
+	try {
+		// content-ok: serializing the tool-result body is the point -- it preserves the
+		// structure the downstream JSON extractors parse.
+		return JSON.stringify(content) ?? stringified;
+	} catch {
+		return stringified;
+	}
 }
 
 // SIO-1054: the AWS MCP wrap layer returns tool errors as a *successful* payload carrying
@@ -313,6 +329,8 @@ const AWS_KIND_TO_CATEGORY: Record<AwsErrorKind, ToolErrorCategory> = {
 // Returns null when the content is not an AWS _error envelope, so the caller can fall through
 // to the normal status-gated path unchanged.
 function extractAwsError(content: unknown): { kind: AwsErrorKind; message: string } | null {
+	// content-ok: ToolMessage result body -- the serialized form is what the '"_error"' substring
+	// check and the JSON parse below both need; flattening to text would destroy the envelope.
 	const raw = typeof content === "string" ? content : JSON.stringify(content ?? "");
 	if (!raw.includes('"_error"')) return null;
 	let parsed: unknown;
@@ -443,6 +461,8 @@ function extractStructuredToolError(content: unknown): {
 	hostname?: string;
 	upstreamContentType?: string;
 } | null {
+	// content-ok: ToolMessage result body -- the serialized form is what the '"_error"' substring
+	// check and the JSON parse below both need; flattening to text would destroy the envelope.
 	const raw = typeof content === "string" ? content : JSON.stringify(content ?? "");
 	if (!raw.includes('"_error"') || !raw.includes('"kind"')) return null;
 	let parsed: unknown;
@@ -557,6 +577,8 @@ export function extractToolErrors(
 		// LangGraph ToolNode sets status="error" when the tool throws (including MCP isError:true).
 		// The old regex matched domain vocabulary like "totalErrorCount" causing false positives.
 
+		// content-ok: msg is a ToolMessage here (the loop filters to tool results), not an
+		// AIMessage; the serialized body feeds the regex error categorizer below.
 		const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
 
 		// SIO-728: split off the structured payload before classifying or redacting.
