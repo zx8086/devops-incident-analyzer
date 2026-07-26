@@ -320,16 +320,91 @@ export function isLightweightRole(role: LlmRole, env: NodeJS.ProcessEnv = proces
 	return DEFAULT_LIGHTWEIGHT_ROLES.has(role);
 }
 
-export function createLlm(role: LlmRole, agentName = "incident-analyzer"): ChatBedrockConverse {
+type LoadedAgentForLlm = ReturnType<typeof getAgentForLlm>;
+type ManifestModelConfig = LoadedAgentForLlm["manifest"]["model"];
+
+// Which manifest the model came from. Emitted on every "LLM model selected" line so an
+// operator can tell a specialist running its own model from one silently inheriting root's.
+export type ModelConfigSource = "light-tier" | "sub-agent-manifest" | "root-manifest";
+
+// SIO-1235: default ON (the RESOLVE_IDENTIFIERS_ENABLED idiom), read at CALL time so flipping
+// it needs only a container restart, not a redeploy. Set to false (or 0) to put all 7
+// specialists back on the root manifest's model in one move.
+export function isSubAgentManifestModelEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+	const v = env.SUB_AGENT_MANIFEST_MODEL_ENABLED;
+	return v !== "false" && v !== "0";
+}
+
+// SIO-1235: the whole precedence rule in one readable, unit-testable place.
+//
+// The defect this replaces: every non-lightweight role -- INCLUDING subAgent -- resolved from
+// the ROOT manifest, so all 7 sub-agent manifests' `model.preferred: claude-haiku-4-5` had never
+// taken effect since the original scaffold (125b3f9e). That is why SIO-1213 flipping one line in
+// the root agent.yaml silently moved all seven specialists onto Sonnet 5.
+//
+// Precedence: light tier > sub-agent manifest > root manifest. Only the `subAgent` role consults
+// subAgentName, so the ~25 other call sites keep their exact previous behaviour.
+export function resolveRoleModelConfig(
+	role: LlmRole,
+	agent: LoadedAgentForLlm,
+	subAgentName?: string,
+): { modelConfig: ManifestModelConfig; source: ModelConfigSource } {
+	// KNOWN FRAGILITY (pre-existing): the light tier borrows the elastic-agent sub-agent
+	// manifest's model. There is no dedicated light-model config; if that manifest changes model,
+	// every light-tier role follows it -- and as of this ticket it also moves the elastic
+	// SUB-AGENT, so the two are now coupled. Decoupling is a follow-up.
+	if (isLightweightRole(role)) {
+		return { modelConfig: agent.subAgents.get("elastic-agent")?.manifest.model, source: "light-tier" };
+	}
+
+	if (role === "subAgent" && subAgentName && isSubAgentManifestModelEnabled()) {
+		const sub = agent.subAgents.get(subAgentName);
+		if (!sub) {
+			// Degrade loudly: a sub-agent absent from the orchestrator's `agents:` map is the
+			// SIO-1229 class of bug, and silently using root's model is how it stayed invisible.
+			logger.warn({ role, subAgentName }, "Sub-agent not found in manifest; falling back to root model");
+		} else if (!sub.manifest.model?.preferred) {
+			logger.warn({ role, subAgentName }, "Sub-agent manifest declares no model.preferred; falling back to root");
+		} else {
+			return { modelConfig: sub.manifest.model, source: "sub-agent-manifest" };
+		}
+	}
+
+	return { modelConfig: agent.manifest.model, source: "root-manifest" };
+}
+
+export function createLlm(role: LlmRole, agentName = "incident-analyzer", subAgentName?: string): ChatBedrockConverse {
 	const agent = getAgentForLlm(agentName);
 	const isLightweight = isLightweightRole(role);
 
-	// KNOWN FRAGILITY: the light tier borrows the elastic-agent sub-agent manifest's
-	// model (haiku). There is no dedicated light-model config; if the elastic-agent
-	// manifest changes model, every light-tier role follows it.
-	const modelConfig = isLightweight ? agent.subAgents.get("elastic-agent")?.manifest.model : agent.manifest.model;
+	const resolved = resolveRoleModelConfig(role, agent, subAgentName);
+	let { modelConfig, source } = resolved;
 
-	const bedrockConfig = resolveBedrockConfig(modelConfig);
+	// SIO-1235: resolveBedrockConfig THROWS on a model name absent from MODEL_REGISTRY. Fail-loud
+	// is right for the root manifest -- a bad root model should stop the process, not run on a
+	// guess. But a typo in ONE specialist's yaml must not take that datasource offline for the
+	// whole run, so the throw is caught on the new sub-agent path ONLY. Every pre-existing path
+	// keeps its throw untouched.
+	let bedrockConfig: BedrockModelConfig;
+	if (source === "sub-agent-manifest") {
+		try {
+			bedrockConfig = resolveBedrockConfig(modelConfig);
+		} catch (error) {
+			logger.error(
+				{ role, subAgentName, error: error instanceof Error ? error.message : String(error) },
+				"Sub-agent manifest model is not in MODEL_REGISTRY; falling back to root model",
+			);
+			modelConfig = agent.manifest.model;
+			source = "root-manifest";
+			bedrockConfig = resolveBedrockConfig(modelConfig);
+		}
+	} else {
+		bedrockConfig = resolveBedrockConfig(modelConfig);
+	}
+
+	// `tier` is kept VERBATIM on all three log lines below -- operator log filters depend on it.
+	// `source`/`subAgentName` are additive.
+	const provenance = { source, ...(source === "sub-agent-manifest" ? { subAgentName } : {}) };
 	const overrides = ROLE_OVERRIDES[role];
 	const primary = buildChatModel(role, bedrockConfig, overrides);
 
@@ -337,19 +412,31 @@ export function createLlm(role: LlmRole, agentName = "incident-analyzer"): ChatB
 	// Skip for tool-binding roles (subAgent) because createReactAgent requires
 	// bindTools() which RunnableWithFallbacks does not implement.
 	if (TOOL_BINDING_ROLES.has(role)) {
-		logger.info({ role, tier: isLightweight ? "light" : "standard", model: bedrockConfig.model }, "LLM model selected");
+		logger.info(
+			{ role, tier: isLightweight ? "light" : "standard", model: bedrockConfig.model, ...provenance },
+			"LLM model selected",
+		);
 		return primary;
 	}
 
 	const fallbackConfig = resolveFallbackConfig(modelConfig);
 	if (!fallbackConfig) {
-		logger.info({ role, tier: isLightweight ? "light" : "standard", model: bedrockConfig.model }, "LLM model selected");
+		logger.info(
+			{ role, tier: isLightweight ? "light" : "standard", model: bedrockConfig.model, ...provenance },
+			"LLM model selected",
+		);
 		return primary;
 	}
 
 	const fallback = buildChatModel(role, fallbackConfig, overrides);
 	logger.info(
-		{ role, tier: isLightweight ? "light" : "standard", model: bedrockConfig.model, fallback: fallbackConfig.model },
+		{
+			role,
+			tier: isLightweight ? "light" : "standard",
+			model: bedrockConfig.model,
+			fallback: fallbackConfig.model,
+			...provenance,
+		},
 		"LLM model selected",
 	);
 	return primary.withFallbacks({ fallbacks: [fallback] }) as unknown as ChatBedrockConverse;

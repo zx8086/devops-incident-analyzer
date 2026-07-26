@@ -3,7 +3,10 @@
 // SIO-1040: generalized model tiering. isLightweightRole resolves the light/standard
 // tier per role from AGENT_LLM_TIER_<ROLE> env vars, defaulting to classifier-only.
 import { describe, expect, test } from "bun:test";
-import { isLightweightRole } from "./llm.ts";
+import { join } from "node:path";
+import { loadAgent } from "@devops-agent/gitagent-bridge";
+import { isLightweightRole, isSubAgentManifestModelEnabled } from "./llm.ts";
+import { AGENT_NAMES as SUB_AGENT_NAMES } from "./sub-agent.ts";
 
 describe("isLightweightRole defaults (SIO-1040)", () => {
 	test("classifier is light by default (status quo)", () => {
@@ -71,5 +74,41 @@ describe("isLightweightRole env matrix (SIO-1040)", () => {
 		expect(isLightweightRole("runbookSelector", { AGENT_LLM_TIER_RUNBOOK_SELECTOR: "light" })).toBe(true);
 		expect(isLightweightRole("followUp", { AGENT_LLM_TIER_FOLLOW_UP: "light" })).toBe(true);
 		expect(isLightweightRole("actionProposal", { AGENT_LLM_TIER_ACTION_PROPOSAL: "light" })).toBe(true);
+	});
+});
+
+// SIO-1235: the kill switch for per-specialist model resolution. Defaults ON and is read at
+// CALL time, so flipping it needs only a container restart -- the rollback lever if Haiku 4.5
+// turns out to underperform on the ReAct loops (the one thing no offline test can answer).
+describe("isSubAgentManifestModelEnabled (SIO-1235)", () => {
+	test("defaults ON when unset", () => {
+		expect(isSubAgentManifestModelEnabled({})).toBe(true);
+	});
+
+	test.each([
+		["false", false],
+		["0", false],
+		["true", true],
+		["1", true],
+		["", true],
+		["yes", true],
+	])("SUB_AGENT_MANIFEST_MODEL_ENABLED=%s -> %s", (value, expected) => {
+		expect(isSubAgentManifestModelEnabled({ SUB_AGENT_MANIFEST_MODEL_ENABLED: value })).toBe(expected);
+	});
+});
+
+// SIO-1235: the invariant the new per-specialist lookup depends on. Every value in AGENT_NAMES
+// must be a real key in the loaded subAgents map, or createLlm falls back to the root model and
+// the specialist silently keeps running the wrong one -- the SIO-1229 failure mode.
+describe("AGENT_NAMES all resolve to real sub-agent manifests (SIO-1235)", () => {
+	const subAgents = loadAgent(join(import.meta.dir, "../../../agents/incident-analyzer")).subAgents;
+
+	test("there are agent names to check", () => {
+		expect(Object.keys(SUB_AGENT_NAMES).length).toBeGreaterThan(0);
+	});
+
+	test.each(Object.entries(SUB_AGENT_NAMES))("%s -> %s is a loaded sub-agent", (_dataSourceId, agentName) => {
+		expect(subAgents.has(agentName), `${agentName} is not in the orchestrator's agents: map`).toBe(true);
+		expect(subAgents.get(agentName)?.manifest.model?.preferred).toBeDefined();
 	});
 });
