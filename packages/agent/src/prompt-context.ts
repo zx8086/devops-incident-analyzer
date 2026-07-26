@@ -105,11 +105,19 @@ export interface OrchestratorPromptOptions {
 	// summarizeNetworkTopologyForPrompt). Rendered as its own volatile section with
 	// a do-not-reproduce instruction: the full map reaches the user as a card.
 	networkContext?: string;
+	// SIO-1215: this turn's derived ML anomaly-record summary
+	// (buildMlAnomalyExplainer -> summarizeMlAnomalyExplainerForPrompt).
+	mlAnomalyContext?: string;
 }
 
 function buildNetworkSection(networkContext: string | undefined): string {
 	if (!networkContext) return "";
 	return `\n\n## Network Map (derived this turn)\n${networkContext}\nMention the network path in the report only where it bears on the root cause; the full map is rendered to the user as an interactive card -- do not reproduce it in the report body.\n`;
+}
+
+function buildMlAnomalySection(mlAnomalyContext: string | undefined): string {
+	if (!mlAnomalyContext) return "";
+	return `\n\n## ML Anomaly Records (derived this turn)\n${mlAnomalyContext}\nMention anomaly findings in the report only where they bear on the root cause; the full detail reaches the user as an interactive card -- do not reproduce it in the report body.\n`;
 }
 
 // SIO-847: the wiki section depends on the current turn's focus, so it is built
@@ -133,6 +141,7 @@ export function buildOrchestratorPromptParts(options: OrchestratorPromptOptions 
 		// questions answer from prior-incident entries instead of LLM inference.
 		graph: buildGraphSection(options.graphContext),
 		network: buildNetworkSection(options.networkContext),
+		mlAnomaly: buildMlAnomalySection(options.mlAnomalyContext),
 	});
 }
 

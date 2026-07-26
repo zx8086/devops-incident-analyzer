@@ -134,6 +134,7 @@ import { registerClearSqlCursorTool } from "./mapping/clear_sql_cursor.js";
 import { registerGetFieldMappingTool } from "./mapping/get_field_mapping.js";
 // SIO-1148: ML anomaly-detection tools (read stats/config + job/datafeed lifecycle).
 import { registerMlCloseJobTool } from "./ml/close_job.js";
+import { registerMlGetAnomalyRecordsTool } from "./ml/get_anomaly_records.js";
 import { registerMlGetDatafeedStatsTool } from "./ml/get_datafeed_stats.js";
 import { registerMlGetDatafeedsTool } from "./ml/get_datafeeds.js";
 import { registerMlGetJobStatsTool } from "./ml/get_job_stats.js";
@@ -271,6 +272,7 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 	"elasticsearch_ml_get_job_stats",
 	"elasticsearch_ml_get_datafeed_stats",
 	"elasticsearch_ml_get_datafeeds",
+	"elasticsearch_ml_get_anomaly_records",
 	"elasticsearch_list_tasks",
 	"elasticsearch_tasks_get_task",
 	"elasticsearch_field_usage_stats",
@@ -531,6 +533,7 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 	registerMlGetJobStatsTool(server, esClient);
 	registerMlGetDatafeedsTool(server, esClient);
 	registerMlGetDatafeedStatsTool(server, esClient);
+	registerMlGetAnomalyRecordsTool(server, esClient);
 	registerMlOpenJobTool(server, esClient);
 	registerMlCloseJobTool(server, esClient);
 	registerMlStartDatafeedTool(server, esClient);

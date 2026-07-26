@@ -11,6 +11,7 @@ import type {
 	HilMatchCandidate,
 	KafkaFindings,
 	LearningProposal,
+	MlAnomalyExplainer,
 	NetworkTopology,
 	PendingAction,
 	StreamEvent,
@@ -339,6 +340,9 @@ export interface ReducerState {
 	// SIO-1204: once-per-turn merged network map from the network_topology event.
 	// Replace semantics (a turn emits at most one); null until the event arrives.
 	networkTopology: NetworkTopology | null;
+	// SIO-1215: once-per-turn ML anomaly explainer from the ml_anomaly_explainer
+	// event. Same replace semantics as networkTopology.
+	mlAnomalyExplainer: MlAnomalyExplainer | null;
 	// Live in-flight status during the queryDataSource fan-out (running/done +
 	// tool-call count), keyed by dataSourceId, or dataSourceId:deploymentId when
 	// deploymentId is set (distinguishes concurrent AWS multi-estate branches).
@@ -422,6 +426,7 @@ export function initialReducerState(): ReducerState {
 		dataSourceProgress: new Map(),
 		dataSourceFindings: new Map(),
 		networkTopology: null,
+		mlAnomalyExplainer: null,
 		subAgentProgress: new Map(),
 		lastSuggestions: [],
 		lastResponseTime: undefined,
@@ -501,6 +506,9 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 		// SIO-1204: merged per-turn network map.
 		case "network_topology":
 			return { ...state, networkTopology: event.topology };
+		// SIO-1215: per-turn ML anomaly explainer.
+		case "ml_anomaly_explainer":
+			return { ...state, mlAnomalyExplainer: event.explainer };
 		case "node_start": {
 			const next = new Set(state.activeNodes);
 			next.add(event.nodeId);

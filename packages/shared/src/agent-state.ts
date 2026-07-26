@@ -632,6 +632,43 @@ export const NetworkTopologySchema = z.object({
 });
 export type NetworkTopology = z.infer<typeof NetworkTopologySchema>;
 
+// SIO-1215: per-turn ML anomaly-record explainer, derived from a single
+// elasticsearch_ml_get_anomaly_records tool output by the pure
+// buildMlAnomalyExplainer builder (packages/agent/src/ml-anomaly-explainer.ts).
+// minScoreApplied is left undefined when the caller queried without a score
+// filter -- the card must render "no filter applied", never imply a hidden
+// default, mirroring the SOUL.md/SKILL.md no-silent-threshold rule.
+export const MlAnomalyRecordSchema = z.object({
+	jobId: z.string(),
+	recordScore: z.number(),
+	fieldName: z.string().optional(),
+	functionName: z.string().optional(),
+	entity: z.string().optional(),
+	deviationPercent: z.number().optional(),
+	actual: z.array(z.number()).optional(),
+	typical: z.array(z.number()).optional(),
+	timestamp: z.string().optional(),
+});
+export type MlAnomalyRecord = z.infer<typeof MlAnomalyRecordSchema>;
+
+export const MlAnomalyJobSummarySchema = z.object({
+	jobId: z.string(),
+	count: z.number().int(),
+});
+export type MlAnomalyJobSummary = z.infer<typeof MlAnomalyJobSummarySchema>;
+
+export const MlAnomalyExplainerSchema = z.object({
+	builtAtTurn: z.number().int(),
+	mode: z.enum(["overview", "detail"]),
+	minScoreApplied: z.number().optional(),
+	lookback: z.string(),
+	records: z.array(MlAnomalyRecordSchema),
+	jobsSummary: z.array(MlAnomalyJobSummarySchema),
+	investigationActions: z.array(z.string()),
+	truncated: z.boolean().optional(),
+});
+export type MlAnomalyExplainer = z.infer<typeof MlAnomalyExplainerSchema>;
+
 // SIO-631: Mitigation steps produced by the propose-mitigation node
 export const MitigationStepsSchema = z.object({
 	investigate: z.array(z.string()),
@@ -714,6 +751,9 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 	// unlike the per-datasource datasource_result above). Emitted from the
 	// extractFindings on_chain_end branch when the builder produced any nodes.
 	z.object({ type: z.literal("network_topology"), topology: NetworkTopologySchema }),
+	// SIO-1215: once-per-turn ML anomaly explainer (replace semantics), emitted from
+	// the extractFindings on_chain_end branch when the builder found matching records.
+	z.object({ type: z.literal("ml_anomaly_explainer"), explainer: MlAnomalyExplainerSchema }),
 	z.object({ type: z.literal("node_start"), nodeId: z.string() }),
 	z.object({ type: z.literal("node_end"), nodeId: z.string(), duration: z.number() }),
 	z.object({ type: z.literal("suggestions"), suggestions: z.array(z.string()) }),

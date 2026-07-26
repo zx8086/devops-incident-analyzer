@@ -8,6 +8,7 @@ import { extractElasticFindings } from "./correlation/extractors/elastic.ts";
 import { extractGitLabFindings } from "./correlation/extractors/gitlab.ts";
 import { extractKafkaFindings } from "./correlation/extractors/kafka.ts";
 import { extractOrbitFindings } from "./correlation/extractors/orbit.ts";
+import { buildMlAnomalyExplainer } from "./ml-anomaly-explainer.ts";
 import { buildNetworkTopology } from "./network-topology.ts";
 import type { AgentStateType } from "./state.ts";
 
@@ -247,5 +248,29 @@ export async function extractFindings(state: AgentStateType): Promise<Partial<Ag
 	} catch (err) {
 		logger.warn({ error: err instanceof Error ? err.message : String(err) }, "buildNetworkTopology failed");
 	}
-	return { dataSourceResults, networkTopology };
+
+	// SIO-1215: per-turn ML anomaly explainer. Same guarded/always-returned-key
+	// contract as networkTopology above -- a turn with no anomaly-record query
+	// clears a stale prior-turn card via the replace reducer.
+	let mlAnomalyExplainer: ReturnType<typeof buildMlAnomalyExplainer>;
+	try {
+		mlAnomalyExplainer = buildMlAnomalyExplainer(dataSourceResults, state.messages.length);
+		if (mlAnomalyExplainer) {
+			logCard(
+				"MlAnomalyExplainerCard",
+				focusServices,
+				mlAnomalyExplainer.records.length,
+				mlAnomalyExplainer.records.length,
+				{
+					mode: mlAnomalyExplainer.mode,
+					jobsSummary: mlAnomalyExplainer.jobsSummary,
+					truncated: mlAnomalyExplainer.truncated ?? false,
+				},
+			);
+		}
+	} catch (err) {
+		logger.warn({ error: err instanceof Error ? err.message : String(err) }, "buildMlAnomalyExplainer failed");
+	}
+
+	return { dataSourceResults, networkTopology, mlAnomalyExplainer };
 }

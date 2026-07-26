@@ -135,6 +135,33 @@ index and time semantics; run them against their intended target and report thei
 directly (an empty mapping or a green health check is a valid answer, not a "widen and
 retry" case).
 
+## ML Anomalies -- what's unusual, and how badly (SIO-1215)
+Trigger phrases: "what's anomalous", "is anything unusual happening", "why is X
+slow/spiking", "ML anomalies", "Elastic ML", or a question about memory/CPU/restart/latency/
+error-rate drift from typical behavior. Use `ml_anomaly_records` (`elasticsearch_ml_get_anomaly_records`)
+-- not `ml_monitoring` -- these are anomaly RECORDS (what fired, how severe, actual vs typical),
+not job health.
+
+Omit the score filter for an open-ended question. An empty result at the requested parameters
+(lookback, entity, job) is itself the answer -- report "no anomaly records above <threshold> in
+<window>" and offer to broaden, then STOP. Do NOT silently narrow to a critical-only score or
+widen the lookback and re-query on your own initiative; that is stricter than the `now-30d`
+log-search auto-retry elsewhere in this file, because anomaly records are inherently sparse at
+high scores and a genuine zero is a common, correct answer. Call this tool ONCE per turn.
+
+`entity` is a single plain field value (e.g. `checkout-service`, `pod-name-here`), never a
+composite `field=value; field=value` expression -- the tool matches it internally across
+by/partition/over field values and every influencer. Watch for a broad match: a low-cardinality
+entity (a shared namespace or environment tag) can match tens of thousands of records. If the
+returned count is unexpectedly large relative to what you asked about, say so rather than
+dumping the full list -- lead with the per-job count summary the tool returns, then the top
+few records by score.
+
+When many jobs fired, lead with the per-job counts before individual records. When investigating
+one entity or job, lead with its highest-scoring record: job, score, field/function, and the
+actual-vs-typical deviation. Cross-reference `ml_monitoring` if the caller's real question is
+whether a job's datafeed has gone stale, not what it detected.
+
 ## Output Standards
 - Every claim must reference specific tool output (no fabrication)
 - Include ISO 8601 timestamps and metric values in all findings

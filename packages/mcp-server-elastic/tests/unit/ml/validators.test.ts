@@ -11,6 +11,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { registerAllTools } from "../../../src/tools/index.js";
 import { mlCloseJobValidator } from "../../../src/tools/ml/close_job.js";
+import { buildJobIdFilter, mlGetAnomalyRecordsValidator } from "../../../src/tools/ml/get_anomaly_records.js";
 import { mlGetDatafeedStatsValidator } from "../../../src/tools/ml/get_datafeed_stats.js";
 import { mlGetDatafeedsValidator } from "../../../src/tools/ml/get_datafeeds.js";
 import { mlGetJobStatsValidator } from "../../../src/tools/ml/get_job_stats.js";
@@ -33,6 +34,64 @@ describe("ML read validators: id is optional (defaults to _all)", () => {
 	});
 	test("get_datafeeds accepts empty args", () => {
 		expect(() => mlGetDatafeedsValidator.parse({})).not.toThrow();
+	});
+	test("get_anomaly_records accepts empty args", () => {
+		expect(() => mlGetAnomalyRecordsValidator.parse({})).not.toThrow();
+	});
+});
+
+describe("get_anomaly_records: no-silent-threshold guard (SIO-1215)", () => {
+	test("omitting minScore leaves it undefined -- must not default to a critical-only filter", () => {
+		expect(mlGetAnomalyRecordsValidator.parse({}).minScore).toBeUndefined();
+	});
+	test("rejects minScore below 0", () => {
+		expect(() => mlGetAnomalyRecordsValidator.parse({ minScore: -1 })).toThrow();
+	});
+	test("rejects minScore above 100", () => {
+		expect(() => mlGetAnomalyRecordsValidator.parse({ minScore: 101 })).toThrow();
+	});
+	test("accepts a valid minScore", () => {
+		expect(() => mlGetAnomalyRecordsValidator.parse({ minScore: 75 })).not.toThrow();
+	});
+	test("rejects a non-positive limit", () => {
+		expect(() => mlGetAnomalyRecordsValidator.parse({ limit: 0 })).toThrow();
+	});
+	test("rejects a limit above 500", () => {
+		expect(() => mlGetAnomalyRecordsValidator.parse({ limit: 501 })).toThrow();
+	});
+	test("limit is undefined when omitted -- default of 25 is applied in the handler, not the schema", () => {
+		expect(mlGetAnomalyRecordsValidator.parse({}).limit).toBeUndefined();
+	});
+	test("accepts a plain-value entity string", () => {
+		expect(() => mlGetAnomalyRecordsValidator.parse({ entity: "checkout-service" })).not.toThrow();
+	});
+	test("rejects a blank/whitespace-only entity", () => {
+		expect(() => mlGetAnomalyRecordsValidator.parse({ entity: "   " })).toThrow();
+	});
+	test("rejects a composite `field=value; field=value` entity expression", () => {
+		expect(() => mlGetAnomalyRecordsValidator.parse({ entity: "service.name=checkout; env=prod" })).toThrow();
+	});
+});
+
+describe("get_anomaly_records: buildJobIdFilter honors the documented jobId syntax (SIO-1215 CodeRabbit)", () => {
+	test("a single id (no wildcard chars) matches only that literal id", () => {
+		expect(buildJobIdFilter("apm-high-error-rate")).toEqual({
+			wildcard: { job_id: { value: "apm-high-error-rate" } },
+		});
+	});
+	test("a comma-separated list becomes a should of wildcard clauses", () => {
+		expect(buildJobIdFilter("apm-high-error-rate, mendix-error-rate-by-app")).toEqual({
+			bool: {
+				should: [
+					{ wildcard: { job_id: { value: "apm-high-error-rate" } } },
+					{ wildcard: { job_id: { value: "mendix-error-rate-by-app" } } },
+				],
+				minimum_should_match: 1,
+			},
+		});
+	});
+	test("a wildcard expression is preserved for pattern matching, not treated as a literal", () => {
+		expect(buildJobIdFilter("mendix-*")).toEqual({ wildcard: { job_id: { value: "mendix-*" } } });
 	});
 });
 
