@@ -85,8 +85,10 @@ export const MODEL_REGISTRY = {
 	"claude-sonnet-5": {
 		bedrockId: "eu.anthropic.claude-sonnet-5",
 		acceptsTemperature: false,
-		// The most verbose model in either chain: it needs ~4,300-4,700 output tokens for a full
-		// report and truncates at 4096, where Haiku 4.5 finishes in 3,874 and Opus 4.8 in 2,964.
+		// The most verbose model in either chain. On the committed probe's full six-section report
+		// it emits ~3,900-4,300 output tokens (4,287 at a 8192 cap, 3,874 at 16384) and TRUNCATES at
+		// 4096, where Haiku 4.5 finishes the same report in 3,289 and Opus 4.8 in 3,094. Numbers
+		// come from docs/reference/model-probes/*.md -- keep them in step with those reports.
 		contentShapeWithoutTools: "blocks",
 		contentShapeWithTools: "blocks",
 		observedBlockTypes: ["reasoning", "text"],

@@ -198,8 +198,12 @@ Rules:
 	const text = extractTextFromContent(response.content);
 	const result = parseLlmJson(text, ClassificationSchema);
 	if (!result.ok) {
+		// SIO-1222 review: log the LENGTH, never the raw text. The router's response can echo the
+		// user's incident query back (hostnames, IPs, emails), and every sibling parseLlmJson call
+		// site logs only reason/message. Raw model output must go through redactPiiContent or not
+		// be logged at all.
 		logger.warn(
-			{ reason: result.reason, detail: result.message, rawResponse: text.slice(0, 200) },
+			{ reason: result.reason, detail: result.message, responseLength: text.length },
 			"Router JSON unusable; defaulting to ambiguous",
 		);
 		return { kind: "ambiguous" };

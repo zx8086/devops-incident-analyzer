@@ -1,6 +1,7 @@
 // apps/web/src/lib/server/agent.test.ts
 import { describe, expect, mock, test } from "bun:test";
 import { EventEmitter } from "node:events";
+import { z } from "zod";
 
 const mockStreamEvents = mock(() => ({
 	async *[Symbol.asyncIterator]() {
@@ -99,22 +100,25 @@ mock.module("@devops-agent/agent", () => ({
 	// SIO-1110: agent.ts threads the graph deadline into configurable under this key.
 	GRAPH_DEADLINE_KEY: "graphDeadlineAt",
 	// SIO-1222: agent.ts now routes both of its message-content reads through this helper
-	// (readCompletedTurn's transcript and getLastAssistantText). Mirrors the real
-	// implementation's shape handling -- string passthrough, text blocks joined, everything
-	// else dropped -- so transcript assertions stay meaningful rather than asserting on a stub.
+	// (readCompletedTurn's transcript and getLastAssistantText), so transcript assertions must
+	// exercise real shape handling rather than a stub.
+	//
+	// SIO-1222 review: this must mirror packages/agent/src/message-utils.ts EXACTLY, including the
+	// lone-block branch -- an earlier version returned "" for a single unwrapped text block while
+	// production returns its text, so a test could pass against behaviour production renders
+	// differently. Uses the same Zod-backed predicate as production rather than hand-rolled
+	// `unknown` narrowing.
 	extractTextFromContent: (content: unknown): string => {
+		const textBlock = z.object({ type: z.literal("text"), text: z.string() }).passthrough();
+		const isTextBlock = (b: unknown): b is { type: "text"; text: string } => textBlock.safeParse(b).success;
 		if (typeof content === "string") return content;
-		if (!Array.isArray(content)) return "";
-		return content
-			.filter(
-				(b): b is { type: "text"; text: string } =>
-					typeof b === "object" &&
-					b !== null &&
-					(b as { type?: unknown }).type === "text" &&
-					typeof (b as { text?: unknown }).text === "string",
-			)
-			.map((b) => b.text)
-			.join("\n");
+		if (Array.isArray(content))
+			return content
+				.filter(isTextBlock)
+				.map((b) => b.text)
+				.join("\n");
+		// A single content block that was never wrapped in an array.
+		return isTextBlock(content) ? content.text : "";
 	},
 	// SIO-780: datasources route test runs later and imports these from the same
 	// @devops-agent/agent module; include them here so the cached namespace has

@@ -7,7 +7,7 @@ description: >
   a validated Terraform change and a GitLab MR.
 
 # SIO-1224: read docs/development/model-upgrade-checklist.md BEFORE changing these.
-# The SIO-1213 bump caused five production failures in one day; the checklist's gates exist
+# The SIO-1213 bump caused six production failures in one day; the checklist's gates exist
 # to catch each of them before merge rather than in production.
 model:
   # SIO-1213: upgraded from claude-opus-4-6 / claude-sonnet-4-6

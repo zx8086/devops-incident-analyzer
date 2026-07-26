@@ -69,9 +69,9 @@ export const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	orchestrator: {},
 	classifier: { temperature: 0 },
 	// SIO-1225: was {} -- inheriting the orchestrator manifest's max_tokens: 4096. SIO-1224's
-	// probe measured Sonnet 5 (which is what this role resolves to) needing ~4,300-4,700 output
-	// tokens for a full report and TRUNCATING at 4096, where Haiku 4.5 finished in 3,874 and
-	// Opus 4.8 in 2,964. A truncated sub-agent report is the SIO-649 failure one layer down: the
+	// probe measured Sonnet 5 (which is what this role resolves to) emitting ~3,900-4,300 output
+	// tokens for a full report and TRUNCATING at 4096, where Haiku 4.5 finished the same report in
+	// 3,289 and Opus 4.8 in 3,094. A truncated sub-agent report is the SIO-649 failure one layer down: the
 	// findings block is cut off and the aggregator silently correlates less than was found.
 	subAgent: { maxTokens: 8192 },
 	// SIO-649: Multi-deployment elastic fan-out produces reports with a per-deployment
@@ -126,9 +126,9 @@ export const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 // its mandatory trailing Confidence line, leaving the HITL gate a 0 score), which a more
 // verbose model reproduces at a budget that used to be ample.
 //
-// Membership is narrow ON PURPOSE. SIO-1224's probe measured Sonnet 5 needing ~4,300-4,700
-// output tokens for a full six-section incident report, making 8192 the smallest CONFIGURED
-// budget that clears it. Applying that floor to a role that emits a compact JSON envelope
+// Membership is narrow ON PURPOSE. SIO-1224's probe measured Sonnet 5 emitting ~3,900-4,300
+// output tokens for a full six-section incident report and truncating at a 4096 cap, making 8192
+// the smallest CONFIGURED budget that clears it. Applying that floor to a role that emits a compact JSON envelope
 // would inflate its budget for nothing, so only roles whose output is genuinely a long
 // document belong here.
 //

@@ -5,7 +5,7 @@ Follow this before changing `model.preferred` or `model.fallback` in any `agents
 ## Why this exists
 
 SIO-1213 bumped two manifests (`incident-analyzer` to Sonnet 5, `elastic-iac` to Opus 4.8) and
-**five production failures followed in a single day**:
+**six production failures followed in a single day**:
 
 | Ticket | Failure | The assumption that broke |
 |---|---|---|
@@ -38,7 +38,11 @@ Commit the generated `docs/reference/model-probes/<model-name>.md`.
 
 ### 2. Declare the model's capabilities
 
-Paste the probe's `--discover` output into `MODEL_REGISTRY`
+```bash
+bun run model:probe -- <model-name> --discover
+```
+
+Paste that output into `MODEL_REGISTRY`
 (`packages/gitagent-bridge/src/model-registry.ts`). A model is not "known" to this codebase
 until it has a complete capability record.
 

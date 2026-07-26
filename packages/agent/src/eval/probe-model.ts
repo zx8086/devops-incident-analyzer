@@ -214,11 +214,15 @@ async function probeContentShape(bedrockId: string): Promise<{
 	// garbled mid-word, so count those explicitly instead of inferring from the invoke shape.
 	let streamMultiBlockChunks = 0;
 	let streamText = "";
-	const stream = await build(bedrockId, 1024).stream(REASONING_MESSAGES());
-	for await (const chunk of stream) {
-		if (Array.isArray(chunk.content) && chunk.content.length > 1) streamMultiBlockChunks++;
-		streamText += extractStreamDeltaText(chunk.content);
-	}
+	// Timed like every other probe call: timed() wraps the WHOLE drain, not just the initial
+	// stream() handshake, so P7's p50/max genuinely covers this call too.
+	await timed(async () => {
+		const stream = await build(bedrockId, 1024).stream(REASONING_MESSAGES());
+		for await (const chunk of stream) {
+			if (Array.isArray(chunk.content) && chunk.content.length > 1) streamMultiBlockChunks++;
+			streamText += extractStreamDeltaText(chunk.content);
+		}
+	});
 
 	return {
 		// "blocks" if ANY no-tool prompt returned blocks -- adaptive thinking makes this a union.

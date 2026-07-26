@@ -34,6 +34,8 @@ const SCAN_ROOTS = ["packages/agent/src", "apps/web/src"];
 //     tolerate that level so a cast like `String((m as { content: unknown }).content)` is
 //     caught; it must not tolerate more, or `truncateToolOutput(JSON.stringify(v), N).content`
 //     would match on a `.content` that belongs to the OUTER call's result.
+// `[^()]` is a NEGATED class, so it already spans newlines -- combined with the whole-file scan
+// below, a call split across lines is matched without needing an explicit `[\s\S]`.
 const ARGS = String.raw`(?:[^()]|\([^()]*\))*`;
 const FORBIDDEN: ReadonlyArray<{ pattern: RegExp; why: string }> = [
 	{
@@ -101,14 +103,21 @@ describe("message content must go through message-utils", () => {
 		for (const file of files) {
 			const rel = relative(ROOT, file);
 			if (ALLOWED.has(rel)) continue;
-			const lines = readFileSync(file, "utf-8").split("\n");
-			for (const [i, line] of lines.entries()) {
-				if (line.trimStart().startsWith("//") || line.trimStart().startsWith("*")) continue;
-				if (isOptedOut(lines, i)) continue;
-				for (const { pattern, why } of FORBIDDEN) {
-					if (pattern.test(line)) {
-						violations.push(`${rel}:${i + 1}  ${why}\n    ${line.trim()}`);
-					}
+			const text = readFileSync(file, "utf-8");
+			const lines = text.split("\n");
+			// SIO-1222 review: scan the WHOLE file text, not line by line. A per-line scan misses
+			// `String(\n  msg.content\n)` -- a formatter can split a long call across lines at any
+			// time, which would have been a silent bypass of this guard.
+			for (const { pattern, why } of FORBIDDEN) {
+				const rx = new RegExp(pattern.source, "gm");
+				for (const match of text.matchAll(rx)) {
+					const index = match.index ?? 0;
+					// Map the byte offset back to a 0-based line number for the opt-out check.
+					const lineNo = text.slice(0, index).split("\n").length - 1;
+					const line = lines[lineNo] ?? "";
+					if (line.trimStart().startsWith("//") || line.trimStart().startsWith("*")) continue;
+					if (isOptedOut(lines, lineNo)) continue;
+					violations.push(`${rel}:${lineNo + 1}  ${why}\n    ${match[0].replace(/\s+/g, " ").trim()}`);
 				}
 			}
 		}
@@ -130,6 +139,10 @@ describe("message content must go through message-utils", () => {
 			'return typeof m.content === "string" ? m.content : JSON.stringify(m.content);',
 			"const text = String(response.content);",
 			"const answer = msg.content as string;",
+			// SIO-1222 review: a formatter can split a long call across lines at any time. The
+			// per-line scan this replaced would have missed exactly this shape.
+			"const text = String(\n\tmessage.content,\n);",
+			"const t = JSON.stringify(\n\tlastMessage.content,\n);",
 		];
 		for (const line of historical) {
 			expect(

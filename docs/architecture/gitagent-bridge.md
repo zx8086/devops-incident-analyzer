@@ -327,8 +327,12 @@ time), and fully dateless (the rest). All five were verified against
 An entry marked "rollback only" has no committed probe report and **no manifest may reference
 it** — a test enforces that (see the Model Upgrade Checklist). Region defaults to
 `eu-central-1` (overridable via `AWS_REGION`). Temperature and max tokens come from the
-manifest's `model.constraints`, with caller-provided defaults as fallback; `temperature` is
-omitted entirely for a model whose record says `acceptsTemperature: false`.
+manifest's `model.constraints`, with caller-provided defaults as fallback.
+
+`resolveBedrockConfig()` always returns a `temperature` on `BedrockModelConfig`. Dropping it is a
+separate step: `buildChatModel()` in `packages/agent/src/llm.ts` omits the field when constructing
+`ChatBedrockConverse` for a model whose record says `acceptsTemperature: false`. The returned
+config contract is unchanged.
 
 **`getRecursionLimit(maxTurns): number`** converts the manifest's `runtime.max_turns` into a LangGraph recursion limit (maxTurns * 2, default 50).
 
