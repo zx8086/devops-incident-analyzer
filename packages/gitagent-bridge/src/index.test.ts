@@ -1,5 +1,6 @@
 // gitagent-bridge/src/index.test.ts
 import { describe, expect, test } from "bun:test";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
 	buildFacadeMap,
@@ -71,19 +72,57 @@ describe("manifest-loader", () => {
 		expect(agent.skills.has("wiki-query")).toBe(true);
 	});
 
-	test("loads all 5 sub-agents recursively", () => {
+	test("loads all 7 sub-agents recursively", () => {
 		const agent = loadAgent(AGENTS_DIR);
-		expect(agent.subAgents.size).toBe(5);
+		expect(agent.subAgents.size).toBe(7);
 		expect(agent.subAgents.has("elastic-agent")).toBe(true);
 		expect(agent.subAgents.has("kafka-agent")).toBe(true);
 		expect(agent.subAgents.has("capella-agent")).toBe(true);
 		expect(agent.subAgents.has("konnect-agent")).toBe(true);
 		expect(agent.subAgents.has("gitlab-agent")).toBe(true);
+		// SIO-1229: these two dispatch by name but were undeclared in agent.yaml,
+		// so they were absent here and silently ran on the orchestrator prompt.
+		expect(agent.subAgents.has("atlassian-agent")).toBe(true);
+		expect(agent.subAgents.has("aws-agent")).toBe(true);
 
 		const elastic = agent.subAgents.get("elastic-agent") as ReturnType<typeof loadAgent>;
 		expect(elastic.manifest.name).toBe("elastic-agent");
 		expect(elastic.manifest.model?.preferred).toBe("claude-haiku-4-5");
 		expect(elastic.soul).toContain("Elasticsearch specialist");
+	});
+
+	// SIO-1229: the regression this guards is NOT the count -- it is that every
+	// sub-agent that EXISTS ON DISK is declared in agent.yaml and therefore gets its
+	// OWN prompt. When a sub-agent is missing from `subAgents`, buildSubAgentPrompt
+	// falls back to buildSystemPrompt(rootAgent): the agent still dispatches and still
+	// runs, just silently wearing the orchestrator's identity instead of its SOUL.md.
+	//
+	// This MUST iterate the directory listing, not `agent.subAgents`. Iterating the
+	// loaded map cannot observe an undeclared agent -- the very thing that goes wrong --
+	// so it would pass vacuously. (Same trap as model-registry.test.ts's `if (!sub)
+	// continue`, which silently skipped these two agents for months.)
+	test("every sub-agent directory on disk is declared and gets its own prompt", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const rootPrompt = buildSystemPrompt(agent);
+
+		const onDisk = readdirSync(join(AGENTS_DIR, "agents"), { withFileTypes: true })
+			.filter((e) => e.isDirectory() && existsSync(join(AGENTS_DIR, "agents", e.name, "agent.yaml")))
+			.map((e) => e.name);
+
+		expect(onDisk.length).toBeGreaterThan(0);
+
+		for (const name of onDisk) {
+			const subAgent = agent.subAgents.get(name);
+			expect(subAgent, `${name} exists on disk but is not declared in agent.yaml`).toBeDefined();
+			if (!subAgent) continue;
+
+			const prompt = buildSystemPrompt(subAgent);
+			expect(prompt, `${name} received the orchestrator prompt`).not.toBe(rootPrompt);
+			expect(prompt, `${name} prompt is missing its own SOUL.md`).toContain(subAgent.soul.trim());
+			if (subAgent.rules.trim()) {
+				expect(prompt, `${name} prompt is missing its own RULES.md`).toContain(subAgent.rules.trim());
+			}
+		}
 	});
 });
 
