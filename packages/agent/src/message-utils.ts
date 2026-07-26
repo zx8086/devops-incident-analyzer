@@ -1,5 +1,6 @@
 // agent/src/message-utils.ts
 import type { MessageContentText } from "@langchain/core/messages";
+import { z } from "zod";
 
 // SIO-1217: AIMessage(Chunk).content is typed string | MessageContentComplex[] --
 // Bedrock Converse responses for Claude's 4.7+/5-generation models (adaptive thinking
@@ -7,14 +8,15 @@ import type { MessageContentText } from "@langchain/core/messages";
 // instead of a plain string. String(content) on that array silently produces
 // "[object Object],[object Object],..." via Array.prototype.toString(). Always route
 // through this helper instead of String(x.content) at any LLM-response call site.
+const textBlockSchema = z
+	.object({
+		type: z.literal("text"),
+		text: z.string(),
+	})
+	.passthrough();
+
 function isTextBlock(block: unknown): block is MessageContentText {
-	return (
-		block !== null &&
-		typeof block === "object" &&
-		"type" in block &&
-		block.type === "text" &&
-		typeof (block as { text?: unknown }).text === "string"
-	);
+	return textBlockSchema.safeParse(block).success;
 }
 
 export function extractTextFromContent(content: unknown): string {
