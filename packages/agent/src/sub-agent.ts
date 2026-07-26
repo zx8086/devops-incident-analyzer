@@ -21,7 +21,7 @@ import { getToolsForDataSource, withAwsEstate, withElasticDeployment } from "./m
 import { extractTextFromContent } from "./message-utils.ts";
 import { fetchNetworkBaseline, isNetworkBaselineEnabled } from "./network-baseline.ts";
 import { buildCachedSystemMessage } from "./prompt-cache.ts";
-import { buildSubAgentPrompt, getToolDefinitionForDataSource } from "./prompt-context.ts";
+import { buildSubAgentPrompt, getSkillToolNames, getToolDefinitionForDataSource } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
 import { buildFocusBlock } from "./sub-agent-focus-block.ts";
 import { instrumentTools, TYPED_FINDING_TOOLS } from "./sub-agent-instrumentation.ts";
@@ -810,6 +810,44 @@ function withResolutionTools(
 	return [...extras, ...selected];
 }
 
+// SIO-1228: union in the tools the sub-agent's SKILL.md prose tells the model to call.
+// Skill bodies are in the system prompt on EVERY turn (prompt-context.ts calls
+// buildSystemPrompt with no activeSkills filter), but action-driven selection binds only
+// the groups the entity extractor picked. On a turn that missed the matching group the
+// model followed its instructions, called an unbound tool, got `Tool "X" not found`
+// -- classified `unknown` -> retryable -- and burned ReAct iterations to the recursion
+// limit, contributing nothing. Binding what the prompt promises makes the two sources of
+// truth unable to diverge.
+//
+// `skillToolNames` deliberately over-matches (the extractor also picks up prose
+// identifiers like `project_id`); intersecting with allTools here is what discards them,
+// so a name that is not a real tool is inert rather than an error.
+function withSkillPromisedTools(
+	selected: StructuredToolInterface[],
+	allTools: StructuredToolInterface[],
+	skillToolNames: string[] | undefined,
+): StructuredToolInterface[] {
+	if (!skillToolNames || skillToolNames.length === 0) return selected;
+	const present = new Set(selected.map((t) => t.name));
+	const missingSet = new Set(skillToolNames.filter((name) => !present.has(name)));
+	if (missingSet.size === 0) return selected;
+	const extras = allTools.filter((t) => missingSet.has(t.name));
+	if (extras.length === 0) return selected;
+	return [...extras, ...selected];
+}
+
+// Resolution tools stay at the HEAD: the SIO-1029/1084 A5 invariant steers the model to
+// its "where to look" enumerator first, and SIO-1228 must not weaken that. Order is
+// [resolution] ++ [skill-promised] ++ [action-selected], then the caller slices to 25.
+function withRequiredTools(
+	selected: StructuredToolInterface[],
+	allTools: StructuredToolInterface[],
+	dataSourceId: string,
+	skillToolNames: string[] | undefined,
+): StructuredToolInterface[] {
+	return withResolutionTools(withSkillPromisedTools(selected, allTools, skillToolNames), allTools, dataSourceId);
+}
+
 // SIO-738: Shared merge step so the augmentation test exercises the same
 // dedup logic the production runSubAgent path uses. Returns baseActions
 // reference unchanged when keywordActions is empty (no extra allocation).
@@ -877,13 +915,22 @@ export function selectToolsByAction(
 	dataSourceId: string,
 	toolActions: Record<string, string[]> | undefined,
 	toolDef: ToolDefinition | undefined,
+	// SIO-1228: tool names the sub-agent's skill prose promises. Passed in rather than
+	// resolved here so this stays a pure function -- reaching for getAgent() would make
+	// every caller mock prompt-context, which pollutes other tests in this package.
+	skillToolNames?: string[],
 ): { tools: StructuredToolInterface[]; filtered: boolean } {
 	if (allTools.length <= MAX_TOOLS_PER_AGENT) {
 		return { tools: allTools, filtered: false };
 	}
 
 	if (!toolDef?.tool_mapping?.action_tool_map) {
-		return { tools: allTools.slice(0, MAX_TOOLS_PER_AGENT), filtered: true };
+		// Skill tools only -- this path deliberately does NOT union the resolution set, so
+		// its pre-SIO-1228 behaviour is preserved exactly. Every shipped datasource has an
+		// action_tool_map, so the branch is unreachable for them today; widening the
+		// resolution invariant here would be an untested change unrelated to this fix.
+		const withSkills = withSkillPromisedTools(allTools.slice(0, MAX_TOOLS_PER_AGENT), allTools, skillToolNames);
+		return { tools: withSkills.slice(0, MAX_TOOLS_PER_AGENT), filtered: true };
 	}
 
 	const actions = toolActions?.[dataSourceId];
@@ -893,8 +940,8 @@ export function selectToolsByAction(
 			const nameSet = new Set(toolNames);
 			const selected = allTools.filter((t) => nameSet.has(t.name));
 			if (selected.length >= MIN_FILTERED_TOOLS) {
-				const withResolution = withResolutionTools(selected, allTools, dataSourceId);
-				return { tools: withResolution.slice(0, MAX_TOOLS_PER_AGENT), filtered: true };
+				const withRequired = withRequiredTools(selected, allTools, dataSourceId, skillToolNames);
+				return { tools: withRequired.slice(0, MAX_TOOLS_PER_AGENT), filtered: true };
 			}
 		}
 	}
@@ -904,8 +951,8 @@ export function selectToolsByAction(
 		const nameSet = new Set(allActionNames);
 		const selected = allTools.filter((t) => nameSet.has(t.name));
 		if (selected.length >= MIN_FILTERED_TOOLS) {
-			const withResolution = withResolutionTools(selected, allTools, dataSourceId);
-			return { tools: withResolution.slice(0, MAX_TOOLS_PER_AGENT), filtered: true };
+			const withRequired = withRequiredTools(selected, allTools, dataSourceId, skillToolNames);
+			return { tools: withRequired.slice(0, MAX_TOOLS_PER_AGENT), filtered: true };
 		}
 	}
 
@@ -914,8 +961,15 @@ export function selectToolsByAction(
 	// `list_services` while runtime tools are `konnect_*`-prefixed), still union in
 	// the datasource's resolution tools so the "where to look" enumerator is always
 	// present, then slice. Guarantees the A5 invariant on every path.
-	const withResolution = withResolutionTools(allTools.slice(0, MAX_TOOLS_PER_AGENT), allTools, dataSourceId);
-	return { tools: withResolution.slice(0, MAX_TOOLS_PER_AGENT), filtered: true };
+	// SIO-1228: same reasoning for the skill-promised tools -- the prompt makes the same
+	// promises regardless of which path selection took.
+	const withRequired = withRequiredTools(
+		allTools.slice(0, MAX_TOOLS_PER_AGENT),
+		allTools,
+		dataSourceId,
+		skillToolNames,
+	);
+	return { tools: withRequired.slice(0, MAX_TOOLS_PER_AGENT), filtered: true };
 }
 
 interface RunOptions {
@@ -1032,7 +1086,18 @@ ${state.correlationFetchDirective}`
 			);
 		}
 
-		const { tools, filtered } = selectToolsByAction(allTools, dataSourceId, augmentedToolActions, toolDef);
+		// SIO-1228: bind whatever this sub-agent's skill prose promises, so the prompt can
+		// never instruct the model to call a tool the action filter withheld. Keyed off the
+		// SAME agentName buildSubAgentPrompt used above, so the bound set and the prompt
+		// that makes the promises can never be resolved from different agents.
+		const skillToolNames = getSkillToolNames(agentName);
+		const { tools, filtered } = selectToolsByAction(
+			allTools,
+			dataSourceId,
+			augmentedToolActions,
+			toolDef,
+			skillToolNames,
+		);
 		log.info(
 			{ toolCount: tools.length, totalTools: allTools.length, filtered, deploymentId },
 			"Creating ReAct agent with tools",
