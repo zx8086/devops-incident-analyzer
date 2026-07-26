@@ -166,7 +166,7 @@ describe("recordIacPromptNode (SIO-1038)", () => {
 		const merge = store.calls.find((c) => c.cypher.includes("MERGE (p:Prompt"));
 		expect(merge?.params?.id).toBe("req-1");
 		expect(merge?.params?.text).toBe(longPrompt);
-		expect((merge?.params?.text as string).length).toBeGreaterThan(280);
+		expect((merge!.params!.text as string).length).toBeGreaterThan(280);
 		expect(merge?.params?.agent).toBe("elastic-iac");
 		expect(store.calls.some((c) => c.cypher.includes("PROMPTED_IN") && c.params?.tid === "thread-abc")).toBe(true);
 	});

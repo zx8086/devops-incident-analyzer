@@ -78,7 +78,7 @@ function sameServiceSet(a: string[], b: string[]): boolean {
 // outcomes) so an empty-but-correct scope still confirms its identifier; only a real
 // malfunction (auth/server/bad-query) blocks confirmation.
 function datasourceConfirmed(result: DataSourceResult | undefined): boolean {
-	if (!result || result.status !== "success") return false;
+	if (result?.status !== "success") return false;
 	return (result.toolErrors ?? []).every((e) => !isDegradingCategory(e.category));
 }
 

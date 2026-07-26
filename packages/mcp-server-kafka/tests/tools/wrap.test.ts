@@ -179,13 +179,14 @@ describe("wrapHandler", () => {
 	});
 
 	describe("read tools pass through", () => {
-		test.each([{ tool: "kafka_list_topics" }, { tool: "kafka_describe_cluster" }])("$tool always works", async ({
-			tool,
-		}) => {
-			const handler = wrapHandler(tool, makeConfig({}), successHandler);
-			const result = await handler({});
-			expect(result.isError).toBeUndefined();
-		});
+		test.each([{ tool: "kafka_list_topics" }, { tool: "kafka_describe_cluster" }])(
+			"$tool always works",
+			async ({ tool }) => {
+				const handler = wrapHandler(tool, makeConfig({}), successHandler);
+				const result = await handler({});
+				expect(result.isError).toBeUndefined();
+			},
+		);
 	});
 
 	describe("error logging on handler throw", () => {

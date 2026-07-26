@@ -428,7 +428,7 @@ describe("health integration", () => {
 		const range = call?.args[0].input.filter?.startTimes?.[0];
 		expect(range?.from).toBeInstanceOf(Date);
 		expect(range?.to).toBeInstanceOf(Date);
-		expect((range?.from as Date).toISOString()).toBe("2026-07-01T00:00:00.000Z");
+		expect((range!.from as Date).toISOString()).toBe("2026-07-01T00:00:00.000Z");
 	});
 
 	test("coerceFilterDates drops an unparseable date bound instead of sending Invalid Date", () => {

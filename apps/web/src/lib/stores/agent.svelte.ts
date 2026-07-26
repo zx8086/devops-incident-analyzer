@@ -434,7 +434,7 @@ function createAgentStore() {
 
 	async function setFeedback(messageIndex: number, score: "up" | "down") {
 		const msg = messages[messageIndex];
-		if (!msg || msg.role !== "assistant") return;
+		if (msg?.role !== "assistant") return;
 		const current = msg.feedback === score ? null : score;
 		messages = messages.map((m, i) => (i === messageIndex ? { ...m, feedback: current } : m));
 

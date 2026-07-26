@@ -618,15 +618,14 @@ describe("buildExplainStatement (SIO-1107)", () => {
 // SIO-1107: lock in the first-token gate assumption -- EXPLAIN / SELECT ADVISOR /
 // INFER must pass readOnlyQueryMode; mutations must still be caught.
 describe("sqlppParser read-only gate regression (SIO-1107)", () => {
-	test.each([
-		"EXPLAIN SELECT * FROM c",
-		"SELECT ADVISOR('SELECT 1') AS r",
-		"INFER `c`",
-	])("%p passes modifiesData and modifiesStructure", (q) => {
-		const parsed = sqlppParser.parse(q);
-		expect(sqlppParser.modifiesData(parsed)).toBe(false);
-		expect(sqlppParser.modifiesStructure(parsed)).toBe(false);
-	});
+	test.each(["EXPLAIN SELECT * FROM c", "SELECT ADVISOR('SELECT 1') AS r", "INFER `c`"])(
+		"%p passes modifiesData and modifiesStructure",
+		(q) => {
+			const parsed = sqlppParser.parse(q);
+			expect(sqlppParser.modifiesData(parsed)).toBe(false);
+			expect(sqlppParser.modifiesStructure(parsed)).toBe(false);
+		},
+	);
 
 	test.each(["DELETE FROM c", "UPSERT INTO c VALUES ('k', {})"])("%p is caught as data modification", (q) => {
 		const parsed = sqlppParser.parse(q);

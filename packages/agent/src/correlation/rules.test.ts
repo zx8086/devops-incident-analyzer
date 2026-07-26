@@ -67,7 +67,7 @@ describe("aws-cloudwatch-anomaly-needs-kafka-lag", () => {
 		const match = rule.trigger(state);
 		expect(match).not.toBeNull();
 		// The scoped alarms are surfaced in context, not just a boolean.
-		expect((match?.context.alarms as AwsCloudWatchAlarm[]).map((a) => a.name)).toContain(
+		expect((match!.context.alarms as AwsCloudWatchAlarm[]).map((a) => a.name)).toContain(
 			"MSK-ConsumerLag-High-payments",
 		);
 	});
@@ -370,7 +370,7 @@ Confidence: 0.87`;
 		expect(match).not.toBeNull();
 		expect(match?.context.services).toEqual(["stock-service", "prices-producer-v2-service"]);
 		expect(Array.isArray(match?.context.bullets)).toBe(true);
-		expect((match?.context.bullets as string[]).length).toBe(2);
+		expect((match!.context.bullets as string[]).length).toBe(2);
 	});
 
 	test("trigger is null when an elastic result already covers every gap service", () => {
@@ -393,7 +393,7 @@ Confidence: 0.87`;
 - \`svc-c\` logs were not retrieved
 - \`svc-d\` logs were not retrieved`;
 		const match = rule.trigger(stateWith(many));
-		expect((match?.context.services as string[]).length).toBe(3);
+		expect((match!.context.services as string[]).length).toBe(3);
 	});
 
 	// CodeRabbit (PR #419): the candidate set is fixed BEFORE coverage filtering, so a

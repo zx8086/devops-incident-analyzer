@@ -79,7 +79,7 @@ describe("ksqldb-unresponsive-task", () => {
 		const state = withKafkaProseResult(baseState(), prose);
 		const match = rule.trigger(state);
 		expect(match).not.toBeNull();
-		expect((match?.context as { signal: string }).signal).toBe("ksqldb-unresponsive");
+		expect((match!.context as { signal: string }).signal).toBe("ksqldb-unresponsive");
 	});
 
 	test("does not fire when only UNRESPONSIVE appears without statusCount", () => {
