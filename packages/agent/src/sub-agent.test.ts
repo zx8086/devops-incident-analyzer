@@ -6,9 +6,11 @@ import {
 	classifyToolError,
 	extractToolErrors,
 	getSubAgentRecursionLimit,
+	getSubAgentRetryTimeoutMs,
 	getSubAgentTimeoutMs,
 	invokeSubAgentWithSalvage,
 	isRecursionLimitError,
+	isSubAgentAbort,
 	normalizeToolContent,
 } from "./sub-agent.ts";
 
@@ -48,14 +50,46 @@ describe("getSubAgentRecursionLimit", () => {
 		expect(getSubAgentRecursionLimit("elastic", {})).toBe(40);
 	});
 
-	test("returns undefined for non-elastic data sources", () => {
-		for (const ds of ["kafka", "couchbase", "konnect", "gitlab", "atlassian"]) {
-			expect(getSubAgentRecursionLimit(ds, { SUBAGENT_ELASTIC_RECURSION_LIMIT: "60" })).toBeUndefined();
+	// SIO-1232: this previously asserted `toBeUndefined()` for every non-elastic datasource. That
+	// WAS the bug -- the caller only spread recursionLimit when defined, so five of the seven
+	// sub-agents ran on LangGraph's default 25 super-steps with no explicit budget, and gitlab made
+	// 97 tool calls before the 6-minute wall stopped it. Every datasource now gets an explicit limit.
+	test("returns an explicit per-datasource limit for every data source", () => {
+		const expected: Record<string, number> = {
+			elastic: 40,
+			aws: 40,
+			couchbase: 30,
+			gitlab: 24,
+			kafka: 24,
+			konnect: 24,
+			atlassian: 20,
+		};
+		for (const [ds, limit] of Object.entries(expected)) {
+			expect(getSubAgentRecursionLimit(ds, {}), `${ds} recursion limit`).toBe(limit);
 		}
 	});
 
-	test("honors SUBAGENT_ELASTIC_RECURSION_LIMIT override for elastic", () => {
+	test("falls back to the generic default for an unknown data source", () => {
+		expect(getSubAgentRecursionLimit("brand-new-source", {})).toBe(30);
+	});
+
+	// The elastic-only env var predates the generic one and may already be set in a deployed
+	// environment, so it must keep working rather than silently stop taking effect.
+	test("honors SUBAGENT_ELASTIC_RECURSION_LIMIT as a back-compat alias for elastic only", () => {
 		expect(getSubAgentRecursionLimit("elastic", { SUBAGENT_ELASTIC_RECURSION_LIMIT: "60" })).toBe(60);
+		// ...and it must not leak onto other datasources, which keep their own defaults.
+		expect(getSubAgentRecursionLimit("gitlab", { SUBAGENT_ELASTIC_RECURSION_LIMIT: "60" })).toBe(24);
+	});
+
+	test("honors the generic per-datasource override", () => {
+		expect(getSubAgentRecursionLimit("gitlab", { SUBAGENT_RECURSION_LIMIT_GITLAB: "12" })).toBe(12);
+		expect(getSubAgentRecursionLimit("aws", { SUBAGENT_RECURSION_LIMIT_AWS: "7" })).toBe(7);
+	});
+
+	test("falls back to the datasource default on an invalid generic override", () => {
+		for (const raw of ["nonsense", "0", "-5", ""]) {
+			expect(getSubAgentRecursionLimit("gitlab", { SUBAGENT_RECURSION_LIMIT_GITLAB: raw })).toBe(24);
+		}
 	});
 
 	test("falls back to default on invalid env values", () => {
@@ -95,6 +129,100 @@ describe("getSubAgentTimeoutMs", () => {
 // SIO-698: typed OAuth errors must classify as auth/non-retryable so the
 // alignment loop fast-fails instead of burning retry budget on a dead
 // refresh chain or a headless-blocked interactive auth prompt.
+// SIO-1232: `Tool "X" not found` is what LangGraph's ToolNode throws when the model calls a tool the
+// 25-tool binder withheld. It fell through to the `unknown` default, which is RETRYABLE, so the
+// model re-issued it and alignment re-dispatched the whole sub-agent. Observed live on aws for
+// aws_ecs_list_clusters, aws_logs_describe_log_groups, aws_rds_describe_db_instances,
+// aws_logs_start_query and aws_health_describe_events.
+describe("SIO-1232: unbound-tool errors are deterministic, not retryable", () => {
+	test("classifies the verbatim LangGraph ToolNode message as not-found", () => {
+		const result = classifyToolError('Error: Tool "aws_ecs_list_clusters" not found.\n Please fix your mistakes.');
+		expect(result.category).toBe("not-found");
+		expect(result.retryable).toBe(false);
+	});
+
+	test("classifies every unbound tool observed in the failing run", () => {
+		for (const tool of [
+			"aws_ecs_list_clusters",
+			"aws_logs_describe_log_groups",
+			"aws_rds_describe_db_instances",
+			"aws_logs_start_query",
+			"aws_health_describe_events",
+		]) {
+			const result = classifyToolError(`Error: Tool "${tool}" not found.\n Please fix your mistakes.`);
+			expect(result.category, tool).toBe("not-found");
+			expect(result.retryable, tool).toBe(false);
+		}
+	});
+
+	// The not-found group is deliberately FIRST in ERROR_PATTERNS: /timeout/i in the transient group
+	// would otherwise claim a not-found message that happened to mention one.
+	test("not-found wins over a transient keyword in the same message", () => {
+		const result = classifyToolError('Tool "aws_logs_start_query" not found. (after a timeout retry)');
+		expect(result.category).toBe("not-found");
+		expect(result.retryable).toBe(false);
+	});
+
+	test("does not swallow a genuine transient error", () => {
+		expect(classifyToolError("Request timeout after 30s").category).toBe("transient");
+		expect(classifyToolError("Request timeout after 30s").retryable).toBe(true);
+	});
+});
+
+// SIO-1232: a retry re-runs from scratch with the same prompt, so it must not be able to consume the
+// entire post-fan-out runway.
+describe("SIO-1232: getSubAgentRetryTimeoutMs", () => {
+	test("defaults to half the base timeout", () => {
+		expect(getSubAgentRetryTimeoutMs({})).toBe(180_000);
+		expect(getSubAgentTimeoutMs({})).toBe(360_000);
+	});
+
+	test("tracks a customised base timeout", () => {
+		expect(getSubAgentRetryTimeoutMs({ SUB_AGENT_TIMEOUT_MS: "200000" })).toBe(100_000);
+	});
+
+	test("honors an explicit override and ignores invalid ones", () => {
+		expect(getSubAgentRetryTimeoutMs({ SUB_AGENT_RETRY_TIMEOUT_MS: "45000" })).toBe(45_000);
+		for (const raw of ["nonsense", "0", "-1", ""]) {
+			expect(getSubAgentRetryTimeoutMs({ SUB_AGENT_RETRY_TIMEOUT_MS: raw })).toBe(180_000);
+		}
+	});
+});
+
+// SIO-1232: the top-level catch returned no toolErrors, and isDataSourceRetryable treats "no
+// toolErrors" as "unknown failure mode -- default to retryable". So a sub-agent that burned its
+// entire 360s budget was re-dispatched for another one (876s total run).
+describe("SIO-1232: isSubAgentAbort", () => {
+	test("recognises the DOMException names AbortSignal.timeout produces", () => {
+		expect(isSubAgentAbort("", "TimeoutError")).toBe(true);
+		expect(isSubAgentAbort("", "AbortError")).toBe(true);
+	});
+
+	test("recognises the message text in case LangGraph re-wraps the error", () => {
+		// The verbatim string from the failing run.
+		expect(isSubAgentAbort("The operation was aborted due to timeout")).toBe(true);
+		expect(isSubAgentAbort("signal timed out")).toBe(true);
+	});
+
+	test("does not fire on an ordinary failure", () => {
+		expect(isSubAgentAbort("ECONNREFUSED connecting to the MCP server")).toBe(false);
+		expect(isSubAgentAbort("Request timeout after 30s")).toBe(false);
+		expect(isSubAgentAbort(undefined)).toBe(false);
+	});
+
+	// CodeRabbit (PR #482): the bare `abort(?:ed|error)` fallback matched INSIDE ECONNABORTED, so a
+	// transient connection abort -- which classifyToolError rightly treats as retryable, alongside
+	// ECONNRESET/ECONNREFUSED -- would be misread as a self-inflicted sub-agent timeout and lose its
+	// one legitimate retry. The fallback is now word-bounded.
+	test("does not treat a connection abort (ECONNABORTED) as a sub-agent timeout", () => {
+		expect(isSubAgentAbort("ECONNABORTED")).toBe(false);
+		expect(isSubAgentAbort("connect ECONNABORTED 10.0.0.1:443")).toBe(false);
+		// ...while a real abort worded as prose still matches.
+		expect(isSubAgentAbort("request aborted")).toBe(true);
+		expect(isSubAgentAbort("AbortError: The operation was aborted")).toBe(true);
+	});
+});
+
 describe("classifyToolError oauth typed errors", () => {
 	test("OAuthRefreshChainExpiredError message classified as auth/non-retryable", () => {
 		const msg =

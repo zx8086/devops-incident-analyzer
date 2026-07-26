@@ -13,7 +13,21 @@ import { describeToolResult } from "./sub-agent-tool-result-shape.ts";
 // below the cap so the discover step always runs. AWS aws_logs_start_query guarding
 // (retention re-anchor) is unchanged.
 
+// Tools with BESPOKE rulesets. SIO-1232: every other tool now gets the generic guard below --
+// previously an unlisted tool was completely unguarded, which is how gitlab made 97 tool calls
+// (dozens of them gitlab_search returning a bare `[]`) before the 6-minute wall stopped it.
 const GUARDED_TOOLS = new Set<string>(["elasticsearch_search", "aws_logs_start_query"]);
+
+// SIO-1232: generic termination guarantees for every non-bespoke tool.
+// MAX_UNPRODUCTIVE_PER_TOOL bounds one tool that keeps coming back empty with permuted args;
+// MAX_UNPRODUCTIVE_PER_RUN is the backstop for a permuter that rotates tool NAMES instead.
+const MAX_UNPRODUCTIVE_PER_TOOL = 3;
+const MAX_UNPRODUCTIVE_PER_RUN = 8;
+
+export const GENERIC_LOOP_GUARD_STOP_MESSAGE =
+	"This exact call was already made, or this tool has returned nothing useful several times in a " +
+	"row. Do not call it again with these or similar arguments. Synthesize your findings from the " +
+	"data you already have, and report what you could not determine as an un-queried gap.";
 
 const AWS_DESCRIBE_LOG_GROUPS = "aws_logs_describe_log_groups";
 
@@ -23,6 +37,24 @@ const AWS_DESCRIBE_LOG_GROUPS = "aws_logs_describe_log_groups";
 // Complete-with-0-rows aws_logs_get_query_results and emit one-shot widen advice.
 const AWS_GET_QUERY_RESULTS = "aws_logs_get_query_results";
 const AWS_EMPTY_RESULTS_ADVICE_THRESHOLD = 2;
+
+// SIO-1232: the two AWS protocol/recovery tools are exempt from EVERY generic rule, not just the
+// duplicate check.
+//   - aws_logs_get_query_results MUST be re-polled with the SAME queryId while status is
+//     Running/Scheduled (the AWS RULES.md protocol prescribes it, and the SIO-1159 consecutive-empty
+//     advice above depends on the repeat).
+//   - aws_logs_describe_log_groups is the REQUIRED recovery call after a rejected
+//     aws_logs_start_query window (SIO-1141 re-anchor); blocking it strands that flow.
+//
+// CodeRabbit (PR #482) caught that an earlier version exempted these from the duplicate check only,
+// so the run-wide backstop could still block them. Neither tool can CONTRIBUTE to totalUnproductive
+// -- recordResult early-returns for both before the generic accounting -- so being blocked BY a
+// counter they cannot raise is incoherent. Worse, the trigger is another tool's runaway, i.e.
+// exactly the scenario this guard exists to bound: a gitlab spam reaching MAX_UNPRODUCTIVE_PER_RUN
+// would have silently killed the CloudWatch poll mid-query.
+// Declared here (not beside the other generic constants) because it references the two names
+// initialised just above -- referencing them earlier would hit the const TDZ.
+const GENERIC_GUARD_EXEMPT_TOOLS = new Set<string>([AWS_GET_QUERY_RESULTS, AWS_DESCRIBE_LOG_GROUPS]);
 
 // SIO-1162: an invalid/expired queryId polled via aws_logs_get_query_results returns a
 // bad-input _error ("The provided queryId = ... is invalid"). A queryId is estate/region
@@ -103,6 +135,9 @@ export interface LoopGuardState {
 	// queryId (bad-input/resource-not-found _error); consumed (cleared) when the corrective
 	// advice is emitted once.
 	awsInvalidQueryId: boolean;
+	// SIO-1232: generic per-tool and per-run unproductive counters for every non-bespoke tool.
+	unproductiveByTool: Map<string, number>;
+	totalUnproductive: number;
 }
 
 export function createLoopGuardState(): LoopGuardState {
@@ -113,6 +148,8 @@ export function createLoopGuardState(): LoopGuardState {
 		awsStartQueryUnproductive: 0,
 		awsEmptyQueryResults: 0,
 		awsInvalidQueryId: false,
+		unproductiveByTool: new Map<string, number>(),
+		totalUnproductive: 0,
 	};
 }
 
@@ -326,7 +363,16 @@ function aggregationsAreEmpty(node: Record<string, unknown>): boolean {
 // exact same (tool, args) call was already seen, OR (elastic) the hard unproductive-call
 // cap is exhausted, OR (aws) a prior retention rejection has not yet been re-anchored.
 export function shouldShortCircuit(state: LoopGuardState, toolName: string, signature: string, arg?: unknown): boolean {
-	if (!GUARDED_TOOLS.has(toolName)) return false;
+	// SIO-1232: generic guard for every tool without a bespoke ruleset. Previously this returned
+	// false immediately for anything outside GUARDED_TOOLS, i.e. no termination guarantee at all.
+	if (!GUARDED_TOOLS.has(toolName)) {
+		// Protocol/recovery tools bypass EVERY generic rule, including the run-wide backstop --
+		// see GENERIC_GUARD_EXEMPT_TOOLS. This must stay the first check in this branch.
+		if (GENERIC_GUARD_EXEMPT_TOOLS.has(toolName)) return false;
+		if (state.seenSignatures.has(signature)) return true;
+		if ((state.unproductiveByTool.get(toolName) ?? 0) >= MAX_UNPRODUCTIVE_PER_TOOL) return true;
+		return state.totalUnproductive >= MAX_UNPRODUCTIVE_PER_RUN;
+	}
 
 	if (toolName === "aws_logs_start_query") {
 		// Exact-duplicate window: never re-issue the identical call.
@@ -358,7 +404,9 @@ export function shouldShortCircuit(state: LoopGuardState, toolName: string, sign
 // SIO-1084: reserve a guarded call's signature BEFORE invoking so a concurrent identical
 // call is caught as a duplicate. Idempotent.
 export function reserveSignature(state: LoopGuardState, toolName: string, signature: string): void {
-	if (!GUARDED_TOOLS.has(toolName)) return;
+	// SIO-1232: reserved for EVERY tool now, so the generic duplicate rule sees concurrent
+	// identical calls. Polling tools are exempted at the shouldShortCircuit check rather than
+	// here -- recording their signature is harmless and keeps this function branch-free.
 	state.seenSignatures.add(signature);
 }
 
@@ -397,9 +445,23 @@ export function recordResult(
 		}
 		return;
 	}
-	if (!GUARDED_TOOLS.has(toolName)) return;
-
 	state.seenSignatures.add(signature);
+
+	// SIO-1232: generic accounting for every tool without a bespoke ruleset. gitlab_search
+	// returning a bare `[]` is `bytes: 2` -> contentType "array", topLevelArrayLen 0 ->
+	// isUnproductiveResult already returns true for it; the tool was simply never observed.
+	if (!GUARDED_TOOLS.has(toolName)) {
+		if (isUnproductiveResult(content, toolName)) {
+			state.unproductiveByTool.set(toolName, (state.unproductiveByTool.get(toolName) ?? 0) + 1);
+			state.totalUnproductive += 1;
+		} else {
+			// A productive call clears THIS tool's streak (the run-wide total is deliberately not
+			// reset -- it is the backstop against a permuter that alternates productive-looking
+			// and empty calls across many tools).
+			state.unproductiveByTool.set(toolName, 0);
+		}
+		return;
+	}
 
 	if (toolName === "aws_logs_start_query") {
 		const unproductive = isUnproductiveResult(content, toolName);
@@ -425,8 +487,10 @@ export function isGuardedTool(toolName: string): boolean {
 	return GUARDED_TOOLS.has(toolName);
 }
 
-export function isObservedTool(toolName: string): boolean {
-	return GUARDED_TOOLS.has(toolName) || toolName === AWS_DESCRIBE_LOG_GROUPS || toolName === AWS_GET_QUERY_RESULTS;
+// SIO-1232: every tool is observed now. The cost is one stableStringify of a small args object per
+// call; the benefit is that an unguarded tool can no longer run away (gitlab: 97 calls).
+export function isObservedTool(_toolName: string): boolean {
+	return true;
 }
 
 // SIO-1084/1090: select the stop message for a guarded tool. `state` is accepted for a
@@ -434,5 +498,8 @@ export function isObservedTool(toolName: string): boolean {
 // message (only one remains).
 export function stopMessageFor(toolName: string, _state?: LoopGuardState): string {
 	if (toolName === "aws_logs_start_query") return AWS_START_QUERY_STOP_MESSAGE;
-	return LOOP_GUARD_STOP_MESSAGE;
+	// SIO-1232: LOOP_GUARD_STOP_MESSAGE is elastic-specific (it talks about indices, patterns and
+	// the service.name discovery agg), so it must not be handed to a gitlab or kafka tool.
+	if (toolName === "elasticsearch_search") return LOOP_GUARD_STOP_MESSAGE;
+	return GENERIC_LOOP_GUARD_STOP_MESSAGE;
 }

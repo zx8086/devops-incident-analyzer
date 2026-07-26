@@ -9,6 +9,7 @@ import {
 	consumeEmptyAwsResultsAdvice,
 	consumeInvalidQueryIdAdvice,
 	createLoopGuardState,
+	GENERIC_LOOP_GUARD_STOP_MESSAGE,
 	isDiscoveryCall,
 	isEmptyAwsQueryResults,
 	isGuardedTool,
@@ -52,10 +53,16 @@ describe("SIO-1029: loop guard result classification", () => {
 		expect(isGuardedTool("kafka_list_topics")).toBe(false);
 	});
 
-	test("observed tools include describe_log_groups (not guarded but recorded)", () => {
+	// SIO-1232: isObservedTool is now true for EVERY tool. It previously returned false for anything
+	// outside the bespoke set, so recordResult never saw those tools' outcomes and they had no
+	// termination guarantee at all -- which is how gitlab made 97 calls. isGuardedTool still marks
+	// only the two tools with bespoke rulesets; everything else runs on the generic guard.
+	test("every tool is observed; isGuardedTool still marks only the bespoke ones", () => {
 		expect(isObservedTool("aws_logs_describe_log_groups")).toBe(true);
+		expect(isObservedTool("kafka_list_topics")).toBe(true);
+		expect(isObservedTool("gitlab_search")).toBe(true);
 		expect(isGuardedTool("aws_logs_describe_log_groups")).toBe(false);
-		expect(isObservedTool("kafka_list_topics")).toBe(false);
+		expect(isGuardedTool("kafka_list_topics")).toBe(false);
 	});
 });
 
@@ -177,10 +184,12 @@ describe("SIO-1090: elastic guard = duplicate-stop + hard cap only", () => {
 		expect(shouldShortCircuit(state, "elasticsearch_search", sig, NON_DISCOVERY)).toBe(true);
 	});
 
-	test("reserveSignature no-ops for non-guarded tools", () => {
+	// SIO-1232: reserveSignature now records EVERY tool so the generic duplicate rule can see
+	// concurrent identical calls. It previously no-opped outside the bespoke set.
+	test("reserveSignature records non-bespoke tools too", () => {
 		const state = createLoopGuardState();
 		reserveSignature(state, "kafka_list_topics", "kafka_list_topics::{}");
-		expect(state.seenSignatures.size).toBe(0);
+		expect(state.seenSignatures.size).toBe(1);
 	});
 });
 
@@ -262,13 +271,122 @@ describe("SIO-1084 A2: aws_logs_start_query guard", () => {
 	});
 });
 
-describe("non-guarded tools", () => {
-	test("never short-circuit", () => {
+// SIO-1232: tools without a bespoke ruleset used to have NO termination guarantee -- shouldShortCircuit
+// returned false for them unconditionally. In the reported run gitlab reached iteration 97 (dozens of
+// gitlab_search calls returning a bare `[]`) and only the 6-minute wall stopped it, after which
+// alignment re-dispatched the whole sub-agent for another 360s.
+describe("SIO-1232: generic loop guard for non-bespoke tools", () => {
+	const EMPTY_ARRAY = "[]"; // gitlab_search's real empty shape: bytes: 2
+	const REAL_RESULT = '[{"id":1,"name":"prana-order-service"}]';
+
+	test("an exact-duplicate call is stopped", () => {
 		const state = createLoopGuardState();
-		const sig = toolCallSignature("kafka_list_topics", {});
-		recordResult(state, "kafka_list_topics", sig, EMPTY_SEARCH);
-		recordResult(state, "kafka_list_topics", sig, EMPTY_SEARCH);
-		expect(shouldShortCircuit(state, "kafka_list_topics", sig)).toBe(false);
+		const sig = toolCallSignature("gitlab_search", { search: "prana" });
+		reserveSignature(state, "gitlab_search", sig);
+		expect(shouldShortCircuit(state, "gitlab_search", sig)).toBe(true);
+	});
+
+	test("distinct args are allowed until the per-tool unproductive cap", () => {
+		const state = createLoopGuardState();
+		let stoppedAt = 0;
+		for (let i = 1; i <= 10; i++) {
+			const sig = toolCallSignature("gitlab_search", { search: `attempt-${i}` });
+			if (shouldShortCircuit(state, "gitlab_search", sig)) {
+				stoppedAt = i;
+				break;
+			}
+			recordResult(state, "gitlab_search", sig, EMPTY_ARRAY);
+		}
+		// MAX_UNPRODUCTIVE_PER_TOOL = 3, so the 4th distinct empty attempt is refused.
+		expect(stoppedAt).toBe(4);
+	});
+
+	test("a productive result clears that tool's unproductive streak", () => {
+		const state = createLoopGuardState();
+		for (let i = 1; i <= 3; i++) {
+			recordResult(state, "gitlab_search", toolCallSignature("gitlab_search", { q: `e${i}` }), EMPTY_ARRAY);
+		}
+		recordResult(state, "gitlab_search", toolCallSignature("gitlab_search", { q: "hit" }), REAL_RESULT);
+		expect(shouldShortCircuit(state, "gitlab_search", toolCallSignature("gitlab_search", { q: "next" }))).toBe(false);
+	});
+
+	test("the run-wide cap stops a permuter that rotates tool NAMES", () => {
+		const state = createLoopGuardState();
+		// Two empties each across four distinct tools stays under the per-tool cap of 3, but
+		// MAX_UNPRODUCTIVE_PER_RUN = 8 must still terminate the run.
+		for (const tool of ["gitlab_search", "gitlab_list_commits", "gitlab_get_repository_tree", "gitlab_blast_radius"]) {
+			for (let i = 1; i <= 2; i++) {
+				recordResult(state, tool, toolCallSignature(tool, { q: `${tool}-${i}` }), EMPTY_ARRAY);
+			}
+		}
+		expect(state.totalUnproductive).toBe(8);
+		expect(
+			shouldShortCircuit(state, "gitlab_pipeline_failures", toolCallSignature("gitlab_pipeline_failures", {})),
+		).toBe(true);
+	});
+
+	test("a non-bespoke tool gets the generic stop message, never the elastic one", () => {
+		expect(stopMessageFor("gitlab_search")).toBe(GENERIC_LOOP_GUARD_STOP_MESSAGE);
+		// The elastic message talks about indices/patterns and the service.name discovery agg,
+		// so handing it to a gitlab or kafka tool would be actively misleading.
+		expect(stopMessageFor("elasticsearch_search")).toBe(LOOP_GUARD_STOP_MESSAGE);
+		expect(stopMessageFor("aws_logs_start_query")).toBe(AWS_START_QUERY_STOP_MESSAGE);
+	});
+
+	// NON-NEGOTIABLE: aws_logs_get_query_results MUST be re-polled with the SAME queryId while the
+	// query is Running/Scheduled. Applying the generic duplicate rule to it would break every
+	// CloudWatch Insights investigation, and the SIO-1159 consecutive-empty advice depends on the
+	// repeat being allowed through.
+	test("aws_logs_get_query_results is exempt from the duplicate rule (polling)", () => {
+		const state = createLoopGuardState();
+		const sig = toolCallSignature("aws_logs_get_query_results", { queryId: "q-123" });
+		reserveSignature(state, "aws_logs_get_query_results", sig);
+		expect(shouldShortCircuit(state, "aws_logs_get_query_results", sig)).toBe(false);
+		// ...and repeated in-flight polls never accrue unproductive counts either.
+		const inFlight = JSON.stringify({ status: "Running", results: [] });
+		for (let i = 0; i < 6; i++) recordResult(state, "aws_logs_get_query_results", sig, inFlight);
+		expect(state.totalUnproductive).toBe(0);
+		expect(shouldShortCircuit(state, "aws_logs_get_query_results", sig)).toBe(false);
+	});
+
+	// CodeRabbit (PR #482): the exemption originally covered the duplicate check ONLY, so the
+	// run-wide backstop could still block these two. The test above could not catch it because it
+	// starts from a fresh state -- the leak only manifests from OTHER tools' activity, i.e. exactly
+	// the runaway this guard exists to bound. In the reported run the gitlab spam would have
+	// silently killed an in-flight CloudWatch poll and the SIO-1141 re-anchor recovery.
+	test("protocol/recovery tools stay callable after other tools exhaust the run-wide cap", () => {
+		const state = createLoopGuardState();
+		for (const tool of ["gitlab_search", "gitlab_list_commits", "gitlab_get_repository_tree", "gitlab_blast_radius"]) {
+			for (let i = 1; i <= 2; i++) {
+				recordResult(state, tool, toolCallSignature(tool, { q: `${tool}-${i}` }), "[]");
+			}
+		}
+		expect(state.totalUnproductive).toBe(8); // at MAX_UNPRODUCTIVE_PER_RUN
+
+		// The in-flight poll must still go through, or the Insights query is abandoned mid-flight.
+		const poll = toolCallSignature("aws_logs_get_query_results", { queryId: "q-123" });
+		expect(shouldShortCircuit(state, "aws_logs_get_query_results", poll)).toBe(false);
+
+		// ...and so must the re-anchor recovery call for a rejected start_query window.
+		const describe = toolCallSignature("aws_logs_describe_log_groups", { logGroupNamePrefix: "/aws/ecs" });
+		expect(shouldShortCircuit(state, "aws_logs_describe_log_groups", describe)).toBe(false);
+
+		// An ordinary tool is still stopped -- the exemption is targeted, not a hole in the cap.
+		expect(
+			shouldShortCircuit(state, "gitlab_pipeline_failures", toolCallSignature("gitlab_pipeline_failures", {})),
+		).toBe(true);
+	});
+
+	// Neither exempt tool can CONTRIBUTE to the counters (recordResult early-returns for both before
+	// the generic accounting), so being blocked BY a counter they cannot raise was incoherent.
+	test("exempt tools never contribute to the generic counters", () => {
+		const state = createLoopGuardState();
+		for (let i = 0; i < 5; i++) {
+			recordResult(state, "aws_logs_describe_log_groups", toolCallSignature("aws_logs_describe_log_groups", {}), "[]");
+			recordResult(state, "aws_logs_get_query_results", toolCallSignature("aws_logs_get_query_results", {}), "[]");
+		}
+		expect(state.totalUnproductive).toBe(0);
+		expect(state.unproductiveByTool.size).toBe(0);
 	});
 });
 

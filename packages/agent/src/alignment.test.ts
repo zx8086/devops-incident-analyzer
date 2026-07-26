@@ -274,6 +274,63 @@ describe("routeAfterAlignment retry-dispatch logging", () => {
 		expect(meta.retryAttempt).toBe(1);
 	});
 
+	// SIO-1232: a sub-agent that burned its entire wall-clock budget will burn it again. Before this,
+	// the top-level catch returned no toolErrors and isDataSourceRetryable's "unknown failure mode ->
+	// default to retryable" branch re-dispatched it for another full 360s -- gitlab timed out at
+	// 360020ms, was retried, and timed out again at 360019ms inside an 876s run.
+	test("does NOT retry a sub-agent that aborted on its timeout", () => {
+		const decision = routeAfterAlignment(
+			makeRetryState({
+				dataSourceResults: [
+					{
+						dataSourceId: "elastic",
+						data: null,
+						status: "error",
+						duration: 360_020,
+						isAlignmentRetry: false,
+						error: "The operation was aborted due to timeout",
+						toolErrors: [
+							{
+								toolName: "__subagent_timeout__",
+								category: "transient",
+								kind: "timeout",
+								message: "sub-agent aborted after 360020ms (timeout 360000ms)",
+								retryable: false,
+							},
+						],
+					},
+				],
+			}),
+		);
+		expect(decision).toBe("aggregate");
+	});
+
+	// Defence in depth: the marker above is the primary mechanism, but a future throw path that
+	// loses toolErrors must not silently reopen the double-timeout.
+	test("does NOT retry an abort recognised only from the top-level error text", () => {
+		const decision = routeAfterAlignment(
+			makeRetryState({
+				dataSourceResults: [
+					{
+						dataSourceId: "elastic",
+						data: null,
+						status: "error",
+						duration: 360_017,
+						isAlignmentRetry: false,
+						error: "The operation was aborted due to timeout",
+					},
+				],
+			}),
+		);
+		expect(decision).toBe("aggregate");
+	});
+
+	// A transient TOOL failure still deserves its one retry -- the abort rule must not swallow it.
+	test("still retries a genuine transient tool error", () => {
+		const decision = routeAfterAlignment(makeRetryState());
+		expect(Array.isArray(decision)).toBe(true);
+	});
+
 	test("does NOT emit the firstAttempts WARN when no retries fire (clean state)", () => {
 		const captured: CapturedLog[] = [];
 		_setAlignmentLoggerForTesting(makeCaptureLogger(captured));
