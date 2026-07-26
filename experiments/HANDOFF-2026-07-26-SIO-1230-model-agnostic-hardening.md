@@ -1,8 +1,8 @@
-# HANDOFF: SIO-1230 model-agnostic hardening (Slices 3-5 outstanding)
+# HANDOFF: SIO-1230 model-agnostic hardening (ALL 5 SLICES MERGED — acceptance outstanding)
 
-- **Date**: 2026-07-26
+- **Date**: 2026-07-26 (updated 2026-07-27: slices 3-5 merged)
 - **Parent ticket**: [SIO-1230](https://linear.app/siobytes/issue/SIO-1230) — Make the agent model-agnostic: fix the SIO-1213/1228/1229 fallout
-- **Children**: [SIO-1231](https://linear.app/siobytes/issue/SIO-1231) DONE · [SIO-1232](https://linear.app/siobytes/issue/SIO-1232) DONE · [SIO-1233](https://linear.app/siobytes/issue/SIO-1233) TODO · [SIO-1234](https://linear.app/siobytes/issue/SIO-1234) TODO · [SIO-1235](https://linear.app/siobytes/issue/SIO-1235) TODO
+- **Children**: [SIO-1231](https://linear.app/siobytes/issue/SIO-1231) DONE · [SIO-1232](https://linear.app/siobytes/issue/SIO-1232) DONE · [SIO-1233](https://linear.app/siobytes/issue/SIO-1233) MERGED · [SIO-1234](https://linear.app/siobytes/issue/SIO-1234) MERGED · [SIO-1235](https://linear.app/siobytes/issue/SIO-1235) MERGED
 - **Repo state**: `main` @ `b7f0d5f4`. **Both PRs are MERGED** (squash), CodeRabbit clear, branches deleted:
   - PR #481 → `dc39b3bf` SIO-1231
   - PR #482 → `b7f0d5f4` SIO-1232 (two CodeRabbit findings triaged and fixed before merge — see below)
@@ -164,3 +164,60 @@ Reverting SIO-1213 or any model rollback · trimming `aws-agent/RULES.md` to ≤
 ## Memory references
 
 `reference_sio1213_model_facts_measured` · `reference_sio1228_skill_tool_binding` · `reference_sio1229_undeclared_subagents_fixed` · `reference_probe_production_path_not_raw_sdk` · `reference_fresh_worktree_no_workspace_symlinks` · `reference_worktree_bash_cd_lands_in_main` · `reference_main_preexisting_test_lint_failures` · `reference_subagent_missing_tool_is_action_group_gap` · `reference_confidence_two_class_policy_sio1194_1195` · `reference_worktree_web_server_replay_env`
+
+---
+
+# UPDATE 2026-07-27 — slices 3-5 merged; only acceptance remains
+
+`main` @ `aaad8eec`. All five children are merged and squashed:
+
+| Ticket | PR | Commit on main |
+|---|---|---|
+| SIO-1231 | #481 | `dc39b3bf` |
+| SIO-1232 | #482 | `b7f0d5f4` |
+| SIO-1233 | #484 | `ca49e3bb` |
+| SIO-1234 | #485 | `9cb5bd8b` |
+| SIO-1235 | #486 | `aaad8eec` |
+
+(`f1953411` SIO-1236, KG WAL, landed from another session in between — unrelated, no overlap.)
+
+**All five Linear issues are In Review, NOT Done.** Done needs the user's explicit approval and the DEVOPS-1405 replay, which has still not been run.
+
+## Verified on merged main (not per-branch)
+
+Each slice branched before the previous merged, so the combination was verified separately after the last merge:
+
+- `bun run typecheck` — 0 errors; `bun run lint` — 0 errors, 14 pre-existing warnings
+- `@devops-agent/agent` — 3052 pass / 0 fail; `@devops-agent/gitagent-bridge` — 279 pass / 0 fail
+- Integration probe on merged main, 5/5: full CloudWatch Insights chain bound (4/4) inside the 25 cap, 16 action-selected tools surviving alongside the head, bound-tools manifest present, `aws-agent` resolving haiku 4.5 / temp 0.1 / maxTokens 8192 in exactly one constructor call, and `aggregator` still on sonnet-5 with no specialist leak.
+
+Note the `apps/web` suite shows 5 pre-existing failures **in a worktree** (barrel-resolution artifact, identical with changes stashed) — not caused by this series.
+
+## What each slice actually changed
+
+- **SIO-1233** — `parseLlmJson` single-key envelope unwrap (failure path only, depth 1), `observedKeys` diagnostic (key names only), `withKeyAliases`, a one-shot corrective re-ask in the new `llm-json-retry.ts`, normalizer silent-failure detection + gated query-token recovery (`NORMALIZER_SERVICE_RECOVERY_ENABLED`), and `contentBlockTypes()` for reasoning-only turns.
+- **SIO-1234** — `composeBoundTools` reserving `MIN_ACTION_TOOLS = 8`, `requiredHeadTools` PROMOTING required tools out of the truncatable tail, the missing `aws` resolution set (9 entries incl. the complete Insights chain), `extractPromptToolNames` for the canary only, a ratcheted coverage test, and a bound-tools manifest in the sub-agent prompt.
+- **SIO-1235** — `resolveRoleModelConfig` (light tier > sub-agent manifest > root), `SUB_AGENT_MANIFEST_MODEL_ENABLED` kill switch, `source`/`subAgentName` provenance on the `"LLM model selected"` lines, and the call site threaded.
+
+## Findings worth carrying forward
+
+1. **The envelope unwrap structurally cannot help `NormalizationSchema`.** All-`.nullish()` means a wrapped payload parses *vacuously* rather than failing, so the failure-path unwrap never fires. Firing it on a successful parse was rejected — `absence-judge.ts` passes `z.unknown()` and would then have every payload unwrapped. Query-token recovery covers that path instead. Pinned by a test.
+2. **"Force-included" was never a guarantee before SIO-1234.** `withResolutionTools` only prepended *missing* required tools, so a required tool that was also action-selected sat in the truncatable tail. This split the async Insights pair (`start_query` at 25, `get_query_results` at 26) and applied equally to `gitlab_list_merge_requests` and `findLinkedIncidents`.
+3. **`aws-agent/RULES.md` named two tools that do not exist** — `aws_messaging_sfn_list_state_machines` / `aws_messaging_sns_list_topics`, prefixed with the action-group name. Real instances of this series' own bug class, fixed in #485.
+4. **kafka-agent's SIO-717 synthetic cross-check instructed a tool it could never have bound** (`elasticsearch_search`, bound only to elastic-agent), so that guard had never run. Caught by SIO-1234's new canary and allowlisted rather than silently rewritten, because the fix was a design decision about SIO-717's feature. **Now FIXED by [SIO-1237](https://linear.app/siobytes/issue/SIO-1237) / PR #487** (`53a47d2f`), which found the guard ran via *neither* path: the `infra-service-degraded-needs-synthetic-cross-check` rule already targeted elastic-agent but carried no `fetchDirective`, so the refetch re-ran the original focus-anchored prompt and essentially never queried `synthetics-*`. The procedure now rides that rule's `fetchDirective` to the agent that owns the tool, and `KNOWN_CROSS_DATASOURCE_PROSE` is back to `{}` — its intended steady state, since any entry means shipping a prompt that instructs an impossible call.
+5. **`resolveBedrockConfig(undefined)` does not throw**; it returns `eu.anthropic.claude-sonnet-4-6`, which is not even the current root model. A missing `elastic-agent` manifest would put every light-tier role on a stale model while still logging `source: "light-tier"`. Warned about now.
+6. **Determinism: still no lever.** Unchanged from the original doc — temperature is discarded for Sonnet 5, Bedrock Converse has no `seed`, `topP` remains unprobed. Do not re-derive.
+
+## The only work left
+
+1. **DEVOPS-1405 end-to-end replay** — the acceptance test for all five slices. Pass criteria are in the original Verification section above.
+2. **LangSmith replay eval per specialist** for SIO-1235's Haiku 4.5 question. No offline test can answer whether Haiku is competent on the 7 ReAct loops.
+
+**Isolate SIO-1235 when replaying.** It is the only slice with real behavioural risk — the other four are containment. If the replay looks worse, `SUB_AGENT_MANIFEST_MODEL_ENABLED=false` isolates that single variable without reverting anything; a per-agent yaml `preferred:` edit is the finer lever.
+
+## Follow-ups deliberately not bundled
+
+- Trim `aws-agent/RULES.md` from 62 named tools to <=17, then drop its `KNOWN_OVERSUBSCRIBED` entry. `gitlab-agent` is over by exactly one (18 vs 17) and clears with a single prose edit.
+- ~~SIO-717 cross-check ownership~~ — done in SIO-1237 / #487, see finding 4.
+- `subAgent` has no fallback (`TOOL_BINDING_ROLES` skips `withFallbacks`), so a Haiku regional outage takes down all 7 — pre-existing, not worsened.
+- The light tier borrows the elastic-agent manifest, which is now *also* live for the elastic sub-agent, so editing it moves two things at once.
