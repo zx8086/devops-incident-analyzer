@@ -3,15 +3,16 @@
 - **Date**: 2026-07-26
 - **Parent ticket**: [SIO-1230](https://linear.app/siobytes/issue/SIO-1230) — Make the agent model-agnostic: fix the SIO-1213/1228/1229 fallout
 - **Children**: [SIO-1231](https://linear.app/siobytes/issue/SIO-1231) DONE · [SIO-1232](https://linear.app/siobytes/issue/SIO-1232) DONE · [SIO-1233](https://linear.app/siobytes/issue/SIO-1233) TODO · [SIO-1234](https://linear.app/siobytes/issue/SIO-1234) TODO · [SIO-1235](https://linear.app/siobytes/issue/SIO-1235) TODO
-- **Repo state**: `main` @ `e3b2b99d`. Two branches pushed, both PRs open and independent (each cut from `origin/main`):
-  - `claude/sio-1231-fix-block-join` → PR #481
-  - `claude/sio-1232-bound-react-loop` → PR #482
+- **Repo state**: `main` @ `b7f0d5f4`. **Both PRs are MERGED** (squash), CodeRabbit clear, branches deleted:
+  - PR #481 → `dc39b3bf` SIO-1231
+  - PR #482 → `b7f0d5f4` SIO-1232 (two CodeRabbit findings triaged and fixed before merge — see below)
+- **Linear**: SIO-1231 and SIO-1232 are **In Review**, not Done — moving them to Done needs the user's explicit approval, and the end-to-end DEVOPS-1405 replay has still not been run.
 - **Suggested branches**: `claude/sio-1233-envelope-drift`, `claude/sio-1234-prompt-tool-binding`, `claude/sio-1235-subagent-manifest-models`
 - **Full plan**: `~/.claude/plans/look-at-the-recent-peppy-sunset.md` (approved verbatim by the user)
 
 ## TL;DR
 
-**What's done**: PRs #481 (garbled report) and #482 (runaway loop + timeout retry) are pushed, green, and independently mergeable. Together they fix the two most visible symptoms.
+**What's done**: PRs #481 (garbled report) and #482 (runaway loop + timeout retry) are **merged into `main`**. Together they fix the two most visible symptoms.
 
 **What's next**: Slices 3-5 = SIO-1233 (extraction envelope drift — *this is the one that causes the all-datasource fan-out*), SIO-1234 (prompt/tool-binding mismatch), SIO-1235 (honour sub-agent manifest models). Each Linear issue already contains the full design with `file:line` references; read the issue, not just this doc.
 
@@ -54,6 +55,10 @@ Five changes in `sub-agent.ts`, `sub-agent-loop-guard.ts`, `alignment.ts`. See P
 - The abort marker keeps `category: "transient"` while setting `retryable: false` — deliberate, and pinned by a test.
 - `aws_logs_get_query_results` **must** stay duplicate-exempt in the loop guard; guarding it breaks every CloudWatch Insights investigation.
 - `isObservedTool` now returns `true` unconditionally.
+
+**Two CodeRabbit findings were triaged and fixed before merge** (`b829ddaa`), both verified with a live repro against the production functions first — worth knowing because both are easy to reintroduce:
+1. `GENERIC_GUARD_EXEMPT_TOOLS` (was `DUPLICATE_EXEMPT_TOOLS`) originally exempted the polling tools from the **duplicate check only**, so the run-wide backstop could still block them once *other* tools exhausted it — i.e. the runaway this guard exists to bound would have silently killed an in-flight CloudWatch poll. `aws_logs_describe_log_groups` was added for the same reason (SIO-1141 re-anchor recovery). Deciding argument: neither tool can *contribute* to the counters, so being blocked *by* them was incoherent. The exemption must stay the **first** check in that branch.
+2. The abort regex's bare `abort(?:ed|error)` matched inside `ECONNABORTED`, so a transient connection abort would be misread as a self-inflicted timeout and lose its legitimate retry. Now word-bounded.
 
 ## Outstanding work
 
