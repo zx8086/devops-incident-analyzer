@@ -78,7 +78,32 @@ export function graphPath(env: NodeJS.ProcessEnv = process.env): string {
 	return path;
 }
 
-const WAL_CORRUPTION_PATTERN = /corrupted wal file/i;
+// SIO-1236: lbug throws (at least) three distinct messages for the SAME failure
+// class -- a torn WAL tail left by an unclean process death, hit during replay:
+//   - "Corrupted wal file. Read out invalid WAL record type." (wal_record.cpp)
+//   - "Checksum verification failed, the WAL file is corrupted." (wal_replayer.cpp;
+//     the common variant now that WAL checksums are on by default)
+//   - "Reading past the end of the file ..." (buffered_file.cpp; SIO-1165's variant)
+// All three are clean replay-time exceptions with a proven-safe recovery
+// (quarantine the WAL, reopen the base file). Native asserts (KU_UNREACHABLE)
+// stay excluded deliberately -- those can indicate base-file damage (SIO-1165).
+const WAL_CORRUPTION_PATTERNS = [
+	/corrupted wal file/i,
+	/checksum verification failed/i,
+	/reading past the end of the file/i,
+];
+
+function isWalCorruptionError(message: string): boolean {
+	return WAL_CORRUPTION_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+// SIO-1236: close() is a deliberate no-op (SIO-954 -- lbug's native finalizer
+// segfaults Bun), so no process ever checkpoints at exit, and lbug's default
+// auto-checkpoint threshold is 16MB -- far above this store's WAL sizes. The
+// WAL therefore accumulated indefinitely, a permanently-open window any unclean
+// death could tear (the root trigger behind SIO-1129/1163/1165). A low
+// threshold keeps the WAL near-empty so there is almost nothing to tear.
+const CHECKPOINT_THRESHOLD_BYTES = 256 * 1024;
 
 // --- LadybugDB (lbug) embedded implementation -------------------------------
 //
@@ -102,10 +127,27 @@ export interface LbugConnection {
 	execute(prepared: LbugPreparedStatement, params: Record<string, unknown>): Promise<LbugQueryResult>;
 }
 export interface LbugDatabase {
+	// Real API (lbug database.js): forces the lazy open -- and therefore WAL
+	// replay -- to happen NOW instead of at the first query. Optional so fakes
+	// and the InMemory store stay valid.
+	init?(): Promise<void>;
 	close?(): Promise<void> | void;
 }
 export interface LbugModule {
-	Database: new (path: string) => LbugDatabase;
+	// Positional ctor per lbug database.js: (path, bufferManagerSize,
+	// enableCompression, readOnly, maxDBSize, autoCheckpoint, checkpointThreshold,
+	// throwOnWalReplayFailure, enableChecksums). Only the first seven are passed;
+	// throwOnWalReplayFailure stays true -- tolerant replay demonstrably leaves
+	// broken in-memory state that crashes on first use (SIO-1165).
+	Database: new (
+		path: string,
+		bufferManagerSize?: number,
+		enableCompression?: boolean,
+		readOnly?: boolean,
+		maxDBSize?: number,
+		autoCheckpoint?: boolean,
+		checkpointThreshold?: number,
+	) => LbugDatabase;
 	Connection: new (db: LbugDatabase) => LbugConnection;
 }
 
@@ -143,6 +185,24 @@ export class LadybugStore implements GraphStore {
 		return this.conn;
 	}
 
+	// SIO-1236: the Database constructor is LAZY (lbug's own docs: "the database
+	// file is not opened until the first query is executed"), so WAL replay -- and
+	// its corruption exception -- can fire either synchronously in the constructor
+	// or later at the first query. Forcing db.init() here pins replay to a single
+	// deterministic point INSIDE the recovery scope; SIO-1163's original catch
+	// wrapped only the constructor and therefore usually never saw the error.
+	private async newDatabase(lbug: LbugModule): Promise<LbugDatabase> {
+		const db = new lbug.Database(this.path, 0, true, false, 0, true, CHECKPOINT_THRESHOLD_BYTES);
+		if (db.init) {
+			await db.init();
+		} else {
+			// Without init(), replay defers to the first query -- outside the recovery
+			// scope, i.e. the exact SIO-1163 dead-code regression. Surface it loudly.
+			logger.warn({ path: this.path }, "lbug Database has no init(); WAL-corruption auto-recovery may not fire");
+		}
+		return db;
+	}
+
 	// SIO-1163: a crash mid-write can leave the WAL in a state lbug's replay can't
 	// parse, which otherwise poisons every future open of this store (SIO-1129).
 	// Quarantine the unreplayable WAL and retry once against the base file -- the
@@ -150,10 +210,10 @@ export class LadybugStore implements GraphStore {
 	// (or a non-WAL error) rethrows unchanged; we never mask a genuinely different problem.
 	private async openDatabase(lbug: LbugModule): Promise<LbugDatabase> {
 		try {
-			return new lbug.Database(this.path);
+			return await this.newDatabase(lbug);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			if (!WAL_CORRUPTION_PATTERN.test(message)) throw error;
+			if (!isWalCorruptionError(message)) throw error;
 			const walPath = `${this.path}.wal`;
 			if (existsSync(walPath)) {
 				const quarantinePath = `${walPath}.corrupt-${Date.now()}`;
@@ -163,7 +223,9 @@ export class LadybugStore implements GraphStore {
 					"corrupt WAL quarantined; retrying open against base file",
 				);
 			}
-			return new lbug.Database(this.path);
+			// A FRESH instance, never the one whose replay failed -- it may hold
+			// partially-replayed state (the SIO-1165 tolerant-replay lesson).
+			return await this.newDatabase(lbug);
 		}
 	}
 
@@ -204,6 +266,15 @@ export class LadybugStore implements GraphStore {
 					logger.warn({ stmt, error: message }, "vector index setup skipped (extension unavailable?)");
 				}
 			}
+		}
+		// SIO-1236: collapse any just-replayed WAL into the base file immediately
+		// instead of leaving it in place until the auto-checkpoint threshold trips.
+		// Best-effort: a store without CHECKPOINT support still works, just with a
+		// longer torn-tail exposure window.
+		try {
+			await conn.query("CHECKPOINT");
+		} catch (error) {
+			logger.debug({ error: error instanceof Error ? error.message : String(error) }, "post-init checkpoint skipped");
 		}
 	}
 
