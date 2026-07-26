@@ -6,7 +6,7 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import { Send } from "@langchain/langgraph";
 import { getGraphDeadlineAt, hasRetryBudget } from "./graph-budget.ts";
 import type { AgentStateType } from "./state.ts";
-import { classifyToolError } from "./sub-agent.ts";
+import { classifyToolError, isSubAgentAbort } from "./sub-agent.ts";
 
 interface AlignmentLogSink {
 	info: (...args: unknown[]) => unknown;
@@ -99,16 +99,27 @@ export function summarizeFirstAttempts(results: DataSourceResult[]): FirstAttemp
 // failure mode -- better to retry than drop).
 function isDataSourceRetryable(results: DataSourceResult[], dataSourceId: string): boolean {
 	let hasToolErrors = false;
+	let sawAbort = false;
 	for (const result of results) {
 		if (result.dataSourceId !== dataSourceId) continue;
+		// SIO-1232: defence in depth. sub-agent.ts's catch now attaches a retryable:false marker for
+		// an abort, but recognising the top-level message too means a future throw path that loses
+		// toolErrors cannot silently reintroduce the double-timeout (360s + 360s inside one run).
+		// A sub-agent that burned its whole wall-clock budget will burn it again.
+		if (isSubAgentAbort(result.error)) {
+			sawAbort = true;
+			continue;
+		}
 		if (!result.toolErrors?.length) continue;
 		hasToolErrors = true;
 		for (const err of result.toolErrors) {
 			if (err.retryable) return true;
 		}
 	}
-	// No toolErrors means we don't know the failure mode -- default to retryable
-	return !hasToolErrors;
+	// A genuinely retryable TOOL error alongside an abort still wins above: a transient tool
+	// failure deserves its one retry even if a sibling deployment timed out.
+	// No toolErrors and no abort means we don't know the failure mode -- default to retryable.
+	return !hasToolErrors && !sawAbort;
 }
 
 function getRetryTargets(state: AgentStateType): { retryTargets: string[]; nonRetryable: string[] } {

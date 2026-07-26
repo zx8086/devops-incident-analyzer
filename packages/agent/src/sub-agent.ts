@@ -176,6 +176,32 @@ export function getSubAgentTimeoutMs(env: NodeJS.ProcessEnv = process.env): numb
 	return Math.floor(parsed);
 }
 
+// SIO-1232: an alignment retry re-runs from scratch with the same prompt, so it does not need the
+// full first-attempt budget -- and letting it take one lets a single datasource eat the entire
+// post-fan-out runway (900s budget - 360s first attempt - 120s aggregation reserve = 420s of
+// headroom, of which hasRetryBudget only requires 180s). Half the base still clears the p50
+// sub-agent completion time comfortably. Override with SUB_AGENT_RETRY_TIMEOUT_MS.
+const SUB_AGENT_RETRY_TIMEOUT_RATIO = 0.5;
+
+export function getSubAgentRetryTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+	const raw = env.SUB_AGENT_RETRY_TIMEOUT_MS;
+	if (raw != null && raw !== "") {
+		const parsed = Number(raw);
+		if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed);
+	}
+	return Math.floor(getSubAgentTimeoutMs(env) * SUB_AGENT_RETRY_TIMEOUT_RATIO);
+}
+
+// SIO-1232: AbortSignal.timeout rejects with a DOMException named "TimeoutError", but LangGraph may
+// re-wrap it on the way out of stream(), so match on name OR text. Exported so alignment.ts shares
+// one definition rather than growing a second, divergent regex.
+const SUB_AGENT_ABORT_RE = /aborted due to timeout|operation was aborted|signal timed out|abort(?:ed|error)/i;
+
+export function isSubAgentAbort(message: string | undefined, errorName?: string): boolean {
+	if (errorName === "TimeoutError" || errorName === "AbortError") return true;
+	return message != null && SUB_AGENT_ABORT_RE.test(message);
+}
+
 // SIO-689: Trace evidence on the failing pass-4 query showed 13 LLM iterations + 12 tools-node
 // executions = 25 graph steps, the LangGraph default. The 33 underlying elasticsearch_* calls were
 // legitimate progressive refinement (cross-deployment 5xx triage), not looping. Lift to 40 for
@@ -183,15 +209,45 @@ export function getSubAgentTimeoutMs(env: NodeJS.ProcessEnv = process.env): numb
 // SUB_AGENT_TIMEOUT_MS still bounds wall-clock damage on a true loop.
 const ELASTIC_RECURSION_LIMIT_DEFAULT = 40;
 
-export function getSubAgentRecursionLimit(
-	dataSourceId: string,
-	env: NodeJS.ProcessEnv = process.env,
-): number | undefined {
-	if (dataSourceId !== "elastic") return undefined;
-	const raw = env.SUBAGENT_ELASTIC_RECURSION_LIMIT;
-	if (raw == null || raw === "") return ELASTIC_RECURSION_LIMIT_DEFAULT;
+// SIO-1232: this used to return undefined for every datasource except elastic, and the caller only
+// spreads recursionLimit when defined -- so five of the seven sub-agents ran on LangGraph's DEFAULT
+// of 25 super-steps with no explicit budget at all. gitlab made 97 tool calls and hit the 6-minute
+// wall instead of any limit.
+//
+// Sizing: LangGraph counts SUPER-STEPS and a ReAct cycle is two of them (agent + tools), so
+// limit ~= 2 x maxLlmTurns + 1. Note the `iteration` counter in the logs counts TOOL CALLS, not
+// steps -- with ~2-3 parallel calls per tools step the tool-call budget is roughly
+// maxLlmTurns x 2.5, which is why 97 calls fit inside a 25-step default.
+//
+// invokeSubAgentWithSalvage already salvages partial messages on GraphRecursionError, so hitting a
+// limit degrades to partial findings, never a hard error.
+const SUB_AGENT_RECURSION_LIMIT_DEFAULT = 30;
+const RECURSION_LIMIT_BY_DATASOURCE: Record<string, number> = {
+	// SIO-689 measured 13 LLM iterations + 12 tools steps on a real cross-deployment 5xx triage.
+	elastic: ELASTIC_RECURSION_LIMIT_DEFAULT,
+	// Genuinely deep: a CloudWatch Insights poll burns a full cycle per poll, and the network-path
+	// / ingress chains are 4-5 sequential hops by design.
+	aws: 40,
+	// Slow-query triage chains three skills (indexes -> schema -> explain).
+	couchbase: 30,
+	// Search -> resolve project -> read MR/commits is 4-6 cycles. 97 calls was thrash, not depth.
+	gitlab: 24,
+	kafka: 24,
+	konnect: 24,
+	// Two-entry action map; nothing here needs depth.
+	atlassian: 20,
+};
+
+export function getSubAgentRecursionLimit(dataSourceId: string, env: NodeJS.ProcessEnv = process.env): number {
+	const fallback = RECURSION_LIMIT_BY_DATASOURCE[dataSourceId] ?? SUB_AGENT_RECURSION_LIMIT_DEFAULT;
+	// SUBAGENT_ELASTIC_RECURSION_LIMIT is kept as a back-compat alias so deployed ops config does
+	// not silently stop taking effect when the generic name lands.
+	const raw =
+		env[`SUBAGENT_RECURSION_LIMIT_${dataSourceId.toUpperCase()}`] ??
+		(dataSourceId === "elastic" ? env.SUBAGENT_ELASTIC_RECURSION_LIMIT : undefined);
+	if (raw == null || raw === "") return fallback;
 	const parsed = Number(raw);
-	if (!Number.isFinite(parsed) || parsed <= 0) return ELASTIC_RECURSION_LIMIT_DEFAULT;
+	if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
 	return Math.floor(parsed);
 }
 
@@ -209,6 +265,19 @@ export const AGENT_NAMES: Record<string, string> = {
 };
 
 const ERROR_PATTERNS: Array<{ category: ToolErrorCategory; patterns: RegExp[] }> = [
+	{
+		// SIO-1232: LangGraph's ToolNode throws `Tool "X" not found.\n Please fix your mistakes.`
+		// when the model calls a tool the 25-tool binder withheld. This is DETERMINISTIC -- the
+		// bound tool set is identical on a retry -- but it fell through to the `unknown` default
+		// below, which is retryable, so the model kept re-issuing it and alignment re-dispatched
+		// the whole sub-agent. Observed live on aws (aws_ecs_list_clusters and four others).
+		// MUST be first: /timeout/i in the transient group would otherwise claim a message that
+		// happened to mention one.
+		// Patterns are matched against the LOWERCASED message (see classifyToolError), so they are
+		// written lowercase -- an uppercase literal here would silently never match.
+		category: "not-found",
+		patterns: [/tool "[^"]+" not found/, /tool `[a-z0-9_]+` not found/],
+	},
 	{
 		category: "auth",
 		patterns: [
@@ -998,6 +1067,9 @@ async function runSubAgent(
 ): Promise<DataSourceResult> {
 	const startTime = Date.now();
 	const { deploymentId } = options;
+	// SIO-1232: hoisted out of the try so the catch can report the budget that actually fired.
+	// Undefined means we threw before the timer was armed.
+	let effectiveTimeoutMs: number | undefined;
 	try {
 		const allTools = getToolsForDataSource(dataSourceId);
 		// SIO-750: wrap the base sub-agent prompt with the investigation focus
@@ -1121,8 +1193,10 @@ ${state.correlationFetchDirective}`
 		// SIO-1110: cap the timer at the remaining graph budget minus the aggregation
 		// reserve so a late dispatch (alignment retry) can never starve aggregation.
 		// First attempts start with ample remaining budget, so the cap never binds there.
-		const baseTimeoutMs = getSubAgentTimeoutMs();
+		// SIO-1232: a retry gets a reduced base so it cannot consume the whole remaining runway.
+		const baseTimeoutMs = isRetry ? getSubAgentRetryTimeoutMs() : getSubAgentTimeoutMs();
 		const timeoutMs = capSubAgentTimeoutMs(baseTimeoutMs, getGraphDeadlineAt(config));
+		effectiveTimeoutMs = timeoutMs;
 		log.info(
 			{ deploymentId, recursionLimit, ...(timeoutMs < baseTimeoutMs && { cappedTimeoutMs: timeoutMs }) },
 			"Invoking sub-agent",
@@ -1151,7 +1225,7 @@ ${state.correlationFetchDirective}`
 				`datasource:${dataSourceId}`,
 				...(deploymentId ? [`deployment:${deploymentId}`] : []),
 			],
-			...(recursionLimit !== undefined && { recursionLimit }),
+			recursionLimit,
 		});
 		const duration = Date.now() - startTime;
 		// SIO-1227: resolved BEFORE the completion log so responseLength reports the answer we will
@@ -1334,10 +1408,13 @@ ${state.correlationFetchDirective}`
 		};
 	} catch (error) {
 		const duration = Date.now() - startTime;
-		log.error(
-			{ duration, deploymentId, error: error instanceof Error ? error.message : String(error) },
-			"Sub-agent failed",
-		);
+		const message = error instanceof Error ? error.message : String(error);
+		const errorName = error instanceof Error ? error.name : "";
+		const aborted = isSubAgentAbort(message, errorName);
+		// errorName is logged because the exact name LangGraph surfaces when AbortSignal.timeout
+		// fires mid-stream() is not pinned by any test -- it may be re-wrapped. Recording it means
+		// the next occurrence tells us definitively instead of requiring another investigation.
+		log.error({ duration, deploymentId, aborted, errorName, error: message }, "Sub-agent failed");
 		return {
 			dataSourceId,
 			data: null,
@@ -1345,7 +1422,32 @@ ${state.correlationFetchDirective}`
 			duration,
 			isAlignmentRetry: isRetry,
 			...(deploymentId && { deploymentId }),
-			error: error instanceof Error ? error.message : String(error),
+			error: message,
+			// SIO-1232: without this the result carries NO toolErrors, and isDataSourceRetryable
+			// documents "No toolErrors means we don't know the failure mode -- default to retryable".
+			// So a sub-agent that burned its entire wall-clock budget was re-dispatched for another
+			// full one (observed: gitlab 360s + 360s inside an 876s run). A timeout will time out
+			// again; it is the one failure we can be sure a blind retry cannot fix.
+			//
+			// DELIBERATE divergence from isRetryableCategory: the category stays "transient" so
+			// summarizeFirstAttempts still labels it transient -- which is TRUE, it was a timeout --
+			// while retryable:false drives the decision. alignment.ts documents ToolError.retryable
+			// as the single source of truth. Any future code that recomputes retryability FROM the
+			// category would silently reintroduce the double-timeout; the test pins this pairing.
+			...(aborted && {
+				toolErrors: [
+					{
+						toolName: "__subagent_timeout__",
+						category: "transient" as const,
+						kind: "timeout" as const,
+						message:
+							effectiveTimeoutMs === undefined
+								? `sub-agent aborted after ${duration}ms`
+								: `sub-agent aborted after ${duration}ms (timeout ${effectiveTimeoutMs}ms)`,
+						retryable: false,
+					},
+				],
+			}),
 		};
 	} finally {
 		// Live progress signal: marks this branch done regardless of exit path
