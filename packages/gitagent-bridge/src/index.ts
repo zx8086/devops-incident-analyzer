@@ -18,6 +18,16 @@ export {
 	resolveBedrockConfig,
 	resolveFallbackConfig,
 } from "./model-factory.ts";
+// SIO-1223: the single source of truth for every model this repo may invoke, and its
+// probe-backed capability record. See docs/development/model-upgrade-checklist.md.
+export {
+	type ContentShape,
+	getModelCapabilities,
+	isKnownModel,
+	MODEL_REGISTRY,
+	type ModelCapabilities,
+	type ModelName,
+} from "./model-registry.ts";
 export { getRelatedTools, withRelatedTools } from "./related-tools.ts";
 export { mergeShared, type SharedMergeResult } from "./shared-merge.ts";
 export { buildSystemPrompt, buildSystemPromptParts, type SystemPromptParts } from "./skill-loader.ts";

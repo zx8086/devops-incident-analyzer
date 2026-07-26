@@ -197,25 +197,14 @@ export class DeadlineExceededError extends Error {
 	}
 }
 
-// SIO-1214: Claude 4.7+/5-generation models (Sonnet 5, Opus 4.7, Opus 4.8, Fable 5,
-// Mythos) reject `temperature` (and `top_p`/`top_k`) outright -- "temperature is
-// deprecated for this model" -- rather than accepting and ignoring it like prior
-// generations. Match by substring (not endsWith) so this still catches versioned/dated
-// Bedrock ids (e.g. a future eu.anthropic.claude-sonnet-5-20260601-v1:0) if MODEL_MAP
-// ever adds one; every current entry that must NOT get temperature is listed
-// explicitly here since a false negative (sending it) hard-fails every call.
-const NO_TEMPERATURE_MODEL_MARKERS = [
-	"claude-sonnet-5",
-	"claude-opus-4-7",
-	"claude-opus-4-8",
-	"claude-fable-5",
-	"claude-mythos-5",
-];
-
-export function modelAcceptsTemperature(bedrockModelId: string): boolean {
-	return !NO_TEMPERATURE_MODEL_MARKERS.some((marker) => bedrockModelId.includes(marker));
-}
-
+// SIO-1214: Claude's 4.7+/5 generation rejects `temperature` outright -- "`temperature` is
+// deprecated for this model" -- rather than accepting and ignoring it like prior generations,
+// so sending it hard-fails every call for that role.
+//
+// SIO-1223: this used to be a local NO_TEMPERATURE_MODEL_MARKERS substring list, a SECOND model
+// registry living in a different package from MODEL_MAP with nothing keeping the two in step --
+// SIO-1213 added to one, production broke, and SIO-1214 retrofitted the other. The capability is
+// now declared once, per model, in MODEL_REGISTRY and carried on the resolved config.
 function buildChatModel(
 	bedrockConfig: BedrockModelConfig,
 	overrides: Partial<BedrockModelConfig>,
@@ -225,7 +214,7 @@ function buildChatModel(
 		model: bedrockConfig.model,
 		region: bedrockConfig.region,
 		maxTokens: overrides.maxTokens ?? bedrockConfig.maxTokens,
-		...(modelAcceptsTemperature(bedrockConfig.model) ? { temperature } : {}),
+		...(bedrockConfig.capabilities.acceptsTemperature ? { temperature } : {}),
 	});
 }
 

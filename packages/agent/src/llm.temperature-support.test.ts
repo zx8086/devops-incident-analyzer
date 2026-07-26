@@ -28,28 +28,17 @@ function optionsFor(modelId: string): Record<string, unknown> | undefined {
 	return constructorCalls.find((options) => options.model === modelId);
 }
 
-const { createLlm, modelAcceptsTemperature } = await import("./llm.ts");
+const { createLlm } = await import("./llm.ts");
 
-describe("modelAcceptsTemperature (SIO-1214)", () => {
-	test("rejects temperature for the newly-adopted Sonnet 5 / Opus 4.8 EU inference profiles", () => {
-		expect(modelAcceptsTemperature("eu.anthropic.claude-sonnet-5")).toBe(false);
-		expect(modelAcceptsTemperature("eu.anthropic.claude-opus-4-8")).toBe(false);
-	});
-
-	test("rejects temperature for other 4.7+/5-generation ids, including versioned/dated variants", () => {
-		expect(modelAcceptsTemperature("us.anthropic.claude-opus-4-7")).toBe(false);
-		expect(modelAcceptsTemperature("eu.anthropic.claude-fable-5")).toBe(false);
-		expect(modelAcceptsTemperature("global.anthropic.claude-mythos-5")).toBe(false);
-		// substring match (not endsWith) so a future dated/versioned Bedrock id still matches
-		expect(modelAcceptsTemperature("eu.anthropic.claude-sonnet-5-20260601-v1:0")).toBe(false);
-	});
-
-	test("still accepts temperature for pre-4.7 model ids in MODEL_MAP", () => {
-		expect(modelAcceptsTemperature("eu.anthropic.claude-sonnet-4-6")).toBe(true);
-		expect(modelAcceptsTemperature("eu.anthropic.claude-haiku-4-5-20251001-v1:0")).toBe(true);
-		expect(modelAcceptsTemperature("eu.anthropic.claude-opus-4-6-v1")).toBe(true);
-	});
-});
+// SIO-1223: the `modelAcceptsTemperature` unit block that used to live here is gone with the
+// function. Temperature acceptance is no longer derived by substring-matching a Bedrock id --
+// it is declared per model in MODEL_REGISTRY, so the equivalent coverage now lives in
+// packages/gitagent-bridge/src/model-registry.test.ts ("acceptsTemperature agrees with the
+// 4.7+/5-generation rule for every entry"), which checks the DECLARATIONS against the same
+// generation rule this block used to check the matcher against.
+//
+// What stays here is the part that block could never prove: that no `temperature` key actually
+// reaches the ChatBedrockConverse constructor, for the primary AND the manifest fallback.
 
 describe("buildChatModel via createLlm (SIO-1214)", () => {
 	beforeEach(() => {
