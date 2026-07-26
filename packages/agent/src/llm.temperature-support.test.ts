@@ -61,11 +61,13 @@ describe("buildChatModel via createLlm (SIO-1214)", () => {
 	});
 
 	// incident-analyzer's manifest prefers claude-sonnet-5 with a haiku-4-5 fallback
-	// (SIO-1213): the primary build must omit temperature, the fallback build must not.
+	// (SIO-1213): the primary build must omit temperature, the fallback build must send it.
 	test("omits temperature for the Sonnet 5 primary, keeps it for the Haiku 4.5 fallback", () => {
 		createLlm("normalizer", "incident-analyzer");
 		const primaryOptions = optionsFor("eu.anthropic.claude-sonnet-5");
 		const fallbackOptions = optionsFor("eu.anthropic.claude-haiku-4-5-20251001-v1:0");
+		expect(primaryOptions).toBeDefined();
+		expect(fallbackOptions).toBeDefined();
 		expect(primaryOptions).not.toHaveProperty("temperature");
 		expect(fallbackOptions).toHaveProperty("temperature");
 	});
@@ -76,6 +78,8 @@ describe("buildChatModel via createLlm (SIO-1214)", () => {
 		createLlm("iacPlanner", "elastic-iac");
 		const primaryOptions = optionsFor("eu.anthropic.claude-opus-4-8");
 		const fallbackOptions = optionsFor("eu.anthropic.claude-sonnet-5");
+		expect(primaryOptions).toBeDefined();
+		expect(fallbackOptions).toBeDefined();
 		expect(primaryOptions).not.toHaveProperty("temperature");
 		expect(fallbackOptions).not.toHaveProperty("temperature");
 	});
@@ -85,6 +89,7 @@ describe("buildChatModel via createLlm (SIO-1214)", () => {
 	test("still includes temperature for a role resolving to Haiku 4.5 (light tier)", () => {
 		createLlm("classifier", "incident-analyzer");
 		const primaryOptions = optionsFor("eu.anthropic.claude-haiku-4-5-20251001-v1:0");
+		expect(primaryOptions).toBeDefined();
 		expect(primaryOptions).toHaveProperty("temperature");
 	});
 });
