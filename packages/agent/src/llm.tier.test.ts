@@ -109,7 +109,9 @@ describe("AGENT_NAMES all resolve to real sub-agent manifests (SIO-1235)", () =>
 
 	test.each(Object.entries(SUB_AGENT_NAMES))("%s -> %s is a loaded sub-agent", (_dataSourceId, agentName) => {
 		expect(subAgents.has(agentName), `${agentName} is not in the orchestrator's agents: map`).toBe(true);
-		expect(subAgents.get(agentName)?.manifest.model?.preferred).toBeDefined();
+		// Truthy, not merely defined: an empty string satisfies toBeDefined() while being exactly
+		// the misconfiguration this test exists to catch.
+		expect(subAgents.get(agentName)?.manifest.model?.preferred).toBeTruthy();
 	});
 });
 
@@ -122,9 +124,15 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 	const agent = loadAgent(join(import.meta.dir, "../../../agents/incident-analyzer"));
 
 	test("a light-tier role reports light-tier and borrows elastic-agent's model", () => {
+		// Anchor the expected value FIRST. Comparing two optional chains directly passes
+		// vacuously when both sides are undefined -- i.e. the test would still be green in
+		// exactly the missing-elastic-agent scenario the warning above exists for.
+		const borrowed = agent.subAgents.get("elastic-agent")?.manifest.model?.preferred;
+		expect(borrowed).toBeTruthy();
+
 		const resolved = resolveRoleModelConfig("classifier", agent);
 		expect(resolved.source).toBe("light-tier");
-		expect(resolved.modelConfig?.preferred).toBe(agent.subAgents.get("elastic-agent")?.manifest.model?.preferred);
+		expect(resolved.modelConfig?.preferred).toBe(borrowed);
 	});
 
 	test("a subAgent role with a known specialist reports sub-agent-manifest", () => {
@@ -138,9 +146,15 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 	});
 
 	test("a standard role reports root-manifest and ignores subAgentName", () => {
+		// Same anchor-first reason as the light-tier case above.
+		const rootPreferred = agent.manifest.model?.preferred;
+		expect(rootPreferred).toBeTruthy();
+
 		const resolved = resolveRoleModelConfig("aggregator", agent, "gitlab-agent");
 		expect(resolved.source).toBe("root-manifest");
-		expect(resolved.modelConfig?.preferred).toBe(agent.manifest.model?.preferred);
+		expect(resolved.modelConfig?.preferred).toBe(rootPreferred);
+		// The specialist's model must NOT leak into a non-subAgent role.
+		expect(resolved.modelConfig?.preferred).not.toBe("claude-haiku-4-5");
 	});
 
 	// The light tier wins over the sub-agent branch: a role that is BOTH tierable-light and
