@@ -855,6 +855,34 @@ const RESOLUTION_TOOLS_BY_DATASOURCE: Record<string, string[]> = {
 	// gitlab_list_merge_requests above) -- force-include it so typed Atlassian findings survive
 	// every action selection, not just incident_correlation.
 	atlassian: ["atlassian_search", "findLinkedIncidents"],
+	// SIO-1234: aws was absent entirely, so nothing was force-included -- and aws-agent
+	// declares no `skills:` block either, so withSkillPromisedTools bound 0 for it too. With
+	// 70 tools loaded and a 25 cap, the model followed its 32.7KB RULES.md and repeatedly
+	// called tools that were never bound (aws_ecs_list_clusters, aws_logs_start_query, ...),
+	// each returning `Tool "X" not found`.
+	//
+	// Kept small (9 of the 25 budget) so action selection still decides most of the belt.
+	// aws_health_describe_events and aws_rds_describe_db_instances were also observed unbound
+	// but are single-call groups; left out to hold the head down. If the AWS eval still misses
+	// them they belong here and MIN_ACTION_TOOLS drops to 7.
+	//
+	// The four logs_* entries are the COMPLETE async CloudWatch Insights chain
+	// (describe_log_groups -> get_log_group_fields -> start_query -> get_query_results), and
+	// they are here as a unit on purpose. A partially-bound chain is worse than an unbound one:
+	// start_query without get_query_results lets the model launch a query whose result it can
+	// never read, and SIO-1232 already had to make get_query_results loop-guard-exempt for the
+	// same reason. The SIO-1161 belt test pins that this chain survives a 4-group union.
+	aws: [
+		"aws_list_estates",
+		"aws_ecs_list_clusters",
+		"aws_ecs_list_services",
+		"aws_ecs_describe_services",
+		"aws_logs_describe_log_groups",
+		"aws_logs_get_log_group_fields",
+		"aws_logs_start_query",
+		"aws_logs_get_query_results",
+		"aws_cloudwatch_describe_alarms",
+	],
 	// NOTE: kafka is deliberately NOT here. Force-including kafka_list_topics would
 	// reintroduce the SIO-785 regression -- the broad topic-listing tool crowds out
 	// the specialized dlq_messages tools (kafka_list_dlq_topics), breaking the typed
@@ -863,25 +891,10 @@ const RESOLUTION_TOOLS_BY_DATASOURCE: Record<string, string[]> = {
 	// per-action tool budget.
 };
 
-// SIO-1029: union the datasource's always-include resolution tools into a
-// filtered selection (looked up from allTools by name), deduping, before the
-// caller slices to MAX_TOOLS_PER_AGENT. No-op for datasources without a
-// resolution set or when the tools are already present.
-function withResolutionTools(
-	selected: StructuredToolInterface[],
-	allTools: StructuredToolInterface[],
-	dataSourceId: string,
-): StructuredToolInterface[] {
-	const required = RESOLUTION_TOOLS_BY_DATASOURCE[dataSourceId];
-	if (!required || required.length === 0) return selected;
-	const present = new Set(selected.map((t) => t.name));
-	const missing = required.filter((name) => !present.has(name));
-	if (missing.length === 0) return selected;
-	const missingSet = new Set(missing);
-	const extras = allTools.filter((t) => missingSet.has(t.name));
-	if (extras.length === 0) return selected;
-	return [...extras, ...selected];
-}
+// SIO-1029 introduced withResolutionTools here to union the datasource's always-include tools
+// into a filtered selection. SIO-1234 replaced it with requiredHeadTools below: unioning only
+// the MISSING ones left a required tool that was also action-selected in the truncatable tail,
+// so "always-include" was never actually guaranteed. requiredHeadTools promotes all of them.
 
 // SIO-1228: union in the tools the sub-agent's SKILL.md prose tells the model to call.
 // Skill bodies are in the system prompt on EVERY turn (prompt-context.ts calls
@@ -909,16 +922,106 @@ function withSkillPromisedTools(
 	return [...extras, ...selected];
 }
 
-// Resolution tools stay at the HEAD: the SIO-1029/1084 A5 invariant steers the model to
-// its "where to look" enumerator first, and SIO-1228 must not weaken that. Order is
-// [resolution] ++ [skill-promised] ++ [action-selected], then the caller slices to 25.
-function withRequiredTools(
+// SIO-1234: the action-selected tools are the ones chosen FOR THIS QUERY, so they are the
+// last thing that should be dropped -- yet they were the only thing being dropped. The old
+// withRequiredTools (removed here, replaced by requiredHeadTools + composeBoundTools) prepended
+// via `[...extras, ...selected]` and the caller sliced to 25, so a head of 25+ names silently
+// truncated the entire action-selected tail to nothing.
+//
+// Guarantee at least MIN_ACTION_TOOLS query-relevant tools survive, taking the space from the
+// head instead. Below the cap this is byte-identical to the old concatenation for every agent
+// in the repo today (gitlab is the largest at head 18 + 5 selected = 23), so it only becomes
+// load-bearing once a head grows past the budget -- which is exactly the aws-agent case.
+const MIN_ACTION_TOOLS = 8;
+
+export function composeBoundTools(
+	head: StructuredToolInterface[],
+	selected: StructuredToolInterface[],
+	max: number = MAX_TOOLS_PER_AGENT,
+	minAction: number = MIN_ACTION_TOOLS,
+): StructuredToolInterface[] {
+	// Dedup BEFORE budgeting, not after. requiredHeadTools now promotes required tools that were
+	// also action-selected, so the two lists genuinely overlap; counting a duplicate against the
+	// action quota would silently buy fewer distinct tools than the quota claims.
+	const headNames = new Set(head.map((t) => t.name));
+	const seenTail = new Set<string>();
+	const tail: StructuredToolInterface[] = [];
+	for (const tool of selected) {
+		if (headNames.has(tool.name) || seenTail.has(tool.name)) continue;
+		seenTail.add(tool.name);
+		tail.push(tool);
+	}
+
+	// Reserve up to minAction slots for action-selected tools, but never more than exist and
+	// never fewer than the head leaves spare (so an under-budget composition is unchanged).
+	const actionQuota = Math.min(tail.length, Math.max(minAction, max - head.length));
+	const headQuota = Math.min(head.length, max - actionQuota);
+	return [...head.slice(0, headQuota), ...tail.slice(0, actionQuota)];
+}
+
+// SIO-1234: the head is EVERY resolution tool, then every skill-promised tool -- not just the
+// ones missing from `selected`.
+//
+// withResolutionTools/withSkillPromisedTools only ever PREPENDED the missing ones, leaving a
+// required tool that happened to also be action-selected sitting in the tail where the 25-slice
+// could still cut it. "Force-included" was therefore never actually a guarantee. That latent gap
+// is what split the async CloudWatch Insights pair: aws_logs_start_query landed at slot 25 and
+// aws_logs_get_query_results at 26, handing the model a way to start a query it could never read.
+// The same hole applied to gitlab_list_merge_requests and findLinkedIncidents, each the sole
+// input to a typed findings extractor and each truncatable in exactly the same way.
+//
+// Promoting them makes force-inclusion mean what its own comments already claimed. A promoted
+// tool is removed from the tail by composeBoundTools' dedup, so overlap costs no extra slots.
+function requiredHeadTools(
+	allTools: StructuredToolInterface[],
+	dataSourceId: string,
+	skillToolNames: string[] | undefined,
+): StructuredToolInterface[] {
+	const byName = new Map(allTools.map((t) => [t.name, t]));
+	const head: StructuredToolInterface[] = [];
+	const added = new Set<string>();
+	const push = (name: string) => {
+		const tool = byName.get(name);
+		// Intersecting with allTools is what discards prose identifiers that are not real tools
+		// (SIO-1228's "stale names are harmless" property).
+		if (!tool || added.has(name)) return;
+		added.add(name);
+		head.push(tool);
+	};
+	// Resolution first: the SIO-1029/1084 A5 invariant steers the model to its "where to look"
+	// enumerator before anything else.
+	for (const name of RESOLUTION_TOOLS_BY_DATASOURCE[dataSourceId] ?? []) push(name);
+	for (const name of skillToolNames ?? []) push(name);
+	return head;
+}
+
+// SIO-1234: tell the model what it actually has. This is the ONLY in-loop lever available:
+// `Tool "X" not found` is thrown by LangGraph's ToolNode (@langchain/langgraph@1.2.2,
+// dist/prebuilt/tool_node.cjs:144) and NEVER reaches instrumentTools -- the proxy in
+// sub-agent-instrumentation.ts only wraps tools that were bound in the first place, so no
+// tool-level guard can ever observe the failure. The prompt is the only place to intervene.
+//
+// The "record it as an un-queried gap" instruction matters as much as the list: without it a
+// model that notices a missing tool tends to retry it or invent a substitute, which is how a
+// single unbound name burned iterations to the recursion limit.
+export function buildBoundToolsBlock(tools: StructuredToolInterface[]): string {
+	const names = tools.map((t) => t.name).join(", ");
+	return `## Tools bound this turn
+
+These are the ONLY tools available to you on this turn: ${names || "(none)"}
+
+If any step in your instructions names a tool that is not in that list, SKIP that step and record it as an un-queried gap in your findings. Do not call it and do not retry it -- it is not bound this turn and the call will fail.`;
+}
+
+// The bind-site composition: head-vs-selected budgeting in one place, so all three call sites
+// below cannot drift apart.
+function bindTools(
 	selected: StructuredToolInterface[],
 	allTools: StructuredToolInterface[],
 	dataSourceId: string,
 	skillToolNames: string[] | undefined,
 ): StructuredToolInterface[] {
-	return withResolutionTools(withSkillPromisedTools(selected, allTools, skillToolNames), allTools, dataSourceId);
+	return composeBoundTools(requiredHeadTools(allTools, dataSourceId, skillToolNames), selected);
 }
 
 // SIO-738: Shared merge step so the augmentation test exercises the same
@@ -1013,8 +1116,7 @@ export function selectToolsByAction(
 			const nameSet = new Set(toolNames);
 			const selected = allTools.filter((t) => nameSet.has(t.name));
 			if (selected.length >= MIN_FILTERED_TOOLS) {
-				const withRequired = withRequiredTools(selected, allTools, dataSourceId, skillToolNames);
-				return { tools: withRequired.slice(0, MAX_TOOLS_PER_AGENT), filtered: true };
+				return { tools: bindTools(selected, allTools, dataSourceId, skillToolNames), filtered: true };
 			}
 		}
 	}
@@ -1024,8 +1126,7 @@ export function selectToolsByAction(
 		const nameSet = new Set(allActionNames);
 		const selected = allTools.filter((t) => nameSet.has(t.name));
 		if (selected.length >= MIN_FILTERED_TOOLS) {
-			const withRequired = withRequiredTools(selected, allTools, dataSourceId, skillToolNames);
-			return { tools: withRequired.slice(0, MAX_TOOLS_PER_AGENT), filtered: true };
+			return { tools: bindTools(selected, allTools, dataSourceId, skillToolNames), filtered: true };
 		}
 	}
 
@@ -1036,13 +1137,10 @@ export function selectToolsByAction(
 	// present, then slice. Guarantees the A5 invariant on every path.
 	// SIO-1228: same reasoning for the skill-promised tools -- the prompt makes the same
 	// promises regardless of which path selection took.
-	const withRequired = withRequiredTools(
-		allTools.slice(0, MAX_TOOLS_PER_AGENT),
-		allTools,
-		dataSourceId,
-		skillToolNames,
-	);
-	return { tools: withRequired.slice(0, MAX_TOOLS_PER_AGENT), filtered: true };
+	return {
+		tools: bindTools(allTools.slice(0, MAX_TOOLS_PER_AGENT), allTools, dataSourceId, skillToolNames),
+		filtered: true,
+	};
 }
 
 interface RunOptions {
@@ -1099,10 +1197,6 @@ async function runSubAgent(
 
 ${state.correlationFetchDirective}`
 			: focusBlock;
-		// SIO-1040: cache the base sub-agent prompt (stable) so the up-to-40 ReAct
-		// iterations and per-deployment fan-out share the Bedrock cache prefix within
-		// the 5-min TTL; the per-turn investigation focus stays volatile (uncached).
-		const systemPrompt = buildCachedSystemMessage(baseSystemPrompt, volatileBlock);
 		const llm = createLlm("subAgent");
 
 		if (allTools.length === 0) {
@@ -1177,6 +1271,17 @@ ${state.correlationFetchDirective}`
 		log.info(
 			{ toolCount: tools.length, totalTools: allTools.length, filtered, deploymentId },
 			"Creating ReAct agent with tools",
+		);
+
+		// SIO-1040: cache the base sub-agent prompt (stable) so the up-to-40 ReAct
+		// iterations and per-deployment fan-out share the Bedrock cache prefix within
+		// the 5-min TTL; the per-turn investigation focus stays volatile (uncached).
+		// SIO-1234: the bound-tools manifest is built AFTER selection (it names what was
+		// actually bound this turn) and goes in the VOLATILE block -- it varies per turn, so
+		// putting it in the stable half would break the cache prefix on every request.
+		const systemPrompt = buildCachedSystemMessage(
+			baseSystemPrompt,
+			`${volatileBlock}\n\n${buildBoundToolsBlock(tools)}`,
 		);
 
 		// SIO-686: per-tool-result observability so we can size the cap from real traces.

@@ -5,7 +5,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { loadAgent } from "./manifest-loader.ts";
-import { extractSkillToolNames } from "./skill-tools.ts";
+import { extractPromptToolNames, extractSkillToolNames } from "./skill-tools.ts";
 import { ToolDefinitionSchema } from "./types.ts";
 
 // SIO-1228 canary. The runtime fix unions skill-named tools into the bound set; these
@@ -18,6 +18,28 @@ import { ToolDefinitionSchema } from "./types.ts";
 
 // Keep in sync with MAX_TOOLS_PER_AGENT in packages/agent/src/sub-agent.ts.
 const MAX_TOOLS_PER_AGENT = 25;
+
+// SIO-1234: prompt prose may name at most (budget - reserved action slots) tools, mirroring
+// composeBoundTools' MIN_ACTION_TOOLS = 8. Naming more than this guarantees that either a
+// promised tool goes unbound or the action-selected tools are starved -- the two failure modes
+// this ticket exists to prevent.
+const MIN_ACTION_TOOLS = 8;
+const PROMPT_TOOL_BUDGET = MAX_TOOLS_PER_AGENT - MIN_ACTION_TOOLS;
+
+// Ratchet entries for prose that already exceeds the budget. These numbers may only ever
+// DECREASE -- lower one when prose is trimmed, and delete the entry once it reaches
+// PROMPT_TOOL_BUDGET. Do NOT raise one to make a build green; that is the regression.
+//
+// aws-agent: RULES.md is 32.7KB and prescribes per-service protocol chains by name. Trimming it
+// to conditional phrasing is tracked as the SIO-1234 follow-up; until then composeBoundTools'
+// reserved action quota is what keeps the binding safe.
+const KNOWN_OVERSUBSCRIBED: Readonly<Record<string, number>> = {
+	"aws-agent": 62,
+	// Over by exactly one. Trimming a single tool name from gitlab SKILL.md prose clears it and
+	// this entry can then be deleted -- deliberately not "fixed" by lowering MIN_ACTION_TOOLS,
+	// which would tune a global constant to suit one agent.
+	"gitlab-agent": 18,
+};
 
 const REPO_ROOT = new URL("../../../", import.meta.url).pathname;
 const ORCHESTRATOR = join(REPO_ROOT, "agents/incident-analyzer");
@@ -135,7 +157,12 @@ describe("SIO-1228: skill prose cannot promise tools the datasource does not exp
 
 		// Same fallback as buildSubAgentPrompt / getSkillToolNames.
 		const agent = rootAgent.subAgents.get(dir) ?? rootAgent;
-		const named = extractSkillToolNames(agent);
+		// SIO-1234: extractPromptToolNames, not extractSkillToolNames. The prompt is SOUL +
+		// sharedContext + RULES + duties + skills, but this canary only ever scanned skills --
+		// which is why aws-agent's 32.7KB RULES.md naming 62 tools went unnoticed until the
+		// model started calling them. aws-agent declares no `skills:` block at all, so the old
+		// scan saw literally nothing for it.
+		const named = extractPromptToolNames(agent);
 		const ds = dataSourceTools.get(dataSourceId);
 
 		// Only tokens that LOOK like a tool for this datasource are checked -- the
@@ -143,14 +170,19 @@ describe("SIO-1228: skill prose cannot promise tools the datasource does not exp
 		// inert at runtime and must not fail the build.
 		const toolLike = ds ? named.filter((n) => ds.prefixes.some((p) => n.startsWith(p))) : [];
 
-		test(`${dir}: every tool-like name in skill prose exists in the action map`, () => {
+		test(`${dir}: every tool-like name in prompt prose exists in the action map`, () => {
 			expect(ds).toBeDefined();
 			const missing = toolLike.filter((n) => !ds?.names.has(n));
 			expect(missing).toEqual([]);
 		});
 
-		test(`${dir}: skill-promised tools fit inside the sub-agent tool budget`, () => {
-			expect(toolLike.length).toBeLessThanOrEqual(MAX_TOOLS_PER_AGENT);
+		test(`${dir}: prompt-promised tools fit inside the sub-agent tool budget`, () => {
+			const ceiling = KNOWN_OVERSUBSCRIBED[dir] ?? PROMPT_TOOL_BUDGET;
+			// RATCHET, not a wall. A hard failure here would block every unrelated PR behind a
+			// 32KB prose rewrite of aws-agent/RULES.md. Instead the known-bad number may only
+			// ever go DOWN: prose that names more tools than before fails, prose that names
+			// fewer passes and should have its entry lowered (or deleted at <= the budget).
+			expect(toolLike.length).toBeLessThanOrEqual(ceiling);
 		});
 	}
 });

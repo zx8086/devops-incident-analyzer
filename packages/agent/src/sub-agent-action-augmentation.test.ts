@@ -318,3 +318,79 @@ describe("SIO-1161: Metrics Insights tool selection with the real aws-introspect
 		expect(tools.length).toBeLessThanOrEqual(25);
 	});
 });
+
+// SIO-1234: aws was absent from RESOLUTION_TOOLS_BY_DATASOURCE entirely and aws-agent declares
+// no `skills:` block, so nothing was force-bound for it at all -- with 70 tools loaded against a
+// 25 cap, the model followed its 32.7KB RULES.md and repeatedly called unbound tools.
+describe("SIO-1234: aws resolution set and action-slot reservation", () => {
+	// Local copy: the SIO-1161 block scopes its own inside that describe.
+	function loadAwsDef(): ToolDefinition {
+		const agent = loadAgent(join(import.meta.dir, "../../../agents/incident-analyzer"));
+		const awsDef = agent.tools.find((t) => t.name === "aws-introspect");
+		if (!awsDef) throw new Error("aws-introspect tool definition not found");
+		return awsDef;
+	}
+
+	const AWS_HEAD = [
+		"aws_list_estates",
+		"aws_ecs_list_clusters",
+		"aws_ecs_list_services",
+		"aws_ecs_describe_services",
+		"aws_logs_describe_log_groups",
+		"aws_logs_get_log_group_fields",
+		"aws_logs_start_query",
+		"aws_logs_get_query_results",
+		"aws_cloudwatch_describe_alarms",
+	];
+
+	test("every aws resolution tool is bound regardless of which actions were selected", () => {
+		const awsDef = loadAwsDef();
+		const allTools = fakeTools(getAllActionToolNames(awsDef));
+		// A narrow, unrelated selection: none of these action groups is about logs.
+		const { tools } = selectToolsByAction(allTools, "aws", { aws: ["ec2_state"] }, awsDef);
+		const names = tools.map((t) => t.name);
+		for (const required of AWS_HEAD) expect(names).toContain(required);
+	});
+
+	// The invariant that motivated promoting required tools out of the truncatable tail: a
+	// started Insights query whose results can never be read is worse than no query at all.
+	test("the async Insights chain is never split by the cap, even on a broad union", () => {
+		const awsDef = loadAwsDef();
+		const allTools = fakeTools(getAllActionToolNames(awsDef));
+		const { tools } = selectToolsByAction(
+			allTools,
+			"aws",
+			{ aws: ["cloudwatch_metrics", "ec2_state", "logs_insights", "ecs_state", "messaging_state"] },
+			awsDef,
+		);
+		const names = tools.map((t) => t.name);
+		expect(names).toContain("aws_logs_describe_log_groups");
+		expect(names).toContain("aws_logs_get_log_group_fields");
+		expect(names).toContain("aws_logs_start_query");
+		expect(names).toContain("aws_logs_get_query_results");
+		expect(tools.length).toBeLessThanOrEqual(25);
+	});
+
+	// The head must never eat the whole belt -- that is the failure this ticket fixes.
+	test("action-selected tools always survive alongside the resolution head", () => {
+		const awsDef = loadAwsDef();
+		const allTools = fakeTools(getAllActionToolNames(awsDef));
+		const { tools } = selectToolsByAction(
+			allTools,
+			"aws",
+			{ aws: ["cloudwatch_metrics", "ec2_state", "logs_insights", "ecs_state"] },
+			awsDef,
+		);
+		const names = tools.map((t) => t.name);
+		const nonHead = names.filter((n) => !AWS_HEAD.includes(n));
+		expect(nonHead.length).toBeGreaterThanOrEqual(8);
+	});
+
+	// Regression guard for the SIO-785 DLQ path: kafka must never gain a resolution entry.
+	test("kafka still force-binds nothing (SIO-785 DLQ regression guard)", () => {
+		const kafkaTools = fakeTools(["kafka_list_topics", "kafka_list_dlq_topics", "kafka_describe_topic"]);
+		const { tools } = selectToolsByAction(kafkaTools, "kafka", undefined, undefined);
+		// With no toolDef the raw-slice fallback runs; nothing may be prepended for kafka.
+		expect(tools.map((t) => t.name)).toEqual(["kafka_list_topics", "kafka_list_dlq_topics", "kafka_describe_topic"]);
+	});
+});

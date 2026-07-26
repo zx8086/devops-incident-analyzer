@@ -1,7 +1,7 @@
 // gitagent-bridge/src/skill-tools.test.ts
 
 import { describe, expect, test } from "bun:test";
-import { extractSkillToolNames, type SkillSource } from "./skill-tools.ts";
+import { extractPromptToolNames, extractSkillToolNames, type SkillSource } from "./skill-tools.ts";
 
 function source(skills: Record<string, string>, sharedSkills: Record<string, string> = {}): SkillSource {
 	return {
@@ -76,5 +76,58 @@ describe("SIO-1228: extractSkillToolNames", () => {
 			s: "---\nname: code-search\nallowed_tools: `some_meta_token`\n---\n\nUse `gitlab_search`.",
 		});
 		expect(extractSkillToolNames(agent)).toEqual(["gitlab_search"]);
+	});
+});
+
+// SIO-1234: the binding canary only ever scanned skills, so aws-agent -- which declares no
+// `skills:` block at all but whose 32.7KB RULES.md names 62 tools -- measured as zero.
+describe("extractPromptToolNames", () => {
+	function promptSource(over: Partial<SkillSource> = {}): SkillSource {
+		return { skills: new Map(), sharedSkills: new Map(), ...over };
+	}
+
+	test.each([
+		["soul", { soul: "Use `aws_list_estates` first." }],
+		["rules", { rules: "Call `aws_list_estates` before anything else." }],
+		["duties", { duties: "Only `aws_list_estates` is permitted." }],
+		["sharedContext", { sharedContext: "Prefer `aws_list_estates`." }],
+	])("collects tool names from %s", (_label, over) => {
+		expect(extractPromptToolNames(promptSource(over))).toEqual(["aws_list_estates"]);
+	});
+
+	// The aws-agent shape exactly: no skills, everything in RULES.md.
+	test("finds tools for an agent with no skills block at all", () => {
+		const agent = promptSource({ rules: "Chain `aws_ecs_list_clusters` -> `aws_ecs_list_services`." });
+		expect(extractSkillToolNames(agent)).toEqual([]);
+		expect(extractPromptToolNames(agent)).toEqual(["aws_ecs_list_clusters", "aws_ecs_list_services"]);
+	});
+
+	test("unions skills with the prompt bodies and dedupes", () => {
+		const agent = promptSource({
+			skills: new Map([["s", "Use `tool_one`."]]),
+			rules: "Use `tool_one` and `tool_two`.",
+		});
+		expect(extractPromptToolNames(agent)).toEqual(["tool_one", "tool_two"]);
+	});
+
+	test("strips frontmatter the same way renderSkill does", () => {
+		const agent = promptSource({ rules: "---\ndescription: uses `not_a_tool`\n---\n\nCall `real_tool`." });
+		expect(extractPromptToolNames(agent)).toEqual(["real_tool"]);
+	});
+
+	test("is a superset of extractSkillToolNames", () => {
+		const agent = promptSource({ skills: new Map([["s", "`skill_tool`"]]), rules: "`rules_tool`" });
+		const skillOnly = extractSkillToolNames(agent);
+		const all = extractPromptToolNames(agent);
+		for (const name of skillOnly) expect(all).toContain(name);
+	});
+
+	test("returns [] when no prompt body names a tool", () => {
+		expect(extractPromptToolNames(promptSource({ rules: "Be careful and thorough." }))).toEqual([]);
+	});
+
+	// The bodies are optional, so every pre-SIO-1234 caller/fixture still satisfies SkillSource.
+	test("tolerates an agent with only the two skill maps", () => {
+		expect(extractPromptToolNames(promptSource())).toEqual([]);
 	});
 });
