@@ -193,7 +193,13 @@ export class LadybugStore implements GraphStore {
 	// wrapped only the constructor and therefore usually never saw the error.
 	private async newDatabase(lbug: LbugModule): Promise<LbugDatabase> {
 		const db = new lbug.Database(this.path, 0, true, false, 0, true, CHECKPOINT_THRESHOLD_BYTES);
-		await db.init?.();
+		if (db.init) {
+			await db.init();
+		} else {
+			// Without init(), replay defers to the first query -- outside the recovery
+			// scope, i.e. the exact SIO-1163 dead-code regression. Surface it loudly.
+			logger.warn({ path: this.path }, "lbug Database has no init(); WAL-corruption auto-recovery may not fire");
+		}
 		return db;
 	}
 

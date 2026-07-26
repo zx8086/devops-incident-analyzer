@@ -73,6 +73,15 @@ function mockLbug(opts: {
 	return { loader, counts, ctorArgs, queries };
 }
 
+async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
+	const dir = mkdtempSync(join(tmpdir(), "kg-store-test-"));
+	try {
+		await fn(dir);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
 describe("graphPath", () => {
 	test("returns the env override verbatim when set", () => {
 		expect(graphPath({ KNOWLEDGE_GRAPH_PATH: "/custom/path" } as NodeJS.ProcessEnv)).toBe("/custom/path");
@@ -132,15 +141,6 @@ describe("getGraphStore singleton reset-on-failure", () => {
 describe("LadybugStore WAL-corruption recovery", () => {
 	// Restore the real lbug loader once this suite finishes.
 	afterAll(() => _setLbugLoaderForTesting(undefined));
-
-	async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
-		const dir = mkdtempSync(join(tmpdir(), "kg-store-test-"));
-		try {
-			await fn(dir);
-		} finally {
-			rmSync(dir, { recursive: true, force: true });
-		}
-	}
 
 	const CORRUPT_WAL_ERROR = "Runtime exception: Corrupted wal file. Read out invalid WAL record type.";
 
@@ -276,15 +276,6 @@ describe("LadybugStore WAL-corruption recovery", () => {
 
 describe("LadybugStore corruption-window hardening (SIO-1236)", () => {
 	afterAll(() => _setLbugLoaderForTesting(undefined));
-
-	async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
-		const dir = mkdtempSync(join(tmpdir(), "kg-store-test-"));
-		try {
-			await fn(dir);
-		} finally {
-			rmSync(dir, { recursive: true, force: true });
-		}
-	}
 
 	test("opens the Database with autoCheckpoint on and a 256KB checkpoint threshold", async () =>
 		withTempDir(async (dir) => {
