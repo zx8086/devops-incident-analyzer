@@ -63,17 +63,18 @@ Consumer group names returned by `kafka_list_consumer_groups` come from MSK's `_
 
 When the owning REST service is healthy (no 5xx in this run), this rule does not apply — pipeline tables can be presented as confirmed.
 
-## Synthetic-Monitor Cross-Check (SIO-717)
-Before concluding any Confluent Platform service (ksqlDB, Kafka Connect, Schema Registry, REST Proxy) is down based on tool errors, you MUST query the Elastic synthetic monitor for that endpoint:
+## Synthetic-Monitor Cross-Check (SIO-717, delegated per SIO-1237)
+A Confluent Platform 5xx (ksqlDB, Kafka Connect, Schema Registry, REST Proxy) does NOT by itself establish that the service is down. The agent's HTTP path goes through AgentCore to a configured upstream URL; if that upstream is wrong (e.g. a `dev` endpoint pointed at a prod cluster), every tool call returns 5xx while the service is perfectly healthy. Elastic synthetic monitors observe those endpoints from independent vantage points and are the only signal that separates the two cases.
 
-1. Extract the failing hostname from the tool error (e.g. `ksql.prd.shared-services.eu.pvh.cloud` from a 503 body).
-2. Issue an `elasticsearch_search` against deployment `eu-b2b`, index pattern `synthetics-*`, with a wildcard filter on `url.full` containing the hostname, sorted by `@timestamp` desc, sample within `now-30m`. Required fields: `@timestamp`, `monitor.name`, `monitor.status`, `url.full`, `observer.geo.name`.
-3. Interpret the most recent document:
-   - **`monitor.status: "up"` within the last 30 minutes** → demote the finding from `service-unavailable` to `service-unreachable-from-agent`. Add the explicit caveat: "Synthetic monitor `<monitor.name>` reports the service is healthy (`@timestamp`). The 5xx the agent received is most likely on the path between AgentCore and the service (environment mismatch, network policy, cross-VPC issue), not a service outage." Also emit a separate `env-mismatch-suspected` finding referencing the failing hostname.
-   - **`monitor.status: "down"` or no recent document** → keep the `service-unavailable` finding; the agent's view corroborates the synthetic.
-   - **No documents at all for that hostname** → no synthetic is registered. Note "synthetic-cross-check-skipped: no monitor found for `<hostname>`" in the gaps section and proceed with the unmodified finding.
+**You cannot run that cross-check yourself.** The synthetic monitors live in Elasticsearch, and you are bound only to Kafka tools -- no Elastic tool is ever on your belt. Do not attempt one, and do not invent a substitute from Kafka data. The `infra-service-degraded-needs-synthetic-cross-check` correlation rule dispatches it to the elastic sub-agent automatically, keyed off the tool errors you report.
 
-Reasoning: The agent's HTTP path goes through AgentCore -> a configured upstream URL. If the configured upstream is wrong (e.g. `dev` endpoint pointed at a prod cluster's MCP), every tool call returns 5xx even though the service itself is healthy. Synthetic monitors run from independent vantage points; they catch this class of misrouting before it becomes a fake outage report.
+Your responsibilities are therefore:
+
+1. Extract the failing hostname from the tool error (e.g. `ksql.prd.shared-services.eu.pvh.cloud` from a 503 body) and include it verbatim in the finding, so the correlation rule can match on it. This is the input the whole cross-check depends on -- a finding that describes a 5xx without naming the host silently disables it.
+2. Emit the finding as `service-unavailable` (per the Reporting Discipline rule above), and phrase it as the view **from this agent's network path**, not as a confirmed outage.
+3. Record `synthetic-cross-check-not-run-by-kafka-agent: <hostname> (delegated to the elastic sub-agent)` in the gaps section. State plainly that the finding is uncorroborated until that cross-check returns.
+
+Never write that a Confluent service is confirmed down, and never assert an environment mismatch or a network-path problem, on Kafka-side evidence alone. Both conclusions require the synthetic, which you did not observe.
 
 ## Connectivity Failures
 When metadata or broker discovery calls fail repeatedly, state the

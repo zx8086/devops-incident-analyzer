@@ -13,7 +13,7 @@ import {
 } from "../confidence-policy.ts";
 import type { AgentStateType, DegradedRule, PendingCorrelation } from "../state";
 import { queryDataSource } from "../sub-agent";
-import { evaluate } from "./engine";
+import { agentToDataSourceId, evaluate } from "./engine";
 import { type CorrelationRule, correlationRules, LOG_GAP_RULE_NAME, LogGapTriggerContextSchema } from "./rules";
 
 const logger = getLogger("agent:enforceCorrelations");
@@ -95,7 +95,15 @@ export function enforceCorrelationsRouter(state: AgentStateType): Send[] | "enfo
 	}
 
 	for (const [agent, pendings] of dedupedByAgent.entries()) {
-		const dataSourceId = agent.replace(/-agent$/, "");
+		// SIO-1237: use the canonical map, not a bare suffix strip. `capella-agent` strips to
+		// "capella", but the couchbase MCP server's datasource id is "couchbase" -- the exact
+		// SIO-763 mismatch agentToDataSourceId exists to prevent, and which engine.ts's
+		// coverage check already routes through. A wrong id here fails silently rather than
+		// loudly: AGENT_NAMES has no "capella" key, so queryDataSource falls back to
+		// elastic-agent and getToolsForDataSource returns EVERY tool. Unreachable today (no
+		// rule targets capella-agent), so this closes the trap rather than fixing an observed
+		// failure.
+		const dataSourceId = agentToDataSourceId(agent);
 		// SIO-1155: rules may provide a targeted fetch directive; without one the
 		// refetch re-runs the original incident prompt and rarely covers the rule's
 		// entities. Multiple directives for one agent concatenate.

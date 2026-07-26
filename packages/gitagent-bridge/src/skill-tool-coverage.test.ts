@@ -97,14 +97,14 @@ const ALL_TOOL_PREFIXES = [...dataSourceTools.values()].flatMap(({ prefixes }) =
 // Detected instances awaiting a product decision, same ratchet discipline as
 // KNOWN_OVERSUBSCRIBED: entries may be removed, never added without a linked follow-up.
 //
-// kafka-agent SOUL.md's SIO-717 "Synthetic-Monitor Cross-Check" tells the kafka sub-agent it
-// MUST `elasticsearch_search` the synthetics-* index -- a tool bound only to elastic-agent, so
-// the step can never execute. Whether that cross-check should move to elastic-agent, become a
-// recorded gap, or be dropped is a design decision about SIO-717's feature, not a mechanical
-// rename, so it is recorded here rather than silently rewritten.
-const KNOWN_CROSS_DATASOURCE_PROSE: Readonly<Record<string, readonly string[]>> = {
-	"kafka-agent": ["elasticsearch_search"],
-};
+// EMPTY as of SIO-1237, and that is the intended steady state -- adding an entry here means
+// shipping a prompt that instructs a call which cannot succeed. The one historical entry was
+// kafka-agent's SIO-717 "Synthetic-Monitor Cross-Check", whose step 2 told the kafka sub-agent
+// to `elasticsearch_search` the synthetics-* index. That tool is bound only to elastic-agent,
+// so the step could never execute. SIO-1237 moved the procedure onto the
+// infra-service-degraded-needs-synthetic-cross-check rule's fetchDirective (rules.ts), which
+// delivers it to elastic-agent -- the agent that owns the tool -- on the turn the rule fires.
+const KNOWN_CROSS_DATASOURCE_PROSE: Readonly<Record<string, readonly string[]>> = {};
 
 // Load through the ROOT agent, exactly as prompt-context's getSkillToolNames does.
 // Loading a sub-agent directory standalone resolves sharedRoot to a path that does not
@@ -150,6 +150,24 @@ describe("SIO-1228: skill prose cannot promise tools the datasource does not exp
 		const agent = rootAgent.subAgents.get("kafka-agent");
 		expect(agent).toBeDefined();
 		expect(agent!.sharedSkills.size).toBeGreaterThan(0);
+	});
+
+	// SIO-1237: the counterpart to the cross-datasource rule below. Removing the kafka SOUL's
+	// unrunnable elasticsearch_search only helps if the agent it moved TO can actually run it.
+	// The synthetic cross-check's fetchDirective (correlation/rules.ts) instructs elastic-agent
+	// to call elasticsearch_search, and that call is guaranteed to bind ONLY because the tool is
+	// named in elastic-agent's prompt: extractSkillToolNames feeds withSkillPromisedTools /
+	// requiredHeadTools, which force-includes it at the head of the bound set on every turn.
+	// There is no `elastic` entry in RESOLUTION_TOOLS_BY_DATASOURCE, so this prose mention is
+	// the whole guarantee -- today it comes from the shared cite-sources skill. If that mention
+	// is ever dropped, binding falls back to action selection alone and a correlation fetch on a
+	// turn that did not pick the `search` action would re-create the exact
+	// `Tool "X" not found` failure SIO-1234 exists to prevent, silently.
+	test("elastic-agent's prompt names elasticsearch_search, so the cross-check directive can bind", () => {
+		const agent = rootAgent.subAgents.get("elastic-agent");
+		expect(agent).toBeDefined();
+		const promised = agent ? extractSkillToolNames(agent) : [];
+		expect(promised).toContain("elasticsearch_search");
 	});
 
 	// A sub-agent directory that is not declared in the orchestrator's `agents:` map is

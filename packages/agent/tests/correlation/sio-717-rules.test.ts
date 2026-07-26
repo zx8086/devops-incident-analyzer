@@ -235,6 +235,71 @@ describe("infra-service-degraded-needs-synthetic-cross-check", () => {
 		expect(ctx.hostnames).toEqual(["connect.prd.shared-services.eu.pvh.cloud"]);
 		expect(ctx.signal).toBe("confluent-5xx-needs-synthetic-crosscheck");
 	});
+
+	// SIO-1237: the procedure moved here from kafka-agent's SOUL.md, where it named
+	// `elasticsearch_search` -- a tool the kafka sub-agent is never bound to, so it could not
+	// run. Without a directive the refetch re-runs the original focus-anchored incident
+	// prompt and does not query synthetics, so the cross-check ran via neither path.
+	describe("fetchDirective (SIO-1237)", () => {
+		function directiveFor(hostnames: string[]): string {
+			const directive = rule.fetchDirective?.({
+				hostnames,
+				signal: "confluent-5xx-needs-synthetic-crosscheck",
+			});
+			expect(directive).toBeDefined();
+			return directive ?? "";
+		}
+
+		test("exists -- without it the elastic refetch never queries synthetics", () => {
+			expect(typeof rule.fetchDirective).toBe("function");
+		});
+
+		test("names every failing hostname so the fetch covers all of them", () => {
+			const directive = directiveFor([
+				"ksql.prd.shared-services.eu.pvh.cloud",
+				"connect.prd.shared-services.eu.pvh.cloud",
+			]);
+			expect(directive).toContain("ksql.prd.shared-services.eu.pvh.cloud");
+			expect(directive).toContain("connect.prd.shared-services.eu.pvh.cloud");
+		});
+
+		// Both tokens are load-bearing for the PARSE side: extractElasticFindings only routes
+		// an output to the synthetic parser when toolName === "elasticsearch_search" AND the
+		// index hint matches /synthetics?/i. Drop either and syntheticMonitors silently stops
+		// populating, which also re-breaks the coverage check that now reads it.
+		test("names the elasticsearch_search tool and the synthetics-* index the extractor keys on", () => {
+			const directive = directiveFor(["ksql.prd.shared-services.eu.pvh.cloud"]);
+			expect(directive).toContain("elasticsearch_search");
+			expect(directive).toContain("synthetics-*");
+		});
+
+		test("names the eu-b2b deployment the monitors actually live in", () => {
+			expect(directiveFor(["ksql.prd.shared-services.eu.pvh.cloud"])).toContain("eu-b2b");
+		});
+
+		test("requests the _source fields the extractor reads", () => {
+			const directive = directiveFor(["ksql.prd.shared-services.eu.pvh.cloud"]);
+			for (const field of ["@timestamp", "monitor.name", "monitor.status", "url.full", "observer.geo.name"]) {
+				expect(directive).toContain(field);
+			}
+		});
+
+		// The whole point of the check: an UP synthetic means the service is fine and the
+		// agent's path is broken. Losing this phrasing turns the fetch into a fact-gather
+		// with no verdict.
+		test("carries the up/down/absent decision logic including the env-mismatch demotion", () => {
+			const directive = directiveFor(["ksql.prd.shared-services.eu.pvh.cloud"]);
+			expect(directive).toContain("env-mismatch-suspected");
+			expect(directive).toContain("now-30m");
+			expect(directive.toLowerCase()).toContain("no synthetic is registered");
+		});
+
+		// Malformed context must not throw inside the router's directive builder.
+		test("degrades to an empty hostname list rather than throwing on a bad context", () => {
+			expect(() => rule.fetchDirective?.({ hostnames: "not-an-array" })).not.toThrow();
+			expect(() => rule.fetchDirective?.({})).not.toThrow();
+		});
+	});
 });
 
 // ---------------------------------------------------------------------------

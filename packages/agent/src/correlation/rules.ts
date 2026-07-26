@@ -178,6 +178,15 @@ function findConfluent5xxToolErrors(toolErrors: ToolError[]): Array<{ tool: stri
 	return out;
 }
 
+// SIO-1237: one schema for the synthetic cross-check's trigger context, mirroring
+// LogGapTriggerContextSchema. Both consumers parse it -- the fetchDirective builder and
+// the engine's hostname-aware coverage check -- so neither can drift from the trigger.
+export const SyntheticCrossCheckContextSchema = z.object({
+	hostnames: z.array(z.string()),
+	signal: z.string(),
+});
+export type SyntheticCrossCheckContext = z.infer<typeof SyntheticCrossCheckContextSchema>;
+
 export const correlationRules: CorrelationRule[] = [
 	{
 		name: "kafka-empty-or-dead-groups",
@@ -294,10 +303,42 @@ export const correlationRules: CorrelationRule[] = [
 			if (hits.length === 0) return null;
 			// Collect unique hostnames so the cross-check covers all failing endpoints
 			const hostnames = [...new Set(hits.map((h) => h.hostname).filter((h): h is string => h !== null))];
-			return { context: { hostnames, signal: "confluent-5xx-needs-synthetic-crosscheck" } };
+			return {
+				context: { hostnames, signal: "confluent-5xx-needs-synthetic-crosscheck" } satisfies SyntheticCrossCheckContext,
+			};
 		},
 		requiredAgent: "elastic-agent",
 		retry: { attempts: 2, timeoutMs: 30_000 },
+		// SIO-1237: the procedure this rule exists to run used to live in kafka-agent's
+		// SOUL.md, which named `elasticsearch_search` -- a tool the kafka sub-agent is never
+		// bound to, so the step could not execute (SIO-1234's canary caught it). Moving the
+		// instructions here puts them in the prompt of the agent that owns the tool, and only
+		// on the turn the rule actually fires.
+		//
+		// Without a directive the refetch re-runs the ORIGINAL incident prompt, which is
+		// focus-anchored on the incident service and essentially never queries synthetics-*
+		// (the failure mode SIO-1155 added fetchDirective for). So the cross-check ran via
+		// NEITHER path before this.
+		//
+		// The `synthetics-*` index pattern and the elasticsearch_search tool name are both
+		// load-bearing for the parse side: extractElasticFindings only routes an output to
+		// parseSyntheticMonitorsFromText when toolName === "elasticsearch_search" AND the
+		// index hint matches /synthetics?/i (see extractors/elastic.ts looksLikeSyntheticIndex).
+		// Change either here and syntheticMonitors silently stops populating.
+		fetchDirective: (context) => {
+			const parsed = SyntheticCrossCheckContextSchema.safeParse(context);
+			const hostnames = parsed.success ? parsed.data.hostnames : [];
+			return `CORRELATION FETCH (SIO-717/SIO-1237): The kafka sub-agent received HTTP 5xx from Confluent Platform endpoints: ${hostnames.join(", ")}. It cannot check these itself -- synthetic monitors live in Elasticsearch and it is bound only to Kafka tools. Determine whether these services are genuinely down or whether only the agent's network path to them is broken.
+
+For EACH hostname listed above, run an elasticsearch_search against deployment "eu-b2b", index pattern "synthetics-*", filtering on a wildcard match of url.full containing that hostname, within the last 30 minutes (now-30m), sorted by @timestamp descending, size 1. Request exactly these _source fields: @timestamp, monitor.name, monitor.status, url.full, observer.geo.name.
+
+Report, per hostname, the most recent document and the verdict it implies:
+- monitor.status "up" within the last 30 minutes -> the service is HEALTHY and the kafka sub-agent's 5xx is a path-side problem. Say so explicitly: name the monitor and its @timestamp, and state that the 5xx most likely originates between AgentCore and the service (environment mismatch, network policy, or cross-VPC routing) rather than from a service outage. Flag it as env-mismatch-suspected against that hostname.
+- monitor.status "down" -> the synthetic corroborates the kafka sub-agent; the service really is impaired.
+- no document returned for that hostname -> no synthetic is registered for it. Report that as an un-queried gap and draw no conclusion either way; do NOT read absence of a monitor as evidence the service is up or down.
+
+This is a targeted fetch -- do NOT re-investigate the incident's focus service, and do NOT substitute APM or application logs for the synthetic. Only a synthetic observes these endpoints from a vantage point independent of the agent's own network path, which is the entire reason this check exists.`;
+		},
 	},
 	{
 		// SIO-723: kafka_list_consumer_groups returns groups from MSK's
