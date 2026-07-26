@@ -147,8 +147,8 @@ export const LONG_FORM_ROLES: ReadonlySet<LlmRole> = new Set<LlmRole>([
 	"iacReader",
 	"hilDistiller",
 	// The sharpest case: iacPlanner's intent JSON embeds VERBATIM user-pasted documents
-	// (ilmFullPolicy, phasesPatch, userSettingsYaml), so its output scales with the paste --
-	// and its 2048 budget is the lowest of any role in this set.
+	// (ilmFullPolicy, phasesPatch, userSettingsYaml), so its output scales with the paste. It
+	// held the lowest budget of any role in this set (2048) until SIO-1225 raised it to 8192.
 	"iacPlanner",
 ]);
 
@@ -223,7 +223,41 @@ export class DeadlineExceededError extends Error {
 // registry living in a different package from MODEL_MAP with nothing keeping the two in step --
 // SIO-1213 added to one, production broke, and SIO-1214 retrofitted the other. The capability is
 // now declared once, per model, in MODEL_REGISTRY and carried on the resolved config.
+// SIO-1226: token accounting. Before this, nothing in the repo could see LLM token use or
+// cost: buildChatModel passed no callbacks and packages/observability has no usage surface, so
+// the only "budget" was graph-budget.ts's wall clock. A per-token price change or a verbosity
+// regression -- exactly what SIO-1213 introduced -- was therefore unobservable and ungated; we
+// could infer the model change was expensive but never measure it.
+//
+// Attached here rather than in invokeWithDeadline because only 8 call sites use that helper;
+// the highest-token roles (aggregator and responder at 16384, and subAgent across up to 40
+// ReAct iterations) call invoke directly or run inside createReactAgent. A callback on the
+// model instance covers every path, streaming included.
+//
+// Reads usage from the two places LangChain has put it, and stays silent rather than throwing
+// if a future version moves it again -- telemetry must never break an answer.
+function logTokenUsage(role: LlmRole, model: string, output: unknown): void {
+	const result = output as {
+		llmOutput?: { usage?: Record<string, unknown> };
+		generations?: Array<Array<{ message?: { usage_metadata?: Record<string, unknown> } }>>;
+	};
+	const usage = result.generations?.[0]?.[0]?.message?.usage_metadata ?? result.llmOutput?.usage;
+	if (!usage) return;
+	const num = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
+	logger.info(
+		{
+			role,
+			model,
+			inputTokens: num(usage.input_tokens) ?? num(usage.inputTokens),
+			outputTokens: num(usage.output_tokens) ?? num(usage.outputTokens),
+			totalTokens: num(usage.total_tokens) ?? num(usage.totalTokens),
+		},
+		"LLM token usage",
+	);
+}
+
 function buildChatModel(
+	role: LlmRole,
 	bedrockConfig: BedrockModelConfig,
 	overrides: Partial<BedrockModelConfig>,
 ): ChatBedrockConverse {
@@ -233,6 +267,17 @@ function buildChatModel(
 		region: bedrockConfig.region,
 		maxTokens: overrides.maxTokens ?? bedrockConfig.maxTokens,
 		...(bedrockConfig.capabilities.acceptsTemperature ? { temperature } : {}),
+		callbacks: [
+			{
+				handleLLMEnd: (output: unknown) => {
+					try {
+						logTokenUsage(role, bedrockConfig.model, output);
+					} catch {
+						// never let telemetry break a turn
+					}
+				},
+			},
+		],
 	});
 }
 
@@ -286,7 +331,7 @@ export function createLlm(role: LlmRole, agentName = "incident-analyzer"): ChatB
 
 	const bedrockConfig = resolveBedrockConfig(modelConfig);
 	const overrides = ROLE_OVERRIDES[role];
-	const primary = buildChatModel(bedrockConfig, overrides);
+	const primary = buildChatModel(role, bedrockConfig, overrides);
 
 	// SIO-621: Wrap with fallback model from gitagent manifest if available.
 	// Skip for tool-binding roles (subAgent) because createReactAgent requires
@@ -302,7 +347,7 @@ export function createLlm(role: LlmRole, agentName = "incident-analyzer"): ChatB
 		return primary;
 	}
 
-	const fallback = buildChatModel(fallbackConfig, overrides);
+	const fallback = buildChatModel(role, fallbackConfig, overrides);
 	logger.info(
 		{ role, tier: isLightweight ? "light" : "standard", model: bedrockConfig.model, fallback: fallbackConfig.model },
 		"LLM model selected",
@@ -325,14 +370,14 @@ export function createLlmWithTools(
 	const overrides = ROLE_OVERRIDES[role];
 
 	const bedrockConfig = resolveBedrockConfig(modelConfig);
-	const primary = buildChatModel(bedrockConfig, overrides).bindTools(tools);
+	const primary = buildChatModel(role, bedrockConfig, overrides).bindTools(tools);
 	const fallbackConfig = resolveFallbackConfig(modelConfig);
 	if (!fallbackConfig) {
 		logger.info({ role, model: bedrockConfig.model }, "LLM model selected");
 		return primary as unknown as Runnable<BaseMessage[], BaseMessage>;
 	}
 
-	const fallback = buildChatModel(fallbackConfig, overrides).bindTools(tools);
+	const fallback = buildChatModel(role, fallbackConfig, overrides).bindTools(tools);
 	logger.info({ role, model: bedrockConfig.model, fallback: fallbackConfig.model }, "LLM model selected");
 	return primary.withFallbacks({ fallbacks: [fallback] }) as unknown as Runnable<BaseMessage[], BaseMessage>;
 }

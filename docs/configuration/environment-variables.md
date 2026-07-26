@@ -416,11 +416,20 @@ The OAuth flow opens a local callback on `ATLASSIAN_OAUTH_CALLBACK_PORT` to rece
 
 Settings for the LangGraph supervisor agent, including model selection and state persistence.
 
+
+> **Removed (SIO-1226):** `AGENT_LLM_MODEL`, `AGENT_LLM_HAIKU_MODEL` and `AGENT_LLM_REGION` were
+> documented here but read by **no source file**, and the first two advertised
+> `claude-sonnet-4-6` long after SIO-1213 moved the orchestrator to Sonnet 5 — so this table was
+> actively misleading about which model runs. Models are chosen in `agents/*/agent.yaml`
+> (`model:`) and resolved through `MODEL_REGISTRY`; the Bedrock region comes from `AWS_REGION`
+> (default `eu-central-1`). See [Model Upgrade Checklist](../development/model-upgrade-checklist.md).
+
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `AGENT_LLM_MODEL` | No | `claude-sonnet-4-6` | Primary model for supervisor, aggregator, and validator nodes |
-| `AGENT_LLM_HAIKU_MODEL` | No | `claude-haiku-4-5` | Fast model for classifier and entity extractor nodes |
-| `AGENT_LLM_REGION` | No | `eu-west-1` | AWS region for Bedrock model inference |
+| `AGENT_LLM_TIER_<ROLE>` | No | per-role default | SIO-1226: flips a role in `TIERABLE_ROLES` between `light` (Haiku) and `standard` (the manifest model) with no code change, e.g. `AGENT_LLM_TIER_FOLLOW_UP=light`. **Caveat:** the light tier borrows the elastic-agent sub-agent manifest, which declares no `fallback:`, so a light-tier role has **no model fallback at all**. |
+| `AGENT_LLM_TIMEOUT_<ROLE>_MS` | No | per-role default | SIO-1226: per-role LLM wall-clock deadline. `0` disables that role's timer; `aggregator`, `subAgent` and `responder` are `0` by design and rely solely on the graph-wide abort signal. |
+| `AGENT_PROMPT_CACHE_ENABLED` | No | `true` | SIO-1226: Bedrock prompt caching for the sub-agent base prompt and the aggregator. Set `false` to kill it on a Bedrock `ValidationException` or a cost regression. Caches are **per model** with a ~5-minute TTL, so any model change invalidates every cached prefix and the sub-agent's up-to-40-iteration amortisation re-primes cold. |
+| `AGGREGATION_MIN_RUNWAY_MS` | No | `30000` | SIO-1226: minimum wall-clock runway `aggregate()` requires before starting its LLM call. Below it, the node emits a deterministic degraded summary instead of being hard-aborted mid-generation with zero output (SIO-1220). |
 | `AGENT_CHECKPOINTER_TYPE` | No | `memory` | State persistence backend: `memory` or `sqlite` |
 | `GRAPH_TIMEOUT_MS` | No | `900000` | Graph-level abort signal in ms. Overrides the `runtime.timeout` value in `agents/incident-analyzer/agent.yaml` when set. Default `900000` (15 min, SIO-1110; was 12 min) fits pre-fan-out (~30 s) + a 360 s fan-out + a 360 s alignment retry + the 120 s aggregation reserve. |
 | `SUB_AGENT_TIMEOUT_MS` | No | `360000` | Per-sub-agent `AbortSignal.timeout` in ms. Replaces the previously hardcoded 300 000. Caps any single sub-agent ReAct loop. Tightening this is useful when you want the alignment retry to start sooner; loosening it helps deep-discovery agents that legitimately need more than 6 minutes. |
