@@ -7,15 +7,16 @@ import { DATA_SOURCE_IDS } from "@devops-agent/shared";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 import { createLlm } from "./llm.ts";
-import { parseLlmJson } from "./llm-json.ts";
-import { extractTextFromContent } from "./message-utils.ts";
+import { withKeyAliases } from "./llm-json.ts";
+import { parseLlmJsonWithCorrection } from "./llm-json-retry.ts";
+import { contentBlockTypes, extractTextFromContent } from "./message-utils.ts";
 import { getAgent } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
 import { withRetry } from "./tool-retry.ts";
 
 const logger = getLogger("agent:entity-extractor");
 
-const ExtractionSchema = z.object({
+const ExtractionObject = z.object({
 	dataSources: z.array(
 		z.object({
 			id: z.string(),
@@ -36,6 +37,23 @@ const ExtractionSchema = z.object({
 		}),
 	toolActions: z.record(z.string(), z.array(z.string())).nullish(),
 });
+
+// SIO-1233: dataSources is this schema's ONLY required field, so any drift in its spelling
+// fails the whole extraction and falls back to all 7 datasources -- the exact "queried
+// everything for a query that named one service" symptom. Aliases cover the spellings a model
+// actually reaches for; `sources` is included because the prompt's own prose says "datasources".
+// Exported for the SIO-1233 regression tests, which assert against the PRODUCTION schema --
+// a hand-rebuilt copy in the test file would drift and stop protecting anything.
+export const ExtractionSchema = withKeyAliases(ExtractionObject, {
+	data_sources: "dataSources",
+	datasources: "dataSources",
+	sources: "dataSources",
+	time_from: "timeFrom",
+	time_to: "timeTo",
+	tool_actions: "toolActions",
+});
+
+const EXTRACTION_KEYS = ["dataSources", "timeFrom", "timeTo", "services", "severity", "toolActions"] as const;
 
 // SIO-680/682: Pure formatter for the action catalog. Extracted from buildActionCatalog
 // so unit tests can supply synthetic ToolDefinition[] without mocking getAgent()
@@ -140,7 +158,36 @@ If no specific datasource is mentioned, include all: ${DATA_SOURCE_IDS.join(", "
 
 	try {
 		const text = extractTextFromContent(response.content);
-		const result = parseLlmJson(text, ExtractionSchema);
+		// SIO-1233: a reasoning-only turn extracts to "" and would otherwise be indistinguishable
+		// from a malformed one. Log the observed block types, then fall through -- the corrective
+		// re-ask below is the recovery for both cases.
+		if (text.trim() === "") {
+			logger.warn(
+				{ blockTypes: contentBlockTypes(response.content) },
+				"Entity extraction got no text from the model; re-asking",
+			);
+		}
+		const result = await parseLlmJsonWithCorrection(text, ExtractionSchema, {
+			expectedKeys: EXTRACTION_KEYS,
+			// One combined human turn rather than appending an assistant turn: the model's previous
+			// output can be empty (the reasoning-only case above), and Bedrock Converse rejects an
+			// empty assistant message and requires strict role alternation.
+			reinvoke: async (correction) => {
+				const retried = await llm.invoke(
+					[
+						{ role: "system", content: systemPrompt },
+						{ role: "human", content: `${query}\n\n${correction}` },
+					],
+					config,
+				);
+				return extractTextFromContent(retried.content);
+			},
+			onRetry: (first) =>
+				logger.warn(
+					{ reason: first.reason, detail: first.message, observedKeys: first.observedKeys },
+					"Entity extraction schema drift; re-asking once",
+				),
+		});
 		if (result.ok) {
 			const parsed = result.data;
 			const entities: ExtractedEntities = {
@@ -176,7 +223,7 @@ If no specific datasource is mentioned, include all: ${DATA_SOURCE_IDS.join(", "
 		// SIO-1221: parseLlmJson never throws, so the fall-through to the all-datasources
 		// fallback below is logged here rather than by the catch.
 		logger.warn(
-			{ reason: result.reason, detail: result.message },
+			{ reason: result.reason, detail: result.message, observedKeys: result.observedKeys, attempts: result.attempts },
 			"Entity extraction failed, falling back to all datasources",
 		);
 	} catch (error) {

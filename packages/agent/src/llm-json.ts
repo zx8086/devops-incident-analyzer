@@ -1,6 +1,10 @@
 // agent/src/llm-json.ts
 
-import type { z } from "zod";
+// SIO-1233: promoted from `import type` -- withKeyAliases needs z.preprocess as a value.
+// This module stays free of every OTHER dependency, and in particular must never gain an
+// LLM invoke: the corrective retry lives in llm-json-retry.ts precisely to keep the parser
+// pure and synchronously testable.
+import { z } from "zod";
 
 // SIO-1221: the single chokepoint for turning an LLM's prose response into validated
 // data. Before this, thirteen nodes each hand-rolled "regex out a JSON blob, JSON.parse
@@ -12,7 +16,15 @@ export type JsonShape = "object" | "array";
 
 export type LlmJsonFailureReason = "no-json" | "malformed-json" | "schema-mismatch";
 
-export type LlmJsonResult<T> = { ok: true; data: T } | { ok: false; reason: LlmJsonFailureReason; message: string };
+// SIO-1233: `observedKeys` carries the top-level key NAMES of the payload that failed
+// validation. Without it an envelope drift is undiagnosable: no call site may log the
+// body (aws-estate-router.ts:200-205 establishes that raw model output echoes user
+// hostnames, IPs and emails), so "dataSources: expected array, received undefined" told
+// us a key was missing but never which keys the model actually sent. Names only, capped
+// and truncated -- a key NAME is model-authored schema vocabulary, not user content.
+export type LlmJsonResult<T> =
+	| { ok: true; data: T }
+	| { ok: false; reason: LlmJsonFailureReason; message: string; observedKeys?: readonly string[] };
 
 // Greedy to the LAST closing delimiter, matching the regex every migrated call site
 // already used. This tolerates a fenced ```json block (the leading fence is skipped
@@ -110,12 +122,78 @@ export function parseLlmJson<S extends z.ZodTypeAny>(
 	}
 
 	const parsed = schema.safeParse(raw);
-	if (!parsed.success) {
-		const message = parsed.error.issues
-			.slice(0, 3)
-			.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
-			.join("; ");
-		return { ok: false, reason: "schema-mismatch", message };
+	if (parsed.success) return { ok: true, data: parsed.data };
+
+	// SIO-1233: envelope drift. The model returned valid JSON whose payload sits one level
+	// down under a container key it invented ({"entities": {...}}, {"result": {...}}). Retry
+	// exactly ONE unwrap, and only here on the already-failing path -- no parse that already
+	// succeeds can change behaviour, at any of the 13 call sites.
+	//
+	// Depth 1 and single-key only, both deliberate: a two-level wrapper is drift severe enough
+	// that the corrective retry should own it, and unbounded unwrapping would eventually
+	// descend INTO a legitimate nested payload and validate the wrong sub-object.
+	const unwrapped = unwrapSingleKeyEnvelope(raw);
+	if (unwrapped !== undefined) {
+		const retry = schema.safeParse(unwrapped);
+		if (retry.success) return { ok: true, data: retry.data };
 	}
-	return { ok: true, data: parsed.data };
+
+	// The ORIGINAL error, never the unwrap's. Reporting the unwrapped failure would describe
+	// a shape the model never sent and send the next debugger after the wrong drift.
+	const message = formatIssues(parsed.error);
+	return { ok: false, reason: "schema-mismatch", message, observedKeys: collectObservedKeys(raw) };
+}
+
+function formatIssues(error: z.ZodError): string {
+	return error.issues
+		.slice(0, 3)
+		.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+		.join("; ");
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// Returns the inner value only for a single-key object whose value is itself an object or
+// array. A scalar-valued single key ({"answer": "yes"}) is NOT an envelope -- unwrapping it
+// would hand the schema a bare string and turn a clear "expected object" into a confusing one.
+function unwrapSingleKeyEnvelope(raw: unknown): unknown {
+	if (!isPlainObject(raw)) return undefined;
+	const keys = Object.keys(raw);
+	if (keys.length !== 1) return undefined;
+	const inner = raw[keys[0] as string];
+	return isPlainObject(inner) || Array.isArray(inner) ? inner : undefined;
+}
+
+const MAX_OBSERVED_KEYS = 10;
+const MAX_OBSERVED_KEY_LENGTH = 40;
+
+function collectObservedKeys(raw: unknown): readonly string[] | undefined {
+	if (!isPlainObject(raw)) return undefined;
+	return Object.keys(raw)
+		.slice(0, MAX_OBSERVED_KEYS)
+		.map((k) => (k.length > MAX_OBSERVED_KEY_LENGTH ? `${k.slice(0, MAX_OBSERVED_KEY_LENGTH)}...` : k));
+}
+
+// SIO-1233: tolerate a model spelling a top-level key snake_case (or by a synonym) instead of
+// the camelCase the schema names. Applied per-schema with an EXPLICIT alias map rather than as
+// a blanket snake_case->camelCase rewrite, because a global rewrite corrupts real data here:
+// ExtractionSchema.toolActions is a z.record keyed by model-authored datasource ids, and
+// extractedMetrics[].name is free text -- both would have their keys mangled.
+//
+// The canonical key always wins. If the model sends BOTH `dataSources` and `data_sources`, the
+// one the schema asked for is authoritative and the alias is ignored, so a model that half-drifts
+// cannot overwrite the field it got right.
+export function withKeyAliases<S extends z.ZodTypeAny>(schema: S, aliases: Readonly<Record<string, string>>) {
+	return z.preprocess((value: unknown) => {
+		if (!isPlainObject(value)) return value;
+		let patched: Record<string, unknown> | undefined;
+		for (const [alias, canonical] of Object.entries(aliases)) {
+			if (value[canonical] !== undefined || value[alias] === undefined) continue;
+			patched ??= { ...value };
+			patched[canonical] = value[alias];
+		}
+		return patched ?? value;
+	}, schema);
 }

@@ -1,6 +1,6 @@
 // agent/src/message-utils.test.ts
 import { describe, expect, test } from "bun:test";
-import { extractStreamDeltaText, extractTextFromContent } from "./message-utils.ts";
+import { contentBlockTypes, extractStreamDeltaText, extractTextFromContent } from "./message-utils.ts";
 
 describe("extractTextFromContent (SIO-1217)", () => {
 	test("returns a plain string unchanged", () => {
@@ -148,5 +148,57 @@ describe("extractStreamDeltaText (SIO-1218)", () => {
 	test("returns empty string for unsupported shapes, never [object Object]", () => {
 		expect(extractStreamDeltaText(null)).toBe("");
 		expect(extractStreamDeltaText({ foo: "bar" })).toBe("");
+	});
+});
+
+// SIO-1233: diagnosing an empty text extraction. A reasoning-only Sonnet 5 turn and a provider
+// block-type rename both surface as "" from extractTextFromContent; only the block TYPES tell
+// them apart. Type names only -- block content is never returned.
+describe("contentBlockTypes", () => {
+	test("reports the distinct block types of an array", () => {
+		expect(
+			contentBlockTypes([
+				{ type: "reasoning", text: "x" },
+				{ type: "text", text: "y" },
+			]),
+		).toEqual(["reasoning", "text"]);
+	});
+
+	test("deduplicates repeated types", () => {
+		expect(
+			contentBlockTypes([
+				{ type: "text", text: "a" },
+				{ type: "text", text: "b" },
+			]),
+		).toEqual(["text"]);
+	});
+
+	// The exact shape that caused the all-datasource fan-out.
+	test("identifies a reasoning-only turn", () => {
+		expect(contentBlockTypes([{ type: "reasoning", text: "thinking..." }])).toEqual(["reasoning"]);
+	});
+
+	test("labels a plain string", () => {
+		expect(contentBlockTypes("hello")).toEqual(["string"]);
+	});
+
+	test("handles an empty array", () => {
+		expect(contentBlockTypes([])).toEqual([]);
+	});
+
+	test("falls back to typeof for a block with no type field", () => {
+		expect(contentBlockTypes([{ text: "no type" }])).toEqual(["object"]);
+	});
+
+	test("handles null and undefined without throwing", () => {
+		expect(contentBlockTypes(null)).toEqual(["object"]);
+		expect(contentBlockTypes(undefined)).toEqual(["undefined"]);
+	});
+
+	// Never leak the text of a block into a log line.
+	test("returns no block CONTENT", () => {
+		const types = contentBlockTypes([{ type: "text", text: "prod-db-01.internal secret" }]);
+		expect(JSON.stringify(types)).not.toContain("prod-db-01");
+		expect(JSON.stringify(types)).not.toContain("secret");
 	});
 });
