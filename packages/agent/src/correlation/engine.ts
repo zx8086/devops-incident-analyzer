@@ -50,10 +50,19 @@ function alreadyCovered(state: AgentStateType, rule: CorrelationRule, match: Tri
 	// elastic result existed, including one that never touched synthetics-*. The cross-check
 	// therefore never dispatched. Substring rather than exact match because url.full is a
 	// full URL (https://ksql.prd.../healthcheck), never equal to the bare hostname.
+	//
+	// EVERY, not some (CodeRabbit on PR #487): the trigger batches all failing endpoints into
+	// one context -- the c72 scenario 5xxs ksql + connect + schemaregistry together -- and the
+	// fetchDirective asks for a lookup per hostname. With `some`, retrieving one monitor marked
+	// the whole rule satisfied, leaving the other endpoints never cross-checked and lifting the
+	// 0.59 cap on a report that had verified a third of its failing hosts. Partial coverage is
+	// not coverage. This is deliberately stricter than the services/topics branch below, which
+	// keeps `some`: an unresolvable host (no synthetic registered) leaves the rule degraded and
+	// capped, which is the documented intent for the missing-monitor case.
 	const triggeredHostnames = extractHostnames(match.context);
 	if (triggeredHostnames.length > 0) {
 		const targets = syntheticMonitorTargets(result);
-		return triggeredHostnames.some((host) => targets.some((target) => target.includes(host)));
+		return triggeredHostnames.every((host) => targets.some((target) => target.includes(host)));
 	}
 
 	const triggeredEntities = extractEntityNames(match.context);

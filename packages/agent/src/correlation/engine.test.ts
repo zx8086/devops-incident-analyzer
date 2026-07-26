@@ -130,6 +130,34 @@ describe("hostname-keyed coverage reads elasticFindings.syntheticMonitors (SIO-1
 		expect(decision?.status).toBe("needs-invocation");
 	});
 
+	// CodeRabbit (PR #487): the trigger batches EVERY failing endpoint into one context -- the
+	// c72 scenario 5xxs ksql + connect + schemaregistry together. Coverage must therefore be
+	// "all hosts checked", not "any host checked": with `some`, retrieving the ksql monitor
+	// alone marked the whole rule satisfied, so connect and schemaregistry were never
+	// cross-checked AND the 0.59 cap was lifted on a report that had only verified one third
+	// of its failing endpoints. Deliberately stricter than the services/topics branch below,
+	// which keeps `some` -- there, one covered entity is genuinely evidence the agent looked.
+	test("needs-invocation when only SOME of several triggered hostnames are covered", () => {
+		const multiHostRule = (): CorrelationRule => ({
+			name: "test-multi-hostname-context",
+			description: "test",
+			trigger: () => ({
+				context: {
+					hostnames: [HOST, "connect.prd.shared-services.eu.pvh.cloud"],
+					signal: "confluent-5xx-needs-synthetic-crosscheck",
+				},
+			}),
+			requiredAgent: "elastic-agent",
+			retry: { attempts: 1, timeoutMs: 1000 },
+		});
+		const state = elasticState({
+			data: "synthetics",
+			elasticFindings: { syntheticMonitors: [{ name: "ksql", status: "up", url: `https://${HOST}/healthcheck` }] },
+		});
+		const [decision] = evaluate(state, [multiHostRule()]);
+		expect(decision?.status).toBe("needs-invocation");
+	});
+
 	// url.full is a full URL, never equal to the bare hostname -- hence substring matching.
 	test("satisfied when a synthetic monitor URL contains the triggered hostname", () => {
 		const state = elasticState({
