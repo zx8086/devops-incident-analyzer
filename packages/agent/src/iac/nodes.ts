@@ -1211,7 +1211,7 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 			new AIMessage(request.clarification),
 			new HumanMessage(reply),
 		]);
-		request = { ...parseIntentJson(String(res2.content)), clarification: undefined };
+		request = { ...parseIntentJson(extractTextFromContent(res2.content)), clarification: undefined };
 		// SIO-1001: the user's clarification reply may itself omit the cluster ("yes, do it") -- keep
 		// inheriting the established deployment on the re-parse too.
 		if (!request.cluster?.trim() && known) request.cluster = known;
@@ -1304,7 +1304,7 @@ export async function answerInfo(state: IacStateType): Promise<Partial<IacStateT
 		const ai = (await llm.invoke(convo)) as AIMessage;
 		convo.push(ai);
 		const calls = ai.tool_calls ?? [];
-		if (calls.length === 0) return { messages: [new AIMessage(String(ai.content))] };
+		if (calls.length === 0) return { messages: [new AIMessage(extractTextFromContent(ai.content))] };
 		for (const call of calls) {
 			const result = await dispatchInfoToolCall(tools, call.name, (call.args ?? {}) as Record<string, unknown>);
 			convo.push(new ToolMessage({ content: result, tool_call_id: call.id ?? call.name }));
@@ -1315,7 +1315,7 @@ export async function answerInfo(state: IacStateType): Promise<Partial<IacStateT
 		...convo,
 		new HumanMessage("Summarize the answer now using what you've gathered."),
 	]);
-	return { messages: [new AIMessage(String(final.content))] };
+	return { messages: [new AIMessage(extractTextFromContent(final.content))] };
 }
 
 // SIO-930: conversational follow-up lane. Unlike every other IaC node (which reads only the latest
@@ -1349,7 +1349,7 @@ export async function converseIac(state: IacStateType): Promise<Partial<IacState
 		const ai = (await llm.invoke(convo)) as AIMessage;
 		convo.push(ai);
 		const calls = ai.tool_calls ?? [];
-		if (calls.length === 0) return { messages: [new AIMessage(String(ai.content))] };
+		if (calls.length === 0) return { messages: [new AIMessage(extractTextFromContent(ai.content))] };
 		for (const call of calls) {
 			const result = await dispatchInfoToolCall(tools, call.name, (call.args ?? {}) as Record<string, unknown>);
 			convo.push(new ToolMessage({ content: result, tool_call_id: call.id ?? call.name }));
@@ -1359,7 +1359,7 @@ export async function converseIac(state: IacStateType): Promise<Partial<IacState
 		...convo,
 		new HumanMessage("Answer the user's follow-up now using what you've gathered."),
 	]);
-	return { messages: [new AIMessage(String(final.content))] };
+	return { messages: [new AIMessage(extractTextFromContent(final.content))] };
 }
 
 // Parse the "[status] {json}" body callTool returns from elastic_cloud_list_deployments

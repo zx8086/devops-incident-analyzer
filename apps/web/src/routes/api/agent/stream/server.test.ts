@@ -52,8 +52,20 @@ mock.module("@devops-agent/agent", () => ({
 	// SIO-1124: the /api/tickets routes import these from this same specifier.
 	getTicketProvider: mock(() => undefined),
 	listAvailableTicketProviders: mock(() => [] as unknown[]),
-	// SIO-1217: sse-pump.ts imports this from the same specifier at module scope.
-	extractTextFromContent: (content: unknown) => (typeof content === "string" ? content : String(content)),
+	// SIO-1217: sse-pump.ts imports this from the same specifier at module scope. Mirror
+	// the real helper's array-of-content-blocks extraction (not a plain String() coercion)
+	// so this mock can't mask the exact "[object Object]" regression it exists to prevent.
+	extractTextFromContent: (content: unknown): string => {
+		if (typeof content === "string") return content;
+		if (!Array.isArray(content)) return String(content);
+		return content
+			.filter(
+				(block): block is { type: "text"; text: string } =>
+					block !== null && typeof block === "object" && block.type === "text" && typeof block.text === "string",
+			)
+			.map((block) => block.text)
+			.join("\n");
+	},
 }));
 
 const sharedLogger = {
@@ -281,6 +293,47 @@ describe("POST /api/agent/stream — SSE stream", () => {
 			.map((e) => e.content)
 			.join("");
 		expect(messageContents).toBe("Hello world.");
+	});
+
+	// SIO-1217: Claude 4.7+/5-generation models on Bedrock Converse (adaptive thinking
+	// always on) can emit AIMessageChunk.content as an array of content blocks instead of
+	// a plain string. Previously String(chunkContent) on that array produced literal
+	// "[object Object]" text streamed to the client on every chunk.
+	test("extracts text from array-shaped chunk content instead of [object Object]", async () => {
+		invokeAgentMock.mockImplementationOnce(async () => ({
+			async *[Symbol.asyncIterator]() {
+				yield {
+					event: "on_chat_model_stream",
+					tags: ["aggregate"],
+					metadata: { langgraph_node: "aggregate" },
+					data: {
+						chunk: {
+							content: [
+								{ type: "thinking", text: "internal reasoning" },
+								{ type: "text", text: "Root cause: timeout." },
+							],
+						},
+					},
+				};
+			},
+		}));
+
+		const response = await POST(
+			makeRequest({
+				messages: [{ role: "user", content: "ping" }],
+				threadId: "thread-array",
+			}),
+		);
+
+		const events = await collectSse(response);
+		const messageContents = events
+			.filter((e) => e.type === "message")
+			.map((e) => e.content)
+			.join("");
+
+		expect(messageContents).not.toContain("[object Object]");
+		expect(messageContents).not.toContain("internal reasoning");
+		expect(messageContents).toBe("Root cause: timeout.");
 	});
 
 	test("only forwards model stream chunks tagged for output nodes", async () => {

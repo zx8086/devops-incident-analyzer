@@ -166,11 +166,12 @@ describe("aggregator SIO-1217 array-shaped response.content regression", () => {
 
 	test("ignores non-text blocks (thinking/reasoning) in an array-shaped response", async () => {
 		mockLlmContent = [
-			{ type: "thinking", text: undefined },
+			{ type: "thinking", text: "SENTINEL-INTERNAL-REASONING-SHOULD-NOT-LEAK" },
 			{ type: "text", text: "# Incident Report\n\nConfidence: 0.7" },
 		];
 		const result = await aggregate(makeState());
 		expect(result.finalAnswer).not.toContain("[object Object]");
+		expect(result.finalAnswer).not.toContain("SENTINEL-INTERNAL-REASONING-SHOULD-NOT-LEAK");
 		expect(result.finalAnswer).toContain("Confidence");
 	});
 });
