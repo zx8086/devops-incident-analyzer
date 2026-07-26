@@ -33,6 +33,35 @@ import {
 
 const logger = getLogger("agent:sub-agent");
 
+// SIO-1227: find the most recent message that actually yields answer text.
+//
+// queryDataSource used to read `messages.at(-1)` alone, which loses a whole datasource's
+// findings in two measured ways:
+//   1. Sonnet 5 sometimes ends the ReAct loop with a REASONING-ONLY assistant message (no text
+//      block). extractTextFromContent correctly returns "" for it -- reasoning must never leak to
+//      the user -- so the caller saw an empty answer.
+//   2. On a recursion-limit salvage the final message is a mid-loop AIMessage/ToolMessage rather
+//      than a synthesized answer, so the same "" resulted even though earlier turns DID carry
+//      the findings the loop had gathered.
+// Both were observed in the SIO-1224 acceptance eval (experiment agent-eval-094b203a): one
+// elastic run and two truncated gitlab runs returned responseLength 0 after 94-159 seconds of
+// real tool work, each reported as status "success".
+//
+// Walking backwards fixes both: it recovers the last turn that said something. Only assistant
+// messages are considered -- a ToolMessage's content is raw tool output, not an answer, and
+// splicing that into r.data would feed the aggregator unlabelled JSON.
+export function lastTextualResponse(
+	messages: Array<{ content: unknown; _getType(): string }>,
+): { text: string; index: number } | null {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const m = messages[i];
+		if (!m || m._getType() !== "ai") continue;
+		const text = extractTextFromContent(m.content).trim();
+		if (text !== "") return { text, index: i };
+	}
+	return null;
+}
+
 // SIO-1029: the LangGraph recursion-limit error. When createReactAgent exhausts
 // its recursionLimit it throws GraphRecursionError (name === "GraphRecursionError",
 // lc_error_code === "GRAPH_RECURSION_LIMIT", message contains "Recursion limit of
@@ -1014,8 +1043,12 @@ ${state.correlationFetchDirective}`
 			],
 			...(recursionLimit !== undefined && { recursionLimit }),
 		});
-		const lastResponse = response.messages.at(-1);
 		const duration = Date.now() - startTime;
+		// SIO-1227: resolved BEFORE the completion log so responseLength reports the answer we will
+		// actually return, not the length of a text-free final message (which logged 0 while the
+		// findings sat in an earlier turn -- how this bug hid).
+		const recovered = lastTextualResponse(response.messages);
+		const noFindings = recovered === null;
 
 		const toolErrors = extractToolErrors(response.messages);
 		const toolMessages = response.messages.filter((m: { _getType(): string }) => m._getType() === "tool");
@@ -1031,7 +1064,9 @@ ${state.correlationFetchDirective}`
 				duration,
 				deploymentId,
 				messageCount: response.messages.length,
-				responseLength: extractTextFromContent(lastResponse?.content ?? "").length,
+				responseLength: recovered?.text.length ?? 0,
+				...(recovered !== null &&
+					recovered.index !== response.messages.length - 1 && { recoveredFromIndex: recovered.index }),
 				toolErrorCount: toolErrors.length,
 				allToolsFailed,
 				...(truncated && { truncated: true }),
@@ -1146,13 +1181,42 @@ ${state.correlationFetchDirective}`
 		// synthesized answer, so append an explicit note when there is no clean final text.
 		const salvageNote =
 			"\n\n[Note: investigation was truncated at the sub-agent recursion limit; the above reflects partial findings.]";
-		const baseData = lastResponse ? extractTextFromContent(lastResponse.content) : "No response from sub-agent";
+		// SIO-1227: was extractTextFromContent(messages.at(-1).content), which yielded "" whenever the
+		// final message carried no text -- a reasoning-only turn, or a mid-loop message on a
+		// truncated run. The old ternary tested whether a message EXISTED, not whether it produced
+		// any text, so the "No response from sub-agent" fallback could never fire and the datasource
+		// silently contributed an empty string while still reporting success.
+		const baseData = recovered?.text ?? "No response from sub-agent";
 		const data = truncated ? `${baseData}${salvageNote}` : baseData;
+
+		// Recovering from an earlier turn is normal on a truncated run but unexpected otherwise, so
+		// log it either way -- it is the signal that the model ended on a text-free message.
+		if (recovered !== null && recovered.index !== response.messages.length - 1) {
+			log.info(
+				{
+					deploymentId,
+					recoveredFromIndex: recovered.index,
+					lastIndex: response.messages.length - 1,
+					truncated: truncated === true,
+				},
+				"Sub-agent final message carried no text; recovered findings from an earlier turn",
+			);
+		}
+		if (noFindings) {
+			log.warn(
+				{ deploymentId, messageCount: response.messages.length, truncated: truncated === true },
+				"Sub-agent produced no textual findings in any message; reporting as error rather than empty success",
+			);
+		}
 
 		return {
 			dataSourceId,
 			data,
-			status: allToolsFailed ? "error" : "success",
+			// SIO-1227: `status` used to be derived from allToolsFailed alone and never consulted
+			// `data`, so a run that produced nothing usable still reported success -- alignment
+			// counts statuses, not content, so it neither retried nor degraded confidence. An empty
+			// result is a failure of this datasource even when its individual tool calls succeeded.
+			status: allToolsFailed || noFindings ? "error" : "success",
 			duration,
 			toolOutputs,
 			isAlignmentRetry: isRetry,
@@ -1160,6 +1224,13 @@ ${state.correlationFetchDirective}`
 			...(deploymentId && { deploymentId }),
 			...(toolErrors.length > 0 && { toolErrors }),
 			...(allToolsFailed && { error: `All ${toolErrors.length} tool calls failed` }),
+			// SIO-1227: a status of "error" must always carry a reason. With no toolErrors recorded,
+			// alignment's isRetryable defaults to retryable, which is the behaviour we want here --
+			// a re-run may well produce a message with text.
+			...(noFindings &&
+				!allToolsFailed && {
+					error: `Sub-agent produced no textual findings across ${response.messages.length} messages`,
+				}),
 		};
 	} catch (error) {
 		const duration = Date.now() - startTime;
