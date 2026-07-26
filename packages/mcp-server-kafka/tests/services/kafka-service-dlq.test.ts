@@ -561,7 +561,7 @@ describe("SIO-1150 DLQ listing", () => {
 		await service.listDlqTopics({ skipDelta: true });
 		// One batched call for the 5-topic batch, not one per topic.
 		expect(metadataMock.mock.calls.length).toBe(1);
-		expect((metadataMock.mock.calls[0]?.[0] as { topics: string[] }).topics).toHaveLength(5);
+		expect((metadataMock.mock.calls[0]![0] as { topics: string[] }).topics).toHaveLength(5);
 	});
 });
 

@@ -145,7 +145,7 @@ describe("SchemaRegistryService", () => {
 		const service = new SchemaRegistryService(configWithSlash);
 		service.listSubjects();
 		const fetchCall = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0];
-		expect((fetchCall?.[0] as string).includes("//subjects")).toBe(false);
+		expect((fetchCall![0] as string).includes("//subjects")).toBe(false);
 	});
 
 	describe("probeReachability", () => {

@@ -39,7 +39,7 @@ function evaluateOne(state: AgentStateType, rule: CorrelationRule): CorrelationD
 function alreadyCovered(state: AgentStateType, rule: CorrelationRule, match: TriggerMatch): boolean {
 	const dataSourceId = agentToDataSourceId(rule.requiredAgent);
 	const result = state.dataSourceResults.find((r) => r.dataSourceId === dataSourceId);
-	if (!result || result.status !== "success" || !result.data) return false;
+	if (result?.status !== "success" || !result.data) return false;
 
 	const triggeredEntities = extractEntityNames(match.context);
 	if (triggeredEntities.length === 0) {

@@ -185,7 +185,7 @@ describe("supervisor router mode", () => {
 		expect(dispatched).toContain("elastic");
 		expect(dispatched).not.toContain("aws");
 		// The skip reason is threaded to the aggregator via skippedDataSources.
-		const skipped = (sends[0]?.args as { skippedDataSources?: string[] }).skippedDataSources ?? [];
+		const skipped = (sends[0]?.args as { skippedDataSources?: string[] } | undefined)?.skippedDataSources ?? [];
 		expect(skipped.some((r) => /aws: no estates resolved/.test(r))).toBe(true);
 	});
 
@@ -197,7 +197,7 @@ describe("supervisor router mode", () => {
 		const sends = supervise(state);
 		const dispatched = sends.map((s) => s.args.currentDataSource);
 		expect(dispatched).toContain("aws");
-		const skipped = (sends[0]?.args as { skippedDataSources?: string[] }).skippedDataSources ?? [];
+		const skipped = (sends[0]?.args as { skippedDataSources?: string[] } | undefined)?.skippedDataSources ?? [];
 		expect(skipped.some((r) => /aws: no estates resolved/.test(r))).toBe(false);
 	});
 

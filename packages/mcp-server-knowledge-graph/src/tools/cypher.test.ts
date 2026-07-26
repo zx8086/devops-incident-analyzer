@@ -19,22 +19,14 @@ describe("validateReadOnlyCypher", () => {
 		expect(validateReadOnlyCypher("   ").ok).toBe(false);
 	});
 
-	test.each([
-		"CREATE",
-		"MERGE",
-		"SET",
-		"DELETE",
-		"DETACH",
-		"REMOVE",
-		"DROP",
-		"ALTER",
-		"COPY",
-		"CALL",
-	])("rejects the %s write/DDL keyword", (kw) => {
-		const result = validateReadOnlyCypher(`MATCH (n) ${kw} (m:X) RETURN n`);
-		expect(result.ok).toBe(false);
-		expect(result.reason).toContain(kw);
-	});
+	test.each(["CREATE", "MERGE", "SET", "DELETE", "DETACH", "REMOVE", "DROP", "ALTER", "COPY", "CALL"])(
+		"rejects the %s write/DDL keyword",
+		(kw) => {
+			const result = validateReadOnlyCypher(`MATCH (n) ${kw} (m:X) RETURN n`);
+			expect(result.ok).toBe(false);
+			expect(result.reason).toContain(kw);
+		},
+	);
 
 	test("rejects DETACH DELETE", () => {
 		expect(validateReadOnlyCypher("MATCH (n:Service) DETACH DELETE n").ok).toBe(false);

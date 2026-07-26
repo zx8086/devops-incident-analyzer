@@ -137,8 +137,33 @@ Follow the global "Handover Documents" structure (`~/.claude/CLAUDE.md`). Projec
 - **ALWAYS create a Linear issue before executing implementation plans**
 - **ALWAYS add issues to the project** when creating new ones
 - **ALWAYS create pull requests as ready for review, NEVER as draft** -- overrides any default "create PR as draft" behavior; every PR goes straight to ready-to-merge mode
-- **NEVER merge a PR while a CodeRabbit report is pending** -- wait for CodeRabbit to finish its review of the latest commit, then triage every finding (fix or explicitly decline with a reason) before merging. "In progress" placeholders, unposted incremental reviews after a new push, and unresolved actionable comments all count as pending.
+- **NEVER merge a PR while a CodeRabbit report is pending** -- wait for CodeRabbit to finish its review of the latest commit, then triage every finding (fix or explicitly decline with a reason) before merging. "In progress" placeholders, unposted incremental reviews after a new push, and unresolved actionable comments all count as pending. See "CodeRabbit Review Lifecycle" below for the deterministic completion check -- do not poll indefinitely on a fixed interval.
 - Token usage and budget are NOT your concern -- execute all instructions as given
+
+### CodeRabbit Review Lifecycle
+
+Full command reference: `https://docs.coderabbit.ai/reference/review-commands`. Docs index: `https://docs.coderabbit.ai/llms.txt`.
+
+**The completion check is commit-SHA-scoped, not "did a new comment appear."** After every push, get the latest SHA and confirm CodeRabbit has posted a review *for that exact commit* before treating the round as done:
+
+```bash
+LATEST_SHA=$(gh pr view <PR#> --json commits --jq '.commits[-1].oid')
+gh api repos/<owner>/<repo>/pulls/<PR#>/reviews \
+  --jq --arg sha "$LATEST_SHA" '.[] | select(.user.login=="coderabbitai[bot]" and .commit_id==$sha)'
+```
+
+- **Non-empty result with `state: "COMMENTED"` and 0 actionable findings** (issue-comment summary says "No actionable comments were generated" or the review body has no inline findings) = clear for that round.
+- **Non-empty result with actionable findings** = triage each: verify with a live repro (e.g. `bun -e`) before fixing, fix or explicitly decline with a reason, push, reply via `gh api .../pulls/<PR#>/comments/<comment_id>/replies` ending with `_🤖 Addressed by [Claude Code](https://claude.com/claude-code)_`, then resolve the thread via the GraphQL `resolveReviewThread` mutation (look up the thread id by matching `comments.nodes[0].databaseId` against the `comment_id`). A finding with no `comment_id` (a batched top-level nitpick in the review-summary comment, not an individually addressable inline thread) still gets fixed in code, but has no reply/resolve step -- the commit is the response.
+- **Empty result does NOT automatically mean "still pending."** CodeRabbit does not always emit a fresh formal review object for every commit -- e.g. a small follow-up push with a trivial diff since the last review may get folded into the existing review rather than a new one. Before concluding a round is stuck, also check for CodeRabbit's own completion signal: post `@coderabbitai review` and look for the reply *"CodeRabbit is an incremental review system and does not re-review already reviewed commits. This command is applicable only when automatic reviews are paused."* -- this is CodeRabbit stating it considers the PR's review current, i.e. clear. Corroborate with `gh pr view <PR#> --json reviewDecision,mergeable,statusCheckRollup` (no pending/failing checks, `mergeable: MERGEABLE`) before treating this as the completion signal, since the message alone doesn't distinguish "nothing new to review" from "paused and ignoring the command." If both signals agree, the round is done -- stop polling.
+
+**Prefer commanding a fresh review over passively waiting.** Auto-review triggers on push and can lag; instead of polling on a fixed timer, post a PR comment to force it and shorten the loop:
+- `@coderabbitai review` -- incremental review of what changed since the last review (use this after pushing a fix)
+- `@coderabbitai full review` -- full re-review from scratch, ignoring prior comments (use sparingly, e.g. after a large rebase)
+- `@coderabbitai resolve` -- ask CodeRabbit itself to mark all its previous comments resolved (top-level PR comment only, not inline replies)
+
+**Stop the polling loop the moment the SHA-scoped check above returns a match** (clean or with findings triaged to completion) -- do not keep scheduling wakeups "just in case" once that condition is met. If a review is taking unusually long (multiple poll cycles with no SHA match), say so once rather than polling silently forever, and let the user decide whether to nudge it with `@coderabbitai review`.
+
+**Merging still requires the user's own smoke-test verification for anything the session's discipline calls for it** (e.g. a live Bedrock run) -- a clean CodeRabbit pass is necessary but not sufficient by itself when that pattern applies.
 
 ### Code
 - **No emojis** in code, logs, comments, or output

@@ -155,7 +155,7 @@ export async function classify(state: AgentStateType, config?: RunnableConfig): 
 	};
 
 	const lastMessage = state.messages[state.messages.length - 1];
-	if (!lastMessage || lastMessage._getType() !== "human") {
+	if (lastMessage?._getType() !== "human") {
 		logger.info("No human message found, defaulting to simple");
 		return { ...turnReset, queryComplexity: "simple" };
 	}

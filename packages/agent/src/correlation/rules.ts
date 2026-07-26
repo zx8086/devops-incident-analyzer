@@ -49,7 +49,7 @@ function getKafkaData(state: AgentStateType): {
 	dlqTopics?: Array<{ name: string; totalMessages: number; recentDelta: number | null }>;
 } {
 	const result = state.dataSourceResults.find((r) => r.dataSourceId === "kafka");
-	if (!result || result.status !== "success") return {};
+	if (result?.status !== "success") return {};
 	// SIO-764: read the structured sibling populated by extractFindings; result.data
 	// stays as the prose summary for aggregator/UI.
 	return result.kafkaFindings ?? {};
@@ -60,7 +60,7 @@ function getKafkaData(state: AgentStateType): {
 // getKafkaData. result.data stays prose for the aggregator/UI.
 function getAwsFindings(state: AgentStateType): AwsFindings {
 	const result = state.dataSourceResults.find((r) => r.dataSourceId === "aws");
-	if (!result || result.status !== "success") return {};
+	if (result?.status !== "success") return {};
 	// SIO-1159: unscoped-fallback rows are display-only (mirrors SIO-1138 couchbase
 	// guard) -- they are NOT linked to the focus services and must not drive rules.
 	if (result.awsFindings?.unscoped) return {};
@@ -89,7 +89,7 @@ function alarmReferencesFocus(a: AwsCloudWatchAlarm, focusServices: string[]): b
 // sub-agents do not emit (see comment on line ~154).
 function getKafkaResultSignals(state: AgentStateType): { toolErrors: ToolError[]; prose: string } {
 	const result = state.dataSourceResults.find((r) => r.dataSourceId === "kafka");
-	if (!result || result.status !== "success") return { toolErrors: [], prose: "" };
+	if (result?.status !== "success") return { toolErrors: [], prose: "" };
 	const toolErrors = Array.isArray(result.toolErrors) ? result.toolErrors : [];
 	const prose = typeof result.data === "string" ? result.data : "";
 	return { toolErrors, prose };
@@ -101,7 +101,7 @@ function getKafkaResultSignals(state: AgentStateType): { toolErrors: ToolError[]
 // rules added in Phase 5.
 function getAwsResultSignals(state: AgentStateType): { toolErrors: ToolError[]; prose: string } {
 	const result = state.dataSourceResults.find((r) => r.dataSourceId === "aws");
-	if (!result || result.status !== "success") return { toolErrors: [], prose: "" };
+	if (result?.status !== "success") return { toolErrors: [], prose: "" };
 	const toolErrors = Array.isArray(result.toolErrors) ? result.toolErrors : [];
 	const prose = typeof result.data === "string" ? result.data : "";
 	return { toolErrors, prose };
@@ -230,7 +230,7 @@ export const correlationRules: CorrelationRule[] = [
 			// the sub-agent's ---STRUCTURED--- sentinel), not kafkaFindings.toolErrors
 			// which was never a populated slot. Mirrors getKafkaResultSignals (rules.ts:39).
 			const result = state.dataSourceResults.find((r) => r.dataSourceId === "kafka");
-			if (!result || result.status !== "success") return null;
+			if (result?.status !== "success") return null;
 			const toolErrors = Array.isArray(result.toolErrors) ? result.toolErrors : [];
 			if (toolErrors.length === 0) return null;
 			return { context: { toolErrors } };
@@ -532,7 +532,7 @@ function shareDistinctiveToken(a: string, b: string): boolean {
 // dormant since SIO-712.
 function getGitLabMergedRequests(state: AgentStateType): GitLabMergedRequest[] {
 	const result = state.dataSourceResults.find((r) => r.dataSourceId === "gitlab");
-	if (!result || result.status !== "success") return [];
+	if (result?.status !== "success") return [];
 	return result.gitlabFindings?.mergedRequests ?? [];
 }
 
@@ -543,7 +543,7 @@ function getGitLabMergedRequests(state: AgentStateType): GitLabMergedRequest[] {
 function getDatastoreSlowQueries(state: AgentStateType, dataSourceId: "couchbase" | "konnect"): CouchbaseSlowQuery[] {
 	if (dataSourceId === "konnect") return [];
 	const result = state.dataSourceResults.find((r) => r.dataSourceId === "couchbase");
-	if (!result || result.status !== "success") return [];
+	if (result?.status !== "success") return [];
 	// SIO-1138: unscoped-fallback rows are display-only -- they are NOT linked to
 	// the focus service, so correlating them against MRs would manufacture
 	// contradictions from unrelated cluster-wide slow queries.
@@ -602,13 +602,13 @@ correlationRules.push({
 // DataSourceResult; result.data stays prose for the aggregator/UI.
 function getOrbitFindings(state: AgentStateType): OrbitFindings {
 	const result = state.dataSourceResults.find((r) => r.dataSourceId === "gitlab");
-	if (!result || result.status !== "success") return {};
+	if (result?.status !== "success") return {};
 	return result.orbitFindings ?? {};
 }
 
 function getElasticFindings(state: AgentStateType): ElasticFindings {
 	const result = state.dataSourceResults.find((r) => r.dataSourceId === "elastic");
-	if (!result || result.status !== "success") return {};
+	if (result?.status !== "success") return {};
 	return result.elasticFindings ?? {};
 }
 
