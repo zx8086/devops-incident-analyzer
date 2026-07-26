@@ -124,8 +124,29 @@ describe("extractServiceCandidates (SIO-1233)", () => {
 		["a host:port", "connect to db-host:5432"],
 		["a semver version", "we deployed 1.2.3 yesterday"],
 		["a file path", "check /var/log/app.log"],
+		// CodeRabbit on PR #484: these three families satisfied SERVICE_TOKEN and slipped past
+		// the original filters. Each one seeded a WRONG focus, which the design note above calls
+		// strictly worse than an empty one -- so they are correctness cases, not cosmetics.
+		["a pre-release version", "we deployed 1.2.3-rc1 yesterday"],
+		["a v-prefixed version", "rolled back to v1.2.3"],
+		["a dotted pre-release", "we deployed 2.0.0-beta.1"],
+		["a bare log filename", "check app.log"],
+		["a bare yaml filename", "look at config.yaml"],
+		["a bare json filename", "dump.json is huge"],
+		["a purely numeric token", "check 1-2-3 now"],
+		["an IP address", "traffic from 10.0.0.1 spiked"],
 	])("rejects %s", (_label, query) => {
 		expect(extractServiceCandidates(query)).toEqual([]);
+	});
+
+	// The rejections above must not over-reach: these are real service names that merely
+	// resemble the rejected shapes.
+	test.each([
+		["a v-prefixed service", "v2-api is down", ["v2-api"]],
+		["a service with a digit suffix", "check s3-uploader", ["s3-uploader"]],
+		["a dotted service that is not a filename", "orders.api is slow", ["orders.api"]],
+	])("still accepts %s", (_label, query, expected) => {
+		expect(extractServiceCandidates(query)).toEqual(expected);
 	});
 
 	// Infra vocabulary is service-SHAPED but never a service, and appears in incident prose

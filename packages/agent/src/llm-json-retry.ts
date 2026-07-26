@@ -18,10 +18,16 @@ import { type JsonShape, type LlmJsonResult, parseLlmJson } from "./llm-json.ts"
 
 export type CorrectedJsonResult<T> = LlmJsonResult<T> & { attempts: number };
 
-// The Zod issue text is echoed back to the model verbatim. That is safe in this direction and
-// only this direction: issue text is key paths and type names, and where it does quote a
-// received value that value came from the model's own previous turn. It is NOT logged -- the
-// caller logs `reason` and `observedKeys`, never the body.
+// The Zod issue text is echoed back to the model verbatim, and both callers ALSO log it as
+// `detail`. Both are safe for the same measured reason: a Zod v4 issue message carries the key
+// path plus the EXPECTED type/option names only -- it never interpolates the received value.
+// Verified directly against the zod in this repo:
+//   z.enum(["critical","high"]) on any string -> `Invalid option: expected one of "critical"|"high"`
+//   z.string()                  on 12345      -> `Invalid input: expected string, received number`
+//   z.literal("text")           on any string -> `Invalid input: expected "text"`
+// Note the "received" clause is a typeof, not the value. If a future zod starts interpolating
+// received values, this text becomes both model-echoed and log-bound user content and BOTH call
+// sites need redaction -- so re-check this on a zod upgrade.
 export function buildCorrectionPrompt(failureMessage: string, expectedKeys: readonly string[]): string {
 	return `Your previous response did not match the required schema.
 

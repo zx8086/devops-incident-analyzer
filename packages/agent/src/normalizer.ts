@@ -79,7 +79,14 @@ export { sanitizeJsonControlChars } from "./llm-json.ts";
 // A single bare word is deliberately NOT a candidate -- "checkout" or "database" in prose would
 // seed a focus that scopes the whole investigation to a word the user never meant as a service.
 const SERVICE_TOKEN = /^[a-z0-9]+(?:[-_.][a-z0-9]+)+$/i;
-const VERSION_TOKEN = /^\d+(?:\.\d+)+$/;
+// Bare AND pre-release versions: "1.2.3", "v1.2.3", "1.2.3-rc1", "2.0.0-beta.1". The original
+// `^\d+(\.\d+)+$` missed every pre-release form, because the "-rc1" tail made it fail the anchor
+// while still satisfying SERVICE_TOKEN -- so "we deployed 1.2.3-rc1" seeded a focus on a version.
+const VERSION_TOKEN = /^v?\d+(?:\.\d+)+(?:[-.][a-z0-9]+)*$/i;
+// A dotted token ending in a file extension is a filename, not a service: "app.log",
+// "config.yaml" and "dump.json" are all two dot-joined segments and contain none of the
+// /@:\ characters rejected below.
+const FILE_EXTENSION_TOKEN = /\.(log|json|ya?ml|txt|csv|conf|ini|xml|sql|md|tsv|gz|zip)$/i;
 
 // Infrastructure vocabulary that is service-SHAPED but never a service. These appear in incident
 // prose constantly ("check the error-rate", "the merge-request that caused it").
@@ -115,7 +122,11 @@ export function extractServiceCandidates(query: string, limit: number = MAX_RECO
 		// sub-segment, and none of them is a service name.
 		if (/[/@:\\]/.test(token)) continue;
 		if (!SERVICE_TOKEN.test(token)) continue;
+		// A service name always contains a letter. Rejects purely numeric shapes SERVICE_TOKEN
+		// otherwise accepts ("1-2-3", "10.0.0.1") without needing a rule per shape.
+		if (!/[a-z]/i.test(token)) continue;
 		if (VERSION_TOKEN.test(token)) continue;
+		if (FILE_EXTENSION_TOKEN.test(token)) continue;
 		const key = token.toLowerCase();
 		if (SERVICE_STOP_LIST.has(key) || seen.has(key)) continue;
 		seen.add(key);
