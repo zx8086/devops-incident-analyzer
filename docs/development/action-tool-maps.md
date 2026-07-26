@@ -200,6 +200,7 @@ If an MCP tool is removed from the server, remove its name from all action categ
 | `packages/agent/src/entity-extractor.ts` | `buildActionCatalog()` -- builds action catalog for the LLM |
 | `packages/agent/src/prompt-context.ts` | `getToolDefinitionForDataSource()` -- resolves tool YAML by datasource ID |
 | `packages/gitagent-bridge/src/tool-mapping.ts` | `resolveActionTools()`, `getAllActionToolNames()` -- YAML-to-tool-name resolution |
+| `packages/gitagent-bridge/src/skill-tools.ts` | `extractSkillToolNames()` -- tool names promised by SKILL.md prose (SIO-1228) |
 | `packages/gitagent-bridge/src/types.ts` | `ToolDefinitionSchema` -- Zod schema defining `action_tool_map` structure |
 | `packages/shared/src/agent-state.ts` | `ExtractedEntitiesSchema` -- includes `toolActions` field |
 
@@ -207,7 +208,9 @@ If an MCP tool is removed from the server, remove its name from all action categ
 
 ## Fallback Behavior
 
-`selectToolsByAction()` in `sub-agent.ts` implements a 3-tier fallback chain. Each tier activates only when the previous tier fails to produce at least `MIN_FILTERED_TOOLS` (5) tools.
+`selectToolsByAction()` in `sub-agent.ts` implements a 3-tier fallback chain. Each tier activates only when the previous tier fails to produce at least `MIN_FILTERED_TOOLS` (1) tools.
+
+> The floor was lowered from 5 to 1 in the SIO-785 follow-up (2026-05-18) so a narrow action (e.g. `dlq_messages` -> 3 tools) is honored instead of falling through to the all-action fallback.
 
 ### Tier 1: Extracted Actions
 
@@ -243,6 +246,40 @@ Result: first 25 tools (hard cap)
 ### Short-Circuit
 
 If the datasource has `MAX_TOOLS_PER_AGENT` (25) or fewer total MCP tools, no filtering is applied. The full set is passed directly to the ReAct agent.
+
+---
+
+## Always-Bound Tools (union before the cap)
+
+Two sets are unioned into the selection on **every** tier before the `MAX_TOOLS_PER_AGENT` slice, and prepended so they survive it. Order is `[resolution] ++ [skill-promised] ++ [action-selected]`.
+
+### Resolution tools (SIO-1029 / SIO-1084)
+
+`RESOLUTION_TOOLS_BY_DATASOURCE` in `sub-agent.ts` -- each datasource's "where to look" enumerator (e.g. `gitlab_search`), so a loose service name is always resolvable to a real identifier regardless of the selected action. Hand-maintained. Kafka is deliberately absent: force-including `kafka_list_topics` crowds out the specialized DLQ tools (the SIO-785 regression).
+
+### Skill-promised tools (SIO-1228)
+
+Sub-agent `SKILL.md` prose names the tools it instructs the model to call, and **every skill body is in the system prompt on every turn** -- `buildSubAgentPrompt` calls `buildSystemPrompt` with no `activeSkills` filter. Action selection binds only the groups the entity extractor picked, so before this fix a turn that missed the matching group left the prompt promising an unbound tool. The model complied, got `Tool "X" not found` (classified `unknown` -> retryable), and burned ReAct iterations to the recursion limit.
+
+`extractSkillToolNames()` (`packages/gitagent-bridge/src/skill-tools.ts`) scans skill bodies for backticked `snake_case` tokens; `selectToolsByAction` unions those that exist in the runtime tool set.
+
+- The extractor **deliberately over-matches** -- prose identifiers like `project_id` are collected too. Intersecting with the real tool list at the bind site discards them, so an unresolvable name is inert (same property as a stale name in the action map).
+- **Limitation:** a tool named *without* backticks is not detected and can still diverge. Every skill in the repo backticks tool names today.
+- The set includes **shared** skills (`agents/shared/skills/`), which every agent inherits, under the same local-shadows-shared rule the prompt builder uses.
+- `getSkillToolNames()` mirrors `buildSubAgentPrompt`'s fallback exactly, including for `atlassian-agent` / `aws-agent`, which have directories but are **not** declared in the orchestrator's `agents:` map and therefore run on the *root* agent's prompt.
+
+Measured against the shipped manifests (raw names -> names that resolve to a real tool):
+
+| sub-agent | raw names | bound | effect |
+|---|---|---|---|
+| gitlab-agent | 28 | **18** | `gitlab_get_file_content` was unbound on every narrow action; now bound (7-10 tools -> 19-21, within the cap) |
+| capella-agent | 9 | 8 | |
+| elastic-agent | 6 | 4 | |
+| kafka / konnect / atlassian / aws | 1 | **0** | inherit only the shared `cite-sources` skill, which names `elasticsearch_search` -- not a tool on their servers, so provably inert. This is what keeps the SIO-785 kafka DLQ behaviour unchanged. |
+
+`packages/gitagent-bridge/src/skill-tool-coverage.test.ts` is the build-time canary: it fails if a skill names a tool absent from the datasource's action map, or if any agent's union exceeds `MAX_TOOLS_PER_AGENT`. It loads through the **root** agent, because loading a sub-agent directory standalone resolves `sharedRoot` to a non-existent path and would silently skip shared skills.
+
+Because gitlab forces 18 of 25 slots, action-driven narrowing is substantially weaker for that agent -- an accepted trade: binding what the prompt actually promises beats binding an arbitrary slice while the prompt over-promises.
 
 ---
 
@@ -301,3 +338,4 @@ The entity extractor returns actions that do not exist in the YAML.
 |------|--------|
 | 2026-04-09 | Initial version |
 | 2026-04-23 | Added `gitlab-api.yaml` and `atlassian-api.yaml` action maps; updated tool counts to reflect 6-server reality |
+| 2026-07-26 | SIO-1228: documented the always-bound union (resolution + skill-promised tools); corrected `MIN_FILTERED_TOOLS` from 5 to 1 |

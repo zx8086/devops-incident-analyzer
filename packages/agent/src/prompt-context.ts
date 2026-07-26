@@ -1,6 +1,7 @@
 // agent/src/prompt-context.ts
 import {
 	buildSystemPrompt,
+	extractSkillToolNames,
 	type LoadedAgent,
 	loadAgent,
 	type RunbookTriggers,
@@ -177,6 +178,33 @@ export function getActiveSkillNames(): string[] {
 	} catch {
 		return [];
 	}
+}
+
+// SIO-1228: the tool names a sub-agent's skill prose promises the model it can call.
+// buildSubAgentPrompt injects EVERY skill body on every turn (no activeSkills filter), so
+// this set is static per process -- memoized here rather than re-scanned per dispatch.
+// Best-effort like getActiveSkillNames: an unreadable manifest degrades to no unioning
+// (today's behaviour), never a broken turn.
+const skillToolNameCache = new Map<string, string[]>();
+
+export function getSkillToolNames(agentName: string): string[] {
+	const cached = skillToolNameCache.get(agentName);
+	if (cached) return cached;
+	let names: string[] = [];
+	try {
+		const rootAgent = getAgent();
+		// MUST mirror buildSubAgentPrompt's fallback exactly: a sub-agent directory that is
+		// not declared in the orchestrator's `agents:` map is absent from subAgents, and the
+		// prompt builder then falls back to the ROOT agent -- so the ROOT agent's skills are
+		// what gets promised. Resolving to [] here would leave those promises unbound,
+		// recreating the very divergence this fixes. (SIO-1229 declares the two agents that
+		// hit this path today; the mirror stays correct either way.)
+		names = extractSkillToolNames(rootAgent.subAgents.get(agentName) ?? rootAgent);
+	} catch {
+		names = [];
+	}
+	skillToolNameCache.set(agentName, names);
+	return names;
 }
 
 // SIO-640: Runbook catalog projection for the lazy selector. Parses each
