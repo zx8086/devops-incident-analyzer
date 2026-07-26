@@ -20,6 +20,9 @@ describe("parseIntentJson — unescaped control chars in verbatim-copy fields", 
 		const req = parseIntentJson(raw);
 		expect(req.workflow).toBe("cluster-settings-edit");
 		expect(req.cluster).toBe("eu-b2b");
+		// The point of the sanitizer is that the pasted document survives BYTE-FOR-BYTE. Asserting
+		// only the routing would still pass if sanitizeJsonControlChars mangled or truncated it.
+		expect(req.userSettingsYaml).toBe("xpack:\n  security:\n\tenabled: true");
 		expect(req.clarification).toBeUndefined();
 	});
 
@@ -31,6 +34,8 @@ describe("parseIntentJson — unescaped control chars in verbatim-copy fields", 
 		const req = parseIntentJson(raw);
 		expect(req.workflow).toBe("ilm-rollout");
 		expect(req.cluster).toBe("eu-b2b");
+		// Same: the nested string must come back with its newline intact, not escaped or dropped.
+		expect(req.phasesPatch).toEqual({ note: "line one\nline two" });
 		expect(req.clarification).toBeUndefined();
 	});
 

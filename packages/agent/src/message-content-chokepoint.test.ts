@@ -75,9 +75,40 @@ const ALLOWED = new Set(["packages/agent/src/message-utils.ts"]);
 // `String(\n  msg.content\n)`, and a formatter can produce that split at any time. Extracted so
 // the opt-out and line-attribution behaviour can be tested against synthetic sources instead of
 // only against whatever happens to be in the tree.
+// Line indices that are comment-only, so a commented-out example is never reported. Covers `//`,
+// a `*` continuation, a single-line `/* ... */`, and every line inside a multi-line block comment.
+// Deliberately only ever SKIPS whole comment lines rather than masking comment regions mid-line: a
+// masker would have to understand string literals too (`"http://x"` contains `//`), and getting
+// that wrong turns this guard into a false NEGATIVE, which is far worse than a false positive.
+function commentOnlyLines(lines: string[]): ReadonlySet<number> {
+	const skip = new Set<number>();
+	let inBlock = false;
+	for (const [i, raw] of lines.entries()) {
+		const line = raw.trim();
+		if (inBlock) {
+			skip.add(i);
+			// A `*/` closes the block; anything after it on the same line is code again, but this
+			// line is still comment-dominated, so leaving it skipped is the safe direction.
+			if (line.includes("*/")) inBlock = false;
+			continue;
+		}
+		if (line.startsWith("//") || line.startsWith("*")) {
+			skip.add(i);
+			continue;
+		}
+		if (line.startsWith("/*")) {
+			skip.add(i);
+			// Only stays open if this line does not also close it.
+			if (!line.includes("*/")) inBlock = true;
+		}
+	}
+	return skip;
+}
+
 function scanText(rel: string, text: string): string[] {
 	const found: string[] = [];
 	const lines = text.split("\n");
+	const commentLines = commentOnlyLines(lines);
 	for (const { pattern, why } of FORBIDDEN) {
 		const rx = new RegExp(pattern.source, "gm");
 		for (const match of text.matchAll(rx)) {
@@ -89,8 +120,7 @@ function scanText(rel: string, text: string): string[] {
 			// `content` token, and `.content as string` starts with it.
 			const contentOffset = Math.max(0, match[0].lastIndexOf("content"));
 			const lineNo = text.slice(0, index + contentOffset).split("\n").length - 1;
-			const line = lines[lineNo] ?? "";
-			if (line.trimStart().startsWith("//") || line.trimStart().startsWith("*")) continue;
+			if (commentLines.has(lineNo)) continue;
 			if (isOptedOut(lines, lineNo)) continue;
 			found.push(`${rel}:${lineNo + 1}  ${why}\n    ${match[0].replace(/\s+/g, " ").trim()}`);
 		}
@@ -165,6 +195,29 @@ describe("message content must go through message-utils", () => {
 		test("still ignores a commented-out .content read", () => {
 			const src = ["// const text = String(message.content);", "const ok = 1;"].join("\n");
 			expect(scanText("synthetic.ts", src)).toEqual([]);
+		});
+
+		test("ignores a single-line block-commented .content read", () => {
+			expect(scanText("synthetic.ts", "/* const text = String(message.content); */")).toEqual([]);
+		});
+
+		test("ignores a .content read inside a multi-line block comment", () => {
+			const src = [
+				"/*",
+				" an example of the old idiom:",
+				" const t = String(message.content);",
+				"*/",
+				"const ok = 1;",
+			].join("\n");
+			expect(scanText("synthetic.ts", src)).toEqual([]);
+		});
+
+		// The flip side: closing a block must not suppress real code on later lines.
+		test("still flags real code after a block comment closes", () => {
+			const src = ["/* harmless prose */", "const text = String(message.content);"].join("\n");
+			const found = scanText("synthetic.ts", src);
+			expect(found).toHaveLength(1);
+			expect(found[0]).toContain("synthetic.ts:2");
 		});
 
 		test("flags a split JSON.stringify on its .content line", () => {
