@@ -135,7 +135,8 @@ const minScoreLabel = $derived(
         </div>
       </div>
     {:else}
-      {#each topRecords.slice(0, 1) as record (recordKey(record))}
+      {#each topRecords as record, i (recordKey(record))}
+        <div class={i > 0 ? "mt-3 pt-3 border-t border-indigo-100" : ""}>
         <div class="flex items-center gap-2 mb-2">
           <span class="inline-flex items-center justify-center min-w-[2.25rem] px-1.5 py-0.5 rounded {severityBadgeClass(severityOf(record.recordScore))} text-[0.6875rem] tabular-nums font-semibold">{record.recordScore.toFixed(0)}</span>
           <span class="font-medium text-gray-800 truncate" title={record.jobId}>{record.jobId}</span>
@@ -178,6 +179,7 @@ const minScoreLabel = $derived(
             </div>
           </div>
         {/if}
+        </div>
       {/each}
     {/if}
 

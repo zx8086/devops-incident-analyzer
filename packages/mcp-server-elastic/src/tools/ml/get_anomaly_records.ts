@@ -22,6 +22,12 @@ export const mlGetAnomalyRecordsValidator = z.object({
 		.describe("Elasticsearch date-math lower bound for `timestamp` (e.g. `now-1h`, `now-7d`). Default `now-24h`."),
 	entity: z
 		.string()
+		.trim()
+		.min(1, "entity cannot be blank")
+		.refine(
+			(v) => !/[=;]/.test(v),
+			"entity must be a single plain value, not a composite `field=value; field=value` expression",
+		)
 		.optional()
 		.describe(
 			"A single plain field VALUE (e.g. 'checkout-service'), not a composite `field=value; field=value` expression. Matched against by_field_value, partition_field_value, over_field_value, and every influencer_field_values entry on each record. Low-cardinality values (e.g. a shared namespace) can match a very large number of records -- report the match count so the caller can tell.",
@@ -139,6 +145,25 @@ function buildEntityShouldClause(entity: string): estypes.QueryDslQueryContainer
 	};
 }
 
+// SIO-1215 (CodeRabbit): the tool description promises a comma-separated list
+// or wildcard expression, but `term` only matches the literal string -- split
+// the list and route each entry through `wildcard` (which also matches a
+// plain literal with no `*`/`?`) via a `should`, matching how list_jobs/
+// get_job_stats already accept the same jobId syntax against the ML API.
+export function buildJobIdFilter(jobId: string): estypes.QueryDslQueryContainer {
+	const ids = jobId
+		.split(",")
+		.map((id) => id.trim())
+		.filter(Boolean);
+	if (ids.length === 1) return { wildcard: { job_id: { value: ids[0] } } };
+	return {
+		bool: {
+			should: ids.map((id) => ({ wildcard: { job_id: { value: id } } })),
+			minimum_should_match: 1,
+		},
+	};
+}
+
 export const registerMlGetAnomalyRecordsTool: ToolRegistrationFunction = (server: McpServer, esClient: Client) => {
 	const handler = async (args: MlGetAnomalyRecordsParams): Promise<SearchResult> => {
 		const perfStart = performance.now();
@@ -152,7 +177,7 @@ export const registerMlGetAnomalyRecordsTool: ToolRegistrationFunction = (server
 				{ term: { result_type: "record" } },
 				{ range: { timestamp: { gte: lookback } } },
 			];
-			if (params.jobId) filter.push({ term: { job_id: params.jobId } });
+			if (params.jobId) filter.push(buildJobIdFilter(params.jobId));
 			if (params.minScore !== undefined) filter.push({ range: { record_score: { gte: params.minScore } } });
 
 			const must: estypes.QueryDslQueryContainer[] = params.entity ? [buildEntityShouldClause(params.entity)] : [];

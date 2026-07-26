@@ -836,6 +836,10 @@ function createAgentStore() {
 		if (!topicShiftPrompt || isStreaming) return;
 		const tid = topicShiftPrompt.threadId;
 		isStreaming = true;
+		// SIO-1215 (CodeRabbit): a fresh topic starts a new investigation -- clear the prior
+		// topic's anomaly card before the resumed stream begins, so a fresh turn that never
+		// fires ml_anomaly_explainer doesn't inherit a stale card via buildAssistantMessage.
+		if (decision === "fresh") mlAnomalyExplainer = null;
 		try {
 			const response = await fetch("/api/agent/topic-shift", {
 				method: "POST",

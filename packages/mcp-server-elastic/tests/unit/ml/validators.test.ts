@@ -11,7 +11,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { registerAllTools } from "../../../src/tools/index.js";
 import { mlCloseJobValidator } from "../../../src/tools/ml/close_job.js";
-import { mlGetAnomalyRecordsValidator } from "../../../src/tools/ml/get_anomaly_records.js";
+import { buildJobIdFilter, mlGetAnomalyRecordsValidator } from "../../../src/tools/ml/get_anomaly_records.js";
 import { mlGetDatafeedStatsValidator } from "../../../src/tools/ml/get_datafeed_stats.js";
 import { mlGetDatafeedsValidator } from "../../../src/tools/ml/get_datafeeds.js";
 import { mlGetJobStatsValidator } from "../../../src/tools/ml/get_job_stats.js";
@@ -64,6 +64,34 @@ describe("get_anomaly_records: no-silent-threshold guard (SIO-1215)", () => {
 	});
 	test("accepts a plain-value entity string", () => {
 		expect(() => mlGetAnomalyRecordsValidator.parse({ entity: "checkout-service" })).not.toThrow();
+	});
+	test("rejects a blank/whitespace-only entity", () => {
+		expect(() => mlGetAnomalyRecordsValidator.parse({ entity: "   " })).toThrow();
+	});
+	test("rejects a composite `field=value; field=value` entity expression", () => {
+		expect(() => mlGetAnomalyRecordsValidator.parse({ entity: "service.name=checkout; env=prod" })).toThrow();
+	});
+});
+
+describe("get_anomaly_records: buildJobIdFilter honors the documented jobId syntax (SIO-1215 CodeRabbit)", () => {
+	test("a single id (no wildcard chars) matches only that literal id", () => {
+		expect(buildJobIdFilter("apm-high-error-rate")).toEqual({
+			wildcard: { job_id: { value: "apm-high-error-rate" } },
+		});
+	});
+	test("a comma-separated list becomes a should of wildcard clauses", () => {
+		expect(buildJobIdFilter("apm-high-error-rate, mendix-error-rate-by-app")).toEqual({
+			bool: {
+				should: [
+					{ wildcard: { job_id: { value: "apm-high-error-rate" } } },
+					{ wildcard: { job_id: { value: "mendix-error-rate-by-app" } } },
+				],
+				minimum_should_match: 1,
+			},
+		});
+	});
+	test("a wildcard expression is preserved for pattern matching, not treated as a literal", () => {
+		expect(buildJobIdFilter("mendix-*")).toEqual({ wildcard: { job_id: { value: "mendix-*" } } });
 	});
 });
 

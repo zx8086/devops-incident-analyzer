@@ -14,6 +14,7 @@ restart/latency/error-rate drift from typical behavior. Also trigger on explicit
 `ml_monitoring`, which answers "is the job healthy", not "what did it detect".
 
 ## Parameters and defaults
+
 | Parameter | Default | Notes |
 |---|---|---|
 | `minScore` | omitted (no filter) | Never default this to a critical-only threshold on an open-ended question. Only set it when the caller names a severity band. |
