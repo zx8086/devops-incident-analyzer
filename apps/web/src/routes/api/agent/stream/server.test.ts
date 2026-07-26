@@ -105,6 +105,19 @@ mock.module("@devops-agent/shared", () => ({
 		edges: z.array(z.object({ from: z.string(), to: z.string(), kind: z.string() }).passthrough()),
 		truncated: z.boolean().optional(),
 	}),
+	// SIO-1215: sse-pump value-imports this to validate the ml_anomaly_explainer
+	// payload before forwarding. Mirrors the real schema's load-bearing shape
+	// (records array) closely enough to reject malformed payloads.
+	MlAnomalyExplainerSchema: z.object({
+		builtAtTurn: z.number(),
+		mode: z.enum(["overview", "detail"]),
+		minScoreApplied: z.number().optional(),
+		lookback: z.string(),
+		records: z.array(z.object({ jobId: z.string(), recordScore: z.number() }).passthrough()),
+		jobsSummary: z.array(z.object({ jobId: z.string(), count: z.number() }).passthrough()),
+		investigationActions: z.array(z.string()),
+		truncated: z.boolean().optional(),
+	}),
 	redactPiiContent: (s: string) => s,
 	isKillSwitchActive: () => false,
 	KillSwitchError: class KillSwitchError extends Error {},

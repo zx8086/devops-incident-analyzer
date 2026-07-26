@@ -11,6 +11,7 @@ import type {
 	HilItemEdits,
 	InvestigationFocus,
 	MitigationSteps,
+	MlAnomalyExplainer,
 	NetworkTopology,
 	NormalizedIncident,
 	PendingAction,
@@ -199,6 +200,15 @@ export const AgentState = Annotation.Root({
 	// node always returns the key (undefined included) so a turn with no network
 	// data clears a stale prior-turn map. Read by recordBindings for the KG write.
 	networkTopology: Annotation<NetworkTopology | undefined>({
+		reducer: (_, next) => next,
+		default: () => undefined,
+	}),
+
+	// SIO-1215: per-turn ML anomaly explainer derived from toolOutputs[] by
+	// extractFindings (pure buildMlAnomalyExplainer). REPLACE reducer -- recomputed
+	// each turn, and the node always returns the key (undefined included) so a turn
+	// with no anomaly-record query clears a stale prior-turn card.
+	mlAnomalyExplainer: Annotation<MlAnomalyExplainer | undefined>({
 		reducer: (_, next) => next,
 		default: () => undefined,
 	}),

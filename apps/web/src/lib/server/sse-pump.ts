@@ -5,7 +5,13 @@
 // Previously the routing lived inline in stream/+server.ts.
 
 import type { InvestigationFocus } from "@devops-agent/shared";
-import { HilApplyReportSchema, NetworkTopologySchema, redactPiiContent, StreamEventSchema } from "@devops-agent/shared";
+import {
+	HilApplyReportSchema,
+	MlAnomalyExplainerSchema,
+	NetworkTopologySchema,
+	redactPiiContent,
+	StreamEventSchema,
+} from "@devops-agent/shared";
 import { z } from "zod";
 
 // SIO-1194 (CodeRabbit PR #455): validate the cap-transparency fields with Zod
@@ -305,6 +311,16 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 					const parsed = NetworkTopologySchema.safeParse(rawTopology);
 					if (parsed.success && parsed.data.nodes.length > 0) {
 						send({ type: "network_topology", topology: parsed.data });
+					}
+				}
+				// SIO-1215: once-per-turn ML anomaly explainer, same guarded-parse
+				// convention as network_topology above -- a malformed payload drops the
+				// event, never the turn.
+				const rawExplainer = (event.data?.output as { mlAnomalyExplainer?: unknown })?.mlAnomalyExplainer;
+				if (rawExplainer !== undefined) {
+					const parsed = MlAnomalyExplainerSchema.safeParse(rawExplainer);
+					if (parsed.success && parsed.data.records.length > 0) {
+						send({ type: "ml_anomaly_explainer", explainer: parsed.data });
 					}
 				}
 			}

@@ -21,6 +21,7 @@ import GitLabFindingsCard from "./GitLabFindingsCard.svelte";
 import Icon from "./Icon.svelte";
 import KafkaFindingsCard from "./KafkaFindingsCard.svelte";
 import MarkdownRenderer from "./MarkdownRenderer.svelte";
+import MlAnomalyExplainerCard from "./MlAnomalyExplainerCard.svelte";
 import NetworkTopologyCard from "./NetworkTopologyCard.svelte";
 
 let {
@@ -152,6 +153,10 @@ const commentMode = $derived(canCommentOnThreadTicket && threadTicket !== null);
 
         {#if !isStreaming && message.networkTopology}
           <NetworkTopologyCard topology={message.networkTopology} />
+        {/if}
+
+        {#if !isStreaming && message.mlAnomalyExplainer}
+          <MlAnomalyExplainerCard explainer={message.mlAnomalyExplainer} />
         {/if}
 
         {#if !isStreaming}

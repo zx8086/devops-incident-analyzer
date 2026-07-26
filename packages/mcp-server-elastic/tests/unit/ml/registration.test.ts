@@ -1,7 +1,8 @@
 // tests/unit/ml/registration.test.ts
-// SIO-1148: Verifies all 9 ML anomaly-detection tools register with the MCP server,
-// that the 4 read tools skip the security-validation wrapper (in READ_ONLY_TOOLS), and
-// that the 5 write tools do not — with reset_job flagged DESTRUCTIVE.
+// SIO-1148: Verifies all 10 ML anomaly-detection tools register with the MCP server,
+// that the 5 read tools skip the security-validation wrapper (in READ_ONLY_TOOLS), and
+// that the 5 write tools do not — with reset_job flagged DESTRUCTIVE. SIO-1215 added
+// elasticsearch_ml_get_anomaly_records as the 5th read tool.
 
 import { describe, expect, test } from "bun:test";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -12,6 +13,7 @@ const ML_READ_TOOLS = [
 	"elasticsearch_ml_get_job_stats",
 	"elasticsearch_ml_get_datafeeds",
 	"elasticsearch_ml_get_datafeed_stats",
+	"elasticsearch_ml_get_anomaly_records",
 ] as const;
 
 const ML_WRITE_TOOLS = [
@@ -25,7 +27,7 @@ const ML_WRITE_TOOLS = [
 const ALL_ML_TOOLS = [...ML_READ_TOOLS, ...ML_WRITE_TOOLS];
 
 describe("SIO-1148: ML tool registration", () => {
-	test("all 9 ML tools are registered with the MCP server", () => {
+	test("all 10 ML tools are registered with the MCP server", () => {
 		const server = new McpServer({ name: "test-server", version: "0.0.0" });
 		// The client is only used inside handlers — never during registration — so a typed shim suffices.
 		const fakeClient = {} as Parameters<typeof registerAllTools>[1];
@@ -38,14 +40,14 @@ describe("SIO-1148: ML tool registration", () => {
 		}
 	});
 
-	test("ML tool count matches expected (9)", () => {
+	test("ML tool count matches expected (10)", () => {
 		const server = new McpServer({ name: "test-server", version: "0.0.0" });
 		const fakeClient = {} as Parameters<typeof registerAllTools>[1];
 
 		const registered = registerAllTools(server, fakeClient);
 		const mlCount = registered.filter((t) => t.name.startsWith("elasticsearch_ml_")).length;
 
-		expect(mlCount).toBe(9);
+		expect(mlCount).toBe(10);
 	});
 
 	test("ML read tools are in READ_ONLY_TOOLS (skips security-validation wrapper)", () => {

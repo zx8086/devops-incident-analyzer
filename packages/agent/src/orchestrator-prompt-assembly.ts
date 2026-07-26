@@ -22,6 +22,9 @@ export interface VolatileSections {
 	// last so an empty/absent value keeps the assembly byte-identical to the
 	// pre-network output (the SIO-1040 byte-identity contract).
 	network?: string;
+	// SIO-1215: this turn's derived ML anomaly-record summary. Same optional,
+	// appended-last convention as network above.
+	mlAnomaly?: string;
 }
 
 // Filter the knowledge array to remove non-selected runbooks when a filter is
@@ -52,6 +55,12 @@ export function assembleOrchestratorPromptParts(
 ): OrchestratorPromptParts {
 	const { core, knowledge } = buildSystemPromptParts(agent);
 	const volatile =
-		knowledge + sections.compliance + sections.liveMemory + sections.wiki + sections.graph + (sections.network ?? "");
+		knowledge +
+		sections.compliance +
+		sections.liveMemory +
+		sections.wiki +
+		sections.graph +
+		(sections.network ?? "") +
+		(sections.mlAnomaly ?? "");
 	return { stable: core, volatile };
 }

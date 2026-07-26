@@ -38,6 +38,7 @@ import {
 import { isGapsJudgeEnabled, judgeDegradingGapBullets } from "./gaps-judge.ts";
 import { createLlm } from "./llm.ts";
 import { extractTextFromContent } from "./message-utils.ts";
+import { buildMlAnomalyExplainer, summarizeMlAnomalyExplainerForPrompt } from "./ml-anomaly-explainer.ts";
 import { buildNetworkTopology, summarizeNetworkTopologyForPrompt } from "./network-topology.ts";
 import { buildCachedSystemMessage } from "./prompt-cache.ts";
 import { buildOrchestratorPromptParts, getActiveSkillNames } from "./prompt-context.ts";
@@ -132,6 +133,15 @@ export function buildAggregatorMessages(
 		// Builder is pure/total; belt-and-braces only -- a network summary must
 		// never sink report generation.
 	}
+	// SIO-1215: same re-run-the-pure-builder convention as networkContext above --
+	// aggregate runs before extractFindings, so state.mlAnomalyExplainer is stale.
+	let mlAnomalyContext = "";
+	try {
+		const explainer = buildMlAnomalyExplainer(state.dataSourceResults, state.messages.length);
+		if (explainer) mlAnomalyContext = summarizeMlAnomalyExplainerForPrompt(explainer);
+	} catch {
+		// Builder is pure/total; belt-and-braces only.
+	}
 	// SIO-1040: split the orchestrator prompt so the stable core (soul + rules +
 	// skills) is a Bedrock cache prefix and the volatile suffix (filtered
 	// knowledge + memory + wiki + graph + network) stays uncached.
@@ -140,6 +150,7 @@ export function buildAggregatorMessages(
 		wikiFocus,
 		graphContext: state.graphContext,
 		networkContext,
+		mlAnomalyContext,
 	});
 	const priorAnswer = state.finalAnswer;
 	const lastUserMessage = state.messages.filter((m) => m._getType() === "human").pop();

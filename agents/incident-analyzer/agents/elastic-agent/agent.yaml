@@ -12,6 +12,9 @@ model:
 tools:
   - elastic-logs
 
+skills:
+  - ml-anomaly-investigation
+
 compliance:
   risk_tier: low
   data_governance:

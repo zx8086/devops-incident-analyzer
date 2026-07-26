@@ -24,6 +24,7 @@ input_schema:
         - billing
         - transform_management
         - ml_monitoring
+        - ml_anomaly_records
       description: Type of Elasticsearch operation to perform
     service_name:
       type: string
@@ -198,6 +199,11 @@ tool_mapping:
       - elasticsearch_ml_get_job_stats
       - elasticsearch_ml_get_datafeeds
       - elasticsearch_ml_get_datafeed_stats
+    # SIO-1215: anomaly RECORDS (what's unusual, not just whether the job is healthy).
+    # Separate from ml_monitoring on purpose -- health and anomaly-record questions are
+    # different asks even though both live under the ML API.
+    ml_anomaly_records:
+      - elasticsearch_ml_get_anomaly_records
   action_descriptions:
     search: >-
       when querying logs by service, time window, and search terms (the primary log-search
@@ -250,3 +256,16 @@ tool_mapping:
       (`results_index_name`, source indices). READ-ONLY -- this action cannot open, close, reset,
       or start/stop anything; ML job lifecycle changes are not available to this agent. Use it to
       assess whether an anomaly-detection model has gone stale or numb, then report the finding.
+      For "what's actually anomalous" (specific unusual records, not job health), use
+      ml_anomaly_records instead.
+    ml_anomaly_records: >-
+      when the user asks what's anomalous, whether anything unusual is happening, why a service is
+      slow/spiking, or about memory/CPU/restart/latency/error-rate drift from typical behavior --
+      "ML anomalies", "Elastic ML", "what does ML think" all trigger this. Returns anomaly-detection
+      RECORDS (recordScore, jobId, fieldName, functionName, entity, deviationPercent, actual vs
+      typical), sorted by recordScore, plus a per-job count summary in one call. READ-ONLY. Omit the
+      minScore-equivalent filter for an open-ended question -- do not silently narrow to
+      critical-only; an empty result at the requested parameters is itself the answer, report it and
+      offer to broaden rather than auto-retrying. Pass entity as a single plain value (e.g.
+      "checkout-service"), never a composite `field=value; field=value` expression. For job/datafeed
+      HEALTH instead of anomaly records, use ml_monitoring.
