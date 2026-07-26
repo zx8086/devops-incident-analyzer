@@ -33,12 +33,25 @@ function logIfAllBlocksDropped(blocks: unknown[], kept: number, fn: string): voi
 	logger.warn({ fn, blockCount: blocks.length, blockTypes: types }, "dropped every content block; returning empty");
 }
 
+// SIO-1231: text blocks are concatenated with NO separator. The original "\n" join assumed a
+// complete message's blocks are "distinct logical paragraphs"; that assumption is wrong on both
+// shapes this codebase actually produces:
+//   1. Streamed nodes. The whole graph runs under streamEvents, so llm.invoke() never takes the
+//      _generate path -- LangChain streams internally and concats the AIMessageChunks, leaving one
+//      text block PER DELTA. "\n" put a newline at every delta boundary, and markdown.ts renders
+//      with breaks:true, so the final report came out as "Incident Report: pr" / "ana-order-service
+//      -- Se" / "asons Lookup Fail". SIO-1218 fixed the live bubble via extractStreamDeltaText and
+//      explicitly left the complete-message sites alone -- but aggregate/responder ARE streamed.
+//   2. Cached system prompts. buildCachedSystemMessage emits [{text: stable}, CACHE_POINT,
+//      {text: volatile}] and its cache-disabled path is `stable + volatile` -- no separator. A "\n"
+//      join silently broke prompt-cache.ts's own "byte-identical to the pre-cache prompt" promise.
+// A model that wants a paragraph break emits "\n\n" INSIDE the block text, so "" loses nothing.
 export function extractTextFromContent(content: unknown): string {
 	if (typeof content === "string") return content;
 	if (Array.isArray(content)) {
 		const texts = content.filter(isTextBlock).map((block) => block.text);
 		logIfAllBlocksDropped(content, texts.length, "extractTextFromContent");
-		return texts.join("\n");
+		return texts.join("");
 	}
 	// A single content block (not wrapped in an array) or any other unsupported shape --
 	// String(content) here would reproduce the exact "[object Object]" bug this helper
@@ -46,13 +59,14 @@ export function extractTextFromContent(content: unknown): string {
 	return isTextBlock(content) ? content.text : "";
 }
 
-// SIO-1218: extractTextFromContent's "\n" join is correct for a COMPLETE message's
-// distinct logical content blocks, but sse-pump.ts calls it per streamed AIMessageChunk
-// delta instead. When one delta chunk carries more than one array block (Bedrock Converse
-// can batch adjacent text deltas under the 4.7+/5-generation models' adaptive thinking),
-// the "\n" join splices a newline into the middle of a word, garbling the live-streamed
-// bubble. A streaming delta's blocks are contiguous text fragments, not separate
-// paragraphs -- concatenate them directly.
+// SIO-1218: sse-pump.ts calls this per streamed AIMessageChunk delta rather than on a complete
+// message. When one delta chunk carries more than one array block (Bedrock Converse can batch
+// adjacent text deltas under the 4.7+/5-generation models' adaptive thinking), a separator would
+// splice into the middle of a word and garble the live-streamed bubble.
+// SIO-1231: this now has the SAME join semantics as extractTextFromContent -- the two are kept
+// separate only for the instrumentation difference documented below, NOT for a different join.
+// If you are choosing between them: use this one on a per-delta chunk, the other on a complete
+// message. Picking the wrong one is no longer a correctness bug, only a logging one.
 // SIO-1222: deliberately NOT instrumented like extractTextFromContent. This runs once per
 // streamed delta (thousands of times per turn), and a chunk legitimately carrying no text
 // block is routine, not a signal -- logging here would be pure noise. The complete-message

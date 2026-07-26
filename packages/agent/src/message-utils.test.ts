@@ -13,12 +13,48 @@ describe("extractTextFromContent (SIO-1217)", () => {
 	// via Array.prototype.toString(). This must extract only the text blocks' text instead.
 	test("extracts text from an array of content blocks, never [object Object]", () => {
 		const content = [
-			{ type: "text", text: "The incident root cause is a timeout." },
+			{ type: "text", text: "The incident root cause is a timeout.\n" },
 			{ type: "text", text: "Confidence: 0.8" },
 		];
 		const result = extractTextFromContent(content);
 		expect(result).not.toContain("[object Object]");
+		// SIO-1231: blocks concatenate with NO separator. This assertion previously expected an
+		// injected "\n" between the blocks; a model that wants a break emits it inside the text,
+		// as the first block does here.
 		expect(result).toBe("The incident root cause is a timeout.\nConfidence: 0.8");
+	});
+
+	// SIO-1231 regression. The whole graph runs under streamEvents, so llm.invoke() at the
+	// aggregate/responder OUTPUT_NODES returns LangChain's concatenation of the AIMessageChunks --
+	// one text block PER DELTA, not per paragraph. A "\n" join put a newline at every delta
+	// boundary and markdown.ts (breaks: true) rendered each as a <br>, producing the reported
+	// "Incident Report: pr" / "ana-order-service -- Se" / "asons Lookup Fail" garbling.
+	test("concatenates delta-shaped blocks of a complete message with no injected separator", () => {
+		const content = [
+			{ type: "text", text: "# Incident Report: pr" },
+			{ type: "text", text: "ana-order-service -- Se" },
+			{ type: "text", text: "asons Lookup Fail" },
+			{ type: "text", text: "ure (CK / DIVISIONAL + OUTLET)" },
+		];
+		const result = extractTextFromContent(content);
+		expect(result).toBe("# Incident Report: prana-order-service -- Seasons Lookup Failure (CK / DIVISIONAL + OUTLET)");
+		expect(result).not.toContain("\n");
+	});
+
+	// SIO-1231: the second shape the "\n" join broke. buildCachedSystemMessage emits
+	// [{text: stable}, CACHE_POINT, {text: volatile}] and its cache-DISABLED path is
+	// `stable + volatile` with no separator, so reconstructing the cached form must produce the
+	// identical string -- that is prompt-cache.ts's stated "byte-identical to the pre-cache
+	// prompt" guarantee.
+	test("reconstructs a cachePoint system prompt identically to the uncached concatenation", () => {
+		const stable = "You are the aggregator.\n";
+		const volatile = "Live memory: none.\n";
+		const cached = [
+			{ type: "text", text: stable },
+			{ cachePoint: { type: "default" } },
+			{ type: "text", text: volatile },
+		];
+		expect(extractTextFromContent(cached)).toBe(stable + volatile);
 	});
 
 	test("filters out thinking/reasoning blocks, keeping only text blocks", () => {
@@ -71,10 +107,11 @@ describe("extractStreamDeltaText (SIO-1218)", () => {
 	// AIMessageChunk.content delta, not a complete message. When a single delta
 	// chunk carries more than one array block (Bedrock Converse batches adjacent
 	// text deltas under the 4.7+/5-generation models' always-on adaptive thinking),
-	// extractTextFromContent's "\n" join -- correct for a *complete* message's
-	// distinct logical blocks -- splices a newline into the middle of a word,
-	// visibly garbling the live-streamed bubble (e.g. "Se\nasons" instead of
-	// "Seasons"). Streamed deltas must concatenate directly, with no separator.
+	// a separator splices a newline into the middle of a word, visibly garbling the
+	// live-streamed bubble (e.g. "Se\nasons" instead of "Seasons").
+	// SIO-1231: the "\n" this originally guarded against is gone from BOTH helpers --
+	// it was never correct for a complete message either (see the two regressions above).
+	// These tests still pin the no-separator contract for the per-delta path.
 	test("concatenates same-chunk delta blocks with no separator, never mid-word newline", () => {
 		const chunk = [
 			{ type: "text", text: "ana-order-service -- Se" },
