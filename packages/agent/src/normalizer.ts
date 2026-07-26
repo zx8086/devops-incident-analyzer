@@ -49,6 +49,53 @@ const NormalizationSchema = z.object({
 		.transform((v) => v ?? undefined),
 });
 
+// SIO-1220: Claude Sonnet 5 frequently echoes the user's raw query verbatim into a JSON
+// string field (e.g. an extractedMetrics.value copied from a pasted multi-line error
+// message) without escaping embedded control characters. JSON.parse correctly rejects a
+// raw \n/\r/\t inside a string literal per spec ("bad control character" / "unterminated
+// string") -- the LLM's response is malformed JSON, not this parser being too strict.
+// Escape control characters that appear INSIDE a string literal (tracking quote state and
+// backslash-escapes char-by-char) before parsing, so a normally-shaped envelope with
+// unescaped whitespace inside a value no longer fails the whole normalization turn.
+export function sanitizeJsonControlChars(text: string): string {
+	let result = "";
+	let inString = false;
+	let escaped = false;
+	for (const ch of text) {
+		if (escaped) {
+			result += ch;
+			escaped = false;
+			continue;
+		}
+		if (ch === "\\" && inString) {
+			result += ch;
+			escaped = true;
+			continue;
+		}
+		if (ch === '"') {
+			inString = !inString;
+			result += ch;
+			continue;
+		}
+		if (inString) {
+			if (ch === "\n") {
+				result += "\\n";
+				continue;
+			}
+			if (ch === "\r") {
+				result += "\\r";
+				continue;
+			}
+			if (ch === "\t") {
+				result += "\\t";
+				continue;
+			}
+		}
+		result += ch;
+	}
+	return result;
+}
+
 const NORMALIZER_PROMPT = `Normalize the user's incident query into structured data for downstream analysis.
 
 Available datasources: ${DATA_SOURCE_IDS.join(", ")}
@@ -143,7 +190,7 @@ export async function normalizeIncident(
 		const text = extractTextFromContent(response.content);
 		const jsonMatch = text.match(/\{[\s\S]*\}/);
 		if (jsonMatch) {
-			const parsed = NormalizationSchema.parse(JSON.parse(jsonMatch[0]));
+			const parsed = NormalizationSchema.parse(JSON.parse(sanitizeJsonControlChars(jsonMatch[0])));
 			const incident: NormalizedIncident = { ...parsed };
 			// SIO-750: establish the investigation focus on the first complex
 			// turn. The sticky reducer in state.ts preserves the existing focus
