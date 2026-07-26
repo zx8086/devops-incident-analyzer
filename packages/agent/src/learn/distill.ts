@@ -13,7 +13,9 @@ import type { BaseMessage } from "@langchain/core/messages";
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { interrupt } from "@langchain/langgraph";
 import { createLlm, type InvokableLlm, invokeWithDeadline } from "../llm.ts";
+import { parseLlmJson } from "../llm-json.ts";
 import { searchAgentMemory } from "../memory-backend.ts";
+import { extractTextFromContent } from "../message-utils.ts";
 import { getRunbookCatalog } from "../prompt-context.ts";
 import type { AgentStateType } from "../state.ts";
 import { type HilDecisions, type HilItemEdits, type LearningProposal, LearningProposalSchema } from "./schema.ts";
@@ -91,19 +93,12 @@ export function buildDistillerMessages(input: DistillerInput): BaseMessage[] {
 }
 
 export function parseLearningProposal(raw: string): LearningProposal | null {
-	const match = raw.match(/\{[\s\S]*\}/);
-	if (!match) return null;
-	try {
-		const result = LearningProposalSchema.safeParse(JSON.parse(match[0]));
-		if (!result.success) {
-			logger.warn({ issues: result.error.issues.slice(0, 3) }, "learning proposal failed schema validation");
-			return null;
-		}
-		return result.data;
-	} catch (error) {
-		logger.warn({ error: error instanceof Error ? error.message : String(error) }, "learning proposal parse failed");
+	const result = parseLlmJson(raw, LearningProposalSchema);
+	if (!result.ok) {
+		logger.warn({ reason: result.reason, detail: result.message }, "learning proposal parse failed");
 		return null;
 	}
+	return result.data;
 }
 
 // Deterministic filter-only lookup: has this ticket already been learned from?
@@ -243,7 +238,9 @@ export async function learnDistill(state: AgentStateType): Promise<Partial<Agent
 			new SystemMessage(DISTILLER_PROMPT),
 			new HumanMessage(humanText),
 		]);
-		const content = typeof result.content === "string" ? result.content : "";
+		// SIO-1222: an empty string here surfaced "could not distill a well-formed learning
+		// proposal" to the user on every /learn invocation, with no error anywhere.
+		const content = extractTextFromContent(result.content);
 		const parsed = parseLearningProposal(content);
 		if (!parsed) {
 			return {

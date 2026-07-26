@@ -7,6 +7,7 @@ import { DATA_SOURCE_IDS } from "@devops-agent/shared";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 import { createLlm } from "./llm.ts";
+import { parseLlmJson } from "./llm-json.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import { getAgent } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
@@ -139,9 +140,9 @@ If no specific datasource is mentioned, include all: ${DATA_SOURCE_IDS.join(", "
 
 	try {
 		const text = extractTextFromContent(response.content);
-		const jsonMatch = text.match(/\{[\s\S]*\}/);
-		if (jsonMatch) {
-			const parsed = ExtractionSchema.parse(JSON.parse(jsonMatch[0]));
+		const result = parseLlmJson(text, ExtractionSchema);
+		if (result.ok) {
+			const parsed = result.data;
 			const entities: ExtractedEntities = {
 				dataSources: parsed.dataSources,
 				toolActions: parsed.toolActions ?? undefined,
@@ -172,6 +173,12 @@ If no specific datasource is mentioned, include all: ${DATA_SOURCE_IDS.join(", "
 				...focusUpdate,
 			};
 		}
+		// SIO-1221: parseLlmJson never throws, so the fall-through to the all-datasources
+		// fallback below is logged here rather than by the catch.
+		logger.warn(
+			{ reason: result.reason, detail: result.message },
+			"Entity extraction failed, falling back to all datasources",
+		);
 	} catch (error) {
 		logger.warn({ error }, "Entity extraction failed, falling back to all datasources");
 	}

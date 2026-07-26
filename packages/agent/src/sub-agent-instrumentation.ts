@@ -269,8 +269,11 @@ function stringifyContent(content: unknown): string {
 	if (typeof content === "string") return content;
 	if (content == null) return "";
 	try {
+		// content-ok: ToolMessage result body, not an AIMessage -- the block shape IS the payload
+		// these downstream extractors parse, so it must be serialized rather than flattened to text.
 		return JSON.stringify(content) ?? "";
 	} catch {
+		// content-ok: ToolMessage result body; last-resort branch when JSON.stringify throws (cycles).
 		return String(content);
 	}
 }

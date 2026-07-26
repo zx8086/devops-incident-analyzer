@@ -98,7 +98,7 @@ The bridge package converts YAML agent definitions into LangGraph-compatible str
 - **YAML parsing** -- loading `agent.yaml`, `SOUL.md`, `RULES.md` from the agents directory
 - **Zod validation** -- manifest schema validation, tool schema alignment
 - **Manifest loading** -- recursive sub-agent loading (elastic-agent, kafka-agent, capella-agent, konnect-agent)
-- **Model factory** -- resolving model names to `claude-sonnet-4-6`, Bedrock config resolution
+- **Model factory / registry** -- resolving model names through `MODEL_REGISTRY` to a Bedrock id plus that model's declared capability record; the temperature-generation oracle, manifest coverage across all nine `agent.yaml` files, and probe-report provenance (SIO-1223)
 - **Tool prompt building** -- dynamic variable substitution in `prompt_template` fields
 - **Related tools map** -- workflow chaining hints from `related_tools` YAML
 - **Facade map** -- `tool_mapping` to MCP server pattern matching

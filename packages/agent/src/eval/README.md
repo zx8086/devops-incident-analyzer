@@ -8,6 +8,23 @@ incident queries × 3 evaluators.
 - ~$0.50-1.50 per full run (5 queries × ~$0.10-0.30 each = Bedrock; ~$0.005 each = gpt-4o-mini judge)
 - ~5-10 minutes wall-clock (~30-90s per query)
 
+## Also in this directory: the model-conformance probe
+
+`probe-model.ts` (SIO-1224) verifies a MODEL's capability assumptions rather than the graph's
+answer quality. It lives here because it is the other money-spending `bun run` script in the
+repo and shares the same cost-banner idiom.
+
+- ~$0.50-2.00 and ~3-5 minutes **per model**; `--agent` also probes the manifest's fallbacks
+- Needs only Bedrock creds -- no MCP servers, no LangSmith, no OpenAI key
+- Deliberately NOT a `*.test.ts`: CI runs `bun test` per package and would bill Bedrock per PR
+
+```bash
+bun run model:probe -- claude-sonnet-5 --agent incident-analyzer --report
+```
+
+It is gate 1 of `docs/development/model-upgrade-checklist.md`; committed output lands in
+`docs/reference/model-probes/`.
+
 ## Prerequisites
 
 - All 6 MCP servers reachable on :9080-:9085 (precheck blocks the run otherwise)

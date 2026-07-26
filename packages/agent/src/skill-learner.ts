@@ -13,7 +13,9 @@ import { redactPiiContent } from "@devops-agent/shared";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { z } from "zod";
 import { createLlm, type InvokableLlm, invokeWithDeadline } from "./llm.ts";
+import { parseLlmJson } from "./llm-json.ts";
 import { enqueueFact, searchAgentMemory, selectedBackend } from "./memory-backend.ts";
+import { extractTextFromContent } from "./message-utils.ts";
 
 const logger = getLogger("agent:skill-learner");
 
@@ -84,15 +86,15 @@ export function preGateSkip(turn: SkillLearnerTurn): string | null {
 }
 
 function parseProposal(raw: string): SkillProposal | null {
-	// Tolerate fenced/garnished JSON: pull the first {...} block.
-	const match = raw.match(/\{[\s\S]*\}/);
-	if (!match) return null;
-	try {
-		return SkillProposalSchema.parse(JSON.parse(match[0]));
-	} catch (error) {
-		logger.warn({ error: error instanceof Error ? error.message : String(error) }, "skill proposal parse failed");
+	// Tolerate fenced/garnished JSON and control chars echoed into string values.
+	const result = parseLlmJson(raw, SkillProposalSchema);
+	if (!result.ok) {
+		// SIO-1221: the no-JSON case previously returned null with no log at all, so a
+		// judge that stopped emitting JSON looked identical to a "not worthy" verdict.
+		logger.warn({ reason: result.reason, detail: result.message }, "skill proposal parse failed");
 		return null;
 	}
+	return result.data;
 }
 
 // The exact text handed to the LLM judge: the transcript, capped and PII-redacted.
@@ -113,7 +115,8 @@ export async function judgeTurn(turn: SkillLearnerTurn): Promise<SkillProposal |
 			new SystemMessage(JUDGE_PROMPT),
 			new HumanMessage(redactForJudge(turn.transcript)),
 		]);
-		const content = typeof result.content === "string" ? result.content : "";
+		// SIO-1222: an empty string here silently disabled skill learning entirely.
+		const content = extractTextFromContent(result.content);
 		const proposal = parseProposal(content);
 		if (!proposal?.worthy) return null;
 		// A worthy verdict must carry at least a name + description to be useful.

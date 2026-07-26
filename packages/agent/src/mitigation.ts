@@ -6,6 +6,7 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 import { getAvailableActionTools } from "./action-tools/executor.ts";
 import { createLlm, DeadlineExceededError, type InvokableLlm, invokeWithDeadline } from "./llm.ts";
+import { parseLlmJson } from "./llm-json.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import type { AgentStateType } from "./state.ts";
 
@@ -123,10 +124,9 @@ export async function aggregateMitigation(
 			);
 
 			const text = extractTextFromContent(response.content);
-			const jsonMatch = text.match(/\{[\s\S]*\}/);
-			if (jsonMatch) {
-				const parsed = ActionProposalSchema.parse(JSON.parse(jsonMatch[0]));
-				pendingActions = parsed.actions
+			const result = parseLlmJson(text, ActionProposalSchema);
+			if (result.ok) {
+				pendingActions = result.data.actions
 					.filter((a) => availableTools.includes(a.tool))
 					.map((a) => ({
 						id: crypto.randomUUID(),
@@ -135,6 +135,9 @@ export async function aggregateMitigation(
 						reason: a.reason,
 					}));
 				logger.info({ count: pendingActions.length }, "Action proposals generated");
+			} else {
+				// SIO-1221: parseLlmJson never throws; pendingActions stays [] as before.
+				logger.warn({ reason: result.reason, detail: result.message }, "Action proposal JSON unusable");
 			}
 		} catch (error) {
 			if (error instanceof DeadlineExceededError) {

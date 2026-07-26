@@ -135,16 +135,20 @@ The root manifest is validated by `AgentManifestSchema` (Zod). All sub-agent man
 | `compliance` | `ComplianceConfig` | No | Risk tier, supervision policy, recordkeeping, data governance |
 | `tags` | `string[]` | No | Metadata tags for filtering and categorization |
 
-**Model configuration example (orchestrator):**
+**Model configuration example (orchestrator) -- this is the live `incident-analyzer` block:**
 ```yaml
 model:
-  preferred: claude-sonnet-4-6
+  preferred: claude-sonnet-5
   fallback:
     - claude-haiku-4-5
   constraints:
     temperature: 0.2
     max_tokens: 4096
 ```
+Note `constraints.temperature` is inert for the primary here: Sonnet 5's registry record sets
+`acceptsTemperature: false`, so `buildChatModel` omits the field entirely (it still applies to
+the Haiku fallback). Changing either model requires the
+[Model Upgrade Checklist](../development/model-upgrade-checklist.md).
 
 **Model configuration example (sub-agent):**
 ```yaml
@@ -300,15 +304,35 @@ interface LoadedAgent {
 
 **Purpose:** Translates gitagent model identifiers into AWS Bedrock model IDs and configuration.
 
-**`resolveBedrockConfig(modelConfig): BedrockModelConfig`** maps friendly names to Bedrock ARNs:
+**`resolveBedrockConfig(modelConfig): BedrockModelConfig`** resolves a friendly name through
+`MODEL_REGISTRY` (`model-registry.ts`), returning the Bedrock id **and** that model's declared
+capability record. SIO-1223 replaced the old `MODEL_MAP` (name -> id only) with the registry, so
+there is no second list of model facts to drift out of step with it — which is exactly what
+happened when SIO-1213 added two models here and `llm.ts` still held its own separate
+temperature list.
 
-| Gitagent Name | Bedrock Model ID |
-|---------------|-----------------|
-| `claude-sonnet-4-6` | `eu.anthropic.claude-sonnet-4-6` |
-| `claude-haiku-4-5` | `eu.anthropic.claude-haiku-4-5-20251001-v1:0` |
-| `claude-opus-4-6` | `eu.anthropic.claude-opus-4-6` |
+| Gitagent Name | Bedrock Model ID | Probed? |
+|---------------|-----------------|---------|
+| `claude-sonnet-5` | `eu.anthropic.claude-sonnet-5` | yes |
+| `claude-opus-4-8` | `eu.anthropic.claude-opus-4-8` | yes |
+| `claude-haiku-4-5` | `eu.anthropic.claude-haiku-4-5-20251001-v1:0` | yes |
+| `claude-sonnet-4-6` | `eu.anthropic.claude-sonnet-4-6` | no — rollback only |
+| `claude-opus-4-6` | `eu.anthropic.claude-opus-4-6-v1` | no — rollback only |
 
-Region defaults to `eu-west-1` (overridable via `AWS_REGION` env var). Temperature and max tokens come from the manifest's `model.constraints`, with caller-provided defaults as fallback.
+Note the three different id conventions: dated + `-v1:0` (Haiku), bare `-v1` (Opus 4.6, per
+SIO-872 — the unsuffixed form is not a real Bedrock id and was silently rejected at invoke
+time), and fully dateless (the rest). All five were verified against
+`aws bedrock list-inference-profiles` on 2026-07-26.
+
+An entry marked "rollback only" has no committed probe report and **no manifest may reference
+it** — a test enforces that (see the Model Upgrade Checklist). Region defaults to
+`eu-central-1` (overridable via `AWS_REGION`). Temperature and max tokens come from the
+manifest's `model.constraints`, with caller-provided defaults as fallback.
+
+`resolveBedrockConfig()` always returns a `temperature` on `BedrockModelConfig`. Dropping it is a
+separate step: `buildChatModel()` in `packages/agent/src/llm.ts` omits the field when constructing
+`ChatBedrockConverse` for a model whose record says `acceptsTemperature: false`. The returned
+config contract is unchanged.
 
 **`getRecursionLimit(maxTurns): number`** converts the manifest's `runtime.max_turns` into a LangGraph recursion limit (maxTurns * 2, default 50).
 

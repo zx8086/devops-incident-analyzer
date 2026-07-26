@@ -7,6 +7,7 @@ import { getLogger } from "@devops-agent/observability";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 import { createLlm } from "./llm.ts";
+import { parseLlmJson } from "./llm-json.ts";
 import { getToolsForDataSource } from "./mcp-bridge.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import type { AgentStateType } from "./state.ts";
@@ -195,34 +196,33 @@ Rules:
 	);
 
 	const text = extractTextFromContent(response.content);
-	const jsonMatch = text.match(/\{[\s\S]*\}/);
-	if (!jsonMatch) {
-		logger.warn({ rawResponse: text.slice(0, 200) }, "Router returned no JSON; defaulting to ambiguous");
-		return { kind: "ambiguous" };
-	}
-	try {
-		const parsed = ClassificationSchema.parse(JSON.parse(jsonMatch[0]));
-		if (parsed.kind === "explicit") {
-			// Filter to only known IDs -- the LLM is told not to invent, but trust+verify.
-			const knownSet = new Set(available);
-			const filtered = parsed.estates.filter((id) => knownSet.has(id));
-			if (filtered.length === 0) {
-				logger.warn(
-					{ requested: parsed.estates, available },
-					"Router returned only unknown estate IDs; falling back to ambiguous",
-				);
-				return { kind: "ambiguous" };
-			}
-			return { kind: "explicit", estates: filtered };
-		}
-		return parsed;
-	} catch (err) {
+	const result = parseLlmJson(text, ClassificationSchema);
+	if (!result.ok) {
+		// SIO-1222 review: log the LENGTH, never the raw text. The router's response can echo the
+		// user's incident query back (hostnames, IPs, emails), and every sibling parseLlmJson call
+		// site logs only reason/message. Raw model output must go through redactPiiContent or not
+		// be logged at all.
 		logger.warn(
-			{ error: err instanceof Error ? err.message : String(err), rawResponse: text.slice(0, 200) },
-			"Router JSON failed schema; defaulting to ambiguous",
+			{ reason: result.reason, detail: result.message, responseLength: text.length },
+			"Router JSON unusable; defaulting to ambiguous",
 		);
 		return { kind: "ambiguous" };
 	}
+	const parsed = result.data;
+	if (parsed.kind === "explicit") {
+		// Filter to only known IDs -- the LLM is told not to invent, but trust+verify.
+		const knownSet = new Set(available);
+		const filtered = parsed.estates.filter((id) => knownSet.has(id));
+		if (filtered.length === 0) {
+			logger.warn(
+				{ requested: parsed.estates, available },
+				"Router returned only unknown estate IDs; falling back to ambiguous",
+			);
+			return { kind: "ambiguous" };
+		}
+		return { kind: "explicit", estates: filtered };
+	}
+	return parsed;
 }
 
 export async function awsEstateRouter(

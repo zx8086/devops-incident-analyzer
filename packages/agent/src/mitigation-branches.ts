@@ -5,12 +5,21 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 import { getConfidenceThreshold } from "./confidence-gate.ts";
 import { createLlm, DeadlineExceededError, type InvokableLlm, invokeWithDeadline, type LlmRole } from "./llm.ts";
+import { parseLlmJson } from "./llm-json.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import type { AgentStateType, MitigationFragment } from "./state.ts";
 
 const logger = getLogger("agent:mitigation-branches");
 
-const BranchOutputSchema = z.object({ items: z.array(z.string()) });
+// SIO-1221: `items` was bare and required, so `"items": null` -- or a missing key on an
+// otherwise-well-formed envelope -- threw and discarded the branch. An empty list is the
+// same user-visible outcome as the parse-failure fallback, so tolerate it instead.
+const BranchOutputSchema = z.object({
+	items: z
+		.array(z.string())
+		.nullish()
+		.transform((v) => v ?? []),
+});
 
 type BranchKind = MitigationFragment["kind"];
 
@@ -110,15 +119,17 @@ async function runBranch(
 		);
 
 		const text = extractTextFromContent(response.content);
-		const jsonMatch = text.match(/\{[\s\S]*\}/);
-		if (!jsonMatch) {
-			logger.warn({ kind: spec.kind }, "Failed to parse mitigation branch JSON");
+		const result = parseLlmJson(text, BranchOutputSchema);
+		if (!result.ok) {
+			logger.warn(
+				{ kind: spec.kind, reason: result.reason, detail: result.message },
+				"Failed to parse mitigation branch JSON",
+			);
 			return { mitigationFragments: [{ kind: spec.kind, items: [] }] };
 		}
 
-		const parsed = BranchOutputSchema.parse(JSON.parse(jsonMatch[0]));
-		logger.info({ kind: spec.kind, count: parsed.items.length }, "Mitigation branch produced items");
-		return { mitigationFragments: [{ kind: spec.kind, items: parsed.items }] };
+		logger.info({ kind: spec.kind, count: result.data.items.length }, "Mitigation branch produced items");
+		return { mitigationFragments: [{ kind: spec.kind, items: result.data.items }] };
 	} catch (error) {
 		if (error instanceof DeadlineExceededError) {
 			logger.warn(

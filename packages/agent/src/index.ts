@@ -64,6 +64,17 @@ export {
 	type TeardownContext,
 } from "./lifecycle.ts";
 export { createLlm, type LlmRole } from "./llm.ts";
+// SIO-1221: the shared chokepoint for parsing an LLM's JSON response. Exported so callers
+// outside packages/agent (and future nodes) reach the sanitizer instead of hand-rolling a
+// regex + bare JSON.parse, which is how SIO-1219 stayed live at twelve of thirteen sites.
+export {
+	extractJsonBlock,
+	type JsonShape,
+	type LlmJsonFailureReason,
+	type LlmJsonResult,
+	parseLlmJson,
+	sanitizeJsonControlChars,
+} from "./llm-json.ts";
 export {
 	createMcpClient,
 	type EmbeddingsNotReadyProject,

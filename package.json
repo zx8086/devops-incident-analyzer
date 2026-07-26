@@ -61,7 +61,8 @@
 		"fallow:audit": "npx -y fallow audit",
 		"fallow:dead": "npx -y fallow dead-code",
 		"fallow:dupes": "npx -y fallow dupes",
-		"fallow:health": "npx -y fallow health"
+		"fallow:health": "npx -y fallow health",
+		"model:probe": "bun run --filter @devops-agent/agent model:probe"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "catalog:dev",

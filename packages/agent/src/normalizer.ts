@@ -6,6 +6,7 @@ import { DATA_SOURCE_IDS } from "@devops-agent/shared";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 import { createLlm } from "./llm.ts";
+import { parseLlmJson } from "./llm-json.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import type { AgentStateType } from "./state.ts";
 
@@ -49,52 +50,10 @@ const NormalizationSchema = z.object({
 		.transform((v) => v ?? undefined),
 });
 
-// SIO-1220: Claude Sonnet 5 frequently echoes the user's raw query verbatim into a JSON
-// string field (e.g. an extractedMetrics.value copied from a pasted multi-line error
-// message) without escaping embedded control characters. JSON.parse correctly rejects a
-// raw \n/\r/\t inside a string literal per spec ("bad control character" / "unterminated
-// string") -- the LLM's response is malformed JSON, not this parser being too strict.
-// Escape control characters that appear INSIDE a string literal (tracking quote state and
-// backslash-escapes char-by-char) before parsing, so a normally-shaped envelope with
-// unescaped whitespace inside a value no longer fails the whole normalization turn.
-export function sanitizeJsonControlChars(text: string): string {
-	let result = "";
-	let inString = false;
-	let escaped = false;
-	for (const ch of text) {
-		if (escaped) {
-			result += ch;
-			escaped = false;
-			continue;
-		}
-		if (ch === "\\" && inString) {
-			result += ch;
-			escaped = true;
-			continue;
-		}
-		if (ch === '"') {
-			inString = !inString;
-			result += ch;
-			continue;
-		}
-		if (inString) {
-			if (ch === "\n") {
-				result += "\\n";
-				continue;
-			}
-			if (ch === "\r") {
-				result += "\\r";
-				continue;
-			}
-			if (ch === "\t") {
-				result += "\\t";
-				continue;
-			}
-		}
-		result += ch;
-	}
-	return result;
-}
+// SIO-1221: moved to llm-json.ts so all thirteen LLM-JSON parse sites share it, not just
+// this one. Re-exported here because normalizer-sanitize.test.ts and prior callers import
+// it from this module.
+export { sanitizeJsonControlChars } from "./llm-json.ts";
 
 const NORMALIZER_PROMPT = `Normalize the user's incident query into structured data for downstream analysis.
 
@@ -188,10 +147,9 @@ export async function normalizeIncident(
 		);
 
 		const text = extractTextFromContent(response.content);
-		const jsonMatch = text.match(/\{[\s\S]*\}/);
-		if (jsonMatch) {
-			const parsed = NormalizationSchema.parse(JSON.parse(sanitizeJsonControlChars(jsonMatch[0])));
-			const incident: NormalizedIncident = { ...parsed };
+		const result = parseLlmJson(text, NormalizationSchema);
+		if (result.ok) {
+			const incident: NormalizedIncident = { ...result.data };
 			// SIO-750: establish the investigation focus on the first complex
 			// turn. The sticky reducer in state.ts preserves the existing focus
 			// across later turns; we only build a fresh one here when none is
@@ -210,6 +168,9 @@ export async function normalizeIncident(
 			);
 			return { normalizedIncident: incident, investigationFocus };
 		}
+		// SIO-1221: parseLlmJson never throws, so log the reason here rather than
+		// relying on the catch below (which now only sees invoke-level failures).
+		logger.warn({ reason: result.reason, detail: result.message }, "Normalization failed, continuing without");
 	} catch (error) {
 		logger.warn(
 			{ error: error instanceof Error ? error.message : String(error) },

@@ -213,7 +213,9 @@ export async function classify(state: AgentStateType, config?: RunnableConfig): 
 			: [new SystemMessage(CLASSIFIER_PROMPT), new HumanMessage(trimmed)];
 
 		const response = await llm.invoke(llmMessages, config);
-		const content = typeof response.content === "string" ? response.content.trim().toUpperCase() : "";
+		// SIO-1222: an empty string made .includes("SIMPLE") false, routing every query to the
+		// expensive complex path AND caching that wrong verdict.
+		const content = extractTextFromContent(response.content).trim().toUpperCase();
 		const classification = content.includes("SIMPLE") ? ("simple" as const) : ("complex" as const);
 
 		if (!hasContext) {

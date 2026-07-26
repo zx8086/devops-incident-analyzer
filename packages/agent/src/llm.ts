@@ -62,10 +62,18 @@ export type LlmRole =
 	// claims against the flagging datasource's returned data before the cap applies.
 	| "absenceJudge";
 
-const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
+// SIO-1224: exported so the model-conformance probe and the long-form truncation test read
+// this exact table rather than duplicating the numbers -- a duplicate would drift silently,
+// which is the failure mode this whole hardening series exists to remove.
+export const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	orchestrator: {},
 	classifier: { temperature: 0 },
-	subAgent: {},
+	// SIO-1225: was {} -- inheriting the orchestrator manifest's max_tokens: 4096. SIO-1224's
+	// probe measured Sonnet 5 (which is what this role resolves to) emitting ~3,900-4,300 output
+	// tokens for a full report and TRUNCATING at 4096, where Haiku 4.5 finished the same report in
+	// 3,289 and Opus 4.8 in 3,094. A truncated sub-agent report is the SIO-649 failure one layer down: the
+	// findings block is cut off and the aggregator silently correlates less than was found.
+	subAgent: { maxTokens: 8192 },
 	// SIO-649: Multi-deployment elastic fan-out produces reports with a per-deployment
 	// findings block (10 deployments = 10 tables) plus a mandatory trailing Confidence line.
 	// Default maxTokens was truncating the end of the report before the confidence line,
@@ -83,21 +91,66 @@ const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	runbookSelector: { temperature: 0, maxTokens: 512 },
 	awsEstateRouter: { temperature: 0, maxTokens: 256 },
 	// elastic-iac: deterministic intent/guard parsing; the drafter writes Terraform diffs.
-	iacPlanner: { temperature: 0, maxTokens: 2048 },
+	// SIO-1225: iacPlanner raised 2048 -> 8192. Its intent JSON embeds VERBATIM user-pasted
+	// documents (ilmFullPolicy, phasesPatch, userSettingsYaml, ingest-pipeline bodies), so its
+	// output scales with whatever the operator pasted -- the least bounded output in the repo,
+	// and it had the smallest budget. Truncation here does not error: parseIntentJson falls
+	// through to "Which cluster and what change should I make?", silently turning a valid
+	// gitops request into a re-ask.
+	iacPlanner: { temperature: 0, maxTokens: 8192 },
 	iacDrafter: { temperature: 0.1, maxTokens: 8192 },
 	iacReviewer: { temperature: 0, maxTokens: 4096 },
 	iacClassifier: { temperature: 0, maxTokens: 16 },
-	iacReader: { temperature: 0, maxTokens: 4096 },
+	// SIO-1225: 4096 -> 8192. Primary is Opus 4.8 (measured floor 4096) but the manifest
+	// FALLBACK is Sonnet 5 (floor 8192), so the old budget truncated a long info answer
+	// whenever the chain failed over -- the failure mode a fallback is supposed to prevent.
+	iacReader: { temperature: 0, maxTokens: 8192 },
 	// SIO-1015: deterministic worthiness judgment + a compact skill proposal as JSON.
 	skillLearner: { temperature: 0, maxTokens: 1024 },
 	// SIO-1126: deterministic distillation of a resolved ticket into a structured
 	// LearningProposal (root cause + facts as JSON).
-	hilDistiller: { temperature: 0, maxTokens: 4096 },
+	// SIO-1225: 4096 -> 8192. The proposal carries a root cause, up to 10 bindings, 3 heuristics
+	// and 6 memory facts, each with 1-3 VERBATIM evidence quotes from the ticket, and it runs on
+	// Sonnet 5 (measured floor 8192). A truncated proposal fails the JSON parse and the user is
+	// told the ticket "could not be distilled".
+	hilDistiller: { temperature: 0, maxTokens: 8192 },
 	// SIO-1149: deterministic per-bullet verdicts as compact JSON.
 	gapsJudge: { temperature: 0, maxTokens: 1024 },
 	// SIO-1158: deterministic per-claim verdicts as compact JSON.
 	absenceJudge: { temperature: 0, maxTokens: 1024 },
 };
+
+// SIO-1224: roles whose output is prose or a complete JSON document that must not be cut off
+// mid-generation. Their effective maxTokens has to clear the active model's measured
+// long-form floor, or the answer truncates -- the exact SIO-649 failure (a report cut before
+// its mandatory trailing Confidence line, leaving the HITL gate a 0 score), which a more
+// verbose model reproduces at a budget that used to be ample.
+//
+// Membership is narrow ON PURPOSE. SIO-1224's probe measured Sonnet 5 emitting ~3,900-4,300
+// output tokens for a full six-section incident report and truncating at a 4096 cap, making 8192
+// the smallest CONFIGURED budget that clears it. Applying that floor to a role that emits a compact JSON envelope
+// would inflate its budget for nothing, so only roles whose output is genuinely a long
+// document belong here.
+//
+// Excluded as compact-output, with their effective budgets: normalizer (4096 manifest),
+// entityExtractor (4096), mitigation + mitigate* (4096, bullet lists), skillLearner (1024,
+// a fixed five-field proposal capped at "1-4 sentences"), classifier, iacClassifier (16),
+// awsEstateRouter (256), followUp (256), actionProposal (512), runbookSelector (512),
+// gapsJudge (1024), absenceJudge (1024). `orchestrator` and `iacReviewer` are excluded because
+// they are declared but never constructed -- verified: no createLlm("orchestrator") or
+// createLlm("iacReviewer") call site exists outside tests, so budgeting them proves nothing.
+export const LONG_FORM_ROLES: ReadonlySet<LlmRole> = new Set<LlmRole>([
+	"aggregator",
+	"responder",
+	"subAgent",
+	"iacDrafter",
+	"iacReader",
+	"hilDistiller",
+	// The sharpest case: iacPlanner's intent JSON embeds VERBATIM user-pasted documents
+	// (ilmFullPolicy, phasesPatch, userSettingsYaml), so its output scales with the paste. It
+	// held the lowest budget of any role in this set (2048) until SIO-1225 raised it to 8192.
+	"iacPlanner",
+]);
 
 // SIO-739: Per-role wall-clock deadline for non-streaming llm.invoke calls. A
 // value of 0 disables the per-call timer for that role (the graph-level signal
@@ -162,26 +215,49 @@ export class DeadlineExceededError extends Error {
 	}
 }
 
-// SIO-1214: Claude 4.7+/5-generation models (Sonnet 5, Opus 4.7, Opus 4.8, Fable 5,
-// Mythos) reject `temperature` (and `top_p`/`top_k`) outright -- "temperature is
-// deprecated for this model" -- rather than accepting and ignoring it like prior
-// generations. Match by substring (not endsWith) so this still catches versioned/dated
-// Bedrock ids (e.g. a future eu.anthropic.claude-sonnet-5-20260601-v1:0) if MODEL_MAP
-// ever adds one; every current entry that must NOT get temperature is listed
-// explicitly here since a false negative (sending it) hard-fails every call.
-const NO_TEMPERATURE_MODEL_MARKERS = [
-	"claude-sonnet-5",
-	"claude-opus-4-7",
-	"claude-opus-4-8",
-	"claude-fable-5",
-	"claude-mythos-5",
-];
-
-export function modelAcceptsTemperature(bedrockModelId: string): boolean {
-	return !NO_TEMPERATURE_MODEL_MARKERS.some((marker) => bedrockModelId.includes(marker));
+// SIO-1214: Claude's 4.7+/5 generation rejects `temperature` outright -- "`temperature` is
+// deprecated for this model" -- rather than accepting and ignoring it like prior generations,
+// so sending it hard-fails every call for that role.
+//
+// SIO-1223: this used to be a local NO_TEMPERATURE_MODEL_MARKERS substring list, a SECOND model
+// registry living in a different package from MODEL_MAP with nothing keeping the two in step --
+// SIO-1213 added to one, production broke, and SIO-1214 retrofitted the other. The capability is
+// now declared once, per model, in MODEL_REGISTRY and carried on the resolved config.
+// SIO-1226: token accounting. Before this, nothing in the repo could see LLM token use or
+// cost: buildChatModel passed no callbacks and packages/observability has no usage surface, so
+// the only "budget" was graph-budget.ts's wall clock. A per-token price change or a verbosity
+// regression -- exactly what SIO-1213 introduced -- was therefore unobservable and ungated; we
+// could infer the model change was expensive but never measure it.
+//
+// Attached here rather than in invokeWithDeadline because only 8 call sites use that helper;
+// the highest-token roles (aggregator and responder at 16384, and subAgent across up to 40
+// ReAct iterations) call invoke directly or run inside createReactAgent. A callback on the
+// model instance covers every path, streaming included.
+//
+// Reads usage from the two places LangChain has put it, and stays silent rather than throwing
+// if a future version moves it again -- telemetry must never break an answer.
+function logTokenUsage(role: LlmRole, model: string, output: unknown): void {
+	const result = output as {
+		llmOutput?: { usage?: Record<string, unknown> };
+		generations?: Array<Array<{ message?: { usage_metadata?: Record<string, unknown> } }>>;
+	};
+	const usage = result.generations?.[0]?.[0]?.message?.usage_metadata ?? result.llmOutput?.usage;
+	if (!usage) return;
+	const num = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
+	logger.info(
+		{
+			role,
+			model,
+			inputTokens: num(usage.input_tokens) ?? num(usage.inputTokens),
+			outputTokens: num(usage.output_tokens) ?? num(usage.outputTokens),
+			totalTokens: num(usage.total_tokens) ?? num(usage.totalTokens),
+		},
+		"LLM token usage",
+	);
 }
 
 function buildChatModel(
+	role: LlmRole,
 	bedrockConfig: BedrockModelConfig,
 	overrides: Partial<BedrockModelConfig>,
 ): ChatBedrockConverse {
@@ -190,7 +266,18 @@ function buildChatModel(
 		model: bedrockConfig.model,
 		region: bedrockConfig.region,
 		maxTokens: overrides.maxTokens ?? bedrockConfig.maxTokens,
-		...(modelAcceptsTemperature(bedrockConfig.model) ? { temperature } : {}),
+		...(bedrockConfig.capabilities.acceptsTemperature ? { temperature } : {}),
+		callbacks: [
+			{
+				handleLLMEnd: (output: unknown) => {
+					try {
+						logTokenUsage(role, bedrockConfig.model, output);
+					} catch {
+						// never let telemetry break a turn
+					}
+				},
+			},
+		],
 	});
 }
 
@@ -204,9 +291,14 @@ const TOOL_BINDING_ROLES: ReadonlySet<LlmRole> = new Set(["subAgent"]);
 // otherwise. Rollout shipped classifier-only; gapsJudge (SIO-1149) is light by design
 // (a per-bullet boolean verdict needs no frontier model). The others are eligible to
 // be flipped to light per-role via AGENT_LLM_TIER_<ROLE>=light after a LangSmith
-// replay eval, without a code change. Every tierable role is invoke-only (not in
-// TOOL_BINDING_ROLES), so withFallbacks is unchanged and a light-model failure falls
-// UP to the standard manifest model.
+// replay eval, without a code change.
+//
+// SIO-1225 CORRECTION: this comment previously claimed "a light-model failure falls UP to the
+// standard manifest model". It does not. The light tier resolves its config from the borrowed
+// elastic-agent sub-agent manifest, and resolveFallbackConfig reads the fallback list from that
+// SAME config -- the sub-agent manifests declare no `fallback:` key, so it returns null and
+// light-tier roles have NO fallback at all. Flipping a role to light therefore trades a
+// Sonnet-5-with-Haiku-fallback for a bare Haiku.
 const DEFAULT_LIGHTWEIGHT_ROLES: ReadonlySet<LlmRole> = new Set(["classifier", "gapsJudge", "absenceJudge"]);
 const TIERABLE_ROLES: ReadonlySet<LlmRole> = new Set([
 	"classifier",
@@ -239,7 +331,7 @@ export function createLlm(role: LlmRole, agentName = "incident-analyzer"): ChatB
 
 	const bedrockConfig = resolveBedrockConfig(modelConfig);
 	const overrides = ROLE_OVERRIDES[role];
-	const primary = buildChatModel(bedrockConfig, overrides);
+	const primary = buildChatModel(role, bedrockConfig, overrides);
 
 	// SIO-621: Wrap with fallback model from gitagent manifest if available.
 	// Skip for tool-binding roles (subAgent) because createReactAgent requires
@@ -255,7 +347,7 @@ export function createLlm(role: LlmRole, agentName = "incident-analyzer"): ChatB
 		return primary;
 	}
 
-	const fallback = buildChatModel(fallbackConfig, overrides);
+	const fallback = buildChatModel(role, fallbackConfig, overrides);
 	logger.info(
 		{ role, tier: isLightweight ? "light" : "standard", model: bedrockConfig.model, fallback: fallbackConfig.model },
 		"LLM model selected",
@@ -278,14 +370,14 @@ export function createLlmWithTools(
 	const overrides = ROLE_OVERRIDES[role];
 
 	const bedrockConfig = resolveBedrockConfig(modelConfig);
-	const primary = buildChatModel(bedrockConfig, overrides).bindTools(tools);
+	const primary = buildChatModel(role, bedrockConfig, overrides).bindTools(tools);
 	const fallbackConfig = resolveFallbackConfig(modelConfig);
 	if (!fallbackConfig) {
 		logger.info({ role, model: bedrockConfig.model }, "LLM model selected");
 		return primary as unknown as Runnable<BaseMessage[], BaseMessage>;
 	}
 
-	const fallback = buildChatModel(fallbackConfig, overrides).bindTools(tools);
+	const fallback = buildChatModel(role, fallbackConfig, overrides).bindTools(tools);
 	logger.info({ role, model: bedrockConfig.model, fallback: fallbackConfig.model }, "LLM model selected");
 	return primary.withFallbacks({ fallbacks: [fallback] }) as unknown as Runnable<BaseMessage[], BaseMessage>;
 }

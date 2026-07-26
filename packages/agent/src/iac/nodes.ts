@@ -13,6 +13,7 @@ import { interrupt } from "@langchain/langgraph";
 import { isMap, parseDocument } from "yaml";
 import { z } from "zod";
 import { createLlm, createLlmWithTools } from "../llm.ts";
+import { extractJsonBlock, sanitizeJsonControlChars } from "../llm-json.ts";
 import { getConnectedServers, getToolsForDataSource } from "../mcp-bridge.ts";
 import {
 	dedupeHitsBy,
@@ -95,7 +96,10 @@ const IAC_SERVER = "elastic-iac-mcp";
 export function lastHumanText(state: IacStateType): string {
 	for (let i = state.messages.length - 1; i >= 0; i--) {
 		const m = state.messages[i];
-		if (m?.getType() === "human") return typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+		// SIO-1222: was JSON.stringify(m.content) for the non-string case, which fed a raw
+		// JSON blob of content blocks (attachment payloads included) into the iacPlanner /
+		// iacClassifier / graph-knowledge prompts instead of the user's actual question.
+		if (m?.getType() === "human") return extractTextFromContent(m.content);
 	}
 	return "";
 }
@@ -312,10 +316,16 @@ const IntentSchema = z.object({
 // Extract the planner's JSON object into a validated IacRequest, falling back to a
 // safe clarify-default on malformed output. (Exported for unit testing.)
 export function parseIntentJson(raw: string): IacRequest {
-	const match = raw.match(/\{[\s\S]*\}/);
-	if (match) {
+	// SIO-1221: sanitize control characters before parsing. This planner has verbatim-copy
+	// fields (ilmFullPolicy, phasesPatch, userSettingsYaml, ingest-pipeline bodies), so a
+	// user-pasted multi-line policy is echoed straight into a JSON string value -- exactly
+	// SIO-1219's failure shape, which here degraded a valid gitops request into a re-ask
+	// loop rather than crashing. Uses the shared extract+sanitize helpers rather than
+	// parseLlmJson so the ~180-line normalization body below keeps its indentation.
+	const extracted = extractJsonBlock(raw);
+	if (extracted) {
 		try {
-			const parsed = IntentSchema.safeParse(JSON.parse(match[0]));
+			const parsed = IntentSchema.safeParse(JSON.parse(sanitizeJsonControlChars(extracted)));
 			if (parsed.success) {
 				const p = parsed.data;
 				// Normalize the planner's explicit nulls to undefined for the IacRequest shape.

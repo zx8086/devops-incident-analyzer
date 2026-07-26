@@ -26,6 +26,8 @@ import type { DataSourceResult } from "@devops-agent/shared";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { z } from "zod";
 import { createLlm, type InvokableLlm, invokeWithDeadline } from "./llm.ts";
+import { parseLlmJson } from "./llm-json.ts";
+import { extractTextFromContent } from "./message-utils.ts";
 import { truncateToolOutput } from "./sub-agent-truncate-tool-output.ts";
 
 const logger = getLogger("agent:absence-judge");
@@ -142,7 +144,7 @@ export async function judgeContradictedAbsenceClaims(
 			config,
 		);
 		return mapVerdicts(
-			typeof result.content === "string" ? result.content : "",
+			extractTextFromContent(result.content),
 			claims.length,
 			(raw) => {
 				const parsed = AbsenceJudgeResponseSchema.safeParse(raw);
@@ -171,12 +173,20 @@ function mapVerdicts(
 	extract: (raw: unknown) => Array<{ index: number; keep: boolean }> | null,
 	label: string,
 ): boolean[] | null {
-	const match = content.match(/\{[\s\S]*\}/);
-	if (!match) {
-		logger.warn({ contentLength: content.length }, `${label} returned no JSON object`);
+	// SIO-1221: this JSON.parse used to be bare, so a SyntaxError propagated to the
+	// callers' catch -- where `if (config?.signal?.aborted) throw error` re-threw it as
+	// if it were a caller cancellation whenever the request signal happened to be
+	// aborted. parseLlmJson never throws, so malformed JSON now always fails closed here
+	// and only genuine invoke-level errors reach that abort check.
+	const parsed = parseLlmJson(content, z.unknown());
+	if (!parsed.ok) {
+		logger.warn(
+			{ reason: parsed.reason, detail: parsed.message, contentLength: content.length },
+			`${label} response unusable`,
+		);
 		return null;
 	}
-	const verdicts = extract(JSON.parse(match[0]));
+	const verdicts = extract(parsed.data);
 	if (verdicts === null) {
 		logger.warn({ label }, `${label} response failed schema validation`);
 		return null;
@@ -227,7 +237,7 @@ export async function judgeOvergeneralizedAbsenceClaims(
 			config,
 		);
 		return mapVerdicts(
-			typeof result.content === "string" ? result.content : "",
+			extractTextFromContent(result.content),
 			lines.length,
 			(raw) => {
 				const parsed = OvergeneralizedJudgeResponseSchema.safeParse(raw);

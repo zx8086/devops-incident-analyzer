@@ -14,6 +14,8 @@ import { getLogger } from "@devops-agent/observability";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { z } from "zod";
 import { createLlm, type InvokableLlm, invokeWithDeadline } from "./llm.ts";
+import { parseLlmJson } from "./llm-json.ts";
+import { extractTextFromContent } from "./message-utils.ts";
 
 const logger = getLogger("agent:gaps-judge");
 
@@ -75,16 +77,17 @@ export async function judgeDegradingGapBullets(
 			[new SystemMessage(JUDGE_PROMPT), new HumanMessage(`Bullets:\n${numbered}`)],
 			config,
 		);
-		const content = typeof result.content === "string" ? result.content : "";
-		// Tolerate fenced/garnished JSON: pull the first {...} block (skill-learner idiom).
-		const match = content.match(/\{[\s\S]*\}/);
-		if (!match) {
-			logger.warn({ contentLength: content.length }, "gaps judge returned no JSON object");
-			return null;
-		}
-		const parsed = GapsJudgeResponseSchema.safeParse(JSON.parse(match[0]));
-		if (!parsed.success) {
-			logger.warn({ issueCount: parsed.error.issues.length }, "gaps judge response failed schema validation");
+		// SIO-1222: was `typeof result.content === "string" ? ... : ""`, which silently
+		// degraded a block-array response to an empty string -- indistinguishable from "the
+		// judge returned nothing", so the veto would fail closed forever with no signal.
+		const content = extractTextFromContent(result.content);
+		// Tolerate fenced/garnished JSON and control chars echoed into string values.
+		const parsed = parseLlmJson(content, GapsJudgeResponseSchema);
+		if (!parsed.ok) {
+			logger.warn(
+				{ reason: parsed.reason, detail: parsed.message, contentLength: content.length },
+				"gaps judge response unusable",
+			);
 			return null;
 		}
 		// Exactly one verdict per bullet, indexes in range, no duplicates -- anything

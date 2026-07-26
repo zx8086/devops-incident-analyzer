@@ -5,6 +5,7 @@ import {
 	buildGraph,
 	buildIacGraph,
 	createMcpClient,
+	extractTextFromContent,
 	GRAPH_DEADLINE_KEY,
 	getAgent,
 	getAgentByName,
@@ -525,7 +526,11 @@ async function readCompletedTurn(ctx: { agentName: string; threadId: string }): 
 
 		// Compact transcript: the last human turn + the last assistant report. Each
 		// message's content can be a string or content-block array; coerce to text.
-		const text = (m: BaseMessage): string => (typeof m.content === "string" ? m.content : JSON.stringify(m.content));
+		// SIO-1222: was JSON.stringify for the array case, so on any attachment turn the
+		// transcript carried a JSON dump of the content blocks -- base64 image/PDF payloads
+		// included -- into the skill-learner judge prompt and, if judged worthy, into a
+		// durably persisted proposal. extractTextFromContent keeps only the text blocks.
+		const text = (m: BaseMessage): string => extractTextFromContent(m.content);
 		const lastHuman = [...messages].reverse().find((m) => m.getType() === "human");
 		const lastAi = [...messages].reverse().find((m) => m.getType() === "ai");
 		const transcript = [lastHuman && `User: ${text(lastHuman)}`, lastAi && `Assistant: ${text(lastAi)}`]
@@ -623,7 +628,13 @@ export async function getLastAssistantText(threadId: string, agentName = "incide
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const m = messages[i];
 		if (m?.getType?.() === "ai") {
-			return typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+			// SIO-1222: was JSON.stringify for the array case. This is the user-visible answer
+			// for the elastic-iac and HIL-learning graphs (neither streams tokens), so a
+			// block-array AIMessage would render a raw JSON array -- reasoning blocks and all --
+			// straight into the chat bubble. Latent today only because every iac/learn node
+			// reconstructs its AIMessage from extracted text; one node appending a raw model
+			// response would expose it.
+			return extractTextFromContent(m.content);
 		}
 	}
 	return "";

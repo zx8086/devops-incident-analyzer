@@ -18,6 +18,7 @@
 import { getLogger } from "@devops-agent/observability";
 import type { InvestigationFocus, NormalizedIncident } from "@devops-agent/shared";
 import { interrupt } from "@langchain/langgraph";
+import { extractTextFromContent } from "./message-utils.ts";
 import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:topic-shift");
@@ -37,7 +38,11 @@ function buildCandidate(
 	const services = incident.affectedServices?.map((s) => s.name) ?? [];
 	const severity = incident.severity ?? "unspecified";
 	const lastMessage = state.messages.at(-1);
-	const query = lastMessage ? String((lastMessage as { content: unknown }).content ?? "") : "";
+	// SIO-1222: was String(content), the last surviving instance of the SIO-1217 idiom.
+	// On any attachment turn the last HumanMessage carries block-array content (built in
+	// apps/web/src/lib/server/agent.ts), so String() yielded "[object Object]" verbatim in
+	// the user-facing topic-shift banner and in the persisted investigationFocus.summary.
+	const query = lastMessage ? extractTextFromContent(lastMessage.content) : "";
 	const querySnippet = query.trim().replace(/\s+/g, " ").slice(0, 80);
 	const summary =
 		services.length > 0
