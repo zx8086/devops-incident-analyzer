@@ -66,6 +66,20 @@ mock.module("@devops-agent/agent", () => ({
 			.map((block) => block.text)
 			.join("\n");
 	},
+	// SIO-1218: sse-pump.ts calls this (not extractTextFromContent) on each streamed delta
+	// chunk. Same block extraction, but concatenated with NO separator -- mirror that exactly
+	// so this mock can't mask the mid-word-newline regression it exists to prevent.
+	extractStreamDeltaText: (content: unknown): string => {
+		if (typeof content === "string") return content;
+		if (!Array.isArray(content)) return String(content);
+		return content
+			.filter(
+				(block): block is { type: "text"; text: string } =>
+					block !== null && typeof block === "object" && block.type === "text" && typeof block.text === "string",
+			)
+			.map((block) => block.text)
+			.join("");
+	},
 }));
 
 const sharedLogger = {
@@ -334,6 +348,46 @@ describe("POST /api/agent/stream — SSE stream", () => {
 		expect(messageContents).not.toContain("[object Object]");
 		expect(messageContents).not.toContain("internal reasoning");
 		expect(messageContents).toBe("Root cause: timeout.");
+	});
+
+	// SIO-1218: a single streamed delta chunk can carry more than one array block (Bedrock
+	// Converse batches adjacent text deltas under adaptive thinking). Joining those with "\n"
+	// (correct for a COMPLETE message's distinct blocks) spliced a newline into the middle of
+	// a word in the live-streamed bubble -- e.g. "Se\nasons" instead of "Seasons".
+	test("concatenates same-chunk delta blocks with no separator, never a mid-word newline", async () => {
+		invokeAgentMock.mockImplementationOnce(async () => ({
+			async *[Symbol.asyncIterator]() {
+				yield {
+					event: "on_chat_model_stream",
+					tags: ["aggregate"],
+					metadata: { langgraph_node: "aggregate" },
+					data: {
+						chunk: {
+							content: [
+								{ type: "text", text: "prana-order-service -- Se" },
+								{ type: "text", text: "asons API" },
+							],
+						},
+					},
+				};
+			},
+		}));
+
+		const response = await POST(
+			makeRequest({
+				messages: [{ role: "user", content: "ping" }],
+				threadId: "thread-delta-multiblock",
+			}),
+		);
+
+		const events = await collectSse(response);
+		const messageContents = events
+			.filter((e) => e.type === "message")
+			.map((e) => e.content)
+			.join("");
+
+		expect(messageContents).toBe("prana-order-service -- Seasons API");
+		expect(messageContents).not.toContain("\n");
 	});
 
 	test("only forwards model stream chunks tagged for output nodes", async () => {

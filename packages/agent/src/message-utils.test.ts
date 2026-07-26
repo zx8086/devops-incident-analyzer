@@ -1,6 +1,6 @@
 // agent/src/message-utils.test.ts
 import { describe, expect, test } from "bun:test";
-import { extractTextFromContent } from "./message-utils.ts";
+import { extractStreamDeltaText, extractTextFromContent } from "./message-utils.ts";
 
 describe("extractTextFromContent (SIO-1217)", () => {
 	test("returns a plain string unchanged", () => {
@@ -63,5 +63,53 @@ describe("extractTextFromContent (SIO-1217)", () => {
 
 	test("extracts text from a single content block not wrapped in an array", () => {
 		expect(extractTextFromContent({ type: "text", text: "lone block" })).toBe("lone block");
+	});
+});
+
+describe("extractStreamDeltaText (SIO-1218)", () => {
+	// Regression: sse-pump.ts calls extractTextFromContent on each streamed
+	// AIMessageChunk.content delta, not a complete message. When a single delta
+	// chunk carries more than one array block (Bedrock Converse batches adjacent
+	// text deltas under the 4.7+/5-generation models' always-on adaptive thinking),
+	// extractTextFromContent's "\n" join -- correct for a *complete* message's
+	// distinct logical blocks -- splices a newline into the middle of a word,
+	// visibly garbling the live-streamed bubble (e.g. "Se\nasons" instead of
+	// "Seasons"). Streamed deltas must concatenate directly, with no separator.
+	test("concatenates same-chunk delta blocks with no separator, never mid-word newline", () => {
+		const chunk = [
+			{ type: "text", text: "ana-order-service -- Se" },
+			{ type: "text", text: "asons API" },
+		];
+		const result = extractStreamDeltaText(chunk);
+		expect(result).toBe("ana-order-service -- Seasons API");
+		expect(result).not.toContain("\n");
+	});
+
+	test("reconstructs a full sentence across multiple streamed chunks with no injected separators", () => {
+		const chunks = [
+			[{ type: "text", text: "Inc" }],
+			[{ type: "text", text: "ident Report: pr" }],
+			[
+				{ type: "text", text: "ana-order-service -- Se" },
+				{ type: "text", text: "asons API" },
+			],
+		];
+		const acc = chunks.map(extractStreamDeltaText).join("");
+		expect(acc).toBe("Incident Report: prana-order-service -- Seasons API");
+	});
+
+	test("still filters non-text blocks and handles a plain string chunk", () => {
+		expect(extractStreamDeltaText("plain delta")).toBe("plain delta");
+		expect(
+			extractStreamDeltaText([
+				{ type: "thinking", thinking: "internal" },
+				{ type: "text", text: "visible" },
+			]),
+		).toBe("visible");
+	});
+
+	test("returns empty string for unsupported shapes, never [object Object]", () => {
+		expect(extractStreamDeltaText(null)).toBe("");
+		expect(extractStreamDeltaText({ foo: "bar" })).toBe("");
 	});
 });

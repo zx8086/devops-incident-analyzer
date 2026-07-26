@@ -100,7 +100,9 @@ export {
 } from "./memory-writer.ts";
 // SIO-1217: apps/web's SSE pump reads raw AIMessageChunk.content off LangGraph stream
 // events (typed unknown there) and must not String() it directly -- see message-utils.ts.
-export { extractTextFromContent } from "./message-utils.ts";
+// SIO-1218: extractStreamDeltaText is the streaming-delta counterpart -- same shape
+// handling, but concatenates same-chunk blocks with no separator (see message-utils.ts).
+export { extractStreamDeltaText, extractTextFromContent } from "./message-utils.ts";
 export { aggregateMitigation } from "./mitigation.ts";
 export { proposeEscalate, proposeInvestigate, proposeMonitor } from "./mitigation-branches.ts";
 export { normalizeIncident } from "./normalizer.ts";

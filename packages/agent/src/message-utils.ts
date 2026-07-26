@@ -32,3 +32,21 @@ export function extractTextFromContent(content: unknown): string {
 	// exists to prevent. Extract text from a lone text block; otherwise empty string.
 	return isTextBlock(content) ? content.text : "";
 }
+
+// SIO-1218: extractTextFromContent's "\n" join is correct for a COMPLETE message's
+// distinct logical content blocks, but sse-pump.ts calls it per streamed AIMessageChunk
+// delta instead. When one delta chunk carries more than one array block (Bedrock Converse
+// can batch adjacent text deltas under the 4.7+/5-generation models' adaptive thinking),
+// the "\n" join splices a newline into the middle of a word, garbling the live-streamed
+// bubble. A streaming delta's blocks are contiguous text fragments, not separate
+// paragraphs -- concatenate them directly.
+export function extractStreamDeltaText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (Array.isArray(content)) {
+		return content
+			.filter(isTextBlock)
+			.map((block) => block.text)
+			.join("");
+	}
+	return isTextBlock(content) ? content.text : "";
+}
