@@ -1,7 +1,7 @@
 // agent/src/sub-agent-empty-findings.test.ts
 
 import { describe, expect, test } from "bun:test";
-import { lastTextualResponse } from "./sub-agent.ts";
+import { buildSubAgentOutcome, lastTextualResponse } from "./sub-agent.ts";
 
 // SIO-1227: queryDataSource used to read `messages.at(-1)` alone, so a datasource's entire
 // findings were lost whenever the final message carried no text -- while still reporting
@@ -90,5 +90,110 @@ describe("lastTextualResponse", () => {
 			]),
 		];
 		expect(lastTextualResponse(messages)).toEqual({ text: "Root cause: consumer fleet stalled.", index: 0 });
+	});
+});
+
+// SIO-1227 review: the helper tests above can all pass while the completion contract regresses,
+// so assert that contract directly. buildSubAgentOutcome was extracted from queryDataSource for
+// exactly this reason -- driving queryDataSource itself would need createReactAgent, the MCP tool
+// layer and prompt-context mocked, and mocking prompt-context is a known source of cross-file
+// mock pollution in this package.
+describe("buildSubAgentOutcome (the completion contract)", () => {
+	const found = { text: "Findings: lag is 4.2M.", index: 3 };
+
+	test("normal run returns success with the recovered text and no error", () => {
+		expect(
+			buildSubAgentOutcome({
+				recovered: found,
+				allToolsFailed: false,
+				truncated: false,
+				messageCount: 4,
+				toolErrorCount: 0,
+			}),
+		).toEqual({ data: "Findings: lag is 4.2M.", status: "success" });
+	});
+
+	// THE invariant: a datasource that produced nothing must not be reported as success, or
+	// alignment counts it a win and neither retries nor degrades confidence.
+	test("no findings is an error carrying a reason, never empty success", () => {
+		const out = buildSubAgentOutcome({
+			recovered: null,
+			allToolsFailed: false,
+			truncated: false,
+			messageCount: 6,
+			toolErrorCount: 0,
+		});
+		expect(out.status).toBe("error");
+		expect(out.error).toBe("Sub-agent produced no textual findings across 6 messages");
+		expect(out.data).toBe("No response from sub-agent");
+	});
+
+	test("all-tools-failed keeps its own error reason and takes precedence", () => {
+		const out = buildSubAgentOutcome({
+			recovered: null,
+			allToolsFailed: true,
+			truncated: false,
+			messageCount: 9,
+			toolErrorCount: 4,
+		});
+		expect(out.status).toBe("error");
+		expect(out.error).toBe("All 4 tool calls failed");
+	});
+
+	// SIO-1029's intent: a truncated run must still surface what it gathered, not a bare note.
+	test("truncated run with recovered findings stays success and appends the salvage note", () => {
+		const out = buildSubAgentOutcome({
+			recovered: found,
+			allToolsFailed: false,
+			truncated: true,
+			messageCount: 44,
+			toolErrorCount: 1,
+		});
+		expect(out.status).toBe("success");
+		expect(out.data).toStartWith("Findings: lag is 4.2M.");
+		expect(out.data).toContain("truncated at the sub-agent recursion limit");
+		expect(out.error).toBeUndefined();
+	});
+
+	test("truncated run with nothing recovered is an error, not a note-only success", () => {
+		const out = buildSubAgentOutcome({
+			recovered: null,
+			allToolsFailed: false,
+			truncated: true,
+			messageCount: 40,
+			toolErrorCount: 2,
+		});
+		expect(out.status).toBe("error");
+		expect(out.data).toContain("truncated at the sub-agent recursion limit");
+	});
+
+	// The whole point, stated as a property: success and empty findings are mutually exclusive.
+	test("no combination of inputs yields success with no findings", () => {
+		for (const allToolsFailed of [false, true]) {
+			for (const truncated of [false, true]) {
+				const out = buildSubAgentOutcome({
+					recovered: null,
+					allToolsFailed,
+					truncated,
+					messageCount: 3,
+					toolErrorCount: 1,
+				});
+				expect(out.status, `allToolsFailed=${allToolsFailed} truncated=${truncated}`).toBe("error");
+				expect(out.error).toBeDefined();
+			}
+		}
+	});
+
+	// Pairs with the trim change: the returned text is verbatim, so the contract must not alter it.
+	test("preserves the recovered text verbatim, including surrounding whitespace", () => {
+		const padded = { text: "\n  Findings with padding  \n", index: 2 };
+		const out = buildSubAgentOutcome({
+			recovered: padded,
+			allToolsFailed: false,
+			truncated: false,
+			messageCount: 3,
+			toolErrorCount: 0,
+		});
+		expect(out.data).toBe("\n  Findings with padding  \n");
 	});
 });

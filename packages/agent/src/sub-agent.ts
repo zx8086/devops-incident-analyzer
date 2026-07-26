@@ -56,10 +56,55 @@ export function lastTextualResponse(
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const m = messages[i];
 		if (!m || m._getType() !== "ai") continue;
-		const text = extractTextFromContent(m.content).trim();
-		if (text !== "") return { text, index: i };
+		// Trim only to DECIDE emptiness; return the text verbatim. The pre-SIO-1227 code did not
+		// trim, so trimming the returned value would be an unrelated behaviour change (and would
+		// make the logged responseLength disagree with the extracted content).
+		const text = extractTextFromContent(m.content);
+		if (text.trim() !== "") return { text, index: i };
 	}
 	return null;
+}
+
+// SIO-1227: the completion contract, extracted so it is directly testable. The invariant that
+// matters -- a sub-agent must NEVER report `success` carrying no findings -- previously lived
+// inline in queryDataSource, which cannot be unit-tested without mocking createReactAgent, the
+// MCP tool layer and prompt-context (the last of which is a known source of cross-file mock
+// pollution in this package). Keeping the decision pure means the invariant is asserted directly
+// instead of inferred from the walk-back helper's behaviour.
+const SALVAGE_NOTE =
+	"\n\n[Note: investigation was truncated at the sub-agent recursion limit; the above reflects partial findings.]";
+
+export interface SubAgentOutcome {
+	data: string;
+	status: "success" | "error";
+	error?: string;
+}
+
+export function buildSubAgentOutcome(opts: {
+	recovered: { text: string; index: number } | null;
+	allToolsFailed: boolean;
+	truncated: boolean;
+	messageCount: number;
+	toolErrorCount: number;
+}): SubAgentOutcome {
+	const { recovered, allToolsFailed, truncated, messageCount, toolErrorCount } = opts;
+	const noFindings = recovered === null;
+	const baseData = recovered?.text ?? "No response from sub-agent";
+	const data = truncated ? `${baseData}${SALVAGE_NOTE}` : baseData;
+
+	// `status` used to be derived from allToolsFailed alone and never consulted the data, so a run
+	// that produced nothing usable still reported success -- and alignment counts statuses, not
+	// content, so it neither retried nor degraded confidence. An empty result is a failure of this
+	// datasource even when its individual tool calls succeeded.
+	if (allToolsFailed) {
+		return { data, status: "error", error: `All ${toolErrorCount} tool calls failed` };
+	}
+	if (noFindings) {
+		// An error must always carry a reason. With no toolErrors recorded, alignment's isRetryable
+		// defaults to retryable, which is what we want -- a re-run may produce a message with text.
+		return { data, status: "error", error: `Sub-agent produced no textual findings across ${messageCount} messages` };
+	}
+	return { data, status: "success" };
 }
 
 // SIO-1029: the LangGraph recursion-limit error. When createReactAgent exhausts
@@ -1175,19 +1220,20 @@ ${state.correlationFetchDirective}`
 			}
 		}
 
-		// SIO-1029: a truncated run that still gathered tool data is partial-success,
-		// not error -- salvage what elastic observed rather than blanking the datasource.
-		// The last message on a truncated run is an AIMessage/ToolMessage mid-loop, not a
-		// synthesized answer, so append an explicit note when there is no clean final text.
-		const salvageNote =
-			"\n\n[Note: investigation was truncated at the sub-agent recursion limit; the above reflects partial findings.]";
-		// SIO-1227: was extractTextFromContent(messages.at(-1).content), which yielded "" whenever the
-		// final message carried no text -- a reasoning-only turn, or a mid-loop message on a
-		// truncated run. The old ternary tested whether a message EXISTED, not whether it produced
-		// any text, so the "No response from sub-agent" fallback could never fire and the datasource
-		// silently contributed an empty string while still reporting success.
-		const baseData = recovered?.text ?? "No response from sub-agent";
-		const data = truncated ? `${baseData}${salvageNote}` : baseData;
+		// SIO-1029: a truncated run that still gathered tool data is partial-success, not error --
+		// salvage what the sub-agent observed rather than blanking the datasource.
+		// SIO-1227: the data/status decision now lives in buildSubAgentOutcome so the
+		// never-success-with-no-findings invariant is unit-testable. Previously this read
+		// extractTextFromContent(messages.at(-1).content), which yielded "" whenever the final
+		// message carried no text -- a reasoning-only turn, or a mid-loop message on a truncated run.
+		const outcome = buildSubAgentOutcome({
+			recovered,
+			allToolsFailed,
+			truncated: truncated === true,
+			messageCount: response.messages.length,
+			toolErrorCount: toolErrors.length,
+		});
+		const data = outcome.data;
 
 		// Recovering from an earlier turn is normal on a truncated run but unexpected otherwise, so
 		// log it either way -- it is the signal that the model ended on a text-free message.
@@ -1212,25 +1258,14 @@ ${state.correlationFetchDirective}`
 		return {
 			dataSourceId,
 			data,
-			// SIO-1227: `status` used to be derived from allToolsFailed alone and never consulted
-			// `data`, so a run that produced nothing usable still reported success -- alignment
-			// counts statuses, not content, so it neither retried nor degraded confidence. An empty
-			// result is a failure of this datasource even when its individual tool calls succeeded.
-			status: allToolsFailed || noFindings ? "error" : "success",
+			status: outcome.status,
 			duration,
 			toolOutputs,
 			isAlignmentRetry: isRetry,
 			messageCount: response.messages.length,
 			...(deploymentId && { deploymentId }),
 			...(toolErrors.length > 0 && { toolErrors }),
-			...(allToolsFailed && { error: `All ${toolErrors.length} tool calls failed` }),
-			// SIO-1227: a status of "error" must always carry a reason. With no toolErrors recorded,
-			// alignment's isRetryable defaults to retryable, which is the behaviour we want here --
-			// a re-run may well produce a message with text.
-			...(noFindings &&
-				!allToolsFailed && {
-					error: `Sub-agent produced no textual findings across ${response.messages.length} messages`,
-				}),
+			...(outcome.error !== undefined && { error: outcome.error }),
 		};
 	} catch (error) {
 		const duration = Date.now() - startTime;
