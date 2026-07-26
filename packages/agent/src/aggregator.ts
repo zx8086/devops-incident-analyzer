@@ -36,6 +36,7 @@ import {
 	upsertIntegrityNote,
 } from "./confidence-policy.ts";
 import { isGapsJudgeEnabled, judgeDegradingGapBullets } from "./gaps-judge.ts";
+import { getGraphDeadlineAt, hasAggregationBudget } from "./graph-budget.ts";
 import { createLlm } from "./llm.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import { buildNetworkTopology, summarizeNetworkTopologyForPrompt } from "./network-topology.ts";
@@ -1132,6 +1133,54 @@ export function ensureVerbatimDdl(
 	return { answer: rewritten, appended: missing, source };
 }
 
+// SIO-1221: deterministic (no LLM) aggregate() fallback for when the graph's
+// shared deadline leaves too little runway for the aggregation LLM call.
+// confidenceScore is fixed well below the HITL threshold so checkConfidence
+// always flags the run for review -- a degraded summary must never read as a
+// confident report.
+const AGGREGATION_FALLBACK_CONFIDENCE = 0.1;
+
+export function buildDegradedAggregateFallback(
+	results: DataSourceResult[],
+	skillsApplied: string[] | null,
+): Partial<AgentStateType> {
+	const succeeded = results.filter((r) => r.status === "success");
+	const failed = results.filter((r) => r.status === "error");
+
+	const lines: string[] = [
+		"# Incident Report (Degraded -- Time Budget Exceeded)",
+		"",
+		"The investigation ran out of time before the full analysis could complete. " +
+			"This is a raw summary of what each datasource returned, not an LLM-synthesized report. " +
+			"Re-run the investigation for a complete analysis.",
+		"",
+		"## Data Sources",
+	];
+	for (const r of succeeded) {
+		const label = r.deploymentId ? `${r.dataSourceId}/${r.deploymentId}` : r.dataSourceId;
+		lines.push(`- ${label}: succeeded (${r.duration ?? 0}ms)`);
+	}
+	for (const r of failed) {
+		const label = r.deploymentId ? `${r.dataSourceId}/${r.deploymentId}` : r.dataSourceId;
+		lines.push(`- ${label}: FAILED -- ${r.error ?? "unknown error"} (${r.duration ?? 0}ms)`);
+	}
+	lines.push("", "## Gaps", "- Aggregation LLM call skipped: insufficient time remaining in the graph budget.");
+	if (failed.length > 0) {
+		lines.push(
+			`- ${failed.length} datasource(s) failed to return results: ${failed.map((r) => r.dataSourceId).join(", ")}.`,
+		);
+	}
+	lines.push("", `Confidence: ${AGGREGATION_FALLBACK_CONFIDENCE.toFixed(2)}`);
+
+	const finalAnswer = lines.join("\n");
+	return {
+		messages: [new AIMessage({ content: finalAnswer })],
+		finalAnswer,
+		confidenceScore: AGGREGATION_FALLBACK_CONFIDENCE,
+		skillsApplied,
+	};
+}
+
 export async function aggregate(state: AgentStateType, config?: RunnableConfig): Promise<Partial<AgentStateType>> {
 	const results = state.dataSourceResults;
 
@@ -1151,6 +1200,23 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 			finalAnswer: "No datasource results to aggregate.",
 			skillsApplied,
 		};
+	}
+
+	// SIO-1221: aggregate()'s LLM call has no per-role deadline (llm.ts opts it out
+	// deliberately) and relies solely on the shared graph-wide AbortSignal. A slow
+	// fan-out (e.g. an alignment retry burning its full timeout) can leave less
+	// runway than the LLM call needs, so the hard AbortSignal kills it mid-generation
+	// with NO answer at all -- worse than a degraded one. When too little time
+	// remains for even a fast LLM call, skip straight to a deterministic summary
+	// built from `results` alone (same "safe, non-LLM fallback" pattern as
+	// runbook-selector.ts's enterFallback) so the turn always produces an answer.
+	const deadlineAt = getGraphDeadlineAt(config);
+	if (!hasAggregationBudget(deadlineAt)) {
+		logger.warn(
+			{ remainingMs: deadlineAt !== undefined ? deadlineAt - Date.now() : undefined },
+			"Insufficient graph budget for aggregation LLM call; falling back to deterministic summary",
+		);
+		return buildDegradedAggregateFallback(results, skillsApplied);
 	}
 
 	const summary = results.map((r) => ({

@@ -46,6 +46,7 @@ import {
 	aggregate,
 	aggregateResultBudget,
 	appendRequestIdFooter,
+	buildDegradedAggregateFallback,
 	collectDegradingGapBullets,
 	countDegradingGapBullets,
 	extractConfidenceScore,
@@ -55,6 +56,7 @@ import {
 	rewriteConfidenceInAnswer,
 } from "./aggregator.ts";
 import { _setGapsJudgeLlmForTesting } from "./gaps-judge.ts";
+import { GRAPH_DEADLINE_KEY } from "./graph-budget.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import { getAgentsDir } from "./paths.ts";
 import { getRunbookFilenames } from "./prompt-context.ts";
@@ -173,6 +175,80 @@ describe("aggregator SIO-1217 array-shaped response.content regression", () => {
 		expect(result.finalAnswer).not.toContain("[object Object]");
 		expect(result.finalAnswer).not.toContain("SENTINEL-INTERNAL-REASONING-SHOULD-NOT-LEAK");
 		expect(result.finalAnswer).toContain("Confidence");
+	});
+});
+
+describe("buildDegradedAggregateFallback (SIO-1221)", () => {
+	test("lists successes and failures with their durations", () => {
+		const results: DataSourceResult[] = [
+			{ dataSourceId: "elastic", status: "success", data: "x", duration: 5000 },
+			{
+				dataSourceId: "gitlab",
+				status: "error",
+				data: null,
+				duration: 360_000,
+				error: "The operation was aborted due to timeout",
+			},
+		];
+		const result = buildDegradedAggregateFallback(results, null);
+		expect(result.finalAnswer).toContain("elastic: succeeded (5000ms)");
+		expect(result.finalAnswer).toContain("gitlab: FAILED -- The operation was aborted due to timeout (360000ms)");
+	});
+
+	test("sets a fixed low confidence so checkConfidence always flags it for review", () => {
+		const results: DataSourceResult[] = [{ dataSourceId: "elastic", status: "success", data: "x", duration: 100 }];
+		const result = buildDegradedAggregateFallback(results, null);
+		expect(result.confidenceScore).toBeLessThan(0.6);
+		expect(result.finalAnswer).toContain("Confidence: 0.10");
+	});
+
+	test("never produces [object Object] even from malformed results", () => {
+		const results: DataSourceResult[] = [
+			{ dataSourceId: "aws", deploymentId: "estate:eu-oit-prd", status: "error", data: null, error: undefined },
+		];
+		const result = buildDegradedAggregateFallback(results, null);
+		expect(result.finalAnswer).not.toContain("[object Object]");
+		expect(result.finalAnswer).toContain("aws/estate:eu-oit-prd: FAILED -- unknown error");
+	});
+
+	test("passes through skillsApplied unchanged", () => {
+		const results: DataSourceResult[] = [{ dataSourceId: "elastic", status: "success", data: "x", duration: 100 }];
+		const result = buildDegradedAggregateFallback(results, ["some-skill"]);
+		expect(result.skillsApplied).toEqual(["some-skill"]);
+	});
+});
+
+// SIO-1221: real-trace regression -- a slow alignment retry (e.g. GitLab burning
+// its full 360s timeout twice) can leave too little graph budget for the
+// aggregation LLM call. Previously this meant a hard AbortSignal killed the
+// call mid-generation with NO answer; now aggregate() detects the tight budget
+// up front and returns the deterministic fallback instead of ever calling the LLM.
+describe("aggregate: insufficient graph budget (SIO-1221)", () => {
+	test("skips the LLM call and returns the deterministic fallback when the deadline is imminent", async () => {
+		lastInvokeMessages = null;
+		const now = Date.now();
+		const result = await aggregate(makeState(), { configurable: { [GRAPH_DEADLINE_KEY]: now + 5_000 } });
+		// The mocked ChatBedrockConverse.invoke() was never reached.
+		expect(lastInvokeMessages).toBeNull();
+		expect(result.finalAnswer).toContain("Degraded -- Time Budget Exceeded");
+		expect(result.confidenceScore).toBeLessThan(0.6);
+	});
+
+	test("proceeds with the normal LLM call when ample budget remains", async () => {
+		lastInvokeMessages = null;
+		mockLlmContent = "# Incident Report\n\nConfidence: 0.8";
+		const now = Date.now();
+		const result = await aggregate(makeState(), { configurable: { [GRAPH_DEADLINE_KEY]: now + 900_000 } });
+		expect(lastInvokeMessages).not.toBeNull();
+		expect(result.finalAnswer).not.toContain("Degraded -- Time Budget Exceeded");
+	});
+
+	test("proceeds normally when no deadline is threaded (legacy/direct invocation)", async () => {
+		lastInvokeMessages = null;
+		mockLlmContent = "# Incident Report\n\nConfidence: 0.8";
+		const result = await aggregate(makeState());
+		expect(lastInvokeMessages).not.toBeNull();
+		expect(result.finalAnswer).not.toContain("Degraded -- Time Budget Exceeded");
 	});
 });
 
