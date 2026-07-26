@@ -4,6 +4,7 @@ import { getLogger } from "@devops-agent/observability";
 import { AIMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { createLlm } from "./llm.ts";
+import { extractTextFromContent } from "./message-utils.ts";
 import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:responder");
@@ -30,7 +31,7 @@ export async function respond(state: AgentStateType, config?: RunnableConfig): P
 	const llm = createLlm("responder");
 	const startTime = Date.now();
 	const response = await llm.invoke([{ role: "system", content: RESPONDER_PROMPT }, ...state.messages], config);
-	const answer = String(response.content);
+	const answer = extractTextFromContent(response.content);
 
 	logger.info({ duration: Date.now() - startTime, answerLength: answer.length }, "Responder complete");
 	return {

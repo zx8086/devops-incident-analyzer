@@ -140,7 +140,7 @@ export async function normalizeIncident(
 			config,
 		);
 
-		const text = String(response.content);
+		const text = extractTextFromContent(response.content);
 		const jsonMatch = text.match(/\{[\s\S]*\}/);
 		if (jsonMatch) {
 			const parsed = NormalizationSchema.parse(JSON.parse(jsonMatch[0]));

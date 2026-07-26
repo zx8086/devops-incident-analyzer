@@ -4,6 +4,7 @@
 // handler and the /api/agent/topic-shift resume handler share the same logic.
 // Previously the routing lived inline in stream/+server.ts.
 
+import { extractTextFromContent } from "@devops-agent/agent";
 import type { InvestigationFocus } from "@devops-agent/shared";
 import { HilApplyReportSchema, NetworkTopologySchema, redactPiiContent, StreamEventSchema } from "@devops-agent/shared";
 import { z } from "zod";
@@ -172,7 +173,7 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 				const isOutputNode = tags.some((t: string) => OUTPUT_NODES.has(t));
 				const nodeName = event.metadata?.langgraph_node;
 				if (isOutputNode || (nodeName && OUTPUT_NODES.has(nodeName))) {
-					const content = redactPiiContent(String(chunkContent));
+					const content = redactPiiContent(extractTextFromContent(chunkContent));
 					responseContent += content;
 					send({ type: "message", content });
 				}

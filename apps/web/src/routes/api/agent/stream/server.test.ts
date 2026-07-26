@@ -52,6 +52,8 @@ mock.module("@devops-agent/agent", () => ({
 	// SIO-1124: the /api/tickets routes import these from this same specifier.
 	getTicketProvider: mock(() => undefined),
 	listAvailableTicketProviders: mock(() => [] as unknown[]),
+	// SIO-1217: sse-pump.ts imports this from the same specifier at module scope.
+	extractTextFromContent: (content: unknown) => (typeof content === "string" ? content : String(content)),
 }));
 
 const sharedLogger = {

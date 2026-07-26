@@ -13,7 +13,9 @@ import type { AgentStateType } from "./state.ts";
 let lastInvokeMessages: BaseMessage[] | null = null;
 // SIO-707: per-test override for the LLM response so cap-from-tool-error-rate tests
 // can return a high (>0.6) confidence and verify the deterministic cap kicks in.
-let mockLlmContent = "Mock aggregator output. Confidence: 0.5";
+// SIO-1217: widened to allow a content-block-array override so a test can reproduce
+// the array-shaped Bedrock Converse response that broke String(response.content).
+let mockLlmContent: string | Array<{ type: string; text?: string }> = "Mock aggregator output. Confidence: 0.5";
 
 mock.module("@langchain/aws", () => ({
 	ChatBedrockConverse: class {
@@ -141,6 +143,37 @@ const firstRunbook = availableRunbooks[0] ?? "";
 function runbookHasHeading(prompt: string, filename: string): boolean {
 	return prompt.includes(`#### ${filename}`);
 }
+
+// SIO-1217: Claude 4.7+/5-generation models on Bedrock Converse (adaptive thinking
+// always on) can return AIMessage.content as an array of content blocks instead of a
+// plain string. String(response.content) on that array previously produced
+// "[object Object],[object Object],..." -- the aggregator must extract only the text
+// blocks via extractTextFromContent instead.
+describe("aggregator SIO-1217 array-shaped response.content regression", () => {
+	afterEach(() => {
+		mockLlmContent = "Mock aggregator output. Confidence: 0.5";
+	});
+
+	test("extracts text from an array-shaped LLM response instead of [object Object]", async () => {
+		mockLlmContent = [
+			{ type: "text", text: "# Incident Report\n\nRoot cause: connection timeout." },
+			{ type: "text", text: "Confidence: 0.8" },
+		];
+		const result = await aggregate(makeState());
+		expect(result.finalAnswer).not.toContain("[object Object]");
+		expect(result.finalAnswer).toContain("Root cause: connection timeout.");
+	});
+
+	test("ignores non-text blocks (thinking/reasoning) in an array-shaped response", async () => {
+		mockLlmContent = [
+			{ type: "thinking", text: undefined },
+			{ type: "text", text: "# Incident Report\n\nConfidence: 0.7" },
+		];
+		const result = await aggregate(makeState());
+		expect(result.finalAnswer).not.toContain("[object Object]");
+		expect(result.finalAnswer).toContain("Confidence");
+	});
+});
 
 describe.skipIf(!hasRunbooks)("aggregator: selectedRunbooks integration", () => {
 	test("null selectedRunbooks keeps every runbook heading in the system prompt", async () => {

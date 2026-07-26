@@ -161,7 +161,7 @@ Rules:
 	}
 
 	// Step 4: parse response
-	const text = String((response as { content: unknown }).content);
+	const text = extractTextFromContent((response as { content: unknown }).content);
 	const jsonMatch = text.match(/\{[\s\S]*\}/);
 	if (!jsonMatch) {
 		return enterFallback("fallback.parse_error", severity, fallbackConfig, startTime);

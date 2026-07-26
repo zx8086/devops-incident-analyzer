@@ -1207,7 +1207,7 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	const startTime = Date.now();
 	const response = await llm.invoke(messages, config);
 
-	const rawAnswer = String(response.content);
+	const rawAnswer = extractTextFromContent(response.content);
 	const answer = redactPiiContent(rawAnswer);
 
 	// SIO-632 / SIO-649: Extract confidence score for the HITL gate. The prompt now requires

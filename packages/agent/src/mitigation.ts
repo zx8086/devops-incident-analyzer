@@ -6,6 +6,7 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 import { getAvailableActionTools } from "./action-tools/executor.ts";
 import { createLlm, DeadlineExceededError, type InvokableLlm, invokeWithDeadline } from "./llm.ts";
+import { extractTextFromContent } from "./message-utils.ts";
 import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:mitigation");
@@ -121,7 +122,7 @@ export async function aggregateMitigation(
 				config as { signal?: AbortSignal; [key: string]: unknown } | undefined,
 			);
 
-			const text = String(response.content);
+			const text = extractTextFromContent(response.content);
 			const jsonMatch = text.match(/\{[\s\S]*\}/);
 			if (jsonMatch) {
 				const parsed = ActionProposalSchema.parse(JSON.parse(jsonMatch[0]));
