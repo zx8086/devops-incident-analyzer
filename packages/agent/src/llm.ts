@@ -62,7 +62,10 @@ export type LlmRole =
 	// claims against the flagging datasource's returned data before the cap applies.
 	| "absenceJudge";
 
-const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
+// SIO-1224: exported so the model-conformance probe and the long-form truncation test read
+// this exact table rather than duplicating the numbers -- a duplicate would drift silently,
+// which is the failure mode this whole hardening series exists to remove.
+export const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	orchestrator: {},
 	classifier: { temperature: 0 },
 	subAgent: {},
@@ -98,6 +101,38 @@ const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	// SIO-1158: deterministic per-claim verdicts as compact JSON.
 	absenceJudge: { temperature: 0, maxTokens: 1024 },
 };
+
+// SIO-1224: roles whose output is prose or a complete JSON document that must not be cut off
+// mid-generation. Their effective maxTokens has to clear the active model's measured
+// long-form floor, or the answer truncates -- the exact SIO-649 failure (a report cut before
+// its mandatory trailing Confidence line, leaving the HITL gate a 0 score), which a more
+// verbose model reproduces at a budget that used to be ample.
+//
+// Membership is narrow ON PURPOSE. SIO-1224's probe measured Sonnet 5 needing ~4,300-4,700
+// output tokens for a full six-section incident report, making 8192 the smallest CONFIGURED
+// budget that clears it. Applying that floor to a role that emits a compact JSON envelope
+// would inflate its budget for nothing, so only roles whose output is genuinely a long
+// document belong here.
+//
+// Excluded as compact-output, with their effective budgets: normalizer (4096 manifest),
+// entityExtractor (4096), mitigation + mitigate* (4096, bullet lists), skillLearner (1024,
+// a fixed five-field proposal capped at "1-4 sentences"), classifier, iacClassifier (16),
+// awsEstateRouter (256), followUp (256), actionProposal (512), runbookSelector (512),
+// gapsJudge (1024), absenceJudge (1024). `orchestrator` is excluded because it is declared
+// but never constructed (verified: no createLlm("orchestrator") call site exists).
+export const LONG_FORM_ROLES: ReadonlySet<LlmRole> = new Set<LlmRole>([
+	"aggregator",
+	"responder",
+	"subAgent",
+	"iacDrafter",
+	"iacReader",
+	"iacReviewer",
+	"hilDistiller",
+	// The sharpest case: iacPlanner's intent JSON embeds VERBATIM user-pasted documents
+	// (ilmFullPolicy, phasesPatch, userSettingsYaml), so its output scales with the paste --
+	// and its 2048 budget is the lowest of any role in this set.
+	"iacPlanner",
+]);
 
 // SIO-739: Per-role wall-clock deadline for non-streaming llm.invoke calls. A
 // value of 0 disables the per-call timer for that role (the graph-level signal

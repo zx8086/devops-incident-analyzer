@@ -10,7 +10,8 @@
 		"eval:precheck": "bun run src/eval/precheck.ts",
 		"eval:upload-dataset": "bun run src/eval/build-dataset.ts",
 		"eval:run": "bun run src/eval/run-eval.ts",
-		"skill:promote": "bun --env-file=../../.env src/skill-promote-cli.ts"
+		"skill:promote": "bun --env-file=../../.env src/skill-promote-cli.ts",
+		"model:probe": "bun --env-file=../../.env src/eval/probe-model.ts"
 	},
 	"dependencies": {
 		"@devops-agent/checkpointer": "workspace:*",
