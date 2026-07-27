@@ -3,10 +3,12 @@
 // the HITL gate; coverage degradation provably disjoint from the root-cause
 // evidence soft-caps above it. Every uncertain case fails closed to hard.
 import { describe, expect, test } from "bun:test";
+import { extractGapsBulletCount } from "./aggregator.ts";
 import {
 	attributeGapBullets,
 	attributeLineDataSources,
 	CAP_REASON_CLASS,
+	CAVEATS_HEADING,
 	decideConfidenceCap,
 	extractRootCauseDataSources,
 	hardCapFor,
@@ -14,6 +16,7 @@ import {
 	isCoverageScopingEnabled,
 	isIntegrityCapTieringEnabled,
 	softCapFor,
+	upsertCaveatsSection,
 	upsertCoverageNote,
 } from "./confidence-policy.ts";
 
@@ -343,7 +346,7 @@ describe("decideConfidenceCap integrity tiers (SIO-1198)", () => {
 		const d = decideConfidenceCap({
 			capReasons: ["no-index-misread"],
 			coverageSignals: [],
-			integritySignals: [{ reason: "no-index-misread", rewritten: true, loadBearing: false }],
+			integritySignals: [{ reason: "no-index-misread", reconciled: true, loadBearing: false }],
 			rootCauseDataSources: rc,
 			threshold: 0.6,
 		});
@@ -356,7 +359,7 @@ describe("decideConfidenceCap integrity tiers (SIO-1198)", () => {
 		const d = decideConfidenceCap({
 			capReasons: ["no-index-misread"],
 			coverageSignals: [],
-			integritySignals: [{ reason: "no-index-misread", rewritten: true, loadBearing: true }],
+			integritySignals: [{ reason: "no-index-misread", reconciled: true, loadBearing: true }],
 			rootCauseDataSources: rc,
 			threshold: 0.6,
 		});
@@ -364,11 +367,11 @@ describe("decideConfidenceCap integrity tiers (SIO-1198)", () => {
 		expect(d.cap).toBe(0.59);
 	});
 
-	test("unrewritten integrity signal -> hard", () => {
+	test("unreconciled integrity signal -> hard", () => {
 		const d = decideConfidenceCap({
 			capReasons: ["premature-absence"],
 			coverageSignals: [],
-			integritySignals: [{ reason: "premature-absence", rewritten: false, loadBearing: false }],
+			integritySignals: [{ reason: "premature-absence", reconciled: false, loadBearing: false }],
 			rootCauseDataSources: rc,
 			threshold: 0.6,
 		});
@@ -391,8 +394,8 @@ describe("decideConfidenceCap integrity tiers (SIO-1198)", () => {
 			capReasons: ["no-index-misread", "premature-absence"],
 			coverageSignals: [],
 			integritySignals: [
-				{ reason: "no-index-misread", rewritten: true, loadBearing: false },
-				{ reason: "premature-absence", rewritten: true, loadBearing: true },
+				{ reason: "no-index-misread", reconciled: true, loadBearing: false },
+				{ reason: "premature-absence", reconciled: true, loadBearing: true },
 			],
 			rootCauseDataSources: rc,
 			threshold: 0.6,
@@ -405,8 +408,8 @@ describe("decideConfidenceCap integrity tiers (SIO-1198)", () => {
 			capReasons: ["premature-absence"],
 			coverageSignals: [],
 			integritySignals: [
-				{ reason: "premature-absence", rewritten: true, loadBearing: false },
-				{ reason: "premature-absence", rewritten: true, loadBearing: true },
+				{ reason: "premature-absence", reconciled: true, loadBearing: false },
+				{ reason: "premature-absence", reconciled: true, loadBearing: true },
 			],
 			rootCauseDataSources: rc,
 			threshold: 0.6,
@@ -417,7 +420,7 @@ describe("decideConfidenceCap integrity tiers (SIO-1198)", () => {
 	test("eligible integrity + disjoint coverage -> soft; overlapping coverage -> hard", () => {
 		const base = {
 			capReasons: ["no-index-misread", "degraded-subagents"],
-			integritySignals: [{ reason: "no-index-misread", rewritten: true, loadBearing: false }],
+			integritySignals: [{ reason: "no-index-misread", reconciled: true, loadBearing: false }],
 			rootCauseDataSources: rc,
 			threshold: 0.6,
 		};
@@ -437,7 +440,7 @@ describe("decideConfidenceCap integrity tiers (SIO-1198)", () => {
 		const d = decideConfidenceCap({
 			capReasons: ["ungrounded-expiry"],
 			coverageSignals: [],
-			integritySignals: [{ reason: "ungrounded-expiry", rewritten: true, loadBearing: false }],
+			integritySignals: [{ reason: "ungrounded-expiry", reconciled: true, loadBearing: false }],
 			rootCauseDataSources: rc,
 			threshold: 0.75,
 		});
@@ -511,11 +514,59 @@ describe("isIntegrityCapTieringEnabled", () => {
 		const d = decideConfidenceCap({
 			capReasons: ["no-index-misread"],
 			coverageSignals: [],
-			integritySignals: [{ reason: "no-index-misread", rewritten: true, loadBearing: false }],
+			integritySignals: [{ reason: "no-index-misread", reconciled: true, loadBearing: false }],
 			integrityTieringEnabled: false,
 			rootCauseDataSources: ["kafka"],
 			threshold: 0.6,
 		});
 		expect(d.mode).toBe("hard");
+	});
+});
+
+// SIO-1242: the caveat SECTION renderer. Two invariants matter beyond formatting: it must be
+// idempotent (the enforce-node re-cap path can call twice), and it must NOT look like a Gaps
+// bullet -- GAPS_HEADING_RE feeds a separate cap, so routing integrity caveats there would make
+// the absence guard manufacture gaps-cap pressure against itself.
+describe("upsertCaveatsSection (SIO-1242)", () => {
+	const caveat = {
+		guard: "premature-absence-contradicted",
+		claim: "prana-order-service is not present across all 5 ECS clusters.",
+		dataSourceId: "aws",
+		section: "Findings by Datasource",
+		occurrences: 2,
+		note: "The labelled datasource returned data matching this claim.",
+	};
+
+	test("inserts the section above the confidence line and quotes the claim verbatim", () => {
+		const answer = "## Summary\n\nall fine.\n\nConfidence: 0.72";
+		const out = upsertCaveatsSection(answer, [caveat]);
+		expect(out).toContain(CAVEATS_HEADING);
+		expect(out).toContain(caveat.claim);
+		expect(out.indexOf(CAVEATS_HEADING)).toBeLessThan(out.indexOf("Confidence: 0.72"));
+		expect(out).toContain("appears 2x");
+		expect(out).toContain('in "Findings by Datasource"');
+	});
+
+	test("is idempotent -- calling twice yields one section", () => {
+		const once = upsertCaveatsSection("## Summary\n\nx\n\nConfidence: 0.7", [caveat]);
+		const twice = upsertCaveatsSection(once, [caveat]);
+		expect(twice).toBe(once);
+		expect(twice.split(CAVEATS_HEADING)).toHaveLength(2);
+	});
+
+	test("removes the section when there are no caveats", () => {
+		const withSection = upsertCaveatsSection("## Summary\n\nx\n\nConfidence: 0.7", [caveat]);
+		expect(upsertCaveatsSection(withSection, [])).not.toContain(CAVEATS_HEADING);
+	});
+
+	test("does not feed the gaps-bullet parser", () => {
+		const out = upsertCaveatsSection("## Summary\n\nx\n\n## Gaps\n\n- a real gap\n\nConfidence: 0.7", [caveat]);
+		// One real gap bullet before and after -- the caveat bullets must not be counted as gaps.
+		expect(extractGapsBulletCount(out)).toBe(1);
+	});
+
+	test("appends at the end when there is no confidence line", () => {
+		const out = upsertCaveatsSection("## Summary\n\nno confidence line here", [caveat]);
+		expect(out).toContain(CAVEATS_HEADING);
 	});
 });

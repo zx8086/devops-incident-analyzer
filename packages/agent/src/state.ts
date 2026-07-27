@@ -15,6 +15,7 @@ import type {
 	NetworkTopology,
 	NormalizedIncident,
 	PendingAction,
+	ReportCaveat,
 	ResolvedIdentifiers,
 	ToolPlanStep,
 } from "@devops-agent/shared";
@@ -306,6 +307,13 @@ export const AgentState = Annotation.Root({
 	// SIO-1155: the Gaps bullet texts that actually COUNTED toward the gaps cap after
 	// the SIO-1149 judge veto (vetoed bullets excluded). The recovery path subtracts
 	// recovered bullets from this set instead of re-running the judge.
+	// SIO-1242: structured caveats replacing inline prose corrections. REPLACE reducer -- recomputed
+	// every aggregate, so a stale prior-turn caveat can never linger on a follow-up.
+	reportCaveats: Annotation<ReportCaveat[]>({
+		reducer: (_, next) => next ?? [],
+		default: () => [],
+	}),
+
 	confirmedDegradingGapBullets: Annotation<string[]>({
 		reducer: (_, next) => next,
 		default: () => [],

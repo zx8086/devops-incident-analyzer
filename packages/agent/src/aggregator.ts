@@ -4,6 +4,7 @@ import {
 	countsTowardDegradedRate,
 	type DataSourceResult,
 	isDegradingCategory,
+	type ReportCaveat,
 	redactPiiContent,
 	type ToolErrorCategory,
 } from "@devops-agent/shared";
@@ -32,6 +33,7 @@ import {
 	isClaimLoadBearing,
 	isCoverageScopingEnabled,
 	isIntegrityCapTieringEnabled,
+	upsertCaveatsSection,
 	upsertCoverageNote,
 	upsertIntegrityNote,
 } from "./confidence-policy.ts";
@@ -815,7 +817,16 @@ const OVERGENERALIZED_RE =
 // Deliberately conservative -- only counts clear data, so a genuinely empty datasource is
 // never falsely credited with data.
 function dataSourceReturnedData(r: DataSourceResult): boolean {
-	const findings = [r.elasticFindings, r.kafkaFindings, r.couchbaseFindings, r.gitlabFindings].filter(Boolean);
+	// SIO-1242: awsFindings/atlassianFindings were missing here, so an AWS or Atlassian row could
+	// never be credited with data at all.
+	const findings = [
+		r.elasticFindings,
+		r.kafkaFindings,
+		r.couchbaseFindings,
+		r.gitlabFindings,
+		r.awsFindings,
+		r.atlassianFindings,
+	].filter(Boolean);
 	for (const f of findings) {
 		if (f && typeof f === "object" && Object.values(f).some((v) => Array.isArray(v) && v.length > 0)) return true;
 	}
@@ -828,6 +839,11 @@ function dataSourceReturnedData(r: DataSourceResult): boolean {
 			if (Array.isArray(hits) && hits.length > 0) return true;
 			if (Array.isArray(o.results) && o.results.length > 0) return true;
 			if (typeof o.total === "number" && o.total > 0) return true;
+			// SIO-1242: AWS list calls wrap their payload in a single named key
+			// (serviceArns / logGroups / MetricAlarms / clusterArns). Without this an
+			// enumeration of 5 ECS services read as "returned nothing", so the confirmed-negative
+			// exemption below could never see the very evidence that proves the negative.
+			if (isEnumerationShaped(o)) return true;
 		}
 		// String tool outputs: a real elastic hit renders as "Total results: N" with N>0.
 		if (typeof raw === "string") {
@@ -840,11 +856,112 @@ function dataSourceReturnedData(r: DataSourceResult): boolean {
 
 // Datasource ownership of a report line: which sub-agent's data would ground/contradict it.
 // A line naming a datasource keyword is checked against THAT datasource's result.
+//
+// SIO-1242: `aws` was missing, so an AWS absence claim could only be flagged via an INCIDENTAL
+// elastic/couchbase/kafka keyword ("apm", "scope", "collection", "topic") -- and was then judged
+// against THAT datasource's evidence. On run 43796e9f the judge was effectively asked "did elastic
+// return data contradicting this?" about an AWS claim; elastic had returned APM data, so it said
+// yes, and a correct confirmed-negative got hard-capped to 0.59.
 const DATASOURCE_KEYWORDS: Record<string, RegExp> = {
 	elastic: /\b(elastic|elasticsearch|logs-apm|service\.name|apm)\b/i,
 	couchbase: /\b(couchbase|capella|scope|collection|seasonal_assignment|n1ql|sql\+\+)\b/i,
 	kafka: /\b(kafka|topic|consumer group|partition|offset)\b/i,
+	aws: /\b(aws|cloudwatch|ecs|fargate|log group|lambda|estate)\b/i,
 };
+
+// SIO-1242: a snake_case TOOL NAME is unambiguous provenance; a bare English keyword is not.
+// Attribute on the strong signal when the line carries one, so "not present across all 5 ECS
+// clusters (aws_ecs_list_services)" is an aws claim even though "clusters" reads generically.
+// Deliberately NOT reusing attributeLineDataSources (confidence-policy.ts): its own comment
+// explains its superset is safe THERE because false positives only widen the degraded set toward
+// the cap. Here a false positive widens the FLAGGED set, which is the opposite risk.
+const DATASOURCE_TOOL_PREFIX: Record<string, RegExp> = {
+	elastic: /\belasticsearch_[a-z0-9_]+/,
+	couchbase: /\b(?:capella|couchbase)_[a-z0-9_]+/,
+	kafka: /\b(?:kafka|ksql|sr|schema_registry)_[a-z0-9_]+/,
+	aws: /\baws_[a-z0-9_]+/,
+};
+
+// Attribute a flagged line to exactly one datasource. Strong (tool-name) match wins; the weak
+// keyword pass is the fallback. Returns null when nothing matches, so the caller skips the line.
+function attributeAbsenceLine(line: string, hasData: (ds: string) => boolean): string | null {
+	for (const [ds, re] of Object.entries(DATASOURCE_TOOL_PREFIX)) {
+		if (re.test(line) && hasData(ds)) return ds;
+	}
+	for (const [ds, kw] of Object.entries(DATASOURCE_KEYWORDS)) {
+		if (kw.test(line) && hasData(ds)) return ds;
+	}
+	return null;
+}
+
+// SIO-1242: the ENUMERATION-BACKED CONFIRMED NEGATIVE.
+//
+// The aggregator prompt itself ASKS for this sentence: crossEstateAbsenceRule (SIO-1149, active
+// whenever more than one estate is assessed) instructs the model to report cross-estate absence as
+// `"not deployed in this estate" -- a definitive negative result`, and states the precondition that
+// makes it sound: "requires that the absent estate's inventory enumeration completed successfully".
+// The absence guard then flagged that sanctioned sentence as a fabrication and hard-capped the
+// report below the HITL gate. Two guards from different tickets were fighting.
+//
+// This reconciles them on the prompt's own terms. A claim is exempt only when ALL of:
+//   1. it names an extractable entity;
+//   2. the datasource returned a non-empty ENUMERATION-shaped payload (something that COULD have
+//      listed the entity);
+//   3. NO payload for that datasource mentions any of those entities.
+// Each condition fails CLOSED to the pre-SIO-1242 behaviour, so this can only ever exempt a shape
+// that positively demonstrates the negative -- never merely an absence of contradiction.
+const ABSENCE_ENTITY_RE = /`([^`]{3,})`|"([^"]{3,})"|\b([a-z0-9]+(?:[-.][a-z0-9]+){1,})\b/gi;
+const ENTITY_STOPWORDS = new Set(["service.name", "log group", "not present", "no data", "sql++", "logs-apm", "n1ql"]);
+
+export function extractClaimEntities(line: string): string[] {
+	const out = new Set<string>();
+	for (const m of line.matchAll(ABSENCE_ENTITY_RE)) {
+		const raw = (m[1] ?? m[2] ?? m[3] ?? "").trim().toLowerCase();
+		if (raw.length < 3 || ENTITY_STOPWORDS.has(raw)) continue;
+		// A bare datasource keyword is vocabulary, not an entity the enumeration could list.
+		if (Object.values(DATASOURCE_KEYWORDS).some((kw) => new RegExp(`^${kw.source}$`, "i").test(raw))) continue;
+		out.add(raw);
+	}
+	return [...out];
+}
+
+// Could this payload have LISTED the entity? A bare count ("Total results: 91") could not, which is
+// exactly why the SIO-1085 fixture must keep flagging -- without this gate that fixture would flip
+// to suppressed and silently gut the original guard.
+function isEnumerationShaped(raw: unknown): boolean {
+	if (Array.isArray(raw)) return raw.length > 0;
+	if (raw && typeof raw === "object") {
+		const o = raw as Record<string, unknown>;
+		if (Array.isArray(o.results) && o.results.length > 0) return true;
+		const hits = (o.hits as { hits?: unknown[] } | undefined)?.hits;
+		if (Array.isArray(hits) && hits.length > 0) return true;
+		// A single-key envelope wrapping a non-empty array (serviceArns, logGroups, MetricAlarms...).
+		return Object.values(o).some((v) => Array.isArray(v) && v.length > 0);
+	}
+	return false;
+}
+
+function payloadMentions(r: DataSourceResult, entities: string[]): boolean {
+	for (const out of r.toolOutputs ?? []) {
+		const text = typeof out.rawJson === "string" ? out.rawJson : JSON.stringify(out.rawJson ?? "");
+		const hay = text.toLowerCase();
+		if (entities.some((e) => hay.includes(e))) return true;
+	}
+	return false;
+}
+
+export function isConfirmedNegative(results: DataSourceResult[], dataSourceId: string, entities: string[]): boolean {
+	if (entities.length === 0) return false;
+	const rows = results.filter((r) => r.dataSourceId === dataSourceId);
+	const enumerated = rows.some((r) => (r.toolOutputs ?? []).some((o) => isEnumerationShaped(o.rawJson)));
+	if (!enumerated) return false;
+	return !rows.some((r) => payloadMentions(r, entities));
+}
+
+// Kill switch, mirroring isAbsenceJudgeEnabled. Read at call time so a test can flip it per case.
+export function isAbsenceEntityMatchEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+	return env.ABSENCE_ENTITY_MATCH_ENABLED !== "false";
+}
 
 export function detectPrematureAbsence(
 	answer: string,
@@ -854,6 +971,7 @@ export function detectPrematureAbsence(
 	for (const r of results) {
 		dataByDs.set(r.dataSourceId, (dataByDs.get(r.dataSourceId) ?? false) || dataSourceReturnedData(r));
 	}
+	const entityMatchEnabled = isAbsenceEntityMatchEnabled();
 	// SIO-1158: keep the flagging datasource with each contradicted line so the absence
 	// judge can weigh the claim against exactly that datasource's returned data.
 	const contradictedDetails: AbsenceClaim[] = [];
@@ -863,13 +981,13 @@ export function detectPrematureAbsence(
 		const isAbsence = ABSENCE_CLAIM_RE.test(line);
 		const isSweeping = OVERGENERALIZED_RE.test(line);
 		if (!isAbsence && !isSweeping) continue;
-		// (A) contradicted: an absence line about a datasource that returned data.
+		// (A) contradicted: an absence line about a datasource that returned data -- UNLESS the
+		// returned data is an enumeration that positively demonstrates the negative.
 		if (isAbsence) {
-			for (const [ds, kw] of Object.entries(DATASOURCE_KEYWORDS)) {
-				if (kw.test(line) && dataByDs.get(ds)) {
-					contradictedDetails.push({ line, dataSourceId: ds });
-					break;
-				}
+			const ds = attributeAbsenceLine(line, (id) => dataByDs.get(id) === true);
+			if (ds !== null) {
+				const exempt = entityMatchEnabled && isConfirmedNegative(results, ds, extractClaimEntities(line));
+				if (!exempt) contradictedDetails.push({ line, dataSourceId: ds });
 			}
 		}
 		// (B) over-generalized: a sweeping absence/completeness claim (any datasource).
@@ -896,23 +1014,59 @@ export function appendSuffixToLine(line: string, suffix: string): string {
 	return `${line.slice(0, lastPipe)}${suffix} ${line.slice(lastPipe)}`;
 }
 
-const CONTRADICTED_ABSENCE_SUFFIX =
-	" [CORRECTION: this datasource's sub-agent returned matching data this turn, so it is NOT absent -- the earlier phrasing was a synthesis error; treat the returned data as ground truth.]";
-const OVERGENERALIZED_ABSENCE_SUFFIX =
-	" [SCOPE: this states absence more broadly than was verified -- it holds only for the specific collection/index/window actually queried, not the whole namespace; other scopes/collections may hold the data and were not all checked.]";
+// SIO-1242: these are the correction TEXTS, no longer suffixes. They used to be appended to the
+// claim's own line; on run 43796e9f the flagged line was a markdown table row, so the whole debug
+// sentence rendered inside the Correlated Timeline's Severity cell. And because the rewriter
+// matched on exact whole-line equality, the Findings section's paraphrase of the same claim was
+// left un-annotated -- the report asserted the claim AND its correction. Recording a caveat instead
+// makes that half-patched state unrepresentable: nothing is mutated, so there is nothing to
+// half-mutate. Phrased for an operator, not as an internal note about a "synthesis error".
+const CONTRADICTED_ABSENCE_NOTE =
+	"The labelled datasource returned data matching this claim, so the absence is not supported. Treat the returned data as ground truth.";
+const OVERGENERALIZED_ABSENCE_NOTE =
+	"States absence more broadly than was verified: it holds only for the specific collection/index/window actually queried, not the whole namespace. Other scopes may hold the data and were not all checked.";
 
-export function rewritePrematureAbsence(answer: string, contradicted: string[], overgeneralized: string[]): string {
-	if (contradicted.length === 0 && overgeneralized.length === 0) return answer;
-	const contra = new Set(contradicted);
-	const over = new Set(overgeneralized);
-	return answer
-		.split("\n")
-		.map((line) => {
-			if (contra.has(line)) return appendSuffixToLine(line, CONTRADICTED_ABSENCE_SUFFIX);
-			if (over.has(line)) return appendSuffixToLine(line, OVERGENERALIZED_ABSENCE_SUFFIX);
-			return line;
-		})
-		.join("\n");
+// Which section a line sits under, so a caveat can point the reader at it.
+function sectionOf(lines: string[], index: number): string | undefined {
+	for (let i = index; i >= 0; i--) {
+		const line = lines[i] ?? "";
+		if (headingLevel(line) !== null) return line.replace(/^#+\s*/, "").trim();
+	}
+	return undefined;
+}
+
+export function buildPrematureAbsenceCaveats(
+	answer: string,
+	contradicted: AbsenceClaim[],
+	overgeneralized: string[],
+): ReportCaveat[] {
+	if (contradicted.length === 0 && overgeneralized.length === 0) return [];
+	const lines = answer.split("\n");
+	const occurrencesOf = (claim: string) => lines.filter((l) => l.trim() === claim.trim()).length;
+	const firstIndexOf = (claim: string) => lines.findIndex((l) => l.trim() === claim.trim());
+	const out: ReportCaveat[] = [];
+	for (const c of contradicted) {
+		out.push({
+			guard: "premature-absence-contradicted",
+			claim: c.line,
+			dataSourceId: c.dataSourceId,
+			section: sectionOf(lines, firstIndexOf(c.line)),
+			// A flagged line is present by construction; clamp so the schema's min(1) always holds
+			// even if a later rewriter reflowed the text before this ran.
+			occurrences: Math.max(1, occurrencesOf(c.line)),
+			note: CONTRADICTED_ABSENCE_NOTE,
+		});
+	}
+	for (const line of overgeneralized) {
+		out.push({
+			guard: "premature-absence-overgeneralized",
+			claim: line,
+			section: sectionOf(lines, firstIndexOf(line)),
+			occurrences: Math.max(1, occurrencesOf(line)),
+			note: OVERGENERALIZED_ABSENCE_NOTE,
+		});
+	}
+	return out;
 }
 
 // SIO-1087 (Fix D): a confident POSITIVE root-cause MECHANISM claim that no tool output supports.
@@ -1459,17 +1613,25 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	const noIndexMisreadCapTriggered = noIndexMisread.length > 0;
 
 	// SIO-860/1013/1079/1085/1087/1088 content rewrites. SIO-1198 moved this chain
-	// BEFORE the cap decision so the per-claim `rewritten` signals reflect what the
+	// BEFORE the cap decision so the per-claim `reconciled` signals reflect what the
 	// rewriters actually did (not an assumption). The chain depends only on the
 	// detection outputs above; the confidence-line rewrite still happens at the end.
 	const groundedBlockers = ungroundedCapTriggered ? rewriteUngroundedBlockers(answer, ungrounded) : answer;
 	const rewrittenForExpiry = expiryCapTriggered
 		? rewriteUngroundedExpiry(groundedBlockers, ungroundedExpiry)
 		: groundedBlockers;
-	// SIO-1085: chain the premature-absence rewrite after the expiry/blocker rewrites.
-	const rewrittenForGrounding = prematureAbsenceCapTriggered
-		? rewritePrematureAbsence(rewrittenForExpiry, contradicted, overgeneralized)
-		: rewrittenForExpiry;
+	// SIO-1242: the absence guard no longer MUTATES the claim; it records a caveat instead, so this
+	// link in the chain is now a pass-through. Kept as a named binding because the downstream
+	// root-cause re-detection comment below reasons about "the already-rewritten text" -- with the
+	// absence rewrite gone, that is now trivially true for absence-flagged lines.
+	const absenceCaveats = prematureAbsenceCapTriggered
+		? buildPrematureAbsenceCaveats(
+				rewrittenForExpiry,
+				absenceDetection.contradictedDetails.filter((c) => contradicted.includes(c.line)),
+				overgeneralized,
+			)
+		: [];
+	const rewrittenForGrounding = rewrittenForExpiry;
 	// SIO-1087 (Fix D): chain the ungrounded-root-cause softening after the absence rewrites.
 	// RE-DETECT against the already-rewritten text: an earlier blocker/expiry/absence guard may
 	// have appended a suffix to a flagged root-cause line, so matching the ORIGINAL line strings
@@ -1487,23 +1649,32 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		? rewriteNoIndexMisread(rewrittenForRootCause, detectNoIndexMisread(rewrittenForRootCause, results).flagged)
 		: rewrittenForRootCause;
 
-	// SIO-1198 Part B: per-claim integrity signals for the tier decision. rewritten =
-	// the chain actually mutated the flagged line (the exact original line is gone);
+	// SIO-1198 Part B: per-claim integrity signals for the tier decision.
+	// SIO-1242: `reconciled` (was `rewritten`) = the guard DISCHARGED the claim. For the four
+	// suffix-append guards that still means "the chain mutated the flagged line", computed exactly
+	// as before. For premature-absence it now means "a caveat naming this claim was emitted" --
+	// without that redefinition the absence guard would score `reconciled: false` on EVERY claim
+	// the moment it stopped mutating text, integrityEligible would fail, and every integrity
+	// reason would hard-cap. The fix for Bug A would have made the cap strictly worse.
 	// loadBearing = location-based Root Cause test on the PRE-rewrite answer.
 	const rewrittenLineSet = new Set(rewrittenForNoIndex.split("\n"));
+	const caveatedClaims = new Set(absenceCaveats.map((c) => c.claim));
 	const toIntegritySignals = (reason: string, lines: string[]): IntegritySignal[] =>
 		lines.map((line) => ({
 			reason,
-			rewritten: !rewrittenLineSet.has(line),
+			reconciled: !rewrittenLineSet.has(line),
+			loadBearing: isClaimLoadBearing(answer, line),
+		}));
+	const toCaveatSignals = (reason: string, lines: string[]): IntegritySignal[] =>
+		lines.map((line) => ({
+			reason,
+			reconciled: caveatedClaims.has(line),
 			loadBearing: isClaimLoadBearing(answer, line),
 		}));
 	const integritySignals: IntegritySignal[] = [
 		...toIntegritySignals("ungrounded-blocker", ungroundedCapTriggered ? ungrounded : []),
 		...toIntegritySignals("ungrounded-expiry", expiryCapTriggered ? ungroundedExpiry : []),
-		...toIntegritySignals(
-			"premature-absence",
-			prematureAbsenceCapTriggered ? [...contradicted, ...overgeneralized] : [],
-		),
+		...toCaveatSignals("premature-absence", prematureAbsenceCapTriggered ? [...contradicted, ...overgeneralized] : []),
 		...toIntegritySignals("ungrounded-root-cause", ungroundedRootCauseCapTriggered ? ungroundedRootCause : []),
 		...toIntegritySignals("no-index-misread", noIndexMisreadCapTriggered ? noIndexMisread : []),
 	];
@@ -1671,11 +1842,15 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 			"Aggregated answer dropped advisor CREATE INDEX DDL; appended verbatim section",
 		);
 	}
+	// SIO-1242: splice the caveats section AFTER the DDL section and BEFORE the confidence-line
+	// rewrite, so both land above the confidence line in the SIO-632 order and the rewrite still
+	// finds the last confidence line.
+	const withCaveats = upsertCaveatsSection(ddlEnsured.answer, absenceCaveats);
 	// SIO-1194: the capped line carries the pre-cap evidence score + reason labels
 	// so the user never sees a bare 0.59 with no explanation.
 	const capped = anyCapTriggered
-		? rewriteConfidenceInAnswer(ddlEnsured.answer, cappedScore, { preCap: confidenceScore, capReasons })
-		: ddlEnsured.answer;
+		? rewriteConfidenceInAnswer(withCaveats, cappedScore, { preCap: confidenceScore, capReasons })
+		: withCaveats;
 	// SIO-1195: a soft cap explains itself with a coverage note under the confidence
 	// line (no numbers in the note -- a later hard re-cap removes it cleanly).
 	const withCoverageNote =
@@ -1715,6 +1890,7 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		confidencePreCap: confidenceScore,
 		capReasons,
 		confirmedDegradingGapBullets: gapsCapTriggered ? confirmedGapBullets : [],
+		reportCaveats: absenceCaveats,
 		// SIO-1195: cap-policy metadata (mode, attribution) for logs/state consumers.
 		rootCauseDataSources: rootCauseDataSources ?? undefined,
 		degradedDataSources: capDecision.degradedDataSources,

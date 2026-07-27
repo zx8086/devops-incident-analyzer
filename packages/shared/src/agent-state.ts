@@ -403,6 +403,30 @@ export const AtlassianFindingsSchema = z.object({
 });
 export type AtlassianFindings = z.infer<typeof AtlassianFindingsSchema>;
 
+// SIO-1242: a grounding guard's correction, recorded as DATA instead of spliced into the claim's
+// visible text. rewritePrematureAbsence used to append "[CORRECTION: ... synthesis error ...]" to
+// the offending line; on run 43796e9f that line was a markdown table row, so the debug sentence
+// rendered inside the Correlated Timeline's Severity cell -- and because the rewriter matches on
+// exact whole-line equality, the Findings section's paraphrase of the same claim stayed
+// un-annotated and the report asserted both. Recording the correction instead makes a
+// half-patched report unrepresentable.
+export const ReportCaveatSchema = z.object({
+	/** Which guard raised it, e.g. "premature-absence-contradicted". Free-form so the sibling
+	 *  rewriters can migrate later without a schema break. */
+	guard: z.string(),
+	/** The offending line VERBATIM. Never mutated in the report. */
+	claim: z.string(),
+	/** Datasource the claim was attributed to (contradicted arm only). */
+	dataSourceId: z.string().optional(),
+	/** Nearest enclosing heading, so a reader can find the claim. */
+	section: z.string().optional(),
+	/** How many times `claim` appears in the report -- makes "every occurrence reconciled" auditable. */
+	occurrences: z.number().int().min(1),
+	/** The correction text that used to be the inline suffix. */
+	note: z.string(),
+});
+export type ReportCaveat = z.infer<typeof ReportCaveatSchema>;
+
 export const DataSourceResultSchema = z.object({
 	dataSourceId: z.string(),
 	// SIO-649: Populated when the elastic sub-agent fans out across deployments.

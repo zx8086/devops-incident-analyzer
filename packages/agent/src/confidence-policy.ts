@@ -9,6 +9,8 @@
 // than the SIO-709 single clamp, never more permissive on integrity failures.
 // Pure: no LLM, no state import, no aggregator import (aggregator imports this).
 
+import type { ReportCaveat } from "@devops-agent/shared";
+
 export type CapClass = "integrity" | "coverage";
 
 export const CAP_REASON_CLASS: Record<string, CapClass> = {
@@ -45,13 +47,18 @@ export interface CoverageSignal {
 }
 
 // SIO-1198 Part B: one signal per flagged CLAIM behind an integrity reason.
-// rewritten = the guard's rewriter actually mutated the claim line in place;
+// reconciled = the guard DISCHARGED the claim -- either it mutated the claim line in place
+// (the suffix-append guards) or, since SIO-1242, it recorded a structured caveat naming the
+// claim verbatim. Both make the report internally honest; only an UNDISCHARGED claim keeps
+// the SIO-1195 hard cap. Renamed from `rewritten`, which described the mechanism rather than
+// the property the tiering actually depends on -- and which would have silently forced every
+// integrity reason to hard-cap once the absence guard stopped mutating text.
 // loadBearing = the claim sits in, or is attributed by, the Root Cause section
 // (location-based -- see isClaimLoadBearing). An integrity reason is soft-eligible
-// only when every one of its signals is rewritten and not load-bearing.
+// only when every one of its signals is reconciled and not load-bearing.
 export interface IntegritySignal {
 	reason: string;
-	rewritten: boolean;
+	reconciled: boolean;
 	loadBearing: boolean;
 }
 
@@ -82,7 +89,7 @@ export function decideConfidenceCap(input: {
 	}
 
 	// SIO-1198 Part B: integrity reasons are soft-eligible only when tiering is on and
-	// EVERY reason has at least one signal with every signal rewritten-in-place and
+	// EVERY reason has at least one signal with every signal reconciled and
 	// not load-bearing for the Root Cause. Anything else (unsignalled reason, failed
 	// rewrite, load-bearing claim, tiering off) keeps the SIO-1195 hard cap.
 	const tiering = input.integrityTieringEnabled ?? true;
@@ -92,7 +99,7 @@ export function decideConfidenceCap(input: {
 		(tiering &&
 			integrity.every((r) => {
 				const signals = integritySignals.filter((s) => s.reason === r);
-				return signals.length > 0 && signals.every((s) => s.rewritten && !s.loadBearing);
+				return signals.length > 0 && signals.every((s) => s.reconciled && !s.loadBearing);
 			}));
 	if (!integrityEligible) {
 		return {
@@ -273,6 +280,47 @@ function upsertPrefixedNote(answer: string, prefix: string, note: string | null)
 
 export function upsertCoverageNote(answer: string, note: string | null): string {
 	return upsertPrefixedNote(answer, COVERAGE_NOTE_PREFIX, note);
+}
+
+// SIO-1242: the caveat SECTION, sibling to the single-line notes above. Same anchor (immediately
+// around the confidence line), same idempotent-upsert contract.
+//
+// Deliberately NOT "## Gaps": GAPS_HEADING_RE feeds the SIO-709 degrading-gap parser and its own
+// GAPS_BULLET_THRESHOLD cap, so routing integrity caveats there would make the absence guard
+// manufacture gaps-cap pressure against itself -- a self-amplifying loop.
+export const CAVEATS_HEADING = "## Report caveats";
+
+export function upsertCaveatsSection(answer: string, caveats: ReportCaveat[]): string {
+	// Strip any existing block first (idempotent: the enforce-node re-cap path can call twice).
+	const lines = answer.split("\n");
+	const start = lines.findIndex((l) => l.trim() === CAVEATS_HEADING);
+	let stripped = lines;
+	if (start !== -1) {
+		// Stop at the next heading OR the confidence line: the section is inserted directly above
+		// the confidence line (SIO-632 keeps it last), so a heading-only bound would swallow it.
+		let end = start + 1;
+		while (end < lines.length) {
+			const l = lines[end] ?? "";
+			if (/^#{1,6}\s/.test(l) || CONFIDENCE_LINE_ONLY_RE.test(l)) break;
+			end++;
+		}
+		stripped = [...lines.slice(0, start), ...lines.slice(end)];
+	}
+	if (caveats.length === 0) return stripped.join("\n").replace(/\n{3,}$/, "\n");
+
+	const body = caveats
+		.map((c) => {
+			const where = c.section ? ` in "${c.section}"` : "";
+			const times = c.occurrences > 1 ? ` (appears ${c.occurrences}x)` : "";
+			return `- **Flagged${where}${times}:** ${c.claim.trim()}\n  - ${c.note}`;
+		})
+		.join("\n");
+	const section = `${CAVEATS_HEADING}\n\nAn automated grounding check flagged the following claims. The report text above is UNCHANGED; each claim is reproduced here with its correction.\n\n${body}\n`;
+
+	// SIO-632 contract: the dedicated Confidence line stays last -- insert above it.
+	const idx = stripped.findIndex((l) => CONFIDENCE_LINE_ONLY_RE.test(l));
+	if (idx === -1) return `${stripped.join("\n").replace(/\s+$/, "")}\n\n${section}`;
+	return [...stripped.slice(0, idx), section, ...stripped.slice(idx)].join("\n");
 }
 
 export function upsertIntegrityNote(answer: string, note: string | null): string {

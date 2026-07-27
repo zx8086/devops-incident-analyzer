@@ -102,6 +102,11 @@ export function buildAbsenceEvidenceDigest(results: DataSourceResult[], dataSour
 			["kafkaFindings", r.kafkaFindings],
 			["couchbaseFindings", r.couchbaseFindings],
 			["gitlabFindings", r.gitlabFindings],
+			// SIO-1242: awsFindings/atlassianFindings were omitted, so on an AWS-attributed claim the
+			// judge saw tool outputs but none of the typed evidence -- part of why it kept a correct
+			// confirmed-negative on run 43796e9f.
+			["awsFindings", r.awsFindings],
+			["atlassianFindings", r.atlassianFindings],
 		];
 		for (const [name, value] of findings) {
 			if (value == null) continue;
@@ -111,7 +116,17 @@ export function buildAbsenceEvidenceDigest(results: DataSourceResult[], dataSour
 		}
 	}
 	if (parts.length === 0) return "(no data returned by this datasource this turn)";
-	return truncateToolOutput(parts.join("\n"), DIGEST_PER_DATASOURCE_CAP_BYTES).content;
+	// SIO-1242: the cap used to apply to the whole datasource, so on a multi-estate turn the first
+	// estate could consume the entire 8KB and the second was truncated away -- the judge then ruled
+	// on a claim about an estate whose evidence it had never seen. Budget PER deployment instead.
+	const deployments = new Set(results.filter((r) => r.dataSourceId === dataSourceId).map((r) => r.deploymentId ?? ""));
+	const perGroupBudget = Math.max(1, Math.floor(DIGEST_PER_DATASOURCE_CAP_BYTES / Math.max(1, deployments.size)));
+	const byLabel = new Map<string, string[]>();
+	for (const part of parts) {
+		const label = /^- \[([^\]]+)\]/.exec(part)?.[1] ?? "";
+		byLabel.set(label, [...(byLabel.get(label) ?? []), part]);
+	}
+	return [...byLabel.values()].map((g) => truncateToolOutput(g.join("\n"), perGroupBudget).content).join("\n");
 }
 
 // Test seam mirroring _setGapsJudgeLlmForTesting: sibling suites mock @langchain/aws
