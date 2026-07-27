@@ -879,6 +879,20 @@ const RESOLUTION_TOOLS_BY_DATASOURCE: Record<string, string[]> = {
 		"aws_ecs_list_clusters",
 		"aws_ecs_list_services",
 		"aws_ecs_describe_services",
+		// SIO-1256: the placement-baseline PAIR (aws-agent/RULES.md:205, SIO-1208), here as a unit
+		// for the same reason as the four logs_* entries below. aws_ecs_describe_tasks REQUIRES
+		// known task ARNs and aws_ecs_list_tasks is the only tool that produces them
+		// (RULES.md:198 -- describe_tasks "cannot search by time or IP"), so binding either alone
+		// is the split-chain failure SIO-1234 fixed for start_query / get_query_results.
+		//
+		// list_tasks was declared in aws-introspect.yaml under ecs_state all along -- this was
+		// never an action-group gap. It is registered LAST of the six ECS tools in
+		// packages/mcp-server-aws, and the tail composeBoundTools slices was in MCP REGISTRATION
+		// order, so on the live 4-group union it sat at tail[16] of a 16-slot tail and was the one
+		// tool dropped. orderByDeclaration below removes the ordering dependency; promoting the
+		// pair here makes the guarantee explicit rather than a property of list positions.
+		"aws_ecs_list_tasks",
+		"aws_ecs_describe_tasks",
 		"aws_logs_describe_log_groups",
 		"aws_logs_get_log_group_fields",
 		"aws_logs_start_query",
@@ -1088,6 +1102,39 @@ export function inferClusterHealthActions(query: string, dataSourceId: string): 
 	return ["health_check", "cluster_info", "restproxy", "ksql", "connect_status", "schema_registry"];
 }
 
+// SIO-1256: the tail composeBoundTools slices was ordered by `allTools`, which arrives in MCP
+// REGISTRATION order -- an order no file in this repo controls. When the tail overflows, WHICH tool
+// falls off was therefore decided by the order a remote, separately-deployed MCP server happened to
+// call server.tool() in.
+//
+// That is how aws_ecs_list_tasks went missing: registered last of the six ECS tools, it landed at
+// tail[16] of a 16-slot tail on the live 4-group union. The belt tests never caught it because they
+// build allTools from getAllActionToolNames (YAML declaration order), where the same union drops
+// aws_ec2_describe_vpc_peering_connections instead -- the fixture ordering and the production
+// ordering disagreed by exactly one slot.
+//
+// Ranking by the YAML declaration order puts the cut under the control of the same curated file the
+// operators edit alongside RULES.md: to change what falls off, reorder aws-introspect.yaml. Names
+// absent from the action map (a skill-promised tool unioned in later) sort last but keep their
+// relative order, so they are the first to be cut rather than silently displacing a mapped tool.
+//
+// This also normalises away resolveActionTools' ordering, which follows the requested-actions array
+// -- i.e. LLM output order, a second non-deterministic input to the belt that nothing tracked.
+function orderByDeclaration(
+	names: Iterable<string>,
+	toolDef: ToolDefinition,
+	allTools: StructuredToolInterface[],
+): StructuredToolInterface[] {
+	const declarationRank = new Map(getAllActionToolNames(toolDef).map((name, i) => [name, i] as const));
+	const byName = new Map(allTools.map((t) => [t.name, t] as const));
+	const unranked = declarationRank.size;
+	return [...new Set(names)]
+		.map((name, i) => ({ name, rank: declarationRank.get(name) ?? unranked + i }))
+		.sort((a, b) => a.rank - b.rank)
+		.map((entry) => byName.get(entry.name))
+		.filter((tool): tool is StructuredToolInterface => tool !== undefined);
+}
+
 export function selectToolsByAction(
 	allTools: StructuredToolInterface[],
 	dataSourceId: string,
@@ -1115,8 +1162,7 @@ export function selectToolsByAction(
 	if (actions && actions.length > 0) {
 		const { toolNames } = resolveActionTools(toolDef, actions);
 		if (toolNames.length > 0) {
-			const nameSet = new Set(toolNames);
-			const selected = allTools.filter((t) => nameSet.has(t.name));
+			const selected = orderByDeclaration(toolNames, toolDef, allTools);
 			if (selected.length >= MIN_FILTERED_TOOLS) {
 				return { tools: bindTools(selected, allTools, dataSourceId, skillToolNames), filtered: true };
 			}
@@ -1125,8 +1171,7 @@ export function selectToolsByAction(
 
 	const allActionNames = getAllActionToolNames(toolDef);
 	if (allActionNames.length > 0) {
-		const nameSet = new Set(allActionNames);
-		const selected = allTools.filter((t) => nameSet.has(t.name));
+		const selected = orderByDeclaration(allActionNames, toolDef, allTools);
 		if (selected.length >= MIN_FILTERED_TOOLS) {
 			return { tools: bindTools(selected, allTools, dataSourceId, skillToolNames), filtered: true };
 		}
