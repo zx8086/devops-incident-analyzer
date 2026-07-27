@@ -1,5 +1,6 @@
 // agent/src/prompt-context.ts
 import {
+	buildSubAgentSystemPrompt,
 	buildSystemPrompt,
 	extractSkillToolNames,
 	type LoadedAgent,
@@ -154,8 +155,13 @@ export function buildOrchestratorPrompt(options: OrchestratorPromptOptions = {})
 export function buildSubAgentPrompt(agentName: string): string {
 	const rootAgent = getAgent();
 	const subAgent = rootAgent.subAgents.get(agentName);
-	if (!subAgent) return buildSystemPrompt(rootAgent);
-	return buildSystemPrompt(subAgent);
+	// SIO-1257: BOTH branches get the non-interactive preamble, including the undeclared-directory
+	// fallback. That agent is still dispatched as a sub-agent, still has no human to answer it, and
+	// (SIO-1229) is the case most likely to be misconfigured in the first place -- gating on a
+	// LoadedAgent flag instead would silently drop the preamble on exactly that path, because the
+	// root agent's flag would be false.
+	if (!subAgent) return buildSubAgentSystemPrompt(rootAgent);
+	return buildSubAgentSystemPrompt(subAgent);
 }
 
 export function getToolDefinitionForDataSource(dataSourceId: string): ToolDefinition | undefined {

@@ -1012,7 +1012,9 @@ export function buildBoundToolsBlock(tools: StructuredToolInterface[]): string {
 
 These are the ONLY tools available to you on this turn: ${names || "(none)"}
 
-If any step in your instructions names a tool that is not in that list, SKIP that step and record it as an un-queried gap in your findings. Do not call it and do not retry it -- it is not bound this turn and the call will fail.`;
+If any step in your instructions names a tool that is not in that list, SKIP that step and record it as an un-queried gap in your findings. Do not call it and do not retry it -- it is not bound this turn and the call will fail.
+
+Skipping is licensed ONLY for a step whose tool is missing from that list. It is never a licence to end the turn without querying: pick the closest bound tool and run it. Make at least one call from this list before you write your findings, and do not describe a call you have not made.`;
 }
 
 // The bind-site composition: head-vs-selected budgeting in one place, so all three call sites

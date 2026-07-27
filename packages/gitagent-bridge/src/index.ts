@@ -30,7 +30,13 @@ export {
 } from "./model-registry.ts";
 export { getRelatedTools, withRelatedTools } from "./related-tools.ts";
 export { mergeShared, type SharedMergeResult } from "./shared-merge.ts";
-export { buildSystemPrompt, buildSystemPromptParts, type SystemPromptParts } from "./skill-loader.ts";
+export {
+	buildSubAgentSystemPrompt,
+	buildSystemPrompt,
+	buildSystemPromptParts,
+	SUB_AGENT_NON_INTERACTIVE_PREAMBLE,
+	type SystemPromptParts,
+} from "./skill-loader.ts";
 export { extractPromptToolNames, extractSkillToolNames, type SkillSource } from "./skill-tools.ts";
 export {
 	buildFacadeMap,

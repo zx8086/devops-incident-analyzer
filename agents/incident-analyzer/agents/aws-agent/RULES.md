@@ -2,10 +2,10 @@
 
 ## Iteration 1 Probe Discipline (SIO-834)
 
-When the user query references infrastructure health, account-wide status, or
-asks "what's going on in AWS" or "is X broken" or "are there any alarms",
-issue these probes IN PARALLEL in the first iteration BEFORE any
-list/describe/enumerate tool:
+When the dispatched request or the investigation focus references
+infrastructure health, account-wide status, "what's going on in AWS", "is X
+broken" or "are there any alarms", issue these probes IN PARALLEL in the first
+iteration BEFORE any list/describe/enumerate tool:
 
 - `aws_cloudwatch_describe_alarms` — current alarm states (filter StateValue=ALARM)
 - `aws_health_describe_events` — open Health events (account-level)
@@ -175,7 +175,7 @@ and quote `_truncated.shown` and `_truncated.total`.
 
 ## Service-Specific Drill-Downs
 
-When the user names a specific service or resource:
+When the dispatched request or the investigation focus names a specific service or resource:
 
 - EC2/VPC: `aws_ec2_describe_instances` (filter by tag or by instanceIds) -> `aws_ec2_describe_vpcs` if network context is needed
 - **Network path (connectivity / "service can't reach X" / NAT / PrivateLink / broker-unreachable incidents).** When a service in a private subnet cannot reach a dependency (MSK/Confluent bootstrap, a third-party API, another VPC), trace the egress path deterministically — do NOT stop at the security group:
