@@ -115,6 +115,55 @@ describe("buildAbsenceEvidenceDigest (SIO-1158)", () => {
 		expect(buildAbsenceEvidenceDigest(RESULTS, "couchbase")).toBe("(no data returned by this datasource this turn)");
 	});
 
+	// SIO-1242 (CodeRabbit, PR #497): the byte budget is now applied PER deploymentId, not per
+	// datasource. Under the old whole-datasource cap the FIRST estate consumed all 8KB and the
+	// second was truncated away ENTIRELY -- so on a multi-estate turn the judge ruled on a claim
+	// about an estate whose evidence it had never seen.
+	//
+	// The fixture size matters: each entry is first bounded by DIGEST_PER_ENTRY_CAP_BYTES (2048),
+	// so a one-entry-per-estate fixture never reaches the 8KB datasource cap and BOTH estates
+	// survive even under the old code -- i.e. it proves nothing. 30 entries per estate is past the
+	// threshold. Measured against the pre-fix source: hasA=true, hasB=FALSE.
+	test("splits the byte budget across deployments so no estate is starved", () => {
+		const entriesFor = (tag: string) =>
+			Array.from({ length: 30 }, (_, i) => ({
+				toolName: `aws_ecs_list_services_${i}`,
+				rawJson: `${tag}${"x".repeat(4_000)}`,
+			}));
+		const digest = buildAbsenceEvidenceDigest(
+			[
+				result({ dataSourceId: "aws", deploymentId: "estate:A", toolOutputs: entriesFor("AAA") }),
+				result({ dataSourceId: "aws", deploymentId: "estate:B", toolOutputs: entriesFor("BBB") }),
+			],
+			"aws",
+		);
+		expect(digest).toContain("estate:A");
+		// The regression: this was absent before the per-deployment split.
+		expect(digest).toContain("estate:B");
+		// Labels alone are not enough -- each estate's own payload must survive too.
+		expect(digest).toContain("AAA");
+		expect(digest).toContain("BBB");
+		expect(Buffer.byteLength(digest, "utf8")).toBeLessThanOrEqual(8_192);
+	});
+
+	// The split must not PENALISE the common single-deployment case. Needs many entries so the
+	// per-DATASOURCE cap actually binds -- a single entry is bounded by DIGEST_PER_ENTRY_CAP_BYTES
+	// (2048) long before the 8KB budget is reached, so a one-entry fixture proves nothing here.
+	test("a single deployment still gets the whole budget", () => {
+		const manyEntries = Array.from({ length: 12 }, (_, i) => ({
+			toolName: `elasticsearch_search_${i}`,
+			rawJson: "x".repeat(4_000),
+		}));
+		const digest = buildAbsenceEvidenceDigest([result({ toolOutputs: manyEntries })], "elastic");
+		// Multiple entries survive (so the budget was not divided by a phantom group count), and the
+		// whole-datasource bound still holds. Deliberately not asserting the budget is FILLED --
+		// truncateToolOutput does not pad to the cap, so an exact-size assertion would pin an
+		// implementation detail of the truncator rather than this function's contract.
+		expect(Buffer.byteLength(digest, "utf8")).toBeGreaterThan(2_048);
+		expect(Buffer.byteLength(digest, "utf8")).toBeLessThanOrEqual(8_192);
+		expect((digest.match(/elasticsearch_search_/g) ?? []).length).toBeGreaterThan(1);
+	});
+
 	test("bounds a huge rawJson under the per-datasource cap with a truncation marker", () => {
 		const digest = buildAbsenceEvidenceDigest(
 			[result({ toolOutputs: [{ toolName: "elasticsearch_search", rawJson: "x".repeat(100_000) }] })],
