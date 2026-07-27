@@ -501,3 +501,122 @@ describe("SIO-1162: invalid-queryId aws_logs_get_query_results advice", () => {
 		expect(consumeInvalidQueryIdAdvice(state)).toBeNull();
 	});
 });
+
+// SIO-1259: isUnproductiveResult had no `contentType === "string"` branch, so ANY non-empty prose
+// was PRODUCTIVE -- and a productive result RESETS that tool's streak (recordResult). gitlab_search
+// returns its empty answer as PROSE, not `[]`, so every miss silently cleared the counter the
+// SIO-1232/SIO-1246 guard depends on. In run cbada913-d22f-4618-826b-0c4c38fd8956, gitlab_search
+// ran seven times and four returned 72-114 byte "nothing found" strings that all counted as hits.
+describe("SIO-1259: short prose 'nothing found' results are unproductive", () => {
+	// VERBATIM shape from packages/mcp-server-gitlab/src/tools/proxy/index.ts, the 0-hit blob-search
+	// branch: `No code matches found for "${search}" in project ${projectId}`. Fixed cost 40 bytes.
+	// The length assertions are the arithmetic that identifies the run's 72- and 78-byte
+	// gitlab_search results as THIS string and nothing else -- if the template is ever reworded,
+	// these fail and point straight at the source line.
+	const GITLAB_NO_MATCH_72 = 'No code matches found for "RequestCanceledException" in project 12345678';
+	const GITLAB_NO_MATCH_78 = 'No code matches found for "CHANNEL_CLOSED_WHILE_IN_FLIGHT" in project 12345678';
+
+	test("the in-repo gitlab blob-search empty template is unproductive", () => {
+		expect(GITLAB_NO_MATCH_72.length).toBe(72);
+		expect(GITLAB_NO_MATCH_78.length).toBe(78);
+		expect(isUnproductiveResult(GITLAB_NO_MATCH_72, "gitlab_search")).toBe(true);
+		expect(isUnproductiveResult(GITLAB_NO_MATCH_78, "gitlab_search")).toBe(true);
+	});
+
+	test("other in-repo empty-prose templates are unproductive", () => {
+		for (const s of [
+			"No playbooks found",
+			"No results found for this query.",
+			"No documents found in inventory.stock to infer schema.",
+			"No indices found matching pattern: logs-*",
+		]) {
+			expect(isUnproductiveResult(s)).toBe(true);
+		}
+	});
+
+	// THE REGRESSION THIS MUST NOT CAUSE. Each of these is a SHORT, DEFINITIVE, data-bearing answer
+	// and a pure length threshold would have swallowed all four. Sources: elastic
+	// index_exists.ts/document_exists.ts ("Exists: true", 12 bytes), couchbase pingHandler.ts, and
+	// couchbase runSqlPlusPlusQuery.ts.
+	test("short definitive answers stay productive", () => {
+		expect(isUnproductiveResult("Exists: true")).toBe(false);
+		expect(isUnproductiveResult("Exists: false")).toBe(false);
+		expect(isUnproductiveResult("Server and database are healthy")).toBe(false);
+		expect(isUnproductiveResult("Found 7 distinct sources")).toBe(false);
+	});
+
+	// The header+payload multi-block shape. coalesceTextBlocks JOINS these, so the guard sees one
+	// string that OPENS with prose. Saved by the "no keyword before the first period" rule, not by
+	// the byte ceiling -- from elastic get_nodes_info.
+	test("a prose header block followed by a real payload stays productive", () => {
+		const blocks = [
+			{
+				type: "text",
+				text: "No parameters specified. Returning node names only. Use {metric: 'os,jvm'} for basic info.",
+			},
+			{ type: "text", text: JSON.stringify({ nodes: { a1: { name: "node-1" }, a2: { name: "node-2" } } }) },
+		];
+		expect(isUnproductiveResult(blocks, "elasticsearch_get_nodes_info")).toBe(false);
+	});
+
+	// ...and the case the BYTE CEILING is for: a matching opener followed by real data.
+	test("a matching opener followed by a real payload stays productive (byte ceiling)", () => {
+		const rows = Array.from({ length: 20 }, (_, i) => ({ path: `src/f${i}.ts`, line: i }));
+		const text = `No exact matches found for "boom" -- showing near matches:\n\n${JSON.stringify(rows)}`;
+		expect(text.length).toBeGreaterThan(400);
+		expect(isUnproductiveResult(text, "gitlab_search")).toBe(false);
+	});
+
+	// A JSON payload that happens to contain the phrase must be judged on its parsed shape.
+	test("a JSON payload containing the phrase is judged on shape, not prose", () => {
+		expect(isUnproductiveResult('[{"title":"No results found for this query."}]', "gitlab_search")).toBe(false);
+	});
+
+	// aws_logs_start_query keeps its bespoke _error-envelope rule and is never judged on prose.
+	test("aws_logs_start_query is unaffected by the prose rule", () => {
+		expect(isUnproductiveResult("No matching log events found", "aws_logs_start_query")).toBe(false);
+	});
+
+	// SIO-1232 documented gitlab_search's `[]` shape; that path must not regress.
+	test("the JSON empty shapes still classify as before", () => {
+		expect(isUnproductiveResult("[]")).toBe(true);
+		expect(isUnproductiveResult("Total results: 0, showing 0 from position 0")).toBe(true);
+	});
+});
+
+describe("SIO-1259: streak semantics are deliberately unchanged", () => {
+	// The per-tool counter stays a STREAK. Four misses interleaved with three hits never reaches
+	// MAX_UNPRODUCTIVE_PER_TOOL -- and that is CORRECT, because
+	// list -> empty -> narrower list -> hit -> drill -> empty is what a WORKING investigation looks
+	// like. A cumulative per-tool counter would strangle exactly the enumerators every other call
+	// depends on. MAX_UNPRODUCTIVE_PER_RUN is the real backstop, and this fix is what lets prose
+	// misses reach it at all.
+	test("interleaved misses do not trip the per-tool streak, but ARE counted run-wide", () => {
+		const state = createLoopGuardState();
+		const miss = 'No code matches found for "x" in project 1';
+		const hit = '[{"path":"src/a.ts"}]';
+		for (let i = 0; i < 4; i++) {
+			recordResult(state, "gitlab_search", toolCallSignature("gitlab_search", { search: `m${i}` }), miss);
+			if (i < 3) recordResult(state, "gitlab_search", toolCallSignature("gitlab_search", { search: `h${i}` }), hit);
+		}
+		expect(shouldShortCircuit(state, "gitlab_search", toolCallSignature("gitlab_search", { search: "n" }))).toBe(false);
+		// Before this fix every `miss` was PRODUCTIVE and this was 0.
+		expect(state.totalUnproductive).toBe(4);
+	});
+
+	// PR #482 (CodeRabbit): the two AWS protocol/recovery tools bypass EVERY generic rule, including
+	// the run-wide backstop. This fix makes totalUnproductive rise FASTER, so pin the carve-out
+	// against the new classification specifically.
+	test("exempt AWS tools survive a run-wide cap reached via PROSE misses", () => {
+		const state = createLoopGuardState();
+		const miss = 'No code matches found for "x" in project 1';
+		for (const t of ["gitlab_search", "gitlab_list_commits", "gitlab_get_repository_tree", "gitlab_blast_radius"]) {
+			for (let i = 1; i <= 2; i++) recordResult(state, t, toolCallSignature(t, { q: `${t}-${i}` }), miss);
+		}
+		expect(state.totalUnproductive).toBe(8);
+		const poll = toolCallSignature("aws_logs_get_query_results", { queryId: "q-1" });
+		expect(shouldShortCircuit(state, "aws_logs_get_query_results", poll)).toBe(false);
+		const describeCall = toolCallSignature("aws_logs_describe_log_groups", { logGroupNamePrefix: "/aws/ecs" });
+		expect(shouldShortCircuit(state, "aws_logs_describe_log_groups", describeCall)).toBe(false);
+	});
+});

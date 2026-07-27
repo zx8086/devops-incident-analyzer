@@ -68,6 +68,43 @@ const AWS_INVALID_QUERY_ID_KINDS = new Set<string>(["bad-input", "resource-not-f
 // An empty elasticsearch_search renders as "Total results: 0, showing 0 ...".
 const EMPTY_SEARCH_RE = /Total results:\s*0\b/i;
 
+// SIO-1259: a SHORT PROSE "nothing found" answer carries no data, but describeToolResult reports it
+// as contentType "string" and isUnproductiveResult had no string branch -- so it was PRODUCTIVE and
+// reset the tool's streak on every miss. The concrete case is the 0-hit blob-search branch of
+// packages/mcp-server-gitlab/src/tools/proxy/index.ts, which returns
+// `No code matches found for "${search}" in project ${projectId}`: 40 fixed bytes + search +
+// project_id, which is exactly the 72- and 78-byte gitlab_search results in run
+// cbada913-d22f-4618-826b-0c4c38fd8956. Couchbase ("No results found for this query.") and elastic
+// ILM ("No indices found matching pattern: ...") emit the same shape.
+//
+// Two clauses, and BOTH are load-bearing:
+//   1. Anchored at the START, with a lazy span that cannot cross a "." or a newline. This is what
+//      keeps "No parameters specified. Returning node names only. Use {metric: ...}" -- the
+//      elasticsearch_get_nodes_info HEADER block that PRECEDES a real payload -- productive: no
+//      keyword appears before its first period.
+//   2. A byte ceiling, so the opener must BE the whole payload. A multi-block result that opens
+//      "No exact matches found for X" and then lists 20 hits is productive; without the ceiling,
+//      coalesceTextBlocks would hand us that whole string and clause 1 alone would condemn it.
+//
+// The keyword list is deliberately narrow. "No searches provided" and "No metric specified" are NOT
+// matched -- adding `provided|specified` would swallow the nodes_info/nodes_stats headers above,
+// and those two are input-validation errors of no loop-guard interest.
+//
+// A pure length threshold was rejected: it cannot separate these from `Exists: true` (12 bytes,
+// elastic index_exists/document_exists), "Server and database are healthy" (31, capella_ping) or
+// "Found 7 distinct sources" -- all short, definitive, data-bearing answers.
+const EMPTY_PROSE_MAX_BYTES = 400;
+const EMPTY_PROSE_RE =
+	/^\s*no\b[^.\n]{0,120}?\b(?:found|match|matches|matched|results?|records?|items?|documents?|hits?|entries)\b/i;
+
+function isEmptyProseResult(text: string): boolean {
+	if (Buffer.byteLength(text, "utf8") > EMPTY_PROSE_MAX_BYTES) return false;
+	// Gate on contentType "string": a JSON payload that happens to contain the phrase must be judged
+	// on its parsed shape by the array/object branches, never on its text.
+	if (describeToolResult(text).shape.contentType !== "string") return false;
+	return EMPTY_PROSE_RE.test(text);
+}
+
 // SIO-1084: AWS tool results carry an {_error:{kind,...}} envelope on failure. The
 // looping kinds are the retention-window rejection (bad-input) and wrong-group
 // (resource-not-found).
@@ -318,6 +355,7 @@ export function isUnproductiveResult(content: unknown, toolName?: string): boole
 	if (typeof asText === "string") {
 		if (asText.length === 0) return true;
 		if (EMPTY_SEARCH_RE.test(asText)) return true;
+		if (isEmptyProseResult(asText)) return true;
 		if (isEmptyAggregationResult(asText)) return true;
 	}
 	const { shape } = describeToolResult(asText ?? content);
