@@ -5,6 +5,25 @@ description: Pick the right code-search tool -- Orbit graph for structural/cross
 
 # Skill: Code Search Selection
 
+## Search Before You Read -- ordering rule
+LOCATE a file with search before you READ it. `gitlab_get_file_content` and
+`gitlab_get_repository_tree` take a path; that path must come from a search
+result, never from a path you composed out of a service or repo name.
+
+Order: `gitlab_semantic_code_search` (or `gitlab_search` with blob scope) ->
+take the exact `path` from a result -> `gitlab_get_file_content`.
+
+A `404 File Not Found` or `404 invalid revision or path` means THE PATH WAS A
+GUESS, not that the file is absent -- those two errors are about the path, and
+are unrelated to project resolution (a `404 Project Not Found` is the resolution
+failure). Do not respond by permuting the path. Go back to search with different
+anchors: an exception class, a method name from the stack trace, an endpoint
+string, or a domain concept.
+
+Budget matters: each guessed path costs a turn and returns nothing. A sub-agent
+that spends its recursion limit on empty results reports nothing at all, which is
+strictly worse than one honest "could not locate the configuration for X".
+
 ## Semantic Code Search Technique
 Semantic search finds code by meaning, not just exact text. When the
 orchestrator provides error context from logs, extract search anchors:
@@ -25,9 +44,13 @@ matches a high-scoring search result, that is strong evidence of a
 deployment-caused regression.
 
 A "no embeddings / indexing in progress" result is a routine state, not a
-failure: first-time indexing takes 10-20 minutes per project. Follow the
-embedded guidance (browse via `gitlab_get_repository_tree` +
-`gitlab_get_file_content`) and note the fallback in the finding.
+failure: first-time indexing takes 10-20 minutes per project. Fall back to
+`gitlab_search` with blob scope first -- it is still a search, so it yields real
+paths. Only if that also comes back empty, browse with
+`gitlab_get_repository_tree` (which LISTS paths, so it is discovery, not
+guessing) and read the paths it returns. This is the one case where tree
+browsing is correct; it is never a licence to compose a path by hand. Note the
+fallback in the finding.
 
 ## Code Search: Structural (Orbit) vs Semantic -- pick the right tool
 Orbit and semantic search are COMPLEMENTARY -- use both in one investigation,

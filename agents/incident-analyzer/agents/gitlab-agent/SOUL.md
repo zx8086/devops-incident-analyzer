@@ -34,8 +34,15 @@ My working procedures are the skills below -- follow them exactly:
 Triage priority:
 1. Recent deployments and pipeline failures in the incident time window
 2. Merge requests merged shortly before the incident
-3. Code changes in affected files (blame, diff, commit history)
-4. Semantic code search for symbols from stack traces or error messages
+3. Semantic code search for symbols from stack traces or error messages --
+   this is how you LOCATE a file. Do it before step 4, not after.
+4. Code changes in the located files (blame, diff, commit history)
+
+Never guess a file path. `gitlab_get_file_content` and
+`gitlab_get_repository_tree` take a path you must have OBTAINED from a search
+result, not one you composed from a service name. A `404 File Not Found` means
+your path was a guess -- it does not mean the file is absent. Search again with
+different anchors instead of permuting the path.
 
 ## Output Standards
 - Every claim must reference specific API response data (no fabrication)

@@ -8,7 +8,6 @@ import {
 	consumeEmptyAwsResultsAdvice,
 	consumeInvalidQueryIdAdvice,
 	createLoopGuardState,
-	isGuardedTool,
 	isObservedTool,
 	type LoopGuardState,
 	recordResult,
@@ -144,16 +143,28 @@ function instrumentTool(
 					runState.toolNames.add(tool.name);
 
 					try {
-						// SIO-1029/SIO-1084: short-circuit a repeated/unproductive guarded
-						// call (elasticsearch_search, aws_logs_start_query) before it re-hits
-						// MCP, so the LLM gets an explicit terminal signal instead of another
-						// silent empty. `observed` also covers aws_logs_describe_log_groups,
-						// which is not guarded but must be recorded (it clears the AWS
-						// re-anchor gate).
-						const guarded = isGuardedTool(tool.name);
+						// SIO-1029/SIO-1084: short-circuit a repeated/unproductive call before it
+						// re-hits MCP, so the LLM gets an explicit terminal signal instead of
+						// another silent empty.
+						//
+						// SIO-1246: this was gated on `guarded` (isGuardedTool -- true for ONLY the
+						// two bespoke tools), which made SIO-1232's generic branch inside
+						// shouldShortCircuit unreachable in production. The counters incremented
+						// faithfully via recordResult but nothing ever stopped a runaway: on run
+						// 43796e9f gitlab_search returned empty at iterations 1/17/20/25 -- a 4th
+						// empty that MAX_UNPRODUCTIVE_PER_TOOL=3 should have refused -- and the
+						// sub-agent burned its whole recursion budget, returning a 49-char answer.
+						// The signature was also "" for every non-bespoke tool, so the generic
+						// duplicate rule had no data even in principle.
+						//
+						// shouldShortCircuit routes internally via GUARDED_TOOLS and checks
+						// GENERIC_GUARD_EXEMPT_TOOLS (aws_logs_get_query_results,
+						// aws_logs_describe_log_groups) FIRST, so the CloudWatch Insights poll and
+						// the AWS re-anchor path stay exempt -- do not reintroduce a call-site gate
+						// to "protect" them (CodeRabbit, PR #482).
 						const observed = isObservedTool(tool.name);
-						const signature = guarded ? toolCallSignature(tool.name, arg) : "";
-						if (guarded && shouldShortCircuit(runState.loopGuard, tool.name, signature, arg)) {
+						const signature = toolCallSignature(tool.name, arg);
+						if (shouldShortCircuit(runState.loopGuard, tool.name, signature, arg)) {
 							ctx.log.info(
 								{
 									event: "subagent.loop_guard_stop",
@@ -168,10 +179,12 @@ function instrumentTool(
 							return buildStopResult(arg, tool.name, runState.loopGuard);
 						}
 
-						// Reserve the signature BEFORE the await so a concurrent identical
-						// guarded call (parallel tool calls from one AIMessage) is caught as a
-						// duplicate rather than both slipping through pre-recordResult.
-						if (guarded) reserveSignature(runState.loopGuard, tool.name, signature);
+						// Reserve the signature BEFORE the await so a concurrent identical call
+						// (parallel tool calls from one AIMessage) is caught as a duplicate rather
+						// than both slipping through pre-recordResult. SIO-1246: now reserved for
+						// EVERY tool, matching reserveSignature's own SIO-1232 contract -- polling
+						// tools are exempted at the shouldShortCircuit check, not here.
+						reserveSignature(runState.loopGuard, tool.name, signature);
 
 						const result = await target.invoke(
 							arg as Parameters<StructuredToolInterface["invoke"]>[0],
