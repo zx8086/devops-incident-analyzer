@@ -4,6 +4,7 @@
 // on hasRunbooks because aggregate() calls buildOrchestratorPrompt(), which
 // calls loadAgent() — requires the real agents/incident-analyzer directory.
 import { afterEach, describe, expect, mock, test } from "bun:test";
+import { CAVEATS_HEADING } from "./confidence-policy.ts";
 
 // SIO-1120: the mock LLM emits BOTH failure shapes at once:
 //   1. logs:DescribeLogGroups "not permitted" -- no auth error will be observed for it (fabricated).
@@ -97,6 +98,7 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-1013 ungrounded-IAM-blocker cap", (
 			confidencePreCap: undefined,
 			capReasons: [] as string[],
 			confirmedDegradingGapBullets: [] as string[],
+			reportCaveats: [],
 			rootCauseDataSources: undefined,
 			degradedDataSources: [] as string[],
 			confidenceCapMode: undefined,
@@ -286,7 +288,8 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-1158 premature-absence judge veto",
 		expect(out.confidenceScore).toBeCloseTo(0.84);
 		expect(out.confidenceCap).toBeUndefined();
 		expect(out.capReasons).not.toContain("premature-absence");
-		expect(out.finalAnswer).not.toContain("[CORRECTION");
+		expect(out.finalAnswer).not.toContain(CAVEATS_HEADING);
+		expect(out.reportCaveats ?? []).toHaveLength(0);
 	});
 
 	test("still caps and rewrites the SIO-1085 true positive when the judge confirms", async () => {
@@ -297,19 +300,26 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-1158 premature-absence judge veto",
 		expect(out.confidenceScore).toBeLessThanOrEqual(0.59);
 		expect(out.confidenceCap).toBe(0.59);
 		expect(out.capReasons).toContain("premature-absence");
-		expect(out.finalAnswer).toContain("[CORRECTION");
+		expect(out.finalAnswer).toContain(CAVEATS_HEADING);
+		expect(out.reportCaveats?.length ?? 0).toBeGreaterThan(0);
 	});
 
-	test("inserts the correction inside the table cell when the judge confirms a table-row contradiction", async () => {
+	// SIO-1242: inverted. This used to assert the "[CORRECTION: ...]" debug string was inserted
+	// INSIDE the row's last cell -- which is exactly how an internal note ended up rendering in the
+	// Correlated Timeline's Severity column on run 43796e9f. The row must now survive untouched and
+	// the correction must arrive as a caveat instead.
+	test("leaves a table row UNMUTATED and records a caveat when the judge confirms", async () => {
 		mockLlmOverride = TABLE_CONTENT;
 		_setAbsenceJudgeLlmForTesting(verdictLlm([true]));
 
 		const out = await aggregate(makeState([ELASTIC_RESULT], "test-absence-judge-table"));
 		expect(out.capReasons).toContain("premature-absence");
 		const row = (out.finalAnswer ?? "").split("\n").find((l) => l.includes("StockSyncException")) ?? "";
-		expect(row).toContain("[CORRECTION");
+		expect(row).not.toContain("[CORRECTION");
 		expect(row.trimEnd().endsWith("|")).toBe(true);
-		expect(row.indexOf("[CORRECTION")).toBeLessThan(row.lastIndexOf("|"));
+		const caveat = out.reportCaveats?.find((c) => c.claim.includes("StockSyncException"));
+		expect(caveat).toBeDefined();
+		expect(out.finalAnswer).toContain(CAVEATS_HEADING);
 	});
 
 	test("ABSENCE_JUDGE_ENABLED=false keeps the regex verdict and never invokes the judge", async () => {
@@ -327,7 +337,8 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-1158 premature-absence judge veto",
 		expect(calls).toHaveLength(0);
 		expect(out.confidenceScore).toBeLessThanOrEqual(0.59);
 		expect(out.capReasons).toContain("premature-absence");
-		expect(out.finalAnswer).toContain("[CORRECTION");
+		expect(out.finalAnswer).toContain(CAVEATS_HEADING);
+		expect(out.reportCaveats?.length ?? 0).toBeGreaterThan(0);
 	});
 
 	test("a judge failure fails closed to the regex verdict", async () => {
@@ -341,7 +352,8 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-1158 premature-absence judge veto",
 		const out = await aggregate(makeState([ELASTIC_RESULT], "test-absence-judge-failure"));
 		expect(out.confidenceScore).toBeLessThanOrEqual(0.59);
 		expect(out.capReasons).toContain("premature-absence");
-		expect(out.finalAnswer).toContain("[CORRECTION");
+		expect(out.finalAnswer).toContain(CAVEATS_HEADING);
+		expect(out.reportCaveats?.length ?? 0).toBeGreaterThan(0);
 	});
 });
 
@@ -380,14 +392,17 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-1198 overgeneralized-absence judge 
 		expect(out.finalAnswer).not.toContain("[SCOPE");
 	});
 
-	test("judge-confirmed universal claim still caps and gets the SCOPE suffix", async () => {
+	// SIO-1242: both arms of the absence guard moved to the caveat channel, so the "[SCOPE ...]"
+	// suffix is now a caveat note rather than an inline append. The cap behaviour is unchanged.
+	test("judge-confirmed universal claim still caps and records a SCOPE caveat", async () => {
 		mockLlmOverride = UNIVERSAL_CONTENT;
 		_setAbsenceJudgeLlmForTesting(overVerdictLlm([true]));
 
 		const out = await aggregate(makeState([ELASTIC_RESULT], "test-overgen-judge-confirm"));
 		expect(out.confidenceScore).toBeLessThanOrEqual(0.59);
 		expect(out.capReasons).toContain("premature-absence");
-		expect(out.finalAnswer).toContain("[SCOPE");
+		expect(out.finalAnswer).not.toContain("[SCOPE");
+		expect(out.reportCaveats?.some((c) => c.guard === "premature-absence-overgeneralized")).toBe(true);
 	});
 
 	test("judge failure keeps the regex verdict (fail-closed: cap applies)", async () => {

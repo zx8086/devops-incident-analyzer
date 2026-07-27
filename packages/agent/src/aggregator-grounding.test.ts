@@ -3,10 +3,10 @@ import { describe, expect, test } from "bun:test";
 import type { DataSourceResult } from "@devops-agent/shared";
 import {
 	appendSuffixToLine,
+	buildPrematureAbsenceCaveats,
 	detectPrematureAbsence,
 	detectUngroundedBlockers,
 	rewriteNoIndexMisread,
-	rewritePrematureAbsence,
 	rewriteUngroundedBlockers,
 	rewriteUngroundedRootCause,
 } from "./aggregator.ts";
@@ -432,35 +432,53 @@ describe("detectPrematureAbsence", () => {
 	});
 });
 
-describe("rewritePrematureAbsence", () => {
-	test("appends a correction to a contradicted absence line and a scope caveat to an over-generalized one", () => {
+// SIO-1242: the absence guard no longer mutates the claim -- it records a caveat. These tests were
+// previously asserting that a "[CORRECTION: ...]" debug string was appended INSIDE the flagged
+// line's last table cell (SIO-1158). That behaviour is what put an internal note in the Correlated
+// Timeline's Severity column on run 43796e9f, so the assertions are inverted here: the line must
+// come back byte-identical and the correction must arrive as data instead.
+describe("buildPrematureAbsenceCaveats (SIO-1242)", () => {
+	test("records a caveat per claim and leaves every source line untouched", () => {
 		const contra = "prana-order-service does not ship logs; 0 hits.";
 		const over = "the afs field is entirely absent from all records.";
 		const answer = `### Elasticsearch\n\n${contra}\n\n### Couchbase\n\n${over}\n\nConfidence: 0.8`;
-		const out = rewritePrematureAbsence(answer, [contra], [over]);
-		expect(out).toContain("CORRECTION: this datasource's sub-agent returned matching data");
-		expect(out).toContain("SCOPE: this states absence more broadly than was verified");
-		expect(out).toContain("Confidence: 0.8"); // untouched lines preserved
+		const caveats = buildPrematureAbsenceCaveats(answer, [{ line: contra, dataSourceId: "elastic" }], [over]);
+
+		expect(caveats.map((c) => c.guard)).toEqual([
+			"premature-absence-contradicted",
+			"premature-absence-overgeneralized",
+		]);
+		expect(caveats[0]?.claim).toBe(contra);
+		expect(caveats[0]?.dataSourceId).toBe("elastic");
+		expect(caveats[0]?.section).toBe("Elasticsearch");
+		expect(caveats[1]?.section).toBe("Couchbase");
+		// The answer itself is an input here and is never returned mutated -- nothing to assert on
+		// it beyond the fact that no rewriter touched it, which the integration test pins end-to-end.
 	});
 
-	test("returns the answer unchanged when nothing is flagged", () => {
-		const answer = "### Elasticsearch\n\nall good.\n\nConfidence: 0.9";
-		expect(rewritePrematureAbsence(answer, [], [])).toBe(answer);
+	test("returns no caveats when nothing is flagged", () => {
+		expect(buildPrematureAbsenceCaveats("### Elasticsearch\n\nall good.\n\nConfidence: 0.9", [], [])).toEqual([]);
 	});
 
-	// SIO-1158: production false positive #2's structural half -- a confirmed contradiction
-	// inside a table row must land INSIDE the last cell, not after the trailing pipe.
-	test("keeps a corrected table row a structurally valid table row", () => {
+	// The inversion of the old "keeps a corrected table row a structurally valid table row".
+	test("never mutates a flagged table row -- the correction becomes a caveat", () => {
 		const answer = `| Pattern | Evidence |\n|---|---|\n${PRODUCTION_TABLE_ROW}\n\nConfidence: 0.8`;
-		const out = rewritePrematureAbsence(answer, [PRODUCTION_TABLE_ROW], []);
-		const lines = out.split("\n");
-		expect(lines[0]).toBe("| Pattern | Evidence |");
-		expect(lines[1]).toBe("|---|---|");
-		const row = lines[2] ?? "";
-		expect(row).toContain("[CORRECTION");
-		expect(row.trimEnd().endsWith("|")).toBe(true);
-		expect(row.indexOf("[CORRECTION")).toBeLessThan(row.lastIndexOf("|"));
-		expect(row.split("|").length).toBe(PRODUCTION_TABLE_ROW.split("|").length);
+		const caveats = buildPrematureAbsenceCaveats(answer, [{ line: PRODUCTION_TABLE_ROW, dataSourceId: "elastic" }], []);
+		expect(caveats).toHaveLength(1);
+		expect(caveats[0]?.claim).toBe(PRODUCTION_TABLE_ROW);
+		expect(caveats[0]?.note).not.toContain("synthesis error");
+		// The row is untouched by construction: nothing in this path writes to `answer`.
+		expect(answer.split("\n")[2]).toBe(PRODUCTION_TABLE_ROW);
+	});
+
+	// The SIO-1242 acceptance criterion: "every occurrence reconciled, not just the flagged line".
+	// Satisfied by construction (nothing is mutated), and made auditable by `occurrences`.
+	test("counts every occurrence of a claim that appears more than once", () => {
+		const claim = "prana-order-service is not present in this estate.";
+		const answer = `### Findings\n\n${claim}\n\n### Timeline\n\n${claim}\n\nConfidence: 0.7`;
+		const caveats = buildPrematureAbsenceCaveats(answer, [{ line: claim, dataSourceId: "aws" }], []);
+		expect(caveats).toHaveLength(1);
+		expect(caveats[0]?.occurrences).toBe(2);
 	});
 });
 
@@ -496,5 +514,93 @@ describe("table-safe suffix adoption in sibling rewriters (SIO-1158)", () => {
 		expect(rewritten).toContain("[CORRECTION");
 		expect(rewritten.trimEnd().endsWith("|")).toBe(true);
 		expect(rewritten.indexOf("[CORRECTION")).toBeLessThan(rewritten.lastIndexOf("|"));
+	});
+});
+
+// SIO-1242: the run-43796e9f false positive. The aggregator prompt's own crossEstateAbsenceRule
+// (SIO-1149) INSTRUCTS the model to write "not deployed in this estate -- a definitive negative
+// result", then the absence guard flagged that sanctioned sentence as a fabrication and hard-capped
+// the report to 0.59, below the HITL gate. Two guards from different tickets fighting each other.
+describe("detectPrematureAbsence: enumeration-backed confirmed negative (SIO-1242)", () => {
+	// eu-shared-services-prd returned FIVE non-empty aws_ecs_list_services payloads; none names the
+	// focus service. Data was returned, but none of it contradicts the claim -- it proves it.
+	const ecsEnumeration = [
+		{ toolName: "aws_ecs_list_services", rawJson: { serviceArns: ["arn:...:service/authentication-service"] } },
+		{ toolName: "aws_ecs_list_services", rawJson: { serviceArns: ["arn:...:service/bitly-service"] } },
+		{ toolName: "aws_ecs_list_services", rawJson: { serviceArns: ["arn:...:service/brads-service"] } },
+		{ toolName: "aws_logs_describe_log_groups", rawJson: { logGroups: [] } },
+	];
+	const ABSENCE_LINE = "`prana-order-service` is not present across all 5 ECS clusters (aws_ecs_list_services).";
+
+	test("does NOT flag a claim whose entity is absent from a non-empty enumeration", () => {
+		const { contradicted } = detectPrematureAbsence(`${ABSENCE_LINE}\n\nConfidence: 0.72`, [
+			result({ dataSourceId: "aws", deploymentId: "estate:eu-shared-services-prd", toolOutputs: ecsEnumeration }),
+		]);
+		expect(contradicted).toEqual([]);
+	});
+
+	// The SIO-1085 guard must survive: when the evidence DOES name the entity, that is a real
+	// contradiction and stays flagged.
+	test("still flags when the returned data mentions the claimed-absent entity", () => {
+		const mentions = [
+			{ toolName: "aws_ecs_list_services", rawJson: { serviceArns: ["arn:...:service/prana-order-service"] } },
+		];
+		const { contradicted } = detectPrematureAbsence(`${ABSENCE_LINE}\n\nConfidence: 0.72`, [
+			result({ dataSourceId: "aws", toolOutputs: mentions }),
+		]);
+		expect(contradicted).toHaveLength(1);
+	});
+
+	// THE LOAD-BEARING GATE. "Total results: 91" is a COUNT, not an enumeration -- it could never
+	// have listed the entity, so it must not be allowed to exempt anything. Without this the
+	// SIO-1085 fixture below flips to suppressed and the original guard is silently gutted.
+	test("a bare count is not an enumeration and cannot suppress (SIO-1085 stays flagged)", () => {
+		const answer =
+			"### Elasticsearch\n\n`prana-order-service` does not ship logs to the connected Elasticsearch cluster; 0 hits.\n\nConfidence: 0.8";
+		const { contradicted } = detectPrematureAbsence(answer, [
+			result({
+				dataSourceId: "elastic",
+				toolOutputs: [{ toolName: "elasticsearch_search", rawJson: "Total results: 91, showing 5 from position 0" }],
+			}),
+		]);
+		expect(contradicted).toHaveLength(1);
+	});
+
+	test("a claim with no extractable entity keeps the pre-SIO-1242 behaviour", () => {
+		const answer = "### Elasticsearch\n\nno matching documents in the elastic index.\n\nConfidence: 0.8";
+		const { contradicted } = detectPrematureAbsence(answer, [
+			result({
+				dataSourceId: "elastic",
+				toolOutputs: [{ toolName: "elasticsearch_search", rawJson: [{ _source: { message: "boom" } }] }],
+			}),
+		]);
+		expect(contradicted).toHaveLength(1);
+	});
+
+	test("the kill switch restores the pre-SIO-1242 flag", () => {
+		const prev = process.env.ABSENCE_ENTITY_MATCH_ENABLED;
+		process.env.ABSENCE_ENTITY_MATCH_ENABLED = "false";
+		try {
+			const { contradicted } = detectPrematureAbsence(`${ABSENCE_LINE}\n\nConfidence: 0.72`, [
+				result({ dataSourceId: "aws", toolOutputs: ecsEnumeration }),
+			]);
+			expect(contradicted).toHaveLength(1);
+		} finally {
+			if (prev === undefined) delete process.env.ABSENCE_ENTITY_MATCH_ENABLED;
+			else process.env.ABSENCE_ENTITY_MATCH_ENABLED = prev;
+		}
+	});
+
+	// Attribution: pre-SIO-1242 DATASOURCE_KEYWORDS had no `aws` entry, so an AWS claim could only
+	// be caught by an incidental keyword and was judged against the WRONG datasource's evidence.
+	test("attributes an AWS claim to aws, not to an incidental keyword", () => {
+		// NB the line must match ABSENCE_CLAIM_RE ("not present"), and mentions BOTH an aws keyword
+		// (CloudWatch) and incidental elastic/kafka ones (APM, topic) -- only aws has data, so aws is
+		// the only attributable owner. Pre-SIO-1242 there was no `aws` key to attribute to at all.
+		const { contradictedDetails } = detectPrematureAbsence(
+			"`checkout-api` is not present in any CloudWatch log group; the APM topic was not queried.\n\nConfidence: 0.7",
+			[result({ dataSourceId: "aws", toolOutputs: [{ toolName: "aws_x", rawJson: { total: 3 } }] })],
+		);
+		expect(contradictedDetails[0]?.dataSourceId).toBe("aws");
 	});
 });

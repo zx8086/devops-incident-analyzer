@@ -1,6 +1,6 @@
 // agent/src/index.test.ts
 import { describe, expect, mock, test } from "bun:test";
-import type { DataSourceResult } from "@devops-agent/shared";
+import type { DataSourceResult, ReportCaveat } from "@devops-agent/shared";
 
 // Mock MCP bridge so supervisor tests don't depend on connected MCP servers.
 // Returns a single fake tool for any valid datasource ID.
@@ -53,6 +53,7 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		confidencePreCap: undefined,
 		capReasons: [] as string[],
 		confirmedDegradingGapBullets: [] as string[],
+		reportCaveats: [] as ReportCaveat[],
 		rootCauseDataSources: undefined,
 		degradedDataSources: [] as string[],
 		confidenceCapMode: undefined,

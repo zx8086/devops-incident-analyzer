@@ -234,6 +234,7 @@ function makeRetryState(overrides: Partial<AgentStateType> = {}): AgentStateType
 		confidencePreCap: undefined,
 		capReasons: [] as string[],
 		confirmedDegradingGapBullets: [] as string[],
+		reportCaveats: [],
 		rootCauseDataSources: undefined,
 		degradedDataSources: [] as string[],
 		confidenceCapMode: undefined,

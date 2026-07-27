@@ -184,6 +184,7 @@ describe("Phase 5 correlation rules — pipeline integration", () => {
 			confidencePreCap: undefined,
 			capReasons: [] as string[],
 			confirmedDegradingGapBullets: [] as string[],
+			reportCaveats: [],
 			correlationFetchDirective: undefined,
 			lowConfidence: false,
 			pendingActions: [],

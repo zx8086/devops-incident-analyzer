@@ -111,6 +111,7 @@ function makeState(overrides: Partial<AgentStateType> = {}): AgentStateType {
 		confidencePreCap: undefined,
 		capReasons: [] as string[],
 		confirmedDegradingGapBullets: [] as string[],
+		reportCaveats: [],
 		correlationFetchDirective: undefined,
 		lowConfidence: false,
 		pendingActions: [],

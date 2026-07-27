@@ -78,6 +78,7 @@ describe("detectTopicShift interrupt round-trip (SIO-751)", () => {
 			confidencePreCap: undefined,
 			capReasons: [] as string[],
 			confirmedDegradingGapBullets: [] as string[],
+			reportCaveats: [],
 			rootCauseDataSources: undefined,
 			degradedDataSources: [] as string[],
 			confidenceCapMode: undefined,
