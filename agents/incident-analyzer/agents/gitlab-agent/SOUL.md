@@ -23,8 +23,10 @@ causes, job timeout patterns, deployment timing, code change authorship)
 but leave cross-datasource correlation to the orchestrator.
 
 My working procedures are the skills below -- follow them exactly:
-- `project-resolution` governs EVERY project-scoped call (resolve first,
-  numeric id, STOP on unresolved; Orbit graph tools are exempt).
+- `project-resolution` governs EVERY project-scoped call (take the id from the
+  investigation focus block when it is there, otherwise resolve it ONCE per
+  project and reuse it; numeric id, STOP on unresolved; Orbit graph tools are
+  exempt).
 - `code-search-selection` picks between Orbit graph tools and semantic
   search, and defines the fallback when Orbit errors.
 - `code-change-correlation` is the deploy-vs-runtime evidence chain

@@ -5,8 +5,10 @@
 // anchor so the LLM can convert ISO/relative windows to correct epoch seconds.
 
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import type { InvestigationFocus, ResolvedIdentifiers } from "@devops-agent/shared";
 import { buildFocusBlock } from "./sub-agent-focus-block.ts";
+import { GENERIC_LOOP_GUARD_STOP_MESSAGE } from "./sub-agent-loop-guard.ts";
 
 const NOW = "2026-07-12T05:18:00.000Z";
 
@@ -255,5 +257,77 @@ describe("SIO-1107 bucket-aware couchbase rendering", () => {
 		expect(block).toContain("orders: [order_lines]");
 		expect(block).not.toContain("Default bucket");
 		expect(block).not.toContain("Other buckets");
+	});
+});
+
+// SIO-1258: project-resolution/SKILL.md STEP 0 tells the gitlab sub-agent to skip its resolution
+// search when the focus block already carries the project id. That instruction is only safe while
+// the SKILL quotes the label buildFocusBlock actually emits -- if either side is reworded, the
+// model looks for a line that never appears, silently falls through to STEP 1, and the 7-searches-
+// per-turn regression this ticket fixed comes back with no test failing.
+//
+// STEP 3's short-circuit paragraph has the same shape: it quotes the loop guard's refusal wording
+// so the agent can tell "the search ran and found nothing" (a real negative finding) from "the
+// search was refused" (a call-budget outcome). Getting that backwards fabricates a
+// "could not resolve a GitLab project" finding, which is worse than the defect.
+describe("SIO-1258: project-resolution prose matches the strings the code emits", () => {
+	const SKILL_PATH = join(
+		import.meta.dir,
+		"../../../agents/incident-analyzer/agents/gitlab-agent/skills/project-resolution/SKILL.md",
+	);
+
+	test("STEP 0 quotes the exact label buildFocusBlock renders for gitlab", async () => {
+		const resolved: ResolvedIdentifiers = {
+			resolvedForTurn: 1,
+			resolvedForServices: FOCUS.services,
+			gitlab: { projectId: "4471", pathWithNamespace: "pvhcorp/b2b/customer-assignments" },
+		};
+		const block = buildFocusBlock(FOCUS, NOW, resolved, "gitlab");
+		// The literal the skill tells the model to look for.
+		expect(block).toContain("- GitLab numeric project_id: 4471 (pvhcorp/b2b/customer-assignments)");
+
+		const skill = await Bun.file(SKILL_PATH).text();
+		// The WHOLE backticked template, not a prefix. A fragment match would let the `<id> (<path>)`
+		// shape drift out of sync with buildFocusBlock while CI stayed green -- which would defeat the
+		// entire point of this test (CodeRabbit, PR #500).
+		expect(skill).toContain("`- GitLab numeric project_id: <id> (<path>)`");
+		// ...and STEP 0 must actually be the instruction that consumes it.
+		expect(skill).toContain("STEP 0");
+		expect(skill).toMatch(/STEP 1 is SATISFIED/i);
+	});
+
+	test("STEP 3 quotes the loop guard's refusal wording", async () => {
+		const skill = await Bun.file(SKILL_PATH).text();
+		// GENERIC_LOOP_GUARD_STOP_MESSAGE is what a short-circuited gitlab_search returns.
+		expect(GENERIC_LOOP_GUARD_STOP_MESSAGE).toContain("returned nothing useful several times");
+		expect(skill).toContain("returned nothing useful several times");
+		// Anchor the FULL report string, not just the closing clause: the "was not attempted"
+		// distinction is the load-bearing half, and a fragment match would let it be dropped.
+		expect(skill).toMatch(
+			/GitLab project resolution was not attempted for\s+`<name>`: the search tool was short-circuited after repeated empty results/,
+		);
+		// The distinction that keeps a refusal from being reported as a missing project.
+		expect(skill).toMatch(/never as "the project does not exist"/i);
+	});
+
+	// CodeRabbit, PR #500 (Major): "reuse any id you already hold" let a short-circuited resolution
+	// for project B fall back to an id resolved for project A -- running project-scoped calls against
+	// the wrong repository and reporting another project's commits as this one's. Reuse must be
+	// same-project only.
+	test("id reuse after a short-circuit is restricted to the same project", async () => {
+		const skill = await Bun.file(SKILL_PATH).text();
+		expect(skill).toMatch(/Reuse ONLY an id you already hold for THAT\s+SAME project/);
+		expect(skill).toMatch(/make no project-scoped call for it\s+and report its resolution as not attempted/);
+		// The dangerous unscoped phrasing must not come back.
+		expect(skill).not.toMatch(/Reuse any id you already hold/i);
+	});
+
+	test("the skill still resolves once per project rather than once per call", async () => {
+		const skill = await Bun.file(SKILL_PATH).text();
+		expect(skill).toContain("ONCE PER DISTINCT PROJECT, not once per call");
+		// SIO-1238's categorical rule must survive -- it fixed a real 404-on-bare-service-name
+		// failure and this ticket scopes it, never reverts it.
+		expect(skill).toMatch(/no tool that takes a `project_id` argument may be called with\s+an unresolved project/);
+		expect(skill).toContain("NEVER pass a bare");
 	});
 });
