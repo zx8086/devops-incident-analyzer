@@ -5,11 +5,8 @@ import { DEFAULT_TOOL_RESULT_CAP_BYTES } from "@devops-agent/shared";
 const HITS_KEEP = 3;
 const NODES_KEEP = 5;
 const ARRAY_KEEP_DEFAULT = 20;
-const ARRAY_KEEP_LARGE_ITEM = 3;
-const LARGE_ITEM_BYTES = 8_192;
 const ROWS_KEEP = 20;
 const BYTE_BUDGET_DIVISOR = 4;
-const ARRAY_INLINE_SAMPLE = 5;
 const MARKER_BYTE_RESERVE = 256;
 // SIO-833: sourced from @devops-agent/shared so the agent and AWS MCP caps move in lockstep.
 const DEFAULT_CAP_BYTES = DEFAULT_TOOL_RESULT_CAP_BYTES;
@@ -117,40 +114,58 @@ function reduceJson(value: unknown, capBytes: number): ReducedJson {
 
 	const hits = obj.hits as Record<string, unknown> | undefined;
 	if (hits && Array.isArray(hits.hits) && hits.hits.length > HITS_KEEP) {
-		const reducedHits = {
-			...hits,
-			hits: hits.hits.slice(0, HITS_KEEP),
-			_truncated: true,
-			_totalHits: hits.hits.length,
-		};
-		return { value: { ...obj, hits: reducedHits }, changed: true, strategy: "json-hits" };
+		// SIO-1249: HITS_KEEP is only the trigger threshold now -- the budget decides the
+		// count. Budget against the ENVELOPE, not the raw cap: sibling fields (aggregations,
+		// took, timed_out) also cost bytes, and ignoring them let the reassembled object
+		// exceed the cap and fall through to the non-structure-preserving text path.
+		const keep = fitCount(hits.hits, capBytes - envelopeBytes({ ...obj, hits: { ...hits, hits: [] } }));
+		if (keep < hits.hits.length) {
+			const reducedHits = {
+				...hits,
+				hits: hits.hits.slice(0, keep),
+				_truncated: true,
+				_totalHits: hits.hits.length,
+			};
+			return { value: { ...obj, hits: reducedHits }, changed: true, strategy: "json-hits" };
+		}
 	}
 
 	const nodes = obj.nodes;
 	if (nodes && typeof nodes === "object" && !Array.isArray(nodes)) {
 		const entries = Object.entries(nodes as Record<string, unknown>);
 		if (entries.length > NODES_KEEP) {
-			const kept = Object.fromEntries(entries.slice(0, NODES_KEEP));
-			return {
-				value: { ...obj, nodes: kept, _nodeCount: entries.length, _truncated: true },
-				changed: true,
-				strategy: "json-nodes",
-			};
+			// SIO-1249: NODES_KEEP is only the trigger threshold. Fitting on the entry PAIRS
+			// keeps the measurement honest -- an entry serialises as key + value, not value
+			// alone -- and the envelope reserve accounts for the sibling fields.
+			const keep = fitCount(entries, capBytes - envelopeBytes({ ...obj, nodes: {} }));
+			if (keep < entries.length) {
+				const kept = Object.fromEntries(entries.slice(0, keep));
+				return {
+					value: { ...obj, nodes: kept, _nodeCount: entries.length, _truncated: true },
+					changed: true,
+					strategy: "json-nodes",
+				};
+			}
 		}
 	}
 
 	// {columns, rows} shape (elasticsearch_execute_sql_query).
 	if (Array.isArray(obj.rows) && obj.rows.length > ROWS_KEEP) {
-		return {
-			value: {
-				...obj,
-				rows: obj.rows.slice(0, ROWS_KEEP),
-				_truncated: true,
-				_totalRows: obj.rows.length,
-			},
-			changed: true,
-			strategy: "json-rows",
-		};
+		// SIO-1249: ROWS_KEEP is only the trigger threshold; the budget decides the real
+		// count, measured against the envelope so `columns` and friends are paid for.
+		const keep = fitCount(obj.rows, capBytes - envelopeBytes({ ...obj, rows: [] }));
+		if (keep < obj.rows.length) {
+			return {
+				value: {
+					...obj,
+					rows: obj.rows.slice(0, keep),
+					_truncated: true,
+					_totalRows: obj.rows.length,
+				},
+				changed: true,
+				strategy: "json-rows",
+			};
+		}
 	}
 
 	// Fallback: find the largest array field and trim it. Catches unknown shapes that
@@ -181,28 +196,18 @@ function reduceArray(value: unknown[], capBytes: number): ReducedJson {
 	return { value: reduced, changed: true, strategy: "json-array" };
 }
 
-// Decides keep-count from item size: small items can keep 20, large items only 3.
-// Appends a {_truncated, _totalCount, _keptCount} marker entry.
-// SIO-688: samples up to 5 items and uses MAX (not avg) so inhomogeneous arrays
-// (small head, huge tail) don't underestimate `keep` from a tiny first item;
-// then verifies actual sliced bytes and shrinks further if needed.
+// Keeps as many leading items as the budget allows, then appends a
+// {_truncated, _totalCount, _keptCount} marker entry.
+//
+// SIO-1249: this used to derive a keep-count from a 5-item sample and clamp it with
+// Math.min(baseKeep, byteBoundedKeep, length) -- so a generous cap still yielded at most
+// 20 items (3 when the sample looked large) and the remaining budget was discarded, and a
+// shrink loop then corrected the sample's underestimates one item at a time. fitCount's
+// binary search over the REAL serialized slice replaces all of it: no sampling heuristic,
+// no correction loop, and the size it reports is the size that ships.
 function reduceArrayInline(value: unknown[], capBytes: number): unknown[] {
 	if (value.length === 0) return value;
-	const sampleCount = Math.min(value.length, ARRAY_INLINE_SAMPLE);
-	let maxSampleBytes = 0;
-	for (let i = 0; i < sampleCount; i++) {
-		const bytes = serializedBytes(value[i]);
-		if (bytes > maxSampleBytes) maxSampleBytes = bytes;
-	}
-	const baseKeep = maxSampleBytes > LARGE_ITEM_BYTES ? ARRAY_KEEP_LARGE_ITEM : ARRAY_KEEP_DEFAULT;
-	const budget = capBytes - MARKER_BYTE_RESERVE;
-	const byteBoundedKeep = Math.max(1, Math.floor(budget / Math.max(1, maxSampleBytes)));
-	let finalKeep = Math.min(baseKeep, byteBoundedKeep, value.length);
-	// Verify the actual sliced bytes against the cap; shrink if a later item turns
-	// out heavier than any sampled item.
-	while (finalKeep > 1 && serializedBytes(value.slice(0, finalKeep)) > budget) {
-		finalKeep--;
-	}
+	const finalKeep = fitCount(value, capBytes - MARKER_BYTE_RESERVE);
 	return [...value.slice(0, finalKeep), { _truncated: true, _totalCount: value.length, _keptCount: finalKeep }];
 }
 
@@ -220,9 +225,45 @@ function findLargestArrayField(obj: Record<string, unknown>): { key: string; arr
 	return best;
 }
 
+// SIO-1249: bytes the container costs with its bulky array emptied, plus the marker
+// reserve. Subtracting this from the cap gives the array its TRUE remaining budget, so a
+// reduced object with heavy siblings still fits and keeps its structure-preserving strategy.
+function envelopeBytes(shell: unknown): number {
+	return serializedBytes(shell) + MARKER_BYTE_RESERVE;
+}
+
 function serializedBytes(value: unknown): number {
 	const json = JSON.stringify(value);
 	return json == null ? 0 : Buffer.byteLength(json, "utf8");
+}
+
+// SIO-1249: how many leading items actually FIT the byte budget.
+//
+// The reducers used to slice at fixed constants (HITS_KEEP 3, NODES_KEEP 5, ROWS_KEEP 20)
+// regardless of capBytes, so cap=131072 and cap=16384 produced byte-identical output and
+// ~99% of the granted budget was thrown away.
+//
+// The BUDGET always wins -- those constants are no longer a ceiling and are deliberately
+// not a floor either. Returning more than fits would push the serialized result back over
+// the cap, and truncateToolOutput would then fall through to textTruncate, whose output is
+// NOT structure-preserving (the exact failure SIO-785/SIO-1159 fixed). The only floor is 1,
+// so the shape stays parseable; if even one item busts the cap, the caller's textTruncate
+// guard is the correct last resort.
+//
+// Binary search on real serialized bytes (~log2(n) stringifies) rather than an item-size
+// estimate, so nested/inhomogeneous items can't overshoot the cap.
+function fitCount(items: unknown[], budgetBytes: number): number {
+	if (items.length === 0) return 0;
+	if (budgetBytes <= 0) return 1;
+
+	let lo = 0;
+	let hi = items.length;
+	while (lo < hi) {
+		const mid = Math.ceil((lo + hi) / 2);
+		if (serializedBytes(items.slice(0, mid)) <= budgetBytes) lo = mid;
+		else hi = mid - 1;
+	}
+	return Math.max(lo, 1);
 }
 
 // Find ```json...``` fences in markdown content. Reduce the first one whose JSON
