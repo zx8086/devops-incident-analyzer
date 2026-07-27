@@ -981,9 +981,15 @@ describe("extractFindings multi-deployment merge (SIO-1245)", () => {
 		} as unknown as AgentStateType;
 
 		const out = await extractFindings(state);
-		for (const row of out.dataSourceResults ?? []) {
-			expect(row.awsFindings?.alarms?.map((a) => a.name)).toEqual(["prana-order-service-CPU"]);
-		}
+		// Assert the row COUNT first: a bare `for (const row of out.dataSourceResults ?? [])`
+		// passes vacuously on an empty array (CodeRabbit, PR #494).
+		expect(out.dataSourceResults).toHaveLength(2);
+		const healthy = out.dataSourceResults?.find((r) => r.deploymentId === "estate:healthy");
+		const broken = out.dataSourceResults?.find((r) => r.deploymentId === "estate:broken");
+		expect(healthy?.awsFindings?.alarms?.map((a) => a.name)).toEqual(["prana-order-service-CPU"]);
+		// The malformed row gets the same merged findings -- that is the point: its bad state
+		// costs neither itself nor its sibling the data.
+		expect(broken?.awsFindings?.alarms?.map((a) => a.name)).toEqual(["prana-order-service-CPU"]);
 	});
 
 	test("order does not matter -- valid before malformed gives the same result", async () => {
@@ -1021,6 +1027,15 @@ describe("extractFindings multi-deployment merge (SIO-1245)", () => {
 			investigationFocus: focus,
 			dataSourceResults: [...rows].reverse(),
 		} as unknown as AgentStateType);
-		expect(forward.dataSourceResults?.[0]?.awsFindings).toEqual(reversed.dataSourceResults?.[0]?.awsFindings as never);
+		// Assert the CONTENT, not just that the two runs agree: comparing
+		// `forward[0].awsFindings` to `reversed[0].awsFindings` passes when both are
+		// undefined, which is the exact bug this test exists to catch (CodeRabbit, PR #494).
+		for (const result of [forward, reversed]) {
+			expect(result.dataSourceResults).toHaveLength(2);
+			expect(result.dataSourceResults?.map((r) => r.awsFindings?.alarms?.map((a) => a.name))).toEqual([
+				["prana-order-service-CPU"],
+				["prana-order-service-CPU"],
+			]);
+		}
 	});
 });
