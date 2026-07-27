@@ -132,3 +132,81 @@ describe("extractAtlassianFindings focus scoping (SIO-1030)", () => {
 		expect(out.linkedIssues?.map((i) => i.key)).toEqual(["INC-1"]);
 	});
 });
+
+// SIO-1244: run 43796e9f dropped all 10 Atlassian findings while Atlassian was the most
+// load-bearing datasource in the report. Provenance -- the envelope's own `service`, i.e. the
+// focus-derived term the sub-agent searched with -- decides before per-issue prose matching.
+describe("extractAtlassianFindings provenance scoping (SIO-1244)", () => {
+	const envelope = (service: string, rows: Array<Record<string, unknown>>): ToolOutput => ({
+		toolName: "findLinkedIncidents",
+		rawJson: { service, jql: "...", count: rows.length, issues: rows },
+	});
+
+	// The production shape: findLinkedIncidents' JQL matches on labels/component/errorKeywords,
+	// so it legitimately returns tickets whose SUMMARY never names the service.
+	test("keeps issues retrieved by a focus-scoped query even when no summary names the service", () => {
+		const out = extractAtlassianFindings(
+			[
+				envelope("prana-order-service", [
+					{ key: "DEVOPS-1405", summary: "AFS season code mismatch on THE1", status: "Open" },
+					{ key: "DEVOPS-1397", summary: "Delivery window calculation regression", status: "Resolved" },
+				]),
+			],
+			["prana-order-service"],
+		);
+		expect(out.linkedIssues?.map((i) => i.key)).toEqual(["DEVOPS-1405", "DEVOPS-1397"]);
+	});
+
+	// The SIO-1030 guarantee: provenance is a guard, not an off-switch. An envelope whose own
+	// service is off-focus must NOT smuggle its tickets in.
+	test("an off-focus envelope still gets per-issue matching, and unrelated issues drop", () => {
+		const out = extractAtlassianFindings(
+			[
+				envelope("billing-service", [
+					{ key: "INC-1", summary: "prana-order-service returning 500s", status: "Open" },
+					{ key: "INC-2", summary: "unrelated cache eviction", status: "Open" },
+				]),
+			],
+			["prana-order-service"],
+		);
+		expect(out.linkedIssues?.map((i) => i.key)).toEqual(["INC-1"]);
+	});
+
+	test("matches on the issue KEY as well as the summary", () => {
+		const out = extractAtlassianFindings(
+			[
+				envelope("billing-service", [
+					{ key: "PRANA-ORDER-77", summary: "opaque title with no service name", status: "Open" },
+					{ key: "OTHER-1", summary: "also opaque", status: "Open" },
+				]),
+			],
+			["prana-order-service"],
+		);
+		expect(out.linkedIssues?.map((i) => i.key)).toEqual(["PRANA-ORDER-77"]);
+	});
+
+	// Back-compat: envelopes without `service` (older captures, other producers) behave exactly
+	// as before -- per-issue matching only.
+	test("an envelope with no service field falls back to per-issue matching", () => {
+		const out = extractAtlassianFindings(
+			[
+				{
+					toolName: "findLinkedIncidents",
+					rawJson: {
+						issues: [
+							{ key: "INC-1", summary: "prana-order-service down", status: "Open" },
+							{ key: "INC-2", summary: "unrelated", status: "Open" },
+						],
+					},
+				},
+			],
+			["prana-order-service"],
+		);
+		expect(out.linkedIssues?.map((i) => i.key)).toEqual(["INC-1"]);
+	});
+
+	test("empty focus keeps everything regardless of envelope service", () => {
+		const out = extractAtlassianFindings([envelope("anything", [{ key: "A-1", summary: "x", status: "Open" }])], []);
+		expect(out.linkedIssues).toHaveLength(1);
+	});
+});
