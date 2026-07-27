@@ -22,7 +22,21 @@ export function buildCoveringIndexDdl(
 	indexFields: string[],
 	coveringFields: string[],
 ): string {
-	const allKeys = [...indexFields, ...coveringFields].join(", ");
+	// SIO-1243: the caller's dedupe (`!indexFields.includes(cleanField)`) is an exact,
+	// case-sensitive Array.includes comparing a PROJECTION string against entries derived from a
+	// PREDICATE regex, so any quoting/case/qualification divergence slips a repeat through
+	// (`` `status` `` vs `status`, `o.status` vs `status`, `Status` vs `status`); coveringFields is
+	// also never deduplicated against itself. Couchbase rejects a duplicate index key, so enforce
+	// the invariant where the list is actually built. First occurrence wins.
+	const seen = new Set<string>();
+	const allKeys = [...indexFields, ...coveringFields]
+		.filter((key) => {
+			const identity = key.replace(/`/g, "").trim().toLowerCase();
+			if (identity.length === 0 || seen.has(identity)) return false;
+			seen.add(identity);
+			return true;
+		})
+		.join(", ");
 	return `CREATE INDEX idx_covering ON \`${bucket}\`.\`${scope}\`.\`${collection}\`(${allKeys});`;
 }
 

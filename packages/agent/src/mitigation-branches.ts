@@ -4,6 +4,7 @@ import { getLogger } from "@devops-agent/observability";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 import { getConfidenceThreshold } from "./confidence-gate.ts";
+import { dedupeCreateIndexKeys } from "./ddl-sanitize.ts";
 import { createLlm, DeadlineExceededError, type InvokableLlm, invokeWithDeadline, type LlmRole } from "./llm.ts";
 import { parseLlmJson } from "./llm-json.ts";
 import { extractTextFromContent } from "./message-utils.ts";
@@ -128,8 +129,26 @@ async function runBranch(
 			return { mitigationFragments: [{ kind: spec.kind, items: [] }] };
 		}
 
-		logger.info({ kind: spec.kind, count: result.data.items.length }, "Mitigation branch produced items");
-		return { mitigationFragments: [{ kind: spec.kind, items: result.data.items }] };
+		// SIO-1243: items are free-text and reach a human verbatim -- the escalate branch handed an
+		// operator a CREATE INDEX with a duplicate key. BranchOutputSchema validates the JSON shape
+		// only, so this is the one place a mechanical invariant on emitted commands can be enforced.
+		// Applied to all three branches: nothing stops investigate/monitor emitting DDL too.
+		const items: string[] = [];
+		const dedupedKeys: string[] = [];
+		for (const item of result.data.items) {
+			const { text, removed } = dedupeCreateIndexKeys(item);
+			items.push(text);
+			dedupedKeys.push(...removed);
+		}
+		if (dedupedKeys.length > 0) {
+			logger.warn(
+				{ kind: spec.kind, removedKeys: dedupedKeys },
+				"Removed duplicate CREATE INDEX keys from mitigation item",
+			);
+		}
+
+		logger.info({ kind: spec.kind, count: items.length }, "Mitigation branch produced items");
+		return { mitigationFragments: [{ kind: spec.kind, items }] };
 	} catch (error) {
 		if (error instanceof DeadlineExceededError) {
 			logger.warn(

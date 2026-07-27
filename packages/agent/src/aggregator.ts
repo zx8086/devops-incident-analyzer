@@ -35,6 +35,7 @@ import {
 	upsertCoverageNote,
 	upsertIntegrityNote,
 } from "./confidence-policy.ts";
+import { CREATE_INDEX_RE, CREATE_INDEX_SHAPE_RE, looksLikeKeyList, normalizeDdl } from "./ddl-sanitize.ts";
 import { isGapsJudgeEnabled, judgeDegradingGapBullets } from "./gaps-judge.ts";
 import { getGraphDeadlineAt, hasAggregationBudget } from "./graph-budget.ts";
 import { createLlm } from "./llm.ts";
@@ -1017,28 +1018,13 @@ export function rewriteNoIndexMisread(answer: string, flagged: string[]): string
 // SIO-1140: the Index Advisor's CREATE INDEX DDL (SIO-1137 chain) is the report's one
 // copy-paste artifact, and multi-source synthesis compressed it into a prose key list.
 // The verbatimDdlRule prompt instruction is the primary fix; this deterministic backstop
-// guarantees the statements survive. A statement is real DDL only when it has the full
-// `CREATE INDEX <name> ON <keyspace>(<keys>)` shape with a key-list-looking paren group
-// -- prose mentioning "CREATE INDEX" never matches. A trailing semicolon is consumed so
-// terminated statements are reproduced verbatim.
-const CREATE_INDEX_RE = /CREATE\s+INDEX[\s\S]*?(?:;|(?=```|\n\s*\n|$))/gi;
-const CREATE_INDEX_SHAPE_RE = /^CREATE\s+INDEX\s+(?:`[^`]+`|[A-Za-z_][\w#-]*)\s+ON\s+[^(]*\(([^)]*)\)/i;
+// guarantees the statements survive.
+//
+// SIO-1243: the shape regexes and their helpers (CREATE_INDEX_RE, CREATE_INDEX_SHAPE_RE,
+// normalizeDdl, looksLikeKeyList) moved to ./ddl-sanitize.ts -- read the DDL contract there.
+// They were module-private, so mitigation-branches.ts could not reuse them for its duplicate-key
+// dedupe, and importing the aggregator from there would invert this package's import direction.
 const MAX_VERBATIM_DDL_STATEMENTS = 10;
-
-// Trailing-semicolon-insensitive so `...(a);` in prose matches `...(a)` in the answer.
-function normalizeDdl(s: string): string {
-	return s.replace(/\s+/g, " ").replace(/;\s*$/, "").trim();
-}
-
-// A paren group counts as a key list when it is backticked/dotted/comma-separated
-// (advisor output always is) or a single bare identifier. Multi-word English like
-// "(not production)" is rejected so prose mimicking DDL is never emitted as SQL.
-function looksLikeKeyList(inner: string): boolean {
-	const t = inner.trim();
-	if (t.length === 0) return false;
-	if (/[`,.[\]]/.test(t)) return true;
-	return /^[\w#-]+$/.test(t);
-}
 
 // SIO-1149 (extends SIO-1140): the prose scan below cannot tell an Index Advisor
 // RECOMMENDATION from an existing-index inventory quoted in the same report -- the

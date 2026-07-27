@@ -32,4 +32,37 @@ describe("buildCoveringIndexDdl", () => {
 		const ddl = buildCoveringIndexDdl("b", "s", "c", ["a", "b"], ["c", "d"]);
 		expect(ddl).toContain("(a, b, c, d)");
 	});
+
+	// SIO-1243: the caller's dedupe is an exact case-sensitive Array.includes across two
+	// differently-derived string sets, so an overlapping projected field slipped through and
+	// produced a duplicate index key -- which Couchbase rejects.
+	describe("duplicate index keys (SIO-1243)", () => {
+		test("drops a projected field that repeats a leading index key", () => {
+			const ddl = buildCoveringIndexDdl(
+				"b",
+				"s",
+				"c",
+				["salesOrganizationCode", "articleType"],
+				["styleSeasonCodeFms", "documentUpdatedBy", "articleType"],
+			);
+			expect(ddl).toBe(
+				"CREATE INDEX idx_covering ON `b`.`s`.`c`(salesOrganizationCode, articleType, styleSeasonCodeFms, documentUpdatedBy);",
+			);
+		});
+
+		test("collapses backtick- and case-divergent repeats the caller's filter misses", () => {
+			const ddl = buildCoveringIndexDdl("b", "s", "c", ["status"], ["`status`", "Status", "other"]);
+			expect(ddl).toBe("CREATE INDEX idx_covering ON `b`.`s`.`c`(status, other);");
+		});
+
+		test("deduplicates coveringFields against itself", () => {
+			const ddl = buildCoveringIndexDdl("b", "s", "c", ["a"], ["b", "b"]);
+			expect(ddl).toBe("CREATE INDEX idx_covering ON `b`.`s`.`c`(a, b);");
+		});
+
+		test("a list with no repeats is unchanged", () => {
+			const ddl = buildCoveringIndexDdl("b", "s", "c", ["a", "b"], ["c", "d"]);
+			expect(ddl).toBe("CREATE INDEX idx_covering ON `b`.`s`.`c`(a, b, c, d);");
+		});
+	});
 });
