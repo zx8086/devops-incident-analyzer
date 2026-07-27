@@ -168,18 +168,24 @@ describe("buildSubAgentOutcome (the completion contract)", () => {
 	});
 
 	// The whole point, stated as a property: success and empty findings are mutually exclusive.
+	// SIO-1260 extends it over the `synthesized` axis -- a null/blank synthesis must not create a
+	// success, and a real one must never be reachable while allToolsFailed holds.
 	test("no combination of inputs yields success with no findings", () => {
 		for (const allToolsFailed of [false, true]) {
 			for (const truncated of [false, true]) {
-				const out = buildSubAgentOutcome({
-					recovered: null,
-					allToolsFailed,
-					truncated,
-					messageCount: 3,
-					toolErrorCount: 1,
-				});
-				expect(out.status, `allToolsFailed=${allToolsFailed} truncated=${truncated}`).toBe("error");
-				expect(out.error).toBeDefined();
+				for (const synthesized of [undefined, null, "", "   "]) {
+					const out = buildSubAgentOutcome({
+						recovered: null,
+						allToolsFailed,
+						truncated,
+						messageCount: 3,
+						toolErrorCount: 1,
+						synthesized,
+					});
+					const label = `allToolsFailed=${allToolsFailed} truncated=${truncated} synthesized=${JSON.stringify(synthesized)}`;
+					expect(out.status, label).toBe("error");
+					expect(out.error).toBeDefined();
+				}
 			}
 		}
 	});
@@ -195,5 +201,80 @@ describe("buildSubAgentOutcome (the completion contract)", () => {
 			toolErrorCount: 0,
 		});
 		expect(out.data).toBe("\n  Findings with padding  \n");
+	});
+});
+
+// SIO-1260: a truncated sub-agent had real evidence and no report. Run
+// cbada913-d22f-4618-826b-0c4c38fd8956: gitlab made 15 SUCCESSFUL tool calls, hit its recursion
+// limit, and lastTextualResponse recovered a 44-character stray mid-loop sentence from index 28 of
+// 29. 44 + the 108-byte SALVAGE_NOTE = 152, exactly the dataLength the aggregator logged.
+//
+// buildSubAgentOutcome stays PURE -- the synthesis happens in the caller and arrives as an optional
+// field -- so the contract is still assertable without mocking createReactAgent or prompt-context.
+describe("SIO-1260: buildSubAgentOutcome with a synthesised report", () => {
+	const STRAY = { text: "Let me check the repository tree.", index: 28 };
+	const REPORT = "## Findings\nThe styles project is 123 and the last deploy was 2026-07-27T14:02Z.";
+
+	test("the live shape: a synthesis REPLACES the stray fragment and is a success", () => {
+		const out = buildSubAgentOutcome({
+			recovered: STRAY,
+			allToolsFailed: false,
+			truncated: true,
+			messageCount: 30,
+			toolErrorCount: 0,
+			synthesized: REPORT,
+		});
+		expect(out.status).toBe("success");
+		expect(out.error).toBeUndefined();
+		expect(out.data.startsWith(REPORT)).toBe(true);
+		// Leading with the 44-char fragment would hand the aggregator noise.
+		expect(out.data).not.toContain("Let me check the repository tree.");
+		expect(out.data).toContain("synthesised from the tool evidence gathered before the cut-off");
+	});
+
+	test("a synthesis on the no-narrative path succeeds with the non-truncated note", () => {
+		const out = buildSubAgentOutcome({
+			recovered: null,
+			allToolsFailed: false,
+			truncated: false,
+			messageCount: 12,
+			toolErrorCount: 0,
+			synthesized: REPORT,
+		});
+		expect(out.status).toBe("success");
+		expect(out.data).toContain("returned no narrative answer");
+		expect(out.data).not.toContain("truncated at the sub-agent recursion limit");
+	});
+
+	// allToolsFailed keeps ABSOLUTE precedence: it is a datasource-level failure however much text
+	// anyone produced.
+	test("allToolsFailed still wins over a synthesis", () => {
+		const out = buildSubAgentOutcome({
+			recovered: STRAY,
+			allToolsFailed: true,
+			truncated: true,
+			messageCount: 30,
+			toolErrorCount: 5,
+			synthesized: REPORT,
+		});
+		expect(out.status).toBe("error");
+		expect(out.error).toBe("All 5 tool calls failed");
+	});
+
+	// Regression fence around the new optional parameter: absent, null and blank must all be
+	// byte-identical to the pre-SIO-1260 behaviour.
+	test("null/blank/omitted synthesis is byte-identical to omitting the field", () => {
+		const base = {
+			recovered: STRAY,
+			allToolsFailed: false,
+			truncated: true,
+			messageCount: 30,
+			toolErrorCount: 0,
+		};
+		const reference = buildSubAgentOutcome(base);
+		for (const synthesized of [null, "", "   "]) {
+			expect(buildSubAgentOutcome({ ...base, synthesized })).toEqual(reference);
+		}
+		expect(reference.data).toContain("reflects partial findings");
 	});
 });
