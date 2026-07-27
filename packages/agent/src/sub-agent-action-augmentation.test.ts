@@ -302,6 +302,12 @@ describe("SIO-1161: Metrics Insights tool selection with the real aws-introspect
 
 	test("a realistic multi-action union keeps both new tools inside the 25-tool belt", () => {
 		const awsDef = loadAwsDef();
+		// SIO-1256: allTools is built in YAML declaration order here, which is NOT the order
+		// production sees -- getToolsForDataSource yields MCP REGISTRATION order. This exact union
+		// dropped aws_ecs_list_tasks live while passing here, because the two orders disagree by
+		// one tail slot. selectToolsByAction is now order-independent, and
+		// sub-agent-belt-ordering.test.ts asserts that property directly; this test keeps the YAML
+		// ordering deliberately so the pair covers both orders.
 		const allTools = fakeTools(getAllActionToolNames(awsDef));
 		expect(allTools.length).toBeGreaterThan(25); // filter path must engage
 
