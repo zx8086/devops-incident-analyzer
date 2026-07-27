@@ -335,6 +335,11 @@ export function isSubAgentManifestModelEnabled(env: NodeJS.ProcessEnv = process.
 	return v !== "false" && v !== "0";
 }
 
+// SIO-1262: the light tier's OWN model, no longer borrowed from a sub-agent manifest. Haiku 4.5 is
+// probed, accepts temperature, and is what the borrow was resolving to before the specialists moved
+// to Sonnet 4.6. Named here so a future specialist bump cannot silently reprice these roles.
+const LIGHT_TIER_MODEL = { preferred: "claude-haiku-4-5" } as const;
+
 // SIO-1235: the whole precedence rule in one readable, unit-testable place.
 //
 // The defect this replaces: every non-lightweight role -- INCLUDING subAgent -- resolved from
@@ -349,25 +354,19 @@ export function resolveRoleModelConfig(
 	agent: LoadedAgentForLlm,
 	subAgentName?: string,
 ): { modelConfig: ManifestModelConfig; source: ModelConfigSource } {
-	// KNOWN FRAGILITY (pre-existing): the light tier borrows the elastic-agent sub-agent
-	// manifest's model. There is no dedicated light-model config; if that manifest changes model,
-	// every light-tier role follows it -- and as of this ticket it also moves the elastic
-	// SUB-AGENT, so the two are now coupled. Decoupling is a follow-up.
+	// SIO-1262: the light tier used to BORROW the elastic-agent sub-agent manifest's model. The
+	// comment here flagged that as a known fragility with decoupling left as a follow-up; this
+	// ticket forced the follow-up. Moving the seven specialists onto Sonnet 4.6 would otherwise
+	// have dragged every light-tier role -- classifier, followUp, runbookSelector, awsEstateRouter
+	// and the rest, all high-frequency and deliberately cheap -- onto a ~3x costlier model as a
+	// pure side effect. Nothing in the change would have said so; the SIO-1214 temperature test is
+	// what caught it.
+	//
+	// The light tier now NAMES its own model rather than inheriting one, so a specialist bump can
+	// never reprice it again. Haiku 4.5 is what it was effectively resolving to before this change,
+	// is probed, and accepts temperature.
 	if (isLightweightRole(role)) {
-		const borrowed = agent.subAgents.get("elastic-agent");
-		// Warning parity with the sub-agent branch below (CodeRabbit on PR #486). Without this the
-		// light tier fails SILENTLY and worse than it looks: resolveBedrockConfig(undefined) does
-		// not throw, it returns the built-in default -- measured as eu.anthropic.claude-sonnet-4-6,
-		// which is not even the current root model. Every light-tier role would run a stale model
-		// while still reporting source: "light-tier", which is exactly the invisible drift this
-		// ticket exists to end.
-		if (!borrowed?.manifest.model) {
-			logger.warn(
-				{ role },
-				"Light tier's borrowed elastic-agent manifest is missing or declares no model; resolveBedrockConfig will use its built-in default",
-			);
-		}
-		return { modelConfig: borrowed?.manifest.model, source: "light-tier" };
+		return { modelConfig: LIGHT_TIER_MODEL, source: "light-tier" };
 	}
 
 	if (role === "subAgent" && subAgentName && isSubAgentManifestModelEnabled()) {

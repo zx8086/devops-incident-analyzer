@@ -88,6 +88,12 @@ describe("buildChatModel via createLlm (SIO-1214)", () => {
 // (since the 125b3f9e scaffold) -- which is why flipping one line in the root agent.yaml at
 // SIO-1213 silently moved every specialist onto Sonnet 5.
 describe("subAgent resolves its own manifest model (SIO-1235)", () => {
+	// SIO-1262: sub-agent manifests declare claude-sonnet-4-6 (probed 2026-07-27) with haiku as
+	// FALLBACK. Deliberately NOT sonnet-5: that model has acceptsTemperature: false, so the
+	// manifests' temperature 0.1 would silently stop applying -- and being identical to the root
+	// model it would also make every "resolved from the sub-agent manifest, not the root" assertion
+	// below vacuous.
+	const SUB = "eu.anthropic.claude-sonnet-4-6";
 	const HAIKU = "eu.anthropic.claude-haiku-4-5-20251001-v1:0";
 	const ROOT = "eu.anthropic.claude-sonnet-5";
 
@@ -109,20 +115,23 @@ describe("subAgent resolves its own manifest model (SIO-1235)", () => {
 		"gitlab-agent",
 		"atlassian-agent",
 		"aws-agent",
-	])("%s builds Haiku 4.5 from its own manifest", (subAgentName) => {
+	])("%s builds Sonnet 4.6 from its own manifest", (subAgentName) => {
 		createLlm("subAgent", "incident-analyzer", subAgentName);
-		const options = optionsFor(HAIKU);
+		const options = optionsFor(SUB);
 		expect(options).toBeDefined();
 		// subAgent is a TOOL_BINDING_ROLE, so createLlm skips withFallbacks -- exactly one model
 		// is constructed. More than one would mean a fallback chain crept back in.
+		// SIO-1262 (CodeRabbit, PR #503): this is also why the manifests deliberately declare NO
+		// `fallback:` -- RunnableWithFallbacks cannot bindTools(), so one would be dead config.
 		expect(constructorCalls).toHaveLength(1);
 	});
 
 	// temperature: 0.1 is declared in every sub-agent manifest and had NEVER applied, because the
-	// root model (Sonnet 5) has acceptsTemperature: false and llm.ts drops it. Haiku accepts it.
+	// root model (Sonnet 5) has acceptsTemperature: false and llm.ts drops it. Sonnet 4.6 accepts
+	// it (probed), which is a large part of why the sub-agents point there and not at the root model.
 	test("temperature 0.1 from the manifest now actually applies", () => {
 		createLlm("subAgent", "incident-analyzer", "gitlab-agent");
-		expect(optionsFor(HAIKU)).toHaveProperty("temperature", 0.1);
+		expect(optionsFor(SUB)).toHaveProperty("temperature", 0.1);
 	});
 
 	// ROLE_OVERRIDES.subAgent.maxTokens wins over the manifest's constraints.max_tokens: 2048,
@@ -130,19 +139,19 @@ describe("subAgent resolves its own manifest model (SIO-1235)", () => {
 	// silently inheriting 2048 would truncate long sub-agent answers.
 	test("maxTokens stays 8192 -- the role override beats the manifest's 2048", () => {
 		createLlm("subAgent", "incident-analyzer", "kafka-agent");
-		expect(optionsFor(HAIKU)).toHaveProperty("maxTokens", 8192);
+		expect(optionsFor(SUB)).toHaveProperty("maxTokens", 8192);
 	});
 
 	test("without a subAgentName it still resolves from the root manifest", () => {
 		createLlm("subAgent");
 		expect(optionsFor(ROOT)).toBeDefined();
-		expect(optionsFor(HAIKU)).toBeUndefined();
+		expect(optionsFor(SUB)).toBeUndefined();
 	});
 
 	test.each([
 		["false", ROOT],
 		["0", ROOT],
-		["true", HAIKU],
+		["true", SUB],
 	])("SUB_AGENT_MANIFEST_MODEL_ENABLED=%s resolves %s", (value, expectedModel) => {
 		process.env.SUB_AGENT_MANIFEST_MODEL_ENABLED = value;
 		createLlm("subAgent", "incident-analyzer", "gitlab-agent");

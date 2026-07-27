@@ -123,22 +123,26 @@ describe("AGENT_NAMES all resolve to real sub-agent manifests (SIO-1235)", () =>
 describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 	const agent = loadAgent(join(import.meta.dir, "../../../agents/incident-analyzer"));
 
-	test("a light-tier role reports light-tier and borrows elastic-agent's model", () => {
-		// Anchor the expected value FIRST. Comparing two optional chains directly passes
-		// vacuously when both sides are undefined -- i.e. the test would still be green in
-		// exactly the missing-elastic-agent scenario the warning above exists for.
-		const borrowed = agent.subAgents.get("elastic-agent")?.manifest.model?.preferred;
-		expect(borrowed).toBeTruthy();
+	// SIO-1262: the light tier used to BORROW elastic-agent's manifest model. Moving the seven
+	// specialists to Sonnet 4.6 would then have repriced every cheap, high-frequency role by pure
+	// side effect, so the light tier now names its own model. This pins the DECOUPLING, which is
+	// the property that matters -- a borrow-equality assertion would go green again the moment
+	// someone reintroduced the coupling.
+	test("a light-tier role reports light-tier and does NOT track the specialists' model", () => {
+		const specialist = agent.subAgents.get("elastic-agent")?.manifest.model?.preferred;
+		expect(specialist).toBeTruthy();
 
 		const resolved = resolveRoleModelConfig("classifier", agent);
 		expect(resolved.source).toBe("light-tier");
-		expect(resolved.modelConfig?.preferred).toBe(borrowed);
+		expect(resolved.modelConfig?.preferred).toBe("claude-haiku-4-5");
+		// The specialists are on Sonnet 4.6; the light tier must not have followed them.
+		expect(resolved.modelConfig?.preferred).not.toBe(specialist);
 	});
 
 	test("a subAgent role with a known specialist reports sub-agent-manifest", () => {
 		const resolved = resolveRoleModelConfig("subAgent", agent, "gitlab-agent");
 		expect(resolved.source).toBe("sub-agent-manifest");
-		expect(resolved.modelConfig?.preferred).toBe("claude-haiku-4-5");
+		expect(resolved.modelConfig?.preferred).toBe("claude-sonnet-4-6");
 	});
 
 	test("a subAgent role with an unknown specialist reports root-manifest", () => {
