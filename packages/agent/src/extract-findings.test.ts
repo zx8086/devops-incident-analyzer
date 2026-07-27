@@ -56,9 +56,12 @@ describe("extractFindings node", () => {
 		expect((elastic as unknown as { kafkaFindings?: unknown }).kafkaFindings).toBeUndefined();
 	});
 
-	test("soft-fails (returns the result unchanged) when the extractor throws", async () => {
-		// Pass a non-iterable in place of toolOutputs[] so the extractor's `for...of` throws.
-		// The node's try/catch must absorb it and leave kafkaFindings undefined.
+	test("soft-fails (returns the result unchanged) on malformed toolOutputs", async () => {
+		// Pass a non-iterable in place of toolOutputs[]. Pre-SIO-1245 this reached the
+		// extractor and its `for...of` threw, absorbed by the node's try/catch. SIO-1245
+		// now drops the malformed row during the merge instead, so the extractor is never
+		// reached -- same observable contract (no throw escapes, findings stay undefined),
+		// reached one step earlier.
 		const state: AgentStateType = {
 			...baseState(),
 			dataSourceResults: [
@@ -857,5 +860,182 @@ describe("extractFindings focus scoping across datasources (SIO-1030)", () => {
 		];
 		const scoped = await extractFindings(stateFor("atlassian", outputs, ["prices-api-v2-service"]));
 		expect(scoped.dataSourceResults?.[0]?.atlassianFindings?.linkedIssues?.map((i) => i.key)).toEqual(["INC-1"]);
+	});
+});
+
+// SIO-1245: the multi-row seam. The AWS estate fan-out (SIO-828) and the elastic deployment
+// fan-out emit several DataSourceResult rows sharing one dataSourceId. Every pre-existing test
+// in this file builds exactly ONE row and asserts on `[0]`, so nothing covered this -- which is
+// how run 43796e9f shipped a card where estate B's unscoped fallback replaced estate A's good
+// scoped set.
+describe("extractFindings multi-deployment merge (SIO-1245)", () => {
+	function awsAlarms(names: string[]): DataSourceResult["toolOutputs"] {
+		return [
+			{
+				toolName: "aws_cloudwatch_describe_alarms",
+				rawJson: { MetricAlarms: names.map((n) => ({ AlarmName: n, StateValue: "ALARM" })) },
+			},
+		];
+	}
+
+	function multiEstateState(focus: string[]): AgentStateType {
+		return {
+			...baseState(),
+			investigationFocus: { services: focus, datasources: [], summary: "", establishedAtTurn: 1 },
+			dataSourceResults: [
+				{
+					dataSourceId: "aws",
+					deploymentId: "estate:eu-oit-prd",
+					data: "prose A",
+					status: "success",
+					duration: 10,
+					// The focus-matching alarm lives in estate A only.
+					toolOutputs: awsAlarms(["prana-order-service-CPU", "unrelated-a-service-CPU"]),
+				},
+				{
+					dataSourceId: "aws",
+					deploymentId: "estate:eu-shared-services-prd",
+					data: "prose B",
+					status: "success",
+					duration: 10,
+					// Estate B has nothing on-focus -- alone it would engage the unscoped fallback.
+					toolOutputs: awsAlarms(["authentication-service-CPU", "bitly-service-Memory", "brads-service-CPU"]),
+				},
+			],
+		} as unknown as AgentStateType;
+	}
+
+	test("one estate's scoped hit suppresses the other estate's unscoped fallback", async () => {
+		const out = await extractFindings(multiEstateState(["prana-order-service"]));
+		const aws = out.dataSourceResults?.filter((r) => r.dataSourceId === "aws") ?? [];
+		expect(aws).toHaveLength(2);
+		for (const row of aws) {
+			expect(row.awsFindings?.alarms?.map((a) => a.name)).toEqual(["prana-order-service-CPU"]);
+			// The bug: estate B fell back and its 3 unscoped alarms replaced estate A's scoped 1.
+			expect(row.awsFindings?.unscoped).toBeFalsy();
+		}
+	});
+
+	test("every row of a dataSourceId carries the identical merged findings object", async () => {
+		const out = await extractFindings(multiEstateState(["prana-order-service"]));
+		const aws = out.dataSourceResults?.filter((r) => r.dataSourceId === "aws") ?? [];
+		// Identity, not just equality: this is what makes the UI's last-wins Map and
+		// rules.ts/engine.ts (which select by dataSourceId) agree on a multi-estate turn.
+		expect(aws[0]?.awsFindings).toBe(aws[1]?.awsFindings as never);
+	});
+
+	test("prose data stays per-row -- the merge only touches findings", async () => {
+		const out = await extractFindings(multiEstateState(["prana-order-service"]));
+		const aws = out.dataSourceResults?.filter((r) => r.dataSourceId === "aws") ?? [];
+		expect(aws.map((r) => r.data)).toEqual(["prose A", "prose B"]);
+		expect(aws.map((r) => r.deploymentId)).toEqual(["estate:eu-oit-prd", "estate:eu-shared-services-prd"]);
+	});
+
+	// NB the focus must share no >=4-char token with any alarm name: tokenize() would match on
+	// a bare "service" and scope successfully, so a focus like "service-that-matches-nothing"
+	// does NOT exercise the fallback.
+	test("the fallback still engages when NO estate scopes", async () => {
+		const out = await extractFindings(multiEstateState(["quantum-widget-registry"]));
+		const aws = out.dataSourceResults?.filter((r) => r.dataSourceId === "aws") ?? [];
+		// Merged across both estates, so the fallback sees all 5 alarms, not one estate's slice.
+		expect(aws[0]?.awsFindings?.unscoped).toBe(true);
+		expect(aws[0]?.awsFindings?.alarms?.length).toBe(5);
+	});
+	// CodeRabbit, PR #494: a malformed row arriving BEFORE a healthy sibling used to store the
+	// garbage as the group's placeholder, after which the valid row matched neither the
+	// "existing is an array" nor the "existing is undefined" branch -- so its data was silently
+	// dropped and the extractor ran on the garbage. Purely order-dependent, i.e. exactly the
+	// "one estate's bad state clobbers another estate's good data" failure this PR exists to remove.
+	test("a malformed row before a valid one does not cost the valid row its findings", async () => {
+		const state = {
+			...baseState(),
+			investigationFocus: {
+				services: ["prana-order-service"],
+				datasources: [],
+				summary: "",
+				establishedAtTurn: 1,
+			},
+			dataSourceResults: [
+				{
+					dataSourceId: "aws",
+					deploymentId: "estate:broken",
+					data: "p",
+					status: "success",
+					duration: 1,
+					toolOutputs: { not: "iterable" } as unknown as DataSourceResult["toolOutputs"],
+				},
+				{
+					dataSourceId: "aws",
+					deploymentId: "estate:healthy",
+					data: "p",
+					status: "success",
+					duration: 1,
+					toolOutputs: [
+						{
+							toolName: "aws_cloudwatch_describe_alarms",
+							rawJson: { MetricAlarms: [{ AlarmName: "prana-order-service-CPU", StateValue: "ALARM" }] },
+						},
+					],
+				},
+			],
+		} as unknown as AgentStateType;
+
+		const out = await extractFindings(state);
+		// Assert the row COUNT first: a bare `for (const row of out.dataSourceResults ?? [])`
+		// passes vacuously on an empty array (CodeRabbit, PR #494).
+		expect(out.dataSourceResults).toHaveLength(2);
+		const healthy = out.dataSourceResults?.find((r) => r.deploymentId === "estate:healthy");
+		const broken = out.dataSourceResults?.find((r) => r.deploymentId === "estate:broken");
+		expect(healthy?.awsFindings?.alarms?.map((a) => a.name)).toEqual(["prana-order-service-CPU"]);
+		// The malformed row gets the same merged findings -- that is the point: its bad state
+		// costs neither itself nor its sibling the data.
+		expect(broken?.awsFindings?.alarms?.map((a) => a.name)).toEqual(["prana-order-service-CPU"]);
+	});
+
+	test("order does not matter -- valid before malformed gives the same result", async () => {
+		const rows = [
+			{
+				dataSourceId: "aws",
+				deploymentId: "estate:healthy",
+				data: "p",
+				status: "success",
+				duration: 1,
+				toolOutputs: [
+					{
+						toolName: "aws_cloudwatch_describe_alarms",
+						rawJson: { MetricAlarms: [{ AlarmName: "prana-order-service-CPU", StateValue: "ALARM" }] },
+					},
+				],
+			},
+			{
+				dataSourceId: "aws",
+				deploymentId: "estate:broken",
+				data: "p",
+				status: "success",
+				duration: 1,
+				toolOutputs: { not: "iterable" },
+			},
+		];
+		const focus = { services: ["prana-order-service"], datasources: [], summary: "", establishedAtTurn: 1 };
+		const forward = await extractFindings({
+			...baseState(),
+			investigationFocus: focus,
+			dataSourceResults: rows,
+		} as unknown as AgentStateType);
+		const reversed = await extractFindings({
+			...baseState(),
+			investigationFocus: focus,
+			dataSourceResults: [...rows].reverse(),
+		} as unknown as AgentStateType);
+		// Assert the CONTENT, not just that the two runs agree: comparing
+		// `forward[0].awsFindings` to `reversed[0].awsFindings` passes when both are
+		// undefined, which is the exact bug this test exists to catch (CodeRabbit, PR #494).
+		for (const result of [forward, reversed]) {
+			expect(result.dataSourceResults).toHaveLength(2);
+			expect(result.dataSourceResults?.map((r) => r.awsFindings?.alarms?.map((a) => a.name))).toEqual([
+				["prana-order-service-CPU"],
+				["prana-order-service-CPU"],
+			]);
+		}
 	});
 });

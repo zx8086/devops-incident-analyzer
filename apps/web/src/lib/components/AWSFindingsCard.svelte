@@ -62,7 +62,16 @@ const aggregateLabel = $derived(
   <div class="mt-2 rounded-lg border border-amber-100 bg-amber-50/40 px-3 py-2.5">
     <div class="flex items-center gap-1.5 mb-2">
       <span class="text-[0.5625rem] font-medium text-amber-700 uppercase tracking-wider">AWS findings</span>
+      {#if findings.unscoped}
+        <!-- SIO-1245: the SIO-1159 backend flag shipped without a UI half, so estate-wide
+             fallback alarms rendered exactly like focus-scoped evidence. Mirrors
+             CouchbaseFindingsCard's SIO-1138 badge. -->
+        <span class="text-[0.5625rem] font-medium text-amber-700 bg-amber-100 uppercase tracking-wider rounded px-1">Unscoped</span>
+      {/if}
     </div>
+    {#if findings.unscoped}
+      <p class="-mt-1 mb-2 text-[0.625rem] text-gray-500">No alarm referenced the focus services -- showing top estate-wide alarms.</p>
+    {/if}
 
     <div>
       <div class="flex items-center gap-2 mb-1">

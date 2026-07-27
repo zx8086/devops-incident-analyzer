@@ -14,6 +14,10 @@ import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:extract-findings");
 
+// SIO-1245: the merged tool-output list an extractor runs over (one dataSourceId's rows
+// concatenated). Derived from DataSourceResult so it cannot drift from the schema.
+type ToolOutputs = NonNullable<DataSourceResult["toolOutputs"]>;
+
 // SIO-1030: emit a per-domain diagnostic mirroring the KafkaFindingsCard block so
 // the live scoping behaviour is visible in dev-server logs (grep the `tag`, or
 // filter by `agent:extract-findings`). `droppedAll` is the tell that focusServices
@@ -102,22 +106,30 @@ export async function extractFindings(state: AgentStateType): Promise<Partial<Ag
 	// rows. rawCount is measured by re-running the (pure, cheap) extractor with empty
 	// focus (show-all) so the diagnostic reports true before/after without reaching
 	// into extractor internals.
-	const extractors: Record<string, (r: DataSourceResult) => Partial<DataSourceResult>> = {
-		kafka: (r) => {
-			const outs = r.toolOutputs ?? [];
+	// SIO-1245: extractors now receive the MERGED toolOutputs for a dataSourceId, not one
+	// row's. The AWS estate fan-out (SIO-828) and the elastic deployment fan-out produce
+	// several DataSourceResult rows sharing one dataSourceId, and extracting per row made
+	// each estate scope independently -- eu-oit-prd scoped 25 -> 3 while eu-shared-services-prd
+	// scoped 35 -> 0 and engaged its OWN unscoped fallback to 5. Both then raced for a single
+	// card slot (the UI reducer keys dataSourceFindings by bare dataSourceId), so the fallback
+	// silently replaced the good scoped set. Merging first makes the fallback a cross-row
+	// decision by construction: the extractor sees every estate's outputs in one pass, so its
+	// existing "scoped hits win" early-return already means "if ANY estate scoped, never fall
+	// back". No separate suppression rule is needed.
+	const extractors: Record<string, (outs: ToolOutputs) => Partial<DataSourceResult>> = {
+		kafka: (outs) => {
 			const kafkaFindings = extractKafkaFindings(outs, focusServices);
 			// SIO-785 diagnostic: report focus + before/after counts so the live filter
 			// behaviour is visible in dev-server logs without DevTools spelunking.
 			// Grep: `KafkaFindingsCard` in pino output, or filter by `agent:extract-findings`.
-			const raw = countRawConsumerGroups(r.toolOutputs);
+			const raw = countRawConsumerGroups(outs);
 			logCard("KafkaFindingsCard", focusServices, raw.count, kafkaFindings.consumerGroups?.length ?? 0, {
 				dlqTopics: kafkaFindings.dlqTopics?.length ?? 0,
 				sampleRawIds: raw.sampleIds,
 			});
 			return { kafkaFindings };
 		},
-		gitlab: (r) => {
-			const outs = r.toolOutputs ?? [];
+		gitlab: (outs) => {
 			const gitlabFindings = extractGitLabFindings(outs, focusServices);
 			const rawCount = extractGitLabFindings(outs).mergedRequests?.length ?? 0;
 			logCard("GitLabFindingsCard", focusServices, rawCount, gitlabFindings.mergedRequests?.length ?? 0);
@@ -145,8 +157,7 @@ export async function extractFindings(state: AgentStateType): Promise<Partial<Ag
 			}
 			return orbitFilteredCount > 0 ? { gitlabFindings, orbitFindings } : { gitlabFindings };
 		},
-		couchbase: (r) => {
-			const outs = r.toolOutputs ?? [];
+		couchbase: (outs) => {
 			const couchbaseFindings = extractCouchbaseFindings(outs, focusServices, couchbaseKeyspaces);
 			const rawCount = extractCouchbaseFindings(outs).slowQueries?.length ?? 0;
 			if (couchbaseFindings.unscoped) {
@@ -168,8 +179,7 @@ export async function extractFindings(state: AgentStateType): Promise<Partial<Ag
 			}
 			return { couchbaseFindings };
 		},
-		elastic: (r) => {
-			const outs = r.toolOutputs ?? [];
+		elastic: (outs) => {
 			const elasticFindings = extractElasticFindings(outs, focusServices);
 			const raw = extractElasticFindings(outs);
 			const rawCount =
@@ -186,8 +196,7 @@ export async function extractFindings(state: AgentStateType): Promise<Partial<Ag
 			return { elasticFindings };
 		},
 		// SIO-785 Phase 2 (2026-05-18): AWS CloudWatch alarms.
-		aws: (r) => {
-			const outs = r.toolOutputs ?? [];
+		aws: (outs) => {
 			const awsFindings = extractAwsFindings(outs, focusServices);
 			const rawCount = extractAwsFindings(outs).alarms?.length ?? 0;
 			if (awsFindings.unscoped) {
@@ -210,26 +219,73 @@ export async function extractFindings(state: AgentStateType): Promise<Partial<Ag
 			return { awsFindings };
 		},
 		// SIO-785 Phase 2 (2026-05-18): Atlassian linked incidents.
-		atlassian: (r) => {
-			const outs = r.toolOutputs ?? [];
+		atlassian: (outs) => {
 			const atlassianFindings = extractAtlassianFindings(outs, focusServices);
 			const rawCount = extractAtlassianFindings(outs).linkedIssues?.length ?? 0;
 			logCard("AtlassianFindingsCard", focusServices, rawCount, atlassianFindings.linkedIssues?.length ?? 0);
 			return { atlassianFindings };
 		},
 	};
-	const dataSourceResults = state.dataSourceResults.map((r) => {
-		const extractor = extractors[r.dataSourceId];
-		if (!extractor) return r;
-		try {
-			return { ...r, ...extractor(r) };
-		} catch (err) {
-			logger.warn(
-				{ dataSourceId: r.dataSourceId, error: err instanceof Error ? err.message : String(err) },
-				"extractFindings failed",
-			);
-			return r;
+	// SIO-1245: group first, extract ONCE per dataSourceId over the union of its rows'
+	// toolOutputs, then give every row in the group the SAME merged findings object. That
+	// last part matters as much as the merge: the UI reducer keys findings by bare
+	// dataSourceId (last row wins) while rules.ts/engine.ts select by dataSourceId too, so
+	// identical objects are what makes the card and the rule engine agree on a multi-estate
+	// turn instead of reading different estates.
+	const outputsByDataSource = new Map<string, ToolOutputs>();
+	const malformedDataSources = new Set<string>();
+	for (const r of state.dataSourceResults) {
+		const outs = r.toolOutputs;
+		const existing = outputsByDataSource.get(r.dataSourceId);
+		// A non-array toolOutputs is malformed. Remember it (so the extractor still throws
+		// inside the per-datasource try/catch below -- the documented soft-fail contract)
+		// but NEVER let it displace or block a sibling row's real data: a malformed estate
+		// A arriving before a healthy estate B must not cost B its findings. Spreading here
+		// would also throw outside the guard and sink the whole node.
+		if (!Array.isArray(outs)) {
+			if (outs != null) malformedDataSources.add(r.dataSourceId);
+			continue;
 		}
+		if (Array.isArray(existing)) existing.push(...outs);
+		else outputsByDataSource.set(r.dataSourceId, [...outs]);
+	}
+	for (const dataSourceId of malformedDataSources) {
+		logger.warn(
+			{ dataSourceId, hasUsableRows: outputsByDataSource.has(dataSourceId) },
+			"ignored a row with malformed toolOutputs while merging",
+		);
+	}
+	const deploymentsByDataSource = new Map<string, string[]>();
+	for (const r of state.dataSourceResults) {
+		if (!r.deploymentId) continue;
+		const ids = deploymentsByDataSource.get(r.dataSourceId) ?? [];
+		if (!ids.includes(r.deploymentId)) ids.push(r.deploymentId);
+		deploymentsByDataSource.set(r.dataSourceId, ids);
+	}
+
+	const findingsByDataSource = new Map<string, Partial<DataSourceResult>>();
+	for (const [dataSourceId, outs] of outputsByDataSource) {
+		const extractor = extractors[dataSourceId];
+		if (!extractor) continue;
+		// One line per dataSourceId naming the rows that were merged, so a multi-estate turn
+		// is legible in the log. Previously each estate emitted its own card line and the
+		// pair read as one card contradicting itself (scoped 25->3, then unscoped 35->5).
+		const deployments = deploymentsByDataSource.get(dataSourceId) ?? [];
+		if (deployments.length > 1) {
+			logger.info(
+				{ dataSourceId, deployments, mergedRows: deployments.length, toolOutputs: outs.length },
+				"merged multi-deployment tool outputs before extraction",
+			);
+		}
+		try {
+			findingsByDataSource.set(dataSourceId, extractor(outs));
+		} catch (err) {
+			logger.warn({ dataSourceId, error: err instanceof Error ? err.message : String(err) }, "extractFindings failed");
+		}
+	}
+	const dataSourceResults = state.dataSourceResults.map((r) => {
+		const findings = findingsByDataSource.get(r.dataSourceId);
+		return findings ? { ...r, ...findings } : r;
 	});
 	// SIO-1204: per-turn network map. Pure and total (safeParse everywhere), but
 	// guarded anyway so a builder bug can never sink the findings extraction. The

@@ -12,6 +12,7 @@ import type {
 import { z } from "zod";
 import type { AgentName, AgentStateType } from "../state";
 import { matchesFocus } from "./focus-match.ts";
+import { selectResultWithFindings } from "./select-result.ts";
 
 export interface CorrelationRule {
 	name: string;
@@ -48,7 +49,7 @@ function getKafkaData(state: AgentStateType): {
 	consumerGroups?: Array<{ id: string; state?: string; totalLag?: number }>;
 	dlqTopics?: Array<{ name: string; totalMessages: number; recentDelta: number | null }>;
 } {
-	const result = state.dataSourceResults.find((r) => r.dataSourceId === "kafka");
+	const result = selectResultWithFindings(state.dataSourceResults, "kafka", "kafkaFindings");
 	if (result?.status !== "success") return {};
 	// SIO-764: read the structured sibling populated by extractFindings; result.data
 	// stays as the prose summary for aggregator/UI.
@@ -59,7 +60,7 @@ function getKafkaData(state: AgentStateType): {
 // aws_cloudwatch_describe_alarms) instead of regex-matching the prose summary. Mirrors
 // getKafkaData. result.data stays prose for the aggregator/UI.
 function getAwsFindings(state: AgentStateType): AwsFindings {
-	const result = state.dataSourceResults.find((r) => r.dataSourceId === "aws");
+	const result = selectResultWithFindings(state.dataSourceResults, "aws", "awsFindings");
 	if (result?.status !== "success") return {};
 	// SIO-1159: unscoped-fallback rows are display-only (mirrors SIO-1138 couchbase
 	// guard) -- they are NOT linked to the focus services and must not drive rules.
@@ -572,7 +573,7 @@ function shareDistinctiveToken(a: string, b: string): boolean {
 // this cast result.data to a typed object that production never wrote --
 // dormant since SIO-712.
 function getGitLabMergedRequests(state: AgentStateType): GitLabMergedRequest[] {
-	const result = state.dataSourceResults.find((r) => r.dataSourceId === "gitlab");
+	const result = selectResultWithFindings(state.dataSourceResults, "gitlab", "gitlabFindings");
 	if (result?.status !== "success") return [];
 	return result.gitlabFindings?.mergedRequests ?? [];
 }
@@ -583,7 +584,7 @@ function getGitLabMergedRequests(state: AgentStateType): GitLabMergedRequest[] {
 // no-op without removing the branch (future konnect work activates it).
 function getDatastoreSlowQueries(state: AgentStateType, dataSourceId: "couchbase" | "konnect"): CouchbaseSlowQuery[] {
 	if (dataSourceId === "konnect") return [];
-	const result = state.dataSourceResults.find((r) => r.dataSourceId === "couchbase");
+	const result = selectResultWithFindings(state.dataSourceResults, "couchbase", "couchbaseFindings");
 	if (result?.status !== "success") return [];
 	// SIO-1138: unscoped-fallback rows are display-only -- they are NOT linked to
 	// the focus service, so correlating them against MRs would manufacture
@@ -642,13 +643,13 @@ correlationRules.push({
 // -- they read the typed sibling extractFindings populated on the gitlab / elastic
 // DataSourceResult; result.data stays prose for the aggregator/UI.
 function getOrbitFindings(state: AgentStateType): OrbitFindings {
-	const result = state.dataSourceResults.find((r) => r.dataSourceId === "gitlab");
+	const result = selectResultWithFindings(state.dataSourceResults, "gitlab", "orbitFindings");
 	if (result?.status !== "success") return {};
 	return result.orbitFindings ?? {};
 }
 
 function getElasticFindings(state: AgentStateType): ElasticFindings {
-	const result = state.dataSourceResults.find((r) => r.dataSourceId === "elastic");
+	const result = selectResultWithFindings(state.dataSourceResults, "elastic", "elasticFindings");
 	if (result?.status !== "success") return {};
 	return result.elasticFindings ?? {};
 }
