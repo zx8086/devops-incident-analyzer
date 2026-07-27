@@ -124,6 +124,39 @@ describe("applyContextBudget", () => {
 		expect(result.elidedCount).toBeGreaterThan(30);
 	});
 
+	// CodeRabbit (PR #493): with NON-UNIFORM sizes the backward walk could "resurrect" an
+	// older, smaller result after a newer, larger one failed to fit -- because `running`
+	// only advanced on a successful add, an older result was still compared against the
+	// stale total. The kept set must be a contiguous newest-first SUFFIX, never a
+	// cherry-pick. Every other multi-result test here uses uniform sizes, which is exactly
+	// why they all missed it.
+	test("never resurrects an older smaller result after a newer larger one is elided", () => {
+		// oldest -> newest. Budget 5_000: only the newest (1_000) fits.
+		const messages = buildLoop([2_000, 10_000, 20_000, 1_000]);
+		const result = applyContextBudget(messages, 5_000);
+
+		const tools = result.messages.filter((m): m is ToolMessage => m instanceof ToolMessage);
+		const elided = tools.map((m) => String(m.content).includes("elided"));
+
+		// newest kept; all three older ones elided -- including the small 2_000 one.
+		expect(elided).toEqual([true, true, true, false]);
+		expect(String(tools[3]?.content)).toHaveLength(1_000);
+	});
+
+	test("kept results always form a contiguous suffix", () => {
+		const messages = buildLoop([1_000, 30_000, 1_000, 1_000, 1_000]);
+		const result = applyContextBudget(messages, 4_000);
+
+		const kept = result.messages
+			.filter((m): m is ToolMessage => m instanceof ToolMessage)
+			.map((m) => !String(m.content).includes("elided"));
+
+		// Once true appears it must stay true to the end -- no gaps.
+		const firstKept = kept.indexOf(true);
+		expect(firstKept).toBeGreaterThanOrEqual(0);
+		expect(kept.slice(firstKept).every(Boolean)).toBe(true);
+	});
+
 	test("leaves non-tool messages untouched", () => {
 		const messages = buildLoop([40_000, 40_000]);
 		const result = applyContextBudget(messages, 1_000);

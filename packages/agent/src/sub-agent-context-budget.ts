@@ -107,10 +107,14 @@ export function applyContextBudget(messages: BaseMessage[], budgetBytes: number)
 		if (isNewest || running + bytes <= budgetBytes) {
 			keepWhole.add(idx);
 			running += bytes;
+			continue;
 		}
-		// Once the budget is spent, everything older is elided. No `break` -- a later
-		// small result should not be resurrected after a large one exhausted the budget,
-		// which keeps the kept set a clean suffix of the timeline.
+		// Stop at the FIRST result that does not fit, so the kept set is a contiguous
+		// newest-first suffix. Without this break `running` stays frozen at the last
+		// successful add, and an older, smaller result is then compared against that
+		// stale total -- resurrecting it while a newer, larger one is elided. Caught by
+		// CodeRabbit on PR #493; the earlier tests all used uniform sizes and missed it.
+		break;
 	}
 
 	let elidedCount = 0;
