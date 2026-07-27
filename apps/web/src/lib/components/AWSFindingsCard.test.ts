@@ -92,4 +92,24 @@ describe("AWSFindingsCard.svelte", () => {
 		expect(body).toContain("bg-green-500");
 		expect(body).toContain("bg-slate-400");
 	});
+	// SIO-1245: the SIO-1159 backend `unscoped` flag shipped with no UI half, so estate-wide
+	// fallback alarms rendered exactly like focus-scoped evidence -- the run-43796e9f card showed
+	// five unrelated alarms (three from April) beside prose correctly saying none were found.
+	// Mirrors CouchbaseFindingsCard's SIO-1138 badge tests.
+	test("renders unscoped badge and explanatory line when unscoped is true", () => {
+		const { body } = render(AWSFindingsCard, {
+			props: { findings: { unscoped: true, alarms: [{ name: "bitly-service-CPU", state: "ALARM" }] } },
+		});
+		expect(body).toContain("Unscoped");
+		expect(body).toContain("No alarm referenced the focus services -- showing top estate-wide alarms.");
+	});
+
+	test("does not render unscoped badge or explanatory line without the flag", () => {
+		const { body } = render(AWSFindingsCard, {
+			props: { findings: { alarms: [{ name: "prana-order-service-CPU", state: "ALARM" }] } },
+		});
+		expect(body).toContain("AWS findings");
+		expect(body).not.toContain("Unscoped");
+		expect(body).not.toContain("No alarm referenced the focus services");
+	});
 });

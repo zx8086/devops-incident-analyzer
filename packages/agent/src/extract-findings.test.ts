@@ -859,3 +859,83 @@ describe("extractFindings focus scoping across datasources (SIO-1030)", () => {
 		expect(scoped.dataSourceResults?.[0]?.atlassianFindings?.linkedIssues?.map((i) => i.key)).toEqual(["INC-1"]);
 	});
 });
+
+// SIO-1245: the multi-row seam. The AWS estate fan-out (SIO-828) and the elastic deployment
+// fan-out emit several DataSourceResult rows sharing one dataSourceId. Every pre-existing test
+// in this file builds exactly ONE row and asserts on `[0]`, so nothing covered this -- which is
+// how run 43796e9f shipped a card where estate B's unscoped fallback replaced estate A's good
+// scoped set.
+describe("extractFindings multi-deployment merge (SIO-1245)", () => {
+	function awsAlarms(names: string[]): DataSourceResult["toolOutputs"] {
+		return [
+			{
+				toolName: "aws_cloudwatch_describe_alarms",
+				rawJson: { MetricAlarms: names.map((n) => ({ AlarmName: n, StateValue: "ALARM" })) },
+			},
+		];
+	}
+
+	function multiEstateState(focus: string[]): AgentStateType {
+		return {
+			...baseState(),
+			investigationFocus: { services: focus, datasources: [], summary: "", establishedAtTurn: 1 },
+			dataSourceResults: [
+				{
+					dataSourceId: "aws",
+					deploymentId: "estate:eu-oit-prd",
+					data: "prose A",
+					status: "success",
+					duration: 10,
+					// The focus-matching alarm lives in estate A only.
+					toolOutputs: awsAlarms(["prana-order-service-CPU", "unrelated-a-service-CPU"]),
+				},
+				{
+					dataSourceId: "aws",
+					deploymentId: "estate:eu-shared-services-prd",
+					data: "prose B",
+					status: "success",
+					duration: 10,
+					// Estate B has nothing on-focus -- alone it would engage the unscoped fallback.
+					toolOutputs: awsAlarms(["authentication-service-CPU", "bitly-service-Memory", "brads-service-CPU"]),
+				},
+			],
+		} as unknown as AgentStateType;
+	}
+
+	test("one estate's scoped hit suppresses the other estate's unscoped fallback", async () => {
+		const out = await extractFindings(multiEstateState(["prana-order-service"]));
+		const aws = out.dataSourceResults?.filter((r) => r.dataSourceId === "aws") ?? [];
+		expect(aws).toHaveLength(2);
+		for (const row of aws) {
+			expect(row.awsFindings?.alarms?.map((a) => a.name)).toEqual(["prana-order-service-CPU"]);
+			// The bug: estate B fell back and its 3 unscoped alarms replaced estate A's scoped 1.
+			expect(row.awsFindings?.unscoped).toBeFalsy();
+		}
+	});
+
+	test("every row of a dataSourceId carries the identical merged findings object", async () => {
+		const out = await extractFindings(multiEstateState(["prana-order-service"]));
+		const aws = out.dataSourceResults?.filter((r) => r.dataSourceId === "aws") ?? [];
+		// Identity, not just equality: this is what makes the UI's last-wins Map and
+		// rules.ts/engine.ts (which select by dataSourceId) agree on a multi-estate turn.
+		expect(aws[0]?.awsFindings).toBe(aws[1]?.awsFindings as never);
+	});
+
+	test("prose data stays per-row -- the merge only touches findings", async () => {
+		const out = await extractFindings(multiEstateState(["prana-order-service"]));
+		const aws = out.dataSourceResults?.filter((r) => r.dataSourceId === "aws") ?? [];
+		expect(aws.map((r) => r.data)).toEqual(["prose A", "prose B"]);
+		expect(aws.map((r) => r.deploymentId)).toEqual(["estate:eu-oit-prd", "estate:eu-shared-services-prd"]);
+	});
+
+	// NB the focus must share no >=4-char token with any alarm name: tokenize() would match on
+	// a bare "service" and scope successfully, so a focus like "service-that-matches-nothing"
+	// does NOT exercise the fallback.
+	test("the fallback still engages when NO estate scopes", async () => {
+		const out = await extractFindings(multiEstateState(["quantum-widget-registry"]));
+		const aws = out.dataSourceResults?.filter((r) => r.dataSourceId === "aws") ?? [];
+		// Merged across both estates, so the fallback sees all 5 alarms, not one estate's slice.
+		expect(aws[0]?.awsFindings?.unscoped).toBe(true);
+		expect(aws[0]?.awsFindings?.alarms?.length).toBe(5);
+	});
+});
