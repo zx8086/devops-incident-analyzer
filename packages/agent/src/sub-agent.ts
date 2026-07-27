@@ -1403,6 +1403,22 @@ ${state.correlationFetchDirective}`
 		// fixed slice (measured: 900 synthetic monitors -> 3). Fall back to the messages when
 		// the collector is empty so any path that bypasses the instrumented tools still
 		// persists what it always did.
+		// The switch is run-wide, so an INCOMPLETE rawOutputs would drop every toolMessages
+		// entry rather than just the missing one. The capture is exhaustive today (success,
+		// loop-guard stop and throw all record), but a future path that yields a ToolMessage
+		// without going through the instrumented invoke would regress this silently. Surface
+		// the divergence rather than quietly degrading persisted findings.
+		if (rawOutputs.length > 0 && rawOutputs.length !== toolMessages.length) {
+			log.warn(
+				{
+					event: "subagent.raw_output_count_mismatch",
+					deploymentId,
+					rawOutputCount: rawOutputs.length,
+					toolMessageCount: toolMessages.length,
+				},
+				"Raw tool-output capture diverged from tool messages; persisted findings may be incomplete",
+			);
+		}
 		const persistSource: Array<{ name?: string; content: unknown }> =
 			rawOutputs.length > 0
 				? rawOutputs.map((o) => ({ name: o.toolName, content: o.content }))

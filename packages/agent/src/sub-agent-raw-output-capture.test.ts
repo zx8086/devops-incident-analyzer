@@ -1,4 +1,4 @@
-// packages/agent/src/sub-agent-raw-output-capture.test.ts
+// agent/src/sub-agent-raw-output-capture.test.ts
 
 import { describe, expect, test } from "bun:test";
 import { tool } from "@langchain/core/tools";
