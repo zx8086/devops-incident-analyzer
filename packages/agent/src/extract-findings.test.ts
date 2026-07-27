@@ -56,9 +56,12 @@ describe("extractFindings node", () => {
 		expect((elastic as unknown as { kafkaFindings?: unknown }).kafkaFindings).toBeUndefined();
 	});
 
-	test("soft-fails (returns the result unchanged) when the extractor throws", async () => {
-		// Pass a non-iterable in place of toolOutputs[] so the extractor's `for...of` throws.
-		// The node's try/catch must absorb it and leave kafkaFindings undefined.
+	test("soft-fails (returns the result unchanged) on malformed toolOutputs", async () => {
+		// Pass a non-iterable in place of toolOutputs[]. Pre-SIO-1245 this reached the
+		// extractor and its `for...of` threw, absorbed by the node's try/catch. SIO-1245
+		// now drops the malformed row during the merge instead, so the extractor is never
+		// reached -- same observable contract (no throw escapes, findings stay undefined),
+		// reached one step earlier.
 		const state: AgentStateType = {
 			...baseState(),
 			dataSourceResults: [
@@ -937,5 +940,87 @@ describe("extractFindings multi-deployment merge (SIO-1245)", () => {
 		// Merged across both estates, so the fallback sees all 5 alarms, not one estate's slice.
 		expect(aws[0]?.awsFindings?.unscoped).toBe(true);
 		expect(aws[0]?.awsFindings?.alarms?.length).toBe(5);
+	});
+	// CodeRabbit, PR #494: a malformed row arriving BEFORE a healthy sibling used to store the
+	// garbage as the group's placeholder, after which the valid row matched neither the
+	// "existing is an array" nor the "existing is undefined" branch -- so its data was silently
+	// dropped and the extractor ran on the garbage. Purely order-dependent, i.e. exactly the
+	// "one estate's bad state clobbers another estate's good data" failure this PR exists to remove.
+	test("a malformed row before a valid one does not cost the valid row its findings", async () => {
+		const state = {
+			...baseState(),
+			investigationFocus: {
+				services: ["prana-order-service"],
+				datasources: [],
+				summary: "",
+				establishedAtTurn: 1,
+			},
+			dataSourceResults: [
+				{
+					dataSourceId: "aws",
+					deploymentId: "estate:broken",
+					data: "p",
+					status: "success",
+					duration: 1,
+					toolOutputs: { not: "iterable" } as unknown as DataSourceResult["toolOutputs"],
+				},
+				{
+					dataSourceId: "aws",
+					deploymentId: "estate:healthy",
+					data: "p",
+					status: "success",
+					duration: 1,
+					toolOutputs: [
+						{
+							toolName: "aws_cloudwatch_describe_alarms",
+							rawJson: { MetricAlarms: [{ AlarmName: "prana-order-service-CPU", StateValue: "ALARM" }] },
+						},
+					],
+				},
+			],
+		} as unknown as AgentStateType;
+
+		const out = await extractFindings(state);
+		for (const row of out.dataSourceResults ?? []) {
+			expect(row.awsFindings?.alarms?.map((a) => a.name)).toEqual(["prana-order-service-CPU"]);
+		}
+	});
+
+	test("order does not matter -- valid before malformed gives the same result", async () => {
+		const rows = [
+			{
+				dataSourceId: "aws",
+				deploymentId: "estate:healthy",
+				data: "p",
+				status: "success",
+				duration: 1,
+				toolOutputs: [
+					{
+						toolName: "aws_cloudwatch_describe_alarms",
+						rawJson: { MetricAlarms: [{ AlarmName: "prana-order-service-CPU", StateValue: "ALARM" }] },
+					},
+				],
+			},
+			{
+				dataSourceId: "aws",
+				deploymentId: "estate:broken",
+				data: "p",
+				status: "success",
+				duration: 1,
+				toolOutputs: { not: "iterable" },
+			},
+		];
+		const focus = { services: ["prana-order-service"], datasources: [], summary: "", establishedAtTurn: 1 };
+		const forward = await extractFindings({
+			...baseState(),
+			investigationFocus: focus,
+			dataSourceResults: rows,
+		} as unknown as AgentStateType);
+		const reversed = await extractFindings({
+			...baseState(),
+			investigationFocus: focus,
+			dataSourceResults: [...rows].reverse(),
+		} as unknown as AgentStateType);
+		expect(forward.dataSourceResults?.[0]?.awsFindings).toEqual(reversed.dataSourceResults?.[0]?.awsFindings as never);
 	});
 });

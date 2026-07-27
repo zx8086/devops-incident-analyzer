@@ -37,12 +37,22 @@ export function selectResultWithFindings(
 	dataSourceId: string,
 	findingsKey: FindingsKey,
 ): DataSourceResult | undefined {
-	let enriched: DataSourceResult | undefined;
+	// Preference order, strongest first. The successful-enriched tier is load-bearing:
+	// extractFindings copies the merged findings onto EVERY row of a dataSourceId group,
+	// including rows whose sub-agent ERRORED, so plain array order could hand back an error
+	// row that happens to carry findings. Every caller in rules.ts then hits its
+	// `status !== "success"` guard and returns `{}` -- discarding findings that were present
+	// all along (CodeRabbit, PR #494). A multi-estate turn where one estate fails is exactly
+	// when that happens, which is the case this whole change exists to get right.
+	let successEnriched: DataSourceResult | undefined;
+	let anyEnriched: DataSourceResult | undefined;
 	let lastMatch: DataSourceResult | undefined;
 	for (const r of results) {
 		if (r.dataSourceId !== dataSourceId) continue;
 		lastMatch = r;
-		if (r[findingsKey] !== undefined) enriched = r;
+		if (r[findingsKey] === undefined) continue;
+		anyEnriched = r;
+		if (r.status === "success") successEnriched = r;
 	}
-	return enriched ?? lastMatch;
+	return successEnriched ?? anyEnriched ?? lastMatch;
 }

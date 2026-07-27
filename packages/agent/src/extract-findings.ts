@@ -233,19 +233,27 @@ export async function extractFindings(state: AgentStateType): Promise<Partial<Ag
 	// identical objects are what makes the card and the rule engine agree on a multi-estate
 	// turn instead of reading different estates.
 	const outputsByDataSource = new Map<string, ToolOutputs>();
+	const malformedDataSources = new Set<string>();
 	for (const r of state.dataSourceResults) {
 		const outs = r.toolOutputs;
 		const existing = outputsByDataSource.get(r.dataSourceId);
-		// A non-array toolOutputs is malformed. Hand it to the extractor UNCHANGED so the
-		// throw happens inside the per-datasource try/catch below, which is the documented
-		// soft-fail contract ("returns the result unchanged when the extractor throws").
-		// Spreading it here would throw outside that guard and sink the whole node.
+		// A non-array toolOutputs is malformed. Remember it (so the extractor still throws
+		// inside the per-datasource try/catch below -- the documented soft-fail contract)
+		// but NEVER let it displace or block a sibling row's real data: a malformed estate
+		// A arriving before a healthy estate B must not cost B its findings. Spreading here
+		// would also throw outside the guard and sink the whole node.
 		if (!Array.isArray(outs)) {
-			if (existing === undefined) outputsByDataSource.set(r.dataSourceId, (outs ?? []) as ToolOutputs);
+			if (outs != null) malformedDataSources.add(r.dataSourceId);
 			continue;
 		}
 		if (Array.isArray(existing)) existing.push(...outs);
-		else if (existing === undefined) outputsByDataSource.set(r.dataSourceId, [...outs]);
+		else outputsByDataSource.set(r.dataSourceId, [...outs]);
+	}
+	for (const dataSourceId of malformedDataSources) {
+		logger.warn(
+			{ dataSourceId, hasUsableRows: outputsByDataSource.has(dataSourceId) },
+			"ignored a row with malformed toolOutputs while merging",
+		);
 	}
 	const deploymentsByDataSource = new Map<string, string[]>();
 	for (const r of state.dataSourceResults) {

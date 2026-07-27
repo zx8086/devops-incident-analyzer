@@ -70,4 +70,25 @@ describe("selectResultWithFindings (SIO-1245)", () => {
 		expect(selectResultWithFindings(results, "gitlab", "orbitFindings")?.orbitFindings).toBeDefined();
 		expect(selectResultWithFindings(results, "gitlab", "gitlabFindings")?.gitlabFindings).toBeUndefined();
 	});
+	// CodeRabbit, PR #494: extractFindings copies the merged findings onto EVERY row of a
+	// dataSourceId group, including rows whose sub-agent ERRORED. Plain array order could then
+	// hand back an error row that happens to carry findings, and every caller in rules.ts hits
+	// its `status !== "success"` guard and returns {} -- discarding findings that were present.
+	// A multi-estate turn where one estate fails is precisely when this bites.
+	test("prefers a SUCCESSFUL enriched row over a later errored one carrying the same findings", () => {
+		const findings = { alarms: [{ name: "prana-order-service-CPU", state: "ALARM" }] };
+		const results = [
+			row({ deploymentId: "estate:ok", status: "success", awsFindings: findings }),
+			row({ deploymentId: "estate:failed", status: "error", awsFindings: findings }),
+		];
+		const picked = selectResultWithFindings(results, "aws", "awsFindings");
+		expect(picked?.deploymentId).toBe("estate:ok");
+		expect(picked?.status).toBe("success");
+	});
+
+	test("still returns an errored enriched row when no successful one exists", () => {
+		const results = [row({ deploymentId: "estate:failed", status: "error", awsFindings: { alarms: [] } })];
+		// The caller's own status guard decides what to do -- the selector must not hide the row.
+		expect(selectResultWithFindings(results, "aws", "awsFindings")?.deploymentId).toBe("estate:failed");
+	});
 });
