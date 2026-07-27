@@ -107,7 +107,60 @@ describe("truncateToolOutput", () => {
 		expect(result.finalBytes).toBe(result.originalBytes);
 	});
 
-	test("reduces hits.hits payload to first 3 with totalHits marker", () => {
+	// SIO-1249: the reducers used FIXED slice constants, so output size was independent of
+	// the budget the caller granted -- cap=131072 and cap=16384 both emitted 876 B,
+	// discarding ~99% of the allowance. The constants are now MINIMUMS; the byte budget
+	// decides how much is actually kept.
+	describe("SIO-1249 budget-aware reduction", () => {
+		test("a larger cap keeps strictly more hits", () => {
+			const content = bigHitsPayload();
+			const counts = [16_384, 65_536, 131_072].map((cap) => {
+				const r = truncateToolOutput(content, cap);
+				expect(r.finalBytes).toBeLessThanOrEqual(cap);
+				return (JSON.parse(r.content) as { hits: { hits: unknown[] } }).hits.hits.length;
+			});
+
+			expect(Number(counts[0])).toBeLessThan(Number(counts[1]));
+			expect(Number(counts[1])).toBeLessThan(Number(counts[2]));
+			// The old behaviour was a flat 3 at every cap.
+			expect(Number(counts[2])).toBeGreaterThan(3);
+		});
+
+		test("a larger cap keeps strictly more rows and array items", () => {
+			const rowsPayload = JSON.stringify({
+				columns: [{ name: "a" }, { name: "b" }],
+				rows: Array.from({ length: 400 }, (_, i) => [i, "r".repeat(200)]),
+			});
+			const rowCounts = [16_384, 131_072].map(
+				(cap) => (JSON.parse(truncateToolOutput(rowsPayload, cap).content) as { rows: unknown[] }).rows.length,
+			);
+			expect(Number(rowCounts[0])).toBeLessThan(Number(rowCounts[1]));
+
+			const arrCounts = [16_384, 131_072].map((cap) => {
+				const parsed = JSON.parse(truncateToolOutput(bigArrayPayload(), cap).content) as unknown[];
+				return (parsed.at(-1) as { _keptCount: number })._keptCount;
+			});
+			expect(Number(arrCounts[0])).toBeLessThan(Number(arrCounts[1]));
+		});
+
+		test("still fits the cap and keeps the truncation markers at every budget", () => {
+			for (const cap of [4_096, 16_384, 65_536, 131_072]) {
+				const r = truncateToolOutput(bigHitsPayload(), cap);
+				expect(r.finalBytes).toBeLessThanOrEqual(cap);
+				const parsed = JSON.parse(r.content) as { hits: { _truncated: boolean; _totalHits: number } };
+				expect(parsed.hits._truncated).toBe(true);
+				expect(parsed.hits._totalHits).toBe(200);
+			}
+		});
+
+		test("a tiny cap still yields at least one parseable hit", () => {
+			const r = truncateToolOutput(bigHitsPayload(), 2_048);
+			const parsed = JSON.parse(r.content) as { hits: { hits: unknown[] } };
+			expect(parsed.hits.hits.length).toBeGreaterThanOrEqual(1);
+		});
+	});
+
+	test("reduces hits.hits payload with totalHits marker", () => {
 		const content = bigHitsPayload();
 		const original = Buffer.byteLength(content, "utf8");
 		const result = truncateToolOutput(content, CAP);
@@ -119,7 +172,9 @@ describe("truncateToolOutput", () => {
 		const parsed = JSON.parse(result.content) as {
 			hits: { hits: unknown[]; _truncated: boolean; _totalHits: number; total: unknown };
 		};
-		expect(parsed.hits.hits.length).toBe(3);
+		// SIO-1249: count is budget-driven now, not a fixed 3.
+		expect(parsed.hits.hits.length).toBeGreaterThan(3);
+		expect(parsed.hits.hits.length).toBeLessThan(200);
 		expect(parsed.hits._truncated).toBe(true);
 		expect(parsed.hits._totalHits).toBe(200);
 		expect(parsed.hits.total).toEqual({ value: 200, relation: "eq" });
@@ -133,8 +188,13 @@ describe("truncateToolOutput", () => {
 		expect(result.finalBytes).toBeLessThanOrEqual(CAP);
 
 		const parsed = JSON.parse(result.content) as Array<Record<string, unknown>>;
-		expect(parsed.length).toBe(21); // 20 items + 1 marker entry
-		expect(parsed.at(-1)).toEqual({ _truncated: true, _totalCount: 500, _keptCount: 20 });
+		// SIO-1249: kept count fills the budget instead of a fixed 20.
+		expect(parsed.length).toBeGreaterThan(21);
+		const arrMarker = parsed.at(-1) as { _truncated: boolean; _totalCount: number; _keptCount: number };
+		expect(arrMarker._truncated).toBe(true);
+		expect(arrMarker._totalCount).toBe(500);
+		expect(arrMarker._keptCount).toBe(parsed.length - 1);
+		expect(arrMarker._keptCount).toBeGreaterThan(20);
 	});
 
 	test("reduces nodes object to first 5 with nodeCount marker", () => {
@@ -149,7 +209,9 @@ describe("truncateToolOutput", () => {
 			_nodeCount: number;
 			_truncated: boolean;
 		};
-		expect(Object.keys(parsed.nodes).length).toBe(5);
+		// SIO-1249: budget-driven, previously a fixed 5.
+		expect(Object.keys(parsed.nodes).length).toBeGreaterThan(5);
+		expect(Object.keys(parsed.nodes).length).toBeLessThan(50);
 		expect(parsed._nodeCount).toBe(50);
 		expect(parsed._truncated).toBe(true);
 	});
@@ -198,9 +260,9 @@ describe("truncateToolOutput", () => {
 		expect(result.content).toContain("_totalCount");
 	});
 
-	test("reduces array of huge items to first 3 (not 20) so cap is met", () => {
+	test("reduces array of huge items so cap is met", () => {
 		// 50 items of ~12KB each = 600KB total, way over cap.
-		// New reducer should pick keep=3 (LARGE_ITEM_BYTES threshold).
+		// SIO-1249: keep-count is whatever fits the budget (previously a fixed 3).
 		const items = Array.from({ length: 50 }, (_, i) => ({
 			id: i,
 			huge: "h".repeat(12_000),
@@ -212,7 +274,9 @@ describe("truncateToolOutput", () => {
 		expect(result.finalBytes).toBeLessThanOrEqual(CAP);
 		if (result.strategy === "json-array") {
 			const parsed = JSON.parse(result.content) as Array<Record<string, unknown>>;
-			expect(parsed.length).toBeLessThanOrEqual(4); // 3 items + 1 marker
+			// Budget-driven: far fewer than 50, and the serialized result still fits CAP.
+			expect(parsed.length).toBeLessThan(50);
+			expect(parsed.length).toBeGreaterThan(1);
 			const marker = parsed.at(-1) as Record<string, unknown>;
 			expect(marker._truncated).toBe(true);
 			expect(marker._totalCount).toBe(50);
@@ -243,7 +307,9 @@ describe("truncateToolOutput", () => {
 			_totalRows: number;
 		};
 		expect(parsed.columns.length).toBe(3); // columns preserved
-		expect(parsed.rows.length).toBe(20); // rows reduced to ROWS_KEEP
+		// SIO-1249: budget-driven, previously a fixed ROWS_KEEP=20.
+		expect(parsed.rows.length).toBeGreaterThan(20);
+		expect(parsed.rows.length).toBeLessThan(200);
 		expect(parsed.cursor).toBe("abc123"); // other fields preserved
 		expect(parsed._truncated).toBe(true);
 		expect(parsed._totalRows).toBe(200);
@@ -271,7 +337,8 @@ describe("truncateToolOutput", () => {
 		expect(parsed.meta).toEqual({ runId: "abc", elapsed: 1234 }); // meta preserved
 		expect(parsed.summary).toBe("ok"); // summary preserved
 		expect(parsed._truncatedField).toBe("results");
-		expect(parsed.results.length).toBeLessThanOrEqual(21); // 20 items + 1 marker (small items)
+		// SIO-1249: small items now fill the budget rather than stopping at 20.
+		expect(parsed.results.length).toBeGreaterThan(21);
 	});
 
 	// SIO-688 Gap 1: capella_get_completed_requests returns markdown content
@@ -388,7 +455,9 @@ describe("truncateToolOutput", () => {
 			hits: { hits: unknown[]; _truncated: boolean; _totalHits: number };
 			aggregations: { error_rate_over_time: { buckets: Array<{ doc_count: number }> } };
 		};
-		expect(parsed.hits.hits.length).toBe(3); // hits reduced
+		// SIO-1249: budget-driven; the envelope (aggregations, took) is paid for first.
+		expect(parsed.hits.hits.length).toBeGreaterThan(3);
+		expect(parsed.hits.hits.length).toBeLessThan(200);
 		expect(parsed.hits._truncated).toBe(true);
 		// aggregations survive fully intact -- not trimmed by the hits reducer.
 		expect(parsed.aggregations.error_rate_over_time.buckets.length).toBe(24);

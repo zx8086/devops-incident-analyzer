@@ -112,7 +112,9 @@ describe("instrumentTools", () => {
 		expect(Buffer.byteLength(finalText, "utf8")).toBeLessThanOrEqual(cap);
 
 		const parsed = JSON.parse(finalText) as { hits: { hits: unknown[]; _truncated: boolean; _totalHits: number } };
-		expect(parsed.hits.hits.length).toBe(3);
+		// SIO-1249: the kept count now fills the byte budget instead of a fixed 3.
+		expect(parsed.hits.hits.length).toBeGreaterThan(3);
+		expect(parsed.hits.hits.length).toBeLessThan(200);
 		expect(parsed.hits._truncated).toBe(true);
 		expect(parsed.hits._totalHits).toBe(200);
 	});
