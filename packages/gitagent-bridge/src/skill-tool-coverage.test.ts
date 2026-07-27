@@ -5,6 +5,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { loadAgent } from "./manifest-loader.ts";
+import { buildSubAgentSystemPrompt, buildSystemPrompt, SUB_AGENT_NON_INTERACTIVE_PREAMBLE } from "./skill-loader.ts";
 import { extractPromptToolNames, extractSkillToolNames } from "./skill-tools.ts";
 import { ToolDefinitionSchema } from "./types.ts";
 
@@ -246,4 +247,216 @@ describe("SIO-1228: skill prose cannot promise tools the datasource does not exp
 			expect(toolLike.length).toBeLessThanOrEqual(ceiling);
 		});
 	}
+});
+
+// SIO-1257: a sub-agent has no human to answer it. sub-agent.ts hands it the RAW end-user
+// HumanMessage as its only message, so every "the user" in SOUL/RULES reads as a live
+// interlocutor -- and nothing in the prompt said otherwise. In run
+// cbada913-d22f-4618-826b-0c4c38fd8956 kafka-agent returned messageCount 2 (system + one AI
+// reply), ZERO tool calls in 6.9s with 25 tools bound, and a report that "offered to check
+// Couchbase sink-connector consumer groups and DLQ topics but deferred pending direction."
+// There was no one to defer to, so the evidence was simply never gathered.
+//
+// `bun run yaml:check` is `yamllint agents/` and cannot see .md files at all, so these tests are
+// the ONLY build-time guard on this prose.
+//
+// SCOPED TO SUB-AGENT DIRECTORIES. agents/incident-analyzer/SOUL.md legitimately says "When the
+// user asks about infrastructure health ... immediately dispatch sub-agents" -- the orchestrator
+// IS the turn with a human on the other end, and banning it there would be wrong.
+interface ProsePattern {
+	readonly name: string;
+	readonly re: RegExp;
+}
+
+const HUMAN_IN_THE_LOOP_PATTERNS: readonly ProsePattern[] = [
+	// "the user query references" / "the user mentions" / "the user names" / "the user asked".
+	// No trailing \b on the verb stem so mention/mentions/mentioned all match.
+	{
+		name: "user-gated instruction",
+		re: /\bthe user(?:'s)?(?:\s+(?:query|message|request|prompt))?\s+(?:mention|name|ask|reference|say|request|want|specif)/i,
+	},
+	{ name: "offer a follow-up", re: /\boffers?\s+(?:to\b|one\b|a\s+follow)/i },
+	{
+		name: "await a human",
+		re: /\b(?:wait|waits|waiting|await|awaits|awaiting)\s+(?:for\s+)?(?:confirmation|approval|direction|the\s+user)\b/i,
+	},
+	{
+		name: "conversational hand-back",
+		re: /\b(?:would you like|shall i\b|let me know|pending\s+(?:direction|confirmation|approval))/i,
+	},
+];
+
+// agents/shared/ merges into every sub-agent, so it carries the stricter set: shared prose must
+// not even IMPLY that a confirmation channel exists. Applied ONLY to agents/shared -- the
+// orchestrator's approval invariant is carried independently by buildComplianceBoundary()
+// (packages/agent/src/prompt-context.ts), built from agent.yaml annotations, so nothing is lost.
+const SHARED_PROSE_PATTERNS: readonly ProsePattern[] = [
+	...HUMAN_IN_THE_LOOP_PATTERNS,
+	{ name: "implies a confirmation channel", re: /\b(?:human-in-the-loop|user confirmation)\b/i },
+];
+
+// Same ratchet discipline as KNOWN_CROSS_DATASOURCE_PROSE: entries may be REMOVED, never added
+// without a linked follow-up. Empty is the intended steady state -- an entry here means shipping
+// a sub-agent prompt that tells it to wait for someone who does not exist. Keyed by
+// "<source> [<pattern name>]" rather than by line number, so unrelated edits above the offending
+// line do not churn this table.
+const KNOWN_HUMAN_IN_THE_LOOP_PROSE: Readonly<Record<string, readonly string[]>> = {};
+
+interface ProseBody {
+	source: string;
+	body: string;
+}
+
+function promptBodies(agent: {
+	soul: string;
+	rules: string;
+	duties?: string;
+	skills: Map<string, string>;
+}): ProseBody[] {
+	const out: ProseBody[] = [
+		{ source: "SOUL.md", body: agent.soul },
+		{ source: "RULES.md", body: agent.rules },
+		{ source: "DUTIES.md", body: agent.duties ?? "" },
+	];
+	// Local skills only. sharedSkills/sharedContext get their own test below, so a shared
+	// offender is reported once instead of seven times.
+	for (const [name, body] of agent.skills) out.push({ source: `skills/${name}/SKILL.md`, body });
+	return out.filter((s) => s.body.trim().length > 0);
+}
+
+function findDeferralProse(bodies: readonly ProseBody[], patterns: readonly ProsePattern[]): string[] {
+	const hits = new Set<string>();
+	for (const { source, body } of bodies) {
+		for (const line of body.split("\n")) {
+			// Patterns are intentionally non-global: RegExp.test on a /g regex is stateful via
+			// lastIndex and would skip every other match.
+			for (const { name, re } of patterns) if (re.test(line)) hits.add(`${source} [${name}]`);
+		}
+	}
+	return [...hits].sort();
+}
+
+describe("SIO-1257: sub-agent prose never defers to a human", () => {
+	for (const dir of subAgentDirs) {
+		const agent = rootAgent.subAgents.get(dir);
+		// An UNDECLARED directory runs the ROOT agent's prompt, which is user-facing by design.
+		// Scanning it here would fail on the orchestrator's legitimate prose and mask the real
+		// bug, which the "undeclared sub-agent directories resolve to the root agent" test owns.
+		if (!agent) continue;
+
+		test(`${dir}: prompt prose never gates on, offers to, or awaits a human`, () => {
+			const hits = findDeferralProse(promptBodies(agent), HUMAN_IN_THE_LOOP_PATTERNS);
+			expect(hits).toEqual([...(KNOWN_HUMAN_IN_THE_LOOP_PROSE[dir] ?? [])]);
+		});
+	}
+
+	test("agents/shared prose never implies a confirmation channel", () => {
+		const bodies: ProseBody[] = [{ source: "shared/context.md", body: rootAgent.sharedContext ?? "" }];
+		for (const [name, body] of rootAgent.sharedSkills) {
+			bodies.push({ source: `shared/skills/${name}/SKILL.md`, body });
+		}
+		expect(findDeferralProse(bodies, SHARED_PROSE_PATTERNS)).toEqual([]);
+	});
+
+	// Anti-vacuity, mirroring the SIO-1228 "extraction actually finds tools" guard. If the scanner
+	// silently reads empty bodies, every test above passes trivially.
+	test("the scanner actually sees prose (kafka-agent has SOUL + RULES)", () => {
+		const agent = rootAgent.subAgents.get("kafka-agent");
+		expect(agent).toBeDefined();
+		if (!agent) return;
+		const sources = promptBodies(agent).map((b) => b.source);
+		expect(sources).toContain("SOUL.md");
+		expect(sources).toContain("RULES.md");
+	});
+
+	// Anti-vacuity for the PATTERNS themselves: a regex typo would make every ban silently inert.
+	// These are the verbatim lines that motivated the ticket.
+	test("the ban patterns match their motivating strings", () => {
+		const samples = [
+			"When the user query references cluster health, multiple Confluent components,",
+			"When the user mentions **dead-letter queues, DLQ, dead letter, or DLQ growth**,",
+			"When the user names a specific service or resource:",
+			'<window>" and offer to broaden, then STOP. Do NOT silently narrow',
+			'   <window>") and offer ONE follow-up ("want me to broaden to `now-7d` / no',
+			'   score filter?"). Wait for confirmation before re-calling -- do not',
+		];
+		for (const s of samples) {
+			expect(HUMAN_IN_THE_LOOP_PATTERNS.some((p) => p.re.test(s))).toBe(true);
+		}
+	});
+
+	// The false-positive floor. Every one of these is legitimate prose that lives in these files
+	// today, and a careless widening of the patterns above would start failing on them:
+	//   - "the user/operator action is ..." names a remediation OWNER, not a conversational partner
+	//   - "confirm with `capella_...`" / "confirmed by a direct query" -- `confirm` as an EVIDENCE
+	//     verb, not a handshake
+	//   - "Defer trace-chain questions to the elastic datasource" -- cross-datasource delegation,
+	//     which is how a sub-agent CORRECTLY hands work to a peer
+	//   - "rather than waiting for an alarm dimension" -- the await pattern enumerates its objects
+	//     precisely so this does not match
+	test("the ban patterns do not fire on legitimate prose", () => {
+		const legit: string[] = [
+			'- `iam-permission-missing`: the action is listed; the user/operator action is "Update ..."',
+			"   non-covering indexes -- confirm with `capella_get_non_covering_index_queries`",
+			"- Tracing: NOT via X-Ray in these estates ... Defer trace-chain questions to the elastic datasource;",
+			"fallback defers to it). Act on the kind:",
+			"RDS inventory up front rather than waiting for an alarm dimension to point at it --",
+			"The incident narrative or user question asks what's anomalous, whether anything",
+			"output, enumerate every PAUSED / FAILED / EMPTY / DEAD entry. Do not stop at the first",
+			"  An empty result set IS proof the mapping is absent (report it as confirmed by a direct",
+		];
+		for (const s of legit) {
+			expect(HUMAN_IN_THE_LOOP_PATTERNS.some((p) => p.re.test(s))).toBe(false);
+		}
+	});
+});
+
+// SIO-1257 + SIO-1229: the preamble is only worth writing if it actually reaches the model. The
+// SIO-1229 failure mode -- a sub-agent directory that is not declared in the orchestrator's
+// `agents:` map silently runs the ROOT prompt -- would drop it just as silently, so assert
+// delivery rather than assuming it.
+describe("SIO-1257: the non-interactive preamble reaches every sub-agent prompt", () => {
+	test("every declared sub-agent's assembled prompt opens with the preamble", () => {
+		const declared = subAgentDirs.filter((d) => rootAgent.subAgents.has(d));
+		// SIO-1229 regression canary: every directory on disk must be declared, or the rest of
+		// this test would silently skip the undeclared one.
+		expect(declared).toEqual(subAgentDirs);
+
+		for (const dir of declared) {
+			const agent = rootAgent.subAgents.get(dir);
+			expect(agent).toBeDefined();
+			if (!agent) continue;
+			const prompt = buildSubAgentSystemPrompt(agent);
+			expect(prompt.startsWith(SUB_AGENT_NON_INTERACTIVE_PREAMBLE)).toBe(true);
+			// ...and the agent's OWN identity still follows it: the preamble prepends, never replaces.
+			expect(prompt).toContain(agent.soul.trim().slice(0, 60));
+		}
+	});
+
+	// Mirrors buildSubAgentPrompt's fallback: an undeclared directory resolves to the root agent,
+	// and that path must still carry the preamble -- it is the misconfiguration case, i.e. the one
+	// most likely to be dispatched with the wrong prompt.
+	test("the root-agent fallback also carries the preamble", () => {
+		expect(buildSubAgentSystemPrompt(rootAgent).startsWith(SUB_AGENT_NON_INTERACTIVE_PREAMBLE)).toBe(true);
+	});
+
+	// The orchestrator DOES have a human on the other end. buildSystemPrompt must stay untouched,
+	// or the orchestrator would start refusing to ask the clarifying questions its SOUL allows.
+	test("the orchestrator prompt does not carry the sub-agent preamble", () => {
+		expect(buildSystemPrompt(rootAgent)).not.toContain(SUB_AGENT_NON_INTERACTIVE_PREAMBLE);
+	});
+
+	// The preamble must never charge against PROMPT_TOOL_BUDGET -- gitlab-agent has exactly one
+	// slot of headroom (16 of 17), so a single backticked snake_case token here would eat it.
+	test("the preamble names no backticked tool token", () => {
+		expect(SUB_AGENT_NON_INTERACTIVE_PREAMBLE).not.toMatch(/`[a-z][a-z0-9]*(?:_[a-z0-9]+)+`/);
+	});
+
+	// It is a system-prompt contract, not a suggestion: pin the load-bearing clauses so a future
+	// reword cannot quietly drop the part that actually fixes the defect.
+	test("the preamble states the three load-bearing rules", () => {
+		expect(SUB_AGENT_NON_INTERACTIVE_PREAMBLE).toContain("There is no human in this");
+		expect(SUB_AGENT_NON_INTERACTIVE_PREAMBLE).toContain("at least one of the tools bound this turn");
+		expect(SUB_AGENT_NON_INTERACTIVE_PREAMBLE).toContain("CONCLUSIONS");
+	});
 });

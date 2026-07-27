@@ -144,7 +144,9 @@ not job health.
 
 Omit the score filter for an open-ended question. An empty result at the requested parameters
 (lookback, entity, job) is itself the answer -- report "no anomaly records above <threshold> in
-<window>" and offer to broaden, then STOP. Do NOT silently narrow to a critical-only score or
+<window>", record "a wider lookback and an unfiltered score were NOT tried" as an un-queried gap,
+then STOP. The gap line is how the broadening option reaches the report; there is no one to agree
+to it mid-turn. Do NOT silently narrow to a critical-only score or
 widen the lookback and re-query on your own initiative; that is stricter than the `now-30d`
 log-search auto-retry elsewhere in this file, because anomaly records are inherently sparse at
 high scores and a genuine zero is a common, correct answer. Call this tool ONCE per turn.

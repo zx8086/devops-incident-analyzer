@@ -101,7 +101,33 @@ describe("buildBoundToolsBlock (SIO-1234)", () => {
 		expect(block).toMatch(/do not retry/i);
 	});
 
-	test("degrades to an explicit (none) rather than an empty list", () => {
-		expect(buildBoundToolsBlock([])).toContain("(none)");
+	// SIO-1234's intent was "never render a dangling empty list -- say something explicit". SIO-1257
+	// keeps that intent but states it far more usefully than the bare "(none)" token, so this now
+	// asserts the GUARANTEE rather than the literal string it used to be spelled with.
+	test("degrades to an explicit statement rather than an empty list", () => {
+		const block = buildBoundToolsBlock([]);
+		expect(block).toContain("No tools are bound to you this turn");
+		expect(block).not.toMatch(/available to you on this turn:\s*$/m);
+	});
+
+	// SIO-1257 (CodeRabbit, PR #499): the empty belt is REACHABLE -- getToolsForDataSource returns []
+	// for a disconnected MCP server (konnect is disabled by design) and selectToolsByAction passes it
+	// straight through. The non-empty block tells the agent to "make at least one call from this
+	// list", which is impossible with an empty list and would push it to fabricate one: the mirror
+	// image of the deferral bug this block exists to fix.
+	test("an empty belt does not demand a tool call", () => {
+		const block = buildBoundToolsBlock([]);
+		expect(block).toContain("un-queried gap");
+		expect(block).not.toContain("Make at least one call from this list");
+		expect(block).not.toContain("pick the closest bound tool and run it");
+		// ...and it must not license a claim about the datasource either.
+		expect(block).toContain("no evidence either way");
+	});
+
+	test("a non-empty belt keeps the must-query imperative", () => {
+		const block = buildBoundToolsBlock(tools("kafka_list_topics"));
+		expect(block).toContain("kafka_list_topics");
+		expect(block).toContain("Make at least one call from this list");
+		expect(block).not.toContain("No tools are bound");
 	});
 });

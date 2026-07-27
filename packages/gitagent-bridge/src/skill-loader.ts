@@ -129,3 +129,48 @@ export function buildSystemPrompt(agent: LoadedAgent, activeSkills?: string[]): 
 	const { core, knowledge } = buildSystemPromptParts(agent, activeSkills);
 	return core + knowledge;
 }
+
+// SIO-1257: a sub-agent has no human on the other end of the turn. sub-agent.ts dispatches it with
+// the RAW end-user HumanMessage as its only message, so every "the user" in SOUL/RULES reads as a
+// live interlocutor -- and nothing in the assembled prompt said otherwise. In run
+// cbada913-d22f-4618-826b-0c4c38fd8956 kafka-agent returned messageCount 2 (system + one AI reply),
+// ZERO tool calls in 6.9s with 25 tools bound, and a report that "offered to check Couchbase
+// sink-connector consumer groups and DLQ topics but deferred pending direction". There was no one
+// to defer to, so the evidence was never gathered.
+//
+// Prepended (not appended) so it frames the SOUL that follows, and kept in the STABLE half of the
+// prompt: it is turn-invariant, so Bedrock prompt caching pays for it once per TTL rather than on
+// every ReAct iteration.
+//
+// Deliberately contains NO backticked snake_case token -- TOOL_TOKEN in skill-tools.ts would read
+// one as a promised tool name and charge it against PROMPT_TOOL_BUDGET, where gitlab-agent has
+// exactly one slot of headroom.
+export const SUB_AGENT_NON_INTERACTIVE_PREAMBLE = `# Operating Context (read first)
+
+You are a specialist sub-agent inside an automated pipeline. There is no human in this
+conversation. Your reply is consumed by an aggregator process that merges it with the other
+sub-agents' replies; nobody will read a question, answer it, or send you a follow-up turn. Any
+question you ask is silently discarded and the investigation ships without your answer.
+
+On every turn:
+- Never offer, propose, or ask. Do not write "want me to ...", "shall I ...", "let me know",
+  "pending direction", or any sentence whose next step depends on a reply. Run the query instead,
+  then report what it returned.
+- Call at least one of the tools bound this turn before you answer. A turn that ends with zero tool
+  calls is a failed turn, whatever the prose says.
+- "This datasource is not relevant", "nothing here" and "not applicable" are CONCLUSIONS, and a
+  conclusion needs evidence. You may write one only after at least one bound tool has returned, and
+  you must cite the call and its result. Never assert it a priori from the wording of the request.
+- Where an instruction elsewhere in this prompt is conditioned on what "the user" said, read it as
+  conditioned on the request text you were dispatched with. That text IS the request, and it is the
+  whole of it. There will be no clarification.`;
+
+// The sub-agent counterpart to buildSystemPrompt. A separate function rather than a flag on
+// LoadedAgent because prompt-context.ts falls back to the ROOT agent when a sub-agent directory is
+// not declared in `agents:`, and a root-agent flag would be false there -- the preamble would go
+// missing on exactly the misconfiguration SIO-1229 was about. The call SITE is the scope boundary,
+// so gate there. It also keeps the preamble away from iac/nodes.ts, whose root agent genuinely does
+// converse with a human.
+export function buildSubAgentSystemPrompt(agent: LoadedAgent, activeSkills?: string[]): string {
+	return `${SUB_AGENT_NON_INTERACTIVE_PREAMBLE}\n\n---\n\n${buildSystemPrompt(agent, activeSkills)}`;
+}

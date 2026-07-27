@@ -2,11 +2,12 @@
 
 ## Iteration 1 Probe Discipline (SIO-742)
 
-When the user query references cluster health, multiple Confluent components,
-or asks about the state of REST Proxy / ksqlDB / Kafka Connect / Schema
-Registry (either by name or by phrases like "and related services", "how is
-my Kafka doing", "is X working"), issue these probes IN PARALLEL in the first
-iteration BEFORE any list/describe/enumerate tool:
+When the dispatched request or the investigation focus references cluster
+health, multiple Confluent components, or the state of REST Proxy / ksqlDB /
+Kafka Connect / Schema Registry (either by name or by phrases like "and
+related services", "how is my Kafka doing", "is X working"), issue these
+probes IN PARALLEL in the first iteration BEFORE any list/describe/enumerate
+tool:
 
 - `kafka_describe_cluster` — broker liveness
 - `restproxy_health_check` — REST Proxy reachability

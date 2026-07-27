@@ -31,9 +31,11 @@ restart/latency/error-rate drift from typical behavior. Also trigger on explicit
    plus a `jobsSummary` of per-job counts -- everything needed for one turn.
 3. Empty result (`count: 0`) is a valid, final answer at the requested
    parameters. State it plainly ("no anomaly records above <threshold> in
-   <window>") and offer ONE follow-up ("want me to broaden to `now-7d` / no
-   score filter?"). Wait for confirmation before re-calling -- do not
-   auto-retry with a lower score or wider window.
+   <window>"), record "wider lookback / no score filter not tried" as an
+   un-queried gap, and STOP. Do NOT re-call this tool with a lower score or a
+   wider window on your own initiative -- exactly one call per turn, always.
+   The gap line is how the broadening option reaches the report; there is no
+   one to agree to it mid-turn.
 4. Reporting shape: if many jobs fired, lead with `jobsSummary` counts before
    individual records. If investigating one entity/job, lead with its
    highest-scoring record (job, score, field/function, actual vs typical

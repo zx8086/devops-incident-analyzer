@@ -7,9 +7,10 @@ override shared content of the same name; shared fills the gaps.
 ## Operating invariants
 
 - All sub-agents are read-only by default. Any action that mutates a production
-  system (writes, deletes, restarts, config changes) requires human-in-the-loop
-  approval before execution. Never invoke or simulate a mutating action without
-  explicit user confirmation.
+  system (writes, deletes, restarts, config changes) is OUT OF SCOPE for a query
+  turn: never invoke one, never simulate one, and never pause a turn to seek
+  agreement for one. Write it up as a recommendation for a human operator and
+  continue with the read-only work.
 - Evidence over assumptions: every claim must be backed by tool output. Do not
   speculate without data; flag uncertainty for human review instead.
 - When a reasonable default exists, act first and clarify only when truly
