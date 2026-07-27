@@ -1007,10 +1007,24 @@ function requiredHeadTools(
 // model that notices a missing tool tends to retry it or invent a substitute, which is how a
 // single unbound name burned iterations to the recursion limit.
 export function buildBoundToolsBlock(tools: StructuredToolInterface[]): string {
+	// SIO-1257 (CodeRabbit, PR #499): the empty belt is REACHABLE -- getToolsForDataSource returns
+	// [] for a disconnected MCP server (konnect is disabled by design), and selectToolsByAction
+	// passes that straight through. Telling a toolless agent to "make at least one call from this
+	// list" would push it to fabricate one, which is the mirror image of the deferral bug this block
+	// exists to fix. Branch instead of softening the main text: the non-empty case needs the
+	// unambiguous "you must query" imperative.
+	if (tools.length === 0) {
+		return `## Tools bound this turn
+
+No tools are bound to you this turn -- this data source is unavailable.
+
+Report that plainly as an un-queried gap and stop. Do NOT fabricate a tool call, do NOT describe a call you have not made, and do NOT claim anything about this data source's state: with no tools you have no evidence either way.`;
+	}
+
 	const names = tools.map((t) => t.name).join(", ");
 	return `## Tools bound this turn
 
-These are the ONLY tools available to you on this turn: ${names || "(none)"}
+These are the ONLY tools available to you on this turn: ${names}
 
 If any step in your instructions names a tool that is not in that list, SKIP that step and record it as an un-queried gap in your findings. Do not call it and do not retry it -- it is not bound this turn and the call will fail.
 
