@@ -1,7 +1,17 @@
 # HANDOFF — Defects surfaced by the 2026-07-27 17:29 live replay
 
 - **Date**: 2026-07-27
-- **Parent to file under**: [SIO-1241](https://linear.app/siobytes/issue/SIO-1241) — Report-quality defects (all five original children now In Review or merged)
+- **Parent**: [SIO-1241](https://linear.app/siobytes/issue/SIO-1241) — the five original children are Done, except SIO-1242 ([PR #497](https://github.com/zx8086/devops-incident-analyzer/pull/497))
+- **Tickets for this document** (all Backlog, filed 2026-07-27):
+  | Defect | Ticket | Sev |
+  |---|---|---|
+  | 1 — truncated sub-agent discards gathered evidence | [SIO-1251](https://linear.app/siobytes/issue/SIO-1251) | **High** |
+  | 2 — kafka sub-agent deferred instead of querying | [SIO-1252](https://linear.app/siobytes/issue/SIO-1252) | **High** |
+  | 3 — `isUnproductiveResult` misses short "no results" strings | [SIO-1253](https://linear.app/siobytes/issue/SIO-1253) | Medium |
+  | 4 — gitlab re-resolves before every scoped tool | [SIO-1254](https://linear.app/siobytes/issue/SIO-1254) | Medium |
+  | 5 — `aws_ecs_list_tasks` prompted but unbound | [SIO-1255](https://linear.app/siobytes/issue/SIO-1255) | Medium |
+
+  Suggested order: **1251 → 1252** (both High, and together they are what broke this report), then 1255 (cheap, and removes the `raw_output_count_mismatch` noise), then 1253 and 1254.
 - **Repo state**: `main` @ `79e0db0a`, plus [PR #497](https://github.com/zx8086/devops-incident-analyzer/pull/497) (SIO-1242) open
 - **Suggested branches**: one per ticket below, e.g. `claude/sio-12XX-truncation-synthesis`
 
@@ -48,7 +58,7 @@ tool. That was structurally impossible before the fix.
 **SIO-1243 / SIO-1244 remain unexercised.** No `CREATE INDEX` was emitted; `findLinkedIncidents`
 returned zero issues (`droppedAll: false`), so the provenance path never ran. Neither is disproven.
 
-## Defect 1 — a truncated sub-agent throws away everything it found (HIGH)
+## Defect 1 — a truncated sub-agent throws away everything it found (HIGH) — [SIO-1251](https://linear.app/siobytes/issue/SIO-1251)
 
 **This is the one that broke this report.**
 
@@ -93,7 +103,7 @@ Recursion limits live in `RECURSION_LIMIT_BY_DATASOURCE` (`sub-agent.ts:228-256`
 via `SUBAGENT_RECURSION_LIMIT_<DATASOURCE>`. Note LangGraph counts **super-steps** and a ReAct cycle
 is two, so `limit ≈ 2 × maxLlmTurns + 1` — gitlab's 24 buys ~11 LLM turns.
 
-## Defect 2 — the Kafka sub-agent asked permission instead of querying (HIGH)
+## Defect 2 — the Kafka sub-agent asked permission instead of querying (HIGH) — [SIO-1252](https://linear.app/siobytes/issue/SIO-1252)
 
 ```
 Sub-agent completed {"dataSourceId":"kafka","duration":6938,"messageCount":2,
@@ -116,7 +126,7 @@ least one query, not asserted a priori.
 Worth checking whether other sub-agents share the phrasing — this is a prompt-shape bug, not a
 kafka-specific one.
 
-## Defect 3 — `isUnproductiveResult` misses short "no results" strings (MEDIUM)
+## Defect 3 — `isUnproductiveResult` misses short "no results" strings (MEDIUM) — [SIO-1253](https://linear.app/siobytes/issue/SIO-1253)
 
 `gitlab_search` was called **seven** times (iterations 1, 2, 6, 11, 12, 18, 20). Four returned short
 **strings** rather than arrays — 78, 72, 90 and 114 bytes — almost certainly "no results"/guidance
@@ -131,7 +141,7 @@ Fix candidate: treat a short string with no structured payload as unproductive, 
 its own empty-shape. Be careful — the guard now actually enforces (SIO-1246), so a loosened predicate
 stops real calls. Add the test before the change.
 
-## Defect 4 — gitlab re-resolves the project before every scoped tool (MEDIUM)
+## Defect 4 — gitlab re-resolves the project before every scoped tool (MEDIUM) — [SIO-1254](https://linear.app/siobytes/issue/SIO-1254)
 
 `project-resolution/SKILL.md` STEP 1 mandates `gitlab_search` before **any** tool taking a
 `project_id`. Every new project-scoped tool triggers another resolve — 7 of 21 calls in this run.
@@ -146,7 +156,7 @@ to "once per distinct project". **Do not** simply revert SIO-1238 — its catego
 `skill-tool-coverage.test.ts`. Verify with:
 `for f in SOUL.md skills/*/SKILL.md; do ...; done | grep -oE '\bgitlab_[a-z_]+' | sort -u | wc -l`
 
-## Defect 5 — `aws_ecs_list_tasks` is prompted but not bound (MEDIUM)
+## Defect 5 — `aws_ecs_list_tasks` is prompted but not bound (MEDIUM) — [SIO-1255](https://linear.app/siobytes/issue/SIO-1255)
 
 ```
 toolErrors:[{"toolName":"aws_ecs_list_tasks","category":"not-found",
