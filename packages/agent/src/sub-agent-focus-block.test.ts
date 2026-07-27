@@ -287,7 +287,10 @@ describe("SIO-1258: project-resolution prose matches the strings the code emits"
 		expect(block).toContain("- GitLab numeric project_id: 4471 (pvhcorp/b2b/customer-assignments)");
 
 		const skill = await Bun.file(SKILL_PATH).text();
-		expect(skill).toContain("- GitLab numeric project_id:");
+		// The WHOLE backticked template, not a prefix. A fragment match would let the `<id> (<path>)`
+		// shape drift out of sync with buildFocusBlock while CI stayed green -- which would defeat the
+		// entire point of this test (CodeRabbit, PR #500).
+		expect(skill).toContain("`- GitLab numeric project_id: <id> (<path>)`");
 		// ...and STEP 0 must actually be the instruction that consumes it.
 		expect(skill).toContain("STEP 0");
 		expect(skill).toMatch(/STEP 1 is SATISFIED/i);
@@ -298,8 +301,25 @@ describe("SIO-1258: project-resolution prose matches the strings the code emits"
 		// GENERIC_LOOP_GUARD_STOP_MESSAGE is what a short-circuited gitlab_search returns.
 		expect(GENERIC_LOOP_GUARD_STOP_MESSAGE).toContain("returned nothing useful several times");
 		expect(skill).toContain("returned nothing useful several times");
+		// Anchor the FULL report string, not just the closing clause: the "was not attempted"
+		// distinction is the load-bearing half, and a fragment match would let it be dropped.
+		expect(skill).toMatch(
+			/GitLab project resolution was not attempted for\s+`<name>`: the search tool was short-circuited after repeated empty results/,
+		);
 		// The distinction that keeps a refusal from being reported as a missing project.
 		expect(skill).toMatch(/never as "the project does not exist"/i);
+	});
+
+	// CodeRabbit, PR #500 (Major): "reuse any id you already hold" let a short-circuited resolution
+	// for project B fall back to an id resolved for project A -- running project-scoped calls against
+	// the wrong repository and reporting another project's commits as this one's. Reuse must be
+	// same-project only.
+	test("id reuse after a short-circuit is restricted to the same project", async () => {
+		const skill = await Bun.file(SKILL_PATH).text();
+		expect(skill).toMatch(/Reuse ONLY an id you already hold for THAT\s+SAME project/);
+		expect(skill).toMatch(/make no project-scoped call for it\s+and report its resolution as not attempted/);
+		// The dangerous unscoped phrasing must not come back.
+		expect(skill).not.toMatch(/Reuse any id you already hold/i);
 	});
 
 	test("the skill still resolves once per project rather than once per call", async () => {
