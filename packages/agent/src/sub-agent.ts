@@ -24,7 +24,7 @@ import { buildCachedSystemMessage } from "./prompt-cache.ts";
 import { buildSubAgentPrompt, getSkillToolNames, getToolDefinitionForDataSource } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
 import { buildFocusBlock } from "./sub-agent-focus-block.ts";
-import { instrumentTools, TYPED_FINDING_TOOLS } from "./sub-agent-instrumentation.ts";
+import { instrumentTools, type RawToolOutput, TYPED_FINDING_TOOLS } from "./sub-agent-instrumentation.ts";
 import {
 	getSubAgentStateOutputCapBytes,
 	getSubAgentToolCapBytes,
@@ -1292,7 +1292,19 @@ ${state.correlationFetchDirective}`
 		// When SUBAGENT_TOOL_RESULT_CAP_BYTES is set, oversized ToolMessage.content is
 		// JSON-aware truncated before re-entering the ReAct loop.
 		const capBytes = getSubAgentToolCapBytes();
-		const instrumentedTools = instrumentTools(tools, { dataSourceId, deploymentId, log, capBytes, config });
+		// SIO-1248: collects each tool result at full size, before the LLM-facing cap, so
+		// toolOutputs[] below can be built from raw bytes instead of the truncated
+		// ToolMessages. Populated on every path (normal, loop-guard stop, recursion-limit
+		// salvage) because the instrumented tool instances are shared with agent.stream().
+		const rawOutputs: RawToolOutput[] = [];
+		const instrumentedTools = instrumentTools(tools, {
+			dataSourceId,
+			deploymentId,
+			log,
+			capBytes,
+			config,
+			rawOutputs,
+		});
 
 		const agent = createReactAgent({
 			llm,
@@ -1386,7 +1398,16 @@ ${state.correlationFetchDirective}`
 		// zero findings; observed live as ElasticFindingsCard rawCount 0 in run 270378e0).
 		// Bounded regardless: pruneThreadState resets dataSourceResults after every turn.
 		const stateCapBytes = getSubAgentStateOutputCapBytes();
-		const toolOutputs = toolMessages.map((m: { name?: string; content: unknown }) => {
+		// SIO-1248: prefer the raw capture -- response.messages carries the CAPPED copies, so
+		// deriving persisted state from them would hand the extractors the truncator's small
+		// fixed slice (measured: 900 synthetic monitors -> 3). Fall back to the messages when
+		// the collector is empty so any path that bypasses the instrumented tools still
+		// persists what it always did.
+		const persistSource: Array<{ name?: string; content: unknown }> =
+			rawOutputs.length > 0
+				? rawOutputs.map((o) => ({ name: o.toolName, content: o.content }))
+				: toolMessages.map((m: { name?: string; content: unknown }) => ({ name: m.name, content: m.content }));
+		const toolOutputs = persistSource.map((m: { name?: string; content: unknown }) => {
 			const toolName = m.name ?? "unknown";
 			const out = buildPersistedToolOutput(toolName, normalizeToolContent(m.content), stateCapBytes);
 			if (out.capSkippedBytes != null) {
