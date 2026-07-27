@@ -35,10 +35,14 @@ const PROMPT_TOOL_BUDGET = MAX_TOOLS_PER_AGENT - MIN_ACTION_TOOLS;
 // reserved action quota is what keeps the binding safe.
 const KNOWN_OVERSUBSCRIBED: Readonly<Record<string, number>> = {
 	"aws-agent": 62,
-	// Over by exactly one. Trimming a single tool name from gitlab SKILL.md prose clears it and
-	// this entry can then be deleted -- deliberately not "fixed" by lowering MIN_ACTION_TOOLS,
-	// which would tune a global constant to suit one agent.
-	"gitlab-agent": 18,
+	// SIO-1238 removed the gitlab-agent entry (was 18, now 16). project-resolution's STEP 1 had
+	// named five project-scoped tools as EXAMPLES of a universal rule, which cost budget and was
+	// also a latent correctness bug: a partial list invites the model to read it as exhaustive
+	// and skip resolution for a bound tool that was not on it. STEP 1 now states the rule
+	// categorically ("any tool that takes a project_id argument") and points at the tool schema
+	// rather than a remembered list. The Orbit exemption list below it is deliberately UNCHANGED
+	// -- that one is a closed set defining an exception, so it is only actionable if every exempt
+	// tool is named.
 };
 
 const REPO_ROOT = new URL("../../../", import.meta.url).pathname;
