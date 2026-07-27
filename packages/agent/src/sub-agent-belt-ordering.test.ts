@@ -17,8 +17,11 @@
 // error also produced a ToolMessage with no paired raw output -- the subagent.raw_output_count_mismatch
 // warning in the same run.
 //
-// These tests assert the PROPERTY (order-independence), not a particular order, so no future fixture
-// can hide the same bug.
+// These tests assert the PROPERTY -- the belt is a pure function of the allTools SET -- rather than
+// blessing whichever order a fixture happens to use, so no future fixture can hide the same bug.
+// The permutation test compares the ORDERED lists: after orderByDeclaration the composition is
+// fully deterministic (fixed head table + declaration-ranked tail), so an ordering regression that
+// happened to preserve the same set is still a regression and a set-only assertion would miss it.
 
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
@@ -157,9 +160,12 @@ function seededShuffle<T>(items: readonly T[], seed: number): T[] {
 	return out;
 }
 
-function boundNames(universe: readonly string[], actions: string[], awsDef: ToolDefinition): Set<string> {
+// Returns the ORDERED list. orderByDeclaration makes the composition deterministic -- the head is
+// a fixed table and the tail is ranked by the YAML action map -- so the output order is itself part
+// of the contract, not an incidental detail (CodeRabbit, PR #498).
+function boundToolNames(universe: readonly string[], actions: string[], awsDef: ToolDefinition): string[] {
 	const { tools } = selectToolsByAction(fakeTools(universe), "aws", { aws: actions }, awsDef);
-	return new Set(tools.map((t) => t.name));
+	return tools.map((t) => t.name);
 }
 
 describe("SIO-1256: the AWS registration-order fixture matches the real MCP server", () => {
@@ -206,14 +212,16 @@ describe("SIO-1256: the AWS registration-order fixture matches the real MCP serv
 describe("SIO-1256: the bound belt does not depend on allTools ordering", () => {
 	test("every permutation of allTools binds the same set", () => {
 		const awsDef = loadAwsDef();
-		const baseline = boundNames(AWS_MCP_REGISTRATION_ORDER, LIVE_UNION_ACTIONS, awsDef);
+		const baseline = boundToolNames(AWS_MCP_REGISTRATION_ORDER, LIVE_UNION_ACTIONS, awsDef);
 
 		for (let seed = 1; seed <= 50; seed++) {
-			const permuted = boundNames(seededShuffle(AWS_MCP_REGISTRATION_ORDER, seed), LIVE_UNION_ACTIONS, awsDef);
-			expect(permuted.size).toBeLessThanOrEqual(25);
-			// Set equality, not array equality: the ORDER of the bound list is allowed to vary,
-			// only its membership must not.
-			expect([...permuted].sort()).toEqual([...baseline].sort());
+			const permuted = boundToolNames(seededShuffle(AWS_MCP_REGISTRATION_ORDER, seed), LIVE_UNION_ACTIONS, awsDef);
+			expect(permuted.length).toBeLessThanOrEqual(25);
+			// ORDERED equality, not just membership. orderByDeclaration's contract is that the belt is
+			// a pure function of {allTools SET, actions, dataSourceId} -- so an ordering regression
+			// that happened to preserve the same set would still be a regression, and a set-only
+			// assertion would let it pass (CodeRabbit, PR #498).
+			expect(permuted).toEqual(baseline);
 		}
 	});
 
@@ -221,9 +229,9 @@ describe("SIO-1256: the bound belt does not depend on allTools ordering", () => 
 	// plausibly pick must agree.
 	test("MCP registration order and YAML declaration order bind the same set", () => {
 		const awsDef = loadAwsDef();
-		const mcp = boundNames(AWS_MCP_REGISTRATION_ORDER, LIVE_UNION_ACTIONS, awsDef);
-		const yaml = boundNames(getAllActionToolNames(awsDef), LIVE_UNION_ACTIONS, awsDef);
-		expect([...mcp].sort()).toEqual([...yaml].sort());
+		const mcp = boundToolNames(AWS_MCP_REGISTRATION_ORDER, LIVE_UNION_ACTIONS, awsDef);
+		const yaml = boundToolNames(getAllActionToolNames(awsDef), LIVE_UNION_ACTIONS, awsDef);
+		expect(mcp).toEqual(yaml);
 	});
 });
 
@@ -275,10 +283,10 @@ describe("SIO-1256: RULES-mandated AWS tools survive the cap under any ordering"
 	for (const [label, universe] of orderings) {
 		test(`the live 4-group union binds every RULES-mandated tool (${label})`, () => {
 			const awsDef = loadAwsDef();
-			const names = boundNames(universe(), LIVE_UNION_ACTIONS, awsDef);
-			expect(names.size).toBeLessThanOrEqual(25);
+			const names = boundToolNames(universe(), LIVE_UNION_ACTIONS, awsDef);
+			expect(names.length).toBeLessThanOrEqual(25);
 			for (const mandated of AWS_MANDATED_BY_RULES) {
-				expect(names.has(mandated)).toBe(true);
+				expect(names).toContain(mandated);
 			}
 		});
 	}
@@ -287,6 +295,6 @@ describe("SIO-1256: RULES-mandated AWS tools survive the cap under any ordering"
 	// rather than pointing at a loop iteration.
 	test("aws_ecs_list_tasks is bound in MCP registration order (the live defect)", () => {
 		const awsDef = loadAwsDef();
-		expect(boundNames(AWS_MCP_REGISTRATION_ORDER, LIVE_UNION_ACTIONS, awsDef).has("aws_ecs_list_tasks")).toBe(true);
+		expect(boundToolNames(AWS_MCP_REGISTRATION_ORDER, LIVE_UNION_ACTIONS, awsDef)).toContain("aws_ecs_list_tasks");
 	});
 });
