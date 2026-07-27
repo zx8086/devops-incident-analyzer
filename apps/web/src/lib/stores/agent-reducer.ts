@@ -330,6 +330,18 @@ export interface DataSourceFindings {
 	atlassianFindings?: AtlassianFindings;
 }
 
+// SIO-1247: one live row per sub-agent branch. Both counts describe ACTIVITY, not
+// capacity -- toolCallCount is invocation attempts, distinctToolCount is how many
+// unique tools those attempts hit (so distinct <= calls). Neither is the size of the
+// sub-agent's bound tool belt, which the UI never sees. Rendered as "N calls across
+// M tools"; the earlier single "N tools" label read as belt size and misled.
+export interface SubAgentProgressEntry {
+	status: "running" | "done";
+	toolCallCount?: number;
+	distinctToolCount?: number;
+	deploymentId?: string;
+}
+
 export interface ReducerState {
 	currentContent: string;
 	threadId: string;
@@ -343,12 +355,12 @@ export interface ReducerState {
 	// SIO-1215: once-per-turn ML anomaly explainer from the ml_anomaly_explainer
 	// event. Same replace semantics as networkTopology.
 	mlAnomalyExplainer: MlAnomalyExplainer | null;
-	// Live in-flight status during the queryDataSource fan-out (running/done +
-	// tool-call count), keyed by dataSourceId, or dataSourceId:deploymentId when
-	// deploymentId is set (distinguishes concurrent AWS multi-estate branches).
-	// Populated well before dataSourceProgress/dataSourceFindings (which only
-	// arrive once at the very end of the whole turn's aggregation).
-	subAgentProgress: Map<string, { status: "running" | "done"; toolCallCount?: number; deploymentId?: string }>;
+	// Live in-flight status during the queryDataSource fan-out, keyed by
+	// dataSourceId, or dataSourceId:deploymentId when deploymentId is set
+	// (distinguishes concurrent AWS multi-estate branches). Populated well before
+	// dataSourceProgress/dataSourceFindings (which only arrive once at the very end
+	// of the whole turn's aggregation).
+	subAgentProgress: Map<string, SubAgentProgressEntry>;
 	lastSuggestions: string[];
 	lastResponseTime: number | undefined;
 	lastToolsUsed: string[];
@@ -475,9 +487,12 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 			const next = new Map(state.subAgentProgress);
 			const key = event.deploymentId ? `${event.dataSourceId}:${event.deploymentId}` : event.dataSourceId;
 			const previous = next.get(key);
+			// The start tick and the terminal "done" tick carry no counts, so both fall
+			// back to the last value seen -- otherwise the row would blank out on done.
 			next.set(key, {
 				status: event.status,
 				toolCallCount: event.toolCallCount ?? previous?.toolCallCount,
+				distinctToolCount: event.distinctToolCount ?? previous?.distinctToolCount,
 				deploymentId: event.deploymentId,
 			});
 			return { ...state, subAgentProgress: next };

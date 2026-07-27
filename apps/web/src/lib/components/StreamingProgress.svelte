@@ -8,6 +8,7 @@ import {
 	INCIDENT_MITIGATION_NODES,
 	INCIDENT_NODES,
 } from "$lib/node-labels";
+import type { SubAgentProgressEntry } from "$lib/stores/agent-reducer";
 import Icon from "./Icon.svelte";
 
 let {
@@ -22,7 +23,7 @@ let {
 	// node-labels.ts / sse-pump.ts's "subagent_progress" event) -- fills the
 	// multi-minute gap between the "Querying..." and "Aligning" pills with
 	// visible per-datasource activity instead of a single static pill.
-	subAgentProgress?: Map<string, { status: "running" | "done"; toolCallCount?: number; deploymentId?: string }>;
+	subAgentProgress?: Map<string, SubAgentProgressEntry>;
 	variant?: "incident" | "iac";
 } = $props();
 
@@ -60,11 +61,23 @@ const currentActiveLabel = $derived.by(() => {
 	return "Starting...";
 });
 
+// SIO-1247: name both numbers -- "3 calls across 2 tools". Calls are invocation
+// attempts; tools are how many DISTINCT tools those calls hit. The old single
+// "N tools" was the call count wearing the wrong noun, so readers took it for the
+// size of the sub-agent's tool belt. Empty until the first tool call resolves; the
+// count-only form covers a tick that arrives without the distinct count.
+function activityLabel(toolCallCount?: number, distinctToolCount?: number): string {
+	if (!toolCallCount) return "";
+	const calls = `${toolCallCount} call${toolCallCount === 1 ? "" : "s"}`;
+	if (!distinctToolCount) return calls;
+	return `${calls} across ${distinctToolCount} tool${distinctToolCount === 1 ? "" : "s"}`;
+}
+
 // Sort running entries first (most relevant while queryDataSource is active),
 // then by dataSourceId for stable ordering as entries arrive out of order.
 const subAgentRows = $derived(
 	[...subAgentProgress.entries()]
-		.map(([key, v]) => ({ key, ...v }))
+		.map(([key, v]) => ({ key, ...v, activity: activityLabel(v.toolCallCount, v.distinctToolCount) }))
 		.sort((a, b) => {
 			if (a.status !== b.status) return a.status === "running" ? -1 : 1;
 			return a.key.localeCompare(b.key);
@@ -127,8 +140,8 @@ function pillClass(nodeId: string): string {
             {/if}
             <span class="font-medium text-gray-700">{row.key}</span>
             <span>{row.status === "running" ? "running" : "done"}</span>
-            {#if row.toolCallCount}
-              <span>&middot; {row.toolCallCount} tool{row.toolCallCount !== 1 ? "s" : ""}</span>
+            {#if row.activity}
+              <span>&middot; {row.activity}</span>
             {/if}
           </div>
         {/each}

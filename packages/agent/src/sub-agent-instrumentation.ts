@@ -79,12 +79,15 @@ export interface InstrumentContext {
 export function instrumentTools(tools: StructuredToolInterface[], ctx: InstrumentContext): StructuredToolInterface[] {
 	// SIO-1029: per-run state shared across every tool in this sub-agent invocation.
 	// The loop guard tracks consecutive-empty / duplicate elasticsearch_search calls.
-	const runState = { iteration: 0, loopGuard: createLoopGuardState() };
+	const runState = { iteration: 0, toolNames: new Set<string>(), loopGuard: createLoopGuardState() };
 	return tools.map((tool) => instrumentTool(tool, ctx, runState));
 }
 
 interface RunState {
 	iteration: number;
+	// SIO-1247: unique tool names attempted this run, so the UI can say "N calls
+	// across M tools" instead of one ambiguous "N tools".
+	toolNames: Set<string>;
 	loopGuard: LoopGuardState;
 }
 
@@ -93,89 +96,120 @@ function instrumentTool(
 	ctx: InstrumentContext,
 	runState: RunState,
 ): StructuredToolInterface {
+	// SIO-1247: one live tick per invocation attempt, fired from every exit path
+	// (loop-guard short-circuit, success, throw) so the count the UI shows never lags
+	// the counter. Soft by design: it runs in a finally, so a dispatch failure must
+	// never replace the tool's own result or error.
+	const emitProgress = async (toolCallCount: number) => {
+		try {
+			await dispatchCustomEvent(
+				"subagent_progress",
+				{
+					dataSourceId: ctx.dataSourceId,
+					deploymentId: ctx.deploymentId,
+					status: "running",
+					toolCallCount,
+					distinctToolCount: runState.toolNames.size,
+				},
+				ctx.config,
+			);
+		} catch (error) {
+			ctx.log.warn(
+				{
+					event: "subagent.progress_dispatch_failed",
+					dataSourceId: ctx.dataSourceId,
+					deploymentId: ctx.deploymentId,
+					toolName: tool.name,
+					toolCallCount,
+					error: error instanceof Error ? error.message : String(error),
+				},
+				"Failed to dispatch sub-agent progress tick",
+			);
+		}
+	};
+
 	const handler: ProxyHandler<StructuredToolInterface> = {
 		get(target, prop, receiver) {
 			if (prop === "invoke") {
 				return async (arg: unknown, configArg?: unknown) => {
 					runState.iteration += 1;
 					const iteration = runState.iteration;
+					// Recorded before the guard check so a short-circuited call still counts
+					// toward both numbers -- the LLM did reach for the tool.
+					runState.toolNames.add(tool.name);
 
-					// SIO-1029/SIO-1084: short-circuit a repeated/unproductive guarded
-					// call (elasticsearch_search, aws_logs_start_query) before it re-hits
-					// MCP, so the LLM gets an explicit terminal signal instead of another
-					// silent empty. `observed` also covers aws_logs_describe_log_groups,
-					// which is not guarded but must be recorded (it clears the AWS
-					// re-anchor gate).
-					const guarded = isGuardedTool(tool.name);
-					const observed = isObservedTool(tool.name);
-					const signature = guarded ? toolCallSignature(tool.name, arg) : "";
-					if (guarded && shouldShortCircuit(runState.loopGuard, tool.name, signature, arg)) {
-						ctx.log.info(
-							{
-								event: "subagent.loop_guard_stop",
-								dataSourceId: ctx.dataSourceId,
-								deploymentId: ctx.deploymentId,
-								toolName: tool.name,
-								iteration,
-								unproductiveSearches: runState.loopGuard.unproductiveSearches,
-							},
-							"Loop guard short-circuited repeated/unproductive tool call",
-						);
-						return buildStopResult(arg, tool.name, runState.loopGuard);
-					}
-
-					// Reserve the signature BEFORE the await so a concurrent identical
-					// guarded call (parallel tool calls from one AIMessage) is caught as a
-					// duplicate rather than both slipping through pre-recordResult.
-					if (guarded) reserveSignature(runState.loopGuard, tool.name, signature);
-
-					const result = await target.invoke(
-						arg as Parameters<StructuredToolInterface["invoke"]>[0],
-						configArg as Parameters<StructuredToolInterface["invoke"]>[1],
-					);
-
-					if (observed) {
-						recordResult(runState.loopGuard, tool.name, signature, extractContent(result), arg);
-					}
-					await dispatchCustomEvent(
-						"subagent_progress",
-						{
-							dataSourceId: ctx.dataSourceId,
-							deploymentId: ctx.deploymentId,
-							status: "running",
-							toolCallCount: iteration,
-						},
-						ctx.config,
-					);
-					const processed = processResult(result, tool.name, iteration, ctx);
-					// SIO-1159: a successful-but-empty CloudWatch result never errors, so
-					// nothing steers the LLM off a too-narrow window (run 270378e0: a 24h
-					// window silently missed a 2-day-old incident). After consecutive
-					// empty-success results, append one-shot widen advice to the result.
-					if (tool.name === "aws_logs_get_query_results") {
-						// SIO-1162: an invalid/expired queryId takes precedence over the widen advice
-						// (an invalid id is never also an empty-success, and re-polling it is always
-						// wasted). Both are appended to the tool result via rebuildResult so the
-						// ToolMessage/AIMessage tool_call pairing Bedrock requires stays intact.
-						const invalidIdAdvice = consumeInvalidQueryIdAdvice(runState.loopGuard);
-						const advice = invalidIdAdvice ?? consumeEmptyAwsResultsAdvice(runState.loopGuard);
-						if (advice) {
+					try {
+						// SIO-1029/SIO-1084: short-circuit a repeated/unproductive guarded
+						// call (elasticsearch_search, aws_logs_start_query) before it re-hits
+						// MCP, so the LLM gets an explicit terminal signal instead of another
+						// silent empty. `observed` also covers aws_logs_describe_log_groups,
+						// which is not guarded but must be recorded (it clears the AWS
+						// re-anchor gate).
+						const guarded = isGuardedTool(tool.name);
+						const observed = isObservedTool(tool.name);
+						const signature = guarded ? toolCallSignature(tool.name, arg) : "";
+						if (guarded && shouldShortCircuit(runState.loopGuard, tool.name, signature, arg)) {
 							ctx.log.info(
 								{
-									event: invalidIdAdvice ? "subagent.aws_invalid_query_id_advice" : "subagent.aws_empty_results_advice",
+									event: "subagent.loop_guard_stop",
 									dataSourceId: ctx.dataSourceId,
 									deploymentId: ctx.deploymentId,
 									toolName: tool.name,
 									iteration,
+									unproductiveSearches: runState.loopGuard.unproductiveSearches,
 								},
-								invalidIdAdvice
-									? "Appending re-anchor advice after invalid CloudWatch queryId"
-									: "Appending widen-window advice after consecutive empty CloudWatch results",
+								"Loop guard short-circuited repeated/unproductive tool call",
 							);
-							return rebuildResult(processed, `${stringifyContent(extractContent(processed))}\n\n${advice}`);
+							return buildStopResult(arg, tool.name, runState.loopGuard);
 						}
+
+						// Reserve the signature BEFORE the await so a concurrent identical
+						// guarded call (parallel tool calls from one AIMessage) is caught as a
+						// duplicate rather than both slipping through pre-recordResult.
+						if (guarded) reserveSignature(runState.loopGuard, tool.name, signature);
+
+						const result = await target.invoke(
+							arg as Parameters<StructuredToolInterface["invoke"]>[0],
+							configArg as Parameters<StructuredToolInterface["invoke"]>[1],
+						);
+
+						if (observed) {
+							recordResult(runState.loopGuard, tool.name, signature, extractContent(result), arg);
+						}
+						const processed = processResult(result, tool.name, iteration, ctx);
+						// SIO-1159: a successful-but-empty CloudWatch result never errors, so
+						// nothing steers the LLM off a too-narrow window (run 270378e0: a 24h
+						// window silently missed a 2-day-old incident). After consecutive
+						// empty-success results, append one-shot widen advice to the result.
+						if (tool.name === "aws_logs_get_query_results") {
+							// SIO-1162: an invalid/expired queryId takes precedence over the widen advice
+							// (an invalid id is never also an empty-success, and re-polling it is always
+							// wasted). Both are appended to the tool result via rebuildResult so the
+							// ToolMessage/AIMessage tool_call pairing Bedrock requires stays intact.
+							const invalidIdAdvice = consumeInvalidQueryIdAdvice(runState.loopGuard);
+							const advice = invalidIdAdvice ?? consumeEmptyAwsResultsAdvice(runState.loopGuard);
+							if (advice) {
+								ctx.log.info(
+									{
+										event: invalidIdAdvice
+											? "subagent.aws_invalid_query_id_advice"
+											: "subagent.aws_empty_results_advice",
+										dataSourceId: ctx.dataSourceId,
+										deploymentId: ctx.deploymentId,
+										toolName: tool.name,
+										iteration,
+									},
+									invalidIdAdvice
+										? "Appending re-anchor advice after invalid CloudWatch queryId"
+										: "Appending widen-window advice after consecutive empty CloudWatch results",
+								);
+								return rebuildResult(processed, `${stringifyContent(extractContent(processed))}\n\n${advice}`);
+							}
+						}
+						return processed;
+					} finally {
+						await emitProgress(iteration);
 					}
-					return processed;
 				};
 			}
 			const value = Reflect.get(target, prop, receiver);

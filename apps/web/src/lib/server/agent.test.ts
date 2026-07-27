@@ -199,6 +199,7 @@ mock.module("@devops-agent/shared", () => {
 				deploymentId: z.string().optional(),
 				status: z.enum(["running", "done"]),
 				toolCallCount: z.number().optional(),
+				distinctToolCount: z.number().optional(),
 			}),
 		]),
 		// SIO-1204: sse-pump value-imports this to validate the network_topology

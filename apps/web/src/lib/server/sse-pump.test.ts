@@ -140,7 +140,9 @@ describe("pumpEventStream datasource_result", () => {
 });
 
 describe("pumpEventStream subagent_progress", () => {
-	test("forwards a valid running event with a tool-call count", async () => {
+	// SIO-1247: both counts must survive the pump -- the UI renders them as
+	// "3 calls across 2 tools", and dropping either half restores the old ambiguity.
+	test("forwards a valid running event with the call and distinct-tool counts", async () => {
 		const captured: Array<Record<string, unknown>> = [];
 		const send = (event: Record<string, unknown>) => {
 			captured.push(event);
@@ -151,7 +153,7 @@ describe("pumpEventStream subagent_progress", () => {
 				{
 					event: "on_custom_event",
 					name: "subagent_progress",
-					data: { dataSourceId: "kafka", status: "running", toolCallCount: 3 } as unknown as {
+					data: { dataSourceId: "kafka", status: "running", toolCallCount: 3, distinctToolCount: 2 } as unknown as {
 						output?: Record<string, unknown>;
 					},
 				},
@@ -161,7 +163,12 @@ describe("pumpEventStream subagent_progress", () => {
 
 		const events = captured.filter((e) => e.type === "subagent_progress");
 		expect(events).toHaveLength(1);
-		expect(events[0]).toMatchObject({ dataSourceId: "kafka", status: "running", toolCallCount: 3 });
+		expect(events[0]).toMatchObject({
+			dataSourceId: "kafka",
+			status: "running",
+			toolCallCount: 3,
+			distinctToolCount: 2,
+		});
 	});
 
 	test("forwards a done event scoped to a deployment (AWS multi-estate branch)", async () => {

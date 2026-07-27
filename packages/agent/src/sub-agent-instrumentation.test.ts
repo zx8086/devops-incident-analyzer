@@ -2,9 +2,10 @@
 
 import { describe, expect, test } from "bun:test";
 import { ToolMessage } from "@langchain/core/messages";
-import { tool } from "@langchain/core/tools";
+import { type RunnableConfig, RunnableLambda } from "@langchain/core/runnables";
+import { type StructuredToolInterface, tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { instrumentTools } from "./sub-agent-instrumentation.ts";
+import { type InstrumentContext, instrumentTools } from "./sub-agent-instrumentation.ts";
 
 interface CapturedLog {
 	event: string;
@@ -521,5 +522,97 @@ describe("SIO-1162: aws_logs_get_query_results invalid-queryId advice injection"
 			expect(result.tool_call_id).toBe("g1");
 		}
 		expect(entries.find((e) => e.event === "subagent.aws_invalid_query_id_advice")).toBeDefined();
+	});
+});
+
+// SIO-1247: the live "N calls across M tools" row is fed by these ticks. Two invariants:
+// every invocation ATTEMPT emits exactly one tick (so the count never jumps past a
+// short-circuited or throwing call), and distinctToolCount counts unique tool names.
+describe("SIO-1247: subagent_progress ticks", () => {
+	// dispatchCustomEvent only reaches handlers from INSIDE a runnable run -- a bare
+	// { callbacks: [handler] } config silently no-ops -- so drive the wrapped tools from
+	// within a RunnableLambda and thread its config in, the same wiring sub-agent.ts uses.
+	async function captureTicks(
+		tools: StructuredToolInterface[],
+		ctx: Omit<InstrumentContext, "config">,
+		run: (wrapped: StructuredToolInterface[]) => Promise<void>,
+	): Promise<Array<{ toolCallCount?: number; distinctToolCount?: number; dataSourceId?: string }>> {
+		const ticks: Array<{ toolCallCount?: number; distinctToolCount?: number; dataSourceId?: string }> = [];
+		const handler = {
+			handleCustomEvent(eventName: string, data: { toolCallCount?: number; distinctToolCount?: number }) {
+				if (eventName === "subagent_progress") ticks.push(data);
+			},
+		};
+		const lambda = RunnableLambda.from(async (_input: unknown, config?: RunnableConfig) => {
+			await run(instrumentTools(tools, { ...ctx, config }));
+		});
+		await lambda.invoke({}, { callbacks: [handler] });
+		return ticks;
+	}
+
+	test("counts calls and distinct tools separately", async () => {
+		const { logger } = makeLog();
+		const alpha = tool(async () => "ok", {
+			name: "alpha_tool",
+			description: "x",
+			schema: z.object({ q: z.string() }),
+		});
+		const beta = tool(async () => "ok", { name: "beta_tool", description: "x", schema: z.object({ q: z.string() }) });
+
+		const ticks = await captureTicks([alpha, beta], { dataSourceId: "kafka", log: logger }, async (wrapped) => {
+			const [a, b] = wrapped;
+			if (!a || !b) throw new Error("instrumentTools returned too few tools");
+			await a.invoke({ q: "1" });
+			await a.invoke({ q: "2" });
+			await b.invoke({ q: "3" });
+		});
+
+		// 3 calls, but only 2 distinct tools -- the distinction the UI label now makes.
+		expect(ticks.map((t) => t.toolCallCount)).toEqual([1, 2, 3]);
+		expect(ticks.map((t) => t.distinctToolCount)).toEqual([1, 1, 2]);
+		expect(ticks.at(-1)?.dataSourceId).toBe("kafka");
+	});
+
+	test("still ticks for a call the loop guard short-circuits (no gap in the count)", async () => {
+		const { entries, logger } = makeLog();
+		const search = tool(async () => "Total results: 0, showing 0 from position 0", {
+			name: "elasticsearch_search",
+			description: "x",
+			schema: z.object({ index: z.string().optional(), q: z.string().optional() }).passthrough(),
+		});
+
+		const ticks = await captureTicks([search], { dataSourceId: "elastic", log: logger }, async (wrapped) => {
+			const [s] = wrapped;
+			if (!s) throw new Error("instrumentTools returned empty array");
+			// 5 distinct empties exhaust MAX_UNPRODUCTIVE_SEARCHES; the 6th is short-circuited.
+			for (let i = 0; i < 6; i++) {
+				await s.invoke({ id: `c${i}`, name: "elasticsearch_search", args: { index: "logs-*", q: `q${i}` } });
+			}
+		});
+
+		// Guard must actually have fired, or this test proves nothing about that path.
+		expect(entries.find((e) => e.event === "subagent.loop_guard_stop")?.iteration).toBe(6);
+		// The short-circuited 6th attempt emits its tick too, so the UI never sees 5 -> 7.
+		expect(ticks.map((t) => t.toolCallCount)).toEqual([1, 2, 3, 4, 5, 6]);
+		expect(ticks.at(-1)?.distinctToolCount).toBe(1);
+	});
+
+	test("still ticks when the tool throws", async () => {
+		const { logger } = makeLog();
+		const boom = tool(
+			async () => {
+				throw new Error("MCP unreachable");
+			},
+			{ name: "boom_tool", description: "x", schema: z.object({ q: z.string() }) },
+		);
+
+		const ticks = await captureTicks([boom], { dataSourceId: "aws", log: logger }, async (wrapped) => {
+			const [b] = wrapped;
+			if (!b) throw new Error("instrumentTools returned empty array");
+			await b.invoke({ q: "1" }).catch(() => undefined);
+		});
+
+		expect(ticks).toHaveLength(1);
+		expect(ticks[0]).toMatchObject({ toolCallCount: 1, distinctToolCount: 1 });
 	});
 });

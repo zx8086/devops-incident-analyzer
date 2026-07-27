@@ -33,6 +33,7 @@ import {
 	type IacReconcileResultRow,
 	type ReconcileDirection,
 	type ReducerState,
+	type SubAgentProgressEntry,
 	type SyntheticsDriftReport,
 	type SyntheticsPushChoice,
 	type SyntheticsPushResultRow,
@@ -102,9 +103,7 @@ function createAgentStore() {
 	let dataSourceFindings = $state<Map<string, DataSourceFindings>>(new Map());
 	let networkTopology = $state<NetworkTopology | null>(null);
 	let mlAnomalyExplainer = $state<MlAnomalyExplainer | null>(null);
-	let subAgentProgress = $state<
-		Map<string, { status: "running" | "done"; toolCallCount?: number; deploymentId?: string }>
-	>(new Map());
+	let subAgentProgress = $state<Map<string, SubAgentProgressEntry>>(new Map());
 	let isStreaming = $state(false);
 	let threadId = $state<string>("");
 	let currentContent = $state("");

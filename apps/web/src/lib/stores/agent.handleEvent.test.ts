@@ -200,6 +200,44 @@ describe("applyStreamEvent", () => {
 		expect(next.pendingActions[0]?.id).toBe("a-1");
 	});
 
+	// SIO-1247: the live sub-agent row shows "N calls across M tools". Only the
+	// per-tool-call tick carries the counts -- the start tick and the terminal "done"
+	// tick have none -- so both must be carried forward or the row blanks out on done.
+	test("subagent_progress keeps both counts across a count-free done tick", () => {
+		const initial = initialReducerState();
+		let state = applyStreamEvent(initial, {
+			type: "subagent_progress",
+			dataSourceId: "aws",
+			deploymentId: "estate:eu-oit-prd",
+			status: "running",
+		});
+		// Keyed by dataSourceId:deploymentId so concurrent AWS estate branches stay distinct.
+		expect(state.subAgentProgress.get("aws:estate:eu-oit-prd")).toMatchObject({ status: "running" });
+
+		state = applyStreamEvent(state, {
+			type: "subagent_progress",
+			dataSourceId: "aws",
+			deploymentId: "estate:eu-oit-prd",
+			status: "running",
+			toolCallCount: 7,
+			distinctToolCount: 3,
+		});
+		state = applyStreamEvent(state, {
+			type: "subagent_progress",
+			dataSourceId: "aws",
+			deploymentId: "estate:eu-oit-prd",
+			status: "done",
+		});
+
+		expect(state.subAgentProgress.get("aws:estate:eu-oit-prd")).toEqual({
+			status: "done",
+			toolCallCount: 7,
+			distinctToolCount: 3,
+			deploymentId: "estate:eu-oit-prd",
+		});
+		expect(initial.subAgentProgress.size).toBe(0);
+	});
+
 	test("records datasource_progress with immutable map copy", () => {
 		const initial = initialReducerState();
 		const next = applyStreamEvent(initial, {
