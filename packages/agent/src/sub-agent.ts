@@ -102,16 +102,31 @@ export interface SubAgentOutcome {
 export const FINAL_TURN_DIRECTIVE =
 	"You are out of reasoning turns. Do NOT call any more tools -- a tool call now will be cut off and its result discarded. Write your findings from the tool results you already have, in this reply. State what the evidence shows, quote the concrete identifiers and counts you saw, and end with a short list of what you did not get to check.";
 
-// Steps left at which the directive fires: room for this model turn plus at most one more cycle.
-const FINAL_TURN_RESERVE_STEPS = 2;
+// Steps left at which the directive fires. One more full cycle costs CYCLE_SUPER_STEPS, so at or
+// below that this is the last turn that can still produce a written answer.
+const FINAL_TURN_RESERVE_STEPS = 3;
+
+// A ReAct cycle is THREE super-steps once preModelHook is installed, not two.
+//
+// Measured, not assumed: createReactAgent's node set is ["__start__","tools","agent"] without the
+// hook and ["__start__","tools","pre_model_hook","agent"] with it. LangGraph counts super-steps and
+// every node is one, so installing the hook turns each cycle into
+// pre_model_hook -> agent -> tools.
+//
+// The first version of this used 2 steps/cycle. The 2026-07-27 replay caught it: gitlab truncated at
+// its 24-step limit and `subagent.final_turn_reserved` fired ZERO times, because the formula needed
+// llmTurns >= 12 while a 24-step budget with the hook installed only affords ~8 model turns. The
+// reservation was inert exactly when it was needed.
+const CYCLE_SUPER_STEPS = 3;
 
 // Extracted so the arithmetic is directly testable -- driving it through createReactAgent would
 // need the whole MCP tool layer mocked (the same reasoning that produced buildSubAgentOutcome).
 //
-// LangGraph counts SUPER-STEPS and a ReAct cycle is two (agent, tools), with the model turn as the
-// odd one. So after `llmTurns` model turns the graph has consumed 2*llmTurns - 1 steps.
+// The Nth pre_model_hook invocation lands on super-step 3N-2, so that many are already spent when
+// this hook body runs.
 export function shouldReserveFinalTurn(llmTurns: number, recursionLimit: number): boolean {
-	return recursionLimit - (2 * llmTurns - 1) <= FINAL_TURN_RESERVE_STEPS;
+	const stepsConsumed = CYCLE_SUPER_STEPS * llmTurns - (CYCLE_SUPER_STEPS - 1);
+	return recursionLimit - stepsConsumed <= FINAL_TURN_RESERVE_STEPS;
 }
 
 export function buildSubAgentOutcome(opts: {
@@ -1410,7 +1425,7 @@ ${state.correlationFetchDirective}`
 					outgoing = budgeted.messages;
 				}
 
-				const stepsLeft = recursionLimit - (2 * llmTurns - 1);
+				const stepsLeft = recursionLimit - (CYCLE_SUPER_STEPS * llmTurns - (CYCLE_SUPER_STEPS - 1));
 				if (shouldReserveFinalTurn(llmTurns, recursionLimit)) {
 					log.info(
 						{ event: "subagent.final_turn_reserved", deploymentId, dataSourceId, llmTurns, stepsLeft, recursionLimit },

@@ -206,26 +206,51 @@ describe("SIO-1260: configuration", () => {
 // SIO-1260 Layer A. The reservation is ADVISORY -- the model can emit tool_calls anyway and spend
 // the reserved step, which is why Layer B carries the guarantee -- but the arithmetic must be right
 // or it fires either too early (burning tool budget on every run) or never.
+//
+// The 2026-07-27 replay proved "never" was the real risk: the first version assumed 2 super-steps
+// per ReAct cycle, gitlab truncated at its 24-step limit, and final_turn_reserved fired ZERO times.
+// preModelHook is itself a graph NODE -- measured: the node set is
+// ["__start__","tools","agent"] without it and ["__start__","tools","pre_model_hook","agent"] with
+// it -- so a cycle costs THREE super-steps and a 24-step budget affords ~8 model turns, not 12.
 describe("SIO-1260: final-turn reservation arithmetic", () => {
-	test("gitlab's limit of 24 reserves on the 12th model turn, not before", () => {
-		// A ReAct cycle is two super-steps and the model turn is the odd one, so turn N has consumed
-		// 2N-1 steps. At 24: turn 11 -> 21 used, 3 left (no); turn 12 -> 23 used, 1 left (yes).
-		expect(shouldReserveFinalTurn(10, 24)).toBe(false);
-		expect(shouldReserveFinalTurn(11, 24)).toBe(false);
-		expect(shouldReserveFinalTurn(12, 24)).toBe(true);
+	// The Nth hook invocation lands on super-step 3N-2.
+	test("gitlab's limit of 24 reserves on the LAST affordable model turn", () => {
+		// 3*8-2 = 22 consumed, 2 left -> fire. 3*7-2 = 19 consumed, 5 left -> not yet.
+		expect(shouldReserveFinalTurn(6, 24)).toBe(false);
+		expect(shouldReserveFinalTurn(7, 24)).toBe(false);
+		expect(shouldReserveFinalTurn(8, 24)).toBe(true);
 	});
 
-	test("aws and elastic limits of 40 reserve on the 20th model turn", () => {
-		expect(shouldReserveFinalTurn(19, 40)).toBe(false);
-		expect(shouldReserveFinalTurn(20, 40)).toBe(true);
+	test("aws and elastic limits of 40 reserve with a turn to spare", () => {
+		// 3*13-2 = 37 consumed, 3 left -> fire; a 40-step budget affords 14 turns.
+		expect(shouldReserveFinalTurn(12, 40)).toBe(false);
+		expect(shouldReserveFinalTurn(13, 40)).toBe(true);
+	});
+
+	test("atlassian's limit of 20 reserves on its last affordable turn", () => {
+		// 3*6-2 = 16 consumed, 4 left -> not yet. 3*7-2 = 19 consumed, 1 left -> fire, and 7 is also
+		// the most turns a 20-step budget affords.
+		expect(shouldReserveFinalTurn(6, 20)).toBe(false);
+		expect(shouldReserveFinalTurn(7, 20)).toBe(true);
+	});
+
+	// THE REGRESSION THE REPLAY CAUGHT: under the old 2-steps-per-cycle formula none of the real
+	// limits ever fired, because the turn budget runs out first. Pin that every shipped limit
+	// reserves within the turns it can actually afford.
+	test("every real recursion limit fires within its affordable turn count", () => {
+		for (const limit of [20, 24, 30, 40]) {
+			const maxTurns = Math.floor((limit + 2) / 3);
+			const fired = Array.from({ length: maxTurns }, (_, i) => i + 1).some((t) => shouldReserveFinalTurn(t, limit));
+			expect(fired, `limit=${limit} maxTurns=${maxTurns}`).toBe(true);
+		}
 	});
 
 	// Once past the threshold it must STAY on -- a turn that ignored the directive still needs it.
 	test("the directive stays on for every later turn", () => {
-		for (let turn = 12; turn <= 20; turn++) expect(shouldReserveFinalTurn(turn, 24)).toBe(true);
+		for (let turn = 8; turn <= 15; turn++) expect(shouldReserveFinalTurn(turn, 24)).toBe(true);
 	});
 
-	// The first turn of a healthy run must never be told to stop calling tools, or the reservation
+	// The first turns of a healthy run must never be told to stop calling tools, or the reservation
 	// would destroy every investigation instead of rescuing the truncated ones.
 	test("the first turns of a normal run are never reserved", () => {
 		for (const limit of [20, 24, 30, 40]) {
