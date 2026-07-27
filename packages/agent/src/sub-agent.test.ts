@@ -47,7 +47,7 @@ function toolMsg(
 
 describe("getSubAgentRecursionLimit", () => {
 	test("returns 40 for elastic when env unset", () => {
-		expect(getSubAgentRecursionLimit("elastic", {})).toBe(40);
+		expect(getSubAgentRecursionLimit("elastic", {})).toBe(60);
 	});
 
 	// SIO-1232: this previously asserted `toBeUndefined()` for every non-elastic datasource. That
@@ -55,14 +55,17 @@ describe("getSubAgentRecursionLimit", () => {
 	// sub-agents ran on LangGraph's default 25 super-steps with no explicit budget, and gitlab made
 	// 97 tool calls before the 6-minute wall stopped it. Every datasource now gets an explicit limit.
 	test("returns an explicit per-datasource limit for every data source", () => {
+		// SIO-1262: scaled 1.5x when preModelHook made a ReAct cycle three super-steps instead of
+		// two. The intended TURN counts are unchanged -- only the step arithmetic that expresses
+		// them. See RECURSION_LIMIT_BY_DATASOURCE.
 		const expected: Record<string, number> = {
-			elastic: 40,
-			aws: 40,
-			couchbase: 30,
-			gitlab: 24,
-			kafka: 24,
-			konnect: 24,
-			atlassian: 20,
+			elastic: 60,
+			aws: 60,
+			couchbase: 45,
+			gitlab: 36,
+			kafka: 36,
+			konnect: 36,
+			atlassian: 30,
 		};
 		for (const [ds, limit] of Object.entries(expected)) {
 			expect(getSubAgentRecursionLimit(ds, {}), `${ds} recursion limit`).toBe(limit);
@@ -70,7 +73,7 @@ describe("getSubAgentRecursionLimit", () => {
 	});
 
 	test("falls back to the generic default for an unknown data source", () => {
-		expect(getSubAgentRecursionLimit("brand-new-source", {})).toBe(30);
+		expect(getSubAgentRecursionLimit("brand-new-source", {})).toBe(45);
 	});
 
 	// The elastic-only env var predates the generic one and may already be set in a deployed
@@ -78,7 +81,7 @@ describe("getSubAgentRecursionLimit", () => {
 	test("honors SUBAGENT_ELASTIC_RECURSION_LIMIT as a back-compat alias for elastic only", () => {
 		expect(getSubAgentRecursionLimit("elastic", { SUBAGENT_ELASTIC_RECURSION_LIMIT: "60" })).toBe(60);
 		// ...and it must not leak onto other datasources, which keep their own defaults.
-		expect(getSubAgentRecursionLimit("gitlab", { SUBAGENT_ELASTIC_RECURSION_LIMIT: "60" })).toBe(24);
+		expect(getSubAgentRecursionLimit("gitlab", { SUBAGENT_ELASTIC_RECURSION_LIMIT: "60" })).toBe(36);
 	});
 
 	test("honors the generic per-datasource override", () => {
@@ -88,14 +91,14 @@ describe("getSubAgentRecursionLimit", () => {
 
 	test("falls back to the datasource default on an invalid generic override", () => {
 		for (const raw of ["nonsense", "0", "-5", ""]) {
-			expect(getSubAgentRecursionLimit("gitlab", { SUBAGENT_RECURSION_LIMIT_GITLAB: raw })).toBe(24);
+			expect(getSubAgentRecursionLimit("gitlab", { SUBAGENT_RECURSION_LIMIT_GITLAB: raw })).toBe(36);
 		}
 	});
 
 	test("falls back to default on invalid env values", () => {
 		// non-numeric, zero, negative, empty -- all clamp back to 40
 		for (const raw of ["abc", "0", "-5", ""]) {
-			expect(getSubAgentRecursionLimit("elastic", { SUBAGENT_ELASTIC_RECURSION_LIMIT: raw })).toBe(40);
+			expect(getSubAgentRecursionLimit("elastic", { SUBAGENT_ELASTIC_RECURSION_LIMIT: raw })).toBe(60);
 		}
 	});
 

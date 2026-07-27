@@ -134,19 +134,24 @@ export const MODEL_REGISTRY = {
 	// manifest references them, so they are deliberately unprobed (probeReport: null). Promote a
 	// rollback entry by running the probe and filling in its report -- the provenance test
 	// requires that before any manifest may point at it.
+	// SIO-1262: PROMOTED from rollback-only to a live target -- the 7 sub-agent manifests point here.
+	// Probed 2026-07-27 in eu-central-1. The previous hand-written placeholder had three values
+	// WRONG: contentShapeWithTools was "string" (it is "blocks"), observedBlockTypes was [] (it is
+	// ["text"]), and longFormMinTokens was 4096 -- which would have under-provisioned the subAgent
+	// role's 8192. Exactly the class of silent capability assumption SIO-1224 built this gate for.
 	"claude-sonnet-4-6": {
 		bedrockId: "eu.anthropic.claude-sonnet-4-6",
 		acceptsTemperature: true,
 		contentShapeWithoutTools: "string",
-		contentShapeWithTools: "string",
-		observedBlockTypes: [],
+		contentShapeWithTools: "blocks",
+		observedBlockTypes: ["text"],
 		emitsReasoningContent: false,
 		observedRawControlCharsInJson: false,
-		longFormMinTokens: 4096,
-		observedLatencyMs: { p50: 0, max: 0 },
-		verifiedAt: "unprobed",
-		verifiedRegion: "unprobed",
-		probeReport: null,
+		longFormMinTokens: 8192,
+		observedLatencyMs: { p50: 2021, max: 87434 },
+		verifiedAt: "2026-07-27",
+		verifiedRegion: "eu-central-1",
+		probeReport: "docs/reference/model-probes/claude-sonnet-4-6.md",
 	},
 	// SIO-872: the valid EU inference profile is ...-4-6-v1; the bare ...-4-6 is not a real
 	// Bedrock id and was rejected at invoke time, silently forcing the fallback.

@@ -138,7 +138,7 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 	test("a subAgent role with a known specialist reports sub-agent-manifest", () => {
 		const resolved = resolveRoleModelConfig("subAgent", agent, "gitlab-agent");
 		expect(resolved.source).toBe("sub-agent-manifest");
-		expect(resolved.modelConfig?.preferred).toBe("claude-haiku-4-5");
+		expect(resolved.modelConfig?.preferred).toBe("claude-sonnet-4-6");
 	});
 
 	test("a subAgent role with an unknown specialist reports root-manifest", () => {
