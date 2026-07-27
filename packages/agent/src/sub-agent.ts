@@ -12,12 +12,12 @@ import {
 	ToolErrorKindSchema,
 } from "@devops-agent/shared";
 import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch";
-import type { BaseMessage } from "@langchain/core/messages";
+import { type BaseMessage, HumanMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { capSubAgentTimeoutMs, getGraphDeadlineAt } from "./graph-budget.ts";
-import { createLlm } from "./llm.ts";
+import { createLlm, type InvokableLlm } from "./llm.ts";
 import { getToolsForDataSource, withAwsEstate, withElasticDeployment } from "./mcp-bridge.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import { fetchNetworkBaseline, isNetworkBaselineEnabled } from "./network-baseline.ts";
@@ -32,6 +32,12 @@ import {
 	getSubAgentToolCapBytes,
 	truncateToolOutput,
 } from "./sub-agent-truncate-tool-output.ts";
+import {
+	isTruncationSynthesisEnabled,
+	type SynthesisTrigger,
+	synthesizeTruncatedFindings,
+	TRUNCATION_SYNTHESIS_TIMEOUT_MS,
+} from "./sub-agent-truncation-synthesis.ts";
 
 const logger = getLogger("agent:sub-agent");
 
@@ -76,10 +82,51 @@ export function lastTextualResponse(
 const SALVAGE_NOTE =
 	"\n\n[Note: investigation was truncated at the sub-agent recursion limit; the above reflects partial findings.]";
 
+// SIO-1260: distinct notes so a reader can tell whether the text is the model's own words or a
+// post-hoc synthesis over the salvaged tool evidence. SALVAGE_NOTE is left byte-identical -- its
+// exact text is pinned by the completion-contract tests.
+const TRUNCATED_SYNTHESIS_NOTE =
+	"\n\n[Note: investigation was truncated at the sub-agent recursion limit; the above was synthesised from the tool evidence gathered before the cut-off.]";
+const SYNTHESIS_NOTE =
+	"\n\n[Note: the sub-agent returned no narrative answer; the above was synthesised from the tool evidence it gathered.]";
+
 export interface SubAgentOutcome {
 	data: string;
 	status: "success" | "error";
 	error?: string;
+}
+
+// SIO-1260 (Layer A). Injected as a user turn rather than appended to the system prompt because the
+// system prompt is cached (prompt-cache.ts) and must stay byte-stable across iterations; a late
+// user message costs nothing until the turn it is needed.
+export const FINAL_TURN_DIRECTIVE =
+	"You are out of reasoning turns. Do NOT call any more tools -- a tool call now will be cut off and its result discarded. Write your findings from the tool results you already have, in this reply. State what the evidence shows, quote the concrete identifiers and counts you saw, and end with a short list of what you did not get to check.";
+
+// Steps left at which the directive fires. One more full cycle costs CYCLE_SUPER_STEPS, so at or
+// below that this is the last turn that can still produce a written answer.
+const FINAL_TURN_RESERVE_STEPS = 3;
+
+// A ReAct cycle is THREE super-steps once preModelHook is installed, not two.
+//
+// Measured, not assumed: createReactAgent's node set is ["__start__","tools","agent"] without the
+// hook and ["__start__","tools","pre_model_hook","agent"] with it. LangGraph counts super-steps and
+// every node is one, so installing the hook turns each cycle into
+// pre_model_hook -> agent -> tools.
+//
+// The first version of this used 2 steps/cycle. The 2026-07-27 replay caught it: gitlab truncated at
+// its 24-step limit and `subagent.final_turn_reserved` fired ZERO times, because the formula needed
+// llmTurns >= 12 while a 24-step budget with the hook installed only affords ~8 model turns. The
+// reservation was inert exactly when it was needed.
+const CYCLE_SUPER_STEPS = 3;
+
+// Extracted so the arithmetic is directly testable -- driving it through createReactAgent would
+// need the whole MCP tool layer mocked (the same reasoning that produced buildSubAgentOutcome).
+//
+// The Nth pre_model_hook invocation lands on super-step 3N-2, so that many are already spent when
+// this hook body runs.
+export function shouldReserveFinalTurn(llmTurns: number, recursionLimit: number): boolean {
+	const stepsConsumed = CYCLE_SUPER_STEPS * llmTurns - (CYCLE_SUPER_STEPS - 1);
+	return recursionLimit - stepsConsumed <= FINAL_TURN_RESERVE_STEPS;
 }
 
 export function buildSubAgentOutcome(opts: {
@@ -88,18 +135,35 @@ export function buildSubAgentOutcome(opts: {
 	truncated: boolean;
 	messageCount: number;
 	toolErrorCount: number;
+	// SIO-1260: OPTIONAL so every pre-existing call site and test compiles untouched, and this
+	// function stays pure and synchronously unit-testable -- the whole point of the SIO-1227
+	// extraction. The synthesis itself happens in the caller.
+	synthesized?: string | null;
 }): SubAgentOutcome {
 	const { recovered, allToolsFailed, truncated, messageCount, toolErrorCount } = opts;
 	const noFindings = recovered === null;
 	const baseData = recovered?.text ?? "No response from sub-agent";
 	const data = truncated ? `${baseData}${SALVAGE_NOTE}` : baseData;
+	const synthesized = opts.synthesized != null && opts.synthesized.trim() !== "" ? opts.synthesized : null;
 
 	// `status` used to be derived from allToolsFailed alone and never consulted the data, so a run
 	// that produced nothing usable still reported success -- and alignment counts statuses, not
 	// content, so it neither retried nor degraded confidence. An empty result is a failure of this
 	// datasource even when its individual tool calls succeeded.
+	//
+	// allToolsFailed keeps ABSOLUTE precedence: it is a datasource-level failure however much text
+	// anyone produced. (The caller also gates synthesis off on this path, so `synthesized` is null
+	// here in practice -- belt and braces.)
 	if (allToolsFailed) {
 		return { data, status: "error", error: `All ${toolErrorCount} tool calls failed` };
+	}
+	if (synthesized !== null) {
+		// A synthesis IS textual findings -- grounded in the evidence rather than in the model's
+		// narration -- so `noFindings` no longer holds and this is a genuine partial success. It
+		// REPLACES the recovered fragment rather than appending to it: on the live gitlab run that
+		// fragment was a 44-character stray mid-loop sentence, and leading with it would hand the
+		// aggregator noise.
+		return { data: `${synthesized}${truncated ? TRUNCATED_SYNTHESIS_NOTE : SYNTHESIS_NOTE}`, status: "success" };
 	}
 	if (noFindings) {
 		// An error must always carry a reason. With no toolErrors recorded, alignment's isRetryable
@@ -1391,13 +1455,33 @@ ${state.correlationFetchDirective}`
 		// PREVIOUS step's value in place and the model would silently reason on a stale,
 		// shorter history.
 		const contextBudgetBytes = getSubAgentContextBudgetBytes();
+		const recursionLimit = getSubAgentRecursionLimit(dataSourceId);
+
+		// SIO-1260 (Layer A): reserve the last turn for writing findings. preModelHook runs once per
+		// agent super-step, so a closure counter gives the turn index without reaching into any
+		// LangGraph internal. See shouldReserveFinalTurn for the step arithmetic -- a cycle is THREE
+		// super-steps because preModelHook is itself a node, which is the assumption the 2026-07-27
+		// replay disproved when this fired zero times on a run that truncated.
+		//
+		// This is ADVISORY -- the model can emit tool_calls anyway and spend the reserved step, which
+		// is exactly why Layer B (the synthesis backstop) exists and carries the guarantee.
+		//
+		// The hook is now installed UNCONDITIONALLY. It used to be spread only when
+		// getSubAgentContextBudgetBytes() returned non-null, i.e. it vanished entirely when
+		// SUBAGENT_CONTEXT_BUDGET_BYTES=0. Turn reservation and byte budgeting are separate concerns,
+		// so applyContextBudget is now applied conditionally INSIDE the hook and the byte-budget path
+		// is byte-identical to before when disabled.
+		let llmTurns = 0;
 		const agent = createReactAgent({
 			llm,
 			tools: instrumentedTools,
 			messageModifier: systemPrompt,
-			...(contextBudgetBytes != null && {
-				preModelHook: (hookState: { messages: BaseMessage[] }) => {
-					const budgeted = applyContextBudget(hookState.messages, contextBudgetBytes);
+			preModelHook: (hookState: { messages: BaseMessage[] }) => {
+				llmTurns += 1;
+				let outgoing = hookState.messages;
+
+				if (contextBudgetBytes != null) {
+					const budgeted = applyContextBudget(outgoing, contextBudgetBytes);
 					if (budgeted.elidedCount > 0) {
 						log.warn(
 							{
@@ -1411,14 +1495,25 @@ ${state.correlationFetchDirective}`
 							"Sub-agent context budget exceeded; elided oldest tool results",
 						);
 					}
-					return { llmInputMessages: budgeted.messages };
-				},
-			}),
+					outgoing = budgeted.messages;
+				}
+
+				const stepsLeft = recursionLimit - (CYCLE_SUPER_STEPS * llmTurns - (CYCLE_SUPER_STEPS - 1));
+				if (shouldReserveFinalTurn(llmTurns, recursionLimit)) {
+					log.info(
+						{ event: "subagent.final_turn_reserved", deploymentId, dataSourceId, llmTurns, stepsLeft, recursionLimit },
+						"Sub-agent nearing its recursion limit; directing it to write findings now",
+					);
+					outgoing = [...outgoing, new HumanMessage(FINAL_TURN_DIRECTIVE)];
+				}
+
+				// Always return llmInputMessages -- see SIO-1250 above: omitting the key leaves the
+				// PREVIOUS step's value in place and the model would reason on a stale history.
+				return { llmInputMessages: outgoing };
+			},
 		});
 
 		const messages = lastUserMessage ? [lastUserMessage] : state.messages.slice(-1);
-
-		const recursionLimit = getSubAgentRecursionLimit(dataSourceId);
 		// SIO-1110: cap the timer at the remaining graph budget minus the aggregation
 		// reserve so a late dispatch (alignment retry) can never starve aggregation.
 		// First attempts start with ample remaining budget, so the cap never binds there.
@@ -1619,12 +1714,115 @@ ${state.correlationFetchDirective}`
 		// never-success-with-no-findings invariant is unit-testable. Previously this read
 		// extractTextFromContent(messages.at(-1).content), which yielded "" whenever the final
 		// message carried no text -- a reasoning-only turn, or a mid-loop message on a truncated run.
+		// SIO-1260 (Layer B): a truncated run has real evidence and no report. Spend ONE non-tool LLM
+		// call to write it from the UNCAPPED rawOutputs -- the loop only ever saw the
+		// truncateToolOutput-capped, applyContextBudget-elided copies. Purely additive: it fires only
+		// on the two paths that would otherwise throw findings away, and every failure returns null,
+		// restoring today's behaviour byte for byte.
+		//
+		// Measured motivation: gitlab made 15 SUCCESSFUL tool calls, hit the 24-step limit, and handed
+		// the aggregator 152 bytes -- a 44-character mid-loop sentence plus the 108-byte SALVAGE_NOTE.
+		//
+		// `no_textual_findings` is the same defect with a different trigger: that branch returns
+		// status "error" and relies on a full sub-agent RETRY (a fresh tool spend) to gamble on the
+		// model narrating, while rawOutputs already holds every byte.
+		let synthesized: string | null = null;
+		let synthesisMs = 0;
+		const synthesisTrigger: SynthesisTrigger | null =
+			truncated === true ? "truncated" : noFindings ? "no_textual_findings" : null;
+
+		if (synthesisTrigger !== null) {
+			if (!isTruncationSynthesisEnabled()) {
+				log.info(
+					{
+						event: "subagent.truncation_synthesis_skipped",
+						deploymentId,
+						dataSourceId,
+						trigger: synthesisTrigger,
+						reason: "disabled",
+					},
+					"Truncation synthesis disabled; returning the salvaged partial answer",
+				);
+			} else if (allToolsFailed || rawOutputs.length === 0) {
+				log.info(
+					{
+						event: "subagent.truncation_synthesis_skipped",
+						deploymentId,
+						dataSourceId,
+						trigger: synthesisTrigger,
+						reason: allToolsFailed ? "all_tools_failed" : "no_raw_outputs",
+						rawOutputCount: rawOutputs.length,
+					},
+					"Truncation synthesis skipped; no usable evidence to synthesise from",
+				);
+			} else {
+				// capSubAgentTimeoutMs already subtracts the aggregation reserve (SIO-1110), so
+				// synthesis can never starve aggregation. The stream's own AbortSignal was created
+				// inline above and is spent, so a fresh budget is what we want.
+				const synthesisBudgetMs = capSubAgentTimeoutMs(TRUNCATION_SYNTHESIS_TIMEOUT_MS, getGraphDeadlineAt(config));
+				const localSignal = AbortSignal.timeout(synthesisBudgetMs);
+				const result = await synthesizeTruncatedFindings(
+					{
+						dataSourceId,
+						trigger: synthesisTrigger,
+						query,
+						partialAnswer: recovered?.text ?? null,
+						evidence: rawOutputs.map((o) => ({
+							toolName: o.toolName,
+							content: normalizeToolContent(o.content),
+						})),
+						toolErrorCount: toolErrors.length,
+					},
+					{
+						llm: llm as unknown as InvokableLlm,
+						signal: config?.signal ? AbortSignal.any([config.signal, localSignal]) : localSignal,
+					},
+				);
+				if (result === null) {
+					log.warn(
+						{
+							event: "subagent.truncation_synthesis_failed",
+							deploymentId,
+							dataSourceId,
+							trigger: synthesisTrigger,
+							budgetMs: synthesisBudgetMs,
+						},
+						"Truncation synthesis produced nothing; falling back to the salvaged partial answer",
+					);
+				} else {
+					synthesized = result.text;
+					synthesisMs = result.durationMs;
+					log.info(
+						{
+							event: "subagent.truncation_synthesis",
+							deploymentId,
+							dataSourceId,
+							trigger: synthesisTrigger,
+							rawOutputCount: rawOutputs.length,
+							entriesIncluded: result.digest.entriesIncluded,
+							entriesTotal: result.digest.entriesTotal,
+							includedTools: result.digest.includedTools,
+							droppedTools: result.digest.droppedTools,
+							evidenceBytes: result.digest.bytes,
+							evidenceOriginalBytes: result.digest.originalBytes,
+							partialAnswerLength: recovered?.text.length ?? 0,
+							synthesizedLength: result.text.length,
+							synthesisMs,
+							budgetMs: synthesisBudgetMs,
+						},
+						"Synthesised sub-agent findings from salvaged tool evidence",
+					);
+				}
+			}
+		}
+
 		const outcome = buildSubAgentOutcome({
 			recovered,
 			allToolsFailed,
 			truncated: truncated === true,
 			messageCount: response.messages.length,
 			toolErrorCount: toolErrors.length,
+			synthesized,
 		});
 		const data = outcome.data;
 
@@ -1641,7 +1839,11 @@ ${state.correlationFetchDirective}`
 				"Sub-agent final message carried no text; recovered findings from an earlier turn",
 			);
 		}
-		if (noFindings) {
+		// SIO-1260 (CodeRabbit, PR #502): gate on the FINAL status, not on `noFindings` alone. A
+		// successful synthesis turns exactly this case into a partial success, so firing the warn
+		// regardless would put "reporting as error" in the trace next to `status: "success"` -- a
+		// direct contradiction for whoever reads it later.
+		if (noFindings && outcome.status === "error") {
 			log.warn(
 				{ deploymentId, messageCount: response.messages.length, truncated: truncated === true },
 				"Sub-agent produced no textual findings in any message; reporting as error rather than empty success",
@@ -1652,7 +1854,12 @@ ${state.correlationFetchDirective}`
 			dataSourceId,
 			data,
 			status: outcome.status,
-			duration,
+			// SIO-1260 (CodeRabbit, PR #502): include the synthesis call. `duration` is consumed
+			// downstream as "how long did this datasource take", and the caller genuinely waited
+			// this long -- excluding a call worth up to the 45s budget would understate every
+			// aggregate built on it. The completion log above still reports the ReAct-loop duration
+			// on its own, and synthesisMs is emitted separately, so the breakdown is not lost.
+			duration: duration + synthesisMs,
 			toolOutputs,
 			isAlignmentRetry: isRetry,
 			messageCount: response.messages.length,
