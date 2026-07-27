@@ -30,9 +30,19 @@ import { truncateToolOutput } from "./sub-agent-truncate-tool-output.ts";
 // Add a tool name to this set when (a) it feeds an extractor and (b) the
 // extractor reads structured JSON rather than raw text. Free-text tools
 // (e.g. consume_messages output, query results) can still be truncated.
-// SIO-1159: exported so the persistence path in sub-agent.ts applies the SAME
-// exemption when capping toolOutputs[].rawJson -- extractFindings reads the
-// persisted form, so truncating there defeats the in-flight skip below.
+//
+// SIO-1248: this set is now a PERSISTENCE-ONLY concern. It used to ALSO skip the
+// in-flight cap in processResult(), because toolOutputs[] was derived from
+// response.messages -- the post-truncation ToolMessages -- so the LLM copy and the
+// extractor copy were the same bytes, in series. That forced one payload to serve
+// two consumers with opposite needs, and elasticsearch_search (below) rode the
+// exemption straight into the ReAct context: a 233KB search result (~58k tokens)
+// re-entered the loop uncapped, and six of them blew the 200k window (live run
+// 2026-07-27, thread sio1247-verify: "prompt is too long: 204580 tokens").
+// instrumentTools now captures the full raw content into ctx.rawOutputs BEFORE
+// truncation, so the two paths are decoupled: the LLM always gets a capped copy,
+// while this set keeps the persisted rawJson at full fidelity for the extractors.
+// Consumed by buildPersistedToolOutput in sub-agent.ts.
 export const TYPED_FINDING_TOOLS = new Set<string>([
 	// kafka extractor
 	"kafka_list_consumer_groups",
@@ -60,6 +70,16 @@ interface InstrumentLogger {
 	warn: (...args: unknown[]) => unknown;
 }
 
+// SIO-1248: one entry per wrapped-tool invocation, in invocation order, holding the
+// UNTRUNCATED result. Raw `content` (not a string) so sub-agent.ts can apply the same
+// normalizeToolContent it already uses -- elasticsearch_search returns multi-block MCP
+// content (SIO-786) and normalising here would both duplicate that logic and create an
+// import cycle back into sub-agent.ts.
+export interface RawToolOutput {
+	toolName: string;
+	content: unknown;
+}
+
 export interface InstrumentContext {
 	dataSourceId: string;
 	deploymentId?: string;
@@ -67,6 +87,9 @@ export interface InstrumentContext {
 	// SIO-686: when set, ToolMessage content exceeding capBytes is JSON-aware truncated
 	// before re-entering the ReAct loop. Disabled when null/undefined (current default).
 	capBytes?: number | null;
+	// SIO-1248: when provided, every invocation appends its full pre-truncation result here so
+	// the persistence path can be built from raw bytes instead of the capped LLM copy.
+	rawOutputs?: RawToolOutput[];
 	// Live progress signal: forwarded on each tool-call resolution so the UI can show
 	// a running tool-call count under the "Querying..." pill during the fan-out.
 	config?: RunnableConfig;
@@ -165,7 +188,12 @@ function instrumentTool(
 								},
 								"Loop guard short-circuited repeated/unproductive tool call",
 							);
-							return buildStopResult(arg, tool.name, runState.loopGuard);
+							const stop = buildStopResult(arg, tool.name, runState.loopGuard);
+							// SIO-1248: capture short-circuits too. toolOutputs[] used to be derived from
+							// response.messages, which includes the stop ToolMessage, so skipping it here
+							// would silently drop an entry the persistence path previously had.
+							ctx.rawOutputs?.push({ toolName: tool.name, content: stop.content });
+							return stop;
 						}
 
 						// Reserve the signature BEFORE the await so a concurrent identical
@@ -173,14 +201,33 @@ function instrumentTool(
 						// duplicate rather than both slipping through pre-recordResult.
 						if (guarded) reserveSignature(runState.loopGuard, tool.name, signature);
 
-						const result = await target.invoke(
-							arg as Parameters<StructuredToolInterface["invoke"]>[0],
-							configArg as Parameters<StructuredToolInterface["invoke"]>[1],
-						);
+						let result: unknown;
+						try {
+							result = await target.invoke(
+								arg as Parameters<StructuredToolInterface["invoke"]>[0],
+								configArg as Parameters<StructuredToolInterface["invoke"]>[1],
+							);
+						} catch (error) {
+							// SIO-1248: LangGraph's ToolNode converts a thrown tool error into an error
+							// ToolMessage that lands in response.messages. toolOutputs[] used to be built
+							// from those messages, so without capturing here the persisted list would
+							// silently lose the failed call. Record it, then rethrow unchanged -- the
+							// outer finally still fires SIO-1247's progress tick.
+							ctx.rawOutputs?.push({
+								toolName: tool.name,
+								content: error instanceof Error ? error.message : String(error),
+							});
+							throw error;
+						}
 
 						if (observed) {
 							recordResult(runState.loopGuard, tool.name, signature, extractContent(result), arg);
 						}
+						// SIO-1248: capture BEFORE processResult so the persisted payload is the full
+						// upstream response, independent of whatever cap the LLM copy gets. Also before
+						// the aws_logs_get_query_results advice append below -- that advice steers the
+						// model and is not part of the tool's data.
+						ctx.rawOutputs?.push({ toolName: tool.name, content: extractContent(result) });
 						const processed = processResult(result, tool.name, iteration, ctx);
 						// SIO-1159: a successful-but-empty CloudWatch result never errors, so
 						// nothing steers the LLM off a too-narrow window (run 270378e0: a 24h
@@ -259,24 +306,11 @@ function processResult(result: unknown, toolName: string, iteration: number, ctx
 	const text = stringifyContent(content);
 	if (Buffer.byteLength(text, "utf8") <= ctx.capBytes) return result;
 
-	// SIO-785 follow-up (2026-05-18): preserve raw JSON for typed-finding
-	// extractors. See TYPED_FINDING_TOOLS for rationale.
-	if (TYPED_FINDING_TOOLS.has(toolName)) {
-		ctx.log.info(
-			{
-				event: "subagent.tool_result_truncation_skipped",
-				dataSourceId: ctx.dataSourceId,
-				deploymentId: ctx.deploymentId,
-				toolName,
-				iteration,
-				bytes,
-				reason: "typed-finding tool",
-			},
-			"Tool result truncation skipped to preserve typed-finding JSON",
-		);
-		return result;
-	}
-
+	// SIO-1248: no typed-finding exemption here any more. The LLM-facing copy is ALWAYS
+	// capped; extractor fidelity is preserved by the ctx.rawOutputs capture in
+	// instrumentTool(), which feeds buildPersistedToolOutput's own exemption. Exempting
+	// the in-flight copy is what let 233KB elasticsearch_search results into the ReAct
+	// context and overflowed the 200k window.
 	const truncated = truncateToolOutput(text, ctx.capBytes);
 	if (truncated.strategy === "none") return result;
 

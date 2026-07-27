@@ -5,7 +5,7 @@ import { ToolMessage } from "@langchain/core/messages";
 import { type RunnableConfig, RunnableLambda } from "@langchain/core/runnables";
 import { type StructuredToolInterface, tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { type InstrumentContext, instrumentTools } from "./sub-agent-instrumentation.ts";
+import { type InstrumentContext, instrumentTools, type RawToolOutput } from "./sub-agent-instrumentation.ts";
 
 interface CapturedLog {
 	event: string;
@@ -117,6 +117,93 @@ describe("instrumentTools", () => {
 		expect(parsed.hits._totalHits).toBe(200);
 	});
 
+	// SIO-1248: the LLM-facing cap and the extractor-facing payload are DECOUPLED.
+	// instrumentTools captures the full raw content into ctx.rawOutputs *before*
+	// truncation, so the ReAct context stays bounded (this is what blew the 200k
+	// window on 2026-07-27) while extractFindings still sees every hit.
+	test("caps the LLM-facing elasticsearch_search copy but captures the full raw output", async () => {
+		const { entries, logger } = makeLog();
+		const payload = bigHitsPayload(200);
+		const rawOutputs: RawToolOutput[] = [];
+		const fake = tool(async () => payload, {
+			name: "elasticsearch_search",
+			description: "x",
+			schema: z.object({}),
+		});
+		const wrapped = instrumentTools([fake], {
+			dataSourceId: "elastic",
+			log: logger,
+			capBytes: 32_768,
+			rawOutputs,
+		})[0];
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+		const result = await wrapped.invoke({ id: "c", name: "elasticsearch_search", args: {}, type: "tool_call" });
+
+		// LLM-facing copy is capped, and the typed-finding skip no longer applies in-flight.
+		expect(entries.find((e) => e.event === "subagent.tool_result_truncated")).toBeDefined();
+		expect(entries.find((e) => e.event === "subagent.tool_result_truncation_skipped")).toBeUndefined();
+		const tm = result as ToolMessage;
+		const finalText = typeof tm.content === "string" ? tm.content : JSON.stringify(tm.content);
+		expect(Buffer.byteLength(finalText, "utf8")).toBeLessThanOrEqual(32_768);
+
+		// Raw capture keeps full fidelity for the persistence/extractor path.
+		expect(rawOutputs).toHaveLength(1);
+		expect(rawOutputs[0]?.toolName).toBe("elasticsearch_search");
+		expect(String(rawOutputs[0]?.content)).toHaveLength(payload.length);
+	});
+
+	test("captures raw output for loop-guard short-circuited calls so persistence keeps 1:1 parity", async () => {
+		const { logger } = makeLog();
+		const rawOutputs: RawToolOutput[] = [];
+		// elasticsearch_search is loop-guarded: an identical repeated signature short-circuits.
+		const fake = tool(async () => JSON.stringify({ hits: { total: { value: 0 }, hits: [] } }), {
+			name: "elasticsearch_search",
+			description: "x",
+			schema: z.object({ q: z.string() }),
+		});
+		const wrapped = instrumentTools([fake], { dataSourceId: "elastic", log: logger, rawOutputs })[0];
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+		const call = { id: "c", name: "elasticsearch_search", args: { q: "same" }, type: "tool_call" as const };
+		await wrapped.invoke(call);
+		await wrapped.invoke(call);
+		await wrapped.invoke(call);
+
+		// Every invocation contributes exactly one raw output, including short-circuits.
+		expect(rawOutputs).toHaveLength(3);
+		expect(rawOutputs.every((o) => o.toolName === "elasticsearch_search")).toBe(true);
+	});
+
+	test("captures a raw output when the tool throws, so persistence keeps 1:1 parity with toolMessages", async () => {
+		// LangGraph's ToolNode turns a thrown tool error into an error ToolMessage that lands
+		// in response.messages -- which is where toolOutputs[] used to come from. Without a
+		// capture on the throw path the persisted list would silently lose that entry.
+		const { logger } = makeLog();
+		const rawOutputs: RawToolOutput[] = [];
+		const boom = tool(
+			async () => {
+				throw new Error("upstream MCP exploded");
+			},
+			{ name: "elasticsearch_search", description: "x", schema: z.object({}) },
+		);
+		const wrapped = instrumentTools([boom], {
+			dataSourceId: "elastic",
+			log: logger,
+			capBytes: 131_072,
+			rawOutputs,
+		})[0];
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+		await expect(
+			wrapped.invoke({ id: "c", name: "elasticsearch_search", args: {}, type: "tool_call" }),
+		).rejects.toThrow("upstream MCP exploded");
+
+		expect(rawOutputs).toHaveLength(1);
+		expect(rawOutputs[0]?.toolName).toBe("elasticsearch_search");
+		expect(String(rawOutputs[0]?.content)).toContain("upstream MCP exploded");
+	});
+
 	test("preserves tool name and schema after wrapping", () => {
 		const { logger } = makeLog();
 		const wrapped = wrapOne("ok", { dataSourceId: "elastic", log: logger });
@@ -125,12 +212,15 @@ describe("instrumentTools", () => {
 		expect(wrapped.schema).toBeDefined();
 	});
 
-	// SIO-785 follow-up (2026-05-18): typed-finding tools must NOT be truncated
-	// because the byte-boundary truncator breaks JSON and the downstream extractor
-	// emits empty findings. Test name matches the allowlist in
-	// sub-agent-instrumentation.ts:TYPED_FINDING_TOOLS.
-	test("does NOT truncate connect_list_connectors even when oversized", async () => {
+	// SIO-785 follow-up (2026-05-18): typed-finding tools must reach the extractor as
+	// parseable JSON -- the byte-boundary truncator breaks it and the extractor emits
+	// empty findings. SIO-1248 moved WHERE that guarantee is enforced: the in-flight
+	// copy is now always capped (it is only context for the model), and fidelity is
+	// preserved through ctx.rawOutputs, which feeds buildPersistedToolOutput's
+	// TYPED_FINDING_TOOLS exemption. Test names match that allowlist.
+	test("caps connect_list_connectors in-flight but keeps the raw output intact", async () => {
 		const { entries, logger } = makeLog();
+		const rawOutputs: RawToolOutput[] = [];
 		// Build a connectors response that exceeds the cap.
 		const connectors: Record<string, unknown> = {};
 		const longKey = "x".repeat(50);
@@ -147,7 +237,12 @@ describe("instrumentTools", () => {
 			description: "Test fixture",
 			schema: z.object({}),
 		});
-		const wrapped = instrumentTools([fake], { dataSourceId: "kafka", log: logger, capBytes: 32_768 })[0];
+		const wrapped = instrumentTools([fake], {
+			dataSourceId: "kafka",
+			log: logger,
+			capBytes: 32_768,
+			rawOutputs,
+		})[0];
 		if (!wrapped) throw new Error("instrumentTools returned empty array");
 
 		const result = await wrapped.invoke({
@@ -157,25 +252,23 @@ describe("instrumentTools", () => {
 			type: "tool_call",
 		});
 
-		// No truncation log
-		expect(entries.find((e) => e.event === "subagent.tool_result_truncated")).toBeUndefined();
-		// New skip log present
-		const skipLog = entries.find((e) => e.event === "subagent.tool_result_truncation_skipped");
-		expect(skipLog).toBeDefined();
-		expect(skipLog?.toolName).toBe("connect_list_connectors");
-		expect(skipLog?.reason).toBe("typed-finding tool");
-
-		// Result content preserved at full length
+		// The LLM copy is capped, and the in-flight skip no longer exists.
+		expect(entries.find((e) => e.event === "subagent.tool_result_truncated")).toBeDefined();
+		expect(entries.find((e) => e.event === "subagent.tool_result_truncation_skipped")).toBeUndefined();
 		const tm = result as ToolMessage;
 		const finalText = typeof tm.content === "string" ? tm.content : JSON.stringify(tm.content);
-		expect(finalText.length).toBe(payload.length);
-		// Parseable as JSON
-		const parsed = JSON.parse(finalText) as { connectors: Record<string, unknown>; count: number };
+		expect(Buffer.byteLength(finalText, "utf8")).toBeLessThanOrEqual(32_768);
+
+		// The persistence path still sees every connector, parseable as JSON.
+		expect(rawOutputs).toHaveLength(1);
+		const rawText = String(rawOutputs[0]?.content);
+		expect(rawText.length).toBe(payload.length);
+		const parsed = JSON.parse(rawText) as { connectors: Record<string, unknown>; count: number };
 		expect(parsed.count).toBe(100);
 		expect(Object.keys(parsed.connectors)).toHaveLength(100);
 	});
 
-	test("does NOT truncate kafka_list_consumer_groups, ksql_list_queries, kafka_list_dlq_topics, aws_cloudwatch_describe_alarms, findLinkedIncidents", async () => {
+	test("caps kafka_list_consumer_groups, ksql_list_queries, kafka_list_dlq_topics, aws_cloudwatch_describe_alarms, findLinkedIncidents in-flight while capturing raw", async () => {
 		// SIO-785 Phase 2 (2026-05-18): aws + atlassian extractors added to the
 		// typed-finding allowlist alongside the existing kafka core tools.
 		const cases = [
@@ -188,12 +281,20 @@ describe("instrumentTools", () => {
 		for (const name of cases) {
 			const { entries, logger } = makeLog();
 			const payload = bigHitsPayload(200); // 200KB+ payload, oversized
+			const rawOutputs: RawToolOutput[] = [];
 			const fake = tool(async () => payload, { name, description: "x", schema: z.object({}) });
-			const wrapped = instrumentTools([fake], { dataSourceId: "kafka", log: logger, capBytes: 32_768 })[0];
+			const wrapped = instrumentTools([fake], {
+				dataSourceId: "kafka",
+				log: logger,
+				capBytes: 32_768,
+				rawOutputs,
+			})[0];
 			if (!wrapped) throw new Error("instrumentTools returned empty array");
 			await wrapped.invoke({ id: "c", name, args: {}, type: "tool_call" });
-			expect(entries.find((e) => e.event === "subagent.tool_result_truncated")).toBeUndefined();
-			expect(entries.find((e) => e.event === "subagent.tool_result_truncation_skipped")?.toolName).toBe(name);
+			expect(entries.find((e) => e.event === "subagent.tool_result_truncated")?.toolName).toBe(name);
+			expect(entries.find((e) => e.event === "subagent.tool_result_truncation_skipped")).toBeUndefined();
+			// Raw capture is untouched regardless of the in-flight cap.
+			expect(String(rawOutputs[0]?.content)).toHaveLength(payload.length);
 		}
 	});
 
