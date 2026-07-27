@@ -6,19 +6,26 @@ description: Pick the right code-search tool -- Orbit graph for structural/cross
 # Skill: Code Search Selection
 
 ## Search Before You Read -- ordering rule
-LOCATE a file with search before you READ it. `gitlab_get_file_content` and
-`gitlab_get_repository_tree` take a path; that path must come from a search
-result, never from a path you composed out of a service or repo name.
+LOCATE a file before you READ it. `gitlab_get_file_content` takes a path, and
+that path must come from a DISCOVERY step, never from one you composed out of a
+service or repo name.
 
-Order: `gitlab_semantic_code_search` (or `gitlab_search` with blob scope) ->
-take the exact `path` from a result -> `gitlab_get_file_content`.
+Any of these count as discovery -- pick with the decision table below:
+- `gitlab_blast_radius` (Orbit) -- an exact stack-trace symbol; its definition
+  row carries the exact project/file/line. Prefer it for that case.
+- `gitlab_semantic_code_search` -- fuzzy "code that resembles this error".
+- `gitlab_search` with blob scope -- literal strings.
+- `gitlab_get_repository_tree` -- LISTS what exists, so it is discovery too, not
+  guessing; use it to enumerate when the searches come back empty.
+
+Order: discovery -> take the exact `path` from a result -> `gitlab_get_file_content`.
 
 A `404 File Not Found` or `404 invalid revision or path` means THE PATH WAS A
 GUESS, not that the file is absent -- those two errors are about the path, and
 are unrelated to project resolution (a `404 Project Not Found` is the resolution
-failure). Do not respond by permuting the path. Go back to search with different
-anchors: an exception class, a method name from the stack trace, an endpoint
-string, or a domain concept.
+failure). Do not respond by permuting the path. Go back to a discovery step with
+different anchors: an exception class, a method name from the stack trace, an
+endpoint string, or a domain concept.
 
 Budget matters: each guessed path costs a turn and returns nothing. A sub-agent
 that spends its recursion limit on empty results reports nothing at all, which is
