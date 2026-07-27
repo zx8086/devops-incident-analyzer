@@ -100,7 +100,12 @@ function instrumentTool(
 	// (loop-guard short-circuit, success, throw) so the count the UI shows never lags
 	// the counter. Soft by design: it runs in a finally, so a dispatch failure must
 	// never replace the tool's own result or error.
-	const emitProgress = async (toolCallCount: number) => {
+	// Reports the LIVE counter, not this call's own iteration: ToolNode runs one
+	// AIMessage's tool calls concurrently, so a slower earlier call resolves after a
+	// faster later one. Emitting its own (smaller) iteration made the last-write-wins
+	// UI count regress 2 -> 1. The live value is non-decreasing by construction.
+	const emitProgress = async () => {
+		const toolCallCount = runState.iteration;
 		try {
 			await dispatchCustomEvent(
 				"subagent_progress",
@@ -208,7 +213,7 @@ function instrumentTool(
 						}
 						return processed;
 					} finally {
-						await emitProgress(iteration);
+						await emitProgress();
 					}
 				};
 			}

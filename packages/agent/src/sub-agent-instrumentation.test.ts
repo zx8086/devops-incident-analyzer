@@ -615,4 +615,44 @@ describe("SIO-1247: subagent_progress ticks", () => {
 		expect(ticks).toHaveLength(1);
 		expect(ticks[0]).toMatchObject({ toolCallCount: 1, distinctToolCount: 1 });
 	});
+
+	// CodeRabbit (PR #489): createReactAgent's ToolNode runs the tool calls of one
+	// AIMessage CONCURRENTLY (see the reserveSignature comment). Emitting the per-call
+	// snapshot meant a slower earlier call ticked after a faster later one, so the
+	// reducer -- which stores the latest tick as-is -- showed the count going backwards.
+	test("never emits a count that goes backwards when calls finish out of order", async () => {
+		const { logger } = makeLog();
+		let releaseSlow: (() => void) | undefined;
+		const slowDone = new Promise<void>((resolve) => {
+			releaseSlow = resolve;
+		});
+		const slow = tool(
+			async () => {
+				await slowDone;
+				return "slow";
+			},
+			{ name: "slow_tool", description: "x", schema: z.object({ q: z.string() }) },
+		);
+		const fast = tool(async () => "fast", {
+			name: "fast_tool",
+			description: "x",
+			schema: z.object({ q: z.string() }),
+		});
+
+		const ticks = await captureTicks([slow, fast], { dataSourceId: "aws", log: logger }, async (wrapped) => {
+			const [s, f] = wrapped;
+			if (!s || !f) throw new Error("instrumentTools returned too few tools");
+			const slowCall = s.invoke({ q: "1" }); // starts first (iteration 1), finishes last
+			await f.invoke({ q: "2" }); // starts second (iteration 2), finishes first
+			releaseSlow?.();
+			await slowCall;
+		});
+
+		const counts = ticks.map((t) => t.toolCallCount ?? 0);
+		expect(counts).toHaveLength(2);
+		// Monotonic: the late-finishing first call must not report a lower count than
+		// the tick already delivered, or the live row regresses 2 -> 1.
+		expect(counts).toEqual([...counts].sort((a, b) => a - b));
+		expect(counts.at(-1)).toBe(2);
+	});
 });
