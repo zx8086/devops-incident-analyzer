@@ -64,5 +64,21 @@ describe("buildCoveringIndexDdl", () => {
 			const ddl = buildCoveringIndexDdl("b", "s", "c", ["a", "b"], ["c", "d"]);
 			expect(ddl).toBe("CREATE INDEX idx_covering ON `b`.`s`.`c`(a, b, c, d);");
 		});
+
+		// CodeRabbit (PR #491) proposed stripping the qualifier so `o.status` and `status` collapse.
+		// Declined: a dotted name is ambiguous at this layer. Distinguishing an alias qualifier from
+		// a nested field path needs the query's FROM aliases, which this function does not have, and
+		// stripping the prefix would DELETE a real index key. Dropping a key yields a silently wrong
+		// index; keeping a duplicate yields a statement Couchbase rejects loudly and that
+		// dedupeCreateIndexKeys catches downstream. These two tests pin that trade-off.
+		test("keeps distinct nested field paths -- never collapses on the last path segment", () => {
+			const ddl = buildCoveringIndexDdl("b", "s", "c", ["shipping.status"], ["billing.status"]);
+			expect(ddl).toBe("CREATE INDEX idx_covering ON `b`.`s`.`c`(shipping.status, billing.status);");
+		});
+
+		test("an alias-qualified repeat is knowingly NOT collapsed", () => {
+			const ddl = buildCoveringIndexDdl("b", "s", "c", ["o.status"], ["status"]);
+			expect(ddl).toBe("CREATE INDEX idx_covering ON `b`.`s`.`c`(o.status, status);");
+		});
 	});
 });

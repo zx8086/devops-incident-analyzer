@@ -24,10 +24,20 @@ export function buildCoveringIndexDdl(
 ): string {
 	// SIO-1243: the caller's dedupe (`!indexFields.includes(cleanField)`) is an exact,
 	// case-sensitive Array.includes comparing a PROJECTION string against entries derived from a
-	// PREDICATE regex, so any quoting/case/qualification divergence slips a repeat through
-	// (`` `status` `` vs `status`, `o.status` vs `status`, `Status` vs `status`); coveringFields is
-	// also never deduplicated against itself. Couchbase rejects a duplicate index key, so enforce
-	// the invariant where the list is actually built. First occurrence wins.
+	// PREDICATE regex, so a quoting or casing divergence slips a repeat through
+	// (`` `status` `` vs `status`, `Status` vs `status`); coveringFields is also never deduplicated
+	// against itself. Couchbase rejects a duplicate index key, so enforce the invariant where the
+	// list is actually built. First occurrence wins.
+	//
+	// Identity is backtick- and case-insensitive but NOT qualifier-stripping. An ALIAS-qualified
+	// `o.status` and a bare `status` therefore stay distinct and a duplicate survives -- accepted
+	// deliberately (CodeRabbit, PR #491). At this layer a dotted name is ambiguous: `o.status` is an
+	// alias qualifier but `shipping.status` is a NESTED FIELD PATH, and telling them apart needs the
+	// query's FROM aliases, which we do not have here. Stripping the prefix would collapse
+	// `shipping.status` and `billing.status` into one key and silently DROP a real index key --
+	// a wrong index, which is worse than a duplicate key that Couchbase rejects loudly and that
+	// dedupeCreateIndexKeys (packages/agent) also catches downstream. Pinned by the
+	// "keeps distinct nested field paths" test.
 	const seen = new Set<string>();
 	const allKeys = [...indexFields, ...coveringFields]
 		.filter((key) => {
