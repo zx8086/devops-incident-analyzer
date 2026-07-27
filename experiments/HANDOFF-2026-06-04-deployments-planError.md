@@ -224,3 +224,28 @@ Reinforced twice since, both citing SIO-905: `66db4fce` (2026-06-12) and `18433b
 **Generalisable lesson for the next planError of this class.** For a stack whose Terraform state is SHARED across all clusters (`deployments` is the only one), the credential lives in a shared env scope, not a per-deployment one. A per-deployment `environment.name` yields *no secret* rather than failing at scope-resolution time — so the symptom surfaces late, as a provider auth error inside `terraform plan`, and reads exactly like a missing secret. Check the scope before hunting for the key.
 
 Everything above this section is preserved as the original record, including the wrong remedy — it shows how a plausible hypothesis was formed from a genuine error message, which is worth keeping.
+
+### Verified end-to-end (2026-07-27)
+
+Triggered a live `deployments` drift-check against `eu-b2b` to confirm the fix rather than infer it from configuration. Pipeline **2707648842**, job **15544471297**, `status: "success"`:
+
+```json
+{ "stack": "deployments", "deployment": "eu-b2b",
+  "plan_path": "/tmp/tf-data-deployments/eu-b2b.tfplan",
+  "terraform_version": "1.14.9",
+  "totals": { "noop": 1, "create": 0, "update": 0, "destroy": 0, "replace": 0, "known-noise": 0 },
+  "resources": [], "has_actionable_drift": false }
+```
+
+A `.tfplan` was written, so `terraform plan` ran to completion, so the `ec` provider authenticated. The original failure was a provider-init error (`authwriter: one of apikey or username and password must be specified`) — that cannot occur and still produce a plan file. Exit 0 (clean), not 42 (drift). This planError class is resolved.
+
+Trigger recipe, for the next person who needs to re-check: the elastic-iac MCP is a stateless HTTP MCP on `:9086` needing no session header —
+
+```bash
+curl -s -X POST http://localhost:9086/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"gitlab_trigger_drift_check",
+       "arguments":{"stack":"deployments","deployment":"eu-b2b"}}}'
+# then poll with gitlab_get_drift_check_result {"pipelineId": <id>}
+```
