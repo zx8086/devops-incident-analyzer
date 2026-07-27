@@ -757,3 +757,124 @@ describe("SIO-1247: subagent_progress ticks", () => {
 		expect(counts.at(-1)).toBe(2);
 	});
 });
+
+// SIO-1246: SIO-1232 shipped a correct, fully unit-tested generic guard that was UNREACHABLE in
+// production -- the call site gated shouldShortCircuit on isGuardedTool(), true for only the two
+// bespoke tools. Run 43796e9f: gitlab_search returned empty at iterations 1/17/20/25 and nothing
+// stopped it; the sub-agent burned its recursion budget and returned 49 chars. These tests are
+// end-to-end through instrumentTools -- sub-agent-loop-guard.test.ts calls the policy directly and
+// so passed throughout, which is exactly why the gap survived.
+describe("SIO-1246: generic loop guard is enforced for non-bespoke tools", () => {
+	const EMPTY_ARRAY = "[]";
+
+	function buildCountingTool(name: string, payload: string, argKeys: string[] = ["search"]) {
+		let calls = 0;
+		const shape: Record<string, z.ZodTypeAny> = {};
+		for (const k of argKeys) shape[k] = z.string().optional();
+		const t = tool(
+			async () => {
+				calls += 1;
+				return payload;
+			},
+			{
+				name,
+				description: "Test fixture that counts underlying invocations.",
+				schema: z.object(shape).passthrough(),
+			},
+		);
+		return { tool: t, getCalls: () => calls };
+	}
+
+	test("stops gitlab_search once the per-tool unproductive cap is exhausted", async () => {
+		const { entries, logger } = makeLog();
+		const { tool: fake, getCalls } = buildCountingTool("gitlab_search", EMPTY_ARRAY);
+		const wrapped = instrumentTools([fake], { dataSourceId: "gitlab", log: logger })[0];
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+		// MAX_UNPRODUCTIVE_PER_TOOL = 3, so three distinct empties are allowed through...
+		for (let i = 0; i < 3; i++) {
+			await wrapped.invoke({ id: `c${i}`, name: "gitlab_search", args: { search: `attempt-${i}` }, type: "tool_call" });
+		}
+		// ...and the 4th distinct attempt is refused before it reaches MCP.
+		const fourth = await wrapped.invoke({
+			id: "c4",
+			name: "gitlab_search",
+			args: { search: "attempt-3" },
+			type: "tool_call",
+		});
+
+		expect(getCalls()).toBe(3);
+		const stopText = fourth instanceof ToolMessage ? String(fourth.content) : String(fourth);
+		expect(stopText).toContain("returned nothing useful");
+		expect(entries.find((e) => e.event === "subagent.loop_guard_stop")).toBeDefined();
+	});
+
+	// The elastic-specific stop message talks about indices and the service.name discovery agg;
+	// handing it to a gitlab tool would be nonsense advice.
+	test("uses the generic stop message, not the elastic one", async () => {
+		const { logger } = makeLog();
+		const { tool: fake } = buildCountingTool("gitlab_search", EMPTY_ARRAY);
+		const wrapped = instrumentTools([fake], { dataSourceId: "gitlab", log: logger })[0];
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+		for (let i = 0; i < 3; i++) {
+			await wrapped.invoke({ id: `c${i}`, name: "gitlab_search", args: { search: `a-${i}` }, type: "tool_call" });
+		}
+		const stopped = await wrapped.invoke({
+			id: "c4",
+			name: "gitlab_search",
+			args: { search: "a-3" },
+			type: "tool_call",
+		});
+		const stopText = stopped instanceof ToolMessage ? String(stopped.content) : String(stopped);
+		expect(stopText).not.toContain("Stop searching");
+		expect(stopText).toContain("Synthesize your findings");
+	});
+
+	test("an exact-duplicate non-bespoke call is refused", async () => {
+		const { logger } = makeLog();
+		const { tool: fake, getCalls } = buildCountingTool("gitlab_list_commits", '[{"id":"abc"}]');
+		const wrapped = instrumentTools([fake], { dataSourceId: "gitlab", log: logger })[0];
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+		const args = { search: "same" };
+		await wrapped.invoke({ id: "d1", name: "gitlab_list_commits", args, type: "tool_call" });
+		await wrapped.invoke({ id: "d2", name: "gitlab_list_commits", args, type: "tool_call" });
+
+		// SIO-1246: previously `signature` was "" for every non-bespoke tool, so the duplicate
+		// rule had no data even in principle.
+		expect(getCalls()).toBe(1);
+	});
+
+	test("productive calls are never stopped", async () => {
+		const { logger } = makeLog();
+		const { tool: fake, getCalls } = buildCountingTool("gitlab_search", '[{"path":"a.ts"}]');
+		const wrapped = instrumentTools([fake], { dataSourceId: "gitlab", log: logger })[0];
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+		for (let i = 0; i < 6; i++) {
+			await wrapped.invoke({ id: `p${i}`, name: "gitlab_search", args: { search: `q-${i}` }, type: "tool_call" });
+		}
+		expect(getCalls()).toBe(6);
+	});
+
+	// The CloudWatch Insights poll re-issues the SAME get_query_results call while a query is
+	// Running, and describe_log_groups is the AWS re-anchor recovery path. Enforcing the generic
+	// guard must not strand either (CodeRabbit, PR #482). GENERIC_GUARD_EXEMPT_TOOLS is checked
+	// FIRST inside shouldShortCircuit's generic branch, which is what preserves this.
+	test("exempt polling tools are never short-circuited, even on repeated identical calls", async () => {
+		const { logger } = makeLog();
+		const empty = JSON.stringify({ results: [], status: "Complete" });
+		for (const name of ["aws_logs_get_query_results", "aws_logs_describe_log_groups"]) {
+			const { tool: fake, getCalls } = buildCountingTool(name, empty, ["queryId"]);
+			const wrapped = instrumentTools([fake], { dataSourceId: "aws", log: logger })[0];
+			if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+			const args = { queryId: "q-1" };
+			for (let i = 0; i < 12; i++) {
+				await wrapped.invoke({ id: `${name}-${i}`, name, args, type: "tool_call" });
+			}
+			expect(getCalls()).toBe(12);
+		}
+	});
+});
