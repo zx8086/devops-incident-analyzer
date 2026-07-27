@@ -191,3 +191,36 @@ Branch off `main` BEFORE the first commit (`sio-XXX-...`); commit `SIO-XXX: mess
 - `project_elastic_iac_gitops_proposer_model` — the agent proposes via MR; CI owns plan/apply (so the failure is genuinely on the CI side).
 - `reference_agent_knowledge_cached_per_process` — cold-restart requirement for elastic-iac changes.
 - `reference_main_preexisting_test_lint_failures` — stash-and-compare before blaming your change for red tests.
+
+---
+
+## Correction (added 2026-07-27 — supersedes the remedy named in "Resolution" above)
+
+The Resolution section above ends by saying the fix is to *"set/scope `EC_API_KEY` for the drift-check job"*. **That remedy is wrong.** The error message it was inferred from was real, but the inference was not.
+
+**Actual root cause: an environment-SCOPE mismatch, not a missing secret.** The org-wide EC API key (`TF_VAR_local_ec_api_key`) exists, and is scoped to the `_deployments` environment. The drift-check job resolved `environment.name: $DEPLOYMENT` (e.g. `eu-b2b`), so the env-scoped variable never materialised for it and the `ec` provider came up with no credentials. Nothing was missing — the job was simply looking in the wrong scope. This also explains the detail the original investigation never accounted for: why the *apply* path worked while drift-check did not. They resolved different scopes.
+
+**Already fixed, same day.** `fix(ci): scope drift-check-on-demand to _deployments env when STACK=deployments (SIO-905)` — commit `fa849c9a`, merged via MR **!94** as `27ccd6b0` on **2026-06-04 21:47Z**, roughly 31 minutes after SIO-905 was filed. The ticket then sat In Review for seven weeks before being closed on 2026-07-27.
+
+The shipped shape in `.gitlab-ci.yml`:
+
+```yaml
+  environment:
+    name: $DRIFT_ENV
+    action: prepare
+  rules:
+    - if: '$DRIFT_CHECK == "true" && $STACK == "deployments"'
+      variables:
+        DRIFT_ENV: "_deployments"
+      when: always
+    - if: '$DRIFT_CHECK == "true"'
+      variables:
+        DRIFT_ENV: "$DEPLOYMENT"
+      when: always
+```
+
+Reinforced twice since, both citing SIO-905: `66db4fce` (2026-06-12) and `18433b85` (2026-07-09). The fleet-wide sweep applies the same rule — `drift-sweep-deployments-stack` pins `environment.name: _deployments`, and `drift-sweep-deployment` excludes the stack via `--skip-stack=deployments,infrastructure`.
+
+**Generalisable lesson for the next planError of this class.** For a stack whose Terraform state is SHARED across all clusters (`deployments` is the only one), the credential lives in a shared env scope, not a per-deployment one. A per-deployment `environment.name` yields *no secret* rather than failing at scope-resolution time — so the symptom surfaces late, as a provider auth error inside `terraform plan`, and reads exactly like a missing secret. Check the scope before hunting for the key.
+
+Everything above this section is preserved as the original record, including the wrong remedy — it shows how a plausible hypothesis was formed from a genuine error message, which is worth keeping.
