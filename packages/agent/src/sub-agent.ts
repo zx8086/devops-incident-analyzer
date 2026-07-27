@@ -12,6 +12,7 @@ import {
 	ToolErrorKindSchema,
 } from "@devops-agent/shared";
 import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch";
+import type { BaseMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
@@ -23,6 +24,7 @@ import { fetchNetworkBaseline, isNetworkBaselineEnabled } from "./network-baseli
 import { buildCachedSystemMessage } from "./prompt-cache.ts";
 import { buildSubAgentPrompt, getSkillToolNames, getToolDefinitionForDataSource } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
+import { applyContextBudget, getSubAgentContextBudgetBytes } from "./sub-agent-context-budget.ts";
 import { buildFocusBlock } from "./sub-agent-focus-block.ts";
 import { instrumentTools, type RawToolOutput, TYPED_FINDING_TOOLS } from "./sub-agent-instrumentation.ts";
 import {
@@ -1306,10 +1308,40 @@ ${state.correlationFetchDirective}`
 			rawOutputs,
 		});
 
+		// SIO-1250: bound the CUMULATIVE loop context. The per-result cap above cannot do
+		// this -- ~6 results at 131_072 already reach 200k. The hook elides the oldest tool
+		// CONTENT (never removes a message, so tool_call pairing cannot break) and returns
+		// it as `llmInputMessages`, which overrides only what the model sees; canonical
+		// `messages` stays whole for extractToolErrors and the SIO-1248 raw capture.
+		//
+		// Always returns llmInputMessages, even when nothing was elided: the channel reducer
+		// is (_, update) => messagesStateReducer([], update), so omitting the key leaves the
+		// PREVIOUS step's value in place and the model would silently reason on a stale,
+		// shorter history.
+		const contextBudgetBytes = getSubAgentContextBudgetBytes();
 		const agent = createReactAgent({
 			llm,
 			tools: instrumentedTools,
 			messageModifier: systemPrompt,
+			...(contextBudgetBytes != null && {
+				preModelHook: (hookState: { messages: BaseMessage[] }) => {
+					const budgeted = applyContextBudget(hookState.messages, contextBudgetBytes);
+					if (budgeted.elidedCount > 0) {
+						log.warn(
+							{
+								event: "subagent.context_budget_pressure",
+								deploymentId,
+								budgetBytes: contextBudgetBytes,
+								totalBytes: budgeted.totalBytes,
+								elidedCount: budgeted.elidedCount,
+								freedBytes: budgeted.freedBytes,
+							},
+							"Sub-agent context budget exceeded; elided oldest tool results",
+						);
+					}
+					return { llmInputMessages: budgeted.messages };
+				},
+			}),
 		});
 
 		const messages = lastUserMessage ? [lastUserMessage] : state.messages.slice(-1);
