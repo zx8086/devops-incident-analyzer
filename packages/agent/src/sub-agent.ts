@@ -213,35 +213,46 @@ export function isSubAgentAbort(message: string | undefined, errorName?: string)
 // legitimate progressive refinement (cross-deployment 5xx triage), not looping. Lift to 40 for
 // elastic only (~20 LLM iterations × ~2.75 parallel tools = ~55 tool-call budget). The 5-minute
 // SUB_AGENT_TIMEOUT_MS still bounds wall-clock damage on a true loop.
-const ELASTIC_RECURSION_LIMIT_DEFAULT = 40;
+const ELASTIC_RECURSION_LIMIT_DEFAULT = 60;
 
 // SIO-1232: this used to return undefined for every datasource except elastic, and the caller only
 // spreads recursionLimit when defined -- so five of the seven sub-agents ran on LangGraph's DEFAULT
 // of 25 super-steps with no explicit budget at all. gitlab made 97 tool calls and hit the 6-minute
 // wall instead of any limit.
 //
-// Sizing: LangGraph counts SUPER-STEPS and a ReAct cycle is two of them (agent + tools), so
-// limit ~= 2 x maxLlmTurns + 1. Note the `iteration` counter in the logs counts TOOL CALLS, not
-// steps -- with ~2-3 parallel calls per tools step the tool-call budget is roughly
-// maxLlmTurns x 2.5, which is why 97 calls fit inside a 25-step default.
+// Sizing: LangGraph counts SUPER-STEPS, and since SIO-1250 installed preModelHook a ReAct cycle is
+// THREE of them (pre_model_hook + agent + tools), so limit ~= 3 x maxLlmTurns. Measured, not
+// assumed: createReactAgent's node set is ["__start__","tools","agent"] without the hook and
+// ["__start__","tools","pre_model_hook","agent"] with it, and LangGraph counts every node as a
+// super-step.
+//
+// SIO-1262: these were originally derived as 2 x turns + 1 and were NOT re-derived when SIO-1250
+// landed, so every sub-agent silently lost a third of its reasoning budget. gitlab's 24 was
+// documented as buying "~11 LLM turns" and was actually buying 8; it truncated mid-investigation in
+// both the 2026-07-27 incident run and its replay. Scaled 1.5x to restore the turn counts these
+// numbers were always meant to express -- the intent below is unchanged, only the arithmetic.
+//
+// Note the `iteration` counter in the logs counts TOOL CALLS, not steps -- with ~2-3 parallel calls
+// per tools step the tool-call budget is roughly maxLlmTurns x 2.5, which is why 97 calls fit
+// inside a 25-step default.
 //
 // invokeSubAgentWithSalvage already salvages partial messages on GraphRecursionError, so hitting a
 // limit degrades to partial findings, never a hard error.
-const SUB_AGENT_RECURSION_LIMIT_DEFAULT = 30;
+const SUB_AGENT_RECURSION_LIMIT_DEFAULT = 45;
 const RECURSION_LIMIT_BY_DATASOURCE: Record<string, number> = {
 	// SIO-689 measured 13 LLM iterations + 12 tools steps on a real cross-deployment 5xx triage.
 	elastic: ELASTIC_RECURSION_LIMIT_DEFAULT,
 	// Genuinely deep: a CloudWatch Insights poll burns a full cycle per poll, and the network-path
 	// / ingress chains are 4-5 sequential hops by design.
-	aws: 40,
+	aws: 60,
 	// Slow-query triage chains three skills (indexes -> schema -> explain).
-	couchbase: 30,
+	couchbase: 45,
 	// Search -> resolve project -> read MR/commits is 4-6 cycles. 97 calls was thrash, not depth.
-	gitlab: 24,
-	kafka: 24,
-	konnect: 24,
+	gitlab: 36,
+	kafka: 36,
+	konnect: 36,
 	// Two-entry action map; nothing here needs depth.
-	atlassian: 20,
+	atlassian: 30,
 };
 
 export function getSubAgentRecursionLimit(dataSourceId: string, env: NodeJS.ProcessEnv = process.env): number {
