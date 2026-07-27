@@ -880,3 +880,108 @@ describe("SIO-1246: generic loop guard is enforced for non-bespoke tools", () =>
 		}
 	});
 });
+
+// SIO-1259: SIO-1246's fixtures used gitlab_search's `[]` shape. The REAL empty answer from the
+// intercepted blob-search path is PROSE (the 0-hit branch of
+// packages/mcp-server-gitlab/src/tools/proxy/index.ts), which classified as PRODUCTIVE and reset the
+// streak on every miss -- so the guard proven by SIO-1246 was, again, unreachable for the exact call
+// that motivated it. These are end-to-end through instrumentTools for the same reason that block is:
+// policy-only tests passed throughout both gaps.
+describe("SIO-1259: prose 'nothing found' results reach the generic guard", () => {
+	const GITLAB_NO_MATCH = 'No code matches found for "boom" in project 12345678';
+
+	function buildCountingTool(name: string, payload: string, argKeys: string[] = ["search"]) {
+		let calls = 0;
+		const shape: Record<string, z.ZodTypeAny> = {};
+		for (const k of argKeys) shape[k] = z.string().optional();
+		const t = tool(
+			async () => {
+				calls += 1;
+				return payload;
+			},
+			{ name, description: "Test fixture that counts underlying invocations.", schema: z.object(shape).passthrough() },
+		);
+		return { tool: t, getCalls: () => calls };
+	}
+
+	test("prose 'no matches' results accrue the per-tool cap end to end", async () => {
+		const { logger } = makeLog();
+		const { tool: fake, getCalls } = buildCountingTool("gitlab_search", GITLAB_NO_MATCH);
+		const wrapped = instrumentTools([fake], { dataSourceId: "gitlab", log: logger })[0];
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+		for (let i = 0; i < 3; i++) {
+			await wrapped.invoke({ id: `n${i}`, name: "gitlab_search", args: { search: `q-${i}` }, type: "tool_call" });
+		}
+		const fourth = await wrapped.invoke({
+			id: "n3",
+			name: "gitlab_search",
+			args: { search: "q-3" },
+			type: "tool_call",
+		});
+
+		// Before this fix the 4th call reached MCP because every prose miss looked productive.
+		expect(getCalls()).toBe(3);
+		const text = fourth instanceof ToolMessage ? String(fourth.content) : String(fourth);
+		expect(text).toContain("returned nothing useful");
+	});
+
+	// SIO-1258 COUPLING. gitlab_search serves two jobs under one tool name -- group-scoped project
+	// RESOLUTION and project-scoped BLOB search -- and only the second returns this prose. Under the
+	// fixed project-resolution skill the resolve runs FIRST and is productive, which resets the
+	// streak, so a second project can still be resolved after a couple of empty blob searches.
+	test("a productive resolve keeps gitlab_search usable after empty blob searches", async () => {
+		const { logger } = makeLog();
+		let call = 0;
+		const responses = [
+			'[{"id":123,"path_with_namespace":"pvhcorp/b2b/orders"}]', // STEP 1 resolve -> productive
+			GITLAB_NO_MATCH,
+			GITLAB_NO_MATCH,
+			'[{"id":456,"path_with_namespace":"pvhcorp/b2b/styles"}]', // a second project's resolve
+		];
+		const fake = tool(
+			async () => {
+				const r = responses[call] ?? "[]";
+				call += 1;
+				return r;
+			},
+			{
+				name: "gitlab_search",
+				description: "Test fixture.",
+				schema: z.object({ search: z.string().optional(), scope: z.string().optional() }).passthrough(),
+			},
+		);
+		const wrapped = instrumentTools([fake], { dataSourceId: "gitlab", log: logger })[0];
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+		for (let i = 0; i < 4; i++) {
+			await wrapped.invoke({ id: `r${i}`, name: "gitlab_search", args: { search: `s-${i}` }, type: "tool_call" });
+		}
+		// The 4th call -- the second project's resolve -- was NOT short-circuited.
+		expect(call).toBe(4);
+	});
+
+	// The residual limit, pinned deliberately so project-resolution's STEP 3 prose stays honest:
+	// after THREE empty blob searches the resolver IS refused, and the refusal text is what the skill
+	// tells the agent to distinguish from "the project does not exist". If
+	// GENERIC_LOOP_GUARD_STOP_MESSAGE is ever reworded, this fails and the skill prose must move with
+	// it -- otherwise a call-budget outcome gets reported as a missing project.
+	test("after three empty blob searches the resolver is refused with the generic stop text", async () => {
+		const { logger } = makeLog();
+		const { tool: fake, getCalls } = buildCountingTool("gitlab_search", GITLAB_NO_MATCH, ["search", "scope"]);
+		const wrapped = instrumentTools([fake], { dataSourceId: "gitlab", log: logger })[0];
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+		for (let i = 0; i < 3; i++) {
+			await wrapped.invoke({ id: `b${i}`, name: "gitlab_search", args: { search: `blob-${i}` }, type: "tool_call" });
+		}
+		const refused = await wrapped.invoke({
+			id: "resolve",
+			name: "gitlab_search",
+			args: { scope: "projects", search: "styles" },
+			type: "tool_call",
+		});
+		expect(getCalls()).toBe(3);
+		expect(String(refused instanceof ToolMessage ? refused.content : refused)).toContain("returned nothing useful");
+	});
+});
