@@ -1387,8 +1387,9 @@ ${state.correlationFetchDirective}`
 
 		// SIO-1260 (Layer A): reserve the last turn for writing findings. preModelHook runs once per
 		// agent super-step, so a closure counter gives the turn index without reaching into any
-		// LangGraph internal. A ReAct cycle is two super-steps and the model turn is the odd one, so
-		// after `llmTurns` model turns we have consumed 2*llmTurns - 1 steps.
+		// LangGraph internal. See shouldReserveFinalTurn for the step arithmetic -- a cycle is THREE
+		// super-steps because preModelHook is itself a node, which is the assumption the 2026-07-27
+		// replay disproved when this fired zero times on a run that truncated.
 		//
 		// This is ADVISORY -- the model can emit tool_calls anyway and spend the reserved step, which
 		// is exactly why Layer B (the synthesis backstop) exists and carries the guarantee.
@@ -1766,7 +1767,11 @@ ${state.correlationFetchDirective}`
 				"Sub-agent final message carried no text; recovered findings from an earlier turn",
 			);
 		}
-		if (noFindings) {
+		// SIO-1260 (CodeRabbit, PR #502): gate on the FINAL status, not on `noFindings` alone. A
+		// successful synthesis turns exactly this case into a partial success, so firing the warn
+		// regardless would put "reporting as error" in the trace next to `status: "success"` -- a
+		// direct contradiction for whoever reads it later.
+		if (noFindings && outcome.status === "error") {
 			log.warn(
 				{ deploymentId, messageCount: response.messages.length, truncated: truncated === true },
 				"Sub-agent produced no textual findings in any message; reporting as error rather than empty success",
@@ -1777,7 +1782,12 @@ ${state.correlationFetchDirective}`
 			dataSourceId,
 			data,
 			status: outcome.status,
-			duration,
+			// SIO-1260 (CodeRabbit, PR #502): include the synthesis call. `duration` is consumed
+			// downstream as "how long did this datasource take", and the caller genuinely waited
+			// this long -- excluding a call worth up to the 45s budget would understate every
+			// aggregate built on it. The completion log above still reports the ReAct-loop duration
+			// on its own, and synthesisMs is emitted separately, so the breakdown is not lost.
+			duration: duration + synthesisMs,
 			toolOutputs,
 			isAlignmentRetry: isRetry,
 			messageCount: response.messages.length,
