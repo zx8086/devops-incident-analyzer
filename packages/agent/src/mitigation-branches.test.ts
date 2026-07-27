@@ -7,7 +7,7 @@ import type { BaseMessage } from "@langchain/core/messages";
 
 const ORIG_ENV = { ...process.env };
 
-type BranchMode = "succeed" | "hang" | "throwOther";
+type BranchMode = "succeed" | "hang" | "throwOther" | "duplicateIndexKey";
 type BranchKind = "investigate" | "monitor" | "escalate";
 
 let mode: BranchMode = "succeed";
@@ -31,6 +31,18 @@ mock.module("@langchain/aws", () => ({
 
 			if (mode === "succeed") {
 				return { content: JSON.stringify({ items: ["one", "two", "three"] }) };
+			}
+			// SIO-1243: the production escalate item -- a covering index whose key list repeats
+			// `articleType`. Identifiers genericized.
+			if (mode === "duplicateIndexKey") {
+				return {
+					content: JSON.stringify({
+						items: [
+							"Add a covering index (requires human approval):\n\n```sql\nCREATE INDEX idx_dates_covering ON `default`.`seasons`.`dates`(`salesOrganizationCode`, `articleType`, `styleSeasonCodeFms`, `documentUpdatedBy`, `articleType`);\n```",
+							"Unrelated step with no DDL.",
+						],
+					}),
+				};
 			}
 			if (mode === "throwOther") {
 				throw new Error("upstream-explosion");
@@ -169,5 +181,46 @@ describe("mitigation branches", () => {
 		expect(escalatePrompt).toContain("escalate");
 		expect(escalatePrompt).not.toMatch(/Category: investigate/);
 		expect(escalatePrompt).not.toMatch(/Category: monitor/);
+	});
+});
+
+// SIO-1243: BranchOutputSchema validates the JSON SHAPE only, so a hallucinated CREATE INDEX
+// reached the operator verbatim under "Escalate (requires human approval)". The dedupe is a
+// mechanical invariant enforced deterministically on every branch's items.
+describe("SIO-1243: emitted CREATE INDEX key dedupe", () => {
+	test("removes a duplicate index key from an escalate item", async () => {
+		mode = "duplicateIndexKey";
+		const out = await proposeEscalate(baseState());
+		const items = out.mitigationFragments?.[0]?.items ?? [];
+		expect(items).toHaveLength(2);
+		const ddlItem = items[0] as string;
+		expect(ddlItem.match(/articleType/g)).toHaveLength(1);
+		expect(ddlItem).toContain(
+			"CREATE INDEX idx_dates_covering ON `default`.`seasons`.`dates`(`salesOrganizationCode`, `articleType`, `styleSeasonCodeFms`, `documentUpdatedBy`);",
+		);
+		// Surrounding prose and the fenced block survive untouched.
+		expect(ddlItem).toStartWith("Add a covering index (requires human approval):");
+		expect(ddlItem).toContain("```sql");
+	});
+
+	test("applies to investigate and monitor too, not just escalate", async () => {
+		mode = "duplicateIndexKey";
+		for (const fn of [proposeInvestigate, proposeMonitor]) {
+			const out = await fn(baseState());
+			const ddlItem = (out.mitigationFragments?.[0]?.items?.[0] ?? "") as string;
+			expect(ddlItem.match(/articleType/g)).toHaveLength(1);
+		}
+	});
+
+	test("leaves items without DDL byte-identical", async () => {
+		mode = "duplicateIndexKey";
+		const out = await proposeEscalate(baseState());
+		expect(out.mitigationFragments?.[0]?.items?.[1]).toBe("Unrelated step with no DDL.");
+	});
+
+	test("a clean branch response is passed through unchanged", async () => {
+		mode = "succeed";
+		const out = await proposeEscalate(baseState());
+		expect(out.mitigationFragments?.[0]?.items).toEqual(["one", "two", "three"]);
 	});
 });

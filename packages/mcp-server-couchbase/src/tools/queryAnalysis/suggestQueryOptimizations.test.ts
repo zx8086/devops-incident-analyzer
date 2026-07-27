@@ -32,4 +32,53 @@ describe("buildCoveringIndexDdl", () => {
 		const ddl = buildCoveringIndexDdl("b", "s", "c", ["a", "b"], ["c", "d"]);
 		expect(ddl).toContain("(a, b, c, d)");
 	});
+
+	// SIO-1243: the caller's dedupe is an exact case-sensitive Array.includes across two
+	// differently-derived string sets, so an overlapping projected field slipped through and
+	// produced a duplicate index key -- which Couchbase rejects.
+	describe("duplicate index keys (SIO-1243)", () => {
+		test("drops a projected field that repeats a leading index key", () => {
+			const ddl = buildCoveringIndexDdl(
+				"b",
+				"s",
+				"c",
+				["salesOrganizationCode", "articleType"],
+				["styleSeasonCodeFms", "documentUpdatedBy", "articleType"],
+			);
+			expect(ddl).toBe(
+				"CREATE INDEX idx_covering ON `b`.`s`.`c`(salesOrganizationCode, articleType, styleSeasonCodeFms, documentUpdatedBy);",
+			);
+		});
+
+		test("collapses backtick- and case-divergent repeats the caller's filter misses", () => {
+			const ddl = buildCoveringIndexDdl("b", "s", "c", ["status"], ["`status`", "Status", "other"]);
+			expect(ddl).toBe("CREATE INDEX idx_covering ON `b`.`s`.`c`(status, other);");
+		});
+
+		test("deduplicates coveringFields against itself", () => {
+			const ddl = buildCoveringIndexDdl("b", "s", "c", ["a"], ["b", "b"]);
+			expect(ddl).toBe("CREATE INDEX idx_covering ON `b`.`s`.`c`(a, b);");
+		});
+
+		test("a list with no repeats is unchanged", () => {
+			const ddl = buildCoveringIndexDdl("b", "s", "c", ["a", "b"], ["c", "d"]);
+			expect(ddl).toBe("CREATE INDEX idx_covering ON `b`.`s`.`c`(a, b, c, d);");
+		});
+
+		// CodeRabbit (PR #491) proposed stripping the qualifier so `o.status` and `status` collapse.
+		// Declined: a dotted name is ambiguous at this layer. Distinguishing an alias qualifier from
+		// a nested field path needs the query's FROM aliases, which this function does not have, and
+		// stripping the prefix would DELETE a real index key. Dropping a key yields a silently wrong
+		// index; keeping a duplicate yields a statement Couchbase rejects loudly and that
+		// dedupeCreateIndexKeys catches downstream. These two tests pin that trade-off.
+		test("keeps distinct nested field paths -- never collapses on the last path segment", () => {
+			const ddl = buildCoveringIndexDdl("b", "s", "c", ["shipping.status"], ["billing.status"]);
+			expect(ddl).toBe("CREATE INDEX idx_covering ON `b`.`s`.`c`(shipping.status, billing.status);");
+		});
+
+		test("an alias-qualified repeat is knowingly NOT collapsed", () => {
+			const ddl = buildCoveringIndexDdl("b", "s", "c", ["o.status"], ["status"]);
+			expect(ddl).toBe("CREATE INDEX idx_covering ON `b`.`s`.`c`(o.status, status);");
+		});
+	});
 });
