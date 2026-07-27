@@ -56,8 +56,12 @@ it executed -- the result says the tool has returned nothing useful several time
 and must not be called again -- that is a call-budget outcome, not evidence about
 the project. Report it as "GitLab project resolution was not attempted for
 `<name>`: the search tool was short-circuited after repeated empty results", and
-never as "the project does not exist". Reuse any id you already hold from STEP 0
-or an earlier STEP 1 rather than treating the turn as unresolved.
+never as "the project does not exist". Reuse ONLY an id you already hold for THAT
+SAME project, from STEP 0 or an earlier STEP 1. An id you resolved for a
+different service is not a fallback -- using it would run project-scoped calls
+against the wrong repository and report another project's commits as this one's.
+If you hold no id for the project in question, make no project-scoped call for it
+and report its resolution as not attempted.
 
 Worked example: service `customer-assignments`
 -> focus block has `- GitLab numeric project_id: 4471 (pvhcorp/b2b/customer-assignments)`
