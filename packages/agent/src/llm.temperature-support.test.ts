@@ -121,6 +121,8 @@ describe("subAgent resolves its own manifest model (SIO-1235)", () => {
 		expect(options).toBeDefined();
 		// subAgent is a TOOL_BINDING_ROLE, so createLlm skips withFallbacks -- exactly one model
 		// is constructed. More than one would mean a fallback chain crept back in.
+		// SIO-1262 (CodeRabbit, PR #503): this is also why the manifests deliberately declare NO
+		// `fallback:` -- RunnableWithFallbacks cannot bindTools(), so one would be dead config.
 		expect(constructorCalls).toHaveLength(1);
 	});
 

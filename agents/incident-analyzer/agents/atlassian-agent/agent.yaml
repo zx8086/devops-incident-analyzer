@@ -4,9 +4,11 @@ version: 0.1.0
 description: Read-only Jira and Confluence specialist for incident context, runbook lookup, and historical correlation.
 
 model:
+  # SIO-1262: no `fallback:` here on purpose. subAgent is a TOOL_BINDING_ROLE and
+  # llm.ts returns the primary unwrapped for those -- RunnableWithFallbacks does not
+  # implement bindTools(), which createReactAgent requires. A fallback listed here
+  # would be dead config, which is the exact defect SIO-1235 fixed.
   preferred: claude-sonnet-4-6
-  fallback:
-    - claude-haiku-4-5
   constraints:
     temperature: 0.1
     max_tokens: 2048

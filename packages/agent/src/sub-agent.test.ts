@@ -46,7 +46,7 @@ function toolMsg(
 }
 
 describe("getSubAgentRecursionLimit", () => {
-	test("returns 40 for elastic when env unset", () => {
+	test("returns 60 for elastic when env unset", () => {
 		expect(getSubAgentRecursionLimit("elastic", {})).toBe(60);
 	});
 
@@ -96,7 +96,7 @@ describe("getSubAgentRecursionLimit", () => {
 	});
 
 	test("falls back to default on invalid env values", () => {
-		// non-numeric, zero, negative, empty -- all clamp back to 40
+		// non-numeric, zero, negative, empty -- all clamp back to the elastic default (60)
 		for (const raw of ["abc", "0", "-5", ""]) {
 			expect(getSubAgentRecursionLimit("elastic", { SUBAGENT_ELASTIC_RECURSION_LIMIT: raw })).toBe(60);
 		}
