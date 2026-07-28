@@ -33,18 +33,65 @@ run that did not*. `git log --since --until` answers it in minutes:
 |---|---|---|
 | sub-agent model | `claude-sonnet-4-6` (inherited from root) | **`claude-haiku-4-5`** |
 | ReAct cycle | 2 super-steps | **3** |
-| gitlab reasoning turns | ~12 | **~8** |
+| gitlab reasoning turns | ~12 (no explicit limit) | **~8** |
 
-Two commits did it:
+> **CORRECTION (2026-07-28).** The comparison above is right, but the narrative below
+> originally named only TWO commits and mis-stated two numbers. Both errors UNDERSTATE the
+> regression. Re-derived from `git log` over the full 37-commit window between the two runs.
 
+**Three** config changes, not two. The missing one is SIO-1213 — and it is what made the
+dead-config defect matter at all:
+
+- **SIO-1213** (`cd7c628a`, 07-26 00:41) bumped the ROOT manifest from `claude-sonnet-4-6` to
+  `claude-sonnet-5`. The sub-agent manifests were still dead config, so this silently moved all
+  seven specialists onto **Sonnet 5**, where they ran for the next 24 hours. SIO-1235's own source
+  comment says exactly this: *"That is why SIO-1213 flipping one line in the root agent.yaml
+  silently moved all seven specialists onto Sonnet 5."*
 - **SIO-1235** (`aaad8eec`, 07-27 00:11) correctly fixed dead config — the seven sub-agent manifests
   declared `claude-haiku-4-5` and it had never taken effect since the original scaffold. Fixing it
-  moved every specialist OFF the root model (then Sonnet 4.6) and ONTO Haiku 4.5.
+  moved every specialist OFF the root model and ONTO Haiku 4.5. **The drop was Sonnet 5 -> Haiku
+  4.5**, not Sonnet 4.6 -> Haiku 4.5 as originally written here.
 - **SIO-1250** (`86a47956`, 07-27 15:15 — **2h14m before the bad run**) installed `preModelHook`.
   It is a graph NODE, so a cycle became three super-steps and every sub-agent silently lost a third
   of its turns.
 
-Neither was a bug. Both were unmeasured against the DEVOPS-1405 baseline.
+Effective specialist model over time:
+
+| When | root `agent.yaml` | sub-agent manifest | effective specialist model |
+|---|---|---|---|
+| good run `e4268905` | `claude-sonnet-4-6` | `claude-haiku-4-5` (DEAD) | **sonnet-4-6** (inherited) |
+| SIO-1213 07-26 00:41 | **`claude-sonnet-5`** | `claude-haiku-4-5` (still DEAD) | **sonnet-5** (inherited) |
+| SIO-1235 07-27 00:11 | `claude-sonnet-5` | `claude-haiku-4-5` (now LIVE) | **haiku-4-5** |
+| now (SIO-1262) | `claude-sonnet-5` | `claude-sonnet-4-6` | **sonnet-4-6** (pinned) |
+
+Two consequences originally missed:
+
+1. The A/B in "The evidence" (haiku-4-5 vs sonnet-4-6) reproduces the **good-run** baseline, not
+   the state immediately preceding the regression. The 0.45 -> 0.78 result stands; the claim that
+   it "restored what was there before" is true of 07-25, not of 07-26.
+2. The specialists are now **pinned a generation behind root** (sonnet-4-6 vs sonnet-5). That is
+   deliberate — sonnet-4-6 is what the good run measured and what `model:probe` cleared — but it
+   means the next root bump will silently NOT carry them. That is the mirror image of the SIO-1213
+   defect, and was equally unasserted until the guard added in
+   `packages/agent/src/sub-agent-effective-config.test.ts`.
+
+Second correction: the recursion row. At the good run **no per-datasource limit existed**.
+`e4268905`'s `sub-agent.ts` defines only `ELASTIC_RECURSION_LIMIT_DEFAULT = 40`;
+`getSubAgentRecursionLimit` returned `undefined` for every other datasource and the caller spread
+it only when defined, so gitlab ran on LangGraph's default of 25 super-steps.
+`RECURSION_LIMIT_BY_DATASOURCE` was **introduced** by SIO-1232 (`b7f0d5f4`, 07-26 22:34):
+
+| When | gitlab limit | nodes/cycle | effective LLM turns |
+|---|---|---|---|
+| good run `e4268905` | none -> LangGraph default 25 | 2 | **~12** |
+| SIO-1232 07-26 22:34 (introduces the table) | 24 | 2 | ~11 |
+| SIO-1250 07-27 15:15 (adds `pre_model_hook`) | 24 | **3** | **~8** |
+| now (SIO-1262) | 36 | 3 | **~12** |
+
+The restore to 36 lands back at good-run parity — correct outcome, different arithmetic than the
+"24 was annotated as buying ~11 turns" framing below.
+
+None of the three was a bug. All three were unmeasured against the DEVOPS-1405 baseline.
 
 ## The evidence
 
@@ -136,11 +183,25 @@ confidence well above 0.45.
    manifest plus the limits.
 3. **One incident, one query.** The 0.78 is a single data point on a replay of the same question.
    Run a fresh incident before trusting it.
-4. **[SIO-1261](https://linear.app/siobytes/issue/SIO-1261) is open and now higher-stakes.**
-   `probeGitlab` (`packages/agent/src/resolve-identifiers.ts`) calls `gitlab_search` with
-   `scope: "projects"` and **no `group_id`**, contradicting project-resolution's "group-scoped
-   search, never global" rule. SIO-1258 made the focus-block id AUTHORITATIVE, so a wrong id now
-   means investigating the wrong repository rather than wasting a call.
+4. **[SIO-1261](https://linear.app/siobytes/issue/SIO-1261) is open, and PROBED LIVE 2026-07-28 —
+   it is not a hypothetical.** `probeGitlab` (`packages/agent/src/resolve-identifiers.ts:675`)
+   deterministically resolves `order-service` — the exact service in this incident — to
+   **`axet/android-call-recorder`**, a stranger's public repo (project id 2770337). SIO-1258 made
+   the focus-block id AUTHORITATIVE, so this points the sub-agent at the wrong repository rather
+   than wasting a call. Three stacked defects, only the first of which is filed:
+
+   1. no `group_id` — live global search returned 20 rows, **zero** of them pvhcorp;
+   2. the search term is `longestToken`, and `normalize` strips the `-service` suffix, so it
+      searches `"order"`, not `"order-service"`;
+   3. `matchesFocus` is **vacuous** here — `"recorder"` contains the substring `"order"`, so it
+      returned `true` for all 19 global rows and `.find()` yields row 0.
+
+   Adding `group_id` alone does NOT fix it: group-scoped search for `"order"` still resolves
+   `pvhcorp/membership-and-loyalty/ddm/microservices/order`, the wrong pvhcorp repo. Only
+   `group_id` + the full service name as the search term reaches
+   `pvhcorp/b2b/oit/order-service` (id 48543975). The ticket's other open question is settled:
+   the SKILL.md "never global" warning is ACCURATE for `scope: "projects"`, so the prose stands
+   and the code must move to match it.
 5. **Six Linear tickets sit in "In Review"** — SIO-1256/1257/1258/1259/1260/1262. Not moved to Done
    without explicit approval.
 
