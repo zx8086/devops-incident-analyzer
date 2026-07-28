@@ -1,5 +1,29 @@
 # HANDOFF — Defects surfaced by the 2026-07-27 17:29 live replay
 
+> ## SUPERSEDED FRAMING — read `HANDOFF-2026-07-27-sio1241-config-regression.md` first
+>
+> The five defects below are real and all five were fixed and merged. **But they were symptoms, not
+> the cause.** The report quality regressed because of TWO CONFIG CHANGES between
+> [DEVOPS-1405](https://pvhcorp.atlassian.net/browse/DEVOPS-1405) (2026-07-25, an excellent 24KB
+> report) and the run that produced this document:
+>
+> - **SIO-1235** moved all 7 sub-agents off the root model onto `claude-haiku-4-5`.
+> - **SIO-1250** installed `preModelHook`, a graph NODE, making a ReAct cycle 3 super-steps instead
+>   of 2 and cutting every sub-agent's reasoning turns by a third.
+>
+> Restoring both ([SIO-1262](https://linear.app/siobytes/issue/SIO-1262), PR #503) took confidence
+> **0.45 -> 0.78** with zero truncations, on plain `main`, before any of the fixes below.
+>
+> Two specific corrections to the text that follows:
+> - **Defect 5 is misdiagnosed.** It is NOT an action-group gap -- `aws_ecs_list_tasks` was declared
+>   in `aws-introspect.yaml` all along. It fell off the 25-tool cap because the tail was ordered by
+>   MCP registration order. See SIO-1256.
+> - **Defect 4's budget claim is off by one.** gitlab-agent headroom is 1 slot (16 of 17), not 0.
+>
+> With the config fixed, Defect 1 (truncation) and Defect 4 (re-resolution) largely stop occurring:
+> Sonnet made 3 `gitlab_search` calls natively vs 4 with the fix on Haiku, and nothing truncated.
+
+
 - **Date**: 2026-07-27
 - **Parent**: [SIO-1241](https://linear.app/siobytes/issue/SIO-1241) — the five original children are Done, except SIO-1242 ([PR #497](https://github.com/zx8086/devops-incident-analyzer/pull/497))
 - **Tickets for this document** (all Backlog, filed 2026-07-27):
