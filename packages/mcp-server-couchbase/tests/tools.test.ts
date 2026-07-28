@@ -3,6 +3,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import toolRegistry from "../src/tools";
+import { withLatencyMs } from "../src/tools/getClusterHealth";
 import { logger } from "../src/utils/logger";
 import { testConfig } from "./test.config";
 import { type MockBucket, type MockCluster, mockConnection, mockServer } from "./test.utils";
@@ -251,6 +252,22 @@ describe("SIO-1107 Adopted Tool Tests", () => {
 		expect(cluster.bucketCalls).toContain("second-bucket");
 	});
 
+	// SIO-1264: the misleading `latency_us` is replaced, not merely supplemented -- see the comment
+	// on withLatencyMs. Leaving it beside a disagreeing latencyMs would re-invite the misread.
+	test("capella_get_cluster_health reports ping latency in named units and drops the mislabelled field", async () => {
+		const clusterResult = await call("capella_get_cluster_health", {});
+		const clusterEntry = JSON.parse(clusterResult.content[0].text).ping.services.query[0];
+		expect(clusterEntry.latencyNs).toBe(250);
+		expect(clusterEntry).not.toHaveProperty("latency_us");
+		// Sibling fields survive the remap.
+		expect(clusterEntry.state).toBe("ok");
+
+		const bucketResult = await call("capella_get_cluster_health", { bucket_name: "second-bucket" });
+		const bucketEntry = JSON.parse(bucketResult.content[0].text).ping.services.kv[0];
+		expect(bucketEntry.latencyNs).toBe(120);
+		expect(bucketEntry).not.toHaveProperty("latency_us");
+	});
+
 	test("capella_get_scopes_and_collections prepends the bucket header and routes bucket_name", async () => {
 		const defaultResult = await call("capella_get_scopes_and_collections", {});
 		expect(defaultResult.content[0].text).toContain("Bucket: default");
@@ -414,5 +431,46 @@ describe("SIO-1107 Adopted Tool Tests", () => {
 		const lowSelectivity = await call("capella_get_low_selectivity_queries", { limit: 3 });
 		expect(lowSelectivity.content[0].text).toContain("Queries With Low Index Selectivity");
 		expect(cluster.queryCalls.at(-1)?.statement).toMatch(/LIMIT 3;$/);
+	});
+});
+
+describe("SIO-1264 withLatencyMs", () => {
+	// The SDK divisor is 1e6, NOT 1e3: diagnosticstypes.js:95 emits `latency_us: svc.latency *
+	// 1000000` from a MILLISECOND source, so the field carries nanoseconds under a microsecond
+	// name. Verified live -- a kv endpoint reporting latency_us 15000000 sits behind a measured
+	// 18.1 ms TCP round trip.
+	//
+	// These are the real raw values from run 2445908e (DEVOPS-1407). The report published them as
+	// "264,000-280,000 ms" and "14,000-22,000 ms" by dividing by 1e3. Dividing by 1e6 recovers the
+	// values that were actually true. This test is the regression pin for the divisor: a /1e3
+	// implementation reproduces the exact fabrication the ticket exists to fix.
+	test("converts the run 2445908e raw values to the milliseconds that were actually true", () => {
+		const mapped = withLatencyMs({
+			services: {
+				query: [{ latency_us: 264_000_000, state: "ok" }, { latency_us: 280_000_000 }],
+				kv: [{ latency_us: 14_000_000 }, { latency_us: 22_000_000 }],
+			},
+		}) as { services: Record<string, Array<Record<string, unknown>>> };
+
+		expect(mapped.services.query.map((e) => e.latencyMs)).toEqual([264, 280]);
+		expect(mapped.services.kv.map((e) => e.latencyMs)).toEqual([14, 22]);
+		// The published-but-false numbers must not appear anywhere in the output.
+		expect(mapped.services.query.map((e) => e.latencyMs)).not.toContain(264_000);
+		// Fidelity is kept under an honest name; the misleading one is gone.
+		expect(mapped.services.query[0].latencyNs).toBe(264_000_000);
+		expect(mapped.services.query[0]).not.toHaveProperty("latency_us");
+		expect(mapped.services.query[0].state).toBe("ok");
+	});
+
+	test("leaves payloads it does not understand untouched", () => {
+		const noServices = { id: "ping-1", version: 2 };
+		expect(withLatencyMs(noServices)).toBe(noServices);
+		expect(withLatencyMs(null)).toBeNull();
+		expect(withLatencyMs("not-an-object")).toBe("not-an-object");
+		// A non-numeric latency_us is passed through rather than coerced to NaN.
+		const odd = withLatencyMs({ services: { query: [{ latency_us: "250" }] } }) as {
+			services: { query: Array<Record<string, unknown>> };
+		};
+		expect(odd.services.query[0]).toEqual({ latency_us: "250" });
 	});
 });
