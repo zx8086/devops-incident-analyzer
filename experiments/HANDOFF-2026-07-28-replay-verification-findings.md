@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Date** | 2026-07-28 |
-| **Tickets** | **None yet — create four.** Suggested: judge-abort fail-closed (High), judge tokens streamed to the UI (High), AWS absence exit pre-empted (Medium), missing Confidence line (Medium) |
+| **Tickets** | [SIO-1270](https://linear.app/siobytes/issue/SIO-1270) judge-abort fail-closed (High) · [SIO-1271](https://linear.app/siobytes/issue/SIO-1271) judge tokens streamed to the UI (High) · [SIO-1272](https://linear.app/siobytes/issue/SIO-1272) AWS absence exit pre-empted (Medium) · [SIO-1273](https://linear.app/siobytes/issue/SIO-1273) missing Confidence line (Medium) |
 | **Parent context** | [SIO-1266](https://linear.app/siobytes/issue/SIO-1266), [SIO-1268](https://linear.app/siobytes/issue/SIO-1268) — these were found while verifying their fixes, and are adjacent to but NOT covered by them |
 | **Repo state** | `main` at `8688332e`. Five PRs open and awaiting review: [#508](https://github.com/zx8086/devops-incident-analyzer/pull/508) SIO-1264, [#509](https://github.com/zx8086/devops-incident-analyzer/pull/509) SIO-1265, [#510](https://github.com/zx8086/devops-incident-analyzer/pull/510) SIO-1267, [#511](https://github.com/zx8086/devops-incident-analyzer/pull/511) SIO-1266, [#512](https://github.com/zx8086/devops-incident-analyzer/pull/512) SIO-1268 |
 | **Source run** | thread `sio1264-1268-replay`, requestId `0e8c9311-84b2-43d4-9e0a-75a7dcd6468c`, runId `eaebc62b-3e90-4b0d-942f-9220fd2bf058`, 2026-07-28T10:06Z, 362s, 43 tools, 4 datasources |
@@ -60,7 +60,7 @@ The four items below are what the same run exposed that those PRs do **not** add
 
 ---
 
-## Finding 1 — the absence judge fails closed into an actively wrong caveat (High)
+## Finding 1 — [SIO-1270](https://linear.app/siobytes/issue/SIO-1270) — the absence judge fails closed into an actively wrong caveat (High)
 
 ### Evidence from the run
 
@@ -155,7 +155,7 @@ tighter in practice.
 
 ---
 
-## Finding 2 — the absence judge's tokens are streamed to the browser (High)
+## Finding 2 — [SIO-1271](https://linear.app/siobytes/issue/SIO-1271) — the absence judge's tokens are streamed to the browser (High)
 
 ### Root cause, confirmed
 
@@ -207,7 +207,7 @@ Add a test that a judge-role token never produces a `type:"message"` event.
 
 ---
 
-## Finding 3 — SIO-1268's absence exit is pre-empted by the run-wide backstop (Medium)
+## Finding 3 — [SIO-1272](https://linear.app/siobytes/issue/SIO-1272) — SIO-1268's absence exit is pre-empted by the run-wide backstop (Medium)
 
 ### Evidence
 
@@ -251,7 +251,7 @@ exit permanently.
 
 ---
 
-## Finding 4 — the report carried no Confidence line, and scored 0 (Medium)
+## Finding 4 — [SIO-1273](https://linear.app/siobytes/issue/SIO-1273) — the report carried no Confidence line, and scored 0 (Medium)
 
 ### Evidence
 
