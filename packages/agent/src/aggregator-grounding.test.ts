@@ -6,6 +6,7 @@ import {
 	buildPrematureAbsenceCaveats,
 	detectPrematureAbsence,
 	detectUngroundedBlockers,
+	extractClaimEntities,
 	rewriteNoIndexMisread,
 	rewriteUngroundedBlockers,
 	rewriteUngroundedRootCause,
@@ -602,5 +603,49 @@ describe("detectPrematureAbsence: enumeration-backed confirmed negative (SIO-124
 			[result({ dataSourceId: "aws", toolOutputs: [{ toolName: "aws_x", rawJson: { total: 3 } }] })],
 		);
 		expect(contradictedDetails[0]?.dataSourceId).toBe("aws");
+	});
+});
+
+// SIO-1269: extractClaimEntities returned ISO-8601 fragments on Correlated Timeline rows. Because
+// a payload essentially never contains "2026-07-28t05", isConfirmedNegative's "no payload mentions
+// any entity" test passed vacuously and exempted the claim from the premature-absence cap -- on
+// exactly the table shape this system emits. A garbage entity list is WORSE than an empty one:
+// an empty list fails closed (isConfirmedNegative returns false), garbage fails OPEN.
+describe("extractClaimEntities (SIO-1269)", () => {
+	// The verbatim production row. Pre-fix this returned ["2026-07-28t05", "46z-06"].
+	const PROD_ROW =
+		"| 2026-07-28T05:12:46Z-06:12:46Z (investigation window) | Elastic | 0 hits for CHANNEL_CLOSED_WHILE_IN_FLIGHT in exact window per elasticsearch_multi_search | - |";
+
+	test("extracts the real entity from a timestamp-led Correlated Timeline row", () => {
+		expect(extractClaimEntities(PROD_ROW)).toEqual(["channel_closed_while_in_flight"]);
+	});
+
+	test("emits no ISO-8601 timestamp fragment", () => {
+		for (const e of extractClaimEntities(PROD_ROW)) {
+			expect(e).not.toMatch(/^\d{4}-\d{2}/);
+			expect(e).not.toMatch(/^\d+z?-\d+$/);
+		}
+	});
+
+	// A bare timestamp range with no entity must yield NOTHING, not a fragment. Empty fails closed:
+	// isConfirmedNegative short-circuits to false and the pre-SIO-1242 flag stands.
+	test("a row whose only tokens are timestamps yields no entities", () => {
+		expect(extractClaimEntities("| 2026-07-28T05:12:46Z-06:12:46Z | Elastic | no data | - |")).toEqual([]);
+	});
+
+	// A tool name is provenance, not the thing claimed absent. Counting it would let a wrapped
+	// envelope that echoes its own tool name defeat the SIO-1242 exemption.
+	test("does not treat a datasource tool name as an entity", () => {
+		expect(extractClaimEntities(PROD_ROW)).not.toContain("elasticsearch_multi_search");
+	});
+
+	// The shapes SIO-1242 depends on must keep extracting.
+	test("still extracts backticked, dotted and hyphenated identifiers", () => {
+		expect(extractClaimEntities("`prana-order-service` is not present across all 5 ECS clusters.")).toContain(
+			"prana-order-service",
+		);
+		expect(extractClaimEntities("no documents matched service.name for checkout-api")).toEqual(
+			expect.arrayContaining(["checkout-api"]),
+		);
 	});
 });
