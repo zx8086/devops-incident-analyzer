@@ -319,6 +319,14 @@ const RECURSION_LIMIT_BY_DATASOURCE: Record<string, number> = {
 	atlassian: 30,
 };
 
+// SIO-1268: default ON, matching the RESOLVE_IDENTIFIERS_ENABLED / HIL_LEARNING_ENABLED idiom.
+// Set AWS_ABSENCE_EARLY_EXIT_ENABLED=false (or 0) to disable; the detector then never latches and
+// every path is byte-identical to pre-SIO-1268. Read at CALL time so flipping it needs no redeploy.
+export function isAwsAbsenceEarlyExitEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+	const v = env.AWS_ABSENCE_EARLY_EXIT_ENABLED;
+	return v !== "false" && v !== "0";
+}
+
 export function getSubAgentRecursionLimit(dataSourceId: string, env: NodeJS.ProcessEnv = process.env): number {
 	const fallback = RECURSION_LIMIT_BY_DATASOURCE[dataSourceId] ?? SUB_AGENT_RECURSION_LIMIT_DEFAULT;
 	// SUBAGENT_ELASTIC_RECURSION_LIMIT is kept as a back-compat alias so deployed ops config does
@@ -1442,6 +1450,10 @@ ${state.correlationFetchDirective}`
 			capBytes,
 			config,
 			rawOutputs,
+			// SIO-1268: AWS-only. Scoped by dataSourceId here rather than inside the guard so the
+			// ledger cannot be built at all for elastic/gitlab/kafka runs.
+			awsAbsenceEarlyExit: dataSourceId === "aws" && isAwsAbsenceEarlyExitEnabled(),
+			focusServices: focus?.services ?? [],
 		});
 
 		// SIO-1250: bound the CUMULATIVE loop context. The per-result cap above cannot do

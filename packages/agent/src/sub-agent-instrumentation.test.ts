@@ -1017,3 +1017,131 @@ describe("SIO-1259: prose 'nothing found' results reach the generic guard", () =
 		expect(stop?.unproductiveSearches).toBe(0);
 	});
 });
+
+// SIO-1268: end-to-end through instrumentTools -- the deterministic exit fires only after a
+// COMPLETE, clean ECS enumeration, hands the model a directive to write the negative finding, and
+// logs its evidence exactly once.
+describe("SIO-1268 AWS absence early exit (end to end)", () => {
+	const CLUSTER_ARN = (n: string) => `arn:aws:ecs:eu-west-1:123456789012:cluster/${n}`;
+	const SERVICE_ARN = (c: string, s: string) => `arn:aws:ecs:eu-west-1:123456789012:service/${c}/${s}`;
+
+	function payloadTool(name: string, payloadFor: (args: Record<string, unknown>) => string) {
+		let calls = 0;
+		const t = tool(
+			async (args: Record<string, unknown>) => {
+				calls += 1;
+				return payloadFor(args);
+			},
+			{
+				name,
+				description: "ECS list fixture.",
+				schema: z.object({ cluster: z.string().optional() }).passthrough(),
+			},
+		);
+		return { tool: t, getCalls: () => calls };
+	}
+
+	function harness(ctxOver: Partial<InstrumentContext> = {}) {
+		const { logger, entries } = makeLog();
+		const clusters = payloadTool("aws_ecs_list_clusters", () =>
+			JSON.stringify({ clusterArns: [CLUSTER_ARN("shared-a"), CLUSTER_ARN("shared-b")] }),
+		);
+		const services = payloadTool("aws_ecs_list_services", (args) =>
+			JSON.stringify({ serviceArns: [SERVICE_ARN(String(args.cluster ?? "x"), "billing-api")] }),
+		);
+		const startQuery = payloadTool("aws_logs_start_query", () => JSON.stringify({ queryId: "q-1" }));
+		const wrapped = instrumentTools([clusters.tool, services.tool, startQuery.tool], {
+			dataSourceId: "aws",
+			deploymentId: "estate:eu-oit-prd",
+			log: logger,
+			awsAbsenceEarlyExit: true,
+			focusServices: ["order-service"],
+			...ctxOver,
+		});
+		const byName = new Map(wrapped.map((w) => [w.name, w]));
+		return { entries, byName, clusters, services, startQuery };
+	}
+
+	const walk = async (byName: Map<string, StructuredToolInterface>) => {
+		await byName
+			.get("aws_ecs_list_clusters")
+			?.invoke({ id: "c", name: "aws_ecs_list_clusters", args: {}, type: "tool_call" });
+		for (const c of ["shared-a", "shared-b"]) {
+			await byName
+				.get("aws_ecs_list_services")
+				?.invoke({ id: `s-${c}`, name: "aws_ecs_list_services", args: { cluster: c }, type: "tool_call" });
+		}
+	};
+
+	test("blocks a NEW Insights query and directs the model to write the negative finding", async () => {
+		const { entries, byName, startQuery } = harness();
+		await walk(byName);
+
+		const refused = await byName
+			.get("aws_logs_start_query")
+			?.invoke({ id: "q", name: "aws_logs_start_query", args: { logGroupName: "/aws/ecs/x" }, type: "tool_call" });
+
+		// The query never reached AWS.
+		expect(startQuery.getCalls()).toBe(0);
+		const text = String(refused instanceof ToolMessage ? refused.content : refused);
+		expect(text).toContain("definitive negative finding, not a gap");
+		expect(text).toContain("Write your findings NOW");
+
+		// Logged once, with the evidence behind the decision.
+		const exits = entries.filter((e) => e.event === "subagent.aws_service_absent_early_exit");
+		expect(exits).toHaveLength(1);
+		expect(exits[0]).toMatchObject({ clustersEnumerated: 2, servicesEnumerated: 2, deploymentId: "estate:eu-oit-prd" });
+		// And the accompanying stop is tagged so a replay can tell it from a repetition stop.
+		expect(entries.find((e) => e.event === "subagent.loop_guard_stop")?.reason).toBe("aws_service_absent");
+	});
+
+	test("emits the decision log only once across repeated blocked calls", async () => {
+		const { entries, byName } = harness();
+		await walk(byName);
+		for (let i = 0; i < 3; i++) {
+			await byName
+				.get("aws_logs_start_query")
+				?.invoke({ id: `q${i}`, name: "aws_logs_start_query", args: { logGroupName: `/g/${i}` }, type: "tool_call" });
+		}
+		expect(entries.filter((e) => e.event === "subagent.aws_service_absent_early_exit")).toHaveLength(1);
+	});
+
+	test("does NOT fire when the focus service IS present in the estate", async () => {
+		const { entries, byName, startQuery } = harness();
+		await byName
+			.get("aws_ecs_list_clusters")
+			?.invoke({ id: "c", name: "aws_ecs_list_clusters", args: {}, type: "tool_call" });
+		// A matching service name -> the hunt must continue.
+		const matching = instrumentTools(
+			[
+				tool(async () => JSON.stringify({ serviceArns: [SERVICE_ARN("shared-a", "order-service")] }), {
+					name: "aws_ecs_list_services",
+					description: "x",
+					schema: z.object({ cluster: z.string().optional() }).passthrough(),
+				}),
+			],
+			{ dataSourceId: "aws", log: makeLog().logger, awsAbsenceEarlyExit: true, focusServices: ["order-service"] },
+		);
+		expect(matching).toHaveLength(1);
+
+		await byName
+			.get("aws_ecs_list_services")
+			?.invoke({ id: "s", name: "aws_ecs_list_services", args: { cluster: "shared-a" }, type: "tool_call" });
+		// Only one of two clusters walked -> incomplete -> no exit regardless.
+		await byName
+			.get("aws_logs_start_query")
+			?.invoke({ id: "q", name: "aws_logs_start_query", args: { logGroupName: "/aws/ecs/x" }, type: "tool_call" });
+		expect(startQuery.getCalls()).toBe(1);
+		expect(entries.filter((e) => e.event === "subagent.aws_service_absent_early_exit")).toHaveLength(0);
+	});
+
+	test("is inert when the feature is disabled", async () => {
+		const { entries, byName, startQuery } = harness({ awsAbsenceEarlyExit: false });
+		await walk(byName);
+		await byName
+			.get("aws_logs_start_query")
+			?.invoke({ id: "q", name: "aws_logs_start_query", args: { logGroupName: "/aws/ecs/x" }, type: "tool_call" });
+		expect(startQuery.getCalls()).toBe(1);
+		expect(entries.filter((e) => e.event === "subagent.aws_service_absent_early_exit")).toHaveLength(0);
+	});
+});

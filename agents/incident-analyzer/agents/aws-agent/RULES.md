@@ -93,6 +93,16 @@ Pagination Enforcement below). If enumeration here failed, timed out, or was
 truncated, report the enumeration gap for this estate instead -- finding the service
 in another estate does not prove absence in this one.
 
+Once that complete enumeration has run and matched nothing, STOP. Do not search log
+groups or run CloudWatch Insights queries to "double-check" a negative that ECS
+enumeration already settled -- an empty Insights result cannot distinguish absence
+from a badly-chosen window, so it adds no evidence while costing a full cycle per
+poll. This is enforced deterministically (SIO-1268): after a complete, error-free,
+fully-paginated ECS enumeration with no focus match, further ECS calls and
+`aws_logs_start_query` are refused, and the refusal directs you to write the negative
+finding. The Empty-Workload Fallback above still applies to the whole ESTATE being
+empty; it does not apply to one focus service being absent from a populated estate.
+
 ## Estate Observability Topology (SIO-1154)
 
 These estates instrument applications with OpenTelemetry and ship telemetry to

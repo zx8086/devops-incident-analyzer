@@ -1,5 +1,6 @@
 // packages/agent/src/sub-agent-loop-guard.ts
 
+import { matchesFocus } from "@devops-agent/shared";
 import { describeToolResult } from "./sub-agent-tool-result-shape.ts";
 
 // SIO-1029/SIO-1090: the elastic ReAct sub-agent can loop on elasticsearch_search
@@ -95,6 +96,31 @@ const AWS_EMPTY_RESULTS_ADVICE_THRESHOLD = 2;
 // initialised just above -- referencing them earlier would hit the const TDZ.
 const GENERIC_GUARD_EXEMPT_TOOLS = new Set<string>([AWS_GET_QUERY_RESULTS, AWS_DESCRIBE_LOG_GROUPS]);
 
+const AWS_ECS_LIST_CLUSTERS = "aws_ecs_list_clusters";
+const AWS_ECS_LIST_SERVICES = "aws_ecs_list_services";
+
+// SIO-1268: the tools that constitute the FOCUS-SERVICE hunt. Once a COMPLETE, clean ECS
+// enumeration of this estate has shown the focus service is not deployed here, continuing down
+// this chain can only re-confirm a negative. On run 2445908e the estate WITHOUT the service spent
+// iterations ~15..59 doing exactly that -- 191s and 78 messages, against 117s and 29 messages for
+// the estate that HAD it.
+//
+// aws_logs_get_query_results and aws_logs_describe_log_groups are deliberately ABSENT. They are
+// GENERIC_GUARD_EXEMPT_TOOLS (see above) because PR #482 established that blocking an in-flight
+// CloudWatch poll strands a query mid-flight. Blocking aws_logs_start_query alone is sufficient:
+// no new queries start, so the poll loop drains on its own. Nothing outside this set is blocked --
+// account-level work (alarms, health events, the SIO-834 governance inventory path) is unaffected,
+// because absence of the FOCUS service says nothing about the rest of the estate.
+const AWS_ABSENCE_BLOCKED_TOOLS = new Set<string>([
+	"aws_logs_start_query",
+	AWS_ECS_LIST_CLUSTERS,
+	AWS_ECS_LIST_SERVICES,
+	"aws_ecs_describe_services",
+	"aws_ecs_list_tasks",
+	"aws_ecs_describe_tasks",
+	"aws_ecs_describe_task_definition",
+]);
+
 // SIO-1162: an invalid/expired queryId polled via aws_logs_get_query_results returns a
 // bad-input _error ("The provided queryId = ... is invalid"). A queryId is estate/region
 // scoped and short-lived: it only works when polled with the SAME estate passed to
@@ -181,12 +207,58 @@ export const AWS_INVALID_QUERY_ID_ADVICE =
 	"to aws_logs_start_query, and it expires. Do NOT re-poll this id. Re-issue aws_logs_start_query " +
 	"for the SAME estate and log group, then poll the NEW queryId it returns.";
 
+// SIO-1268: emitted ONLY when awsEcsAbsenceProven() is true, i.e. a COMPLETE, error-free ECS
+// enumeration of this estate matched nothing. Phrased to produce the SIO-1149 negative FINDING
+// (aws-agent/RULES.md "Cross-Estate Absence Is a Finding") rather than a gap: that prose already
+// required this and the model ignored it, so the stop restates it at the point of decision, with
+// the evidence already in hand.
+export const AWS_SERVICE_ABSENT_STOP_MESSAGE =
+	"Enumeration of this estate is COMPLETE and conclusive: every ECS cluster was listed, every " +
+	"cluster's services were listed, every continuation page was walked, no call errored, and NONE " +
+	"of the returned cluster or service names match the focus service. That is a definitive " +
+	"negative finding, not a gap -- searching log groups or running CloudWatch Insights queries " +
+	"cannot change it, because an empty query result cannot distinguish absence from a bad window. " +
+	"Do NOT call this tool again. Write your findings NOW, stating that the focus service is not " +
+	"deployed in this estate, and cite the enumeration evidence (how many clusters you walked and " +
+	"which service names you did see). Do not phrase this as 'could not be located', 'unconfirmed', " +
+	"or an un-queried gap.";
+
 export const AWS_START_QUERY_STOP_MESSAGE =
 	"The previous aws_logs_start_query window was rejected as outside the log group's " +
 	"retention window, and you have not re-anchored since. Do NOT re-issue the same query. " +
 	"Call aws_logs_describe_log_groups first to read retentionInDays and creationTime, then " +
 	"re-anchor startTime/endTime to the incident/event timestamp (usually recent) inside " +
 	"[now - retentionInDays, now] before calling aws_logs_start_query again.";
+
+// SIO-1268: per-estate ECS enumeration ledger. Each AWS estate is an INDEPENDENT runSubAgent
+// invocation with its own LoopGuardState (sub-agent.ts AWS fan-out), so this is already correctly
+// scoped to one estate -- no estate key is needed.
+//
+// COMPLETENESS is the whole point. A partial enumeration must NEVER early-exit: that would
+// suppress a genuine finding, which is strictly worse than the wasted iterations this fixes. Every
+// field below exists to make "complete" provable rather than assumed, and the bias is
+// one-directional: we would rather waste iterations than hide a real service.
+export interface AwsEcsEnumerationState {
+	// Off entirely when the flag is off or focus is empty. matchesFocus returns TRUE for an empty
+	// focus list (shared/focus-match.ts), so an empty focus would make `matched` vacuously true --
+	// safe, but the explicit gate is clearer and cheaper.
+	enabled: boolean;
+	focusServices: string[];
+	// Set when a list_clusters page arrived with NO continuation token and NO _truncated.
+	clusterPagesComplete: boolean;
+	// Union of cluster NAMES (not ARNs) seen across all list_clusters pages.
+	clusters: Set<string>;
+	// Cluster names whose list_services reached a final page.
+	servicesComplete: Set<string>;
+	// A cluster or service name matched the focus -> the service may be here; never exit.
+	matched: boolean;
+	// Any _error envelope, any _truncated page, any unparseable result, or any loop-guard stop on
+	// an ECS list call. Latches ON and is never cleared: once enumeration is known-incomplete for
+	// this estate it stays that way, so a later clean re-list cannot resurrect the exit.
+	failed: boolean;
+	// One-shot, so the decision is logged once rather than on every blocked call.
+	exitLogged: boolean;
+}
 
 export interface LoopGuardState {
 	seenSignatures: Set<string>;
@@ -214,9 +286,19 @@ export interface LoopGuardState {
 	// SIO-1232: generic per-tool and per-run unproductive counters for every non-bespoke tool.
 	unproductiveByTool: Map<string, number>;
 	totalUnproductive: number;
+	// SIO-1268: ECS enumeration ledger driving the "service not deployed in this estate" exit.
+	awsEcs: AwsEcsEnumerationState;
 }
 
-export function createLoopGuardState(): LoopGuardState {
+export interface LoopGuardOptions {
+	// SIO-1268: passed from sub-agent.ts, which owns the env read -- this module stays pure (no
+	// process.env) and therefore directly unit-testable, matching its current shape.
+	awsAbsenceEarlyExit?: boolean;
+	focusServices?: string[];
+}
+
+export function createLoopGuardState(opts: LoopGuardOptions = {}): LoopGuardState {
+	const focusServices = opts.focusServices ?? [];
 	return {
 		seenSignatures: new Set<string>(),
 		unproductiveSearches: 0,
@@ -226,6 +308,17 @@ export function createLoopGuardState(): LoopGuardState {
 		awsInvalidQueryId: false,
 		unproductiveByTool: new Map<string, number>(),
 		totalUnproductive: 0,
+		awsEcs: {
+			// Defaults keep every existing call site and test compiling and behaving unchanged.
+			enabled: opts.awsAbsenceEarlyExit === true && focusServices.length > 0,
+			focusServices,
+			clusterPagesComplete: false,
+			clusters: new Set<string>(),
+			servicesComplete: new Set<string>(),
+			matched: false,
+			failed: false,
+			exitLogged: false,
+		},
 	};
 }
 
@@ -439,6 +532,135 @@ function aggregationsAreEmpty(node: Record<string, unknown>): boolean {
 // Decide BEFORE invoking whether this call should be short-circuited. Trips when the
 // exact same (tool, args) call was already seen, OR (elastic) the hard unproductive-call
 // cap is exhausted, OR (aws) a prior retention rejection has not yet been re-anchored.
+// SIO-1268: ECS identifiers arrive as ARNs from the list tools
+// (arn:aws:ecs:eu-west-1:123:cluster/my-cluster, .../service/my-cluster/my-service), but the
+// `cluster` ARG on aws_ecs_list_services may be a SHORT NAME or a full ARN (list-services.ts: "Short
+// name or full ARN"). Both sides must reduce to the last path segment or servicesComplete never
+// intersects `clusters` and the exit can never fire.
+//
+// Focus matching uses the extracted NAME, never the ARN: tokenize() splits on [-_.] only
+// (shared/focus-match.ts), so a raw ARN yields account-id and region tokens that make matchesFocus
+// meaningless.
+function ecsLastSegment(arn: string): string {
+	const i = arn.lastIndexOf("/");
+	return i === -1 ? arn : arn.slice(i + 1);
+}
+
+// A page is FINAL only when it carries no continuation token AND was not byte-truncated.
+// _truncated Case B (wrap.ts) has NO cursor but still dropped items -- treating it as final would
+// be exactly the partial-enumeration false positive this design must not produce.
+const ECS_TOKEN_FIELDS = ["nextToken", "NextToken", "Marker", "NextMarker", "PaginationToken"];
+
+function isFinalListPage(obj: Record<string, unknown>): boolean {
+	if ("_truncated" in obj) return false;
+	for (const field of ECS_TOKEN_FIELDS) {
+		const v = obj[field];
+		if (typeof v === "string" && v.length > 0) return false;
+	}
+	return true;
+}
+
+function parseEcsListResult(content: unknown): Record<string, unknown> | null {
+	// Mirrors isUnproductiveResult's coalescing: AWS MCP results arrive as a string today, but
+	// @langchain/mcp-adapters can deliver a raw text-block ARRAY.
+	const coalesced = coalesceTextBlocks(content);
+	const text = typeof content === "string" ? content : (coalesced ?? safeStringify(content));
+	const start = text.indexOf("{");
+	if (start === -1) return null;
+	try {
+		const parsed = JSON.parse(text.slice(start));
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+	} catch {
+		return null;
+	}
+}
+
+// SIO-1268: fold one ECS list result into the ledger. Called from recordResult. Every failure mode
+// -- unparseable, _error, truncated page, missing cluster arg -- sets `failed`, which permanently
+// disables the exit for this estate.
+export function observeEcsListResult(state: LoopGuardState, toolName: string, content: unknown, arg?: unknown): void {
+	const e = state.awsEcs;
+	if (!e.enabled) return;
+	if (toolName !== AWS_ECS_LIST_CLUSTERS && toolName !== AWS_ECS_LIST_SERVICES) return;
+
+	if (awsErrorKind(content) !== null) {
+		e.failed = true;
+		return;
+	}
+	const obj = parseEcsListResult(content);
+	if (obj === null) {
+		e.failed = true;
+		return;
+	}
+	const final = isFinalListPage(obj);
+	if ("_truncated" in obj) e.failed = true;
+
+	if (toolName === AWS_ECS_LIST_CLUSTERS) {
+		const arns = Array.isArray(obj.clusterArns) ? obj.clusterArns : [];
+		for (const a of arns) {
+			if (typeof a !== "string") continue;
+			const name = ecsLastSegment(a);
+			e.clusters.add(name);
+			// A cluster NAMED for the focus service is itself evidence of presence.
+			if (matchesFocus(name, e.focusServices)) e.matched = true;
+		}
+		if (final) e.clusterPagesComplete = true;
+		return;
+	}
+
+	// aws_ecs_list_services
+	const arns = Array.isArray(obj.serviceArns) ? obj.serviceArns : [];
+	for (const a of arns) {
+		if (typeof a !== "string") continue;
+		if (matchesFocus(ecsLastSegment(a), e.focusServices)) e.matched = true;
+	}
+	const args = unwrapCallArgs(arg);
+	const cluster = args && typeof args === "object" ? (args as Record<string, unknown>).cluster : undefined;
+	if (typeof cluster !== "string" || cluster.length === 0) {
+		// Without a cluster arg this page cannot be attributed, so completeness is unprovable.
+		// (The schema requires it, so this is defensive.)
+		e.failed = true;
+		return;
+	}
+	if (final) e.servicesComplete.add(ecsLastSegment(cluster));
+}
+
+// SIO-1268: the exit predicate. Evaluated LAZILY rather than latched at record time, because
+// ToolNode runs one AIMessage's tool calls CONCURRENTLY -- the last list_services to resolve is not
+// necessarily the one that completes the set.
+//
+// Every clause is a completeness requirement:
+//   failed               -> any error/truncation/guard-stop anywhere in the chain
+//   matched              -> the service (or a cluster named for it) IS here
+//   clusterPagesComplete -> list_clusters was walked to its final page
+//   clusters.size > 0    -> a ZERO-cluster estate is NOT proof. That shape is indistinguishable
+//                           from a scoping/permission artifact, and SIO-834 (RULES.md) exists
+//                           precisely because an all-empty estate needs the inventory check.
+//   every cluster walked -> the miss is estate-wide, not "the 3 clusters it happened to try"
+export function awsEcsAbsenceProven(state: LoopGuardState): boolean {
+	const e = state.awsEcs;
+	if (!e.enabled || e.failed || e.matched) return false;
+	if (!e.clusterPagesComplete) return false;
+	if (e.clusters.size === 0) return false;
+	for (const c of e.clusters) {
+		if (!e.servicesComplete.has(c)) return false;
+	}
+	return true;
+}
+
+// Exposed so the instrumentation layer can log the evidence behind the decision exactly once.
+export function consumeAbsenceExitLog(
+	state: LoopGuardState,
+): { clustersEnumerated: number; servicesEnumerated: number; focusServices: string[] } | null {
+	if (state.awsEcs.exitLogged) return null;
+	state.awsEcs.exitLogged = true;
+	return {
+		clustersEnumerated: state.awsEcs.clusters.size,
+		servicesEnumerated: state.awsEcs.servicesComplete.size,
+		focusServices: state.awsEcs.focusServices,
+	};
+}
+
 export function shouldShortCircuit(state: LoopGuardState, toolName: string, signature: string, arg?: unknown): boolean {
 	// SIO-1232: generic guard for every tool without a bespoke ruleset. Previously this returned
 	// false immediately for anything outside GUARDED_TOOLS, i.e. no termination guarantee at all.
@@ -446,12 +668,19 @@ export function shouldShortCircuit(state: LoopGuardState, toolName: string, sign
 		// Protocol/recovery tools bypass EVERY generic rule, including the run-wide backstop --
 		// see GENERIC_GUARD_EXEMPT_TOOLS. This must stay the first check in this branch.
 		if (GENERIC_GUARD_EXEMPT_TOOLS.has(toolName)) return false;
+		// SIO-1268: placed AFTER the exemption so aws_logs_get_query_results and
+		// aws_logs_describe_log_groups keep their PR #482 carve-out unconditionally, and BEFORE the
+		// duplicate/streak rules because the absence conclusion supersedes them.
+		if (AWS_ABSENCE_BLOCKED_TOOLS.has(toolName) && awsEcsAbsenceProven(state)) return true;
 		if (state.seenSignatures.has(signature)) return true;
 		if ((state.unproductiveByTool.get(toolName) ?? 0) >= MAX_UNPRODUCTIVE_PER_TOOL) return true;
 		return state.totalUnproductive >= MAX_UNPRODUCTIVE_PER_RUN;
 	}
 
 	if (toolName === "aws_logs_start_query") {
+		// SIO-1268: no NEW Insights query once absence is proven. Only start_query is stopped;
+		// aws_logs_get_query_results stays exempt above, so any in-flight query still drains.
+		if (awsEcsAbsenceProven(state)) return true;
 		// Exact-duplicate window: never re-issue the identical call.
 		if (state.seenSignatures.has(signature)) return true;
 		// SIO-1141: hard termination backstop -- stop once total unproductive start_query
@@ -493,7 +722,9 @@ export function recordResult(
 	toolName: string,
 	signature: string,
 	content: unknown,
-	_arg?: unknown,
+	// SIO-1268: now READ (observeEcsListResult needs the `cluster` arg to attribute a
+	// list_services page to its cluster), so it is no longer underscore-prefixed.
+	arg?: unknown,
 ): void {
 	if (toolName === AWS_DESCRIBE_LOG_GROUPS) {
 		state.awsStartQueryNeedsReanchor = false;
@@ -523,6 +754,16 @@ export function recordResult(
 		return;
 	}
 	state.seenSignatures.add(signature);
+
+	// SIO-1268: fold ECS list results into the enumeration ledger. No-op for every other tool and
+	// when the detector is disabled.
+	//
+	// Deliberately does NOT alter the SIO-1232 generic accounting below. An empty
+	// {"serviceArns":[]} is classified PRODUCTIVE today (describeToolResult sets hitsLen only for
+	// Elastic-shaped hits.hits), and that MUST stay true: if empty ECS lists began counting,
+	// MAX_UNPRODUCTIVE_PER_TOOL=3 would block list_services on cluster 4 of 7 and complete
+	// enumeration -- the precondition of this whole exit -- would become unreachable.
+	observeEcsListResult(state, toolName, content, arg);
 
 	// SIO-1232: generic accounting for every tool without a bespoke ruleset. gitlab_search
 	// returning a bare `[]` is `bytes: 2` -> contentType "array", topLevelArrayLen 0 ->
@@ -574,8 +815,14 @@ export function isObservedTool(_toolName: string): boolean {
 // SIO-1267: `signature` is optional and, when supplied, splits the generic path into its two real
 // branches. The two bespoke tools keep their single domain-specific message: both already carry
 // concrete recovery instructions (re-anchor the window / use the discovery agg) that a generic
-// duplicate notice would lose, and neither is the tool this ticket is about.
+// duplicate notice would lose, and neither is the tool that ticket is about.
 export function stopMessageFor(toolName: string, state?: LoopGuardState, signature?: string): string {
+	// SIO-1268: checked FIRST because the absence conclusion supersedes every other message,
+	// including the bespoke ones -- "re-anchor your window" and "this exact call was already made"
+	// are both actively wrong advice once the service is known not to be in this estate.
+	if (state !== undefined && AWS_ABSENCE_BLOCKED_TOOLS.has(toolName) && awsEcsAbsenceProven(state)) {
+		return AWS_SERVICE_ABSENT_STOP_MESSAGE;
+	}
 	if (toolName === "aws_logs_start_query") return AWS_START_QUERY_STOP_MESSAGE;
 	// SIO-1232: LOOP_GUARD_STOP_MESSAGE is elastic-specific (it talks about indices, patterns and
 	// the service.name discovery agg), so it must not be handed to a gitlab or kafka tool.

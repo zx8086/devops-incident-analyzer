@@ -4,8 +4,11 @@ import { describe, expect, test } from "bun:test";
 import {
 	AWS_EMPTY_RESULTS_ADVICE,
 	AWS_INVALID_QUERY_ID_ADVICE,
+	AWS_SERVICE_ABSENT_STOP_MESSAGE,
 	AWS_START_QUERY_STOP_MESSAGE,
+	awsEcsAbsenceProven,
 	awsErrorKind,
+	consumeAbsenceExitLog,
 	consumeEmptyAwsResultsAdvice,
 	consumeInvalidQueryIdAdvice,
 	createLoopGuardState,
@@ -18,6 +21,7 @@ import {
 	isObservedTool,
 	isUnproductiveResult,
 	LOOP_GUARD_STOP_MESSAGE,
+	type LoopGuardState,
 	recordResult,
 	reserveSignature,
 	shouldShortCircuit,
@@ -707,5 +711,224 @@ describe("SIO-1259: streak semantics are deliberately unchanged", () => {
 		expect(shouldShortCircuit(state, "aws_logs_get_query_results", poll)).toBe(false);
 		const describeCall = toolCallSignature("aws_logs_describe_log_groups", { logGroupNamePrefix: "/aws/ecs" });
 		expect(shouldShortCircuit(state, "aws_logs_describe_log_groups", describeCall)).toBe(false);
+	});
+});
+
+// SIO-1268: run 2445908e -- the estate WITHOUT the focus service cost 191s / 78 messages / peak
+// iteration 59 of 60, against 117s / 29 messages for the estate that HAD it. The agent had the
+// decisive evidence by ~iteration 15 (list_clusters + list_services across all 7 clusters matched
+// nothing) and spent the rest re-confirming a negative via CloudWatch Insights.
+describe("SIO-1268: complete-ECS-enumeration absence early exit", () => {
+	const FOCUS = ["order-service"];
+	const CLUSTER_ARN = (n: string) => `arn:aws:ecs:eu-west-1:123456789012:cluster/${n}`;
+	const SERVICE_ARN = (c: string, s: string) => `arn:aws:ecs:eu-west-1:123456789012:service/${c}/${s}`;
+	const clustersPage = (names: string[], nextToken?: string) =>
+		JSON.stringify({
+			clusterArns: names.map(CLUSTER_ARN),
+			...(nextToken ? { nextToken } : {}),
+			$metadata: { httpStatusCode: 200 },
+		});
+	const servicesPage = (cluster: string, svcs: string[], nextToken?: string) =>
+		JSON.stringify({ serviceArns: svcs.map((s) => SERVICE_ARN(cluster, s)), ...(nextToken ? { nextToken } : {}) });
+
+	const enabledState = () => createLoopGuardState({ awsAbsenceEarlyExit: true, focusServices: FOCUS });
+	const record = (state: LoopGuardState, tool: string, content: string, args: unknown) =>
+		recordResult(state, tool, toolCallSignature(tool, args), content, args);
+
+	// The eu-oit-prd shape, reduced to two clusters.
+	function walkCleanEstate(state: LoopGuardState) {
+		record(state, "aws_ecs_list_clusters", clustersPage(["shared-a", "shared-b"]), {});
+		record(state, "aws_ecs_list_services", servicesPage("shared-a", ["billing-api"]), {
+			cluster: CLUSTER_ARN("shared-a"),
+		});
+		record(state, "aws_ecs_list_services", servicesPage("shared-b", []), { cluster: "shared-b" });
+	}
+
+	test("a complete, clean, unmatched enumeration proves absence", () => {
+		const state = enabledState();
+		expect(awsEcsAbsenceProven(state)).toBe(false);
+		walkCleanEstate(state);
+		expect(awsEcsAbsenceProven(state)).toBe(true);
+	});
+
+	test("cluster ARNs and short cluster names key the SAME cluster", () => {
+		// list_clusters returns ARNs; the `cluster` arg may be either form ("Short name or full
+		// ARN"). Without last-segment normalization servicesComplete never intersects clusters and
+		// the exit could never fire at all.
+		const state = enabledState();
+		walkCleanEstate(state);
+		expect(state.awsEcs.servicesComplete.has("shared-a")).toBe(true);
+		expect(state.awsEcs.servicesComplete.has("shared-b")).toBe(true);
+	});
+
+	test("a matching SERVICE name suppresses the exit", () => {
+		const state = enabledState();
+		record(state, "aws_ecs_list_clusters", clustersPage(["shared-a"]), {});
+		record(state, "aws_ecs_list_services", servicesPage("shared-a", ["order-service"]), { cluster: "shared-a" });
+		expect(state.awsEcs.matched).toBe(true);
+		expect(awsEcsAbsenceProven(state)).toBe(false);
+	});
+
+	test("a matching CLUSTER name suppresses the exit", () => {
+		const state = enabledState();
+		record(state, "aws_ecs_list_clusters", clustersPage(["order-service-cluster"]), {});
+		record(state, "aws_ecs_list_services", servicesPage("order-service-cluster", []), {
+			cluster: "order-service-cluster",
+		});
+		expect(awsEcsAbsenceProven(state)).toBe(false);
+	});
+
+	// ---- SAFETY CORE: a PARTIAL enumeration must NEVER exit. Suppressing a real finding is
+	// strictly worse than the wasted iterations this ticket fixes.
+	test("an unwalked cluster blocks the exit", () => {
+		const state = enabledState();
+		record(state, "aws_ecs_list_clusters", clustersPage(["a", "b", "c"]), {});
+		record(state, "aws_ecs_list_services", servicesPage("a", []), { cluster: "a" });
+		record(state, "aws_ecs_list_services", servicesPage("b", []), { cluster: "b" });
+		expect(awsEcsAbsenceProven(state)).toBe(false);
+	});
+
+	test("an unwalked list_clusters page blocks the exit", () => {
+		const state = enabledState();
+		record(state, "aws_ecs_list_clusters", clustersPage(["a"], "TOKEN"), {});
+		record(state, "aws_ecs_list_services", servicesPage("a", []), { cluster: "a" });
+		expect(state.awsEcs.clusterPagesComplete).toBe(false);
+		expect(awsEcsAbsenceProven(state)).toBe(false);
+	});
+
+	test("an unwalked list_services page blocks the exit", () => {
+		const state = enabledState();
+		record(state, "aws_ecs_list_clusters", clustersPage(["a"]), {});
+		record(state, "aws_ecs_list_services", servicesPage("a", ["x"], "TOKEN"), { cluster: "a" });
+		expect(awsEcsAbsenceProven(state)).toBe(false);
+	});
+
+	test("a byte-truncated page with NO cursor (Case B) blocks the exit permanently", () => {
+		// wrap.ts Case B has no continuation token but still dropped items. Treating it as final
+		// would be exactly the partial-enumeration false positive this must not produce.
+		const state = enabledState();
+		record(
+			state,
+			"aws_ecs_list_clusters",
+			JSON.stringify({
+				clusterArns: [CLUSTER_ARN("a")],
+				_truncated: { shown: 1, total: 40, advice: "Byte-truncated to fit the size cap..." },
+			}),
+			{},
+		);
+		record(state, "aws_ecs_list_services", servicesPage("a", []), { cluster: "a" });
+		expect(state.awsEcs.failed).toBe(true);
+		expect(awsEcsAbsenceProven(state)).toBe(false);
+	});
+
+	test("an _error on any ECS list call latches the exit off permanently", () => {
+		const state = enabledState();
+		record(state, "aws_ecs_list_clusters", clustersPage(["a", "b"]), {});
+		record(state, "aws_ecs_list_services", servicesPage("a", []), { cluster: "a" });
+		record(state, "aws_ecs_list_services", JSON.stringify({ _error: { kind: "iam-permission-missing" } }), {
+			cluster: "b",
+		});
+		expect(awsEcsAbsenceProven(state)).toBe(false);
+		// Latched: a later clean re-list must not resurrect the exit.
+		record(state, "aws_ecs_list_services", servicesPage("b", []), { cluster: "b" });
+		expect(awsEcsAbsenceProven(state)).toBe(false);
+	});
+
+	test("an estate with ZERO clusters is NOT treated as proof", () => {
+		// Shape-identical to a scoping/permission artifact; SIO-834 requires the inventory path
+		// there, not an early exit.
+		const state = enabledState();
+		record(state, "aws_ecs_list_clusters", clustersPage([]), {});
+		expect(state.awsEcs.clusterPagesComplete).toBe(true);
+		expect(awsEcsAbsenceProven(state)).toBe(false);
+	});
+
+	test("an unparseable ECS result blocks the exit", () => {
+		const state = enabledState();
+		record(state, "aws_ecs_list_clusters", "not json at all", {});
+		expect(state.awsEcs.failed).toBe(true);
+		expect(awsEcsAbsenceProven(state)).toBe(false);
+	});
+
+	test("a list_services page with no cluster arg cannot be attributed, so it blocks the exit", () => {
+		const state = enabledState();
+		record(state, "aws_ecs_list_clusters", clustersPage(["a"]), {});
+		record(state, "aws_ecs_list_services", servicesPage("a", []), {});
+		expect(state.awsEcs.failed).toBe(true);
+		expect(awsEcsAbsenceProven(state)).toBe(false);
+	});
+
+	test("the detector is inert when disabled or focus is empty", () => {
+		for (const opts of [
+			{ awsAbsenceEarlyExit: false, focusServices: FOCUS },
+			{ awsAbsenceEarlyExit: true, focusServices: [] },
+			{},
+		]) {
+			const state = createLoopGuardState(opts);
+			walkCleanEstate(state);
+			expect(state.awsEcs.enabled).toBe(false);
+			expect(awsEcsAbsenceProven(state)).toBe(false);
+		}
+	});
+
+	test("proven absence blocks the hunt chain but not the rest of the estate", () => {
+		const state = enabledState();
+		walkCleanEstate(state);
+		for (const t of ["aws_logs_start_query", "aws_ecs_describe_services", "aws_ecs_list_tasks"]) {
+			expect(shouldShortCircuit(state, t, toolCallSignature(t, { fresh: t }))).toBe(true);
+		}
+		// Account-level work is untouched -- absence of the FOCUS service says nothing about it.
+		const alarms = toolCallSignature("aws_cloudwatch_describe_alarms", { stateValue: "ALARM" });
+		expect(shouldShortCircuit(state, "aws_cloudwatch_describe_alarms", alarms)).toBe(false);
+	});
+
+	// PR #482 (CodeRabbit): the two AWS protocol/recovery tools bypass EVERY generic rule. SIO-1268
+	// must not become the exception that strands an in-flight CloudWatch poll.
+	test("the PR #482 exempt tools stay exempt under a proven absence", () => {
+		const state = enabledState();
+		walkCleanEstate(state);
+		const poll = toolCallSignature("aws_logs_get_query_results", { queryId: "q-1" });
+		expect(shouldShortCircuit(state, "aws_logs_get_query_results", poll)).toBe(false);
+		const desc = toolCallSignature("aws_logs_describe_log_groups", { logGroupNamePrefix: "/aws/ecs" });
+		expect(shouldShortCircuit(state, "aws_logs_describe_log_groups", desc)).toBe(false);
+	});
+
+	test("the absence message supersedes the tool's own stop prose", () => {
+		const state = enabledState();
+		walkCleanEstate(state);
+		expect(stopMessageFor("aws_logs_start_query", state)).toBe(AWS_SERVICE_ABSENT_STOP_MESSAGE);
+		// Un-proven absence keeps the re-anchor advice.
+		expect(stopMessageFor("aws_logs_start_query", enabledState())).toBe(AWS_START_QUERY_STOP_MESSAGE);
+	});
+
+	test("the absence message directs a FINDING, not a gap", () => {
+		// RULES.md SIO-1149 already required this and the model ignored the prose, so the stop text
+		// restates it at the point of decision.
+		expect(AWS_SERVICE_ABSENT_STOP_MESSAGE).toContain("definitive negative finding, not a gap");
+		expect(AWS_SERVICE_ABSENT_STOP_MESSAGE).toContain("not deployed in this estate");
+		expect(AWS_SERVICE_ABSENT_STOP_MESSAGE).toContain("Write your findings NOW");
+	});
+
+	test("the decision log is one-shot", () => {
+		const state = enabledState();
+		walkCleanEstate(state);
+		expect(consumeAbsenceExitLog(state)).toMatchObject({ clustersEnumerated: 2, servicesEnumerated: 2 });
+		expect(consumeAbsenceExitLog(state)).toBeNull();
+	});
+
+	// Regression pin for the interaction that makes this feature possible AT ALL.
+	test("an empty ECS list stays PRODUCTIVE so enumeration is never guard-capped", () => {
+		// describeToolResult sets hitsLen only for Elastic-shaped hits.hits, so this falls through
+		// as productive. If it ever became unproductive, MAX_UNPRODUCTIVE_PER_TOOL=3 would block
+		// list_services on cluster 4 of 7 and complete enumeration -- the precondition of this exit
+		// -- would be unreachable, silently disabling the feature.
+		expect(isUnproductiveResult('{"serviceArns":[],"$metadata":{}}')).toBe(false);
+		const state = enabledState();
+		for (let i = 1; i <= 7; i++) {
+			const args = { cluster: `c${i}` };
+			const sig = toolCallSignature("aws_ecs_list_services", args);
+			expect(shouldShortCircuit(state, "aws_ecs_list_services", sig, args)).toBe(false);
+			recordResult(state, "aws_ecs_list_services", sig, servicesPage(`c${i}`, []), args);
+		}
 	});
 });
