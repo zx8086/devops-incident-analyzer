@@ -12,6 +12,7 @@ import {
 	consumeEmptyAwsResultsAdvice,
 	consumeInvalidQueryIdAdvice,
 	createLoopGuardState,
+	DUPLICATE_CALL_STOP_MESSAGE,
 	GENERIC_LOOP_GUARD_STOP_MESSAGE,
 	isDiscoveryCall,
 	isEmptyAwsQueryResults,
@@ -25,6 +26,7 @@ import {
 	reserveSignature,
 	shouldShortCircuit,
 	stopMessageFor,
+	stopReasonFor,
 	toolCallSignature,
 	unwrapCallArgs,
 } from "./sub-agent-loop-guard.ts";
@@ -335,6 +337,93 @@ describe("SIO-1232: generic loop guard for non-bespoke tools", () => {
 		// so handing it to a gitlab or kafka tool would be actively misleading.
 		expect(stopMessageFor("elasticsearch_search")).toBe(LOOP_GUARD_STOP_MESSAGE);
 		expect(stopMessageFor("aws_logs_start_query")).toBe(AWS_START_QUERY_STOP_MESSAGE);
+	});
+
+	// SIO-1267: the generic message used to be a disjunction ("this exact call was already made, OR
+	// this tool has returned nothing useful several times") handed to BOTH branches. On run 2445908e
+	// all 8 gitlab_search stops were DUPLICATE stops -- every one logged `unproductiveSearches: 0` --
+	// but project-resolution/SKILL.md STEP 3 keys its escape hatch on the second clause, so the model
+	// was told to report "resolution was not attempted ... after repeated empty results". False.
+	describe("SIO-1267 duplicate vs unproductive-streak attribution", () => {
+		const args = { scope: "projects", search: "styles" };
+		const sig = toolCallSignature("gitlab_search", args);
+
+		test("a duplicate-signature stop gets the duplicate message", () => {
+			const state = createLoopGuardState();
+			reserveSignature(state, "gitlab_search", sig);
+			expect(shouldShortCircuit(state, "gitlab_search", sig)).toBe(true);
+			expect(stopReasonFor(state, sig)).toBe("duplicate-call");
+			expect(stopMessageFor("gitlab_search", state, sig)).toBe(DUPLICATE_CALL_STOP_MESSAGE);
+		});
+
+		test("an unproductive-streak stop keeps the streak message", () => {
+			const state = createLoopGuardState();
+			// Three distinct empty calls -> the per-tool streak cap, without any repeat.
+			for (let i = 0; i < 3; i++) {
+				const a = { search: `blob-${i}` };
+				recordResult(
+					state,
+					"gitlab_search",
+					toolCallSignature("gitlab_search", a),
+					`No code matches found for "b${i}"`,
+				);
+			}
+			// A FRESH signature: not a duplicate, so only the streak rule can fire.
+			expect(shouldShortCircuit(state, "gitlab_search", sig)).toBe(true);
+			expect(stopReasonFor(state, sig)).toBe("unproductive-streak");
+			expect(stopMessageFor("gitlab_search", state, sig)).toBe(GENERIC_LOOP_GUARD_STOP_MESSAGE);
+		});
+
+		test("the duplicate message does NOT claim the tool returned nothing", () => {
+			// This is the whole defect: SKILL.md STEP 3 matches on that phrase and converts it into
+			// "resolution was not attempted ... after repeated empty results".
+			expect(DUPLICATE_CALL_STOP_MESSAGE).not.toContain("returned nothing useful several times");
+			expect(DUPLICATE_CALL_STOP_MESSAGE).toContain("already in your context");
+			expect(DUPLICATE_CALL_STOP_MESSAGE).toContain("NOT a failure");
+		});
+
+		test("the streak message keeps the wording project-resolution/SKILL.md STEP 3 keys on", () => {
+			// Pinned coupling: STEP 3's escape hatch was written for THIS branch and must keep matching
+			// it. sub-agent-focus-block.test.ts asserts the SKILL.md side of the same contract.
+			expect(GENERIC_LOOP_GUARD_STOP_MESSAGE).toContain("returned nothing useful several times");
+		});
+
+		test("duplicate wins over streak, matching shouldShortCircuit's own precedence", () => {
+			const state = createLoopGuardState();
+			for (let i = 0; i < 3; i++) {
+				const a = { search: `blob-${i}` };
+				recordResult(
+					state,
+					"gitlab_search",
+					toolCallSignature("gitlab_search", a),
+					`No code matches found for "b${i}"`,
+				);
+			}
+			// Now ALSO a duplicate. shouldShortCircuit checks seenSignatures first, so must the message.
+			const dupSig = toolCallSignature("gitlab_search", { search: "blob-0" });
+			expect(stopReasonFor(state, dupSig)).toBe("duplicate-call");
+			expect(stopMessageFor("gitlab_search", state, dupSig)).toBe(DUPLICATE_CALL_STOP_MESSAGE);
+		});
+
+		test("without a signature the caller gets the streak message, as before", () => {
+			// Back-compat: the 1- and 2-arg call sites and the bespoke tools are unchanged.
+			const state = createLoopGuardState();
+			expect(stopMessageFor("gitlab_search")).toBe(GENERIC_LOOP_GUARD_STOP_MESSAGE);
+			expect(stopMessageFor("gitlab_search", state)).toBe(GENERIC_LOOP_GUARD_STOP_MESSAGE);
+			expect(stopReasonFor(undefined, undefined)).toBe("unproductive-streak");
+		});
+
+		test("the bespoke tools keep their domain-specific message even on a duplicate", () => {
+			// Both carry concrete recovery instructions (re-anchor the window / use the discovery
+			// agg) that a generic duplicate notice would throw away.
+			const state = createLoopGuardState();
+			const esSig = toolCallSignature("elasticsearch_search", { index: "logs-*" });
+			reserveSignature(state, "elasticsearch_search", esSig);
+			expect(stopMessageFor("elasticsearch_search", state, esSig)).toBe(LOOP_GUARD_STOP_MESSAGE);
+			const awsSig = toolCallSignature("aws_logs_start_query", { logGroupName: "/aws/ecs/x" });
+			reserveSignature(state, "aws_logs_start_query", awsSig);
+			expect(stopMessageFor("aws_logs_start_query", state, awsSig)).toBe(AWS_START_QUERY_STOP_MESSAGE);
+		});
 	});
 
 	// NON-NEGOTIABLE: aws_logs_get_query_results MUST be re-polled with the SAME queryId while the

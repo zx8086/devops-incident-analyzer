@@ -11,15 +11,57 @@ import type { SearchResult, TextContent, ToolRegistrationFunction } from "../typ
 // Direct JSON Schema definition
 // FIXED: Original JSON Schema definition removed - now using Zod schema inline
 
+// SIO-1265: identical defect to elasticsearch_multi_search, one directory over -- `searches` was
+// `z.array(z.object({}).passthrough())`, so nothing told the model that msearch_template also takes
+// an ALTERNATING metadata/body array. Same action group (`search` in
+// agents/incident-analyzer/tools/elastic-logs.yaml), same sub-agent, same failure mode available.
+// Accept one object per LOGICAL search and build the alternating array here.
+const searchTemplateSpec = z
+	.object({
+		index: z
+			.string()
+			.optional()
+			.describe("Index or pattern for THIS search. Falls back to the top-level `index` when omitted."),
+		id: z.string().optional().describe("Id of a stored search template. Provide either `id` or `source`."),
+		source: z
+			.string()
+			.optional()
+			.describe("An inline template body, as a string. Provide either `id` or `source`, not both."),
+		params: z
+			.record(z.string(), z.unknown())
+			.optional()
+			.describe('Template parameter values for THIS search. Example: {"field":"level","value":"error"}'),
+	})
+	.refine((s) => Boolean(s.id) !== Boolean(s.source), {
+		message: "Provide exactly one of `id` (a stored template) or `source` (an inline template).",
+	})
+	.describe(
+		'ONE templated search. Do NOT pass an alternating metadata/body array. Example: {"index":"logs-*","id":"my-template","params":{"level":"error"}}',
+	);
+
 // Zod validator for runtime validation
 const multiSearchTemplateValidator = z.object({
-	searches: z.array(z.object({}).passthrough()),
+	searches: z
+		.array(searchTemplateSpec)
+		.describe('One entry per templated search. Example: [{"index":"logs-*","id":"my-template","params":{"n":5}}]'),
 	index: z.string().optional(),
 	maxConcurrentSearches: z.number().optional(),
 	ccsMinimizeRoundtrips: z.boolean().optional(),
 	restTotalHitsAsInt: z.boolean().optional(),
 	typedKeys: z.boolean().optional(),
 });
+
+// SIO-1265: expand into msearch_template's alternating metadata/body array. Mirrors toMsearchBody in
+// ../search/multi_search.ts; kept local because the body half is a template ref, not a query DSL.
+export function toMsearchTemplateBody(
+	searches: Array<{ index?: string; id?: string; source?: string; params?: Record<string, unknown> }>,
+): Array<Record<string, unknown>> {
+	return searches.flatMap((s) => {
+		const body: Record<string, unknown> = s.id ? { id: s.id } : { source: s.source };
+		if (s.params) body.params = s.params;
+		return [s.index ? { index: s.index } : {}, body];
+	});
+}
 
 type MultiSearchTemplateParams = z.infer<typeof multiSearchTemplateValidator>;
 
@@ -59,7 +101,7 @@ export const registerMultiSearchTemplateTool: ToolRegistrationFunction = (server
 			// SIO-669: prefer top-level `search_templates` over deprecated `body` wrapper.
 			const result = await esClient.msearchTemplate(
 				{
-					search_templates: searches as unknown as estypes.MsearchTemplateRequestItem[],
+					search_templates: toMsearchTemplateBody(searches) as unknown as estypes.MsearchTemplateRequestItem[],
 					index,
 					max_concurrent_searches: maxConcurrentSearches,
 					ccs_minimize_roundtrips: ccsMinimizeRoundtrips,
@@ -76,8 +118,21 @@ export const registerMultiSearchTemplateTool: ToolRegistrationFunction = (server
 				logger.warn({ duration, searchCount: searches.length }, "Slow multi-search template operation");
 			}
 
+			// SIO-1265: same failure-visibility gap as elasticsearch_multi_search. msearch_template also
+			// answers 200 OK with per-response `error` objects buried in the body, and the sub-agent
+			// only ever reads `content`. Without a summary line a failed template search is skimmed as
+			// an empty one and published as a measured negative.
+			const failedSearches = (result.responses ?? []).filter((r) => "error" in r && r.error).length;
+			const failureHeader =
+				failedSearches > 0
+					? `WARNING: ${failedSearches} of ${searches.length} template searches FAILED and returned NO results.\n` +
+						'A failed search is NOT a zero-hit search. Do NOT report absence or "0 hits" on the basis ' +
+						"of a failed search -- the query never ran, so nothing was measured. Read the per-response " +
+						"`error` objects below, fix the template or its params, and retry.\n\n"
+					: "";
+
 			return {
-				content: [{ type: "text", text: JSON.stringify(result, null, 2) } as TextContent],
+				content: [{ type: "text", text: failureHeader + JSON.stringify(result, null, 2) } as TextContent],
 			};
 		} catch (error) {
 			// Error handling
@@ -134,7 +189,7 @@ export const registerMultiSearchTemplateTool: ToolRegistrationFunction = (server
 			title: "Multi Search Template",
 
 			description:
-				"Execute multiple search templates in Elasticsearch. Uses direct JSON Schema and standardized MCP error codes. Best for batch search operations, templated queries, performance optimization. Use when you need to run multiple parameterized searches efficiently using Elasticsearch search templates. TIP: Each search in searches array can specify its own template and parameters.",
+				'Execute multiple search templates in Elasticsearch. Best for batch templated queries and parameterized searches. Pass ONE object per search in `searches`, each with an optional `index`, exactly one of `id` (stored template) or `source` (inline template), and optional `params` -- this tool builds the msearch_template metadata/body pairs for you, so do NOT pass an alternating array. Example: {"searches":[{"index":"logs-*","id":"my-template","params":{"level":"error"}}]}. If any search fails, the result begins with a WARNING line naming the failure count; a failed search is not a zero-hit search.',
 
 			inputSchema: multiSearchTemplateValidator.shape,
 		},
