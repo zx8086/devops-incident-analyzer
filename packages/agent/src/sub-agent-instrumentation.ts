@@ -5,6 +5,8 @@ import { ToolMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import {
+	awsEcsAbsenceProven,
+	consumeAbsenceExitLog,
 	consumeEmptyAwsResultsAdvice,
 	consumeInvalidQueryIdAdvice,
 	createLoopGuardState,
@@ -92,6 +94,10 @@ export interface InstrumentContext {
 	// Live progress signal: forwarded on each tool-call resolution so the UI can show
 	// a running tool-call count under the "Querying..." pill during the fan-out.
 	config?: RunnableConfig;
+	// SIO-1268: the env read lives in sub-agent.ts so the loop-guard module stays pure.
+	awsAbsenceEarlyExit?: boolean;
+	// SIO-1268: investigation focus service names, for matchesFocus in the ECS ledger.
+	focusServices?: string[];
 }
 
 // Wraps each tool so we can observe what flows back from MCP into the ReAct loop.
@@ -101,7 +107,14 @@ export interface InstrumentContext {
 export function instrumentTools(tools: StructuredToolInterface[], ctx: InstrumentContext): StructuredToolInterface[] {
 	// SIO-1029: per-run state shared across every tool in this sub-agent invocation.
 	// The loop guard tracks consecutive-empty / duplicate elasticsearch_search calls.
-	const runState = { iteration: 0, toolNames: new Set<string>(), loopGuard: createLoopGuardState() };
+	const runState = {
+		iteration: 0,
+		toolNames: new Set<string>(),
+		loopGuard: createLoopGuardState({
+			awsAbsenceEarlyExit: ctx.awsAbsenceEarlyExit,
+			focusServices: ctx.focusServices,
+		}),
+	};
 	return tools.map((tool) => instrumentTool(tool, ctx, runState));
 }
 
@@ -188,6 +201,30 @@ function instrumentTool(
 						const observed = isObservedTool(tool.name);
 						const signature = toolCallSignature(tool.name, arg);
 						if (shouldShortCircuit(runState.loopGuard, tool.name, signature, arg)) {
+							// SIO-1268: a STOPPED ECS list call means that page/cluster was never walked, so
+							// enumeration is permanently unprovable for this estate. Mark it before any
+							// later absence check can treat a guard-truncated sweep as complete.
+							if (tool.name === "aws_ecs_list_clusters" || tool.name === "aws_ecs_list_services") {
+								runState.loopGuard.awsEcs.failed = true;
+							}
+							// SIO-1268: log the decision ONCE, with the evidence behind it, so a replay can
+							// audit why this estate stopped early.
+							const absence = awsEcsAbsenceProven(runState.loopGuard)
+								? consumeAbsenceExitLog(runState.loopGuard)
+								: null;
+							if (absence) {
+								ctx.log.info(
+									{
+										event: "subagent.aws_service_absent_early_exit",
+										dataSourceId: ctx.dataSourceId,
+										deploymentId: ctx.deploymentId,
+										toolName: tool.name,
+										iteration,
+										...absence,
+									},
+									"Complete ECS enumeration matched no focus service; stopping the focus-service hunt in this estate",
+								);
+							}
 							ctx.log.info(
 								{
 									event: "subagent.loop_guard_stop",
@@ -196,6 +233,8 @@ function instrumentTool(
 									toolName: tool.name,
 									iteration,
 									unproductiveSearches: runState.loopGuard.unproductiveSearches,
+									// SIO-1268: distinguishes an absence stop from a repetition stop in replay.
+									...(runState.loopGuard.awsEcs.exitLogged ? { reason: "aws_service_absent" } : {}),
 								},
 								"Loop guard short-circuited repeated/unproductive tool call",
 							);

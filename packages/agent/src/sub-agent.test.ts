@@ -9,6 +9,7 @@ import {
 	getSubAgentRetryTimeoutMs,
 	getSubAgentTimeoutMs,
 	invokeSubAgentWithSalvage,
+	isAwsAbsenceEarlyExitEnabled,
 	isRecursionLimitError,
 	isSubAgentAbort,
 	normalizeToolContent,
@@ -839,5 +840,16 @@ describe("buildPersistedToolOutput SIO-1159 typed-finding exemption", () => {
 		expect(out.rawJson).toBe(big);
 		expect(out.capSkippedBytes).toBeNull();
 		expect(out.truncation).toBeNull();
+	});
+});
+
+// SIO-1268: default-ON kill switch, matching the RESOLVE_IDENTIFIERS_ENABLED idiom.
+describe("isAwsAbsenceEarlyExitEnabled", () => {
+	test("defaults ON and is disabled only by an explicit false/0", () => {
+		expect(isAwsAbsenceEarlyExitEnabled({})).toBe(true);
+		expect(isAwsAbsenceEarlyExitEnabled({ AWS_ABSENCE_EARLY_EXIT_ENABLED: "true" })).toBe(true);
+		expect(isAwsAbsenceEarlyExitEnabled({ AWS_ABSENCE_EARLY_EXIT_ENABLED: "1" })).toBe(true);
+		expect(isAwsAbsenceEarlyExitEnabled({ AWS_ABSENCE_EARLY_EXIT_ENABLED: "false" })).toBe(false);
+		expect(isAwsAbsenceEarlyExitEnabled({ AWS_ABSENCE_EARLY_EXIT_ENABLED: "0" })).toBe(false);
 	});
 });
