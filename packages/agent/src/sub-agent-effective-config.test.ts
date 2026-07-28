@@ -1,4 +1,4 @@
-// packages/agent/src/sub-agent-effective-config.test.ts
+// agent/src/sub-agent-effective-config.test.ts
 //
 // SIO-1241: the config regression that produced the 2026-07-27 report collapse (confidence 0.45,
 // gitlab truncated to 44 bytes) was invisible for two days because nothing asserted what a
@@ -67,9 +67,9 @@ describe("effective sub-agent model (SIO-1241 regression guard)", () => {
 	});
 });
 
-// A ReAct cycle's cost in LangGraph super-steps, measured off a real graph. Excludes `__start__`,
-// which runs once rather than once per cycle.
-function measureCycleSuperSteps(): number {
+// One shared fixture for the mirror graph. Both the cycle-cost measurement and the node-set
+// assertion read from this, so the two mirrors of the production shape cannot drift apart.
+function buildMirrorAgent() {
 	const llm = new FakeListChatModel({ responses: ["ok"] });
 	const noop = tool(async () => "", {
 		name: "noop",
@@ -80,14 +80,22 @@ function measureCycleSuperSteps(): number {
 	// Mirrors the shape sub-agent.ts builds. The hook has been installed UNCONDITIONALLY since
 	// SIO-1260 -- it used to be spread only when a byte budget was configured, which made the cycle
 	// cost depend on an env var.
-	const agent = createReactAgent({
+	return createReactAgent({
 		llm,
 		tools: [noop],
 		preModelHook: (state: { messages: BaseMessage[] }) => ({ llmInputMessages: state.messages }),
 	});
+}
 
-	const nodes = Object.keys((agent as unknown as { nodes: Record<string, unknown> }).nodes ?? {});
-	return nodes.filter((n) => n !== "__start__").length;
+function mirrorAgentNodes(): string[] {
+	const agent = buildMirrorAgent();
+	return Object.keys((agent as unknown as { nodes: Record<string, unknown> }).nodes ?? {});
+}
+
+// A ReAct cycle's cost in LangGraph super-steps. Excludes `__start__`, which runs once rather than
+// once per cycle.
+function measureCycleSuperSteps(): number {
+	return mirrorAgentNodes().filter((n) => n !== "__start__").length;
 }
 
 // limit / cycle cost. These are the turn counts the limits in RECURSION_LIMIT_BY_DATASOURCE were
@@ -111,20 +119,7 @@ describe("effective sub-agent turn budget (SIO-1241 regression guard)", () => {
 	});
 
 	test("the measured cost matches the node set the limits were sized against", () => {
-		const llm = new FakeListChatModel({ responses: ["ok"] });
-		const noop = tool(async () => "", {
-			name: "noop",
-			description: "placeholder tool; never invoked",
-			schema: z.object({}),
-		});
-		const withHook = createReactAgent({
-			llm,
-			tools: [noop],
-			preModelHook: (state: { messages: BaseMessage[] }) => ({ llmInputMessages: state.messages }),
-		});
-
-		const nodes = Object.keys((withHook as unknown as { nodes: Record<string, unknown> }).nodes ?? {});
-		expect(nodes.sort()).toEqual(["__start__", "agent", "pre_model_hook", "tools"]);
+		expect(mirrorAgentNodes().sort()).toEqual(["__start__", "agent", "pre_model_hook", "tools"]);
 	});
 
 	// measureCycleSuperSteps builds a MIRROR of the production graph, so on its own it would happily
@@ -134,11 +129,26 @@ describe("effective sub-agent turn budget (SIO-1241 regression guard)", () => {
 	// deliberately not listed.
 	test("the production createReactAgent call adds no node this budget has not accounted for", async () => {
 		const source = await Bun.file(join(import.meta.dir, "sub-agent.ts")).text();
-		const call = source.slice(source.indexOf("createReactAgent({"));
-		expect(call, "createReactAgent call not found in sub-agent.ts").not.toBe("");
 
-		// Bounded to the call's own object literal: the next top-level `\n\t\t});` closes it.
-		const body = call.slice(0, call.indexOf("\n\t\t});"));
+		// Both offsets are asserted BEFORE slicing. indexOf returns -1 when it misses, and a negative
+		// index makes slice count from the END rather than throw: `slice(-1)` would yield a 1-char
+		// string that still passes a `!== ""` check, and `slice(0, -1)` would yield the entire rest of
+		// the file (22201 chars vs the real 1440) so the postModelHook scan would silently read
+		// unrelated code. Reformatting sub-agent.ts must fail this test loudly, not degrade it.
+		const start = source.indexOf("createReactAgent({");
+		expect(start, "createReactAgent({ not found in sub-agent.ts -- has the call been reshaped?").toBeGreaterThanOrEqual(
+			0,
+		);
+
+		const call = source.slice(start);
+		const end = call.indexOf("\n\t\t});");
+		expect(
+			end,
+			"could not find the end of the createReactAgent object literal (expected a `\\n\\t\\t});` terminator) -- re-anchor this guard before trusting it",
+		).toBeGreaterThan(0);
+
+		// Bounded to the call's own object literal.
+		const body = call.slice(0, end);
 
 		expect(body).toContain("preModelHook:");
 		expect(
