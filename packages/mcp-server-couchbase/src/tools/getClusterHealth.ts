@@ -40,7 +40,12 @@ export function withLatencyMs(raw: unknown): unknown {
 		services[serviceType] = Array.isArray(entries)
 			? entries.map((entry) => {
 					const ns = entry?.latency_us;
-					if (typeof ns !== "number") return entry;
+					// Number.isFinite, not `typeof === "number"`: NaN and +/-Infinity are numbers, and
+					// Math.round leaves them intact, so JSON.stringify would serialise BOTH latencyMs
+					// and latencyNs as null -- destroying the raw value instead of preserving it.
+					// Leaving a malformed entry untouched keeps latency_us visible, which is strictly
+					// more useful to an operator than two nulls (CodeRabbit, PR #508).
+					if (typeof ns !== "number" || !Number.isFinite(ns)) return entry;
 					const { latency_us: _dropped, ...rest } = entry;
 					return { latencyMs: Math.round(ns / 1_000_000), latencyNs: ns, ...rest };
 				})

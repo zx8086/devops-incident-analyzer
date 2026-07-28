@@ -462,6 +462,30 @@ describe("SIO-1264 withLatencyMs", () => {
 		expect(mapped.services.query[0].state).toBe("ok");
 	});
 
+	// CodeRabbit (PR #508): NaN and +/-Infinity ARE numbers, so a `typeof === "number"` guard let
+	// them through; Math.round preserves them and JSON.stringify then emits null for BOTH derived
+	// fields, destroying the raw value. A malformed entry must survive untouched.
+	test("leaves non-finite latency values untouched rather than serialising them as null", () => {
+		for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+			const mapped = withLatencyMs({ services: { query: [{ latency_us: bad, state: "ok" }] } }) as {
+				services: { query: Array<Record<string, unknown>> };
+			};
+			const entry = mapped.services.query[0];
+			// Untouched: the raw field is still there and no derived fields were invented.
+			expect(entry).toEqual({ latency_us: bad, state: "ok" });
+			// The failure mode this pins: pre-fix, BOTH derived fields were emitted and both
+			// serialised to null, so the model saw `latencyMs: null` -- a named millisecond field
+			// with no value, which is worse than no field at all.
+			const serialised = JSON.stringify(entry);
+			expect(serialised).not.toContain("latencyMs");
+			expect(serialised).not.toContain("latencyNs");
+			// JSON itself has no NaN/Infinity literal, so latency_us still serialises as null. That
+			// is unavoidable; the point is that we no longer manufacture two MORE null fields and
+			// the unit-bearing name is absent rather than attached to nothing.
+			expect(serialised).toBe('{"latency_us":null,"state":"ok"}');
+		}
+	});
+
 	test("leaves payloads it does not understand untouched", () => {
 		const noServices = { id: "ping-1", version: 2 };
 		expect(withLatencyMs(noServices)).toBe(noServices);
