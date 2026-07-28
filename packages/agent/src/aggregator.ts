@@ -913,16 +913,50 @@ function attributeAbsenceLine(line: string, hasData: (ds: string) => boolean): s
 //   3. NO payload for that datasource mentions any of those entities.
 // Each condition fails CLOSED to the pre-SIO-1242 behaviour, so this can only ever exempt a shape
 // that positively demonstrates the negative -- never merely an absence of contradiction.
-const ABSENCE_ENTITY_RE = /`([^`]{3,})`|"([^"]{3,})"|\b([a-z0-9]+(?:[-.][a-z0-9]+){1,})\b/gi;
+// `_` is a separator here alongside `-` and `.`, so SCREAMING_SNAKE and snake_case identifiers
+// (CHANNEL_CLOSED_WHILE_IN_FLIGHT) are extractable. SIO-1269: without it the ONLY real entity on a
+// Correlated Timeline row was invisible, and the row's leading ISO timestamp supplied the entity
+// list instead.
+const ABSENCE_ENTITY_RE = /`([^`]{3,})`|"([^"]{3,})"|\b([a-z0-9]+(?:[-._][a-z0-9]+){1,})\b/gi;
 const ENTITY_STOPWORDS = new Set(["service.name", "log group", "not present", "no data", "sql++", "logs-apm", "n1ql"]);
+
+// SIO-1269: a token built only from digits, separators and the ISO date/time markers T/Z is a
+// timestamp fragment, never an entity. The identifier alternative above cannot tell the
+// digit-and-hyphen runs inside "2026-07-28T05:12:46Z-06:12:46Z" apart from "prana-order-service",
+// so it yielded "2026-07-28t05" and "46z-06". Any token carrying a letter outside [tz] survives.
+const TIMESTAMP_FRAGMENT_RE = /^[0-9tz\-.:+]+$/i;
+
+// A table cell holding ONLY a timestamp/date range, plus an optional parenthetical label such as
+// "(investigation window)". Requires a leading digit so a prose cell ("Elastic") and the "-"
+// placeholder are never mistaken for one; "0 hits for X" fails because the tail is not consumable.
+const TIMESTAMP_CELL_RE = /^\s*\d[\d\-.:+tz\s]*(?:\([^)]*\))?\s*$/i;
+
+// SIO-1269: Correlated Timeline rows lead with a timestamp-range cell. Drop LEADING such cells so
+// the window never contributes entities. Only leading cells -- a timestamp appearing mid-row is
+// left alone for the fragment filter, since a later cell can carry a real entity beside it.
+function stripLeadingTimestampCells(line: string): string {
+	if (!/^\s*\|/.test(line)) return line;
+	const cells = line.split("|");
+	let i = 0;
+	for (; i < cells.length; i++) {
+		const cell = cells[i] ?? "";
+		if (cell.trim() !== "" && !TIMESTAMP_CELL_RE.test(cell)) break;
+	}
+	return cells.slice(i).join("|");
+}
 
 export function extractClaimEntities(line: string): string[] {
 	const out = new Set<string>();
-	for (const m of line.matchAll(ABSENCE_ENTITY_RE)) {
+	for (const m of stripLeadingTimestampCells(line).matchAll(ABSENCE_ENTITY_RE)) {
 		const raw = (m[1] ?? m[2] ?? m[3] ?? "").trim().toLowerCase();
 		if (raw.length < 3 || ENTITY_STOPWORDS.has(raw)) continue;
+		if (TIMESTAMP_FRAGMENT_RE.test(raw)) continue;
 		// A bare datasource keyword is vocabulary, not an entity the enumeration could list.
 		if (Object.values(DATASOURCE_KEYWORDS).some((kw) => new RegExp(`^${kw.source}$`, "i").test(raw))) continue;
+		// SIO-1269: likewise a TOOL NAME -- it is the provenance citation, not the thing claimed
+		// absent. Counting it would let a wrapped envelope that echoes its own tool name (SIO-1159)
+		// register as "the payload mentions the entity" and defeat the SIO-1242 exemption.
+		if (Object.values(DATASOURCE_TOOL_PREFIX).some((re) => new RegExp(`^${re.source}$`, "i").test(raw))) continue;
 		out.add(raw);
 	}
 	return [...out];
