@@ -31,6 +31,14 @@ export const CAP_REASON_INFO: Record<string, CapReasonInfo> = {
 		label: "unverified absence claim",
 		detail: "An absence claim was contradicted by returned data or over-generalized from a partial query.",
 	},
+	// SIO-1266: split out of "premature-absence". NOT a contradiction -- the tool call the claim
+	// cites produced no result, so the negative was never measured. Distinct because the operator
+	// remedy is the opposite of its sibling's: re-run the query, rather than "treat the returned
+	// data as ground truth". Label carries no digit, per the LOOSE_CONFIDENCE_RE note above.
+	"premature-absence-unverifiable": {
+		label: "unverified absence claim (query failed)",
+		detail: "An absence claim rests on a tool call that failed this turn, so the negative was never actually measured.",
+	},
 	"ungrounded-root-cause": {
 		label: "unverified root-cause mechanism",
 		detail: "The stated root-cause mechanism is not supported by any returned data; it was softened.",

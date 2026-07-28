@@ -36,6 +36,9 @@ const logger = getLogger("agent:absence-judge");
 export interface AbsenceClaim {
 	line: string;
 	dataSourceId: string;
+	// SIO-1266: set only on the UNVERIFIABLE arm -- the tool this line cites whose calls all failed
+	// this turn. Optional because the CONTRADICTED arm (the only one the judge sees) never has one.
+	failedTool?: string;
 }
 
 // Default ON; "false"/"0" disables the veto entirely (the regex verdict then always
@@ -71,9 +74,13 @@ const JUDGE_PROMPT = `You review flagged sentences from a DevOps incident report
 
 contradictedByData = true ONLY when the evidence for the sentence's labelled datasource contains the very data the sentence declares absent -- for example the sentence says "0 hits for X" or "service does not ship logs" while the evidence shows matching hits for X or log documents from that service.
 
+Evidence lines beginning "- [datasource] ERROR <tool>:" are tool FAILURES, not data. They tell you a call did not produce a result.
+
 contradictedByData = false when:
 - the sentence reports a correctly SCOPED negative result (a search for a specific phrase, field, error, or index returned zero) and the evidence merely shows OTHER data from the same datasource -- a scoped zero-hit finding is valid even when the datasource is not empty;
 - the sentence's absence claim is actually grounded in a DIFFERENT datasource than the labelled one, which is only mentioned incidentally (for example a CloudWatch/AWS finding in a sentence that also names Elasticsearch APM);
+- the sentence CITES A TOOL that the evidence reports as ERROR this turn (and not as recovered): a claim resting on a call that failed was never measured at all, so data returned by OTHER calls cannot contradict it;
+- the sentence scopes its claim to a TIME WINDOW ("0 hits between 05:12Z and 06:12Z", "in the last hour", "in the exact window") and the evidence covers a DIFFERENT or WIDER period. Hits outside the sentence's window do not contradict a claim about that window -- 121 hits over 30 days says nothing about one hour. Answer true only if the evidence shows matching data INSIDE the stated window;
 - the evidence is unrelated to the entity, phrase, field, or window the sentence names.
 
 Return ONLY JSON, no prose, with exactly one verdict per sentence index:
@@ -83,15 +90,34 @@ Return ONLY JSON, no prose, with exactly one verdict per sentence index:
 // datasource, reusing the JSON-aware truncator so structured payloads shrink sanely.
 const DIGEST_PER_ENTRY_CAP_BYTES = 2_048;
 const DIGEST_PER_DATASOURCE_CAP_BYTES = 8_192;
+// SIO-1266: share of a deployment's budget reserved for the ERROR block, carved OUT of the payload
+// budget rather than added on top, so DIGEST_PER_DATASOURCE_CAP_BYTES still binds. Applied only to
+// labels that actually have errors, so a digest with no toolErrors renders byte-identically to
+// pre-SIO-1266 output.
+const DIGEST_ERROR_BUDGET_FRACTION = 0.25;
+const DIGEST_ERROR_MESSAGE_CAP_BYTES = 256;
 
 // Renders what one datasource's sub-agent returned this turn: the same structures
 // dataSourceReturnedData (aggregator.ts) inspects, so the judge sees exactly the
 // evidence that caused the regex flag.
 export function buildAbsenceEvidenceDigest(results: DataSourceResult[], dataSourceId: string): string {
 	const parts: string[] = [];
+	const errorParts: string[] = [];
 	for (const r of results) {
 		if (r.dataSourceId !== dataSourceId) continue;
 		const label = r.deploymentId ? `${r.dataSourceId}/${r.deploymentId}` : r.dataSourceId;
+		// SIO-1266: the judge could not previously see that a call FAILED. It was shown what the
+		// datasource RETURNED and asked "does this contradict the claim?", so a claim resting on a
+		// failed query was indistinguishable from one resting on a genuine zero-hit result. On run
+		// 2445908e it answered keep:true about a 1-HOUR claim whose msearch had errored, weighed
+		// against 30-DAY evidence. `recovered` is surfaced verbatim so the judge can tell a
+		// self-corrected call (SIO-1164) from a dead one.
+		for (const e of r.toolErrors ?? []) {
+			const status = typeof e.statusCode === "number" ? ` (HTTP ${e.statusCode})` : "";
+			const recovered = e.recovered ? " [a later call to this tool SUCCEEDED]" : "";
+			const message = truncateToolOutput(e.message ?? "", DIGEST_ERROR_MESSAGE_CAP_BYTES).content;
+			errorParts.push(`- [${label}] ERROR ${e.toolName}: ${e.kind ?? e.category}${status} -- ${message}${recovered}`);
+		}
 		for (const out of r.toolOutputs ?? []) {
 			const rendered = typeof out.rawJson === "string" ? out.rawJson : JSON.stringify(out.rawJson);
 			if (rendered == null || rendered === "") continue;
@@ -115,18 +141,44 @@ export function buildAbsenceEvidenceDigest(results: DataSourceResult[], dataSour
 			);
 		}
 	}
-	if (parts.length === 0) return "(no data returned by this datasource this turn)";
+	// SIO-1266: a datasource with errors but NO payloads used to render only this placeholder,
+	// hiding the failure completely. The exact string is preserved for the genuinely-empty case --
+	// an existing test pins it for an unknown datasource.
+	const placeholder = "(no data returned by this datasource this turn)";
+	if (parts.length === 0 && errorParts.length === 0) return placeholder;
 	// SIO-1242: the cap used to apply to the whole datasource, so on a multi-estate turn the first
 	// estate could consume the entire 8KB and the second was truncated away -- the judge then ruled
 	// on a claim about an estate whose evidence it had never seen. Budget PER deployment instead.
 	const deployments = new Set(results.filter((r) => r.dataSourceId === dataSourceId).map((r) => r.deploymentId ?? ""));
 	const perGroupBudget = Math.max(1, Math.floor(DIGEST_PER_DATASOURCE_CAP_BYTES / Math.max(1, deployments.size)));
+	const labelOf = (part: string) => /^- \[([^\]]+)\]/.exec(part)?.[1] ?? "";
 	const byLabel = new Map<string, string[]>();
 	for (const part of parts) {
-		const label = /^- \[([^\]]+)\]/.exec(part)?.[1] ?? "";
-		byLabel.set(label, [...(byLabel.get(label) ?? []), part]);
+		byLabel.set(labelOf(part), [...(byLabel.get(labelOf(part)) ?? []), part]);
 	}
-	return [...byLabel.values()].map((g) => truncateToolOutput(g.join("\n"), perGroupBudget).content).join("\n");
+	// SIO-1266: errors are grouped by the same label and emitted FIRST within their group, so they
+	// survive any truncation of that group's payloads.
+	const errorsByLabel = new Map<string, string[]>();
+	for (const part of errorParts) {
+		errorsByLabel.set(labelOf(part), [...(errorsByLabel.get(labelOf(part)) ?? []), part]);
+	}
+	const labels = [...new Set([...byLabel.keys(), ...errorsByLabel.keys()])];
+	return labels
+		.map((label) => {
+			const errs = errorsByLabel.get(label) ?? [];
+			const payloads = byLabel.get(label) ?? [];
+			// Only a group that HAS errors pays the reservation, so the no-error path is unchanged.
+			if (errs.length === 0) return truncateToolOutput(payloads.join("\n"), perGroupBudget).content;
+			const errorBudget = Math.max(1, Math.floor(perGroupBudget * DIGEST_ERROR_BUDGET_FRACTION));
+			const rendered = [truncateToolOutput(errs.join("\n"), errorBudget).content];
+			if (payloads.length > 0) {
+				rendered.push(truncateToolOutput(payloads.join("\n"), perGroupBudget - errorBudget).content);
+			} else {
+				rendered.push(placeholder);
+			}
+			return rendered.join("\n");
+		})
+		.join("\n");
 }
 
 // Test seam mirroring _setGapsJudgeLlmForTesting: sibling suites mock @langchain/aws

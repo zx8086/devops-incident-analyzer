@@ -12,6 +12,10 @@ describe("CAP_REASON_INFO", () => {
 			"ungrounded-blocker",
 			"ungrounded-expiry",
 			"premature-absence",
+			// SIO-1266: sibling of premature-absence for a claim whose OWN tool call failed this
+			// turn -- the negative was never measured, so "contradicted by returned data" is the
+			// wrong account of it. Classified integrity and always-hard in confidence-policy.ts.
+			"premature-absence-unverifiable",
 			"ungrounded-root-cause",
 			"no-index-misread",
 			"correlation-degraded",

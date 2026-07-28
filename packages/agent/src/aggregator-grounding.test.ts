@@ -7,6 +7,8 @@ import {
 	detectPrematureAbsence,
 	detectUngroundedBlockers,
 	extractClaimEntities,
+	isConfirmedNegative,
+	isFailedResponseEnvelope,
 	rewriteNoIndexMisread,
 	rewriteUngroundedBlockers,
 	rewriteUngroundedRootCause,
@@ -603,6 +605,243 @@ describe("detectPrematureAbsence: enumeration-backed confirmed negative (SIO-124
 			[result({ dataSourceId: "aws", toolOutputs: [{ toolName: "aws_x", rawJson: { total: 3 } }] })],
 		);
 		expect(contradictedDetails[0]?.dataSourceId).toBe("aws");
+	});
+});
+
+// SIO-1266: run 2445908e capped confidence 0.85 -> 0.59 with capReasons ["premature-absence"].
+// The cap was RIGHT (the claim was unsupported) but the REASON was wrong. Elastic returned 121 hits
+// over 30 DAYS while the claim was about a 1-HOUR window -- not a contradiction -- and the msearch
+// the line actually cites had FAILED with illegal_argument_exception.
+//
+// The failure is only visible in the PAYLOAD: `_msearch` answers HTTP 200 with per-response errors
+// in the body, so extractToolErrors recorded nothing and r.toolErrors was EMPTY on that run.
+const FAILED_MSEARCH = {
+	toolName: "elasticsearch_multi_search",
+	rawJson: {
+		took: 3,
+		responses: [
+			{
+				error: { type: "illegal_argument_exception", reason: "key [header] is not supported in the metadata section" },
+				status: 400,
+			},
+			{
+				error: { type: "illegal_argument_exception", reason: "key [header] is not supported in the metadata section" },
+				status: 400,
+			},
+		],
+	},
+};
+const THIRTY_DAY_HITS = {
+	toolName: "elasticsearch_search",
+	rawJson: "Total results: 121, showing 10 from position 0",
+};
+const PROD_ROW =
+	"| 2026-07-28T05:12:46Z-06:12:46Z (investigation window) | Elastic | 0 hits for CHANNEL_CLOSED_WHILE_IN_FLIGHT in exact window per elasticsearch_multi_search | - |";
+
+describe("isFailedResponseEnvelope (SIO-1266)", () => {
+	const envelope = (responses: unknown[]) => ({ took: 1, responses });
+
+	test("true only when EVERY response in a non-empty batch failed", () => {
+		expect(isFailedResponseEnvelope(FAILED_MSEARCH.rawJson)).toBe(true);
+		expect(isFailedResponseEnvelope(envelope([{ status: 400 }]))).toBe(true);
+		expect(isFailedResponseEnvelope(envelope([{ error: { type: "x" } }]))).toBe(true);
+	});
+
+	test("false for a PARTIALLY successful batch -- it returned real data", () => {
+		expect(isFailedResponseEnvelope(envelope([{ error: { type: "x" }, status: 400 }, { hits: { hits: [] } }]))).toBe(
+			false,
+		);
+	});
+
+	test("false for shapes that are not a response batch", () => {
+		expect(isFailedResponseEnvelope(envelope([]))).toBe(false);
+		expect(isFailedResponseEnvelope({ took: 1 })).toBe(false);
+		expect(isFailedResponseEnvelope([{ error: 1 }])).toBe(false);
+		expect(isFailedResponseEnvelope("Total results: 0")).toBe(false);
+		expect(isFailedResponseEnvelope(null)).toBe(false);
+	});
+});
+
+describe("detectPrematureAbsence: unverifiable arm (SIO-1266)", () => {
+	const elastic = (over: Partial<DataSourceResult> = {}) =>
+		result({ dataSourceId: "elastic", toolOutputs: [THIRTY_DAY_HITS, FAILED_MSEARCH], ...over });
+
+	test("the run 2445908e row is UNVERIFIABLE, not contradicted", () => {
+		const { contradicted, unverifiable, unverifiableDetails } = detectPrematureAbsence(
+			`${PROD_ROW}\n\nConfidence: 0.85`,
+			[elastic()],
+		);
+		expect(unverifiable).toHaveLength(1);
+		expect(unverifiableDetails[0]?.failedTool).toBe("elasticsearch_multi_search");
+		expect(unverifiableDetails[0]?.dataSourceId).toBe("elastic");
+		expect(contradicted).toHaveLength(0);
+	});
+
+	test("a structured toolError also blames the tool", () => {
+		const line = "No matching documents were found via elasticsearch_search for the incident window.";
+		const { unverifiable, contradicted } = detectPrematureAbsence(`${line}\n\nConfidence: 0.8`, [
+			result({
+				dataSourceId: "elastic",
+				toolOutputs: [{ toolName: "elasticsearch_count_documents", rawJson: { total: 4 } }],
+				toolErrors: [
+					{
+						toolName: "elasticsearch_search",
+						category: "server-error",
+						message: "search_phase_execution_exception",
+						retryable: false,
+					},
+				],
+			}),
+		]);
+		expect(unverifiable).toHaveLength(1);
+		expect(contradicted).toHaveLength(0);
+	});
+
+	// Fail-closed cases: each must keep the pre-SIO-1266 CONTRADICTED verdict.
+	test("a recovered error does NOT demote the claim", () => {
+		const line = "No matching documents were found via elasticsearch_search for the incident window.";
+		const { unverifiable, contradicted } = detectPrematureAbsence(`${line}\n\nConfidence: 0.8`, [
+			result({
+				dataSourceId: "elastic",
+				toolOutputs: [{ toolName: "elasticsearch_count_documents", rawJson: { total: 4 } }],
+				toolErrors: [
+					{
+						toolName: "elasticsearch_search",
+						category: "server-error",
+						message: "transient",
+						retryable: true,
+						recovered: true,
+					},
+				],
+			}),
+		]);
+		expect(unverifiable).toHaveLength(0);
+		expect(contradicted).toHaveLength(1);
+	});
+
+	test("a benign discovery outcome does NOT demote the claim", () => {
+		// countsTowardDegradedRate excludes no-data/not-found (SIO-1087): a collection with no index
+		// or a non-existent log group is a routine result, not a malfunction, so a claim resting on
+		// it WAS measured.
+		const line = "No matching documents were found via elasticsearch_search for the incident window.";
+		const { unverifiable, contradicted } = detectPrematureAbsence(`${line}\n\nConfidence: 0.8`, [
+			result({
+				dataSourceId: "elastic",
+				toolOutputs: [{ toolName: "elasticsearch_count_documents", rawJson: { total: 4 } }],
+				toolErrors: [
+					{
+						toolName: "elasticsearch_search",
+						category: "no-data",
+						kind: "no-index",
+						message: "no such index",
+						retryable: false,
+					},
+				],
+			}),
+		]);
+		expect(unverifiable).toHaveLength(0);
+		expect(contradicted).toHaveLength(1);
+	});
+
+	test("a line naming NO tool keeps the contradicted verdict", () => {
+		// A bare English absence claim blames no specific call, so there is nothing to attribute
+		// the failure to. Prose provenance is not evidence.
+		const line = "prana-order-service does not ship logs to the connected Elasticsearch cluster.";
+		const { unverifiable, contradicted } = detectPrematureAbsence(`${line}\n\nConfidence: 0.8`, [elastic()]);
+		expect(unverifiable).toHaveLength(0);
+		expect(contradicted).toHaveLength(1);
+	});
+
+	test("a line naming one FAILED and one HEALTHY tool keeps the contradicted verdict", () => {
+		const line = "0 hits per elasticsearch_multi_search and elasticsearch_search in the window.";
+		const { unverifiable, contradicted } = detectPrematureAbsence(`${line}\n\nConfidence: 0.8`, [elastic()]);
+		expect(unverifiable).toHaveLength(0);
+		expect(contradicted).toHaveLength(1);
+	});
+
+	test("a tool that ALSO produced a healthy payload is not counted as failed", () => {
+		// Prose form of the same claim, so this case turns ONLY on the envelopeOk subtraction.
+		// The PROD_ROW table row is deliberately not reused: it carries a real entity, so the
+		// healthy-payload variant would also have to satisfy SIO-1242's confirmed-negative check
+		// and a failure could no longer be attributed to one mechanism. (Before SIO-1269 that row
+		// yielded timestamp fragments as entities, which made the distinction sharper still.)
+		const line = "0 hits for CHANNEL_CLOSED_WHILE_IN_FLIGHT per elasticsearch_multi_search in the incident window.";
+		const healthySameTool = {
+			toolName: "elasticsearch_multi_search",
+			rawJson: {
+				responses: [{ hits: { hits: [{ _id: "1", _source: { message: "CHANNEL_CLOSED_WHILE_IN_FLIGHT" } }] } }],
+			},
+		};
+
+		// Baseline: with only the failed call, the claim is unverifiable.
+		const failedOnly = detectPrematureAbsence(`${line}\n\nConfidence: 0.85`, [
+			result({ dataSourceId: "elastic", toolOutputs: [THIRTY_DAY_HITS, FAILED_MSEARCH] }),
+		]);
+		expect(failedOnly.unverifiable).toHaveLength(1);
+
+		// The envelopeOk subtraction: one failed call does not condemn a tool that also SUCCEEDED
+		// this turn, so the claim falls back to the pre-SIO-1266 contradicted verdict.
+		const alsoSucceeded = detectPrematureAbsence(`${line}\n\nConfidence: 0.85`, [
+			result({ dataSourceId: "elastic", toolOutputs: [THIRTY_DAY_HITS, FAILED_MSEARCH, healthySameTool] }),
+		]);
+		expect(alsoSucceeded.unverifiable).toHaveLength(0);
+		expect(alsoSucceeded.contradicted).toHaveLength(1);
+	});
+
+	test("the kill switch restores the pre-SIO-1266 behaviour exactly", () => {
+		const saved = process.env.ABSENCE_UNVERIFIABLE_SPLIT_ENABLED;
+		try {
+			process.env.ABSENCE_UNVERIFIABLE_SPLIT_ENABLED = "false";
+			const { contradicted, unverifiable } = detectPrematureAbsence(`${PROD_ROW}\n\nConfidence: 0.85`, [elastic()]);
+			expect(unverifiable).toHaveLength(0);
+			expect(contradicted).toHaveLength(1);
+		} finally {
+			if (saved === undefined) delete process.env.ABSENCE_UNVERIFIABLE_SPLIT_ENABLED;
+			else process.env.ABSENCE_UNVERIFIABLE_SPLIT_ENABLED = saved;
+		}
+	});
+});
+
+describe("a failed batch is not returned data (SIO-1266)", () => {
+	test("an all-errors msearch no longer credits the datasource with data", () => {
+		// Pre-fix isEnumerationShaped saw a non-empty `responses` array and returned true, so the
+		// datasource was marked as having returned data off a payload that enumerated nothing.
+		const line = "prana-order-service does not ship logs to the connected Elasticsearch cluster.";
+		const { contradicted, unverifiable } = detectPrematureAbsence(`${line}\n\nConfidence: 0.8`, [
+			result({ dataSourceId: "elastic", toolOutputs: [FAILED_MSEARCH] }),
+		]);
+		expect(contradicted).toHaveLength(0);
+		expect(unverifiable).toHaveLength(0);
+	});
+
+	test("a failed batch cannot satisfy the SIO-1242 confirmed-negative precondition", () => {
+		expect(
+			isConfirmedNegative([result({ dataSourceId: "elastic", toolOutputs: [FAILED_MSEARCH] })], "elastic", [
+				"prana-order-service",
+			]),
+		).toBe(false);
+	});
+});
+
+describe("buildPrematureAbsenceCaveats: unverifiable guard (SIO-1266)", () => {
+	const claim = { line: PROD_ROW, dataSourceId: "elastic", failedTool: "elasticsearch_multi_search" };
+
+	test("emits the unverifiable guard with a note that does not say 'trust the returned data'", () => {
+		const caveats = buildPrematureAbsenceCaveats(`## Correlated Timeline\n\n${PROD_ROW}\n`, [], [], [claim]);
+		expect(caveats).toHaveLength(1);
+		expect(caveats[0]?.guard).toBe("premature-absence-unverifiable");
+		expect(caveats[0]?.dataSourceId).toBe("elastic");
+		expect(caveats[0]?.section).toBe("Correlated Timeline");
+		expect(caveats[0]?.note).toContain("elasticsearch_multi_search");
+		expect(caveats[0]?.note).toContain("never measured");
+		// The sibling note's instruction is actively wrong here.
+		expect(caveats[0]?.note).not.toContain("Treat the returned data as ground truth");
+		// SIO-1242 invariant: the flagged line is recorded verbatim, never mutated.
+		expect(caveats[0]?.claim).toBe(PROD_ROW);
+	});
+
+	test("the 3-arg call still behaves exactly as before", () => {
+		expect(buildPrematureAbsenceCaveats("x\n", [], [])).toEqual([]);
 	});
 });
 

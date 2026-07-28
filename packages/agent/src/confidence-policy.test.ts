@@ -570,3 +570,76 @@ describe("upsertCaveatsSection (SIO-1242)", () => {
 		expect(out).toContain(CAVEATS_HEADING);
 	});
 });
+
+// SIO-1266: "premature-absence-unverifiable" is the sibling of "premature-absence" for a claim
+// whose OWN tool call failed. It is INTEGRITY (a published-but-unmeasured negative is a
+// fabrication, not an honest hole) and it is ALWAYS HARD -- a caveat on it can only restore the
+// reader to ignorance, which is the state a human reviewer exists to resolve.
+describe("SIO-1266 premature-absence-unverifiable cap class", () => {
+	const rc = ["kafka", "elastic"];
+	const eligible = (reason: string) => ({ reason, reconciled: true, loadBearing: false });
+	const decide = (capReasons: string[], integritySignals: ReturnType<typeof eligible>[], threshold = 0.6) =>
+		decideConfidenceCap({
+			capReasons,
+			coverageSignals: [],
+			integritySignals,
+			rootCauseDataSources: rc,
+			threshold,
+		});
+
+	test("is classified integrity, not coverage", () => {
+		// Coverage would route it through the disjointness test and let a report that published
+		// "0 hits, so the error is not happening now" off a FAILED query soft-cap to 0.75 -- above
+		// the 0.6 HITL gate, in the dangerous direction.
+		expect(CAP_REASON_CLASS["premature-absence-unverifiable"]).toBe("integrity");
+	});
+
+	test("a reconciled, non-load-bearing unverifiable claim STILL hard-caps", () => {
+		const d = decide(["premature-absence-unverifiable"], [eligible("premature-absence-unverifiable")]);
+		expect(d.mode).toBe("hard");
+		expect(d.cap).toBe(0.59);
+		expect(d.hardReasons).toEqual(["premature-absence-unverifiable"]);
+	});
+
+	test("the SIBLING reason with identical signals soft-caps -- the always-hard set is the difference", () => {
+		// Control for the test above: proves the outcome is driven by ALWAYS_HARD_INTEGRITY_REASONS
+		// and not by some incidental property of the signal shape.
+		const d = decide(["premature-absence"], [eligible("premature-absence")]);
+		expect(d.mode).toBe("soft");
+		expect(d.cap).toBe(0.75);
+	});
+
+	test("one always-hard reason poisons an otherwise soft-eligible set", () => {
+		const d = decide(
+			["no-index-misread", "premature-absence-unverifiable"],
+			[eligible("no-index-misread"), eligible("premature-absence-unverifiable")],
+		);
+		expect(d.mode).toBe("hard");
+	});
+
+	test("the hard cap tracks a non-default threshold", () => {
+		expect(
+			decide(["premature-absence-unverifiable"], [eligible("premature-absence-unverifiable")], 0.5).cap,
+		).toBeCloseTo(0.49, 10);
+	});
+
+	test("stays hard with integrity tiering disabled", () => {
+		const d = decideConfidenceCap({
+			capReasons: ["premature-absence-unverifiable"],
+			coverageSignals: [],
+			integritySignals: [eligible("premature-absence-unverifiable")],
+			integrityTieringEnabled: false,
+			rootCauseDataSources: rc,
+			threshold: 0.6,
+		});
+		expect(d.mode).toBe("hard");
+	});
+
+	test("run 2445908e keeps its cap value and its HITL outcome -- only the reason changes", () => {
+		// The whole point of choosing always-hard: zero confidence-number movement on the motivating
+		// run. 0.59 < 0.6, so it still crosses the HITL gate exactly as before.
+		const d = decide(["premature-absence-unverifiable"], [eligible("premature-absence-unverifiable")]);
+		expect(d.cap).toBe(0.59);
+		expect(d.cap).toBeLessThan(0.6);
+	});
+});

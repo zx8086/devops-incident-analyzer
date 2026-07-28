@@ -839,6 +839,9 @@ function dataSourceReturnedData(r: DataSourceResult): boolean {
 			if (Array.isArray(hits) && hits.length > 0) return true;
 			if (Array.isArray(o.results) && o.results.length > 0) return true;
 			if (typeof o.total === "number" && o.total > 0) return true;
+			// SIO-1266: a batch where EVERY sub-request errored is not returned data. See
+			// isFailedResponseEnvelope -- this is the run 2445908e payload.
+			if (isFailedResponseEnvelope(o)) continue;
 			// SIO-1242: AWS list calls wrap their payload in a single named key
 			// (serviceArns / logGroups / MetricAlarms / clusterArns). Without this an
 			// enumeration of 5 ECS services read as "returned nothing", so the confirmed-negative
@@ -962,9 +965,35 @@ export function extractClaimEntities(line: string): string[] {
 // Could this payload have LISTED the entity? A bare count ("Total results: 91") could not, which is
 // exactly why the SIO-1085 fixture must keep flagging -- without this gate that fixture would flip
 // to suppressed and silently gut the original guard.
+// SIO-1266: a persisted tool output that is itself a REPORT OF FAILURE.
+//
+// Elasticsearch `_msearch` answers 200 OK with per-response errors in the BODY, and the MCP tool
+// returns that body on its SUCCESS path. extractToolErrors (sub-agent.ts) only records from
+// ToolMessage.status === "error" or a structured `_error` envelope, so on run 2445908e -- where
+// EVERY sub-search failed with illegal_argument_exception -- `r.toolErrors` was EMPTY. A
+// toolErrors-only "did this call fail?" test would not fire on the very run this guard exists for.
+//
+// Deliberately narrow: every element of a NON-EMPTY `responses` array must carry an `error` key or
+// a >=400 `status`. A partially-successful batch returned real data and is not a failed call.
+export function isFailedResponseEnvelope(raw: unknown): boolean {
+	if (raw == null || typeof raw !== "object" || Array.isArray(raw)) return false;
+	const responses = (raw as { responses?: unknown }).responses;
+	if (!Array.isArray(responses) || responses.length === 0) return false;
+	return responses.every((r) => {
+		if (r == null || typeof r !== "object") return false;
+		const o = r as { error?: unknown; status?: unknown };
+		return o.error != null || (typeof o.status === "number" && o.status >= 400);
+	});
+}
+
 function isEnumerationShaped(raw: unknown): boolean {
 	if (Array.isArray(raw)) return raw.length > 0;
 	if (raw && typeof raw === "object") {
+		// SIO-1266: an all-errors msearch body has a NON-EMPTY `responses` array, so the single-key
+		// envelope arm below used to read it as an enumeration -- which both credited the datasource
+		// with data AND could satisfy the SIO-1242 confirmed-negative precondition off a payload
+		// that enumerated nothing at all.
+		if (isFailedResponseEnvelope(raw)) return false;
 		const o = raw as Record<string, unknown>;
 		if (Array.isArray(o.results) && o.results.length > 0) return true;
 		const hits = (o.hits as { hits?: unknown[] } | undefined)?.hits;
@@ -997,18 +1026,70 @@ export function isAbsenceEntityMatchEnabled(env: NodeJS.ProcessEnv = process.env
 	return env.ABSENCE_ENTITY_MATCH_ENABLED !== "false";
 }
 
+// SIO-1266 kill switch, same idiom. OFF sends every unverifiable line back into `contradicted`,
+// byte-for-byte the pre-SIO-1266 behaviour.
+export function isAbsenceUnverifiableSplitEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+	return env.ABSENCE_UNVERIFIABLE_SPLIT_ENABLED !== "false";
+}
+
+// SIO-1266: which tools of ONE datasource failed this turn. Two arms, because neither alone
+// suffices:
+//   1. structured toolErrors -- the normal path. Filtered through countsTowardDegradedRate (shared,
+//      SIO-1087/1164) so a routine no-index/not-found discovery outcome, or an error a later
+//      same-tool call recovered from, never demotes a claim to "unverifiable".
+//   2. a persisted payload that IS a failure envelope -- the msearch case, where the tool answered
+//      200 OK and toolErrors stayed empty. It has no `recovered` flag of its own, so the equivalent
+//      is computed here: a tool that ALSO produced a non-envelope payload succeeded somewhere and
+//      is dropped.
+// Both arms fail CLOSED: anything unrecognised leaves the line on the pre-SIO-1266 path.
+function collectFailedTools(results: DataSourceResult[], dataSourceId: string): Set<string> {
+	const structural = new Set<string>();
+	const envelope = new Set<string>();
+	const envelopeOk = new Set<string>();
+	for (const r of results) {
+		if (r.dataSourceId !== dataSourceId) continue;
+		for (const e of r.toolErrors ?? []) {
+			if (countsTowardDegradedRate(e)) structural.add(e.toolName);
+		}
+		for (const out of r.toolOutputs ?? []) {
+			if (isFailedResponseEnvelope(out.rawJson)) envelope.add(out.toolName);
+			else envelopeOk.add(out.toolName);
+		}
+	}
+	for (const t of envelopeOk) envelope.delete(t);
+	return new Set([...structural, ...envelope]);
+}
+
 export function detectPrematureAbsence(
 	answer: string,
 	results: DataSourceResult[],
-): { contradicted: string[]; overgeneralized: string[]; contradictedDetails: AbsenceClaim[] } {
+): {
+	contradicted: string[];
+	overgeneralized: string[];
+	contradictedDetails: AbsenceClaim[];
+	// SIO-1266: additive -- every existing destructure keeps working unchanged.
+	unverifiable: string[];
+	unverifiableDetails: AbsenceClaim[];
+} {
 	const dataByDs = new Map<string, boolean>();
 	for (const r of results) {
 		dataByDs.set(r.dataSourceId, (dataByDs.get(r.dataSourceId) ?? false) || dataSourceReturnedData(r));
 	}
 	const entityMatchEnabled = isAbsenceEntityMatchEnabled();
+	const splitEnabled = isAbsenceUnverifiableSplitEnabled();
+	// Lazily indexed per datasource; most turns flag lines for at most one or two.
+	const failedToolsByDs = new Map<string, Set<string>>();
+	const failedTools = (ds: string): Set<string> => {
+		const hit = failedToolsByDs.get(ds);
+		if (hit) return hit;
+		const built = collectFailedTools(results, ds);
+		failedToolsByDs.set(ds, built);
+		return built;
+	};
 	// SIO-1158: keep the flagging datasource with each contradicted line so the absence
 	// judge can weigh the claim against exactly that datasource's returned data.
 	const contradictedDetails: AbsenceClaim[] = [];
+	const unverifiableDetails: AbsenceClaim[] = [];
 	const overgeneralized: string[] = [];
 	for (const line of answer.split("\n")) {
 		if (headingLevel(line) !== null) continue;
@@ -1021,15 +1102,48 @@ export function detectPrematureAbsence(
 			const ds = attributeAbsenceLine(line, (id) => dataByDs.get(id) === true);
 			if (ds !== null) {
 				const exempt = entityMatchEnabled && isConfirmedNegative(results, ds, extractClaimEntities(line));
-				if (!exempt) contradictedDetails.push({ line, dataSourceId: ds });
+				// SIO-1266 precedence, most specific first:
+				//   exempt       -- a successful enumeration positively PROVED the negative (SIO-1242);
+				//                   the claim is true, nothing to flag. Unchanged, still wins.
+				//   unverifiable -- the line NAMES a tool and EVERY tool it names failed for this
+				//                   datasource this turn. Beats `contradicted` because "the query
+				//                   behind this never ran" is a strictly better account of the same
+				//                   claim than "some other call returned data".
+				//   contradicted -- the pre-SIO-1266 verdict.
+				// Gated on a NAMED tool: a snake_case tool name is unambiguous provenance, a bare
+				// English keyword is not, so a prose absence claim blames no call and keeps the old
+				// verdict. `every` (not `some`) so a line citing one failed and one healthy tool is
+				// still treated as contradicted -- fail closed.
+				const named = toolNamesInBullet(line);
+				const failed = failedTools(ds);
+				const blamed =
+					splitEnabled && named.length > 0 && named.every((n) => failed.has(n))
+						? named.find((n) => failed.has(n))
+						: undefined;
+				if (exempt) {
+					// nothing: the negative is proven
+				} else if (blamed !== undefined) {
+					unverifiableDetails.push({ line, dataSourceId: ds, failedTool: blamed });
+				} else {
+					contradictedDetails.push({ line, dataSourceId: ds });
+				}
 			}
 		}
 		// (B) over-generalized: a sweeping absence/completeness claim (any datasource).
 		if (isSweeping && (isAbsence || /\b(absent|empty|missing|no )\b/i.test(line))) {
-			if (!contradictedDetails.some((c) => c.line === line)) overgeneralized.push(line);
+			// SIO-1266: an unverifiable line is already flagged; do not double-flag it here.
+			if (![...contradictedDetails, ...unverifiableDetails].some((c) => c.line === line)) {
+				overgeneralized.push(line);
+			}
 		}
 	}
-	return { contradicted: contradictedDetails.map((c) => c.line), overgeneralized, contradictedDetails };
+	return {
+		contradicted: contradictedDetails.map((c) => c.line),
+		overgeneralized,
+		contradictedDetails,
+		unverifiable: unverifiableDetails.map((c) => c.line),
+		unverifiableDetails,
+	};
 }
 
 // SIO-1158: a markdown table row (leading and trailing pipe) is a single physical line;
@@ -1059,6 +1173,15 @@ const CONTRADICTED_ABSENCE_NOTE =
 	"The labelled datasource returned data matching this claim, so the absence is not supported. Treat the returned data as ground truth.";
 const OVERGENERALIZED_ABSENCE_NOTE =
 	"States absence more broadly than was verified: it holds only for the specific collection/index/window actually queried, not the whole namespace. Other scopes may hold the data and were not all checked.";
+// SIO-1266: split out of CONTRADICTED_ABSENCE_NOTE, whose "treat the returned data as ground truth"
+// is actively wrong when the call behind the claim returned nothing at all. On run 2445908e the
+// elastic 30-DAY search returned 121 hits while the claim was about a 1-HOUR window (not a
+// contradiction), and the msearch the line actually cites had failed with
+// illegal_argument_exception. The cap was right; this is the reason it should have given.
+function unverifiableAbsenceNote(failedTool: string | undefined): string {
+	const which = failedTool ? ` (\`${failedTool}\`)` : "";
+	return `The tool call this claim cites${which} failed this turn, so the negative was never measured. Treat this as an unanswered question, not a confirmed absence -- re-run the query before acting on it.`;
+}
 
 // Which section a line sits under, so a caveat can point the reader at it.
 function sectionOf(lines: string[], index: number): string | undefined {
@@ -1073,8 +1196,10 @@ export function buildPrematureAbsenceCaveats(
 	answer: string,
 	contradicted: AbsenceClaim[],
 	overgeneralized: string[],
+	// SIO-1266: defaulted so the existing 3-arg call sites and tests compile untouched.
+	unverifiable: AbsenceClaim[] = [],
 ): ReportCaveat[] {
-	if (contradicted.length === 0 && overgeneralized.length === 0) return [];
+	if (contradicted.length === 0 && overgeneralized.length === 0 && unverifiable.length === 0) return [];
 	const lines = answer.split("\n");
 	const occurrencesOf = (claim: string) => lines.filter((l) => l.trim() === claim.trim()).length;
 	const firstIndexOf = (claim: string) => lines.findIndex((l) => l.trim() === claim.trim());
@@ -1089,6 +1214,16 @@ export function buildPrematureAbsenceCaveats(
 			// even if a later rewriter reflowed the text before this ran.
 			occurrences: Math.max(1, occurrencesOf(c.line)),
 			note: CONTRADICTED_ABSENCE_NOTE,
+		});
+	}
+	for (const c of unverifiable) {
+		out.push({
+			guard: "premature-absence-unverifiable",
+			claim: c.line,
+			dataSourceId: c.dataSourceId,
+			section: sectionOf(lines, firstIndexOf(c.line)),
+			occurrences: Math.max(1, occurrencesOf(c.line)),
+			note: unverifiableAbsenceNote(c.failedTool),
 		});
 	}
 	for (const line of overgeneralized) {
@@ -1596,6 +1731,12 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	// CORRECTION assertion).
 	const absenceDetection = detectPrematureAbsence(answer, results);
 	let contradicted = absenceDetection.contradicted;
+	// SIO-1266: the UNVERIFIABLE arm is deterministic and is deliberately NOT judged. The judge's
+	// question is "does the returned data CONTRADICT this claim?", which is meaningless when the
+	// call produced no data, and its verdicts are shrink-only over the CONTRADICTED set -- routing
+	// unverifiable lines through it could only delete them, never re-label them. Its new
+	// error-awareness serves the CONTRADICTED arm, where a stale claim can still be exonerated.
+	const unverifiable = absenceDetection.unverifiableDetails;
 	let absenceJudgeUsed = false;
 	if (contradicted.length > 0 && isAbsenceJudgeEnabled()) {
 		absenceJudgeUsed = true;
@@ -1633,6 +1774,17 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		);
 	}
 	const prematureAbsenceCapTriggered = contradicted.length > 0 || overgeneralized.length > 0;
+	const unverifiableAbsenceCapTriggered = unverifiable.length > 0;
+	if (unverifiableAbsenceCapTriggered) {
+		logger.info(
+			{
+				unverifiableCount: unverifiable.length,
+				failedTools: [...new Set(unverifiable.map((c) => c.failedTool).filter(Boolean))],
+				dataSources: [...new Set(unverifiable.map((c) => c.dataSourceId))],
+			},
+			"Absence claims rest on tool calls that failed this turn -- capped as unverifiable, not contradicted",
+		);
+	}
 
 	// SIO-1087 (Fix D): a Root Cause line asserting a specific mechanism (schema mismatch, field
 	// names absent, metadata corruption, epoch-0) that no returned data supports. Cap + soften.
@@ -1658,13 +1810,15 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	// link in the chain is now a pass-through. Kept as a named binding because the downstream
 	// root-cause re-detection comment below reasons about "the already-rewritten text" -- with the
 	// absence rewrite gone, that is now trivially true for absence-flagged lines.
-	const absenceCaveats = prematureAbsenceCapTriggered
-		? buildPrematureAbsenceCaveats(
-				rewrittenForExpiry,
-				absenceDetection.contradictedDetails.filter((c) => contradicted.includes(c.line)),
-				overgeneralized,
-			)
-		: [];
+	const absenceCaveats =
+		prematureAbsenceCapTriggered || unverifiableAbsenceCapTriggered
+			? buildPrematureAbsenceCaveats(
+					rewrittenForExpiry,
+					absenceDetection.contradictedDetails.filter((c) => contradicted.includes(c.line)),
+					overgeneralized,
+					unverifiable,
+				)
+			: [];
 	const rewrittenForGrounding = rewrittenForExpiry;
 	// SIO-1087 (Fix D): chain the ungrounded-root-cause softening after the absence rewrites.
 	// RE-DETECT against the already-rewritten text: an earlier blocker/expiry/absence guard may
@@ -1709,6 +1863,14 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		...toIntegritySignals("ungrounded-blocker", ungroundedCapTriggered ? ungrounded : []),
 		...toIntegritySignals("ungrounded-expiry", expiryCapTriggered ? ungroundedExpiry : []),
 		...toCaveatSignals("premature-absence", prematureAbsenceCapTriggered ? [...contradicted, ...overgeneralized] : []),
+		// SIO-1266: same reconciliation contract -- the caveat list now carries the unverifiable
+		// claims too, so these signal reconciled:true. The soft path is closed for this reason by
+		// ALWAYS_HARD_INTEGRITY_REASONS regardless, but the signal is emitted honestly so a future
+		// reader can see the claim WAS discharged by a caveat.
+		...toCaveatSignals(
+			"premature-absence-unverifiable",
+			unverifiableAbsenceCapTriggered ? unverifiable.map((c) => c.line) : [],
+		),
 		...toIntegritySignals("ungrounded-root-cause", ungroundedRootCauseCapTriggered ? ungroundedRootCause : []),
 		...toIntegritySignals("no-index-misread", noIndexMisreadCapTriggered ? noIndexMisread : []),
 	];
@@ -1722,6 +1884,7 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	if (ungroundedCapTriggered) capReasons.push("ungrounded-blocker");
 	if (expiryCapTriggered) capReasons.push("ungrounded-expiry");
 	if (prematureAbsenceCapTriggered) capReasons.push("premature-absence");
+	if (unverifiableAbsenceCapTriggered) capReasons.push("premature-absence-unverifiable");
 	if (ungroundedRootCauseCapTriggered) capReasons.push("ungrounded-root-cause");
 	if (noIndexMisreadCapTriggered) capReasons.push("no-index-misread");
 	const anyCapTriggered = capReasons.length > 0;
