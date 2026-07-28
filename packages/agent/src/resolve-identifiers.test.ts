@@ -27,6 +27,7 @@ import {
 	computeTargetSources,
 	DEFAULT_PROBE_TIMEOUT_MS,
 	fetchGraphSeeds,
+	getGitlabResolutionGroup,
 	isBindingsReadEnabled,
 	isResolveIdentifiersEnabled,
 	pickServiceCandidates,
@@ -311,6 +312,53 @@ describe("resolveIdentifiers node", () => {
 			projectId: "41051769",
 			pathWithNamespace: "pvhcorp/b2b/oit/order-service",
 		});
+	});
+
+	// SIO-1261: the probe used a GLOBAL project search, contradicting project-resolution/SKILL.md's
+	// categorical "group-scoped search, never global search -- global project search returns
+	// unrelated public repos". It matters more since SIO-1258 made this id AUTHORITATIVE: the
+	// sub-agent skips its own resolution when the focus block carries one.
+	test("gitlab probe scopes the search to the resolution group", async () => {
+		const seen: Array<Record<string, unknown>> = [];
+		toolRegistry.gitlab = [
+			{
+				name: "gitlab_search",
+				invoke: async (args: unknown) => {
+					seen.push(args as Record<string, unknown>);
+					return JSON.stringify([
+						{ id: 41051769, name: "order-service", path_with_namespace: "pvhcorp/b2b/oit/order-service" },
+					]);
+				},
+			},
+		];
+		await resolveIdentifiers(makeState({ targetDataSources: ["gitlab"] }));
+		expect(seen).toHaveLength(1);
+		expect(seen[0]).toMatchObject({ scope: "projects", group_id: "pvhcorp" });
+	});
+
+	// SIO-1261: the old code fell back to `rows[0]` when nothing matched the focus, so a global
+	// search returning an unrelated repo made THAT repo authoritative. Returning nothing is the
+	// correct outcome -- the sub-agent's own STEP 1 then resolves it with the full skill logic.
+	test("gitlab probe returns nothing rather than adopting an unmatched project", async () => {
+		toolRegistry.gitlab = [
+			{
+				name: "gitlab_search",
+				invoke: async () =>
+					JSON.stringify([
+						{ id: 999, name: "totally-unrelated", path_with_namespace: "someone-else/totally-unrelated" },
+					]),
+			},
+		];
+		const result = await resolveIdentifiers(makeState({ targetDataSources: ["gitlab"] }));
+		expect(result.resolvedIdentifiers?.gitlab).toBeUndefined();
+	});
+
+	// The group is overridable so another tenant needs no code change, and defaults to pvhcorp.
+	test("the resolution group defaults to pvhcorp and honours an override", () => {
+		expect(getGitlabResolutionGroup({})).toBe("pvhcorp");
+		expect(getGitlabResolutionGroup({ GITLAB_RESOLUTION_GROUP: "" })).toBe("pvhcorp");
+		expect(getGitlabResolutionGroup({ GITLAB_RESOLUTION_GROUP: "  " })).toBe("pvhcorp");
+		expect(getGitlabResolutionGroup({ GITLAB_RESOLUTION_GROUP: "other-corp" })).toBe("other-corp");
 	});
 
 	test("konnect probe resolves the control plane then its matching service", async () => {

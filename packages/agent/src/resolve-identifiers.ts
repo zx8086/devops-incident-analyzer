@@ -672,16 +672,41 @@ async function probeKonnect(focusServices: string[]): Promise<Partial<ResolvedId
 	return { konnect: result };
 }
 
+// SIO-1261: the group every repository lives under. project-resolution/SKILL.md states it as fact
+// ("All repositories are under the `pvhcorp` top-level group on GitLab.com") and instructs the
+// sub-agent to scope every resolution search to it. This probe must obey the same rule. Overridable
+// so a different tenant needs no code change.
+export function getGitlabResolutionGroup(env: NodeJS.ProcessEnv = process.env): string {
+	const raw = env.GITLAB_RESOLUTION_GROUP?.trim();
+	return raw && raw !== "" ? raw : "pvhcorp";
+}
+
 async function probeGitlab(focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {
 	const tool = toolFor("gitlab", "gitlab_search");
 	if (!tool) return {};
 	const term = longestToken(focusServices) ?? focusServices[0];
 	if (!term) return {};
+	// SIO-1261: GROUP-SCOPED, not global. project-resolution/SKILL.md is categorical -- "Use
+	// group-scoped search, never global search -- global project search returns unrelated public
+	// repos" -- and this probe was doing precisely what that rule forbids. It matters more since
+	// SIO-1258 made the id produced here AUTHORITATIVE: the sub-agent now skips its own resolution
+	// when the focus block carries one, so a wrong id means the turn investigates the wrong
+	// repository rather than merely wasting a call.
 	const rows = parseGitlabProjects(
-		safeJson(normalizeToolContent(await tool.invoke({ scope: "projects", search: term }))),
+		safeJson(
+			normalizeToolContent(
+				await tool.invoke({ scope: "projects", search: term, group_id: getGitlabResolutionGroup() }),
+			),
+		),
 	);
 	// Match on name/path, then lift the numeric id (guessing the path 404s).
-	const match = rows.find((r) => matchesFocus(r.pathWithNamespace ?? r.name ?? "", focusServices)) ?? rows[0];
+	//
+	// SIO-1261: no `?? rows[0]` fallback. Accepting an arbitrary first row when nothing matched the
+	// focus is how an unrelated repository becomes authoritative. Returning {} is cheap: the gitlab
+	// sub-agent's own STEP 1 then resolves it with the full skill logic -- group scope,
+	// path-vs-numeric handling, and an honest STOP when nothing resolves. An unresolved probe is a
+	// normal, handled outcome; a confidently wrong one is not.
+	const match = rows.find((r) => matchesFocus(r.pathWithNamespace ?? r.name ?? "", focusServices));
 	if (!match) return {};
 	return { gitlab: { projectId: match.id, pathWithNamespace: match.pathWithNamespace } };
 }
