@@ -984,4 +984,36 @@ describe("SIO-1259: prose 'nothing found' results reach the generic guard", () =
 		expect(getCalls()).toBe(3);
 		expect(String(refused instanceof ToolMessage ? refused.content : refused)).toContain("returned nothing useful");
 	});
+
+	// SIO-1267: the run 2445908e shape. gitlab_search was stopped 8 times, every one with
+	// `unproductiveSearches: 0` -- i.e. DUPLICATE-signature stops, not empty-result stops. The old
+	// disjunctive message let project-resolution/SKILL.md STEP 3 convert those into "resolution was
+	// not attempted ... after repeated empty results", which was false for that branch.
+	test("a repeated identical gitlab_search is refused as a DUPLICATE, not as an empty result", async () => {
+		const { logger, entries } = makeLog();
+		// A PRODUCTIVE result, so the streak counters stay at zero and only the duplicate rule can fire.
+		const { tool: fake, getCalls } = buildCountingTool(
+			"gitlab_search",
+			JSON.stringify([{ id: 42, path_with_namespace: "pvhcorp/b2b/styles" }]),
+			["search", "scope"],
+		);
+		const wrapped = instrumentTools([fake], { dataSourceId: "gitlab", log: logger })[0];
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+		const args = { scope: "projects", search: "styles" };
+		await wrapped.invoke({ id: "a", name: "gitlab_search", args, type: "tool_call" });
+		const repeated = await wrapped.invoke({ id: "b", name: "gitlab_search", args, type: "tool_call" });
+
+		// The duplicate never reached GitLab.
+		expect(getCalls()).toBe(1);
+		const text = String(repeated instanceof ToolMessage ? repeated.content : repeated);
+		expect(text).toContain("already in your context");
+		// The load-bearing assertion: it must NOT say the tool returned nothing, or STEP 3 fires.
+		expect(text).not.toContain("returned nothing useful several times");
+
+		// And the log says which branch fired, rather than leaving it to be inferred from a zero.
+		const stop = entries.find((e) => e.event === "subagent.loop_guard_stop");
+		expect(stop?.reason).toBe("duplicate-call");
+		expect(stop?.unproductiveSearches).toBe(0);
+	});
 });

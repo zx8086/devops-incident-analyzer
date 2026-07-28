@@ -14,6 +14,7 @@ import {
 	reserveSignature,
 	shouldShortCircuit,
 	stopMessageFor,
+	stopReasonFor,
 	toolCallSignature,
 } from "./sub-agent-loop-guard.ts";
 import { describeToolResult } from "./sub-agent-tool-result-shape.ts";
@@ -196,10 +197,14 @@ function instrumentTool(
 									toolName: tool.name,
 									iteration,
 									unproductiveSearches: runState.loopGuard.unproductiveSearches,
+									// SIO-1267: on run 2445908e all 8 gitlab_search stops logged
+									// `unproductiveSearches: 0`, so telling a duplicate stop from a streak
+									// stop meant inferring it from that zero. State it instead.
+									reason: stopReasonFor(runState.loopGuard, signature),
 								},
 								"Loop guard short-circuited repeated/unproductive tool call",
 							);
-							const stop = buildStopResult(arg, tool.name, runState.loopGuard);
+							const stop = buildStopResult(arg, tool.name, runState.loopGuard, signature);
 							// SIO-1248: capture short-circuits too. toolOutputs[] used to be derived from
 							// response.messages, which includes the stop ToolMessage, so skipping it here
 							// would silently drop an entry the persistence path previously had.
@@ -289,12 +294,14 @@ function instrumentTool(
 // full tool-call object ({ name, args, id }); we reuse that id so the message
 // pairs with its AIMessage tool_call (Bedrock requires the pairing). SIO-1084:
 // the message is tool-specific (elastic "stop searching" vs aws "re-anchor").
-function buildStopResult(arg: unknown, toolName: string, state: LoopGuardState): ToolMessage {
+// SIO-1267: `signature` additionally splits the generic message into its duplicate-call and
+// unproductive-streak variants.
+function buildStopResult(arg: unknown, toolName: string, state: LoopGuardState, signature?: string): ToolMessage {
 	const toolCallId =
 		arg && typeof arg === "object" && "id" in arg && typeof (arg as { id: unknown }).id === "string"
 			? (arg as { id: string }).id
 			: "loop-guard-stop";
-	return new ToolMessage({ content: stopMessageFor(toolName, state), tool_call_id: toolCallId });
+	return new ToolMessage({ content: stopMessageFor(toolName, state, signature), tool_call_id: toolCallId });
 }
 
 function processResult(result: unknown, toolName: string, iteration: number, ctx: InstrumentContext): unknown {

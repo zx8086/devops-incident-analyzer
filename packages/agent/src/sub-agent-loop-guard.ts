@@ -24,10 +24,49 @@ const GUARDED_TOOLS = new Set<string>(["elasticsearch_search", "aws_logs_start_q
 const MAX_UNPRODUCTIVE_PER_TOOL = 3;
 const MAX_UNPRODUCTIVE_PER_RUN = 8;
 
+// SIO-1267: this used to be ONE disjunctive message -- "This exact call was already made, OR this
+// tool has returned nothing useful several times in a row" -- handed to BOTH branches of
+// shouldShortCircuit's generic path. The model could not tell which had fired, and the two mean
+// opposite things: a duplicate stop says "you already have this answer", a streak stop says "there
+// is no answer to be had".
+//
+// That ambiguity had a concrete cost. gitlab-agent/skills/project-resolution/SKILL.md STEP 3 keys
+// its escape hatch on the SECOND clause verbatim ("the result says the tool has returned nothing
+// useful several times and must not be called again") and instructs the model to report
+// "resolution was not attempted: the search tool was short-circuited after repeated empty results".
+// On run 2445908e all 8 gitlab_search stops were DUPLICATE-signature stops -- every one logged
+// `unproductiveSearches: 0` -- so the skill made the model publish a false statement about why
+// resolution failed.
+//
+// The streak message deliberately KEEPS the "returned nothing useful several times" wording so that
+// STEP 3's existing escape hatch still matches the branch it was actually written for. The
+// duplicate message deliberately avoids that phrase.
+export const DUPLICATE_CALL_STOP_MESSAGE =
+	"You have already made this exact call, with these exact arguments, earlier in this run. Its " +
+	"result is already in your context above -- scroll back and use it. Nothing has changed since, " +
+	"so re-issuing it cannot return anything new. This is NOT a failure and NOT an empty result: do " +
+	"not report it as one, and do not describe this tool as unavailable, short-circuited, or as " +
+	"having returned nothing. If you need different information, call it with MATERIALLY different " +
+	"arguments; otherwise synthesize your findings from what you already have.";
+
 export const GENERIC_LOOP_GUARD_STOP_MESSAGE =
-	"This exact call was already made, or this tool has returned nothing useful several times in a " +
-	"row. Do not call it again with these or similar arguments. Synthesize your findings from the " +
-	"data you already have, and report what you could not determine as an un-queried gap.";
+	"This tool has returned nothing useful several times in a row. Do not call it again with these " +
+	"or similar arguments. Synthesize your findings from the data you already have, and report what " +
+	"you could not determine as an un-queried gap.";
+
+// SIO-1267: which branch of the generic path fired. Used both to pick the stop message and to tag
+// the subagent.loop_guard_stop log, so a replay can tell a duplicate stop from a streak stop
+// without inferring it from `unproductiveSearches: 0`.
+export type LoopGuardStopReason = "duplicate-call" | "unproductive-streak";
+
+// Mirrors shouldShortCircuit's precedence: the duplicate check runs FIRST, so a call that is both a
+// duplicate and over the streak cap is attributed to the duplicate. Safe to evaluate at stop time
+// because reserveSignature runs BEFORE tool invocation and recordResult never runs for a
+// short-circuited call -- the signature of an earlier successful call is still present.
+export function stopReasonFor(state?: LoopGuardState, signature?: string): LoopGuardStopReason {
+	if (state && signature !== undefined && state.seenSignatures.has(signature)) return "duplicate-call";
+	return "unproductive-streak";
+}
 
 const AWS_DESCRIBE_LOG_GROUPS = "aws_logs_describe_log_groups";
 
@@ -531,13 +570,17 @@ export function isObservedTool(_toolName: string): boolean {
 	return true;
 }
 
-// SIO-1084/1090: select the stop message for a guarded tool. `state` is accepted for a
-// stable signature with the call site but is no longer needed to choose the elastic
-// message (only one remains).
-export function stopMessageFor(toolName: string, _state?: LoopGuardState): string {
+// SIO-1084/1090: select the stop message for a guarded tool.
+// SIO-1267: `signature` is optional and, when supplied, splits the generic path into its two real
+// branches. The two bespoke tools keep their single domain-specific message: both already carry
+// concrete recovery instructions (re-anchor the window / use the discovery agg) that a generic
+// duplicate notice would lose, and neither is the tool this ticket is about.
+export function stopMessageFor(toolName: string, state?: LoopGuardState, signature?: string): string {
 	if (toolName === "aws_logs_start_query") return AWS_START_QUERY_STOP_MESSAGE;
 	// SIO-1232: LOOP_GUARD_STOP_MESSAGE is elastic-specific (it talks about indices, patterns and
 	// the service.name discovery agg), so it must not be handed to a gitlab or kafka tool.
 	if (toolName === "elasticsearch_search") return LOOP_GUARD_STOP_MESSAGE;
-	return GENERIC_LOOP_GUARD_STOP_MESSAGE;
+	return stopReasonFor(state, signature) === "duplicate-call"
+		? DUPLICATE_CALL_STOP_MESSAGE
+		: GENERIC_LOOP_GUARD_STOP_MESSAGE;
 }
