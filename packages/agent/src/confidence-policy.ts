@@ -20,10 +20,32 @@ export const CAP_REASON_CLASS: Record<string, CapClass> = {
 	"ungrounded-blocker": "integrity",
 	"ungrounded-expiry": "integrity",
 	"premature-absence": "integrity",
+	// SIO-1266: sibling of "premature-absence" for a claim whose OWN tool call failed this turn.
+	// INTEGRITY, not coverage: the report asserts a MEASURED negative that was never measured -- a
+	// fabricated finding, not a hole the report is honest about. Classifying it "coverage" would
+	// route it through the disjointness test below and let a report that published "0 hits, the
+	// error is not happening now" off a failed query soft-cap to 0.75, ABOVE the 0.6 HITL gate, in
+	// the dangerous direction.
+	"premature-absence-unverifiable": "integrity",
 	"ungrounded-root-cause": "integrity",
 	"no-index-misread": "integrity",
 	"ungrounded-metrics": "integrity",
 };
+
+// SIO-1266: integrity reasons that are NEVER soft-eligible, whatever their per-claim signals say.
+//
+// The SIO-1198 soft path exists for a claim the guard DISCHARGED. A contradicted-absence caveat
+// discharges it by restoring the reader to a TRUE belief ("there IS data; here it is"), so a
+// corrected, non-load-bearing claim need not gate the report. An unverifiable-absence caveat cannot
+// do that. The best it can say is "nobody knows whether this is still happening" -- it restores the
+// reader to IGNORANCE, which is precisely the state a human reviewer exists to resolve.
+// `reconciled` and `loadBearing` are both blind to this distinction (one is a discharge test, the
+// other a location test), so it is stated here explicitly rather than smuggled in by mislabelling
+// a signal.
+//
+// This also makes SIO-1266 a pure reason-correctness change: run 2445908e stays hard-capped at 0.59
+// and still gates HITL. Only the stated reason and the caveat text change.
+const ALWAYS_HARD_INTEGRITY_REASONS: ReadonlySet<string> = new Set(["premature-absence-unverifiable"]);
 
 // Same derivation as deriveConfidenceCap (confidence-gate.ts) -- duplicated here to
 // keep this module import-free; the parity is pinned by tests on both sides,
@@ -97,6 +119,9 @@ export function decideConfidenceCap(input: {
 	const integrityEligible =
 		integrity.length === 0 ||
 		(tiering &&
+			// SIO-1266: one always-hard reason poisons the whole soft path, exactly as one
+			// unsignalled or load-bearing reason does in the every() below.
+			!integrity.some((r) => ALWAYS_HARD_INTEGRITY_REASONS.has(r)) &&
 			integrity.every((r) => {
 				const signals = integritySignals.filter((s) => s.reason === r);
 				return signals.length > 0 && signals.every((s) => s.reconciled && !s.loadBearing);

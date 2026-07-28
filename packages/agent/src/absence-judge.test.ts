@@ -339,3 +339,110 @@ describe("judgeOvergeneralizedAbsenceClaims (SIO-1198)", () => {
 		expect(await judgeOvergeneralizedAbsenceClaims(LINES)).toBeNull();
 	});
 });
+
+// SIO-1266: the judge was shown what a datasource RETURNED and asked "does this contradict the
+// claim?", but never that a call had FAILED. On run 2445908e it kept a 1-HOUR claim whose msearch
+// had errored, weighed against 30-DAY evidence.
+describe("buildAbsenceEvidenceDigest: tool errors (SIO-1266)", () => {
+	const withErrors = (over: Record<string, unknown> = {}) =>
+		result({
+			toolOutputs: [{ toolName: "elasticsearch_search", rawJson: "Total results: 121, showing 10 from position 0" }],
+			toolErrors: [
+				{
+					toolName: "elasticsearch_multi_search",
+					category: "bad-query",
+					kind: "bad-input",
+					message: "key [header] is not supported in the metadata section",
+					statusCode: 400,
+				},
+			],
+			...over,
+		});
+
+	test("renders an ERROR line the judge prompt can key on", () => {
+		const digest = buildAbsenceEvidenceDigest([withErrors()], "elastic");
+		expect(digest).toContain("ERROR elasticsearch_multi_search");
+		expect(digest).toContain("key [header] is not supported");
+		expect(digest).toContain("(HTTP 400)");
+	});
+
+	test("marks a recovered error so the judge can tell it from a dead one", () => {
+		const digest = buildAbsenceEvidenceDigest(
+			[
+				result({
+					toolOutputs: [{ toolName: "elasticsearch_search", rawJson: "Total results: 5" }],
+					toolErrors: [
+						{ toolName: "elasticsearch_search", category: "server-error", message: "transient", recovered: true },
+					],
+				}),
+			],
+			"elastic",
+		);
+		expect(digest).toContain("[a later call to this tool SUCCEEDED]");
+	});
+
+	test("a row with errors but NO payloads still shows the failure", () => {
+		// Pre-SIO-1266 this rendered only the placeholder, hiding the failure completely.
+		const digest = buildAbsenceEvidenceDigest(
+			[
+				result({
+					toolOutputs: [],
+					toolErrors: [{ toolName: "elasticsearch_multi_search", category: "bad-query", message: "boom" }],
+				}),
+			],
+			"elastic",
+		);
+		expect(digest).toContain("ERROR elasticsearch_multi_search");
+		expect(digest).toContain("(no data returned by this datasource this turn)");
+	});
+
+	test("errors come FIRST so they survive truncation of the payloads", () => {
+		const digest = buildAbsenceEvidenceDigest([withErrors()], "elastic");
+		expect(digest.indexOf("ERROR")).toBeLessThan(digest.indexOf("elasticsearch_search: Total results"));
+	});
+
+	test("a digest with NO toolErrors is byte-identical to the pre-SIO-1266 output", () => {
+		// The error budget is carved out of the existing per-group allowance and only charged to a
+		// group that actually has errors, so the no-error path must not shift by a single byte.
+		const digest = buildAbsenceEvidenceDigest(RESULTS, "elastic");
+		expect(digest).toBe("- [elastic] elasticsearch_search: Total results: 91, showing 5 from position 0");
+		expect(digest).not.toContain("ERROR");
+	});
+
+	test("an unknown datasource still returns exactly the placeholder", () => {
+		expect(buildAbsenceEvidenceDigest(RESULTS, "kafka")).toBe("(no data returned by this datasource this turn)");
+	});
+
+	test("stays within the per-datasource byte budget with many errors", () => {
+		const many = result({
+			deploymentId: "prod-a",
+			toolOutputs: Array.from({ length: 30 }, (_, i) => ({
+				toolName: `elasticsearch_search_${i}`,
+				rawJson: "x".repeat(2_000),
+			})),
+			toolErrors: Array.from({ length: 20 }, (_, i) => ({
+				toolName: `elasticsearch_multi_search_${i}`,
+				category: "bad-query",
+				message: "y".repeat(2_000),
+			})),
+		});
+		const digest = buildAbsenceEvidenceDigest([many], "elastic");
+		expect(Buffer.byteLength(digest, "utf8")).toBeLessThanOrEqual(8_192);
+		expect(digest).toContain("ERROR");
+	});
+});
+
+describe("judge prompt: errors and windows (SIO-1266)", () => {
+	test("tells the model that ERROR lines are failures and that a stated window matters", async () => {
+		const { calls, llm } = fakeLlm(() =>
+			JSON.stringify({ verdicts: CLAIMS.map((_, i) => ({ index: i, contradictedByData: true, reason: "r" })) }),
+		);
+		_setAbsenceJudgeLlmForTesting(llm);
+		await judgeContradictedAbsenceClaims(CLAIMS, RESULTS);
+		const sent = JSON.stringify(calls[0]);
+		expect(sent).toContain("are tool FAILURES, not data");
+		expect(sent).toContain("TIME WINDOW");
+		// The concrete arithmetic the run got wrong.
+		expect(sent).toContain("121 hits over 30 days says nothing about one hour");
+	});
+});
