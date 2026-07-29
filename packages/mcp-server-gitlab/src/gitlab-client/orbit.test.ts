@@ -134,6 +134,44 @@ describe("isOrbitIndexed (live gitlab.com system/components shape, SIO-1077)", (
 	});
 });
 
+// SIO-1295: the REAL gitlab.com Orbit v0.91.1 GET /orbit/status response during a live
+// schema migration, captured 2026-07-30 ~01:20 UTC+2. system.status is "migrating" while BOTH required
+// indexers stay healthy and serving -- /orbit/query answered normally throughout, so
+// "migrating" with ready indexers must NOT gate Orbit off.
+const LIVE_MIGRATING_STATUS = {
+	user: { available: true },
+	system: {
+		status: "migrating",
+		version: "0.91.1",
+		components: [
+			{ name: "gkg-indexer-sdlc", status: "healthy", replicas: { ready: 8, desired: 8 } },
+			{ name: "gkg-indexer-code", status: "healthy", replicas: { ready: 10, desired: 10 } },
+			{ name: "schema_migration", status: "migrating", replicas: { ready: 0, desired: 0 } },
+		],
+	},
+};
+
+describe("isOrbitIndexed (live migrating shape, SIO-1295)", () => {
+	test("true for a migrating Orbit when both required indexers are healthy and ready", () => {
+		expect(isOrbitIndexed(OrbitStatusResponseSchema.parse(LIVE_MIGRATING_STATUS))).toBe(true);
+	});
+
+	test("false when migrating and an indexer has zero ready replicas", () => {
+		const degraded = {
+			...LIVE_MIGRATING_STATUS,
+			system: {
+				...LIVE_MIGRATING_STATUS.system,
+				components: [
+					{ name: "gkg-indexer-sdlc", status: "healthy", replicas: { ready: 0, desired: 8 } },
+					{ name: "gkg-indexer-code", status: "healthy", replicas: { ready: 10, desired: 10 } },
+					{ name: "schema_migration", status: "migrating", replicas: { ready: 0, desired: 0 } },
+				],
+			},
+		};
+		expect(isOrbitIndexed(OrbitStatusResponseSchema.parse(degraded))).toBe(false);
+	});
+});
+
 describe("OrbitStatusResponseSchema (SIO-1077)", () => {
 	test("parses the live response without throwing and preserves system.components", () => {
 		const parsed = OrbitStatusResponseSchema.parse(LIVE_HEALTHY_STATUS);

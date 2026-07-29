@@ -44,10 +44,10 @@ const BAD_QUERY_GUIDANCE =
 
 export interface OrbitToolContext {
 	client?: OrbitRestClient;
+	// Boot-probe availability. NOT frozen: while false, every handler re-checks via a
+	// credit-free getStatus() and flips this on recovery (SIO-1295) -- a server booted
+	// during an Orbit migration/outage picks the graph back up without a restart.
 	available: boolean;
-	// Optional re-check when a boot status said "indexing"; the handler calls
-	// getStatus() once before giving up (single retry, credit-free).
-	indexing?: boolean;
 	// Ceiling on paid /orbit/query calls per rolling time window (credit guard).
 	// 0 disables the guard. NOTE: registerOrbitTools is recorded ONCE by the
 	// SIO-1044 cached factory and replayed on every fresh per-request server, so a
@@ -158,22 +158,18 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 		return true;
 	}
 
-	// Resolve availability: soft-fail unless indexed. One free /status re-check if
-	// boot saw "indexing". Returns a guidance result to short-circuit, or null when
-	// Orbit is usable.
+	// Resolve availability: soft-fail unless indexed. SIO-1295: while boot-unavailable
+	// (ANY state -- indexing, migrating, failed probe), each handler call makes one free
+	// /status re-check so a recovered Orbit is picked up without a process restart.
+	// Returns a guidance result to short-circuit, or null when Orbit is usable.
 	async function ensureAvailable() {
 		if (!ctx.client) return unavailableResult();
 		if (ctx.available) return null;
-		if (ctx.indexing) {
-			try {
-				const status = await ctx.client.getStatus();
-				if (isOrbitIndexed(status)) {
-					ctx.available = true;
-					ctx.indexing = false;
-				}
-			} catch {
-				// fall through to guidance
-			}
+		try {
+			const status = await ctx.client.getStatus();
+			if (isOrbitIndexed(status)) ctx.available = true;
+		} catch {
+			// fall through to guidance
 		}
 		return ctx.available ? null : unavailableResult();
 	}
@@ -258,9 +254,15 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 		{},
 		async () =>
 			traceToolCall("gitlab_graph_schema", async () => {
-				if (!ctx.client) return unavailableResult();
+				// Free, but still gated: the SIO-1295 recovery re-check must fire even when
+				// this is the first handler invoked, and an Orbit-off schema call should
+				// return the non-degrading no-index envelope, not an HTTP-mapped error.
+				const unavailable = await ensureAvailable();
+				if (unavailable) return unavailable;
+				const client = ctx.client;
+				if (!client) return unavailableResult();
 				try {
-					const schema = await ctx.client.getSchema();
+					const schema = await client.getSchema();
 					return textResult(JSON.stringify(schema, null, 2));
 				} catch (error) {
 					return orbitErrorResult(error);

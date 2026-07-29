@@ -178,12 +178,17 @@ export class OrbitRestClient {
 // have at least one ready replica -- i.e. the graph is actually being served, not just the
 // deployment object existing.
 //
+// SIO-1295: "migrating" also counts -- observed live (gitlab.com Orbit v0.91.1) a schema
+// migration reports system.status "migrating" while both indexers stay healthy and
+// /orbit/query keeps serving. The indexer-readiness check below still gates a migration
+// that actually degrades the indexers.
+//
 // Legacy shape: top-level status === "indexed", or both sdlc+code domains indexed.
 export function isOrbitIndexed(status: OrbitStatusResponse): boolean {
 	// Live shape first.
 	const system = status.system;
 	if (system) {
-		const systemOk = system.status === "healthy" || system.status === "indexed";
+		const systemOk = system.status === "healthy" || system.status === "indexed" || system.status === "migrating";
 		if (systemOk && Array.isArray(system.components)) {
 			const indexersReady = REQUIRED_INDEXERS.every((name) => {
 				const c = system.components?.find((comp) => comp.name === name);
