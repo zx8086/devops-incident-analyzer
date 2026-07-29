@@ -2044,7 +2044,14 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 				originalScore: confidenceScore,
 				cappedScore,
 			},
-			"Aggregator asserted absence contradicted by returned data, or over-generalized 'all records' absence; rewriting + capping confidence",
+			// SIO-1270 (CodeRabbit, PR #513): the message must not out-assert the caveat it
+			// accompanies. When either judge returned no verdict, the cap rests on the regex alone
+			// and the emitted caveat deliberately says only that the check did not complete --
+			// logging "asserted absence contradicted by returned data" would reintroduce, in the
+			// log, exactly the unearned claim this ticket removes from the report.
+			absenceJudgeFailed || overgeneralizedJudgeFailed
+				? "Premature-absence cap applied on the regex verdict alone; a judge returned no verdict, so the claim is unadjudicated -- capping confidence"
+				: "Aggregator asserted absence contradicted by returned data, or over-generalized 'all records' absence; rewriting + capping confidence",
 		);
 	}
 

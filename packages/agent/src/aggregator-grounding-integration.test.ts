@@ -38,7 +38,7 @@ mock.module("@devops-agent/shared", () => ({
 }));
 
 import { _setAbsenceJudgeLlmForTesting } from "./absence-judge.ts";
-import { aggregate } from "./aggregator.ts";
+import { _setAggregatorLoggerForTesting, aggregate } from "./aggregator.ts";
 import { getRunbookFilenames } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
 
@@ -330,6 +330,56 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-1158 premature-absence judge veto",
 		expect(caveat?.note).not.toContain("returned data matching this claim");
 		expect(caveat?.note).not.toContain("ground truth");
 		expect(caveat?.note).toContain("did not complete");
+	});
+
+	// SIO-1270 (CodeRabbit, PR #513): the LOG must not out-assert the caveat. A message saying
+	// the aggregator "asserted absence contradicted by returned data" while the accompanying
+	// caveat says the check never completed reintroduces the unearned claim one layer down,
+	// where a replay would read it as evidence the contradiction was established.
+	test("a FAILED judge also produces a non-asserting log message", async () => {
+		const warnings: string[] = [];
+		const capture = (...args: unknown[]) => {
+			const msg = args.find((a) => typeof a === "string");
+			if (typeof msg === "string") warnings.push(msg);
+			return undefined;
+		};
+		_setAggregatorLoggerForTesting({ info: capture, warn: capture, error: capture });
+		try {
+			mockLlmOverride = TP_CONTENT;
+			_setAbsenceJudgeLlmForTesting({
+				invoke: async () => {
+					throw new Error("bedrock unavailable");
+				},
+			});
+			await aggregate(makeState([ELASTIC_RESULT], "test-absence-judge-failed-log"));
+		} finally {
+			_setAggregatorLoggerForTesting(null);
+		}
+		const capLog = warnings.find((m) => m.includes("capping confidence") && m.includes("absence"));
+		expect(capLog).toBeDefined();
+		expect(capLog).not.toContain("asserted absence contradicted by returned data");
+		expect(capLog).toContain("unadjudicated");
+	});
+
+	// The complement: when the judge DID adjudicate, the asserting wording is correct and must
+	// survive -- the fix is conditional, not a blanket softening.
+	test("a judge-CONFIRMED contradiction keeps the asserting log message", async () => {
+		const warnings: string[] = [];
+		const capture = (...args: unknown[]) => {
+			const msg = args.find((a) => typeof a === "string");
+			if (typeof msg === "string") warnings.push(msg);
+			return undefined;
+		};
+		_setAggregatorLoggerForTesting({ info: capture, warn: capture, error: capture });
+		try {
+			mockLlmOverride = TP_CONTENT;
+			_setAbsenceJudgeLlmForTesting(verdictLlm([true]));
+			await aggregate(makeState([ELASTIC_RESULT], "test-absence-judge-confirmed-log"));
+		} finally {
+			_setAggregatorLoggerForTesting(null);
+		}
+		const capLog = warnings.find((m) => m.includes("capping confidence") && m.includes("absence"));
+		expect(capLog).toContain("asserted absence contradicted by returned data");
 	});
 
 	// SIO-1242: inverted. This used to assert the "[CORRECTION: ...]" debug string was inserted
