@@ -147,6 +147,7 @@ shapes are unsupported. They are not; `.passthrough()` already carries them:
 | bare `verified` mapping | **PASS** — carried as an unknown key |
 | `verified` as a list | **PASS** |
 | `generated: {by, at}` | **PASS** |
+| `sources: [{resource, usage_count}]` | **PASS** |
 | bad `status` enum (`status: whatever`) | **FAIL** — the typed field still rejects |
 
 So the schema is §11-conformant **as written**, with no further change. Promote `verified` /
@@ -229,13 +230,19 @@ made this expensive is gone (no longer a registered category since SIO-1285). Th
 **The third option was priced rather than left open.** Conformant listing files
 (`- [title](file.md) - description` per entry) across elastic-iac's 6 registered categories:
 
-```
+```text
 reference    6 entries ->   465 B      specs        4 ->   463 B
 issues       8         ->   554 B      cost-plans   6 ->   678 B
 runbooks     6         ->   750 B      playbook    11 -> 1,087 B
 TOTAL                     3,997 B
-prompt 485,959 -> 489,956   (+0.82%)
+prompt 489,096 -> 493,093   (+0.82%)
 ```
+
+**Units.** These are UTF-8 **bytes** (`Buffer.byteLength(s, "utf8")`). The rest of this spec
+quotes prompt sizes as `buildSystemPrompt(...).length`, which counts UTF-16 code units —
+485,959 for the same prompt. The knowledge corpus contains non-ASCII, so the two differ by
+3,137 for elastic-iac; do not mix them. The listing files themselves are pure ASCII, so
+3,997 and **+0.82%** hold in either unit.
 
 A conformant bundle-root `knowledge/index.md` — the one place frontmatter is legal on a
 listing, carrying `okf_version: 0.2` — costs **zero**: `knowledge/` is not a registered
@@ -247,11 +254,17 @@ loader change. Document it as a deliberate OKF deviation; OKF requires consumers
 tolerate a missing `index.md`, so this is conformant.
 
 **Why the measurement does not overturn that.** +0.82% is affordable, so cost is *not* the
-deciding argument — and the earlier framing of this risk as **High** (in both the ticket and
-the handover) does not survive measurement. What remains is that `_INDEX.md` needs no loader
-change and is already test-pinned, against `index.md`'s benefit of matching all eight
-official examples verbatim. That is a judgement call about conformance-versus-inertia, not a
-cost trade.
+deciding argument. What remains is that `_INDEX.md` needs no loader change and is already
+test-pinned, against `index.md`'s benefit of matching all eight official examples verbatim.
+That is a judgement call about conformance-versus-inertia, not a cost trade.
+
+**This number is impact, not likelihood.** It says what an `index.md` in a registered
+category *would cost*, not how probable one is. The likelihood is governed by the Q1
+decision and its controls — `_INDEX.md` is the documented convention, `_archive` is no
+longer a registered category, and `elastic-iac-load.test.ts:63` pins the not-loaded
+behaviour — none of which this measurement bears on. The earlier **High** rating in the
+ticket and the handover was an *impact* claim ("adds N files to a 125k-token prompt"); it is
+that claim, and only that claim, the measurement refutes.
 
 Recorded so a future reader does not re-open Q1 believing the cost is unknown or large. If
 the migration later adopts `index.md` for strict conformance, **+0.82% is the price**, and
@@ -416,7 +429,7 @@ bun test packages/gitagent-bridge/src/runbook-validator.test.ts
 | Widening hides real authoring errors | Medium | `.passthrough()` the envelope, keep `triggers` strictly typed. Validated: malformed triggers still FAIL |
 | Optional `triggers` disables selection | **Resolved — not a risk** | `narrowCatalogByTriggers` `noop` mode verified to keep trigger-less runbooks |
 | A new `index.yaml` key silently stripped | **Certain if the field is omitted** | Plain `z.object` discards unknown keys with `success: true`. Add the field AND a load probe |
-| An OKF `index.md` in a registered category gets loaded | Low (was High) | Q1: use `_INDEX.md`; `_archive` is no longer registered. **Measured** if adopted anyway: +3,997 B / +0.82%, bundle root free |
+| An OKF `index.md` in a registered category gets loaded | Low | Q1 chose `_INDEX.md`; `_archive` is no longer registered; `elastic-iac-load.test.ts:63` pins the not-loaded behaviour. *Impact if it happened anyway: +3,997 B / +0.82%, bundle root free — measured, and low* |
 | OKF v0.2 -> v0.3 churn mid-migration | Low | Spec is designed for backward-compatible growth; minor bumps add optional fields. Pin `okf_version` at bundle root |
 | Scope creep into `SKILL.md` | Medium | Out of scope by explicit decision |
 | Treating OKF as a fix for the SIO-1281 bug class | Medium | It is not — §5 says so plainly |
