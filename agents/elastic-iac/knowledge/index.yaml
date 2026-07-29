@@ -35,9 +35,50 @@ categories:
   playbook:
     path: playbook/
     description: Operational playbook chapters
-  health-snapshots:
-    path: health-snapshots/
-    description: Point-in-time cluster health snapshots
-  _archive:
-    path: _archive/
-    description: Archived knowledge retained for traceability (matches prior manifest auto-discovery)
+# SIO-1285: health-snapshots/ and _archive/ are deliberately NOT registered.
+#
+# health-snapshots/ holds four point-in-time cluster reports (10 Mar / 13 Mar /
+# 13 Apr / 25 May 2026). A dated snapshot goes stale, and a stale snapshot in the
+# prompt is worse than none -- the agent may reason from figures that no longer
+# hold. RULES.md:7 already says "Do not rely on tracker rows or memory snapshots
+# alone"; dropping them aligns the prompt with the rule. Live health is read via
+# the elastic tools instead. No code consumer: `grep -rn "health-snapshot"
+# --include="*.ts" packages apps` returns nothing.
+#
+# _archive/index.md is a traceability list mapping superseded .docx filenames to
+# their current authoritative counterparts. No operational value in a prompt.
+#
+# Both directories remain on disk and in git; only the prompt loses them
+# (-82,487 bytes / -14.5% of the assembled system prompt, on EVERY call site).
+
+# SIO-1285: per-intent knowledge selection. Presence of this block wires the
+# selectIacKnowledge node into buildIacGraph; remove it and the feature is off and every
+# prompt returns to the unfiltered build (the SIO-640 edge-gate idiom).
+#
+# Keyed on the classifier's `intent`, NOT the 19-value `workflow`: parseIntent PRODUCES
+# the workflow, so it cannot filter on its own output, while classifyIacIntent has already
+# run and cost nothing extra. Every name below must be a category declared above -- the
+# loader throws at load time otherwise, rather than silently dropping it.
+knowledge_selection:
+  by_intent:
+    # The gitops lane feeds parseIntent, which must discriminate among 19 workflows.
+    # Keeps the categories carrying workflow discriminators; drops narrative-only ones.
+    gitops: [reference, playbook, specs, issues]
+    gitops-amend: [reference, playbook, specs, issues]
+    # converseIac explains the agent's OWN prior answer and already carries the full
+    # conversation history, so it needs conventions plus the incident narratives.
+    converse: [reference, runbooks]
+    # 'info' is intentFromText's CATCH-ALL (nodes.ts:573 returns it for anything
+    # unrecognised) -- not a category of request but everything the classifier could not
+    # place. Narrowing it would silently starve every novel or misclassified request, so
+    # it gets the full set permanently. knowledge-selector-sync.test.ts pins this.
+    info: [reference, playbook, specs, issues, cost-plans, runbooks]
+    # These four route to nodes that build no knowledge-bearing prompt, so their mapping
+    # is inert; kept at the full set so nothing starves if that ever changes.
+    drift: [reference, playbook, specs, issues, cost-plans, runbooks]
+    synthetics-drift: [reference, playbook, specs, issues, cost-plans, runbooks]
+    fleet-upgrade: [reference, playbook, specs, issues, cost-plans, runbooks]
+    pipeline-status: [reference, playbook, specs, issues, cost-plans, runbooks]
+  # Always unioned into every selection, so no lane can starve. reference/ holds the repo
+  # map, conventions, cluster inventory, stack modules and the MR template.
+  floor: [reference]

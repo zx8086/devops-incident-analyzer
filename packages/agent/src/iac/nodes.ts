@@ -42,6 +42,7 @@ import {
 	parseSinglePipeline,
 } from "./fleet-apply-result.ts";
 import { evaluateGuards, validateIlmPhaseOrdering } from "./guards.ts";
+import { filterAgentKnowledge } from "./knowledge-selector.ts";
 import { classifyLiveState, lifecycleRank, lifecycleTag } from "./lifecycle.ts";
 import {
 	computeIlmLiveParity,
@@ -923,7 +924,8 @@ async function buildInFlightSessionNote(): Promise<string> {
 export async function parseIntent(state: IacStateType): Promise<Partial<IacStateType>> {
 	const query = lastHumanText(state);
 	const llm = createLlm("iacPlanner", AGENT);
-	const sys = buildSystemPrompt(getAgentByName(AGENT));
+	// SIO-1285: narrowed to state.selectedKnowledge when the selector ran; null -> unchanged.
+	const sys = buildSystemPrompt(filterAgentKnowledge(getAgentByName(AGENT), state.selectedKnowledge));
 	const instruction =
 		"Extract the requested Elastic Cloud IaC change as a single strict JSON object with keys: " +
 		// SIO-1003: built from WORKFLOW_VALUES so the instruction enum can never drift from the zod enum.
@@ -1304,7 +1306,7 @@ export async function answerInfo(state: IacStateType): Promise<Partial<IacStateT
 	}
 	const llm = createLlmWithTools("iacReader", tools, AGENT);
 	const sys =
-		`${buildSystemPrompt(getAgentByName(AGENT))}\n\n` +
+		`${buildSystemPrompt(filterAgentKnowledge(getAgentByName(AGENT), state.selectedKnowledge))}\n\n` +
 		"This is a READ-ONLY question. Use the elastic read tools to answer it precisely. " +
 		"Never draft Terraform, never open an MR, never create a branch. Answer concisely with the facts.";
 	const convo: BaseMessage[] = [new SystemMessage(sys), new HumanMessage(query)];
@@ -1343,7 +1345,7 @@ const CONVERSE_GUARDRAIL =
 
 export async function converseIac(state: IacStateType): Promise<Partial<IacStateType>> {
 	const tools = infoTools();
-	const sys = `${buildSystemPrompt(getAgentByName(AGENT))}\n\n${CONVERSE_GUARDRAIL}`;
+	const sys = `${buildSystemPrompt(filterAgentKnowledge(getAgentByName(AGENT), state.selectedKnowledge))}\n\n${CONVERSE_GUARDRAIL}`;
 
 	// No read tools available: answer from history alone (still useful -- it's an explanation).
 	if (tools.length === 0) {
@@ -7145,7 +7147,10 @@ async function buildMrDescription(state: IacStateType): Promise<string> {
 	const review = state.planReview;
 	const req = state.iacRequest;
 	try {
-		const sys = buildSystemPrompt(getAgentByName(AGENT));
+		// SIO-1285: reached only on the gitops path, so selectedKnowledge is already the
+		// gitops set. It fills reference/mr-template.md, so `reference` (in every selection
+		// via the floor) is the category it actually needs.
+		const sys = buildSystemPrompt(filterAgentKnowledge(getAgentByName(AGENT), state.selectedKnowledge));
 		const context = [
 			`Change: ${req?.workflow ?? "other"} on cluster ${req?.cluster ?? "?"}.`,
 			req?.workflow === "version-upgrade"

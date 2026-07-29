@@ -205,12 +205,32 @@ export const RunbookSelectionConfigSchema = z.object({
 });
 export type RunbookSelectionConfig = z.infer<typeof RunbookSelectionConfigSchema>;
 
+// SIO-1285: per-intent knowledge CATEGORY selection for elastic-iac, whose prompt
+// otherwise carries every entry on every call. Presence of this block is the feature
+// gate (same idiom as runbook_selection above); absent -> the selector node is never
+// edged and prompts are byte-identical to the unfiltered build.
+//
+// Keyed on the classifier's `intent` rather than the 19-value `workflow`, because
+// parseIntent PRODUCES the workflow -- it cannot filter on its own output -- while
+// classifyIacIntent has already run and cost nothing extra.
+export const KnowledgeSelectionConfigSchema = z.object({
+	by_intent: z.record(z.string(), z.array(z.string())),
+	// Always unioned into every selection, so no lane can starve. `reference` holds the
+	// repo map, conventions and cluster inventory the planner needs whatever it is doing.
+	floor: z.array(z.string()),
+});
+export type KnowledgeSelectionConfig = z.infer<typeof KnowledgeSelectionConfigSchema>;
+
 export const KnowledgeIndexSchema = z.object({
 	name: z.string(),
 	description: z.string(),
 	version: z.string(),
 	categories: z.record(z.string(), KnowledgeCategorySchema),
 	runbook_selection: RunbookSelectionConfigSchema.optional(),
+	// A plain z.object STRIPS unknown keys rather than rejecting them, so a
+	// knowledge_selection block in index.yaml without this field parses "successfully"
+	// and is silently discarded -- the feature would never turn on, with no error.
+	knowledge_selection: KnowledgeSelectionConfigSchema.optional(),
 });
 export type KnowledgeIndex = z.infer<typeof KnowledgeIndexSchema>;
 

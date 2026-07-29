@@ -4,6 +4,7 @@ import { isKnowledgeGraphEnabled } from "@devops-agent/knowledge-graph";
 import { END, START, StateGraph } from "@langchain/langgraph";
 import { initializeLangSmith } from "../langsmith.ts";
 import { selectedBackend } from "../memory-backend.ts";
+import { getAgentByName } from "../prompt-context.ts";
 import {
 	graphEnrichIac,
 	memoryEnrichIac,
@@ -11,6 +12,7 @@ import {
 	recordIacOutcome,
 	recordIacPromptNode,
 } from "./graph-knowledge.ts";
+import { selectIacKnowledge } from "./knowledge-selector.ts";
 import {
 	advanceDrift,
 	amendChange,
@@ -80,10 +82,47 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 	// watchPipeline when the KG is enabled, for both the gitops MR flow and the
 	// pipeline-status re-check. Same edge-gate idiom as the SIO-954 nodes above.
 	const outcomeTarget = () => (knowledgeGraphEnabled ? "recordIacOutcome" : "teardown");
+	// SIO-1285: the knowledge selector is gated on the data-driven knowledge_selection block
+	// in agents/elastic-iac/knowledge/index.yaml -- presence IS the switch, exactly as
+	// runbook_selection gates incident-analyzer's selectRunbooks (graph.ts:81). When absent,
+	// selectIacKnowledge is registered but never selected, selectedKnowledge stays null, and
+	// every prompt is byte-identical to the unfiltered build.
+	const knowledgeSelectorEnabled = getAgentByName("elastic-iac").knowledgeSelection !== undefined;
+	// The intent fan-out router, lifted out of its addConditionalEdges call so BOTH the
+	// gated-off path (classifyIacIntent -> target) and the gated-on path
+	// (classifyIacIntent -> selectIacKnowledge -> target) run the IDENTICAL function.
+	const intentTarget = (s: typeof IacState.State): string =>
+		s.intent === "gitops"
+			? "parseIntent"
+			: s.intent === "gitops-amend"
+				? "amendChange"
+				: s.intent === "fleet-upgrade"
+					? "detectFleetUpgrade"
+					: s.intent === "synthetics-drift"
+						? "detectSyntheticsDrift"
+						: s.intent === "drift"
+							? "detectDrift"
+							: s.intent === "pipeline-status"
+								? "watchPipeline"
+								: s.intent === "converse"
+									? "converseIac"
+									: "answerInfo";
+	const INTENT_TARGETS = [
+		"parseIntent",
+		"amendChange",
+		"detectFleetUpgrade",
+		"detectSyntheticsDrift",
+		"detectDrift",
+		"answerInfo",
+		"watchPipeline",
+		"converseIac",
+	];
 
 	const graph = new StateGraph(IacState)
 		.addNode("bootstrap", bootstrapIac)
 		.addNode("classifyIacIntent", classifyIacIntent)
+		// SIO-1285: always registered, edged only when knowledge_selection is configured.
+		.addNode("selectIacKnowledge", selectIacKnowledge)
 		.addNode("answerInfo", answerInfo)
 		.addNode("converseIac", converseIac)
 		.addNode("parseIntent", parseIntent)
@@ -144,35 +183,14 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		.addEdge("recordIacPrompt", "classifyIacIntent")
 		// SIO-870 info -> answerInfo; gitops -> maker pipeline. SIO-875 pipeline-status ->
 		// re-check the thread's MR via watchPipeline. SIO-882 drift -> detectDrift.
-		.addConditionalEdges(
-			"classifyIacIntent",
-			(s) =>
-				s.intent === "gitops"
-					? "parseIntent"
-					: s.intent === "gitops-amend"
-						? "amendChange"
-						: s.intent === "fleet-upgrade"
-							? "detectFleetUpgrade"
-							: s.intent === "synthetics-drift"
-								? "detectSyntheticsDrift"
-								: s.intent === "drift"
-									? "detectDrift"
-									: s.intent === "pipeline-status"
-										? "watchPipeline"
-										: s.intent === "converse"
-											? "converseIac"
-											: "answerInfo",
-			[
-				"parseIntent",
-				"amendChange",
-				"detectFleetUpgrade",
-				"detectSyntheticsDrift",
-				"detectDrift",
-				"answerInfo",
-				"watchPipeline",
-				"converseIac",
-			],
-		)
+		// SIO-1285: when the knowledge selector is configured, this fan-out takes one hop
+		// through selectIacKnowledge first; that node then runs the SAME intentTarget router,
+		// so routing is identical either way and only the prompt size differs.
+		.addConditionalEdges("classifyIacIntent", knowledgeSelectorEnabled ? () => "selectIacKnowledge" : intentTarget, [
+			"selectIacKnowledge",
+			...INTENT_TARGETS,
+		])
+		.addConditionalEdges("selectIacKnowledge", intentTarget, INTENT_TARGETS)
 		.addEdge("answerInfo", END)
 		.addEdge("converseIac", END)
 		// SIO-912: parseIntent short-circuits a request it has no proposer for (workflow

@@ -8,10 +8,18 @@ The `elastic-iac` agent is a peer to the incident-analyzer (selected by the UI a
 
 The governing principle (deck "Elastic Cloud Observability · IaC Monorepo", p.18): **agent proposes, GitOps disposes.** The agent never merges, approves, or applies — that is the human/CI side of a maker/checker separation of duties.
 
-## Graph (30 nodes)
+## Graph (31 nodes)
+
+SIO-1285 added `selectIacKnowledge` between `classifyIacIntent` and the intent fan-out.
+It is gated on the `knowledge_selection` block in `agents/elastic-iac/knowledge/index.yaml`
+(presence IS the switch -- the SIO-640 edge-gate idiom): registered always, edged only when
+configured. When edged, the fan-out takes one hop through it and the node runs the SAME
+intent router, so routing is identical and only the assembled prompt size differs. It makes
+no model call -- it reads the `intent` that `classifyIacIntent` already computed.
 
 ```text
 START -> bootstrap -> {connected? recordIacPrompt -> classifyIacIntent : END}
+  classifyIacIntent -> selectIacKnowledge -> (the same intent fan-out below)
   classifyIacIntent --(info)----------> answerInfo -> END
   classifyIacIntent --(converse)------> converseIac -> END        (follow-up turns only, SIO-930)
   classifyIacIntent --(pipeline-status)-> watchPipeline -> teardown -> END

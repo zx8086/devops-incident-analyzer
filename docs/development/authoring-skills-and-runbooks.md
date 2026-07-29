@@ -29,9 +29,26 @@ pipeline stage (normalize, aggregate, validate/mitigate)?
 |---|---|---|
 | File location | `agents/incident-analyzer/skills/<name>/SKILL.md` | `agents/incident-analyzer/knowledge/<category>/<file>.md` |
 | Activation | Named explicitly in `agent.yaml:skills:` | Auto-discovered via `knowledge/index.yaml` category path |
-| Prompt presence | Only when listed in the manifest | Every registered entry, always on |
+| Prompt presence | Only when listed in the manifest | **Selected, not always-on** -- see below |
 | Who decides when it applies | The pipeline node whose purpose maps to the skill | The LLM pattern-matches incident signals against prose |
 | Maintenance cost | Changes to a skill require care -- they shape the agent's procedure | Drop-in authoring; new runbook is live on next agent load |
+
+**Prompt presence is per-agent, and neither agent is "always on" any more.** This row said
+"Every registered entry, always on" until SIO-1285; that had been wrong for incident-analyzer
+since SIO-640 and is now wrong for elastic-iac too:
+
+- **incident-analyzer** (SIO-640): runbooks are lazy. A catalog projection costs ~280 bytes
+  per runbook always-on (summary capped at 200 chars), and only the `selectRunbooks` node's
+  max-3 picks get their full ~6 KB body. Configured by `runbook_selection` in
+  `knowledge/index.yaml`; non-runbook categories are unaffected.
+- **elastic-iac** (SIO-1285): knowledge is selected by *category*, keyed on the classifier's
+  `intent`, via the `knowledge_selection` block in `knowledge/index.yaml`. A `converse` turn
+  carries ~154 KB where an unfiltered build carried ~486 KB.
+
+In both cases **presence of the config block is the feature gate** -- remove it and the
+agent returns to loading everything. Adding a file to a registered category still makes it
+live on the next agent load, but it is no longer free: it enlarges every prompt that selects
+that category. Check the byte cost before adding a large file.
 
 ---
 
@@ -130,6 +147,16 @@ agents/incident-analyzer/knowledge/
 ```
 
 The loader walks every `.md` file (excluding `.gitkeep`) in each directory registered under `knowledge/index.yaml`. As long as `runbooks/` is listed in the index (it already is), any new file is picked up on the next agent load.
+
+Two things that surprise people here:
+
+- **The walk is not recursive.** `loadKnowledge` reads only the `.md` files sitting *directly*
+  under a category's `path`; subdirectories are invisible to it. That is load-bearing, not
+  incidental -- it is how `knowledge/_archive/eu-b2b-ilm/` stays out of the prompt while
+  remaining in git. Nesting a file one level down is the crude way to exclude it.
+- **Pickup is not free.** A new file enlarges every prompt that selects its category (see the
+  prompt-presence note above). For a large file, prefer a category the relevant intent does
+  not select, or leave it unregistered and reference it from a runbook by path.
 
 ### Step 2: Write the runbook
 

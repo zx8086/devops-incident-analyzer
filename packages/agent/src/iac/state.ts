@@ -31,6 +31,29 @@ export const WORKFLOW_VALUES = [
 
 export type IacWorkflow = (typeof WORKFLOW_VALUES)[number];
 
+// SIO-1285: single source of truth for the classifier's intent enum, mirroring
+// WORKFLOW_VALUES above. The `intent` annotation is derived from it, so the knowledge
+// selector's Record<IacIntent, ...> is compile-time exhaustive and the sync test can
+// iterate every value -- the SIO-1003 discipline (a hand-maintained mapping that drifts
+// from its enum is the bug that ticket fixed).
+//
+// NOTE: this is a DIFFERENT, coarser enum than WORKFLOW_VALUES. `intent` is what
+// classifyIacIntent emits to route the fan-out; `workflow` is what parseIntent extracts
+// once the gitops lane is chosen. "drift" and "synthetics-drift" are intents, NOT
+// workflows.
+export const INTENT_VALUES = [
+	"info",
+	"gitops",
+	"gitops-amend",
+	"pipeline-status",
+	"drift",
+	"synthetics-drift",
+	"fleet-upgrade",
+	"converse",
+] as const;
+
+export type IacIntent = (typeof INTENT_VALUES)[number];
+
 // Parsed natural-language IaC request (e.g. "downsize eu-b2b warm to 8 GB").
 export interface IacRequest {
 	workflow: IacWorkflow;
@@ -586,17 +609,17 @@ export const IacState = Annotation.Root({
 	// wrong, use 14d", "do as instructed", "proceed"). Selectable only when an activeChange.branch
 	// exists; routes to amendChange, which re-commits onto that SAME branch (updating the existing MR
 	// in place) instead of proposing from scratch.
-	intent: Annotation<
-		| "info"
-		| "gitops"
-		| "gitops-amend"
-		| "pipeline-status"
-		| "drift"
-		| "synthetics-drift"
-		| "fleet-upgrade"
-		| "converse"
-		| null
-	>({
+	intent: Annotation<IacIntent | null>({
+		reducer: last,
+		default: () => null,
+	}),
+	// SIO-1285: the knowledge CATEGORIES this turn's prompt may carry, chosen by
+	// selectIacKnowledge from `intent`. Tri-state, mirroring SIO-640's selectedRunbooks:
+	//   null    -> selector did not run (default; feature off) -> NO filtering at all
+	//   []      -> selector ran and chose nothing (unreachable: the floor makes the
+	//              selection non-empty, and every degenerate path returns the full set)
+	//   [names] -> keep exactly these categories
+	selectedKnowledge: Annotation<string[] | null>({
 		reducer: last,
 		default: () => null,
 	}),
