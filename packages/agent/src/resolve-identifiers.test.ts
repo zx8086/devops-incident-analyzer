@@ -406,6 +406,83 @@ describe("resolveIdentifiers node", () => {
 		expect(result.resolvedIdentifiers?.gitlab).toBeUndefined();
 	});
 
+	// SIO-1279: an empty targetDeployments used to mean ONE probe against the MCP default
+	// cluster. eu-b2b is third in ELASTIC_DEPLOYMENTS, so an unscoped order-service
+	// incident probed eu-cld -- which holds zero *order* services -- and reported absence.
+	test("elastic probe fans out across every configured deployment when none is targeted", async () => {
+		// Capture the ALS-scoped deployment each invocation runs under, so this asserts
+		// distinct clusters were probed rather than merely counting calls.
+		const seen: string[] = [];
+		toolRegistry.elastic = [
+			{
+				name: "elasticsearch_search",
+				invoke: async () => {
+					seen.push(realBridge.currentElasticDeploymentForTest() ?? "(default)");
+					return elasticAggPayload([]);
+				},
+			},
+		];
+		const prev = process.env.ELASTIC_DEPLOYMENTS;
+		process.env.ELASTIC_DEPLOYMENTS = "eu-cld,us-cld,eu-b2b";
+		try {
+			await resolveIdentifiers(makeState({ targetDataSources: ["elastic"] }));
+		} finally {
+			if (prev === undefined) delete process.env.ELASTIC_DEPLOYMENTS;
+			else process.env.ELASTIC_DEPLOYMENTS = prev;
+		}
+		// One warm-up + one probe per deployment. The exact count is less important than
+		// the fact that a single default-cluster probe is no longer what happens.
+		// warmElasticDeployments fires an unscoped warm-up first (SIO-1086), which is why
+		// "(default)" also appears; assert the fan-out is a SUPERSET of the configured list
+		// rather than pinning the warm-up's presence.
+		for (const id of ["eu-cld", "us-cld", "eu-b2b"]) {
+			expect(seen, `deployment ${id} was never probed`).toContain(id);
+		}
+	});
+
+	// SIO-1279: every deployment carries dev/stg/prd traffic, so the sub-agent needs the
+	// environment mix per candidate -- a prod symptom explained by a dev document is a
+	// silently wrong conclusion.
+	test("elastic probe records the deployment and environments each name was found in", async () => {
+		toolRegistry.elastic = [
+			{
+				name: "elasticsearch_search",
+				invoke: async () =>
+					JSON.stringify({
+						aggregations: {
+							by_service: {
+								buckets: [
+									{
+										key: "prana-order-service",
+										doc_count: 100,
+										env: {
+											buckets: [
+												{ key: "production", doc_count: 70 },
+												{ key: "development", doc_count: 30 },
+											],
+										},
+									},
+								],
+							},
+						},
+					}),
+			},
+		];
+		const prev = process.env.ELASTIC_DEPLOYMENTS;
+		process.env.ELASTIC_DEPLOYMENTS = "eu-b2b";
+		try {
+			const result = await resolveIdentifiers(makeState({ targetDataSources: ["elastic"] }));
+			const placements = result.resolvedIdentifiers?.elastic?.placements ?? [];
+			expect(placements).toHaveLength(1);
+			expect(placements[0]?.serviceName).toBe("prana-order-service");
+			expect(placements[0]?.deployment).toBe("eu-b2b");
+			expect(placements[0]?.environments).toEqual(["production", "development"]);
+		} finally {
+			if (prev === undefined) delete process.env.ELASTIC_DEPLOYMENTS;
+			else process.env.ELASTIC_DEPLOYMENTS = prev;
+		}
+	});
+
 	// SIO-1261 (CodeRabbit on PR #505): the group is deliberately NOT env-overridable. An override
 	// would reach only the PROBE -- project-resolution/SKILL.md hard-codes `group_id: "pvhcorp"`, so
 	// the sub-agent's own STEP 1 would still search pvhcorp on exactly the fallback path this ticket

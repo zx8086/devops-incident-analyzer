@@ -520,7 +520,35 @@ export const ResolvedIdentifiersSchema = z.object({
 	// still set-equals the current focus.services.
 	resolvedForTurn: z.number(),
 	resolvedForServices: z.array(z.string()),
-	elastic: z.object({ serviceNames: z.array(z.string()) }).optional(),
+	// SIO-1279: `serviceNames` alone could not answer WHERE a name was found. The probe
+	// only ever queried the default cluster, so a service in any other deployment was
+	// reported absent -- and even a successful probe could not tell the sub-agent which
+	// of the 10 configured deployments to name, making SIO-1277's "deployment is
+	// MANDATORY" rule unsatisfiable.
+	//
+	// `placements` carries that provenance per name. Every deployment holds dev, stg AND
+	// prd traffic, so `environments` is load-bearing for correlation: an incident about
+	// production must not be answered from development documents, and a prod GitLab
+	// deploy correlated against dev Elastic errors is a silently wrong conclusion.
+	// Measured 2026-07-29: prana-order-service in eu-b2b is ~32% development over 24h.
+	//
+	// `serviceNames` is retained unchanged so every existing reader keeps working.
+	elastic: z
+		.object({
+			serviceNames: z.array(z.string()),
+			placements: z
+				.array(
+					z.object({
+						serviceName: z.string(),
+						deployment: z.string(),
+						// Descending by doc volume. Empty when the source carries no
+						// service.environment at all (Kong gateway rows, k8s container logs).
+						environments: z.array(z.string()),
+					}),
+				)
+				.optional(),
+		})
+		.optional(),
 	// SIO-1087: `scopes` = every scope -> its collection names (enumerated, never filtered).
 	// SIO-1088: `indexInfo` = scope -> collection -> { hasPrimary, secondaryKeyFields }. A bare
 	// SELECT * needs a PRIMARY index; a collection with only SECONDARY indexes rejects SELECT *

@@ -25,6 +25,13 @@ function currentElasticDeployment(): string | undefined {
 	return deploymentStorage.getStore()?.deploymentId;
 }
 
+// SIO-1279: test seam. The deployment lives in AsyncLocalStorage, so a test asserting
+// that a probe fanned out across clusters has no other way to observe which deployment
+// each invocation ran under. Mirrors the _setXForTesting idiom used elsewhere here.
+export function currentElasticDeploymentForTest(): string | undefined {
+	return currentElasticDeployment();
+}
+
 // SIO-828: AWS estates carry per-fan-out context too, but via tool *args* (estate
 // is a required Zod-enum field on every AWS tool), not headers. The sub-agent
 // enters a withAwsEstate scope before invoking its tools, and getToolsForDataSource
