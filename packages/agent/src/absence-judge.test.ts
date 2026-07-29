@@ -255,6 +255,29 @@ describe("judgeContradictedAbsenceClaims (SIO-1158)", () => {
 		expect(await judgeContradictedAbsenceClaims(CLAIMS, RESULTS)).toBeNull();
 	});
 
+	// SIO-1270: `reason` was required, so a model returning perfectly usable verdicts but no
+	// justification failed safeParse -> null -> the caller kept the regex verdict and shipped the
+	// "treat the returned data as ground truth" caveat. A whole failure mode for a field
+	// mapVerdicts discards before it is ever logged.
+	test("a verdict omitting `reason` still parses (SIO-1270)", async () => {
+		const { llm } = fakeLlm(() =>
+			JSON.stringify({
+				verdicts: [
+					{ index: 0, contradictedByData: false },
+					{ index: 1, contradictedByData: true },
+				],
+			}),
+		);
+		_setAbsenceJudgeLlmForTesting(llm);
+		expect(await judgeContradictedAbsenceClaims(CLAIMS, RESULTS)).toEqual([false, true]);
+	});
+
+	test("a MISSING contradictedByData still returns null -- only `reason` became optional", async () => {
+		const { llm } = fakeLlm(() => JSON.stringify({ verdicts: [{ index: 0 }, { index: 1 }] }));
+		_setAbsenceJudgeLlmForTesting(llm);
+		expect(await judgeContradictedAbsenceClaims(CLAIMS, RESULTS)).toBeNull();
+	});
+
 	test("an externally aborted signal rethrows instead of failing closed", async () => {
 		_setAbsenceJudgeLlmForTesting({
 			invoke: async () => {
@@ -337,6 +360,19 @@ describe("judgeOvergeneralizedAbsenceClaims (SIO-1198)", () => {
 		});
 		_setAbsenceJudgeLlmForTesting(llm);
 		expect(await judgeOvergeneralizedAbsenceClaims(LINES)).toBeNull();
+	});
+
+	test("a verdict omitting `reason` still parses (SIO-1270)", async () => {
+		const { llm } = fakeLlm(() =>
+			JSON.stringify({
+				verdicts: [
+					{ index: 0, overgeneralizedAbsence: true },
+					{ index: 1, overgeneralizedAbsence: false },
+				],
+			}),
+		);
+		_setAbsenceJudgeLlmForTesting(llm);
+		expect(await judgeOvergeneralizedAbsenceClaims(LINES)).toEqual([true, false]);
 	});
 });
 
@@ -444,5 +480,16 @@ describe("judge prompt: errors and windows (SIO-1266)", () => {
 		expect(sent).toContain("TIME WINDOW");
 		// The concrete arithmetic the run got wrong.
 		expect(sent).toContain("121 hits over 30 days says nothing about one hour");
+	});
+
+	// SIO-1270: the 8s deadline abort on run eaebc62b came with ~40-word `reason` strings against
+	// maxTokens 1024. Verdicts are load-bearing; justifications are not.
+	test("tells the model to keep `reason` short and to drop it before dropping verdicts", async () => {
+		const { calls, llm } = fakeLlm(() => verdictJson([true, true]));
+		_setAbsenceJudgeLlmForTesting(llm);
+		await judgeContradictedAbsenceClaims(CLAIMS, RESULTS);
+		const sent = JSON.stringify(calls[0]);
+		expect(sent).toContain("under 15 words");
+		expect(sent).toContain("omit");
 	});
 });

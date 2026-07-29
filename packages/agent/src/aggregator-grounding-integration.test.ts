@@ -304,6 +304,34 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-1158 premature-absence judge veto",
 		expect(out.reportCaveats?.length ?? 0).toBeGreaterThan(0);
 	});
 
+	// SIO-1270 headline: a judge that never answers must change the caveat TEXT and NOTHING else.
+	// Fail-closed is right for the cap and stays; it is wrong for a note that asserts a specific,
+	// checkable, false statement about data the operator is then told to trust.
+	test("a FAILED judge keeps the cap identical but drops the asserting caveat", async () => {
+		mockLlmOverride = TP_CONTENT;
+		_setAbsenceJudgeLlmForTesting({
+			invoke: async () => {
+				throw new Error("bedrock unavailable");
+			},
+		});
+
+		const out = await aggregate(makeState([ELASTIC_RESULT], "test-absence-judge-failed"));
+		// Identical to the judge-confirms case above -- this is the "cap value is unchanged" pin.
+		expect(out.confidenceScore).toBeLessThanOrEqual(0.59);
+		expect(out.confidenceCap).toBe(0.59);
+		expect(out.capReasons).toContain("premature-absence");
+		// ...and no NEW cap reason vocabulary was introduced (that would break the exact-set
+		// assertion in packages/shared/src/__tests__/confidence.test.ts).
+		expect(out.capReasons).not.toContain("premature-absence-unjudged");
+		expect(out.finalAnswer).toContain(CAVEATS_HEADING);
+
+		const caveat = out.reportCaveats?.find((c) => c.guard.startsWith("premature-absence-contradicted"));
+		expect(caveat?.guard).toBe("premature-absence-contradicted-unjudged");
+		expect(caveat?.note).not.toContain("returned data matching this claim");
+		expect(caveat?.note).not.toContain("ground truth");
+		expect(caveat?.note).toContain("did not complete");
+	});
+
 	// SIO-1242: inverted. This used to assert the "[CORRECTION: ...]" debug string was inserted
 	// INSIDE the row's last cell -- which is exactly how an internal note ended up rendering in the
 	// Correlated Timeline's Severity column on run 43796e9f. The row must now survive untouched and

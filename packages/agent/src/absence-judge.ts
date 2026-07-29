@@ -48,12 +48,18 @@ export function isAbsenceJudgeEnabled(env: NodeJS.ProcessEnv = process.env): boo
 	return v !== "false" && v !== "0";
 }
 
+// SIO-1270: `reason` is OPTIONAL. Requiring it made a model that returned a perfectly usable
+// verdict (index + contradictedByData) fail safeParse -> mapVerdicts returns null -> the caller
+// keeps the regex verdict and ships the "treat the returned data as ground truth" caveat. That is
+// a whole failure mode traded for a field mapVerdicts discards before it is ever logged. Kept in
+// the schema and the prompt because a model asked to justify a verdict is better calibrated than
+// one told to emit a bare boolean; it is simply no longer load-bearing.
 export const AbsenceJudgeResponseSchema = z.object({
 	verdicts: z.array(
 		z.object({
 			index: z.number().int().min(0),
 			contradictedByData: z.boolean(),
-			reason: z.string(),
+			reason: z.string().optional(),
 		}),
 	),
 });
@@ -65,7 +71,8 @@ export const OvergeneralizedJudgeResponseSchema = z.object({
 		z.object({
 			index: z.number().int().min(0),
 			overgeneralizedAbsence: z.boolean(),
-			reason: z.string(),
+			// SIO-1270: optional for the same reason as the contradicted arm above.
+			reason: z.string().optional(),
 		}),
 	),
 });
@@ -83,7 +90,7 @@ contradictedByData = false when:
 - the sentence scopes its claim to a TIME WINDOW ("0 hits between 05:12Z and 06:12Z", "in the last hour", "in the exact window") and the evidence covers a DIFFERENT or WIDER period. Hits outside the sentence's window do not contradict a claim about that window -- 121 hits over 30 days says nothing about one hour. Answer true only if the evidence shows matching data INSIDE the stated window;
 - the evidence is unrelated to the entity, phrase, field, or window the sentence names.
 
-Return ONLY JSON, no prose, with exactly one verdict per sentence index:
+Return ONLY JSON, no prose, with exactly one verdict per sentence index. Keep each "reason" under 15 words, and omit "reason" entirely if that helps you finish within the response limit -- a complete set of verdicts matters far more than the justifications:
 {"verdicts": [{"index": 0, "contradictedByData": true, "reason": "..."}]}`;
 
 // Byte bounds for the evidence digest: per tool-output/findings entry and per
@@ -286,7 +293,7 @@ overgeneralizedAbsence = true ONLY when the sentence asserts absence universally
 
 overgeneralizedAbsence = false when the sentence explicitly SCOPES its claim to what was checked: it enumerates the specific collections, indexes, tables, or windows examined (e.g. "absent from all queried collections: a.b, c.d, e.f"), or qualifies with words like "queried", "sampled", "checked", "examined", "in the N collections listed". A scoped negative over an enumerated set is a valid finding, not an over-generalization.
 
-Return ONLY JSON, no prose, with exactly one verdict per sentence index:
+Return ONLY JSON, no prose, with exactly one verdict per sentence index. Keep each "reason" under 15 words, and omit "reason" entirely if that helps you finish within the response limit -- a complete set of verdicts matters far more than the justifications:
 {"verdicts": [{"index": 0, "overgeneralizedAbsence": true, "reason": "..."}]}`;
 
 export async function judgeOvergeneralizedAbsenceClaims(
