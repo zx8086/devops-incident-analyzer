@@ -7,7 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildSystemPrompt, loadAgent } from "@devops-agent/gitagent-bridge";
+import { buildSystemPrompt, type KnowledgeEntry, loadAgent } from "@devops-agent/gitagent-bridge";
 import {
 	ALL_LIVE_CATEGORIES,
 	DEFAULT_BY_INTENT,
@@ -168,8 +168,15 @@ describe("prompt-size effect (SIO-1285)", () => {
 // binding for RUNBOOK selection; before this it did nothing for any other category, because
 // stripFrontmatter discarded the parsed status. These pin the three carried-over decisions.
 describe("OKF lifecycle exclusion (SIO-1289)", () => {
-	const entry = (filename: string, status?: string, staleAfter?: string) =>
-		({ category: "issues", filename, content: "body", status, staleAfter }) as never;
+	// Typed against the real KnowledgeEntry rather than cast, so a change to the lifecycle
+	// union is a compile error here instead of drifting silently.
+	const entry = (filename: string, status?: KnowledgeEntry["status"], staleAfter?: string): KnowledgeEntry => ({
+		category: "issues",
+		filename,
+		content: "body",
+		status,
+		staleAfter,
+	});
 
 	test("a deprecated entry is excluded", () => {
 		const kept = excludeDeprecated([entry("a.md"), entry("b.md", "deprecated"), entry("c.md", "stable")]);
