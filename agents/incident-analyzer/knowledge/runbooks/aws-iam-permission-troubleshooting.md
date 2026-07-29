@@ -13,6 +13,8 @@ tools:
 ---
 # AWS IAM Permission Troubleshooting
 
+Diagnose AWS AccessDenied errors and identify the missing IAM permission.
+
 ## When to Use This
 Reach for this runbook when an AWS tool returns an `iam-permission-missing` error from the MCP server, or when a `ToolError` has `category: "iam"` with `advice` pointing at `DevOpsAgentReadOnlyPolicy`. The aws-agent should link to this runbook rather than re-raising the same IAM gap as a finding on every run.
 

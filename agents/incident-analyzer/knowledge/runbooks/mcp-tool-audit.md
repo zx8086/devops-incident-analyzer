@@ -11,9 +11,10 @@ triggers:
   metrics:
     - mcp
     - tool_error
-    - tool_not_found
-    - datasource_unavailable
-    - empty_results
+    - tool error
+    - tool not found
+    - datasource unavailable
+    - empty results
   match: any
 tools:
   - elasticsearch_get_cluster_health

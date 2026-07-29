@@ -9,10 +9,12 @@ generated:
   at: 2026-07-29
 triggers:
   metrics:
-    - error_rate
+    - error rate
     - 5xx
+    - http status
     - http_status
     - gateway
+    - ingest failure
     - ingest_failure
   severity:
     - critical
@@ -37,6 +39,8 @@ tools:
   - kafka_get_consumer_group_lag
 ---
 # High Error Rate Investigation
+
+Investigate a spike in application error rate using Elastic APM.
 
 ## Symptoms
 - Elevated 5xx responses on API gateway (Kong Konnect)

@@ -10,10 +10,10 @@ generated:
 triggers:
   metrics:
     - n1ql
-    - slow_query
-    - query_latency
+    - slow query
+    - query latency
     - couchbase
-    - fatal_request
+    - fatal request
   match: any
 tools:
   - capella_get_longest_running_queries
@@ -36,6 +36,8 @@ tools:
   - query_api_requests
 ---
 # Couchbase Slow Query Investigation
+
+Investigate slow Couchbase queries, missing indexes and query-plan regressions.
 
 ## Symptoms
 - N1QL query latency exceeding SLO (P99 > 500ms for complex, >100ms for indexed)

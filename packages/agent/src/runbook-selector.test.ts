@@ -533,6 +533,38 @@ describe("narrowCatalogByTriggers", () => {
 		expect(result.mode).toBe("noop");
 		expect(result.narrowed).toEqual([]);
 	});
+
+	// SIO-1293: trigger stems are matched as substrings of the normalizer's
+	// HUMAN-PHRASED metric names ("consumer lag", not "consumer_lag"). These two
+	// cases pin the contract the production runbook stems rely on.
+	test("SIO-1293: human-phrased metric matches domain stems; trigger-less cross-cutting entry survives narrowing", () => {
+		const catalog = [
+			entry("kafka-consumer-lag.md", { metrics: ["lag", "dlq", "dead letter", "consumer", "kafka"] }),
+			entry("high-error-rate.md", { metrics: ["error rate", "5xx", "http status", "gateway", "ingest failure"] }),
+			entry("code-change-correlation.md"), // trigger-less: always visible to the router
+		];
+		const result = narrowCatalogByTriggers(catalog, {
+			extractedMetrics: [{ name: "consumer lag", value: "12000" }],
+		});
+		expect(result.mode).toBe("narrowed");
+		expect(result.narrowed.map((e) => e.filename).sort()).toEqual([
+			"code-change-correlation.md",
+			"kafka-consumer-lag.md",
+		]);
+	});
+
+	test("SIO-1293: unmatched metric (no domain stem hits it) -> fallback keeps the full catalog", () => {
+		const catalog = [
+			entry("kafka-consumer-lag.md", { metrics: ["lag", "dlq", "dead letter", "consumer", "kafka"] }),
+			entry("high-error-rate.md", { metrics: ["error rate", "5xx", "http status", "gateway", "ingest failure"] }),
+			entry("code-change-correlation.md"),
+		];
+		const result = narrowCatalogByTriggers(catalog, {
+			extractedMetrics: [{ name: "error count", value: "57" }],
+		});
+		expect(result.mode).toBe("fallback");
+		expect(result.narrowed).toEqual(catalog);
+	});
 });
 
 describe("runSelectRunbooks: trigger filter integration", () => {

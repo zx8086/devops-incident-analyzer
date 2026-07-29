@@ -11,8 +11,8 @@ triggers:
   metrics:
     - lag
     - dlq
-    - dead_letter
-    - consumer_group
+    - dead letter
+    - consumer
     - kafka
   match: any
 tools:
@@ -34,6 +34,8 @@ tools:
   - capella_get_fatal_requests
 ---
 # Kafka Consumer Lag Investigation
+
+Identify consumer groups with growing lag and locate the stalled partition.
 
 ## Symptoms
 - Consumer group lag exceeding threshold (>10,000 messages)
