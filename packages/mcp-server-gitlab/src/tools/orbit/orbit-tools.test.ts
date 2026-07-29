@@ -197,12 +197,18 @@ describe("gitlab_orbit_query_graph: selectivity + error classification", () => {
 		const { handlers } = register(makeCtx({}, client));
 		const result = await handlers.get("gitlab_cross_project_callers")?.({ fqn: "X" });
 		expect(result?.isError).toBe(true);
-		const envelope = extractEnvelope(result?.content[0]?.text ?? "");
+		const text = result?.content[0]?.text ?? "";
+		const envelope = extractEnvelope(text);
 		expect(envelope.kind).toBe("bad-query");
 		expect(envelope.statusCode).toBe(400);
+		// SIO-1294: a compile error means Orbit is UP and rejected the query shape --
+		// the prose must steer fix-the-DSL, never the unavailability fallback.
+		expect(text).not.toContain("not available");
+		expect(text).toContain("Fix the query DSL");
+		expect(text).toContain("gitlab_graph_schema");
 	});
 
-	test("upstream 503 classifies as server-error", async () => {
+	test("upstream 503 classifies as server-error and keeps the unavailability fallback prose", async () => {
 		const client: Partial<OrbitRestClient> = {
 			query: async () => {
 				throw new OrbitUnavailableError("Orbit query failed (503)", 503);
@@ -211,7 +217,10 @@ describe("gitlab_orbit_query_graph: selectivity + error classification", () => {
 		const { handlers } = register(makeCtx({}, client));
 		const result = await handlers.get("gitlab_cross_project_callers")?.({ fqn: "X" });
 		expect(result?.isError).toBe(true);
-		expect(extractEnvelope(result?.content[0]?.text ?? "").kind).toBe("server-error");
+		const text = result?.content[0]?.text ?? "";
+		expect(extractEnvelope(text).kind).toBe("server-error");
+		// SIO-1294: only bad-query branches away from the fallback steering.
+		expect(text).toContain("not available");
 	});
 });
 

@@ -34,6 +34,14 @@ const UNAVAILABLE_GUIDANCE =
 	"Fall back to gitlab_semantic_code_search for symbol resolution and gitlab_get_repository_tree / gitlab_list_commits " +
 	"for per-project investigation. Do NOT fabricate cross-project import edges.";
 
+// SIO-1294: a compile error means Orbit is UP and rejected this query's shape --
+// steering the LLM to the unavailability fallback here would abandon Orbit over a
+// fixable DSL mistake. Steer fix-and-retry instead.
+const BAD_QUERY_GUIDANCE =
+	"Orbit rejected this query shape (compile error) -- Orbit itself is up, so do NOT fall back to other tools. " +
+	"Fix the query DSL using the error pointer below and retry; do not blind-retry the same shape. " +
+	"Ground the shape with gitlab_graph_schema (free) if unsure.";
+
 export interface OrbitToolContext {
 	client?: OrbitRestClient;
 	available: boolean;
@@ -81,7 +89,8 @@ function orbitErrorResult(error: unknown) {
 	else if (status !== undefined) kind = mapHttpStatusToKind(status);
 	else if (/timed?\s*out|ETIMEDOUT|abort/i.test(detail)) kind = "timeout";
 	else kind = "network";
-	const prose = `${UNAVAILABLE_GUIDANCE}\n\n(Orbit error: ${detail})`;
+	const guidance = kind === "bad-query" ? BAD_QUERY_GUIDANCE : UNAVAILABLE_GUIDANCE;
+	const prose = `${guidance}\n\n(Orbit error: ${detail})`;
 	return textResult(envelopeText(prose, { kind, message: detail, statusCode: status }), true);
 }
 
