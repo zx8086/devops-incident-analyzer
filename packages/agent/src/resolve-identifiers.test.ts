@@ -1,6 +1,7 @@
 // packages/agent/src/resolve-identifiers.test.ts
 
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { join } from "node:path";
 import { HumanMessage } from "@langchain/core/messages";
 // Preserve the REAL module (esp. the ALS wrappers withAwsEstate/withElasticDeployment)
 // and override ONLY getToolsForDataSource. Spreading the real exports avoids the
@@ -27,6 +28,7 @@ import {
 	computeTargetSources,
 	DEFAULT_PROBE_TIMEOUT_MS,
 	fetchGraphSeeds,
+	getGitlabResolutionGroup,
 	isBindingsReadEnabled,
 	isResolveIdentifiersEnabled,
 	pickServiceCandidates,
@@ -311,6 +313,123 @@ describe("resolveIdentifiers node", () => {
 			projectId: "41051769",
 			pathWithNamespace: "pvhcorp/b2b/oit/order-service",
 		});
+	});
+
+	// SIO-1261: the probe used a GLOBAL project search, contradicting project-resolution/SKILL.md's
+	// categorical "group-scoped search, never global search -- global project search returns
+	// unrelated public repos". It matters more since SIO-1258 made this id AUTHORITATIVE: the
+	// sub-agent skips its own resolution when the focus block carries one.
+	test("gitlab probe scopes the search to the resolution group", async () => {
+		const seen: Array<Record<string, unknown>> = [];
+		toolRegistry.gitlab = [
+			{
+				name: "gitlab_search",
+				invoke: async (args: unknown) => {
+					seen.push(args as Record<string, unknown>);
+					return JSON.stringify([
+						{ id: 41051769, name: "order-service", path_with_namespace: "pvhcorp/b2b/oit/order-service" },
+					]);
+				},
+			},
+		];
+		await resolveIdentifiers(makeState({ targetDataSources: ["gitlab"] }));
+		expect(seen).toHaveLength(1);
+		expect(seen[0]).toMatchObject({ scope: "projects", group_id: "pvhcorp" });
+	});
+
+	// SIO-1261: group-scoping alone did NOT fix this ticket. The term was longestToken(), and
+	// tokenize() runs normalize(), whose SUFFIX_PATTERN strips `-service` -- so `order-service`
+	// searched for `order`. Measured live 2026-07-28 in group pvhcorp: `order` ranks
+	// `pvhcorp/membership-and-loyalty/ddm/microservices/order` FIRST and the correct
+	// `pvhcorp/b2b/oit/order-service` fifth. The no-fallback guard does not save it, because the
+	// wrong repo genuinely passes matchesFocus.
+	test("gitlab probe searches the full service name, not the suffix-stripped token", async () => {
+		const seen: Array<Record<string, unknown>> = [];
+		toolRegistry.gitlab = [
+			{
+				name: "gitlab_search",
+				invoke: async (args: unknown) => {
+					seen.push(args as Record<string, unknown>);
+					return JSON.stringify([]);
+				},
+			},
+		];
+		await resolveIdentifiers(makeState({ targetDataSources: ["gitlab"] }));
+		expect(seen[0]).toMatchObject({ search: "order-service" });
+		expect(seen[0]?.search).not.toBe("order");
+	});
+
+	// The live ranking for `order-service` in group pvhcorp, in order. Rows 2 and 3 are real repos
+	// that BOTH pass matchesFocus, so without an exact-match preference the winner is whatever
+	// GitLab's relevance score happened to put first.
+	test("gitlab probe prefers an exact name match over a fuzzier higher-ranked row", async () => {
+		toolRegistry.gitlab = [
+			{
+				name: "gitlab_search",
+				invoke: async () =>
+					JSON.stringify([
+						{
+							id: 41051854,
+							name: "orders-service-legacy",
+							path_with_namespace: "pvhcorp/b2b/oit/orders-service-legacy",
+						},
+						{
+							id: 80424402,
+							name: "pvh-ecomm-order-services",
+							path_with_namespace: "pvhcorp/nara/pvh-ecomm-order-services",
+						},
+						{ id: 48543975, name: "order-service", path_with_namespace: "pvhcorp/b2b/oit/order-service" },
+					]),
+			},
+		];
+		const result = await resolveIdentifiers(makeState({ targetDataSources: ["gitlab"] }));
+		expect(result.resolvedIdentifiers?.gitlab).toEqual({
+			projectId: "48543975",
+			pathWithNamespace: "pvhcorp/b2b/oit/order-service",
+		});
+	});
+
+	// SIO-1261: the old code fell back to `rows[0]` when nothing matched the focus, so a global
+	// search returning an unrelated repo made THAT repo authoritative. Returning nothing is the
+	// correct outcome -- the sub-agent's own STEP 1 then resolves it with the full skill logic.
+	test("gitlab probe returns nothing rather than adopting an unmatched project", async () => {
+		toolRegistry.gitlab = [
+			{
+				name: "gitlab_search",
+				invoke: async () =>
+					JSON.stringify([
+						{ id: 999, name: "totally-unrelated", path_with_namespace: "someone-else/totally-unrelated" },
+					]),
+			},
+		];
+		const result = await resolveIdentifiers(makeState({ targetDataSources: ["gitlab"] }));
+		expect(result.resolvedIdentifiers?.gitlab).toBeUndefined();
+	});
+
+	// SIO-1261 (CodeRabbit on PR #505): the group is deliberately NOT env-overridable. An override
+	// would reach only the PROBE -- project-resolution/SKILL.md hard-codes `group_id: "pvhcorp"`, so
+	// the sub-agent's own STEP 1 would still search pvhcorp on exactly the fallback path this ticket
+	// relies on. This pins the single source of truth AND that no env var can desynchronise the two.
+	test("the resolution group is fixed to pvhcorp and no env var can desynchronise it from SKILL.md", () => {
+		expect(getGitlabResolutionGroup()).toBe("pvhcorp");
+
+		const before = process.env.GITLAB_RESOLUTION_GROUP;
+		process.env.GITLAB_RESOLUTION_GROUP = "other-corp";
+		try {
+			expect(getGitlabResolutionGroup()).toBe("pvhcorp");
+		} finally {
+			if (before === undefined) delete process.env.GITLAB_RESOLUTION_GROUP;
+			else process.env.GITLAB_RESOLUTION_GROUP = before;
+		}
+	});
+
+	// Anti-vacuity for the test above: the constant must actually match what the skill instructs,
+	// or "they agree" is asserted against a value nobody reads.
+	test("SKILL.md scopes its resolution search to the same group the probe uses", async () => {
+		const skill = await Bun.file(
+			join(import.meta.dir, "../../../agents/incident-analyzer/agents/gitlab-agent/skills/project-resolution/SKILL.md"),
+		).text();
+		expect(skill).toContain(`group_id: "${getGitlabResolutionGroup()}"`);
 	});
 
 	test("konnect probe resolves the control plane then its matching service", async () => {
