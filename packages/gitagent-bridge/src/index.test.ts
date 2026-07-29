@@ -124,6 +124,47 @@ describe("manifest-loader", () => {
 			}
 		}
 	});
+
+	// SIO-1281: local skills are a manifest ALLOWLIST, not a directory scan -- manifest-loader
+	// iterates `manifest.skills` and existsSync-checks each, so a skill directory that is not
+	// declared in agent.yaml is skipped with no error and no warning. 16 elastic-iac directories
+	// drifted this way and never loaded; the content had been deleted from the playbook in the
+	// same move, so the agent silently lost ~1,300 lines of knowledge it previously had.
+	//
+	// Same anti-vacuity rule as the sub-agent test above: this MUST iterate the directory
+	// listing, not `agent.skills`. Iterating the loaded map cannot observe an undeclared skill --
+	// the very thing that goes wrong -- so it would pass vacuously.
+	//
+	// Both agent.yaml dialects normalize through toIdList (plain strings for incident-analyzer,
+	// `- id:` objects for elastic-iac), so read the LOADED manifest rather than parsing YAML.
+	test("every skill directory on disk is declared in agent.yaml", () => {
+		for (const agentDir of [AGENTS_DIR, ELASTIC_IAC_DIR]) {
+			const agent = loadAgent(agentDir);
+			const skillsDir = join(agentDir, "skills");
+			if (!existsSync(skillsDir)) continue;
+
+			const onDisk = readdirSync(skillsDir, { withFileTypes: true })
+				.filter((e) => e.isDirectory() && existsSync(join(skillsDir, e.name, "SKILL.md")))
+				.map((e) => e.name);
+
+			expect(onDisk.length).toBeGreaterThan(0);
+
+			for (const name of onDisk) {
+				expect(
+					agent.skills.has(name),
+					`${agentDir}: skills/${name}/ exists on disk but is not declared in agent.yaml, so it never loads`,
+				).toBe(true);
+			}
+
+			// The inverse: a declared skill whose directory is missing loads as nothing.
+			for (const name of agent.manifest.skills ?? []) {
+				expect(
+					existsSync(join(skillsDir, name, "SKILL.md")),
+					`${agentDir}: agent.yaml declares skill "${name}" but skills/${name}/SKILL.md does not exist`,
+				).toBe(true);
+			}
+		}
+	});
 });
 
 describe("model-factory", () => {

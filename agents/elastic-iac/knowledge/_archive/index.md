@@ -145,6 +145,8 @@ NOT copied into the scaffold. Each line maps a superseded file to the current au
 - infrastructure-observability-metrics-ilm.tf — single tf file, the source repository is canonical
 - mr_schema_v1.json — JSON schema companion to mr-template, kept in source corpus for tool validators
 - mr_example_backfill_v1.md — example filled MR, kept in source corpus as a reference
+- eu-b2b-ilm/ — SIO-1281: the 2026-05-15 eu-b2b ILM incident pair (apply runbook + OOM recovery).
+  In a subdirectory deliberately: loadKnowledge does not recurse, so these do not enter the prompt.
 
 ## Not copied — credentials
 

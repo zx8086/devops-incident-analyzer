@@ -67,29 +67,37 @@ Every file under `knowledge/` and any new skills promoted from the source corpus
 - `health-snapshots/ap-cld.md`
 - `health-snapshots/cluster-health-ilm-cost-review.md`
 
-## promoted-skills (created under agent-starter/skills/ — listed here for cross-reference)
+## playbook sub-procedures (SIO-1281: restored to the playbook, not skills)
 
-Promoted from playbook v12 sub-procedures:
+These 14 were briefly converted to skill directories that were never declared in `agent.yaml`
+and therefore never loaded. SIO-1281 restored them to their playbook sections and deleted the
+orphaned directories. They are reference knowledge the agent consults, not pipeline-stage
+procedures — see `docs/development/authoring-skills-and-runbooks.md`.
 
-- `skills/dead-data-stream-cleanup/SKILL.md` (playbook §3.7)
-- `skills/orphan-index-reattachment/SKILL.md` (§3.8)
-- `skills/built-in-ilm-policy-revalidation-after-upgrade/SKILL.md` (§3.9)
-- `skills/dedicated-ilm-policy-for-high-retention-network-logs-streams/SKILL.md` (§3.10)
-- `skills/ilm-rollover-guard-semantics/SKILL.md` (§3.12)
-- `skills/empty-retention-fleet-templates-inherit-prod-ilm/SKILL.md` (§3.13)
-- `skills/override-index-template-pattern-priority-300/SKILL.md` (§3.14)
-- `skills/warmcold-tier-replica-policy/SKILL.md` (§3.15)
-- `skills/systemprocess-metric-tuning/SKILL.md` (§4.4)
-- `skills/clock-skew-ingest-pipeline-custom-pinning/SKILL.md` (§4.5)
-- `skills/stream-consolidation-via-reroute-processor/SKILL.md` (§6.7)
-- `skills/hot-node-low-watermark-relief-and-single-shard-reshard/SKILL.md` (§6.8)
-- `skills/raise-then-downsize-two-step-incident-pattern/SKILL.md` (§7.2.3)
-- `skills/retention-audit-process/SKILL.md` (§8.3)
+- `playbook/3-index-lifecycle-management-ilm.md` §3.7 — Dead data stream cleanup
+- `playbook/3-index-lifecycle-management-ilm.md` §3.8 — Orphan index reattachment
+- `playbook/3-index-lifecycle-management-ilm.md` §3.9 — Built-in ILM policy revalidation after upgrade
+- `playbook/3-index-lifecycle-management-ilm.md` §3.10 — Dedicated ILM policy for high-retention network-logs streams
+- `playbook/3-index-lifecycle-management-ilm.md` §3.12 — ILM rollover guard semantics
+- `playbook/3-index-lifecycle-management-ilm.md` §3.13 — Empty retention-fleet templates inherit prod ILM
+- `playbook/3-index-lifecycle-management-ilm.md` §3.14 — Override index template pattern (priority 300)
+- `playbook/3-index-lifecycle-management-ilm.md` §3.15 — Warm/cold-tier replica policy
+- `playbook/4-fleet-agent-collection.md` §4.4 — system.process metric tuning
+- `playbook/4-fleet-agent-collection.md` §4.5 — Clock-skew ingest pipeline (@custom) pinning
+- `playbook/6-index-and-data-hygiene.md` §6.7 — Stream consolidation via reroute processor
+- `playbook/6-index-and-data-hygiene.md` §6.8 — Hot-node low-watermark relief and single-shard reshard
+- `playbook/7-infrastructure-and-cost.md` §7.2.3 — Raise-then-downsize two-step incident pattern
+- `playbook/8-operational-governance.md` §8.3 — Retention audit process
 
-Promoted from incident runbooks:
+From incident runbooks — archived, NOT loaded into the prompt:
 
-- `skills/eu-b2b-ilm-oom-incident-recovery/SKILL.md` (source: `eu-b2b_ILM_OOM_Incident_Runbook_2026-05-15.md` — numbered Step 1..N)
-- `skills/eu-b2b-ilm-change-apply-runbook/SKILL.md` (source: `eu-b2b_ILM_Change_Approval_and_Runbook_2026-05-13.docx` — multi-day timeline with gates)
+Both are point-in-time records of the 2026-05-15 eu-b2b ILM incident, not reusable procedure.
+They live in a **subdirectory** of `_archive/` on purpose: `loadKnowledge` reads only `*.md`
+directly under a category path (`manifest-loader.ts:180`, no recursion), so nesting them keeps
+~441 lines out of every elastic-iac turn. `_archive/` itself IS a loaded category.
+
+- `_archive/eu-b2b-ilm/eu-b2b-ilm-oom-incident-recovery.md` (source: `eu-b2b_ILM_OOM_Incident_Runbook_2026-05-15.md`)
+- `_archive/eu-b2b-ilm/eu-b2b-ilm-change-apply-runbook.md` (source: `eu-b2b_ILM_Change_Approval_and_Runbook_2026-05-13.docx`)
 
 ## _archive/
 

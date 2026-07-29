@@ -1,12 +1,3 @@
----
-name: eu-b2b-ilm-change-apply-runbook
-description: Apply runbook for eu-b2b ILM retention + warm/cold tier resize package — compressed multi-day timeline with gates between phases.
-inputs:
-  cluster: { type: string, required: true, default: eu-b2b }
-outputs:
-  status: { type: string }
----
-
 **eu-b2b ILM Change --- Approval & Apply Runbook**
 
 *Compressed apply schedule · Signoff captured · 2026-05-13*

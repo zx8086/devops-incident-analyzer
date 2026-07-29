@@ -52,7 +52,7 @@ The Cloud API enforces `max_size_per_zone >= size_per_zone`. The Terraform provi
 
 ## §7.2.3 — Raise-then-downsize two-step pattern (referenced)
 
-When a tier needs temporary capacity during an incident (e.g. ILM phase-shift causing force-merge surge), and the user agrees to give it back: open two MRs back-to-back. MR1 raises; MR2 (gated on incident-clear evidence) downsizes back. Each carries the matching observation criteria in `## Risks`. See `skills/raise-then-downsize-two-step-incident-pattern/` for the full procedure.
+When a tier needs temporary capacity during an incident (e.g. ILM phase-shift causing force-merge surge), and the user agrees to give it back: open two MRs back-to-back. MR1 raises; MR2 (gated on incident-clear evidence) downsizes back. Each carries the matching observation criteria in `## Risks`. See `knowledge/playbook/7-infrastructure-and-cost.md` §7.2.3 for the full procedure.
 
 ## Open the MR
 
