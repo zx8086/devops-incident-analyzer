@@ -28,14 +28,29 @@ ENUMERATE, DO NOT FILTER. Run ONE aggregation over the deployment with NO servic
 filter:
 ```json
 { "deployment": "<deployment>", "index": "logs-*,logs-apm.*", "size": 0,
-  "query": { "range": { "@timestamp": { "gte": "now-24h" } } },
+  "query": { "range": { "@timestamp": { "gte": "now-30d" } } },
   "aggs": {
-    "by_service": { "terms": { "field": "service.name", "size": 1000, "order": { "_key": "asc" } } },
-    "by_index":   { "terms": { "field": "_index",       "size": 50 } } } }
+    "by_service": {
+      "terms": { "field": "service.name", "size": 1000, "order": { "_key": "asc" } },
+      "aggs": {
+        "idx":   { "terms": { "field": "_index",              "size": 3 } },
+        "agent": { "terms": { "field": "agent.name",          "size": 2 } },
+        "env":   { "terms": { "field": "service.environment", "size": 3 } } } } } }
 ```
 - `deployment` is MANDATORY. The cluster is multi-deployment; an unscoped query blends
   clusters and returns a service list that belongs to none of them. An absence
   conclusion drawn from an unscoped query is INVALID.
+- The window is `now-30d`, the SAME width the search and absence rules below use. A
+  narrower discovery window than the search window is a false-absence generator: a
+  service quiet for a day is omitted from discovery, never gets searched, and "absent"
+  stays eligible. Measured in eu-b2b: `order-service-v2` and `sample-order-hub_Mdx` have
+  documents in the 2-30 day band and NONE in the last 24h.
+- `by_service.sum_other_doc_count` must be `0`. Only then is the enumeration complete and
+  an absence conclusion even possible. If it is `> 0`, raise `size` and re-run.
+- `idx` / `agent` / `env` are nested UNDER `by_service` on purpose. As sibling aggs they
+  describe the deployment as a whole, not each service, and with `size: 0` there are no
+  hits to read the fields from -- so the classification below would have nothing per
+  candidate to classify on.
 - Do NOT put a `wildcard` on `service.name` here. SIO-1277: filtering by an anchor token
   cannot see a service whose name is truncated, abbreviated, or opaque -- in eu-b2b,
   `ordo`, `sampleor` and `otcwdis` are real services that `*order*` never matches. The
@@ -48,7 +63,8 @@ filter:
   an absence conclusion even possible. If it is `> 0`, raise `size` and re-run.
 
 CLASSIFY each candidate before choosing -- a name that matches is not necessarily the
-application. Use `agent.name` and the index family from `by_index`:
+application. Read the candidate's OWN nested `idx` / `agent` / `env` buckets (verified
+live: this one call classifies all three classes below correctly):
 - **APM application**: has `agent.name` (an OTel/APM agent string) AND
   `service.environment`; lives in `logs-apm.app.*` / `traces-apm*` / `metrics-apm.*`.
   This is the application. Prefer it.

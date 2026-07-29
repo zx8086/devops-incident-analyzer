@@ -29,6 +29,24 @@ async function soul(): Promise<string> {
 	return await Bun.file(SOUL_PATH).text();
 }
 
+// Slice on the literal PHASE HEADING -- line-start, followed by the ` -- ` separator the
+// headings actually use. Two weaker patterns were tried and both mis-sliced against real
+// prose (found while addressing CodeRabbit on PR #518):
+//   indexOf("PHASE 2")  -> matched phase 1 prose REFERRING to phase 2, truncating phase 1
+//   /^PHASE \d /m       -> matched the hard-wrapped line "PHASE 1 is never a substitute"
+//                          inside phase 2, truncating phase 2
+// Both failed assertions about content that was present, which is the worst kind of test
+// failure: it points at the document when the bug is in the reader.
+const HEADING = (n: number) => new RegExp(`^PHASE ${n} -- `, "m");
+
+function phase(text: string, n: 1 | 2 | 3): string {
+	const start = text.search(HEADING(n));
+	if (start < 0) throw new Error(`PHASE ${n} heading not found in SOUL.md`);
+	const rest = text.slice(start);
+	const next = rest.slice(1).search(/^PHASE \d -- /m);
+	return next < 0 ? rest : rest.slice(0, next + 1);
+}
+
 describe("Defect A -- discovery payloads reach the absence judge (SIO-1277)", () => {
 	// buildAbsenceEvidenceDigest renders only PERSISTED toolOutputs, so a tool absent from
 	// this set is invisible to judgeContradictedAbsenceClaims. Both elastic search tools can
@@ -67,7 +85,7 @@ describe("Defect B -- PHASE 1 enumerates rather than filters (SIO-1277)", () => 
 
 	test("PHASE 1 no longer prescribes a service.name wildcard", async () => {
 		const text = await soul();
-		const phase1 = text.slice(text.indexOf("PHASE 1"), text.indexOf("PHASE 2"));
+		const phase1 = phase(text, 1);
 		expect(phase1.length).toBeGreaterThan(0);
 
 		expect(
@@ -77,15 +95,59 @@ describe("Defect B -- PHASE 1 enumerates rather than filters (SIO-1277)", () => 
 	});
 
 	test("PHASE 1 requires an explicit deployment and a completeness check", async () => {
-		const phase1 = (await soul()).match(/PHASE 1[\s\S]*?(?=PHASE 2)/)?.[0] ?? "";
+		const phase1 = phase(await soul(), 1);
 		expect(phase1).toContain("deployment");
 		expect(phase1).toContain("sum_other_doc_count");
 		// The multi-deployment hazard must be stated, not merely implied by the placeholder.
 		expect(phase1.toLowerCase()).toContain("unscoped");
 	});
 
+	// CodeRabbit on PR #518: PHASE 1 enumerated at now-24h while PHASE 2 and the absence
+	// rule use now-30d. A narrower discovery window than the search window is a
+	// false-absence generator -- a service quiet for a day is omitted from discovery, so
+	// PHASE 2 never queries it and "absent" stays eligible. Measured in eu-b2b:
+	// order-service-v2 and sample-order-hub_Mdx have docs in the 2-30 day band and none in
+	// the last 24h.
+	test("PHASE 1 discovery window matches the PHASE 2 / absence window", async () => {
+		const text = await soul();
+		const phase1 = phase(text, 1);
+		const gte = /"gte":\s*"now-(\d+)([dh])"/.exec(phase1);
+		expect(gte, "PHASE 1 must state an explicit @timestamp lower bound").not.toBeNull();
+
+		const [, amount, unit] = gte ?? [];
+		const hours = unit === "d" ? Number(amount) * 24 : Number(amount);
+		expect(
+			hours,
+			"PHASE 1 must discover over a window at least as wide as PHASE 2 (now-30d), or a service quiet for a day is silently undiscoverable",
+		).toBeGreaterThanOrEqual(30 * 24);
+	});
+
+	// CodeRabbit on PR #518: as SIBLING aggs, idx/agent/env describe the deployment as a
+	// whole rather than each service -- and with size:0 there are no hits to read the
+	// fields from. The classification contract would then have nothing per candidate to
+	// classify on. They must be nested under by_service.
+	test("classification metadata is nested under by_service, not a sibling agg", async () => {
+		const phase1 = phase(await soul(), 1);
+		const json = phase1.match(/```json([\s\S]*?)```/)?.[1] ?? "";
+		expect(json).toContain("by_service");
+
+		// The nested block must sit inside by_service's own "aggs", which only exists when
+		// by_service has a second "aggs" key after its "terms".
+		const byService = json.slice(json.indexOf('"by_service"'));
+		const termsAt = byService.indexOf('"terms"');
+		const nestedAggsAt = byService.indexOf('"aggs"', termsAt);
+		expect(
+			nestedAggsAt,
+			"by_service must carry a nested aggs block -- sibling aggs describe the deployment, not the candidate",
+		).toBeGreaterThan(termsAt);
+
+		for (const field of ["_index", "agent.name", "service.environment"]) {
+			expect(byService.slice(nestedAggsAt)).toContain(field);
+		}
+	});
+
 	test("PHASE 1 teaches the app / gateway / container-log distinction", async () => {
-		const phase1 = (await soul()).match(/PHASE 1[\s\S]*?(?=PHASE 2)/)?.[0] ?? "";
+		const phase1 = phase(await soul(), 1);
 		// A matching name is not necessarily the application: order-service is Kong data.
 		expect(phase1).toContain("agent.name");
 		expect(phase1).toContain("logs-kong");
@@ -96,7 +158,7 @@ describe("Defect B -- PHASE 1 enumerates rather than filters (SIO-1277)", () => 
 describe("Defect A -- absence requires PHASE 2 to have run (SIO-1277)", () => {
 	test("PHASE 2 is mandatory once PHASE 1 returns a candidate", async () => {
 		const text = await soul();
-		const phase2 = text.slice(text.indexOf("PHASE 2"), text.indexOf("PHASE 3"));
+		const phase2 = phase(text, 2);
 		expect(phase2).toContain("MANDATORY");
 		// Re-running discovery instead of advancing is the observed failure mode. Collapse
 		// whitespace first: the prose is hard-wrapped, so the phrase spans a newline.
@@ -106,7 +168,7 @@ describe("Defect A -- absence requires PHASE 2 to have run (SIO-1277)", () => {
 
 	test("an unqueried candidate forbids an absence conclusion", async () => {
 		const text = await soul();
-		const tail = text.slice(text.indexOf("PHASE 3"));
+		const tail = text.slice(text.search(/^PHASE 3 -- /m));
 		expect(tail).toContain("did not query");
 		expect(tail.toLowerCase()).toContain("have not established absence");
 	});
