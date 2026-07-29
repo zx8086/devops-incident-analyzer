@@ -1,373 +1,31 @@
 // gitagent-bridge/src/runbook-validator.test.ts
-// SIO-641: Runbook tool-name binding validator. Walks every agent's runbooks,
+// SIO-641: Runbook tool-name binding validator tests. Walks every agent's runbooks,
 // extracts tool name citations from prose and the "All Tools Used Are Read-Only"
 // tail section, and fails bun test if any citation is not in the agent's
 // action_tool_map union or if prose and tail disagree.
+//
+// SIO-1288: the logic under test moved to ./runbook-validator.ts. This file is now
+// tests only. The production gate at the bottom (real agents + sub-agents) is the
+// load-bearing part -- it validates the actual agents/ tree, not fixtures.
 
 import { describe, expect, test } from "bun:test";
-import {
-	existsSync,
-	mkdirSync,
-	mkdtempSync,
-	readdirSync,
-	readFileSync,
-	rmSync,
-	statSync,
-	writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type LoadedAgent, loadAgent, type ToolDefinition } from "./index.ts";
-
-// ============================================================================
-// Types
-// ============================================================================
-
-interface Citation {
-	name: string;
-	line: number;
-	source: "prose" | "tail";
-}
-
-interface TailSectionResult {
-	citations: Citation[];
-	errors: string[];
-}
-
-interface ValidationReport {
-	runbookPath: string;
-	missing: Citation[];
-	proseOnly: Citation[];
-	tailOnly: Citation[];
-	errors: string[];
-}
-
-interface AgentFixture {
-	name: string;
-	agentDir: string;
-	agent: LoadedAgent;
-	runbookPaths: string[];
-}
-
-interface SubAgentFixture {
-	parentName: string;
-	subAgentName: string;
-	parentTools: ToolDefinition[];
-	subAgent: LoadedAgent;
-	runbookPaths: string[];
-}
-
-// ============================================================================
-// Helpers (stubs - implemented in later tasks)
-// ============================================================================
-
-function extractProseCitations(content: string): Citation[] {
-	const citations: Citation[] = [];
-	const lines = content.split("\n");
-	let inFence = false;
-
-	// SIO-643: Skip leading YAML frontmatter block so its identifiers are not
-	// mistaken for prose citations. The frontmatter is parsed by the loader
-	// for runbooks; the validator should not re-interpret it.
-	let startLine = 0;
-	if (lines.length > 0 && (lines[0] ?? "").trim() === "---") {
-		// Find the closing --- delimiter
-		for (let i = 1; i < lines.length; i++) {
-			if ((lines[i] ?? "").trim() === "---") {
-				startLine = i + 1;
-				break;
-			}
-		}
-		// If we never found a closing delimiter, startLine stays 0 and we
-		// walk the full content. A missing closing delimiter is a load-time
-		// error (see parseRunbookFrontmatter) so reaching this branch here
-		// means the validator is being run on a malformed file anyway.
-	}
-
-	for (let i = startLine; i < lines.length; i++) {
-		const line = lines[i] ?? "";
-		const trimmed = line.trim();
-
-		// Toggle fenced code block state
-		if (trimmed.startsWith("```")) {
-			inFence = !inFence;
-			continue;
-		}
-		if (inFence) continue;
-
-		// Find all backtick-wrapped segments on this line
-		const backtickRegex = /`([^`]+)`/g;
-		let match: RegExpExecArray | null = backtickRegex.exec(line);
-		while (match !== null) {
-			const inner = match[1] ?? "";
-			// Must be snake_case lowercase with at least one underscore
-			if (/^[a-z][a-z0-9_]*$/.test(inner) && inner.includes("_")) {
-				citations.push({ name: inner, line: i + 1, source: "prose" });
-			}
-			match = backtickRegex.exec(line);
-		}
-	}
-
-	return citations;
-}
-
-function extractTailSection(content: string): TailSectionResult {
-	const lines = content.split("\n");
-	const HEADER = "## All Tools Used Are Read-Only";
-
-	// Find all occurrences of the header
-	const headerIndices: number[] = [];
-	for (let i = 0; i < lines.length; i++) {
-		if ((lines[i] ?? "").trim() === HEADER) {
-			headerIndices.push(i);
-		}
-	}
-
-	if (headerIndices.length === 0) {
-		return { citations: [], errors: ["missing_tail_section"] };
-	}
-	if (headerIndices.length > 1) {
-		return { citations: [], errors: ["duplicate_tail_section"] };
-	}
-
-	const headerLine = headerIndices[0] as number;
-
-	// Find the first non-empty content line after the header
-	let contentLineIdx = -1;
-	for (let i = headerLine + 1; i < lines.length; i++) {
-		const trimmed = (lines[i] ?? "").trim();
-		if (trimmed === "") continue;
-		contentLineIdx = i;
-		break;
-	}
-
-	if (contentLineIdx === -1) {
-		return { citations: [], errors: ["empty_tail_section"] };
-	}
-
-	const contentLine = (lines[contentLineIdx] ?? "").trim();
-
-	// Reject if the next non-empty content is a heading or a fenced block
-	if (contentLine.startsWith("#")) {
-		return { citations: [], errors: ["empty_tail_section"] };
-	}
-	if (contentLine.startsWith("```")) {
-		return { citations: [], errors: ["malformed_tail_section"] };
-	}
-
-	// Parse comma-separated list
-	const names = contentLine
-		.split(",")
-		.map((s) => s.trim())
-		.filter((s) => s.length > 0);
-
-	// Check for duplicates within the list
-	const seen = new Set<string>();
-	const errors: string[] = [];
-	for (const name of names) {
-		if (seen.has(name)) {
-			errors.push("duplicate_in_tail_section");
-			break;
-		}
-		seen.add(name);
-	}
-
-	const citations: Citation[] = names.map((name) => ({
-		name,
-		line: contentLineIdx + 1,
-		source: "tail",
-	}));
-
-	return { citations, errors };
-}
-
-function buildAuthority(tools: ToolDefinition[]): Set<string> {
-	const authority = new Set<string>();
-	for (const tool of tools) {
-		const actionMap = tool.tool_mapping?.action_tool_map;
-		if (!actionMap) continue;
-		for (const toolNames of Object.values(actionMap)) {
-			for (const name of toolNames) {
-				authority.add(name);
-			}
-		}
-	}
-	return authority;
-}
-
-function buildSubAgentAuthority(parentTools: ToolDefinition[], subAgentFacadeNames: string[]): Set<string> {
-	const facadeSet = new Set(subAgentFacadeNames);
-	const relevantTools = parentTools.filter((t) => facadeSet.has(t.name));
-	return buildAuthority(relevantTools);
-}
-
-function validateRunbook(runbookPath: string, content: string, authority: Set<string>): ValidationReport {
-	const proseCitations = extractProseCitations(content);
-	const tailResult = extractTailSection(content);
-
-	const missing: Citation[] = [];
-
-	// Missing bucket: any citation whose name is not in authority
-	for (const c of proseCitations) {
-		if (!authority.has(c.name)) missing.push(c);
-	}
-	for (const c of tailResult.citations) {
-		if (!authority.has(c.name)) missing.push(c);
-	}
-
-	// Drift buckets: comparison of unique names between prose and tail sets
-	const proseNames = new Set(proseCitations.map((c) => c.name));
-	const tailNames = new Set(tailResult.citations.map((c) => c.name));
-
-	// proseOnly: dedupe by name (first occurrence wins)
-	const proseOnlySeen = new Set<string>();
-	const proseOnly: Citation[] = [];
-	for (const c of proseCitations) {
-		if (tailNames.has(c.name)) continue;
-		if (proseOnlySeen.has(c.name)) continue;
-		proseOnlySeen.add(c.name);
-		proseOnly.push(c);
-	}
-
-	const tailOnly: Citation[] = [];
-	for (const c of tailResult.citations) {
-		if (!proseNames.has(c.name)) tailOnly.push(c);
-	}
-
-	return {
-		runbookPath,
-		missing,
-		proseOnly,
-		tailOnly,
-		errors: tailResult.errors,
-	};
-}
-
-function formatReport(report: ValidationReport): string {
-	const lines: string[] = [];
-	lines.push(`Runbook: ${report.runbookPath}`);
-	lines.push("");
-
-	lines.push(`Missing from action_tool_map (${report.missing.length}):`);
-	if (report.missing.length === 0) {
-		lines.push("  (none)");
-	} else {
-		for (const c of report.missing) {
-			lines.push(`  line ${c.line}: ${c.name}`);
-		}
-	}
-	lines.push("");
-
-	lines.push(
-		`Cited in prose but missing from "All Tools Used Are Read-Only" tail section (${report.proseOnly.length}):`,
-	);
-	if (report.proseOnly.length === 0) {
-		lines.push("  (none)");
-	} else {
-		for (const c of report.proseOnly) {
-			lines.push(`  line ${c.line}: ${c.name}`);
-		}
-	}
-	lines.push("");
-
-	lines.push(`Listed in tail section but not cited in prose (${report.tailOnly.length}):`);
-	if (report.tailOnly.length === 0) {
-		lines.push("  (none)");
-	} else {
-		for (const c of report.tailOnly) {
-			lines.push(`  line ${c.line}: ${c.name}`);
-		}
-	}
-	lines.push("");
-
-	lines.push(`Structural errors (${report.errors.length}):`);
-	if (report.errors.length === 0) {
-		lines.push("  (none)");
-	} else {
-		for (const e of report.errors) {
-			lines.push(`  ${e}`);
-		}
-	}
-	lines.push("");
-
-	lines.push("Fix:");
-	lines.push('  - For each "Missing" entry: verify the tool name, or add it to');
-	lines.push("    an action_tool_map in the agent's tools/*.yaml.");
-	lines.push('  - For each "prose only" entry: add the name to the');
-	lines.push('    "## All Tools Used Are Read-Only" tail section.');
-	lines.push('  - For each "tail only" entry: either cite it in prose or remove');
-	lines.push("    it from the tail section.");
-
-	return lines.join("\n");
-}
-
-function isClean(report: ValidationReport): boolean {
-	return (
-		report.missing.length === 0 &&
-		report.proseOnly.length === 0 &&
-		report.tailOnly.length === 0 &&
-		report.errors.length === 0
-	);
-}
-
-function collectAgents(agentsRoot: string): AgentFixture[] {
-	if (!existsSync(agentsRoot)) return [];
-	const entries = readdirSync(agentsRoot);
-	const fixtures: AgentFixture[] = [];
-
-	for (const entry of entries) {
-		const agentDir = join(agentsRoot, entry);
-		if (!statSync(agentDir).isDirectory()) continue;
-
-		const runbooksDir = join(agentDir, "knowledge", "runbooks");
-		if (!existsSync(runbooksDir)) continue;
-		if (!statSync(runbooksDir).isDirectory()) continue;
-
-		const runbookPaths = readdirSync(runbooksDir)
-			.filter((f) => f.endsWith(".md"))
-			.map((f) => join(runbooksDir, f));
-
-		if (runbookPaths.length === 0) continue;
-
-		// loadAgent throws if the agent definition is broken; we let it
-		// propagate so the test suite fails loudly rather than silently
-		// skipping broken agents.
-		const agent = loadAgent(agentDir);
-
-		fixtures.push({ name: entry, agentDir, agent, runbookPaths });
-	}
-
-	return fixtures;
-}
-
-function collectSubAgentFixtures(parentFixtures: AgentFixture[]): SubAgentFixture[] {
-	const fixtures: SubAgentFixture[] = [];
-
-	for (const parent of parentFixtures) {
-		for (const [subAgentName, subAgent] of parent.agent.subAgents) {
-			// Extract runbook entries from the already-loaded knowledge. Avoids
-			// a second filesystem walk; loadAgent() already recursed and
-			// populated each sub-agent's knowledge[] with its own runbooks.
-			const runbookEntries = subAgent.knowledge.filter((e) => e.category === "runbooks");
-			if (runbookEntries.length === 0) continue;
-
-			// Reconstruct absolute paths for each runbook file
-			const runbookPaths = runbookEntries.map((entry) =>
-				join(parent.agentDir, "agents", subAgentName, "knowledge", "runbooks", entry.filename),
-			);
-
-			fixtures.push({
-				parentName: parent.name,
-				subAgentName,
-				parentTools: parent.agent.tools,
-				subAgent,
-				runbookPaths,
-			});
-		}
-	}
-
-	return fixtures;
-}
+import type { LoadedAgent, ToolDefinition } from "./index.ts";
+import type { AgentFixture, ValidationReport } from "./runbook-validator.ts";
+import {
+	buildAuthority,
+	buildSubAgentAuthority,
+	collectAgents,
+	collectSubAgentFixtures,
+	extractFrontmatterTools,
+	extractProseCitations,
+	extractTailSection,
+	formatReport,
+	isClean,
+	validateRunbook,
+} from "./runbook-validator.ts";
 
 // ============================================================================
 // Tests
@@ -686,6 +344,104 @@ describe("buildSubAgentAuthority", () => {
 		const authority = buildSubAgentAuthority(parentTools, ["kafka-introspect", "bogus-facade"]);
 		expect(authority.has("kafka_list_consumer_groups")).toBe(true);
 		expect(authority.size).toBe(4); // only the 4 kafka tools; bogus-facade silently ignored
+	});
+});
+
+// SIO-1288: `tools:` frontmatter as the machine-readable source of truth, dual-read with
+// the legacy tail section so the validator change and the content migration stay
+// separately revertable.
+describe("extractFrontmatterTools", () => {
+	test("returns the declared list", () => {
+		const content = ["---", "tools:", "  - a_one", "  - a_two", "---", "# Body"].join("\n");
+		expect(extractFrontmatterTools(content)).toEqual(["a_one", "a_two"]);
+	});
+
+	test("inline array form", () => {
+		expect(extractFrontmatterTools(["---", "tools: [a_one, a_two]", "---", "# Body"].join("\n"))).toEqual([
+			"a_one",
+			"a_two",
+		]);
+	});
+
+	test("undefined when there is no frontmatter at all", () => {
+		expect(extractFrontmatterTools("# Body only")).toBeUndefined();
+	});
+
+	test("undefined when frontmatter exists but declares no tools key", () => {
+		expect(
+			extractFrontmatterTools(["---", "triggers:", "  severity: [high]", "---", "# B"].join("\n")),
+		).toBeUndefined();
+	});
+
+	// Degrades rather than throwing: one malformed runbook must not abort the sweep.
+	test("undefined on malformed YAML (falls back to the tail section)", () => {
+		expect(extractFrontmatterTools(["---", "tools: [unclosed", "---", "# B"].join("\n"))).toBeUndefined();
+	});
+
+	test("undefined when tools is not an array of strings", () => {
+		expect(extractFrontmatterTools(["---", "tools: a_one", "---", "# B"].join("\n"))).toBeUndefined();
+		expect(extractFrontmatterTools(["---", "tools:", "  - nested: bad", "---", "# B"].join("\n"))).toBeUndefined();
+	});
+});
+
+describe("validateRunbook with tools: frontmatter (SIO-1288)", () => {
+	const authority = new Set(["a_one", "a_two"]);
+
+	test("frontmatter declaration satisfies validation with no tail section", () => {
+		const content = ["---", "tools: [a_one]", "---", "# Runbook", "", "Use `a_one` here."].join("\n");
+		const report = validateRunbook("/fake/p.md", content, authority);
+		expect(report.missing).toEqual([]);
+		expect(report.proseOnly).toEqual([]);
+		expect(report.tailOnly).toEqual([]);
+	});
+
+	test("a tool cited in prose but absent from frontmatter is still caught", () => {
+		const content = ["---", "tools: [a_one]", "---", "# Runbook", "", "Use `a_two` here."].join("\n");
+		const report = validateRunbook("/fake/p.md", content, authority);
+		expect(report.proseOnly.map((c) => c.name)).toEqual(["a_two"]);
+	});
+
+	test("a frontmatter tool outside the agent's authority is caught", () => {
+		const content = ["---", "tools: [a_rogue]", "---", "# Runbook", "", "Use `a_rogue` here."].join("\n");
+		const report = validateRunbook("/fake/p.md", content, authority);
+		expect(report.missing.map((c) => c.name)).toContain("a_rogue");
+	});
+
+	test("frontmatter WINS over a tail section when both are present", () => {
+		const content = [
+			"---",
+			"tools: [a_one]",
+			"---",
+			"# Runbook",
+			"",
+			"Use `a_one` here.",
+			"",
+			"## All Tools Used Are Read-Only",
+			"a_one, a_two",
+		].join("\n");
+		const report = validateRunbook("/fake/p.md", content, authority);
+		// a_two would be tailOnly under the legacy path; frontmatter is authoritative, and
+		// it does not declare a_two, so the stale tail section is simply not consulted.
+		expect(report.tailOnly).toEqual([]);
+	});
+
+	// THE SIO-1278 REGRESSION. Explanatory prose in the tail section split on commas into
+	// bogus tool names. A typed YAML array structurally cannot do this.
+	test("prose containing commas cannot produce bogus tool names (SIO-1278 regression)", () => {
+		const legacy = [
+			"# Runbook",
+			"",
+			"Use `a_one` here.",
+			"",
+			"## All Tools Used Are Read-Only",
+			"All of the above are read-only, and none mutate cluster state, so they are safe.",
+		].join("\n");
+		const legacyReport = validateRunbook("/fake/p.md", legacy, authority);
+		// The legacy parser turns that sentence into fragments and flags them as unknown tools.
+		expect(legacyReport.missing.length).toBeGreaterThan(0);
+
+		const migrated = ["---", "tools: [a_one]", "---", "# Runbook", "", "Use `a_one` here."].join("\n");
+		expect(validateRunbook("/fake/p.md", migrated, authority).missing).toEqual([]);
 	});
 });
 
