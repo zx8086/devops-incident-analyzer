@@ -135,7 +135,7 @@ describe("isOrbitIndexed (live gitlab.com system/components shape, SIO-1077)", (
 });
 
 // SIO-1295: the REAL gitlab.com Orbit v0.91.1 GET /orbit/status response during a live
-// schema migration, captured 2026-07-30. system.status is "migrating" while BOTH required
+// schema migration, captured 2026-07-30 ~01:20 UTC+2. system.status is "migrating" while BOTH required
 // indexers stay healthy and serving -- /orbit/query answered normally throughout, so
 // "migrating" with ready indexers must NOT gate Orbit off.
 const LIVE_MIGRATING_STATUS = {

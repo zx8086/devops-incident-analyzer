@@ -97,6 +97,30 @@ describe("Orbit tools: availability", () => {
 		expect(ctx.available).toBe(true);
 	});
 
+	// The free schema tool participates in the same recovery contract: if it is the
+	// first handler invoked after a recovery, it must flip availability too.
+	test("gitlab_graph_schema also re-checks a boot-unavailable context and recovers", async () => {
+		let statusCalls = 0;
+		let schemaCalls = 0;
+		const client: Partial<OrbitRestClient> = {
+			getStatus: async () => {
+				statusCalls += 1;
+				return LIVE_HEALTHY_STATUS as Awaited<ReturnType<OrbitRestClient["getStatus"]>>;
+			},
+			getSchema: async () => {
+				schemaCalls += 1;
+				return { nodes: [] };
+			},
+		};
+		const ctx = makeCtx({ available: false }, client);
+		const { handlers } = register(ctx);
+		const result = await handlers.get("gitlab_graph_schema")?.({});
+		expect(result?.isError).toBeFalsy();
+		expect(statusCalls).toBe(1);
+		expect(schemaCalls).toBe(1);
+		expect(ctx.available).toBe(true);
+	});
+
 	test("re-check that still reports unavailable soft-fails with no-index and never bills", async () => {
 		let statusCalls = 0;
 		let queryCalls = 0;

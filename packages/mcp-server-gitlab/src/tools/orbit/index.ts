@@ -254,9 +254,15 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 		{},
 		async () =>
 			traceToolCall("gitlab_graph_schema", async () => {
-				if (!ctx.client) return unavailableResult();
+				// Free, but still gated: the SIO-1295 recovery re-check must fire even when
+				// this is the first handler invoked, and an Orbit-off schema call should
+				// return the non-degrading no-index envelope, not an HTTP-mapped error.
+				const unavailable = await ensureAvailable();
+				if (unavailable) return unavailable;
+				const client = ctx.client;
+				if (!client) return unavailableResult();
 				try {
-					const schema = await ctx.client.getSchema();
+					const schema = await client.getSchema();
 					return textResult(JSON.stringify(schema, null, 2));
 				} catch (error) {
 					return orbitErrorResult(error);
