@@ -497,3 +497,34 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-1198 overgeneralized-absence judge 
 		expect(out.capReasons).toContain("premature-absence");
 	});
 });
+
+// SIO-1273: run eaebc62b's 13,495-char report carried no Confidence line at all, so the cap
+// machinery ran against a score of 0 and the turn shipped `confidence: 0` with
+// `lowConfidence: false`. A missing line is a report-QUALITY defect and belongs in the caveats
+// channel -- not a cap reason (there is no score to reduce) and never a synthesised number.
+describe.skipIf(!hasRunbooks)("aggregate SIO-1273 missing confidence line", () => {
+	const NO_CONFIDENCE_CONTENT =
+		"### Elasticsearch\n\nThe checkout error rate rose sharply after 05:12Z and recovered by 06:30Z.\n";
+
+	test("records a report-quality caveat when the report states no confidence", async () => {
+		mockLlmOverride = NO_CONFIDENCE_CONTENT;
+
+		const out = await aggregate(makeState([ELASTIC_RESULT], "test-confidence-line-missing"));
+		const caveat = out.reportCaveats?.find((c) => c.guard === "confidence-line-missing");
+		expect(caveat).toBeDefined();
+		expect(caveat?.note).toContain("did not state a confidence score");
+		// The caveats section actually renders even though no absence guard fired.
+		expect(out.finalAnswer).toContain(CAVEATS_HEADING);
+		// No new cap-reason vocabulary: a missing line is not a reason a score was REDUCED, and
+		// adding one would break the exact-set assertion in packages/shared.
+		expect(out.capReasons ?? []).not.toContain("confidence-line-missing");
+	});
+
+	test("a report WITH a confidence line records no such caveat", async () => {
+		mockLlmOverride = `${NO_CONFIDENCE_CONTENT}\nConfidence: 0.82`;
+
+		const out = await aggregate(makeState([ELASTIC_RESULT], "test-confidence-line-present"));
+		expect(out.reportCaveats?.some((c) => c.guard === "confidence-line-missing")).toBe(false);
+		expect(out.confidenceScore).toBeCloseTo(0.82);
+	});
+});

@@ -52,6 +52,7 @@ import {
 	extractConfidenceScore,
 	extractGapsBulletCount,
 	filterStructurallyBenignGapBullets,
+	findConfidenceScore,
 	isDegradingGapBullet,
 	rewriteConfidenceInAnswer,
 } from "./aggregator.ts";
@@ -1210,6 +1211,48 @@ describe("extractConfidenceScore annotation safety (SIO-1194)", () => {
 
 	test("degenerate line with no capped number yields 0, never the pre-cap number", () => {
 		expect(extractConfidenceScore("Confidence: (capped from evidence score 0.84 -- gaps)")).toBe(0);
+	});
+});
+
+// SIO-1273: on run eaebc62b a 13,495-char report contained no confidence line at all, so the cap
+// machinery ran against a score of 0 and the turn shipped `confidence: 0` with
+// `lowConfidence: false`. The defect is that a MISSING line and a STATED 0 were the same value.
+//
+// Note the split deliberately PRESERVES the SIO-1194 block above: 0 is the correct answer for the
+// wrapper, and those tests pin a safety property from a different ticket (a degenerate annotated
+// line must never leak the pre-cap number). The new behaviour is additive, on a new function.
+describe("findConfidenceScore distinguishes absent from zero (SIO-1273)", () => {
+	test("returns null when the report has no confidence line at all", () => {
+		const report = "# Incident Report\n\n## Findings\n\n- Something happened.\n\n## Timeline\n\n- 05:12Z start\n";
+		expect(findConfidenceScore(report)).toBeNull();
+		// The wrapper still collapses it, which is what keeps state typed `number`.
+		expect(extractConfidenceScore(report)).toBe(0);
+	});
+
+	test("returns 0 -- not null -- for an explicitly stated Confidence: 0.0", () => {
+		expect(findConfidenceScore("Findings\n\nConfidence: 0.0")).toBe(0);
+	});
+
+	test("the two zero cases are now distinguishable", () => {
+		const absent = findConfidenceScore("# Report\n\nNo score here.");
+		const stated = findConfidenceScore("# Report\n\nConfidence: 0.0");
+		expect(absent).toBeNull();
+		expect(stated).toBe(0);
+		expect(absent).not.toBe(stated);
+		// ...and were NOT distinguishable before, via the wrapper.
+		expect(extractConfidenceScore("# Report\n\nNo score here.")).toBe(
+			extractConfidenceScore("# Report\n\nConfidence: 0.0"),
+		);
+	});
+
+	test("a degenerate line with no parseable number reads as absent", () => {
+		expect(findConfidenceScore("Confidence: (capped from evidence score 0.84 -- gaps)")).toBeNull();
+	});
+
+	test("normal scores are unaffected", () => {
+		expect(findConfidenceScore("Confidence: 0.84")).toBe(0.84);
+		expect(findConfidenceScore("Confidence: 0.59 (capped from evidence score 0.84 -- gaps)")).toBe(0.59);
+		expect(findConfidenceScore("**Confidence Score:** 0.72")).toBe(0.72);
 	});
 });
 

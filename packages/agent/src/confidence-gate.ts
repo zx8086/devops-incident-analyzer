@@ -51,7 +51,17 @@ export function checkConfidence(state: AgentStateType): Partial<AgentStateType> 
 
 	logger.info({ confidenceScore: score, threshold }, "Checking confidence against HITL threshold");
 
-	if (score > 0 && score < threshold) {
+	// SIO-1273: the `score > 0` guard that used to be here produced the exact inversion of its
+	// intent. It was presumably meant as "no number yet, do not cry wolf", but because 0 is also
+	// what an ABSENT confidence line extracts to, the LEAST trustworthy report -- one that never
+	// stated a confidence at all -- was the one declared passing. Run eaebc62b shipped
+	// `confidence: 0` with `lowConfidence: false` for precisely that reason. An explicit
+	// `Confidence: 0.0` was waved through too, which is indefensible on any reading.
+	//
+	// This gate is non-blocking by design (see above), so flagging cannot strand a run: the cost
+	// of a false positive is a banner a human dismisses, against an unscored report presented as
+	// trustworthy.
+	if (score < threshold) {
 		logger.warn({ confidenceScore: score, threshold }, "Confidence below threshold, flagging for user review");
 		return { lowConfidence: true };
 	}
