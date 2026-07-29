@@ -117,7 +117,10 @@ export function validate(state: AgentStateType): Partial<AgentStateType> {
 			const threshold = getConfidenceThreshold();
 			const cap = validationWarningConfidenceCap(threshold);
 			const cappedScore = Math.min(state.confidenceScore, cap);
-			const lowConfidence = cappedScore > 0 && cappedScore < threshold;
+			// SIO-1273: the same `> 0` inversion as confidence-gate.ts -- one bug in two places,
+			// not two branches disagreeing. A 0 here means either an absent confidence line or a
+			// model-stated zero; both belong below the threshold, not above it.
+			const lowConfidence = cappedScore < threshold;
 			// SIO-1194: rewrite the printed line too (SIO-860 prose==gate invariant --
 			// this path previously capped the gate value while the prose kept the
 			// pre-cap number). validate is in the SSE ANSWER_REWRITE_NODES set and runs

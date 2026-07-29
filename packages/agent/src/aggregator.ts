@@ -334,9 +334,12 @@ const STRICT_CONFIDENCE_RE = /^\s*[*_>\-\s]*\**\s*confidence(?:\s+score)?\s*:?\*
 // Loose fallback: old pattern, but we additionally require the number to be in [0, 1].
 const LOOSE_CONFIDENCE_RE = /confidence[^0-9]{0,20}([0-9]+(?:\.[0-9]+)?)/i;
 
-// SIO-1194: exported for the annotation-safety tests (the cap annotation must never
-// change what the gate extracts).
-export function extractConfidenceScore(answer: string): number {
+// SIO-1273: the parsing core, returning null when the report states NO parseable confidence.
+// extractConfidenceScore collapsed that case onto 0, making "the model scored this 0.0" and "the
+// model never wrote the line" the same value. On run eaebc62b a 13,495-char report carried no
+// confidence line at all, so the cap machinery ran against a score of 0 and the turn shipped
+// `confidence: 0` alongside `lowConfidence: false` -- an unmeasured report reported as passing.
+export function findConfidenceScore(answer: string): number | null {
 	const strict = answer.match(STRICT_CONFIDENCE_RE);
 	if (strict) {
 		const n = Number.parseFloat(strict[1] ?? "");
@@ -348,7 +351,17 @@ export function extractConfidenceScore(answer: string): number {
 		// Only accept fallback matches that look like a valid confidence score (0-1, not an index/version).
 		if (Number.isFinite(n) && n >= 0 && n <= 1) return n;
 	}
-	return 0;
+	return null;
+}
+
+// SIO-1194: exported for the annotation-safety tests (the cap annotation must never
+// change what the gate extracts).
+// SIO-1273: kept as a 0-defaulting wrapper so `confidenceScore` stays a `number` end to end --
+// state.ts defaults it to 0 and every downstream consumer (the gate, the validator, the cap
+// arithmetic, the SSE `confidence` field) is typed `number`. Callers that need to distinguish
+// "absent" from "zero" call findConfidenceScore directly.
+export function extractConfidenceScore(answer: string): number {
+	return findConfidenceScore(answer) ?? 0;
 }
 
 // SIO-1133: stamp the turn's requestId into the report footer DETERMINISTICALLY (never via
@@ -1630,7 +1643,29 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	// a strict "Confidence: 0.XX" line, but we try the old loose pattern as a fallback for
 	// when the LLM slips (older checkpoints, response truncation). Both paths reject values
 	// outside [0, 1] so in-prose mentions like "confident in version 9.3.3" can't bleed in.
-	const confidenceScore = extractConfidenceScore(answer);
+	// SIO-1273: distinguish "no line at all" from "the model wrote 0.0". Both used to read as 0.
+	const extractedConfidence = findConfidenceScore(answer);
+	const confidenceMissing = extractedConfidence === null;
+	const confidenceScore = extractedConfidence ?? 0;
+	if (confidenceMissing) {
+		// The diagnostic that decides the follow-up fix, because TRUNCATION and MODEL OMISSION
+		// need opposite remedies and we cannot yet tell them apart. A truncated answer ends
+		// mid-sentence and stops at the token ceiling; an omitted line ends cleanly and, given
+		// the rubric primes the word repeatedly, usually still mentions "confidence" somewhere.
+		const meta = (response as { response_metadata?: Record<string, unknown>; usage_metadata?: Record<string, unknown> })
+			.response_metadata;
+		const usage = (response as { usage_metadata?: Record<string, unknown> }).usage_metadata;
+		logger.warn(
+			{
+				answerChars: answer.length,
+				answerTail: answer.slice(-200),
+				stopReason: meta?.stop_reason ?? meta?.finishReason ?? meta?.stopReason,
+				outputTokens: usage?.output_tokens ?? usage?.outputTokens,
+				mentionsConfidence: /confidence/i.test(answer),
+			},
+			"Report omitted the required Confidence line -- score defaulted to 0 (SIO-1273)",
+		);
+	}
 
 	// SIO-709 (extends SIO-707): cap confidence when any sub-agent's tool-error rate
 	// exceeds 15%. The styles-v3 transcript had kafka at 9/40 (22.5%) and elastic at
@@ -1860,6 +1895,20 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 					{ contradicted: absenceJudgeFailed, overgeneralized: overgeneralizedJudgeFailed },
 				)
 			: [];
+	// SIO-1273: a report that never stated its confidence is a report-quality defect, and the
+	// caveats channel SIO-1242 built is exactly where such a defect belongs -- no new cap-reason
+	// vocabulary, no synthesised score. Deliberately NOT routed into toCaveatSignals below: this
+	// is a FORMATTING failure, not an evidence-integrity signal about any particular claim.
+	if (confidenceMissing) {
+		absenceCaveats.push({
+			guard: "confidence-line-missing",
+			// No offending line exists, so `claim` names the omission itself rather than quoting
+			// a line the report does not contain.
+			claim: "Confidence line (absent)",
+			occurrences: 1,
+			note: "This report did not state a confidence score, so the score shown is a floor rather than a measurement. The analysis may still be sound -- treat the score as unknown, not as zero confidence.",
+		});
+	}
 	const rewrittenForGrounding = rewrittenForExpiry;
 	// SIO-1087 (Fix D): chain the ungrounded-root-cause softening after the absence rewrites.
 	// RE-DETECT against the already-rewritten text: an earlier blocker/expiry/absence guard may
