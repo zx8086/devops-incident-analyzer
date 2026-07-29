@@ -5,8 +5,9 @@
 | **Date** | 2026-07-29 |
 | **Tickets** | [SIO-1270](https://linear.app/siobytes/issue/SIO-1270) · [SIO-1271](https://linear.app/siobytes/issue/SIO-1271) · [SIO-1272](https://linear.app/siobytes/issue/SIO-1272) · [SIO-1273](https://linear.app/siobytes/issue/SIO-1273) |
 | **Parent** | `experiments/HANDOFF-2026-07-28-replay-verification-findings.md` — the write-up that identified all four |
-| **Repo state** | `main` at `66f8f78d`; all four PRs merged ([#513](https://github.com/zx8086/devops-incident-analyzer/pull/513), [#514](https://github.com/zx8086/devops-incident-analyzer/pull/514), [#515](https://github.com/zx8086/devops-incident-analyzer/pull/515), [#516](https://github.com/zx8086/devops-incident-analyzer/pull/516)) |
+| **Repo state** | `main` at `e1aa644a`; all four PRs merged ([#513](https://github.com/zx8086/devops-incident-analyzer/pull/513), [#514](https://github.com/zx8086/devops-incident-analyzer/pull/514), [#515](https://github.com/zx8086/devops-incident-analyzer/pull/515), [#516](https://github.com/zx8086/devops-incident-analyzer/pull/516)). **`1e961acf` (SIO-1277, [#518](https://github.com/zx8086/devops-incident-analyzer/pull/518)) landed between the four merges and this document** — see "Correction: how #518 actually interacts". |
 | **Linear** | SIO-1270 + SIO-1271 **Done**; SIO-1272 + SIO-1273 moved back to **In Review** (2026-07-29) because their live gaps are open. See "Linear status — resolved" below. |
+| **Amended** | 2026-07-29, post-merge. Five source corrections applied; original content otherwise preserved verbatim. |
 | **Suggested branch** | `claude/sio-1272-1273-live-verification` for the remaining gaps |
 
 ---
@@ -23,6 +24,8 @@ Two are verified end-to-end against live infrastructure. **Two are not**, and th
 - **SIO-1273 PARTIAL** — happy path confirmed (`Confidence: 0.78` parsed). The absent-line branch never ran, and **the original "why was the line dropped?" question is still unanswered**.
 
 Success for the next session: close the two gaps, or consciously accept them as test-covered-only.
+
+**Read "Correction: how #518 actually interacts" before replaying anything.** SIO-1277 landed after these four merged and changed what the absence judge sees. It does not conflict with any of them, but it changes how a fresh timeout should be interpreted — which bears directly on Gap C.
 
 ---
 
@@ -71,7 +74,50 @@ The handover treats role-tag propagation as an open risk requiring verification.
 
 **SIO-1272's pre-emption is self-amplifying.** A backstop stop on an ECS list latches `awsEcs.failed`, and `awsEcsAbsenceProven` returns `false` forever once set. The exit is not delayed — it is **permanently destroyed** for that estate, and the agent keeps hunting, raising `totalUnproductive` further.
 
+*Amended 2026-07-29:* there are **five** independent one-way latch sites, not one. Nothing anywhere resets `failed`:
+
+| Site | Trigger |
+|---|---|
+| `sub-agent-loop-guard.ts:612` | `awsErrorKind(content) !== null` |
+| `sub-agent-loop-guard.ts:617` | unparseable result |
+| `sub-agent-loop-guard.ts:621` | `"_truncated" in obj` |
+| `sub-agent-loop-guard.ts:647` | `list_services` page with no attributable `cluster` arg |
+| `sub-agent-instrumentation.ts:219` | guard-stop path — the one SIO-1272 exists to avoid |
+
+Read site `sub-agent-loop-guard.ts:665-667` (`if (!e.enabled || e.failed || e.matched) return false;`) is permanent for that estate's `LoopGuardState`.
+
+**This matters for Gap A.** Four latches *other than* the SIO-1272 one can still destroy the exit. So a Gap A repro that fails to see `subagent.aws_service_absent_early_exit` does **not** by itself indicate the SIO-1272 fix is wrong — check *which* latch fired before concluding anything.
+
 **`topic-shift/+server.ts:89`** carries the same `finalAnswer !== responseContent` guard as `stream/+server.ts:227`, so SIO-1271's behaviour change affects both paths.
+
+---
+
+## Correction: how #518 actually interacts
+
+*Added 2026-07-29, after `1e961acf` (SIO-1277, #518) landed.*
+
+The session that wrote this document described #518 as "letting the absence judge see discovery, which plausibly affects **how often the judge produces a verdict at all**, and therefore how often SIO-1270's path is reachable."
+
+**The first half is right; the causal link is not.** `judgeContradictedAbsenceClaims` (`absence-judge.ts:201`) is never gated on digest content:
+
+- returns `[]` early **only** when `claims.length === 0` (`:206`)
+- returns `null` **only** on LLM error, timeout, or malformed response (`:231-238`, and `mapVerdicts` `:244-283`)
+- an empty digest renders the placeholder `"(no data returned by this datasource this turn)"` (`:154`) and **the judge still runs**, just against nothing refutable
+
+So adding `elasticsearch_multi_search` to `TYPED_FINDING_TOOLS` (`sub-agent-instrumentation.ts:74`) changes **verdict quality**, not verdict frequency. The judge now sees contradicting evidence it was previously blind to; it does not run more or less often.
+
+### The real second-order path runs the *opposite* way
+
+Two effects are genuine, and both follow from the digest being bigger, not from any gate:
+
+1. **More input tokens against a fixed deadline.** `ROLE_DEADLINES_MS.absenceJudge` is 8 s (`llm.ts:189`) regardless of digest size, so timeout-to-`null` becomes marginally **more** likely — which makes SIO-1270's non-asserting-caveat path **more** reachable, not less.
+2. **Harder truncation of everything else.** `DIGEST_PER_DATASOURCE_CAP_BYTES` (8192, `absence-judge.ts:99`) is divided per deployment at `:160` (`perGroupBudget`), and that budget is now shared with the extra msearch entries — so on a multi-deployment datasource, other entries truncate harder. Each individual entry is separately capped at `DIGEST_PER_ENTRY_CAP_BYTES` (2048, `:98`).
+
+### Why this matters for Gap C
+
+Gap C asks whether PR #511's ERROR block made the 8 s deadline tighter in practice. **#518 is now a live candidate cause for any natural timeout observed from here on.**
+
+Without this note, the next session would read a fresh timeout as *"the deadline was always too tight"* when the honest reading may be *"the digest got bigger on 2026-07-29"*. Distinguish them before acting: compare digest size, not just the timeout's presence. This strengthens the existing instruction not to raise `ROLE_DEADLINES_MS.absenceJudge` — there is now a second explanation to rule out first.
 
 ---
 
@@ -85,8 +131,14 @@ Thread `sio1270-1273-replay`, runId `13bba57c-d339-487c-811b-2db1c6d0c826`. 4 da
 
 - **SIO-1271 PASS** — `verdicts` and `contradictedByData` both absent from the concatenated `message` stream.
 - **SIO-1273 happy path** — `confidence: 0.78`, line present, parsed correctly, diagnostic did not fire.
-- **SIO-1270 not exercised** — no absence claim arose, so the judge never ran (`judge verdicts`: 0 occurrences).
+- **SIO-1270 not exercised** — no absence claim arose, so the judge never ran (`judge verdicts`: 0 occurrences). **The conclusion is right; the method is not — see below.**
 - **SIO-1272 not exercised** — backstop never armed during enumeration.
+
+> **Amended 2026-07-29 — do not reuse that grep as-is.** `"judge verdicts"` is emitted at `absence-judge.ts:281`, inside `mapVerdicts`, i.e. **only on the success path**. Every `null` return — LLM error, timeout, malformed JSON, verdict-count mismatch, duplicate index — logs a *different* message and never reaches it.
+>
+> The Run 1 conclusion still holds, but for a different reason than stated: no absence claim arose, so `claims.length === 0` returned `[]` at `:206` **before any LLM call**. Zero occurrences of `"judge verdicts"` proves the judge never reached a usable verdict — **not** that it never ran.
+>
+> That distinction is exactly the SIO-1270 scenario (judge ran, then failed), so the naive grep would give a false negative on the very case this ticket is about. A future session must also check `"absence judge failed"` (`:236`) and `"absence judge response unusable"` (`:259`).
 
 ### Run 2 — deliberate fault injection (SIO-1270)
 
@@ -143,8 +195,15 @@ The diagnostic shipped in #516 is the instrument. When a report next omits the l
 | `outputTokens` vs resolved `maxTokens` | at the ceiling ⇒ truncation |
 | `answerTail` (last 200 chars) | mid-sentence ⇒ truncation; clean ⇒ omission |
 | `mentionsConfidence` | `false` on a long report ⇒ model omission |
+| `answerChars` | *(amended — was missing from this table)* total length; corroborates `outputTokens` |
 
-**Truncation and omission need opposite fixes** (raise `maxTokens`/hoist the line earlier vs strengthen the prompt), which is why #516 deliberately ships no repair. Grep production logs for `"Report omitted the required Confidence line"` — the first hit answers the question.
+All five are logged at `aggregator.ts:1660-1664`. Exact grep string (`:1666`):
+
+```
+Report omitted the required Confidence line -- score defaulted to 0 (SIO-1273)
+```
+
+**Truncation and omission need opposite fixes** (raise `maxTokens`/hoist the line earlier vs strengthen the prompt), which is why #516 deliberately ships no repair. The first hit answers the question.
 
 ### Gap C — the SIO-1270 deadline question, still open
 
@@ -167,6 +226,8 @@ All four auto-flipped to **Done** when their merged PR links attached (`referenc
 
 Each reopened ticket carries a comment naming its closing condition. **Do not move them to Done without the user's approval** — and note the trap: re-attaching a merged PR link can auto-flip them again.
 
+Rationale, so the alternatives are not re-litigated: leaving them Done and relying on the ticket comments would put the caveat only where someone is already reading carefully — and status fields get trusted precisely when nobody has time to read comments. Splitting the unverified halves into follow-ups would create two issues whose only content is "the thing the original said it did."
+
 ---
 
 ## Files changed (all merged)
@@ -177,6 +238,8 @@ Each reopened ticket carries a comment naming its closing condition. **Do not mo
 | `packages/agent/src/absence-judge.ts` | `reason` optional in both schemas; brevity instruction in both prompts | 1270 |
 | `packages/agent/src/llm.ts` | `tags: ["role:<role>"]` + `metadata: { role }` in `buildChatModel` | 1271 |
 | `apps/web/src/lib/server/sse-pump.ts` | `OUTPUT_ROLES` / `NON_STREAMING_ROLES`; role-first filter with subtractive fallback | 1271 |
+
+*Amended on the `sse-pump.ts` row:* "subtractive fallback" understates the design. When a role **is** present the decision is **purely additive** — `OUTPUT_ROLES.has(role)` (`:197`) — so any role not on that list is silent by default. `NON_STREAMING_ROLES` is consulted **only** on the no-role fallback (`:198-207`), per its own comment at `:53-54`. Consequence worth knowing: **a future judge role leaks nothing even if nobody remembers to add it to `NON_STREAMING_ROLES`.**
 | `packages/agent/src/sub-agent-loop-guard.ts` | `RUN_BACKSTOP_EXEMPT_TOOLS` + guard reorder | 1272 |
 | `packages/agent/src/confidence-gate.ts`, `validator.ts` | drop the `> 0` clause (one bug, two places) | 1273 |
 
