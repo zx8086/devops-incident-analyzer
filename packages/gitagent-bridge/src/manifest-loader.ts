@@ -9,6 +9,7 @@ import {
 	type AgentManifest,
 	AgentManifestSchema,
 	KnowledgeIndexSchema,
+	type KnowledgeSelectionConfig,
 	RunbookFrontmatterSchema,
 	type RunbookSelectionConfig,
 	type RunbookTriggers,
@@ -45,6 +46,10 @@ export interface LoadedAgent {
 	// Presence of this field gates whether the runbook selector node is wired
 	// into the graph.
 	runbookSelection?: RunbookSelectionConfig;
+	// SIO-1285: optional per-intent knowledge category selection from
+	// knowledge/index.yaml. Presence gates whether the IaC knowledge selector node
+	// is edged into buildIacGraph.
+	knowledgeSelection?: KnowledgeSelectionConfig;
 	// SIO-843: gitagent dynamic-pattern asset trees. hooks/memory/workflows are
 	// root-only (sub-agents leave them undefined/empty). sharedSkills/sharedContext
 	// are merged from agents/shared for every agent (local overrides shared).
@@ -113,7 +118,7 @@ export function loadAgent(agentDir: string, options?: LoadAgentOptions): LoadedA
 		}
 	}
 
-	const { entries: knowledge, runbookSelection } = loadKnowledge(agentDir, manifest.knowledge);
+	const { entries: knowledge, runbookSelection, knowledgeSelection } = loadKnowledge(agentDir, manifest.knowledge);
 
 	// SIO-843: lifecycle asset trees are root-only.
 	const hooks = root ? loadHooks(agentDir) : undefined;
@@ -131,6 +136,7 @@ export function loadAgent(agentDir: string, options?: LoadAgentOptions): LoadedA
 		subAgents,
 		knowledge,
 		runbookSelection,
+		knowledgeSelection,
 		hooks,
 		memory,
 		workflows,
@@ -156,6 +162,7 @@ function loadKnowledge(
 ): {
 	entries: KnowledgeEntry[];
 	runbookSelection?: RunbookSelectionConfig;
+	knowledgeSelection?: KnowledgeSelectionConfig;
 } {
 	const knowledgeDir = join(agentDir, "knowledge");
 	const indexPath = join(knowledgeDir, "index.yaml");
@@ -231,7 +238,38 @@ function loadKnowledge(
 		}
 	}
 
-	return { entries, runbookSelection: index.data.runbook_selection };
+	// SIO-1285: validate knowledge_selection references real categories. Without this a
+	// typo'd name degrades to "that category silently vanishes from the prompt" -- the
+	// under-selection failure mode, and invisible, because a missing category directory
+	// is already skipped with a bare `continue` above. Fail loudly at load instead.
+	if (index.data.knowledge_selection) {
+		const known = new Set(Object.keys(index.data.categories));
+		const { by_intent, floor } = index.data.knowledge_selection;
+		for (const [intent, categories] of Object.entries(by_intent)) {
+			for (const category of categories) {
+				if (!known.has(category)) {
+					throw new Error(
+						`knowledge/index.yaml: knowledge_selection.by_intent.${intent} references ` +
+							`"${category}" but no such category is defined under categories:`,
+					);
+				}
+			}
+		}
+		for (const category of floor) {
+			if (!known.has(category)) {
+				throw new Error(
+					`knowledge/index.yaml: knowledge_selection.floor references "${category}" ` +
+						"but no such category is defined under categories:",
+				);
+			}
+		}
+	}
+
+	return {
+		entries,
+		runbookSelection: index.data.runbook_selection,
+		knowledgeSelection: index.data.knowledge_selection,
+	};
 }
 
 // GAP auto-discovery: resolve each manifest `knowledge:` entry. A directory entry

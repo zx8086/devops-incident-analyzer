@@ -53,8 +53,10 @@ knowledge:
   - knowledge/specs/
   - knowledge/cost-plans/
   - knowledge/playbook/
-  - knowledge/health-snapshots/
-  - knowledge/_archive/
+# SIO-1285: this list is INERT whenever knowledge/index.yaml exists -- loadKnowledge
+# takes the manifest branch only when index.yaml is ABSENT (manifest-loader.ts:166-169).
+# index.yaml is the single source of truth for what loads. health-snapshots/ and
+# _archive/ were dropped there and are removed here only so the two files agree.
 
 workflows:
   - workflows/tier-resize.yaml
