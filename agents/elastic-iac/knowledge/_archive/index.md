@@ -145,6 +145,9 @@ NOT copied into the scaffold. Each line maps a superseded file to the current au
 - infrastructure-observability-metrics-ilm.tf — single tf file, the source repository is canonical
 - mr_schema_v1.json — JSON schema companion to mr-template, kept in source corpus for tool validators
 - mr_example_backfill_v1.md — example filled MR, kept in source corpus as a reference
+- eu-b2b-ilm-change-apply-runbook.md — SIO-1281: dated multi-day approval timeline for the
+  2026-05-13 eu-b2b ILM change. Historical record of one change, not reusable procedure; the
+  reusable recovery steps from the same incident live at runbooks/eu-b2b-ilm-oom-incident-recovery.md
 
 ## Not copied — credentials
 

@@ -48,7 +48,10 @@ can silently replace the custom versions on the APM data streams.
     upgrade in a planned window with revalidation.
 
 ## §8.3 Retention audit process
-_Promoted to skill `skills/retention-audit-process/`._
+
+Retention is the single largest lever on storage cost, and it is set
+once and rarely revisited. Audit it against what the data owner actually
+needs rather than what was configured at onboarding.
 
 ## §8.3.1 Scope
 
@@ -76,6 +79,26 @@ _Promoted to skill `skills/retention-audit-process/`._
     min_age reduction in the policy change register.
 
 -   Give data owner 2-week comment window before applying.
+
+Scope queries:
+
+    GET _cat/indices?h=index,ilm.policy&format=json
+    # group by ilm.policy, count indices, rank descending
+
+    GET _ilm/policy
+    # extract phases.delete.min_age per policy
+
+## §8.3.3 Validation
+
+Post-apply, cross-ref §9.1 (After an ILM policy change):
+
+-   Policy version bumped, modified_date matches the apply timestamp.
+
+-   _ilm/explain?only_errors=true returns empty across affected backing
+    indices.
+
+-   Storage delta visible within one retention cycle on
+    _cat/indices?bytes=gb.
 
 ## §8.4 Release gates
 

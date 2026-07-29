@@ -1,12 +1,3 @@
----
-name: eu-b2b-ilm-oom-incident-recovery
-description: Step-by-step recovery for cold-tier OOM caused by an ILM frozen min_age pull-in triggering force-merge stampede. Source incident eu-b2b 2026-05-15.
-inputs:
-  cluster: { type: string, required: true, default: eu-b2b }
-outputs:
-  status: { type: string }
----
-
 # eu-b2b — Cold-Tier OOM Incident Runbook
 
 **Date:** 2026-05-15

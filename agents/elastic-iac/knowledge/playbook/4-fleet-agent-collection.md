@@ -45,7 +45,12 @@ docs/day of collection volume has been eliminated in this programme.
 -   Document the change in the cluster's session handover.
 
 ## §4.4 Sub-procedure: system.process metric tuning
-_Promoted to skill `skills/systemprocess-metric-tuning/`._
+
+Symptom: system.process is emitting 10--15M docs/day across several
+Fleet policies despite most of those docs being idle processes
+(loopback listeners, kernel threads, always-zero-CPU consumers).
+Pattern confirmed on eu-cld Fleet policies contributing ~11--12M
+docs/day.
 
 ## §4.4.1 Interval bump
 
@@ -79,8 +84,70 @@ _Promoted to skill `skills/systemprocess-metric-tuning/`._
     to query a longer time window or re-enable the integration on a
     small dedicated policy.
 
+## §4.4.3 Validation
+
+Cross-ref §9.2 (After a Fleet agent policy change):
+
+-   Pilot tag group: observe the ingest-rate drop in Stack Monitoring
+    for 60 min before broad rollout.
+
+-   _cat/count/.ds-metrics-system.process-* over 24h should show
+    docs/day drop consistent with the 30x target (interval bump alone)
+    and further with the drop filter.
+
+-   No alerting gap opened: check process-based watchers and SLOs for
+    false negatives.
+
 ## §4.5 Sub-procedure: Clock-skew ingest pipeline (\@custom) pinning
-_Promoted to skill `skills/clock-skew-ingest-pipeline-custom-pinning/`._
+
+Symptom: agents on hosts with skewed clocks produce documents with
+\@timestamp in the future, which breaks time-based dashboards and can
+push docs into the next index generation. Observed across Windows hosts
+in ap-cld where NTP drift was not corrected at the OS level.
+
+Pattern: intercept in the integration's \@custom ingest pipeline, not in
+a global pipeline --- \@custom pipelines are guaranteed to be invoked by
+every integration and survive package upgrades.
+
+    PUT _ingest/pipeline/logs-system-@custom
+    {
+    "processors": [
+    {
+    "script": {
+    "source": """
+    long now = new Date().getTime();
+    long ts =
+    ZonedDateTime.parse(ctx['@timestamp']).toInstant().toEpochMilli();
+    if (ts - now > 300000) { // >5 min in the future
+    ctx['event.ingested'] =
+    ZonedDateTime.now(ZoneOffset.UTC).toString();
+    ctx['event.original_ts'] = ctx['@timestamp'];
+    ctx['@timestamp'] = ctx['event.ingested'];
+    ctx['tags'] = (ctx['tags'] ?: []);
+    ctx['tags'].add('clock-skew-corrected');
+    }
+    """
+    }
+    }
+    ]
+    }
+
+-   Pin via component template so \@custom survives Fleet package
+    upgrades:
+
+```{=html}
+<!-- -->
+```
+    PUT _component_template/logs-system@custom
+    { "template": { "settings": { "index.default_pipeline":
+    "logs-system-@custom" } } }
+
+-   Repeat per integration (metrics-system\@custom,
+    logs-windows\@custom, etc.) --- Fleet integrations each have their
+    own \@custom pipeline name.
+
+-   Monitor tags:clock-skew-corrected to find hosts that need OS-level
+    NTP fixes; this is a diagnostic, not a permanent substitute for NTP.
 
 ## §4.6 Common mistakes
 

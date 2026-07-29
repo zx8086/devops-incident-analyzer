@@ -206,7 +206,12 @@ frozen, not progressing to delete.
     deletion-phase stalls.
 
 ## §3.7 Sub-procedure: Dead data stream cleanup
-_Promoted to skill `skills/dead-data-stream-cleanup/`._
+
+Symptom: a data stream has an empty write index rolling over every day.
+Observed on eu-b2b (19 deprecated streams).
+
+Cause: the application stopped writing but the data stream was never
+deleted. ILM keeps rolling the empty write index because max_age fires.
 
 ## §3.7.1 Detect
 
@@ -217,6 +222,9 @@ GET
     GET
 
 _cat/indices/.ds-*?h=index,docs.count,creation.date&s=creation.date&format=json
+
+A high generation number combined with a write index of 0 docs is the
+canonical fingerprint.
 
 ## §3.7.2 Remove
 
@@ -235,17 +243,40 @@ _cat/indices/.ds-*?h=index,docs.count,creation.date&s=creation.date&format=json
     "next_step": { "phase": "delete", "action": "delete",
     "name": "delete" } }
 
--   Delete the data stream: DELETE _data_stream/.
+-   Delete the data stream: DELETE _data_stream/<stream-name>.
 
 -   Verify no matching index templates will re-create it on next ingest.
+    Audit _index_template/* for any index_patterns that would match.
+
+## §3.7.3 Validation
+
+Re-run the detect query --- the stream should not reappear. Watch
+_cat/indices for 24h: no new .ds-<stream>-* backing index should be
+created. If one is, an upstream producer is still alive or a Fleet
+integration is rehydrating it; abort and re-investigate before
+re-deleting.
+
+Cross-reference §9.1 (After an ILM policy change) for downstream
+policy-level validation if the stream was tied to a custom policy.
 
 ## §3.8 Sub-procedure: Orphan index reattachment
-_Promoted to skill `skills/orphan-index-reattachment/`._
+
+Symptom: indices matching a known pattern have index.lifecycle.name
+unset. Observed on eu-b2b (14 indices) and on eu-cld (storewatch-*,
+which turned out to be enrich sources --- see §6.3 before reattaching).
+
+Before reattaching anything, check §6.3 (Enrich policy source discovery
+--- do not delete before checking). If the "orphan" is an enrich source
+it is correctly unmanaged; reattaching it to an ILM policy with a delete
+phase will destroy the enrich data.
 
 ## §3.8.1 Detect
 
 GET _cat/indices/<pattern>*?h=index,ilm.policy&v
     # Filter rows where ilm.policy is blank or 'null'
+
+For each candidate, confirm it is not an enrich source: GET
+_enrich/policy and look for any indices entry referencing the index.
 
 ## §3.8.2 Reattach
 
@@ -256,16 +287,31 @@ PUT <index>/_settings
     }
 
 -   The ILM age counter resets to 0 at reattachment --- keep this in
-    mind for delete timing on already-old data.
+    mind for delete timing on already-old data. If the index is already
+    past its target retention, plan a manual delete instead of relying
+    on ILM to catch up.
 
 -   Always reattach to the same policy the new indices in that stream
     are using --- diverging policies cause split retention.
 
+-   For data-stream backing indices, prefer fixing at the data-stream
+    level so future backing indices inherit correctly.
+
 -   Verify with GET /_ilm/explain --- expect policy field populated and
-    phase=hot\|warm\|cold (not null).
+    phase=hot\|warm\|cold (not null). Re-check 24h later that the index
+    is progressing through phases as expected. Cross-ref §9.1.
 
 ## §3.9 Sub-procedure: Built-in ILM policy revalidation after upgrade
-_Promoted to skill `skills/built-in-ilm-policy-revalidation-after-upgrade/`._
+
+Elastic ships seven built-in policies (metrics, logs, synthetics,
+profiling, @lifecycle, ilm-history, watch-history). An upgrade or Fleet
+package install silently re-applies the shipped definition, which is
+hot-only with no delete phase. If these were customised, the
+customisations are lost and data accumulates on hot.
+
+Note (per §12.28): the 9.3 -> 9.4 upgrade did NOT auto-recreate built-in
+ILM policies --- the assumption from earlier upgrades is now soft. Still
+run this check after every upgrade.
 
 ## §3.9.1 Post-upgrade check
 
@@ -274,9 +320,12 @@ GET _ilm/policy/metrics
     GET _ilm/policy/synthetics
     GET _ilm/policy/profiling
     GET _ilm/policy/@lifecycle
-    # Compare phases against git-stored baseline; alert if phase count !=
+    GET _ilm/policy/ilm-history
+    GET _ilm/policy/watch-history
 
-expected
+Compare phases against the git-stored baseline. Alert if phase count
+differs from the baseline, or if phases.delete is missing on any policy
+that previously had one.
 
 ## §3.9.2 Permanent fix
 
@@ -288,10 +337,69 @@ expected
     conflict.
 
 -   Add a weekly scheduled check in the monitoring cluster: assert phase
-    count on custom policies is unchanged since last baseline commit.
+    count and phases.delete.min_age on custom policies are unchanged
+    since the last baseline commit. Fire on drift.
+
+## §3.9.3 Validation
+
+Cross-ref §9.1 (After an ILM policy change) and §3.4 (Policy migration
+drift --- the checklist):
+
+-   GET _ilm/explain/.ds-*?only_errors=true returns empty.
+
+-   _cat/indices?h=index,ilm.policy shows production indices on the
+    custom policy names, not the built-ins.
+
+-   _index_template/* references custom policy names in
+    template.settings.index.lifecycle.name.
+
+If any policy drifted, restore from the git baseline via PUT
+_ilm/policy/<name> with the saved JSON.
 
 ## §3.10 Sub-procedure: Dedicated ILM policy for high-retention network-logs streams
-_Promoted to skill `skills/dedicated-ilm-policy-for-high-retention-network-logs-streams/`._
+
+Symptom: a single high-volume, long-retention stream (network-logs from
+Cisco Meraki / FTD on ap-cld) shares the observability-default policy
+sized for short retention. Result: the stream either forces the shared
+policy retention longer than observability wants, or is capped below its
+compliance requirement.
+
+Fix pattern: dedicated 5-phase policy that is sized for the stream's
+ingest and retention profile.
+
+    PUT _ilm/policy/ap-network-logs
+    {
+    "policy": {
+    "phases": {
+    "hot": { "actions": { "rollover": { "max_primary_shard_size":
+    "10gb", "max_age": "1d" }, "set_priority": { "priority": 100
+    } } },
+    "warm": { "min_age": "3d", "actions": { "allocate": {
+    "number_of_replicas": 1 }, "set_priority": { "priority": 50 } }
+    },
+    "cold": { "min_age": "7d", "actions": {
+    "searchable_snapshot": { "snapshot_repository":
+    "found-snapshots" }, "set_priority": { "priority": 0 } } },
+    "frozen": { "min_age": "30d", "actions": {
+    "searchable_snapshot": { "snapshot_repository":
+    "found-snapshots" } } },
+    "delete": { "min_age": "365d", "actions": { "delete": {} } }
+    }
+    }
+    }
+
+-   Key choices: 10GB rollover (not 25GB) because the stream is busy but
+    not enormous, and smaller rollovers keep warm merges fast.
+
+-   365-day delete reflects network-logs compliance retention --- do not
+    blend into the 90-day observability bucket.
+
+-   Attach via a dedicated index template at priority 200 so the
+    observability-default index template (priority 100) does not win the
+    pattern match.
+
+-   Monitor hot-tier docs/s after attach --- dedicated policies isolate
+    backpressure from the shared pool.
 
 ## §3.11 Aggressive rollover trigger profile (recommended default)
 
@@ -318,10 +426,43 @@ sparse streams to never roll.
 -   Net effect on eu-cld (modelled): −51% shard count over 30--45 days.
 
 ## §3.12 Sub-procedure: ILM rollover guard semantics --- do not use min\_\* on shared policies
-_Promoted to skill `skills/ilm-rollover-guard-semantics/`._
+
+min_* rollover conditions (min_primary_shard_docs,
+min_primary_shard_size, min_age, min_size, min_docs) are guards:
+rollover triggers only when ALL min_* are met AND any max_* is met.
+If a sparse stream never reaches the min_* threshold, the index never
+rolls over --- regardless of max_age.
+
+Concrete failure case (eu-cld, 5 May 2026): a kubernetes.state_cronjob
+stream in eu_dtc_dev accumulated 7 docs across multiple days. With
+min_primary_shard_docs: 1000000 set, the index would have stayed in
+hot phase indefinitely, never moving to warm/cold/frozen, never reaching
+the delete phase.
+
+-   Symptom to watch for: GET _ilm/explain/\<index\> shows step:
+    check-rollover-ready past the policy's max_age.
+
+-   Verification: GET \<index\>/_ilm/explain and check the index has
+    been hot longer than max_age while below the min_* threshold.
+
+-   Rule: if the policy is shared across many streams of differing
+    volume, do not use min_*. Rely on max_age +
+    max_primary_shard_size only.
+
+-   Acceptable use of min_*: dedicated single-stream policies where
+    the stream's volume is bounded and known.
 
 ## §3.13 Sub-procedure: Empty retention-fleet templates inherit prod ILM
-_Promoted to skill `skills/empty-retention-fleet-templates-inherit-prod-ilm/`._
+
+Templates at priority 250+ matching dev/stg/test/nonprod patterns can
+match the patterns yet have template: {} (empty body). They win the
+priority arbitration but do nothing --- dev/stg streams inherit whatever
+the composed <type>@settings component specifies (typically the prod
+policy). Result: dev/stg streams silently inherit the prod 90-day ILM.
+
+Pattern observed on eu-cld; suspected on ap-cld and us-cld --- audit
+each. Memory cross-ref: project_retention_fleet_templates_gotcha --- PVH
+*-nonprod-retention-fleet templates (priority 251) may be empty.
 
 ## §3.13.1 Detect
 
@@ -360,11 +501,97 @@ PUT each retention-fleet template with the correct nonprod ILM:
 -   This pattern likely repeats across the federation --- audit ap-cld
     and us-cld for the same empty-body templates.
 
+-   Adapt index_patterns to the patterns the empty template actually
+    matched, and composed_of to the type prefix (logs@*, metrics@*,
+    traces@*, synthetics@*).
+
+-   No data loss; this is a retention drift correction for new indices
+    only. If matching streams have max_age longer than the desired
+    correction window, pair with a force-attach for existing backing
+    indices.
+
+## §3.13.3 Codify and validate
+
+After the live PUT validates, codify the same templates in
+stacks/<cluster>/templates.tf so they survive the next session and are
+not re-overwritten by a Fleet package upgrade.
+
+Post-change validation, after the next rollover on any matching stream:
+
+-   GET <new-backing-index>/_settings.index.lifecycle.name reports the
+    nonprod policy.
+
+-   _ilm/explain on the new backing index shows the nonprod policy
+    attached.
+
+-   Ingest rate and Kibana dashboards remain unaffected.
+
 ## §3.14 Sub-procedure: Override index template pattern (priority 300)
-_Promoted to skill `skills/override-index-template-pattern-priority-300/`._
+
+When the goal is to add a setting (e.g. index.mode: logsdb,
+index.mapping.source.mode: synthetic) without modifying a Fleet-managed
+integration template, create a higher-priority override that composes in
+the same components.
+
+    PUT _index_template/logs-kubernetes.container_logs-logsdb
+    {
+      "index_patterns": ["logs-kubernetes.container_logs-*"],
+      "priority": 300,
+      "composed_of": [
+        "logs@mappings",
+        "logs@settings",
+        "logs-kubernetes.container_logs@package",
+        "logs@custom",
+        "kubernetes@custom",
+        "logs-kubernetes.container_logs@custom",
+        "ecs@mappings",
+        ".fleet_globals-1",
+        ".fleet_agent_id_verification-1"
+      ],
+      "ignore_missing_component_templates": [
+        "logs@custom",
+        "kubernetes@custom",
+        "logs-kubernetes.container_logs@custom"
+      ],
+      "template": {
+        "settings": {
+          "index": { "mode": "logsdb" }
+        }
+      },
+      "data_stream": { "hidden": false, "allow_custom_routing": false }
+    }
+
+-   Priority 300 wins over the integration's priority-200 template.
+
+-   composed_of mirrors the integration's composition, so package
+    mappings/processors continue to apply.
+
+-   ignore_missing_component_templates keeps the override resilient
+    to optional \@custom hooks not yet defined.
+
+-   Reversal: DELETE _index_template/\<override-name\>. The
+    integration's template applies again on next rollover.
+
+-   Use this whenever _component_template access is restricted
+    (e.g. through limited tooling) and \@custom cannot be PUT directly.
 
 ## §3.15 Sub-procedure: Warm/cold-tier replica policy --- single-copy exposure
-_Promoted to skill `skills/warmcold-tier-replica-policy/`._
+
+The core ILM policies (logs, metrics, logs-apm.app_logs-default_policy,
+metrics-apm.app_metrics-default_policy, traces-apm.traces-default_policy,
+and the per-signal metrics-apm aggregate policies) set
+allocate.number_of_replicas: 0 in the warm phase (min_age 3d; 4d for
+transaction_1m).
+
+A backing index therefore runs a single copy from roughly 3 to 14 days
+of age --- through the warm and cold phases --- until it converts to an
+S3-backed frozen searchable snapshot. A warm or cold node restart or
+replacement orphans those replica-0 primaries and takes their indices
+RED until recovery. This was the 2026-05-15 eu-b2b incident: 96
+unassigned primary shards across 167 data streams.
+
+Hot-phase write indices are unaffected --- they correctly carry 1
+replica.
 
 ## §3.15.1 Detect
 
@@ -401,7 +628,19 @@ one-off settings call to gain a copy immediately.
 
 -   APM-bundled policies (logs-apm.app, metrics-apm.app,
     traces-apm.traces) may auto-revert on Fleet package update ---
-    re-apply after stack upgrades, as in 3.9.
+    re-apply after stack upgrades, as in §3.9 and §8.2.
+
+## §3.15.3 Validation
+
+Cross-ref §9.1 (After an ILM policy change):
+
+-   _cluster/health returns GREEN, 0 unassigned shards.
+
+-   _cat/shards/.ds-logs-apm.app.*-*?h=index,shard,prirep,node shows
+    each warm backing index with both a primary and a replica.
+
+-   Warm-tier disk usage rises by the expected per-stream amount; if
+    not, replicas failed to allocate --- check tier headroom.
 
 ## §3.5 TB on eu-cld during the 21 April incident), the raise is a tactical
 

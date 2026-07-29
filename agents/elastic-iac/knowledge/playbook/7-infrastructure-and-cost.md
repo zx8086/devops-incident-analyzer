@@ -76,7 +76,45 @@ alerts.
     change (§7.1).
 
 ## §7.2.3 Raise-then-downsize two-step (incident pattern)
-_Promoted to skill `skills/raise-then-downsize-two-step-incident-pattern/`._
+
+## §7.2.3.1 Why this pattern
+
+A ceiling raise under incident pressure is a tactical fix. Without follow-up, the estate pays for the higher ceiling permanently, even after the §3.3.2 frozen tuning, §8.3 retention audit, and stream-specific ILM changes land their savings. A permanent ceiling raise should require explicit cost-owner sign-off; the default posture is two MRs.
+
+## §7.2.3.2 Step 1 --- Raise (incident-time MR)
+
+1. Call `validate-cluster-state` skill with `change_type: "resize"`. Under incident conditions some gate conditions (b: breaker tripped, c: heap > 90%) may fail. **Allowed exception:** if the raise itself is the mitigation for those conditions, document the gate failures in the MR `## Risks` section and proceed — the maker step is not blocked under explicit incident framing.
+2. Use the `resize-tier` skill to draft the raise. MR-template category: `tier-resize`; risk: HIGH (incident).
+3. Record in the policy change register (per §8.1):
+   - New ceiling value
+   - Exact reason (watermark event, query pattern, breaker trip count, AutoOps event)
+   - Date and cluster
+   - Expected lifetime: "tactical — to be downsized once tuning ages in"
+4. Open MR via `open-mr`. Title: `[<cluster>] <tier> ceiling raise — <before>GB → <after>GB (incident)`.
+5. Append to `memory/runtime/context.md` `## in-flight` with explicit "scheduled downsize" reminder + a date ≥ 14 days out.
+
+## §7.2.3.3 Aging requirement (minimum 14 days)
+
+Do not open Step 2 MR until:
+
+- §3.3.2 frozen `min_age` tuning is applied AND ≥ 14 days have elapsed (frozen ILM age counter is from rollover, so new `min_age` takes effect as each index progresses, not immediately).
+- §8.3 retention audit decisions are applied AND ≥ 14 days elapsed.
+- Any stream-specific ILM changes have rolled over at least once.
+
+Re-measure actual usage at this point — do not estimate from baseline.
+
+## §7.2.3.4 Step 2 --- Downsize (planned MR)
+
+1. Re-run `validate-cluster-state` with `change_type: "resize"`. All 5 gate conditions must pass cleanly now (no incident framing).
+2. Compute the new ceiling as **`actual_usage × 1.25`** — not necessarily the original pre-incident value. The 25% buffer protects against the next legitimate growth event.
+3. Use `resize-tier` skill. MR-template category: `tier-resize`; risk: MEDIUM.
+4. Update the policy change register with before/after usage figures, the new ceiling, and the audit trail back to Step 1.
+5. Open MR. Title: `[<cluster>] <tier> ceiling downsize — <step1_after>GB → <step2_target>GB (post-tuning right-size)`.
+6. In the MR body, link to Step 1 MR for traceability.
+
+Both MRs follow the standard `tier-resize` category rules, and each is
+recorded in the policy change register (§8.1) so the raise and the
+matching downsize stay traceable to one another.
 
 ## §7.3 Hot-tier I3 downsize after over-migration
 

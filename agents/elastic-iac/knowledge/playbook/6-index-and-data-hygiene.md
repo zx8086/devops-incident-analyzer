@@ -169,7 +169,12 @@ all use TSDB and therefore synthetic source by default.
     support synthetic source).
 
 ## §6.7 Sub-procedure: Stream consolidation via reroute processor
-_Promoted to skill `skills/stream-consolidation-via-reroute-processor/`._
+
+A Fleet integration creates one data stream per resource type per
+namespace. With 9 namespaces x 16 resource types, that is ~85 streams
+just for kubernetes.state_*. Consolidating to one stream per resource
+type with namespace as a field reduces stream count ~9x and
+proportionally reduces backing index count.
 
 ## §6.7.1 The consolidation pipeline
 
@@ -221,8 +226,31 @@ upgrades.
     independently reversible via DELETE
     _ingest/pipeline/\<dataset\>\@custom.
 
+## §6.7.4 Validation
+
+Cross-ref §9.6 (After a reroute pipeline change):
+
+-   GET _cat/indices/.ds-metrics-kubernetes.state_<subtype>-default-*
+    shows new backing indices created post-wire.
+
+-   Per-namespace .ds-metrics-kubernetes.state_<subtype>-<ns>-* indices
+    stop growing after rollover.
+
+-   Dashboards and ML jobs render against the consolidated stream with
+    no data gaps.
+
 ## §6.8 Hot-node low-watermark relief and single-shard reshard
-_Promoted to skill `skills/hot-node-low-watermark-relief-and-single-shard-reshard/`._
+
+AutoOps low-watermark forecasts sometimes fire on a single hot node
+while the tier as a whole has headroom. Confirm whether the problem is
+tier capacity or per-node imbalance before acting --- Elastic Cloud tier
+autoscaling responds only to tier-level capacity and will not rebalance
+individual nodes.
+
+Diagnose with GET _cat/allocation?v and the node FS stats. If one node
+sits far below its siblings, look for an oversized single-shard index: a
+single primary above ~50 GB forces its primary and replica onto two
+nodes only, starving the third in a three-zone tier.
 
 ## §6.8.1 Interim relief --- allocation-filter reroute
 
@@ -281,4 +309,14 @@ mulesoft-aggregations-prod-v6 had last checkpoint 71299 at 2026-03-22
 two consecutive checks. The reshard reindex was started immediately
 without a write-pause window; the cutover or retirement decision is held
 with the Mulesoft team.
+
+## §6.8.4 Validation
+
+-   _cat/allocation?v shows the three hot nodes within 10% disk usage of
+    each other.
+
+-   The reshard target alias serves reads with no consumer change.
+
+-   The AutoOps low-watermark forecast clears within one observation
+    window.
 
