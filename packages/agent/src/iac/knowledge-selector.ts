@@ -58,9 +58,55 @@ export const DEFAULT_BY_INTENT: Record<IacIntent, readonly string[]> = {
 //   []               -> drop all knowledge
 //   [names]          -> keep only these categories
 export function filterAgentKnowledge(agent: LoadedAgent, categories: string[] | null | undefined): LoadedAgent {
-	if (categories === null || categories === undefined) return agent;
+	const live = excludeDeprecated(agent.knowledge);
+	if (categories === null || categories === undefined) {
+		// Pass-through on categories, but lifecycle still applies. Identity is preserved when
+		// nothing is deprecated, so the byte-identical gate-off contract survives.
+		return live === agent.knowledge ? agent : { ...agent, knowledge: live };
+	}
 	const keep = new Set(categories);
-	return { ...agent, knowledge: agent.knowledge.filter((entry) => keep.has(entry.category)) };
+	return { ...agent, knowledge: live.filter((entry) => keep.has(entry.category)) };
+}
+
+// SIO-1289: OKF lifecycle exclusion for elastic-iac, mirroring SIO-1287's
+// filterCatalogByLifecycle (runbook-selector.ts:371) for runbooks. Three deliberate
+// carry-overs from that decision, so the two agents behave the same way:
+//
+//   1. `status: deprecated` is BINDING -- an explicit human act saying "do not use this".
+//   2. A past `stale_after` is ADVISORY -- warn, but KEEP. The date is an author's
+//      months-old guess, and a mis-set one silently starving the prompt is worse than
+//      stale-but-present guidance. `status: draft` is likewise kept: drafts are authored
+//      intentionally, and OKF's default for an absent status is `stable`, so absence never
+//      excludes.
+//   3. If EVERY entry is deprecated, pass the full set through rather than starve the
+//      prompt -- the `emptied` escape hatch, same principle as this file's other fallbacks.
+//
+// Runs BEFORE category selection: a deprecated file inside a selected category must be gone
+// before the category filter can let it back in.
+export function excludeDeprecated(knowledge: LoadedAgent["knowledge"]): LoadedAgent["knowledge"] {
+	const kept = knowledge.filter((e) => e.status !== "deprecated");
+	if (kept.length === knowledge.length) return knowledge; // noop -- preserve identity
+	if (kept.length === 0) {
+		log.warn(
+			{ deprecated: knowledge.length },
+			"iac knowledge lifecycle: EVERY entry is deprecated; passing the full set through rather than starving the prompt",
+		);
+		return knowledge;
+	}
+	const excluded = knowledge.filter((e) => e.status === "deprecated").map((e) => `${e.category}/${e.filename}`);
+	log.info({ excluded, kept: kept.length, total: knowledge.length }, "iac knowledge lifecycle: excluded deprecated");
+	return kept;
+}
+
+// Advisory-only, per carry-over 2 above. Reported so a stale file is discoverable without
+// being silently removed. Compared as YYYY-MM-DD strings: `stale_after` is a plain OKF date
+// with no time or zone, so lexicographic comparison is exact and immune to the off-by-a-day
+// errors a Date round-trip introduces.
+export function staleEntries(knowledge: LoadedAgent["knowledge"], now: Date): string[] {
+	const today = now.toISOString().slice(0, 10);
+	return knowledge
+		.filter((e) => e.staleAfter !== undefined && e.staleAfter < today)
+		.map((e) => `${e.category}/${e.filename}`);
 }
 
 // Resolve the category list for an intent. Every degenerate path returns the FULL set --
@@ -99,6 +145,13 @@ export async function selectIacKnowledge(state: IacStateType): Promise<Partial<I
 
 		const categories = selectCategories(state.intent, config);
 		log.info({ intent: state.intent, categories: categories.join(",") }, "iac knowledge selection");
+
+		// SIO-1289: advisory only -- surfaced here so a past stale_after is discoverable once
+		// per turn without removing the entry. Exclusion happens in filterAgentKnowledge.
+		const stale = staleEntries(getAgentByName(AGENT).knowledge, new Date());
+		if (stale.length > 0) {
+			log.warn({ stale }, `${stale.length} knowledge file(s) past stale_after; still loaded -- review them`);
+		}
 		return { selectedKnowledge: categories };
 	} catch (err) {
 		// Deliberately NOT the hard-fail of SIO-640's RunbookSelectionFallbackError. There a
