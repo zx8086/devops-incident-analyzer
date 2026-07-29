@@ -51,6 +51,42 @@ Credits. Call `gitlab_graph_schema` (free) first if you need to ground a raw
 query; prefer the purpose-built tools over the raw `gitlab_orbit_query_graph`
 escape hatch.
 
+## Orbit raw query reference (gitlab_orbit_query_graph)
+
+Only for questions the purpose-built tools above cannot express. Ground the
+shape with `gitlab_graph_schema` (free) before spending credits on a raw query.
+
+**Entities.** GitLab issues, epics, tasks and incidents are all the **WorkItem**
+entity. There is no **Issue** node -- a query with entity "Issue" is rejected
+outright, so a hunt for a linked incident or epic queries **WorkItem**.
+
+**Traversal depth.** Relationship entries take **max_hops** (and optionally
+**min_hops**): default 1, maximum 3. A one-hop default means an unset
+**max_hops** answers "direct importers" and silently misses transitive ones --
+set it explicitly when the question is "everything downstream".
+
+**Path queries.** These are a different shape: **path_finding** requires a
+**path** sub-object carrying **path.max_depth** (max 3). **max_hops** does not
+apply to a path query. When the endpoints use filters, add **path.rel_types**
+to bound fan-out; path queries follow edges only in their schema direction, so
+an unexpectedly empty result is often a direction mismatch rather than absence.
+
+**Diff edges.** Prefer **HAS_LATEST_DIFF** over **HAS_DIFF** when the question
+is "what does this file look like now" -- **HAS_DIFF** spans every historical
+revision and undercounts long-lived files when combined with a limit.
+
+**Pipeline source.** Merge-request pipelines carry
+**Pipeline.source = "merge_request_event"**. Parent/child pipeline structures
+mean a naive count double-counts; filter on source when attributing a failure
+to an MR.
+
+**Iteration budget.** At most 5 query attempts per question. Changing only
+**limit** or **columns** is not progress; changing the entity, a relationship
+type or a filter is. HTTP 400 validation errors count. On exceeding 5, report
+the shapes tried and what each failed on, then fall back to
+`gitlab_semantic_code_search` + `gitlab_list_commits` -- an inflated partial
+graph answer is worse than a stated gap.
+
 ## Investigation Steps (per-project fallback)
 
 ### 1. Extract Search Anchors from Logs

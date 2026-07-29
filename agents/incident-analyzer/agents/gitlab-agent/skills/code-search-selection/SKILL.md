@@ -87,3 +87,23 @@ and why). In every case, do NOT fabricate cross-project import edges from an
 unavailable graph. Orbit indexes the DEFAULT BRANCH only and excludes
 Terraform/YAML, so IaC-change questions stay on the REST / commit path
 regardless.
+
+## Orbit Query Shape
+Three schema facts that decide whether a graph query returns rows or a 400.
+
+GitLab issues, epics, tasks and incidents are all the **WorkItem** entity.
+There is no **Issue** node -- a query with entity "Issue" is rejected outright.
+Modern GitLab unifies these under work items and Orbit follows the same model,
+so query **WorkItem** for any of them.
+
+Traversal edges take **max_hops** (optionally **min_hops**): default 1, max 3.
+Path queries are different -- they use **path.max_depth** inside the required
+**path** object, also max 3, and **max_hops** does not apply there. When path
+endpoints use filters, include **path.rel_types** to bound fan-out; path
+queries follow edges only in their schema direction.
+
+Budget: resolve a question in at most 5 query attempts. Changing only **limit**
+or **columns** is not progress; changing the entity, the relationship type or a
+filter is. HTTP 400 validation errors count toward the 5. On exceeding it,
+report the shapes tried and what each failed on, then move to the fallback --
+do not keep iterating or present a partial graph result as a complete answer.
