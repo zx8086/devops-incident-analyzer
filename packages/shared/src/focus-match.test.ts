@@ -53,6 +53,22 @@ describe("tokenize", () => {
 	test("splits an acronym-suffixed PascalCase name at the word/acronym boundary", () => {
 		expect(tokenize("NotificationHTTPService")).toEqual(tokenize("notification-http-service"));
 	});
+
+	// SIO-1284: five call sites pass free prose rather than an identifier (the gitlab,
+	// aws-alarm, atlassian and orbit extractors, plus rules.ts). Without \s in the split
+	// class a title collapsed into a single token -- "Add retry to SAP draft order sink"
+	// yielded one 29-char string, so the word `order` was invisible to token overlap.
+	test("splits prose on whitespace into discrete word tokens", () => {
+		// `sink` is absent because SUFFIX_PATTERN strips it at end-of-string during
+		// normalize() -- same rule that applies to identifiers, not a whitespace artifact.
+		expect(tokenize("Add retry to SAP draft order sink")).toEqual(new Set(["retry", "draft", "order"]));
+	});
+	test("identifier tokenization is unaffected by the whitespace split", () => {
+		// No whitespace in these, so they must tokenize exactly as before.
+		expect(tokenize("pim-sink-articles")).toEqual(new Set(["sink", "article"]));
+		expect(tokenize("eu-oit-prd-order-service")).toEqual(new Set(["order"]));
+		expect(tokenize("orders-service-prd")).toEqual(new Set(["order", "service"]));
+	});
 });
 
 describe("matchesFocus", () => {
@@ -129,5 +145,34 @@ describe("matchesFocus", () => {
 	});
 	test("PascalCase focus token still rejects an unrelated hyphenated name", () => {
 		expect(matchesFocus("billing-service", ["NotificationService"])).toBe(false);
+	});
+
+	// SIO-1284: live run 000c83df -- the GitLab card logged `droppedAll: true` (5 raw, 0
+	// kept) because extractors/gitlab.ts matches on prose (MR title + description) and
+	// tokenize() did not split on whitespace, collapsing a whole title into one token.
+	test("prose containing a focus word matches (whitespace is a token boundary)", () => {
+		const focus = ["prana-order-service"];
+		expect(matchesFocus("Add retry to SAP draft order sink", focus)).toBe(true);
+		expect(matchesFocus("Fix season validation for archived order items", focus)).toBe(true);
+	});
+	test("prose without any focus word is still rejected", () => {
+		const focus = ["prana-order-service"];
+		expect(matchesFocus("chore: bump dependencies", focus)).toBe(false);
+		expect(matchesFocus("Refactor payment gateway timeout", focus)).toBe(false);
+		expect(matchesFocus("Fix flaky test in billing module", focus)).toBe(false);
+	});
+	// The whitespace split must not loosen identifier matching -- these are the shapes the
+	// SIO-1268 ECS ledger and SIO-1261 gitlab probe depend on.
+	test("identifier matching is unchanged by the whitespace split", () => {
+		const focus = ["prana-order-service"];
+		expect(matchesFocus("order-service", focus)).toBe(true);
+		expect(matchesFocus("eu-oit-prd-order-service", focus)).toBe(true);
+		expect(matchesFocus("orders-service-prd", focus)).toBe(true);
+		expect(matchesFocus("billing-service", focus)).toBe(false);
+		// A slash-separated path does NOT match -- `/` is not in the split class, so this
+		// tokenizes to one "pvhcorp/b2b/oit/order" token. Pre-existing behaviour, verified
+		// unchanged by this fix; call sites needing it extract the last segment first
+		// (cf. ecsLastSegment in sub-agent-loop-guard.ts).
+		expect(matchesFocus("pvhcorp/b2b/oit/order-service", focus)).toBe(false);
 	});
 });

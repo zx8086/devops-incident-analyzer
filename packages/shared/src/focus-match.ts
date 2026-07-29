@@ -50,9 +50,20 @@ export function tokenize(s: string): Set<string> {
 	// SIO-785: depluralise per token so `articles` matches `article`. The whole-string
 	// normalize only strips a single trailing `s`, but kafka group ids embed plural
 	// nouns mid-string (e.g. `pim-sink-articles`).
+	//
+	// SIO-1284: \s is in the split class because five call sites pass FREE PROSE, not an
+	// identifier: the gitlab (title+description), aws alarm, atlassian (key+summary) and
+	// orbit extractors, plus rules.ts. Without it a whitespace-separated title collapses
+	// into ONE token that fails both the MIN_TOKEN_LENGTH filter and the overlap check --
+	// "Add retry to SAP draft order sink" tokenized to a single 29-char string and was
+	// dropped against focus `prana-order-service` despite containing the word `order`.
+	// The GitLab card was therefore empty on every focused run (droppedAll: true).
+	// Identifier tokenization is UNCHANGED: ARNs, log groups, consumer-group ids, kafka
+	// topics and gitlab paths contain no whitespace -- verified zero drift across all of
+	// them, which is what keeps the SIO-1268 ECS ledger and SIO-1261 gitlab probe intact.
 	return new Set(
 		normalize(splitCamelCase(s))
-			.split(/[-_.]/)
+			.split(/[-_.\s]/)
 			.filter((t) => t.length >= MIN_TOKEN_LENGTH)
 			.map((t) => t.replace(/s$/, "")),
 	);
