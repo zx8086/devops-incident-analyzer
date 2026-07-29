@@ -717,6 +717,37 @@ describe("R7 graph seeds (SIO-1101)", () => {
 		expect(graphSeeded.filter((v) => v.startsWith("/ecs/")).length).toBe(5);
 	});
 
+	// SIO-1276: a seeded service name is useless without the cluster it lives in -- the
+	// sub-agent would still have no deployment to name (the rule SIO-1277 made MANDATORY).
+	// The graph stores it in `locator`; record-bindings writes it, this surfaces it.
+	test("applyGraphSeeds carries the graph's deployment through as a placement", () => {
+		const merged: ResolvedIdentifiers = { resolvedForTurn: 1, resolvedForServices: ["order-service"] };
+		applyGraphSeeds(merged, [binding({ kind: "serviceName", resourceId: "prana-order-service", locator: "eu-b2b" })]);
+		expect(merged.elastic?.serviceNames).toContain("prana-order-service");
+		expect(merged.elastic?.placements).toEqual([
+			// environments empty on purpose: the graph records WHERE, not the env mix, which
+			// is only knowable from a live probe.
+			{ serviceName: "prana-order-service", deployment: "eu-b2b", environments: [] },
+		]);
+	});
+
+	// A probe-confirmed name already carries a LIVE placement (with real environments).
+	// A seed for the same name must not shadow it with possibly-stale graph data.
+	test("a seed does not overwrite the placement a live probe already established", () => {
+		const merged: ResolvedIdentifiers = {
+			resolvedForTurn: 1,
+			resolvedForServices: ["order-service"],
+			elastic: {
+				serviceNames: ["prana-order-service"],
+				placements: [{ serviceName: "prana-order-service", deployment: "eu-b2b", environments: ["production"] }],
+			},
+		};
+		applyGraphSeeds(merged, [binding({ kind: "serviceName", resourceId: "prana-order-service", locator: "us-cld" })]);
+		expect(merged.elastic?.placements).toHaveLength(1);
+		expect(merged.elastic?.placements?.[0]?.deployment, "the live probe's placement must win").toBe("eu-b2b");
+		expect(merged.elastic?.placements?.[0]?.environments).toEqual(["production"]);
+	});
+
 	test("fetchGraphSeeds returns [] when KG disabled or read flag off", async () => {
 		delete process.env.KNOWLEDGE_GRAPH_ENABLED;
 		process.env.KG_BINDINGS_READ_ENABLED = "true";

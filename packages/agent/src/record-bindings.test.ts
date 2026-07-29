@@ -59,6 +59,122 @@ describe("isBindingsWriteEnabled", () => {
 	});
 });
 
+// SIO-1276: the graph must learn WHERE a service name lives, not just that it exists.
+// Without the deployment in `locator`, a seeded binding cannot answer the question
+// SIO-1279 exists to answer -- which of the 10 configured clusters to query -- so the
+// sub-agent still has no deployment to name. konnect and gitlab already used `locator`
+// for exactly this kind of qualifier; elastic was the one datasource passing none.
+describe("deriveConfirmedBindings elastic deployment locator (SIO-1276)", () => {
+	test("records the deployment the placement says the name was found in", () => {
+		const recs = deriveConfirmedBindings(
+			baseState({
+				resolvedIdentifiers: {
+					// the spread in baseState REPLACES resolvedIdentifiers wholesale, so the
+					// stamp fields must be restated or sameServiceSet throws on undefined.
+					resolvedForTurn: 1,
+					resolvedForServices: ["orders"],
+					elastic: {
+						serviceNames: ["orders-api"],
+						placements: [{ serviceName: "orders-api", deployment: "eu-b2b", environments: ["production"] }],
+					},
+				},
+			} as unknown as Partial<AgentStateType>),
+		);
+		// EXCLUSIVE over elastic records, not toContainEqual (CodeRabbit on PR #524): a
+		// containment check also passes when an EXTRA elastic record carrying a wrong
+		// locator is emitted alongside the right one.
+		expect(recs.filter((r) => r.datasource === "elastic")).toEqual([
+			expect.objectContaining({ resourceId: "orders-api", locator: "eu-b2b" }),
+		]);
+	});
+
+	// "(default)" is the probe's label for an unset ELASTIC_DEPLOYMENTS. Persisting it
+	// would seed a deployment id that does not exist, which is worse than seeding none.
+	test("never persists the synthetic (default) label as a deployment", () => {
+		const recs = deriveConfirmedBindings(
+			baseState({
+				resolvedIdentifiers: {
+					// the spread in baseState REPLACES resolvedIdentifiers wholesale, so the
+					// stamp fields must be restated or sameServiceSet throws on undefined.
+					resolvedForTurn: 1,
+					resolvedForServices: ["orders"],
+					elastic: {
+						serviceNames: ["orders-api"],
+						placements: [{ serviceName: "orders-api", deployment: "(default)", environments: [] }],
+					},
+				},
+			} as unknown as Partial<AgentStateType>),
+		);
+		// CodeRabbit on PR #524: `find(...)?.locator ?? ""` is ALSO "" when no elastic record
+		// was emitted at all, so this would pass if the binding were dropped entirely.
+		// Assert the record exists, has no locator, and is the ONLY elastic record.
+		expect(recs.filter((r) => r.datasource === "elastic")).toEqual([
+			expect.objectContaining({ resourceId: "orders-api", locator: "" }),
+		]);
+	});
+
+	// CodeRabbit on PR #524, Major: the comment above says "recording it against the wrong
+	// one is worse than recording nothing", but the first implementation kept the FIRST
+	// placement per name -- persisting whichever cluster the fan-out happened to return
+	// first. A seeded wrong deployment is worse than none: the sub-agent scopes confidently
+	// to the wrong cluster instead of falling back to discovery.
+	test("an ambiguous name is recorded WITHOUT a locator, not with an arbitrary one", () => {
+		const recs = deriveConfirmedBindings(
+			baseState({
+				resolvedIdentifiers: {
+					resolvedForTurn: 1,
+					resolvedForServices: ["orders"],
+					elastic: {
+						serviceNames: ["orders-api"],
+						placements: [
+							{ serviceName: "orders-api", deployment: "eu-b2b", environments: ["production"] },
+							{ serviceName: "orders-api", deployment: "us-cld", environments: ["production"] },
+						],
+					},
+				},
+			} as unknown as Partial<AgentStateType>),
+		);
+		// Exclusive: ambiguity must not ALSO emit a second record carrying one of the
+		// candidate locators, which is exactly the arbitrary-pick this test forbids.
+		expect(recs.filter((r) => r.datasource === "elastic")).toEqual([
+			expect.objectContaining({ resourceId: "orders-api", locator: "" }),
+		]);
+	});
+
+	// A single-cluster install labels its placement "(default)". That is filtered BEFORE
+	// the uniqueness check, so one real deployment plus "(default)" must still count as
+	// unambiguous rather than being discarded as a conflict.
+	test("the (default) label does not make a single real deployment look ambiguous", () => {
+		const recs = deriveConfirmedBindings(
+			baseState({
+				resolvedIdentifiers: {
+					resolvedForTurn: 1,
+					resolvedForServices: ["orders"],
+					elastic: {
+						serviceNames: ["orders-api"],
+						placements: [
+							{ serviceName: "orders-api", deployment: "(default)", environments: [] },
+							{ serviceName: "orders-api", deployment: "eu-b2b", environments: ["production"] },
+						],
+					},
+				},
+			} as unknown as Partial<AgentStateType>),
+		);
+		expect(recs.filter((r) => r.datasource === "elastic")).toEqual([
+			expect.objectContaining({ resourceId: "orders-api", locator: "eu-b2b" }),
+		]);
+	});
+
+	// A name with no placement must still be recorded -- just without a locator. Dropping
+	// the binding would lose the alias the graph is primarily there to learn.
+	test("still records a name that has no placement, without a locator", () => {
+		const recs = deriveConfirmedBindings(baseState());
+		const elastic = recs.find((r) => r.datasource === "elastic");
+		expect(elastic?.resourceId).toBe("orders-api");
+		expect(elastic?.locator ?? "").toBe("");
+	});
+});
+
 describe("deriveConfirmedBindings", () => {
 	test("maps confirmed datasources' identifiers to binding records", () => {
 		const recs = deriveConfirmedBindings(baseState());

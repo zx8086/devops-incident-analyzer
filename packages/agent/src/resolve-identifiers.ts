@@ -356,7 +356,23 @@ export function applyGraphSeeds(merged: ResolvedIdentifiers, seeds: ServiceBindi
 		switch (s.kind) {
 			case "serviceName": {
 				merged.elastic ??= { serviceNames: [] };
+				const before = merged.elastic.serviceNames.length;
 				addTo(merged.elastic.serviceNames, s.resourceId, "elastic");
+				// SIO-1276: a seeded name is useless without the cluster it lives in -- the
+				// sub-agent would still have no deployment to name. The graph stores it in
+				// `locator` (written by record-bindings). Only attach a placement when addTo
+				// actually accepted the name, so a probe-confirmed name keeps its LIVE
+				// placement rather than being shadowed by a possibly-stale seeded one.
+				if (merged.elastic.serviceNames.length > before && s.locator) {
+					merged.elastic.placements ??= [];
+					merged.elastic.placements.push({
+						serviceName: s.resourceId,
+						deployment: s.locator,
+						// The graph records where, not the environment mix; that is only
+						// knowable from a live probe. Empty is honest here.
+						environments: [],
+					});
+				}
 				break;
 			}
 			case "logGroup": {
