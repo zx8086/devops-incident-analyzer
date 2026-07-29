@@ -15,6 +15,25 @@ triggers:
     - couchbase
     - fatal_request
   match: any
+tools:
+  - capella_get_longest_running_queries
+  - capella_get_most_expensive_queries
+  - capella_get_most_frequent_queries
+  - capella_get_primary_index_queries
+  - capella_suggest_query_optimizations
+  - capella_run_sql_plus_plus_query
+  - capella_get_system_indexes
+  - capella_get_detailed_indexes
+  - capella_get_indexes_to_drop
+  - capella_get_system_vitals
+  - capella_get_system_nodes
+  - capella_get_fatal_requests
+  - capella_get_completed_requests
+  - capella_get_prepared_statements
+  - capella_get_detailed_prepared_statements
+  - elasticsearch_search
+  - elasticsearch_count_documents
+  - query_api_requests
 ---
 # Couchbase Slow Query Investigation
 

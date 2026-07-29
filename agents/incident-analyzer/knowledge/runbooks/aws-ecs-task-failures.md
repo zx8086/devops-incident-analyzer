@@ -18,6 +18,15 @@ triggers:
   services:
     - ecs
   match: any
+tools:
+  - aws_ecs_list_clusters
+  - aws_ecs_describe_services
+  - aws_ecs_list_tasks
+  - aws_ecs_describe_tasks
+  - aws_logs_describe_log_groups
+  - aws_logs_start_query
+  - aws_logs_get_query_results
+  - aws_ec2_describe_security_groups
 ---
 # AWS ECS Task Failures Investigation
 

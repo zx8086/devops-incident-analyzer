@@ -7,6 +7,10 @@ tags: [aws, msk, iam]
 generated:
   by: human:simon
   at: 2026-07-29
+tools:
+  - kafka_describe_cluster
+  - kafka_describe_consumer_group
+  - kafka_consume_messages
 ---
 # MSK IAM Permissions for Read-Only Introspection
 

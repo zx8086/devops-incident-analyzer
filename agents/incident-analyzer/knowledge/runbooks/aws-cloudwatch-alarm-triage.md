@@ -17,6 +17,14 @@ triggers:
   services:
     - cloudwatch
   match: any
+tools:
+  - aws_cloudwatch_describe_alarms
+  - aws_cloudwatch_get_metric_data
+  - aws_ec2_describe_instances
+  - aws_ecs_describe_services
+  - aws_lambda_get_function_configuration
+  - aws_rds_describe_db_instances
+  - aws_health_describe_events
 ---
 # AWS CloudWatch Alarm Triage
 

@@ -18,6 +18,23 @@ triggers:
     - critical
     - high
   match: any
+tools:
+  - query_api_requests
+  - list_services
+  - list_routes
+  - get_service
+  - list_plugins
+  - elasticsearch_search
+  - elasticsearch_count_documents
+  - elasticsearch_get_ingest_pipeline
+  - elasticsearch_get_cluster_stats
+  - elasticsearch_simulate_ingest_pipeline
+  - capella_get_system_vitals
+  - capella_get_fatal_requests
+  - capella_get_longest_running_queries
+  - kafka_list_consumer_groups
+  - kafka_describe_consumer_group
+  - kafka_get_consumer_group_lag
 ---
 # High Error Rate Investigation
 

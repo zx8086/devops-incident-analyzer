@@ -15,6 +15,24 @@ triggers:
     - commit
     - mr
   match: any
+tools:
+  - gitlab_semantic_code_search
+  - gitlab_get_file_content
+  - gitlab_get_blame
+  - gitlab_list_commits
+  - gitlab_get_commit_diff
+  - gitlab_get_merge_request
+  - gitlab_get_merge_request_diffs
+  - gitlab_get_merge_request_pipelines
+  - gitlab_get_repository_tree
+  - gitlab_search
+  - gitlab_graph_schema
+  - gitlab_blast_radius
+  - gitlab_cross_project_callers
+  - gitlab_recent_deploys
+  - gitlab_pipeline_failures
+  - gitlab_recent_vulnerabilities
+  - gitlab_orbit_query_graph
 ---
 # Code Change Correlation
 

@@ -7,6 +7,9 @@ tags: [aws, iam, permissions]
 generated:
   by: human:simon
   at: 2026-07-29
+tools:
+  - aws_ecs_describe_services
+  - aws_ecs_describe_tasks
 ---
 # AWS IAM Permission Troubleshooting
 
