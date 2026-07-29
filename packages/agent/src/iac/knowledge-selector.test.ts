@@ -116,9 +116,20 @@ describe("fallback clears prior selection, never leaves it stale (SIO-1285)", ()
 		expect(body).not.toMatch(/return \{\};/);
 	});
 
-	test("a successful selection still returns the chosen categories", async () => {
+	// Deliberately asserts only the tri-state invariant, NOT a specific category list. The node
+	// reads the process-global agent via getAgentByName, and sibling suites register
+	// mock.module("../prompt-context.ts") -- so whether the real config is visible depends on
+	// file execution order (see reference_prompt_context_mock_pollutes_direct_imports). Under the
+	// mock the node correctly takes its `!config` path and returns null; unmocked it returns the
+	// converse set. Both are correct; asserting either specific value makes the test order-fragile
+	// (it passed solo and across this directory, but failed in CI's full-monorepo run). The
+	// category mapping itself is covered order-independently by the pure selectCategories tests.
+	test("always writes the key -- never omits it, whichever path it takes", async () => {
 		const result = await selectIacKnowledge({ intent: "converse" } as never);
-		expect(result.selectedKnowledge).toEqual([...DEFAULT_BY_INTENT.converse]);
+		expect("selectedKnowledge" in result).toBe(true);
+		const value = result.selectedKnowledge;
+		expect(value === null || Array.isArray(value)).toBe(true);
+		if (Array.isArray(value)) expect(value).toEqual([...DEFAULT_BY_INTENT.converse]);
 	});
 
 	test("TURN_START_RESET clears selectedKnowledge so a turn cannot inherit one", () => {
