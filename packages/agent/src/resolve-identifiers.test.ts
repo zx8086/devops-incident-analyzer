@@ -445,17 +445,19 @@ describe("resolveIdentifiers node", () => {
 	// pay their uncancellable session-fork connect inside the timed probe -- the exact
 	// failure SIO-1086 added the warm-up to prevent. Observed as a 117s elastic sub-agent
 	// on the first fan-out run. Pin the two together so they cannot drift again.
-	test("warm-up covers every deployment the probe will query", async () => {
-		const warmed: string[] = [];
-		const probed: string[] = [];
+	// CodeRabbit on PR #522: two membership arrays only prove the sets overlap. A
+	// regression that ran the probe BEFORE the warm-up, or warmed extra stale
+	// deployments, would still pass -- while the warm-up exists precisely to land FIRST.
+	// Record an ordered event log and assert both the exact set equality and the ordering.
+	test("every probed deployment is warmed BEFORE the first probe", async () => {
+		const events: Array<{ phase: "warm" | "probe"; deployment: string }> = [];
 		toolRegistry.elastic = [
 			{
 				name: "elasticsearch_search",
 				invoke: async (args: unknown) => {
-					const dep = realBridge.currentElasticDeploymentForTest() ?? "(default)";
 					// The warm-up is the terminate_after:1 match_all; everything else is the probe.
-					const isWarm = JSON.stringify(args ?? {}).includes("terminate_after");
-					(isWarm ? warmed : probed).push(dep);
+					const phase = JSON.stringify(args ?? {}).includes("terminate_after") ? "warm" : "probe";
+					events.push({ phase, deployment: realBridge.currentElasticDeploymentForTest() ?? "(default)" });
 					return elasticAggPayload([]);
 				},
 			},
@@ -468,11 +470,29 @@ describe("resolveIdentifiers node", () => {
 			if (prev === undefined) delete process.env.ELASTIC_DEPLOYMENTS;
 			else process.env.ELASTIC_DEPLOYMENTS = prev;
 		}
-		for (const dep of new Set(probed)) {
+
+		const probed = new Set(events.filter((e) => e.phase === "probe").map((e) => e.deployment));
+		const warmed = new Set(events.filter((e) => e.phase === "warm").map((e) => e.deployment));
+		const firstProbeAt = events.findIndex((e) => e.phase === "probe");
+		expect(firstProbeAt, "the probe never ran, so this test proves nothing").toBeGreaterThan(-1);
+
+		// The SAME selection, not merely overlapping: warming a deployment the probe never
+		// queries is drift too, just in the other direction.
+		expect(warmed, "warm-up and probe must select the same deployments").toEqual(probed);
+
+		// And every warm-up must LAND before the timed probe opens, or the connect it
+		// exists to pay for is paid inside PROBE_TIMEOUT_MS after all.
+		const warmedBeforeFirstProbe = new Set(
+			events
+				.slice(0, firstProbeAt)
+				.filter((e) => e.phase === "warm")
+				.map((e) => e.deployment),
+		);
+		for (const dep of probed) {
 			expect(
-				warmed,
-				`probe queried ${dep} but the warm-up never established its session -- that connect is paid inside PROBE_TIMEOUT_MS`,
-			).toContain(dep);
+				warmedBeforeFirstProbe.has(dep),
+				`${dep} was probed but not warmed beforehand -- its session-fork connect is paid inside PROBE_TIMEOUT_MS`,
+			).toBe(true);
 		}
 	});
 
