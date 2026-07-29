@@ -30,7 +30,8 @@ type EventStream = AsyncIterable<{
 	event?: string;
 	name?: string;
 	tags?: string[];
-	metadata?: { langgraph_node?: string };
+	// SIO-1271: `role` is stamped on every model instance by buildChatModel (packages/agent/src/llm.ts).
+	metadata?: { langgraph_node?: string; role?: string };
 	data?: {
 		chunk?: { content?: unknown };
 		output?: Record<string, unknown>;
@@ -39,6 +40,19 @@ type EventStream = AsyncIterable<{
 }>;
 
 const OUTPUT_NODES = new Set(["aggregate", "responder"]);
+// SIO-1271: the roles whose tokens ARE the user-facing answer. OUTPUT_NODES above is node-scoped,
+// but four LLM calls share langgraph_node "aggregate": the aggregator plus gapsJudge and both
+// absenceJudge arms. The judges run AFTER the main call, so their raw JSON arrived as trailing
+// garbage appended to the report body -- a user watching the stream saw judge verdict JSON appear
+// in the chat. Matching the ROLE is call-scoped, and matching it POSITIVELY is fail-safe: a future
+// judge added inside `aggregate` is silent by default rather than leaking.
+//
+// Adding an answer-producing role here is required for it to stream at all -- that is the
+// deliberate trade for not having to remember to exclude every new utility call.
+const OUTPUT_ROLES = new Set(["aggregator", "responder"]);
+// Roles that run inside an OUTPUT_NODE but must never reach the browser. Consulted ONLY on the
+// no-role fallback path below, so the fallback cannot re-open the leak it exists to survive.
+const NON_STREAMING_ROLES = new Set(["gapsJudge", "absenceJudge"]);
 const PIPELINE_NODES = new Set([
 	"classify",
 	"normalize",
@@ -176,9 +190,23 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 			const chunkContent = event.data?.chunk?.content;
 			if (chunkContent) {
 				const tags: string[] = event.tags ?? [];
-				const isOutputNode = tags.some((t: string) => OUTPUT_NODES.has(t));
-				const nodeName = event.metadata?.langgraph_node;
-				if (isOutputNode || (nodeName && OUTPUT_NODES.has(nodeName))) {
+				// SIO-1271: prefer the ROLE -- it is call-scoped, where the node name is not.
+				const role = event.metadata?.role ?? tags.find((t) => t.startsWith("role:"))?.slice("role:".length);
+				let isAnswerStream: boolean;
+				if (role !== undefined) {
+					isAnswerStream = OUTPUT_ROLES.has(role);
+				} else {
+					// No role on the event (an older agent, or a path buildChatModel does not build):
+					// fall back to the pre-SIO-1271 node match so an untagged call can never blank the
+					// whole answer stream, but subtract the known judge roles so the fallback cannot
+					// re-open the leak either.
+					const isOutputNode = tags.some((t: string) => OUTPUT_NODES.has(t));
+					const nodeName = event.metadata?.langgraph_node;
+					isAnswerStream =
+						(isOutputNode || (nodeName !== undefined && OUTPUT_NODES.has(nodeName))) &&
+						!tags.some((t) => NON_STREAMING_ROLES.has(t) || NON_STREAMING_ROLES.has(t.replace(/^role:/, "")));
+				}
+				if (isAnswerStream) {
 					const content = redactPiiContent(extractStreamDeltaText(chunkContent));
 					responseContent += content;
 					send({ type: "message", content });

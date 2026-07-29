@@ -8,7 +8,9 @@ type LangGraphEvent = {
 	event?: string;
 	name?: string;
 	tags?: string[];
-	metadata?: { langgraph_node?: string };
+	// SIO-1271: mirrors the production EventStream type -- buildChatModel stamps `role` on every
+	// model instance, and the pump prefers it over the node name.
+	metadata?: { langgraph_node?: string; role?: string };
 	data?: {
 		chunk?: { content?: unknown };
 		output?: Record<string, unknown>;
@@ -594,5 +596,79 @@ describe("pumpEventStream hil_learning_applied", () => {
 		);
 		const failure = captured.find((e) => e.type === "partial_failure");
 		expect(failure?.reason).toBe("binding-write-failed");
+	});
+});
+
+// SIO-1271: the pump filtered streamed tokens by NODE, but four LLM calls share langgraph_node
+// "aggregate" -- the aggregator plus gapsJudge and both absenceJudge arms. The judges run after
+// the main call, so on run eaebc62b the assembled message stream ended mid-word and continued
+// with the absence judge's raw verdict JSON, which a user watching the chat could see.
+describe("SIO-1271: only answer-producing roles stream to the browser", () => {
+	const streamEvent = (role: string | undefined, node: string, content: string, tags?: string[]) => ({
+		event: "on_chat_model_stream",
+		...(tags ? { tags } : {}),
+		metadata: { langgraph_node: node, ...(role ? { role } : {}) },
+		data: { chunk: { content } },
+	});
+
+	async function pump(events: Parameters<typeof fromArray>[0]) {
+		const captured: Array<Record<string, unknown>> = [];
+		const result = await pumpEventStream(fromArray(events), (e) => captured.push(e));
+		return { messages: captured.filter((e) => e.type === "message").map((e) => e.content), result };
+	}
+
+	test("an absenceJudge token inside the aggregate node produces NO message event", async () => {
+		const { messages, result } = await pump([streamEvent("absenceJudge", "aggregate", '{"verdicts":[{"index":0,')]);
+		expect(messages).toEqual([]);
+		expect(result.responseContent).toBe("");
+	});
+
+	test("a gapsJudge token inside the aggregate node produces NO message event", async () => {
+		const { messages } = await pump([streamEvent("gapsJudge", "aggregate", '{"keep":[true]}')]);
+		expect(messages).toEqual([]);
+	});
+
+	test("an aggregator token DOES stream", async () => {
+		const { messages } = await pump([streamEvent("aggregator", "aggregate", "# Incident Report")]);
+		expect(messages).toEqual(["# Incident Report"]);
+	});
+
+	test("a responder token DOES stream", async () => {
+		const { messages } = await pump([streamEvent("responder", "responder", "Hello.")]);
+		expect(messages).toEqual(["Hello."]);
+	});
+
+	// The actual regression: the report body streams, the trailing judge JSON does not.
+	test("the report body streams while the trailing judge JSON does not", async () => {
+		const { messages, result } = await pump([
+			streamEvent("aggregator", "aggregate", "all returning HT"),
+			streamEvent("absenceJudge", "aggregate", '```json\n{"verdicts":[{"index":0,"contradictedByData":false}]}'),
+		]);
+		expect(messages).toEqual(["all returning HT"]);
+		expect(result.responseContent).not.toContain("verdicts");
+	});
+
+	// Fail-safety: an event with no role at all must still stream, or a propagation change
+	// upstream would blank the entire answer rather than merely leaking.
+	test("an UNTAGGED aggregate token still streams (no-role fallback)", async () => {
+		const { messages } = await pump([streamEvent(undefined, "aggregate", "# Report")]);
+		expect(messages).toEqual(["# Report"]);
+	});
+
+	test("the no-role fallback still suppresses a judge identified only by tag", async () => {
+		const { messages } = await pump([
+			streamEvent(undefined, "aggregate", '{"verdicts":[', ["role:absenceJudge", "aggregate"]),
+		]);
+		expect(messages).toEqual([]);
+	});
+
+	test("the role wins over the node name: an aggregator on an unknown node streams", async () => {
+		const { messages } = await pump([streamEvent("aggregator", "someFutureNode", "body")]);
+		expect(messages).toEqual(["body"]);
+	});
+
+	test("a judge role is suppressed even outside the known output nodes", async () => {
+		const { messages } = await pump([streamEvent("absenceJudge", "someFutureNode", '{"verdicts":[')]);
+		expect(messages).toEqual([]);
 	});
 });
