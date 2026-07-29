@@ -14,6 +14,7 @@
 
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { parse } from "yaml";
 import { type LoadedAgent, loadAgent, type ToolDefinition } from "./index.ts";
 
 // ============================================================================
@@ -198,9 +199,51 @@ export function buildSubAgentAuthority(parentTools: ToolDefinition[], subAgentFa
 	return buildAuthority(relevantTools);
 }
 
+// SIO-1288: read the declared tool list from `tools:` frontmatter. Returns undefined when
+// the key is absent, which is what selects the legacy tail-section path in validateRunbook.
+//
+// Why frontmatter at all: the tail section's contract is "first non-empty line under the
+// header is a comma-separated list", so a parser cannot tell a tool list from a sentence
+// containing commas. In SIO-1278 explanatory prose written there split into bogus tool
+// names. A typed YAML array cannot fail that way.
+//
+// Deliberately hand-rolled rather than reusing parseRunbookFrontmatter: that function
+// THROWS on malformed frontmatter (it is the agent-load path, where failing loud is
+// correct). Here a malformed block must degrade to the tail-section path so one bad
+// runbook cannot take down the whole validation sweep -- the report collects errors, it
+// does not abort.
+export function extractFrontmatterTools(content: string): string[] | undefined {
+	if (!content.startsWith("---\n") && !content.startsWith("---\r\n")) return undefined;
+	const afterOpening = content.indexOf("\n") + 1;
+	const closingMatch = content.slice(afterOpening).match(/^---\r?\n?/m);
+	if (!closingMatch || closingMatch.index === undefined) return undefined;
+
+	const block = content.slice(afterOpening, afterOpening + closingMatch.index);
+	try {
+		const parsed = parse(block);
+		if (!parsed || typeof parsed !== "object") return undefined;
+		const tools = (parsed as Record<string, unknown>).tools;
+		if (!Array.isArray(tools)) return undefined;
+		// Every element must be a string; a malformed entry falls back rather than
+		// silently contributing a "[object Object]" tool name to the authority check.
+		if (!tools.every((t) => typeof t === "string")) return undefined;
+		return tools as string[];
+	} catch {
+		return undefined;
+	}
+}
+
 export function validateRunbook(runbookPath: string, content: string, authority: Set<string>): ValidationReport {
 	const proseCitations = extractProseCitations(content);
-	const tailResult = extractTailSection(content);
+	// SIO-1288 dual-read: `tools:` frontmatter is the source of truth when present; the
+	// tail section remains supported so the validator change and the content migration stay
+	// separately revertable. The prose cross-check runs against whichever won -- it is
+	// valuable independent of where the declaration lives.
+	const frontmatterTools = extractFrontmatterTools(content);
+	const tailResult: TailSectionResult =
+		frontmatterTools !== undefined
+			? { citations: frontmatterTools.map((name) => ({ name, line: 0, source: "tail" as const })), errors: [] }
+			: extractTailSection(content);
 
 	const missing: Citation[] = [];
 

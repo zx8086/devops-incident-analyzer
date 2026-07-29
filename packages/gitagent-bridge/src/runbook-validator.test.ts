@@ -19,6 +19,7 @@ import {
 	buildSubAgentAuthority,
 	collectAgents,
 	collectSubAgentFixtures,
+	extractFrontmatterTools,
 	extractProseCitations,
 	extractTailSection,
 	formatReport,
@@ -343,6 +344,104 @@ describe("buildSubAgentAuthority", () => {
 		const authority = buildSubAgentAuthority(parentTools, ["kafka-introspect", "bogus-facade"]);
 		expect(authority.has("kafka_list_consumer_groups")).toBe(true);
 		expect(authority.size).toBe(4); // only the 4 kafka tools; bogus-facade silently ignored
+	});
+});
+
+// SIO-1288: `tools:` frontmatter as the machine-readable source of truth, dual-read with
+// the legacy tail section so the validator change and the content migration stay
+// separately revertable.
+describe("extractFrontmatterTools", () => {
+	test("returns the declared list", () => {
+		const content = ["---", "tools:", "  - a_one", "  - a_two", "---", "# Body"].join("\n");
+		expect(extractFrontmatterTools(content)).toEqual(["a_one", "a_two"]);
+	});
+
+	test("inline array form", () => {
+		expect(extractFrontmatterTools(["---", "tools: [a_one, a_two]", "---", "# Body"].join("\n"))).toEqual([
+			"a_one",
+			"a_two",
+		]);
+	});
+
+	test("undefined when there is no frontmatter at all", () => {
+		expect(extractFrontmatterTools("# Body only")).toBeUndefined();
+	});
+
+	test("undefined when frontmatter exists but declares no tools key", () => {
+		expect(
+			extractFrontmatterTools(["---", "triggers:", "  severity: [high]", "---", "# B"].join("\n")),
+		).toBeUndefined();
+	});
+
+	// Degrades rather than throwing: one malformed runbook must not abort the sweep.
+	test("undefined on malformed YAML (falls back to the tail section)", () => {
+		expect(extractFrontmatterTools(["---", "tools: [unclosed", "---", "# B"].join("\n"))).toBeUndefined();
+	});
+
+	test("undefined when tools is not an array of strings", () => {
+		expect(extractFrontmatterTools(["---", "tools: a_one", "---", "# B"].join("\n"))).toBeUndefined();
+		expect(extractFrontmatterTools(["---", "tools:", "  - nested: bad", "---", "# B"].join("\n"))).toBeUndefined();
+	});
+});
+
+describe("validateRunbook with tools: frontmatter (SIO-1288)", () => {
+	const authority = new Set(["a_one", "a_two"]);
+
+	test("frontmatter declaration satisfies validation with no tail section", () => {
+		const content = ["---", "tools: [a_one]", "---", "# Runbook", "", "Use `a_one` here."].join("\n");
+		const report = validateRunbook("/fake/p.md", content, authority);
+		expect(report.missing).toEqual([]);
+		expect(report.proseOnly).toEqual([]);
+		expect(report.tailOnly).toEqual([]);
+	});
+
+	test("a tool cited in prose but absent from frontmatter is still caught", () => {
+		const content = ["---", "tools: [a_one]", "---", "# Runbook", "", "Use `a_two` here."].join("\n");
+		const report = validateRunbook("/fake/p.md", content, authority);
+		expect(report.proseOnly.map((c) => c.name)).toEqual(["a_two"]);
+	});
+
+	test("a frontmatter tool outside the agent's authority is caught", () => {
+		const content = ["---", "tools: [a_rogue]", "---", "# Runbook", "", "Use `a_rogue` here."].join("\n");
+		const report = validateRunbook("/fake/p.md", content, authority);
+		expect(report.missing.map((c) => c.name)).toContain("a_rogue");
+	});
+
+	test("frontmatter WINS over a tail section when both are present", () => {
+		const content = [
+			"---",
+			"tools: [a_one]",
+			"---",
+			"# Runbook",
+			"",
+			"Use `a_one` here.",
+			"",
+			"## All Tools Used Are Read-Only",
+			"a_one, a_two",
+		].join("\n");
+		const report = validateRunbook("/fake/p.md", content, authority);
+		// a_two would be tailOnly under the legacy path; frontmatter is authoritative, and
+		// it does not declare a_two, so the stale tail section is simply not consulted.
+		expect(report.tailOnly).toEqual([]);
+	});
+
+	// THE SIO-1278 REGRESSION. Explanatory prose in the tail section split on commas into
+	// bogus tool names. A typed YAML array structurally cannot do this.
+	test("prose containing commas cannot produce bogus tool names (SIO-1278 regression)", () => {
+		const legacy = [
+			"# Runbook",
+			"",
+			"Use `a_one` here.",
+			"",
+			"## All Tools Used Are Read-Only",
+			"All of the above are read-only, and none mutate cluster state, so they are safe.",
+		].join("\n");
+		const legacyReport = validateRunbook("/fake/p.md", legacy, authority);
+		// The legacy parser turns that sentence into fragments and flags them as unknown tools.
+		expect(legacyReport.missing.length).toBeGreaterThan(0);
+
+		const migrated = ["---", "tools: [a_one]", "---", "# Runbook", "", "Use `a_one` here."].join("\n");
+		expect(validateRunbook("/fake/p.md", migrated, authority).missing).toEqual([]);
 	});
 });
 
