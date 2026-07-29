@@ -6,7 +6,7 @@
 | **Tickets** | [SIO-1270](https://linear.app/siobytes/issue/SIO-1270) · [SIO-1271](https://linear.app/siobytes/issue/SIO-1271) · [SIO-1272](https://linear.app/siobytes/issue/SIO-1272) · [SIO-1273](https://linear.app/siobytes/issue/SIO-1273) |
 | **Parent** | `experiments/HANDOFF-2026-07-28-replay-verification-findings.md` — the write-up that identified all four |
 | **Repo state** | `main` at `66f8f78d`; all four PRs merged ([#513](https://github.com/zx8086/devops-incident-analyzer/pull/513), [#514](https://github.com/zx8086/devops-incident-analyzer/pull/514), [#515](https://github.com/zx8086/devops-incident-analyzer/pull/515), [#516](https://github.com/zx8086/devops-incident-analyzer/pull/516)) |
-| **Linear** | All four auto-flipped to **Done** when their merged PR links attached (known behaviour — `reference_linear_pr_link_auto_transitions_to_done`). See "Linear status is overstated" below. |
+| **Linear** | SIO-1270 + SIO-1271 **Done**; SIO-1272 + SIO-1273 moved back to **In Review** (2026-07-29) because their live gaps are open. See "Linear status — resolved" below. |
 | **Suggested branch** | `claude/sio-1272-1273-live-verification` for the remaining gaps |
 
 ---
@@ -152,17 +152,20 @@ The original ticket asks whether PR #511's ERROR block made the 8 s deadline tig
 
 ---
 
-## Linear status is overstated — needs a decision
+## Linear status — resolved
 
-All four issues show **Done**. That was **not** a deliberate call: attaching a merged PR link auto-transitions the issue (`reference_linear_pr_link_auto_transitions_to_done`). Per project rules I have not moved anything to Done myself, and I am flagging rather than silently correcting.
+All four auto-flipped to **Done** when their merged PR links attached (`reference_linear_pr_link_auto_transitions_to_done`) — not a deliberate call.
 
-Defensible for SIO-1270 and SIO-1271 (verified live). **Arguably wrong for SIO-1272 and SIO-1273**, whose acceptance criteria are only test-covered. Options:
+**Resolved 2026-07-29 on the user's instruction:**
 
-1. Leave as-is and treat the Linear comments (which state the gaps explicitly) as the record.
-2. Move SIO-1272 and SIO-1273 back to **In Review** until their live gaps close.
-3. Split the unverified halves into follow-up issues and let the originals stay Done.
+| Ticket | Status | Why |
+|---|---|---|
+| SIO-1270 | **Done** | Verified live (forced timeout) |
+| SIO-1271 | **Done** | Verified live, twice |
+| SIO-1272 | **In Review** | Acceptance criterion 2 unmet — no live run reached the fixed path |
+| SIO-1273 | **In Review** | Acceptance criterion 2 unmet live, and fix item 2 (*why* the line dropped) still unanswered |
 
-Needs the user's call.
+Each reopened ticket carries a comment naming its closing condition. **Do not move them to Done without the user's approval** — and note the trap: re-attaching a merged PR link can auto-flip them again.
 
 ---
 
