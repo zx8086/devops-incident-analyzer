@@ -137,6 +137,23 @@ export const RunbookFrontmatterSchema = z
 That last row is the important one: widening does **not** blunt the guard against real
 authoring errors. A malformed `triggers` block still fails loudly.
 
+**The trust family, deliberately commented out above, was also exercised** — because §11
+names `verified` specifically ("consumers MUST treat a bare `verified` mapping as a
+one-element list"), and it would be easy to read the commented-out block as meaning those
+shapes are unsupported. They are not; `.passthrough()` already carries them:
+
+| Case | Result against the schema exactly as written above |
+|---|---|
+| bare `verified` mapping | **PASS** — carried as an unknown key |
+| `verified` as a list | **PASS** |
+| `generated: {by, at}` | **PASS** |
+| `sources: [{resource, usage_count}]` | **PASS** |
+| bad `status` enum (`status: whatever`) | **FAIL** — the typed field still rejects |
+
+So the schema is §11-conformant **as written**, with no further change. Promote `verified` /
+`generated` / `sources` from comments to typed fields only when a consumer actually reads
+them — typing them earlier trades §11 tolerance for validation nobody uses.
+
 ### Making `triggers` optional is safe — the open risk, resolved
 
 The handover flagged this Medium: "making `triggers` optional silently disables runbook
@@ -150,6 +167,22 @@ selection." **It does not.** Verified:
   `undefined` with no guard — exactly what the consumer expects.
 
 elastic-iac (0 triggers) already runs entirely through the `noop` path today.
+
+**Confirmed by running the selector, not only by reading it.** The case that matters is the
+one neither agent is in today: the **mixed** catalog a partial migration necessarily
+creates, where some runbooks have been converted and some have not.
+
+| Catalog | `mode` | kept |
+|---|---|---|
+| all declare `triggers` (today, incident-analyzer) | `narrowed` | matching only |
+| **mixed — some converted, some not** | `narrowed` | matching **+ every trigger-less entry** |
+| none declare `triggers` (today, elastic-iac) | `noop` | all |
+| triggers present, zero match | `fallback` | all |
+
+The mixed row is the safety property the migration depends on: a runbook that has *not* yet
+been converted is never silently dropped from the catalog while its neighbours are. That
+makes a **file-by-file migration safe to land incrementally** — no need to convert a whole
+category atomically.
 
 ### Do NOT relax `RunbookTriggersSchema`
 
@@ -194,9 +227,48 @@ made this expensive is gone (no longer a registered category since SIO-1285). Th
 — `_INDEX.md` naming, nesting one level down (`loadKnowledge` does not recurse,
 `manifest-loader.ts:188`), or accepting the cost per selected intent.
 
+**The third option was priced rather than left open.** Conformant listing files
+(`- [title](file.md) - description` per entry) across elastic-iac's 6 registered categories:
+
+```text
+reference    6 entries ->   465 B      specs        4 ->   463 B
+issues       8         ->   554 B      cost-plans   6 ->   678 B
+runbooks     6         ->   750 B      playbook    11 -> 1,087 B
+TOTAL                     3,997 B
+prompt 489,096 -> 493,093   (+0.82%)
+```
+
+**Units.** These are UTF-8 **bytes** (`Buffer.byteLength(s, "utf8")`). The rest of this spec
+quotes prompt sizes as `buildSystemPrompt(...).length`, which counts UTF-16 code units —
+485,959 for the same prompt. The knowledge corpus contains non-ASCII, so the two differ by
+3,137 for elastic-iac; do not mix them. The listing files themselves are pure ASCII, so
+3,997 and **+0.82%** hold in either unit.
+
+A conformant bundle-root `knowledge/index.md` — the one place frontmatter is legal on a
+listing, carrying `okf_version: 0.2` — costs **zero**: `knowledge/` is not a registered
+category, so it is not prompt-loaded (the same reason `_INDEX.md` is not, verified the same
+way).
+
 **Decision: `_INDEX.md`.** It is a proven convention, already test-pinned, and needs no
 loader change. Document it as a deliberate OKF deviation; OKF requires consumers to
 tolerate a missing `index.md`, so this is conformant.
+
+**Why the measurement does not overturn that.** +0.82% is affordable, so cost is *not* the
+deciding argument. What remains is that `_INDEX.md` needs no loader change and is already
+test-pinned, against `index.md`'s benefit of matching all eight official examples verbatim.
+That is a judgement call about conformance-versus-inertia, not a cost trade.
+
+**This number is impact, not likelihood.** It says what an `index.md` in a registered
+category *would cost*, not how probable one is. The likelihood is governed by the Q1
+decision and its controls — `_INDEX.md` is the documented convention, `_archive` is no
+longer a registered category, and `elastic-iac-load.test.ts:63` pins the not-loaded
+behaviour — none of which this measurement bears on. The earlier **High** rating in the
+ticket and the handover was an *impact* claim ("adds N files to a 125k-token prompt"); it is
+that claim, and only that claim, the measurement refutes.
+
+Recorded so a future reader does not re-open Q1 believing the cost is unknown or large. If
+the migration later adopts `index.md` for strict conformance, **+0.82% is the price**, and
+the bundle root is free either way.
 
 **Q2. Does OKF `verified`/`sources` replace `skill-outcome.ts`'s frontmatter? — DECIDED: neither. They do not meet.**
 The bespoke fields (`confidence` Laplace-smoothed, `usage_count`, `success_count`,
@@ -357,7 +429,7 @@ bun test packages/gitagent-bridge/src/runbook-validator.test.ts
 | Widening hides real authoring errors | Medium | `.passthrough()` the envelope, keep `triggers` strictly typed. Validated: malformed triggers still FAIL |
 | Optional `triggers` disables selection | **Resolved — not a risk** | `narrowCatalogByTriggers` `noop` mode verified to keep trigger-less runbooks |
 | A new `index.yaml` key silently stripped | **Certain if the field is omitted** | Plain `z.object` discards unknown keys with `success: true`. Add the field AND a load probe |
-| An OKF `index.md` in a registered category gets loaded | Low (was High) | Q1: use `_INDEX.md`; `_archive` is no longer registered |
+| An OKF `index.md` in a registered category gets loaded | Low | Q1 chose `_INDEX.md`; `_archive` is no longer registered; `elastic-iac-load.test.ts:63` pins the not-loaded behaviour. *Impact if it happened anyway: +3,997 B / +0.82%, bundle root free — measured, and low* |
 | OKF v0.2 -> v0.3 churn mid-migration | Low | Spec is designed for backward-compatible growth; minor bumps add optional fields. Pin `okf_version` at bundle root |
 | Scope creep into `SKILL.md` | Medium | Out of scope by explicit decision |
 | Treating OKF as a fix for the SIO-1281 bug class | Medium | It is not — §5 says so plainly |
