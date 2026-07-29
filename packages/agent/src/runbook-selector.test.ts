@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { HumanMessage } from "@langchain/core/messages";
 import type { RunbookCatalogEntry } from "./prompt-context.ts";
 import {
+	filterCatalogByLifecycle,
 	matchMetricsAxis,
 	matchServicesAxis,
 	matchSeverityAxis,
@@ -213,6 +214,53 @@ describe("runSelectRunbooks", () => {
 			expect((err as Error).message).toContain("severity is missing");
 		}
 	});
+
+	// SIO-1287: end-to-end lifecycle behaviour through the node, not just the pure filter.
+	test("15. a deprecated runbook is never offered to the LLM router", async () => {
+		catalogOverride = [
+			{ filename: "a.md", title: "A", summary: "sa" },
+			{ filename: "b.md", title: "B", summary: "sb", status: "deprecated" },
+		];
+		// The router "picks" the deprecated file; it is not in validFilenames, so it cannot
+		// be selected even if the model names it.
+		llmResponse = { content: '{"filenames":["b.md"],"reasoning":"x"}' };
+		const result = await runSelectRunbooks(makeState({ normalizedIncident: { severity: "high" } }), buildRuntime());
+		expect(result.selectedRunbooks).not.toContain("b.md");
+	});
+
+	// The fallback reads filenames from index.yaml config, NOT from the catalog -- the one
+	// route that bypasses every catalog-level filter. Without the explicit exclusion set, a
+	// deprecated runbook would re-enter here.
+	test("16. the severity fallback drops deprecated runbooks too", async () => {
+		catalogOverride = [
+			{ filename: "a.md", title: "A", summary: "sa", status: "deprecated" },
+			{ filename: "b.md", title: "B", summary: "sb" },
+			{ filename: "c.md", title: "C", summary: "sc" },
+		];
+		llmError = new Error("api error");
+		const result = await runSelectRunbooks(makeState({ normalizedIncident: { severity: "critical" } }), buildRuntime());
+		// FALLBACK_CONFIG.critical is [a.md, b.md, c.md]; a.md is deprecated.
+		expect(result.selectedRunbooks).toEqual(["b.md", "c.md"]);
+	});
+
+	// A past stale_after must NOT change selection -- it only warns (SIO-1287 decision).
+	test("17. a stale-but-not-deprecated runbook stays selectable", async () => {
+		catalogOverride = [{ filename: "a.md", title: "A", summary: "sa", staleAfter: "2020-01-01" }];
+		llmResponse = { content: '{"filenames":["a.md"],"reasoning":"x"}' };
+		const result = await runSelectRunbooks(makeState({ normalizedIncident: { severity: "high" } }), buildRuntime());
+		expect(result.selectedRunbooks).toEqual(["a.md"]);
+	});
+
+	// Guard: all-deprecated passes the full catalog through rather than starving the router.
+	test("18. an all-deprecated catalog does not starve selection", async () => {
+		catalogOverride = [
+			{ filename: "a.md", title: "A", summary: "sa", status: "deprecated" },
+			{ filename: "b.md", title: "B", summary: "sb", status: "deprecated" },
+		];
+		llmResponse = { content: '{"filenames":["a.md"],"reasoning":"x"}' };
+		const result = await runSelectRunbooks(makeState({ normalizedIncident: { severity: "high" } }), buildRuntime());
+		expect(result.selectedRunbooks).toEqual(["a.md"]);
+	});
 });
 
 describe("matchSeverityAxis", () => {
@@ -328,6 +376,81 @@ describe("matchTriggers combinator", () => {
 		const triggers = { severity: ["critical" as const] };
 		const incident = { severity: "critical" as const };
 		expect(matchTriggers(triggers, incident)).toBe(true);
+	});
+});
+
+// SIO-1287: OKF lifecycle filtering. `status: deprecated` is BINDING (an explicit human
+// act); a past `stale_after` is ADVISORY (an author's months-old guess -- a mis-set date
+// silently starving selection is worse than stale-but-present guidance).
+describe("filterCatalogByLifecycle", () => {
+	const NOW = new Date("2026-07-29T12:00:00Z");
+	const lc = (filename: string, status?: RunbookCatalogEntry["status"], staleAfter?: string): RunbookCatalogEntry => ({
+		filename,
+		title: `Title of ${filename}`,
+		summary: `Summary of ${filename}`,
+		status,
+		staleAfter,
+	});
+
+	test("noop: no runbook carries lifecycle fields (every runbook in the repo today)", () => {
+		const catalog = [lc("a.md"), lc("b.md")];
+		const result = filterCatalogByLifecycle(catalog, NOW);
+		expect(result.mode).toBe("noop");
+		// Returns the SAME array reference, so the no-lifecycle path is provably inert.
+		expect(result.kept).toBe(catalog);
+		expect(result.excluded).toEqual([]);
+	});
+
+	test("filtered: status deprecated is excluded", () => {
+		const result = filterCatalogByLifecycle([lc("a.md"), lc("b.md", "deprecated"), lc("c.md")], NOW);
+		expect(result.mode).toBe("filtered");
+		expect(result.kept.map((e) => e.filename)).toEqual(["a.md", "c.md"]);
+		expect(result.excluded).toEqual(["b.md"]);
+	});
+
+	test("status stable and draft are both kept (absent means stable per OKF)", () => {
+		const result = filterCatalogByLifecycle([lc("a.md", "stable"), lc("b.md", "draft"), lc("c.md")], NOW);
+		expect(result.mode).toBe("noop");
+		expect(result.kept).toHaveLength(3);
+	});
+
+	test("emptied: every runbook deprecated -> full catalog passes through rather than starving", () => {
+		const catalog = [lc("a.md", "deprecated"), lc("b.md", "deprecated")];
+		const result = filterCatalogByLifecycle(catalog, NOW);
+		expect(result.mode).toBe("emptied");
+		expect(result.kept).toHaveLength(2);
+		expect(result.excluded).toEqual(["a.md", "b.md"]);
+	});
+
+	test("past stale_after is ADVISORY: reported but NOT excluded", () => {
+		const result = filterCatalogByLifecycle([lc("a.md", undefined, "2026-01-01"), lc("b.md")], NOW);
+		expect(result.stale).toEqual(["a.md"]);
+		expect(result.kept.map((e) => e.filename)).toEqual(["a.md", "b.md"]);
+		expect(result.mode).toBe("noop");
+	});
+
+	test("future stale_after is not reported stale", () => {
+		const result = filterCatalogByLifecycle([lc("a.md", undefined, "2027-01-01")], NOW);
+		expect(result.stale).toEqual([]);
+	});
+
+	// Boundary: stale_after is a plain OKF YYYY-MM-DD with no time or zone, so it is
+	// compared as a string. "expires ON this date" must not fire on the date itself.
+	test("stale_after equal to today is NOT stale (boundary)", () => {
+		const result = filterCatalogByLifecycle([lc("a.md", undefined, "2026-07-29")], NOW);
+		expect(result.stale).toEqual([]);
+	});
+
+	test("stale_after one day before today IS stale (boundary)", () => {
+		const result = filterCatalogByLifecycle([lc("a.md", undefined, "2026-07-28")], NOW);
+		expect(result.stale).toEqual(["a.md"]);
+	});
+
+	test("a deprecated runbook that is ALSO stale is excluded once, and still reported stale", () => {
+		const result = filterCatalogByLifecycle([lc("a.md", "deprecated", "2026-01-01"), lc("b.md")], NOW);
+		expect(result.excluded).toEqual(["a.md"]);
+		expect(result.stale).toEqual(["a.md"]);
+		expect(result.kept.map((e) => e.filename)).toEqual(["b.md"]);
 	});
 });
 
