@@ -1,3 +1,13 @@
+---
+type: Issue Register
+title: "Issues — eu-b2b"
+description: "Open and historical issues for the eu-b2b deployment."
+status: stable
+tags: [eu-b2b, issues]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # Issues — eu-b2b
 
 Source: Consolidated_Issue_Register_v21 (live-reconciled 2026-05-31). 36 entries.

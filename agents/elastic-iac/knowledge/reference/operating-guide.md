@@ -1,3 +1,13 @@
+---
+type: Reference
+title: "Elastic IaC operating guide"
+description: "Start here: how the agent proposes, reviews and applies Elastic Cloud changes."
+status: stable
+tags: [operating-guide, gitops]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # Elastic IaC Operating Guide — START HERE
 
 Purpose: a single grounding file to read at the start of any Elastic session so we are always

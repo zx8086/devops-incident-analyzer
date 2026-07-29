@@ -1,3 +1,13 @@
+---
+type: Playbook Section
+title: "8. Operational governance"
+description: "Operational playbook chapter 8: operational governance."
+status: stable
+tags: [playbook, operations]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # 8. Operational governance
 
 Source: Elastic_Optimisation_Playbook_v12 §8 (reference content).

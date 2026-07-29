@@ -1,3 +1,13 @@
+---
+type: Runbook
+title: "eu-cld cold tier capacity incident"
+description: "Incident write-up and remediation plan for the eu-cld cold tier running out of capacity."
+status: stable
+tags: [eu-cld, cold-tier, capacity]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 **eu-cld Cold Tier Capacity Incident & Remediation Plan**
 
 *21 April 2026 --- Platform Engineering*

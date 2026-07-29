@@ -1,3 +1,13 @@
+---
+type: Reference
+title: "Conventions and local lore"
+description: "Repo conventions and gotchas the agent must follow when editing IaC."
+status: stable
+tags: [conventions, gotchas]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # Conventions — local lore the agent needs
 
 ## Validation scoping

@@ -1,3 +1,13 @@
+---
+type: Issue Register
+title: "Issues — monitor clusters"
+description: "Open and historical issues for the monitoring clusters."
+status: stable
+tags: [monitoring, issues]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # Issues — monitor-clusters
 
 Source: Consolidated_Issue_Register_v21 (live-reconciled 2026-05-31). 2 entries.

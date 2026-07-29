@@ -1,3 +1,13 @@
+---
+type: Reference
+title: "API latency SLO definitions"
+description: "Per-tier API latency SLO targets and burn-rate thresholds."
+status: stable
+tags: [slo, latency]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # API Latency SLO Definitions
 
 ## Service Tiers

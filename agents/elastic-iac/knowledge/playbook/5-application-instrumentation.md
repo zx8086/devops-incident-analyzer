@@ -1,3 +1,13 @@
+---
+type: Playbook Section
+title: "5. Application instrumentation"
+description: "Operational playbook chapter 5: application instrumentation."
+status: stable
+tags: [playbook, operations]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # 5. Application instrumentation
 
 Source: Elastic_Optimisation_Playbook_v12 §5 (reference content).

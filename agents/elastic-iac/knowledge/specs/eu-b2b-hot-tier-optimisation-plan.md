@@ -1,3 +1,13 @@
+---
+type: Change Spec
+title: "eu-b2b hot tier cost optimisation plan"
+description: "Change specification for right-sizing the eu-b2b hot tier."
+status: stable
+tags: [eu-b2b, hot-tier, cost]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # eu-b2b hot tier — cost optimisation plan
 
 Live cluster reconciliation 2026-05-31. All facts verified via Elastic MCP against deployment `02655c3733ea471999d9cec39a17df32`.

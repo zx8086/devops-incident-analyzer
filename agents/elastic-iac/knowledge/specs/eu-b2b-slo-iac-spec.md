@@ -1,3 +1,13 @@
+---
+type: Change Spec
+title: "eu-b2b SLO infrastructure-as-code spec"
+description: "Change specification for defining eu-b2b SLOs as code."
+status: stable
+tags: [eu-b2b, slo, terraform]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # eu-b2b — SLO Infrastructure-as-Code specification
 
 **Cluster:** eu-b2b (`71bdf337bb454d7ba192142d5a9925cf`), Kibana v9.4.0, eu-central-1

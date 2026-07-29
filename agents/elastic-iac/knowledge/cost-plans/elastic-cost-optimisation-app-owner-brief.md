@@ -1,3 +1,13 @@
+---
+type: Cost Plan
+title: "Cost optimisation brief for application owners"
+description: "Application-owner-facing summary of the cost optimisation programme."
+status: stable
+tags: [cost, stakeholders]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 **Elastic Cost-Optimisation --- App-Owner Action Brief**
 
 *Updated 2026-05-26 (reindex started 03:44 UTC; Transform finding

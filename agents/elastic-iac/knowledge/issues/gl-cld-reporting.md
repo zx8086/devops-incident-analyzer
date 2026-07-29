@@ -1,3 +1,13 @@
+---
+type: Issue Register
+title: "Issues — gl-cld-reporting"
+description: "Open and historical issues for the gl-cld-reporting deployment."
+status: stable
+tags: [gl-cld-reporting, issues]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # Issues — gl-cld-reporting
 
 Source: Consolidated_Issue_Register_v21 (live-reconciled 2026-05-31). 5 entries.

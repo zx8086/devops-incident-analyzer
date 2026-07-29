@@ -1,3 +1,13 @@
+---
+type: Cost Plan
+title: "eu-b2b wide cost sweep"
+description: "Estate-wide cost sweep findings for the eu-b2b deployment."
+status: stable
+tags: [eu-b2b, cost]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 **eu-b2b Wide Cost Sweep**
 
 *Cluster-wide cost-saving review · 2026-05-14 · post warm-resize + 9.4.1

@@ -1,3 +1,13 @@
+---
+type: Runbook
+title: "eu-cld GK POS credential masking incident"
+description: "Incident write-up for credentials appearing unmasked in GK POS logs."
+status: stable
+tags: [eu-cld, security, masking]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 **INCIDENT REPORT**
 
 **GK PoS Plaintext Credential Exposure & DEBUG/TRACE Volume**
