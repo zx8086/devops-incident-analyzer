@@ -59,6 +59,62 @@ describe("isBindingsWriteEnabled", () => {
 	});
 });
 
+// SIO-1276: the graph must learn WHERE a service name lives, not just that it exists.
+// Without the deployment in `locator`, a seeded binding cannot answer the question
+// SIO-1279 exists to answer -- which of the 10 configured clusters to query -- so the
+// sub-agent still has no deployment to name. konnect and gitlab already used `locator`
+// for exactly this kind of qualifier; elastic was the one datasource passing none.
+describe("deriveConfirmedBindings elastic deployment locator (SIO-1276)", () => {
+	test("records the deployment the placement says the name was found in", () => {
+		const recs = deriveConfirmedBindings(
+			baseState({
+				resolvedIdentifiers: {
+					// the spread in baseState REPLACES resolvedIdentifiers wholesale, so the
+					// stamp fields must be restated or sameServiceSet throws on undefined.
+					resolvedForTurn: 1,
+					resolvedForServices: ["orders"],
+					elastic: {
+						serviceNames: ["orders-api"],
+						placements: [{ serviceName: "orders-api", deployment: "eu-b2b", environments: ["production"] }],
+					},
+				},
+			} as unknown as Partial<AgentStateType>),
+		);
+		expect(recs).toContainEqual(
+			expect.objectContaining({ datasource: "elastic", resourceId: "orders-api", locator: "eu-b2b" }),
+		);
+	});
+
+	// "(default)" is the probe's label for an unset ELASTIC_DEPLOYMENTS. Persisting it
+	// would seed a deployment id that does not exist, which is worse than seeding none.
+	test("never persists the synthetic (default) label as a deployment", () => {
+		const recs = deriveConfirmedBindings(
+			baseState({
+				resolvedIdentifiers: {
+					// the spread in baseState REPLACES resolvedIdentifiers wholesale, so the
+					// stamp fields must be restated or sameServiceSet throws on undefined.
+					resolvedForTurn: 1,
+					resolvedForServices: ["orders"],
+					elastic: {
+						serviceNames: ["orders-api"],
+						placements: [{ serviceName: "orders-api", deployment: "(default)", environments: [] }],
+					},
+				},
+			} as unknown as Partial<AgentStateType>),
+		);
+		expect(recs.find((r) => r.datasource === "elastic")?.locator ?? "").toBe("");
+	});
+
+	// A name with no placement must still be recorded -- just without a locator. Dropping
+	// the binding would lose the alias the graph is primarily there to learn.
+	test("still records a name that has no placement, without a locator", () => {
+		const recs = deriveConfirmedBindings(baseState());
+		const elastic = recs.find((r) => r.datasource === "elastic");
+		expect(elastic?.resourceId).toBe("orders-api");
+		expect(elastic?.locator ?? "").toBe("");
+	});
+});
+
 describe("deriveConfirmedBindings", () => {
 	test("maps confirmed datasources' identifiers to binding records", () => {
 		const recs = deriveConfirmedBindings(baseState());

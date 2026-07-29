@@ -136,8 +136,31 @@ interface RawBinding {
 
 function rawBindingsFor(resolved: ResolvedIdentifiers): RawBinding[] {
 	const out: RawBinding[] = [];
+	// SIO-1276: carry the DEPLOYMENT in the locator. Without it the graph learns
+	// "order-service -> prana-order-service" but not WHERE that name lives, so a seeded
+	// binding cannot answer the question SIO-1279 exists to answer -- which of the 10
+	// configured clusters to query. The locator field already carries exactly this kind of
+	// qualifier for konnect (controlPlaneName) and gitlab (pathWithNamespace); elastic was
+	// the one datasource passing none, so the deployment resolveIdentifiers now discovers
+	// was being discarded on write.
+	//
+	// Placements are keyed by serviceName, so look up each name's deployment rather than
+	// assuming one cluster: the same service name CAN exist in more than one deployment,
+	// and recording it against the wrong one is worse than recording nothing.
+	const placementsByName = new Map<string, string>();
+	for (const p of resolved.elastic?.placements ?? []) {
+		if (!placementsByName.has(p.serviceName)) placementsByName.set(p.serviceName, p.deployment);
+	}
 	for (const name of resolved.elastic?.serviceNames ?? []) {
-		out.push({ datasource: "elastic", kind: "serviceName", resourceId: name });
+		const deployment = placementsByName.get(name);
+		out.push({
+			datasource: "elastic",
+			kind: "serviceName",
+			resourceId: name,
+			// "(default)" is the probe's label for an unset ELASTIC_DEPLOYMENTS; it is not a
+			// real deployment id, so it must not be persisted as one.
+			...(deployment && deployment !== "(default)" && { locator: deployment }),
+		});
 	}
 	for (const lg of resolved.aws?.logGroups ?? []) {
 		out.push({ datasource: "aws", kind: "logGroup", resourceId: lg });
