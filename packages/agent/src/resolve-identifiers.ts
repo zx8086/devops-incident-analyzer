@@ -675,11 +675,20 @@ async function probeKonnect(focusServices: string[]): Promise<Partial<ResolvedId
 
 // SIO-1261: the group every repository lives under. project-resolution/SKILL.md states it as fact
 // ("All repositories are under the `pvhcorp` top-level group on GitLab.com") and instructs the
-// sub-agent to scope every resolution search to it. This probe must obey the same rule. Overridable
-// so a different tenant needs no code change.
-export function getGitlabResolutionGroup(env: NodeJS.ProcessEnv = process.env): string {
-	const raw = env.GITLAB_RESOLUTION_GROUP?.trim();
-	return raw && raw !== "" ? raw : "pvhcorp";
+// sub-agent to scope every resolution search to it. This probe must obey the same rule.
+//
+// Deliberately NOT env-overridable (CodeRabbit, PR #505). An override here would only reach the
+// PROBE: SKILL.md hard-codes `group_id: "pvhcorp"` in five places, so a different tenant would be
+// searched by the probe and NOT by the sub-agent's own STEP 1 -- the exact fallback this ticket now
+// relies on when the probe declines to guess. Propagating it through the focus block does not fix
+// that either: buildResolvedBlock returns "" when there are no resolved lines, so the block is
+// absent precisely on the fallback path. A half-wired knob that silently applies to one of two
+// resolution paths is the dead-config pattern that caused the SIO-1241 wave; making it real means
+// templating SKILL.md, which is its own ticket.
+const GITLAB_RESOLUTION_GROUP = "pvhcorp";
+
+export function getGitlabResolutionGroup(): string {
+	return GITLAB_RESOLUTION_GROUP;
 }
 
 async function probeGitlab(focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {

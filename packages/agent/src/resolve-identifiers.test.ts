@@ -1,6 +1,7 @@
 // packages/agent/src/resolve-identifiers.test.ts
 
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { join } from "node:path";
 import { HumanMessage } from "@langchain/core/messages";
 // Preserve the REAL module (esp. the ALS wrappers withAwsEstate/withElasticDeployment)
 // and override ONLY getToolsForDataSource. Spreading the real exports avoids the
@@ -405,12 +406,30 @@ describe("resolveIdentifiers node", () => {
 		expect(result.resolvedIdentifiers?.gitlab).toBeUndefined();
 	});
 
-	// The group is overridable so another tenant needs no code change, and defaults to pvhcorp.
-	test("the resolution group defaults to pvhcorp and honours an override", () => {
-		expect(getGitlabResolutionGroup({})).toBe("pvhcorp");
-		expect(getGitlabResolutionGroup({ GITLAB_RESOLUTION_GROUP: "" })).toBe("pvhcorp");
-		expect(getGitlabResolutionGroup({ GITLAB_RESOLUTION_GROUP: "  " })).toBe("pvhcorp");
-		expect(getGitlabResolutionGroup({ GITLAB_RESOLUTION_GROUP: "other-corp" })).toBe("other-corp");
+	// SIO-1261 (CodeRabbit on PR #505): the group is deliberately NOT env-overridable. An override
+	// would reach only the PROBE -- project-resolution/SKILL.md hard-codes `group_id: "pvhcorp"`, so
+	// the sub-agent's own STEP 1 would still search pvhcorp on exactly the fallback path this ticket
+	// relies on. This pins the single source of truth AND that no env var can desynchronise the two.
+	test("the resolution group is fixed to pvhcorp and no env var can desynchronise it from SKILL.md", () => {
+		expect(getGitlabResolutionGroup()).toBe("pvhcorp");
+
+		const before = process.env.GITLAB_RESOLUTION_GROUP;
+		process.env.GITLAB_RESOLUTION_GROUP = "other-corp";
+		try {
+			expect(getGitlabResolutionGroup()).toBe("pvhcorp");
+		} finally {
+			if (before === undefined) delete process.env.GITLAB_RESOLUTION_GROUP;
+			else process.env.GITLAB_RESOLUTION_GROUP = before;
+		}
+	});
+
+	// Anti-vacuity for the test above: the constant must actually match what the skill instructs,
+	// or "they agree" is asserted against a value nobody reads.
+	test("SKILL.md scopes its resolution search to the same group the probe uses", async () => {
+		const skill = await Bun.file(
+			join(import.meta.dir, "../../../agents/incident-analyzer/agents/gitlab-agent/skills/project-resolution/SKILL.md"),
+		).text();
+		expect(skill).toContain(`group_id: "${getGitlabResolutionGroup()}"`);
 	});
 
 	test("konnect probe resolves the control plane then its matching service", async () => {
