@@ -353,6 +353,10 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-1158 premature-absence judge veto",
 			});
 			await aggregate(makeState([ELASTIC_RESULT], "test-absence-judge-failed-log"));
 		} finally {
+			// The top-level afterEach already clears this (it runs even when a test throws --
+			// verified), so this is belt-and-braces: it keeps the invariant local rather than
+			// dependent on a hook 300 lines away. CodeRabbit, PR #513.
+			_setAbsenceJudgeLlmForTesting(null);
 			_setAggregatorLoggerForTesting(null);
 		}
 		const capLog = warnings.find((m) => m.includes("capping confidence") && m.includes("absence"));
@@ -376,6 +380,7 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-1158 premature-absence judge veto",
 			_setAbsenceJudgeLlmForTesting(verdictLlm([true]));
 			await aggregate(makeState([ELASTIC_RESULT], "test-absence-judge-confirmed-log"));
 		} finally {
+			_setAbsenceJudgeLlmForTesting(null);
 			_setAggregatorLoggerForTesting(null);
 		}
 		const capLog = warnings.find((m) => m.includes("capping confidence") && m.includes("absence"));
