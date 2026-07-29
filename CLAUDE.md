@@ -149,8 +149,10 @@ Full command reference: `https://docs.coderabbit.ai/reference/review-commands`. 
 ```bash
 LATEST_SHA=$(gh pr view <PR#> --json commits --jq '.commits[-1].oid')
 gh api repos/<owner>/<repo>/pulls/<PR#>/reviews \
-  --jq --arg sha "$LATEST_SHA" '.[] | select(.user.login=="coderabbitai[bot]" and .commit_id==$sha)'
+  --jq ".[] | select(.user.login==\"coderabbitai[bot]\" and .commit_id==\"$LATEST_SHA\")"
 ```
+
+Note: `gh api --jq` uses go-gh's embedded jq evaluator, which does not support jq's `--arg` variable binding (and `gh api` accepts only one positional argument, so passing `--arg sha ...` fails with `accepts 1 arg(s), received 4`). Interpolate the SHA directly as above, or pipe the unfiltered `gh api` output to the real `jq` binary: `gh api ... | jq --arg sha "$LATEST_SHA" '...'`.
 
 - **Non-empty result with `state: "COMMENTED"` and 0 actionable findings** (issue-comment summary says "No actionable comments were generated" or the review body has no inline findings) = clear for that round.
 - **Non-empty result with actionable findings** = triage each: verify with a live repro (e.g. `bun -e`) before fixing, fix or explicitly decline with a reason, push, reply via `gh api .../pulls/<PR#>/comments/<comment_id>/replies` ending with `_Addressed by [Claude Code](https://claude.com/claude-code)_`, then resolve the thread via the GraphQL `resolveReviewThread` mutation (look up the thread id by matching `comments.nodes[0].databaseId` against the `comment_id`). A finding with no `comment_id` (a batched top-level nitpick in the review-summary comment, not an individually addressable inline thread) still gets fixed in code, but has no reply/resolve step -- the commit is the response.
