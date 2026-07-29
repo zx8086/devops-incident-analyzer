@@ -1182,6 +1182,22 @@ function unverifiableAbsenceNote(failedTool: string | undefined): string {
 	const which = failedTool ? ` (\`${failedTool}\`)` : "";
 	return `The tool call this claim cites${which} failed this turn, so the negative was never measured. Treat this as an unanswered question, not a confirmed absence -- re-run the query before acting on it.`;
 }
+// SIO-1270: the notes for a claim the judge was ASKED about but never answered for. Fail-closed is
+// right for the CAP and is unchanged, but it is wrong for the caveat TEXT: on run eaebc62b the
+// judge had already ruled contradictedByData:false and its 8s deadline discarded the verdict, so a
+// correctly-scoped, enumeration-backed confirmed negative shipped tagged "the labelled datasource
+// returned data matching this claim ... treat the returned data as ground truth". That is a
+// specific, checkable, FALSE statement about the data, and it told the operator to trust data that
+// does not exist. "We could not verify this, so we keep the cap" and "the datasource contradicted
+// you" are different claims; only the second is a fabrication.
+//
+// These assert nothing about any datasource -- they state only that the check did not complete.
+// Deliberately digit-free so they cannot be mistaken for a score by LOOSE_CONFIDENCE_RE's 20-char
+// non-digit window when rendered above the confidence line.
+const UNJUDGED_ABSENCE_NOTE =
+	"An automated check of this absence claim did not complete this turn, so the claim could not be verified either way. A keyword filter flagged it for review; that flag alone is not evidence the claim is wrong. Confirm it manually before acting on it.";
+const UNJUDGED_OVERGENERALIZED_NOTE =
+	"An automated check of the scope of this absence claim did not complete this turn. It may be correctly scoped to what was actually queried; that was not confirmed. Verify the claim's scope before relying on it.";
 
 // Which section a line sits under, so a caveat can point the reader at it.
 function sectionOf(lines: string[], index: number): string | undefined {
@@ -1198,6 +1214,12 @@ export function buildPrematureAbsenceCaveats(
 	overgeneralized: string[],
 	// SIO-1266: defaulted so the existing 3-arg call sites and tests compile untouched.
 	unverifiable: AbsenceClaim[] = [],
+	// SIO-1270: which judge arms failed to return a verdict this turn (all five null paths in
+	// judgeContradictedAbsenceClaims: the 8s deadline, malformed JSON, schema/count/index
+	// mismatch). Defaulted for the same reason `unverifiable` is -- 3- and 4-arg call sites and
+	// their tests compile untouched. An options object rather than two trailing booleans because
+	// both arms need one and a 6-arg positional signature ending in two booleans is a footgun.
+	judgeFailed: { contradicted?: boolean; overgeneralized?: boolean } = {},
 ): ReportCaveat[] {
 	if (contradicted.length === 0 && overgeneralized.length === 0 && unverifiable.length === 0) return [];
 	const lines = answer.split("\n");
@@ -1206,14 +1228,18 @@ export function buildPrematureAbsenceCaveats(
 	const out: ReportCaveat[] = [];
 	for (const c of contradicted) {
 		out.push({
-			guard: "premature-absence-contradicted",
+			// SIO-1270: the guard records WHY the note text differs -- exactly the forensic question
+			// the next replay asks. Free to vary: ReportCaveat.guard is free-form (agent-state.ts)
+			// and no production code branches on it (rendering uses `claim` + `note`, and the
+			// integrity-signal reconciliation in toCaveatSignals matches on `claim`).
+			guard: judgeFailed.contradicted ? "premature-absence-contradicted-unjudged" : "premature-absence-contradicted",
 			claim: c.line,
 			dataSourceId: c.dataSourceId,
 			section: sectionOf(lines, firstIndexOf(c.line)),
 			// A flagged line is present by construction; clamp so the schema's min(1) always holds
 			// even if a later rewriter reflowed the text before this ran.
 			occurrences: Math.max(1, occurrencesOf(c.line)),
-			note: CONTRADICTED_ABSENCE_NOTE,
+			note: judgeFailed.contradicted ? UNJUDGED_ABSENCE_NOTE : CONTRADICTED_ABSENCE_NOTE,
 		});
 	}
 	for (const c of unverifiable) {
@@ -1226,13 +1252,17 @@ export function buildPrematureAbsenceCaveats(
 			note: unverifiableAbsenceNote(c.failedTool),
 		});
 	}
+	// The `unverifiable` arm above is deliberately NOT judge-aware: SIO-1266 established it never
+	// reaches the judge at all, so it can never be "unjudged".
 	for (const line of overgeneralized) {
 		out.push({
-			guard: "premature-absence-overgeneralized",
+			guard: judgeFailed.overgeneralized
+				? "premature-absence-overgeneralized-unjudged"
+				: "premature-absence-overgeneralized",
 			claim: line,
 			section: sectionOf(lines, firstIndexOf(line)),
 			occurrences: Math.max(1, occurrencesOf(line)),
-			note: OVERGENERALIZED_ABSENCE_NOTE,
+			note: judgeFailed.overgeneralized ? UNJUDGED_OVERGENERALIZED_NOTE : OVERGENERALIZED_ABSENCE_NOTE,
 		});
 	}
 	return out;
@@ -1738,9 +1768,14 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	// error-awareness serves the CONTRADICTED arm, where a stale claim can still be exonerated.
 	const unverifiable = absenceDetection.unverifiableDetails;
 	let absenceJudgeUsed = false;
+	// SIO-1270: `null` IS the judge-failed signal -- no new return channel is needed. Read it here
+	// so the caveat can say "the check did not complete" instead of asserting a contradiction
+	// nothing adjudicated. The cap below is deliberately unaffected.
+	let absenceJudgeFailed = false;
 	if (contradicted.length > 0 && isAbsenceJudgeEnabled()) {
 		absenceJudgeUsed = true;
 		const verdicts = await judgeContradictedAbsenceClaims(absenceDetection.contradictedDetails, results, config);
+		absenceJudgeFailed = verdicts === null;
 		if (verdicts !== null) {
 			contradicted = absenceDetection.contradictedDetails.filter((_, i) => verdicts[i]).map((c) => c.line);
 		}
@@ -1759,9 +1794,14 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	// fail-closed (judge failure keeps the regex verdict).
 	let overgeneralized = absenceDetection.overgeneralized;
 	let overgeneralizedJudgeUsed = false;
+	// SIO-1270: same treatment as the contradicted arm. Both share the absenceJudge role and its
+	// deadline, so one timeout very likely hits both in the same turn -- fixing only one arm would
+	// emit an honest caveat and a confident one side by side in the same report.
+	let overgeneralizedJudgeFailed = false;
 	if (overgeneralized.length > 0 && isAbsenceJudgeEnabled()) {
 		overgeneralizedJudgeUsed = true;
 		const overVerdicts = await judgeOvergeneralizedAbsenceClaims(overgeneralized, config);
+		overgeneralizedJudgeFailed = overVerdicts === null;
 		if (overVerdicts !== null) {
 			overgeneralized = overgeneralized.filter((_, i) => overVerdicts[i]);
 		}
@@ -1817,6 +1857,7 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 					absenceDetection.contradictedDetails.filter((c) => contradicted.includes(c.line)),
 					overgeneralized,
 					unverifiable,
+					{ contradicted: absenceJudgeFailed, overgeneralized: overgeneralizedJudgeFailed },
 				)
 			: [];
 	const rewrittenForGrounding = rewrittenForExpiry;
@@ -1993,13 +2034,24 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 				regexOvergeneralizedCount: absenceDetection.overgeneralized.length,
 				absenceJudgeUsed,
 				absenceJudgeVetoedCount,
+				// SIO-1270: whether each arm's judge returned no verdict at all. A `true` here means
+				// the caveat text is the non-asserting variant and the cap rests on the regex alone.
+				absenceJudgeFailed,
 				overgeneralizedJudgeUsed,
 				overgeneralizedJudgeVetoedCount,
+				overgeneralizedJudgeFailed,
 				cap: appliedCap,
 				originalScore: confidenceScore,
 				cappedScore,
 			},
-			"Aggregator asserted absence contradicted by returned data, or over-generalized 'all records' absence; rewriting + capping confidence",
+			// SIO-1270 (CodeRabbit, PR #513): the message must not out-assert the caveat it
+			// accompanies. When either judge returned no verdict, the cap rests on the regex alone
+			// and the emitted caveat deliberately says only that the check did not complete --
+			// logging "asserted absence contradicted by returned data" would reintroduce, in the
+			// log, exactly the unearned claim this ticket removes from the report.
+			absenceJudgeFailed || overgeneralizedJudgeFailed
+				? "Premature-absence cap applied on the regex verdict alone; a judge returned no verdict, so the claim is unadjudicated -- capping confidence"
+				: "Aggregator asserted absence contradicted by returned data, or over-generalized 'all records' absence; rewriting + capping confidence",
 		);
 	}
 

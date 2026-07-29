@@ -843,6 +843,81 @@ describe("buildPrematureAbsenceCaveats: unverifiable guard (SIO-1266)", () => {
 	test("the 3-arg call still behaves exactly as before", () => {
 		expect(buildPrematureAbsenceCaveats("x\n", [], [])).toEqual([]);
 	});
+
+	test("the 4-arg call still behaves exactly as before (SIO-1270 added a 5th)", () => {
+		expect(buildPrematureAbsenceCaveats("x\n", [], [], [])).toEqual([]);
+	});
+});
+
+// SIO-1270: on run eaebc62b the absence judge hit its 8s deadline and returned null. The caller
+// fell back to the regex verdict (correct -- the cap must survive a judge failure) but the caveat
+// still asserted "the labelled datasource returned data matching this claim ... treat the returned
+// data as ground truth". The judge had in fact ruled contradictedByData:false. So the report told
+// the operator to trust data that does not exist, on the strength of a check that never finished.
+describe("buildPrematureAbsenceCaveats: unjudged claims (SIO-1270)", () => {
+	const ANSWER = `## Findings\n\n${PROD_ROW}\n`;
+	const contradictedClaim = { line: PROD_ROW, dataSourceId: "elastic" };
+	const OVERGENERALIZED_LINE = "- No records exist in any collection for order 12345.";
+
+	test("a judge-failed contradicted claim gets a note that asserts nothing about the data", () => {
+		const caveats = buildPrematureAbsenceCaveats(ANSWER, [contradictedClaim], [], [], { contradicted: true });
+		expect(caveats).toHaveLength(1);
+		expect(caveats[0]?.guard).toBe("premature-absence-contradicted-unjudged");
+		// The exact fabrication this ticket exists to remove.
+		expect(caveats[0]?.note).not.toContain("returned data matching this claim");
+		expect(caveats[0]?.note).not.toContain("ground truth");
+		expect(caveats[0]?.note).toContain("did not complete");
+		// SIO-1242 invariant: the flagged line is recorded verbatim, never mutated.
+		expect(caveats[0]?.claim).toBe(PROD_ROW);
+		expect(caveats[0]?.dataSourceId).toBe("elastic");
+	});
+
+	test("a judge-SUCCEEDED contradicted claim keeps the asserting note", () => {
+		const caveats = buildPrematureAbsenceCaveats(ANSWER, [contradictedClaim], []);
+		expect(caveats[0]?.guard).toBe("premature-absence-contradicted");
+		expect(caveats[0]?.note).toContain("Treat the returned data as ground truth");
+	});
+
+	test("a judge-failed overgeneralized claim gets a non-asserting note", () => {
+		const answer = `## Findings\n\n${OVERGENERALIZED_LINE}\n`;
+		const caveats = buildPrematureAbsenceCaveats(answer, [], [OVERGENERALIZED_LINE], [], {
+			overgeneralized: true,
+		});
+		expect(caveats).toHaveLength(1);
+		expect(caveats[0]?.guard).toBe("premature-absence-overgeneralized-unjudged");
+		expect(caveats[0]?.note).toContain("did not complete");
+		expect(caveats[0]?.note).not.toContain("States absence more broadly than was verified");
+		expect(caveats[0]?.claim).toBe(OVERGENERALIZED_LINE);
+	});
+
+	test("a judge-SUCCEEDED overgeneralized claim keeps the scope note", () => {
+		const answer = `## Findings\n\n${OVERGENERALIZED_LINE}\n`;
+		const caveats = buildPrematureAbsenceCaveats(answer, [], [OVERGENERALIZED_LINE]);
+		expect(caveats[0]?.guard).toBe("premature-absence-overgeneralized");
+		expect(caveats[0]?.note).toContain("States absence more broadly than was verified");
+	});
+
+	test("the unverifiable arm is unaffected by judgeFailed -- it never reaches the judge", () => {
+		const unverifiable = { line: PROD_ROW, dataSourceId: "elastic", failedTool: "elasticsearch_multi_search" };
+		const caveats = buildPrematureAbsenceCaveats(ANSWER, [], [], [unverifiable], {
+			contradicted: true,
+			overgeneralized: true,
+		});
+		expect(caveats).toHaveLength(1);
+		expect(caveats[0]?.guard).toBe("premature-absence-unverifiable");
+		expect(caveats[0]?.note).toContain("never measured");
+	});
+
+	test("both arms can be unjudged in the same turn -- they share one deadline", () => {
+		const answer = `## Findings\n\n${PROD_ROW}\n${OVERGENERALIZED_LINE}\n`;
+		const caveats = buildPrematureAbsenceCaveats(answer, [contradictedClaim], [OVERGENERALIZED_LINE], [], {
+			contradicted: true,
+			overgeneralized: true,
+		});
+		expect(caveats).toHaveLength(2);
+		expect(caveats.every((c) => c.guard.endsWith("-unjudged"))).toBe(true);
+		expect(caveats.every((c) => c.note.includes("did not complete"))).toBe(true);
+	});
 });
 
 // SIO-1269: extractClaimEntities returned ISO-8601 fragments on Correlated Timeline rows. Because

@@ -38,7 +38,7 @@ mock.module("@devops-agent/shared", () => ({
 }));
 
 import { _setAbsenceJudgeLlmForTesting } from "./absence-judge.ts";
-import { aggregate } from "./aggregator.ts";
+import { _setAggregatorLoggerForTesting, aggregate } from "./aggregator.ts";
 import { getRunbookFilenames } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
 
@@ -302,6 +302,89 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-1158 premature-absence judge veto",
 		expect(out.capReasons).toContain("premature-absence");
 		expect(out.finalAnswer).toContain(CAVEATS_HEADING);
 		expect(out.reportCaveats?.length ?? 0).toBeGreaterThan(0);
+	});
+
+	// SIO-1270 headline: a judge that never answers must change the caveat TEXT and NOTHING else.
+	// Fail-closed is right for the cap and stays; it is wrong for a note that asserts a specific,
+	// checkable, false statement about data the operator is then told to trust.
+	test("a FAILED judge keeps the cap identical but drops the asserting caveat", async () => {
+		mockLlmOverride = TP_CONTENT;
+		_setAbsenceJudgeLlmForTesting({
+			invoke: async () => {
+				throw new Error("bedrock unavailable");
+			},
+		});
+
+		const out = await aggregate(makeState([ELASTIC_RESULT], "test-absence-judge-failed"));
+		// Identical to the judge-confirms case above -- this is the "cap value is unchanged" pin.
+		expect(out.confidenceScore).toBeLessThanOrEqual(0.59);
+		expect(out.confidenceCap).toBe(0.59);
+		expect(out.capReasons).toContain("premature-absence");
+		// ...and no NEW cap reason vocabulary was introduced (that would break the exact-set
+		// assertion in packages/shared/src/__tests__/confidence.test.ts).
+		expect(out.capReasons).not.toContain("premature-absence-unjudged");
+		expect(out.finalAnswer).toContain(CAVEATS_HEADING);
+
+		const caveat = out.reportCaveats?.find((c) => c.guard.startsWith("premature-absence-contradicted"));
+		expect(caveat?.guard).toBe("premature-absence-contradicted-unjudged");
+		expect(caveat?.note).not.toContain("returned data matching this claim");
+		expect(caveat?.note).not.toContain("ground truth");
+		expect(caveat?.note).toContain("did not complete");
+	});
+
+	// SIO-1270 (CodeRabbit, PR #513): the LOG must not out-assert the caveat. A message saying
+	// the aggregator "asserted absence contradicted by returned data" while the accompanying
+	// caveat says the check never completed reintroduces the unearned claim one layer down,
+	// where a replay would read it as evidence the contradiction was established.
+	test("a FAILED judge also produces a non-asserting log message", async () => {
+		const warnings: string[] = [];
+		const capture = (...args: unknown[]) => {
+			const msg = args.find((a) => typeof a === "string");
+			if (typeof msg === "string") warnings.push(msg);
+			return undefined;
+		};
+		_setAggregatorLoggerForTesting({ info: capture, warn: capture, error: capture });
+		try {
+			mockLlmOverride = TP_CONTENT;
+			_setAbsenceJudgeLlmForTesting({
+				invoke: async () => {
+					throw new Error("bedrock unavailable");
+				},
+			});
+			await aggregate(makeState([ELASTIC_RESULT], "test-absence-judge-failed-log"));
+		} finally {
+			// The top-level afterEach already clears this (it runs even when a test throws --
+			// verified), so this is belt-and-braces: it keeps the invariant local rather than
+			// dependent on a hook 300 lines away. CodeRabbit, PR #513.
+			_setAbsenceJudgeLlmForTesting(null);
+			_setAggregatorLoggerForTesting(null);
+		}
+		const capLog = warnings.find((m) => m.includes("capping confidence") && m.includes("absence"));
+		expect(capLog).toBeDefined();
+		expect(capLog).not.toContain("asserted absence contradicted by returned data");
+		expect(capLog).toContain("unadjudicated");
+	});
+
+	// The complement: when the judge DID adjudicate, the asserting wording is correct and must
+	// survive -- the fix is conditional, not a blanket softening.
+	test("a judge-CONFIRMED contradiction keeps the asserting log message", async () => {
+		const warnings: string[] = [];
+		const capture = (...args: unknown[]) => {
+			const msg = args.find((a) => typeof a === "string");
+			if (typeof msg === "string") warnings.push(msg);
+			return undefined;
+		};
+		_setAggregatorLoggerForTesting({ info: capture, warn: capture, error: capture });
+		try {
+			mockLlmOverride = TP_CONTENT;
+			_setAbsenceJudgeLlmForTesting(verdictLlm([true]));
+			await aggregate(makeState([ELASTIC_RESULT], "test-absence-judge-confirmed-log"));
+		} finally {
+			_setAbsenceJudgeLlmForTesting(null);
+			_setAggregatorLoggerForTesting(null);
+		}
+		const capLog = warnings.find((m) => m.includes("capping confidence") && m.includes("absence"));
+		expect(capLog).toContain("asserted absence contradicted by returned data");
 	});
 
 	// SIO-1242: inverted. This used to assert the "[CORRECTION: ...]" debug string was inserted
