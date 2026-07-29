@@ -15,6 +15,23 @@ triggers:
     - consumer_group
     - kafka
   match: any
+tools:
+  - kafka_list_consumer_groups
+  - kafka_get_consumer_group_lag
+  - kafka_describe_consumer_group
+  - kafka_describe_topic
+  - kafka_get_topic_offsets
+  - kafka_consume_messages
+  - kafka_get_message_by_offset
+  - kafka_list_topics
+  - kafka_list_dlq_topics
+  - kafka_describe_cluster
+  - ksql_get_server_info
+  - ksql_list_queries
+  - elasticsearch_search
+  - elasticsearch_count_documents
+  - capella_get_completed_requests
+  - capella_get_fatal_requests
 ---
 # Kafka Consumer Lag Investigation
 

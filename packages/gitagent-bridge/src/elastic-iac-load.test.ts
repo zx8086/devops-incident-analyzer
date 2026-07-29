@@ -182,3 +182,17 @@ describe("frontmatter delimiter and strict/tolerant split (SIO-1282)", () => {
 		expect(parseRunbookFrontmatter("---\ntype: Runbook\n---\n# Body\n---\nmore\n").body).toBe("# Body\n---\nmore\n");
 	});
 });
+
+// SIO-1290: the OKF bundle-root index.md carries `okf_version: 0.2` -- the one place the spec
+// permits frontmatter on a listing file. It sits at knowledge/, which is NOT a registered
+// category, so it must never reach the prompt. Same guarantee as _INDEX.md above.
+describe("OKF bundle root is never prompt-loaded (SIO-1290)", () => {
+	test("index.md is absent from both agents' loaded knowledge", () => {
+		for (const name of ["elastic-iac", "incident-analyzer"]) {
+			const agent = loadAgent(join(AGENTS_ROOT, name));
+			expect(agent.knowledge.some((k) => k.filename === "index.md")).toBe(false);
+			// and no entry's body carries the marker, which would mean it leaked in some other way
+			expect(agent.knowledge.some((k) => k.content.includes("okf_version"))).toBe(false);
+		}
+	});
+});

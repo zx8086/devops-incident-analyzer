@@ -18,6 +18,17 @@ triggers:
     - msk
     - kafka
   match: any
+tools:
+  - aws_cloudwatch_describe_alarms
+  - aws_cloudwatch_get_metric_data
+  - aws_ec2_describe_instances
+  - aws_ec2_describe_security_groups
+  - aws_logs_describe_log_groups
+  - aws_logs_start_query
+  - aws_logs_get_query_results
+  - aws_health_describe_events
+  - kafka_describe_cluster
+  - kafka_consume_messages
 ---
 # AWS MSK Broker Unreachable Investigation
 

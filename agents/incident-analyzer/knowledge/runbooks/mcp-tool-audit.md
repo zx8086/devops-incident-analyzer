@@ -15,6 +15,12 @@ triggers:
     - datasource_unavailable
     - empty_results
   match: any
+tools:
+  - elasticsearch_get_cluster_health
+  - kafka_describe_cluster
+  - capella_get_cluster_health
+  - capella_ping
+  - gitlab_graph_schema
 ---
 # MCP Tool Audit (datasource-agnostic)
 
