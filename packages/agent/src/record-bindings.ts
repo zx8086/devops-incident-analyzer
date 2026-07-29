@@ -147,19 +147,38 @@ function rawBindingsFor(resolved: ResolvedIdentifiers): RawBinding[] {
 	// Placements are keyed by serviceName, so look up each name's deployment rather than
 	// assuming one cluster: the same service name CAN exist in more than one deployment,
 	// and recording it against the wrong one is worse than recording nothing.
-	const placementsByName = new Map<string, string>();
+	//
+	// CodeRabbit on PR #524: an earlier version kept the FIRST placement per name, which
+	// contradicted that reasoning -- on an ambiguous name it persisted whichever cluster
+	// the fan-out happened to return first, and a seeded wrong deployment is worse than no
+	// deployment (the sub-agent would scope confidently to the wrong cluster instead of
+	// falling back to discovery). Collect the DISTINCT deployments per name and only write
+	// a locator when exactly one survives; ambiguity records the alias without a locator.
+	//
+	// "(default)" is the probe's label for an unset ELASTIC_DEPLOYMENTS. It is not a real
+	// deployment id, so it is filtered out BEFORE the uniqueness check -- otherwise a
+	// single-cluster install would look "ambiguous" and lose a locator it never had.
+	const deploymentsByName = new Map<string, Set<string>>();
 	for (const p of resolved.elastic?.placements ?? []) {
-		if (!placementsByName.has(p.serviceName)) placementsByName.set(p.serviceName, p.deployment);
+		if (!p.deployment || p.deployment === "(default)") continue;
+		const set = deploymentsByName.get(p.serviceName) ?? new Set<string>();
+		set.add(p.deployment);
+		deploymentsByName.set(p.serviceName, set);
 	}
 	for (const name of resolved.elastic?.serviceNames ?? []) {
-		const deployment = placementsByName.get(name);
+		const candidates = deploymentsByName.get(name);
+		const unambiguous = candidates?.size === 1 ? [...candidates][0] : undefined;
+		if (candidates && candidates.size > 1) {
+			logger.info(
+				{ serviceName: name, deployments: [...candidates] },
+				"elastic name found in multiple deployments; recording binding without a deployment locator",
+			);
+		}
 		out.push({
 			datasource: "elastic",
 			kind: "serviceName",
 			resourceId: name,
-			// "(default)" is the probe's label for an unset ELASTIC_DEPLOYMENTS; it is not a
-			// real deployment id, so it must not be persisted as one.
-			...(deployment && deployment !== "(default)" && { locator: deployment }),
+			...(unambiguous && { locator: unambiguous }),
 		});
 	}
 	for (const lg of resolved.aws?.logGroups ?? []) {

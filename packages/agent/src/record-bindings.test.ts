@@ -102,7 +102,62 @@ describe("deriveConfirmedBindings elastic deployment locator (SIO-1276)", () => 
 				},
 			} as unknown as Partial<AgentStateType>),
 		);
-		expect(recs.find((r) => r.datasource === "elastic")?.locator ?? "").toBe("");
+		// CodeRabbit on PR #524: `find(...)?.locator ?? ""` is ALSO "" when no elastic record
+		// was emitted at all, so this would pass if the binding were dropped entirely.
+		// Assert the record exists AND has no locator.
+		expect(recs).toContainEqual(
+			expect.objectContaining({ datasource: "elastic", resourceId: "orders-api", locator: "" }),
+		);
+	});
+
+	// CodeRabbit on PR #524, Major: the comment above says "recording it against the wrong
+	// one is worse than recording nothing", but the first implementation kept the FIRST
+	// placement per name -- persisting whichever cluster the fan-out happened to return
+	// first. A seeded wrong deployment is worse than none: the sub-agent scopes confidently
+	// to the wrong cluster instead of falling back to discovery.
+	test("an ambiguous name is recorded WITHOUT a locator, not with an arbitrary one", () => {
+		const recs = deriveConfirmedBindings(
+			baseState({
+				resolvedIdentifiers: {
+					resolvedForTurn: 1,
+					resolvedForServices: ["orders"],
+					elastic: {
+						serviceNames: ["orders-api"],
+						placements: [
+							{ serviceName: "orders-api", deployment: "eu-b2b", environments: ["production"] },
+							{ serviceName: "orders-api", deployment: "us-cld", environments: ["production"] },
+						],
+					},
+				},
+			} as unknown as Partial<AgentStateType>),
+		);
+		expect(recs).toContainEqual(
+			expect.objectContaining({ datasource: "elastic", resourceId: "orders-api", locator: "" }),
+		);
+	});
+
+	// A single-cluster install labels its placement "(default)". That is filtered BEFORE
+	// the uniqueness check, so one real deployment plus "(default)" must still count as
+	// unambiguous rather than being discarded as a conflict.
+	test("the (default) label does not make a single real deployment look ambiguous", () => {
+		const recs = deriveConfirmedBindings(
+			baseState({
+				resolvedIdentifiers: {
+					resolvedForTurn: 1,
+					resolvedForServices: ["orders"],
+					elastic: {
+						serviceNames: ["orders-api"],
+						placements: [
+							{ serviceName: "orders-api", deployment: "(default)", environments: [] },
+							{ serviceName: "orders-api", deployment: "eu-b2b", environments: ["production"] },
+						],
+					},
+				},
+			} as unknown as Partial<AgentStateType>),
+		);
+		expect(recs).toContainEqual(
+			expect.objectContaining({ datasource: "elastic", resourceId: "orders-api", locator: "eu-b2b" }),
+		);
 	});
 
 	// A name with no placement must still be recorded -- just without a locator. Dropping
