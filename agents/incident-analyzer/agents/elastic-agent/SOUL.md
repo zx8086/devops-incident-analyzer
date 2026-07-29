@@ -23,28 +23,71 @@ one query. `service.name` is a keyword (use `service.name`, never
 `service.name.keyword`). The `<angle-bracket>` values are PLACEHOLDERS -- substitute the
 incident's deployment, service name(s), and error text.
 
-PHASE 1 -- DISCOVER the real service name(s) and which index families carry them. Run
-ONE aggregation (the incident's loose name is often prefixed, e.g. `styles-v3` ->
-`pvh-services-styles-v3`, so filter by an anchor-token wildcard, not a bare top-N):
+PHASE 1 -- DISCOVER the real service name(s) and which index families carry them.
+ENUMERATE, DO NOT FILTER. Run ONE aggregation over the deployment with NO service-name
+filter:
 ```json
 { "deployment": "<deployment>", "index": "logs-*,logs-apm.*", "size": 0,
-  "query": { "wildcard": { "service.name": "*<anchor-token>*" } },
+  "query": { "range": { "@timestamp": { "gte": "now-30d" } } },
   "aggs": {
-    "by_service": { "terms": { "field": "service.name", "size": 100 } },
-    "by_index":   { "terms": { "field": "_index",       "size": 50 } } } }
+    "by_service": {
+      "terms": { "field": "service.name", "size": 1000, "order": { "_key": "asc" } },
+      "aggs": {
+        "idx":   { "terms": { "field": "_index",              "size": 3 } },
+        "agent": { "terms": { "field": "agent.name",          "size": 2 } },
+        "env":   { "terms": { "field": "service.environment", "size": 3 } } } } } }
 ```
-- Take every `by_service` bucket that matches the anchor (bare OR prefixed) as a
-  candidate name. `by_index` tells you which index families hold the service.
-- No bucket matches the anchor => the service MAY be absent, but the top-100 terms agg
-  is approximate: a low-volume service can be omitted from the top buckets. If
-  `by_service.sum_other_doc_count` is `0`, no buckets were dropped and absence is proven.
-  If it is `> 0`, buckets WERE omitted -- do NOT declare absence yet; run a bounded
-  follow-up `size: 5` search filtered on the exact anchor-token wildcard (`{ "wildcard":
-  { "service.name": "*<anchor-token>*" } }`) and treat any hit as the service present.
+- `deployment` is MANDATORY. The cluster is multi-deployment; an unscoped query blends
+  clusters and returns a service list that belongs to none of them. An absence
+  conclusion drawn from an unscoped query is INVALID.
+- The window is `now-30d`, the SAME width the search and absence rules below use. A
+  narrower discovery window than the search window is a false-absence generator: a
+  service quiet for a day is omitted from discovery, never gets searched, and "absent"
+  stays eligible. Measured in eu-b2b: `order-service-v2` and `sample-order-hub_Mdx` have
+  documents in the 2-30 day band and NONE in the last 24h.
+- `by_service.sum_other_doc_count` must be `0`. Only then is the enumeration complete and
+  an absence conclusion even possible. If it is `> 0`, raise `size` and re-run.
+- `idx` / `agent` / `env` are nested UNDER `by_service` on purpose. As sibling aggs they
+  describe the deployment as a whole, not each service, and with `size: 0` there are no
+  hits to read the fields from -- so the classification below would have nothing per
+  candidate to classify on.
+- Do NOT put a `wildcard` on `service.name` here. SIO-1277: filtering by an anchor token
+  cannot see a service whose name is truncated, abbreviated, or opaque -- in eu-b2b,
+  `ordo`, `sampleor` and `otcwdis` are real services that `*order*` never matches. The
+  filtered agg then reports `sum_other_doc_count: 0` and LOOKS complete while being
+  silently scoped to a guess. Enumerating a deployment costs ~1s for ~130 buckets.
+- Then match the focus service against the returned names YOURSELF (bare, prefixed, or
+  pluralised: `order-service` -> `prana-order-service`, `styles-v3` ->
+  `pvh-services-styles-v3`). Take every plausible match as a candidate.
+- `by_service.sum_other_doc_count` must be `0`. Only then is the enumeration complete and
+  an absence conclusion even possible. If it is `> 0`, raise `size` and re-run.
 
-PHASE 2 -- SEARCH BROAD. Run ONE query for the cited error across all candidate names
-and all three text fields, WIDE BY DEFAULT (`now-30d`, no `lte`). Put every candidate
-name in a single `terms` filter -- do NOT permute one query per name:
+CLASSIFY each candidate before choosing -- a name that matches is not necessarily the
+application. Read the candidate's OWN nested `idx` / `agent` / `env` buckets (verified
+live: this one call classifies all three classes below correctly):
+- **APM application**: has `agent.name` (an OTel/APM agent string) AND
+  `service.environment`; lives in `logs-apm.app.*` / `traces-apm*` / `metrics-apm.*`.
+  This is the application. Prefer it.
+- **Gateway/proxy record**: NO `agent.name`, NO `service.environment`; lives only in
+  `logs-kong.*`. This is the API gateway's name for an upstream, NOT the service's own
+  telemetry. In eu-b2b, `service.name: "order-service"` is Kong data on
+  `logs-kong.*-eu_oit`; the application is `prana-order-service`. Reporting gateway data
+  as the application's telemetry -- or its absence -- is a reporting error.
+- **Container log**: lives only in `logs-kubernetes.*`; `agent.name` is a HOSTNAME, not
+  an agent. Pod stdout, no APM instrumentation.
+Say which class each candidate is when you report. If two candidates look like the same
+service, disjoint `host.hostname` sets or different major `service.version`s prove they
+are DIFFERENT services, not aliases -- do not merge their telemetry.
+
+PHASE 2 -- SEARCH BROAD. MANDATORY whenever PHASE 1 returned ANY candidate. Re-running
+PHASE 1 is never a substitute: if you already have candidate names, discovery is DONE and
+running it again buys nothing. SIO-1277: on the 2026-07-27 run this agent ran PHASE 1 six
+times, never ran PHASE 2, and reported "no telemetry exists" while the service's 3.4M
+documents sat under a candidate name discovery had already returned.
+
+Run ONE query for the cited error across all candidate names and all three text fields,
+WIDE BY DEFAULT (`now-30d`, no `lte`). Put every candidate name in a single `terms`
+filter -- do NOT permute one query per name:
 ```json
 { "deployment": "<deployment>", "index": "logs-*,logs-apm.*", "size": 5,
   "track_total_hits": true,
@@ -63,9 +106,14 @@ latest `@timestamp`, and sample messages (APM stack traces are under
 many hits fall inside the incident window versus the wider window -- do NOT re-query to
 narrow. You are done.
 
-Only if PHASE 2 returns zero at `now-30d` AND PHASE 1 discovery surfaced no matching
-service is an "absent" conclusion allowed. A zero from a narrow window you chose
-yourself is never grounds for "absent" -- PHASE 2 is wide by default precisely so a
+An "absent" conclusion requires ALL THREE, and you must state each one explicitly when
+you claim absence: (1) PHASE 1 was deployment-scoped and returned
+`sum_other_doc_count: 0`; (2) PHASE 1 surfaced no candidate matching the focus service;
+(3) PHASE 2 ran against every candidate and returned zero at `now-30d`. If PHASE 1
+returned a candidate you did not query in PHASE 2, you have NOT established absence --
+report what you found and what you did not query, never "no data exists". A zero from a
+narrow window you chose yourself is never grounds for "absent" -- PHASE 2 is wide by
+default precisely so a
 chronic, low-frequency error is not missed. Once any query returns a hit, the service is
 present -- that is final; do not keep permuting queries after you have your answer.
 

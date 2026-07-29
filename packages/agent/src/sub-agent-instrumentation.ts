@@ -62,6 +62,16 @@ export const TYPED_FINDING_TOOLS = new Set<string>([
 	// elastic extractor (only when searching synthetics-* indices, but the
 	// extractor narrows by shape so it's safe to include unconditionally).
 	"elasticsearch_search",
+	// SIO-1277: elasticsearch_multi_search was MISSING, and that is how a false absence claim
+	// reached the report. The absence judge rules on buildAbsenceEvidenceDigest, which renders
+	// PERSISTED toolOutputs -- so a claim is refutable only if the contradicting payload was
+	// persisted. On the 2026-07-27 run the elasticsearch_search discovery call timed out and the
+	// agent correctly recovered via elasticsearch_multi_search; that recovered call carried the
+	// by_service buckets proving the service existed, was not persisted, and the judge upheld
+	// "no telemetry exists" against evidence it was never shown. Any tool that can carry a
+	// discovery aggregation must be persisted, or the contradiction check goes blind exactly
+	// when a call was retried.
+	"elasticsearch_multi_search",
 	// SIO-785 Phase 2 (2026-05-18): aws extractor + atlassian extractor.
 	"aws_cloudwatch_describe_alarms",
 	"findLinkedIncidents",
