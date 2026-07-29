@@ -108,23 +108,55 @@ export async function runSelectRunbooks(
 		return {};
 	}
 
+	// SIO-1287: Lifecycle filter runs FIRST, so a deprecated runbook is gone before triggers
+	// are considered and before the severity fallback can reinstate it.
+	const lifecycleResult = filterCatalogByLifecycle(fullCatalog, new Date());
+	if (lifecycleResult.mode !== "noop") {
+		logger.info(
+			{
+				lifecycle_filter_mode: lifecycleResult.mode,
+				lifecycle_excluded: lifecycleResult.excluded,
+				lifecycle_input_size: fullCatalog.length,
+				lifecycle_output_size: lifecycleResult.kept.length,
+			},
+			lifecycleResult.mode === "emptied"
+				? "Runbook lifecycle filter: EVERY runbook is deprecated; passing the full catalog through rather than starving selection"
+				: `Runbook lifecycle filter: excluded ${lifecycleResult.excluded.length} deprecated runbook(s)`,
+		);
+	}
+	// Advisory per the SIO-1287 decision: a past stale_after warns but does NOT exclude. The
+	// date is an author's months-old guess, and a mis-set one silently starving selection is
+	// worse than stale-but-present guidance.
+	if (lifecycleResult.stale.length > 0) {
+		logger.warn(
+			{ stale_runbooks: lifecycleResult.stale },
+			`${lifecycleResult.stale.length} runbook(s) past stale_after; still selectable -- review them`,
+		);
+	}
+
 	// SIO-643: Pre-filter via trigger grammar before the LLM router sees the catalog.
 	// Triggers narrow, they do not gatekeep: zero matches -> full catalog fallback;
 	// no runbook has triggers -> noop. The filter can only reduce the router's work.
 	const incident = state.normalizedIncident ?? {};
-	const filterResult = narrowCatalogByTriggers(fullCatalog, incident);
+	const filterResult = narrowCatalogByTriggers(lifecycleResult.kept, incident);
 	const catalog = filterResult.narrowed;
 
 	logger.info(
 		{
 			trigger_filter_mode: filterResult.mode,
-			trigger_filter_input_size: fullCatalog.length,
+			// SIO-1287: the trigger filter's input is now the lifecycle-filtered set, not the
+			// raw catalog. Reporting fullCatalog.length here would misattribute lifecycle
+			// exclusions to the trigger filter.
+			trigger_filter_input_size: lifecycleResult.kept.length,
 			trigger_filter_output_size: catalog.length,
 		},
 		`Runbook trigger filter: ${filterResult.mode}`,
 	);
 
 	const validFilenames = new Set(catalog.map((e) => e.filename));
+	// SIO-1287: the severity fallback reads filenames from index.yaml config rather than from
+	// the catalog, so it needs the exclusion set explicitly or deprecated entries re-enter there.
+	const deprecatedFilenames = new Set(lifecycleResult.excluded);
 	const severity = state.normalizedIncident?.severity;
 	const fallbackConfig = runtime.getFallbackConfig();
 
@@ -169,7 +201,7 @@ Rules:
 	} catch (err) {
 		const isTimeout = err instanceof Error && err.name === "TimeoutError";
 		const mode: SelectionMode = isTimeout ? "fallback.timeout" : "fallback.api_error";
-		return enterFallback(mode, severity, fallbackConfig, startTime);
+		return enterFallback(mode, severity, fallbackConfig, startTime, deprecatedFilenames);
 	}
 
 	// Step 4: parse response
@@ -177,7 +209,7 @@ Rules:
 	const result = parseLlmJson(text, RunbookSelectionResponseSchema);
 	if (!result.ok) {
 		logger.warn({ reason: result.reason, detail: result.message }, "Runbook selection JSON unusable");
-		return enterFallback("fallback.parse_error", severity, fallbackConfig, startTime);
+		return enterFallback("fallback.parse_error", severity, fallbackConfig, startTime, deprecatedFilenames);
 	}
 	const parsed: RunbookSelectionResponse = result.data;
 
@@ -186,7 +218,7 @@ Rules:
 	const invalidPicks = parsed.filenames.filter((f) => !validFilenames.has(f));
 
 	if (parsed.filenames.length > 0 && validPicks.length === 0) {
-		return enterFallback("fallback.invalid_filenames", severity, fallbackConfig, startTime);
+		return enterFallback("fallback.invalid_filenames", severity, fallbackConfig, startTime, deprecatedFilenames);
 	}
 
 	// Step 6: truncate to max 3 (SIO-746 -- was 2)
@@ -211,11 +243,17 @@ Rules:
 	return { selectedRunbooks: truncated };
 }
 
+// SIO-1287: `deprecated` is the set of filenames the lifecycle filter excluded. The severity
+// fallback reads filenames straight from index.yaml config, NOT from the catalog, so without
+// this a deprecated runbook would re-enter through the fallback path -- the one route that
+// bypasses every catalog-level filter. A deprecated runbook is never a good answer, even when
+// the alternative is an empty selection.
 function enterFallback(
 	mode: SelectionMode,
 	severity: string | undefined,
 	config: SeverityFallbackConfig,
 	startTime: number,
+	deprecated: ReadonlySet<string> = new Set(),
 ): Partial<AgentStateType> {
 	if (!severity) {
 		logger.error(
@@ -227,16 +265,21 @@ function enterFallback(
 				`This indicates a bug in the normalize node or a malformed incident; refusing to guess.`,
 		);
 	}
-	const fallback = config[severity as keyof SeverityFallbackConfig] ?? [];
+	const configured = config[severity as keyof SeverityFallbackConfig] ?? [];
+	const fallback = configured.filter((f) => !deprecated.has(f));
+	const dropped = configured.filter((f) => deprecated.has(f));
 	logger.info(
 		{
 			mode,
 			severity,
 			filenames: fallback.join(","),
 			count: fallback.length,
+			...(dropped.length > 0 ? { lifecycle_dropped: dropped } : {}),
 			latencyMs: Date.now() - startTime,
 		},
-		"Runbook selection entered fallback path",
+		dropped.length > 0
+			? `Runbook selection entered fallback path; dropped ${dropped.length} deprecated runbook(s) from the severity tier`
+			: "Runbook selection entered fallback path",
 	);
 	return { selectedRunbooks: fallback };
 }
@@ -309,6 +352,41 @@ export function matchTriggers(triggers: RunbookTriggers, incident: NormalizedInc
 
 	const combinator = triggers.match ?? "any";
 	return combinator === "all" ? axisResults.every((r) => r) : axisResults.some((r) => r);
+}
+
+// SIO-1287: Deterministic lifecycle pre-filter, applied BEFORE trigger narrowing so a
+// deprecated runbook never reaches the LLM router regardless of whether it declares
+// triggers -- and before the severity fallback, so it cannot re-enter that way either.
+//
+// Two signals, deliberately treated differently:
+//   status: deprecated -> BINDING. An explicit human act saying "do not use this".
+//   stale_after past   -> ADVISORY. A date guessed months earlier by an author; a mis-set
+//                         one silently starving selection is worse than stale-but-present
+//                         guidance, so it warns and KEEPS the entry.
+// `status: draft` is kept: drafts are authored intentionally, and OKF's default for an
+// absent status is `stable`, so absence is never a reason to exclude.
+//
+// Guard: if every entry is deprecated, return the full catalog rather than starving the
+// router, and report `emptied` so the log distinguishes it from a genuine empty selection.
+export function filterCatalogByLifecycle(
+	catalog: RunbookCatalogEntry[],
+	now: Date,
+): { kept: RunbookCatalogEntry[]; mode: "noop" | "filtered" | "emptied"; excluded: string[]; stale: string[] } {
+	const today = now.toISOString().slice(0, 10);
+	// Compared as YYYY-MM-DD strings, not timestamps: `stale_after` is a plain OKF date
+	// with no time or zone, so lexicographic comparison is exactly right and immune to the
+	// off-by-a-day errors a Date round-trip would introduce.
+	const stale = catalog.filter((e) => e.staleAfter !== undefined && e.staleAfter < today).map((e) => e.filename);
+	const kept = catalog.filter((e) => e.status !== "deprecated");
+	const excluded = catalog.filter((e) => e.status === "deprecated").map((e) => e.filename);
+
+	if (excluded.length === 0) {
+		return { kept: catalog, mode: "noop", excluded, stale };
+	}
+	if (kept.length === 0) {
+		return { kept: catalog, mode: "emptied", excluded, stale };
+	}
+	return { kept, mode: "filtered", excluded, stale };
 }
 
 // SIO-643: Deterministic pre-filter that narrows the runbook catalog before

@@ -222,6 +222,10 @@ export interface RunbookCatalogEntry {
 	title: string;
 	summary: string;
 	triggers?: RunbookTriggers;
+	// SIO-1287: OKF lifecycle metadata, consumed by filterCatalogByLifecycle in
+	// runbook-selector.ts. Absent `status` means `stable` per the OKF spec.
+	status?: "draft" | "stable" | "deprecated";
+	staleAfter?: string;
 }
 
 export function getRunbookCatalog(): RunbookCatalogEntry[] {
@@ -231,6 +235,8 @@ export function getRunbookCatalog(): RunbookCatalogEntry[] {
 		.map((k) => ({
 			...parseRunbookCatalogEntry(k.filename, k.content),
 			triggers: k.triggers,
+			status: k.status,
+			staleAfter: k.staleAfter,
 		}));
 }
 

@@ -25,6 +25,11 @@ export interface KnowledgeEntry {
 	filename: string;
 	content: string;
 	triggers?: RunbookTriggers;
+	// SIO-1287: OKF lifecycle fields, parsed by SIO-1286's widened schema and threaded
+	// through so runbook selection can act on them. Absent `status` means `stable` per the
+	// OKF spec -- do NOT default it here; the selector distinguishes absent from explicit.
+	status?: "draft" | "stable" | "deprecated";
+	staleAfter?: string;
 }
 
 export interface LoadedAgent {
@@ -194,12 +199,14 @@ function loadKnowledge(
 			// slo-policies) pass through verbatim.
 			if (category === "runbooks") {
 				try {
-					const { triggers, body } = parseRunbookFrontmatter(rawContent);
+					const { triggers, status, staleAfter, body } = parseRunbookFrontmatter(rawContent);
 					entries.push({
 						category,
 						filename: file,
 						content: body,
 						triggers,
+						status,
+						staleAfter,
 					});
 				} catch (err) {
 					const message = err instanceof Error ? err.message : String(err);
@@ -302,8 +309,8 @@ function loadKnowledgeFromManifest(agentDir: string, paths: string[]): Knowledge
 function makeKnowledgeEntry(category: string, filename: string, content: string): KnowledgeEntry {
 	if (category === "runbooks") {
 		try {
-			const { triggers, body } = parseRunbookFrontmatter(content);
-			return { category, filename, content: body, triggers };
+			const { triggers, status, staleAfter, body } = parseRunbookFrontmatter(content);
+			return { category, filename, content: body, triggers, status, staleAfter };
 		} catch {
 			return { category, filename, content };
 		}
@@ -318,6 +325,11 @@ function makeKnowledgeEntry(category: string, filename: string, content: string)
 // frontmatter blocks, which parse to undefined and are rejected by the schema).
 export function parseRunbookFrontmatter(content: string): {
 	triggers?: RunbookTriggers;
+	// SIO-1287: OKF lifecycle fields surfaced for the selector. `stale_after` is renamed to
+	// camelCase at this boundary to match repo convention; the on-disk key stays snake_case
+	// because OKF reserves it.
+	status?: "draft" | "stable" | "deprecated";
+	staleAfter?: string;
 	body: string;
 } {
 	if (!content.startsWith("---\n") && !content.startsWith("---\r\n")) {
@@ -337,7 +349,7 @@ export function parseRunbookFrontmatter(content: string): {
 	const parsed = parse(frontmatterYaml);
 	const validated = RunbookFrontmatterSchema.parse(parsed);
 
-	return { triggers: validated.triggers, body };
+	return { triggers: validated.triggers, status: validated.status, staleAfter: validated.stale_after, body };
 }
 
 // SIO-1014: parse a SKILL.md frontmatter block into typed metadata. Unlike
