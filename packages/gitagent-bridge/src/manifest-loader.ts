@@ -195,8 +195,17 @@ function loadKnowledge(
 			const rawContent = readFileSync(join(categoryDir, file), "utf-8").trim();
 			if (!rawContent) continue;
 
-			// Only runbooks get frontmatter parsed. Other categories (systems-map,
-			// slo-policies) pass through verbatim.
+			// SIO-1282: EVERY category gets frontmatter stripped, not just runbooks. OKF v0.2
+			// requires frontmatter on every non-reserved .md, and an unstripped block reaches
+			// the prompt as literal YAML prose (~5 KB across elastic-iac's 35 non-runbook
+			// files). `triggers` remains meaningful only for runbooks -- other categories
+			// simply lose the block from their body.
+			//
+			// The runbooks THROW is deliberately preserved and NOT extended: a malformed
+			// runbook is an authoring error in the SIO-640 selection contract and must fail
+			// loudly. Other categories degrade instead -- a bad block there costs prompt
+			// noise, not selection correctness, and killing agent load over a playbook typo
+			// would be a worse failure than the one it prevents.
 			if (category === "runbooks") {
 				try {
 					const { triggers, status, staleAfter, body } = parseRunbookFrontmatter(rawContent);
@@ -213,7 +222,7 @@ function loadKnowledge(
 					throw new Error(`Failed to parse runbook frontmatter in ${join(categoryDir, file)}: ${message}`);
 				}
 			} else {
-				entries.push({ category, filename: file, content: rawContent });
+				entries.push({ category, filename: file, content: stripFrontmatter(rawContent, join(categoryDir, file)) });
 			}
 		}
 	}
@@ -315,7 +324,28 @@ function makeKnowledgeEntry(category: string, filename: string, content: string)
 			return { category, filename, content };
 		}
 	}
-	return { category, filename, content };
+	// SIO-1282: strip frontmatter for every other category too, so an OKF block never
+	// reaches the prompt as literal YAML. Tolerant by design -- see stripFrontmatter.
+	return { category, filename, content: stripFrontmatter(content, filename) };
+}
+
+// SIO-1282: remove a leading YAML frontmatter block from non-runbook knowledge, so OKF
+// metadata does not surface in the prompt as prose. Deliberately TOLERANT, unlike the
+// runbook path: these categories carry no selection contract, so a malformed block costs
+// prompt noise rather than selection correctness, and throwing would take down agent load
+// over a playbook typo. On any parse failure the original content is returned unchanged
+// (the block stays visible, which is the pre-SIO-1282 behaviour) and a warning names the
+// file so the authoring error is still discoverable.
+function stripFrontmatter(content: string, filePath: string): string {
+	if (!content.startsWith("---\n") && !content.startsWith("---\r\n")) return content;
+	try {
+		const { body } = parseRunbookFrontmatter(content);
+		return body;
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		console.warn(`knowledge frontmatter (${filePath}): ${message}; leaving content unstripped`);
+		return content;
+	}
 }
 
 // Detects, parses, validates, and strips YAML frontmatter from a runbook file's
@@ -337,13 +367,24 @@ export function parseRunbookFrontmatter(content: string): {
 	}
 
 	const afterOpening = content.indexOf("\n") + 1;
-	const closingMatch = content.slice(afterOpening).match(/^---\r?\n?/m);
+	// SIO-1282: the delimiter must be a WHOLE line. The previous /^---\r?\n?/m matched the
+	// `---` prefix of any line starting with three dashes, so `---not-a-delimiter` was taken
+	// as the close: the frontmatter ended early and the body silently lost its leading
+	// dashes. Pre-existing, but 3a widens the exposure from 16 runbooks to all 53 knowledge
+	// files, so it is fixed here rather than left to a follow-up.
+	const closingMatch = content.slice(afterOpening).match(/^---[ \t]*\r?$/m);
 	if (!closingMatch || closingMatch.index === undefined) {
 		throw new Error("Runbook frontmatter: missing closing --- delimiter");
 	}
 
 	const frontmatterYaml = content.slice(afterOpening, afterOpening + closingMatch.index);
-	const bodyStart = afterOpening + closingMatch.index + closingMatch[0].length;
+	// The `$` anchor stops before the line terminator, so step past it explicitly.
+	const afterDelimiter = afterOpening + closingMatch.index + closingMatch[0].length;
+	const bodyStart = content.startsWith("\r\n", afterDelimiter)
+		? afterDelimiter + 2
+		: content.startsWith("\n", afterDelimiter)
+			? afterDelimiter + 1
+			: afterDelimiter;
 	const body = content.slice(bodyStart);
 
 	const parsed = parse(frontmatterYaml);

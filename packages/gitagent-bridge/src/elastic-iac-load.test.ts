@@ -2,6 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { loadAgent } from "./index.ts";
+import { parseRunbookFrontmatter } from "./manifest-loader.ts";
 
 const AGENTS_ROOT = join(import.meta.dir, "../../../agents");
 
@@ -117,5 +118,67 @@ describe("loadAgent(incident-analyzer) — unchanged", () => {
 		expect(agent.workflows.has("incident-triage")).toBe(true);
 		// no DUTIES.md for this agent
 		expect(agent.duties).toBe("");
+	});
+});
+
+// SIO-1282: frontmatter is stripped for EVERY knowledge category, not just runbooks.
+// OKF v0.2 requires frontmatter on every non-reserved .md, and before this change an OKF
+// block on a non-runbook file reached the prompt as literal YAML prose (~5 KB across
+// elastic-iac's 35 non-runbook files). These pin the contract, including the deliberate
+// asymmetry between the runbooks throw-path and the tolerant path for everything else.
+describe("knowledge frontmatter stripping across categories (SIO-1282)", () => {
+	const iac = loadAgent(join(AGENTS_ROOT, "elastic-iac"));
+	const incident = loadAgent(join(AGENTS_ROOT, "incident-analyzer"));
+
+	test("no loaded knowledge entry leaks a frontmatter block into its content", () => {
+		for (const agent of [iac, incident]) {
+			for (const entry of agent.knowledge) {
+				expect({
+					file: `${entry.category}/${entry.filename}`,
+					leaks: entry.content.trimStart().startsWith("---"),
+				}).toEqual({ file: `${entry.category}/${entry.filename}`, leaks: false });
+			}
+		}
+	});
+
+	test("converted runbooks keep their triggers and lose their frontmatter", () => {
+		const runbooks = incident.knowledge.filter((k) => k.category === "runbooks");
+		expect(runbooks.length).toBe(10);
+		// SIO-1282 PR 2 converted all 10; 8 declare triggers, and every body starts at its H1.
+		expect(runbooks.filter((k) => k.triggers).length).toBe(8);
+		for (const rb of runbooks) {
+			expect(rb.content.trimStart().startsWith("#")).toBe(true);
+		}
+	});
+
+	test("non-runbook categories are loaded and non-empty", () => {
+		// Guards against a strip that silently eats the whole body.
+		for (const category of ["reference", "playbook", "specs", "issues", "cost-plans"]) {
+			const entries = iac.knowledge.filter((k) => k.category === category);
+			expect(entries.length).toBeGreaterThan(0);
+			for (const e of entries) expect(e.content.length).toBeGreaterThan(0);
+		}
+	});
+});
+
+// SIO-1282 (CodeRabbit, PR #532): the strict/tolerant split and the closing-delimiter
+// contract. Both are easy to regress silently, so they are pinned directly.
+describe("frontmatter delimiter and strict/tolerant split (SIO-1282)", () => {
+	test("a partial line like ---not-a-delimiter is NOT a closing delimiter", () => {
+		// Previously /^---\r?\n?/m matched the `---` prefix, ending the frontmatter early and
+		// silently dropping the leading dashes from the body.
+		expect(() => parseRunbookFrontmatter("---\ntype: Runbook\n---not-a-delimiter\n# Body\n")).toThrow();
+	});
+
+	test("a delimiter with trailing whitespace still closes the block", () => {
+		expect(parseRunbookFrontmatter("---\ntype: Runbook\n---   \n# Body\n").body).toBe("# Body\n");
+	});
+
+	test("CRLF frontmatter strips without leaving a stray newline", () => {
+		expect(parseRunbookFrontmatter("---\r\ntype: Runbook\r\n---\r\n# Body\r\n").body).toBe("# Body\r\n");
+	});
+
+	test("a --- line inside the BODY is left untouched", () => {
+		expect(parseRunbookFrontmatter("---\ntype: Runbook\n---\n# Body\n---\nmore\n").body).toBe("# Body\n---\nmore\n");
 	});
 });
