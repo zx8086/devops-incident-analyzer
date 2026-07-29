@@ -830,3 +830,46 @@ describe("real sub-agent runbook bindings", () => {
 		});
 	}
 });
+
+// ============================================================================
+// Production validation - catalog summaries (SIO-1293)
+// ============================================================================
+
+// The runbook selector LLM sees `filename: title -- <first non-empty line after
+// the H1>` (parseRunbookCatalogEntry in packages/agent/src/prompt-context.ts). A
+// `##` header directly after the H1 makes that summary EMPTY, so the router picks
+// on title alone -- exactly how the Orbit runbook went unselected in SIO-1293.
+// Mirrors the parse: first non-empty line after the first H1, "" if a header
+// arrives first.
+function firstParagraphAfterH1(content: string): string {
+	const lines = content.split("\n");
+	let h1Index = -1;
+	for (let i = 0; i < lines.length; i++) {
+		if (/^#\s+/.test(lines[i] ?? "")) {
+			h1Index = i;
+			break;
+		}
+	}
+	if (h1Index === -1) return "";
+	for (let i = h1Index + 1; i < lines.length; i++) {
+		const trimmed = (lines[i] ?? "").trim();
+		if (trimmed === "") continue;
+		if (trimmed.startsWith("#")) return "";
+		return trimmed;
+	}
+	return "";
+}
+
+describe("real runbook catalog summaries (SIO-1293)", () => {
+	for (const fixture of RUNBOOK_BINDING_FIXTURES) {
+		describe(fixture.name, () => {
+			for (const runbookPath of fixture.runbookPaths) {
+				const basename = runbookPath.split("/").pop() ?? runbookPath;
+				test(`${basename} has a non-empty first paragraph after its H1`, () => {
+					const content = readFileSync(runbookPath, "utf-8");
+					expect(firstParagraphAfterH1(content)).not.toBe("");
+				});
+			}
+		});
+	}
+});

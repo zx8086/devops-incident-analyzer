@@ -9,11 +9,10 @@ generated:
   at: 2026-07-29
 triggers:
   metrics:
-    - broker-timeout
-    - broker-unreachable
-    - msk-broker
-    - kafka-broker
-    - connection-refused
+    - broker
+    - msk
+    - unreachable
+    - connection refused
   services:
     - msk
     - kafka
@@ -31,6 +30,8 @@ tools:
   - kafka_consume_messages
 ---
 # AWS MSK Broker Unreachable Investigation
+
+Investigate MSK brokers that are unreachable or failing health checks.
 
 ## Symptoms
 - Kafka-agent tool calls (`kafka_describe_cluster`, `kafka_consume_messages`) timing out against MSK bootstrap brokers

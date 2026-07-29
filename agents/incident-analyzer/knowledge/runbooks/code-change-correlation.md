@@ -1,179 +1,177 @@
 ---
 type: Runbook
 title: "Code Change Correlation"
-description: "Correlate an incident window with recent GitLab deploys and merge requests."
+description: "Trace an error or stack trace to the code change that caused it: Orbit blast radius across pvhcorp, group-wide deploy and pipeline ranking, MR diff evidence."
 status: stable
-tags: [gitlab, deploys, correlation]
+tags: [gitlab, orbit, deploys, correlation]
 generated:
   by: human:simon
-  at: 2026-07-29
-triggers:
-  metrics:
-    - deploy
-    - release
-    - stack_trace
-    - commit
-    - mr
-  match: any
+  at: 2026-07-30
 tools:
-  - gitlab_semantic_code_search
-  - gitlab_get_file_content
-  - gitlab_get_blame
-  - gitlab_list_commits
-  - gitlab_get_commit_diff
-  - gitlab_get_merge_request
-  - gitlab_get_merge_request_diffs
-  - gitlab_get_merge_request_pipelines
-  - gitlab_get_repository_tree
-  - gitlab_search
-  - gitlab_graph_schema
   - gitlab_blast_radius
   - gitlab_cross_project_callers
   - gitlab_recent_deploys
   - gitlab_pipeline_failures
   - gitlab_recent_vulnerabilities
+  - gitlab_graph_schema
   - gitlab_orbit_query_graph
+  - gitlab_semantic_code_search
+  - gitlab_list_merge_requests
+  - gitlab_get_merge_request
+  - gitlab_get_merge_request_diffs
+  - gitlab_get_merge_request_pipelines
+  - gitlab_list_commits
+  - gitlab_get_commit_diff
+  - gitlab_get_file_content
+  - gitlab_get_blame
+  - gitlab_search
+  - gitlab_get_repository_tree
 ---
 # Code Change Correlation
 
-## Symptoms
-- Incident timing correlates with a recent deployment
+Trace an error or stack trace to the code change that caused it: Orbit blast radius, recent deploys, MR diff evidence. Co-select with a domain runbook whenever logs name code symbols.
+
+## When This Applies
+
 - Stack traces or error messages reference specific classes, methods, or file paths
-- New error patterns appear that were not present before a recent merge
-- Performance degradation after a CI/CD pipeline completed
+- Incident timing correlates with a recent deployment or merged MR
+- New error patterns appear that were not present before a CI/CD pipeline completed
+- A shared library changed and several services degrade together
 
-## Preferred: Orbit blast-radius traversal (deterministic, cross-project)
+This runbook complements the domain runbooks (Kafka, Elastic APM, Couchbase, AWS):
+they establish WHAT is failing; this one establishes WHICH CHANGE made it fail.
+Select it alongside them, not instead of them.
 
-When GitLab Orbit is enabled, the whole call chain below becomes a single
-deterministic graph traversal instead of an 8-step per-project hunt. Prefer it
-for the "which shared change broke which services" question -- it is the only
-path that spans repositories.
+## Step 1: Extract Anchor Symbols
 
-1. Extract anchor symbols from the Elasticsearch logs (exception classes, method
-   names) exactly as in step 1 below.
-2. Call `gitlab_blast_radius(symbol: "<anchor>")` -- group-scoped, no project
-   resolution needed. Orbit resolves the anchor to a `Definition` node and
-   returns every downstream project/file that `IMPORTS` it across `pvhcorp`.
-3. Read the result: `importedByProjects` is the deterministic set of affected
-   services (not a `gitlab_search` guess). `sourceProject`/`sourceFile` is where
-   the changed definition lives.
-4. For group-wide deploy/failure context, use `gitlab_recent_deploys` and
-   `gitlab_pipeline_failures` (both take a `since` timestamp) -- ranked across
-   all projects.
-5. Only drop to the per-project steps below when Orbit is disabled/indexing, the
-   symbol is on a non-default branch, or the code is Terraform/YAML (Orbit
-   indexes the default branch only and excludes HCL/YAML).
+From the error text and Elasticsearch logs, collect anchors in priority order:
 
-The rules engine consumes these findings automatically: a blast-radius result
-plus a post-merge Elastic error spike in a downstream service fires
-`orbit-deploy-blast-radius-vs-elastic`, grounding the root cause deterministically
-rather than relying on the aggregator LLM to reconstruct it in prose.
+1. **Class or module names** (e.g. VariantEventConsumer) -- the BEST anchors:
+   these are what other code imports, so they resolve in the Orbit graph.
+2. **File paths** from stack frames (e.g. consumer/variant_event_consumer.py).
+3. **Method names** (e.g. handleVariantUpsert) -- the WEAKEST anchors: methods
+   are rarely imported directly. Use them to choose between candidate
+   definitions, not as the first blast-radius argument.
 
-For "who calls this definition across repos" use `gitlab_cross_project_callers`,
-and for a group-wide security sweep use `gitlab_recent_vulnerabilities`.
+Strip package prefixes and generic suffixes before anchoring: anchor on the
+distinctive token, not com.pvh.orders.VariantEventConsumer verbatim.
 
-Note: `gitlab_blast_radius` and the other billed Orbit tools consume GitLab
-Credits. Call `gitlab_graph_schema` (free) first if you need to ground a raw
-query; prefer the purpose-built tools over the raw `gitlab_orbit_query_graph`
-escape hatch.
+## Step 2: Orbit Blast Radius (preferred -- deterministic, cross-project)
 
-## Orbit raw query reference (gitlab_orbit_query_graph)
+When GitLab Orbit is enabled this replaces the per-project hunt with a single
+graph traversal, and it is the only path that spans repositories.
 
-Only for questions the purpose-built tools above cannot express. Ground the
-shape with `gitlab_graph_schema` (free) before spending credits on a raw query.
+1. Call `gitlab_blast_radius` with the strongest anchor (class/module name).
+   It is group-scoped -- no project resolution needed. Orbit resolves the
+   anchor to a Definition node and returns every downstream project and file
+   that IMPORTS it across pvhcorp: `importedByProjects` is the deterministic
+   set of affected services (not a search guess); `sourceProject` and
+   `sourceFile` locate the changed definition; `mrByFile` names the merged MR
+   that last touched each defining file.
+2. An EMPTY result is a checkpoint, not a conclusion. You MUST retry exactly
+   once with a different anchor -- the module or class name if the first try
+   was a method, or an alternate class from the stack trace. Only after the
+   retry may the finding read "no cross-project importers found for
+   <symbol> in the Orbit index" -- NEVER "no code cause" or "nothing depends
+   on this" from a single empty call.
+3. For "who calls this exact definition across repos", take the fqn from a
+   blast-radius definition row and pass it to `gitlab_cross_project_callers`.
+   The fqn is matched exactly -- never compose it by hand.
+4. Billing: `gitlab_blast_radius` and the other Orbit tools consume GitLab
+   Credits. `gitlab_graph_schema` is free -- use it to ground shapes before
+   spending credits, and prefer these purpose-built tools over the raw
+   `gitlab_orbit_query_graph` escape hatch.
 
-**Entities.** GitLab issues, epics, tasks and incidents are all the **WorkItem**
-entity. There is no **Issue** node -- a query with entity "Issue" is rejected
-outright, so a hunt for a linked incident or epic queries **WorkItem**.
+## Step 3: Group-Wide Deploy and Pipeline Context
 
-**Traversal depth.** Relationship entries take **max_hops** (and optionally
-**min_hops**): default 1, maximum 3. A one-hop default means an unset
-**max_hops** answers "direct importers" and silently misses transitive ones --
-set it explicitly when the question is "everything downstream".
+Run these whenever incident timing suggests deployment causation -- they rank
+activity across ALL projects, so they work even before a project is identified:
 
-**Path queries.** These are a different shape: **path_finding** requires a
-**path** sub-object carrying **path.max_depth** (max 3). **max_hops** does not
-apply to a path query. When the endpoints use filters, add **path.rel_types**
-to bound fan-out; path queries follow edges only in their schema direction, so
-an unexpectedly empty result is often a direction mismatch rather than absence.
+- `gitlab_recent_deploys` with since = incident window start: which projects
+  deployed inside the window, ranked.
+- `gitlab_pipeline_failures` with since = incident window start: failing
+  pipelines group-wide; a deploy pipeline that failed mid-rollout is a
+  first-class root-cause candidate.
+- `gitlab_recent_vulnerabilities` for a group-wide security sweep when the
+  error pattern suggests exploitation. An empty result is legitimate when the
+  scanning index is empty -- report "no vulnerabilities in the index", not a
+  tool failure.
 
-**Diff edges.** Prefer **HAS_LATEST_DIFF** over **HAS_DIFF** when the question
-is "what does this file look like now" -- **HAS_DIFF** spans every historical
-revision and undercounts long-lived files when combined with a limit.
+## Step 4: Merge Request Evidence Chain
 
-**Pipeline source.** Merge-request pipelines carry
-**Pipeline.source = "merge_request_event"**. Parent/child pipeline structures
-mean a naive count double-counts; filter on source when attributing a failure
-to an MR.
+Once a project is implicated (by blast radius, deploy ranking, or the incident
+itself):
 
-**Iteration budget.** At most 5 query attempts per question. Changing only
-**limit** or **columns** is not progress; changing the entity, a relationship
-type or a filter is. HTTP 400 validation errors count. On exceeding 5, report
-the shapes tried and what each failed on, then fall back to
-`gitlab_semantic_code_search` + `gitlab_list_commits` -- an inflated partial
-graph answer is worse than a stated gap.
+1. `gitlab_list_merge_requests` with state merged and the incident window --
+   filter client-side to MRs whose merge time falls inside the window.
+2. For at most the 3 MRs merged closest before onset: `gitlab_get_merge_request`
+   for details and authors, `gitlab_get_merge_request_diffs` for exactly what
+   changed, `gitlab_get_merge_request_pipelines` to verify the pipeline that
+   shipped it.
+3. In the diffs, look for: changed error handling, modified timeouts or
+   connection settings, new dependencies or API call patterns, configuration
+   and feature-flag changes.
 
-## Investigation Steps (per-project fallback)
+## Orbit Raw Query Reference (escape hatch)
 
-### 1. Extract Search Anchors from Logs
-Before querying GitLab, extract searchable symbols from Elasticsearch logs and error messages:
-- Exception class names (e.g. `NullPointerException`, `TimeoutException`)
-- Method names from stack traces (e.g. `fetchOpenWindows`, `processDeliveryDates`)
-- Endpoint or route paths (e.g. `/api/v1/delivery-dates`)
-- Kafka topic names or Couchbase query references from error context
+`gitlab_orbit_query_graph` is only for questions the purpose-built tools cannot
+express. Ground the shape with `gitlab_graph_schema` first. Key constraints:
 
-### 2. Semantic Code Search for Root Cause
-Use `gitlab_semantic_code_search` with extracted symbols to find relevant source code by meaning, not just exact text. This finds code even when log messages don't match function names exactly.
+- GitLab issues, epics, tasks and incidents are all the **WorkItem** entity;
+  a query with entity "Issue" is rejected outright.
+- Relationship entries take **max_hops** (default 1, max 3). An unset
+  **max_hops** answers "direct importers" and silently misses transitive ones.
+- Path queries are a different shape: **path_finding** requires a **path**
+  sub-object with its own depth cap; an unexpectedly empty path result is
+  often an edge-direction mismatch, not absence.
+- Prefer **HAS_LATEST_DIFF** over **HAS_DIFF** for "what does this file look
+  like now"; **HAS_DIFF** spans every historical revision.
+- Merge-request pipelines carry **Pipeline.source = "merge_request_event"**;
+  filter on it or parent/child pipelines double-count.
+- Budget: at most 5 query attempts per question; changing only limit or
+  columns is not progress. On exceeding 5, report the shapes tried and fall
+  back to the per-project chain below -- an inflated partial graph answer is
+  worse than a stated gap.
 
-Examples:
-- Log shows `SettlementWindowRepository.fetchOpenWindows timeout` -> search "settlement window fetch open windows timeout"
-- Log shows `DeliveryDateConsumer failed to process event` -> search "delivery date consumer event processing"
-- Log shows `connection refused on port 5432` -> search "database connection configuration"
+## Per-Project Fallback
 
-Semantic search returns scored results. Focus on scores above 0.75.
+Use when Orbit is disabled or still indexing, the symbol lives on a
+non-default branch, or the code is Terraform/YAML (Orbit indexes the default
+branch only and excludes HCL/YAML):
 
-### 3. Trace the Call Chain
-When semantic search identifies an exception handler or error handler:
-- Use `gitlab_get_file_content` to read the full source file
-- Use `gitlab_get_blame` to identify who last modified the relevant lines
-- Look for callers of the failing method by searching for method name references
+1. `gitlab_semantic_code_search` with the extracted anchors -- finds code by
+   meaning, not exact text; focus on scores above 0.75.
+2. `gitlab_get_file_content` to read the implicated file; `gitlab_get_blame`
+   to identify who last modified the failing lines.
+3. `gitlab_list_commits` filtered by since/until around incident onset (and
+   by path when known); `gitlab_get_commit_diff` for suspect commits.
+4. `gitlab_search` with scope projects to map a service name to its
+   repository; `gitlab_get_repository_tree` to navigate unfamiliar layouts.
 
-### 4. Identify Recent Code Changes
-Use `gitlab_list_commits` filtered to the deployment time window (from Elasticsearch log timestamps):
-- Filter by `since` and `until` matching the incident onset
-- Filter by `path` if you know the affected file from step 2
+## Cross-Datasource Correlation (for the final report)
 
-### 5. Examine the Deployment Merge Request
-If recent commits point to a merge request:
-- Use `gitlab_get_merge_request` to get the MR details, description, and approvers
-- Use `gitlab_get_merge_request_diffs` to see exactly what code changed
-- Use `gitlab_get_merge_request_pipelines` to verify the CI/CD pipeline passed
-
-### 6. Check Commit Diffs for Suspect Changes
-Use `gitlab_get_commit_diff` for commits that touch files identified in steps 2-4. Look for:
-- Changed error handling (removed try/catch, changed exception types)
-- Modified timeouts or connection settings
-- New dependencies or API call patterns
-- Configuration changes (environment variables, feature flags)
-
-### 7. Identify the Affected Project
-If the incident references a service name but not a GitLab project, use `gitlab_search` with scope `projects` to find the matching repository. Search by service name, namespace, or keyword.
-
-### 8. Browse Repository Structure
-Use `gitlab_get_repository_tree` to understand the project layout when navigating unfamiliar codebases. This helps locate configuration files, test directories, and related modules.
-
-## Cross-Datasource Correlation
-- Elasticsearch error timestamp + GitLab commit timestamp = deployment-caused regression
-- Orbit blast radius (shared definition imported by service X) + post-merge Elastic error spike in X = shared-library root cause (fires `orbit-deploy-blast-radius-vs-elastic`)
-- Kafka consumer lag spike + GitLab MR merged = consumer code change caused processing failure
-- Couchbase slow queries + GitLab commit touching query code = query regression
-- Kong gateway 5xx + GitLab pipeline deployment = upstream service deployment failure
-- Error class in logs + GitLab blame shows recent author = direct author for escalation
+- Orbit blast radius (shared definition imported by service X) + post-merge
+  Elastic error spike in X = shared-library root cause. This is the
+  `orbit-deploy-blast-radius-vs-elastic` rule: when both sides are present,
+  state the causal chain deterministically (definition -> importing service ->
+  error onset) instead of reconstructing it in prose.
+- Elasticsearch error onset + commit or deploy timestamp inside the window =
+  deployment-caused regression; cite both timestamps.
+- Kafka consumer lag spike + merged MR touching the consumer = consumer code
+  change caused the processing failure.
+- Couchbase slow queries + commit touching query code = query regression.
+- Blame author on the failing lines = direct escalation target.
+- Report Orbit limitations as stated gaps, not absence of cause: the index
+  covers default branches only, excludes Terraform/YAML, and an empty
+  blast radius after the mandatory retry means "no importers found in the
+  index" -- the per-project chain is the remaining evidence path.
 
 ## Escalation Criteria
-- Code change clearly caused regression: tag MR author and reviewers
-- Multiple services affected by same deployment: escalate to release manager
+
+- Code change clearly caused regression: tag the MR author and reviewers
+- Multiple services affected by the same deployment: escalate to the release manager
 - Rollback candidate identified: requires human approval before proceeding
 
 ## All Tools Used Are Read-Only
-gitlab_semantic_code_search, gitlab_get_file_content, gitlab_get_blame, gitlab_list_commits, gitlab_get_commit_diff, gitlab_get_merge_request, gitlab_get_merge_request_diffs, gitlab_get_merge_request_pipelines, gitlab_get_repository_tree, gitlab_search, gitlab_graph_schema, gitlab_blast_radius, gitlab_cross_project_callers, gitlab_recent_deploys, gitlab_pipeline_failures, gitlab_recent_vulnerabilities, gitlab_orbit_query_graph
+
+gitlab_blast_radius, gitlab_cross_project_callers, gitlab_recent_deploys, gitlab_pipeline_failures, gitlab_recent_vulnerabilities, gitlab_graph_schema, gitlab_orbit_query_graph, gitlab_semantic_code_search, gitlab_list_merge_requests, gitlab_get_merge_request, gitlab_get_merge_request_diffs, gitlab_get_merge_request_pipelines, gitlab_list_commits, gitlab_get_commit_diff, gitlab_get_file_content, gitlab_get_blame, gitlab_search, gitlab_get_repository_tree

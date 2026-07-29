@@ -11,10 +11,11 @@ triggers:
   metrics:
     - ecs
     - task
-    - task-failure
+    - running count
     - runningCount
+    - desired count
     - desiredCount
-    - service-degraded
+    - degraded
   services:
     - ecs
   match: any
@@ -29,6 +30,8 @@ tools:
   - aws_ec2_describe_security_groups
 ---
 # AWS ECS Task Failures Investigation
+
+Investigate ECS task stops, crash loops and deployment failures.
 
 ## Symptoms
 - ECS service reporting `runningCount < desiredCount`

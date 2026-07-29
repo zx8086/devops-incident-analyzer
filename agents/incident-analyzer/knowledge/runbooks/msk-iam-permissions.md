@@ -14,6 +14,8 @@ tools:
 ---
 # MSK IAM Permissions for Read-Only Introspection
 
+Reference for the IAM permissions required for read-only MSK introspection.
+
 ## When to Use This
 Reach for this runbook when a Kafka tool returns a permission error (e.g. `AccessDeniedException`, `kafka:DescribeClusterV2 not authorized`) or when `kafka_describe_cluster` succeeds but reports incomplete broker metadata against an MSK cluster. The kafka-agent should link to this runbook instead of re-raising the IAM gap as a finding on every run.
 

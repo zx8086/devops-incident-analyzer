@@ -11,9 +11,7 @@ triggers:
   metrics:
     - alarm
     - cloudwatch
-    - ALARM
-    - INSUFFICIENT_DATA
-    - alarm-state
+    - insufficient
   services:
     - cloudwatch
   match: any
@@ -27,6 +25,8 @@ tools:
   - aws_health_describe_events
 ---
 # AWS CloudWatch Alarm Triage
+
+Triage CloudWatch alarms in ALARM state and correlate them with the owning service.
 
 ## Symptoms
 - One or more CloudWatch alarms in `ALARM` state
