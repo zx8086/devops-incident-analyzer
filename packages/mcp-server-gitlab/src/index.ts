@@ -86,7 +86,6 @@ if (import.meta.main) {
 			// is set. The probe never calls the billed /query endpoint.
 			let orbitClient: OrbitRestClient | undefined;
 			let orbitAvailable = false;
-			let orbitIndexing = false;
 			if (config.orbit.enabled) {
 				orbitClient = new OrbitRestClient({
 					instanceUrl: config.gitlab.instanceUrl,
@@ -98,10 +97,9 @@ if (import.meta.main) {
 				});
 				try {
 					const status = await orbitClient.getStatus();
+					// SIO-1295: no boot-frozen "indexing" flag anymore -- while unavailable,
+					// the tool handlers re-check /status (free) on every call and recover.
 					orbitAvailable = isOrbitIndexed(status);
-					// Only "indexing" warrants a later free /status re-check; other
-					// defined statuses ("disabled", "error") go straight to fallback.
-					orbitIndexing = !orbitAvailable && status.status === "indexing";
 					serverLog.info({ orbitStatus: status.status, orbitAvailable }, "Orbit status probed");
 				} catch (error) {
 					serverLog.warn(
@@ -111,7 +109,7 @@ if (import.meta.main) {
 				}
 			}
 
-			return { proxy, restClient, config, discoveredTools, orbitClient, orbitAvailable, orbitIndexing };
+			return { proxy, restClient, config, discoveredTools, orbitClient, orbitAvailable };
 		},
 
 		// SIO-1044: record-once / replay-many factory (createMcpServerFactory already returns

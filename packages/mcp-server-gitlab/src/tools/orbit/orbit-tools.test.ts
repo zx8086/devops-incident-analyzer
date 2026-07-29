@@ -25,7 +25,7 @@ function stubServer() {
 }
 
 // Mirrors the live gitlab.com /orbit/status shape (SIO-1077) so isOrbitIndexed
-// flips availability in the indexing re-check test.
+// flips availability in the boot-unavailable re-check test.
 const LIVE_HEALTHY_STATUS = {
 	system: {
 		status: "healthy",
@@ -72,7 +72,10 @@ describe("Orbit tools: availability", () => {
 		expect(envelope.category).toBe("no-data");
 	});
 
-	test("boot saw indexing -> one free status re-check flips availability and the query proceeds", async () => {
+	// SIO-1295: the re-check arms for ANY boot-unavailable state (e.g. a boot during a
+	// schema migration or a failed boot probe), not just "indexing" -- a recovered Orbit
+	// is picked up on the next tool call without a process restart.
+	test("booted unavailable -> one free status re-check flips availability and the query proceeds", async () => {
 		let statusCalls = 0;
 		let queryCalls = 0;
 		const client: Partial<OrbitRestClient> = {
@@ -85,13 +88,36 @@ describe("Orbit tools: availability", () => {
 				return { result: { rows: [] } };
 			},
 		};
-		const ctx = makeCtx({ available: false, indexing: true }, client);
+		const ctx = makeCtx({ available: false }, client);
 		const { handlers } = register(ctx);
 		const result = await handlers.get("gitlab_cross_project_callers")?.({ fqn: "X" });
 		expect(result?.isError).toBeFalsy();
 		expect(statusCalls).toBe(1);
 		expect(queryCalls).toBe(1);
 		expect(ctx.available).toBe(true);
+	});
+
+	test("re-check that still reports unavailable soft-fails with no-index and never bills", async () => {
+		let statusCalls = 0;
+		let queryCalls = 0;
+		const client: Partial<OrbitRestClient> = {
+			getStatus: async () => {
+				statusCalls += 1;
+				return { status: "indexing" } as Awaited<ReturnType<OrbitRestClient["getStatus"]>>;
+			},
+			query: async () => {
+				queryCalls += 1;
+				return { result: { rows: [] } };
+			},
+		};
+		const ctx = makeCtx({ available: false }, client);
+		const { handlers } = register(ctx);
+		const result = await handlers.get("gitlab_cross_project_callers")?.({ fqn: "X" });
+		expect(result?.isError).toBe(true);
+		expect(extractEnvelope(result?.content[0]?.text ?? "").kind).toBe("no-index");
+		expect(statusCalls).toBe(1);
+		expect(queryCalls).toBe(0);
+		expect(ctx.available).toBe(false);
 	});
 });
 

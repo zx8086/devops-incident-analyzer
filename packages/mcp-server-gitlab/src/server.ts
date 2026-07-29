@@ -20,7 +20,6 @@ export interface GitLabDatasource {
 	// SIO-1076: Orbit knowledge-graph REST client + boot-probe state.
 	orbitClient?: OrbitRestClient;
 	orbitAvailable?: boolean;
-	orbitIndexing?: boolean;
 }
 
 // Discover remote tools once at startup (async)
@@ -69,7 +68,6 @@ function registerAll(server: McpServer, datasource: GitLabDatasource): void {
 		orbitCount = registerOrbitTools(server, {
 			client: datasource.orbitClient,
 			available: datasource.orbitAvailable ?? false,
-			indexing: datasource.orbitIndexing ?? false,
 			maxQueriesPerRun: config.orbit.maxQueriesPerRun,
 			defaultGroupPath: "pvhcorp",
 		});
