@@ -222,7 +222,14 @@ function loadKnowledge(
 					throw new Error(`Failed to parse runbook frontmatter in ${join(categoryDir, file)}: ${message}`);
 				}
 			} else {
-				entries.push({ category, filename: file, content: stripFrontmatter(rawContent, join(categoryDir, file)) });
+				const stripped = stripFrontmatter(rawContent, join(categoryDir, file));
+				entries.push({
+					category,
+					filename: file,
+					content: stripped.content,
+					status: stripped.status,
+					staleAfter: stripped.staleAfter,
+				});
 			}
 		}
 	}
@@ -326,7 +333,8 @@ function makeKnowledgeEntry(category: string, filename: string, content: string)
 	}
 	// SIO-1282: strip frontmatter for every other category too, so an OKF block never
 	// reaches the prompt as literal YAML. Tolerant by design -- see stripFrontmatter.
-	return { category, filename, content: stripFrontmatter(content, filename) };
+	const stripped = stripFrontmatter(content, filename);
+	return { category, filename, content: stripped.content, status: stripped.status, staleAfter: stripped.staleAfter };
 }
 
 // SIO-1282: remove a leading YAML frontmatter block from non-runbook knowledge, so OKF
@@ -336,15 +344,27 @@ function makeKnowledgeEntry(category: string, filename: string, content: string)
 // over a playbook typo. On any parse failure the original content is returned unchanged
 // (the block stays visible, which is the pre-SIO-1282 behaviour) and a warning names the
 // file so the authoring error is still discoverable.
-function stripFrontmatter(content: string, filePath: string): string {
-	if (!content.startsWith("---\n") && !content.startsWith("---\r\n")) return content;
+// SIO-1289: returns the OKF lifecycle fields alongside the body. The previous version
+// destructured only `body`, so `status`/`stale_after` were parsed and then silently dropped
+// for every non-runbook category -- `status: deprecated` on a playbook, issue or spec did
+// nothing at all, while SIO-1287 honoured it for runbooks.
+//
+// `triggers` is deliberately NOT returned: it is the SIO-640 runbook selection contract and
+// is meaningless outside that category.
+function stripFrontmatter(
+	content: string,
+	filePath: string,
+): { content: string; status?: KnowledgeEntry["status"]; staleAfter?: string } {
+	if (!content.startsWith("---\n") && !content.startsWith("---\r\n")) return { content };
 	try {
-		const { body } = parseRunbookFrontmatter(content);
-		return body;
+		const { body, status, staleAfter } = parseRunbookFrontmatter(content);
+		return { content: body, status, staleAfter };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		console.warn(`knowledge frontmatter (${filePath}): ${message}; leaving content unstripped`);
-		return content;
+		// Tolerant path unchanged: content survives verbatim and carries NO lifecycle fields,
+		// so a malformed block can never make a file look deprecated.
+		return { content };
 	}
 }
 

@@ -11,9 +11,11 @@ import { buildSystemPrompt, loadAgent } from "@devops-agent/gitagent-bridge";
 import {
 	ALL_LIVE_CATEGORIES,
 	DEFAULT_BY_INTENT,
+	excludeDeprecated,
 	filterAgentKnowledge,
 	selectCategories,
 	selectIacKnowledge,
+	staleEntries,
 } from "./knowledge-selector.ts";
 import { TURN_START_RESET } from "./nodes.ts";
 import { INTENT_VALUES } from "./state.ts";
@@ -159,5 +161,51 @@ describe("prompt-size effect (SIO-1285)", () => {
 		const agent = loadAgent(IAC_DIR);
 		// selectedKnowledge stays null when the selector never runs.
 		expect(buildSystemPrompt(filterAgentKnowledge(agent, null))).toBe(buildSystemPrompt(agent));
+	});
+});
+
+// SIO-1289: OKF lifecycle exclusion for elastic-iac. SIO-1287 made `status: deprecated`
+// binding for RUNBOOK selection; before this it did nothing for any other category, because
+// stripFrontmatter discarded the parsed status. These pin the three carried-over decisions.
+describe("OKF lifecycle exclusion (SIO-1289)", () => {
+	const entry = (filename: string, status?: string, staleAfter?: string) =>
+		({ category: "issues", filename, content: "body", status, staleAfter }) as never;
+
+	test("a deprecated entry is excluded", () => {
+		const kept = excludeDeprecated([entry("a.md"), entry("b.md", "deprecated"), entry("c.md", "stable")]);
+		expect(kept.map((e) => e.filename)).toEqual(["a.md", "c.md"]);
+	});
+
+	test("nothing deprecated is a pass-through preserving array identity", () => {
+		const input = [entry("a.md", "stable"), entry("b.md")];
+		expect(excludeDeprecated(input)).toBe(input);
+	});
+
+	test("draft and absent status are KEPT -- OKF defaults an absent status to stable", () => {
+		const input = [entry("a.md", "draft"), entry("b.md")];
+		expect(excludeDeprecated(input)).toBe(input);
+	});
+
+	test("ALL deprecated passes the full set through rather than starving the prompt", () => {
+		const input = [entry("a.md", "deprecated"), entry("b.md", "deprecated")];
+		expect(excludeDeprecated(input)).toBe(input);
+	});
+
+	test("a past stale_after is ADVISORY -- reported but never excluded", () => {
+		const input = [entry("old.md", "stable", "2020-01-01"), entry("fresh.md", "stable", "2999-01-01")];
+		expect(excludeDeprecated(input)).toBe(input);
+		expect(staleEntries(input, new Date("2026-07-29"))).toEqual(["issues/old.md"]);
+	});
+
+	test("filterAgentKnowledge applies lifecycle BEFORE category selection", () => {
+		const agent = loadAgent(IAC_DIR);
+		const withDeprecated = {
+			...agent,
+			knowledge: agent.knowledge.map((k, i) => (i === 0 ? { ...k, status: "deprecated" as const } : k)),
+		};
+		const first = agent.knowledge[0];
+		// selecting the deprecated entry's own category must still drop it
+		const filtered = filterAgentKnowledge(withDeprecated, [first?.category as string]);
+		expect(filtered.knowledge.some((k) => k.filename === first?.filename)).toBe(false);
 	});
 });
