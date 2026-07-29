@@ -355,13 +355,24 @@ export function parseRunbookFrontmatter(content: string): {
 	}
 
 	const afterOpening = content.indexOf("\n") + 1;
-	const closingMatch = content.slice(afterOpening).match(/^---\r?\n?/m);
+	// SIO-1282: the delimiter must be a WHOLE line. The previous /^---\r?\n?/m matched the
+	// `---` prefix of any line starting with three dashes, so `---not-a-delimiter` was taken
+	// as the close: the frontmatter ended early and the body silently lost its leading
+	// dashes. Pre-existing, but 3a widens the exposure from 16 runbooks to all 53 knowledge
+	// files, so it is fixed here rather than left to a follow-up.
+	const closingMatch = content.slice(afterOpening).match(/^---[ \t]*\r?$/m);
 	if (!closingMatch || closingMatch.index === undefined) {
 		throw new Error("Runbook frontmatter: missing closing --- delimiter");
 	}
 
 	const frontmatterYaml = content.slice(afterOpening, afterOpening + closingMatch.index);
-	const bodyStart = afterOpening + closingMatch.index + closingMatch[0].length;
+	// The `$` anchor stops before the line terminator, so step past it explicitly.
+	const afterDelimiter = afterOpening + closingMatch.index + closingMatch[0].length;
+	const bodyStart = content.startsWith("\r\n", afterDelimiter)
+		? afterDelimiter + 2
+		: content.startsWith("\n", afterDelimiter)
+			? afterDelimiter + 1
+			: afterDelimiter;
 	const body = content.slice(bodyStart);
 
 	const parsed = parse(frontmatterYaml);

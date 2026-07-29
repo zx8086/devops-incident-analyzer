@@ -2,6 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { loadAgent } from "./index.ts";
+import { parseRunbookFrontmatter } from "./manifest-loader.ts";
 
 const AGENTS_ROOT = join(import.meta.dir, "../../../agents");
 
@@ -157,5 +158,27 @@ describe("knowledge frontmatter stripping across categories (SIO-1282)", () => {
 			expect(entries.length).toBeGreaterThan(0);
 			for (const e of entries) expect(e.content.length).toBeGreaterThan(0);
 		}
+	});
+});
+
+// SIO-1282 (CodeRabbit, PR #532): the strict/tolerant split and the closing-delimiter
+// contract. Both are easy to regress silently, so they are pinned directly.
+describe("frontmatter delimiter and strict/tolerant split (SIO-1282)", () => {
+	test("a partial line like ---not-a-delimiter is NOT a closing delimiter", () => {
+		// Previously /^---\r?\n?/m matched the `---` prefix, ending the frontmatter early and
+		// silently dropping the leading dashes from the body.
+		expect(() => parseRunbookFrontmatter("---\ntype: Runbook\n---not-a-delimiter\n# Body\n")).toThrow();
+	});
+
+	test("a delimiter with trailing whitespace still closes the block", () => {
+		expect(parseRunbookFrontmatter("---\ntype: Runbook\n---   \n# Body\n").body).toBe("# Body\n");
+	});
+
+	test("CRLF frontmatter strips without leaving a stray newline", () => {
+		expect(parseRunbookFrontmatter("---\r\ntype: Runbook\r\n---\r\n# Body\r\n").body).toBe("# Body\r\n");
+	});
+
+	test("a --- line inside the BODY is left untouched", () => {
+		expect(parseRunbookFrontmatter("---\ntype: Runbook\n---\n# Body\n---\nmore\n").body).toBe("# Body\n---\nmore\n");
 	});
 });
