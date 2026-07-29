@@ -1,4 +1,12 @@
 ---
+type: Runbook
+title: "Kafka Consumer Lag Investigation"
+description: "Identify consumer groups with growing lag and locate the stalled partition."
+status: stable
+tags: [kafka, consumer-lag]
+generated:
+  by: human:simon
+  at: 2026-07-29
 triggers:
   metrics:
     - lag

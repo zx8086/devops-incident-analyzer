@@ -1,4 +1,12 @@
 ---
+type: Runbook
+title: "MCP Tool Audit (datasource-agnostic)"
+description: "Datasource-agnostic audit of MCP tool availability and error modes."
+status: stable
+tags: [mcp, tooling, diagnostics]
+generated:
+  by: human:simon
+  at: 2026-07-29
 triggers:
   metrics:
     - mcp

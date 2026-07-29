@@ -1,4 +1,12 @@
 ---
+type: Runbook
+title: "AWS CloudWatch Alarm Triage"
+description: "Triage CloudWatch alarms in ALARM state and correlate them with the owning service."
+status: stable
+tags: [aws, cloudwatch, alarms]
+generated:
+  by: human:simon
+  at: 2026-07-29
 triggers:
   metrics:
     - alarm

@@ -1,4 +1,12 @@
 ---
+type: Runbook
+title: "AWS ECS Task Failures Investigation"
+description: "Investigate ECS task stops, crash loops and deployment failures."
+status: stable
+tags: [aws, ecs, containers]
+generated:
+  by: human:simon
+  at: 2026-07-29
 triggers:
   metrics:
     - ecs

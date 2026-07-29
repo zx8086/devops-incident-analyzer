@@ -1,4 +1,12 @@
 ---
+type: Runbook
+title: "Couchbase Slow Query Investigation"
+description: "Investigate slow Couchbase queries, missing indexes and query-plan regressions."
+status: stable
+tags: [couchbase, query-performance]
+generated:
+  by: human:simon
+  at: 2026-07-29
 triggers:
   metrics:
     - n1ql
