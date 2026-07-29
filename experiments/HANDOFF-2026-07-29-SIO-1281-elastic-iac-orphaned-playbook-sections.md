@@ -12,7 +12,9 @@
 
 16 of 31 skill directories under `agents/elastic-iac/skills/` are missing from `agent.yaml` `skills:`, so they **never load**. They are not abandoned scaffolding: they are playbook sections that were converted into skill files, and the original prose was **deleted from the playbook in the same move**. 14 playbook sections now contain only a one-line pointer. The elastic-iac agent therefore lost ~1,246 lines of operational knowledge it previously had.
 
-Success = the 14 bodies are restored to their playbook sections, the 2 eu-b2b incident runbooks are relocated, the 16 skill dirs are deleted, `_INDEX.md` is repointed, and a drift test exists so this cannot silently recur.
+Success = the 14 bodies are restored to their playbook sections, the 2 eu-b2b incident runbooks are **archived out of the prompt** (`_archive/eu-b2b-ilm/` — a non-recursed subdir), the 16 skill dirs are deleted, `_INDEX.md` is repointed, and a drift test exists so this cannot silently recur.
+
+**Net prompt cost of this ticket: zero.** The 14 restored bodies re-inflate playbook stubs already in the prompt; the 2 archived files stay out of it.
 
 ## Context — how this ticket came to be
 
@@ -114,11 +116,34 @@ For each row in the table above: take the body of `agents/elastic-iac/skills/<na
 - **Drop the frontmatter** (`name`/`description`/`inputs`/`outputs`). Playbook files have no frontmatter — verified: `head -1` on every `knowledge/playbook/*.md` is an `# N. Title` heading, and none contains `type:`.
 - Keep the `> Source: Elastic_Optimisation_Playbook_v12 §X.Y` line only if the surrounding sections do; check the neighbours first.
 
-### Step 2 — Relocate the 2 eu-b2b incident runbooks
+### Step 2 — ARCHIVE the 2 eu-b2b incident runbooks (decided 2026-07-29)
 
-`eu-b2b-ilm-change-apply-runbook` (339L) and `eu-b2b-ilm-oom-incident-recovery` (100L) have no playbook §; they came from a docx/md incident source. Move to `agents/elastic-iac/knowledge/runbooks/`, whose `index.yaml` description is *"eu-cld incident runbooks (reference; loaded as plain knowledge)"*.
+`eu-b2b-ilm-change-apply-runbook` (339L) and `eu-b2b-ilm-oom-incident-recovery` (100L) have no playbook §; they came from a docx/md incident source.
 
-**DECISION NEEDED — ask the user before doing this.** elastic-iac knowledge is **always-on** (see Risks), so this adds **+439 lines to every elastic-iac turn**. The alternative is `knowledge/_archive/` (which exists and is declared) if they are historical rather than reusable.
+**DECISION (user, 2026-07-29): archive them. Do NOT add 439 lines to every turn.**
+
+They are eu-b2b point-in-time incident histories, not reusable procedure. Retain for traceability, keep out of the prompt.
+
+**Destination: `agents/elastic-iac/knowledge/_archive/eu-b2b-ilm/`** — note the **subdirectory**, which is load-bearing.
+
+#### Why a subdirectory, and not `_archive/` directly
+
+`_archive/` is a **loaded category** — declared at `agent.yaml:57` and in `index.yaml` (*"Archived knowledge retained for traceability"*). Its `index.md` (13,234 bytes) already reaches the prompt every turn. Dropping the two files directly into `_archive/` would still cost the 439 lines and defeat the decision.
+
+**`loadKnowledge` does not recurse subdirectories** (`packages/gitagent-bridge/src/manifest-loader.ts:180`):
+```ts
+const files = readdirSync(categoryDir).filter((f) => f.endsWith(".md") && f !== ".gitkeep");
+```
+Only `.md` files **directly under** `config.path` load. Anything one level deeper is invisible to the loader — which is exactly what is wanted here. The `index.yaml` header comment states the same rule: *"each category loads the `*.md` files DIRECTLY under its `path` (subdirectories are not recursed)"*.
+
+**Verified empirically on `5b3c796a`**: a probe file placed at `knowledge/_archive/_probe/probe.md` did **not** appear in `agent.knowledge` — total entries stayed 46, and `_archive` still reported only `index.md`. Probe removed afterwards.
+
+Steps:
+1. `mkdir -p agents/elastic-iac/knowledge/_archive/eu-b2b-ilm/`
+2. Move both `SKILL.md` bodies there as `eu-b2b-ilm-change-apply-runbook.md` and `eu-b2b-ilm-oom-incident-recovery.md`. **Strip the `inputs`/`outputs` frontmatter** — nothing parses these files, so frontmatter is dead weight; keep the `> Source:` provenance line.
+3. Add a pointer line to `knowledge/_archive/index.md` noting the subdirectory and that its contents are deliberately not loaded. **`_archive/index.md` IS in the prompt**, so keep the addition to one or two lines — do not summarise 439 lines there.
+
+**Do NOT put them in `knowledge/runbooks/`.** elastic-iac has no `selectRunbooks` node, so that category is always-on, not trigger-gated (see Risks).
 
 ### Step 3 — Delete the 16 skill directories
 
@@ -133,7 +158,7 @@ git rm -r built-in-ilm-policy-revalidation-after-upgrade clock-skew-ingest-pipel
   retention-audit-process stream-consolidation-via-reroute-processor \
   systemprocess-metric-tuning warmcold-tier-replica-policy
 ```
-(Adjust for whatever step 2 decides about the two eu-b2b files — move them before deleting.)
+**Do step 2 (archiving the two eu-b2b files) BEFORE this deletion** — otherwise their content is gone. The `git rm` list above includes both; move them out first, then delete the empty dirs.
 
 ### Step 4 — Repoint `knowledge/_INDEX.md`
 
@@ -173,7 +198,8 @@ Cover both `agents/incident-analyzer` and `agents/elastic-iac`. Note incident-an
 | `agents/elastic-iac/knowledge/playbook/6-index-and-data-hygiene.md` | Restore 2 |
 | `agents/elastic-iac/knowledge/playbook/7-infrastructure-and-cost.md` | Restore 1 (§7.2.3) |
 | `agents/elastic-iac/knowledge/playbook/8-operational-governance.md` | Restore 1 (§8.3) |
-| `agents/elastic-iac/knowledge/runbooks/` | +2 eu-b2b files (pending step-2 decision) |
+| `agents/elastic-iac/knowledge/_archive/eu-b2b-ilm/` | **New subdir** — +2 eu-b2b files (NOT loaded; subdirs are not recursed) |
+| `agents/elastic-iac/knowledge/_archive/index.md` | +1-2 line pointer (this file IS in the prompt — keep it short) |
 | `agents/elastic-iac/skills/<16 dirs>/` | **Delete** |
 | `agents/elastic-iac/knowledge/_INDEX.md` | Repoint lines 74-92 |
 | `agents/elastic-iac/skills/resize-tier/SKILL.md` | Line 55 cross-reference |
@@ -191,7 +217,15 @@ Load probe — skills down to 15, playbook knowledge unchanged in file count but
 bun -e 'import{loadAgent}from"./packages/gitagent-bridge/src/index.ts";const a=loadAgent("agents/elastic-iac");console.log("skills:",a.skills.size);const kb={};for(const k of a.knowledge)kb[k.category]=(kb[k.category]||0)+1;console.log("knowledge:",JSON.stringify(kb));const pb=a.knowledge.filter(k=>k.category==="playbook").reduce((n,k)=>n+k.content.length,0);console.log("playbook bytes:",pb);'
 ```
 
-Expected: `skills: 15`. Baseline on `5b3c796a` for comparison: `skills: 15 of 31 on disk`, `knowledge: {"reference":6,"issues":8,"runbooks":6,"specs":4,"cost-plans":6,"playbook":11,"health-snapshots":4,"_archive":1}`.
+Expected: `skills: 15`. Baseline on `5b3c796a` for comparison: `skills: 15 of 31 on disk`, `knowledge: {"reference":6,"issues":8,"runbooks":6,"specs":4,"cost-plans":6,"playbook":11,"health-snapshots":4,"_archive":1}` (46 entries total).
+
+**The archive must stay invisible to the loader.** After step 2, the counts for `runbooks` (6) and `_archive` (1) must be **unchanged** — the two archived files must not appear anywhere in `agent.knowledge`:
+
+```bash
+bun -e 'import{loadAgent}from"./packages/gitagent-bridge/src/index.ts";const a=loadAgent("agents/elastic-iac");const f=a.knowledge.map(k=>k.filename);console.log("total entries:",f.length,"(baseline 46)");console.log("_archive:",a.knowledge.filter(k=>k.category==="_archive").map(k=>k.filename).join(", "),"(expect: index.md only)");console.log("runbooks:",a.knowledge.filter(k=>k.category==="runbooks").length,"(expect 6)");console.log("LEAKED archived files:",f.filter(n=>n.startsWith("eu-b2b-ilm-")).join(", ")||"none");'
+```
+
+Expected: `total entries: 46`, `_archive: index.md only`, `runbooks: 6`, `LEAKED: none`. Any other result means the archive is being loaded and the 439 lines are back in the prompt.
 
 No stubs remain:
 ```bash
@@ -210,6 +244,8 @@ Drift test actually bites — temporarily create `agents/elastic-iac/skills/zz-c
 | Risk | Likelihood | Mitigation |
 |---|---|---|
 | Restoring all 16 to `knowledge/` instead of the playbook adds ~1,246 always-on lines | Medium | **elastic-iac has NO `selectRunbooks` node** — its `knowledge/index.yaml` says so explicitly: *"No runbook_selection: that wires incident-analyzer's selectRunbooks node, which the IaC graph (buildIacGraph) does not have."* So elastic-iac knowledge is always-on, NOT trigger-gated. Restoring into `playbook/` (already loaded, 11 files) is the only zero-new-cost option |
+| **Archiving into `_archive/` directly instead of a subdir** | **High — the obvious wrong move** | `_archive/` IS a loaded category (`agent.yaml:57`; its `index.md` is 13,234 bytes in the prompt today). Files must go in `_archive/eu-b2b-ilm/` — subdirs are not recursed (`manifest-loader.ts:180`). The "archive must stay invisible" probe in Verification is the guard |
+| Summarising the archived content into `_archive/index.md` | Medium | That file IS in the prompt. A 1-2 line pointer only — a summary would re-import the cost the archiving decision was made to avoid |
 | Content loss during the move | Medium | Do it as `git mv`-then-edit where possible; diff the restored section against the deleted SKILL.md body before committing |
 | Section numbering drift after edits | Low | Line numbers above are from `5b3c796a`; re-grep `_Promoted to skill` before each edit rather than trusting them |
 | Playbook frontmatter mismatch | Low | Playbook files have NO frontmatter — do not carry `inputs`/`outputs` across |
