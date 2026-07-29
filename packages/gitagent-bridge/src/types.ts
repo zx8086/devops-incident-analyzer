@@ -245,11 +245,41 @@ export const RunbookTriggersSchema = z
 
 export type RunbookTriggers = z.infer<typeof RunbookTriggersSchema>;
 
+// SIO-1286: the envelope is .passthrough() and every key is optional, per OKF v0.2's
+// consumer-conformance rules: "Consumers MUST NOT reject a bundle because of ... Unknown
+// additional frontmatter keys." The pre-1286 shape was .strict() with `triggers` as its
+// only REQUIRED key, so an OKF-conformant runbook (which MUST carry `type`) was rejected
+// two ways at once -- and manifest-loader.ts parses with a bare .parse(), so that rejection
+// THREW and broke agent load. Mirrors SkillFrontmatterSchema below, already .passthrough().
+//
+// RunbookTriggersSchema stays .strict() deliberately: the widening applies to the envelope,
+// NOT to the field selectRunbooks depends on. A malformed `triggers` block must still fail
+// loudly -- that is the guard against real authoring errors, and it is test-pinned.
+//
+// The OKF provenance/trust families (sources[], usage_window, generated, verified) are
+// deliberately absent: .passthrough() preserves them already, which is all OKF requires.
+// Add typed fields when a consumer actually reads them, not before.
 export const RunbookFrontmatterSchema = z
 	.object({
-		triggers: RunbookTriggersSchema,
+		// Was REQUIRED pre-1286. Safe to relax: narrowCatalogByTriggers partitions on
+		// `triggers !== undefined` and KEEPS trigger-less runbooks in the narrowed set
+		// (they opt out of filtering, not out of the catalog), and getRunbookCatalog
+		// passes it through unguarded. elastic-iac (0 of 6 with triggers) already runs
+		// entirely through that noop path.
+		triggers: RunbookTriggersSchema.optional(),
+		// OKF reserved: `type` is required by the spec on every non-reserved .md,
+		// producer-defined and not centrally registered (so `type: Runbook` is idiomatic).
+		type: z.string().optional(),
+		title: z.string().optional(),
+		description: z.string().optional(),
+		resource: z.string().optional(),
+		tags: z.array(z.string()).optional(),
+		// OKF lifecycle. Absent means `stable` per the spec. Parsed here but not yet acted
+		// on -- SIO-1287 teaches selection to drop deprecated/stale entries.
+		status: z.enum(["draft", "stable", "deprecated"]).optional(),
+		stale_after: z.string().optional(),
 	})
-	.strict();
+	.passthrough();
 
 export type RunbookFrontmatter = z.infer<typeof RunbookFrontmatterSchema>;
 

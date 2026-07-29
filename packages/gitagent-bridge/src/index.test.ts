@@ -849,14 +849,44 @@ describe("RunbookFrontmatterSchema", () => {
 		expect(() => RunbookFrontmatterSchema.parse(input)).not.toThrow();
 	});
 
-	test("rejects object without triggers key", () => {
+	// SIO-1286: was "rejects object without triggers key". `triggers` is now optional so an
+	// OKF concept doc (which need not declare triggers) loads. Selection still works: 0
+	// trigger-declared runbooks puts narrowCatalogByTriggers in `noop` mode.
+	test("accepts object without triggers key (SIO-1286)", () => {
 		const input = { tags: ["kafka"] };
-		expect(() => RunbookFrontmatterSchema.parse(input)).toThrow();
+		expect(() => RunbookFrontmatterSchema.parse(input)).not.toThrow();
 	});
 
-	test("rejects object with triggers AND unknown top-level key", () => {
+	// SIO-1286: was "rejects object with triggers AND unknown top-level key". OKF requires
+	// consumers to tolerate unknown keys AND to preserve them, so this asserts both.
+	test("accepts AND PRESERVES an unknown top-level key (SIO-1286)", () => {
 		const input = { triggers: { severity: ["critical"] }, author: "dev" };
-		expect(() => RunbookFrontmatterSchema.parse(input)).toThrow();
+		const parsed = RunbookFrontmatterSchema.parse(input);
+		expect(parsed.triggers).toEqual({ severity: ["critical"] });
+		// Preservation is the OKF requirement -- a plain z.object would silently STRIP this.
+		expect((parsed as Record<string, unknown>).author).toBe("dev");
+	});
+
+	// SIO-1286: OKF's required `type` field, the whole point of the widening. Pre-1286 this
+	// threw with unrecognized_keys and broke agent load.
+	test("accepts OKF reserved fields: type, title, status, stale_after (SIO-1286)", () => {
+		const input = {
+			type: "Runbook",
+			title: "MCP Tool Audit",
+			description: "Audit an MCP server end-to-end.",
+			tags: ["mcp", "audit"],
+			status: "stable",
+			stale_after: "2027-01-01",
+		};
+		expect(() => RunbookFrontmatterSchema.parse(input)).not.toThrow();
+	});
+
+	// SIO-1286: the widening is on the ENVELOPE only. RunbookTriggersSchema stays .strict(),
+	// so a malformed triggers block must still fail loudly -- this is the guard against real
+	// authoring errors, and manifest-loader's bare .parse() turns it into a load failure.
+	test("STILL rejects a malformed triggers block (SIO-1286 guard)", () => {
+		expect(() => RunbookFrontmatterSchema.parse({ triggers: { severity: "critical" } })).toThrow();
+		expect(() => RunbookFrontmatterSchema.parse({ triggers: { unknown_axis: ["x"] } })).toThrow();
 	});
 
 	test("rejects undefined (empty YAML parse result)", () => {
@@ -912,6 +942,31 @@ describe("parseRunbookFrontmatter", () => {
 		expect(result.body).toBe("# Body");
 	});
 
+	// SIO-1286: the end-to-end load path, not just the schema. An OKF-conformant runbook
+	// carrying `type:` must strip its frontmatter and return the body -- pre-1286 this THREW
+	// out of manifest-loader's bare .parse() and broke agent load.
+	test("4b. OKF frontmatter with type: and no triggers loads (SIO-1286)", () => {
+		const input = ["---", "type: Runbook", "title: MCP Tool Audit", "status: stable", "---", "# Body"].join("\n");
+		const result = parseRunbookFrontmatter(input);
+		expect(result.triggers).toBeUndefined();
+		expect(result.body).toBe("# Body");
+	});
+
+	// SIO-1286: OKF fields and our `triggers` producer extension coexist -- triggers is still
+	// typed and still reaches the selector.
+	test("4c. OKF fields alongside triggers keep triggers typed (SIO-1286)", () => {
+		const input = ["---", "type: Runbook", "triggers:", "  severity: [critical]", "---", "# Body"].join("\n");
+		const result = parseRunbookFrontmatter(input);
+		expect(result.triggers).toEqual({ severity: ["critical"] });
+		expect(result.body).toBe("# Body");
+	});
+
+	// SIO-1286: the guard survives end-to-end, not just at the schema level.
+	test("4d. malformed triggers STILL throws through the load path (SIO-1286)", () => {
+		const input = ["---", "type: Runbook", "triggers:", "  severity: critical", "---", "# Body"].join("\n");
+		expect(() => parseRunbookFrontmatter(input)).toThrow();
+	});
+
 	test("5. frontmatter followed by paragraph", () => {
 		const input = ["---", "triggers:", "  severity: [high]", "---", "", "# Body", "", "Paragraph."].join("\n");
 		const result = parseRunbookFrontmatter(input);
@@ -934,9 +989,13 @@ describe("parseRunbookFrontmatter", () => {
 		expect(() => parseRunbookFrontmatter(input)).toThrow();
 	});
 
-	test("9. unknown top-level frontmatter key", () => {
+	// SIO-1286: was "unknown top-level frontmatter key ... toThrow()". `tags` is an OKF
+	// RECOMMENDED field, and unknown keys are tolerated + preserved per OKF conformance, so
+	// this now loads with no triggers rather than throwing.
+	test("9. non-triggers top-level frontmatter key loads (SIO-1286)", () => {
 		const input = "---\ntags: [kafka]\n---\n";
-		expect(() => parseRunbookFrontmatter(input)).toThrow();
+		const result = parseRunbookFrontmatter(input);
+		expect(result.triggers).toBeUndefined();
 	});
 
 	test("10. missing closing ---", () => {
