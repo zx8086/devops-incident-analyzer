@@ -245,11 +245,44 @@ export const RunbookTriggersSchema = z
 
 export type RunbookTriggers = z.infer<typeof RunbookTriggersSchema>;
 
+// SIO-1282: widened for OKF v0.2. Was `.strict()` with `triggers` as the only, REQUIRED
+// key -- so adding OKF's required `type:` to any runbook threw at load
+// (manifest-loader.ts uses a bare .parse()). OKF's own conformance rules require consumers
+// to tolerate unknown keys and missing optional fields, so `.passthrough()` moves TOWARD
+// the spec rather than away from it.
+//
+// Two things deliberately NOT relaxed:
+//   - `RunbookTriggersSchema` stays `.strict()`. The widening applies to the envelope, not
+//     to the field selectRunbooks depends on; a malformed triggers block must still fail
+//     loudly (SIO-640).
+//   - The throw-on-malformed path in manifest-loader is untouched.
+//
+// `triggers` becomes optional: OKF concepts need not declare it, and elastic-iac's 6
+// runbooks already declare none. Verified safe -- narrowCatalogByTriggers keeps
+// trigger-less runbooks in the narrowed set rather than dropping them, including in the
+// MIXED catalog a partial migration creates.
+//
+// The trust/provenance families (`sources[]`, `usage_window`, `generated`, `verified`) are
+// intentionally NOT typed here. `.passthrough()` already carries them, which is exactly
+// what OKF §11 requires ("consumers MUST treat a bare `verified` mapping as a one-element
+// list"). Type them only when a consumer actually reads them -- typing them earlier trades
+// §11 tolerance for validation nothing uses.
+//
+// `type` is optional here even though OKF requires it, so a partial migration cannot break
+// the load. Tighten to required only once every knowledge file carries one.
+// Spec: docs/superpowers/specs/2026-07-29-okf-runbook-alignment-design.md
 export const RunbookFrontmatterSchema = z
 	.object({
-		triggers: RunbookTriggersSchema,
+		triggers: RunbookTriggersSchema.optional(),
+		type: z.string().optional(),
+		title: z.string().optional(),
+		description: z.string().optional(),
+		resource: z.string().optional(),
+		tags: z.array(z.string()).optional(),
+		status: z.enum(["draft", "stable", "deprecated"]).optional(),
+		stale_after: z.string().optional(),
 	})
-	.strict();
+	.passthrough();
 
 export type RunbookFrontmatter = z.infer<typeof RunbookFrontmatterSchema>;
 

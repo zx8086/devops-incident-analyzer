@@ -849,18 +849,90 @@ describe("RunbookFrontmatterSchema", () => {
 		expect(() => RunbookFrontmatterSchema.parse(input)).not.toThrow();
 	});
 
-	test("rejects object without triggers key", () => {
+	// SIO-1282: these three previously asserted the `.strict()` + required-`triggers`
+	// contract. Widening for OKF v0.2 deliberately inverts the first two -- a runbook may
+	// now omit `triggers` entirely (OKF concepts need not declare it, and elastic-iac's 6
+	// runbooks already declare none), and unknown TOP-LEVEL keys are tolerated because OKF
+	// §11 requires consumers not to reject them.
+	test("accepts object WITHOUT triggers (OKF concepts need not declare it)", () => {
 		const input = { tags: ["kafka"] };
-		expect(() => RunbookFrontmatterSchema.parse(input)).toThrow();
+		expect(() => RunbookFrontmatterSchema.parse(input)).not.toThrow();
 	});
 
-	test("rejects object with triggers AND unknown top-level key", () => {
+	test("accepts triggers AND an unknown top-level key (OKF §11 tolerance)", () => {
 		const input = { triggers: { severity: ["critical"] }, author: "dev" };
-		expect(() => RunbookFrontmatterSchema.parse(input)).toThrow();
+		expect(() => RunbookFrontmatterSchema.parse(input)).not.toThrow();
+	});
+
+	test("preserves unknown top-level keys rather than stripping them (OKF requires round-trip)", () => {
+		const parsed = RunbookFrontmatterSchema.parse({ type: "Runbook", author: "dev" });
+		expect((parsed as Record<string, unknown>).author).toBe("dev");
 	});
 
 	test("rejects undefined (empty YAML parse result)", () => {
 		expect(() => RunbookFrontmatterSchema.parse(undefined)).toThrow();
+	});
+
+	// The guards that must SURVIVE the widening. The envelope got permissive; the fields
+	// the selector and the authoring contract depend on did not.
+	test("still rejects a malformed triggers value", () => {
+		expect(() => RunbookFrontmatterSchema.parse({ triggers: { severity: ["nonsense"] } })).toThrow();
+	});
+
+	test("still rejects an unknown key INSIDE triggers (RunbookTriggersSchema stays .strict())", () => {
+		expect(() => RunbookFrontmatterSchema.parse({ triggers: { severity: ["high"], bogus: 1 } })).toThrow();
+	});
+
+	test("rejects a bad status enum", () => {
+		expect(() => RunbookFrontmatterSchema.parse({ type: "Runbook", status: "whatever" })).toThrow();
+	});
+
+	test("rejects a wrongly-typed tags field", () => {
+		expect(() => RunbookFrontmatterSchema.parse({ type: "Runbook", tags: "not-an-array" })).toThrow();
+	});
+
+	// OKF v0.2 reserved shapes the migration will actually author.
+	test("accepts the OKF reserved fields", () => {
+		const input = {
+			type: "Runbook",
+			title: "MCP Tool Audit",
+			description: "Audit MCP tool availability.",
+			resource: "https://example.invalid/runbook",
+			tags: ["mcp", "diagnostics"],
+			status: "stable",
+			stale_after: "2027-01-01",
+		};
+		expect(() => RunbookFrontmatterSchema.parse(input)).not.toThrow();
+	});
+
+	// §11: "consumers MUST treat a bare `verified` mapping as a one-element list". Both
+	// shapes ride through `.passthrough()`; they are deliberately not typed until a
+	// consumer reads them.
+	test("accepts a bare verified mapping and a verified list (OKF §11)", () => {
+		expect(() =>
+			RunbookFrontmatterSchema.parse({ type: "Runbook", verified: { by: "human:simon", at: "2026-07-29" } }),
+		).not.toThrow();
+		expect(() =>
+			RunbookFrontmatterSchema.parse({ type: "Runbook", verified: [{ by: "human:simon", at: "2026-07-29" }] }),
+		).not.toThrow();
+	});
+
+	test("accepts generated and sources provenance blocks", () => {
+		const input = {
+			type: "Runbook",
+			generated: { by: "human:simon", at: "2026-07-29" },
+			sources: [{ resource: "https://example.invalid/x", usage_count: 3 }],
+		};
+		expect(() => RunbookFrontmatterSchema.parse(input)).not.toThrow();
+	});
+
+	test("type and triggers coexist -- triggers survives as a producer extension (SIO-640)", () => {
+		const parsed = RunbookFrontmatterSchema.parse({
+			type: "Runbook",
+			status: "stable",
+			triggers: { severity: ["high"], match: "any" },
+		});
+		expect(parsed.triggers).toEqual({ severity: ["high"], match: "any" });
 	});
 });
 
@@ -934,9 +1006,20 @@ describe("parseRunbookFrontmatter", () => {
 		expect(() => parseRunbookFrontmatter(input)).toThrow();
 	});
 
-	test("9. unknown top-level frontmatter key", () => {
-		const input = "---\ntags: [kafka]\n---\n";
-		expect(() => parseRunbookFrontmatter(input)).toThrow();
+	// SIO-1282: this previously asserted a throw. Frontmatter carrying only non-`triggers`
+	// keys is exactly the OKF concept shape, so it must now parse -- with `triggers`
+	// undefined, which narrowCatalogByTriggers already handles by keeping the runbook.
+	test("9. non-triggers frontmatter keys now parse (OKF concept shape)", () => {
+		const result = parseRunbookFrontmatter("---\ntags: [kafka]\n---\n# Body");
+		expect(result.triggers).toBeUndefined();
+		expect(result.body).toBe("# Body");
+	});
+
+	test("9b. a full OKF frontmatter block parses and keeps triggers", () => {
+		const input = "---\ntype: Runbook\nstatus: stable\ntriggers:\n  severity: [high]\n---\n# Body";
+		const result = parseRunbookFrontmatter(input);
+		expect(result.triggers).toEqual({ severity: ["high"] });
+		expect(result.body).toBe("# Body");
 	});
 
 	test("10. missing closing ---", () => {
