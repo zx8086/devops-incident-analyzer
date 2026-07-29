@@ -751,6 +751,109 @@ describe("SIO-1268: complete-ECS-enumeration absence early exit", () => {
 		expect(awsEcsAbsenceProven(state)).toBe(true);
 	});
 
+	// SIO-1272: the run-wide backstop pre-empted the exit. On run eaebc62b
+	// aws_ecs_list_clusters was stopped with reason "unproductive-streak" after only TWO calls
+	// -- far below MAX_UNPRODUCTIVE_PER_TOOL -- because OTHER tools had spent the run-wide
+	// budget. That stop latches awsEcs.failed, so the exit was not delayed but destroyed.
+	describe("SIO-1272: the counter-driven caps do not bind ECS enumeration", () => {
+		// Mirrors the L319 permuter test: four unrelated tools x2 empties = 8, the run-wide cap.
+		function exhaustRunWideBudget(state: LoopGuardState) {
+			for (const tool of [
+				"gitlab_search",
+				"gitlab_list_commits",
+				"gitlab_get_repository_tree",
+				"gitlab_blast_radius",
+			]) {
+				for (let i = 1; i <= 2; i++) {
+					recordResult(state, tool, toolCallSignature(tool, { q: `${tool}-${i}` }), "[]");
+				}
+			}
+			return state;
+		}
+
+		test("an ECS list is NOT blocked by totalUnproductive raised by other tools", () => {
+			const state = exhaustRunWideBudget(enabledState());
+			// Anti-vacuity: the backstop really is armed.
+			expect(state.totalUnproductive).toBeGreaterThanOrEqual(8);
+			expect(shouldShortCircuit(state, "aws_ecs_list_clusters", toolCallSignature("aws_ecs_list_clusters", {}))).toBe(
+				false,
+			);
+			expect(
+				shouldShortCircuit(
+					state,
+					"aws_ecs_list_services",
+					toolCallSignature("aws_ecs_list_services", { cluster: "shared-a" }),
+				),
+			).toBe(false);
+		});
+
+		// THE REGRESSION GUARD. The obvious fix -- adding these tools to
+		// GENERIC_GUARD_EXEMPT_TOOLS -- would return false at that check, which runs FIRST and
+		// unconditionally, bypassing the absence block and silently disabling SIO-1268 entirely.
+		test("a proven absence STILL blocks an ECS list call", () => {
+			const state = enabledState();
+			walkCleanEstate(state);
+			expect(awsEcsAbsenceProven(state)).toBe(true);
+			expect(
+				shouldShortCircuit(state, "aws_ecs_list_clusters", toolCallSignature("aws_ecs_list_clusters", { fresh: 1 })),
+			).toBe(true);
+			expect(
+				shouldShortCircuit(
+					state,
+					"aws_ecs_list_services",
+					toolCallSignature("aws_ecs_list_services", { cluster: "fresh" }),
+				),
+			).toBe(true);
+		});
+
+		test("an exact-duplicate ECS list is still stopped", () => {
+			const state = enabledState();
+			const sig = toolCallSignature("aws_ecs_list_services", { cluster: "shared-a" });
+			reserveSignature(state, "aws_ecs_list_services", sig);
+			expect(shouldShortCircuit(state, "aws_ecs_list_services", sig)).toBe(true);
+		});
+
+		// The live scenario end to end: a busy estate must still reach the exit.
+		test("a spent run-wide budget no longer destroys the exit mid-enumeration", () => {
+			const state = exhaustRunWideBudget(enabledState());
+			const calls: Array<[string, unknown]> = [
+				["aws_ecs_list_clusters", {}],
+				["aws_ecs_list_services", { cluster: CLUSTER_ARN("shared-a") }],
+				["aws_ecs_list_services", { cluster: "shared-b" }],
+			];
+			for (const [tool, args] of calls) {
+				expect(shouldShortCircuit(state, tool, toolCallSignature(tool, args), args)).toBe(false);
+			}
+			walkCleanEstate(state);
+			expect(state.awsEcs.failed).toBe(false);
+			expect(awsEcsAbsenceProven(state)).toBe(true);
+		});
+
+		// Scope pin: only the two LEDGER tools are exempt. The consumers of the conclusion can
+		// genuinely return unproductive results and keep the backstop.
+		test("a non-ledger ECS tool is STILL bound by the run-wide backstop", () => {
+			const state = exhaustRunWideBudget(enabledState());
+			for (const tool of ["aws_ecs_describe_services", "aws_ecs_list_tasks", "aws_ecs_describe_tasks"]) {
+				expect(shouldShortCircuit(state, tool, toolCallSignature(tool, { fresh: tool }))).toBe(true);
+			}
+		});
+
+		// The per-tool cap is a no-op for these tools today (empty ECS lists are classified
+		// PRODUCTIVE on purpose), but the exemption makes that invariant explicit rather than
+		// leaving the exit one classifier change away from breaking.
+		test("an ECS list is not blocked by the per-tool unproductive cap either", () => {
+			const state = enabledState();
+			state.unproductiveByTool.set("aws_ecs_list_services", 99);
+			expect(
+				shouldShortCircuit(
+					state,
+					"aws_ecs_list_services",
+					toolCallSignature("aws_ecs_list_services", { cluster: "x" }),
+				),
+			).toBe(false);
+		});
+	});
+
 	test("cluster ARNs and short cluster names key the SAME cluster", () => {
 		// list_clusters returns ARNs; the `cluster` arg may be either form ("Short name or full
 		// ARN"). Without last-segment normalization servicesComplete never intersects clusters and

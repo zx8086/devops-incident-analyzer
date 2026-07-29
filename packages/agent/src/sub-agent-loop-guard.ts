@@ -99,6 +99,31 @@ const GENERIC_GUARD_EXEMPT_TOOLS = new Set<string>([AWS_GET_QUERY_RESULTS, AWS_D
 const AWS_ECS_LIST_CLUSTERS = "aws_ecs_list_clusters";
 const AWS_ECS_LIST_SERVICES = "aws_ecs_list_services";
 
+// SIO-1272: the two ECS ENUMERATION tools are exempt from the COUNTER-driven generic rules --
+// the per-tool cap and the run-wide backstop -- but NOT from the absence block or the duplicate
+// check.
+//
+// This is the same incoherence PR #482 identified for the CloudWatch protocol pair above: neither
+// of these tools can CONTRIBUTE to totalUnproductive, because an empty {"serviceArns":[]} is
+// classified PRODUCTIVE and must stay so (see recordResult below) -- so being blocked BY a counter
+// they cannot raise is incoherent, and the trigger is always ANOTHER tool's runaway.
+//
+// Worse than incoherent here, it is self-amplifying. A backstop stop on an ECS list latches
+// awsEcs.failed (sub-agent-instrumentation.ts), and awsEcsAbsenceProven returns false forever once
+// failed is set -- so the SIO-1268 exit is not merely delayed but PERMANENTLY destroyed for that
+// estate, and the agent keeps hunting, raising totalUnproductive further. Observed live on run
+// eaebc62b: aws_ecs_list_clusters stopped with reason "unproductive-streak" and
+// unproductiveSearches 0 at iteration 16, after only 2 calls -- far below MAX_UNPRODUCTIVE_PER_TOOL.
+//
+// Deliberately NOT added to GENERIC_GUARD_EXEMPT_TOOLS: that set is checked FIRST in
+// shouldShortCircuit and returns false unconditionally, which would also bypass the SIO-1268
+// absence block below and regress the very exit this exists to protect.
+//
+// Scope is exactly the two LEDGER tools. Only these feed awsEcsAbsenceProven and only these latch
+// `failed`; the other AWS_ABSENCE_BLOCKED_TOOLS members consume the conclusion rather than produce
+// it, can genuinely return unproductive results, and keep the backstop.
+const RUN_BACKSTOP_EXEMPT_TOOLS = new Set<string>([AWS_ECS_LIST_CLUSTERS, AWS_ECS_LIST_SERVICES]);
+
 // SIO-1268: the tools that constitute the FOCUS-SERVICE hunt. Once a COMPLETE, clean ECS
 // enumeration of this estate has shown the focus service is not deployed here, continuing down
 // this chain can only re-confirm a negative. On run 2445908e the estate WITHOUT the service spent
@@ -673,6 +698,11 @@ export function shouldShortCircuit(state: LoopGuardState, toolName: string, sign
 		// duplicate/streak rules because the absence conclusion supersedes them.
 		if (AWS_ABSENCE_BLOCKED_TOOLS.has(toolName) && awsEcsAbsenceProven(state)) return true;
 		if (state.seenSignatures.has(signature)) return true;
+		// SIO-1272: the two counter-driven caps do not bind the ECS enumeration tools -- they
+		// cannot raise either counter, and a stop here permanently destroys the SIO-1268 exit.
+		// Placed AFTER the absence block and the duplicate check above so both still bind them:
+		// a proven absence must still stop the hunt, and an exact-duplicate list is still waste.
+		if (RUN_BACKSTOP_EXEMPT_TOOLS.has(toolName)) return false;
 		if ((state.unproductiveByTool.get(toolName) ?? 0) >= MAX_UNPRODUCTIVE_PER_TOOL) return true;
 		return state.totalUnproductive >= MAX_UNPRODUCTIVE_PER_RUN;
 	}
@@ -763,6 +793,12 @@ export function recordResult(
 	// Elastic-shaped hits.hits), and that MUST stay true: if empty ECS lists began counting,
 	// MAX_UNPRODUCTIVE_PER_TOOL=3 would block list_services on cluster 4 of 7 and complete
 	// enumeration -- the precondition of this whole exit -- would become unreachable.
+	//
+	// SIO-1272 depends on this staying true: RUN_BACKSTOP_EXEMPT_TOOLS exempts these tools from
+	// the counter-driven caps on the grounds that they cannot RAISE those counters. If a future
+	// change makes empty ECS lists unproductive, that exemption must be revisited in the same
+	// commit -- otherwise they would contribute to a counter they are immune to, which is the
+	// mirror image of the incoherence PR #482 fixed.
 	observeEcsListResult(state, toolName, content, arg);
 
 	// SIO-1232: generic accounting for every tool without a bespoke ruleset. gitlab_search

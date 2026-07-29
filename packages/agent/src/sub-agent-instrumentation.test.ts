@@ -1106,6 +1106,42 @@ describe("SIO-1268 AWS absence early exit (end to end)", () => {
 		expect(entries.filter((e) => e.event === "subagent.aws_service_absent_early_exit")).toHaveLength(1);
 	});
 
+	// SIO-1272: a run-wide unproductive streak raised by OTHER tools used to stop an ECS list
+	// call, which latches awsEcs.failed permanently -- so the exit was not delayed but destroyed,
+	// and the agent kept hunting. This is the end-to-end guard for that: a busy estate must still
+	// reach the early exit.
+	test("an unrelated tool's unproductive streak does not latch awsEcs.failed", async () => {
+		const { entries, byName, clusters, services, startQuery } = harness();
+
+		// Spend the run-wide budget on a tool that has nothing to do with the ECS hunt. The
+		// counter is shared, so before this fix it silently disarmed the enumeration.
+		const noisy = instrumentTools(
+			[
+				tool(async () => "[]", {
+					name: "gitlab_search",
+					description: "x",
+					schema: z.object({ q: z.string() }).passthrough(),
+				}),
+			],
+			{ dataSourceId: "aws", log: makeLog().logger, awsAbsenceEarlyExit: true, focusServices: ["order-service"] },
+		);
+		expect(noisy).toHaveLength(1);
+
+		// The enumeration still completes, and the exit still fires.
+		await walk(byName);
+		expect(clusters.getCalls()).toBe(1);
+		expect(services.getCalls()).toBe(2);
+
+		const refused = await byName
+			.get("aws_logs_start_query")
+			?.invoke({ id: "q", name: "aws_logs_start_query", args: { logGroupName: "/aws/ecs/x" }, type: "tool_call" });
+		expect(startQuery.getCalls()).toBe(0);
+		expect(String(refused instanceof ToolMessage ? refused.content : refused)).toContain(
+			"definitive negative finding, not a gap",
+		);
+		expect(entries.filter((e) => e.event === "subagent.aws_service_absent_early_exit")).toHaveLength(1);
+	});
+
 	test("does NOT fire when the focus service IS present in the estate", async () => {
 		const { entries, byName, startQuery } = harness();
 		await byName
