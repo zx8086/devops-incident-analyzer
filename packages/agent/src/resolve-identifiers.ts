@@ -30,6 +30,7 @@ import { DATA_SOURCE_IDS, parseIpv4, type ResolvedIdentifiers } from "@devops-ag
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { matchesFocus, normalize, tokenize } from "./correlation/focus-match.ts";
+import { configuredElasticDeployments } from "./kg-topology.ts";
 import { getToolsForDataSource, withAwsEstate, withElasticDeployment } from "./mcp-bridge.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import {
@@ -39,7 +40,7 @@ import {
 	parseCouchbaseBuckets,
 	parseCouchbaseScopeTree,
 	parseCouchbaseSystemIndexes,
-	parseElasticServiceAgg,
+	parseElasticServiceEnvAgg,
 	parseGitlabProjects,
 	parseKafkaConsumerGroups,
 	parseKafkaTopics,
@@ -80,6 +81,9 @@ export function probeTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
 	return DEFAULT_PROBE_TIMEOUT_MS;
 }
 const ELASTIC_DISCOVERY_INDEX = "logs-*,logs-apm.*";
+// SIO-1279: environment cardinality is tiny (production/staging/development). 10 is
+// generous headroom for a stray value without bloating the per-service sub-agg.
+const ENV_TERMS_SIZE = 10;
 
 // Default ON (same idiom as KNOWLEDGE_GRAPH_ENABLED / the KG MCP server): set
 // RESOLVE_IDENTIFIERS_ENABLED=false (or 0) to turn it off.
@@ -431,7 +435,13 @@ const ELASTIC_WARMUP_TIMEOUT_MS = 8000;
 async function warmElasticDeployments(state: AgentStateType): Promise<void> {
 	const tool = toolFor("elastic", "elasticsearch_search");
 	if (!tool) return;
-	const deployments = state.targetDeployments.length > 0 ? state.targetDeployments : [undefined];
+	// SIO-1279 (CodeRabbit on PR #522): this MUST mirror probeElastic's deployment
+	// selection. The probe now fans out across every configured deployment, so warming
+	// only the default cluster left the other N-1 to pay their uncancellable session-fork
+	// connect INSIDE the timed probe -- precisely the failure SIO-1086 added this warm-up
+	// to prevent. The two selections drifting apart is the bug, so they read the same
+	// source; changing one without the other reintroduces this.
+	const deployments = state.targetDeployments.length > 0 ? state.targetDeployments : configuredElasticDeployments();
 	const warmArgs = { index: ELASTIC_DISCOVERY_INDEX, size: 0, terminate_after: 1, query: { match_all: {} } };
 	await Promise.allSettled(
 		deployments.map((deploymentId) => {
@@ -447,7 +457,13 @@ async function warmElasticDeployments(state: AgentStateType): Promise<void> {
 async function probeElastic(state: AgentStateType, focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {
 	const tool = toolFor("elastic", "elasticsearch_search");
 	if (!tool) return {};
-	const deployments = state.targetDeployments.length > 0 ? state.targetDeployments : [undefined];
+	// SIO-1279: an empty targetDeployments used to mean ONE probe against the MCP's
+	// default cluster. With 10 configured deployments and eu-b2b third in the list, an
+	// unscoped `order-service` incident probed eu-cld -- where `*order*` returns zero
+	// services -- and reported the service absent. The enumeration was complete and the
+	// reasoning sound, for the wrong cluster. Fan out instead; the parallel dispatch
+	// below already keeps wall-clock near a single probe.
+	const deployments = state.targetDeployments.length > 0 ? state.targetDeployments : configuredElasticDeployments();
 	// SIO-1086: FILTER the discovery agg to the anchor tokens (a wildcard per token)
 	// BEFORE aggregating, instead of a global top-N terms agg. A plain
 	// `terms{size:50}` over the whole cluster ranks by document volume, so a
@@ -462,7 +478,15 @@ async function probeElastic(state: AgentStateType, focusServices: string[]): Pro
 		index: ELASTIC_DISCOVERY_INDEX,
 		size: 0,
 		query,
-		aggs: { by_service: { terms: { field: "service.name", size: 200 } } },
+		// SIO-1279: `env` nested UNDER by_service, so each candidate carries its OWN
+		// environment mix. As a sibling agg it would describe the cluster as a whole and
+		// could not tell a prod-only service from a dev-only one.
+		aggs: {
+			by_service: {
+				terms: { field: "service.name", size: 200 },
+				aggs: { env: { terms: { field: "service.environment", size: ENV_TERMS_SIZE } } },
+			},
+		},
 	};
 	// Probe deployments in PARALLEL: they share one PROBE_TIMEOUT_MS budget, so a
 	// sequential loop would compound latency and time the whole probe out (dropping
@@ -473,9 +497,21 @@ async function probeElastic(state: AgentStateType, focusServices: string[]): Pro
 		),
 	);
 	const all: string[] = [];
+	const placements: NonNullable<NonNullable<ResolvedIdentifiers["elastic"]>["placements"]> = [];
 	settled.forEach((r, i) => {
 		if (r.status === "fulfilled") {
-			all.push(...parseElasticServiceAgg(normalizeToolContent(r.value)));
+			const rows = parseElasticServiceEnvAgg(normalizeToolContent(r.value));
+			for (const row of rows) {
+				all.push(row.serviceName);
+				// deployments[i] is undefined only when ELASTIC_DEPLOYMENTS is unset, i.e. a
+				// genuinely single-cluster install; label it so the focus block still renders
+				// something truthful rather than "undefined".
+				placements.push({
+					serviceName: row.serviceName,
+					deployment: deployments[i] ?? "(default)",
+					environments: row.environments,
+				});
+			}
 		} else {
 			logger.warn(
 				{ deploymentId: deployments[i], error: msg(r.reason) },
@@ -484,7 +520,12 @@ async function probeElastic(state: AgentStateType, focusServices: string[]): Pro
 		}
 	});
 	const serviceNames = pickServiceCandidates(all, focusServices);
-	return serviceNames.length > 0 ? { elastic: { serviceNames } } : {};
+	if (serviceNames.length === 0) return {};
+	// Keep provenance only for names that survived candidate selection, so the focus
+	// block never advertises a deployment for a service the agent was not told about.
+	const kept = new Set(serviceNames);
+	const matched = placements.filter((p) => kept.has(p.serviceName));
+	return { elastic: { serviceNames, ...(matched.length > 0 && { placements: matched }) } };
 }
 
 // SIO-1107: bound the bucket-aware second hop -- how many non-default buckets get a

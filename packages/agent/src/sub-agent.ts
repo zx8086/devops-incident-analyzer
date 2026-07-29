@@ -129,6 +129,37 @@ export function shouldReserveFinalTurn(llmTurns: number, recursionLimit: number)
 	return recursionLimit - stepsConsumed <= FINAL_TURN_RESERVE_STEPS;
 }
 
+// SIO-1279: which elastic deployments this turn fans out across, in precedence order.
+//
+// The bug this closes: the final branch used to be `state.targetDeployments` alone, so an
+// unscoped turn produced an EMPTY list, queryDataSource took its `deployments.length === 0`
+// path, and the sub-agent queried whichever cluster the MCP defaults to. With eu-b2b third
+// in ELASTIC_DEPLOYMENTS, an `order-service` incident was answered from eu-cld -- which
+// holds none of its documents. resolveIdentifiers had already found the service in eu-b2b;
+// nothing carried that into execution.
+//
+// Precedence:
+//   1. retryDeployments  -- SIO-697, only the ones that failed the first attempt
+//   2. targetDeployments -- an explicit caller/UI selection always wins
+//   3. probe placements  -- where the focus service was actually FOUND this turn
+//
+// (3) is deliberately NOT "every configured deployment": only clusters a candidate was
+// seen in, so a 10-cluster estate runs one or two branches rather than ten. "(default)"
+// is the probe's label for an unset ELASTIC_DEPLOYMENTS (single-cluster install) and must
+// never be passed as a real deployment header -- it would 404 as an unknown deployment id.
+export function selectElasticDeployments(opts: {
+	dataSourceId: string;
+	isRetry: boolean;
+	retryDeployments: string[];
+	targetDeployments: string[];
+	placements?: Array<{ deployment: string }>;
+}): string[] {
+	if (opts.dataSourceId !== "elastic") return [];
+	if (opts.isRetry && opts.retryDeployments.length > 0) return opts.retryDeployments;
+	if (opts.targetDeployments.length > 0) return opts.targetDeployments;
+	return [...new Set((opts.placements ?? []).map((p) => p.deployment).filter((d) => d !== "" && d !== "(default)"))];
+}
+
 export function buildSubAgentOutcome(opts: {
 	recovered: { text: string; index: number } | null;
 	allToolsFailed: boolean;
@@ -1946,12 +1977,15 @@ export async function queryDataSource(
 	// is the pre-SIO-649 behavior.
 	// SIO-697: an alignment retry uses retryDeployments (only the deployments that failed on
 	// the first attempt), so we don't re-run siblings that already succeeded.
-	const deployments =
-		dataSourceId === "elastic"
-			? isRetry && state.retryDeployments.length > 0
-				? state.retryDeployments
-				: state.targetDeployments
-			: [];
+	// SIO-1279: see selectElasticDeployments -- extracted so the precedence is directly
+	// unit-testable (queryDataSource itself needs the whole MCP layer mocked).
+	const deployments = selectElasticDeployments({
+		dataSourceId,
+		isRetry,
+		retryDeployments: state.retryDeployments,
+		targetDeployments: state.targetDeployments,
+		placements: state.resolvedIdentifiers?.elastic?.placements,
+	});
 
 	// SIO-828: AWS fan-out is by estate, populated by awsEstateRouter. Mirrors the
 	// elastic pattern but uses tool-arg injection (withAwsEstate ALS) instead of

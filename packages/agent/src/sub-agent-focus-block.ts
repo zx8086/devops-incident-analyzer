@@ -73,6 +73,32 @@ function renderDatasourceLines(resolved: ResolvedIdentifiers, dataSourceId: stri
 		case "elastic":
 			if (resolved.elastic?.serviceNames.length) {
 				lines.push(`- Elastic service.name candidates: ${resolved.elastic.serviceNames.join(", ")}`);
+				// SIO-1279: WHERE each candidate was found. Without this the sub-agent cannot
+				// satisfy its own SOUL.md rule that `deployment` is MANDATORY -- there are 10
+				// configured clusters and nothing else tells it which one holds the service.
+				//
+				// Environments matter as much as the cluster: every deployment carries dev, stg
+				// AND prd traffic, so an unqualified query mixes them. Measured 2026-07-29:
+				// prana-order-service in eu-b2b is ~32% development over 24h. Correlating a
+				// production GitLab deploy against development Elastic errors is a silently wrong
+				// conclusion, so the environment must be held consistent across every datasource.
+				for (const placement of resolved.elastic.placements ?? []) {
+					const envs =
+						placement.environments.length > 0 ? placement.environments.join(", ") : "no service.environment field";
+					lines.push(
+						`  - \`${placement.serviceName}\` is in deployment \`${placement.deployment}\` (environments: ${envs})`,
+					);
+				}
+				if (resolved.elastic.placements?.length) {
+					lines.push(
+						"  Pass that `deployment` on EVERY elastic call -- an unscoped query hits the default " +
+							"cluster, which may not hold this service at all. Filter `service.environment` to the " +
+							"environment the incident is about (production unless stated otherwise) and keep it " +
+							"consistent with the environment the other datasources report, so a production symptom " +
+							"is never explained by a dev/staging document. If a candidate lists no " +
+							"`service.environment`, say so rather than assuming production.",
+					);
+				}
 				// SIO-1090: hand the agent the WORKING broad query shape so it finds the data in
 				// one call instead of thrashing. The incident message can live in generic app logs
 				// (`message`), APM app logs, OR APM error logs (`error.exception.message`) -- searching

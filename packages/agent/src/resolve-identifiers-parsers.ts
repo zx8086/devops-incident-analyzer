@@ -30,6 +30,49 @@ export function parseElasticServiceAgg(normalized: string): string[] {
 	return dedupe(keys);
 }
 
+// SIO-1279: the nested discovery shape -- `by_service` buckets each carrying an `env`
+// sub-aggregation. parseElasticServiceAgg CANNOT be reused: collectBucketKeys recurses
+// into every nested agg and flattens all keys together, so environment values
+// ("production", "staging") would come back as if they were service names. Read the
+// structure explicitly instead.
+export interface ElasticServicePlacement {
+	serviceName: string;
+	// Descending by doc_count, as returned. Empty when the source carries no
+	// service.environment field at all (Kong gateway rows, k8s container logs) -- that
+	// absence is meaningful and must not be conflated with "unknown".
+	environments: string[];
+}
+
+export function parseElasticServiceEnvAgg(normalized: string): ElasticServicePlacement[] {
+	const parsed = firstJson(normalized);
+	if (!parsed || typeof parsed !== "object") return [];
+	const root = parsed as Record<string, unknown>;
+	const aggsNode = root.aggregations ?? root;
+	if (!aggsNode || typeof aggsNode !== "object") return [];
+	const byService = (aggsNode as Record<string, unknown>).by_service;
+	if (!byService || typeof byService !== "object") return [];
+	const buckets = (byService as Record<string, unknown>).buckets;
+	if (!Array.isArray(buckets)) return [];
+
+	const out: ElasticServicePlacement[] = [];
+	for (const bucket of buckets) {
+		if (!bucket || typeof bucket !== "object") continue;
+		const rec = bucket as Record<string, unknown>;
+		if (typeof rec.key !== "string" || rec.key === "") continue;
+		const envAgg = rec.env;
+		const envBuckets = envAgg && typeof envAgg === "object" ? (envAgg as Record<string, unknown>).buckets : undefined;
+		const environments: string[] = [];
+		if (Array.isArray(envBuckets)) {
+			for (const e of envBuckets) {
+				const key = e && typeof e === "object" ? (e as Record<string, unknown>).key : undefined;
+				if (typeof key === "string" && key !== "") environments.push(key);
+			}
+		}
+		out.push({ serviceName: rec.key, environments });
+	}
+	return out;
+}
+
 function collectBucketKeys(node: Record<string, unknown>): string[] {
 	const out: string[] = [];
 	for (const value of Object.values(node)) {
