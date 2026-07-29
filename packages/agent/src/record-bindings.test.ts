@@ -80,9 +80,12 @@ describe("deriveConfirmedBindings elastic deployment locator (SIO-1276)", () => 
 				},
 			} as unknown as Partial<AgentStateType>),
 		);
-		expect(recs).toContainEqual(
-			expect.objectContaining({ datasource: "elastic", resourceId: "orders-api", locator: "eu-b2b" }),
-		);
+		// EXCLUSIVE over elastic records, not toContainEqual (CodeRabbit on PR #524): a
+		// containment check also passes when an EXTRA elastic record carrying a wrong
+		// locator is emitted alongside the right one.
+		expect(recs.filter((r) => r.datasource === "elastic")).toEqual([
+			expect.objectContaining({ resourceId: "orders-api", locator: "eu-b2b" }),
+		]);
 	});
 
 	// "(default)" is the probe's label for an unset ELASTIC_DEPLOYMENTS. Persisting it
@@ -104,10 +107,10 @@ describe("deriveConfirmedBindings elastic deployment locator (SIO-1276)", () => 
 		);
 		// CodeRabbit on PR #524: `find(...)?.locator ?? ""` is ALSO "" when no elastic record
 		// was emitted at all, so this would pass if the binding were dropped entirely.
-		// Assert the record exists AND has no locator.
-		expect(recs).toContainEqual(
-			expect.objectContaining({ datasource: "elastic", resourceId: "orders-api", locator: "" }),
-		);
+		// Assert the record exists, has no locator, and is the ONLY elastic record.
+		expect(recs.filter((r) => r.datasource === "elastic")).toEqual([
+			expect.objectContaining({ resourceId: "orders-api", locator: "" }),
+		]);
 	});
 
 	// CodeRabbit on PR #524, Major: the comment above says "recording it against the wrong
@@ -131,9 +134,11 @@ describe("deriveConfirmedBindings elastic deployment locator (SIO-1276)", () => 
 				},
 			} as unknown as Partial<AgentStateType>),
 		);
-		expect(recs).toContainEqual(
-			expect.objectContaining({ datasource: "elastic", resourceId: "orders-api", locator: "" }),
-		);
+		// Exclusive: ambiguity must not ALSO emit a second record carrying one of the
+		// candidate locators, which is exactly the arbitrary-pick this test forbids.
+		expect(recs.filter((r) => r.datasource === "elastic")).toEqual([
+			expect.objectContaining({ resourceId: "orders-api", locator: "" }),
+		]);
 	});
 
 	// A single-cluster install labels its placement "(default)". That is filtered BEFORE
@@ -155,9 +160,9 @@ describe("deriveConfirmedBindings elastic deployment locator (SIO-1276)", () => 
 				},
 			} as unknown as Partial<AgentStateType>),
 		);
-		expect(recs).toContainEqual(
-			expect.objectContaining({ datasource: "elastic", resourceId: "orders-api", locator: "eu-b2b" }),
-		);
+		expect(recs.filter((r) => r.datasource === "elastic")).toEqual([
+			expect.objectContaining({ resourceId: "orders-api", locator: "eu-b2b" }),
+		]);
 	});
 
 	// A name with no placement must still be recorded -- just without a locator. Dropping
