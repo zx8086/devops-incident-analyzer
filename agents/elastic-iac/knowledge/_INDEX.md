@@ -89,10 +89,15 @@ procedures — see `docs/development/authoring-skills-and-runbooks.md`.
 - `playbook/7-infrastructure-and-cost.md` §7.2.3 — Raise-then-downsize two-step incident pattern
 - `playbook/8-operational-governance.md` §8.3 — Retention audit process
 
-From incident runbooks:
+From incident runbooks — archived, NOT loaded into the prompt:
 
-- `runbooks/eu-b2b-ilm-oom-incident-recovery.md` (source: `eu-b2b_ILM_OOM_Incident_Runbook_2026-05-15.md` — reusable recovery procedure)
-- `_archive/eu-b2b-ilm-change-apply-runbook.md` (source: `eu-b2b_ILM_Change_Approval_and_Runbook_2026-05-13.docx` — dated approval timeline, archived)
+Both are point-in-time records of the 2026-05-15 eu-b2b ILM incident, not reusable procedure.
+They live in a **subdirectory** of `_archive/` on purpose: `loadKnowledge` reads only `*.md`
+directly under a category path (`manifest-loader.ts:180`, no recursion), so nesting them keeps
+~441 lines out of every elastic-iac turn. `_archive/` itself IS a loaded category.
+
+- `_archive/eu-b2b-ilm/eu-b2b-ilm-oom-incident-recovery.md` (source: `eu-b2b_ILM_OOM_Incident_Runbook_2026-05-15.md`)
+- `_archive/eu-b2b-ilm/eu-b2b-ilm-change-apply-runbook.md` (source: `eu-b2b_ILM_Change_Approval_and_Runbook_2026-05-13.docx`)
 
 ## _archive/
 
