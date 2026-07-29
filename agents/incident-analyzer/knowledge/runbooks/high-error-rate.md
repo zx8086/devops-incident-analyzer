@@ -1,4 +1,12 @@
 ---
+type: Runbook
+title: "High Error Rate Investigation"
+description: "Investigate a spike in application error rate using Elastic APM."
+status: stable
+tags: [elastic, apm, errors]
+generated:
+  by: human:simon
+  at: 2026-07-29
 triggers:
   metrics:
     - error_rate

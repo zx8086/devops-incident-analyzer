@@ -1,4 +1,12 @@
 ---
+type: Runbook
+title: "AWS MSK Broker Unreachable Investigation"
+description: "Investigate MSK brokers that are unreachable or failing health checks."
+status: stable
+tags: [aws, msk, kafka]
+generated:
+  by: human:simon
+  at: 2026-07-29
 triggers:
   metrics:
     - broker-timeout

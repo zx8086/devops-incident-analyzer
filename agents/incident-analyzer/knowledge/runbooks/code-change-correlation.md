@@ -1,4 +1,12 @@
 ---
+type: Runbook
+title: "Code Change Correlation"
+description: "Correlate an incident window with recent GitLab deploys and merge requests."
+status: stable
+tags: [gitlab, deploys, correlation]
+generated:
+  by: human:simon
+  at: 2026-07-29
 triggers:
   metrics:
     - deploy

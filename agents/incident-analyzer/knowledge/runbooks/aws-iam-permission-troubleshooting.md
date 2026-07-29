@@ -1,3 +1,13 @@
+---
+type: Runbook
+title: "AWS IAM Permission Troubleshooting"
+description: "Diagnose AWS AccessDenied errors and identify the missing IAM permission."
+status: stable
+tags: [aws, iam, permissions]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # AWS IAM Permission Troubleshooting
 
 ## When to Use This

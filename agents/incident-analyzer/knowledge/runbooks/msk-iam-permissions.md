@@ -1,3 +1,13 @@
+---
+type: Runbook
+title: "MSK IAM Permissions for Read-Only Introspection"
+description: "Reference for the IAM permissions required for read-only MSK introspection."
+status: stable
+tags: [aws, msk, iam]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # MSK IAM Permissions for Read-Only Introspection
 
 ## When to Use This
