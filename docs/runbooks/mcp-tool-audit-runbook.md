@@ -4,7 +4,14 @@ A repeatable method for auditing any of this repo's MCP servers (elastic, kafka,
 
 Core principle: a tool that "works" in isolation can still be broken in three other places -- the query it builds, the agent's ability to select it, and the way its errors classify. Audit all four layers.
 
-Skill form: `.agents/skills/mcp-tool-audit/SKILL.md` carries this runbook as a condensed checklist in the [Agent Skills](https://agentskills.io) open format (the cross-tool discovery location used by gitlab-org/ai/skills), so GitLab Duo CLI, Zed, Claude Code, and OpenCode-class assistants can load it on demand. It is deliberately NOT listed in `agents/incident-analyzer/agent.yaml` `skills:` -- gitagent renders listed skills into the system prompt on every turn, and this is an operator workflow, not an incident-time skill.
+Two condensed forms of this runbook exist, deliberately (SIO-1278):
+
+- **Cross-tool skill form**: `.agents/skills/mcp-tool-audit/SKILL.md`, in the [Agent Skills](https://agentskills.io) open format (the cross-tool discovery location used by gitlab-org/ai/skills), so GitLab Duo CLI, Zed, Claude Code, and OpenCode-class assistants can load it on demand.
+- **Agent form**: `agents/incident-analyzer/knowledge/runbooks/mcp-tool-audit.md`, so the incident-analyzer orchestrator can reach it.
+
+It remains deliberately NOT listed in `agents/incident-analyzer/agent.yaml` `skills:` -- gitagent renders listed skills into the system prompt on **every** turn, and this is an operator workflow, not an incident-time skill. The runbook lane is the right home instead: `selectRunbooks` (SIO-640) has the LLM pick 0-3 runbooks per turn from the catalog, so this one loads only when the incident is actually about MCP tooling and costs nothing otherwise. Its `triggers.metrics` are tooling signals (`mcp`, `tool_error`, `tool_not_found`, `datasource_unavailable`, `empty_results`), and it is intentionally absent from `runbook_selection.fallback_by_severity` -- an MCP audit is not severity-driven.
+
+When editing the method, update all three files together; the two condensed forms must not drift from this one.
 
 ## Phase 0: Inventory and ground truth
 
