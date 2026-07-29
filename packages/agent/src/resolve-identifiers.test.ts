@@ -336,6 +336,58 @@ describe("resolveIdentifiers node", () => {
 		expect(seen[0]).toMatchObject({ scope: "projects", group_id: "pvhcorp" });
 	});
 
+	// SIO-1261: group-scoping alone did NOT fix this ticket. The term was longestToken(), and
+	// tokenize() runs normalize(), whose SUFFIX_PATTERN strips `-service` -- so `order-service`
+	// searched for `order`. Measured live 2026-07-28 in group pvhcorp: `order` ranks
+	// `pvhcorp/membership-and-loyalty/ddm/microservices/order` FIRST and the correct
+	// `pvhcorp/b2b/oit/order-service` fifth. The no-fallback guard does not save it, because the
+	// wrong repo genuinely passes matchesFocus.
+	test("gitlab probe searches the full service name, not the suffix-stripped token", async () => {
+		const seen: Array<Record<string, unknown>> = [];
+		toolRegistry.gitlab = [
+			{
+				name: "gitlab_search",
+				invoke: async (args: unknown) => {
+					seen.push(args as Record<string, unknown>);
+					return JSON.stringify([]);
+				},
+			},
+		];
+		await resolveIdentifiers(makeState({ targetDataSources: ["gitlab"] }));
+		expect(seen[0]).toMatchObject({ search: "order-service" });
+		expect(seen[0]?.search).not.toBe("order");
+	});
+
+	// The live ranking for `order-service` in group pvhcorp, in order. Rows 2 and 3 are real repos
+	// that BOTH pass matchesFocus, so without an exact-match preference the winner is whatever
+	// GitLab's relevance score happened to put first.
+	test("gitlab probe prefers an exact name match over a fuzzier higher-ranked row", async () => {
+		toolRegistry.gitlab = [
+			{
+				name: "gitlab_search",
+				invoke: async () =>
+					JSON.stringify([
+						{
+							id: 41051854,
+							name: "orders-service-legacy",
+							path_with_namespace: "pvhcorp/b2b/oit/orders-service-legacy",
+						},
+						{
+							id: 80424402,
+							name: "pvh-ecomm-order-services",
+							path_with_namespace: "pvhcorp/nara/pvh-ecomm-order-services",
+						},
+						{ id: 48543975, name: "order-service", path_with_namespace: "pvhcorp/b2b/oit/order-service" },
+					]),
+			},
+		];
+		const result = await resolveIdentifiers(makeState({ targetDataSources: ["gitlab"] }));
+		expect(result.resolvedIdentifiers?.gitlab).toEqual({
+			projectId: "48543975",
+			pathWithNamespace: "pvhcorp/b2b/oit/order-service",
+		});
+	});
+
 	// SIO-1261: the old code fell back to `rows[0]` when nothing matched the focus, so a global
 	// search returning an unrelated repo made THAT repo authoritative. Returning nothing is the
 	// correct outcome -- the sub-agent's own STEP 1 then resolves it with the full skill logic.

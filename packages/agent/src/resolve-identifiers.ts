@@ -34,6 +34,7 @@ import { getToolsForDataSource, withAwsEstate, withElasticDeployment } from "./m
 import { extractTextFromContent } from "./message-utils.ts";
 import {
 	type CouchbaseIndexMap,
+	type GitlabProject,
 	parseAwsLogGroups,
 	parseCouchbaseBuckets,
 	parseCouchbaseScopeTree,
@@ -684,7 +685,15 @@ export function getGitlabResolutionGroup(env: NodeJS.ProcessEnv = process.env): 
 async function probeGitlab(focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {
 	const tool = toolFor("gitlab", "gitlab_search");
 	if (!tool) return {};
-	const term = longestToken(focusServices) ?? focusServices[0];
+	// SIO-1261: search the FULL service name, NOT longestToken. tokenize() runs normalize(), whose
+	// SUFFIX_PATTERN strips a trailing `-service`, so `order-service` collapsed to the token `order`
+	// and that is what the probe searched for. Measured live 2026-07-28 against gitlab.com, group
+	// pvhcorp: `order` ranks `pvhcorp/membership-and-loyalty/ddm/microservices/order` FIRST and
+	// `pvhcorp/b2b/oit/order-service` fifth, while `order-service` ranks the correct repo first.
+	// Group-scoping alone therefore did NOT fix this ticket -- it only changed which wrong repo was
+	// adopted, and the no-fallback guard below does not fire because the wrong repo DOES pass
+	// matchesFocus (`order` is a token of both).
+	const term = longestServiceName(focusServices);
 	if (!term) return {};
 	// SIO-1261: GROUP-SCOPED, not global. project-resolution/SKILL.md is categorical -- "Use
 	// group-scoped search, never global search -- global project search returns unrelated public
@@ -706,7 +715,15 @@ async function probeGitlab(focusServices: string[]): Promise<Partial<ResolvedIde
 	// sub-agent's own STEP 1 then resolves it with the full skill logic -- group scope,
 	// path-vs-numeric handling, and an honest STOP when nothing resolves. An unresolved probe is a
 	// normal, handled outcome; a confidently wrong one is not.
-	const match = rows.find((r) => matchesFocus(r.pathWithNamespace ?? r.name ?? "", focusServices));
+	//
+	// SIO-1261: prefer an EXACT name/leaf-path hit over mere focus-match, and only then fall back to
+	// relevance order. matchesFocus is deliberately fuzzy, so for `order-service` it also accepts
+	// `orders-service-legacy` and `pvh-ecomm-order-services` -- both real pvhcorp repos, both
+	// returned by the live search above. Without this, which one wins is whatever GitLab ranked
+	// first, i.e. the correct answer is load-bearing on a relevance score we do not control.
+	const match =
+		rows.find((r) => isExactServiceMatch(r, focusServices)) ??
+		rows.find((r) => matchesFocus(r.pathWithNamespace ?? r.name ?? "", focusServices));
 	if (!match) return {};
 	return { gitlab: { projectId: match.id, pathWithNamespace: match.pathWithNamespace } };
 }
@@ -714,6 +731,24 @@ async function probeGitlab(focusServices: string[]): Promise<Partial<ResolvedIde
 function longestToken(focusServices: string[]): string | undefined {
 	const tokens = focusServices.flatMap((s) => [...tokenize(s)]);
 	return tokens.sort((a, b) => b.length - a.length)[0];
+}
+
+// SIO-1261: an exact hit on the project's own name or the LEAF of path_with_namespace, compared
+// case-insensitively and raw. Deliberately NOT normalize()d: normalize strips `-service`, which
+// would make `order-service` and the bare `order` repo compare equal and reintroduce the very
+// ambiguity this exists to break.
+function isExactServiceMatch(row: GitlabProject, focusServices: string[]): boolean {
+	const leaf = row.pathWithNamespace?.split("/").pop();
+	const candidates = [row.name, leaf].filter((v): v is string => typeof v === "string" && v !== "");
+	return candidates.some((c) => focusServices.some((s) => c.toLowerCase() === s.trim().toLowerCase()));
+}
+
+// SIO-1261: the WHOLE focus service, untokenized -- the shape project-resolution/SKILL.md's own
+// worked example searches (`gitlab_search(group_id: "pvhcorp", search: "customer-assignments")`).
+// Longest wins for the same reason longestToken picks the longest token: it is the most specific
+// anchor when a focus carries several services.
+function longestServiceName(focusServices: string[]): string | undefined {
+	return [...focusServices].filter((s) => s.trim() !== "").sort((a, b) => b.length - a.length)[0];
 }
 
 // SIO-1086: build a `wildcard` clause per anchor token so the elastic discovery agg
