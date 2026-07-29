@@ -440,6 +440,42 @@ describe("resolveIdentifiers node", () => {
 		}
 	});
 
+	// SIO-1279 (CodeRabbit on PR #522): warmElasticDeployments must select the SAME
+	// deployments as probeElastic. Warming only the default cluster left the other N-1 to
+	// pay their uncancellable session-fork connect inside the timed probe -- the exact
+	// failure SIO-1086 added the warm-up to prevent. Observed as a 117s elastic sub-agent
+	// on the first fan-out run. Pin the two together so they cannot drift again.
+	test("warm-up covers every deployment the probe will query", async () => {
+		const warmed: string[] = [];
+		const probed: string[] = [];
+		toolRegistry.elastic = [
+			{
+				name: "elasticsearch_search",
+				invoke: async (args: unknown) => {
+					const dep = realBridge.currentElasticDeploymentForTest() ?? "(default)";
+					// The warm-up is the terminate_after:1 match_all; everything else is the probe.
+					const isWarm = JSON.stringify(args ?? {}).includes("terminate_after");
+					(isWarm ? warmed : probed).push(dep);
+					return elasticAggPayload([]);
+				},
+			},
+		];
+		const prev = process.env.ELASTIC_DEPLOYMENTS;
+		process.env.ELASTIC_DEPLOYMENTS = "eu-cld,us-cld,eu-b2b";
+		try {
+			await resolveIdentifiers(makeState({ targetDataSources: ["elastic"] }));
+		} finally {
+			if (prev === undefined) delete process.env.ELASTIC_DEPLOYMENTS;
+			else process.env.ELASTIC_DEPLOYMENTS = prev;
+		}
+		for (const dep of new Set(probed)) {
+			expect(
+				warmed,
+				`probe queried ${dep} but the warm-up never established its session -- that connect is paid inside PROBE_TIMEOUT_MS`,
+			).toContain(dep);
+		}
+	});
+
 	// SIO-1279: every deployment carries dev/stg/prd traffic, so the sub-agent needs the
 	// environment mix per candidate -- a prod symptom explained by a dev document is a
 	// silently wrong conclusion.

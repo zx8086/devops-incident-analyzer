@@ -435,7 +435,13 @@ const ELASTIC_WARMUP_TIMEOUT_MS = 8000;
 async function warmElasticDeployments(state: AgentStateType): Promise<void> {
 	const tool = toolFor("elastic", "elasticsearch_search");
 	if (!tool) return;
-	const deployments = state.targetDeployments.length > 0 ? state.targetDeployments : [undefined];
+	// SIO-1279 (CodeRabbit on PR #522): this MUST mirror probeElastic's deployment
+	// selection. The probe now fans out across every configured deployment, so warming
+	// only the default cluster left the other N-1 to pay their uncancellable session-fork
+	// connect INSIDE the timed probe -- precisely the failure SIO-1086 added this warm-up
+	// to prevent. The two selections drifting apart is the bug, so they read the same
+	// source; changing one without the other reintroduces this.
+	const deployments = state.targetDeployments.length > 0 ? state.targetDeployments : configuredElasticDeployments();
 	const warmArgs = { index: ELASTIC_DISCOVERY_INDEX, size: 0, terminate_after: 1, query: { match_all: {} } };
 	await Promise.allSettled(
 		deployments.map((deploymentId) => {
