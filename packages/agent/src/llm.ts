@@ -267,6 +267,20 @@ function buildChatModel(
 		region: bedrockConfig.region,
 		maxTokens: overrides.maxTokens ?? bedrockConfig.maxTokens,
 		...(bedrockConfig.capabilities.acceptsTemperature ? { temperature } : {}),
+		// SIO-1271: stamp the ROLE on the model instance so a consumer of the LangGraph event
+		// stream can tell the answer-producing call from the utility calls that share its node.
+		// FOUR LLM calls run under langgraph_node "aggregate" -- the aggregator itself plus
+		// gapsJudge and both absenceJudge arms -- so the SSE pump's node-scoped filter forwarded
+		// all four to the browser, appending raw judge JSON after the report body.
+		//
+		// Attached here rather than in invokeWithDeadline for the same reason as the callbacks
+		// above: the model instance covers every path (streaming and createReactAgent included),
+		// whereas that helper covers only 8 call sites and the aggregator does not use it.
+		// LangChain carries these as NON-inheritable locals, so `role` never leaks onto child
+		// runs: base.cjs sets this.tags/this.metadata, chat_models.cjs passes them to
+		// CallbackManager.configure, and event_stream.cjs surfaces them on on_chat_model_stream.
+		tags: [`role:${role}`],
+		metadata: { role },
 		callbacks: [
 			{
 				handleLLMEnd: (output: unknown) => {
