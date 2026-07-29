@@ -11,7 +11,8 @@ triggers:
   metrics:
     - alarm
     - cloudwatch
-    - insufficient
+    - insufficient data
+    - insufficient_data
   services:
     - cloudwatch
   match: any

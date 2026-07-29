@@ -540,7 +540,7 @@ describe("narrowCatalogByTriggers", () => {
 	test("SIO-1293: human-phrased metric matches domain stems; trigger-less cross-cutting entry survives narrowing", () => {
 		const catalog = [
 			entry("kafka-consumer-lag.md", { metrics: ["lag", "dlq", "dead letter", "consumer", "kafka"] }),
-			entry("high-error-rate.md", { metrics: ["error rate", "5xx", "http", "gateway", "ingest"] }),
+			entry("high-error-rate.md", { metrics: ["error rate", "5xx", "http status", "gateway", "ingest failure"] }),
 			entry("code-change-correlation.md"), // trigger-less: always visible to the router
 		];
 		const result = narrowCatalogByTriggers(catalog, {
@@ -553,10 +553,10 @@ describe("narrowCatalogByTriggers", () => {
 		]);
 	});
 
-	test("SIO-1293: ambiguous metric matches no domain stem -> fallback keeps the full catalog", () => {
+	test("SIO-1293: unmatched metric (no domain stem hits it) -> fallback keeps the full catalog", () => {
 		const catalog = [
 			entry("kafka-consumer-lag.md", { metrics: ["lag", "dlq", "dead letter", "consumer", "kafka"] }),
-			entry("high-error-rate.md", { metrics: ["error rate", "5xx", "http", "gateway", "ingest"] }),
+			entry("high-error-rate.md", { metrics: ["error rate", "5xx", "http status", "gateway", "ingest failure"] }),
 			entry("code-change-correlation.md"),
 		];
 		const result = narrowCatalogByTriggers(catalog, {

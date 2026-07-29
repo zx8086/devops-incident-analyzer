@@ -6,7 +6,7 @@ status: stable
 tags: [gitlab, orbit, deploys, correlation]
 generated:
   by: human:simon
-  at: 2026-07-30
+  at: 2026-07-29
 tools:
   - gitlab_blast_radius
   - gitlab_cross_project_callers
@@ -150,16 +150,27 @@ branch only and excludes HCL/YAML):
 
 ## Cross-Datasource Correlation (for the final report)
 
-- Orbit blast radius (shared definition imported by service X) + post-merge
-  Elastic error spike in X = shared-library root cause. This is the
-  `orbit-deploy-blast-radius-vs-elastic` rule: when both sides are present,
-  state the causal chain deterministically (definition -> importing service ->
-  error onset) instead of reconstructing it in prose.
-- Elasticsearch error onset + commit or deploy timestamp inside the window =
-  deployment-caused regression; cite both timestamps.
-- Kafka consumer lag spike + merged MR touching the consumer = consumer code
-  change caused the processing failure.
-- Couchbase slow queries + commit touching query code = query regression.
+A change is CONFIRMED as root cause only when three things line up: a
+code-level link (blast-radius importer, or a diff touching the failing
+surface), deployment evidence that the change actually shipped (a deploy from
+`gitlab_recent_deploys` or a passed deploy pipeline from
+`gitlab_get_merge_request_pipelines`), and error onset AFTER that deploy
+timestamp. With any leg missing, report the change as a CANDIDATE correlation,
+not a cause.
+
+- Orbit blast radius (shared definition imported by service X) + deploy of the
+  defining project + post-deploy Elastic error spike in X = shared-library
+  root cause. This is the `orbit-deploy-blast-radius-vs-elastic` rule: when
+  all sides are present, state the causal chain deterministically
+  (definition -> importing service -> deploy time -> error onset) instead of
+  reconstructing it in prose.
+- Elasticsearch error onset + a merged MR whose deployment lands inside the
+  window = deployment-caused regression; cite the deploy and onset timestamps.
+  A commit timestamp alone, with no evidence it shipped, stays a candidate.
+- Kafka consumer lag spike + merged MR touching the consumer: candidate until
+  the MR's deploy pipeline confirms it shipped before the lag onset.
+- Couchbase slow queries + commit touching query code: same rule -- confirm
+  the shipping deploy before calling it a query regression.
 - Blame author on the failing lines = direct escalation target.
 - Report Orbit limitations as stated gaps, not absence of cause: the index
   covers default branches only, excludes Terraform/YAML, and an empty

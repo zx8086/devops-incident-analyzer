@@ -11,9 +11,11 @@ triggers:
   metrics:
     - error rate
     - 5xx
-    - http
+    - http status
+    - http_status
     - gateway
-    - ingest
+    - ingest failure
+    - ingest_failure
   severity:
     - critical
     - high
