@@ -1,3 +1,13 @@
+---
+type: Issue Register
+title: "Issues — us-cld"
+description: "Open and historical issues for the us-cld deployment."
+status: stable
+tags: [us-cld, issues]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # Issues — us-cld
 
 Source: Consolidated_Issue_Register_v21 (live-reconciled 2026-05-31). 31 entries.

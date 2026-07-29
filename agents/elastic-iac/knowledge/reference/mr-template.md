@@ -1,3 +1,13 @@
+---
+type: Reference
+title: "Merge request template"
+description: "The GitLab MR template the agent fills when opening a change."
+status: stable
+tags: [gitlab, merge-request, template]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 <!--
 GitLab MR template for PVH Elastic Cloud Terraform IaC repos
 Primary target: pvhcorp/dhco/observability/observability-elastic-iac

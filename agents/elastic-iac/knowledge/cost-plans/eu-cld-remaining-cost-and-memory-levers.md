@@ -1,3 +1,13 @@
+---
+type: Cost Plan
+title: "eu-cld remaining cost and memory levers"
+description: "Remaining cost and memory reduction levers for eu-cld."
+status: stable
+tags: [eu-cld, cost, memory]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 **eu-cld Remaining Cost & Memory Levers**
 
 *Cluster eu-cld (eda974) · 5 May 2026 · Catalogue of optimisation work

@@ -1,3 +1,13 @@
+---
+type: Runbook
+title: "eu-cld Kibana proxy TLS timeout investigation"
+description: "Deep investigation of Kibana proxy TLS timeouts on the coordinating tier."
+status: stable
+tags: [eu-cld, kibana, tls]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 **eu-cld Incident Investigation**
 
 *Kibana proxy TLS handshake timeout on .kibana\_9.2.3 saved-object

@@ -1,3 +1,13 @@
+---
+type: Cost Plan
+title: "Cost optimisation action plan"
+description: "Consolidated cost action plan across eu-cld, us-cld and ap-cld."
+status: stable
+tags: [cost, action-plan]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # Cost Optimisation Action Plan — eu-cld / us-cld / ap-cld
 
 **Compiled:** 2026-05-25 · **Basis:** Billing v2 MTD 2026-05-01→05-25 (org 58,333 ECU) + live cluster queries

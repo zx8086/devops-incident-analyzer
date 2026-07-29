@@ -1,3 +1,13 @@
+---
+type: Reference
+title: "Service dependency map"
+description: "Map of service-to-service and service-to-datastore dependencies used for blast-radius reasoning."
+status: stable
+tags: [systems-map, dependencies]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # Service Dependency Map
 
 ## Overview

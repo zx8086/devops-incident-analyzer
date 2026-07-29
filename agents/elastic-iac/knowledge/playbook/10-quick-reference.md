@@ -1,3 +1,13 @@
+---
+type: Playbook Section
+title: "10. Quick reference"
+description: "Operational playbook chapter 10: quick reference."
+status: stable
+tags: [playbook, operations]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # 10. Quick reference
 
 Source: Elastic_Optimisation_Playbook_v12 §10 (reference content).

@@ -1,3 +1,13 @@
+---
+type: Issue Register
+title: "Issues — unattributed (deprecated)"
+description: "Deprecated register superseded by cross-cluster.md; retained for traceability."
+status: stable
+tags: [issues, deprecated]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # (deprecated — see cross-cluster.md)
 
 This file was a transient bucket from an earlier extraction pass. Cluster routing has since been fixed; IR-174 (pre-resize validation gate, cross-cluster lesson) now lives in `cross-cluster.md`.

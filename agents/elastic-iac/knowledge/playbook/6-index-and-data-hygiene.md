@@ -1,3 +1,13 @@
+---
+type: Playbook Section
+title: "6. Index and data hygiene"
+description: "Operational playbook chapter 6: index and data hygiene."
+status: stable
+tags: [playbook, operations]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # 6. Index and data hygiene
 
 Source: Elastic_Optimisation_Playbook_v12 §6 (reference content).

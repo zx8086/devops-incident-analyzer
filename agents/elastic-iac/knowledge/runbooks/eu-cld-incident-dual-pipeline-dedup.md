@@ -1,3 +1,13 @@
+---
+type: Runbook
+title: "eu-cld dual pipeline deduplication incident"
+description: "Incident write-up for duplicate documents caused by two ingest pipelines."
+status: stable
+tags: [eu-cld, ingest, duplication]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 **INCIDENT REPORT**
 
 **Dual OTel + Kubernetes Log Pipeline Duplicate Ingestion**

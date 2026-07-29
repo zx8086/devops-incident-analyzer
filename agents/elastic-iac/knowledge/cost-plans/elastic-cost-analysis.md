@@ -1,3 +1,13 @@
+---
+type: Cost Plan
+title: "Elastic cloud cost analysis"
+description: "Annual run-rate analysis across the hosted Elastic deployments."
+status: stable
+tags: [cost, analysis]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 Cloud Cost Analysis
 E Elastic
 10 Hosted Deployments - April 2026

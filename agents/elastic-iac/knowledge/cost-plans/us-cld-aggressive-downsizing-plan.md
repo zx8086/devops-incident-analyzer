@@ -1,3 +1,13 @@
+---
+type: Cost Plan
+title: "us-cld aggressive downsizing plan"
+description: "Aggressive downsizing proposal for the us-cld deployment."
+status: stable
+tags: [us-cld, cost, downsizing]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 **us-cld Aggressive Tier Downsizing Plan**
 
 Post-Windows Metrics Optimisation --- Accelerated Cost Reduction

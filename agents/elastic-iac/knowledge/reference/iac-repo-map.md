@@ -1,3 +1,13 @@
+---
+type: Reference
+title: "IaC repo map"
+description: "Where each kind of configuration lives in the observability-elastic-iac repo."
+status: stable
+tags: [repo-map, terraform]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # IaC repo map
 
 ## Primary repo

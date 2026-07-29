@@ -1,3 +1,13 @@
+---
+type: Issue Register
+title: "Issues — eu-cld"
+description: "Open and historical issues for the eu-cld deployment."
+status: stable
+tags: [eu-cld, issues]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # Issues — eu-cld
 
 Source: Consolidated_Issue_Register_v21 (live-reconciled 2026-05-31). 66 entries.

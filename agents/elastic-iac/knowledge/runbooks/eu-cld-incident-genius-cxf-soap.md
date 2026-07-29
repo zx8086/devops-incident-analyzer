@@ -1,3 +1,13 @@
+---
+type: Runbook
+title: "eu-cld Genius CXF SOAP incident"
+description: "Incident write-up for the Genius CXF SOAP integration failure."
+status: stable
+tags: [eu-cld, apm, soap]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 **INCIDENT REPORT**
 
 **Genius.app CXF SOAP Payload Logging at INFO Level**

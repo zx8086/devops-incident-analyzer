@@ -1,3 +1,13 @@
+---
+type: Playbook Section
+title: "2. Platform baseline"
+description: "Operational playbook chapter 2: platform baseline."
+status: stable
+tags: [playbook, operations]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # 2. Platform baseline
 
 Source: Elastic_Optimisation_Playbook_v12 §2 (reference content).

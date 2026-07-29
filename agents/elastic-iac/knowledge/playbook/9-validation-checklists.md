@@ -1,3 +1,13 @@
+---
+type: Playbook Section
+title: "9. Validation checklists"
+description: "Operational playbook chapter 9: validation checklists."
+status: stable
+tags: [playbook, operations]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # 9. Validation checklists
 
 Source: Elastic_Optimisation_Playbook_v12 §9 (reference content).

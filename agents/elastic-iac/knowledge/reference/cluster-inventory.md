@@ -1,3 +1,13 @@
+---
+type: Reference
+title: "Cluster inventory"
+description: "Quick reference for every Elastic Cloud deployment: cluster ids, regions and roles."
+status: stable
+tags: [elastic, inventory, clusters]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # Cluster inventory — quick reference
 
 Re-query Elastic Cloud on bootstrap; do not trust this file as ground truth. Use it for naming + intent.

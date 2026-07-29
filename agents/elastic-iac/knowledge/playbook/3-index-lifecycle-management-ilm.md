@@ -1,3 +1,13 @@
+---
+type: Playbook Section
+title: "3. Index lifecycle management (ILM)"
+description: "Operational playbook chapter 3: index lifecycle management (ilm)."
+status: stable
+tags: [playbook, operations]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # 3. Index lifecycle management (ILM)
 
 Source: Elastic_Optimisation_Playbook_v12 §3 (reference content).

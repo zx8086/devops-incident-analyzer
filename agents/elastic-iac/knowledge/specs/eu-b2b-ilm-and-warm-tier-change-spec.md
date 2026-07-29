@@ -1,3 +1,13 @@
+---
+type: Change Spec
+title: "eu-b2b ILM and warm tier change spec"
+description: "Change specification for eu-b2b ILM policy and warm tier transitions."
+status: stable
+tags: [eu-b2b, ilm, warm-tier]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 **eu-b2b ILM Retention and Warm Tier Change Spec**
 
 *Implementation specification for IaC team · No commits made ·

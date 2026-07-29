@@ -1,3 +1,13 @@
+---
+type: Issue Register
+title: "Issues — cross-cluster"
+description: "Issues spanning more than one deployment, including CCS/CCR concerns."
+status: stable
+tags: [cross-cluster, issues]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # Issues — cross-cluster
 
 Source: Consolidated_Issue_Register_v21 (live-reconciled 2026-05-31). 8 entries.

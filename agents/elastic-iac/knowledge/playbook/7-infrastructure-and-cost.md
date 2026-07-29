@@ -1,3 +1,13 @@
+---
+type: Playbook Section
+title: "7. Infrastructure and cost"
+description: "Operational playbook chapter 7: infrastructure and cost."
+status: stable
+tags: [playbook, operations]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # 7. Infrastructure and cost
 
 Source: Elastic_Optimisation_Playbook_v12 §7 (reference content).

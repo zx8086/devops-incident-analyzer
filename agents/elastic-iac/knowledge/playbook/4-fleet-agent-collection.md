@@ -1,3 +1,13 @@
+---
+type: Playbook Section
+title: "4. Fleet and agent collection"
+description: "Operational playbook chapter 4: fleet and agent collection."
+status: stable
+tags: [playbook, operations]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # 4. Fleet & agent collection
 
 Source: Elastic_Optimisation_Playbook_v12 §4 (reference content).

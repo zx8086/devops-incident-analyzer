@@ -1,3 +1,13 @@
+---
+type: Reference
+title: "Stack modules"
+description: "Which Terraform stack module owns which part of the Elastic estate."
+status: stable
+tags: [terraform, modules]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # Stack modules — what lives where
 
 ## `modules/elastic-cloud-deployment/`

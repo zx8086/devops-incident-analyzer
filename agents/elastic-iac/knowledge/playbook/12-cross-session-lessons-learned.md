@@ -1,3 +1,13 @@
+---
+type: Playbook Section
+title: "12. Cross-session lessons learned"
+description: "Operational playbook chapter 12: cross-session lessons learned."
+status: stable
+tags: [playbook, operations]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # 12. Cross-session lessons learned
 
 Source: Elastic_Optimisation_Playbook_v12 §12 (reference content).

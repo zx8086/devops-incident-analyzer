@@ -1,3 +1,13 @@
+---
+type: Change Spec
+title: "eu-b2b ILM replica and frozen transition change spec"
+description: "Change specification for eu-b2b replica counts and frozen-tier transitions."
+status: stable
+tags: [eu-b2b, ilm, frozen]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 # eu-b2b — ILM Replica & Frozen-Transition Change Spec
 
 **Date:** 2026-05-15

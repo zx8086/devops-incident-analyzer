@@ -1,3 +1,13 @@
+---
+type: Runbook
+title: "eu-cld OTel DB2 connection closure incident"
+description: "Incident write-up for OpenTelemetry DB2 connections closing unexpectedly."
+status: stable
+tags: [eu-cld, otel, db2]
+generated:
+  by: human:simon
+  at: 2026-07-29
+---
 **P1 INCIDENT REPORT --- CLOSURE**
 
 **OTel Java Agent DB2 Instrumentation Surge**
