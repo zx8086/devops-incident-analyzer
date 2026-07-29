@@ -57,9 +57,13 @@ The directory name **is** the skill name. It must be unique and match exactly wh
 
 ### Step 2: Write SKILL.md
 
-The loader reads the entire file, strips an optional YAML frontmatter block (everything between the first `---` pair at the top), and appends the body to the orchestrator's system prompt under a `## Skill: <name>` heading. See `packages/gitagent-bridge/src/skill-loader.ts:42` for the exact regex.
+The loader reads the entire file, strips an optional YAML frontmatter block (everything between the first `---` pair at the top), and appends the body to the orchestrator's system prompt under a `## Skill: <name>` heading. See `packages/gitagent-bridge/src/skill-loader.ts:29` for the exact regex.
 
-None of the three production skills currently use frontmatter. Frontmatter is optional -- include it only if you want to record metadata for humans reading the file directly. A plain Markdown body is the norm:
+Frontmatter is optional, but `name` + `description` are the recommended minimum: a skill with no `description` is omitted from the `## Skills` catalog that precedes the bodies (`skill-loader.ts:49`), so the model only discovers it by reading the full body. The authoritative field list is `SkillFrontmatterSchema` in `packages/gitagent-bridge/src/types.ts:242-262` -- every field is optional and the schema is `.passthrough()`, so unknown keys are accepted but never read. The learner-managed fields (`confidence`, `learned_from`, `learned_at`, `usage_count`, `success_count`, `failure_count`) are documented in `docs/superpowers/specs/2026-06-26-skill-promotion-and-confidence-design.md`; do not hand-author them.
+
+Note that the six older orchestrator skills are body-only, which is what keeps them out of the runtime frontmatter rewriter -- `recordSkillOutcome` short-circuits when no `---` block exists (`packages/agent/src/skill-outcome.ts:118-128`). A hand-authored skill that gains a frontmatter block starts being tracked when `SKILL_OUTCOME_TRACKING_ENABLED` is on.
+
+A plain Markdown body:
 
 ```markdown
 # Skill: My New Skill
@@ -81,7 +85,7 @@ try to produce output matching this shape when the skill is invoked.
 - Behavior under conflicting signals
 ```
 
-Follow the style of the three existing skills (`normalize-incident`, `aggregate-findings`, `propose-mitigation`) for tone, headings, and verbosity.
+Follow the style of the existing orchestrator skills (`normalize-incident`, `aggregate-findings`, `propose-mitigation`) for tone, headings, and verbosity. For a frontmatter-bearing example, see `mcp-tool-audit`, or any sub-agent skill such as `agents/incident-analyzer/agents/capella-agent/skills/slow-query-triage`.
 
 ### Step 3: Activate the skill
 
