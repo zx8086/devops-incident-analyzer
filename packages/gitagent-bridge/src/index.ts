@@ -59,6 +59,8 @@ export {
 	KnowledgeCategorySchema,
 	type KnowledgeIndex,
 	KnowledgeIndexSchema,
+	type KnowledgeSelectionConfig,
+	KnowledgeSelectionConfigSchema,
 	type ModelConfig,
 	type RunbookFrontmatter,
 	RunbookFrontmatterSchema,

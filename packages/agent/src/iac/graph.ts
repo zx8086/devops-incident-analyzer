@@ -91,7 +91,9 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 	// The intent fan-out router, lifted out of its addConditionalEdges call so BOTH the
 	// gated-off path (classifyIacIntent -> target) and the gated-on path
 	// (classifyIacIntent -> selectIacKnowledge -> target) run the IDENTICAL function.
-	const intentTarget = (s: typeof IacState.State): string =>
+	// Return type is inferred as the literal union of node names (not widened to `string`),
+	// which is what addConditionalEdges' `ends` parameter requires.
+	const intentTarget = (s: typeof IacState.State) =>
 		s.intent === "gitops"
 			? "parseIntent"
 			: s.intent === "gitops-amend"
@@ -107,6 +109,7 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 								: s.intent === "converse"
 									? "converseIac"
 									: "answerInfo";
+	// `as const` keeps these as literal node names rather than widening to string[].
 	const INTENT_TARGETS = [
 		"parseIntent",
 		"amendChange",
@@ -116,7 +119,7 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		"answerInfo",
 		"watchPipeline",
 		"converseIac",
-	];
+	] as const;
 
 	const graph = new StateGraph(IacState)
 		.addNode("bootstrap", bootstrapIac)
@@ -190,7 +193,8 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 			"selectIacKnowledge",
 			...INTENT_TARGETS,
 		])
-		.addConditionalEdges("selectIacKnowledge", intentTarget, INTENT_TARGETS)
+		// Spread to a mutable array -- `ends` does not accept a readonly tuple.
+		.addConditionalEdges("selectIacKnowledge", intentTarget, [...INTENT_TARGETS])
 		.addEdge("answerInfo", END)
 		.addEdge("converseIac", END)
 		// SIO-912: parseIntent short-circuits a request it has no proposer for (workflow

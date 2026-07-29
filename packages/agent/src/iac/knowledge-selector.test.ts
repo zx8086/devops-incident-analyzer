@@ -5,6 +5,7 @@
 // suite is immune to the process-global mock.module("../prompt-context.ts") that sibling
 // suites register (see reference_prompt_context_mock_pollutes_direct_imports).
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildSystemPrompt, loadAgent } from "@devops-agent/gitagent-bridge";
 import {
@@ -12,7 +13,9 @@ import {
 	DEFAULT_BY_INTENT,
 	filterAgentKnowledge,
 	selectCategories,
+	selectIacKnowledge,
 } from "./knowledge-selector.ts";
+import { TURN_START_RESET } from "./nodes.ts";
 import { INTENT_VALUES } from "./state.ts";
 
 const IAC_DIR = join(import.meta.dir, "../../../../agents/elastic-iac");
@@ -90,6 +93,43 @@ describe("selectCategories fallback behaviour (SIO-1285)", () => {
 				expect(selectCategories(intent, cfg)).toContain(floorCategory);
 			}
 		}
+	});
+});
+
+// SIO-1285 (CodeRabbit, PR #523): selectedKnowledge is checkpointed per thread with a
+// last-write-wins reducer, so a node returning {} applies NO update and the previous turn's
+// selection survives. A converse turn narrowed to [reference, runbooks] followed by a gitops
+// turn whose selector fell back would have run parseIntent on the converse set -- the exact
+// starvation the fallback exists to prevent. Every non-selecting path must return an
+// EXPLICIT null. Same bug class as SIO-1020's TURN_START_RESET.
+describe("fallback clears prior selection, never leaves it stale (SIO-1285)", () => {
+	// The node's non-selecting paths must WRITE null rather than omit the key. Asserted on the
+	// source because both paths (config absent, and the catch block) depend on repo config or a
+	// thrown error that this suite cannot induce without mocking the process-global agent cache.
+	test("every non-selecting return writes an explicit null, never a bare {}", () => {
+		const src = readFileSync(join(import.meta.dir, "knowledge-selector.ts"), "utf-8");
+		const body = src.slice(src.indexOf("export async function selectIacKnowledge"));
+		expect(body).toContain("if (!config) return { selectedKnowledge: null };");
+		// the catch block's fallback
+		expect(body).toMatch(/catch[\s\S]*return \{ selectedKnowledge: null \};/);
+		// and no bare `return {}` survives in the node
+		expect(body).not.toMatch(/return \{\};/);
+	});
+
+	test("a successful selection still returns the chosen categories", async () => {
+		const result = await selectIacKnowledge({ intent: "converse" } as never);
+		expect(result.selectedKnowledge).toEqual([...DEFAULT_BY_INTENT.converse]);
+	});
+
+	test("TURN_START_RESET clears selectedKnowledge so a turn cannot inherit one", () => {
+		// bootstrapIac spreads TURN_START_RESET on every turn; the field must be present and
+		// null, or a turn that never reaches the selector keeps the last turn's narrowing.
+		expect(TURN_START_RESET).toHaveProperty("selectedKnowledge", null);
+	});
+
+	test("an explicit null is a pass-through: full knowledge, not zero", () => {
+		const agent = loadAgent(IAC_DIR);
+		expect(filterAgentKnowledge(agent, null).knowledge.length).toBe(agent.knowledge.length);
 	});
 });
 

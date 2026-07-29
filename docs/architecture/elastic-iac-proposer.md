@@ -12,14 +12,22 @@ The governing principle (deck "Elastic Cloud Observability · IaC Monorepo", p.1
 
 SIO-1285 added `selectIacKnowledge` between `classifyIacIntent` and the intent fan-out.
 It is gated on the `knowledge_selection` block in `agents/elastic-iac/knowledge/index.yaml`
-(presence IS the switch -- the SIO-640 edge-gate idiom): registered always, edged only when
-configured. When edged, the fan-out takes one hop through it and the node runs the SAME
-intent router, so routing is identical and only the assembled prompt size differs. It makes
-no model call -- it reads the `intent` that `classifyIacIntent` already computed.
+(presence IS the switch -- the SIO-640 edge-gate idiom): always registered, edged only when
+configured. It makes no model call -- it reads the `intent` that `classifyIacIntent` already
+computed.
+
+The two configurations are mutually exclusive, and routing is identical in both -- only the
+assembled prompt size differs, because the selector runs the SAME intent router:
+
+```text
+knowledge_selection CONFIGURED:  classifyIacIntent -> selectIacKnowledge -> <intent fan-out>
+knowledge_selection ABSENT:      classifyIacIntent ---------------------> <intent fan-out>
+```
+
+The `<intent fan-out>` below is reached either way:
 
 ```text
 START -> bootstrap -> {connected? recordIacPrompt -> classifyIacIntent : END}
-  classifyIacIntent -> selectIacKnowledge -> (the same intent fan-out below)
   classifyIacIntent --(info)----------> answerInfo -> END
   classifyIacIntent --(converse)------> converseIac -> END        (follow-up turns only, SIO-930)
   classifyIacIntent --(pipeline-status)-> watchPipeline -> teardown -> END

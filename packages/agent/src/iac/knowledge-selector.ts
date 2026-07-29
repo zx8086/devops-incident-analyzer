@@ -85,13 +85,17 @@ export function selectCategories(intent: IacIntent | null, config?: KnowledgeSel
 // computed and writes the resulting category list to state, where the four
 // buildSystemPrompt call sites read it back.
 //
-// Returning {} leaves selectedKnowledge at its `null` default, which filterAgentKnowledge
-// treats as pass-through -- so every failure mode degrades to today's full prompt rather
-// than to a partial one.
+// Every non-selecting path returns an EXPLICIT null rather than {}. `selectedKnowledge` is
+// checkpointed per thread with a last-write-wins reducer, so returning {} applies no update
+// and the PREVIOUS turn's selection survives -- a converse turn narrowed to
+// [reference, runbooks] followed by a gitops turn whose selector threw would run parseIntent
+// on the converse set, which is precisely the starvation this node exists to avoid. null is
+// the pass-through sentinel filterAgentKnowledge honours, so an explicit null is the full
+// prompt. Same bug class as SIO-1020 (see TURN_START_RESET in nodes.ts:837).
 export async function selectIacKnowledge(state: IacStateType): Promise<Partial<IacStateType>> {
 	try {
 		const config = getAgentByName(AGENT).knowledgeSelection;
-		if (!config) return {};
+		if (!config) return { selectedKnowledge: null };
 
 		const categories = selectCategories(state.intent, config);
 		log.info({ intent: state.intent, categories: categories.join(",") }, "iac knowledge selection");
@@ -101,7 +105,7 @@ export async function selectIacKnowledge(state: IacStateType): Promise<Partial<I
 		// missing severity signalled a real normalize bug worth surfacing; here `intent` is
 		// total, so throwing would only turn a cost regression into an outage.
 		log.warn({ err }, "iac knowledge selection failed; falling back to FULL knowledge");
-		return {};
+		return { selectedKnowledge: null };
 	}
 }
 

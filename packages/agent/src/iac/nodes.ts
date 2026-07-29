@@ -834,7 +834,17 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 // is the only node that clears blockedReason). So a prior turn's blockedReason/noopReason would
 // short-circuit the next unrelated follow-up. Reset both at turn start (bootstrap runs first on every
 // turn) so each turn re-derives its own terminal state. (guardNode still clears blockedReason mid-lane.)
-const TURN_START_RESET = { blockedReason: "", noopReason: "", versionDrift: null } as const;
+// SIO-1285: selectedKnowledge is the same class of hazard. It is checkpointed per thread with
+// a last-write-wins reducer, so without a turn-start reset a turn that never reaches
+// selectIacKnowledge (the node is gated off, or the intent routes around it) would inherit the
+// PREVIOUS turn's narrowed category set. null is the pass-through sentinel = full knowledge, so
+// each turn starts unfiltered and re-derives its own selection.
+export const TURN_START_RESET = {
+	blockedReason: "",
+	noopReason: "",
+	versionDrift: null,
+	selectedKnowledge: null,
+} as const;
 
 // (context the turn's response weaves in), once per session, best-effort, never blocking.
 export async function bootstrapIac(state: IacStateType, config?: RunnableConfig): Promise<Partial<IacStateType>> {
