@@ -5,6 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ElasticFindings, OrbitFindings } from "@devops-agent/shared";
 import type { AgentStateType } from "../state.ts";
+import { enforceCorrelationsRouter } from "./enforce-node.ts";
 import { correlationRules } from "./rules.ts";
 
 function findRule(name: string) {
@@ -75,6 +76,165 @@ describe("orbit-deploy-needs-blast-radius (cost gate)", () => {
 			elastic: { apmServices: [{ serviceName: "checkout", errorRate: 0.3, observedAt: daysAgo(1) }] },
 		});
 		expect(rule.trigger(state)).toBeNull();
+	});
+
+	// SIO-1299: the trigger context carries full MR objects (not just ids) and
+	// raw log-cluster sample messages, so the fetchDirective can name the deploy
+	// and pass real stack-trace-shaped evidence to the re-fanned agent.
+	test("trigger context carries full deploy MR objects and log samples", () => {
+		const state = makeState({
+			orbit: {
+				recentDeploys: [
+					{
+						mrId: "10",
+						title: "Bump styles client",
+						project: "pvhcorp/styles-v3-service",
+						mergedAt: daysAgo(2),
+						webUrl: "https://gitlab.com/mr/10",
+					},
+				],
+			},
+			elastic: {
+				logClusters: [
+					{
+						signature: "s1",
+						sampleMessage:
+							"com.couchbase.client.core.error.UnambiguousTimeoutException at StyleController#getStyleByStyleCode",
+						count: 12,
+						level: "error",
+						service: "styles-v3-service",
+					},
+				],
+			},
+		});
+		const match = rule.trigger(state);
+		expect(match).not.toBeNull();
+		const deployMrs = match?.context.deployMrs as Array<{ mrId: string; title?: string; webUrl?: string }>;
+		expect(deployMrs).toHaveLength(1);
+		expect(deployMrs[0]?.mrId).toBe("10");
+		expect(deployMrs[0]?.title).toBe("Bump styles client");
+		expect(deployMrs[0]?.webUrl).toBe("https://gitlab.com/mr/10");
+		const logSamples = match?.context.logSamples as string[];
+		expect(logSamples[0]).toContain("StyleController#getStyleByStyleCode");
+	});
+
+	// CodeRabbit (PR #549): logSamples must filter out clusters with no
+	// sampleMessage BEFORE applying the MAX_ORBIT_DEPLOY_LOG_SAMPLES cap -- slicing
+	// first would drop a later cluster's real message if an earlier cluster in the
+	// array happened to have no sampleMessage. sampleMessage is a required schema
+	// field, so the malformed first cluster below is only reachable via an
+	// untyped boundary (e.g. a hand-rolled extractor row); the `undefined` cast
+	// mirrors exactly the runtime shape pushBlastRadius-style extractors must
+	// defend against, not a real ElasticLogCluster.
+	test("logSamples skips clusters with no sampleMessage before applying the cap", () => {
+		const malformedCluster = {
+			signature: "s0",
+			sampleMessage: undefined as unknown as string,
+			count: 1,
+			level: "error",
+			service: "checkout",
+		};
+		const state = makeState({
+			orbit: { recentDeploys: [{ mrId: "10", project: "pvhcorp/checkout", mergedAt: daysAgo(2) }] },
+			elastic: {
+				logClusters: [
+					malformedCluster,
+					{ signature: "s1", sampleMessage: "real message A", count: 5, level: "error", service: "checkout" },
+					{ signature: "s2", sampleMessage: "real message B", count: 5, level: "error", service: "checkout" },
+					{ signature: "s3", sampleMessage: "real message C", count: 5, level: "error", service: "checkout" },
+					{
+						signature: "s4",
+						sampleMessage: "real message D (should be capped out)",
+						count: 5,
+						level: "error",
+						service: "checkout",
+					},
+				],
+			},
+		});
+		const match = rule.trigger(state);
+		const logSamples = match?.context.logSamples as string[];
+		expect(logSamples).toEqual(["real message A", "real message B", "real message C"]);
+	});
+
+	describe("fetchDirective", () => {
+		test("names the deploy MR, services, and log evidence; forbids re-investigating the focus", () => {
+			const directive =
+				rule.fetchDirective?.({
+					requestBlastRadius: true,
+					services: ["styles-v3-service"],
+					deployMrs: [
+						{
+							mrId: "10",
+							title: "Bump styles client",
+							mergedAt: "2026-07-28T00:00:00.000Z",
+							project: "pvhcorp/styles-v3-service",
+							webUrl: "https://gitlab.com/mr/10",
+						},
+					],
+					logSamples: ["UnambiguousTimeoutException at StyleController#getStyleByStyleCode"],
+				}) ?? "";
+			expect(directive).toContain("CORRELATION FETCH (SIO-1299)");
+			expect(directive).toContain("styles-v3-service");
+			expect(directive).toContain("MR 10");
+			expect(directive).toContain("Bump styles client");
+			expect(directive).toContain("https://gitlab.com/mr/10");
+			expect(directive).toContain("StyleController#getStyleByStyleCode");
+			expect(directive).toContain("gitlab_blast_radius");
+			expect(directive).toContain("do NOT re-investigate the focus service");
+		});
+
+		test("falls back to a generic directive when the context does not parse", () => {
+			const directive = rule.fetchDirective?.({ garbage: true }) ?? "";
+			expect(directive).toContain("CORRELATION FETCH (SIO-1299)");
+			expect(directive).toContain("gitlab_blast_radius");
+		});
+
+		test("handles no deploy MRs or log samples without throwing", () => {
+			const directive =
+				rule.fetchDirective?.({
+					requestBlastRadius: true,
+					services: ["checkout"],
+					deployMrs: [],
+					logSamples: [],
+				}) ?? "";
+			expect(directive).toContain("CORRELATION FETCH (SIO-1299)");
+			expect(directive).toContain("none named");
+			expect(directive).toContain("none captured");
+		});
+	});
+
+	// SIO-1299: end-to-end through enforceCorrelationsRouter -- the directive must
+	// actually reach the dispatched Send's correlationFetchDirective, not just be
+	// buildable in isolation.
+	test("router attaches the fetchDirective to the gitlab-agent re-fan Send", () => {
+		const state = makeState({
+			orbit: {
+				recentDeploys: [
+					{ mrId: "10", title: "Bump styles client", project: "pvhcorp/styles-v3-service", mergedAt: daysAgo(2) },
+				],
+			},
+			elastic: {
+				logClusters: [
+					{
+						signature: "s1",
+						sampleMessage: "UnambiguousTimeoutException at StyleController#getStyleByStyleCode",
+						count: 12,
+						level: "error",
+						service: "styles-v3-service",
+					},
+				],
+			},
+		});
+		const result = enforceCorrelationsRouter(state);
+		expect(Array.isArray(result)).toBe(true);
+		if (!Array.isArray(result)) throw new Error("expected Send[]");
+		const gitlabSend = result.find((s) => s.args.currentDataSource === "gitlab");
+		expect(gitlabSend).toBeDefined();
+		const directive = String(gitlabSend?.args.correlationFetchDirective);
+		expect(directive).toContain("CORRELATION FETCH (SIO-1299)");
+		expect(directive).toContain("MR 10");
+		expect(directive).toContain("StyleController#getStyleByStyleCode");
 	});
 });
 
