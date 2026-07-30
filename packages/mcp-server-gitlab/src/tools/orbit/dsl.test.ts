@@ -141,6 +141,15 @@ describe("hasSelectiveAnchor", () => {
 	});
 });
 
+const ALL_BUILT = [
+	buildBlastRadiusQuery({ symbol: "authenticate" }),
+	buildCrossProjectCallersQuery({ fqn: "Gitlab::Auth::authenticate" }),
+	buildRecentDeploysQuery({ groupPath: "pvhcorp", since: "2026-07-01T00:00:00Z" }),
+	buildPipelineFailuresQuery({ groupPath: "pvhcorp", since: "2026-07-01T00:00:00Z" }),
+	buildRecentVulnerabilitiesQuery({ groupPath: "pvhcorp" }),
+	buildMrForFileQuery({ sourceFile: "src/app.ts" }),
+];
+
 // SIO-1151: filter-grammar contract, live-validated against Orbit format_version
 // 3.0.1 on 2026-07-19. Filters are op-AS-KEY objects; the former { op, value }
 // shape is rejected with compile_error "schema violation ... oneOf" for EVERY op
@@ -163,15 +172,6 @@ describe("Orbit filter-grammar contract (SIO-1151)", () => {
 		}
 		return hits;
 	}
-
-	const ALL_BUILT = [
-		buildBlastRadiusQuery({ symbol: "authenticate" }),
-		buildCrossProjectCallersQuery({ fqn: "Gitlab::Auth::authenticate" }),
-		buildRecentDeploysQuery({ groupPath: "pvhcorp", since: "2026-07-01T00:00:00Z" }),
-		buildPipelineFailuresQuery({ groupPath: "pvhcorp", since: "2026-07-01T00:00:00Z" }),
-		buildRecentVulnerabilitiesQuery({ groupPath: "pvhcorp" }),
-		buildMrForFileQuery({ sourceFile: "src/app.ts" }),
-	];
 
 	test("no builder emits the rejected legacy { op, value } filter shape", () => {
 		for (const { queryTag, dsl } of ALL_BUILT) {
@@ -276,5 +276,54 @@ describe("project-scoped correlation queries (SIO-1298)", () => {
 		);
 		expect(withOmitted).toContain('"starts_with":"pvhcorp/"');
 		expect(withOmitted).not.toContain('"eq":"pvhcorp');
+	});
+});
+
+// SIO-1297: aggregation-grammar contract, live-validated against Orbit v0.91.1
+// on 2026-07-30. group_by entries are "<node>.<prop>" strings or
+// { key: "<node>.<prop>", truncate?, as? } objects; aggregations are
+// function-AS-KEY objects with at most 2 properties ({ count: "pl", as: "x" }).
+// The former { kind, node, property, alias } group_by and
+// { function, target, alias } aggregation objects are rejected with
+// compile_error "schema violation ... oneOf".
+describe("Orbit aggregation-grammar contract (SIO-1297)", () => {
+	test("pipeline failures group_by keeps the project/ref aliases via { key, as }", () => {
+		const { dsl } = buildPipelineFailuresQuery({ groupPath: "pvhcorp", since: "2026-07-01T00:00:00Z" });
+		expect(dsl.group_by).toEqual([
+			{ key: "p.full_path", as: "project" },
+			{ key: "pl.ref", as: "ref" },
+		]);
+	});
+
+	test("pipeline failures aggregations use the function-as-key max-2-property shape", () => {
+		const { dsl } = buildPipelineFailuresQuery({ groupPath: "pvhcorp", since: "2026-07-01T00:00:00Z" });
+		expect(dsl.aggregations).toEqual([{ count: "pl", as: "failures" }]);
+		// aggregation_sort references the preserved alias, unchanged by the rewrite.
+		expect(dsl.aggregation_sort).toBe("-failures");
+	});
+
+	test("no builder emits the rejected kind/function/target/alias object shapes", () => {
+		const REJECTED_KEYS = ["kind", "function", "target", "alias"];
+		function walkForRejectedShape(value: unknown, path = "$"): string[] {
+			const hits: string[] = [];
+			if (Array.isArray(value)) {
+				value.forEach((v, i) => {
+					hits.push(...walkForRejectedShape(v, `${path}[${i}]`));
+				});
+				return hits;
+			}
+			if (value && typeof value === "object") {
+				const rec = value as Record<string, unknown>;
+				if (REJECTED_KEYS.some((k) => k in rec)) hits.push(path);
+				for (const [k, v] of Object.entries(rec)) hits.push(...walkForRejectedShape(v, `${path}.${k}`));
+			}
+			return hits;
+		}
+		for (const { queryTag, dsl } of ALL_BUILT) {
+			expect({ tag: queryTag, rejectedSites: walkForRejectedShape(dsl) }).toEqual({
+				tag: queryTag,
+				rejectedSites: [],
+			});
+		}
 	});
 });
