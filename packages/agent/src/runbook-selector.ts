@@ -171,20 +171,29 @@ export async function runSelectRunbooks(
 	const severity = state.normalizedIncident?.severity;
 	const fallbackConfig = runtime.getFallbackConfig();
 
-	// SIO-1302: always-select filenames, validated against the LIFECYCLE-filtered
-	// catalog (not the trigger-narrowed `catalog`/`validFilenames`) -- trigger
-	// narrowing exists to reduce the LLM router's candidate list, not to gate a
-	// deterministic injection that bypasses the router entirely. A deprecated
-	// runbook is still never force-selected (same discipline as the severity
-	// fallback below). An always-select filename absent from the lifecycle-kept
-	// catalog entirely (e.g. a config typo) is dropped silently at this layer --
+	// SIO-1302: always-select filenames, validated against the FULL catalog (not
+	// the trigger-narrowed `catalog`/`validFilenames`) -- trigger narrowing exists
+	// to reduce the LLM router's candidate list, not to gate a deterministic
+	// injection that bypasses the router entirely. A deprecated runbook is still
+	// never force-selected (same discipline as the severity fallback below) --
+	// filtered against `deprecatedFilenames` directly rather than
+	// `lifecycleResult.kept`, because the "emptied" lifecycle guard mode
+	// (filterCatalogByLifecycle, every runbook deprecated) deliberately returns
+	// `kept: catalog` UNFILTERED to avoid starving the router, which would have
+	// let a fully-deprecated catalog force-select a deprecated runbook here
+	// (CodeRabbit, PR #548). An always-select filename absent from the catalog
+	// entirely (e.g. a config typo) is dropped silently at this layer --
 	// manifest-loader.ts already fails the agent load if it doesn't exist on disk
-	// at all, so this is defense against a load-time-valid-but-now-deprecated file.
-	const lifecycleKeptFilenames = new Set(lifecycleResult.kept.map((e) => e.filename));
+	// at all, so this is defense-in-depth, not the primary validation.
+	const fullCatalogFilenames = new Set(fullCatalog.map((e) => e.filename));
 	// De-duped via a Set round-trip: a duplicate entry in the always_select config
 	// (e.g. a copy-paste mistake in index.yaml) must not produce a duplicate
 	// filename in the final selection (CodeRabbit, PR #548).
-	const alwaysSelect = [...new Set((runtime.getAlwaysSelect?.() ?? []).filter((f) => lifecycleKeptFilenames.has(f)))];
+	const alwaysSelect = [
+		...new Set(
+			(runtime.getAlwaysSelect?.() ?? []).filter((f) => fullCatalogFilenames.has(f) && !deprecatedFilenames.has(f)),
+		),
+	];
 
 	// Step 2: build router prompt
 	const lastMessage = state.messages.at(-1);

@@ -342,6 +342,28 @@ describe("runSelectRunbooks: always-select (SIO-1302)", () => {
 		expect(result.selectedRunbooks).toEqual(["a.md"]);
 	});
 
+	// CodeRabbit (PR #548): filterCatalogByLifecycle's "emptied" guard mode
+	// (every runbook in the catalog is deprecated) deliberately returns the
+	// UNFILTERED catalog as `kept` (and thus as the router's candidate set too),
+	// to avoid starving the router entirely -- the router itself picking a
+	// deprecated runbook in this edge case is pre-existing, out-of-scope
+	// behavior. What SIO-1302 must not do is have always-select ALSO force-select
+	// it independent of the router's own pick: with the router picking a
+	// DIFFERENT runbook, the deprecated always-select entry must not additionally
+	// appear via the always-select union.
+	test("all-deprecated catalog: always-select does not additionally force-select the deprecated entry", async () => {
+		catalogOverride = [
+			{ filename: "a.md", title: "A", summary: "sa", status: "deprecated" },
+			{ filename: "b.md", title: "B", summary: "sb", status: "deprecated" },
+		];
+		alwaysSelectOverride = ["a.md"];
+		// Router picks the OTHER deprecated entry (itself a pre-existing, out-of-scope
+		// quirk of the emptied-catalog guard) -- always-select must not ALSO inject a.md.
+		llmResponse = { content: '{"filenames":["b.md"],"reasoning":"x"}' };
+		const result = await runSelectRunbooks(makeState(), buildRuntime());
+		expect(result.selectedRunbooks).toEqual(["b.md"]);
+	});
+
 	test("no getAlwaysSelect on the runtime (older caller) behaves as if it returned []", async () => {
 		const runtimeWithoutAlwaysSelect: SelectRunbooksRuntime = {
 			getCatalog: () => DEFAULT_CATALOG,
