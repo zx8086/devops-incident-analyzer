@@ -153,10 +153,14 @@ export function buildCrossProjectCallersQuery(params: { fqn: string; limit?: num
 }
 
 // SIO-1298: shared Project-node filter for the two correlation queries. A resolved
-// owning project narrows to an exact full_path match (cheap 30-day escalation call);
-// otherwise the group prefix scan is the default.
+// owning project narrows to an exact full_path match (cheap escalation call);
+// otherwise the group prefix scan is the default. SIO-1301: a PROVIDED projectPath
+// must be non-blank -- "" is falsy, so the previous ternary silently widened the
+// billed query back to the group-wide scan; a blank now throws before the billed
+// call (requireSelector also trims padded paths into the exact match).
 function projectScopeFilter(groupPath: string, projectPath?: string): Record<string, unknown> {
-	return projectPath ? { full_path: { eq: projectPath } } : { full_path: { starts_with: `${groupPath}/` } };
+	if (projectPath === undefined) return { full_path: { starts_with: `${groupPath}/` } };
+	return { full_path: { eq: requireSelector(projectPath, "projectPath") } };
 }
 
 // Recent deploy MRs across a group, merged since a timestamp. Selectivity via the

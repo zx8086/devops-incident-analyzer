@@ -270,12 +270,51 @@ describe("project-scoped correlation queries (SIO-1298)", () => {
 		expect(s).not.toContain("starts_with");
 	});
 
-	test("omitted projectPath keeps the group-prefix scan byte-identical", () => {
-		const withOmitted = JSON.stringify(
-			buildRecentDeploysQuery({ groupPath: "pvhcorp", since: "2026-06-30T00:00:00Z" }).dsl,
-		);
-		expect(withOmitted).toContain('"starts_with":"pvhcorp/"');
-		expect(withOmitted).not.toContain('"eq":"pvhcorp');
+	// SIO-1301: exact-object assertions on the Project-node filter for BOTH builders,
+	// not substring presence on one -- a regression to a different filter shape (or a
+	// stray second op key) would slip past a toContain check.
+	test("omitted projectPath keeps the exact group-prefix Project filter on both builders", () => {
+		const deploys = buildRecentDeploysQuery({ groupPath: "pvhcorp", since: "2026-06-30T00:00:00Z" }).dsl;
+		const deployNodes = deploys.nodes as Array<{ entity: string; filters?: Record<string, unknown> }>;
+		expect(deployNodes[0]?.entity).toBe("Project");
+		expect(deployNodes[0]?.filters).toEqual({ full_path: { starts_with: "pvhcorp/" } });
+
+		const failures = buildPipelineFailuresQuery({ groupPath: "pvhcorp", since: "2026-06-30T00:00:00Z" }).dsl;
+		const failureNodes = failures.nodes as Array<{ entity: string; filters?: Record<string, unknown> }>;
+		expect(failureNodes[1]?.entity).toBe("Project");
+		expect(failureNodes[1]?.filters).toEqual({ full_path: { starts_with: "pvhcorp/" } });
+	});
+});
+
+// SIO-1301: a PROVIDED projectPath must be non-blank. "" is falsy, so the previous
+// ternary silently fell back to the group-wide starts_with scan -- invalid input
+// widening a billed query's scope. A blank projectPath now throws BEFORE the billed
+// call, mirroring the requireSelector discipline for groupPath/since.
+describe("project-path hardening (SIO-1301)", () => {
+	test("recent deploys: blank projectPath throws instead of widening to the group scan", () => {
+		for (const blank of ["", "   "]) {
+			expect(() =>
+				buildRecentDeploysQuery({ groupPath: "pvhcorp", since: "2026-06-30T00:00:00Z", projectPath: blank }),
+			).toThrow(/selectivity/i);
+		}
+	});
+
+	test("pipeline failures: blank projectPath throws instead of widening to the group scan", () => {
+		for (const blank of ["", "   "]) {
+			expect(() =>
+				buildPipelineFailuresQuery({ groupPath: "pvhcorp", since: "2026-06-30T00:00:00Z", projectPath: blank }),
+			).toThrow(/selectivity/i);
+		}
+	});
+
+	test("padded projectPath is trimmed into the exact-match filter", () => {
+		const { dsl } = buildRecentDeploysQuery({
+			groupPath: "pvhcorp",
+			since: "2026-06-30T00:00:00Z",
+			projectPath: "  pvhcorp/b2b/oit/order-service  ",
+		});
+		const nodes = dsl.nodes as Array<{ filters?: Record<string, unknown> }>;
+		expect(nodes[0]?.filters).toEqual({ full_path: { eq: "pvhcorp/b2b/oit/order-service" } });
 	});
 });
 
