@@ -903,6 +903,7 @@ describe("buildPersistedToolOutput SIO-1159 typed-finding exemption", () => {
 			const out = buildPersistedToolOutput(toolName, big, REALISTIC_CAP);
 			expect(out.truncation).toBeNull();
 			expect(out.capSkippedBytes).toBe(Buffer.byteLength(big, "utf8"));
+			expect(out.rawJson).toEqual(JSON.parse(big));
 		});
 
 		test("gitlab_graph_schema remains capped (deliberately excluded -- feeds no extractor)", () => {
