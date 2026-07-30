@@ -181,7 +181,10 @@ export async function runSelectRunbooks(
 	// manifest-loader.ts already fails the agent load if it doesn't exist on disk
 	// at all, so this is defense against a load-time-valid-but-now-deprecated file.
 	const lifecycleKeptFilenames = new Set(lifecycleResult.kept.map((e) => e.filename));
-	const alwaysSelect = (runtime.getAlwaysSelect?.() ?? []).filter((f) => lifecycleKeptFilenames.has(f));
+	// De-duped via a Set round-trip: a duplicate entry in the always_select config
+	// (e.g. a copy-paste mistake in index.yaml) must not produce a duplicate
+	// filename in the final selection (CodeRabbit, PR #548).
+	const alwaysSelect = [...new Set((runtime.getAlwaysSelect?.() ?? []).filter((f) => lifecycleKeptFilenames.has(f)))];
 
 	// Step 2: build router prompt
 	const lastMessage = state.messages.at(-1);

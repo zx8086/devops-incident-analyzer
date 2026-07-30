@@ -305,6 +305,16 @@ describe("runSelectRunbooks: always-select (SIO-1302)", () => {
 		expect(result.selectedRunbooks).toEqual(["a.md"]);
 	});
 
+	// CodeRabbit (PR #548): a duplicate entry in the always_select CONFIG itself
+	// (e.g. a copy-paste mistake in index.yaml) must not produce a duplicate
+	// filename in the final selection.
+	test("a duplicate entry within always_select config is deduped", async () => {
+		alwaysSelectOverride = ["c.md", "c.md"];
+		llmResponse = { content: '{"filenames":[],"reasoning":"nothing matches"}' };
+		const result = await runSelectRunbooks(makeState(), buildRuntime());
+		expect(result.selectedRunbooks).toEqual(["c.md"]);
+	});
+
 	test("router failure fallback path also unions always-select", async () => {
 		alwaysSelectOverride = ["c.md"];
 		llmError = new Error("500 Internal Server Error");
