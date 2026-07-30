@@ -311,11 +311,17 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 	const DeploysParams = z.object({
 		since: z.string().describe("ISO 8601 timestamp; return MRs merged at or after this time"),
 		group_path: z.string().optional().describe("Top-level group path (default: pvhcorp)"),
+		project_path: z
+			.string()
+			.optional()
+			.describe(
+				"SIO-1298: exact project full_path (e.g. pvhcorp/b2b/oit/order-service). Scopes the query to that one project -- use for the 30-day escalation call when the owning codebase is known",
+			),
 		limit: z.number().int().optional().describe("Max MRs to return (default 50, max 1000)"),
 	});
 	server.tool(
 		"gitlab_recent_deploys",
-		"List recent deploy merge requests merged across the whole group since a timestamp, ranked newest-first. " +
+		"List recent deploy merge requests merged across the whole group (or one project via project_path) since a timestamp, ranked newest-first. " +
 			"Group-wide (impossible with per-project REST). Consumes GitLab Credits.",
 		DeploysParams.shape,
 		async (args) =>
@@ -323,7 +329,12 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 				const p = DeploysParams.parse(args);
 				return runQuery(
 					"gitlab_recent_deploys",
-					buildRecentDeploysQuery({ groupPath: p.group_path ?? ctx.defaultGroupPath, since: p.since, limit: p.limit }),
+					buildRecentDeploysQuery({
+						groupPath: p.group_path ?? ctx.defaultGroupPath,
+						since: p.since,
+						limit: p.limit,
+						projectPath: p.project_path,
+					}),
 				);
 			}),
 	);
@@ -332,11 +343,17 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 	const FailuresParams = z.object({
 		since: z.string().describe("ISO 8601 timestamp; count failures created at or after this time"),
 		group_path: z.string().optional().describe("Top-level group path (default: pvhcorp)"),
+		project_path: z
+			.string()
+			.optional()
+			.describe(
+				"SIO-1298: exact project full_path (e.g. pvhcorp/b2b/oit/order-service). Scopes the query to that one project -- use for the 30-day escalation call when the owning codebase is known",
+			),
 		limit: z.number().int().optional().describe("Max ranked rows to return (default 50, max 1000)"),
 	});
 	server.tool(
 		"gitlab_pipeline_failures",
-		"Rank pipeline failures (source=merge_request_event) across all projects in the group within a window. " +
+		"Rank pipeline failures (source=merge_request_event) across all projects in the group (or one project via project_path) within a window. " +
 			"Group-wide aggregation. Consumes GitLab Credits.",
 		FailuresParams.shape,
 		async (args) =>
@@ -348,6 +365,7 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 						groupPath: p.group_path ?? ctx.defaultGroupPath,
 						since: p.since,
 						limit: p.limit,
+						projectPath: p.project_path,
 					}),
 				);
 			}),

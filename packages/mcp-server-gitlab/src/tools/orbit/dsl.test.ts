@@ -244,3 +244,37 @@ describe("Orbit filter-grammar contract (SIO-1151)", () => {
 		expect(nodes[2]?.filters).toEqual({ state: { eq: "merged" } });
 	});
 });
+
+// SIO-1298: project_path narrows the Project node to an exact full_path match for the
+// mandatory 30-day escalation call; omitting it keeps the group-prefix scan unchanged.
+describe("project-scoped correlation queries (SIO-1298)", () => {
+	test("recent deploys: projectPath switches to exact full_path eq", () => {
+		const { dsl } = buildRecentDeploysQuery({
+			groupPath: "pvhcorp",
+			since: "2026-06-30T00:00:00Z",
+			projectPath: "pvhcorp/b2b/oit/order-service",
+		});
+		const s = JSON.stringify(dsl);
+		expect(s).toContain('"eq":"pvhcorp/b2b/oit/order-service"');
+		expect(s).not.toContain("starts_with");
+	});
+
+	test("pipeline failures: projectPath switches to exact full_path eq", () => {
+		const { dsl } = buildPipelineFailuresQuery({
+			groupPath: "pvhcorp",
+			since: "2026-06-30T00:00:00Z",
+			projectPath: "pvhcorp/b2b/oit/order-service",
+		});
+		const s = JSON.stringify(dsl);
+		expect(s).toContain('"eq":"pvhcorp/b2b/oit/order-service"');
+		expect(s).not.toContain("starts_with");
+	});
+
+	test("omitted projectPath keeps the group-prefix scan byte-identical", () => {
+		const withOmitted = JSON.stringify(
+			buildRecentDeploysQuery({ groupPath: "pvhcorp", since: "2026-06-30T00:00:00Z" }).dsl,
+		);
+		expect(withOmitted).toContain('"starts_with":"pvhcorp/"');
+		expect(withOmitted).not.toContain('"eq":"pvhcorp');
+	});
+});

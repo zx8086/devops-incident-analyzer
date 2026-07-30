@@ -146,12 +146,20 @@ export function buildCrossProjectCallersQuery(params: { fqn: string; limit?: num
 	};
 }
 
+// SIO-1298: shared Project-node filter for the two correlation queries. A resolved
+// owning project narrows to an exact full_path match (cheap 30-day escalation call);
+// otherwise the group prefix scan is the default.
+function projectScopeFilter(groupPath: string, projectPath?: string): Record<string, unknown> {
+	return projectPath ? { full_path: { eq: projectPath } } : { full_path: { starts_with: `${groupPath}/` } };
+}
+
 // Recent deploy MRs across a group, merged since a timestamp. Selectivity via the
-// group full_path prefix + the merged_at time bound.
+// group full_path prefix (or an exact project path) + the merged_at time bound.
 export function buildRecentDeploysQuery(params: {
 	groupPath: string;
 	since: string;
 	limit?: number;
+	projectPath?: string;
 }): TaggedOrbitQuery {
 	const groupPath = requireSelector(params.groupPath, "groupPath");
 	const since = requireSelector(params.since, "since");
@@ -164,7 +172,7 @@ export function buildRecentDeploysQuery(params: {
 					id: "p",
 					entity: "Project",
 					columns: ["name", "full_path"],
-					filters: { full_path: { starts_with: `${groupPath}/` } },
+					filters: projectScopeFilter(groupPath, params.projectPath),
 				},
 				{
 					id: "mr",
@@ -191,6 +199,7 @@ export function buildPipelineFailuresQuery(params: {
 	groupPath: string;
 	since: string;
 	limit?: number;
+	projectPath?: string;
 }): TaggedOrbitQuery {
 	const groupPath = requireSelector(params.groupPath, "groupPath");
 	const since = requireSelector(params.since, "since");
@@ -212,7 +221,7 @@ export function buildPipelineFailuresQuery(params: {
 					id: "p",
 					entity: "Project",
 					columns: ["name", "full_path"],
-					filters: { full_path: { starts_with: `${groupPath}/` } },
+					filters: projectScopeFilter(groupPath, params.projectPath),
 				},
 			],
 			relationships: [{ type: "IN_PROJECT", from: "pl", to: "p" }],

@@ -10,15 +10,19 @@ import {
 	awsErrorKind,
 	consumeAbsenceExitLog,
 	consumeEmptyAwsResultsAdvice,
+	consumeGitlabCorrelationWidenAdvice,
 	consumeInvalidQueryIdAdvice,
 	createLoopGuardState,
 	DUPLICATE_CALL_STOP_MESSAGE,
 	GENERIC_LOOP_GUARD_STOP_MESSAGE,
+	GITLAB_CORRELATION_WIDEN_ADVICE,
 	isDiscoveryCall,
 	isEmptyAwsQueryResults,
+	isEmptyGitlabCorrelationResult,
 	isGuardedTool,
 	isInvalidQueryIdResult,
 	isObservedTool,
+	isRecentCorrelationWindow,
 	isUnproductiveResult,
 	LOOP_GUARD_STOP_MESSAGE,
 	type LoopGuardState,
@@ -1033,5 +1037,70 @@ describe("SIO-1268: complete-ECS-enumeration absence early exit", () => {
 			expect(shouldShortCircuit(state, "aws_ecs_list_services", sig, args)).toBe(false);
 			recordResult(state, "aws_ecs_list_services", sig, servicesPage(`c${i}`, []), args);
 		}
+	});
+});
+
+// SIO-1298: staged deploy-correlation window -- empty ~24h result latches the mandatory
+// 30-day escalation advice, one-shot per tool.
+describe("gitlab correlation widen advice (SIO-1298)", () => {
+	const DEPLOYS = "gitlab_recent_deploys";
+	const FAILURES = "gitlab_pipeline_failures";
+	const recentSince = () => ({ since: new Date(Date.now() - 24 * 3600_000).toISOString() });
+	const oldSince = () => ({ since: new Date(Date.now() - 30 * 24 * 3600_000).toISOString() });
+	const emptyPayload = JSON.stringify({
+		queryTag: "orbit_recent_deploys",
+		result: { format_version: "3.0.1", query_type: "traversal", nodes: [], edges: [] },
+		query_type: "traversal",
+		row_count: 0,
+	});
+	const nonEmptyPayload = JSON.stringify({
+		queryTag: "orbit_recent_deploys",
+		result: { format_version: "3.0.1", query_type: "traversal", nodes: [{ type: "MergeRequest" }] },
+		query_type: "traversal",
+		row_count: 3,
+	});
+
+	test("detects empty-success payloads; errors and non-JSON are not empty", () => {
+		expect(isEmptyGitlabCorrelationResult(emptyPayload)).toBe(true);
+		expect(isEmptyGitlabCorrelationResult(nonEmptyPayload)).toBe(false);
+		expect(isEmptyGitlabCorrelationResult(JSON.stringify({ row_count: 0, _error: { kind: "bad-query" } }))).toBe(false);
+		expect(isEmptyGitlabCorrelationResult("prose, not JSON")).toBe(false);
+		// MCP text-block array form coalesces to the same string
+		expect(isEmptyGitlabCorrelationResult([{ type: "text", text: emptyPayload }])).toBe(true);
+	});
+
+	test("since recency: default window counts, 30-day lookback does not", () => {
+		const now = Date.parse("2026-07-30T00:00:00Z");
+		expect(isRecentCorrelationWindow({ since: "2026-07-29T00:00:00Z" }, now)).toBe(true);
+		expect(isRecentCorrelationWindow({ since: "2026-06-30T00:00:00Z" }, now)).toBe(false);
+		expect(isRecentCorrelationWindow({ since: "not-a-date" }, now)).toBe(false);
+		expect(isRecentCorrelationWindow(undefined, now)).toBe(false);
+		// future-dated since (LLM year-drift) must not latch the escalation
+		expect(isRecentCorrelationWindow({ since: "2027-07-29T00:00:00Z" }, now)).toBe(false);
+	});
+
+	test("empty + recent since latches; advice consumed exactly once", () => {
+		const state = createLoopGuardState();
+		recordResult(state, DEPLOYS, "sig1", emptyPayload, recentSince());
+		expect(consumeGitlabCorrelationWidenAdvice(state, DEPLOYS)).toBe(GITLAB_CORRELATION_WIDEN_ADVICE);
+		expect(consumeGitlabCorrelationWidenAdvice(state, DEPLOYS)).toBeNull();
+	});
+
+	test("both tools latch independently", () => {
+		const state = createLoopGuardState();
+		recordResult(state, DEPLOYS, "sig1", emptyPayload, recentSince());
+		recordResult(state, FAILURES, "sig2", emptyPayload, recentSince());
+		expect(consumeGitlabCorrelationWidenAdvice(state, FAILURES)).toBe(GITLAB_CORRELATION_WIDEN_ADVICE);
+		expect(consumeGitlabCorrelationWidenAdvice(state, DEPLOYS)).toBe(GITLAB_CORRELATION_WIDEN_ADVICE);
+	});
+
+	test("no latch for non-empty results, old windows, or other tools", () => {
+		const state = createLoopGuardState();
+		recordResult(state, DEPLOYS, "sig1", nonEmptyPayload, recentSince());
+		expect(consumeGitlabCorrelationWidenAdvice(state, DEPLOYS)).toBeNull();
+		recordResult(state, DEPLOYS, "sig2", emptyPayload, oldSince());
+		expect(consumeGitlabCorrelationWidenAdvice(state, DEPLOYS)).toBeNull();
+		recordResult(state, "gitlab_search", "sig3", emptyPayload, recentSince());
+		expect(consumeGitlabCorrelationWidenAdvice(state, "gitlab_search")).toBeNull();
 	});
 });
