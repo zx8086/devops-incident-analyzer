@@ -260,6 +260,36 @@ describe("graphEnrich", () => {
 		});
 	});
 
+	// SIO-1305: the full canonical Service-name universe, read once here so the
+	// aggregator's synchronous downstream-impact render can resolve Orbit
+	// consumer repos against the same universe the write path (recordRootCauseData)
+	// uses -- not just names already surfaced in this turn's graphBlastRadius.
+	test("populates knownServiceNames from a live serviceNames(store) read", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		store.stub("MATCH (s:Service) RETURN s.name", [{ name: "styles-v3-service" }, { name: "lists-api" }]);
+		_setGraphStoreForTesting(store);
+		_setEmbedderForTesting(async () => [0.1, 0.2, 0.3]);
+		const result = await graphEnrich(stateWith(["styles-v3-service"], "kafka lag"));
+		expect(result.knownServiceNames).toEqual(["styles-v3-service", "lists-api"]);
+	});
+
+	test("knownServiceNames read failure is non-fatal (soft-fails to empty, keeps the rest of enrichment)", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		const originalRun = store.run.bind(store);
+		store.run = (async (cypher: string, params?: Record<string, unknown>) => {
+			if (cypher.includes("MATCH (s:Service) RETURN s.name")) throw new Error("boom");
+			return originalRun(cypher, params);
+		}) as typeof store.run;
+		_setGraphStoreForTesting(store);
+		_setEmbedderForTesting(async () => [0.1, 0.2, 0.3]);
+		const result = await graphEnrich(stateWith(["svc-a"], "kafka lag"));
+		expect(result.knownServiceNames).toEqual([]);
+		// the rest of enrichment still ran (graphContext key is present).
+		expect(result.graphContext).toBeDefined();
+	});
+
 	test("soft-fails to dependencies-only when the embedder throws", async () => {
 		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
 		const store = new InMemoryGraphStore();

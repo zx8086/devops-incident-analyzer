@@ -157,28 +157,17 @@ export function buildAggregatorMessages(
 	// field, not extractFindings-derived) with this turn's LIVE Orbit code radius
 	// (re-derived from state.dataSourceResults, same double-build convention as
 	// networkContext/mlAnomalyContext above -- graphEnrich runs BEFORE the gitlab
-	// fan-out, so it never sees this turn's orbitFindings).
-	//
-	// KNOWN LIMITATION (CodeRabbit, PR #547): "known service names" for the P6
-	// repo-resolution match here is the union of names already surfaced THIS turn
-	// (incident services + graphBlastRadius neighbours), narrower than the write
-	// path's serviceNames(store) full live universe (graph-knowledge.ts) -- a live
-	// store read is deliberately not used here since buildAggregatorMessages is
-	// synchronous. Consequence: a code-only consumer whose service has never had
-	// an APM DEPENDS_ON edge (so it never appears in graphBlastRadius) IS still
-	// persisted by the write path this turn, but does NOT appear in THIS turn's
-	// Downstream Impact section -- it surfaces next turn via graphEnrich's
-	// priorRelationshipsForServices instead (a different prompt section, "Known
-	// dependencies"), once graphEnrich re-reads the graph. Same-turn parity would
-	// need either a live store read here (making aggregation async) or threading
-	// the canonical service list through state from an earlier async node --
-	// deferred as a heavier change than this same-turn preview warrants.
+	// fan-out, so it never sees this turn's orbitFindings). The P6 repo-resolution
+	// match uses state.knownServiceNames -- the SAME full canonical Service-name
+	// universe the write path (recordRootCauseData, graph-knowledge.ts) resolves
+	// against, read once by graphEnrich (CodeRabbit, PR #547: a narrower
+	// incident-services-plus-graphBlastRadius set silently omitted code-only
+	// consumers from this turn's render even though the write path persisted them).
 	let downstreamImpactContext = "";
 	try {
 		const incidentServices = state.normalizedIncident.affectedServices?.map((s) => s.name) ?? [];
-		const known = new Set([...incidentServices, ...state.graphBlastRadius.flatMap((h) => [h.service, h.neighbour])]);
 		const orbitBlastRadius = orbitBlastRadiusFindings(state);
-		const consumerEdges = resolveOrbitConsumerEdges(orbitBlastRadius, incidentServices, [...known]);
+		const consumerEdges = resolveOrbitConsumerEdges(orbitBlastRadius, incidentServices, state.knownServiceNames);
 		const entries = buildDownstreamImpact(state.graphBlastRadius, consumerEdges, incidentServices);
 		downstreamImpactContext = summarizeDownstreamImpactForPrompt(entries);
 	} catch {

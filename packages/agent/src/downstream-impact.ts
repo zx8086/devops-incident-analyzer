@@ -34,6 +34,14 @@ export interface DownstreamImpactEntry {
 	source: ImpactSource;
 }
 
+// normalize() does not trim whitespace, so " svc " and "svc" produce distinct
+// keys and would silently fail to match -- trim before normalizing everywhere a
+// lookup key is derived from a name that might carry incidental whitespace
+// (CodeRabbit, PR #547).
+function normalizedKey(name: string): string {
+	return normalize(name.trim());
+}
+
 // Orbit's sourceProject is projectFromPath's two-segment prefix (e.g.
 // "pvhcorp/styles-v3-service"), a repo-shaped identifier -- normalize() is built
 // for bare service-name-like tokens (it strips -service/-consumer/etc suffixes)
@@ -57,8 +65,8 @@ export function resolveOrbitConsumerEdges(
 	incidentServices: string[],
 	knownServiceNames: string[],
 ): TopologyEdgeRecord[] {
-	const byNormalized = new Map(knownServiceNames.map((name) => [normalize(name), name]));
-	const incidentSet = new Set(incidentServices.map((s) => normalize(s)));
+	const byNormalized = new Map(knownServiceNames.map((name) => [normalizedKey(name), name]));
+	const incidentSet = new Set(incidentServices.map(normalizedKey));
 	const edges: TopologyEdgeRecord[] = [];
 	const seen = new Set<string>();
 	for (const finding of findings) {
@@ -66,9 +74,9 @@ export function resolveOrbitConsumerEdges(
 		// The incident service the definition's OWN project resolves to -- the
 		// canonical "to" endpoint (this is the failing service).
 		const definitionService = finding.sourceProject
-			? byNormalized.get(normalize(repoName(finding.sourceProject)))
+			? byNormalized.get(normalizedKey(repoName(finding.sourceProject)))
 			: undefined;
-		const to = definitionService && incidentSet.has(normalize(definitionService)) ? definitionService : undefined;
+		const to = definitionService && incidentSet.has(normalizedKey(definitionService)) ? definitionService : undefined;
 		if (!to) continue;
 		// A name-match finding has no confirmed importer (that's the point of the
 		// fallback), so the consumer signal is the OTHER distinct sourceProject
@@ -78,7 +86,7 @@ export function resolveOrbitConsumerEdges(
 		for (const other of findings) {
 			if (other === finding || other.radiusMode !== "definition-name-match") continue;
 			if (!other.sourceProject) continue;
-			const from = byNormalized.get(normalize(repoName(other.sourceProject)));
+			const from = byNormalized.get(normalizedKey(repoName(other.sourceProject)));
 			if (!from || from === to) continue;
 			const key = `${from} ${to}`;
 			if (seen.has(key)) continue;
@@ -100,18 +108,19 @@ export function buildDownstreamImpact(
 	orbitConsumerEdges: TopologyEdgeRecord[],
 	incidentServices: string[],
 ): DownstreamImpactEntry[] {
-	const incidentSet = new Set(incidentServices.map((s) => normalize(s)));
-	// Canonical-name maps keyed by normalize() so an APM hit and an Orbit edge that
-	// name the same service/dependent with different casing/whitespace still merge
-	// into ONE entry (and can be labeled confirmed). The first-seen spelling per
-	// normalized key is kept as the display name -- APM and Orbit both source from
-	// real service identifiers, so any spelling is representative.
+	const incidentSet = new Set(incidentServices.map(normalizedKey));
+	// Canonical-name maps keyed by the same trim+normalize() (normalizedKey) so an
+	// APM hit and an Orbit edge that name the same service/dependent with
+	// different casing/whitespace still merge into ONE entry (and can be labeled
+	// confirmed). The first-seen spelling per key is kept as the display name --
+	// APM and Orbit both source from real service identifiers, so any spelling is
+	// representative.
 	const canonical = new Map<string, string>();
 	function canonicalize(name: string): string {
-		const key = normalize(name);
-		const existing = canonical.get(key);
+		const k = normalizedKey(name);
+		const existing = canonical.get(k);
 		if (existing) return existing;
-		canonical.set(key, name);
+		canonical.set(k, name);
 		return name;
 	}
 	// APM: blastRadiusForServices' "depends-on" hits are both-direction (SIO-1104
@@ -125,7 +134,7 @@ export function buildDownstreamImpact(
 	const apmDependents = new Map<string, Set<string>>();
 	for (const hit of graphBlastRadius) {
 		if (hit.via !== "depends-on") continue;
-		if (!incidentSet.has(normalize(hit.service))) continue;
+		if (!incidentSet.has(normalizedKey(hit.service))) continue;
 		const service = canonicalize(hit.service);
 		const set = apmDependents.get(service) ?? new Set<string>();
 		set.add(canonicalize(hit.neighbour));

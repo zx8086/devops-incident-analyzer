@@ -196,6 +196,19 @@ export const AgentState = Annotation.Root({
 		default: () => [],
 	}),
 
+	// SIO-1305: the KG's full canonical Service-name universe, read once by
+	// graphEnrich (a cheap addition to its existing store-open + async reads) so
+	// the aggregator's downstream-impact render (buildAggregatorMessages, which is
+	// synchronous and cannot do its own live store read) can resolve Orbit
+	// name-match consumer repos against the SAME universe recordRootCauseData's
+	// write path uses, not just names already surfaced this turn. Replace reducer;
+	// default [] so a quiet turn (graph disabled, or a read failure) renders no
+	// code-only consumers rather than fabricating a service.
+	knownServiceNames: Annotation<string[]>({
+		reducer: (_, next) => next,
+		default: () => [],
+	}),
+
 	// SIO-1204: per-turn network map derived from toolOutputs[] by extractFindings
 	// (pure buildNetworkTopology). REPLACE reducer -- recomputed each turn, and the
 	// node always returns the key (undefined included) so a turn with no network

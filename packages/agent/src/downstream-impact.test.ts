@@ -68,6 +68,17 @@ describe("resolveOrbitConsumerEdges", () => {
 		const edges = resolveOrbitConsumerEdges(findings, ["styles-v3-service"], ["styles-v3-service", "lists-api"]);
 		expect(edges).toHaveLength(1);
 	});
+
+	// CodeRabbit (PR #547, round 2): normalize() does not trim whitespace, so a
+	// known-service-name list entry with incidental padding would fail to match.
+	test("whitespace-padded known service names still resolve", () => {
+		const findings = [
+			nameMatchFinding({ sourceProject: "pvhcorp/styles-v3-service" }),
+			nameMatchFinding({ sourceProject: "pvhcorp/lists-api" }),
+		];
+		const edges = resolveOrbitConsumerEdges(findings, [" styles-v3-service "], [" styles-v3-service ", " lists-api "]);
+		expect(edges).toContainEqual({ kind: "depends-on", from: " lists-api ", to: " styles-v3-service " });
+	});
 });
 
 describe("buildDownstreamImpact", () => {
@@ -113,6 +124,25 @@ describe("buildDownstreamImpact", () => {
 		};
 		const entries = buildDownstreamImpact(
 			[casedHit],
+			[{ kind: "depends-on", from: "lists-api", to: "styles-v3-service" }],
+			["styles-v3-service"],
+		);
+		expect(entries).toHaveLength(1);
+		expect(entries[0]?.source).toBe("confirmed");
+	});
+
+	// CodeRabbit (PR #547, round 2): normalize() does not trim whitespace, so a
+	// leading/trailing-space variant from one source would not merge with the
+	// other even after the casing fix above.
+	test("leading/trailing whitespace in one source's names still merges into confirmed", () => {
+		const paddedHit: GraphBlastRadiusHit = {
+			service: " styles-v3-service ",
+			neighbour: " lists-api ",
+			via: "depends-on",
+			sharedResource: "",
+		};
+		const entries = buildDownstreamImpact(
+			[paddedHit],
 			[{ kind: "depends-on", from: "lists-api", to: "styles-v3-service" }],
 			["styles-v3-service"],
 		);

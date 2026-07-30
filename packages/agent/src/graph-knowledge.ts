@@ -184,6 +184,22 @@ export async function graphEnrich(state: AgentStateType): Promise<Partial<AgentS
 			);
 		}
 
+		// SIO-1305: the full canonical Service-name universe, read once here (cheap
+		// addition to this node's existing store-open + async reads) so the
+		// aggregator's downstream-impact render -- synchronous, cannot do its own
+		// live store read -- resolves Orbit consumer repos against the SAME
+		// universe recordRootCauseData's write path uses, not just names already
+		// surfaced this turn's graphBlastRadius (CodeRabbit, PR #547).
+		let knownServiceNames: string[] = [];
+		try {
+			knownServiceNames = await serviceNames(store);
+		} catch (error) {
+			logger.warn(
+				{ error: error instanceof Error ? error.message : String(error) },
+				"graphEnrich serviceNames read failed; continuing",
+			);
+		}
+
 		let similar: SimilarIncidentWithCause[] = [];
 		const query = lastUserQuery(state);
 		if (query) {
@@ -270,7 +286,7 @@ export async function graphEnrich(state: AgentStateType): Promise<Partial<AgentS
 			);
 		}
 
-		return { graphContext: buildGraphContext(deps, similar) + networkContext, graphBlastRadius };
+		return { graphContext: buildGraphContext(deps, similar) + networkContext, graphBlastRadius, knownServiceNames };
 	} catch (error) {
 		logger.warn(
 			{ error: error instanceof Error ? error.message : String(error) },
