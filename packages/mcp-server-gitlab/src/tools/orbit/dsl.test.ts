@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	buildBlastRadiusQuery,
 	buildCrossProjectCallersQuery,
+	buildDefinitionNameMatchQuery,
 	buildMrForFileQuery,
 	buildPipelineFailuresQuery,
 	buildRecentDeploysQuery,
@@ -32,6 +33,30 @@ describe("Orbit DSL builders", () => {
 
 	test("blast radius: rejects an empty symbol (no unbounded scan)", () => {
 		expect(() => buildBlastRadiusQuery({ symbol: "   " })).toThrow(/selectivity/i);
+	});
+
+	// SIO-1303: the IMPORTS join is blind to Java same-package and cross-service REST
+	// coupling (no import statement is ever produced), so a 0-row edge query does not
+	// mean "no blast radius" -- it means the join can't see it. This fallback drops the
+	// ImportedSymbol/IMPORTS half entirely and matches Definition by name alone.
+	test("definition name-match: tagged as blastRadius, selective, anchored on the symbol", () => {
+		const { queryTag, dsl } = buildDefinitionNameMatchQuery({ symbol: "getStyleByStyleCode" });
+		expect(queryTag).toBe(ORBIT_QUERY_TAGS.blastRadius);
+		expect(hasSelectiveNode(dsl)).toBe(true);
+		expect(JSON.stringify(dsl)).toContain("getStyleByStyleCode");
+		expect(dsl.query_type).toBe("traversal");
+	});
+
+	test("definition name-match: rejects an empty symbol (no unbounded scan)", () => {
+		expect(() => buildDefinitionNameMatchQuery({ symbol: "   " })).toThrow(/selectivity/i);
+	});
+
+	test("definition name-match: single Definition node, no IMPORTS relationship", () => {
+		const { dsl } = buildDefinitionNameMatchQuery({ symbol: "getStyleByStyleCode" });
+		const nodes = dsl.nodes as Array<{ id: string; entity: string }>;
+		expect(nodes).toHaveLength(1);
+		expect(nodes[0]?.entity).toBe("Definition");
+		expect(dsl.relationships ?? []).toHaveLength(0);
 	});
 
 	test("cross-project callers: exact fqn eq filter", () => {
@@ -148,6 +173,7 @@ const ALL_BUILT = [
 	buildPipelineFailuresQuery({ groupPath: "pvhcorp", since: "2026-07-01T00:00:00Z" }),
 	buildRecentVulnerabilitiesQuery({ groupPath: "pvhcorp" }),
 	buildMrForFileQuery({ sourceFile: "src/app.ts" }),
+	buildDefinitionNameMatchQuery({ symbol: "authenticate" }),
 ];
 
 // SIO-1151: filter-grammar contract, live-validated against Orbit format_version
@@ -242,6 +268,12 @@ describe("Orbit filter-grammar contract (SIO-1151)", () => {
 		const nodes = dsl.nodes as Array<{ filters?: Record<string, unknown> }>;
 		expect(nodes[0]?.filters).toEqual({ old_path: { eq: "src/app.ts" } });
 		expect(nodes[2]?.filters).toEqual({ state: { eq: "merged" } });
+	});
+
+	test("definition name-match uses op-as-key text filter on name", () => {
+		const { dsl } = buildDefinitionNameMatchQuery({ symbol: "getStyleByStyleCode" });
+		const nodes = dsl.nodes as Array<{ filters?: Record<string, unknown> }>;
+		expect(nodes[0]?.filters).toEqual({ name: { token_match: "getStyleByStyleCode" } });
 	});
 });
 

@@ -220,6 +220,98 @@ describe("gitlab_blast_radius: mrByFile enrichment stitching", () => {
 	});
 });
 
+// SIO-1303: the IMPORTS join is blind to Java same-package and cross-service REST
+// coupling, so a 0-row edge result does not mean "no blast radius" -- it means the
+// join can't see it. The handler falls back to a Definition name-sweep and tags the
+// payload distinctly so the extractor and the LLM both know these rows are name
+// co-occurrences, not confirmed import edges.
+describe("gitlab_blast_radius: definition name-match fallback (SIO-1303)", () => {
+	test("0 edge rows -> fallback query fires, payload tagged radiusMode, mrByFile still stitches", async () => {
+		const calls: Array<Record<string, unknown>> = [];
+		let call = 0;
+		const client: Partial<OrbitRestClient> = {
+			query: async (dsl: Record<string, unknown>) => {
+				calls.push(dsl);
+				call += 1;
+				if (call === 1) return { result: { rows: [] } }; // primary IMPORTS join: 0 rows
+				if (call === 2) {
+					// fallback definition name-match: 1 row
+					return { result: { rows: [{ def: { fqn: "StyleController#getStyleByStyleCode", file_path: "a.java" } }] } };
+				}
+				// enrichment MR-for-file query
+				return { result: { rows: [{ mr: { iid: 7, merged_at: "2026-07-20 10:00:00" } }] } };
+			},
+		};
+		const { handlers } = register(makeCtx({}, client));
+		const result = await handlers.get("gitlab_blast_radius")?.({ symbol: "getStyleByStyleCode" });
+		expect(result?.isError).toBeFalsy();
+		const payload = JSON.parse(result?.content[0]?.text ?? "{}") as {
+			queryTag: string;
+			radiusMode?: string;
+			mrByFile: Record<string, { iid: number }>;
+		};
+		expect(payload.queryTag).toBe("orbit_blast_radius");
+		expect(payload.radiusMode).toBe("definition-name-match");
+		expect(payload.mrByFile["a.java"]?.iid).toBe(7);
+		// call 2 must be the fallback DSL: single Definition node, no IMPORTS relationship
+		const fallbackDsl = calls[1];
+		const nodes = fallbackDsl?.nodes as Array<{ entity: string }> | undefined;
+		expect(nodes).toHaveLength(1);
+		expect(nodes?.[0]?.entity).toBe("Definition");
+		expect(fallbackDsl?.relationships ?? []).toHaveLength(0);
+	});
+
+	test("edge query returns rows -> no fallback triggered, radiusMode omitted", async () => {
+		let call = 0;
+		const client: Partial<OrbitRestClient> = {
+			query: async () => {
+				call += 1;
+				if (call === 1) return { result: { rows: [{ def: { file_path: "logger.js" }, sym: { file_path: "x.js" } }] } };
+				return { result: { rows: [] } }; // enrichment
+			},
+		};
+		const { handlers } = register(makeCtx({}, client));
+		const result = await handlers.get("gitlab_blast_radius")?.({ symbol: "logger" });
+		const payload = JSON.parse(result?.content[0]?.text ?? "{}") as { radiusMode?: string };
+		expect(payload.radiusMode).toBeUndefined();
+		expect(call).toBe(2); // primary + 1 enrich; no fallback query
+	});
+
+	test("0 edge rows + budget exhausted before fallback -> returns empty primary result, no crash", async () => {
+		let call = 0;
+		const client: Partial<OrbitRestClient> = {
+			query: async () => {
+				call += 1;
+				return { result: { rows: [] } };
+			},
+		};
+		// maxQueriesPerRun: 1 means the primary query consumes the only slot in the window.
+		const { handlers } = register(makeCtx({ maxQueriesPerRun: 1 }, client));
+		const result = await handlers.get("gitlab_blast_radius")?.({ symbol: "getStyleByStyleCode" });
+		expect(result?.isError).toBeFalsy();
+		const payload = JSON.parse(result?.content[0]?.text ?? "{}") as { radiusMode?: string };
+		expect(payload.radiusMode).toBeUndefined();
+		expect(call).toBe(1); // only the primary query ran
+	});
+
+	test("fallback query throws -> falls through to the empty primary payload, no error", async () => {
+		let call = 0;
+		const client: Partial<OrbitRestClient> = {
+			query: async () => {
+				call += 1;
+				if (call === 1) return { result: { rows: [] } };
+				throw new OrbitUnavailableError("fallback boom");
+			},
+		};
+		const { handlers } = register(makeCtx({}, client));
+		const result = await handlers.get("gitlab_blast_radius")?.({ symbol: "getStyleByStyleCode" });
+		expect(result?.isError).toBeFalsy();
+		const payload = JSON.parse(result?.content[0]?.text ?? "{}") as { radiusMode?: string; mrByFile: unknown };
+		expect(payload.radiusMode).toBeUndefined();
+		expect(payload.mrByFile).toEqual({});
+	});
+});
+
 describe("gitlab_orbit_query_graph: selectivity + error classification", () => {
 	test("unselective query rejected with bad-query envelope BEFORE any billed call", async () => {
 		let queryCalls = 0;

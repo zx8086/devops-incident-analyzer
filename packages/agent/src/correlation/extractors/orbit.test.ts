@@ -170,4 +170,92 @@ describe("extractOrbitFindings", () => {
 		const raw = { result: { rows: [{ p: { properties: { full_path: "pvhcorp/x" } } }] } };
 		expect(extractOrbitFindings([out("gitlab_orbit_query_graph", raw)])).toEqual({});
 	});
+
+	// SIO-1303: definition name-match fallback rows carry only `def` (no `sym`/IMPORTS
+	// edge). These are name co-occurrences across repos, not confirmed import sites --
+	// importSiteCount/importedByFiles/importedByProjects must stay empty, and the
+	// finding must be stamped radiusMode so downstream consumers can tell edge-radius
+	// findings apart from name-match findings.
+	describe("definition name-match fallback (radiusMode)", () => {
+		test("radiusMode rows populate definitionName but NOT importSiteCount/importedByFiles/importedByProjects", () => {
+			const raw = {
+				queryTag: "orbit_blast_radius",
+				radiusMode: "definition-name-match",
+				result: {
+					rows: [
+						{
+							def: {
+								properties: {
+									fqn: "StyleController#getStyleByStyleCode",
+									file_path: "pvh/services/styles/controller/StyleController.java",
+									definition_type: "method",
+								},
+							},
+						},
+					],
+				},
+			};
+			const findings = extractOrbitFindings([out("gitlab_blast_radius", raw)]);
+			expect(findings.blastRadius).toHaveLength(1);
+			const b = findings.blastRadius?.[0];
+			expect(b?.definitionName).toBe("StyleController#getStyleByStyleCode");
+			expect(b?.radiusMode).toBe("definition-name-match");
+			expect(b?.importSiteCount).toBe(0);
+			expect(b?.importedByFiles).toEqual([]);
+			expect(b?.importedByProjects).toEqual([]);
+		});
+
+		test("radiusMode rows still stitch MR metadata from mrByFile", () => {
+			const raw = {
+				queryTag: "orbit_blast_radius",
+				radiusMode: "definition-name-match",
+				result: {
+					rows: [{ def: { properties: { fqn: "X", file_path: "a.java" } } }],
+				},
+				mrByFile: {
+					"a.java": { properties: { id: "9", merged_at: "2026-07-20T00:00:00Z" } },
+				},
+			};
+			const b = extractOrbitFindings([out("gitlab_blast_radius", raw)]).blastRadius?.[0];
+			expect(b?.mrId).toBe("9");
+			expect(b?.mrMergedAt).toBe("2026-07-20T00:00:00Z");
+		});
+
+		test("multiple name-match rows for distinct definitions produce distinct findings, none with an import count", () => {
+			const raw = {
+				queryTag: "orbit_blast_radius",
+				radiusMode: "definition-name-match",
+				result: {
+					rows: [
+						{ def: { properties: { fqn: "A", file_path: "a.java" } } },
+						{ def: { properties: { fqn: "B", file_path: "b.java" } } },
+					],
+				},
+			};
+			const findings = extractOrbitFindings([out("gitlab_blast_radius", raw)]);
+			expect(findings.blastRadius).toHaveLength(2);
+			for (const b of findings.blastRadius ?? []) {
+				expect(b.importSiteCount).toBe(0);
+				expect(b.radiusMode).toBe("definition-name-match");
+			}
+		});
+
+		test("absent radiusMode keeps the existing edge-confirmed importSiteCount behavior", () => {
+			const raw = {
+				queryTag: "orbit_blast_radius",
+				result: {
+					rows: [
+						{
+							def: { properties: { fqn: "Auth::verify", file_path: "a.rb" } },
+							sym: { properties: { file_path: "checkout/app.rb" } },
+						},
+					],
+				},
+			};
+			const b = extractOrbitFindings([out("gitlab_blast_radius", raw)]).blastRadius?.[0];
+			expect(b?.radiusMode).toBeUndefined();
+			expect(b?.importSiteCount).toBe(1);
+			expect(b?.importedByFiles).toHaveLength(1);
+		});
+	});
 });
