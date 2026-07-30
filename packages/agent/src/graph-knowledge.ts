@@ -10,23 +10,28 @@ import { createHash } from "node:crypto";
 import {
 	blastRadiusForServices,
 	buildGraphContext,
+	type GraphStore,
 	getGraphStore,
 	isKnowledgeGraphEnabled,
 	networkMapForService,
 	priorRelationshipsForServices,
 	priorRootCauses,
 	recordIncident,
+	recordOrbitDependsOnEdges,
 	recordRootCause,
 	rootCauseForIncident,
 	type SimilarIncidentWithCause,
+	serviceNames,
 	setIncidentEmbedding,
 	similarIncidents,
 	upsertEntities,
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
-import { truncateForEmbedding } from "@devops-agent/shared";
+import { type OrbitBlastRadius, truncateForEmbedding } from "@devops-agent/shared";
 import { evaluate } from "./correlation/engine.ts";
 import { correlationRules } from "./correlation/rules.ts";
+import { selectResultWithFindings } from "./correlation/select-result.ts";
+import { resolveOrbitConsumerEdges } from "./downstream-impact.ts";
 import { registerGraphWarmer } from "./lifecycle.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import { renderNetworkContextLine } from "./network-kg.ts";
@@ -106,6 +111,35 @@ function lastUserQuery(state: AgentStateType): string {
 
 function affectedServiceNames(state: AgentStateType): string[] {
 	return (state.normalizedIncident.affectedServices ?? []).map((s) => s.name).filter((n) => n.length > 0);
+}
+
+// SIO-1305: this turn's Orbit blast-radius findings, mirroring correlation/rules.ts's
+// getOrbitFindings (that one is file-private; graph-knowledge reads the same shared
+// selector directly rather than exporting a rules.ts internal for one caller).
+function orbitBlastRadiusFindings(state: AgentStateType): OrbitBlastRadius[] {
+	const result = selectResultWithFindings(state.dataSourceResults, "gitlab", "orbitFindings");
+	if (result?.status !== "success") return [];
+	return result.orbitFindings?.blastRadius ?? [];
+}
+
+// SIO-1305: write this turn's Orbit-derived consumer edges into the KG (resolution
+// via resolveOrbitConsumerEdges in downstream-impact.ts, shared with the render
+// side so the write and read paths agree on what counts as a consumer). Own
+// try/catch (the recordRootCauseData soft-fail pattern) -- a write failure never
+// blocks the root-cause record it rides alongside.
+async function recordOrbitConsumerEdges(store: GraphStore, state: AgentStateType): Promise<void> {
+	const findings = orbitBlastRadiusFindings(state);
+	if (findings.length === 0) return;
+	try {
+		const known = await serviceNames(store);
+		const edges = resolveOrbitConsumerEdges(findings, affectedServiceNames(state), known);
+		if (edges.length > 0) await recordOrbitDependsOnEdges(store, edges);
+	} catch (error) {
+		logger.warn(
+			{ error: error instanceof Error ? error.message : String(error) },
+			"recordOrbitConsumerEdges write failed; continuing",
+		);
+	}
 }
 
 // recordEntities node: persist the turn's services + incident into the graph.
@@ -277,14 +311,19 @@ function topSatisfiedCorrelation(state: AgentStateType): { ruleName: string; des
 }
 
 // recordRootCause node: persist a RootCause for the turn's Incident when a
-// cross-domain correlation held. Runs LATE (after mitigation) so it can see the
-// final confidenceScore. Soft-fails like the other graph nodes.
+// cross-domain correlation held, AND (SIO-1305, independent of whether a root cause
+// was found) this turn's Orbit definition name-match consumer edges. Runs LATE
+// (after mitigation) so it can see the final confidenceScore, and -- load-bearing
+// for the Orbit write -- so orbitFindings from this turn's gitlab-agent fan-out are
+// already in state.dataSourceResults (graphEnrich runs too early to see them).
+// Soft-fails like the other graph nodes.
 export async function recordRootCauseData(state: AgentStateType): Promise<Partial<AgentStateType>> {
 	if (!isKnowledgeGraphEnabled()) return {};
 	const cause = topSatisfiedCorrelation(state);
-	if (!cause) return {};
 	try {
 		const store = await getGraphStore();
+		await recordOrbitConsumerEdges(store, state);
+		if (!cause) return {};
 		// PK is a stable hash of the normalized class so recurrences MERGE to one node.
 		const id = createHash("sha256").update(cause.ruleName).digest("hex").slice(0, 16);
 		await recordRootCause(store, {

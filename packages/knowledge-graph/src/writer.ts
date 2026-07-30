@@ -11,6 +11,7 @@ import {
 	NETWORK_DISCOVERED_BY,
 	type NetworkTopologyRecord,
 	NetworkTopologyRecordSchema,
+	ORBIT_DISCOVERED_BY,
 	TOPOLOGY_DISCOVERED_BY,
 	TOPOLOGY_KINDS,
 	type TopologyEdgeKind,
@@ -720,6 +721,54 @@ export async function recordTopologyEdges(store: GraphStore, edges: TopologyEdge
 		await store.run(
 			`MATCH (a:${fromLabel} {${fromKey}: $from})-[r:${rel}]->(b:${toLabel} {${toKey}: $to}) WHERE coalesce(r.tValid, '') = '' SET r.tValid = $now`,
 			{ from: edge.from, to: edge.to, now },
+		);
+	}
+}
+
+// SIO-1305: DEPENDS_ON edges derived from Orbit's SIO-1303 definition name-match
+// consumers (code-derived downstream-impact evidence, resolved to canonical Service
+// names by the caller -- this writer never guesses a Service from a raw repo path).
+// These coexist with the APM topology sweep's DEPENDS_ON edges on the SAME rel
+// table, disambiguated only by discoveredBy, so a collision policy is mandatory:
+// NEVER demote an edge the APM sweep already confirmed (discoveredBy ==
+// TOPOLOGY_DISCOVERED_BY) to Orbit provenance. recordTopologyEdges's unconditional
+// re-observe-claims-ownership SET is correct for its own single-writer sweep, but
+// wrong here where two independent, differently-trusted sources write the same
+// table -- so this is NOT a call to recordTopologyEdges; it duplicates the MERGE
+// shape with a pre-check gating the discoveredBy SET, modeled on recordIpBinding's
+// invalidate-the-conflict-before-merge shape (also in this file) rather than a
+// conditional SET clause.
+export async function recordOrbitDependsOnEdges(store: GraphStore, edges: TopologyEdgeRecord[]): Promise<void> {
+	const { rel, fromLabel, fromKey, toLabel, toKey } = TOPOLOGY_KINDS["depends-on"];
+	for (const raw of edges) {
+		const parsed = TopologyEdgeRecordSchema.safeParse(raw);
+		if (!parsed.success || parsed.data.kind !== "depends-on") continue;
+		const edge = parsed.data;
+		const now = edge.createdAt ?? new Date().toISOString();
+		await store.run(`MERGE (a:${fromLabel} {${fromKey}: $from})`, { from: edge.from });
+		await store.run(`MERGE (b:${toLabel} {${toKey}: $to})`, { to: edge.to });
+		// Pre-check: does a currently-valid, sweep-owned edge already exist for this
+		// exact pair? If so, this write is a no-op -- the APM sweep's confirmation
+		// stands, never overwritten by a lower-trust code co-occurrence signal.
+		const owned = await store.run<{ n: number }>(
+			`MATCH (a:${fromLabel} {${fromKey}: $from})-[r:${rel}]->(b:${toLabel} {${toKey}: $to}) WHERE r.discoveredBy = $topologyDiscoveredBy AND r.tInvalid = '' RETURN count(r) AS n`,
+			{ from: edge.from, to: edge.to, topologyDiscoveredBy: TOPOLOGY_DISCOVERED_BY },
+		);
+		if ((owned[0]?.n ?? 0) > 0) continue;
+		// MERGE with a discoveredBy guard: only claim/re-claim Orbit ownership when
+		// the edge is new or already Orbit-owned -- never when it's owned by anyone
+		// else (the pre-check above covers the sweep; this WHERE covers any other
+		// future writer sharing this table).
+		await store.run(
+			`MATCH (a:${fromLabel} {${fromKey}: $from}), (b:${toLabel} {${toKey}: $to}) MERGE (a)-[r:${rel}]->(b) WITH r WHERE coalesce(r.discoveredBy, '') = '' OR r.discoveredBy = $orbitDiscoveredBy SET r.discoveredBy = $orbitDiscoveredBy, r.tInvalid = '', r.consecutiveMisses = 0`,
+			{ from: edge.from, to: edge.to, orbitDiscoveredBy: ORBIT_DISCOVERED_BY },
+		);
+		await backfillEdgeTValid(
+			store,
+			`(a:${fromLabel} {${fromKey}: $from})-[r:${rel}]->(b:${toLabel} {${toKey}: $to})`,
+			"r",
+			{ from: edge.from, to: edge.to },
+			now,
 		);
 	}
 }

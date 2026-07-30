@@ -311,4 +311,61 @@ describe("recordRootCauseData", () => {
 		expect(edge?.params?.ruleName).toBe("kafka-significant-lag");
 		expect(edge?.params?.confidence).toBe(0.72);
 	});
+
+	// SIO-1305: the Orbit consumer-edge write is INDEPENDENT of whether a root
+	// cause was found -- it must fire even when topSatisfiedCorrelation returns
+	// null, since Orbit findings are unrelated to correlation-rule coverage.
+	test("writes Orbit name-match consumer edges even when no correlation fired", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		store.stub("MATCH (s:Service) RETURN s.name", [{ name: "styles-v3-service" }, { name: "lists-api" }]);
+		_setGraphStoreForTesting(store);
+		const state = {
+			...stateWith(["styles-v3-service"], "hello"),
+			dataSourceResults: [
+				{
+					dataSourceId: "gitlab",
+					status: "success",
+					orbitFindings: {
+						blastRadius: [
+							{
+								definitionName: "getStyleByStyleCode",
+								sourceProject: "pvhcorp/styles-v3-service",
+								importedByProjects: [],
+								importedByFiles: [],
+								importSiteCount: 0,
+								radiusMode: "definition-name-match",
+							},
+							{
+								definitionName: "getStyleByStyleCode",
+								sourceProject: "pvhcorp/lists-api",
+								importedByProjects: [],
+								importedByFiles: [],
+								importSiteCount: 0,
+								radiusMode: "definition-name-match",
+							},
+						],
+					},
+				},
+			],
+		} as unknown as AgentStateType;
+		const result = await recordRootCauseData(state);
+		expect(result).toEqual({});
+		// No RootCause written (no correlation fired)...
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (rc:RootCause"))).toBe(false);
+		// ...but the Orbit DEPENDS_ON edge WAS written.
+		const merge = store.calls.find((c) => c.cypher.includes("MERGE (a)-[r:DEPENDS_ON]->(b)"));
+		expect(merge?.params?.from).toBe("lists-api");
+		expect(merge?.params?.to).toBe("styles-v3-service");
+		expect(merge?.params?.orbitDiscoveredBy).toBe("orbit-name-match");
+	});
+
+	test("does not write Orbit edges when orbitFindings has no name-match rows", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		const state = { ...stateWith(["svc-a"], "hello"), dataSourceResults: [] } as unknown as AgentStateType;
+		await recordRootCauseData(state);
+		expect(store.calls.some((c) => c.cypher.includes("DEPENDS_ON"))).toBe(false);
+	});
 });

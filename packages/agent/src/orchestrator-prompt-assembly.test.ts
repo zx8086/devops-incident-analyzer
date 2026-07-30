@@ -83,4 +83,30 @@ describe("assembleOrchestratorPromptParts byte-identity (SIO-1040)", () => {
 		// all runbooks removed by the empty filter
 		expect(filtered.knowledge.some((k) => k.category === "runbooks")).toBe(false);
 	});
+
+	// SIO-1305: downstreamImpact is optional and appended LAST (after mlAnomaly),
+	// same convention as network/mlAnomaly -- omitting it must reproduce the
+	// 4-section legacy output exactly, and providing it must append after
+	// everything else.
+	test("downstreamImpact omitted keeps the legacy 4-section output byte-identical", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const parts = assembleOrchestratorPromptParts(agent, SECTIONS);
+		expect(parts.stable + parts.volatile).toBe(legacyPrompt(agent));
+	});
+
+	test("downstreamImpact provided appends after network and mlAnomaly", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const withAll = assembleOrchestratorPromptParts(agent, {
+			...SECTIONS,
+			network: "\n\n## Network Map\nnet-line",
+			mlAnomaly: "\n\n## ML Anomaly\nml-line",
+			downstreamImpact: "\n\n## Downstream Impact\nimpact-line",
+		});
+		const netIdx = withAll.volatile.indexOf("net-line");
+		const mlIdx = withAll.volatile.indexOf("ml-line");
+		const impactIdx = withAll.volatile.indexOf("impact-line");
+		expect(netIdx).toBeGreaterThan(-1);
+		expect(mlIdx).toBeGreaterThan(netIdx);
+		expect(impactIdx).toBeGreaterThan(mlIdx);
+	});
 });

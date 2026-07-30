@@ -25,6 +25,9 @@ export interface VolatileSections {
 	// SIO-1215: this turn's derived ML anomaly-record summary. Same optional,
 	// appended-last convention as network above.
 	mlAnomaly?: string;
+	// SIO-1305: this turn's fused downstream-impact enumeration. Same optional,
+	// appended-last convention as network/mlAnomaly above.
+	downstreamImpact?: string;
 }
 
 // Filter the knowledge array to remove non-selected runbooks when a filter is
@@ -61,6 +64,7 @@ export function assembleOrchestratorPromptParts(
 		sections.wiki +
 		sections.graph +
 		(sections.network ?? "") +
-		(sections.mlAnomaly ?? "");
+		(sections.mlAnomaly ?? "") +
+		(sections.downstreamImpact ?? "");
 	return { stable: core, volatile };
 }

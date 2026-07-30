@@ -151,6 +151,13 @@ export const TOPOLOGY_DISCOVERED_BY = "topology-job";
 // its own edges without touching sweep- or agent-owned ones.
 export const NETWORK_DISCOVERED_BY = "network-map";
 
+// SIO-1305: discoveredBy stamp for DEPENDS_ON edges written from Orbit's SIO-1303
+// definition name-match consumers (code-derived downstream-impact evidence).
+// Distinct from TOPOLOGY_DISCOVERED_BY so the two sources coexist, corroborate, and
+// lifecycle out independently on the SAME DEPENDS_ON rel table -- see
+// recordOrbitDependsOnEdges's never-demote-a-topology-job-edge collision policy.
+export const ORBIT_DISCOVERED_BY = "orbit-name-match";
+
 // Writer-boundary shape for one observed topology edge (collector output is parsed
 // external data -- validate the WHOLE record, not just the kind).
 export const TopologyEdgeRecordSchema = z
