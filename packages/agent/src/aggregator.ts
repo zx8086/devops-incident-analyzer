@@ -37,10 +37,10 @@ import {
 	upsertCoverageNote,
 	upsertIntegrityNote,
 } from "./confidence-policy.ts";
-import { selectResultWithFindings } from "./correlation/select-result.ts";
 import { CREATE_INDEX_RE, CREATE_INDEX_SHAPE_RE, looksLikeKeyList, normalizeDdl } from "./ddl-sanitize.ts";
 import {
 	buildDownstreamImpact,
+	orbitBlastRadiusFindings,
 	resolveOrbitConsumerEdges,
 	summarizeDownstreamImpactForPrompt,
 } from "./downstream-impact.ts";
@@ -168,8 +168,7 @@ export function buildAggregatorMessages(
 	try {
 		const incidentServices = state.normalizedIncident.affectedServices?.map((s) => s.name) ?? [];
 		const known = new Set([...incidentServices, ...state.graphBlastRadius.flatMap((h) => [h.service, h.neighbour])]);
-		const orbitResult = selectResultWithFindings(state.dataSourceResults, "gitlab", "orbitFindings");
-		const orbitBlastRadius = orbitResult?.status === "success" ? (orbitResult.orbitFindings?.blastRadius ?? []) : [];
+		const orbitBlastRadius = orbitBlastRadiusFindings(state);
 		const consumerEdges = resolveOrbitConsumerEdges(orbitBlastRadius, incidentServices, [...known]);
 		const entries = buildDownstreamImpact(state.graphBlastRadius, consumerEdges, incidentServices);
 		downstreamImpactContext = summarizeDownstreamImpactForPrompt(entries);

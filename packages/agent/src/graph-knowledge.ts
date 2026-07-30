@@ -27,11 +27,10 @@ import {
 	upsertEntities,
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
-import { type OrbitBlastRadius, truncateForEmbedding } from "@devops-agent/shared";
+import { truncateForEmbedding } from "@devops-agent/shared";
 import { evaluate } from "./correlation/engine.ts";
 import { correlationRules } from "./correlation/rules.ts";
-import { selectResultWithFindings } from "./correlation/select-result.ts";
-import { resolveOrbitConsumerEdges } from "./downstream-impact.ts";
+import { orbitBlastRadiusFindings, resolveOrbitConsumerEdges } from "./downstream-impact.ts";
 import { registerGraphWarmer } from "./lifecycle.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import { renderNetworkContextLine } from "./network-kg.ts";
@@ -111,15 +110,6 @@ function lastUserQuery(state: AgentStateType): string {
 
 function affectedServiceNames(state: AgentStateType): string[] {
 	return (state.normalizedIncident.affectedServices ?? []).map((s) => s.name).filter((n) => n.length > 0);
-}
-
-// SIO-1305: this turn's Orbit blast-radius findings, mirroring correlation/rules.ts's
-// getOrbitFindings (that one is file-private; graph-knowledge reads the same shared
-// selector directly rather than exporting a rules.ts internal for one caller).
-function orbitBlastRadiusFindings(state: AgentStateType): OrbitBlastRadius[] {
-	const result = selectResultWithFindings(state.dataSourceResults, "gitlab", "orbitFindings");
-	if (result?.status !== "success") return [];
-	return result.orbitFindings?.blastRadius ?? [];
 }
 
 // SIO-1305: write this turn's Orbit-derived consumer edges into the KG (resolution

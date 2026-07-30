@@ -12,6 +12,19 @@
 import type { TopologyEdgeRecord } from "@devops-agent/knowledge-graph";
 import type { GraphBlastRadiusHit, OrbitBlastRadius } from "@devops-agent/shared";
 import { normalize } from "@devops-agent/shared";
+import { selectResultWithFindings } from "./correlation/select-result.ts";
+import type { AgentStateType } from "./state.ts";
+
+// SIO-1305: this turn's Orbit blast-radius findings, mirroring correlation/rules.ts's
+// file-private getOrbitFindings. Exported here (the shared home for both the write
+// path in graph-knowledge.ts and the render path in aggregator.ts) rather than
+// duplicated in each caller -- CodeRabbit (PR #547) caught the third independent
+// copy that would otherwise drift.
+export function orbitBlastRadiusFindings(state: AgentStateType): OrbitBlastRadius[] {
+	const result = selectResultWithFindings(state.dataSourceResults, "gitlab", "orbitFindings");
+	if (result?.status !== "success") return [];
+	return result.orbitFindings?.blastRadius ?? [];
+}
 
 export type ImpactSource = "apm" | "code" | "confirmed";
 
