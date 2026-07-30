@@ -519,8 +519,13 @@ export function isEmptyGitlabCorrelationResult(content: unknown): boolean {
 // escalation apply -- a call that already looked back further (e.g. 30 days) must not
 // re-trigger it. nowMs is injectable for tests; recordResult passes the real clock.
 export function isRecentCorrelationWindow(arg: unknown, nowMs: number = Date.now()): boolean {
-	if (!arg || typeof arg !== "object") return false;
-	const since = (arg as { since?: unknown }).since;
+	// SIO-1298 follow-up: the instrumentation call site passes the WRAPPED tool-call
+	// envelope ({name,id,type,args}) -- reading since off the wrapper silently never
+	// latched (proven live, run verify-sio1298-escalation). unwrapCallArgs passes bare
+	// args through unchanged, so both shapes are safe.
+	const bare = unwrapCallArgs(arg);
+	if (!bare || typeof bare !== "object") return false;
+	const since = (bare as { since?: unknown }).since;
 	if (typeof since !== "string") return false;
 	const t = Date.parse(since);
 	if (Number.isNaN(t)) return false;
