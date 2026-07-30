@@ -22,6 +22,12 @@
 //    A bare value ({ prop: v }) is an implicit eq. aggregation_sort is a string
 //    ("-alias" desc / "alias" asc), same convention as order_by -- the former
 //    { column, direction } object is rejected.
+//  - AGGREGATION SHAPE (SIO-1297, live-validated against Orbit v0.91.1):
+//    group_by entries are "<node>.<prop>" strings or { key: "<node>.<prop>",
+//    truncate?, as? } objects; aggregations are function-AS-KEY objects with at
+//    most 2 properties ({ count: "pl", as: "failures" }). The former
+//    { kind, node, property, alias } / { function, target, alias } objects are
+//    rejected with compile_error "schema violation ... oneOf".
 
 import type { OrbitQuery } from "../../gitlab-client/orbit.js";
 
@@ -194,7 +200,9 @@ export function buildRecentDeploysQuery(params: {
 }
 
 // Ranked pipeline failures across a group in a time window. Aggregation grouped by
-// project + job name. MUST filter source = merge_request_event (see header).
+// project + ref. MUST filter source = merge_request_event (see header). The
+// group_by/aggregation aliases (project, ref, failures) are load-bearing: the
+// Layer-B extractor (pushPipelineFailures) reads those row columns by name.
 export function buildPipelineFailuresQuery(params: {
 	groupPath: string;
 	since: string;
@@ -225,11 +233,14 @@ export function buildPipelineFailuresQuery(params: {
 				},
 			],
 			relationships: [{ type: "IN_PROJECT", from: "pl", to: "p" }],
+			// SIO-1297: { key, as } group_by objects + function-as-key aggregations
+			// (see AGGREGATION SHAPE in the header) -- the former { kind, ... } /
+			// { function, ... } objects are rejected by Orbit v0.91.1.
 			group_by: [
-				{ kind: "property", node: "p", property: "full_path", alias: "project" },
-				{ kind: "property", node: "pl", property: "ref", alias: "ref" },
+				{ key: "p.full_path", as: "project" },
+				{ key: "pl.ref", as: "ref" },
 			],
-			aggregations: [{ function: "count", target: "pl", alias: "failures" }],
+			aggregations: [{ count: "pl", as: "failures" }],
 			// SIO-1151: string form ("-alias" = desc), mirroring order_by.
 			aggregation_sort: "-failures",
 			limit: clampLimit(params.limit, 50),
