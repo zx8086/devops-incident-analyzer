@@ -76,6 +76,21 @@ export const TYPED_FINDING_TOOLS = new Set<string>([
 	// SIO-785 Phase 2 (2026-05-18): aws extractor + atlassian extractor.
 	"aws_cloudwatch_describe_alarms",
 	"findLinkedIncidents",
+	// SIO-1300: the 6 Orbit output tools feed the orbit extractor
+	// (correlation/extractors/orbit.ts), which reads structured traversal/
+	// aggregation JSON -- none were in this set, so a payload over 64KB
+	// persisted truncated and the extractor silently parsed fewer (or zero)
+	// rows from broken JSON, the same failure class SIO-1277 fixed for
+	// elasticsearch_multi_search. Live-measured 2026-07-30: a 23KB blast-radius
+	// payload at limit 50; the tool default limit is 200 (max 1000), so a real
+	// cross-project incident payload plausibly exceeds 64KB. gitlab_graph_schema
+	// deliberately stays OUT -- it feeds no extractor (schema introspection only).
+	"gitlab_blast_radius",
+	"gitlab_cross_project_callers",
+	"gitlab_recent_deploys",
+	"gitlab_pipeline_failures",
+	"gitlab_recent_vulnerabilities",
+	"gitlab_orbit_query_graph",
 ]);
 
 interface InstrumentLogger {
