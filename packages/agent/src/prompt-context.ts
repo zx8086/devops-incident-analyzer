@@ -110,6 +110,10 @@ export interface OrchestratorPromptOptions {
 	// SIO-1215: this turn's derived ML anomaly-record summary
 	// (buildMlAnomalyExplainer -> summarizeMlAnomalyExplainerForPrompt).
 	mlAnomalyContext?: string;
+	// SIO-1305: this turn's fused downstream-impact enumeration (KG DEPENDS_ON
+	// runtime radius + Orbit code radius). Already-rendered string; inlined
+	// verbatim. Empty when the graph is disabled or no dependents are known.
+	downstreamImpactContext?: string;
 }
 
 function buildNetworkSection(networkContext: string | undefined): string {
@@ -120,6 +124,13 @@ function buildNetworkSection(networkContext: string | undefined): string {
 function buildMlAnomalySection(mlAnomalyContext: string | undefined): string {
 	if (!mlAnomalyContext) return "";
 	return `\n\n## ML Anomaly Records (derived this turn)\n${mlAnomalyContext}\nMention anomaly findings in the report only where they bear on the root cause; the full detail reaches the user as an interactive card -- do not reproduce it in the report body.\n`;
+}
+
+// SIO-1305: the KG DEPENDS_ON runtime radius fused with Orbit's code radius, as a
+// deterministic enumeration -- never LLM-router discretion on whether it appears.
+function buildDownstreamImpactSection(downstreamImpactContext: string | undefined): string {
+	if (!downstreamImpactContext) return "";
+	return `\n\n## Downstream Impact (derived this turn)\n${downstreamImpactContext}\nThis enumeration is deterministic, not inferred -- report it as given, and prefer CONFIRMED (two-source) entries over single-source ones when summarizing.\n`;
 }
 
 // SIO-847: the wiki section depends on the current turn's focus, so it is built
@@ -144,6 +155,7 @@ export function buildOrchestratorPromptParts(options: OrchestratorPromptOptions 
 		graph: buildGraphSection(options.graphContext),
 		network: buildNetworkSection(options.networkContext),
 		mlAnomaly: buildMlAnomalySection(options.mlAnomalyContext),
+		downstreamImpact: buildDownstreamImpactSection(options.downstreamImpactContext),
 	});
 }
 

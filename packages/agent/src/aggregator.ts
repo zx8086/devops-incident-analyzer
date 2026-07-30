@@ -38,6 +38,12 @@ import {
 	upsertIntegrityNote,
 } from "./confidence-policy.ts";
 import { CREATE_INDEX_RE, CREATE_INDEX_SHAPE_RE, looksLikeKeyList, normalizeDdl } from "./ddl-sanitize.ts";
+import {
+	buildDownstreamImpact,
+	orbitBlastRadiusFindings,
+	resolveOrbitConsumerEdges,
+	summarizeDownstreamImpactForPrompt,
+} from "./downstream-impact.ts";
 import { isGapsJudgeEnabled, judgeDegradingGapBullets } from "./gaps-judge.ts";
 import { getGraphDeadlineAt, hasAggregationBudget } from "./graph-budget.ts";
 import { createLlm } from "./llm.ts";
@@ -146,6 +152,27 @@ export function buildAggregatorMessages(
 	} catch {
 		// Builder is pure/total; belt-and-braces only.
 	}
+	// SIO-1305: fuse the KG's runtime DEPENDS_ON radius (state.graphBlastRadius --
+	// populated early by graphEnrich, still valid here since it's a plain state
+	// field, not extractFindings-derived) with this turn's LIVE Orbit code radius
+	// (re-derived from state.dataSourceResults, same double-build convention as
+	// networkContext/mlAnomalyContext above -- graphEnrich runs BEFORE the gitlab
+	// fan-out, so it never sees this turn's orbitFindings). The P6 repo-resolution
+	// match uses state.knownServiceNames -- the SAME full canonical Service-name
+	// universe the write path (recordRootCauseData, graph-knowledge.ts) resolves
+	// against, read once by graphEnrich (CodeRabbit, PR #547: a narrower
+	// incident-services-plus-graphBlastRadius set silently omitted code-only
+	// consumers from this turn's render even though the write path persisted them).
+	let downstreamImpactContext = "";
+	try {
+		const incidentServices = state.normalizedIncident.affectedServices?.map((s) => s.name) ?? [];
+		const orbitBlastRadius = orbitBlastRadiusFindings(state);
+		const consumerEdges = resolveOrbitConsumerEdges(orbitBlastRadius, incidentServices, state.knownServiceNames);
+		const entries = buildDownstreamImpact(state.graphBlastRadius, consumerEdges, incidentServices);
+		downstreamImpactContext = summarizeDownstreamImpactForPrompt(entries);
+	} catch {
+		// Builder is pure/total; belt-and-braces only.
+	}
 	// SIO-1040: split the orchestrator prompt so the stable core (soul + rules +
 	// skills) is a Bedrock cache prefix and the volatile suffix (filtered
 	// knowledge + memory + wiki + graph + network) stays uncached.
@@ -155,6 +182,7 @@ export function buildAggregatorMessages(
 		graphContext: state.graphContext,
 		networkContext,
 		mlAnomalyContext,
+		downstreamImpactContext,
 	});
 	const priorAnswer = state.finalAnswer;
 	const lastUserMessage = state.messages.filter((m) => m._getType() === "human").pop();

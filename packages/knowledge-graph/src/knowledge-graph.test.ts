@@ -29,6 +29,7 @@ import {
 	recordIacChange,
 	recordIacPrompt,
 	recordIncident,
+	recordOrbitDependsOnEdges,
 	recordPipeline,
 	recordRootCause,
 	recordServiceBinding,
@@ -1430,5 +1431,53 @@ describe("SIO-1104 topology writer", () => {
 		const store = new InMemoryGraphStore();
 		store.stub("MATCH (s:Service) RETURN s.name", [{ name: "orders" }, { name: "" }]);
 		expect(await serviceNames(store)).toEqual(["orders"]);
+	});
+});
+
+// SIO-1305: DEPENDS_ON edges from Orbit's SIO-1303 definition name-match consumers.
+// Same rel table as the topology sweep's depends-on edges -- the collision policy
+// (never demote a topology-job-owned edge) is the load-bearing behavior under test.
+describe("SIO-1305 Orbit DEPENDS_ON writer", () => {
+	test("recordOrbitDependsOnEdges MERGEs endpoints and stamps orbit-name-match provenance on a new edge", async () => {
+		const store = new InMemoryGraphStore();
+		await recordOrbitDependsOnEdges(store, [{ kind: "depends-on", from: "lists-api", to: "styles-v3-service" }]);
+		expect(
+			store.calls.some((c) => c.cypher === "MERGE (a:Service {name: $from})" && c.params?.from === "lists-api"),
+		).toBe(true);
+		expect(
+			store.calls.some((c) => c.cypher === "MERGE (b:Service {name: $to})" && c.params?.to === "styles-v3-service"),
+		).toBe(true);
+		const merge = store.calls.find((c) => c.cypher.includes("MERGE (a)-[r:DEPENDS_ON]->(b)"));
+		expect(merge?.cypher).toContain(
+			"SET r.discoveredBy = $orbitDiscoveredBy, r.tInvalid = '', r.consecutiveMisses = 0",
+		);
+		expect(merge?.params?.orbitDiscoveredBy).toBe("orbit-name-match");
+		const backfill = store.calls.find(
+			(c) => c.cypher.includes("[r:DEPENDS_ON]") && c.cypher.includes("coalesce(r.tValid, '') = ''"),
+		);
+		expect(backfill?.cypher).toContain("SET r.tValid = $now");
+	});
+
+	test("recordOrbitDependsOnEdges NEVER demotes an edge already owned by the topology sweep", async () => {
+		const store = new InMemoryGraphStore();
+		// The pre-check query returns a non-zero count -- a sweep-owned, currently-valid
+		// edge already exists for this exact pair.
+		store.stub("r.discoveredBy = $topologyDiscoveredBy AND r.tInvalid = ''", [{ n: 1 }]);
+		await recordOrbitDependsOnEdges(store, [{ kind: "depends-on", from: "lists-api", to: "styles-v3-service" }]);
+		// The pre-check ran (both endpoint MERGEs plus the count query)...
+		expect(store.calls.some((c) => c.cypher.includes("count(r) AS n"))).toBe(true);
+		// ...but no MERGE of the edge itself, no discoveredBy SET, no tValid backfill.
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (a)-[r:DEPENDS_ON]->(b)"))).toBe(false);
+		expect(store.calls.some((c) => c.params?.orbitDiscoveredBy === "orbit-name-match")).toBe(false);
+	});
+
+	test("recordOrbitDependsOnEdges skips non-depends-on kinds and empty endpoints", async () => {
+		const store = new InMemoryGraphStore();
+		await recordOrbitDependsOnEdges(store, [
+			{ kind: "runs-on", from: "orders", to: "arn:x" },
+			{ kind: "depends-on", from: "", to: "styles-v3-service" },
+			{ kind: "depends-on", from: "lists-api", to: "" },
+		]);
+		expect(store.calls).toHaveLength(0);
 	});
 });

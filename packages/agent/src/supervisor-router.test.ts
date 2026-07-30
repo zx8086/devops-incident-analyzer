@@ -51,6 +51,7 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		finalAnswer: "",
 		graphContext: "",
 		graphBlastRadius: [],
+		knownServiceNames: [],
 		networkTopology: undefined,
 		mlAnomalyExplainer: undefined,
 		dataSourceContext: undefined,

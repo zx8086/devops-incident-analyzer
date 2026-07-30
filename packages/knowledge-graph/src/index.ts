@@ -78,6 +78,7 @@ export {
 	NetworkTopologyRecordSchema,
 	NODE_LABELS,
 	type NodeLabel,
+	ORBIT_DISCOVERED_BY,
 	type PipelineNode,
 	PipelineNodeSchema,
 	type PromptNode,
@@ -114,6 +115,7 @@ export {
 	WorkflowNodeSchema,
 } from "./schema.ts";
 export {
+	_setGraphStoreFactoryForTesting,
 	_setGraphStoreForTesting,
 	type GraphRow,
 	type GraphStore,
@@ -147,6 +149,7 @@ export {
 	recordIncident,
 	recordIpBinding,
 	recordNetworkTopology,
+	recordOrbitDependsOnEdges,
 	recordPipeline,
 	recordRootCause,
 	recordServiceBinding,

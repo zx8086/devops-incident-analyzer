@@ -10,23 +10,27 @@ import { createHash } from "node:crypto";
 import {
 	blastRadiusForServices,
 	buildGraphContext,
+	type GraphStore,
 	getGraphStore,
 	isKnowledgeGraphEnabled,
 	networkMapForService,
 	priorRelationshipsForServices,
 	priorRootCauses,
 	recordIncident,
+	recordOrbitDependsOnEdges,
 	recordRootCause,
 	rootCauseForIncident,
 	type SimilarIncidentWithCause,
+	serviceNames,
 	setIncidentEmbedding,
 	similarIncidents,
 	upsertEntities,
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
-import { truncateForEmbedding } from "@devops-agent/shared";
+import { type OrbitBlastRadius, truncateForEmbedding } from "@devops-agent/shared";
 import { evaluate } from "./correlation/engine.ts";
 import { correlationRules } from "./correlation/rules.ts";
+import { orbitBlastRadiusFindings, resolveOrbitConsumerEdges } from "./downstream-impact.ts";
 import { registerGraphWarmer } from "./lifecycle.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import { renderNetworkContextLine } from "./network-kg.ts";
@@ -108,6 +112,28 @@ function affectedServiceNames(state: AgentStateType): string[] {
 	return (state.normalizedIncident.affectedServices ?? []).map((s) => s.name).filter((n) => n.length > 0);
 }
 
+// SIO-1305: write this turn's Orbit-derived consumer edges into the KG (resolution
+// via resolveOrbitConsumerEdges in downstream-impact.ts, shared with the render
+// side so the write and read paths agree on what counts as a consumer). Own
+// try/catch (the recordRootCauseData soft-fail pattern) -- a write failure never
+// blocks the root-cause record it rides alongside.
+async function recordOrbitConsumerEdges(
+	store: GraphStore,
+	findings: OrbitBlastRadius[],
+	state: AgentStateType,
+): Promise<void> {
+	try {
+		const known = await serviceNames(store);
+		const edges = resolveOrbitConsumerEdges(findings, affectedServiceNames(state), known);
+		if (edges.length > 0) await recordOrbitDependsOnEdges(store, edges);
+	} catch (error) {
+		logger.warn(
+			{ error: error instanceof Error ? error.message : String(error) },
+			"recordOrbitConsumerEdges write failed; continuing",
+		);
+	}
+}
+
 // recordEntities node: persist the turn's services + incident into the graph.
 export async function recordGraphEntities(state: AgentStateType): Promise<Partial<AgentStateType>> {
 	if (!isKnowledgeGraphEnabled()) return {};
@@ -155,6 +181,22 @@ export async function graphEnrich(state: AgentStateType): Promise<Partial<AgentS
 			logger.warn(
 				{ error: error instanceof Error ? error.message : String(error) },
 				"graphEnrich blast-radius read failed; continuing",
+			);
+		}
+
+		// SIO-1305: the full canonical Service-name universe, read once here (cheap
+		// addition to this node's existing store-open + async reads) so the
+		// aggregator's downstream-impact render -- synchronous, cannot do its own
+		// live store read -- resolves Orbit consumer repos against the SAME
+		// universe recordRootCauseData's write path uses, not just names already
+		// surfaced this turn's graphBlastRadius (CodeRabbit, PR #547).
+		let knownServiceNames: string[] = [];
+		try {
+			knownServiceNames = await serviceNames(store);
+		} catch (error) {
+			logger.warn(
+				{ error: error instanceof Error ? error.message : String(error) },
+				"graphEnrich serviceNames read failed; continuing",
 			);
 		}
 
@@ -244,13 +286,19 @@ export async function graphEnrich(state: AgentStateType): Promise<Partial<AgentS
 			);
 		}
 
-		return { graphContext: buildGraphContext(deps, similar) + networkContext, graphBlastRadius };
+		return { graphContext: buildGraphContext(deps, similar) + networkContext, graphBlastRadius, knownServiceNames };
 	} catch (error) {
 		logger.warn(
 			{ error: error instanceof Error ? error.message : String(error) },
 			"graphEnrich failed; continuing without graph context",
 		);
-		return {};
+		// SIO-1305 (CodeRabbit, PR #547): knownServiceNames uses a REPLACE reducer,
+		// so an update that omits the key leaves the channel's PRIOR-turn value
+		// untouched -- an outer-catch failure (e.g. getGraphStore() itself throwing,
+		// before either inner try/catch runs) must explicitly clear it, or a stale
+		// service list from a prior successful turn would silently feed this turn's
+		// downstream-impact resolution.
+		return { knownServiceNames: [] };
 	}
 }
 
@@ -277,14 +325,24 @@ function topSatisfiedCorrelation(state: AgentStateType): { ruleName: string; des
 }
 
 // recordRootCause node: persist a RootCause for the turn's Incident when a
-// cross-domain correlation held. Runs LATE (after mitigation) so it can see the
-// final confidenceScore. Soft-fails like the other graph nodes.
+// cross-domain correlation held, AND (SIO-1305, independent of whether a root cause
+// was found) this turn's Orbit definition name-match consumer edges. Runs LATE
+// (after mitigation) so it can see the final confidenceScore, and -- load-bearing
+// for the Orbit write -- so orbitFindings from this turn's gitlab-agent fan-out are
+// already in state.dataSourceResults (graphEnrich runs too early to see them).
+// Soft-fails like the other graph nodes.
 export async function recordRootCauseData(state: AgentStateType): Promise<Partial<AgentStateType>> {
 	if (!isKnowledgeGraphEnabled()) return {};
 	const cause = topSatisfiedCorrelation(state);
-	if (!cause) return {};
+	const orbitFindings = orbitBlastRadiusFindings(state);
+	// Nothing to write on this turn: skip opening the store entirely so an outage
+	// on a quiet turn (no correlation, no Orbit findings) stays a silent no-op,
+	// not a spurious partialFailures entry for a write that was never attempted.
+	if (!cause && orbitFindings.length === 0) return {};
 	try {
 		const store = await getGraphStore();
+		if (orbitFindings.length > 0) await recordOrbitConsumerEdges(store, orbitFindings, state);
+		if (!cause) return {};
 		// PK is a stable hash of the normalized class so recurrences MERGE to one node.
 		const id = createHash("sha256").update(cause.ruleName).digest("hex").slice(0, 16);
 		await recordRootCause(store, {
