@@ -738,6 +738,36 @@ describe("KnowledgeIndexSchema: runbook_selection", () => {
 		};
 		expect(() => KnowledgeIndexSchema.parse(config)).not.toThrow();
 	});
+
+	// SIO-1302: always_select is optional -- absent (older configs) parses unchanged.
+	test("accepts config with always_select present", () => {
+		const config = {
+			name: "test",
+			description: "test",
+			version: "0.1.0",
+			categories: { runbooks: { path: "runbooks/", description: "test" } },
+			runbook_selection: {
+				fallback_by_severity: { critical: [], high: [], medium: [], low: [] },
+				always_select: ["code-change-correlation.md"],
+			},
+		};
+		const parsed = KnowledgeIndexSchema.parse(config);
+		expect(parsed.runbook_selection?.always_select).toEqual(["code-change-correlation.md"]);
+	});
+
+	test("accepts config with always_select absent (backward compatible)", () => {
+		const config = {
+			name: "test",
+			description: "test",
+			version: "0.1.0",
+			categories: { runbooks: { path: "runbooks/", description: "test" } },
+			runbook_selection: {
+				fallback_by_severity: { critical: [], high: [], medium: [], low: [] },
+			},
+		};
+		const parsed = KnowledgeIndexSchema.parse(config);
+		expect(parsed.runbook_selection?.always_select).toBeUndefined();
+	});
 });
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -808,6 +838,49 @@ runbook_selection:
 			{ "a.md": "# A\n\nContent" },
 		);
 		expect(() => loadAgent(dir)).toThrow(/missing\.md/);
+		rmSync(dir, { recursive: true });
+	});
+
+	// SIO-1302: always_select gets the same existence check as fallback_by_severity.
+	test("accepts always_select referencing an existing filename", () => {
+		const dir = makeTestAgent(
+			`name: test
+description: test
+version: 0.1.0
+categories:
+  runbooks: { path: runbooks/, description: test }
+runbook_selection:
+  fallback_by_severity:
+    critical: []
+    high: []
+    medium: []
+    low: []
+  always_select: ["a.md"]
+`,
+			{ "a.md": "# A\n\nContent" },
+		);
+		expect(() => loadAgent(dir)).not.toThrow();
+		rmSync(dir, { recursive: true });
+	});
+
+	test("rejects always_select referencing a nonexistent filename", () => {
+		const dir = makeTestAgent(
+			`name: test
+description: test
+version: 0.1.0
+categories:
+  runbooks: { path: runbooks/, description: test }
+runbook_selection:
+  fallback_by_severity:
+    critical: []
+    high: []
+    medium: []
+    low: []
+  always_select: ["missing.md"]
+`,
+			{ "a.md": "# A\n\nContent" },
+		);
+		expect(() => loadAgent(dir)).toThrow(/always_select.*missing\.md/);
 		rmSync(dir, { recursive: true });
 	});
 });

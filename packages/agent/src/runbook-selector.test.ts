@@ -36,6 +36,7 @@ const FALLBACK_CONFIG: SeverityFallbackConfig = {
 let llmResponse: unknown = { content: '{"filenames":[],"reasoning":"none"}' };
 let llmError: Error | null = null;
 let catalogOverride: RunbookCatalogEntry[] | null = null;
+let alwaysSelectOverride: string[] | null = null;
 
 function buildRuntime(): SelectRunbooksRuntime {
 	return {
@@ -47,6 +48,7 @@ function buildRuntime(): SelectRunbooksRuntime {
 				return llmResponse as { content: unknown };
 			},
 		}),
+		getAlwaysSelect: () => alwaysSelectOverride ?? [],
 	};
 }
 
@@ -99,6 +101,7 @@ describe("runSelectRunbooks", () => {
 		llmResponse = { content: '{"filenames":[],"reasoning":"none"}' };
 		llmError = null;
 		catalogOverride = null;
+		alwaysSelectOverride = null;
 	});
 
 	test("1. valid single pick", async () => {
@@ -259,6 +262,116 @@ describe("runSelectRunbooks", () => {
 		];
 		llmResponse = { content: '{"filenames":["a.md"],"reasoning":"x"}' };
 		const result = await runSelectRunbooks(makeState({ normalizedIncident: { severity: "high" } }), buildRuntime());
+		expect(result.selectedRunbooks).toEqual(["a.md"]);
+	});
+});
+
+// SIO-1302: always-select rides on top of the router's picks AND the severity
+// fallback, deterministically, regardless of what the router did (or whether it
+// ran at all). This is the acceptance criterion: state.selectedRunbooks contains
+// the always-select filename(s) on every complex turn.
+describe("runSelectRunbooks: always-select (SIO-1302)", () => {
+	beforeEach(() => {
+		llmResponse = { content: '{"filenames":[],"reasoning":"none"}' };
+		llmError = null;
+		catalogOverride = null;
+		alwaysSelectOverride = null;
+	});
+
+	test("router picks none -> always-select is still present", async () => {
+		alwaysSelectOverride = ["c.md"];
+		llmResponse = { content: '{"filenames":[],"reasoning":"nothing matches"}' };
+		const result = await runSelectRunbooks(makeState(), buildRuntime());
+		expect(result.selectedRunbooks).toEqual(["c.md"]);
+	});
+
+	test("router picks 3 others -> always-select rides on top, not truncated by the 3-cap", async () => {
+		catalogOverride = [
+			{ filename: "a.md", title: "A", summary: "sa" },
+			{ filename: "b.md", title: "B", summary: "sb" },
+			{ filename: "c.md", title: "C", summary: "sc" },
+			{ filename: "d.md", title: "D", summary: "sd" },
+		];
+		alwaysSelectOverride = ["d.md"];
+		llmResponse = { content: '{"filenames":["a.md","b.md","c.md"],"reasoning":"all"}' };
+		const result = await runSelectRunbooks(makeState(), buildRuntime());
+		expect(result.selectedRunbooks).toEqual(["a.md", "b.md", "c.md", "d.md"]);
+	});
+
+	test("router picks the always-select runbook itself -> deduped, not doubled", async () => {
+		alwaysSelectOverride = ["a.md"];
+		llmResponse = { content: '{"filenames":["a.md"],"reasoning":"pattern A"}' };
+		const result = await runSelectRunbooks(makeState(), buildRuntime());
+		expect(result.selectedRunbooks).toEqual(["a.md"]);
+	});
+
+	// CodeRabbit (PR #548): a duplicate entry in the always_select CONFIG itself
+	// (e.g. a copy-paste mistake in index.yaml) must not produce a duplicate
+	// filename in the final selection.
+	test("a duplicate entry within always_select config is deduped", async () => {
+		alwaysSelectOverride = ["c.md", "c.md"];
+		llmResponse = { content: '{"filenames":[],"reasoning":"nothing matches"}' };
+		const result = await runSelectRunbooks(makeState(), buildRuntime());
+		expect(result.selectedRunbooks).toEqual(["c.md"]);
+	});
+
+	test("router failure fallback path also unions always-select", async () => {
+		alwaysSelectOverride = ["c.md"];
+		llmError = new Error("500 Internal Server Error");
+		// FALLBACK_CONFIG.low is [] -- always-select is the only thing that fires.
+		const result = await runSelectRunbooks(makeState({ normalizedIncident: { severity: "low" } }), buildRuntime());
+		expect(result.selectedRunbooks).toEqual(["c.md"]);
+	});
+
+	test("severity fallback already contains the always-select filename -> deduped", async () => {
+		alwaysSelectOverride = ["a.md"];
+		llmError = new Error("500 Internal Server Error");
+		// FALLBACK_CONFIG.high is ["a.md"].
+		const result = await runSelectRunbooks(makeState({ normalizedIncident: { severity: "high" } }), buildRuntime());
+		expect(result.selectedRunbooks).toEqual(["a.md"]);
+	});
+
+	test("a deprecated always-select entry is never force-selected", async () => {
+		catalogOverride = [
+			{ filename: "a.md", title: "A", summary: "sa" },
+			{ filename: "b.md", title: "B", summary: "sb", status: "deprecated" },
+		];
+		alwaysSelectOverride = ["b.md"];
+		llmResponse = { content: '{"filenames":["a.md"],"reasoning":"x"}' };
+		const result = await runSelectRunbooks(makeState(), buildRuntime());
+		expect(result.selectedRunbooks).toEqual(["a.md"]);
+	});
+
+	// CodeRabbit (PR #548): filterCatalogByLifecycle's "emptied" guard mode
+	// (every runbook in the catalog is deprecated) deliberately returns the
+	// UNFILTERED catalog as `kept` (and thus as the router's candidate set too),
+	// to avoid starving the router entirely -- the router itself picking a
+	// deprecated runbook in this edge case is pre-existing, out-of-scope
+	// behavior. What SIO-1302 must not do is have always-select ALSO force-select
+	// it independent of the router's own pick: with the router picking a
+	// DIFFERENT runbook, the deprecated always-select entry must not additionally
+	// appear via the always-select union.
+	test("all-deprecated catalog: always-select does not additionally force-select the deprecated entry", async () => {
+		catalogOverride = [
+			{ filename: "a.md", title: "A", summary: "sa", status: "deprecated" },
+			{ filename: "b.md", title: "B", summary: "sb", status: "deprecated" },
+		];
+		alwaysSelectOverride = ["a.md"];
+		// Router picks the OTHER deprecated entry (itself a pre-existing, out-of-scope
+		// quirk of the emptied-catalog guard) -- always-select must not ALSO inject a.md.
+		llmResponse = { content: '{"filenames":["b.md"],"reasoning":"x"}' };
+		const result = await runSelectRunbooks(makeState(), buildRuntime());
+		expect(result.selectedRunbooks).toEqual(["b.md"]);
+	});
+
+	test("no getAlwaysSelect on the runtime (older caller) behaves as if it returned []", async () => {
+		const runtimeWithoutAlwaysSelect: SelectRunbooksRuntime = {
+			getCatalog: () => DEFAULT_CATALOG,
+			getFallbackConfig: () => FALLBACK_CONFIG,
+			getLlm: () => ({ invoke: async () => llmResponse as { content: unknown } }),
+		};
+		llmResponse = { content: '{"filenames":["a.md"],"reasoning":"pattern A"}' };
+		const result = await runSelectRunbooks(makeState(), runtimeWithoutAlwaysSelect);
 		expect(result.selectedRunbooks).toEqual(["a.md"]);
 	});
 });

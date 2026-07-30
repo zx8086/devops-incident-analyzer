@@ -248,7 +248,7 @@ function loadKnowledge(
 			? new Set(readdirSync(runbooksDir).filter((f) => f.endsWith(".md")))
 			: new Set<string>();
 
-		const { fallback_by_severity } = index.data.runbook_selection;
+		const { fallback_by_severity, always_select } = index.data.runbook_selection;
 		for (const [severity, filenames] of Object.entries(fallback_by_severity)) {
 			for (const filename of filenames) {
 				if (!existingFiles.has(filename)) {
@@ -257,6 +257,15 @@ function loadKnowledge(
 							`"${filename}" but no such file exists under ${runbooksCategory.path}`,
 					);
 				}
+			}
+		}
+		// SIO-1302: same existence check for always_select.
+		for (const filename of always_select ?? []) {
+			if (!existingFiles.has(filename)) {
+				throw new Error(
+					`knowledge/index.yaml: runbook_selection.always_select references ` +
+						`"${filename}" but no such file exists under ${runbooksCategory.path}`,
+				);
 			}
 		}
 	}
