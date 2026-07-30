@@ -674,6 +674,37 @@ function elasticShowsPostMergeError(elastic: ElasticFindings, service: string, m
 	);
 }
 
+// SIO-1299: one schema for the orbit-deploy-needs-blast-radius trigger context,
+// mirroring LogGapTriggerContextSchema/SyntheticCrossCheckContextSchema -- both
+// the trigger and the fetchDirective builder parse it, so they cannot drift.
+// deployMrs carries full MR objects (not just ids) so the directive can name
+// the MR by title/merged-at, not just an opaque id the re-fanned agent would
+// have to look up again. logSamples are raw log-cluster sampleMessage strings
+// (Reactor/JVM stack traces routinely embed the failing class#method) -- there
+// is no structured symbol field anywhere upstream of this rule, so the directive
+// passes the raw evidence through and instructs the target agent to extract the
+// candidate symbol itself, the same "raw evidence in, extraction downstream"
+// shape as the log-gap rule's `bullets`.
+export const OrbitDeployBlastRadiusTriggerContextSchema = z.object({
+	requestBlastRadius: z.literal(true),
+	services: z.array(z.string()),
+	deployMrs: z.array(
+		z.object({
+			mrId: z.union([z.number(), z.string()]),
+			title: z.string().optional(),
+			mergedAt: z.string(),
+			project: z.string().optional(),
+			webUrl: z.string().optional(),
+		}),
+	),
+	logSamples: z.array(z.string()),
+});
+export type OrbitDeployBlastRadiusTriggerContext = z.infer<typeof OrbitDeployBlastRadiusTriggerContextSchema>;
+
+// Cap on how many log-cluster sample messages ride in the directive -- enough to
+// give the target agent real stack-trace material without ballooning the prompt.
+const MAX_ORBIT_DEPLOY_LOG_SAMPLES = 3;
+
 // Rule: gated blast-radius pre-fetch.
 // Cost gate. Fires only when BOTH a recent deploy AND an elastic error signal
 // already exist, then re-fans to gitlab-agent to run the (billed) blast-radius
@@ -702,16 +733,54 @@ correlationRules.push({
 		const services = new Set<string>();
 		for (const a of elastic.apmServices ?? []) if ((a.errorRate ?? 0) > 0) services.add(a.serviceName);
 		for (const c of elastic.logClusters ?? []) if (c.service) services.add(c.service);
+		const logSamples = (elastic.logClusters ?? [])
+			.slice(0, MAX_ORBIT_DEPLOY_LOG_SAMPLES)
+			.map((c) => c.sampleMessage)
+			.filter((m): m is string => !!m);
 		return {
 			context: {
 				requestBlastRadius: true,
 				services: Array.from(services),
-				deployMrs: inWindow.map((d) => d.mrId),
-			},
+				deployMrs: inWindow.map((d) => ({
+					mrId: d.mrId,
+					title: d.title,
+					mergedAt: d.mergedAt,
+					project: d.project,
+					webUrl: d.webUrl,
+				})),
+				logSamples,
+			} satisfies OrbitDeployBlastRadiusTriggerContext,
 		};
 	},
 	requiredAgent: "gitlab-agent",
 	retry: { attempts: 1, timeoutMs: 30_000 },
+	fetchDirective: (context) => {
+		const parsed = OrbitDeployBlastRadiusTriggerContextSchema.safeParse(context);
+		if (!parsed.success) {
+			return "CORRELATION FETCH (SIO-1299): a recent deploy coincides with an Elastic error signal. Run gitlab_blast_radius on the symbol most likely implicated by the incident's stack trace or error message, then gitlab_recent_deploys to confirm timing.";
+		}
+		const { services, deployMrs, logSamples } = parsed.data;
+		const mrLines = deployMrs
+			.map(
+				(mr) =>
+					`  - MR ${mr.mrId}${mr.title ? ` "${mr.title}"` : ""}${mr.project ? ` (${mr.project})` : ""}, merged ${mr.mergedAt}${mr.webUrl ? ` -- ${mr.webUrl}` : ""}`,
+			)
+			.join("\n");
+		const logLines = logSamples.map((s) => `  - ${s}`).join("\n");
+		return `CORRELATION FETCH (SIO-1299): a recent group-wide deploy coincides with an Elastic error signal in ${services.join(", ") || "the affected service(s)"}, but no Orbit cross-project blast radius has been fetched for it yet. It cannot be inferred which symbol to trace from the original prompt alone -- derive it from the evidence below.
+
+Recent deploy MR(s) in the runtime window:
+${mrLines || "  (none named)"}
+
+Sample error/log messages from the affected service(s) (may contain a stack trace naming the failing class/method):
+${logLines || "  (none captured)"}
+
+Steps:
+1. Identify the most likely changed symbol (function/class/module) from the log samples above -- a stack trace frame, exception class, or method name. If the samples name no clear symbol, fall back to inspecting the deploy MR's diff (gitlab_get_merge_request_diffs or gitlab_get_commit_diff) for the changed definitions.
+2. Run gitlab_blast_radius on that symbol. This is a targeted fetch -- do NOT re-investigate the focus service from scratch.
+3. If gitlab_blast_radius returns a definition row with an exact fqn, follow up with gitlab_cross_project_callers on that fqn for confirmed cross-project importers.
+4. Report the blast radius found (or, if genuinely nothing traceable, say so explicitly rather than fabricating a symbol).`;
+	},
 });
 
 // Rule: flagship blast-radius vs elastic.
