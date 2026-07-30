@@ -118,6 +118,45 @@ describe("orbit-deploy-needs-blast-radius (cost gate)", () => {
 		expect(logSamples[0]).toContain("StyleController#getStyleByStyleCode");
 	});
 
+	// CodeRabbit (PR #549): logSamples must filter out clusters with no
+	// sampleMessage BEFORE applying the MAX_ORBIT_DEPLOY_LOG_SAMPLES cap -- slicing
+	// first would drop a later cluster's real message if an earlier cluster in the
+	// array happened to have no sampleMessage. sampleMessage is a required schema
+	// field, so the malformed first cluster below is only reachable via an
+	// untyped boundary (e.g. a hand-rolled extractor row); the `undefined` cast
+	// mirrors exactly the runtime shape pushBlastRadius-style extractors must
+	// defend against, not a real ElasticLogCluster.
+	test("logSamples skips clusters with no sampleMessage before applying the cap", () => {
+		const malformedCluster = {
+			signature: "s0",
+			sampleMessage: undefined as unknown as string,
+			count: 1,
+			level: "error",
+			service: "checkout",
+		};
+		const state = makeState({
+			orbit: { recentDeploys: [{ mrId: "10", project: "pvhcorp/checkout", mergedAt: daysAgo(2) }] },
+			elastic: {
+				logClusters: [
+					malformedCluster,
+					{ signature: "s1", sampleMessage: "real message A", count: 5, level: "error", service: "checkout" },
+					{ signature: "s2", sampleMessage: "real message B", count: 5, level: "error", service: "checkout" },
+					{ signature: "s3", sampleMessage: "real message C", count: 5, level: "error", service: "checkout" },
+					{
+						signature: "s4",
+						sampleMessage: "real message D (should be capped out)",
+						count: 5,
+						level: "error",
+						service: "checkout",
+					},
+				],
+			},
+		});
+		const match = rule.trigger(state);
+		const logSamples = match?.context.logSamples as string[];
+		expect(logSamples).toEqual(["real message A", "real message B", "real message C"]);
+	});
+
 	describe("fetchDirective", () => {
 		test("names the deploy MR, services, and log evidence; forbids re-investigating the focus", () => {
 			const directive =

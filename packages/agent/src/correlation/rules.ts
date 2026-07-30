@@ -734,9 +734,9 @@ correlationRules.push({
 		for (const a of elastic.apmServices ?? []) if ((a.errorRate ?? 0) > 0) services.add(a.serviceName);
 		for (const c of elastic.logClusters ?? []) if (c.service) services.add(c.service);
 		const logSamples = (elastic.logClusters ?? [])
-			.slice(0, MAX_ORBIT_DEPLOY_LOG_SAMPLES)
 			.map((c) => c.sampleMessage)
-			.filter((m): m is string => !!m);
+			.filter((m): m is string => !!m)
+			.slice(0, MAX_ORBIT_DEPLOY_LOG_SAMPLES);
 		return {
 			context: {
 				requestBlastRadius: true,
