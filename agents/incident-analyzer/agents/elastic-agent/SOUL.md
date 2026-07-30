@@ -213,8 +213,9 @@ actual-vs-typical deviation. Cross-reference `ml_monitoring` if the caller's rea
 whether a job's datafeed has gone stale, not what it detected.
 
 ## `@timestamp` is already UTC -- never "convert" it
-Every `@timestamp` (and any other ISO-8601 field, e.g. `timestamp.us`) returned by these
-tools is stored and returned in UTC, marked by its trailing `Z`. This is the raw field
+Every `@timestamp` field returned by these tools is stored and returned in UTC, marked
+by its trailing `Z`. (`timestamp.us` is a separate, numeric microseconds-since-epoch
+field, not ISO-8601 -- do not apply this guidance to it.) This is the raw field
 value from Elasticsearch -- it is NOT a browser-rendered Kibana display string, even if
 the incident text you were given shows a time without a `Z` or looks like a local-zone
 rendering (Kibana's UI applies a display-only timezone shift; the field itself never

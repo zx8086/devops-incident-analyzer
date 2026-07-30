@@ -1156,9 +1156,9 @@ These are the ONLY tools available to you on this turn: ${names}
 
 If any step in your instructions names a tool that is not in that list, SKIP that step and record it as an un-queried gap in your findings. Do not call it and do not retry it -- it is not bound this turn and the call will fail.
 
-Skipping is licensed ONLY for a step whose tool is missing from that list. It is never a licence to end the turn without querying: pick the closest bound tool and run it. Make at least one call from this list before you write your findings, and do not describe a call you have not made.
+Skipping is licensed ONLY for a step whose tool is missing from that list. If a relevant bound tool exists, make at least one call from this list before writing findings. If none fit the task, state that explicitly as an un-queried gap; do not invoke an unrelated tool, and do not describe a call you have not made.
 
-Never invent a tool name by pattern-matching this list -- e.g. a plausible-looking "_for_<entity>" or "_by_<field>" suffix on a real tool above does not exist just because it would be convenient. If no bound tool does what you need, that is a gap: name the closest bound tool you used instead, or state that none fit -- do not call a name that is not verbatim in the list above.`;
+Never invent a tool name by pattern-matching this list -- e.g. a plausible-looking "_for_<entity>" or "_by_<field>" suffix on a real tool above does not exist just because it would be convenient. A name must be verbatim in the list above to be callable.`;
 }
 
 // The bind-site composition: head-vs-selected budgeting in one place, so all three call sites
