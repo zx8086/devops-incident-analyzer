@@ -157,13 +157,22 @@ export function buildAggregatorMessages(
 	// field, not extractFindings-derived) with this turn's LIVE Orbit code radius
 	// (re-derived from state.dataSourceResults, same double-build convention as
 	// networkContext/mlAnomalyContext above -- graphEnrich runs BEFORE the gitlab
-	// fan-out, so it never sees this turn's orbitFindings). "Known service names"
-	// for the P6 repo-resolution match is the union of names already surfaced this
-	// turn (incident services + graphBlastRadius neighbours) -- a live
-	// serviceNames(store) read is deliberately not used here since
-	// buildAggregatorMessages is synchronous; the KG write side (recordRootCauseData,
-	// which DOES query the live graph) is the source of truth for what gets
-	// persisted, this render is a best-effort same-turn preview.
+	// fan-out, so it never sees this turn's orbitFindings).
+	//
+	// KNOWN LIMITATION (CodeRabbit, PR #547): "known service names" for the P6
+	// repo-resolution match here is the union of names already surfaced THIS turn
+	// (incident services + graphBlastRadius neighbours), narrower than the write
+	// path's serviceNames(store) full live universe (graph-knowledge.ts) -- a live
+	// store read is deliberately not used here since buildAggregatorMessages is
+	// synchronous. Consequence: a code-only consumer whose service has never had
+	// an APM DEPENDS_ON edge (so it never appears in graphBlastRadius) IS still
+	// persisted by the write path this turn, but does NOT appear in THIS turn's
+	// Downstream Impact section -- it surfaces next turn via graphEnrich's
+	// priorRelationshipsForServices instead (a different prompt section, "Known
+	// dependencies"), once graphEnrich re-reads the graph. Same-turn parity would
+	// need either a live store read here (making aggregation async) or threading
+	// the canonical service list through state from an earlier async node --
+	// deferred as a heavier change than this same-turn preview warrants.
 	let downstreamImpactContext = "";
 	try {
 		const incidentServices = state.normalizedIncident.affectedServices?.map((s) => s.name) ?? [];

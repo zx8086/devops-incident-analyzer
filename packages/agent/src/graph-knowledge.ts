@@ -27,7 +27,7 @@ import {
 	upsertEntities,
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
-import { truncateForEmbedding } from "@devops-agent/shared";
+import { type OrbitBlastRadius, truncateForEmbedding } from "@devops-agent/shared";
 import { evaluate } from "./correlation/engine.ts";
 import { correlationRules } from "./correlation/rules.ts";
 import { orbitBlastRadiusFindings, resolveOrbitConsumerEdges } from "./downstream-impact.ts";
@@ -117,9 +117,11 @@ function affectedServiceNames(state: AgentStateType): string[] {
 // side so the write and read paths agree on what counts as a consumer). Own
 // try/catch (the recordRootCauseData soft-fail pattern) -- a write failure never
 // blocks the root-cause record it rides alongside.
-async function recordOrbitConsumerEdges(store: GraphStore, state: AgentStateType): Promise<void> {
-	const findings = orbitBlastRadiusFindings(state);
-	if (findings.length === 0) return;
+async function recordOrbitConsumerEdges(
+	store: GraphStore,
+	findings: OrbitBlastRadius[],
+	state: AgentStateType,
+): Promise<void> {
 	try {
 		const known = await serviceNames(store);
 		const edges = resolveOrbitConsumerEdges(findings, affectedServiceNames(state), known);
@@ -310,9 +312,14 @@ function topSatisfiedCorrelation(state: AgentStateType): { ruleName: string; des
 export async function recordRootCauseData(state: AgentStateType): Promise<Partial<AgentStateType>> {
 	if (!isKnowledgeGraphEnabled()) return {};
 	const cause = topSatisfiedCorrelation(state);
+	const orbitFindings = orbitBlastRadiusFindings(state);
+	// Nothing to write on this turn: skip opening the store entirely so an outage
+	// on a quiet turn (no correlation, no Orbit findings) stays a silent no-op,
+	// not a spurious partialFailures entry for a write that was never attempted.
+	if (!cause && orbitFindings.length === 0) return {};
 	try {
 		const store = await getGraphStore();
-		await recordOrbitConsumerEdges(store, state);
+		if (orbitFindings.length > 0) await recordOrbitConsumerEdges(store, orbitFindings, state);
 		if (!cause) return {};
 		// PK is a stable hash of the normalized class so recurrences MERGE to one node.
 		const id = createHash("sha256").update(cause.ruleName).digest("hex").slice(0, 16);

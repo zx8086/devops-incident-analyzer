@@ -101,6 +101,25 @@ describe("buildDownstreamImpact", () => {
 		expect(entries).toEqual([{ incidentService: "styles-v3-service", dependent: "lists-api", source: "confirmed" }]);
 	});
 
+	// CodeRabbit (PR #547): apmDependents/codeDependents were keyed by raw names
+	// while incidentSet used normalize() -- a casing/whitespace mismatch between
+	// the two sources silently prevented a real match from merging into "confirmed".
+	test("differently-cased service/dependent names from the two sources still merge into confirmed", () => {
+		const casedHit: GraphBlastRadiusHit = {
+			service: "Styles-V3-Service",
+			neighbour: "Lists-API",
+			via: "depends-on",
+			sharedResource: "",
+		};
+		const entries = buildDownstreamImpact(
+			[casedHit],
+			[{ kind: "depends-on", from: "lists-api", to: "styles-v3-service" }],
+			["styles-v3-service"],
+		);
+		expect(entries).toHaveLength(1);
+		expect(entries[0]?.source).toBe("confirmed");
+	});
+
 	test("excludes the reverse-direction APM hit (incident service depends on X, not X depends on incident service)", () => {
 		// service=lists-api, neighbour=styles-v3-service is the OTHER direction of
 		// the same depends-on edge -- not anchored on the incident service.

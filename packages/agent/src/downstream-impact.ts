@@ -101,6 +101,19 @@ export function buildDownstreamImpact(
 	incidentServices: string[],
 ): DownstreamImpactEntry[] {
 	const incidentSet = new Set(incidentServices.map((s) => normalize(s)));
+	// Canonical-name maps keyed by normalize() so an APM hit and an Orbit edge that
+	// name the same service/dependent with different casing/whitespace still merge
+	// into ONE entry (and can be labeled confirmed). The first-seen spelling per
+	// normalized key is kept as the display name -- APM and Orbit both source from
+	// real service identifiers, so any spelling is representative.
+	const canonical = new Map<string, string>();
+	function canonicalize(name: string): string {
+		const key = normalize(name);
+		const existing = canonical.get(key);
+		if (existing) return existing;
+		canonical.set(key, name);
+		return name;
+	}
 	// APM: blastRadiusForServices' "depends-on" hits are both-direction (SIO-1104
 	// note in rules.ts) -- keep only the ones where the INCIDENT service is the
 	// dependency target (hit.neighbour depends on hit.service), i.e. the neighbour
@@ -113,15 +126,17 @@ export function buildDownstreamImpact(
 	for (const hit of graphBlastRadius) {
 		if (hit.via !== "depends-on") continue;
 		if (!incidentSet.has(normalize(hit.service))) continue;
-		const set = apmDependents.get(hit.service) ?? new Set<string>();
-		set.add(hit.neighbour);
-		apmDependents.set(hit.service, set);
+		const service = canonicalize(hit.service);
+		const set = apmDependents.get(service) ?? new Set<string>();
+		set.add(canonicalize(hit.neighbour));
+		apmDependents.set(service, set);
 	}
 	const codeDependents = new Map<string, Set<string>>();
 	for (const edge of orbitConsumerEdges) {
-		const set = codeDependents.get(edge.to) ?? new Set<string>();
-		set.add(edge.from);
-		codeDependents.set(edge.to, set);
+		const service = canonicalize(edge.to);
+		const set = codeDependents.get(service) ?? new Set<string>();
+		set.add(canonicalize(edge.from));
+		codeDependents.set(service, set);
 	}
 	const entries: DownstreamImpactEntry[] = [];
 	const services = new Set([...apmDependents.keys(), ...codeDependents.keys()]);
@@ -136,13 +151,16 @@ export function buildDownstreamImpact(
 			entries.push({ incidentService: service, dependent, source });
 		}
 	}
-	// Deterministic order: confirmed first, then by service/dependent name.
+	// Deterministic order: confirmed first, then by service/dependent name. A plain
+	// code-point comparator (not localeCompare, which is locale/ICU-version
+	// dependent) so the rendered prompt bytes are stable across environments.
 	const rank: Record<ImpactSource, number> = { confirmed: 0, apm: 1, code: 2 };
+	const byCodePoint = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 	entries.sort(
 		(a, b) =>
 			rank[a.source] - rank[b.source] ||
-			a.incidentService.localeCompare(b.incidentService) ||
-			a.dependent.localeCompare(b.dependent),
+			byCodePoint(a.incidentService, b.incidentService) ||
+			byCodePoint(a.dependent, b.dependent),
 	);
 	return entries;
 }
