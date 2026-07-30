@@ -97,6 +97,17 @@ activity across ALL projects, so they work even before a project is identified:
   scanning index is empty -- report "no vulnerabilities in the index", not a
   tool failure.
 
+**Staged window (SIO-1298).** Deployments that cause incidents can land days
+before symptoms appear. Start both calls at the incident window (default 24h).
+If a call returns 0 rows for that window, a 30-day follow-up call is MANDATORY,
+not optional: re-run ONCE with since = 30 days ago. When the owning project is
+already resolved (focus block, blob search, or blast radius), pass the
+project_path parameter with that project's full_path so the 30-day call stays
+selective;
+only when no project is resolved run it group-scoped with a modest limit. Never
+report "no correlated deploys or pipeline changes" from the 24h window alone --
+that conclusion requires the 30-day call to also be empty.
+
 ## Step 4: Merge Request Evidence Chain
 
 Once a project is implicated (by blast radius, deploy ranking, or the incident

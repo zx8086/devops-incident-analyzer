@@ -8,6 +8,7 @@ import {
 	awsEcsAbsenceProven,
 	consumeAbsenceExitLog,
 	consumeEmptyAwsResultsAdvice,
+	consumeGitlabCorrelationWidenAdvice,
 	consumeInvalidQueryIdAdvice,
 	createLoopGuardState,
 	isObservedTool,
@@ -324,6 +325,25 @@ function instrumentTool(
 									invalidIdAdvice
 										? "Appending re-anchor advice after invalid CloudWatch queryId"
 										: "Appending widen-window advice after consecutive empty CloudWatch results",
+								);
+								return rebuildResult(processed, `${stringifyContent(extractContent(processed))}\n\n${advice}`);
+							}
+						}
+						// SIO-1298: an empty ~24h deploy/pipeline correlation window must not be read as
+						// "no correlated change" -- deployments can land days before symptoms. Append the
+						// mandatory 30-day escalation advice (project-scoped when the codebase is known).
+						if (tool.name === "gitlab_recent_deploys" || tool.name === "gitlab_pipeline_failures") {
+							const advice = consumeGitlabCorrelationWidenAdvice(runState.loopGuard, tool.name);
+							if (advice) {
+								ctx.log.info(
+									{
+										event: "subagent.gitlab_correlation_widen_advice",
+										dataSourceId: ctx.dataSourceId,
+										deploymentId: ctx.deploymentId,
+										toolName: tool.name,
+										iteration,
+									},
+									"Appending 30-day escalation advice after empty 24h correlation window",
 								);
 								return rebuildResult(processed, `${stringifyContent(extractContent(processed))}\n\n${advice}`);
 							}

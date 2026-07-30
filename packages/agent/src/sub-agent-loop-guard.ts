@@ -78,6 +78,15 @@ const AWS_DESCRIBE_LOG_GROUPS = "aws_logs_describe_log_groups";
 const AWS_GET_QUERY_RESULTS = "aws_logs_get_query_results";
 const AWS_EMPTY_RESULTS_ADVICE_THRESHOLD = 2;
 
+// SIO-1298: the two Orbit deploy/pipeline correlation tools. An empty result from a
+// ~24h window latches the mandatory 30-day escalation advice.
+const GITLAB_RECENT_DEPLOYS = "gitlab_recent_deploys";
+const GITLAB_PIPELINE_FAILURES = "gitlab_pipeline_failures";
+const GITLAB_CORRELATION_TOOLS = new Set<string>([GITLAB_RECENT_DEPLOYS, GITLAB_PIPELINE_FAILURES]);
+// 25h keeps an hour of slack over the SIO-1296 24h default so a window computed at
+// normalize time still counts as "the default window" by the time the tool runs.
+const GITLAB_CORRELATION_RECENT_WINDOW_MS = 25 * 3600_000;
+
 // SIO-1232: the two AWS protocol/recovery tools are exempt from EVERY generic rule, not just the
 // duplicate check.
 //   - aws_logs_get_query_results MUST be re-polled with the SAME queryId while status is
@@ -226,6 +235,18 @@ export const AWS_EMPTY_RESULTS_ADVICE =
 	"that reaches back past the incident time); only report absence if the widened query is " +
 	"also empty.";
 
+// SIO-1298: deployments that cause incidents can land days before symptoms appear, so an
+// empty ~24h deploy/pipeline window is NOT evidence of no correlated change. The 30-day
+// follow-up is mandatory; project-scoped when the owning codebase is resolved.
+export const GITLAB_CORRELATION_WIDEN_ADVICE =
+	"[loop-guard advice] This deploy/pipeline correlation query returned 0 rows for a ~24h window. " +
+	"Deployments that cause incidents can land days in advance, so an empty 24-hour window is NOT " +
+	"evidence of no correlated change. You MUST re-run this tool ONCE with since = 30 days ago. " +
+	"If the owning project/codebase is resolved (focus block, blob search, or prior findings), pass " +
+	"project_path with that project's full_path to keep the query selective; otherwise run it " +
+	"group-scoped with a modest limit. Only report 'no correlated deploys or pipeline changes' if " +
+	"the 30-day call is also empty.";
+
 export const AWS_INVALID_QUERY_ID_ADVICE =
 	"[loop-guard advice] aws_logs_get_query_results rejected the queryId as invalid. A queryId is " +
 	"estate/region-scoped and short-lived: it only works when polled with the SAME estate you passed " +
@@ -308,6 +329,10 @@ export interface LoopGuardState {
 	// queryId (bad-input/resource-not-found _error); consumed (cleared) when the corrective
 	// advice is emitted once.
 	awsInvalidQueryId: boolean;
+	// SIO-1298: correlation tools that returned an empty result for a ~24h window this run.
+	// Latched in recordResult; consumed (per tool, one-shot) when the escalation advice is
+	// appended to that tool's result.
+	gitlabCorrelationEmpty: Set<string>;
 	// SIO-1232: generic per-tool and per-run unproductive counters for every non-bespoke tool.
 	unproductiveByTool: Map<string, number>;
 	totalUnproductive: number;
@@ -331,6 +356,7 @@ export function createLoopGuardState(opts: LoopGuardOptions = {}): LoopGuardStat
 		awsStartQueryUnproductive: 0,
 		awsEmptyQueryResults: 0,
 		awsInvalidQueryId: false,
+		gitlabCorrelationEmpty: new Set<string>(),
 		unproductiveByTool: new Map<string, number>(),
 		totalUnproductive: 0,
 		awsEcs: {
@@ -473,6 +499,41 @@ export function consumeInvalidQueryIdAdvice(state: LoopGuardState): string | nul
 	if (!state.awsInvalidQueryId) return null;
 	state.awsInvalidQueryId = false;
 	return AWS_INVALID_QUERY_ID_ADVICE;
+}
+
+// SIO-1298: detect an empty-success Orbit correlation payload. Both tools return the
+// taggedPayload envelope carrying a top-level row_count; 0 rows on a SUCCESS response is
+// the trigger (an _error envelope never parses to row_count 0 and must not fire this).
+export function isEmptyGitlabCorrelationResult(content: unknown): boolean {
+	const text = typeof content === "string" ? content : coalesceTextBlocks(content);
+	if (!text) return false;
+	try {
+		const parsed = JSON.parse(text) as Record<string, unknown>;
+		return parsed !== null && typeof parsed === "object" && parsed.row_count === 0 && !("_error" in parsed);
+	} catch {
+		return false;
+	}
+}
+
+// SIO-1298: was this call's `since` inside the default (~24h) window? Only then does the
+// escalation apply -- a call that already looked back further (e.g. 30 days) must not
+// re-trigger it. nowMs is injectable for tests; recordResult passes the real clock.
+export function isRecentCorrelationWindow(arg: unknown, nowMs: number = Date.now()): boolean {
+	if (!arg || typeof arg !== "object") return false;
+	const since = (arg as { since?: unknown }).since;
+	if (typeof since !== "string") return false;
+	const t = Date.parse(since);
+	if (Number.isNaN(t)) return false;
+	return nowMs - t <= GITLAB_CORRELATION_RECENT_WINDOW_MS;
+}
+
+// SIO-1298: one-shot per tool. Fires on the FIRST empty ~24h result (unlike the AWS widen
+// advice's two-consecutive threshold -- these correlation tools are typically called once
+// per run, so a single empty already means the conclusion would be under-scoped).
+export function consumeGitlabCorrelationWidenAdvice(state: LoopGuardState, toolName: string): string | null {
+	if (!state.gitlabCorrelationEmpty.has(toolName)) return null;
+	state.gitlabCorrelationEmpty.delete(toolName);
+	return GITLAB_CORRELATION_WIDEN_ADVICE;
 }
 
 function safeStringify(value: unknown): string {
@@ -783,6 +844,17 @@ export function recordResult(
 		}
 		return;
 	}
+	// SIO-1298: an empty deploy/pipeline correlation result from a ~24h window latches the
+	// mandatory 30-day escalation advice. Latch only -- generic accounting below is untouched,
+	// and the branch deliberately does NOT return: the call still records its signature.
+	if (
+		GITLAB_CORRELATION_TOOLS.has(toolName) &&
+		isEmptyGitlabCorrelationResult(content) &&
+		isRecentCorrelationWindow(arg)
+	) {
+		state.gitlabCorrelationEmpty.add(toolName);
+	}
+
 	state.seenSignatures.add(signature);
 
 	// SIO-1268: fold ECS list results into the enumeration ledger. No-op for every other tool and
