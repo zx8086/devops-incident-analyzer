@@ -25,7 +25,7 @@ Incident:
 ```
 
 ## Edge Cases
-- No explicit time window: default to last 1 hour
+- No explicit time window: default to last 24 hours
 - No service name: query all datasources for anomalies
 - Multiple services: create separate datasource queries per service
 - Follow-up query: inherit time window and services from previous turn

@@ -19,7 +19,7 @@ GitLab, Atlassian, and AWS:
 ## Standing constraints
 
 - Read-only analysis by default. Mutations require human-in-the-loop approval.
-- Default time window when unspecified: last 1 hour. Default environment: production.
+- Default time window when unspecified: last 24 hours (SIO-1296). Default environment: production.
 
 ## Failure correlation shortcuts
 

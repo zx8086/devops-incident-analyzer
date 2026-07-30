@@ -166,7 +166,7 @@ The SOUL.md file defines the agent's personality, communication style, action bi
 The root orchestrator's SOUL.md establishes:
 - **Core Identity:** multi-datasource incident analysis orchestrator
 - **Communication Style:** structured, evidence-driven, tables for comparisons
-- **Action Bias:** act first, clarify only when genuinely ambiguous. Default to all clusters, last 1 hour, all datasources, production
+- **Action Bias:** act first, clarify only when genuinely ambiguous. Default to all clusters, last 24 hours, all datasources, production
 - **Values:** evidence over assumptions, read-only, transparency, escalation over guessing, correlation over isolation
 - **Domain Expertise:** Kubernetes, Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, incident correlation, SLO assessment
 

@@ -149,7 +149,7 @@ Available datasources: ${DATA_SOURCE_IDS.join(", ")}
 
 Extract and return JSON with:
 - severity: "critical" (outage), "high" (degraded), "medium" (anomaly), "low" (informational). Infer from keywords like "down", "outage" = critical; "slow", "degraded" = high; "check", "how" = medium.
-- timeWindow: { from, to } as ISO 8601. Parse "last 30 min", "past hour", etc. If no time is mentioned, default to { from: 1 hour ago, to: now }.
+- timeWindow: { from, to } as ISO 8601. Parse "last 30 min", "past hour", etc. If no time is mentioned, default to { from: 24 hours ago, to: now }.
 - affectedServices: array of { name, namespace?, deployment? }. Extract service names, namespaces, or deployment identifiers mentioned.
 - extractedMetrics: array of { name, value?, threshold? }. Extract metrics like "error rate 15%", "latency > 500ms", "lag 10000".
 
@@ -221,8 +221,11 @@ export async function normalizeIncident(
 				: "";
 
 	const now = new Date();
-	const oneHourAgo = new Date(now.getTime() - 3600_000);
-	const timeContext = `\nCurrent time: ${now.toISOString()}. Default time window: { "from": "${oneHourAgo.toISOString()}", "to": "${now.toISOString()}" }`;
+	// SIO-1296: 24h default. Investigations usually start well after onset -- the previous
+	// 1h default under-scoped the deploy/pipeline correlation checks (0 rows on chronic
+	// incidents). Explicit time expressions in the query still override this.
+	const dayAgo = new Date(now.getTime() - 24 * 3600_000);
+	const timeContext = `\nCurrent time: ${now.toISOString()}. Default time window: { "from": "${dayAgo.toISOString()}", "to": "${now.toISOString()}" }`;
 
 	const llm = createLlm("normalizer");
 	try {
