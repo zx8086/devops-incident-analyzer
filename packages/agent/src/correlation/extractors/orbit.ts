@@ -98,7 +98,6 @@ function mrByFileOf(rawJson: unknown): Record<string, Row> {
 // Blast radius: each row pairs a Definition (def) with an ImportedSymbol (sym).
 // Group by definition, collect the distinct downstream import sites, and attach
 // the merged-MR metadata resolved for the definition's source file.
-//
 // SIO-1303: when radiusMode is "definition-name-match" the rows carry only `def`
 // (no `sym`/IMPORTS edge -- the tool fell back to a Definition name-sweep). A
 // name-match row is a candidate definition location, NOT a confirmed import
