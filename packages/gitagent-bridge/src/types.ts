@@ -202,6 +202,12 @@ export const RunbookSelectionConfigSchema = z.object({
 		medium: z.array(z.string()),
 		low: z.array(z.string()),
 	}),
+	// SIO-1302: filenames appended to the router's picks (and to the severity
+	// fallback) on every complex turn, unconditionally -- deterministic, not
+	// LLM-router discretion. The 3-pick cap applies to router picks only; these
+	// ride on top, deduped. Optional so existing agents without this key parse
+	// unchanged (empty list, no always-select behavior).
+	always_select: z.array(z.string()).optional(),
 });
 export type RunbookSelectionConfig = z.infer<typeof RunbookSelectionConfigSchema>;
 

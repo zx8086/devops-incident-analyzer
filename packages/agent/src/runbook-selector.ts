@@ -69,6 +69,12 @@ export type SelectionMode =
 	| "skip.empty_catalog"
 	| "error.missing_severity";
 
+// SIO-1302: source of a runbook filename in the final selection, distinct from
+// SelectionMode (which describes HOW the router-picks half was resolved). Logged
+// alongside mode so "code-change-correlation.md always present" is auditable
+// without re-deriving it from the always-select config at log-read time.
+export type SelectionSource = "router" | "fallback" | "always_select";
+
 export type SeverityFallbackConfig = Record<"critical" | "high" | "medium" | "low", string[]>;
 
 export interface RunbookSelectorDeps {
@@ -92,6 +98,11 @@ export interface SelectRunbooksRuntime {
 	getCatalog: () => RunbookCatalogEntry[];
 	getFallbackConfig: () => SeverityFallbackConfig;
 	getLlm: () => SelectorLlm;
+	// SIO-1302: filenames appended to every selection unconditionally (router
+	// picks AND severity fallback), deduped. Optional so existing callers that
+	// predate this field behave as if it returned []; createSelectRunbooksNode
+	// wires it to agent.runbookSelection.always_select.
+	getAlwaysSelect?: () => string[];
 }
 
 export async function runSelectRunbooks(
@@ -160,6 +171,18 @@ export async function runSelectRunbooks(
 	const severity = state.normalizedIncident?.severity;
 	const fallbackConfig = runtime.getFallbackConfig();
 
+	// SIO-1302: always-select filenames, validated against the LIFECYCLE-filtered
+	// catalog (not the trigger-narrowed `catalog`/`validFilenames`) -- trigger
+	// narrowing exists to reduce the LLM router's candidate list, not to gate a
+	// deterministic injection that bypasses the router entirely. A deprecated
+	// runbook is still never force-selected (same discipline as the severity
+	// fallback below). An always-select filename absent from the lifecycle-kept
+	// catalog entirely (e.g. a config typo) is dropped silently at this layer --
+	// manifest-loader.ts already fails the agent load if it doesn't exist on disk
+	// at all, so this is defense against a load-time-valid-but-now-deprecated file.
+	const lifecycleKeptFilenames = new Set(lifecycleResult.kept.map((e) => e.filename));
+	const alwaysSelect = (runtime.getAlwaysSelect?.() ?? []).filter((f) => lifecycleKeptFilenames.has(f));
+
 	// Step 2: build router prompt
 	const lastMessage = state.messages.at(-1);
 	const rawInput = lastMessage ? extractTextFromContent(lastMessage.content).slice(0, 500) : "";
@@ -201,7 +224,7 @@ Rules:
 	} catch (err) {
 		const isTimeout = err instanceof Error && err.name === "TimeoutError";
 		const mode: SelectionMode = isTimeout ? "fallback.timeout" : "fallback.api_error";
-		return enterFallback(mode, severity, fallbackConfig, startTime, deprecatedFilenames);
+		return enterFallback(mode, severity, fallbackConfig, startTime, deprecatedFilenames, alwaysSelect);
 	}
 
 	// Step 4: parse response
@@ -209,7 +232,14 @@ Rules:
 	const result = parseLlmJson(text, RunbookSelectionResponseSchema);
 	if (!result.ok) {
 		logger.warn({ reason: result.reason, detail: result.message }, "Runbook selection JSON unusable");
-		return enterFallback("fallback.parse_error", severity, fallbackConfig, startTime, deprecatedFilenames);
+		return enterFallback(
+			"fallback.parse_error",
+			severity,
+			fallbackConfig,
+			startTime,
+			deprecatedFilenames,
+			alwaysSelect,
+		);
 	}
 	const parsed: RunbookSelectionResponse = result.data;
 
@@ -218,7 +248,14 @@ Rules:
 	const invalidPicks = parsed.filenames.filter((f) => !validFilenames.has(f));
 
 	if (parsed.filenames.length > 0 && validPicks.length === 0) {
-		return enterFallback("fallback.invalid_filenames", severity, fallbackConfig, startTime, deprecatedFilenames);
+		return enterFallback(
+			"fallback.invalid_filenames",
+			severity,
+			fallbackConfig,
+			startTime,
+			deprecatedFilenames,
+			alwaysSelect,
+		);
 	}
 
 	// Step 6: truncate to max 3 (SIO-746 -- was 2)
@@ -228,6 +265,11 @@ Rules:
 	else if (invalidPicks.length > 0) mode = "llm.partial";
 	else if (truncated.length === 0) mode = "llm.empty";
 
+	// SIO-1302: always-select rides ON TOP of the 3-pick cap, deduped against the
+	// router's picks -- it is not subject to truncation and does not compete for
+	// the router's 3 slots.
+	const finalSelection = [...truncated, ...alwaysSelect.filter((f) => !truncated.includes(f))];
+
 	logger.info(
 		{
 			mode,
@@ -236,11 +278,12 @@ Rules:
 			reasoning: parsed.reasoning,
 			latencyMs: Date.now() - startTime,
 			catalogSize: catalog.length,
+			...(alwaysSelect.length > 0 ? { always_select: alwaysSelect.join(",") } : {}),
 		},
 		"Runbook selection complete",
 	);
 
-	return { selectedRunbooks: truncated };
+	return { selectedRunbooks: finalSelection };
 }
 
 // SIO-1287: `deprecated` is the set of filenames the lifecycle filter excluded. The severity
@@ -254,6 +297,7 @@ function enterFallback(
 	config: SeverityFallbackConfig,
 	startTime: number,
 	deprecated: ReadonlySet<string> = new Set(),
+	alwaysSelect: string[] = [],
 ): Partial<AgentStateType> {
 	if (!severity) {
 		logger.error(
@@ -268,6 +312,9 @@ function enterFallback(
 	const configured = config[severity as keyof SeverityFallbackConfig] ?? [];
 	const fallback = configured.filter((f) => !deprecated.has(f));
 	const dropped = configured.filter((f) => deprecated.has(f));
+	// SIO-1302: always-select is unioned into the fallback path too, deduped --
+	// the router failing must not lose the mandatory code-change frame either.
+	const finalSelection = [...fallback, ...alwaysSelect.filter((f) => !fallback.includes(f))];
 	logger.info(
 		{
 			mode,
@@ -275,13 +322,14 @@ function enterFallback(
 			filenames: fallback.join(","),
 			count: fallback.length,
 			...(dropped.length > 0 ? { lifecycle_dropped: dropped } : {}),
+			...(alwaysSelect.length > 0 ? { always_select: alwaysSelect.join(",") } : {}),
 			latencyMs: Date.now() - startTime,
 		},
 		dropped.length > 0
 			? `Runbook selection entered fallback path; dropped ${dropped.length} deprecated runbook(s) from the severity tier`
 			: "Runbook selection entered fallback path",
 	);
-	return { selectedRunbooks: fallback };
+	return { selectedRunbooks: finalSelection };
 }
 
 function formatIncidentSummary(state: AgentStateType): string {
@@ -446,6 +494,9 @@ export function createSelectRunbooksNode(): (
 				return agent.runbookSelection.fallback_by_severity;
 			},
 			getLlm: () => createLlm("runbookSelector") as unknown as SelectorLlm,
+			// SIO-1302: absent key in index.yaml -> [] (no always-select behavior),
+			// matching the schema's optional() + the runtime interface's default.
+			getAlwaysSelect: () => getAgent().runbookSelection?.always_select ?? [],
 		};
 		return runSelectRunbooks(state, runtime, config);
 	};

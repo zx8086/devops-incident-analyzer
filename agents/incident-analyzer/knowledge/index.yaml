@@ -32,3 +32,9 @@ runbook_selection:
     medium:
       - code-change-correlation.md
     low: []
+  # SIO-1302: appended to the router's picks (and unioned into the severity
+  # fallback above) on every complex turn, unconditionally -- deterministic,
+  # never left to LLM-router discretion. Policy: all incidents in this system
+  # are software incidents, so code-change investigation is mandatory.
+  always_select:
+    - code-change-correlation.md
