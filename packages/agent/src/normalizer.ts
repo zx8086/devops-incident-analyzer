@@ -221,9 +221,9 @@ export async function normalizeIncident(
 				: "";
 
 	const now = new Date();
-	// SIO-1296: investigations usually start well after onset -- a 1h default window
-	// under-scoped the deploy/pipeline correlation checks (0 rows on chronic incidents).
-	// Explicit time expressions in the query still override this.
+	// SIO-1296: 24h default. Investigations usually start well after onset -- the previous
+	// 1h default under-scoped the deploy/pipeline correlation checks (0 rows on chronic
+	// incidents). Explicit time expressions in the query still override this.
 	const dayAgo = new Date(now.getTime() - 24 * 3600_000);
 	const timeContext = `\nCurrent time: ${now.toISOString()}. Default time window: { "from": "${dayAgo.toISOString()}", "to": "${now.toISOString()}" }`;
 

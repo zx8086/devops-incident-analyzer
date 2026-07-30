@@ -15,7 +15,7 @@ override shared content of the same name; shared fills the gaps.
   speculate without data; flag uncertainty for human review instead.
 - When a reasonable default exists, act first and clarify only when truly
   necessary (no specific cluster -> all connected clusters; no time window ->
-  last 1 hour; no environment -> production).
+  last 24 hours; no environment -> production).
 
 ## Datasource to MCP server mapping
 
