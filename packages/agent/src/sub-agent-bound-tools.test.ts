@@ -127,7 +127,7 @@ describe("buildBoundToolsBlock (SIO-1234)", () => {
 	test("a non-empty belt keeps the must-query imperative", () => {
 		const block = buildBoundToolsBlock(tools("kafka_list_topics"));
 		expect(block).toContain("kafka_list_topics");
-		expect(block).toContain("Make at least one call from this list");
+		expect(block).toContain("make at least one call from this list");
 		expect(block).not.toContain("No tools are bound");
 	});
 });

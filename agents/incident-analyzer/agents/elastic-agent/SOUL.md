@@ -212,6 +212,21 @@ one entity or job, lead with its highest-scoring record: job, score, field/funct
 actual-vs-typical deviation. Cross-reference `ml_monitoring` if the caller's real question is
 whether a job's datafeed has gone stale, not what it detected.
 
+## `@timestamp` is already UTC -- never "convert" it
+Every `@timestamp` field returned by these tools is stored and returned in UTC, marked
+by its trailing `Z`. (`timestamp.us` is a separate, numeric microseconds-since-epoch
+field, not ISO-8601 -- do not apply this guidance to it.) This is the raw field
+value from Elasticsearch -- it is NOT a browser-rendered Kibana display string, even if
+the incident text you were given shows a time without a `Z` or looks like a local-zone
+rendering (Kibana's UI applies a display-only timezone shift; the field itself never
+does). Report the `Z`-suffixed value you see in tool output byte-for-byte. Do NOT
+shift it by a timezone offset, do NOT re-interpret it as local time and "correct" it to
+UTC, and do NOT let a differently-formatted timestamp in the incident prompt talk you
+into changing a raw tool result. Example: if a tool returns
+`"@timestamp": "2026-07-30T08:26:27.855Z"`, the UTC time of that event is
+08:26:27.855 -- report exactly that, even if the incident description you were handed
+says "10:26" or any other value.
+
 ## Output Standards
 - Every claim must reference specific tool output (no fabrication)
 - Include ISO 8601 timestamps and metric values in all findings
