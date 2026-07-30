@@ -1,6 +1,11 @@
 // agent/src/graph-knowledge.test.ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { _setGraphStoreForTesting, type GraphRow, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
+import {
+	_setGraphStoreFactoryForTesting,
+	_setGraphStoreForTesting,
+	type GraphRow,
+	InMemoryGraphStore,
+} from "@devops-agent/knowledge-graph";
 import { HumanMessage } from "@langchain/core/messages";
 import { _setEmbedderForTesting, graphEnrich, recordGraphEntities, recordRootCauseData } from "./graph-knowledge.ts";
 import type { AgentStateType } from "./state.ts";
@@ -46,6 +51,7 @@ afterEach(() => {
 	if (prev === undefined) delete process.env.KNOWLEDGE_GRAPH_ENABLED;
 	else process.env.KNOWLEDGE_GRAPH_ENABLED = prev;
 	_setGraphStoreForTesting(null);
+	_setGraphStoreFactoryForTesting(undefined);
 	_setEmbedderForTesting(null);
 });
 
@@ -288,6 +294,18 @@ describe("graphEnrich", () => {
 		expect(result.knownServiceNames).toEqual([]);
 		// the rest of enrichment still ran (graphContext key is present).
 		expect(result.graphContext).toBeDefined();
+	});
+
+	// CodeRabbit (PR #547, round 3): knownServiceNames uses a REPLACE reducer, so
+	// an update that OMITS the key leaves a prior turn's value untouched. The
+	// outer catch (getGraphStore() itself throwing, before either inner
+	// try/catch runs) must explicitly return knownServiceNames: [], or a stale
+	// service list from an earlier successful turn would silently leak forward.
+	test("outer-catch failure (getGraphStore itself throws) explicitly clears knownServiceNames", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		_setGraphStoreFactoryForTesting(() => Promise.reject(new Error("store open failed")));
+		const result = await graphEnrich(stateWith(["svc-a"], "kafka lag"));
+		expect(result).toEqual({ knownServiceNames: [] });
 	});
 
 	test("soft-fails to dependencies-only when the embedder throws", async () => {

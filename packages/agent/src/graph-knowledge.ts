@@ -292,7 +292,13 @@ export async function graphEnrich(state: AgentStateType): Promise<Partial<AgentS
 			{ error: error instanceof Error ? error.message : String(error) },
 			"graphEnrich failed; continuing without graph context",
 		);
-		return {};
+		// SIO-1305 (CodeRabbit, PR #547): knownServiceNames uses a REPLACE reducer,
+		// so an update that omits the key leaves the channel's PRIOR-turn value
+		// untouched -- an outer-catch failure (e.g. getGraphStore() itself throwing,
+		// before either inner try/catch runs) must explicitly clear it, or a stale
+		// service list from a prior successful turn would silently feed this turn's
+		// downstream-impact resolution.
+		return { knownServiceNames: [] };
 	}
 }
 
