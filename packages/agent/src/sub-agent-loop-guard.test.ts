@@ -1086,6 +1086,13 @@ describe("gitlab correlation widen advice (SIO-1298)", () => {
 		expect(consumeGitlabCorrelationWidenAdvice(state, DEPLOYS)).toBeNull();
 	});
 
+	test("latches through the wrapped tool-call envelope (live regression, SIO-1084 shape)", () => {
+		const state = createLoopGuardState();
+		const wrapped = { name: DEPLOYS, id: "call_1", type: "tool_call", args: recentSince() };
+		recordResult(state, DEPLOYS, "sig1", emptyPayload, wrapped);
+		expect(consumeGitlabCorrelationWidenAdvice(state, DEPLOYS)).toBe(GITLAB_CORRELATION_WIDEN_ADVICE);
+	});
+
 	test("both tools latch independently", () => {
 		const state = createLoopGuardState();
 		recordResult(state, DEPLOYS, "sig1", emptyPayload, recentSince());
