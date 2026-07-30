@@ -841,6 +841,78 @@ describe("buildPersistedToolOutput SIO-1159 typed-finding exemption", () => {
 		expect(out.capSkippedBytes).toBeNull();
 		expect(out.truncation).toBeNull();
 	});
+
+	// SIO-1300: none of the 6 Orbit output tools was in TYPED_FINDING_TOOLS, so a
+	// blast-radius/deploy-ranking envelope over 64KB persisted truncated and the
+	// orbit extractor (correlation/extractors/orbit.ts) silently parsed fewer (or
+	// zero) rows from the resulting broken JSON -- the same failure class SIO-1277
+	// fixed for elasticsearch_multi_search. Live-measured: a 23KB blast-radius
+	// payload at limit 50; the tool default limit is 200 (max 1000), so a real
+	// cross-project payload plausibly exceeds the 64KB DEFAULT_STATE_CAP_BYTES.
+	describe("SIO-1300 Orbit typed-finding exemption", () => {
+		const REALISTIC_CAP = 65_536;
+
+		// Mirrors the real Orbit envelope shape (SIO-1303/1305 handoff): queryTag +
+		// result.rows[], each row a traversal node-alias-keyed object.
+		function bigBlastRadiusPayload(rowCount: number): string {
+			const rows = Array.from({ length: rowCount }, (_, i) => ({
+				def: {
+					type: "Definition",
+					id: String(i),
+					properties: {
+						fqn: `pvhcorp/service-${i}::Controller#method${i}`,
+						file_path: `src/main/java/pvh/services/service-${i}/Controller.java`,
+						definition_type: "method",
+					},
+				},
+				sym: {
+					type: "ImportedSymbol",
+					id: String(i + 10_000),
+					properties: { file_path: `pvhcorp/consumer-${i}/app.rb`, import_path: `pvhcorp/service-${i}/method${i}` },
+				},
+			}));
+			return JSON.stringify({ queryTag: "orbit_blast_radius", result: { rows }, mrByFile: {} });
+		}
+
+		test("gitlab_blast_radius over 64KB is persisted un-truncated, and the extractor's row count is unchanged", async () => {
+			const { extractOrbitFindings } = await import("./correlation/extractors/orbit.ts");
+			const payload = bigBlastRadiusPayload(300);
+			expect(Buffer.byteLength(payload, "utf8")).toBeGreaterThan(REALISTIC_CAP);
+
+			const out = buildPersistedToolOutput("gitlab_blast_radius", payload, REALISTIC_CAP);
+			expect(out.truncation).toBeNull();
+			expect(out.capSkippedBytes).toBe(Buffer.byteLength(payload, "utf8"));
+
+			const findingsFromOriginal = extractOrbitFindings([
+				{ toolName: "gitlab_blast_radius", rawJson: JSON.parse(payload) },
+			]);
+			const findingsFromPersisted = extractOrbitFindings([{ toolName: "gitlab_blast_radius", rawJson: out.rawJson }]);
+			expect(findingsFromPersisted.blastRadius?.length).toBe(findingsFromOriginal.blastRadius?.length);
+			expect(findingsFromPersisted.blastRadius?.length).toBe(300);
+		});
+
+		test.each([
+			"gitlab_blast_radius",
+			"gitlab_cross_project_callers",
+			"gitlab_recent_deploys",
+			"gitlab_pipeline_failures",
+			"gitlab_recent_vulnerabilities",
+			"gitlab_orbit_query_graph",
+		])("%s is exempt from the persist-side truncation cap", (toolName) => {
+			const big = `{"queryTag":"x","result":{"rows":[]},"padding":"${"a".repeat(REALISTIC_CAP * 2)}"}`;
+			const out = buildPersistedToolOutput(toolName, big, REALISTIC_CAP);
+			expect(out.truncation).toBeNull();
+			expect(out.capSkippedBytes).toBe(Buffer.byteLength(big, "utf8"));
+			expect(out.rawJson).toEqual(JSON.parse(big));
+		});
+
+		test("gitlab_graph_schema remains capped (deliberately excluded -- feeds no extractor)", () => {
+			const big = "z".repeat(REALISTIC_CAP * 2);
+			const out = buildPersistedToolOutput("gitlab_graph_schema", big, REALISTIC_CAP);
+			expect(out.truncation).not.toBeNull();
+			expect(out.capSkippedBytes).toBeNull();
+		});
+	});
 });
 
 // SIO-1268: default-ON kill switch, matching the RESOLVE_IDENTIFIERS_ENABLED idiom.
