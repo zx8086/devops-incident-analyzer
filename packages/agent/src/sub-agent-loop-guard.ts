@@ -235,17 +235,23 @@ export const AWS_EMPTY_RESULTS_ADVICE =
 	"that reaches back past the incident time); only report absence if the widened query is " +
 	"also empty.";
 
-// SIO-1298: deployments that cause incidents can land days before symptoms appear, so an
-// empty ~24h deploy/pipeline window is NOT evidence of no correlated change. The 30-day
-// follow-up is mandatory; project-scoped when the owning codebase is resolved.
+// SIO-1298/SIO-1304: deployments that cause incidents can land days or weeks before
+// symptoms appear, so an empty ~24h deploy/pipeline window is NOT evidence of no
+// correlated change. The widened follow-up is mandatory: 90 days project-scoped when
+// the owning codebase is resolved (newest-first + limit-bounded, so the wide window
+// adds coverage for low-velocity teams, not noise), 30 days group-scoped otherwise.
 export const GITLAB_CORRELATION_WIDEN_ADVICE =
 	"[loop-guard advice] This deploy/pipeline correlation query returned 0 rows for a ~24h window. " +
-	"Deployments that cause incidents can land days in advance, so an empty 24-hour window is NOT " +
-	"evidence of no correlated change. You MUST re-run this tool ONCE with since = 30 days ago. " +
-	"If the owning project/codebase is resolved (focus block, blob search, or prior findings), pass " +
-	"project_path with that project's full_path to keep the query selective; otherwise run it " +
-	"group-scoped with a modest limit. Only report 'no correlated deploys or pipeline changes' if " +
-	"the 30-day call is also empty.";
+	"Deployments that cause incidents can land days or weeks in advance, so an empty 24-hour window " +
+	"is NOT evidence of no correlated change. You MUST re-run this tool ONCE. If the owning " +
+	"project/codebase is resolved (focus block, blob search, or prior findings), pass project_path " +
+	"with that project's full_path and since = 90 days ago -- results are newest-first and " +
+	"limit-bounded, so the wide window adds coverage, not noise, and it reveals the team's deploy " +
+	"cadence: state that cadence and the gap between the last change and the documented incident " +
+	"onset in your findings, and treat an old change as a root-cause candidate only if its timing " +
+	"aligns with that onset. If no project is resolved, re-run group-scoped with since = 30 days " +
+	"ago and a modest limit. Only report 'no correlated deploys or pipeline changes' if the widened " +
+	"call is also empty.";
 
 export const AWS_INVALID_QUERY_ID_ADVICE =
 	"[loop-guard advice] aws_logs_get_query_results rejected the queryId as invalid. A queryId is " +

@@ -97,16 +97,23 @@ activity across ALL projects, so they work even before a project is identified:
   scanning index is empty -- report "no vulnerabilities in the index", not a
   tool failure.
 
-**Staged window (SIO-1298).** Deployments that cause incidents can land days
-before symptoms appear. Start both calls at the incident window (default 24h).
-If a call returns 0 rows for that window, a 30-day follow-up call is MANDATORY,
-not optional: re-run ONCE with since = 30 days ago. When the owning project is
-already resolved (focus block, blob search, or blast radius), pass the
-project_path parameter with that project's full_path so the 30-day call stays
-selective;
-only when no project is resolved run it group-scoped with a modest limit. Never
-report "no correlated deploys or pipeline changes" from the 24h window alone --
-that conclusion requires the 30-day call to also be empty.
+**Staged window (SIO-1298, SIO-1304).** Deployments that cause incidents can
+land days or weeks before symptoms appear. Start both calls at the incident
+window (default 24h). If a call returns 0 rows for that window, a widened
+follow-up call is MANDATORY, not optional -- re-run ONCE:
+
+- Owning project resolved (focus block, blob search, or blast radius): pass the
+  project_path parameter with that project's full_path and since = 90 days ago.
+  Results are newest-first and limit-bounded, so the wide window adds coverage
+  for low-velocity teams without adding noise -- and it reveals the team's
+  deploy cadence. State that cadence and the gap between the last change and
+  the documented incident onset in your findings; treat an old change as a
+  root-cause candidate only if its timing aligns with that onset.
+- No project resolved: re-run group-scoped with since = 30 days ago and a
+  modest limit.
+
+Never report "no correlated deploys or pipeline changes" from the 24h window
+alone -- that conclusion requires the widened call to also be empty.
 
 ## Step 4: Merge Request Evidence Chain
 
