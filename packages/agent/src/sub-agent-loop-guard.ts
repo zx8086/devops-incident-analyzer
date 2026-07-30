@@ -524,7 +524,10 @@ export function isRecentCorrelationWindow(arg: unknown, nowMs: number = Date.now
 	if (typeof since !== "string") return false;
 	const t = Date.parse(since);
 	if (Number.isNaN(t)) return false;
-	return nowMs - t <= GITLAB_CORRELATION_RECENT_WINDOW_MS;
+	// A future-dated since (LLM year-drift) is not a "recent window" -- a negative elapsed
+	// must never latch the paid 30-day escalation.
+	const elapsedMs = nowMs - t;
+	return elapsedMs >= 0 && elapsedMs <= GITLAB_CORRELATION_RECENT_WINDOW_MS;
 }
 
 // SIO-1298: one-shot per tool. Fires on the FIRST empty ~24h result (unlike the AWS widen

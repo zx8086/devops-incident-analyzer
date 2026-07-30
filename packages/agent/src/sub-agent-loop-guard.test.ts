@@ -1075,6 +1075,8 @@ describe("gitlab correlation widen advice (SIO-1298)", () => {
 		expect(isRecentCorrelationWindow({ since: "2026-06-30T00:00:00Z" }, now)).toBe(false);
 		expect(isRecentCorrelationWindow({ since: "not-a-date" }, now)).toBe(false);
 		expect(isRecentCorrelationWindow(undefined, now)).toBe(false);
+		// future-dated since (LLM year-drift) must not latch the escalation
+		expect(isRecentCorrelationWindow({ since: "2027-07-29T00:00:00Z" }, now)).toBe(false);
 	});
 
 	test("empty + recent since latches; advice consumed exactly once", () => {
