@@ -227,6 +227,17 @@ export const OrbitBlastRadiusSchema = z.object({
 		)
 		.describe("Concrete import sites (project+file) for the report and rule scoping"),
 	importSiteCount: z.number().int().describe("Total IMPORTS edges resolved (may exceed importedByFiles length)"),
+	// SIO-1303: the IMPORTS join is structurally blind to Java same-package and
+	// cross-service REST coupling (neither produces an import statement). Absent
+	// (or "edge") means importedByProjects/importedByFiles are confirmed IMPORTS
+	// edges; "definition-name-match" means the tool fell back to a Definition
+	// name-sweep -- these rows are name co-occurrences across repos (REST clients,
+	// contracts, tests), NOT confirmed importers, and importSiteCount/
+	// importedByFiles/importedByProjects are NOT populated from them.
+	radiusMode: z
+		.enum(["edge", "definition-name-match"])
+		.optional()
+		.describe("How this finding's rows were resolved: confirmed IMPORTS edge, or a definition name-match fallback"),
 });
 export type OrbitBlastRadius = z.infer<typeof OrbitBlastRadiusSchema>;
 

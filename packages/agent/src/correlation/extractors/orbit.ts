@@ -71,6 +71,14 @@ function queryTagOf(rawJson: unknown): string | undefined {
 	return top ? str(top.queryTag) : undefined;
 }
 
+// SIO-1303: when the IMPORTS-edge query returns 0 rows, runBlastRadius falls back
+// to a Definition name-sweep and tags the payload radiusMode: "definition-name-match".
+// Those rows are name co-occurrences across repos, not confirmed import edges.
+function radiusModeOf(rawJson: unknown): "definition-name-match" | undefined {
+	const top = asRecord(rawJson);
+	return str(top?.radiusMode) === "definition-name-match" ? "definition-name-match" : undefined;
+}
+
 // SIO-1076: the blast-radius tool stitches the recent merged MR per changed
 // source file into a top-level `mrByFile` map (the Definition->MR path exceeds
 // Orbit's 3-hop cap, so it can't ride the traversal rows). Returns file -> MR
@@ -90,18 +98,24 @@ function mrByFileOf(rawJson: unknown): Record<string, Row> {
 // Blast radius: each row pairs a Definition (def) with an ImportedSymbol (sym).
 // Group by definition, collect the distinct downstream import sites, and attach
 // the merged-MR metadata resolved for the definition's source file.
-function pushBlastRadius(out: OrbitBlastRadius[], rows: Row[], mrByFile: Record<string, Row>, focus: string[]): void {
+// SIO-1303: when radiusMode is "definition-name-match" the rows carry only `def`
+// (no `sym`/IMPORTS edge -- the tool fell back to a Definition name-sweep). A
+// name-match row is a candidate definition location, NOT a confirmed import
+// site: importSiteCount/importedByFiles/importedByProjects must stay empty for
+// these rows (they're the "confirmed importer" signal downstream rules key on),
+// and the finding is stamped radiusMode so consumers can tell the two apart.
+function pushBlastRadius(
+	out: OrbitBlastRadius[],
+	rows: Row[],
+	mrByFile: Record<string, Row>,
+	focus: string[],
+	radiusMode?: "definition-name-match",
+): void {
 	const byDef = new Map<string, OrbitBlastRadius>();
 	for (const row of rows) {
 		const def = nodeProps(row.def);
-		const sym = nodeProps(row.sym);
 		const defName = str(def.fqn) ?? str(def.name);
 		if (!defName) continue;
-		const symFile = str(sym.file_path);
-		// The downstream (importing) project is the file DOING the import -- i.e.
-		// the ImportedSymbol's own file_path, NOT its import_path (which names the
-		// imported source lib and would point back at the changed definition).
-		const symProject = projectFromPath(symFile);
 		const sourceFile = str(def.file_path);
 		const existing = byDef.get(defName) ?? {
 			definitionName: defName,
@@ -111,6 +125,7 @@ function pushBlastRadius(out: OrbitBlastRadius[], rows: Row[], mrByFile: Record<
 			importedByProjects: [],
 			importedByFiles: [],
 			importSiteCount: 0,
+			...(radiusMode ? { radiusMode } : {}),
 		};
 		// Attach MR metadata resolved by the tool's enrichment query, keyed by the
 		// changed source file. Populates mrMergedAt, without which the flagship
@@ -123,9 +138,17 @@ function pushBlastRadius(out: OrbitBlastRadius[], rows: Row[], mrByFile: Record<
 				existing.mrWebUrl = str(mr.web_url);
 			}
 		}
-		if (symFile) existing.importedByFiles.push({ project: symProject, file: symFile });
-		if (symProject && !existing.importedByProjects.includes(symProject)) existing.importedByProjects.push(symProject);
-		existing.importSiteCount += 1;
+		if (radiusMode === undefined) {
+			const sym = nodeProps(row.sym);
+			const symFile = str(sym.file_path);
+			// The downstream (importing) project is the file DOING the import -- i.e.
+			// the ImportedSymbol's own file_path, NOT its import_path (which names
+			// the imported source lib and would point back at the changed definition).
+			const symProject = projectFromPath(symFile);
+			if (symFile) existing.importedByFiles.push({ project: symProject, file: symFile });
+			if (symProject && !existing.importedByProjects.includes(symProject)) existing.importedByProjects.push(symProject);
+			existing.importSiteCount += 1;
+		}
 		byDef.set(defName, existing);
 	}
 	for (const b of byDef.values()) {
@@ -211,7 +234,7 @@ export function extractOrbitFindings(outputs: ToolOutput[], focusServices: strin
 		switch (queryTagOf(o.rawJson)) {
 			case "orbit_blast_radius":
 			case "orbit_cross_project_callers":
-				pushBlastRadius(blastRadius, rows, mrByFileOf(o.rawJson), focusServices);
+				pushBlastRadius(blastRadius, rows, mrByFileOf(o.rawJson), focusServices, radiusModeOf(o.rawJson));
 				break;
 			case "orbit_recent_deploys":
 				pushRecentDeploys(recentDeploys, rows, focusServices);

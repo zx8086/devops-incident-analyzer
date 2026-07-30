@@ -125,6 +125,35 @@ export function buildBlastRadiusQuery(params: { symbol: string; limit?: number }
 	};
 }
 
+// SIO-1303: fallback for when the IMPORTS join above returns 0 rows. In a
+// Java/C# microservice estate, cross-service coupling is REST calls and
+// same-package references -- neither produces an import statement, so the
+// edge query is structurally blind to them even though the Definition is in
+// the index. This drops the ImportedSymbol/IMPORTS half entirely and matches
+// Definition by name alone; the caller (runBlastRadius) tags the resulting
+// payload radiusMode: "definition-name-match" so the extractor and the LLM
+// both know these are name co-occurrences across repos, not confirmed import
+// edges. Reuses the blastRadius tag (same finding type, different production
+// path -- same precedent as buildMrForFileQuery below).
+export function buildDefinitionNameMatchQuery(params: { symbol: string; limit?: number }): TaggedOrbitQuery {
+	const symbol = requireSelector(params.symbol, "symbol");
+	return {
+		queryTag: ORBIT_QUERY_TAGS.blastRadius,
+		dsl: {
+			query_type: "traversal",
+			nodes: [
+				{
+					id: "def",
+					entity: "Definition",
+					columns: ["name", "fqn", "file_path", "definition_type", "start_line", "end_line"],
+					filters: { name: { token_match: symbol } },
+				},
+			],
+			limit: clampLimit(params.limit, 200),
+		},
+	};
+}
+
 // Cross-project callers of a fully-qualified definition. Uses the exact fqn
 // (text-indexed) for a precise anchor.
 export function buildCrossProjectCallersQuery(params: { fqn: string; limit?: number }): TaggedOrbitQuery {

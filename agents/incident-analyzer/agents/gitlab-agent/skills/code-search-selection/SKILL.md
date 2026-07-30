@@ -68,6 +68,7 @@ search.
 |------|-----|-----|
 | Where is this stack-trace symbol DEFINED? (exact project/file/line) | `gitlab_blast_radius` FIRST (`gitlab_cross_project_callers` only with an exact fqn taken from a prior blast-radius def row -- its `eq` match fails on hand-composed names) | semantic (ranked guess) |
 | WHO IMPORTS/CALLS this function across repos? / blast radius | Orbit graph tools (`IMPORTS` traversal) | semantic (single-project, can't traverse) |
+| Reading a `gitlab_blast_radius` result: `importSiteCount: 0` / empty `importedByProjects` | An empty IMPORTS join does NOT mean unused/contained -- Java same-package and cross-service REST coupling produce no import statement, so the tool falls back to a Definition name-sweep (payload marked `radiusMode: "definition-name-match"`). Treat those rows as "this symbol exists here" (a candidate location), never as a confirmed cross-project blast radius. | claiming the symbol is unused or safe to change |
 | Find code that SEMANTICALLY RESEMBLES this error/behaviour | `gitlab_semantic_code_search` (Duo embeddings) | Orbit (structural, no fuzzy match) |
 | Symbol on a NON-DEFAULT branch, or Terraform/YAML | `gitlab_semantic_code_search` + REST reads | Orbit (default-branch source only; no HCL/YAML) |
 

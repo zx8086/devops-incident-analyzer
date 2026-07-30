@@ -15,6 +15,7 @@ import { envelopeText } from "../error-envelope.js";
 import {
 	buildBlastRadiusQuery,
 	buildCrossProjectCallersQuery,
+	buildDefinitionNameMatchQuery,
 	buildMrForFileQuery,
 	buildPipelineFailuresQuery,
 	buildRecentDeploysQuery,
@@ -225,10 +226,32 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 			return orbitErrorResult(error);
 		}
 
+		// SIO-1303: the IMPORTS join is structurally blind to Java same-package and
+		// cross-service REST coupling (neither produces an import statement), so a
+		// 0-row result does not mean "no blast radius" -- it means the join can't see
+		// it. Fall back to a Definition name-sweep, one extra billed call, fail-open
+		// on budget exhaustion (skip the fallback, return the empty primary result)
+		// and non-fatal on error (fall through the same way). radiusMode tags the
+		// payload so the extractor and the LLM both know these rows are name
+		// co-occurrences across repos, not confirmed import edges.
+		let radiusMode: "definition-name-match" | undefined;
+		if (orbitRows(raw).length === 0 && tryConsumeBudget()) {
+			try {
+				const fallbackRaw = await client.query(buildDefinitionNameMatchQuery({ symbol, limit }).dsl, "raw");
+				if (orbitRows(fallbackRaw).length > 0) {
+					raw = fallbackRaw;
+					radiusMode = "definition-name-match";
+				}
+			} catch {
+				// leave raw as the empty primary result; blast radius is still reported
+			}
+		}
+
 		// Enrich: resolve the recent merged MR per distinct changed-definition file.
 		// Bounded to MAX_ENRICH_FILES so one symbol can't fan out unboundedly, and
 		// each enrich query still consumes budget (best-effort -- failures are
-		// non-fatal and just leave MR metadata absent).
+		// non-fatal and just leave MR metadata absent). Works unmodified for
+		// fallback rows too: both query shapes carry def.file_path.
 		const files = distinctDefFiles(raw).slice(0, MAX_ENRICH_FILES);
 		const mrByFile: Record<string, unknown> = {};
 		for (const file of files) {
@@ -242,7 +265,12 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 			}
 		}
 
-		const payload = { queryTag: ORBIT_QUERY_TAGS.blastRadius, ...(raw as Record<string, unknown>), mrByFile };
+		const payload = {
+			queryTag: ORBIT_QUERY_TAGS.blastRadius,
+			...(raw as Record<string, unknown>),
+			mrByFile,
+			...(radiusMode ? { radiusMode } : {}),
+		};
 		return textResult(JSON.stringify(payload, null, 2));
 	}
 
@@ -281,7 +309,11 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 	server.tool(
 		"gitlab_blast_radius",
 		"Cross-project blast radius: given a symbol/definition, return the downstream files and projects across the " +
-			"whole group that IMPORT it. Group-scoped (no per-project resolution needed). Consumes GitLab Credits.",
+			"whole group that IMPORT it. Group-scoped (no per-project resolution needed). If no import edges are found " +
+			"(common for Java/C# same-package or REST coupling, which produce no import statement), falls back to a " +
+			'definition name-match sweep -- the payload carries radiusMode: "definition-name-match" and those rows are ' +
+			"name co-occurrences across repos (REST clients, contracts, tests), NOT confirmed importers; treat them as " +
+			"lower-confidence. Consumes GitLab Credits.",
 		BlastRadiusParams.shape,
 		async (args) =>
 			traceToolCall("gitlab_blast_radius", async () => {
