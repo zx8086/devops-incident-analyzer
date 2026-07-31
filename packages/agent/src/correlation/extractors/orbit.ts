@@ -10,13 +10,18 @@ import type {
 import { matchesFocus } from "../focus-match.ts";
 
 // SIO-1076: Orbit tool outputs ride the gitlab DataSourceResult. Every wrapper
-// tool returns { queryTag, result: { rows: [...] }, ... } (or the raw envelope
-// for the escape hatch). We branch on queryTag -- stamped by the DSL builder --
-// and map Orbit's node/aggregation rows to the typed OrbitFindings shape.
+// tool returns { queryTag, result: {...}, ... } (or the raw envelope for the
+// escape hatch). We branch on queryTag -- stamped by the DSL builder -- and map
+// Orbit's node/aggregation rows to the typed OrbitFindings shape.
 //
-// Orbit row shapes (format:"raw"):
-//  - traversal rows: node aliases as keys, each { type, id, properties: {...} }
-//  - aggregation rows: group-by aliases (scalar or nested node) + aggregate cols
+// Orbit result shapes (format:"raw"):
+//  - aggregation: result.rows -- group-by aliases (scalar or nested node) +
+//    aggregate cols
+//  - traversal, Orbit >= 0.91 (SIO-1318): result.nodes (flat typed node objects
+//    with inline properties) + result.edges ({ from, from_id, to, to_id, type })
+//    -- NO result.rows. rowsFromNodes() rebuilds alias-keyed rows from these.
+//  - traversal, legacy (< 0.91): result.rows with node aliases as keys, each
+//    { type, id, properties: {...} } -- still read for backward compat.
 // All entity ids come back as strings.
 
 const ORBIT_TOOL_NAMES = new Set([
@@ -64,6 +69,76 @@ function rowsOf(rawJson: unknown): Row[] {
 	const result = asRecord(top.result);
 	const rows = result?.rows ?? top.rows;
 	return Array.isArray(rows) ? rows.filter((r): r is Row => asRecord(r) !== undefined) : [];
+}
+
+function resultList(rawJson: unknown, key: "nodes" | "edges"): Row[] {
+	const top = asRecord(rawJson);
+	if (!top) return [];
+	const result = asRecord(top.result);
+	const list = result?.[key] ?? top[key];
+	return Array.isArray(list) ? list.filter((v): v is Row => asRecord(v) !== undefined) : [];
+}
+
+// SIO-1318: rebuild alias-keyed rows from the Orbit >= 0.91 traversal shape
+// (flat typed result.nodes + result.edges) so the per-tag push* mappers keep a
+// single row contract:
+//  - IMPORTS edge          -> { def, sym }  (blast radius / cross-project callers)
+//  - IN_PROJECT edge       -> { mr, p } or { v, p }  (deploys / vulnerabilities)
+//  - edge-less Definitions -> { def }  (the SIO-1303 name-match fallback sweep)
+function rowsFromNodes(rawJson: unknown, tag: string | undefined): Row[] {
+	const nodes = resultList(rawJson, "nodes");
+	if (nodes.length === 0) return [];
+	const byTypeId = new Map<string, Row>();
+	for (const n of nodes) {
+		const id = str(n.id);
+		if (id) byTypeId.set(`${str(n.type) ?? ""}:${id}`, n);
+	}
+	const edges = resultList(rawJson, "edges");
+	const endpoint = (edge: Row, side: "from" | "to"): Row | undefined =>
+		byTypeId.get(`${str(edge[side]) ?? ""}:${str(edge[`${side}_id`]) ?? ""}`);
+	const rows: Row[] = [];
+
+	switch (tag) {
+		case "orbit_blast_radius":
+		case "orbit_cross_project_callers": {
+			for (const edge of edges) {
+				if (str(edge.type) !== "IMPORTS") continue;
+				const a = endpoint(edge, "from");
+				const b = endpoint(edge, "to");
+				const def = [a, b].find((n) => n && str(n.type) === "Definition");
+				const sym = [a, b].find((n) => n && str(n.type) === "ImportedSymbol");
+				if (def) rows.push({ def, ...(sym ? { sym } : {}) });
+			}
+			if (rows.length === 0) {
+				for (const n of nodes) if (str(n.type) === "Definition") rows.push({ def: n });
+			}
+			return rows;
+		}
+		case "orbit_recent_deploys":
+		case "orbit_recent_vulnerabilities": {
+			const primaryType = tag === "orbit_recent_deploys" ? "MergeRequest" : "Vulnerability";
+			const alias = tag === "orbit_recent_deploys" ? "mr" : "v";
+			const projectByPrimaryId = new Map<string, Row>();
+			for (const edge of edges) {
+				if (str(edge.type) !== "IN_PROJECT") continue;
+				const a = endpoint(edge, "from");
+				const b = endpoint(edge, "to");
+				const primary = [a, b].find((n) => n && str(n.type) === primaryType);
+				const project = [a, b].find((n) => n && str(n.type) === "Project");
+				const primaryId = primary ? str(primary.id) : undefined;
+				if (primaryId && project) projectByPrimaryId.set(primaryId, project);
+			}
+			for (const n of nodes) {
+				if (str(n.type) !== primaryType) continue;
+				const p = projectByPrimaryId.get(str(n.id) ?? "");
+				rows.push({ [alias]: n, ...(p ? { p } : {}) });
+			}
+			return rows;
+		}
+		default:
+			// Aggregations always carry result.rows; raw escape hatch has no mapping.
+			return [];
+	}
 }
 
 function queryTagOf(rawJson: unknown): string | undefined {
@@ -144,10 +219,15 @@ function pushBlastRadius(
 			// The downstream (importing) project is the file DOING the import -- i.e.
 			// the ImportedSymbol's own file_path, NOT its import_path (which names
 			// the imported source lib and would point back at the changed definition).
-			const symProject = projectFromPath(symFile);
-			if (symFile) existing.importedByFiles.push({ project: symProject, file: symFile });
-			if (symProject && !existing.importedByProjects.includes(symProject)) existing.importedByProjects.push(symProject);
-			existing.importSiteCount += 1;
+			// SIO-1318: only a row with an identifiable importing file counts as a
+			// confirmed import site -- def-only rows must not inflate the count.
+			if (symFile) {
+				const symProject = projectFromPath(symFile);
+				existing.importedByFiles.push({ project: symProject, file: symFile });
+				if (symProject && !existing.importedByProjects.includes(symProject))
+					existing.importedByProjects.push(symProject);
+				existing.importSiteCount += 1;
+			}
 		}
 		byDef.set(defName, existing);
 	}
@@ -229,9 +309,13 @@ export function extractOrbitFindings(outputs: ToolOutput[], focusServices: strin
 
 	for (const o of outputs) {
 		if (!ORBIT_TOOL_NAMES.has(o.toolName)) continue;
-		const rows = rowsOf(o.rawJson);
+		const tag = queryTagOf(o.rawJson);
+		// SIO-1318: Orbit >= 0.91 traversal responses have no result.rows; fall back
+		// to rebuilding alias rows from result.nodes/result.edges.
+		let rows = rowsOf(o.rawJson);
+		if (rows.length === 0) rows = rowsFromNodes(o.rawJson, tag);
 		if (rows.length === 0) continue;
-		switch (queryTagOf(o.rawJson)) {
+		switch (tag) {
 			case "orbit_blast_radius":
 			case "orbit_cross_project_callers":
 				pushBlastRadius(blastRadius, rows, mrByFileOf(o.rawJson), focusServices, radiusModeOf(o.rawJson));

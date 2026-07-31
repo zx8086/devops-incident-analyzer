@@ -112,6 +112,21 @@ function orbitRows(raw: unknown): Array<Record<string, unknown>> {
 	return Array.isArray(rows) ? rows.filter((r): r is Record<string, unknown> => !!r && typeof r === "object") : [];
 }
 
+// SIO-1318: Orbit v0.91 moved traversal results from alias-keyed result.rows to
+// flat typed result.nodes (+ result.edges); result.rows now only appears on
+// aggregation responses. Emptiness checks and node lookups must read both shapes.
+function orbitNodes(raw: unknown): Array<Record<string, unknown>> {
+	const top = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : undefined;
+	const result = top?.result && typeof top.result === "object" ? (top.result as Record<string, unknown>) : undefined;
+	const nodes = result?.nodes ?? top?.nodes;
+	return Array.isArray(nodes) ? nodes.filter((n): n is Record<string, unknown> => !!n && typeof n === "object") : [];
+}
+
+function orbitRowCount(raw: unknown): number {
+	const rows = orbitRows(raw);
+	return rows.length > 0 ? rows.length : orbitNodes(raw).length;
+}
+
 function nodeProperties(v: unknown): Record<string, unknown> {
 	const rec = v && typeof v === "object" ? (v as Record<string, unknown>) : undefined;
 	const props =
@@ -126,6 +141,11 @@ function distinctDefFiles(raw: unknown): string[] {
 		const fp = nodeProperties(row.def).file_path;
 		if (typeof fp === "string" && fp) files.add(fp);
 	}
+	for (const node of orbitNodes(raw)) {
+		if (node.type !== "Definition") continue;
+		const fp = nodeProperties(node).file_path;
+		if (typeof fp === "string" && fp) files.add(fp);
+	}
 	return Array.from(files);
 }
 
@@ -133,6 +153,11 @@ function distinctDefFiles(raw: unknown): string[] {
 function firstMrRow(raw: unknown): Record<string, unknown> | undefined {
 	for (const row of orbitRows(raw)) {
 		const mr = nodeProperties(row.mr);
+		if (Object.keys(mr).length > 0) return mr;
+	}
+	for (const node of orbitNodes(raw)) {
+		if (node.type !== "MergeRequest") continue;
+		const mr = nodeProperties(node);
 		if (Object.keys(mr).length > 0) return mr;
 	}
 	return undefined;
@@ -235,10 +260,10 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 		// payload so the extractor and the LLM both know these rows are name
 		// co-occurrences across repos, not confirmed import edges.
 		let radiusMode: "definition-name-match" | undefined;
-		if (orbitRows(raw).length === 0 && tryConsumeBudget()) {
+		if (orbitRowCount(raw) === 0 && tryConsumeBudget()) {
 			try {
 				const fallbackRaw = await client.query(buildDefinitionNameMatchQuery({ symbol, limit }).dsl, "raw");
-				if (orbitRows(fallbackRaw).length > 0) {
+				if (orbitRowCount(fallbackRaw) > 0) {
 					raw = fallbackRaw;
 					radiusMode = "definition-name-match";
 				}
@@ -471,5 +496,15 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 	);
 
 	// gitlab_graph_schema + 5 billed wrappers + raw escape hatch = 7 tools.
-	return 7;
+	const registered = [
+		"gitlab_graph_schema",
+		"gitlab_blast_radius",
+		"gitlab_cross_project_callers",
+		"gitlab_recent_deploys",
+		"gitlab_pipeline_failures",
+		"gitlab_recent_vulnerabilities",
+		"gitlab_orbit_query_graph",
+	];
+	log.info({ count: registered.length, tools: registered }, "Orbit tools registered");
+	return registered.length;
 }

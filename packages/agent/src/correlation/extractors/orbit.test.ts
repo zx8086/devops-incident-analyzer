@@ -259,3 +259,146 @@ describe("extractOrbitFindings", () => {
 		});
 	});
 });
+
+// SIO-1318: Orbit >= 0.91 traversal responses drop alias-keyed result.rows in
+// favor of flat typed result.nodes + result.edges. Fixtures mirror the live
+// shape captured 2026-07-31 against gitlab.com Orbit v0.91.1.
+describe("extractOrbitFindings -- Orbit >= 0.91 nodes/edges traversal shape (SIO-1318)", () => {
+	test("blast radius primary: IMPORTS edges rebuild def/sym rows with import sites", () => {
+		const raw = {
+			queryTag: "orbit_blast_radius",
+			result: {
+				format_version: "3.0.1",
+				query_type: "traversal",
+				nodes: [
+					{
+						type: "Definition",
+						id: "10",
+						fqn: "Auth::verify",
+						file_path: "pvhcorp/auth-lib/src/verify.rb",
+						definition_type: "method",
+					},
+					{
+						type: "ImportedSymbol",
+						id: "20",
+						file_path: "pvhcorp/checkout/app.rb",
+						import_path: "pvhcorp/auth-lib/verify",
+					},
+				],
+				edges: [{ from: "ImportedSymbol", from_id: "20", to: "Definition", to_id: "10", type: "IMPORTS" }],
+			},
+		};
+		const findings = extractOrbitFindings([out("gitlab_blast_radius", raw)]);
+		expect(findings.blastRadius).toHaveLength(1);
+		const b = findings.blastRadius?.[0];
+		expect(b?.definitionName).toBe("Auth::verify");
+		expect(b?.importSiteCount).toBe(1);
+		expect(b?.importedByProjects).toContain("pvhcorp/checkout");
+		expect(b?.radiusMode).toBeUndefined();
+	});
+
+	test("blast radius fallback: def-only nodes + radiusMode -> candidate rows, zero import sites", () => {
+		const raw = {
+			queryTag: "orbit_blast_radius",
+			radiusMode: "definition-name-match",
+			result: {
+				format_version: "3.0.1",
+				query_type: "traversal",
+				nodes: [
+					{
+						type: "Definition",
+						id: "1",
+						name: "getStyleByStyleCode",
+						fqn: "getStyleByStyleCode",
+						file_path: "src/main/java/pvh/services/styles/controller/StyleController.java",
+					},
+					{
+						type: "Definition",
+						id: "2",
+						name: "getStyleByStyleCode",
+						fqn: "StylesAPIRestClient#getStyleByStyleCode",
+						file_path: "src/main/java/com/pvh/listsapi/rest_client/StylesAPIRestClient.java",
+					},
+				],
+				edges: [],
+			},
+		};
+		const findings = extractOrbitFindings([out("gitlab_blast_radius", raw)]);
+		expect(findings.blastRadius).toHaveLength(2);
+		for (const b of findings.blastRadius ?? []) {
+			expect(b.radiusMode).toBe("definition-name-match");
+			expect(b.importSiteCount).toBe(0);
+			expect(b.importedByFiles).toHaveLength(0);
+		}
+	});
+
+	test("recent deploys: MergeRequest nodes joined to Project via IN_PROJECT edges", () => {
+		const raw = {
+			queryTag: "orbit_recent_deploys",
+			result: {
+				format_version: "3.0.1",
+				query_type: "traversal",
+				nodes: [
+					{
+						type: "Project",
+						id: "43242609",
+						full_path: "pvhcorp/b2b/shared-services/pvh.services.styles",
+						name: "pvh.services.styles",
+					},
+					{
+						type: "MergeRequest",
+						id: "513527642",
+						iid: "383",
+						target_branch: "main",
+						title: "Adding marketingItemType as filter",
+						merged_at: "2026-07-30 18:17:17",
+						state: "merged",
+					},
+					{
+						type: "MergeRequest",
+						id: "512424012",
+						iid: "379",
+						target_branch: "main",
+						title: "Merging release to main",
+						merged_at: "2026-07-28 14:46:00",
+						state: "merged",
+					},
+				],
+				edges: [
+					{ from: "MergeRequest", from_id: "513527642", to: "Project", to_id: "43242609", type: "IN_PROJECT" },
+					{ from: "MergeRequest", from_id: "512424012", to: "Project", to_id: "43242609", type: "IN_PROJECT" },
+				],
+			},
+		};
+		const findings = extractOrbitFindings([out("gitlab_recent_deploys", raw)]);
+		expect(findings.recentDeploys).toHaveLength(2);
+		expect(findings.recentDeploys?.[0]?.project).toBe("pvhcorp/b2b/shared-services/pvh.services.styles");
+		expect(findings.recentDeploys?.[0]?.mergedAt).toBe("2026-07-30 18:17:17");
+	});
+
+	test("vulnerabilities: Vulnerability nodes joined to Project via IN_PROJECT edges", () => {
+		const raw = {
+			queryTag: "orbit_recent_vulnerabilities",
+			result: {
+				format_version: "3.0.1",
+				query_type: "traversal",
+				nodes: [
+					{ type: "Project", id: "7", full_path: "pvhcorp/b2b/oit/order-service" },
+					{
+						type: "Vulnerability",
+						id: "90",
+						severity: "critical",
+						title: "Log injection",
+						report_type: "sast",
+						state: "detected",
+					},
+				],
+				edges: [{ from: "Vulnerability", from_id: "90", to: "Project", to_id: "7", type: "IN_PROJECT" }],
+			},
+		};
+		const findings = extractOrbitFindings([out("gitlab_recent_vulnerabilities", raw)]);
+		expect(findings.vulnerabilities).toHaveLength(1);
+		expect(findings.vulnerabilities?.[0]?.severity).toBe("critical");
+		expect(findings.vulnerabilities?.[0]?.project).toBe("pvhcorp/b2b/oit/order-service");
+	});
+});
