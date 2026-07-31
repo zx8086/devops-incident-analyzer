@@ -49,7 +49,7 @@ describe("readPositiveMsEnv", () => {
 		const { logger, calls } = makeSpyLogger();
 		expect(readPositiveMsEnv(TEST_VAR, 1000, logger)).toBe(1000);
 		expect(calls.length).toBe(1);
-		// biome-ignore lint/style/noNonNullAssertion: calls.length is guaranteed to be 1
+		// biome-ignore lint/style/noNonNullAssertion: SIO-1308 - calls.length is guaranteed to be 1
 		expect(calls[0]!.obj).toMatchObject({ name: TEST_VAR, raw: "not-a-number", defaultValue: 1000 });
 	});
 

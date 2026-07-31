@@ -242,6 +242,8 @@ Expected: no errors.
 
 - [ ] **Step 7: Commit**
 
+Get explicit user authorization before committing (per this repo's "never commit without explicit user authorization" rule), then:
+
 ```bash
 git add packages/shared/src/env-validation.ts packages/shared/src/__tests__/env-validation.test.ts packages/shared/src/index.ts
 git commit -m "SIO-1308: add readPositiveMsEnv/readPositiveIntEnv shared helpers"
@@ -354,6 +356,8 @@ Expected: no errors; existing tests for `nodes.ts` (watchPipeline, driftCheck, f
 
 - [ ] **Step 8: Commit**
 
+Get explicit user authorization before committing (per this repo's "never commit without explicit user authorization" rule), then:
+
 ```bash
 git add packages/agent/src/iac/nodes.ts
 git commit -m "SIO-1308: validate IaC poll-budget/interval env vars in nodes.ts"
@@ -433,6 +437,8 @@ Expected: no errors; existing tests for `gitlab.ts` drift/fleet-apply tools stil
 
 - [ ] **Step 8: Commit**
 
+Get explicit user authorization before committing (per this repo's "never commit without explicit user authorization" rule), then:
+
 ```bash
 git add packages/mcp-server-elastic-iac/src/tools/gitlab.ts
 git commit -m "SIO-1308: validate IaC poll-budget/interval env vars in gitlab.ts"
@@ -460,7 +466,7 @@ console.log("result:", readPositiveMsEnv("IAC_PIPELINE_POLL_INTERVAL_MS", 10000,
 '
 ```
 Expected output:
-```
+```text
 WARN: invalid env var, falling back to default { name: 'IAC_PIPELINE_POLL_INTERVAL_MS', raw: 'not-a-number', defaultValue: 10000 }
 result: 10000
 ```
@@ -482,7 +488,7 @@ gh pr create --title "SIO-1308: validate IaC poll-budget/interval env vars with 
 
 Linear: https://linear.app/siobytes/issue/SIO-1308/add-zod-validation-for-iac-poll-budgetinterval-env-vars
 
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
+Generated with [Claude Code](https://claude.com/claude-code)
 EOF
 )"
 ```
