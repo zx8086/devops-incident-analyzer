@@ -12,6 +12,8 @@
 
 Re-run the full 37-tool GitLab MCP deep test (24 proxy + 6 code-analysis + 7 Orbit) against the running :9084 dev server, using the styles-v3 production Couchbase timeout as the incident basis. The 2026-07-31 run classified all 37 tools (30 live PASS-family, 7 writes SKIPPED-POLICY) and found + fixed SIO-1318. Success for a replay: every expected outcome below reproduces, and `gitlab_blast_radius` now returns `radiusMode: "definition-name-match"` with 4 Definitions and a populated `mrByFile` (it returned empty before the fix).
 
+**Replayed once already, same day (2026-07-31), against `main` @ `617b9412`: full pass, no regressions, SIO-1318 confirmed holding.** Two small findings from that replay are folded into Phase 2b and the Gotchas below: the MR 379 notes count drifted 3 -> 2 (cosmetic, not a bug), and several proxy tools turned out to be inconsistent about their project-ID arg name (`id` vs `project_id`) -- always read the tool's own `inputSchema` from Phase 0 rather than assuming.
+
 ## The incident (verbatim basis)
 
 ```
@@ -68,7 +70,7 @@ Phase 2 -- code-analysis, investigation order:
 - `gitlab_get_commit_diff {sha:"3d808419"}` (short SHA accepted) -> 2-file diff.
 - Error branch: `gitlab_get_file_content` on `does/not/exist/NoSuchFile.java` -> `isError` + `{"_error":{"kind":"not-found","statusCode":404}}`.
 
-Phase 2b -- MR 379 deep-dive (proxy reads): `gitlab_get_merge_request {id:"43242609", merge_request_iid:379}` (merge SHA 8ae6c79f, release/AMS-Support-team -> main, 2026-07-28T14:46Z), `_commits` (2 cherry-picks), `_diffs` (Product.java, ProductDto.java, OptionResponse.java, CHANGELOG -- overlaps the failing PRODUCT_* read path), `_pipelines` (2712388222 + 2712377388, both success), `_notes` (GraphQL envelope, 3 notes), `_conflicts` (QUIRK: `isError:true` with "Merge request does not have conflicts" -- benign), `gitlab_get_pipeline_jobs {pipeline_id:2712388222}` (6 jobs, all success), `gitlab_get_job_log {job_id:<integration-test>}` (~418KB, Couchbase Testcontainers, "Job succeeded").
+Phase 2b -- MR 379 deep-dive (proxy reads): `gitlab_get_merge_request {id:"43242609", merge_request_iid:379}` (merge SHA 8ae6c79f, release/AMS-Support-team -> main, 2026-07-28T14:46Z), `_commits` (2 cherry-picks), `_diffs` (Product.java, ProductDto.java, OptionResponse.java, CHANGELOG -- overlaps the failing PRODUCT_* read path), `_pipelines` (2712388222 + 2712377388, both success), `_notes` (GraphQL envelope, 3 notes as of the 2026-07-31 baseline -- the 2026-07-31 replay saw 2, both the same system-generated merge-automation notes ("enabled an automatic merge...", "mentioned in commit 8ae6c79f..."); treat the count as approximate, not a hard assertion), `_conflicts` (QUIRK: `isError:true` with "Merge request does not have conflicts" -- benign), `gitlab_get_pipeline_jobs {pipeline_id:2712388222}` (6 jobs, all success), `gitlab_get_job_log {job_id:<integration-test>}` (~418KB, Couchbase Testcontainers, "Job succeeded").
 
 Phase 2c -- issues/work items/wiki: `gitlab_search {scope:"issues"}` finds things ONLY with vocabulary present in the issue text -- "Neutralization" hits, "couchbase timeout" does not (the project's only issue is SAST finding iid 1, `confidential:true`, still visible to this PAT). `gitlab_get_issue {issue_iid:1}` -> "Improper Output Neutralization for Logs". `gitlab_get_work_item_types` -> Epic/Incident/Issue/Task/Ticket. `gitlab_get_workitem_notes {work_item_iid:1}` -> empty envelope count 0. `gitlab_get_saved_view_work_items` -> ENV-LIMITED (needs a real `WorkItemsSavedViewsSavedViewID`). `gitlab_list_wiki_pages` -> 0 pages.
 
@@ -100,6 +102,8 @@ Not a client-config regression (no timeout override; config untouched since 2024
 
 - Session stdio MCP instances run the code loaded at spawn -- a restarted :9084 does NOT refresh them, and they don't test :9084. Curl only.
 - `gitlab_list_merge_requests` requires NUMERIC project_id (int); the other 5 code-analysis tools take numeric-as-string; URL-encoded paths 404.
+- **Proxy tools are NOT consistent about the project-ID arg name -- capture each tool's `inputSchema` from the Phase 0 `tools/list` response and use it verbatim, never assume.** Confirmed inconsistent on 2026-07-31: `gitlab_get_pipeline_jobs`, `gitlab_get_job_log`, `gitlab_get_issue` take `id`; `gitlab_get_merge_request_notes`, `gitlab_get_merge_request_conflicts` take `project_id`. Guessing wrong returns a Zod `invalid_union` on `[]` (empty path) or on `["project_id"]`/`["id"]` depending on which field was omitted -- read the `path` in the error to see which key it wanted.
+- `gitlab_orbit_query_graph` wraps the DSL under a top-level `query` object (`{"query": {"query_type": ..., "nodes": [...]}}`), not flat args -- passing the DSL fields at the top level fails with `expected record, received undefined` on path `["query"]`.
 - blast_radius can consume up to 5 budget units in one call (primary + fallback + up to 3 mrByFile enrich); isolate it from the other billed calls.
 - Orbit availability self-heals per-call (SIO-1295) -- a `no-index` right after a healthy boot deserves one retry, not a bug report.
 - The `--hot` dev server on main hot-reloads source on git pull, but bun --hot does not re-resolve node_modules; restart after dependency changes.
