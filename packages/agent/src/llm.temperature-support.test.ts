@@ -94,7 +94,6 @@ describe("subAgent resolves its own manifest model (SIO-1235)", () => {
 	// model it would also make every "resolved from the sub-agent manifest, not the root" assertion
 	// below vacuous.
 	const SUB = "eu.anthropic.claude-sonnet-4-6";
-	const HAIKU = "eu.anthropic.claude-haiku-4-5-20251001-v1:0";
 	const ROOT = "eu.anthropic.claude-sonnet-5";
 
 	beforeEach(() => {

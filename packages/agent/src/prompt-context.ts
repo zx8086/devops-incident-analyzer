@@ -1,7 +1,6 @@
 // agent/src/prompt-context.ts
 import {
 	buildSubAgentSystemPrompt,
-	buildSystemPrompt,
 	extractSkillToolNames,
 	type LoadedAgent,
 	loadAgent,

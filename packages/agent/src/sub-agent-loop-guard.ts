@@ -814,7 +814,7 @@ export function shouldShortCircuit(state: LoopGuardState, toolName: string, sign
 
 // SIO-1084: reserve a guarded call's signature BEFORE invoking so a concurrent identical
 // call is caught as a duplicate. Idempotent.
-export function reserveSignature(state: LoopGuardState, toolName: string, signature: string): void {
+export function reserveSignature(state: LoopGuardState, _toolName: string, signature: string): void {
 	// SIO-1232: reserved for EVERY tool now, so the generic duplicate rule sees concurrent
 	// identical calls. Polling tools are exempted at the shouldShortCircuit check rather than
 	// here -- recording their signature is harmless and keeps this function branch-free.
