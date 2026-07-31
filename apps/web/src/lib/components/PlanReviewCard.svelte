@@ -98,6 +98,18 @@ const planLabel = "How this applies";
         </details>
       {/if}
 
+      <!-- SIO-1310: per-request stack drift-check advisory -- pre-existing repo-vs-live drift in
+           the edited stack, independent of this MR. Non-blocking; same warning styling as the
+           SIO-983 live-parity block above. -->
+      {#if review.stackDriftAdvisory}
+        <details class="mt-2" open>
+          <summary class="text-xs font-semibold text-yellow-900 cursor-pointer">Live drift in this stack</summary>
+          <div class="mt-1 rounded bg-yellow-50 border border-yellow-400/50 px-2 py-1 text-xs text-yellow-900">
+            <MarkdownRenderer content={review.stackDriftAdvisory} />
+          </div>
+        </details>
+      {/if}
+
       <details class="mt-2" open>
         <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">{planLabel}</summary>
         <pre class="mt-1 max-h-48 overflow-auto rounded bg-tommy-navy text-tommy-cream text-xs p-2 whitespace-pre-wrap">{review.plan || "(none)"}</pre>

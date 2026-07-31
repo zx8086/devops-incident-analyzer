@@ -83,6 +83,10 @@ export interface IacReview {
 	// Undefined when no live equivalent was read or the draft matches live. Same silent-drop gotcha:
 	// the server passes it on the review payload, so it MUST exist here or the card drops it.
 	liveParity?: string;
+	// SIO-1310: stack drift-check advisory -- pre-existing repo-vs-live drift in the edited stack
+	// (beyond this MR), markdown. Undefined when clean/disabled/unauthoritative. Same silent-drop
+	// gotcha as above.
+	stackDriftAdvisory?: string;
 }
 
 export interface IacPlanReviewPrompt {
