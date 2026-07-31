@@ -20,6 +20,10 @@ tools:
   - gitlab_get_merge_request
   - gitlab_get_merge_request_diffs
   - gitlab_get_merge_request_pipelines
+  - gitlab_get_merge_request_notes
+  - gitlab_get_pipeline_jobs
+  - gitlab_get_job_log
+  - gitlab_get_issue
   - gitlab_list_commits
   - gitlab_get_commit_diff
   - gitlab_get_file_content
@@ -41,6 +45,33 @@ Trace an error or stack trace to the code change that caused it: Orbit blast rad
 This runbook complements the domain runbooks (Kafka, Elastic APM, Couchbase, AWS):
 they establish WHAT is failing; this one establishes WHICH CHANGE made it fail.
 Select it alongside them, not instead of them.
+
+## Investigation Question Checklist
+
+Every code-change finding should be able to answer the questions below; each
+maps to a deterministic tool path (SIO-1320, distilled from the 2026-07-31
+37-tool live test). Report an unanswered question as a stated gap, not silence.
+
+- What shipped recently? -- `gitlab_list_merge_requests` (project) /
+  `gitlab_recent_deploys` (group-wide or project_path-scoped)
+- Where does the implicated code/config live? -- `gitlab_semantic_code_search`,
+  `gitlab_get_repository_tree` (discovery first; never guess paths)
+- What does it say now? -- `gitlab_get_file_content`
+- Who/when last changed it? -- `gitlab_get_blame`, `gitlab_list_commits`
+- What exactly changed? -- `gitlab_get_commit_diff`, `gitlab_get_merge_request_diffs`
+- Did the shipping pipeline succeed? -- `gitlab_get_merge_request_pipelines`,
+  `gitlab_get_pipeline_jobs`, `gitlab_get_job_log`
+- Are pipelines failing group-wide? -- `gitlab_pipeline_failures`
+- What did reviewers flag pre-merge? -- `gitlab_get_merge_request_notes`
+  (strongest candidate only; at most 2 cited notes)
+- What is downstream of the changed symbol? -- `gitlab_blast_radius`,
+  `gitlab_cross_project_callers`
+- Known vulnerabilities in play? -- `gitlab_recent_vulnerabilities`
+- A graph question the purpose-built tools cannot ask? --
+  `gitlab_orbit_query_graph` grounded by `gitlab_graph_schema`
+- Prior art in GitLab issues? -- `gitlab_search` (scope issues, ERROR-CLASS
+  vocabulary -- never service names) + `gitlab_get_issue`; Jira owns incident
+  history, so zero hits is the normal outcome
 
 ## Step 1: Extract Anchor Symbols
 
@@ -129,6 +160,9 @@ itself):
 3. In the diffs, look for: changed error handling, modified timeouts or
    connection settings, new dependencies or API call patterns, configuration
    and feature-flag changes.
+4. For the strongest candidate, `gitlab_get_merge_request_notes`: review
+   discussion often names the exact risk that shipped. Cite at most 2 relevant
+   notes; empty discussion is nothing, not a gap.
 
 ## Orbit Raw Query Reference (escape hatch)
 
@@ -203,4 +237,4 @@ not a cause.
 
 ## All Tools Used Are Read-Only
 
-gitlab_blast_radius, gitlab_cross_project_callers, gitlab_recent_deploys, gitlab_pipeline_failures, gitlab_recent_vulnerabilities, gitlab_graph_schema, gitlab_orbit_query_graph, gitlab_semantic_code_search, gitlab_list_merge_requests, gitlab_get_merge_request, gitlab_get_merge_request_diffs, gitlab_get_merge_request_pipelines, gitlab_list_commits, gitlab_get_commit_diff, gitlab_get_file_content, gitlab_get_blame, gitlab_search, gitlab_get_repository_tree
+gitlab_blast_radius, gitlab_cross_project_callers, gitlab_recent_deploys, gitlab_pipeline_failures, gitlab_recent_vulnerabilities, gitlab_graph_schema, gitlab_orbit_query_graph, gitlab_semantic_code_search, gitlab_list_merge_requests, gitlab_get_merge_request, gitlab_get_merge_request_diffs, gitlab_get_merge_request_pipelines, gitlab_get_merge_request_notes, gitlab_get_pipeline_jobs, gitlab_get_job_log, gitlab_get_issue, gitlab_list_commits, gitlab_get_commit_diff, gitlab_get_file_content, gitlab_get_blame, gitlab_search, gitlab_get_repository_tree

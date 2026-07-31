@@ -1,6 +1,6 @@
 ---
 name: code-change-correlation
-description: Trace a runtime incident to a code change -- merged-MR listing, MR detail chain, pipeline jobs and logs, blast radius, and how to read structured tool errors.
+description: Trace a runtime incident to a code change -- merged-MR listing, MR detail chain, pipeline jobs and logs, review notes, blast radius, prior-art check, and how to read structured tool errors.
 ---
 
 # Skill: Code Change Correlation
@@ -27,11 +27,27 @@ in order; every id comes from the PREVIOUS call's response, never guessed.
    -> capture the failing/suspicious job ids -> `gitlab_get_job_log(job_id)` for
    at most 2 jobs. Job logs are large and contain ANSI escape codes; extract the
    failure lines, do not quote whole logs.
-4. Report the MR iid, merge timestamp (ISO 8601), changed files, and the pipeline
+4. Also for the strongest candidate only: `gitlab_get_merge_request_notes` --
+   review discussion often names the exact risk that shipped (timeout, rollout,
+   compatibility concerns raised pre-merge). Cite at most 2 relevant notes as
+   evidence; an empty or purely procedural discussion is reported as nothing,
+   not as a gap.
+5. Report the MR iid, merge timestamp (ISO 8601), changed files, and the pipeline
    evidence together -- the orchestrator correlates timing against runtime
    findings from other datasources. If more than 3 in-window MRs exist, say so
    ("N further merged MRs in window not deep-inspected") instead of expanding
    the fan-out.
+
+## Prior-art check (one cheap query, only when the error class is distinctive)
+When the error carries a distinctive class (an exception type, a scanner rule
+name), issue ONE `gitlab_search` with scope issues using ERROR-CLASS vocabulary
+-- the exception type or its distinctive tokens, NEVER the incident's service
+name (issue text rarely contains service names; a service-name search proves
+nothing either way). Jira owns incident history (the atlassian agent queries
+it); this check only surfaces scanner/bot-created GitLab issues. For a hit,
+fetch detail via the issues action (gitlab_get_issue with the numeric project
+id and the hit's iid). Zero hits is the NORMAL outcome -- move on without
+retrying synonyms.
 
 ## Blast radius workflow
 When the incident implicates a symbol or a changed shared file:
