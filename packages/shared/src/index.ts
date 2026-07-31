@@ -177,6 +177,7 @@ export {
 	KonnectConfigSchema,
 } from "./datasource.ts";
 export { embeddingMaxChars, truncateForEmbedding } from "./embedding-truncate.ts";
+export { type EnvLogger, readPositiveIntEnv, readPositiveMsEnv } from "./env-validation.ts";
 export { matchesFocus, normalize, tokenize } from "./focus-match.ts";
 export {
 	type BindingCorrection,
