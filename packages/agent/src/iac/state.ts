@@ -305,6 +305,10 @@ export interface IacPlanReview {
 	// cluster (fields in the draft but not live, value changes, fields live has that the draft
 	// drops). Undefined when no live equivalent was read or the draft matches live.
 	liveParity?: string;
+	// SIO-1310: rendered stack-drift advisory -- the target stack's per-request CI drift-check
+	// found pre-existing repo-vs-live drift beyond this edit. Undefined when clean, the check
+	// was disabled/unauthoritative, or the workflow has no stack mapping.
+	stackDriftAdvisory?: string;
 }
 
 // SIO-875: the actual Terraform plan parsed from the MR pipeline's terraform report.
@@ -720,6 +724,19 @@ export const IacState = Annotation.Root({
 		mrRef?: string;
 		applyJobUrl?: string;
 	} | null>({ reducer: last, default: () => null }),
+	// SIO-1310: per-request scoped drift check (the maker lane's live-parity gate). Set by
+	// draftChange's post-hook when a no-op verdict's stack CI drift-check finds live drift;
+	// routes draftChange -> explainDrift with a one-stack seeded driftReport, exactly like
+	// versionDrift but for ANY workflow's stack. Turn-scoped: reset by TURN_START_RESET.
+	editDrift: Annotation<{
+		deployment: string;
+		stack: string;
+		workflow: string;
+	} | null>({ reducer: last, default: () => null }),
+	// SIO-1310: non-blocking review-card advisory when a DRAFTED change's stack has
+	// pre-existing repo-vs-live drift beyond the edit (from the same per-request CI check).
+	// "" when clean/unchecked. Turn-scoped: reset by TURN_START_RESET.
+	stackDriftAdvisory: Annotation<string>({ reducer: last, default: () => "" }),
 	// SIO-882: drift reconcile sub-flow. targetDeployment scopes the audit to one
 	// deployment; driftReport holds the per-stack plan; driftIndex walks the drifted
 	// stacks sequentially; currentDirection is the gate's chosen direction for the

@@ -47,9 +47,11 @@ import { IacState } from "./state.ts";
 // SIO-1196: draftChange exits. Terminal block/no-op -> END; a version live-drift (repo already at
 // target, live behind -- versionDrift is turn-scoped, set only by proposeVersionUpgrade) -> the
 // drift lane's explainDrift (drift card + reconcileGate interrupt; the seed's liveReconcilable:false
-// hides reconcile-to-live); else the review gate. (Pure; unit-tested.)
+// hides reconcile-to-live); else the review gate. SIO-1310: editDrift (any workflow's no-op verdict
+// overturned by the per-request stack drift-check) routes the same way -- its seed drops noopReason,
+// so the editDrift check never competes with the END branch. (Pure; unit-tested.)
 export const routeAfterDraft = (s: typeof IacState.State): string =>
-	s.blockedReason || s.noopReason ? END : s.versionDrift ? "explainDrift" : "reviewPlan";
+	s.blockedReason || s.noopReason ? END : s.versionDrift || s.editDrift ? "explainDrift" : "reviewPlan";
 
 // Dedicated Elastic Cloud IaC maker graph. Every mutating/external step is gated;
 // the planReview node is a human interrupt and the graph never applies (a human

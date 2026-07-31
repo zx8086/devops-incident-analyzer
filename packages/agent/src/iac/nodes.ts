@@ -843,6 +843,9 @@ export const TURN_START_RESET = {
 	blockedReason: "",
 	noopReason: "",
 	versionDrift: null,
+	// SIO-1310: per-request stack drift-check outputs are turn-scoped, like versionDrift.
+	editDrift: null,
+	stackDriftAdvisory: "",
 	selectedKnowledge: null,
 } as const;
 
@@ -6577,9 +6580,175 @@ export async function amendChange(state: IacStateType): Promise<Partial<IacState
 // GitLab API; CI computes the plan on the MR). SIO-912: the legacy local-terraform-diff
 // path for workflow "other" is gone -- parseIntent now short-circuits "other" with a
 // capability message before reaching draftChange, so any unmatched workflow here is a bug.
+// SIO-1310: the per-request scoped drift check's kill-switch. Lazy process.env read (no
+// module-scope Bun.env -- Vite SSR throws); default ON, "false" restores the pre-SIO-1310
+// behavior exactly (no CI trigger, repo-only no-op caveats).
+export function editDriftCheckEnabled(): boolean {
+	return (process.env.ELASTIC_IAC_EDIT_DRIFT_CHECK ?? "true").trim().toLowerCase() !== "false";
+}
+
+// SIO-1310: rewrite a no-op message's repo-only caveat once the stack's live drift-check came
+// back CLEAN -- the verdict upgrades from "I did not verify live" to a verified live parity.
+// Pure; transforms only the LAST string-content AIMessage and leaves everything else untouched.
+export function upgradeNoopMessagesVerified(messages: BaseMessage[], cluster: string, stack: string): BaseMessage[] {
+	const verified =
+		` Verified against the LIVE deployment too: the '${stack}' stack drift-check reports no drift, ` +
+		`so the repo file and the live cluster agree.`;
+	return rewriteLastAiMessage(messages, (text) => {
+		const caveat = repoOnlyCaveat(cluster);
+		return text.includes(caveat) ? text.replace(caveat, verified) : `${text}${verified}`;
+	});
+}
+
+// SIO-1310: append the not-authoritative note when the live drift-check could not verify the
+// stack (trigger lock / failed pipeline / poll timeout). The repo-only caveat STAYS -- the
+// verdict is still repo-file-only. Pure.
+export function appendNoopPlanErrorNote(messages: BaseMessage[], stack: string, reason: string): BaseMessage[] {
+	const note = ` (A live drift-check for the '${stack}' stack was attempted but was not authoritative: ${reason})`;
+	return rewriteLastAiMessage(messages, (text) => `${text}${note}`);
+}
+
+function rewriteLastAiMessage(messages: BaseMessage[], fn: (text: string) => string): BaseMessage[] {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const m = messages[i];
+		if (m instanceof AIMessage && typeof m.content === "string") {
+			const next = [...messages];
+			next[i] = new AIMessage(fn(m.content));
+			return next;
+		}
+	}
+	return messages;
+}
+
+// SIO-1310: render the review-card advisory for a DRAFTED change whose stack has pre-existing
+// repo-vs-live drift beyond the edit. Must never contain the phrase "not in live" -- reviewPlan
+// promotes that exact phrase (a SIO-983 draft-vs-live signal) to a HIGH risk. Pure.
+export function buildStackDriftAdvisory(stackDrift: StackDrift, deployment: string): string {
+	if (!stackDrift.drifted) return "";
+	const shown = stackDrift.resources.slice(0, 3).map((r) => {
+		const keys = (r.changedKeys ?? []).slice(0, 4).join(", ");
+		return `- \`${shortAddress(r.address)}\` (${r.actions.join("+")}${keys ? `: ${keys}` : ""})`;
+	});
+	const more = stackDrift.resources.length - shown.length;
+	return [
+		`**Pre-existing live drift in the '${stackDrift.stack}' stack** (${stackDrift.create} create / ` +
+			`${stackDrift.update} update / ${stackDrift.delete} destroy vs live, BEYOND this edit):`,
+		...shown,
+		...(more > 0 ? [`- ...and ${more} more resource(s)`] : []),
+		`This drift exists on main independently of this MR. Ask me to "check ${deployment || "the deployment"} ` +
+			`for drift" to review and reconcile it.`,
+	].join("\n");
+}
+
+// SIO-1310: run the target stack's on-demand CI drift-check for one maker request. Reuses
+// driftCheckStack verbatim (trigger + poll + parse; planError semantics; iac_pipeline_progress
+// events). Returns null when the check is disabled, the workflow has no stack mapping, or the
+// deployment is unknown -- callers then keep today's repo-only behavior.
+export async function runEditDriftCheck(
+	deployment: string | undefined,
+	workflow: string | undefined,
+): Promise<StackDrift | null> {
+	if (!editDriftCheckEnabled()) return null;
+	const stack = stackForWorkflow(workflow);
+	if (!stack || !deployment) return null;
+	log.info({ deployment, stack, workflow }, "iac edit-drift: running per-request stack drift-check");
+	return driftCheckStack(deployment, stack);
+}
+
+// SIO-1310: post-hook applied to every proposer result. On a no-op verdict, the stack's live
+// drift-check either verifies the no-op (clean), degrades gracefully (planError), or converts
+// it into a seeded drift-reconcile turn (drifted) -- generalizing the SIO-1196 versionDrift
+// pattern to every workflow. On a drafted change, drift becomes a non-blocking review-card
+// advisory. version-upgrade is excluded (it has its own three-way check and drift seeding).
+export async function applyEditDriftCheck(
+	req: IacRequest,
+	result: Partial<IacStateType>,
+): Promise<Partial<IacStateType>> {
+	if (req.workflow === "version-upgrade") return result;
+	if (result.blockedReason || result.versionDrift) return result;
+	const cluster = req.cluster;
+	const isNoop = Boolean(result.noopReason);
+	const isDrafted = Boolean(result.branch);
+	if (!isNoop && !isDrafted) return result;
+
+	let drift: StackDrift | null = null;
+	try {
+		drift = await runEditDriftCheck(cluster, req.workflow);
+	} catch (error) {
+		// Never let the advisory check break the propose/no-op turn.
+		log.warn(
+			{ cluster, workflow: req.workflow, error: error instanceof Error ? error.message : String(error) },
+			"iac edit-drift: check failed; keeping repo-only verdict",
+		);
+		return result;
+	}
+	if (!drift) return result;
+
+	if (isNoop) {
+		if (drift.planError) {
+			return {
+				...result,
+				messages: appendNoopPlanErrorNote(
+					result.messages ?? [],
+					drift.stack,
+					drift.planErrorReason ?? "the drift-check pipeline could not be read",
+				),
+			};
+		}
+		if (!drift.drifted) {
+			return {
+				...result,
+				messages: upgradeNoopMessagesVerified(result.messages ?? [], cluster ?? "", drift.stack),
+			};
+		}
+		// Drifted: the "no change needed" verdict is FALSE against live -- convert the turn into
+		// the drift-reconcile lane with a one-stack seed (SIO-1196 idiom). Direction safety:
+		// liveReconcilable false -- reconcile-to-live would overwrite the very values the user
+		// just asserted; the standalone drift flow offers the full options.
+		const summary = `${drift.create} create / ${drift.update} update / ${drift.delete} destroy`;
+		log.info(
+			{ cluster, stack: drift.stack, workflow: req.workflow, summary },
+			"iac edit-drift: no-op verdict overturned by live drift; routing to reconcile lane",
+		);
+		return {
+			intent: "drift",
+			editDrift: { deployment: cluster ?? "", stack: drift.stack, workflow: req.workflow ?? "" },
+			targetDeployment: cluster ?? "",
+			driftReport: {
+				deployment: cluster ?? "",
+				stacks: [{ ...drift, liveReconcilable: false }],
+				generatedAt: new Date().toISOString(),
+			},
+			driftIndex: 0,
+			reconcileResults: [],
+			messages: [
+				new AIMessage(
+					`No repo change is needed (the GitOps file already matches your request), but the LIVE ` +
+						`cluster differs from the repo for the '${drift.stack}' stack (${summary}). I am routing ` +
+						`this into the drift-reconcile flow. Reconcile to Live Deployment is deliberately not ` +
+						`offered here -- it would overwrite the values you just asserted; use "check ` +
+						`${cluster ?? "the deployment"} for drift" for the full reconcile options.`,
+				),
+			],
+		};
+	}
+
+	// Drafted change: pre-existing stack drift becomes a non-blocking advisory on the review card.
+	if (drift.drifted && !drift.planError) {
+		return { ...result, stackDriftAdvisory: buildStackDriftAdvisory(drift, cluster ?? "") };
+	}
+	return result;
+}
+
 export async function draftChange(state: IacStateType): Promise<Partial<IacStateType>> {
 	const req = state.iacRequest;
 	if (!req) return {};
+	// SIO-1310: every proposer result flows through the per-request stack drift-check post-hook.
+	const result = await dispatchProposer(state, req);
+	return applyEditDriftCheck(req, result);
+}
+
+async function dispatchProposer(state: IacStateType, req: IacRequest): Promise<Partial<IacStateType>> {
 	if (req.workflow === "version-upgrade") return proposeVersionUpgrade(state, req);
 	if (req.workflow === "tier-resize") return proposeTierResize(state, req);
 	if (req.workflow === "ilm-rollout") return proposeIlmChange(state, req);
@@ -7062,6 +7231,9 @@ export async function reviewPlan(state: IacStateType): Promise<Partial<IacStateT
 		// SIO-983: surface the live-parity advisory (draft vs live cluster). Empty when no live
 		// equivalent was read (deployment not connected) or the draft matches live.
 		liveParity: state.liveParity || undefined,
+		// SIO-1310: surface the per-request stack drift-check advisory (pre-existing repo-vs-live
+		// drift in the edited stack, beyond this MR). Empty when clean/disabled/unauthoritative.
+		stackDriftAdvisory: state.stackDriftAdvisory || undefined,
 	};
 	// SIO-990: capture the durable active-change context at propose time -- one consolidation point
 	// for every proposer (they all land here via draftChange -> reviewPlan). This survives a
