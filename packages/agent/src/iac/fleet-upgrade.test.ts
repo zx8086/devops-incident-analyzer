@@ -1040,12 +1040,18 @@ describe("fleet-upgrade MAX_AGENTS blast-radius override (SIO-927)", () => {
 describe("applyFleetUpgrade live-ticker poll loop uses its own budget (SIO-1307)", () => {
 	const ORIGINAL_BUDGET = process.env.IAC_FLEET_APPLY_TICKER_BUDGET_MS;
 	const ORIGINAL_INTERVAL = process.env.IAC_FLEET_APPLY_TICKER_INTERVAL_MS;
+	// SIO-1307 review: the second test below also mutates the unrelated SHARED
+	// IAC_PIPELINE_POLL_BUDGET_MS to prove it's ignored -- capture/restore it here too, so a test
+	// failure before its own inline cleanup doesn't leak a stray "10" into later tests/files.
+	const ORIGINAL_SHARED_BUDGET = process.env.IAC_PIPELINE_POLL_BUDGET_MS;
 
 	afterEach(() => {
 		if (ORIGINAL_BUDGET === undefined) delete process.env.IAC_FLEET_APPLY_TICKER_BUDGET_MS;
 		else process.env.IAC_FLEET_APPLY_TICKER_BUDGET_MS = ORIGINAL_BUDGET;
 		if (ORIGINAL_INTERVAL === undefined) delete process.env.IAC_FLEET_APPLY_TICKER_INTERVAL_MS;
 		else process.env.IAC_FLEET_APPLY_TICKER_INTERVAL_MS = ORIGINAL_INTERVAL;
+		if (ORIGINAL_SHARED_BUDGET === undefined) delete process.env.IAC_PIPELINE_POLL_BUDGET_MS;
+		else process.env.IAC_PIPELINE_POLL_BUDGET_MS = ORIGINAL_SHARED_BUDGET;
 	});
 
 	test("a pipeline that never reaches terminal status stops polling at the dedicated budget, not IAC_PIPELINE_POLL_BUDGET_MS", async () => {
@@ -1090,7 +1096,15 @@ describe("applyFleetUpgrade live-ticker poll loop uses its own budget (SIO-1307)
 		expect(out.fleetApplyPipelineId).toBe(2700000001);
 	});
 
-	test("default IAC_FLEET_APPLY_TICKER_BUDGET_MS is 40000, independent of IAC_PIPELINE_POLL_BUDGET_MS", async () => {
+	// NOTE: this does NOT measure the 40000ms default deadline itself (the codebase has no fake-timer
+	// harness -- introducing one for a single assertion was judged disproportionate; see the CodeRabbit
+	// review on PR #552). It proves the narrower, still-useful claim that resolving the unset dedicated
+	// env vars (falling through to their defaults) does not throw and does not fall back to reading the
+	// unrelated shared IAC_PIPELINE_POLL_BUDGET_MS var -- terminal-on-first-poll means the loop body
+	// never actually reaches its deadline check, so a wrong default value would NOT be caught here. The
+	// preceding test is what actually proves the dedicated vars gate the loop's exit (via a measurable
+	// elapsed-time bound on an explicit override).
+	test("unset IAC_FLEET_APPLY_TICKER_BUDGET_MS/_INTERVAL_MS resolve without throwing, ignoring IAC_PIPELINE_POLL_BUDGET_MS", async () => {
 		delete process.env.IAC_FLEET_APPLY_TICKER_BUDGET_MS;
 		delete process.env.IAC_FLEET_APPLY_TICKER_INTERVAL_MS;
 		// Deliberately set the SHARED (unrelated) var to something tiny; if applyFleetUpgrade's ticker
@@ -1127,7 +1141,6 @@ describe("applyFleetUpgrade live-ticker poll loop uses its own budget (SIO-1307)
 		const out = await applyFleetUpgrade(state);
 
 		expect(out.fleetUpgradeResult?.status).toBe("applied");
-		delete process.env.IAC_PIPELINE_POLL_BUDGET_MS;
 	});
 });
 

@@ -135,8 +135,8 @@ The GitOps target is resolved by the MCP server; the JSON paths are agent-side t
 | `ELASTIC_IAC_DEPLOYMENT_JSON_TEMPLATE` | `environments/_deployments/${cluster}.json` | agent |
 | `ELASTIC_IAC_ILM_POLICY_TEMPLATE` | `environments/${cluster}/lifecycle-policies/${policy}.json` | agent |
 | `IAC_PIPELINE_POLL_BUDGET_MS` | `90000` | agent (`watchPipeline` MR poll loop only) |
-| `IAC_PIPELINE_POLL_BUDGET_MS_EXTENDED` | `90000` | agent (SIO-989: capped at the default 90s) |
-| `IAC_PIPELINE_POLL_INTERVAL_MS` | `10000` | agent |
+| `IAC_PIPELINE_POLL_BUDGET_MS_EXTENDED` | `90000` | agent (`watchPipeline` MR poll loop only; SIO-989: capped at the default 90s) |
+| `IAC_PIPELINE_POLL_INTERVAL_MS` | `10000` | agent (`watchPipeline` MR poll loop only) |
 | `IAC_FLEET_APPLY_TICKER_BUDGET_MS` | `40000` | agent (`applyFleetUpgrade` live ticker; SIO-1307: split from `IAC_PIPELINE_POLL_BUDGET_MS`) |
 | `IAC_FLEET_APPLY_TICKER_INTERVAL_MS` | `10000` | agent |
 | `ELASTIC_IAC_FLEET_APPLY_POLL_BUDGET_MS` | `30000` | MCP (`gitlab_get_fleet_upgrade_apply_result`; SIO-1307: 120000 -> 30000) |
