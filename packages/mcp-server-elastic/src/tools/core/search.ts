@@ -309,6 +309,37 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 
 			await progressTracker.updateProgress(85, `Search completed in ${result.took}ms, processing results`);
 
+			// SIO-1328: Elasticsearch's default allow_partial_search_results=true means a request
+			// rejected by some/all shards (e.g. a `terms` agg on a `match_only_text` field -- an
+			// illegal_argument_exception, "match_only_text fields do not support sorting and
+			// aggregations") still returns HTTP 200, NOT a thrown error -- the catch block below never
+			// runs. This is a QUERY-SHAPE bug, not a partial-data condition: every shard runs the exact
+			// same aggs clause, so a shard "succeeding" here just means it had zero matching base-filter
+			// documents to run the illegal agg against, not that it tolerated the bad field -- ANY
+			// failure of this kind means the agg itself is broken and its results (including
+			// hits.total, which is undercounted for the shards that never got to execute the real
+			// query) cannot be trusted. Verified live against eu-b2b: a 6-of-8-shards-failed response
+			// still reported hits.total:0 despite the 2 "successful" shards not being representative.
+			// `_shards` is always present on a genuine ES response but absent on some hand-built test
+			// doubles elsewhere in this repo -- guard defensively so an incomplete mock never throws
+			// here instead of exercising the code it meant to test.
+			const shards = result._shards;
+			if (shards && shards.failed > 0) {
+				const firstFailure = shards.failures?.[0]?.reason;
+				const reasonText = firstFailure
+					? `${firstFailure.type ?? "unknown_error"}: ${firstFailure.reason ?? "no detail"}`
+					: "unknown shard failure";
+				const envelope = buildToolErrorEnvelope({
+					kind: "bad-query",
+					message: `[elasticsearch_search] ${shards.failed} of ${shards.total} shard(s) failed: ${reasonText}`,
+					advice:
+						"This request shape is rejected by at least one shard (commonly: a `terms`/`cardinality` aggregation on a `text`/`match_only_text` field with no fielddata, or a `.keyword` sub-field is required). Every shard runs the same aggregation, so a partial failure still means the query itself is malformed -- the reported hit/aggregation counts are NOT trustworthy and a low or zero result is NOT a valid absence conclusion. Fix the aggregation/query field and retry.",
+				});
+				throw new McpError(ErrorCode.InvalidParams, JSON.stringify(envelope), {
+					shardFailures: shards.failures,
+				});
+			}
+
 			// Safe property access to avoid undefined errors
 			const fromOffset = from ?? 0;
 			const sizeLimit = size;
