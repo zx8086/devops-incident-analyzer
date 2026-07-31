@@ -82,6 +82,7 @@ import type {
 	ReconcileDirection,
 	ReconcileResult,
 	StackDrift,
+	StackDriftResource,
 	SyntheticsDriftMonitor,
 	SyntheticsDriftReport,
 	SyntheticsPushResult,
@@ -8154,6 +8155,17 @@ function reportStacksExcluded(): Set<string> {
 			.filter(Boolean),
 	);
 }
+// SIO-1315: opt-OUT set for the nested-layout families (security / fleet-integrations /
+// agent-policies). An excluded stack falls back to the report-sourced default (whose per-key
+// template then blocks with the SIO-901 fail-safe -- the pre-SIO-1315 behavior).
+function nestedStacksExcluded(): Set<string> {
+	return new Set(
+		(process.env.ELASTIC_IAC_NESTED_STACKS_EXCLUDE ?? "")
+			.split(",")
+			.map((s) => s.trim().toLowerCase())
+			.filter(Boolean),
+	);
+}
 // Per-resource config-file template for report-sourced stacks. ${cluster}=deployment, ${stack}=stack
 // name, ${key}=the resource's for_each index key (README convention; override via env).
 function stackConfigPathTemplate(): string {
@@ -8223,23 +8235,79 @@ function reportReconcileFamily(stack: string): LiveReconcileFamily {
 		name: stack,
 		matches: (s) => s === stack,
 		configPath: (d) => stackResourceDir(stackConfigPathTemplate(), d, stack),
-		hasReconcilableDrift: (actionable) =>
-			actionable.some(
-				(c) =>
-					(c.category === "update" || c.category === "replace") &&
-					// SIO-900: a writable live value at attribute grain (values) OR leaf grain (changes) qualifies.
-					(hasWritableBefore(c.values) || hasWritableChanges(c)),
-			),
+		// SIO-900: a writable live value at attribute grain (values) OR leaf grain (changes) qualifies.
+		hasReconcilableDrift: hasReportWritableDrift,
 		build: buildReportSourcedReconcile,
 	};
 }
 
-// The live-reconcile family a stack belongs to, or undefined (unwired). deployment/ilm match by name;
-// every other stack is report-sourced by DEFAULT unless suppressed via ELASTIC_IAC_REPORT_STACKS_EXCLUDE.
+// SIO-1315: the shared "does the actual drift carry writable live values" predicate for the
+// report-sourced and nested families (update/replace with a non-sentinel before at attribute or
+// leaf grain). (Pure.)
+function hasReportWritableDrift(actionable: DriftResourceChange[]): boolean {
+	return actionable.some(
+		(c) =>
+			(c.category === "update" || c.category === "replace") && (hasWritableBefore(c.values) || hasWritableChanges(c)),
+	);
+}
+
+// SIO-1315: nested-layout specs for the stacks whose repo layout is NOT one-file-per-resource
+// (verified live against eu-b2b, 2026-07-31):
+// - security: ONE aggregate security.json; role entries nest under `roles.<for_each-key>`.
+// - fleet-integrations: ONE aggregate integrations.json; entries are the TOP-LEVEL map keys.
+// - agent-policies: one file per POLICY; the for_each key composes `<policy>-<integration>` and
+//   the integration entry nests under `integrations.<integration>` inside the policy file.
+interface NestedLayoutSpec {
+	kind: "aggregate" | "composite";
+	// aggregate: the single per-deployment file. composite: the stack's per-parent-file directory.
+	path: (deployment: string) => string;
+	// The object key the per-resource entries nest under ("" = the file's top-level map).
+	container: string;
+}
+function nestedLayoutSpecs(): Record<string, NestedLayoutSpec> {
+	return {
+		security: {
+			kind: "aggregate",
+			path: (d) => deploymentJsonPath(securityTemplate(), d),
+			container: "roles",
+		},
+		"fleet-integrations": {
+			kind: "aggregate",
+			path: (d) => deploymentJsonPath(fleetIntegrationsTemplate(), d),
+			container: "",
+		},
+		"agent-policies": {
+			kind: "composite",
+			path: (d) => stackResourceDir(stackConfigPathTemplate(), d, "agent-policies"),
+			container: "integrations",
+		},
+	};
+}
+
+// SIO-1315: nested-layout families. Report-sourced live values (drift-report before/changes),
+// projected into the entry's slot inside the aggregate/parent file instead of a per-key file.
+function nestedReconcileFamilies(): LiveReconcileFamily[] {
+	const excluded = nestedStacksExcluded();
+	return Object.entries(nestedLayoutSpecs())
+		.filter(([stackName]) => !excluded.has(stackName))
+		.map(([stackName, spec]) => ({
+			name: stackName,
+			matches: (s) => s === stackName,
+			configPath: (d) => spec.path(d),
+			hasReconcilableDrift: hasReportWritableDrift,
+			build: (deployment, stack) => buildNestedReconcile(deployment, stack, spec),
+		}));
+}
+
+// The live-reconcile family a stack belongs to, or undefined (unwired). deployment/ilm match by
+// name; the SIO-1315 nested-layout stacks come next; every other stack is report-sourced by
+// DEFAULT unless suppressed via ELASTIC_IAC_REPORT_STACKS_EXCLUDE.
 function liveReconcileFamily(stack: string): LiveReconcileFamily | undefined {
 	const s = stack.toLowerCase();
 	const mcp = mcpReconcileFamilies().find((f) => f.matches(s));
 	if (mcp) return mcp;
+	const nested = nestedReconcileFamilies().find((f) => f.matches(s));
+	if (nested) return nested;
 	return reportStacksExcluded().has(s) ? undefined : reportReconcileFamily(s);
 }
 
@@ -9150,6 +9218,145 @@ async function buildReportSourcedReconcile(
 		// unreadable. Otherwise it is the generic no-reconcilable-values case (with the skip note).
 		if (readableFileCount === 0 && skipped.length > 0) {
 			return { blocked: `Could not read any config file for this stack. ${skipNote}` };
+		}
+		return {
+			blocked: `No reconcilable live values (drift was create-only, redacted, oversized, or already matches the repo).${skipNote ? ` ${skipNote}` : ""}`,
+		};
+	}
+	return { files, summary: summaryParts.join("; "), ...(skipNote && { note: skipNote }) };
+}
+
+// SIO-1315: reconcile-to-live for nested-layout stacks (security / fleet-integrations /
+// agent-policies). Same report-sourced projection as buildReportSourcedReconcile, but the target
+// is the resource's ENTRY inside an aggregate or parent file rather than a per-key file: the
+// entry is projected as its own JSON document (reusing the SIO-889/900 appliers verbatim) and
+// spliced back, so per-leaf/per-key empty-diff guards and sentinel protection carry over. Same
+// SIO-901 fail-safes: skip-with-note per unresolvable entry/file, block only when nothing was
+// readable or writable -- an unknown layout still never writes garbage.
+async function buildNestedReconcile(
+	deployment: string,
+	stack: StackDrift,
+	spec: NestedLayoutSpec,
+): Promise<LiveReconcileBuild | { blocked: string }> {
+	const writable = stack.resources.filter(
+		(r) =>
+			(r.category === "update" || r.category === "replace") && (hasWritableChanges(r) || hasWritableBefore(r.values)),
+	);
+	if (writable.length === 0) {
+		return {
+			blocked: "No reconcilable live values (drift was create-only, redacted, oversized, or already matches the repo).",
+		};
+	}
+
+	// Resolve each for_each key to (file, entry key). aggregate: one file, entry key = the key
+	// itself. composite: longest-prefix match of the key against the stack directory's *.json
+	// basenames -- the remainder (after the joining "-") is the entry key inside that file.
+	const skipped: string[] = [];
+	type NestedTarget = { resource: StackDriftResource; filePath: string; entryKey: string };
+	const targets: NestedTarget[] = [];
+	if (spec.kind === "aggregate") {
+		const filePath = spec.path(deployment);
+		for (const r of writable) {
+			const key = addressIndexKey(r.address);
+			if (!key) continue;
+			targets.push({ resource: r, filePath, entryKey: key });
+		}
+	} else {
+		const dir = spec.path(deployment);
+		const basenames = parseRepoTreeFiles(await callTool("gitlab_get_repository_tree", { path: dir }))
+			.filter((f) => f.endsWith(".json"))
+			.map((f) => f.slice(0, -".json".length))
+			.sort((a, b) => b.length - a.length); // longest prefix wins (policy names contain "-")
+		for (const r of writable) {
+			const key = addressIndexKey(r.address);
+			if (!key) continue;
+			const parent = basenames.find((b) => key.startsWith(`${b}-`));
+			if (!parent) {
+				skipped.push(`${key} (no matching parent file under ${dir})`);
+				continue;
+			}
+			targets.push({ resource: r, filePath: `${dir}/${parent}.json`, entryKey: key.slice(parent.length + 1) });
+		}
+	}
+
+	// Read + project per FILE: an aggregate file carries many entries, so read once and edit the
+	// parsed document in place; serialize only files where at least one entry actually changed.
+	const docs = new Map<string, Record<string, unknown>>();
+	const unreadable = new Set<string>();
+	const appliedFiles = new Set<string>();
+	const summaryParts: string[] = [];
+	for (const t of targets) {
+		if (unreadable.has(t.filePath)) continue;
+		let doc = docs.get(t.filePath);
+		if (!doc) {
+			const raw = await callTool("gitlab_get_file_content", { filePath: t.filePath });
+			if (!raw.startsWith("[2")) {
+				unreadable.add(t.filePath);
+				skipped.push(t.filePath);
+				continue;
+			}
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(extractFileContent(raw));
+			} catch {
+				unreadable.add(t.filePath);
+				skipped.push(`${t.filePath} (unparseable JSON)`);
+				continue;
+			}
+			if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+				unreadable.add(t.filePath);
+				skipped.push(`${t.filePath} (not a JSON object)`);
+				continue;
+			}
+			doc = parsed as Record<string, unknown>;
+			docs.set(t.filePath, doc);
+		}
+		const containerObj = spec.container === "" ? doc : doc[spec.container];
+		if (typeof containerObj !== "object" || containerObj === null || Array.isArray(containerObj)) {
+			skipped.push(`${t.filePath} (no '${spec.container}' object)`);
+			continue;
+		}
+		const entry = (containerObj as Record<string, unknown>)[t.entryKey];
+		if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+			skipped.push(`${t.entryKey} (no entry in ${t.filePath})`);
+			continue;
+		}
+		const entryJson = `${JSON.stringify(entry, null, 2)}\n`;
+		const r = t.resource;
+		const useChanges = hasWritableChanges(r);
+		let projected: { content: string; applied: string[] };
+		try {
+			projected = useChanges
+				? applyReportChangesToConfig(entryJson, r.changes ?? [])
+				: r.values
+					? applyReportValuesToConfig(entryJson, r.values)
+					: { content: entryJson, applied: [] };
+			// Path-precise resolved nothing -> attribute-grain fallback (mirrors the report family).
+			if (useChanges && projected.applied.length === 0 && r.values && hasWritableBefore(r.values)) {
+				projected = applyReportValuesToConfig(entryJson, r.values);
+			}
+		} catch (err) {
+			return { blocked: `${t.filePath} could not be rewritten: ${err instanceof Error ? err.message : String(err)}` };
+		}
+		if (projected.applied.length === 0) continue; // sentinels/unresolved or already in sync
+		(containerObj as Record<string, unknown>)[t.entryKey] = JSON.parse(projected.content);
+		appliedFiles.add(t.filePath);
+		summaryParts.push(`${t.entryKey}: ${projected.applied.join(", ")}`);
+	}
+
+	const files: ReconcileFile[] = [...appliedFiles].map((path) => ({
+		path,
+		content: `${JSON.stringify(docs.get(path), null, 2)}\n`,
+	}));
+	const skipNote =
+		skipped.length > 0
+			? `Skipped ${skipped.length} unresolvable entr${skipped.length === 1 ? "y" : "ies"}: ${skipped.slice(0, 5).join(", ")}${skipped.length > 5 ? ", ..." : ""}.`
+			: undefined;
+	if (files.length === 0) {
+		// Message parity with the report family (SIO-901): "unreadable" only when every candidate
+		// file failed to read; otherwise the generic no-reconcilable-values case.
+		if (docs.size === 0 && unreadable.size > 0) {
+			return { blocked: `Could not read any config file for this stack. ${skipNote ?? ""}`.trim() };
 		}
 		return {
 			blocked: `No reconcilable live values (drift was create-only, redacted, oversized, or already matches the repo).${skipNote ? ` ${skipNote}` : ""}`,
