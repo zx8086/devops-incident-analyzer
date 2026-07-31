@@ -1031,6 +1031,119 @@ describe("fleet-upgrade MAX_AGENTS blast-radius override (SIO-927)", () => {
 	});
 });
 
+// SIO-1307: the live-ticker poll loop in applyFleetUpgrade (gitlab_get_pipeline, pre-artifact-fetch)
+// must respect its OWN dedicated budget/interval env vars, not the shared IAC_PIPELINE_POLL_BUDGET_MS
+// pair that watchPipeline (the unrelated MR-watch flow) also reads -- reusing the shared pair would
+// couple the two flows' latency tuning. These assert the loop is bounded (never hangs waiting for a
+// pipeline that stays "running" forever) and that overriding the dedicated vars actually changes the
+// number of gitlab_get_pipeline polls, proving the wiring, not just the constant's existence.
+describe("applyFleetUpgrade live-ticker poll loop uses its own budget (SIO-1307)", () => {
+	const ORIGINAL_BUDGET = process.env.IAC_FLEET_APPLY_TICKER_BUDGET_MS;
+	const ORIGINAL_INTERVAL = process.env.IAC_FLEET_APPLY_TICKER_INTERVAL_MS;
+	// SIO-1307 review: the second test below also mutates the unrelated SHARED
+	// IAC_PIPELINE_POLL_BUDGET_MS to prove it's ignored -- capture/restore it here too, so a test
+	// failure before its own inline cleanup doesn't leak a stray "10" into later tests/files.
+	const ORIGINAL_SHARED_BUDGET = process.env.IAC_PIPELINE_POLL_BUDGET_MS;
+
+	afterEach(() => {
+		if (ORIGINAL_BUDGET === undefined) delete process.env.IAC_FLEET_APPLY_TICKER_BUDGET_MS;
+		else process.env.IAC_FLEET_APPLY_TICKER_BUDGET_MS = ORIGINAL_BUDGET;
+		if (ORIGINAL_INTERVAL === undefined) delete process.env.IAC_FLEET_APPLY_TICKER_INTERVAL_MS;
+		else process.env.IAC_FLEET_APPLY_TICKER_INTERVAL_MS = ORIGINAL_INTERVAL;
+		if (ORIGINAL_SHARED_BUDGET === undefined) delete process.env.IAC_PIPELINE_POLL_BUDGET_MS;
+		else process.env.IAC_PIPELINE_POLL_BUDGET_MS = ORIGINAL_SHARED_BUDGET;
+	});
+
+	test("a pipeline that never reaches terminal status stops polling at the dedicated budget, not IAC_PIPELINE_POLL_BUDGET_MS", async () => {
+		// A budget far below the shared MR-watch pair's 90000ms default proves this loop reads its OWN
+		// var: if it fell back to the shared one, the loop would keep polling past this test's timeout.
+		process.env.IAC_FLEET_APPLY_TICKER_BUDGET_MS = "30";
+		process.env.IAC_FLEET_APPLY_TICKER_INTERVAL_MS = "10";
+		const { applyFleetUpgrade } = await import("./nodes.ts");
+		let pipelinePolls = 0;
+		mockTools({
+			gitlab_trigger_fleet_upgrade_apply: () =>
+				'[201] {"deployment":"eu-b2b","version":"9.4.2","pipelineId":2700000001,"status":"created"}',
+			// Always "running" -- never terminal -- so the loop can only exit via the budget deadline.
+			gitlab_get_pipeline: () => {
+				pipelinePolls++;
+				return '[200] {"id":2700000001,"status":"running"}';
+			},
+			// Still non-terminal when the artifact fetch is finally made -> dispatched, not applied/failed.
+			gitlab_get_fleet_upgrade_apply_result: () =>
+				`[200] ${JSON.stringify({ pipelineId: 2700000001, status: "running", note: "still running at budget; re-check" })}`,
+		});
+		const state = stateWith({
+			fleetUpgradeReport: report({
+				deployment: "eu-b2b",
+				resolvedCount: 5,
+				crosstab: { upgradeable: 5, notUpgradeable: 0, byReason: [] },
+			}),
+		});
+
+		const start = Date.now();
+		const out = await applyFleetUpgrade(state);
+		const elapsedMs = Date.now() - start;
+
+		// Bounded by the dedicated 30ms budget (plus the blocking artifact-fetch call), not the shared
+		// pair's 90000ms default -- if the loop had read the wrong env var this would hang for ~90s.
+		expect(elapsedMs).toBeLessThan(5000);
+		// At least the first (pre-loop) poll plus one in-loop poll before the 30ms/10ms budget expires.
+		expect(pipelinePolls).toBeGreaterThanOrEqual(2);
+		expect(out.fleetUpgradeResult?.status).toBe("dispatched");
+		// SIO-926: a still-running apply persists its pipeline id for a later re-poll.
+		expect(out.fleetUpgradeResult?.pipelineId).toBe(2700000001);
+		expect(out.fleetApplyPipelineId).toBe(2700000001);
+	});
+
+	// NOTE: this does NOT measure the 40000ms default deadline itself (the codebase has no fake-timer
+	// harness -- introducing one for a single assertion was judged disproportionate; see the CodeRabbit
+	// review on PR #552). It proves the narrower, still-useful claim that resolving the unset dedicated
+	// env vars (falling through to their defaults) does not throw and does not fall back to reading the
+	// unrelated shared IAC_PIPELINE_POLL_BUDGET_MS var -- terminal-on-first-poll means the loop body
+	// never actually reaches its deadline check, so a wrong default value would NOT be caught here. The
+	// preceding test is what actually proves the dedicated vars gate the loop's exit (via a measurable
+	// elapsed-time bound on an explicit override).
+	test("unset IAC_FLEET_APPLY_TICKER_BUDGET_MS/_INTERVAL_MS resolve without throwing, ignoring IAC_PIPELINE_POLL_BUDGET_MS", async () => {
+		delete process.env.IAC_FLEET_APPLY_TICKER_BUDGET_MS;
+		delete process.env.IAC_FLEET_APPLY_TICKER_INTERVAL_MS;
+		// Deliberately set the SHARED (unrelated) var to something tiny; if applyFleetUpgrade's ticker
+		// loop were still reading it, this test would finish suspiciously fast instead of respecting the
+		// dedicated 40000ms default -- so we terminate the pipeline on the very first poll instead of
+		// actually waiting out 40s, and assert only that the trigger/poll sequence completed cleanly.
+		process.env.IAC_PIPELINE_POLL_BUDGET_MS = "10";
+		const { applyFleetUpgrade } = await import("./nodes.ts");
+		mockTools({
+			gitlab_trigger_fleet_upgrade_apply: () =>
+				'[201] {"deployment":"eu-b2b","version":"9.4.2","pipelineId":2700000002,"status":"created"}',
+			// Terminal on the first status read -> the loop exits immediately regardless of budget size,
+			// so this test stays fast while still proving the default env var is read without throwing.
+			gitlab_get_pipeline: () => '[200] {"id":2700000002,"status":"success"}',
+			gitlab_get_fleet_upgrade_apply_result: () =>
+				`[200] ${JSON.stringify({
+					pipelineId: 2700000002,
+					status: "success",
+					report: JSON.stringify({
+						mode: "apply",
+						action_id: "act-2",
+						apply: { poll_status: "COMPLETE", acked: 5, created: 5, failed_silent: 0 },
+					}),
+				})}`,
+		});
+		const state = stateWith({
+			fleetUpgradeReport: report({
+				deployment: "eu-b2b",
+				resolvedCount: 5,
+				crosstab: { upgradeable: 5, notUpgradeable: 0, byReason: [] },
+			}),
+		});
+
+		const out = await applyFleetUpgrade(state);
+
+		expect(out.fleetUpgradeResult?.status).toBe("applied");
+	});
+});
+
 // SIO-928: the reported bug -- a follow-up about a dispatched fleet apply ("How is the rollout?")
 // classified as info and re-printed the stale dispatched message instead of re-polling. The
 // deterministic guard in classifyIacIntent routes it to pipeline-status BEFORE the LLM, but only

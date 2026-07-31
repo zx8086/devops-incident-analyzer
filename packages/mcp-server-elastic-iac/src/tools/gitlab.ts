@@ -653,7 +653,13 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 	// far longer than the drift budget. We do NOT block for the whole rollout: this is a bounded
 	// "did it start cleanly" window. If the pipeline is still running at the end, the apply result
 	// reports `dispatched` (started, in-flight) and the user tracks the pipeline / asks to re-check.
-	const FLEET_APPLY_POLL_BUDGET_MS = Number(process.env.ELASTIC_IAC_FLEET_APPLY_POLL_BUDGET_MS ?? "120000");
+	// SIO-1307: cut 120000 -> 30000. The caller (applyFleetUpgrade in packages/agent) already runs its
+	// own ~40s live-ticker poll against gitlab_get_pipeline before calling this tool, so by the time
+	// this budget starts the user has already seen ~40s of status updates; this poll only needs a
+	// few more shots (at the 5s DRIFT_POLL_INTERVAL_MS cadence) at catching a fast-terminal pipeline
+	// before falling back to the (fully supported, re-pollable) `dispatched` outcome. Combined
+	// worst-case resume-turn latency: ~40s + ~30s = ~70s, down from ~210s (was 90s + 120s).
+	const FLEET_APPLY_POLL_BUDGET_MS = Number(process.env.ELASTIC_IAC_FLEET_APPLY_POLL_BUDGET_MS ?? "30000");
 	// SIO-887: trace tail returned for a failed drift-check (human review).
 	// SIO-904: bumped 4000 -> 16000 because Terraform prints the lock-info block + retries
 	// AFTER the state-lock error, which pushed the signature out of a 4000-byte tail.
