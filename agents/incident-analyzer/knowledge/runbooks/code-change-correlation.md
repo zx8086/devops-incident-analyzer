@@ -69,12 +69,13 @@ maps to a deterministic tool path (SIO-1320, distilled from the 2026-07-31
 - Known vulnerabilities in play? -- `gitlab_recent_vulnerabilities`
 - A graph question the purpose-built tools cannot ask? --
   `gitlab_orbit_query_graph` grounded by `gitlab_graph_schema`
-- Prior art in GitLab issues? -- `gitlab_search` with `scope: "work_items"`
-  (NOT scope projects -- there is no `"issues"` scope value) using
-  ERROR-CLASS vocabulary, never service names, + `gitlab_get_issue` for any
-  hit. Run this whenever the incident names a distinctive error class; only
-  skip it for a genuinely vague report with no exception/rule name. Jira owns
-  incident history, so zero hits is the normal outcome
+- Prior art in GitLab issues? -- `gitlab_search` with `scope: "issues"` (NOT
+  scope projects) using ERROR-CLASS vocabulary, never service names, +
+  `gitlab_get_issue` for any hit (its two required parameters are the
+  project id and the hit's iid). Run this whenever the incident names a
+  distinctive error class; only skip it for a genuinely vague report with
+  no exception/rule name. Jira owns incident history, so zero hits is the
+  normal outcome
 
 ## Step 1: Extract Anchor Symbols
 

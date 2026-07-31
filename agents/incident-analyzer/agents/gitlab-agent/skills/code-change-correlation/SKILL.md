@@ -48,17 +48,18 @@ The error report almost always carries a distinctive class (an exception
 type, a scanner rule name) -- treat that as the default case and run this
 check. Only skip it when the incident text truly has no distinctive
 error-class token at all (a vague "service is slow" report with no exception
-name). When you run it: issue ONE `gitlab_search` with `scope: "work_items"`
-(GitLab issues/tasks/epics/incidents are all the WorkItem entity -- there is
-no `"issues"` scope value) using ERROR-CLASS vocabulary -- the exception type
-or its distinctive tokens, NEVER the incident's service name (issue text
-rarely contains service names; a service-name search proves nothing either
-way, and a `scope:"projects"` search for the service does NOT satisfy this
-check). Jira owns incident history (the atlassian agent queries it); this
-check only surfaces scanner/bot-created GitLab issues. For a hit, fetch
-detail via the issues action (gitlab_get_issue with the numeric project id
-and the hit's iid). Zero hits is the NORMAL outcome -- move on without
-retrying synonyms.
+name). When you run it: issue ONE `gitlab_search` with `scope: "issues"`
+using ERROR-CLASS vocabulary -- the exception type or its distinctive
+tokens, NEVER the incident's service name (issue text rarely contains
+service names; a service-name search proves nothing either way, and a
+`scope:"projects"` search for the service does NOT satisfy this check).
+(`scope: "work_items"` also works and returns the same hits plus extra
+WorkItem-only fields -- either scope is fine; `issues` is the narrower,
+issue-shaped result.) Jira owns incident history (the atlassian agent
+queries it); this check only surfaces scanner/bot-created GitLab issues.
+For a hit, fetch detail via `gitlab_get_issue` -- its two required
+parameters are `id` (the numeric project id) and `issue_iid` (the hit's
+iid). Zero hits is the NORMAL outcome -- move on without retrying synonyms.
 
 ## Blast radius workflow
 When the incident implicates a symbol or a changed shared file:

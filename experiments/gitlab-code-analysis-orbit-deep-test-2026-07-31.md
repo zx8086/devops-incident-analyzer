@@ -151,9 +151,11 @@ Same incident prompt as the deep test above (styles-v3 Couchbase KV `Unambiguous
 
 ### Pass criteria verdicts
 
+Numbering below is PRE-FIX (as the SKILL.md read at replay time: step 3 = job logs, step 4 = notes). The fix section further down swaps this -- post-fix, notes is step 3 and job logs is step 4. Historical references here are left as originally observed, not renumbered.
+
 | # | Behavior | Run 1 evidence | Run 2 evidence | Verdict |
 |---|---|---|---|---|
-| 1 | Review-notes step (SKILL step 4) | `gitlab_get_merge_request_notes`: 0 calls in trace | 0 calls in trace | **FAIL** -- never fires in either run |
+| 1 | Review-notes step (SKILL step 4, pre-fix numbering) | `gitlab_get_merge_request_notes`: 0 calls in trace | 0 calls in trace | **FAIL** -- never fires in either run |
 | 2 | Prior-art check (SKILL new section) | 4x `gitlab_search`, all `scope:"projects"` (`pvh-services-styles-v3`, `styles`, `pvh.services.styles`) -- zero `scope:"issues"` calls | 4x `gitlab_search`, all `scope:"projects"` (`styles-v3`, `pvh.services.styles`, `styles`) -- zero `scope:"issues"` calls | **FAIL** -- the tool searches only resolve the project itself, never an issues prior-art query |
 | 3 | Blast radius through the pipeline (SIO-1318) | `gitlab_blast_radius symbol:"GlobalExceptionHandler"` -- generic class name matching 8+ unrelated services; `radiusMode:"definition-name-match"` present (SIO-1318 plumbing itself works) but `listsapi`/`StylesAPIRestClient`/`StyleController` absent from output and absent from final findings | Same: `symbol:"GlobalExceptionHandler"`, same generic-symbol miss | **FAIL as specified** -- SIO-1318's fix (nodes-shape parsing, `radiusMode` populated) is proven working, but the agent never queries the ground-truth symbol `getStyleByStyleCode`, so the correct blast radius never surfaces |
 | 4 | Runbook checklist reaches the aggregator | Server log: `Runbook selection complete ... always_select:"code-change-correlation.md" ... runbooks: 2` (mitigation-merge log) | (not independently re-checked; `always_select` is unconditional) | **PASS** -- `code-change-correlation.md` ships via `always_select` regardless of LLM discretion; file confirmed on disk to contain "Investigation Question Checklist" (`agents/incident-analyzer/knowledge/runbooks/code-change-correlation.md:49`) |
@@ -191,34 +193,46 @@ Findings 1 and 2 above are real steering defects, not acceptable LLM noise -- 0/
 
 Fix: split step 3 and step 4 into independent checkpoints. Step 3 (job logs) is now explicitly gated on "pipeline is failing" only and instructed to skip outright otherwise. Step 4 (notes) is now the direct continuation of "pick the strongest candidate" -- unconditional once a candidate is picked, explicitly run "even if the pipeline is green." Same restructuring applied to the runbook's Step 4 item 4 for consistency (aggregator-side checklist, not sub-agent-facing, but should not contradict the skill).
 
-### Root cause 2 (bonus find): `scope: "issues"` is not a valid `gitlab_search` scope value
+### Root cause 2, CORRECTED after CodeRabbit review (see "CodeRabbit triage" below): `scope: "issues"` IS valid -- initial claim was wrong
 
-While investigating criterion 2, direct inspection of the live `gitlab_search` tool schema (`curl .../mcp tools/list`, `:9084`) showed the tool's actual `scope` enum is `projects, blobs, work_items, merge_requests, wiki_blobs, commits, notes, milestones, users` -- there is no `"issues"` value. GitLab issues/tasks/epics/incidents are unified under the `work_items` entity (the runbook's own Orbit section already documented this fact for `gitlab_orbit_query_graph`, just not for `gitlab_search`). `git log -p` confirms `scope issues` was in the SKILL.md text as merged by SIO-1320 (`79b560c9`) -- this is a genuine documentation bug in the merged work, not something introduced by this session's rewrite. The model could never have satisfied the SKILL.md's literal instruction as written.
+**This section originally claimed `scope: "issues"` was an invalid value and rewrote the steering to `scope: "work_items"`. That claim was based on reading the MCP tool's `inputSchema.scope` DESCRIPTION TEXT, which enumerates `projects, blobs, work_items, merge_requests, wiki_blobs, commits, notes, milestones, users` and omits `issues` -- but the description text is incomplete relative to what the live server actually accepts.** Direct testing during CodeRabbit-finding triage proved otherwise:
 
-Fix: replaced `scope issues` with `scope: "work_items"` in both the SKILL.md prior-art section and the runbook checklist line.
+```
+scope:"issues"      search:"Neutralization" group_id:pvhcorp -> 20 hits, 68087 bytes, isError absent
+scope:"work_items"  search:"Neutralization" group_id:pvhcorp -> 20 hits (same 20), 82961 bytes, isError absent
+scope:"bogus_xyz"   search:"Neutralization" group_id:pvhcorp -> isError:true, "scope does not have a valid value"
+```
+
+`issues` and `work_items` return the identical 20 hits -- `work_items` is a strict superset (extra WorkItem-only fields like `epic`, `iteration`, `severity`); `issues` returns the narrower issue-shaped record. A genuinely invalid scope is rejected outright with a clear error, which `issues` is not. **`scope: "issues"` was never broken.** GitLab's search API supports the legacy `issues` scope alongside the newer unified `work_items` scope for backward compatibility; this MCP tool's schema description just doesn't mention it.
+
+**Corrected fix**: reverted the SKILL.md and runbook back to `scope: "issues"` (matching the original SIO-1320 text) with a note that `work_items` also works if ever needed. The ONE part of the original "fix" that remains valid: the `gitlab_get_issue` parameter guidance. CodeRabbit's review separately flagged that the SKILL.md's "numeric project id and the hit's iid" phrasing didn't name exact parameter keys -- confirmed via live schema (`gitlab_get_issue` requires `id` [project id/path] + `issue_iid`, both required) -- so that part of the instruction is now spelled out explicitly as `gitlab_get_issue(id: <project id>, issue_iid: <hit iid>)`.
+
+**Corrected implication for criterion 2's scoring**: the pre-fix 0/2 reproduction was NOT explained by an unsatisfiable instruction (SIO-1320's `scope: "issues"` text was fine all along) -- it is a pure prompt-following/probabilistic-steering miss, same class as the other findings in this doc. This session's fix1 replay run, which happened to self-correct to `scope:"work_items"` mid-session, demonstrated the model CAN find alternate valid scope values but does not reliably choose to run the check at all -- that observation still stands, independent of which scope name is "correct."
 
 ### Post-fix replay evidence (3 additional runs, fresh threadId each)
 
-| Run | threadId | `gitlab_get_merge_request_notes` | `gitlab_search scope:"work_items"` |
+These runs happened BEFORE the scope claim was corrected -- fix2/fix3 were replayed against a server running the (incorrectly) `work_items`-only SKILL.md text, and are still valid data points for criterion 1 (notes) and for "does `gitlab_search` fire at all for prior-art," just not for "which scope value" (both `issues` and `work_items` are legitimate; this table's "not called" verdicts for criterion 2 would read the same regardless of which valid scope name the steering asked for).
+
+| Run | threadId | `gitlab_get_merge_request_notes` | `gitlab_search` prior-art call (any valid scope) |
 |---|---|---|---|
-| fix1 (notes-restructure only, scope still said `issues`) | `66ca3121-9e55-4313-8ed3-3e20ff5bc794` | NOT called | 1 call used `scope:"work_items"` (model self-corrected against the tool's real schema, ignoring the SKILL.md's invalid `issues` text) -- `search:"UnambiguousTimeoutException styles"` |
-| fix2 (both fixes applied) | `0ad8b1d2-af09-4976-a87a-501df074fdd8` | **CALLED** -- `gitlab_get_merge_request_notes(project_id:43242609, merge_request_iid:383)`, correctly the strongest candidate | NOT called (4x `scope:"projects"` only) |
-| fix3 (both fixes applied, confirmation run) | `d80b20e2-bff3-4d0e-a3f5-769d6e324012` | **CALLED** again | NOT called (4x `scope:"projects"` only) |
+| fix1 (notes-restructure only) | `66ca3121-9e55-4313-8ed3-3e20ff5bc794` | NOT called | 1 call used `scope:"work_items"` -- `search:"UnambiguousTimeoutException styles"`. Scope-correct, but the query itself is NOT fully SKILL-compliant: it mixes the error class with "styles" (a service-name-adjacent token the skill says never to include). Do not count this as a clean pass on query vocabulary, only on "the check fired at all" |
+| fix2 (notes fix + scope text pointed at `work_items`) | `0ad8b1d2-af09-4976-a87a-501df074fdd8` | **CALLED** -- `gitlab_get_merge_request_notes(project_id:43242609, merge_request_iid:383)`, correctly the strongest candidate | NOT called (4x `scope:"projects"` only) |
+| fix3 (same, confirmation run) | `d80b20e2-bff3-4d0e-a3f5-769d6e324012` | **CALLED** again | NOT called (4x `scope:"projects"` only) |
 
 ### Final verdict per criterion
 
 | # | Criterion | Pre-fix | Post-fix | Status |
 |---|---|---|---|---|
 | 1 | Review-notes step | 0/2 runs | **2/2 runs** (fix2, fix3) | **FIXED** -- the step-3/step-4 decoupling resolved it; reproduced twice |
-| 2 | Prior-art check | 0/2 runs, and the instruction as written (`scope issues`) could never have succeeded | 0/2 runs with the corrected scope (fix2, fix3); 1 run (fix1) self-corrected to the right scope without the fix present, suggesting the model CAN discover `work_items` from the tool schema but doesn't reliably choose to run this check at all | **SCOPE BUG FIXED, TRIGGER STILL UNRELIABLE** -- the fix removes an impossible-to-satisfy instruction (real bug, worth keeping), but does not reliably make the model run the check. This incident's error class (`UnambiguousTimeoutException`, a Couchbase SDK exception, not a GitLab-specific or scanner-rule pattern) may simply read to the model as low-value to search for in GitLab issues -- a plausible, not confirmed, explanation for why "run it, do not reason about whether to" phrasing did not move the needle further |
+| 2 | Prior-art check | 0/2 runs. Original claim that `scope: "issues"` was an invalid value was WRONG (see corrected root-cause-2 above) -- the instruction was always satisfiable | 0/3 runs called the prior-art search with any valid scope (fix1 used `work_items` but that run predates the notes-decoupling fix so isn't a clean data point; fix2/fix3 called zero prior-art searches at all) | **NOT FIXED -- steering wording change (`scope:"work_items"`, now reverted to `scope:"issues"`) had no effect on the underlying trigger-reliability problem**, because there was never a scope bug to fix. This is a pure prompt-following miss, unresolved by this PR |
 | 3 | Blast radius (SIO-1318) | tool-layer proven, wrong symbol anchored | not retested (out of scope -- pre-existing symbol-selection question, not part of this fix) | unchanged: **PARTIAL**, separate ticket recommended |
 | 4 | Runbook checklist reaches aggregator | PASS (structural) | unchanged (no code touched this criterion) | **PASS** |
 
-Per the user's explicit guidance during this session: steering should not become a strict/mandatory rule if the underlying behavior would not actually be helpful. Both instructions here remain conditional and cheap as designed (single-MR notes check, single zero-or-low-cost search) -- the fix targeted prompt clarity and a real schema bug, not converting either into an unconditional mandate.
+Per the user's explicit guidance during this session: steering should not become a strict/mandatory rule if the underlying behavior would not actually be helpful. The notes-step fix (criterion 1) targeted a real structural coupling bug and is confirmed working. The prior-art check (criterion 2) remains conditional and cheap as designed -- no fix in this PR changed its reliability; it is left as a known limitation, not converted into an unconditional mandate.
 
-### Recommendation for criterion 2
+### Recommendation for criterion 2 (revised)
 
-Criterion 2 is close to acceptable as a known probabilistic-steering limitation given: (a) the check is explicitly optional/cheap by design (zero hits is the normal, expected outcome), (b) one run demonstrated the model is CAPABLE of finding and using `scope:"work_items"` correctly once it decides to run the check, (c) forcing it unconditionally would contradict the "don't make cheap-but-not-always-helpful checks mandatory" principle. If this remains unsatisfying, a follow-up ticket could test whether keying the trigger to a more concrete condition (e.g. "the error type is a checked/named exception class, not a generic timeout/5xx") makes the check fire more reliably -- but that is genuine future work, not part of this fix.
+No structural fix was applied in this PR -- the `scope` value was never the problem. What remains true: the check is explicitly optional/cheap by design (zero hits is the normal, expected outcome), the model demonstrably CAN issue a `work_items`/`issues` search (fix1 did, before any of this PR's fixes existed), but does not reliably choose to run this specific check for this incident's error class (`UnambiguousTimeoutException`, a Couchbase SDK exception rather than a GitLab-specific or scanner-rule pattern). A genuine follow-up fix -- not attempted here -- would need to test whether a more concrete trigger condition (e.g. "the error type is a checked/named exception class, not a generic timeout/5xx") makes the check fire more reliably, the same open question as before this PR.
 
 ### Verification run for this section
 
@@ -226,7 +240,22 @@ Criterion 2 is close to acceptable as a known probabilistic-steering limitation 
 
 ### Cleanup (this follow-up)
 
-- :5174 web app across 3 restarts (tracked PIDs 42543/42545, then 43712/43717 after the scope-fix restart): all killed; `lsof -nP -iTCP:5174 -sTCP:LISTEN` empty.
-- One process-tracking miss caught and corrected mid-session: a stray `bun run dev` (PID 41322/41325) from an earlier attempt was still listening on :5174 when a new instance was started, causing the new instance to silently fall back to :5175. Found via `ps`, killed by exact PID, verified both :5174 and :5175 free before restarting cleanly.
-- User's :5173 and :9084: untouched throughout.
+- :5174 web app across 3 restarts (tracked PIDs 42543/42545, then 43712/43717 after the scope-fix restart): all killed; `lsof -nP -iTCP:5174 -sTCP:LISTEN` empty after each restart and again at final cleanup.
+- One process-tracking miss caught and corrected mid-session: a stray `bun run dev` (PID 41322/41325) from an earlier attempt was still listening on :5174 when a new instance was started; the new instance silently fell back to :5175 rather than erroring, so `lsof -nP -iTCP:5174` alone (clean, since the NEW process wasn't on 5174) would have missed the collision -- it was `:5175` that revealed it. Found via `ps aux | grep vite`, killed both stray PIDs (41322, 41325) by exact PID, then pre-start-checked BOTH :5174 and :5175 free (`lsof -nP -iTCP:5174 -sTCP:LISTEN` and `-iTCP:5175`, both empty) before restarting cleanly on :5174.
+- Final cleanup check (post CodeRabbit-fix commit, both ports): `lsof -nP -iTCP:5174 -sTCP:LISTEN` empty, `lsof -nP -iTCP:5175 -sTCP:LISTEN` empty, user's `:5173` (PID 3937) confirmed still listening/untouched.
+- User's :9084: untouched throughout.
 - No write/mutating GitLab tool invoked at any point.
+
+## CodeRabbit triage (PR #558, review at commit `2e9ca159`)
+
+5 actionable findings, all triaged with a live repro before fixing or declining:
+
+| # | Severity | Finding | Verdict | Action |
+|---|---|---|---|---|
+| 1 | Major | Prior-art `gitlab_search` hits should be routed by WorkItem type before calling `gitlab_get_issue`; also claimed the deployed `gitlab_get_issue` contract uses bare `id` | **PARTIALLY VALID, one factual error corrected** -- live schema check (`tools/list` on :9084) confirms `gitlab_get_issue` requires BOTH `id` (project) and `issue_iid`, not bare `id` as the finding claimed; fixed by naming both parameters explicitly. The type-routing concern is valid and addressed with a one-line caveat that a `work_items`/`issues` search hit should "look like an issue" before fetching detail | Fixed (partially, with the incorrect part corrected rather than applied as-is) |
+| 2 | Minor | Replay report's step numbering (notes=4, job-logs=3) doesn't match the final post-fix SKILL.md (notes=3, job-logs=4) | Valid | Fixed -- added an explicit "pre-fix numbering, not renumbered" note at the top of the verdicts table |
+| 3 | Minor | Earlier tool-mapping table lists `gitlab_search (issues)`, apparently contradicting the "fix" | **Finding's premise was correct that this looked contradictory, but investigating it is what surfaced that root-cause-2 was itself wrong** -- `scope: "issues"` is valid (see below), so this table was right all along and needed no change | Declined (no change needed) -- but this finding is what triggered re-verifying the scope claim, which uncovered a real self-inflicted error (see next row) |
+| 4 | Minor | fix1's recorded prior-art query mixed error-class vocabulary with the service name ("styles"), shouldn't count as a clean compliant pass | Valid | Fixed -- annotated the fix1 table row as scope-correct-but-query-noncompliant |
+| 5 | Minor | Cleanup section only re-verified :5174, not the :5175 fallback port the report itself described | Valid | Fixed -- added explicit final `lsof` checks for both ports plus the user's :5173 |
+
+**Self-caught error while triaging finding #1**: verifying finding #1's claim against the live `gitlab_get_issue` schema led to also re-testing whether `scope: "issues"` (the ORIGINAL SIO-1320 text, which this PR had "fixed" to `scope: "work_items"`) was really invalid. It was not -- `curl` against the live `:9084` server showed `scope:"issues"` and `scope:"work_items"` return the identical 20 hits for the same query, while a genuinely invalid scope value is rejected outright (`"scope does not have a valid value"`). The original "root cause 2" analysis in this document was wrong: it read the MCP tool's `inputSchema.scope` DESCRIPTION TEXT (which omits `issues`) as authoritative without testing the value against the live server. **Reverted the SKILL.md/runbook scope value back to `"issues"`** (matching the original SIO-1320 text) and corrected the false claim throughout this document rather than leaving it. This is exactly the mistake the project's "verify before applying" discipline exists to catch -- caught here via a second, independent check prompted by review, not on the first pass.
