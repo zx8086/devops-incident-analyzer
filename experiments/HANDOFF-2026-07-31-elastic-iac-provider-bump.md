@@ -1,7 +1,7 @@
 # Handover: elasticstack Terraform provider lock bump (elastic-iac GitOps repo)
 
 **Date**: 2026-07-31
-**Ticket(s)**: None yet — no Linear ticket has been created for this. Create one in the **Siobytes** team before starting implementation (see "Workflow" below); this doc is the full plan to paste into it.
+**Ticket(s)**: [SIO-1309](https://linear.app/siobytes/issue/SIO-1309/bump-elasticstack-terraform-provider-lock-to-0163-across-elastic-iac)
 **Parent epic**: None (standalone infra maintenance item, not part of a DevOps Incident Analyzer epic)
 **Target repo**: `observability-elastic-iac` — GitLab project ID `82850717`, https://gitlab.com/pvhcorp/dhco/observability/observability-elastic-iac (per `reference_elastic_iac_migrated_to_gitlab_com.md`)
 **Target repo state at investigation time**: `HEAD` (default branch `main`), read via `gitlab_get_file_content`/`gitlab_get_repository_tree` MCP tools — no local clone exists in this session
@@ -10,7 +10,7 @@
 
 ## TL;DR
 
-The elastic-iac GitOps repo pins `elastic/elasticstack` at `~> 0.16.0` in three stacks (`slos`, `synthetics`, `spaces`) and one module (`space`), but all three `.terraform.lock.hcl` files are locked to `0.16.1` while `0.16.3` is the latest available release (published 2026-07-23). Because the version *constraint* already allows any `0.16.x`, this is a lock-file refresh, not a constraint edit — `terraform init -upgrade` picks it up with no `.tf` changes required. Verified live against the upstream GitHub repo that 0.16.3's one breaking change (Kibana dashboard `options_list_control_config`/`range_slider_control_config` restructuring) does not apply — no file in the elastic-iac repo references `kibana_dashboard`, `options_list_control_config`, or `range_slider_control_config`. Also verified that the `Mastercard/restapi` workaround provider in `stacks/slos/versions.tf` (used for `synthetics_availability_indicator`, since the native provider doesn't expose it) is still necessary as of 0.16.3 — no native replacement has shipped. Success = lock files updated to `0.16.3` across all four locations, a clean `terraform plan` (no unexpected diff) on each affected stack, and the restapi workaround comment left untouched since it's still accurate.
+The elastic-iac GitOps repo pins `elastic/elasticstack` at `~> 0.16.0` in three stacks (`slos`, `synthetics`, `spaces`) and one module (`space`), but all three `.terraform.lock.hcl` files are locked to `0.16.1` while `0.16.3` is the latest available release (published 2026-07-23). Because the version *constraint* already allows any `0.16.x`, this is a lock-file refresh, not a constraint edit — `terraform init -upgrade` picks it up with no `.tf` changes required. Verified live against the upstream GitHub repo that 0.16.3's one breaking change (Kibana dashboard `options_list_control_config`/`range_slider_control_config` restructuring) does not apply — no file in the elastic-iac repo references `kibana_dashboard`, `options_list_control_config`, or `range_slider_control_config`. Also verified that the `Mastercard/restapi` workaround provider in `stacks/slos/versions.tf` (used for `synthetics_availability_indicator`, since the native provider doesn't expose it) is still necessary as of 0.16.3 — no native replacement has shipped. Success = lock files updated to `0.16.3` across all four locations, a clean `terraform plan` (no unexpected diff) on each affected stack, and the `restapi` provider itself kept as-is (still needed) with its comment's stale `#610` reference corrected per "Why the `restapi` workaround is still needed" below.
 
 ## Context — how this came to be
 
@@ -54,15 +54,15 @@ terraform {
 
 ### Locked versions (this IS what needs to change)
 
-All three stack lock files (`stacks/slos/.terraform.lock.hcl`, `stacks/synthetics/.terraform.lock.hcl`, `stacks/spaces/.terraform.lock.hcl`) currently pin:
-```
+All three **root-stack** lock files (`stacks/slos/.terraform.lock.hcl`, `stacks/synthetics/.terraform.lock.hcl`, `stacks/spaces/.terraform.lock.hcl`) currently pin:
+```hcl
 provider "registry.terraform.io/elastic/elasticstack" {
   version     = "0.16.1"
   constraints = ">= 0.14.0, ~> 0.16.0"
   ...
 }
 ```
-`modules/space/.terraform.lock.hcl` was not individually re-verified for its exact locked patch version in this session (module, not a root stack — inherits whichever provider version the consuming stack resolves) — check it as part of implementation.
+These three are the locks that actually govern what version gets deployed for each stack -- a Terraform dependency lock file belongs to the configuration it's generated in, not to child modules, so `stacks/*`'s own lock files (not `modules/space`'s) are what resolves the provider version for anything consuming the `space` module. `modules/space/.terraform.lock.hcl` is a separate, standalone-module concern: it only matters if `modules/space` is ever `terraform init`'d and used on its own outside of a consuming stack. Update it too for consistency, but do not treat it as controlling provider selection for `stacks/*` -- it does not. `modules/space` was not individually re-verified for its exact locked patch version in this session — check it as part of implementation, and if consumers must resolve to exactly `0.16.3`, enforce that via each root stack's own lock-update process (`terraform init -upgrade` per stack), not via the module's lock file.
 
 Latest registry version confirmed live via `get_latest_provider_version(namespace: "elastic", name: "elasticstack")` → **`0.16.3`**, published `2026-07-23T04:43:17Z` per `gh api repos/elastic/terraform-provider-elasticstack/releases/tags/v0.16.3`.
 
@@ -82,9 +82,10 @@ This work happens **in the elastic-iac repo**, via the normal MR flow (either by
    This rewrites `.terraform.lock.hcl` to `0.16.3` (still satisfying `~> 0.16.0` / `>= 0.16.0`) and pulls in the new provider binary hashes. No `.tf` file edits are needed — the constraint doesn't change.
 3. **Sanity-check the breaking change doesn't apply** (already verified in this session via `gitlab_search` for `kibana_dashboard`/`options_list_control_config`/`range_slider_control_config` across the whole repo — zero matches — but re-confirm at implementation time in case new dashboard-managing `.tf` landed between now and then):
    ```bash
-   grep -rn "options_list_control_config\|range_slider_control_config\|elasticstack_kibana_dashboard" .
+   grep -RIn --include='*.tf' --exclude-dir=.terraform --exclude-dir=.git -E \
+     'options_list_control_config|range_slider_control_config|elasticstack_kibana_dashboard' .
    ```
-   Expect no output. If it now returns matches, read the 0.16.3 release notes' breaking-change section before proceeding — the control-config attributes need to be wrapped in a new `by_field { ... }` block (state auto-upgrades on `apply`, but `.tf` source must be updated to match the new nested shape).
+   Expect no output (scoped to `.tf` source, excluding `.terraform`'s cached provider binaries and `.git`, which running after `terraform init` could otherwise false-match against). If it now returns matches, read the 0.16.3 release notes' breaking-change section before proceeding — the control-config attributes need to be wrapped in a new `by_field { ... }` block (state auto-upgrades on `apply`, but `.tf` source must be updated to match the new nested shape).
 4. **Run `terraform plan`** in each of the three stacks. Expect **no diff** — this is purely a provider binary/lock bump, not a resource change. Any unexpected diff means one of the 0.16.2/0.16.3 behavior changes below is touching a resource this repo manages; investigate before merging:
    - 0.16.2: `elasticstack_elasticsearch_ml_anomaly_detection_job` `timeouts` changed from block to attribute syntax (breaking, but only affects that specific resource type).
    - 0.16.3 Fleet-adjacent fixes worth knowing about (informational, shouldn't cause plan diffs, but explain behavior changes if seen): fix for `elasticstack_fleet_integration_policy` post-apply inconsistency on Stack 9.5 ([#4055](https://github.com/elastic/terraform-provider-elasticstack/pull/4055)), Fleet 9.5 `DeleteKibanaAssets` uninstall fallback ([#4073](https://github.com/elastic/terraform-provider-elasticstack/pull/4073)), Fleet agent policy `policy_id`-omitted create fix ([#3937](https://github.com/elastic/terraform-provider-elasticstack/pull/3937)).
@@ -107,7 +108,11 @@ Expected: `terraform validate` passes on all four; `terraform plan` shows **no c
 tflint --config=.tflint.hcl
 ```
 
-No verification runs in **this** repo (`devops-incident-analyzer`) — nothing here changes as part of this work. If you want to smoke-test that the agent still proposes elastic-iac changes correctly after the bump, the closest existing coverage is around the fleet-upgrade and drift-check flows (`packages/agent/src/iac/fleet-upgrade.test.ts`, `packages/agent/src/iac/version-live-parity.test.ts`), but those don't touch provider versions and shouldn't need re-running for this change.
+This repo (`devops-incident-analyzer`) is not expected to have any code changes from this work (it's a lock-file-only bump in a different repo), but per this repo's standard verification requirement, still run and report the results of:
+```bash
+bun run typecheck && bun run lint && bun run test
+```
+before considering this handoff's work complete, as a baseline confirmation that nothing in this repo regressed. If you want to additionally smoke-test that the agent still proposes elastic-iac changes correctly after the bump, the closest existing coverage is around the fleet-upgrade and drift-check flows (`packages/agent/src/iac/fleet-upgrade.test.ts`, `packages/agent/src/iac/version-live-parity.test.ts`), but those don't touch provider versions and shouldn't need re-running for this change.
 
 ## Files to modify
 
@@ -122,13 +127,13 @@ No verification runs in **this** repo (`devops-incident-analyzer`) — nothing h
 
 ## Workflow
 
-- No Linear issue exists yet for this. Create one in **Siobytes** team, commit format `SIO-XX: message`, before starting implementation (per this repo's CLAUDE.md: "ALWAYS create a Linear issue before executing implementation plans"). Title suggestion: "Bump elasticstack Terraform provider lock to 0.16.3 across elastic-iac stacks."
+- Linear issue: [SIO-1309](https://linear.app/siobytes/issue/SIO-1309/bump-elasticstack-terraform-provider-lock-to-0163-across-elastic-iac), team **Siobytes**, added to the DevOps Incident Analyzer project. Commit format `SIO-1309: message`.
 - Branch off `main` in the **elastic-iac repo** (not this repo) — `bump-elasticstack-provider-0.16.3`.
 - Linear status transitions: In Progress → In Review → Done (Done only with explicit user approval, per this repo's guardrails — that rule is stated as a general practice, apply it here even though the code change lands in a different repo).
 - Commit message template (elastic-iac repo):
   ```bash
   git commit -m "$(cat <<'EOF'
-  SIO-XX: bump elasticstack provider lock to 0.16.3
+  SIO-1309: bump elasticstack provider lock to 0.16.3
 
   Lock was pinned at 0.16.1 while the ~> 0.16.0 constraint already
   permitted 0.16.3. No breaking changes apply (dashboard control-config
