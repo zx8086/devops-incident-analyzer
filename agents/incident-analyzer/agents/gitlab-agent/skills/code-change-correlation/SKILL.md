@@ -22,32 +22,44 @@ in order; every id comes from the PREVIOUS call's response, never guessed.
    the incident as candidates. For each candidate:
    `gitlab_get_merge_request` -> `gitlab_get_merge_request_diffs` (what changed)
    and `gitlab_get_merge_request_pipelines` (capture the pipeline id).
-3. For the STRONGEST candidate only (changed files overlap the incident
-   surface, or its pipeline is failing): `gitlab_get_pipeline_jobs(pipeline_id)`
-   -> capture the failing/suspicious job ids -> `gitlab_get_job_log(job_id)` for
-   at most 2 jobs. Job logs are large and contain ANSI escape codes; extract the
-   failure lines, do not quote whole logs.
-4. Also for the strongest candidate only: `gitlab_get_merge_request_notes` --
-   review discussion often names the exact risk that shipped (timeout, rollout,
-   compatibility concerns raised pre-merge). Cite at most 2 relevant notes as
-   evidence; an empty or purely procedural discussion is reported as nothing,
-   not as a gap.
+3. Pick the STRONGEST candidate from step 2 (changed files overlap the
+   incident surface, or its pipeline is failing) and name it explicitly before
+   continuing -- everything below runs against that one MR:
+   `gitlab_get_merge_request_notes(mr_iid)` -- review discussion often names
+   the exact risk that shipped (timeout, rollout, compatibility concerns
+   raised pre-merge). Cite at most 2 relevant notes as evidence; an empty or
+   purely procedural discussion is reported as nothing, not as a gap. Do this
+   even if the pipeline is green -- a passing pipeline does not mean the
+   review discussion is uninformative.
+4. If the strongest candidate's pipeline is failing (not merely present):
+   `gitlab_get_pipeline_jobs(pipeline_id)` -> capture the failing/suspicious
+   job ids -> `gitlab_get_job_log(job_id)` for at most 2 jobs. Job logs are
+   large and contain ANSI escape codes; extract the failure lines, do not
+   quote whole logs. Skip this step outright when the pipeline is green --
+   there is nothing to extract.
 5. Report the MR iid, merge timestamp (ISO 8601), changed files, and the pipeline
    evidence together -- the orchestrator correlates timing against runtime
    findings from other datasources. If more than 3 in-window MRs exist, say so
    ("N further merged MRs in window not deep-inspected") instead of expanding
    the fan-out.
 
-## Prior-art check (one cheap query, only when the error class is distinctive)
-When the error carries a distinctive class (an exception type, a scanner rule
-name), issue ONE `gitlab_search` with scope issues using ERROR-CLASS vocabulary
--- the exception type or its distinctive tokens, NEVER the incident's service
-name (issue text rarely contains service names; a service-name search proves
-nothing either way). Jira owns incident history (the atlassian agent queries
-it); this check only surfaces scanner/bot-created GitLab issues. For a hit,
-fetch detail via the issues action (gitlab_get_issue with the numeric project
-id and the hit's iid). Zero hits is the NORMAL outcome -- move on without
-retrying synonyms.
+## Prior-art check (one cheap query -- run it, do not reason about whether to)
+The error report almost always carries a distinctive class (an exception
+type, a scanner rule name) -- treat that as the default case and run this
+check. Only skip it when the incident text truly has no distinctive
+error-class token at all (a vague "service is slow" report with no exception
+name). When you run it: issue ONE `gitlab_search` with `scope: "issues"`
+using ERROR-CLASS vocabulary -- the exception type or its distinctive
+tokens, NEVER the incident's service name (issue text rarely contains
+service names; a service-name search proves nothing either way, and a
+`scope:"projects"` search for the service does NOT satisfy this check).
+(`scope: "work_items"` also works and returns the same hits plus extra
+WorkItem-only fields -- either scope is fine; `issues` is the narrower,
+issue-shaped result.) Jira owns incident history (the atlassian agent
+queries it); this check only surfaces scanner/bot-created GitLab issues.
+For a hit, fetch detail via `gitlab_get_issue` -- its two required
+parameters are `id` (the numeric project id) and `issue_iid` (the hit's
+iid). Zero hits is the NORMAL outcome -- move on without retrying synonyms.
 
 ## Blast radius workflow
 When the incident implicates a symbol or a changed shared file:
