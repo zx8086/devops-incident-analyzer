@@ -380,3 +380,94 @@ describe("registerOrbitTools surface", () => {
 		expect(Object.keys(shapes.get("gitlab_blast_radius") ?? {}).sort()).toEqual(["limit", "symbol"]);
 	});
 });
+
+// SIO-1318: Orbit >= 0.91 traversal responses carry result.nodes/result.edges
+// (flat typed node objects) instead of alias-keyed result.rows. The handler must
+// detect non-emptiness, stitch mrByFile, and tag radiusMode from that shape.
+describe("gitlab_blast_radius: Orbit >= 0.91 nodes/edges traversal shape (SIO-1318)", () => {
+	test("primary returns nodes -> treated non-empty, NO fallback fired, enrichment stitches from nodes", async () => {
+		let call = 0;
+		const calls: Array<Record<string, unknown>> = [];
+		const client: Partial<OrbitRestClient> = {
+			query: async (dsl: Record<string, unknown>) => {
+				calls.push(dsl);
+				call += 1;
+				if (call === 1) {
+					return {
+						result: {
+							format_version: "3.0.1",
+							query_type: "traversal",
+							nodes: [
+								{ type: "Definition", id: "10", fqn: "Auth::verify", file_path: "lib/verify.rb" },
+								{ type: "ImportedSymbol", id: "20", file_path: "checkout/app.rb" },
+							],
+							edges: [{ from: "ImportedSymbol", from_id: "20", to: "Definition", to_id: "10", type: "IMPORTS" }],
+						},
+					};
+				}
+				// enrichment MR-for-file query, live nodes shape
+				return {
+					result: {
+						query_type: "traversal",
+						nodes: [{ type: "MergeRequest", id: "42", iid: "42", merged_at: "2026-07-28 14:46:00" }],
+						edges: [],
+					},
+				};
+			},
+		};
+		const { handlers } = register(makeCtx({}, client));
+		const result = await handlers.get("gitlab_blast_radius")?.({ symbol: "verify" });
+		expect(result?.isError).toBeFalsy();
+		const payload = JSON.parse(result?.content[0]?.text ?? "{}") as {
+			radiusMode?: string;
+			mrByFile: Record<string, { iid: string }>;
+		};
+		expect(payload.radiusMode).toBeUndefined();
+		expect(payload.mrByFile["lib/verify.rb"]?.iid).toBe("42");
+		// primary + exactly one enrichment; the fallback must NOT have fired
+		expect(calls).toHaveLength(2);
+	});
+
+	test("empty primary -> fallback nodes accepted, radiusMode tagged, def files enriched from nodes", async () => {
+		let call = 0;
+		const client: Partial<OrbitRestClient> = {
+			query: async () => {
+				call += 1;
+				if (call === 1) return { result: { query_type: "traversal", nodes: [], edges: [] } };
+				if (call === 2) {
+					return {
+						result: {
+							query_type: "traversal",
+							nodes: [
+								{
+									type: "Definition",
+									id: "1",
+									name: "getStyleByStyleCode",
+									file_path: "src/main/java/pvh/services/styles/controller/StyleController.java",
+								},
+							],
+							edges: [],
+						},
+					};
+				}
+				return {
+					result: {
+						query_type: "traversal",
+						nodes: [{ type: "MergeRequest", id: "7", iid: "7", merged_at: "2026-07-20 10:00:00" }],
+						edges: [],
+					},
+				};
+			},
+		};
+		const { handlers } = register(makeCtx({}, client));
+		const result = await handlers.get("gitlab_blast_radius")?.({ symbol: "getStyleByStyleCode" });
+		expect(result?.isError).toBeFalsy();
+		const payload = JSON.parse(result?.content[0]?.text ?? "{}") as {
+			radiusMode?: string;
+			mrByFile: Record<string, { iid: string }>;
+		};
+		expect(payload.radiusMode).toBe("definition-name-match");
+		expect(payload.mrByFile["src/main/java/pvh/services/styles/controller/StyleController.java"]?.iid).toBe("7");
+		expect(call).toBe(3); // primary + fallback + one enrichment
+	});
+});

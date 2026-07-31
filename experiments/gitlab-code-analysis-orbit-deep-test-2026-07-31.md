@@ -1,6 +1,8 @@
 # GitLab MCP 37-tool live deep test -- 2026-07-31
 
-Ticket: https://linear.app/siobytes/issue/SIO-1316 (log-parity fix + this test). Defect found: https://linear.app/siobytes/issue/SIO-1318.
+Ticket: https://linear.app/siobytes/issue/SIO-1316 (log-parity fix + this test). Defect found AND fixed in this branch: https://linear.app/siobytes/issue/SIO-1318 (orbitRows traversal-shape bug; see Findings).
+
+Counting convention: totals count UNIQUE TOOLS (37 = 24 proxy + 6 code-analysis + 7 orbit; 30 live-tested, 7 skipped). Matrix rows describe the calls made per tool -- several tools were invoked more than once (repeated probes and error branches are labeled in their rows), so invocation count exceeds tool count.
 
 - Target: user's dev server `http://localhost:9084/mcp` (HTTP stateless, gitlab.com, booted 2026-07-31 19:43 local, `orbitAvailable: true`). All calls via curl `tools/call` with SSE-stripped parsing; the session's stdio MCP instances were NOT used.
 - Incident basis: `pvh-services-styles-v3` production `com.couchbase.client.core.error.UnambiguousTimeoutException` -- KV GetRequest TIMEOUT, `timeoutMs=2500`, bucket `default`, scope `styles`, collection `product2g`, doc `PRODUCT_2027WISPSP_LV04F3853G`, Capella `private-endpoint.mn1uxqblvorb0cle.cloud.couchbase.com:11213`, surfaced by `pvh.services.styles.exception.GlobalExceptionHandler`, 2026-07-30 ~16:40 (Kibana display TZ).
@@ -37,7 +39,7 @@ Classification per docs/runbooks/mcp-tool-audit-runbook.md.
 | gitlab_pipeline_failures | since 2026-07-24, project_path styles | 0 aggregation rows -- consistent with all-green pipelines seen via REST | PASS-behavioral |
 | gitlab_recent_vulnerabilities | group pvhcorp | 0 rows (Vulnerability entities not populated for the group, despite a scanner-generated GitLab issue existing in the project) | ENV-DATA-EMPTY |
 | gitlab_cross_project_callers | fqn StyleController.getStyleByStyleCode | 0 rows -- expected: IMPORTS-join blind to Java REST coupling (SIO-1303 precedent; no fallback on this tool) | PASS-behavioral |
-| gitlab_blast_radius | symbol getStyleByStyleCode | row_count 0, no radiusMode, mrByFile {} -- but the identical fallback DSL via raw query returns 4 Definitions. `orbitRows()` reads `result.rows`; live traversal responses use `result.nodes` -> fallback always fires (extra billed query per call) and is always discarded; mrByFile enrichment dead | **TOOL-BUG -> SIO-1318** |
+| gitlab_blast_radius | symbol getStyleByStyleCode | Initially: row_count 0, no radiusMode, mrByFile {} -- but the identical fallback DSL via raw query returned 4 Definitions. `orbitRows()` read `result.rows`; live traversal responses use `result.nodes` -> fallback always fired (extra billed query per call) and was always discarded; mrByFile enrichment dead. FIXED in this branch and re-proven live on a worktree instance: radiusMode `definition-name-match`, all 4 Definitions, mrByFile stitched (MR 355 -> StyleController.java 2026-03-25, MR 352 -> StylesAPIRestClient.java 2026-05-26, MR 11 -> getStyleByStyleCode.ts contract) | **TOOL-BUG -> SIO-1318, fixed + live-verified** |
 | gitlab_orbit_query_graph | selective Definition token_match; unselective probe | Selective: 4 Definition nodes (the SIO-1303 ground truth). Unselective: local `bad-query` rejection with guidance, unbilled | PASS |
 
 ### Proxy reads (17 live)
@@ -46,7 +48,7 @@ Classification per docs/runbooks/mcp-tool-audit-runbook.md.
 |---|---|---|
 | gitlab_get_mcp_server_version | "19.3.0-pre" | PASS |
 | gitlab_search (projects) | resolved 43242609 `pvhcorp/b2b/shared-services/pvh.services.styles` (+ sibling `pvh.couchbase.eventing.styles`) | PASS |
-| gitlab_search (issues) | 0 hits project+group -- yet issue iid 1 exists; issues search index does not surface scanner-created issues | PASS-behavioral (quirk noted) |
+| gitlab_search (issues) | Initial probes ("couchbase timeout", "style", "timeout") hit 0 -- but a follow-up probe with a term actually present in the issue ("Neutralization") returns iid 1, even without `confidential: true`. The 0-hits were TERM MISMATCHES (the project's only issue is a SAST finding whose text shares no vocabulary with the incident), not an index gap. Initial "quirk" classification RETRACTED | PASS (earlier quirk retracted) |
 | gitlab_semantic_code_search | "couchbase kv get timeout configuration" -> CouchbaseConfig.java 0.82 top hit | PASS |
 | gitlab_search_labels | 0 labels in project | ENV-DATA-EMPTY |
 | gitlab_get_merge_request | MR 379 full detail (merge SHA 8ae6c79f) | PASS |
@@ -69,9 +71,9 @@ gitlab_create_issue, gitlab_create_merge_request, gitlab_create_merge_request_no
 
 ## Findings
 
-1. **TOOL-BUG (SIO-1318, High)**: `orbitRows()` traversal-shape mismatch guts `gitlab_blast_radius` -- fallback always fires (wasted billed query per call), its rows are always discarded, `radiusMode` and `mrByFile` are dead. Incident pipeline gets an empty Orbit blast radius on every run. The prior replay's "0-row radius is the tool model" conclusion is corrected by this: the data is in the index; the handler drops it.
+1. **TOOL-BUG, FIXED (SIO-1318, High)**: `orbitRows()` read only the aggregation `result.rows` shape while live Orbit v0.91.x traversal responses carry `result.nodes`/`result.edges` -- the SIO-1303 fallback always fired (wasted billed query per call), its rows were always discarded, and `radiusMode`/`mrByFile` were dead. The regression matches the Orbit 0.86 -> 0.91.1 platform migration of Jul 29-30 (the pre-0.91 traversal shape WAS alias-keyed rows, which is what the code and its fixtures modeled). Fixed two layers in this branch: the tool handler (`packages/mcp-server-gitlab/src/tools/orbit/index.ts` -- dual-shape row detection, nodes-aware `distinctDefFiles`/`firstMrRow`) and the incident-pipeline extractor (`packages/agent/src/correlation/extractors/orbit.ts` -- `rowsFromNodes()` rebuilds alias rows from nodes/edges for blast radius, callers, deploys, and vulnerabilities; without this, ALL traversal-based orbitFindings were empty in incident runs, not just blast radius). Live re-verified end-to-end on a worktree instance: radiusMode + 4 Definitions + mrByFile stitched. Fixtures updated to the live shape (legacy rows shape still covered for back-compat).
 2. Upstream quirk: `gitlab_get_merge_request_conflicts` reports `isError: true` for the benign "no conflicts" state -- consumers should not treat that error flag as a failure.
-3. Search-index quirk: `gitlab_search scope=issues` does not surface the project's scanner-created issue (iid 1) that `gitlab_get_issue` returns directly.
+3. RETRACTED: the earlier "issues search index does not surface scanner-created issues" claim was wrong. Follow-up probes show `gitlab_search scope=issues` finds issue iid 1 fine when the search term actually occurs in the issue ("Neutralization"); the original 0-hit probes used incident vocabulary absent from the issue text. Practical caveat that stands: prior-art searches must use error-class vocabulary, and the issue being `confidential: true` did not hide it from this PAT.
 4. Orbit `Vulnerability` entities are unpopulated for `pvhcorp` even where scanner findings exist as issues -- `gitlab_recent_vulnerabilities` is ENV-DATA-EMPTY for this estate, not broken.
 
 ## Incident read-out (what the tools showed for styles-v3)
@@ -94,13 +96,41 @@ All 7 Orbit tools are force-bound on every incident gitlab invocation (`RESOLUTI
 | Who/when last changed it? | gitlab_get_blame, gitlab_list_commits | code_analysis |
 | What exactly changed? | gitlab_get_commit_diff | code_analysis |
 | Pipeline health implicated? | gitlab_pipeline_failures, gitlab_get_pipeline_jobs, gitlab_get_job_log | pipelines |
-| Which MR is the culprit -- detail/diffs/pipelines/review context? | gitlab_get_merge_request, _commits, _diffs, _pipelines, _notes, _conflicts | merge_requests |
-| Downstream impact of the stack-trace symbols? | gitlab_blast_radius (blocked by SIO-1318 today; raw query workaround) | graph_analysis |
+| Which MR is the culprit -- detail/diffs/pipelines/review context? | gitlab_get_merge_request, gitlab_get_merge_request_commits, gitlab_get_merge_request_diffs, gitlab_get_merge_request_pipelines, gitlab_get_merge_request_notes, gitlab_get_merge_request_conflicts | merge_requests |
+| Downstream impact of the stack-trace symbols? | gitlab_blast_radius (SIO-1318 fixed in this branch; was broken at test time) | graph_analysis |
 | Cross-project callers of the exact fqn? | gitlab_cross_project_callers | graph_analysis |
 | Known vulns in play? | gitlab_recent_vulnerabilities | graph_analysis |
 | Ad-hoc graph question? | gitlab_orbit_query_graph grounded by gitlab_graph_schema | graph_analysis |
-| Is this already tracked / prior art? | gitlab_search (issues), gitlab_get_issue, gitlab_get_work_item_types, gitlab_get_workitem_notes | issues / work items |
-| Runbook/docs in the wiki? | gitlab_list_wiki_pages | wikis |
+| Is this already tracked / prior art? | gitlab_search (issues), gitlab_get_issue, gitlab_get_workitem_notes, gitlab_get_saved_view_work_items | issues (gitlab_get_work_item_types is deliberately unmapped: creation-flow metadata) |
+| Runbook/docs in the wiki? | gitlab_list_wiki_pages | NONE -- in no action group; unreachable by the agent (see steering audit) |
+
+## Steering audit: does the agent actually ask these investigation questions?
+
+The mapping table above is close to an "ideal runbook" -- so this section compares it against what the gitlab-agent is ACTUALLY steered to do. Sources: `agents/incident-analyzer/agents/gitlab-agent/SOUL.md` (triage priority + never-guess-path rule), its 3 skills (`project-resolution`, `code-search-selection`, `code-change-correlation`), the aggregator-side runbook `agents/incident-analyzer/knowledge/runbooks/code-change-correlation.md`, and `agents/incident-analyzer/tools/gitlab-api.yaml` (action map). Reminder of the SIO-1293 split: the SKILLS drive the sub-agent's in-flight tool calls; the RUNBOOK body reaches the aggregator only.
+
+Verdict: 11 of the 13 investigation questions ARE encoded in current steering, several with stronger discipline than the table (staged 24h -> 90d window widening per SIO-1298/1304, empty-blast-radius mandatory retry, the 3-leg confirmation rule -- code link + shipped deploy + onset-after-deploy -- and escalation criteria). Question-by-question:
+
+| Question | Steered? | Where |
+|---|---|---|
+| What shipped recently? | YES | SOUL triage 1-2; skill chain step 1; runbook Step 3 (staged window) + Step 4 |
+| Where is the config? | YES | SOUL triage 3 + "never guess a file path"; code-search-selection; runbook Per-Project Fallback |
+| What does it say now? | YES | runbook fallback (gitlab_get_file_content after discovery) |
+| Who/when last changed it? | YES | runbook fallback (gitlab_get_blame, gitlab_list_commits since/until) |
+| What exactly changed? | YES | skill step 2 + runbook Step 4.3, which EXPLICITLY says to look for "modified timeouts or connection settings" -- precisely the styles-v3 question |
+| Pipeline health? | YES | skill step 3 (jobs -> max 2 job logs); runbook Step 3 (group ranking) |
+| Culprit MR chain? | PARTIAL | gitlab_get_merge_request/_diffs/_pipelines steered (skill step 2); _commits/_notes/_conflicts are action-mapped but NO skill/runbook step uses them -- review context (notes) is an unused evidence source |
+| Blast radius? | YES | runbook Step 2 + skill blast-radius workflow (retry-once, semantic fallback) -- and SIO-1318 (fixed here) was silently defeating this exact step in production |
+| Cross-project callers? | YES | runbook Step 2.3 (fqn from a prior row only) |
+| Vulns? | YES | runbook Step 3 (when the error pattern suggests exploitation) |
+| Ad-hoc graph? | YES | runbook raw-query reference (grammar constraints + 5-attempt budget) |
+| Prior art in GitLab issues? | NO | the `issues` action exists but no skill/runbook step says to search GitLab issues for prior incidents. Defensible: pvhcorp tracks incidents in Jira, and the atlassian-agent owns prior-incident lookup (findLinkedIncidents/getIncidentHistory). Gap is real only for scanner-created GitLab issues (like styles iid 1) |
+| Wiki runbooks? | NO -- UNREACHABLE | gitlab_list_wiki_pages is in NO action group, so composeBoundTools never binds it regardless of steering. Low value for this estate (styles wiki live-verified empty); adding it would need both an action mapping and a steering line |
+
+Deliberately unmapped (by design, commented in gitlab-api.yaml): the 6 write tools + gitlab_manage_pipeline (read-only investigator; tickets go through the atlassian create-ticket tool), gitlab_get_mcp_server_version (diagnostic), gitlab_get_work_item_types (creation-flow metadata).
+
+Prior live-replay proof (2026-07-30 audit) already showed the pipeline follows this steering organically: the gitlab sub-agent called gitlab_blast_radius x3 with correct stack-trace anchors, gitlab_graph_schema, gitlab_recent_deploys, gitlab_pipeline_failures plus 24 REST calls on a styles-v3-shaped incident. The steering was working; SIO-1318 was starving it of results.
+
+Actionable residue (not done in this branch): (1) a one-line skill addition steering gitlab_get_merge_request_notes for the strongest culprit MR (review context as evidence); (2) decide whether GitLab-issue prior-art search deserves a steering line given Jira is the tracker; (3) wiki tools stay unmapped unless a wiki-using estate appears; (4) SIO-1302 (mandatory selection of the code-change-correlation runbook) remains open -- selection is still router discretion today.
 
 ## Cleanup
 
