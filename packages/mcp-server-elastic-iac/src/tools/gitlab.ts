@@ -1,4 +1,5 @@
 // src/tools/gitlab.ts
+import { readPositiveIntEnv, readPositiveMsEnv } from "@devops-agent/shared";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Config } from "../config.ts";
@@ -647,8 +648,8 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 
 	// SIO-989: capped at 90s (was 300s). A cold k8s runner (~130s+) may not reach terminal within the
 	// budget -- the tool then returns its non-terminal status and the user re-checks. Env-tunable.
-	const DRIFT_POLL_BUDGET_MS = Number(process.env.ELASTIC_IAC_DRIFT_POLL_BUDGET_MS ?? "90000");
-	const DRIFT_POLL_INTERVAL_MS = Number(process.env.ELASTIC_IAC_DRIFT_POLL_INTERVAL_MS ?? "5000");
+	const DRIFT_POLL_BUDGET_MS = readPositiveMsEnv("ELASTIC_IAC_DRIFT_POLL_BUDGET_MS", 90000, log);
+	const DRIFT_POLL_INTERVAL_MS = readPositiveMsEnv("ELASTIC_IAC_DRIFT_POLL_INTERVAL_MS", 5000, log);
 	// SIO-926: a fleet-agent bulk_upgrade rolls out over its ROLLOUT_SECONDS window (e.g. 3600s) --
 	// far longer than the drift budget. We do NOT block for the whole rollout: this is a bounded
 	// "did it start cleanly" window. If the pipeline is still running at the end, the apply result
@@ -659,11 +660,11 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 	// few more shots (at the 5s DRIFT_POLL_INTERVAL_MS cadence) at catching a fast-terminal pipeline
 	// before falling back to the (fully supported, re-pollable) `dispatched` outcome. Combined
 	// worst-case resume-turn latency: ~40s + ~30s = ~70s, down from ~210s (was 90s + 120s).
-	const FLEET_APPLY_POLL_BUDGET_MS = Number(process.env.ELASTIC_IAC_FLEET_APPLY_POLL_BUDGET_MS ?? "30000");
+	const FLEET_APPLY_POLL_BUDGET_MS = readPositiveMsEnv("ELASTIC_IAC_FLEET_APPLY_POLL_BUDGET_MS", 30000, log);
 	// SIO-887: trace tail returned for a failed drift-check (human review).
 	// SIO-904: bumped 4000 -> 16000 because Terraform prints the lock-info block + retries
 	// AFTER the state-lock error, which pushed the signature out of a 4000-byte tail.
-	const DRIFT_FAIL_LOG_TAIL_BYTES = Number(process.env.ELASTIC_IAC_DRIFT_FAIL_LOG_TAIL_BYTES ?? "16000");
+	const DRIFT_FAIL_LOG_TAIL_BYTES = readPositiveIntEnv("ELASTIC_IAC_DRIFT_FAIL_LOG_TAIL_BYTES", 16000, log);
 	const isTerminal = (s: string) => ["success", "failed", "canceled", "skipped"].includes(s);
 
 	// SIO-884: poll a drift-check pipeline to terminal, then return its drift-report.json
