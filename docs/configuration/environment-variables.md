@@ -140,7 +140,9 @@ The config-edit proposers resolve repo file paths from templates. `${cluster}`, 
 | `ELASTIC_IAC_FLEET_INTEGRATIONS_TEMPLATE` | fleet-integration |
 | `ELASTIC_IAC_DASHBOARD_TEMPLATE` | dashboard-edit |
 | `ELASTIC_IAC_STACK_CONFIG_TEMPLATE` / `ELASTIC_IAC_RECONCILE_MARKER_TEMPLATE` | drift sub-flow |
-| `IAC_PIPELINE_POLL_BUDGET_MS` / `IAC_PIPELINE_POLL_BUDGET_MS_EXTENDED` / `IAC_PIPELINE_POLL_INTERVAL_MS` | `watchPipeline` / `applyFleetUpgrade` poll loop (defaults `90000` / `90000` / `10000`; SIO-989 capped the extended budget at 90s — a cold-runner pipeline >90s returns at `running` and the user re-checks) |
+| `IAC_PIPELINE_POLL_BUDGET_MS` / `IAC_PIPELINE_POLL_BUDGET_MS_EXTENDED` / `IAC_PIPELINE_POLL_INTERVAL_MS` | `watchPipeline` MR poll loop only (defaults `90000` / `90000` / `10000`; SIO-989 capped the extended budget at 90s — a cold-runner pipeline >90s returns at `running` and the user re-checks) |
+| `IAC_FLEET_APPLY_TICKER_BUDGET_MS` / `IAC_FLEET_APPLY_TICKER_INTERVAL_MS` | `applyFleetUpgrade` live-ticker poll loop (agent-side `gitlab_get_pipeline` polling before the blocking result fetch; defaults `40000` / `10000`. SIO-1307: split from `IAC_PIPELINE_POLL_BUDGET_MS` so this loop tunes independently of the unrelated MR-watch flow) |
+| `ELASTIC_IAC_FLEET_APPLY_POLL_BUDGET_MS` | MCP `gitlab_get_fleet_upgrade_apply_result` poll-to-terminal loop (default `30000`, polls at the shared `ELASTIC_IAC_DRIFT_POLL_INTERVAL_MS` cadence; SIO-1307 cut from `120000` — combined with the `IAC_FLEET_APPLY_TICKER_BUDGET_MS` ticker above, worst-case resume-turn latency for a still-running apply dropped from ~210s to ~70s) |
 | `ELASTIC_IAC_DRIFT_POLL_BUDGET_MS` / `ELASTIC_IAC_DRIFT_POLL_INTERVAL_MS` | MCP drift-check / synthetics poll-to-terminal loop (defaults `90000` / `5000`; SIO-989 dropped the budget 300s -> 90s — also feeds the agent's `elastic-iac-mcp` tool timeout = budget + 30s margin) |
 | `ELASTIC_IAC_DRIFT_CONCURRENCY`, `ELASTIC_IAC_REPORT_STACKS_EXCLUDE`, `ELASTIC_IAC_CONFIG_DEPLOYMENT_STACKS`, `ELASTIC_IAC_CONFIG_ILM_STACKS` | drift / report stack scoping |
 

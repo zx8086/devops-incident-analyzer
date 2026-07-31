@@ -11108,6 +11108,11 @@ export async function applyFleetUpgrade(state: IacStateType): Promise<Partial<Ia
 	// clickable GitLab link up front, then emit iac_pipeline_progress on each status transition.
 	// gitlab_get_fleet_upgrade_apply_result blocks server-side until terminal, so the ticker comes
 	// from polling gitlab_get_pipeline (single-shot status read) BEFORE we fetch the artifact.
+	// SIO-1307: dedicated budget/interval env vars, NOT the shared IAC_PIPELINE_POLL_BUDGET_MS[_EXTENDED]
+	// (that pair belongs to the unrelated MR-watch flow above, tuned to 90s for SIO-982/989 -- reusing it
+	// here coupled two independent flows' latency budgets). Default cut from 90000 -> 40000: combined with
+	// the inner gitlab_get_fleet_upgrade_apply_result budget (120000 -> 30000, see gitlab.ts SIO-1307
+	// comment), worst-case resume-turn latency for a still-running apply drops from ~210s to ~70s.
 	let pipelineUrl = "";
 	{
 		const first = parseSinglePipeline(await callTool("gitlab_get_pipeline", { pipelineId: trig.pipelineId }));
@@ -11118,8 +11123,8 @@ export async function applyFleetUpgrade(state: IacStateType): Promise<Partial<Ia
 			status: `fleet apply: ${lastStatus}`,
 			...(pipelineUrl && { url: pipelineUrl }),
 		});
-		const budgetMs = Number(process.env.IAC_PIPELINE_POLL_BUDGET_MS ?? "90000");
-		const intervalMs = Number(process.env.IAC_PIPELINE_POLL_INTERVAL_MS ?? "10000");
+		const budgetMs = Number(process.env.IAC_FLEET_APPLY_TICKER_BUDGET_MS ?? "40000");
+		const intervalMs = Number(process.env.IAC_FLEET_APPLY_TICKER_INTERVAL_MS ?? "10000");
 		const deadline = Date.now() + budgetMs;
 		while (!isTerminalPipelineStatus(lastStatus) && Date.now() < deadline) {
 			if (Date.now() + intervalMs >= deadline) break;
