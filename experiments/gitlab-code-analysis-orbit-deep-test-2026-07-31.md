@@ -137,3 +137,96 @@ Actionable residue (not done in this branch): (1) a one-line skill addition stee
 - User's :9084 server (bun PID 14002): untouched, still listening.
 - Throwaway :9284 verification instance: killed by tracked PID; `lsof -nP -iTCP:9284 -sTCP:LISTEN` empty.
 - No write/mutating GitLab tool invoked; scratch SSE captures live in the session scratchpad only.
+
+## SIO-1322 verification: does SIO-1320's steering actually fire in a live pipeline run?
+
+Ticket: https://linear.app/siobytes/issue/SIO-1322. Verifies https://linear.app/siobytes/issue/SIO-1320 (PR [#556](https://github.com/zx8086/devops-incident-analyzer/pull/556), merged `79b560c9`) against the "actionable residue" item 1 identified above -- a real pipeline run, not code inspection. Repo state: `main` @ `79b560c9`. Fresh :5174 web app (main checkout, `KNOWLEDGE_GRAPH_ENABLED=false LIVE_MEMORY_ENABLED=false AGENT_MEMORY_ENABLED=false`) so agent knowledge (skills/runbooks, cached per-process per [[reference_agent_knowledge_cached_per_process]]) reflects post-merge steering, not the user's possibly-stale :5173. `:9084` gitlab MCP preflighted first (`gitlab_blast_radius` returned `definition-name-match` -- post-`e5d08a3e` code confirmed).
+
+Same incident prompt as the deep test above (styles-v3 Couchbase KV `UnambiguousTimeoutException`), `dataSources: ["gitlab"]`, run twice (fresh threadId each time -- the second run is the one allowed re-run for a soft miss, per the handover's scoring rule). Evidence: SSE `toolsUsed[]` + LangSmith child tool runs (`langsmith run get <id> --full` for arguments) on both trace ids.
+
+| Run | threadId | traceId | responseTime | confidence |
+|---|---|---|---|---|
+| 1 | `4e3b2302-c4c6-4b03-8fca-9282d23f573d` | `019fb9a4-cc9d-741b-8af3-8782133cd8f7` | 195.0s | 0.45 |
+| 2 (re-run) | `f3072e7c-ef83-409c-8de3-b63e7b4b96eb` | `019fb9a9-c6fe-7469-b7d5-536f528b70b5` | 197.3s | 0.45 |
+
+### Pass criteria verdicts
+
+| # | Behavior | Run 1 evidence | Run 2 evidence | Verdict |
+|---|---|---|---|---|
+| 1 | Review-notes step (SKILL step 4) | `gitlab_get_merge_request_notes`: 0 calls in trace | 0 calls in trace | **FAIL** -- never fires in either run |
+| 2 | Prior-art check (SKILL new section) | 4x `gitlab_search`, all `scope:"projects"` (`pvh-services-styles-v3`, `styles`, `pvh.services.styles`) -- zero `scope:"issues"` calls | 4x `gitlab_search`, all `scope:"projects"` (`styles-v3`, `pvh.services.styles`, `styles`) -- zero `scope:"issues"` calls | **FAIL** -- the tool searches only resolve the project itself, never an issues prior-art query |
+| 3 | Blast radius through the pipeline (SIO-1318) | `gitlab_blast_radius symbol:"GlobalExceptionHandler"` -- generic class name matching 8+ unrelated services; `radiusMode:"definition-name-match"` present (SIO-1318 plumbing itself works) but `listsapi`/`StylesAPIRestClient`/`StyleController` absent from output and absent from final findings | Same: `symbol:"GlobalExceptionHandler"`, same generic-symbol miss | **FAIL as specified** -- SIO-1318's fix (nodes-shape parsing, `radiusMode` populated) is proven working, but the agent never queries the ground-truth symbol `getStyleByStyleCode`, so the correct blast radius never surfaces |
+| 4 | Runbook checklist reaches the aggregator | Server log: `Runbook selection complete ... always_select:"code-change-correlation.md" ... runbooks: 2` (mitigation-merge log) | (not independently re-checked; `always_select` is unconditional) | **PASS** -- `code-change-correlation.md` ships via `always_select` regardless of LLM discretion; file confirmed on disk to contain "Investigation Question Checklist" (`agents/incident-analyzer/knowledge/runbooks/code-change-correlation.md:49`) |
+
+### Analysis
+
+Criteria 1-3 are consistent misses across both the original run and the one allowed re-run -- not LLM noise, a structural gap. Root cause read from the evidence, not asserted:
+
+- **Criterion 1 (notes)**: the SKILL.md step-4 instruction exists (confirmed present in source per the handover's "what changed" section) but the sub-agent's tool-call sequence in both runs stops at `_diffs`/`_pipelines`/`_blame` for the candidate MRs and never reaches `_notes`. Matches the pre-SIO-1320 gap the deep-test steering audit already flagged ("_commits/_notes/_conflicts are action-mapped but no skill/runbook step uses them") -- the new skill language did not change observed sub-agent behavior in this incident shape.
+- **Criterion 2 (prior-art)**: the agent DOES call `gitlab_search`, but exclusively `scope:"projects"` to resolve `pvh.services.styles` from the service name -- a different, pre-existing behavior (project resolution, per `project-resolution` skill), not the new conditional issues-scope prior-art check. Zero `scope:"issues"` calls in either trace means the new section's trigger condition ("only when the error class is distinctive") was never judged as met, or the step is not being reached at all.
+- **Criterion 3 (blast radius)**: this is a step-order/anchor-selection issue, not a SIO-1318 regression -- SIO-1318's own fix is proven live (`radiusMode:"definition-name-match"` populated in both runs, matching the deep-test's fixed-tool proof above). But the agent anchors blast-radius on `GlobalExceptionHandler` (the exception handler class named in the incident's `surfaced by` line) rather than the actual business-logic entry point `getStyleByStyleCode` used in the deep test's ground truth. `GlobalExceptionHandler` is a common name reused by 8+ unrelated pvhcorp services, so the traversal returns noise instead of the styles-specific `listsapi`/`StylesAPIRestClient` chain.
+
+### Scoring vs. the handover's rule
+
+Handover: "1-3 are the SIO-1320/1318 verdicts... a soft miss earns EXACTLY ONE re-run (fresh threadId) before classifying as a steering defect." One re-run was performed for all three; all three reproduced identically. Per that rule: **criteria 1 and 2 are steering defects** (the SIO-1320 SKILL additions are not organically firing); **criterion 3 is a partial pass** -- the SIO-1318 tool-layer fix is proven correct and live-verified, but the pipeline's symbol-selection step (pre-existing, not part of SIO-1320) prevents it from producing useful output for this incident shape. Criterion 4 passes cleanly (structural guarantee via `always_select`, independent of LLM discretion).
+
+### Recommendation (not actioned in this session -- read-only verification)
+
+SIO-1320's SKILL.md additions are present in the file but did not observably change sub-agent tool-call behavior across 2 runs. Possible next steps for a follow-up ticket: (a) strengthen the step-4 notes instruction from advisory to a more directive trigger tied to a concrete condition (e.g. "after identifying the strongest candidate MR, call notes before writing findings"); (b) same for the prior-art check -- verify the "distinctive error class" trigger condition is being evaluated at all, e.g. by inspecting the sub-agent's reasoning/thinking trace, not just tool calls; (c) the blast-radius anchor-selection gap (criterion 3) is a separate, pre-existing steering question -- worth its own ticket scoped to "which symbol does the agent pick for blast radius" rather than folding it into SIO-1320/1318 scope.
+
+### Cleanup (this section)
+
+- :5174 web app (tracked PID 37327, child bun/node PID 37328): killed after both runs; `lsof -nP -iTCP:5174 -sTCP:LISTEN` empty.
+- User's :5173 and :9084: untouched.
+- Billed Orbit queries: 1 preflight + 1 blast_radius per run (2 runs) = ~3 total, well under the 20/60s cap.
+- No write/mutating GitLab tool invoked.
+
+## SIO-1322 follow-up: root-cause + fix for criteria 1 and 2
+
+Findings 1 and 2 above are real steering defects, not acceptable LLM noise -- 0/2 reproductions each. Investigated root cause and applied targeted fixes in this same worktree/branch (`claude/sio-1322-steering-verification-a4479b`), staying within SIO-1320/1322 scope (did not touch the shared step-3 job-logs pattern, which has the identical bug but is out of scope here).
+
+### Root cause 1: notes-step and job-logs-step were coupled under one ambiguous gate
+
+`SKILL.md` step 3 (job logs) and step 4 (notes) both hung off "for the STRONGEST candidate ... (changed files overlap incident surface, or its pipeline is failing)". In this incident all pipelines were green (`gitlab_pipeline_failures`: 0 rows), so the "pipeline is failing" branch was false, and the model appears to have treated the entire steps-3-and-4 block as conditionally skippable rather than explicitly picking a strongest candidate by the "changed files overlap" branch and continuing into step 4 independently. By contrast, the Blast Radius section (proven reliable across every run, this doc's earlier deep test included) is a flat, unconditional imperative with no upstream judgment call to silently skip.
+
+Fix: split step 3 and step 4 into independent checkpoints. Step 3 (job logs) is now explicitly gated on "pipeline is failing" only and instructed to skip outright otherwise. Step 4 (notes) is now the direct continuation of "pick the strongest candidate" -- unconditional once a candidate is picked, explicitly run "even if the pipeline is green." Same restructuring applied to the runbook's Step 4 item 4 for consistency (aggregator-side checklist, not sub-agent-facing, but should not contradict the skill).
+
+### Root cause 2 (bonus find): `scope: "issues"` is not a valid `gitlab_search` scope value
+
+While investigating criterion 2, direct inspection of the live `gitlab_search` tool schema (`curl .../mcp tools/list`, `:9084`) showed the tool's actual `scope` enum is `projects, blobs, work_items, merge_requests, wiki_blobs, commits, notes, milestones, users` -- there is no `"issues"` value. GitLab issues/tasks/epics/incidents are unified under the `work_items` entity (the runbook's own Orbit section already documented this fact for `gitlab_orbit_query_graph`, just not for `gitlab_search`). `git log -p` confirms `scope issues` was in the SKILL.md text as merged by SIO-1320 (`79b560c9`) -- this is a genuine documentation bug in the merged work, not something introduced by this session's rewrite. The model could never have satisfied the SKILL.md's literal instruction as written.
+
+Fix: replaced `scope issues` with `scope: "work_items"` in both the SKILL.md prior-art section and the runbook checklist line.
+
+### Post-fix replay evidence (3 additional runs, fresh threadId each)
+
+| Run | threadId | `gitlab_get_merge_request_notes` | `gitlab_search scope:"work_items"` |
+|---|---|---|---|
+| fix1 (notes-restructure only, scope still said `issues`) | `66ca3121-9e55-4313-8ed3-3e20ff5bc794` | NOT called | 1 call used `scope:"work_items"` (model self-corrected against the tool's real schema, ignoring the SKILL.md's invalid `issues` text) -- `search:"UnambiguousTimeoutException styles"` |
+| fix2 (both fixes applied) | `0ad8b1d2-af09-4976-a87a-501df074fdd8` | **CALLED** -- `gitlab_get_merge_request_notes(project_id:43242609, merge_request_iid:383)`, correctly the strongest candidate | NOT called (4x `scope:"projects"` only) |
+| fix3 (both fixes applied, confirmation run) | `d80b20e2-bff3-4d0e-a3f5-769d6e324012` | **CALLED** again | NOT called (4x `scope:"projects"` only) |
+
+### Final verdict per criterion
+
+| # | Criterion | Pre-fix | Post-fix | Status |
+|---|---|---|---|---|
+| 1 | Review-notes step | 0/2 runs | **2/2 runs** (fix2, fix3) | **FIXED** -- the step-3/step-4 decoupling resolved it; reproduced twice |
+| 2 | Prior-art check | 0/2 runs, and the instruction as written (`scope issues`) could never have succeeded | 0/2 runs with the corrected scope (fix2, fix3); 1 run (fix1) self-corrected to the right scope without the fix present, suggesting the model CAN discover `work_items` from the tool schema but doesn't reliably choose to run this check at all | **SCOPE BUG FIXED, TRIGGER STILL UNRELIABLE** -- the fix removes an impossible-to-satisfy instruction (real bug, worth keeping), but does not reliably make the model run the check. This incident's error class (`UnambiguousTimeoutException`, a Couchbase SDK exception, not a GitLab-specific or scanner-rule pattern) may simply read to the model as low-value to search for in GitLab issues -- a plausible, not confirmed, explanation for why "run it, do not reason about whether to" phrasing did not move the needle further |
+| 3 | Blast radius (SIO-1318) | tool-layer proven, wrong symbol anchored | not retested (out of scope -- pre-existing symbol-selection question, not part of this fix) | unchanged: **PARTIAL**, separate ticket recommended |
+| 4 | Runbook checklist reaches aggregator | PASS (structural) | unchanged (no code touched this criterion) | **PASS** |
+
+Per the user's explicit guidance during this session: steering should not become a strict/mandatory rule if the underlying behavior would not actually be helpful. Both instructions here remain conditional and cheap as designed (single-MR notes check, single zero-or-low-cost search) -- the fix targeted prompt clarity and a real schema bug, not converting either into an unconditional mandate.
+
+### Recommendation for criterion 2
+
+Criterion 2 is close to acceptable as a known probabilistic-steering limitation given: (a) the check is explicitly optional/cheap by design (zero hits is the normal, expected outcome), (b) one run demonstrated the model is CAPABLE of finding and using `scope:"work_items"` correctly once it decides to run the check, (c) forcing it unconditionally would contradict the "don't make cheap-but-not-always-helpful checks mandatory" principle. If this remains unsatisfying, a follow-up ticket could test whether keying the trigger to a more concrete condition (e.g. "the error type is a checked/named exception class, not a generic timeout/5xx") makes the check fire more reliably -- but that is genuine future work, not part of this fix.
+
+### Verification run for this section
+
+`bun run typecheck` (all packages, 0 errors) and `bun run lint` (16 pre-existing warnings in unrelated `mcp-server-kafka` test files, zero findings in the two edited files) both clean. `packages/gitagent-bridge` test suite (341 tests, includes the `skill-tool-coverage` budget canary): 341 pass, 0 fail -- the rewrite did not add new backticked tool names, so gitlab-agent's 17/17 prompt-name budget is untouched.
+
+### Cleanup (this follow-up)
+
+- :5174 web app across 3 restarts (tracked PIDs 42543/42545, then 43712/43717 after the scope-fix restart): all killed; `lsof -nP -iTCP:5174 -sTCP:LISTEN` empty.
+- One process-tracking miss caught and corrected mid-session: a stray `bun run dev` (PID 41322/41325) from an earlier attempt was still listening on :5174 when a new instance was started, causing the new instance to silently fall back to :5175. Found via `ps`, killed by exact PID, verified both :5174 and :5175 free before restarting cleanly.
+- User's :5173 and :9084: untouched throughout.
+- No write/mutating GitLab tool invoked at any point.

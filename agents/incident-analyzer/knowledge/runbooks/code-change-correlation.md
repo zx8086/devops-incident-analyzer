@@ -69,10 +69,12 @@ maps to a deterministic tool path (SIO-1320, distilled from the 2026-07-31
 - Known vulnerabilities in play? -- `gitlab_recent_vulnerabilities`
 - A graph question the purpose-built tools cannot ask? --
   `gitlab_orbit_query_graph` grounded by `gitlab_graph_schema`
-- Prior art in GitLab issues, when the error class is distinctive? --
-  `gitlab_search` (scope issues, ERROR-CLASS vocabulary -- never service names)
-  + `gitlab_get_issue`; otherwise report this question as not applicable.
-  Jira owns incident history, so zero hits is the normal outcome
+- Prior art in GitLab issues? -- `gitlab_search` with `scope: "work_items"`
+  (NOT scope projects -- there is no `"issues"` scope value) using
+  ERROR-CLASS vocabulary, never service names, + `gitlab_get_issue` for any
+  hit. Run this whenever the incident names a distinctive error class; only
+  skip it for a genuinely vague report with no exception/rule name. Jira owns
+  incident history, so zero hits is the normal outcome
 
 ## Step 1: Extract Anchor Symbols
 
@@ -161,9 +163,10 @@ itself):
 3. In the diffs, look for: changed error handling, modified timeouts or
    connection settings, new dependencies or API call patterns, configuration
    and feature-flag changes.
-4. For the strongest candidate, `gitlab_get_merge_request_notes`: review
-   discussion often names the exact risk that shipped. Cite at most 2 relevant
-   notes; an empty or purely procedural discussion is nothing, not a gap.
+4. For the strongest candidate, `gitlab_get_merge_request_notes` -- run this
+   regardless of whether its pipeline passed or failed: review discussion
+   often names the exact risk that shipped. Cite at most 2 relevant notes; an
+   empty or purely procedural discussion is nothing, not a gap.
 
 ## Orbit Raw Query Reference (escape hatch)
 
