@@ -143,7 +143,7 @@ before considering this handoff's work complete, as a baseline confirmation that
   EOF
   )"
   ```
-- PR/MR in elastic-iac should be created ready-for-review (not draft), per this repo's "always create PRs as ready for review" convention — apply the same standard there unless the elastic-iac repo's own `AGENTS.md` says otherwise (not yet read in this session — check it first).
+- PR/MR in elastic-iac must be created ready-for-review, never as draft — per this repo's "always create PRs as ready for review" convention, applied without exception. Check the elastic-iac repo's own `AGENTS.md` first for additional contribution rules, but it does not override this requirement.
 
 ## Risks and edge cases
 
