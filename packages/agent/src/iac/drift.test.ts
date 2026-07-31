@@ -957,7 +957,9 @@ describe("applyReportValuesToConfig (SIO-889 Approach-B projection)", () => {
 	});
 });
 
-describe("buildLiveReconcile — report-sourced family (agent-policies)", () => {
+// SIO-1315: agent-policies moved to the nested (composite-key) family; the generic
+// report-sourced family is exercised with a per-key stack (dataviews).
+describe("buildLiveReconcile — report-sourced family (per-key stacks)", () => {
 	test("writes the live before-value into the per-resource config file (top-level key)", async () => {
 		mockTools({
 			gitlab_get_file_content: () => b64(`${JSON.stringify({ name: "eu-oit.prd - SM", namespace: "prd" }, null, 2)}\n`),
@@ -966,8 +968,8 @@ describe("buildLiveReconcile — report-sourced family (agent-policies)", () => 
 		const built = await buildLiveReconcile(
 			"eu-b2b",
 			stackDrift({
-				stack: "agent-policies",
-				configPath: "environments/eu-b2b/agent-policies",
+				stack: "dataviews",
+				configPath: "environments/eu-b2b/dataviews",
 				resources: [
 					{
 						address: 'module.agent_policies.elasticstack_fleet_agent_policy.this["eu-oit-prd"]',
@@ -982,7 +984,7 @@ describe("buildLiveReconcile — report-sourced family (agent-policies)", () => 
 		expect("files" in built).toBe(true);
 		if ("files" in built) {
 			expect(built.files).toHaveLength(1);
-			expect(built.files[0]?.path).toBe("environments/eu-b2b/agent-policies/eu-oit-prd.json");
+			expect(built.files[0]?.path).toBe("environments/eu-b2b/dataviews/eu-oit-prd.json");
 			expect(JSON.parse(built.files[0]?.content ?? "{}").name).toBe("eu-oit.prd - SM ");
 			expect(built.summary).toContain("eu-oit-prd: name");
 		}
@@ -996,7 +998,7 @@ describe("buildLiveReconcile — report-sourced family (agent-policies)", () => 
 		const built = await buildLiveReconcile(
 			"eu-b2b",
 			stackDrift({
-				stack: "agent-policies",
+				stack: "dataviews",
 				resources: [
 					{
 						address: 'module.agent_policies.elasticstack_fleet_agent_policy.this["p1"]',
@@ -1209,7 +1211,7 @@ describe("formatLeafChange", () => {
 describe("explainStackDrift with changes[] (SIO-900)", () => {
 	test("expands leaf-level changes and notes 'and N more' when capped", () => {
 		const out = explainStackDrift({
-			stack: "agent-policies",
+			stack: "dataviews",
 			drifted: true,
 			kind: "config-json",
 			create: 0,
@@ -1247,8 +1249,8 @@ describe("buildLiveReconcile — report-sourced via changes[] (SIO-900)", () => 
 		const built = await buildLiveReconcile(
 			"eu-b2b",
 			stackDrift({
-				stack: "agent-policies",
-				configPath: "environments/eu-b2b/agent-policies",
+				stack: "dataviews",
+				configPath: "environments/eu-b2b/dataviews",
 				resources: [
 					{
 						address: 'module.agent_policies.elasticstack_fleet_integration_policy.this["k8s"]',
@@ -1263,7 +1265,7 @@ describe("buildLiveReconcile — report-sourced via changes[] (SIO-900)", () => 
 		);
 		expect("files" in built).toBe(true);
 		if ("files" in built) {
-			expect(built.files[0]?.path).toBe("environments/eu-b2b/agent-policies/k8s.json");
+			expect(built.files[0]?.path).toBe("environments/eu-b2b/dataviews/k8s.json");
 			expect(JSON.parse(built.files[0]?.content ?? "{}").inputs[0].period).toBe("10s");
 			expect(built.summary).toContain('k8s: inputs["kubelet/metrics"].period');
 		}
@@ -1277,8 +1279,8 @@ describe("buildLiveReconcile — report-sourced via changes[] (SIO-900)", () => 
 		const built = await buildLiveReconcile(
 			"eu-b2b",
 			stackDrift({
-				stack: "agent-policies",
-				configPath: "environments/eu-b2b/agent-policies",
+				stack: "dataviews",
+				configPath: "environments/eu-b2b/dataviews",
 				resources: [
 					{
 						address: 'module.agent_policies.elasticstack_fleet_agent_policy.this["eu-oit-prd"]',
@@ -1316,8 +1318,8 @@ describe("buildReportSourcedReconcile — skip-on-unreadable (SIO-901)", () => {
 		const built = await buildLiveReconcile(
 			"eu-b2b",
 			stackDrift({
-				stack: "agent-policies",
-				configPath: "environments/eu-b2b/agent-policies",
+				stack: "dataviews",
+				configPath: "environments/eu-b2b/dataviews",
 				resources: [
 					{
 						address: 'module.agent_policies.elasticstack_fleet_agent_policy.this["eu-oit-prd"]',
@@ -1340,7 +1342,7 @@ describe("buildReportSourcedReconcile — skip-on-unreadable (SIO-901)", () => {
 		expect("files" in built).toBe(true);
 		if ("files" in built) {
 			expect(built.files).toHaveLength(1);
-			expect(built.files[0]?.path).toBe("environments/eu-b2b/agent-policies/eu-oit-prd.json");
+			expect(built.files[0]?.path).toBe("environments/eu-b2b/dataviews/eu-oit-prd.json");
 			expect(built.note).toContain("Skipped 1 unreadable");
 			expect(built.note).toContain("eu-mendix-platform-dev-cloud_security_posture.json");
 		}
@@ -1352,7 +1354,7 @@ describe("buildReportSourcedReconcile — skip-on-unreadable (SIO-901)", () => {
 		const built = await buildLiveReconcile(
 			"eu-b2b",
 			stackDrift({
-				stack: "agent-policies",
+				stack: "dataviews",
 				resources: [
 					{
 						address: 'module.agent_policies.elasticstack_fleet_agent_policy.this["p1"]',
@@ -1381,7 +1383,7 @@ describe("buildReportSourcedReconcile — skip-on-unreadable (SIO-901)", () => {
 		const built = await buildLiveReconcile(
 			"eu-b2b",
 			stackDrift({
-				stack: "agent-policies",
+				stack: "dataviews",
 				resources: [
 					{
 						address: 'module.agent_policies.elasticstack_fleet_agent_policy.this["in-sync"]',
