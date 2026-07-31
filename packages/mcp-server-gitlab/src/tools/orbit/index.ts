@@ -471,5 +471,15 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 	);
 
 	// gitlab_graph_schema + 5 billed wrappers + raw escape hatch = 7 tools.
-	return 7;
+	const registered = [
+		"gitlab_graph_schema",
+		"gitlab_blast_radius",
+		"gitlab_cross_project_callers",
+		"gitlab_recent_deploys",
+		"gitlab_pipeline_failures",
+		"gitlab_recent_vulnerabilities",
+		"gitlab_orbit_query_graph",
+	];
+	log.info({ count: registered.length, tools: registered }, "Orbit tools registered");
+	return registered.length;
 }
