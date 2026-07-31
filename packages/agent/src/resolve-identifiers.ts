@@ -504,12 +504,22 @@ async function probeElastic(state: AgentStateType, focusServices: string[]): Pro
 			},
 		},
 	};
-	// Probe deployments in PARALLEL: they share one PROBE_TIMEOUT_MS budget, so a
-	// sequential loop would compound latency and time the whole probe out (dropping
-	// every partial result) on multi-deployment setups.
+	// Probe deployments in PARALLEL, each with ITS OWN PROBE_TIMEOUT_MS budget.
+	// SIO-1326: this used to share ONE timeout across the whole Promise.allSettled via the
+	// outer safeProbe() wrap. Promise.allSettled only resolves once every branch settles, so
+	// one slow deployment (measured live: eu-b2b at 9.4s against an 8s budget) blew the
+	// shared clock and safeProbe's catch discarded ALL 10 deployments' results -- including
+	// the 9 that had already resolved correctly and found the focus service. Timing each
+	// branch individually means a slow deployment degrades to "missing that one deployment's
+	// candidates" (a rejected settlement, already handled below) instead of erasing every
+	// other deployment's real answer.
+	const timeoutMs = probeTimeoutMs();
 	const settled = await Promise.allSettled(
 		deployments.map((deploymentId) =>
-			deploymentId ? withElasticDeployment(deploymentId, () => tool.invoke(args)) : tool.invoke(args),
+			withTimeout(
+				deploymentId ? withElasticDeployment(deploymentId, () => tool.invoke(args)) : tool.invoke(args),
+				timeoutMs,
+			),
 		),
 	);
 	const all: string[] = [];
@@ -655,11 +665,18 @@ async function probeAws(state: AgentStateType, focusServices: string[]): Promise
 	// here: aws_ecs_list_services requires a `cluster` arg (a prior list-clusters
 	// hop), too heavy for a cheap pre-fan-out probe -- the aws-agent RULES.md
 	// (SIO-1084) drives the ECS -> awslogs-group derivation on the sub-agent side.
-	// Probe estates in PARALLEL (they share one PROBE_TIMEOUT_MS budget, so a
-	// sequential loop would compound latency across estates).
+	// Probe estates in PARALLEL, each with ITS OWN PROBE_TIMEOUT_MS budget (SIO-1326: same
+	// fix as probeElastic -- a shared timeout across the whole Promise.allSettled means one
+	// slow estate discards every other estate's already-resolved result).
 	const estates = state.awsTargetEstates;
+	const awsTimeoutMs = probeTimeoutMs();
 	const settled = await Promise.allSettled(
-		estates.map((estate) => withAwsEstate(estate, () => describe.invoke({ logGroupNamePattern: pattern, limit: 50 }))),
+		estates.map((estate) =>
+			withTimeout(
+				withAwsEstate(estate, () => describe.invoke({ logGroupNamePattern: pattern, limit: 50 })),
+				awsTimeoutMs,
+			),
+		),
 	);
 	const logGroups: string[] = [];
 	settled.forEach((r, i) => {

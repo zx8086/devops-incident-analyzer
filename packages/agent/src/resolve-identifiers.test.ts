@@ -539,6 +539,57 @@ describe("resolveIdentifiers node", () => {
 		}
 	});
 
+	// SIO-1326: live-verified via the MCP steering audit runbook -- eu-b2b's discovery agg
+	// took 9.4s against the 8s shared budget, and because ONE outer safeProbe() timeout used
+	// to wrap the whole Promise.allSettled fan-out, that single slow deployment discarded the
+	// OTHER deployments' already-correct results too. The fix times each deployment branch
+	// individually, so a slow/hung deployment degrades to "missing that deployment's
+	// candidates" (a rejected settlement) while the fast deployments' real answers survive.
+	test("a slow deployment does not erase the OTHER deployments' already-resolved candidates", async () => {
+		const prevTimeout = process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS;
+		const prevDeployments = process.env.ELASTIC_DEPLOYMENTS;
+		process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS = "30";
+		process.env.ELASTIC_DEPLOYMENTS = "eu-cld,eu-b2b";
+		toolRegistry.elastic = [
+			{
+				name: "elasticsearch_search",
+				invoke: async (args: unknown) => {
+					// warm-up (terminate_after) always resolves fast, regardless of deployment.
+					if (JSON.stringify(args ?? {}).includes("terminate_after")) return elasticAggPayload([]);
+					const deployment = realBridge.currentElasticDeploymentForTest();
+					if (deployment === "eu-b2b") {
+						// Slower than the 30ms test budget -- must settle as rejected, not hang the test.
+						await new Promise((resolve) => setTimeout(resolve, 200));
+						return elasticAggPayload(["pvh-services-styles-v3"]);
+					}
+					return elasticAggPayload(["order-service"]);
+				},
+			},
+		];
+		try {
+			const result = await resolveIdentifiers(
+				makeState({
+					targetDataSources: ["elastic"],
+					investigationFocus: {
+						services: ["order-service"],
+						datasources: [],
+						summary: "order-service failing",
+						establishedAtTurn: 1,
+					},
+				}),
+			);
+			// eu-cld resolved well within budget and must survive even though eu-b2b timed out.
+			expect(result.resolvedIdentifiers?.elastic?.serviceNames).toContain("order-service");
+			const placements = result.resolvedIdentifiers?.elastic?.placements ?? [];
+			expect(placements.some((p) => p.deployment === "eu-cld")).toBe(true);
+		} finally {
+			if (prevTimeout === undefined) delete process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS;
+			else process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS = prevTimeout;
+			if (prevDeployments === undefined) delete process.env.ELASTIC_DEPLOYMENTS;
+			else process.env.ELASTIC_DEPLOYMENTS = prevDeployments;
+		}
+	});
+
 	// SIO-1261 (CodeRabbit on PR #505): the group is deliberately NOT env-overridable. An override
 	// would reach only the PROBE -- project-resolution/SKILL.md hard-codes `group_id: "pvhcorp"`, so
 	// the sub-agent's own STEP 1 would still search pvhcorp on exactly the fallback path this ticket
