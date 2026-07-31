@@ -265,9 +265,9 @@ export async function resolveIdentifiers(
 	const graphSeeds = await fetchGraphSeeds(focus.services, seedScope);
 
 	const probes: Array<Promise<Partial<ResolvedIdentifiers>>> = [];
-	if (inScope.has("elastic")) probes.push(safeProbe("elastic", () => probeElastic(state, focus.services)));
+	if (inScope.has("elastic")) probes.push(catchOnlyProbe("elastic", () => probeElastic(state, focus.services)));
 	if (inScope.has("couchbase")) probes.push(safeProbe("couchbase", () => probeCouchbase()));
-	if (inScope.has("aws")) probes.push(safeProbe("aws", () => probeAws(state, focus.services)));
+	if (inScope.has("aws")) probes.push(catchOnlyProbe("aws", () => probeAws(state, focus.services)));
 	if (inScope.has("kafka")) probes.push(safeProbe("kafka", () => probeKafka(focus.services)));
 	if (inScope.has("konnect")) probes.push(safeProbe("konnect", () => probeKonnect(focus.services)));
 	if (inScope.has("gitlab")) probes.push(safeProbe("gitlab", () => probeGitlab(focus.services)));
@@ -410,6 +410,30 @@ async function safeProbe(
 ): Promise<Partial<ResolvedIdentifiers>> {
 	try {
 		return await withTimeout(fn(), probeTimeoutMs());
+	} catch (err) {
+		logger.warn(
+			{ dataSourceId, error: err instanceof Error ? err.message : String(err) },
+			"resolveIdentifiers probe failed; omitting this datasource",
+		);
+		return {};
+	}
+}
+
+// SIO-1326 (CodeRabbit follow-up on PR #559): probeElastic/probeAws already time EACH
+// deployment/estate branch individually inside their own Promise.allSettled -- wrapping the
+// WHOLE call in another withTimeout(probeTimeoutMs()) on top races the exact same clock a
+// second time. If Promise.allSettled's post-settlement continuation (parsing every branch's
+// result) is still running when that outer timer fires, safeProbe's catch discards the entire
+// probe -- including every branch that had already resolved -- reproducing the SIO-1326 bug
+// through a different door. These two probes only need a plain catch (their own internal
+// timeouts are the real bound); every other single-call probe still needs safeProbe's outer
+// timeout since it has no internal per-branch protection of its own.
+async function catchOnlyProbe(
+	dataSourceId: string,
+	fn: () => Promise<Partial<ResolvedIdentifiers>>,
+): Promise<Partial<ResolvedIdentifiers>> {
+	try {
+		return await fn();
 	} catch (err) {
 		logger.warn(
 			{ dataSourceId, error: err instanceof Error ? err.message : String(err) },

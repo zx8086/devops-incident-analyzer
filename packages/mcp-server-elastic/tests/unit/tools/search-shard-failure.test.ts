@@ -15,7 +15,7 @@ type Handler = (args: SearchArgs) => Promise<SearchResult>;
 // match_only_text field -- allow_partial_search_results=true (the default) means the
 // request still returns HTTP 200 with a per-shard failure list, NOT a thrown error, so the
 // search.ts catch block never runs; the shard-failure check must live in the success path.
-// LIVE-VERIFIED shape (against eu-b2b, 2026-08-01): NOT all shards fail identically -- some
+// LIVE-VERIFIED shape (against eu-b2b): NOT all shards fail identically -- some
 // shards report `successful` simply because they had zero matching base-filter documents to
 // run the illegal aggregation against, not because they tolerated the bad field. A 6-of-8
 // partial failure still reported hits.total:0, an undercounted/untrustworthy result, so the
@@ -63,6 +63,16 @@ function makeHandler(searchResponse: estypes.SearchResponse): Handler {
 	return tool.handler as Handler;
 }
 
+type ErrorEnvelope = { _error: { kind: string; category: string; message: string; advice?: string } };
+
+// McpError's own message is `MCP error -32602: <json>` (or similar) -- the envelope is the
+// SECOND constructor arg (JSON.stringify(envelope)), which the SDK folds into `.message`.
+function parseErrorEnvelope(err: McpError): ErrorEnvelope {
+	const jsonStart = err.message.indexOf("{");
+	if (jsonStart === -1) throw new Error(`expected a JSON envelope in the error message, got: ${err.message}`);
+	return JSON.parse(err.message.slice(jsonStart)) as ErrorEnvelope;
+}
+
 describe("elasticsearch_search shard-failure detection (SIO-1328)", () => {
 	test("throws a bad-query envelope when every shard failed, instead of returning a phantom empty success", async () => {
 		const handler = makeHandler(shardFailureResponse({ total: 8, successful: 0, failed: 8 }));
@@ -82,17 +92,30 @@ describe("elasticsearch_search shard-failure detection (SIO-1328)", () => {
 	// shards succeeding, so a partial failure is exactly as untrustworthy as a total one.
 	test("throws even on a PARTIAL shard failure -- every shard runs the same broken agg, so a partial result is still untrustworthy", async () => {
 		const handler = makeHandler(shardFailureResponse({ total: 8, successful: 2, failed: 6 }));
-		await expect(
-			handler({
+		try {
+			await handler({
 				index: "logs-apm.error-*",
 				size: 0,
 				query: { match_all: {} },
 				aggs: { by_message: { terms: { field: "error.exception.message", size: 5 } } },
-			}),
-		).rejects.toThrow(McpError);
+			});
+			throw new Error("expected handler to throw");
+		} catch (err) {
+			expect(err).toBeInstanceOf(McpError);
+			const envelope = parseErrorEnvelope(err as McpError);
+			expect(envelope._error.kind).toBe("bad-query");
+			expect(envelope._error.category).toBe("bad-query");
+			expect(envelope._error.message).toContain("illegal_argument_exception");
+			expect(envelope._error.message).toContain("6");
+			expect(envelope._error.message).toContain("8");
+		}
 	});
 
-	test("the thrown error surfaces the real per-shard reason, not a generic message", async () => {
+	// SIO-1328 (CodeRabbit on PR #559): parse the structured { _error } envelope instead of
+	// substring-matching the message -- a substring check can pass even if the envelope shape is
+	// wrong (missing/renamed fields), which is exactly the class of bug this tool exists to
+	// prevent agents from silently tripping over.
+	test("the thrown error surfaces the real per-shard reason as a structured _error envelope, not a generic message", async () => {
 		const handler = makeHandler(shardFailureResponse({ total: 8, successful: 0, failed: 8 }));
 		try {
 			await handler({
@@ -104,10 +127,48 @@ describe("elasticsearch_search shard-failure detection (SIO-1328)", () => {
 			throw new Error("expected handler to throw");
 		} catch (err) {
 			expect(err).toBeInstanceOf(McpError);
-			const message = (err as McpError).message;
-			expect(message).toContain("bad-query");
-			expect(message).toContain("illegal_argument_exception");
-			expect(message).toContain("8 shard");
+			const envelope = parseErrorEnvelope(err as McpError);
+			expect(envelope._error.kind).toBe("bad-query");
+			expect(envelope._error.category).toBe("bad-query");
+			expect(envelope._error.message).toContain("illegal_argument_exception");
+			expect(envelope._error.message).toContain("8 shard");
+		}
+	});
+
+	test("classifies a genuine infra-level shard failure (node lost) as network, not bad-query", async () => {
+		const infraFailure = shardFailureResponse({ total: 8, successful: 0, failed: 8 });
+		(infraFailure._shards.failures as Array<{ reason: { type: string; reason: string } }>)[0].reason = {
+			type: "node_not_connected_exception",
+			reason: "[node-1][10.0.0.1:9300] Node not connected",
+		};
+		const handler = makeHandler(infraFailure);
+		try {
+			await handler({ index: "logs-apm.error-*", size: 0, query: { match_all: {} } });
+			throw new Error("expected handler to throw");
+		} catch (err) {
+			expect(err).toBeInstanceOf(McpError);
+			const envelope = parseErrorEnvelope(err as McpError);
+			expect(envelope._error.kind).toBe("network");
+			expect(envelope._error.category).not.toBe("bad-query");
+		}
+	});
+
+	test("rejects a timed_out:true response even when _shards.failed is 0", async () => {
+		const timedOut: estypes.SearchResponse = {
+			took: 30000,
+			timed_out: true,
+			_shards: { total: 8, successful: 8, skipped: 0, failed: 0 },
+			hits: { total: { value: 0, relation: "eq" }, max_score: null, hits: [] },
+			aggregations: {},
+		} as unknown as estypes.SearchResponse;
+		const handler = makeHandler(timedOut);
+		try {
+			await handler({ index: "logs-*", size: 0, query: { match_all: {} } });
+			throw new Error("expected handler to throw");
+		} catch (err) {
+			expect(err).toBeInstanceOf(McpError);
+			const envelope = parseErrorEnvelope(err as McpError);
+			expect(envelope._error.message).toContain("timed out");
 		}
 	});
 

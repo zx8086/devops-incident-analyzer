@@ -550,6 +550,10 @@ describe("resolveIdentifiers node", () => {
 		const prevDeployments = process.env.ELASTIC_DEPLOYMENTS;
 		process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS = "30";
 		process.env.ELASTIC_DEPLOYMENTS = "eu-cld,eu-b2b";
+		// SIO-1326 (CodeRabbit on PR #559): record every deployment actually probed, not just
+		// which one's data survived -- a regression that skipped eu-b2b's branch entirely (rather
+		// than probing it and losing the race) would still pass an assertion on eu-cld alone.
+		const probedDeployments: string[] = [];
 		toolRegistry.elastic = [
 			{
 				name: "elasticsearch_search",
@@ -557,6 +561,7 @@ describe("resolveIdentifiers node", () => {
 					// warm-up (terminate_after) always resolves fast, regardless of deployment.
 					if (JSON.stringify(args ?? {}).includes("terminate_after")) return elasticAggPayload([]);
 					const deployment = realBridge.currentElasticDeploymentForTest();
+					probedDeployments.push(deployment ?? "(default)");
 					if (deployment === "eu-b2b") {
 						// Slower than the 30ms test budget -- must settle as rejected, not hang the test.
 						await new Promise((resolve) => setTimeout(resolve, 200));
@@ -578,6 +583,9 @@ describe("resolveIdentifiers node", () => {
 					},
 				}),
 			);
+			// Both deployments must have actually been probed -- proves the fan-out reached
+			// eu-b2b at all, not merely that it was skipped.
+			expect(probedDeployments).toEqual(expect.arrayContaining(["eu-cld", "eu-b2b"]));
 			// eu-cld resolved well within budget and must survive even though eu-b2b timed out.
 			expect(result.resolvedIdentifiers?.elastic?.serviceNames).toContain("order-service");
 			const placements = result.resolvedIdentifiers?.elastic?.placements ?? [];
@@ -587,6 +595,42 @@ describe("resolveIdentifiers node", () => {
 			else process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS = prevTimeout;
 			if (prevDeployments === undefined) delete process.env.ELASTIC_DEPLOYMENTS;
 			else process.env.ELASTIC_DEPLOYMENTS = prevDeployments;
+		}
+	});
+
+	// SIO-1326 (CodeRabbit on PR #559): the AWS side of the same fix -- probeAws's per-estate
+	// timeout must behave identically to probeElastic's per-deployment one.
+	test("AWS: a slow estate does not erase the OTHER estate's already-resolved log groups", async () => {
+		const prevTimeout = process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS;
+		process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS = "30";
+		const probedEstates: string[] = [];
+		toolRegistry.aws = [
+			{
+				name: "aws_logs_describe_log_groups",
+				invoke: async () => {
+					const estate = realBridge.currentAwsEstate();
+					probedEstates.push(estate ?? "(none)");
+					if (estate === "eu-slow-prd") {
+						// Slower than the 30ms test budget -- must settle as rejected, not hang the test.
+						await new Promise((resolve) => setTimeout(resolve, 200));
+						return JSON.stringify({ logGroups: [{ logGroupName: "/ecs/order-service-slow" }] });
+					}
+					return JSON.stringify({ logGroups: [{ logGroupName: "/ecs/order-service" }] });
+				},
+			},
+		];
+		try {
+			const result = await resolveIdentifiers(
+				makeState({ targetDataSources: ["aws"], awsTargetEstates: ["eu-fast-prd", "eu-slow-prd"] }),
+			);
+			// Both estates must have actually been probed -- proves the fan-out reached the slow
+			// one at all, not merely that it was skipped.
+			expect(probedEstates).toEqual(expect.arrayContaining(["eu-fast-prd", "eu-slow-prd"]));
+			// The fast estate's log group must survive even though the slow one timed out.
+			expect(result.resolvedIdentifiers?.aws?.logGroups).toContain("/ecs/order-service");
+		} finally {
+			if (prevTimeout === undefined) delete process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS;
+			else process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS = prevTimeout;
 		}
 	});
 

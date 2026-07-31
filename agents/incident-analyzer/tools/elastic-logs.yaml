@@ -228,10 +228,14 @@ tool_mapping:
       (`logs-apm.error-*`): SDK/DB connection errors (e.g. `finishConnect(..) failed: Connection
       refused`) surface there, not in the app-log INFO stream. For billion-doc indices
       (traces-apm*, logs-apm*), narrow the index pattern (date suffix or specific index name
-      beats `traces-apm*`), use the shortest viable time window (prefer `now-24h` over
-      `now-7d`), project only needed fields via `_source` or `fields`, and avoid fanning out
-      multiple heavy aggregations in parallel -- run them sequentially so each gets the full
-      per-call timeout budget
+      beats `traces-apm*`) and project only needed fields via `_source` or `fields`, and avoid
+      fanning out multiple heavy aggregations in parallel -- run them sequentially so each gets
+      the full per-call timeout budget. This performance guidance does NOT override the fixed
+      `now-30d` window SOUL.md mandates for the PHASE 1->2->3 discovery/absence procedure or any
+      other log/document search or aggregation -- narrow the INDEX PATTERN and FIELD PROJECTION
+      to control cost on large streams, never the time window, and never substitute `now-24h` for
+      `now-30d` (SIO-1327: a self-narrowed window is exactly the false-absence pattern SOUL.md
+      warns against).
     cluster_health: when checking cluster status, node count, shard allocation, or pending tasks at the cluster level
     node_info: when inspecting a specific node's hardware, JVM, thread pools, or per-node disk/memory usage
     index_management: when listing indices, checking index settings, mappings, stats, or rolling over an index pattern
