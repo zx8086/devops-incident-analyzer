@@ -285,6 +285,32 @@ describe("buildLiveReconcile — agent-policies composite keys (SIO-1315)", () =
 	});
 });
 
+describe("skip-note hygiene (CodeRabbit PR #557)", () => {
+	test("container-miss notes dedupe per file and no-key addresses are noted", async () => {
+		// File whose top level lacks the roles container entirely.
+		mockTools({ gitlab_get_file_content: () => b64('{\n  "role_mappings": {}\n}\n') });
+		const { buildLiveReconcile } = await import("./nodes.ts");
+		const role = (name: string) => ({
+			address: `module.security.elasticstack_elasticsearch_security_role.this["${name}"]`,
+			actions: ["update"],
+			category: "update" as const,
+			values: { cluster: { before: ["all"] } },
+		});
+		const noKey = {
+			address: "module.security.elasticstack_elasticsearch_security_role.this",
+			actions: ["update"],
+			category: "update" as const,
+			values: { cluster: { before: ["all"] } },
+		};
+		const built = await buildLiveReconcile("eu-b2b", drift("security", [role("a"), role("b"), role("c"), noKey]));
+		if (!("blocked" in built)) throw new Error("expected block");
+		// One deduped container note (not three) + one no-key note = 2 entries.
+		expect(built.blocked).toContain("Skipped 2 unresolvable entries");
+		expect(built.blocked).toContain("(no 'roles' object)");
+		expect(built.blocked).toContain("(no for_each key)");
+	});
+});
+
 describe("nested family exclusion (SIO-1315)", () => {
 	test("ELASTIC_IAC_NESTED_STACKS_EXCLUDE falls back to the per-key report family", async () => {
 		const prev = process.env.ELASTIC_IAC_NESTED_STACKS_EXCLUDE;

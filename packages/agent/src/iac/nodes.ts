@@ -9251,14 +9251,19 @@ async function buildNestedReconcile(
 	// Resolve each for_each key to (file, entry key). aggregate: one file, entry key = the key
 	// itself. composite: longest-prefix match of the key against the stack directory's *.json
 	// basenames -- the remainder (after the joining "-") is the entry key inside that file.
-	const skipped: string[] = [];
+	// Set: an aggregate file with a missing container would otherwise push one identical
+	// entry per target, inflating the note (CodeRabbit, PR #557).
+	const skipped = new Set<string>();
 	type NestedTarget = { resource: StackDriftResource; filePath: string; entryKey: string };
 	const targets: NestedTarget[] = [];
 	if (spec.kind === "aggregate") {
 		const filePath = spec.path(deployment);
 		for (const r of writable) {
 			const key = addressIndexKey(r.address);
-			if (!key) continue;
+			if (!key) {
+				skipped.add(`${shortAddress(r.address)} (no for_each key)`);
+				continue;
+			}
 			targets.push({ resource: r, filePath, entryKey: key });
 		}
 	} else {
@@ -9269,10 +9274,13 @@ async function buildNestedReconcile(
 			.sort((a, b) => b.length - a.length); // longest prefix wins (policy names contain "-")
 		for (const r of writable) {
 			const key = addressIndexKey(r.address);
-			if (!key) continue;
+			if (!key) {
+				skipped.add(`${shortAddress(r.address)} (no for_each key)`);
+				continue;
+			}
 			const parent = basenames.find((b) => key.startsWith(`${b}-`));
 			if (!parent) {
-				skipped.push(`${key} (no matching parent file under ${dir})`);
+				skipped.add(`${key} (no matching parent file under ${dir})`);
 				continue;
 			}
 			targets.push({ resource: r, filePath: `${dir}/${parent}.json`, entryKey: key.slice(parent.length + 1) });
@@ -9292,7 +9300,7 @@ async function buildNestedReconcile(
 			const raw = await callTool("gitlab_get_file_content", { filePath: t.filePath });
 			if (!raw.startsWith("[2")) {
 				unreadable.add(t.filePath);
-				skipped.push(t.filePath);
+				skipped.add(t.filePath);
 				continue;
 			}
 			let parsed: unknown;
@@ -9300,12 +9308,12 @@ async function buildNestedReconcile(
 				parsed = JSON.parse(extractFileContent(raw));
 			} catch {
 				unreadable.add(t.filePath);
-				skipped.push(`${t.filePath} (unparseable JSON)`);
+				skipped.add(`${t.filePath} (unparseable JSON)`);
 				continue;
 			}
 			if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
 				unreadable.add(t.filePath);
-				skipped.push(`${t.filePath} (not a JSON object)`);
+				skipped.add(`${t.filePath} (not a JSON object)`);
 				continue;
 			}
 			doc = parsed as Record<string, unknown>;
@@ -9313,12 +9321,12 @@ async function buildNestedReconcile(
 		}
 		const containerObj = spec.container === "" ? doc : doc[spec.container];
 		if (typeof containerObj !== "object" || containerObj === null || Array.isArray(containerObj)) {
-			skipped.push(`${t.filePath} (no '${spec.container}' object)`);
+			skipped.add(`${t.filePath} (no '${spec.container}' object)`);
 			continue;
 		}
 		const entry = (containerObj as Record<string, unknown>)[t.entryKey];
 		if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-			skipped.push(`${t.entryKey} (no entry in ${t.filePath})`);
+			skipped.add(`${t.entryKey} (no entry in ${t.filePath})`);
 			continue;
 		}
 		const entryJson = `${JSON.stringify(entry, null, 2)}\n`;
@@ -9348,9 +9356,10 @@ async function buildNestedReconcile(
 		path,
 		content: `${JSON.stringify(docs.get(path), null, 2)}\n`,
 	}));
+	const skippedList = [...skipped];
 	const skipNote =
-		skipped.length > 0
-			? `Skipped ${skipped.length} unresolvable entr${skipped.length === 1 ? "y" : "ies"}: ${skipped.slice(0, 5).join(", ")}${skipped.length > 5 ? ", ..." : ""}.`
+		skippedList.length > 0
+			? `Skipped ${skippedList.length} unresolvable entr${skippedList.length === 1 ? "y" : "ies"}: ${skippedList.slice(0, 5).join(", ")}${skippedList.length > 5 ? ", ..." : ""}.`
 			: undefined;
 	if (files.length === 0) {
 		// Message parity with the report family (SIO-901): "unreadable" only when every candidate
