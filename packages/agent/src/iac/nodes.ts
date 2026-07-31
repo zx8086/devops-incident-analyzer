@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { buildSystemPrompt } from "@devops-agent/gitagent-bridge";
 import { isKnowledgeGraphEnabled } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
-import type { AnnotationMap } from "@devops-agent/shared";
+import { type AnnotationMap, readPositiveIntEnv, readPositiveMsEnv } from "@devops-agent/shared";
 import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch";
 import { AIMessage, type BaseMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
@@ -7615,8 +7615,8 @@ export async function watchPipeline(state: IacStateType): Promise<Partial<IacSta
 
 	// SIO-982: per-call poll budget. SIO-989: capped at 90s -- both the default and the "extended"
 	// budget are now 90s, so a watch turn never blocks longer than the snappy ceiling.
-	const defaultBudgetMs = Number(process.env.IAC_PIPELINE_POLL_BUDGET_MS ?? "90000");
-	const extendedBudgetMs = Number(process.env.IAC_PIPELINE_POLL_BUDGET_MS_EXTENDED ?? "90000");
+	const defaultBudgetMs = readPositiveMsEnv("IAC_PIPELINE_POLL_BUDGET_MS", 90000, log);
+	const extendedBudgetMs = readPositiveMsEnv("IAC_PIPELINE_POLL_BUDGET_MS_EXTENDED", 90000, log);
 	// SIO-984: distinguish the two ways watchPipeline is entered. Straight after openMr (intent
 	// "gitops") it polls to TERMINAL so the card shows triggered->running->succeeded in one turn; a
 	// "check my MR" follow-up (intent "pipeline-status") only extends when the user asks to "watch
@@ -7626,7 +7626,7 @@ export async function watchPipeline(state: IacStateType): Promise<Partial<IacSta
 	// budget is a ceiling, not a fixed wait. Override both via IAC_PIPELINE_POLL_BUDGET_MS[_EXTENDED].
 	const isPostMrWatch = state.intent === "gitops";
 	const budgetMs = resolveWatchPipelineBudgetMs(isPostMrWatch, lastHumanText(state), defaultBudgetMs, extendedBudgetMs);
-	const intervalMs = Number(process.env.IAC_PIPELINE_POLL_INTERVAL_MS ?? "10000");
+	const intervalMs = readPositiveMsEnv("IAC_PIPELINE_POLL_INTERVAL_MS", 10000, log);
 	const deadline = Date.now() + budgetMs;
 
 	let pipelineId: number | null = null;
@@ -9348,7 +9348,7 @@ export async function detectDrift(state: IacStateType): Promise<Partial<IacState
 		};
 	}
 
-	const cap = Number(process.env.ELASTIC_IAC_DRIFT_CONCURRENCY ?? "4");
+	const cap = readPositiveIntEnv("ELASTIC_IAC_DRIFT_CONCURRENCY", 4, log);
 	log.info({ deployment, stacks, count: stacks.length, concurrency: cap }, "iac drift: auditing stacks for deployment");
 	const stackDrifts = await mapWithConcurrency(stacks, cap, (stack) => driftCheckStack(deployment, stack));
 	log.info(
@@ -11123,8 +11123,8 @@ export async function applyFleetUpgrade(state: IacStateType): Promise<Partial<Ia
 			status: `fleet apply: ${lastStatus}`,
 			...(pipelineUrl && { url: pipelineUrl }),
 		});
-		const budgetMs = Number(process.env.IAC_FLEET_APPLY_TICKER_BUDGET_MS ?? "40000");
-		const intervalMs = Number(process.env.IAC_FLEET_APPLY_TICKER_INTERVAL_MS ?? "10000");
+		const budgetMs = readPositiveMsEnv("IAC_FLEET_APPLY_TICKER_BUDGET_MS", 40000, log);
+		const intervalMs = readPositiveMsEnv("IAC_FLEET_APPLY_TICKER_INTERVAL_MS", 10000, log);
 		const deadline = Date.now() + budgetMs;
 		while (!isTerminalPipelineStatus(lastStatus) && Date.now() < deadline) {
 			if (Date.now() + intervalMs >= deadline) break;
