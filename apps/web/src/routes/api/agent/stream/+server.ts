@@ -1,12 +1,19 @@
 // apps/web/src/routes/api/agent/stream/+server.ts
 
-import { AttachmentError, flushLangSmithCallbacks, processAttachments } from "@devops-agent/agent";
+import {
+	AttachmentError,
+	flushLangSmithCallbacks,
+	isClosureLearningEnabled,
+	processAttachments,
+	runIncidentCloseForClosingTurn,
+} from "@devops-agent/agent";
 import { getLogger, runWithRequestContext, traceSpan } from "@devops-agent/observability";
 import { AttachmentBlockSchema, DataSourceContextSchema } from "@devops-agent/shared";
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
 import {
 	decrementSseConnections,
+	getClosureRequest,
 	getIacTurnOutcome,
 	getLastAssistantText,
 	getPendingInterrupt,
@@ -229,11 +236,36 @@ export const POST: RequestHandler = async ({ request }) => {
 
 								const responseTime = Date.now() - startTime;
 								log.info({ responseTime, toolsUsed: toolsUsed.length, toolNames: toolsUsed }, "agent.request.end");
+								// SIO-1357: read the closing turn's state BEFORE pruning (pruneThreadState
+								// clears dataSourceResults; closeIncidentRequested/finalAnswer are not
+								// pruned today, but reading first keeps this independent of that fact).
+								const closureRequest = isClosureLearningEnabled() ? await getClosureRequest(threadId) : null;
 								// SIO-476: prune the checkpoint after the turn completes (best-effort).
 								await pruneThreadState(threadId, body.agentName);
 								// SIO-942: persist this turn's live-memory blocks (best-effort). Default
 								// matches invokeAgent/pruneThreadState when agentName is omitted.
 								await runPostTurn({ agentName: body.agentName ?? "incident-analyzer", threadId });
+								// SIO-1357: fire the incident-close learning chain (postmortem ->
+								// wiki-ingest -> memory-pr) as a DETACHED background run -- never awaited,
+								// never allowed to affect the response. runIncidentCloseForClosingTurn's
+								// own try/catch guarantees the promise always resolves, never rejects; the
+								// .catch() here is defense-in-depth so this boundary can never produce an
+								// unhandled rejection regardless of that contract.
+								if (closureRequest) {
+									void runIncidentCloseForClosingTurn(closureRequest)
+										.then((result) => {
+											log.info(
+												{ threadId, status: result.status, reason: result.reason },
+												"incident-close workflow completed",
+											);
+										})
+										.catch((error) => {
+											log.warn(
+												{ threadId, error: error instanceof Error ? error.message : String(error) },
+												"incident-close workflow rejected unexpectedly",
+											);
+										});
+								}
 								send({
 									type: "done",
 									threadId,

@@ -60,7 +60,11 @@ export type LlmRole =
 	| "gapsJudge"
 	// SIO-1158: contradicted-absence veto judge -- confirms regex-flagged absence
 	// claims against the flagging datasource's returned data before the cap applies.
-	| "absenceJudge";
+	| "absenceJudge"
+	// SIO-1357: composes a SkillsFlow `skill:` step's SKILL.md body with the
+	// closing turn's context into one LLM call (the incident-close workflow's
+	// postmortem/wiki-ingest steps).
+	| "closureSkillStep";
 
 // SIO-1224: exported so the model-conformance probe and the long-form truncation test read
 // this exact table rather than duplicating the numbers -- a duplicate would drift silently,
@@ -118,6 +122,10 @@ export const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	gapsJudge: { temperature: 0, maxTokens: 1024 },
 	// SIO-1158: deterministic per-claim verdicts as compact JSON.
 	absenceJudge: { temperature: 0, maxTokens: 1024 },
+	// SIO-1357: a skill step's output is a full document (postmortem markdown,
+	// wiki page body) -- matches responder/aggregator's long-form budget rather
+	// than a compact-JSON role's.
+	closureSkillStep: { temperature: 0.2, maxTokens: 16384 },
 };
 
 // SIO-1224: roles whose output is prose or a complete JSON document that must not be cut off
@@ -150,6 +158,8 @@ export const LONG_FORM_ROLES: ReadonlySet<LlmRole> = new Set<LlmRole>([
 	// (ilmFullPolicy, phasesPatch, userSettingsYaml), so its output scales with the paste. It
 	// held the lowest budget of any role in this set (2048) until SIO-1225 raised it to 8192.
 	"iacPlanner",
+	// SIO-1357: postmortem/wiki-page prose, structurally the same shape as responder's report.
+	"closureSkillStep",
 ]);
 
 // SIO-739: Per-role wall-clock deadline for non-streaming llm.invoke calls. A
@@ -187,6 +197,10 @@ export const ROLE_DEADLINES_MS: Record<LlmRole, number> = {
 	gapsJudge: 8_000,
 	// SIO-1158: same profile as gapsJudge -- would-cap runs only, fail-closed.
 	absenceJudge: 8_000,
+	// SIO-1357: post-turn background workflow, off the critical path entirely --
+	// bound it generously (long-form prose) so a hung call is never silently
+	// unbounded, but never so tight that a real postmortem call gets cut short.
+	closureSkillStep: 120_000,
 };
 
 // SIO-739: Convert camelCase LlmRole to SCREAMING_SNAKE for env-var keys.

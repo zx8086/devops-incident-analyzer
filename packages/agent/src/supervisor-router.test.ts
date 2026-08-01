@@ -92,6 +92,8 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		hilDecisions: undefined,
 		hilEdits: {},
 		hilApplyReport: undefined,
+		closeIncidentRequested: false,
+		closingReport: "",
 		...overrides,
 	};
 }

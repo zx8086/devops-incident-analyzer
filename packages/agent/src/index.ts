@@ -35,6 +35,13 @@ export { evaluateGuards } from "./iac/guards.ts";
 export { converseIac, type IacTurnOutcome, iacTurnOutcome } from "./iac/nodes.ts";
 export { type ReconcileOptions, type ReconcileSummary, reconcileAll, reconcileEnabled } from "./iac/reconcile.ts";
 export { type IacRequest, IacState, type IacStateType } from "./iac/state.ts";
+// SIO-1357: the incident-close workflow's production entry point (post-turn
+// background hook) plus the flag apps/web gates it on.
+export {
+	type CloseWorkflowResult,
+	isClosureLearningEnabled,
+	runIncidentCloseForClosingTurn,
+} from "./incident-close-workflow-handlers.ts";
 // SIO-1135: retention sweep (uncurated incident purge) wired beside the topology cron.
 export {
 	type PurgeSweepSummary,

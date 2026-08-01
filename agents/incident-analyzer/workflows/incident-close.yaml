@@ -1,0 +1,49 @@
+name: incident-close
+version: 0.1.0
+description: >
+  SIO-1357: consistent incident-closure learning chain. Runs as a POST-TURN
+  background workflow after an explicit "close incident" command -- never
+  inside the SSE/interrupt path. Reconstructs a postmortem from the turn's
+  already-completed investigation, compiles it into a wiki proposal, and opens
+  a human-review PR. Best-effort throughout: a failure here must never affect
+  the user-facing turn that already answered the incident.
+
+triggers:
+  - type: manual
+
+steps:
+  # Reconstruct a blameless postmortem from the closing turn's aggregated
+  # report/findings/confidence, supplied via the trigger payload (this
+  # workflow runs AFTER the graph turn completes, not as part of it).
+  - name: postmortem
+    skill: incident-postmortem
+    description: Reconstruct a postmortem from the completed investigation
+    with:
+      report: ${{ trigger.report }}
+      confidence: ${{ trigger.confidence }}
+    outputs:
+      - report
+
+  # Compile the postmortem into a wiki-page update proposal.
+  - name: post_wiki
+    skill: wiki-ingest
+    description: Propose a wiki update from the postmortem
+    depends_on:
+      - postmortem
+    with:
+      report: ${{ steps.postmortem.outputs.report }}
+    outputs:
+      - proposal
+
+  # Open a review PR for the durable learning. Tolerant: a failure here must
+  # not fail a postmortem that already succeeded.
+  - name: learn
+    tool: memory-pr
+    description: Open a human-review PR for the wiki/memory update
+    depends_on:
+      - post_wiki
+    with:
+      proposal: ${{ steps.post_wiki.outputs.proposal }}
+    error_handling: continue
+
+error_handling: best_effort
