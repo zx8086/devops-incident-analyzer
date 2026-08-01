@@ -1,5 +1,6 @@
 // agent/src/learn/skill-pr.test.ts
 import { describe, expect, test } from "bun:test";
+import { validateSkillFile } from "@devops-agent/gitagent-bridge";
 import type { AnnotationMap } from "@devops-agent/shared";
 import { AGENT_MANIFEST_PATH, buildSkillPrBody, buildSkillPrFiles, buildSkillPrTitle, SKILL_DIR } from "./skill-pr.ts";
 
@@ -80,6 +81,21 @@ describe("buildSkillPrFiles (SIO-1346)", () => {
 		const result = buildSkillPrFiles(already, { skillName: "lag-correlation", annotations: ANNOTATIONS, body: BODY });
 		expect(result.ok).toBe(false);
 		if (!result.ok) expect(result.reason).toContain("already listed in agent.yaml");
+	});
+
+	// SIO-1347: the spec-compliance suite (skill-spec-compliance.test.ts) gates every
+	// SKILL.md merged into agents/, including learn-lane promotion PRs. Keep the
+	// generator's own template compliant so a well-formed proposal never opens a PR
+	// that the spec gate would redden.
+	test("the generated SKILL.md passes the agentskills.io spec validator", () => {
+		const result = buildSkillPrFiles(BASE_MANIFEST, {
+			skillName: "lag-correlation",
+			annotations: ANNOTATIONS,
+			body: BODY,
+		});
+		if (!result.ok) throw new Error(`expected ok, got: ${result.reason}`);
+		const skill = result.files[0];
+		expect(validateSkillFile(skill?.path ?? "", skill?.contents ?? "")).toEqual([]);
 	});
 });
 

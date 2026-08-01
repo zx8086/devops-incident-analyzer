@@ -1,3 +1,8 @@
+---
+name: propose-mitigation
+description: Suggest safe, read-only mitigation steps -- investigate, monitor, and escalate actions, plus a stakeholder status-update template -- based on the aggregated incident findings and confidence score. Use after aggregation and confidence checks, to turn findings into recommended next actions without ever proposing a destructive operation.
+---
+
 # Skill: Propose Mitigation
 
 ## Purpose
@@ -16,8 +21,11 @@ human approval before execution.
    - Investigate: additional queries to run (safe, read-only)
    - Monitor: metrics to watch and thresholds
    - Escalate: actions requiring human intervention
-4. Reference relevant runbooks from knowledge/runbooks/ if available
-5. Never suggest destructive operations (restart, delete, drop, reset)
+4. Whenever any Escalate item is produced, draft a status update using the
+   template in the output format below; fill every field from the aggregated
+   report and never leave an unresolved placeholder in what gets posted
+5. Reference relevant runbooks from knowledge/runbooks/ if available
+6. Never suggest destructive operations (restart, delete, drop, reset)
 
 ## Output Format
 ```
@@ -34,6 +42,13 @@ human approval before execution.
 ### Escalate (requires human approval)
 1. Consider scaling payment-service consumers (currently 3 replicas)
 2. Review recent deployment to payment-service (last deploy: 14:25 UTC)
+
+### Status Update (draft with any escalation)
+[HIGH] payment-service - error rate 15x above baseline, checkout degraded
+Impact: ~30% of checkout requests failing since 14:25 UTC
+Current state: investigating
+Next update: in 30 minutes or on material change
+Owner: unassigned (needs a human on point)
 
 ### Related Runbooks
 - knowledge/runbooks/kafka-consumer-lag.md

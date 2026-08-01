@@ -1,3 +1,8 @@
+---
+name: wiki-lint
+description: Validate the integrity of the compiled wiki -- dead links, orphan pages, missing frontmatter, stale sources, and missing source files -- so it does not drift from its raw sources or accumulate broken cross-references. Runs in CI (wiki:lint) and during session teardown to keep the wiki trustworthy for wiki-query to consume.
+---
+
 # Skill: Wiki Lint
 
 ## Purpose

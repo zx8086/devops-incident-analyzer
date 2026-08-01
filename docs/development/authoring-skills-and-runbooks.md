@@ -76,13 +76,30 @@ The directory name **is** the skill name. It must be unique and match exactly wh
 
 The loader reads the entire file, strips an optional YAML frontmatter block (everything between the first `---` pair at the top), and appends the body to the orchestrator's system prompt under a `## Skill: <name>` heading. See `packages/gitagent-bridge/src/skill-loader.ts:29` for the exact regex.
 
-Frontmatter is optional, but `name` + `description` are the recommended minimum: a skill with no `description` is omitted from the `## Skills` catalog that precedes the bodies (`skill-loader.ts:49`), so the model only discovers it by reading the full body. The authoritative field list is `SkillFrontmatterSchema` in `packages/gitagent-bridge/src/types.ts:242-262` -- every field is optional and the schema is `.passthrough()`, so unknown keys are accepted but never read. The learner-managed fields (`confidence`, `learned_from`, `learned_at`, `usage_count`, `success_count`, `failure_count`) are documented in `docs/superpowers/specs/2026-06-26-skill-promotion-and-confidence-design.md`; do not hand-author them.
+#### The agentskills.io spec contract (SIO-1347, enforced)
 
-Note that the six older orchestrator skills are body-only, which is what keeps them out of the runtime frontmatter rewriter -- `recordSkillOutcome` short-circuits when no `---` block exists (`packages/agent/src/skill-outcome.ts:118-128`). A hand-authored skill that gains a frontmatter block starts being tracked when `SKILL_OUTCOME_TRACKING_ENABLED` is on.
+Every SKILL.md in the repo -- under `agents/**` and `.agents/skills/` -- must satisfy the [agentskills.io specification](https://agentskills.io/specification) frontmatter contract:
 
-A plain Markdown body:
+- `name` (required): max 64 chars, lowercase alphanumeric segments joined by single hyphens, and it **must equal the skill's directory name**.
+- `description` (required): 1-1024 chars, non-empty. Describe both what the skill does and when to use it -- the description is the skill's line in the `## Skills` catalog that precedes the bodies (`skill-loader.ts:49`), so it is what the model uses to decide the skill is relevant.
+- Optional spec fields: `license`, `compatibility`, `metadata`, `allowed-tools`.
+
+On top of the spec, this repo allows a documented set of extension fields (kept top-level by the SIO-1347 minimal-alignment decision): `inputs`/`outputs` (elastic-iac skill contracts), the learner-managed fields (`confidence`, `task_category`, `learned_from`, `learned_at`, `usage_count`, `success_count`, `failure_count`, `negative_examples` -- written by the promotion paths, do not hand-author them; see `docs/superpowers/specs/2026-06-26-skill-promotion-and-confidence-design.md`), and `version`/`category` (`.agents/skills` operator skills). Any other top-level key fails the build. To add a new extension field, update `SKILL_EXTENSION_FIELDS` in `packages/gitagent-bridge/src/skill-spec-validator.ts` in the same PR that introduces the first skill using it.
+
+Enforcement is `packages/gitagent-bridge/src/skill-spec-compliance.test.ts` (one test per SKILL.md, run by `bun test`); `bun run yaml:check` is yamllint over `.yaml` files and cannot see Markdown frontmatter. The runtime loader stays tolerant (`parseSkillFrontmatter` degrades to a minimal record instead of failing agent load) -- the test suite, not the runtime, is the gate. The authoritative runtime field list is `SkillFrontmatterSchema` in `packages/gitagent-bridge/src/types.ts:301-323` (all optional, `.passthrough()`); the spec validator is deliberately stricter.
+
+This gate also covers learn-lane skill-promotion PRs (SIO-1346): a generated SKILL.md that reaches `agents/` must pass. If such a PR's CI goes red on this suite (say, the proposal had no recoverable description), that is the two-gate flow working -- the reviewer completes the draft before merging. `packages/agent/src/learn/skill-pr.test.ts` asserts the generator template itself stays spec-compliant.
+
+Note on outcome tracking: since SIO-1347 every hand-authored skill carries frontmatter, so `recordSkillOutcome` gates on a learning marker (`usage_count`/`learned_from`) rather than on a frontmatter block existing (`packages/agent/src/skill-outcome.ts`). Hand-authored skills are never mutated at runtime; only promoted skills are tracked when `SKILL_OUTCOME_TRACKING_ENABLED` is on.
+
+A minimal compliant skill:
 
 ```markdown
+---
+name: my-new-skill
+description: One sentence on what this does, one on when the model should reach for it.
+---
+
 # Skill: My New Skill
 
 ## Purpose
@@ -124,6 +141,7 @@ If you skip this step, the skill file sits on disk but never enters the prompt. 
 bun run yaml:check    # validates agent.yaml
 bun run typecheck     # ensures the bridge still loads cleanly
 bun run lint          # catches Markdown/formatting issues
+bun run --filter '@devops-agent/gitagent-bridge' test   # spec gate: skill-spec-compliance.test.ts
 ```
 
 No dedicated unit test is needed for skill content -- but if your skill encodes a non-trivial output shape, add an agent-level integration test that verifies the orchestrator produces that shape.
@@ -187,7 +205,16 @@ Read-only suggestions only. Never embed write operations. HITL or
 escalation guidance if appropriate.
 ```
 
-Runbooks are pure prose read by the LLM. There is no schema enforcement on their structure beyond "it must be valid Markdown."
+Runbooks are pure prose read by the LLM. There is no schema enforcement on their structure beyond "it must be valid Markdown." (OKF frontmatter -- `type`, `title`, `status`, `triggers`, `generated`, `stale_after` -- is validated separately; see the OKF design spec.)
+
+#### Conventions worth stealing (SIO-1347, guidance only)
+
+Distilled from the highest-rated public incident runbook skills; none of these are validator-enforced, all of them make a runbook better under 3 AM conditions:
+
+- **Quick checklist at the top**: a short numbered checklist directly under the H1 mirroring the section order, so a responder can track progress under stress without re-reading prose.
+- **Freshness is visible**: OKF frontmatter already carries `generated.at` and optional `stale_after` -- set them honestly and re-verify a runbook after every incident where it was used. A runbook that references retired tools or old cluster names is worse than none.
+- **Per-step failure handling**: every drill-down step should say what to do when the tool call itself fails or returns empty, not only what a successful result means. An empty result is evidence, not an error to skip past (see the absence-vs-error handling in the sub-agent RULES files).
+- **Comms cadence**: when a runbook reaches escalation, point at the status-update template in the propose-mitigation skill rather than inventing a new format -- one template, filled from cited findings, updated on a stated cadence.
 
 ### Step 3: Validate
 
@@ -240,11 +267,11 @@ Fix:
 
 ## End-to-End: Adding a Skill
 
-Scenario: you want the orchestrator to emit a post-incident blameless summary after the validate node runs.
+Scenario: you want the orchestrator to emit a post-incident blameless summary after the validate node runs. (This one exists now -- `agents/incident-analyzer/skills/incident-postmortem/` is the SIO-1347 worked example of everything below.)
 
-1. Create `agents/incident-analyzer/skills/write-postmortem/SKILL.md` with a `Purpose / Procedure / Output Format / Edge Cases` structure.
+1. Create `agents/incident-analyzer/skills/write-postmortem/SKILL.md` with spec frontmatter (`name` matching the directory, a what-plus-when `description`) and a `Purpose / Procedure / Output Format / Edge Cases` structure.
 2. Add `write-postmortem` to `agent.yaml:skills:`.
-3. `bun run yaml:check && bun run typecheck && bun run lint`.
+3. `bun run yaml:check && bun run typecheck && bun run lint && bun run --filter '@devops-agent/gitagent-bridge' test`.
 4. Wire the new skill into the appropriate pipeline node in `packages/agent/src/graph.ts` if it needs an explicit call site (many skills are implicitly applied by the LLM based on the prompt content; new skills that need a dedicated node are an architectural change).
 5. Run an end-to-end smoke query and verify the postmortem section appears in the final response.
 

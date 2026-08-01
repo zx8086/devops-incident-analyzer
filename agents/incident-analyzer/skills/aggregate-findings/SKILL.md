@@ -1,3 +1,8 @@
+---
+name: aggregate-findings
+description: Correlate findings from multiple datasource sub-agents into a unified incident report with a cross-datasource timeline, causal analysis, gap flagging, and a confidence score. Use after sub-agent fan-out returns, to merge per-datasource results into the single report the mitigation and validation stages consume.
+---
+
 # Skill: Aggregate Findings
 
 ## Purpose
@@ -14,6 +19,20 @@ incident report with cross-datasource timeline and causal analysis.
    - Gateway errors (Konnect) + no backend errors = gateway misconfiguration
 5. Calculate a confidence score (0.0-1.0) based on data completeness
 6. Identify gaps: datasources that returned no data or errors
+
+## Timeline Gaps
+After building the shared timeline (step 2), scan for unexplained gaps -- not
+just missing datasources (step 6 covers those), but silence WITHIN a
+datasource that did return data. Flag a gap when:
+- Two findings from the same datasource are separated by a stretch of silence
+  while the incident remained active per another datasource's data.
+- A causal chain has a missing link: an effect appears with no corresponding
+  cause anywhere in the aligned timeline.
+
+State each flagged gap explicitly in the output, e.g. "Gap: no Elastic events
+between 14:31 and 14:44 despite active Kafka lag growth -- possible logging
+outage or missed query window." A flagged gap lowers confidence independently
+of the missing-datasource rule; note both when they co-occur.
 
 ## Output Format
 ```

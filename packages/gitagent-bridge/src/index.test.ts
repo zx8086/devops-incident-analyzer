@@ -60,13 +60,15 @@ describe("manifest-loader", () => {
 		expect(toolNames).toContain("aws-introspect");
 	});
 
-	test("loads all 6 skills", () => {
+	test("loads all 7 skills", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		// SIO-862: 3 original incident skills + the 3 wiki-* skills (wiki-ingest/lint/query).
-		expect(agent.skills.size).toBe(6);
+		// SIO-1347 added incident-postmortem.
+		expect(agent.skills.size).toBe(7);
 		expect(agent.skills.has("normalize-incident")).toBe(true);
 		expect(agent.skills.has("aggregate-findings")).toBe(true);
 		expect(agent.skills.has("propose-mitigation")).toBe(true);
+		expect(agent.skills.has("incident-postmortem")).toBe(true);
 		expect(agent.skills.has("wiki-ingest")).toBe(true);
 		expect(agent.skills.has("wiki-lint")).toBe(true);
 		expect(agent.skills.has("wiki-query")).toBe(true);
@@ -295,17 +297,24 @@ describe("skill-loader", () => {
 
 // SIO-1014: SKILL.md frontmatter -> typed skillMeta + a Skills catalog in the prompt.
 describe("skill frontmatter (SIO-1014)", () => {
-	test("skillMeta is total over skills (minimal record for markdown-only skills)", () => {
+	test("skillMeta is total over skills (name + description everywhere since SIO-1347)", () => {
 		const agent = loadAgent(AGENTS_DIR);
-		// incident-analyzer skills are markdown-only (no frontmatter) -> minimal { name }.
+		// SIO-1347: every incident-analyzer skill now carries agentskills.io spec
+		// frontmatter, so each meta record has the directory-matching name AND a
+		// non-empty description (enforced by skill-spec-compliance.test.ts).
 		expect(agent.skillMeta.size).toBe(agent.skills.size);
 		for (const name of agent.skills.keys()) {
 			const meta = agent.skillMeta.get(name);
 			expect(meta).toBeDefined();
 			expect(meta?.name).toBe(name);
-			// no frontmatter -> no description
-			expect(meta?.description).toBeUndefined();
+			expect(meta?.description).toBeTruthy();
 		}
+	});
+
+	// The markdown-only degrade path is still supported at runtime (tolerant loader)
+	// even though no in-repo skill uses it anymore -- pin it with a synthetic file.
+	test("a markdown-only skill still degrades to a minimal { name } record", () => {
+		expect(parseSkillFrontmatter("bare-skill", "# Skill: Bare\n\nNo frontmatter.\n")).toEqual({ name: "bare-skill" });
 	});
 
 	test("elastic-iac skills parse name + description from frontmatter", () => {
@@ -328,10 +337,32 @@ describe("skill frontmatter (SIO-1014)", () => {
 		expect(prompt).toContain("Skill: resize-tier");
 	});
 
-	test("no Skills catalog when no active skill has a description (markdown-only)", () => {
+	test("incident-analyzer catalog lists every skill now that all carry descriptions", () => {
 		const agent = loadAgent(AGENTS_DIR);
-		// incident-analyzer locals are markdown-only AND the shared cite-sources skill
-		// is markdown-only too, so the catalog section is absent entirely.
+		// SIO-1347 inverted the old expectation: the locals AND the shared
+		// cite-sources skill all have descriptions, so the catalog section exists
+		// and covers the full set.
+		const prompt = buildSystemPrompt(agent);
+		expect(prompt).toContain("## Skills\n");
+		expect(prompt).toContain("**incident-postmortem**:");
+		expect(prompt).toContain("**cite-sources**:");
+	});
+
+	test("no Skills catalog when no active skill has a description", () => {
+		const agent: LoadedAgent = {
+			manifest: { name: "t", version: "0.1.0", description: "t" },
+			soul: "",
+			rules: "",
+			duties: "",
+			tools: [],
+			skills: new Map([["bare-skill", "# Skill: Bare\n\nBody only.\n"]]),
+			skillMeta: new Map([["bare-skill", { name: "bare-skill" }]]),
+			subAgents: new Map(),
+			knowledge: [],
+			workflows: new Map(),
+			sharedSkills: new Map(),
+			sharedSkillMeta: new Map(),
+		};
 		const prompt = buildSystemPrompt(agent);
 		expect(prompt).not.toContain("## Skills\n");
 	});

@@ -1,3 +1,8 @@
+---
+name: cite-sources
+description: Require every factual claim in an analysis to be traceable to a specific tool output -- name the tool and datasource, include the concrete supporting data point, and mark inferences explicitly as hypotheses rather than findings. Applies to the orchestrator and every sub-agent on every turn that states a finding.
+---
+
 # Skill: Cite Sources
 
 ## Purpose

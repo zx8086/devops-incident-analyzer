@@ -28,6 +28,7 @@ skills:
   - normalize-incident
   - aggregate-findings
   - propose-mitigation
+  - incident-postmortem
   - wiki-ingest
   - wiki-query
   - wiki-lint
