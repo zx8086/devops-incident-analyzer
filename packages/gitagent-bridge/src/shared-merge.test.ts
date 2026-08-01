@@ -134,8 +134,9 @@ describe("loadAgent: SIO-843 dynamic-pattern fields", () => {
 		// hooks/memory are root-only even though the root now has them
 		expect(elastic?.hooks).toBeUndefined();
 		expect(elastic?.memory).toBeUndefined();
-		// SIO-1352: workflows load for every agent tier; elastic-agent ships none today
-		expect(elastic?.workflows.size).toBe(0);
+		// SIO-1352: workflows load for every agent tier; SIO-1354 shipped
+		// elastic-agent's resolve-identifiers preset, so assert it loads.
+		expect(elastic?.workflows.has("elastic-resolve-identifiers")).toBe(true);
 		// but shared merge still runs for sub-agents
 		expect(elastic?.sharedSkills instanceof Map).toBe(true);
 	});

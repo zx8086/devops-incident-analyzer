@@ -1,0 +1,61 @@
+name: konnect-resolve-identifiers
+version: 0.1.0
+description: >
+  Deterministic konnect identifier discovery for the pre-fan-out
+  resolveIdentifiers node (SIO-1354). Two-stage: enumerate control planes
+  (optionally filtered by the focus token, which travels via the trigger
+  payload -- an empty filterName is omitted from the tool args), select the
+  focus-matching control plane in code, then enumerate its services. Selection
+  and focus matching stay in code (selectKonnectControlPlaneFromRaw /
+  assembleKonnectFromRaws).
+
+triggers:
+  - type: manual
+
+steps:
+  - name: list-control-planes
+    tool: konnect_list_control_planes
+    description: Enumerate control planes (focus token filter when available)
+    with:
+      filterName: ${{ trigger.filterName }}
+      pageSize: "10"
+    outputs:
+      - raw
+
+  - name: select-control-plane
+    node: selectKonnectControlPlane
+    description: Pick the focus-matching control plane, else the first (code; throws when none)
+    depends_on:
+      - list-control-planes
+    with:
+      cpRaw: ${{ steps.list-control-planes.outputs.raw }}
+    outputs:
+      - controlPlaneId
+      - controlPlaneName
+
+  - name: list-services
+    tool: konnect_list_services
+    description: Enumerate the selected control plane's services
+    depends_on:
+      - select-control-plane
+    with:
+      controlPlaneId: ${{ steps.select-control-plane.outputs.controlPlaneId }}
+      pageSize: "100"
+    outputs:
+      - raw
+    error_handling: continue
+
+  - name: assemble
+    node: assembleKonnectFromRaws
+    description: Focus-match service ids onto the selected control plane (code, not YAML)
+    depends_on:
+      - select-control-plane
+      - list-services
+    with:
+      controlPlaneId: ${{ steps.select-control-plane.outputs.controlPlaneId }}
+      controlPlaneName: ${{ steps.select-control-plane.outputs.controlPlaneName }}
+      servicesRaw: ${{ steps.list-services.outputs.raw }}
+    outputs:
+      - result
+
+error_handling: fail_fast

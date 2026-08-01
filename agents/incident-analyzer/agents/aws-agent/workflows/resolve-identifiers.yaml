@@ -1,0 +1,37 @@
+name: aws-resolve-identifiers
+version: 0.1.0
+description: >
+  Deterministic aws log-group discovery for the pre-fan-out resolveIdentifiers
+  node (SIO-1354), via the MULTIPLIED-STEP convention: the single
+  describe-log-groups step below runs once per target estate (parallel,
+  per-branch timeout budgets, each inside its withAwsEstate cross-account
+  scope -- aws tools THROW outside it). The focus-derived name pattern travels
+  via the trigger payload; branch unpacking, focus matching, and SIO-1328
+  unresolved-estate tracking stay in code (assembleAwsFromBranches). ECS
+  enumeration is deliberately NOT probed here (needs a prior list-clusters
+  hop; the aws-agent RULES.md drives that derivation sub-agent-side).
+
+triggers:
+  - type: manual
+
+steps:
+  - name: describe-log-groups
+    tool: aws_logs_describe_log_groups
+    description: Pattern-scoped log-group discovery, multiplied across target estates
+    with:
+      logGroupNamePattern: ${{ trigger.pattern }}
+      limit: "50"
+    outputs:
+      - raw
+
+  - name: assemble
+    node: assembleAwsFromBranches
+    description: Unpack branches, focus-match, track unresolved estates (code, not YAML)
+    depends_on:
+      - describe-log-groups
+    with:
+      branchesRaw: ${{ steps.describe-log-groups.outputs.raw }}
+    outputs:
+      - result
+
+error_handling: fail_fast
