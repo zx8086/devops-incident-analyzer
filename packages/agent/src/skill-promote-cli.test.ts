@@ -27,3 +27,19 @@ describe("skillFilePath (SIO-1017)", () => {
 		expect(p).toBe("/repo/agents/incident-analyzer/skills/lag-correlation/SKILL.md");
 	});
 });
+
+describe("parsePromoteArgs modes (SIO-1345)", () => {
+	test("--list needs no --skill", () => {
+		const args = parsePromoteArgs(["--list"]);
+		expect(args.list).toBe(true);
+		expect(args.skill).toBeUndefined();
+	});
+	test("--pr with --ticket", () => {
+		const args = parsePromoteArgs(["--skill", "s", "--pr", "--ticket", "SIO-1345"]);
+		expect(args.pr).toBe(true);
+		expect(args.ticket).toBe("SIO-1345");
+	});
+	test("still throws without --skill in promote modes", () => {
+		expect(() => parsePromoteArgs(["--pr"])).toThrow(/--skill/);
+	});
+});
