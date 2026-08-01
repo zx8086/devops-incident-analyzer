@@ -151,6 +151,69 @@ describe("findLinkedIncidents SIO-704 regressions", () => {
 		expect(result.count).toBe(1);
 	});
 
+	// SIO-1336: isLast:false means more incidents matched than the `limit`-bounded page
+	// returned. Before this fix, count:N was indistinguishable from "N is the total that
+	// matched" -- callers (and the correlation extractor) had no signal that the real count
+	// could be higher.
+	test("flags truncation via configWarning when isLast is false", async () => {
+		const fakeProxy = {
+			callTool: async () => ({
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({
+							issues: [
+								{
+									key: "INC-1",
+									fields: { summary: "test", status: { name: "Open" }, created: "2026-04-10T10:00:00Z" },
+								},
+							],
+							isLast: false,
+							nextPageToken: "next",
+						}),
+					},
+				],
+			}),
+		} as unknown as AtlassianMcpProxy;
+		const result = await findLinkedIncidents(fakeProxy, {
+			service: "api",
+			withinDays: 30,
+			limit: 1,
+			incidentProjects: ["INC"],
+		});
+		expect(result.count).toBe(1);
+		expect(result.configWarning).toBeDefined();
+		expect(result.configWarning).toContain("truncated");
+	});
+
+	test("does not set configWarning when isLast is true", async () => {
+		const fakeProxy = {
+			callTool: async () => ({
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({
+							issues: [
+								{
+									key: "INC-1",
+									fields: { summary: "test", status: { name: "Open" }, created: "2026-04-10T10:00:00Z" },
+								},
+							],
+							isLast: true,
+						}),
+					},
+				],
+			}),
+		} as unknown as AtlassianMcpProxy;
+		const result = await findLinkedIncidents(fakeProxy, {
+			service: "api",
+			withinDays: 30,
+			limit: 10,
+			incidentProjects: ["INC"],
+		});
+		expect(result.configWarning).toBeUndefined();
+	});
+
 	test("propagates AtlassianAuthRequiredError instead of silently emptying issues", async () => {
 		const fakeProxy = {
 			callTool: async () => ({

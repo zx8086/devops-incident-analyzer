@@ -44,7 +44,9 @@ export const OutputSchema = z.object({
 	configWarning: z
 		.string()
 		.optional()
-		.describe("SIO-1184: set when ATLASSIAN_INCIDENT_PROJECTS named projects that do not exist on this site"),
+		.describe(
+			"Set when ATLASSIAN_INCIDENT_PROJECTS named projects that do not exist on this site (SIO-1184) and/or when the 30d/window total exceeds the 100-issue page fetched, making totals/MTTR undercounts (SIO-1336). Multiple warnings are space-joined.",
+		),
 });
 
 export type GetIncidentHistoryInput = z.infer<typeof InputSchema>;
@@ -151,8 +153,12 @@ export function aggregate(
 
 // SIO-704: tolerate the {issues, isLast, nextPageToken} pagination envelope and any
 // future top-level fields the upstream may add. Extra keys are ignored at runtime.
+// SIO-1336: isLast is read below -- this tool aggregates counts/MTTR over a single
+// maxResults:100 page with no follow-up fetch, so more matches than that silently
+// under-count and skew the mean MTTR while still reporting a clean, unflagged total.
 interface JiraSearchResponse {
 	issues?: RawIssueForHistory[];
+	isLast?: boolean;
 }
 
 export async function getIncidentHistory(
@@ -186,7 +192,20 @@ export async function getIncidentHistory(
 		return aggregate([], ctx.windowDays, ctx.groupBy, ctx.service);
 	}
 
-	return aggregate(parsed.issues ?? [], ctx.windowDays, ctx.groupBy, ctx.service);
+	const issues = parsed.issues ?? [];
+	const output = aggregate(issues, ctx.windowDays, ctx.groupBy, ctx.service);
+
+	// SIO-1336: isLast:false means the true incident count/MTTR for this window exceeds what
+	// was aggregated -- the totals below are a floor, not the actual totals, and nothing else
+	// in this payload distinguishes that from a genuine complete count.
+	if (parsed.isLast === false) {
+		return {
+			...output,
+			configWarning: `More than ${issues.length} incidents matched within ${ctx.windowDays}d; totals and MTTR reflect only the first ${issues.length} and are undercounts. Narrow the window to get complete aggregates.`,
+		};
+	}
+
+	return output;
 }
 
 export function registerGetIncidentHistory(
@@ -218,9 +237,11 @@ export function registerGetIncidentHistory(
 						groupBy: args.groupBy ?? "week",
 						incidentProjects: effective.projects,
 					});
-					const payload: GetIncidentHistoryOutput = effective.configWarning
-						? { ...output, configWarning: effective.configWarning }
-						: output;
+					// SIO-1336: compose rather than overwrite -- a nonexistent-project warning and a
+					// pagination-truncation warning can both be true for the same call.
+					const warnings = [effective.configWarning, output.configWarning].filter((w): w is string => w !== undefined);
+					const payload: GetIncidentHistoryOutput =
+						warnings.length > 0 ? { ...output, configWarning: warnings.join(" ") } : output;
 					return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }] };
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);

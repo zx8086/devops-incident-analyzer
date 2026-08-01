@@ -75,7 +75,9 @@ export const OutputSchema = z.object({
 	configWarning: z
 		.string()
 		.optional()
-		.describe("SIO-1184: set when ATLASSIAN_INCIDENT_PROJECTS named projects that do not exist on this site"),
+		.describe(
+			"Set when ATLASSIAN_INCIDENT_PROJECTS named projects that do not exist on this site (SIO-1184) and/or when more incidents matched than were returned (SIO-1336). Multiple warnings are space-joined.",
+		),
 });
 
 export type FindLinkedIncidentsInput = z.infer<typeof InputSchema>;
@@ -173,8 +175,12 @@ export function shapeIssue(raw: JiraIssueRaw, siteUrl?: string): z.infer<typeof 
 
 // SIO-704: tolerate the {issues, isLast, nextPageToken} pagination envelope and any
 // future top-level fields the upstream may add. Extra keys are ignored at runtime.
+// SIO-1336: isLast is read (see below) -- more matches exist beyond `limit` than the
+// count:N this tool reports, and that must not be silently indistinguishable from
+// "N is the total that matched."
 interface JiraSearchResponse {
 	issues?: JiraIssueRaw[];
+	isLast?: boolean;
 }
 
 export async function findLinkedIncidents(
@@ -214,7 +220,20 @@ export async function findLinkedIncidents(
 	const rawIssues = parsed.issues ?? [];
 	const issues = rawIssues.map((raw) => shapeIssue(raw, ctx.siteUrl));
 
-	return { service: ctx.service, jql, count: issues.length, issues };
+	// SIO-1336: isLast:false means more matches exist beyond this page than `count` reports --
+	// without this, count reads as the total that matched (it is only the total returned).
+	const truncationWarning =
+		parsed.isLast === false
+			? `More than ${issues.length} incidents matched within ${ctx.withinDays}d; results were truncated to the requested limit. Increase limit or narrow withinDays to see the full set.`
+			: undefined;
+
+	return {
+		service: ctx.service,
+		jql,
+		count: issues.length,
+		issues,
+		...(truncationWarning ? { configWarning: truncationWarning } : {}),
+	};
 }
 
 export function registerFindLinkedIncidents(
@@ -250,9 +269,11 @@ export function registerFindLinkedIncidents(
 						incidentProjects: effective.projects,
 						siteUrl,
 					});
-					const payload: FindLinkedIncidentsOutput = effective.configWarning
-						? { ...output, configWarning: effective.configWarning }
-						: output;
+					// SIO-1336: compose rather than overwrite -- a nonexistent-project warning and a
+					// pagination-truncation warning can both be true for the same call.
+					const warnings = [effective.configWarning, output.configWarning].filter((w): w is string => w !== undefined);
+					const payload: FindLinkedIncidentsOutput =
+						warnings.length > 0 ? { ...output, configWarning: warnings.join(" ") } : output;
 					return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }] };
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
