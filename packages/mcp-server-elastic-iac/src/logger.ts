@@ -1,10 +1,7 @@
 // src/logger.ts
-import pino from "pino";
+import { createMcpLogger } from "@devops-agent/shared";
 
-export const logger = pino({
-	name: "elastic-iac-mcp-server",
-	level: process.env.LOG_LEVEL ?? "info",
-});
+export const logger = createMcpLogger("elastic-iac-mcp-server");
 
 export function createContextLogger(context: string) {
 	return logger.child({ context });

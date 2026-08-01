@@ -236,6 +236,16 @@ mock.module("@devops-agent/shared", () => {
 		buildTelemetryConfig: () => undefined,
 		// SIO-1044: knowledge-graph server.ts now imports createCachedServerFactory at module load.
 		createCachedServerFactory: () => () => undefined,
+		// SIO-1351: knowledge-graph server's logger.ts now imports createMcpLogger at module load
+		// (previously a bare pino() call, no @devops-agent/shared dependency). Same link-error
+		// requirement as the other stubs above.
+		createMcpLogger: () => ({
+			child: () => ({ info: () => undefined, warn: () => undefined, error: () => undefined, debug: () => undefined }),
+			info: () => undefined,
+			warn: () => undefined,
+			error: () => undefined,
+			debug: () => undefined,
+		}),
 	};
 });
 

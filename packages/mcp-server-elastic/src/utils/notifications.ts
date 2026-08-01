@@ -115,10 +115,9 @@ export class NotificationManager {
 	async sendMessage(notification: GeneralNotification): Promise<void> {
 		// CRITICAL: Most MCP clients don't support notifications/message
 		// Always log locally and skip sending notification to avoid errors
-		const logMessage = `[${notification.level.toUpperCase()}] ${notification.data.message}`;
+		const logMessage = notification.data.message;
 		const logMetadata = {
 			level: notification.level,
-			type: notification.data.type,
 			operation_id: notification.data.operation_id,
 			data: notification.data,
 		};
