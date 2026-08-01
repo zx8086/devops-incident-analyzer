@@ -96,7 +96,12 @@ export function loadSchedules(
 		return schedules;
 	}
 
-	const files = readdirSync(schedulesDir).filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"));
+	// Sorted explicitly: readdirSync's order is filesystem/OS-dependent (observed
+	// to differ between macOS and Linux CI), and which file "wins" a duplicate id
+	// must be deterministic, not an accident of directory enumeration order.
+	const files = readdirSync(schedulesDir)
+		.filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"))
+		.sort();
 	for (const file of files) {
 		const path = join(schedulesDir, file);
 		try {
