@@ -224,7 +224,7 @@ describe("proposeIlmChange live-parity (SIO-983)", () => {
 			gitlab_create_branch: () => "[201] {}",
 			gitlab_commit_file: () => "[201] {}",
 			// Deployment not wired into this MCP session -> placeholder -> parseEsIlmPolicyResponse null.
-			elastic_ilm_get_lifecycle: () => "[cluster 'us-cld' not configured: set ELASTIC_IAC_CLUSTER_DEPLOYMENTS ...]",
+			elastic_ilm_get_lifecycle: () => "[cluster 'us-cld' not configured: set ELASTIC_DEPLOYMENTS ...]",
 		});
 		const { proposeIlmChange } = await import("./nodes.ts");
 		const out = await proposeIlmChange(asIacState({}), {

@@ -881,8 +881,7 @@ describe("buildLiveReconcile — ilm family", () => {
 
 	test("blocks when the live cluster read is not authoritative (e.g. cluster not configured)", async () => {
 		mockTools({
-			elastic_ilm_get_lifecycle: () =>
-				"[cluster 'eu-b2b' not configured: set ELASTIC_IAC_CLUSTER_DEPLOYMENTS + ELASTIC_IAC_CLUSTER_<ID>_URL]",
+			elastic_ilm_get_lifecycle: () => "[cluster 'eu-b2b' not configured: set ELASTIC_DEPLOYMENTS + ELASTIC_<ID>_URL]",
 		});
 		const { buildLiveReconcile } = await import("./nodes.ts");
 		const built = await buildLiveReconcile(

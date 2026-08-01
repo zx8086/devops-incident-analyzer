@@ -80,19 +80,20 @@ export const ConfigSchema = z.object({
 
 export type Config = z.infer<typeof ConfigSchema>;
 
-// Per-deployment cluster env convention: ELASTIC_IAC_CLUSTER_<ID_UPPER_UNDERSCORED>_<SUFFIX>
-// (URL / API_KEY / USERNAME / PASSWORD), with the id list in ELASTIC_IAC_CLUSTER_DEPLOYMENTS.
-// Mirrors mcp-server-elastic's deployments loader. A deployment with no URL is skipped (one
-// misconfigured cluster never blocks the others).
+// SIO-1323: reuse mcp-server-elastic's existing per-deployment env convention
+// (ELASTIC_<ID_UPPER_UNDERSCORED>_<SUFFIX>, id list in ELASTIC_DEPLOYMENTS) instead of a
+// separate ELASTIC_IAC_CLUSTER_* set of vars -- the URL/API_KEY/USERNAME/PASSWORD values
+// already exist per deployment for the elastic-agent MCP; no new secrets to configure.
+// A deployment with no URL is skipped (one misconfigured cluster never blocks the others).
 function clusterEnvKey(id: string, suffix: string): string {
-	return `ELASTIC_IAC_CLUSTER_${id.toUpperCase().replace(/-/g, "_")}_${suffix}`;
+	return `ELASTIC_${id.toUpperCase().replace(/-/g, "_")}_${suffix}`;
 }
 function readClusterEnv(id: string, suffix: string): string | undefined {
 	const v = Bun.env[clusterEnvKey(id, suffix)];
 	return v && v.length > 0 ? v : undefined;
 }
 function loadClusterDeployments(): ClusterDeployment[] {
-	const raw = Bun.env.ELASTIC_IAC_CLUSTER_DEPLOYMENTS;
+	const raw = Bun.env.ELASTIC_DEPLOYMENTS;
 	if (!raw) return [];
 	const out: ClusterDeployment[] = [];
 	for (const id of raw
