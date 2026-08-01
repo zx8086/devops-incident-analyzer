@@ -1,0 +1,43 @@
+name: kafka-resolve-identifiers
+version: 0.1.0
+description: >
+  Deterministic kafka identifier discovery for the pre-fan-out
+  resolveIdentifiers node (SIO-1354). Two independent enumerations -- topics
+  and consumer groups -- each tolerant to failure; focus matching and dedupe
+  stay in code (assembleKafkaFromRaws). NEVER add a `filter` arg: the server
+  compiles it as a raw RegExp and a non-regex token throws MCP -32603 --
+  enumerate unfiltered and match client-side.
+
+triggers:
+  - type: manual
+
+steps:
+  - name: list-topics
+    tool: kafka_list_topics
+    description: Enumerate topics (unfiltered; client-side focus match)
+    with:
+      limit: "500"
+    outputs:
+      - raw
+    error_handling: continue
+
+  - name: list-consumer-groups
+    tool: kafka_list_consumer_groups
+    description: Enumerate consumer groups (unfiltered; client-side focus match)
+    outputs:
+      - raw
+    error_handling: continue
+
+  - name: assemble
+    node: assembleKafkaFromRaws
+    description: Focus-match + dedupe (code, not YAML)
+    depends_on:
+      - list-topics
+      - list-consumer-groups
+    with:
+      topicsRaw: ${{ steps.list-topics.outputs.raw }}
+      groupsRaw: ${{ steps.list-consumer-groups.outputs.raw }}
+    outputs:
+      - result
+
+error_handling: fail_fast

@@ -1255,8 +1255,337 @@ describe("SIO-1353 preset runner unit behavior", () => {
 			toolFor: () => undefined,
 			withTimeout: (p) => p,
 			timeoutMs: 1000,
-			assemble: async () => ({}),
+			nodes: {},
 		});
 		expect(result).toBeUndefined();
+	});
+});
+
+// SIO-1354: kafka/konnect/gitlab presets must produce identical fragments AND
+// identical tool arguments to their legacy probes (the args comparison proves
+// the YAML string -> typed-arg coercion in toToolArgs reconstructs exactly
+// what the legacy code passed). Each scenario exercises the real shipped YAML.
+describe("SIO-1354 kafka/konnect/gitlab preset parity", () => {
+	const ORIG_PRESETS = process.env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED;
+	afterEach(() => {
+		if (ORIG_PRESETS === undefined) delete process.env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED;
+		else process.env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED = ORIG_PRESETS;
+	});
+
+	async function bothPaths(datasource: "kafka" | "konnect" | "gitlab", seenArgs?: unknown[]) {
+		process.env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED = "false";
+		const legacy = await resolveIdentifiers(makeState({ targetDataSources: [datasource] }));
+		const legacyArgs = seenArgs ? [...seenArgs] : undefined;
+		seenArgs?.splice(0);
+		process.env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED = "true";
+		const preset = await resolveIdentifiers(makeState({ targetDataSources: [datasource] }));
+		const presetArgs = seenArgs ? [...seenArgs] : undefined;
+		return {
+			legacy: legacy.resolvedIdentifiers,
+			preset: preset.resolvedIdentifiers,
+			legacyArgs,
+			presetArgs,
+		};
+	}
+
+	test("kafka: both branches resolve with identical args and never a filter", async () => {
+		const seenArgs: unknown[] = [];
+		toolRegistry.kafka = [
+			{
+				name: "kafka_list_topics",
+				invoke: async (args) => {
+					seenArgs.push(args);
+					return JSON.stringify({ topics: [{ name: "orders.v1" }], total: 1 });
+				},
+			},
+			{
+				name: "kafka_list_consumer_groups",
+				invoke: async (args) => {
+					seenArgs.push(args);
+					return JSON.stringify([{ id: "orders-service-prd", state: "Stable" }]);
+				},
+			},
+		];
+		const { legacy, preset, legacyArgs, presetArgs } = await bothPaths("kafka", seenArgs);
+		expect(legacy?.kafka).toEqual({ topics: ["orders.v1"], consumerGroups: ["orders-service-prd"] });
+		expect(preset?.kafka).toEqual(legacy?.kafka);
+		// arg parity: "500" in YAML coerced back to the number the legacy code passed
+		expect(presetArgs).toEqual(legacyArgs);
+		for (const a of presetArgs ?? []) {
+			expect((a as Record<string, unknown>).filter).toBeUndefined();
+		}
+	});
+
+	test("kafka: a failing consumer-group branch degrades to topics-only on both paths", async () => {
+		toolRegistry.kafka = [
+			{
+				name: "kafka_list_topics",
+				invoke: async () => JSON.stringify({ topics: [{ name: "orders.v1" }], total: 1 }),
+			},
+			{
+				name: "kafka_list_consumer_groups",
+				invoke: async () => {
+					throw new Error("group coordinator unavailable");
+				},
+			},
+		];
+		const { legacy, preset } = await bothPaths("kafka");
+		expect(legacy?.kafka).toEqual({ topics: ["orders.v1"], consumerGroups: [] });
+		expect(preset?.kafka).toEqual(legacy?.kafka);
+	});
+
+	test("kafka: both branches failing omit kafka on both paths", async () => {
+		toolRegistry.kafka = [
+			{
+				name: "kafka_list_topics",
+				invoke: async () => {
+					throw new Error("broker down");
+				},
+			},
+			{
+				name: "kafka_list_consumer_groups",
+				invoke: async () => {
+					throw new Error("broker down");
+				},
+			},
+		];
+		const { legacy, preset } = await bothPaths("kafka");
+		expect(legacy?.kafka).toBeUndefined();
+		expect(preset?.kafka).toEqual(legacy?.kafka);
+	});
+
+	test("konnect: control plane + matching service with identical two-stage args", async () => {
+		const seenArgs: unknown[] = [];
+		toolRegistry.konnect = [
+			{
+				name: "konnect_list_control_planes",
+				invoke: async (args) => {
+					seenArgs.push(args);
+					return JSON.stringify({ controlPlanes: [{ controlPlaneId: "cp-1", name: "orders-cp" }] });
+				},
+			},
+			{
+				name: "konnect_list_services",
+				invoke: async (args) => {
+					seenArgs.push(args);
+					return JSON.stringify({
+						services: [
+							{ serviceId: "svc-1", name: "order-service" },
+							{ serviceId: "svc-2", name: "payments" },
+						],
+					});
+				},
+			},
+		];
+		const { legacy, preset, legacyArgs, presetArgs } = await bothPaths("konnect", seenArgs);
+		expect(legacy?.konnect?.controlPlaneId).toBe("cp-1");
+		expect(legacy?.konnect?.serviceIds).toEqual(["svc-1"]);
+		expect(preset?.konnect).toEqual(legacy?.konnect);
+		// the mid-flow controlPlaneId template + pageSize coercion reconstruct the legacy args
+		expect(presetArgs).toEqual(legacyArgs);
+	});
+
+	test("konnect: a failing services stage keeps the control-plane block on both paths", async () => {
+		toolRegistry.konnect = [
+			{
+				name: "konnect_list_control_planes",
+				invoke: async () => JSON.stringify({ controlPlanes: [{ controlPlaneId: "cp-1", name: "orders-cp" }] }),
+			},
+			{
+				name: "konnect_list_services",
+				invoke: async () => {
+					throw new Error("services endpoint 502");
+				},
+			},
+		];
+		const { legacy, preset } = await bothPaths("konnect");
+		expect(legacy?.konnect).toEqual({ controlPlaneId: "cp-1", controlPlaneName: "orders-cp" });
+		expect(preset?.konnect).toEqual(legacy?.konnect);
+	});
+
+	test("konnect: empty control-plane enumeration omits konnect on both paths", async () => {
+		toolRegistry.konnect = [
+			{ name: "konnect_list_control_planes", invoke: async () => JSON.stringify({ controlPlanes: [] }) },
+		];
+		const { legacy, preset } = await bothPaths("konnect");
+		expect(legacy?.konnect).toBeUndefined();
+		expect(preset?.konnect).toEqual(legacy?.konnect);
+	});
+
+	test("konnect: a control-plane failure omits konnect on both paths", async () => {
+		toolRegistry.konnect = [
+			{
+				name: "konnect_list_control_planes",
+				invoke: async () => {
+					throw new Error("konnect unreachable");
+				},
+			},
+		];
+		const { legacy, preset } = await bothPaths("konnect");
+		expect(legacy?.konnect).toBeUndefined();
+		expect(preset?.konnect).toEqual(legacy?.konnect);
+	});
+
+	test("gitlab: exact-match preference with identical group-scoped args", async () => {
+		const seenArgs: unknown[] = [];
+		toolRegistry.gitlab = [
+			{
+				name: "gitlab_search",
+				invoke: async (args) => {
+					seenArgs.push(args);
+					return JSON.stringify([
+						{
+							id: 41051854,
+							name: "orders-service-legacy",
+							path_with_namespace: "pvhcorp/b2b/oit/orders-service-legacy",
+						},
+						{
+							id: 80424402,
+							name: "pvh-ecomm-order-services",
+							path_with_namespace: "pvhcorp/nara/pvh-ecomm-order-services",
+						},
+						{ id: 48543975, name: "order-service", path_with_namespace: "pvhcorp/b2b/oit/order-service" },
+					]);
+				},
+			},
+		];
+		const { legacy, preset, legacyArgs, presetArgs } = await bothPaths("gitlab", seenArgs);
+		expect(legacy?.gitlab).toEqual({
+			projectId: "48543975",
+			pathWithNamespace: "pvhcorp/b2b/oit/order-service",
+		});
+		expect(preset?.gitlab).toEqual(legacy?.gitlab);
+		// trigger-carried search term and group stay STRINGS through the coercion
+		expect(presetArgs).toEqual(legacyArgs);
+		expect(presetArgs?.[0]).toMatchObject({ scope: "projects", search: "order-service", group_id: "pvhcorp" });
+	});
+
+	test("gitlab: unmatched rows resolve nothing on both paths (no rows[0] fallback)", async () => {
+		toolRegistry.gitlab = [
+			{
+				name: "gitlab_search",
+				invoke: async () =>
+					JSON.stringify([
+						{ id: 999, name: "totally-unrelated", path_with_namespace: "someone-else/totally-unrelated" },
+					]),
+			},
+		];
+		const { legacy, preset } = await bothPaths("gitlab");
+		expect(legacy?.gitlab).toBeUndefined();
+		expect(preset?.gitlab).toEqual(legacy?.gitlab);
+	});
+});
+
+// SIO-1354: elastic and aws presets use the multiplied-step convention -- one
+// declared tool step, executed once per deployment/estate by the handler.
+// Parity covers fragments, tool args (the JSON-through-trigger query/aggs must
+// reconstruct the legacy args exactly), and the SIO-1328 unresolved-coverage
+// degradations.
+describe("SIO-1354 elastic/aws multiplied-step preset parity", () => {
+	const ORIG_PRESETS = process.env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED;
+	afterEach(() => {
+		if (ORIG_PRESETS === undefined) delete process.env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED;
+		else process.env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED = ORIG_PRESETS;
+	});
+
+	async function bothPaths(overrides: Partial<AgentStateType>, seenArgs?: unknown[]) {
+		process.env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED = "false";
+		const legacy = await resolveIdentifiers(makeState(overrides));
+		const legacyArgs = seenArgs ? [...seenArgs] : undefined;
+		seenArgs?.splice(0);
+		process.env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED = "true";
+		const preset = await resolveIdentifiers(makeState(overrides));
+		const presetArgs = seenArgs ? [...seenArgs] : undefined;
+		return {
+			legacy: legacy.resolvedIdentifiers,
+			preset: preset.resolvedIdentifiers,
+			legacyArgs,
+			presetArgs,
+		};
+	}
+
+	test("elastic: candidates + placements resolve with identical reconstructed agg args", async () => {
+		const seenArgs: unknown[] = [];
+		toolRegistry.elastic = [
+			{
+				name: "elasticsearch_search",
+				invoke: async (args) => {
+					seenArgs.push(args);
+					return elasticAggPayload(["pvh-services-orders", "unrelated-svc"]);
+				},
+			},
+		];
+		const { legacy, preset, legacyArgs, presetArgs } = await bothPaths({ targetDataSources: ["elastic"] }, seenArgs);
+		expect(legacy?.elastic?.serviceNames).toEqual(["pvh-services-orders"]);
+		expect(preset?.elastic).toEqual(legacy?.elastic);
+		// the trigger-carried JSON query/aggs reconstruct the exact per-deployment args
+		expect(presetArgs).toEqual(legacyArgs);
+		expect(presetArgs?.length).toBeGreaterThan(0);
+	});
+
+	test("elastic: an entirely failing probe reports unresolvedDeployments on both paths", async () => {
+		toolRegistry.elastic = [
+			{
+				name: "elasticsearch_search",
+				invoke: async () => {
+					throw new Error("elastic unreachable");
+				},
+			},
+		];
+		const { legacy, preset } = await bothPaths({ targetDataSources: ["elastic"] });
+		expect(legacy?.elastic?.serviceNames).toEqual([]);
+		expect(legacy?.elastic?.unresolvedDeployments?.length).toBeGreaterThan(0);
+		expect(preset?.elastic).toEqual(legacy?.elastic);
+	});
+
+	test("aws: focus-matched log groups resolve with identical pattern args", async () => {
+		const seenArgs: unknown[] = [];
+		toolRegistry.aws = [
+			{
+				name: "aws_logs_describe_log_groups",
+				invoke: async (args) => {
+					seenArgs.push(args);
+					return JSON.stringify({
+						logGroups: [{ logGroupName: "/ecs/order-service" }, { logGroupName: "/ecs/payments" }],
+					});
+				},
+			},
+		];
+		const { legacy, preset, legacyArgs, presetArgs } = await bothPaths(
+			{ targetDataSources: ["aws"], awsTargetEstates: ["eu-oit-prd"] },
+			seenArgs,
+		);
+		expect(legacy?.aws?.logGroups).toEqual(["/ecs/order-service"]);
+		expect(preset?.aws).toEqual(legacy?.aws);
+		expect(presetArgs).toEqual(legacyArgs);
+		expect(presetArgs?.[0]).toMatchObject({ limit: 50 });
+	});
+
+	test("aws: a failing estate reports unresolvedEstates on both paths", async () => {
+		toolRegistry.aws = [
+			{
+				name: "aws_logs_describe_log_groups",
+				invoke: async () => {
+					throw new Error("estate assume-role denied");
+				},
+			},
+		];
+		const { legacy, preset } = await bothPaths({ targetDataSources: ["aws"], awsTargetEstates: ["eu-oit-prd"] });
+		expect(legacy?.aws).toEqual({ logGroups: [], unresolvedEstates: ["eu-oit-prd"] });
+		expect(preset?.aws).toEqual(legacy?.aws);
+	});
+
+	test("aws: no target estates skips the probe cleanly on both paths", async () => {
+		toolRegistry.aws = [
+			{
+				name: "aws_logs_describe_log_groups",
+				invoke: async () => {
+					throw new Error("must not be called outside withAwsEstate scope");
+				},
+			},
+		];
+		const { legacy, preset } = await bothPaths({ targetDataSources: ["aws"], awsTargetEstates: [] });
+		expect(legacy?.aws).toBeUndefined();
+		expect(preset?.aws).toEqual(legacy?.aws);
 	});
 });

@@ -1,0 +1,36 @@
+name: gitlab-resolve-identifiers
+version: 0.1.0
+description: >
+  Deterministic gitlab project-id discovery for the pre-fan-out
+  resolveIdentifiers node (SIO-1354). One GROUP-SCOPED search (SIO-1261: never
+  global -- global project search returns unrelated public repos, and this id
+  is AUTHORITATIVE for the sub-agent since SIO-1258) searching the FULL
+  service name; the trigger payload carries the focus-derived term and the
+  resolution group. Exact-match preference and the no-rows[0]-fallback rule
+  stay in code (assembleGitlabFromRaws).
+
+triggers:
+  - type: manual
+
+steps:
+  - name: search-projects
+    tool: gitlab_search
+    description: Group-scoped project search for the full service name
+    with:
+      scope: projects
+      search: ${{ trigger.searchTerm }}
+      group_id: ${{ trigger.groupId }}
+    outputs:
+      - raw
+
+  - name: assemble
+    node: assembleGitlabFromRaws
+    description: Exact-name preference, fuzzy fallback, never rows[0] (code, not YAML)
+    depends_on:
+      - search-projects
+    with:
+      projectsRaw: ${{ steps.search-projects.outputs.raw }}
+    outputs:
+      - result
+
+error_handling: fail_fast

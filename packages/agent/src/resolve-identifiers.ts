@@ -266,7 +266,13 @@ export async function resolveIdentifiers(
 	const graphSeeds = await fetchGraphSeeds(focus.services, seedScope);
 
 	const probes: Array<Promise<Partial<ResolvedIdentifiers>>> = [];
-	if (inScope.has("elastic")) probes.push(catchOnlyProbe("elastic", () => probeElastic(state, focus.services)));
+	if (inScope.has("elastic")) {
+		probes.push(
+			isResolvePresetsEnabled()
+				? catchOnlyProbe("elastic", () => probeElasticPreset(state, focus.services))
+				: catchOnlyProbe("elastic", () => probeElastic(state, focus.services)),
+		);
+	}
 	// SIO-1332: probeCouchbase runs its own Promise.allSettled([scopes, indexes, buckets]) with
 	// no per-branch timeout, the same shape probeElastic/probeAws had before SIO-1326 -- wrapping
 	// it in safeProbe's OUTER withTimeout races that allSettled a second time, and a slow
@@ -274,10 +280,37 @@ export async function resolveIdentifiers(
 	// (no outer timeout) matches the SIO-1326 fix; the query/collection-manager calls inside have
 	// their own SDK-level bounds, same reasoning as probeElastic/probeAws.
 	if (inScope.has("couchbase")) probes.push(catchOnlyProbe("couchbase", () => probeCouchbaseDispatch()));
-	if (inScope.has("aws")) probes.push(catchOnlyProbe("aws", () => probeAws(state, focus.services)));
-	if (inScope.has("kafka")) probes.push(safeProbe("kafka", () => probeKafka(focus.services)));
-	if (inScope.has("konnect")) probes.push(safeProbe("konnect", () => probeKonnect(focus.services)));
-	if (inScope.has("gitlab")) probes.push(safeProbe("gitlab", () => probeGitlab(focus.services)));
+	if (inScope.has("aws")) {
+		probes.push(
+			isResolvePresetsEnabled()
+				? catchOnlyProbe("aws", () => probeAwsPreset(state, focus.services))
+				: catchOnlyProbe("aws", () => probeAws(state, focus.services)),
+		);
+	}
+	// SIO-1354: preset-enabled datasources dispatch through their preset when the
+	// flag is ON (catchOnlyProbe -- per-step budgets live inside the handler);
+	// flag OFF keeps the exact legacy safeProbe wiring.
+	if (inScope.has("kafka")) {
+		probes.push(
+			isResolvePresetsEnabled()
+				? catchOnlyProbe("kafka", () => probeKafkaPreset(focus.services))
+				: safeProbe("kafka", () => probeKafka(focus.services)),
+		);
+	}
+	if (inScope.has("konnect")) {
+		probes.push(
+			isResolvePresetsEnabled()
+				? catchOnlyProbe("konnect", () => probeKonnectPreset(focus.services))
+				: safeProbe("konnect", () => probeKonnect(focus.services)),
+		);
+	}
+	if (inScope.has("gitlab")) {
+		probes.push(
+			isResolvePresetsEnabled()
+				? catchOnlyProbe("gitlab", () => probeGitlabPreset(focus.services))
+				: safeProbe("gitlab", () => probeGitlab(focus.services)),
+		);
+	}
 	// SIO-1096: no atlassian probe. Jira projects are named by team/org (DSD, BP, PANDP), never by
 	// service, so a service->project name-match resolves nothing -- and the answer never needs a
 	// project key: the atlassian sub-agent searches all projects by incident domain terms (its SOUL).
@@ -501,33 +534,25 @@ async function warmElasticDeployments(state: AgentStateType): Promise<void> {
 	);
 }
 
-async function probeElastic(state: AgentStateType, focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {
-	const tool = toolFor("elastic", "elasticsearch_search");
-	if (!tool) return {};
-	// SIO-1279: an empty targetDeployments used to mean ONE probe against the MCP's
-	// default cluster. With 10 configured deployments and eu-b2b third in the list, an
-	// unscoped `order-service` incident probed eu-cld -- where `*order*` returns zero
-	// services -- and reported the service absent. The enumeration was complete and the
-	// reasoning sound, for the wrong cluster. Fan out instead; the parallel dispatch
-	// below already keeps wall-clock near a single probe.
-	const deployments = state.targetDeployments.length > 0 ? state.targetDeployments : configuredElasticDeployments();
-	// SIO-1086: FILTER the discovery agg to the anchor tokens (a wildcard per token)
-	// BEFORE aggregating, instead of a global top-N terms agg. A plain
-	// `terms{size:50}` over the whole cluster ranks by document volume, so a
-	// low-volume service (e.g. `prana-order-service`) falls outside the top buckets
-	// and is wrongly reported absent. Filtering to `*<token>*` first makes the agg
-	// exhaustive for every name matching the anchor regardless of volume; the larger
-	// terms size is then just a safety bound. Verified live: the filtered agg surfaces
-	// prana-order-service (+ 11 other *order* services) that the top-50 dropped.
+// SIO-1354: the discovery-agg args, shared by both elastic paths (the preset
+// path serializes query/aggs through the trigger payload).
+// SIO-1086: FILTER the discovery agg to the anchor tokens (a wildcard per token)
+// BEFORE aggregating, instead of a global top-N terms agg -- a low-volume
+// service falls outside volume-ranked top buckets and is wrongly reported
+// absent. SIO-1279: `env` nested UNDER by_service so each candidate carries its
+// OWN environment mix.
+export function buildElasticDiscoveryArgs(focusServices: string[]): {
+	index: string;
+	size: number;
+	query: unknown;
+	aggs: unknown;
+} {
 	const shoulds = anchorWildcards(focusServices);
 	const query = shoulds.length > 0 ? { bool: { should: shoulds, minimum_should_match: 1 } } : { match_all: {} };
-	const args = {
+	return {
 		index: ELASTIC_DISCOVERY_INDEX,
 		size: 0,
 		query,
-		// SIO-1279: `env` nested UNDER by_service, so each candidate carries its OWN
-		// environment mix. As a sibling agg it would describe the cluster as a whole and
-		// could not tell a prod-only service from a dev-only one.
 		aggs: {
 			by_service: {
 				terms: { field: "service.name", size: 200 },
@@ -535,54 +560,38 @@ async function probeElastic(state: AgentStateType, focusServices: string[]): Pro
 			},
 		},
 	};
-	// Probe deployments in PARALLEL, each with ITS OWN PROBE_TIMEOUT_MS budget.
-	// SIO-1326: this used to share ONE timeout across the whole Promise.allSettled via the
-	// outer safeProbe() wrap. Promise.allSettled only resolves once every branch settles, so
-	// one slow deployment (measured live: eu-b2b at 9.4s against an 8s budget) blew the
-	// shared clock and safeProbe's catch discarded ALL 10 deployments' results -- including
-	// the 9 that had already resolved correctly and found the focus service. Timing each
-	// branch individually means a slow deployment degrades to "missing that one deployment's
-	// candidates" (a rejected settlement, already handled below) instead of erasing every
-	// other deployment's real answer.
-	const timeoutMs = probeTimeoutMs();
-	const settled = await Promise.allSettled(
-		deployments.map((deploymentId) =>
-			withTimeout(
-				deploymentId ? withElasticDeployment(deploymentId, () => tool.invoke(args)) : tool.invoke(args),
-				timeoutMs,
-			),
-		),
-	);
+}
+
+// SIO-1354: per-deployment branch assembly shared by both elastic paths. A
+// branch with ok=false is SIO-1328's inconclusive-coverage case: recorded in
+// unresolvedDeployments so a timeout is never indistinguishable from a proven
+// negative. Target "" labels the single-cluster default deployment.
+export function assembleElasticFromBranches(
+	branches: Array<{ target: string; ok: boolean; raw?: string; error?: string }>,
+	focusServices: string[],
+): Partial<ResolvedIdentifiers> {
 	const all: string[] = [];
 	const placements: NonNullable<NonNullable<ResolvedIdentifiers["elastic"]>["placements"]> = [];
-	// SIO-1328 (CodeRabbit on PR #559): a rejected deployment is dropped from `placements` the
-	// same way one that genuinely had no matching candidates is -- the two are indistinguishable
-	// downstream without tracking which deployments never completed. Record them so the focus
-	// block can flag "this deployment's coverage is inconclusive, not proven absent" instead of
-	// silently treating a timeout the same as a real negative result.
 	const unresolvedDeployments: string[] = [];
-	settled.forEach((r, i) => {
-		if (r.status === "fulfilled") {
-			const rows = parseElasticServiceEnvAgg(normalizeToolContent(r.value));
+	for (const b of branches) {
+		if (b.ok && b.raw !== undefined) {
+			const rows = parseElasticServiceEnvAgg(b.raw);
 			for (const row of rows) {
 				all.push(row.serviceName);
-				// deployments[i] is undefined only when ELASTIC_DEPLOYMENTS is unset, i.e. a
-				// genuinely single-cluster install; label it so the focus block still renders
-				// something truthful rather than "undefined".
 				placements.push({
 					serviceName: row.serviceName,
-					deployment: deployments[i] ?? "(default)",
+					deployment: b.target || "(default)",
 					environments: row.environments,
 				});
 			}
 		} else {
 			logger.warn(
-				{ deploymentId: deployments[i], error: msg(r.reason) },
+				{ deploymentId: b.target || undefined, error: b.error },
 				"elastic discovery probe failed for deployment",
 			);
-			unresolvedDeployments.push(deployments[i] ?? "(default)");
+			unresolvedDeployments.push(b.target || "(default)");
 		}
-	});
+	}
 	const serviceNames = pickServiceCandidates(all, focusServices);
 	// SIO-1328: even with zero candidates, still report unresolvedDeployments if any -- a caller
 	// (or the focus block, or an aggregator absence-conclusion rule) needs to know coverage was
@@ -603,6 +612,86 @@ async function probeElastic(state: AgentStateType, focusServices: string[]): Pro
 	};
 }
 
+async function probeElastic(state: AgentStateType, focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {
+	const tool = toolFor("elastic", "elasticsearch_search");
+	if (!tool) return {};
+	// SIO-1279: an empty targetDeployments used to mean ONE probe against the MCP's
+	// default cluster. With 10 configured deployments and eu-b2b third in the list, an
+	// unscoped `order-service` incident probed eu-cld -- where `*order*` returns zero
+	// services -- and reported the service absent. Fan out instead; the parallel
+	// dispatch below keeps wall-clock near a single probe.
+	const deployments = state.targetDeployments.length > 0 ? state.targetDeployments : configuredElasticDeployments();
+	const args = buildElasticDiscoveryArgs(focusServices);
+	// Probe deployments in PARALLEL, each with ITS OWN PROBE_TIMEOUT_MS budget.
+	// SIO-1326: a shared clock across the whole Promise.allSettled let one slow
+	// deployment (measured live: eu-b2b at 9.4s against an 8s budget) discard ALL
+	// deployments' results; timing each branch individually degrades a slow
+	// deployment to "missing that one deployment's candidates" instead.
+	const timeoutMs = probeTimeoutMs();
+	const settled = await Promise.allSettled(
+		deployments.map((deploymentId) =>
+			withTimeout(
+				deploymentId ? withElasticDeployment(deploymentId, () => tool.invoke(args)) : tool.invoke(args),
+				timeoutMs,
+			),
+		),
+	);
+	const branches = settled.map((r, i) => {
+		const target = deployments[i] ?? "";
+		return r.status === "fulfilled"
+			? { target, ok: true, raw: normalizeToolContent(r.value) }
+			: { target, ok: false, error: msg(r.reason) };
+	});
+	return assembleElasticFromBranches(branches, focusServices);
+}
+
+// SIO-1354: preset dispatch for elastic via the "multiplied step" convention --
+// the YAML declares ONE elasticsearch_search step; the tool handler runs it
+// once per configured deployment (parallel, per-branch budgets) and the
+// assemble node unpacks the branch envelope. query/aggs travel as JSON through
+// the trigger payload and toToolArgs reconstructs the exact legacy args.
+async function probeElasticPreset(
+	state: AgentStateType,
+	focusServices: string[],
+): Promise<Partial<ResolvedIdentifiers>> {
+	const deployments = state.targetDeployments.length > 0 ? state.targetDeployments : configuredElasticDeployments();
+	const args = buildElasticDiscoveryArgs(focusServices);
+	const fragment = await runResolvePreset("elastic", "elastic-agent", "elastic-resolve-identifiers", {
+		toolFor,
+		withTimeout,
+		timeoutMs: probeTimeoutMs(),
+		trigger: { index: args.index, query: JSON.stringify(args.query), aggs: JSON.stringify(args.aggs) },
+		multiply: {
+			targets: deployments.map((d) => d ?? ""),
+			wrap: (target, fn) => (target ? withElasticDeployment(target, fn) : fn()),
+		},
+		nodes: {
+			assembleElasticFromBranches: async (inputs) => ({
+				fragment: assembleElasticFromBranches(parseBranchEnvelope(inputs.branchesRaw), focusServices),
+			}),
+		},
+	});
+	if (fragment === undefined) return probeElastic(state, focusServices);
+	return fragment as Partial<ResolvedIdentifiers>;
+}
+
+// Parse a multiplied-step branch envelope defensively: anything malformed
+// degrades to [] (assembled as "nothing enumerable"), never a throw.
+function parseBranchEnvelope(
+	raw: string | undefined,
+): Array<{ target: string; ok: boolean; raw?: string; error?: string }> {
+	if (!raw) return [];
+	const parsed = safeJson(raw);
+	const branches = (parsed as { branches?: unknown } | null)?.branches;
+	if (!Array.isArray(branches)) return [];
+	return branches.map((b: { target?: unknown; ok?: unknown; raw?: unknown; error?: unknown }) => ({
+		target: typeof b.target === "string" ? b.target : "",
+		ok: b.ok === true,
+		...(typeof b.raw === "string" && { raw: b.raw }),
+		...(typeof b.error === "string" && { error: b.error }),
+	}));
+}
+
 // SIO-1107: bound the bucket-aware second hop -- how many non-default buckets get a
 // per-bucket scopes/collections probe, and how many bucket names land in state.
 const MAX_PROBED_BUCKETS = 3;
@@ -620,12 +709,15 @@ async function probeCouchbaseDispatch(): Promise<Partial<ResolvedIdentifiers>> {
 		toolFor,
 		withTimeout,
 		timeoutMs: probeTimeoutMs(),
-		assemble: (raws) =>
-			assembleCouchbaseFromRaws({
-				scopesRaw: raws.scopesRaw ?? "",
-				indexesRaw: raws.indexesRaw || undefined,
-				bucketsRaw: raws.bucketsRaw || undefined,
+		nodes: {
+			assembleCouchbaseFromRaws: async (raws) => ({
+				fragment: await assembleCouchbaseFromRaws({
+					scopesRaw: raws.scopesRaw ?? "",
+					indexesRaw: raws.indexesRaw || undefined,
+					bucketsRaw: raws.bucketsRaw || undefined,
+				}),
 			}),
+		},
 	});
 	if (fragment === undefined) return probeCouchbase();
 	// The assemble handler above is assembleCouchbaseFromRaws, so the fragment
@@ -769,6 +861,30 @@ async function probeCouchbase(): Promise<Partial<ResolvedIdentifiers>> {
 	});
 }
 
+// SIO-1354: per-estate branch assembly shared by both aws paths. SIO-1328: a
+// rejected estate is recorded in unresolvedEstates so a timeout is never
+// indistinguishable from an estate that genuinely has no matching log groups.
+export function assembleAwsFromBranches(
+	branches: Array<{ target: string; ok: boolean; raw?: string; error?: string }>,
+	focusServices: string[],
+): Partial<ResolvedIdentifiers> {
+	const logGroups: string[] = [];
+	const unresolvedEstates: string[] = [];
+	for (const b of branches) {
+		if (b.ok && b.raw !== undefined) {
+			const parsed = parseAwsLogGroups(safeJson(b.raw));
+			logGroups.push(...parsed.logGroups.filter((n) => matchesFocus(n, focusServices)));
+		} else {
+			logger.warn({ estate: b.target, error: b.error }, "aws log-group probe failed for estate");
+			if (b.target) unresolvedEstates.push(b.target);
+		}
+	}
+	if (logGroups.length === 0) {
+		return unresolvedEstates.length > 0 ? { aws: { logGroups: [], unresolvedEstates } } : {};
+	}
+	return { aws: { logGroups: dedupe(logGroups), ...(unresolvedEstates.length > 0 && { unresolvedEstates }) } };
+}
+
 async function probeAws(state: AgentStateType, focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {
 	// AWS tools REQUIRE an estate (injected from the withAwsEstate ALS scope); with
 	// no target estate there is nothing to probe -- invoking outside the scope would
@@ -782,9 +898,7 @@ async function probeAws(state: AgentStateType, focusServices: string[]): Promise
 	// here: aws_ecs_list_services requires a `cluster` arg (a prior list-clusters
 	// hop), too heavy for a cheap pre-fan-out probe -- the aws-agent RULES.md
 	// (SIO-1084) drives the ECS -> awslogs-group derivation on the sub-agent side.
-	// Probe estates in PARALLEL, each with ITS OWN PROBE_TIMEOUT_MS budget (SIO-1326: same
-	// fix as probeElastic -- a shared timeout across the whole Promise.allSettled means one
-	// slow estate discards every other estate's already-resolved result).
+	// Probe estates in PARALLEL, each with ITS OWN PROBE_TIMEOUT_MS budget (SIO-1326).
 	const estates = state.awsTargetEstates;
 	const awsTimeoutMs = probeTimeoutMs();
 	const settled = await Promise.allSettled(
@@ -795,54 +909,140 @@ async function probeAws(state: AgentStateType, focusServices: string[]): Promise
 			),
 		),
 	);
-	const logGroups: string[] = [];
-	// SIO-1328 (CodeRabbit on PR #559): same inconclusive-coverage tracking as probeElastic's
-	// unresolvedDeployments -- a rejected estate must not be indistinguishable from an estate
-	// that genuinely has no matching log groups.
-	const unresolvedEstates: string[] = [];
-	settled.forEach((r, i) => {
-		if (r.status === "fulfilled") {
-			const parsed = parseAwsLogGroups(safeJson(normalizeToolContent(r.value)));
-			logGroups.push(...parsed.logGroups.filter((n) => matchesFocus(n, focusServices)));
-		} else {
-			logger.warn({ estate: estates[i], error: msg(r.reason) }, "aws log-group probe failed for estate");
-			if (estates[i]) unresolvedEstates.push(estates[i]);
-		}
+	const branches = settled.map((r, i) => {
+		const target = estates[i] ?? "";
+		return r.status === "fulfilled"
+			? { target, ok: true, raw: normalizeToolContent(r.value) }
+			: { target, ok: false, error: msg(r.reason) };
 	});
-	if (logGroups.length === 0) {
-		return unresolvedEstates.length > 0 ? { aws: { logGroups: [], unresolvedEstates } } : {};
+	return assembleAwsFromBranches(branches, focusServices);
+}
+
+// SIO-1354: preset dispatch for aws via the multiplied-step convention. The
+// legacy guards stay here: no target estates -> nothing to probe (aws tools
+// THROW outside withAwsEstate), no focus token -> nothing to search for.
+async function probeAwsPreset(state: AgentStateType, focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {
+	if (state.awsTargetEstates.length === 0) return {};
+	const pattern = longestToken(focusServices);
+	if (!pattern) return {};
+	const fragment = await runResolvePreset("aws", "aws-agent", "aws-resolve-identifiers", {
+		toolFor,
+		withTimeout,
+		timeoutMs: probeTimeoutMs(),
+		trigger: { pattern },
+		multiply: {
+			targets: state.awsTargetEstates,
+			wrap: (estate, fn) => withAwsEstate(estate, fn),
+		},
+		nodes: {
+			assembleAwsFromBranches: async (inputs) => ({
+				fragment: assembleAwsFromBranches(parseBranchEnvelope(inputs.branchesRaw), focusServices),
+			}),
+		},
+	});
+	if (fragment === undefined) return probeAws(state, focusServices);
+	return fragment as Partial<ResolvedIdentifiers>;
+}
+
+// SIO-1354: shared post-invocation assembly for BOTH kafka paths. An undefined/
+// empty raw marks that branch failed or absent -- the other branch still
+// resolves (matching the legacy per-branch try/catch degradation).
+export function assembleKafkaFromRaws(
+	raws: { topicsRaw?: string; groupsRaw?: string },
+	focusServices: string[],
+): Partial<ResolvedIdentifiers> {
+	const topics: string[] = [];
+	const consumerGroups: string[] = [];
+	if (raws.topicsRaw) {
+		const all = parseKafkaTopics(safeJson(raws.topicsRaw));
+		topics.push(...all.filter((n) => matchesFocus(n, focusServices)));
 	}
-	return { aws: { logGroups: dedupe(logGroups), ...(unresolvedEstates.length > 0 && { unresolvedEstates }) } };
+	if (raws.groupsRaw) {
+		const all = parseKafkaConsumerGroups(safeJson(raws.groupsRaw));
+		consumerGroups.push(...all.filter((n) => matchesFocus(n, focusServices)));
+	}
+	return topics.length > 0 || consumerGroups.length > 0
+		? { kafka: { topics: dedupe(topics), consumerGroups: dedupe(consumerGroups) } }
+		: {};
 }
 
 async function probeKafka(focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {
 	const topicsTool = toolFor("kafka", "kafka_list_topics");
 	const groupsTool = toolFor("kafka", "kafka_list_consumer_groups");
-	const topics: string[] = [];
-	const consumerGroups: string[] = [];
+	let topicsRaw: string | undefined;
+	let groupsRaw: string | undefined;
 	// DO NOT pass `filter` -- the server compiles it as a raw RegExp and a non-regex
 	// token throws MCP -32603. Enumerate unfiltered and match client-side.
 	if (topicsTool) {
 		try {
-			const raw = await topicsTool.invoke({ limit: 500 });
-			const all = parseKafkaTopics(safeJson(normalizeToolContent(raw)));
-			topics.push(...all.filter((n) => matchesFocus(n, focusServices)));
+			topicsRaw = normalizeToolContent(await topicsTool.invoke({ limit: 500 }));
 		} catch (err) {
 			logger.warn({ error: msg(err) }, "kafka topic probe failed");
 		}
 	}
 	if (groupsTool) {
 		try {
-			const raw = await groupsTool.invoke({});
-			const all = parseKafkaConsumerGroups(safeJson(normalizeToolContent(raw)));
-			consumerGroups.push(...all.filter((n) => matchesFocus(n, focusServices)));
+			groupsRaw = normalizeToolContent(await groupsTool.invoke({}));
 		} catch (err) {
 			logger.warn({ error: msg(err) }, "kafka consumer-group probe failed");
 		}
 	}
-	return topics.length > 0 || consumerGroups.length > 0
-		? { kafka: { topics: dedupe(topics), consumerGroups: dedupe(consumerGroups) } }
-		: {};
+	return assembleKafkaFromRaws({ topicsRaw, groupsRaw }, focusServices);
+}
+
+// SIO-1354: preset dispatch for kafka. Preset steps carry their OWN per-branch
+// probe-timeout budgets inside the tool handler, so the preset path uses
+// catchOnlyProbe at the dispatch site (an outer safeProbe clock racing the
+// per-step clocks is the SIO-1326 shape); the legacy fallback re-applies
+// safeProbe's single outer bound to stay identical to the flag-OFF path.
+async function probeKafkaPreset(focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {
+	const fragment = await runResolvePreset("kafka", "kafka-agent", "kafka-resolve-identifiers", {
+		toolFor,
+		withTimeout,
+		timeoutMs: probeTimeoutMs(),
+		nodes: {
+			assembleKafkaFromRaws: async (raws) => ({
+				fragment: assembleKafkaFromRaws(
+					{ topicsRaw: raws.topicsRaw || undefined, groupsRaw: raws.groupsRaw || undefined },
+					focusServices,
+				),
+			}),
+		},
+	});
+	if (fragment === undefined) return withTimeout(probeKafka(focusServices), probeTimeoutMs());
+	return fragment as Partial<ResolvedIdentifiers>;
+}
+
+// SIO-1354: control-plane selection shared by both konnect paths. Returns
+// undefined when nothing is enumerable (legacy early-return); the preset node
+// wrapper converts that into a throw so fail-fast aborts the flow.
+export function selectKonnectControlPlaneFromRaw(
+	cpRaw: string,
+	focusServices: string[],
+): { controlPlaneId: string; controlPlaneName?: string } | undefined {
+	const cps = parseKonnectControlPlanes(safeJson(cpRaw));
+	// Pick the control plane whose name matches the focus, else the first.
+	const cp = cps.find((c) => c.name && matchesFocus(c.name, focusServices)) ?? cps[0];
+	if (!cp) return undefined;
+	return { controlPlaneId: cp.controlPlaneId, controlPlaneName: cp.name };
+}
+
+// SIO-1354: shared final assembly for both konnect paths. servicesRaw ""/absent
+// (failed or missing tool) keeps the control-plane block only.
+export function assembleKonnectFromRaws(
+	inputs: { controlPlaneId: string; controlPlaneName?: string; servicesRaw?: string },
+	focusServices: string[],
+): Partial<ResolvedIdentifiers> {
+	const result: NonNullable<ResolvedIdentifiers["konnect"]> = {
+		controlPlaneId: inputs.controlPlaneId,
+		controlPlaneName: inputs.controlPlaneName,
+	};
+	if (inputs.servicesRaw) {
+		const services = parseKonnectServices(safeJson(inputs.servicesRaw));
+		const matched = services.filter((s) => s.name && matchesFocus(s.name, focusServices)).map((s) => s.serviceId);
+		if (matched.length > 0) result.serviceIds = dedupe(matched);
+	}
+	return { konnect: result };
 }
 
 async function probeKonnect(focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {
@@ -850,26 +1050,54 @@ async function probeKonnect(focusServices: string[]): Promise<Partial<ResolvedId
 	if (!cpTool) return {};
 	const pattern = longestToken(focusServices);
 	const cpArgs = pattern ? { filterName: pattern, pageSize: 10 } : { pageSize: 10 };
-	const cps = parseKonnectControlPlanes(safeJson(normalizeToolContent(await cpTool.invoke(cpArgs))));
-	// Pick the control plane whose name matches the focus, else the first.
-	const cp = cps.find((c) => c.name && matchesFocus(c.name, focusServices)) ?? cps[0];
-	if (!cp) return {};
-	const result: NonNullable<ResolvedIdentifiers["konnect"]> = {
-		controlPlaneId: cp.controlPlaneId,
-		controlPlaneName: cp.name,
-	};
+	const selected = selectKonnectControlPlaneFromRaw(normalizeToolContent(await cpTool.invoke(cpArgs)), focusServices);
+	if (!selected) return {};
+	let servicesRaw: string | undefined;
 	const svcTool = toolFor("konnect", "konnect_list_services");
 	if (svcTool) {
 		try {
-			const raw = await svcTool.invoke({ controlPlaneId: cp.controlPlaneId, pageSize: 100 });
-			const services = parseKonnectServices(safeJson(normalizeToolContent(raw)));
-			const matched = services.filter((s) => s.name && matchesFocus(s.name, focusServices)).map((s) => s.serviceId);
-			if (matched.length > 0) result.serviceIds = dedupe(matched);
+			servicesRaw = normalizeToolContent(
+				await svcTool.invoke({ controlPlaneId: selected.controlPlaneId, pageSize: 100 }),
+			);
 		} catch (err) {
 			logger.warn({ error: msg(err) }, "konnect service probe failed");
 		}
 	}
-	return { konnect: result };
+	return assembleKonnectFromRaws({ ...selected, servicesRaw }, focusServices);
+}
+
+// SIO-1354: preset dispatch for konnect (two-stage: select the control plane
+// mid-flow, then enumerate its services). The focus-derived filterName travels
+// via the trigger payload; "" is omitted from tool args by toToolArgs, matching
+// the legacy conditional cpArgs construction.
+async function probeKonnectPreset(focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {
+	const fragment = await runResolvePreset("konnect", "konnect-agent", "konnect-resolve-identifiers", {
+		toolFor,
+		withTimeout,
+		timeoutMs: probeTimeoutMs(),
+		trigger: { filterName: longestToken(focusServices) ?? "" },
+		nodes: {
+			selectKonnectControlPlane: async (inputs) => {
+				const selected = selectKonnectControlPlaneFromRaw(inputs.cpRaw ?? "", focusServices);
+				if (!selected) throw new Error("no konnect control plane enumerable for this focus");
+				return {
+					outputs: { controlPlaneId: selected.controlPlaneId, controlPlaneName: selected.controlPlaneName ?? "" },
+				};
+			},
+			assembleKonnectFromRaws: async (inputs) => ({
+				fragment: assembleKonnectFromRaws(
+					{
+						controlPlaneId: inputs.controlPlaneId ?? "",
+						controlPlaneName: inputs.controlPlaneName || undefined,
+						servicesRaw: inputs.servicesRaw || undefined,
+					},
+					focusServices,
+				),
+			}),
+		},
+	});
+	if (fragment === undefined) return withTimeout(probeKonnect(focusServices), probeTimeoutMs());
+	return fragment as Partial<ResolvedIdentifiers>;
 }
 
 // SIO-1261: the group every repository lives under. project-resolution/SKILL.md states it as fact
@@ -890,6 +1118,26 @@ export function getGitlabResolutionGroup(): string {
 	return GITLAB_RESOLUTION_GROUP;
 }
 
+// SIO-1354: shared selection/assembly for both gitlab paths. All the SIO-1261
+// selection rules live here once: exact name/leaf-path preference over fuzzy
+// focus-match, and NO rows[0] fallback (an unresolved probe is a normal
+// outcome; a confidently wrong authoritative id is not).
+export function assembleGitlabFromRaws(projectsRaw: string, focusServices: string[]): Partial<ResolvedIdentifiers> {
+	const rows = parseGitlabProjects(safeJson(projectsRaw));
+	// Match on name/path, then lift the numeric id (guessing the path 404s).
+	//
+	// SIO-1261: prefer an EXACT name/leaf-path hit over mere focus-match, and only then fall back to
+	// relevance order. matchesFocus is deliberately fuzzy, so for `order-service` it also accepts
+	// `orders-service-legacy` and `pvh-ecomm-order-services` -- both real pvhcorp repos, both
+	// returned by the live search. Without this, which one wins is whatever GitLab ranked first,
+	// i.e. the correct answer is load-bearing on a relevance score we do not control.
+	const match =
+		rows.find((r) => isExactServiceMatch(r, focusServices)) ??
+		rows.find((r) => matchesFocus(r.pathWithNamespace ?? r.name ?? "", focusServices));
+	if (!match) return {};
+	return { gitlab: { projectId: match.id, pathWithNamespace: match.pathWithNamespace } };
+}
+
 async function probeGitlab(focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {
 	const tool = toolFor("gitlab", "gitlab_search");
 	if (!tool) return {};
@@ -898,42 +1146,39 @@ async function probeGitlab(focusServices: string[]): Promise<Partial<ResolvedIde
 	// and that is what the probe searched for. Measured live 2026-07-28 against gitlab.com, group
 	// pvhcorp: `order` ranks `pvhcorp/membership-and-loyalty/ddm/microservices/order` FIRST and
 	// `pvhcorp/b2b/oit/order-service` fifth, while `order-service` ranks the correct repo first.
-	// Group-scoping alone therefore did NOT fix this ticket -- it only changed which wrong repo was
-	// adopted, and the no-fallback guard below does not fire because the wrong repo DOES pass
-	// matchesFocus (`order` is a token of both).
 	const term = longestServiceName(focusServices);
 	if (!term) return {};
 	// SIO-1261: GROUP-SCOPED, not global. project-resolution/SKILL.md is categorical -- "Use
 	// group-scoped search, never global search -- global project search returns unrelated public
-	// repos" -- and this probe was doing precisely what that rule forbids. It matters more since
-	// SIO-1258 made the id produced here AUTHORITATIVE: the sub-agent now skips its own resolution
-	// when the focus block carries one, so a wrong id means the turn investigates the wrong
-	// repository rather than merely wasting a call.
-	const rows = parseGitlabProjects(
-		safeJson(
-			normalizeToolContent(
-				await tool.invoke({ scope: "projects", search: term, group_id: getGitlabResolutionGroup() }),
-			),
-		),
+	// repos". It matters more since SIO-1258 made the id produced here AUTHORITATIVE: the
+	// sub-agent now skips its own resolution when the focus block carries one, so a wrong id
+	// means the turn investigates the wrong repository rather than merely wasting a call.
+	const raw = normalizeToolContent(
+		await tool.invoke({ scope: "projects", search: term, group_id: getGitlabResolutionGroup() }),
 	);
-	// Match on name/path, then lift the numeric id (guessing the path 404s).
-	//
-	// SIO-1261: no `?? rows[0]` fallback. Accepting an arbitrary first row when nothing matched the
-	// focus is how an unrelated repository becomes authoritative. Returning {} is cheap: the gitlab
-	// sub-agent's own STEP 1 then resolves it with the full skill logic -- group scope,
-	// path-vs-numeric handling, and an honest STOP when nothing resolves. An unresolved probe is a
-	// normal, handled outcome; a confidently wrong one is not.
-	//
-	// SIO-1261: prefer an EXACT name/leaf-path hit over mere focus-match, and only then fall back to
-	// relevance order. matchesFocus is deliberately fuzzy, so for `order-service` it also accepts
-	// `orders-service-legacy` and `pvh-ecomm-order-services` -- both real pvhcorp repos, both
-	// returned by the live search above. Without this, which one wins is whatever GitLab ranked
-	// first, i.e. the correct answer is load-bearing on a relevance score we do not control.
-	const match =
-		rows.find((r) => isExactServiceMatch(r, focusServices)) ??
-		rows.find((r) => matchesFocus(r.pathWithNamespace ?? r.name ?? "", focusServices));
-	if (!match) return {};
-	return { gitlab: { projectId: match.id, pathWithNamespace: match.pathWithNamespace } };
+	return assembleGitlabFromRaws(raw, focusServices);
+}
+
+// SIO-1354: preset dispatch for gitlab. The focus-derived search term and the
+// resolution group travel via the trigger payload; the legacy early-return on
+// a missing term stays here (an omitted-search invoke would search everything,
+// which is exactly the global-search failure SIO-1261 removed).
+async function probeGitlabPreset(focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {
+	const term = longestServiceName(focusServices);
+	if (!term) return {};
+	const fragment = await runResolvePreset("gitlab", "gitlab-agent", "gitlab-resolve-identifiers", {
+		toolFor,
+		withTimeout,
+		timeoutMs: probeTimeoutMs(),
+		trigger: { searchTerm: term, groupId: getGitlabResolutionGroup() },
+		nodes: {
+			assembleGitlabFromRaws: async (inputs) => ({
+				fragment: assembleGitlabFromRaws(inputs.projectsRaw ?? "", focusServices),
+			}),
+		},
+	});
+	if (fragment === undefined) return withTimeout(probeGitlab(focusServices), probeTimeoutMs());
+	return fragment as Partial<ResolvedIdentifiers>;
 }
 
 function longestToken(focusServices: string[]): string | undefined {

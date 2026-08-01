@@ -1,0 +1,38 @@
+name: elastic-resolve-identifiers
+version: 0.1.0
+description: >
+  Deterministic elastic service-name discovery for the pre-fan-out
+  resolveIdentifiers node (SIO-1354), via the MULTIPLIED-STEP convention: the
+  single search step below runs once per configured deployment (parallel,
+  per-branch timeout budgets -- SIO-1326), because the deployment list is
+  runtime env config that cannot live in YAML. The focus-filtered query and
+  the service/environment agg (SIO-1086/SIO-1279) travel as JSON through the
+  trigger payload; branch unpacking, candidate selection, and SIO-1328
+  unresolved-coverage tracking stay in code (assembleElasticFromBranches).
+
+triggers:
+  - type: manual
+
+steps:
+  - name: discover-services
+    tool: elasticsearch_search
+    description: Focus-filtered service.name/environment agg, multiplied across deployments
+    with:
+      index: ${{ trigger.index }}
+      size: "0"
+      query: ${{ trigger.query }}
+      aggs: ${{ trigger.aggs }}
+    outputs:
+      - raw
+
+  - name: assemble
+    node: assembleElasticFromBranches
+    description: Unpack branches, pick candidates, track unresolved deployments (code, not YAML)
+    depends_on:
+      - discover-services
+    with:
+      branchesRaw: ${{ steps.discover-services.outputs.raw }}
+    outputs:
+      - result
+
+error_handling: fail_fast
