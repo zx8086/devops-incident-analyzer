@@ -53,17 +53,29 @@ export const runQuery = async (params: { scope_name: string; query: string }, bu
 	try {
 		const result = await runSqlPlusPlusQuery({ lifespanContext: { bucket } }, scope_name, query, sqlppParser);
 		const rows = result.rows as Record<string, unknown>[];
+		// The N1QL warnings are ADVISORY (index selectivity, sequential-scan fallback,
+		// deprecated syntax) -- a warning never means the returned rows are incomplete or
+		// wrong, unlike an elastic shard failure. Still, an agent that never sees the
+		// caveat cannot factor it into its report, so surface it as a visible prefix on an
+		// otherwise-normal success response rather than failing the call.
+		const warnings = (result.meta as { warnings?: { code: number; message: string }[] } | undefined)?.warnings;
+		const warningsText =
+			warnings && warnings.length > 0
+				? `Query succeeded with ${warnings.length} warning(s): ${warnings.map((w) => `[${w.code}] ${w.message}`).join("; ")}\n\n`
+				: "";
 
 		if (rows.length === 1 && rows[0] !== undefined && "distinct_source_count" in rows[0]) {
 			return {
-				content: [{ type: "text" as const, text: `Found ${rows[0].distinct_source_count} distinct sources` }],
+				content: [
+					{ type: "text" as const, text: `${warningsText}Found ${rows[0].distinct_source_count} distinct sources` },
+				],
 				_meta: { rowCount: 1 },
 				isError: false,
 			};
 		}
 
 		return {
-			content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }],
+			content: [{ type: "text" as const, text: `${warningsText}${JSON.stringify(rows, null, 2)}` }],
 			_meta: { rowCount: rows.length, meta: result.meta },
 			isError: false,
 		};

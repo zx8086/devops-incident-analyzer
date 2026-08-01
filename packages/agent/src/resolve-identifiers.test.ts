@@ -1067,4 +1067,39 @@ describe("SIO-1107 bucket-aware couchbase probe", () => {
 		expect(indexInfo?.new_model?.seasonal_assignment?.hasPrimary).toBe(true);
 		expect(indexInfo?.pricing).toBeUndefined();
 	});
+
+	// SIO-1333: probeCouchbase's internal Promise.allSettled([scopes, indexes, buckets]) has no
+	// per-branch timeout of its own -- it relies entirely on the OUTER safeProbe() wrap. That is
+	// the same "outer timeout races an inner Promise.allSettled" shape SIO-1326 fixed for
+	// probeElastic/probeAws: if one of the three branches is slow, the outer timeout can fire
+	// while the allSettled's post-settlement continuation is still running, and safeProbe's catch
+	// then discards the WHOLE probe result -- including the scopes branch that already resolved.
+	// This differs from SIO-1326 only in being a heterogeneous 3-call fan-out instead of N
+	// homogeneous per-target branches; the failure mechanism is identical.
+	test("a slow buckets/indexes branch does not erase the already-resolved scopes branch", async () => {
+		const prevTimeout = process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS;
+		process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS = "30";
+		toolRegistry.couchbase = [
+			{
+				// Resolves well within the 30ms budget.
+				name: "capella_get_scopes_and_collections",
+				invoke: async () => DEFAULT_TREE,
+			},
+			{
+				// Slower than the shared 30ms budget -- must not erase the scopes branch above.
+				name: "capella_get_buckets",
+				invoke: async () => {
+					await new Promise((resolve) => setTimeout(resolve, 200));
+					return bucketsPayload(["default"]);
+				},
+			},
+		];
+		try {
+			const result = await resolveIdentifiers(makeState({ targetDataSources: ["couchbase"] }));
+			expect(result.resolvedIdentifiers?.couchbase?.scopes).toEqual({ new_model: ["seasonal_assignment"] });
+		} finally {
+			if (prevTimeout === undefined) delete process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS;
+			else process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS = prevTimeout;
+		}
+	});
 });

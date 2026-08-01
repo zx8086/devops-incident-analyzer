@@ -43,6 +43,40 @@ describe("runSqlPlusPlusQuery error surfacing (SIO-744)", () => {
 	});
 });
 
+describe("runSqlPlusPlusQuery warnings surfacing", () => {
+	test("a successful query with N1QL meta.warnings surfaces them in the response", async () => {
+		// The Couchbase SDK returns status:success + non-empty warnings for advisory
+		// conditions (e.g. non-covering index selectivity, sequential-scan fallback) --
+		// the row data is complete and correct, but the caveat must reach the agent.
+		const bucket = makeBucket(async () => ({
+			rows: [{ total: 42 }],
+			meta: {
+				warnings: [{ code: 4300, message: "No index available for this query, using sequential scan" }],
+			},
+		}));
+
+		const result = await runQuery({ scope_name: "styles", query: "SELECT COUNT(*) AS total FROM article" }, bucket);
+
+		expect(result.isError).toBe(false);
+		const text = (result.content[0] as { text: string }).text;
+		expect(text).toContain("sequential scan");
+		expect(text).toContain("4300");
+	});
+
+	test("a successful query with no warnings does not mention warnings", async () => {
+		const bucket = makeBucket(async () => ({
+			rows: [{ total: 42 }],
+			meta: { warnings: [] },
+		}));
+
+		const result = await runQuery({ scope_name: "styles", query: "SELECT COUNT(*) AS total FROM article" }, bucket);
+
+		expect(result.isError).toBe(false);
+		const text = (result.content[0] as { text: string }).text;
+		expect(text).not.toContain("warning");
+	});
+});
+
 describe("runSqlPlusPlusQuery bucket-path guardrail (SIO-1162)", () => {
 	test("full bucket.scope.collection path returns a structured bad-query envelope with advice", async () => {
 		// The guardrail short-circuits before touching the bucket, so no query impl is needed.
