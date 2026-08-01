@@ -586,7 +586,11 @@ export class KafkaService {
 		});
 	}
 
-	async consumeMessages(options: ConsumeMessagesOptions): Promise<FormattedMessage[]> {
+	// SIO-1335: returns `timedOut` alongside the messages so the caller can tell a
+	// batch that was genuinely cut short by timeoutMs (1 <= length < maxMessages)
+	// apart from one that completed on its own (hit maxMessages, or the topic/window
+	// was fully drained) -- a bare array leaves the two indistinguishable.
+	async consumeMessages(options: ConsumeMessagesOptions): Promise<{ messages: FormattedMessage[]; timedOut: boolean }> {
 		logger.debug(
 			{
 				topic: options.topic,
@@ -598,6 +602,7 @@ export class KafkaService {
 		const groupId = `mcp-consume-${crypto.randomUUID()}`;
 		const consumer = await this.clientManager.createConsumer(groupId);
 		const messages: FormattedMessage[] = [];
+		let timedOut = false;
 
 		try {
 			const mode = options.fromBeginning ? "earliest" : "latest";
@@ -612,7 +617,6 @@ export class KafkaService {
 			// The previous Date.now() deadline check only fired AFTER pushing a message,
 			// so empty topics (or "latest" mode with no production) hung indefinitely
 			// and AgentCore tore the runtime down with -32010.
-			let timedOut = false;
 			const timer = setTimeout(() => {
 				timedOut = true;
 				void stream.close().catch(() => {});
@@ -635,7 +639,7 @@ export class KafkaService {
 			}
 		}
 
-		return messages;
+		return { messages, timedOut };
 	}
 
 	async listConsumerGroups(
@@ -756,6 +760,7 @@ export class KafkaService {
 
 	async getConsumerGroupLag(groupId: string): Promise<{
 		groupId: string;
+		groupState?: string;
 		topics: Array<{
 			topic: string;
 			partitions: Array<{
@@ -770,11 +775,21 @@ export class KafkaService {
 	}> {
 		logger.debug({ groupId }, "Getting consumer group lag");
 		return this.clientManager.withAdmin(async (admin) => {
-			const offsetGroups = await admin.listConsumerGroupOffsets({ groups: [groupId] });
+			const [offsetGroups, groupsMap] = await Promise.all([
+				admin.listConsumerGroupOffsets({ groups: [groupId] }),
+				// SIO-1334: a group with no committed offsets is reported as "totalLag: 0",
+				// identical to a genuinely healthy zero-lag group. describeGroups' `state`
+				// (e.g. "Dead" for a nonexistent/deleted group) is the disambiguator --
+				// mirrors describeConsumerGroup's own existence check. Soft-fail to undefined
+				// on error so a describeGroups hiccup never blocks the lag numbers callers
+				// actually asked for.
+				admin.describeGroups({ groups: [groupId] }).catch(() => undefined),
+			]);
 			const offsetGroup = offsetGroups.find((g) => g.groupId === groupId);
+			const groupState = groupsMap?.get(groupId)?.state;
 
 			if (!offsetGroup || offsetGroup.topics.length === 0) {
-				return { groupId, topics: [], totalLag: "0" };
+				return { groupId, ...(groupState !== undefined && { groupState }), topics: [], totalLag: "0" };
 			}
 
 			let grandTotalLag = BigInt(0);
@@ -830,6 +845,7 @@ export class KafkaService {
 
 			return {
 				groupId,
+				...(groupState !== undefined && { groupState }),
 				topics: topicResults,
 				totalLag: grandTotalLag.toString(),
 			};

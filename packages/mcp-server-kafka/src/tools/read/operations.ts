@@ -50,6 +50,12 @@ export async function getTopicOffsets(service: KafkaService, params: { topic: st
 // serialization format was unreadable -- the real cause was the default "latest" start
 // offset, which makes historical backlog invisible. The note names the actual cause
 // and the recovery path so the LLM does not have to guess.
+//
+// SIO-1335: a batch that arrives non-empty but short of maxMessages because timeoutMs
+// fired mid-scan is just as ambiguous as the empty case -- it reads identically to a
+// scan that legitimately drained the whole window. Annotate that case too instead of
+// returning a bare array, so a bounded scan (e.g. the SIO-1201 business-key lookup)
+// can tell "confirmed not found in this window" apart from "cut short, unconfirmed".
 export async function consumeMessages(
 	service: KafkaService,
 	config: AppConfig,
@@ -61,24 +67,39 @@ export async function consumeMessages(
 	},
 ) {
 	const timeoutMs = params.timeoutMs ?? config.kafka.consumeTimeoutMs;
-	const messages = await service.consumeMessages({
+	const maxMessages = params.maxMessages ?? config.kafka.consumeMaxMessages;
+	const { messages, timedOut } = await service.consumeMessages({
 		topic: params.topic,
-		maxMessages: params.maxMessages ?? config.kafka.consumeMaxMessages,
+		maxMessages,
 		timeoutMs,
 		fromBeginning: params.fromBeginning,
 	});
-	if (messages.length > 0) return messages;
 	const mode = params.fromBeginning ? "earliest" : "latest";
-	return {
-		messages: [],
-		consumed: 0,
-		mode,
-		timeoutMs,
-		note:
-			mode === "latest"
-				? `0 messages arrived within ${timeoutMs}ms. The ephemeral consumer starts at the LATEST offset, so existing backlog is invisible -- an empty result does NOT mean the topic is empty. To inspect backlog, retry with fromBeginning: true or read a specific offset with kafka_get_message_by_offset.`
-				: `0 messages read from the beginning within ${timeoutMs}ms. The topic may be empty, or the fetch did not complete in time -- verify with kafka_describe_topic offsets before concluding the topic is empty.`,
-	};
+
+	if (messages.length === 0) {
+		return {
+			messages: [],
+			consumed: 0,
+			mode,
+			timeoutMs,
+			note:
+				mode === "latest"
+					? `0 messages arrived within ${timeoutMs}ms. The ephemeral consumer starts at the LATEST offset, so existing backlog is invisible -- an empty result does NOT mean the topic is empty. To inspect backlog, retry with fromBeginning: true or read a specific offset with kafka_get_message_by_offset.`
+					: `0 messages read from the beginning within ${timeoutMs}ms. The topic may be empty, or the fetch did not complete in time -- verify with kafka_describe_topic offsets before concluding the topic is empty.`,
+		};
+	}
+
+	if (timedOut && messages.length < maxMessages) {
+		return {
+			messages,
+			consumed: messages.length,
+			mode,
+			timeoutMs,
+			note: `Scan stopped after ${timeoutMs}ms with ${messages.length}/${maxMessages} messages read -- this is a partial (timeout-truncated) result, not a completed scan of the requested window. Do not conclude a business key or pattern is absent from the topic based on this batch alone; retry with a larger timeoutMs or narrow the scan.`,
+		};
+	}
+
+	return messages;
 }
 
 export async function listConsumerGroups(

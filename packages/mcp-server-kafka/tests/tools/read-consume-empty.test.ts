@@ -11,8 +11,8 @@ import { consumeMessages } from "../../src/tools/read/operations.ts";
 
 const config = { kafka: { consumeMaxMessages: 10, consumeTimeoutMs: 30_000 } } as unknown as AppConfig;
 
-function serviceReturning(messages: unknown[]): KafkaService {
-	return { consumeMessages: mock(async () => messages) } as unknown as KafkaService;
+function serviceReturning(messages: unknown[], timedOut = false): KafkaService {
+	return { consumeMessages: mock(async () => ({ messages, timedOut })) } as unknown as KafkaService;
 }
 
 describe("consumeMessages op empty-result annotation (SIO-1159)", () => {
@@ -39,9 +39,9 @@ describe("consumeMessages op empty-result annotation (SIO-1159)", () => {
 		expect(annotated.note).not.toContain("LATEST offset");
 	});
 
-	test("non-empty results keep the bare array shape (backward compat)", async () => {
+	test("non-empty results that completed on their own keep the bare array shape (backward compat)", async () => {
 		const msg = { topic: "t", partition: 0, offset: "1", key: null, value: "{}", timestamp: "0", headers: {} };
-		const result = await consumeMessages(serviceReturning([msg]), config, { topic: "t" });
+		const result = await consumeMessages(serviceReturning([msg], false), config, { topic: "t" });
 		expect(Array.isArray(result)).toBe(true);
 		expect(result).toEqual([msg]);
 	});
@@ -51,5 +51,35 @@ describe("consumeMessages op empty-result annotation (SIO-1159)", () => {
 		const annotated = result as { timeoutMs: number; note: string };
 		expect(annotated.timeoutMs).toBe(5000);
 		expect(annotated.note).toContain("5000ms");
+	});
+});
+
+// SIO-1335: a batch cut short by timeoutMs before reaching maxMessages is just as
+// ambiguous as an empty result -- annotate it so a bounded scan (SIO-1201) can tell
+// "confirmed absent in this window" apart from "cut short, unconfirmed".
+describe("consumeMessages op partial-batch annotation (SIO-1335)", () => {
+	test("a non-empty result under maxMessages that timed out is annotated, not a bare array", async () => {
+		const msg = { topic: "t", partition: 0, offset: "1", key: null, value: "{}", timestamp: "0", headers: {} };
+		const result = await consumeMessages(serviceReturning([msg], true), config, { topic: "t", maxMessages: 500 });
+		expect(Array.isArray(result)).toBe(false);
+		const annotated = result as { messages: unknown[]; consumed: number; mode: string; note: string };
+		expect(annotated.messages).toEqual([msg]);
+		expect(annotated.consumed).toBe(1);
+		expect(annotated.note).toContain("partial");
+		expect(annotated.note).toContain("1/500");
+	});
+
+	test("hitting maxMessages exactly stays a bare array even if timedOut is also true (race at the boundary)", async () => {
+		const msg = { topic: "t", partition: 0, offset: "1", key: null, value: "{}", timestamp: "0", headers: {} };
+		const result = await consumeMessages(serviceReturning([msg], true), config, { topic: "t", maxMessages: 1 });
+		expect(Array.isArray(result)).toBe(true);
+		expect(result).toEqual([msg]);
+	});
+
+	test("a non-empty result that did NOT time out (genuinely completed) stays a bare array", async () => {
+		const msg = { topic: "t", partition: 0, offset: "1", key: null, value: "{}", timestamp: "0", headers: {} };
+		const result = await consumeMessages(serviceReturning([msg], false), config, { topic: "t", maxMessages: 500 });
+		expect(Array.isArray(result)).toBe(true);
+		expect(result).toEqual([msg]);
 	});
 });
