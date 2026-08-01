@@ -396,7 +396,7 @@ export function dedupeHitsBy(
 	const out: MemorySearchHit[] = [];
 	for (const [i, hit] of hits.entries()) {
 		// no stable key -> unique fallback so distinct keyless hits are never collapsed together
-		const key = keyFn(hit) ?? ` nokey:${i}`;
+		const key = keyFn(hit) ?? ` nokey:${i}`;
 		if (seen.has(key)) continue;
 		seen.add(key);
 		out.push(hit);
