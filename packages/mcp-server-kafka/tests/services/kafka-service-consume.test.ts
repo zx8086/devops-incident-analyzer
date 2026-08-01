@@ -89,7 +89,8 @@ describe("KafkaService.consumeMessages SIO-699 timeout behavior", () => {
 		});
 		const elapsed = Date.now() - start;
 
-		expect(result).toEqual([]);
+		expect(result.messages).toEqual([]);
+		expect(result.timedOut).toBe(true);
 		expect(stream.closed).toBe(true);
 		expect(consumerClosed).toBe(true);
 		// Bound checks: should fire roughly at timeoutMs, not hang indefinitely.
@@ -199,12 +200,70 @@ describe("KafkaService.consumeMessages SIO-699 timeout behavior", () => {
 		});
 		const elapsed = Date.now() - start;
 
-		expect(result).toHaveLength(2);
-		expect(result[0]?.offset).toBe("1");
-		expect(result[1]?.offset).toBe("2");
+		expect(result.messages).toHaveLength(2);
+		expect(result.messages[0]?.offset).toBe("1");
+		expect(result.messages[1]?.offset).toBe("2");
+		expect(result.timedOut).toBe(false);
 		// Should resolve well before timeoutMs since we hit maxMessages first.
 		expect(elapsed).toBeLessThan(1000);
 		expect(stream.closed).toBe(true);
+	});
+
+	// SIO-1335: the caller needs to tell "cut short by timeoutMs" apart from
+	// "hit maxMessages" apart from "genuinely drained the topic" -- timedOut is the
+	// signal a bare messages[] never carried.
+	test("SIO-1335: timedOut is true when the timer fires before maxMessages is reached", async () => {
+		const fakeMessages = [
+			{
+				topic: "topic-a",
+				partition: 0,
+				offset: 1n,
+				key: Buffer.from("k1"),
+				value: Buffer.from("v1"),
+				timestamp: 1700000000000n,
+				headers: new Map(),
+			},
+		];
+		// Yields one message immediately, then hangs -- forcing the timer to fire
+		// before maxMessages (10) is ever reached.
+		let resolveNext: ((v: IteratorResult<unknown>) => void) | null = null;
+		let yielded = false;
+		const stream: FakeStream = {
+			closed: false,
+			close: async () => {
+				stream.closed = true;
+				resolveNext?.({ value: undefined, done: true });
+				resolveNext = null;
+			},
+			[Symbol.asyncIterator]: () => ({
+				next: () => {
+					if (!yielded) {
+						yielded = true;
+						return Promise.resolve({ value: fakeMessages[0], done: false });
+					}
+					return new Promise<IteratorResult<unknown>>((resolve) => {
+						if (stream.closed) resolve({ value: undefined, done: true });
+						else resolveNext = resolve;
+					});
+				},
+			}),
+		};
+		const manager = buildClientManager(() => ({
+			closed: false,
+			consume: async () => stream,
+			close: async () => {},
+		}));
+		const service = new KafkaService(manager);
+
+		const result = await service.consumeMessages({
+			topic: "topic-a",
+			maxMessages: 10,
+			timeoutMs: 200,
+			fromBeginning: false,
+		});
+
+		expect(result.messages).toHaveLength(1);
+		expect(result.timedOut).toBe(true);
 	});
 });
 
@@ -232,7 +291,7 @@ describe("KafkaService.consumeMessages SIO-1159 valueLooksBinary", () => {
 			close: async () => {},
 		}));
 		const service = new KafkaService(manager);
-		const messages = await service.consumeMessages({
+		const { messages } = await service.consumeMessages({
 			topic: "topic-a",
 			maxMessages: 1,
 			timeoutMs: 5_000,
