@@ -32,9 +32,7 @@ const INPUT = {
 
 describe("pure builders (SIO-1345)", () => {
 	test("branch, commit message, title", () => {
-		expect(promotionBranchName("incident-analyzer", "lag-correlation")).toBe(
-			"skill/incident-analyzer/lag-correlation",
-		);
+		expect(promotionBranchName("incident-analyzer", "lag-correlation")).toBe("skill/incident-analyzer/lag-correlation");
 		expect(promotionCommitMessage({ agent: "a", skill: "s" })).toBe("promote learned skill s (a)");
 		expect(promotionCommitMessage({ agent: "a", skill: "s", ticket: "SIO-9" })).toBe(
 			"SIO-9: promote learned skill s (a)",
