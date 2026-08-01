@@ -1,0 +1,19 @@
+name: kg-topology-sweep
+version: 0.1.0
+description: >
+  Collects live runtime topology (Elastic APM service_destination, Konnect
+  routes, Kafka consumer groups, AWS ECS) into the knowledge graph via
+  runTopologySweep(), with tValid/tInvalid freshness + K-miss invalidation.
+  SIO-1104 (5a); scheduled declaratively (SIO-1358) via
+  schedules/kg-topology-sweep.yaml rather than a hand-wired Bun.cron call. A
+  single opaque node step -- the sweep itself isn't a multi-step DAG, so this
+  workflow exists only to give the scheduler a named, runWorkflow()-executed
+  target.
+
+triggers:
+  - type: manual
+
+steps:
+  - name: sweep
+    node: kg-topology-sweep
+    outputs: []

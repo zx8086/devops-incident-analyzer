@@ -61,9 +61,9 @@ Nodes: `Vpc`, `Subnet` (cidr), `LoadBalancer`, `TargetGroup`, `DnsRecord` (PK `<
 
 Readers: `networkMapForService(store, service, asOf?)` and `ipToWorkload(store, ip, asOf?)` -- the latter powers the SIO-1200 reverse-IP protocol's KG-cache-first step 0 (`resolveIdentifiers` injects `aws.ipHints`, verify-then-trust) and the curated MCP tools `kg_network_map` / `kg_ip_to_workload`. `graphEnrich` renders up to 5 bounded "known topology" lines into `graphContext`. Not rebuilt from facts (machine-rediscoverable from AWS; SIO-1135 curated-only rule).
 
-### The scheduled topology sweep (SIO-1104, 5a)
+### The scheduled topology sweep (SIO-1104, 5a; SIO-1358)
 
-A **third write path**, belonging to neither agent pipeline: an in-process cron in the web app (`apps/web/src/lib/server/kg-topology-cron.ts` -> `runTopologySweep` in `packages/agent/src/kg-topology.ts` -> the KG writers), sharing the same MCP bridge and the single `getGraphStore()` lbug handle. Default **OFF** (`KG_TOPOLOGY_CRON_ENABLED`; unlike the other KG flags, it does live MCP I/O on a schedule -- default hourly, `KG_TOPOLOGY_CRON_SCHEDULE`).
+A **third write path**, belonging to neither agent pipeline: a schedule (`schedules/kg-topology-sweep.yaml`) declaratively registered via the generic scheduler in `packages/skillflow/src/scheduler.ts`, running a one-step `workflows/kg-topology-sweep.yaml` whose `node:` target is bound to `runTopologySweep` in `packages/agent/src/kg-topology.ts` -> the KG writers, sharing the same MCP bridge and the single `getGraphStore()` lbug handle. Requires `KNOWLEDGE_GRAPH_ENABLED` (a backend precondition); cadence and on/off (`enabled:`) both live in the schedule's YAML, default hourly and enabled -- no `KG_TOPOLOGY_CRON_ENABLED`/`KG_TOPOLOGY_CRON_SCHEDULE` env vars (removed by SIO-1358; previously a hand-wired `apps/web/src/lib/server/kg-topology-cron.ts` Bun.cron file, now deleted).
 
 Per sweep, each source maps live data to edges (soft-failing independently, bounded per-source wall clock):
 
@@ -153,7 +153,7 @@ The graph nodes are why the registered node counts exceed the base graphs:
 
 incident-analyzer consumes the graph purely through internal enrich nodes -- it has no LLM-callable `kg_*` tools by design (its graph use is enrichment, not a ReAct tool loop; the entity extractor only routes the seven user datasources, so a graph sub-agent would never be dispatched). SIO-1026 brought prior-root-cause recall into that enrichment path and added the shared `kg_prior_root_causes` MCP tool, which is available to elastic-iac's `kg_run_cypher`/curated surface and to any future ad-hoc caller.
 
-SIO-1104 (5a) adds a **third write path** outside both agent pipelines: the scheduled topology sweep (see "The scheduled topology sweep" above) -- an apps/web in-process cron writing through the same `getGraphStore()` singleton, gated by `KG_TOPOLOGY_CRON_ENABLED` (default off).
+SIO-1104 (5a) adds a **third write path** outside both agent pipelines: the scheduled topology sweep (see "The scheduled topology sweep" above) -- a declaratively-registered schedule (SIO-1358) writing through the same `getGraphStore()` singleton, gated by `KNOWLEDGE_GRAPH_ENABLED` and its own `enabled:` flag in `schedules/kg-topology-sweep.yaml`.
 
 ## Lifecycle
 

@@ -3,7 +3,10 @@
 // SIO-848: WorkflowSchema is canonical in the bridge (the lower-level dep);
 // re-export it here so skillflow consumers have one import surface.
 export {
+	loadSchedules,
 	loadWorkflows,
+	type ScheduleDef,
+	ScheduleDefSchema,
 	type WorkflowDef,
 	WorkflowSchema,
 	type WorkflowStep,
@@ -27,5 +30,11 @@ export {
 	stepKind,
 	stepTarget,
 } from "./resolvers.ts";
+export {
+	type RegisteredSchedule,
+	registerSchedules,
+	type ScheduleHandlers,
+	scheduleToIntervalMs,
+} from "./scheduler.ts";
 export { resolveInputs, resolveTemplate, type TemplateContext, TemplateError } from "./template.ts";
 export { shouldTrigger, type TriggerEvent } from "./triggers.ts";

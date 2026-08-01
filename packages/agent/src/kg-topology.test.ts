@@ -29,7 +29,6 @@ import {
 
 const ORIG_ENV = {
 	KNOWLEDGE_GRAPH_ENABLED: process.env.KNOWLEDGE_GRAPH_ENABLED,
-	KG_TOPOLOGY_CRON_ENABLED: process.env.KG_TOPOLOGY_CRON_ENABLED,
 	AWS_ESTATES: process.env.AWS_ESTATES,
 	ELASTIC_DEPLOYMENTS: process.env.ELASTIC_DEPLOYMENTS,
 	// SIO-1115: page cap + kafka describe timeout, set by individual tests.
@@ -97,7 +96,6 @@ function isServiceNamesRequest(args: unknown): boolean {
 
 beforeEach(() => {
 	process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
-	process.env.KG_TOPOLOGY_CRON_ENABLED = "true";
 	delete process.env.AWS_ESTATES;
 	delete process.env.ELASTIC_DEPLOYMENTS;
 	delete process.env.KG_TOPOLOGY_MAX_PAGES;
@@ -122,16 +120,14 @@ afterAll(() => {
 });
 
 describe("flags", () => {
-	test("topologyCronEnabled defaults OFF and requires BOTH flags", () => {
+	// SIO-1358: topologyCronEnabled is now a pure backend-availability check (does the
+	// knowledge graph exist to write to) -- cron enablement moved to `enabled:` in
+	// schedules/kg-topology-sweep.yaml, so there is no dedicated cron flag left to test.
+	test("topologyCronEnabled requires only KNOWLEDGE_GRAPH_ENABLED", () => {
 		expect(topologyCronEnabled({} as NodeJS.ProcessEnv)).toBe(false);
-		expect(topologyCronEnabled({ KNOWLEDGE_GRAPH_ENABLED: "true" } as NodeJS.ProcessEnv)).toBe(false);
-		expect(topologyCronEnabled({ KG_TOPOLOGY_CRON_ENABLED: "true" } as NodeJS.ProcessEnv)).toBe(false);
-		expect(
-			topologyCronEnabled({ KG_TOPOLOGY_CRON_ENABLED: "true", KNOWLEDGE_GRAPH_ENABLED: "true" } as NodeJS.ProcessEnv),
-		).toBe(true);
-		expect(
-			topologyCronEnabled({ KG_TOPOLOGY_CRON_ENABLED: "1", KNOWLEDGE_GRAPH_ENABLED: "1" } as NodeJS.ProcessEnv),
-		).toBe(true);
+		expect(topologyCronEnabled({ KNOWLEDGE_GRAPH_ENABLED: "true" } as NodeJS.ProcessEnv)).toBe(true);
+		expect(topologyCronEnabled({ KNOWLEDGE_GRAPH_ENABLED: "1" } as NodeJS.ProcessEnv)).toBe(true);
+		expect(topologyCronEnabled({ KNOWLEDGE_GRAPH_ENABLED: "false" } as NodeJS.ProcessEnv)).toBe(false);
 	});
 
 	test("topologyMissThreshold parses a positive integer, else 3", () => {
@@ -238,7 +234,7 @@ describe("collectAwsRunsOn", () => {
 
 describe("runTopologySweep", () => {
 	test("skips when disabled", async () => {
-		delete process.env.KG_TOPOLOGY_CRON_ENABLED;
+		delete process.env.KNOWLEDGE_GRAPH_ENABLED;
 		const store = new InMemoryGraphStore();
 		_setGraphStoreForTesting(store);
 		expect(await runTopologySweep()).toEqual({ skipped: "disabled", sources: {} });

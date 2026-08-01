@@ -468,6 +468,7 @@ Optional cross-session subsystems. All are off / file-backed by default; the dee
 | `AGENT_MEMORY_DAILYLOG_TTL_SECONDS` | No | *(none)* | Short TTL for dailylog breadcrumbs; omit for no decay (facts never decay) |
 | `AGENT_MEMORY_SYNC_WRITES` | No | `false` | `true` -> `async_processing=false`: a written block is searchable immediately |
 | `IAC_PROPOSAL_FACT_TTL_SECONDS` | No | 90d | TTL on the elastic-iac change proposal fact; it expires once reconciliation writes the terminal fact (SIO-1005) |
+| `KG_UNCURATED_RETENTION_DAYS` | No | `30` | SIO-1135: retention window (days) for the scheduled purge of uncurated `Incident` rows; a value <= 0 disables the purge. Requires `KNOWLEDGE_GRAPH_ENABLED` to run at all (a backend precondition). SIO-1358: cadence and on/off live in `schedules/kg-purge-sweep.yaml`, not an env var (`KG_PURGE_CRON_ENABLED`/`KG_PURGE_CRON_SCHEDULE` removed) |
 | `SKILL_LEARNING_ENABLED` | No | off | incident-analyzer post-turn skill-proposal learner (writes `kind:skill` facts; agent-memory backend only, SIO-1015) |
 | `HIL_LEARNING_ENABLED` | No | on | SIO-1126: master gate for the human-in-the-loop learning lane (learn-from-ticket). Default on (kill-switch semantics — the lane only fires on an explicit `learn from TICKET-123` command, so it never triggers on normal traffic); set `=false` to disable the lane entirely. Requires `KNOWLEDGE_GRAPH_ENABLED`. See the [HIL learning lane](../architecture/agent-pipeline.md#hil-learning-lane). |
 
@@ -487,14 +488,14 @@ Optional cross-session subsystems. All are off / file-backed by default; the dee
 | `KG_BINDINGS_READ_DATASOURCES` | No | `elastic,aws` | SIO-1101: comma list of datasources that accept graph seeds (`all` = every datasource). Widen without a code change. |
 | `KG_BINDINGS_STALENESS_ENABLED` | No | on | SIO-1103: when a graph-seeded coordinate's datasource reports not-found this turn, retire the agent-discovered binding (human bindings are only flagged, never auto-invalidated). Set `=false` to disable auto-invalidation. |
 
-#### Scheduled topology sweep (SIO-1104 / SIO-1115)
+#### Scheduled topology sweep (SIO-1104 / SIO-1115 / SIO-1358)
 
-The in-process topology cron collects live topology edges (elastic APM `DEPENDS_ON`, Konnect `ROUTES_TO`, Kafka `CONSUMES_FROM`, AWS ECS `RUNS_ON`) and runs the K-consecutive-miss staleness invalidation. Requires `KNOWLEDGE_GRAPH_ENABLED`.
+The scheduled topology sweep collects live topology edges (elastic APM `DEPENDS_ON`, Konnect `ROUTES_TO`, Kafka `CONSUMES_FROM`, AWS ECS `RUNS_ON`) and runs the K-consecutive-miss staleness invalidation. It runs at all only when `KNOWLEDGE_GRAPH_ENABLED` is set (a backend-availability precondition, not an on/off flag).
+
+**SIO-1358: cadence and on/off are configured in `schedules/kg-topology-sweep.yaml`, not env vars.** Edit that file's `cron:` to retune, and its `enabled:` to turn the sweep on/off (default `enabled: true`, still gated by `KNOWLEDGE_GRAPH_ENABLED`). `KG_TOPOLOGY_CRON_ENABLED` and `KG_TOPOLOGY_CRON_SCHEDULE` have been removed.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `KG_TOPOLOGY_CRON_ENABLED` | No | off | SIO-1104: enable the scheduled topology sweep (`true`/`1`). No-op unless `KNOWLEDGE_GRAPH_ENABLED` is also set (the sweep does live MCP I/O on a schedule) |
-| `KG_TOPOLOGY_CRON_SCHEDULE` | No | hourly (`0 * * * *`) | SIO-1104: cron expression for the sweep. Under the Node dev server, only `*`, `*/N`, and fixed-minute-hourly forms are honored (else defaults to hourly) |
 | `KG_TOPOLOGY_MISS_THRESHOLD` | No | `3` | SIO-1104: K — a topology edge missing from K consecutive complete sweeps is invalidated (`tInvalid` set). Edge staleness SLO = interval x K |
 | `KG_TOPOLOGY_SOURCE_TIMEOUT_MS` | No | `60000` | SIO-1115: per-source wall-clock budget for one collector (the losing side of the race is not cancelled — the adapter SDK takes no AbortSignal — it just stops being awaited) |
 | `KG_TOPOLOGY_MAX_PAGES` | No | `10` | SIO-1115: page cap shared by the APM composite aggregation and the ECS `nextToken` pagination. Hitting the cap marks the source incomplete (sweep skipped this round — safe) and warns, rather than reading partial data as authoritative |
@@ -557,3 +558,4 @@ In production, set `CORS_ORIGINS` to the actual frontend domain. For local devel
 | 2026-07-15 | SIO-1111: added `ATLASSIAN_READINESS_FRESHNESS_WINDOW_MS` (default 90 000, passive readiness for the /ready cloudId component) and bridge-side `ATLASSIAN_TOOL_TIMEOUT_MS` (default 120 000); `ATLASSIAN_TIMEOUT` now actually bounds each upstream Rovo call (was dead config); documented the previously undocumented `ELASTIC_IAC_TOOL_TIMEOUT_MS`. |
 | 2026-07-15 | SIO-1115: added `KG_TOPOLOGY_SOURCE_TIMEOUT_MS` (default 60 000), `KG_TOPOLOGY_MAX_PAGES` (default 10, shared APM composite-agg + ECS pagination cap), and `KG_TOPOLOGY_KAFKA_DESCRIBE_TIMEOUT_MS` (default 15 000); extended `KAFKA_TOOL_TIMEOUT_MS` to also drive the bridge-side `defaultToolTimeout` for `kafka-mcp`; documented the previously undocumented topology-cron knobs `KG_TOPOLOGY_CRON_ENABLED` / `KG_TOPOLOGY_CRON_SCHEDULE` / `KG_TOPOLOGY_MISS_THRESHOLD`. |
 | 2026-07-23 | SIO-1184: `ATLASSIAN_INCIDENT_PROJECTS` is now documented as optional-narrowing with an all-projects wildcard default; configured keys are validated against the live site on first custom-tool use (nonexistent keys dropped, wildcard fallback, `configWarning` in tool output). `.env.example` no longer ships the `INC,OPS` example -- those projects did not exist on the connected site and silently zeroed `findLinkedIncidents`/`getIncidentHistory` (SIO-1181 audit finding F1). |
+| 2026-08-01 | SIO-1358: migrated the 3 hand-wired Bun.cron jobs (SIO-1005, SIO-1104, SIO-1135) to a declarative `schedules/*.yaml` layer with a generic scheduler. Removed `IAC_RECONCILE_CRON_SCHEDULE`, `KG_TOPOLOGY_CRON_ENABLED`, `KG_TOPOLOGY_CRON_SCHEDULE`, `KG_PURGE_CRON_ENABLED`, `KG_PURGE_CRON_SCHEDULE` -- cadence and on/off now live in each schedule's YAML file, not env vars. Documented the previously-undocumented `KG_UNCURATED_RETENTION_DAYS`. See `docs/superpowers/specs/2026-08-01-declarative-schedules-design.md`. |

@@ -1,0 +1,15 @@
+# SIO-1104 / SIO-1358: sweeps live runtime topology into the knowledge graph.
+# Cadence and enablement both live ONLY here -- no env var overrides either
+# (see docs/superpowers/specs/2026-08-01-declarative-schedules-design.md).
+# Requires KNOWLEDGE_GRAPH_ENABLED at registration time (checked by the
+# scheduler as a precondition, not a second on/off switch); with `enabled:
+# true` but no KG backend configured, this schedule is skipped with a log,
+# never registered.
+# Default disabled (matches the old KG_TOPOLOGY_CRON_ENABLED default): this
+# sweep does live MCP I/O on a schedule, so it's opt-in per deployment. Set
+# `enabled: true` to turn it on.
+id: kg-topology-sweep
+mode: repeat
+cron: "0 * * * *"
+enabled: false
+workflow: kg-topology-sweep

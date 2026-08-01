@@ -1,0 +1,17 @@
+name: reconcile-sweep
+version: 0.1.0
+description: >
+  Reconciles proposed elastic-iac memory facts to their real terminal state
+  (applied / apply-failed / closed) via reconcileAll(). SIO-1005; scheduled
+  declaratively (SIO-1358) via schedules/iac-reconcile-sweep.yaml rather than a
+  hand-wired Bun.cron call. A single opaque node step -- the sweep itself
+  isn't a multi-step DAG, so this workflow exists only to give the scheduler a
+  named, runWorkflow()-executed target.
+
+triggers:
+  - type: manual
+
+steps:
+  - name: sweep
+    node: iac-reconcile-sweep
+    outputs: []

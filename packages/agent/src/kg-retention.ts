@@ -25,11 +25,13 @@ export function uncuratedRetentionDays(env: NodeJS.ProcessEnv = process.env): nu
 	return parsed;
 }
 
-// Default OFF, like the topology cron: a scheduled sweep that mutates the store should be
-// opt-in per environment. Requires the knowledge graph itself to be enabled.
+// SIO-1358: whether the purge sweep can run at all, given what's configured in
+// this deployment. Requires the knowledge graph itself to be enabled. This is
+// a backend-availability PRECONDITION, not an on/off switch -- whether the
+// sweep runs ON A SCHEDULE is controlled solely by `enabled:` in
+// schedules/kg-purge-sweep.yaml (no dedicated *_CRON_ENABLED env var).
 export function purgeCronEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-	const v = env.KG_PURGE_CRON_ENABLED;
-	return (v === "true" || v === "1") && isKnowledgeGraphEnabled(env);
+	return isKnowledgeGraphEnabled(env);
 }
 
 export interface PurgeSweepSummary {

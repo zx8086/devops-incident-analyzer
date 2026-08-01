@@ -141,19 +141,21 @@ mock.module("@devops-agent/agent", () => ({
 	promoteToMemory: mock(() => Promise.resolve()),
 	executeAction: mock(() => Promise.resolve()),
 	getAvailableActionTools: mock(() => [] as unknown[]),
-	// SIO-1045/SIO-1053: iac-reconcile-cron.ts is imported (and its module-scope startIacReconcileCron
-	// call reads reconcileEnabled()) transitively via agent.ts -- must resolve on this same
-	// process-global mock cache entry. reconcileEnabled() false keeps the cron unregistered under test.
+	// SIO-1045/SIO-1053/SIO-1358: schedules.ts is imported (and its module-scope startSchedules
+	// call reads reconcileEnabled()/topologyCronEnabled()/purgeCronEnabled()) transitively via
+	// agent.ts -- must resolve on this same process-global mock cache entry. All three false
+	// keeps every schedule filtered out before registerSchedules() is even called under test.
 	reconcileAll: mock(() => Promise.resolve({ reconciled: 0, skipped: 0, errors: 0 })),
 	reconcileEnabled: mock(() => false),
-	// SIO-1104 (5a): kg-topology-cron.ts is imported transitively via agent.ts the same way --
-	// the stub must export its imports too. topologyCronEnabled() false keeps the cron unregistered.
 	runTopologySweep: mock(() => Promise.resolve({ sources: {} })),
 	topologyCronEnabled: mock(() => false),
-	// SIO-1135: purge-cron.ts is imported transitively via agent.ts too -- stub its imports.
-	// purgeCronEnabled() false keeps the retention sweep unregistered under test.
 	runUncuratedPurgeSweep: mock(() => Promise.resolve({ incidents: 0, edges: 0 })),
 	purgeCronEnabled: mock(() => false),
+	// SIO-1358: schedules.ts's other @devops-agent/agent imports -- getWorkspaceRoot resolves the
+	// real repo root (harmless; loadSchedules/loadWorkflows below are gitagent-bridge stubs so no
+	// real YAML is read), registerSchedules is a no-op stub since the schedules map is empty here.
+	getWorkspaceRoot: mock(() => "/tmp"),
+	registerSchedules: mock(() => []),
 	selectedBackend: mock(() => "file" as const),
 	// SIO-1124: the /api/tickets routes import these from this same specifier.
 	getTicketProvider: mock(() => undefined),
@@ -162,6 +164,10 @@ mock.module("@devops-agent/agent", () => ({
 
 mock.module("@devops-agent/gitagent-bridge", () => ({
 	getRecursionLimit: (maxTurns?: number) => (maxTurns ?? 30) * 2,
+	// SIO-1358: schedules.ts value-imports these; empty maps keep startSchedules() a no-op
+	// under test (nothing to register even before the enablement-flag filtering above).
+	loadSchedules: () => new Map(),
+	loadWorkflows: () => new Map(),
 	complianceToMetadata: (compliance?: Record<string, unknown>) => {
 		if (!compliance) return {};
 		return {

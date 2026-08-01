@@ -29,6 +29,7 @@ export {
 	type ModelName,
 } from "./model-registry.ts";
 export { getRelatedTools, withRelatedTools } from "./related-tools.ts";
+export { loadSchedules, type ScheduleDef, ScheduleDefSchema } from "./schedule.ts";
 export { mergeShared, type SharedMergeResult } from "./shared-merge.ts";
 export {
 	buildSubAgentSystemPrompt,
