@@ -31,6 +31,7 @@ describe("loadAgent(elastic-iac) — GAP dialect", () => {
 			"open-mr",
 			"validate-cluster-state",
 			"query-knowledge-graph",
+			"search-memory",
 		]);
 		expect(agent.manifest.tools).toEqual(["elastic-iac"]);
 		// scalar fallback normalizes to string[]
