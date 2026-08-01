@@ -109,6 +109,20 @@ export function kafkaDescribeTimeoutMs(env: NodeJS.ProcessEnv = process.env): nu
 	return Number.isInteger(parsed) && parsed > 0 ? parsed : KAFKA_DESCRIBE_TIMEOUT_DEFAULT_MS;
 }
 
+// SIO-1330: collectAwsRunsOn fans out ECS cluster/service enumeration per estate via
+// Promise.allSettled, but the only clock that used to bound it was runSource's OUTER
+// sourceTimeoutMs() wrapping the whole collectAwsRunsOn call -- the same "one timeout wraps N
+// branches" shape SIO-1326 fixed in resolve-identifiers.ts's probeElastic/probeAws. If one
+// estate's pagination is slow, the outer wall clock could fire while Promise.allSettled was
+// still waiting, discarding every fast estate's already-collected edges along with the slow
+// one. Each estate now gets its OWN timeout budget so a slow estate settles `rejected`
+// (already handled) instead of erasing the rest.
+const AWS_ESTATE_TIMEOUT_DEFAULT_MS = 20_000;
+export function awsEstateTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+	const parsed = Number(env.KG_TOPOLOGY_AWS_ESTATE_TIMEOUT_MS);
+	return Number.isInteger(parsed) && parsed > 0 ? parsed : AWS_ESTATE_TIMEOUT_DEFAULT_MS;
+}
+
 function msg(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
@@ -563,7 +577,10 @@ export async function collectAwsRunsOn(knownServiceNames: string[]): Promise<Col
 			}
 			return out;
 		});
-	const settled = await Promise.allSettled(estates.map(collectEstate));
+	const estateTimeoutMs = awsEstateTimeoutMs();
+	const settled = await Promise.allSettled(
+		estates.map((estate) => withTimeout(collectEstate(estate), estateTimeoutMs, `aws runs-on estate ${estate}`)),
+	);
 	const edges: TopologyEdgeRecord[] = [];
 	settled.forEach((r, i) => {
 		if (r.status === "fulfilled") edges.push(...r.value);

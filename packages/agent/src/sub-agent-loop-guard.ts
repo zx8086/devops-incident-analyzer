@@ -259,6 +259,19 @@ export const AWS_INVALID_QUERY_ID_ADVICE =
 	"to aws_logs_start_query, and it expires. Do NOT re-poll this id. Re-issue aws_logs_start_query " +
 	"for the SAME estate and log group, then poll the NEW queryId it returns.";
 
+// SIO-1329: CloudWatch Logs Insights returns a Failed/Cancelled/Timeout status as a normal HTTP 200
+// response with no thrown exception -- a query that never actually completed is otherwise
+// structurally indistinguishable from a genuine Complete-with-0-rows success. Do NOT treat this as
+// "no matching logs"; it means the query itself never produced trustworthy data.
+export const AWS_FAILED_QUERY_ADVICE =
+	"[loop-guard advice] aws_logs_get_query_results returned status Failed, Cancelled, or Timeout -- " +
+	"this is NOT a successful empty result and must NOT be reported as 'no matching logs'. The query " +
+	"never completed: Timeout means it exceeded CloudWatch's 60-minute runtime limit (narrow the time " +
+	"window or simplify the query), Cancelled means it was stopped before finishing, and Failed means " +
+	"it errored during execution (often a metric-math or grammar issue not caught at submission). " +
+	"Re-issue aws_logs_start_query with a narrower window and/or a simpler query, then poll the NEW " +
+	"queryId. Only report an absence once a query reaches status Complete.";
+
 // SIO-1268: emitted ONLY when awsEcsAbsenceProven() is true, i.e. a COMPLETE, error-free ECS
 // enumeration of this estate matched nothing. Phrased to produce the SIO-1149 negative FINDING
 // (aws-agent/RULES.md "Cross-Estate Absence Is a Finding") rather than a gap: that prose already
@@ -335,6 +348,12 @@ export interface LoopGuardState {
 	// queryId (bad-input/resource-not-found _error); consumed (cleared) when the corrective
 	// advice is emitted once.
 	awsInvalidQueryId: boolean;
+	// SIO-1329: set when the last aws_logs_get_query_results returned status Failed/Cancelled/
+	// Timeout -- a genuinely failed query CloudWatch still returns as HTTP 200 (no thrown
+	// exception), so this is NOT covered by awsInvalidQueryId (_error-based) or
+	// awsEmptyQueryResults (Complete-with-0-rows). Consumed (cleared) when the corrective
+	// advice is emitted once.
+	awsFailedQuery: boolean;
 	// SIO-1298: correlation tools that returned an empty result for a ~24h window this run.
 	// Latched in recordResult; consumed (per tool, one-shot) when the escalation advice is
 	// appended to that tool's result.
@@ -362,6 +381,7 @@ export function createLoopGuardState(opts: LoopGuardOptions = {}): LoopGuardStat
 		awsStartQueryUnproductive: 0,
 		awsEmptyQueryResults: 0,
 		awsInvalidQueryId: false,
+		awsFailedQuery: false,
 		gitlabCorrelationEmpty: new Set<string>(),
 		unproductiveByTool: new Map<string, number>(),
 		totalUnproductive: 0,
@@ -482,6 +502,17 @@ function isInFlightAwsQueryResults(content: unknown): boolean {
 	return parsed !== null && (parsed.status === "Running" || parsed.status === "Scheduled");
 }
 
+// SIO-1329: a genuinely FAILED query. Per the AWS SDK's own GetQueryResultsResponse.status
+// documentation, CloudWatch returns Failed/Cancelled/Timeout as an ordinary HTTP 200 (no thrown
+// exception -- mapAwsError/awsErrorKind never runs), so without this check a failed query is
+// structurally identical to isEmptyAwsQueryResults' Complete-with-0-rows success shape. Must be
+// checked BEFORE treating a result as empty-success or as in-flight.
+const AWS_FAILED_QUERY_STATUSES = new Set(["Failed", "Cancelled", "Timeout"]);
+export function isFailedAwsQueryResults(content: unknown): boolean {
+	const parsed = parseAwsQueryResults(content);
+	return parsed !== null && AWS_FAILED_QUERY_STATUSES.has(parsed.status);
+}
+
 // SIO-1162: detect an invalid/expired queryId error on aws_logs_get_query_results. Keyed on
 // the resulting _error.kind (bad-input/resource-not-found), which is stable regardless of the
 // exact SDK error name AWS uses for the invalid-queryId message.
@@ -505,6 +536,15 @@ export function consumeInvalidQueryIdAdvice(state: LoopGuardState): string | nul
 	if (!state.awsInvalidQueryId) return null;
 	state.awsInvalidQueryId = false;
 	return AWS_INVALID_QUERY_ID_ADVICE;
+}
+
+// SIO-1329: one-shot failed/timeout/cancelled advice. Fires on the FIRST such result, same
+// urgency as the invalid-queryId case -- a Failed/Timeout/Cancelled result is not evidence to
+// accumulate toward a widen decision, it must never be read as data at all.
+export function consumeFailedQueryAdvice(state: LoopGuardState): string | null {
+	if (!state.awsFailedQuery) return null;
+	state.awsFailedQuery = false;
+	return AWS_FAILED_QUERY_ADVICE;
 }
 
 // SIO-1298: detect an empty-success Orbit correlation payload. Both tools return the
@@ -847,6 +887,15 @@ export function recordResult(
 		if (isInvalidQueryIdResult(content)) {
 			state.awsInvalidQueryId = true;
 			state.awsEmptyQueryResults = 0;
+			return;
+		}
+		// SIO-1329: a Failed/Cancelled/Timeout status is a normal HTTP 200 (no thrown exception),
+		// so it must be checked BEFORE the empty-success/in-flight branches below -- otherwise it
+		// falls into the `!isInFlightAwsQueryResults` else-branch and silently RESETS
+		// awsEmptyQueryResults, erasing a genuine 0-row streak's progress toward the widen advice
+		// while emitting no signal that the query never produced trustworthy data at all.
+		if (isFailedAwsQueryResults(content)) {
+			state.awsFailedQuery = true;
 			return;
 		}
 		// SIO-1159: count consecutive empty-success outcomes. In-flight polls

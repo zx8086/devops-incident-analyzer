@@ -300,6 +300,20 @@ describe("SIO-1161: Metrics Insights tool selection with the real aws-introspect
 		expect(matchActionsByKeywords("check the rds instance status", awsDef)).not.toContain("cloudwatch_metrics");
 	});
 
+	// SIO-1331: RULES.md's "Iteration 1 Probe Discipline" mandates aws_rds_describe_db_instances
+	// fire unconditionally alongside cloudwatch_alarms/health_events, but rds_state had NO
+	// action_keywords entry at all -- live-replayed 0/2, including a prompt that explicitly asked
+	// "are there any database issues" (health_events correctly keyword-matched via "aws health" in
+	// the same prompt; rds_state had nothing in the table that could ever match, regardless of
+	// wording). Mirrors the existing cloudwatch_metrics/health_events keyword coverage above.
+	test("SIO-1331: database-oriented phrasings keyword-match rds_state", () => {
+		const awsDef = loadAwsDef();
+		expect(matchActionsByKeywords("are there any database issues affecting it", awsDef)).toContain("rds_state");
+		expect(matchActionsByKeywords("check the rds instance status", awsDef)).toContain("rds_state");
+		expect(matchActionsByKeywords("is the aurora cluster healthy", awsDef)).toContain("rds_state");
+		expect(matchActionsByKeywords("any database connection errors", awsDef)).toContain("rds_state");
+	});
+
 	test("a realistic multi-action union keeps both new tools inside the 25-tool belt", () => {
 		const awsDef = loadAwsDef();
 		// SIO-1256: allTools is built in YAML declaration order here, which is NOT the order

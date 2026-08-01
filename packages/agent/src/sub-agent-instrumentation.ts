@@ -8,6 +8,7 @@ import {
 	awsEcsAbsenceProven,
 	consumeAbsenceExitLog,
 	consumeEmptyAwsResultsAdvice,
+	consumeFailedQueryAdvice,
 	consumeGitlabCorrelationWidenAdvice,
 	consumeInvalidQueryIdAdvice,
 	createLoopGuardState,
@@ -320,18 +321,22 @@ function instrumentTool(
 						// window silently missed a 2-day-old incident). After consecutive
 						// empty-success results, append one-shot widen advice to the result.
 						if (tool.name === "aws_logs_get_query_results") {
-							// SIO-1162: an invalid/expired queryId takes precedence over the widen advice
-							// (an invalid id is never also an empty-success, and re-polling it is always
-							// wasted). Both are appended to the tool result via rebuildResult so the
+							// SIO-1162/SIO-1329: an invalid/expired queryId or a Failed/Cancelled/Timeout
+							// status both take precedence over the widen advice -- neither is ever also a
+							// genuine empty-success, and treating either as ordinary data is always wrong.
+							// All three are appended to the tool result via rebuildResult so the
 							// ToolMessage/AIMessage tool_call pairing Bedrock requires stays intact.
 							const invalidIdAdvice = consumeInvalidQueryIdAdvice(runState.loopGuard);
-							const advice = invalidIdAdvice ?? consumeEmptyAwsResultsAdvice(runState.loopGuard);
+							const failedQueryAdvice = invalidIdAdvice ? null : consumeFailedQueryAdvice(runState.loopGuard);
+							const advice = invalidIdAdvice ?? failedQueryAdvice ?? consumeEmptyAwsResultsAdvice(runState.loopGuard);
 							if (advice) {
 								ctx.log.info(
 									{
 										event: invalidIdAdvice
 											? "subagent.aws_invalid_query_id_advice"
-											: "subagent.aws_empty_results_advice",
+											: failedQueryAdvice
+												? "subagent.aws_failed_query_advice"
+												: "subagent.aws_empty_results_advice",
 										dataSourceId: ctx.dataSourceId,
 										deploymentId: ctx.deploymentId,
 										toolName: tool.name,
@@ -339,7 +344,9 @@ function instrumentTool(
 									},
 									invalidIdAdvice
 										? "Appending re-anchor advice after invalid CloudWatch queryId"
-										: "Appending widen-window advice after consecutive empty CloudWatch results",
+										: failedQueryAdvice
+											? "Appending recovery advice after Failed/Cancelled/Timeout CloudWatch query status"
+											: "Appending widen-window advice after consecutive empty CloudWatch results",
 								);
 								return rebuildResult(processed, `${stringifyContent(extractContent(processed))}\n\n${advice}`);
 							}

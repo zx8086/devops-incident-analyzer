@@ -19,6 +19,7 @@ mock.module("./mcp-bridge.ts", () => ({
 import { _setGraphStoreForTesting, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
 import { _resetEstateCacheForTests, _resetEstateReconcileForTests } from "./aws-estate-router.ts";
 import {
+	collectAwsRunsOn,
 	collectElasticDependencies,
 	configuredElasticDeployments,
 	runTopologySweep,
@@ -34,6 +35,8 @@ const ORIG_ENV = {
 	// SIO-1115: page cap + kafka describe timeout, set by individual tests.
 	KG_TOPOLOGY_MAX_PAGES: process.env.KG_TOPOLOGY_MAX_PAGES,
 	KG_TOPOLOGY_KAFKA_DESCRIBE_TIMEOUT_MS: process.env.KG_TOPOLOGY_KAFKA_DESCRIBE_TIMEOUT_MS,
+	// SIO-1330: per-estate AWS ECS enumeration timeout, set by individual tests.
+	KG_TOPOLOGY_AWS_ESTATE_TIMEOUT_MS: process.env.KG_TOPOLOGY_AWS_ESTATE_TIMEOUT_MS,
 };
 
 function restoreEnv(): void {
@@ -99,6 +102,7 @@ beforeEach(() => {
 	delete process.env.ELASTIC_DEPLOYMENTS;
 	delete process.env.KG_TOPOLOGY_MAX_PAGES;
 	delete process.env.KG_TOPOLOGY_KAFKA_DESCRIBE_TIMEOUT_MS;
+	delete process.env.KG_TOPOLOGY_AWS_ESTATE_TIMEOUT_MS;
 	toolRegistry = {};
 	connectedServers = [];
 	_setGraphStoreForTesting(null);
@@ -175,6 +179,60 @@ describe("collectElasticDependencies", () => {
 	test("incomplete without the search tool", async () => {
 		const result = await collectElasticDependencies();
 		expect(result).toMatchObject({ edges: [], complete: false });
+	});
+});
+
+// SIO-1330: collectAwsRunsOn's Promise.allSettled(estates.map(collectEstate)) fans out per estate,
+// but (before this fix) had no per-estate timeout of its own -- the ONLY clock bounding it was
+// runTopologySweep's outer sourceTimeoutMs() wrapping the WHOLE collectAwsRunsOn call. If one
+// estate's ECS pagination is slow, the outer wall clock fires while Promise.allSettled is still
+// waiting, and runSource's catch discards the ENTIRE collectAwsRunsOn result -- including edges
+// already collected from every fast estate. Same shape as the SIO-1326 elastic/AWS
+// resolve-identifiers.ts bug, just one layer up (the background KG topology sweep, not the live
+// incident-analysis probe). Fixed by giving collectEstate its own per-estate timeout so a slow
+// estate settles `rejected` (already handled) instead of erasing the others.
+describe("collectAwsRunsOn", () => {
+	test("a slow estate does not erase the OTHER estate's already-collected edges", async () => {
+		process.env.KG_TOPOLOGY_AWS_ESTATE_TIMEOUT_MS = "30";
+		const probedEstates: string[] = [];
+		toolRegistry.aws = [
+			{
+				name: "aws_ecs_list_clusters",
+				invoke: async () => {
+					const estate = realBridge.currentAwsEstate();
+					probedEstates.push(estate ?? "(none)");
+					if (estate === "eu-slow-prd") {
+						// Slower than the 30ms per-estate test budget -- must settle as rejected,
+						// not hang the test and not blow the whole collector's budget.
+						await new Promise((resolve) => setTimeout(resolve, 200));
+					}
+					return JSON.stringify({ clusterArns: [`arn:aws:ecs:eu-central-1:1:cluster/${estate}`] });
+				},
+			},
+			{
+				name: "aws_ecs_list_services",
+				invoke: async () => JSON.stringify({ serviceArns: ["arn:aws:ecs:eu-central-1:1:service/x/order-service"] }),
+			},
+		];
+		const prevEstates = process.env.AWS_ESTATES;
+		process.env.AWS_ESTATES = JSON.stringify({ "eu-fast-prd": {}, "eu-slow-prd": {} });
+		try {
+			const result = await collectAwsRunsOn(["order-service"]);
+			// Both estates must have actually been probed -- proves the fan-out reached the slow
+			// one at all, not merely that it was skipped.
+			expect(probedEstates).toEqual(expect.arrayContaining(["eu-fast-prd", "eu-slow-prd"]));
+			// The fast estate's edge must survive even though the slow one timed out.
+			expect(result.edges).toContainEqual({
+				kind: "runs-on",
+				from: "order-service",
+				to: "arn:aws:ecs:eu-central-1:1:service/x/order-service",
+			});
+			// A rejected estate makes the collection incomplete (must not sweep on partial data).
+			expect(result.complete).toBe(false);
+		} finally {
+			if (prevEstates === undefined) delete process.env.AWS_ESTATES;
+			else process.env.AWS_ESTATES = prevEstates;
+		}
 	});
 });
 

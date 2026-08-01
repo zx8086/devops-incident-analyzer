@@ -3,6 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	AWS_EMPTY_RESULTS_ADVICE,
+	AWS_FAILED_QUERY_ADVICE,
 	AWS_INVALID_QUERY_ID_ADVICE,
 	AWS_SERVICE_ABSENT_STOP_MESSAGE,
 	AWS_START_QUERY_STOP_MESSAGE,
@@ -10,6 +11,7 @@ import {
 	awsErrorKind,
 	consumeAbsenceExitLog,
 	consumeEmptyAwsResultsAdvice,
+	consumeFailedQueryAdvice,
 	consumeGitlabCorrelationWidenAdvice,
 	consumeInvalidQueryIdAdvice,
 	createLoopGuardState,
@@ -19,6 +21,7 @@ import {
 	isDiscoveryCall,
 	isEmptyAwsQueryResults,
 	isEmptyGitlabCorrelationResult,
+	isFailedAwsQueryResults,
 	isGuardedTool,
 	isInvalidQueryIdResult,
 	isObservedTool,
@@ -552,6 +555,64 @@ describe("SIO-1159: empty-success aws_logs_get_query_results advice", () => {
 		recordResult(state, TOOL, "", EMPTY_RESULT);
 		expect(state.awsStartQueryUnproductive).toBe(0);
 		expect(state.awsStartQueryNeedsReanchor).toBe(false);
+	});
+});
+
+// SIO-1329: GetQueryResultsResponse.status can be Failed/Cancelled/Timeout -- a genuinely
+// FAILED query that AWS still returns as HTTP 200 (no thrown exception, so mapAwsError/
+// awsErrorKind never runs). Before this fix, isEmptyAwsQueryResults only recognized
+// status:"Complete", so a Failed/Timeout/Cancelled result fell into recordResult's
+// `!isInFlightAwsQueryResults` else-branch and silently RESET awsEmptyQueryResults to 0 --
+// worse than a no-op, since it erased any accumulated empty-streak progress and emitted no
+// signal that the query never actually ran to completion. A rejected aggregation must not
+// be indistinguishable from a genuine 0-row success (same class of bug as SIO-1328's
+// Elasticsearch _shards.failed swallow).
+describe("SIO-1329: failed/timeout/cancelled aws_logs_get_query_results advice", () => {
+	const TOOL = "aws_logs_get_query_results";
+	const FAILED_RESULT = JSON.stringify({ results: [], status: "Failed", $metadata: {} });
+	const TIMEOUT_RESULT = JSON.stringify({ results: [], status: "Timeout", $metadata: {} });
+	const CANCELLED_RESULT = JSON.stringify({ results: [], status: "Cancelled", $metadata: {} });
+	const COMPLETE_EMPTY_RESULT = JSON.stringify({ results: [], status: "Complete", $metadata: {} });
+	const COMPLETE_NONEMPTY_RESULT = JSON.stringify({
+		results: [[{ field: "@message", value: "CatalogException" }]],
+		status: "Complete",
+	});
+
+	test("detects Failed/Timeout/Cancelled; Complete (empty or not) is never a failed result", () => {
+		expect(isFailedAwsQueryResults(FAILED_RESULT)).toBe(true);
+		expect(isFailedAwsQueryResults(TIMEOUT_RESULT)).toBe(true);
+		expect(isFailedAwsQueryResults(CANCELLED_RESULT)).toBe(true);
+		expect(isFailedAwsQueryResults(COMPLETE_EMPTY_RESULT)).toBe(false);
+		expect(isFailedAwsQueryResults(COMPLETE_NONEMPTY_RESULT)).toBe(false);
+	});
+
+	test("a Failed status is never misclassified as an empty-success", () => {
+		expect(isEmptyAwsQueryResults(FAILED_RESULT)).toBe(false);
+		expect(isEmptyAwsQueryResults(TIMEOUT_RESULT)).toBe(false);
+		expect(isEmptyAwsQueryResults(CANCELLED_RESULT)).toBe(false);
+	});
+
+	test("advice fires on the FIRST failed/timeout/cancelled result and only once", () => {
+		const state = createLoopGuardState();
+		recordResult(state, TOOL, "", FAILED_RESULT);
+		expect(consumeFailedQueryAdvice(state)).toBe(AWS_FAILED_QUERY_ADVICE);
+		expect(consumeFailedQueryAdvice(state)).toBeNull();
+	});
+
+	test("a failed/timeout/cancelled result does NOT silently reset the consecutive-empty counter", () => {
+		// Before the fix: Failed fell into the `!isInFlightAwsQueryResults` branch and zeroed
+		// awsEmptyQueryResults, erasing a genuine 0-row streak's progress toward the widen advice.
+		const state = createLoopGuardState();
+		recordResult(state, TOOL, "", COMPLETE_EMPTY_RESULT);
+		recordResult(state, TOOL, "", FAILED_RESULT);
+		recordResult(state, TOOL, "", COMPLETE_EMPTY_RESULT);
+		expect(consumeEmptyAwsResultsAdvice(state)).toBe(AWS_EMPTY_RESULTS_ADVICE);
+	});
+
+	test("a failed result is not also counted as empty-success", () => {
+		const state = createLoopGuardState();
+		recordResult(state, TOOL, "", FAILED_RESULT);
+		expect(consumeEmptyAwsResultsAdvice(state)).toBeNull();
 	});
 });
 
