@@ -640,6 +640,49 @@ export async function getLastAssistantText(threadId: string, agentName = "incide
 	return "";
 }
 
+// SIO-1357: read the closing turn's state for the post-turn background
+// closure workflow. Mirrors getLastAssistantText's access pattern. MUST be
+// called before pruneThreadState (pruning clears dataSourceResults, and a
+// future report source could depend on it) -- best-effort: any failure
+// (unreadable state, missing graph) returns null so the caller skips the
+// workflow rather than throwing out of the turn's completion path.
+//
+// Reads closingReport, NOT finalAnswer: the close command routes through
+// queryComplexity: "simple" (classifier.ts) precisely so it skips the
+// fan-out/aggregate pipeline, but the SIMPLE path's own responder node still
+// runs and overwrites finalAnswer's replace reducer with a generic
+// acknowledgment. closingReport is a snapshot classify took of finalAnswer
+// BEFORE that overwrite -- the actual prior investigation report.
+export interface ClosureRequest {
+	threadId: string;
+	report: string;
+	confidence?: string;
+}
+
+export async function getClosureRequest(threadId: string): Promise<ClosureRequest | null> {
+	try {
+		const graph = await getGraph();
+		const snapshot = await graph.getState({ configurable: { thread_id: threadId } });
+		const values = snapshot.values as {
+			closeIncidentRequested?: boolean;
+			closingReport?: string;
+			confidenceScore?: number;
+		};
+		if (!values?.closeIncidentRequested) return null;
+		return {
+			threadId,
+			report: values.closingReport ?? "",
+			...(values.confidenceScore !== undefined && { confidence: String(values.confidenceScore) }),
+		};
+	} catch (error) {
+		getLogger("web:closure-workflow").warn(
+			{ threadId, error: error instanceof Error ? error.message : String(error) },
+			"getClosureRequest failed; skipping closure workflow for this turn",
+		);
+		return null;
+	}
+}
+
 // SIO-930: the IaC graph streams its final message through the checkpointer (no output-node token
 // stream), so the SSE handlers read terminal state here to label the completion chip. Mirrors
 // getLastAssistantText's state access. Defaults to "completed" if state can't be read.

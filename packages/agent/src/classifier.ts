@@ -3,6 +3,7 @@ import { getLogger } from "@devops-agent/observability";
 import type { BaseMessage } from "@langchain/core/messages";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
+import { detectCloseCommand } from "./close-detect.ts";
 import { detectLearnCommand } from "./learn/detect.ts";
 import { createLlm } from "./llm.ts";
 import { extractTextFromContent } from "./message-utils.ts";
@@ -152,6 +153,8 @@ export async function classify(state: AgentStateType, config?: RunnableConfig): 
 		hilDecisions: undefined,
 		hilEdits: {},
 		hilApplyReport: undefined,
+		closeIncidentRequested: false,
+		closingReport: "",
 	};
 
 	const lastMessage = state.messages[state.messages.length - 1];
@@ -173,6 +176,27 @@ export async function classify(state: AgentStateType, config?: RunnableConfig): 
 	if (learnKey) {
 		logger.info({ ticket: learnKey }, "HIL learn command detected");
 		return { ...turnReset, hilLearnTicketKey: learnKey, queryComplexity: "complex" };
+	}
+
+	// SIO-1357: the incident-closure command short-circuits to the SIMPLE path
+	// (skips the fan-out/aggregate pipeline entirely) -- closing an incident
+	// must not re-run a multi-minute investigation. Unlike learn, it flags this
+	// turn for a post-turn background workflow (fired by the stream route after
+	// the graph finishes) rather than diverting into a dedicated graph lane.
+	// CRITICAL: finalAnswer is a replace reducer (state.ts) -- if this turn's own
+	// responder node ran, its generic reply would overwrite the PRIOR
+	// investigation's report before the closure hook could read it. Snapshot
+	// state.finalAnswer into closingReport HERE, before anything this turn does
+	// can touch it, so the postmortem skill step gets the actual incident report
+	// being closed, not an acknowledgment of the close command itself.
+	if (detectCloseCommand(trimmed)) {
+		logger.info("Incident close command detected");
+		return {
+			...turnReset,
+			closeIncidentRequested: true,
+			closingReport: state.finalAnswer,
+			queryComplexity: "simple",
+		};
 	}
 
 	// SIO-749: follow-up detection runs in the UI now (apps/web/src/routes/+page.svelte:35-40).

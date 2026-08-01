@@ -470,6 +470,27 @@ export const AgentState = Annotation.Root({
 		reducer: (_, next) => next,
 		default: () => undefined,
 	}),
+
+	// SIO-1357: set when classify detects the explicit "close incident" command.
+	// Per-turn replace reducer, cleared by classify's turnReset like
+	// hilLearnTicketKey -- unlike the HIL learn lane this never routes to a
+	// dedicated graph node; the stream route reads the final state after the
+	// turn completes and fires the closure workflow as a detached background
+	// run, so a stale true from a prior turn must never leak into this one.
+	closeIncidentRequested: Annotation<boolean>({
+		reducer: (_, next) => next,
+		default: () => false,
+	}),
+	// SIO-1357: a snapshot of finalAnswer taken at the moment classify detects
+	// the close command -- BEFORE this turn's own responder node (routed via
+	// queryComplexity: "simple") overwrites finalAnswer's replace reducer with
+	// a generic acknowledgment. Holds the actual investigation report the
+	// closure workflow's postmortem step needs. Cleared by turnReset on every
+	// other turn so a stale report never survives past the closure it belongs to.
+	closingReport: Annotation<string>({
+		reducer: (_, next) => next,
+		default: () => "",
+	}),
 });
 
 export type AgentStateType = typeof AgentState.State;

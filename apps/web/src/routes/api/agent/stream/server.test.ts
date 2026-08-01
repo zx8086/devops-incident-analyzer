@@ -3,6 +3,16 @@ import { describe, expect, mock, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { z } from "zod";
 
+// SIO-1357: named consts so individual tests can reconfigure/inspect the closure
+// hook without restructuring the rest of this file's inline-mock convention.
+type ClosureRequest = { threadId: string; report: string; confidence?: string };
+type CloseWorkflowResult = { status: "opened" | "skipped" | "blocked" | "no-fragment"; reason?: string; url?: string };
+const isClosureLearningEnabledMock = mock(() => false);
+const runIncidentCloseForClosingTurnMock = mock(
+	(_ctx: ClosureRequest): Promise<CloseWorkflowResult> => Promise.resolve({ status: "no-fragment" }),
+);
+const getClosureRequestMock = mock((): Promise<ClosureRequest | null> => Promise.resolve(null));
+
 mock.module("@devops-agent/agent", () => ({
 	AttachmentError: class AttachmentError extends Error {},
 	flushLangSmithCallbacks: mock(() => Promise.resolve()),
@@ -52,6 +62,11 @@ mock.module("@devops-agent/agent", () => ({
 	// SIO-1124: the /api/tickets routes import these from this same specifier.
 	getTicketProvider: mock(() => undefined),
 	listAvailableTicketProviders: mock(() => [] as unknown[]),
+	// SIO-1357: the stream route's post-turn closure hook imports these. Default
+	// OFF (matches production's default) so the background workflow never fires
+	// in this file's existing tests unless a test explicitly overrides the mock.
+	isClosureLearningEnabled: isClosureLearningEnabledMock,
+	runIncidentCloseForClosingTurn: runIncidentCloseForClosingTurnMock,
 	// SIO-1217: sse-pump.ts imports this from the same specifier at module scope. Mirror
 	// the real helper's array-of-content-blocks extraction (not a plain String() coercion)
 	// so this mock can't mask the exact "[object Object]" regression it exists to prevent.
@@ -205,6 +220,9 @@ mock.module("$lib/server/agent", () => ({
 	// SIO-482: stream/+server.ts tracks active SSE connections for /health.
 	incrementSseConnections: mock(() => undefined),
 	decrementSseConnections: mock(() => undefined),
+	// SIO-1357: stream/+server.ts reads this before pruning to decide whether to
+	// fire the background closure workflow. null = no closure this turn.
+	getClosureRequest: getClosureRequestMock,
 	// SIO-1045: union of every sibling route test's $lib/server/agent imports (ensureMcpConnected,
 	// resumeAgent, sessionTeardown, getActiveSseConnections, getAgentRuntimeStatus), so the
 	// process-global mock cache stays link-compatible regardless of file ordering.
@@ -770,5 +788,82 @@ describe("POST /api/agent/stream — lifecycle logging", () => {
 			dataSources: ["elastic", "kafka"],
 			isFollowUp: true,
 		});
+	});
+});
+
+describe("POST /api/agent/stream — SIO-1357 incident-close background hook", () => {
+	test("does not fire the closure workflow when the flag is off (default)", async () => {
+		isClosureLearningEnabledMock.mockClear();
+		getClosureRequestMock.mockClear();
+		runIncidentCloseForClosingTurnMock.mockClear();
+		isClosureLearningEnabledMock.mockImplementationOnce(() => false);
+
+		// The stream's actual work runs inside ReadableStream.start(), which POST
+		// does not await -- drain via collectSse (mirrors every other test in this
+		// file) so the closure-hook code path has actually run before asserting.
+		const response = await POST(makeRequest({ messages: [{ role: "user", content: "close incident" }] }));
+		await collectSse(response);
+
+		expect(isClosureLearningEnabledMock).toHaveBeenCalled();
+		expect(getClosureRequestMock).not.toHaveBeenCalled();
+		expect(runIncidentCloseForClosingTurnMock).not.toHaveBeenCalled();
+	});
+
+	test("does not fire the closure workflow when the flag is on but the turn did not request closure", async () => {
+		isClosureLearningEnabledMock.mockClear();
+		getClosureRequestMock.mockClear();
+		runIncidentCloseForClosingTurnMock.mockClear();
+		isClosureLearningEnabledMock.mockImplementationOnce(() => true);
+		getClosureRequestMock.mockImplementationOnce(async () => null);
+
+		const response = await POST(makeRequest({ messages: [{ role: "user", content: "check kafka lag" }] }));
+		await collectSse(response);
+
+		expect(getClosureRequestMock).toHaveBeenCalled();
+		expect(runIncidentCloseForClosingTurnMock).not.toHaveBeenCalled();
+	});
+
+	test("fires the closure workflow (detached) when the flag is on and the turn requested closure", async () => {
+		isClosureLearningEnabledMock.mockClear();
+		getClosureRequestMock.mockClear();
+		runIncidentCloseForClosingTurnMock.mockClear();
+		isClosureLearningEnabledMock.mockImplementationOnce(() => true);
+		getClosureRequestMock.mockImplementationOnce(async () => ({ threadId: "thread-close", report: "final report" }));
+		runIncidentCloseForClosingTurnMock.mockImplementationOnce(() => Promise.resolve({ status: "opened" as const }));
+
+		const response = await POST(
+			makeRequest({ messages: [{ role: "user", content: "close incident" }], threadId: "thread-close" }),
+		);
+
+		// The route does not await the closure workflow -- it must not block or
+		// change the response shape. Assert the turn still completes normally...
+		expect(response.status).toBe(200);
+		const events = await collectSse(response);
+		expect(events[events.length - 1]?.type).toBe("done");
+		// ...and the workflow was fired with the state the route read.
+		expect(runIncidentCloseForClosingTurnMock).toHaveBeenCalledWith({
+			threadId: "thread-close",
+			report: "final report",
+		});
+	});
+
+	// A failure inside the closure workflow must never surface as a stream
+	// error -- runIncidentCloseForClosingTurn's own contract is "never throws",
+	// but the hook itself must also survive a rejecting promise defensively.
+	test("a rejecting closure workflow promise does not affect the response", async () => {
+		isClosureLearningEnabledMock.mockClear();
+		getClosureRequestMock.mockClear();
+		runIncidentCloseForClosingTurnMock.mockClear();
+		isClosureLearningEnabledMock.mockImplementationOnce(() => true);
+		getClosureRequestMock.mockImplementationOnce(async () => ({ threadId: "thread-fail", report: "r" }));
+		runIncidentCloseForClosingTurnMock.mockImplementationOnce(() => Promise.reject(new Error("bedrock down")));
+
+		const response = await POST(
+			makeRequest({ messages: [{ role: "user", content: "close incident" }], threadId: "thread-fail" }),
+		);
+
+		expect(response.status).toBe(200);
+		const events = await collectSse(response);
+		expect(events[events.length - 1]?.type).toBe("done");
 	});
 });
