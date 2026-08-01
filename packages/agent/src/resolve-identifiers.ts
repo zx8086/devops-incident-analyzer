@@ -684,12 +684,16 @@ function parseBranchEnvelope(
 	const parsed = safeJson(raw);
 	const branches = (parsed as { branches?: unknown } | null)?.branches;
 	if (!Array.isArray(branches)) return [];
-	return branches.map((b: { target?: unknown; ok?: unknown; raw?: unknown; error?: unknown }) => ({
-		target: typeof b.target === "string" ? b.target : "",
-		ok: b.ok === true,
-		...(typeof b.raw === "string" && { raw: b.raw }),
-		...(typeof b.error === "string" && { error: b.error }),
-	}));
+	// CodeRabbit on PR #575: a null/non-object element would TypeError on
+	// b.target, breaking this function's degrade-never-throw contract.
+	return branches
+		.filter((b): b is Record<string, unknown> => b !== null && typeof b === "object")
+		.map((b) => ({
+			target: typeof b.target === "string" ? b.target : "",
+			ok: b.ok === true,
+			...(typeof b.raw === "string" && { raw: b.raw }),
+			...(typeof b.error === "string" && { error: b.error }),
+		}));
 }
 
 // SIO-1107: bound the bucket-aware second hop -- how many non-default buckets get a

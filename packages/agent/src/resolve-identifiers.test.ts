@@ -1583,7 +1583,9 @@ describe("SIO-1354 elastic/aws multiplied-step preset parity", () => {
 		});
 		toolRegistry.aws = [{ name: "aws_logs_describe_log_groups", invoke: async () => huge }];
 		process.env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED = "true";
-		const preset = await resolveIdentifiers(makeState({ targetDataSources: ["aws"], awsTargetEstates: ["eu-oit-prd"] }));
+		const preset = await resolveIdentifiers(
+			makeState({ targetDataSources: ["aws"], awsTargetEstates: ["eu-oit-prd"] }),
+		);
 		expect(preset.resolvedIdentifiers?.aws).toEqual({ logGroups: [], unresolvedEstates: ["eu-oit-prd"] });
 	});
 
