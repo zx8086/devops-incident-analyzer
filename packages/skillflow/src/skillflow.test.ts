@@ -233,8 +233,9 @@ describe("runWorkflow", () => {
 	});
 
 	// SIO-1355: independent steps in the same DAG layer run concurrently, not
-	// sequentially. Two 30ms-delayed steps with no relationship should overlap;
-	// serial execution would take >=60ms, concurrent execution ~30ms.
+	// sequentially. Proven by both handlers being IN FLIGHT at once (maxConcurrent
+	// === 2), not by wall-clock timing -- a wall-clock margin is flaky under CI
+	// runner load/scheduling jitter, while overlapping in-flight counts are not.
 	test("independent steps in the same layer run concurrently", async () => {
 		const parallel = WorkflowSchema.parse({
 			name: "p",
@@ -247,21 +248,25 @@ describe("runWorkflow", () => {
 		});
 		let concurrent = 0;
 		let maxConcurrent = 0;
+		let bothStartedResolve: (() => void) | undefined;
+		const bothStarted = new Promise<void>((resolve) => {
+			bothStartedResolve = resolve;
+		});
 		const handlers: StepHandlers = {
 			tool: async () => {
 				concurrent++;
 				maxConcurrent = Math.max(maxConcurrent, concurrent);
-				await new Promise((r) => setTimeout(r, 30));
+				if (concurrent === 2) bothStartedResolve?.();
+				// Sequential execution would never reach concurrent === 2, so this
+				// would hang and fail the test on timeout rather than racing a clock.
+				await bothStarted;
 				concurrent--;
 				return { raw: "ok" };
 			},
 		};
-		const start = performance.now();
 		const result = await runWorkflow(parallel, { handlers });
-		const elapsed = performance.now() - start;
 		expect(result.ok).toBe(true);
 		expect(maxConcurrent).toBe(2);
-		expect(elapsed).toBeLessThan(60);
 	});
 
 	// A later layer must wait for the ENTIRE prior layer, not just the step(s)
