@@ -85,7 +85,14 @@ async function main(): Promise<void> {
 			console.log(`No kind:skill proposals found for agent ${args.agent}.`);
 			return;
 		}
-		const manifestText = readFileSync(join(getAgentsDir(args.agent), "agent.yaml"), "utf8");
+		const manifestPath = join(getAgentsDir(args.agent), "agent.yaml");
+		let manifestText: string;
+		try {
+			manifestText = readFileSync(manifestPath, "utf8");
+		} catch {
+			console.error(`No agent.yaml found for agent ${args.agent} at ${manifestPath}.`);
+			process.exit(1);
+		}
 		for (const p of proposals) {
 			const fileExists = existsSync(skillFilePath(getWorkspaceRoot(), args.agent, p.name));
 			const inManifest = manifestHasSkill(manifestText, p.name);

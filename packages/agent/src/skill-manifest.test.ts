@@ -63,3 +63,30 @@ describe("addSkillToManifest (SIO-1345)", () => {
 		expect(() => addSkillToManifest('name: a\nversion: "1"\ndescription: d\n', "x")).toThrow(/skills/);
 	});
 });
+
+describe("addSkillToManifest hardening (SIO-1345 CodeRabbit round 1)", () => {
+	test("converts an empty flow-style skills list to block style", () => {
+		const flow = 'name: a\nversion: "1"\ndescription: d\nskills: []\ntools: []\n';
+		const { content, changed } = addSkillToManifest(flow, "first");
+		expect(changed).toBe(true);
+		expect(content).toContain("skills:\n  - first\ntools: []");
+	});
+	test("preserves a trailing comment when converting empty flow style", () => {
+		const flow = 'name: a\nversion: "1"\ndescription: d\nskills: [] # none yet\n';
+		const { content } = addSkillToManifest(flow, "first");
+		expect(content).toContain("skills: # none yet\n  - first");
+	});
+	test("rejects a non-empty flow-style skills list with a clear error", () => {
+		const flow = 'name: a\nversion: "1"\ndescription: d\nskills: [x, y]\n';
+		expect(() => addSkillToManifest(flow, "first")).toThrow(/flow-style/);
+	});
+	test("stays idempotent for a skill already in a flow-style list", () => {
+		const flow = 'name: a\nversion: "1"\ndescription: d\nskills: [x, y]\n';
+		const { changed } = addSkillToManifest(flow, "x");
+		expect(changed).toBe(false);
+	});
+	test("rejects unsafe skill names before touching the manifest", () => {
+		expect(() => addSkillToManifest(PLAIN, "bad: name")).toThrow(/kebab-case/);
+		expect(() => addSkillToManifest(PLAIN, "x #comment")).toThrow(/kebab-case/);
+	});
+});

@@ -90,7 +90,19 @@ export function runPromotion(runner: GitRunner, input: PromotionInput, writeFile
 	const branch = promotionBranchName(input.agent, input.skill);
 	must(runner, ["git", "checkout", "-b", branch]);
 
-	writeFiles();
+	try {
+		writeFiles();
+	} catch (error) {
+		// Mirror the graceful-degradation posture below: explain the branch state and how
+		// to recover instead of surfacing a raw error from a half-done promotion.
+		const back = runner.run(["git", "checkout", original]);
+		const hint = back.ok
+			? `returned to ${original}; remove the branch with: git branch -D ${branch}`
+			: `still on ${branch} (checkout back failed; inspect git status); recover with: git checkout ${original} && git branch -D ${branch}`;
+		throw new Error(
+			`writing skill files failed after creating branch ${branch}; ${hint}: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
 
 	must(runner, ["git", "add", input.skillFile, input.manifestFile]);
 	must(runner, ["git", "commit", "-m", promotionCommitMessage(input)]);

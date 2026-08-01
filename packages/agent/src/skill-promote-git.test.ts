@@ -86,3 +86,26 @@ describe("runPromotion (SIO-1345)", () => {
 		expect(() => runPromotion(runner, INPUT, () => {})).toThrow(/git commit/);
 	});
 });
+
+describe("runPromotion writeFiles failure (SIO-1345 CodeRabbit round 1)", () => {
+	test("checks out back and rethrows with branch name + recovery hint", () => {
+		const { runner, calls } = fakeRunner({ "git rev-parse --abbrev-ref": { ok: true, stdout: "main\n" } });
+		expect(() =>
+			runPromotion(runner, INPUT, () => {
+				throw new Error("no skills key");
+			}),
+		).toThrow(/skill\/incident-analyzer\/lag-correlation.*no skills key/);
+		expect(calls.at(-1)).toEqual(["git", "checkout", "main"]);
+	});
+	test("failed checkout-back is reported in the recovery hint", () => {
+		const { runner } = fakeRunner({
+			"git rev-parse --abbrev-ref": { ok: true, stdout: "main\n" },
+			"git checkout main": { ok: false, stderr: "local changes" },
+		});
+		expect(() =>
+			runPromotion(runner, INPUT, () => {
+				throw new Error("boom");
+			}),
+		).toThrow(/still on skill\/incident-analyzer\/lag-correlation/);
+	});
+});
