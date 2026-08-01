@@ -127,13 +127,14 @@ describe("loadAgent: SIO-843 dynamic-pattern fields", () => {
 		expect(agent.sharedSkills instanceof Map).toBe(true);
 	});
 
-	test("sub-agents leave lifecycle trees empty (root-only)", () => {
+	test("sub-agents leave hooks/memory empty (root-only); workflows load per-agent", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		const elastic = agent.subAgents.get("elastic-agent");
 		expect(elastic).toBeDefined();
 		// hooks/memory are root-only even though the root now has them
 		expect(elastic?.hooks).toBeUndefined();
 		expect(elastic?.memory).toBeUndefined();
+		// SIO-1352: workflows load for every agent tier; elastic-agent ships none today
 		expect(elastic?.workflows.size).toBe(0);
 		// but shared merge still runs for sub-agents
 		expect(elastic?.sharedSkills instanceof Map).toBe(true);

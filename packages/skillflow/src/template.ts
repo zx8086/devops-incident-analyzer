@@ -10,6 +10,12 @@ export interface TemplateContext {
 	steps: Map<string, Record<string, string>>;
 	// trigger payload (e.g. ${{ trigger.changed_files }})
 	trigger?: Record<string, string>;
+	// SIO-1352: GAP SkillsFlow declared-inputs payload (e.g. ${{ inputs.cluster }}).
+	// Keys are opaque lookups: an indexed reference like `inputs.clusters_in_order[0]`
+	// resolves by the literal key "clusters_in_order[0]" -- the caller supplies
+	// pre-computed entries. No expression semantics; honouring declared
+	// defaults/types stays future work (see skillFlowToWorkflowDef).
+	inputs?: Record<string, string>;
 }
 
 export class TemplateError extends Error {
@@ -29,6 +35,13 @@ function resolveReference(ref: string, ctx: TemplateContext): string {
 			throw new TemplateError(`unknown trigger reference: ${ref}`);
 		}
 		return ctx.trigger[key] ?? "";
+	}
+	if (parts[0] === "inputs") {
+		const key = ref.slice("inputs.".length);
+		if (!key || !ctx.inputs || !(key in ctx.inputs)) {
+			throw new TemplateError(`unknown inputs reference: ${ref}`);
+		}
+		return ctx.inputs[key] ?? "";
 	}
 	// steps.<stepName>.outputs.<outputName>
 	if (parts[0] === "steps" && parts[2] === "outputs") {

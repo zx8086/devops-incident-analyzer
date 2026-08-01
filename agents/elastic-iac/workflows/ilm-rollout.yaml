@@ -21,6 +21,7 @@ steps:
       policy_name: ${{ inputs.policy_name }}
       phases: ${{ inputs.phases }}
       target_indices_pattern: ${{ inputs.target_indices_pattern }}
+    outputs: [branch, body]
 
   glt_mr:
     skill: open-mr
@@ -40,6 +41,7 @@ steps:
       policy_name: ${{ inputs.policy_name }}
       phases: ${{ inputs.phases }}
       target_indices_pattern: ${{ inputs.target_indices_pattern }}
+    outputs: [branch, body]
 
   dev_mr:
     skill: open-mr
@@ -57,6 +59,7 @@ steps:
       policy_name: ${{ inputs.policy_name }}
       phases: ${{ inputs.phases }}
       target_indices_pattern: ${{ inputs.target_indices_pattern }}
+    outputs: [branch, body]
 
   stg_mr:
     skill: open-mr
@@ -74,6 +77,7 @@ steps:
       policy_name: ${{ inputs.policy_name }}
       phases: ${{ inputs.phases }}
       target_indices_pattern: ${{ inputs.target_indices_pattern }}
+    outputs: [branch, body]
 
   prod_mr:
     skill: open-mr

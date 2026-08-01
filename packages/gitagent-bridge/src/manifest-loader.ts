@@ -55,8 +55,9 @@ export interface LoadedAgent {
 	// knowledge/index.yaml. Presence gates whether the IaC knowledge selector node
 	// is edged into buildIacGraph.
 	knowledgeSelection?: KnowledgeSelectionConfig;
-	// SIO-843: gitagent dynamic-pattern asset trees. hooks/memory/workflows are
-	// root-only (sub-agents leave them undefined/empty). sharedSkills/sharedContext
+	// SIO-843: gitagent dynamic-pattern asset trees. hooks/memory are root-only
+	// (sub-agents leave them undefined). SIO-1352: workflows load for EVERY agent
+	// tier so sub-agents can ship preset workflows. sharedSkills/sharedContext
 	// are merged from agents/shared for every agent (local overrides shared).
 	hooks?: HooksConfig;
 	memory?: LoadedMemory;
@@ -67,9 +68,9 @@ export interface LoadedAgent {
 	sharedContext?: string;
 }
 
-// SIO-843: Internal recursion options. Lifecycle asset trees (hooks/memory/
-// workflows) load only for the root agent; the shared root is resolved once at
-// the top-level call (agents/shared) and threaded down so nested sub-agents
+// SIO-843: Internal recursion options. Lifecycle asset trees (hooks/memory)
+// load only for the root agent; the shared root is resolved once at the
+// top-level call (agents/shared) and threaded down so nested sub-agents
 // merge against the same monorepo-shared directory, not a per-agent sibling.
 interface LoadAgentOptions {
 	root: boolean;
@@ -125,10 +126,12 @@ export function loadAgent(agentDir: string, options?: LoadAgentOptions): LoadedA
 
 	const { entries: knowledge, runbookSelection, knowledgeSelection } = loadKnowledge(agentDir, manifest.knowledge);
 
-	// SIO-843: lifecycle asset trees are root-only.
+	// SIO-843: hooks/memory are root-only. SIO-1352: workflows load for every
+	// agent tier so sub-agents can ship preset workflows (loadWorkflows throws
+	// on invalid YAML, so a broken preset fails agent load loudly).
 	const hooks = root ? loadHooks(agentDir) : undefined;
 	const memory = root ? loadMemoryLayout(agentDir) : undefined;
-	const workflows = root ? loadWorkflows(agentDir) : new Map<string, WorkflowDef>();
+	const workflows = loadWorkflows(agentDir);
 
 	const base: LoadedAgent = {
 		manifest,

@@ -19,6 +19,7 @@ steps:
     skill: validate-cluster-state
     inputs:
       cluster: ${{ inputs.cluster }}
+    outputs: [state]
 
   guard:
     tool: bash
@@ -40,6 +41,7 @@ steps:
       new_size_gb: ${{ inputs.new_size_gb }}
       new_max_gb: ${{ inputs.new_max_gb }}
       reason: ${{ inputs.reason }}
+    outputs: [branch, title, body]
 
   mr:
     skill: open-mr
@@ -49,6 +51,7 @@ steps:
       title: ${{ steps.draft.outputs.title }}
       body: ${{ steps.draft.outputs.body }}
       labels: ["agent-generated", "iac", "tier-resize"]
+    outputs: [mr_url]
 
   notify:
     tool: bash

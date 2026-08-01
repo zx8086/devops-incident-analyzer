@@ -16,6 +16,9 @@ const logger = getLogger("skillflow:executor");
 export interface RunWorkflowOptions {
 	handlers: StepHandlers;
 	trigger?: Record<string, string>;
+	// SIO-1352: GAP declared-inputs payload for ${{ inputs.* }} references
+	// (opaque keys; see TemplateContext.inputs).
+	inputs?: Record<string, string>;
 	// Dry run: resolve order + inputs without invoking handlers. Returns the plan.
 	dryRun?: boolean;
 }
@@ -83,7 +86,7 @@ async function runOne(step: WorkflowStep, ctx: TemplateContext, options: RunWork
 
 export async function runWorkflow(def: WorkflowDef, options: RunWorkflowOptions): Promise<WorkflowRunResult> {
 	const ordered = topoSort(def.steps);
-	const ctx: TemplateContext = { steps: new Map(), trigger: options.trigger };
+	const ctx: TemplateContext = { steps: new Map(), trigger: options.trigger, inputs: options.inputs };
 	const results: StepRunResult[] = [];
 	let ok = true;
 
