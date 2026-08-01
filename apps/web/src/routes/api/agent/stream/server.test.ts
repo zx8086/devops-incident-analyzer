@@ -39,12 +39,17 @@ mock.module("@devops-agent/agent", () => ({
 	runPostTurn: mock(() => Promise.resolve()),
 	runTeardown: mock(() => Promise.resolve([])),
 	setSessionOutcome: mock(() => undefined),
+	// SIO-1358: schedules.ts is imported transitively via agent.ts the same way -- the stub
+	// must export its imports too. All three false keeps every schedule filtered out before
+	// registerSchedules() is even called under test.
 	reconcileAll: mock(() => Promise.resolve({ reconciled: 0, skipped: 0, errors: 0 })),
 	reconcileEnabled: mock(() => false),
-	// SIO-1104 (5a): kg-topology-cron.ts is imported transitively via agent.ts the same way --
-	// the stub must export its imports too. topologyCronEnabled() false keeps the cron unregistered.
 	runTopologySweep: mock(() => Promise.resolve({ sources: {} })),
 	topologyCronEnabled: mock(() => false),
+	runUncuratedPurgeSweep: mock(() => Promise.resolve({ incidents: 0, edges: 0 })),
+	purgeCronEnabled: mock(() => false),
+	getWorkspaceRoot: mock(() => "/tmp"),
+	registerSchedules: mock(() => []),
 	selectedBackend: mock(() => "file" as const),
 	promoteToMemory: mock(() => Promise.resolve()),
 	executeAction: mock(() => Promise.resolve()),

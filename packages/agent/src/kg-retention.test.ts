@@ -37,16 +37,14 @@ describe("SIO-1135 uncuratedRetentionDays", () => {
 });
 
 describe("SIO-1135 purgeCronEnabled", () => {
-	test("defaults OFF and requires BOTH the cron flag and KNOWLEDGE_GRAPH_ENABLED", () => {
+	// SIO-1358: purgeCronEnabled is now a pure backend-availability check (does the
+	// knowledge graph exist to write to) -- cron enablement moved to `enabled:` in
+	// schedules/kg-purge-sweep.yaml, so there is no dedicated cron flag left to test.
+	test("requires only KNOWLEDGE_GRAPH_ENABLED", () => {
 		expect(purgeCronEnabled({} as NodeJS.ProcessEnv)).toBe(false);
-		expect(purgeCronEnabled({ KG_PURGE_CRON_ENABLED: "true" } as NodeJS.ProcessEnv)).toBe(false);
-		expect(purgeCronEnabled({ KNOWLEDGE_GRAPH_ENABLED: "true" } as NodeJS.ProcessEnv)).toBe(false);
-		expect(
-			purgeCronEnabled({ KG_PURGE_CRON_ENABLED: "true", KNOWLEDGE_GRAPH_ENABLED: "true" } as NodeJS.ProcessEnv),
-		).toBe(true);
-		expect(purgeCronEnabled({ KG_PURGE_CRON_ENABLED: "1", KNOWLEDGE_GRAPH_ENABLED: "1" } as NodeJS.ProcessEnv)).toBe(
-			true,
-		);
+		expect(purgeCronEnabled({ KNOWLEDGE_GRAPH_ENABLED: "true" } as NodeJS.ProcessEnv)).toBe(true);
+		expect(purgeCronEnabled({ KNOWLEDGE_GRAPH_ENABLED: "1" } as NodeJS.ProcessEnv)).toBe(true);
+		expect(purgeCronEnabled({ KNOWLEDGE_GRAPH_ENABLED: "false" } as NodeJS.ProcessEnv)).toBe(false);
 	});
 });
 

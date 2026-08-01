@@ -1,0 +1,18 @@
+name: kg-purge-sweep
+version: 0.1.0
+description: >
+  Physically deletes uncurated Incident rows older than
+  KG_UNCURATED_RETENTION_DAYS via runUncuratedPurgeSweep(). DB-only, no MCP
+  I/O. SIO-1135; scheduled declaratively (SIO-1358) via
+  schedules/kg-purge-sweep.yaml rather than a hand-wired Bun.cron call. A
+  single opaque node step -- the sweep itself isn't a multi-step DAG, so this
+  workflow exists only to give the scheduler a named, runWorkflow()-executed
+  target.
+
+triggers:
+  - type: manual
+
+steps:
+  - name: sweep
+    node: kg-purge-sweep
+    outputs: []

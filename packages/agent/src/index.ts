@@ -4,6 +4,13 @@
 // knowledge-graph dependency -- KG access from the web app goes through here.
 export { getGraphStore, isKnowledgeGraphEnabled, linkIncidentTicket } from "@devops-agent/knowledge-graph";
 export type { MemoryPrProposal, OpenMemoryPrResult } from "@devops-agent/memory-pr";
+// SIO-1358: apps/web registers schedules/*.yaml jobs but has no direct skillflow
+// dependency -- the scheduler goes through here (same pattern as the KG re-export above).
+export {
+	type RegisteredSchedule,
+	registerSchedules,
+	type ScheduleHandlers,
+} from "@devops-agent/skillflow";
 export { executeAction, getAvailableActionTools } from "./action-tools/executor.ts";
 export { installAgentMemory } from "./agent-memory-install.ts";
 export { aggregate } from "./aggregator.ts";

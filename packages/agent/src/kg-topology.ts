@@ -44,11 +44,13 @@ import { normalizeToolContent } from "./sub-agent.ts";
 
 const logger = getLogger("agent:kg-topology");
 
-// Default OFF, unlike the other KG flags: the sweep does live MCP I/O on a schedule.
-// Requires the knowledge graph itself to be enabled.
+// SIO-1358: whether the topology sweep can run at all, given what's configured
+// in this deployment. Requires the knowledge graph itself to be enabled. This
+// is a backend-availability PRECONDITION, not an on/off switch -- whether the
+// sweep runs ON A SCHEDULE is controlled solely by `enabled:` in
+// schedules/kg-topology-sweep.yaml (no dedicated *_CRON_ENABLED env var).
 export function topologyCronEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-	const v = env.KG_TOPOLOGY_CRON_ENABLED;
-	return (v === "true" || v === "1") && isKnowledgeGraphEnabled(env);
+	return isKnowledgeGraphEnabled(env);
 }
 
 // K in the K-consecutive-miss invalidation (edge staleness SLO = interval x K).

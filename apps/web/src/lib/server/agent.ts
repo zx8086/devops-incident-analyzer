@@ -32,9 +32,7 @@ import { getLogger } from "@devops-agent/observability";
 import type { AttachmentMeta, DataSourceContext } from "@devops-agent/shared";
 import { isKillSwitchActive, KillSwitchError } from "@devops-agent/shared";
 import type { BaseMessage, MessageContentComplex } from "@langchain/core/messages";
-import { startIacReconcileCron } from "./iac-reconcile-cron.ts";
-import { startKgTopologyCron } from "./kg-topology-cron.ts";
-import { startPurgeCron } from "./purge-cron.ts";
+import { startSchedules } from "./schedules.ts";
 
 // SIO-849/SIO-850: wire the lifecycle teardown (open_memory_pr) and bootstrap
 // (warm_knowledge_graph) seams once, at module load. Both no-op until their
@@ -50,19 +48,12 @@ installAgentMemory();
 // SIO-1016: also inject the confidence-feedback reader (runs in the same post-turn
 // slot, independently gated by SKILL_OUTCOME_TRACKING_ENABLED).
 installSkillLearner(readCompletedTurn, undefined, readCompletedTurnOutcome);
-// SIO-1005: start the in-process Bun.cron that reconciles proposed iac-change memory facts to their
-// real terminal state. Shares this process's MCP bridge + memory client. Enabled implicitly by the
-// agent-memory backend (LIVE_MEMORY_BACKEND=agent-memory); a no-op on any other backend.
-startIacReconcileCron();
-// SIO-1104 (5a): start the in-process scheduled topology sweep (elastic APM / Konnect /
-// Kafka / AWS ECS -> KG edges with tValid/tInvalid + K-miss invalidation). Shares this
-// process's MCP bridge + the single lbug store handle. Default OFF
-// (KG_TOPOLOGY_CRON_ENABLED) -- it does live MCP I/O on a schedule.
-startKgTopologyCron();
-// SIO-1135: start the in-process scheduled retention sweep that physically removes
-// uncurated Incident rows older than KG_UNCURATED_RETENTION_DAYS. DB-only (no MCP I/O);
-// default OFF (KG_PURGE_CRON_ENABLED). Shares the single lbug store handle.
-startPurgeCron();
+// SIO-1358: start every enabled schedules/*.yaml entry (iac-reconcile-sweep,
+// kg-topology-sweep, kg-purge-sweep) via the declarative scheduler. Replaces the
+// 3 hand-wired Bun.cron files (SIO-1005, SIO-1104/5a, SIO-1135) -- cadence and
+// enablement now live in each schedule's YAML, not env vars. Backend-availability
+// preconditions (agent-memory/KG configured) are still checked before registering.
+startSchedules();
 
 // SIO-987: is a TCP server already listening on host:port? A successful connect means yes (something
 // -- a standalone KG server -- already owns the port). Resolves false on connect refused/timeout.

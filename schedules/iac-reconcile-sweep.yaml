@@ -1,0 +1,11 @@
+# SIO-1005 / SIO-1358: reconciles proposed elastic-iac memory facts to their
+# real terminal state. Cadence and enablement both live ONLY here -- no env
+# var overrides either (see docs/superpowers/specs/2026-08-01-declarative-schedules-design.md).
+# Backend availability (agent-memory backend OR knowledge graph configured) is
+# checked by the scheduler at registration time as a precondition, not a
+# second on/off switch -- see reconcileEnabled() in packages/agent.
+id: iac-reconcile-sweep
+mode: repeat
+cron: "*/30 * * * *"
+enabled: true
+workflow: reconcile-sweep

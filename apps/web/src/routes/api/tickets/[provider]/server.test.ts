@@ -57,10 +57,15 @@ mock.module("@devops-agent/agent", () => ({
 	promoteToMemory: () => Promise.resolve(),
 	executeAction: () => Promise.resolve(),
 	getAvailableActionTools: () => [] as unknown[],
+	// SIO-1358: schedules.ts imports these transitively via agent.ts.
 	reconcileAll: () => Promise.resolve({ reconciled: 0, skipped: 0, errors: 0 }),
 	reconcileEnabled: () => false,
 	runTopologySweep: () => Promise.resolve({ sources: {} }),
 	topologyCronEnabled: () => false,
+	runUncuratedPurgeSweep: () => Promise.resolve({ incidents: 0, edges: 0 }),
+	purgeCronEnabled: () => false,
+	getWorkspaceRoot: () => "/tmp",
+	registerSchedules: () => [],
 	selectedBackend: () => "file" as const,
 	// SIO-1124: the /api/tickets routes import these from this same specifier.
 	getTicketProvider: (id: string) => (id === "jira" ? mockProvider : undefined),

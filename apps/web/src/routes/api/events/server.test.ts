@@ -44,10 +44,15 @@ mock.module("@devops-agent/agent", () => ({
 	runPostTurn: () => Promise.resolve(),
 	runTeardown: () => Promise.resolve([]),
 	setSessionOutcome: () => undefined,
+	// SIO-1358: schedules.ts imports these transitively via agent.ts.
 	reconcileAll: () => Promise.resolve({ reconciled: 0, skipped: 0, errors: 0 }),
-	// SIO-1104 (5a): kg-topology-cron.ts imports these transitively via agent.ts.
+	reconcileEnabled: () => false,
 	runTopologySweep: () => Promise.resolve({ sources: {} }),
 	topologyCronEnabled: () => false,
+	runUncuratedPurgeSweep: () => Promise.resolve({ incidents: 0, edges: 0 }),
+	purgeCronEnabled: () => false,
+	getWorkspaceRoot: () => "/tmp",
+	registerSchedules: () => [],
 	selectedBackend: () => "file" as const,
 	promoteToMemory: () => Promise.resolve(),
 	executeAction: () => Promise.resolve(),
