@@ -369,6 +369,37 @@ describe("detectSyntheticsDrift (mocked tools)", () => {
 		const out = await detectSyntheticsDrift({ targetDeployment: "eu-b2b", messages: [] } as unknown as IacStateType);
 		expect(out.syntheticsDriftReport?.planError).toBe(true);
 	});
+
+	// SIO-1349: drift-check-synthetics-on-demand exits 1 whenever has_actionable_drift is true (no
+	// allow_failure cushioning like the Terraform drift-check job has), so pipeline status "failed"
+	// is the NORMAL outcome for a drifted run, not a script/infra error. A valid, parseable report
+	// must win over the "failed" status, not get discarded as an unassessable planError.
+	test("'failed' pipeline status with a valid report -> real drift, NOT planError", async () => {
+		mockTools({
+			gitlab_trigger_synthetics_drift_check: () =>
+				`[200] ${JSON.stringify({ deployment: "eu-b2b", pipelineId: 99, status: "created" })}`,
+			gitlab_get_synthetics_drift_result: () =>
+				`[200] ${JSON.stringify({ pipelineId: 99, jobId: 1, status: "failed", report: okReport })}`,
+		});
+		const { detectSyntheticsDrift } = await import("./nodes.ts");
+		const out = await detectSyntheticsDrift({ targetDeployment: "eu-b2b", messages: [] } as unknown as IacStateType);
+		expect(out.syntheticsDriftReport?.planError).toBeUndefined();
+		expect(out.syntheticsDriftReport?.hasActionableDrift).toBe(true);
+		expect(out.syntheticsDriftReport?.totals.missingInKibana).toBe(0);
+		expect(out.syntheticsDriftReport?.totals.changed).toBe(1);
+	});
+
+	test("'failed' pipeline status with NO report -> still planError (genuine failure)", async () => {
+		mockTools({
+			gitlab_trigger_synthetics_drift_check: () =>
+				`[200] ${JSON.stringify({ deployment: "eu-b2b", pipelineId: 99, status: "created" })}`,
+			gitlab_get_synthetics_drift_result: () =>
+				`[200] ${JSON.stringify({ pipelineId: 99, status: "failed", note: "script error" })}`,
+		});
+		const { detectSyntheticsDrift } = await import("./nodes.ts");
+		const out = await detectSyntheticsDrift({ targetDeployment: "eu-b2b", messages: [] } as unknown as IacStateType);
+		expect(out.syntheticsDriftReport?.planError).toBe(true);
+	});
 });
 
 describe("pushSynthetics (mocked tools)", () => {
