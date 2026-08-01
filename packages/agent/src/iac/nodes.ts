@@ -10820,7 +10820,14 @@ export async function detectSyntheticsDrift(state: IacStateType): Promise<Partia
 	const result = parseDriftCheckResult(
 		await callTool("gitlab_get_synthetics_drift_result", { pipelineId: trig.pipelineId }),
 	);
-	if (result.status !== "success" || !result.report) {
+	// Unlike the Terraform drift-check job (which uses allow_failure:[2] so a drifted run still
+	// reports pipeline "success"), drift-check-synthetics-on-demand exits 1 whenever
+	// has_actionable_drift is true -- that IS the drift signal, so a "failed" pipeline status is
+	// the NORMAL/expected outcome for a drifted run, not evidence of a script/infra error. The
+	// artifact fetch in gitlab_get_synthetics_drift_result is unconditional on job status, so
+	// result.report is present and authoritative whenever it exists -- gate on that, not on
+	// result.status. Only fall back to planError when there is truly no usable report.
+	if (!result.report) {
 		const reason =
 			result.status === "failed" || result.status === "canceled"
 				? `Synthetics drift-check pipeline ${result.status}. ${classifyPipelineFailure(result.failureLog, result.stateLocked)}`
