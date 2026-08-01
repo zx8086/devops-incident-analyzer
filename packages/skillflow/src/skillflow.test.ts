@@ -32,6 +32,7 @@ describe("resolveTemplate", () => {
 	const ctx: TemplateContext = {
 		steps: new Map([["pre", { pages: "p1,p2" }]]),
 		trigger: { changed_files: "a.ts" },
+		inputs: { cluster: "us-cld", "clusters_in_order[0]": "eu-cld" },
 	};
 
 	test("resolves a step output reference", () => {
@@ -40,6 +41,19 @@ describe("resolveTemplate", () => {
 
 	test("resolves a trigger reference", () => {
 		expect(resolveTemplate("${{ trigger.changed_files }}", ctx)).toBe("a.ts");
+	});
+
+	// SIO-1352: GAP declared-inputs namespace (the elastic-iac flows use it)
+	test("resolves an inputs reference", () => {
+		expect(resolveTemplate("${{ inputs.cluster }}", ctx)).toBe("us-cld");
+	});
+
+	test("resolves an indexed inputs reference as an opaque key", () => {
+		expect(resolveTemplate("${{ inputs.clusters_in_order[0] }}", ctx)).toBe("eu-cld");
+	});
+
+	test("throws on an unknown inputs reference (strict)", () => {
+		expect(() => resolveTemplate("${{ inputs.ghost }}", ctx)).toThrow(TemplateError);
 	});
 
 	test("throws on an unknown step output (strict)", () => {
