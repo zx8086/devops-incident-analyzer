@@ -5,7 +5,7 @@ import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { classifyElasticError, esStatusCode } from "../../lib/classifyElasticError.js";
+import { classifyElasticError, classifyShardFailureReason, esStatusCode } from "../../lib/classifyElasticError.js";
 import { validateRangeQuery } from "../../lib/validateRangeQuery.js";
 import { logger } from "../../utils/logger.js";
 import { createProgressTracker, notificationManager, withNotificationContext } from "../../utils/notifications.js";
@@ -308,6 +308,54 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 			});
 
 			await progressTracker.updateProgress(85, `Search completed in ${result.took}ms, processing results`);
+
+			// SIO-1328: Elasticsearch's default allow_partial_search_results=true means a request
+			// rejected by some/all shards (e.g. a `terms` agg on a `match_only_text` field -- an
+			// illegal_argument_exception, "match_only_text fields do not support sorting and
+			// aggregations") still returns HTTP 200, NOT a thrown error -- the catch block below never
+			// runs. Every shard runs the exact same aggs clause, so a shard "succeeding" here just
+			// means it had zero matching base-filter documents to run the illegal agg against, not that
+			// it tolerated the bad field -- ANY failure means the whole response (including hits.total,
+			// undercounted for shards that never ran the real query) cannot be trusted. Verified live
+			// against eu-b2b: a 6-of-8-shards-failed response still reported hits.total:0 despite the 2
+			// "successful" shards not being representative.
+			// `timed_out: true` is a DIFFERENT, non-shards.failed failure mode (a shard that ran out of
+			// time still counts as neither successful nor failed per the ES docs) -- also incomplete,
+			// also not a valid basis for an absence conclusion, so reject it the same way.
+			// `_shards` is always present on a genuine ES response but absent on some hand-built test
+			// doubles elsewhere in this repo -- guard defensively so an incomplete mock never throws
+			// here instead of exercising the code it meant to test.
+			const shards = result._shards;
+			if ((shards && shards.failed > 0) || result.timed_out) {
+				const firstFailure = shards?.failures?.[0]?.reason;
+				const reasonText = firstFailure
+					? `${firstFailure.type ?? "unknown_error"}: ${firstFailure.reason ?? "no detail"}`
+					: result.timed_out
+						? "the search timed out before all shards completed"
+						: "unknown shard failure";
+				// SIO-1328 (CodeRabbit): classify by the ACTUAL failure reason instead of hardcoding
+				// bad-query -- a shard-level infra/availability problem (node lost, connection reset)
+				// is not something rewriting the query fixes, and telling the agent "fix your query"
+				// for a real outage is actively misleading. Falls back to bad-query only when the
+				// reason is unclassified or this was a timeout (still the most actionable default: the
+				// caller should narrow the query/window and retry, same as any other timeout guidance
+				// elsewhere in this codebase).
+				const kind = firstFailure ? classifyShardFailureReason(firstFailure) : "unknown";
+				const resolvedKind = kind === "unknown" ? "bad-query" : kind;
+				const envelope = buildToolErrorEnvelope({
+					kind: resolvedKind,
+					message: result.timed_out
+						? `[elasticsearch_search] Search timed out before completing (${result.took}ms)`
+						: `[elasticsearch_search] ${shards?.failed} of ${shards?.total} shard(s) failed: ${reasonText}`,
+					advice: result.timed_out
+						? "The search did not complete within the cluster's search timeout. Narrow the index pattern, time window, or aggregation complexity and retry -- a partial/timed-out result is NOT a valid absence conclusion."
+						: "This request shape is rejected by at least one shard (commonly: a `terms`/`cardinality` aggregation on a `text`/`match_only_text` field with no fielddata, or a `.keyword` sub-field is required). Every shard runs the same aggregation, so a partial failure still means the query itself is malformed -- the reported hit/aggregation counts are NOT trustworthy and a low or zero result is NOT a valid absence conclusion. Fix the aggregation/query field and retry.",
+				});
+				throw new McpError(ErrorCode.InvalidParams, JSON.stringify(envelope), {
+					shardFailures: shards?.failures,
+					timedOut: result.timed_out,
+				});
+			}
 
 			// Safe property access to avoid undefined errors
 			const fromOffset = from ?? 0;

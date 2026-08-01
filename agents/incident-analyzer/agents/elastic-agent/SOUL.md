@@ -165,6 +165,31 @@ To claim "no APM errors" you MUST have queried BOTH the error stream `logs-apm.e
 backing-index probe proves nothing about errors. The broad `logs-*,logs-apm.*` search above
 covers both in one call.
 
+## `error.exception.type` is a keyword field -- match it exactly, never as a phrase (SIO-1327)
+`error.exception.type` holds the full dotted exception class name (e.g.
+`com.couchbase.client.core.error.UnambiguousTimeoutException`) as a single keyword value, not
+analyzed text. A `match_phrase`/`multi_match` search for a substring like
+`"UnambiguousTimeoutException"` against this field returns **zero hits even when the exception
+is present** -- keyword fields do not tokenize, so phrase matching only succeeds on the EXACT
+full value. Verified live: `multi_match` for `"UnambiguousTimeoutException"` against
+`error.exception.type` returned 0 hits on a service with 26,000+ matching documents in the same
+30-day window; `term`/`wildcard` against the same field found them immediately.
+
+To search this field, use `term` (exact full class name) or `wildcard` (`"*<ClassName>*"`), never
+`match_phrase`:
+```json
+{ "deployment": "<deployment>", "index": "logs-apm.error-*", "size": 5,
+  "query": { "bool": { "filter": [
+    { "term": { "service.name": "<service>" } },
+    { "wildcard": { "error.exception.type": "*UnambiguousTimeoutException*" } },
+    { "range": { "@timestamp": { "gte": "now-30d" } } } ] } } }
+```
+A zero-hit `match_phrase`/`multi_match` result against `error.exception.type` is NOT grounds for
+an absence conclusion by itself -- retry with `term`/`wildcard` on that field before reporting
+the exception type as unobserved. This is the same class of false-negative as the
+`index_not_found_exception` case above: the query shape was wrong for the field, not the data
+missing.
+
 ## Stop on Empty Results
 For a NAMED service, follow the PHASE 1 -> 2 -> 3 procedure above -- it defines when an
 "absent" conclusion is allowed (only when PHASE 2 is zero at `now-30d` AND PHASE 1
@@ -183,12 +208,22 @@ index and time semantics; run them against their intended target and report thei
 directly (an empty mapping or a green health check is a valid answer, not a "widen and
 retry" case).
 
+`now-30d` is the FIXED window for every log/document search and aggregation above -- never
+substitute `now-24h` for it. `now-24h` is a DIFFERENT tool's default (see ML Anomalies below,
+SIO-1327): it belongs only to `ml_anomaly_records` calls, not to `elasticsearch_search`/
+`elasticsearch_multi_search` log queries. A `now-24h`-relative window built from the CURRENT
+time can silently exclude an incident that happened more than 24h before "now" even though it
+is well inside `now-30d` -- a zero result from a self-chosen `now-24h` window is exactly the
+"narrow window you chose yourself" false-absence case above, not a real absence.
+
 ## ML Anomalies -- what's unusual, and how badly (SIO-1215)
 Trigger phrases: "what's anomalous", "is anything unusual happening", "why is X
 slow/spiking", "ML anomalies", "Elastic ML", or a question about memory/CPU/restart/latency/
 error-rate drift from typical behavior. Use `ml_anomaly_records` (`elasticsearch_ml_get_anomaly_records`)
 -- not `ml_monitoring` -- these are anomaly RECORDS (what fired, how severe, actual vs typical),
-not job health.
+not job health. Its `now-24h` lookback default is SPECIFIC TO THIS TOOL -- do not reuse `now-24h`
+for any `elasticsearch_search`/`elasticsearch_multi_search` log or aggregation call; those always
+use `now-30d` (see above).
 
 Omit the score filter for an open-ended question. An empty result at the requested parameters
 (lookback, entity, job) is itself the answer -- report "no anomaly records above <threshold> in

@@ -265,9 +265,9 @@ export async function resolveIdentifiers(
 	const graphSeeds = await fetchGraphSeeds(focus.services, seedScope);
 
 	const probes: Array<Promise<Partial<ResolvedIdentifiers>>> = [];
-	if (inScope.has("elastic")) probes.push(safeProbe("elastic", () => probeElastic(state, focus.services)));
+	if (inScope.has("elastic")) probes.push(catchOnlyProbe("elastic", () => probeElastic(state, focus.services)));
 	if (inScope.has("couchbase")) probes.push(safeProbe("couchbase", () => probeCouchbase()));
-	if (inScope.has("aws")) probes.push(safeProbe("aws", () => probeAws(state, focus.services)));
+	if (inScope.has("aws")) probes.push(catchOnlyProbe("aws", () => probeAws(state, focus.services)));
 	if (inScope.has("kafka")) probes.push(safeProbe("kafka", () => probeKafka(focus.services)));
 	if (inScope.has("konnect")) probes.push(safeProbe("konnect", () => probeKonnect(focus.services)));
 	if (inScope.has("gitlab")) probes.push(safeProbe("gitlab", () => probeGitlab(focus.services)));
@@ -419,6 +419,30 @@ async function safeProbe(
 	}
 }
 
+// SIO-1326 (CodeRabbit follow-up on PR #559): probeElastic/probeAws already time EACH
+// deployment/estate branch individually inside their own Promise.allSettled -- wrapping the
+// WHOLE call in another withTimeout(probeTimeoutMs()) on top races the exact same clock a
+// second time. If Promise.allSettled's post-settlement continuation (parsing every branch's
+// result) is still running when that outer timer fires, safeProbe's catch discards the entire
+// probe -- including every branch that had already resolved -- reproducing the SIO-1326 bug
+// through a different door. These two probes only need a plain catch (their own internal
+// timeouts are the real bound); every other single-call probe still needs safeProbe's outer
+// timeout since it has no internal per-branch protection of its own.
+async function catchOnlyProbe(
+	dataSourceId: string,
+	fn: () => Promise<Partial<ResolvedIdentifiers>>,
+): Promise<Partial<ResolvedIdentifiers>> {
+	try {
+		return await fn();
+	} catch (err) {
+		logger.warn(
+			{ dataSourceId, error: err instanceof Error ? err.message : String(err) },
+			"resolveIdentifiers probe failed; omitting this datasource",
+		);
+		return {};
+	}
+}
+
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const timeout = new Promise<T>((_resolve, reject) => {
@@ -504,16 +528,32 @@ async function probeElastic(state: AgentStateType, focusServices: string[]): Pro
 			},
 		},
 	};
-	// Probe deployments in PARALLEL: they share one PROBE_TIMEOUT_MS budget, so a
-	// sequential loop would compound latency and time the whole probe out (dropping
-	// every partial result) on multi-deployment setups.
+	// Probe deployments in PARALLEL, each with ITS OWN PROBE_TIMEOUT_MS budget.
+	// SIO-1326: this used to share ONE timeout across the whole Promise.allSettled via the
+	// outer safeProbe() wrap. Promise.allSettled only resolves once every branch settles, so
+	// one slow deployment (measured live: eu-b2b at 9.4s against an 8s budget) blew the
+	// shared clock and safeProbe's catch discarded ALL 10 deployments' results -- including
+	// the 9 that had already resolved correctly and found the focus service. Timing each
+	// branch individually means a slow deployment degrades to "missing that one deployment's
+	// candidates" (a rejected settlement, already handled below) instead of erasing every
+	// other deployment's real answer.
+	const timeoutMs = probeTimeoutMs();
 	const settled = await Promise.allSettled(
 		deployments.map((deploymentId) =>
-			deploymentId ? withElasticDeployment(deploymentId, () => tool.invoke(args)) : tool.invoke(args),
+			withTimeout(
+				deploymentId ? withElasticDeployment(deploymentId, () => tool.invoke(args)) : tool.invoke(args),
+				timeoutMs,
+			),
 		),
 	);
 	const all: string[] = [];
 	const placements: NonNullable<NonNullable<ResolvedIdentifiers["elastic"]>["placements"]> = [];
+	// SIO-1328 (CodeRabbit on PR #559): a rejected deployment is dropped from `placements` the
+	// same way one that genuinely had no matching candidates is -- the two are indistinguishable
+	// downstream without tracking which deployments never completed. Record them so the focus
+	// block can flag "this deployment's coverage is inconclusive, not proven absent" instead of
+	// silently treating a timeout the same as a real negative result.
+	const unresolvedDeployments: string[] = [];
 	settled.forEach((r, i) => {
 		if (r.status === "fulfilled") {
 			const rows = parseElasticServiceEnvAgg(normalizeToolContent(r.value));
@@ -533,15 +573,27 @@ async function probeElastic(state: AgentStateType, focusServices: string[]): Pro
 				{ deploymentId: deployments[i], error: msg(r.reason) },
 				"elastic discovery probe failed for deployment",
 			);
+			unresolvedDeployments.push(deployments[i] ?? "(default)");
 		}
 	});
 	const serviceNames = pickServiceCandidates(all, focusServices);
-	if (serviceNames.length === 0) return {};
+	// SIO-1328: even with zero candidates, still report unresolvedDeployments if any -- a caller
+	// (or the focus block, or an aggregator absence-conclusion rule) needs to know coverage was
+	// incomplete even when there's nothing else to report this turn.
+	if (serviceNames.length === 0) {
+		return unresolvedDeployments.length > 0 ? { elastic: { serviceNames: [], unresolvedDeployments } } : {};
+	}
 	// Keep provenance only for names that survived candidate selection, so the focus
 	// block never advertises a deployment for a service the agent was not told about.
 	const kept = new Set(serviceNames);
 	const matched = placements.filter((p) => kept.has(p.serviceName));
-	return { elastic: { serviceNames, ...(matched.length > 0 && { placements: matched }) } };
+	return {
+		elastic: {
+			serviceNames,
+			...(matched.length > 0 && { placements: matched }),
+			...(unresolvedDeployments.length > 0 && { unresolvedDeployments }),
+		},
+	};
 }
 
 // SIO-1107: bound the bucket-aware second hop -- how many non-default buckets get a
@@ -655,22 +707,37 @@ async function probeAws(state: AgentStateType, focusServices: string[]): Promise
 	// here: aws_ecs_list_services requires a `cluster` arg (a prior list-clusters
 	// hop), too heavy for a cheap pre-fan-out probe -- the aws-agent RULES.md
 	// (SIO-1084) drives the ECS -> awslogs-group derivation on the sub-agent side.
-	// Probe estates in PARALLEL (they share one PROBE_TIMEOUT_MS budget, so a
-	// sequential loop would compound latency across estates).
+	// Probe estates in PARALLEL, each with ITS OWN PROBE_TIMEOUT_MS budget (SIO-1326: same
+	// fix as probeElastic -- a shared timeout across the whole Promise.allSettled means one
+	// slow estate discards every other estate's already-resolved result).
 	const estates = state.awsTargetEstates;
+	const awsTimeoutMs = probeTimeoutMs();
 	const settled = await Promise.allSettled(
-		estates.map((estate) => withAwsEstate(estate, () => describe.invoke({ logGroupNamePattern: pattern, limit: 50 }))),
+		estates.map((estate) =>
+			withTimeout(
+				withAwsEstate(estate, () => describe.invoke({ logGroupNamePattern: pattern, limit: 50 })),
+				awsTimeoutMs,
+			),
+		),
 	);
 	const logGroups: string[] = [];
+	// SIO-1328 (CodeRabbit on PR #559): same inconclusive-coverage tracking as probeElastic's
+	// unresolvedDeployments -- a rejected estate must not be indistinguishable from an estate
+	// that genuinely has no matching log groups.
+	const unresolvedEstates: string[] = [];
 	settled.forEach((r, i) => {
 		if (r.status === "fulfilled") {
 			const parsed = parseAwsLogGroups(safeJson(normalizeToolContent(r.value)));
 			logGroups.push(...parsed.logGroups.filter((n) => matchesFocus(n, focusServices)));
 		} else {
 			logger.warn({ estate: estates[i], error: msg(r.reason) }, "aws log-group probe failed for estate");
+			if (estates[i]) unresolvedEstates.push(estates[i]);
 		}
 	});
-	return logGroups.length > 0 ? { aws: { logGroups: dedupe(logGroups) } } : {};
+	if (logGroups.length === 0) {
+		return unresolvedEstates.length > 0 ? { aws: { logGroups: [], unresolvedEstates } } : {};
+	}
+	return { aws: { logGroups: dedupe(logGroups), ...(unresolvedEstates.length > 0 && { unresolvedEstates }) } };
 }
 
 async function probeKafka(focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {

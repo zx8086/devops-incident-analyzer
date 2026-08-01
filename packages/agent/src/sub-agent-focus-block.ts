@@ -117,6 +117,16 @@ function renderDatasourceLines(resolved: ResolvedIdentifiers, dataSourceId: stri
 						"candidate names in one `terms` filter.",
 				);
 			}
+			// SIO-1328 (CodeRabbit on PR #559): render this REGARDLESS of whether serviceNames is
+			// empty -- a deployment that rejected (timed out/threw) this turn is the exact case
+			// where "no candidates found" must NOT be read as "service confirmed absent". Without
+			// this, a rejected deployment silently disappears into the same empty result as a
+			// deployment that was genuinely queried and found nothing.
+			if (resolved.elastic?.unresolvedDeployments?.length) {
+				lines.push(
+					`- INCONCLUSIVE coverage: the discovery probe for deployment(s) ${resolved.elastic.unresolvedDeployments.map((d) => `\`${d}\``).join(", ")} did not complete this turn (timed out or errored) -- this is NOT the same as those deployments having been searched and found empty. If the incident could plausibly involve ${resolved.elastic.unresolvedDeployments.length === 1 ? "this deployment" : "these deployments"}, query it/them directly with a scoped discovery aggregation before reporting the service as absent anywhere.`,
+				);
+			}
 			break;
 		case "couchbase":
 			if (resolved.couchbase && Object.keys(resolved.couchbase.scopes).length > 0) {
@@ -219,6 +229,13 @@ function renderDatasourceLines(resolved: ResolvedIdentifiers, dataSourceId: stri
 			lines.push(
 				"- CloudWatch Logs Insights windows: keep the default startRelative now-30d. Do NOT narrow to 1h/24h -- the incident may be days old, and an empty result from a narrow window looks identical to no logs. If a narrowed query returns 0 rows, re-run it once at now-30d before concluding absence.",
 			);
+			// SIO-1328 (CodeRabbit on PR #559): same inconclusive-coverage caveat as the elastic
+			// case above -- a rejected estate must not read as "estate searched and confirmed empty".
+			if (resolved.aws?.unresolvedEstates?.length) {
+				lines.push(
+					`- INCONCLUSIVE coverage: the log-group discovery probe for estate(s) ${resolved.aws.unresolvedEstates.map((e) => `\`${e}\``).join(", ")} did not complete this turn (timed out or errored) -- this is NOT the same as those estates having been searched and found empty. If the incident could plausibly involve ${resolved.aws.unresolvedEstates.length === 1 ? "this estate" : "these estates"}, query it/them directly before reporting the service as absent anywhere.`,
+				);
+			}
 			break;
 		case "kafka":
 			if (resolved.kafka?.topics.length) {

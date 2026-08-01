@@ -12,13 +12,22 @@ const { ResponseError, TimeoutError, ConnectionError } = errors;
 // ES error `type` -> shared kind. bad-query = the DSL/query is malformed (fix the query, e.g. the
 // two-field range clause); not-found = the index does not exist; auth-denied = security_exception;
 // throttled = circuit breaker. search_phase_execution_exception wraps the real cause in root_cause.
+// SIO-1328 (CodeRabbit on PR #559): also used to classify PER-SHARD failure reasons (same
+// {type, reason} shape as a top-level ES error cause) -- illegal_argument_exception covers the
+// "match_only_text fields do not support sorting and aggregations" class (a query-shape mistake,
+// fix the field/agg choice); node_not_connected/no_shard_available/circuit_breaking are genuine
+// infra/availability problems, not something retrying the same query differently would fix.
 const ES_TYPE_TO_KIND: Record<string, ToolErrorKind> = {
 	x_content_parse_exception: "bad-query",
 	parsing_exception: "bad-query",
 	query_shard_exception: "bad-query",
+	illegal_argument_exception: "bad-query",
 	index_not_found_exception: "not-found",
 	security_exception: "auth-denied",
 	circuit_breaking_exception: "throttled",
+	node_not_connected_exception: "network",
+	no_shard_available_action_exception: "server-error",
+	node_disconnected_exception: "network",
 };
 
 interface EsErrorCause {
@@ -73,4 +82,14 @@ export function classifyElasticError(error: unknown): ToolErrorKind {
 
 export function esStatusCode(error: unknown): number | undefined {
 	return readStatusCode(error);
+}
+
+// SIO-1328: classify a single `_shards.failures[]` entry's `reason` the SAME way a thrown ES
+// error is classified, so a shard-level illegal_argument_exception (bad-query, fix the field) is
+// distinguished from a shard-level node_not_connected_exception (network/infra, not something a
+// different query fixes). Falls back to "unknown" for an unrecognized type -- the caller decides
+// what an unclassified shard failure means, this never guesses "bad-query" by default.
+export function classifyShardFailureReason(reason: { type?: string } | undefined): ToolErrorKind {
+	if (!reason?.type) return "unknown";
+	return ES_TYPE_TO_KIND[reason.type] ?? "unknown";
 }

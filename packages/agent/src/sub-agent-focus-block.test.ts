@@ -140,6 +140,71 @@ describe("SIO-1084 B5: resolved-identifiers injection", () => {
 		expect(block).toContain("eu-oit-prd-order-service");
 	});
 
+	// SIO-1328 (CodeRabbit on PR #559): a rejected deployment/estate must render an explicit
+	// "coverage is inconclusive" caveat, even when serviceNames/logGroups is otherwise empty --
+	// this is the exact case where silently omitting the caveat would read as proven absence.
+	describe("SIO-1328: unresolved deployment/estate caveats", () => {
+		test("elastic renders the inconclusive-coverage caveat when unresolvedDeployments is set, even with candidates found", () => {
+			const block = buildFocusBlock(
+				FOCUS,
+				NOW,
+				{
+					resolvedForTurn: 1,
+					resolvedForServices: FOCUS.services,
+					elastic: { serviceNames: ["pvh-services-orders"], unresolvedDeployments: ["eu-b2b"] },
+				},
+				"elastic",
+			);
+			expect(block).toContain("INCONCLUSIVE coverage");
+			expect(block).toContain("eu-b2b");
+			expect(block).toContain("did not complete this turn");
+			expect(block).not.toContain("confirmed absent");
+		});
+
+		test("elastic renders the caveat even when serviceNames is EMPTY -- zero candidates must not read as proven absence", () => {
+			const block = buildFocusBlock(
+				FOCUS,
+				NOW,
+				{
+					resolvedForTurn: 1,
+					resolvedForServices: FOCUS.services,
+					elastic: { serviceNames: [], unresolvedDeployments: ["eu-cld", "eu-b2b"] },
+				},
+				"elastic",
+			);
+			expect(block).toContain("RESOLVED IDENTIFIERS");
+			expect(block).toContain("INCONCLUSIVE coverage");
+			expect(block).toContain("eu-cld");
+			expect(block).toContain("eu-b2b");
+		});
+
+		test("elastic renders no caveat when unresolvedDeployments is absent (regression guard)", () => {
+			const block = buildFocusBlock(FOCUS, NOW, RESOLVED, "elastic");
+			expect(block).not.toContain("INCONCLUSIVE coverage");
+		});
+
+		test("aws renders the inconclusive-coverage caveat when unresolvedEstates is set", () => {
+			const block = buildFocusBlock(
+				FOCUS,
+				NOW,
+				{
+					resolvedForTurn: 1,
+					resolvedForServices: FOCUS.services,
+					aws: { logGroups: [], unresolvedEstates: ["eu-slow-prd"] },
+				},
+				"aws",
+			);
+			expect(block).toContain("INCONCLUSIVE coverage");
+			expect(block).toContain("eu-slow-prd");
+			expect(block).toContain("did not complete this turn");
+		});
+
+		test("aws renders no caveat when unresolvedEstates is absent (regression guard)", () => {
+			const block = buildFocusBlock(FOCUS, NOW, RESOLVED, "aws");
+			expect(block).not.toContain("INCONCLUSIVE coverage");
+		});
+	});
+
 	test("suppressed when the stamp does not match the current focus.services", () => {
 		const stale: ResolvedIdentifiers = { ...RESOLVED, resolvedForServices: ["payments-service"] };
 		const block = buildFocusBlock(FOCUS, NOW, stale, "elastic");
