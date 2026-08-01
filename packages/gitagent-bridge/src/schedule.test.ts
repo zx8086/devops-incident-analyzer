@@ -20,12 +20,16 @@ describe("ScheduleDefSchema", () => {
 		).toBe(true);
 	});
 
-	test("defaults mode to repeat and enabled to true", () => {
+	// CLAUDE.md: no .default() in config schemas -- the schema stays honest about
+	// what was actually in the file (mode/enabled omitted here parse as
+	// undefined); loadSchedules() materializes the repeat/true defaults after a
+	// successful parse (covered in the loadSchedules describe block below).
+	test("mode and enabled are optional at the schema level (no schema defaults)", () => {
 		const result = ScheduleDefSchema.safeParse({ ...base, cron: "0 * * * *", workflow: "w" });
 		expect(result.success).toBe(true);
 		if (result.success) {
-			expect(result.data.mode).toBe("repeat");
-			expect(result.data.enabled).toBe(true);
+			expect(result.data.mode).toBeUndefined();
+			expect(result.data.enabled).toBeUndefined();
 		}
 	});
 
@@ -54,6 +58,30 @@ describe("ScheduleDefSchema", () => {
 
 	test("rejects unknown keys (strict)", () => {
 		expect(ScheduleDefSchema.safeParse({ ...base, cron: "0 * * * *", workflow: "w", bogus: 1 }).success).toBe(false);
+	});
+
+	test("rejects a repeat schedule that also sets runAt", () => {
+		expect(
+			ScheduleDefSchema.safeParse({
+				...base,
+				mode: "repeat",
+				cron: "0 * * * *",
+				runAt: "2026-04-01T09:00:00Z",
+				workflow: "w",
+			}).success,
+		).toBe(false);
+	});
+
+	test("rejects a once schedule that also sets cron", () => {
+		expect(
+			ScheduleDefSchema.safeParse({
+				...base,
+				mode: "once",
+				cron: "0 * * * *",
+				runAt: "2026-04-01T09:00:00Z",
+				workflow: "w",
+			}).success,
+		).toBe(false);
 	});
 });
 
@@ -100,6 +128,34 @@ describe("loadSchedules", () => {
 			expect(schedules.size).toBe(1);
 			expect(schedules.has("good")).toBe(true);
 			expect(errors.some((p) => p.endsWith("broken.yaml"))).toBe(true);
+		} finally {
+			rmSync(dir, { recursive: true });
+		}
+	});
+
+	test("a duplicate schedule id is reported via onError and NOT overwritten", () => {
+		const dir = mkdtempSync(join(tmpdir(), "gitagent-sched-dup-"));
+		mkdirSync(join(dir, "schedules"), { recursive: true });
+		writeFileSync(
+			join(dir, "schedules", "a-first.yaml"),
+			["id: dup", "cron: '0 * * * *'", "workflow: first-workflow"].join("\n"),
+		);
+		writeFileSync(
+			join(dir, "schedules", "b-second.yaml"),
+			["id: dup", "cron: '0 3 * * *'", "workflow: second-workflow"].join("\n"),
+		);
+		const errors: Array<{ path: string; message: string }> = [];
+		try {
+			const schedules = loadSchedules(dir, (path, error) =>
+				errors.push({ path, message: error instanceof Error ? error.message : String(error) }),
+			);
+			expect(schedules.size).toBe(1);
+			// The FIRST file enumerated wins; the id is never silently overwritten by
+			// a later file (directory enumeration order must not decide the winner).
+			expect(schedules.get("dup")?.workflow).toBe("first-workflow");
+			expect(errors.some((e) => e.path.endsWith("b-second.yaml") && /duplicate schedule id/.test(e.message))).toBe(
+				true,
+			);
 		} finally {
 			rmSync(dir, { recursive: true });
 		}

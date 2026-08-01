@@ -6,8 +6,11 @@
 # scheduler as a precondition, not a second on/off switch); with `enabled:
 # true` but no KG backend configured, this schedule is skipped with a log,
 # never registered.
+# Default disabled (matches the old KG_PURGE_CRON_ENABLED default): this sweep
+# PHYSICALLY DELETES rows, so it's opt-in per deployment. Set `enabled: true`
+# to turn it on.
 id: kg-purge-sweep
 mode: repeat
 cron: "0 3 * * *"
-enabled: true
+enabled: false
 workflow: kg-purge-sweep
