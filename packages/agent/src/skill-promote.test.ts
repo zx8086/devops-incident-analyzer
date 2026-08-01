@@ -120,3 +120,22 @@ describe("renderSkillMarkdown (SIO-1017)", () => {
 		expect(md).toContain("A lag spike coincides");
 	});
 });
+
+describe("renderSkillMarkdown pr mode (SIO-1345)", () => {
+	const input = {
+		annotations: { skill_name: "lag-correlation", confidence: "0.5" },
+		body: "Proposed skill: lag-correlation - correlate lag\nProcedure: check lag then errors",
+	};
+	test("default mode keeps the DRAFT banner", () => {
+		expect(renderSkillMarkdown(input)).toContain("# DRAFT");
+	});
+	test("pr mode swaps in the merge-activation banner", () => {
+		const md = renderSkillMarkdown(input, { mode: "pr" });
+		expect(md).toContain("activates on merge");
+		expect(md).not.toContain("# DRAFT");
+	});
+	test("frontmatter is identical across modes", () => {
+		const fm = (s: string) => s.split("---")[1];
+		expect(fm(renderSkillMarkdown(input, { mode: "pr" }))).toBe(fm(renderSkillMarkdown(input)));
+	});
+});
