@@ -376,6 +376,38 @@ describe("runWorkflow", () => {
 		});
 		await expect(runWorkflow(skillOnly, { handlers: {} })).rejects.toThrow(MissingHandlerError);
 	});
+
+	// CodeRabbit (PR #576): resolveStep() (template resolution) runs BEFORE
+	// runOne's handler try/catch, synchronously. Under layer concurrency this
+	// step's rejection is one branch of a Promise.all alongside a slower sibling
+	// -- if runOne let the TemplateError propagate, the whole Promise.all would
+	// reject and the sibling's already-in-flight result would never reach
+	// ctx.steps/results, even though the sibling itself succeeded. Proves the
+	// fix: the bad-template step degrades to a "failed" StepRunResult and the
+	// slower sibling's result is still applied.
+	test("a synchronous template-resolution failure does not drop an in-flight sibling's result", async () => {
+		const mixed = WorkflowSchema.parse({
+			name: "m",
+			version: "0.1.0",
+			description: "d",
+			steps: [
+				// References a step that never ran -- resolveStep throws TemplateError
+				// synchronously, before any handler is invoked.
+				{ name: "bad-template", tool: "x", with: { v: "${{ steps.ghost.outputs.x }}" }, outputs: ["raw"] },
+				{ name: "slow-sibling", tool: "y", outputs: ["raw"] },
+			],
+		});
+		const handlers: StepHandlers = {
+			tool: async (r) => {
+				if (r.step.name === "slow-sibling") await new Promise((res) => setTimeout(res, 20));
+				return { raw: "ok" };
+			},
+		};
+		const result = await runWorkflow(mixed, { handlers });
+		expect(result.ok).toBe(false);
+		expect(result.steps.find((s) => s.name === "bad-template")?.status).toBe("failed");
+		expect(result.steps.find((s) => s.name === "slow-sibling")?.status).toBe("ok");
+	});
 });
 
 describe("shouldTrigger", () => {

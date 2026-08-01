@@ -1254,6 +1254,17 @@ describe("SIO-1353 preset runner unit behavior", () => {
 		expect(isResolvePresetsEnabled("aws", { RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "all" })).toBe(true);
 	});
 
+	// CodeRabbit (PR #576): an explicit blank/whitespace-only value must fall
+	// through to the same default-ON path as unset, and the global forms must
+	// be case-insensitive (a real env-authoring mistake like "TRUE"/"All").
+	test("isResolvePresetsEnabled treats blank values as unset and is case-insensitive", () => {
+		expect(isResolvePresetsEnabled("couchbase", { RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "" })).toBe(true);
+		expect(isResolvePresetsEnabled("couchbase", { RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "   " })).toBe(true);
+		expect(isResolvePresetsEnabled("couchbase", { RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "TRUE" })).toBe(true);
+		expect(isResolvePresetsEnabled("couchbase", { RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "All" })).toBe(true);
+		expect(isResolvePresetsEnabled("couchbase", { RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "FALSE" })).toBe(false);
+	});
+
 	test("isResolvePresetsEnabled accepts a per-datasource list", () => {
 		const env = { RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "couchbase,kafka" };
 		expect(isResolvePresetsEnabled("couchbase", env)).toBe(true);

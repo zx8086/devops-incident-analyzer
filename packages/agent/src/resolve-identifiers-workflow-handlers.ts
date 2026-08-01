@@ -15,6 +15,7 @@ import { loadWorkflows, type WorkflowDef } from "@devops-agent/gitagent-bridge";
 import { getLogger } from "@devops-agent/observability";
 import { runWorkflow } from "@devops-agent/skillflow";
 import type { StructuredToolInterface } from "@langchain/core/tools";
+import { z } from "zod";
 import { getAgentsDir } from "./paths.ts";
 import { normalizeToolContent } from "./sub-agent.ts";
 
@@ -30,15 +31,28 @@ const logger = getLogger("agent:resolveIdentifiersPresets");
 // default below rather than off, so removing the env var is a no-op, not a
 // silent revert to the legacy probe. When OFF for a datasource -- or when
 // that datasource ships no preset -- the legacy probe runs unchanged.
+//
+// Zod normalizes case/whitespace once, up front (no .default(): an unset var
+// and an explicitly blank one both fall through to DEFAULT_PRESET_DATASOURCES
+// via the same empty-string check, matching the pre-Zod behavior exactly --
+// including case-insensitive "TRUE"/"All"/etc, which the raw string-literal
+// comparisons before this change missed).
 const DEFAULT_PRESET_DATASOURCES = "all";
+const presetFlagSchema = z
+	.string()
+	.optional()
+	.transform((raw) => {
+		const trimmed = raw?.trim().toLowerCase();
+		return trimmed && trimmed.length > 0 ? trimmed : DEFAULT_PRESET_DATASOURCES;
+	});
+
 export function isResolvePresetsEnabled(dataSourceId: string, env: NodeJS.ProcessEnv = process.env): boolean {
-	const raw = env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED?.trim();
-	const value = raw && raw.length > 0 ? raw : DEFAULT_PRESET_DATASOURCES;
+	const value = presetFlagSchema.parse(env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED);
 	if (value === "false" || value === "0") return false;
 	if (value === "true" || value === "1" || value === "all") return true;
 	return value
 		.split(",")
-		.map((s) => s.trim().toLowerCase())
+		.map((s) => s.trim())
 		.includes(dataSourceId.toLowerCase());
 }
 

@@ -22,14 +22,20 @@ export class UnknownDependencyError extends Error {
 	}
 }
 
-// Returns the steps in a valid execution order (dependencies first). Throws on
-// an unknown dependency or a cycle. Kahn's algorithm; ties broken by declared
-// order for deterministic output.
-export function topoSort(steps: WorkflowStep[]): WorkflowStep[] {
+interface KahnState {
+	byName: Map<string, WorkflowStep>;
+	indegree: Map<string, number>;
+	dependents: Map<string, string[]>;
+}
+
+// Shared setup for both Kahn traversals below: builds the name lookup,
+// validates every depends_on edge up front (so the error names the offending
+// step), and computes indegree + the reverse (dependent) adjacency. topoSort
+// and topoLayers differ only in how they consume the resulting frontier.
+function buildKahnState(steps: WorkflowStep[]): KahnState {
 	const byName = new Map<string, WorkflowStep>();
 	for (const step of steps) byName.set(step.name, step);
 
-	// Validate edges up front so the error names the offending step.
 	for (const step of steps) {
 		for (const dep of step.depends_on ?? []) {
 			if (!byName.has(dep)) throw new UnknownDependencyError(step.name, dep);
@@ -48,6 +54,14 @@ export function topoSort(steps: WorkflowStep[]): WorkflowStep[] {
 			dependents.set(dep, list);
 		}
 	}
+	return { byName, indegree, dependents };
+}
+
+// Returns the steps in a valid execution order (dependencies first). Throws on
+// an unknown dependency or a cycle. Kahn's algorithm; ties broken by declared
+// order for deterministic output.
+export function topoSort(steps: WorkflowStep[]): WorkflowStep[] {
+	const { byName, indegree, dependents } = buildKahnState(steps);
 
 	// Seed queue with zero-indegree steps in declared order.
 	const queue: string[] = steps.filter((s) => (indegree.get(s.name) ?? 0) === 0).map((s) => s.name);
@@ -77,27 +91,7 @@ export function topoSort(steps: WorkflowStep[]): WorkflowStep[] {
 // concurrently and only needs to sequence layer-to-layer. Ties within a layer
 // keep declared order (same tie-break as topoSort) for deterministic output.
 export function topoLayers(steps: WorkflowStep[]): WorkflowStep[][] {
-	const byName = new Map<string, WorkflowStep>();
-	for (const step of steps) byName.set(step.name, step);
-
-	for (const step of steps) {
-		for (const dep of step.depends_on ?? []) {
-			if (!byName.has(dep)) throw new UnknownDependencyError(step.name, dep);
-		}
-	}
-
-	const indegree = new Map<string, number>();
-	const dependents = new Map<string, string[]>();
-	for (const step of steps) {
-		indegree.set(step.name, step.depends_on?.length ?? 0);
-	}
-	for (const step of steps) {
-		for (const dep of step.depends_on ?? []) {
-			const list = dependents.get(dep) ?? [];
-			list.push(step.name);
-			dependents.set(dep, list);
-		}
-	}
+	const { byName, indegree, dependents } = buildKahnState(steps);
 
 	let frontier: string[] = steps.filter((s) => (indegree.get(s.name) ?? 0) === 0).map((s) => s.name);
 	const layers: WorkflowStep[][] = [];

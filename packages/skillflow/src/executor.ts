@@ -44,8 +44,57 @@ function resolveStep(step: WorkflowStep, ctx: TemplateContext): ResolvedStep {
 	return { step, kind, target: stepTarget(step, kind), inputs: resolveInputs(step.with, ctx) };
 }
 
+// CodeRabbit (PR #576): resolveStep() runs setup, not step work -- during a
+// REAL run, a bad ${{ }} reference (TemplateError, e.g. a downstream step
+// referencing an upstream one that failed and only got SIO-1356 placeholder
+// seeding for its DECLARED outputs) is a per-step data problem, not a
+// rejection that should propagate out of runOne. Folding it into the same
+// "failed" StepRunResult as a handler throw means runOne never rejects for a
+// TemplateError during a real run, which runWorkflow's layer-level
+// Promise.all depends on: a rejecting promise in that Promise.all would drop
+// every sibling result already fulfilled in the same layer, not just abort
+// the failing step.
+//
+// Dry run is EXEMPT from this catch (preserved pre-SIO-1355 contract): the CI
+// gate (preset-workflows-gate.test.ts) dry-runs every shipped workflow
+// specifically to catch a genuinely broken template reference (a typo'd
+// output name, a reference to a step that will never exist) as a thrown
+// error at PR time -- swallowing that into a "failed" status would make the
+// gate silently pass on broken YAML.
+//
+// MissingHandlerError is deliberately NOT caught in either mode -- an
+// unregistered step kind is a caller configuration bug (the workflow
+// declares a `skill:` step but the caller never wired a `skill` handler),
+// not step-level data failure, and should keep failing the whole run loudly
+// (existing contract; dry run never reaches handlerFor at all, see below).
 async function runOne(step: WorkflowStep, ctx: TemplateContext, options: RunWorkflowOptions): Promise<StepRunResult> {
-	const resolved = resolveStep(step, ctx);
+	let resolved: ResolvedStep;
+	if (options.dryRun) {
+		resolved = resolveStep(step, ctx);
+		return {
+			name: step.name,
+			kind: resolved.kind,
+			target: resolved.target,
+			inputs: resolved.inputs,
+			outputs: {},
+			status: "skipped",
+		};
+	}
+	try {
+		resolved = resolveStep(step, ctx);
+	} catch (error) {
+		const kind = stepKind(step);
+		const message = error instanceof Error ? error.message : String(error);
+		return {
+			name: step.name,
+			kind,
+			target: stepTarget(step, kind),
+			inputs: {},
+			outputs: {},
+			status: "failed",
+			error: message,
+		};
+	}
 	const base: StepRunResult = {
 		name: step.name,
 		kind: resolved.kind,
@@ -54,10 +103,6 @@ async function runOne(step: WorkflowStep, ctx: TemplateContext, options: RunWork
 		outputs: {},
 		status: "ok",
 	};
-
-	if (options.dryRun) {
-		return { ...base, status: "skipped" };
-	}
 
 	const handler = handlerFor(options.handlers, resolved.kind);
 	const attempts = step.error_handling === "retry" ? (step.retry?.attempts ?? 1) : 1;
@@ -135,27 +180,31 @@ export async function runWorkflow(def: WorkflowDef, options: RunWorkflowOptions)
 	// SIO-1355: layers, not one flat order -- every step in a layer has all its
 	// depends_on already resolved by an earlier (fully-applied) layer, so the
 	// layer's steps run concurrently via Promise.all. runOne itself never
-	// throws (it converts handler rejection into a "failed" StepRunResult), so
-	// Promise.all is safe here -- no allSettled needed at this level.
+	// rejects for a per-step data/config problem (TemplateError is folded into
+	// a "failed" StepRunResult; see runOne) -- it can still reject for a
+	// MissingHandlerError, a caller wiring bug that is meant to fail the whole
+	// run loudly, so Promise.all (not allSettled) is correct here.
 	const layers = topoLayers(def.steps);
 	const ctx: TemplateContext = { steps: new Map(), trigger: options.trigger, inputs: options.inputs };
 	const results: StepRunResult[] = [];
 	let ok = true;
+	let abortAfterLayer = false;
 
-	outer: for (const layer of layers) {
+	for (const layer of layers) {
 		const layerResults = await Promise.all(layer.map((step) => runOne(step, ctx, options)));
-		// Apply in declared order (not settle order) so ctx.steps writes and the
-		// results array stay deterministic regardless of which handler resolved
-		// first -- this is what a serial reader of `results` or `ctx.steps`
-		// expects, and matches topoLayers' declared-order tie-break.
+		// Apply EVERY step's result before checking abort (CodeRabbit, PR #576):
+		// a non-tolerated failure earlier in declared order must not skip
+		// applying a later sibling's already-fulfilled result -- both ran
+		// concurrently, so both get recorded before the run stops.
 		for (let i = 0; i < layer.length; i++) {
 			const step = layer[i];
 			const result = layerResults[i];
 			if (!step || !result) continue;
 			const outcome = applyStepResult(step, result, def, ctx, results);
 			if (!outcome.ok) ok = false;
-			if (outcome.abort) break outer;
+			if (outcome.abort) abortAfterLayer = true;
 		}
+		if (abortAfterLayer) break;
 	}
 
 	return { workflow: def.name, steps: results, ok };
