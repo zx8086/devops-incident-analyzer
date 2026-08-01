@@ -35,7 +35,7 @@ outage or missed query window." A flagged gap lowers confidence independently
 of the missing-datasource rule; note both when they co-occur.
 
 ## Output Format
-```
+```markdown
 | Time (UTC) | Datasource | Finding | Severity |
 |------------|-----------|---------|----------|
 | 2024-01-15T14:30:00Z | Elastic | Error rate spike in payment-service | High |

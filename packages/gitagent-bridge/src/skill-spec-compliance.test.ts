@@ -9,9 +9,14 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { validateSkillFile } from "./skill-spec-validator.ts";
 
-const REPO_ROOT = new URL("../../../", import.meta.url).pathname;
+// fileURLToPath, not URL.pathname: pathname keeps percent-encoding and the
+// leading slash before a Windows drive letter, either of which would send
+// findSkillFiles walking a nonexistent root and green-light an empty corpus
+// (the canary below is the second line of defense).
+const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 // Scoped to exactly the two skill roots (agents/ recurses into shared and
 // sub-agent skills/ dirs at every nesting depth; .agents/skills holds the
@@ -83,6 +88,19 @@ describe("validateSkillFile unit fixtures", () => {
 		expect(validateSkillFile(path, "---\nname: my-skill\n")).toEqual([
 			expect.objectContaining({ rule: "no-frontmatter" }),
 		]);
+	});
+
+	test("a line merely starting with --- does not close the block", () => {
+		// Under a prefix-match regex, ---not-a-delimiter would terminate extraction
+		// and let malformed frontmatter pass; the strict gate requires a full --- line.
+		expect(validateSkillFile(path, "---\nname: my-skill\n---not-a-delimiter\n")).toEqual([
+			expect.objectContaining({ rule: "no-frontmatter" }),
+		]);
+	});
+
+	test("accepts a closing delimiter with trailing whitespace", () => {
+		const content = "---\nname: my-skill\ndescription: Does a thing. Use when needed.\n--- \n\nbody\n";
+		expect(validateSkillFile(path, content)).toEqual([]);
 	});
 
 	test("flags malformed YAML", () => {

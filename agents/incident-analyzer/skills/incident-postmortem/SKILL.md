@@ -46,7 +46,7 @@ human review -- it is the raw material for the learning loop, not a verdict.
 6. List related tickets and runbooks so the reader can traverse the evidence.
 
 ## Output Format
-```
+```markdown
 ## Postmortem: <incident title>  (DRAFT for human review)
 Severity: <critical|high|medium|low> | Duration: <detection -> resolution>
 Confidence: <score from the aggregated report>

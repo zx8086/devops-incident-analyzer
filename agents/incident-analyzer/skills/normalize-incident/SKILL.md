@@ -32,7 +32,7 @@ wider impact than initially classified, treat the incident at the higher
 severity from that point on and note the reclassification in the report.
 
 ## Output Format
-```
+```yaml
 Incident:
   id: <generated UUID>
   severity: critical | high | medium | low

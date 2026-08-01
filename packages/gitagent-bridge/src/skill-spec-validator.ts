@@ -68,8 +68,11 @@ export const SKILL_EXTENSION_FIELDS: ReadonlySet<string> = new Set([
 	"category",
 ]);
 
-// Locate the frontmatter block with the same delimiters parseSkillFrontmatter
-// accepts, but report violations instead of degrading.
+// Locate the frontmatter block, reporting violations instead of degrading.
+// Stricter than the tolerant loader on the closing delimiter: only a complete
+// `---` line closes the block (same regex as parseRunbookFrontmatter), so a
+// line like `---not-a-delimiter` cannot terminate extraction early and smuggle
+// malformed frontmatter past the gate.
 function extractFrontmatterYaml(content: string): { yaml: string } | { violation: SkillSpecViolation } {
 	if (!content.startsWith("---\n") && !content.startsWith("---\r\n")) {
 		return {
@@ -77,7 +80,7 @@ function extractFrontmatterYaml(content: string): { yaml: string } | { violation
 		};
 	}
 	const afterOpening = content.indexOf("\n") + 1;
-	const closingMatch = content.slice(afterOpening).match(/^---\r?\n?/m);
+	const closingMatch = content.slice(afterOpening).match(/^---[ \t]*\r?$/m);
 	if (!closingMatch || closingMatch.index === undefined) {
 		return { violation: { rule: "no-frontmatter", detail: "missing closing --- delimiter" } };
 	}

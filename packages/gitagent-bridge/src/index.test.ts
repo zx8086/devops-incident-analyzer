@@ -341,11 +341,15 @@ describe("skill frontmatter (SIO-1014)", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		// SIO-1347 inverted the old expectation: the locals AND the shared
 		// cite-sources skill all have descriptions, so the catalog section exists
-		// and covers the full set.
+		// and covers the full set -- assert every loaded skill, local and shared,
+		// so a future description regression on any one of them fails here.
 		const prompt = buildSystemPrompt(agent);
 		expect(prompt).toContain("## Skills\n");
-		expect(prompt).toContain("**incident-postmortem**:");
-		expect(prompt).toContain("**cite-sources**:");
+		const allNames = [...agent.skills.keys(), ...agent.sharedSkills.keys()];
+		expect(allNames.length).toBeGreaterThan(0);
+		for (const name of allNames) {
+			expect(prompt).toContain(`**${name}**:`);
+		}
 	});
 
 	test("no Skills catalog when no active skill has a description", () => {
