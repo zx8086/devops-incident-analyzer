@@ -24,7 +24,7 @@ import {
 	type TopologyEdgeRecord,
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
-import { normalize } from "@devops-agent/shared";
+import { normalize, readPositiveIntEnv } from "@devops-agent/shared";
 import { availableAwsEstates } from "./aws-estate-router.ts";
 import { getConnectedServers, getToolsForDataSource, withAwsEstate, withElasticDeployment } from "./mcp-bridge.ts";
 import {
@@ -107,6 +107,21 @@ const KAFKA_DESCRIBE_TIMEOUT_DEFAULT_MS = 15_000;
 export function kafkaDescribeTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
 	const parsed = Number(env.KG_TOPOLOGY_KAFKA_DESCRIBE_TIMEOUT_MS);
 	return Number.isInteger(parsed) && parsed > 0 ? parsed : KAFKA_DESCRIBE_TIMEOUT_DEFAULT_MS;
+}
+
+// SIO-1330: collectAwsRunsOn fans out ECS cluster/service enumeration per estate via
+// Promise.allSettled, but the only clock that used to bound it was runSource's OUTER
+// sourceTimeoutMs() wrapping the whole collectAwsRunsOn call -- the same "one timeout wraps N
+// branches" shape SIO-1326 fixed in resolve-identifiers.ts's probeElastic/probeAws. If one
+// estate's pagination is slow, the outer wall clock could fire while Promise.allSettled was
+// still waiting, discarding every fast estate's already-collected edges along with the slow
+// one. Each estate now gets its OWN timeout budget so a slow estate settles `rejected`
+// (already handled) instead of erasing the rest.
+const AWS_ESTATE_TIMEOUT_DEFAULT_MS = 20_000;
+// SIO-1308: use the shared Zod-validated env reader (not manual Number() parsing) --
+// the established convention for new numeric tuning knobs in this repo.
+export function awsEstateTimeoutMs(): number {
+	return readPositiveIntEnv("KG_TOPOLOGY_AWS_ESTATE_TIMEOUT_MS", AWS_ESTATE_TIMEOUT_DEFAULT_MS, logger);
 }
 
 function msg(err: unknown): string {
@@ -563,7 +578,10 @@ export async function collectAwsRunsOn(knownServiceNames: string[]): Promise<Col
 			}
 			return out;
 		});
-	const settled = await Promise.allSettled(estates.map(collectEstate));
+	const estateTimeoutMs = awsEstateTimeoutMs();
+	const settled = await Promise.allSettled(
+		estates.map((estate) => withTimeout(collectEstate(estate), estateTimeoutMs, `aws runs-on estate ${estate}`)),
+	);
 	const edges: TopologyEdgeRecord[] = [];
 	settled.forEach((r, i) => {
 		if (r.status === "fulfilled") edges.push(...r.value);
