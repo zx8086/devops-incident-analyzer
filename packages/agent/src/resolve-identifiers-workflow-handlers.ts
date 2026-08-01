@@ -15,18 +15,45 @@ import { loadWorkflows, type WorkflowDef } from "@devops-agent/gitagent-bridge";
 import { getLogger } from "@devops-agent/observability";
 import { runWorkflow } from "@devops-agent/skillflow";
 import type { StructuredToolInterface } from "@langchain/core/tools";
+import { z } from "zod";
 import { getAgentsDir } from "./paths.ts";
 import { normalizeToolContent } from "./sub-agent.ts";
 
 const logger = getLogger("agent:resolveIdentifiersPresets");
 
-// Default OFF (inverse idiom of RESOLVE_IDENTIFIERS_ENABLED): the preset path
-// is the new-behavior opt-in until SIO-1355 flips it after live parity
-// verification. When OFF -- or when a datasource ships no preset -- the legacy
-// probe runs unchanged.
-export function isResolvePresetsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-	const v = env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED;
-	return v === "true" || v === "1";
+// SIO-1355: default ON for every preset-eligible datasource, after live parity
+// verification (elastic/couchbase/gitlab/aws: healthy-run + soft-fail proof
+// this session; kafka/konnect: covered by the SIO-1354 parity suite, live
+// verification is a fast-follow). List-valued, mirroring bindingsReadDatasources
+// (resolve-identifiers.ts): "true"/"1"/"all" opts every datasource in; a
+// comma-separated list opts only the named datasources in; "false"/"0" opts
+// none in (the escape hatch for a wholesale regression). Unset uses the
+// default below rather than off, so removing the env var is a no-op, not a
+// silent revert to the legacy probe. When OFF for a datasource -- or when
+// that datasource ships no preset -- the legacy probe runs unchanged.
+//
+// Zod normalizes case/whitespace once, up front (no .default(): an unset var
+// and an explicitly blank one both fall through to DEFAULT_PRESET_DATASOURCES
+// via the same empty-string check, matching the pre-Zod behavior exactly --
+// including case-insensitive "TRUE"/"All"/etc, which the raw string-literal
+// comparisons before this change missed).
+const DEFAULT_PRESET_DATASOURCES = "all";
+const presetFlagSchema = z
+	.string()
+	.optional()
+	.transform((raw) => {
+		const trimmed = raw?.trim().toLowerCase();
+		return trimmed && trimmed.length > 0 ? trimmed : DEFAULT_PRESET_DATASOURCES;
+	});
+
+export function isResolvePresetsEnabled(dataSourceId: string, env: NodeJS.ProcessEnv = process.env): boolean {
+	const value = presetFlagSchema.parse(env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED);
+	if (value === "false" || value === "0") return false;
+	if (value === "true" || value === "1" || value === "all") return true;
+	return value
+		.split(",")
+		.map((s) => s.trim())
+		.includes(dataSourceId.toLowerCase());
 }
 
 // A node step either exposes outputs for downstream templating (mid-flow

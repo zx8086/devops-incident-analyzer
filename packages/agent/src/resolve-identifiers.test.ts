@@ -1243,11 +1243,35 @@ describe("SIO-1353 couchbase preset parity", () => {
 });
 
 describe("SIO-1353 preset runner unit behavior", () => {
-	test("isResolvePresetsEnabled defaults OFF; only 'true'/'1' enable", () => {
-		expect(isResolvePresetsEnabled({})).toBe(false);
-		expect(isResolvePresetsEnabled({ RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "false" })).toBe(false);
-		expect(isResolvePresetsEnabled({ RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "true" })).toBe(true);
-		expect(isResolvePresetsEnabled({ RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "1" })).toBe(true);
+	test("isResolvePresetsEnabled defaults ON (SIO-1355); 'false'/'0' disable every datasource", () => {
+		expect(isResolvePresetsEnabled("couchbase", {})).toBe(true);
+		expect(isResolvePresetsEnabled("aws", {})).toBe(true);
+		expect(isResolvePresetsEnabled("couchbase", { RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "false" })).toBe(false);
+		expect(isResolvePresetsEnabled("couchbase", { RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "0" })).toBe(false);
+		expect(isResolvePresetsEnabled("couchbase", { RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "true" })).toBe(true);
+		expect(isResolvePresetsEnabled("kafka", { RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "true" })).toBe(true);
+		expect(isResolvePresetsEnabled("couchbase", { RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "1" })).toBe(true);
+		expect(isResolvePresetsEnabled("aws", { RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "all" })).toBe(true);
+	});
+
+	// CodeRabbit (PR #576): an explicit blank/whitespace-only value must fall
+	// through to the same default-ON path as unset, and the global forms must
+	// be case-insensitive (a real env-authoring mistake like "TRUE"/"All").
+	test("isResolvePresetsEnabled treats blank values as unset and is case-insensitive", () => {
+		expect(isResolvePresetsEnabled("couchbase", { RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "" })).toBe(true);
+		expect(isResolvePresetsEnabled("couchbase", { RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "   " })).toBe(true);
+		expect(isResolvePresetsEnabled("couchbase", { RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "TRUE" })).toBe(true);
+		expect(isResolvePresetsEnabled("couchbase", { RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "All" })).toBe(true);
+		expect(isResolvePresetsEnabled("couchbase", { RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "FALSE" })).toBe(false);
+	});
+
+	test("isResolvePresetsEnabled accepts a per-datasource list", () => {
+		const env = { RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "couchbase,kafka" };
+		expect(isResolvePresetsEnabled("couchbase", env)).toBe(true);
+		expect(isResolvePresetsEnabled("kafka", env)).toBe(true);
+		expect(isResolvePresetsEnabled("Couchbase", env)).toBe(true);
+		expect(isResolvePresetsEnabled("konnect", env)).toBe(false);
+		expect(isResolvePresetsEnabled("gitlab", env)).toBe(false);
 	});
 
 	test("an absent preset returns undefined (caller falls back to the legacy probe)", async () => {
