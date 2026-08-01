@@ -13,7 +13,7 @@ The graph records the elastic-iac repo's structure (three layers: Module -> Stac
 
 ## Pick the curated tool first
 
-Most questions map to one of the four curated, parameterized tools (no Cypher needed, no quirks to remember):
+Most questions map to one of the nine curated, parameterized tools (no Cypher needed, no quirks to remember):
 
 | Question | Tool |
 |---|---|
@@ -21,6 +21,11 @@ Most questions map to one of the four curated, parameterized tools (no Cypher ne
 | Which stacks use the `<module>` module? | `kg_stacks_using_module {module}` |
 | What changed on `<deployment>/<stack>` (with outcome)? | `kg_stack_instance_history {deployment, stack}` |
 | Recent changes to `<deployment>`? | `kg_deployment_history {deployment}` |
+| Have we seen this root-cause class before, and how was it resolved? | `kg_prior_root_causes {causeClass}` |
+| What prompts led to a successfully applied change? | `kg_successful_prompts {limit?}` |
+| Every applied change, newest first (whether or not it has a linked prompt)? | `kg_applied_changes {limit?}` |
+| What's the network map (DNS -> LB -> target group -> workload) for `<service>`? | `kg_network_map {service, asOf?}` |
+| What workload(s) was/were `<ip>` bound to (at `asOf`, or currently)? | `kg_ip_to_workload {ip, asOf?}` |
 
 Only reach for `kg_run_cypher` when the question needs a shape the curated tools do not return (e.g. joining workflow + pipeline status, counting changes per outcome, multi-hop traversals).
 

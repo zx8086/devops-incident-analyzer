@@ -35,7 +35,7 @@ export const DEPLOYMENT_INVENTORY: Record<string, { ecId: string; region: string
 
 // Underscore-prefixed environment dirs are config buckets, not clusters:
 // `_deployments` (cluster JSON for the deployments stack) and `_shared` (defaults).
-function isDeploymentDir(name: string): boolean {
+export function isDeploymentDir(name: string): boolean {
 	return !name.startsWith("_");
 }
 

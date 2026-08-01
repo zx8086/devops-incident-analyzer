@@ -272,6 +272,34 @@ describe("LadybugStore WAL-corruption recovery", () => {
 			expect(quarantined.length).toBe(1);
 			expect(mock.counts.ctor).toBe(2);
 		}));
+
+	// SIO-1339: a second process opening the same lbug store while another
+	// process already holds the exclusive file lock does not fail with a clean
+	// lock-denied error -- it surfaces as a garbled IO exception with a nonsense
+	// byte position (live-observed: "position: 4901969379328" against a 92MB
+	// file). This message shape does NOT match any WAL_CORRUPTION_PATTERNS, so
+	// it must NOT be quarantine-and-retried (the WAL is healthy; quarantining it
+	// would destroy real data for no reason, and retrying against a still-held
+	// lock would just fail identically). It should instead surface as a clear,
+	// actionable error distinct from a generic IO exception.
+	const CONCURRENT_OPEN_ERROR =
+		"IO exception: Cannot read from file: /data/knowledge-graph fileDescriptor: 48 numBytesRead: 0 numBytesToRead: 4096 position: 4901969379328";
+
+	test("does not quarantine the .wal file for a concurrent-open IO exception", async () =>
+		withTempDir(async (dir) => {
+			const path = join(dir, "knowledge-graph");
+			const walPath = `${path}.wal`;
+			writeFileSync(walPath, "a healthy wal file, not corrupt");
+
+			const mock = mockLbug({ ctorThrows: () => new Error(CONCURRENT_OPEN_ERROR) });
+			_setLbugLoaderForTesting(mock.loader);
+
+			const store = new LadybugStore(path);
+			await expect(store.run("MATCH (n) RETURN n")).rejects.toThrow(/exclusive file lock/i);
+			// The healthy WAL must survive -- this is not corruption, so it must not be quarantined.
+			expect(existsSync(walPath)).toBe(true);
+			expect(mock.counts.ctor).toBe(1);
+		}));
 });
 
 describe("LadybugStore corruption-window hardening (SIO-1236)", () => {
