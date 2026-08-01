@@ -37,9 +37,18 @@ describe("seed", () => {
 			]) {
 				expect(boundValues).toContain(service);
 			}
-			// And the 5 documented dependency edges are all present as from/to pairs.
-			const edgeCalls = store.calls.filter((c) => c.cypher.includes("DEPENDS_ON"));
-			expect(edgeCalls).toHaveLength(5);
+			// And the exact 5 documented dependency edges are present as from/to param pairs, not just
+			// a count -- a wrong or duplicated pair would still pass a bare length check.
+			const edgePairs = store.calls
+				.filter((c) => c.cypher.includes("DEPENDS_ON"))
+				.map((c) => ({ from: c.params?.from, to: c.params?.to }));
+			expect(edgePairs).toEqual([
+				{ from: "konnect-gateway", to: "backend-services" },
+				{ from: "backend-services", to: "couchbase" },
+				{ from: "backend-services", to: "kafka" },
+				{ from: "kafka", to: "downstream-consumers" },
+				{ from: "backend-services", to: "elasticsearch" },
+			]);
 		} finally {
 			_setGraphStoreForTesting(null);
 		}

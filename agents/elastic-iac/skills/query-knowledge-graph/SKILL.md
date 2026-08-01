@@ -25,7 +25,7 @@ Most questions map to one of the nine curated, parameterized tools (no Cypher ne
 | What prompts led to a successfully applied change? | `kg_successful_prompts {limit?}` |
 | Every applied change, newest first (whether or not it has a linked prompt)? | `kg_applied_changes {limit?}` |
 | What's the network map (DNS -> LB -> target group -> workload) for `<service>`? | `kg_network_map {service, asOf?}` |
-| What workload was `<ip>` last bound to? | `kg_ip_to_workload {ip, asOf?}` |
+| What workload(s) was/were `<ip>` bound to (at `asOf`, or currently)? | `kg_ip_to_workload {ip, asOf?}` |
 
 Only reach for `kg_run_cypher` when the question needs a shape the curated tools do not return (e.g. joining workflow + pipeline status, counting changes per outcome, multi-hop traversals).
 

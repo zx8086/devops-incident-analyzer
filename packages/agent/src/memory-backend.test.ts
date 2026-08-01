@@ -568,9 +568,10 @@ describe("recallInFlightFleetUpgrades ID logging (SIO-991/SIO-1340)", () => {
 			expect(result).toHaveLength(1);
 			const logged = spy.calls.find((args) => args[1] === "agent-memory in-flight fleet recall");
 			expect(logged).toBeDefined();
-			const fields = logged?.[0] as { userId?: string; sessionId?: string; blockIds?: string[] };
+			const fields = logged?.[0] as { userId?: string; sessionId?: string; hitCount?: number; blockIds?: string[] };
 			expect(fields.userId).toBe("elastic-iac");
 			expect(fields.sessionId).toBeDefined();
+			expect(fields.hitCount).toBe(1);
 			expect(fields.blockIds).toEqual(["block-42"]);
 		} finally {
 			spy.restore();

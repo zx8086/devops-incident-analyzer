@@ -88,7 +88,7 @@ So `startKnowledgeGraphServer()` mounts a `Bun.serve` on `127.0.0.1:9087` **insi
 
 ### Tool surface
 
-Reached at `http://127.0.0.1:9087/mcp`. Nine **curated** read-only tools are always registered (`tools/curated.ts`), each binding its args as params (injection-safe):
+Reached at `http://127.0.0.1:9087/mcp`. When the in-process server is running (gated on `KNOWLEDGE_GRAPH_ENABLED`, see above), nine **curated** read-only tools are always registered (`tools/curated.ts`), each binding its args as params (injection-safe):
 
 | Tool | Input | Returns | Reader |
 |------|-------|---------|--------|
@@ -100,7 +100,7 @@ Reached at `http://127.0.0.1:9087/mcp`. Nine **curated** read-only tools are alw
 | `kg_successful_prompts` | `limit` (optional) | prompts that produced a successfully applied change, newest first (SIO-1202) — INNER joins `Prompt.id == ConfigChange.id`, filtered to `outcome = 'applied'` | `successfulPromptChanges` |
 | `kg_applied_changes` | `limit` (optional) | every applied change, newest first, whether or not it has a linked Prompt (SIO-1203) — `OPTIONAL MATCH` on `Prompt`, so it also covers changes applied before SIO-1038 | `appliedChanges` |
 | `kg_network_map` | `service`, `asOf` (optional) | persisted network map for one service: DNS -> load balancer -> target group -> workload chain, VPC/subnet placement, currently-valid IP bindings, and service endpoints (SIO-1204) — bi-temporal `asOf` read; accreted per incident, verify live before acting on IPs | `networkMapForService` |
-| `kg_ip_to_workload` | `ip`, `asOf` (optional) | cached reverse-IP lookup: which workload a private IP was last bound to (`BOUND_TO` edges from prior incidents); verify-then-trust against the live AWS reverse-IP protocol before relying on it | `ipToWorkload` |
+| `kg_ip_to_workload` | `ip`, `asOf` (optional) | cached reverse-IP lookup: one or more `BOUND_TO` owners valid for `ip` at the requested `asOf` (or currently, by default); verify-then-trust against the live AWS reverse-IP protocol before relying on it | `ipToWorkload` |
 
 **`kg_successful_prompts` vs `kg_applied_changes` (SIO-1203).** The `Prompt` node only exists from SIO-1038 onward (`recordIacPromptNode`) — the KG itself was activated for elastic-iac earlier, in SIO-954, which wrote `ConfigChange`/`MergeRequest` but never a prompt. So `kg_successful_prompts`' INNER join is invisible to any change applied in that gap window (SIO-954 → SIO-1038): the change is real and recorded, it just has no prompt to join. A missing `Prompt` on a change recorded after SIO-1038 can also happen — `recordIacPromptNode` soft-fails and logs-and-continues on a graph-write error — so an absent prompt means "not recorded", not necessarily "predates SIO-1038"; don't infer the date from the absence alone. `kg_applied_changes` is the full-coverage fallback — it returns every applied change regardless, rendering `(no prompt recorded)` for rows with no linked `Prompt`. Use `kg_successful_prompts` when you specifically need the verbatim prompt text; use `kg_applied_changes` for a complete historical count.
 
