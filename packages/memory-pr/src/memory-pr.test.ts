@@ -29,6 +29,9 @@ function makeFakeClient(fileContent: string | null = "base file content"): { cli
 			calls.push(`createPR:${opts.head}->${opts.base}`);
 			return { url: "https://github.com/o/r/pull/7", number: 7 };
 		},
+		async addLabels(prNumber, labels) {
+			calls.push(`addLabels:${prNumber}:${labels.join(",")}`);
+		},
 	};
 	return { client, calls };
 }
@@ -142,6 +145,28 @@ describe("openMemoryPr happy path", () => {
 		const result = await openMemoryPr(validProposal, { client, env: { MEMORY_PR_ENABLED: "true" } });
 		expect(result.status).toBe("skipped");
 		expect(calls).toEqual([]);
+	});
+
+	// CodeRabbit PR #568: labels used to be accepted by the schema but silently
+	// discarded -- they now reach GitHub via the Issues API after PR creation.
+	test("forwards proposal labels to the opened PR", async () => {
+		const { client, calls } = makeFakeClient();
+		const result = await openMemoryPr(
+			{ ...validProposal, labels: ["hil-learning", "skill-promotion"] },
+			{ client, env: enabledEnv },
+		);
+		expect(result.status).toBe("opened");
+		expect(calls.at(-1)).toBe("addLabels:7:hil-learning,skill-promotion");
+	});
+
+	test("a labeling failure still reports the PR as opened (best-effort)", async () => {
+		const { client } = makeFakeClient();
+		client.addLabels = async () => {
+			throw new Error("labels API down");
+		};
+		const result = await openMemoryPr({ ...validProposal, labels: ["hil-learning"] }, { client, env: enabledEnv });
+		expect(result.status).toBe("opened");
+		expect(result.url).toContain("/pull/7");
 	});
 });
 

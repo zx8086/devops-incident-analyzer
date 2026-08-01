@@ -31,6 +31,10 @@ export interface GitHubClient {
 	createBranch(branch: string, commitSha: string): Promise<void>;
 	// Open a PR from head into base.
 	createPullRequest(opts: { title: string; head: string; base: string; body: string }): Promise<CreatedPullRequest>;
+	// Add labels to an existing PR. Separate from createPullRequest because the
+	// Pulls API cannot set labels at creation time -- labels go through the
+	// Issues API on the PR's number (CodeRabbit, PR #568).
+	addLabels(prNumber: number, labels: string[]): Promise<void>;
 }
 
 export interface GitHubClientConfig {
@@ -135,6 +139,10 @@ export function createFetchGitHubClient(config: GitHubClientConfig): GitHubClien
 				draft: true,
 			});
 			return { url: pr.html_url, number: pr.number };
+		},
+
+		async addLabels(prNumber, labels) {
+			await ghFetch(config, "POST", `${repoPath}/issues/${prNumber}/labels`, { labels });
 		},
 	};
 }

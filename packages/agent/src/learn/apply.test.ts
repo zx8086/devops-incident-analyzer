@@ -613,6 +613,9 @@ describe("SIO-1346 skill promotion PR", () => {
 				calls.push("createPR");
 				return { url: "https://github.com/o/r/pull/9", number: 9 };
 			},
+			async addLabels(prNumber, labels) {
+				calls.push(`addLabels:${prNumber}:${labels.join(",")}`);
+			},
 			...overrides,
 		};
 		return { client, staged, calls };
@@ -662,6 +665,7 @@ describe("SIO-1346 skill promotion PR", () => {
 		expect(skillFile?.contents).toContain("activates on merge");
 		expect(calls).toContain("getFileContent:agents/incident-analyzer/agent.yaml:main");
 		expect(calls).toContain("createBranch:agent/learn/skill-resolver-check");
+		expect(calls).toContain("addLabels:9:hil-learning,skill-promotion");
 
 		expect(result.hilApplyReport?.skillPrUrls).toEqual(["https://github.com/o/r/pull/9"]);
 		const summary = String(result.messages?.[0]?.content ?? "");

@@ -139,6 +139,19 @@ export async function openMemoryPr(
 		body: proposal.body,
 	});
 
+	// Best-effort: the PR is already open, so a labeling failure must not turn an
+	// "opened" result into a thrown failure (a retry would double-open the branch).
+	if (parsed.labels && parsed.labels.length > 0) {
+		try {
+			await client.addLabels(pr.number, parsed.labels);
+		} catch (error) {
+			logger.warn(
+				{ url: pr.url, labels: parsed.labels, error: error instanceof Error ? error.message : String(error) },
+				"memory review PR opened but labeling failed",
+			);
+		}
+	}
+
 	logger.info({ url: pr.url, number: pr.number, kind: proposal.kind }, "opened memory review PR");
 	return { status: "opened", url: pr.url, number: pr.number };
 }
