@@ -113,6 +113,15 @@ export async function runWorkflow(def: WorkflowDef, options: RunWorkflowOptions)
 		const tolerate = step.error_handling === "continue" || def.error_handling === "best_effort";
 		if (tolerate) {
 			logger.warn({ step: step.name, error: result.error }, "step failed; continuing per error_handling");
+			// SIO-1356: seed the failed step's DECLARED outputs with empty-string
+			// placeholders (same seeding as the dry-run skipped path above). Without
+			// this, a downstream step templating ${{ steps.<failed>.outputs.X }}
+			// throws TemplateError out of the whole run -- defeating error_handling:
+			// continue for any workflow whose later steps reference an optional
+			// branch. Downstream handlers see "" and treat the branch as absent.
+			const placeholders: Record<string, string> = {};
+			for (const name of step.outputs ?? []) placeholders[name] = "";
+			ctx.steps.set(step.name, placeholders);
 			ok = false;
 			continue;
 		}

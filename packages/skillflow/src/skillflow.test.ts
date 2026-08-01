@@ -167,6 +167,42 @@ describe("runWorkflow", () => {
 		expect(result.steps.find((s) => s.name === "after")?.status).toBe("ok");
 		expect(result.ok).toBe(false);
 	});
+
+	// SIO-1356: without placeholder seeding, this exact shape threw TemplateError
+	// out of runWorkflow (resolveStep runs outside the handler try/catch), defeating
+	// error_handling: continue for optional-branch templating.
+	test("a failed continue-step's declared outputs resolve to empty strings downstream (SIO-1356)", async () => {
+		const tolerant = WorkflowSchema.parse({
+			name: "t",
+			version: "0.1.0",
+			description: "d",
+			steps: [
+				{ name: "optional", tool: "boom", error_handling: "continue", outputs: ["raw"] },
+				{
+					name: "assemble",
+					node: "assembler",
+					depends_on: ["optional"],
+					with: { got: "${{ steps.optional.outputs.raw }}" },
+					outputs: ["result"],
+				},
+			],
+		});
+		const seen: Record<string, Record<string, string>> = {};
+		const handlers: StepHandlers = {
+			tool: async () => {
+				throw new Error("boom");
+			},
+			node: async (r: ResolvedStep) => {
+				seen[r.step.name] = r.inputs;
+				return { result: "assembled" };
+			},
+		};
+		const result = await runWorkflow(tolerant, { handlers });
+		expect(result.ok).toBe(false);
+		expect(result.steps.find((s) => s.name === "assemble")?.status).toBe("ok");
+		// the failed step's declared output resolved to "" instead of aborting the run
+		expect(seen.assemble).toEqual({ got: "" });
+	});
 });
 
 describe("shouldTrigger", () => {
