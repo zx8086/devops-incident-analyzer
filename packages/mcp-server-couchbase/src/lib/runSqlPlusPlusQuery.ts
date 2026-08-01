@@ -1,5 +1,6 @@
 /* src/lib/runSqlPlusPlusQuery.ts */
 
+import type { QueryMetaData } from "couchbase";
 import { config } from "../config";
 import type { SQLPPParser } from "../types";
 import { createContextLogger, measureOperation } from "../utils/logger";
@@ -8,7 +9,7 @@ import type { OperationContext } from "./types";
 
 interface RunQueryResult {
 	rows: unknown[];
-	meta?: unknown;
+	meta?: QueryMetaData;
 }
 
 export async function runSqlPlusPlusQuery(

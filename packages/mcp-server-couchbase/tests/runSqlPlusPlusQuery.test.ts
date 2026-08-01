@@ -43,6 +43,66 @@ describe("runSqlPlusPlusQuery error surfacing (SIO-744)", () => {
 	});
 });
 
+describe("runSqlPlusPlusQuery warnings surfacing", () => {
+	test("a successful query with N1QL meta.warnings surfaces them in _meta, not the JSON text", async () => {
+		// The Couchbase SDK returns status:success + non-empty warnings for advisory
+		// conditions (e.g. non-covering index selectivity, sequential-scan fallback) --
+		// the row data is complete and correct, but the caveat must reach the agent.
+		// Warnings must land in _meta, NOT prefixed onto content[0].text: the agent's
+		// tryParseJson does a bare JSON.parse on that text, and a prose prefix would
+		// break parsing for every downstream consumer of toolOutputs[].rawJson.
+		const bucket = makeBucket(async () => ({
+			rows: [{ total: 42 }],
+			meta: {
+				warnings: [{ code: 4300, message: "No index available for this query, using sequential scan" }],
+			},
+		}));
+
+		const result = await runQuery({ scope_name: "styles", query: "SELECT COUNT(*) AS total FROM article" }, bucket);
+
+		expect(result.isError).toBe(false);
+		const text = (result.content[0] as { text: string }).text;
+		expect(() => JSON.parse(text)).not.toThrow();
+		expect(JSON.parse(text)).toEqual([{ total: 42 }]);
+		expect(result._meta?.warnings).toEqual([
+			{ code: 4300, message: "No index available for this query, using sequential scan" },
+		]);
+	});
+
+	test("a successful distinct-source-count query with warnings surfaces them in _meta", async () => {
+		const bucket = makeBucket(async () => ({
+			rows: [{ distinct_source_count: 42 }],
+			meta: {
+				warnings: [{ code: 4300, message: "No index available for this query, using sequential scan" }],
+			},
+		}));
+
+		const result = await runQuery(
+			{ scope_name: "styles", query: "SELECT COUNT(DISTINCT source) AS distinct_source_count FROM article" },
+			bucket,
+		);
+
+		expect(result.isError).toBe(false);
+		const text = (result.content[0] as { text: string }).text;
+		expect(text).toBe("Found 42 distinct sources");
+		expect(result._meta?.warnings).toEqual([
+			{ code: 4300, message: "No index available for this query, using sequential scan" },
+		]);
+	});
+
+	test("a successful query with no warnings omits _meta.warnings", async () => {
+		const bucket = makeBucket(async () => ({
+			rows: [{ total: 42 }],
+			meta: { warnings: [] },
+		}));
+
+		const result = await runQuery({ scope_name: "styles", query: "SELECT COUNT(*) AS total FROM article" }, bucket);
+
+		expect(result.isError).toBe(false);
+		expect(result._meta?.warnings).toBeUndefined();
+	});
+});
+
 describe("runSqlPlusPlusQuery bucket-path guardrail (SIO-1162)", () => {
 	test("full bucket.scope.collection path returns a structured bad-query envelope with advice", async () => {
 		// The guardrail short-circuits before touching the bucket, so no query impl is needed.
