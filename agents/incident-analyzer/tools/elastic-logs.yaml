@@ -227,15 +227,22 @@ tool_mapping:
       observed" -- and before claiming an error is unobserved, check the APM ERROR stream
       (`logs-apm.error-*`): SDK/DB connection errors (e.g. `finishConnect(..) failed: Connection
       refused`) surface there, not in the app-log INFO stream. For billion-doc indices
-      (traces-apm*, logs-apm*), narrow the index pattern (date suffix or specific index name
-      beats `traces-apm*`) and project only needed fields via `_source` or `fields`, and avoid
-      fanning out multiple heavy aggregations in parallel -- run them sequentially so each gets
-      the full per-call timeout budget. This performance guidance does NOT override the fixed
-      `now-30d` window SOUL.md mandates for the PHASE 1->2->3 discovery/absence procedure or any
-      other log/document search or aggregation -- narrow the INDEX PATTERN and FIELD PROJECTION
-      to control cost on large streams, never the time window, and never substitute `now-24h` for
-      `now-30d` (SIO-1327: a self-narrowed window is exactly the false-absence pattern SOUL.md
-      warns against).
+      (traces-apm*, logs-apm*), narrowing helps on cost but must still cover the FULL `now-30d`
+      window -- a date-suffixed pattern or wildcard spanning all 30 days (e.g.
+      `logs-apm.error-*-2026.07.*,logs-apm.error-*-2026.06.*` for a window crossing a month
+      boundary) beats `traces-apm*`, but a SINGLE day's backing index or a narrower stream is
+      NOT an equivalent substitute -- it can omit valid documents from another day or another
+      family (`logs-*` vs `logs-apm.*`) and reproduce the exact false-absence pattern this
+      narrowing guidance exists to avoid causing in the first place. Only narrow to a single
+      concrete index once PHASE 1 discovery has already proven that index holds the complete
+      applicable scope. Project only needed fields via `_source` or `fields`, and avoid fanning
+      out multiple heavy aggregations in parallel -- run them sequentially so each gets the full
+      per-call timeout budget. This performance guidance does NOT override the fixed `now-30d`
+      window SOUL.md mandates for the PHASE 1->2->3 discovery/absence procedure or any other
+      log/document search or aggregation -- narrow the INDEX PATTERN (while still covering the
+      full window) and FIELD PROJECTION to control cost on large streams, never the time window
+      itself, and never substitute `now-24h` for `now-30d` (SIO-1327: a self-narrowed window is
+      exactly the false-absence pattern SOUL.md warns against).
     cluster_health: when checking cluster status, node count, shard allocation, or pending tasks at the cluster level
     node_info: when inspecting a specific node's hardware, JVM, thread pools, or per-node disk/memory usage
     index_management: when listing indices, checking index settings, mappings, stats, or rolling over an index pattern

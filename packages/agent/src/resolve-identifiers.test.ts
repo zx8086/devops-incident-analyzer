@@ -252,7 +252,12 @@ describe("resolveIdentifiers node", () => {
 		expect(result).toEqual({ resolvedIdentifiers: undefined });
 	});
 
-	test("a failing probe omits its datasource but others still resolve", async () => {
+	// SIO-1328 (CodeRabbit on PR #559): a fully-failing elastic probe used to vanish entirely
+	// (result.elastic === undefined) -- indistinguishable from every deployment being
+	// conclusively searched and found empty. It now reports unresolvedDeployments instead, so
+	// the sub-agent knows coverage was inconclusive, not that absence was proven. Other
+	// datasources are unaffected either way.
+	test("a failing probe reports its datasource as unresolved (not silently omitted); others still resolve normally", async () => {
 		toolRegistry.elastic = [
 			{
 				name: "elasticsearch_search",
@@ -268,7 +273,8 @@ describe("resolveIdentifiers node", () => {
 			},
 		];
 		const result = await resolveIdentifiers(makeState({ targetDataSources: ["elastic", "couchbase"] }));
-		expect(result.resolvedIdentifiers?.elastic).toBeUndefined();
+		expect(result.resolvedIdentifiers?.elastic?.serviceNames).toEqual([]);
+		expect(result.resolvedIdentifiers?.elastic?.unresolvedDeployments?.length).toBeGreaterThan(0);
 		expect(result.resolvedIdentifiers?.couchbase?.scopes).toEqual({ orders: ["order_lines"] });
 	});
 
@@ -590,6 +596,10 @@ describe("resolveIdentifiers node", () => {
 			expect(result.resolvedIdentifiers?.elastic?.serviceNames).toContain("order-service");
 			const placements = result.resolvedIdentifiers?.elastic?.placements ?? [];
 			expect(placements.some((p) => p.deployment === "eu-cld")).toBe(true);
+			// SIO-1328 (CodeRabbit on PR #559): eu-b2b's rejection must be tracked, not silently
+			// dropped -- the sub-agent needs to know its coverage is inconclusive even though
+			// eu-cld's real answer is available.
+			expect(result.resolvedIdentifiers?.elastic?.unresolvedDeployments).toEqual(["eu-b2b"]);
 		} finally {
 			if (prevTimeout === undefined) delete process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS;
 			else process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS = prevTimeout;
@@ -628,9 +638,47 @@ describe("resolveIdentifiers node", () => {
 			expect(probedEstates).toEqual(expect.arrayContaining(["eu-fast-prd", "eu-slow-prd"]));
 			// The fast estate's log group must survive even though the slow one timed out.
 			expect(result.resolvedIdentifiers?.aws?.logGroups).toContain("/ecs/order-service");
+			// SIO-1328 (CodeRabbit on PR #559): the rejected estate must be tracked, not silently
+			// dropped -- the sub-agent needs to know eu-slow-prd's coverage is inconclusive.
+			expect(result.resolvedIdentifiers?.aws?.unresolvedEstates).toEqual(["eu-slow-prd"]);
 		} finally {
 			if (prevTimeout === undefined) delete process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS;
 			else process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS = prevTimeout;
+		}
+	});
+
+	// SIO-1328 (CodeRabbit on PR #559): a rejected deployment/estate is indistinguishable from
+	// a genuinely-empty one downstream unless it's tracked explicitly -- this is the case where
+	// that distinction matters MOST: zero candidates found, but coverage was incomplete, so
+	// "absent" would be an unproven conclusion.
+	test("a deployment that rejects with ZERO other candidates still reports unresolvedDeployments, not a silent empty result", async () => {
+		const prevTimeout = process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS;
+		process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS = "30";
+		toolRegistry.elastic = [
+			{
+				name: "elasticsearch_search",
+				invoke: async (args: unknown) => {
+					if (JSON.stringify(args ?? {}).includes("terminate_after")) return elasticAggPayload([]);
+					// Every deployment's real probe rejects -- no candidates anywhere, but ALSO no
+					// deployment was ever conclusively confirmed empty.
+					await new Promise((resolve) => setTimeout(resolve, 200));
+					return elasticAggPayload([]);
+				},
+			},
+		];
+		const prevDeployments = process.env.ELASTIC_DEPLOYMENTS;
+		process.env.ELASTIC_DEPLOYMENTS = "eu-cld,eu-b2b";
+		try {
+			const result = await resolveIdentifiers(makeState({ targetDataSources: ["elastic"] }));
+			expect(result.resolvedIdentifiers?.elastic?.serviceNames).toEqual([]);
+			expect(result.resolvedIdentifiers?.elastic?.unresolvedDeployments).toEqual(
+				expect.arrayContaining(["eu-cld", "eu-b2b"]),
+			);
+		} finally {
+			if (prevTimeout === undefined) delete process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS;
+			else process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS = prevTimeout;
+			if (prevDeployments === undefined) delete process.env.ELASTIC_DEPLOYMENTS;
+			else process.env.ELASTIC_DEPLOYMENTS = prevDeployments;
 		}
 	});
 

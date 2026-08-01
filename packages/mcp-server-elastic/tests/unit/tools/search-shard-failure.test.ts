@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 import type { Client, estypes } from "@elastic/elasticsearch";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 import { registerSearchTool } from "../../../src/tools/core/search.js";
 import { getToolFromServer } from "../../utils/elasticsearch-client.js";
 
@@ -63,14 +64,22 @@ function makeHandler(searchResponse: estypes.SearchResponse): Handler {
 	return tool.handler as Handler;
 }
 
-type ErrorEnvelope = { _error: { kind: string; category: string; message: string; advice?: string } };
+const ErrorEnvelopeSchema = z.object({
+	_error: z.object({
+		kind: z.string(),
+		category: z.string(),
+		message: z.string(),
+		advice: z.string().optional(),
+	}),
+});
+type ErrorEnvelope = z.infer<typeof ErrorEnvelopeSchema>;
 
 // McpError's own message is `MCP error -32602: <json>` (or similar) -- the envelope is the
 // SECOND constructor arg (JSON.stringify(envelope)), which the SDK folds into `.message`.
 function parseErrorEnvelope(err: McpError): ErrorEnvelope {
 	const jsonStart = err.message.indexOf("{");
 	if (jsonStart === -1) throw new Error(`expected a JSON envelope in the error message, got: ${err.message}`);
-	return JSON.parse(err.message.slice(jsonStart)) as ErrorEnvelope;
+	return ErrorEnvelopeSchema.parse(JSON.parse(err.message.slice(jsonStart)));
 }
 
 describe("elasticsearch_search shard-failure detection (SIO-1328)", () => {

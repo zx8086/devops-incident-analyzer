@@ -558,6 +558,14 @@ export const ResolvedIdentifiersSchema = z.object({
 					}),
 				)
 				.optional(),
+			// SIO-1328 (CodeRabbit on PR #559): deployments whose per-branch probe REJECTED
+			// (timed out or threw) this turn. A rejected deployment is dropped from `placements`
+			// same as one that genuinely had no matching candidates -- the two are indistinguishable
+			// downstream without this list. This is an inconclusive-coverage flag, not a
+			// service-name list: the focus block renders it as an explicit caveat so the sub-agent
+			// (and the final report) know NOT to treat a rejected deployment's absence from
+			// `placements` as proof the service isn't there.
+			unresolvedDeployments: z.array(z.string()).optional(),
 		})
 		.optional(),
 	// SIO-1087: `scopes` = every scope -> its collection names (enumerated, never filtered).
@@ -604,6 +612,10 @@ export const ResolvedIdentifiersSchema = z.object({
 					}),
 				)
 				.optional(),
+			// SIO-1328 (CodeRabbit on PR #559): estates whose per-branch probe REJECTED (timed
+			// out or threw) this turn -- same inconclusive-coverage caveat as
+			// elastic.unresolvedDeployments above.
+			unresolvedEstates: z.array(z.string()).optional(),
 		})
 		.optional(),
 	kafka: z.object({ topics: z.array(z.string()), consumerGroups: z.array(z.string()) }).optional(),
