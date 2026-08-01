@@ -68,6 +68,59 @@ describe("getIncidentHistory SIO-704 regressions", () => {
 		expect(out.totals.incidentCount).toBe(1);
 	});
 
+	// SIO-1336: this tool aggregates over a single maxResults:100 page with no follow-up
+	// fetch. isLast:false means the real window total exceeds what was aggregated -- totals
+	// and MTTR are a floor, not the true values, and nothing previously distinguished that
+	// from a genuinely complete aggregate.
+	test("flags truncation via configWarning when isLast is false", async () => {
+		const fakeProxy = {
+			callTool: async () => ({
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({
+							issues: [{ fields: { created: "2026-04-13T10:00:00Z", resolutiondate: "2026-04-13T11:00:00Z" } }],
+							isLast: false,
+							nextPageToken: "xyz",
+						}),
+					},
+				],
+			}),
+		} as unknown as AtlassianMcpProxy;
+		const out = await getIncidentHistory(fakeProxy, {
+			service: "svc",
+			windowDays: 30,
+			groupBy: "week",
+			incidentProjects: ["INC"],
+		});
+		expect(out.totals.incidentCount).toBe(1);
+		expect(out.configWarning).toBeDefined();
+		expect(out.configWarning).toContain("undercounts");
+	});
+
+	test("does not set configWarning when isLast is true", async () => {
+		const fakeProxy = {
+			callTool: async () => ({
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({
+							issues: [{ fields: { created: "2026-04-13T10:00:00Z", resolutiondate: "2026-04-13T11:00:00Z" } }],
+							isLast: true,
+						}),
+					},
+				],
+			}),
+		} as unknown as AtlassianMcpProxy;
+		const out = await getIncidentHistory(fakeProxy, {
+			service: "svc",
+			windowDays: 30,
+			groupBy: "week",
+			incidentProjects: ["INC"],
+		});
+		expect(out.configWarning).toBeUndefined();
+	});
+
 	test("propagates AtlassianAuthRequiredError instead of silently emptying buckets", async () => {
 		const fakeProxy = {
 			callTool: async () => ({
