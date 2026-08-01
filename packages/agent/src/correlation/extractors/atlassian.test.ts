@@ -77,6 +77,54 @@ describe("extractAtlassianFindings", () => {
 		expect(findings.linkedIssues?.map((i) => i.key)).toEqual(["A-1", "B-1"]);
 	});
 
+	// SIO-1338 (CodeRabbit, PR #564): two calls probing different services can legitimately
+	// return the SAME ticket (matched by both services' domain terms). The merge above has no
+	// dedup, so linkedIssues could carry duplicate keys -- AtlassianFindingsCard's keyed
+	// {#each ... (issue.key)} block requires unique keys per Svelte's own contract.
+	test("dedupes issues sharing the same key across multiple findLinkedIncidents calls", () => {
+		const findings = extractAtlassianFindings([
+			{
+				toolName: "findLinkedIncidents",
+				rawJson: {
+					service: "orders-service",
+					issues: [{ key: "DEVOPS-1", summary: "orders-service consume failure", status: "Backlog" }],
+				},
+			},
+			{
+				toolName: "findLinkedIncidents",
+				rawJson: {
+					service: "corrected-delivery-dates-service",
+					// Same underlying ticket, matched again by a different service's domain-term query --
+					// this is the exact SIO-1093 cross-service text-match design, not malformed input.
+					issues: [{ key: "DEVOPS-1", summary: "orders-service consume failure", status: "Backlog" }],
+				},
+			},
+		]);
+		expect(findings.linkedIssues?.map((i) => i.key)).toEqual(["DEVOPS-1"]);
+		expect(findings.linkedIssues).toHaveLength(1);
+	});
+
+	test("dedup keeps the FIRST occurrence's data when the same key repeats", () => {
+		const findings = extractAtlassianFindings([
+			{
+				toolName: "findLinkedIncidents",
+				rawJson: {
+					service: "a",
+					issues: [{ key: "DEVOPS-1", summary: "first-seen summary", status: "Open" }],
+				},
+			},
+			{
+				toolName: "findLinkedIncidents",
+				rawJson: {
+					service: "b",
+					issues: [{ key: "DEVOPS-1", summary: "second-seen summary (stale duplicate)", status: "Resolved" }],
+				},
+			},
+		]);
+		expect(findings.linkedIssues?.[0]?.summary).toBe("first-seen summary");
+		expect(findings.linkedIssues?.[0]?.status).toBe("Open");
+	});
+
 	test("returns empty on no matching tool outputs", () => {
 		expect(extractAtlassianFindings([])).toEqual({});
 	});

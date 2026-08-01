@@ -48,6 +48,12 @@ const EnvelopeSchema = z.object({
 // over `key + summary` so a ticket naming the service in either one survives.
 export function extractAtlassianFindings(outputs: ToolOutput[], focusServices: string[] = []): AtlassianFindings {
 	const linkedIssues: AtlassianLinkedIssue[] = [];
+	// SIO-1338 (CodeRabbit, PR #564): two findLinkedIncidents calls probing different services can
+	// legitimately return the SAME ticket (e.g. text-matched by both services' domain terms). This
+	// extractor's own "merges issues across multiple calls" behavior (intentional, tested since
+	// SIO-785) means linkedIssues can carry duplicate keys with no dedup -- AtlassianFindingsCard's
+	// keyed {#each ... (issue.key)} block requires unique keys, so dedupe here, not in the component.
+	const seenKeys = new Set<string>();
 	// SIO-1338: multiple findLinkedIncidents calls in one turn (one per probed service) can each
 	// carry their own configWarning -- collect and dedupe rather than letting the last call win,
 	// mirroring the space-join composition the composer tool itself uses (SIO-1337).
@@ -63,6 +69,8 @@ export function extractAtlassianFindings(outputs: ToolOutput[], focusServices: s
 			const parsed = AtlassianLinkedIssueSchema.safeParse(raw);
 			if (!parsed.success) continue;
 			if (!envelopeInFocus && !matchesFocus(`${parsed.data.key} ${parsed.data.summary}`, focusServices)) continue;
+			if (seenKeys.has(parsed.data.key)) continue;
+			seenKeys.add(parsed.data.key);
 			linkedIssues.push(parsed.data);
 		}
 	}
