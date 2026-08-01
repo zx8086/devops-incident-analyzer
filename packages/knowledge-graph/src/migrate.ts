@@ -17,13 +17,13 @@ const SEED_DEPENDENCIES = [
 	{ from: "backend-services", to: "elasticsearch" },
 ];
 
-async function migrate(): Promise<void> {
+export async function migrate(): Promise<void> {
 	const store = await getGraphStore();
 	await store.init();
 	process.stdout.write("knowledge-graph: schema applied.\n");
 }
 
-async function seed(): Promise<void> {
+export async function seed(): Promise<void> {
 	const store = await getGraphStore();
 	await store.init();
 	await upsertEntities(store, {
@@ -48,7 +48,11 @@ async function main(): Promise<void> {
 	await store.close();
 }
 
-main().catch((error) => {
-	process.stderr.write(`knowledge-graph migrate failed: ${error instanceof Error ? error.message : String(error)}\n`);
-	process.exit(1);
-});
+// Auto-run only as a CLI (`bun run src/migrate.ts`), not when a test imports
+// migrate/seed directly (same guard as seed-iac.ts).
+if (import.meta.main) {
+	main().catch((error) => {
+		process.stderr.write(`knowledge-graph migrate failed: ${error instanceof Error ? error.message : String(error)}\n`);
+		process.exit(1);
+	});
+}
