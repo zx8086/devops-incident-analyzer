@@ -20,13 +20,26 @@ import { normalizeToolContent } from "./sub-agent.ts";
 
 const logger = getLogger("agent:resolveIdentifiersPresets");
 
-// Default OFF (inverse idiom of RESOLVE_IDENTIFIERS_ENABLED): the preset path
-// is the new-behavior opt-in until SIO-1355 flips it after live parity
-// verification. When OFF -- or when a datasource ships no preset -- the legacy
-// probe runs unchanged.
-export function isResolvePresetsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-	const v = env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED;
-	return v === "true" || v === "1";
+// SIO-1355: default ON for every preset-eligible datasource, after live parity
+// verification (elastic/couchbase/gitlab/aws: healthy-run + soft-fail proof
+// this session; kafka/konnect: covered by the SIO-1354 parity suite, live
+// verification is a fast-follow). List-valued, mirroring bindingsReadDatasources
+// (resolve-identifiers.ts): "true"/"1"/"all" opts every datasource in; a
+// comma-separated list opts only the named datasources in; "false"/"0" opts
+// none in (the escape hatch for a wholesale regression). Unset uses the
+// default below rather than off, so removing the env var is a no-op, not a
+// silent revert to the legacy probe. When OFF for a datasource -- or when
+// that datasource ships no preset -- the legacy probe runs unchanged.
+const DEFAULT_PRESET_DATASOURCES = "all";
+export function isResolvePresetsEnabled(dataSourceId: string, env: NodeJS.ProcessEnv = process.env): boolean {
+	const raw = env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED?.trim();
+	const value = raw && raw.length > 0 ? raw : DEFAULT_PRESET_DATASOURCES;
+	if (value === "false" || value === "0") return false;
+	if (value === "true" || value === "1" || value === "all") return true;
+	return value
+		.split(",")
+		.map((s) => s.trim().toLowerCase())
+		.includes(dataSourceId.toLowerCase());
 }
 
 // A node step either exposes outputs for downstream templating (mid-flow

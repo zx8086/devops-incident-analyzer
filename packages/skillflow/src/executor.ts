@@ -7,7 +7,7 @@
 
 import type { WorkflowDef, WorkflowStep } from "@devops-agent/gitagent-bridge";
 import { getLogger, traceSpan } from "@devops-agent/observability";
-import { topoSort } from "./dag.ts";
+import { topoLayers } from "./dag.ts";
 import { handlerFor, type ResolvedStep, type StepHandlers, stepKind, stepTarget } from "./resolvers.ts";
 import { resolveInputs, type TemplateContext } from "./template.ts";
 
@@ -84,50 +84,78 @@ async function runOne(step: WorkflowStep, ctx: TemplateContext, options: RunWork
 	return { ...base, status: "failed", error: message };
 }
 
+// Applies one step's outcome to ctx/results, mirroring the placeholder-seeding
+// and fail-fast rules that pre-SIO-1355 applied inline per iteration. Returns
+// whether the workflow must abort before starting the next layer.
+function applyStepResult(
+	step: WorkflowStep,
+	result: StepRunResult,
+	def: WorkflowDef,
+	ctx: TemplateContext,
+	results: StepRunResult[],
+): { ok: boolean; abort: boolean } {
+	results.push(result);
+
+	if (result.status === "ok") {
+		ctx.steps.set(step.name, result.outputs);
+		return { ok: true, abort: false };
+	}
+	if (result.status === "skipped") {
+		// Dry run: seed declared outputs with placeholders so downstream
+		// templates resolve structurally. This validates that every
+		// referenced step+output is declared (catching typos) without
+		// executing anything.
+		const placeholders: Record<string, string> = {};
+		for (const name of step.outputs ?? []) placeholders[name] = "";
+		ctx.steps.set(step.name, placeholders);
+		return { ok: true, abort: false };
+	}
+
+	// Failed. "continue" tolerates the failure; anything else fails the run.
+	// best_effort at the workflow level also tolerates per-step failure.
+	const tolerate = step.error_handling === "continue" || def.error_handling === "best_effort";
+	if (tolerate) {
+		logger.warn({ step: step.name, error: result.error }, "step failed; continuing per error_handling");
+		// SIO-1356: seed the failed step's DECLARED outputs with empty-string
+		// placeholders (same seeding as the dry-run skipped path above). Without
+		// this, a downstream step templating ${{ steps.<failed>.outputs.X }}
+		// throws TemplateError out of the whole run -- defeating error_handling:
+		// continue for any workflow whose later steps reference an optional
+		// branch. Downstream handlers see "" and treat the branch as absent.
+		const placeholders: Record<string, string> = {};
+		for (const name of step.outputs ?? []) placeholders[name] = "";
+		ctx.steps.set(step.name, placeholders);
+		return { ok: false, abort: false };
+	}
+	logger.error({ step: step.name, error: result.error }, "step failed; aborting workflow (fail-fast)");
+	return { ok: false, abort: true };
+}
+
 export async function runWorkflow(def: WorkflowDef, options: RunWorkflowOptions): Promise<WorkflowRunResult> {
-	const ordered = topoSort(def.steps);
+	// SIO-1355: layers, not one flat order -- every step in a layer has all its
+	// depends_on already resolved by an earlier (fully-applied) layer, so the
+	// layer's steps run concurrently via Promise.all. runOne itself never
+	// throws (it converts handler rejection into a "failed" StepRunResult), so
+	// Promise.all is safe here -- no allSettled needed at this level.
+	const layers = topoLayers(def.steps);
 	const ctx: TemplateContext = { steps: new Map(), trigger: options.trigger, inputs: options.inputs };
 	const results: StepRunResult[] = [];
 	let ok = true;
 
-	for (const step of ordered) {
-		const result = await runOne(step, ctx, options);
-		results.push(result);
-		if (result.status === "ok") {
-			ctx.steps.set(step.name, result.outputs);
-			continue;
+	outer: for (const layer of layers) {
+		const layerResults = await Promise.all(layer.map((step) => runOne(step, ctx, options)));
+		// Apply in declared order (not settle order) so ctx.steps writes and the
+		// results array stay deterministic regardless of which handler resolved
+		// first -- this is what a serial reader of `results` or `ctx.steps`
+		// expects, and matches topoLayers' declared-order tie-break.
+		for (let i = 0; i < layer.length; i++) {
+			const step = layer[i];
+			const result = layerResults[i];
+			if (!step || !result) continue;
+			const outcome = applyStepResult(step, result, def, ctx, results);
+			if (!outcome.ok) ok = false;
+			if (outcome.abort) break outer;
 		}
-		if (result.status === "skipped") {
-			// Dry run: seed declared outputs with placeholders so downstream
-			// templates resolve structurally. This validates that every
-			// referenced step+output is declared (catching typos) without
-			// executing anything.
-			const placeholders: Record<string, string> = {};
-			for (const name of step.outputs ?? []) placeholders[name] = "";
-			ctx.steps.set(step.name, placeholders);
-			continue;
-		}
-
-		// Failed. "continue" tolerates the failure; anything else fails the run.
-		// best_effort at the workflow level also tolerates per-step failure.
-		const tolerate = step.error_handling === "continue" || def.error_handling === "best_effort";
-		if (tolerate) {
-			logger.warn({ step: step.name, error: result.error }, "step failed; continuing per error_handling");
-			// SIO-1356: seed the failed step's DECLARED outputs with empty-string
-			// placeholders (same seeding as the dry-run skipped path above). Without
-			// this, a downstream step templating ${{ steps.<failed>.outputs.X }}
-			// throws TemplateError out of the whole run -- defeating error_handling:
-			// continue for any workflow whose later steps reference an optional
-			// branch. Downstream handlers see "" and treat the branch as absent.
-			const placeholders: Record<string, string> = {};
-			for (const name of step.outputs ?? []) placeholders[name] = "";
-			ctx.steps.set(step.name, placeholders);
-			ok = false;
-			continue;
-		}
-		logger.error({ step: step.name, error: result.error }, "step failed; aborting workflow (fail-fast)");
-		ok = false;
-		break;
 	}
 
 	return { workflow: def.name, steps: results, ok };

@@ -75,12 +75,18 @@ Resolution is **strict** — an unknown step, a step that hasn't run, or an unde
 
 ### Execution and error handling
 
-`runWorkflow()` (`packages/skillflow/src/executor.ts`) runs the sorted steps, threading each step's outputs into the context so later `${{ }}` references resolve. Failure handling is two-tier:
+`runWorkflow()` (`packages/skillflow/src/executor.ts`) runs the DAG in **independence layers**, not one flat order (SIO-1355): `topoLayers()` (`packages/skillflow/src/dag.ts`) groups steps into waves where every step in a layer has all its `depends_on` already satisfied by an earlier layer (same Kahn computation as `topoSort()`, just not flattened). Each layer's steps run concurrently via `Promise.all`; the executor waits for the *entire* layer — not just a given step's direct dependencies — before starting the next one. `topoSort()` still exists as a separate, unchanged export (a flat order is still useful, e.g. for the CI dry-run gate's plan display) — reach for `topoLayers()` when you need actual execution.
+
+Threading: each step's outputs are written into the shared context (`ctx.steps`) so later `${{ }}` references resolve; a step's `resolveStep()` (template resolution) only runs once every step it depends on has already written its result, which layer-by-layer sequencing guarantees for free.
+
+Failure handling is two-tier:
 
 - **Per-step `error_handling`:** `fail` (default — propagate), `continue` (record and keep going), or `retry` (with `retry.attempts` + `retry.backoff_ms`).
 - **Workflow `error_handling`:** `fail_fast` (default — stop on first intolerable failure) or `best_effort` (tolerate any step failure).
 
-The executor does **not** implement what a step *does* — it dispatches to injected `StepHandlers` (`skill`/`agent`/`tool`/`node`/`graph`), supplied by the agent package (`packages/skillflow/src/resolvers.ts`). Each step runs inside a `skillflow.step.<name>` trace span.
+A non-tolerated failure aborts the run **before the next layer starts** — but does not (and cannot) prevent sibling steps already launched in the same layer from finishing; all of a layer's results are applied in declared order once the whole layer settles. A tolerated failure (`continue` or workflow-level `best_effort`) seeds that step's declared outputs with empty-string placeholders (SIO-1356) so a downstream `${{ steps.<failed>.outputs.X }}` reference resolves to `""` instead of throwing `TemplateError` — this placeholder seeding is layer-agnostic and applies identically whether the failing step shares a layer with other steps or runs alone.
+
+The executor does **not** implement what a step *does* — it dispatches to injected `StepHandlers` (`skill`/`agent`/`tool`/`node`/`graph`), supplied by the agent package (`packages/skillflow/src/resolvers.ts`). Each step runs inside a `skillflow.step.<name>` trace span. `handlerFor()` throws `MissingHandlerError` for a step kind with no registered handler — this only surfaces on a real (non-dry-run) invocation, since `dryRun: true` returns before dispatch.
 
 ### Two dialects
 
@@ -90,6 +96,25 @@ The bridge accepts two YAML shapes (`parseWorkflowFile` in `workflow.ts`):
 - **GAP SkillsFlow** — `steps` is a *map* (`{ stepName: {...} }`); validated by `SkillFlowSchema` and converted to the canonical form by `skillFlowToWorkflowDef()`. The conversion is lossy: `conditions` fold into the step `prompt` as notes, and non-string inputs are JSON-stringified.
 
 Example (GAP dialect, `agents/elastic-iac/workflows/tier-resize.yaml`): `validate → guard → draft → precheck → mr → notify`, each `depends_on` the previous, with `${{ steps.draft.outputs.branch }}` style wiring and a final `error_handling: { on_failure: comment_on_mr_if_exists, notify_user: true }`.
+
+### resolve-identifiers presets (SIO-1353/1354/1355)
+
+The first production wiring of SkillsFlow: each probed sub-agent ships a declarative `workflows/resolve-identifiers.yaml` (elastic, couchbase, kafka, konnect, gitlab, aws — atlassian deliberately has none, SIO-1096: Jira projects are named by team/org, never by service, so a service→project match resolves nothing) executed from the `resolveIdentifiers` graph node via `packages/agent/src/resolve-identifiers-workflow-handlers.ts::runResolvePreset()`. That module is the pattern to imitate for any new SkillsFlow wiring: a narrow file that injects `StepHandlers` into `runWorkflow()`, stays datasource/domain-agnostic, and never imports back into its caller (no cycle).
+
+**Two registered step kinds, two conventions:**
+
+- **`tool` steps** are one discovery invocation each. The handler binds the named MCP tool for the datasource, invokes it within a per-branch timeout budget, and normalizes the response into a single declared output named `raw` — parsing/matching stays in the caller's `node` steps, never in the tool handler itself.
+- **`node` steps** are the datasource's own code, registered by name in a `nodes: Record<string, PresetNodeFn>` map keyed to the YAML `node:` target. A node step's result is one of two shapes: `{ outputs }` exposes named values for downstream `${{ }}` templating (e.g. konnect's mid-flow control-plane selection), or `{ fragment }` terminates the flow and becomes the preset's final return value (the assemble step). `runResolvePreset()` closes over which node produced the fragment; if none did (a load-bearing branch fail-fast broke the run), it returns `{}`, matching the legacy probes' early-return-on-failure behavior.
+
+**The `trigger` payload** carries `${{ trigger.* }}` values the YAML cannot know statically — focus-derived search terms and similar runtime parameters. An empty string is a legitimate trigger value (see `toToolArgs` below).
+
+**`toToolArgs()` — the `with:` → tool-call-args convention:** YAML `with:` values are always strings (schema constraint); `toToolArgs()` converts each to a typed arg by JSON-parsing when it parses (`"500"` → `500`, `"true"` → `true`) and falling back to the raw string otherwise. An empty-string value is **omitted from the args object entirely** — this is how an absent/optional argument (a focus filter with no token this turn, or a SIO-1356 placeholder from a tolerated upstream failure) declares itself absent to the tool, mirroring the legacy probes' conditional arg construction. Caveat: an argument whose *legitimate* value is itself a numeric string would incorrectly coerce to a number under this convention — none of the shipped presets has one; prefer renaming/wrapping such an argument over weakening the rule.
+
+**The `multiply` per-target fan-out (SIO-1354):** elastic (per-deployment) and aws (per-estate) need one tool invocation per target, not one total. `PresetProbeDeps.multiply` carries `{ targets, wrap }`; when set, a `tool` step's single declared invocation runs once per target via `Promise.allSettled`, each branch in its own timeout and context wrapper (mirroring the legacy probes' per-branch SIO-1326 semantics — one slow/failed target never blocks or discards a sibling's result). This fan-out happens **entirely inside one step's handler**, invisible to the executor/DAG — from `runWorkflow()`'s perspective it is still a single `tool` step producing one output. Results serialize into a bounded envelope: `{ raw: JSON.stringify({ branches: [{ target, ok, raw?, error? }] }) }`. A branch payload exceeding `MAX_BRANCH_RAW_BYTES` (1 MiB) is deliberately converted into a **failed** branch rather than truncated — truncating would silently corrupt the JSON the assemble node parses, so an oversized branch instead lands in `unresolvedDeployments`/`unresolvedEstates` as inconclusive coverage (SIO-1328), never as silently-partial data. The target list itself is runtime env config, not YAML — it cannot be known at definition time.
+
+Note the `multiply` fan-out (parallel branches *within* one step) is a structurally different mechanism from the executor's layer concurrency (parallel *steps* across the DAG, see "Execution and error handling" above) — both use the same `Promise.allSettled`/timeout-per-branch discipline, but they operate at different levels and should not be conflated.
+
+**Feature flag — per-datasource, default ON (SIO-1355):** `isResolvePresetsEnabled(dataSourceId, env)` in `resolve-identifiers-workflow-handlers.ts` reads `RESOLVE_IDENTIFIERS_PRESETS_ENABLED`, list-valued (mirrors `bindingsReadDatasources` in `resolve-identifiers.ts`): unset defaults to every datasource ON (post-live-verification default); `"false"`/`"0"` opts every datasource out (legacy probe runs — the escape hatch for a wholesale regression); `"true"`/`"1"`/`"all"` is an explicit every-datasource-on (same effect as unset, kept for the parity suites and explicit intent); a comma-separated list (`"couchbase,kafka"`) opts only the named datasources in and every other datasource out. Each of the six preset-eligible dispatch sites in `resolve-identifiers.ts` passes its own datasource id. When a datasource is opted out, or its preset YAML fails to load, the legacy hand-written probe runs unchanged — the preset path is additive, never a hard cutover. elastic/couchbase/gitlab/aws were live-verified (healthy-run + simulated-MCP-outage soft-fail) before the flip; kafka/konnect ship on the SIO-1354 parity-test coverage with live verification as a fast-follow.
 
 ---
 

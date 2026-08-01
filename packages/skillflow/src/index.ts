@@ -10,7 +10,7 @@ export {
 	WorkflowStepSchema,
 	type WorkflowTrigger,
 } from "@devops-agent/gitagent-bridge";
-export { topoSort, UnknownDependencyError, WorkflowCycleError } from "./dag.ts";
+export { topoLayers, topoSort, UnknownDependencyError, WorkflowCycleError } from "./dag.ts";
 export {
 	type RunWorkflowOptions,
 	runWorkflow,

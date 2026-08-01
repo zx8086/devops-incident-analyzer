@@ -268,7 +268,7 @@ export async function resolveIdentifiers(
 	const probes: Array<Promise<Partial<ResolvedIdentifiers>>> = [];
 	if (inScope.has("elastic")) {
 		probes.push(
-			isResolvePresetsEnabled()
+			isResolvePresetsEnabled("elastic")
 				? catchOnlyProbe("elastic", () => probeElasticPreset(state, focus.services))
 				: catchOnlyProbe("elastic", () => probeElastic(state, focus.services)),
 		);
@@ -282,7 +282,7 @@ export async function resolveIdentifiers(
 	if (inScope.has("couchbase")) probes.push(catchOnlyProbe("couchbase", () => probeCouchbaseDispatch()));
 	if (inScope.has("aws")) {
 		probes.push(
-			isResolvePresetsEnabled()
+			isResolvePresetsEnabled("aws")
 				? catchOnlyProbe("aws", () => probeAwsPreset(state, focus.services))
 				: catchOnlyProbe("aws", () => probeAws(state, focus.services)),
 		);
@@ -292,21 +292,21 @@ export async function resolveIdentifiers(
 	// flag OFF keeps the exact legacy safeProbe wiring.
 	if (inScope.has("kafka")) {
 		probes.push(
-			isResolvePresetsEnabled()
+			isResolvePresetsEnabled("kafka")
 				? catchOnlyProbe("kafka", () => probeKafkaPreset(focus.services))
 				: safeProbe("kafka", () => probeKafka(focus.services)),
 		);
 	}
 	if (inScope.has("konnect")) {
 		probes.push(
-			isResolvePresetsEnabled()
+			isResolvePresetsEnabled("konnect")
 				? catchOnlyProbe("konnect", () => probeKonnectPreset(focus.services))
 				: safeProbe("konnect", () => probeKonnect(focus.services)),
 		);
 	}
 	if (inScope.has("gitlab")) {
 		probes.push(
-			isResolvePresetsEnabled()
+			isResolvePresetsEnabled("gitlab")
 				? catchOnlyProbe("gitlab", () => probeGitlabPreset(focus.services))
 				: safeProbe("gitlab", () => probeGitlab(focus.services)),
 		);
@@ -708,7 +708,7 @@ const MAX_BUCKET_NAMES = 10;
 // the two paths cannot drift. Preset absent/unloadable -> legacy probe, so the
 // flag can ship ahead of the YAML (and vice versa) without breaking a turn.
 async function probeCouchbaseDispatch(): Promise<Partial<ResolvedIdentifiers>> {
-	if (!isResolvePresetsEnabled()) return probeCouchbase();
+	if (!isResolvePresetsEnabled("couchbase")) return probeCouchbase();
 	const fragment = await runResolvePreset("couchbase", "capella-agent", "capella-resolve-identifiers", {
 		toolFor,
 		withTimeout,
