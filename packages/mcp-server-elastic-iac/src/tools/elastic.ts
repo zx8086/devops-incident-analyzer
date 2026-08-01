@@ -173,7 +173,8 @@ export function registerElasticTools(server: McpServer, config: Config): void {
 	);
 
 	// Cluster-API (data-plane) reads resolve a per-deployment URL + auth from config
-	// (ELASTIC_IAC_CLUSTER_*), keyed by the `deployment` name -- never a model-supplied base URL.
+	// (ELASTIC_DEPLOYMENTS + ELASTIC_<ID>_*), keyed by the `deployment` name -- never a
+	// model-supplied base URL.
 	// A model-controlled URL would bypass the deployment allowlist and make this an SSRF primitive,
 	// so the tool surface only takes a deployment name. Read-only (GET); never mutates.
 	server.tool(
@@ -260,7 +261,7 @@ async function clusterFetch(
 ): Promise<string> {
 	const { url, authHeader } = resolveCluster(deployments, deployment);
 	if (!url) {
-		return `[cluster '${deployment ?? "(unset)"}' not configured: set ELASTIC_IAC_CLUSTER_DEPLOYMENTS + ELASTIC_IAC_CLUSTER_<ID>_URL]`;
+		return `[cluster '${deployment ?? "(unset)"}' not configured: set ELASTIC_DEPLOYMENTS + ELASTIC_<ID>_URL]`;
 	}
 	return clusterFetchRaw(url, apiPath, authHeader);
 }
@@ -286,7 +287,7 @@ async function clusterPost(
 ): Promise<string> {
 	const { url, authHeader } = resolveCluster(deployments, deployment);
 	if (!url) {
-		return `[cluster '${deployment ?? "(unset)"}' not configured: set ELASTIC_IAC_CLUSTER_DEPLOYMENTS + ELASTIC_IAC_CLUSTER_<ID>_URL]`;
+		return `[cluster '${deployment ?? "(unset)"}' not configured: set ELASTIC_DEPLOYMENTS + ELASTIC_<ID>_URL]`;
 	}
 	try {
 		const res = await fetch(`${url}${apiPath}`, {

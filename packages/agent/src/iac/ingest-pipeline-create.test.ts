@@ -271,7 +271,7 @@ describe("draftChange -> proposeIngestPipelineCreate", () => {
 		mockTools({
 			// The deployment has no configured cluster connection for simulate.
 			elastic_simulate_ingest_pipeline: () =>
-				"[cluster 'us-cld' not configured: set ELASTIC_IAC_CLUSTER_DEPLOYMENTS + ELASTIC_IAC_CLUSTER_<ID>_URL]",
+				"[cluster 'us-cld' not configured: set ELASTIC_DEPLOYMENTS + ELASTIC_<ID>_URL]",
 			gitlab_get_file_content: () => '[404] {"message":"404 File Not Found"}',
 			gitlab_create_branch: () => "[201] {}",
 			gitlab_commit_file: (args) => {
