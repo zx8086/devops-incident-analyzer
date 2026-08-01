@@ -50,6 +50,7 @@ import {
 	redactForJudge,
 	type SkillLearnerTurn,
 	SkillProposalSchema,
+	summarizeSkillProposalHits,
 } from "./skill-learner.ts";
 
 const NOW = "2026-06-25T12:00:00Z";
@@ -87,6 +88,38 @@ afterEach(async () => {
 	__resetMemoryQueue();
 	// SIO-1045: re-claim ownership after every test in this file (see the file-scope comment above).
 	mock.module("./memory-backend.ts", () => realMemoryBackend);
+});
+
+describe("summarizeSkillProposalHits (SIO-1345)", () => {
+	test("maps annotations to summaries and drops nameless hits", () => {
+		const hits = [
+			{
+				text: "Proposed skill: lag-correlation - correlate lag with errors",
+				annotations: {
+					kind: "skill",
+					skill_name: "lag-correlation",
+					task_category: "lag-correlation",
+					learned_at: "2026-07-30T10:00:00Z",
+					learned_from: "thread:t1",
+				},
+			},
+			{ text: "malformed, no name", annotations: { kind: "skill" } },
+		];
+		const out = summarizeSkillProposalHits(hits);
+		expect(out).toHaveLength(1);
+		expect(out[0]).toEqual({
+			name: "lag-correlation",
+			category: "lag-correlation",
+			learnedAt: "2026-07-30T10:00:00Z",
+			learnedFrom: "thread:t1",
+			text: "Proposed skill: lag-correlation - correlate lag with errors",
+		});
+	});
+
+	test("tolerates absent optional annotations", () => {
+		const out = summarizeSkillProposalHits([{ text: "body", annotations: { skill_name: "thin" } }]);
+		expect(out[0]).toEqual({ name: "thin", category: "", learnedAt: "", learnedFrom: "", text: "body" });
+	});
 });
 
 describe("isSkillLearningEnabled", () => {

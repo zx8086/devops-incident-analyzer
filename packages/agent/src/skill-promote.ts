@@ -102,15 +102,27 @@ const DRAFT_BANNER = `# DRAFT — review before use
 > procedure, edit it for correctness, and remove this banner before relying on it.
 > It is NOT loaded until you add it to the agent's \`agent.yaml\` \`skills:\` list.`;
 
+// SIO-1345: the --pr flow registers the skill in agent.yaml on the same branch, so
+// the "not loaded until you edit agent.yaml" draft language would be wrong there.
+const PR_BANNER = `# Learned skill -- activates on merge
+
+> Scaffolded from a learned kind:skill proposal (SIO-1345 git-native promotion).
+> This branch also registers the skill under \`skills:\` in agent.yaml, so merging
+> this PR makes the skill live in the agent's prompt. Review the procedure and
+> verify any tool names it references exist for this agent before merging.`;
+
+export type PromoteRenderMode = "draft" | "pr";
+
 // Render the full SKILL.md text: YAML frontmatter (round-trips through the loader's
-// yaml `parse` + SkillFrontmatterSchema) + DRAFT banner + the recovered sections.
-export function renderSkillMarkdown(input: SkillScaffoldInput): string {
+// yaml `parse` + SkillFrontmatterSchema) + mode banner + the recovered sections.
+export function renderSkillMarkdown(input: SkillScaffoldInput, opts?: { mode?: PromoteRenderMode }): string {
 	const parsed = parseSkillFactBody(input.body);
 	const frontmatter = buildSkillFrontmatter(input.annotations, {
 		...(parsed.description ? { description: parsed.description } : {}),
 	});
 	const yaml = stringify(frontmatter).trimEnd();
-	const sections = [`---\n${yaml}\n---`, "", DRAFT_BANNER];
+	const banner = (opts?.mode ?? "draft") === "pr" ? PR_BANNER : DRAFT_BANNER;
+	const sections = [`---\n${yaml}\n---`, "", banner];
 	if (parsed.whenToUse) sections.push("", "## When to use", "", parsed.whenToUse);
 	sections.push("", "## Procedure", "", parsed.procedure, "");
 	return sections.join("\n");

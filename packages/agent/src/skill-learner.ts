@@ -143,6 +143,38 @@ export async function skillProposalExists(skillName: string): Promise<boolean> {
 	return hits.length > 0;
 }
 
+// SIO-1345: discovery for the promotion flow. Deterministic filter-only listing of
+// every kind:skill proposal fact for an agent (the same retrieval mode
+// skillProposalExists uses, without the name filter). The pure summarizer is split
+// out so it is testable without the backend; its parameter type is structural so
+// tests never import memory-backend types (MemorySearchHit satisfies it).
+export interface SkillProposalSummary {
+	name: string;
+	category: string;
+	learnedAt: string;
+	learnedFrom: string;
+	text: string;
+}
+
+export function summarizeSkillProposalHits(
+	hits: Array<{ text: string; annotations: Record<string, string | undefined> }>,
+): SkillProposalSummary[] {
+	return hits
+		.map((h) => ({
+			name: h.annotations.skill_name ?? "",
+			category: h.annotations.task_category ?? "",
+			learnedAt: h.annotations.learned_at ?? "",
+			learnedFrom: h.annotations.learned_from ?? "",
+			text: h.text,
+		}))
+		.filter((p) => p.name !== "");
+}
+
+export async function listSkillProposals(agentName: string = LEARNER_AGENT): Promise<SkillProposalSummary[]> {
+	const hits = await searchAgentMemory(agentName, "", { kind: "skill" }, 8, { deterministic: true });
+	return summarizeSkillProposalHits(hits);
+}
+
 // Build the durable-fact annotations carrying the gitagent.sh learning fields.
 // All values are strings (AnnotationMap). confidence is SEEDED, not measured —
 // there is no live success/failure feedback loop against immutable facts (SIO-1015
