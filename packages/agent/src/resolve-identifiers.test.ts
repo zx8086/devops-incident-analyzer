@@ -35,6 +35,7 @@ import {
 	probeTimeoutMs,
 	resolveIdentifiers,
 } from "./resolve-identifiers.ts";
+import { isResolvePresetsEnabled, runResolvePreset } from "./resolve-identifiers-workflow-handlers.ts";
 import type { AgentStateType } from "./state.ts";
 
 const ORIG_FLAG = process.env.RESOLVE_IDENTIFIERS_ENABLED;
@@ -1102,5 +1103,160 @@ describe("SIO-1107 bucket-aware couchbase probe", () => {
 			if (prevTimeout === undefined) delete process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS;
 			else process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS = prevTimeout;
 		}
+	});
+});
+
+// SIO-1353: the capella preset workflow must produce identical couchbase
+// fragments to the legacy probeCouchbase path across the SIO-1107 fixture
+// matrix. Each scenario runs through BOTH flag states and deep-equals the
+// result -- this suite is the real outputs-contract enforcement for the
+// shipped preset YAML (the skillflow dry-run gate only checks structure), and
+// it exercises the real agents/incident-analyzer/agents/capella-agent/
+// workflows/resolve-identifiers.yaml, not a fixture copy.
+describe("SIO-1353 couchbase preset parity", () => {
+	const DEFAULT_TREE = "📁 Scope: new_model\n  └─ 📄 Collection: seasonal_assignment\n";
+	const OTHER_TREE = "Bucket: prices\n\n📁 Scope: pricing\n  └─ 📄 Collection: price_points\n";
+	const bucketsPayload = (names: string[]) =>
+		JSON.stringify({ default_bucket: "default", buckets: names.map((name) => ({ name })) });
+	const indexesMd = (rows: unknown[]) =>
+		`# System Indexes (${rows.length} results)\n\n\`\`\`json\n${JSON.stringify(rows)}\n\`\`\``;
+
+	const ORIG_PRESETS = process.env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED;
+	afterEach(() => {
+		if (ORIG_PRESETS === undefined) delete process.env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED;
+		else process.env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED = ORIG_PRESETS;
+	});
+
+	async function bothPaths() {
+		process.env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED = "false";
+		const legacy = await resolveIdentifiers(makeState({ targetDataSources: ["couchbase"] }));
+		process.env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED = "true";
+		const preset = await resolveIdentifiers(makeState({ targetDataSources: ["couchbase"] }));
+		return {
+			legacy: legacy.resolvedIdentifiers?.couchbase,
+			preset: preset.resolvedIdentifiers?.couchbase,
+		};
+	}
+
+	test("full scenario: scopes + buckets + indexes + second hop", async () => {
+		toolRegistry.couchbase = [
+			{
+				name: "capella_get_scopes_and_collections",
+				invoke: async (args) => {
+					const a = args as Record<string, unknown> | undefined;
+					return a?.bucket_name === "prices" ? OTHER_TREE : DEFAULT_TREE;
+				},
+			},
+			{ name: "capella_get_buckets", invoke: async () => bucketsPayload(["default", "prices"]) },
+			{
+				name: "capella_get_system_indexes",
+				invoke: async () =>
+					indexesMd([
+						{
+							bucket_id: "default",
+							scope_id: "new_model",
+							keyspace_id: "seasonal_assignment",
+							state: "online",
+							is_primary: true,
+						},
+					]),
+			},
+		];
+		const { legacy, preset } = await bothPaths();
+		// sanity: parity must not be vacuous undefined === undefined
+		expect(legacy?.scopes).toEqual({ new_model: ["seasonal_assignment"] });
+		expect(legacy?.otherBucketScopes).toEqual({ prices: { pricing: ["price_points"] } });
+		expect(preset).toEqual(legacy);
+	});
+
+	test("buckets tool absent degrades to scopes-only on both paths", async () => {
+		toolRegistry.couchbase = [{ name: "capella_get_scopes_and_collections", invoke: async () => DEFAULT_TREE }];
+		const { legacy, preset } = await bothPaths();
+		expect(legacy).toEqual({ scopes: { new_model: ["seasonal_assignment"] } });
+		expect(preset).toEqual(legacy);
+	});
+
+	test("index shape drift omits index tags on both paths", async () => {
+		toolRegistry.couchbase = [
+			{ name: "capella_get_scopes_and_collections", invoke: async () => DEFAULT_TREE },
+			{
+				name: "capella_get_system_indexes",
+				// bucket-level primary (scope_id null) parses to zero entries while the
+				// payload plainly contains index rows -> the drift guard fires
+				invoke: async () => indexesMd([{ scope_id: null, keyspace_id: "default", state: "online", is_primary: true }]),
+			},
+		];
+		const { legacy, preset } = await bothPaths();
+		expect(legacy?.indexInfo).toBeUndefined();
+		expect(legacy?.scopes).toEqual({ new_model: ["seasonal_assignment"] });
+		expect(preset).toEqual(legacy);
+	});
+
+	test("failing per-bucket second-hop probe drops that bucket only, both paths", async () => {
+		toolRegistry.couchbase = [
+			{
+				name: "capella_get_scopes_and_collections",
+				invoke: async (args) => {
+					const a = args as Record<string, unknown> | undefined;
+					if (a?.bucket_name === "bad") throw new Error("bucket unreachable");
+					if (a?.bucket_name === "ok") return "Scope: s_ok\n  Collection: c_ok\n";
+					return DEFAULT_TREE;
+				},
+			},
+			{ name: "capella_get_buckets", invoke: async () => bucketsPayload(["default", "ok", "bad"]) },
+		];
+		const { legacy, preset } = await bothPaths();
+		expect(legacy?.otherBucketScopes).toEqual({ ok: { s_ok: ["c_ok"] } });
+		expect(preset).toEqual(legacy);
+	});
+
+	test("scopes probe failure omits couchbase entirely on both paths", async () => {
+		toolRegistry.couchbase = [
+			{
+				name: "capella_get_scopes_and_collections",
+				invoke: async () => {
+					throw new Error("cluster unreachable");
+				},
+			},
+		];
+		const { legacy, preset } = await bothPaths();
+		expect(legacy).toBeUndefined();
+		expect(preset).toEqual(legacy);
+	});
+
+	test("a never-settling optional branch times out per-branch on both paths", async () => {
+		const prevTimeout = process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS;
+		process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS = "30";
+		toolRegistry.couchbase = [
+			{ name: "capella_get_scopes_and_collections", invoke: async () => DEFAULT_TREE },
+			{ name: "capella_get_buckets", invoke: () => new Promise(() => {}) },
+		];
+		try {
+			const { legacy, preset } = await bothPaths();
+			expect(legacy).toEqual({ scopes: { new_model: ["seasonal_assignment"] } });
+			expect(preset).toEqual(legacy);
+		} finally {
+			if (prevTimeout === undefined) delete process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS;
+			else process.env.RESOLVE_IDENTIFIERS_PROBE_TIMEOUT_MS = prevTimeout;
+		}
+	});
+});
+
+describe("SIO-1353 preset runner unit behavior", () => {
+	test("isResolvePresetsEnabled defaults OFF; only 'true'/'1' enable", () => {
+		expect(isResolvePresetsEnabled({})).toBe(false);
+		expect(isResolvePresetsEnabled({ RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "false" })).toBe(false);
+		expect(isResolvePresetsEnabled({ RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "true" })).toBe(true);
+		expect(isResolvePresetsEnabled({ RESOLVE_IDENTIFIERS_PRESETS_ENABLED: "1" })).toBe(true);
+	});
+
+	test("an absent preset returns undefined (caller falls back to the legacy probe)", async () => {
+		const result = await runResolvePreset("couchbase", "no-such-agent", "nope", {
+			toolFor: () => undefined,
+			withTimeout: (p) => p,
+			timeoutMs: 1000,
+			assemble: async () => ({}),
+		});
+		expect(result).toBeUndefined();
 	});
 });

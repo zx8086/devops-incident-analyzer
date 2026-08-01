@@ -47,6 +47,7 @@ import {
 	parseKonnectControlPlanes,
 	parseKonnectServices,
 } from "./resolve-identifiers-parsers.ts";
+import { isResolvePresetsEnabled, runResolvePreset } from "./resolve-identifiers-workflow-handlers.ts";
 import type { AgentStateType } from "./state.ts";
 import { normalizeToolContent } from "./sub-agent.ts";
 
@@ -272,7 +273,7 @@ export async function resolveIdentifiers(
 	// indexes/buckets branch can discard an already-resolved scopes branch. catchOnlyProbe here
 	// (no outer timeout) matches the SIO-1326 fix; the query/collection-manager calls inside have
 	// their own SDK-level bounds, same reasoning as probeElastic/probeAws.
-	if (inScope.has("couchbase")) probes.push(catchOnlyProbe("couchbase", () => probeCouchbase()));
+	if (inScope.has("couchbase")) probes.push(catchOnlyProbe("couchbase", () => probeCouchbaseDispatch()));
 	if (inScope.has("aws")) probes.push(catchOnlyProbe("aws", () => probeAws(state, focus.services)));
 	if (inScope.has("kafka")) probes.push(safeProbe("kafka", () => probeKafka(focus.services)));
 	if (inScope.has("konnect")) probes.push(safeProbe("konnect", () => probeKonnect(focus.services)));
@@ -607,6 +608,125 @@ async function probeElastic(state: AgentStateType, focusServices: string[]): Pro
 const MAX_PROBED_BUCKETS = 3;
 const MAX_BUCKET_NAMES = 10;
 
+// SIO-1353: preset-workflow dispatch for couchbase, behind
+// RESOLVE_IDENTIFIERS_PRESETS_ENABLED (default OFF). The capella-agent's
+// workflows/resolve-identifiers.yaml declares the same three discovery tools
+// the legacy probe invokes; assembly is SHARED (assembleCouchbaseFromRaws) so
+// the two paths cannot drift. Preset absent/unloadable -> legacy probe, so the
+// flag can ship ahead of the YAML (and vice versa) without breaking a turn.
+async function probeCouchbaseDispatch(): Promise<Partial<ResolvedIdentifiers>> {
+	if (!isResolvePresetsEnabled()) return probeCouchbase();
+	const fragment = await runResolvePreset("couchbase", "capella-agent", "capella-resolve-identifiers", {
+		toolFor,
+		withTimeout,
+		timeoutMs: probeTimeoutMs(),
+		assemble: (raws) =>
+			assembleCouchbaseFromRaws({
+				scopesRaw: raws.scopesRaw ?? "",
+				indexesRaw: raws.indexesRaw || undefined,
+				bucketsRaw: raws.bucketsRaw || undefined,
+			}),
+	});
+	if (fragment === undefined) return probeCouchbase();
+	// The assemble handler above is assembleCouchbaseFromRaws, so the fragment
+	// is a Partial<ResolvedIdentifiers> by construction (unknown only because
+	// PresetProbeDeps stays datasource-generic for SIO-1354).
+	return fragment as Partial<ResolvedIdentifiers>;
+}
+
+// SIO-1353: shared post-invocation assembly for BOTH couchbase paths (legacy
+// probeCouchbase and the capella-agent preset workflow). Everything after the
+// tool calls -- parsing, bounding, the shape-drift guard, and the bounded
+// per-bucket second hop -- lives here ONCE, so the preset path is
+// parity-by-construction with the legacy probe. A missing/empty raw marks that
+// branch failed or absent (preset steps with error_handling: continue seed ""
+// on failure per SIO-1356); a fulfilled-but-empty payload is treated the same
+// way -- pathological for these tools, and safer than asserting "no index".
+export interface CouchbaseProbeRaws {
+	scopesRaw: string;
+	indexesRaw?: string;
+	bucketsRaw?: string;
+}
+
+export async function assembleCouchbaseFromRaws(raws: CouchbaseProbeRaws): Promise<Partial<ResolvedIdentifiers>> {
+	const scopes = parseCouchbaseScopeTree(raws.scopesRaw);
+	if (Object.keys(scopes).length === 0) return {};
+
+	let defaultBucket: string | undefined;
+	let bucketNames: string[] | undefined;
+	if (raws.bucketsRaw) {
+		const parsedBuckets = parseCouchbaseBuckets(raws.bucketsRaw);
+		if (parsedBuckets.buckets.length > 0) {
+			defaultBucket = parsedBuckets.defaultBucket;
+			bucketNames = parsedBuckets.buckets.slice(0, MAX_BUCKET_NAMES);
+		}
+	}
+
+	// Inject the ENTIRE scope map -- enumerating what exists is the fix; do not filter.
+	// SIO-1088: capture per-collection primary/secondary index info so the focus block can steer the
+	// agent to the RIGHT query shape (SELECT * only where a primary index exists; WHERE-on-key-field
+	// elsewhere). Key off the probe SUCCEEDING (an empty-but-present map correctly marks every
+	// collection secondary-less; a failed probe stays undefined -> renderer omits the tag).
+	let indexInfo: CouchbaseIndexMap | undefined;
+	if (raws.indexesRaw) {
+		const rawIndexes = raws.indexesRaw;
+		// SIO-1107: system:indexes is cluster-wide; scope the map to the default bucket when known
+		// so another bucket's indexes never tag the default bucket's collections.
+		indexInfo = parseCouchbaseSystemIndexes(rawIndexes, defaultBucket);
+		// SIO-1088 (CodeRabbit): distinguish a GENUINE "no online indexes" response from PARSE DRIFT
+		// (the upstream shape changed and the parser silently extracted nothing). Both collapse to an
+		// empty map otherwise, which would mislabel every collection [NO USABLE INDEX]. If the raw
+		// payload plainly contained index rows (keyspace_id/scope_id keys) but we extracted zero,
+		// that's drift -- warn AND omit the tags (undefined) rather than asserting "no index".
+		if (Object.keys(indexInfo).length === 0 && /"(?:keyspace_id|scope_id)"\s*:/.test(rawIndexes)) {
+			logger.warn(
+				{ rawSample: rawIndexes.slice(0, 200) },
+				"couchbase index probe returned rows but parser extracted none (shape drift?); omitting index tags",
+			);
+			indexInfo = undefined;
+		}
+	}
+
+	// SIO-1107: bounded second hop -- enumerate scopes/collections of up to MAX_PROBED_BUCKETS
+	// non-default buckets in parallel. Per-bucket failures are non-fatal. Handler-owned dynamic
+	// fan-out: the bucket list is only known after the buckets branch, so this hop stays code on
+	// BOTH paths (the preset YAML declares the static plan; this is its "multiplied step").
+	// SIO-1332: each bucket gets its OWN cbTimeoutMs budget (no outer safeProbe() wrap exists
+	// anymore to bound this hop implicitly) -- a slow non-default bucket must degrade to "missing
+	// that bucket's scopes" via a rejected settlement, not risk an unbounded hang on the hot
+	// pre-fan-out path.
+	let otherBucketScopes: Record<string, Record<string, string[]>> | undefined;
+	if (defaultBucket && bucketNames) {
+		const scopesTool = toolFor("couchbase", "capella_get_scopes_and_collections");
+		const others = bucketNames.filter((b) => b !== defaultBucket).slice(0, MAX_PROBED_BUCKETS);
+		if (scopesTool && others.length > 0) {
+			const cbTimeoutMs = probeTimeoutMs();
+			const settled = await Promise.allSettled(
+				others.map((b) => withTimeout(scopesTool.invoke({ bucket_name: b }), cbTimeoutMs)),
+			);
+			settled.forEach((res, i) => {
+				const name = others[i];
+				if (!name) return;
+				if (res.status !== "fulfilled") {
+					logger.warn({ bucket: name, error: msg(res.reason) }, "couchbase per-bucket scope probe failed");
+					return;
+				}
+				const tree = parseCouchbaseScopeTree(normalizeToolContent(res.value));
+				if (Object.keys(tree).length === 0) return;
+				otherBucketScopes = otherBucketScopes ?? {};
+				otherBucketScopes[name] = tree;
+			});
+		}
+	}
+
+	const couchbase: NonNullable<ResolvedIdentifiers["couchbase"]> = { scopes };
+	if (indexInfo) couchbase.indexInfo = indexInfo;
+	if (defaultBucket) couchbase.defaultBucket = defaultBucket;
+	if (bucketNames) couchbase.buckets = bucketNames;
+	if (otherBucketScopes) couchbase.otherBucketScopes = otherBucketScopes;
+	return { couchbase };
+}
+
 async function probeCouchbase(): Promise<Partial<ResolvedIdentifiers>> {
 	const scopesTool = toolFor("couchbase", "capella_get_scopes_and_collections");
 	if (!scopesTool) return {};
@@ -633,85 +753,20 @@ async function probeCouchbase(): Promise<Partial<ResolvedIdentifiers>> {
 			: Promise.reject(new Error("capella_get_buckets unavailable")),
 	]);
 	if (scopesRes.status !== "fulfilled") return {};
-	const scopes = parseCouchbaseScopeTree(normalizeToolContent(scopesRes.value));
-	if (Object.keys(scopes).length === 0) return {};
-
-	let defaultBucket: string | undefined;
-	let bucketNames: string[] | undefined;
-	if (bucketsRes.status === "fulfilled") {
-		const parsedBuckets = parseCouchbaseBuckets(normalizeToolContent(bucketsRes.value));
-		if (parsedBuckets.buckets.length > 0) {
-			defaultBucket = parsedBuckets.defaultBucket;
-			bucketNames = parsedBuckets.buckets.slice(0, MAX_BUCKET_NAMES);
-		}
-	} else {
+	if (bucketsRes.status !== "fulfilled") {
 		logger.warn({ error: msg(bucketsRes.reason) }, "couchbase bucket probe unavailable; resolving default bucket only");
 	}
-
-	// Inject the ENTIRE scope map -- enumerating what exists is the fix; do not filter.
-	// SIO-1088: capture per-collection primary/secondary index info so the focus block can steer the
-	// agent to the RIGHT query shape (SELECT * only where a primary index exists; WHERE-on-key-field
-	// elsewhere). Key off the probe SUCCEEDING (an empty-but-present map correctly marks every
-	// collection secondary-less; a failed probe stays undefined -> renderer omits the tag).
-	let indexInfo: CouchbaseIndexMap | undefined;
-	if (indexesRes.status === "fulfilled") {
-		const rawIndexes = normalizeToolContent(indexesRes.value);
-		// SIO-1107: system:indexes is cluster-wide; scope the map to the default bucket when known
-		// so another bucket's indexes never tag the default bucket's collections.
-		indexInfo = parseCouchbaseSystemIndexes(rawIndexes, defaultBucket);
-		// SIO-1088 (CodeRabbit): distinguish a GENUINE "no online indexes" response from PARSE DRIFT
-		// (the upstream shape changed and the parser silently extracted nothing). Both collapse to an
-		// empty map otherwise, which would mislabel every collection [NO USABLE INDEX]. If the raw
-		// payload plainly contained index rows (keyspace_id/scope_id keys) but we extracted zero,
-		// that's drift -- warn AND omit the tags (undefined) rather than asserting "no index".
-		if (Object.keys(indexInfo).length === 0 && /"(?:keyspace_id|scope_id)"\s*:/.test(rawIndexes)) {
-			logger.warn(
-				{ rawSample: rawIndexes.slice(0, 200) },
-				"couchbase index probe returned rows but parser extracted none (shape drift?); omitting index tags",
-			);
-			indexInfo = undefined;
-		}
-	} else {
+	if (indexesRes.status !== "fulfilled") {
 		logger.warn(
 			{ error: msg(indexesRes.reason) },
 			"couchbase index probe failed; collections rendered without index tags",
 		);
 	}
-
-	// SIO-1107: bounded second hop -- enumerate scopes/collections of up to MAX_PROBED_BUCKETS
-	// non-default buckets in parallel. Per-bucket failures are non-fatal.
-	// SIO-1332: each bucket gets its OWN cbTimeoutMs budget (no outer safeProbe() wrap exists
-	// anymore to bound this hop implicitly) -- a slow non-default bucket must degrade to "missing
-	// that bucket's scopes" via a rejected settlement, not risk an unbounded hang on the hot
-	// pre-fan-out path.
-	let otherBucketScopes: Record<string, Record<string, string[]>> | undefined;
-	if (defaultBucket && bucketNames) {
-		const others = bucketNames.filter((b) => b !== defaultBucket).slice(0, MAX_PROBED_BUCKETS);
-		if (others.length > 0) {
-			const settled = await Promise.allSettled(
-				others.map((b) => withTimeout(scopesTool.invoke({ bucket_name: b }), cbTimeoutMs)),
-			);
-			settled.forEach((res, i) => {
-				const name = others[i];
-				if (!name) return;
-				if (res.status !== "fulfilled") {
-					logger.warn({ bucket: name, error: msg(res.reason) }, "couchbase per-bucket scope probe failed");
-					return;
-				}
-				const tree = parseCouchbaseScopeTree(normalizeToolContent(res.value));
-				if (Object.keys(tree).length === 0) return;
-				otherBucketScopes = otherBucketScopes ?? {};
-				otherBucketScopes[name] = tree;
-			});
-		}
-	}
-
-	const couchbase: NonNullable<ResolvedIdentifiers["couchbase"]> = { scopes };
-	if (indexInfo) couchbase.indexInfo = indexInfo;
-	if (defaultBucket) couchbase.defaultBucket = defaultBucket;
-	if (bucketNames) couchbase.buckets = bucketNames;
-	if (otherBucketScopes) couchbase.otherBucketScopes = otherBucketScopes;
-	return { couchbase };
+	return assembleCouchbaseFromRaws({
+		scopesRaw: normalizeToolContent(scopesRes.value),
+		indexesRaw: indexesRes.status === "fulfilled" ? normalizeToolContent(indexesRes.value) : undefined,
+		bucketsRaw: bucketsRes.status === "fulfilled" ? normalizeToolContent(bucketsRes.value) : undefined,
+	});
 }
 
 async function probeAws(state: AgentStateType, focusServices: string[]): Promise<Partial<ResolvedIdentifiers>> {

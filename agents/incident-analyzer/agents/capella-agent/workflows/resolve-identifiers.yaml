@@ -1,0 +1,57 @@
+name: capella-resolve-identifiers
+version: 0.1.0
+description: >
+  Deterministic couchbase identifier discovery for the pre-fan-out
+  resolveIdentifiers node (SIO-1353). This preset declares WHICH discovery
+  tools run in WHAT order; parsing, focus matching, bounding, the index
+  shape-drift guard, and the bounded per-bucket second hop stay in code
+  (assembleCouchbaseFromRaws in packages/agent/src/resolve-identifiers.ts).
+  Executed by the skillflow executor behind RESOLVE_IDENTIFIERS_PRESETS_ENABLED
+  (default OFF); the legacy probeCouchbase path remains the fallback and the
+  parity contract.
+
+triggers:
+  - type: manual
+
+steps:
+  # Load-bearing branch: no error_handling override, so a failure fail-fasts
+  # the run and the node degrades to "no couchbase identifiers this turn"
+  # (matching the legacy probe's early-return when the scopes probe fails).
+  - name: get-scopes
+    tool: capella_get_scopes_and_collections
+    description: Enumerate the default bucket's scope/collection tree
+    outputs:
+      - raw
+
+  # Optional branches: on failure their declared outputs seed "" (SIO-1356)
+  # and assembly degrades exactly like the legacy probe (no index tags /
+  # default bucket only).
+  - name: get-system-indexes
+    tool: capella_get_system_indexes
+    description: Cluster-wide index map; scoped to the default bucket during assembly
+    outputs:
+      - raw
+    error_handling: continue
+
+  - name: get-buckets
+    tool: capella_get_buckets
+    description: Enumerate buckets and the default bucket name (tool absent on older servers)
+    outputs:
+      - raw
+    error_handling: continue
+
+  - name: assemble
+    node: assembleCouchbaseFromRaws
+    description: Parse + bound + shape-drift guard + bounded per-bucket second hop (code, not YAML)
+    depends_on:
+      - get-scopes
+      - get-system-indexes
+      - get-buckets
+    with:
+      scopesRaw: ${{ steps.get-scopes.outputs.raw }}
+      indexesRaw: ${{ steps.get-system-indexes.outputs.raw }}
+      bucketsRaw: ${{ steps.get-buckets.outputs.raw }}
+    outputs:
+      - result
+
+error_handling: fail_fast
