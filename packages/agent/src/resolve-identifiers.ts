@@ -266,7 +266,7 @@ export async function resolveIdentifiers(
 
 	const probes: Array<Promise<Partial<ResolvedIdentifiers>>> = [];
 	if (inScope.has("elastic")) probes.push(catchOnlyProbe("elastic", () => probeElastic(state, focus.services)));
-	// SIO-1333: probeCouchbase runs its own Promise.allSettled([scopes, indexes, buckets]) with
+	// SIO-1332: probeCouchbase runs its own Promise.allSettled([scopes, indexes, buckets]) with
 	// no per-branch timeout, the same shape probeElastic/probeAws had before SIO-1326 -- wrapping
 	// it in safeProbe's OUTER withTimeout races that allSettled a second time, and a slow
 	// indexes/buckets branch can discard an already-resolved scopes branch. catchOnlyProbe here
@@ -618,7 +618,7 @@ async function probeCouchbase(): Promise<Partial<ResolvedIdentifiers>> {
 	// servers -- then every new field stays undefined and the result is identical to before.
 	const indexesTool = toolFor("couchbase", "capella_get_system_indexes");
 	const bucketsTool = toolFor("couchbase", "capella_get_buckets");
-	// SIO-1333: each of the three branches gets its OWN probeTimeoutMs() budget (same pattern as
+	// SIO-1332: each of the three branches gets its OWN probeTimeoutMs() budget (same pattern as
 	// probeElastic's per-deployment timing) instead of relying on an outer safeProbe() wrap around
 	// the whole allSettled -- see catchOnlyProbe's call site for why the outer wrap alone
 	// reproduces the SIO-1326 bug for this heterogeneous 3-call fan-out.
@@ -680,7 +680,7 @@ async function probeCouchbase(): Promise<Partial<ResolvedIdentifiers>> {
 
 	// SIO-1107: bounded second hop -- enumerate scopes/collections of up to MAX_PROBED_BUCKETS
 	// non-default buckets in parallel. Per-bucket failures are non-fatal.
-	// SIO-1333: each bucket gets its OWN cbTimeoutMs budget (no outer safeProbe() wrap exists
+	// SIO-1332: each bucket gets its OWN cbTimeoutMs budget (no outer safeProbe() wrap exists
 	// anymore to bound this hop implicitly) -- a slow non-default bucket must degrade to "missing
 	// that bucket's scopes" via a rejected settlement, not risk an unbounded hang on the hot
 	// pre-fan-out path.

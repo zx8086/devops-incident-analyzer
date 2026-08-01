@@ -1068,7 +1068,7 @@ describe("SIO-1107 bucket-aware couchbase probe", () => {
 		expect(indexInfo?.pricing).toBeUndefined();
 	});
 
-	// SIO-1333: probeCouchbase's internal Promise.allSettled([scopes, indexes, buckets]) has no
+	// SIO-1332: probeCouchbase's internal Promise.allSettled([scopes, indexes, buckets]) has no
 	// per-branch timeout of its own -- it relies entirely on the OUTER safeProbe() wrap. That is
 	// the same "outer timeout races an inner Promise.allSettled" shape SIO-1326 fixed for
 	// probeElastic/probeAws: if one of the three branches is slow, the outer timeout can fire
@@ -1086,12 +1086,13 @@ describe("SIO-1107 bucket-aware couchbase probe", () => {
 				invoke: async () => DEFAULT_TREE,
 			},
 			{
-				// Slower than the shared 30ms budget -- must not erase the scopes branch above.
+				// NEVER settles. A test that instead used a delay-then-resolve promise could
+				// pass even WITHOUT per-branch timeout protection (Promise.allSettled would just
+				// wait for it) -- a never-settling branch only completes if the per-branch
+				// withTimeout actually rejects it, so this genuinely exercises the timeout path
+				// rather than merely tolerating a slow-but-eventually-fulfilled one.
 				name: "capella_get_buckets",
-				invoke: async () => {
-					await new Promise((resolve) => setTimeout(resolve, 200));
-					return bucketsPayload(["default"]);
-				},
+				invoke: () => new Promise(() => {}),
 			},
 		];
 		try {

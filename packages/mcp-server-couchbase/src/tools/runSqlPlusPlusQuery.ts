@@ -56,27 +56,26 @@ export const runQuery = async (params: { scope_name: string; query: string }, bu
 		// The N1QL warnings are ADVISORY (index selectivity, sequential-scan fallback,
 		// deprecated syntax) -- a warning never means the returned rows are incomplete or
 		// wrong, unlike an elastic shard failure. Still, an agent that never sees the
-		// caveat cannot factor it into its report, so surface it as a visible prefix on an
-		// otherwise-normal success response rather than failing the call.
-		const warnings = (result.meta as { warnings?: { code: number; message: string }[] } | undefined)?.warnings;
-		const warningsText =
-			warnings && warnings.length > 0
-				? `Query succeeded with ${warnings.length} warning(s): ${warnings.map((w) => `[${w.code}] ${w.message}`).join("; ")}\n\n`
-				: "";
+		// caveat cannot factor it into its report, so surface it in `_meta.warnings`
+		// alongside the normal rowCount/meta fields rather than prefixing content[0].text:
+		// the agent's tryParseJson(text) does a bare JSON.parse, and a prose prefix in
+		// front of the JSON rows would make the text unparseable, silently degrading
+		// toolOutputs[].rawJson from the row array to a raw string for every downstream
+		// consumer (aggregator.ts's isEnumerationShaped/isFailedResponseEnvelope checks).
+		const warnings = result.meta?.warnings;
+		const warningsMeta = warnings && warnings.length > 0 ? { warnings } : {};
 
 		if (rows.length === 1 && rows[0] !== undefined && "distinct_source_count" in rows[0]) {
 			return {
-				content: [
-					{ type: "text" as const, text: `${warningsText}Found ${rows[0].distinct_source_count} distinct sources` },
-				],
-				_meta: { rowCount: 1 },
+				content: [{ type: "text" as const, text: `Found ${rows[0].distinct_source_count} distinct sources` }],
+				_meta: { rowCount: 1, ...warningsMeta },
 				isError: false,
 			};
 		}
 
 		return {
-			content: [{ type: "text" as const, text: `${warningsText}${JSON.stringify(rows, null, 2)}` }],
-			_meta: { rowCount: rows.length, meta: result.meta },
+			content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }],
+			_meta: { rowCount: rows.length, meta: result.meta, ...warningsMeta },
 			isError: false,
 		};
 	} catch (error) {
