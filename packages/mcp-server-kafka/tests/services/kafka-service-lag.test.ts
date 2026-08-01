@@ -70,6 +70,39 @@ describe("KafkaService.getConsumerGroupLag SIO-1334 groupState disambiguation", 
 		expect(result.groupState).toBeUndefined();
 	});
 
+	// CodeRabbit (PR #562): the prior soft-fail test only covered the zero-lag
+	// path, so a regression that let a describeGroups failure clobber a REAL,
+	// nonzero lag calculation (not just omit groupState) would have passed
+	// unnoticed. Assert the lag numbers survive untouched.
+	test("describeGroups failure soft-fails even when the group has real nonzero lag", async () => {
+		const admin = buildAdmin({
+			listConsumerGroupOffsets: async () => [
+				{
+					groupId: "active-group",
+					topics: [
+						{
+							name: "topic-a",
+							partitions: [{ partitionIndex: 0, committedOffset: 10n, committedLeaderEpoch: 0, metadata: null }],
+						},
+					],
+				},
+			],
+			describeGroups: async () => {
+				throw new Error("coordinator unavailable");
+			},
+		});
+		(admin as unknown as { listOffsets: Admin["listOffsets"] }).listOffsets = (async () => [
+			{ name: "topic-a", partitions: [{ partitionIndex: 0, offset: 15n }] },
+		]) as unknown as Admin["listOffsets"];
+		const service = new KafkaService(buildClientManager(admin));
+
+		const result = await service.getConsumerGroupLag("active-group");
+
+		expect(result.totalLag).toBe("5");
+		expect(result.topics[0]?.totalLag).toBe("5");
+		expect(result.groupState).toBeUndefined();
+	});
+
 	test("a group with real committed offsets and lag also carries groupState", async () => {
 		const admin = buildAdmin({
 			listConsumerGroupOffsets: async () => [
