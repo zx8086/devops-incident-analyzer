@@ -77,6 +77,54 @@ describe("extractAtlassianFindings", () => {
 		expect(findings.linkedIssues?.map((i) => i.key)).toEqual(["A-1", "B-1"]);
 	});
 
+	// SIO-1338 (CodeRabbit, PR #564): two calls probing different services can legitimately
+	// return the SAME ticket (matched by both services' domain terms). The merge above has no
+	// dedup, so linkedIssues could carry duplicate keys -- AtlassianFindingsCard's keyed
+	// {#each ... (issue.key)} block requires unique keys per Svelte's own contract.
+	test("dedupes issues sharing the same key across multiple findLinkedIncidents calls", () => {
+		const findings = extractAtlassianFindings([
+			{
+				toolName: "findLinkedIncidents",
+				rawJson: {
+					service: "orders-service",
+					issues: [{ key: "DEVOPS-1", summary: "orders-service consume failure", status: "Backlog" }],
+				},
+			},
+			{
+				toolName: "findLinkedIncidents",
+				rawJson: {
+					service: "corrected-delivery-dates-service",
+					// Same underlying ticket, matched again by a different service's domain-term query --
+					// this is the exact SIO-1093 cross-service text-match design, not malformed input.
+					issues: [{ key: "DEVOPS-1", summary: "orders-service consume failure", status: "Backlog" }],
+				},
+			},
+		]);
+		expect(findings.linkedIssues?.map((i) => i.key)).toEqual(["DEVOPS-1"]);
+		expect(findings.linkedIssues).toHaveLength(1);
+	});
+
+	test("dedup keeps the FIRST occurrence's data when the same key repeats", () => {
+		const findings = extractAtlassianFindings([
+			{
+				toolName: "findLinkedIncidents",
+				rawJson: {
+					service: "a",
+					issues: [{ key: "DEVOPS-1", summary: "first-seen summary", status: "Open" }],
+				},
+			},
+			{
+				toolName: "findLinkedIncidents",
+				rawJson: {
+					service: "b",
+					issues: [{ key: "DEVOPS-1", summary: "second-seen summary (stale duplicate)", status: "Resolved" }],
+				},
+			},
+		]);
+		expect(findings.linkedIssues?.[0]?.summary).toBe("first-seen summary");
+		expect(findings.linkedIssues?.[0]?.status).toBe("Open");
+	});
+
 	test("returns empty on no matching tool outputs", () => {
 		expect(extractAtlassianFindings([])).toEqual({});
 	});
@@ -97,6 +145,72 @@ describe("extractAtlassianFindings", () => {
 	test("ignores non-object rawJson (defensive)", () => {
 		expect(extractAtlassianFindings([{ toolName: "findLinkedIncidents", rawJson: "upstream text" }])).toEqual({});
 		expect(extractAtlassianFindings([{ toolName: "findLinkedIncidents", rawJson: null }])).toEqual({});
+	});
+});
+
+// SIO-1338: findLinkedIncidents' own configWarning (SIO-1184 dead-project config, SIO-1337
+// pagination truncation) was being discarded here -- the raw JSON carried it, but nothing
+// downstream of this extractor (the findings card, the aggregator prompt context) could see it.
+describe("extractAtlassianFindings configWarning propagation (SIO-1338)", () => {
+	test("propagates configWarning alongside linkedIssues", () => {
+		const findings = extractAtlassianFindings([
+			{
+				toolName: "findLinkedIncidents",
+				rawJson: {
+					service: "orders-service",
+					issues: [{ key: "DEVOPS-1", summary: "x", status: "Open" }],
+					configWarning: "More than 1 incidents matched within 30d; results were truncated to the requested limit.",
+				},
+			},
+		]);
+		expect(findings.linkedIssues).toHaveLength(1);
+		expect(findings.configWarning).toBe(
+			"More than 1 incidents matched within 30d; results were truncated to the requested limit.",
+		);
+	});
+
+	test("propagates configWarning even when linkedIssues is empty", () => {
+		const findings = extractAtlassianFindings([
+			{
+				toolName: "findLinkedIncidents",
+				rawJson: {
+					service: "orders-service",
+					issues: [],
+					configWarning: "Configured incident project(s) INC do not exist on this Jira site.",
+				},
+			},
+		]);
+		expect(findings.linkedIssues).toBeUndefined();
+		expect(findings.configWarning).toBe("Configured incident project(s) INC do not exist on this Jira site.");
+	});
+
+	test("dedupes and joins configWarning across multiple calls", () => {
+		const findings = extractAtlassianFindings([
+			{
+				toolName: "findLinkedIncidents",
+				rawJson: { service: "a", issues: [{ key: "A-1", summary: "a", status: "Open" }], configWarning: "warn-a" },
+			},
+			{
+				toolName: "findLinkedIncidents",
+				rawJson: { service: "b", issues: [{ key: "B-1", summary: "b", status: "Open" }], configWarning: "warn-b" },
+			},
+			// Same warning text repeated (e.g. two calls hitting the same truncation) must not duplicate.
+			{
+				toolName: "findLinkedIncidents",
+				rawJson: { service: "a", issues: [{ key: "A-2", summary: "a2", status: "Open" }], configWarning: "warn-a" },
+			},
+		]);
+		expect(findings.configWarning).toBe("warn-a warn-b");
+	});
+
+	test("omits configWarning entirely when no call set it", () => {
+		const findings = extractAtlassianFindings([
+			{
+				toolName: "findLinkedIncidents",
+				rawJson: { service: "a", issues: [{ key: "A-1", summary: "a", status: "Open" }] },
+			},
+		]);
+		expect(findings.configWarning).toBeUndefined();
 	});
 });
 

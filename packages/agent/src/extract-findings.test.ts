@@ -861,6 +861,29 @@ describe("extractFindings focus scoping across datasources (SIO-1030)", () => {
 		const scoped = await extractFindings(stateFor("atlassian", outputs, ["prices-api-v2-service"]));
 		expect(scoped.dataSourceResults?.[0]?.atlassianFindings?.linkedIssues?.map((i) => i.key)).toEqual(["INC-1"]);
 	});
+
+	// SIO-1338: findLinkedIncidents' own configWarning (SIO-1184 dead-project config, SIO-1337
+	// pagination truncation) must survive the full extractFindings pipeline into DataSourceResult,
+	// not just the extractor unit test -- this is the layer the aggregator prompt context and the
+	// AtlassianFindingsCard actually read from.
+	test("atlassian: configWarning reaches DataSourceResult.atlassianFindings end to end", async () => {
+		const outputs: DataSourceResult["toolOutputs"] = [
+			{
+				toolName: "findLinkedIncidents",
+				rawJson: {
+					service: "orders-service",
+					issues: [{ key: "DEVOPS-1397", summary: "orders-service consume failure", status: "Backlog" }],
+					configWarning: "More than 1 incidents matched within 30d; results were truncated to the requested limit.",
+				},
+			},
+		];
+		const scoped = await extractFindings(stateFor("atlassian", outputs, ["orders-service"]));
+		const findings = scoped.dataSourceResults?.[0]?.atlassianFindings;
+		expect(findings?.linkedIssues?.map((i) => i.key)).toEqual(["DEVOPS-1397"]);
+		expect(findings?.configWarning).toBe(
+			"More than 1 incidents matched within 30d; results were truncated to the requested limit.",
+		);
+	});
 });
 
 // SIO-1245: the multi-row seam. The AWS estate fan-out (SIO-828) and the elastic deployment

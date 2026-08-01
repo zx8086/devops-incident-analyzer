@@ -78,4 +78,39 @@ describe("AtlassianFindingsCard.svelte", () => {
 		expect(body).toContain("bg-amber-500");
 		expect(body).toContain("bg-red-500");
 	});
+
+	// SIO-1338: configWarning (SIO-1184 dead-project config, SIO-1337 pagination truncation)
+	// must render even without linkedIssues -- the pre-fix `hasContent` gate on linkedIssues.length
+	// alone would have made this warning invisible.
+	describe("configWarning (SIO-1338)", () => {
+		test("renders the warning banner alone when linkedIssues is absent", () => {
+			const { body } = render(AtlassianFindingsCard, {
+				props: {
+					findings: { configWarning: "More than 100 incidents matched within 365d; totals are undercounts." },
+				},
+			});
+			expect(body).toContain("Atlassian findings");
+			expect(body).toContain("More than 100 incidents matched within 365d; totals are undercounts.");
+			expect(body).not.toContain("Linked incidents");
+		});
+
+		test("renders the warning banner alongside linkedIssues rows", () => {
+			const { body } = render(AtlassianFindingsCard, {
+				props: {
+					findings: {
+						linkedIssues: [{ key: "DEVOPS-1", summary: "x", status: "Open" }],
+						configWarning: "Configured incident project(s) INC do not exist on this Jira site.",
+					},
+				},
+			});
+			expect(body).toContain("Configured incident project(s) INC do not exist on this Jira site.");
+			expect(body).toContain("DEVOPS-1");
+			expect(body).toContain("Linked incidents");
+		});
+
+		test("still renders nothing when both configWarning and linkedIssues are absent", () => {
+			const { body } = render(AtlassianFindingsCard, { props: { findings: {} } });
+			expect(body).not.toContain("Atlassian findings");
+		});
+	});
 });
