@@ -135,6 +135,8 @@ export const HilApplyReportSchema = z.object({
 	bindingsInvalidated: z.number(),
 	heuristicsProposed: z.number(),
 	draftRunbookUrl: z.string().optional(),
+	// SIO-1346: skill-promotion PR URLs (one per approved heuristic, up to 3).
+	skillPrUrls: z.array(z.string()).optional(),
 	skipped: z.array(z.object({ id: z.string(), reason: z.string() })),
 	items: z.array(HilApplyItemSchema),
 });

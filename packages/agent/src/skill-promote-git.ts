@@ -1,8 +1,11 @@
 // agent/src/skill-promote-git.ts
 //
 // SIO-1345: git/gh mechanics for the --pr promotion flow. Pure builders are unit-
-// tested with a fake runner; spawnRunner is the only real-process seam. Imported
-// LAZILY by skill-promote-cli.ts main() only -- never from graph/runtime code.
+// tested with a fake runner; spawnRunner is the only real-process seam. The git/gh
+// orchestration (runPromotion/spawnRunner) is imported LAZILY by
+// skill-promote-cli.ts main() only -- never from graph/runtime code. The pure PR-
+// text builders (buildPrTitle/buildPrBody) are side-effect-free and also feed the
+// runtime memory-PR promotion path (SIO-1346, learn/skill-pr.ts).
 
 export interface GitRunner {
 	run(argv: string[]): { ok: boolean; stdout: string; stderr: string };

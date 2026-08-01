@@ -22,6 +22,7 @@ import {
 	recordServiceBinding,
 	setIncidentEmbedding,
 } from "@devops-agent/knowledge-graph";
+import { fetchBaseFileContent } from "@devops-agent/memory-pr";
 import { getLogger } from "@devops-agent/observability";
 import type {
 	BindingCorrection,
@@ -42,6 +43,7 @@ import { writeCurationMirrorFacts } from "./curation-facts.ts";
 import { applyEdits } from "./edits.ts";
 import { draftRunbookFilename, RUNBOOK_DIR, renderRunbookMarkdown } from "./runbook.ts";
 import type { RootCauseCorrection } from "./schema.ts";
+import { AGENT_MANIFEST_PATH, buildSkillPrBody, buildSkillPrFiles, buildSkillPrTitle } from "./skill-pr.ts";
 
 const logger = getLogger("agent:learn:apply");
 
@@ -93,12 +95,20 @@ export function buildApplySummary(report: HilApplyReport, ticketKey: string): st
 		lines.push(`- Invalidated ${report.bindingsInvalidated} stale telemetry binding(s).`);
 	}
 	if (report.heuristicsProposed > 0) {
+		// SIO-1346: proposals normally arrive with their own promotion PR; the manual
+		// CLI hint only applies to proposals whose PR was skipped or failed.
+		const prCount = report.skillPrUrls?.length ?? 0;
 		lines.push(
-			`- Proposed ${report.heuristicsProposed} diagnostic skill(s); promote with \`bun run skill:promote\` after review.`,
+			prCount >= report.heuristicsProposed
+				? `- Proposed ${report.heuristicsProposed} diagnostic skill(s).`
+				: `- Proposed ${report.heuristicsProposed} diagnostic skill(s); promote with \`bun run skill:promote\` after review.`,
 		);
 	}
 	if (report.draftRunbookUrl) {
 		lines.push(`- Opened a DRAFT runbook PR for review: ${report.draftRunbookUrl}`);
+	}
+	for (const url of report.skillPrUrls ?? []) {
+		lines.push(`- Opened a skill-promotion PR for review: ${url}`);
 	}
 	for (const s of report.skipped) {
 		lines.push(`- Skipped ${s.id}: ${s.reason}.`);
@@ -354,8 +364,10 @@ export async function applyLearnings(state: AgentStateType): Promise<Partial<Age
 	}
 
 	// SIO-1127: heuristics become kind:skill proposal facts (the SIO-1015 pipeline).
-	// Promotion stays `bun run skill:promote`. Self-gates on live memory + dedups by
-	// skill_name so a re-learn never doubles the immutable fact.
+	// SIO-1346: each approved heuristic also opens a best-effort skill-promotion PR
+	// (SKILL.md + agent.yaml edit built from base-branch content); merge activates it.
+	// Self-gates on live memory + dedups by skill_name so a re-learn never doubles
+	// the immutable fact or re-opens its PR.
 	if (!alreadyLearned && isLiveMemoryEnabled()) {
 		for (const heuristic of proposal.heuristics) {
 			if (!approved(decisions, heuristic.id)) {
@@ -562,7 +574,8 @@ async function applyBinding(
 
 // SIO-1127: an approved heuristic becomes a kind:skill proposal fact (the SIO-1015
 // pipeline), reusing buildSkillFactText/buildSkillAnnotations with learned_from:
-// "ticket:<key>". Dedups by skill_name so a re-learn never doubles the immutable fact.
+// "ticket:<key>". Dedups by skill_name so a re-learn never doubles the immutable fact
+// (or re-opens its promotion PR).
 async function applyHeuristic(
 	heuristic: Heuristic,
 	ticketKey: string,
@@ -582,13 +595,67 @@ async function applyHeuristic(
 		task_category: "",
 	};
 	const nowIso = new Date().toISOString();
-	recordKeyDecision({
-		requestId,
-		decision: buildSkillFactText(proposal),
-		annotations: buildSkillAnnotations(proposal, requestId, nowIso, `ticket:${ticketKey}`),
-	});
+	const annotations = buildSkillAnnotations(proposal, requestId, nowIso, `ticket:${ticketKey}`);
+	const body = buildSkillFactText(proposal);
+	recordKeyDecision({ requestId, decision: body, annotations });
 	report.heuristicsProposed += 1;
+	// SIO-1346: best-effort promotion PR (SKILL.md + agent.yaml edit). draftSkillPr
+	// catches internally, so a PR failure never voids the fact write above.
+	await draftSkillPr(heuristic, ticketKey, annotations, body, report);
 	return true;
+}
+
+// SIO-1346: open a skill-promotion PR for an approved heuristic, mirroring
+// draftRunbook. The agent.yaml edit runs against the BASE branch's live content
+// (fetchBaseFileContent) -- never a local snapshot, which would clobber
+// concurrently merged skills: entries when the tree write replaces the file. The
+// chat approval reviewed the LEARNING; the PR merge reviews ACTIVATION into the
+// agent.yaml capability boundary (the runbook flow's two-gate precedent), so the
+// skill is not live (and no activation-dependent link is recorded) until merge.
+// Up to 3 heuristics per apply mean up to 3 sibling PRs editing agent.yaml off
+// the same base SHA -- after the first merges the rest need "Update branch".
+// Accepted: one proposal = one branch/PR, matching runbooks. HIL lane only: the
+// post-turn learner (learnFromTurn) stays fact-only, its proposals are unreviewed.
+async function draftSkillPr(
+	heuristic: Heuristic,
+	ticketKey: string,
+	annotations: Record<string, string>,
+	body: string,
+	report: HilApplyReport,
+): Promise<void> {
+	try {
+		const base = await fetchBaseFileContent(AGENT_MANIFEST_PATH);
+		if (base.status === "skipped") {
+			report.skipped.push({ id: heuristic.id, reason: `skill PR not opened (${base.reason})` });
+			return;
+		}
+		if (base.content === null) {
+			report.skipped.push({ id: heuristic.id, reason: "skill PR not opened (agent.yaml not found on base branch)" });
+			return;
+		}
+		const built = buildSkillPrFiles(base.content, { skillName: heuristic.name, annotations, body });
+		if (!built.ok) {
+			report.skipped.push({ id: heuristic.id, reason: `skill PR not opened (${built.reason})` });
+			return;
+		}
+		const result = await promoteToMemory({
+			kind: "new-skill",
+			branch: `agent/learn/skill-${heuristic.name}`,
+			title: buildSkillPrTitle(heuristic.name),
+			body: buildSkillPrBody(heuristic.name, annotations),
+			files: built.files,
+			labels: ["hil-learning", "skill-promotion"],
+		});
+		if (result.status === "opened" && result.url) {
+			report.skillPrUrls = [...(report.skillPrUrls ?? []), result.url];
+		} else {
+			report.skipped.push({ id: heuristic.id, reason: `skill PR not opened (${result.status})` });
+		}
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		logger.warn({ ticket: ticketKey, skill: heuristic.name, error: message }, "HIL skill-promotion PR failed");
+		report.skipped.push({ id: heuristic.id, reason: "skill PR failed" });
+	}
 }
 
 // SIO-1127: open a PR-gated DRAFT runbook for a cause with no catalog match. The file is

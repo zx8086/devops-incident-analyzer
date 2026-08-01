@@ -1,18 +1,22 @@
 // memory-pr/src/memory-pr.test.ts
 import { afterEach, describe, expect, test } from "bun:test";
 import type { CreatedPullRequest, GitHubClient, GitHubFile } from "./github-client.ts";
-import { openMemoryPr } from "./index.ts";
+import { _setMemoryPrClientForTesting, fetchBaseFileContent, openMemoryPr } from "./index.ts";
 import { scanContent, scanFiles } from "./secret-scan.ts";
 import { MemoryPrProposalSchema } from "./types.ts";
 
 // Records the sequence of client calls so tests can assert ordering and the
 // absence of any merge operation (the interface has no merge method at all).
-function makeFakeClient(): { client: GitHubClient; calls: string[] } {
+function makeFakeClient(fileContent: string | null = "base file content"): { client: GitHubClient; calls: string[] } {
 	const calls: string[] = [];
 	const client: GitHubClient = {
 		async getBaseSha(base) {
 			calls.push(`getBaseSha:${base}`);
 			return "basesha";
+		},
+		async getFileContent(path, ref) {
+			calls.push(`getFileContent:${path}:${ref}`);
+			return fileContent;
 		},
 		async createCommitWithFiles(opts: { baseSha: string; files: GitHubFile[]; message: string }) {
 			calls.push(`createCommit:${opts.files.map((f) => f.path).join(",")}`);
@@ -138,5 +142,61 @@ describe("openMemoryPr happy path", () => {
 		const result = await openMemoryPr(validProposal, { client, env: { MEMORY_PR_ENABLED: "true" } });
 		expect(result.status).toBe("skipped");
 		expect(calls).toEqual([]);
+	});
+});
+
+// SIO-1346: base-branch reads for proposals that edit an existing file.
+describe("fetchBaseFileContent", () => {
+	const prevKill = process.env.AGENT_KILL_SWITCH;
+	afterEach(() => {
+		if (prevKill === undefined) delete process.env.AGENT_KILL_SWITCH;
+		else process.env.AGENT_KILL_SWITCH = prevKill;
+		_setMemoryPrClientForTesting(null);
+	});
+
+	test("skips when MEMORY_PR_ENABLED is not set (no client calls)", async () => {
+		const { client, calls } = makeFakeClient();
+		const result = await fetchBaseFileContent("agents/incident-analyzer/agent.yaml", {
+			client,
+			env: { MEMORY_PR_ENABLED: "false" },
+		});
+		expect(result).toEqual({ status: "skipped", reason: "MEMORY_PR_ENABLED is not set" });
+		expect(calls).toEqual([]);
+	});
+
+	test("skips when the kill switch is active", async () => {
+		process.env.AGENT_KILL_SWITCH = "true";
+		const { client, calls } = makeFakeClient();
+		const result = await fetchBaseFileContent("agents/incident-analyzer/agent.yaml", { client, env: enabledEnv });
+		expect(result.status).toBe("skipped");
+		expect(calls).toEqual([]);
+	});
+
+	test("skips when token/repo are not configured even if enabled", async () => {
+		const { client, calls } = makeFakeClient();
+		const result = await fetchBaseFileContent("x.yaml", { client, env: { MEMORY_PR_ENABLED: "true" } });
+		expect(result.status).toBe("skipped");
+		expect(calls).toEqual([]);
+	});
+
+	test("returns the base branch's content on the happy path", async () => {
+		const { client, calls } = makeFakeClient("skills:\n  - existing\n");
+		const result = await fetchBaseFileContent("agents/incident-analyzer/agent.yaml", { client, env: enabledEnv });
+		expect(result).toEqual({ status: "ok", content: "skills:\n  - existing\n" });
+		expect(calls).toEqual(["getFileContent:agents/incident-analyzer/agent.yaml:main"]);
+	});
+
+	test("a missing file (404 -> null) is ok/null, not an error", async () => {
+		const { client } = makeFakeClient(null);
+		const result = await fetchBaseFileContent("agents/incident-analyzer/agent.yaml", { client, env: enabledEnv });
+		expect(result).toEqual({ status: "ok", content: null });
+	});
+
+	test("_setMemoryPrClientForTesting is consulted when options.client is omitted", async () => {
+		const { client, calls } = makeFakeClient("injected content");
+		_setMemoryPrClientForTesting(client);
+		const result = await fetchBaseFileContent("x.yaml", { env: enabledEnv });
+		expect(result).toEqual({ status: "ok", content: "injected content" });
+		expect(calls).toEqual(["getFileContent:x.yaml:main"]);
 	});
 });

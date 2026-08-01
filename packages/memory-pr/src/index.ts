@@ -46,6 +46,47 @@ export interface OpenMemoryPrOptions {
 	env?: NodeJS.ProcessEnv;
 }
 
+// SIO-1346: module-level test seam (mirrors the agent package's
+// __setAgentMemoryClient idiom). Consulted before the fetch-client fallback
+// whenever options.client is omitted, so callers deep inside the graph
+// (applyHeuristic -> draftSkillPr) are testable without threading options.
+let testClientOverride: GitHubClient | null = null;
+
+export function _setMemoryPrClientForTesting(client: GitHubClient | null): void {
+	testClientOverride = client;
+}
+
+function resolveClient(options: OpenMemoryPrOptions, token: string, repo: string): GitHubClient {
+	return options.client ?? testClientOverride ?? createFetchGitHubClient({ token, repo });
+}
+
+export type FetchBaseFileResult = { status: "ok"; content: string | null } | { status: "skipped"; reason: string };
+
+// SIO-1346: read a file's current content from the base branch via the GitHub
+// API. A proposal that EDITS a shared file (the skill-promotion path's
+// agent.yaml insertion) must build the edit from this live content, never a
+// local snapshot -- createCommitWithFiles replaces listed paths wholesale
+// against the base tree, so a stale snapshot would clobber concurrently merged
+// changes. Gates mirror openMemoryPr so callers get identical self-skip
+// behavior when the flow is disabled or unconfigured.
+export async function fetchBaseFileContent(
+	path: string,
+	options: OpenMemoryPrOptions = {},
+): Promise<FetchBaseFileResult> {
+	const config = resolveMemoryPrConfig(options.env);
+	if (!config.enabled) {
+		return { status: "skipped", reason: "MEMORY_PR_ENABLED is not set" };
+	}
+	if (isKillSwitchActive()) {
+		return { status: "skipped", reason: "kill switch active" };
+	}
+	if (!config.token || !config.repo) {
+		return { status: "skipped", reason: "GITHUB_TOKEN or MEMORY_PR_REPO not configured" };
+	}
+	const client = resolveClient(options, config.token, config.repo);
+	return { status: "ok", content: await client.getFileContent(path, config.base) };
+}
+
 // Stages the proposal's files on a fresh branch and opens a draft PR. Returns a
 // structured result rather than throwing for the expected "off" paths
 // (disabled, kill switch, secret hit) so callers (lifecycle teardown) can treat
@@ -82,7 +123,7 @@ export async function openMemoryPr(
 		return { status: "skipped", reason: "GITHUB_TOKEN or MEMORY_PR_REPO not configured" };
 	}
 
-	const client = options.client ?? createFetchGitHubClient({ token: config.token, repo: config.repo });
+	const client = resolveClient(options, config.token, config.repo);
 
 	const baseSha = await client.getBaseSha(config.base);
 	const commitSha = await client.createCommitWithFiles({

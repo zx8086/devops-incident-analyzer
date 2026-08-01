@@ -73,6 +73,14 @@ const statusLabel: Record<string, string> = {
       </p>
     {/if}
 
+    {#each outcome.skillPrUrls ?? [] as url (url)}
+      <p class="mt-1 text-xs">
+        <a href={url} target="_blank" rel="noopener noreferrer" class="text-tommy-navy underline">
+          Skill-promotion PR opened for review
+        </a>
+      </p>
+    {/each}
+
     {#each footnotes as note (note.id)}
       <p class="mt-1 text-xs text-gray-500">{note.id}: {note.reason}</p>
     {/each}
