@@ -151,8 +151,11 @@ Beyond the two block types above, the agents read and write memory in a number o
 | R4 | Plan-review memory enrich | `iac/graph-knowledge.ts` `memoryEnrichIac` | pre-draft, after `graphEnrichIac` (SIO-970) | **deterministic** — filter `{stack_instance, kind:iac-change}` -> `priorLearnings` |
 | R5 | In-flight fleet-upgrade recall | `memory-backend.ts` `recallInFlightFleetUpgrades` | session bootstrap (proactive, SIO-960) + "how's the upgrade going?" | **deterministic** — filter `{kind:fleet-upgrade-dispatched}` |
 | R6 | Skill dedup check | `skill-learner.ts` `proposalExists` -> `searchAgentMemory` | before writing a new `kind:skill` fact | **deterministic** — filter `{kind:skill, skill_name}` |
+| R7 | On-demand LLM recall (`search_memory` tool) | `iac/local-tools.ts` `runMemorySearch` -> `searchAgentMemory` | elastic-iac's own LLM decides to call it mid-turn | **semantic** — `query` kept deliberately (model-driven fuzzy recall is the point), `relevant_k` widened to 25 so an optional `{deployment, stack, kind}` filter still has a real candidate pool post-truncation (SIO-998-aware mitigation, not full deterministic mode) |
 
 The semantic-vs-deterministic distinction (and *why* identifier-keyed recalls MUST omit `query`) is the SIO-998 gotcha documented in [Retrieval: TWO modes](#retrieval-two-modes--semantic-ranking-vs-deterministic-filter) above.
+
+**No MCP server, but one LLM-callable tool.** Agent Memory has no MCP server and is never exposed via `tools/list` the way the Knowledge Graph's `kg_*` tools are (`packages/agent/src/iac/local-tools.ts`'s header comment: "only `search_memory` stays LOCAL because agent memory is REST infrastructure, not MCP-exposed"). That is a narrower claim than "no LLM tool surface at all" — `search_memory` (R7 above) IS a real, LangChain-native tool bound into elastic-iac's tool set whenever the agent-memory backend is selected (`createSearchMemoryTool`, wired via `infoTools()` in `iac/nodes.ts`). R1–R6 are all code-driven recalls the LLM never chooses to trigger; R7 is the one seam where the model itself decides to search memory.
 
 ### Dedup (SIO-973 / SIO-1005)
 
