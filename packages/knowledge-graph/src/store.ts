@@ -97,6 +97,19 @@ function isWalCorruptionError(message: string): boolean {
 	return WAL_CORRUPTION_PATTERNS.some((pattern) => pattern.test(message));
 }
 
+// SIO-1339: a second process opening this store while another process already
+// holds lbug's exclusive file lock does not fail with a clean lock-denied
+// error -- it surfaces as this IO exception with a nonsense byte position
+// (live-observed: "position: 4901969379328" against a 92MB file; "numBytesRead:
+// 0" -- nothing was actually read). This is NOT WAL corruption: the WAL is
+// healthy, so it must never be quarantined, and retrying is pointless while the
+// lock is still held.
+const CONCURRENT_OPEN_ERROR_PATTERN = /IO exception: Cannot read from file.*numBytesRead: 0/i;
+
+function isConcurrentOpenError(message: string): boolean {
+	return CONCURRENT_OPEN_ERROR_PATTERN.test(message);
+}
+
 // SIO-1236: close() is a deliberate no-op (SIO-954 -- lbug's native finalizer
 // segfaults Bun), so no process ever checkpoints at exit, and lbug's default
 // auto-checkpoint threshold is 16MB -- far above this store's WAL sizes. The
@@ -213,6 +226,16 @@ export class LadybugStore implements GraphStore {
 			return await this.newDatabase(lbug);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
+			if (isConcurrentOpenError(message)) {
+				logger.error(
+					{ path: this.path, error: message },
+					"lbug store open failed: another process likely holds the exclusive lock on this store",
+				);
+				throw new Error(
+					`Knowledge-graph store at ${this.path} could not be opened: another process appears to already ` +
+						`hold lbug's exclusive file lock on this store (original error: ${message})`,
+				);
+			}
 			if (!isWalCorruptionError(message)) throw error;
 			const walPath = `${this.path}.wal`;
 			if (existsSync(walPath)) {
