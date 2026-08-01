@@ -57,6 +57,7 @@
         "@devops-agent/memory-pr": "workspace:*",
         "@devops-agent/observability": "workspace:*",
         "@devops-agent/shared": "workspace:*",
+        "@devops-agent/skillflow": "workspace:*",
         "@langchain/aws": "catalog:",
         "@langchain/core": "catalog:",
         "@langchain/langgraph": "catalog:",
