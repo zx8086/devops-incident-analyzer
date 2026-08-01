@@ -8,6 +8,7 @@
 // absolute file via a "../memory-backend.ts" specifier) could otherwise leak a stub into the very
 // suite meant to verify the real implementation.
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { getLogger } from "@devops-agent/observability";
 import {
 	type AgentMemoryClient,
 	type AgentMemoryUserRef,
@@ -42,6 +43,7 @@ import {
 	flushAgentMemoryAfterTurn,
 	pendingWriteCount,
 	recallAgentMemory,
+	recallInFlightFleetUpgrades,
 	resolveUserId,
 	searchAgentMemory,
 	selectedBackend,
@@ -123,6 +125,26 @@ function makeFakeClient(searchResult: string[] = []): { client: AgentMemoryClien
 		},
 	};
 	return { client, rec };
+}
+
+// SIO-1340: every getLogger() call returns a pino child logger sharing one prototype, so spying on
+// the prototype's `info` method captures a call from ANY logger instance (including the module-scoped
+// `logger` inside memory-backend.ts, which this test file cannot import directly). Restores the
+// original in the returned `restore()` so the spy never leaks into sibling tests.
+function spyOnLoggerInfo(): { calls: unknown[][]; restore: () => void } {
+	const proto = Object.getPrototypeOf(getLogger("spy-probe"));
+	const calls: unknown[][] = [];
+	const orig = proto.info;
+	proto.info = function (this: unknown, ...args: unknown[]) {
+		calls.push(args);
+		return orig.apply(this, args);
+	};
+	return {
+		calls,
+		restore: () => {
+			proto.info = orig;
+		},
+	};
 }
 
 const prevBackend = process.env.LIVE_MEMORY_BACKEND;
@@ -504,6 +526,55 @@ describe("recall + endSession", () => {
 		enqueueMessage({ user_content: "q", assistant_content: "a" }, "2026-06-17T00:00:00Z");
 		await endAgentMemorySession();
 		expect(rec.updated).toHaveLength(1); // only the first session stamped an outcome
+	});
+});
+
+// SIO-1340: every other recall function (recallAgentMemory, searchAgentMemory) logs
+// userId/sessionId/blockIds on a successful recall per SIO-991, so a hit can be cross-referenced to
+// its Couchbase document. recallInFlightFleetUpgrades called c.searchMemory directly and had no
+// success-path log at all -- only a failure warn.
+describe("recallInFlightFleetUpgrades ID logging (SIO-991/SIO-1340)", () => {
+	test("logs userId/sessionId/blockIds on a successful recall", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const client: AgentMemoryClient = {
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async addMessages() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async searchMemory() {
+				return [
+					{
+						text: "dispatched us-cld fleet upgrade to 9.3.0",
+						annotations: { kind: "fleet-upgrade-dispatched", deployment: "us-cld", version: "9.3.0" },
+						blockId: "block-42",
+					},
+				];
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true };
+			},
+		};
+		__setAgentMemoryClient(client);
+
+		const spy = spyOnLoggerInfo();
+		try {
+			const result = await recallInFlightFleetUpgrades("elastic-iac");
+			expect(result).toHaveLength(1);
+			const logged = spy.calls.find((args) => args[1] === "agent-memory in-flight fleet recall");
+			expect(logged).toBeDefined();
+			const fields = logged?.[0] as { userId?: string; sessionId?: string; blockIds?: string[] };
+			expect(fields.userId).toBe("elastic-iac");
+			expect(fields.sessionId).toBeDefined();
+			expect(fields.blockIds).toEqual(["block-42"]);
+		} finally {
+			spy.restore();
+		}
 	});
 });
 

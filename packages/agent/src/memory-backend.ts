@@ -584,6 +584,18 @@ export async function recallInFlightFleetUpgrades(agentName: string): Promise<In
 			allSessions: true,
 			annotations: { kind: "fleet-upgrade-dispatched" },
 		});
+		// SIO-991/SIO-1340: this recall bypasses the logged searchAgentMemory wrapper (it needs a
+		// fixed annotation filter, not a caller-supplied query/filter), so it must log the
+		// userId/sessionId/blockIds success trail itself -- every other recall function already does.
+		logger.info(
+			{
+				userId,
+				sessionId: ref.sessionId,
+				hitCount: hits.length,
+				blockIds: hits.map((h) => h.blockId).filter((id): id is string => Boolean(id)),
+			},
+			"agent-memory in-flight fleet recall",
+		);
 		return hits.map((h) => {
 			const a = h.annotations ?? {};
 			const pid = a.pipeline_id ? Number(a.pipeline_id) : undefined;
