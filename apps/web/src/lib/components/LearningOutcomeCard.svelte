@@ -73,6 +73,22 @@ const statusLabel: Record<string, string> = {
       </p>
     {/if}
 
+    {#each outcome.skillPrUrls ?? [] as url (url)}
+      <p class="mt-1 text-xs">
+        <!-- aria-label carries the URL so multiple PR links stay distinguishable
+             to screen readers (CodeRabbit, PR #568). -->
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={`Open skill-promotion PR ${url} in a new tab`}
+          class="text-tommy-navy underline"
+        >
+          Skill-promotion PR opened for review
+        </a>
+      </p>
+    {/each}
+
     {#each footnotes as note (note.id)}
       <p class="mt-1 text-xs text-gray-500">{note.id}: {note.reason}</p>
     {/each}

@@ -1,7 +1,8 @@
 // agent/src/learn/apply.test.ts
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { _setGraphStoreForTesting, type GraphStore } from "@devops-agent/knowledge-graph";
+import { _setMemoryPrClientForTesting, type GitHubClient } from "@devops-agent/memory-pr";
 import type { LearningProposal } from "@devops-agent/shared";
 import type { AgentStateType } from "../state.ts";
 import { applyLearnings, buildApplyItems, buildApplySummary, composeRootCauseDescription } from "./apply.ts";
@@ -520,6 +521,209 @@ describe("SIO-1126 applyLearnings", () => {
 	});
 });
 
+// SIO-1346: an approved heuristic also opens a skill-promotion PR (SKILL.md +
+// agent.yaml edit) via memory-pr, mirroring the draft-runbook flow. The fake
+// GitHubClient is injected through _setMemoryPrClientForTesting; the fake
+// AgentMemoryClient through __setAgentMemoryClient (agent-memory backend, so the
+// fact write never touches the real filesystem).
+describe("SIO-1346 skill promotion PR", () => {
+	const ENV_KEYS = [
+		"LIVE_MEMORY_ENABLED",
+		"LIVE_MEMORY_BACKEND",
+		"MEMORY_PR_ENABLED",
+		"GITHUB_TOKEN",
+		"MEMORY_PR_REPO",
+		"MEMORY_PR_BASE",
+	] as const;
+	const prevEnv: Record<string, string | undefined> = {};
+
+	beforeEach(() => {
+		for (const key of ENV_KEYS) prevEnv[key] = process.env[key];
+		process.env.LIVE_MEMORY_ENABLED = "true";
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		process.env.MEMORY_PR_ENABLED = "true";
+		process.env.GITHUB_TOKEN = "t";
+		process.env.MEMORY_PR_REPO = "o/r";
+		process.env.MEMORY_PR_BASE = "main";
+	});
+
+	afterEach(async () => {
+		for (const key of ENV_KEYS) {
+			if (prevEnv[key] === undefined) delete process.env[key];
+			else process.env[key] = prevEnv[key];
+		}
+		_setMemoryPrClientForTesting(null);
+		const { __setAgentMemoryClient, __resetMemoryQueue } = await import("../memory-backend.ts");
+		__setAgentMemoryClient(null);
+		__resetMemoryQueue();
+	});
+
+	function memStub(searchResult: Array<{ text: string; annotations?: Record<string, string> }> = []) {
+		return {
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts() {
+				return { blockIds: ["b1"], acceptedCount: 1, rejectedCount: 0 };
+			},
+			async addMessages() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async searchMemory() {
+				return searchResult;
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true };
+			},
+		};
+	}
+
+	async function installMemStub(searchResult: Array<{ text: string; annotations?: Record<string, string> }> = []) {
+		const { __setAgentMemoryClient } = await import("../memory-backend.ts");
+		// biome-ignore lint/suspicious/noExplicitAny: SIO-1346 - test stub for the AgentMemoryClient surface
+		__setAgentMemoryClient(memStub(searchResult) as any);
+	}
+
+	// The base branch already carries a concurrently merged skill the local
+	// process has never seen -- the staleness scenario from the ticket.
+	const LIVE_BASE_MANIFEST = "name: incident-analyzer\nskills:\n  - concurrently-merged-skill\n";
+
+	function fakeGithub(overrides: Partial<GitHubClient> = {}) {
+		const staged: Array<{ path: string; contents: string }> = [];
+		const calls: string[] = [];
+		const client: GitHubClient = {
+			async getBaseSha() {
+				calls.push("getBaseSha");
+				return "sha1";
+			},
+			async getFileContent(path, ref) {
+				calls.push(`getFileContent:${path}:${ref}`);
+				return LIVE_BASE_MANIFEST;
+			},
+			async createCommitWithFiles(opts) {
+				calls.push("createCommit");
+				staged.push(...opts.files);
+				return "commit1";
+			},
+			async createBranch(branch) {
+				calls.push(`createBranch:${branch}`);
+			},
+			async createPullRequest() {
+				calls.push("createPR");
+				return { url: "https://github.com/o/r/pull/9", number: 9 };
+			},
+			async addLabels(prNumber, labels) {
+				calls.push(`addLabels:${prNumber}:${labels.join(",")}`);
+			},
+			...overrides,
+		};
+		return { client, staged, calls };
+	}
+
+	function heuristicProposal(): LearningProposal {
+		return {
+			ticketKey: "DEVOPS-1355",
+			rootCause: null,
+			bindings: [],
+			heuristics: [
+				{
+					id: "heur-1",
+					kind: "heuristic",
+					name: "resolver-check",
+					description: "Check resolver rule associations first.",
+					whenToUse: "broker id -1 with healthy brokers",
+					procedure: "check resolver rules then broker DNS",
+					evidence: ["check resolver rules"],
+				},
+			],
+			memoryFacts: [],
+		};
+	}
+
+	function heuristicState(): AgentStateType {
+		return stateWith({
+			hilProposal: heuristicProposal(),
+			hilMatch: { incidentId: "inc-1", created: false },
+			hilDecisions: { "heur-1": "approve" },
+		});
+	}
+
+	test("agent.yaml edit uses the BASE branch's live content; PR URL lands in report + summary", async () => {
+		await installMemStub();
+		const { client, staged, calls } = fakeGithub();
+		_setMemoryPrClientForTesting(client);
+
+		const result = await applyLearnings(heuristicState());
+
+		// The staleness proof: the committed manifest keeps the concurrently merged
+		// entry (only present on the base branch) AND gains the new skill.
+		const manifest = staged.find((f) => f.path === "agents/incident-analyzer/agent.yaml");
+		expect(manifest?.contents).toContain("- concurrently-merged-skill");
+		expect(manifest?.contents).toContain("- resolver-check");
+		const skillFile = staged.find((f) => f.path === "agents/incident-analyzer/skills/resolver-check/SKILL.md");
+		expect(skillFile?.contents).toContain("activates on merge");
+		expect(calls).toContain("getFileContent:agents/incident-analyzer/agent.yaml:main");
+		expect(calls).toContain("createBranch:agent/learn/skill-resolver-check");
+		expect(calls).toContain("addLabels:9:hil-learning,skill-promotion");
+
+		expect(result.hilApplyReport?.skillPrUrls).toEqual(["https://github.com/o/r/pull/9"]);
+		const summary = String(result.messages?.[0]?.content ?? "");
+		expect(summary).toContain("Opened a skill-promotion PR for review: https://github.com/o/r/pull/9");
+		// Every proposal got a PR -> the manual CLI hint is dropped.
+		expect(summary).not.toContain("bun run skill:promote");
+	});
+
+	test("without MEMORY_PR config the fact still writes and the PR self-skips", async () => {
+		delete process.env.MEMORY_PR_ENABLED;
+		await installMemStub();
+
+		const result = await applyLearnings(heuristicState());
+
+		expect(result.hilApplyReport?.heuristicsProposed).toBe(1);
+		expect(result.hilApplyReport?.skillPrUrls).toBeUndefined();
+		const summary = String(result.messages?.[0]?.content ?? "");
+		expect(summary).toContain("skill PR not opened (MEMORY_PR_ENABLED is not set)");
+		// PR was skipped -> the manual CLI hint stays.
+		expect(summary).toContain("bun run skill:promote");
+	});
+
+	test("dedup: an already-proposed skill opens no PR (zero GitHub calls)", async () => {
+		await installMemStub([
+			{
+				text: "Proposed skill: resolver-check - existing",
+				annotations: { kind: "skill", skill_name: "resolver-check" },
+			},
+		]);
+		const { client, calls } = fakeGithub();
+		_setMemoryPrClientForTesting(client);
+
+		const result = await applyLearnings(heuristicState());
+
+		expect(calls).toEqual([]);
+		expect(result.hilApplyReport?.skillPrUrls).toBeUndefined();
+		const summary = String(result.messages?.[0]?.content ?? "");
+		expect(summary).toContain('skill "resolver-check" already proposed');
+	});
+
+	test("a GitHub failure is best-effort: reported as a skip, never fails the apply", async () => {
+		await installMemStub();
+		const { client } = fakeGithub({
+			async createBranch() {
+				throw new Error("ref already exists");
+			},
+		});
+		_setMemoryPrClientForTesting(client);
+
+		const result = await applyLearnings(heuristicState());
+
+		expect(result.hilApplyReport?.heuristicsProposed).toBe(1);
+		expect(result.hilApplyReport?.skillPrUrls).toBeUndefined();
+		const summary = String(result.messages?.[0]?.content ?? "");
+		expect(summary).toContain("Skipped heur-1: skill PR failed");
+	});
+});
+
 describe("SIO-1126 buildApplySummary", () => {
 	const emptyReport = {
 		ticketKey: "DEVOPS-1355",
@@ -555,6 +759,27 @@ describe("SIO-1126 buildApplySummary", () => {
 		expect(text).toContain("Invalidated 1 stale telemetry binding");
 		expect(text).toContain("Proposed 1 diagnostic skill");
 		expect(text).toContain("DRAFT runbook PR for review: https://gitlab.com/x/-/merge_requests/7");
+	});
+
+	// SIO-1346: skill-promotion PR lines; the manual CLI hint only survives for
+	// proposals whose PR was not opened.
+	test("renders skill PR lines and drops the CLI hint when every proposal got a PR", () => {
+		const text = buildApplySummary(
+			{ ...emptyReport, heuristicsProposed: 1, skillPrUrls: ["https://github.com/o/r/pull/9"] },
+			"DEVOPS-1355",
+		);
+		expect(text).toContain("Proposed 1 diagnostic skill(s).");
+		expect(text).toContain("Opened a skill-promotion PR for review: https://github.com/o/r/pull/9");
+		expect(text).not.toContain("bun run skill:promote");
+	});
+
+	test("keeps the CLI hint when a proposal did not get a PR", () => {
+		const text = buildApplySummary(
+			{ ...emptyReport, heuristicsProposed: 2, skillPrUrls: ["https://github.com/o/r/pull/9"] },
+			"DEVOPS-1355",
+		);
+		expect(text).toContain("bun run skill:promote");
+		expect(text).toContain("Opened a skill-promotion PR for review: https://github.com/o/r/pull/9");
 	});
 });
 

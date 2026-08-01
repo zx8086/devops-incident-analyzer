@@ -19,6 +19,11 @@ export interface CreatedPullRequest {
 export interface GitHubClient {
 	// Resolve the head commit sha of a base branch.
 	getBaseSha(base: string): Promise<string>;
+	// SIO-1346: fetch a file's content at ref. Returns null when the path does not
+	// exist there. Read-only -- exists so proposals that EDIT a shared file (the
+	// skill-promotion agent.yaml insertion) can build the edit from the base
+	// branch's live content instead of a stale local snapshot.
+	getFileContent(path: string, ref: string): Promise<string | null>;
 	// Create a single commit containing all files on top of baseSha. Returns the
 	// new commit sha. Does not move any ref.
 	createCommitWithFiles(opts: { baseSha: string; files: GitHubFile[]; message: string }): Promise<string>;
@@ -26,6 +31,10 @@ export interface GitHubClient {
 	createBranch(branch: string, commitSha: string): Promise<void>;
 	// Open a PR from head into base.
 	createPullRequest(opts: { title: string; head: string; base: string; body: string }): Promise<CreatedPullRequest>;
+	// Add labels to an existing PR. Separate from createPullRequest because the
+	// Pulls API cannot set labels at creation time -- labels go through the
+	// Issues API on the PR's number (CodeRabbit, PR #568).
+	addLabels(prNumber: number, labels: string[]): Promise<void>;
 }
 
 export interface GitHubClientConfig {
@@ -66,6 +75,34 @@ export function createFetchGitHubClient(config: GitHubClientConfig): GitHubClien
 			return ref.object.sha;
 		},
 
+		// Written against fetch directly (not ghFetch) because 404 is an expected
+		// outcome here (file absent at ref), not an error.
+		async getFileContent(path, ref) {
+			const encoded = path.split("/").map(encodeURIComponent).join("/");
+			const url = `${config.apiBaseUrl ?? DEFAULT_API}${repoPath}/contents/${encoded}?ref=${encodeURIComponent(ref)}`;
+			const res = await fetch(url, {
+				headers: {
+					Authorization: `Bearer ${config.token}`,
+					Accept: "application/vnd.github+json",
+					"X-GitHub-Api-Version": "2022-11-28",
+				},
+			});
+			if (res.status === 404) return null;
+			if (!res.ok) {
+				const text = await res.text().catch(() => "");
+				throw new Error(
+					`GitHub API GET ${repoPath}/contents/${path} failed: ${res.status} ${res.statusText} ${text}`.trim(),
+				);
+			}
+			const body = (await res.json()) as { content?: string };
+			if (typeof body.content !== "string") {
+				throw new Error(
+					`GitHub API GET ${repoPath}/contents/${path} returned no file content (directory or submodule?)`,
+				);
+			}
+			return Buffer.from(body.content, "base64").toString("utf8");
+		},
+
 		async createCommitWithFiles({ baseSha, files, message }) {
 			const baseCommit = await ghFetch<{ tree: { sha: string } }>(config, "GET", `${repoPath}/git/commits/${baseSha}`);
 			const treeItems = await Promise.all(
@@ -102,6 +139,10 @@ export function createFetchGitHubClient(config: GitHubClientConfig): GitHubClien
 				draft: true,
 			});
 			return { url: pr.html_url, number: pr.number };
+		},
+
+		async addLabels(prNumber, labels) {
+			await ghFetch(config, "POST", `${repoPath}/issues/${prNumber}/labels`, { labels });
 		},
 	};
 }
