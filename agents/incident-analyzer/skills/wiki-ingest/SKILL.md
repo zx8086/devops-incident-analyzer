@@ -1,3 +1,8 @@
+---
+name: wiki-ingest
+description: Compile a raw source (a runbook, systems-map doc, or finished investigation report) into a cross-referenced wiki page under memory/wiki/pages, and update the catalog and log. Use when a completed investigation or a new raw knowledge document should be distilled into the durable, cross-linked wiki layer for reuse by future investigations.
+---
+
 # Skill: Wiki Ingest
 
 ## Purpose

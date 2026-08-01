@@ -37,6 +37,12 @@ export {
 	SUB_AGENT_NON_INTERACTIVE_PREAMBLE,
 	type SystemPromptParts,
 } from "./skill-loader.ts";
+export {
+	SKILL_EXTENSION_FIELDS,
+	SKILL_SPEC_FIELDS,
+	type SkillSpecViolation,
+	validateSkillFile,
+} from "./skill-spec-validator.ts";
 export { extractPromptToolNames, extractSkillToolNames, type SkillSource } from "./skill-tools.ts";
 export {
 	buildFacadeMap,

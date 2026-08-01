@@ -1,3 +1,8 @@
+---
+name: wiki-query
+description: Select the most relevant compiled wiki pages for the current investigation and inline them into context, so the agent reuses prior compiled knowledge instead of re-deriving topology or runbook steps from raw sources. Use early in an investigation, right after normalization, to ground the agent in previously compiled findings before querying live datasources.
+---
+
 # Skill: Wiki Query
 
 ## Purpose

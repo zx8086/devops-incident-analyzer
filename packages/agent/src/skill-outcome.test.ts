@@ -110,6 +110,45 @@ describe("rewriteFrontmatter (SIO-1016)", () => {
 		const noFm = "# Just a markdown skill\n\nNo frontmatter here.\n";
 		expect(rewriteFrontmatter(noFm, "success")).toBe(noFm);
 	});
+
+	// SIO-1347: since the spec overhaul every hand-authored skill carries
+	// name/description frontmatter, so tracking gates on a learning marker
+	// (usage_count/learned_from), not on a frontmatter block existing.
+	test("returns a hand-authored skill (spec frontmatter, no learning fields) unchanged", () => {
+		const handAuthored = [
+			"---",
+			"name: normalize-incident",
+			"description: Turn a raw report into the canonical Incident shape.",
+			"---",
+			"",
+			"## Procedure",
+			"",
+			"Parse, classify, map datasources.",
+			"",
+		].join("\n");
+		expect(rewriteFrontmatter(handAuthored, "success")).toBe(handAuthored);
+	});
+
+	test("tracks a promoted skill that has learned_from but no counts yet", () => {
+		const promoted = [
+			"---",
+			"name: lag-correlation",
+			"description: Correlate lag with errors.",
+			"learned_from: ticket:SIO-999",
+			"---",
+			"",
+			"## Procedure",
+			"",
+			"Pull lag, then errors, then align.",
+			"",
+		].join("\n");
+		const updated = rewriteFrontmatter(promoted, "failure");
+		const afterOpening = updated.indexOf("\n") + 1;
+		const closing = updated.slice(afterOpening).search(/^---\r?\n?/m);
+		const fm = SkillFrontmatterSchema.parse(parse(updated.slice(afterOpening, afterOpening + closing)));
+		expect(fm.usage_count).toBe(1);
+		expect(fm.failure_count).toBe(1);
+	});
 });
 
 describe("isSkillOutcomeTrackingEnabled (SIO-1016)", () => {

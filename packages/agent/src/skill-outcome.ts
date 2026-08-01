@@ -76,6 +76,12 @@ export function rewriteFrontmatter(content: string, outcome: SkillOutcome): stri
 		// Malformed frontmatter: do not guess. Leave the file untouched.
 		return content;
 	}
+	// SIO-1347: gate on a learning field, not on a frontmatter block existing. Since
+	// the spec overhaul every hand-authored skill carries name/description frontmatter,
+	// so "has frontmatter" no longer distinguishes promoted skills. Only files already
+	// carrying a learning marker (written by the SIO-1017/SIO-1346 promotion paths)
+	// are tracked; hand-authored skills stay byte-identical at runtime.
+	if (current.usage_count === undefined && current.learned_from === undefined) return content;
 	const updated = nextFrontmatter(current, outcome);
 	const yaml = stringify(updated).trimEnd();
 	return `---\n${yaml}\n---${split.body.startsWith("\n") ? "" : "\n"}${split.body}`;
@@ -119,13 +125,11 @@ export interface AppliedSkill {
 // body-only file), so passing the full active set is safe.
 //
 // INVARIANT (why "bump every active skill" stays meaningful): recordSkillOutcome only
-// advances counts when splitFrontmatter finds a frontmatter block. The hand-authored
-// skills are body-only (no `---` block at all) -> short-circuit no-op; only skills
-// promoted from a learned proposal (SIO-1017) carry learning frontmatter and get
-// tracked. CAVEAT: SkillFrontmatterSchema makes the learning fields optional, so a
-// hand-authored skill that later gains ANY frontmatter block would start being tracked.
-// If that becomes a concern, gate on a learning field (usage_count/learned_from) rather
-// than on a frontmatter block existing.
+// advances counts when the current frontmatter already carries a learning marker
+// (usage_count or learned_from). Since SIO-1347 every hand-authored skill has spec
+// frontmatter (name/description), so rewriteFrontmatter gates on those learning
+// fields -- exactly the escalation this comment used to anticipate -- and only
+// skills promoted from a learned proposal (SIO-1017/SIO-1346) get tracked.
 export function appliedSkillsForNames(agentName: string, names: string[]): AppliedSkill[] {
 	const root = getWorkspaceRoot();
 	return names.map((name) => ({ name, filePath: skillFilePath(root, agentName, name) }));
