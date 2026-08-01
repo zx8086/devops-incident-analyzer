@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { loadAgent } from "./index.ts";
 import { parseRunbookFrontmatter } from "./manifest-loader.ts";
+import { buildSystemPrompt } from "./skill-loader.ts";
 
 const AGENTS_ROOT = join(import.meta.dir, "../../../agents");
 
@@ -43,6 +44,21 @@ describe("loadAgent(elastic-iac) — GAP dialect", () => {
 	test("DUTIES.md is loaded", () => {
 		expect(agent.duties).toContain("DUTIES");
 		expect(agent.duties.length).toBeGreaterThan(0);
+	});
+
+	// SIO-1344: a skill registered in agent.yaml but never checked against the assembled
+	// prompt is exactly the failure mode this test guards -- the manifest test above only
+	// proves the NAME is in the list, not that the SKILL.md body actually got loaded and
+	// rendered into what the model sees.
+	test("search-memory skill content is loaded and reaches the assembled prompt", () => {
+		expect(agent.skills.has("search-memory")).toBe(true);
+		const body = agent.skills.get("search-memory");
+		expect(body).toContain("search_memory");
+		expect(body).toContain("kg_*"); // the when-to-call-it-vs-KG distinction
+
+		const prompt = buildSystemPrompt(agent);
+		expect(prompt).toContain("## Skill: search-memory");
+		expect(prompt).toContain("search_memory");
 	});
 
 	// SIO-953: knowledge loads via knowledge/index.yaml (Knowledge Tree), which
