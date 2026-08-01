@@ -572,24 +572,42 @@ describe("SIO-1329: failed/timeout/cancelled aws_logs_get_query_results advice",
 	const FAILED_RESULT = JSON.stringify({ results: [], status: "Failed", $metadata: {} });
 	const TIMEOUT_RESULT = JSON.stringify({ results: [], status: "Timeout", $metadata: {} });
 	const CANCELLED_RESULT = JSON.stringify({ results: [], status: "Cancelled", $metadata: {} });
+	// CodeRabbit (PR #560): the SDK's GetQueryResultsResponse.status union also includes "Unknown" --
+	// equally untrustworthy as Failed/Cancelled/Timeout (not Complete, not Running/Scheduled), and the
+	// original SIO-1329 fix missed it, leaving it to fall through to the same counter-reset bug.
+	const UNKNOWN_RESULT = JSON.stringify({ results: [], status: "Unknown", $metadata: {} });
 	const COMPLETE_EMPTY_RESULT = JSON.stringify({ results: [], status: "Complete", $metadata: {} });
 	const COMPLETE_NONEMPTY_RESULT = JSON.stringify({
 		results: [[{ field: "@message", value: "CatalogException" }]],
 		status: "Complete",
 	});
 
-	test("detects Failed/Timeout/Cancelled; Complete (empty or not) is never a failed result", () => {
+	test("detects Failed/Timeout/Cancelled/Unknown; Complete (empty or not) is never a failed result", () => {
 		expect(isFailedAwsQueryResults(FAILED_RESULT)).toBe(true);
 		expect(isFailedAwsQueryResults(TIMEOUT_RESULT)).toBe(true);
 		expect(isFailedAwsQueryResults(CANCELLED_RESULT)).toBe(true);
+		expect(isFailedAwsQueryResults(UNKNOWN_RESULT)).toBe(true);
 		expect(isFailedAwsQueryResults(COMPLETE_EMPTY_RESULT)).toBe(false);
 		expect(isFailedAwsQueryResults(COMPLETE_NONEMPTY_RESULT)).toBe(false);
 	});
 
-	test("a Failed status is never misclassified as an empty-success", () => {
+	test("a Failed/Unknown status is never misclassified as an empty-success", () => {
 		expect(isEmptyAwsQueryResults(FAILED_RESULT)).toBe(false);
 		expect(isEmptyAwsQueryResults(TIMEOUT_RESULT)).toBe(false);
 		expect(isEmptyAwsQueryResults(CANCELLED_RESULT)).toBe(false);
+		expect(isEmptyAwsQueryResults(UNKNOWN_RESULT)).toBe(false);
+	});
+
+	test("an Unknown status fires the same recovery advice and does not reset the empty-streak counter", () => {
+		const state = createLoopGuardState();
+		recordResult(state, TOOL, "", UNKNOWN_RESULT);
+		expect(consumeFailedQueryAdvice(state)).toBe(AWS_FAILED_QUERY_ADVICE);
+		// Mirrors the Failed-status test below: Unknown must not silently zero a genuine streak.
+		const state2 = createLoopGuardState();
+		recordResult(state2, TOOL, "", COMPLETE_EMPTY_RESULT);
+		recordResult(state2, TOOL, "", UNKNOWN_RESULT);
+		recordResult(state2, TOOL, "", COMPLETE_EMPTY_RESULT);
+		expect(consumeEmptyAwsResultsAdvice(state2)).toBe(AWS_EMPTY_RESULTS_ADVICE);
 	});
 
 	test("advice fires on the FIRST failed/timeout/cancelled result and only once", () => {

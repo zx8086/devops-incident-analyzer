@@ -259,18 +259,19 @@ export const AWS_INVALID_QUERY_ID_ADVICE =
 	"to aws_logs_start_query, and it expires. Do NOT re-poll this id. Re-issue aws_logs_start_query " +
 	"for the SAME estate and log group, then poll the NEW queryId it returns.";
 
-// SIO-1329: CloudWatch Logs Insights returns a Failed/Cancelled/Timeout status as a normal HTTP 200
-// response with no thrown exception -- a query that never actually completed is otherwise
+// SIO-1329: CloudWatch Logs Insights returns a Failed/Cancelled/Timeout/Unknown status as a normal
+// HTTP 200 response with no thrown exception -- a query that never actually completed is otherwise
 // structurally indistinguishable from a genuine Complete-with-0-rows success. Do NOT treat this as
 // "no matching logs"; it means the query itself never produced trustworthy data.
 export const AWS_FAILED_QUERY_ADVICE =
-	"[loop-guard advice] aws_logs_get_query_results returned status Failed, Cancelled, or Timeout -- " +
-	"this is NOT a successful empty result and must NOT be reported as 'no matching logs'. The query " +
-	"never completed: Timeout means it exceeded CloudWatch's 60-minute runtime limit (narrow the time " +
-	"window or simplify the query), Cancelled means it was stopped before finishing, and Failed means " +
-	"it errored during execution (often a metric-math or grammar issue not caught at submission). " +
-	"Re-issue aws_logs_start_query with a narrower window and/or a simpler query, then poll the NEW " +
-	"queryId. Only report an absence once a query reaches status Complete.";
+	"[loop-guard advice] aws_logs_get_query_results returned status Failed, Cancelled, Timeout, or " +
+	"Unknown -- this is NOT a successful empty result and must NOT be reported as 'no matching logs'. " +
+	"The query never completed: Timeout means it exceeded CloudWatch's 60-minute runtime limit (narrow " +
+	"the time window or simplify the query), Cancelled means it was stopped before finishing, Failed " +
+	"means it errored during execution (often a metric-math or grammar issue not caught at submission), " +
+	"and Unknown means CloudWatch could not determine the outcome. Re-issue aws_logs_start_query with a " +
+	"narrower window and/or a simpler query, then poll the NEW queryId. Only report an absence once a " +
+	"query reaches status Complete.";
 
 // SIO-1268: emitted ONLY when awsEcsAbsenceProven() is true, i.e. a COMPLETE, error-free ECS
 // enumeration of this estate matched nothing. Phrased to produce the SIO-1149 negative FINDING
@@ -503,11 +504,13 @@ function isInFlightAwsQueryResults(content: unknown): boolean {
 }
 
 // SIO-1329: a genuinely FAILED query. Per the AWS SDK's own GetQueryResultsResponse.status
-// documentation, CloudWatch returns Failed/Cancelled/Timeout as an ordinary HTTP 200 (no thrown
-// exception -- mapAwsError/awsErrorKind never runs), so without this check a failed query is
-// structurally identical to isEmptyAwsQueryResults' Complete-with-0-rows success shape. Must be
-// checked BEFORE treating a result as empty-success or as in-flight.
-const AWS_FAILED_QUERY_STATUSES = new Set(["Failed", "Cancelled", "Timeout"]);
+// documentation, CloudWatch returns Failed/Cancelled/Timeout/Unknown as an ordinary HTTP 200 (no
+// thrown exception -- mapAwsError/awsErrorKind never runs), so without this check a failed query is
+// structurally identical to isEmptyAwsQueryResults' Complete-with-0-rows success shape. "Unknown" is
+// the SDK's catch-all for a query whose true status could not be determined -- equally untrustworthy
+// as an explicit failure, not a success. Must be checked BEFORE treating a result as empty-success or
+// as in-flight (CodeRabbit, PR #560: Unknown was missing from the initial SIO-1329 fix).
+const AWS_FAILED_QUERY_STATUSES = new Set(["Failed", "Cancelled", "Timeout", "Unknown"]);
 export function isFailedAwsQueryResults(content: unknown): boolean {
 	const parsed = parseAwsQueryResults(content);
 	return parsed !== null && AWS_FAILED_QUERY_STATUSES.has(parsed.status);
@@ -889,9 +892,9 @@ export function recordResult(
 			state.awsEmptyQueryResults = 0;
 			return;
 		}
-		// SIO-1329: a Failed/Cancelled/Timeout status is a normal HTTP 200 (no thrown exception),
-		// so it must be checked BEFORE the empty-success/in-flight branches below -- otherwise it
-		// falls into the `!isInFlightAwsQueryResults` else-branch and silently RESETS
+		// SIO-1329: a Failed/Cancelled/Timeout/Unknown status is a normal HTTP 200 (no thrown
+		// exception), so it must be checked BEFORE the empty-success/in-flight branches below --
+		// otherwise it falls into the `!isInFlightAwsQueryResults` else-branch and silently RESETS
 		// awsEmptyQueryResults, erasing a genuine 0-row streak's progress toward the widen advice
 		// while emitting no signal that the query never produced trustworthy data at all.
 		if (isFailedAwsQueryResults(content)) {
