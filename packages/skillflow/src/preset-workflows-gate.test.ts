@@ -22,9 +22,11 @@ function isAgentDir(dir: string): boolean {
 
 function listDirs(dir: string): string[] {
 	if (!existsSync(dir) || !statSync(dir).isDirectory()) return [];
-	return readdirSync(dir)
-		.map((entry) => join(dir, entry))
-		.filter((p) => statSync(p).isDirectory());
+	// withFileTypes classifies entries without a per-entry statSync, so a
+	// dangling symlink under agents/ cannot throw ENOENT out of the gate suite.
+	return readdirSync(dir, { withFileTypes: true })
+		.filter((entry) => entry.isDirectory())
+		.map((entry) => join(dir, entry.name));
 }
 
 // Root agents (agents/<name>) plus one nesting level of sub-agents
@@ -106,9 +108,15 @@ describe("the gate catches broken workflows (red fixtures)", () => {
 		}
 	}
 
-	test("malformed YAML throws at load (the agent-boot failure class)", () => {
+	test("invalid workflow definition throws at load (the agent-boot failure class)", () => {
+		// valid YAML, schema violation: steps violates WorkflowSchema's .min(1)
 		const dir = tempAgentDir("name: broken\nversion: 0.1.0\ndescription: no steps\nsteps: []\n");
 		expect(() => loadWorkflows(dir)).toThrow(/fixture\.yaml/);
+	});
+
+	test("unparseable YAML throws at load", () => {
+		const dir = tempAgentDir("name: [unclosed\n\tsteps: :::\n");
+		expect(() => loadWorkflows(dir)).toThrow();
 	});
 
 	test("undeclared template reference throws in dry run", async () => {
