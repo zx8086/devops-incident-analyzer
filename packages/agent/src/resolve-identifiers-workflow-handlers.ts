@@ -67,6 +67,15 @@ export interface MultipliedBranch {
 	error?: string;
 }
 
+// Per-branch payload bound for the multiplied envelope (CodeRabbit on PR #575).
+// Legitimate discovery responses are tiny (size:0 aggs, limit-50 lists); a
+// branch beyond this is pathological (e.g. a misrouted full-hits response).
+// Truncating the string would silently corrupt the JSON the assemble parsers
+// read, so an oversized branch becomes a FAILED branch instead -- it lands in
+// unresolvedDeployments/unresolvedEstates as inconclusive coverage (SIO-1328),
+// never as silently-partial data.
+export const MAX_BRANCH_RAW_BYTES = 1_048_576;
+
 // YAML `with:` values are strings by schema; real tools take typed args. The
 // convention (mirror of skillFlowToWorkflowDef's stringifySkillFlowInput):
 // each value is JSON-parsed when it parses ("500" -> 500, "true" -> true),
@@ -144,9 +153,18 @@ export async function runResolvePreset(
 					);
 					const branches: MultipliedBranch[] = settled.map((r, i) => {
 						const target = targets[i] ?? "";
-						return r.status === "fulfilled"
-							? { target, ok: true, raw: normalizeToolContent(r.value) }
-							: { target, ok: false, error: r.reason instanceof Error ? r.reason.message : String(r.reason) };
+						if (r.status !== "fulfilled") {
+							return { target, ok: false, error: r.reason instanceof Error ? r.reason.message : String(r.reason) };
+						}
+						const branchRaw = normalizeToolContent(r.value);
+						if (branchRaw.length > MAX_BRANCH_RAW_BYTES) {
+							return {
+								target,
+								ok: false,
+								error: `branch payload ${branchRaw.length} bytes exceeds ${MAX_BRANCH_RAW_BYTES}; treating coverage as inconclusive`,
+							};
+						}
+						return { target, ok: true, raw: branchRaw };
 					});
 					return { raw: JSON.stringify({ branches }) };
 				}

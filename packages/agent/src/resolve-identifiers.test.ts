@@ -1575,6 +1575,18 @@ describe("SIO-1354 elastic/aws multiplied-step preset parity", () => {
 		expect(preset?.aws).toEqual(legacy?.aws);
 	});
 
+	// CodeRabbit on PR #575: an oversized multiplied-branch payload must degrade to
+	// a FAILED branch (inconclusive coverage), never silently-truncated JSON.
+	test("aws: an oversized branch payload becomes unresolved coverage on the preset path", async () => {
+		const huge = JSON.stringify({
+			logGroups: [{ logGroupName: `/ecs/order-service-${"x".repeat(1_100_000)}` }],
+		});
+		toolRegistry.aws = [{ name: "aws_logs_describe_log_groups", invoke: async () => huge }];
+		process.env.RESOLVE_IDENTIFIERS_PRESETS_ENABLED = "true";
+		const preset = await resolveIdentifiers(makeState({ targetDataSources: ["aws"], awsTargetEstates: ["eu-oit-prd"] }));
+		expect(preset.resolvedIdentifiers?.aws).toEqual({ logGroups: [], unresolvedEstates: ["eu-oit-prd"] });
+	});
+
 	test("aws: no target estates skips the probe cleanly on both paths", async () => {
 		toolRegistry.aws = [
 			{
