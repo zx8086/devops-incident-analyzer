@@ -100,6 +100,72 @@ describe("extractAtlassianFindings", () => {
 	});
 });
 
+// SIO-1338: findLinkedIncidents' own configWarning (SIO-1184 dead-project config, SIO-1337
+// pagination truncation) was being discarded here -- the raw JSON carried it, but nothing
+// downstream of this extractor (the findings card, the aggregator prompt context) could see it.
+describe("extractAtlassianFindings configWarning propagation (SIO-1338)", () => {
+	test("propagates configWarning alongside linkedIssues", () => {
+		const findings = extractAtlassianFindings([
+			{
+				toolName: "findLinkedIncidents",
+				rawJson: {
+					service: "orders-service",
+					issues: [{ key: "DEVOPS-1", summary: "x", status: "Open" }],
+					configWarning: "More than 1 incidents matched within 30d; results were truncated to the requested limit.",
+				},
+			},
+		]);
+		expect(findings.linkedIssues).toHaveLength(1);
+		expect(findings.configWarning).toBe(
+			"More than 1 incidents matched within 30d; results were truncated to the requested limit.",
+		);
+	});
+
+	test("propagates configWarning even when linkedIssues is empty", () => {
+		const findings = extractAtlassianFindings([
+			{
+				toolName: "findLinkedIncidents",
+				rawJson: {
+					service: "orders-service",
+					issues: [],
+					configWarning: "Configured incident project(s) INC do not exist on this Jira site.",
+				},
+			},
+		]);
+		expect(findings.linkedIssues).toBeUndefined();
+		expect(findings.configWarning).toBe("Configured incident project(s) INC do not exist on this Jira site.");
+	});
+
+	test("dedupes and joins configWarning across multiple calls", () => {
+		const findings = extractAtlassianFindings([
+			{
+				toolName: "findLinkedIncidents",
+				rawJson: { service: "a", issues: [{ key: "A-1", summary: "a", status: "Open" }], configWarning: "warn-a" },
+			},
+			{
+				toolName: "findLinkedIncidents",
+				rawJson: { service: "b", issues: [{ key: "B-1", summary: "b", status: "Open" }], configWarning: "warn-b" },
+			},
+			// Same warning text repeated (e.g. two calls hitting the same truncation) must not duplicate.
+			{
+				toolName: "findLinkedIncidents",
+				rawJson: { service: "a", issues: [{ key: "A-2", summary: "a2", status: "Open" }], configWarning: "warn-a" },
+			},
+		]);
+		expect(findings.configWarning).toBe("warn-a warn-b");
+	});
+
+	test("omits configWarning entirely when no call set it", () => {
+		const findings = extractAtlassianFindings([
+			{
+				toolName: "findLinkedIncidents",
+				rawJson: { service: "a", issues: [{ key: "A-1", summary: "a", status: "Open" }] },
+			},
+		]);
+		expect(findings.configWarning).toBeUndefined();
+	});
+});
+
 describe("extractAtlassianFindings focus scoping (SIO-1030)", () => {
 	const issues = (rows: Array<Record<string, unknown>>): ToolOutput => ({
 		toolName: "findLinkedIncidents",

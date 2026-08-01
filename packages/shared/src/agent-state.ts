@@ -411,6 +411,12 @@ export type AtlassianLinkedIssue = z.infer<typeof AtlassianLinkedIssueSchema>;
 
 export const AtlassianFindingsSchema = z.object({
 	linkedIssues: z.array(AtlassianLinkedIssueSchema).optional(),
+	// SIO-1338: propagated from findLinkedIncidents' own configWarning (SIO-1184 dead-project
+	// config, SIO-1337 pagination truncation) so the report-visible card and aggregator prompt
+	// context can surface it -- previously the composer tool set this field but the extractor
+	// discarded it, leaving the warning reachable only if the LLM happened to notice it in the
+	// raw tool JSON.
+	configWarning: z.string().optional(),
 });
 export type AtlassianFindings = z.infer<typeof AtlassianFindingsSchema>;
 

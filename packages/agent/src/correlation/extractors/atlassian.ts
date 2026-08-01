@@ -13,9 +13,13 @@ import { matchesFocus } from "../focus-match.ts";
 // SIO-1244: capture the envelope's `service` -- the focus-derived term the sub-agent
 // actually searched with (OutputSchema in find-linked-incidents.ts). It was being
 // discarded, which left the per-issue summary match below standing alone.
+// SIO-1338: capture `configWarning` too (SIO-1184 dead-project config, SIO-1337 pagination
+// truncation) -- previously discarded here, leaving the composer's own warning unreachable by
+// anything downstream of the raw tool JSON.
 const EnvelopeSchema = z.object({
 	service: z.string().optional(),
 	issues: z.array(z.unknown()).optional(),
+	configWarning: z.string().optional(),
 });
 
 // SIO-1030: focusServices scopes linked incidents to the incident under
@@ -44,10 +48,15 @@ const EnvelopeSchema = z.object({
 // over `key + summary` so a ticket naming the service in either one survives.
 export function extractAtlassianFindings(outputs: ToolOutput[], focusServices: string[] = []): AtlassianFindings {
 	const linkedIssues: AtlassianLinkedIssue[] = [];
+	// SIO-1338: multiple findLinkedIncidents calls in one turn (one per probed service) can each
+	// carry their own configWarning -- collect and dedupe rather than letting the last call win,
+	// mirroring the space-join composition the composer tool itself uses (SIO-1337).
+	const configWarnings = new Set<string>();
 	for (const o of outputs) {
 		if (o.toolName !== "findLinkedIncidents") continue;
 		const env = EnvelopeSchema.safeParse(o.rawJson);
 		if (!env.success) continue;
+		if (env.data.configWarning) configWarnings.add(env.data.configWarning);
 		const queriedService = env.data.service ?? "";
 		const envelopeInFocus = queriedService.length > 0 && matchesFocus(queriedService, focusServices);
 		for (const raw of env.data.issues ?? []) {
@@ -57,5 +66,10 @@ export function extractAtlassianFindings(outputs: ToolOutput[], focusServices: s
 			linkedIssues.push(parsed.data);
 		}
 	}
-	return linkedIssues.length > 0 ? { linkedIssues } : {};
+	const configWarning = configWarnings.size > 0 ? [...configWarnings].join(" ") : undefined;
+	if (linkedIssues.length === 0 && !configWarning) return {};
+	return {
+		...(linkedIssues.length > 0 ? { linkedIssues } : {}),
+		...(configWarning ? { configWarning } : {}),
+	};
 }
