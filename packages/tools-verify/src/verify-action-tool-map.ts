@@ -1,4 +1,4 @@
-// scripts/verify-action-tool-map.ts
+// src/verify-action-tool-map.ts
 // SIO-1368: gitagent tool YAMLs declare tool_mapping.action_tool_map -- literal MCP tool
 // names per action. packages/agent/src/sub-agent.ts's orderByDeclaration() intersects these
 // against the live connected MCP server's tools/list and silently drops any name that
@@ -17,6 +17,7 @@
 // reason: they are served by the separate knowledge-graph MCP server, never by elastic-iac's
 // own tools/list, so absence there is by design (see the classifyMissing comments below).
 
+import { fileURLToPath } from "node:url";
 import { getAllActionToolNames, loadAgent, type ToolDefinition } from "@devops-agent/gitagent-bridge";
 import { createCachedServerFactory } from "@devops-agent/shared";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -25,7 +26,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 // `bun run --filter` executes with cwd set to this package's directory, not the repo root, so
 // agent YAML paths are resolved relative to this file instead of assuming a repo-root cwd.
-const REPO_ROOT = new URL("../../../", import.meta.url).pathname;
+// fileURLToPath (not URL.pathname) so a checkout path containing spaces or other characters
+// needing percent-encoding still resolves to a real, decoded filesystem path.
+const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 interface ServerAdapter {
 	mcpServer: string;
@@ -249,6 +252,10 @@ async function main() {
 	const adapterByServer = new Map(adapters.map((a) => [a.mcpServer, a]));
 	const diagnostics: Diagnostic[] = [];
 	const skipReasonCounts = new Map<string, number>();
+	// A YAML whose mcp_server has no adapter here would otherwise silently skip verification
+	// (0 names checked, no diagnostic, exit 0) -- tracked separately and treated as a hard
+	// failure below so a new datasource YAML can never pass by going unchecked.
+	const unverified: string[] = [];
 	let totalChecked = 0;
 
 	for (const { toolDef } of allTools) {
@@ -256,7 +263,7 @@ async function main() {
 		if (!server) continue;
 		const adapter = adapterByServer.get(server);
 		if (!adapter) {
-			console.warn(`WARN: ${toolDef.name} declares mcp_server "${server}" with no adapter -- skipping`);
+			unverified.push(`${toolDef.name} (mcp_server "${server}")`);
 			continue;
 		}
 
@@ -278,8 +285,9 @@ async function main() {
 	}
 
 	// getAllActionToolNames is the same union-of-all-actions helper sub-agent.ts's
-	// orderByDeclaration relies on -- included here only as a sanity cross-check that the
-	// per-action loop above covers the same names getAllActionToolNames would report.
+	// orderByDeclaration relies on. This total is informational only -- it dedupes names
+	// within each tool definition (the per-action loop above counts every occurrence) and
+	// includes YAMLs that had no adapter, so it is not a cross-check against totalChecked.
 	const totalDeclared = allTools.reduce((sum, { toolDef }) => sum + getAllActionToolNames(toolDef).length, 0);
 	const totalSkipped = [...skipReasonCounts.values()].reduce((sum, n) => sum + n, 0);
 
@@ -289,6 +297,15 @@ async function main() {
 		console.log(`  ${count}x: ${reason}`);
 	}
 	console.log(`(${totalDeclared} total unique declared names across ${allTools.length} tool definitions.)`);
+
+	if (unverified.length > 0) {
+		console.error(`\n${unverified.length} tool definition(s) have no adapter and were never verified:\n`);
+		for (const name of unverified) {
+			console.error(`  ${name}`);
+		}
+		console.error("\nAdd an adapter in buildAdapters() for each mcp_server listed above.");
+		process.exit(1);
+	}
 
 	if (diagnostics.length > 0) {
 		console.error(`\n${diagnostics.length} action_tool_map name(s) not found in the live MCP server tool list:\n`);

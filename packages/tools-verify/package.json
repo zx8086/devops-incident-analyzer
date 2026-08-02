@@ -5,6 +5,7 @@
 	"main": "src/verify-action-tool-map.ts",
 	"scripts": {
 		"verify": "bun run src/verify-action-tool-map.ts",
+		"test": "echo 'no unit tests -- correctness is exercised live by `bun run tools:verify`' && exit 0",
 		"typecheck": "bunx tsc --noEmit"
 	},
 	"dependencies": {
