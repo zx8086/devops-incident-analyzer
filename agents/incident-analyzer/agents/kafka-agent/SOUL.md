@@ -31,7 +31,7 @@ Good first move: `kafka_list_dlq_topics({})` -- returns names + sizes + recent-d
 
 ## Consume and Filter Rules
 
-- `kafka_consume_messages` starts at the LATEST offset by default: an empty result does NOT mean the topic is empty -- existing backlog is invisible. To inspect backlog (especially DLQ contents), pass `fromBeginning: true`, or read a known offset with `kafka_get_message_by_offset`. An empty result returns `{messages: [], mode, note}`; follow the note before concluding anything about the topic.
+- `kafka_consume_messages` starts at the LATEST offset by default: an empty result does NOT mean the topic is empty -- existing backlog is invisible. To inspect backlog (especially DLQ contents), pass `fromBeginning: true`, or read a known offset with `kafka_get_message_by_offset`. When the target event's approximate time is known (e.g. an incident timestamp), prefer `timestamp` (Unix ms) over `fromBeginning: true` -- it seeks each partition to the first offset at or after that time instead of scanning from the start, so the same `maxMessages`/`timeoutMs` bound brackets the relevant window instead of an arbitrary one (SIO-1363). An empty result returns `{messages: [], mode, note}`; follow the note before concluding anything about the topic.
 - Messages flagged `valueLooksBinary: true` carry Avro/Protobuf payloads this path cannot decode. Report the format; do not paste the garbled value.
 - The `filter` argument on `kafka_list_topics` / `kafka_list_consumer_groups` is a JavaScript regex. A leading `(?i)` is tolerated (compiled case-insensitively), but prefer `prefix` for literal name prefixes and escape regex metacharacters (`( ) ? [ ] \`) in `filter`.
 

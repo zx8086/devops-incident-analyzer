@@ -163,6 +163,36 @@ const DLQ_PATTERNS = [/-dlq$/i, /^dlt-/i, /-dead-letter$/i, /^dead-letter-/i, /\
 // Number of DLQ topics sampled concurrently per batch to avoid overloading brokers.
 const DLQ_PARALLEL_BATCH_SIZE = 20;
 
+// SIO-1363: same per-partition listOffsets shape as getTopicOffsets, extracted
+// so consumeMessages can seed a manual-mode stream at a timestamp instead of
+// scanning from the earliest/latest sentinel.
+async function getPartitionOffsetsAtTimestamp(
+	admin: Admin,
+	topicName: string,
+	timestamp: number,
+): Promise<Array<{ topic: string; partition: number; offset: bigint }>> {
+	const ts = BigInt(timestamp);
+	const partitions = await getPartitionIndices(admin, topicName);
+
+	const result = await admin.listOffsets({
+		topics: [
+			{
+				name: topicName,
+				partitions: partitions.map((i) => ({ partitionIndex: i, timestamp: ts })),
+			},
+		],
+	});
+
+	const topicResult = result.find((t) => t.name === topicName);
+	if (!topicResult) return [];
+
+	return topicResult.partitions.map((p) => ({
+		topic: topicName,
+		partition: p.partitionIndex,
+		offset: p.offset,
+	}));
+}
+
 // Duration of the sampling window used to compute recentDelta. Kept well under
 // the kafka-mcp client's 30s defaultToolTimeout (mcp-bridge.ts KAFKA_TOOL_TIMEOUT_DEFAULT_MS)
 // so the sleep plus the listTopics()/two sampleDlqOffsets() round trips it wraps
@@ -189,6 +219,10 @@ export interface ConsumeMessagesOptions {
 	maxMessages: number;
 	timeoutMs: number;
 	fromBeginning?: boolean;
+	// SIO-1363: Unix ms. Seeks each partition to the first offset whose broker
+	// timestamp is >= this value instead of starting at earliest/latest. Ignored
+	// when fromBeginning is true (fromBeginning takes precedence).
+	timestamp?: number;
 }
 
 export interface ProduceMessageInput {
@@ -596,22 +630,41 @@ export class KafkaService {
 				topic: options.topic,
 				maxMessages: options.maxMessages,
 				timeoutMs: options.timeoutMs,
+				timestamp: options.timestamp ?? null,
 			},
 			"Consuming messages",
 		);
+
+		// SIO-1363: a timestamp seek is computed before the consumer is opened, same
+		// two-step shape as getMessageByOffset (bounds via withAdmin, then a separate
+		// createConsumer/consume call). fromBeginning takes precedence when both are set.
+		const useTimestampSeek = options.timestamp !== undefined && !options.fromBeginning;
+		const seekOffsets = useTimestampSeek
+			? await this.clientManager.withAdmin((admin) =>
+					getPartitionOffsetsAtTimestamp(admin, options.topic, options.timestamp as number),
+				)
+			: null;
+
 		const groupId = `mcp-consume-${crypto.randomUUID()}`;
 		const consumer = await this.clientManager.createConsumer(groupId);
 		const messages: FormattedMessage[] = [];
 		let timedOut = false;
 
 		try {
-			const mode = options.fromBeginning ? "earliest" : "latest";
-			const stream = await consumer.consume({
-				topics: [options.topic],
-				mode,
-				autocommit: false,
-				maxFetches: 1,
-			});
+			const stream = seekOffsets
+				? await consumer.consume({
+						topics: [options.topic],
+						offsets: seekOffsets,
+						mode: "manual",
+						autocommit: false,
+						maxFetches: 1,
+					})
+				: await consumer.consume({
+						topics: [options.topic],
+						mode: options.fromBeginning ? "earliest" : "latest",
+						autocommit: false,
+						maxFetches: 1,
+					});
 
 			// SIO-699: external timer terminates the for-await when no messages arrive.
 			// The previous Date.now() deadline check only fired AFTER pushing a message,

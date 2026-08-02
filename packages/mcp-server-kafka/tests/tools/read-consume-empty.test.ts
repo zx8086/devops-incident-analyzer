@@ -54,6 +54,43 @@ describe("consumeMessages op empty-result annotation (SIO-1159)", () => {
 	});
 });
 
+// SIO-1363: a timestamp-seeded scan gets its own "seek" mode and a note that names
+// it a stronger negative than fromBeginning/latest, while still flagging the
+// maxMessages/timeoutMs bound.
+describe("consumeMessages op timestamp-seek annotation (SIO-1363)", () => {
+	test("empty seek-mode result names the timestamp and the bounded-not-exhaustive caveat", async () => {
+		const result = await consumeMessages(serviceReturning([]), config, {
+			topic: "mendix-customer-assignments",
+			timestamp: 1753863987855,
+		});
+		const annotated = result as { mode: string; note: string };
+		expect(annotated.mode).toBe("seek");
+		expect(annotated.note).toContain("1753863987855");
+		expect(annotated.note).toContain("kafka_get_topic_offsets");
+		expect(annotated.note).not.toContain("LATEST offset");
+	});
+
+	test("fromBeginning takes precedence over timestamp in mode derivation", async () => {
+		const result = await consumeMessages(serviceReturning([]), config, {
+			topic: "t",
+			fromBeginning: true,
+			timestamp: 1753863987855,
+		});
+		const annotated = result as { mode: string };
+		expect(annotated.mode).toBe("earliest");
+	});
+
+	test("non-empty seek-mode results that completed on their own keep the bare array shape", async () => {
+		const msg = { topic: "t", partition: 0, offset: "1000", key: null, value: "{}", timestamp: "0", headers: {} };
+		const result = await consumeMessages(serviceReturning([msg], false), config, {
+			topic: "t",
+			timestamp: 1753863987855,
+		});
+		expect(Array.isArray(result)).toBe(true);
+		expect(result).toEqual([msg]);
+	});
+});
+
 // SIO-1335: a batch cut short by timeoutMs before reaching maxMessages is just as
 // ambiguous as an empty result -- annotate it so a bounded scan (SIO-1201) can tell
 // "confirmed absent in this window" apart from "cut short, unconfirmed".
