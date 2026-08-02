@@ -36,8 +36,9 @@ import {
 
 // One Agent Memory user per agent (SIO-938). Bindings are the incident agent's.
 const INCIDENT_USER = "incident-analyzer";
-// A recall session id is required by the ref; a filter-only search across all
-// sessions ignores it, so any stable value works.
+// A recall session id is required by the ref. SIO-1360: the service validates that the
+// session EXISTS (even for all-session filter-only searches), so recallClient() creates
+// it on first use; the id itself is otherwise arbitrary but must stay stable.
 const REBUILD_SESSION = "kg-rebuild";
 
 interface RebuildOptions {
@@ -172,16 +173,35 @@ export function rootCauseFromAnnotations(a: AnnotationMap): RootCauseRecord | nu
 	};
 }
 
+// SIO-1360: the service validates the recall session's existence even for filter-only
+// all-session searches (404 SESSION_NOT_FOUND otherwise), so the kg-rebuild session must
+// be created before the first search. Memoized: user+session ensure once per run.
+let recallClientPromise: Promise<ReturnType<typeof createFetchAgentMemoryClient>> | null = null;
+
+function recallClient(config: ReturnType<typeof resolveAgentMemoryConfig>) {
+	if (!recallClientPromise) {
+		recallClientPromise = (async () => {
+			const client = createFetchAgentMemoryClient(config);
+			await client.ensureUser(INCIDENT_USER, INCIDENT_USER);
+			await client.ensureSession(INCIDENT_USER, REBUILD_SESSION, {
+				metadata: { purpose: "knowledge-graph rebuild recall session (SIO-1100/1103)" },
+			});
+			return client;
+		})();
+	}
+	return recallClientPromise;
+}
+
 // Fetch every fact of one kind (deterministic filter-only recall, SIO-998 -- empty
-// query so the annotation filter is authoritative with no top-k truncation). Returns []
-// when the agent-memory backend is unselected/disabled.
+// query so the annotation filter is authoritative; SIO-1359 sends the exhaustive
+// relevant_k ceiling). Returns [] when the agent-memory backend is unselected/disabled.
 async function fetchFactsByKind(kind: string): Promise<AnnotationMap[]> {
 	// resolveAgentMemoryConfig throws if AGENT_MEMORY_BASE_URL is unset; only call it
 	// when the agent-memory backend is actually selected.
 	if (process.env.LIVE_MEMORY_BACKEND !== "agent-memory") return [];
 	const config = resolveAgentMemoryConfig();
 	if (!config.enabled) return [];
-	const client = createFetchAgentMemoryClient(config);
+	const client = await recallClient(config);
 	const ref: AgentMemoryUserRef = { userId: INCIDENT_USER, sessionId: REBUILD_SESSION };
 	const hits = await client.searchMemory(ref, "", { allSessions: true, annotations: { kind } });
 	return hits.map((h) => h.annotations ?? {});

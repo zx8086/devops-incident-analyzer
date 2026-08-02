@@ -97,17 +97,21 @@ function isWalCorruptionError(message: string): boolean {
 	return WAL_CORRUPTION_PATTERNS.some((pattern) => pattern.test(message));
 }
 
-// SIO-1339: a second process opening this store while another process already
-// holds lbug's exclusive file lock does not fail with a clean lock-denied
-// error -- it surfaces as this IO exception with a nonsense byte position
-// (live-observed: "position: 4901969379328" against a 92MB file; "numBytesRead:
-// 0" -- nothing was actually read). This is NOT WAL corruption: the WAL is
-// healthy, so it must never be quarantined, and retrying is pointless while the
-// lock is still held.
-const CONCURRENT_OPEN_ERROR_PATTERN = /IO exception: Cannot read from file.*numBytesRead: 0/i;
+// SIO-967 (proven live): a second OS process opening a store whose exclusive file
+// lock is held by another process fails with this clean, distinct message.
+const LOCK_HELD_ERROR_PATTERN = /could not set lock on file/i;
 
-function isConcurrentOpenError(message: string): boolean {
-	return CONCURRENT_OPEN_ERROR_PATTERN.test(message);
+// SIO-1339 originally read this shape as a concurrent open; SIO-1361 disproved that
+// live (zero lock holders per lsof, byte-identical failure on a COPY of the file,
+// with and without its WAL, read-only and read-write): it is persistent BASE-FILE
+// damage -- the store's own metadata references a page far beyond EOF (live:
+// "position: 4901969379328" in a 92MB file; "numBytesRead: 0" -- nothing was read).
+// NOT WAL corruption: quarantining the healthy WAL cannot help and destroys data,
+// and retrying fails identically. The only recovery is `knowledge-graph:rebuild`.
+const BASE_FILE_DAMAGE_ERROR_PATTERN = /IO exception: Cannot read from file.*numBytesRead: 0/i;
+
+function isBaseFileDamageError(message: string): boolean {
+	return BASE_FILE_DAMAGE_ERROR_PATTERN.test(message);
 }
 
 // SIO-1236: close() is a deliberate no-op (SIO-954 -- lbug's native finalizer
@@ -226,14 +230,25 @@ export class LadybugStore implements GraphStore {
 			return await this.newDatabase(lbug);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			if (isConcurrentOpenError(message)) {
+			if (LOCK_HELD_ERROR_PATTERN.test(message)) {
 				logger.error(
 					{ path: this.path, error: message },
-					"lbug store open failed: another process likely holds the exclusive lock on this store",
+					"lbug store open failed: another process holds the exclusive lock on this store",
 				);
 				throw new Error(
-					`Knowledge-graph store at ${this.path} could not be opened: another process appears to already ` +
-						`hold lbug's exclusive file lock on this store (original error: ${message})`,
+					`Knowledge-graph store at ${this.path} could not be opened: another process holds lbug's ` +
+						`exclusive file lock on this store (original error: ${message})`,
+				);
+			}
+			if (isBaseFileDamageError(message)) {
+				logger.error(
+					{ path: this.path, error: message },
+					"lbug store open failed: base file appears corrupted (unreadable page reference); run knowledge-graph:rebuild",
+				);
+				throw new Error(
+					`Knowledge-graph store at ${this.path} could not be opened: the base file appears corrupted ` +
+						`(unreadable page reference; SIO-1361). Rebuild it with \`bun run knowledge-graph:rebuild\` ` +
+						`(original error: ${message})`,
 				);
 			}
 			if (!isWalCorruptionError(message)) throw error;
