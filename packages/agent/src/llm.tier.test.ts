@@ -146,12 +146,23 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 
 		// Prove independence structurally: even after mutating the specialist's manifest to a
 		// model the light tier has never heard of, the light tier's resolution is unchanged --
-		// it never reads agent.subAgents at all.
-		if (elasticAgent?.manifest.model) {
-			elasticAgent.manifest.model.preferred = "claude-opus-5";
+		// it never reads agent.subAgents at all. `agent` is shared across every test in this
+		// file, so the mutation must be undone even on assertion failure, or a later test
+		// reading elastic-agent's preferred model would see this test's leaked state.
+		const model = elasticAgent?.manifest.model;
+		expect(model).toBeDefined();
+		const originalPreferred = model?.preferred as string;
+		try {
+			if (model) {
+				model.preferred = "claude-opus-5";
+			}
+			const resolvedAfterMutation = resolveRoleModelConfig("classifier", agent);
+			expect(resolvedAfterMutation.modelConfig?.preferred).toBe("claude-haiku-4-5");
+		} finally {
+			if (model) {
+				model.preferred = originalPreferred;
+			}
 		}
-		const resolvedAfterMutation = resolveRoleModelConfig("classifier", agent);
-		expect(resolvedAfterMutation.modelConfig?.preferred).toBe("claude-haiku-4-5");
 	});
 
 	// SIO-1367: sub-agents moved claude-sonnet-4-6 -> claude-haiku-4-5.
