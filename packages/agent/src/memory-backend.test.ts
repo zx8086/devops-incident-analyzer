@@ -128,21 +128,21 @@ function makeFakeClient(searchResult: string[] = []): { client: AgentMemoryClien
 }
 
 // SIO-1340: every getLogger() call returns a pino child logger sharing one prototype, so spying on
-// the prototype's `info` method captures a call from ANY logger instance (including the module-scoped
+// the prototype's method captures a call from ANY logger instance (including the module-scoped
 // `logger` inside memory-backend.ts, which this test file cannot import directly). Restores the
 // original in the returned `restore()` so the spy never leaks into sibling tests.
-function spyOnLoggerInfo(): { calls: unknown[][]; restore: () => void } {
+function spyOnLoggerMethod(method: "info" | "warn"): { calls: unknown[][]; restore: () => void } {
 	const proto = Object.getPrototypeOf(getLogger("spy-probe"));
 	const calls: unknown[][] = [];
-	const orig = proto.info;
-	proto.info = function (this: unknown, ...args: unknown[]) {
+	const orig = proto[method];
+	proto[method] = function (this: unknown, ...args: unknown[]) {
 		calls.push(args);
 		return orig.apply(this, args);
 	};
 	return {
 		calls,
 		restore: () => {
-			proto.info = orig;
+			proto[method] = orig;
 		},
 	};
 }
@@ -562,7 +562,7 @@ describe("recallInFlightFleetUpgrades ID logging (SIO-991/SIO-1340)", () => {
 		};
 		__setAgentMemoryClient(client);
 
-		const spy = spyOnLoggerInfo();
+		const spy = spyOnLoggerMethod("info");
 		try {
 			const result = await recallInFlightFleetUpgrades("elastic-iac");
 			expect(result).toHaveLength(1);
@@ -638,9 +638,23 @@ describe("annotations + metadata (SIO-952)", () => {
 		};
 		__setAgentMemoryClient(client);
 		recordKeyDecision({ requestId: "r1", decision: "scale consumers" });
-		await flushAgentMemory();
+		const warnSpy = spyOnLoggerMethod("warn");
+		try {
+			await flushAgentMemory();
+		} finally {
+			warnSpy.restore();
+		}
 		expect(accepted).toHaveLength(0); // 503 -> nothing accepted yet
 		expect(pendingWriteCount()).toBe(1); // requeued, not dropped
+		// SIO-1364: the service's 503 body is surfaced in the warn -- the service
+		// rejects these requests before its own request logger, so this warn is
+		// the only record of the rejection reason.
+		const warned = warnSpy.calls.find(
+			(args) => args[1] === "agent-memory queue saturated (503); requeued writes for retry",
+		);
+		expect(warned).toBeDefined();
+		const warnFields = (warned?.[0] ?? {}) as { error?: string };
+		expect(warnFields.error).toContain("queue full");
 		// Service recovers; next flush succeeds.
 		throwOn503 = false;
 		await flushAgentMemory();

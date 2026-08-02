@@ -342,7 +342,15 @@ export async function flushAgentMemory(): Promise<void> {
 			const cooldownSeconds = hint.success ? hint.data : DEFAULT_SATURATION_COOLDOWN_SECONDS;
 			saturatedUntil = Date.now() + cooldownSeconds * 1000;
 			logger.warn(
-				{ requeued: sendable.length, retryAfterSeconds: error.retryAfterSeconds, cooldownSeconds },
+				{
+					requeued: sendable.length,
+					retryAfterSeconds: error.retryAfterSeconds,
+					cooldownSeconds,
+					// SIO-1364: surface the service's 503 response body (method, path, and
+					// capacity detail). The service rejects these requests BEFORE its own
+					// request-logging middleware, so this warn is the only record of why.
+					error: error.message,
+				},
 				"agent-memory queue saturated (503); requeued writes for retry",
 			);
 			return;
