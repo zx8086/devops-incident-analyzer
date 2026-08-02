@@ -1,9 +1,12 @@
 // src/telemetry/tracing.ts
-// Bridge to @devops-agent/observability tracing initialization.
-// Tracing is a no-op in tests and when LANGSMITH_API_KEY is missing.
+import { createServerTracing, isTracingActive } from "@devops-agent/shared";
+import { createContextLogger } from "../utils/logger.ts";
 
-export async function initializeTracing(): Promise<void> {
-	// Reserved for OTel/LangSmith wiring later. The other MCP servers also keep
-	// this empty in their initial scaffolding; tracing comes online via env vars
-	// recognized by @devops-agent/observability.
-}
+export { isTracingActive };
+
+export const { initializeTracing, traceToolCall } = createServerTracing({
+	dataSourceId: "aws",
+	projectEnvVar: "AWS_LANGSMITH_PROJECT",
+	defaultProject: "aws-mcp-server",
+	log: createContextLogger("tool"),
+});

@@ -4,11 +4,23 @@
 // AWS Bedrock AgentCore Runtime. Parameterized so any MCP server can use it.
 
 import { createHash, createHmac } from "node:crypto";
-import { createMcpLogger } from "./logger.ts";
+import type { DataSourceId } from "./datasource.ts";
+import { createMcpLogger, getChildLogger } from "./logger.ts";
 import type { IdentityCard } from "./transport/identity.ts";
 import { createProxyReadinessProbe } from "./transport/proxy-readiness.ts";
 
-const logger = createMcpLogger("agentcore-proxy");
+// SIO-1371: dataSourceId + the per-server logger name are both derived from
+// `role` rather than threaded through ProxyConfig -- role already
+// distinguishes "aws-proxy"/"kafka-proxy" 1:1 with the datasource, so this
+// avoids adding a redundant config field callers would have to keep in sync.
+const ROLE_TO_DATASOURCE: Record<"aws-proxy" | "kafka-proxy", DataSourceId> = {
+	"aws-proxy": "aws",
+	"kafka-proxy": "kafka",
+};
+const ROLE_TO_SERVICE_NAME: Record<"aws-proxy" | "kafka-proxy", string> = {
+	"aws-proxy": "aws-mcp-server",
+	"kafka-proxy": "kafka-mcp-server",
+};
 
 // SIO-737: retry policy for transient AgentCore JSON-RPC server errors.
 // Codes in the JSON-RPC 2.0 -32099..-32000 "implementation-defined
@@ -390,6 +402,13 @@ export async function startAgentCoreProxy(
 	identityCard: IdentityCard,
 	role: "aws-proxy" | "kafka-proxy",
 ): Promise<AgentCoreProxyHandle> {
+	// SIO-1371: per-instance logger (not module-scope) so `service` reads the
+	// real per-server name -- matches the bootstrap path's createMcpLogger(serviceName)
+	// convention instead of the previous fixed "agentcore-proxy" for every role.
+	const dataSourceId = ROLE_TO_DATASOURCE[role];
+	const baseLogger = createMcpLogger(ROLE_TO_SERVICE_NAME[role]);
+	const logger = getChildLogger(baseLogger, "tool");
+
 	// Derive URL pieces from runtimeArn + region. Equivalent to the old
 	// readProxyConfig but using the explicitly-passed config.
 	const encodedArn = encodeURIComponent(config.runtimeArn);
@@ -458,13 +477,18 @@ export async function startAgentCoreProxy(
 					if (!currentSessionAbort) currentSessionAbort = new AbortController();
 					const sessionAbort = currentSessionAbort;
 
-					// SIO-626: Log tool calls passing through the proxy for observability
+					// SIO-626: Log tool calls passing through the proxy for observability.
+					// SIO-1371: "Tool call started" matches the bootstrap path's
+					// createServerTracing.traceToolCall phrasing (server-tracing-factory.ts).
 					let toolName: string | undefined;
 					try {
 						const parsed = JSON.parse(body);
 						if (parsed.method === "tools/call" && parsed.params?.name) {
 							toolName = parsed.params.name;
-							logger.info({ tool: toolName, id: parsed.id }, `Proxying tool call: ${toolName}`);
+							logger.info(
+								{ tool: toolName, dataSource: dataSourceId, id: parsed.id },
+								`Tool call started: ${toolName}`,
+							);
 						}
 					} catch {
 						// Not valid JSON or not a tool call -- continue silently
@@ -563,7 +587,13 @@ export async function startAgentCoreProxy(
 								const severity = severityForToolStatus(toolStatus);
 								const logFn = severity === "info" ? logger.info.bind(logger) : logger.warn.bind(logger);
 								const httpAbnormal = response.status >= 300;
-								const logFields: Record<string, unknown> = { tool: toolName, status: toolStatus };
+								const duration = Date.now() - requestStart;
+								const logFields: Record<string, unknown> = {
+									tool: toolName,
+									dataSource: dataSourceId,
+									status: toolStatus,
+									duration,
+								};
 								if (httpAbnormal) logFields.httpStatus = response.status;
 								if (jsonRpcCode !== undefined) logFields.jsonRpcCode = jsonRpcCode;
 								if (jsonRpcMessage !== undefined) logFields.jsonRpcMessage = jsonRpcMessage;
@@ -572,13 +602,21 @@ export async function startAgentCoreProxy(
 									logFields.maxAttempts = maxAttempts;
 								}
 								if (retryable && isFinalAttempt) {
-									logFields.gaveUpAfterMs = Date.now() - requestStart;
+									logFields.gaveUpAfterMs = duration;
 								}
 								if (toolStatus === "ok" && jsonRpcAttempt > 1) {
 									logFields.recoveredAfterAttempts = jsonRpcAttempt;
 								}
-								const msgSuffix = httpAbnormal ? `${toolStatus} (http ${response.status})` : toolStatus;
-								logFn(logFields, `Tool call proxied: ${toolName} -> ${msgSuffix}`);
+								// SIO-1371: converge the two most common outcomes onto the bootstrap
+								// path's "Tool call completed"/"Tool call failed" phrasing
+								// (server-tracing-factory.ts); the status/httpStatus/jsonRpcCode
+								// fields already carry the outcome detail, so the message text can
+								// match without losing information.
+								const msg =
+									toolStatus === "ok"
+										? `Tool call completed: ${toolName}`
+										: `Tool call failed: ${toolName} (${httpAbnormal ? `${toolStatus} (http ${response.status})` : toolStatus})`;
+								logFn(logFields, msg);
 							}
 							break;
 						}
@@ -594,6 +632,7 @@ export async function startAgentCoreProxy(
 							if (toolName) {
 								const deadlineFields: Record<string, unknown> = {
 									tool: toolName,
+									dataSource: dataSourceId,
 									status: classifyToolStatus(clonedBody),
 									jsonRpcCode,
 									attempt: jsonRpcAttempt,
@@ -615,6 +654,7 @@ export async function startAgentCoreProxy(
 						if (toolName) {
 							const retryFields: Record<string, unknown> = {
 								tool: toolName,
+								dataSource: dataSourceId,
 								status: classifyToolStatus(clonedBody),
 								jsonRpcCode,
 								attempt: jsonRpcAttempt,
@@ -634,7 +674,7 @@ export async function startAgentCoreProxy(
 						} catch {
 							if (toolName) {
 								logger.warn(
-									{ tool: toolName, attempt: jsonRpcAttempt, reason: "session-reset" },
+									{ tool: toolName, dataSource: dataSourceId, attempt: jsonRpcAttempt, reason: "session-reset" },
 									`Tool call proxied: ${toolName} -> aborted`,
 								);
 							}
