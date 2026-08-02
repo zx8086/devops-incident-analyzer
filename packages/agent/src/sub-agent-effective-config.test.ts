@@ -33,8 +33,12 @@ import { AGENT_NAMES, getSubAgentRecursionLimit } from "./sub-agent.ts";
 // The good run (DEVOPS-1405, 2026-07-25) had the specialists on sonnet-4-6 by INHERITANCE from a
 // root that also read sonnet-4-6. They are now PINNED there while root runs sonnet-5, so the two
 // no longer move together -- deliberate, and the reason both are pinned separately below.
+//
+// SIO-1367: re-derived per this file's own ratchet policy (see header) -- specialists moved
+// claude-sonnet-4-6 -> claude-haiku-4-5 on live probe data (no truncation, faster latency,
+// acceptsTemperature: true). Root is unchanged.
 const EXPECTED_ROOT_MODEL = "claude-sonnet-5";
-const EXPECTED_SPECIALIST_MODEL = "claude-sonnet-4-6";
+const EXPECTED_SPECIALIST_MODEL = "claude-haiku-4-5";
 
 const orchestrator = loadAgent(join(import.meta.dir, "../../../agents/incident-analyzer"));
 

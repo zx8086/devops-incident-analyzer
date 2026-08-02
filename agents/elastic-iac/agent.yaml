@@ -11,8 +11,15 @@ description: >
 # to catch each of them before merge rather than in production.
 model:
   # SIO-1213: upgraded from claude-opus-4-6 / claude-sonnet-4-6
-  preferred: claude-opus-4-8
-  fallback: claude-sonnet-5
+  # SIO-1367: downgraded to claude-haiku-4-5 -- probe data (docs/reference/model-probes/
+  # claude-haiku-4-5.md) showed no truncation at any elastic-iac role budget, faster latency
+  # (p50 1078ms vs opus-4-8's 1882ms), and acceptsTemperature: true so iacDrafter's
+  # temperature: 0.1 etc. actually apply (opus-4-8 silently dropped it). Fallback moved to
+  # claude-sonnet-4-6 (also acceptsTemperature: true) rather than claude-sonnet-5, so a
+  # failover keeps every role's temperature in effect on both legs instead of reintroducing
+  # the SIO-1233 silent-drop class only on the fallback path.
+  preferred: claude-haiku-4-5
+  fallback: claude-sonnet-4-6
 
 # Where the truth lives. The agent reads these on bootstrap.
 repository:

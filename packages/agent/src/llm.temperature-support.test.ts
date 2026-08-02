@@ -61,16 +61,17 @@ describe("buildChatModel via createLlm (SIO-1214)", () => {
 		expect(fallbackOptions).toHaveProperty("temperature");
 	});
 
-	// elastic-iac's manifest prefers claude-opus-4-8 with a claude-sonnet-5 fallback
-	// (SIO-1213): both are in the no-temperature family, so neither build should send it.
-	test("omits temperature for both the Opus 4.8 primary and the Sonnet 5 fallback", () => {
+	// elastic-iac's manifest prefers claude-haiku-4-5 with a claude-sonnet-4-6 fallback
+	// (SIO-1367, was Opus 4.8 / Sonnet 5): both are in the temperature-accepting family, so
+	// both builds should send it -- a failover no longer silently drops iacPlanner's temperature.
+	test("includes temperature for both the Haiku 4.5 primary and the Sonnet 4.6 fallback", () => {
 		createLlm("iacPlanner", "elastic-iac");
-		const primaryOptions = optionsFor("eu.anthropic.claude-opus-4-8");
-		const fallbackOptions = optionsFor("eu.anthropic.claude-sonnet-5");
+		const primaryOptions = optionsFor("eu.anthropic.claude-haiku-4-5-20251001-v1:0");
+		const fallbackOptions = optionsFor("eu.anthropic.claude-sonnet-4-6");
 		expect(primaryOptions).toBeDefined();
 		expect(fallbackOptions).toBeDefined();
-		expect(primaryOptions).not.toHaveProperty("temperature");
-		expect(fallbackOptions).not.toHaveProperty("temperature");
+		expect(primaryOptions).toHaveProperty("temperature");
+		expect(fallbackOptions).toHaveProperty("temperature");
 	});
 
 	// classifier is light-tier by default (SIO-1040) and borrows the elastic-agent
@@ -88,12 +89,16 @@ describe("buildChatModel via createLlm (SIO-1214)", () => {
 // (since the 125b3f9e scaffold) -- which is why flipping one line in the root agent.yaml at
 // SIO-1213 silently moved every specialist onto Sonnet 5.
 describe("subAgent resolves its own manifest model (SIO-1235)", () => {
-	// SIO-1262: sub-agent manifests declare claude-sonnet-4-6 (probed 2026-07-27) with haiku as
-	// FALLBACK. Deliberately NOT sonnet-5: that model has acceptsTemperature: false, so the
-	// manifests' temperature 0.1 would silently stop applying -- and being identical to the root
-	// model it would also make every "resolved from the sub-agent manifest, not the root" assertion
-	// below vacuous.
-	const SUB = "eu.anthropic.claude-sonnet-4-6";
+	// SIO-1367: sub-agent manifests moved claude-sonnet-4-6 -> claude-haiku-4-5 (probed
+	// 2026-08-02: no truncation at the subAgent role's 8192 budget, faster latency,
+	// acceptsTemperature: true so the manifests' temperature 0.1 keeps applying). Deliberately
+	// NOT sonnet-5: that model has acceptsTemperature: false, so temperature 0.1 would silently
+	// stop applying -- and being identical to the root model it would also make every "resolved
+	// from the sub-agent manifest, not the root" assertion below vacuous. Haiku 4.5 differs from
+	// ROOT (sonnet-5) so that property still holds even though it now coincides with the
+	// light tier's own model (see llm.tier.test.ts) -- that coincidence is unrelated: the light
+	// tier resolves from a hardcoded constant, never from any sub-agent manifest.
+	const SUB = "eu.anthropic.claude-haiku-4-5-20251001-v1:0";
 	const ROOT = "eu.anthropic.claude-sonnet-5";
 
 	beforeEach(() => {
@@ -126,7 +131,7 @@ describe("subAgent resolves its own manifest model (SIO-1235)", () => {
 	});
 
 	// temperature: 0.1 is declared in every sub-agent manifest and had NEVER applied, because the
-	// root model (Sonnet 5) has acceptsTemperature: false and llm.ts drops it. Sonnet 4.6 accepts
+	// root model (Sonnet 5) has acceptsTemperature: false and llm.ts drops it. Haiku 4.5 accepts
 	// it (probed), which is a large part of why the sub-agents point there and not at the root model.
 	test("temperature 0.1 from the manifest now actually applies", () => {
 		createLlm("subAgent", "incident-analyzer", "gitlab-agent");
@@ -134,8 +139,9 @@ describe("subAgent resolves its own manifest model (SIO-1235)", () => {
 	});
 
 	// ROLE_OVERRIDES.subAgent.maxTokens wins over the manifest's constraints.max_tokens: 2048,
-	// via `overrides.maxTokens ?? bedrockConfig.maxTokens`. 8192 clears haiku's 4096 floor;
-	// silently inheriting 2048 would truncate long sub-agent answers.
+	// via `overrides.maxTokens ?? bedrockConfig.maxTokens`. 8192 clears haiku's measured 8192
+	// long-form floor (refreshed 2026-08-02, was 4096 before SIO-1225 raised iacPlanner's own
+	// budget); silently inheriting 2048 would truncate long sub-agent answers.
 	test("maxTokens stays 8192 -- the role override beats the manifest's 2048", () => {
 		createLlm("subAgent", "incident-analyzer", "kafka-agent");
 		expect(optionsFor(SUB)).toHaveProperty("maxTokens", 8192);

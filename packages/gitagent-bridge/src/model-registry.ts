@@ -89,6 +89,13 @@ export const MODEL_REGISTRY = {
 		// it emits ~3,900-4,300 output tokens (4,287 at a 8192 cap, 3,874 at 16384) and TRUNCATES at
 		// 4096, where Haiku 4.5 finishes the same report in 3,289 and Opus 4.8 in 3,094. Numbers
 		// come from docs/reference/model-probes/*.md -- keep them in step with those reports.
+		//
+		// REPRODUCIBILITY NOTE (2026-08-02 rerun, not committed as a report to avoid clobbering
+		// the original): contentShapeWithTools measured "string" this run (was "blocks" on the
+		// 2026-07-26 probe) and P4 hit 1/3 prompts (was 2/3). Both P3-with-tools and P4 are
+		// documented as STOCHASTIC (see emitsReasoningContent below) -- kept the more
+		// conservative "blocks" declaration rather than overwriting with the looser result, since
+		// a consumer built for "blocks" tolerates a "string" response but not the reverse.
 		contentShapeWithoutTools: "blocks",
 		contentShapeWithTools: "blocks",
 		observedBlockTypes: ["reasoning", "text"],
@@ -100,6 +107,10 @@ export const MODEL_REGISTRY = {
 		verifiedRegion: "eu-central-1",
 		probeReport: "docs/reference/model-probes/claude-sonnet-5.md",
 	},
+	// REFRESHED 2026-08-02 (was 2026-07-26): longFormMinTokens moved 4096 -> 8192, same cause as
+	// the claude-haiku-4-5 refresh below -- the 2026-07-26 run measured iacPlanner truncating at
+	// its THEN-budget of 2048; SIO-1225 later raised it to 8192, and this rerun reflects that.
+	// All other fields (content shape, reasoning, temperature) matched the prior probe exactly.
 	"claude-opus-4-8": {
 		bedrockId: "eu.anthropic.claude-opus-4-8",
 		acceptsTemperature: false,
@@ -108,14 +119,19 @@ export const MODEL_REGISTRY = {
 		observedBlockTypes: ["text"],
 		emitsReasoningContent: false,
 		observedRawControlCharsInJson: false,
-		longFormMinTokens: 4096,
-		observedLatencyMs: { p50: 1971, max: 41079 },
-		verifiedAt: "2026-07-26",
+		longFormMinTokens: 8192,
+		observedLatencyMs: { p50: 1882, max: 36537 },
+		verifiedAt: "2026-08-02",
 		verifiedRegion: "eu-central-1",
 		probeReport: "docs/reference/model-probes/claude-opus-4-8.md",
 	},
 	// The light tier: borrowed by classifier / gapsJudge / absenceJudge via the elastic-agent
 	// sub-agent manifest, and the incident-analyzer fallback.
+	//
+	// REFRESHED 2026-08-02 (was 2026-07-26): longFormMinTokens moved 4096 -> 8192. NOT a model
+	// capability change -- the 2026-07-26 run measured iacPlanner truncating at its THEN-budget
+	// of 2048 (SIO-1225 later raised it to 8192, and the current run reflects that fixed config).
+	// P6 is deterministic (unlike P3/P4), so this rerun's numbers replace the prior ones outright.
 	"claude-haiku-4-5": {
 		bedrockId: "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
 		acceptsTemperature: true,
@@ -124,9 +140,9 @@ export const MODEL_REGISTRY = {
 		observedBlockTypes: [],
 		emitsReasoningContent: false,
 		observedRawControlCharsInJson: false,
-		longFormMinTokens: 4096,
-		observedLatencyMs: { p50: 983, max: 29020 },
-		verifiedAt: "2026-07-26",
+		longFormMinTokens: 8192,
+		observedLatencyMs: { p50: 1078, max: 27763 },
+		verifiedAt: "2026-08-02",
 		verifiedRegion: "eu-central-1",
 		probeReport: "docs/reference/model-probes/claude-haiku-4-5.md",
 	},
@@ -139,6 +155,8 @@ export const MODEL_REGISTRY = {
 	// WRONG: contentShapeWithTools was "string" (it is "blocks"), observedBlockTypes was [] (it is
 	// ["text"]), and longFormMinTokens was 4096 -- which would have under-provisioned the subAgent
 	// role's 8192. Exactly the class of silent capability assumption SIO-1224 built this gate for.
+	// REFRESHED 2026-08-02 (was 2026-07-27): re-probe confirmed every field unchanged; only
+	// verifiedAt/latency updated.
 	"claude-sonnet-4-6": {
 		bedrockId: "eu.anthropic.claude-sonnet-4-6",
 		acceptsTemperature: true,
@@ -148,10 +166,27 @@ export const MODEL_REGISTRY = {
 		emitsReasoningContent: false,
 		observedRawControlCharsInJson: false,
 		longFormMinTokens: 8192,
-		observedLatencyMs: { p50: 2021, max: 87434 },
-		verifiedAt: "2026-07-27",
+		observedLatencyMs: { p50: 1666, max: 103695 },
+		verifiedAt: "2026-08-02",
 		verifiedRegion: "eu-central-1",
 		probeReport: "docs/reference/model-probes/claude-sonnet-4-6.md",
+	},
+	// Live-probed 2026-08-02, confirmed via `aws bedrock list-inference-profiles` as a real EU
+	// cross-region profile in this account. Unlike Opus 4.8, Opus 5 DOES emit reasoning blocks
+	// (1/3 prompt shapes) -- do not assume "Opus" implies emitsReasoningContent: false.
+	"claude-opus-5": {
+		bedrockId: "eu.anthropic.claude-opus-5",
+		acceptsTemperature: false,
+		contentShapeWithoutTools: "blocks",
+		contentShapeWithTools: "blocks",
+		observedBlockTypes: ["reasoning", "text"],
+		emitsReasoningContent: true,
+		observedRawControlCharsInJson: false,
+		longFormMinTokens: 8192,
+		observedLatencyMs: { p50: 2002, max: 106101 },
+		verifiedAt: "2026-08-02",
+		verifiedRegion: "eu-central-1",
+		probeReport: "docs/reference/model-probes/claude-opus-5.md",
 	},
 	// SIO-872: the valid EU inference profile is ...-4-6-v1; the bare ...-4-6 is not a real
 	// Bedrock id and was rejected at invoke time, silently forcing the fallback.

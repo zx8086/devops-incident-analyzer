@@ -35,8 +35,8 @@ describe("loadAgent(elastic-iac) — GAP dialect", () => {
 			"search-memory",
 		]);
 		expect(agent.manifest.tools).toEqual(["elastic-iac"]);
-		// scalar fallback normalizes to string[]
-		expect(agent.manifest.model?.fallback).toEqual(["claude-sonnet-5"]);
+		// scalar fallback normalizes to string[] (SIO-1367: fallback moved sonnet-5 -> sonnet-4-6)
+		expect(agent.manifest.model?.fallback).toEqual(["claude-sonnet-4-6"]);
 		expect(agent.manifest.repository?.project_id).toBe(82850717);
 		expect(agent.manifest.compliance?.segregation_of_duties?.enforcement).toBe("strict");
 	});
