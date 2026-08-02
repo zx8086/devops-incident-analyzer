@@ -164,6 +164,15 @@ const queue: QueuedWrite[] = [];
 // unboundedly; failures are swallowed (best-effort, never block the agent).
 const FLUSH_THRESHOLD = 25;
 
+// SIO-1364: honor the service's 503 retry_after_seconds hint. While the cooldown
+// is active, threshold- and per-turn flush triggers are skipped (writes keep
+// queueing) so the client stops re-hitting an extraction queue that asked for
+// backoff -- previously every enqueue past the threshold retried immediately.
+// flushAgentMemory() itself stays ungated: teardown calls it directly as the
+// last chance to drain before the session closes.
+const DEFAULT_SATURATION_COOLDOWN_SECONDS = 30;
+let saturatedUntil = 0;
+
 // SIO-952: stamp block kind so recall can filter daily-log noise from durable
 // key-decisions; merge any caller-supplied annotations (e.g. { intent }).
 function factAnnotations(extra?: AnnotationMap): AnnotationMap {
@@ -198,9 +207,11 @@ export function pendingWriteCount(): number {
 // in the process-global queue (Bun runs a package's test files in one process).
 export function __resetMemoryQueue(): void {
 	queue.length = 0;
+	saturatedUntil = 0;
 }
 
 function maybeFlush(): void {
+	if (Date.now() < saturatedUntil) return;
 	if (queue.length >= FLUSH_THRESHOLD) {
 		void flushAgentMemory().catch(() => {
 			// flushAgentMemory already logs; swallow here so enqueue stays sync/safe.
@@ -270,12 +281,19 @@ export async function flushAgentMemory(): Promise<void> {
 			},
 			"flushed agent-memory writes",
 		);
+		saturatedUntil = 0;
 	} catch (error) {
 		if (error instanceof ServiceUnavailableError) {
 			// Requeue (front) and let the next flush/teardown retry. Don't drop.
 			queue.unshift(...batch);
+			// SIO-1364: only a positive finite hint is honored; a missing/garbage
+			// retry-after (NaN from a malformed header) falls back to the default.
+			const hint = error.retryAfterSeconds;
+			const cooldownSeconds =
+				typeof hint === "number" && Number.isFinite(hint) && hint > 0 ? hint : DEFAULT_SATURATION_COOLDOWN_SECONDS;
+			saturatedUntil = Date.now() + cooldownSeconds * 1000;
 			logger.warn(
-				{ requeued: batch.length, retryAfterSeconds: error.retryAfterSeconds },
+				{ requeued: batch.length, retryAfterSeconds: error.retryAfterSeconds, cooldownSeconds },
 				"agent-memory queue saturated (503); requeued writes for retry",
 			);
 			return;
@@ -316,6 +334,9 @@ export async function flushAgentMemory(): Promise<void> {
 export async function flushAgentMemoryAfterTurn(agentName: string, threadId: string): Promise<void> {
 	if (selectedBackend() !== "agent-memory") return;
 	setActiveMemorySession(agentName, threadId);
+	// SIO-1364: respect an active saturation cooldown; queued writes ride along
+	// to a later turn or teardown instead of re-hitting a 503ing service.
+	if (Date.now() < saturatedUntil) return;
 	await flushAgentMemory();
 }
 
