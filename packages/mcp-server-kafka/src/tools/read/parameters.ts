@@ -45,6 +45,14 @@ export const ConsumeMessagesParams = z.object({
 	maxMessages: MaxMessagesParam,
 	timeoutMs: TimeoutParam,
 	fromBeginning: z.boolean().optional().describe("Start consuming from the beginning of the topic"),
+	timestamp: z
+		.number()
+		.int()
+		.nonnegative()
+		.optional()
+		.describe(
+			"Unix timestamp in ms. When set, each partition starts at the first offset whose broker timestamp is >= this value, instead of earliest/latest. Use this to scan near a known incident time instead of scanning the whole topic. Ignored if fromBeginning is also true (fromBeginning takes precedence). Must be a non-negative integer -- negative values collide with Kafka's LATEST(-1)/EARLIEST(-2) sentinels.",
+		),
 });
 
 export const ListConsumerGroupsParams = z.object({

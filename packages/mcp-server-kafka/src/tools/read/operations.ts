@@ -56,6 +56,14 @@ export async function getTopicOffsets(service: KafkaService, params: { topic: st
 // scan that legitimately drained the whole window. Annotate that case too instead of
 // returning a bare array, so a bounded scan (e.g. the SIO-1201 business-key lookup)
 // can tell "confirmed not found in this window" apart from "cut short, unconfirmed".
+// SIO-1363: fromBeginning takes precedence over timestamp when both are set,
+// matching the service layer's precedence (kafka-service.ts consumeMessages).
+function deriveConsumeMode(params: { fromBeginning?: boolean; timestamp?: number }): "earliest" | "latest" | "seek" {
+	if (params.fromBeginning) return "earliest";
+	if (params.timestamp !== undefined) return "seek";
+	return "latest";
+}
+
 export async function consumeMessages(
 	service: KafkaService,
 	config: AppConfig,
@@ -64,6 +72,7 @@ export async function consumeMessages(
 		maxMessages?: number;
 		timeoutMs?: number;
 		fromBeginning?: boolean;
+		timestamp?: number;
 	},
 ) {
 	const timeoutMs = params.timeoutMs ?? config.kafka.consumeTimeoutMs;
@@ -73,19 +82,23 @@ export async function consumeMessages(
 		maxMessages,
 		timeoutMs,
 		fromBeginning: params.fromBeginning,
+		timestamp: params.timestamp,
 	});
-	const mode = params.fromBeginning ? "earliest" : "latest";
+	const mode = deriveConsumeMode(params);
 
 	if (messages.length === 0) {
+		const note =
+			mode === "latest"
+				? `0 messages arrived within ${timeoutMs}ms. The ephemeral consumer starts at the LATEST offset, so existing backlog is invisible -- an empty result does NOT mean the topic is empty. To inspect backlog, retry with fromBeginning: true or read a specific offset with kafka_get_message_by_offset.`
+				: mode === "seek"
+					? `0 messages read from the timestamp-seeked offset (timestamp: ${params.timestamp}) within ${timeoutMs}ms. This means no message was found at or after that timestamp within the scan window -- a stronger negative than a fromBeginning/latest scan, but still bounded by maxMessages/timeoutMs, not exhaustive. Verify with kafka_get_topic_offsets({ topic, timestamp }) to confirm the seek landed where expected.`
+					: `0 messages read from the beginning within ${timeoutMs}ms. The topic may be empty, or the fetch did not complete in time -- verify with kafka_describe_topic offsets before concluding the topic is empty.`;
 		return {
 			messages: [],
 			consumed: 0,
 			mode,
 			timeoutMs,
-			note:
-				mode === "latest"
-					? `0 messages arrived within ${timeoutMs}ms. The ephemeral consumer starts at the LATEST offset, so existing backlog is invisible -- an empty result does NOT mean the topic is empty. To inspect backlog, retry with fromBeginning: true or read a specific offset with kafka_get_message_by_offset.`
-					: `0 messages read from the beginning within ${timeoutMs}ms. The topic may be empty, or the fetch did not complete in time -- verify with kafka_describe_topic offsets before concluding the topic is empty.`,
+			note,
 		};
 	}
 

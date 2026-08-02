@@ -3,6 +3,7 @@ import { describe, expect, mock, test } from "bun:test";
 import type { AppConfig } from "../../src/config/schemas.ts";
 import type { KafkaService } from "../../src/services/kafka-service.ts";
 import { consumeMessages } from "../../src/tools/read/operations.ts";
+import { ConsumeMessagesParams } from "../../src/tools/read/parameters.ts";
 
 // SIO-1159: an empty consume must return an annotated object, not a bare [].
 // Run 270378e0 read a bare [] from a 1M-message topic and wrongly concluded the
@@ -51,6 +52,70 @@ describe("consumeMessages op empty-result annotation (SIO-1159)", () => {
 		const annotated = result as { timeoutMs: number; note: string };
 		expect(annotated.timeoutMs).toBe(5000);
 		expect(annotated.note).toContain("5000ms");
+	});
+});
+
+// SIO-1363: a timestamp-seeded scan gets its own "seek" mode and a note that names
+// it a stronger negative than fromBeginning/latest, while still flagging the
+// maxMessages/timeoutMs bound.
+describe("consumeMessages op timestamp-seek annotation (SIO-1363)", () => {
+	test("empty seek-mode result names the timestamp and the bounded-not-exhaustive caveat", async () => {
+		const result = await consumeMessages(serviceReturning([]), config, {
+			topic: "mendix-customer-assignments",
+			timestamp: 1753863987855,
+		});
+		const annotated = result as { mode: string; note: string };
+		expect(annotated.mode).toBe("seek");
+		expect(annotated.note).toContain("1753863987855");
+		expect(annotated.note).toContain("kafka_get_topic_offsets");
+		expect(annotated.note).not.toContain("LATEST offset");
+	});
+
+	test("fromBeginning takes precedence over timestamp in mode derivation", async () => {
+		const result = await consumeMessages(serviceReturning([]), config, {
+			topic: "t",
+			fromBeginning: true,
+			timestamp: 1753863987855,
+		});
+		const annotated = result as { mode: string };
+		expect(annotated.mode).toBe("earliest");
+	});
+
+	test("non-empty seek-mode results that completed on their own keep the bare array shape", async () => {
+		const msg = { topic: "t", partition: 0, offset: "1000", key: null, value: "{}", timestamp: "0", headers: {} };
+		const result = await consumeMessages(serviceReturning([msg], false), config, {
+			topic: "t",
+			timestamp: 1753863987855,
+		});
+		expect(Array.isArray(result)).toBe(true);
+		expect(result).toEqual([msg]);
+	});
+});
+
+// CodeRabbit (PR #581): BigInt(timestamp) throws on fractional input, and negative
+// values collide with @platformatic/kafka's LATEST(-1n)/EARLIEST(-2n) sentinels --
+// both must be rejected by the Zod schema before reaching the service layer.
+describe("ConsumeMessagesParams timestamp validation", () => {
+	const base = { topic: "t", maxMessages: 10, timeoutMs: 5000 };
+
+	test("rejects a fractional timestamp", () => {
+		const result = ConsumeMessagesParams.safeParse({ ...base, timestamp: 1753863987855.5 });
+		expect(result.success).toBe(false);
+	});
+
+	test("rejects a negative timestamp (would collide with LATEST/EARLIEST sentinels)", () => {
+		expect(ConsumeMessagesParams.safeParse({ ...base, timestamp: -1 }).success).toBe(false);
+		expect(ConsumeMessagesParams.safeParse({ ...base, timestamp: -2 }).success).toBe(false);
+	});
+
+	test("accepts a valid non-negative integer timestamp", () => {
+		const result = ConsumeMessagesParams.safeParse({ ...base, timestamp: 1753863987855 });
+		expect(result.success).toBe(true);
+	});
+
+	test("timestamp remains optional (omitting it is valid)", () => {
+		const result = ConsumeMessagesParams.safeParse(base);
+		expect(result.success).toBe(true);
 	});
 });
 

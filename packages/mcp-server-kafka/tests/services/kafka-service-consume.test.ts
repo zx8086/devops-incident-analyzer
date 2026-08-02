@@ -1,5 +1,5 @@
 // tests/services/kafka-service-consume.test.ts
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import type { Admin } from "@platformatic/kafka";
 import type { KafkaClientManager } from "../../src/services/client-manager.ts";
 import { KafkaService } from "../../src/services/kafka-service.ts";
@@ -65,6 +65,50 @@ function buildClientManager(consumerFactory: () => FakeConsumer) {
 		createConsumer: async () => consumerFactory(),
 	} as unknown as KafkaClientManager;
 	return manager;
+}
+
+// SIO-1363: partitionIndex -> seeked offset, used by getPartitionOffsetsAtTimestamp
+// (metadata() for partition indices, then listOffsets() for the offset per partition).
+function buildTimestampSeekClientManager(opts: {
+	topic: string;
+	partitionOffsets: Record<number, bigint>;
+	consumerFactory: () => FakeConsumer;
+}) {
+	type ListOffsetsCall = {
+		topics: Array<{ name: string; partitions: Array<{ partitionIndex: number; timestamp: bigint }> }>;
+	};
+	type MetadataCallback = (err: Error | null, data: unknown) => void;
+
+	const listOffsetsCalls: ListOffsetsCall[] = [];
+	const fakeAdmin = {
+		metadata: mock((metaOpts: { topics: string[] }, cb: MetadataCallback) => {
+			const topicsMap = new Map<string, { partitions: Record<number, unknown> }>();
+			for (const t of metaOpts.topics) {
+				const partitions: Record<number, unknown> = {};
+				for (const idx of Object.keys(opts.partitionOffsets)) partitions[Number(idx)] = {};
+				topicsMap.set(t, { partitions });
+			}
+			cb(null, { topics: topicsMap });
+		}),
+		listOffsets: mock(async (req: ListOffsetsCall) => {
+			listOffsetsCalls.push(req);
+			return req.topics.map((t) => ({
+				name: t.name,
+				partitions: t.partitions.map((p) => ({
+					partitionIndex: p.partitionIndex,
+					timestamp: p.timestamp,
+					offset: opts.partitionOffsets[p.partitionIndex] ?? 0n,
+				})),
+			}));
+		}),
+	} as unknown as Admin;
+
+	const manager = {
+		withAdmin: async <T>(fn: (admin: Admin) => Promise<T>): Promise<T> => fn(fakeAdmin),
+		createConsumer: async () => opts.consumerFactory(),
+	} as unknown as KafkaClientManager;
+
+	return { manager, listOffsetsCalls, listOffsetsMock: fakeAdmin.listOffsets as unknown as ReturnType<typeof mock> };
 }
 
 describe("KafkaService.consumeMessages SIO-699 timeout behavior", () => {
@@ -264,6 +308,108 @@ describe("KafkaService.consumeMessages SIO-699 timeout behavior", () => {
 
 		expect(result.messages).toHaveLength(1);
 		expect(result.timedOut).toBe(true);
+	});
+});
+
+// SIO-1363: timestamp seeds each partition at the offset returned by listOffsets
+// instead of scanning from earliest/latest.
+describe("KafkaService.consumeMessages SIO-1363 timestamp seek", () => {
+	test("computes per-partition offsets via listOffsets and opens the stream in manual mode", async () => {
+		const stream = buildYieldingStream([]);
+		let consumeArgs: unknown = null;
+		const env = buildTimestampSeekClientManager({
+			topic: "mendix-customer-assignments",
+			partitionOffsets: { 0: 1000n, 1: 2500n, 2: 4200n },
+			consumerFactory: () => ({
+				closed: false,
+				consume: async (args: unknown) => {
+					consumeArgs = args;
+					return stream;
+				},
+				close: async () => {},
+			}),
+		});
+		const service = new KafkaService(env.manager);
+
+		await service.consumeMessages({
+			topic: "mendix-customer-assignments",
+			maxMessages: 500,
+			timeoutMs: 30_000,
+			timestamp: 1753863987855,
+		});
+
+		// One listOffsets call carrying the requested timestamp for every partition.
+		expect(env.listOffsetsCalls).toHaveLength(1);
+		const call = env.listOffsetsCalls[0];
+		expect(call?.topics[0]?.name).toBe("mendix-customer-assignments");
+		const partitions = call?.topics[0]?.partitions ?? [];
+		expect(partitions).toHaveLength(3);
+		for (const p of partitions) {
+			expect(p.timestamp).toBe(1753863987855n);
+		}
+
+		// The stream must be opened in manual mode, seeded at the offsets listOffsets returned.
+		expect(consumeArgs).toMatchObject({
+			mode: "manual",
+			offsets: expect.arrayContaining([
+				{ topic: "mendix-customer-assignments", partition: 0, offset: 1000n },
+				{ topic: "mendix-customer-assignments", partition: 1, offset: 2500n },
+				{ topic: "mendix-customer-assignments", partition: 2, offset: 4200n },
+			]),
+		});
+	});
+
+	test("fromBeginning takes precedence over timestamp when both are set", async () => {
+		const stream = buildYieldingStream([]);
+		let consumeArgs: unknown = null;
+		const env = buildTimestampSeekClientManager({
+			topic: "topic-a",
+			partitionOffsets: { 0: 999n },
+			consumerFactory: () => ({
+				closed: false,
+				consume: async (args: unknown) => {
+					consumeArgs = args;
+					return stream;
+				},
+				close: async () => {},
+			}),
+		});
+		const service = new KafkaService(env.manager);
+
+		await service.consumeMessages({
+			topic: "topic-a",
+			maxMessages: 10,
+			timeoutMs: 5_000,
+			fromBeginning: true,
+			timestamp: 1753863987855,
+		});
+
+		// listOffsets must never be called -- fromBeginning skips the seek entirely.
+		expect(env.listOffsetsCalls).toHaveLength(0);
+		expect(consumeArgs).toMatchObject({ mode: "earliest" });
+	});
+
+	test("omitting both timestamp and fromBeginning preserves default latest behavior", async () => {
+		const stream = buildYieldingStream([]);
+		let consumeArgs: unknown = null;
+		const manager = buildClientManager(() => ({
+			closed: false,
+			consume: async (args: unknown) => {
+				consumeArgs = args;
+				return stream;
+			},
+			close: async () => {},
+		}));
+		const service = new KafkaService(manager);
+
+		await service.consumeMessages({
+			topic: "topic-a",
+			maxMessages: 10,
+			timeoutMs: 5_000,
+		});
+
+		expect(consumeArgs).toMatchObject({ mode: "latest" });
+		expect(consumeArgs).not.toHaveProperty("offsets");
 	});
 });
 

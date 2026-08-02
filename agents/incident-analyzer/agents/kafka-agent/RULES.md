@@ -64,7 +64,7 @@ enough to draw a conclusion. Only when NEITHER measure is available may you repo
 an offset-growth gap — and phrase it as "historical per-window offset deltas could
 not be reconstructed because broker timestamps are unusable", never a flat "unavailable".
 
-## Targeted Message Lookup by Business Key (SIO-1201)
+## Targeted Message Lookup by Business Key (SIO-1201, timestamp-seek per SIO-1363)
 
 When asked to confirm delivery or presence of an event referencing a specific
 business identifier (order ID, SKU, product/notification code, etc.) in a named
@@ -72,29 +72,43 @@ topic, Kafka has no secondary content index -- there is no tool that searches a
 topic by key or payload content. The only way to answer this is a bounded scan
 across the topic's partitions:
 
-1. Call `kafka_consume_messages` with `fromBeginning: true` and an explicit bound
-   on both `maxMessages` (e.g. 500, the tool's max) and `timeoutMs` (at or below
-   the tool's 60s max). Match the business key against each returned message's
-   `key` with EXACT equality first. If the key does not carry the business
-   identifier (e.g. the key is a partition/routing key, not the business ID),
-   `JSON.parse` the `value` and compare the specific expected field to the
-   business key with exact equality. Do not substring-match the raw serialized
-   `value` string -- an unrelated field or nested object containing the same
-   digits/text as the business key produces a false positive.
-2. **There is no partition-narrowing shortcut.** `kafka_consume_messages` has no
-   partition parameter -- it always scans every partition of the topic, not one.
-   Kafka's admin/broker API also does not expose a topic's partitioning strategy
-   (key-hash vs. round-robin is a producer-side decision), so there is no way to
-   compute which single partition a business key would land in. Do not claim or
-   attempt a single-partition scan; every lookup under this protocol scans all
-   partitions from the beginning, bounded by `maxMessages`/`timeoutMs`.
-3. **This is a bounded scan, not an exhaustive one.** `maxMessages`/`timeoutMs`
-   caps mean the scan may stop before reaching the end of a large or high-volume
-   topic even with `fromBeginning: true`. Respect the existing `fromBeginning`
-   caveat above: an empty scan result within the bound means "not found within
-   this bounded scan," not "the topic is empty" or "the message does not exist" --
-   do not conflate the two.
-4. If the scan completes without a match, report "message for `<business-key>`
-   not found within a `<N>`-message / `<T>`-second bounded scan from the
-   beginning of `<topic>`" -- a falsifiable, bounded claim. Never report a bare
-   "not sampled" or "not queried".
+1. **If an approximate timestamp for the target event is known** (e.g. an
+   incident timestamp from the dispatched request or entity-extraction context),
+   call `kafka_consume_messages` with `timestamp` set to that time in Unix ms
+   (subtract a few minutes as a buffer for clock/ingestion skew) instead of
+   `fromBeginning: true`. This seeks each partition to the first offset at or
+   after that timestamp via `admin.listOffsets`, so the same `maxMessages`/
+   `timeoutMs` bound brackets the relevant neighborhood of the log instead of an
+   arbitrary window from the start or end of a potentially huge topic (e.g. tens
+   of millions of offsets). **If no timestamp is known**, fall back to
+   `fromBeginning: true` as before.
+2. Match the business key against each returned message's `key` with EXACT
+   equality first. If the key does not carry the business identifier (e.g. the
+   key is a partition/routing key, not the business ID), `JSON.parse` the
+   `value` and compare the specific expected field to the business key with
+   exact equality. Do not substring-match the raw serialized `value` string --
+   an unrelated field or nested object containing the same digits/text as the
+   business key produces a false positive.
+3. **There is no partition-narrowing shortcut.** `kafka_consume_messages` has no
+   partition parameter -- it always scans every partition of the topic, not one
+   (this holds under `timestamp` seek too: every partition is seeded at its own
+   offset for that timestamp and scanned). Kafka's admin/broker API also does
+   not expose a topic's partitioning strategy (key-hash vs. round-robin is a
+   producer-side decision), so there is no way to compute which single
+   partition a business key would land in. Do not claim or attempt a
+   single-partition scan.
+4. **This is a bounded scan, not an exhaustive one**, whether seeded by
+   `timestamp` or `fromBeginning`. `maxMessages`/`timeoutMs` caps mean the scan
+   may stop before reaching the end of a large or high-volume topic. Respect
+   the existing `fromBeginning`/`latest` caveats above: an empty scan result
+   within the bound means "not found within this bounded scan," not "the topic
+   is empty" or "the message does not exist" -- do not conflate the two. That
+   said, a no-match result from a `timestamp`-seeded scan is a meaningfully
+   stronger negative than the same result from a `fromBeginning` scan of a huge
+   topic, because the scan started in the right neighborhood of the log instead
+   of an arbitrary one -- say so explicitly when reporting the result.
+5. If the scan completes without a match, report "message for `<business-key>`
+   not found within a `<N>`-message / `<T>`-second bounded scan of `<topic>`,
+   seeded at `<timestamp>`" (or "from the beginning of `<topic>`" when no
+   timestamp was available) -- a falsifiable, bounded claim. Never report a
+   bare "not sampled" or "not queried".
