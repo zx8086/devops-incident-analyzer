@@ -19,6 +19,10 @@
 import { z } from "zod";
 import { truncateForEmbedding } from "./embedding-truncate.ts";
 
+// SIO-1359: the service defaults relevant_k to 10 when absent -- even for deterministic
+// (filter-only) searches -- so exhaustive recalls must send an explicit high ceiling.
+const DETERMINISTIC_RELEVANT_K = 1000;
+
 export const AgentMemoryConfigSchema = z.object({
 	baseUrl: z.string().url(),
 	enabled: z.boolean(),
@@ -270,12 +274,15 @@ export function createFetchAgentMemoryClient(config: AgentMemoryConfig): AgentMe
 
 		async searchMemory(ref, query, opts) {
 			// SIO-998: a non-empty query selects SEMANTIC mode (FTS-KNN ranked, top-relevant_k); an empty
-			// query selects DETERMINISTIC mode -- send `filters` ALONE, omitting both `query` and
-			// `relevant_k`, so the annotation filter is the authoritative WHERE clause with no top-k
-			// truncation. Per the service's OpenAPI: only the time bounds pre-filter the KNN candidate
-			// pool; `annotations` post-filters the ranked top-k, so an identifier-keyed lookup under a
-			// query string can be truncated to 0 before the filter applies. See
-			// docs/architecture/agent-memory.md "Retrieval: TWO modes".
+			// query selects DETERMINISTIC mode -- send `filters` without `query`, so the annotation
+			// filter is the authoritative WHERE clause. Per the service's OpenAPI: only the time bounds
+			// pre-filter the KNN candidate pool; `annotations` post-filters the ranked top-k, so an
+			// identifier-keyed lookup under a query string can be truncated to 0 before the filter
+			// applies. See docs/architecture/agent-memory.md "Retrieval: TWO modes".
+			// SIO-1359: `relevant_k` must still be sent EXPLICITLY in deterministic mode -- the service
+			// defaults it to 10 when absent (OpenAPI FilterOptions.relevant_k default; there is no
+			// separate limit param), so omitting it silently truncated every filter-only recall to 10
+			// blocks (live: kind=kg-binding returned 10 of 91).
 			const deterministic = query.length === 0;
 			// SIO-1081: the service embeds `query` server-side with Bedrock Titan v2 (8192-token
 			// cap); a large pasted incident used as the recall seed 400s ("maximum input length is
@@ -285,8 +292,9 @@ export function createFetchAgentMemoryClient(config: AgentMemoryConfig): AgentMe
 				...(deterministic ? {} : { query: boundedQuery }),
 				filters: {
 					session_ids: opts?.allSessions ? "all" : undefined,
-					// In deterministic mode relevant_k must be absent (it implies/enables the ranked path).
-					...(deterministic ? {} : { relevant_k: opts?.relevantK ?? null }),
+					// SIO-1359: deterministic recalls are exhaustive by contract, so send a high
+					// ceiling instead of inheriting the server's default of 10.
+					relevant_k: opts?.relevantK ?? (deterministic ? DETERMINISTIC_RELEVANT_K : null),
 					// SIO-959: structured annotation filter (e.g. { kind: "fleet-upgrade-dispatched" }).
 					annotations: opts?.annotations ?? undefined,
 				},

@@ -273,30 +273,48 @@ describe("LadybugStore WAL-corruption recovery", () => {
 			expect(mock.counts.ctor).toBe(2);
 		}));
 
-	// SIO-1339: a second process opening the same lbug store while another
-	// process already holds the exclusive file lock does not fail with a clean
-	// lock-denied error -- it surfaces as a garbled IO exception with a nonsense
-	// byte position (live-observed: "position: 4901969379328" against a 92MB
-	// file). This message shape does NOT match any WAL_CORRUPTION_PATTERNS, so
-	// it must NOT be quarantine-and-retried (the WAL is healthy; quarantining it
-	// would destroy real data for no reason, and retrying against a still-held
-	// lock would just fail identically). It should instead surface as a clear,
-	// actionable error distinct from a generic IO exception.
-	const CONCURRENT_OPEN_ERROR =
+	// SIO-1361 (reversing SIO-1339's reading): this garbled IO exception with a
+	// nonsense byte position (live-observed: "position: 4901969379328" against a
+	// 92MB file, "numBytesRead: 0") is persistent BASE-FILE damage, proven live
+	// with zero lock holders and a byte-identical failure on a copy of the file
+	// with and without its WAL. It does NOT match any WAL_CORRUPTION_PATTERNS and
+	// must NOT be quarantine-and-retried (the WAL is healthy; quarantining it
+	// would destroy real data for no reason, and retrying fails identically). It
+	// surfaces as a clear error pointing the operator at knowledge-graph:rebuild.
+	const BASE_FILE_DAMAGE_ERROR =
 		"IO exception: Cannot read from file: /data/knowledge-graph fileDescriptor: 48 numBytesRead: 0 numBytesToRead: 4096 position: 4901969379328";
 
-	test("does not quarantine the .wal file for a concurrent-open IO exception", async () =>
+	test("does not quarantine the .wal file for a base-file-damage IO exception", async () =>
 		withTempDir(async (dir) => {
 			const path = join(dir, "knowledge-graph");
 			const walPath = `${path}.wal`;
 			writeFileSync(walPath, "a healthy wal file, not corrupt");
 
-			const mock = mockLbug({ ctorThrows: () => new Error(CONCURRENT_OPEN_ERROR) });
+			const mock = mockLbug({ ctorThrows: () => new Error(BASE_FILE_DAMAGE_ERROR) });
+			_setLbugLoaderForTesting(mock.loader);
+
+			const store = new LadybugStore(path);
+			await expect(store.run("MATCH (n) RETURN n")).rejects.toThrow(/base file appears corrupted/i);
+			// The healthy WAL must survive -- this is not WAL corruption, so it must not be quarantined.
+			expect(existsSync(walPath)).toBe(true);
+			expect(mock.counts.ctor).toBe(1);
+		}));
+
+	// SIO-967/SIO-1361: TRUE cross-process lock contention has its own clean message
+	// shape; it must surface as a lock-held error, with no quarantine and no retry.
+	const LOCK_HELD_ERROR = "IO exception: Could not set lock on file : /data/knowledge-graph";
+
+	test("does not quarantine the .wal file when another process holds the lock", async () =>
+		withTempDir(async (dir) => {
+			const path = join(dir, "knowledge-graph");
+			const walPath = `${path}.wal`;
+			writeFileSync(walPath, "a healthy wal file, not corrupt");
+
+			const mock = mockLbug({ ctorThrows: () => new Error(LOCK_HELD_ERROR) });
 			_setLbugLoaderForTesting(mock.loader);
 
 			const store = new LadybugStore(path);
 			await expect(store.run("MATCH (n) RETURN n")).rejects.toThrow(/exclusive file lock/i);
-			// The healthy WAL must survive -- this is not corruption, so it must not be quarantined.
 			expect(existsSync(walPath)).toBe(true);
 			expect(mock.counts.ctor).toBe(1);
 		}));

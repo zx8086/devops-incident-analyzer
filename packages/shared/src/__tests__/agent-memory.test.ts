@@ -258,9 +258,11 @@ describe("createFetchAgentMemoryClient", () => {
 		restore();
 	});
 
-	// SIO-998: an empty query selects DETERMINISTIC mode -- the request body must OMIT `query` and
-	// `relevant_k` so the annotation filter is the authoritative WHERE clause (no top-k truncation).
-	test("searchMemory with an empty query omits query + relevant_k (deterministic mode)", async () => {
+	// SIO-998: an empty query selects DETERMINISTIC mode -- the request body must OMIT `query` so
+	// the annotation filter is the authoritative WHERE clause. SIO-1359: `relevant_k` must be SENT
+	// (an explicit caller value, else a high ceiling) -- the service defaults an absent relevant_k
+	// to 10 even in deterministic mode, silently truncating filter-only recalls.
+	test("searchMemory with an empty query omits query but sends the caller's relevant_k", async () => {
 		const { calls, restore } = stubFetch({
 			"POST /users/elastic-iac/sessions/t-iac/memory/search": { status: 200, body: { count: 0, memory_blocks: [] } },
 		});
@@ -272,8 +274,25 @@ describe("createFetchAgentMemoryClient", () => {
 		});
 		const body = calls[0]?.body as { query?: unknown; filters: { relevant_k?: unknown; annotations?: unknown } };
 		expect("query" in body).toBe(false); // no query key at all
-		expect("relevant_k" in body.filters).toBe(false); // no relevant_k -> no top-k truncation
+		expect(body.filters.relevant_k).toBe(8);
 		expect(body.filters.annotations).toMatchObject({ kind: "iac-change", mr_url: "X" });
+		restore();
+	});
+
+	// SIO-1359: with no caller relevantK, deterministic mode sends the exhaustive ceiling (1000)
+	// instead of omitting the field and inheriting the server's default of 10.
+	test("searchMemory deterministic mode defaults relevant_k to the exhaustive ceiling", async () => {
+		const { calls, restore } = stubFetch({
+			"POST /users/elastic-iac/sessions/t-iac/memory/search": { status: 200, body: { count: 0, memory_blocks: [] } },
+		});
+		const client = createFetchAgentMemoryClient(CONFIG);
+		await client.searchMemory({ userId: "elastic-iac", sessionId: "t-iac" }, "", {
+			allSessions: true,
+			annotations: { kind: "iac-change" },
+		});
+		const body = calls[0]?.body as { query?: unknown; filters: { relevant_k?: unknown } };
+		expect("query" in body).toBe(false);
+		expect(body.filters.relevant_k).toBe(1000);
 		restore();
 	});
 
