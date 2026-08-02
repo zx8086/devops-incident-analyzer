@@ -3,6 +3,7 @@ import { describe, expect, mock, test } from "bun:test";
 import type { AppConfig } from "../../src/config/schemas.ts";
 import type { KafkaService } from "../../src/services/kafka-service.ts";
 import { consumeMessages } from "../../src/tools/read/operations.ts";
+import { ConsumeMessagesParams } from "../../src/tools/read/parameters.ts";
 
 // SIO-1159: an empty consume must return an annotated object, not a bare [].
 // Run 270378e0 read a bare [] from a 1M-message topic and wrongly concluded the
@@ -88,6 +89,33 @@ describe("consumeMessages op timestamp-seek annotation (SIO-1363)", () => {
 		});
 		expect(Array.isArray(result)).toBe(true);
 		expect(result).toEqual([msg]);
+	});
+});
+
+// CodeRabbit (PR #581): BigInt(timestamp) throws on fractional input, and negative
+// values collide with @platformatic/kafka's LATEST(-1n)/EARLIEST(-2n) sentinels --
+// both must be rejected by the Zod schema before reaching the service layer.
+describe("ConsumeMessagesParams timestamp validation", () => {
+	const base = { topic: "t", maxMessages: 10, timeoutMs: 5000 };
+
+	test("rejects a fractional timestamp", () => {
+		const result = ConsumeMessagesParams.safeParse({ ...base, timestamp: 1753863987855.5 });
+		expect(result.success).toBe(false);
+	});
+
+	test("rejects a negative timestamp (would collide with LATEST/EARLIEST sentinels)", () => {
+		expect(ConsumeMessagesParams.safeParse({ ...base, timestamp: -1 }).success).toBe(false);
+		expect(ConsumeMessagesParams.safeParse({ ...base, timestamp: -2 }).success).toBe(false);
+	});
+
+	test("accepts a valid non-negative integer timestamp", () => {
+		const result = ConsumeMessagesParams.safeParse({ ...base, timestamp: 1753863987855 });
+		expect(result.success).toBe(true);
+	});
+
+	test("timestamp remains optional (omitting it is valid)", () => {
+		const result = ConsumeMessagesParams.safeParse(base);
+		expect(result.success).toBe(true);
 	});
 });
 
