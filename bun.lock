@@ -372,6 +372,28 @@
         "typescript": "catalog:dev",
       },
     },
+    "packages/tools-verify": {
+      "name": "@devops-agent/tools-verify",
+      "version": "0.1.0",
+      "dependencies": {
+        "@devops-agent/gitagent-bridge": "workspace:*",
+        "@devops-agent/mcp-server-atlassian": "workspace:*",
+        "@devops-agent/mcp-server-aws": "workspace:*",
+        "@devops-agent/mcp-server-couchbase": "workspace:*",
+        "@devops-agent/mcp-server-elastic": "workspace:*",
+        "@devops-agent/mcp-server-elastic-iac": "workspace:*",
+        "@devops-agent/mcp-server-gitlab": "workspace:*",
+        "@devops-agent/mcp-server-kafka": "workspace:*",
+        "@devops-agent/mcp-server-konnect": "workspace:*",
+        "@devops-agent/shared": "workspace:*",
+        "@modelcontextprotocol/sdk": "catalog:",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:dev",
+        "bun-types": "catalog:dev",
+        "typescript": "catalog:dev",
+      },
+    },
   },
   "trustedDependencies": [
     "lbug",
@@ -642,6 +664,8 @@
     "@devops-agent/shared": ["@devops-agent/shared@workspace:packages/shared"],
 
     "@devops-agent/skillflow": ["@devops-agent/skillflow@workspace:packages/skillflow"],
+
+    "@devops-agent/tools-verify": ["@devops-agent/tools-verify@workspace:packages/tools-verify"],
 
     "@devops-agent/web": ["@devops-agent/web@workspace:apps/web"],
 

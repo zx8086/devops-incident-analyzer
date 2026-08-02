@@ -1309,11 +1309,12 @@ export function selectToolsByAction(
 		}
 	}
 
-	// SIO-1084: even on the raw-slice fallback (reached when the action_tool_map
-	// names don't resolve to runtime tool names -- e.g. konnect's YAML uses bare
-	// `list_services` while runtime tools are `konnect_*`-prefixed), still union in
-	// the datasource's resolution tools so the "where to look" enumerator is always
-	// present, then slice. Guarantees the A5 invariant on every path.
+	// SIO-1084: even on the raw-slice fallback (reached when the action_tool_map names don't
+	// resolve to runtime tool names -- e.g. a YAML declares a bare `list_services` while the
+	// live MCP tool is actually `konnect_list_services`; see SIO-1368's
+	// packages/tools-verify checker, which now catches this class at build time instead of
+	// runtime), still union in the datasource's resolution tools so the "where to look"
+	// enumerator is always present, then slice. Guarantees the A5 invariant on every path.
 	// SIO-1228: same reasoning for the skill-promised tools -- the prompt makes the same
 	// promises regardless of which path selection took.
 	return {

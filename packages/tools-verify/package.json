@@ -1,0 +1,30 @@
+{
+	"name": "@devops-agent/tools-verify",
+	"version": "0.1.0",
+	"type": "module",
+	"main": "src/verify-action-tool-map.ts",
+	"scripts": {
+		"verify": "bun run src/verify-action-tool-map.ts",
+		"test": "echo 'no unit tests -- correctness is exercised live by `bun run tools:verify`' && exit 0",
+		"typecheck": "bunx tsc --noEmit"
+	},
+	"dependencies": {
+		"@devops-agent/gitagent-bridge": "workspace:*",
+		"@devops-agent/mcp-server-atlassian": "workspace:*",
+		"@devops-agent/mcp-server-aws": "workspace:*",
+		"@devops-agent/mcp-server-couchbase": "workspace:*",
+		"@devops-agent/mcp-server-elastic": "workspace:*",
+		"@devops-agent/mcp-server-elastic-iac": "workspace:*",
+		"@devops-agent/mcp-server-gitlab": "workspace:*",
+		"@devops-agent/mcp-server-kafka": "workspace:*",
+		"@devops-agent/mcp-server-konnect": "workspace:*",
+		"@devops-agent/shared": "workspace:*",
+		"@modelcontextprotocol/sdk": "catalog:"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:dev",
+		"bun-types": "catalog:dev",
+		"typescript": "catalog:dev"
+	},
+	"private": true
+}

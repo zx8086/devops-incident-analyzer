@@ -33,7 +33,7 @@ tools:
   - capella_get_detailed_prepared_statements
   - elasticsearch_search
   - elasticsearch_count_documents
-  - query_api_requests
+  - konnect_query_api_requests
 ---
 # Couchbase Slow Query Investigation
 
@@ -71,7 +71,7 @@ Use `capella_get_prepared_statements` to check cached query plans. Use `capella_
 Use `elasticsearch_search` filtered by the application service name accessing Couchbase. Look for connection pool exhaustion, timeout errors, CAS conflict patterns, or retry storms. Use `elasticsearch_count_documents` to quantify error frequency.
 
 ### 9. Check API Gateway Impact
-Use `query_api_requests` filtered to routes that depend on Couchbase-backed services. Check if slow queries are causing elevated gateway latency or 5xx responses.
+Use `konnect_query_api_requests` filtered to routes that depend on Couchbase-backed services. Check if slow queries are causing elevated gateway latency or 5xx responses.
 
 ## Cross-Datasource Correlation
 - Couchbase slow queries + Kong 5xx on dependent routes = user-visible latency impact
@@ -85,4 +85,4 @@ Use `query_api_requests` filtered to routes that depend on Couchbase-backed serv
 - Query timeout rate >10%: consider circuit breaker activation (requires human approval)
 
 ## All Tools Used Are Read-Only
-capella_get_longest_running_queries, capella_get_most_expensive_queries, capella_get_most_frequent_queries, capella_get_primary_index_queries, capella_suggest_query_optimizations, capella_run_sql_plus_plus_query, capella_get_system_indexes, capella_get_detailed_indexes, capella_get_indexes_to_drop, capella_get_system_vitals, capella_get_system_nodes, capella_get_fatal_requests, capella_get_completed_requests, capella_get_prepared_statements, capella_get_detailed_prepared_statements, elasticsearch_search, elasticsearch_count_documents, query_api_requests
+capella_get_longest_running_queries, capella_get_most_expensive_queries, capella_get_most_frequent_queries, capella_get_primary_index_queries, capella_suggest_query_optimizations, capella_run_sql_plus_plus_query, capella_get_system_indexes, capella_get_detailed_indexes, capella_get_indexes_to_drop, capella_get_system_vitals, capella_get_system_nodes, capella_get_fatal_requests, capella_get_completed_requests, capella_get_prepared_statements, capella_get_detailed_prepared_statements, elasticsearch_search, elasticsearch_count_documents, konnect_query_api_requests
