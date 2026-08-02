@@ -22,6 +22,23 @@ const ROLE_TO_SERVICE_NAME: Record<"aws-proxy" | "kafka-proxy", string> = {
 	"kafka-proxy": "kafka-mcp-server",
 };
 
+// SIO-1371 (CodeRabbit): createMcpLogger registers a prod/staging destination +
+// unref'd flush timer with no dispose API. One role maps to exactly one service
+// name, so memoizing per role -- rather than constructing fresh in every
+// startAgentCoreProxy() call -- keeps destination/timer lifetime back at
+// module-scope (its original lifetime pre-SIO-1371) while still tagging each
+// role's logger with the correct service/component.
+const roleLoggers = new Map<"aws-proxy" | "kafka-proxy", ReturnType<typeof getChildLogger>>();
+
+function getProxyLogger(role: "aws-proxy" | "kafka-proxy"): ReturnType<typeof getChildLogger> {
+	let logger = roleLoggers.get(role);
+	if (!logger) {
+		logger = getChildLogger(createMcpLogger(ROLE_TO_SERVICE_NAME[role]), "tool");
+		roleLoggers.set(role, logger);
+	}
+	return logger;
+}
+
 // SIO-737: retry policy for transient AgentCore JSON-RPC server errors.
 // Codes in the JSON-RPC 2.0 -32099..-32000 "implementation-defined
 // server-errors" band are the AgentCore transport layer's way of saying
@@ -402,12 +419,12 @@ export async function startAgentCoreProxy(
 	identityCard: IdentityCard,
 	role: "aws-proxy" | "kafka-proxy",
 ): Promise<AgentCoreProxyHandle> {
-	// SIO-1371: per-instance logger (not module-scope) so `service` reads the
-	// real per-server name -- matches the bootstrap path's createMcpLogger(serviceName)
-	// convention instead of the previous fixed "agentcore-proxy" for every role.
+	// SIO-1371: per-role logger (memoized, see getProxyLogger) so `service` reads
+	// the real per-server name -- matches the bootstrap path's
+	// createMcpLogger(serviceName) convention instead of the previous fixed
+	// "agentcore-proxy" for every role.
 	const dataSourceId = ROLE_TO_DATASOURCE[role];
-	const baseLogger = createMcpLogger(ROLE_TO_SERVICE_NAME[role]);
-	const logger = getChildLogger(baseLogger, "tool");
+	const logger = getProxyLogger(role);
 
 	// Derive URL pieces from runtimeArn + region. Equivalent to the old
 	// readProxyConfig but using the explicitly-passed config.
@@ -585,8 +602,14 @@ export async function startAgentCoreProxy(
 							if (toolName) {
 								const toolStatus = classifyToolStatus(clonedBody);
 								const severity = severityForToolStatus(toolStatus);
-								const logFn = severity === "info" ? logger.info.bind(logger) : logger.warn.bind(logger);
 								const httpAbnormal = response.status >= 300;
+								// SIO-1371 (CodeRabbit): a 4xx/5xx HTTP response with an
+								// otherwise-"ok"-looking body is still a failure -- gate the
+								// completed/failed split (and log severity) on both toolStatus
+								// and httpAbnormal, not toolStatus alone.
+								const succeeded = toolStatus === "ok" && !httpAbnormal;
+								const logFn =
+									severity === "info" && !httpAbnormal ? logger.info.bind(logger) : logger.warn.bind(logger);
 								const duration = Date.now() - requestStart;
 								const logFields: Record<string, unknown> = {
 									tool: toolName,
@@ -604,7 +627,7 @@ export async function startAgentCoreProxy(
 								if (retryable && isFinalAttempt) {
 									logFields.gaveUpAfterMs = duration;
 								}
-								if (toolStatus === "ok" && jsonRpcAttempt > 1) {
+								if (succeeded && jsonRpcAttempt > 1) {
 									logFields.recoveredAfterAttempts = jsonRpcAttempt;
 								}
 								// SIO-1371: converge the two most common outcomes onto the bootstrap
@@ -612,10 +635,9 @@ export async function startAgentCoreProxy(
 								// (server-tracing-factory.ts); the status/httpStatus/jsonRpcCode
 								// fields already carry the outcome detail, so the message text can
 								// match without losing information.
-								const msg =
-									toolStatus === "ok"
-										? `Tool call completed: ${toolName}`
-										: `Tool call failed: ${toolName} (${httpAbnormal ? `${toolStatus} (http ${response.status})` : toolStatus})`;
+								const msg = succeeded
+									? `Tool call completed: ${toolName}`
+									: `Tool call failed: ${toolName} (${httpAbnormal ? `${toolStatus} (http ${response.status})` : toolStatus})`;
 								logFn(logFields, msg);
 							}
 							break;
