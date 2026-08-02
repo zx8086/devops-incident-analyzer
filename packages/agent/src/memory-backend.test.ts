@@ -648,6 +648,132 @@ describe("annotations + metadata (SIO-952)", () => {
 		expect(pendingWriteCount()).toBe(0);
 	});
 
+	test("SIO-1364: a 503 starts a cooldown that suppresses threshold and per-turn flushes; teardown still drains", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		setActiveMemorySession("incident-analyzer", "t-cooldown");
+		let throwOn503 = true;
+		let attempts = 0;
+		const accepted: string[] = [];
+		const client: AgentMemoryClient = {
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts(_ref, facts) {
+				attempts++;
+				if (throwOn503) throw new ServiceUnavailableError("queue full", 60);
+				accepted.push(...facts);
+				return { blockIds: facts.map((_, i) => `fact-${i}`), acceptedCount: facts.length, rejectedCount: 0 };
+			},
+			async addMessages() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async searchMemory() {
+				return [];
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true };
+			},
+		};
+		__setAgentMemoryClient(client);
+		recordKeyDecision({ requestId: "r1", decision: "scale consumers" });
+		await flushAgentMemory(); // hits the 503 -> requeued, 60s cooldown starts
+		expect(attempts).toBe(1);
+		expect(pendingWriteCount()).toBe(1);
+		// Piling far past FLUSH_THRESHOLD must NOT re-trigger a flush during the cooldown
+		// (previously every enqueue past the threshold retried immediately).
+		for (let i = 0; i < 30; i++) enqueueFact(`decision ${i}`, "2026-06-17T00:00:00Z");
+		await flushAgentMemoryAfterTurn("incident-analyzer", "t-cooldown"); // per-turn drain suppressed too
+		expect(attempts).toBe(1); // no further client calls while cooling down
+		expect(pendingWriteCount()).toBe(31);
+		// Teardown flushes unconditionally -- last chance before the session closes.
+		throwOn503 = false;
+		await endAgentMemorySession("incident-analyzer", "t-cooldown");
+		expect(accepted).toHaveLength(31);
+		expect(pendingWriteCount()).toBe(0);
+	});
+
+	test("SIO-1364: the cooldown expires and a later per-turn flush drains the queue", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		setActiveMemorySession("incident-analyzer", "t-cooldown-expiry");
+		let throwOn503 = true;
+		const accepted: string[] = [];
+		const client: AgentMemoryClient = {
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts(_ref, facts) {
+				// 50ms hint keeps the test fast while exercising the real clock path.
+				if (throwOn503) throw new ServiceUnavailableError("queue full", 0.05);
+				accepted.push(...facts);
+				return { blockIds: facts.map((_, i) => `fact-${i}`), acceptedCount: facts.length, rejectedCount: 0 };
+			},
+			async addMessages() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async searchMemory() {
+				return [];
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true };
+			},
+		};
+		__setAgentMemoryClient(client);
+		recordKeyDecision({ requestId: "r1", decision: "scale consumers" });
+		await flushAgentMemory(); // 503 -> 50ms cooldown
+		await flushAgentMemoryAfterTurn("incident-analyzer", "t-cooldown-expiry"); // still cooling down
+		expect(accepted).toHaveLength(0);
+		expect(pendingWriteCount()).toBe(1);
+		await Bun.sleep(80); // let the cooldown lapse
+		throwOn503 = false;
+		await flushAgentMemoryAfterTurn("incident-analyzer", "t-cooldown-expiry");
+		expect(accepted).toEqual(["scale consumers"]);
+		expect(pendingWriteCount()).toBe(0);
+	});
+
+	test("SIO-1364: a write held across a cooldown stays bound to its originating session", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		setActiveMemorySession("incident-analyzer", "session-a");
+		let throwOn503 = true;
+		const sentRefs: AgentMemoryUserRef[] = [];
+		const ensuredSessions: string[] = [];
+		const client: AgentMemoryClient = {
+			async ensureUser() {},
+			async ensureSession(_userId, sessionId) {
+				ensuredSessions.push(sessionId);
+			},
+			async addFacts(ref, facts) {
+				if (throwOn503) throw new ServiceUnavailableError("queue full", 0.05);
+				sentRefs.push(ref);
+				return { blockIds: facts.map((_, i) => `fact-${i}`), acceptedCount: facts.length, rejectedCount: 0 };
+			},
+			async addMessages() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async searchMemory() {
+				return [];
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true };
+			},
+		};
+		__setAgentMemoryClient(client);
+		recordKeyDecision({ requestId: "r1", decision: "belongs to session A" });
+		await flushAgentMemory(); // 503 -> requeued with session-a pinned, 50ms cooldown
+		expect(pendingWriteCount()).toBe(1);
+		await Bun.sleep(80);
+		throwOn503 = false;
+		// Session B's turn rebinds the module-global session while A's write is still queued.
+		await flushAgentMemoryAfterTurn("incident-analyzer", "session-b");
+		expect(pendingWriteCount()).toBe(0);
+		expect(sentRefs.map((r) => r.sessionId)).toEqual(["session-a"]); // never session-b
+		expect(ensuredSessions).toContain("session-a");
+		expect(ensuredSessions).not.toContain("session-b");
+	});
+
 	test("SIO-1170: a total-outage fetch failure on flush still drops the batch (not requeued)", async () => {
 		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
 		setActiveMemorySession("incident-analyzer", "t-outage");

@@ -19,6 +19,7 @@ import {
 	ServiceUnavailableError,
 	SessionAlreadyEndedError,
 } from "@devops-agent/shared";
+import { z } from "zod";
 
 const logger = getLogger("agent:memory-backend");
 
@@ -156,13 +157,43 @@ type QueuedWrite =
 	// SIO-1005: facts are durable by default (no ttlSeconds), but the proposal iac-change fact can
 	// carry a TTL so it auto-expires once the reconciliation pass has written the durable terminal
 	// fact -- keeping the append-only store at ~one fact per settled MR instead of two.
-	| { kind: "fact"; text: string; createdAt: string; annotations?: AnnotationMap; ttlSeconds?: number }
-	| { kind: "message"; message: ChatMessageBlock; ttlSeconds?: number; createdAt: string; annotations?: AnnotationMap };
+	// SIO-1364 (CodeRabbit PR #582): `ref` pins the session bound at enqueue time so a write held
+	// across a session rebind (saturation cooldown, 503 requeue) still lands in its own session.
+	| {
+			kind: "fact";
+			text: string;
+			createdAt: string;
+			annotations?: AnnotationMap;
+			ttlSeconds?: number;
+			ref: AgentMemoryUserRef | null;
+	  }
+	| {
+			kind: "message";
+			message: ChatMessageBlock;
+			ttlSeconds?: number;
+			createdAt: string;
+			annotations?: AnnotationMap;
+			ref: AgentMemoryUserRef | null;
+	  };
+// A write whose session ref resolved (enqueue-time ref or the flush-time fallback).
+type SendableWrite = QueuedWrite & { ref: AgentMemoryUserRef };
 const queue: QueuedWrite[] = [];
 
 // Drain when the queue grows large so a long session does not accumulate
 // unboundedly; failures are swallowed (best-effort, never block the agent).
 const FLUSH_THRESHOLD = 25;
+
+// SIO-1364: honor the service's 503 retry_after_seconds hint. While the cooldown
+// is active, threshold- and per-turn flush triggers are skipped (writes keep
+// queueing) so the client stops re-hitting an extraction queue that asked for
+// backoff -- previously every enqueue past the threshold retried immediately.
+// flushAgentMemory() itself stays ungated: teardown calls it directly as the
+// last chance to drain before the session closes.
+const DEFAULT_SATURATION_COOLDOWN_SECONDS = 30;
+// SIO-1364 (CodeRabbit PR #582): the retry hint originates from an unvalidated
+// 503 body or Retry-After header; only a positive finite number is honored.
+const retryAfterHintSchema = z.number().finite().positive();
+let saturatedUntil = 0;
 
 // SIO-952: stamp block kind so recall can filter daily-log noise from durable
 // key-decisions; merge any caller-supplied annotations (e.g. { intent }).
@@ -176,7 +207,7 @@ function messageAnnotations(extra?: AnnotationMap): AnnotationMap {
 export function enqueueFact(text: string, createdAt: string, annotations?: AnnotationMap, ttlSeconds?: number): void {
 	// SIO-1005: ttlSeconds is optional and defaults to undefined -> a durable fact (no decay), so every
 	// existing caller is unchanged. Only the proposal iac-change fact passes a TTL.
-	queue.push({ kind: "fact", text, createdAt, annotations: factAnnotations(annotations), ttlSeconds });
+	queue.push({ kind: "fact", text, createdAt, annotations: factAnnotations(annotations), ttlSeconds, ref: activeRef });
 	maybeFlush();
 }
 
@@ -186,7 +217,14 @@ export function enqueueMessage(
 	ttlSeconds?: number,
 	annotations?: AnnotationMap,
 ): void {
-	queue.push({ kind: "message", message, ttlSeconds, createdAt, annotations: messageAnnotations(annotations) });
+	queue.push({
+		kind: "message",
+		message,
+		ttlSeconds,
+		createdAt,
+		annotations: messageAnnotations(annotations),
+		ref: activeRef,
+	});
 	maybeFlush();
 }
 
@@ -198,9 +236,11 @@ export function pendingWriteCount(): number {
 // in the process-global queue (Bun runs a package's test files in one process).
 export function __resetMemoryQueue(): void {
 	queue.length = 0;
+	saturatedUntil = 0;
 }
 
 function maybeFlush(): void {
+	if (Date.now() < saturatedUntil) return;
 	if (queue.length >= FLUSH_THRESHOLD) {
 		void flushAgentMemory().catch(() => {
 			// flushAgentMemory already logs; swallow here so enqueue stays sync/safe.
@@ -222,16 +262,28 @@ function sessionAnnotations(): AnnotationMap {
 
 export async function flushAgentMemory(): Promise<void> {
 	if (queue.length === 0) return;
-	const ref = activeRef;
-	const batch = queue.splice(0, queue.length);
-	if (!ref) {
-		logger.warn({ dropped: batch.length }, "agent-memory flush with no active session; dropping writes");
-		return;
+	// SIO-1364 (CodeRabbit PR #582): each write flushes under the session that
+	// enqueued it, not the module-global activeRef alone. A saturation cooldown
+	// (or a plain 503 requeue) can hold session A's writes across a rebind to
+	// session B; the enqueue-time ref keeps them attributed to A. Writes enqueued
+	// before any session was bound adopt the currently bound session.
+	const fallbackRef = activeRef;
+	const batch = queue.splice(0, queue.length).map((w) => ({ ...w, ref: w.ref ?? fallbackRef }));
+	const sendable = batch.filter((w): w is SendableWrite => w.ref !== null);
+	if (sendable.length < batch.length) {
+		logger.warn(
+			{ dropped: batch.length - sendable.length },
+			"agent-memory flush with no active session; dropping writes",
+		);
 	}
+	if (sendable.length === 0) return;
 	try {
 		const c = client();
-		await c.ensureUser(ref.userId, activeAgentName, { agent: activeAgentName, role: resolveRole(activeAgentName) });
-		await c.ensureSession(ref.userId, ref.sessionId, { annotations: sessionAnnotations() });
+		// Ensure user + session once per distinct ref in the batch (idempotent,
+		// 409-tolerant). The agent identity derives from the ref's userId (the two
+		// coincide for both known agents) so a cross-session retry never stamps
+		// the currently bound agent onto another session's user.
+		const ensured = new Set<string>();
 		// Per-block createdAt feeds the service's conflict resolution, so send each
 		// block with its own timestamp rather than batching across timestamps.
 		let facts = 0;
@@ -239,17 +291,25 @@ export async function flushAgentMemory(): Promise<void> {
 		// against the actual memory-block documents in Capella (keyed by userId/sessionId/blockId).
 		const blockIds: string[] = [];
 		let rejected = 0;
-		for (const w of batch) {
+		let primary = fallbackRef;
+		for (const w of sendable) {
+			primary ??= w.ref;
+			const ensureKey = `${w.ref.userId}/${w.ref.sessionId}`;
+			if (!ensured.has(ensureKey)) {
+				await c.ensureUser(w.ref.userId, w.ref.userId, { agent: w.ref.userId, role: resolveRole(w.ref.userId) });
+				await c.ensureSession(w.ref.userId, w.ref.sessionId, { annotations: sessionAnnotations() });
+				ensured.add(ensureKey);
+			}
 			const res =
 				w.kind === "fact"
-					? await c.addFacts(ref, [w.text], {
+					? await c.addFacts(w.ref, [w.text], {
 							// SIO-1005: ttlSeconds is undefined for ordinary durable facts (no decay); only the
 							// proposal iac-change fact sets it. addFacts forwards it as memory_block_ttl.
 							ttlSeconds: w.ttlSeconds,
 							createdAt: w.createdAt,
 							annotations: w.annotations,
 						})
-					: await c.addMessages(ref, [w.message], {
+					: await c.addMessages(w.ref, [w.message], {
 							ttlSeconds: w.ttlSeconds,
 							createdAt: w.createdAt,
 							annotations: w.annotations,
@@ -260,22 +320,29 @@ export async function flushAgentMemory(): Promise<void> {
 		}
 		logger.info(
 			{
-				userId: ref.userId,
-				sessionId: ref.sessionId,
+				userId: primary?.userId,
+				sessionId: primary?.sessionId,
+				...(ensured.size > 1 && { sessions: ensured.size }),
 				facts,
-				total: batch.length,
+				total: sendable.length,
 				blockIds,
 				...(rejected > 0 && { rejected }),
 				sync: syncWritesEnabled(),
 			},
 			"flushed agent-memory writes",
 		);
+		saturatedUntil = 0;
 	} catch (error) {
 		if (error instanceof ServiceUnavailableError) {
 			// Requeue (front) and let the next flush/teardown retry. Don't drop.
-			queue.unshift(...batch);
+			// Refs were pinned above, so a retry under a different bound session
+			// still lands each write in its originating session.
+			queue.unshift(...sendable);
+			const hint = retryAfterHintSchema.safeParse(error.retryAfterSeconds);
+			const cooldownSeconds = hint.success ? hint.data : DEFAULT_SATURATION_COOLDOWN_SECONDS;
+			saturatedUntil = Date.now() + cooldownSeconds * 1000;
 			logger.warn(
-				{ requeued: batch.length, retryAfterSeconds: error.retryAfterSeconds },
+				{ requeued: sendable.length, retryAfterSeconds: error.retryAfterSeconds, cooldownSeconds },
 				"agent-memory queue saturated (503); requeued writes for retry",
 			);
 			return;
@@ -285,7 +352,7 @@ export async function flushAgentMemory(): Promise<void> {
 			// land and there is nothing to retry. Clear the stale ref and move on
 			// quietly — this is expected after a conversation ends, not a failure.
 			clearActiveMemorySession();
-			logger.debug({ dropped: batch.length }, "agent-memory flush after session end; writes discarded");
+			logger.debug({ dropped: sendable.length }, "agent-memory flush after session end; writes discarded");
 			return;
 		}
 		if (isNetworkFailure(error)) {
@@ -294,13 +361,13 @@ export async function flushAgentMemory(): Promise<void> {
 			// that previously read as an opaque "fetch failed" warn with no signal that the
 			// backend itself was unreachable for the whole session.
 			logger.error(
-				{ dropped: batch.length, ...describeError(error) },
+				{ dropped: sendable.length, ...describeError(error) },
 				"agent-memory unreachable; flush dropped writes",
 			);
 			return;
 		}
 		logger.warn(
-			{ dropped: batch.length, error: error instanceof Error ? error.message : String(error) },
+			{ dropped: sendable.length, error: error instanceof Error ? error.message : String(error) },
 			"agent-memory flush failed; writes dropped",
 		);
 	}
@@ -316,6 +383,9 @@ export async function flushAgentMemory(): Promise<void> {
 export async function flushAgentMemoryAfterTurn(agentName: string, threadId: string): Promise<void> {
 	if (selectedBackend() !== "agent-memory") return;
 	setActiveMemorySession(agentName, threadId);
+	// SIO-1364: respect an active saturation cooldown; queued writes ride along
+	// to a later turn or teardown instead of re-hitting a 503ing service.
+	if (Date.now() < saturatedUntil) return;
 	await flushAgentMemory();
 }
 
