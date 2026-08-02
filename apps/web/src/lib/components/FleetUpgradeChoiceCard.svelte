@@ -30,6 +30,17 @@ function reasonLabel(reason: string): string {
 	if (reason === "wolfi_container") return "Wolfi container";
 	return reason;
 }
+
+// "unknown" and "other" resolve to the same label above, so group by resolved label and sum
+// counts -- otherwise a report carrying both buckets renders two visually identical rows.
+const skippedByLabel = $derived.by(() => {
+	const grouped = new Map<string, number>();
+	for (const r of prompt.byReason) {
+		const label = reasonLabel(r.reason);
+		grouped.set(label, (grouped.get(label) ?? 0) + r.count);
+	}
+	return [...grouped].map(([label, count]) => ({ label, count }));
+});
 </script>
 
 <div
@@ -93,8 +104,8 @@ function reasonLabel(reason: string): string {
           Skipped &mdash; not Fleet-upgradeable (bump the image tag upstream instead)
         </p>
         <ul class="mt-1 space-y-0.5 text-xs">
-          {#each prompt.byReason as r (r.reason)}
-            <li class="text-gray-500"><span class="font-medium">{r.count}</span> &times; {reasonLabel(r.reason)}</li>
+          {#each skippedByLabel as row (row.label)}
+            <li class="text-gray-500"><span class="font-medium">{row.count}</span> &times; {row.label}</li>
           {/each}
         </ul>
       </div>
