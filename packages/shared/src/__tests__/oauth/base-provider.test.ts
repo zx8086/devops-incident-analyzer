@@ -12,7 +12,11 @@ import {
 	STALE_INVALIDATION_WINDOW_MS,
 	TOKEN_EXPIRY_SKEW_MS,
 } from "../../oauth/base-provider.ts";
-import { OAuthRefreshLockTimeoutError, OAuthRequiresInteractiveAuthError } from "../../oauth/errors.ts";
+import {
+	OAuthRefreshChainExpiredError,
+	OAuthRefreshLockTimeoutError,
+	OAuthRequiresInteractiveAuthError,
+} from "../../oauth/errors.ts";
 
 const TEST_NAMESPACE = "__base-provider-test__";
 const STORAGE_DIR = join(homedir(), ".mcp-auth", TEST_NAMESPACE);
@@ -370,7 +374,7 @@ describe("BaseOAuthClientProvider", () => {
 			expect(refreshCount).toBeGreaterThanOrEqual(1);
 		});
 
-		test("terminal refresh failure stops the interval (no further ticks)", async () => {
+		test("terminal refresh failure (chain expired) stops the interval (no further ticks)", async () => {
 			const provider = makeProvider({ clock: () => 9_999_999_999_999 });
 			provider.saveTokens({ access_token: "old", refresh_token: "r", token_type: "bearer", expires_in: 1 });
 			(provider as unknown as { lastSaveAt: number }).lastSaveAt = 0;
@@ -379,7 +383,7 @@ describe("BaseOAuthClientProvider", () => {
 			let refreshCount = 0;
 			provider.refreshImpl = async () => {
 				refreshCount++;
-				throw new Error("refresh chain expired");
+				throw new OAuthRefreshChainExpiredError(TEST_NAMESPACE, "invalid_grant from IdP");
 			};
 
 			const stop = provider.startProactiveRefresh(20);
@@ -390,6 +394,101 @@ describe("BaseOAuthClientProvider", () => {
 			// even though we waited long enough for ~6 ticks at 20ms, refreshCount
 			// is 1 (not 6).
 			expect(refreshCount).toBe(1);
+		});
+
+		// SIO-1362: transient errors (socket closed, network blip, lock timeout)
+		// must NOT stop the interval -- only a dead chain is terminal.
+		test("transient refresh failure keeps the interval running (retries next tick)", async () => {
+			const provider = makeProvider({ clock: () => 9_999_999_999_999 });
+			provider.saveTokens({ access_token: "old", refresh_token: "r", token_type: "bearer", expires_in: 1 });
+			(provider as unknown as { lastSaveAt: number }).lastSaveAt = 0;
+			(provider as unknown as { persisted: { tokenObtainedAt?: number } }).persisted.tokenObtainedAt = 0;
+
+			let refreshCount = 0;
+			provider.refreshImpl = async () => {
+				refreshCount++;
+				throw new Error("The socket connection was closed unexpectedly");
+			};
+
+			const stop = provider.startProactiveRefresh(20);
+			await new Promise((r) => setTimeout(r, 120));
+			stop();
+
+			expect(refreshCount).toBeGreaterThanOrEqual(2);
+		});
+
+		// SIO-1362: bun --hot re-runs initDatasource on a fresh provider instance
+		// without ever calling the old instance's stop-fn. The globalThis-keyed
+		// singleton must replace the prior interval, not stack on top of it.
+		test("second start with same namespace+storageKey replaces the first interval", async () => {
+			const clock = () => 9_999_999_999_999;
+			const first = makeProvider({ clock });
+			first.saveTokens({ access_token: "old", refresh_token: "r", token_type: "bearer", expires_in: 1 });
+			(first as unknown as { lastSaveAt: number }).lastSaveAt = 0;
+			(first as unknown as { persisted: { tokenObtainedAt?: number } }).persisted.tokenObtainedAt = 0;
+
+			let firstTicks = 0;
+			first.refreshImpl = async () => {
+				firstTicks++;
+				return { access_token: "fresh", refresh_token: "r", token_type: "bearer", expires_in: 7200 };
+			};
+
+			// Simulate the hot-reload leak: the first instance's stop-fn is lost.
+			first.startProactiveRefresh(20);
+
+			const second = makeProvider({ clock });
+			(second as unknown as { lastSaveAt: number }).lastSaveAt = 0;
+			(second as unknown as { persisted: { tokenObtainedAt?: number } }).persisted.tokenObtainedAt = 0;
+			let secondTicks = 0;
+			second.refreshImpl = async () => {
+				secondTicks++;
+				return { access_token: "fresh2", refresh_token: "r", token_type: "bearer", expires_in: 7200 };
+			};
+			const stopSecond = second.startProactiveRefresh(20);
+
+			await new Promise((r) => setTimeout(r, 90));
+			stopSecond();
+
+			// The first instance's interval was replaced before it could tick;
+			// only the second instance's interval fires.
+			expect(firstTicks).toBe(0);
+			expect(secondTicks).toBeGreaterThanOrEqual(1);
+		});
+
+		// SIO-1362: a stale stop-fn held by a replaced (pre-reload) instance must
+		// clear only its own dead timer, not evict the live replacement.
+		test("stale stop-fn from a replaced instance does not stop the live interval", async () => {
+			const clock = () => 9_999_999_999_999;
+			const first = makeProvider({ clock });
+			first.saveTokens({ access_token: "old", refresh_token: "r", token_type: "bearer", expires_in: 1 });
+			(first as unknown as { lastSaveAt: number }).lastSaveAt = 0;
+			(first as unknown as { persisted: { tokenObtainedAt?: number } }).persisted.tokenObtainedAt = 0;
+			first.refreshImpl = async () => ({
+				access_token: "fresh",
+				refresh_token: "r",
+				token_type: "bearer",
+				expires_in: 7200,
+			});
+			const staleStop = first.startProactiveRefresh(20);
+
+			const second = makeProvider({ clock });
+			(second as unknown as { lastSaveAt: number }).lastSaveAt = 0;
+			(second as unknown as { persisted: { tokenObtainedAt?: number } }).persisted.tokenObtainedAt = 0;
+			let secondTicks = 0;
+			second.refreshImpl = async () => {
+				secondTicks++;
+				return { access_token: "fresh2", refresh_token: "r", token_type: "bearer", expires_in: 7200 };
+			};
+			const stopSecond = second.startProactiveRefresh(20);
+
+			// Calling the replaced instance's stop-fn must be a no-op for the
+			// live interval registered by the second instance.
+			staleStop();
+
+			await new Promise((r) => setTimeout(r, 90));
+			stopSecond();
+
+			expect(secondTicks).toBeGreaterThanOrEqual(1);
 		});
 
 		test("stop function clears the interval (no refreshes after stop)", async () => {
@@ -640,6 +739,7 @@ describe("BaseOAuthClientProvider", () => {
 					warnLogs.push({ obj, msg });
 				},
 				error: () => {},
+				debug: () => {},
 			};
 			const provider = new TestProvider({
 				storageNamespace: TEST_NAMESPACE,

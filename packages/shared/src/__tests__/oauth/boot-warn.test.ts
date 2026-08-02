@@ -5,7 +5,7 @@ import type { OAuthProviderLogger } from "../../oauth/base-provider.ts";
 import { warnIfOAuthNotSeeded } from "../../oauth/boot-warn.ts";
 
 interface CapturedCall {
-	method: "info" | "warn" | "error";
+	method: "debug" | "info" | "warn" | "error";
 	meta: Record<string, unknown>;
 	msg: string;
 }
@@ -14,6 +14,9 @@ function makeRecordingLogger(): OAuthProviderLogger & { calls: CapturedCall[] } 
 	const calls: CapturedCall[] = [];
 	return {
 		calls,
+		debug(meta, msg) {
+			calls.push({ method: "debug", meta, msg });
+		},
 		info(meta, msg) {
 			calls.push({ method: "info", meta, msg });
 		},

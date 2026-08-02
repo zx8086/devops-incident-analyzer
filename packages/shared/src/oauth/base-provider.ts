@@ -18,7 +18,11 @@ import type {
 	OAuthClientMetadata,
 	OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { OAuthRefreshLockTimeoutError, OAuthRequiresInteractiveAuthError } from "./errors.ts";
+import {
+	OAuthRefreshChainExpiredError,
+	OAuthRefreshLockTimeoutError,
+	OAuthRequiresInteractiveAuthError,
+} from "./errors.ts";
 import { isHeadless } from "./headless.ts";
 
 export const OAUTH_CALLBACK_PATH = "/oauth/callback";
@@ -68,6 +72,7 @@ export interface PersistedOAuthState {
 export type AuthorizationHandler = (url: URL) => void | Promise<void>;
 
 export interface OAuthProviderLogger {
+	debug(obj: Record<string, unknown>, msg: string): void;
 	info(obj: Record<string, unknown>, msg: string): void;
 	warn(obj: Record<string, unknown>, msg: string): void;
 	error(obj: Record<string, unknown>, msg: string): void;
@@ -85,6 +90,7 @@ export interface BaseOAuthProviderOptions {
 }
 
 const NOOP_LOGGER: OAuthProviderLogger = {
+	debug: () => {},
 	info: () => {},
 	warn: () => {},
 	error: () => {},
@@ -421,32 +427,74 @@ export abstract class BaseOAuthClientProvider implements OAuthClientProvider {
 	//
 	// Returns a stop function. Subclasses wire this from the MCP server's
 	// initDatasource and store the handle for cleanup at disconnect/shutdown.
+	//
+	// SIO-1362: process-wide singleton per namespace+storageKey, keyed on
+	// globalThis (same rationale as the SIO-1113 health-poll timer). Under
+	// `bun --hot` each reload re-runs initDatasource -> connect() ->
+	// startProactiveRefresh() on a FRESH provider instance while
+	// cleanupDatasource only runs on SIGINT/SIGTERM, so an instance- or
+	// module-scope guard would let every reload stack another permanent
+	// interval. globalThis survives across module graphs, so start always
+	// replaces the one live timer instead of adding to it.
 	startProactiveRefresh(intervalMs: number): () => void {
+		const timerKey = Symbol.for(`devops-agent.oauth.proactiveRefresh.${this.storageNamespace}.${this.storageKey}`);
+		const registry = globalThis as Record<symbol, unknown>;
+		const prior = registry[timerKey] as ReturnType<typeof setInterval> | undefined;
+		if (prior !== undefined) {
+			clearInterval(prior);
+			this.logger.debug(
+				{ namespace: this.storageNamespace, intervalMs },
+				"Replaced prior OAuth proactive refresh interval",
+			);
+		}
 		const id = setInterval(async () => {
 			try {
 				await this.ensureFreshTokens();
-				this.logger.info({ namespace: this.storageNamespace, intervalMs }, "OAuth proactive refresh tick succeeded");
+				this.logger.debug({ namespace: this.storageNamespace, intervalMs }, "OAuth proactive refresh tick succeeded");
 			} catch (error) {
-				// On a terminal refresh failure (the chain is dead), stop the
-				// interval -- hammering /oauth/token won't revive it, and the
-				// next real tool call will surface the same error to the caller.
-				clearInterval(id);
-				this.logger.error(
+				// SIO-1362: only a dead refresh chain is terminal -- hammering
+				// /oauth/token won't revive it, and the next real tool call
+				// surfaces the same error to the caller. Everything else
+				// (transient socket/network errors, lock-timeout contention)
+				// resolves itself; keep ticking and retry next interval.
+				if (error instanceof OAuthRefreshChainExpiredError) {
+					clearInterval(id);
+					if (registry[timerKey] === id) {
+						registry[timerKey] = undefined;
+					}
+					this.logger.error(
+						{
+							namespace: this.storageNamespace,
+							error: error.message,
+							remediation: `bun run oauth:seed:${this.storageNamespace}`,
+						},
+						"OAuth proactive refresh failed terminally; interval stopped, re-seed required",
+					);
+					return;
+				}
+				this.logger.warn(
 					{
 						namespace: this.storageNamespace,
 						error: error instanceof Error ? error.message : String(error),
-						remediation: `bun run oauth:seed:${this.storageNamespace}`,
 					},
-					"OAuth proactive refresh failed terminally; interval stopped, re-seed required",
+					"OAuth proactive refresh tick failed; will retry next tick",
 				);
 			}
 		}, intervalMs);
+		registry[timerKey] = id;
 		// Don't keep the event loop alive solely for this timer -- if the MCP
 		// server has shut down everything else, the process should exit.
 		if (typeof id === "object" && id !== null && "unref" in id && typeof id.unref === "function") {
 			id.unref();
 		}
-		return () => clearInterval(id);
+		return () => {
+			clearInterval(id);
+			// A stale stop-fn from a replaced (pre-reload) instance must not
+			// evict the live timer another instance registered after it.
+			if (registry[timerKey] === id) {
+				registry[timerKey] = undefined;
+			}
+		};
 	}
 
 	// Treat tokens as expired when there is no obtainedAt timestamp on disk
