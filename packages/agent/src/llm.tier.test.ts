@@ -128,21 +128,48 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 	// side effect, so the light tier now names its own model. This pins the DECOUPLING, which is
 	// the property that matters -- a borrow-equality assertion would go green again the moment
 	// someone reintroduced the coupling.
+	//
+	// SIO-1367: both the light tier and the sub-agent manifests independently landed on
+	// claude-haiku-4-5, so a value-inequality assertion (`not.toBe(specialist)`) would now be a
+	// false negative -- equal values, unrelated sources. The invariant this test guards is
+	// structural (LIGHT_TIER_MODEL is a hardcoded constant with no read of any sub-agent
+	// manifest), not "the strings happen to differ today." Assert that directly: mutating the
+	// elastic-agent manifest object in memory must not move what the light tier resolves to.
 	test("a light-tier role reports light-tier and does NOT track the specialists' model", () => {
-		const specialist = agent.subAgents.get("elastic-agent")?.manifest.model?.preferred;
+		const elasticAgent = agent.subAgents.get("elastic-agent");
+		const specialist = elasticAgent?.manifest.model?.preferred;
 		expect(specialist).toBeTruthy();
 
 		const resolved = resolveRoleModelConfig("classifier", agent);
 		expect(resolved.source).toBe("light-tier");
 		expect(resolved.modelConfig?.preferred).toBe("claude-haiku-4-5");
-		// The specialists are on Sonnet 4.6; the light tier must not have followed them.
-		expect(resolved.modelConfig?.preferred).not.toBe(specialist);
+
+		// Prove independence structurally: even after mutating the specialist's manifest to a
+		// model the light tier has never heard of, the light tier's resolution is unchanged --
+		// it never reads agent.subAgents at all. `agent` is shared across every test in this
+		// file, so the mutation must be undone even on assertion failure, or a later test
+		// reading elastic-agent's preferred model would see this test's leaked state.
+		const model = elasticAgent?.manifest.model;
+		expect(model).toBeDefined();
+		const originalPreferred = model?.preferred as string;
+		try {
+			if (model) {
+				model.preferred = "claude-opus-5";
+			}
+			const resolvedAfterMutation = resolveRoleModelConfig("classifier", agent);
+			expect(resolvedAfterMutation.modelConfig?.preferred).toBe("claude-haiku-4-5");
+		} finally {
+			if (model) {
+				model.preferred = originalPreferred;
+			}
+		}
 	});
 
+	// SIO-1367: sub-agents moved claude-sonnet-4-6 -> claude-haiku-4-5.
 	test("a subAgent role with a known specialist reports sub-agent-manifest", () => {
 		const resolved = resolveRoleModelConfig("subAgent", agent, "gitlab-agent");
 		expect(resolved.source).toBe("sub-agent-manifest");
-		expect(resolved.modelConfig?.preferred).toBe("claude-sonnet-4-6");
+		expect(resolved.modelConfig?.preferred).toBe("claude-haiku-4-5");
 	});
 
 	test("a subAgent role with an unknown specialist reports root-manifest", () => {
