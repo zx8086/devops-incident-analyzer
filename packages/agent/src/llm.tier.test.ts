@@ -154,9 +154,15 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 		const model = elasticAgent?.manifest.model;
 		expect(model).toBeDefined();
 		const originalPreferred = model?.preferred as string;
+		// CodeRabbit (PR #589): the target must be neutral to both tiers, or this test could pass
+		// by coincidence (e.g. if claude-sonnet-4-6 later became the light tier's own model) rather
+		// than by proving the light tier never reads agent.subAgents.
+		const mutationTarget = "claude-sonnet-4-6";
+		expect(mutationTarget).not.toBe(specialist);
+		expect(mutationTarget).not.toBe(resolved.modelConfig?.preferred);
 		try {
 			if (model) {
-				model.preferred = "claude-sonnet-4-6";
+				model.preferred = mutationTarget;
 			}
 			const resolvedAfterMutation = resolveRoleModelConfig("classifier", agent);
 			expect(resolvedAfterMutation.modelConfig?.preferred).toBe("claude-haiku-4-5");
@@ -186,10 +192,12 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 		const resolved = resolveRoleModelConfig("aggregator", agent, "gitlab-agent");
 		expect(resolved.source).toBe("root-manifest");
 		expect(resolved.modelConfig?.preferred).toBe(rootPreferred);
-		// The specialist's model must NOT leak into a non-subAgent role.
-		const specialistPreferred = agent.subAgents.get("gitlab-agent")?.manifest.model?.preferred;
-		expect(specialistPreferred).toBeTruthy();
-		expect(resolved.modelConfig?.preferred).not.toBe(specialistPreferred);
+		// CodeRabbit (PR #589): a valid manifest can assign the same model to root and a
+		// specialist, so asserting the two preferred strings differ is a false invariant that
+		// would fail on a coincidental match even when subAgentName is correctly ignored. Prove
+		// ignorance directly: the result must be identical to calling without a subAgentName.
+		const resolvedWithoutSubAgentName = resolveRoleModelConfig("aggregator", agent);
+		expect(resolved.modelConfig).toEqual(resolvedWithoutSubAgentName.modelConfig);
 	});
 
 	// The light tier wins over the sub-agent branch: a role that is BOTH tierable-light and
@@ -205,11 +213,19 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 	// changing generation behavior, not just the model. It must drop only `fallback` (the
 	// override is meant to isolate ONE model's behavior, not its production fallback chain).
 	test("an eval override drops fallback but preserves the resolved model's constraints", () => {
-		const resolved = resolveRoleModelConfig("classifier", agent, undefined, {
+		// CodeRabbit (PR #589): prove the override actually REMOVES a fallback, not merely that
+		// the post-override result happens to have none. Root's model: block is the fixture with
+		// both a fallback and constraints (lightTierModel has no fallback in agent.yaml, so a
+		// light-tier target could pass this precondition by coincidence, not by proof).
+		const resolvedWithoutOverride = resolveRoleModelConfig("aggregator", agent, undefined, {} as NodeJS.ProcessEnv);
+		expect(resolvedWithoutOverride.modelConfig?.fallback).toBeTruthy();
+		expect(resolvedWithoutOverride.modelConfig?.constraints?.temperature).toBe(0.2);
+
+		const resolved = resolveRoleModelConfig("aggregator", agent, undefined, {
 			EVAL_ROOT_MODEL_OVERRIDE: "claude-sonnet-4-6",
 		} as NodeJS.ProcessEnv);
 		expect(resolved.modelConfig?.preferred).toBe("claude-sonnet-4-6");
 		expect(resolved.modelConfig?.fallback).toBeUndefined();
-		expect(resolved.modelConfig?.constraints?.temperature).toBe(0);
+		expect(resolved.modelConfig?.constraints?.temperature).toBe(0.2);
 	});
 });
