@@ -129,12 +129,15 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 	// the property that matters -- a borrow-equality assertion would go green again the moment
 	// someone reintroduced the coupling.
 	//
-	// SIO-1367: both the light tier and the sub-agent manifests independently landed on
-	// claude-haiku-4-5, so a value-inequality assertion (`not.toBe(specialist)`) would now be a
-	// false negative -- equal values, unrelated sources. The invariant this test guards is
-	// structural (LIGHT_TIER_MODEL is a hardcoded constant with no read of any sub-agent
-	// manifest), not "the strings happen to differ today." Assert that directly: mutating the
-	// elastic-agent manifest object in memory must not move what the light tier resolves to.
+	// SIO-1372 (in-flight, separate work): a future specialist swap could put the light tier and
+	// the specialists on the SAME model, so a value-inequality assertion (`not.toBe(specialist)`)
+	// here would become a false negative the moment that happens to be true. The invariant this
+	// test guards is structural
+	// (LIGHT_TIER_MODEL / lightTierModel is read from the ROOT manifest with no read of any
+	// sub-agent manifest), not "the strings happen to differ today." Assert that directly:
+	// mutating the elastic-agent manifest object in memory must not move what the light tier
+	// resolves to. The mutation target below must stay a model NEITHER tier currently uses, or
+	// this test would pass by coincidence rather than by proving independence.
 	test("a light-tier role reports light-tier and does NOT track the specialists' model", () => {
 		const elasticAgent = agent.subAgents.get("elastic-agent");
 		const specialist = elasticAgent?.manifest.model?.preferred;
@@ -152,9 +155,15 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 		const model = elasticAgent?.manifest.model;
 		expect(model).toBeDefined();
 		const originalPreferred = model?.preferred as string;
+		// CodeRabbit (PR #589): the target must be neutral to both tiers, or this test could pass
+		// by coincidence (e.g. if claude-sonnet-4-6 later became the light tier's own model) rather
+		// than by proving the light tier never reads agent.subAgents.
+		const mutationTarget = "claude-sonnet-4-6";
+		expect(mutationTarget).not.toBe(specialist);
+		expect(mutationTarget).not.toBe(resolved.modelConfig?.preferred);
 		try {
 			if (model) {
-				model.preferred = "claude-opus-5";
+				model.preferred = mutationTarget;
 			}
 			const resolvedAfterMutation = resolveRoleModelConfig("classifier", agent);
 			expect(resolvedAfterMutation.modelConfig?.preferred).toBe("claude-haiku-4-5");
@@ -165,7 +174,9 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 		}
 	});
 
-	// SIO-1367: sub-agents moved claude-sonnet-4-6 -> claude-haiku-4-5.
+	// SIO-1367: sub-agents moved claude-sonnet-4-6 -> claude-haiku-4-5. (An in-flight, uncommitted
+	// SIO-1372 swap to claude-opus-5 is separate work, blocked on a Bedrock ServiceUnavailableException
+	// -- not part of this PR. This test tracks the manifest actually committed here.)
 	test("a subAgent role with a known specialist reports sub-agent-manifest", () => {
 		const resolved = resolveRoleModelConfig("subAgent", agent, "gitlab-agent");
 		expect(resolved.source).toBe("sub-agent-manifest");
@@ -184,8 +195,12 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 		const resolved = resolveRoleModelConfig("aggregator", agent, "gitlab-agent");
 		expect(resolved.source).toBe("root-manifest");
 		expect(resolved.modelConfig?.preferred).toBe(rootPreferred);
-		// The specialist's model must NOT leak into a non-subAgent role.
-		expect(resolved.modelConfig?.preferred).not.toBe("claude-haiku-4-5");
+		// CodeRabbit (PR #589): a valid manifest can assign the same model to root and a
+		// specialist, so asserting the two preferred strings differ is a false invariant that
+		// would fail on a coincidental match even when subAgentName is correctly ignored. Prove
+		// ignorance directly: the result must be identical to calling without a subAgentName.
+		const resolvedWithoutSubAgentName = resolveRoleModelConfig("aggregator", agent);
+		expect(resolved.modelConfig).toEqual(resolvedWithoutSubAgentName.modelConfig);
 	});
 
 	// The light tier wins over the sub-agent branch: a role that is BOTH tierable-light and
@@ -193,5 +208,27 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 	// silently overridden.
 	test("light tier takes precedence over a sub-agent name", () => {
 		expect(resolveRoleModelConfig("classifier", agent, "gitlab-agent").source).toBe("light-tier");
+	});
+
+	// CodeRabbit (PR #589): applyEvalModelOverride used to return a bare { preferred: override },
+	// which silently dropped the resolved model's `constraints` too -- for the light tier that
+	// turns lightTierModel's temperature: 0 into the provider default under an eval override,
+	// changing generation behavior, not just the model. It must drop only `fallback` (the
+	// override is meant to isolate ONE model's behavior, not its production fallback chain).
+	test("an eval override drops fallback but preserves the resolved model's constraints", () => {
+		// CodeRabbit (PR #589): prove the override actually REMOVES a fallback, not merely that
+		// the post-override result happens to have none. Root's model: block is the fixture with
+		// both a fallback and constraints (lightTierModel has no fallback in agent.yaml, so a
+		// light-tier target could pass this precondition by coincidence, not by proof).
+		const resolvedWithoutOverride = resolveRoleModelConfig("aggregator", agent, undefined, {} as NodeJS.ProcessEnv);
+		expect(resolvedWithoutOverride.modelConfig?.fallback).toBeTruthy();
+		expect(resolvedWithoutOverride.modelConfig?.constraints?.temperature).toBe(0.2);
+
+		const resolved = resolveRoleModelConfig("aggregator", agent, undefined, {
+			EVAL_ROOT_MODEL_OVERRIDE: "claude-sonnet-4-6",
+		} as NodeJS.ProcessEnv);
+		expect(resolved.modelConfig?.preferred).toBe("claude-sonnet-4-6");
+		expect(resolved.modelConfig?.fallback).toBeUndefined();
+		expect(resolved.modelConfig?.constraints?.temperature).toBe(0.2);
 	});
 });
