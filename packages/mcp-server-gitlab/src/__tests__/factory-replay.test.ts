@@ -4,7 +4,7 @@
 // once via discoverRemoteTools), so registerAll iterating that frozen array at boot is sound.
 // This test locks in replay equivalence -- a replayed server's tool list must match both a
 // second replay and a directly-registered control server built from the same stubs.
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -97,6 +97,68 @@ describe("SIO-1044: gitlab-mcp-server cached factory replay", () => {
 		expect(names).not.toContain("gitlab_get_project");
 		expect(names).not.toContain("gitlab_list_issues");
 		expect(names.length).toBeGreaterThan(0);
+	});
+
+	// Regression: GitLab's upstream /api/v4/mcp tool surface can add a tool under the same name
+	// as a hand-written code-analysis tool (list_merge_requests -> gitlab_list_merge_requests,
+	// SIO-771) at any time. Without excludeToolsShadowedByCodeAnalysis, registerCodeAnalysisTools
+	// (registered second) throws "Tool gitlab_list_merge_requests is already registered" and the
+	// whole server fails to boot -- this must resolve to the custom tool winning instead.
+	test("a discovered proxy tool colliding with a code-analysis tool name does not crash boot -- custom tool wins", async () => {
+		const collidingDiscoveredTools: ProxyToolInfo[] = [
+			...fakeDiscoveredTools,
+			{
+				name: "list_merge_requests",
+				description: "Upstream GitLab proxy's own merge-request listing tool",
+				inputSchema: { type: "object", properties: { project_id: { type: "string" } }, required: ["project_id"] },
+			},
+		];
+
+		const factory = createMcpServerFactory(makeDatasource(collidingDiscoveredTools));
+		const names = await toolNames(factory());
+
+		expect(names.filter((n) => n === "gitlab_list_merge_requests")).toHaveLength(1);
+		expect(names).toContain("gitlab_get_project");
+		expect(names).toContain("gitlab_list_issues");
+	});
+
+	// CodeRabbit (PR #588): the tool-list assertion above proves only that the name is registered
+	// once, not that the CUSTOM handler is the one that ends up bound to it. Invoke the tool
+	// through a real client and assert restClient.listMergeRequests (the custom handler's
+	// dependency) is called while proxy.callTool (the shadowed upstream handler's dependency)
+	// is not.
+	test("the colliding tool's handler is the custom code-analysis one, not the shadowed proxy passthrough", async () => {
+		const collidingDiscoveredTools: ProxyToolInfo[] = [
+			{
+				name: "list_merge_requests",
+				description: "Upstream GitLab proxy's own merge-request listing tool",
+				inputSchema: { type: "object", properties: { project_id: { type: "string" } }, required: ["project_id"] },
+			},
+		];
+
+		const proxyCallToolSpy = mock(async () => ({ content: [] }));
+		const spiedProxy = { ...stubProxy, callTool: proxyCallToolSpy } as unknown as GitLabMcpProxy;
+
+		const listMergeRequestsSpy = mock(async (_projectId: number, _options?: Record<string, unknown>) => []);
+		const spiedRestClient = { listMergeRequests: listMergeRequestsSpy } as unknown as GitLabRestClient;
+
+		const ds: GitLabDatasource = {
+			proxy: spiedProxy,
+			restClient: spiedRestClient,
+			config: fakeConfig,
+			discoveredTools: collidingDiscoveredTools,
+		};
+		const server = createMcpServerFactory(ds)();
+
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "gitlab-collision-handler-test-client", version: "0.0.0" });
+		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+		await client.callTool({ name: "gitlab_list_merge_requests", arguments: { project_id: 42 } });
+		await client.close();
+
+		expect(listMergeRequestsSpy).toHaveBeenCalledTimes(1);
+		expect(listMergeRequestsSpy.mock.calls[0]?.[0]).toBe(42);
+		expect(proxyCallToolSpy).not.toHaveBeenCalled();
 	});
 
 	// SIO-1076: Orbit tools register only when config.orbit.enabled is true, and the
