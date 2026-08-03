@@ -129,12 +129,14 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 	// the property that matters -- a borrow-equality assertion would go green again the moment
 	// someone reintroduced the coupling.
 	//
-	// SIO-1367: both the light tier and the sub-agent manifests independently landed on
-	// claude-haiku-4-5, so a value-inequality assertion (`not.toBe(specialist)`) would now be a
-	// false negative -- equal values, unrelated sources. The invariant this test guards is
-	// structural (LIGHT_TIER_MODEL is a hardcoded constant with no read of any sub-agent
-	// manifest), not "the strings happen to differ today." Assert that directly: mutating the
-	// elastic-agent manifest object in memory must not move what the light tier resolves to.
+	// SIO-1372: specialists moved claude-haiku-4-5 -> claude-opus-5, so a value-inequality
+	// assertion (`not.toBe(specialist)`) here would again be a false negative the moment the
+	// two tiers' models happen to match. The invariant this test guards is structural
+	// (LIGHT_TIER_MODEL / lightTierModel is read from the ROOT manifest with no read of any
+	// sub-agent manifest), not "the strings happen to differ today." Assert that directly:
+	// mutating the elastic-agent manifest object in memory must not move what the light tier
+	// resolves to. The mutation target below must stay a model NEITHER tier currently uses, or
+	// this test would pass by coincidence rather than by proving independence.
 	test("a light-tier role reports light-tier and does NOT track the specialists' model", () => {
 		const elasticAgent = agent.subAgents.get("elastic-agent");
 		const specialist = elasticAgent?.manifest.model?.preferred;
@@ -154,7 +156,7 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 		const originalPreferred = model?.preferred as string;
 		try {
 			if (model) {
-				model.preferred = "claude-opus-5";
+				model.preferred = "claude-sonnet-4-6";
 			}
 			const resolvedAfterMutation = resolveRoleModelConfig("classifier", agent);
 			expect(resolvedAfterMutation.modelConfig?.preferred).toBe("claude-haiku-4-5");
@@ -165,11 +167,11 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 		}
 	});
 
-	// SIO-1367: sub-agents moved claude-sonnet-4-6 -> claude-haiku-4-5.
+	// SIO-1372: sub-agents moved claude-haiku-4-5 -> claude-opus-5.
 	test("a subAgent role with a known specialist reports sub-agent-manifest", () => {
 		const resolved = resolveRoleModelConfig("subAgent", agent, "gitlab-agent");
 		expect(resolved.source).toBe("sub-agent-manifest");
-		expect(resolved.modelConfig?.preferred).toBe("claude-haiku-4-5");
+		expect(resolved.modelConfig?.preferred).toBe("claude-opus-5");
 	});
 
 	test("a subAgent role with an unknown specialist reports root-manifest", () => {
@@ -185,7 +187,9 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 		expect(resolved.source).toBe("root-manifest");
 		expect(resolved.modelConfig?.preferred).toBe(rootPreferred);
 		// The specialist's model must NOT leak into a non-subAgent role.
-		expect(resolved.modelConfig?.preferred).not.toBe("claude-haiku-4-5");
+		const specialistPreferred = agent.subAgents.get("gitlab-agent")?.manifest.model?.preferred;
+		expect(specialistPreferred).toBeTruthy();
+		expect(resolved.modelConfig?.preferred).not.toBe(specialistPreferred);
 	});
 
 	// The light tier wins over the sub-agent branch: a role that is BOTH tierable-light and
@@ -193,5 +197,19 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 	// silently overridden.
 	test("light tier takes precedence over a sub-agent name", () => {
 		expect(resolveRoleModelConfig("classifier", agent, "gitlab-agent").source).toBe("light-tier");
+	});
+
+	// CodeRabbit (PR #589): applyEvalModelOverride used to return a bare { preferred: override },
+	// which silently dropped the resolved model's `constraints` too -- for the light tier that
+	// turns lightTierModel's temperature: 0 into the provider default under an eval override,
+	// changing generation behavior, not just the model. It must drop only `fallback` (the
+	// override is meant to isolate ONE model's behavior, not its production fallback chain).
+	test("an eval override drops fallback but preserves the resolved model's constraints", () => {
+		const resolved = resolveRoleModelConfig("classifier", agent, undefined, {
+			EVAL_ROOT_MODEL_OVERRIDE: "claude-sonnet-4-6",
+		} as NodeJS.ProcessEnv);
+		expect(resolved.modelConfig?.preferred).toBe("claude-sonnet-4-6");
+		expect(resolved.modelConfig?.fallback).toBeUndefined();
+		expect(resolved.modelConfig?.constraints?.temperature).toBe(0);
 	});
 });

@@ -390,7 +390,10 @@ function applyEvalModelOverride(
 ): ManifestModelConfig {
 	const override = role === "subAgent" ? env.EVAL_SUB_AGENT_MODEL_OVERRIDE : env.EVAL_ROOT_MODEL_OVERRIDE;
 	if (!override) return modelConfig;
-	return { preferred: override };
+	// CodeRabbit (PR #589): a bare { preferred: override } dropped the resolved manifest's
+	// `constraints` too -- for lightTierModel that silently turned temperature: 0 into the
+	// provider default under an eval override, changing generation behavior, not just the model.
+	return { ...modelConfig, preferred: override, fallback: undefined };
 }
 
 // SIO-1235: the whole precedence rule in one readable, unit-testable place.
