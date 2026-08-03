@@ -129,9 +129,10 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 	// the property that matters -- a borrow-equality assertion would go green again the moment
 	// someone reintroduced the coupling.
 	//
-	// SIO-1372: specialists moved claude-haiku-4-5 -> claude-opus-5, so a value-inequality
-	// assertion (`not.toBe(specialist)`) here would again be a false negative the moment the
-	// two tiers' models happen to match. The invariant this test guards is structural
+	// SIO-1372 (in-flight, separate work): a future specialist swap could put the light tier and
+	// the specialists on the SAME model, so a value-inequality assertion (`not.toBe(specialist)`)
+	// here would become a false negative the moment that happens to be true. The invariant this
+	// test guards is structural
 	// (LIGHT_TIER_MODEL / lightTierModel is read from the ROOT manifest with no read of any
 	// sub-agent manifest), not "the strings happen to differ today." Assert that directly:
 	// mutating the elastic-agent manifest object in memory must not move what the light tier
@@ -173,11 +174,13 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 		}
 	});
 
-	// SIO-1372: sub-agents moved claude-haiku-4-5 -> claude-opus-5.
+	// SIO-1367: sub-agents moved claude-sonnet-4-6 -> claude-haiku-4-5. (An in-flight, uncommitted
+	// SIO-1372 swap to claude-opus-5 is separate work, blocked on a Bedrock ServiceUnavailableException
+	// -- not part of this PR. This test tracks the manifest actually committed here.)
 	test("a subAgent role with a known specialist reports sub-agent-manifest", () => {
 		const resolved = resolveRoleModelConfig("subAgent", agent, "gitlab-agent");
 		expect(resolved.source).toBe("sub-agent-manifest");
-		expect(resolved.modelConfig?.preferred).toBe("claude-opus-5");
+		expect(resolved.modelConfig?.preferred).toBe("claude-haiku-4-5");
 	});
 
 	test("a subAgent role with an unknown specialist reports root-manifest", () => {
