@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { GitLabApiError, type GitLabRestClient } from "../../gitlab-client/index.js";
-import { registerCodeAnalysisTools } from "../code-analysis-registry.js";
+import { CODE_ANALYSIS_TOOL_NAMES, registerCodeAnalysisTools } from "../code-analysis-registry.js";
 
 interface ToolResult {
 	content: Array<{ type: string; text: string }>;
@@ -24,14 +24,9 @@ function stubServer() {
 	return { server, handlers };
 }
 
-const EXPECTED_TOOLS = [
-	"gitlab_get_file_content",
-	"gitlab_get_blame",
-	"gitlab_get_commit_diff",
-	"gitlab_list_commits",
-	"gitlab_get_repository_tree",
-	"gitlab_list_merge_requests",
-];
+// CodeRabbit (PR #588): import the same list registerAll's proxy-collision filter uses, so this
+// test fails if a code-analysis tool is registered without updating CODE_ANALYSIS_TOOL_NAMES.
+const EXPECTED_TOOLS = CODE_ANALYSIS_TOOL_NAMES;
 
 function makeClient(over: Partial<GitLabRestClient>): GitLabRestClient {
 	return over as unknown as GitLabRestClient;

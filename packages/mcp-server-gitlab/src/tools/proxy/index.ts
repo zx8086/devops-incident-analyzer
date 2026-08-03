@@ -10,7 +10,7 @@ import { classifyErrorMessage, envelopeText } from "../error-envelope.js";
 
 const log = createContextLogger("proxy-tools");
 
-const TOOL_PREFIX = "gitlab_";
+export const TOOL_PREFIX = "gitlab_";
 
 // GitLab returns this when a project's code embeddings haven't been built yet.
 // First-time indexing takes 10-20 minutes per project (rate-limited to 450 embeddings/min).

@@ -7,7 +7,7 @@ import type { OrbitRestClient } from "./gitlab-client/orbit.js";
 import type { GitLabMcpProxy, ProxyToolInfo } from "./gitlab-client/proxy.js";
 import { CODE_ANALYSIS_TOOL_NAMES, registerCodeAnalysisTools } from "./tools/code-analysis-registry.js";
 import { registerOrbitTools } from "./tools/orbit/index.js";
-import { registerProxyTools } from "./tools/proxy/index.js";
+import { registerProxyTools, TOOL_PREFIX } from "./tools/proxy/index.js";
 import { createContextLogger } from "./utils/logger.js";
 
 const log = createContextLogger("server");
@@ -58,7 +58,7 @@ function createBareServer(config: Config): McpServer {
 // always wins by dropping the colliding proxy tool here first.
 function excludeToolsShadowedByCodeAnalysis(discoveredTools: ProxyToolInfo[]): ProxyToolInfo[] {
 	return discoveredTools.filter((tool) => {
-		const prefixedName = tool.name.startsWith("gitlab_") ? tool.name : `gitlab_${tool.name}`;
+		const prefixedName = tool.name.startsWith(TOOL_PREFIX) ? tool.name : `${TOOL_PREFIX}${tool.name}`;
 		return !CODE_ANALYSIS_TOOL_NAME_SET.has(prefixedName);
 	});
 }
