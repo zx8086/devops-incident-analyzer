@@ -12,6 +12,20 @@ import { registerListMergeRequestsTool } from "./code-analysis/list-merge-reques
 
 const log = createContextLogger("code-analysis-tools");
 
+// SIO-771 etc: these are hand-written tools with behavior the upstream GitLab MCP proxy doesn't
+// (yet, or reliably) provide -- e.g. list-merge-requests requires numeric project_id, which
+// upstream 404s on. Exported so registerAll (server.ts) can filter these names out of the
+// discovered proxy tool set before registration, since GitLab's upstream tool surface can add a
+// same-named tool at any time and the SDK throws on a duplicate registerTool call.
+export const CODE_ANALYSIS_TOOL_NAMES = [
+	"gitlab_get_file_content",
+	"gitlab_get_blame",
+	"gitlab_get_commit_diff",
+	"gitlab_list_commits",
+	"gitlab_get_repository_tree",
+	"gitlab_list_merge_requests",
+] as const;
+
 export function registerCodeAnalysisTools(server: McpServer, restClient: GitLabRestClient): number {
 	registerGetFileContentTool(server, restClient);
 	registerGetBlameTool(server, restClient);
@@ -19,14 +33,9 @@ export function registerCodeAnalysisTools(server: McpServer, restClient: GitLabR
 	registerListCommitsTool(server, restClient);
 	registerGetRepositoryTreeTool(server, restClient);
 	registerListMergeRequestsTool(server, restClient);
-	const registered = [
-		"gitlab_get_file_content",
-		"gitlab_get_blame",
-		"gitlab_get_commit_diff",
-		"gitlab_list_commits",
-		"gitlab_get_repository_tree",
-		"gitlab_list_merge_requests",
-	];
-	log.info({ count: registered.length, tools: registered }, "Code analysis tools registered");
-	return registered.length;
+	log.info(
+		{ count: CODE_ANALYSIS_TOOL_NAMES.length, tools: CODE_ANALYSIS_TOOL_NAMES },
+		"Code analysis tools registered",
+	);
+	return CODE_ANALYSIS_TOOL_NAMES.length;
 }

@@ -99,6 +99,29 @@ describe("SIO-1044: gitlab-mcp-server cached factory replay", () => {
 		expect(names.length).toBeGreaterThan(0);
 	});
 
+	// Regression: GitLab's upstream /api/v4/mcp tool surface can add a tool under the same name
+	// as a hand-written code-analysis tool (list_merge_requests -> gitlab_list_merge_requests,
+	// SIO-771) at any time. Without excludeToolsShadowedByCodeAnalysis, registerCodeAnalysisTools
+	// (registered second) throws "Tool gitlab_list_merge_requests is already registered" and the
+	// whole server fails to boot -- this must resolve to the custom tool winning instead.
+	test("a discovered proxy tool colliding with a code-analysis tool name does not crash boot -- custom tool wins", async () => {
+		const collidingDiscoveredTools: ProxyToolInfo[] = [
+			...fakeDiscoveredTools,
+			{
+				name: "list_merge_requests",
+				description: "Upstream GitLab proxy's own merge-request listing tool",
+				inputSchema: { type: "object", properties: { project_id: { type: "string" } }, required: ["project_id"] },
+			},
+		];
+
+		const factory = createMcpServerFactory(makeDatasource(collidingDiscoveredTools));
+		const names = await toolNames(factory());
+
+		expect(names.filter((n) => n === "gitlab_list_merge_requests")).toHaveLength(1);
+		expect(names).toContain("gitlab_get_project");
+		expect(names).toContain("gitlab_list_issues");
+	});
+
 	// SIO-1076: Orbit tools register only when config.orbit.enabled is true, and the
 	// tool surface is stable regardless of boot availability (handlers soft-fail).
 	test("orbit tools register when enabled and are absent when disabled", async () => {
