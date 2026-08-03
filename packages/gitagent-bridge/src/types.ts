@@ -86,6 +86,11 @@ export const AgentManifestSchema = z.object({
 	version: z.string(),
 	description: z.string(),
 	model: ModelConfigSchema.optional(),
+	// SIO-1372: the light-tier model (classifier/gapsJudge/absenceJudge) used to be hardcoded in
+	// llm.ts specifically so a sub-agent specialist bump could never silently reprice it (SIO-1262).
+	// That decoupling goal doesn't require code -- an independent YAML key gets the same isolation
+	// (it inherits from nothing) while staying editable like every other model config in this repo.
+	lightTierModel: ModelConfigSchema.optional(),
 	runtime: RuntimeConfigSchema.optional(),
 	// GAP dialect: skills/tools may be `["x"]` or `[{ id: "x" }]`; both normalize to string[].
 	skills: z.preprocess(toIdList, z.array(z.string())).optional(),

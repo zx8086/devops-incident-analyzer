@@ -17,6 +17,17 @@ model:
     temperature: 0.2
     max_tokens: 4096
 
+# SIO-1372: the light tier (classifier, gapsJudge, absenceJudge -- deliberately cheap,
+# high-frequency roles) resolves its model from HERE, not from `model:` above and not from any
+# sub-agent manifest. This isolation is what SIO-1262 wanted -- a specialist or root model bump
+# can never silently reprice these roles -- now expressed as an independent YAML key instead of a
+# hardcoded constant in llm.ts, so it can be changed the same way every other model in this repo
+# is changed. No fallback: light-tier roles have never had one (see llm.ts SIO-1225 correction).
+lightTierModel:
+  preferred: claude-haiku-4-5
+  constraints:
+    temperature: 0
+
 runtime:
   max_turns: 50
   # SIO-697: graph budget; abort here is the safety net, not the expected end state.
