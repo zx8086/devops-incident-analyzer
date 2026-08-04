@@ -27,7 +27,16 @@ function ensureMcpConnected(): Promise<void> {
 	return mcpReady;
 }
 
-export async function runAgent(inputs: { query: string }): Promise<{
+export async function runAgent(inputs: {
+	query: string;
+	// SIO-1371: mirrors apps/web/src/lib/server/agent.ts:invokeAgent's targetDataSources/
+	// targetDeployments/uiAwsEstates initial-state fields, so an incident-replay example that
+	// carries the real UI selections a user had active exercises the SAME fixed-target path
+	// production runs use, instead of falling through to free entity extraction.
+	uiSelectedDataSources?: string[];
+	uiSelectedElasticDeployments?: string[];
+	uiSelectedAwsEstates?: string[];
+}): Promise<{
 	output: {
 		response: string;
 		targetDataSources: string[];
@@ -40,7 +49,12 @@ export async function runAgent(inputs: { query: string }): Promise<{
 		cachedGraph = await buildGraph({ checkpointerType: "memory" });
 	}
 	const finalState = await cachedGraph.invoke(
-		{ messages: [new HumanMessage(inputs.query)] },
+		{
+			messages: [new HumanMessage(inputs.query)],
+			targetDataSources: inputs.uiSelectedDataSources ?? [],
+			targetDeployments: inputs.uiSelectedElasticDeployments ?? [],
+			uiAwsEstates: inputs.uiSelectedAwsEstates ?? [],
+		},
 		{ configurable: { thread_id: `eval-${crypto.randomUUID()}` } },
 	);
 	const lastMessage = finalState.messages.at(-1);

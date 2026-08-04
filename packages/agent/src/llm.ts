@@ -368,6 +368,29 @@ export function isSubAgentManifestModelEnabled(env: NodeJS.ProcessEnv = process.
 // to Sonnet 4.6. Named here so a future specialist bump cannot silently reprice these roles.
 const LIGHT_TIER_MODEL = { preferred: "claude-haiku-4-5" } as const;
 
+// SIO-1371: eval-only model-swap A/B override, read at CALL time (same idiom as
+// SUB_AGENT_MANIFEST_MODEL_ENABLED above) so it never needs a redeploy and can never leak into
+// a normal run by accident -- both env vars are unset in every environment except a deliberate
+// eval invocation. Substitutes the resolved `preferred` (and drops any manifest `fallback`, since
+// the override is meant to isolate ONE model's behavior, not its production fallback chain) AFTER
+// resolveRoleModelConfig has already picked light-tier / sub-agent-manifest / root-manifest, so
+// the override composes with the real precedence rule instead of replacing it -- an eval run using
+// this still exercises the same source-selection logic production does.
+//
+// Deliberately narrow: this exists to let run-incident-replay-eval.ts A/B sub-agent model swaps
+// (e.g. the SIO-1367 claude-haiku-4-5 move against its claude-sonnet-4-6 predecessor) without ever
+// touching a committed agent.yaml, not as a general-purpose config mechanism. Do not read these
+// vars anywhere outside the eval harness.
+function applyEvalModelOverride(
+	role: LlmRole,
+	modelConfig: ManifestModelConfig,
+	env: NodeJS.ProcessEnv,
+): ManifestModelConfig {
+	const override = role === "subAgent" ? env.EVAL_SUB_AGENT_MODEL_OVERRIDE : env.EVAL_ROOT_MODEL_OVERRIDE;
+	if (!override) return modelConfig;
+	return { preferred: override };
+}
+
 // SIO-1235: the whole precedence rule in one readable, unit-testable place.
 //
 // The defect this replaces: every non-lightweight role -- INCLUDING subAgent -- resolved from
@@ -377,10 +400,10 @@ const LIGHT_TIER_MODEL = { preferred: "claude-haiku-4-5" } as const;
 //
 // Precedence: light tier > sub-agent manifest > root manifest. Only the `subAgent` role consults
 // subAgentName, so the ~25 other call sites keep their exact previous behaviour.
-export function resolveRoleModelConfig(
+function resolveRoleModelConfigBySource(
 	role: LlmRole,
 	agent: LoadedAgentForLlm,
-	subAgentName?: string,
+	subAgentName: string | undefined,
 ): { modelConfig: ManifestModelConfig; source: ModelConfigSource } {
 	// SIO-1262: the light tier used to BORROW the elastic-agent sub-agent manifest's model. The
 	// comment here flagged that as a known fragility with decoupling left as a follow-up; this
@@ -411,6 +434,20 @@ export function resolveRoleModelConfig(
 	}
 
 	return { modelConfig: agent.manifest.model, source: "root-manifest" };
+}
+
+export function resolveRoleModelConfig(
+	role: LlmRole,
+	agent: LoadedAgentForLlm,
+	subAgentName?: string,
+	env: NodeJS.ProcessEnv = process.env,
+): { modelConfig: ManifestModelConfig; source: ModelConfigSource } {
+	const resolved = resolveRoleModelConfigBySource(role, agent, subAgentName);
+	// SIO-1371: applied AFTER the real precedence rule picks a source, so an eval override
+	// composes with light-tier/sub-agent-manifest/root-manifest instead of bypassing it. The
+	// `source` field is left untouched -- an override changes WHICH model a role gets, not
+	// which manifest it would have come from, so provenance logging stays honest.
+	return { modelConfig: applyEvalModelOverride(role, resolved.modelConfig, env), source: resolved.source };
 }
 
 export function createLlm(role: LlmRole, agentName = "incident-analyzer", subAgentName?: string): ChatBedrockConverse {
