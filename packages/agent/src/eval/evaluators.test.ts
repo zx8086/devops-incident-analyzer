@@ -128,6 +128,52 @@ describe("judgeFeedback (SIO-1372)", () => {
 	});
 });
 
+describe("judgeFeedback datasourceVerdicts (SIO-1374)", () => {
+	test("no datasourceVerdicts: no evidence_ keys emitted, existing keys unaffected", () => {
+		const fb = judgeFeedback({ score: 8, rootCauseMatch: "correct", reasoning: "x" });
+		expect(fb.some((f) => f.key.startsWith("evidence_"))).toBe(false);
+		expect(fb).toHaveLength(2);
+	});
+
+	test("one evidence_<datasource> key per datasource in datasourceVerdicts", () => {
+		const fb = judgeFeedback({
+			score: 8,
+			rootCauseMatch: "correct",
+			reasoning: "x",
+			datasourceVerdicts: {
+				elastic: { verdict: "found", gapsHonest: true, fabricated: false },
+				kafka: { verdict: "missed", gapsHonest: true, fabricated: false },
+			},
+		});
+		const elastic = fb.find((f) => f.key === "evidence_elastic");
+		const kafka = fb.find((f) => f.key === "evidence_kafka");
+		expect(elastic?.score).toBe(1);
+		expect(kafka?.score).toBe(0);
+	});
+
+	test("partial verdict scores 0.5", () => {
+		const fb = judgeFeedback({
+			score: 8,
+			rootCauseMatch: "correct",
+			reasoning: "x",
+			datasourceVerdicts: { aws: { verdict: "partial", gapsHonest: false, fabricated: false } },
+		});
+		expect(fb.find((f) => f.key === "evidence_aws")?.score).toBe(0.5);
+	});
+
+	test("comment includes gapsHonest and fabricated flags", () => {
+		const fb = judgeFeedback({
+			score: 8,
+			rootCauseMatch: "correct",
+			reasoning: "x",
+			datasourceVerdicts: { aws: { verdict: "found", gapsHonest: false, fabricated: true } },
+		});
+		const aws = fb.find((f) => f.key === "evidence_aws");
+		expect(aws?.comment).toContain("gapsHonest=false");
+		expect(aws?.comment).toContain("fabricated=true");
+	});
+});
+
 describe("HolisticGradeSchema datasourceVerdicts (SIO-1374)", () => {
 	test("datasourceVerdicts is optional and can be omitted", () => {
 		const grade = HolisticGradeSchema.parse({ score: 7, rootCauseMatch: "correct", reasoning: "x" });

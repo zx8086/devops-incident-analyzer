@@ -91,15 +91,25 @@ export function judgeFeedback(grade: HolisticGrade): { key: string; score: numbe
 		score: (capped - 1) / 9,
 		comment: `${capped}/10${capNote} -- rootCauseMatch=${grade.rootCauseMatch} -- ${grade.reasoning}`,
 	};
-	if (grade.rootCauseMatch === "not_determinable") return [quality];
-	return [
-		quality,
-		{
+	const feedback: { key: string; score: number; comment: string }[] = [quality];
+	if (grade.rootCauseMatch !== "not_determinable") {
+		feedback.push({
 			key: "root_cause_accuracy",
 			score: grade.rootCauseMatch === "correct" ? 1 : grade.rootCauseMatch === "partial" ? 0.5 : 0,
 			comment: `rootCauseMatch=${grade.rootCauseMatch} -- ${grade.reasoning}`,
-		},
-	];
+		});
+	}
+	// SIO-1374: one evidence_<datasource> key per datasource the judge scored, so LangSmith
+	// Compare can filter per-datasource weaknesses across A/B legs (e.g. "haiku's gitlab
+	// evidence is systematically weak") instead of only seeing one aggregate score.
+	for (const [datasource, v] of Object.entries(grade.datasourceVerdicts ?? {})) {
+		feedback.push({
+			key: `evidence_${datasource}`,
+			score: v.verdict === "found" ? 1 : v.verdict === "partial" ? 0.5 : 0,
+			comment: `verdict=${v.verdict} gapsHonest=${v.gapsHonest} fabricated=${v.fabricated}`,
+		});
+	}
+	return feedback;
 }
 
 export function datasourcesCovered(run: Run, example: Example) {
