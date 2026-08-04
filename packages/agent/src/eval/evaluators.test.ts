@@ -5,7 +5,31 @@
 // These tests pin the cap, the schema's tolerant degradation, and the feedback mapping
 // (including the not_determinable omission) without any OpenAI call.
 import { describe, expect, test } from "bun:test";
-import { applyRootCauseCap, HolisticGradeSchema, judgeFeedback, squareVerdictWithReference } from "./evaluators.ts";
+import {
+	applyRootCauseCap,
+	ExampleOutputsSchema,
+	HolisticGradeSchema,
+	judgeFeedback,
+	squareVerdictWithReference,
+} from "./evaluators.ts";
+
+// CodeRabbit round 2 on PR #590: whitespace-only values must not pass min(1) -- a blank-ish
+// referenceReport would otherwise silently select the report-backed grading path.
+describe("ExampleOutputsSchema whitespace rejection (SIO-1372)", () => {
+	test("whitespace-only qualityRubric fails the parse", () => {
+		expect(ExampleOutputsSchema.safeParse({ qualityRubric: "   " }).success).toBe(false);
+	});
+
+	test("whitespace-only referenceReport fails the parse rather than grading report-backed", () => {
+		expect(ExampleOutputsSchema.safeParse({ qualityRubric: "check X", referenceReport: "\n\t " }).success).toBe(false);
+	});
+
+	test("absent referenceReport stays optional", () => {
+		const parsed = ExampleOutputsSchema.safeParse({ qualityRubric: "check X" });
+		expect(parsed.success).toBe(true);
+		if (parsed.success) expect(parsed.data.referenceReport).toBeUndefined();
+	});
+});
 
 describe("applyRootCauseCap (SIO-1372)", () => {
 	test("incorrect caps at 4 -- a wrong cause can never grade above weak", () => {

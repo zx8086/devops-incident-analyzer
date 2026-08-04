@@ -145,9 +145,11 @@ const HOLISTIC_JUDGE_SYSTEM_PROMPT = [
 // SIO-1372 (CodeRabbit PR #590): example.outputs is Zod-parsed rather than cast, because
 // referenceReport presence is load-bearing below -- it decides whether a not_determinable
 // verdict is legitimate (no report to compare against) or malformed judge output.
-const ExampleOutputsSchema = z.object({
-	qualityRubric: z.string().min(1),
-	referenceReport: z.string().min(1).optional(),
+// (CodeRabbit round 2: .trim() so a whitespace-only value cannot pass min(1) and select the
+// report-backed grading path -- a blank-ish dataset field fails the parse loudly instead.)
+export const ExampleOutputsSchema = z.object({
+	qualityRubric: z.string().trim().min(1),
+	referenceReport: z.string().trim().min(1).optional(),
 });
 
 export async function responseQualityJudge(run: Run, example: Example) {
