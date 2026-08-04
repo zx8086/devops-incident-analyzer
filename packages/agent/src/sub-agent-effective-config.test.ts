@@ -103,13 +103,20 @@ function measureCycleSuperSteps(): number {
 }
 
 // limit / cycle cost. These are the turn counts the limits in RECURSION_LIMIT_BY_DATASOURCE were
-// written to express; gitlab's 12 is DEVOPS-1405 parity, the run this whole investigation used as
-// its baseline.
+// written to express.
+//
+// gitlab 12 -> 20 (2026-08-04, incident-replay eval): the DEVOPS-1405 baseline of 12 turns was
+// consistently insufficient on the 32-incident replay eval -- gitlab hit exactly 12 turns and
+// triggered its final-turn-reserved warning every time the limit bound at all (6/32 sonnet-leg
+// runs, 13/32 haiku-leg runs), with each occurrence's report noticeably thinner than gitlab's
+// non-limited runs. Raised to match elastic/aws's 20-turn tier (RECURSION_LIMIT_BY_DATASOURCE's
+// gitlab: 60) since a deep-agent architecture should bound LLM turns for cost/loop safety, not
+// starve genuine investigations of the evidence a longer conversation would surface.
 const EXPECTED_EFFECTIVE_TURNS: Record<string, number> = {
 	elastic: 20,
 	aws: 20,
 	couchbase: 15,
-	gitlab: 12,
+	gitlab: 20,
 	kafka: 12,
 	konnect: 12,
 	atlassian: 10,

@@ -81,8 +81,18 @@ export const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	// SIO-649: Multi-deployment elastic fan-out produces reports with a per-deployment
 	// findings block (10 deployments = 10 tables) plus a mandatory trailing Confidence line.
 	// Default maxTokens was truncating the end of the report before the confidence line,
-	// leaving the HITL gate with a 0 score. 16384 matches responder for consistency.
-	aggregator: { temperature: 0.1, maxTokens: 16384 },
+	// leaving the HITL gate with a 0 score.
+	//
+	// 16384 -> 32768 (2026-08-04, incident-replay eval regression): the SIO-1213 probe that
+	// calibrated 16384 used a ~600-input-token synthetic prompt and measured 3874-4287 output
+	// tokens -- nowhere near the ceiling, so it never exercised a prompt large/complex enough for
+	// Sonnet 5's reasoning block to compete with the answer for the same budget. On the real
+	// 32-incident replay eval (30-49K input tokens per call), the aggregator hit max_tokens on
+	// 13/64 calls across both A/B legs -- twice with the reasoning block alone consuming all
+	// 16384 tokens and zero answer text, the rest truncating a substantial answer before the
+	// mandatory trailing Confidence line (successful calls in the same run ranged up to 16088
+	// output tokens, right at the ceiling). See llm.role-max-tokens.test.ts's headroom assertion.
+	aggregator: { temperature: 0.1, maxTokens: 32768 },
 	responder: { temperature: 0.3, maxTokens: 16384 },
 	entityExtractor: { temperature: 0 },
 	followUp: { temperature: 0.5, maxTokens: 256 },

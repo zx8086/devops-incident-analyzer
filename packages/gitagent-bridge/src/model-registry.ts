@@ -101,6 +101,16 @@ export const MODEL_REGISTRY = {
 		observedBlockTypes: ["reasoning", "text"],
 		emitsReasoningContent: true,
 		observedRawControlCharsInJson: false,
+		// CAVEAT (2026-08-04): this figure is measured against the P6 probe's ~600-input-token
+		// synthetic prompt (packages/agent/src/eval/probe-model.ts), which never puts reasoning
+		// and answer text in competition for the same budget the way a large real prompt does. The
+		// 32-incident replay eval (30-49K input tokens per aggregator call) needed up to 16088
+		// output tokens on a successful call and hit max_tokens on 13/64 calls at the
+		// then-configured 16384 aggregator budget -- both well above this 8192 floor. Treat 8192 as
+		// a LOWER bound proven safe for small prompts, never as validated for large real-world ones;
+		// a role budgeted to exactly this floor on a genuinely long prompt can still truncate. A
+		// rerun of the probe against a realistically large prompt should replace this note and the
+		// figure.
 		longFormMinTokens: 8192,
 		observedLatencyMs: { p50: 1890, max: 45305 },
 		verifiedAt: "2026-07-26",

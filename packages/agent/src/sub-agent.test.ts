@@ -59,11 +59,21 @@ describe("getSubAgentRecursionLimit", () => {
 		// SIO-1262: scaled 1.5x when preModelHook made a ReAct cycle three super-steps instead of
 		// two. The intended TURN counts are unchanged -- only the step arithmetic that expresses
 		// them. See RECURSION_LIMIT_BY_DATASOURCE.
+		//
+		// gitlab 36 -> 60 (2026-08-04, incident-replay eval): SIO-1262 capped gitlab below the
+		// SUB_AGENT_RECURSION_LIMIT_DEFAULT based on one prior incident ("97 calls was thrash, not
+		// depth"). On the 32-incident replay eval, gitlab hit its final-turn-reserved warning at
+		// EXACTLY 12 LLM turns every time it triggered (6/32 sonnet-leg, 13/32 haiku-leg) -- a hard,
+		// repeatable ceiling on real historical investigations, not thrash. In a deep-agent
+		// architecture the recursion limit bounds LLM turns (cost/loop safety), never the evidence
+		// available per turn, so a consistently-exhausted budget means genuine investigations are
+		// being cut short. Matched to elastic/aws's tier since the ceiling had no slack at the
+		// generic default's step count either.
 		const expected: Record<string, number> = {
 			elastic: 60,
 			aws: 60,
 			couchbase: 45,
-			gitlab: 36,
+			gitlab: 60,
 			kafka: 36,
 			konnect: 36,
 			atlassian: 30,
@@ -82,7 +92,7 @@ describe("getSubAgentRecursionLimit", () => {
 	test("honors SUBAGENT_ELASTIC_RECURSION_LIMIT as a back-compat alias for elastic only", () => {
 		expect(getSubAgentRecursionLimit("elastic", { SUBAGENT_ELASTIC_RECURSION_LIMIT: "60" })).toBe(60);
 		// ...and it must not leak onto other datasources, which keep their own defaults.
-		expect(getSubAgentRecursionLimit("gitlab", { SUBAGENT_ELASTIC_RECURSION_LIMIT: "60" })).toBe(36);
+		expect(getSubAgentRecursionLimit("gitlab", { SUBAGENT_ELASTIC_RECURSION_LIMIT: "60" })).toBe(60);
 	});
 
 	test("honors the generic per-datasource override", () => {
@@ -92,7 +102,7 @@ describe("getSubAgentRecursionLimit", () => {
 
 	test("falls back to the datasource default on an invalid generic override", () => {
 		for (const raw of ["nonsense", "0", "-5", ""]) {
-			expect(getSubAgentRecursionLimit("gitlab", { SUBAGENT_RECURSION_LIMIT_GITLAB: raw })).toBe(36);
+			expect(getSubAgentRecursionLimit("gitlab", { SUBAGENT_RECURSION_LIMIT_GITLAB: raw })).toBe(60);
 		}
 	});
 
