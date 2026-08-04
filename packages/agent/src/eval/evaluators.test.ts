@@ -127,3 +127,48 @@ describe("judgeFeedback (SIO-1372)", () => {
 		expect(fb[0]?.score).toBeCloseTo((6 - 1) / 9);
 	});
 });
+
+describe("HolisticGradeSchema datasourceVerdicts (SIO-1374)", () => {
+	test("datasourceVerdicts is optional and can be omitted", () => {
+		const grade = HolisticGradeSchema.parse({ score: 7, rootCauseMatch: "correct", reasoning: "x" });
+		expect(grade.datasourceVerdicts).toBeUndefined();
+	});
+
+	test("a well-formed datasourceVerdicts map parses through untouched", () => {
+		const grade = HolisticGradeSchema.parse({
+			score: 7,
+			rootCauseMatch: "correct",
+			reasoning: "x",
+			datasourceVerdicts: {
+				elastic: { verdict: "found", gapsHonest: true, fabricated: false },
+				kafka: { verdict: "missed", gapsHonest: true, fabricated: false },
+			},
+		});
+		expect(grade.datasourceVerdicts?.elastic).toEqual({ verdict: "found", gapsHonest: true, fabricated: false });
+		expect(grade.datasourceVerdicts?.kafka?.verdict).toBe("missed");
+	});
+
+	test("a bogus verdict enum value in one datasource degrades that entry only, does not fail the whole map", () => {
+		const grade = HolisticGradeSchema.parse({
+			score: 7,
+			rootCauseMatch: "correct",
+			reasoning: "x",
+			datasourceVerdicts: {
+				elastic: { verdict: "somewhat", gapsHonest: true, fabricated: false },
+				kafka: { verdict: "found", gapsHonest: true, fabricated: false },
+			},
+		});
+		expect(grade.datasourceVerdicts?.elastic?.verdict).toBe("missed");
+		expect(grade.datasourceVerdicts?.kafka?.verdict).toBe("found");
+	});
+
+	test("missing gapsHonest/fabricated booleans degrade to false, not a parse failure", () => {
+		const grade = HolisticGradeSchema.parse({
+			score: 7,
+			rootCauseMatch: "correct",
+			reasoning: "x",
+			datasourceVerdicts: { elastic: { verdict: "found" } },
+		});
+		expect(grade.datasourceVerdicts?.elastic).toEqual({ verdict: "found", gapsHonest: false, fabricated: false });
+	});
+});

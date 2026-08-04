@@ -4,6 +4,17 @@ import OpenAI from "openai";
 import { z } from "zod";
 import { parseLlmJson } from "../llm-json.ts";
 
+export const DatasourceVerdictSchema = z.object({
+	verdict: z.enum(["found", "partial", "missed"]).catch("missed"),
+	// SIO-1374: folded in from the section-judging idea rather than a separate graded pass --
+	// see the design doc's non-goal on section-by-section grading. Missing/malformed booleans
+	// degrade to false (not honest / not fabricated) rather than failing the entry, same
+	// tolerance philosophy as the rest of this schema.
+	gapsHonest: z.boolean().catch(false),
+	fabricated: z.boolean().catch(false),
+});
+export type DatasourceVerdict = z.output<typeof DatasourceVerdictSchema>;
+
 // Tolerant by design: the judge's own shape drifting must score an example 0, not
 // abort the run.
 //
@@ -23,6 +34,12 @@ export const HolisticGradeSchema = z.object({
 	// mangled value degrades to not_determinable (no cap, no accuracy feedback) rather than
 	// failing the example -- same tolerance philosophy as the other fields.
 	rootCauseMatch: z.enum(["correct", "partial", "incorrect", "not_determinable"]).catch("not_determinable"),
+	// SIO-1374: for each expected datasource, did the response surface the evidence the real
+	// ticket's referenceFindings says that datasource showed? Optional -- a judge response for
+	// an example with no referenceFindings, or one that omits this field entirely, must not fail
+	// the example (same graceful-degradation contract as rootCauseMatch). A per-key .catch()
+	// on DatasourceVerdictSchema means one malformed datasource entry degrades only that key.
+	datasourceVerdicts: z.record(z.string(), DatasourceVerdictSchema).optional(),
 	reasoning: z
 		.union([z.string(), z.number(), z.null()])
 		.optional()
