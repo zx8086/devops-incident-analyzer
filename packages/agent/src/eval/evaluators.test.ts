@@ -5,7 +5,7 @@
 // These tests pin the cap, the schema's tolerant degradation, and the feedback mapping
 // (including the not_determinable omission) without any OpenAI call.
 import { describe, expect, test } from "bun:test";
-import { applyRootCauseCap, HolisticGradeSchema, judgeFeedback } from "./evaluators.ts";
+import { applyRootCauseCap, HolisticGradeSchema, judgeFeedback, squareVerdictWithReference } from "./evaluators.ts";
 
 describe("applyRootCauseCap (SIO-1372)", () => {
 	test("incorrect caps at 4 -- a wrong cause can never grade above weak", () => {
@@ -41,6 +41,32 @@ describe("HolisticGradeSchema rootCauseMatch tolerance (SIO-1372)", () => {
 	test("valid verdicts parse through untouched", () => {
 		for (const v of ["correct", "partial", "incorrect", "not_determinable"] as const) {
 			expect(HolisticGradeSchema.parse({ score: 5, rootCauseMatch: v, reasoning: "" }).rootCauseMatch).toBe(v);
+		}
+	});
+});
+
+// CodeRabbit PR #590: the .catch("not_determinable") tolerance must not become a cap bypass.
+describe("squareVerdictWithReference (SIO-1372)", () => {
+	test("report-backed example with a missing/mangled verdict is malformed, not a free pass", () => {
+		// A judge reply of {"score": 10} parses to not_determinable via .catch -- with a real
+		// report present that must score the example 0, never an uncapped 10.
+		const grade = HolisticGradeSchema.parse({ score: 10 });
+		expect(squareVerdictWithReference(grade, true)).toBe("malformed");
+	});
+
+	test("report-backed example with a real verdict passes through untouched", () => {
+		const grade = HolisticGradeSchema.parse({ score: 8, rootCauseMatch: "partial", reasoning: "x" });
+		expect(squareVerdictWithReference(grade, true)).toEqual(grade);
+	});
+
+	test("report-less example is forced to not_determinable even when the judge says correct", () => {
+		const grade = HolisticGradeSchema.parse({ score: 9, rootCauseMatch: "correct", reasoning: "hallucinated" });
+		const squared = squareVerdictWithReference(grade, false);
+		expect(squared).not.toBe("malformed");
+		if (squared !== "malformed") {
+			expect(squared.rootCauseMatch).toBe("not_determinable");
+			// Downstream, that means NO root_cause_accuracy entry can be emitted.
+			expect(judgeFeedback(squared)).toHaveLength(1);
 		}
 	});
 });

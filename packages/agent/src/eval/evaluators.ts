@@ -30,7 +30,7 @@ export const HolisticGradeSchema = z.object({
 });
 
 export type RootCauseMatch = z.output<typeof HolisticGradeSchema>["rootCauseMatch"];
-type HolisticGrade = z.output<typeof HolisticGradeSchema>;
+export type HolisticGrade = z.output<typeof HolisticGradeSchema>;
 
 // SIO-1372: the code-level gate. DEVOPS-1386 proved a prompt instruction alone does not hold:
 // the judge scored a response 8/10 ("solid") despite its own band text placing a missed root
@@ -41,6 +41,22 @@ export function applyRootCauseCap(score: number, match: RootCauseMatch): number 
 	if (match === "incorrect") return Math.min(score, 4);
 	if (match === "partial") return Math.min(score, 7);
 	return score;
+}
+
+// SIO-1372 (CodeRabbit PR #590): the schema's .catch() must not become a cap bypass, so the
+// verdict is squared against referenceReport availability BEFORE any scoring:
+// - report-less example: force not_determinable no matter what the judge said, so a
+//   hallucinated "correct" can never emit root_cause_accuracy=1 with nothing to have been
+//   compared against.
+// - report-backed example: not_determinable (which includes a missing or mangled field the
+//   .catch() absorbed) is malformed judge output -- with the real report in the prompt the
+//   judge can always rule correct/partial/incorrect. The caller scores the example 0 like any
+//   other unusable judge response, rather than letting {"score": 10} skip both the cap and the
+//   accuracy feedback.
+export function squareVerdictWithReference(grade: HolisticGrade, hasReference: boolean): HolisticGrade | "malformed" {
+	if (!hasReference) return { ...grade, rootCauseMatch: "not_determinable" };
+	if (grade.rootCauseMatch === "not_determinable") return "malformed";
+	return grade;
 }
 
 // Pure mapping from a parsed grade to LangSmith feedback entries, split out so the cap and the
@@ -126,13 +142,21 @@ const HOLISTIC_JUDGE_SYSTEM_PROMPT = [
 	'Respond with JSON: {"rootCauseMatch": "correct" | "partial" | "incorrect" | "not_determinable", "score": number (1-10), "reasoning": string (2-4 sentences: first justify the rootCauseMatch verdict, then explain the score)}',
 ].join(" ");
 
+// SIO-1372 (CodeRabbit PR #590): example.outputs is Zod-parsed rather than cast, because
+// referenceReport presence is load-bearing below -- it decides whether a not_determinable
+// verdict is legitimate (no report to compare against) or malformed judge output.
+const ExampleOutputsSchema = z.object({
+	qualityRubric: z.string().min(1),
+	referenceReport: z.string().min(1).optional(),
+});
+
 export async function responseQualityJudge(run: Run, example: Example) {
-	const rubric = example.outputs?.qualityRubric as string | undefined;
-	const referenceReport = example.outputs?.referenceReport as string | undefined;
+	const parsedOutputs = ExampleOutputsSchema.safeParse(example.outputs ?? {});
 	const response = (run.outputs as { output?: { response?: string } } | undefined)?.output?.response;
-	if (!rubric || !response) {
+	if (!parsedOutputs.success || !response) {
 		return { key: "response_quality", score: 0, comment: "missing rubric or response" };
 	}
+	const { qualityRubric: rubric, referenceReport } = parsedOutputs.data;
 	const openai = new OpenAI();
 	const userContent = referenceReport
 		? `Real incident report (written by a human analyst, the ground truth for this incident):\n${referenceReport}\n\nRubric (what a thorough answer for this incident should cover):\n${rubric}\n\nAI agent's response to grade:\n${response}\n\nScore the AI agent's response 1-10 by comparing it holistically to the real report and rubric above.`
@@ -157,17 +181,26 @@ export async function responseQualityJudge(run: Run, example: Example) {
 			comment: `judge response unusable (${grade.reason}): ${grade.message}`,
 		};
 	}
-	// SIO-1372 (handover risk table): LLM judges are not perfectly self-consistent -- a verdict
-	// that contradicts the raw score band is drift worth surfacing in the run log, never a hard
-	// failure that would abort the eval.
-	const { score: rawScore, rootCauseMatch } = grade.data;
-	if ((rootCauseMatch === "correct" && rawScore < 5) || (rootCauseMatch === "incorrect" && rawScore > 7)) {
+	const data = squareVerdictWithReference(grade.data, Boolean(referenceReport));
+	if (data === "malformed") {
+		return {
+			key: "response_quality",
+			score: 0,
+			comment: "judge response unusable: rootCauseMatch missing or invalid for a report-backed example",
+		};
+	}
+	// SIO-1372 (handover risk table + CodeRabbit PR #590): LLM judges are not perfectly
+	// self-consistent -- warn on ANY score the cap actually changed (an incorrect 5-7 or a
+	// partial 8+ was capped silently before) and on a correct verdict scored in the failing
+	// band. Drift stays visible in the run log; never a hard failure that aborts the eval.
+	const capped = applyRootCauseCap(data.score, data.rootCauseMatch);
+	if (capped !== data.score || (data.rootCauseMatch === "correct" && data.score < 5)) {
 		console.warn(
-			`response_quality judge inconsistency: rootCauseMatch=${rootCauseMatch} but raw score=${rawScore} -- ${grade.data.reasoning}`,
+			`response_quality judge: rootCauseMatch=${data.rootCauseMatch} raw=${data.score} capped=${capped} -- ${data.reasoning}`,
 		);
 	}
 	// One OpenAI call, two feedback entries (langsmith's RunEvaluatorLike accepts
 	// EvaluationResult[]): response_quality carries the capped holistic score,
 	// root_cause_accuracy makes the gate filterable on its own in the Compare UI.
-	return judgeFeedback(grade.data);
+	return judgeFeedback(data);
 }

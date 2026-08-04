@@ -29,7 +29,15 @@ const DATASET_NAME = "incident-replay-eval";
 const argv = process.argv.slice(2);
 function opt(name: string): string | undefined {
 	const i = argv.indexOf(`--${name}`);
-	return i >= 0 ? argv[i + 1] : undefined;
+	if (i < 0) return undefined;
+	const value = argv[i + 1];
+	// CodeRabbit PR #590: a bare `--sub-agent-model` (or one followed by another flag) would
+	// silently set the override to undefined/"--flag" and run the WRONG leg of an A/B.
+	if (!value || value.startsWith("--")) {
+		console.error(`--${name} requires a value.`);
+		process.exit(1);
+	}
+	return value;
 }
 
 // Applying the override via this script's OWN process.env, not the shell env the user set --
@@ -63,7 +71,10 @@ if (precheck.status !== 0) {
 	process.exit(precheck.status ?? 1);
 }
 
-const gitSha = spawnSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf-8" }).stdout.trim();
+// CodeRabbit PR #590: outside a git checkout, .stdout is null and .trim() throws before the
+// eval even starts -- a placeholder keeps the experiment name well-formed instead.
+const gitRev = spawnSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf-8" });
+const gitSha = gitRev.status === 0 && gitRev.stdout ? gitRev.stdout.trim() : "nogit";
 const experimentPrefix = `agent-eval-${gitSha}-subagent-${resolvedSubAgentModel}`;
 console.log(`Starting evaluation, experiment prefix: ${experimentPrefix}`);
 

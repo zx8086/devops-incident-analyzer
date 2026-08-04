@@ -25,8 +25,10 @@
 // string, never tool-call trajectory, so qualityRubric clauses must be response-content checks.
 //
 // uiSelectedDataSources/uiSelectedElasticDeployments/uiSelectedAwsEstates are set on every entry
-// to match the real DataSourceSelector UI's default state (all 6 non-Konnect sources, Elastic
-// deployment eu-b2b, AWS estates eu-oit-prd + eu-shared-services-prd) -- these all came from
+// to match the real DataSourceSelector UI state for that incident (all 6 non-Konnect sources,
+// Elastic deployment eu-b2b, and the AWS estate(s) the incident actually spanned -- most often
+// eu-oit-prd and/or eu-shared-services-prd, with eu-ediservices-prd for the Boomi incident and
+// eu-mendix-platform-prd for the Mendix ones) -- these all came from
 // PVH/Tommy Hilfiger production services in that same estate/deployment family. Without these
 // fields, run-function.ts falls through to targetDataSources/targetDeployments/uiAwsEstates: []
 // (free entity extraction, nothing pinned), which is NOT how a real user drives this UI and was
@@ -42,7 +44,7 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 		// ECS security-group missing from the Capella private endpoint's inbound allowlist.
 		inputs: {
 			query:
-				'Investigate the "pvh-services-styles-v3" service for this error:\n\ncom.couchbase.client.core.endpoint.BaseEndpoint$2 exception, source IP 10.34.51.61, connecting to private-endpoint.mn1uxqblvorb0cle.cloud.couchbase.com -- connection refused/failed at the network layer.',
+				'Investigate the "pvh-services-styles-v3" service for this error:\n\ncom.couchbase.client.core.endpoint.BaseEndpoint$2 exception, source IP 10.0.0.61, connecting to private-endpoint.xxxxxxxxxxxxxxxx.cloud.couchbase.com -- connection refused/failed at the network layer.',
 			uiSelectedDataSources: ["elastic", "kafka", "couchbase", "gitlab", "atlassian", "aws"],
 			uiSelectedElasticDeployments: ["eu-b2b"],
 			uiSelectedAwsEstates: ["eu-shared-services-prd"],
@@ -53,7 +55,7 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 			qualityRubric:
 				"Response should identify this as a client-side network/connectivity failure (BaseEndpoint exception) rather than a Couchbase server-side fault, and should check whether the Couchbase cluster itself reports healthy. Response should investigate the AWS security-group configuration for the ECS service and note whether it is present in the Capella private endpoint's inbound allowlist as a candidate root cause. Response should check Atlassian for prior related incidents on the same endpoint/service. Response should include a Gaps section if the exact allowlist state could not be directly confirmed.",
 			referenceReport:
-				"Executive Summary (DEVOPS-1353): pvh-services-styles-v3 is throwing com.couchbase.client.core.endpoint.BaseEndpoint$2 exceptions exclusively for this service while all other services connecting to Couchbase remain healthy. The Couchbase cluster itself is fully healthy (12/12 nodes healthy, zero fatal N1QL requests, low CPU and memory pressure). The Kafka pipeline feeding Couchbase is at zero lag with empty DLQs. No code changes have been deployed since 2026-05-05, ruling out a code regression. The primary root cause hypothesis, supported by AWS evidence, is that the ECS security group sg-0ac93a0b035d94b63 (styles-v3-service-ecs-sg) has never been added to the inbound allowlist of the Couchbase Capella private endpoint's security group. This is a network-layer block specific to this service's dedicated SG. Secondary hypotheses are a stale or rotated SSM credential and a TLS certificate mismatch from the hardcoded certs/capella.pem in the container image. Root cause confidence: 0.72 (SG allowlist gap ranked highest at 0.82). Elastic agent failed on both invocations in the real investigation, so the full exception stack trace and error-rate distribution were gaps in the original report.",
+				"Executive Summary (DEVOPS-1353): pvh-services-styles-v3 is throwing com.couchbase.client.core.endpoint.BaseEndpoint$2 exceptions exclusively for this service while all other services connecting to Couchbase remain healthy. The Couchbase cluster itself is fully healthy (12/12 nodes healthy, zero fatal N1QL requests, low CPU and memory pressure). The Kafka pipeline feeding Couchbase is at zero lag with empty DLQs. No code changes have been deployed since 2026-05-05, ruling out a code regression. The primary root cause hypothesis, supported by AWS evidence, is that the ECS security group sg-0aaaaaaaaaaaaaaaa (styles-v3-service-ecs-sg) has never been added to the inbound allowlist of the Couchbase Capella private endpoint's security group. This is a network-layer block specific to this service's dedicated SG. Secondary hypotheses are a stale or rotated SSM credential and a TLS certificate mismatch from the hardcoded certs/capella.pem in the container image. Root cause confidence: 0.72 (SG allowlist gap ranked highest at 0.82). Elastic agent failed on both invocations in the real investigation, so the full exception stack trace and error-rate distribution were gaps in the original report.",
 		},
 	},
 	{
@@ -405,7 +407,7 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 		// DEVOPS-1398 -- VERBATIM (Agent Memory, incident cc8d872f-...).
 		inputs: {
 			query:
-				'Investigate the "prana-import-export-service" service errors and error exceptions below :-\n\nError while getting file 0003308153.json from s3 bucket -> User: arn:aws:sts::762715229080:assumed-role/import-export-service-ecs-task-role/f5d2df3fdb0948fa8ec3e46d8335c88e is not authorized to perform: s3:ListBucket',
+				'Investigate the "prana-import-export-service" service errors and error exceptions below :-\n\nError while getting file 0003308153.json from s3 bucket -> User: arn:aws:sts::000000000000:assumed-role/import-export-service-ecs-task-role/0000000000000000000000000000000f is not authorized to perform: s3:ListBucket',
 			uiSelectedDataSources: ["elastic", "kafka", "couchbase", "gitlab", "atlassian", "aws"],
 			uiSelectedElasticDeployments: ["eu-b2b"],
 			uiSelectedAwsEstates: ["eu-oit-prd", "eu-shared-services-prd"],
