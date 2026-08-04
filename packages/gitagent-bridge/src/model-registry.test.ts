@@ -86,6 +86,12 @@ describe("MODEL_REGISTRY", () => {
 			const agent = loadAgent(dir);
 			if (agent.manifest.model?.preferred) inUse.add(agent.manifest.model.preferred);
 			for (const fb of agent.manifest.model?.fallback ?? []) inUse.add(fb);
+			// SIO-1372: lightTierModel is its own manifest field (no longer a hardcoded llm.ts
+			// constant), so it needs the same probe-coverage guard as model: and every sub-agent's
+			// model: below -- otherwise a light-tier bump could point at an unmeasured model with
+			// nothing here to catch it.
+			if (agent.manifest.lightTierModel?.preferred) inUse.add(agent.manifest.lightTierModel.preferred);
+			for (const fb of agent.manifest.lightTierModel?.fallback ?? []) inUse.add(fb);
 			// SIO-1235: sub-agent manifests are LIVE as of this ticket -- createLlm("subAgent", ...)
 			// resolves each specialist's own model.preferred instead of the root's. Before that they
 			// were dead config (since the 125b3f9e scaffold), so this loop covered root manifests

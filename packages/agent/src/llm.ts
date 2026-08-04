@@ -363,9 +363,11 @@ export function isSubAgentManifestModelEnabled(env: NodeJS.ProcessEnv = process.
 	return v !== "false" && v !== "0";
 }
 
-// SIO-1262: the light tier's OWN model, no longer borrowed from a sub-agent manifest. Haiku 4.5 is
-// probed, accepts temperature, and is what the borrow was resolving to before the specialists moved
-// to Sonnet 4.6. Named here so a future specialist bump cannot silently reprice these roles.
+// SIO-1262/SIO-1372: default light-tier model, used only when the root manifest's
+// `lightTierModel:` key is absent (a manifest predating SIO-1372, or a test fixture). Haiku 4.5
+// is probed, accepts temperature, and is what the tier was resolving to before this became
+// manifest-configurable. The normal, supported way to change the light tier's model is editing
+// `lightTierModel:` in agent.yaml, not this constant.
 const LIGHT_TIER_MODEL = { preferred: "claude-haiku-4-5" } as const;
 
 // SIO-1371: eval-only model-swap A/B override, read at CALL time (same idiom as
@@ -399,7 +401,10 @@ function applyEvalModelOverride(
 		warnedEvalOverrides.add(warnKey);
 		logger.warn({ role, override }, "EVAL model override ACTIVE -- eval-only seam, never set in production");
 	}
-	return { preferred: override };
+	// CodeRabbit (PR #589): a bare { preferred: override } dropped the resolved manifest's
+	// `constraints` too -- for lightTierModel that silently turned temperature: 0 into the
+	// provider default under an eval override, changing generation behavior, not just the model.
+	return { ...modelConfig, preferred: override, fallback: undefined };
 }
 
 // SIO-1235: the whole precedence rule in one readable, unit-testable place.
@@ -427,8 +432,14 @@ function resolveRoleModelConfigBySource(
 	// The light tier now NAMES its own model rather than inheriting one, so a specialist bump can
 	// never reprice it again. Haiku 4.5 is what it was effectively resolving to before this change,
 	// is probed, and accepts temperature.
+	//
+	// SIO-1372: this model now lives in the root manifest's `lightTierModel:` key, not a hardcoded
+	// constant -- the isolation SIO-1262 wanted comes from it being an independent YAML field (it
+	// inherits from nothing), not from living in code. LIGHT_TIER_MODEL is kept only as the
+	// fallback for a manifest that predates this field, so an unedited agent.yaml keeps behaving
+	// exactly as before.
 	if (isLightweightRole(role)) {
-		return { modelConfig: LIGHT_TIER_MODEL, source: "light-tier" };
+		return { modelConfig: agent.manifest.lightTierModel ?? LIGHT_TIER_MODEL, source: "light-tier" };
 	}
 
 	if (role === "subAgent" && subAgentName && isSubAgentManifestModelEnabled()) {
