@@ -1,4 +1,4 @@
-// packages/agent/src/validator.test.ts
+// agent/src/validator.test.ts
 import { describe, expect, test } from "bun:test";
 import type { DataSourceResult } from "@devops-agent/shared";
 import type { AgentStateType } from "./state.ts";

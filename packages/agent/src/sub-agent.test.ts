@@ -89,10 +89,16 @@ describe("getSubAgentRecursionLimit", () => {
 
 	// The elastic-only env var predates the generic one and may already be set in a deployed
 	// environment, so it must keep working rather than silently stop taking effect.
+	//
+	// CodeRabbit (PR #591): gitlab's own default was raised to 60 (matching elastic's), so an
+	// override value of "60" here would pass whether or not the alias actually leaked onto
+	// gitlab -- both the correct default and a leaked override resolve to the same number,
+	// making the assertion non-discriminating. Use a value (61) that differs from gitlab's own
+	// default so a real leak would be caught.
 	test("honors SUBAGENT_ELASTIC_RECURSION_LIMIT as a back-compat alias for elastic only", () => {
-		expect(getSubAgentRecursionLimit("elastic", { SUBAGENT_ELASTIC_RECURSION_LIMIT: "60" })).toBe(60);
+		expect(getSubAgentRecursionLimit("elastic", { SUBAGENT_ELASTIC_RECURSION_LIMIT: "61" })).toBe(61);
 		// ...and it must not leak onto other datasources, which keep their own defaults.
-		expect(getSubAgentRecursionLimit("gitlab", { SUBAGENT_ELASTIC_RECURSION_LIMIT: "60" })).toBe(60);
+		expect(getSubAgentRecursionLimit("gitlab", { SUBAGENT_ELASTIC_RECURSION_LIMIT: "61" })).toBe(60);
 	});
 
 	test("honors the generic per-datasource override", () => {

@@ -14,6 +14,7 @@ import {
 	SubagentGradeSchema,
 	squareVerdictWithReference,
 	subagentJudgeFeedback,
+	truncateForJudge,
 } from "./evaluators.ts";
 
 // CodeRabbit round 2 on PR #590: whitespace-only values must not pass min(1) -- a blank-ish
@@ -220,6 +221,40 @@ describe("HolisticGradeSchema datasourceVerdicts (SIO-1374)", () => {
 		});
 		expect(grade.datasourceVerdicts?.elastic).toEqual({ verdict: "found", gapsHonest: false, fabricated: false });
 	});
+
+	// CodeRabbit (PR #591): a non-object value (null, a string, etc.) at one datasource key
+	// currently fails the WHOLE datasourceVerdicts map -- z.record's inner .catch() only rescues
+	// validation errors on an otherwise-well-typed object, not a wrong-TYPE value at that key. This
+	// contradicts the file's own stated design (per-key degradation, see the comment above
+	// DatasourceVerdictSchema's usage) and means one bad datasource entry from a drifting judge
+	// silently fails response_quality for the ENTIRE example, not just that one evidence_ key.
+	test("a null value at one datasource key degrades that entry only, does not fail the whole map", () => {
+		const grade = HolisticGradeSchema.parse({
+			score: 7,
+			rootCauseMatch: "correct",
+			reasoning: "x",
+			datasourceVerdicts: {
+				elastic: null,
+				kafka: { verdict: "found", gapsHonest: true, fabricated: false },
+			},
+		});
+		expect(grade.datasourceVerdicts?.elastic).toEqual({ verdict: "missed", gapsHonest: false, fabricated: false });
+		expect(grade.datasourceVerdicts?.kafka?.verdict).toBe("found");
+	});
+
+	test("a non-object (string) value at one datasource key degrades that entry only", () => {
+		const grade = HolisticGradeSchema.parse({
+			score: 7,
+			rootCauseMatch: "correct",
+			reasoning: "x",
+			datasourceVerdicts: {
+				aws: "not an object",
+				gitlab: { verdict: "partial", gapsHonest: true, fabricated: false },
+			},
+		});
+		expect(grade.datasourceVerdicts?.aws).toEqual({ verdict: "missed", gapsHonest: false, fabricated: false });
+		expect(grade.datasourceVerdicts?.gitlab?.verdict).toBe("partial");
+	});
 });
 
 describe("HOLISTIC_JUDGE_SYSTEM_PROMPT content (SIO-1374)", () => {
@@ -258,6 +293,23 @@ describe("SubagentGradeSchema (SIO-1374)", () => {
 		const grade = SubagentGradeSchema.parse({});
 		expect(grade.datasourceAccuracy).toEqual({});
 	});
+
+	// CodeRabbit (PR #591): the outer .catch({}) on the whole datasourceAccuracy record rescues a
+	// malformed record itself (e.g. not an object at all), but z.record still fails validation as
+	// soon as ONE inner value is the wrong type -- and that failure propagates to the outer
+	// .catch(), which discards the ENTIRE map, including every other well-formed entry. A single
+	// malformed datasource from a drifting judge silently loses subagent_accuracy_* feedback for
+	// every OTHER datasource in the same response, not just the bad one.
+	test("a null value at one datasource key does not silently discard every other entry", () => {
+		const grade = SubagentGradeSchema.parse({
+			datasourceAccuracy: {
+				elastic: null,
+				kafka: { accuracy: "correct", reasoning: "matched the deadlock chain" },
+			},
+		});
+		expect(grade.datasourceAccuracy.kafka?.accuracy).toBe("correct");
+		expect(grade.datasourceAccuracy.elastic?.accuracy).toBe("incorrect");
+	});
 });
 
 describe("subagentJudgeFeedback (SIO-1374)", () => {
@@ -273,11 +325,34 @@ describe("subagentJudgeFeedback (SIO-1374)", () => {
 		expect(fb.find((f) => f.key === "subagent_accuracy_elastic")?.score).toBe(1);
 		expect(fb.find((f) => f.key === "subagent_accuracy_kafka")?.score).toBe(0.5);
 		expect(fb.find((f) => f.key === "subagent_accuracy_aws")?.score).toBe(0);
-		expect(fb.find((f) => f.key === "subagent_accuracy_incorrect")).toBeUndefined();
 		expect(fb.find((f) => f.key === "subagent_accuracy_gitlab")?.score).toBe(0);
 	});
 
 	test("empty datasourceAccuracy emits no feedback entries", () => {
 		expect(subagentJudgeFeedback({ datasourceAccuracy: {} })).toHaveLength(0);
+	});
+});
+
+// CodeRabbit (PR #591): buildSubagentReports concatenates every deployment's serialized
+// *Findings object for a datasource with no cap, so an example that fanned out across multiple
+// deployments/estates could produce an oversized judgeSubagentReports prompt. This caps each
+// datasource's report before it is interpolated into the judge's user message.
+describe("truncateForJudge (SIO-1374 follow-up, PR #591)", () => {
+	test("text at or under the cap passes through unchanged", () => {
+		expect(truncateForJudge("short report", 100)).toBe("short report");
+	});
+
+	test("text over the cap is truncated with an explicit marker", () => {
+		const long = "x".repeat(150);
+		const result = truncateForJudge(long, 100);
+		expect(result.length).toBeLessThan(long.length);
+		expect(result).toContain("x".repeat(100));
+		expect(result).toContain("[truncated");
+	});
+
+	test("the truncation marker states how many characters were cut", () => {
+		const long = "x".repeat(150);
+		const result = truncateForJudge(long, 100);
+		expect(result).toContain("50 chars");
 	});
 });

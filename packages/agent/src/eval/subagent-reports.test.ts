@@ -17,6 +17,14 @@ describe("buildSubagentReports (SIO-1374)", () => {
 		expect(map.gitlab).toBeUndefined();
 	});
 
+	// CodeRabbit (PR #591): subagent-reports.ts's FINDINGS_FIELD_BY_DATASOURCE deliberately
+	// excludes datasources with no *Findings field (e.g. konnect, orbit) -- this pins that
+	// deliberate omission so a future edit to the map can't silently regress it unnoticed.
+	test("an unsupported dataSourceId is skipped even when it carries findings under an unrelated key", () => {
+		const map = buildSubagentReports([result({ dataSourceId: "konnect", gitlabFindings: { d: 4 } as never })]);
+		expect(map).toEqual({});
+	});
+
 	test("serializes elasticFindings under the elastic key", () => {
 		const map = buildSubagentReports([
 			result({ dataSourceId: "elastic", elasticFindings: { errorRate: 0.42 } as never }),

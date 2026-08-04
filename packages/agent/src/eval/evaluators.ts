@@ -4,6 +4,8 @@ import OpenAI from "openai";
 import { z } from "zod";
 import { parseLlmJson } from "../llm-json.ts";
 
+const DATASOURCE_VERDICT_DEFAULT = { verdict: "missed" as const, gapsHonest: false, fabricated: false };
+
 export const DatasourceVerdictSchema = z.object({
 	verdict: z.enum(["found", "partial", "missed"]).catch("missed"),
 	// SIO-1374: folded in from the section-judging idea rather than a separate graded pass --
@@ -14,6 +16,17 @@ export const DatasourceVerdictSchema = z.object({
 	fabricated: z.boolean().catch(false),
 });
 export type DatasourceVerdict = z.output<typeof DatasourceVerdictSchema>;
+
+// CodeRabbit (PR #591): the .catch() calls INSIDE DatasourceVerdictSchema only rescue a
+// malformed FIELD once Zod has already confirmed the value at that key is an object -- a
+// datasource value that is null, a string, or any other non-object type fails z.object()'s own
+// type check before those field-level .catch()es ever run, and z.record's inner schema failing
+// propagates up to fail the WHOLE map (see HolisticGradeSchema.datasourceVerdicts below), not
+// just that one key. A single malformed datasource in the judge's own JSON drift would silently
+// zero out response_quality for the entire example. Wrapping the whole per-value schema in
+// .catch() degrades a non-object (or otherwise unparseable) value to the same safe default the
+// field-level catches already use, so per-key degradation actually holds as documented.
+const TolerantDatasourceVerdictSchema = DatasourceVerdictSchema.catch(DATASOURCE_VERDICT_DEFAULT);
 
 // Tolerant by design: the judge's own shape drifting must score an example 0, not
 // abort the run.
@@ -39,7 +52,7 @@ export const HolisticGradeSchema = z.object({
 	// an example with no referenceFindings, or one that omits this field entirely, must not fail
 	// the example (same graceful-degradation contract as rootCauseMatch). A per-key .catch()
 	// on DatasourceVerdictSchema means one malformed datasource entry degrades only that key.
-	datasourceVerdicts: z.record(z.string(), DatasourceVerdictSchema).optional(),
+	datasourceVerdicts: z.record(z.string(), TolerantDatasourceVerdictSchema).optional(),
 	reasoning: z
 		.union([z.string(), z.number(), z.null()])
 		.optional()
@@ -214,15 +227,28 @@ export async function responseQualityJudge(run: Run, example: Example) {
 	const userContent = referenceReport
 		? `Real incident report (written by a human analyst, the ground truth for this incident):\n${referenceReport}${findingsBlock}\n\nRubric (what a thorough answer for this incident should cover):\n${rubric}\n\nAI agent's response to grade:\n${response}\n\nScore the AI agent's response 1-10 by comparing it holistically to the real report and rubric above.${referenceFindings ? " Also populate datasourceVerdicts for each ground-truth datasource listed above." : ""}`
 		: `Rubric (what a thorough answer for this incident should cover -- no real incident report is available for this synthetic example, grade against the rubric alone):\n${rubric}\n\nResponse to grade:\n${response}\n\nScore the response 1-10 against the rubric.`;
-	const r = await openai.chat.completions.create({
-		model: "gpt-4o-mini",
-		temperature: 0,
-		response_format: { type: "json_object" },
-		messages: [
-			{ role: "system", content: HOLISTIC_JUDGE_SYSTEM_PROMPT },
-			{ role: "user", content: userContent },
-		],
-	});
+	// CodeRabbit (PR #591): a request error here (network failure, rate limit, timeout) used to
+	// throw out of the function, killing the whole eval run over one example -- the exact
+	// fragility SIO-1221 fixed for JSON.parse below, just one call earlier. Degrade to the same
+	// score-0 result the parse-failure path already returns.
+	let r: Awaited<ReturnType<typeof openai.chat.completions.create>>;
+	try {
+		r = await openai.chat.completions.create({
+			model: "gpt-4o-mini",
+			temperature: 0,
+			response_format: { type: "json_object" },
+			messages: [
+				{ role: "system", content: HOLISTIC_JUDGE_SYSTEM_PROMPT },
+				{ role: "user", content: userContent },
+			],
+		});
+	} catch (err) {
+		return {
+			key: "response_quality",
+			score: 0,
+			comment: `judge request failed: ${err instanceof Error ? err.message : String(err)}`,
+		};
+	}
 	// SIO-1221: this was the only unwrapped JSON.parse of model output in the repo -- the
 	// `??` default only covered a null content, not malformed JSON, so a single bad judge
 	// response threw and killed the whole eval run rather than scoring that example 0.
@@ -263,19 +289,26 @@ export async function responseQualityJudge(run: Run, example: Example) {
 // model) from the constant (Sonnet 5 aggregator prose) -- the measurement gap this ticket exists
 // to close. A separate schema/prompt/call from the holistic judge: it grades raw sub-agent
 // findings, not the aggregator's final response text.
+const SUBAGENT_ACCURACY_ENTRY_DEFAULT = { accuracy: "incorrect" as const, reasoning: "" };
+
+// CodeRabbit (PR #591): a bare `.catch({})` on the outer record only rescues the record itself
+// being malformed (not an object, missing entirely) -- z.record still fails as soon as ONE inner
+// value is the wrong type, and that failure propagates straight to the outer .catch(), silently
+// discarding every OTHER well-formed entry along with the bad one. Wrapping the per-value schema
+// in its own .catch() degrades a malformed entry independently, so one bad datasource from a
+// drifting judge never costs the whole example its subagent_accuracy_* feedback.
+const TolerantSubagentAccuracyEntrySchema = z
+	.object({
+		accuracy: z.enum(["correct", "partial", "missing", "incorrect"]).catch("incorrect"),
+		reasoning: z
+			.union([z.string(), z.number(), z.null()])
+			.optional()
+			.transform((v) => (v === null || v === undefined ? "" : String(v))),
+	})
+	.catch(SUBAGENT_ACCURACY_ENTRY_DEFAULT);
+
 export const SubagentGradeSchema = z.object({
-	datasourceAccuracy: z
-		.record(
-			z.string(),
-			z.object({
-				accuracy: z.enum(["correct", "partial", "missing", "incorrect"]).catch("incorrect"),
-				reasoning: z
-					.union([z.string(), z.number(), z.null()])
-					.optional()
-					.transform((v) => (v === null || v === undefined ? "" : String(v))),
-			}),
-		)
-		.catch({}),
+	datasourceAccuracy: z.record(z.string(), TolerantSubagentAccuracyEntrySchema).catch({}),
 });
 export type SubagentGrade = z.output<typeof SubagentGradeSchema>;
 
@@ -296,6 +329,19 @@ const SUBAGENT_JUDGE_SYSTEM_PROMPT = [
 	'Respond with JSON: {"datasourceAccuracy": { "<datasource>": { "accuracy": "correct" | "partial" | "missing" | "incorrect", "reasoning": string (1-2 sentences) }, ... }}',
 ].join(" ");
 
+// CodeRabbit (PR #591): buildSubagentReports concatenates every deployment's serialized
+// findings for a datasource with no cap -- an example that fanned out across several
+// deployments/estates could produce an oversized judge prompt. Caps each datasource's report
+// independently (not the whole userContent) so a truncation always lands per-datasource with an
+// explicit marker, never silently mid-JSON inside one report.
+const SUBAGENT_REPORT_CHAR_CAP = 8_000;
+
+export function truncateForJudge(text: string, capChars: number = SUBAGENT_REPORT_CHAR_CAP): string {
+	if (text.length <= capChars) return text;
+	const cut = text.length - capChars;
+	return `${text.slice(0, capChars)}\n[truncated ${cut} chars for judge input size]`;
+}
+
 // Batches every datasource's sub-agent report + reference finding into ONE OpenAI call per
 // example (not one call per datasource) to keep cost trivial on gpt-4o-mini -- SIO-1374 design
 // doc's ~$1-2/32-example-leg target. Only datasources present in referenceFindings are graded:
@@ -313,19 +359,30 @@ export async function judgeSubagentReports(
 	const openai = new OpenAI();
 	const userContent = datasources
 		.map((ds) => {
-			const report = subagentReports[ds] ?? "(no findings produced by the sub-agent for this datasource)";
+			const report = truncateForJudge(
+				subagentReports[ds] ?? "(no findings produced by the sub-agent for this datasource)",
+			);
 			return `Datasource: ${ds}\nSub-agent's raw findings:\n${report}\nGround truth (from the real ticket):\n${referenceFindings[ds]}`;
 		})
 		.join("\n\n");
-	const r = await openai.chat.completions.create({
-		model: "gpt-4o-mini",
-		temperature: 0,
-		response_format: { type: "json_object" },
-		messages: [
-			{ role: "system", content: SUBAGENT_JUDGE_SYSTEM_PROMPT },
-			{ role: "user", content: userContent },
-		],
-	});
+	// CodeRabbit (PR #591): an unhandled request error (network failure, rate limit, timeout) used
+	// to throw out of this function, killing the whole eval run over one example -- the same
+	// class of fragility SIO-1221 already fixed for responseQualityJudge's JSON.parse. Degrade to
+	// no feedback for this example instead, matching the parse-failure path below.
+	let r: Awaited<ReturnType<typeof openai.chat.completions.create>>;
+	try {
+		r = await openai.chat.completions.create({
+			model: "gpt-4o-mini",
+			temperature: 0,
+			response_format: { type: "json_object" },
+			messages: [
+				{ role: "system", content: SUBAGENT_JUDGE_SYSTEM_PROMPT },
+				{ role: "user", content: userContent },
+			],
+		});
+	} catch {
+		return [];
+	}
 	const grade = parseLlmJson(r.choices[0]?.message?.content ?? "", SubagentGradeSchema);
 	if (!grade.ok) return [];
 	return subagentJudgeFeedback(grade.data);
@@ -335,7 +392,12 @@ export async function judgeSubagentReports(
 // mirroring responseQualityJudge's run/example -> feedback[] shape so it slots into the same
 // evaluate() call registration as the existing evaluators.
 export async function subagentEvidenceJudge(run: Run, example: Example) {
-	const referenceFindings = (example.outputs?.referenceFindings ?? {}) as { [datasource: string]: string };
+	// CodeRabbit (PR #591): example.outputs?.referenceFindings was previously an unchecked cast --
+	// responseQualityJudge validates the same field through ExampleOutputsSchema, so a non-string
+	// dataset value would silently interpolate as "[object Object]" in the judge prompt here while
+	// failing loudly there. Sharing the schema keeps both evaluators on one contract.
+	const parsedOutputs = ExampleOutputsSchema.safeParse(example.outputs ?? {});
+	const referenceFindings = parsedOutputs.success ? (parsedOutputs.data.referenceFindings ?? {}) : {};
 	const subagentReports =
 		(run.outputs as { output?: { subagentReports?: { [k: string]: string } } } | undefined)?.output?.subagentReports ??
 		{};
