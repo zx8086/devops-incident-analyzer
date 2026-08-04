@@ -258,3 +258,75 @@ export async function responseQualityJudge(run: Run, example: Example) {
 	// root_cause_accuracy makes the gate filterable on its own in the Compare UI.
 	return judgeFeedback(data);
 }
+
+// SIO-1374: the per-sub-agent judge, grading each datasource's serialized *Findings object
+// (buildSubagentReports) against referenceFindings, isolating the variable under test (sub-agent
+// model) from the constant (Sonnet 5 aggregator prose) -- the measurement gap this ticket exists
+// to close. A separate schema/prompt/call from the holistic judge: it grades raw sub-agent
+// findings, not the aggregator's final response text.
+export const SubagentGradeSchema = z.object({
+	datasourceAccuracy: z
+		.record(
+			z.string(),
+			z.object({
+				accuracy: z.enum(["correct", "partial", "missing", "incorrect"]).catch("incorrect"),
+				reasoning: z
+					.union([z.string(), z.number(), z.null()])
+					.optional()
+					.transform((v) => (v === null || v === undefined ? "" : String(v))),
+			}),
+		)
+		.catch({}),
+});
+export type SubagentGrade = z.output<typeof SubagentGradeSchema>;
+
+// Pure mapping, unit-testable without an OpenAI call, same split as judgeFeedback.
+export function subagentJudgeFeedback(grade: SubagentGrade): { key: string; score: number; comment: string }[] {
+	return Object.entries(grade.datasourceAccuracy).map(([datasource, v]) => ({
+		key: `subagent_accuracy_${datasource}`,
+		score: v.accuracy === "correct" ? 1 : v.accuracy === "partial" ? 0.5 : 0,
+		comment: `accuracy=${v.accuracy} -- ${v.reasoning}`,
+	}));
+}
+
+const SUBAGENT_JUDGE_SYSTEM_PROMPT = [
+	"You are grading raw sub-agent investigation findings (structured data one specialist tool-using agent produced for one datasource) against the real, human-curated ticket's own per-datasource findings for the same incident.",
+	"You will be given, for each datasource: the sub-agent's own serialized findings (raw JSON, not prose -- do not penalize formatting or lack of narrative), and the real ticket's ground-truth finding for that same datasource.",
+	"For EACH datasource provided, determine: 'correct' if the sub-agent's findings contain the same specific evidence/conclusion the ground truth describes; 'partial' if it contains related but incomplete or less specific evidence; 'missing' if the sub-agent produced no findings, or findings with no bearing on the ground truth, for that datasource; 'incorrect' if the sub-agent's findings actively contradict the ground truth.",
+	"Grade each datasource independently -- do not let a strong result on one datasource influence the verdict on another.",
+	'Respond with JSON: {"datasourceAccuracy": { "<datasource>": { "accuracy": "correct" | "partial" | "missing" | "incorrect", "reasoning": string (1-2 sentences) }, ... }}',
+].join(" ");
+
+// Batches every datasource's sub-agent report + reference finding into ONE OpenAI call per
+// example (not one call per datasource) to keep cost trivial on gpt-4o-mini -- SIO-1374 design
+// doc's ~$1-2/32-example-leg target. Only datasources present in BOTH maps are graded: a
+// datasource missing from referenceFindings has no ground truth to grade against (see Task 2's
+// deliberate-omission note), and a datasource missing from subagentReports produced no evidence
+// to grade, which is exactly a "missing" verdict, but that requires an existing referenceFindings
+// entry to be meaningful -- so the judge is only asked about datasources it can actually assess.
+export async function judgeSubagentReports(
+	subagentReports: { [dataSourceId: string]: string },
+	referenceFindings: { [datasource: string]: string },
+): Promise<{ key: string; score: number; comment: string }[]> {
+	const datasources = Object.keys(referenceFindings);
+	if (datasources.length === 0) return [];
+	const openai = new OpenAI();
+	const userContent = datasources
+		.map((ds) => {
+			const report = subagentReports[ds] ?? "(no findings produced by the sub-agent for this datasource)";
+			return `Datasource: ${ds}\nSub-agent's raw findings:\n${report}\nGround truth (from the real ticket):\n${referenceFindings[ds]}`;
+		})
+		.join("\n\n");
+	const r = await openai.chat.completions.create({
+		model: "gpt-4o-mini",
+		temperature: 0,
+		response_format: { type: "json_object" },
+		messages: [
+			{ role: "system", content: SUBAGENT_JUDGE_SYSTEM_PROMPT },
+			{ role: "user", content: userContent },
+		],
+	});
+	const grade = parseLlmJson(r.choices[0]?.message?.content ?? "", SubagentGradeSchema);
+	if (!grade.ok) return [];
+	return subagentJudgeFeedback(grade.data);
+}

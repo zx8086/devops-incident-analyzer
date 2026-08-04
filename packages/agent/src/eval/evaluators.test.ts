@@ -11,7 +11,9 @@ import {
 	HOLISTIC_JUDGE_SYSTEM_PROMPT,
 	HolisticGradeSchema,
 	judgeFeedback,
+	SubagentGradeSchema,
 	squareVerdictWithReference,
+	subagentJudgeFeedback,
 } from "./evaluators.ts";
 
 // CodeRabbit round 2 on PR #590: whitespace-only values must not pass min(1) -- a blank-ish
@@ -230,5 +232,52 @@ describe("HOLISTIC_JUDGE_SYSTEM_PROMPT content (SIO-1374)", () => {
 		expect(HOLISTIC_JUDGE_SYSTEM_PROMPT).toContain("datasourceVerdicts");
 		expect(HOLISTIC_JUDGE_SYSTEM_PROMPT).toContain("gapsHonest");
 		expect(HOLISTIC_JUDGE_SYSTEM_PROMPT).toContain("fabricated");
+	});
+});
+
+describe("SubagentGradeSchema (SIO-1374)", () => {
+	test("parses a well-formed per-datasource accuracy map", () => {
+		const grade = SubagentGradeSchema.parse({
+			datasourceAccuracy: {
+				elastic: { accuracy: "correct", reasoning: "matched the deadlock chain" },
+				kafka: { accuracy: "missing", reasoning: "no DLQ evidence surfaced" },
+			},
+		});
+		expect(grade.datasourceAccuracy.elastic?.accuracy).toBe("correct");
+		expect(grade.datasourceAccuracy.kafka?.accuracy).toBe("missing");
+	});
+
+	test("a bogus accuracy enum value degrades that entry to incorrect, not a parse failure", () => {
+		const grade = SubagentGradeSchema.parse({
+			datasourceAccuracy: { elastic: { accuracy: "sort of", reasoning: "x" } },
+		});
+		expect(grade.datasourceAccuracy.elastic?.accuracy).toBe("incorrect");
+	});
+
+	test("missing datasourceAccuracy degrades to an empty object, not a parse failure", () => {
+		const grade = SubagentGradeSchema.parse({});
+		expect(grade.datasourceAccuracy).toEqual({});
+	});
+});
+
+describe("subagentJudgeFeedback (SIO-1374)", () => {
+	test("emits one subagent_accuracy_<datasource> key per graded datasource", () => {
+		const fb = subagentJudgeFeedback({
+			datasourceAccuracy: {
+				elastic: { accuracy: "correct", reasoning: "matched" },
+				kafka: { accuracy: "partial", reasoning: "half right" },
+				aws: { accuracy: "missing", reasoning: "nothing surfaced" },
+				gitlab: { accuracy: "incorrect", reasoning: "wrong conclusion" },
+			},
+		});
+		expect(fb.find((f) => f.key === "subagent_accuracy_elastic")?.score).toBe(1);
+		expect(fb.find((f) => f.key === "subagent_accuracy_kafka")?.score).toBe(0.5);
+		expect(fb.find((f) => f.key === "subagent_accuracy_aws")?.score).toBe(0);
+		expect(fb.find((f) => f.key === "subagent_accuracy_incorrect")).toBeUndefined();
+		expect(fb.find((f) => f.key === "subagent_accuracy_gitlab")?.score).toBe(0);
+	});
+
+	test("empty datasourceAccuracy emits no feedback entries", () => {
+		expect(subagentJudgeFeedback({ datasourceAccuracy: {} })).toHaveLength(0);
 	});
 });
