@@ -5,6 +5,7 @@ import { type FirstAttemptSummary, summarizeFirstAttempts } from "../alignment.t
 import { buildGraph } from "../graph.ts";
 import { createMcpClient } from "../mcp-bridge.ts";
 import { extractTextFromContent } from "../message-utils.ts";
+import { buildSubagentReports } from "./subagent-reports.ts";
 
 // SIO-1371 (CodeRabbit PR #590): dataset examples arrive from LangSmith as untyped JSON --
 // validate at the boundary so a malformed example fails loudly as a harness error instead of
@@ -48,6 +49,7 @@ export async function runAgent(inputs: z.infer<typeof RunAgentInputsSchema>): Pr
 		targetDataSources: string[];
 		confidenceCap?: number;
 		firstAttempts: FirstAttemptSummary[];
+		subagentReports: { [dataSourceId: string]: string };
 	};
 }> {
 	const parsed = RunAgentInputsSchema.parse(inputs);
@@ -74,12 +76,17 @@ export async function runAgent(inputs: z.infer<typeof RunAgentInputsSchema>): Pr
 	// retry-recovered runs from clean first-try runs without log inspection. Field name
 	// matches the alignment + aggregator log keys for cross-referencing.
 	const firstAttempts = summarizeFirstAttempts(finalState.dataSourceResults ?? []);
+	// SIO-1374: raw per-sub-agent findings, isolated from the aggregator's final response text,
+	// so the per-sub-agent judge can grade the variable under test (sub-agent model) without the
+	// constant (Sonnet 5 aggregator prose) diluting the signal.
+	const subagentReports = buildSubagentReports(finalState.dataSourceResults ?? []);
 	return {
 		output: {
 			response: responseText,
 			targetDataSources: finalState.targetDataSources ?? [],
 			confidenceCap: finalState.confidenceCap,
 			firstAttempts,
+			subagentReports,
 		},
 	};
 }
