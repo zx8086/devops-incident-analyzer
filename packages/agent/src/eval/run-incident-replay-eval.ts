@@ -21,7 +21,7 @@ import { loadAgent } from "@devops-agent/gitagent-bridge";
 import { evaluate } from "langsmith/evaluation";
 import { resolveRoleModelConfig } from "../llm.ts";
 import { getAgentsDir } from "../paths.ts";
-import { confidenceThreshold, datasourcesCovered, responseQualityJudge } from "./evaluators.ts";
+import { confidenceThreshold, datasourcesCovered, responseQualityJudge, subagentEvidenceJudge } from "./evaluators.ts";
 import { runAgent } from "./run-function.ts";
 
 const DATASET_NAME = "incident-replay-eval";
@@ -80,7 +80,7 @@ console.log(`Starting evaluation, experiment prefix: ${experimentPrefix}`);
 
 const opts = {
 	data: DATASET_NAME,
-	evaluators: [datasourcesCovered, confidenceThreshold, responseQualityJudge],
+	evaluators: [datasourcesCovered, confidenceThreshold, responseQualityJudge, subagentEvidenceJudge],
 	experimentPrefix,
 	// biome-ignore lint/suspicious/noExplicitAny: SIO-680 - langsmith evaluate overload resolution
 } as any;

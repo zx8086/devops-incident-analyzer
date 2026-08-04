@@ -330,3 +330,15 @@ export async function judgeSubagentReports(
 	if (!grade.ok) return [];
 	return subagentJudgeFeedback(grade.data);
 }
+
+// LangSmith run-evaluator entrypoint for the per-sub-agent judge (Task 7's judgeSubagentReports),
+// mirroring responseQualityJudge's run/example -> feedback[] shape so it slots into the same
+// evaluate() call registration as the existing evaluators.
+export async function subagentEvidenceJudge(run: Run, example: Example) {
+	const referenceFindings = (example.outputs?.referenceFindings ?? {}) as { [datasource: string]: string };
+	const subagentReports =
+		(run.outputs as { output?: { subagentReports?: { [k: string]: string } } } | undefined)?.output?.subagentReports ??
+		{};
+	if (Object.keys(referenceFindings).length === 0) return [];
+	return judgeSubagentReports(subagentReports, referenceFindings);
+}
