@@ -27,6 +27,14 @@ export interface EvalExample {
 		// entries (real tickets) have a real report to compare against; the synthetic dataset.ts
 		// examples have no source ticket and omit this.
 		referenceReport?: string;
+		// SIO-1374: per-datasource ground truth, backfilled from each real ticket's own "Findings
+		// by Datasource" section. Keys are datasource ids (elastic, kafka, couchbase, gitlab, aws,
+		// atlassian) matching expectedDatasources entries. Used by the per-datasource evidence
+		// verdicts (evaluators.ts datasourceVerdicts) and the per-sub-agent judge, which need
+		// datasource-level ground truth that referenceReport's Executive-Summary-only text does not
+		// provide. Optional: only incident-replay-dataset.ts entries have per-datasource source
+		// material; the synthetic dataset.ts examples omit this.
+		referenceFindings?: { [datasource: string]: string };
 	};
 }
 

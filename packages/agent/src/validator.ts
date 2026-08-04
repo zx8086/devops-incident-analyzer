@@ -24,6 +24,14 @@ export function validationWarningConfidenceCap(threshold: number): number {
 // ungrounded-metrics warning (validator.ts below: ungrounded.length > 3).
 const UNGROUNDED_METRIC_WARNING_PREFIX = /^\d+ metric values in answer not found in source data/;
 
+// SIO-1140's ensureVerbatimDdl backstop (aggregator.ts) appends this section to whatever
+// answer the aggregator produced, so a real DDL recommendation is never silently dropped --
+// even when the aggregator's own synthesis is empty (2026-08-04: Sonnet 5's reasoning block
+// consuming the entire maxTokens budget). That backstop text alone can clear the short-answer
+// length gate below, making a report that is ONLY a raw DDL dump look like a valid answer.
+// Strip it before measuring "real" content so the gate sees what the aggregator actually wrote.
+const VERBATIM_DDL_SECTION_RE = /## Server-computed index DDL \(verbatim\)[\s\S]*$/;
+
 export function validate(state: AgentStateType): Partial<AgentStateType> {
 	const answer = state.finalAnswer;
 	if (!answer) {
@@ -34,9 +42,15 @@ export function validate(state: AgentStateType): Partial<AgentStateType> {
 	logger.info({ answerLength: answer.length, retryCount: state.retryCount }, "Validating answer");
 	const warnings: string[] = [];
 
-	// Check for empty or too-short answers
-	if (answer.length < 50) {
-		logger.warn({ answerLength: answer.length }, "Answer too short, validation failed");
+	// Check for empty or too-short answers, ignoring the verbatim-DDL backstop section so a
+	// truncated/empty aggregation is judged on what it actually wrote, not on a fixed section a
+	// deterministic post-processing step appended regardless of synthesis quality.
+	const answerWithoutDdlBackstop = answer.replace(VERBATIM_DDL_SECTION_RE, "").trim();
+	if (answerWithoutDdlBackstop.length < 50) {
+		logger.warn(
+			{ answerLength: answer.length, answerLengthWithoutDdlBackstop: answerWithoutDdlBackstop.length },
+			"Answer too short, validation failed",
+		);
 		return { validationResult: "fail", retryCount: state.retryCount + 1 };
 	}
 

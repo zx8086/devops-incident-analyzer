@@ -99,4 +99,22 @@ describe("long-form roles clear the model's measured truncation floor", () => {
 			expect(LONG_FORM_ROLES.has(role), `${role} must not be treated as long-form`).toBe(false);
 		}
 	});
+
+	// SIO-1213's synthetic P6 probe prompt is ~600 input tokens (packages/agent/src/eval/probe-model.ts)
+	// and measured Sonnet 5 finishing a full report in 3874-4287 output tokens -- nowhere near the
+	// 16384 ceiling, so the probe never exercised a prompt large/complex enough to make reasoning and
+	// answer text compete for the same budget. The 2026-08-04 incident-replay eval (32 real incidents,
+	// 30-49K input tokens per aggregation call) hit maxTokens on 13/64 aggregator calls across both
+	// A/B legs, twice with ZERO answer text (the reasoning block alone consumed all 16384 tokens).
+	// Successful calls in that same run ranged up to 16088 output tokens -- right at the ceiling, with
+	// several near-misses -- confirming 16384 is genuinely undersized for this workload, not merely an
+	// unlucky draw. Require real headroom (not "technically above the single highest sample") so a
+	// similarly-sized reasoning block on a slightly larger prompt still leaves room for the answer.
+	test("aggregator budget clears the observed 2026-08-04 incident-replay eval ceiling with real headroom, not a bare pass", () => {
+		const OBSERVED_EVAL_MAX_OUTPUT_TOKENS = 16088;
+		const REQUIRED_HEADROOM_TOKENS = 8192;
+		expect(ROLE_OVERRIDES.aggregator.maxTokens).toBeGreaterThanOrEqual(
+			OBSERVED_EVAL_MAX_OUTPUT_TOKENS + REQUIRED_HEADROOM_TOKENS,
+		);
+	});
 });

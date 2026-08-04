@@ -343,7 +343,18 @@ const RECURSION_LIMIT_BY_DATASOURCE: Record<string, number> = {
 	// Slow-query triage chains three skills (indexes -> schema -> explain).
 	couchbase: 45,
 	// Search -> resolve project -> read MR/commits is 4-6 cycles. 97 calls was thrash, not depth.
-	gitlab: 36,
+	//
+	// 36 -> 60 (2026-08-04, incident-replay eval): the 36 cap was set from one prior incident's
+	// thrash pattern, but the 32-incident replay eval showed gitlab consistently hitting its
+	// final-turn-reserved warning at EXACTLY 12 LLM turns every time it triggered (6/32 sonnet-leg
+	// runs, 13/32 haiku-leg runs) -- a hard, repeatable ceiling on real historical investigations,
+	// not thrash, each producing a noticeably thinner final report than gitlab's non-limited runs.
+	// This is a deep-agent architecture: the recursion limit bounds LLM TURNS (cost/loop safety),
+	// not the evidence available per turn (that is sub-agent-context-budget.ts's job) -- a
+	// consistently-exhausted turn budget means genuine investigations are being cut short, not
+	// that thrash is being prevented. Matched to elastic/aws's tier rather than the generic
+	// default, since the ceiling was hit with no slack at 36/45's step count.
+	gitlab: 60,
 	kafka: 36,
 	konnect: 36,
 	// Two-entry action map; nothing here needs depth.
