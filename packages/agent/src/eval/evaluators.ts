@@ -164,12 +164,11 @@ export const HOLISTIC_JUDGE_SYSTEM_PROMPT = [
 	"A thorough, well-organized response whose named cause is wrong is still a wrong answer -- do not let fluency, formatting, or investigative breadth pull the verdict toward 'correct'.",
 	// SIO-1374 (audit example #8, DEVOPS-1386): live replays investigate CURRENT systems, so the
 	// AI response may truthfully describe a live recurrence window with additional co-occurring
-	// symptoms that the reference report's frozen era does not mention -- these must be classified
-	// as observations "outside the reference window", NOT as fabrication, and must not by
-	// themselves pull the root-cause verdict toward 'incorrect'. Judge the root-cause verdict on
-	// mechanism category and naming as usual; only assertions that actively contradict the
-	// reference report's own findings, or invent specifics with no supporting evidence, count as
-	// fabrication.",
+	// symptoms that the reference report's frozen era does not mention. These are exempt from
+	// fabrication classification if the response's own cited evidence genuinely supports them;
+	// only assertions that contradict the reference report or invent specifics with no supporting
+	// evidence count as fabrication. This grounding prevents live-recurrence observations from
+	// falsely pulling the root-cause verdict toward 'incorrect'.
 	"A response may describe a live recurrence window with additional co-occurring symptoms not present in the reference report's era -- if the response's own cited evidence genuinely supports those observations, classify them as 'outside the reference window', not as fabrication; only classify an observation as fabrication if it contradicts the reference report or invents specifics with no supporting evidence in the response itself. Continue judging the root-cause verdict on mechanism category and naming as usual.",
 	"Only after fixing that verdict, grade holistically, not as a checklist: judge overall investigative quality, evidence quality (specific, concrete findings vs vague assertions), and appropriate honesty about gaps/limitations -- the same way you would compare two colleagues' incident write-ups.",
 	"A response that reaches the same substantive conclusion as the real report, with strong supporting evidence, should score highly even if it misses a minor rubric clause or a small point the real report happened to also make.",
@@ -299,11 +298,12 @@ const SUBAGENT_JUDGE_SYSTEM_PROMPT = [
 
 // Batches every datasource's sub-agent report + reference finding into ONE OpenAI call per
 // example (not one call per datasource) to keep cost trivial on gpt-4o-mini -- SIO-1374 design
-// doc's ~$1-2/32-example-leg target. Only datasources present in BOTH maps are graded: a
-// datasource missing from referenceFindings has no ground truth to grade against (see Task 2's
-// deliberate-omission note), and a datasource missing from subagentReports produced no evidence
-// to grade, which is exactly a "missing" verdict, but that requires an existing referenceFindings
-// entry to be meaningful -- so the judge is only asked about datasources it can actually assess.
+// doc's ~$1-2/32-example-leg target. Only datasources present in referenceFindings are graded:
+// a datasource missing from referenceFindings has no ground truth to grade against (see Task 2's
+// deliberate-omission note). A datasource missing from subagentReports still gets graded via a
+// placeholder string so the judge can score it as "missing" evidence; this requires the
+// referenceFindings entry to be meaningful, so the judge is only asked about datasources with
+// reference ground truth to assess.
 export async function judgeSubagentReports(
 	subagentReports: { [dataSourceId: string]: string },
 	referenceFindings: { [datasource: string]: string },

@@ -14,6 +14,10 @@ const FINDINGS_FIELD_BY_DATASOURCE: Record<string, keyof DataSourceResult> = {
 	gitlab: "gitlabFindings",
 	aws: "awsFindings",
 	atlassian: "atlassianFindings",
+	// orbitFindings is deliberately omitted: it rides the gitlab DataSourceResult but the
+	// incident-replay dataset's referenceFindings.gitlab entries are source/MR-level facts only,
+	// not Orbit cross-project blast-radius data, so including it would add noise the judge has
+	// no ground truth to grade against.
 };
 
 // Builds one serialized "report" string per datasource id from that datasource's structured
