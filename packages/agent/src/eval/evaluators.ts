@@ -152,9 +152,9 @@ export function confidenceThreshold(run: Run, example: Example) {
 // the earlier binary meets_rubric shape -- that shape is what flattened two visibly
 // different-quality responses (one materially more thorough than the other) to the same
 // score this cycle.
-const HOLISTIC_JUDGE_SYSTEM_PROMPT = [
+export const HOLISTIC_JUDGE_SYSTEM_PROMPT = [
 	"You are an experienced incident-response reviewer grading an AI agent's investigation report against the real, human-curated investigation of the same incident.",
-	"You will be given: the real incident's own report (written by a human analyst reviewing the actual production investigation), a rubric describing what a thorough answer for this specific incident should cover, and the AI agent's response to grade.",
+	"You will be given: the real incident's own report (written by a human analyst reviewing the actual production investigation), a rubric describing what a thorough answer for this specific incident should cover, per-datasource ground-truth findings when available, and the AI agent's response to grade.",
 	// SIO-1372: the root-cause verdict comes FIRST and is its own required output field. The
 	// earlier prompt mentioned root-cause correctness only inside the 3-4 scoring band, as one
 	// of several disjunctive conditions -- advisory, not a required check -- and the judge
@@ -162,11 +162,25 @@ const HOLISTIC_JUDGE_SYSTEM_PROMPT = [
 	// separate mandatory first step keeps holistic fluency from absorbing correctness.
 	"FIRST, before scoring anything else, determine whether the AI response's stated root cause matches the real report's root cause: 'correct' means it names the same specific mechanism/cause the real report identified; 'partial' means it lands in the right general category (e.g. both agree the driver is automated/internal/bulk traffic) but never names the specific mechanism the real report identified; 'incorrect' means it names a different or contradictory cause, or commits to no cause at all where the real report identified one; 'not_determinable' means no real report was provided to compare against.",
 	"A thorough, well-organized response whose named cause is wrong is still a wrong answer -- do not let fluency, formatting, or investigative breadth pull the verdict toward 'correct'.",
+	// SIO-1374 (audit example #8, DEVOPS-1386): live replays investigate CURRENT systems, so the
+	// AI response may truthfully describe a live recurrence window with additional co-occurring
+	// symptoms that the reference report's frozen era does not mention -- these must be classified
+	// as observations "outside the reference window", NOT as fabrication, and must not by
+	// themselves pull the root-cause verdict toward 'incorrect'. Judge the root-cause verdict on
+	// mechanism category and naming as usual; only assertions that actively contradict the
+	// reference report's own findings, or invent specifics with no supporting evidence, count as
+	// fabrication.",
+	"A response may describe a live recurrence window with additional co-occurring symptoms not present in the reference report's era -- classify such observations as 'outside the reference window', not as fabrication, and continue judging the root-cause verdict on mechanism category and naming as usual.",
 	"Only after fixing that verdict, grade holistically, not as a checklist: judge overall investigative quality, evidence quality (specific, concrete findings vs vague assertions), and appropriate honesty about gaps/limitations -- the same way you would compare two colleagues' incident write-ups.",
 	"A response that reaches the same substantive conclusion as the real report, with strong supporting evidence, should score highly even if it misses a minor rubric clause or a small point the real report happened to also make.",
 	"A response that is vague, reaches the wrong conclusion, fabricates unsupported specifics, or omits a major finding the real report considered central should score low.",
 	"Score on a 1-10 scale: 9-10 exceptional (matches or exceeds the real report's rigor), 7-8 solid (correct conclusion, good evidence, minor gaps), 5-6 mediocre (partially correct or thin evidence), 3-4 weak (misses the real root cause or is mostly vague), 1-2 poor (wrong, fabricated, or substantively empty).",
-	'Respond with JSON: {"rootCauseMatch": "correct" | "partial" | "incorrect" | "not_determinable", "score": number (1-10), "reasoning": string (2-4 sentences: first justify the rootCauseMatch verdict, then explain the score)}',
+	// SIO-1374: per-datasource verdicts, folded gaps-honesty and fabrication checks in as extra
+	// fields per datasource (not a separate graded section -- see the design doc's non-goal on
+	// section-by-section grading, which would re-measure pipeline-enforced formatting instead of
+	// evidence quality).
+	"If per-datasource ground-truth findings are provided, ALSO determine, for each datasource named in the ground truth: whether the response surfaced that datasource's specific evidence ('found'), surfaced some but missed the key specific detail ('partial'), or did not surface it at all ('missed'); whether the response was honest about gaps for that datasource (gapsHonest: true if it did not overclaim confidence where the ground truth shows a gap, or if there was no gap to admit; false if it overclaimed); and whether the response fabricated a specific finding for that datasource unsupported by the ground truth (fabricated: true/false). Do not penalize truthful recurrence-window observations (see above) as fabrication.",
+	'Respond with JSON: {"rootCauseMatch": "correct" | "partial" | "incorrect" | "not_determinable", "score": number (1-10), "datasourceVerdicts": { "<datasource>": { "verdict": "found" | "partial" | "missed", "gapsHonest": boolean, "fabricated": boolean }, ... } (omit entirely if no per-datasource ground truth was provided), "reasoning": string (2-4 sentences: first justify the rootCauseMatch verdict, then explain the score, then briefly note any datasourceVerdicts of note)}',
 ].join(" ");
 
 // SIO-1372 (CodeRabbit PR #590): example.outputs is Zod-parsed rather than cast, because
@@ -177,6 +191,10 @@ const HOLISTIC_JUDGE_SYSTEM_PROMPT = [
 export const ExampleOutputsSchema = z.object({
 	qualityRubric: z.string().trim().min(1),
 	referenceReport: z.string().trim().min(1).optional(),
+	// SIO-1374: per-datasource ground truth passed to the judge alongside referenceReport, so it
+	// can populate datasourceVerdicts against real per-datasource evidence rather than inferring
+	// it from the Executive-Summary-only referenceReport text.
+	referenceFindings: z.record(z.string(), z.string().trim().min(1)).optional(),
 });
 
 export async function responseQualityJudge(run: Run, example: Example) {
@@ -185,10 +203,17 @@ export async function responseQualityJudge(run: Run, example: Example) {
 	if (!parsedOutputs.success || !response) {
 		return { key: "response_quality", score: 0, comment: "missing rubric or response" };
 	}
-	const { qualityRubric: rubric, referenceReport } = parsedOutputs.data;
+	const { qualityRubric: rubric, referenceReport, referenceFindings } = parsedOutputs.data;
 	const openai = new OpenAI();
+	const findingsBlock = referenceFindings
+		? `\n\nPer-datasource ground-truth findings (what the real investigation found from each source):\n${Object.entries(
+				referenceFindings,
+			)
+				.map(([ds, text]) => `- ${ds}: ${text}`)
+				.join("\n")}`
+		: "";
 	const userContent = referenceReport
-		? `Real incident report (written by a human analyst, the ground truth for this incident):\n${referenceReport}\n\nRubric (what a thorough answer for this incident should cover):\n${rubric}\n\nAI agent's response to grade:\n${response}\n\nScore the AI agent's response 1-10 by comparing it holistically to the real report and rubric above.`
+		? `Real incident report (written by a human analyst, the ground truth for this incident):\n${referenceReport}${findingsBlock}\n\nRubric (what a thorough answer for this incident should cover):\n${rubric}\n\nAI agent's response to grade:\n${response}\n\nScore the AI agent's response 1-10 by comparing it holistically to the real report and rubric above.${referenceFindings ? " Also populate datasourceVerdicts for each ground-truth datasource listed above." : ""}`
 		: `Rubric (what a thorough answer for this incident should cover -- no real incident report is available for this synthetic example, grade against the rubric alone):\n${rubric}\n\nResponse to grade:\n${response}\n\nScore the response 1-10 against the rubric.`;
 	const r = await openai.chat.completions.create({
 		model: "gpt-4o-mini",

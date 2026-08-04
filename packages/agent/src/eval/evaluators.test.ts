@@ -8,6 +8,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	applyRootCauseCap,
 	ExampleOutputsSchema,
+	HOLISTIC_JUDGE_SYSTEM_PROMPT,
 	HolisticGradeSchema,
 	judgeFeedback,
 	squareVerdictWithReference,
@@ -216,5 +217,18 @@ describe("HolisticGradeSchema datasourceVerdicts (SIO-1374)", () => {
 			datasourceVerdicts: { elastic: { verdict: "found" } },
 		});
 		expect(grade.datasourceVerdicts?.elastic).toEqual({ verdict: "found", gapsHonest: false, fabricated: false });
+	});
+});
+
+describe("HOLISTIC_JUDGE_SYSTEM_PROMPT content (SIO-1374)", () => {
+	test("instructs era-drift observations to be classified as outside-window, not fabrication", () => {
+		expect(HOLISTIC_JUDGE_SYSTEM_PROMPT).toContain("outside the reference window");
+		expect(HOLISTIC_JUDGE_SYSTEM_PROMPT.toLowerCase()).toContain("recurrence window");
+	});
+
+	test("instructs the judge to populate datasourceVerdicts with gapsHonest and fabricated flags", () => {
+		expect(HOLISTIC_JUDGE_SYSTEM_PROMPT).toContain("datasourceVerdicts");
+		expect(HOLISTIC_JUDGE_SYSTEM_PROMPT).toContain("gapsHonest");
+		expect(HOLISTIC_JUDGE_SYSTEM_PROMPT).toContain("fabricated");
 	});
 });
