@@ -176,6 +176,54 @@ describe("judgeFeedback datasourceVerdicts (SIO-1374)", () => {
 		expect(aws?.comment).toContain("gapsHonest=false");
 		expect(aws?.comment).toContain("fabricated=true");
 	});
+
+	// CodeRabbit (PR #591): judgeFeedback previously emitted an evidence_<datasource> key for
+	// EVERY datasource the judge returned in datasourceVerdicts, with no check against the
+	// example's actual referenceFindings. The prompt only ASKS the judge to populate
+	// datasourceVerdicts when referenceFindings exists, but an LLM is not a reliable enforcer of
+	// that -- it can hallucinate the field on a synthetic example with no ground truth, or return
+	// an extra datasource name never listed in referenceFindings, either of which would emit an
+	// ungrounded evidence_<datasource> score that pollutes LangSmith's per-datasource metrics.
+	test("allowedDatasources filters out ungrounded datasource keys the judge returned anyway", () => {
+		const fb = judgeFeedback(
+			{
+				score: 8,
+				rootCauseMatch: "correct",
+				reasoning: "x",
+				datasourceVerdicts: {
+					elastic: { verdict: "found", gapsHonest: true, fabricated: false },
+					// aws was never in referenceFindings -- judge hallucinated a verdict for it anyway.
+					aws: { verdict: "missed", gapsHonest: true, fabricated: false },
+				},
+			},
+			["elastic"],
+		);
+		expect(fb.find((f) => f.key === "evidence_elastic")).toBeDefined();
+		expect(fb.find((f) => f.key === "evidence_aws")).toBeUndefined();
+	});
+
+	test("allowedDatasources=[] (no referenceFindings) suppresses every evidence_ key", () => {
+		const fb = judgeFeedback(
+			{
+				score: 8,
+				rootCauseMatch: "correct",
+				reasoning: "x",
+				datasourceVerdicts: { elastic: { verdict: "found", gapsHonest: true, fabricated: false } },
+			},
+			[],
+		);
+		expect(fb.some((f) => f.key.startsWith("evidence_"))).toBe(false);
+	});
+
+	test("omitting allowedDatasources keeps the existing unfiltered behavior", () => {
+		const fb = judgeFeedback({
+			score: 8,
+			rootCauseMatch: "correct",
+			reasoning: "x",
+			datasourceVerdicts: { elastic: { verdict: "found", gapsHonest: true, fabricated: false } },
+		});
+		expect(fb.find((f) => f.key === "evidence_elastic")).toBeDefined();
+	});
 });
 
 describe("HolisticGradeSchema datasourceVerdicts (SIO-1374)", () => {
@@ -330,6 +378,30 @@ describe("subagentJudgeFeedback (SIO-1374)", () => {
 
 	test("empty datasourceAccuracy emits no feedback entries", () => {
 		expect(subagentJudgeFeedback({ datasourceAccuracy: {} })).toHaveLength(0);
+	});
+
+	// CodeRabbit (PR #591): the judge is only ever ASKED about referenceFindings' datasources, but
+	// its JSON response is not guaranteed to respect that -- an extra hallucinated key would
+	// otherwise emit an ungrounded subagent_accuracy_<datasource> score.
+	test("allowedDatasources filters out a datasource the judge graded but was never asked about", () => {
+		const fb = subagentJudgeFeedback(
+			{
+				datasourceAccuracy: {
+					elastic: { accuracy: "correct", reasoning: "matched" },
+					aws: { accuracy: "missing", reasoning: "nothing surfaced" },
+				},
+			},
+			["elastic"],
+		);
+		expect(fb.find((f) => f.key === "subagent_accuracy_elastic")).toBeDefined();
+		expect(fb.find((f) => f.key === "subagent_accuracy_aws")).toBeUndefined();
+	});
+
+	test("omitting allowedDatasources keeps the existing unfiltered behavior", () => {
+		const fb = subagentJudgeFeedback({
+			datasourceAccuracy: { elastic: { accuracy: "correct", reasoning: "matched" } },
+		});
+		expect(fb.find((f) => f.key === "subagent_accuracy_elastic")).toBeDefined();
 	});
 });
 

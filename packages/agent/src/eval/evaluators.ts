@@ -94,7 +94,18 @@ export function squareVerdictWithReference(grade: HolisticGrade, hasReference: b
 // root_cause_accuracy entry: the synthetic dataset.ts examples have no referenceReport to be
 // right or wrong against, and a placeholder score would pollute the metric's average in the
 // LangSmith Compare view.
-export function judgeFeedback(grade: HolisticGrade): { key: string; score: number; comment: string }[] {
+//
+// CodeRabbit (PR #591): allowedDatasources filters evidence_<datasource> emission to datasources
+// the caller actually has referenceFindings ground truth for. The judge prompt only ASKS for
+// datasourceVerdicts when referenceFindings exists, but an LLM is not a reliable enforcer of that
+// instruction -- it can hallucinate the field on a synthetic example with no ground truth, or
+// return a datasource name that was never in referenceFindings, either of which would otherwise
+// emit an ungrounded evidence_<datasource> score into LangSmith's per-datasource metrics.
+// Optional and unfiltered by default (undefined) so existing callers/tests keep their behavior.
+export function judgeFeedback(
+	grade: HolisticGrade,
+	allowedDatasources?: string[],
+): { key: string; score: number; comment: string }[] {
 	const capped = applyRootCauseCap(grade.score, grade.rootCauseMatch);
 	const capNote = capped < grade.score ? ` (capped from ${grade.score}/10: root cause ${grade.rootCauseMatch})` : "";
 	const quality = {
@@ -115,7 +126,9 @@ export function judgeFeedback(grade: HolisticGrade): { key: string; score: numbe
 	// SIO-1374: one evidence_<datasource> key per datasource the judge scored, so LangSmith
 	// Compare can filter per-datasource weaknesses across A/B legs (e.g. "haiku's gitlab
 	// evidence is systematically weak") instead of only seeing one aggregate score.
+	const allowedSet = allowedDatasources === undefined ? undefined : new Set(allowedDatasources);
 	for (const [datasource, v] of Object.entries(grade.datasourceVerdicts ?? {})) {
+		if (allowedSet !== undefined && !allowedSet.has(datasource)) continue;
 		feedback.push({
 			key: `evidence_${datasource}`,
 			score: v.verdict === "found" ? 1 : v.verdict === "partial" ? 0.5 : 0,
@@ -281,7 +294,7 @@ export async function responseQualityJudge(run: Run, example: Example) {
 	// One OpenAI call, two feedback entries (langsmith's RunEvaluatorLike accepts
 	// EvaluationResult[]): response_quality carries the capped holistic score,
 	// root_cause_accuracy makes the gate filterable on its own in the Compare UI.
-	return judgeFeedback(data);
+	return judgeFeedback(data, referenceFindings ? Object.keys(referenceFindings) : []);
 }
 
 // SIO-1374: the per-sub-agent judge, grading each datasource's serialized *Findings object
@@ -313,12 +326,23 @@ export const SubagentGradeSchema = z.object({
 export type SubagentGrade = z.output<typeof SubagentGradeSchema>;
 
 // Pure mapping, unit-testable without an OpenAI call, same split as judgeFeedback.
-export function subagentJudgeFeedback(grade: SubagentGrade): { key: string; score: number; comment: string }[] {
-	return Object.entries(grade.datasourceAccuracy).map(([datasource, v]) => ({
-		key: `subagent_accuracy_${datasource}`,
-		score: v.accuracy === "correct" ? 1 : v.accuracy === "partial" ? 0.5 : 0,
-		comment: `accuracy=${v.accuracy} -- ${v.reasoning}`,
-	}));
+// CodeRabbit (PR #591): allowedDatasources filters subagent_accuracy_<datasource> emission the
+// same way judgeFeedback filters evidence_<datasource> -- judgeSubagentReports only ever ASKS the
+// judge about Object.keys(referenceFindings), but an LLM JSON response is not guaranteed to
+// respect that; an extra hallucinated key would otherwise emit an ungrounded score. Optional and
+// unfiltered by default so existing callers/tests keep their behavior.
+export function subagentJudgeFeedback(
+	grade: SubagentGrade,
+	allowedDatasources?: string[],
+): { key: string; score: number; comment: string }[] {
+	const allowedSet = allowedDatasources === undefined ? undefined : new Set(allowedDatasources);
+	return Object.entries(grade.datasourceAccuracy)
+		.filter(([datasource]) => allowedSet === undefined || allowedSet.has(datasource))
+		.map(([datasource, v]) => ({
+			key: `subagent_accuracy_${datasource}`,
+			score: v.accuracy === "correct" ? 1 : v.accuracy === "partial" ? 0.5 : 0,
+			comment: `accuracy=${v.accuracy} -- ${v.reasoning}`,
+		}));
 }
 
 const SUBAGENT_JUDGE_SYSTEM_PROMPT = [
@@ -385,7 +409,7 @@ export async function judgeSubagentReports(
 	}
 	const grade = parseLlmJson(r.choices[0]?.message?.content ?? "", SubagentGradeSchema);
 	if (!grade.ok) return [];
-	return subagentJudgeFeedback(grade.data);
+	return subagentJudgeFeedback(grade.data, datasources);
 }
 
 // LangSmith run-evaluator entrypoint for the per-sub-agent judge (Task 7's judgeSubagentReports),
