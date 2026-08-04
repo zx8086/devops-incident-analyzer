@@ -1,9 +1,24 @@
 // packages/agent/src/eval/run-function.ts
 import { HumanMessage } from "@langchain/core/messages";
+import { z } from "zod";
 import { type FirstAttemptSummary, summarizeFirstAttempts } from "../alignment.ts";
 import { buildGraph } from "../graph.ts";
 import { createMcpClient } from "../mcp-bridge.ts";
 import { extractTextFromContent } from "../message-utils.ts";
+
+// SIO-1371 (CodeRabbit PR #590): dataset examples arrive from LangSmith as untyped JSON --
+// validate at the boundary so a malformed example fails loudly as a harness error instead of
+// invoking the graph with an empty query and grading the resulting non-answer.
+const RunAgentInputsSchema = z.object({
+	query: z.string().min(1),
+	// Mirrors apps/web/src/lib/server/agent.ts:invokeAgent's targetDataSources/
+	// targetDeployments/uiAwsEstates initial-state fields, so an incident-replay example that
+	// carries the real UI selections a user had active exercises the SAME fixed-target path
+	// production runs use, instead of falling through to free entity extraction.
+	uiSelectedDataSources: z.array(z.string()).optional(),
+	uiSelectedElasticDeployments: z.array(z.string()).optional(),
+	uiSelectedAwsEstates: z.array(z.string()).optional(),
+});
 
 let cachedGraph: Awaited<ReturnType<typeof buildGraph>> | undefined;
 let mcpReady: Promise<void> | undefined;
@@ -27,7 +42,7 @@ function ensureMcpConnected(): Promise<void> {
 	return mcpReady;
 }
 
-export async function runAgent(inputs: { query: string }): Promise<{
+export async function runAgent(inputs: z.infer<typeof RunAgentInputsSchema>): Promise<{
 	output: {
 		response: string;
 		targetDataSources: string[];
@@ -35,12 +50,18 @@ export async function runAgent(inputs: { query: string }): Promise<{
 		firstAttempts: FirstAttemptSummary[];
 	};
 }> {
+	const parsed = RunAgentInputsSchema.parse(inputs);
 	await ensureMcpConnected();
 	if (!cachedGraph) {
 		cachedGraph = await buildGraph({ checkpointerType: "memory" });
 	}
 	const finalState = await cachedGraph.invoke(
-		{ messages: [new HumanMessage(inputs.query)] },
+		{
+			messages: [new HumanMessage(parsed.query)],
+			targetDataSources: parsed.uiSelectedDataSources ?? [],
+			targetDeployments: parsed.uiSelectedElasticDeployments ?? [],
+			uiAwsEstates: parsed.uiSelectedAwsEstates ?? [],
+		},
 		{ configurable: { thread_id: `eval-${crypto.randomUUID()}` } },
 	);
 	const lastMessage = finalState.messages.at(-1);

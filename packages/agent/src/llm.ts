@@ -379,10 +379,12 @@ const LIGHT_TIER_MODEL = { preferred: "claude-haiku-4-5" } as const;
 // the override composes with the real precedence rule instead of replacing it -- an eval run using
 // this still exercises the same source-selection logic production does.
 //
-// Deliberately narrow: this exists to let `run-eval.ts` A/B the SIO-1367 model swap against the
-// pre-swap models (claude-sonnet-4-6 for sub-agents, claude-opus-4-8 for elastic-iac) without ever
+// Deliberately narrow: this exists to let run-incident-replay-eval.ts A/B sub-agent model swaps
+// (e.g. the SIO-1367 claude-haiku-4-5 move against its claude-sonnet-4-6 predecessor) without ever
 // touching a committed agent.yaml, not as a general-purpose config mechanism. Do not read these
 // vars anywhere outside the eval harness.
+const warnedEvalOverrides = new Set<string>();
+
 function applyEvalModelOverride(
 	role: LlmRole,
 	modelConfig: ManifestModelConfig,
@@ -390,6 +392,15 @@ function applyEvalModelOverride(
 ): ManifestModelConfig {
 	const override = role === "subAgent" ? env.EVAL_SUB_AGENT_MODEL_OVERRIDE : env.EVAL_ROOT_MODEL_OVERRIDE;
 	if (!override) return modelConfig;
+	// CodeRabbit PR #590: an override silently rerouting model resolution would be invisible in
+	// a misconfigured production environment. Warn once per role+model so ANY activation is
+	// loud in the logs -- in a deliberate eval run this is expected noise; anywhere else it is
+	// the signal that an EVAL_* var leaked into an environment it must never be set in.
+	const warnKey = `${role}:${override}`;
+	if (!warnedEvalOverrides.has(warnKey)) {
+		warnedEvalOverrides.add(warnKey);
+		logger.warn({ role, override }, "EVAL model override ACTIVE -- eval-only seam, never set in production");
+	}
 	// CodeRabbit (PR #589): a bare { preferred: override } dropped the resolved manifest's
 	// `constraints` too -- for lightTierModel that silently turned temperature: 0 into the
 	// provider default under an eval override, changing generation behavior, not just the model.

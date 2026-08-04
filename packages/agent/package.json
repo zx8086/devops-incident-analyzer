@@ -10,6 +10,8 @@
 		"eval:precheck": "bun --env-file=../../.env run src/eval/precheck.ts",
 		"eval:upload-dataset": "bun --env-file=../../.env run src/eval/build-dataset.ts",
 		"eval:run": "bun --env-file=../../.env run src/eval/run-eval.ts",
+		"eval:upload-incident-replay-dataset": "bun --env-file=../../.env run src/eval/build-incident-replay-dataset.ts",
+		"eval:incident-replay": "bun --env-file=../../.env run src/eval/run-incident-replay-eval.ts",
 		"skill:promote": "bun --env-file=../../.env src/skill-promote-cli.ts",
 		"model:probe": "bun --env-file=../../.env src/eval/probe-model.ts"
 	},

@@ -5,11 +5,28 @@
 // trajectory checks ("should call tool.foo" / "should query Y for Z").
 
 export interface EvalExample {
-	inputs: { query: string };
+	inputs: {
+		query: string;
+		// SIO-1371: real incident replays carry the exact UI datasource/deployment/estate
+		// selections the user had active, so the eval exercises the same fixed-target path
+		// production runs use (entityExtractor takes uiSelected as effectiveTargets directly,
+		// see entity-extractor.ts:203/234) rather than letting free entity extraction guess.
+		// Optional: the synthetic dataset.ts examples omit this and rely on free extraction.
+		uiSelectedDataSources?: string[];
+		uiSelectedElasticDeployments?: string[];
+		uiSelectedAwsEstates?: string[];
+	};
 	outputs: {
 		expectedDatasources: string[];
 		minConfidence: number;
 		qualityRubric: string;
+		// SIO-1372: the real, human-curated ticket's own Executive Summary / root-cause text, used
+		// by responseQualityJudge as a holistic reference answer instead of a per-clause checklist
+		// (the earlier binary meets_rubric grading flattened real quality gradients between two
+		// responses to a single 0/1 -- see evaluators.ts). Optional: only incident-replay-dataset.ts
+		// entries (real tickets) have a real report to compare against; the synthetic dataset.ts
+		// examples have no source ticket and omit this.
+		referenceReport?: string;
 	};
 }
 

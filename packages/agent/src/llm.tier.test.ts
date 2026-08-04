@@ -232,3 +232,39 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 		expect(resolved.modelConfig?.constraints?.temperature).toBe(0.2);
 	});
 });
+
+// SIO-1371: the eval-only A/B override composes AFTER the precedence rule -- it swaps which
+// model a role gets without changing which manifest it would have come from, so provenance
+// logging stays honest and the eval still exercises production's source-selection logic.
+describe("resolveRoleModelConfig eval override (SIO-1371)", () => {
+	const agent = loadAgent(join(import.meta.dir, "../../../agents/incident-analyzer"));
+
+	test("EVAL_SUB_AGENT_MODEL_OVERRIDE swaps preferred, drops fallback, keeps source", () => {
+		const env = { EVAL_SUB_AGENT_MODEL_OVERRIDE: "claude-sonnet-4-6" } as NodeJS.ProcessEnv;
+		const resolved = resolveRoleModelConfig("subAgent", agent, "gitlab-agent", env);
+		expect(resolved.modelConfig?.preferred).toBe("claude-sonnet-4-6");
+		// The override isolates ONE model's behavior -- a manifest fallback chain must not ride along.
+		expect(resolved.modelConfig?.fallback).toBeUndefined();
+		expect(resolved.source).toBe("sub-agent-manifest");
+	});
+
+	test("the sub-agent override does NOT leak into non-subAgent roles", () => {
+		const env = { EVAL_SUB_AGENT_MODEL_OVERRIDE: "claude-sonnet-4-6" } as NodeJS.ProcessEnv;
+		const resolved = resolveRoleModelConfig("aggregator", agent, undefined, env);
+		expect(resolved.modelConfig?.preferred).toBe(agent.manifest.model?.preferred);
+	});
+
+	test("EVAL_ROOT_MODEL_OVERRIDE covers non-subAgent roles only", () => {
+		const env = { EVAL_ROOT_MODEL_OVERRIDE: "claude-opus-4-8" } as NodeJS.ProcessEnv;
+		expect(resolveRoleModelConfig("aggregator", agent, undefined, env).modelConfig?.preferred).toBe("claude-opus-4-8");
+		expect(resolveRoleModelConfig("subAgent", agent, "gitlab-agent", env).modelConfig?.preferred).toBe(
+			agent.subAgents.get("gitlab-agent")?.manifest.model?.preferred,
+		);
+	});
+
+	test("unset env is a pure passthrough", () => {
+		const resolved = resolveRoleModelConfig("subAgent", agent, "gitlab-agent", {} as NodeJS.ProcessEnv);
+		expect(resolved.modelConfig?.preferred).toBe(agent.subAgents.get("gitlab-agent")?.manifest.model?.preferred);
+		expect(resolved.source).toBe("sub-agent-manifest");
+	});
+});
