@@ -32,10 +32,14 @@ try {
 
 // Replace-all sync from the TS source of truth. Deleting EXAMPLES (never the dataset)
 // preserves the dataset id and its version history.
+//
+// CodeRabbit (PR #593): create BEFORE deleting the stale set. The JS SDK has no upsert --
+// only createExamples/deleteExample -- so a delete-first flow that then failed mid-create
+// would leave the dataset empty or partial for the next eval run. Creating first means a
+// failed upload leaves the OLD examples fully intact (worst case after a partial create:
+// temporary duplicates, reported loudly below, cleaned up by a successful re-run).
 const stale: Example[] = [];
 for await (const example of client.listExamples({ datasetId })) stale.push(example);
-for (const example of stale) await client.deleteExample(example.id);
-if (stale.length > 0) console.log(`Deleted ${stale.length} existing examples.`);
 
 const created = await client.createExamples(
 	INCIDENT_REPLAY_DATASET.map((entry) => ({
@@ -45,4 +49,14 @@ const created = await client.createExamples(
 		metadata: entry.metadata,
 	})),
 );
+if (created.length !== INCIDENT_REPLAY_DATASET.length) {
+	console.error(
+		`Upload incomplete: created ${created.length}/${INCIDENT_REPLAY_DATASET.length} examples; ` +
+			`the ${stale.length} pre-existing examples were NOT deleted. Re-run this script to sync cleanly.`,
+	);
+	process.exit(1);
+}
+
+for (const example of stale) await client.deleteExample(example.id);
+if (stale.length > 0) console.log(`Deleted ${stale.length} stale examples after a validated upload.`);
 console.log(`Uploaded ${created.length} examples to ${DATASET_NAME} (${datasetId}).`);

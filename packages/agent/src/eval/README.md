@@ -41,9 +41,14 @@ was silently dropped by the ground-truth filter and the example lost that dataso
 
 ### Live replay, frozen ground truth -- and why tool-level replay is deliberately absent
 
-Replays run the production graph against LIVE MCP servers while reference reports stay frozen
-at their curation era (2026-06). Live drift is expected; the judge's recurrence-window
-exemption keeps truthful current observations from being graded as fabrication.
+Replays run the production graph against LIVE MCP servers while each entry's reference
+report/findings stay frozen at that entry's own `metadata.era` (2026-06 for 12 entries,
+2026-07 for 20). Live drift is expected -- and era-dependent: June evidence is already past
+retention for elastic (~30d hot), kafka (broker retention/transient state), and
+couchbase/konnect (current-state-only tools); July evidence is partially inside elastic's
+window and CloudWatch's ~60d but expiring. Only gitlab/atlassian (MRs, deploys, tickets)
+remain durable for both eras. The judge's recurrence-window exemption keeps truthful current
+observations from being graded as fabrication.
 
 Deterministic tool-level replay (recording MCP results once and serving them in later runs)
 was evaluated and REJECTED: the A/B varies sub-agent models, different models issue different
@@ -51,14 +56,21 @@ tool calls, and replaying model A's recorded results to model B would grade B on
 answers to questions it never asked. What IS frozen instead (SIO-1379, the sound-freeze
 layer): each run's final outputs (so judge/harness iteration replays frozen agent behavior)
 and a per-call MCP audit trail (so score disputes are resolvable from data). Time anchoring
-of queries is deferred until a fresh, in-retention incident joins the dataset -- the June 2026
-evidence is already past retention for elastic/kafka/couchbase; only gitlab/atlassian remain
-durable.
+of queries is deferred until a fresh, in-retention incident joins the dataset (see the
+retention picture above).
 
-## Cost & time
+### Cost & time (incident replay)
+
+- 32 examples per repetition per leg; ~$0.50-1.50 and ~5-10min PER repetition (Bedrock +
+  gpt-4o-mini judge) -- scale by `--repetitions` and by the number of A/B legs
+- `EVAL_FIXTURE_MODE=replay-outputs` re-grades a recorded leg for judge cost only (pennies,
+  minutes; no Bedrock/MCP)
+
+## Cost & time (synthetic eval)
 
 - ~$0.50-1.50 per full run (5 queries × ~$0.10-0.30 each = Bedrock; ~$0.005 each = gpt-4o-mini judge)
 - ~5-10 minutes wall-clock (~30-90s per query)
+- Incident-replay cost is documented in its own section above
 
 ## Also in this directory: the model-conformance probe
 
