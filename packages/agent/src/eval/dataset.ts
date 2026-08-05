@@ -36,6 +36,26 @@ export interface EvalExample {
 		// material; the synthetic dataset.ts examples omit this.
 		referenceFindings?: { [datasource: string]: string };
 	};
+	// SIO-1378: per-example provenance, uploaded as LangSmith example metadata by
+	// build-incident-replay-dataset.ts so runs are filterable by ticket, era, and query
+	// fidelity. Optional: the synthetic examples above have no source ticket.
+	metadata?: {
+		ticketKey: string;
+		// ISO date of the incident itself, only when the ticket's own text records one.
+		incidentDate?: string;
+		// verbatim = recovered from Agent Memory; verbatim-adjacent = full ticket content in
+		// hand but no memory block (DEVOPS-1391); reconstructed = rebuilt from the ticket's
+		// quoted error strings, NOT what the user actually typed.
+		queryProvenance: "verbatim" | "verbatim-adjacent" | "reconstructed";
+		// YYYY-MM the ground truth was curated -- reference reports/findings are frozen at this
+		// era while live replays investigate current systems (the judge's recurrence-window
+		// exemption compensates; see evaluators.ts).
+		era: string;
+		// Reserved for future fresh-incident entries whose historical window is still inside
+		// datasource retention; nothing consumes this yet (time anchoring is deliberately
+		// deferred -- see eval README).
+		incidentWindow?: { from: string; to: string };
+	};
 }
 
 export const DATASET: EvalExample[] = [

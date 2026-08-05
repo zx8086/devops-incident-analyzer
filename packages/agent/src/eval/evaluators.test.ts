@@ -7,10 +7,12 @@
 import { describe, expect, test } from "bun:test";
 import {
 	applyRootCauseCap,
+	canonicalizeDatasourceKey,
 	ExampleOutputsSchema,
 	HOLISTIC_JUDGE_SYSTEM_PROMPT,
 	HolisticGradeSchema,
 	judgeFeedback,
+	judgeModelConfig,
 	SubagentGradeSchema,
 	squareVerdictWithReference,
 	subagentJudgeFeedback,
@@ -302,6 +304,113 @@ describe("HolisticGradeSchema datasourceVerdicts (SIO-1374)", () => {
 		});
 		expect(grade.datasourceVerdicts?.aws).toEqual({ verdict: "missed", gapsHonest: false, fabricated: false });
 		expect(grade.datasourceVerdicts?.gitlab?.verdict).toBe("partial");
+	});
+});
+
+describe("canonicalizeDatasourceKey (SIO-1378)", () => {
+	test("maps judge free-form aliases to canonical datasource ids", () => {
+		expect(canonicalizeDatasourceKey("elasticsearch")).toBe("elastic");
+		expect(canonicalizeDatasourceKey("Elastic-Search")).toBe("elastic");
+		expect(canonicalizeDatasourceKey("es")).toBe("elastic");
+		expect(canonicalizeDatasourceKey("capella")).toBe("couchbase");
+		expect(canonicalizeDatasourceKey("couchbase-capella")).toBe("couchbase");
+		expect(canonicalizeDatasourceKey("cloudwatch")).toBe("aws");
+		expect(canonicalizeDatasourceKey("jira")).toBe("atlassian");
+		expect(canonicalizeDatasourceKey("confluence")).toBe("atlassian");
+	});
+
+	test("canonical ids and unknown keys pass through lowercased and trimmed", () => {
+		expect(canonicalizeDatasourceKey("elastic")).toBe("elastic");
+		expect(canonicalizeDatasourceKey(" Kafka ")).toBe("kafka");
+		expect(canonicalizeDatasourceKey("konnect")).toBe("konnect");
+	});
+});
+
+// SIO-1378: since PR #591 the allowedSet filter ran on the judge's RAW key, so a free-formed
+// "elasticsearch" verdict was silently dropped -- the example lost its evidence_elastic
+// feedback entirely (a missing data point in the LangSmith average), observed on 2-5/32
+// examples per run.
+describe("judgeFeedback key canonicalization (SIO-1378)", () => {
+	test("a free-formed 'elasticsearch' verdict lands on evidence_elastic and survives the filter", () => {
+		const fb = judgeFeedback(
+			{
+				score: 8,
+				rootCauseMatch: "correct",
+				reasoning: "x",
+				datasourceVerdicts: { elasticsearch: { verdict: "found", gapsHonest: true, fabricated: false } },
+			},
+			["elastic"],
+		);
+		expect(fb.find((f) => f.key === "evidence_elastic")?.score).toBe(1);
+		expect(fb.some((f) => f.key === "evidence_elasticsearch")).toBe(false);
+	});
+
+	test("alias collision keeps the worse verdict and merges flags conservatively", () => {
+		const fb = judgeFeedback(
+			{
+				score: 8,
+				rootCauseMatch: "correct",
+				reasoning: "x",
+				datasourceVerdicts: {
+					elastic: { verdict: "found", gapsHonest: true, fabricated: false },
+					elasticsearch: { verdict: "partial", gapsHonest: true, fabricated: true },
+				},
+			},
+			["elastic"],
+		);
+		const entries = fb.filter((f) => f.key === "evidence_elastic");
+		expect(entries).toHaveLength(1);
+		expect(entries[0]?.score).toBe(0.5);
+		expect(entries[0]?.comment).toContain("fabricated=true");
+	});
+});
+
+describe("subagentJudgeFeedback key canonicalization (SIO-1378)", () => {
+	test("a free-formed 'capella' grade lands on subagent_accuracy_couchbase and survives the filter", () => {
+		const fb = subagentJudgeFeedback({ datasourceAccuracy: { capella: { accuracy: "partial", reasoning: "x" } } }, [
+			"couchbase",
+		]);
+		expect(fb.find((f) => f.key === "subagent_accuracy_couchbase")?.score).toBe(0.5);
+	});
+
+	test("alias collision keeps the worse accuracy", () => {
+		const fb = subagentJudgeFeedback(
+			{
+				datasourceAccuracy: {
+					couchbase: { accuracy: "correct", reasoning: "good" },
+					capella: { accuracy: "incorrect", reasoning: "contradicts" },
+				},
+			},
+			["couchbase"],
+		);
+		const entries = fb.filter((f) => f.key === "subagent_accuracy_couchbase");
+		expect(entries).toHaveLength(1);
+		expect(entries[0]?.score).toBe(0);
+		expect(entries[0]?.comment).toContain("accuracy=incorrect");
+	});
+});
+
+describe("judgeModelConfig (SIO-1378)", () => {
+	test("defaults to gpt-4o-mini with temperature 0", () => {
+		expect(judgeModelConfig({} as NodeJS.ProcessEnv)).toEqual({ model: "gpt-4o-mini", temperature: 0 });
+	});
+
+	test("EVAL_JUDGE_MODEL overrides the model", () => {
+		expect(judgeModelConfig({ EVAL_JUDGE_MODEL: "gpt-4o" } as NodeJS.ProcessEnv)).toEqual({
+			model: "gpt-4o",
+			temperature: 0,
+		});
+	});
+
+	test("reasoning models (o-series / gpt-5-class) omit temperature", () => {
+		expect(judgeModelConfig({ EVAL_JUDGE_MODEL: "o3-mini" } as NodeJS.ProcessEnv)).toEqual({ model: "o3-mini" });
+		expect(judgeModelConfig({ EVAL_JUDGE_MODEL: "gpt-5-turbo" } as NodeJS.ProcessEnv)).toEqual({
+			model: "gpt-5-turbo",
+		});
+	});
+
+	test("blank or whitespace override falls back to the default", () => {
+		expect(judgeModelConfig({ EVAL_JUDGE_MODEL: "  " } as NodeJS.ProcessEnv).model).toBe("gpt-4o-mini");
 	});
 });
 

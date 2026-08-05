@@ -102,6 +102,39 @@ export function squareVerdictWithReference(grade: HolisticGrade, hasReference: b
 // return a datasource name that was never in referenceFindings, either of which would otherwise
 // emit an ungrounded evidence_<datasource> score into LangSmith's per-datasource metrics.
 // Optional and unfiltered by default (undefined) so existing callers/tests keep their behavior.
+// SIO-1378: the judge's JSON sometimes free-forms datasource names ("elasticsearch",
+// "capella") instead of the canonical ids the dataset uses. Since PR #591 the allowedSet
+// filter below ran on the RAW key, so a free-formed name was silently DROPPED -- the example
+// lost its evidence_<datasource> feedback entirely (a missing data point in the LangSmith
+// average, observed on 2-5/32 examples per run), not a stray key. Canonicalize before
+// filtering; when two aliases collapse onto one canonical key, keep the worse verdict so
+// canonicalization can never inflate a score.
+const DATASOURCE_KEY_ALIASES: Record<string, string> = {
+	elasticsearch: "elastic",
+	"elastic-search": "elastic",
+	es: "elastic",
+	capella: "couchbase",
+	"couchbase-capella": "couchbase",
+	cloudwatch: "aws",
+	jira: "atlassian",
+	confluence: "atlassian",
+};
+
+export function canonicalizeDatasourceKey(key: string): string {
+	const lower = key.trim().toLowerCase();
+	return DATASOURCE_KEY_ALIASES[lower] ?? lower;
+}
+
+const EVIDENCE_VERDICT_RANK: Record<DatasourceVerdict["verdict"], number> = { missed: 0, partial: 1, found: 2 };
+
+function worseDatasourceVerdict(a: DatasourceVerdict, b: DatasourceVerdict): DatasourceVerdict {
+	return {
+		verdict: EVIDENCE_VERDICT_RANK[a.verdict] <= EVIDENCE_VERDICT_RANK[b.verdict] ? a.verdict : b.verdict,
+		gapsHonest: a.gapsHonest && b.gapsHonest,
+		fabricated: a.fabricated || b.fabricated,
+	};
+}
+
 export function judgeFeedback(
 	grade: HolisticGrade,
 	allowedDatasources?: string[],
@@ -127,7 +160,13 @@ export function judgeFeedback(
 	// Compare can filter per-datasource weaknesses across A/B legs (e.g. "haiku's gitlab
 	// evidence is systematically weak") instead of only seeing one aggregate score.
 	const allowedSet = allowedDatasources === undefined ? undefined : new Set(allowedDatasources);
-	for (const [datasource, v] of Object.entries(grade.datasourceVerdicts ?? {})) {
+	const canonicalVerdicts = new Map<string, DatasourceVerdict>();
+	for (const [rawKey, v] of Object.entries(grade.datasourceVerdicts ?? {})) {
+		const datasource = canonicalizeDatasourceKey(rawKey);
+		const prev = canonicalVerdicts.get(datasource);
+		canonicalVerdicts.set(datasource, prev === undefined ? v : worseDatasourceVerdict(prev, v));
+	}
+	for (const [datasource, v] of canonicalVerdicts) {
 		if (allowedSet !== undefined && !allowedSet.has(datasource)) continue;
 		feedback.push({
 			key: `evidence_${datasource}`,
@@ -138,8 +177,8 @@ export function judgeFeedback(
 	return feedback;
 }
 
-export function datasourcesCovered(run: Run, example: Example) {
-	const expectedRaw = (example.outputs?.expectedDatasources ?? []) as unknown;
+export function datasourcesCovered(run: Run, example?: Example) {
+	const expectedRaw = (example?.outputs?.expectedDatasources ?? []) as unknown;
 	const actualRaw =
 		(run.outputs as { output?: { targetDataSources?: unknown } } | undefined)?.output?.targetDataSources ?? [];
 	const expected = new Set<string>(Array.isArray(expectedRaw) ? (expectedRaw as string[]) : []);
@@ -153,9 +192,9 @@ export function datasourcesCovered(run: Run, example: Example) {
 	};
 }
 
-export function confidenceThreshold(run: Run, example: Example) {
+export function confidenceThreshold(run: Run, example?: Example) {
 	const cap = (run.outputs as { output?: { confidenceCap?: number } } | undefined)?.output?.confidenceCap;
-	const min = ((example.outputs?.minConfidence as number | undefined) ?? 0.6) as number;
+	const min = ((example?.outputs?.minConfidence as number | undefined) ?? 0.6) as number;
 	const ok = cap === undefined || cap >= min;
 	return {
 		key: "confidence_threshold",
@@ -222,8 +261,18 @@ export const ExampleOutputsSchema = z.object({
 	referenceFindings: z.record(z.string(), z.string().trim().min(1)).optional(),
 });
 
-export async function responseQualityJudge(run: Run, example: Example) {
-	const parsedOutputs = ExampleOutputsSchema.safeParse(example.outputs ?? {});
+// SIO-1378: the judge model was hardcoded inline at both OpenAI call sites, so re-grading with
+// a stronger judge (e.g. against frozen outputs) meant editing source. EVAL_JUDGE_MODEL makes it
+// a run-time choice; the resolved model is recorded in experiment metadata by
+// run-incident-replay-eval.ts because scores are only comparable within one judge model.
+// o-series / gpt-5-class reasoning models reject an explicit temperature; omit it for them.
+export function judgeModelConfig(env: NodeJS.ProcessEnv = process.env): { model: string; temperature?: number } {
+	const model = env.EVAL_JUDGE_MODEL?.trim() || "gpt-4o-mini";
+	return /^(o\d|gpt-5)/.test(model) ? { model } : { model, temperature: 0 };
+}
+
+export async function responseQualityJudge(run: Run, example?: Example) {
+	const parsedOutputs = ExampleOutputsSchema.safeParse(example?.outputs ?? {});
 	const response = (run.outputs as { output?: { response?: string } } | undefined)?.output?.response;
 	if (!parsedOutputs.success || !response) {
 		return { key: "response_quality", score: 0, comment: "missing rubric or response" };
@@ -247,8 +296,7 @@ export async function responseQualityJudge(run: Run, example: Example) {
 	let r: Awaited<ReturnType<typeof openai.chat.completions.create>>;
 	try {
 		r = await openai.chat.completions.create({
-			model: "gpt-4o-mini",
-			temperature: 0,
+			...judgeModelConfig(),
 			response_format: { type: "json_object" },
 			messages: [
 				{ role: "system", content: HOLISTIC_JUDGE_SYSTEM_PROMPT },
@@ -331,12 +379,33 @@ export type SubagentGrade = z.output<typeof SubagentGradeSchema>;
 // judge about Object.keys(referenceFindings), but an LLM JSON response is not guaranteed to
 // respect that; an extra hallucinated key would otherwise emit an ungrounded score. Optional and
 // unfiltered by default so existing callers/tests keep their behavior.
+type SubagentAccuracyEntry = SubagentGrade["datasourceAccuracy"][string];
+
+// SIO-1378: rank for keep-the-worse merging on alias collisions -- an active contradiction
+// (incorrect) ranks below plain absence (missing).
+const SUBAGENT_ACCURACY_RANK: Record<SubagentAccuracyEntry["accuracy"], number> = {
+	incorrect: 0,
+	missing: 1,
+	partial: 2,
+	correct: 3,
+};
+
 export function subagentJudgeFeedback(
 	grade: SubagentGrade,
 	allowedDatasources?: string[],
 ): { key: string; score: number; comment: string }[] {
 	const allowedSet = allowedDatasources === undefined ? undefined : new Set(allowedDatasources);
-	return Object.entries(grade.datasourceAccuracy)
+	// SIO-1378: canonicalize before filtering, same rationale as judgeFeedback above -- a
+	// free-formed key otherwise silently drops that datasource's feedback for the example.
+	const canonicalEntries = new Map<string, SubagentAccuracyEntry>();
+	for (const [rawKey, v] of Object.entries(grade.datasourceAccuracy)) {
+		const datasource = canonicalizeDatasourceKey(rawKey);
+		const prev = canonicalEntries.get(datasource);
+		if (prev === undefined || SUBAGENT_ACCURACY_RANK[v.accuracy] < SUBAGENT_ACCURACY_RANK[prev.accuracy]) {
+			canonicalEntries.set(datasource, v);
+		}
+	}
+	return [...canonicalEntries.entries()]
 		.filter(([datasource]) => allowedSet === undefined || allowedSet.has(datasource))
 		.map(([datasource, v]) => ({
 			key: `subagent_accuracy_${datasource}`,
@@ -396,8 +465,7 @@ export async function judgeSubagentReports(
 	let r: Awaited<ReturnType<typeof openai.chat.completions.create>>;
 	try {
 		r = await openai.chat.completions.create({
-			model: "gpt-4o-mini",
-			temperature: 0,
+			...judgeModelConfig(),
 			response_format: { type: "json_object" },
 			messages: [
 				{ role: "system", content: SUBAGENT_JUDGE_SYSTEM_PROMPT },
@@ -415,12 +483,12 @@ export async function judgeSubagentReports(
 // LangSmith run-evaluator entrypoint for the per-sub-agent judge (Task 7's judgeSubagentReports),
 // mirroring responseQualityJudge's run/example -> feedback[] shape so it slots into the same
 // evaluate() call registration as the existing evaluators.
-export async function subagentEvidenceJudge(run: Run, example: Example) {
-	// CodeRabbit (PR #591): example.outputs?.referenceFindings was previously an unchecked cast --
+export async function subagentEvidenceJudge(run: Run, example?: Example) {
+	// CodeRabbit (PR #591): example?.outputs?.referenceFindings was previously an unchecked cast --
 	// responseQualityJudge validates the same field through ExampleOutputsSchema, so a non-string
 	// dataset value would silently interpolate as "[object Object]" in the judge prompt here while
 	// failing loudly there. Sharing the schema keeps both evaluators on one contract.
-	const parsedOutputs = ExampleOutputsSchema.safeParse(example.outputs ?? {});
+	const parsedOutputs = ExampleOutputsSchema.safeParse(example?.outputs ?? {});
 	const referenceFindings = parsedOutputs.success ? (parsedOutputs.data.referenceFindings ?? {}) : {};
 	const subagentReports =
 		(run.outputs as { output?: { subagentReports?: { [k: string]: string } } } | undefined)?.output?.subagentReports ??
