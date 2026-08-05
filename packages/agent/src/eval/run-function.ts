@@ -24,11 +24,13 @@ const RunAgentInputsSchema = z.object({
 let cachedGraph: Awaited<ReturnType<typeof buildGraph>> | undefined;
 let mcpReady: Promise<void> | undefined;
 
-// Mirrors apps/web/src/lib/server/agent.ts:getMcpConfig + ensureMcpConnected.
-// Without this, the supervisor's getToolsForDataSource() returns 0 tools per
-// datasource and skips every sub-agent -- the graph terminates without
-// dispatching anything and the run-function reads back the original
-// HumanMessage as its "response".
+// Pure env-var -> config mapping, split out from ensureMcpConnected so it is unit-testable
+// without mocking createMcpClient or buildGraph. A prior version of this test mocked the whole
+// mcp-bridge.ts module to capture this object, which replaced the module's ENTIRE namespace for
+// every OTHER test file loaded afterward in the same bun process (a documented bun mock.module
+// cross-file leak -- reference_bun_mock_namespace_live_binding_poisoning) and broke an unrelated
+// test in __tests__/mcp-bridge.boot-strict-integration.test.ts. Testing this mapping directly
+// needs no mock at all.
 //
 // SIO-1375 follow-up (2026-08-05): awsUrl was missing here since this function was first
 // written -- every AWS sub-agent invocation across every SIO-1374/SIO-1375 eval run (both
@@ -38,17 +40,26 @@ let mcpReady: Promise<void> | undefined;
 // server (HTTP 200, 49 tools) that the server itself was healthy the entire time -- this was a
 // harness config gap, not an environment/connectivity issue. Matches production's
 // apps/web/src/lib/server/agent.ts:224 (`awsUrl: process.env.AWS_MCP_URL`).
+export function buildEvalMcpConfig(env: NodeJS.ProcessEnv = process.env): Parameters<typeof createMcpClient>[0] {
+	return {
+		elasticUrl: env.ELASTIC_MCP_URL,
+		kafkaUrl: env.KAFKA_MCP_URL,
+		capellaUrl: env.COUCHBASE_MCP_URL,
+		konnectUrl: env.KONNECT_MCP_URL,
+		gitlabUrl: env.GITLAB_MCP_URL,
+		atlassianUrl: env.ATLASSIAN_MCP_URL,
+		awsUrl: env.AWS_MCP_URL,
+	};
+}
+
+// Mirrors apps/web/src/lib/server/agent.ts:getMcpConfig + ensureMcpConnected.
+// Without this, the supervisor's getToolsForDataSource() returns 0 tools per
+// datasource and skips every sub-agent -- the graph terminates without
+// dispatching anything and the run-function reads back the original
+// HumanMessage as its "response".
 function ensureMcpConnected(): Promise<void> {
 	if (!mcpReady) {
-		mcpReady = createMcpClient({
-			elasticUrl: process.env.ELASTIC_MCP_URL,
-			kafkaUrl: process.env.KAFKA_MCP_URL,
-			capellaUrl: process.env.COUCHBASE_MCP_URL,
-			konnectUrl: process.env.KONNECT_MCP_URL,
-			gitlabUrl: process.env.GITLAB_MCP_URL,
-			atlassianUrl: process.env.ATLASSIAN_MCP_URL,
-			awsUrl: process.env.AWS_MCP_URL,
-		});
+		mcpReady = createMcpClient(buildEvalMcpConfig());
 	}
 	return mcpReady;
 }
