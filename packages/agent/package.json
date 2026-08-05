@@ -5,7 +5,7 @@
 	"main": "src/index.ts",
 	"types": "src/index.ts",
 	"scripts": {
-		"test": "bun test",
+		"test": "bun test --isolate",
 		"typecheck": "bunx tsc --noEmit",
 		"eval:precheck": "bun --env-file=../../.env run src/eval/precheck.ts",
 		"eval:upload-dataset": "bun --env-file=../../.env run src/eval/build-dataset.ts",
