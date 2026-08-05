@@ -15,17 +15,30 @@ import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 // risk worth catching before the round-trip.
 //
 // Deliberately NOT the stricter "must END with LIMIT" rule that was proposed: verified live that
-// three legitimate shapes have no trailing LIMIT and work fine --
-//   `... | STATS c = COUNT(*)`        (aggregations return one row per group; LIMIT is meaningless)
+// these legitimate shapes have no trailing LIMIT and work fine --
+//   `... | STATS c = COUNT(*)`        (UNGROUPED agg -> exactly 1 row)
 //   `... | LIMIT 5 | SORT @timestamp` (LIMIT may appear mid-pipeline)
 //   `... | limit 2`                   (ES|QL keywords are case-insensitive)
 // Rejecting those would break working queries to enforce a style rule. Require only that a LIMIT
-// appears SOMEWHERE, and exempt pipelines whose row count is already bounded by an aggregation.
+// appears SOMEWHERE, plus the narrow ungrouped-STATS exemption below.
 const LIMIT_CLAUSE = /\|\s*limit\s+\d+/i;
-const BOUNDED_BY_AGGREGATION = /\|\s*(stats|inlinestats)\s/i;
+// CodeRabbit round 2 (PR #596): the first exemption was too broad. Verified live on eu-cld:
+//   `| STATS c = COUNT(*)`              -> 1 row      (safe to exempt)
+//   `| STATS c = COUNT(*) BY service.name` -> 1000 rows  (one per GROUP -- hits the default cap)
+//   `| INLINESTATS c = COUNT(*)`        -> 1000 rows  (annotates rows, never reduces them)
+// So only an ungrouped STATS actually bounds the result. INLINESTATS never does.
+// Split on pipes and inspect each stage on its own rather than writing one clever regex over the
+// whole query -- an earlier single-regex attempt silently accepted `| STATS ... BY service.name`,
+// the exact case this is meant to reject.
+const STATS_STAGE = /^\s*stats\s/i;
+const BY_CLAUSE = /\sby\s/i;
+
+function hasUngroupedStats(query: string): boolean {
+	return query.split("|").some((stage) => STATS_STAGE.test(stage) && !BY_CLAUSE.test(stage));
+}
 
 function requiresExplicitLimit(query: string): boolean {
-	return !LIMIT_CLAUSE.test(query) && !BOUNDED_BY_AGGREGATION.test(query);
+	return !LIMIT_CLAUSE.test(query) && !hasUngroupedStats(query);
 }
 
 const esqlQueryValidator = z.object({
@@ -34,10 +47,10 @@ const esqlQueryValidator = z.object({
 		.min(1)
 		.refine((q) => !requiresExplicitLimit(q), {
 			message:
-				"ES|QL query must include a `| LIMIT <n>` clause (or be bounded by `| STATS`). Without one Elasticsearch returns its default 1000 rows.",
+				"ES|QL query must include a `| LIMIT <n>` clause. Only an UNGROUPED `| STATS` (no `BY`) is exempt, since it returns a single row -- `STATS ... BY <field>` and `INLINESTATS` do not bound the row count. Without a LIMIT, Elasticsearch returns its default 1000 rows.",
 		})
 		.describe(
-			"ES|QL query string. Starts with a source command (FROM/ROW/SHOW) and pipes through operators, e.g. 'FROM logs-* | WHERE log.level == \"error\" | STATS count = COUNT(*) BY service.name | SORT count DESC | LIMIT 10'. Must include a `| LIMIT <n>` clause unless the pipeline uses `| STATS` (which already bounds the row count) -- without one Elasticsearch returns its default 1000 rows.",
+			"ES|QL query string. Starts with a source command (FROM/ROW/SHOW) and pipes through operators, e.g. 'FROM logs-* | WHERE log.level == \"error\" | STATS count = COUNT(*) BY service.name | SORT count DESC | LIMIT 10'. Must include a `| LIMIT <n>` clause unless the pipeline ends in an UNGROUPED `| STATS` (no `BY`), which returns a single row. `STATS ... BY <field>` and `INLINESTATS` still need a LIMIT -- without one Elasticsearch returns its default 1000 rows.",
 		),
 	filter: z
 		.object({})
@@ -139,7 +152,7 @@ export const registerEsqlQueryTool: ToolRegistrationFunction = (server: McpServe
 		{
 			title: "Run ES|QL Query",
 			description:
-				"Run an ES|QL (Elasticsearch Query Language) pipeline query. Preferred over elasticsearch_search when you want filter + aggregate + sort in ONE call: 'FROM logs-* | WHERE log.level == \"error\" | STATS count = COUNT(*) BY service.name | SORT count DESC | LIMIT 10'. Read-only (ES|QL has no write commands). Returns rows as objects keyed by column name. Include a `| LIMIT <n>` clause (not required when the pipeline uses `| STATS`, which already bounds rows) -- it is enforced, and without one Elasticsearch returns 1000 rows. Use double quotes for string literals and == for equality. For plain document retrieval or highlighting, use elasticsearch_search instead.",
+				"Run an ES|QL (Elasticsearch Query Language) pipeline query. Preferred over elasticsearch_search when you want filter + aggregate + sort in ONE call: 'FROM logs-* | WHERE log.level == \"error\" | STATS count = COUNT(*) BY service.name | SORT count DESC | LIMIT 10'. Read-only (ES|QL has no write commands). Returns rows as objects keyed by column name. Include a `| LIMIT <n>` clause -- enforced. Only an UNGROUPED `| STATS` (no `BY`) is exempt, since it returns one row; `STATS ... BY <field>` and `INLINESTATS` do NOT bound the rows and still require a LIMIT, else Elasticsearch returns 1000 rows. Use double quotes for string literals and == for equality. For plain document retrieval or highlighting, use elasticsearch_search instead.",
 			inputSchema: esqlQueryValidator.shape,
 		},
 		esqlQueryHandler,

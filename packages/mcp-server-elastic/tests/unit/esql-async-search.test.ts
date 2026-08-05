@@ -99,12 +99,14 @@ describe("elasticsearch_esql_query", () => {
 	});
 
 	test("accepts LIMIT-less shapes that are legitimately bounded (verified live)", async () => {
-		// Deliberately NOT enforcing "must END with LIMIT" -- all three of these work against a real
+		// Deliberately NOT enforcing "must END with LIMIT" -- all of these work against a real
 		// cluster, and the stricter rule would reject working queries to enforce a style preference.
 		const cases = [
-			"FROM logs-* | STATS c = COUNT(*)", // aggregation bounds the rows; LIMIT is meaningless
+			"FROM logs-* | STATS c = COUNT(*)", // ungrouped agg -> 1 row (verified live)
 			"FROM logs-* | KEEP @timestamp | LIMIT 5 | SORT @timestamp DESC", // LIMIT mid-pipeline
 			"from logs-* | keep @timestamp | limit 2", // ES|QL keywords are case-insensitive
+			"FROM logs-* | STATS c = COUNT(*) BY svc | LIMIT 10", // grouped, but explicitly limited
+			"FROM logs-* | STATS c=COUNT(*) BY a | STATS t=SUM(c)", // regrouped down to one row
 		];
 
 		for (const query of cases) {
@@ -113,6 +115,23 @@ describe("elasticsearch_esql_query", () => {
 			});
 			await handler({ query }, {});
 			expect(sent).toHaveLength(1);
+		}
+	});
+
+	test("rejects aggregations that do NOT bound the row count", async () => {
+		// CodeRabbit round 2 (PR #596): the first exemption was too broad. Verified live on eu-cld --
+		// `STATS ... BY <field>` returns one row per GROUP (1000, the default cap) and INLINESTATS
+		// annotates rows without reducing them (also 1000). Only an UNGROUPED stats bounds output.
+		const cases = [
+			"FROM logs-* | STATS c = COUNT(*) BY service.name",
+			"FROM logs-* | stats c = count(*) by svc", // case-insensitive
+			"FROM logs-* | KEEP @timestamp | INLINESTATS c = COUNT(*)",
+		];
+
+		for (const query of cases) {
+			const { handler, sent } = harness(registerEsqlQueryTool as Registrar, { esqlQuery: () => ({}) });
+			await expect(handler({ query }, {})).rejects.toThrow(/LIMIT/);
+			expect(sent).toHaveLength(0);
 		}
 	});
 
