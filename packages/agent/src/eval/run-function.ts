@@ -29,6 +29,15 @@ let mcpReady: Promise<void> | undefined;
 // datasource and skips every sub-agent -- the graph terminates without
 // dispatching anything and the run-function reads back the original
 // HumanMessage as its "response".
+//
+// SIO-1375 follow-up (2026-08-05): awsUrl was missing here since this function was first
+// written -- every AWS sub-agent invocation across every SIO-1374/SIO-1375 eval run (both
+// legs, before and after the aggregator/validator/gitlab fixes) hit getToolsForDataSource("aws")
+// returning 0 tools and logged "No MCP tools available, skipping", making evidence_aws/
+// subagent_accuracy_aws unconditionally 0.000. Confirmed via a live curl against the AWS MCP
+// server (HTTP 200, 49 tools) that the server itself was healthy the entire time -- this was a
+// harness config gap, not an environment/connectivity issue. Matches production's
+// apps/web/src/lib/server/agent.ts:224 (`awsUrl: process.env.AWS_MCP_URL`).
 function ensureMcpConnected(): Promise<void> {
 	if (!mcpReady) {
 		mcpReady = createMcpClient({
@@ -38,6 +47,7 @@ function ensureMcpConnected(): Promise<void> {
 			konnectUrl: process.env.KONNECT_MCP_URL,
 			gitlabUrl: process.env.GITLAB_MCP_URL,
 			atlassianUrl: process.env.ATLASSIAN_MCP_URL,
+			awsUrl: process.env.AWS_MCP_URL,
 		});
 	}
 	return mcpReady;
