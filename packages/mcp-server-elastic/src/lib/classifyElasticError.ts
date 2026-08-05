@@ -53,6 +53,18 @@ function readEsErrorType(err: unknown): string | undefined {
 	return c.type ?? c.root_cause?.[0]?.type ?? c.caused_by?.type;
 }
 
+// SIO-1391: the `reason` string alongside the type. Only needed where one type covers materially
+// different failures (verification_exception); classification stays type-first everywhere else.
+function readEsErrorReason(err: unknown): string | undefined {
+	if (!(err instanceof ResponseError)) return undefined;
+	const body = (err.meta as { body?: unknown } | undefined)?.body;
+	if (body == null || typeof body !== "object") return undefined;
+	const cause = (body as { error?: unknown }).error;
+	if (cause == null || typeof cause !== "object") return undefined;
+	const reason = (cause as { reason?: unknown }).reason;
+	return typeof reason === "string" ? reason : undefined;
+}
+
 function readStatusCode(err: unknown): number | undefined {
 	if (err instanceof ResponseError) {
 		const sc = (err.meta as { statusCode?: unknown } | undefined)?.statusCode;
@@ -68,6 +80,15 @@ export function classifyElasticError(error: unknown): ToolErrorKind {
 	if (error instanceof ConnectionError) return "network";
 
 	const type = readEsErrorType(error);
+	// SIO-1391: ES|QL reports BOTH "unknown index" and "unknown column" as verification_exception,
+	// so the type alone cannot separate them -- and they need opposite kinds. A missing index is
+	// not-found (expected, NON-degrading: the caller should widen the pattern); a bad column is
+	// bad-query (fix the pipeline). Verified live on eu-cld. Without this the HTTP-400 fallback
+	// below would call a missing index bad-query, which reads as "your query is wrong" for what is
+	// really an absence, and counts against the tool-error rate.
+	if (type === "verification_exception") {
+		return /Unknown index/i.test(readEsErrorReason(error) ?? "") ? "not-found" : "bad-query";
+	}
 	if (type && ES_TYPE_TO_KIND[type]) return ES_TYPE_TO_KIND[type];
 
 	// Fall back to HTTP status when the structured type is absent/unmapped.
