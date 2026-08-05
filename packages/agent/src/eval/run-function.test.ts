@@ -1,5 +1,14 @@
 // packages/agent/src/eval/run-function.test.ts
-import { describe, expect, mock, test } from "bun:test";
+import { afterAll, describe, expect, mock, test } from "bun:test";
+// Preserve the REAL module and override ONLY createMcpClient. Spreading the real exports
+// avoids the bun mock.module cross-file leak (reference_bun_mock_namespace_live_binding_poisoning):
+// a bare `mock.module("../mcp-bridge.ts", () => ({ createMcpClient: ... }))` replaces the ENTIRE
+// module namespace for every test file loaded afterward in the same bun process -- including
+// __tests__/mcp-bridge.boot-strict-integration.test.ts, which imports McpRoleMismatchError and
+// _resetExpectedIdentityForTest from the real module and got this stub's always-resolving
+// createMcpClient instead, turning its "expect...rejects" assertion into an unexplained failure
+// with no connection to this file's actual diff. Confirmed as the cause of that exact CI failure.
+import * as realBridge from "../mcp-bridge.ts";
 
 // SIO-1375 follow-up: run-function.ts's ensureMcpConnected() builds the McpClientConfig passed to
 // createMcpClient. Every AWS eval run in the SIO-1374/SIO-1375 A/B legs (both before AND after the
@@ -12,6 +21,7 @@ import { describe, expect, mock, test } from "bun:test";
 let capturedConfig: Record<string, unknown> | undefined;
 
 mock.module("../mcp-bridge.ts", () => ({
+	...realBridge,
 	createMcpClient: (config: Record<string, unknown>) => {
 		capturedConfig = config;
 		return Promise.resolve();
@@ -26,6 +36,12 @@ mock.module("../graph.ts", () => ({
 }));
 
 import { runAgent } from "./run-function.ts";
+
+// Restore the genuine mcp-bridge so the createMcpClient override cannot leak into sibling test
+// files run later in the same bun process.
+afterAll(() => {
+	mock.module("../mcp-bridge.ts", () => ({ ...realBridge }));
+});
 
 describe("ensureMcpConnected's createMcpClient config (SIO-1375 follow-up)", () => {
 	test("includes awsUrl from AWS_MCP_URL, matching every other datasource", async () => {
