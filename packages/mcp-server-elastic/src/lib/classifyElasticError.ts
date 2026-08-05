@@ -99,9 +99,19 @@ export function classifyElasticErrorFromMessage(message: string): ToolErrorKind 
 	// Match the longest type name first: several ES type names are suffixes of others, and a
 	// substring scan would otherwise stop on the shorter one.
 	const matched = Object.keys(ES_TYPE_TO_KIND)
-		.filter((type) => message.includes(type))
+		.filter((type) => containsEsType(message, type))
 		.sort((a, b) => b.length - a.length)[0];
 	return (matched && ES_TYPE_TO_KIND[matched]) || "unknown";
+}
+
+// CodeRabbit (PR #595): a bare `message.includes(type)` also matches a type name embedded in a
+// LONGER identifier -- `my_index_not_found_exception_copy` classified as not-found, which is not an
+// ES type at all. Since not-found is non-degrading, a false positive there would silently exempt a
+// real failure from the tool-error-rate cap. Require identifier boundaries on both sides; `_` counts
+// as an identifier char, so adjacent underscores do not qualify as a boundary.
+function containsEsType(message: string, type: string): boolean {
+	const escaped = type.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return new RegExp(`(?:^|[^A-Za-z0-9_])${escaped}(?=$|[^A-Za-z0-9_])`).test(message);
 }
 
 // SIO-1328: classify a single `_shards.failures[]` entry's `reason` the SAME way a thrown ES

@@ -108,6 +108,66 @@ describe("elasticsearch_search .keyword auto-retry", () => {
 		expect((caught as Error).message).toContain("node_not_connected_exception");
 	});
 
+	test("rewrites ONLY the failing terms clause, not a sibling date_histogram", async () => {
+		// CodeRabbit (PR #595): the first version rewrote every nested `field`, turning a valid
+		// date_histogram on @timestamp into "@timestamp.keyword" -- which either errors or silently
+		// changes the aggregation's meaning. Only clauses where .keyword is the documented fix qualify.
+		const { handler, sent } = harness([
+			{ ...baseHits, _shards: FIELDDATA_FAILURE },
+			{ ...baseHits, _shards: CLEAN_SHARDS, aggregations: {} },
+		]);
+
+		await handler(
+			{
+				index: "logs-x",
+				size: 0,
+				aggs: {
+					over_time: { date_histogram: { field: "@timestamp", fixed_interval: "5m" } },
+					svc: { terms: { field: "message" } },
+				},
+			},
+			{},
+		);
+
+		expect(sent).toHaveLength(2);
+		const retryAggs = JSON.stringify(sent[1]?.aggs);
+		expect(retryAggs).toContain('"field":"message.keyword"');
+		expect(retryAggs).toContain('"field":"@timestamp"');
+		expect(retryAggs).not.toContain("@timestamp.keyword");
+	});
+
+	test("keeps the ORIGINAL failure when the retry request THROWS", async () => {
+		// A retry that times out must not replace the actionable fielddata diagnosis with its own
+		// error -- the caller would otherwise be told to fix the wrong thing.
+		let call = 0;
+		const esClient = {
+			search: async () => {
+				call += 1;
+				if (call === 1) return { ...baseHits, _shards: FIELDDATA_FAILURE };
+				throw new Error("Request timed out after 60000ms");
+			},
+		} as never;
+
+		let handler: Handler | undefined;
+		const server = {
+			registerTool: (_n: string, _c: unknown, h: Handler) => {
+				handler = h;
+				return {};
+			},
+		} as never;
+		registerSearchTool(server, esClient);
+		if (!handler) throw new Error("search tool did not register");
+
+		const caught = await handler(
+			{ index: "logs-x", size: 0, aggs: { svc: { terms: { field: "message" } } } },
+			{},
+		).catch((e: unknown) => e);
+
+		expect(call).toBe(2);
+		expect((caught as Error).message).toContain("Fielddata is disabled");
+		expect((caught as Error).message).not.toContain("timed out after 60000ms");
+	});
+
 	test("keeps the ORIGINAL failure when the retry also fails", async () => {
 		const { handler, sent } = harness([
 			{ ...baseHits, _shards: FIELDDATA_FAILURE },

@@ -134,6 +134,17 @@ describe("classifyElasticErrorFromMessage", () => {
 		expect(classifyElasticErrorFromMessage("")).toBe("unknown");
 	});
 
+	test("does NOT match a type name embedded in a longer identifier", () => {
+		// CodeRabbit (PR #595): a bare substring scan classified these as not-found. Since not-found
+		// is non-degrading, a false positive would silently exempt a real failure from the
+		// tool-error-rate cap -- the opposite of what this whole change is for.
+		expect(classifyElasticErrorFromMessage("my_index_not_found_exception_copy")).toBe("unknown");
+		expect(classifyElasticErrorFromMessage("prefixed_security_exception_handler fired")).toBe("unknown");
+		// Real occurrences still match at word/punctuation boundaries.
+		expect(classifyElasticErrorFromMessage("[index_not_found_exception] no such index")).toBe("not-found");
+		expect(classifyElasticErrorFromMessage("index_not_found_exception")).toBe("not-found");
+	});
+
 	test("structural classification wins over message text", () => {
 		// Message says not-found, structure says auth-denied. Structure must win -- otherwise a
 		// misleading message could downgrade a real permission failure into an expected absence.

@@ -83,22 +83,30 @@ function needsKeywordRetry(result: Pick<estypes.SearchResponse, "_shards">): boo
 	});
 }
 
-// Rewrites `field` on terms/cardinality aggregation clauses to `<field>.keyword`. Returns undefined
-// when nothing would change, so the caller can skip a pointless second round-trip. Only touches the
-// agg `field` values -- the query clause is left alone, since the failure is aggregation-specific.
+// Aggregation clauses where a text field is the failure and `.keyword` is the documented fix.
+// CodeRabbit (PR #595): scoping matters -- rewriting EVERY nested `field` also hit a sibling
+// `date_histogram` on `@timestamp`, producing `@timestamp.keyword`, which either errors or silently
+// changes the aggregation's meaning. Only the clause that actually rejects a text field is rewritten.
+const KEYWORD_RETRYABLE_AGG_CLAUSES = new Set(["terms", "cardinality", "significant_terms", "rare_terms"]);
+
+// Rewrites `field` on those clauses to `<field>.keyword`. Returns undefined when nothing would
+// change, so the caller can skip a pointless second round-trip. Only touches agg `field` values --
+// the query clause is left alone, since the failure is aggregation-specific.
 function withKeywordSubfields(aggs: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
 	if (!aggs) return undefined;
 	let changed = false;
-	const rewrite = (node: unknown): unknown => {
-		if (Array.isArray(node)) return node.map(rewrite);
+	// `inRetryableClause` is set when we descend INTO a terms/cardinality/... clause, so the `field`
+	// key one level down is the one that gets rewritten. Any other clause resets it to false.
+	const rewrite = (node: unknown, inRetryableClause = false): unknown => {
+		if (Array.isArray(node)) return node.map((item) => rewrite(item, inRetryableClause));
 		if (node == null || typeof node !== "object") return node;
 		const out: Record<string, unknown> = {};
 		for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
-			if (key === "field" && typeof value === "string" && !value.endsWith(".keyword")) {
+			if (inRetryableClause && key === "field" && typeof value === "string" && !value.endsWith(".keyword")) {
 				out[key] = `${value}.keyword`;
 				changed = true;
 			} else {
-				out[key] = rewrite(value);
+				out[key] = rewrite(value, KEYWORD_RETRYABLE_AGG_CLAUSES.has(key));
 			}
 		}
 		return out;
@@ -359,19 +367,30 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 			const keywordRetryAggs = needsKeywordRetry(result) ? withKeywordSubfields(searchRequest.aggs) : undefined;
 			if (keywordRetryAggs) {
 				logger.info("Retrying search with .keyword sub-fields after fielddata shard failure");
-				const retryResult = await esClient.search(
-					{
-						...searchRequest,
-						// Same double-cast as the initial request above: the rewritten aggs are
-						// user-supplied structure the SDK types strictly.
-						aggs: keywordRetryAggs as unknown as Record<string, estypes.AggregationsAggregationContainer>,
-					},
-					{ opaqueId: "elasticsearch_search", requestTimeout: searchRequestTimeout, maxRetries: searchMaxRetries },
-				);
-				// Adopt the retry only if it actually cleared the failure; otherwise keep the original
-				// so the error path below reports the real first problem, not a second symptom.
-				if (!retryResult._shards || retryResult._shards.failed === 0) {
-					result = retryResult;
+				// CodeRabbit (PR #595): the retry is best-effort and must never REPLACE the original
+				// diagnosis. Without this local catch, a retry that times out or rejects propagates to
+				// the outer catch and the caller sees the retry's error instead of the actionable
+				// "fix the aggregation field" fielddata error the first response already gave us.
+				try {
+					const retryResult = await esClient.search(
+						{
+							...searchRequest,
+							// Same double-cast as the initial request above: the rewritten aggs are
+							// user-supplied structure the SDK types strictly.
+							aggs: keywordRetryAggs as unknown as Record<string, estypes.AggregationsAggregationContainer>,
+						},
+						{ opaqueId: "elasticsearch_search", requestTimeout: searchRequestTimeout, maxRetries: searchMaxRetries },
+					);
+					// Adopt the retry only if it actually cleared the failure; otherwise keep the original
+					// so the error path below reports the real first problem, not a second symptom.
+					if (!retryResult._shards || retryResult._shards.failed === 0) {
+						result = retryResult;
+					}
+				} catch (retryError) {
+					logger.warn(
+						{ retryError: retryError instanceof Error ? retryError.message : String(retryError) },
+						"Keyword retry failed; falling back to the original shard-failure result",
+					);
 				}
 			}
 

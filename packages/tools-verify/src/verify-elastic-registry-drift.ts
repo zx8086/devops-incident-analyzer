@@ -10,7 +10,7 @@
 // tool file goes unregistered without a decision being recorded.
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -65,7 +65,11 @@ function main(): void {
 	const parked: Array<{ file: string; reason: string }> = [];
 
 	for (const file of walk(TOOLS_DIR)) {
-		const relPath = relative(TOOLS_DIR, file);
+		// CodeRabbit (PR #595): normalize to POSIX separators. On Windows `relative()` yields
+		// "watcher\get_watch.ts", which matches neither the "watcher/" allowlist prefix nor the
+		// NON_TOOL_FILE regex -- so parked tools would be reported as undeclared drift and helper
+		// files would stop being excluded. Verified both fail without this.
+		const relPath = relative(TOOLS_DIR, file).split(sep).join("/");
 		if (NON_TOOL_FILE.test(relPath)) continue;
 
 		const source = readFileSync(file, "utf8");
