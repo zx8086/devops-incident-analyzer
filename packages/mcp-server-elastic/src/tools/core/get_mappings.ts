@@ -1,10 +1,12 @@
 /* src/tools/core/get_mappings.ts */
 /* FIXED: Uses Zod Schema instead of JSON Schema for MCP compatibility */
 
+import { buildToolErrorEnvelope } from "@devops-agent/shared";
 import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { ENVELOPE_KIND_BY_TYPE } from "../../lib/toolErrorInterceptor.js";
 import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import { throwZodValidationMcpError } from "../../utils/toolErrorHandling.js";
@@ -36,6 +38,17 @@ function createGetMappingsMcpError(
 		index_not_found: ErrorCode.InvalidParams,
 		timeout: ErrorCode.RequestTimeout,
 	};
+
+	// SIO-1388: this factory rewrites the ES message into human prose ("Index not found: logs-x"),
+	// which erases the `index_not_found_exception` type the central interceptor classifies on -- so
+	// the error reached the agent unstamped and counted as "unknown"/degrading. `context.type`
+	// already IS the classification, so stamp the shared envelope straight from it rather than
+	// hoping a type name survives in the text.
+	const kind = ENVELOPE_KIND_BY_TYPE[context.type];
+	if (kind) {
+		const envelope = buildToolErrorEnvelope({ kind, message: `[elasticsearch_get_mappings] ${message}` });
+		return new McpError(errorCodeMap[context.type], JSON.stringify(envelope), context.details);
+	}
 
 	return new McpError(errorCodeMap[context.type], `[elasticsearch_get_mappings] ${message}`, context.details);
 }

@@ -84,6 +84,26 @@ export function esStatusCode(error: unknown): number | undefined {
 	return readStatusCode(error);
 }
 
+// SIO-1388: last-resort classification from the error MESSAGE, for the ~140 tool files whose catch
+// blocks rebuild an McpError from `error.message` and discard the ResponseError (so `meta.body` and
+// `meta.statusCode` are already gone by the time the central interceptor sees it). This works only
+// because the SDK copies the ES `type` verbatim into the message -- the same accident noted at the
+// top of this file. Deliberately reuses ES_TYPE_TO_KIND rather than introducing a second vocabulary:
+// a type added there is picked up here for free.
+//
+// Structural classification (classifyElasticError) is ALWAYS preferred; call this only when it
+// returned "unknown". Returns "unknown" when no known type name appears, and callers MUST treat
+// that as "do not stamp" rather than defaulting to a degrading category.
+export function classifyElasticErrorFromMessage(message: string): ToolErrorKind {
+	if (!message) return "unknown";
+	// Match the longest type name first: several ES type names are suffixes of others, and a
+	// substring scan would otherwise stop on the shorter one.
+	const matched = Object.keys(ES_TYPE_TO_KIND)
+		.filter((type) => message.includes(type))
+		.sort((a, b) => b.length - a.length)[0];
+	return (matched && ES_TYPE_TO_KIND[matched]) || "unknown";
+}
+
 // SIO-1328: classify a single `_shards.failures[]` entry's `reason` the SAME way a thrown ES
 // error is classified, so a shard-level illegal_argument_exception (bad-query, fix the field) is
 // distinguished from a shard-level node_not_connected_exception (network/infra, not something a

@@ -13,6 +13,7 @@ import {
 import { z } from "zod";
 import { runWithDeployment } from "../clients/context.js";
 import { listRegisteredDeploymentIds } from "../clients/registry.js";
+import { withStructuredToolError } from "../lib/toolErrorInterceptor.js";
 import { logger } from "../utils/logger.js";
 import { withSecurityValidation } from "../utils/securityEnhancer.js";
 import { traceToolCall } from "../utils/tracing.js";
@@ -390,9 +391,15 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 		// Create enhanced handler with both tracing and security validation
 		let enhancedHandler: RegisteredToolHandler = handler;
 
+		// SIO-1388: stamp the shared structured-error envelope on ALL tools. Sits INNERMOST (closest
+		// to the raw handler) so it sees the error the tool actually threw, before tracing rethrows
+		// it. Never stamps an unclassifiable error -- see toolErrorInterceptor.ts for why that rule
+		// is what makes a central interceptor safe here.
+		const structuredHandler = withStructuredToolError(name, handler);
+
 		// Add tracing wrapper to ALL tools
 		enhancedHandler = async (toolArgs, extra) => {
-			return traceToolCall(name, () => handler(toolArgs, extra));
+			return traceToolCall(name, () => structuredHandler(toolArgs, extra));
 		};
 
 		// Add security validation wrapper for write operations
@@ -444,6 +451,11 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 	registerListIndicesTool(server, esClient);
 	registerGetMappingsTool(server, esClient);
 	registerSearchTool(server, esClient);
+	// GONE (SIO-1388) -- enhanced_search. The source file (core/search_enhanced.ts) no longer
+	// exists; only this dead call and its dead import at the top of the file survived. Superseded by
+	// elasticsearch_search above, which absorbed the hardening (range pre-validation, shard-failure
+	// rejection, wildcard retry advice, the .keyword retry). Kept as a one-line tombstone so the
+	// next reader does not go looking for a tool that was intentionally removed.
 	// registerEnhancedSearchTool(server, esClient);
 	registerGetShardsTool(server, esClient);
 	registerIndicesSummaryTool(server, esClient);
@@ -484,6 +496,9 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 	registerPutIndexTemplateTool(server, esClient);
 	registerDeleteIndexTemplateTool(server, esClient);
 
+	// PARKED (SIO-1388) -- Analytics Tools. Term vectors are a relevance-debugging tool, not an
+	// incident-analysis one. Timestamp analysis overlaps what elasticsearch_search already answers
+	// with a date_histogram agg, so registering it would spend budget to duplicate a capability.
 	// registerGetTermVectorsTool(server, esClient);
 	// registerGetMultiTermVectorsTool(server, esClient);
 	// registerTimestampAnalysisTool(server, esClient);
@@ -540,14 +555,21 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 	registerMlStopDatafeedTool(server, esClient);
 	registerMlResetJobTool(server, esClient);
 
-	// // Register Enrich Tools
+	// PARKED (SIO-1388) -- Enrich Tools. Implemented and kept compiling, deliberately not registered.
+	// They arrived pre-disabled in this file's creation commit (cff40896, the monorepo integration)
+	// and SIO-1047's dead-code sweep reviewed and KEPT them. Enrich policies are a data-ingest
+	// concern, not incident analysis, so registering them would spend scarce budget against
+	// MAX_TOOLS_PER_AGENT=25 for no diagnostic value. Enable only alongside an `action_tool_map`
+	// entry in agents/incident-analyzer/tools/elastic-logs.yaml and a budget review.
 	// registerEnrichGetPolicyTool(server, esClient);
 	// registerEnrichPutPolicyTool(server, esClient);
 	// registerEnrichDeletePolicyTool(server, esClient);
 	// registerEnrichExecutePolicyTool(server, esClient);
 	// registerEnrichStatsTool(server, esClient);
 
-	// // Register Autoscaling Tools
+	// PARKED (SIO-1388) -- Autoscaling Tools. Same provenance as Enrich above. Our clusters are
+	// Elastic Cloud deployments whose capacity is managed through the cloud/billing tools, so the
+	// cluster-level autoscaling API is not the lever an incident responder would reach for.
 	// registerAutoscalingGetPolicyTool(server, esClient);
 	// registerAutoscalingPutPolicyTool(server, esClient);
 	// registerAutoscalingDeletePolicyTool(server, esClient);
@@ -556,6 +578,10 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 	// Register Task Tools
 	registerListTasksTool(server, esClient);
 	registerGetTaskTool(server, esClient);
+	// PARKED (SIO-1388) -- cancel_task. Has real incident value (killing a runaway query that is
+	// itself the incident), but it is a WRITE op: enabling it means keeping it OUT of
+	// READ_ONLY_TOOLS so withSecurityValidation runs, and accepting that readOnlyMode.ts gates on
+	// tool NAME (so it must also be added to the DESTRUCTIVE/WRITE sets there). Not a drive-by.
 	// registerCancelTaskTool(server, esClient);
 
 	// Register Indices Analysis Tools
@@ -571,7 +597,12 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 	registerExplainDataLifecycleTool(server, esClient);
 	registerDeleteDataStreamTool(server, esClient);
 
-	// // Register Watcher Tools
+	// PARKED (SIO-1388) -- Watcher Tools (13). The strongest re-enable candidate of the parked
+	// groups: existing watch definitions are evidence about what the cluster ALREADY alerts on,
+	// which is genuine incident context. Blocked on two things, not on the code: (a) 13 tools is
+	// half the MAX_TOOLS_PER_AGENT=25 budget, so only the read subset (get/query/stats) would
+	// qualify, and (b) the put/delete/activate/deactivate/start/stop tools are writes needing the
+	// readOnlyMode.ts name-set treatment described at cancel_task above.
 	// registerWatcherGetWatchTool(server, esClient);
 	// registerWatcherPutWatchTool(server, esClient);
 	// registerWatcherDeleteWatchTool(server, esClient);

@@ -18,7 +18,7 @@ input_schema:
         - template_management
         - alias_management
         - document_ops
-        - snapshot
+        - data_lifecycle
         - diagnostics
         - cloud_deployment
         - billing
@@ -153,7 +153,7 @@ tool_mapping:
       - elasticsearch_reindex_documents
       - elasticsearch_delete_by_query
       - elasticsearch_update_by_query
-    snapshot:
+    data_lifecycle:
       - elasticsearch_get_data_lifecycle_stats
       - elasticsearch_explain_data_lifecycle
       - elasticsearch_ilm_get_lifecycle
@@ -251,7 +251,11 @@ tool_mapping:
     template_management: when reading or updating index/component templates (controls index settings/mappings at creation time)
     alias_management: when reading aliases, alias filters, or routing settings (cross-index views and write-target indirection)
     document_ops: when reading specific documents by ID, counting matches, or running aggregations against a known index (read-only)
-    snapshot: when listing snapshot repositories or snapshots, or checking snapshot/restore status
+    data_lifecycle: >-
+      when checking ILM policy definitions, ILM status, why an index is stuck in a lifecycle
+      step, or data-stream lifecycle and retention stats. SIO-1388 -- this server has NO
+      snapshot or restore tools. If the question is about snapshot repositories, backups, or
+      restore status, say that capability is unavailable rather than substituting lifecycle data.
     diagnostics: when running cluster-wide diagnostic commands (allocation explain, hot threads, pending tasks) for deep troubleshooting
     cloud_deployment: when listing or describing Elastic Cloud deployments via the v1 cloud API (metadata only -- region, plan, version, capacity; for cost or spend data use `billing` instead)
     billing: when checking Elastic Cloud organization or deployment billing/cost data via the v2 billing API (read-only cost reporting)
