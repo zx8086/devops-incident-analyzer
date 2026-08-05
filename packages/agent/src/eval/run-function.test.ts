@@ -1,4 +1,4 @@
-// agent/src/eval/run-function.test.ts
+// packages/agent/src/eval/run-function.test.ts
 import { describe, expect, mock, test } from "bun:test";
 
 // SIO-1375 follow-up: run-function.ts's ensureMcpConnected() builds the McpClientConfig passed to
