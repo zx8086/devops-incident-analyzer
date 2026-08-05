@@ -89,6 +89,33 @@ describe("elasticsearch_esql_query", () => {
 		expect(sent).toHaveLength(0);
 	});
 
+	test("rejects a query with no LIMIT, before any request", async () => {
+		// CodeRabbit (PR #596): the description told the model to LIMIT but nothing enforced it.
+		// Verified live: a no-LIMIT ES|QL query really does return Elasticsearch's default 1000 rows.
+		const { handler, sent } = harness(registerEsqlQueryTool as Registrar, { esqlQuery: () => ({}) });
+
+		await expect(handler({ query: "FROM logs-* | KEEP @timestamp" }, {})).rejects.toThrow(/LIMIT/);
+		expect(sent).toHaveLength(0);
+	});
+
+	test("accepts LIMIT-less shapes that are legitimately bounded (verified live)", async () => {
+		// Deliberately NOT enforcing "must END with LIMIT" -- all three of these work against a real
+		// cluster, and the stricter rule would reject working queries to enforce a style preference.
+		const cases = [
+			"FROM logs-* | STATS c = COUNT(*)", // aggregation bounds the rows; LIMIT is meaningless
+			"FROM logs-* | KEEP @timestamp | LIMIT 5 | SORT @timestamp DESC", // LIMIT mid-pipeline
+			"from logs-* | keep @timestamp | limit 2", // ES|QL keywords are case-insensitive
+		];
+
+		for (const query of cases) {
+			const { handler, sent } = harness(registerEsqlQueryTool as Registrar, {
+				esqlQuery: () => ({ columns: [], values: [] }),
+			});
+			await handler({ query }, {});
+			expect(sent).toHaveLength(1);
+		}
+	});
+
 	test("passes an optional pre-filter through to the request", async () => {
 		const { handler, sent } = harness(registerEsqlQueryTool as Registrar, {
 			esqlQuery: () => ({ columns: [], values: [] }),

@@ -10,12 +10,34 @@ import { z } from "zod";
 import { logger } from "../../utils/logger.js";
 import type { SearchResult, ToolRegistrationFunction } from "../types.js";
 
+// CodeRabbit (PR #596): the description told the model to always LIMIT but nothing enforced it, and
+// a no-LIMIT query really does return ES's default 1000 rows (verified live on eu-cld) -- a payload
+// risk worth catching before the round-trip.
+//
+// Deliberately NOT the stricter "must END with LIMIT" rule that was proposed: verified live that
+// three legitimate shapes have no trailing LIMIT and work fine --
+//   `... | STATS c = COUNT(*)`        (aggregations return one row per group; LIMIT is meaningless)
+//   `... | LIMIT 5 | SORT @timestamp` (LIMIT may appear mid-pipeline)
+//   `... | limit 2`                   (ES|QL keywords are case-insensitive)
+// Rejecting those would break working queries to enforce a style rule. Require only that a LIMIT
+// appears SOMEWHERE, and exempt pipelines whose row count is already bounded by an aggregation.
+const LIMIT_CLAUSE = /\|\s*limit\s+\d+/i;
+const BOUNDED_BY_AGGREGATION = /\|\s*(stats|inlinestats)\s/i;
+
+function requiresExplicitLimit(query: string): boolean {
+	return !LIMIT_CLAUSE.test(query) && !BOUNDED_BY_AGGREGATION.test(query);
+}
+
 const esqlQueryValidator = z.object({
 	query: z
 		.string()
 		.min(1)
+		.refine((q) => !requiresExplicitLimit(q), {
+			message:
+				"ES|QL query must include a `| LIMIT <n>` clause (or be bounded by `| STATS`). Without one Elasticsearch returns its default 1000 rows.",
+		})
 		.describe(
-			"ES|QL query string. Starts with a source command (FROM/ROW/SHOW) and pipes through operators, e.g. 'FROM logs-* | WHERE log.level == \"error\" | STATS count = COUNT(*) BY service.name | SORT count DESC | LIMIT 10'. Always include a LIMIT.",
+			"ES|QL query string. Starts with a source command (FROM/ROW/SHOW) and pipes through operators, e.g. 'FROM logs-* | WHERE log.level == \"error\" | STATS count = COUNT(*) BY service.name | SORT count DESC | LIMIT 10'. Must include a `| LIMIT <n>` clause unless the pipeline uses `| STATS` (which already bounds the row count) -- without one Elasticsearch returns its default 1000 rows.",
 		),
 	filter: z
 		.object({})
@@ -117,7 +139,7 @@ export const registerEsqlQueryTool: ToolRegistrationFunction = (server: McpServe
 		{
 			title: "Run ES|QL Query",
 			description:
-				"Run an ES|QL (Elasticsearch Query Language) pipeline query. Preferred over elasticsearch_search when you want filter + aggregate + sort in ONE call: 'FROM logs-* | WHERE log.level == \"error\" | STATS count = COUNT(*) BY service.name | SORT count DESC | LIMIT 10'. Read-only (ES|QL has no write commands). Returns rows as objects keyed by column name. ALWAYS end with LIMIT. Use double quotes for string literals and == for equality. For plain document retrieval or highlighting, use elasticsearch_search instead.",
+				"Run an ES|QL (Elasticsearch Query Language) pipeline query. Preferred over elasticsearch_search when you want filter + aggregate + sort in ONE call: 'FROM logs-* | WHERE log.level == \"error\" | STATS count = COUNT(*) BY service.name | SORT count DESC | LIMIT 10'. Read-only (ES|QL has no write commands). Returns rows as objects keyed by column name. Include a `| LIMIT <n>` clause (not required when the pipeline uses `| STATS`, which already bounds rows) -- it is enforced, and without one Elasticsearch returns 1000 rows. Use double quotes for string literals and == for equality. For plain document retrieval or highlighting, use elasticsearch_search instead.",
 			inputSchema: esqlQueryValidator.shape,
 		},
 		esqlQueryHandler,
