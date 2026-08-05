@@ -145,6 +145,27 @@ describe("classifyElasticErrorFromMessage", () => {
 		expect(classifyElasticErrorFromMessage("index_not_found_exception")).toBe("not-found");
 	});
 
+	test("SIO-1391: verification_exception splits on reason (ES|QL unknown index vs unknown column)", () => {
+		// ES|QL reports both as verification_exception, but they need OPPOSITE kinds: a missing index
+		// is an expected absence (not-found, non-degrading), a bad column is a query bug (bad-query).
+		// Both reason strings captured live from eu-cld.
+		const unknownIndex = esResponseError("verification_exception", 400);
+		(
+			(unknownIndex as { meta?: { body?: { error?: { reason?: string } } } }).meta as {
+				body: { error: { reason: string } };
+			}
+		).body.error.reason = "Unknown index [no_such_concrete]";
+		expect(classifyForEnvelope(unknownIndex)).toBe("not-found");
+
+		const unknownColumn = esResponseError("verification_exception", 400);
+		(
+			(unknownColumn as { meta?: { body?: { error?: { reason?: string } } } }).meta as {
+				body: { error: { reason: string } };
+			}
+		).body.error.reason = "Found 1 problem line 1:21: Unknown column [no_such_field]";
+		expect(classifyForEnvelope(unknownColumn)).toBe("bad-query");
+	});
+
 	test("structural classification wins over message text", () => {
 		// Message says not-found, structure says auth-denied. Structure must win -- otherwise a
 		// misleading message could downgrade a real permission failure into an expected absence.

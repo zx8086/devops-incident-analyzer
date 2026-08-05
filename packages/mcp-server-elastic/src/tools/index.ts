@@ -87,9 +87,15 @@ import { registerPutMappingTool } from "./index_management/put_mapping.js";
 import { registerRefreshIndexTool } from "./index_management/refresh_index.js";
 import { registerReindexDocumentsTool } from "./index_management/reindex_documents.js";
 import { registerUpdateIndexSettingsTool } from "./index_management/update_index_settings.js";
+import {
+	registerAsyncSearchDeleteTool,
+	registerAsyncSearchGetTool,
+	registerAsyncSearchSubmitTool,
+} from "./search/async_search.js";
 // Search Tools (Execute SQL Query, Update By Query, Count Documents, Scroll Search, Multi Search, Clear Scroll)
 import { registerClearScrollTool } from "./search/clear_scroll.js";
 import { registerCountDocumentsTool } from "./search/count_documents.js";
+import { registerEsqlQueryTool } from "./search/esql_query.js";
 import { registerExecuteSqlQueryTool } from "./search/execute_sql_query.js";
 import { registerMultiSearchTool } from "./search/multi_search.js";
 import { registerScrollSearchTool } from "./search/scroll_search.js";
@@ -237,6 +243,14 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 	"elasticsearch_processor_grok",
 	"elasticsearch_execute_sql_query",
 	"elasticsearch_translate_sql_query",
+	// SIO-1391: ES|QL has no write commands, and async search submit/get only read. `delete` removes
+	// the STORED SEARCH RESULT, never indexed data -- it belongs here for the same reason
+	// clear_scroll does. Listing them also enrolls them in cluster-tool deployment routing, which
+	// SIO-675 derives from this set.
+	"elasticsearch_esql_query",
+	"elasticsearch_async_search_submit",
+	"elasticsearch_async_search_get",
+	"elasticsearch_async_search_delete",
 	"elasticsearch_count_documents",
 	"elasticsearch_scroll_search",
 	"elasticsearch_multi_search",
@@ -470,6 +484,11 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 	registerMultiGetTool(server, esClient);
 
 	registerExecuteSqlQueryTool(server, esClient);
+	// SIO-1391: ES|QL + async search. Both read-only; see READ_ONLY_TOOLS above.
+	registerEsqlQueryTool(server, esClient);
+	registerAsyncSearchSubmitTool(server, esClient);
+	registerAsyncSearchGetTool(server, esClient);
+	registerAsyncSearchDeleteTool(server, esClient);
 	registerUpdateByQueryTool(server, esClient);
 	registerCountDocumentsTool(server, esClient);
 	registerScrollSearchTool(server, esClient);

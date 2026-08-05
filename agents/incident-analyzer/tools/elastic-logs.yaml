@@ -97,6 +97,10 @@ tool_mapping:
       - elasticsearch_translate_sql_query
       - elasticsearch_search_template
       - elasticsearch_multi_search_template
+      - elasticsearch_esql_query
+      - elasticsearch_async_search_submit
+      - elasticsearch_async_search_get
+      - elasticsearch_async_search_delete
     cluster_health:
       - elasticsearch_get_cluster_health
       - elasticsearch_get_cluster_stats
@@ -242,7 +246,18 @@ tool_mapping:
       log/document search or aggregation -- narrow the INDEX PATTERN (while still covering the
       full window) and FIELD PROJECTION to control cost on large streams, never the time window
       itself, and never substitute `now-24h` for `now-30d` (SIO-1327: a self-narrowed window is
-      exactly the false-absence pattern SOUL.md warns against).
+      exactly the false-absence pattern SOUL.md warns against). SIO-1391 -- this action also
+      carries `elasticsearch_esql_query` and the async-search trio. Use `elasticsearch_esql_query`
+      when one pipeline answers the question in a single call (filter + aggregate + sort), e.g.
+      `FROM logs-* | WHERE log.level == "error" | STATS c = COUNT(*) BY service.name | SORT c DESC
+      | LIMIT 10`; it is read-only, always needs a LIMIT, and returns rows keyed by column name.
+      Keep using `elasticsearch_search` for document retrieval, highlighting, and the PHASE 1->3
+      discovery procedure. If a heavy aggregation over the mandated window TIMES OUT (commonly on
+      `traces-apm*`), do NOT shrink the window to make it fit -- submit it via
+      `elasticsearch_async_search_submit`, poll `elasticsearch_async_search_get` until
+      `is_running` is false, then `elasticsearch_async_search_delete`. A response with
+      `is_running` or `is_partial` true is INCOMPLETE and is never a valid basis for concluding
+      absence.
     cluster_health: when checking cluster status, node count, shard allocation, or pending tasks at the cluster level
     node_info: when inspecting a specific node's hardware, JVM, thread pools, or per-node disk/memory usage
     index_management: when listing indices, checking index settings, mappings, stats, or rolling over an index pattern
