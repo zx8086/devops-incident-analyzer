@@ -88,11 +88,17 @@ console.log(
 console.log("Estimated cost: $0.50-1.50 and ~5-10min PER repetition. Continue in 5s or Ctrl-C.");
 await new Promise((r) => setTimeout(r, 5000));
 
-console.log("Running precheck...");
-const precheck = spawnSync("bun", ["run", "src/eval/precheck.ts"], { stdio: "inherit" });
-if (precheck.status !== 0) {
-	console.error("Precheck failed; fix the missing MCP servers and re-run.");
-	process.exit(precheck.status ?? 1);
+// SIO-1379: replay-outputs re-grades recorded outputs -- no MCP server is touched, so
+// gating on their reachability would block the exact offline iteration the mode exists for.
+if (process.env.EVAL_FIXTURE_MODE === "replay-outputs") {
+	console.log("EVAL_FIXTURE_MODE=replay-outputs: skipping MCP precheck (no live systems touched).");
+} else {
+	console.log("Running precheck...");
+	const precheck = spawnSync("bun", ["run", "src/eval/precheck.ts"], { stdio: "inherit" });
+	if (precheck.status !== 0) {
+		console.error("Precheck failed; fix the missing MCP servers and re-run.");
+		process.exit(precheck.status ?? 1);
+	}
 }
 
 // CodeRabbit PR #590: outside a git checkout, .stdout is null and .trim() throws before the

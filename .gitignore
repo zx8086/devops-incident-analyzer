@@ -69,3 +69,8 @@ packages/agent/src/eval/run-eval-no-precheck.ts
 # Phase 1 IAM trust policy with developer-specific principal — do not commit
 scripts/agentcore/policies/devops-agent-readonly-trust-policy-phase1.json
 pvh-tf-state-pat.txt
+
+# SIO-1379: recorded eval fixtures -- public repo, payloads carry real infra identifiers
+# (account ids, hostnames, IPs). Only the content-free MANIFEST.json is committable.
+packages/agent/src/eval/fixtures/*
+!packages/agent/src/eval/fixtures/MANIFEST.json

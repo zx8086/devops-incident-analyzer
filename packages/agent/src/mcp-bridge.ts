@@ -60,6 +60,13 @@ export interface McpClientConfig {
 	// SIO-967: read-only knowledge-graph query server. Mounted IN-PROCESS in the web
 	// app (lbug exclusive file lock) and reached over localhost like any other server.
 	knowledgeGraphUrl?: string;
+	// SIO-1379: eval-only seam. Applied to every tool of every server as it enters
+	// toolsByServer (boot connect AND reconnect) -- the single chokepoint every in-process
+	// MCP invocation flows through: sub-agent loops, resolveIdentifiers probes,
+	// aws-estate-router reconciliation, ticket providers. Production wiring
+	// (apps/web/src/lib/server/agent.ts) never sets this; only the eval harness's
+	// EVAL_FIXTURE_MODE=record path does (see eval/fixture-recorder.ts).
+	toolMiddleware?: (serverName: string, tool: StructuredToolInterface) => StructuredToolInterface;
 }
 
 // SIO-705: pino's default JSON serializer drops non-enumerable fields on Error
@@ -95,6 +102,21 @@ export function serializeMcpConnectError(
 let allTools: StructuredToolInterface[] = [];
 let connectedServers: Set<string> = new Set();
 let toolsByServer: Map<string, StructuredToolInterface[]> = new Map();
+
+// SIO-1379: remembered from createMcpClient's config so reconnectServer (health-poll path)
+// re-applies the same middleware -- a reconnected server must not silently lose recording.
+let activeToolMiddleware: McpClientConfig["toolMiddleware"];
+
+// Pure so it is unit-testable without a live connect; both call sites pass the module-level
+// activeToolMiddleware.
+export function applyToolMiddleware(
+	middleware: McpClientConfig["toolMiddleware"],
+	serverName: string,
+	tools: StructuredToolInterface[],
+): StructuredToolInterface[] {
+	if (!middleware) return tools;
+	return tools.map((tool) => middleware(serverName, tool));
+}
 
 // SIO-608: Health polling state
 let serverUrls: Map<string, string> = new Map();
@@ -233,6 +255,8 @@ function injectElasticHeaders(): { headers: Record<string, string> } | undefined
 export async function createMcpClient(config: McpClientConfig): Promise<void> {
 	const { MultiServerMCPClient } = await import("@langchain/mcp-adapters");
 
+	activeToolMiddleware = config.toolMiddleware;
+
 	const serverEntries: Array<{ name: string; url: string }> = [];
 
 	if (config.elasticUrl) {
@@ -318,10 +342,11 @@ export async function createMcpClient(config: McpClientConfig): Promise<void> {
 					tool.description = `${tool.name} tool`;
 				}
 			}
-			tools.push(...result.value.tools);
+			const serverTools = applyToolMiddleware(activeToolMiddleware, entry.name, result.value.tools);
+			tools.push(...serverTools);
 			connectedServers.add(result.value.name);
-			toolsByServer.set(result.value.name, result.value.tools);
-			logger.info({ serverName: entry.name, toolCount: result.value.tools.length }, "MCP server connected");
+			toolsByServer.set(result.value.name, serverTools);
+			logger.info({ serverName: entry.name, toolCount: serverTools.length }, "MCP server connected");
 		} else {
 			// SIO-705: pino's default JSON serializer drops non-enumerable Error fields,
 			// so passing the raw rejection logged as `error:{}` and hid the actual
@@ -636,12 +661,17 @@ async function reconnectServer(name: string, mcpUrl: string): Promise<void> {
 			}
 		}
 
-		// Remove any stale tools for this server before appending
-		const staleTools = toolsByServer.get(name) ?? [];
-		const staleNames = new Set(staleTools.map((t) => t.name));
-		allTools = [...allTools.filter((t) => !staleNames.has(t.name)), ...tools];
+		// SIO-1379: re-apply the middleware createMcpClient was configured with, so a
+		// health-poll reconnect never silently swaps recorded tools for raw ones mid-run.
+		const wrappedTools = applyToolMiddleware(activeToolMiddleware, name, tools);
 
-		toolsByServer.set(name, tools);
+		// Remove any stale tools for this server before appending. CodeRabbit (PR #594): by
+		// INSTANCE, not by name -- toolsByServer holds the exact objects that were pushed into
+		// allTools, and a name-based filter would evict another server's same-named tool.
+		const staleTools = new Set<StructuredToolInterface>(toolsByServer.get(name) ?? []);
+		allTools = [...allTools.filter((tool) => !staleTools.has(tool)), ...wrappedTools];
+
+		toolsByServer.set(name, wrappedTools);
 		connectedServers.add(name);
 		logger.info({ serverName: name, toolCount: tools.length }, "MCP server reconnected with tools");
 	} catch (error) {

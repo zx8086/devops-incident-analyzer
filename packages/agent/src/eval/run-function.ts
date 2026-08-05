@@ -1,10 +1,19 @@
 // packages/agent/src/eval/run-function.ts
+import { ToolErrorCategorySchema } from "@devops-agent/shared";
 import { HumanMessage } from "@langchain/core/messages";
 import { z } from "zod";
 import { type FirstAttemptSummary, summarizeFirstAttempts } from "../alignment.ts";
 import { buildGraph } from "../graph.ts";
 import { createMcpClient } from "../mcp-bridge.ts";
 import { extractTextFromContent } from "../message-utils.ts";
+import {
+	appendRecordedOutput,
+	exampleKey,
+	fixturesDir,
+	readRecordedOutputs,
+	recordingToolMiddleware,
+	runWithExampleTag,
+} from "./fixture-recorder.ts";
 import { buildSubagentReports } from "./subagent-reports.ts";
 
 // SIO-1371 (CodeRabbit PR #590): dataset examples arrive from LangSmith as untyped JSON --
@@ -52,6 +61,35 @@ export function buildEvalMcpConfig(env: NodeJS.ProcessEnv = process.env): Parame
 	};
 }
 
+// SIO-1379: the A/B leg this process runs -- the sub-agent override is the eval's only
+// per-leg variable, so it doubles as the fixture namespace for recorded outputs/tool calls.
+function currentLeg(env: NodeJS.ProcessEnv = process.env): string {
+	return env.EVAL_SUB_AGENT_MODEL_OVERRIDE ?? "manifest-default";
+}
+
+// SIO-1379: replay-outputs re-parses each recorded output instead of trusting the JSONL
+// blindly -- a hand-edited or truncated store must fail the example loudly as a harness
+// error, never feed the judge a half-shaped output. (CodeRabbit PR #594: firstAttempts is
+// validated against the real FirstAttemptSummary shape via the shared ToolErrorCategory
+// enum, not waved through as unknown[] + cast.)
+const FirstAttemptSummarySchema = z.object({
+	dataSourceId: z.string(),
+	firstStatus: z.enum(["success", "error"]),
+	firstCategory: ToolErrorCategorySchema.optional(),
+	firstDurationMs: z.number(),
+	recovered: z.boolean(),
+});
+
+const FrozenOutputSchema = z.object({
+	response: z.string(),
+	targetDataSources: z.array(z.string()),
+	confidenceCap: z.number().optional(),
+	firstAttempts: z.array(FirstAttemptSummarySchema),
+	subagentReports: z.record(z.string(), z.string()),
+});
+
+let frozenOutputs: Map<string, unknown> | undefined;
+
 // Mirrors apps/web/src/lib/server/agent.ts:getMcpConfig + ensureMcpConnected.
 // Without this, the supervisor's getToolsForDataSource() returns 0 tools per
 // datasource and skips every sub-agent -- the graph terminates without
@@ -59,7 +97,13 @@ export function buildEvalMcpConfig(env: NodeJS.ProcessEnv = process.env): Parame
 // HumanMessage as its "response".
 function ensureMcpConnected(): Promise<void> {
 	if (!mcpReady) {
-		mcpReady = createMcpClient(buildEvalMcpConfig());
+		const config = buildEvalMcpConfig();
+		// SIO-1379: record mode wraps every MCP tool with the audit recorder. Set ONLY here in
+		// the eval harness -- production wiring never populates toolMiddleware.
+		if (process.env.EVAL_FIXTURE_MODE === "record") {
+			config.toolMiddleware = recordingToolMiddleware({ dir: fixturesDir(), leg: currentLeg() });
+		}
+		mcpReady = createMcpClient(config);
 	}
 	return mcpReady;
 }
@@ -74,40 +118,66 @@ export async function runAgent(inputs: z.infer<typeof RunAgentInputsSchema>): Pr
 	};
 }> {
 	const parsed = RunAgentInputsSchema.parse(inputs);
-	await ensureMcpConnected();
-	if (!cachedGraph) {
-		cachedGraph = await buildGraph({ checkpointerType: "memory" });
+	const fixtureMode = process.env.EVAL_FIXTURE_MODE;
+	// SIO-1379: replay-outputs never touches MCP, Bedrock, or the graph -- it re-serves the
+	// recorded output so evaluator/judge changes re-grade frozen agent behavior in minutes.
+	if (fixtureMode === "replay-outputs") {
+		if (!frozenOutputs) {
+			frozenOutputs = readRecordedOutputs(fixturesDir(), currentLeg());
+		}
+		const key = exampleKey(parsed.query);
+		const stored = frozenOutputs.get(key);
+		if (stored === undefined) {
+			throw new Error(
+				`replay-outputs: no recorded output for example ${key} (query starts "${parsed.query.slice(0, 60)}") in leg "${currentLeg()}" -- record that leg first`,
+			);
+		}
+		return { output: FrozenOutputSchema.parse(stored) };
 	}
-	const finalState = await cachedGraph.invoke(
-		{
-			messages: [new HumanMessage(parsed.query)],
-			targetDataSources: parsed.uiSelectedDataSources ?? [],
-			targetDeployments: parsed.uiSelectedElasticDeployments ?? [],
-			uiAwsEstates: parsed.uiSelectedAwsEstates ?? [],
-		},
-		{ configurable: { thread_id: `eval-${crypto.randomUUID()}` } },
-	);
-	const lastMessage = finalState.messages.at(-1);
-	// SIO-1222: was JSON.stringify for the array case, which handed LangSmith's output.response
-	// a JSON blob for the judge to grade -- so a content-shape change would read as a model
-	// QUALITY regression in the eval scores rather than a harness bug. That is a bad failure
-	// mode for the very harness meant to validate a model swap.
-	const responseText = extractTextFromContent(lastMessage?.content);
-	// SIO-691: attach per-source first-attempt summary so LangSmith traces distinguish
-	// retry-recovered runs from clean first-try runs without log inspection. Field name
-	// matches the alignment + aggregator log keys for cross-referencing.
-	const firstAttempts = summarizeFirstAttempts(finalState.dataSourceResults ?? []);
-	// SIO-1374: raw per-sub-agent findings, isolated from the aggregator's final response text,
-	// so the per-sub-agent judge can grade the variable under test (sub-agent model) without the
-	// constant (Sonnet 5 aggregator prose) diluting the signal.
-	const subagentReports = buildSubagentReports(finalState.dataSourceResults ?? []);
-	return {
-		output: {
-			response: responseText,
-			targetDataSources: finalState.targetDataSources ?? [],
-			confidenceCap: finalState.confidenceCap,
-			firstAttempts,
-			subagentReports,
-		},
+	const invokeOnce = async () => {
+		await ensureMcpConnected();
+		if (!cachedGraph) {
+			cachedGraph = await buildGraph({ checkpointerType: "memory" });
+		}
+		const finalState = await cachedGraph.invoke(
+			{
+				messages: [new HumanMessage(parsed.query)],
+				targetDataSources: parsed.uiSelectedDataSources ?? [],
+				targetDeployments: parsed.uiSelectedElasticDeployments ?? [],
+				uiAwsEstates: parsed.uiSelectedAwsEstates ?? [],
+			},
+			{ configurable: { thread_id: `eval-${crypto.randomUUID()}` } },
+		);
+		const lastMessage = finalState.messages.at(-1);
+		// SIO-1222: was JSON.stringify for the array case, which handed LangSmith's output.response
+		// a JSON blob for the judge to grade -- so a content-shape change would read as a model
+		// QUALITY regression in the eval scores rather than a harness bug. That is a bad failure
+		// mode for the very harness meant to validate a model swap.
+		const responseText = extractTextFromContent(lastMessage?.content);
+		// SIO-691: attach per-source first-attempt summary so LangSmith traces distinguish
+		// retry-recovered runs from clean first-try runs without log inspection. Field name
+		// matches the alignment + aggregator log keys for cross-referencing.
+		const firstAttempts = summarizeFirstAttempts(finalState.dataSourceResults ?? []);
+		// SIO-1374: raw per-sub-agent findings, isolated from the aggregator's final response text,
+		// so the per-sub-agent judge can grade the variable under test (sub-agent model) without the
+		// constant (Sonnet 5 aggregator prose) diluting the signal.
+		const subagentReports = buildSubagentReports(finalState.dataSourceResults ?? []);
+		return {
+			output: {
+				response: responseText,
+				targetDataSources: finalState.targetDataSources ?? [],
+				confidenceCap: finalState.confidenceCap,
+				firstAttempts,
+				subagentReports,
+			},
+		};
 	};
+	if (fixtureMode !== "record") {
+		return invokeOnce();
+	}
+	// SIO-1379: the ALS example tag scopes every recorded tool call to this example (so a
+	// future maxConcurrency > 1 cannot cross-tag); the final output lands in the frozen store.
+	const result = await runWithExampleTag(exampleKey(parsed.query), invokeOnce);
+	appendRecordedOutput(fixturesDir(), currentLeg(), parsed.query, result.output);
+	return result;
 }
