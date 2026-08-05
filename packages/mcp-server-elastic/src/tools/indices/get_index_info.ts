@@ -1,10 +1,12 @@
 /* src/tools/indices/get_index_info.ts */
 /* FIXED: Uses Zod Schema instead of JSON Schema for MCP compatibility */
 
+import { buildToolErrorEnvelope } from "@devops-agent/shared";
 import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { ENVELOPE_KIND_BY_TYPE } from "../../lib/toolErrorInterceptor.js";
 import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import { booleanField } from "../../utils/zodHelpers.js";
@@ -59,6 +61,14 @@ function createGetIndexInfoMcpError(
 		index_not_found: ErrorCode.InvalidParams,
 		timeout: ErrorCode.InternalError,
 	};
+
+	// SIO-1388: see get_mappings.ts -- the rewritten prose erases the ES type name, so stamp the
+	// shared envelope from `context.type`, which already holds the classification.
+	const kind = ENVELOPE_KIND_BY_TYPE[context.type];
+	if (kind) {
+		const envelope = buildToolErrorEnvelope({ kind, message: `[elasticsearch_get_index_info] ${message}` });
+		return new McpError(errorCodeMap[context.type], JSON.stringify(envelope), context.details);
+	}
 
 	return new McpError(errorCodeMap[context.type], `[elasticsearch_get_index_info] ${message}`, context.details);
 }

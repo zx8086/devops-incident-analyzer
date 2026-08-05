@@ -134,7 +134,12 @@ export const registerCountDocumentsTool: ToolRegistrationFunction = (server: Mcp
 				}
 
 				if (error.message.includes("index_not_found_exception")) {
-					throw createCountDocumentsMcpError(`Index not found: ${args.index || "*"}`, {
+					// SIO-1388: keep the ES type name in the message. This factory's discriminant is
+					// only validation|execution and this site passes "validation", so mapping by type
+					// would mis-stamp a missing index as bad-query (degrading) instead of not-found
+					// (non-degrading). Retaining the type name lets the central interceptor classify
+					// it correctly from the text.
+					throw createCountDocumentsMcpError(`Index not found (index_not_found_exception): ${args.index || "*"}`, {
 						type: "validation",
 						details: {
 							providedIndex: args.index,

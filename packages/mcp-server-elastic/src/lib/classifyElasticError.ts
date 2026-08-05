@@ -84,6 +84,36 @@ export function esStatusCode(error: unknown): number | undefined {
 	return readStatusCode(error);
 }
 
+// SIO-1388: last-resort classification from the error MESSAGE, for the ~140 tool files whose catch
+// blocks rebuild an McpError from `error.message` and discard the ResponseError (so `meta.body` and
+// `meta.statusCode` are already gone by the time the central interceptor sees it). This works only
+// because the SDK copies the ES `type` verbatim into the message -- the same accident noted at the
+// top of this file. Deliberately reuses ES_TYPE_TO_KIND rather than introducing a second vocabulary:
+// a type added there is picked up here for free.
+//
+// Structural classification (classifyElasticError) is ALWAYS preferred; call this only when it
+// returned "unknown". Returns "unknown" when no known type name appears, and callers MUST treat
+// that as "do not stamp" rather than defaulting to a degrading category.
+export function classifyElasticErrorFromMessage(message: string): ToolErrorKind {
+	if (!message) return "unknown";
+	// Match the longest type name first: several ES type names are suffixes of others, and a
+	// substring scan would otherwise stop on the shorter one.
+	const matched = Object.keys(ES_TYPE_TO_KIND)
+		.filter((type) => containsEsType(message, type))
+		.sort((a, b) => b.length - a.length)[0];
+	return (matched && ES_TYPE_TO_KIND[matched]) || "unknown";
+}
+
+// CodeRabbit (PR #595): a bare `message.includes(type)` also matches a type name embedded in a
+// LONGER identifier -- `my_index_not_found_exception_copy` classified as not-found, which is not an
+// ES type at all. Since not-found is non-degrading, a false positive there would silently exempt a
+// real failure from the tool-error-rate cap. Require identifier boundaries on both sides; `_` counts
+// as an identifier char, so adjacent underscores do not qualify as a boundary.
+function containsEsType(message: string, type: string): boolean {
+	const escaped = type.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return new RegExp(`(?:^|[^A-Za-z0-9_])${escaped}(?=$|[^A-Za-z0-9_])`).test(message);
+}
+
 // SIO-1328: classify a single `_shards.failures[]` entry's `reason` the SAME way a thrown ES
 // error is classified, so a shard-level illegal_argument_exception (bad-query, fix the field) is
 // distinguished from a shard-level node_not_connected_exception (network/infra, not something a

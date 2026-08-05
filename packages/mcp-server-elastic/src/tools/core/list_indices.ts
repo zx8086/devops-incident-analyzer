@@ -311,11 +311,17 @@ export const registerListIndicesTool: ToolRegistrationFunction = (server: McpSer
 			}
 
 			if (error instanceof Error && error.message.includes("index_not_found_exception")) {
-				throw createMcpError(`No indices found matching pattern: ${args.indexPattern || "*"}`, {
-					toolName: "elasticsearch_list_indices",
-					type: "not_found",
-					details: { pattern: args.indexPattern },
-				});
+				// SIO-1388: keep the ES type name in the message so the central interceptor stamps
+				// this as not-found (non-degrading). Without it the rewritten prose classified as
+				// "unknown", and a routine empty-pattern result counted against the tool-error rate.
+				throw createMcpError(
+					`No indices found matching pattern (index_not_found_exception): ${args.indexPattern || "*"}`,
+					{
+						toolName: "elasticsearch_list_indices",
+						type: "not_found",
+						details: { pattern: args.indexPattern },
+					},
+				);
 			}
 
 			throw createMcpError(error instanceof Error ? error.message : String(error), {

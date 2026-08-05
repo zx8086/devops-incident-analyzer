@@ -68,6 +68,53 @@ const SearchParams = z.object({
 
 type SearchParamsType = z.infer<typeof SearchParams>;
 
+// SIO-1388: the ONLY shard-failure shape for which appending `.keyword` is the documented fix.
+// ES reports it as an illegal_argument_exception whose reason names fielddata being disabled on a
+// text field, or a match_only_text field not supporting aggregations. Matching the reason text (not
+// merely the type) keeps the retry off unrelated illegal_argument_exceptions -- a `terms` agg on a
+// numeric field with a bad `format`, say -- where `.keyword` would be nonsense.
+function needsKeywordRetry(result: Pick<estypes.SearchResponse, "_shards">): boolean {
+	const shards = result._shards;
+	if (!shards?.failed || shards.failed === 0) return false;
+	return (shards.failures ?? []).some((failure) => {
+		if (failure.reason?.type !== "illegal_argument_exception") return false;
+		const reason = failure.reason?.reason ?? "";
+		return reason.includes("Fielddata is disabled") || reason.includes("do not support sorting and aggregations");
+	});
+}
+
+// Aggregation clauses where a text field is the failure and `.keyword` is the documented fix.
+// CodeRabbit (PR #595): scoping matters -- rewriting EVERY nested `field` also hit a sibling
+// `date_histogram` on `@timestamp`, producing `@timestamp.keyword`, which either errors or silently
+// changes the aggregation's meaning. Only the clause that actually rejects a text field is rewritten.
+const KEYWORD_RETRYABLE_AGG_CLAUSES = new Set(["terms", "cardinality", "significant_terms", "rare_terms"]);
+
+// Rewrites `field` on those clauses to `<field>.keyword`. Returns undefined when nothing would
+// change, so the caller can skip a pointless second round-trip. Only touches agg `field` values --
+// the query clause is left alone, since the failure is aggregation-specific.
+function withKeywordSubfields(aggs: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+	if (!aggs) return undefined;
+	let changed = false;
+	// `inRetryableClause` is set when we descend INTO a terms/cardinality/... clause, so the `field`
+	// key one level down is the one that gets rewritten. Any other clause resets it to false.
+	const rewrite = (node: unknown, inRetryableClause = false): unknown => {
+		if (Array.isArray(node)) return node.map((item) => rewrite(item, inRetryableClause));
+		if (node == null || typeof node !== "object") return node;
+		const out: Record<string, unknown> = {};
+		for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+			if (inRetryableClause && key === "field" && typeof value === "string" && !value.endsWith(".keyword")) {
+				out[key] = `${value}.keyword`;
+				changed = true;
+			} else {
+				out[key] = rewrite(value, KEYWORD_RETRYABLE_AGG_CLAUSES.has(key));
+			}
+		}
+		return out;
+	};
+	const rewritten = rewrite(aggs) as Record<string, unknown>;
+	return changed ? rewritten : undefined;
+}
+
 // MCP error handling
 function createSearchMcpError(
 	error: Error | string,
@@ -301,11 +348,51 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 			// (4 parallel `now-7d` aggs in the styles-v3 run all hit 30,295-30,301ms exactly).
 			// Default 60s / 0 retries; tunable via ELASTIC_SEARCH_REQUEST_TIMEOUT_MS / ELASTIC_SEARCH_MAX_RETRIES.
 			const { requestTimeout: searchRequestTimeout, maxRetries: searchMaxRetries } = getSearchRequestOptions();
-			const result = await esClient.search(searchRequest, {
+			let result = await esClient.search(searchRequest, {
 				opaqueId: "elasticsearch_search",
 				requestTimeout: searchRequestTimeout,
 				maxRetries: searchMaxRetries,
 			});
+
+			// SIO-1388: auto-retry ONCE with `.keyword` sub-fields when -- and only when -- a shard
+			// rejected the aggregation because the field is text/match_only_text with no fielddata.
+			// That is the single case where appending `.keyword` is the documented fix, and it is
+			// already exactly what this tool's own advice string tells the model to do by hand.
+			//
+			// Deliberately NOT a blanket retry (the obvious generalization is WRONG here): SOUL.md
+			// states `service.name` is a keyword with NO `.keyword` sub-field on our OTel/APM data
+			// streams, so appending it there returns ZERO buckets and would break the primary
+			// discovery aggregation. A successful-but-empty response therefore never triggers this --
+			// only an explicit shard-level fielddata rejection does.
+			const keywordRetryAggs = needsKeywordRetry(result) ? withKeywordSubfields(searchRequest.aggs) : undefined;
+			if (keywordRetryAggs) {
+				logger.info("Retrying search with .keyword sub-fields after fielddata shard failure");
+				// CodeRabbit (PR #595): the retry is best-effort and must never REPLACE the original
+				// diagnosis. Without this local catch, a retry that times out or rejects propagates to
+				// the outer catch and the caller sees the retry's error instead of the actionable
+				// "fix the aggregation field" fielddata error the first response already gave us.
+				try {
+					const retryResult = await esClient.search(
+						{
+							...searchRequest,
+							// Same double-cast as the initial request above: the rewritten aggs are
+							// user-supplied structure the SDK types strictly.
+							aggs: keywordRetryAggs as unknown as Record<string, estypes.AggregationsAggregationContainer>,
+						},
+						{ opaqueId: "elasticsearch_search", requestTimeout: searchRequestTimeout, maxRetries: searchMaxRetries },
+					);
+					// Adopt the retry only if it actually cleared the failure; otherwise keep the original
+					// so the error path below reports the real first problem, not a second symptom.
+					if (!retryResult._shards || retryResult._shards.failed === 0) {
+						result = retryResult;
+					}
+				} catch (retryError) {
+					logger.warn(
+						{ retryError: retryError instanceof Error ? retryError.message : String(retryError) },
+						"Keyword retry failed; falling back to the original shard-failure result",
+					);
+				}
+			}
 
 			await progressTracker.updateProgress(85, `Search completed in ${result.took}ms, processing results`);
 
