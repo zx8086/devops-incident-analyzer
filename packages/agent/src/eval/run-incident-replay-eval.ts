@@ -21,7 +21,13 @@ import { loadAgent } from "@devops-agent/gitagent-bridge";
 import { evaluate } from "langsmith/evaluation";
 import { resolveRoleModelConfig } from "../llm.ts";
 import { getAgentsDir } from "../paths.ts";
-import { confidenceThreshold, datasourcesCovered, responseQualityJudge, subagentEvidenceJudge } from "./evaluators.ts";
+import {
+	confidenceThreshold,
+	datasourcesCovered,
+	judgeModelConfig,
+	responseQualityJudge,
+	subagentEvidenceJudge,
+} from "./evaluators.ts";
 import { runAgent } from "./run-function.ts";
 
 const DATASET_NAME = "incident-replay-eval";
@@ -38,6 +44,20 @@ function opt(name: string): string | undefined {
 		process.exit(1);
 	}
 	return value;
+}
+
+// SIO-1378: n=32 single-shot runs sit inside judge/model noise -- the SIO-1375 A/B conclusion
+// flipped once a config bug was fixed. numRepetitions is the SDK's own lever for tightening
+// that; any model DECISION should use --repetitions >= 2.
+function intOpt(name: string): number | undefined {
+	const raw = opt(name);
+	if (raw === undefined) return undefined;
+	const parsed = Number.parseInt(raw, 10);
+	if (!Number.isInteger(parsed) || parsed < 1 || String(parsed) !== raw.trim()) {
+		console.error(`--${name} must be a positive integer, got "${raw}".`);
+		process.exit(1);
+	}
+	return parsed;
 }
 
 // Applying the override via this script's OWN process.env, not the shell env the user set --
@@ -59,9 +79,13 @@ const resolvedSubAgentModel =
 	resolveRoleModelConfig("subAgent", orchestrator, "elastic-agent").modelConfig?.preferred ??
 	"unknown";
 
-console.log("WARNING: this hits the systems your .env points at (Bedrock, OpenAI, all 6 MCP servers).");
-console.log(`Sub-agent model: ${resolvedSubAgentModel}`);
-console.log("Estimated cost: $0.50-1.50 per run. Time: ~5-10min. Continue in 5s or Ctrl-C.");
+const repetitions = intOpt("repetitions") ?? 1;
+
+console.log("WARNING: this hits the systems your .env points at (Bedrock, OpenAI, all 7 MCP servers).");
+console.log(
+	`Sub-agent model: ${resolvedSubAgentModel} | judge: ${judgeModelConfig().model} | repetitions: ${repetitions}`,
+);
+console.log("Estimated cost: $0.50-1.50 and ~5-10min PER repetition. Continue in 5s or Ctrl-C.");
 await new Promise((r) => setTimeout(r, 5000));
 
 console.log("Running precheck...");
@@ -78,13 +102,31 @@ const gitSha = gitRev.status === 0 && gitRev.stdout ? gitRev.stdout.trim() : "no
 const experimentPrefix = `agent-eval-${gitSha}-subagent-${resolvedSubAgentModel}`;
 console.log(`Starting evaluation, experiment prefix: ${experimentPrefix}`);
 
-const opts = {
-	data: DATASET_NAME,
-	evaluators: [datasourcesCovered, confidenceThreshold, responseQualityJudge, subagentEvidenceJudge],
-	experimentPrefix,
-	// biome-ignore lint/suspicious/noExplicitAny: SIO-680 - langsmith evaluate overload resolution
-} as any;
-const results = await evaluate(runAgent, opts);
+// SIO-1378: the SIO-680 `as any` cast is gone -- langsmith@0.6.3's EvaluatorT accepts the
+// (run, example) function shape directly. The target is widened to Record<string, unknown>
+// because evaluate() types targets as KVMap-consuming and parameter contravariance rejects
+// runAgent's narrower declared inputs; runAgent Zod-parses at its boundary, so the cast is
+// safe. maxConcurrency: 1 pins today's implicit sequential behavior explicitly (live MCP
+// servers + Bedrock quotas are not sized for concurrent example fan-out). Experiment metadata
+// records everything a future reader needs to know before comparing two runs: scores are only
+// comparable within one judge model and one fixture mode.
+const results = await evaluate(
+	(inputs: Record<string, unknown>) => runAgent(inputs as Parameters<typeof runAgent>[0]),
+	{
+		data: DATASET_NAME,
+		evaluators: [datasourcesCovered, confidenceThreshold, responseQualityJudge, subagentEvidenceJudge],
+		experimentPrefix,
+		maxConcurrency: 1,
+		numRepetitions: repetitions,
+		metadata: {
+			gitSha,
+			subAgentModel: resolvedSubAgentModel,
+			judgeModel: judgeModelConfig().model,
+			repetitions,
+			fixtureMode: process.env.EVAL_FIXTURE_MODE ?? "live",
+		},
+	},
+);
 
 console.log("Done. View results in LangSmith UI under the experiment prefix above.");
 console.log(`Compare both sides at: Datasets -> ${DATASET_NAME} -> Compare (filter by "agent-eval-${gitSha}")`);

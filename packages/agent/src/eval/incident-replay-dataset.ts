@@ -11,15 +11,18 @@
 // via DEVOPS-XXXX)"), matched by that trailing "(curated via DEVOPS-XXXX)" tag, NOT by the loose
 // `annotations.ticket` field on the memory block -- an earlier attempt trusted `annotations.ticket`
 // and produced several wrong-ticket matches (fixed after cross-checking every entry's query text
-// against each ticket's own re-fetched description). 13 of 32 tickets had a directly matching,
+// against each ticket's own re-fetched description). 15 of 32 tickets had a directly matching,
 // unambiguous memory block (marked VERBATIM below, using Agent Memory's own stored text, which is
 // itself truncated to ~350 chars at the source -- that is the genuine stored content, not a
 // truncation added here); 1 more (DEVOPS-1391) had no Agent Memory match but its full ticket
-// content was already in hand (marked VERBATIM-adjacent). The remaining 18 tickets had no
+// content was already in hand (marked VERBATIM-adjacent). The remaining 16 tickets had no
 // recoverable original-query memory block after exhausting reasonable search angles (marked
 // RECONSTRUCTED below): their query is built from the exact error string/exception message quoted
 // in the ticket's own description, in the same "Investigate this error" phrasing style real users
 // submit, but is NOT a verbatim capture of what was actually typed.
+// (SIO-1378: this header originally tallied 13/18; the per-entry markers -- now machine-checked
+// via each entry's metadata.queryProvenance in dataset.test.ts -- count 15 VERBATIM /
+// 1 VERBATIM-adjacent / 16 RECONSTRUCTED.)
 //
 // Same rubric-grading constraint as dataset.ts (SIO-692): the judge sees only the final response
 // string, never tool-call trajectory, so qualityRubric clauses must be response-content checks.
@@ -64,6 +67,11 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 					"Zero prior Jira incidents for pvh-services-styles-v3 in the last 30 days, and no matching runbook found for this service or the BaseEndpoint exception pattern -- either a first-occurrence failure mode or the service has not previously been tracked under this label.",
 			},
 		},
+		metadata: {
+			ticketKey: "DEVOPS-1353",
+			queryProvenance: "reconstructed",
+			era: "2026-06",
+		},
 	},
 	{
 		// DEVOPS-1355 -- RECONSTRUCTED. MSK Kafka controller-election storm disrupting ksqlDB;
@@ -89,6 +97,11 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 				gitlab:
 					"MR !154 (merged 2026-05-26) added log.error calls in ArticleConsumer.java for null Kafka records and null ArticleDTO payloads; during the MSK instability window this amplifies the visible error signal because tombstone/null-value messages produced during the controller storm trigger the new error paths -- a secondary contributing factor, not the root cause.",
 			},
+		},
+		metadata: {
+			ticketKey: "DEVOPS-1355",
+			queryProvenance: "reconstructed",
+			era: "2026-06",
 		},
 	},
 	{
@@ -117,6 +130,11 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 					"Cluster is healthy and not a contributing factor: totalErrorCount 0 fatal N1QL errors, both query nodes report healthy:true, CPU 0.027-0.026%, ~21GB memory free on both nodes, zero queued requests -- no expensive or long-running queries fall within the incident window.",
 			},
 		},
+		metadata: {
+			ticketKey: "DEVOPS-1356",
+			queryProvenance: "reconstructed",
+			era: "2026-06",
+		},
 	},
 	{
 		// DEVOPS-1375 -- VERBATIM (Agent Memory, incident jira:DEVOPS-1375).
@@ -138,6 +156,11 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 					"Query-node health confirmed clean: svc-qi-node-133 and svc-qi-node-135 both healthy with 54-day uptime. Live nc reproduction on Query TLS port 18093 across all three AZs showed instant TCP RST refusals (~0.01s, not a timeout) at 40-45% rate, while the KV control port (11207) was 100% clean (50/50 connected) -- isolating the fault to the query-service port specifically, not the cluster generally.",
 				aws: "VPC Flow Logs on the endpoint ENIs show 18093 connections recorded ACCEPT through the endpoint, then reset -- confirming the RST originates on the Capella side of PrivateLink, not at the PVH SG/NACL/endpoint layer. Everything PVH-side is verified clean (endpoint SG sg-0aaaaaaaaaaaaaaaa, NACLs, client SGs, CloudTrail, VPC endpoint), isolating the fault to the Capella-managed NLB behind the endpoint service, not remediable from the PVH AWS account.",
 			},
+		},
+		metadata: {
+			ticketKey: "DEVOPS-1375",
+			queryProvenance: "verbatim",
+			era: "2026-06",
 		},
 	},
 	{
@@ -165,6 +188,12 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 				gitlab:
 					"Group-wide blob search for connectionThreshold / com.boomi.container.maxConnections / container.properties returned zero results -- the connection threshold is managed exclusively via the Boomi AtomSphere UI, not version control. WCS MR !4384 (Loqate integration, EED-17253) merged 66 minutes before the incident window and introduces 60s-timeout retry calls, a circumstantial timing correlation with no confirmed causal link to the Boomi connection exhaustion.",
 			},
+		},
+		metadata: {
+			ticketKey: "DEVOPS-1376",
+			incidentDate: "2026-06-14",
+			queryProvenance: "reconstructed",
+			era: "2026-06",
 		},
 	},
 	{
@@ -195,6 +224,11 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 					"The price pipeline is fully healthy: all consumer groups serving the prices domain report zero lag and STABLE state, the Couchbase sink connectors have ~122M committed offsets, and all 14 sampled DLQ topics are empty -- ruling out Kafka as the cause and indicating the WARNs are misclassified expected 'key not found' responses, not genuine write-pipeline failures.",
 			},
 		},
+		metadata: {
+			ticketKey: "DEVOPS-1380",
+			queryProvenance: "reconstructed",
+			era: "2026-06",
+		},
 	},
 	{
 		// DEVOPS-1381 -- RECONSTRUCTED. matorder-worker Mendix pod readiness/liveness probe
@@ -219,6 +253,12 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 					"m2ee-sidecar ping failures on the worker began 2026-07-14T03:32:23Z ('Healthcheck failed ping: no response to ping'), recurring every 15-30 minutes; the mendix container continued emitting DOM namespace warnings during the failure (07:10Z, 07:17Z), indicating the JVM was partially alive but the m2ee admin port was unresponsive, consistent with thread starvation or an admin-port deadlock rather than a full JVM crash. The master pod separately entered an unrecoverable state at 08:35:18Z and required a full JVM restart, reconnecting to PostgreSQL at 08:41:32Z.",
 				aws: "Liveness probes (context deadline exceeded, 151 failures) and readiness probes (HTTP 500, 34 failures) oscillated, with the HTTP 500 failures beginning 2026-07-11T10:07:05Z -- the same day the node was provisioned, three days before the alert fired. Node infrastructure was confirmed healthy throughout (CPU 11.4-11.8%, NetworkIn stable, NAT gateway available, security groups permissive), ruling out infrastructure exhaustion; mendix-operator was actively reconciling but had not resolved the issue autonomously.",
 			},
+		},
+		metadata: {
+			ticketKey: "DEVOPS-1381",
+			incidentDate: "2026-07-11",
+			queryProvenance: "reconstructed",
+			era: "2026-07",
 		},
 	},
 	{
@@ -249,6 +289,12 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 					"MR !903 (merged 2026-07-13, deployed as order-service-1.83.0 on 2026-07-16T12:06Z) converted DigitalShowroomOrderService.java from @Async (fire-and-forget) to @Transactional (synchronous), introducing a new blocking code path that can exceed Kong's 60-second read_timeout and return 504. The post-deployment Deck Sync PRD job was never executed (started_at: null), leaving Kong's route config potentially stale relative to the deployed revision.",
 			},
 		},
+		metadata: {
+			ticketKey: "DEVOPS-1385",
+			incidentDate: "2026-07-15",
+			queryProvenance: "reconstructed",
+			era: "2026-07",
+		},
 	},
 	{
 		// DEVOPS-1386 -- VERBATIM (Agent Memory, incident 8a2be3ff-...).
@@ -271,6 +317,12 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 					"Spike onset was exactly 2026-07-16T23:10:00Z (first request GET /v3/styles/0000001047); APM app document volume rose from ~140 docs/5min to a peak of 155,970 docs/5min, and Kong PRD traffic was 99.8% anonymous (116,080 of ~116,349 requests). Only 50 application errors were recorded across the entire spike window (0.04% error rate), all caller-side defects (malformed style codes), confirming the service absorbed the load without genuine failures.",
 				aws: "ALB RequestCountPerTarget peaked at 11,171 per 5-min window (~4,468 tpm across 2 tasks) at 23:35Z; ECS CPU peaked at 41.8% and memory at 49.8%, both well short of autoscaling thresholds. Application logs confirmed zero errors and all-200 responses, with traffic originating from internal VPC addresses (ALB forwarding IPs), ruling out external attack; repeated requests for identical style codes within the same second indicate a fan-out batch job without deduplication.",
 			},
+		},
+		metadata: {
+			ticketKey: "DEVOPS-1386",
+			incidentDate: "2026-07-16",
+			queryProvenance: "verbatim",
+			era: "2026-07",
 		},
 	},
 	{
@@ -301,6 +353,11 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 					"Confluence PVHEU/468026370 documents the Live: Price Indexing V2 Jenkins job scheduled daily at 23:10 UTC performing a full-catalogue MQT Refresh and FredHopper indexing -- an exact match to the spike onset time -- while no Jira incident ticket exists for images-v2 (the related styles-v3 spike is tracked separately as DEVOPS-1386).",
 			},
 		},
+		metadata: {
+			ticketKey: "DEVOPS-1387",
+			queryProvenance: "reconstructed",
+			era: "2026-07",
+		},
 	},
 	{
 		// DEVOPS-1388 -- VERBATIM (Agent Memory, incident 9ed68499-...).
@@ -324,6 +381,11 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 				kafka:
 					"The SAP Draft Order pipeline (T_PRIVATE_SOURCE_SAP_DRAFT_ORDER / T_PRIVATE_SINK_SAP_DRAFT_ORDER) shows ~780M cumulative messages each, 3 partitions, 7-day retention, with the ksqlDB stream running 12 stream threads across 3 nodes all caught up at zero consumer lag -- a structurally high-throughput pipeline that is healthy by design, not a fault; near-identical source/sink offset totals confirm ksqlDB is passing through essentially every message.",
 			},
+		},
+		metadata: {
+			ticketKey: "DEVOPS-1388",
+			queryProvenance: "verbatim",
+			era: "2026-06",
 		},
 	},
 	{
@@ -349,6 +411,12 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 				atlassian:
 					"No prior Jira incident ticket was found specifically for localcore-service nightlySyncVariantStock failures over the last 90 days -- this failure pattern has not been formally tracked, despite related open incidents (DEVOPS-1356, DEVOPS-1375, DEVOPS-1385) sharing the same deployment chain.",
 			},
+		},
+		metadata: {
+			ticketKey: "DEVOPS-1389",
+			incidentDate: "2026-07-17",
+			queryProvenance: "verbatim",
+			era: "2026-07",
 		},
 	},
 	{
@@ -376,6 +444,12 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 					"UUID fe7c08d1-4bd4-46f9-9e02-88dd6e000656 is absent from customer.assignments, customer.customers, new_model.seasonal_assignment, and _default.archived (scope limited to what was actually queried, not a full-namespace guarantee). The customer.assignments collection stores documents of a different class (com.pvh.customerassignmentsservice.assignment.Assignment) than the failing entity (com.pvh.localcoreservice.model.Assignment), confirming the EntityNotFoundException is thrown by JPA/Hibernate against localcore-service's own PostgreSQL, not against Couchbase; SBAUDO's own 15,664 assignments in Couchbase are intact and healthy.",
 			},
 		},
+		metadata: {
+			ticketKey: "DEVOPS-1390",
+			incidentDate: "2026-06-22",
+			queryProvenance: "reconstructed",
+			era: "2026-06",
+		},
 	},
 	{
 		// DEVOPS-1391 -- VERBATIM-adjacent (ticket content directly available, no Agent Memory
@@ -400,6 +474,12 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 					"Every failure produces two correlated log entries sharing the same trace.id: an ERROR from AssignmentServiceImpl.java:L342 ('Error while getting assignments grouped by sold to') and a WARN propagating the failure to callers as code 400. TMADDICK-specific hits total 1,465 over 30 days; error spikes concentrate in the 22:00-06:00 UTC window, consistent with off-peak upstream degradation. The pattern is cross-brand and cross-user, not isolated to one account.",
 				aws: "The confirmed call chain traces the 503 through localcore-service -> AssignmentServiceImpl.getByUsernameGroupedBySoldTo() -> customer-assignments-service -> CORE_API_URL: xxxxxxxxxx.pvhcorp.com, which returns the raw 503 (io.smallrye.graphql.client.InvalidResponseException: Unexpected response. Code=503). Both localcore-service (3/3 tasks, CPU 0.85%, memory 2.64%) and customer-assignments-service (3/3 tasks, CPU ~2%) are infrastructure-healthy, confirming the service is idle waiting on the upstream rather than resource-constrained.",
 			},
+		},
+		metadata: {
+			ticketKey: "DEVOPS-1391",
+			incidentDate: "2026-06-22",
+			queryProvenance: "verbatim-adjacent",
+			era: "2026-06",
 		},
 	},
 	{
@@ -428,6 +508,11 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 					"The Kafka pipeline for SAP draft orders is fully healthy: DLQ_T_PRIVATE_SINK_SAP_DRAFT_ORDER has 0 messages, the connect-C_SINK_SAP_DRAFT_ORDER connector is STABLE with 3 active members, and consumer lag is 0 across all 3 partitions and all 8 orders-service-prd subscribed topics -- ruling out the pipeline as a contributing factor.",
 			},
 		},
+		metadata: {
+			ticketKey: "DEVOPS-1395",
+			queryProvenance: "reconstructed",
+			era: "2026-07",
+		},
 	},
 	{
 		// DEVOPS-1392 -- RECONSTRUCTED. Earlier pass identifying the S3 bucket via env var but
@@ -451,6 +536,12 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 				elastic:
 					"287 occurrences of defect 1 (identifier null NPE) and 103 occurrences of defect 2 (eansSheet null NPE) confirmed over 30 days via APM, both present since at least 2026-06-22 -- chronic, not a new regression. Both call chains resolve to ImportService.java (buildEanSheetLines at line 171 and getOptionsToUpdate at line 139 respectively).",
 			},
+		},
+		metadata: {
+			ticketKey: "DEVOPS-1392",
+			incidentDate: "2026-06-22",
+			queryProvenance: "reconstructed",
+			era: "2026-06",
 		},
 	},
 	{
@@ -478,6 +569,11 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 				atlassian:
 					"Jira DSDW-1274 (2024-01-16) documents an NPE in DataLoaderServiceImpl.lambda$loadVariant$0 when dropDate is null, marked Done after Dev/Stage verification, but DSDW-1599 weekly monitoring shows the identical NPE reappeared in production on 2024-10-07 -- the fix was incomplete or a new code path re-exposed the same unguarded dereference. DSDW-1629 corroborates that a null division field in the variant cache causes missing delivery dates.",
 			},
+		},
+		metadata: {
+			ticketKey: "DEVOPS-1393",
+			queryProvenance: "verbatim",
+			era: "2026-07",
 		},
 	},
 	{
@@ -507,6 +603,12 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 					"The VariantEventConsumer query queued for 24.9 seconds (87% of total elapsed) before executing, per capella_get_completed_requests. Four fatal full-table-scan queries against styles_stibo.article timed out at 74.5s each, consuming 1.74GB memory apiece, at 06:06-06:18Z -- these saturated both query nodes and are a documented amplifier of consumer failures under concurrent load, not the primary root cause.",
 				aws: "ECS service orders-service in cluster orders-prd: task def :342, desired/running/pending 3/3/0, deployment COMPLETED. The SmallRye liveness probe reports the variant-in channel as [KO] - 'Error invoking subclass method' while all other channels (prepack-in, prices-in, stock-in, etc.) report [OK], isolating the fault entirely to the variant consumer path. 200,075 deadlock-matched log records were confirmed over 30 days, peaking at 14,226 on 2026-06-24.",
 			},
+		},
+		metadata: {
+			ticketKey: "DEVOPS-1396",
+			incidentDate: "2026-06-21",
+			queryProvenance: "verbatim",
+			era: "2026-06",
 		},
 	},
 	{
@@ -540,6 +642,11 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 				aws: "Deadlock evidence extracted verbatim from CloudWatch shows a full 43-column UPDATE b2b_order statement; when multiple consumer threads process variant events for the same order concurrently, they acquire row locks in non-deterministic order, producing a circular dependency PostgreSQL resolves by killing one transaction. 200,075 total matched deadlock events over 30 days, peaking at 2,303 in a single 5-minute window on 2026-07-01.",
 			},
 		},
+		metadata: {
+			ticketKey: "DEVOPS-1397",
+			queryProvenance: "verbatim",
+			era: "2026-07",
+		},
 	},
 	{
 		// DEVOPS-1398 -- VERBATIM (Agent Memory, incident cc8d872f-...).
@@ -565,6 +672,11 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 					"DEVOPS-1392 (filed 2026-07-21, Backlog, unassigned) identified the bucket via the task definition environment variable but explicitly listed it as an uninvestigated gap without querying it. DSP-9446 (2024-08-27) provisioned the bucket with an access-policy instruction to match 'other documents' but the task role policy was evidently never updated; DEVOPS-954 (S3 hardening, completed 2025-03-13) is a candidate contributing factor, unconfirmed without CloudTrail evidence.",
 			},
 		},
+		metadata: {
+			ticketKey: "DEVOPS-1398",
+			queryProvenance: "verbatim",
+			era: "2026-07",
+		},
 	},
 	{
 		// DEVOPS-1399 -- VERBATIM (Agent Memory, incident ea7e6a48-...).
@@ -589,6 +701,11 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 				gitlab:
 					"The crash site is confirmed in ExcelExportService.createEanSheetLine(): articleCode.split('_')[1] is called after only a contains('_') guard, but Java's default split() trims trailing empty strings, so an articleCode like 'MW0MW35263_' (trailing underscore) passes the guard but produces a length-1 array, causing the out-of-bounds access at index 1. MR !354 (2026-07-17) exercised this code path more broadly but the split bug itself is pre-existing.",
 			},
+		},
+		metadata: {
+			ticketKey: "DEVOPS-1399",
+			queryProvenance: "verbatim",
+			era: "2026-07",
 		},
 	},
 	{
@@ -616,6 +733,12 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 					"All 22 Couchbase-sink consumer groups are at zero lag and all four Couchbase-specific DLQs are empty -- the DocumentNotFoundException errors occur on read-side KV GetRequest operations by stock-service itself, not on write-side Kafka connector operations, ruling out the pipeline as a contributing factor.",
 			},
 		},
+		metadata: {
+			ticketKey: "DEVOPS-1400",
+			incidentDate: "2026-07-14",
+			queryProvenance: "verbatim",
+			era: "2026-07",
+		},
 	},
 	{
 		// DEVOPS-1402 -- RECONSTRUCTED. Same routing-fallthrough family as DEVOPS-1385/1396/1397,
@@ -642,6 +765,12 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 				aws: "A separate, concurrent infrastructure event at approximately 2026-07-24T00:00Z in eu-shared-services-prd showed a 97% traffic drop, CPU spike to 44.9%, and P99 latency reaching 3,121ms on the styles-v3-service ALB target group, with zero 4xx/5xx counts during the spike -- consistent with an ECS rolling task replacement rather than application errors. Traffic had not fully recovered to pre-event levels by the time of the report.",
 			},
 		},
+		metadata: {
+			ticketKey: "DEVOPS-1402",
+			incidentDate: "2026-07-10",
+			queryProvenance: "reconstructed",
+			era: "2026-07",
+		},
 	},
 	{
 		// DEVOPS-1403 -- VERBATIM (Agent Memory, incident ec3a109f-...).
@@ -666,6 +795,12 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 					"15 total archived-entity errors over 30 days (2 article-level, 7 variant-level), with 12 of those occurring on 2026-07-23 alone -- a 4x jump over the preceding 13-day total of 3. Both error sub-types terminate in Couchbase KV operations, confirming the document was successfully retrieved before the exception was thrown by application logic detecting the archived state, not by a connectivity failure.",
 				aws: "CloudWatch confirms connectors-service (eu-oit-prd) received the HTTP 404 at 22:15:12.890Z, logged it at WARN, and fell back to a Digital Showroom upsert with isActive=false, completing processing successfully -- the caller handles the archived-entity 404 gracefully. styles-v3-service itself is operationally healthy (2/2 ECS tasks, stable since the 2026-07-06 deployment), ruling out an infrastructure or deployment cause.",
 			},
+		},
+		metadata: {
+			ticketKey: "DEVOPS-1403",
+			incidentDate: "2026-07-23",
+			queryProvenance: "verbatim",
+			era: "2026-07",
 		},
 	},
 	{
@@ -692,6 +827,12 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 					"189 occurrences of org.springframework.web.client.HttpClientErrorException$NotFound over at least 3 days, marked error.exception.handled: true, affecting multiple ECS nodes cluster-wide. The Spring Retry interceptor is actively retrying the 404 responses before surfacing the error, adding unnecessary upstream load since a 404 here indicates data absence, not a transient failure.",
 			},
 		},
+		metadata: {
+			ticketKey: "DEVOPS-1404",
+			incidentDate: "2026-06-25",
+			queryProvenance: "verbatim",
+			era: "2026-06",
+		},
 	},
 	{
 		// DEVOPS-1405 -- VERBATIM (Agent Memory, incident daf6d33d-...).
@@ -716,6 +857,11 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 				atlassian:
 					"Five prior Jira tickets (DEVOPS-1385, 1389, 1395, 1396, 1397), all in Backlog and unassigned, document the same recurring, unresolved platform-wide season-data gap where season codes are not registered in the delivery-dates data store -- confirming this is a known systemic issue rather than a novel one-off failure.",
 			},
+		},
+		metadata: {
+			ticketKey: "DEVOPS-1405",
+			queryProvenance: "verbatim",
+			era: "2026-07",
 		},
 	},
 	{
@@ -744,6 +890,12 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 					"DEVOPS-1353 documented the same Capella endpoint and the same source IP in a prior incident resolved 2026-07-15 with a recorded root cause of an ECS security-group allowlist gap; incident volume for this service has risen from 1/month in April to 23/month in July, confirming this is a chronic, recurring, unresolved pattern rather than an isolated event.",
 			},
 		},
+		metadata: {
+			ticketKey: "DEVOPS-1407",
+			incidentDate: "2026-07-01",
+			queryProvenance: "verbatim",
+			era: "2026-07",
+		},
 	},
 	{
 		// DEVOPS-1408 -- RECONSTRUCTED.
@@ -770,6 +922,12 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 				atlassian:
 					"Five prior linked Jira tickets (DEVOPS-1385, 1389, 1395, 1396, 1397) document the same failure class since 2026-07-09, all unassigned/Backlog; incident count for season-related errors has spiked from 16/week to 31/week in the week before this ticket, confirming a chronic, worsening, platform-wide season-data gap.",
 			},
+		},
+		metadata: {
+			ticketKey: "DEVOPS-1408",
+			incidentDate: "2026-07-28",
+			queryProvenance: "reconstructed",
+			era: "2026-07",
 		},
 	},
 	{
@@ -798,6 +956,12 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 					"Three related, unresolved, Backlog-status tickets exist for localcore-service (DEVOPS-1390: EntityNotFoundException from stale Assignment UUIDs; DEVOPS-1391: 503 from customer-assignments-service; DEVOPS-1389: nightly variant stock sync failure), all unassigned with MTTR null -- confirming this is part of a longer-running, untriaged pattern rather than a first occurrence.",
 			},
 		},
+		metadata: {
+			ticketKey: "DEVOPS-1410",
+			incidentDate: "2026-07-28",
+			queryProvenance: "verbatim",
+			era: "2026-07",
+		},
 	},
 	{
 		// DEVOPS-1411 -- RECONSTRUCTED.
@@ -825,6 +989,12 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 					"DEVOPS-1408 (created the prior day) documents the identical 'no active season' failure mode occurring 62+ times in a nightly batch across 23+ order IDs, with that ticket's own Couchbase investigation confirming season documents with isActive:false and expired activeTo dates -- corroborating, though not directly confirming for this specific item, that stale/expired season reference data is the systemic driver.",
 			},
 		},
+		metadata: {
+			ticketKey: "DEVOPS-1411",
+			incidentDate: "2026-07-29",
+			queryProvenance: "reconstructed",
+			era: "2026-07",
+		},
 	},
 	{
 		// DEVOPS-1412 -- RECONSTRUCTED.
@@ -849,6 +1019,11 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 					"5,972 UnambiguousTimeoutException records in 24h split evenly across two hosts (2,998 and 2,974), ruling out a single-node/pod issue. The apm-errors-rare-grouping-by-service ML job fired 22 records for novel error-grouping keys during the burst, consistent with a newly-emerged failure mode.",
 				aws: "The Couchbase SDK's own orphan-request telemetry (via CloudWatch) shows total_server_duration_us of 3-27 microseconds against dispatch_duration_us of 1.1-3.3 seconds, with 628-2,730 orphaned KV requests per 10-second window -- direct evidence the server answers almost instantly and the delay is network/dispatch-layer, not server-side. The network path (security groups, NACLs, Transit Gateway) to the Couchbase private endpoint is confirmed fully permissive and healthy.",
 			},
+		},
+		metadata: {
+			ticketKey: "DEVOPS-1412",
+			queryProvenance: "reconstructed",
+			era: "2026-07",
 		},
 	},
 	{
@@ -875,6 +1050,11 @@ export const INCIDENT_REPLAY_DATASET: EvalExample[] = [
 					"8,112 total error-type events in the 24h window, of which 6,377 are UnambiguousTimeoutException; secondary co-occurring error types (StacklessClosedChannelException: 1,198, NativeIoException: 269) are consistent with forcibly closed TCP connections during the burst windows. ML jobs for high mean response time and high error rate both fired at the 14:30-14:35 UTC window with 5-31x deviation from baseline.",
 				aws: "ECS task CPU was sustained at 100 percent during the burst windows (14:30-15:00 and 16:30-17:30 UTC), confirmed via CloudWatch metrics -- this starved the Couchbase SDK's Netty I/O and timer threads, preventing KV GetRequest responses from being processed within the 2500ms budget. Many error records show totalServerMicros: 0, indicating the server response never arrived within the client's timeout window from the client's own perspective. No CPU-high alarm exists for this service, only scale-down alarms.",
 			},
+		},
+		metadata: {
+			ticketKey: "DEVOPS-1413",
+			queryProvenance: "reconstructed",
+			era: "2026-07",
 		},
 	},
 ];

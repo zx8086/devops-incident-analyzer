@@ -3,32 +3,60 @@
 // SIO-1371: uploads INCIDENT_REPLAY_DATASET as its own LangSmith dataset, separate from
 // build-dataset.ts's synthetic "devops-incident-eval" -- kept as an independent script rather
 // than parameterizing build-dataset.ts so neither dataset's upload path can regress the other.
+//
+// SIO-1378: switched from the `langsmith` CLI to the SDK. The CLI (0.1.7) cannot carry
+// per-example metadata, and its failure path forced a delete-and-reupload flow that churned the
+// dataset id, orphaning prior experiments' version history. This path syncs examples IN PLACE:
+// the dataset (and its id) survives, so asOf/version comparisons keep resolving.
 
-import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { Client } from "langsmith";
+import type { Example } from "langsmith/schemas";
 import { INCIDENT_REPLAY_DATASET } from "./incident-replay-dataset.ts";
 
-const TARGET = "/tmp/incident-replay-eval.json";
 const DATASET_NAME = "incident-replay-eval";
 
-writeFileSync(TARGET, JSON.stringify(INCIDENT_REPLAY_DATASET, null, 2));
-console.log(`Wrote ${INCIDENT_REPLAY_DATASET.length} examples to ${TARGET}`);
+const client = new Client();
 
-const result = spawnSync("langsmith", ["dataset", "upload", TARGET, "--name", DATASET_NAME], {
-	stdio: "inherit",
-	env: process.env,
-});
+let datasetId: string;
+try {
+	const existing = await client.readDataset({ datasetName: DATASET_NAME });
+	datasetId = existing.id;
+	console.log(`Dataset ${DATASET_NAME} exists (${datasetId}) -- syncing examples in place, id preserved.`);
+} catch {
+	const created = await client.createDataset(DATASET_NAME, {
+		description: "32 real incident replays from Jira epic DEVOPS-1354 (SIO-1371/SIO-1378)",
+	});
+	datasetId = created.id;
+	console.log(`Created dataset ${DATASET_NAME} (${datasetId}).`);
+}
 
-if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") {
-	console.error("`langsmith` CLI not found on PATH. Install it:");
+// Replace-all sync from the TS source of truth. Deleting EXAMPLES (never the dataset)
+// preserves the dataset id and its version history.
+//
+// CodeRabbit (PR #593): create BEFORE deleting the stale set. The JS SDK has no upsert --
+// only createExamples/deleteExample -- so a delete-first flow that then failed mid-create
+// would leave the dataset empty or partial for the next eval run. Creating first means a
+// failed upload leaves the OLD examples fully intact (worst case after a partial create:
+// temporary duplicates, reported loudly below, cleaned up by a successful re-run).
+const stale: Example[] = [];
+for await (const example of client.listExamples({ datasetId })) stale.push(example);
+
+const created = await client.createExamples(
+	INCIDENT_REPLAY_DATASET.map((entry) => ({
+		dataset_id: datasetId,
+		inputs: entry.inputs,
+		outputs: entry.outputs,
+		metadata: entry.metadata,
+	})),
+);
+if (created.length !== INCIDENT_REPLAY_DATASET.length) {
 	console.error(
-		"  curl -sSL https://raw.githubusercontent.com/langchain-ai/langsmith-cli/main/scripts/install.sh | sh",
+		`Upload incomplete: created ${created.length}/${INCIDENT_REPLAY_DATASET.length} examples; ` +
+			`the ${stale.length} pre-existing examples were NOT deleted. Re-run this script to sync cleanly.`,
 	);
 	process.exit(1);
 }
 
-if (result.status !== 0) {
-	console.error(`langsmith dataset upload failed (exit ${result.status})`);
-	console.error(`If the dataset already exists, delete it first: langsmith dataset delete ${DATASET_NAME}`);
-	process.exit(result.status ?? 1);
-}
+for (const example of stale) await client.deleteExample(example.id);
+if (stale.length > 0) console.log(`Deleted ${stale.length} stale examples after a validated upload.`);
+console.log(`Uploaded ${created.length} examples to ${DATASET_NAME} (${datasetId}).`);
