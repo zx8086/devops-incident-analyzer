@@ -1,4 +1,5 @@
 // packages/agent/src/eval/run-function.ts
+import { ToolErrorCategorySchema } from "@devops-agent/shared";
 import { HumanMessage } from "@langchain/core/messages";
 import { z } from "zod";
 import { type FirstAttemptSummary, summarizeFirstAttempts } from "../alignment.ts";
@@ -68,13 +69,22 @@ function currentLeg(env: NodeJS.ProcessEnv = process.env): string {
 
 // SIO-1379: replay-outputs re-parses each recorded output instead of trusting the JSONL
 // blindly -- a hand-edited or truncated store must fail the example loudly as a harness
-// error, never feed the judge a half-shaped output. firstAttempts entries are structurally
-// opaque here (trace display only); validated as an array, cast at the boundary.
+// error, never feed the judge a half-shaped output. (CodeRabbit PR #594: firstAttempts is
+// validated against the real FirstAttemptSummary shape via the shared ToolErrorCategory
+// enum, not waved through as unknown[] + cast.)
+const FirstAttemptSummarySchema = z.object({
+	dataSourceId: z.string(),
+	firstStatus: z.enum(["success", "error"]),
+	firstCategory: ToolErrorCategorySchema.optional(),
+	firstDurationMs: z.number(),
+	recovered: z.boolean(),
+});
+
 const FrozenOutputSchema = z.object({
 	response: z.string(),
 	targetDataSources: z.array(z.string()),
 	confidenceCap: z.number().optional(),
-	firstAttempts: z.array(z.unknown()),
+	firstAttempts: z.array(FirstAttemptSummarySchema),
 	subagentReports: z.record(z.string(), z.string()),
 });
 
@@ -122,8 +132,7 @@ export async function runAgent(inputs: z.infer<typeof RunAgentInputsSchema>): Pr
 				`replay-outputs: no recorded output for example ${key} (query starts "${parsed.query.slice(0, 60)}") in leg "${currentLeg()}" -- record that leg first`,
 			);
 		}
-		const frozen = FrozenOutputSchema.parse(stored);
-		return { output: { ...frozen, firstAttempts: frozen.firstAttempts as FirstAttemptSummary[] } };
+		return { output: FrozenOutputSchema.parse(stored) };
 	}
 	const invokeOnce = async () => {
 		await ensureMcpConnected();

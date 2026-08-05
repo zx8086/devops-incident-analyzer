@@ -665,10 +665,11 @@ async function reconnectServer(name: string, mcpUrl: string): Promise<void> {
 		// health-poll reconnect never silently swaps recorded tools for raw ones mid-run.
 		const wrappedTools = applyToolMiddleware(activeToolMiddleware, name, tools);
 
-		// Remove any stale tools for this server before appending
-		const staleTools = toolsByServer.get(name) ?? [];
-		const staleNames = new Set(staleTools.map((t) => t.name));
-		allTools = [...allTools.filter((t) => !staleNames.has(t.name)), ...wrappedTools];
+		// Remove any stale tools for this server before appending. CodeRabbit (PR #594): by
+		// INSTANCE, not by name -- toolsByServer holds the exact objects that were pushed into
+		// allTools, and a name-based filter would evict another server's same-named tool.
+		const staleTools = new Set<StructuredToolInterface>(toolsByServer.get(name) ?? []);
+		allTools = [...allTools.filter((tool) => !staleTools.has(tool)), ...wrappedTools];
 
 		toolsByServer.set(name, wrappedTools);
 		connectedServers.add(name);
