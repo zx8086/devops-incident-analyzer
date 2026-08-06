@@ -5,6 +5,11 @@ import { OAuthRequiresInteractiveAuthError } from "./oauth/errors.ts";
 import { installReadOnlyChokepoint, type ReadOnlyMiddlewareConfig } from "./read-only-chokepoint.ts";
 import { initTelemetry, shutdownTelemetry, type TelemetryConfig } from "./telemetry/telemetry.ts";
 import { installToolCallLogging } from "./tool-call-logging.ts";
+import {
+	createToolCallMetricsRecorder,
+	resolveToolCallMetricsDbPath,
+	type ToolCallMetricsRecorder,
+} from "./tool-call-metrics.ts";
 import { buildIdentityCard, type IdentityCard, type McpRole } from "./transport/identity.ts";
 
 export type { TelemetryConfig };
@@ -150,6 +155,14 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 		const innerFactory =
 			mode === "proxy" || !options.createServerFactory ? undefined : options.createServerFactory(datasource);
 		const readOnlyConfig = options.readOnly;
+		// SIO-1400: opt-in SQLite usage counters (MCP_TOOL_METRICS_DB_PATH unset = off).
+		// Created ONCE per process and shared by every server instance -- the factory
+		// below can run per-connection (cached-server-factory), so the recorder must
+		// not live inside it. Proxy mode counts in the agentcore proxy itself.
+		const metricsDbPath = mode === "proxy" ? undefined : resolveToolCallMetricsDbPath();
+		const toolMetrics: ToolCallMetricsRecorder | undefined = metricsDbPath
+			? await createToolCallMetricsRecorder({ serverName: name, dbPath: metricsDbPath, logger })
+			: undefined;
 		// SIO-974: every server gets tools/call lifecycle logging; read-only enforcement is
 		// still opt-in. Install order matters: read-only INNER, logging OUTER, so a blocked
 		// call (read-only handler short-circuits) is still logged by the outer wrap.
@@ -157,7 +170,12 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 			? () => {
 					const server = innerFactory();
 					if (readOnlyConfig) installReadOnlyChokepoint(server, readOnlyConfig.manager);
-					installToolCallLogging(server, logger);
+					installToolCallLogging(
+						server,
+						logger,
+						undefined,
+						toolMetrics ? (outcome) => toolMetrics.record(outcome.tool, outcome.ok) : undefined,
+					);
 					return server;
 				}
 			: innerFactory;
@@ -218,6 +236,9 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 					});
 				}
 			}
+
+			// SIO-1400: best-effort -- per-call upserts are already committed (WAL).
+			toolMetrics?.close();
 
 			try {
 				await shutdownTelemetry(otelSdk);

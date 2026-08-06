@@ -6,6 +6,7 @@
 import { createHash, createHmac } from "node:crypto";
 import type { DataSourceId } from "./datasource.ts";
 import { createMcpLogger, getChildLogger } from "./logger.ts";
+import { createToolCallMetricsRecorder, resolveToolCallMetricsDbPath } from "./tool-call-metrics.ts";
 import type { IdentityCard } from "./transport/identity.ts";
 import { createProxyReadinessProbe } from "./transport/proxy-readiness.ts";
 
@@ -122,6 +123,12 @@ export interface ProxyConfig {
 	 * session-tokens expire).
 	 */
 	credentials: ProxyCredentials | (() => Promise<ProxyCredentials>);
+	/**
+	 * SIO-1400: when set, proxied tools/call terminal outcomes are counted in
+	 * the SQLite usage-counters DB at this path (see tool-call-metrics.ts).
+	 * loadProxyConfigFromEnv fills it from MCP_TOOL_METRICS_DB_PATH.
+	 */
+	metricsDbPath?: string;
 }
 
 /**
@@ -195,7 +202,15 @@ export function loadProxyConfigFromEnv(prefix: string): ProxyConfig {
 		};
 	}
 
-	return { runtimeArn, region, port, qualifier, serverName, credentials };
+	return {
+		runtimeArn,
+		region,
+		port,
+		qualifier,
+		serverName,
+		credentials,
+		metricsDbPath: resolveToolCallMetricsDbPath(),
+	};
 }
 
 // AwsCreds, module-level cachedCreds, clearCredentialCache, and the
@@ -426,6 +441,20 @@ export async function startAgentCoreProxy(
 	const dataSourceId = ROLE_TO_DATASOURCE[role];
 	const logger = getProxyLogger(role);
 
+	// SIO-1400: opt-in SQLite usage counters. Proxy mode bypasses the McpServer
+	// tools/call seam (tool-call-logging.ts), so the proxy records terminal
+	// outcomes itself -- exactly once per logical call; retries are not separate
+	// calls. serverName matches the bootstrap-side naming style so the `server`
+	// column stays uniform across the metrics DB.
+	const toolMetrics = config.metricsDbPath
+		? await createToolCallMetricsRecorder({
+				serverName: ROLE_TO_SERVICE_NAME[role],
+				dbPath: config.metricsDbPath,
+				// adapt to this file's pino-style logger (fields first, message second)
+				logger: { warn: (message, meta) => logger.warn(meta ?? {}, message) },
+			})
+		: undefined;
+
 	// Derive URL pieces from runtimeArn + region. Equivalent to the old
 	// readProxyConfig but using the explicitly-passed config.
 	const encodedArn = encodeURIComponent(config.runtimeArn);
@@ -639,6 +668,7 @@ export async function startAgentCoreProxy(
 									? `Tool call completed: ${toolName}`
 									: `Tool call failed: ${toolName} (${httpAbnormal ? `${toolStatus} (http ${response.status})` : toolStatus})`;
 								logFn(logFields, msg);
+								toolMetrics?.record(toolName, succeeded);
 							}
 							break;
 						}
@@ -664,6 +694,7 @@ export async function startAgentCoreProxy(
 								};
 								if (jsonRpcMessage !== undefined) deadlineFields.jsonRpcMessage = jsonRpcMessage;
 								logger.warn(deadlineFields, `Tool call proxied: ${toolName} -> jsonrpc-error (deadline)`);
+								toolMetrics?.record(toolName, false);
 							}
 							break;
 						}
@@ -699,6 +730,7 @@ export async function startAgentCoreProxy(
 									{ tool: toolName, dataSource: dataSourceId, attempt: jsonRpcAttempt, reason: "session-reset" },
 									`Tool call proxied: ${toolName} -> aborted`,
 								);
+								toolMetrics?.record(toolName, false);
 							}
 							return Response.json(
 								{ jsonrpc: "2.0", error: { code: -32000, message: "Session reset during retry" }, id: null },
@@ -782,6 +814,7 @@ export async function startAgentCoreProxy(
 		url: proxyUrl,
 		async close() {
 			server.stop(true);
+			toolMetrics?.close();
 			logger.info("AgentCore proxy closed");
 		},
 	};

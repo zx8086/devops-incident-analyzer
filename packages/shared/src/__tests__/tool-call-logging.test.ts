@@ -96,4 +96,55 @@ describe("installToolCallLogging", () => {
 		const { logger } = recordingLogger();
 		expect(() => installToolCallLogging(bare, logger)).toThrow(/no 'tools\/call' handler/);
 	});
+
+	// SIO-1400: optional onCall sink feeding the SQLite usage counters.
+	test("onCall sink receives ok:true on success and ok:false on an isError result", async () => {
+		const okServer = buildServerWithTool("read_thing", async () => ({ content: [{ type: "text", text: "ok" }] }));
+		const failServer = buildServerWithTool("boom", async () => {
+			throw new Error("kaboom");
+		});
+		const outcomes: Array<{ tool: string; ok: boolean; durationMs: number }> = [];
+		const { logger } = recordingLogger();
+		const ticks = [1000, 1042];
+		let i = 0;
+		installToolCallLogging(
+			okServer,
+			logger,
+			() => ticks[Math.min(i++, ticks.length - 1)] as number,
+			(o) => outcomes.push(o),
+		);
+		installToolCallLogging(
+			failServer,
+			logger,
+			() => 0,
+			(o) => outcomes.push(o),
+		);
+
+		await dispatchToolsCall(okServer, "read_thing");
+		await dispatchToolsCall(failServer, "boom");
+
+		expect(outcomes).toEqual([
+			{ tool: "read_thing", ok: true, durationMs: 42 },
+			{ tool: "boom", ok: false, durationMs: 0 },
+		]);
+	});
+
+	test("a throwing onCall sink neither breaks the dispatch result nor suppresses the log line", async () => {
+		const server = buildServerWithTool("read_thing", async () => ({ content: [{ type: "text", text: "ok" }] }));
+		const { logger, lines } = recordingLogger();
+		installToolCallLogging(
+			server,
+			logger,
+			() => 0,
+			() => {
+				throw new Error("sink exploded");
+			},
+		);
+
+		const result = await dispatchToolsCall(server, "read_thing");
+		expect(result).toEqual({ content: [{ type: "text", text: "ok" }] });
+		expect(lines.find((l) => l.message === "tools/call ok")?.meta?.tool).toBe("read_thing");
+		const sinkWarn = lines.find((l) => l.message === "tools/call outcome sink failed");
+		expect(sinkWarn?.meta?.error).toBe("sink exploded");
+	});
 });

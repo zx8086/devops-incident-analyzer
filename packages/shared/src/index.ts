@@ -302,7 +302,13 @@ export {
 	type TicketProviderInfo,
 	TicketProviderInfoSchema,
 } from "./ticket-types.ts";
-export { installToolCallLogging, type ToolCallLogger } from "./tool-call-logging.ts";
+export { installToolCallLogging, type ToolCallLogger, type ToolCallOutcome } from "./tool-call-logging.ts";
+export {
+	createToolCallMetricsRecorder,
+	resolveToolCallMetricsDbPath,
+	type ToolCallMetricsLogger,
+	type ToolCallMetricsRecorder,
+} from "./tool-call-metrics.ts";
 export {
 	buildToolErrorEnvelope,
 	mapHttpStatusToKind,
