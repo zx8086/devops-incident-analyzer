@@ -28,7 +28,6 @@ const NOT_YET_CONVERTED = new Set([
 	"mcp-server-elastic-iac", // SIO-1417 (C-4)
 	"mcp-server-gitlab", // SIO-1418 (C-5)
 	"mcp-server-kafka", // SIO-1421 (C-8)
-	"mcp-server-knowledge-graph", // SIO-1415 (C-2)
 ]);
 // mcp-server-elastic is absent: fully converted since SIO-1050 (v1.17.5 signature
 // incompatibility forced it) -- it is the proof the guard passes on a converted tree.
