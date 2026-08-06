@@ -22,22 +22,49 @@ import type { EvalExample } from "./dataset.ts";
 // SIO-1398: every live anchor in ONE place, so a drifting entity is a one-line fix rather than
 // a dataset-wide edit. Verified 2026-08-06 against the LIVE .env (NOT .env.example, which
 // drifts) and prior audits -- see the per-field evidence notes.
+// Every value below was PROBED against the live MCP server on 2026-08-06 and confirmed to
+// return rows -- not inferred from config or from what other datasets happen to use. An
+// unverified anchor produces a false empty-anchor finding, which is worse than no coverage.
 export const LIVE_ANCHORS = {
 	// All 32 incident-replay examples pin this deployment; styles-v3 appears in 21 of them.
+	// Verified: elasticsearch_search on logs-apm.error-* returns 2,177 hits for this service.
 	elastic: { deployment: "eu-b2b", service: "pvh-services-styles-v3" },
-	// Documented known-good topic on c72-shared-services-msk
-	// (experiments/HANDOFF-2026-05-10-sio-699-700.md:151). Note `example-topic` also exists but
-	// hit a per-topic IAM gap, so it is deliberately NOT the anchor.
-	kafka: { topic: "T_PRIVATE_SAP_CAR_PRICES", cluster: "c72-shared-services-msk" },
-	// COUCHBASE_BUCKET in the live .env (PVH Prd cluster).
-	couchbase: { bucket: "default" },
-	// GITLAB_DEFAULT_PROJECT_ID in the live .env.
-	gitlab: { projectId: "57520959" },
+	kafka: {
+		// Documented known-good topic (experiments/HANDOFF-2026-05-10-sio-699-700.md:151).
+		// Verified: kafka_describe_topic returns partitions. `example-topic` also exists but hit
+		// a per-topic IAM gap, so it is deliberately NOT the anchor.
+		topic: "T_PRIVATE_SAP_CAR_PRICES",
+		cluster: "c72-shared-services-msk",
+		// Verified STABLE group from a live kafka_list_consumer_groups; kafka_get_consumer_group_lag
+		// against it returns a real totalLag. Needed because that tool requires `groupId` -- without
+		// a real value the model must first discover one, which it does not reliably do.
+		consumerGroup: "connect-C_SINK_COUCHBASE_PRICES_DOCUMENTS",
+	},
+	couchbase: {
+		// COUCHBASE_BUCKET in the live .env (PVH Prd cluster).
+		bucket: "default",
+		// Verified via capella_get_scopes_and_collections. Needed for capella_get_document_by_id
+		// and capella_run_sql_plus_plus_query, both of which require scope_name.
+		scope: "customer",
+		collection: "customers",
+	},
+	// SIO-1401: GITLAB_DEFAULT_PROJECT_ID (57520959) 404s -- and so does EVERY other project id,
+	// including ones gitlab_search itself returns (39794803, 39482941, 39794935 all 404 on
+	// gitlab_list_merge_requests). The proxy search path works while the custom REST path does
+	// not, so no project id is a valid anchor today. Examples therefore lean on the tools that
+	// DO work (search, graph) and declare no knownGoodAnchors for the REST-path tools.
+	gitlab: { projectId: "57520959", searchableNamespace: "pvhcorp" },
 	// ATLASSIAN_SITE_NAME in the live .env.
 	atlassian: { site: "pvhcorp" },
-	// 23/32 incident-replay examples use exactly this estate pair
-	// (docs/runbooks/aws-estate-onboarding.md:15,21).
-	aws: { estates: ["eu-oit-prd", "eu-shared-services-prd"] },
+	aws: {
+		// 23/32 incident-replay examples use exactly this estate pair
+		// (docs/runbooks/aws-estate-onboarding.md:15,21).
+		estates: ["eu-oit-prd", "eu-shared-services-prd"],
+		// Verified via aws_ecs_list_clusters on eu-oit-prd. Most AWS tools require `estate` (which
+		// uiSelectedAwsEstates already supplies); the ECS detail tools additionally require
+		// `cluster`, so a real cluster name is what unlocks them.
+		ecsCluster: "orders-prd",
+	},
 } as const;
 
 // Retention shapes which anchors can return data, and an empty result from an out-of-window
@@ -359,95 +386,188 @@ const EXAMPLES: EvalExample[] = [
 
 	{
 		inputs: {
-			query: `Which topics on ${LIVE_ANCHORS.kafka.cluster} are dead-letter queues, and are any of them accumulating messages? Also report the partition layout of ${LIVE_ANCHORS.kafka.topic}.`,
+			query: `Which topics on ${LIVE_ANCHORS.kafka.cluster} are dead-letter queues, and are any accumulating messages? Separately, report the partition layout and current offsets of topic ${LIVE_ANCHORS.kafka.topic}.`,
 			uiSelectedDataSources: ["kafka"],
 		},
 		outputs: {
 			expectedDatasources: ["kafka"],
 			minConfidence: 0.6,
 			qualityRubric:
-				"Response should report which DLQ topics exist (or state clearly that none do) and describe the anchor topic's partitions. An empty DLQ set is a healthy finding, not a gap.",
+				"Response should report which DLQ topics exist (or state clearly that none do) AND separately describe the named topic's partitions/offsets. Both halves must be answered -- a response covering only one is incomplete. An empty DLQ set is a healthy finding, not a gap.",
 			expectedToolUse: {
 				requiredToolGroups: [
 					{
 						dataSource: "kafka",
 						anyOf: ["kafka_list_dlq_topics", "kafka_list_topics"],
-						why: "dlq_messages action group -- kafka_list_dlq_topics feeds the kafka typed extractor (TYPED_FINDING_TOOLS) and the DLQ correlation path, and had never been exercised",
+						why: "dlq_messages action group -- kafka_list_dlq_topics feeds the kafka typed extractor (TYPED_FINDING_TOOLS) and the DLQ correlation path",
 					},
 					{
 						dataSource: "kafka",
 						anyOf: ["kafka_describe_topic", "kafka_get_topic_offsets"],
-						why: "describe_topic action group -- both are runbook-cited (kafka-consumer-lag) and neither had been exercised",
+						why: "describe_topic action group, runbook-cited (kafka-consumer-lag). The previous phrasing of this example buried the topic ask in a trailing clause and the model answered only the DLQ half (0.5 on expected_tools_fired, run 35ee7eca) -- the two asks are now explicitly separated",
 					},
 				],
 				forbiddenTools: ["kafka_delete_topic", "kafka_produce_message", "kafka_reset_consumer_group_offsets"],
+				// Both verified zero-arg-OK live; the cluster genuinely has topics.
+				knownGoodAnchors: [{ toolName: "kafka_list_topics", mustReturnRows: true }],
 			},
 		},
 		metadata: { ticketKey: "SIO-1398-kafka-dlq-and-topics", queryProvenance: "reconstructed", era: "2026-08" },
 	},
 	{
 		inputs: {
-			query: `Trace recent code changes in GitLab project ${LIVE_ANCHORS.gitlab.projectId}: which commits landed most recently, and were there any failing pipelines or recent deploys?`,
+			query: `Check the health of the Kafka Connect and ksqlDB estate on ${LIVE_ANCHORS.kafka.cluster}: which connectors are registered and what state are they in, and what ksql queries are running? Also report the lag on consumer group ${LIVE_ANCHORS.kafka.consumerGroup}.`,
+			uiSelectedDataSources: ["kafka"],
+		},
+		outputs: {
+			expectedDatasources: ["kafka"],
+			minConfidence: 0.6,
+			qualityRubric:
+				"Response should name registered connectors with their state, report running ksql queries, and give the named consumer group's lag. If Connect or ksqlDB is not enabled the response should say so plainly rather than inventing state.",
+			expectedToolUse: {
+				requiredToolGroups: [
+					{
+						dataSource: "kafka",
+						anyOf: ["connect_list_connectors", "connect_get_connector_status"],
+						why: "connect_status action group -- both are in TYPED_FINDING_TOOLS and feed the kafka extractor's connector findings; connect_list_connectors verified zero-arg-OK live, contradicting the earlier assumption that Connect was unavailable",
+					},
+					{
+						dataSource: "kafka",
+						anyOf: ["ksql_list_queries", "ksql_get_server_info"],
+						why: "ksql action group -- ksql_list_queries is in TYPED_FINDING_TOOLS; both verified zero-arg-OK",
+					},
+					{
+						dataSource: "kafka",
+						anyOf: ["kafka_get_consumer_group_lag", "kafka_describe_consumer_group"],
+						why: "consumer_lag with a REAL groupId supplied in the prompt -- these tools require groupId, so without a verified value the model must discover one first, which it does not do reliably",
+					},
+				],
+				forbiddenTools: ["kafka_reset_consumer_group_offsets", "kafka_delete_topic"],
+				knownGoodAnchors: [{ toolName: "connect_list_connectors", mustReturnRows: true }],
+			},
+		},
+		metadata: { ticketKey: "SIO-1398-kafka-connect-ksql", queryProvenance: "reconstructed", era: "2026-08" },
+	},
+	// SIO-1401 blocks the REST-path tools (list_merge_requests, list_commits, get_repository_tree
+	// all 404 on EVERY project id, including ones gitlab_search returns). This example therefore
+	// exercises the paths that DO work -- proxy search and the graph/Orbit tools -- and declares
+	// no knownGoodAnchors, so it measures tool selection without generating false empty-anchor
+	// findings from a known-broken auth path. Restore anchors here once SIO-1401 is fixed.
+	{
+		inputs: {
+			query: `Search GitLab across the ${LIVE_ANCHORS.gitlab.searchableNamespace} namespace for projects and code related to "styles", then report what the code graph knows: recent deploys, failing pipelines, and any known vulnerabilities.`,
 			uiSelectedDataSources: ["gitlab"],
 		},
 		outputs: {
 			expectedDatasources: ["gitlab"],
 			minConfidence: 0.6,
 			qualityRubric:
-				"Response should name recent commits and report pipeline/deploy state, or say plainly that the project is not indexed for the graph-backed tools. GitLab data is durable, so an active project should yield commits.",
+				"Response should report search results from the namespace and whatever the graph-backed tools return, stating plainly when a project is not indexed. A 404 or not-indexed result should be reported as an access/indexing limitation, NOT as an absence of code changes.",
 			expectedToolUse: {
 				requiredToolGroups: [
 					{
 						dataSource: "gitlab",
-						anyOf: ["gitlab_list_commits", "gitlab_get_commit_diff", "gitlab_recent_deploys"],
-						why: "code-change-correlation runbook's core path; gitlab_recent_deploys additionally feeds the orbit extractor",
+						anyOf: ["gitlab_search", "gitlab_semantic_code_search"],
+						why: "search action group -- gitlab_search is force-included via RESOLUTION and is verified live as the one gitlab path that currently works (it enumerates real pvhcorp projects while every REST-path call 404s, SIO-1401)",
 					},
 					{
 						dataSource: "gitlab",
-						anyOf: ["gitlab_pipeline_failures", "gitlab_get_pipeline_jobs", "gitlab_get_job_log"],
-						why: "pipelines action group -- gitlab_pipeline_failures is in TYPED_FINDING_TOOLS and none of the three had been exercised",
+						anyOf: ["gitlab_recent_deploys", "gitlab_pipeline_failures", "gitlab_recent_vulnerabilities"],
+						why: "graph_analysis -- all three are in TYPED_FINDING_TOOLS and feed the orbit extractor; they take `since` (recent_deploys/pipeline_failures) or nothing (recent_vulnerabilities), so none depends on a project id",
 					},
 				],
 				forbiddenTools: ["gitlab_create_merge_request", "gitlab_create_issue", "gitlab_manage_pipeline"],
 			},
 		},
-		metadata: { ticketKey: "SIO-1398-gitlab-change-correlation", queryProvenance: "reconstructed", era: "2026-08" },
+		metadata: { ticketKey: "SIO-1398-gitlab-search-and-graph", queryProvenance: "reconstructed", era: "2026-08" },
 	},
+	// Couchbase carries the widest zero-arg surface of any datasource: 16 of its 19 coverage
+	// targets take NO required params (probed live 2026-08-06), so a single broad question can
+	// legitimately sweep most of them. Split across two examples -- query performance and index
+	// health -- rather than one, so a miss points at a specific area.
 	{
 		inputs: {
-			query: `Analyse query performance on the Couchbase ${LIVE_ANCHORS.couchbase.bucket} bucket: which queries are slowest, are any running without a covering index, and what scopes and collections exist?`,
+			query: `Give me a full query-performance profile of the Couchbase cluster behind the ${LIVE_ANCHORS.couchbase.bucket} bucket: the longest-running, most expensive and most frequent queries, any fatal or failed requests, and which prepared statements are in play.`,
 			uiSelectedDataSources: ["couchbase"],
 		},
 		outputs: {
 			expectedDatasources: ["couchbase"],
 			minConfidence: 0.6,
 			qualityRubric:
-				"Response should report slow/expensive queries and the bucket's scope+collection layout. A cluster with no slow queries is a healthy finding; the structural inventory should still be reported.",
+				"Response should cover query latency outliers, cost, frequency and any fatal requests, naming concrete statements or stating plainly that a category was empty. These are current-state tools with no time window, so an idle cluster returning few queries is a healthy finding.",
 			expectedToolUse: {
 				requiredToolGroups: [
 					{
 						dataSource: "couchbase",
-						anyOf: [
-							"capella_get_longest_running_queries",
-							"capella_get_most_expensive_queries",
-							"capella_get_completed_requests",
-						],
-						why: "slow_queries action group -- capella_get_longest_running_queries is couchbase's ONLY entry in TYPED_FINDING_TOOLS and had never been exercised",
+						anyOf: ["capella_get_longest_running_queries", "capella_get_most_expensive_queries"],
+						why: "slow_queries action group -- capella_get_longest_running_queries is couchbase's ONLY entry in TYPED_FINDING_TOOLS, so if it never fires the couchbase findings card cannot populate",
 					},
 					{
 						dataSource: "couchbase",
-						anyOf: ["capella_get_scopes_and_collections", "capella_get_system_indexes"],
-						why: "both are in RESOLUTION_TOOLS_BY_DATASOURCE, i.e. force-included every turn, yet neither had been exercised",
+						anyOf: ["capella_get_fatal_requests", "capella_get_completed_requests"],
+						why: "fatal_requests action group -- the failure-side counterpart to slow queries; both are zero-arg and runbook-cited (database-slow-queries)",
+					},
+					{
+						dataSource: "couchbase",
+						anyOf: ["capella_get_prepared_statements", "capella_get_detailed_prepared_statements"],
+						why: "runbook-cited (database-slow-queries) and zero-arg; prepared-statement reuse is a distinct diagnosis from raw latency",
 					},
 				],
 				forbiddenTools: ["capella_delete_document_by_id", "capella_upsert_document_by_id"],
+				// All three verified zero-arg-OK against the live server, and this cluster serves
+				// production traffic, so an empty result from any of them is a genuine finding.
+				knownGoodAnchors: [
+					{ toolName: "capella_get_longest_running_queries", mustReturnRows: true },
+					{ toolName: "capella_get_completed_requests", mustReturnRows: true },
+				],
 			},
 		},
-		metadata: { ticketKey: "SIO-1398-couchbase-query-analysis", queryProvenance: "reconstructed", era: "2026-08" },
+		metadata: { ticketKey: "SIO-1398-couchbase-query-profile", queryProvenance: "reconstructed", era: "2026-08" },
 	},
 	{
 		inputs: {
-			query: `In the ${LIVE_ANCHORS.aws.estates[0]} AWS estate, list the CloudWatch log groups and report which ECS tasks are currently running.`,
+			query: `Audit the Couchbase index estate: list the system indexes and their detail, flag any indexes that are candidates to drop, and report which queries are running against a primary index or without a covering index. Also show the scope and collection layout.`,
+			uiSelectedDataSources: ["couchbase"],
+		},
+		outputs: {
+			expectedDatasources: ["couchbase"],
+			minConfidence: 0.6,
+			qualityRubric:
+				"Response should name real indexes, report drop candidates (or state there are none), and identify primary-index or non-covering query patterns. A production cluster always has indexes and a scope layout, so an empty structural answer is a tool problem rather than a finding.",
+			expectedToolUse: {
+				requiredToolGroups: [
+					{
+						dataSource: "couchbase",
+						anyOf: ["capella_get_system_indexes", "capella_get_detailed_indexes"],
+						why: "index_analysis -- capella_get_system_indexes is in RESOLUTION_TOOLS_BY_DATASOURCE (force-included every turn) and capella_get_detailed_indexes is zero-arg despite my earlier claim that it needed a discovery step",
+					},
+					{
+						dataSource: "couchbase",
+						anyOf: ["capella_get_indexes_to_drop", "capella_get_primary_index_queries"],
+						why: "both runbook-cited (database-slow-queries), both zero-arg, and neither had ever been exercised",
+					},
+					{
+						dataSource: "couchbase",
+						anyOf: ["capella_get_scopes_and_collections"],
+						why: "force-included via RESOLUTION; single-tool group so a miss isolates tool selection from argument correctness",
+					},
+				],
+				forbiddenTools: ["capella_delete_document_by_id", "capella_upsert_document_by_id"],
+				knownGoodAnchors: [
+					{ toolName: "capella_get_system_indexes", mustReturnRows: true },
+					{ toolName: "capella_get_scopes_and_collections", mustReturnRows: true },
+				],
+			},
+		},
+		metadata: { ticketKey: "SIO-1398-couchbase-index-audit", queryProvenance: "reconstructed", era: "2026-08" },
+	},
+	// Nearly every AWS tool requires `estate` and nothing else -- and uiSelectedAwsEstates already
+	// supplies it, so the "NEEDS-ARGS" majority on this datasource is largely already satisfied.
+	// The ECS detail tools additionally need `cluster`, which is why a verified cluster name is
+	// named in the prompt.
+	{
+		inputs: {
+			query: `In the ${LIVE_ANCHORS.aws.estates[0]} AWS estate, list the CloudWatch log groups, and report which tasks are running on the ${LIVE_ANCHORS.aws.ecsCluster} ECS cluster.`,
 			uiSelectedDataSources: ["aws"],
 			uiSelectedAwsEstates: [LIVE_ANCHORS.aws.estates[0]],
 		},
@@ -455,23 +575,57 @@ const EXAMPLES: EvalExample[] = [
 			expectedDatasources: ["aws"],
 			minConfidence: 0.6,
 			qualityRubric:
-				"Response should name real log groups and running tasks for the estate. A production estate always has both, so an empty answer points at AssumeRole or arguments rather than at reality.",
+				"Response should name real log groups and the running tasks on the named cluster. A production estate always has both, so an empty answer points at AssumeRole or arguments rather than at reality.",
 			expectedToolUse: {
 				requiredToolGroups: [
 					{
 						dataSource: "aws",
 						anyOf: ["aws_logs_describe_log_groups", "aws_logs_start_query"],
-						why: "logs_insights action group -- both are runbook-cited AND in RESOLUTION_TOOLS_BY_DATASOURCE, and neither had been exercised",
+						why: "logs_insights action group -- both runbook-cited AND in RESOLUTION_TOOLS_BY_DATASOURCE; both require only `estate`, which the UI pin supplies",
 					},
 					{
 						dataSource: "aws",
 						anyOf: ["aws_ecs_list_tasks", "aws_ecs_describe_tasks"],
-						why: "the ecs task pair is force-included via RESOLUTION; aws_ecs_list_tasks specifically was the SIO-1255 unbound-tool defect, so it is worth pinning",
+						why: "force-included via RESOLUTION, and aws_ecs_list_tasks was the SIO-1255 unbound-tool defect. Both require `cluster`, so the prompt names a cluster verified live via aws_ecs_list_clusters",
+					},
+				],
+				knownGoodAnchors: [{ toolName: "aws_logs_describe_log_groups", mustReturnRows: true }],
+			},
+		},
+		metadata: { ticketKey: "SIO-1398-aws-logs-and-tasks", queryProvenance: "reconstructed", era: "2026-08" },
+	},
+	{
+		inputs: {
+			query: `Give me an infrastructure inventory for the ${LIVE_ANCHORS.aws.estates[1]} AWS estate: EC2 instances, RDS database instances, and any active AWS Health events affecting the account.`,
+			uiSelectedDataSources: ["aws"],
+			uiSelectedAwsEstates: [LIVE_ANCHORS.aws.estates[1]],
+		},
+		outputs: {
+			expectedDatasources: ["aws"],
+			minConfidence: 0.6,
+			qualityRubric:
+				"Response should inventory compute and database resources for the estate and report Health events (or state plainly that there are none, which is the healthy case). An empty inventory across all three categories indicates an AssumeRole problem rather than an empty account.",
+			expectedToolUse: {
+				requiredToolGroups: [
+					{
+						dataSource: "aws",
+						anyOf: ["aws_ec2_describe_instances", "aws_ec2_describe_security_groups"],
+						why: "ec2_state is the largest AWS action group (12 tools) and was entirely unexercised; both require only `estate`",
+					},
+					{
+						dataSource: "aws",
+						anyOf: ["aws_rds_describe_db_instances"],
+						why: "rds_state -- runbook-cited, requires only `estate`, and SIO-1331 recorded it as unreachable via keyword match (0/2 live replays), so pinning it here is a direct regression check",
+					},
+					{
+						dataSource: "aws",
+						anyOf: ["aws_health_describe_events"],
+						why: "health_events -- runbook-cited (aws-msk-broker-unreachable), single-tool group so a miss isolates selection from arguments",
 					},
 				],
 			},
 		},
-		metadata: { ticketKey: "SIO-1398-aws-logs-and-tasks", queryProvenance: "reconstructed", era: "2026-08" },
+		metadata: { ticketKey: "SIO-1398-aws-infra-inventory", queryProvenance: "reconstructed", era: "2026-08" },
 	},
 	{
 		inputs: {
