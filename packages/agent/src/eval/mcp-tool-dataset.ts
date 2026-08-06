@@ -346,6 +346,157 @@ const EXAMPLES: EvalExample[] = [
 		metadata: { ticketKey: "SIO-1398-aws-cloudwatch-alarms", queryProvenance: "reconstructed", era: "2026-08" },
 	},
 
+	// --- coverage expansion (SIO-1398) -------------------------------------------------------
+	// The examples above were hand-picked; these target the highest-value gaps reported by
+	// coverage-targets.ts, prioritising tools named by MORE THAN ONE deterministic source
+	// (runbook + typed-finding + resolution), since those have a declared functional
+	// consequence if never called -- a findings card or correlation rule silently not firing.
+	//
+	// knownGoodAnchors are deliberately OMITTED throughout this block: none of these anchors
+	// has been verified to return rows in this environment (a populated DLQ, an Orbit-indexed
+	// project, Kafka Connect enabled). An unverified anchor produces a false empty-anchor
+	// finding, which is worse than no coverage -- add them once each is confirmed live.
+
+	{
+		inputs: {
+			query: `Which topics on ${LIVE_ANCHORS.kafka.cluster} are dead-letter queues, and are any of them accumulating messages? Also report the partition layout of ${LIVE_ANCHORS.kafka.topic}.`,
+			uiSelectedDataSources: ["kafka"],
+		},
+		outputs: {
+			expectedDatasources: ["kafka"],
+			minConfidence: 0.6,
+			qualityRubric:
+				"Response should report which DLQ topics exist (or state clearly that none do) and describe the anchor topic's partitions. An empty DLQ set is a healthy finding, not a gap.",
+			expectedToolUse: {
+				requiredToolGroups: [
+					{
+						dataSource: "kafka",
+						anyOf: ["kafka_list_dlq_topics", "kafka_list_topics"],
+						why: "dlq_messages action group -- kafka_list_dlq_topics feeds the kafka typed extractor (TYPED_FINDING_TOOLS) and the DLQ correlation path, and had never been exercised",
+					},
+					{
+						dataSource: "kafka",
+						anyOf: ["kafka_describe_topic", "kafka_get_topic_offsets"],
+						why: "describe_topic action group -- both are runbook-cited (kafka-consumer-lag) and neither had been exercised",
+					},
+				],
+				forbiddenTools: ["kafka_delete_topic", "kafka_produce_message", "kafka_reset_consumer_group_offsets"],
+			},
+		},
+		metadata: { ticketKey: "SIO-1398-kafka-dlq-and-topics", queryProvenance: "reconstructed", era: "2026-08" },
+	},
+	{
+		inputs: {
+			query: `Trace recent code changes in GitLab project ${LIVE_ANCHORS.gitlab.projectId}: which commits landed most recently, and were there any failing pipelines or recent deploys?`,
+			uiSelectedDataSources: ["gitlab"],
+		},
+		outputs: {
+			expectedDatasources: ["gitlab"],
+			minConfidence: 0.6,
+			qualityRubric:
+				"Response should name recent commits and report pipeline/deploy state, or say plainly that the project is not indexed for the graph-backed tools. GitLab data is durable, so an active project should yield commits.",
+			expectedToolUse: {
+				requiredToolGroups: [
+					{
+						dataSource: "gitlab",
+						anyOf: ["gitlab_list_commits", "gitlab_get_commit_diff", "gitlab_recent_deploys"],
+						why: "code-change-correlation runbook's core path; gitlab_recent_deploys additionally feeds the orbit extractor",
+					},
+					{
+						dataSource: "gitlab",
+						anyOf: ["gitlab_pipeline_failures", "gitlab_get_pipeline_jobs", "gitlab_get_job_log"],
+						why: "pipelines action group -- gitlab_pipeline_failures is in TYPED_FINDING_TOOLS and none of the three had been exercised",
+					},
+				],
+				forbiddenTools: ["gitlab_create_merge_request", "gitlab_create_issue", "gitlab_manage_pipeline"],
+			},
+		},
+		metadata: { ticketKey: "SIO-1398-gitlab-change-correlation", queryProvenance: "reconstructed", era: "2026-08" },
+	},
+	{
+		inputs: {
+			query: `Analyse query performance on the Couchbase ${LIVE_ANCHORS.couchbase.bucket} bucket: which queries are slowest, are any running without a covering index, and what scopes and collections exist?`,
+			uiSelectedDataSources: ["couchbase"],
+		},
+		outputs: {
+			expectedDatasources: ["couchbase"],
+			minConfidence: 0.6,
+			qualityRubric:
+				"Response should report slow/expensive queries and the bucket's scope+collection layout. A cluster with no slow queries is a healthy finding; the structural inventory should still be reported.",
+			expectedToolUse: {
+				requiredToolGroups: [
+					{
+						dataSource: "couchbase",
+						anyOf: [
+							"capella_get_longest_running_queries",
+							"capella_get_most_expensive_queries",
+							"capella_get_completed_requests",
+						],
+						why: "slow_queries action group -- capella_get_longest_running_queries is couchbase's ONLY entry in TYPED_FINDING_TOOLS and had never been exercised",
+					},
+					{
+						dataSource: "couchbase",
+						anyOf: ["capella_get_scopes_and_collections", "capella_get_system_indexes"],
+						why: "both are in RESOLUTION_TOOLS_BY_DATASOURCE, i.e. force-included every turn, yet neither had been exercised",
+					},
+				],
+				forbiddenTools: ["capella_delete_document_by_id", "capella_upsert_document_by_id"],
+			},
+		},
+		metadata: { ticketKey: "SIO-1398-couchbase-query-analysis", queryProvenance: "reconstructed", era: "2026-08" },
+	},
+	{
+		inputs: {
+			query: `In the ${LIVE_ANCHORS.aws.estates[0]} AWS estate, list the CloudWatch log groups and report which ECS tasks are currently running.`,
+			uiSelectedDataSources: ["aws"],
+			uiSelectedAwsEstates: [LIVE_ANCHORS.aws.estates[0]],
+		},
+		outputs: {
+			expectedDatasources: ["aws"],
+			minConfidence: 0.6,
+			qualityRubric:
+				"Response should name real log groups and running tasks for the estate. A production estate always has both, so an empty answer points at AssumeRole or arguments rather than at reality.",
+			expectedToolUse: {
+				requiredToolGroups: [
+					{
+						dataSource: "aws",
+						anyOf: ["aws_logs_describe_log_groups", "aws_logs_start_query"],
+						why: "logs_insights action group -- both are runbook-cited AND in RESOLUTION_TOOLS_BY_DATASOURCE, and neither had been exercised",
+					},
+					{
+						dataSource: "aws",
+						anyOf: ["aws_ecs_list_tasks", "aws_ecs_describe_tasks"],
+						why: "the ecs task pair is force-included via RESOLUTION; aws_ecs_list_tasks specifically was the SIO-1255 unbound-tool defect, so it is worth pinning",
+					},
+				],
+			},
+		},
+		metadata: { ticketKey: "SIO-1398-aws-logs-and-tasks", queryProvenance: "reconstructed", era: "2026-08" },
+	},
+	{
+		inputs: {
+			query: `Search Jira on ${LIVE_ANCHORS.atlassian.site} for incidents related to the ${LIVE_ANCHORS.elastic.service} service, and report any linked or recurring incidents.`,
+			uiSelectedDataSources: ["atlassian"],
+		},
+		outputs: {
+			expectedDatasources: ["atlassian"],
+			minConfidence: 0.6,
+			qualityRubric:
+				"Response should report linked or prior incidents for the named service, or state clearly that none were found. Either outcome is legitimate; the lookup itself must happen.",
+			expectedToolUse: {
+				requiredToolGroups: [
+					{
+						dataSource: "atlassian",
+						anyOf: ["findLinkedIncidents", "atlassian_search", "getIncidentHistory"],
+						why: "incident_correlation action group -- findLinkedIncidents is the SOLE input to the atlassian typed extractor (SIO-1182) and atlassian_search is force-included via RESOLUTION; atlassian had the worst coverage of any datasource at 0/2",
+					},
+				],
+				forbiddenTools: ["atlassian_createJiraIssue", "atlassian_editJiraIssue"],
+			},
+		},
+		metadata: { ticketKey: "SIO-1398-atlassian-linked-incidents", queryProvenance: "reconstructed", era: "2026-08" },
+	},
+
 	// --- konnect ----------------------------------------------------------------------------
 	// Konnect is intentionally disabled in this dev environment (precheck.ts marks it
 	// required:false and the agent soft-skips it). The example is carried so coverage is
