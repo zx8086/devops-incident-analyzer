@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { GitLabRestClient } from "../../gitlab-client/index.js";
 import { traceToolCall } from "../../utils/tracing.js";
+import { LOCAL_READ_ONLY_ANNOTATIONS } from "../annotations.js";
 import { restErrorResult } from "../error-envelope.js";
 import { ProjectIdParam } from "./project-id-param.js";
 
@@ -18,10 +19,13 @@ const ListCommitsParams = z.object({
 });
 
 export function registerListCommitsTool(server: McpServer, client: GitLabRestClient) {
-	server.tool(
+	server.registerTool(
 		"gitlab_list_commits",
-		"List commits in a GitLab repository with optional filters for branch, date range, and file path",
-		ListCommitsParams.shape,
+		{
+			description: "List commits in a GitLab repository with optional filters for branch, date range, and file path",
+			inputSchema: ListCommitsParams.shape,
+			annotations: LOCAL_READ_ONLY_ANNOTATIONS,
+		},
 		async (args) => {
 			return traceToolCall("gitlab_list_commits", async () => {
 				const params = ListCommitsParams.parse(args);

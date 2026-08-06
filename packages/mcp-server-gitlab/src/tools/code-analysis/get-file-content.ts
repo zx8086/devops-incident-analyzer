@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { GitLabRestClient } from "../../gitlab-client/index.js";
 import { traceToolCall } from "../../utils/tracing.js";
+import { LOCAL_READ_ONLY_ANNOTATIONS } from "../annotations.js";
 import { restErrorResult } from "../error-envelope.js";
 import { ProjectIdParam } from "./project-id-param.js";
 
@@ -14,10 +15,13 @@ const GetFileContentParams = z.object({
 });
 
 export function registerGetFileContentTool(server: McpServer, client: GitLabRestClient) {
-	server.tool(
+	server.registerTool(
 		"gitlab_get_file_content",
-		"Read the content of a file from a GitLab repository",
-		GetFileContentParams.shape,
+		{
+			description: "Read the content of a file from a GitLab repository",
+			inputSchema: GetFileContentParams.shape,
+			annotations: LOCAL_READ_ONLY_ANNOTATIONS,
+		},
 		async (args) => {
 			return traceToolCall("gitlab_get_file_content", async () => {
 				const params = GetFileContentParams.parse(args);

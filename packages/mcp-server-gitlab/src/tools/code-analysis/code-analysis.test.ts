@@ -17,7 +17,7 @@ type ToolHandler = (args: Record<string, unknown>) => Promise<ToolResult>;
 function stubServer() {
 	const handlers = new Map<string, ToolHandler>();
 	const server = {
-		tool: (name: string, _desc: string, _shape: unknown, handler: ToolHandler) => {
+		registerTool: (name: string, _config: unknown, handler: ToolHandler) => {
 			handlers.set(name, handler);
 		},
 	} as unknown as McpServer;

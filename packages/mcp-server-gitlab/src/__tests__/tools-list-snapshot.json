@@ -1,0 +1,99 @@
+{
+	"gitlab_blast_radius": {
+		"surfaceHash": "9b551defcc2479f9052436cef5f6b51e1de6b312d587ff93137feb6f084bddcb",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_cross_project_callers": {
+		"surfaceHash": "dc906f2db68a491415051841c1f2bb25638f793850800938c38f023e70731939",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_get_blame": {
+		"surfaceHash": "a2952961231fc10de6a9cd49ca0d79a44b5701d96d5c617512f11eea3e46b739",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_get_commit_diff": {
+		"surfaceHash": "5a1a0cc071a521deccef477ac622b7cffe12cf4ba682f00b12944774606db218",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_get_file_content": {
+		"surfaceHash": "96666f1d4c5307adfa817bb1a71bf1bd8084ad3a66454fba2b49b25fb5787d7c",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_get_project": {
+		"surfaceHash": "20108189672eb1523e0538943b667bffdd6cbfcb989cdb1d2a2d9e3760cce42d"
+	},
+	"gitlab_get_repository_tree": {
+		"surfaceHash": "0a6634ea639baff66e4dcca6990af5b6716e89c929fb6abd1627a3f9050c341c",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_graph_schema": {
+		"surfaceHash": "df7da39ad21c63297f31d79bf3cae325999bd40610f717b74175a6c3df9eaf05",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_list_commits": {
+		"surfaceHash": "b3c1be399f47d753c2f7cd1129cfd533986226901812ee2409c7e47f5a31fb11",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_list_issues": {
+		"surfaceHash": "823941098b25f5083e4930c30415b1f572e2049a31910775cb54bb5398753ba6"
+	},
+	"gitlab_list_merge_requests": {
+		"surfaceHash": "8ba811bc367d736308b1076b680f450560a8480f2193c25b0483e119f75a2ca4",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_orbit_query_graph": {
+		"surfaceHash": "3fbec3bdc442cb6c32e2de98c84cd5d31c09b573f5c5921a79d8794298c5b96c",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_pipeline_failures": {
+		"surfaceHash": "d4eceeabad6b963c12af83b6260b05224a13b6090759972dfd917d826409e6a8",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_recent_deploys": {
+		"surfaceHash": "420f19311b3865e58ded783321e0b03a13edf2fb4273859b01db5744918b4aba",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_recent_vulnerabilities": {
+		"surfaceHash": "fd94cf103843472161a10be409a5a8dfa7a822368a4f432de551897a7abeddd7",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	}
+}

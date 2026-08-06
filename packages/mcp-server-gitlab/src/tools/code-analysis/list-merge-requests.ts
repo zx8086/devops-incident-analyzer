@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { GitLabRestClient } from "../../gitlab-client/index.js";
 import { traceToolCall } from "../../utils/tracing.js";
+import { LOCAL_READ_ONLY_ANNOTATIONS } from "../annotations.js";
 import { restErrorResult } from "../error-envelope.js";
 import { NumericPreferredProjectIdParam } from "./project-id-param.js";
 
@@ -22,10 +23,14 @@ const ListMergeRequestsParams = z.object({
 });
 
 export function registerListMergeRequestsTool(server: McpServer, client: GitLabRestClient): void {
-	server.tool(
+	server.registerTool(
 		"gitlab_list_merge_requests",
-		"List merge requests for a GitLab project. Defaults to state=merged for the deploy-vs-datastore-runtime correlation flow. Use updated_after to bound the result set by recency.",
-		ListMergeRequestsParams.shape,
+		{
+			description:
+				"List merge requests for a GitLab project. Defaults to state=merged for the deploy-vs-datastore-runtime correlation flow. Use updated_after to bound the result set by recency.",
+			inputSchema: ListMergeRequestsParams.shape,
+			annotations: LOCAL_READ_ONLY_ANNOTATIONS,
+		},
 		async (args) => {
 			return traceToolCall("gitlab_list_merge_requests", async () => {
 				const params = ListMergeRequestsParams.parse(args);

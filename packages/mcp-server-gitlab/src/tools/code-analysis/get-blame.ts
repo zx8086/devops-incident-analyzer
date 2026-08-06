@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { GitLabRestClient } from "../../gitlab-client/index.js";
 import { traceToolCall } from "../../utils/tracing.js";
+import { LOCAL_READ_ONLY_ANNOTATIONS } from "../annotations.js";
 import { restErrorResult } from "../error-envelope.js";
 import { ProjectIdParam } from "./project-id-param.js";
 
@@ -14,10 +15,13 @@ const GetBlameParams = z.object({
 });
 
 export function registerGetBlameTool(server: McpServer, client: GitLabRestClient) {
-	server.tool(
+	server.registerTool(
 		"gitlab_get_blame",
-		"Get git blame information for a file showing who last modified each line",
-		GetBlameParams.shape,
+		{
+			description: "Get git blame information for a file showing who last modified each line",
+			inputSchema: GetBlameParams.shape,
+			annotations: LOCAL_READ_ONLY_ANNOTATIONS,
+		},
 		async (args) => {
 			return traceToolCall("gitlab_get_blame", async () => {
 				const params = GetBlameParams.parse(args);

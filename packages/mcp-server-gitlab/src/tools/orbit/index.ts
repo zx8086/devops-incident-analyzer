@@ -11,6 +11,7 @@ import {
 } from "../../gitlab-client/orbit.js";
 import { createContextLogger } from "../../utils/logger.js";
 import { traceToolCall } from "../../utils/tracing.js";
+import { LOCAL_READ_ONLY_ANNOTATIONS } from "../annotations.js";
 import { envelopeText } from "../error-envelope.js";
 import {
 	buildBlastRadiusQuery,
@@ -328,11 +329,15 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 	}
 
 	// -- gitlab_graph_schema (FREE) --
-	server.tool(
+	server.registerTool(
 		"gitlab_graph_schema",
-		"Return the GitLab Orbit knowledge-graph schema (node and relationship types). Free (no GitLab Credits). " +
-			"Call this first to ground cross-project graph queries.",
-		{},
+		{
+			description:
+				"Return the GitLab Orbit knowledge-graph schema (node and relationship types). Free (no GitLab Credits). " +
+				"Call this first to ground cross-project graph queries.",
+			inputSchema: {},
+			annotations: LOCAL_READ_ONLY_ANNOTATIONS,
+		},
 		async () =>
 			traceToolCall("gitlab_graph_schema", async () => {
 				// Free, but still gated: the SIO-1295 recovery re-check must fire even when
@@ -359,15 +364,19 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 		symbol: z.string().describe("Function/class/module name or symbol to trace (from a stack trace or a changed file)"),
 		limit: z.number().int().optional().describe("Max import sites to return (default 200, max 1000)"),
 	});
-	server.tool(
+	server.registerTool(
 		"gitlab_blast_radius",
-		"Cross-project blast radius: given a symbol/definition, return the downstream files and projects across the " +
-			"whole group that IMPORT it. Group-scoped (no per-project resolution needed). If no import edges are found " +
-			"(common for Java/C# same-package or REST coupling, which produce no import statement), falls back to a " +
-			'definition name-match sweep -- the payload carries radiusMode: "definition-name-match" and those rows are ' +
-			"name co-occurrences across repos (REST clients, contracts, tests), NOT confirmed importers; treat them as " +
-			"lower-confidence. Consumes GitLab Credits.",
-		BlastRadiusParams.shape,
+		{
+			description:
+				"Cross-project blast radius: given a symbol/definition, return the downstream files and projects across the " +
+				"whole group that IMPORT it. Group-scoped (no per-project resolution needed). If no import edges are found " +
+				"(common for Java/C# same-package or REST coupling, which produce no import statement), falls back to a " +
+				'definition name-match sweep -- the payload carries radiusMode: "definition-name-match" and those rows are ' +
+				"name co-occurrences across repos (REST clients, contracts, tests), NOT confirmed importers; treat them as " +
+				"lower-confidence. Consumes GitLab Credits.",
+			inputSchema: BlastRadiusParams.shape,
+			annotations: LOCAL_READ_ONLY_ANNOTATIONS,
+		},
 		async (args) =>
 			traceToolCall("gitlab_blast_radius", async () => {
 				const p = BlastRadiusParams.parse(args);
@@ -380,11 +389,15 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 		fqn: z.string().describe("Fully-qualified definition name (e.g. Gitlab::Auth::authenticate)"),
 		limit: z.number().int().optional().describe("Max caller sites to return (default 200, max 1000)"),
 	});
-	server.tool(
+	server.registerTool(
 		"gitlab_cross_project_callers",
-		"List the callers/importers of a fully-qualified definition across every repo in the group. " +
-			"Group-scoped. Consumes GitLab Credits.",
-		CallersParams.shape,
+		{
+			description:
+				"List the callers/importers of a fully-qualified definition across every repo in the group. " +
+				"Group-scoped. Consumes GitLab Credits.",
+			inputSchema: CallersParams.shape,
+			annotations: LOCAL_READ_ONLY_ANNOTATIONS,
+		},
 		async (args) =>
 			traceToolCall("gitlab_cross_project_callers", async () => {
 				const p = CallersParams.parse(args);
@@ -404,11 +417,15 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 			),
 		limit: z.number().int().optional().describe("Max MRs to return (default 50, max 1000)"),
 	});
-	server.tool(
+	server.registerTool(
 		"gitlab_recent_deploys",
-		"List recent deploy merge requests merged across the whole group (or one project via project_path) since a timestamp, ranked newest-first. " +
-			"Group-wide (impossible with per-project REST). Consumes GitLab Credits.",
-		DeploysParams.shape,
+		{
+			description:
+				"List recent deploy merge requests merged across the whole group (or one project via project_path) since a timestamp, ranked newest-first. " +
+				"Group-wide (impossible with per-project REST). Consumes GitLab Credits.",
+			inputSchema: DeploysParams.shape,
+			annotations: LOCAL_READ_ONLY_ANNOTATIONS,
+		},
 		async (args) =>
 			traceToolCall("gitlab_recent_deploys", async () => {
 				const p = DeploysParams.parse(args);
@@ -436,11 +453,15 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 			),
 		limit: z.number().int().optional().describe("Max ranked rows to return (default 50, max 1000)"),
 	});
-	server.tool(
+	server.registerTool(
 		"gitlab_pipeline_failures",
-		"Rank pipeline failures (source=merge_request_event) across all projects in the group (or one project via project_path) within a window. " +
-			"Group-wide aggregation. Consumes GitLab Credits.",
-		FailuresParams.shape,
+		{
+			description:
+				"Rank pipeline failures (source=merge_request_event) across all projects in the group (or one project via project_path) within a window. " +
+				"Group-wide aggregation. Consumes GitLab Credits.",
+			inputSchema: FailuresParams.shape,
+			annotations: LOCAL_READ_ONLY_ANNOTATIONS,
+		},
 		async (args) =>
 			traceToolCall("gitlab_pipeline_failures", async () => {
 				const p = FailuresParams.parse(args);
@@ -461,11 +482,15 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 		group_path: z.string().optional().describe("Top-level group path (default: pvhcorp)"),
 		limit: z.number().int().optional().describe("Max vulnerabilities to return (default 50, max 1000)"),
 	});
-	server.tool(
+	server.registerTool(
 		"gitlab_recent_vulnerabilities",
-		"List critical/high vulnerabilities still detected across the group, ranked by severity. " +
-			"Group-wide. Consumes GitLab Credits.",
-		VulnParams.shape,
+		{
+			description:
+				"List critical/high vulnerabilities still detected across the group, ranked by severity. " +
+				"Group-wide. Consumes GitLab Credits.",
+			inputSchema: VulnParams.shape,
+			annotations: LOCAL_READ_ONLY_ANNOTATIONS,
+		},
 		async (args) =>
 			traceToolCall("gitlab_recent_vulnerabilities", async () => {
 				const p = VulnParams.parse(args);
@@ -562,13 +587,17 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 				"rejected AND billed. Call gitlab_graph_schema for the entity/relationship ontology.",
 		),
 	});
-	server.tool(
+	server.registerTool(
 		"gitlab_orbit_query_graph",
-		"Escape hatch: run an arbitrary GitLab Orbit query DSL object for cross-project questions the purpose-built " +
-			"tools do not cover. Every query MUST be selective (a filter or node_ids). Consumes GitLab Credits. " +
-			'Search = single-node traversal, e.g. {"query_type":"traversal","nodes":[{"id":"f","entity":"File",' +
-			'"filters":{"path":{"ends_with":"README.md"}},"columns":["path"]}],"limit":5}.',
-		RawParams.shape,
+		{
+			description:
+				"Escape hatch: run an arbitrary GitLab Orbit query DSL object for cross-project questions the purpose-built " +
+				"tools do not cover. Every query MUST be selective (a filter or node_ids). Consumes GitLab Credits. " +
+				'Search = single-node traversal, e.g. {"query_type":"traversal","nodes":[{"id":"f","entity":"File",' +
+				'"filters":{"path":{"ends_with":"README.md"}},"columns":["path"]}],"limit":5}.',
+			inputSchema: RawParams.shape,
+			annotations: LOCAL_READ_ONLY_ANNOTATIONS,
+		},
 		async (args) =>
 			traceToolCall("gitlab_orbit_query_graph", async () => {
 				const p = RawParams.parse(args);
