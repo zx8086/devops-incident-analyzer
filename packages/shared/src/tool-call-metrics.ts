@@ -64,16 +64,24 @@ export function resolveToolCallMetricsDbPath(
 const UNKNOWN_TOOL_TEXT_RE = /^(?:MCP error -\d+: )?Tool \S+ not found$/;
 
 // SIO-1407: the tool-argument validation rejection -- the canonical bad-input
-// event (the eval toolset's tool_arg_validity keys on exactly this). Live wire
-// shape, identical across servers: "MCP error -32602: Input validation error:
-// Invalid arguments for tool <name>: [ <zod issues> ]" (both prefixes optional
-// across SDK versions). Matched before the brace-scan because the zod issue
-// array parses as JSON but carries no { _error } envelope. The trailing ": ["
-// delimiter is REQUIRED (CodeRabbit): the stamp mutates matching results, so a
-// tool's own prose that merely mentions "Invalid arguments for tool X" must
-// never match -- only the canonical rejection with its zod-issue payload does.
+// event (the eval toolset's tool_arg_validity keys on exactly this). Two live
+// wire shapes, matched before the brace-scan because neither carries an
+// { _error } envelope:
+// - SDK <= 1.29: "MCP error -32602: Input validation error: Invalid arguments
+//   for tool <name>: [ <zod issues JSON> ]" -- the trailing ": [" delimiter is
+//   REQUIRED (CodeRabbit): the stamp mutates matching results, so a tool's own
+//   prose that merely mentions "Invalid arguments for tool X" must never match.
+//   Kept because the agentcore proxy classifies text from REMOTE servers that
+//   may still run an older SDK.
+// - SDK >= 1.30 (SIO-1410): getParseErrorMessage formats zod issues as prose
+//   lines ("<message> at <dot.path>"), so there is no "[" -- the mandatory
+//   "Input validation error: " prefix (unconditional in the SDK's
+//   validateToolInput throw) is the anti-false-positive anchor instead, and a
+//   non-empty payload after the colon is REQUIRED (CodeRabbit): the SDK always
+//   emits at least one issue line, so a delimiter-less bare prefix is not the
+//   canonical rejection and must not be stamped.
 export const ARG_VALIDATION_TEXT_RE =
-	/^(?:MCP error -\d+: )?(?:Input validation error: )?Invalid arguments for tool \S+:\s*\[/;
+	/^(?:MCP error -\d+: )?(?:Input validation error: Invalid arguments for tool \S+:\s*\S|Invalid arguments for tool \S+:\s*\[)/;
 
 // SIO-1402 (CodeRabbit): the enum schemas -- not the `in` operator -- gate the
 // envelope fields, so inherited property names ("toString", "__proto__") in a
