@@ -44,7 +44,9 @@ describe("looksReadOnlyByName", () => {
 	});
 
 	test("conservative: no trailing segment, write verbs, and mid-word verbs do not match", () => {
-		// no "_" after the verb -- deliberately unflagged
+		// listed verb with no "_" after it -- the trailing-segment rule (CodeRabbit)
+		expect(looksReadOnlyByName("capella_get")).toBe(false);
+		// unlisted verb with no trailing segment -- deliberately unflagged real tool
 		expect(looksReadOnlyByName("capella_ping")).toBe(false);
 		expect(looksReadOnlyByName("kafka_delete_topic")).toBe(false);
 		expect(looksReadOnlyByName("kafka_create_topic")).toBe(false);

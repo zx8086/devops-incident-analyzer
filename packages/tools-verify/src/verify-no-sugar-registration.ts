@@ -34,10 +34,11 @@ const NOT_YET_CONVERTED = new Set([
 // mcp-server-elastic is absent: fully converted since SIO-1050 (v1.17.5 signature
 // incompatibility forced it) -- it is the proof the guard passes on a converted tree.
 
-// Live sugar call on a registration receiver. `server.registerTool(` cannot match:
-// after "server." the alternation must match at the first character, and
-// "registerTool" does not start with "tool".
-const SUGAR_CALL_RE = /\bserver\.(tool|prompt|resource)\s*\(/g;
+// Live sugar call on a registration receiver, in dot or bracket form
+// (server.tool( / server["tool"]( / server['tool']( -- CodeRabbit).
+// `server.registerTool(` cannot match: after "server." the alternation must
+// match at the first character, and "registerTool" does not start with "tool".
+const SUGAR_CALL_RE = /\bserver(?:\.(?:tool|prompt|resource)|\[["'](?:tool|prompt|resource)["']\])\s*\(/g;
 
 // Strip /* ... */ block comments and // line comments before matching -- elastic
 // carries prose like "Direct server.tool() call" inside historical block comments,
@@ -55,7 +56,7 @@ function walk(dir: string, out: string[] = []): string[] {
 		const full = join(dir, entry);
 		if (statSync(full).isDirectory()) {
 			if (entry !== "__tests__" && entry !== "node_modules") walk(full, out);
-		} else if (entry.endsWith(".ts") && !entry.endsWith(".test.ts")) {
+		} else if (entry.endsWith(".ts") && !entry.endsWith(".test.ts") && !entry.endsWith(".spec.ts")) {
 			out.push(full);
 		}
 	}
