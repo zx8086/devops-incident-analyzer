@@ -9,6 +9,7 @@ import {
 	extractHallucinatedToolName,
 	isBadArgumentCall,
 	isEmptyPayload,
+	isExpiryField,
 	isHallucinatedCall,
 	type ToolCallRecord,
 } from "./tool-trajectory.ts";
@@ -243,6 +244,39 @@ describe("checkResponseHealth", () => {
 
 		expect(findings.map((f) => f.rule)).toContain("future-dated-window");
 	});
+
+	test("does not flag a certificate expiry, which is legitimately in the future", () => {
+		// Live regression: aws_rds_describe_db_instances returns ValidTill per instance (CA cert
+		// expiry). The first full run flagged this 16 times as a year-shift defect. A future
+		// expiry is healthy infrastructure, not a year-shifted observation.
+		const findings = checkResponseHealth([
+			result({
+				dataSourceId: "aws",
+				toolOutputs: [
+					{
+						toolName: "aws_rds_describe_db_instances",
+						rawJson: { rows: [{ CertificateDetails: { ValidTill: "2027-03-05T02:29:03.000Z" } }] },
+					},
+				],
+			}),
+		]);
+
+		expect(findings.filter((f) => f.rule === "future-dated-window")).toHaveLength(0);
+	});
+
+	test.each([["ValidTill"], ["validUntil"], ["expiresAt"], ["NotAfter"], ["renewalDate"], ["scheduledAt"]])(
+		"treats %s as an expiry field",
+		(key) => {
+			expect(isExpiryField(key)).toBe(true);
+		},
+	);
+
+	test.each([["timestamp"], ["@timestamp"], ["createdAt"], ["StartTime"], ["lastSeen"]])(
+		"treats %s as an observed-moment field, still year-shift checked",
+		(key) => {
+			expect(isExpiryField(key)).toBe(false);
+		},
+	);
 
 	test("does not flag present-day timestamps", () => {
 		const findings = checkResponseHealth([

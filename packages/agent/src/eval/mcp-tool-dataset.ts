@@ -492,9 +492,15 @@ const EXAMPLES: EvalExample[] = [
 					},
 				],
 				forbiddenTools: ["gitlab_create_merge_request", "gitlab_create_issue", "gitlab_manage_pipeline"],
-				// Restored post-SIO-1401: this project genuinely has MRs and commits (verified live,
-				// iid 383/382), so an empty result is now a real finding rather than an auth artefact.
-				knownGoodAnchors: [{ toolName: "gitlab_list_merge_requests", mustReturnRows: true }],
+				// NO anchor on gitlab_list_merge_requests, despite the project genuinely having MRs
+				// (iid 383/382 verified live). The first post-SIO-1401 run flagged empty-anchor
+				// twice, and the cause was the EVAL, not the tool: the model reasonably added
+				// `updated_after` to answer "most recently landed", and this project's MRs had not
+				// been updated inside that window -- `{project_id}` returns rows while
+				// `{project_id, updated_after}` returns []. An anchor cannot survive the model
+				// adding a legitimate filter, so asserting must-return-rows on a filterable list
+				// tool manufactures false findings. Anchors belong on tools whose result does not
+				// depend on a model-chosen window (cluster health, index inventory).
 			},
 		},
 		metadata: { ticketKey: "SIO-1398-gitlab-change-correlation", queryProvenance: "reconstructed", era: "2026-08" },

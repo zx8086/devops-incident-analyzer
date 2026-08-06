@@ -170,6 +170,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// Fields whose value is legitimately in the future: certificate/token/subscription expiry and
+// scheduled maintenance. Checked against the KEY, since the value alone cannot distinguish
+// "this log line is year-shifted" from "this certificate expires in 2027".
+const EXPIRY_FIELD_PATTERN = /(valid.?(till|until|to)|expir|not.?after|renew|scheduled|next.?run|due)/i;
+
+export function isExpiryField(key: string): boolean {
+	return EXPIRY_FIELD_PATTERN.test(key);
+}
+
 // Walks a tool payload looking for the known-bug fingerprints. Bounded depth: a deeply nested
 // or cyclic payload must never hang the projection, and the markers we look for are shallow.
 function scanPayload(value: unknown, visit: (key: string, value: unknown) => void, depth = 0): void {
@@ -234,7 +243,13 @@ export function checkResponseHealth(
 				}
 				// AWS year-shift: a window anchored on the wrong year returns logs stamped in a
 				// year that has not happened. Cheap, high-signal check against a real prior defect.
-				if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value)) {
+				//
+				// EXPIRY fields are excluded. A future date is CORRECT for them, and the first
+				// live run proved it: aws_rds_describe_db_instances returns `ValidTill` for each
+				// instance's CA certificate (2027-03-05 etc), which this rule flagged 16 times as
+				// a year-shift defect. Only fields naming an OBSERVED moment can be year-shifted;
+				// a certificate that expires next year is healthy infrastructure.
+				if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value) && !isExpiryField(key)) {
 					const year = Number.parseInt(value.slice(0, 4), 10);
 					if (year > currentYear) {
 						findings.push({
