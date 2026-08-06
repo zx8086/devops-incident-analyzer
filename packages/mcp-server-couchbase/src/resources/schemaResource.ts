@@ -6,75 +6,78 @@ import { isNoIndexError } from "../lib/classifyCouchbaseError";
 import { ResponseBuilder } from "../lib/responseBuilder";
 import type { DocumentContent } from "../lib/types";
 import { logger } from "../utils/logger";
+import type { ResourceRegistry, TemplateVariables } from "./resource-registry";
 
-export function registerSchemaResource(server: McpServer, bucket: Bucket): void {
-	server.resource(
-		"collection-schema",
-		new ResourceTemplate("schema://{scope}/{collection}", { list: undefined }),
-		async (uri, { scope, collection }) => {
-			const scopeName = String(scope ?? "");
-			const collectionName = String(collection ?? "");
-			try {
-				logger.info({ scope: scopeName, collection: collectionName }, "Fetching schema resource");
+export function registerSchemaResource(server: McpServer, bucket: Bucket, registry: ResourceRegistry): void {
+	// SIO-1412: single handler const registered on the SDK server AND in couchbase's
+	// own registry, so readResourceByUri dispatches without SDK-internal reach-in.
+	const schemaTemplate = new ResourceTemplate("schema://{scope}/{collection}", { list: undefined });
+	const readSchema = async (uri: URL, { scope, collection }: TemplateVariables) => {
+		const scopeName = String(scope ?? "");
+		const collectionName = String(collection ?? "");
+		try {
+			logger.info({ scope: scopeName, collection: collectionName }, "Fetching schema resource");
 
-				const collectionMgr = bucket.collections();
-				const scopes = await collectionMgr.getAllScopes();
-				const foundScope = scopes.find((s) => s.name === scopeName);
+			const collectionMgr = bucket.collections();
+			const scopes = await collectionMgr.getAllScopes();
+			const foundScope = scopes.find((s) => s.name === scopeName);
 
-				if (!foundScope) {
-					return ResponseBuilder.error(`Scope "${scopeName}" not found`).buildResourceResponse(uri.href);
-				}
+			if (!foundScope) {
+				return ResponseBuilder.error(`Scope "${scopeName}" not found`).buildResourceResponse(uri.href);
+			}
 
-				const foundCollection = foundScope.collections.find((c) => c.name === collectionName);
-				if (!foundCollection) {
-					return ResponseBuilder.error(
-						`Collection "${collectionName}" not found in scope "${scopeName}"`,
-					).buildResourceResponse(uri.href);
-				}
-
-				try {
-					const result = await bucket
-						.scope(scopeName)
-						.query(`SELECT RAW META().id FROM \`${bucket.name}\`.\`${scopeName}\`.\`${collectionName}\` LIMIT 1`);
-
-					const rows = await result.rows;
-
-					if (rows && rows.length > 0) {
-						const docId = rows[0];
-						const docResult = await bucket.scope(scopeName).collection(collectionName).get(docId);
-
-						const schemaText = formatDocumentAsSchema(docResult.content);
-						return ResponseBuilder.markdown(schemaText).buildResourceResponse(uri.href);
-					}
-					return ResponseBuilder.error(
-						`No documents found in ${scopeName}.${collectionName} to infer schema.`,
-					).buildResourceResponse(uri.href);
-				} catch (queryError) {
-					// SIO-1087: classify on the SDK error class / N1QL code, not message text.
-					if (isNoIndexError(queryError)) {
-						return ResponseBuilder.error(
-							`Unable to query collection. You may need to create a primary index:\nCREATE PRIMARY INDEX ON \`${bucket.name}\`.\`${scopeName}\`.\`${collectionName}\`;`,
-						).buildResourceResponse(uri.href);
-					}
-					throw queryError;
-				}
-			} catch (error) {
-				logger.error(
-					{
-						error: error instanceof Error ? error.message : String(error),
-						scope: scopeName,
-						collection: collectionName,
-					},
-					"Error fetching schema resource",
-				);
-
+			const foundCollection = foundScope.collections.find((c) => c.name === collectionName);
+			if (!foundCollection) {
 				return ResponseBuilder.error(
-					"Error fetching schema resource",
-					error instanceof Error ? error : new Error(String(error)),
+					`Collection "${collectionName}" not found in scope "${scopeName}"`,
 				).buildResourceResponse(uri.href);
 			}
-		},
-	);
+
+			try {
+				const result = await bucket
+					.scope(scopeName)
+					.query(`SELECT RAW META().id FROM \`${bucket.name}\`.\`${scopeName}\`.\`${collectionName}\` LIMIT 1`);
+
+				const rows = await result.rows;
+
+				if (rows && rows.length > 0) {
+					const docId = rows[0];
+					const docResult = await bucket.scope(scopeName).collection(collectionName).get(docId);
+
+					const schemaText = formatDocumentAsSchema(docResult.content);
+					return ResponseBuilder.markdown(schemaText).buildResourceResponse(uri.href);
+				}
+				return ResponseBuilder.error(
+					`No documents found in ${scopeName}.${collectionName} to infer schema.`,
+				).buildResourceResponse(uri.href);
+			} catch (queryError) {
+				// SIO-1087: classify on the SDK error class / N1QL code, not message text.
+				if (isNoIndexError(queryError)) {
+					return ResponseBuilder.error(
+						`Unable to query collection. You may need to create a primary index:\nCREATE PRIMARY INDEX ON \`${bucket.name}\`.\`${scopeName}\`.\`${collectionName}\`;`,
+					).buildResourceResponse(uri.href);
+				}
+				throw queryError;
+			}
+		} catch (error) {
+			logger.error(
+				{
+					error: error instanceof Error ? error.message : String(error),
+					scope: scopeName,
+					collection: collectionName,
+				},
+				"Error fetching schema resource",
+			);
+
+			return ResponseBuilder.error(
+				"Error fetching schema resource",
+				error instanceof Error ? error : new Error(String(error)),
+			).buildResourceResponse(uri.href);
+		}
+	};
+
+	server.resource("collection-schema", schemaTemplate, readSchema);
+	registry.addTemplate(schemaTemplate, readSchema);
 
 	logger.info("Schema resource registered successfully");
 }

@@ -4,9 +4,12 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import type { BucketInfo } from "../lib/types";
 import { logger } from "../utils/logger";
+import type { ResourceRegistry } from "./resource-registry";
 
-export function registerDatabaseStructureResource(server: McpServer, bucket: Bucket): void {
-	server.resource("database-structure", "database://structure", async (uri) => {
+export function registerDatabaseStructureResource(server: McpServer, bucket: Bucket, registry: ResourceRegistry): void {
+	// SIO-1412: single handler const registered on the SDK server AND in couchbase's
+	// own registry, so readResourceByUri dispatches without SDK-internal reach-in.
+	const readDatabaseStructure = async (uri: URL) => {
 		try {
 			logger.info("Fetching database structure resource");
 
@@ -78,7 +81,10 @@ export function registerDatabaseStructureResource(server: McpServer, bucket: Buc
 				],
 			};
 		}
-	});
+	};
+
+	server.resource("database-structure", "database://structure", readDatabaseStructure);
+	registry.addExact("database://structure", readDatabaseStructure);
 
 	logger.info("Database structure resource registered successfully");
 }

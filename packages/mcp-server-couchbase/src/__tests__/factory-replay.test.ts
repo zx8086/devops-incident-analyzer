@@ -21,6 +21,7 @@ import { registerAll as registerAllTools } from "../lib/toolRegistry.ts";
 import { registerSqlppQueryGenerator } from "../prompts/sqlppQueryGenerator.ts";
 import { registerAllResources } from "../resources/index.ts";
 import { PlaybookHandler, type PlaybookRegistry } from "../resources/playbookResource.ts";
+import { ResourceRegistry } from "../resources/resource-registry.ts";
 import { type CouchbaseServerDatasource, createMcpServerFactory } from "../server.ts";
 
 // Registration never calls the Bucket (query analysis / document tools only touch it inside
@@ -103,7 +104,7 @@ describe("SIO-1044: mcp-server-couchbase cached factory replay", () => {
 		}));
 		registerAllTools(control, ds.bucket);
 		registerSqlppQueryGenerator(control);
-		registerAllResources(control, ds.bucket, ds.playbooks);
+		registerAllResources(control, ds.bucket, ds.playbooks, new ResourceRegistry());
 		registerPingHandlers(control);
 		control.tool("capella_echo", "Echoes back the input parameters for debugging", {}, async (params) => ({
 			content: [{ type: "text" as const, text: JSON.stringify(params) }],
@@ -191,7 +192,7 @@ describe("SIO-1044: mcp-server-couchbase cached factory replay", () => {
 				}));
 				registerAllTools(server, ds.bucket);
 				registerSqlppQueryGenerator(server);
-				registerAllResources(server, ds.bucket, playbooksSpy);
+				registerAllResources(server, ds.bucket, playbooksSpy, new ResourceRegistry());
 				registerPingHandlers(server);
 				server.tool("capella_echo", "Echoes back the input parameters for debugging", {}, async (params) => ({
 					content: [{ type: "text" as const, text: JSON.stringify(params) }],
