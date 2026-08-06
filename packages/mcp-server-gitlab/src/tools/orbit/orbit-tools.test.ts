@@ -17,7 +17,7 @@ type ToolHandler = (args: Record<string, unknown>) => Promise<ToolResult>;
 function stubServer() {
 	const handlers = new Map<string, ToolHandler>();
 	const server = {
-		tool: (name: string, _desc: string, _shape: unknown, handler: ToolHandler) => {
+		registerTool: (name: string, _config: unknown, handler: ToolHandler) => {
 			handlers.set(name, handler);
 		},
 	} as unknown as McpServer;
@@ -409,8 +409,8 @@ describe("registerOrbitTools surface", () => {
 	test("registers exactly 7 tools and blast_radius exposes no group_path param", () => {
 		const shapes = new Map<string, Record<string, unknown>>();
 		const server = {
-			tool: (name: string, _desc: string, shape: Record<string, unknown>) => {
-				shapes.set(name, shape);
+			registerTool: (name: string, config: { inputSchema: Record<string, unknown> }) => {
+				shapes.set(name, config.inputSchema);
 			},
 		} as unknown as McpServer;
 		const count = registerOrbitTools(server, makeCtx({}));

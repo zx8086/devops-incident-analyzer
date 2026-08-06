@@ -264,7 +264,10 @@ export function registerProxyTools(
 			});
 		};
 
-		server.tool(prefixedName, tool.description, zodShape, handler);
+		// SIO-1418: registerTool config style (SDK v2 removes the .tool() sugar). No
+		// annotations here -- the upstream surface is discovered at boot and we cannot
+		// assert per-tool hints for tools we do not own.
+		server.registerTool(prefixedName, { description: tool.description, inputSchema: zodShape }, handler);
 		registered.push(prefixedName);
 	}
 

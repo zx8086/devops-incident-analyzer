@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { GitLabRestClient } from "../../gitlab-client/index.js";
 import { traceToolCall } from "../../utils/tracing.js";
+import { LOCAL_READ_ONLY_ANNOTATIONS } from "../annotations.js";
 import { restErrorResult } from "../error-envelope.js";
 import { ProjectIdParam } from "./project-id-param.js";
 
@@ -13,10 +14,13 @@ const GetCommitDiffParams = z.object({
 });
 
 export function registerGetCommitDiffTool(server: McpServer, client: GitLabRestClient) {
-	server.tool(
+	server.registerTool(
 		"gitlab_get_commit_diff",
-		"Get the diff for a specific commit showing all file changes",
-		GetCommitDiffParams.shape,
+		{
+			description: "Get the diff for a specific commit showing all file changes",
+			inputSchema: GetCommitDiffParams.shape,
+			annotations: LOCAL_READ_ONLY_ANNOTATIONS,
+		},
 		async (args) => {
 			return traceToolCall("gitlab_get_commit_diff", async () => {
 				const params = GetCommitDiffParams.parse(args);

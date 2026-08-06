@@ -24,7 +24,6 @@ const PACKAGES_DIR = join(HERE, "../../..", "packages");
 const NOT_YET_CONVERTED = new Set([
 	"mcp-server-aws", // SIO-1420 (C-7)
 	"mcp-server-couchbase", // SIO-1419 (C-6)
-	"mcp-server-gitlab", // SIO-1418 (C-5)
 	"mcp-server-kafka", // SIO-1421 (C-8)
 ]);
 // mcp-server-elastic is absent: fully converted since SIO-1050 (v1.17.5 signature
