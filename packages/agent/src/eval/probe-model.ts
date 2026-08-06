@@ -523,7 +523,12 @@ function registryLiteral(r: ProbeResult, verifiedAt: string): string {
 		`\t\tobservedRawControlCharsInJson: ${r.observedRawControlCharsInJson},`,
 		// SIO-1428: the registry figure is the CONSERVATIVE floor -- the worse of the small-prompt
 		// P6 floor and the large-prompt P6L floor (llm.role-max-tokens.test.ts enforces it).
-		`\t\tlongFormMinTokens: ${Math.max(r.longFormMinTokens, r.largeLongFormMinTokens)},`,
+		// CodeRabbit (PR #613): a P6L floor of 0 means NO probed budget survived the large prompt
+		// -- publishing the P6 floor then would mark an unsafe budget as safe, so the snippet
+		// deliberately emits a non-compiling line that forces a human to raise budgets and re-run.
+		r.largeLongFormMinTokens > 0
+			? `\t\tlongFormMinTokens: ${Math.max(r.longFormMinTokens, r.largeLongFormMinTokens)},`
+			: "\t\t// longFormMinTokens: UNSAFE -- no probed budget survived the P6L large prompt; raise role budgets and re-run before registering.",
 		`\t\tobservedLatencyMs: { p50: ${r.latencyMs.p50}, max: ${r.latencyMs.max} },`,
 		`\t\tverifiedAt: "${verifiedAt}",`,
 		`\t\tverifiedRegion: "${REGION}",`,

@@ -36,9 +36,14 @@ drift from production configuration.
 | 512 | short | end_turn | 4 | actionProposal, runbookSelector |
 | 1024 | short | end_turn | 4 | absenceJudge, gapsJudge, skillLearner |
 | 4096 | short | end_turn | 4 | classifier, entityExtractor, iacReviewer, mitigateEscalate, mitigateInvestigate, mitigateMonitor, mitigation, normalizer, orchestrator |
-| 8192 | long-form | end_turn | 4282 | hilDistiller, iacDrafter, iacPlanner, iacReader, subAgent |
-| 16384 | long-form | end_turn | 5590 | closureSkillStep, responder |
+| 8192 | long-form | end_turn | 4282 | iacDrafter, iacPlanner, iacReader, subAgent |
+| 16384 | long-form | end_turn | 5590 | closureSkillStep, hilDistiller, responder |
 | 32768 | long-form | end_turn | 4592 | aggregator |
+
+Role columns reflect CURRENT `ROLE_OVERRIDES`: hilDistiller was budgeted 8192 when this run
+executed and appears in the 16384 rows because this run's own P6L result moved it there
+(8192 -> 16384, SIO-1428). Measurements attach to budgets, not roles, so the measured
+stopReason/output-token values are unaffected by the label move.
 
 ## P6L: stopReason on the LARGE prompt (SIO-1428)
 
@@ -49,12 +54,12 @@ requires ALL 3 samples per budget to stop with end_turn.
 
 | maxTokens | sample | stopReason | output tokens | input tokens | roles |
 |---|---|---|---|---|---|
-| 8192 | 1 | end_turn | 5917 | 82914 | hilDistiller, iacDrafter, iacPlanner, iacReader, subAgent |
-| 8192 | 2 | **max_tokens** | 8192 | 82914 | hilDistiller, iacDrafter, iacPlanner, iacReader, subAgent |
-| 8192 | 3 | end_turn | 4854 | 82914 | hilDistiller, iacDrafter, iacPlanner, iacReader, subAgent |
-| 16384 | 1 | end_turn | 6730 | 82914 | closureSkillStep, responder |
-| 16384 | 2 | end_turn | 9391 | 82914 | closureSkillStep, responder |
-| 16384 | 3 | end_turn | 6129 | 82914 | closureSkillStep, responder |
+| 8192 | 1 | end_turn | 5917 | 82914 | iacDrafter, iacPlanner, iacReader, subAgent |
+| 8192 | 2 | **max_tokens** | 8192 | 82914 | iacDrafter, iacPlanner, iacReader, subAgent |
+| 8192 | 3 | end_turn | 4854 | 82914 | iacDrafter, iacPlanner, iacReader, subAgent |
+| 16384 | 1 | end_turn | 6730 | 82914 | closureSkillStep, hilDistiller, responder |
+| 16384 | 2 | end_turn | 9391 | 82914 | closureSkillStep, hilDistiller, responder |
+| 16384 | 3 | end_turn | 6129 | 82914 | closureSkillStep, hilDistiller, responder |
 | 32768 | 1 | end_turn | 5060 | 82914 | aggregator |
 | 32768 | 2 | end_turn | 5814 | 82914 | aggregator |
 | 32768 | 3 | end_turn | 8209 | 82914 | aggregator |

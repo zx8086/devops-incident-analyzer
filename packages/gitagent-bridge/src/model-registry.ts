@@ -101,7 +101,7 @@ export const MODEL_REGISTRY = {
 		observedBlockTypes: ["reasoning", "text"],
 		emitsReasoningContent: true,
 		observedRawControlCharsInJson: false,
-		// SIO-1428 (2026-08-07): re-measured with the P6L LARGE prompt (~83K input tokens, 3
+		// SIO-1428 (2026-08-06): re-measured with the P6L LARGE prompt (~83K input tokens, 3
 		// samples per long-form budget), replacing the 2026-08-04 caveat that the ~600-token P6
 		// prompt never put reasoning and answer text in competition for one output budget.
 		// Measured: 8192 truncated 1/3 samples (max_tokens with the reasoning block in play --
@@ -113,7 +113,7 @@ export const MODEL_REGISTRY = {
 		// hilDistiller moved 8192 -> 16384 with this change.
 		longFormMinTokens: 16384,
 		observedLatencyMs: { p50: 7730, max: 104329 },
-		verifiedAt: "2026-08-07",
+		verifiedAt: "2026-08-06",
 		verifiedRegion: "eu-central-1",
 		probeReport: "docs/reference/model-probes/claude-sonnet-5.md",
 	},
