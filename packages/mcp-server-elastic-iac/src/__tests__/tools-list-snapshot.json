@@ -1,0 +1,289 @@
+{
+	"elastic_cloud_get_deployment": {
+		"surfaceHash": "0ccfdf65cea64e792161b458d66d76add0ad5b3a6153d4d1bfb2c547bf178c3a",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"elastic_cloud_get_plan_history": {
+		"surfaceHash": "22f25b03b063b1812a55566dd61e89a0275aeb92daaee81331a9393b23ff4bae",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"elastic_cloud_list_deployment_versions": {
+		"surfaceHash": "d784f1743b72c8e627dad11628bc0dc653e20198469e1ef92f25ae34bc924e4d",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"elastic_cloud_list_deployments": {
+		"surfaceHash": "31b1b3cfdc37637bf2af94c6bd0ec3e100cb2d639049c795df946104f16b8951",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"elastic_get_cluster_health": {
+		"surfaceHash": "632796a42e120f2253ab4204a42a7042bac508aec446fef90dfa58ecbd58bec9",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"elastic_get_index_template": {
+		"surfaceHash": "a50c04c1c81b411b1c440049113bf0432949d80875ebf4b4dfc2e20a791e94d9",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"elastic_ilm_get_lifecycle": {
+		"surfaceHash": "40eb3ac6d10dcc3ef1246421dea37fcdec7afdaf4c997220e6c1cadb94883e3b",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"elastic_simulate_ingest_pipeline": {
+		"surfaceHash": "0a26c4b9fb874c976c304fca1cdf76072387ea4fe81c6fa9e349276a9956e54b",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_commit_file": {
+		"surfaceHash": "4af3ca5373df967c09c5b7b4093beae93237188b246fa2ba5dea35c4d5499326",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"gitlab_commit_files": {
+		"surfaceHash": "9f87200caf8f77af99d9ec335538410b80490a73badd3367cd18ff53697edf15",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"gitlab_create_branch": {
+		"surfaceHash": "e0ea5859c63c5ec644e2f3341cba6e3656dae551fdf7255a00db5d10faee803c",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_create_merge_request": {
+		"surfaceHash": "21d5ad8728b964b443efa0eacfb12bda3d0a0188cdeda06c2e0ae5df04f7a088",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_get_commit_merge_requests": {
+		"surfaceHash": "ed099b97ed3cf3ddf918c6bea859cb81d76f5df6fc54e2c4d1f8dc68b9097deb",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_get_drift_check_result": {
+		"surfaceHash": "1c0543eb8717ff1a7a3e57b38b71c7a259e2db5d675259f89739038d0b857736",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_get_file_content": {
+		"surfaceHash": "f6af0013bdb65dbd1a0ab128d308824414cef051a5adf4f965455126f3a50b1e",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_get_fleet_upgrade_apply_result": {
+		"surfaceHash": "b9c766c2488f982e03f496009687a378d06e559b7c52105523b38db4aac3dd93",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_get_fleet_upgrade_preview_result": {
+		"surfaceHash": "627883ee695bfd4ef21868190cb5c6240b3fc18e3cda47641ed5b45baa9ebc30",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_get_merge_commit_apply_result": {
+		"surfaceHash": "463e0d0e4b3a52a1f1f9103e78cbe28be3741c31dc87dbfd563429e2cf3cab87",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_get_merge_request": {
+		"surfaceHash": "7b7f935f73f10b2a6315b4c7a613d13b78bad5735dcefd089dec03bd81b8269e",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_get_merge_request_approvals": {
+		"surfaceHash": "ad32e4986d0011c777c6e6e201a6b40dd9a77e0691e63d10d3c16f0bf0ab7446",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_get_merge_request_pipelines": {
+		"surfaceHash": "7169e85679f38c3b8727fa85444928db994347a7fa006a57d4cab938a6ef7985",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_get_pipeline": {
+		"surfaceHash": "8d9290a21aecd966cd327b0d62253b6e1ebffa9e278a7a18996a8cf6167e5a93",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_get_pipeline_plan_log": {
+		"surfaceHash": "a0ab625c35b7d84039ed3b2d9327e6157fbe2319a1dbb7a1110cd13e9aa8939c",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_get_pipeline_terraform_report": {
+		"surfaceHash": "4dc8fd7c29edacf01cb98c23fcb9aeaf044576c121049d5cc24229a231f498d9",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_get_repository_tree": {
+		"surfaceHash": "43360dc00e1ebdda3d46ad17dee442e45132b026c565e1e7300e1a801ea664ee",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_get_synthetics_drift_result": {
+		"surfaceHash": "73b908db4fbdd5ef916503dbf845fabda2a4579218c4a77b2ecc4ff3d78e6fd4",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_get_synthetics_push_result": {
+		"surfaceHash": "aa438c41e66804f4b77919f699e284ec76d78f1c768452a2f4a97c4cb27c3795",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_list_agent_merge_requests": {
+		"surfaceHash": "677e64d8793f58fe9b2bbe5e737fa71aea2be431616398ce32ce9eb4d57fe771",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_list_pipelines_for_sha": {
+		"surfaceHash": "71b7eece4e4e696fdd112e7bf4fea9f0f7637854b8c42c245a3aff0f21822311",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_trigger_drift_check": {
+		"surfaceHash": "b50fb477709a5dee556dfcced8b16092b1d55e088100891f414f3b4345928b5f",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_trigger_fleet_upgrade_apply": {
+		"surfaceHash": "ed6ee04d815cb6b6566604e2f379a3a6118303d0489e3138f77e3b1d79076da1",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"gitlab_trigger_fleet_upgrade_preview": {
+		"surfaceHash": "621559c97bcc94527d98f1759be2e8f6ce00e0787485646c015c81e4aad267b2",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_trigger_synthetics_drift_check": {
+		"surfaceHash": "f811fb7b3f5eba8e2d07ee02c80e5920a31ef99dccafff572923f67bf74651c4",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"gitlab_trigger_synthetics_push": {
+		"surfaceHash": "3febdbdc389d25769d075c5f4136de037b7d661cf279d25738ab168aa7e2cad4",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"iac_list_deployments": {
+		"surfaceHash": "0128f945fd689d4523e0e8d62293f0fa22b542770a040f03b1dd58f579b5894f",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"iac_list_stacks": {
+		"surfaceHash": "ed4dcbaa1f303b96db3b0eb862c6011938a39650b80f9a299dd100fb03e052eb",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"iac_output": {
+		"surfaceHash": "ff28e961d9391721c5beb101a0e8005c7f7edea1f2bb886829cb54976f3b0485",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"iac_state_list": {
+		"surfaceHash": "a1ccceb16be69141013fb4c5089927d11dbe541773745ac83e9c3524b8fa4c92",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"iac_status": {
+		"surfaceHash": "81e7f5fbfe2fbf3e6b94db80dbd5c10cd403612d5622c3429a7427597db5fbf5",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"terraform_search_modules": {
+		"surfaceHash": "071c4bc6ab18646b6aed2f6b87d03c9cbeda0f9ae7abbe96debf6be9a466e4c8",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"terraform_search_providers": {
+		"surfaceHash": "0524c0b4837c379281e5e7a490788f280984fb76cb5c944b69522f1d990d1466",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	}
+}

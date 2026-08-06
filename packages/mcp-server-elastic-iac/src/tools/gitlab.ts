@@ -6,6 +6,7 @@ import type { Config } from "../config.ts";
 import { createContextLogger } from "../logger.ts";
 import { CI_CONTRACT } from "./ci-contract.ts";
 import { gitlabFetch, text } from "./shared.ts";
+import { iacToolAnnotations } from "./tool-classification.ts";
 
 const log = createContextLogger("gitlab");
 
@@ -237,10 +238,13 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 	const token = config.gitops.token ?? config.gitlabToken;
 	const project = encodeURIComponent(config.gitops.project || config.repository.projectId);
 
-	server.tool(
+	server.registerTool(
 		"gitlab_get_repository_tree",
-		"List files/directories in the IaC repo (defaults to the repository root).",
-		{ path: z.string().optional(), ref: z.string().optional() },
+		{
+			description: "List files/directories in the IaC repo (defaults to the repository root).",
+			inputSchema: { path: z.string().optional(), ref: z.string().optional() },
+			annotations: iacToolAnnotations("gitlab_get_repository_tree"),
+		},
 		async ({ path, ref }) => {
 			const qs = new URLSearchParams({ recursive: "false", per_page: "100" });
 			if (path) qs.set("path", path);
@@ -249,10 +253,13 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		},
 	);
 
-	server.tool(
+	server.registerTool(
 		"gitlab_get_file_content",
-		"Read a Terraform file blob from the IaC repo.",
-		{ filePath: z.string(), ref: z.string().optional() },
+		{
+			description: "Read a Terraform file blob from the IaC repo.",
+			inputSchema: { filePath: z.string(), ref: z.string().optional() },
+			annotations: iacToolAnnotations("gitlab_get_file_content"),
+		},
 		async ({ filePath, ref }) => {
 			const qs = new URLSearchParams({ ref: ref ?? "main" });
 			return text(
@@ -265,10 +272,14 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		},
 	);
 
-	server.tool(
+	server.registerTool(
 		"gitlab_create_branch",
-		"Create a branch from a ref (server-side; no local clone). GitOps proposer step before committing a config edit.",
-		{ branch: z.string(), ref: z.string().optional() },
+		{
+			description:
+				"Create a branch from a ref (server-side; no local clone). GitOps proposer step before committing a config edit.",
+			inputSchema: { branch: z.string(), ref: z.string().optional() },
+			annotations: iacToolAnnotations("gitlab_create_branch"),
+		},
 		async ({ branch, ref }) => {
 			const qs = new URLSearchParams({ branch, ref: ref ?? "main" });
 			return text(
@@ -279,25 +290,29 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		},
 	);
 
-	server.tool(
+	server.registerTool(
 		"gitlab_commit_file",
-		"Commit a single-file change to a branch via the GitLab API (server-side; no local git). " +
-			"Upsert: updates the file when it exists, creates it when it does not. The content is the FULL new file body, not a diff. " +
-			"SIO-1022: action 'delete' removes the file (no content needed) -- used to revert a config override.",
 		{
-			branch: z.string(),
-			file_path: z.string(),
-			content: z
-				.string()
-				.optional()
-				.describe("Full new file content (read-modify-write; not a diff). Omit for a delete."),
-			commit_message: z.string(),
-			action: z
-				.enum(["create", "update", "delete"])
-				.optional()
-				.describe(
-					"Initial commit action; defaults to 'update'. 'create'/'update' auto-flip on a file-exists mismatch; 'delete' removes the file.",
-				),
+			description:
+				"Commit a single-file change to a branch via the GitLab API (server-side; no local git). " +
+				"Upsert: updates the file when it exists, creates it when it does not. The content is the FULL new file body, not a diff. " +
+				"SIO-1022: action 'delete' removes the file (no content needed) -- used to revert a config override.",
+			inputSchema: {
+				branch: z.string(),
+				file_path: z.string(),
+				content: z
+					.string()
+					.optional()
+					.describe("Full new file content (read-modify-write; not a diff). Omit for a delete."),
+				commit_message: z.string(),
+				action: z
+					.enum(["create", "update", "delete"])
+					.optional()
+					.describe(
+						"Initial commit action; defaults to 'update'. 'create'/'update' auto-flip on a file-exists mismatch; 'delete' removes the file.",
+					),
+			},
+			annotations: iacToolAnnotations("gitlab_commit_file"),
 		},
 		async ({ branch, file_path, content, commit_message, action }) => {
 			const initial = action ?? "update";
@@ -334,29 +349,33 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		},
 	);
 
-	server.tool(
+	server.registerTool(
 		"gitlab_commit_files",
-		"Commit MULTIPLE files atomically in ONE commit on a branch via the GitLab API (server-side; no " +
-			"local git). All files land in a single commit. Each file's content is the FULL new body, not a diff. " +
-			"Each file carries its own action ('update' for an existing file, 'create' for a new one, 'delete' to " +
-			"remove it -- SIO-1022); pass the correct action up front -- unlike gitlab_commit_file, a multi-action " +
-			"commit cannot auto-flip per file.",
 		{
-			branch: z.string(),
-			files: z
-				.array(
-					z.object({
-						file_path: z.string(),
-						content: z
-							.string()
-							.optional()
-							.describe("Full new file content (read-modify-write; not a diff). Omit for a delete."),
-						action: z.enum(["create", "update", "delete"]).optional().describe("Defaults to 'update'."),
-					}),
-				)
-				.min(1)
-				.describe("Files to commit atomically in one commit."),
-			commit_message: z.string(),
+			description:
+				"Commit MULTIPLE files atomically in ONE commit on a branch via the GitLab API (server-side; no " +
+				"local git). All files land in a single commit. Each file's content is the FULL new body, not a diff. " +
+				"Each file carries its own action ('update' for an existing file, 'create' for a new one, 'delete' to " +
+				"remove it -- SIO-1022); pass the correct action up front -- unlike gitlab_commit_file, a multi-action " +
+				"commit cannot auto-flip per file.",
+			inputSchema: {
+				branch: z.string(),
+				files: z
+					.array(
+						z.object({
+							file_path: z.string(),
+							content: z
+								.string()
+								.optional()
+								.describe("Full new file content (read-modify-write; not a diff). Omit for a delete."),
+							action: z.enum(["create", "update", "delete"]).optional().describe("Defaults to 'update'."),
+						}),
+					)
+					.min(1)
+					.describe("Files to commit atomically in one commit."),
+				commit_message: z.string(),
+			},
+			annotations: iacToolAnnotations("gitlab_commit_files"),
 		},
 		async ({ branch, files, commit_message }) => {
 			log.info(
@@ -379,15 +398,18 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		},
 	);
 
-	server.tool(
+	server.registerTool(
 		"gitlab_create_merge_request",
-		"Open a merge request from a working branch into main. Never merges or approves.",
 		{
-			source_branch: z.string(),
-			target_branch: z.string(),
-			title: z.string(),
-			description: z.string(),
-			labels: z.array(z.string()).optional(),
+			description: "Open a merge request from a working branch into main. Never merges or approves.",
+			inputSchema: {
+				source_branch: z.string(),
+				target_branch: z.string(),
+				title: z.string(),
+				description: z.string(),
+				labels: z.array(z.string()).optional(),
+			},
+			annotations: iacToolAnnotations("gitlab_create_merge_request"),
 		},
 		async ({ source_branch, target_branch, title, description, labels }) =>
 			text(
@@ -406,14 +428,23 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 			),
 	);
 
-	server.tool("gitlab_get_merge_request", "Read a merge request by IID.", { iid: z.number() }, async ({ iid }) =>
-		text(await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/merge_requests/${iid}`)),
+	server.registerTool(
+		"gitlab_get_merge_request",
+		{
+			description: "Read a merge request by IID.",
+			inputSchema: { iid: z.number() },
+			annotations: iacToolAnnotations("gitlab_get_merge_request"),
+		},
+		async ({ iid }) => text(await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/merge_requests/${iid}`)),
 	);
 
-	server.tool(
+	server.registerTool(
 		"gitlab_get_merge_request_pipelines",
-		"List CI pipelines for a merge request (GitOps status; read-only).",
-		{ iid: z.number() },
+		{
+			description: "List CI pipelines for a merge request (GitOps status; read-only).",
+			inputSchema: { iid: z.number() },
+			annotations: iacToolAnnotations("gitlab_get_merge_request_pipelines"),
+		},
 		async ({ iid }) =>
 			text(await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/merge_requests/${iid}/pipelines`)),
 	);
@@ -441,10 +472,14 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		}
 	}
 
-	server.tool(
+	server.registerTool(
 		"gitlab_get_pipeline",
-		"Read a single pipeline's status (read-only GitOps status). Use the id from gitlab_get_merge_request_pipelines.",
-		{ pipelineId: z.number() },
+		{
+			description:
+				"Read a single pipeline's status (read-only GitOps status). Use the id from gitlab_get_merge_request_pipelines.",
+			inputSchema: { pipelineId: z.number() },
+			annotations: iacToolAnnotations("gitlab_get_pipeline"),
+		},
 		async ({ pipelineId }) =>
 			text(await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/pipelines/${pipelineId}`)),
 	);
@@ -454,15 +489,19 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 	// lands on main and a pipeline runs for it. List pipelines for that sha so a "check my MR" follow-up
 	// can read the apply pipeline's real status (running/success/failed) instead of telling the user to
 	// go look in GitLab. Newest first; [] when the apply pipeline has not started yet. Read-only.
-	server.tool(
+	server.registerTool(
 		"gitlab_list_pipelines_for_sha",
-		"List CI pipelines for a commit sha on a ref (default main). Used to find the post-merge terraform " +
-			"APPLY pipeline (which runs on main, not on the MR) via the MR's merge_commit_sha. Short shas are " +
-			"resolved to the full 40-char sha (the GitLab filter matches full shas only). Read-only; newest first; " +
-			"an api-source pipeline at the same sha is NOT the apply pipeline (prefer source=push).",
 		{
-			sha: z.string().describe("Commit sha (the MR's merge_commit_sha after merge; short shas are resolved)."),
-			ref: z.string().optional().describe("Branch ref to scope to (default 'main')."),
+			description:
+				"List CI pipelines for a commit sha on a ref (default main). Used to find the post-merge terraform " +
+				"APPLY pipeline (which runs on main, not on the MR) via the MR's merge_commit_sha. Short shas are " +
+				"resolved to the full 40-char sha (the GitLab filter matches full shas only). Read-only; newest first; " +
+				"an api-source pipeline at the same sha is NOT the apply pipeline (prefer source=push).",
+			inputSchema: {
+				sha: z.string().describe("Commit sha (the MR's merge_commit_sha after merge; short shas are resolved)."),
+				ref: z.string().optional().describe("Branch ref to scope to (default 'main')."),
+			},
+			annotations: iacToolAnnotations("gitlab_list_pipelines_for_sha"),
 		},
 		async ({ sha, ref }) => {
 			const branch = ref ?? "main";
@@ -480,16 +519,20 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 	// JSON {applyStatus, jobId?, pipelineId, webUrl?, parentStatus} so the agent never collapses a
 	// still-running or failed apply into "live". applyStatus is "" when the apply job hasn't appeared
 	// yet (parent only / no child) -- the caller must treat that as "starting", never success. Read-only.
-	server.tool(
+	server.registerTool(
 		"gitlab_get_merge_commit_apply_result",
-		"Resolve the REAL post-merge terraform APPLY outcome for a merge-commit sha: walk parent pipeline " +
-			"-> child -> the apply:* job and return that JOB's status (success=live, running=applying, failed=not " +
-			"live, manual=waiting for an operator to start it). Prefers the push-source pipeline (an api-source " +
-			"pipeline at the same sha is a synthetics trigger, not the apply). Short shas are resolved to the " +
-			"full sha. The parent pipeline status alone is NOT reliable. Read-only. Returns JSON.",
 		{
-			sha: z.string().describe("The MR's merge_commit_sha (after merge; short shas are resolved)."),
-			ref: z.string().optional().describe("Branch ref to scope to (default 'main')."),
+			description:
+				"Resolve the REAL post-merge terraform APPLY outcome for a merge-commit sha: walk parent pipeline " +
+				"-> child -> the apply:* job and return that JOB's status (success=live, running=applying, failed=not " +
+				"live, manual=waiting for an operator to start it). Prefers the push-source pipeline (an api-source " +
+				"pipeline at the same sha is a synthetics trigger, not the apply). Short shas are resolved to the " +
+				"full sha. The parent pipeline status alone is NOT reliable. Read-only. Returns JSON.",
+			inputSchema: {
+				sha: z.string().describe("The MR's merge_commit_sha (after merge; short shas are resolved)."),
+				ref: z.string().optional().describe("Branch ref to scope to (default 'main')."),
+			},
+			annotations: iacToolAnnotations("gitlab_get_merge_commit_apply_result"),
 		},
 		async ({ sha, ref }) => {
 			const branch = ref ?? "main";
@@ -553,11 +596,15 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 
 	// SIO-1196: MR attribution for the version-drift precheck -- given a file's last_commit_id,
 	// name the merged MR that landed it ("MR !346 merged <date> but its apply never ran").
-	server.tool(
+	server.registerTool(
 		"gitlab_get_commit_merge_requests",
-		"List the merge requests associated with a commit sha (GET /repository/commits/:sha/merge_requests). " +
-			"Used to attribute a merged-but-unapplied change to its MR (iid, state, merged_at, web_url). Read-only.",
-		{ sha: z.string().describe("Commit sha (e.g. the file's last_commit_id from the files API).") },
+		{
+			description:
+				"List the merge requests associated with a commit sha (GET /repository/commits/:sha/merge_requests). " +
+				"Used to attribute a merged-but-unapplied change to its MR (iid, state, merged_at, web_url). Read-only.",
+			inputSchema: { sha: z.string().describe("Commit sha (e.g. the file's last_commit_id from the files API).") },
+			annotations: iacToolAnnotations("gitlab_get_commit_merge_requests"),
+		},
 		async ({ sha }) =>
 			text(
 				await gitlabFetch(
@@ -568,11 +615,17 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 			),
 	);
 
-	server.tool(
+	server.registerTool(
 		"gitlab_get_pipeline_terraform_report",
-		"Get the actual Terraform plan (create/update/delete + changed resources) for an MR pipeline. " +
-			"Walks the parent->child dynamic pipeline to the plan job's tfplan-report.json artifact. Read-only.",
-		{ pipelineId: z.number().describe("Parent (MR) pipeline id from gitlab_get_merge_request_pipelines.") },
+		{
+			description:
+				"Get the actual Terraform plan (create/update/delete + changed resources) for an MR pipeline. " +
+				"Walks the parent->child dynamic pipeline to the plan job's tfplan-report.json artifact. Read-only.",
+			inputSchema: {
+				pipelineId: z.number().describe("Parent (MR) pipeline id from gitlab_get_merge_request_pipelines."),
+			},
+			annotations: iacToolAnnotations("gitlab_get_pipeline_terraform_report"),
+		},
 		async ({ pipelineId }) => {
 			try {
 				const childId = childPipelineId(await glJson(`/projects/${project}/pipelines/${pipelineId}/bridges`));
@@ -594,14 +647,18 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 	// DRIFT_CHECK=true makes CI run ONLY the drift-check-on-demand job (terraform plan
 	// -refresh, never apply). Returns the pipeline id to poll. A 409 means an apply currently
 	// holds the state lock. Plan-only read trigger; the agent never applies.
-	server.tool(
+	server.registerTool(
 		"gitlab_trigger_drift_check",
-		"Trigger the on-demand drift-check pipeline for one (stack, deployment): POST a pipeline with DRIFT_CHECK=true, " +
-			"STACK, DEPLOYMENT. Plan-only (refresh); never applies. Returns {stack,deployment,pipelineId,status}. Then poll gitlab_get_drift_check_result.",
 		{
-			stack: z.string(),
-			deployment: z.string(),
-			ref: z.string().optional().describe("Pipeline ref (default ELASTIC_IAC_DRIFT_PIPELINE_REF or 'main')."),
+			description:
+				"Trigger the on-demand drift-check pipeline for one (stack, deployment): POST a pipeline with DRIFT_CHECK=true, " +
+				"STACK, DEPLOYMENT. Plan-only (refresh); never applies. Returns {stack,deployment,pipelineId,status}. Then poll gitlab_get_drift_check_result.",
+			inputSchema: {
+				stack: z.string(),
+				deployment: z.string(),
+				ref: z.string().optional().describe("Pipeline ref (default ELASTIC_IAC_DRIFT_PIPELINE_REF or 'main')."),
+			},
+			annotations: iacToolAnnotations("gitlab_trigger_drift_check"),
 		},
 		async ({ stack, deployment, ref }) => {
 			const driftRef = ref ?? process.env.ELASTIC_IAC_DRIFT_PIPELINE_REF ?? "main";
@@ -671,13 +728,17 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 	// artifact (raw JSON) from the drift-check-on-demand job. Drift lives in the ARTIFACT,
 	// not the pipeline status (allow_failure:[2] keeps a drifted run "success"; when:always
 	// uploads the artifact even on error). Read-only.
-	server.tool(
+	server.registerTool(
 		"gitlab_get_drift_check_result",
-		"Poll a drift-check pipeline to completion and return its drift-report.json artifact (raw JSON) from the " +
-			"drift-check-on-demand job. Read drift from the artifact, not the pipeline status. On a failed run also returns " +
-			"the job trace tail plus stateLocked (full-trace state-lock detection). " +
-			"Returns {pipelineId,jobId,status,report,failureLog?,stateLocked?}.",
-		{ pipelineId: z.number() },
+		{
+			description:
+				"Poll a drift-check pipeline to completion and return its drift-report.json artifact (raw JSON) from the " +
+				"drift-check-on-demand job. Read drift from the artifact, not the pipeline status. On a failed run also returns " +
+				"the job trace tail plus stateLocked (full-trace state-lock detection). " +
+				"Returns {pipelineId,jobId,status,report,failureLog?,stateLocked?}.",
+			inputSchema: { pipelineId: z.number() },
+			annotations: iacToolAnnotations("gitlab_get_drift_check_result"),
+		},
 		async ({ pipelineId }) => {
 			if (!token) return text(JSON.stringify({ pipelineId, status: "error", note: "gitlab token not configured" }));
 			const deadline = Date.now() + DRIFT_POLL_BUDGET_MS;
@@ -789,15 +850,19 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 	const synthDriftRef =
 		process.env.ELASTIC_IAC_SYNTH_PIPELINE_REF ?? process.env.ELASTIC_IAC_DRIFT_PIPELINE_REF ?? "main";
 
-	server.tool(
+	server.registerTool(
 		"gitlab_trigger_synthetics_drift_check",
-		"Trigger the on-demand synthetics drift-check pipeline for one deployment: POST a pipeline with " +
-			"SYNTH_DRIFT_CHECK=true, DEPLOYMENT, and optional PROJECT (no STACK). Read-only -- compares source YAML " +
-			"monitors against live Kibana. Returns {deployment,project,pipelineId,status}. Then poll gitlab_get_synthetics_drift_result.",
 		{
-			deployment: z.string(),
-			project: z.string().optional().describe("Scope to a single synthetics project; omit for fleet-wide."),
-			ref: z.string().optional().describe("Pipeline ref (default ELASTIC_IAC_SYNTH_PIPELINE_REF or 'main')."),
+			description:
+				"Trigger the on-demand synthetics drift-check pipeline for one deployment: POST a pipeline with " +
+				"SYNTH_DRIFT_CHECK=true, DEPLOYMENT, and optional PROJECT (no STACK). Read-only -- compares source YAML " +
+				"monitors against live Kibana. Returns {deployment,project,pipelineId,status}. Then poll gitlab_get_synthetics_drift_result.",
+			inputSchema: {
+				deployment: z.string(),
+				project: z.string().optional().describe("Scope to a single synthetics project; omit for fleet-wide."),
+				ref: z.string().optional().describe("Pipeline ref (default ELASTIC_IAC_SYNTH_PIPELINE_REF or 'main')."),
+			},
+			annotations: iacToolAnnotations("gitlab_trigger_synthetics_drift_check"),
 		},
 		async ({ deployment, project: synthProject, ref }) => {
 			const driftRef = ref ?? synthDriftRef;
@@ -856,12 +921,16 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		},
 	);
 
-	server.tool(
+	server.registerTool(
 		"gitlab_get_synthetics_drift_result",
-		"Poll a synthetics drift-check pipeline to completion and return its synthetics-drift-report.json artifact " +
-			"(raw JSON) from the drift-check-synthetics-on-demand job. On a failed run also returns the job trace tail. " +
-			"Returns {pipelineId,jobId,status,report,failureLog?,stateLocked?}.",
-		{ pipelineId: z.number() },
+		{
+			description:
+				"Poll a synthetics drift-check pipeline to completion and return its synthetics-drift-report.json artifact " +
+				"(raw JSON) from the drift-check-synthetics-on-demand job. On a failed run also returns the job trace tail. " +
+				"Returns {pipelineId,jobId,status,report,failureLog?,stateLocked?}.",
+			inputSchema: { pipelineId: z.number() },
+			annotations: iacToolAnnotations("gitlab_get_synthetics_drift_result"),
+		},
 		async ({ pipelineId }) => {
 			if (!token) return text(JSON.stringify({ pipelineId, status: "error", note: "gitlab token not configured" }));
 			const deadline = Date.now() + DRIFT_POLL_BUDGET_MS;
@@ -957,15 +1026,19 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		},
 	);
 
-	server.tool(
+	server.registerTool(
 		"gitlab_trigger_synthetics_push",
-		"Trigger the operator-approved synthetics PUSH pipeline: POST a pipeline with SYNTH_PUSH=true, DEPLOYMENT, " +
-			"and optional PROJECT. Re-asserts source YAML monitors to Kibana (the push_to_kibana set). NEVER deletes " +
-			"extra-in-Kibana monitors. Returns {deployment,project,pipelineId,status}. Then poll gitlab_get_synthetics_push_result.",
 		{
-			deployment: z.string(),
-			project: z.string().optional().describe("Scope to a single synthetics project; omit for fleet-wide."),
-			ref: z.string().optional().describe("Pipeline ref (default ELASTIC_IAC_SYNTH_PIPELINE_REF or 'main')."),
+			description:
+				"Trigger the operator-approved synthetics PUSH pipeline: POST a pipeline with SYNTH_PUSH=true, DEPLOYMENT, " +
+				"and optional PROJECT. Re-asserts source YAML monitors to Kibana (the push_to_kibana set). NEVER deletes " +
+				"extra-in-Kibana monitors. Returns {deployment,project,pipelineId,status}. Then poll gitlab_get_synthetics_push_result.",
+			inputSchema: {
+				deployment: z.string(),
+				project: z.string().optional().describe("Scope to a single synthetics project; omit for fleet-wide."),
+				ref: z.string().optional().describe("Pipeline ref (default ELASTIC_IAC_SYNTH_PIPELINE_REF or 'main')."),
+			},
+			annotations: iacToolAnnotations("gitlab_trigger_synthetics_push"),
 		},
 		async ({ deployment, project: synthProject, ref }) => {
 			const pushRef = ref ?? synthDriftRef;
@@ -1022,12 +1095,16 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		},
 	);
 
-	server.tool(
+	server.registerTool(
 		"gitlab_get_synthetics_push_result",
-		"Poll a synthetics PUSH pipeline to completion. The push job emits NO artifact -- its success/failure IS the " +
-			"signal. On a failed run returns the job trace tail plus stateLocked. " +
-			"Returns {pipelineId,jobId,status,failureLog?,stateLocked?}.",
-		{ pipelineId: z.number() },
+		{
+			description:
+				"Poll a synthetics PUSH pipeline to completion. The push job emits NO artifact -- its success/failure IS the " +
+				"signal. On a failed run returns the job trace tail plus stateLocked. " +
+				"Returns {pipelineId,jobId,status,failureLog?,stateLocked?}.",
+			inputSchema: { pipelineId: z.number() },
+			annotations: iacToolAnnotations("gitlab_get_synthetics_push_result"),
+		},
 		async ({ pipelineId }) => {
 			if (!token) return text(JSON.stringify({ pipelineId, status: "error", note: "gitlab token not configured" }));
 			const deadline = Date.now() + DRIFT_POLL_BUDGET_MS;
@@ -1274,18 +1351,25 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		}
 	};
 
-	server.tool(
+	server.registerTool(
 		"gitlab_trigger_fleet_upgrade_preview",
-		"Trigger the on-demand Fleet agent-binary-upgrade PREVIEW pipeline for one deployment: POST a pipeline with " +
-			"FLEET_UPGRADE_PREVIEW=true, DEPLOYMENT, VERSION, optional ROLLOUT_SECONDS/SELECTOR. Read-only (no bulk_upgrade " +
-			"POST) -- resolves the agent count + upgradeable crosstab. Returns {deployment,version,pipelineId,status}. " +
-			"Then poll gitlab_get_fleet_upgrade_preview_result.",
 		{
-			deployment: z.string(),
-			version: z.string().describe("Target agent version, e.g. '9.4.2'."),
-			rolloutSeconds: z.number().optional().describe("Rollout window in seconds (default the repo script's default)."),
-			selector: z.string().optional().describe("Fleet KQL selecting agents; omit for all enrolled agents."),
-			ref: z.string().optional().describe("Pipeline ref (default ELASTIC_IAC_FLEET_PIPELINE_REF or 'main')."),
+			description:
+				"Trigger the on-demand Fleet agent-binary-upgrade PREVIEW pipeline for one deployment: POST a pipeline with " +
+				"FLEET_UPGRADE_PREVIEW=true, DEPLOYMENT, VERSION, optional ROLLOUT_SECONDS/SELECTOR. Read-only (no bulk_upgrade " +
+				"POST) -- resolves the agent count + upgradeable crosstab. Returns {deployment,version,pipelineId,status}. " +
+				"Then poll gitlab_get_fleet_upgrade_preview_result.",
+			inputSchema: {
+				deployment: z.string(),
+				version: z.string().describe("Target agent version, e.g. '9.4.2'."),
+				rolloutSeconds: z
+					.number()
+					.optional()
+					.describe("Rollout window in seconds (default the repo script's default)."),
+				selector: z.string().optional().describe("Fleet KQL selecting agents; omit for all enrolled agents."),
+				ref: z.string().optional().describe("Pipeline ref (default ELASTIC_IAC_FLEET_PIPELINE_REF or 'main')."),
+			},
+			annotations: iacToolAnnotations("gitlab_trigger_fleet_upgrade_preview"),
 		},
 		async ({ deployment, version, rolloutSeconds, selector, ref }) =>
 			text(
@@ -1301,37 +1385,45 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 			),
 	);
 
-	server.tool(
+	server.registerTool(
 		"gitlab_get_fleet_upgrade_preview_result",
-		"Poll a Fleet-upgrade PREVIEW pipeline to completion and return its fleet-upgrade-report.json artifact (raw JSON: " +
-			"resolved_count, version_available, upgradeable_crosstab). On a failed run also returns the job trace tail. " +
-			"Returns {pipelineId,jobId,status,report,failureLog?,stateLocked?}.",
-		{ pipelineId: z.number() },
+		{
+			description:
+				"Poll a Fleet-upgrade PREVIEW pipeline to completion and return its fleet-upgrade-report.json artifact (raw JSON: " +
+				"resolved_count, version_available, upgradeable_crosstab). On a failed run also returns the job trace tail. " +
+				"Returns {pipelineId,jobId,status,report,failureLog?,stateLocked?}.",
+			inputSchema: { pipelineId: z.number() },
+			annotations: iacToolAnnotations("gitlab_get_fleet_upgrade_preview_result"),
+		},
 		async ({ pipelineId }) => text(await pollFleetResult("preview", CI_CONTRACT.fleetPreviewJobName, pipelineId)),
 	);
 
-	server.tool(
+	server.registerTool(
 		"gitlab_trigger_fleet_upgrade_apply",
-		"Trigger the operator-approved Fleet agent-binary-upgrade APPLY pipeline: POST a pipeline with FLEET_UPGRADE_APPLY=true, " +
-			"DEPLOYMENT, VERSION, optional ROLLOUT_SECONDS/SELECTOR/MAX_AGENTS. This issues the bulk_upgrade POST in CI and runs " +
-			"the verify sweep. Use the SAME deployment/version/selector that were previewed. Returns " +
-			"{deployment,version,pipelineId,status}. Then poll gitlab_get_fleet_upgrade_apply_result.",
 		{
-			deployment: z.string(),
-			version: z.string().describe("Target agent version, e.g. '9.4.2' (must match the previewed version)."),
-			rolloutSeconds: z.number().optional(),
-			selector: z.string().optional().describe("Fleet KQL (must match the previewed selector)."),
-			// SIO-927: the apply script REFUSES when resolved_count exceeds its blast-radius cap (default 500).
-			// Pass the previewed resolved_count to authorize a fleet-wide apply; explicit operator approval ==
-			// accepting that blast radius. Omit to keep the script default. (Fleet's hard cap of 10000 is separate.)
-			maxAgents: z
-				.number()
-				.optional()
-				.describe(
-					"Apply-path blast-radius cap override (CI MAX_AGENTS -> --max-agents). Pass the previewed resolved_count " +
-						"to apply fleet-wide past the script's 500 default; omit for the default.",
-				),
-			ref: z.string().optional(),
+			description:
+				"Trigger the operator-approved Fleet agent-binary-upgrade APPLY pipeline: POST a pipeline with FLEET_UPGRADE_APPLY=true, " +
+				"DEPLOYMENT, VERSION, optional ROLLOUT_SECONDS/SELECTOR/MAX_AGENTS. This issues the bulk_upgrade POST in CI and runs " +
+				"the verify sweep. Use the SAME deployment/version/selector that were previewed. Returns " +
+				"{deployment,version,pipelineId,status}. Then poll gitlab_get_fleet_upgrade_apply_result.",
+			inputSchema: {
+				deployment: z.string(),
+				version: z.string().describe("Target agent version, e.g. '9.4.2' (must match the previewed version)."),
+				rolloutSeconds: z.number().optional(),
+				selector: z.string().optional().describe("Fleet KQL (must match the previewed selector)."),
+				// SIO-927: the apply script REFUSES when resolved_count exceeds its blast-radius cap (default 500).
+				// Pass the previewed resolved_count to authorize a fleet-wide apply; explicit operator approval ==
+				// accepting that blast radius. Omit to keep the script default. (Fleet's hard cap of 10000 is separate.)
+				maxAgents: z
+					.number()
+					.optional()
+					.describe(
+						"Apply-path blast-radius cap override (CI MAX_AGENTS -> --max-agents). Pass the previewed resolved_count " +
+							"to apply fleet-wide past the script's 500 default; omit for the default.",
+					),
+				ref: z.string().optional(),
+			},
+			annotations: iacToolAnnotations("gitlab_trigger_fleet_upgrade_apply"),
 		},
 		async ({ deployment, version, rolloutSeconds, selector, maxAgents, ref }) =>
 			text(
@@ -1348,22 +1440,32 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 			),
 	);
 
-	server.tool(
+	server.registerTool(
 		"gitlab_get_fleet_upgrade_apply_result",
-		"Poll a Fleet-upgrade APPLY pipeline to completion and return its fleet-upgrade-report.json artifact (raw JSON: " +
-			"action_id + apply.poll_status/acked/created/failed_silent). failed_silent is the verify-sweep UPG_FAILED ground " +
-			"truth (Fleet action_status undercounts). On failure also returns the job trace tail. " +
-			"Returns {pipelineId,jobId,status,report,failureLog?,stateLocked?}.",
-		{ pipelineId: z.number() },
+		{
+			description:
+				"Poll a Fleet-upgrade APPLY pipeline to completion and return its fleet-upgrade-report.json artifact (raw JSON: " +
+				"action_id + apply.poll_status/acked/created/failed_silent). failed_silent is the verify-sweep UPG_FAILED ground " +
+				"truth (Fleet action_status undercounts). On failure also returns the job trace tail. " +
+				"Returns {pipelineId,jobId,status,report,failureLog?,stateLocked?}.",
+			inputSchema: { pipelineId: z.number() },
+			annotations: iacToolAnnotations("gitlab_get_fleet_upgrade_apply_result"),
+		},
 		async ({ pipelineId }) => text(await pollFleetResult("apply", CI_CONTRACT.fleetApplyJobName, pipelineId)),
 	);
 
 	const PLAN_LOG_TAIL_BYTES = 4000;
-	server.tool(
+	server.registerTool(
 		"gitlab_get_pipeline_plan_log",
-		"Get the tail of the plan job's log for an MR pipeline (to diagnose a FAILED plan -- e.g. a " +
-			"Terraform state-lock vs a real plan error). Walks the parent->child pipeline to the plan job. Read-only.",
-		{ pipelineId: z.number().describe("Parent (MR) pipeline id from gitlab_get_merge_request_pipelines.") },
+		{
+			description:
+				"Get the tail of the plan job's log for an MR pipeline (to diagnose a FAILED plan -- e.g. a " +
+				"Terraform state-lock vs a real plan error). Walks the parent->child pipeline to the plan job. Read-only.",
+			inputSchema: {
+				pipelineId: z.number().describe("Parent (MR) pipeline id from gitlab_get_merge_request_pipelines."),
+			},
+			annotations: iacToolAnnotations("gitlab_get_pipeline_plan_log"),
+		},
 		async ({ pipelineId }) => {
 			if (!token) return text("[gitlab token not configured: set ELASTIC_IAC_GITLAB_TOKEN]");
 			try {
@@ -1383,19 +1485,27 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		},
 	);
 
-	server.tool(
+	server.registerTool(
 		"gitlab_get_merge_request_approvals",
-		"Read a merge request's approval state (approved? by whom? required count). Read-only; never approves.",
-		{ iid: z.number() },
+		{
+			description:
+				"Read a merge request's approval state (approved? by whom? required count). Read-only; never approves.",
+			inputSchema: { iid: z.number() },
+			annotations: iacToolAnnotations("gitlab_get_merge_request_approvals"),
+		},
 		async ({ iid }) =>
 			text(await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/merge_requests/${iid}/approvals`)),
 	);
 
-	server.tool(
+	server.registerTool(
 		"gitlab_list_agent_merge_requests",
-		"List the agent's open merge requests (label agent-generated), newest first. Used to recover " +
-			"the MR to watch when the thread no longer holds it (e.g. after a page reload). Read-only.",
-		{},
+		{
+			description:
+				"List the agent's open merge requests (label agent-generated), newest first. Used to recover " +
+				"the MR to watch when the thread no longer holds it (e.g. after a page reload). Read-only.",
+			inputSchema: {},
+			annotations: iacToolAnnotations("gitlab_list_agent_merge_requests"),
+		},
 		async () =>
 			text(
 				await gitlabFetch(

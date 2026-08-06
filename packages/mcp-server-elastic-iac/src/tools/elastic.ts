@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ClusterDeployment, Config } from "../config.ts";
 import { text } from "./shared.ts";
+import { iacToolAnnotations } from "./tool-classification.ts";
 
 // Shapes of the slices of the Elastic Cloud deployment payloads this server reads.
 // The two endpoints differ: the LIST (/api/v1/deployments) gives `resources[]`
@@ -102,22 +103,32 @@ export function registerElasticTools(server: McpServer, config: Config): void {
 		return res.json();
 	}
 
-	server.tool("elastic_cloud_list_deployments", "List Elastic Cloud deployments.", {}, async () =>
-		text(await cloudFetch("/api/v1/deployments")),
+	server.registerTool(
+		"elastic_cloud_list_deployments",
+		{
+			description: "List Elastic Cloud deployments.",
+			inputSchema: {},
+			annotations: iacToolAnnotations("elastic_cloud_list_deployments"),
+		},
+		async () => text(await cloudFetch("/api/v1/deployments")),
 	);
 
 	// Bound the per-id GETs used to enrich sparse list rows with a version.
 	const MAX_VERSION_FANOUT = 25;
-	server.tool(
+	server.registerTool(
 		"elastic_cloud_list_deployment_versions",
-		"List all Elastic Cloud deployments with their Elasticsearch version, region, and health (one row per deployment). " +
-			"Org-scoped; answers 'what version is X running' across one or many deployments without drafting any change. " +
-			`Sparse list rows are enriched with a bounded per-deployment lookup (max ${MAX_VERSION_FANOUT}).`,
 		{
-			nameFilter: z
-				.string()
-				.optional()
-				.describe("Case-insensitive substring filter on deployment name; omit for all org deployments."),
+			description:
+				"List all Elastic Cloud deployments with their Elasticsearch version, region, and health (one row per deployment). " +
+				"Org-scoped; answers 'what version is X running' across one or many deployments without drafting any change. " +
+				`Sparse list rows are enriched with a bounded per-deployment lookup (max ${MAX_VERSION_FANOUT}).`,
+			inputSchema: {
+				nameFilter: z
+					.string()
+					.optional()
+					.describe("Case-insensitive substring filter on deployment name; omit for all org deployments."),
+			},
+			annotations: iacToolAnnotations("elastic_cloud_list_deployment_versions"),
 		},
 		async ({ nameFilter }) => {
 			try {
@@ -153,17 +164,23 @@ export function registerElasticTools(server: McpServer, config: Config): void {
 		},
 	);
 
-	server.tool(
+	server.registerTool(
 		"elastic_cloud_get_deployment",
-		"Get an Elastic Cloud deployment (topology, sizing).",
-		{ deploymentId: z.string() },
+		{
+			description: "Get an Elastic Cloud deployment (topology, sizing).",
+			inputSchema: { deploymentId: z.string() },
+			annotations: iacToolAnnotations("elastic_cloud_get_deployment"),
+		},
 		async ({ deploymentId }) => text(await cloudFetch(`/api/v1/deployments/${deploymentId}`)),
 	);
 
-	server.tool(
+	server.registerTool(
 		"elastic_cloud_get_plan_history",
-		"Get the plan history for a deployment's Elasticsearch resource (source of truth for tier changes).",
-		{ deploymentId: z.string(), refId: z.string().optional() },
+		{
+			description: "Get the plan history for a deployment's Elasticsearch resource (source of truth for tier changes).",
+			inputSchema: { deploymentId: z.string(), refId: z.string().optional() },
+			annotations: iacToolAnnotations("elastic_cloud_get_plan_history"),
+		},
 		async ({ deploymentId, refId }) =>
 			text(
 				await cloudFetch(
@@ -177,25 +194,35 @@ export function registerElasticTools(server: McpServer, config: Config): void {
 	// model-supplied base URL.
 	// A model-controlled URL would bypass the deployment allowlist and make this an SSRF primitive,
 	// so the tool surface only takes a deployment name. Read-only (GET); never mutates.
-	server.tool(
+	server.registerTool(
 		"elastic_get_cluster_health",
-		"Read cluster health for a configured deployment's cluster API.",
-		{ deployment: z.string().optional() },
+		{
+			description: "Read cluster health for a configured deployment's cluster API.",
+			inputSchema: { deployment: z.string().optional() },
+			annotations: iacToolAnnotations("elastic_get_cluster_health"),
+		},
 		async ({ deployment }) => text(await clusterFetch(config.clusterDeployments, deployment, "/_cluster/health")),
 	);
 
-	server.tool(
+	server.registerTool(
 		"elastic_get_index_template",
-		"Read an index template (composable/component) from a configured deployment's cluster API.",
-		{ name: z.string(), deployment: z.string().optional() },
+		{
+			description: "Read an index template (composable/component) from a configured deployment's cluster API.",
+			inputSchema: { name: z.string(), deployment: z.string().optional() },
+			annotations: iacToolAnnotations("elastic_get_index_template"),
+		},
 		async ({ name, deployment }) =>
 			text(await clusterFetch(config.clusterDeployments, deployment, `/_index_template/${name}`)),
 	);
 
-	server.tool(
+	server.registerTool(
 		"elastic_ilm_get_lifecycle",
-		"Read an ILM policy from a configured deployment's cluster API. Pass `deployment` (cluster name) to resolve the configured URL + auth.",
-		{ policy: z.string(), deployment: z.string().optional() },
+		{
+			description:
+				"Read an ILM policy from a configured deployment's cluster API. Pass `deployment` (cluster name) to resolve the configured URL + auth.",
+			inputSchema: { policy: z.string(), deployment: z.string().optional() },
+			annotations: iacToolAnnotations("elastic_ilm_get_lifecycle"),
+		},
 		async ({ policy, deployment }) =>
 			text(await clusterFetch(config.clusterDeployments, deployment, `/_ilm/policy/${encodeURIComponent(policy)}`)),
 	);
@@ -206,22 +233,29 @@ export function registerElasticTools(server: McpServer, config: Config): void {
 	// deployment NAME only (never a model-supplied URL -- same SSRF-safe contract as the read tools);
 	// _simulate is read-only and never mutates the cluster. Default docs to a single empty document so
 	// a pure structural simulate works without the caller providing sample data.
-	server.tool(
+	server.registerTool(
 		"elastic_simulate_ingest_pipeline",
-		"Simulate an inline ingest-pipeline definition against a configured deployment's cluster API " +
-			"(_ingest/pipeline/_simulate). Validates that the pipeline and its processors compile before it is " +
-			"committed. Pass `pipeline` (the inline {processors:[...]} body), `deployment` (cluster name), and " +
-			"optionally `docs` (sample documents; defaults to one empty doc) and `verbose`. Read-only.",
 		{
-			pipeline: z
-				.record(z.string(), z.unknown())
-				.describe('Inline pipeline definition, e.g. { processors: [ { drop: { if: "..." } } ] }.'),
-			deployment: z.string().optional().describe("Configured deployment (cluster) name; resolves the URL + auth."),
-			docs: z
-				.array(z.record(z.string(), z.unknown()))
-				.optional()
-				.describe("Sample documents (each {_source:{...}} or bare fields). Defaults to a single empty document."),
-			verbose: z.boolean().optional().describe("Show the result after each processor step, not just the final output."),
+			description:
+				"Simulate an inline ingest-pipeline definition against a configured deployment's cluster API " +
+				"(_ingest/pipeline/_simulate). Validates that the pipeline and its processors compile before it is " +
+				"committed. Pass `pipeline` (the inline {processors:[...]} body), `deployment` (cluster name), and " +
+				"optionally `docs` (sample documents; defaults to one empty doc) and `verbose`. Read-only.",
+			inputSchema: {
+				pipeline: z
+					.record(z.string(), z.unknown())
+					.describe('Inline pipeline definition, e.g. { processors: [ { drop: { if: "..." } } ] }.'),
+				deployment: z.string().optional().describe("Configured deployment (cluster) name; resolves the URL + auth."),
+				docs: z
+					.array(z.record(z.string(), z.unknown()))
+					.optional()
+					.describe("Sample documents (each {_source:{...}} or bare fields). Defaults to a single empty document."),
+				verbose: z
+					.boolean()
+					.optional()
+					.describe("Show the result after each processor step, not just the final output."),
+			},
+			annotations: iacToolAnnotations("elastic_simulate_ingest_pipeline"),
 		},
 		async ({ pipeline, deployment, docs, verbose }) => {
 			const sampleDocs = (docs && docs.length > 0 ? docs : [{ _source: {} }]).map((doc) => ({
