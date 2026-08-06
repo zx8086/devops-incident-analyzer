@@ -174,6 +174,107 @@ describe("installToolCallLogging", () => {
 		expect(outcomes).toEqual([{ tool: "no_such_tool", ok: false, durationMs: 0, failureClass: "unknown-tool" }]);
 	});
 
+	// SIO-1407: dispatching schema-invalid arguments through the REAL SDK must
+	// yield a bad-input outcome AND a stamped { _error } envelope, with the
+	// original prose + zod issues preserved for the model to fix its arguments.
+	test("schema-invalid arguments through the real SDK stamp a bad-input envelope", async () => {
+		const server = new McpServer(
+			{ name: "log-test", version: "0.0.0" },
+			{ capabilities: { tools: { listChanged: true } } as Record<string, unknown> },
+		);
+		server.registerTool(
+			"needs_args",
+			{ description: "tool", inputSchema: z.object({ required_field: z.string() }).shape },
+			async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
+		);
+		const outcomes: ToolCallOutcome[] = [];
+		const { logger } = recordingLogger();
+		installToolCallLogging(
+			server,
+			logger,
+			() => 0,
+			(o) => outcomes.push(o),
+		);
+
+		const result = (await dispatchToolsCall(server, "needs_args")) as {
+			isError?: boolean;
+			content: Array<{ type: string; text: string }>;
+		};
+
+		expect(result.isError).toBe(true);
+		expect(outcomes[0]?.failureClass).toBe("bad-input");
+		const text = result.content[0]?.text ?? "";
+		// original rejection text preserved, envelope appended
+		expect(text).toMatch(/Invalid arguments for tool needs_args/);
+		const envelopeStart = text.lastIndexOf('{"_error"');
+		expect(envelopeStart).toBeGreaterThan(0);
+		const envelope = JSON.parse(text.slice(envelopeStart)) as {
+			_error: { kind: string; category: string; advice?: string };
+		};
+		expect(envelope._error.kind).toBe("bad-input");
+	});
+
+	// SIO-1407 (CodeRabbit): a schema field literally named "_error" puts the bytes
+	// '"_error"' into the zod issue path -- the OLD substring skip would have
+	// suppressed stamping; the structural check must not.
+	test("a rejected schema field named _error still gets stamped", async () => {
+		const server = new McpServer(
+			{ name: "log-test", version: "0.0.0" },
+			{ capabilities: { tools: { listChanged: true } } as Record<string, unknown> },
+		);
+		server.registerTool(
+			"underscore_error_tool",
+			{ description: "tool", inputSchema: z.object({ _error: z.string() }).shape },
+			async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
+		);
+		const outcomes: ToolCallOutcome[] = [];
+		const { logger } = recordingLogger();
+		installToolCallLogging(
+			server,
+			logger,
+			() => 0,
+			(o) => outcomes.push(o),
+		);
+
+		const result = (await dispatchToolsCall(server, "underscore_error_tool")) as {
+			isError?: boolean;
+			content: Array<{ text: string }>;
+		};
+
+		expect(result.isError).toBe(true);
+		expect(outcomes[0]?.failureClass).toBe("bad-input");
+		const text = result.content[0]?.text ?? "";
+		const envelopeStart = text.lastIndexOf('{"_error"');
+		expect(envelopeStart).toBeGreaterThan(0);
+		const envelope = JSON.parse(text.slice(envelopeStart)) as { _error: { kind: string } };
+		expect(envelope._error.kind).toBe("bad-input");
+	});
+
+	test("stamping leaves non-matching error text byte-identical and never double-stamps envelopes", async () => {
+		const proseServer = buildServerWithTool("prose_fail", async () => ({
+			content: [{ type: "text", text: "Index not found: logs-x" }],
+			isError: true,
+		}));
+		const envelopeText = '{"_error":{"kind":"bad-query","category":"bad-query","message":"bad DSL"}}';
+		const envelopeServer = buildServerWithTool("envelope_fail", async () => ({
+			content: [{ type: "text", text: envelopeText }],
+			isError: true,
+		}));
+		const { logger } = recordingLogger();
+		installToolCallLogging(proseServer, logger, () => 0);
+		installToolCallLogging(envelopeServer, logger, () => 0);
+
+		const prose = (await dispatchToolsCall(proseServer, "prose_fail")) as {
+			content: Array<{ text: string }>;
+		};
+		expect(prose.content[0]?.text).toBe("Index not found: logs-x");
+
+		const enveloped = (await dispatchToolsCall(envelopeServer, "envelope_fail")) as {
+			content: Array<{ text: string }>;
+		};
+		expect(enveloped.content[0]?.text).toBe(envelopeText);
+	});
+
 	test("a throwing onCall sink neither breaks the dispatch result nor suppresses the log line", async () => {
 		const server = buildServerWithTool("read_thing", async () => ({ content: [{ type: "text", text: "ok" }] }));
 		const { logger, lines } = recordingLogger();

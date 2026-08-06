@@ -111,6 +111,29 @@ describe("classifyFailureText", () => {
 		);
 	});
 
+	// SIO-1407: argument-validation rejections are the canonical bad-input event.
+	// Both fixtures are live-captured (elastic missing-LIMIT custom rule, couchbase
+	// missing scope_name) -- prose + raw zod issues, no envelope.
+	test("argument-validation rejection text classifies bad-input", () => {
+		expect(
+			classifyFailureText(
+				'MCP error -32602: Input validation error: Invalid arguments for tool elasticsearch_esql_query: [\n  {\n    "code": "custom",\n    "path": ["query"],\n    "message": "ES|QL query must include a `| LIMIT <n>` clause."\n  }\n]',
+			),
+		).toBe("bad-input");
+		expect(
+			classifyFailureText(
+				'MCP error -32602: Input validation error: Invalid arguments for tool capella_run_sql_plus_plus_query: [\n  {\n    "expected": "string",\n    "code": "invalid_type",\n    "path": ["scope_name"],\n    "message": "Invalid input: expected string, received undefined"\n  }\n]',
+			),
+		).toBe("bad-input");
+		// both prefixes are optional across SDK versions
+		expect(classifyFailureText("Invalid arguments for tool kafka_list_topics: [bad]")).toBe("bad-input");
+		// "toolsmith" must not match the "tool <name>" form
+		expect(classifyFailureText("Invalid arguments for toolsmith")).toBe("unstructured");
+		// SIO-1407 (CodeRabbit): the ": [" zod-payload delimiter is REQUIRED -- a
+		// tool's own prose mentioning the phrase must never classify (or be stamped)
+		expect(classifyFailureText("Invalid arguments for tool foo, please retry with a filter")).toBe("unstructured");
+	});
+
 	// SIO-1402: the SDK RESOLVES an unknown tool name into this exact error text
 	// (measured; it does not reject at dispatch).
 	test("the SDK's unknown-tool text classifies unknown-tool", () => {

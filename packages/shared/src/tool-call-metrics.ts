@@ -11,7 +11,13 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { z } from "zod";
-import { TOOL_ERROR_KIND_TO_CATEGORY, ToolErrorCategorySchema, ToolErrorKindSchema } from "./agent-state.ts";
+import {
+	TOOL_ERROR_KIND_TO_CATEGORY,
+	type ToolErrorCategory,
+	ToolErrorCategorySchema,
+	type ToolErrorKind,
+	ToolErrorKindSchema,
+} from "./agent-state.ts";
 
 export interface ToolCallMetricsLogger {
 	warn(message: string, meta?: Record<string, unknown>): void;
@@ -57,6 +63,18 @@ export function resolveToolCallMetricsDbPath(
 // - "structured-other": a well-formed envelope of any other kind.
 const UNKNOWN_TOOL_TEXT_RE = /^(?:MCP error -\d+: )?Tool \S+ not found$/;
 
+// SIO-1407: the tool-argument validation rejection -- the canonical bad-input
+// event (the eval toolset's tool_arg_validity keys on exactly this). Live wire
+// shape, identical across servers: "MCP error -32602: Input validation error:
+// Invalid arguments for tool <name>: [ <zod issues> ]" (both prefixes optional
+// across SDK versions). Matched before the brace-scan because the zod issue
+// array parses as JSON but carries no { _error } envelope. The trailing ": ["
+// delimiter is REQUIRED (CodeRabbit): the stamp mutates matching results, so a
+// tool's own prose that merely mentions "Invalid arguments for tool X" must
+// never match -- only the canonical rejection with its zod-issue payload does.
+export const ARG_VALIDATION_TEXT_RE =
+	/^(?:MCP error -\d+: )?(?:Input validation error: )?Invalid arguments for tool \S+:\s*\[/;
+
 // SIO-1402 (CodeRabbit): the enum schemas -- not the `in` operator -- gate the
 // envelope fields, so inherited property names ("toString", "__proto__") in a
 // malformed envelope classify unstructured instead of leaking through as
@@ -69,24 +87,40 @@ const EnvelopeFieldsSchema = z.object({
 	category: ToolErrorCategorySchema.optional().catch(undefined),
 });
 
-export function classifyFailureText(text: string | undefined): ToolCallFailureClass {
-	if (!text) return "unstructured";
-	if (UNKNOWN_TOOL_TEXT_RE.test(text.trim())) return "unknown-tool";
+// Brace-scan + schema-gate the { _error } envelope out of an error text. Returns
+// the resolved kind/category, or null when no structurally valid envelope exists.
+function parseEnvelopeFields(text: string): { kind: ToolErrorKind; category: ToolErrorCategory } | null {
 	const start = text.indexOf("{");
 	const end = text.lastIndexOf("}");
-	if (start === -1 || end <= start) return "unstructured";
+	if (start === -1 || end <= start) return null;
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(text.slice(start, end + 1));
 	} catch {
-		return "unstructured";
+		return null;
 	}
-	if (typeof parsed !== "object" || parsed === null) return "unstructured";
+	if (typeof parsed !== "object" || parsed === null) return null;
 	const envelope = EnvelopeFieldsSchema.safeParse((parsed as { _error?: unknown })._error);
-	if (!envelope.success) return "unstructured";
+	if (!envelope.success) return null;
 	const { kind } = envelope.data;
-	const category = envelope.data.category ?? TOOL_ERROR_KIND_TO_CATEGORY[kind];
-	if (category === "bad-query" || kind === "bad-input") return "bad-input";
+	return { kind, category: envelope.data.category ?? TOOL_ERROR_KIND_TO_CATEGORY[kind] };
+}
+
+// SIO-1407 (CodeRabbit): STRUCTURAL presence check, for callers deciding whether
+// a text already carries an envelope. A bare '"_error"' substring is not enough
+// -- a zod issue path for an input field literally named "_error" contains the
+// same bytes without any envelope.
+export function hasStructuredEnvelope(text: string): boolean {
+	return parseEnvelopeFields(text) !== null;
+}
+
+export function classifyFailureText(text: string | undefined): ToolCallFailureClass {
+	if (!text) return "unstructured";
+	if (UNKNOWN_TOOL_TEXT_RE.test(text.trim())) return "unknown-tool";
+	if (ARG_VALIDATION_TEXT_RE.test(text.trim())) return "bad-input";
+	const fields = parseEnvelopeFields(text);
+	if (!fields) return "unstructured";
+	if (fields.category === "bad-query" || fields.kind === "bad-input") return "bad-input";
 	return "structured-other";
 }
 
@@ -94,7 +128,8 @@ export function classifyFailureText(text: string | undefined): ToolCallFailureCl
 // content blocks, shared by the McpServer seam (tool-call-logging.ts) and the
 // agentcore proxy. Prefers the block carrying the "_error" envelope marker so a
 // multi-block result still classifies; falls back to the first text block.
-const TextContentBlockSchema = z.object({ type: z.literal("text"), text: z.string() });
+// Exported (SIO-1407) so the envelope stamp validates blocks the same way.
+export const TextContentBlockSchema = z.object({ type: z.literal("text"), text: z.string() });
 
 export function extractErrorTextFromContent(content: unknown): string | undefined {
 	if (!Array.isArray(content)) return undefined;
