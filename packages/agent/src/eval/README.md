@@ -72,6 +72,82 @@ retention picture above).
 - ~5-10 minutes wall-clock (~30-90s per query)
 - Incident-replay cost is documented in its own section above
 
+## MCP tool eval (SIO-1398)
+
+The third eval in this directory, and the only one that grades the TOOL CALL rather than the
+report. Both evals above read `run.outputs.output.response`; nothing looked at what the agent
+actually called, so "the LLM called the tool wrong" was structurally ungradeable.
+
+```bash
+bun run --filter @devops-agent/agent eval:upload-mcp-tool-dataset   # SDK sync, dataset id preserved
+bun run eval:mcp-tool -- --datasource elastic                       # one server
+bun run eval:mcp-tool                                               # all 7
+```
+
+> Running from a **git worktree**: every script here uses `--env-file=../../.env`, which resolves
+> inside the worktree, where no `.env` exists (it lives in the main checkout). Symptom is a
+> LangSmith `401` or missing MCP URLs, not an obvious "file not found". Point at the real file:
+> `bun --env-file=/path/to/main/checkout/.env run src/eval/run-mcp-tool-eval.ts --datasource elastic`.
+
+- Dataset: `mcp-tool-dataset.ts` -> LangSmith dataset `mcp-tool-eval`. 11 examples across all
+  7 datasources.
+- **Separate from `incident-replay-eval` on purpose.** That one is a model A/B harness
+  (`--sub-agent-model`); its variable under test is the model. This one tests the tooling and
+  should run on every MCP server change, independent of any model comparison. It also covers
+  each server systematically rather than "whatever tools those 32 incidents happened to touch".
+- Every example **pins one datasource**, so a run fans out to a single sub-agent and any
+  failure is attributable to that server. Queries force a specific action group from that
+  datasource's `action_tool_map`, anchored on an entity that returns rows today
+  (`LIVE_ANCHORS`, verified against the live `.env`, not `.env.example`).
+- **An example returning zero tool calls means the anchor or query is wrong**, not that the
+  tools are healthy. The evaluators emit no feedback at `totalCalls === 0` rather than scoring
+  a perfect 1.0 -- otherwise a run where the sub-agent was skipped would look like a clean pass.
+- konnect is included but intentionally disabled in this environment (`precheck.ts` marks it
+  `required: false`), so its example reports zero calls until konnect is enabled.
+
+### Feedback keys
+
+Convention: **1.0 = good on every key**, so rate metrics emit `1 - rate` and Compare reads
+uniformly beside `response_quality`.
+
+- `tool_arg_validity` -- deterministic: share of calls whose arguments the server accepted.
+  Reads `bad-input` at the KIND layer deliberately, because it collapses to category `unknown`
+  (SIO-1399), so reading only the category would miss every `-32602` the model caused.
+- `tool_name_validity` -- deterministic: share of calls naming a bound tool. Splits a
+  model-invented name out of category `not-found`, which otherwise conflates it with a
+  genuinely absent resource.
+- `expected_tools_fired` -- deterministic: partial credit over `anyOf` groups. A forbidden call
+  (e.g. a write tool on a read-only question) zeroes the key.
+- `tool_response_health` -- deterministic: prose-only errors (no `{ _error }` envelope),
+  suspicious emptiness against a declared anchor, and known-bug regressions (`latency_us`
+  nanoseconds-as-microseconds, AWS year-shift windows).
+- `tool_efficiency` -- deterministic, **soft comparative signal only, gate nothing on it**.
+  Args are not observable, so a paginated sweep reads as a repeat.
+- `tool_data_utilization` -- LLM judge (1 / 0.5 / 0): tools returned data, did the report use
+  it? Catches the silent drop that `evidence_<ds>` and `subagent_accuracy_<ds>` miss, since
+  both grade what was FOUND rather than whether it reached the answer.
+
+### Ground truth is deliberately argument-free
+
+`expectedToolUse` names required tool GROUPS (`anyOf`), never arguments. Tool names change on
+MCP upgrades and the 25-tool binder makes the bound set dynamic per run, so the disjunction is
+what keeps this from rotting. Argument correctness is graded drift-free by `tool_arg_validity`
+-- the server's own validation verdict beats a curator's guess, and args are not in graph state
+anyway. `mcp-tool-dataset.test.ts` parses the real agent YAML so a renamed tool fails offline
+instead of surfacing as a false model regression on a live run.
+
+### What reaches LangSmith
+
+`toolTrajectory` carries tool names, closed-enum classifications, and counts -- **never `args`
+or `rawJson`**. Response-health checks read payloads in-process and emit only rule + tool name
++ detail. `redactPiiContent` could not have made payloads safe regardless: it deliberately does
+not redact IPs, hostnames, or account ids (SIO-861, they are core diagnostic data). Projecting
+no payload is the safety property.
+
+Note that LangSmith run *inputs* already carry real incident text (hostnames, cluster names) and
+have since `incident-replay-eval` shipped. The boundary being protected here is the **public git
+repo** and the gitignored fixtures, not LangSmith, which is treated as internal-confidential.
+
 ## Also in this directory: the model-conformance probe
 
 `probe-model.ts` (SIO-1224) verifies a MODEL's capability assumptions rather than the graph's

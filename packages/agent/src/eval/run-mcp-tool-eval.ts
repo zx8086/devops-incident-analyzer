@@ -14,7 +14,9 @@
 // is attributable to that server rather than to the 7-way supervisor fan-out.
 
 import { spawnSync } from "node:child_process";
+import { Client } from "langsmith";
 import { evaluate } from "langsmith/evaluation";
+import type { Example } from "langsmith/schemas";
 import {
 	confidenceThreshold,
 	datasourcesCovered,
@@ -25,7 +27,7 @@ import {
 	toolNameValidity,
 	toolResponseHealth,
 } from "./evaluators.ts";
-import { coveredDatasources, examplesForDatasource } from "./mcp-tool-dataset.ts";
+import { coveredDatasources } from "./mcp-tool-dataset.ts";
 import { runAgent } from "./run-function.ts";
 
 const DATASET_NAME = "mcp-tool-eval";
@@ -51,12 +53,36 @@ if (datasource && !known.includes(datasource)) {
 	process.exit(1);
 }
 
-// LangSmith's evaluate() takes a dataset NAME, so a per-datasource run filters client-side on
-// the example ids that belong to that datasource. Splitting into one LangSmith dataset per
-// datasource was rejected: 7 datasets would fragment the Compare view and multiply the upload
-// scripts for no analytical gain.
-const selected = datasource ? examplesForDatasource(datasource) : undefined;
+// evaluate()'s `data` accepts a dataset name OR a list of examples. For a per-datasource run we
+// pass the filtered LIST, pulled from the uploaded dataset and filtered on the example's own
+// pinned uiSelectedDataSources -- so the LangSmith dataset stays the source of truth (example
+// ids, version history) rather than re-deriving examples from local TS.
+//
+// Filtering on the PIN, not on expectedDatasources: the pin is what actually constrains the
+// fan-out, so anything else could select an example that runs a different sub-agent than the
+// flag names. Splitting into 7 LangSmith datasets was rejected -- it would fragment the Compare
+// view and multiply the upload scripts for no analytical gain.
+async function selectedExamples(ds: string): Promise<Example[]> {
+	const client = new Client();
+	const matching: Example[] = [];
+	for await (const example of client.listExamples({ datasetName: DATASET_NAME })) {
+		const pinned = (example.inputs as { uiSelectedDataSources?: unknown }).uiSelectedDataSources;
+		if (Array.isArray(pinned) && pinned.includes(ds)) matching.push(example);
+	}
+	return matching;
+}
+
+const selected = datasource ? await selectedExamples(datasource) : undefined;
 const exampleCount = selected?.length;
+if (datasource && exampleCount === 0) {
+	// The local dataset has examples for this datasource (checked above) but the uploaded one
+	// does not -- almost always a missing or stale upload, which would otherwise present as a
+	// silent zero-example "pass".
+	console.error(
+		`No uploaded examples for "${datasource}" in dataset ${DATASET_NAME}. Run eval:upload-mcp-tool-dataset first.`,
+	);
+	process.exit(1);
+}
 
 console.log("WARNING: this hits the LIVE MCP servers your .env points at (and Bedrock).");
 console.log(
@@ -90,7 +116,8 @@ console.log(`Starting evaluation, experiment prefix: ${experimentPrefix}`);
 const results = await evaluate(
 	(inputs: Record<string, unknown>) => runAgent(inputs as Parameters<typeof runAgent>[0]),
 	{
-		data: DATASET_NAME,
+		// The filtered example list when --datasource is set, otherwise the whole dataset by name.
+		data: selected ?? DATASET_NAME,
 		evaluators: [
 			// Tool-correctness keys (SIO-1398), all deterministic.
 			toolArgValidity,
