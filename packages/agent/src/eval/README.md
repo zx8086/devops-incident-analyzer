@@ -156,7 +156,48 @@ Three things this sweep established:
    1.0, and `expected_tools_fired` correctly reported `0/1 required tool group(s) fired`. The
    "zero calls is a visible signal, not silent absence" contract holds.
 
-### Latest full run (`mcp-tool-eval-7a72cb0c`, 20 examples, all 7 datasources)
+### Latest full run (`mcp-tool-eval-ddb9b17b`, 25 examples, all 7 datasources)
+
+Every correctness key clean, and **zero tool errors across the whole run**.
+
+| key | avg | previous |
+|---|---|---|
+| `tool_arg_validity` | **1.000** | 0.988 |
+| `tool_name_validity` | **1.000** | 1.000 |
+| `tool_response_health` | **1.000** | 0.917 |
+| `tool_data_utilization` | **1.000** | 1.000 |
+| `datasources_covered` | **1.000** | 1.000 |
+| `expected_tools_fired` | 0.972 | 0.933 |
+| `confidence_threshold` | 0.960 | 0.960 |
+| `tool_efficiency` | 0.419 (soft) | 0.396 |
+
+Two fixes closed the gaps the previous run exposed:
+
+- `tool_arg_validity` 0.988 -> 1.000. The previous run recorded **10 rejected
+  `gitlab_orbit_query_graph` calls out of 10 attempts**, because `query` was a bare `z.record`
+  (`additionalProperties: {}` -- any object passes JSON-Schema, so the model got no structural
+  signal and only learned it was wrong from Orbit's validator, after the billed call). SIO-1408
+  typed the DSL skeleton and put a worked payload in the description.
+- `tool_response_health` 0.917 -> 1.000. The two findings were false positives from anchors on
+  FILTERABLE list tools -- see the anchor rule below.
+
+### The anchor rule (learned twice, now enforced by a test)
+
+A `knownGoodAnchor` asserts "this tool MUST return rows". That only holds for tools whose
+result **cannot be narrowed by a model-chosen filter**. `gitlab_list_merge_requests` produced a
+false `empty-anchor` twice -- the model reasonably added `updated_after`, and the project's MRs
+fell outside that window, so `{project_id}` returns rows while `{project_id, updated_after}`
+returns `[]`.
+
+Anchors removed for the same reason: `kafka_list_consumer_groups` (`filter`/`states`),
+`kafka_list_topics` (`filter`/`prefix`), `elasticsearch_list_indices` (`indexPattern`).
+
+Anchors kept are keyed on an **exact identifier** (`gitlab_get_commit_diff` by sha,
+`gitlab_get_merge_request` by iid, `gitlab_get_pipeline_jobs` by pipeline id) or take no
+narrowing argument at all (couchbase current-state tools, `connect_list_connectors`).
+`mcp-tool-dataset.test.ts` now fails if a filterable-list anchor is reintroduced.
+
+### Previous full run (`mcp-tool-eval-7a72cb0c`, 20 examples, all 7 datasources)
 
 Run against servers built from the SIO-1398 `_id` prune and the SIO-1403 project_id
 normalisation.
