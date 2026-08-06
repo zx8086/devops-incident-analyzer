@@ -666,3 +666,96 @@ export function toolEfficiency(run: Run, example?: Example): { key: string; scor
 		},
 	];
 }
+
+// --- SIO-1398: tool_data_utilization (the one new judge) -----------------------------------
+//
+// The only irreducibly semantic question in this set: tools returned data -- did the report
+// actually USE it? Neither evidence_<datasource> nor subagent_accuracy_<datasource> catches
+// this, because both grade what was FOUND against referenceFindings, not whether what was
+// found reached the answer. The failure it targets is the silent drop: tools succeed, real data
+// comes back, and the response is vague prose that ignores it.
+//
+// PRIVACY: this judge receives tool NAMES + subagentReports + response. It NEVER receives tool
+// results. subagentReports and response already go to OpenAI via the two existing judges, so
+// this adds no new egress surface; sending rawJson would.
+
+export const UTILIZATION_JUDGE_SYSTEM_PROMPT = [
+	"You are grading whether an AI incident-analysis agent actually USED the data its tools returned.",
+	"You will be given, per datasource: the names of the tools that returned successfully, the sub-agent's own raw findings, and the final response the agent produced.",
+	"You are NOT grading whether the findings are correct, complete, or well written -- another judge does that. Grade ONLY the link between retrieval and reporting.",
+	'Return "used" when the response carries concrete, specific content attributable to what those tools retrieved (named entities, counts, states, timestamps, identifiers).',
+	'Return "partially_used" when some retrieved material surfaces but notable retrieved content is dropped or flattened into generalities.',
+	'Return "ignored" when tools returned successfully yet the response is generic, hedges as though nothing was retrieved, or claims an absence of data that the retrieval contradicts.',
+	"A truthful, well-evidenced report that says a check came back clean COUNTS AS USED -- reporting a negative finding is using the data. Do not penalise it.",
+	'Respond with JSON only: {"verdict": "used|partially_used|ignored", "reasoning": "<one or two sentences>"}',
+].join("\n");
+
+export const UtilizationGradeSchema = z.object({
+	verdict: z.enum(["used", "partially_used", "ignored"]).catch("ignored"),
+	reasoning: z
+		.union([z.string(), z.number(), z.null()])
+		.optional()
+		.transform((v) => (v === null || v === undefined ? "" : String(v))),
+});
+export type UtilizationGrade = z.output<typeof UtilizationGradeSchema>;
+
+// Pure mapping, split out so the score semantics are unit-testable without an OpenAI call --
+// same split as judgeFeedback/subagentJudgeFeedback above.
+export function utilizationFeedback(grade: UtilizationGrade): { key: string; score: number; comment: string }[] {
+	const score = grade.verdict === "used" ? 1 : grade.verdict === "partially_used" ? 0.5 : 0;
+	return [{ key: "tool_data_utilization", score, comment: `verdict=${grade.verdict} -- ${grade.reasoning}` }];
+}
+
+export async function toolDataUtilization(
+	run: Run,
+	_example?: Example,
+): Promise<{ key: string; score: number; comment: string }[]> {
+	const trajectory = readTrajectory(run);
+	if (!trajectory || trajectory.totalCalls === 0) return [];
+
+	// Only datasources whose tools actually SUCCEEDED can be graded on utilization: if every
+	// call errored there is nothing that could have been used, and scoring 0 would blame the
+	// report for a tool failure the other keys already capture.
+	const succeededByDatasource = new Map<string, Set<string>>();
+	for (const call of trajectory.calls) {
+		if (call.outcome !== "success") continue;
+		const names = succeededByDatasource.get(call.dataSourceId) ?? new Set<string>();
+		names.add(call.toolName);
+		succeededByDatasource.set(call.dataSourceId, names);
+	}
+	if (succeededByDatasource.size === 0) return [];
+
+	const output = (run.outputs as { output?: { response?: unknown; subagentReports?: unknown } } | undefined)?.output;
+	const response = typeof output?.response === "string" ? output.response : "";
+	if (response.trim().length === 0) return [];
+	const subagentReports = (output?.subagentReports ?? {}) as { [dataSourceId: string]: string };
+
+	const perDatasource = [...succeededByDatasource.entries()]
+		.map(([datasource, names]) => {
+			const report = truncateForJudge(
+				subagentReports[datasource] ?? "(no findings produced by the sub-agent for this datasource)",
+			);
+			return `Datasource: ${datasource}\nTools that returned successfully: ${[...names].join(", ")}\nSub-agent's raw findings:\n${report}`;
+		})
+		.join("\n\n");
+
+	const openai = new OpenAI();
+	let r: Awaited<ReturnType<typeof openai.chat.completions.create>>;
+	try {
+		r = await openai.chat.completions.create({
+			...judgeModelConfig(),
+			response_format: { type: "json_object" },
+			messages: [
+				{ role: "system", content: UTILIZATION_JUDGE_SYSTEM_PROMPT },
+				{ role: "user", content: `${perDatasource}\n\nFinal response to grade:\n${truncateForJudge(response)}` },
+			],
+		});
+	} catch {
+		// Degrade to no feedback rather than killing the run over one example -- same contract as
+		// the two judges above.
+		return [];
+	}
+	const grade = parseLlmJson(r.choices[0]?.message?.content ?? "", UtilizationGradeSchema);
+	if (!grade.ok) return [];
+	return utilizationFeedback(grade.data);
+}

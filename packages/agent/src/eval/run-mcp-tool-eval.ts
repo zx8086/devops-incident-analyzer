@@ -20,6 +20,7 @@ import {
 	datasourcesCovered,
 	expectedToolsFired,
 	toolArgValidity,
+	toolDataUtilization,
 	toolEfficiency,
 	toolNameValidity,
 	toolResponseHealth,
@@ -97,6 +98,8 @@ const results = await evaluate(
 			expectedToolsFired,
 			toolResponseHealth,
 			toolEfficiency,
+			// The one LLM judge -- the only per-example cost beyond the agent run itself.
+			toolDataUtilization,
 			// Reused from the incident evals: cheap, and a tool probe that fails to target its
 			// own pinned datasource is worth catching here too.
 			datasourcesCovered,

@@ -7,9 +7,12 @@ import type { Example, Run } from "langsmith/schemas";
 import {
 	expectedToolsFired,
 	toolArgValidity,
+	toolDataUtilization,
 	toolEfficiency,
 	toolNameValidity,
 	toolResponseHealth,
+	UtilizationGradeSchema,
+	utilizationFeedback,
 } from "./evaluators.ts";
 import type { ToolCallRecord } from "./tool-trajectory.ts";
 
@@ -231,5 +234,47 @@ describe("toolEfficiency", () => {
 			runWith([call({ toolName: "a", outcome: "error", category: "bad-query" }), call({ toolName: "a" })]),
 		);
 		expect(feedback?.score).toBe(0.5);
+	});
+});
+
+describe("utilizationFeedback (SIO-1398 judge mapping)", () => {
+	test("maps the three verdicts to 1 / 0.5 / 0", () => {
+		expect(utilizationFeedback({ verdict: "used", reasoning: "r" })[0]?.score).toBe(1);
+		expect(utilizationFeedback({ verdict: "partially_used", reasoning: "r" })[0]?.score).toBe(0.5);
+		expect(utilizationFeedback({ verdict: "ignored", reasoning: "r" })[0]?.score).toBe(0);
+	});
+
+	test("carries the verdict and reasoning into the comment", () => {
+		const [feedback] = utilizationFeedback({
+			verdict: "ignored",
+			reasoning: "response never cites the retrieved data",
+		});
+		expect(feedback?.key).toBe("tool_data_utilization");
+		expect(feedback?.comment).toContain("ignored");
+		expect(feedback?.comment).toContain("never cites");
+	});
+});
+
+describe("UtilizationGradeSchema tolerance", () => {
+	test("a malformed verdict degrades to ignored rather than failing the example", () => {
+		const parsed = UtilizationGradeSchema.parse({ verdict: "nonsense", reasoning: null });
+		expect(parsed.verdict).toBe("ignored");
+		expect(parsed.reasoning).toBe("");
+	});
+});
+
+describe("toolDataUtilization guards (no OpenAI call reached)", () => {
+	test("emits no feedback when nothing was called", async () => {
+		expect(await toolDataUtilization(runWith([]))).toEqual([]);
+	});
+
+	test("emits no feedback when every call errored -- nothing could have been used", async () => {
+		// Scoring 0 here would blame the report for a tool failure the other keys already capture.
+		const run = runWith([call({ toolName: "a", outcome: "error", category: "server-error" })]);
+		expect(await toolDataUtilization(run)).toEqual([]);
+	});
+
+	test("emits no feedback when the response is empty", async () => {
+		expect(await toolDataUtilization(runWith([call({ toolName: "a" })]))).toEqual([]);
 	});
 });
