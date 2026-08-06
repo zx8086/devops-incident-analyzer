@@ -88,6 +88,32 @@ describe("dataset tool names resolve against the real action maps", () => {
 		}
 	});
 
+	test("no anchor is on a tool whose result a model-chosen filter can narrow", () => {
+		// The rule learned the hard way: an anchor asserts "this tool MUST return rows". That only
+		// holds for tools with no narrowing argument. gitlab_list_merge_requests produced a false
+		// empty-anchor TWICE -- the model reasonably added `updated_after` and the project's MRs
+		// fell outside that window. Same risk on any filterable LIST tool.
+		const FILTERABLE_LIST_TOOLS = new Set([
+			"gitlab_list_merge_requests",
+			"gitlab_list_commits",
+			"gitlab_search",
+			"kafka_list_topics",
+			"kafka_list_consumer_groups",
+			"elasticsearch_list_indices",
+			"elasticsearch_search",
+			"atlassian_searchJiraIssuesUsingJql",
+		]);
+		const offenders: string[] = [];
+		for (const example of MCP_TOOL_DATASET) {
+			for (const anchor of example.outputs.expectedToolUse?.knownGoodAnchors ?? []) {
+				if (FILTERABLE_LIST_TOOLS.has(anchor.toolName)) {
+					offenders.push(`${example.metadata?.ticketKey}: ${anchor.toolName}`);
+				}
+			}
+		}
+		expect(offenders).toEqual([]);
+	});
+
 	test("no example forbids a tool it also requires", () => {
 		for (const example of MCP_TOOL_DATASET) {
 			const expected = example.outputs.expectedToolUse;

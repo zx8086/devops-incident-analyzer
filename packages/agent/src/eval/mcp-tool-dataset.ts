@@ -173,7 +173,10 @@ const EXAMPLES: EvalExample[] = [
 					},
 				],
 				forbiddenTools: ["elasticsearch_delete_index", "elasticsearch_create_index"],
-				knownGoodAnchors: [{ toolName: "elasticsearch_list_indices", mustReturnRows: true }],
+				// NOT elasticsearch_list_indices: it accepts `indexPattern`, so a narrowed pattern can
+				// legitimately return zero. elasticsearch_indices_summary has no narrowing argument
+				// on the path this example exercises, making its emptiness unambiguous.
+				knownGoodAnchors: [{ toolName: "elasticsearch_indices_summary", mustReturnRows: true }],
 			},
 		},
 		metadata: {
@@ -263,7 +266,11 @@ const EXAMPLES: EvalExample[] = [
 					},
 				],
 				forbiddenTools: ["kafka_reset_consumer_group_offsets", "kafka_delete_topic"],
-				knownGoodAnchors: [{ toolName: "kafka_list_consumer_groups", mustReturnRows: true }],
+				// NO anchor. kafka_list_consumer_groups accepts `filter`/`states`, so a narrowed
+				// query can legitimately return zero -- the same class as the gitlab
+				// list_merge_requests false positive. A non-filterable sibling like
+				// kafka_describe_cluster is not in this example's required groups, so anchoring it
+				// would be vacuous (the drift test enforces exactly that).
 			},
 		},
 		metadata: { ticketKey: "SIO-1398-kafka-consumer-lag", queryProvenance: "reconstructed", era: "2026-08" },
@@ -320,7 +327,17 @@ const EXAMPLES: EvalExample[] = [
 					},
 				],
 				forbiddenTools: ["gitlab_create_merge_request", "gitlab_create_issue", "gitlab_manage_pipeline"],
-				knownGoodAnchors: [{ toolName: "gitlab_list_merge_requests", mustReturnRows: true }],
+				// NO anchor on gitlab_list_merge_requests. It has now produced a false empty-anchor
+				// finding TWICE -- once before SIO-1401 and again after, when I wrongly re-added it
+				// on the theory that the 404 had been the cause. It was not: the model reasonably
+				// adds `updated_after` to answer "most recently", and this project's MRs fall
+				// outside that window, so `{project_id}` returns rows while
+				// `{project_id, updated_after}` returns []. Verified by bisecting the arguments
+				// against the live server.
+				//
+				// The rule this establishes: an anchor asserts "this tool MUST return rows", which
+				// only holds for tools whose result cannot be narrowed by a model-chosen filter.
+				// Cluster health and index inventory qualify; any filterable LIST tool does not.
 			},
 		},
 		metadata: { ticketKey: "SIO-1398-gitlab-merge-requests", queryProvenance: "reconstructed", era: "2026-08" },
@@ -437,8 +454,9 @@ const EXAMPLES: EvalExample[] = [
 					},
 				],
 				forbiddenTools: ["kafka_delete_topic", "kafka_produce_message", "kafka_reset_consumer_group_offsets"],
-				// Both verified zero-arg-OK live; the cluster genuinely has topics.
-				knownGoodAnchors: [{ toolName: "kafka_list_topics", mustReturnRows: true }],
+				// NO anchor: kafka_list_topics accepts `filter`/`prefix`, so a narrowed query can
+				// legitimately return zero rows. Only tools with no narrowing argument can carry a
+				// must-return-rows assertion (see the gitlab list_merge_requests note).
 			},
 		},
 		metadata: { ticketKey: "SIO-1398-kafka-dlq-and-topics", queryProvenance: "reconstructed", era: "2026-08" },
