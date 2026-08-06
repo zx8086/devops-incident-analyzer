@@ -17,6 +17,7 @@ import { z } from "zod";
 import type { AtlassianMcpProxy } from "../../atlassian-client/index.js";
 import { createContextLogger } from "../../utils/logger.js";
 import { traceToolCall } from "../../utils/tracing.js";
+import { CUSTOM_READ_ONLY_ANNOTATIONS } from "../annotations.js";
 import { toolErrorResult } from "../error-envelope.js";
 import { parseAtlassianTextContent } from "./parse-atlassian-content.js";
 
@@ -157,12 +158,16 @@ export async function getJiraIssue(proxy: AtlassianMcpProxy, input: GetJiraIssue
 }
 
 export function registerGetJiraIssue(server: McpServer, proxy: AtlassianMcpProxy): void {
-	server.tool(
+	server.registerTool(
 		"atlassian_getJiraIssue",
-		'Fetch a Jira issue by key or ID. Returns a triage-sized projection by default (summary, status, priority, severity, assignee, reporter, dates, labels, components, issuetype, description truncated to ~4KB). Pass `fields` to narrow further or pass `"*"` for the full issue (frequently exceeds the 64KB tool-result cap).',
 		{
-			issueIdOrKey: InputSchema.shape.issueIdOrKey,
-			fields: InputSchema.shape.fields,
+			description:
+				'Fetch a Jira issue by key or ID. Returns a triage-sized projection by default (summary, status, priority, severity, assignee, reporter, dates, labels, components, issuetype, description truncated to ~4KB). Pass `fields` to narrow further or pass `"*"` for the full issue (frequently exceeds the 64KB tool-result cap).',
+			inputSchema: {
+				issueIdOrKey: InputSchema.shape.issueIdOrKey,
+				fields: InputSchema.shape.fields,
+			},
+			annotations: CUSTOM_READ_ONLY_ANNOTATIONS,
 		},
 		async (args) => {
 			return traceToolCall("atlassian_getJiraIssue", async () => {

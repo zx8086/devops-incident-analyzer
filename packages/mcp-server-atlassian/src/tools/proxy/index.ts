@@ -158,7 +158,7 @@ export function registerProxyTools(
 			continue;
 		}
 		// SIO-706: tools with a hand-written wrapper in custom/ override the generic proxy.
-		// Registering both would throw at server.tool(name, ...) on the second call.
+		// Registering both would throw at registerTool(name, ...) on the second call.
 		if (CUSTOM_OVERRIDDEN_UPSTREAM_TOOLS.has(tool.name)) {
 			continue;
 		}
@@ -194,7 +194,11 @@ export function registerProxyTools(
 			});
 		};
 
-		server.tool(prefixedName, tool.description, zodShape, handler);
+		// SIO-1416: registerTool config style (SDK v2 removes the .tool() sugar). No
+		// annotations here -- the upstream surface is discovered at boot and we cannot
+		// assert per-tool hints for tools we do not own; WRITE_TOOL_PATTERNS filtering
+		// above remains the write gate.
+		server.registerTool(prefixedName, { description: tool.description, inputSchema: zodShape }, handler);
 		registered.push(prefixedName);
 	}
 
