@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { AtlassianMcpProxy } from "../../atlassian-client/index.js";
 import { createContextLogger } from "../../utils/logger.js";
 import { traceToolCall } from "../../utils/tracing.js";
+import { CUSTOM_READ_ONLY_ANNOTATIONS } from "../annotations.js";
 import { toolErrorResult } from "../error-envelope.js";
 import { errorKeywordsField, sanitizeErrorKeywords } from "./find-linked-incidents.js";
 import { parseAtlassianTextContent } from "./parse-atlassian-content.js";
@@ -151,14 +152,18 @@ export async function getRunbookForAlert(
 }
 
 export function registerGetRunbookForAlert(server: McpServer, proxy: AtlassianMcpProxy, siteUrl?: string): void {
-	server.tool(
+	server.registerTool(
 		"getRunbookForAlert",
-		"Search Confluence for runbooks relevant to a service alert. Returns pages ranked by relevance score.",
 		{
-			service: z.string().describe("Service name to find runbooks for"),
-			errorKeywords: errorKeywordsField.describe("Error keywords to include in the search"),
-			spaceKey: z.string().optional().describe("Confluence space key to scope the search"),
-			limit: z.number().int().positive().default(5).describe("Maximum number of runbook pages to return"),
+			description:
+				"Search Confluence for runbooks relevant to a service alert. Returns pages ranked by relevance score.",
+			inputSchema: {
+				service: z.string().describe("Service name to find runbooks for"),
+				errorKeywords: errorKeywordsField.describe("Error keywords to include in the search"),
+				spaceKey: z.string().optional().describe("Confluence space key to scope the search"),
+				limit: z.number().int().positive().default(5).describe("Maximum number of runbook pages to return"),
+			},
+			annotations: CUSTOM_READ_ONLY_ANNOTATIONS,
 		},
 		async (args) => {
 			return traceToolCall("getRunbookForAlert", async () => {

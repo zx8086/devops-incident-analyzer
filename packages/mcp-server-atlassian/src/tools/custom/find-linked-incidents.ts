@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { AtlassianMcpProxy } from "../../atlassian-client/index.js";
 import { createContextLogger } from "../../utils/logger.js";
 import { traceToolCall } from "../../utils/tracing.js";
+import { CUSTOM_READ_ONLY_ANNOTATIONS } from "../annotations.js";
 import { toolErrorResult } from "../error-envelope.js";
 import { parseAtlassianTextContent } from "./parse-atlassian-content.js";
 import { resolveEffectiveProjects } from "./validate-incident-projects.js";
@@ -242,17 +243,21 @@ export function registerFindLinkedIncidents(
 	incidentProjects: string[],
 	siteUrl?: string,
 ): void {
-	server.tool(
+	server.registerTool(
 		"findLinkedIncidents",
-		"Find Jira incidents linked to a service within a time window. Returns shaped issues with severity, status, and MTTR.",
 		{
-			service: z.string().describe("Service name to search for in Jira incidents"),
-			componentLabel: z.string().optional().describe("Optional Jira component or label to narrow results"),
-			errorKeywords: errorKeywordsField.describe(
-				"Incident domain terms to text-match (e.g. ['AFS season code', 'FMS', 'THE1']) so tickets not labelled with the service are still found.",
-			),
-			withinDays: z.number().int().positive().default(30).describe("How many days back to search"),
-			limit: z.number().int().positive().default(10).describe("Maximum number of issues to return"),
+			description:
+				"Find Jira incidents linked to a service within a time window. Returns shaped issues with severity, status, and MTTR.",
+			inputSchema: {
+				service: z.string().describe("Service name to search for in Jira incidents"),
+				componentLabel: z.string().optional().describe("Optional Jira component or label to narrow results"),
+				errorKeywords: errorKeywordsField.describe(
+					"Incident domain terms to text-match (e.g. ['AFS season code', 'FMS', 'THE1']) so tickets not labelled with the service are still found.",
+				),
+				withinDays: z.number().int().positive().default(30).describe("How many days back to search"),
+				limit: z.number().int().positive().default(10).describe("Maximum number of issues to return"),
+			},
+			annotations: CUSTOM_READ_ONLY_ANNOTATIONS,
 		},
 		async (args) => {
 			return traceToolCall("findLinkedIncidents", async () => {

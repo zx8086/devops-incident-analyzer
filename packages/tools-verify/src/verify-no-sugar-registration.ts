@@ -22,7 +22,6 @@ const PACKAGES_DIR = join(HERE, "../../..", "packages");
 // and deletes its entry here in the same commit. When the last entry goes, the
 // guard enforces zero sugar registration repo-wide.
 const NOT_YET_CONVERTED = new Set([
-	"mcp-server-atlassian", // SIO-1416 (C-3)
 	"mcp-server-aws", // SIO-1420 (C-7)
 	"mcp-server-couchbase", // SIO-1419 (C-6)
 	"mcp-server-elastic-iac", // SIO-1417 (C-4)

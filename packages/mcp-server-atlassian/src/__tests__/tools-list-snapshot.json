@@ -1,0 +1,36 @@
+{
+	"atlassian_getIssue": {
+		"surfaceHash": "ddf1907fd8adabd2f458342878ec0e8855db72b604ec20968d83c81975fafcd2"
+	},
+	"atlassian_getJiraIssue": {
+		"surfaceHash": "1c8a0d357f60eb98a3d411b86c373c226785f342b4dadf75cb15a74e8587cc9b",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"atlassian_searchIssues": {
+		"surfaceHash": "d4eb41a9b19f4ba6c8169f03451004d406d01c098758c32131b907c9171ac342"
+	},
+	"findLinkedIncidents": {
+		"surfaceHash": "cd54526a4318e85bdf17138f627985728cfa80c1de4fd272231b7455b6cad512",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"getIncidentHistory": {
+		"surfaceHash": "b16cf1bc9cb7a6431183d92cbb4febcfe9229c3be084616bd2bffc3a61454b40",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"getRunbookForAlert": {
+		"surfaceHash": "072da034722f7351042524102f5a581662d3e91d3ec4229a5afbdb0c813a1b20",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	}
+}
