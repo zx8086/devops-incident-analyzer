@@ -1,5 +1,5 @@
 // packages/agent/src/eval/run-function.ts
-import { ToolErrorCategorySchema } from "@devops-agent/shared";
+import { ToolErrorCategorySchema, ToolErrorKindSchema } from "@devops-agent/shared";
 import { HumanMessage } from "@langchain/core/messages";
 import { z } from "zod";
 import { type FirstAttemptSummary, summarizeFirstAttempts } from "../alignment.ts";
@@ -15,6 +15,7 @@ import {
 	runWithExampleTag,
 } from "./fixture-recorder.ts";
 import { buildSubagentReports } from "./subagent-reports.ts";
+import { buildToolTrajectory, type ToolTrajectory } from "./tool-trajectory.ts";
 
 // SIO-1371 (CodeRabbit PR #590): dataset examples arrive from LangSmith as untyped JSON --
 // validate at the boundary so a malformed example fails loudly as a harness error instead of
@@ -80,12 +81,42 @@ const FirstAttemptSummarySchema = z.object({
 	recovered: z.boolean(),
 });
 
-const FrozenOutputSchema = z.object({
+// SIO-1398: the trajectory member carries a DEFAULT, unlike every sibling above. Fixtures
+// recorded before this field existed have no `toolTrajectory` key, and this parse is strict --
+// without the default, every previously recorded leg would fail here and replay-outputs (the
+// cheap judge-iteration mode) would break on its first example. An empty trajectory is also
+// the semantically right fallback: the evaluators emit NO feedback at totalCalls === 0 rather
+// than scoring a perfect 1.0, so a pre-SIO-1398 fixture is simply not graded on tool calls.
+const FrozenToolTrajectorySchema = z
+	.object({
+		calls: z.array(
+			z.object({
+				dataSourceId: z.string(),
+				deploymentId: z.string().optional(),
+				toolName: z.string(),
+				outcome: z.enum(["success", "error"]),
+				category: ToolErrorCategorySchema.optional(),
+				kind: ToolErrorKindSchema.optional(),
+				statusCode: z.number().optional(),
+				recovered: z.boolean().optional(),
+				hallucinatedName: z.string().optional(),
+				isAlignmentRetry: z.boolean(),
+			}),
+		),
+		byDataSource: z.record(z.string(), z.object({ total: z.number(), errors: z.number() })),
+		totalCalls: z.number(),
+	})
+	.default({ calls: [], byDataSource: {}, totalCalls: 0 });
+
+// Exported for the backward-compat regression test: a fixture recorded before SIO-1398 must
+// keep parsing here, or replay-outputs breaks for every previously recorded leg.
+export const FrozenOutputSchema = z.object({
 	response: z.string(),
 	targetDataSources: z.array(z.string()),
 	confidenceCap: z.number().optional(),
 	firstAttempts: z.array(FirstAttemptSummarySchema),
 	subagentReports: z.record(z.string(), z.string()),
+	toolTrajectory: FrozenToolTrajectorySchema,
 });
 
 let frozenOutputs: Map<string, unknown> | undefined;
@@ -115,6 +146,7 @@ export async function runAgent(inputs: z.infer<typeof RunAgentInputsSchema>): Pr
 		confidenceCap?: number;
 		firstAttempts: FirstAttemptSummary[];
 		subagentReports: { [dataSourceId: string]: string };
+		toolTrajectory: ToolTrajectory;
 	};
 }> {
 	const parsed = RunAgentInputsSchema.parse(inputs);
@@ -162,6 +194,10 @@ export async function runAgent(inputs: z.infer<typeof RunAgentInputsSchema>): Pr
 		// so the per-sub-agent judge can grade the variable under test (sub-agent model) without the
 		// constant (Sonnet 5 aggregator prose) diluting the signal.
 		const subagentReports = buildSubagentReports(finalState.dataSourceResults ?? []);
+		// SIO-1398: the third projection over the same dataSourceResults the two above read.
+		// Carries tool names, closed-enum classifications, and counts only -- never args or
+		// rawJson (see the privacy invariant on ToolCallRecord).
+		const toolTrajectory = buildToolTrajectory(finalState.dataSourceResults ?? []);
 		return {
 			output: {
 				response: responseText,
@@ -169,6 +205,7 @@ export async function runAgent(inputs: z.infer<typeof RunAgentInputsSchema>): Pr
 				confidenceCap: finalState.confidenceCap,
 				firstAttempts,
 				subagentReports,
+				toolTrajectory,
 			},
 		};
 	};

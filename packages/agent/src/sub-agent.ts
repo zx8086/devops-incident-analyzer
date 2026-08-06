@@ -395,6 +395,13 @@ export const AGENT_NAMES: Record<string, string> = {
 	aws: "aws-agent",
 };
 
+// SIO-1398: exported so the eval's tool-trajectory projection matches on the SAME constant
+// rather than a copy that silently drifts. The capture group is the model-invented tool name.
+// Agent-side these stay category "not-found" (unchanged); the eval re-matches them only to
+// separate "the model invented a tool" from "the resource genuinely does not exist", which
+// share that category but are completely different defects.
+export const TOOL_NOT_FOUND_PATTERNS: readonly RegExp[] = [/tool "([^"]+)" not found/, /tool `([a-z0-9_]+)` not found/];
+
 const ERROR_PATTERNS: Array<{ category: ToolErrorCategory; patterns: RegExp[] }> = [
 	{
 		// SIO-1232: LangGraph's ToolNode throws `Tool "X" not found.\n Please fix your mistakes.`
@@ -407,7 +414,7 @@ const ERROR_PATTERNS: Array<{ category: ToolErrorCategory; patterns: RegExp[] }>
 		// Patterns are matched against the LOWERCASED message (see classifyToolError), so they are
 		// written lowercase -- an uppercase literal here would silently never match.
 		category: "not-found",
-		patterns: [/tool "[^"]+" not found/, /tool `[a-z0-9_]+` not found/],
+		patterns: [...TOOL_NOT_FOUND_PATTERNS],
 	},
 	{
 		category: "auth",

@@ -1,6 +1,6 @@
 // packages/agent/src/eval/run-function.test.ts
 import { describe, expect, test } from "bun:test";
-import { buildEvalMcpConfig } from "./run-function.ts";
+import { buildEvalMcpConfig, FrozenOutputSchema } from "./run-function.ts";
 
 // SIO-1375 follow-up: run-function.ts's ensureMcpConnected() builds the McpClientConfig passed to
 // createMcpClient. Every AWS eval run in the SIO-1374/SIO-1375 A/B legs (both before AND after the
@@ -45,5 +45,57 @@ describe("buildEvalMcpConfig (SIO-1375/SIO-1376)", () => {
 		expect(config.awsUrl).toBeUndefined();
 		expect(config.elasticUrl).toBeUndefined();
 		expect("awsUrl" in config).toBe(true);
+	});
+});
+
+// SIO-1398: FrozenOutputSchema.parse is STRICT and runs on every replay-outputs example. The
+// toolTrajectory member therefore carries a default -- without it, every leg recorded before
+// this field existed would fail to parse and the offline judge-iteration mode would break on
+// its first example. These tests pin that contract in both directions.
+describe("FrozenOutputSchema toolTrajectory backward compatibility (SIO-1398)", () => {
+	const legacyFixture = {
+		response: "a report recorded before toolTrajectory existed",
+		targetDataSources: ["elastic"],
+		firstAttempts: [],
+		subagentReports: {},
+	};
+
+	test("a fixture recorded before toolTrajectory existed still parses", () => {
+		const parsed = FrozenOutputSchema.parse(legacyFixture);
+		expect(parsed.toolTrajectory).toEqual({ calls: [], byDataSource: {}, totalCalls: 0 });
+	});
+
+	test("a recorded trajectory round-trips intact", () => {
+		const parsed = FrozenOutputSchema.parse({
+			...legacyFixture,
+			toolTrajectory: {
+				calls: [
+					{
+						dataSourceId: "elastic",
+						deploymentId: "eu-b2b",
+						toolName: "elasticsearch_search",
+						outcome: "error",
+						category: "bad-query",
+						kind: "bad-query",
+						isAlignmentRetry: false,
+					},
+				],
+				byDataSource: { elastic: { total: 1, errors: 1 } },
+				totalCalls: 1,
+			},
+		});
+
+		expect(parsed.toolTrajectory.totalCalls).toBe(1);
+		expect(parsed.toolTrajectory.calls[0]?.toolName).toBe("elasticsearch_search");
+		expect(parsed.toolTrajectory.calls[0]?.deploymentId).toBe("eu-b2b");
+	});
+
+	test("a malformed trajectory fails loudly rather than being waved through", () => {
+		expect(() =>
+			FrozenOutputSchema.parse({
+				...legacyFixture,
+				toolTrajectory: { calls: [{ dataSourceId: "elastic" }], byDataSource: {}, totalCalls: 1 },
+			}),
+		).toThrow();
 	});
 });
