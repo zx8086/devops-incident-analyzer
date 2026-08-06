@@ -9,7 +9,7 @@
 //
 // PII-safe: logs the tool name + timing + ok flag ONLY -- never args or results.
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { classifyFailureText, type ToolCallFailureClass } from "./tool-call-metrics.ts";
+import { classifyFailureText, extractErrorTextFromContent, type ToolCallFailureClass } from "./tool-call-metrics.ts";
 
 export interface ToolCallLogger {
 	debug?(message: string, meta?: Record<string, unknown>): void;
@@ -49,20 +49,11 @@ function extractToolName(request: unknown): string | undefined {
 	return typeof name === "string" ? name : undefined;
 }
 
-// SIO-1402: pull the text block carrying the structured error envelope out of an
-// isError result. Prefers the block containing "_error" (the envelope marker) so
-// a multi-block result still classifies; falls back to the first text block.
+// SIO-1402: envelope text extraction lives in the shared Zod-backed parser
+// (extractErrorTextFromContent) so this seam and the agentcore proxy validate
+// untrusted content blocks identically.
 function extractErrorText(result: unknown): string | undefined {
-	const content = (result as { content?: unknown }).content;
-	if (!Array.isArray(content)) return undefined;
-	const texts = content.filter(
-		(c): c is { type: "text"; text: string } =>
-			typeof c === "object" &&
-			c !== null &&
-			(c as { type?: unknown }).type === "text" &&
-			typeof (c as { text?: unknown }).text === "string",
-	);
-	return (texts.find((c) => c.text.includes('"_error"')) ?? texts[0])?.text;
+	return extractErrorTextFromContent((result as { content?: unknown }).content);
 }
 
 // Wraps the McpServer's underlying "tools/call" handler with start/end lifecycle logging.

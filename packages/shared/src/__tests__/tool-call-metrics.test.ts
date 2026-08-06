@@ -95,6 +95,22 @@ describe("classifyFailureText", () => {
 		expect(classifyFailureText(undefined)).toBe("unstructured");
 	});
 
+	// SIO-1402 (CodeRabbit): enum schemas gate the envelope fields, so inherited
+	// property names never leak through an `in` check as structured-other.
+	test("inherited property names as kind/category classify unstructured", () => {
+		for (const name of ["toString", "constructor", "__proto__"]) {
+			expect(classifyFailureText(`{"_error":{"kind":"${name}","message":"x"}}`)).toBe("unstructured");
+			expect(classifyFailureText(`{"_error":{"kind":"bad-query","category":"${name}","message":"x"}}`)).toBe(
+				// invalid category on a valid kind falls back to the kind's mapping
+				"bad-input",
+			);
+		}
+		// a category value that is a KIND but not a CATEGORY must not pass either
+		expect(classifyFailureText('{"_error":{"kind":"not-found","category":"throttled","message":"x"}}')).toBe(
+			"structured-other",
+		);
+	});
+
 	// SIO-1402: the SDK RESOLVES an unknown tool name into this exact error text
 	// (measured; it does not reject at dispatch).
 	test("the SDK's unknown-tool text classifies unknown-tool", () => {

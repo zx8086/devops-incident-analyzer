@@ -10,7 +10,8 @@
 // and the shared ToolErrorKind/ToolErrorCategory vocabulary from agent-state.ts.
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { TOOL_ERROR_KIND_TO_CATEGORY, type ToolErrorCategory, type ToolErrorKind } from "./agent-state.ts";
+import { z } from "zod";
+import { TOOL_ERROR_KIND_TO_CATEGORY, ToolErrorCategorySchema, ToolErrorKindSchema } from "./agent-state.ts";
 
 export interface ToolCallMetricsLogger {
 	warn(message: string, meta?: Record<string, unknown>): void;
@@ -56,6 +57,18 @@ export function resolveToolCallMetricsDbPath(
 // - "structured-other": a well-formed envelope of any other kind.
 const UNKNOWN_TOOL_TEXT_RE = /^(?:MCP error -\d+: )?Tool \S+ not found$/;
 
+// SIO-1402 (CodeRabbit): the enum schemas -- not the `in` operator -- gate the
+// envelope fields, so inherited property names ("toString", "__proto__") in a
+// malformed envelope classify unstructured instead of leaking through as
+// structured-other. Also validates category against the CATEGORY enum (the
+// mapping object is keyed by kind, so an `in` check against it was wrong twice).
+const EnvelopeFieldsSchema = z.object({
+	kind: ToolErrorKindSchema,
+	// an invalid category on a valid kind falls back to the kind's mapping
+	// (catch) rather than rejecting the whole envelope
+	category: ToolErrorCategorySchema.optional().catch(undefined),
+});
+
 export function classifyFailureText(text: string | undefined): ToolCallFailureClass {
 	if (!text) return "unstructured";
 	if (UNKNOWN_TOOL_TEXT_RE.test(text.trim())) return "unknown-tool";
@@ -69,17 +82,27 @@ export function classifyFailureText(text: string | undefined): ToolCallFailureCl
 		return "unstructured";
 	}
 	if (typeof parsed !== "object" || parsed === null) return "unstructured";
-	const err = (parsed as { _error?: unknown })._error;
-	if (typeof err !== "object" || err === null) return "unstructured";
-	const kind = (err as { kind?: unknown }).kind;
-	if (typeof kind !== "string" || !(kind in TOOL_ERROR_KIND_TO_CATEGORY)) return "unstructured";
-	const rawCategory = (err as { category?: unknown }).category;
-	const category: ToolErrorCategory =
-		typeof rawCategory === "string" && rawCategory in TOOL_ERROR_KIND_TO_CATEGORY
-			? (rawCategory as ToolErrorCategory)
-			: TOOL_ERROR_KIND_TO_CATEGORY[kind as ToolErrorKind];
+	const envelope = EnvelopeFieldsSchema.safeParse((parsed as { _error?: unknown })._error);
+	if (!envelope.success) return "unstructured";
+	const { kind } = envelope.data;
+	const category = envelope.data.category ?? TOOL_ERROR_KIND_TO_CATEGORY[kind];
 	if (category === "bad-query" || kind === "bad-input") return "bad-input";
 	return "structured-other";
+}
+
+// SIO-1402 (CodeRabbit): ONE Zod-backed parser for untrusted CallToolResult
+// content blocks, shared by the McpServer seam (tool-call-logging.ts) and the
+// agentcore proxy. Prefers the block carrying the "_error" envelope marker so a
+// multi-block result still classifies; falls back to the first text block.
+const TextContentBlockSchema = z.object({ type: z.literal("text"), text: z.string() });
+
+export function extractErrorTextFromContent(content: unknown): string | undefined {
+	if (!Array.isArray(content)) return undefined;
+	const texts = content.flatMap((block) => {
+		const parsed = TextContentBlockSchema.safeParse(block);
+		return parsed.success ? [parsed.data] : [];
+	});
+	return (texts.find((c) => c.text.includes('"_error"')) ?? texts[0])?.text;
 }
 
 const CREATE_TABLE_SQL = `
@@ -138,16 +161,32 @@ export async function createToolCallMetricsRecorder(options: {
 		db.run("PRAGMA busy_timeout = 5000;");
 		db.run("PRAGMA journal_mode = WAL;");
 		db.run(CREATE_TABLE_SQL);
-		const existing = new Set(
-			db
-				.query<{ name: string }, []>("PRAGMA table_info(mcp_tool_call_counts)")
-				.all()
-				.map((c) => c.name),
-		);
-		for (const column of MIGRATED_COLUMNS) {
-			if (!existing.has(column)) {
-				db.run(`ALTER TABLE mcp_tool_call_counts ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
+		// SIO-1402 (CodeRabbit): BEGIN IMMEDIATE serializes concurrent legacy-DB
+		// migrations -- without it, two cold-starting processes can both observe a
+		// missing column and the loser's ALTER fails (duplicate column), disabling
+		// its recorder. The write lock makes the check-then-alter atomic; the loser
+		// re-checks after the winner commits and finds nothing left to add.
+		db.run("BEGIN IMMEDIATE");
+		try {
+			const existing = new Set(
+				db
+					.query<{ name: string }, []>("PRAGMA table_info(mcp_tool_call_counts)")
+					.all()
+					.map((c) => c.name),
+			);
+			for (const column of MIGRATED_COLUMNS) {
+				if (!existing.has(column)) {
+					db.run(`ALTER TABLE mcp_tool_call_counts ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
+				}
 			}
+			db.run("COMMIT");
+		} catch (error) {
+			try {
+				db.run("ROLLBACK");
+			} catch {
+				// rollback is best-effort; the original error is what matters
+			}
+			throw error;
 		}
 		const upsert = db.query(UPSERT_SQL);
 		let closed = false;

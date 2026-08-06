@@ -50,7 +50,10 @@ if (rows.length === 0) {
 	process.exit(0);
 }
 
-const successPct = (r: CountRow): string => (((r.calls - r.failures) / r.calls) * 100).toFixed(1);
+// calls can only be 0 in a hand-edited DB (the upsert always inserts 1), but a
+// guard beats printing NaN% for it
+const pct = (ok: number, calls: number): string => (calls === 0 ? "0.0" : ((ok / calls) * 100).toFixed(1));
+const successPct = (r: CountRow): string => pct(r.calls - r.failures, r.calls);
 
 const header = [
 	"server",
@@ -95,5 +98,5 @@ const totals = rows.reduce(
 );
 const servers = new Set(rows.map((r) => r.server)).size;
 console.log(
-	`\n${rows.length} tools across ${servers} servers; ${totals.calls} calls, ${totals.failures} failures (${(((totals.calls - totals.failures) / totals.calls) * 100).toFixed(1)}% success); failure classes: ${totals.badInput} bad-input, ${totals.unstructured} unstructured, ${totals.unknownTool} unknown-tool`,
+	`\n${rows.length} tools across ${servers} servers; ${totals.calls} calls, ${totals.failures} failures (${pct(totals.calls - totals.failures, totals.calls)}% success); failure classes: ${totals.badInput} bad-input, ${totals.unstructured} unstructured, ${totals.unknownTool} unknown-tool`,
 );

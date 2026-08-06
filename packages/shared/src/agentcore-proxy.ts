@@ -9,6 +9,7 @@ import { createMcpLogger, getChildLogger } from "./logger.ts";
 import {
 	classifyFailureText,
 	createToolCallMetricsRecorder,
+	extractErrorTextFromContent,
 	resolveToolCallMetricsDbPath,
 } from "./tool-call-metrics.ts";
 import type { IdentityCard } from "./transport/identity.ts";
@@ -383,16 +384,9 @@ function innerErrorText(rawBody: string): string | undefined {
 	if (typeof parsed !== "object" || parsed === null) return undefined;
 	const result = (parsed as { result?: unknown }).result;
 	if (typeof result !== "object" || result === null) return undefined;
-	const content = (result as { content?: unknown }).content;
-	if (!Array.isArray(content)) return undefined;
-	const texts = content.filter(
-		(c): c is { type: "text"; text: string } =>
-			typeof c === "object" &&
-			c !== null &&
-			(c as { type?: unknown }).type === "text" &&
-			typeof (c as { text?: unknown }).text === "string",
-	);
-	return (texts.find((c) => c.text.includes('"_error"')) ?? texts[0])?.text;
+	// SIO-1402 (CodeRabbit): block validation + selection is the shared Zod-backed
+	// parser, identical to the McpServer seam in tool-call-logging.ts.
+	return extractErrorTextFromContent((result as { content?: unknown }).content);
 }
 
 export interface JsonRpcErrorInfo {
