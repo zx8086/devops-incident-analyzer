@@ -76,7 +76,8 @@ describe("AgentCore transport", () => {
 				id: 1,
 				method: "initialize",
 				params: {
-					protocolVersion: "2025-03-26",
+					// SIO-1411: LATEST_PROTOCOL_VERSION literal, matching http.test.ts
+					protocolVersion: "2025-11-25",
 					capabilities: {},
 					clientInfo: { name: "test-client", version: "1.0.0" },
 				},

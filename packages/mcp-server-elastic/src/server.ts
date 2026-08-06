@@ -289,15 +289,17 @@ function createBareServer(config: Config): McpServer {
 			version: config.server.version,
 		},
 		{
+			// SIO-1411: spec-conforming ServerCapabilities only. The previous
+			// { notifications: { supportsProgress, supportsLogging } } key was not a
+			// real capability category (force-cast past the type checker, ignored by
+			// the SDK). Progress notifications need NO capability declaration, and
+			// `logging` is deliberately absent: utils/notifications.ts never forwards
+			// notifications/message to clients -- declare it only if that changes.
 			capabilities: {
-				notifications: {
-					supportsProgress: true,
-					supportsLogging: true,
-				},
 				tools: {
 					listChanged: true,
 				},
-			} as Record<string, unknown>,
+			},
 			instructions: `Elasticsearch MCP Server (${config.server.version}) - Comprehensive Elasticsearch operations with ${config.server.readOnlyMode ? "READ-ONLY" : "FULL-ACCESS"} mode`,
 		},
 	);

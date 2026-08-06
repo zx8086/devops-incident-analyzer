@@ -1,6 +1,7 @@
 // src/oauth/doctor.ts
 
 import { existsSync, readFileSync } from "node:fs";
+import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import type { PersistedOAuthState } from "./base-provider.ts";
 import { getOAuthStoragePath } from "./base-provider.ts";
 
@@ -183,7 +184,9 @@ export async function diagnoseOAuth(options: DiagnoseOAuthOptions): Promise<Diag
 			id: 1,
 			method: "initialize",
 			params: {
-				protocolVersion: "2025-03-26",
+				// SIO-1411: track the SDK's current version instead of a stale literal;
+				// the probed endpoint negotiates down if it only supports older ones.
+				protocolVersion: LATEST_PROTOCOL_VERSION,
 				capabilities: {},
 				clientInfo: { name: "oauth-doctor", version: "0.1.0" },
 			},
