@@ -135,6 +135,13 @@ describe("classifyFailureText", () => {
 				"MCP error -32602: Input validation error: Invalid arguments for tool echo_tool: Invalid input: expected number, received string at value",
 			),
 		).toBe("bad-input");
+		// SIO-1410 (CodeRabbit): a bare prefixed rejection with an EMPTY payload is
+		// not the canonical form (the SDK always emits at least one issue line) and
+		// must not classify or be stamped.
+		expect(classifyFailureText("Input validation error: Invalid arguments for tool foo:")).toBe("unstructured");
+		expect(classifyFailureText("MCP error -32602: Input validation error: Invalid arguments for tool foo:")).toBe(
+			"unstructured",
+		);
 		// "toolsmith" must not match the "tool <name>" form
 		expect(classifyFailureText("Invalid arguments for toolsmith")).toBe("unstructured");
 		// SIO-1407 (CodeRabbit): without the "Input validation error: " prefix the

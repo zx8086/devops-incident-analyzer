@@ -76,9 +76,12 @@ const UNKNOWN_TOOL_TEXT_RE = /^(?:MCP error -\d+: )?Tool \S+ not found$/;
 // - SDK >= 1.30 (SIO-1410): getParseErrorMessage formats zod issues as prose
 //   lines ("<message> at <dot.path>"), so there is no "[" -- the mandatory
 //   "Input validation error: " prefix (unconditional in the SDK's
-//   validateToolInput throw) is the anti-false-positive anchor instead.
+//   validateToolInput throw) is the anti-false-positive anchor instead, and a
+//   non-empty payload after the colon is REQUIRED (CodeRabbit): the SDK always
+//   emits at least one issue line, so a delimiter-less bare prefix is not the
+//   canonical rejection and must not be stamped.
 export const ARG_VALIDATION_TEXT_RE =
-	/^(?:MCP error -\d+: )?(?:Input validation error: Invalid arguments for tool \S+:|Invalid arguments for tool \S+:\s*\[)/;
+	/^(?:MCP error -\d+: )?(?:Input validation error: Invalid arguments for tool \S+:\s*\S|Invalid arguments for tool \S+:\s*\[)/;
 
 // SIO-1402 (CodeRabbit): the enum schemas -- not the `in` operator -- gate the
 // envelope fields, so inherited property names ("toString", "__proto__") in a
