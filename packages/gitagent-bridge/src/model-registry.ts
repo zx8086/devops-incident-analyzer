@@ -101,19 +101,19 @@ export const MODEL_REGISTRY = {
 		observedBlockTypes: ["reasoning", "text"],
 		emitsReasoningContent: true,
 		observedRawControlCharsInJson: false,
-		// CAVEAT (2026-08-04): this figure is measured against the P6 probe's ~600-input-token
-		// synthetic prompt (packages/agent/src/eval/probe-model.ts), which never puts reasoning
-		// and answer text in competition for the same budget the way a large real prompt does. The
-		// 32-incident replay eval (30-49K input tokens per aggregator call) needed up to 16088
-		// output tokens on a successful call and hit max_tokens on 13/64 calls at the
-		// then-configured 16384 aggregator budget -- both well above this 8192 floor. Treat 8192 as
-		// a LOWER bound proven safe for small prompts, never as validated for large real-world ones;
-		// a role budgeted to exactly this floor on a genuinely long prompt can still truncate. A
-		// rerun of the probe against a realistically large prompt should replace this note and the
-		// figure.
-		longFormMinTokens: 8192,
-		observedLatencyMs: { p50: 1890, max: 45305 },
-		verifiedAt: "2026-07-26",
+		// SIO-1428 (2026-08-06): re-measured with the P6L LARGE prompt (~83K input tokens, 3
+		// samples per long-form budget), replacing the 2026-08-04 caveat that the ~600-token P6
+		// prompt never put reasoning and answer text in competition for one output budget.
+		// Measured: 8192 truncated 1/3 samples (max_tokens with the reasoning block in play --
+		// the stochastic competition the 32-incident eval hit live on 13/64 aggregator calls,
+		// SIO-1375); 16384 and 32768 were 3/3 clean. The small-prompt P6 floor remains 8192.
+		// This figure is the large-prompt floor and what llm.role-max-tokens.test.ts enforces;
+		// it is a FLOOR, not a budget recommendation -- real aggregator calls have needed up to
+		// 16088 output tokens, so the aggregator stays at 32768 (llm.ts ROLE_OVERRIDES) and
+		// hilDistiller moved 8192 -> 16384 with this change.
+		longFormMinTokens: 16384,
+		observedLatencyMs: { p50: 7730, max: 104329 },
+		verifiedAt: "2026-08-06",
 		verifiedRegion: "eu-central-1",
 		probeReport: "docs/reference/model-probes/claude-sonnet-5.md",
 	},
