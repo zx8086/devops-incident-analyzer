@@ -9,6 +9,7 @@ interface CountRow {
 	tool: string;
 	calls: number;
 	failures: number;
+	first_called_at: string;
 	last_called_at: string;
 }
 
@@ -23,7 +24,7 @@ try {
 	const db = new Database(dbPath, { readonly: true });
 	rows = db
 		.query<CountRow, []>(
-			"SELECT server, tool, calls, failures, last_called_at FROM mcp_tool_call_counts ORDER BY server ASC, calls DESC, tool ASC",
+			"SELECT server, tool, calls, failures, first_called_at, last_called_at FROM mcp_tool_call_counts ORDER BY server ASC, calls DESC, tool ASC",
 		)
 		.all();
 	db.close(false);
@@ -39,8 +40,16 @@ if (rows.length === 0) {
 
 const successPct = (r: CountRow): string => (((r.calls - r.failures) / r.calls) * 100).toFixed(1);
 
-const header = ["server", "tool", "calls", "failures", "success%", "last_called_at"];
-const table = rows.map((r) => [r.server, r.tool, String(r.calls), String(r.failures), successPct(r), r.last_called_at]);
+const header = ["server", "tool", "calls", "failures", "success%", "first_called_at", "last_called_at"];
+const table = rows.map((r) => [
+	r.server,
+	r.tool,
+	String(r.calls),
+	String(r.failures),
+	successPct(r),
+	r.first_called_at,
+	r.last_called_at,
+]);
 const widths = header.map((h, i) => Math.max(h.length, ...table.map((row) => (row[i] as string).length)));
 const formatLine = (cells: string[]): string => cells.map((c, i) => c.padEnd(widths[i] as number)).join("  ");
 

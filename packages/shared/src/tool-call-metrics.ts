@@ -63,8 +63,12 @@ export async function createToolCallMetricsRecorder(options: {
 		const { Database } = await import(/* @vite-ignore */ "bun:sqlite");
 		mkdirSync(dirname(dbPath), { recursive: true });
 		const db = new Database(dbPath, { create: true, strict: true });
-		db.run("PRAGMA journal_mode = WAL;");
+		// busy_timeout BEFORE journal_mode: switching to WAL takes a lock, and with
+		// no busy handler a concurrent opener (8+ servers cold-starting on one DB)
+		// fails instantly with "database is locked" -- measured 11/40 in a race
+		// harness; 0/40 with this order.
 		db.run("PRAGMA busy_timeout = 5000;");
+		db.run("PRAGMA journal_mode = WAL;");
 		db.run(CREATE_TABLE_SQL);
 		const upsert = db.query(UPSERT_SQL);
 		let closed = false;

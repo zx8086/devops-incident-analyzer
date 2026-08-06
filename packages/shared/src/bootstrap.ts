@@ -136,6 +136,11 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 		});
 	}
 
+	// SIO-1400 (CodeRabbit): declared outside the try so a startup failure after the
+	// recorder opened can close it -- matters in embedded mode, where the process
+	// (and its SQLite handle) outlives the failed start.
+	let toolMetrics: ToolCallMetricsRecorder | undefined;
+
 	try {
 		// Step 1: LangSmith tracing (must be first -- sets env vars before anything reads them)
 		options.initTracing();
@@ -160,9 +165,12 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 		// below can run per-connection (cached-server-factory), so the recorder must
 		// not live inside it. Proxy mode counts in the agentcore proxy itself.
 		const metricsDbPath = mode === "proxy" ? undefined : resolveToolCallMetricsDbPath();
-		const toolMetrics: ToolCallMetricsRecorder | undefined = metricsDbPath
+		toolMetrics = metricsDbPath
 			? await createToolCallMetricsRecorder({ serverName: name, dbPath: metricsDbPath, logger })
 			: undefined;
+		// const capture: the factory closure below outlives this scope, and TS cannot
+		// narrow the outer `let` (declared before the try for the error path).
+		const metricsSink = toolMetrics;
 		// SIO-974: every server gets tools/call lifecycle logging; read-only enforcement is
 		// still opt-in. Install order matters: read-only INNER, logging OUTER, so a blocked
 		// call (read-only handler short-circuits) is still logged by the outer wrap.
@@ -174,7 +182,7 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 						server,
 						logger,
 						undefined,
-						toolMetrics ? (outcome) => toolMetrics.record(outcome.tool, outcome.ok) : undefined,
+						metricsSink ? (outcome) => metricsSink.record(outcome.tool, outcome.ok) : undefined,
 					);
 					return server;
 				}
@@ -273,6 +281,9 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 
 		return { datasource, transport, shutdown };
 	} catch (error) {
+		// SIO-1400: a startup failure never reaches the shutdown handle, so close the
+		// recorder here (no-op if it never opened; close() is soft-failing).
+		toolMetrics?.close();
 		// An un-authorized OAuth server (no valid seeded tokens under headless /
 		// non-interactive stdout) surfaces a typed error. The deep SDK auth stack
 		// (auth.js -> streamableHttp.js) is noise -- the fix is a one-time
