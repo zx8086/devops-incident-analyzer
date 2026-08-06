@@ -127,10 +127,19 @@ describe("classifyFailureText", () => {
 		).toBe("bad-input");
 		// both prefixes are optional across SDK versions
 		expect(classifyFailureText("Invalid arguments for tool kafka_list_topics: [bad]")).toBe("bad-input");
+		// SIO-1410: SDK >= 1.30 formats zod issues as prose lines (no "[") -- the
+		// mandatory "Input validation error: " prefix is the anchor instead.
+		// Live-captured against SDK 1.30.0.
+		expect(
+			classifyFailureText(
+				"MCP error -32602: Input validation error: Invalid arguments for tool echo_tool: Invalid input: expected number, received string at value",
+			),
+		).toBe("bad-input");
 		// "toolsmith" must not match the "tool <name>" form
 		expect(classifyFailureText("Invalid arguments for toolsmith")).toBe("unstructured");
-		// SIO-1407 (CodeRabbit): the ": [" zod-payload delimiter is REQUIRED -- a
-		// tool's own prose mentioning the phrase must never classify (or be stamped)
+		// SIO-1407 (CodeRabbit): without the "Input validation error: " prefix the
+		// ": [" zod-payload delimiter is REQUIRED -- a tool's own prose mentioning
+		// the phrase must never classify (or be stamped)
 		expect(classifyFailureText("Invalid arguments for tool foo, please retry with a filter")).toBe("unstructured");
 	});
 
