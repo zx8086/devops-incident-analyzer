@@ -648,11 +648,15 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-1164 recovery-aware tool-error-rate
 						status: "success",
 						data: "result",
 						messageCount: 38,
+						// SIO-1399: was "bad-query", which is now NON-degrading (a query we malformed is
+						// not a datasource malfunction). This test is about the cap arithmetic at
+						// 6/38 = 15.8% with nothing recovered, so it needs a genuinely degrading
+						// category -- "server-error" matches the intent and the 5xx message below.
 						toolErrors: Array.from({ length: 6 }, (_, i) => ({
 							toolName: `capella_tool_${i}`,
-							category: "bad-query" as const,
-							message: "no index",
-							retryable: false,
+							category: "server-error" as const,
+							message: "upstream 503",
+							retryable: true,
 						})),
 					},
 				],
@@ -822,7 +826,26 @@ describe("filterStructurallyBenignGapBullets (SIO-1162 structured reconciliation
 		expect(kept).toHaveLength(0);
 	});
 
-	test("keeps a bullet whose matching tool has a DEGRADING (bad-query) error", () => {
+	test("keeps a bullet whose matching tool has a DEGRADING (server-error) error", () => {
+		const results = resultWith([
+			{
+				toolName: "capella_run_sql_plus_plus_query",
+				category: "server-error",
+				kind: "server-error",
+				message: "upstream 503",
+				retryable: true,
+			},
+		]);
+		const flagged = ["- capella_run_sql_plus_plus_query returned a server error"];
+		const { kept, suppressed } = filterStructurallyBenignGapBullets(flagged, results);
+		expect(kept).toHaveLength(1);
+		expect(suppressed).toHaveLength(0);
+	});
+
+	// SIO-1399: bad-query joined the non-degrading set, so this bullet now suppresses. A parse
+	// failure means the query WE sent was malformed -- the datasource answered correctly by
+	// rejecting it -- so narrating it must not cap confidence as a datasource malfunction.
+	test("SIO-1399: suppresses a bullet whose matching tool only has a bad-query error", () => {
 		const results = resultWith([
 			{
 				toolName: "capella_run_sql_plus_plus_query",
@@ -834,8 +857,8 @@ describe("filterStructurallyBenignGapBullets (SIO-1162 structured reconciliation
 		]);
 		const flagged = ["- capella_run_sql_plus_plus_query returned a parsing failure"];
 		const { kept, suppressed } = filterStructurallyBenignGapBullets(flagged, results);
-		expect(kept).toHaveLength(1);
-		expect(suppressed).toHaveLength(0);
+		expect(suppressed).toHaveLength(1);
+		expect(kept).toHaveLength(0);
 	});
 
 	test("multi-tool bullet: kept if ANY named tool has a degrading error", () => {
@@ -1084,12 +1107,15 @@ Confidence: 0.85`;
 								message: "no index",
 								retryable: false,
 							},
+							// SIO-1399: was bad-query/bad-query, now non-degrading. This test needs a
+							// GENUINE degrading error to prove the cap still fires alongside the
+							// suppressed benign bullet, so use an upstream server fault.
 							{
 								toolName: "capella_get_system_indexes",
-								category: "bad-query",
-								kind: "bad-query",
-								message: "parse fail",
-								retryable: false,
+								category: "server-error",
+								kind: "server-error",
+								message: "upstream 503",
+								retryable: true,
 							},
 						],
 					},

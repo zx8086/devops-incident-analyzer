@@ -28,12 +28,16 @@ describe("ToolErrorSchema recovered field", () => {
 });
 
 describe("countsTowardDegradedRate", () => {
+	// These two pin the `recovered` axis (SIO-1164), not any particular category. They used
+	// "bad-query" as the stand-in degrading category until SIO-1399 moved it to the
+	// non-degrading set; "transient" keeps the subject of the test intact. bad-query's own
+	// (now non-degrading) behaviour is pinned in ../tool-error-category.test.ts.
 	test("degrading category, not recovered -> counts", () => {
-		expect(countsTowardDegradedRate({ category: "bad-query", recovered: false })).toBe(true);
+		expect(countsTowardDegradedRate({ category: "transient", recovered: false })).toBe(true);
 	});
 
 	test("degrading category, recovered -> does not count", () => {
-		expect(countsTowardDegradedRate({ category: "bad-query", recovered: true })).toBe(false);
+		expect(countsTowardDegradedRate({ category: "transient", recovered: true })).toBe(false);
 	});
 
 	test("degrading category, recovered undefined -> counts (default unrecovered)", () => {

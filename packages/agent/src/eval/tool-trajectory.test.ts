@@ -134,8 +134,10 @@ describe("isBadArgumentCall", () => {
 				dataSourceId: "kafka",
 				toolErrors: [
 					{ toolName: "a", category: "bad-query", message: "malformed DSL", retryable: false },
-					// bad-input collapses to category "unknown" (SIO-1399) -- reading only the
-					// category would miss every -32602 the model caused.
+					// SIO-1399 remapped bad-input to category "bad-query", so the category alone now
+					// catches this. The kind check stays as a fallback: toolErrors replayed from
+					// checkpoints written BEFORE that change still carry the old "unknown" category,
+					// and this fixture pins that legacy shape so those runs stay gradeable.
 					{ toolName: "b", category: "unknown", kind: "bad-input", message: "invalid params", retryable: false },
 					{ toolName: "c", category: "transient", message: "timeout", retryable: true },
 				],

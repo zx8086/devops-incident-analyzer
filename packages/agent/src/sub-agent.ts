@@ -602,7 +602,11 @@ const AWS_KIND_TO_CATEGORY: Record<AwsErrorKind, ToolErrorCategory> = {
 	"aws-network-error": "transient",
 	"aws-server-error": "server-error",
 	"aws-throttled": "transient",
-	"bad-input": "unknown",
+	// SIO-1399: "bad-input" is the ONE member this AWS-specific union shares with the shared
+	// ToolErrorKind union, so it must resolve to the same category on both paths. Delegate to the
+	// canonical map rather than restating the literal -- a future remap there cannot silently
+	// leave the AWS path behind. sub-agent.test.ts pins the two in lockstep.
+	"bad-input": TOOL_ERROR_KIND_TO_CATEGORY["bad-input"],
 	"aws-unknown": "unknown",
 };
 

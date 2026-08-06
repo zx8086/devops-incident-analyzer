@@ -66,7 +66,13 @@ export const TOOL_ERROR_KIND_TO_CATEGORY: Record<ToolErrorKind, ToolErrorCategor
 	"assume-role-denied": "auth",
 	"auth-expired": "session",
 	"bad-query": "bad-query",
-	"bad-input": "unknown",
+	// SIO-1399: was "unknown" -- which made a self-inflicted malformed call (bad param, failed
+	// argument validation) count toward the >15% degraded-subagent confidence cap exactly like a
+	// malfunctioning datasource. The call the LLM can fix by re-issuing with correct args belongs
+	// in the same coarse bucket as a malformed query STRING: non-retryable ("do not blind-retry"),
+	// but attributable to the caller, not the server. Note SIO-1407 widened what emits this kind
+	// (schema-validation rejections on every server), so the mis-bucketing now fires far more often.
+	"bad-input": "bad-query",
 	"not-found": "not-found",
 	"no-index": "no-data",
 	"query-window": "bad-query", // a fixable query-window mistake, not a transient failure
@@ -87,7 +93,21 @@ export function isRetryableCategory(category: ToolErrorCategory): boolean {
 // SIO-1087: categories that are routine discovery outcomes, NOT tool malfunctions. Excluded from
 // the >15% degraded-subagent confidence cap so a collection-with-no-index or a non-existent log
 // group never drags confidence below the HITL gate.
-const NON_DEGRADING_CATEGORIES: ReadonlySet<ToolErrorCategory> = new Set<ToolErrorCategory>(["no-data", "not-found"]);
+//
+// SIO-1399 adds "bad-query" on the same principle, from the other direction: the datasource
+// answered correctly by REJECTING a query we malformed. Every producer of this category is
+// caller-fault -- N1QL parse failures (classifyCouchbaseError.ts:53), Elasticsearch
+// parsing_exception (classifyElasticError.ts:22), and argument-validation rejections
+// (SIO-1407, now mapped here via "bad-input"). Counting those as a degraded datasource
+// punished the answer's confidence for a mistake the agent itself made and could re-issue,
+// which is precisely backwards: a healthy server proving its own input validation works is
+// evidence FOR the datasource, not against it. Genuine malfunctions stay in the degrading
+// set -- "unknown" (the real catch-all), auth, session, transient, server-error.
+const NON_DEGRADING_CATEGORIES: ReadonlySet<ToolErrorCategory> = new Set<ToolErrorCategory>([
+	"no-data",
+	"not-found",
+	"bad-query",
+]);
 export function isDegradingCategory(category: ToolErrorCategory): boolean {
 	return !NON_DEGRADING_CATEGORIES.has(category);
 }
