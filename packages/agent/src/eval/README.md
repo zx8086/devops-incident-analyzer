@@ -31,11 +31,8 @@ bun run eval:incident-replay -- --sub-agent-model claude-haiku-4-5 --repetitions
 - `response_quality` -- holistic 1-10 (normalized 0-1), root-cause-capped in code (SIO-1372)
 - `root_cause_accuracy` -- 1 / 0.5 / 0; omitted when not determinable
 - `evidence_<datasource>` -- per-datasource verdicts from the holistic judge (SIO-1374)
-- `subagent_accuracy_<datasource>` -- independent judge over each sub-agent's own report
-  (narrative + labeled typed findings, SIO-1405; typed findings alone under-covered the real
-  evidence surface), isolating the sub-agent model from the aggregator (SIO-1374). Scores
-  before/after the SIO-1405 serialization change are NOT comparable -- the experiment's gitSha
-  metadata marks the boundary.
+- `subagent_accuracy_<datasource>` -- independent judge over raw serialized sub-agent findings,
+  isolating the sub-agent model from the aggregator (SIO-1374)
 - `datasources_covered`, `confidence_threshold` -- deterministic code checks
 
 Judge-emitted datasource names are canonicalized (`elasticsearch`->`elastic`,
@@ -159,7 +156,35 @@ Three things this sweep established:
    1.0, and `expected_tools_fired` correctly reported `0/1 required tool group(s) fired`. The
    "zero calls is a visible signal, not silent absence" contract holds.
 
-### Latest full run (`mcp-tool-eval-ddb9b17b`, 25 examples, all 7 datasources)
+### Production baseline (`mcp-tool-eval-6b23491e`, 25 examples, run against MAIN)
+
+First run against merged main with NO URL overrides -- all six locally-running MCP servers, exactly
+as production runs. The merge SHA is the experiment prefix, so the run is traceable to the code.
+
+| key | avg | branch run |
+|---|---|---|
+| `tool_arg_validity` | **1.000** | 1.000 |
+| `tool_name_validity` | **1.000** | 1.000 |
+| `tool_data_utilization` | **1.000** | 1.000 |
+| `datasources_covered` | **1.000** | 1.000 |
+| `expected_tools_fired` | 0.972 | 0.972 |
+| `confidence_threshold` | 0.960 | 0.960 |
+| `tool_response_health` | 0.917 | 1.000 |
+| `tool_efficiency` | 0.381 (soft) | 0.419 |
+
+Coverage 59/88, the best of any run (gitlab 21/22, elastic 4/7).
+
+The single difference from the branch run is `tool_response_health`, and it is ENVIRONMENTAL,
+not a regression: three `prose-only-error` findings, all elastic `-32001 Request timed out` /
+`-32603` on `elasticsearch_search` and `_multi_search`. Verified immediately afterwards --
+`/health` returns ok and the same query succeeds. Slow queries against a large cluster, not a
+code defect.
+
+Worth noting the check did its job: a timeout surfaces as category `unknown` with no `{ _error }`
+envelope, which is exactly the prose-only class the rule exists to flag. The finding is correct;
+the cause is just infrastructure rather than code.
+
+### Previous full run (`mcp-tool-eval-ddb9b17b`, 25 examples, branch servers)
 
 Every correctness key clean, and **zero tool errors across the whole run**.
 
