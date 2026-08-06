@@ -156,6 +156,24 @@ Three things this sweep established:
    1.0, and `expected_tools_fired` correctly reported `0/1 required tool group(s) fired`. The
    "zero calls is a visible signal, not silent absence" contract holds.
 
+### Closing the loop: the elastic finding was fixed and re-verified
+
+The `tool_arg_validity` 0.75 above was traced to `value_count` on the `_id` field, which
+Elasticsearch rejects outright (`Fielddata access on the _id field is disallowed`) -- failing
+the WHOLE search, so one bad clause took the legitimate sibling `terms` aggregations down with
+it. Fixed in `034a5e5e` (schema description names the restriction and the already-available
+alternative; the server also prunes the clause pre-flight).
+
+Re-running the same leg against a server built from the fix:
+
+| | before (`dda7575d`) | after (`034a5e5e`) |
+|---|---|---|
+| `tool_arg_validity` | 0.75, 1, 1 | **1, 1, 1** |
+| search example | `calls=8 errors=2` | `calls=8 errors=0` |
+
+Same dataset, same queries, zero rejected calls. This is the eval's intended loop: a live score
+named the defect, the defect was root-caused and fixed, and the same score confirmed the fix.
+
 ### Reading `tool_efficiency`
 
 It is below 1.0 nearly everywhere, and that is expected -- it counts same-tool-same-target
