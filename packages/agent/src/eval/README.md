@@ -127,6 +127,24 @@ uniformly beside `response_quality`.
   it? Catches the silent drop that `evidence_<ds>` and `subagent_accuracy_<ds>` miss, since
   both grade what was FOUND rather than whether it reached the answer.
 
+### First live run (2026-08-06, elastic leg)
+
+Experiment `mcp-tool-eval-dda7575d-elastic`, 3 examples, all 8 keys emitted:
+
+| key | scores | note |
+|---|---|---|
+| `tool_arg_validity` | 0.75, 1, 1 | **`2/8 call(s) rejected for bad arguments: elasticsearch_search`** |
+| `tool_efficiency` | 0.125, 0.5, 0.5 | 7/8 repeated on the search example |
+| `tool_name_validity` | 1, 1, 1 | no invented tool names |
+| `expected_tools_fired` | 1, 1, 1 | required group fired on every example |
+| `tool_response_health` | 1, 1, 1 | anchors returned rows; no findings |
+| `tool_data_utilization` | 1, 1, 1 | judge: `used` -- report cited real retrieved values |
+
+The first row is the point: the reported "LLM calls tools incorrectly" behaviour now shows up
+as a score with the offending tool named, on the argument-heavy `search` action group exactly
+where it was predicted to appear. `elasticsearch_search` was also called 8 times for one
+question, which `tool_efficiency` surfaces as a soft signal.
+
 ### Ground truth is deliberately argument-free
 
 `expectedToolUse` names required tool GROUPS (`anyOf`), never arguments. Tool names change on
