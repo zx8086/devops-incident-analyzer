@@ -3,23 +3,30 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Config } from "../config.ts";
 import { text } from "./shared.ts";
+import { iacToolAnnotations } from "./tool-classification.ts";
 
 // SIO-912: registry search only. terraform fmt/validate/plan shelled out to a local
 // `terraform` binary against a local clone -- a path the agent no longer takes (it is a
 // propose-only GitOps maker: edit config + open an MR; CI computes the authoritative plan
 // on the MR, deck slide 18). apply/destroy/state-surgery/force-unlock were never registered.
 export function registerTerraformTools(server: McpServer, _config: Config): void {
-	server.tool(
+	server.registerTool(
 		"terraform_search_modules",
-		"Search the public Terraform Registry for modules.",
-		{ query: z.string().describe("Search term, e.g. 'elasticstack ilm'") },
+		{
+			description: "Search the public Terraform Registry for modules.",
+			inputSchema: { query: z.string().describe("Search term, e.g. 'elasticstack ilm'") },
+			annotations: iacToolAnnotations("terraform_search_modules"),
+		},
 		async ({ query }) => text(await searchRegistry("modules", query)),
 	);
 
-	server.tool(
+	server.registerTool(
 		"terraform_search_providers",
-		"Search the public Terraform Registry for providers.",
-		{ query: z.string().describe("Search term, e.g. 'elasticstack'") },
+		{
+			description: "Search the public Terraform Registry for providers.",
+			inputSchema: { query: z.string().describe("Search term, e.g. 'elasticstack'") },
+			annotations: iacToolAnnotations("terraform_search_providers"),
+		},
 		async ({ query }) => text(await searchRegistry("providers", query)),
 	);
 }
