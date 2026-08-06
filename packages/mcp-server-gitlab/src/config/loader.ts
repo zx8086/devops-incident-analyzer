@@ -29,7 +29,6 @@ export class ConfigurationManager {
 			gitlab: {
 				instanceUrl: getEnvVarWithDefault("GITLAB_INSTANCE_URL", configDefaults.gitlab.instanceUrl),
 				personalAccessToken: getEnvVar("GITLAB_PERSONAL_ACCESS_TOKEN") || "",
-				defaultProjectId: getEnvVar("GITLAB_DEFAULT_PROJECT_ID") || undefined,
 				timeout: parseInt(getEnvVarWithDefault("GITLAB_TIMEOUT", configDefaults.gitlab.timeout), 10),
 				retryAttempts: parseInt(getEnvVarWithDefault("GITLAB_RETRY_ATTEMPTS", configDefaults.gitlab.retryAttempts), 10),
 				retryDelay: parseInt(getEnvVarWithDefault("GITLAB_RETRY_DELAY", configDefaults.gitlab.retryDelay), 10),

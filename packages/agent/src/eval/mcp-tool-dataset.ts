@@ -48,12 +48,24 @@ export const LIVE_ANCHORS = {
 		scope: "customer",
 		collection: "customers",
 	},
-	// SIO-1401: GITLAB_DEFAULT_PROJECT_ID (57520959) 404s -- and so does EVERY other project id,
-	// including ones gitlab_search itself returns (39794803, 39482941, 39794935 all 404 on
-	// gitlab_list_merge_requests). The proxy search path works while the custom REST path does
-	// not, so no project id is a valid anchor today. Examples therefore lean on the tools that
-	// DO work (search, graph) and declare no knownGoodAnchors for the REST-path tools.
-	gitlab: { projectId: "57520959", searchableNamespace: "pvhcorp" },
+	// SIO-1401 RESOLVED 2026-08-06. Root cause was config, not code: the PAT was a PROJECT access
+	// token scoped to 82850717 only. A project token can never span projects, and GitLab returns
+	// 404 -- not 403 -- for a project you cannot see, which is why it presented as a missing
+	// project rather than an auth-scope problem.
+	//
+	// Fixed by a group-level token (group_14146787_bot_*). Verified live: list_merge_requests,
+	// list_commits, get_repository_tree and search all return real data for this project.
+	//
+	// The former GITLAB_DEFAULT_PROJECT_ID env var is GONE (removed in this change): it was
+	// parsed into config in three places and read by zero tool handlers, since every gitlab tool
+	// takes an explicit project_id. Its stale value pointed at a project that does not exist,
+	// which sent this session chasing a 404 no code path ever consulted. Project ids belong in
+	// the example that needs them -- here.
+	gitlab: {
+		projectId: "43242609",
+		path: "pvhcorp/b2b/shared-services/pvh.services.styles",
+		searchableNamespace: "pvhcorp",
+	},
 	// ATLASSIAN_SITE_NAME in the live .env.
 	atlassian: { site: "pvhcorp" },
 	aws: {
@@ -448,35 +460,71 @@ const EXAMPLES: EvalExample[] = [
 		},
 		metadata: { ticketKey: "SIO-1398-kafka-connect-ksql", queryProvenance: "reconstructed", era: "2026-08" },
 	},
-	// SIO-1401 blocks the REST-path tools (list_merge_requests, list_commits, get_repository_tree
-	// all 404 on EVERY project id, including ones gitlab_search returns). This example therefore
-	// exercises the paths that DO work -- proxy search and the graph/Orbit tools -- and declares
-	// no knownGoodAnchors, so it measures tool selection without generating false empty-anchor
-	// findings from a known-broken auth path. Restore anchors here once SIO-1401 is fixed.
+	// SIO-1401 is resolved (group-level token + correct project id), so the REST-path tools are
+	// reachable again and anchors are restored. Verified live via :9184 before re-enabling:
+	// list_merge_requests, list_commits and get_repository_tree all return real data for 43242609.
 	{
 		inputs: {
-			query: `Search GitLab across the ${LIVE_ANCHORS.gitlab.searchableNamespace} namespace for projects and code related to "styles", then report what the code graph knows: recent deploys, failing pipelines, and any known vulnerabilities.`,
+			query: `Trace recent code changes in GitLab project ${LIVE_ANCHORS.gitlab.projectId} (${LIVE_ANCHORS.gitlab.path}): which merge requests and commits landed most recently, and what does the repository tree look like at the root?`,
 			uiSelectedDataSources: ["gitlab"],
 		},
 		outputs: {
 			expectedDatasources: ["gitlab"],
 			minConfidence: 0.6,
 			qualityRubric:
-				"Response should report search results from the namespace and whatever the graph-backed tools return, stating plainly when a project is not indexed. A 404 or not-indexed result should be reported as an access/indexing limitation, NOT as an absence of code changes.",
+				"Response should name real merge requests and commits with titles, and describe the repository layout. This is an active production service, so an empty answer indicates an access or argument problem rather than an inactive project.",
+			expectedToolUse: {
+				requiredToolGroups: [
+					{
+						dataSource: "gitlab",
+						anyOf: ["gitlab_list_merge_requests", "gitlab_get_merge_request"],
+						why: "gitlab_list_merge_requests is the flagship code-change correlation input (sole input to extractGitLabFindings, SIO-1178) and is force-included via RESOLUTION -- it was 404ing under the old project-scoped token",
+					},
+					{
+						dataSource: "gitlab",
+						anyOf: ["gitlab_list_commits", "gitlab_get_commit_diff"],
+						why: "code-change-correlation runbook's commit path; both require project_id and were unreachable before SIO-1401",
+					},
+					{
+						dataSource: "gitlab",
+						anyOf: ["gitlab_get_repository_tree", "gitlab_get_file_content"],
+						why: "repository structure -- get_repository_tree needs only project_id and was 404ing; it is the cheapest proof the REST path is healthy",
+					},
+				],
+				forbiddenTools: ["gitlab_create_merge_request", "gitlab_create_issue", "gitlab_manage_pipeline"],
+				// Restored post-SIO-1401: this project genuinely has MRs and commits (verified live,
+				// iid 383/382), so an empty result is now a real finding rather than an auth artefact.
+				knownGoodAnchors: [{ toolName: "gitlab_list_merge_requests", mustReturnRows: true }],
+			},
+		},
+		metadata: { ticketKey: "SIO-1398-gitlab-change-correlation", queryProvenance: "reconstructed", era: "2026-08" },
+	},
+	{
+		inputs: {
+			query: `Search GitLab across the ${LIVE_ANCHORS.gitlab.searchableNamespace} namespace for code related to "styles", then report what the code graph knows: recent deploys, failing pipelines, and any known vulnerabilities.`,
+			uiSelectedDataSources: ["gitlab"],
+		},
+		outputs: {
+			expectedDatasources: ["gitlab"],
+			minConfidence: 0.6,
+			qualityRubric:
+				"Response should report search results from the namespace and whatever the graph-backed tools return, stating plainly when a project is not indexed. A not-indexed result should be reported as an indexing limitation, NOT as an absence of code changes.",
 			expectedToolUse: {
 				requiredToolGroups: [
 					{
 						dataSource: "gitlab",
 						anyOf: ["gitlab_search", "gitlab_semantic_code_search"],
-						why: "search action group -- gitlab_search is force-included via RESOLUTION and is verified live as the one gitlab path that currently works (it enumerates real pvhcorp projects while every REST-path call 404s, SIO-1401)",
+						why: "search action group -- gitlab_search is force-included via RESOLUTION and goes through the OAuth proxy rather than the REST client, so it exercises the OTHER gitlab auth path (the split that made SIO-1401 look like a code bug)",
 					},
 					{
 						dataSource: "gitlab",
 						anyOf: ["gitlab_recent_deploys", "gitlab_pipeline_failures", "gitlab_recent_vulnerabilities"],
-						why: "graph_analysis -- all three are in TYPED_FINDING_TOOLS and feed the orbit extractor; they take `since` (recent_deploys/pipeline_failures) or nothing (recent_vulnerabilities), so none depends on a project id",
+						why: "graph_analysis -- all three are in TYPED_FINDING_TOOLS and feed the orbit extractor; they take `since` or nothing, so none depends on a project id",
 					},
 				],
 				forbiddenTools: ["gitlab_create_merge_request", "gitlab_create_issue", "gitlab_manage_pipeline"],
+				// No anchor on the graph tools: Orbit indexing is separate from token scope, and
+				// `no-index` remains a legitimate environment state rather than a defect.
 			},
 		},
 		metadata: { ticketKey: "SIO-1398-gitlab-search-and-graph", queryProvenance: "reconstructed", era: "2026-08" },
