@@ -588,14 +588,23 @@ export function expectedToolsFired(run: Run, example?: Example): { key: string; 
 	const expected = readExpectedToolUse(example);
 	// No ground truth on this example -> no opinion. Keeps a partial rollout well-defined.
 	if (!expected || expected.requiredToolGroups.length === 0) return [];
-	if (!trajectory) return [];
+	// CodeRabbit (PR #599): this checked only that a trajectory EXISTED, so a run where every
+	// sub-agent was skipped (totalCalls === 0) scored 0 here while every sibling key emitted
+	// nothing -- an inconsistent key set for the same run, and a 0 that blames the model for a
+	// dispatch failure it did not cause. The no-calls rule documented at the top of this section
+	// applies to this key too.
+	if (!trajectory || trajectory.totalCalls === 0) return [];
 
 	const called = new Set(trajectory.calls.map((c) => c.toolName));
 	const satisfied: string[] = [];
 	const missing: string[] = [];
 	for (const group of expected.requiredToolGroups) {
 		// Disjunctive within a group: any member satisfies it.
-		if (group.anyOf.some((name) => called.has(name))) satisfied.push(group.anyOf[0] ?? "");
+		// CodeRabbit (PR #599): record the member that ACTUALLY fired, not anyOf[0]. Only the
+		// length is scored today, but a list naming the wrong tool is a trap for anyone who later
+		// reads it (e.g. to report which alternative the model preferred).
+		const firedMember = group.anyOf.find((name) => called.has(name));
+		if (firedMember !== undefined) satisfied.push(firedMember);
 		else missing.push(`[${group.anyOf.join(" | ")}] (${group.why})`);
 	}
 

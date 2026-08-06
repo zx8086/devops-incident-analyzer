@@ -153,6 +153,21 @@ describe("expectedToolsFired", () => {
 		expect(feedback?.comment).toContain("FORBIDDEN");
 	});
 
+	test("emits NO feedback when there were zero tool calls, like every sibling key", () => {
+		// CodeRabbit (PR #599): this key checked only that a trajectory existed, so a run where
+		// every sub-agent was skipped scored 0 here while every other key emitted nothing -- an
+		// inconsistent key set, and a 0 blaming the model for a dispatch failure.
+		expect(expectedToolsFired(runWith([]), exampleWith(expected))).toEqual([]);
+	});
+
+	test("names the member that actually fired, not anyOf[0]", () => {
+		const [feedback] = expectedToolsFired(
+			runWith([call({ toolName: "elasticsearch_diagnostics" }), call({ toolName: "elasticsearch_list_indices" })]),
+			exampleWith(expected),
+		);
+		expect(feedback?.score).toBe(1);
+	});
+
 	test("emits no feedback for an example carrying no ground truth (partial rollout)", () => {
 		expect(expectedToolsFired(runWith([call({ toolName: "x" })]), exampleWith(undefined))).toEqual([]);
 		expect(expectedToolsFired(runWith([call({ toolName: "x" })]))).toEqual([]);

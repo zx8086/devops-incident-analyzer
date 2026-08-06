@@ -90,6 +90,12 @@ describe("hallucinated tool names", () => {
 		expect(extractHallucinatedToolName("tool `kafka_made_up` not found")).toBe("kafka_made_up");
 	});
 
+	test("preserves the ORIGINAL casing of the invented name", () => {
+		// CodeRabbit (PR #599): the matcher runs on lowercased text, and returning ITS capture
+		// group meant an uppercase tool name was reported in the wrong case.
+		expect(extractHallucinatedToolName('Tool "AWS_ECS_ListTasks" not found.')).toBe("AWS_ECS_ListTasks");
+	});
+
 	test("does not fire on a genuine missing resource sharing category not-found", () => {
 		expect(extractHallucinatedToolName("log group /aws/lambda/missing does not exist")).toBeUndefined();
 		expect(extractHallucinatedToolName("index not found")).toBeUndefined();

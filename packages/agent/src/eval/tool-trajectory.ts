@@ -66,11 +66,18 @@ export interface ToolTrajectory {
 // original casing to be actionable, and the patterns are already lowercase-only literals
 // apart from the capture group.
 export function extractHallucinatedToolName(message: string): string | undefined {
+	// CodeRabbit (PR #599): matching on `lowered` and returning ITS capture group meant the name
+	// was always lowercased, contradicting the comment above. The patterns must still run against
+	// the lowercased text (they are lowercase literals, matching how classifyToolError applies
+	// them), so match there for the INDEX and slice the original message for the VALUE.
 	const lowered = message.toLowerCase();
 	for (const pattern of TOOL_NOT_FOUND_PATTERNS) {
 		const match = lowered.match(pattern);
 		const captured = match?.[1];
-		if (captured) return captured.slice(0, HALLUCINATED_NAME_CAP);
+		if (captured === undefined || match?.index === undefined) continue;
+		const start = lowered.indexOf(captured, match.index);
+		if (start < 0) return captured.slice(0, HALLUCINATED_NAME_CAP);
+		return message.slice(start, start + captured.length).slice(0, HALLUCINATED_NAME_CAP);
 	}
 	return undefined;
 }
