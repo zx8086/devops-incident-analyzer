@@ -174,6 +174,47 @@ Re-running the same leg against a server built from the fix:
 Same dataset, same queries, zero rejected calls. This is the eval's intended loop: a live score
 named the defect, the defect was root-caused and fixed, and the same score confirmed the fix.
 
+### Full-dataset run (2026-08-06, `mcp-tool-eval-35ee7eca`)
+
+16 examples, all 7 datasources, 198 tool calls. Elastic pointed at a server built from the
+`_id` fix (`034a5e5e`).
+
+| key | avg | note |
+|---|---|---|
+| `tool_arg_validity` | **1.000** | zero malformed calls anywhere -- the `_id` fix holding across the whole dataset |
+| `tool_name_validity` | **1.000** | no invented tool names |
+| `tool_response_health` | **1.000** | no prose-only errors, no empty anchors, no known-bug regressions |
+| `tool_data_utilization` | **1.000** | judge: `used` on every example |
+| `datasources_covered` | 1.000 | every example hit its pinned datasource |
+| `expected_tools_fired` | 0.906 | 2 misses, both explained below |
+| `confidence_threshold` | 0.938 | one example self-reported 0.59 vs the 0.6 gate |
+| `tool_efficiency` | 0.327 | soft signal -- see below |
+
+Coverage against the derived targets: **31/88** (from 19/88 before the expansion).
+
+| datasource | covered |
+|---|---|
+| atlassian | 2/2 |
+| couchbase | 8/19 |
+| aws | 7/17 |
+| kafka | 6/15 |
+| gitlab | 5/22 |
+| elastic | 3/7 |
+| konnect | 0/6 (server disabled) |
+
+The two `expected_tools_fired` misses are both legitimate:
+
+- **konnect 0/1** -- the server is disabled here, so no tool could fire. Correct reporting, not a
+  defect.
+- **kafka 1/2** -- the model answered the DLQ half via `kafka_list_dlq_topics` +
+  `kafka_consume_messages` and never reached for `kafka_describe_topic`. A genuine steering
+  observation: the example asked two things and the model answered one.
+
+10 tool errors, all pre-existing and correctly classified -- 6 × HTTP 404 `not-found` (the
+SIO-1401 GitLab project-access issue) and 4 × `no-index` -> `no-data` from the Orbit tools on an
+unindexed project. `tool_arg_validity` stayed 1.000 throughout, which is the evaluator
+separation working: neither class is a malformed argument.
+
 ### Reading `tool_efficiency`
 
 It is below 1.0 nearly everywhere, and that is expected -- it counts same-tool-same-target
