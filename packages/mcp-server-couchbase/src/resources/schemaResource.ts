@@ -76,7 +76,7 @@ export function registerSchemaResource(server: McpServer, bucket: Bucket, regist
 		}
 	};
 
-	server.resource("collection-schema", schemaTemplate, readSchema);
+	server.registerResource("collection-schema", schemaTemplate, {}, readSchema);
 	registry.addTemplate(schemaTemplate, readSchema);
 
 	logger.info("Schema resource registered successfully");

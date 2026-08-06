@@ -253,7 +253,7 @@ export function registerMarkdownDocumentationResource(
 		logger.info({ uri: uri.href }, "Handling documentation browser request");
 		return handler.listDocumentation();
 	};
-	server.resource("documentation-browser", "docs://", readDocumentationBrowser);
+	server.registerResource("documentation-browser", "docs://", {}, readDocumentationBrowser);
 	registry.addExact("docs://", readDocumentationBrowser);
 
 	// Register scope-documentation resource with a placeholder implementation
@@ -264,7 +264,7 @@ export function registerMarkdownDocumentationResource(
 		return handler.getScopeDocumentation("default");
 	};
 	// "scope-documentation" is a simple URI to avoid template issues
-	server.resource("scope-documentation", "scope-documentation", readScopeDocumentation);
+	server.registerResource("scope-documentation", "scope-documentation", {}, readScopeDocumentation);
 	registry.addExact("scope-documentation", readScopeDocumentation);
 
 	// Register collection-documentation resource with a placeholder implementation
@@ -274,7 +274,7 @@ export function registerMarkdownDocumentationResource(
 		logger.info({ uri: uri.href }, "Handling collection documentation request");
 		return handler.getCollectionDocumentation("default", "default");
 	};
-	server.resource("collection-documentation", "collection-documentation", readCollectionDocumentation);
+	server.registerResource("collection-documentation", "collection-documentation", {}, readCollectionDocumentation);
 	registry.addExact("collection-documentation", readCollectionDocumentation);
 
 	// Register documentation-file resource with a placeholder implementation
@@ -284,7 +284,7 @@ export function registerMarkdownDocumentationResource(
 		logger.info({ uri: uri.href }, "Handling documentation file request");
 		return handler.getDocumentationFile("default", "default", "default");
 	};
-	server.resource("documentation-file", "documentation-file", readDocumentationFile);
+	server.registerResource("documentation-file", "documentation-file", {}, readDocumentationFile);
 	registry.addExact("documentation-file", readDocumentationFile);
 
 	// SIO-1052: the old "custom handler for resources/templates/list" block here was dead code --

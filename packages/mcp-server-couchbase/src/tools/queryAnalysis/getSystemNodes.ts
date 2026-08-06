@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { logger } from "../../utils/logger";
+import { couchbaseToolAnnotations } from "../tool-classification";
 import { systemNodesQuery } from "./analysisQueries";
 import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
@@ -23,11 +24,14 @@ export function buildQuery(input: SystemNodesInput): {
 }
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_get_system_nodes",
-		"Get information about all nodes in the Couchbase cluster",
 		{
-			service_filter: z.string().optional().describe("Filter by service type (e.g., 'n1ql', 'kv', 'index', 'fts')"),
+			description: "Get information about all nodes in the Couchbase cluster",
+			inputSchema: {
+				service_filter: z.string().optional().describe("Filter by service type (e.g., 'n1ql', 'kv', 'index', 'fts')"),
+			},
+			annotations: couchbaseToolAnnotations("capella_get_system_nodes"),
 		},
 		async (input) => {
 			logger.info(input, "Getting system nodes information");

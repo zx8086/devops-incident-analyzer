@@ -4,16 +4,20 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { logger } from "../../utils/logger";
+import { couchbaseToolAnnotations } from "../tool-classification";
 import { n1qlLargestResultSizeQueries } from "./analysisQueries";
 import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_get_largest_result_size_queries",
-		"Get queries that return the largest result sizes in bytes",
 		{
-			limit: z.number().optional().describe("Optional limit for the number of results to return"),
-			min_size_kb: z.number().optional().describe("Minimum result size in KB to include"),
+			description: "Get queries that return the largest result sizes in bytes",
+			inputSchema: {
+				limit: z.number().optional().describe("Optional limit for the number of results to return"),
+				min_size_kb: z.number().optional().describe("Minimum result size in KB to include"),
+			},
+			annotations: couchbaseToolAnnotations("capella_get_largest_result_size_queries"),
 		},
 		async ({ limit, min_size_kb }) => {
 			logger.info({ limit, min_size_kb }, "Getting largest result size queries");

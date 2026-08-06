@@ -23,6 +23,7 @@ import { registerAllResources } from "../resources/index.ts";
 import { PlaybookHandler, type PlaybookRegistry } from "../resources/playbookResource.ts";
 import { ResourceRegistry } from "../resources/resource-registry.ts";
 import { type CouchbaseServerDatasource, createMcpServerFactory } from "../server.ts";
+import { couchbaseToolAnnotations } from "../tools/tool-classification.ts";
 
 // Registration never calls the Bucket (query analysis / document tools only touch it inside
 // tools/call handlers), so an empty stub is sufficient for a tools/list-only test.
@@ -99,16 +100,24 @@ describe("SIO-1044: mcp-server-couchbase cached factory replay", () => {
 		// createMcpServerFactory's registerAll does internally), independent of the factory
 		// recording mechanism under test.
 		const control = new McpServer({ name: "couchbase-mcp-server-control", version: "0.0.0" });
-		control.resource("test-playbook", "playbook://test.md", async (uri) => ({
+		control.registerResource("test-playbook", "playbook://test.md", {}, async (uri) => ({
 			contents: [{ uri: uri.href, mimeType: "text/markdown", text: "# Test" }],
 		}));
 		registerAllTools(control, ds.bucket);
 		registerSqlppQueryGenerator(control);
 		registerAllResources(control, ds.bucket, ds.playbooks, new ResourceRegistry());
 		registerPingHandlers(control);
-		control.tool("capella_echo", "Echoes back the input parameters for debugging", {}, async (params) => ({
-			content: [{ type: "text" as const, text: JSON.stringify(params) }],
-		}));
+		control.registerTool(
+			"capella_echo",
+			{
+				description: "Echoes back the input parameters for debugging",
+				inputSchema: {},
+				annotations: couchbaseToolAnnotations("capella_echo"),
+			},
+			async (params) => ({
+				content: [{ type: "text" as const, text: JSON.stringify(params) }],
+			}),
+		);
 
 		const [replayedTools, controlTools] = await Promise.all([toolNames(replayedServer), toolNames(control)]);
 		expect(replayedTools).toEqual(controlTools);
@@ -187,16 +196,24 @@ describe("SIO-1044: mcp-server-couchbase cached factory replay", () => {
 			createBareServer: () => new McpServer({ name: "couchbase-mcp-server-test", version: "0.0.0" }),
 			registerAll: (server) => {
 				registerAllCalls++;
-				server.resource("test-playbook", "playbook://test.md", async (uri) => ({
+				server.registerResource("test-playbook", "playbook://test.md", {}, async (uri) => ({
 					contents: [{ uri: uri.href, mimeType: "text/markdown", text: "# Test" }],
 				}));
 				registerAllTools(server, ds.bucket);
 				registerSqlppQueryGenerator(server);
 				registerAllResources(server, ds.bucket, playbooksSpy, new ResourceRegistry());
 				registerPingHandlers(server);
-				server.tool("capella_echo", "Echoes back the input parameters for debugging", {}, async (params) => ({
-					content: [{ type: "text" as const, text: JSON.stringify(params) }],
-				}));
+				server.registerTool(
+					"capella_echo",
+					{
+						description: "Echoes back the input parameters for debugging",
+						inputSchema: {},
+						annotations: couchbaseToolAnnotations("capella_echo"),
+					},
+					async (params) => ({
+						content: [{ type: "text" as const, text: JSON.stringify(params) }],
+					}),
+				);
 			},
 		});
 

@@ -7,6 +7,7 @@ import { z } from "zod";
 import { classifyCouchbaseError } from "../../lib/classifyCouchbaseError";
 import { resolveBucket } from "../../lib/resolveBucket";
 import { logger } from "../../utils/logger";
+import { couchbaseToolAnnotations } from "../tool-classification";
 import { n1qlIndexAdvisor } from "./analysisQueries";
 
 export type IndexAdvisorInput = {
@@ -116,15 +117,19 @@ export const adviseQuery = async (
 };
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_get_index_advisor_recommendations",
-		"Run the server-computed Couchbase Index Advisor (SELECT ADVISOR) on a SQL++ query and return current, recommended, and covering index DDL. Evaluates only -- never creates indexes.",
 		{
-			scope_name: z.string().describe("Name of the scope to analyze the query in"),
-			query: z
-				.string()
-				.describe("SQL++ query to analyze. Use only the collection name in the FROM clause (scope context)."),
-			bucket_name: z.string().optional().describe("Optional bucket name (defaults to the configured bucket)"),
+			description:
+				"Run the server-computed Couchbase Index Advisor (SELECT ADVISOR) on a SQL++ query and return current, recommended, and covering index DDL. Evaluates only -- never creates indexes.",
+			inputSchema: {
+				scope_name: z.string().describe("Name of the scope to analyze the query in"),
+				query: z
+					.string()
+					.describe("SQL++ query to analyze. Use only the collection name in the FROM clause (scope context)."),
+				bucket_name: z.string().optional().describe("Optional bucket name (defaults to the configured bucket)"),
+			},
+			annotations: couchbaseToolAnnotations("capella_get_index_advisor_recommendations"),
 		},
 		async (params) => {
 			logger.info({ scope: params.scope_name, bucket: params.bucket_name }, "Running index advisor");

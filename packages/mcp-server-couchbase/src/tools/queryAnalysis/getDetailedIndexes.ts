@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { logger } from "../../utils/logger";
+import { couchbaseToolAnnotations } from "../tool-classification";
 import { detailedIndexesQuery } from "./analysisQueries";
 import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
@@ -84,22 +85,25 @@ export function buildQuery(input: DetailedIndexesInput): {
 }
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_get_detailed_indexes",
-		"Get detailed information about all indexes in the Couchbase system",
 		{
-			bucket_name: z.string().optional().describe("Filter by bucket name"),
-			scope_name: z.string().optional().describe("Filter by scope name"),
-			collection_name: z.string().optional().describe("Filter by collection name"),
-			state: z.string().optional().describe("Filter by state (e.g., 'online', 'deferred')"),
-			has_condition: z.boolean().optional().describe("Filter for indexes with conditions"),
-			is_primary: z.boolean().optional().describe("Filter for primary indexes only"),
-			index_type: z.string().optional().describe("Filter by index type (e.g., 'GSI', 'FTS')"),
-			sort_by: z
-				.enum(["name", "state", "keyspace_id", "last_scan_time"])
-				.optional()
-				.default("keyspace_id")
-				.describe("Sort results by field"),
+			description: "Get detailed information about all indexes in the Couchbase system",
+			inputSchema: {
+				bucket_name: z.string().optional().describe("Filter by bucket name"),
+				scope_name: z.string().optional().describe("Filter by scope name"),
+				collection_name: z.string().optional().describe("Filter by collection name"),
+				state: z.string().optional().describe("Filter by state (e.g., 'online', 'deferred')"),
+				has_condition: z.boolean().optional().describe("Filter for indexes with conditions"),
+				is_primary: z.boolean().optional().describe("Filter for primary indexes only"),
+				index_type: z.string().optional().describe("Filter by index type (e.g., 'GSI', 'FTS')"),
+				sort_by: z
+					.enum(["name", "state", "keyspace_id", "last_scan_time"])
+					.optional()
+					.default("keyspace_id")
+					.describe("Sort results by field"),
+			},
+			annotations: couchbaseToolAnnotations("capella_get_detailed_indexes"),
 		},
 		async (input) => {
 			logger.info(input, "Getting detailed indexes information");

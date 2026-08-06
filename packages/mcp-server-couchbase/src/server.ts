@@ -11,6 +11,7 @@ import { registerAllResources } from "./resources";
 import type { DocumentationHandler } from "./resources/documentationResource";
 import type { PlaybookRegistry } from "./resources/playbookResource";
 import { ResourceRegistry } from "./resources/resource-registry";
+import { couchbaseToolAnnotations } from "./tools/tool-classification";
 
 // SIO-1044: playbooks is pre-enumerated once in initDatasource (loadPlaybooks, async/fs-bound) so
 // registerAll below can stay fully synchronous, as required by createCachedServerFactory.
@@ -105,7 +106,7 @@ export function createMcpServerFactory(ds: CouchbaseServerDatasource): () => Mcp
 					},
 				],
 			});
-			server.resource("test-playbook", "playbook://test.md", readTestPlaybook);
+			server.registerResource("test-playbook", "playbook://test.md", {}, readTestPlaybook);
 			registry.addExact("playbook://test.md", readTestPlaybook);
 
 			// Register all tools
@@ -129,10 +130,13 @@ export function createMcpServerFactory(ds: CouchbaseServerDatasource): () => Mcp
 			registerPingHandlers(server);
 
 			// Register a minimal echo tool for debugging
-			server.tool(
+			server.registerTool(
 				"capella_echo",
-				"Echoes back the input parameters for debugging",
-				{},
+				{
+					description: "Echoes back the input parameters for debugging",
+					inputSchema: {},
+					annotations: couchbaseToolAnnotations("capella_echo"),
+				},
 				async (params: Record<string, unknown>) => {
 					getDocLogger().info("EchoTool RAW params", { raw_params: JSON.stringify(params) });
 					return { content: [{ type: "text", text: JSON.stringify(params) }] };

@@ -5,6 +5,7 @@ import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { resolveBucket } from "../lib/resolveBucket";
 import { logger } from "../utils/logger";
+import { couchbaseToolAnnotations } from "./tool-classification";
 
 // SIO-1264: the SDK's `latency_us` field does NOT contain microseconds. It contains NANOSECONDS.
 //
@@ -83,11 +84,15 @@ export const getClusterHealthHandler = async (params: { bucket_name?: string }, 
 };
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_get_cluster_health",
-		"Get cluster health and running services with per-service ping latency. Each service entry reports latencyMs (MILLISECONDS -- use this one) and latencyNs (nanoseconds, same value). Do not rescale them. Typical healthy values are single-digit to low-hundreds of ms for a remote cluster. Optionally scoped to a bucket.",
 		{
-			bucket_name: z.string().optional().describe("Optional bucket to ping instead of the cluster"),
+			description:
+				"Get cluster health and running services with per-service ping latency. Each service entry reports latencyMs (MILLISECONDS -- use this one) and latencyNs (nanoseconds, same value). Do not rescale them. Typical healthy values are single-digit to low-hundreds of ms for a remote cluster. Optionally scoped to a bucket.",
+			inputSchema: {
+				bucket_name: z.string().optional().describe("Optional bucket to ping instead of the cluster"),
+			},
+			annotations: couchbaseToolAnnotations("capella_get_cluster_health"),
 		},
 		async (params) => {
 			logger.info({ bucket: params.bucket_name }, "Getting cluster health");

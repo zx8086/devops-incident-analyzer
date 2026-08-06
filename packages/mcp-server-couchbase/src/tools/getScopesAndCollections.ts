@@ -5,6 +5,7 @@ import type { Bucket, ScopeSpec } from "couchbase";
 import { z } from "zod";
 import { resolveBucket } from "../lib/resolveBucket";
 import { TtlCache } from "../lib/ttlCache";
+import { couchbaseToolAnnotations } from "./tool-classification";
 
 // Topology changes rarely, but agents call this tool multiple times per turn
 // (often back-to-back). A short TTL keeps duplicates off the cluster while
@@ -50,11 +51,14 @@ const getScopesAndCollectionsHandler = async (params: { bucket_name?: string }, 
 };
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_get_scopes_and_collections",
-		"Get all scopes and collections in a bucket (defaults to the configured bucket)",
 		{
-			bucket_name: z.string().optional().describe("Optional bucket name (defaults to the configured bucket)"),
+			description: "Get all scopes and collections in a bucket (defaults to the configured bucket)",
+			inputSchema: {
+				bucket_name: z.string().optional().describe("Optional bucket name (defaults to the configured bucket)"),
+			},
+			annotations: couchbaseToolAnnotations("capella_get_scopes_and_collections"),
 		},
 		async (params: { bucket_name?: string }) => {
 			if (!params || typeof params !== "object") {

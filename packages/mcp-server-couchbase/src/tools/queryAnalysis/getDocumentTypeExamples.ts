@@ -5,6 +5,7 @@ import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { assertIdentifier } from "../../lib/identifiers";
 import { logger } from "../../utils/logger";
+import { couchbaseToolAnnotations } from "../tool-classification";
 import { documentTypeExamples } from "./analysisQueries";
 import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
@@ -42,25 +43,28 @@ export function buildQuery(input: DocumentTypeExamplesInput): {
 }
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_get_document_type_examples",
-		"Get examples of document keys for each document type",
 		{
-			scope_name: z
-				.string()
-				.optional()
-				.default("_default")
-				.describe("Scope name to query (must match /^[A-Za-z0-9_][A-Za-z0-9_%-]*$/)"),
-			collection_name: z
-				.string()
-				.optional()
-				.default("_default")
-				.describe("Collection name to query, hyphens allowed (must match /^[A-Za-z0-9_][A-Za-z0-9_%-]*$/)"),
-			type_field: z
-				.string()
-				.optional()
-				.default("documentType")
-				.describe("Field name that contains the document type (must match /^[A-Za-z0-9_][A-Za-z0-9_%-]*$/)"),
+			description: "Get examples of document keys for each document type",
+			inputSchema: {
+				scope_name: z
+					.string()
+					.optional()
+					.default("_default")
+					.describe("Scope name to query (must match /^[A-Za-z0-9_][A-Za-z0-9_%-]*$/)"),
+				collection_name: z
+					.string()
+					.optional()
+					.default("_default")
+					.describe("Collection name to query, hyphens allowed (must match /^[A-Za-z0-9_][A-Za-z0-9_%-]*$/)"),
+				type_field: z
+					.string()
+					.optional()
+					.default("documentType")
+					.describe("Field name that contains the document type (must match /^[A-Za-z0-9_][A-Za-z0-9_%-]*$/)"),
+			},
+			annotations: couchbaseToolAnnotations("capella_get_document_type_examples"),
 		},
 		async (input) => {
 			logger.info(input, "Getting document type examples");

@@ -9,6 +9,7 @@ import { resolveBucket } from "../../lib/resolveBucket";
 import { sqlppParser } from "../../lib/sqlppParser";
 import { logger } from "../../utils/logger";
 import { buildExplainStatement } from "../explainSqlPlusPlusQuery";
+import { couchbaseToolAnnotations } from "../tool-classification";
 import { buildQuery as buildAdvisorQuery, extractAdvisorSections } from "./getIndexAdvisor";
 
 // SIO-1058: Couchbase GSI has NO `INCLUDE (col-list)` covering clause (that is SQL Server syntax;
@@ -125,14 +126,18 @@ export async function runLiveOptimizationAnalysis(
 }
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_suggest_query_optimizations",
-		"Analyze a query and suggest optimizations and indexes. Uses the live Index Advisor and EXPLAIN plan when the cluster is reachable; falls back to offline heuristic analysis otherwise.",
 		{
-			query: z.string().describe("The N1QL query to analyze"),
-			bucket_name: z.string().optional().describe("Bucket name (defaults to bucket in query)"),
-			scope_name: z.string().optional().describe("Scope name (defaults to scope in query)"),
-			collection_name: z.string().optional().describe("Collection name (defaults to collection in query)"),
+			description:
+				"Analyze a query and suggest optimizations and indexes. Uses the live Index Advisor and EXPLAIN plan when the cluster is reachable; falls back to offline heuristic analysis otherwise.",
+			inputSchema: {
+				query: z.string().describe("The N1QL query to analyze"),
+				bucket_name: z.string().optional().describe("Bucket name (defaults to bucket in query)"),
+				scope_name: z.string().optional().describe("Scope name (defaults to scope in query)"),
+				collection_name: z.string().optional().describe("Collection name (defaults to collection in query)"),
+			},
+			annotations: couchbaseToolAnnotations("capella_suggest_query_optimizations"),
 		},
 		async ({ query, bucket_name, scope_name, collection_name }) => {
 			logger.info({ query, bucket_name, scope_name, collection_name }, "Analyzing query for optimizations");

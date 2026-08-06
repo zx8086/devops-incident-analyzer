@@ -1,0 +1,362 @@
+{
+	"tools": {
+		"capella_analyze_document_structure": {
+			"surfaceHash": "9bb69eec8c2b138301a36e7f4e49bb2b73ccc8dbf829ec4d123d5ff046cf9e65",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_create_documentation": {
+			"surfaceHash": "71667378a75496e5eb94ddf6b93acf833f7d2ea4ea8da2fd7747db00a7f23044",
+			"annotations": {
+				"readOnlyHint": false,
+				"destructiveHint": false
+			}
+		},
+		"capella_delete_document_by_id": {
+			"surfaceHash": "75060c3d8a2d36b92e53cdd59aba428fe9c8566937a10033b11cfc41c3a79ccf",
+			"annotations": {
+				"readOnlyHint": false,
+				"destructiveHint": true
+			}
+		},
+		"capella_delete_documentation": {
+			"surfaceHash": "83f3061aa649acbea807cf6e7c286018121452199532fcf18b88acb776d22caa",
+			"annotations": {
+				"readOnlyHint": false,
+				"destructiveHint": true
+			}
+		},
+		"capella_echo": {
+			"surfaceHash": "10aff7288e39c369540dee3b0171ec1d2efe796ea72fbac01f1d89430608902f",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_explain_sql_plus_plus_query": {
+			"surfaceHash": "3d027893715a941c652474c6f580236d511b6fd2f8f3ca35f6b7a4e815a27289",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_buckets": {
+			"surfaceHash": "d0f31d7ca0c641e63094c5014729856ed91720d1b27cb232e038e489d82a56ce",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_cluster_health": {
+			"surfaceHash": "e34dbcf1505366591d7eeb40e24b523bf82e559a50cc8822a689dd97be1f5b89",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_completed_requests": {
+			"surfaceHash": "54ea876ef0cddb706c7eb348996d632a7d9af92ded8c877c496e611867395726",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_detailed_indexes": {
+			"surfaceHash": "89b8360d3228676199da886e603b929855fdfd5f9a12ec800c6d15ed4ad2053c",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_detailed_prepared_statements": {
+			"surfaceHash": "16481ccf3bdbf9f02e69b0925fdead6a3094808a261dfc38083421e5be7535aa",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_document_by_id": {
+			"surfaceHash": "19d32e1c7180f0f058c3a2edf334b70bcb29af5da266c6fcbfd33c48c6ab0be2",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_document_type_examples": {
+			"surfaceHash": "4ac5d9258d5c2573b6d015b19656c140794aa8946a6cc6176e9f5d0af39345a5",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_fatal_requests": {
+			"surfaceHash": "3e8d3890c848607b0254fdd27efde96bb1411f9ed04fe5313eedf5ed7f51fd2f",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_index_advisor_recommendations": {
+			"surfaceHash": "c383133aa074151264be08a8106dda41af0b3a8964e3f40c4af10948f49cda8d",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_indexes_to_drop": {
+			"surfaceHash": "cfb270450613fc4dbf48d58ac4ab66c8e16a9237705d7306df217a3ec5a9c71f",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_largest_result_count_queries": {
+			"surfaceHash": "fbbf92cf4011cb993333ae8398f0e00fe84e0216823ea6a8227298b2e4fa050b",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_largest_result_size_queries": {
+			"surfaceHash": "15d1d27c4b838b9648f6090f617b60edb005769f3123c36a9e205775ed74e9d7",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_longest_running_queries": {
+			"surfaceHash": "6d60e16aaf5708e9e8fb311ca5a08940de621bf479b56742f912dbd98212888b",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_low_selectivity_queries": {
+			"surfaceHash": "fee7b3d91396eb52fe959dcb86c6bab3bc7b61c0423f79f889a006e7944be785",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_most_expensive_queries": {
+			"surfaceHash": "b845fa852e2765c87bb97c394e2e51bf4fe5696f1d7fbe1e1cb2bb8186cb91aa",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_most_frequent_queries": {
+			"surfaceHash": "a799697ae5e0adc668d673d3faec0f24e7bdf9633f70d92e800133578bd011a0",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_non_covering_index_queries": {
+			"surfaceHash": "1b61818016cacd2e5da81429fb15fea34a076daecdb2d8fc5e312691f7da8ec8",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_playbook": {
+			"surfaceHash": "6625018eed018559cb4d2532d5c3b6bbcff590b0e8394287585116b2c232d5a1",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_prepared_statements": {
+			"surfaceHash": "aecef14a5303ad814924bfd1122e9dc511d056f0efcca26ad47f886bcf89a0ff",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_primary_index_queries": {
+			"surfaceHash": "3ea5447c9b220442dc7ca1be98e4f022803dcc3ac0f21d2d58acf82ddb463493",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_schema_for_collection": {
+			"surfaceHash": "b44f514dbe7213034fd78b5bb1113b83f1823c35ed0aa88ef586dbab2647172e",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_scopes_and_collections": {
+			"surfaceHash": "07576c067c3d2ad832ac061ea0fe7de719dd9885fb76f04881697d7693e8bc8c",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_system_indexes": {
+			"surfaceHash": "0c0fb5d33c7f2d1de91fa363823cff7fa6afc56e7f43f004971c8d1b273d5e80",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_system_nodes": {
+			"surfaceHash": "92d484eec2a75867f121995c4851eeff7bbfb5ba4f1a3a355869c7febb0efafb",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_system_vitals": {
+			"surfaceHash": "f55f8f7ee45a289ae04bcae4f0105a2eb9263c724b84a76d16b9f0c9cffca892",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_list_documentation": {
+			"surfaceHash": "92de3ad47b74a8b5a6299cad8a66ec99164457eae7cdeb7fc82fc9fb9e0d6285",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_list_playbooks": {
+			"surfaceHash": "632762fd54b950219fe261bc896f307fcd44a9f3352a6e3d9f2c9f75f95060fe",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_ping": {
+			"surfaceHash": "348c64b63f7fc82d8a985a87f43008a66591477bfbdb4a38e4bc9791a49943e8",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_read_documentation": {
+			"surfaceHash": "0da3ed390d2153958c8b2dafa6d25dece55b28c9eeea8ffdfa7fa87a18f6dbfa",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_run_sql_plus_plus_query": {
+			"surfaceHash": "61d8bd2efd4da818ff505bc1ecb225f22609ac0a41a8c652268e3de6757cbc7e",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_suggest_query_optimizations": {
+			"surfaceHash": "feec2fd138b9235e8caf253bc00b84a42549567ba9c4af5e02b5df4eac0cb8b2",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_sync_documentation_with_database": {
+			"surfaceHash": "8819c9e7d9354856ab534380672f5e3686b762d204b38ef7eaf12f35255e3a7b",
+			"annotations": {
+				"readOnlyHint": false,
+				"destructiveHint": false
+			}
+		},
+		"capella_upsert_document_by_id": {
+			"surfaceHash": "25561d048816618e1dc03194dc20d2185b157da5fab6457f98662c78f84e0583",
+			"annotations": {
+				"readOnlyHint": false,
+				"destructiveHint": false
+			}
+		}
+	},
+	"resources": [
+		{
+			"name": "collection-documentation",
+			"uri": "collection-documentation"
+		},
+		{
+			"name": "database-structure",
+			"uri": "database://structure"
+		},
+		{
+			"name": "documentation-browser",
+			"uri": "docs://"
+		},
+		{
+			"name": "documentation-file",
+			"uri": "documentation-file"
+		},
+		{
+			"name": "playbook-directory",
+			"uri": "playbook://"
+		},
+		{
+			"name": "test-playbook",
+			"uri": "playbook://test.md"
+		},
+		{
+			"name": "playbook-test1",
+			"uri": "playbook://test1"
+		},
+		{
+			"name": "scope-documentation",
+			"uri": "scope-documentation"
+		}
+	],
+	"resourceTemplates": [
+		{
+			"name": "document",
+			"uriTemplate": "document://{scope}/{collection}/{id}"
+		},
+		{
+			"name": "query-results",
+			"uriTemplate": "query://{scope}/{encodedQuery}"
+		},
+		{
+			"name": "collection-schema",
+			"uriTemplate": "schema://{scope}/{collection}"
+		}
+	],
+	"prompts": [
+		{
+			"name": "generate_sqlpp_query",
+			"arguments": [
+				{
+					"name": "description",
+					"description": "What you want to accomplish with this query",
+					"required": true
+				},
+				{
+					"name": "bucket",
+					"description": "The bucket name (e.g., 'travel-sample')",
+					"required": true
+				},
+				{
+					"name": "scope",
+					"description": "The scope name (e.g., 'inventory'). If not provided, '_default' will be used",
+					"required": false
+				},
+				{
+					"name": "collection",
+					"description": "The collection name (e.g., 'hotel')",
+					"required": true
+				},
+				{
+					"name": "filters",
+					"description": "Any conditions for filtering results",
+					"required": false
+				},
+				{
+					"name": "limit",
+					"description": "Maximum number of results to return",
+					"required": false
+				}
+			]
+		}
+	]
+}

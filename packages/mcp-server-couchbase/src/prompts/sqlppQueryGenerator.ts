@@ -5,18 +5,23 @@ import { z } from "zod";
 import { logger } from "../utils/logger";
 
 export function registerSqlppQueryGenerator(server: McpServer): void {
-	server.prompt(
+	// SIO-1419: registerPrompt config style (SDK v2 removes the .prompt() sugar).
+	// Same argsSchema value the positional overload took, so prompts/list is
+	// byte-identical (locked by the snapshot test).
+	server.registerPrompt(
 		"generate_sqlpp_query",
 		{
-			description: z.string().describe("What you want to accomplish with this query"),
-			bucket: z.string().describe("The bucket name (e.g., 'travel-sample')"),
-			scope: z
-				.string()
-				.optional()
-				.describe("The scope name (e.g., 'inventory'). If not provided, '_default' will be used"),
-			collection: z.string().describe("The collection name (e.g., 'hotel')"),
-			filters: z.string().optional().describe("Any conditions for filtering results"),
-			limit: z.string().optional().describe("Maximum number of results to return"),
+			argsSchema: {
+				description: z.string().describe("What you want to accomplish with this query"),
+				bucket: z.string().describe("The bucket name (e.g., 'travel-sample')"),
+				scope: z
+					.string()
+					.optional()
+					.describe("The scope name (e.g., 'inventory'). If not provided, '_default' will be used"),
+				collection: z.string().describe("The collection name (e.g., 'hotel')"),
+				filters: z.string().optional().describe("Any conditions for filtering results"),
+				limit: z.string().optional().describe("Maximum number of results to return"),
+			},
 		},
 		(args) => {
 			const { description, bucket, scope, collection, filters, limit } = args;

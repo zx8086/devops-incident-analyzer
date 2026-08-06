@@ -4,15 +4,19 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { logger } from "../../utils/logger";
+import { couchbaseToolAnnotations } from "../tool-classification";
 import { n1qlPreparedStatements } from "./analysisQueries";
 import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_get_prepared_statements",
-		"Get information about prepared statements in the query engine",
 		{
-			limit: z.number().optional().describe("Optional limit for the number of results to return"),
+			description: "Get information about prepared statements in the query engine",
+			inputSchema: {
+				limit: z.number().optional().describe("Optional limit for the number of results to return"),
+			},
+			annotations: couchbaseToolAnnotations("capella_get_prepared_statements"),
 		},
 		async ({ limit }) => {
 			logger.info({ limit }, "Getting prepared statements");

@@ -4,15 +4,19 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { logger } from "../../utils/logger";
+import { couchbaseToolAnnotations } from "../tool-classification";
 import { n1qlPrimaryIndexes } from "./analysisQueries";
 import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_get_primary_index_queries",
-		"Get queries that used primary indexes, which can indicate inefficient querying",
 		{
-			limit: z.number().optional().describe("Optional limit for the number of results to return"),
+			description: "Get queries that used primary indexes, which can indicate inefficient querying",
+			inputSchema: {
+				limit: z.number().optional().describe("Optional limit for the number of results to return"),
+			},
+			annotations: couchbaseToolAnnotations("capella_get_primary_index_queries"),
 		},
 		async ({ limit }) => {
 			logger.info({ limit }, "Getting primary index queries");

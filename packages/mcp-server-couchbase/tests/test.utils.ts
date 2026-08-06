@@ -155,19 +155,10 @@ export const mockConnection = {
 
 export const mockServer = {
 	registeredTools: {} as Record<string, { schema: unknown; handler: ToolHandler }>,
-	tool: (...args: unknown[]) => {
-		let name: string;
-		let schema: unknown;
-		let handler: unknown;
-		if (args.length === 4) {
-			[name, , schema, handler] = args as [string, unknown, unknown, unknown];
-		} else if (args.length === 3) {
-			[name, schema, handler] = args as [string, unknown, unknown];
-		} else {
-			throw new Error("Invalid tool registration signature");
-		}
+	// SIO-1419: registerTool config style (name, { description, inputSchema, annotations }, handler).
+	registerTool: (name: string, config: { inputSchema?: unknown }, handler: unknown) => {
 		mockServer.registeredTools[name] = {
-			schema,
+			schema: config.inputSchema,
 			handler: typeof handler === "function" ? (handler as ToolHandler) : async () => undefined,
 		};
 		return mockServer;

@@ -6,6 +6,7 @@ import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { classifyCouchbaseError } from "../lib/classifyCouchbaseError";
 import { logger } from "../utils/logger";
+import { couchbaseToolAnnotations } from "./tool-classification";
 
 // Exported for unit testing (SIO-1118). Wrap the direct SDK remove() so a missing
 // document surfaces as a structured not-found envelope rather than an uncaught
@@ -45,13 +46,16 @@ export const deleteDocument = async (
 };
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_delete_document_by_id",
-		"Delete a document by ID from a specific scope and collection",
 		{
-			scope_name: z.string().describe("Name of the scope"),
-			collection_name: z.string().describe("Name of the collection"),
-			document_id: z.string().describe("ID of the document to delete"),
+			description: "Delete a document by ID from a specific scope and collection",
+			inputSchema: {
+				scope_name: z.string().describe("Name of the scope"),
+				collection_name: z.string().describe("Name of the collection"),
+				document_id: z.string().describe("ID of the document to delete"),
+			},
+			annotations: couchbaseToolAnnotations("capella_delete_document_by_id"),
 		},
 		async (params) => deleteDocument(params, bucket),
 	);

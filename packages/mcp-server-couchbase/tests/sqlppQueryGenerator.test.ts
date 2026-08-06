@@ -16,7 +16,7 @@ type PromptHandler = (args: Record<string, string>) => { messages: Array<{ conte
 function capturePrompt(): { getText: (args: Record<string, string>) => string } {
 	let handler: PromptHandler | undefined;
 	const server = {
-		prompt: (_name: string, _schema: unknown, cb: PromptHandler) => {
+		registerPrompt: (_name: string, _config: unknown, cb: PromptHandler) => {
 			handler = cb;
 		},
 	} as unknown as McpServer;

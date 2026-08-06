@@ -6,6 +6,7 @@ import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { classifyCouchbaseError } from "../lib/classifyCouchbaseError";
 import { logger } from "../utils/logger";
+import { couchbaseToolAnnotations } from "./tool-classification";
 
 // Exported for unit testing (SIO-1118). Wrap the JSON parse + direct SDK upsert()
 // so an SDK error (CAS/validation/timeout) or invalid content surfaces as a
@@ -52,14 +53,17 @@ export const upsertDocument = async (
 };
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_upsert_document_by_id",
-		"Create or update a document with a specific ID",
 		{
-			scope_name: z.string().describe("Name of the scope"),
-			collection_name: z.string().describe("Name of the collection"),
-			document_id: z.string().describe("ID of the document to create or update"),
-			document_content: z.string().describe("JSON content of the document"),
+			description: "Create or update a document with a specific ID",
+			inputSchema: {
+				scope_name: z.string().describe("Name of the scope"),
+				collection_name: z.string().describe("Name of the collection"),
+				document_id: z.string().describe("ID of the document to create or update"),
+				document_content: z.string().describe("JSON content of the document"),
+			},
+			annotations: couchbaseToolAnnotations("capella_upsert_document_by_id"),
 		},
 		async (params) => upsertDocument(params, bucket),
 	);

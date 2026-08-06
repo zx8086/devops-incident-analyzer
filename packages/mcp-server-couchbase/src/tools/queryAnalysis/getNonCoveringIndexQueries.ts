@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { logger } from "../../utils/logger";
+import { couchbaseToolAnnotations } from "../tool-classification";
 import { n1qlNonCoveringIndexQueries } from "./analysisQueries";
 import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
@@ -25,11 +26,15 @@ export function buildQuery(input: NonCoveringIndexQueriesInput): {
 }
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_get_non_covering_index_queries",
-		"Get queries whose index scans still required a document fetch phase (the index did not cover the query). Empty results can mean request logging thresholds excluded fast queries.",
 		{
-			limit: z.number().int().positive().optional().describe("Optional limit for the number of results to return"),
+			description:
+				"Get queries whose index scans still required a document fetch phase (the index did not cover the query). Empty results can mean request logging thresholds excluded fast queries.",
+			inputSchema: {
+				limit: z.number().int().positive().optional().describe("Optional limit for the number of results to return"),
+			},
+			annotations: couchbaseToolAnnotations("capella_get_non_covering_index_queries"),
 		},
 		async ({ limit }) => {
 			logger.info({ limit }, "Getting non-covering index queries");

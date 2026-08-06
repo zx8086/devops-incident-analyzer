@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { logger } from "../../utils/logger";
+import { couchbaseToolAnnotations } from "../tool-classification";
 import { n1qlIndexesToDrop } from "./analysisQueries";
 import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
@@ -41,11 +42,14 @@ export function buildQuery(input: IndexesToDropInput): {
 }
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_get_indexes_to_drop",
-		"Get indexes that might be candidates for removal (never scanned)",
 		{
-			bucket_filter: z.string().optional().describe("Optional filter for bucket names (comma-separated)"),
+			description: "Get indexes that might be candidates for removal (never scanned)",
+			inputSchema: {
+				bucket_filter: z.string().optional().describe("Optional filter for bucket names (comma-separated)"),
+			},
+			annotations: couchbaseToolAnnotations("capella_get_indexes_to_drop"),
 		},
 		async (input) => {
 			logger.info(input, "Getting indexes that are candidates for removal");

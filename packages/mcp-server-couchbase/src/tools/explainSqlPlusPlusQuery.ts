@@ -12,6 +12,7 @@ import { resolveBucket } from "../lib/resolveBucket";
 import { sqlppParser } from "../lib/sqlppParser";
 import { logger } from "../utils/logger";
 import { adviseQuery } from "./queryAnalysis/getIndexAdvisor";
+import { couchbaseToolAnnotations } from "./tool-classification";
 
 // Strip any leading EXPLAIN token (and trailing semicolon), then prepend exactly one.
 export function buildExplainStatement(query: string): string {
@@ -113,15 +114,19 @@ export const explainQuery = async (
 };
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_explain_sql_plus_plus_query",
-		"Get the execution plan for a SQL++ query (EXPLAIN) plus an automated plan analysis: index usage, covering vs fetch, primary-scan warnings. Does not execute the query.",
 		{
-			scope_name: z.string().describe("Name of the scope to plan the query in"),
-			query: z
-				.string()
-				.describe("SQL++ query to explain. Use only the collection name in the FROM clause (scope context)."),
-			bucket_name: z.string().optional().describe("Optional bucket name (defaults to the configured bucket)"),
+			description:
+				"Get the execution plan for a SQL++ query (EXPLAIN) plus an automated plan analysis: index usage, covering vs fetch, primary-scan warnings. Does not execute the query.",
+			inputSchema: {
+				scope_name: z.string().describe("Name of the scope to plan the query in"),
+				query: z
+					.string()
+					.describe("SQL++ query to explain. Use only the collection name in the FROM clause (scope context)."),
+				bucket_name: z.string().optional().describe("Optional bucket name (defaults to the configured bucket)"),
+			},
+			annotations: couchbaseToolAnnotations("capella_explain_sql_plus_plus_query"),
 		},
 		async (params) => {
 			logger.info({ scope: params.scope_name, bucket: params.bucket_name }, "Explaining SQL++ query");

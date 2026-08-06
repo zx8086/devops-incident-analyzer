@@ -4,17 +4,21 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { logger } from "../utils/logger";
+import { couchbaseToolAnnotations } from "./tool-classification";
 
 type ReadResourceByUri = (uri: string) => Promise<{ contents?: Array<{ mimeType?: string; text?: string }> }>;
 
 export default (server: McpServer, _bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_read_documentation",
-		"Read documentation content using the resource protocol",
 		{
-			scope_name: z.string().optional().describe("Name of the scope (optional)"),
-			collection_name: z.string().optional().describe("Name of the collection (optional)"),
-			file_name: z.string().optional().describe("Name of the document file (without extension, optional)"),
+			description: "Read documentation content using the resource protocol",
+			inputSchema: {
+				scope_name: z.string().optional().describe("Name of the scope (optional)"),
+				collection_name: z.string().optional().describe("Name of the collection (optional)"),
+				file_name: z.string().optional().describe("Name of the document file (without extension, optional)"),
+			},
+			annotations: couchbaseToolAnnotations("capella_read_documentation"),
 		},
 		async ({ scope_name, collection_name, file_name }) => {
 			let resourceUri: string;

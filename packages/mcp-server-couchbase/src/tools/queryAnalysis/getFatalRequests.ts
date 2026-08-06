@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { logger } from "../../utils/logger";
+import { couchbaseToolAnnotations } from "../tool-classification";
 import { DEFAULT_ANALYSIS_LIMIT, n1qlQueryFatalRequests } from "./analysisQueries";
 import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
@@ -57,15 +58,18 @@ export function buildQuery(input: FatalRequestsInput): {
 }
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_get_fatal_requests",
-		"Get information about failed/fatal N1QL queries",
 		{
-			period: z
-				.enum(["day", "week", "month", "quarter"])
-				.optional()
-				.describe("Time period to analyze (day, week, month, quarter)"),
-			limit: z.number().optional().describe("Optional limit for the number of results to return"),
+			description: "Get information about failed/fatal N1QL queries",
+			inputSchema: {
+				period: z
+					.enum(["day", "week", "month", "quarter"])
+					.optional()
+					.describe("Time period to analyze (day, week, month, quarter)"),
+				limit: z.number().optional().describe("Optional limit for the number of results to return"),
+			},
+			annotations: couchbaseToolAnnotations("capella_get_fatal_requests"),
 		},
 		async ({ period, limit }) => {
 			logger.info({ period, limit }, "Getting fatal query requests");
