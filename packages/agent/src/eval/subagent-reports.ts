@@ -1,5 +1,6 @@
 // packages/agent/src/eval/subagent-reports.ts
 import type { DataSourceResult } from "@devops-agent/shared";
+import { z } from "zod";
 
 // SIO-1374 originally serialized ONLY these typed *Findings objects, on the premise that
 // DataSourceResult has no plain-text report field. That premise was wrong: `data` (z.unknown()
@@ -33,13 +34,19 @@ const FINDINGS_FIELD_BY_DATASOURCE: Record<string, keyof DataSourceResult> = {
 // error-status result's narrative is still included: it is what the sub-agent produced, and
 // the judge grades it against ground truth. Size is capped downstream per datasource by
 // evaluators.ts's truncateForJudge, narrative-first so truncation eats the JSON tail.
+// CodeRabbit (PR #603): `data` is z.unknown() in DataSourceResultSchema (null on the no-tools
+// path), so the narrative is validated with Zod at this boundary per repo convention.
+// Non-transforming by design: refine (not trim-transform) rejects whitespace-only values while
+// preserving the original string byte-for-byte for the judge.
+const NarrativeSchema = z.string().refine((value) => value.trim().length > 0);
+
 export function buildSubagentReports(results: DataSourceResult[]): { [dataSourceId: string]: string } {
 	const byDatasource = new Map<string, string[]>();
 	for (const result of results) {
 		const parts: string[] = [];
-		// `data` is z.unknown() (null on the no-tools path) -- only a non-blank string counts.
-		if (typeof result.data === "string" && result.data.trim().length > 0) {
-			parts.push(result.data);
+		const narrative = NarrativeSchema.safeParse(result.data);
+		if (narrative.success) {
+			parts.push(narrative.data);
 		}
 		const field = FINDINGS_FIELD_BY_DATASOURCE[result.dataSourceId];
 		const findings = field ? result[field] : undefined;
