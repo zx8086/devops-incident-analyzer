@@ -6,6 +6,7 @@
 	"scripts": {
 		"verify": "bun run src/verify-action-tool-map.ts",
 		"verify:drift": "bun run src/verify-elastic-registry-drift.ts",
+		"verify:no-sugar": "bun run src/verify-no-sugar-registration.ts",
 		"test": "echo 'no unit tests -- correctness is exercised live by `bun run tools:verify`' && exit 0",
 		"typecheck": "bunx tsc --noEmit"
 	},

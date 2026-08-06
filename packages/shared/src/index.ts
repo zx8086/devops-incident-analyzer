@@ -302,6 +302,7 @@ export {
 	type TicketProviderInfo,
 	TicketProviderInfoSchema,
 } from "./ticket-types.ts";
+export { deriveToolAnnotations, looksReadOnlyByName, type ToolAnnotationSets } from "./tool-annotations.ts";
 export { installToolCallLogging, type ToolCallLogger, type ToolCallOutcome } from "./tool-call-logging.ts";
 export {
 	classifyFailureText,
