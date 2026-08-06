@@ -71,6 +71,17 @@ interface ProbeResult {
 	stopReasons: Array<{ maxTokens: number; roles: string[]; prompt: string; stopReason: string; outputTokens: number }>;
 	longFormMinTokens: number;
 	truncatedLongFormRoles: string[];
+	// SIO-1428: P6L, the same floor measured against a ~40K-input-token prompt.
+	largeLongFormRows: Array<{
+		maxTokens: number;
+		roles: string[];
+		sample: number;
+		stopReason: string;
+		outputTokens: number;
+		inputTokens: number;
+	}>;
+	largeLongFormMinTokens: number;
+	largeLongFormInputTokens: number;
 	latencyMs: { p50: number; max: number };
 	extractionSafe: boolean;
 	streamMultiBlockChunks: number;
@@ -142,6 +153,35 @@ const LONG_FORM_PROMPT = [
 	"- Kong Konnect: route seasons-v3 upstream latency p99 rose 180ms -> 180000ms at 12:03Z.",
 	"- AWS CloudWatch: ECS service order-service running 4/6 desired tasks, 2 stopped OOM.",
 ].join("\n");
+
+// SIO-1428: the small LONG_FORM_PROMPT above (~600 input tokens) never puts an adaptive-
+// thinking model's reasoning block and its answer text in competition for the same output
+// budget -- the exact failure the 32-incident replay eval exposed on Sonnet 5 (30-49K-token
+// aggregator prompts, max_tokens on 13/64 calls at the then-configured 16384, twice with the
+// reasoning block alone consuming the whole budget; SIO-1375). P6L probes that regime with a
+// synthetic prompt tiled to a realistic size: content authenticity is irrelevant, input SCALE
+// is what triggers long reasoning plus a long answer.
+const LARGE_LONG_FORM_TARGET_TOKENS = 40_000;
+
+function buildLargeLongFormPrompt(): string {
+	const sections: string[] = [LONG_FORM_PROMPT, "", "Additional evidence collected across services and windows:"];
+	// ~4 chars/token heuristic; tile numbered, varied evidence lines until the target size so
+	// the model cannot compress-by-omission the way it could with one repeated block.
+	const targetChars = LARGE_LONG_FORM_TARGET_TOKENS * 4;
+	let charCount = sections.join("\n").length;
+	let i = 0;
+	while (charCount < targetChars) {
+		i += 1;
+		const line =
+			`- Service checkout-svc-${i}: APM 5xx rate ${(i % 37) + 1}.${i % 10}% between 1${i % 10}:0${i % 6}Z and 1${i % 10}:4${i % 6}Z; ` +
+			`ECS tasks ${(i % 5) + 1}/6 healthy; consumer group cg-${i} lag ${100_000 + i * 917}; ` +
+			`N1QL scan on bucket b${i % 8} averaged ${(i % 20) + 1}s; deploy pipeline ${40_000 + i} ${i % 3 === 0 ? "succeeded" : "not found"}; ` +
+			`log sample: 'Timeout deadline: ${180 - (i % 90)}s exceeded on GET /v${(i % 4) + 1}/inventory/${i}'.`;
+		sections.push(line);
+		charCount += line.length + 1;
+	}
+	return sections.join("\n");
+}
 
 // P5 asks for the shape that broke SIO-1219: a JSON envelope with a string value that must
 // carry a multi-line document verbatim.
@@ -336,6 +376,54 @@ async function probeStopReasons(bedrockId: string, manifestMaxTokens: number) {
 	return { rows, longFormMinTokens, truncated };
 }
 
+// SIO-1428: P6L -- the LARGE-prompt long-form floor. Only long-form budgets are probed (a
+// short budget cannot answer and is not meant to), each with `samples` attempts because
+// reasoning emission is stochastic on these models: one clean sample proves nothing, so the
+// floor is the smallest budget where EVERY sample ended with end_turn. Derived from the same
+// ROLE_OVERRIDES table as P6 so it cannot drift from production.
+async function probeLargeLongForm(bedrockId: string, manifestMaxTokens: number) {
+	const prompt = buildLargeLongFormPrompt();
+	const byTokens = new Map<number, string[]>();
+	for (const role of Object.keys(ROLE_OVERRIDES) as LlmRole[]) {
+		if (!LONG_FORM_ROLES.has(role)) continue;
+		const effective = ROLE_OVERRIDES[role].maxTokens ?? manifestMaxTokens;
+		byTokens.set(effective, [...(byTokens.get(effective) ?? []), role]);
+	}
+	const budgets = [...byTokens.keys()].sort((a, b) => a - b);
+
+	const rows: Array<{
+		maxTokens: number;
+		roles: string[];
+		sample: number;
+		stopReason: string;
+		outputTokens: number;
+		inputTokens: number;
+	}> = [];
+	for (const maxTokens of budgets) {
+		const roles = (byTokens.get(maxTokens) ?? []).sort();
+		for (let sample = 1; sample <= samples; sample++) {
+			const { value } = await timed(() => build(bedrockId, maxTokens).invoke([new HumanMessage(prompt)]));
+			const meta = value.response_metadata as { stopReason?: string } | undefined;
+			const usage = value.usage_metadata as { output_tokens?: number; input_tokens?: number } | undefined;
+			rows.push({
+				maxTokens,
+				roles,
+				sample,
+				stopReason: meta?.stopReason ?? "unknown",
+				outputTokens: usage?.output_tokens ?? 0,
+				inputTokens: usage?.input_tokens ?? 0,
+			});
+		}
+	}
+
+	const cleanBudgets = budgets.filter((b) =>
+		rows.filter((r) => r.maxTokens === b).every((r) => r.stopReason === "end_turn"),
+	);
+	const largeLongFormMinTokens = cleanBudgets.length > 0 ? Math.min(...cleanBudgets) : 0;
+	const inputTokens = rows.length > 0 ? Math.max(...rows.map((r) => r.inputTokens)) : 0;
+	return { rows, largeLongFormMinTokens, inputTokens };
+}
+
 // ---------------------------------------------------------------- run
 
 async function probeOne(modelName: string): Promise<ProbeResult> {
@@ -382,6 +470,19 @@ async function probeOne(modelName: string): Promise<ProbeResult> {
 	}
 	console.log(`   longFormMinTokens = ${stop.longFormMinTokens}`);
 
+	const large = await probeLargeLongForm(bedrockId, cfg.maxTokens);
+	console.log(`P6L stopReason x maxTokens, LARGE prompt (~${large.inputTokens} input tokens)`);
+	console.log("   maxTokens  sample  stopReason   outTok  roles");
+	for (const r of large.rows) {
+		const bad = r.stopReason === "max_tokens" ? "  <-- TRUNCATES" : "";
+		console.log(
+			`   ${String(r.maxTokens).padStart(9)}  ${String(r.sample).padStart(6)}  ${r.stopReason.padEnd(11)} ${String(
+				r.outputTokens,
+			).padStart(6)}  ${r.roles.join(", ")}${bad}`,
+		);
+	}
+	console.log(`   largeLongFormMinTokens = ${large.largeLongFormMinTokens}`);
+
 	const latencyMs = { p50: percentile(latencies, 50), max: Math.max(...latencies.map((n) => Math.round(n))) };
 	console.log(`P7 latency ..................... p50 ${latencyMs.p50}ms / max ${latencyMs.max}ms`);
 
@@ -400,6 +501,9 @@ async function probeOne(modelName: string): Promise<ProbeResult> {
 		stopReasons: stop.rows,
 		longFormMinTokens: stop.longFormMinTokens,
 		truncatedLongFormRoles: [...new Set(stop.truncated)],
+		largeLongFormRows: large.rows,
+		largeLongFormMinTokens: large.largeLongFormMinTokens,
+		largeLongFormInputTokens: large.inputTokens,
 		latencyMs,
 		extractionSafe: shape.extractionSafe,
 		streamMultiBlockChunks: shape.streamMultiBlockChunks,
@@ -417,7 +521,9 @@ function registryLiteral(r: ProbeResult, verifiedAt: string): string {
 		`\t\tobservedBlockTypes: [${r.observedBlockTypes.map((t) => `"${t}"`).join(", ")}],`,
 		`\t\temitsReasoningContent: ${r.emitsReasoningContent},`,
 		`\t\tobservedRawControlCharsInJson: ${r.observedRawControlCharsInJson},`,
-		`\t\tlongFormMinTokens: ${r.longFormMinTokens},`,
+		// SIO-1428: the registry figure is the CONSERVATIVE floor -- the worse of the small-prompt
+		// P6 floor and the large-prompt P6L floor (llm.role-max-tokens.test.ts enforces it).
+		`\t\tlongFormMinTokens: ${Math.max(r.longFormMinTokens, r.largeLongFormMinTokens)},`,
 		`\t\tobservedLatencyMs: { p50: ${r.latencyMs.p50}, max: ${r.latencyMs.max} },`,
 		`\t\tverifiedAt: "${verifiedAt}",`,
 		`\t\tverifiedRegion: "${REGION}",`,
@@ -463,6 +569,9 @@ function writeReport(r: ProbeResult, verifiedAt: string, gitSha: string, langcha
 				? `**truncates:** ${r.truncatedLongFormRoles.join(", ")}`
 				: "no long-form role truncates"
 		} | SIO-649 verbosity |`,
+		`| P6L LARGE-prompt long-form floor | ${
+			r.largeLongFormMinTokens > 0 ? `${r.largeLongFormMinTokens} tokens` : "**no probed budget is clean**"
+		} | ~${r.largeLongFormInputTokens} input tokens, ${samples} samples/budget, floor requires ALL samples end_turn | SIO-1375/SIO-1428 reasoning-vs-answer budget competition |`,
 		`| P7 latency | p50 ${r.latencyMs.p50}ms / max ${r.latencyMs.max}ms | across ${latencies.length} calls | SIO-1220 budget |`,
 		"",
 		"## stopReason by configured maxTokens",
@@ -475,6 +584,20 @@ function writeReport(r: ProbeResult, verifiedAt: string, gitSha: string, langcha
 		...r.stopReasons.map(
 			(s) =>
 				`| ${s.maxTokens} | ${s.prompt} | ${s.stopReason === "max_tokens" && s.prompt === "long-form" ? `**${s.stopReason}**` : s.stopReason} | ${s.outputTokens} | ${s.roles.join(", ")} |`,
+		),
+		"",
+		"## P6L: stopReason on the LARGE prompt (SIO-1428)",
+		"",
+		`Same long-form budgets, but against a ~${r.largeLongFormInputTokens}-input-token synthetic prompt that puts`,
+		"reasoning and answer text in competition for one output budget -- the regime where the small",
+		"P6 prompt cannot truncate but real 30-49K-token aggregator calls did (SIO-1375). The floor",
+		`requires ALL ${samples} samples per budget to stop with end_turn.`,
+		"",
+		"| maxTokens | sample | stopReason | output tokens | input tokens | roles |",
+		"|---|---|---|---|---|---|",
+		...r.largeLongFormRows.map(
+			(s) =>
+				`| ${s.maxTokens} | ${s.sample} | ${s.stopReason === "max_tokens" ? `**${s.stopReason}**` : s.stopReason} | ${s.outputTokens} | ${s.inputTokens} | ${s.roles.join(", ")} |`,
 		),
 		"",
 		"## Registry entry",

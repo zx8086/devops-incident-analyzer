@@ -127,7 +127,11 @@ export const ROLE_OVERRIDES: Record<LlmRole, Partial<BedrockModelConfig>> = {
 	// and 6 memory facts, each with 1-3 VERBATIM evidence quotes from the ticket, and it runs on
 	// Sonnet 5 (measured floor 8192). A truncated proposal fails the JSON parse and the user is
 	// told the ticket "could not be distilled".
-	hilDistiller: { temperature: 0, maxTokens: 8192 },
+	// SIO-1428: 8192 -> 16384. The P6L large-prompt probe measured Sonnet 5 (this role's model
+	// via the root manifest) truncating at 8192 on 1/3 samples when the reasoning block competes
+	// with the answer -- the same stochastic failure SIO-1375 fixed for the aggregator. 16384 is
+	// the measured large-prompt floor; a cap, not a target.
+	hilDistiller: { temperature: 0, maxTokens: 16384 },
 	// SIO-1149: deterministic per-bullet verdicts as compact JSON.
 	gapsJudge: { temperature: 0, maxTokens: 1024 },
 	// SIO-1158: deterministic per-claim verdicts as compact JSON.
