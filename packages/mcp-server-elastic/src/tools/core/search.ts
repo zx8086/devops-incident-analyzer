@@ -127,36 +127,64 @@ export function withoutIdFieldAggs(aggs: Record<string, unknown> | undefined): R
 	const targetsIdField = (clause: unknown): boolean =>
 		typeof clause === "object" && clause !== null && (clause as { field?: unknown }).field === "_id";
 
-	const prune = (node: unknown): unknown => {
-		if (Array.isArray(node)) return node.map(prune);
-		if (node == null || typeof node !== "object") return node;
+	// CodeRabbit (PR #599): the first version pruned clauses recursively but only dropped EMPTIED
+	// named aggregations at the ROOT map, so a nested definition such as
+	// `{by_service: {terms: {...}, aggs: {doc_ids: {cardinality: {field: "_id"}}}}}` was left as
+	// `doc_ids: {}` and still sent to ES -- which rejects an empty aggregation body, swapping one
+	// bad-query for another. Verified live before fixing.
+	//
+	// The prune now walks named-aggregation MAPS explicitly (the root, plus every nested `aggs` /
+	// `aggregations`), so an aggregation emptied at any depth is removed by its owner.
+
+	// Sub-aggregation maps: each key is a user-chosen NAME whose value is a definition object.
+	const SUB_AGG_KEYS = new Set(["aggs", "aggregations"]);
+
+	// A definition is dead once nothing executable survives. `meta` is metadata that cannot run on
+	// its own, and an emptied `aggs` map leaves nothing either, so both count as empty.
+	const isDeadDefinition = (definition: Record<string, unknown>): boolean =>
+		Object.entries(definition).every(([key, value]) => {
+			if (key === "meta") return true;
+			if (SUB_AGG_KEYS.has(key)) {
+				return value == null || (typeof value === "object" && Object.keys(value as object).length === 0);
+			}
+			return false;
+		});
+
+	// Prunes one named-aggregation map, returning the surviving entries.
+	const pruneAggMap = (map: Record<string, unknown>): Record<string, unknown> => {
 		const out: Record<string, unknown> = {};
-		for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
-			if (ID_FIELD_AGG_CLAUSES.has(key) && targetsIdField(value)) {
+		for (const [name, rawDefinition] of Object.entries(map)) {
+			if (rawDefinition == null || typeof rawDefinition !== "object" || Array.isArray(rawDefinition)) {
+				out[name] = rawDefinition;
+				continue;
+			}
+			const definition: Record<string, unknown> = {};
+			for (const [key, value] of Object.entries(rawDefinition as Record<string, unknown>)) {
+				// The offending clause itself, e.g. `value_count: {field: "_id"}`.
+				if (ID_FIELD_AGG_CLAUSES.has(key) && targetsIdField(value)) {
+					changed = true;
+					continue;
+				}
+				// Recurse into nested named-aggregation maps.
+				if (SUB_AGG_KEYS.has(key) && value != null && typeof value === "object" && !Array.isArray(value)) {
+					const nested = pruneAggMap(value as Record<string, unknown>);
+					if (Object.keys(nested).length > 0) definition[key] = nested;
+					else changed = true;
+					continue;
+				}
+				definition[key] = value;
+			}
+			// Drop the owner when the prune left it with nothing that can execute.
+			if (Object.keys(definition).length === 0 || isDeadDefinition(definition)) {
 				changed = true;
 				continue;
 			}
-			out[key] = prune(value);
+			out[name] = definition;
 		}
 		return out;
 	};
 
-	// A named aggregation left with no clauses after pruning (e.g. `{error_count: {}}`) is
-	// itself dropped -- ES rejects an empty aggregation body, so keeping it would swap one
-	// bad-query for another.
-	const dropEmptyNamedAggs = (node: Record<string, unknown>): Record<string, unknown> => {
-		const out: Record<string, unknown> = {};
-		for (const [name, body] of Object.entries(node)) {
-			if (body != null && typeof body === "object" && !Array.isArray(body) && Object.keys(body).length === 0) {
-				changed = true;
-				continue;
-			}
-			out[name] = body;
-		}
-		return out;
-	};
-
-	const pruned = dropEmptyNamedAggs(prune(aggs) as Record<string, unknown>);
+	const pruned = pruneAggMap(aggs);
 	if (!changed) return undefined;
 	// Everything was dropped -- return an empty object so the caller omits `aggs` entirely
 	// rather than sending `{}`.

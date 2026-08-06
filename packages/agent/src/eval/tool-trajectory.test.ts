@@ -160,6 +160,10 @@ describe("isEmptyPayload", () => {
 		[{ rows: [{ id: 1 }] }, false],
 		[{ hits: { hits: [{ _id: "x" }] } }, false],
 		[{ status: "green" }, false],
+		// CodeRabbit (PR #599): a populated collection with an EMPTY SIBLING array must not read
+		// as empty -- `.some` made it do so, emitting a false empty-anchor finding.
+		[{ hits: { hits: [{ _id: "1" }], failed_shards: [] } }, false],
+		[{ hits: { hits: [], failed_shards: [] } }, true],
 	])("isEmptyPayload(%p) === %p", (input, expected) => {
 		expect(isEmptyPayload(input)).toBe(expected);
 	});

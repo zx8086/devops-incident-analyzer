@@ -75,3 +75,59 @@ describe("withoutIdFieldAggs", () => {
 		).toBeUndefined();
 	});
 });
+
+// CodeRabbit (PR #599): the first implementation dropped emptied named aggregations only at the
+// ROOT map, so a nested one survived as `{}` and ES rejects an empty aggregation body -- swapping
+// one bad-query for another. Verified live before fixing.
+describe("withoutIdFieldAggs prunes at every named-aggregation boundary", () => {
+	test("removes a NESTED aggregation whose only clause targeted _id", () => {
+		const pruned = withoutIdFieldAggs({
+			by_service: { terms: { field: "service.name" }, aggs: { doc_ids: { cardinality: { field: "_id" } } } },
+		});
+
+		expect(JSON.stringify(pruned)).not.toContain('"_id"');
+		// The emptied `aggs` map is gone entirely, not left as `{doc_ids:{}}` or `{aggs:{}}`.
+		expect(JSON.stringify(pruned)).not.toMatch(/:\{\}/);
+		expect(pruned).toEqual({ by_service: { terms: { field: "service.name" } } });
+	});
+
+	test("keeps a valid sibling inside the same nested map", () => {
+		const pruned = withoutIdFieldAggs({
+			by_service: {
+				terms: { field: "service.name" },
+				aggs: { doc_ids: { cardinality: { field: "_id" } }, envs: { terms: { field: "service.environment" } } },
+			},
+		});
+
+		expect(JSON.stringify(pruned)).toContain("service.environment");
+		expect(JSON.stringify(pruned)).not.toContain('"_id"');
+		expect(JSON.stringify(pruned)).not.toMatch(/:\{\}/);
+	});
+
+	test("drops an aggregation left with only `meta` after pruning", () => {
+		// `meta` is metadata and cannot execute on its own, so the owner is dead.
+		expect(withoutIdFieldAggs({ c: { value_count: { field: "_id" }, meta: { note: "x" } } })).toEqual({});
+	});
+
+	test("prunes three levels deep", () => {
+		const pruned = withoutIdFieldAggs({
+			a: {
+				terms: { field: "x" },
+				aggs: { b: { terms: { field: "y" }, aggs: { c: { cardinality: { field: "_id" } } } } },
+			},
+		});
+
+		expect(JSON.stringify(pruned)).not.toContain('"_id"');
+		expect(JSON.stringify(pruned)).not.toMatch(/:\{\}/);
+		// The two valid ancestors survive with their own clauses intact.
+		expect(JSON.stringify(pruned)).toContain('"y"');
+		expect(JSON.stringify(pruned)).toContain('"x"');
+	});
+
+	test("honours the `aggregations` spelling as well as `aggs`", () => {
+		const pruned = withoutIdFieldAggs({
+			a: { terms: { field: "x" }, aggregations: { b: { value_count: { field: "_id" } } } },
+		});
+		expect(pruned).toEqual({ a: { terms: { field: "x" } } });
+	});
+});

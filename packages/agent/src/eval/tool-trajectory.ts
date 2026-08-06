@@ -285,8 +285,15 @@ export function isEmptyPayload(raw: unknown): boolean {
 	if (collections.length === 0) return false;
 	return collections.every(([, value]) => {
 		if (Array.isArray(value)) return value.length === 0;
-		// elastic-style { hits: { hits: [] } }
-		if (isRecord(value)) return Object.values(value).some((inner) => Array.isArray(inner) && inner.length === 0);
+		// elastic-style { hits: { hits: [...] } }. CodeRabbit (PR #599): this used `.some`, so a
+		// wrapper was called empty if ANY inner array was empty -- meaning
+		// `{hits: {hits: [{_id:"1"}], failed_shards: []}}` read as empty purely because of the
+		// empty sibling, emitting a false empty-anchor finding. tool_response_health is binary, so
+		// one false finding zeroes the key. EVERY array-valued entry must be empty.
+		if (isRecord(value)) {
+			const innerArrays = Object.values(value).filter(Array.isArray);
+			return innerArrays.length > 0 && innerArrays.every((inner) => inner.length === 0);
+		}
 		return value === null || value === undefined;
 	});
 }
