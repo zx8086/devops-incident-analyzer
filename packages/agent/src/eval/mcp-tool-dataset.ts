@@ -65,6 +65,15 @@ export const LIVE_ANCHORS = {
 		projectId: "43242609",
 		path: "pvhcorp/b2b/shared-services/pvh.services.styles",
 		searchableNamespace: "pvhcorp",
+		// Detail-tool anchors, each discovered from its parent tool and then verified to return
+		// data (2026-08-06). These exist because the detail tools need an id the model can only
+		// get from a discovery step -- naming them in the prompt is what makes the tool reachable
+		// in one turn instead of two.
+		mergeRequestIid: 383,
+		commitSha: "d586495171757e4bbfa0fe3526fd0899030c3844",
+		pipelineId: 2719503800,
+		jobId: 15629731761,
+		filePath: "README.md",
 	},
 	// ATLASSIAN_SITE_NAME in the live .env.
 	atlassian: { site: "pvhcorp" },
@@ -505,6 +514,147 @@ const EXAMPLES: EvalExample[] = [
 		},
 		metadata: { ticketKey: "SIO-1398-gitlab-change-correlation", queryProvenance: "reconstructed", era: "2026-08" },
 	},
+	// GitLab DETAIL tools. These sat uncovered at 9/22 not because they are broken -- the direct
+	// probe (eval:tool-probe) shows 17/22 healthy -- but because they need an id (MR iid, commit
+	// sha, pipeline id) that only exists after a discovery call. A question that does not name
+	// one lets the model stop at the list tools, so these examples name a real, verified id and
+	// make the drill-down the actual ask.
+	//
+	// Each anchor below was discovered from its parent tool and then confirmed to return data.
+	{
+		inputs: {
+			query: `Review merge request !${LIVE_ANCHORS.gitlab.mergeRequestIid} in GitLab project ${LIVE_ANCHORS.gitlab.projectId}: summarise the MR itself, what changed in its diffs, any review discussion on it, and the state of its pipelines.`,
+			uiSelectedDataSources: ["gitlab"],
+		},
+		outputs: {
+			expectedDatasources: ["gitlab"],
+			minConfidence: 0.6,
+			qualityRubric:
+				"Response should describe the specific merge request (title/state/author), name concrete files or changes from its diffs, report review notes (or state there are none), and give pipeline status. Naming the MR without opening its diffs is an incomplete answer.",
+			expectedToolUse: {
+				requiredToolGroups: [
+					{
+						dataSource: "gitlab",
+						anyOf: ["gitlab_get_merge_request", "gitlab_get_merge_request_diffs"],
+						why: "MR detail drill-down -- both runbook-cited (code-change-correlation) and both need merge_request_iid, which is why a list-only question never reaches them",
+					},
+					{
+						dataSource: "gitlab",
+						anyOf: ["gitlab_get_merge_request_notes"],
+						why: "review discussion is a distinct evidence source from the diff; single-tool group so a miss isolates selection from arguments",
+					},
+					{
+						dataSource: "gitlab",
+						anyOf: ["gitlab_get_merge_request_pipelines", "gitlab_get_pipeline_jobs"],
+						why: "pipeline state for a SPECIFIC MR, as opposed to the graph-wide gitlab_pipeline_failures already covered elsewhere",
+					},
+				],
+				forbiddenTools: ["gitlab_create_merge_request_note", "gitlab_create_merge_request", "gitlab_manage_pipeline"],
+				// Verified live: this MR exists and returns data from all four tools.
+				knownGoodAnchors: [{ toolName: "gitlab_get_merge_request", mustReturnRows: true }],
+			},
+		},
+		metadata: { ticketKey: "SIO-1398-gitlab-mr-drilldown", queryProvenance: "reconstructed", era: "2026-08" },
+	},
+	{
+		inputs: {
+			query: `In GitLab project ${LIVE_ANCHORS.gitlab.projectId}, show me what commit ${LIVE_ANCHORS.gitlab.commitSha} changed, then show the current contents of ${LIVE_ANCHORS.gitlab.filePath} and who last modified each line of it.`,
+			uiSelectedDataSources: ["gitlab"],
+		},
+		outputs: {
+			expectedDatasources: ["gitlab"],
+			minConfidence: 0.6,
+			qualityRubric:
+				"Response should describe the commit's actual changes, show or summarise the file's contents, and attribute lines to authors via blame. All three are separate asks and all three should be answered.",
+			expectedToolUse: {
+				requiredToolGroups: [
+					{
+						dataSource: "gitlab",
+						anyOf: ["gitlab_get_commit_diff"],
+						why: "commit-level drill-down, runbook-cited; needs a sha, so it is unreachable from a question that only asks 'what changed recently'",
+					},
+					{
+						dataSource: "gitlab",
+						anyOf: ["gitlab_get_file_content"],
+						why: "file contents -- the evidence source for 'is the fix actually in the code', and needs file_path",
+					},
+					{
+						dataSource: "gitlab",
+						anyOf: ["gitlab_get_blame"],
+						why: "line-level attribution, the tool that answers 'who introduced this'; distinct from commit diff and never exercised",
+					},
+				],
+				forbiddenTools: ["gitlab_create_merge_request", "gitlab_create_issue"],
+				knownGoodAnchors: [{ toolName: "gitlab_get_commit_diff", mustReturnRows: true }],
+			},
+		},
+		metadata: { ticketKey: "SIO-1398-gitlab-commit-and-file", queryProvenance: "reconstructed", era: "2026-08" },
+	},
+	{
+		inputs: {
+			query: `Investigate pipeline ${LIVE_ANCHORS.gitlab.pipelineId} in GitLab project ${LIVE_ANCHORS.gitlab.projectId}: list its jobs and pull the log for job ${LIVE_ANCHORS.gitlab.jobId}. Separately, search the codebase semantically for how "styles" is resolved.`,
+			uiSelectedDataSources: ["gitlab"],
+		},
+		outputs: {
+			expectedDatasources: ["gitlab"],
+			minConfidence: 0.6,
+			qualityRubric:
+				"Response should list the pipeline's jobs with their status, quote or summarise the named job's log, and report semantic code-search results. A green pipeline with an uneventful log is a legitimate finding; the calls still have to happen.",
+			expectedToolUse: {
+				requiredToolGroups: [
+					{
+						dataSource: "gitlab",
+						anyOf: ["gitlab_get_pipeline_jobs"],
+						why: "pipelines action group -- needs pipeline_id, so it is only reachable when one is named or discovered",
+					},
+					{
+						dataSource: "gitlab",
+						anyOf: ["gitlab_get_job_log"],
+						why: "job logs are the actual failure evidence in a CI incident; runbook-cited and never exercised",
+					},
+					{
+						dataSource: "gitlab",
+						anyOf: ["gitlab_semantic_code_search", "gitlab_cross_project_callers"],
+						why: "code_analysis -- semantic search is the embedding-backed path (distinct from gitlab_search's keyword path) and cross_project_callers is in TYPED_FINDING_TOOLS",
+					},
+				],
+				forbiddenTools: ["gitlab_manage_pipeline", "gitlab_create_issue"],
+				knownGoodAnchors: [{ toolName: "gitlab_get_pipeline_jobs", mustReturnRows: true }],
+			},
+		},
+		metadata: { ticketKey: "SIO-1398-gitlab-pipeline-and-code", queryProvenance: "reconstructed", era: "2026-08" },
+	},
+	{
+		inputs: {
+			query: `Look up issue #1 in GitLab project ${LIVE_ANCHORS.gitlab.projectId} and summarise what it reports and its current state.`,
+			uiSelectedDataSources: ["gitlab"],
+		},
+		outputs: {
+			expectedDatasources: ["gitlab"],
+			minConfidence: 0.6,
+			qualityRubric:
+				"Response should report the issue's title, state and substance, or state plainly that it does not exist. Either is a legitimate answer; the lookup itself must happen.",
+			expectedToolUse: {
+				requiredToolGroups: [
+					{
+						dataSource: "gitlab",
+						anyOf: ["gitlab_get_issue"],
+						why: "issues action group -- the only uncovered member, runbook-cited, and needs issue_iid so a generic question never reaches it. Single-tool group so a miss isolates tool selection",
+					},
+				],
+				forbiddenTools: ["gitlab_create_issue", "gitlab_create_workitem_note"],
+				// No anchor: issue #1 may legitimately not exist in this project, and that is a
+				// valid answer. The point here is that the tool FIRES, not what it returns.
+			},
+		},
+		metadata: { ticketKey: "SIO-1398-gitlab-issue-lookup", queryProvenance: "reconstructed", era: "2026-08" },
+	},
+	// gitlab_orbit_query_graph is deliberately NOT covered. Its `query` parameter is a raw Orbit
+	// DSL OBJECT (query_type + node + filters), not a Cypher string, and building a valid one
+	// requires reading gitlab_graph_schema first -- the tool's own description says so. A probe
+	// with a plausible-looking query returns "schema violation" from the Orbit API. Writing an
+	// example around a DSL shape I have not verified would assert a contract I cannot prove, so
+	// it stays uncovered and honest rather than covered and wrong.
 	{
 		inputs: {
 			query: `Search GitLab across the ${LIVE_ANCHORS.gitlab.searchableNamespace} namespace for code related to "styles", then report what the code graph knows: recent deploys, failing pipelines, and any known vulnerabilities.`,
