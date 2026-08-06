@@ -9,6 +9,7 @@
 //
 // PII-safe: logs the tool name + timing + ok flag ONLY -- never args or results.
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { classifyFailureText, type ToolCallFailureClass } from "./tool-call-metrics.ts";
 
 export interface ToolCallLogger {
 	debug?(message: string, meta?: Record<string, unknown>): void;
@@ -17,10 +18,14 @@ export interface ToolCallLogger {
 }
 
 // SIO-1400: per-call outcome handed to the optional onCall sink (metrics counters).
+// SIO-1402: failureClass is set only on isError results (classifyFailureText over
+// the error text, which also catches the SDK's resolved unknown-tool-name form);
+// dispatch-level rejections stay unclassified (plain failure).
 export interface ToolCallOutcome {
 	tool: string;
 	ok: boolean;
 	durationMs: number;
+	failureClass?: ToolCallFailureClass;
 }
 
 const TOOLS_CALL_METHOD = "tools/call";
@@ -42,6 +47,22 @@ function extractToolName(request: unknown): string | undefined {
 	if (typeof params !== "object" || params === null) return undefined;
 	const name = (params as { name?: unknown }).name;
 	return typeof name === "string" ? name : undefined;
+}
+
+// SIO-1402: pull the text block carrying the structured error envelope out of an
+// isError result. Prefers the block containing "_error" (the envelope marker) so
+// a multi-block result still classifies; falls back to the first text block.
+function extractErrorText(result: unknown): string | undefined {
+	const content = (result as { content?: unknown }).content;
+	if (!Array.isArray(content)) return undefined;
+	const texts = content.filter(
+		(c): c is { type: "text"; text: string } =>
+			typeof c === "object" &&
+			c !== null &&
+			(c as { type?: unknown }).type === "text" &&
+			typeof (c as { text?: unknown }).text === "string",
+	);
+	return (texts.find((c) => c.text.includes('"_error"')) ?? texts[0])?.text;
 }
 
 // Wraps the McpServer's underlying "tools/call" handler with start/end lifecycle logging.
@@ -94,7 +115,8 @@ export function installToolCallLogging(
 			const durationMs = now() - start;
 			if (isErrorResult(result)) {
 				logger.warn("tools/call error", { tool, durationMs });
-				emitOutcome({ tool, ok: false, durationMs });
+				// SIO-1402: classify only on the error path (brace-scan of one text block).
+				emitOutcome({ tool, ok: false, durationMs, failureClass: classifyFailureText(extractErrorText(result)) });
 			} else {
 				logger.info("tools/call ok", { tool, durationMs });
 				emitOutcome({ tool, ok: true, durationMs });
@@ -107,6 +129,9 @@ export function installToolCallLogging(
 				durationMs,
 				error: error instanceof Error ? error.message : String(error),
 			});
+			// SIO-1402: dispatch-level rejections are transport failures, not tool
+			// semantics -- unclassified. (An unknown tool name does NOT land here:
+			// measured SDK behavior resolves it to an isError result, classified above.)
 			emitOutcome({ tool, ok: false, durationMs });
 			throw error;
 		}

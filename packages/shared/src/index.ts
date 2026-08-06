@@ -304,8 +304,10 @@ export {
 } from "./ticket-types.ts";
 export { installToolCallLogging, type ToolCallLogger, type ToolCallOutcome } from "./tool-call-logging.ts";
 export {
+	classifyFailureText,
 	createToolCallMetricsRecorder,
 	resolveToolCallMetricsDbPath,
+	type ToolCallFailureClass,
 	type ToolCallMetricsLogger,
 	type ToolCallMetricsRecorder,
 } from "./tool-call-metrics.ts";

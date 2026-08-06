@@ -3,9 +3,10 @@ import { describe, expect, test } from "bun:test";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { installReadOnlyChokepoint, type ReadOnlyManagerLike } from "../read-only-chokepoint.ts";
-import { installToolCallLogging, type ToolCallLogger } from "../tool-call-logging.ts";
+import { installToolCallLogging, type ToolCallLogger, type ToolCallOutcome } from "../tool-call-logging.ts";
+import { buildToolErrorEnvelope } from "../tool-error.ts";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+type ToolResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
 
 function buildServerWithTool(toolName: string, handler: () => Promise<ToolResult>) {
 	const server = new McpServer(
@@ -103,7 +104,7 @@ describe("installToolCallLogging", () => {
 		const failServer = buildServerWithTool("boom", async () => {
 			throw new Error("kaboom");
 		});
-		const outcomes: Array<{ tool: string; ok: boolean; durationMs: number }> = [];
+		const outcomes: ToolCallOutcome[] = [];
 		const { logger } = recordingLogger();
 		const ticks = [1000, 1042];
 		let i = 0;
@@ -125,8 +126,52 @@ describe("installToolCallLogging", () => {
 
 		expect(outcomes).toEqual([
 			{ tool: "read_thing", ok: true, durationMs: 42 },
-			{ tool: "boom", ok: false, durationMs: 0 },
+			// SIO-1402: a thrown handler surfaces as prose text (no envelope) -> unstructured
+			{ tool: "boom", ok: false, durationMs: 0, failureClass: "unstructured" },
 		]);
+	});
+
+	// SIO-1402: a returned { _error } envelope with a bad-input rule match classifies
+	// bad-input on the outcome (same vocabulary as the eval's tool_arg_validity).
+	test("onCall sink classifies an envelope error result as bad-input", async () => {
+		const envelopeText = JSON.stringify(buildToolErrorEnvelope({ kind: "bad-query", message: "malformed DSL" }));
+		const server = buildServerWithTool("query_thing", async () => ({
+			content: [{ type: "text", text: envelopeText }],
+			isError: true,
+		}));
+		const outcomes: ToolCallOutcome[] = [];
+		const { logger } = recordingLogger();
+		installToolCallLogging(
+			server,
+			logger,
+			() => 0,
+			(o) => outcomes.push(o),
+		);
+
+		await dispatchToolsCall(server, "query_thing");
+
+		expect(outcomes).toHaveLength(1);
+		expect(outcomes[0]?.ok).toBe(false);
+		expect(outcomes[0]?.failureClass).toBe("bad-input");
+	});
+
+	// SIO-1402: measured SDK behavior -- an unknown tool name does NOT reject at
+	// dispatch; it RESOLVES to isError:true with "MCP error -32602: Tool <name>
+	// not found" text, so the classifier catches it on the isError branch.
+	test("onCall sink classifies an unknown tool name as unknown-tool", async () => {
+		const server = buildServerWithTool("real_tool", async () => ({ content: [{ type: "text", text: "ok" }] }));
+		const outcomes: ToolCallOutcome[] = [];
+		const { logger } = recordingLogger();
+		installToolCallLogging(
+			server,
+			logger,
+			() => 0,
+			(o) => outcomes.push(o),
+		);
+
+		const result = (await dispatchToolsCall(server, "no_such_tool")) as { isError?: boolean };
+		expect(result.isError).toBe(true);
+		expect(outcomes).toEqual([{ tool: "no_such_tool", ok: false, durationMs: 0, failureClass: "unknown-tool" }]);
 	});
 
 	test("a throwing onCall sink neither breaks the dispatch result nor suppresses the log line", async () => {

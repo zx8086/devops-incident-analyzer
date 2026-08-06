@@ -2,20 +2,25 @@
 
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	classifyFailureText,
 	createToolCallMetricsRecorder,
 	resolveToolCallMetricsDbPath,
 	type ToolCallMetricsRecorder,
 } from "../tool-call-metrics.ts";
+import { buildToolErrorEnvelope } from "../tool-error.ts";
 
 interface CountRow {
 	server: string;
 	tool: string;
 	calls: number;
 	failures: number;
+	bad_input_failures: number;
+	unstructured_failures: number;
+	unknown_tool_failures: number;
 	first_called_at: string;
 	last_called_at: string;
 }
@@ -24,7 +29,7 @@ function readRows(dbPath: string): CountRow[] {
 	const db = new Database(dbPath, { readonly: true });
 	const rows = db
 		.query<CountRow, []>(
-			"SELECT server, tool, calls, failures, first_called_at, last_called_at FROM mcp_tool_call_counts ORDER BY server, tool",
+			"SELECT server, tool, calls, failures, bad_input_failures, unstructured_failures, unknown_tool_failures, first_called_at, last_called_at FROM mcp_tool_call_counts ORDER BY server, tool",
 		)
 		.all();
 	db.close(false);
@@ -53,6 +58,50 @@ describe("resolveToolCallMetricsDbPath", () => {
 		).toBeUndefined();
 		// this very test run proves the guard is live
 		expect(resolveToolCallMetricsDbPath()).toBeUndefined();
+	});
+});
+
+// SIO-1402: same rule as the eval toolset's tool_arg_validity -- bad-input when
+// category is "bad-query" OR kind is "bad-input"; unstructured when no { _error }
+// envelope parses out of the text.
+describe("classifyFailureText", () => {
+	test("bad-query envelope classifies bad-input", () => {
+		const text = JSON.stringify(buildToolErrorEnvelope({ kind: "bad-query", message: "malformed DSL" }));
+		expect(classifyFailureText(text)).toBe("bad-input");
+	});
+
+	test("bad-input kind classifies bad-input even though its category maps to unknown", () => {
+		const text = JSON.stringify(buildToolErrorEnvelope({ kind: "bad-input", message: "param out of range" }));
+		expect(classifyFailureText(text)).toBe("bad-input");
+	});
+
+	test("envelope behind an MCP error prefix still parses (brace scan, not whole-string)", () => {
+		const envelope = JSON.stringify(buildToolErrorEnvelope({ kind: "bad-query", message: "bad window" }));
+		expect(classifyFailureText(`MCP error -32602: ${envelope}`)).toBe("bad-input");
+	});
+
+	test("other structured kinds classify structured-other", () => {
+		const text = JSON.stringify(buildToolErrorEnvelope({ kind: "not-found", message: "index missing" }));
+		expect(classifyFailureText(text)).toBe("structured-other");
+		const throttled = JSON.stringify(buildToolErrorEnvelope({ kind: "throttled", message: "429", statusCode: 429 }));
+		expect(classifyFailureText(throttled)).toBe("structured-other");
+	});
+
+	test("prose, JSON without _error, unknown kinds, and empty text classify unstructured", () => {
+		expect(classifyFailureText("Index not found: logs-x")).toBe("unstructured");
+		expect(classifyFailureText('{"error":"nope"}')).toBe("unstructured");
+		expect(classifyFailureText('{"_error":{"kind":"made-up-kind","message":"x"}}')).toBe("unstructured");
+		expect(classifyFailureText("")).toBe("unstructured");
+		expect(classifyFailureText(undefined)).toBe("unstructured");
+	});
+
+	// SIO-1402: the SDK RESOLVES an unknown tool name into this exact error text
+	// (measured; it does not reject at dispatch).
+	test("the SDK's unknown-tool text classifies unknown-tool", () => {
+		expect(classifyFailureText("MCP error -32602: Tool no_such_tool not found")).toBe("unknown-tool");
+		expect(classifyFailureText("Tool kafka_list_topicz not found")).toBe("unknown-tool");
+		// resource-not-found prose is NOT a tool-name miss
+		expect(classifyFailureText("Index logs-x not found")).toBe("unstructured");
 	});
 });
 
@@ -95,9 +144,56 @@ describe("createToolCallMetricsRecorder", () => {
 			tool: "search",
 			calls: 3,
 			failures: 1,
+			bad_input_failures: 0,
+			unstructured_failures: 0,
+			unknown_tool_failures: 0,
 			first_called_at: "2026-08-06T10:00:00.000Z",
 			last_called_at: "2026-08-06T10:00:02.000Z",
 		});
+	});
+
+	// SIO-1402: each failure class increments exactly its own column plus failures.
+	test("failure classes increment their columns", async () => {
+		const recorder = await openRecorder("elastic-mcp-server");
+		recorder.record("search", true);
+		recorder.record("search", false, "bad-input");
+		recorder.record("search", false, "unstructured");
+		recorder.record("search", false, "unknown-tool");
+		recorder.record("search", false, "structured-other");
+		recorder.record("search", false);
+		recorder.close();
+
+		const row = readRows(dbPath)[0];
+		expect(row?.calls).toBe(6);
+		expect(row?.failures).toBe(5);
+		expect(row?.bad_input_failures).toBe(1);
+		expect(row?.unstructured_failures).toBe(1);
+		expect(row?.unknown_tool_failures).toBe(1);
+	});
+
+	// SIO-1402: CREATE TABLE IF NOT EXISTS cannot add columns, so a pre-1402 DB is
+	// ALTERed in place; existing rows keep their counts with zeroed classes.
+	test("migrates a pre-1402 database in place and accumulates onto legacy rows", async () => {
+		mkdirSync(join(dir, "nested"), { recursive: true });
+		const legacy = new Database(dbPath, { create: true, strict: true });
+		legacy.run(
+			"CREATE TABLE mcp_tool_call_counts (server TEXT NOT NULL, tool TEXT NOT NULL, calls INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0, first_called_at TEXT NOT NULL, last_called_at TEXT NOT NULL, PRIMARY KEY (server, tool))",
+		);
+		legacy.run(
+			"INSERT INTO mcp_tool_call_counts (server, tool, calls, failures, first_called_at, last_called_at) VALUES ('elastic-mcp-server', 'search', 5, 2, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:01.000Z')",
+		);
+		legacy.close(false);
+
+		const recorder = await openRecorder("elastic-mcp-server");
+		recorder.record("search", false, "bad-input");
+		recorder.close();
+
+		const row = readRows(dbPath)[0];
+		expect(row?.calls).toBe(6);
+		expect(row?.failures).toBe(3);
+		expect(row?.bad_input_failures).toBe(1);
+		expect(row?.unstructured_failures).toBe(0);
+		expect(row?.first_called_at).toBe("2026-08-01T00:00:00.000Z");
 	});
 
 	test("separate rows per server and per tool (multi-process shape)", async () => {
