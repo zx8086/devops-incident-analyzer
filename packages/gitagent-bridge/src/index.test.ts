@@ -89,8 +89,9 @@ describe("manifest-loader", () => {
 
 		const elastic = agent.subAgents.get("elastic-agent") as ReturnType<typeof loadAgent>;
 		expect(elastic.manifest.name).toBe("elastic-agent");
-		// SIO-1367: sub-agents moved claude-sonnet-4-6 -> claude-haiku-4-5.
-		expect(elastic.manifest.model?.preferred).toBe("claude-haiku-4-5");
+		// SIO-1404: sub-agents restored to claude-sonnet-4-6 (the SIO-1380 eval
+		// baseline showed it beats the SIO-1367 claude-haiku-4-5 swap).
+		expect(elastic.manifest.model?.preferred).toBe("claude-sonnet-4-6");
 		expect(elastic.soul).toContain("Elasticsearch specialist");
 	});
 
