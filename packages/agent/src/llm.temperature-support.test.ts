@@ -94,11 +94,11 @@ describe("subAgent resolves its own manifest model (SIO-1235)", () => {
 	// acceptsTemperature: true so the manifests' temperature 0.1 keeps applying). Deliberately
 	// NOT sonnet-5: that model has acceptsTemperature: false, so temperature 0.1 would silently
 	// stop applying -- and being identical to the root model it would also make every "resolved
-	// from the sub-agent manifest, not the root" assertion below vacuous. Haiku 4.5 differs from
-	// ROOT (sonnet-5) so that property still holds even though it now coincides with the
-	// light tier's own model (see llm.tier.test.ts) -- that coincidence is unrelated: the light
-	// tier resolves from a hardcoded constant, never from any sub-agent manifest.
-	const SUB = "eu.anthropic.claude-haiku-4-5-20251001-v1:0";
+	// from the sub-agent manifest, not the root" assertion below vacuous. Sonnet 4.6 (SIO-1404:
+	// restored from the SIO-1367 haiku downgrade after the SIO-1380 baseline showed the quality
+	// cost was real) differs from ROOT (sonnet-5) so that property holds, and differs from the
+	// light tier's hardcoded haiku so no assertion here can pass by tier coincidence.
+	const SUB = "eu.anthropic.claude-sonnet-4-6";
 	const ROOT = "eu.anthropic.claude-sonnet-5";
 
 	beforeEach(() => {
@@ -131,17 +131,16 @@ describe("subAgent resolves its own manifest model (SIO-1235)", () => {
 	});
 
 	// temperature: 0.1 is declared in every sub-agent manifest and had NEVER applied, because the
-	// root model (Sonnet 5) has acceptsTemperature: false and llm.ts drops it. Haiku 4.5 accepts
-	// it (probed), which is a large part of why the sub-agents point there and not at the root model.
+	// root model (Sonnet 5) has acceptsTemperature: false and llm.ts drops it. Sonnet 4.6 accepts
+	// it (probed), so pointing the sub-agents at it keeps the constraint live.
 	test("temperature 0.1 from the manifest now actually applies", () => {
 		createLlm("subAgent", "incident-analyzer", "gitlab-agent");
 		expect(optionsFor(SUB)).toHaveProperty("temperature", 0.1);
 	});
 
 	// ROLE_OVERRIDES.subAgent.maxTokens wins over the manifest's constraints.max_tokens: 2048,
-	// via `overrides.maxTokens ?? bedrockConfig.maxTokens`. 8192 clears haiku's measured 8192
-	// long-form floor (refreshed 2026-08-02, was 4096 before SIO-1225 raised iacPlanner's own
-	// budget); silently inheriting 2048 would truncate long sub-agent answers.
+	// via `overrides.maxTokens ?? bedrockConfig.maxTokens`; silently inheriting 2048 would
+	// truncate long sub-agent answers.
 	test("maxTokens stays 8192 -- the role override beats the manifest's 2048", () => {
 		createLlm("subAgent", "incident-analyzer", "kafka-agent");
 		expect(optionsFor(SUB)).toHaveProperty("maxTokens", 8192);

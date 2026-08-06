@@ -156,9 +156,10 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 		expect(model).toBeDefined();
 		const originalPreferred = model?.preferred as string;
 		// CodeRabbit (PR #589): the target must be neutral to both tiers, or this test could pass
-		// by coincidence (e.g. if claude-sonnet-4-6 later became the light tier's own model) rather
-		// than by proving the light tier never reads agent.subAgents.
-		const mutationTarget = "claude-sonnet-4-6";
+		// by coincidence rather than by proving the light tier never reads agent.subAgents.
+		// SIO-1404: was claude-sonnet-4-6 until the specialists moved back onto it -- opus-4-8 is
+		// now the model neutral to both the light tier (haiku) and the specialists (sonnet-4-6).
+		const mutationTarget = "claude-opus-4-8";
 		expect(mutationTarget).not.toBe(specialist);
 		expect(mutationTarget).not.toBe(resolved.modelConfig?.preferred);
 		try {
@@ -174,13 +175,13 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 		}
 	});
 
-	// SIO-1367: sub-agents moved claude-sonnet-4-6 -> claude-haiku-4-5. (An in-flight, uncommitted
-	// SIO-1372 swap to claude-opus-5 is separate work, blocked on a Bedrock ServiceUnavailableException
-	// -- not part of this PR. This test tracks the manifest actually committed here.)
+	// SIO-1404: sub-agents restored claude-haiku-4-5 -> claude-sonnet-4-6 after the SIO-1380
+	// clean baseline (identical-basis judging, AWS connected) showed the SIO-1367 downgrade's
+	// quality cost was real. This test tracks the manifest actually committed here.
 	test("a subAgent role with a known specialist reports sub-agent-manifest", () => {
 		const resolved = resolveRoleModelConfig("subAgent", agent, "gitlab-agent");
 		expect(resolved.source).toBe("sub-agent-manifest");
-		expect(resolved.modelConfig?.preferred).toBe("claude-haiku-4-5");
+		expect(resolved.modelConfig?.preferred).toBe("claude-sonnet-4-6");
 	});
 
 	test("a subAgent role with an unknown specialist reports root-manifest", () => {
