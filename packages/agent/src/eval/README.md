@@ -156,6 +156,45 @@ Three things this sweep established:
    1.0, and `expected_tools_fired` correctly reported `0/1 required tool group(s) fired`. The
    "zero calls is a visible signal, not silent absence" contract holds.
 
+### Latest full run (`mcp-tool-eval-7a72cb0c`, 20 examples, all 7 datasources)
+
+Run against servers built from the SIO-1398 `_id` prune and the SIO-1403 project_id
+normalisation.
+
+| key | avg |
+|---|---|
+| `tool_arg_validity` | **1.000** |
+| `tool_name_validity` | **1.000** |
+| `tool_response_health` | **1.000** |
+| `tool_data_utilization` | **1.000** |
+| `datasources_covered` | **1.000** |
+| `expected_tools_fired` | 0.917 |
+| `confidence_threshold` | 0.950 |
+| `tool_efficiency` | 0.405 (soft) |
+
+`tool_response_health` is back to 1.000 from 0.895: both false positives are gone (the
+`ValidTill` certificate-expiry misread and the gitlab anchor that could not survive the model
+adding `updated_after`). The kafka `describe_topic` miss is also gone -- that was the SIO-785
+narrowing dropping an explicitly-selected action, not steering.
+
+Coverage 46/88. Session progression: 19 -> 31 -> 45 -> 46.
+
+### Coverage is NOT a tool-health measure -- use `eval:tool-probe` for that
+
+gitlab sits at 9/22 here while the direct probe reports **17/22 tools returning data with zero
+defects**. That gap is the whole reason `eval:tool-probe` exists: this eval can only observe a
+tool the MODEL chose to call, so a healthy tool the agent never needed is indistinguishable
+from a broken one. The remaining 13 gitlab targets are detail tools (`get_merge_request_diffs`,
+`get_blame`, `get_job_log`) that only fire after a discovery step the example did not require.
+
+Read the two together:
+
+| probe | eval | meaning |
+|---|---|---|
+| ok | exercised | healthy and reachable |
+| ok | not exercised | **steering gap** -- the tool works, the model did not pick it |
+| fail | either | **tool defect** -- fix the server |
+
 ### Closing the loop: the elastic finding was fixed and re-verified
 
 The `tool_arg_validity` 0.75 above was traced to `value_count` on the `_id` field, which
