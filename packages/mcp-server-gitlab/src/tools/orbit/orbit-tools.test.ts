@@ -143,6 +143,45 @@ describe("Orbit tools: availability", () => {
 		expect(queryCalls).toBe(0);
 		expect(ctx.available).toBe(false);
 	});
+
+	// SIO-1406: a 401/403 on the /status re-check is a token problem, not an indexing
+	// state -- it must surface as auth-denied naming the PAT, never as "no-index"
+	// (which previously misdirected root-cause hunts toward indexing/feature flags).
+	test("re-check that hits 401 surfaces auth-denied guidance naming the PAT, never bills", async () => {
+		let queryCalls = 0;
+		const client: Partial<OrbitRestClient> = {
+			getStatus: async () => {
+				throw new OrbitUnavailableError("Orbit API error 401: Unauthorized.", 401);
+			},
+			query: async () => {
+				queryCalls += 1;
+				return { result: { rows: [] } };
+			},
+		};
+		const ctx = makeCtx({ available: false }, client);
+		const { handlers } = register(ctx);
+		const result = await handlers.get("gitlab_cross_project_callers")?.({ fqn: "X" });
+		expect(result?.isError).toBe(true);
+		const envelope = extractEnvelope(result?.content[0]?.text ?? "");
+		expect(envelope.kind).toBe("auth-denied");
+		expect(envelope.statusCode).toBe(401);
+		expect(result?.content[0]?.text).toContain("GITLAB_PERSONAL_ACCESS_TOKEN");
+		expect(queryCalls).toBe(0);
+		expect(ctx.available).toBe(false);
+	});
+
+	test("re-check that throws a non-auth error still reports no-index", async () => {
+		const client: Partial<OrbitRestClient> = {
+			getStatus: async () => {
+				throw new OrbitUnavailableError("Orbit API error 503: Service Unavailable.", 503);
+			},
+		};
+		const ctx = makeCtx({ available: false }, client);
+		const { handlers } = register(ctx);
+		const result = await handlers.get("gitlab_cross_project_callers")?.({ fqn: "X" });
+		expect(result?.isError).toBe(true);
+		expect(extractEnvelope(result?.content[0]?.text ?? "").kind).toBe("no-index");
+	});
 });
 
 describe("Orbit tools: credit budget guard", () => {

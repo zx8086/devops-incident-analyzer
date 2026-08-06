@@ -40,7 +40,6 @@ export class ConfigurationManager {
 			},
 			orbit: {
 				enabled: getEnvVarWithDefault("ORBIT_ENABLED", configDefaults.orbit.enabled) === "true",
-				personalAccessToken: getEnvVar("ORBIT_PERSONAL_ACCESS_TOKEN") || undefined,
 				queryPath: getEnvVarWithDefault("ORBIT_QUERY_PATH", configDefaults.orbit.queryPath),
 				schemaPath: getEnvVarWithDefault("ORBIT_SCHEMA_PATH", configDefaults.orbit.schemaPath),
 				statusPath: getEnvVarWithDefault("ORBIT_STATUS_PATH", configDefaults.orbit.statusPath),

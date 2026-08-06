@@ -81,15 +81,18 @@ if (import.meta.main) {
 				timeout: config.gitlab.timeout,
 			});
 
-			// SIO-1076: Orbit REST client + free /status boot probe. Reuses the
-			// GitLab PAT (read_api) unless a dedicated ORBIT_PERSONAL_ACCESS_TOKEN
-			// is set. The probe never calls the billed /query endpoint.
+			// SIO-1076: Orbit REST client + free /status boot probe. SIO-1406: ONE
+			// token -- the GitLab PAT authenticates Orbit too (live-verified
+			// authorized); the dedicated ORBIT_PERSONAL_ACCESS_TOKEN config was
+			// removed so a second-token misconfiguration can never diverge Orbit
+			// auth from the rest of the server. The probe never calls the billed
+			// /query endpoint.
 			let orbitClient: OrbitRestClient | undefined;
 			let orbitAvailable = false;
 			if (config.orbit.enabled) {
 				orbitClient = new OrbitRestClient({
 					instanceUrl: config.gitlab.instanceUrl,
-					personalAccessToken: config.orbit.personalAccessToken || config.gitlab.personalAccessToken,
+					personalAccessToken: config.gitlab.personalAccessToken,
 					queryPath: config.orbit.queryPath,
 					schemaPath: config.orbit.schemaPath,
 					statusPath: config.orbit.statusPath,

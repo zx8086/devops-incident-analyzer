@@ -77,6 +77,28 @@ function unavailableResult() {
 	);
 }
 
+// SIO-1406: a 401/403 on the free /status re-check is a TOKEN problem, not an
+// indexing state -- reporting it as "still indexing / feature off" (the previous
+// behavior) misdirected both the agent and a human root-cause hunt. Name the
+// actual lever: Orbit authenticates with the same GITLAB_PERSONAL_ACCESS_TOKEN
+// as the rest of this server.
+const AUTH_DENIED_GUIDANCE =
+	"GitLab Orbit rejected this server's credentials (HTTP 401/403) -- this is an auth problem, NOT an indexing state. " +
+	"Orbit uses the same GITLAB_PERSONAL_ACCESS_TOKEN as the other gitlab tools; the token is likely expired, rotated, " +
+	"or missing scopes. Fix the token and restart the server. Fall back to gitlab_semantic_code_search / " +
+	"gitlab_get_repository_tree for now, and do NOT fabricate cross-project import edges.";
+
+function authDeniedResult(statusCode: number | undefined) {
+	return textResult(
+		envelopeText(AUTH_DENIED_GUIDANCE, {
+			kind: "auth-denied",
+			message: "GitLab Orbit authentication failed",
+			statusCode,
+		}),
+		true,
+	);
+}
+
 // SIO-1179: classify an Orbit failure structurally. compile_error = a query the
 // server rejected (fix the DSL, do not blind-retry); an HTTP status maps through
 // the shared table; anything else from OrbitUnavailableError's wrapping is a
@@ -194,8 +216,14 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 		try {
 			const status = await ctx.client.getStatus();
 			if (isOrbitIndexed(status)) ctx.available = true;
-		} catch {
-			// fall through to guidance
+		} catch (error) {
+			// SIO-1406: an auth rejection is not an indexing state -- surface it as
+			// auth-denied so it is never misread as "still indexing / feature off".
+			if (error instanceof OrbitUnavailableError && (error.status === 401 || error.status === 403)) {
+				log.warn({ status: error.status }, "Orbit /status auth-denied -- check GITLAB_PERSONAL_ACCESS_TOKEN");
+				return authDeniedResult(error.status);
+			}
+			// anything else falls through to the no-index guidance
 		}
 		return ctx.available ? null : unavailableResult();
 	}

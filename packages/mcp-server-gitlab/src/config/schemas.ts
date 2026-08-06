@@ -38,10 +38,6 @@ export const ConfigSchema = z.object({
 			enabled: z
 				.boolean()
 				.describe("Enable GitLab Orbit knowledge-graph tools (Beta; on by default, soft-fails if unreachable)"),
-			personalAccessToken: z
-				.string()
-				.optional()
-				.describe("Dedicated Orbit PAT (read_api scope); falls back to the GitLab PAT when unset"),
 			queryPath: z.string().startsWith("/").describe("Orbit REST query endpoint path (billed)"),
 			schemaPath: z.string().startsWith("/").describe("Orbit REST schema endpoint path (free)"),
 			statusPath: z.string().startsWith("/").describe("Orbit REST indexing-status endpoint path (free)"),

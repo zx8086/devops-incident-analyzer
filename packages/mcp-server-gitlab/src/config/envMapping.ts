@@ -30,7 +30,6 @@ export const envMapping: readonly EnvMappingEntry[] = [
 
 	// orbit (SIO-1076)
 	{ configPath: "orbit.enabled", envVar: "ORBIT_ENABLED", default: configDefaults.orbit.enabled },
-	{ configPath: "orbit.personalAccessToken", envVar: "ORBIT_PERSONAL_ACCESS_TOKEN", default: "" },
 	{ configPath: "orbit.queryPath", envVar: "ORBIT_QUERY_PATH", default: configDefaults.orbit.queryPath },
 	{ configPath: "orbit.schemaPath", envVar: "ORBIT_SCHEMA_PATH", default: configDefaults.orbit.schemaPath },
 	{ configPath: "orbit.statusPath", envVar: "ORBIT_STATUS_PATH", default: configDefaults.orbit.statusPath },
