@@ -1215,14 +1215,37 @@ const HIGH_PRECISION_NARROWING_RULES: Record<string, string[]> = {
 	dlq_messages: ["topic_throughput", "describe_topic"],
 };
 
-export function narrowOnHighPrecisionIntent(mergedActions: string[], keywordActions: string[]): string[] {
+// SIO-1398: `baseActions` are what the entity extractor DELIBERATELY selected for this query;
+// keyword matches are an ambient substring pass layered on top. Narrowing may drop an ambient
+// action, but must never drop one the extractor explicitly chose -- that silently removes a
+// tool the query actually asked for.
+//
+// Observed live (mcp-tool-eval run 1375f857): a query asking for BOTH dead-letter queues and a
+// topic's partition layout produced baseActions ["dlq_messages","describe_topic"], and the
+// dlq_messages narrowing rule dropped describe_topic -- so kafka_describe_topic was never bound
+// and the model could not answer the second half. It scored 0.5 on expected_tools_fired twice,
+// including after the query was reworded to separate the two asks, because rewording cannot
+// fix a tool that is not offered.
+//
+// The rule itself stays: for a pure "show me the DLQ" query, hiding the generic topic-listing
+// tools is still right (SIO-785 -- otherwise the LLM picks kafka_list_topics over the
+// specialized tool and the typed extractor sees no DLQ data). It just no longer overrides an
+// explicit extractor selection.
+export function narrowOnHighPrecisionIntent(
+	mergedActions: string[],
+	keywordActions: string[],
+	baseActions: string[] = [],
+): string[] {
 	let actions = mergedActions;
+	const explicit = new Set(baseActions);
 	for (const trigger of keywordActions) {
 		const toDrop = HIGH_PRECISION_NARROWING_RULES[trigger];
 		if (!toDrop || toDrop.length === 0) continue;
 		const dropSet = new Set(toDrop);
 		// Don't drop something the keyword pass itself anchored.
 		for (const k of keywordActions) dropSet.delete(k);
+		// Don't drop something the entity extractor explicitly selected.
+		for (const b of explicit) dropSet.delete(b);
 		const next = actions.filter((a) => !dropSet.has(a));
 		if (next.length === 0) continue; // refuse to empty the list
 		actions = next;
@@ -1441,7 +1464,7 @@ ${state.correlationFetchDirective}`
 		// picks it instead of kafka_list_dlq_topics — leaving typed dlqTopics empty
 		// and the UI card invisible. The remote AgentCore-deployed tool description
 		// is not editable from local code, so we narrow the toolset upstream.
-		const mergedActions = narrowOnHighPrecisionIntent(preNarrowMerged, keywordActions);
+		const mergedActions = narrowOnHighPrecisionIntent(preNarrowMerged, keywordActions, baseActions);
 		const augmentedToolActions =
 			augmentationActions.length > 0 || mergedActions.length !== preNarrowMerged.length
 				? { ...state.extractedEntities.toolActions, [dataSourceId]: mergedActions }

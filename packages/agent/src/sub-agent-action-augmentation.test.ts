@@ -414,3 +414,37 @@ describe("SIO-1234: aws resolution set and action-slot reservation", () => {
 		expect(tools.map((t) => t.name)).toEqual(["kafka_list_topics", "kafka_list_dlq_topics", "kafka_describe_topic"]);
 	});
 });
+
+// SIO-1398: narrowing must not override an EXPLICIT entity-extractor selection.
+describe("narrowOnHighPrecisionIntent respects explicit baseActions", () => {
+	test("keeps describe_topic when the extractor selected it, even under a dlq_messages match", () => {
+		// The live failure (mcp-tool-eval run 1375f857): a query asking for BOTH dead-letter
+		// queues and a topic's partition layout. The extractor correctly chose both actions;
+		// narrowing dropped describe_topic, so kafka_describe_topic was never bound and the
+		// model could not answer the second half. Rewording the query could not fix it -- the
+		// tool was not on offer.
+		const kept = narrowOnHighPrecisionIntent(
+			["dlq_messages", "describe_topic"],
+			["dlq_messages"],
+			["dlq_messages", "describe_topic"],
+		);
+		expect(kept).toContain("describe_topic");
+		expect(kept).toContain("dlq_messages");
+	});
+
+	test("still drops an AMBIENT describe_topic on a pure DLQ query (SIO-785 preserved)", () => {
+		// baseActions has only dlq_messages here -- describe_topic arrived from the ambient
+		// keyword pass, so hiding it is still correct: otherwise the LLM reaches for the generic
+		// listing tool and the typed extractor sees no DLQ data.
+		expect(narrowOnHighPrecisionIntent(["dlq_messages", "describe_topic"], ["dlq_messages"], ["dlq_messages"])).toEqual(
+			["dlq_messages"],
+		);
+	});
+
+	test("defaults to the old behaviour when baseActions is omitted", () => {
+		// Back-compat: existing callers that pass two args keep the pre-SIO-1398 semantics.
+		expect(narrowOnHighPrecisionIntent(["dlq_messages", "topic_throughput"], ["dlq_messages"])).toEqual([
+			"dlq_messages",
+		]);
+	});
+});

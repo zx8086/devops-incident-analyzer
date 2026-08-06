@@ -65,7 +65,8 @@
 		"fallow:dupes": "npx -y fallow dupes",
 		"fallow:health": "npx -y fallow health",
 		"model:probe": "bun run --filter @devops-agent/agent model:probe",
-		"eval:mcp-tool": "bun run --filter @devops-agent/agent eval:mcp-tool"
+		"eval:mcp-tool": "bun run --filter @devops-agent/agent eval:mcp-tool",
+		"eval:tool-probe": "bun run --filter @devops-agent/agent eval:tool-probe"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "catalog:dev",

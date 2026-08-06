@@ -15,7 +15,8 @@
 		"skill:promote": "bun --env-file=../../.env src/skill-promote-cli.ts",
 		"model:probe": "bun --env-file=../../.env src/eval/probe-model.ts",
 		"eval:upload-mcp-tool-dataset": "bun --env-file=../../.env run src/eval/build-mcp-tool-dataset.ts",
-		"eval:mcp-tool": "bun --env-file=../../.env run src/eval/run-mcp-tool-eval.ts"
+		"eval:mcp-tool": "bun --env-file=../../.env run src/eval/run-mcp-tool-eval.ts",
+		"eval:tool-probe": "bun --env-file=../../.env run src/eval/run-tool-probe.ts"
 	},
 	"dependencies": {
 		"@devops-agent/checkpointer": "workspace:*",
