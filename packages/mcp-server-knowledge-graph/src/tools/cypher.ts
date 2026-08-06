@@ -10,7 +10,7 @@
 import { type GraphStore, getGraphStore } from "@devops-agent/knowledge-graph";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { errText, text } from "./shared.ts";
+import { errText, KG_READ_ONLY_ANNOTATIONS, text } from "./shared.ts";
 
 // Mutation / DDL keywords that make a statement non-read-only in Cypher + lbug.
 // Matched as whole words, case-insensitive, AFTER comment/string stripping.
@@ -130,19 +130,23 @@ const SCHEMA_CARD = [
 
 export function registerCypherTool(server: McpServer, enabled: boolean): void {
 	const resolveStore = makeResolveStore(enabled);
-	server.tool(
+	server.registerTool(
 		"kg_run_cypher",
-		"Run a READ-ONLY Cypher query against the infrastructure knowledge graph. " +
-			"Prefer the curated kg_* tools for common questions; use this for ad-hoc graph queries. " +
-			"Pass values via the params object as bound $name placeholders -- never string-interpolate. " +
-			"Write/DDL keywords (CREATE/MERGE/SET/DELETE/...) and multi-statement payloads are rejected.\n\n" +
-			SCHEMA_CARD,
 		{
-			cypher: z.string().min(1).describe("A single read-only Cypher statement using $param placeholders."),
-			params: z
-				.record(z.string(), z.unknown())
-				.optional()
-				.describe("Bound parameter values for the $placeholders in the query."),
+			description:
+				"Run a READ-ONLY Cypher query against the infrastructure knowledge graph. " +
+				"Prefer the curated kg_* tools for common questions; use this for ad-hoc graph queries. " +
+				"Pass values via the params object as bound $name placeholders -- never string-interpolate. " +
+				"Write/DDL keywords (CREATE/MERGE/SET/DELETE/...) and multi-statement payloads are rejected.\n\n" +
+				SCHEMA_CARD,
+			inputSchema: {
+				cypher: z.string().min(1).describe("A single read-only Cypher statement using $param placeholders."),
+				params: z
+					.record(z.string(), z.unknown())
+					.optional()
+					.describe("Bound parameter values for the $placeholders in the query."),
+			},
+			annotations: KG_READ_ONLY_ANNOTATIONS,
 		},
 		async ({ cypher, params }) => {
 			const guard = validateReadOnlyCypher(cypher);

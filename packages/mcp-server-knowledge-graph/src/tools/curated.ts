@@ -22,7 +22,7 @@ import {
 } from "@devops-agent/knowledge-graph";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { text } from "./shared.ts";
+import { KG_READ_ONLY_ANNOTATIONS, text } from "./shared.ts";
 
 // SIO-968: loud-fail strings. When the graph cannot answer, the model MUST NOT
 // silently substitute prose from loaded specs/runbooks -- the disabled/unavailable
@@ -55,10 +55,14 @@ function makeResolveStore(enabled: boolean): () => Promise<GraphStore | string> 
 
 export function registerCuratedTools(server: McpServer, enabled: boolean): void {
 	const resolveStore = makeResolveStore(enabled);
-	server.tool(
+	server.registerTool(
 		"kg_deployments_running_stack",
-		"Blast radius: which Elastic deployments run a given stack (cross-deployment). Read-only; no Cypher.",
-		{ stack: z.string().min(1).describe("Stack name, e.g. slos") },
+		{
+			description:
+				"Blast radius: which Elastic deployments run a given stack (cross-deployment). Read-only; no Cypher.",
+			inputSchema: { stack: z.string().min(1).describe("Stack name, e.g. slos") },
+			annotations: KG_READ_ONLY_ANNOTATIONS,
+		},
 		async ({ stack }) => {
 			const store = await resolveStore();
 			if (typeof store === "string") return text(store);
@@ -71,10 +75,13 @@ export function registerCuratedTools(server: McpServer, enabled: boolean): void 
 		},
 	);
 
-	server.tool(
+	server.registerTool(
 		"kg_stacks_using_module",
-		"Blast radius: which stacks wire a given module (cross-stack reuse). Read-only; no Cypher.",
-		{ module: z.string().min(1).describe("Module name, e.g. lifecycle") },
+		{
+			description: "Blast radius: which stacks wire a given module (cross-stack reuse). Read-only; no Cypher.",
+			inputSchema: { module: z.string().min(1).describe("Module name, e.g. lifecycle") },
+			annotations: KG_READ_ONLY_ANNOTATIONS,
+		},
 		async ({ module }) => {
 			const store = await resolveStore();
 			if (typeof store === "string") return text(store);
@@ -87,12 +94,15 @@ export function registerCuratedTools(server: McpServer, enabled: boolean): void 
 		},
 	);
 
-	server.tool(
+	server.registerTool(
 		"kg_stack_instance_history",
-		"Recent change history for one (deployment, stack) cell, with outcome. Read-only; no Cypher.",
 		{
-			deployment: z.string().min(1).describe("Deployment name, e.g. eu-b2b"),
-			stack: z.string().min(1).describe("Stack name, e.g. slos"),
+			description: "Recent change history for one (deployment, stack) cell, with outcome. Read-only; no Cypher.",
+			inputSchema: {
+				deployment: z.string().min(1).describe("Deployment name, e.g. eu-b2b"),
+				stack: z.string().min(1).describe("Stack name, e.g. slos"),
+			},
+			annotations: KG_READ_ONLY_ANNOTATIONS,
 		},
 		async ({ deployment, stack }) => {
 			const store = await resolveStore();
@@ -110,10 +120,13 @@ export function registerCuratedTools(server: McpServer, enabled: boolean): void 
 		},
 	);
 
-	server.tool(
+	server.registerTool(
 		"kg_deployment_history",
-		"Recent IaC change history for one deployment, most-recent first. Read-only; no Cypher.",
-		{ deployment: z.string().min(1).describe("Deployment name, e.g. eu-b2b") },
+		{
+			description: "Recent IaC change history for one deployment, most-recent first. Read-only; no Cypher.",
+			inputSchema: { deployment: z.string().min(1).describe("Deployment name, e.g. eu-b2b") },
+			annotations: KG_READ_ONLY_ANNOTATIONS,
+		},
 		async ({ deployment }) => {
 			const store = await resolveStore();
 			if (typeof store === "string") return text(store);
@@ -132,11 +145,18 @@ export function registerCuratedTools(server: McpServer, enabled: boolean): void 
 	);
 
 	// SIO-1026: "have we seen this root cause before, and what resolved it".
-	server.tool(
+	server.registerTool(
 		"kg_prior_root_causes",
-		"Prior incidents that shared a root-cause class (e.g. a correlation rule name), with any runbook that resolved them. Read-only; no Cypher.",
 		{
-			causeClass: z.string().min(1).describe("Root-cause class, e.g. the correlation rule name kafka-significant-lag"),
+			description:
+				"Prior incidents that shared a root-cause class (e.g. a correlation rule name), with any runbook that resolved them. Read-only; no Cypher.",
+			inputSchema: {
+				causeClass: z
+					.string()
+					.min(1)
+					.describe("Root-cause class, e.g. the correlation rule name kafka-significant-lag"),
+			},
+			annotations: KG_READ_ONLY_ANNOTATIONS,
 		},
 		async ({ causeClass }) => {
 			const store = await resolveStore();
@@ -161,10 +181,16 @@ export function registerCuratedTools(server: McpServer, enabled: boolean): void 
 
 	// SIO-1202: prompts that produced a successfully APPLIED change -- "what to ask
 	// to get a working change", for a documentation catalog of validated examples.
-	server.tool(
+	server.registerTool(
 		"kg_successful_prompts",
-		"Prompts that produced a successfully applied elastic-iac change (Prompt joined to its ConfigChange via matching id, filtered to outcome = 'applied'), newest first. Read-only; no Cypher.",
-		{ limit: z.number().int().positive().max(200).optional().describe("Max rows to return (default 20)") },
+		{
+			description:
+				"Prompts that produced a successfully applied elastic-iac change (Prompt joined to its ConfigChange via matching id, filtered to outcome = 'applied'), newest first. Read-only; no Cypher.",
+			inputSchema: {
+				limit: z.number().int().positive().max(200).optional().describe("Max rows to return (default 20)"),
+			},
+			annotations: KG_READ_ONLY_ANNOTATIONS,
+		},
 		async ({ limit }) => {
 			const store = await resolveStore();
 			if (typeof store === "string") return text(store);
@@ -189,10 +215,16 @@ export function registerCuratedTools(server: McpServer, enabled: boolean): void 
 	// though it is real. A missing Prompt can also reflect a soft-failed write on a later
 	// turn -- render it as "no prompt recorded" rather than asserting the change predates
 	// SIO-1038 (CodeRabbit PR #463: don't infer provenance from an absence).
-	server.tool(
+	server.registerTool(
 		"kg_applied_changes",
-		"Every successfully applied elastic-iac change, newest first, whether or not it has a linked Prompt (a missing Prompt is common for changes recorded before the Prompt node existed, SIO-1038, but can also reflect a soft-failed write). Use this for full historical coverage; use kg_successful_prompts when you specifically need the prompt text. Read-only; no Cypher.",
-		{ limit: z.number().int().positive().max(200).optional().describe("Max rows to return (default 20)") },
+		{
+			description:
+				"Every successfully applied elastic-iac change, newest first, whether or not it has a linked Prompt (a missing Prompt is common for changes recorded before the Prompt node existed, SIO-1038, but can also reflect a soft-failed write). Use this for full historical coverage; use kg_successful_prompts when you specifically need the prompt text. Read-only; no Cypher.",
+			inputSchema: {
+				limit: z.number().int().positive().max(200).optional().describe("Max rows to return (default 20)"),
+			},
+			annotations: KG_READ_ONLY_ANNOTATIONS,
+		},
 		async ({ limit }) => {
 			const store = await resolveStore();
 			if (typeof store === "string") return text(store);
@@ -211,12 +243,16 @@ export function registerCuratedTools(server: McpServer, enabled: boolean): void 
 
 	// SIO-1204/SIO-1207: the persisted per-service network map (static topology +
 	// currently-valid IP bindings accreted from prior incident turns).
-	server.tool(
+	server.registerTool(
 		"kg_network_map",
-		"Persisted network map for one service: DNS -> load balancer -> target group -> workload chain, VPC/subnet placement, currently-valid IP bindings, and service endpoints (Kong/Kafka/Capella/Elastic). Accreted per incident; verify live before acting on IPs. Read-only; no Cypher.",
 		{
-			service: z.string().min(1).describe("Canonical service name, e.g. orders-service"),
-			asOf: z.string().optional().describe("ISO timestamp for a bi-temporal as-of read (default: currently valid)"),
+			description:
+				"Persisted network map for one service: DNS -> load balancer -> target group -> workload chain, VPC/subnet placement, currently-valid IP bindings, and service endpoints (Kong/Kafka/Capella/Elastic). Accreted per incident; verify live before acting on IPs. Read-only; no Cypher.",
+			inputSchema: {
+				service: z.string().min(1).describe("Canonical service name, e.g. orders-service"),
+				asOf: z.string().optional().describe("ISO timestamp for a bi-temporal as-of read (default: currently valid)"),
+			},
+			annotations: KG_READ_ONLY_ANNOTATIONS,
 		},
 		async ({ service, asOf }) => {
 			const store = await resolveStore();
@@ -258,12 +294,16 @@ export function registerCuratedTools(server: McpServer, enabled: boolean): void 
 	// SIO-1204/SIO-1207: KG-cache-first reverse IP lookup (the SIO-1200 protocol's
 	// step 0). Returns ALL currently-valid owners: a private IP is unique only per
 	// VPC, so multiple hits need live disambiguation.
-	server.tool(
+	server.registerTool(
 		"kg_ip_to_workload",
-		"Cached reverse-IP lookup: which workload was this private IP last bound to (BOUND_TO edges from prior incidents). Verify-then-trust: always confirm live via the AWS reverse-IP protocol before relying on it. asOf gives a historical as-of read. Read-only; no Cypher.",
 		{
-			ip: z.ipv4().describe("IPv4 address, e.g. 10.34.50.147"),
-			asOf: z.string().optional().describe("ISO timestamp for a bi-temporal as-of read (default: currently valid)"),
+			description:
+				"Cached reverse-IP lookup: which workload was this private IP last bound to (BOUND_TO edges from prior incidents). Verify-then-trust: always confirm live via the AWS reverse-IP protocol before relying on it. asOf gives a historical as-of read. Read-only; no Cypher.",
+			inputSchema: {
+				ip: z.ipv4().describe("IPv4 address, e.g. 10.34.50.147"),
+				asOf: z.string().optional().describe("ISO timestamp for a bi-temporal as-of read (default: currently valid)"),
+			},
+			annotations: KG_READ_ONLY_ANNOTATIONS,
 		},
 		async ({ ip, asOf }) => {
 			const store = await resolveStore();

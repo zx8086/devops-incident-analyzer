@@ -1,0 +1,72 @@
+{
+	"kg_applied_changes": {
+		"surfaceHash": "9e6b277129f0f19bb67f9e2ea9d0d3a85161e5bc6fba98d7f6cfc55391b87939",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kg_deployment_history": {
+		"surfaceHash": "edc129699b19ab990e0e643b81e197caa25bd4dd5506b0be78561e84a33e4eb0",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kg_deployments_running_stack": {
+		"surfaceHash": "7068a9674fdf3528038f03f6d187d681133d9e1abef00bfbb0ee4e1f565f1f65",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kg_ip_to_workload": {
+		"surfaceHash": "61f656f6fba5086b205c64ef9ca7855991620aed0a71dfe91a5119f6640f31a1",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kg_network_map": {
+		"surfaceHash": "f3a06b750f2af3eece9faedb00bdab55dbd316e5235f0bba7d46041e6e2f5035",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kg_prior_root_causes": {
+		"surfaceHash": "b393e90e8700ed9bd0c88c5311fac2deb25a5695e93937e3cdf8fa882760a4ed",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kg_run_cypher": {
+		"surfaceHash": "c29bf0b14de9748c94ee27f14ecc53933d8bab6a6ed392e1a82e8208c4680818",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kg_stack_instance_history": {
+		"surfaceHash": "14282a07e1d98b8a1f4248f47e8b1b209ae0d2aa8afb3f6038af41cdddfd19e8",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kg_stacks_using_module": {
+		"surfaceHash": "169404fcf78c321642c74b880220ff2823671b96c1bde56e357ac3f45c2c8a6d",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kg_successful_prompts": {
+		"surfaceHash": "e75527b6d3f8fe040961c81e0358db9833b21a556e6db259caf7b09abe639ea5",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	}
+}
