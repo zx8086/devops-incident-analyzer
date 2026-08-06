@@ -1,0 +1,548 @@
+{
+	"konnect_analyze_migration_context": {
+		"surfaceHash": "03fdbda6827549c697a0e3cfec6dc485f2b58e578aeed9d8c41c8759d7641cd9",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_authenticate_portal_developer": {
+		"surfaceHash": "e3fa0fcf70ff21d9174daaa8bcab781e1acdbfa5b6b3eac1e0a01550db3e1497",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"konnect_check_control_plane_group_membership": {
+		"surfaceHash": "50d295a67168469fb3a10a905ec2bf61102ca6eaa7952676fa8b760563cbab3f",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_create_certificate": {
+		"surfaceHash": "57bd1518ff066b922fa0e02091d73fcfec25184991a48603976416db93c299c8",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"konnect_create_consumer": {
+		"surfaceHash": "c92198ea1e353f706902001345a153058d4357a3e2b7ba04414b0b19c73f7085",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"konnect_create_control_plane": {
+		"surfaceHash": "ed3c487afd3c048703956ef48695b512ce8f587e80a17753065294d870906321",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"konnect_create_data_plane_token": {
+		"surfaceHash": "ea3425b6c4090f7e45d33ad4af0d9761e9989cd01ab3e3da8641b385ce18a469",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"konnect_create_elicitation_session": {
+		"surfaceHash": "b1109871c56a9172bd2d00e39ab39c6e2376ffbef3744b167992d7ca6fa072dc",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"konnect_create_plugin": {
+		"surfaceHash": "085258a423f7d9cf860630eb255d9ca17223a2c888990a1934cbef6f5771d44e",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"konnect_create_portal": {
+		"surfaceHash": "de4c001cce0853d0f52df521e24a27c7521f8ec76790dedde3a605ca166daa9c",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"konnect_create_portal_application": {
+		"surfaceHash": "71888ecc483642693f9ad40eb63896b136b286c7ade071da17e0663a945ab7c7",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"konnect_create_portal_application_registration": {
+		"surfaceHash": "26e6bfd6e31d610dec581bef6338de717ad52cb8aafca223593017075051e138",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"konnect_create_portal_credential": {
+		"surfaceHash": "0cc5c89f1f347e9e42d471823dfa7b7dd814067e9681fd7b47ff312d969e2697",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"konnect_create_route": {
+		"surfaceHash": "466a84ec18c18dabd4838ddb78cb3acd2eb23e2480073f090c931043900055bc",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"konnect_create_service": {
+		"surfaceHash": "e04b25e2af07c75a65ec61000765d59f63662ed1efe12ba0352e39a32f656339",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"konnect_delete_certificate": {
+		"surfaceHash": "d513b69f1dab996f84c0a38e32f0be9c0195e1645a5cce00356e944fda696d07",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_delete_consumer": {
+		"surfaceHash": "fbbb598ff7c6da8a04e2840f21411507e00fda1e3c4df228eefe2bffb2996814",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_delete_control_plane": {
+		"surfaceHash": "efe572c310f90f29ca2f48ba4101a422beb012ced2c9a143c65a008981ea1ffb",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_delete_plugin": {
+		"surfaceHash": "d6410d10beab5c462a25c210d175aadbe04805f180c1598f2148d27597809247",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_delete_portal": {
+		"surfaceHash": "1e695e44c61ffbe99d47fb0960445ee0cf3915761d74ea8ff4b3b24e9b92e39e",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_delete_portal_application": {
+		"surfaceHash": "67d26a5025d2fd1c7f1faf3d34ed11a56e97be0908c5c9910886d9489168cd9f",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_delete_portal_application_registration": {
+		"surfaceHash": "59a423bc65e95aa62c3e3308ad2dbe34f765b952451907a92e8fdaf73eb42701",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_delete_portal_credential": {
+		"surfaceHash": "cb0165d44401143ca3fb1926dc6743e45f024121f585274f3bae36391a9fedd8",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_delete_route": {
+		"surfaceHash": "43874f5b2eb50f420b154d1712a2d5064602d4900ff5c317ec16a52aff7d27a7",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_delete_service": {
+		"surfaceHash": "48868fea47a0d8239642d1f5fbd8cb66cce43e59d8381c72f9be8575b538ed4f",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_fetch_portal_api": {
+		"surfaceHash": "84ac237aaa52b25ebe31117261047cfbead729ab9b7393524646c985b1f2c721",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_fetch_portal_api_document": {
+		"surfaceHash": "64ace016e1339e9da7d936bd19e6a10cf1c79047fa81e8cd03e5cebf1211c16f",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_get_certificate": {
+		"surfaceHash": "0f1cb88838d882e2d5f257d9e8225ccad102d59063156fc93ff629f96e916eab",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_get_consumer": {
+		"surfaceHash": "e3d44f89a609c309cc5f33df9cfb610c5f7969c120ab3774044a81e6d79c9ee8",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_get_consumer_requests": {
+		"surfaceHash": "42575472844947bf290bf5ab856d1522e8ef771842a0413e51b658e46eb6181d",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_get_control_plane": {
+		"surfaceHash": "5a575a60a017c754bfa764b1b84b7276cf03cbdca169847e56f5bf72944e4868",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_get_control_plane_config": {
+		"surfaceHash": "4470c963c775f5bfb7c3c31fcc3760a99790e4dc25dac99015b1760fa17c26bc",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_get_data_plane_node": {
+		"surfaceHash": "df7f69b786701a626a735a96f8501b2ab82242427b92f537d07e0b786cda71a7",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_get_plugin": {
+		"surfaceHash": "2587664034849da68459021f6c1bcbe778061f976805f688a9bba78d6b0d790a",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_get_portal": {
+		"surfaceHash": "4ac0957273c9a88e16b82787c910278f8ddd8be833f41a6964a4ec92344ed7d9",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_get_portal_api_actions": {
+		"surfaceHash": "d2ba110de7c75900b37748bdc78e3f605d098c3ad99feff74fa1c81262eb0d10",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_get_portal_application": {
+		"surfaceHash": "25691a52cc3eb40e44dc808a1b2387344df38b6d0a8faa682f3f5fad7fad04ec",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_get_portal_application_registration": {
+		"surfaceHash": "060be3ac28ea4b6816fd171be3a877adcff092138a298a7e1d2586efb88b90f2",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_get_portal_developer_me": {
+		"surfaceHash": "0b3799a069ad07f8d39698aeabf03c6e9df10d1b65825832bd509b6a9fda050f",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_get_route": {
+		"surfaceHash": "c3044608507a990ed4179a073ad433940d097b42064c89a3dc91b8ab29356b6c",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_get_service": {
+		"surfaceHash": "1e7978c77c0f9abaa1b39f730e9dc5b143aad3b9a7b5f32b755ab8dc91f90b97",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_get_session_status": {
+		"surfaceHash": "aaaff21835eaa179c695775cf6ff23f55108a7a8f82a04edcfdb09aa3b1d210e",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_list_certificates": {
+		"surfaceHash": "0ec9b49d898a2533e1bda614a665a34f3de6935df2c7f3b2eb460b0f2b524d24",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_list_consumers": {
+		"surfaceHash": "3f6b7c94f63bf9550d3f473535d60c4d181346c49af17d13ea352b2f3e464f58",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_list_control_plane_group_memberships": {
+		"surfaceHash": "af87c1c678988ff3fae13ccf9878a449fc57af4ab7b5e1b61ca0150a21f27b30",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_list_control_planes": {
+		"surfaceHash": "eccdc053bdf5a401c0dafc0696d2145ba68556563371ab9c34a6f4d6a2c10253",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_list_data_plane_nodes": {
+		"surfaceHash": "1e063c6e3fdb0808c7852fe2f0ff38fe447228423e491c5050890cbfb6dcdad5",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_list_data_plane_tokens": {
+		"surfaceHash": "25d0ef70ef57f229f4ddfd60f229aa1620320e379e67ca0eb4a653061380718e",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_list_plugin_schemas": {
+		"surfaceHash": "d983fb991d7d4333fea8785b9ab1dffb766b600d8ecbaa669e023be5228a56d0",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_list_plugins": {
+		"surfaceHash": "083af5ec9308ee994aade473476ad4a0386a5c7a887e511dc1f16224fe0ba452",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_list_portal_api_documents": {
+		"surfaceHash": "770a71b483b29b3d2def5b6308b710e5278687abf1b6f61345906db04a9e7c6d",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_list_portal_apis": {
+		"surfaceHash": "d5b67c4c32e4d2f209b4d128d686b073b6d6fb565a9982f099ee26d365309404",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_list_portal_application_registrations": {
+		"surfaceHash": "fec85e6709058c518725ccf514be7677c7b099e130fd254192a1c5fefb5aefc1",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_list_portal_applications": {
+		"surfaceHash": "5e7a589beb801eeb8a767262cb82ac09f3f0b6f3fae2128af1995dab7385f07d",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_list_portal_credentials": {
+		"surfaceHash": "7b9fba617631374ba54343de66e45f3f5817430cb3357bb2ff9932b2c3d33a29",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_list_portal_products": {
+		"surfaceHash": "c5f0502c727bab09c2baf41d4e409731c977c0e3d8d03270f516d477446dfd9a",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_list_portals": {
+		"surfaceHash": "de61148136568d7e7c133cf57d062105d1c41b20982f2a1df67773470f8809b2",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_list_routes": {
+		"surfaceHash": "93114c5518a2c3d8939a98c0644e73a9a69475efa33720355ca73c95b8e0c9c0",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_list_services": {
+		"surfaceHash": "32a48ee9f389cff85c05fddc18bae513940099afd8bbe089ed1f0cef57e4fb8d",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_logout_portal_developer": {
+		"surfaceHash": "d0dba10c76946a9b64d545dc5025860dfe094f3e25240fda5f654579c5b4be51",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_process_elicitation_response": {
+		"surfaceHash": "82d2dae318e80c85c1a0e703e913259c45927d5d32405d4db9db53a12ae6d530",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"konnect_publish_portal_product": {
+		"surfaceHash": "0e0ce6abfb2aa7007dddb27e1e9ac14b19ec6063aab0c7d707e89c4360defb2d",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"konnect_query_api_requests": {
+		"surfaceHash": "26e89734a204187c165a8109801214984070562d62aeaebc6a6762de25d3ea21",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_query_portal_application_analytics": {
+		"surfaceHash": "e333c6da01b421495c7b81fd67fe187ec22a4bffcc94d572a72a3e3bbcbd77a5",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"konnect_regenerate_portal_application_secret": {
+		"surfaceHash": "154d1cdc69a1702f23a399084870c9946dfed002dbfd66c2bff23fc3e8698e81",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_register_portal_developer": {
+		"surfaceHash": "e1cea28e8549ee041647a0ab39b37ee3644478064a2345c5155432efc7e1890b",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"konnect_revoke_data_plane_token": {
+		"surfaceHash": "0a3873c2dcd1175c2b0efdc9158d0eb5fed95279bc1ba4d01faf6542af6c377f",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_unpublish_portal_product": {
+		"surfaceHash": "76447d834258ef8e63473664712500ac7132ea002c34c987f5972514f3a08031",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_update_certificate": {
+		"surfaceHash": "3b3e56d3d2b1d38a51d457a90f8de235d67eff19ac8c426e9d8de2266bf61007",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_update_consumer": {
+		"surfaceHash": "8ca6404a4e84bb3ab0c94260ce5991e2b9eba41ca68edd68310220b58d26fc37",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_update_control_plane": {
+		"surfaceHash": "da737640c85da0692c35fbcca6901d69891416a3ab2608b2f383e930ee2ae187",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_update_control_plane_config": {
+		"surfaceHash": "3967fa901f34e778f6ee8eb845054d0778d342599541259818cc5072dd3e1940",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_update_plugin": {
+		"surfaceHash": "a7c49071f672bab0f6231a686a6b20b6bc7234fd1fcd6035501c8e0defc9afdd",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_update_portal": {
+		"surfaceHash": "97f533920190bca7134045c7a1a00d3f6baa037ae35b9b725ab153694122c7a3",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_update_portal_application": {
+		"surfaceHash": "df547e32fe8c74f6148d8f63e6d4974ce124cc5557a47d1061b83c64c97710b3",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_update_portal_credential": {
+		"surfaceHash": "10ac0a9074de5249b118672aa6710ab66827afd194342e91d9936fba27c9546e",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_update_route": {
+		"surfaceHash": "9521401ad9b0e2ca2c828dd1a20bceda58276c576a42a3749d4ca257dc3986fc",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"konnect_update_service": {
+		"surfaceHash": "c3857b6f87101de64d2c894646c3872da560954ccbc8281899f922f3832230e5",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	}
+}

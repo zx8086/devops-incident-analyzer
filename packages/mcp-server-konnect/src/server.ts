@@ -1,11 +1,18 @@
 // src/server.ts
-import { buildToolErrorEnvelope, createCachedServerFactory, mapHttpStatusToKind } from "@devops-agent/shared";
+import {
+	buildToolErrorEnvelope,
+	createCachedServerFactory,
+	deriveToolAnnotations,
+	mapHttpStatusToKind,
+} from "@devops-agent/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ZodRawShapeCompat } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { KongApi } from "./api/kong-api.js";
 import type { Config } from "./config/index.js";
 import type { ElicitationOperations } from "./tools/elicitation-tool.js";
 import { getAllTools, validateToolRegistry } from "./tools/registry.js";
+import { buildKonnectAnnotationSets } from "./tools/tool-classification.js";
 import { formatError, KongMCPError } from "./utils/error-handling.js";
 import { createContextLogger } from "./utils/logger.js";
 import { mcpPaginator } from "./utils/pagination.js";
@@ -152,6 +159,9 @@ function registerTools(
 	elicitationOps: ElicitationOperations,
 ) {
 	const allTools = getAllTools();
+	// SIO-1414: throws on an unclassified verb, so a new tool cannot register
+	// without a recorded read/write/destructive decision.
+	const annotationSets = buildKonnectAnnotationSets(allTools);
 
 	log.info("Native MCP elicitation active");
 	log.info(
@@ -204,9 +214,25 @@ function registerTools(
 		const tracedHandler = async (args: any, extra: RequestHandlerExtra<any, any>): Promise<any> =>
 			traceToolCall(prefixedName, () => handler(args, extra));
 
-		const toolParams = (tool as unknown as Record<string, unknown>).inputSchema ?? tool.parameters?.shape ?? {};
+		// SIO-1414: same runtime value the .tool() positional overload received; typed
+		// to the SDK's own InputArgs member (registry entries carry either a raw
+		// JSON-Schema object or a Zod shape, both of which registerTool normalizes).
+		const toolParams = ((tool as unknown as Record<string, unknown>).inputSchema ??
+			tool.parameters?.shape ??
+			{}) as ZodRawShapeCompat;
 		log.debug({ method: prefixedName, category: tool.category }, "Registering tool");
-		server.tool(prefixedName, tool.description, toolParams, tracedHandler);
+		// SIO-1414: registerTool config style (SDK v2 removes the .tool() sugar);
+		// inputSchema takes the same raw shape the positional overload took, so the
+		// serialized tools/list schema is byte-identical (locked by the snapshot test).
+		server.registerTool(
+			prefixedName,
+			{
+				description: tool.description,
+				inputSchema: toolParams,
+				annotations: deriveToolAnnotations(prefixedName, annotationSets),
+			},
+			tracedHandler,
+		);
 	});
 
 	log.info({ toolCount: allTools.length }, "All tools registered successfully");
