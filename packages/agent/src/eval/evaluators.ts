@@ -1,8 +1,17 @@
 // packages/agent/src/eval/evaluators.ts
+import { isRetryableCategory } from "@devops-agent/shared";
 import type { Example, Run } from "langsmith/schemas";
 import OpenAI from "openai";
 import { z } from "zod";
 import { parseLlmJson } from "../llm-json.ts";
+import type { ExpectedToolUse } from "./dataset.ts";
+import {
+	callIdentity,
+	isBadArgumentCall,
+	isHallucinatedCall,
+	type ResponseHealthFinding,
+	type ToolTrajectory,
+} from "./tool-trajectory.ts";
 
 const DATASOURCE_VERDICT_DEFAULT = { verdict: "missed" as const, gapsHonest: false, fabricated: false };
 
@@ -495,4 +504,165 @@ export async function subagentEvidenceJudge(run: Run, example?: Example) {
 		{};
 	if (Object.keys(referenceFindings).length === 0) return [];
 	return judgeSubagentReports(subagentReports, referenceFindings);
+}
+
+// --- SIO-1398: tool-correctness evaluators -------------------------------------------------
+//
+// All deterministic. They read run.outputs.output.toolTrajectory, the projection added by
+// tool-trajectory.ts -- the first evaluators in this file to grade the tool CALL rather than
+// the report prose.
+//
+// Two conventions, both load-bearing:
+//   1. 1.0 = good for every key, so rate metrics emit (1 - rate). LangSmith's Compare view
+//      reads uniformly across these and the older keys; a key where "higher is worse" sitting
+//      next to response_quality is actively misleading.
+//   2. When there are no tool calls at all, emit NO feedback rather than a score. A run where
+//      every sub-agent was skipped would otherwise score a perfect 1.0 on every key -- the
+//      failure mode rewarded as success. Mirrors the not_determinable omission in
+//      judgeFeedback above.
+
+function readTrajectory(run: Run): ToolTrajectory | undefined {
+	const trajectory = (run.outputs as { output?: { toolTrajectory?: unknown } } | undefined)?.output?.toolTrajectory;
+	if (typeof trajectory !== "object" || trajectory === null) return undefined;
+	const candidate = trajectory as Partial<ToolTrajectory>;
+	if (!Array.isArray(candidate.calls) || typeof candidate.totalCalls !== "number") return undefined;
+	return candidate as ToolTrajectory;
+}
+
+function readExpectedToolUse(example?: Example): ExpectedToolUse | undefined {
+	const expected = (example?.outputs as { expectedToolUse?: unknown } | undefined)?.expectedToolUse;
+	if (typeof expected !== "object" || expected === null) return undefined;
+	const candidate = expected as Partial<ExpectedToolUse>;
+	if (!Array.isArray(candidate.requiredToolGroups)) return undefined;
+	return candidate as ExpectedToolUse;
+}
+
+// Names the offending tools rather than only counting them -- for "the LLM calls tools
+// incorrectly", the actionable payload IS which tool and which argument class.
+function summarizeOffenders(names: string[], cap = 5): string {
+	const unique = [...new Set(names)];
+	const shown = unique.slice(0, cap).join(", ");
+	return unique.length > cap ? `${shown} (+${unique.length - cap} more)` : shown;
+}
+
+export function toolArgValidity(run: Run, example?: Example): { key: string; score: number; comment: string }[] {
+	const trajectory = readTrajectory(run);
+	if (!trajectory || trajectory.totalCalls === 0) return [];
+	const bad = trajectory.calls.filter(isBadArgumentCall);
+	const score = 1 - bad.length / trajectory.totalCalls;
+	return [
+		{
+			key: "tool_arg_validity",
+			score,
+			comment:
+				bad.length === 0
+					? `All ${trajectory.totalCalls} tool call(s) had valid arguments`
+					: `${bad.length}/${trajectory.totalCalls} call(s) rejected for bad arguments: ${summarizeOffenders(bad.map((c) => c.toolName))}`,
+		},
+	];
+}
+
+export function toolNameValidity(run: Run, example?: Example): { key: string; score: number; comment: string }[] {
+	const trajectory = readTrajectory(run);
+	if (!trajectory || trajectory.totalCalls === 0) return [];
+	const invented = trajectory.calls.filter(isHallucinatedCall);
+	const score = 1 - invented.length / trajectory.totalCalls;
+	return [
+		{
+			key: "tool_name_validity",
+			score,
+			comment:
+				invented.length === 0
+					? `All ${trajectory.totalCalls} tool call(s) named a bound tool`
+					: `${invented.length}/${trajectory.totalCalls} call(s) named a tool that does not exist: ${summarizeOffenders(
+							invented.map((c) => c.hallucinatedName ?? c.toolName),
+						)}`,
+		},
+	];
+}
+
+// Partial credit, unlike the binary datasources_covered. A tool-level check scored all-or-
+// nothing cannot show improvement between runs, which is most of what this metric is for.
+export function expectedToolsFired(run: Run, example?: Example): { key: string; score: number; comment: string }[] {
+	const trajectory = readTrajectory(run);
+	const expected = readExpectedToolUse(example);
+	// No ground truth on this example -> no opinion. Keeps a partial rollout well-defined.
+	if (!expected || expected.requiredToolGroups.length === 0) return [];
+	if (!trajectory) return [];
+
+	const called = new Set(trajectory.calls.map((c) => c.toolName));
+	const satisfied: string[] = [];
+	const missing: string[] = [];
+	for (const group of expected.requiredToolGroups) {
+		// Disjunctive within a group: any member satisfies it.
+		if (group.anyOf.some((name) => called.has(name))) satisfied.push(group.anyOf[0] ?? "");
+		else missing.push(`[${group.anyOf.join(" | ")}] (${group.why})`);
+	}
+
+	const forbiddenCalled = (expected.forbiddenTools ?? []).filter((name) => called.has(name));
+	const groupScore = satisfied.length / expected.requiredToolGroups.length;
+	// A forbidden call is a correctness failure, not a style issue: it zeroes the key rather
+	// than shading it, so it cannot hide behind otherwise-satisfied groups.
+	const score = forbiddenCalled.length > 0 ? 0 : groupScore;
+
+	const parts: string[] = [`${satisfied.length}/${expected.requiredToolGroups.length} required tool group(s) fired`];
+	if (missing.length > 0) parts.push(`missing: ${missing.join("; ")}`);
+	if (forbiddenCalled.length > 0) parts.push(`FORBIDDEN tool(s) called: ${forbiddenCalled.join(", ")}`);
+	return [{ key: "expected_tools_fired", score, comment: parts.join(" -- ") }];
+}
+
+// "Did the right data come back." Reads the response-health findings the trajectory projection
+// derived in-process from rawJson (the payload itself never reaches LangSmith).
+export function toolResponseHealth(run: Run, example?: Example): { key: string; score: number; comment: string }[] {
+	const trajectory = readTrajectory(run);
+	if (!trajectory || trajectory.totalCalls === 0) return [];
+	const findings = (run.outputs as { output?: { responseHealth?: unknown } } | undefined)?.output?.responseHealth;
+	if (!Array.isArray(findings)) return [];
+	const typed = findings as ResponseHealthFinding[];
+	// Binary: any structural problem in what the tools returned fails the key. Unlike the rate
+	// metrics, one bad payload is not diluted by a hundred healthy ones -- an empty known-good
+	// anchor or a 1000x unit error is a defect regardless of how much else worked.
+	const score = typed.length === 0 ? 1 : 0;
+	return [
+		{
+			key: "tool_response_health",
+			score,
+			comment:
+				typed.length === 0
+					? `No response-health findings across ${trajectory.totalCalls} call(s)`
+					: typed.map((f) => `${f.rule} on ${f.toolName}: ${f.detail}`).join(" | "),
+		},
+	];
+}
+
+// SOFT comparative signal -- gate nothing on it. State carries toolName but NOT args (they are
+// deliberately not projected; see the ToolCallRecord privacy invariant), so this cannot tell a
+// paginated sweep with an advancing cursor from a genuinely redundant repeat. Useful for "did
+// this run call the same tool more times than that one", not as a correctness threshold.
+export function toolEfficiency(run: Run, example?: Example): { key: string; score: number; comment: string }[] {
+	const trajectory = readTrajectory(run);
+	if (!trajectory || trajectory.totalCalls === 0) return [];
+
+	// Exclusions, both mandatory or the metric is noise:
+	//  - alignment retries are the supervisor deliberately re-dispatching a failed sub-agent,
+	//    not the model repeating itself
+	//  - a retry after a retryable-category failure (throttled/timeout/5xx) is correct behavior
+	const graded = trajectory.calls.filter(
+		(call) => !call.isAlignmentRetry && !(call.category !== undefined && isRetryableCategory(call.category)),
+	);
+	if (graded.length === 0) return [];
+
+	const distinct = new Set(graded.map(callIdentity));
+	const score = distinct.size / graded.length;
+	const repeats = graded.length - distinct.size;
+	return [
+		{
+			key: "tool_efficiency",
+			score,
+			comment:
+				repeats === 0
+					? `${graded.length} graded call(s), no repeats`
+					: `${repeats} repeated call(s) across ${graded.length} graded (soft signal: args are not observable, so a paginated sweep reads as a repeat)`,
+		},
+	];
 }

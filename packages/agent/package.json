@@ -13,7 +13,9 @@
 		"eval:upload-incident-replay-dataset": "bun --env-file=../../.env run src/eval/build-incident-replay-dataset.ts",
 		"eval:incident-replay": "bun --env-file=../../.env run src/eval/run-incident-replay-eval.ts",
 		"skill:promote": "bun --env-file=../../.env src/skill-promote-cli.ts",
-		"model:probe": "bun --env-file=../../.env src/eval/probe-model.ts"
+		"model:probe": "bun --env-file=../../.env src/eval/probe-model.ts",
+		"eval:upload-mcp-tool-dataset": "bun --env-file=../../.env run src/eval/build-mcp-tool-dataset.ts",
+		"eval:mcp-tool": "bun --env-file=../../.env run src/eval/run-mcp-tool-eval.ts"
 	},
 	"dependencies": {
 		"@devops-agent/checkpointer": "workspace:*",

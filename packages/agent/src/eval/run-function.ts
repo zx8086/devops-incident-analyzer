@@ -15,7 +15,12 @@ import {
 	runWithExampleTag,
 } from "./fixture-recorder.ts";
 import { buildSubagentReports } from "./subagent-reports.ts";
-import { buildToolTrajectory, type ToolTrajectory } from "./tool-trajectory.ts";
+import {
+	buildToolTrajectory,
+	checkResponseHealth,
+	type ResponseHealthFinding,
+	type ToolTrajectory,
+} from "./tool-trajectory.ts";
 
 // SIO-1371 (CodeRabbit PR #590): dataset examples arrive from LangSmith as untyped JSON --
 // validate at the boundary so a malformed example fails loudly as a harness error instead of
@@ -29,6 +34,11 @@ const RunAgentInputsSchema = z.object({
 	uiSelectedDataSources: z.array(z.string()).optional(),
 	uiSelectedElasticDeployments: z.array(z.string()).optional(),
 	uiSelectedAwsEstates: z.array(z.string()).optional(),
+	// SIO-1398: tool names the example declares as known-good live anchors -- they must return
+	// rows, so an empty result is a finding rather than a result. Carried on INPUTS rather than
+	// outputs because only inputs reach this target function, and the empty-anchor check needs
+	// rawJson, which exists only here (the trajectory deliberately drops it).
+	knownGoodAnchorTools: z.array(z.string()).optional(),
 });
 
 let cachedGraph: Awaited<ReturnType<typeof buildGraph>> | undefined;
@@ -117,6 +127,17 @@ export const FrozenOutputSchema = z.object({
 	firstAttempts: z.array(FirstAttemptSummarySchema),
 	subagentReports: z.record(z.string(), z.string()),
 	toolTrajectory: FrozenToolTrajectorySchema,
+	// Same default rationale as toolTrajectory: absent on every pre-SIO-1398 fixture.
+	responseHealth: z
+		.array(
+			z.object({
+				rule: z.enum(["prose-only-error", "empty-anchor", "latency-unit-confusion", "future-dated-window"]),
+				dataSourceId: z.string(),
+				toolName: z.string(),
+				detail: z.string(),
+			}),
+		)
+		.default([]),
 });
 
 let frozenOutputs: Map<string, unknown> | undefined;
@@ -147,6 +168,7 @@ export async function runAgent(inputs: z.infer<typeof RunAgentInputsSchema>): Pr
 		firstAttempts: FirstAttemptSummary[];
 		subagentReports: { [dataSourceId: string]: string };
 		toolTrajectory: ToolTrajectory;
+		responseHealth: ResponseHealthFinding[];
 	};
 }> {
 	const parsed = RunAgentInputsSchema.parse(inputs);
@@ -198,6 +220,18 @@ export async function runAgent(inputs: z.infer<typeof RunAgentInputsSchema>): Pr
 		// Carries tool names, closed-enum classifications, and counts only -- never args or
 		// rawJson (see the privacy invariant on ToolCallRecord).
 		const toolTrajectory = buildToolTrajectory(finalState.dataSourceResults ?? []);
+		// Response-health findings are computed HERE, in-process, because this is the only place
+		// rawJson exists -- the trajectory deliberately drops it, and the evaluator (which runs
+		// against the LangSmith run, not the graph state) could never see it. The findings
+		// themselves are name+rule+detail only, so no payload rides along.
+		//
+		// The known-good anchor names ride on the example's INPUTS (not outputs) precisely so the
+		// target function can see them: LangSmith passes only inputs here, and the empty-anchor
+		// rule needs to know which tools were promised to return rows.
+		const responseHealth = checkResponseHealth(
+			finalState.dataSourceResults ?? [],
+			new Set(parsed.knownGoodAnchorTools ?? []),
+		);
 		return {
 			output: {
 				response: responseText,
@@ -206,6 +240,7 @@ export async function runAgent(inputs: z.infer<typeof RunAgentInputsSchema>): Pr
 				firstAttempts,
 				subagentReports,
 				toolTrajectory,
+				responseHealth,
 			},
 		};
 	};
