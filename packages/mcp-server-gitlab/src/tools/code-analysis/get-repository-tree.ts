@@ -5,9 +5,10 @@ import { z } from "zod";
 import type { GitLabRestClient } from "../../gitlab-client/index.js";
 import { traceToolCall } from "../../utils/tracing.js";
 import { restErrorResult } from "../error-envelope.js";
+import { ProjectIdParam } from "./project-id-param.js";
 
 const GetRepositoryTreeParams = z.object({
-	project_id: z.string().describe("GitLab project ID or URL-encoded path"),
+	project_id: ProjectIdParam,
 	path: z.string().optional().describe("Directory path to list (default: root)"),
 	ref: z.string().optional().describe("Branch, tag, or commit SHA (default: default branch)"),
 	recursive: z.boolean().optional().describe("List files recursively (default: false)"),

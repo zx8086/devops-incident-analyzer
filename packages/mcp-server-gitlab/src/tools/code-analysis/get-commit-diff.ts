@@ -5,9 +5,10 @@ import { z } from "zod";
 import type { GitLabRestClient } from "../../gitlab-client/index.js";
 import { traceToolCall } from "../../utils/tracing.js";
 import { restErrorResult } from "../error-envelope.js";
+import { ProjectIdParam } from "./project-id-param.js";
 
 const GetCommitDiffParams = z.object({
-	project_id: z.string().describe("GitLab project ID or URL-encoded path"),
+	project_id: ProjectIdParam,
 	sha: z.string().describe("Commit SHA to get the diff for"),
 });
 
