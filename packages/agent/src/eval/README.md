@@ -31,8 +31,11 @@ bun run eval:incident-replay -- --sub-agent-model claude-haiku-4-5 --repetitions
 - `response_quality` -- holistic 1-10 (normalized 0-1), root-cause-capped in code (SIO-1372)
 - `root_cause_accuracy` -- 1 / 0.5 / 0; omitted when not determinable
 - `evidence_<datasource>` -- per-datasource verdicts from the holistic judge (SIO-1374)
-- `subagent_accuracy_<datasource>` -- independent judge over raw serialized sub-agent findings,
-  isolating the sub-agent model from the aggregator (SIO-1374)
+- `subagent_accuracy_<datasource>` -- independent judge over each sub-agent's own report
+  (narrative + labeled typed findings, SIO-1405; typed findings alone under-covered the real
+  evidence surface), isolating the sub-agent model from the aggregator (SIO-1374). Scores
+  before/after the SIO-1405 serialization change are NOT comparable -- the experiment's gitSha
+  metadata marks the boundary.
 - `datasources_covered`, `confidence_threshold` -- deterministic code checks
 
 Judge-emitted datasource names are canonicalized (`elasticsearch`->`elastic`,
