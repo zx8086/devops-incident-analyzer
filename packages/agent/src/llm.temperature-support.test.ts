@@ -97,7 +97,8 @@ describe("subAgent resolves its own manifest model (SIO-1235)", () => {
 	// from the sub-agent manifest, not the root" assertion below vacuous. Sonnet 4.6 (SIO-1404:
 	// restored from the SIO-1367 haiku downgrade after the SIO-1380 baseline showed the quality
 	// cost was real) differs from ROOT (sonnet-5) so that property holds, and differs from the
-	// light tier's hardcoded haiku so no assertion here can pass by tier coincidence.
+	// light tier's model (haiku by default, configurable via the manifest's lightTierModel since
+	// SIO-1372) so no assertion here can pass by tier coincidence.
 	const SUB = "eu.anthropic.claude-sonnet-4-6";
 	const ROOT = "eu.anthropic.claude-sonnet-5";
 

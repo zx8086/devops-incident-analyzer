@@ -240,17 +240,20 @@ describe("resolveRoleModelConfig provenance (SIO-1235)", () => {
 describe("resolveRoleModelConfig eval override (SIO-1371)", () => {
 	const agent = loadAgent(join(import.meta.dir, "../../../agents/incident-analyzer"));
 
+	// CodeRabbit (PR #601): the override value must differ from the manifest default (now
+	// claude-sonnet-4-6 after SIO-1404), or the first assertion passes even with override
+	// handling removed entirely. opus-4-8 is registered and matches neither manifest nor tier.
 	test("EVAL_SUB_AGENT_MODEL_OVERRIDE swaps preferred, drops fallback, keeps source", () => {
-		const env = { EVAL_SUB_AGENT_MODEL_OVERRIDE: "claude-sonnet-4-6" } as NodeJS.ProcessEnv;
+		const env = { EVAL_SUB_AGENT_MODEL_OVERRIDE: "claude-opus-4-8" } as NodeJS.ProcessEnv;
 		const resolved = resolveRoleModelConfig("subAgent", agent, "gitlab-agent", env);
-		expect(resolved.modelConfig?.preferred).toBe("claude-sonnet-4-6");
+		expect(resolved.modelConfig?.preferred).toBe("claude-opus-4-8");
 		// The override isolates ONE model's behavior -- a manifest fallback chain must not ride along.
 		expect(resolved.modelConfig?.fallback).toBeUndefined();
 		expect(resolved.source).toBe("sub-agent-manifest");
 	});
 
 	test("the sub-agent override does NOT leak into non-subAgent roles", () => {
-		const env = { EVAL_SUB_AGENT_MODEL_OVERRIDE: "claude-sonnet-4-6" } as NodeJS.ProcessEnv;
+		const env = { EVAL_SUB_AGENT_MODEL_OVERRIDE: "claude-opus-4-8" } as NodeJS.ProcessEnv;
 		const resolved = resolveRoleModelConfig("aggregator", agent, undefined, env);
 		expect(resolved.modelConfig?.preferred).toBe(agent.manifest.model?.preferred);
 	});
