@@ -16,6 +16,8 @@ import {
 	ARG_VALIDATION_TEXT_RE,
 	classifyFailureText,
 	extractErrorTextFromContent,
+	hasStructuredEnvelope,
+	TextContentBlockSchema,
 	type ToolCallFailureClass,
 } from "./tool-call-metrics.ts";
 import { buildToolErrorEnvelope } from "./tool-error.ts";
@@ -79,14 +81,17 @@ function stampArgValidationEnvelope(result: unknown): void {
 	try {
 		const content = (result as { content?: unknown }).content;
 		if (!Array.isArray(content)) return;
-		const texts = content.filter(
-			(c): c is { type: "text"; text: string } =>
-				typeof c === "object" &&
-				c !== null &&
-				(c as { type?: unknown }).type === "text" &&
-				typeof (c as { text?: unknown }).text === "string",
-		);
-		if (texts.some((c) => c.text.includes('"_error"'))) return;
+		// SIO-1407 (CodeRabbit): blocks are gated by the same Zod schema the
+		// classifier uses; mutation targets the ORIGINAL block object (safeParse
+		// output is a copy), keyed by the validated text.
+		const texts = content.flatMap((block) => {
+			const parsed = TextContentBlockSchema.safeParse(block);
+			return parsed.success ? [{ block: block as { text: string }, text: parsed.data.text }] : [];
+		});
+		// SIO-1407 (CodeRabbit): STRUCTURAL envelope check -- a zod issue path for
+		// an input field literally named "_error" contains the '"_error"' bytes
+		// without any envelope, and must not suppress stamping.
+		if (texts.some((c) => hasStructuredEnvelope(c.text))) return;
 		const target = texts.find((c) => ARG_VALIDATION_TEXT_RE.test(c.text.trim()));
 		if (!target) return;
 		const firstLine = target.text.trim().split("\n")[0]?.slice(0, 300) ?? "invalid tool arguments";
@@ -96,7 +101,7 @@ function stampArgValidationEnvelope(result: unknown): void {
 			advice:
 				"The tool arguments failed schema validation. Fix the arguments per the issues listed in this message and retry; do not re-issue the call unchanged.",
 		});
-		target.text = `${target.text}\n\n${JSON.stringify(envelope)}`;
+		target.block.text = `${target.text}\n\n${JSON.stringify(envelope)}`;
 	} catch {
 		// stamping is best-effort and must never break dispatch
 	}

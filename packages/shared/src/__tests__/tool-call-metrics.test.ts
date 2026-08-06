@@ -129,6 +129,9 @@ describe("classifyFailureText", () => {
 		expect(classifyFailureText("Invalid arguments for tool kafka_list_topics: [bad]")).toBe("bad-input");
 		// "toolsmith" must not match the "tool <name>" form
 		expect(classifyFailureText("Invalid arguments for toolsmith")).toBe("unstructured");
+		// SIO-1407 (CodeRabbit): the ": [" zod-payload delimiter is REQUIRED -- a
+		// tool's own prose mentioning the phrase must never classify (or be stamped)
+		expect(classifyFailureText("Invalid arguments for tool foo, please retry with a filter")).toBe("unstructured");
 	});
 
 	// SIO-1402: the SDK RESOLVES an unknown tool name into this exact error text

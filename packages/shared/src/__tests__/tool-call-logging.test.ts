@@ -214,6 +214,42 @@ describe("installToolCallLogging", () => {
 		expect(envelope._error.kind).toBe("bad-input");
 	});
 
+	// SIO-1407 (CodeRabbit): a schema field literally named "_error" puts the bytes
+	// '"_error"' into the zod issue path -- the OLD substring skip would have
+	// suppressed stamping; the structural check must not.
+	test("a rejected schema field named _error still gets stamped", async () => {
+		const server = new McpServer(
+			{ name: "log-test", version: "0.0.0" },
+			{ capabilities: { tools: { listChanged: true } } as Record<string, unknown> },
+		);
+		server.registerTool(
+			"underscore_error_tool",
+			{ description: "tool", inputSchema: z.object({ _error: z.string() }).shape },
+			async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
+		);
+		const outcomes: ToolCallOutcome[] = [];
+		const { logger } = recordingLogger();
+		installToolCallLogging(
+			server,
+			logger,
+			() => 0,
+			(o) => outcomes.push(o),
+		);
+
+		const result = (await dispatchToolsCall(server, "underscore_error_tool")) as {
+			isError?: boolean;
+			content: Array<{ text: string }>;
+		};
+
+		expect(result.isError).toBe(true);
+		expect(outcomes[0]?.failureClass).toBe("bad-input");
+		const text = result.content[0]?.text ?? "";
+		const envelopeStart = text.lastIndexOf('{"_error"');
+		expect(envelopeStart).toBeGreaterThan(0);
+		const envelope = JSON.parse(text.slice(envelopeStart)) as { _error: { kind: string } };
+		expect(envelope._error.kind).toBe("bad-input");
+	});
+
 	test("stamping leaves non-matching error text byte-identical and never double-stamps envelopes", async () => {
 		const proseServer = buildServerWithTool("prose_fail", async () => ({
 			content: [{ type: "text", text: "Index not found: logs-x" }],
