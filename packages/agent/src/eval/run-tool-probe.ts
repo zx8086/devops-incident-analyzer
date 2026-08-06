@@ -61,10 +61,26 @@ const PROBE_ARGS: ProbeArgs = {
 	gitlab_get_merge_request_notes: { project_id: LIVE_ANCHORS.gitlab.projectId, merge_request_iid: 383 },
 	gitlab_get_merge_request_pipelines: { id: LIVE_ANCHORS.gitlab.projectId, merge_request_iid: 383 },
 	gitlab_semantic_code_search: { id: LIVE_ANCHORS.gitlab.projectId, q: "styles" },
-	gitlab_orbit_query_graph: { query: "MATCH (n) RETURN n LIMIT 1" },
+	// Orbit's `query` is a DSL OBJECT, not Cypher. Single-node `traversal` is the search shape
+	// (Orbit has no `search` query_type); filters take operator objects. Verified live: row_count
+	// 3, format_version 5.0.1. An earlier probe sent a Cypher string and got -32602, which is why
+	// this tool was briefly written off as uncoverable.
+	gitlab_orbit_query_graph: {
+		query: {
+			query_type: "traversal",
+			nodes: [
+				{ id: "file", entity: "File", filters: { path: { ends_with: "README.md" } }, columns: ["path", "language"] },
+			],
+			limit: 3,
+		},
+	},
 	gitlab_blast_radius: { symbol: "main" },
 	gitlab_cross_project_callers: { fqn: "main" },
 	gitlab_search: { scope: "projects", search: LIVE_ANCHORS.gitlab.searchableNamespace },
+	gitlab_get_commit_diff: { project_id: LIVE_ANCHORS.gitlab.projectId, sha: LIVE_ANCHORS.gitlab.commitSha },
+	gitlab_get_issue: { id: LIVE_ANCHORS.gitlab.projectId, issue_iid: 1 },
+	gitlab_get_job_log: { id: LIVE_ANCHORS.gitlab.projectId, job_id: LIVE_ANCHORS.gitlab.jobId },
+	gitlab_get_pipeline_jobs: { id: LIVE_ANCHORS.gitlab.projectId, pipeline_id: LIVE_ANCHORS.gitlab.pipelineId },
 	gitlab_recent_deploys: { since: "2026-07-01" },
 	gitlab_pipeline_failures: { since: "2026-07-01" },
 	// atlassian

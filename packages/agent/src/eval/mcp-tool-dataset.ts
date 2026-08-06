@@ -74,6 +74,14 @@ export const LIVE_ANCHORS = {
 		pipelineId: 2719503800,
 		jobId: 15629731761,
 		filePath: "README.md",
+		// Orbit's `query` is a raw DSL OBJECT, not a Cypher string. Single-node `traversal` IS the
+		// search shape -- Orbit has no separate `search` query_type. Verified live twice
+		// (row_count 3, format_version 5.0.1) with this exact shape:
+		//   {query_type:"traversal", nodes:[{id,entity,filters,columns}], limit}
+		// Filters use operator objects (`{"path":{"ends_with":"README.md"}}`), not bare values,
+		// and `node_ids` takes internal graph ids -- passing an MR iid there returns 0 rows
+		// without erroring, which is the trap that makes a wrong query look like empty data.
+		orbitFileFilter: "README.md",
 	},
 	// ATLASSIAN_SITE_NAME in the live .env.
 	atlassian: { site: "pvhcorp" },
@@ -649,12 +657,38 @@ const EXAMPLES: EvalExample[] = [
 		},
 		metadata: { ticketKey: "SIO-1398-gitlab-issue-lookup", queryProvenance: "reconstructed", era: "2026-08" },
 	},
-	// gitlab_orbit_query_graph is deliberately NOT covered. Its `query` parameter is a raw Orbit
-	// DSL OBJECT (query_type + node + filters), not a Cypher string, and building a valid one
-	// requires reading gitlab_graph_schema first -- the tool's own description says so. A probe
-	// with a plausible-looking query returns "schema violation" from the Orbit API. Writing an
-	// example around a DSL shape I have not verified would assert a contract I cannot prove, so
-	// it stays uncovered and honest rather than covered and wrong.
+	{
+		inputs: {
+			query: `Using the GitLab code graph, find the indexed files whose path ends with ${LIVE_ANCHORS.gitlab.orbitFileFilter} and report their language. Check the graph schema first so the query is well-formed.`,
+			uiSelectedDataSources: ["gitlab"],
+		},
+		outputs: {
+			expectedDatasources: ["gitlab"],
+			minConfidence: 0.6,
+			qualityRubric:
+				"Response should name real indexed file paths from the code graph. If the query is rejected the response should say the graph query was malformed or the project is not indexed -- NOT report an absence of files, which would be a false negative.",
+			expectedToolUse: {
+				requiredToolGroups: [
+					{
+						dataSource: "gitlab",
+						anyOf: ["gitlab_orbit_query_graph"],
+						why: "the last uncovered graph tool, in TYPED_FINDING_TOOLS and feeding the orbit extractor. Single-tool group deliberately: its `query` is a raw DSL object, so this measures whether the model can build a VALID one, which is the hard part",
+					},
+					{
+						dataSource: "gitlab",
+						anyOf: ["gitlab_graph_schema"],
+						why: "orbit_query_graph's own description says to call this first; pinning it checks the model follows the documented two-step rather than guessing a query shape",
+					},
+				],
+				forbiddenTools: ["gitlab_create_issue", "gitlab_create_merge_request"],
+				// Verified live, twice: the traversal shape above returns row_count 3 against this
+				// filter. An empty result is therefore a real finding -- most likely a malformed
+				// query, since a wrong `node_ids` returns 0 rows WITHOUT erroring.
+				knownGoodAnchors: [{ toolName: "gitlab_orbit_query_graph", mustReturnRows: true }],
+			},
+		},
+		metadata: { ticketKey: "SIO-1398-gitlab-orbit-graph", queryProvenance: "reconstructed", era: "2026-08" },
+	},
 	{
 		inputs: {
 			query: `Search GitLab across the ${LIVE_ANCHORS.gitlab.searchableNamespace} namespace for code related to "styles", then report what the code graph knows: recent deploys, failing pipelines, and any known vulnerabilities.`,
