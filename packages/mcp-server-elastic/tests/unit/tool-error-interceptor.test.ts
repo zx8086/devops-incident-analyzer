@@ -9,7 +9,11 @@ import { buildToolErrorEnvelope, isDegradingCategory, TOOL_ERROR_KIND_TO_CATEGOR
 import { errors } from "@elastic/elasticsearch";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { classifyElasticErrorFromMessage } from "../../src/lib/classifyElasticError.js";
-import { classifyForEnvelope, withStructuredToolError } from "../../src/lib/toolErrorInterceptor.js";
+import {
+	classifyForEnvelope,
+	shouldRethrowRawForClassification,
+	withStructuredToolError,
+} from "../../src/lib/toolErrorInterceptor.js";
 
 const { ResponseError } = errors;
 
@@ -172,5 +176,25 @@ describe("classifyElasticErrorFromMessage", () => {
 		const err = esResponseError("security_exception", 403);
 		(err as { message: string }).message = "index_not_found_exception";
 		expect(classifyForEnvelope(err)).toBe("auth-denied");
+	});
+});
+
+describe("shouldRethrowRawForClassification (SIO-1396)", () => {
+	test("true for structurally-classifiable SDK errors", () => {
+		// These carry their classification in the object's TYPE, which a rebuilt McpError destroys.
+		expect(shouldRethrowRawForClassification(new errors.ConnectionError("connect ECONNREFUSED"))).toBe(true);
+		expect(shouldRethrowRawForClassification(new errors.TimeoutError("timed out"))).toBe(true);
+		expect(shouldRethrowRawForClassification(esResponseError("index_not_found_exception", 404))).toBe(true);
+	});
+
+	test("false for anything not structurally recognizable", () => {
+		// The catch-all `"execution"` arm also covers genuine server errors and plain bugs. Those keep
+		// their hand-written per-tool message, which is more useful to the model than a bare SDK
+		// string -- and blanket-rethrowing would mislabel them as transient/retryable.
+		expect(shouldRethrowRawForClassification(new Error("something unrecognizable"))).toBe(false);
+		expect(shouldRethrowRawForClassification("a bare string")).toBe(false);
+		// Deliberately excluded: a message that only LOOKS like an ES type. The existing factory arms
+		// handle those with better prose, and the interceptor's message fallback still catches them.
+		expect(shouldRethrowRawForClassification(new Error("index_not_found_exception in text only"))).toBe(false);
 	});
 });

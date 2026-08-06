@@ -6,7 +6,7 @@ import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { ENVELOPE_KIND_BY_TYPE } from "../../lib/toolErrorInterceptor.js";
+import { ENVELOPE_KIND_BY_TYPE, shouldRethrowRawForClassification } from "../../lib/toolErrorInterceptor.js";
 import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import { booleanField } from "../../utils/zodHelpers.js";
@@ -133,6 +133,12 @@ export const registerGetIndexInfoTool: ToolRegistrationFunction = (server: McpSe
 					});
 				}
 			}
+
+			// SIO-1396: rethrow a structurally-classifiable SDK error (ConnectionError -> network,
+			// TimeoutError, ResponseError) RAW so the central interceptor stamps it. Rebuilding an
+			// McpError here discards the prototype/meta, which is why connection failures arrived
+			// unstamped. Unrecognizable errors keep the hand-written message below.
+			if (shouldRethrowRawForClassification(error)) throw error;
 
 			throw createGetIndexInfoMcpError(error instanceof Error ? error.message : String(error), {
 				type: "execution",

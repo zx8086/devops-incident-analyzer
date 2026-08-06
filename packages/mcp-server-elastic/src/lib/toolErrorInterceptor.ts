@@ -52,6 +52,24 @@ export function classifyForEnvelope(error: unknown): ToolErrorKind {
 	return classifyElasticErrorFromMessage(messageOf(error));
 }
 
+// SIO-1396: for the CATCH-ALL arm of an incident-path tool's error factory (the `"execution"` case).
+// Those arms rebuild an McpError from `error.message`, which discards the raw SDK error -- so a
+// ConnectionError never reaches the interceptor's `instanceof` checks and lands unstamped, even
+// though classifyElasticError maps it to "network" perfectly well when it does arrive intact.
+//
+// Returns true when the caller should rethrow the RAW error and let the interceptor classify it.
+// Deliberately NOT a blanket "always rethrow on execution": that arm is the catch-all and also
+// covers genuine server errors and non-ES bugs. Only errors this recognizes structurally (a real
+// SDK ConnectionError/TimeoutError/ResponseError) qualify; everything else keeps its hand-written
+// per-tool message, which is more useful to the model than a bare SDK string.
+export function shouldRethrowRawForClassification(error: unknown): boolean {
+	// Message-text classification is deliberately excluded here: the existing factories already
+	// handle the text-recognizable cases (index_not_found, timeout) in their own arms with better
+	// prose, and the interceptor's message fallback still catches them after the factory rebuilds.
+	// This is only about errors whose STRUCTURE carries the classification.
+	return classifyElasticError(error) !== "unknown";
+}
+
 // Wraps a tool handler so any thrown error leaves with a shared envelope when-and-only-when it can
 // be classified confidently.
 export function withStructuredToolError<TArgs, TExtra, TResult>(

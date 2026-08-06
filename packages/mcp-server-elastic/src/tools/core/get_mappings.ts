@@ -6,7 +6,7 @@ import type { Client } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { ENVELOPE_KIND_BY_TYPE } from "../../lib/toolErrorInterceptor.js";
+import { ENVELOPE_KIND_BY_TYPE, shouldRethrowRawForClassification } from "../../lib/toolErrorInterceptor.js";
 import { getDiscoveryRequestOptions } from "../../utils/discoveryRequestOptions.js";
 import { logger } from "../../utils/logger.js";
 import { throwZodValidationMcpError } from "../../utils/toolErrorHandling.js";
@@ -107,6 +107,13 @@ export const registerGetMappingsTool: ToolRegistrationFunction = (server: McpSer
 					);
 				}
 			}
+
+			// SIO-1396: a structurally-classifiable SDK error (ConnectionError -> network,
+			// TimeoutError, ResponseError) is rethrown RAW so the central interceptor can stamp it.
+			// Rebuilding an McpError here discards `meta`/the prototype, which is why a connection
+			// failure reached the agent unstamped. Anything not structurally recognizable keeps the
+			// hand-written message below -- more useful to the model than a bare SDK string.
+			if (shouldRethrowRawForClassification(error)) throw error;
 
 			throw createGetMappingsMcpError(error instanceof Error ? error.message : String(error), {
 				type: "execution",
