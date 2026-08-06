@@ -5,6 +5,7 @@ import * as path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { config } from "../config";
 import { logger } from "../utils/logger";
+import type { ResourceRegistry } from "./resource-registry";
 
 /**
  * Playbook handler class that manages access to playbook content
@@ -236,36 +237,37 @@ export async function loadPlaybooks(): Promise<PlaybookRegistry | null> {
  * the old floating-promise registerAllResources call). It has been removed -- server.ts's
  * assignment is now the sole, canonical implementation.
  */
-export function registerPlaybookResources(server: McpServer, playbooks: PlaybookRegistry | null): void {
+export function registerPlaybookResources(
+	server: McpServer,
+	playbooks: PlaybookRegistry | null,
+	registry: ResourceRegistry,
+): void {
 	if (!playbooks) {
 		return;
 	}
 	const { handler, resourceIds } = playbooks;
 
 	// Register resources - both for resources/list and resources/read
-	// First register with the original method that works with resources/read
-	server.resource(
-		"playbook-directory", // Resource ID
-		"playbook://", // URI
-		async (uri) => {
-			logger.info({ uri: uri.href }, "Handling direct resource request for playbook-directory");
-			return handler.listPlaybooks();
-		},
-	);
+	// SIO-1412: each handler const is registered on the SDK server AND in couchbase's
+	// own registry, so readResourceByUri dispatches without SDK-internal reach-in.
+	const readPlaybookDirectory = async (uri: URL) => {
+		logger.info({ uri: uri.href }, "Handling direct resource request for playbook-directory");
+		return handler.listPlaybooks();
+	};
+	server.resource("playbook-directory", "playbook://", readPlaybookDirectory);
+	registry.addExact("playbook://", readPlaybookDirectory);
 
 	// Also register specific handlers for individual playbooks
 	for (const resourceId of resourceIds) {
 		const resourceUri = `playbook://${resourceId}`;
 
 		// Register each playbook as a separate resource
-		server.resource(
-			`playbook-${resourceId}`, // Resource ID
-			resourceUri, // URI
-			async (uri) => {
-				logger.info({ uri: uri.href }, `Handling direct resource request for playbook: ${resourceId}`);
-				return handler.getPlaybook(resourceId);
-			},
-		);
+		const readPlaybook = async (uri: URL) => {
+			logger.info({ uri: uri.href }, `Handling direct resource request for playbook: ${resourceId}`);
+			return handler.getPlaybook(resourceId);
+		};
+		server.resource(`playbook-${resourceId}`, resourceUri, readPlaybook);
+		registry.addExact(resourceUri, readPlaybook);
 	}
 
 	logger.info("Playbook resources registered successfully");

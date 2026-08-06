@@ -6,6 +6,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { createError } from "../lib/errors";
 import { logger } from "../utils/logger";
+import type { ResourceRegistry } from "./resource-registry";
 
 /**
  * Configuration for the markdown documentation resource
@@ -234,6 +235,7 @@ export function registerMarkdownDocumentationResource(
 	server: McpServer,
 	_bucket: Bucket,
 	config: MarkdownDocsConfig,
+	registry: ResourceRegistry,
 ): DocumentationHandler {
 	// Validate config
 	if (!config.baseDirectory) {
@@ -243,48 +245,47 @@ export function registerMarkdownDocumentationResource(
 	// Create handler instance
 	const handler = new DocumentationHandler(config);
 
+	// SIO-1412: each handler const is registered on the SDK server AND in couchbase's
+	// own registry, so readResourceByUri dispatches without SDK-internal reach-in.
 	// Register the documentation-browser resource
 	logger.info("Registering documentation-browser resource");
-	server.resource("documentation-browser", "docs://", async (uri) => {
+	const readDocumentationBrowser = async (uri: URL) => {
 		logger.info({ uri: uri.href }, "Handling documentation browser request");
 		return handler.listDocumentation();
-	});
+	};
+	server.resource("documentation-browser", "docs://", readDocumentationBrowser);
+	registry.addExact("docs://", readDocumentationBrowser);
 
 	// Register scope-documentation resource with a placeholder implementation
 	logger.info("Registering scope-documentation resource");
-	server.resource(
-		"scope-documentation",
-		"scope-documentation", // Use a simple URI to avoid template issues
-		async (uri) => {
-			// This is a placeholder implementation that doesn't rely on URI parameters
-			logger.info({ uri: uri.href }, "Handling scope documentation request");
-			return handler.getScopeDocumentation("default");
-		},
-	);
+	const readScopeDocumentation = async (uri: URL) => {
+		// This is a placeholder implementation that doesn't rely on URI parameters
+		logger.info({ uri: uri.href }, "Handling scope documentation request");
+		return handler.getScopeDocumentation("default");
+	};
+	// "scope-documentation" is a simple URI to avoid template issues
+	server.resource("scope-documentation", "scope-documentation", readScopeDocumentation);
+	registry.addExact("scope-documentation", readScopeDocumentation);
 
 	// Register collection-documentation resource with a placeholder implementation
 	logger.info("Registering collection-documentation resource");
-	server.resource(
-		"collection-documentation",
-		"collection-documentation", // Use a simple URI to avoid template issues
-		async (uri) => {
-			// This is a placeholder implementation that doesn't rely on URI parameters
-			logger.info({ uri: uri.href }, "Handling collection documentation request");
-			return handler.getCollectionDocumentation("default", "default");
-		},
-	);
+	const readCollectionDocumentation = async (uri: URL) => {
+		// This is a placeholder implementation that doesn't rely on URI parameters
+		logger.info({ uri: uri.href }, "Handling collection documentation request");
+		return handler.getCollectionDocumentation("default", "default");
+	};
+	server.resource("collection-documentation", "collection-documentation", readCollectionDocumentation);
+	registry.addExact("collection-documentation", readCollectionDocumentation);
 
 	// Register documentation-file resource with a placeholder implementation
 	logger.info("Registering documentation-file resource");
-	server.resource(
-		"documentation-file",
-		"documentation-file", // Use a simple URI to avoid template issues
-		async (uri) => {
-			// This is a placeholder implementation that doesn't rely on URI parameters
-			logger.info({ uri: uri.href }, "Handling documentation file request");
-			return handler.getDocumentationFile("default", "default", "default");
-		},
-	);
+	const readDocumentationFile = async (uri: URL) => {
+		// This is a placeholder implementation that doesn't rely on URI parameters
+		logger.info({ uri: uri.href }, "Handling documentation file request");
+		return handler.getDocumentationFile("default", "default", "default");
+	};
+	server.resource("documentation-file", "documentation-file", readDocumentationFile);
+	registry.addExact("documentation-file", readDocumentationFile);
 
 	// SIO-1052: the old "custom handler for resources/templates/list" block here was dead code --
 	// McpServer has no own setRequestHandler, so it always fell through to a no-op (same verified
