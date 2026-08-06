@@ -37,6 +37,7 @@ COPY packages/mcp-server-kafka/package.json packages/mcp-server-kafka/
 COPY packages/mcp-server-knowledge-graph/package.json packages/mcp-server-knowledge-graph/
 COPY packages/mcp-server-konnect/package.json packages/mcp-server-konnect/
 COPY packages/observability/package.json packages/observability/
+COPY packages/tools-verify/package.json packages/tools-verify/
 COPY apps/web/package.json apps/web/
 
 RUN bun install --frozen-lockfile --production
