@@ -97,6 +97,21 @@ describe("isOrbitIndexed (legacy shape)", () => {
 	});
 });
 
+// SIO-1406: gitlab.com was observed returning system: null (boot log 2026-08-06);
+// the schema must parse it (not throw) and availability must resolve false.
+describe("OrbitStatusResponseSchema null tolerance (SIO-1406)", () => {
+	test("system: null parses and resolves not-indexed", () => {
+		const parsed = OrbitStatusResponseSchema.parse({ user: { available: true }, system: null });
+		expect(parsed.system).toBeNull();
+		expect(isOrbitIndexed(parsed)).toBe(false);
+	});
+
+	test("user: null parses; legacy fields still decide availability", () => {
+		const parsed = OrbitStatusResponseSchema.parse({ user: null, status: "indexed" });
+		expect(isOrbitIndexed(parsed)).toBe(true);
+	});
+});
+
 describe("isOrbitIndexed (live gitlab.com system/components shape, SIO-1077)", () => {
 	test("true for a healthy Orbit with both indexers ready", () => {
 		const parsed = OrbitStatusResponseSchema.parse(LIVE_HEALTHY_STATUS);

@@ -54,8 +54,13 @@ const OrbitComponentSchema = z
 
 export const OrbitStatusResponseSchema = z
 	.object({
-		// Live shape (gitlab.com Orbit >= 0.86.0)
-		user: z.object({ available: z.boolean().optional() }).catchall(z.unknown()).optional(),
+		// Live shape (gitlab.com Orbit >= 0.86.0). SIO-1406: `user`/`system` are
+		// nullable, not just optional -- gitlab.com was observed returning
+		// `system: null` (2026-08-06 boot log), and .optional() alone makes the
+		// whole parse THROW on it, turning a routine degraded-status payload into
+		// a ZodError that reads like a client bug. Null parses cleanly and
+		// isOrbitIndexed treats it as not-indexed.
+		user: z.object({ available: z.boolean().optional() }).catchall(z.unknown()).nullish(),
 		system: z
 			.object({
 				status: z.string().optional(), // "healthy" | "unhealthy" | ...
@@ -63,7 +68,7 @@ export const OrbitStatusResponseSchema = z
 				components: z.array(OrbitComponentSchema).optional(),
 			})
 			.catchall(z.unknown())
-			.optional(),
+			.nullish(),
 		// Legacy documented shape (kept for older/self-hosted Orbit)
 		status: z.string().optional(), // "indexed" | "indexing" | ...
 		domains: z
