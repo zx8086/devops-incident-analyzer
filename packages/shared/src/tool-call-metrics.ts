@@ -57,6 +57,15 @@ export function resolveToolCallMetricsDbPath(
 // - "structured-other": a well-formed envelope of any other kind.
 const UNKNOWN_TOOL_TEXT_RE = /^(?:MCP error -\d+: )?Tool \S+ not found$/;
 
+// SIO-1407: the tool-argument validation rejection -- the canonical bad-input
+// event (the eval toolset's tool_arg_validity keys on exactly this). Live wire
+// shape, identical across servers: "MCP error -32602: Input validation error:
+// Invalid arguments for tool <name>: [ <zod issues> ]" (both prefixes optional
+// across SDK versions). Matched before the brace-scan because the zod issue
+// array parses as JSON but carries no { _error } envelope.
+export const ARG_VALIDATION_TEXT_RE =
+	/^(?:MCP error -\d+: )?(?:Input validation error: )?Invalid arguments for tool \S+/;
+
 // SIO-1402 (CodeRabbit): the enum schemas -- not the `in` operator -- gate the
 // envelope fields, so inherited property names ("toString", "__proto__") in a
 // malformed envelope classify unstructured instead of leaking through as
@@ -72,6 +81,7 @@ const EnvelopeFieldsSchema = z.object({
 export function classifyFailureText(text: string | undefined): ToolCallFailureClass {
 	if (!text) return "unstructured";
 	if (UNKNOWN_TOOL_TEXT_RE.test(text.trim())) return "unknown-tool";
+	if (ARG_VALIDATION_TEXT_RE.test(text.trim())) return "bad-input";
 	const start = text.indexOf("{");
 	const end = text.lastIndexOf("}");
 	if (start === -1 || end <= start) return "unstructured";

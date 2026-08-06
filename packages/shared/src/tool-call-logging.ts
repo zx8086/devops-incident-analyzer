@@ -8,8 +8,17 @@
 // the read-only manager, for ALL servers.
 //
 // PII-safe: logs the tool name + timing + ok flag ONLY -- never args or results.
+// SIO-1407: the wrap additionally stamps a { _error: { kind: "bad-input" } }
+// envelope onto argument-validation rejections (see stampArgValidationEnvelope)
+// -- the one result mutation it performs, gated on an unambiguous signature.
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { classifyFailureText, extractErrorTextFromContent, type ToolCallFailureClass } from "./tool-call-metrics.ts";
+import {
+	ARG_VALIDATION_TEXT_RE,
+	classifyFailureText,
+	extractErrorTextFromContent,
+	type ToolCallFailureClass,
+} from "./tool-call-metrics.ts";
+import { buildToolErrorEnvelope } from "./tool-error.ts";
 
 export interface ToolCallLogger {
 	debug?(message: string, meta?: Record<string, unknown>): void;
@@ -54,6 +63,43 @@ function extractToolName(request: unknown): string | undefined {
 // untrusted content blocks identically.
 function extractErrorText(result: unknown): string | undefined {
 	return extractErrorTextFromContent((result as { content?: unknown }).content);
+}
+
+// SIO-1407: argument-validation rejections are the canonical bad-input event,
+// but the validation layer emits prose + raw zod issues with NO { _error }
+// envelope -- so the agent's structural classifier falls back to regexes and
+// lands on unknown. Stamping here (the one seam every server's dispatch passes
+// through) appends a real envelope AFTER the original text: the prose + zod
+// issues stay intact for the model to fix its arguments, and the agent's
+// depth-aware extractEmbeddedErrorObject anchors on "_error" so the interior
+// zod braces cannot derail it. SIO-1388 discipline: stamp ONLY the unambiguous
+// validation signature and never a text that already carries an envelope --
+// anything else is left byte-identical.
+function stampArgValidationEnvelope(result: unknown): void {
+	try {
+		const content = (result as { content?: unknown }).content;
+		if (!Array.isArray(content)) return;
+		const texts = content.filter(
+			(c): c is { type: "text"; text: string } =>
+				typeof c === "object" &&
+				c !== null &&
+				(c as { type?: unknown }).type === "text" &&
+				typeof (c as { text?: unknown }).text === "string",
+		);
+		if (texts.some((c) => c.text.includes('"_error"'))) return;
+		const target = texts.find((c) => ARG_VALIDATION_TEXT_RE.test(c.text.trim()));
+		if (!target) return;
+		const firstLine = target.text.trim().split("\n")[0]?.slice(0, 300) ?? "invalid tool arguments";
+		const envelope = buildToolErrorEnvelope({
+			kind: "bad-input",
+			message: firstLine,
+			advice:
+				"The tool arguments failed schema validation. Fix the arguments per the issues listed in this message and retry; do not re-issue the call unchanged.",
+		});
+		target.text = `${target.text}\n\n${JSON.stringify(envelope)}`;
+	} catch {
+		// stamping is best-effort and must never break dispatch
+	}
 }
 
 // Wraps the McpServer's underlying "tools/call" handler with start/end lifecycle logging.
@@ -105,6 +151,9 @@ export function installToolCallLogging(
 			// only fires on a dispatch-level failure, which is rare.)
 			const durationMs = now() - start;
 			if (isErrorResult(result)) {
+				// SIO-1407: stamp BEFORE classification so both the counters and the
+				// agent see the same structured bad-input envelope.
+				stampArgValidationEnvelope(result);
 				logger.warn("tools/call error", { tool, durationMs });
 				// SIO-1402: classify only on the error path (brace-scan of one text block).
 				emitOutcome({ tool, ok: false, durationMs, failureClass: classifyFailureText(extractErrorText(result)) });
