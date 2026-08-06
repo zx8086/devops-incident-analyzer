@@ -6,6 +6,7 @@
 import { createHash, createHmac } from "node:crypto";
 import type { DataSourceId } from "./datasource.ts";
 import { createMcpLogger, getChildLogger } from "./logger.ts";
+import { createToolCallMetricsRecorder, resolveToolCallMetricsDbPath } from "./tool-call-metrics.ts";
 import type { IdentityCard } from "./transport/identity.ts";
 import { createProxyReadinessProbe } from "./transport/proxy-readiness.ts";
 
@@ -122,6 +123,12 @@ export interface ProxyConfig {
 	 * session-tokens expire).
 	 */
 	credentials: ProxyCredentials | (() => Promise<ProxyCredentials>);
+	/**
+	 * SIO-1400: when set, proxied tools/call terminal outcomes are counted in
+	 * the SQLite usage-counters DB at this path (see tool-call-metrics.ts).
+	 * loadProxyConfigFromEnv fills it from MCP_TOOL_METRICS_DB_PATH.
+	 */
+	metricsDbPath?: string;
 }
 
 /**
@@ -195,7 +202,15 @@ export function loadProxyConfigFromEnv(prefix: string): ProxyConfig {
 		};
 	}
 
-	return { runtimeArn, region, port, qualifier, serverName, credentials };
+	return {
+		runtimeArn,
+		region,
+		port,
+		qualifier,
+		serverName,
+		credentials,
+		metricsDbPath: resolveToolCallMetricsDbPath(),
+	};
 }
 
 // AwsCreds, module-level cachedCreds, clearCredentialCache, and the
@@ -426,6 +441,20 @@ export async function startAgentCoreProxy(
 	const dataSourceId = ROLE_TO_DATASOURCE[role];
 	const logger = getProxyLogger(role);
 
+	// SIO-1400: opt-in SQLite usage counters. Proxy mode bypasses the McpServer
+	// tools/call seam (tool-call-logging.ts), so the proxy records terminal
+	// outcomes itself -- exactly once per logical call; retries are not separate
+	// calls. serverName matches the bootstrap-side naming style so the `server`
+	// column stays uniform across the metrics DB.
+	const toolMetrics = config.metricsDbPath
+		? await createToolCallMetricsRecorder({
+				serverName: ROLE_TO_SERVICE_NAME[role],
+				dbPath: config.metricsDbPath,
+				// adapt to this file's pino-style logger (fields first, message second)
+				logger: { warn: (message, meta) => logger.warn(meta ?? {}, message) },
+			})
+		: undefined;
+
 	// Derive URL pieces from runtimeArn + region. Equivalent to the old
 	// readProxyConfig but using the explicitly-passed config.
 	const encodedArn = encodeURIComponent(config.runtimeArn);
@@ -477,298 +506,315 @@ export async function startAgentCoreProxy(
 	// on the first POST so an idle proxy holds no signal.
 	let currentSessionAbort: AbortController | undefined;
 
-	const server = Bun.serve({
-		port: config.port,
-		hostname: "127.0.0.1",
-		idleTimeout: 120,
+	// SIO-1400 (CodeRabbit): Bun.serve is the only startup step after the metrics
+	// recorder opens that can throw (port bind). Close the recorder before
+	// propagating so a failed proxy start does not leak the SQLite handle.
+	const serveGuarded = <T>(start: () => T): T => {
+		try {
+			return start();
+		} catch (error) {
+			toolMetrics?.close();
+			throw error;
+		}
+	};
 
-		routes: {
-			"/mcp": {
-				POST: async (req: Request) => {
-					const body = await req.text();
-					const tcpMaxAttempts = 2;
-					const requestStart = Date.now();
-					const maxAttempts = jsonRpcRetryMaxAttempts();
-					const deadline = requestStart + jsonRpcRetryDeadlineMs();
+	const server = serveGuarded(() =>
+		Bun.serve({
+			port: config.port,
+			hostname: "127.0.0.1",
+			idleTimeout: 120,
 
-					if (!currentSessionAbort) currentSessionAbort = new AbortController();
-					const sessionAbort = currentSessionAbort;
+			routes: {
+				"/mcp": {
+					POST: async (req: Request) => {
+						const body = await req.text();
+						const tcpMaxAttempts = 2;
+						const requestStart = Date.now();
+						const maxAttempts = jsonRpcRetryMaxAttempts();
+						const deadline = requestStart + jsonRpcRetryDeadlineMs();
 
-					// SIO-626: Log tool calls passing through the proxy for observability.
-					// SIO-1371: "Tool call started" matches the bootstrap path's
-					// createServerTracing.traceToolCall phrasing (server-tracing-factory.ts).
-					let toolName: string | undefined;
-					try {
-						const parsed = JSON.parse(body);
-						if (parsed.method === "tools/call" && parsed.params?.name) {
-							toolName = parsed.params.name;
-							logger.info(
-								{ tool: toolName, dataSource: dataSourceId, id: parsed.id },
-								`Tool call started: ${toolName}`,
-							);
+						if (!currentSessionAbort) currentSessionAbort = new AbortController();
+						const sessionAbort = currentSessionAbort;
+
+						// SIO-626: Log tool calls passing through the proxy for observability.
+						// SIO-1371: "Tool call started" matches the bootstrap path's
+						// createServerTracing.traceToolCall phrasing (server-tracing-factory.ts).
+						let toolName: string | undefined;
+						try {
+							const parsed = JSON.parse(body);
+							if (parsed.method === "tools/call" && parsed.params?.name) {
+								toolName = parsed.params.name;
+								logger.info(
+									{ tool: toolName, dataSource: dataSourceId, id: parsed.id },
+									`Tool call started: ${toolName}`,
+								);
+							}
+						} catch {
+							// Not valid JSON or not a tool call -- continue silently
 						}
-					} catch {
-						// Not valid JSON or not a tool call -- continue silently
-					}
 
-					// SIO-737: Inner TCP-level fetch with the original 2-attempt retry
-					// on TimeoutError/aborted/ECONNRESET. Returns the upstream Response
-					// plus its body (already consumed for classification) or a 502
-					// envelope on terminal TCP failure.
-					const doFetchWithTcpRetry = async (): Promise<{
-						response: Response;
-						clonedBody: string;
-						terminalFailure: boolean;
-					}> => {
-						for (let attempt = 1; attempt <= tcpMaxAttempts; attempt++) {
-							try {
-								const creds = await getCredentials();
-								const targetUrl = new URL(`${basePath}?${queryString}`, baseUrl);
-								const headers = signRequest("POST", targetUrl, body, creds, config.region);
-								if (mcpSessionId) headers["mcp-session-id"] = mcpSessionId;
+						// SIO-737: Inner TCP-level fetch with the original 2-attempt retry
+						// on TimeoutError/aborted/ECONNRESET. Returns the upstream Response
+						// plus its body (already consumed for classification) or a 502
+						// envelope on terminal TCP failure.
+						const doFetchWithTcpRetry = async (): Promise<{
+							response: Response;
+							clonedBody: string;
+							terminalFailure: boolean;
+						}> => {
+							for (let attempt = 1; attempt <= tcpMaxAttempts; attempt++) {
+								try {
+									const creds = await getCredentials();
+									const targetUrl = new URL(`${basePath}?${queryString}`, baseUrl);
+									const headers = signRequest("POST", targetUrl, body, creds, config.region);
+									if (mcpSessionId) headers["mcp-session-id"] = mcpSessionId;
 
-								const response = await fetch(targetUrl.toString(), {
-									method: "POST",
-									headers,
-									body,
-									signal: AbortSignal.any([AbortSignal.timeout(30_000), sessionAbort.signal]),
-								});
+									const response = await fetch(targetUrl.toString(), {
+										method: "POST",
+										headers,
+										body,
+										signal: AbortSignal.any([AbortSignal.timeout(30_000), sessionAbort.signal]),
+									});
 
-								const respSessionId = response.headers.get("mcp-session-id");
-								if (respSessionId) mcpSessionId = respSessionId;
+									const respSessionId = response.headers.get("mcp-session-id");
+									if (respSessionId) mcpSessionId = respSessionId;
 
-								const clonedBody = await response.clone().text();
-								return { response, clonedBody, terminalFailure: false };
-							} catch (error) {
-								const isRetryable =
-									error instanceof Error &&
-									(error.name === "TimeoutError" ||
-										error.message.includes("aborted") ||
-										error.message.includes("ECONNRESET"));
+									const clonedBody = await response.clone().text();
+									return { response, clonedBody, terminalFailure: false };
+								} catch (error) {
+									const isRetryable =
+										error instanceof Error &&
+										(error.name === "TimeoutError" ||
+											error.message.includes("aborted") ||
+											error.message.includes("ECONNRESET"));
 
-								if (isRetryable && attempt < tcpMaxAttempts) {
-									logger.warn(
-										{ attempt, error: error instanceof Error ? error.message : String(error) },
-										"Proxy request failed, retrying",
+									if (isRetryable && attempt < tcpMaxAttempts) {
+										logger.warn(
+											{ attempt, error: error instanceof Error ? error.message : String(error) },
+											"Proxy request failed, retrying",
+										);
+										continue;
+									}
+
+									logger.error(
+										{ err: error instanceof Error ? error : new Error(String(error)), path: "/mcp", attempt },
+										"Proxy request failed",
 									);
-									continue;
+									const envelope = Response.json(
+										{
+											jsonrpc: "2.0",
+											error: { code: -32000, message: error instanceof Error ? error.message : String(error) },
+											id: null,
+										},
+										{ status: 502 },
+									);
+									return { response: envelope, clonedBody: await envelope.clone().text(), terminalFailure: true };
 								}
-
-								logger.error(
-									{ err: error instanceof Error ? error : new Error(String(error)), path: "/mcp", attempt },
-									"Proxy request failed",
-								);
-								const envelope = Response.json(
-									{
-										jsonrpc: "2.0",
-										error: { code: -32000, message: error instanceof Error ? error.message : String(error) },
-										id: null,
-									},
-									{ status: 502 },
-								);
-								return { response: envelope, clonedBody: await envelope.clone().text(), terminalFailure: true };
 							}
-						}
-						// Unreachable, kept for exhaustiveness
-						const envelope = Response.json(
-							{ jsonrpc: "2.0", error: { code: -32000, message: "Max retries exceeded" }, id: null },
-							{ status: 502 },
-						);
-						return { response: envelope, clonedBody: await envelope.clone().text(), terminalFailure: true };
-					};
+							// Unreachable, kept for exhaustiveness
+							const envelope = Response.json(
+								{ jsonrpc: "2.0", error: { code: -32000, message: "Max retries exceeded" }, id: null },
+								{ status: 502 },
+							);
+							return { response: envelope, clonedBody: await envelope.clone().text(), terminalFailure: true };
+						};
 
-					// SIO-737: Outer JSON-RPC -320xx retry loop. Bails on success,
-					// non-retryable code, attempt-budget exhaustion, or cumulative
-					// deadline. The 5-attempt budget is independent of the inner TCP
-					// retry counter; both share the cumulative 30s wallclock deadline.
-					let response: Response | undefined;
-					let clonedBody = "";
-					let terminalFailure = false;
-					for (let jsonRpcAttempt = 1; jsonRpcAttempt <= maxAttempts; jsonRpcAttempt++) {
-						({ response, clonedBody, terminalFailure } = await doFetchWithTcpRetry());
-						// SIO-737: when the inner TCP loop built a 502 envelope itself,
-						// the -32000 inside it is ours -- not AgentCore's. Don't retry on
-						// our own failure envelope; surface it to the caller untouched.
-						// SIO-740: pull message alongside code so logs surface what the
-						// upstream actually said.
-						const jsonRpcInfo = terminalFailure ? undefined : extractJsonRpcError(clonedBody);
-						const jsonRpcCode = jsonRpcInfo?.code;
-						const jsonRpcMessage = jsonRpcInfo?.message;
-						const retryable = isRetryableJsonRpcCode(jsonRpcCode);
-						const isFinalAttempt = jsonRpcAttempt >= maxAttempts;
+						// SIO-737: Outer JSON-RPC -320xx retry loop. Bails on success,
+						// non-retryable code, attempt-budget exhaustion, or cumulative
+						// deadline. The 5-attempt budget is independent of the inner TCP
+						// retry counter; both share the cumulative 30s wallclock deadline.
+						let response: Response | undefined;
+						let clonedBody = "";
+						let terminalFailure = false;
+						for (let jsonRpcAttempt = 1; jsonRpcAttempt <= maxAttempts; jsonRpcAttempt++) {
+							({ response, clonedBody, terminalFailure } = await doFetchWithTcpRetry());
+							// SIO-737: when the inner TCP loop built a 502 envelope itself,
+							// the -32000 inside it is ours -- not AgentCore's. Don't retry on
+							// our own failure envelope; surface it to the caller untouched.
+							// SIO-740: pull message alongside code so logs surface what the
+							// upstream actually said.
+							const jsonRpcInfo = terminalFailure ? undefined : extractJsonRpcError(clonedBody);
+							const jsonRpcCode = jsonRpcInfo?.code;
+							const jsonRpcMessage = jsonRpcInfo?.message;
+							const retryable = isRetryableJsonRpcCode(jsonRpcCode);
+							const isFinalAttempt = jsonRpcAttempt >= maxAttempts;
 
-						if (!retryable || isFinalAttempt) {
-							// Terminal path: log once and break out of the loop.
-							if (toolName) {
-								const toolStatus = classifyToolStatus(clonedBody);
-								const severity = severityForToolStatus(toolStatus);
-								const httpAbnormal = response.status >= 300;
-								// SIO-1371 (CodeRabbit): a 4xx/5xx HTTP response with an
-								// otherwise-"ok"-looking body is still a failure -- gate the
-								// completed/failed split (and log severity) on both toolStatus
-								// and httpAbnormal, not toolStatus alone.
-								const succeeded = toolStatus === "ok" && !httpAbnormal;
-								const logFn =
-									severity === "info" && !httpAbnormal ? logger.info.bind(logger) : logger.warn.bind(logger);
-								const duration = Date.now() - requestStart;
-								const logFields: Record<string, unknown> = {
-									tool: toolName,
-									dataSource: dataSourceId,
-									status: toolStatus,
-									duration,
-								};
-								if (httpAbnormal) logFields.httpStatus = response.status;
-								if (jsonRpcCode !== undefined) logFields.jsonRpcCode = jsonRpcCode;
-								if (jsonRpcMessage !== undefined) logFields.jsonRpcMessage = jsonRpcMessage;
-								if (jsonRpcAttempt > 1) {
-									logFields.attempt = jsonRpcAttempt;
-									logFields.maxAttempts = maxAttempts;
+							if (!retryable || isFinalAttempt) {
+								// Terminal path: log once and break out of the loop.
+								if (toolName) {
+									const toolStatus = classifyToolStatus(clonedBody);
+									const severity = severityForToolStatus(toolStatus);
+									const httpAbnormal = response.status >= 300;
+									// SIO-1371 (CodeRabbit): a 4xx/5xx HTTP response with an
+									// otherwise-"ok"-looking body is still a failure -- gate the
+									// completed/failed split (and log severity) on both toolStatus
+									// and httpAbnormal, not toolStatus alone.
+									const succeeded = toolStatus === "ok" && !httpAbnormal;
+									const logFn =
+										severity === "info" && !httpAbnormal ? logger.info.bind(logger) : logger.warn.bind(logger);
+									const duration = Date.now() - requestStart;
+									const logFields: Record<string, unknown> = {
+										tool: toolName,
+										dataSource: dataSourceId,
+										status: toolStatus,
+										duration,
+									};
+									if (httpAbnormal) logFields.httpStatus = response.status;
+									if (jsonRpcCode !== undefined) logFields.jsonRpcCode = jsonRpcCode;
+									if (jsonRpcMessage !== undefined) logFields.jsonRpcMessage = jsonRpcMessage;
+									if (jsonRpcAttempt > 1) {
+										logFields.attempt = jsonRpcAttempt;
+										logFields.maxAttempts = maxAttempts;
+									}
+									if (retryable && isFinalAttempt) {
+										logFields.gaveUpAfterMs = duration;
+									}
+									if (succeeded && jsonRpcAttempt > 1) {
+										logFields.recoveredAfterAttempts = jsonRpcAttempt;
+									}
+									// SIO-1371: converge the two most common outcomes onto the bootstrap
+									// path's "Tool call completed"/"Tool call failed" phrasing
+									// (server-tracing-factory.ts); the status/httpStatus/jsonRpcCode
+									// fields already carry the outcome detail, so the message text can
+									// match without losing information.
+									const msg = succeeded
+										? `Tool call completed: ${toolName}`
+										: `Tool call failed: ${toolName} (${httpAbnormal ? `${toolStatus} (http ${response.status})` : toolStatus})`;
+									logFn(logFields, msg);
+									toolMetrics?.record(toolName, succeeded);
 								}
-								if (retryable && isFinalAttempt) {
-									logFields.gaveUpAfterMs = duration;
-								}
-								if (succeeded && jsonRpcAttempt > 1) {
-									logFields.recoveredAfterAttempts = jsonRpcAttempt;
-								}
-								// SIO-1371: converge the two most common outcomes onto the bootstrap
-								// path's "Tool call completed"/"Tool call failed" phrasing
-								// (server-tracing-factory.ts); the status/httpStatus/jsonRpcCode
-								// fields already carry the outcome detail, so the message text can
-								// match without losing information.
-								const msg = succeeded
-									? `Tool call completed: ${toolName}`
-									: `Tool call failed: ${toolName} (${httpAbnormal ? `${toolStatus} (http ${response.status})` : toolStatus})`;
-								logFn(logFields, msg);
+								break;
 							}
-							break;
-						}
 
-						// Retryable -320xx with budget remaining. Compute jittered
-						// backoff and bail if it would overshoot the cumulative deadline.
-						// Clamp to the last backoff so an env-raised maxAttempts past the array
-						// reuses the max wait instead of falling to a 0ms (tight-loop) retry.
-						const base =
-							JSONRPC_RETRY_BACKOFFS_MS[Math.min(jsonRpcAttempt - 1, JSONRPC_RETRY_BACKOFFS_MS.length - 1)] ?? 0;
-						const retryAfterMs = computeJitteredBackoff(base);
-						if (Date.now() + retryAfterMs >= deadline) {
+							// Retryable -320xx with budget remaining. Compute jittered
+							// backoff and bail if it would overshoot the cumulative deadline.
+							// Clamp to the last backoff so an env-raised maxAttempts past the array
+							// reuses the max wait instead of falling to a 0ms (tight-loop) retry.
+							const base =
+								JSONRPC_RETRY_BACKOFFS_MS[Math.min(jsonRpcAttempt - 1, JSONRPC_RETRY_BACKOFFS_MS.length - 1)] ?? 0;
+							const retryAfterMs = computeJitteredBackoff(base);
+							if (Date.now() + retryAfterMs >= deadline) {
+								if (toolName) {
+									const deadlineFields: Record<string, unknown> = {
+										tool: toolName,
+										dataSource: dataSourceId,
+										status: classifyToolStatus(clonedBody),
+										jsonRpcCode,
+										attempt: jsonRpcAttempt,
+										maxAttempts: maxAttempts,
+										gaveUpDueToDeadline: true,
+										totalMs: Date.now() - requestStart,
+									};
+									if (jsonRpcMessage !== undefined) deadlineFields.jsonRpcMessage = jsonRpcMessage;
+									logger.warn(deadlineFields, `Tool call proxied: ${toolName} -> jsonrpc-error (deadline)`);
+									toolMetrics?.record(toolName, false);
+								}
+								break;
+							}
+
+							// SIO-745: see severityForJsonRpcRetry -- cold-start -32010 attempt 1 is
+							// debug, everything else warn. Recovery still surfaces in the terminal
+							// "ok" log via recoveredAfterAttempts.
+							const retrySeverity = severityForJsonRpcRetry(jsonRpcCode, jsonRpcAttempt);
+							const retryLogFn = retrySeverity === "debug" ? logger.debug.bind(logger) : logger.warn.bind(logger);
 							if (toolName) {
-								const deadlineFields: Record<string, unknown> = {
+								const retryFields: Record<string, unknown> = {
 									tool: toolName,
 									dataSource: dataSourceId,
 									status: classifyToolStatus(clonedBody),
 									jsonRpcCode,
 									attempt: jsonRpcAttempt,
 									maxAttempts: maxAttempts,
-									gaveUpDueToDeadline: true,
-									totalMs: Date.now() - requestStart,
+									retryAfterMs,
 								};
-								if (jsonRpcMessage !== undefined) deadlineFields.jsonRpcMessage = jsonRpcMessage;
-								logger.warn(deadlineFields, `Tool call proxied: ${toolName} -> jsonrpc-error (deadline)`);
+								if (jsonRpcMessage !== undefined) retryFields.jsonRpcMessage = jsonRpcMessage;
+								retryLogFn(retryFields, `Tool call proxied: ${toolName} -> jsonrpc-error (retrying)`);
+							} else {
+								const anonFields: Record<string, unknown> = { jsonRpcCode, attempt: jsonRpcAttempt, retryAfterMs };
+								if (jsonRpcMessage !== undefined) anonFields.jsonRpcMessage = jsonRpcMessage;
+								retryLogFn(anonFields, "AgentCore -320xx response, retrying");
 							}
-							break;
-						}
 
-						// SIO-745: see severityForJsonRpcRetry -- cold-start -32010 attempt 1 is
-						// debug, everything else warn. Recovery still surfaces in the terminal
-						// "ok" log via recoveredAfterAttempts.
-						const retrySeverity = severityForJsonRpcRetry(jsonRpcCode, jsonRpcAttempt);
-						const retryLogFn = retrySeverity === "debug" ? logger.debug.bind(logger) : logger.warn.bind(logger);
-						if (toolName) {
-							const retryFields: Record<string, unknown> = {
-								tool: toolName,
-								dataSource: dataSourceId,
-								status: classifyToolStatus(clonedBody),
-								jsonRpcCode,
-								attempt: jsonRpcAttempt,
-								maxAttempts: maxAttempts,
-								retryAfterMs,
-							};
-							if (jsonRpcMessage !== undefined) retryFields.jsonRpcMessage = jsonRpcMessage;
-							retryLogFn(retryFields, `Tool call proxied: ${toolName} -> jsonrpc-error (retrying)`);
-						} else {
-							const anonFields: Record<string, unknown> = { jsonRpcCode, attempt: jsonRpcAttempt, retryAfterMs };
-							if (jsonRpcMessage !== undefined) anonFields.jsonRpcMessage = jsonRpcMessage;
-							retryLogFn(anonFields, "AgentCore -320xx response, retrying");
-						}
-
-						try {
-							await sleepWithAbort(retryAfterMs, sessionAbort.signal);
-						} catch {
-							if (toolName) {
-								logger.warn(
-									{ tool: toolName, dataSource: dataSourceId, attempt: jsonRpcAttempt, reason: "session-reset" },
-									`Tool call proxied: ${toolName} -> aborted`,
+							try {
+								await sleepWithAbort(retryAfterMs, sessionAbort.signal);
+							} catch {
+								if (toolName) {
+									logger.warn(
+										{ tool: toolName, dataSource: dataSourceId, attempt: jsonRpcAttempt, reason: "session-reset" },
+										`Tool call proxied: ${toolName} -> aborted`,
+									);
+									toolMetrics?.record(toolName, false);
+								}
+								return Response.json(
+									{ jsonrpc: "2.0", error: { code: -32000, message: "Session reset during retry" }, id: null },
+									{ status: 502 },
 								);
 							}
+						}
+
+						if (!response) {
+							// Defensive: loop never executed (impossible because budget >= 1).
 							return Response.json(
-								{ jsonrpc: "2.0", error: { code: -32000, message: "Session reset during retry" }, id: null },
+								{ jsonrpc: "2.0", error: { code: -32000, message: "Internal proxy error" }, id: null },
 								{ status: 502 },
 							);
 						}
-					}
 
-					if (!response) {
-						// Defensive: loop never executed (impossible because budget >= 1).
-						return Response.json(
-							{ jsonrpc: "2.0", error: { code: -32000, message: "Internal proxy error" }, id: null },
-							{ status: 502 },
-						);
-					}
+						const respHeaders = new Headers();
+						respHeaders.set("content-type", response.headers.get("content-type") || "application/json");
+						if (mcpSessionId) respHeaders.set("mcp-session-id", mcpSessionId);
+						return new Response(clonedBody, { status: response.status, headers: respHeaders });
+					},
 
-					const respHeaders = new Headers();
-					respHeaders.set("content-type", response.headers.get("content-type") || "application/json");
-					if (mcpSessionId) respHeaders.set("mcp-session-id", mcpSessionId);
-					return new Response(clonedBody, { status: response.status, headers: respHeaders });
+					GET: () => new Response("Method not allowed", { status: 405 }),
+
+					DELETE: () => {
+						// SIO-737: abort any retry sleep mid-flight for this session,
+						// then mint a fresh controller for whatever comes next.
+						currentSessionAbort?.abort(new Error("Session reset via DELETE"));
+						currentSessionAbort = new AbortController();
+						mcpSessionId = undefined;
+						return new Response(null, { status: 200 });
+					},
 				},
 
-				GET: () => new Response("Method not allowed", { status: 405 }),
+				"/health": {
+					GET: async () => {
+						try {
+							await getCredentials();
+							return Response.json({ status: "ok", target: "agentcore", region: config.region });
+						} catch {
+							return Response.json({ status: "error", message: "credentials unavailable" }, { status: 503 });
+						}
+					},
+				},
 
-				DELETE: () => {
-					// SIO-737: abort any retry sleep mid-flight for this session,
-					// then mint a fresh controller for whatever comes next.
-					currentSessionAbort?.abort(new Error("Session reset via DELETE"));
-					currentSessionAbort = new AbortController();
-					mcpSessionId = undefined;
-					return new Response(null, { status: 200 });
+				"/ping": {
+					GET: () => Response.json({ status: "ok", proxy: true, target: fullUrl }),
+				},
+
+				"/identity": {
+					GET: () => Response.json(identityCard),
+				},
+
+				"/ready": {
+					GET: async (): Promise<Response> => {
+						try {
+							const snap = await readinessProbe();
+							return Response.json(snap, { status: snap.ready ? 200 : 503 });
+						} catch (err) {
+							return Response.json(
+								{ ready: false, error: err instanceof Error ? err.message : String(err) },
+								{ status: 503 },
+							);
+						}
+					},
 				},
 			},
 
-			"/health": {
-				GET: async () => {
-					try {
-						await getCredentials();
-						return Response.json({ status: "ok", target: "agentcore", region: config.region });
-					} catch {
-						return Response.json({ status: "error", message: "credentials unavailable" }, { status: 503 });
-					}
-				},
-			},
-
-			"/ping": {
-				GET: () => Response.json({ status: "ok", proxy: true, target: fullUrl }),
-			},
-
-			"/identity": {
-				GET: () => Response.json(identityCard),
-			},
-
-			"/ready": {
-				GET: async (): Promise<Response> => {
-					try {
-						const snap = await readinessProbe();
-						return Response.json(snap, { status: snap.ready ? 200 : 503 });
-					} catch (err) {
-						return Response.json(
-							{ ready: false, error: err instanceof Error ? err.message : String(err) },
-							{ status: 503 },
-						);
-					}
-				},
-			},
-		},
-
-		fetch: () => Response.json({ error: "Not found" }, { status: 404 }),
-	});
+			fetch: () => Response.json({ error: "Not found" }, { status: 404 }),
+		}),
+	);
 
 	const proxyUrl = `http://127.0.0.1:${server.port}`;
 
@@ -782,6 +828,7 @@ export async function startAgentCoreProxy(
 		url: proxyUrl,
 		async close() {
 			server.stop(true);
+			toolMetrics?.close();
 			logger.info("AgentCore proxy closed");
 		},
 	};

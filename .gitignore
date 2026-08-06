@@ -74,3 +74,6 @@ pvh-tf-state-pat.txt
 # (account ids, hostnames, IPs). Only the content-free MANIFEST.json is committable.
 packages/agent/src/eval/fixtures/*
 !packages/agent/src/eval/fixtures/MANIFEST.json
+
+# SIO-1400: local MCP tool-call metrics DB (MCP_TOOL_METRICS_DB_PATH) + WAL/SHM sidecars
+data/*.sqlite*

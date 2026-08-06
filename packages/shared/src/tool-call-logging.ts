@@ -16,6 +16,13 @@ export interface ToolCallLogger {
 	warn(message: string, meta?: Record<string, unknown>): void;
 }
 
+// SIO-1400: per-call outcome handed to the optional onCall sink (metrics counters).
+export interface ToolCallOutcome {
+	tool: string;
+	ok: boolean;
+	durationMs: number;
+}
+
 const TOOLS_CALL_METHOD = "tools/call";
 
 type RequestHandler = (request: unknown, extra: unknown) => Promise<unknown>;
@@ -46,6 +53,9 @@ export function installToolCallLogging(
 	server: McpServer,
 	logger: ToolCallLogger,
 	now: () => number = () => Date.now(),
+	// SIO-1400: optional per-call sink (SQLite usage counters). Invoked on every
+	// outcome branch; a throwing sink is contained so it can never break dispatch.
+	onCall?: (outcome: ToolCallOutcome) => void,
 ): void {
 	const internal = server.server as unknown as InternalServerHandlers;
 	const handlers = internal._requestHandlers;
@@ -58,6 +68,18 @@ export function installToolCallLogging(
 			"Cannot install tool-call logging: no 'tools/call' handler registered. Ensure tools are registered before createMcpApplication wraps the factory.",
 		);
 	}
+
+	const emitOutcome = (outcome: ToolCallOutcome): void => {
+		if (!onCall) return;
+		try {
+			onCall(outcome);
+		} catch (error) {
+			logger.warn("tools/call outcome sink failed", {
+				tool: outcome.tool,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	};
 
 	const wrapped: RequestHandler = async (request, extra) => {
 		const tool = extractToolName(request) ?? "unknown";
@@ -72,16 +94,20 @@ export function installToolCallLogging(
 			const durationMs = now() - start;
 			if (isErrorResult(result)) {
 				logger.warn("tools/call error", { tool, durationMs });
+				emitOutcome({ tool, ok: false, durationMs });
 			} else {
 				logger.info("tools/call ok", { tool, durationMs });
+				emitOutcome({ tool, ok: true, durationMs });
 			}
 			return result;
 		} catch (error) {
+			const durationMs = now() - start;
 			logger.warn("tools/call dispatch error", {
 				tool,
-				durationMs: now() - start,
+				durationMs,
 				error: error instanceof Error ? error.message : String(error),
 			});
+			emitOutcome({ tool, ok: false, durationMs });
 			throw error;
 		}
 	};
