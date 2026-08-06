@@ -37,8 +37,13 @@ import { AGENT_NAMES, getSubAgentRecursionLimit } from "./sub-agent.ts";
 // SIO-1367: re-derived per this file's own ratchet policy (see header) -- specialists moved
 // claude-sonnet-4-6 -> claude-haiku-4-5 on live probe data (no truncation, faster latency,
 // acceptsTemperature: true). Root is unchanged.
+//
+// SIO-1404: re-derived again -- specialists restored to claude-sonnet-4-6 after the SIO-1380
+// clean baseline (identical-basis judging, AWS connected for the first time) showed the haiku
+// downgrade's quality cost was real: response_quality 0.563 vs 0.767, root_cause_accuracy
+// 0.531 vs 0.797, evidence_couchbase 0.029 vs 0.941. Root is unchanged.
 const EXPECTED_ROOT_MODEL = "claude-sonnet-5";
-const EXPECTED_SPECIALIST_MODEL = "claude-haiku-4-5";
+const EXPECTED_SPECIALIST_MODEL = "claude-sonnet-4-6";
 
 const orchestrator = loadAgent(join(import.meta.dir, "../../../agents/incident-analyzer"));
 
