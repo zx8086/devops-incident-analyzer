@@ -2,6 +2,7 @@
 
 import type { ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import { logger } from "../utils/logger";
 
 // SIO-1412: couchbase's OWN registry of every resource it registers on the SDK
 // server, populated explicitly at registration time (threaded through
@@ -16,11 +17,33 @@ export type TemplateVariables = Record<string, string | string[]>;
 export type ExactReadCallback = (uri: URL) => Promise<unknown> | unknown;
 export type TemplateReadCallback = (uri: URL, variables: TemplateVariables) => Promise<unknown> | unknown;
 
+// SIO-1412 (CodeRabbit): three documentation resources register SCHEME-LESS URIs
+// ("scope-documentation" and friends); a bare `new URL()` throws TypeError before
+// their handler runs. Fall back to an opaque base so every registered URI reaches
+// its handler; input unparsable even with the base keeps -32602 parity.
+function toUrl(uri: string): URL {
+	try {
+		return new URL(uri);
+	} catch {
+		try {
+			return new URL(uri, "resource://local/");
+		} catch {
+			throw new McpError(ErrorCode.InvalidParams, `Unparsable resource URI: ${uri}`);
+		}
+	}
+}
+
 export class ResourceRegistry {
 	private readonly exact = new Map<string, ExactReadCallback>();
 	private readonly templates: Array<{ template: ResourceTemplate; readCallback: TemplateReadCallback }> = [];
 
 	addExact(uri: string, readCallback: ExactReadCallback): void {
+		// Last registration wins (matches the SDK's own behavior); log so a collision
+		// (e.g. a playbook literally named "test.md" vs the hardcoded debug resource)
+		// is visible instead of silent.
+		if (this.exact.has(uri)) {
+			logger.debug({ uri }, "ResourceRegistry: duplicate exact URI registration; overwriting previous handler");
+		}
 		this.exact.set(uri, readCallback);
 	}
 
@@ -34,12 +57,12 @@ export class ResourceRegistry {
 	async read(uri: string): Promise<unknown> {
 		const exact = this.exact.get(uri);
 		if (exact) {
-			return await exact(new URL(uri));
+			return await exact(toUrl(uri));
 		}
 		for (const { template, readCallback } of this.templates) {
 			const variables = template.uriTemplate.match(uri);
 			if (variables) {
-				return await readCallback(new URL(uri), variables);
+				return await readCallback(toUrl(uri), variables);
 			}
 		}
 		throw new McpError(ErrorCode.InvalidParams, `No resource handler found for URI: ${uri}`);

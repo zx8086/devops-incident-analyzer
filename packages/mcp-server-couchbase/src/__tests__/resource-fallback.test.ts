@@ -102,3 +102,30 @@ describe("readResourceByUri generic fallback via the own ResourceRegistry (SIO-1
 		expect((thrown as McpError).message).toContain("No resource handler found for URI");
 	});
 });
+
+describe("scheme-less documentation URIs resolve via the registry (SIO-1412, CodeRabbit)", () => {
+	// The three placeholder docs resources register under SCHEME-LESS URIs; a bare
+	// new URL() would throw TypeError before their handlers run. The registry's
+	// base-URL fallback must carry them through to a real response.
+	test("scope-documentation / collection-documentation / documentation-file return responses, not TypeError", async () => {
+		const prior = config.documentation;
+		config.documentation = { enabled: true, baseDirectory: "./docs-fixture-unused", fileExtension: ".md" };
+		try {
+			const server = new McpServer({ name: "couchbase-schemeless-docs-test", version: "0.0.0" });
+			const registry = new ResourceRegistry();
+			const docsHandler = registerAllResources(server, stubBucket, null, registry);
+			const read = buildReadResourceByUri({ bucket: stubBucket, playbooks: null }, docsHandler, registry);
+
+			const scopeDoc = await read("scope-documentation");
+			expect(textOf(scopeDoc)).toContain("Scope Documentation");
+
+			const collectionDoc = await read("collection-documentation");
+			expect(textOf(collectionDoc).length).toBeGreaterThan(0);
+
+			const fileDoc = await read("documentation-file");
+			expect(textOf(fileDoc).length).toBeGreaterThan(0);
+		} finally {
+			config.documentation = prior;
+		}
+	});
+});
