@@ -182,7 +182,7 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 						server,
 						logger,
 						undefined,
-						metricsSink ? (outcome) => metricsSink.record(outcome.tool, outcome.ok) : undefined,
+						metricsSink ? (outcome) => metricsSink.record(outcome.tool, outcome.ok, outcome.failureClass) : undefined,
 					);
 					return server;
 				}

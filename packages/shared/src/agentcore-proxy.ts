@@ -6,7 +6,12 @@
 import { createHash, createHmac } from "node:crypto";
 import type { DataSourceId } from "./datasource.ts";
 import { createMcpLogger, getChildLogger } from "./logger.ts";
-import { createToolCallMetricsRecorder, resolveToolCallMetricsDbPath } from "./tool-call-metrics.ts";
+import {
+	classifyFailureText,
+	createToolCallMetricsRecorder,
+	extractErrorTextFromContent,
+	resolveToolCallMetricsDbPath,
+} from "./tool-call-metrics.ts";
 import type { IdentityCard } from "./transport/identity.ts";
 import { createProxyReadinessProbe } from "./transport/proxy-readiness.ts";
 
@@ -361,6 +366,29 @@ export function classifyToolStatus(rawBody: string): string {
 	return "error (unparsed)";
 }
 
+// SIO-1402: pull the inner error text out of an isError frame so the metrics
+// recorder can classify it (bad-input vs unstructured) with the same
+// classifyFailureText the McpServer seam uses. Same SSE-framing convention as
+// classifyToolStatus above; prefers the text block containing the "_error"
+// envelope marker, falls back to the first text block.
+function innerErrorText(rawBody: string): string | undefined {
+	const dataLines = rawBody.split("\n").filter((l) => l.startsWith("data: "));
+	const jsonText = dataLines.length > 0 ? dataLines[dataLines.length - 1]?.slice(6) : rawBody.trim();
+	if (!jsonText) return undefined;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(jsonText);
+	} catch {
+		return undefined;
+	}
+	if (typeof parsed !== "object" || parsed === null) return undefined;
+	const result = (parsed as { result?: unknown }).result;
+	if (typeof result !== "object" || result === null) return undefined;
+	// SIO-1402 (CodeRabbit): block validation + selection is the shared Zod-backed
+	// parser, identical to the McpServer seam in tool-call-logging.ts.
+	return extractErrorTextFromContent((result as { content?: unknown }).content);
+}
+
 export interface JsonRpcErrorInfo {
 	code: number;
 	message?: string;
@@ -681,7 +709,14 @@ export async function startAgentCoreProxy(
 										? `Tool call completed: ${toolName}`
 										: `Tool call failed: ${toolName} (${httpAbnormal ? `${toolStatus} (http ${response.status})` : toolStatus})`;
 									logFn(logFields, msg);
-									toolMetrics?.record(toolName, succeeded);
+									// SIO-1402: inner tool errors ("error (...)" statuses) carry the
+									// envelope in the frame's text block -- classify those; transport
+									// outcomes (jsonrpc-error / unparseable / http) stay plain failures.
+									const failureClass =
+										!succeeded && toolStatus.startsWith("error")
+											? classifyFailureText(innerErrorText(clonedBody))
+											: undefined;
+									toolMetrics?.record(toolName, succeeded, failureClass);
 								}
 								break;
 							}

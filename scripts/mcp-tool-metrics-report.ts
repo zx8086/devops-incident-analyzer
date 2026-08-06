@@ -1,6 +1,7 @@
 // scripts/mcp-tool-metrics-report.ts
 // SIO-1400: print the MCP tool-call usage counters recorded when
 // MCP_TOOL_METRICS_DB_PATH is set (see packages/shared/src/tool-call-metrics.ts).
+// SIO-1402: failure-class columns (bad_input / unstructured / unknown_tool).
 // Usage: bun scripts/mcp-tool-metrics-report.ts [db-path]
 import { Database } from "bun:sqlite";
 
@@ -9,6 +10,9 @@ interface CountRow {
 	tool: string;
 	calls: number;
 	failures: number;
+	bad_input_failures: number;
+	unstructured_failures: number;
+	unknown_tool_failures: number;
 	first_called_at: string;
 	last_called_at: string;
 }
@@ -19,14 +23,22 @@ if (!dbPath) {
 	process.exit(1);
 }
 
+const FULL_SQL =
+	"SELECT server, tool, calls, failures, bad_input_failures, unstructured_failures, unknown_tool_failures, first_called_at, last_called_at FROM mcp_tool_call_counts ORDER BY server ASC, calls DESC, tool ASC";
+// SIO-1402: a pre-migration DB (no server restarted since the upgrade) lacks the
+// class columns; the recorder migrates on open but this report is read-only, so
+// fall back to zeroed class counts instead of erroring.
+const LEGACY_SQL =
+	"SELECT server, tool, calls, failures, 0 AS bad_input_failures, 0 AS unstructured_failures, 0 AS unknown_tool_failures, first_called_at, last_called_at FROM mcp_tool_call_counts ORDER BY server ASC, calls DESC, tool ASC";
+
 let rows: CountRow[];
 try {
 	const db = new Database(dbPath, { readonly: true });
-	rows = db
-		.query<CountRow, []>(
-			"SELECT server, tool, calls, failures, first_called_at, last_called_at FROM mcp_tool_call_counts ORDER BY server ASC, calls DESC, tool ASC",
-		)
-		.all();
+	try {
+		rows = db.query<CountRow, []>(FULL_SQL).all();
+	} catch {
+		rows = db.query<CountRow, []>(LEGACY_SQL).all();
+	}
 	db.close(false);
 } catch (error) {
 	console.error(`Cannot read metrics DB at ${dbPath}: ${error instanceof Error ? error.message : String(error)}`);
@@ -38,14 +50,31 @@ if (rows.length === 0) {
 	process.exit(0);
 }
 
-const successPct = (r: CountRow): string => (((r.calls - r.failures) / r.calls) * 100).toFixed(1);
+// calls can only be 0 in a hand-edited DB (the upsert always inserts 1), but a
+// guard beats printing NaN% for it
+const pct = (ok: number, calls: number): string => (calls === 0 ? "0.0" : ((ok / calls) * 100).toFixed(1));
+const successPct = (r: CountRow): string => pct(r.calls - r.failures, r.calls);
 
-const header = ["server", "tool", "calls", "failures", "success%", "first_called_at", "last_called_at"];
+const header = [
+	"server",
+	"tool",
+	"calls",
+	"failures",
+	"bad_input",
+	"unstructured",
+	"unknown_tool",
+	"success%",
+	"first_called_at",
+	"last_called_at",
+];
 const table = rows.map((r) => [
 	r.server,
 	r.tool,
 	String(r.calls),
 	String(r.failures),
+	String(r.bad_input_failures),
+	String(r.unstructured_failures),
+	String(r.unknown_tool_failures),
 	successPct(r),
 	r.first_called_at,
 	r.last_called_at,
@@ -57,11 +86,17 @@ console.log(formatLine(header));
 console.log(formatLine(widths.map((w) => "-".repeat(w))));
 for (const row of table) console.log(formatLine(row));
 
-const totals = rows.reduce((acc, r) => ({ calls: acc.calls + r.calls, failures: acc.failures + r.failures }), {
-	calls: 0,
-	failures: 0,
-});
+const totals = rows.reduce(
+	(acc, r) => ({
+		calls: acc.calls + r.calls,
+		failures: acc.failures + r.failures,
+		badInput: acc.badInput + r.bad_input_failures,
+		unstructured: acc.unstructured + r.unstructured_failures,
+		unknownTool: acc.unknownTool + r.unknown_tool_failures,
+	}),
+	{ calls: 0, failures: 0, badInput: 0, unstructured: 0, unknownTool: 0 },
+);
 const servers = new Set(rows.map((r) => r.server)).size;
 console.log(
-	`\n${rows.length} tools across ${servers} servers; ${totals.calls} calls, ${totals.failures} failures (${(((totals.calls - totals.failures) / totals.calls) * 100).toFixed(1)}% success)`,
+	`\n${rows.length} tools across ${servers} servers; ${totals.calls} calls, ${totals.failures} failures (${pct(totals.calls - totals.failures, totals.calls)}% success); failure classes: ${totals.badInput} bad-input, ${totals.unstructured} unstructured, ${totals.unknownTool} unknown-tool`,
 );
