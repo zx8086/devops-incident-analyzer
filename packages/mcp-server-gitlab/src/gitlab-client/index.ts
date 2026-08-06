@@ -183,7 +183,11 @@ export class GitLabRestClient {
 
 	// Numeric projectId only: URL-encoded path-style IDs 404 for this endpoint (memory: reference_gitlab_internal_vs_public)
 	async listMergeRequests(
-		projectId: number,
+		// SIO-1403: was `number`, the only one of the six code-analysis client methods not taking
+		// a string. GitLab puts the identifier in a path segment, so a numeric id and its string
+		// form build the identical URL; the outlier type forced callers to special-case this one
+		// method and was half of the four-way schema split the tools exposed.
+		projectId: string,
 		options?: {
 			state?: "merged" | "opened" | "closed" | "all";
 			updated_after?: string;

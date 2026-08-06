@@ -297,7 +297,7 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 - Search: global search, labels, semantic code search with deferred retry for embedding readiness (via proxy)
 - Code analysis: file content, blame, commit diff, commit listing, repository tree (custom REST tools)
 
-**Configuration:** Token-based authentication via `GITLAB_PERSONAL_ACCESS_TOKEN` (requires `api` scope) for the custom code-analysis tools. The proxy connection to `/api/v4/mcp` uses OAuth 2.0 Dynamic Client Registration as a public client (RFC 8252, `token_endpoint_auth_method: "none"`) with PKCE; this is what GitLab DCR actually issues for unverified MCP clients. Scope is pinned to `mcp` (GitLab MR !208967 default). Instance URL via `GITLAB_INSTANCE_URL` (defaults to `https://gitlab.com`). Callback port on `GITLAB_OAUTH_CALLBACK_PORT` (default 9184). Optional `GITLAB_DEFAULT_PROJECT_ID` for default project scoping. See [OAuth credential persistence](#oauth-credential-persistence) below for the seeding flow.
+**Configuration:** Token-based authentication via `GITLAB_PERSONAL_ACCESS_TOKEN` (requires `api` scope) for the custom code-analysis tools. The proxy connection to `/api/v4/mcp` uses OAuth 2.0 Dynamic Client Registration as a public client (RFC 8252, `token_endpoint_auth_method: "none"`) with PKCE; this is what GitLab DCR actually issues for unverified MCP clients. Scope is pinned to `mcp` (GitLab MR !208967 default). Instance URL via `GITLAB_INSTANCE_URL` (defaults to `https://gitlab.com`). Callback port on `GITLAB_OAUTH_CALLBACK_PORT` (default 9184). See [OAuth credential persistence](#oauth-credential-persistence) below for the seeding flow.
 
 **Transport:** Streamable HTTP (`/mcp`), SSE, stdio, and AWS Bedrock AgentCore.
 

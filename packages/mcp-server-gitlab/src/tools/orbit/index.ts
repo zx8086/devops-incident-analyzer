@@ -477,18 +477,97 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 	);
 
 	// -- gitlab_orbit_query_graph (BILLED, raw escape hatch) --
-	const RawParams = z.object({
-		query: z
+	//
+	// SIO-1408: `query` used to be a bare `z.record(z.string(), z.unknown())`, which serialises to
+	// `additionalProperties: {}` -- ANY object passes JSON-Schema, so the model got no structural
+	// signal whatsoever and only learned it was wrong from Orbit's own validator, after the call.
+	// Measured live: 10 attempts in one eval example, 10 rejections, 0 successes. The model was
+	// not guessing badly; it was guessing blind.
+	//
+	// The DSL is now typed, so a malformed query is rejected LOCALLY with a -32602 naming the
+	// offending field, and the shape is discoverable from tools/list without a second call.
+	// Deliberately permissive at the leaves (`filters` and `aggregations` values stay unknown):
+	// the operator grammar is broad and Orbit is the authority on it, so over-tightening here
+	// would reject valid queries. The win is the SKELETON being explicit.
+	const OrbitNodeSelector = z.object({
+		id: z.string().describe("Local alias for this node, referenced by relationships/path/neighbors."),
+		entity: z.string().describe("Ontology node type: Project, User, MergeRequest, File, Definition, Pipeline, ..."),
+		columns: z
+			.union([z.literal("*"), z.array(z.string())])
+			.optional()
+			.describe('Properties to return. "*" for all non-restricted, or an array of names. Max 50.'),
+		filters: z
 			.record(z.string(), z.unknown())
+			.optional()
 			.describe(
-				"A raw Orbit query DSL object (query_type + node/nodes + relationships/aggregations). " +
-					"MUST include a selective node (filters/node_ids). Call gitlab_graph_schema first.",
+				'Property filters. Simple equality {"state":"merged"} or an operator object ' +
+					'{"path":{"ends_with":"app/models/project.rb"}}. Operators: eq, gt, gte, lt, lte, in, contains, ' +
+					"starts_with, ends_with, is_null, is_not_null, token_match, all_tokens, any_tokens. Max 10 per node.",
 			),
+		node_ids: z
+			.array(z.union([z.number(), z.string()]))
+			.optional()
+			.describe(
+				"Exact INTERNAL graph ids (not project-scoped iids). Max 500. A wrong id class returns 0 rows " +
+					"WITHOUT erroring, so prefer `filters` unless you resolved the id from a prior query.",
+			),
+		id_range: z.object({ start: z.number(), end: z.number() }).optional().describe("Inclusive graph-id range."),
+		id_property: z.string().optional().describe("Property used by node_ids/id_range. Default `id`."),
+	});
+
+	const OrbitRelationship = z.object({
+		type: z.union([z.string(), z.array(z.string())]).describe('Relationship type(s), e.g. "IN_PROJECT", "AUTHORED".'),
+		from: z.string().describe("Alias of the start node selector."),
+		to: z.string().describe("Alias of the end node selector."),
+		direction: z.enum(["outgoing", "incoming", "both"]).optional().describe("Default outgoing."),
+		hops: z.array(z.number()).optional().describe("Inclusive [min,max] hop range. Default [1,1]. Max 3."),
+		filters: z.record(z.string(), z.unknown()).optional().describe("Relationship property filters. Max 5."),
+	});
+
+	const OrbitQuerySchema = z.object({
+		query_type: z
+			.enum(["traversal", "aggregation", "path_finding", "neighbors"])
+			.describe(
+				"traversal: fetch nodes or follow relationships -- SINGLE-NODE TRAVERSAL IS THE SEARCH SHAPE " +
+					"(there is no `search` query_type). aggregation: count/sum/avg/group. path_finding: bounded path " +
+					"between two selectors. neighbors: what connects to one bounded node.",
+			),
+		nodes: z
+			.array(OrbitNodeSelector)
+			.min(1)
+			.max(5)
+			.describe("Node selectors, always required. Single-node queries use a 1-element array."),
+		relationships: z.array(OrbitRelationship).max(5).optional(),
+		aggregations: z
+			.array(z.record(z.string(), z.unknown()))
+			.max(10)
+			.optional()
+			.describe('Required for aggregation. One function key each: {"count":"mr","as":"merged_mrs"}.'),
+		group_by: z.array(z.unknown()).max(4).optional().describe('Group keys: "node" or "node.property".'),
+		path: z.record(z.string(), z.unknown()).optional().describe("Required for path_finding: {type,from,to,max_depth}."),
+		neighbors: z.record(z.string(), z.unknown()).optional().describe("Required for neighbors: {direction,rel_types}."),
+		limit: z.number().int().max(1000).optional().describe("Rows to return. Default 30, max 1000."),
+		cursor: z.record(z.string(), z.unknown()).optional().describe("Keyset pagination: {page_size, after}."),
+		order_by: z.string().optional().describe('Sort by node property: "node.prop" asc, "-node.prop" desc.'),
+		aggregation_sort: z.string().optional().describe("Sort aggregation rows by output column name."),
+		options: z.record(z.string(), z.unknown()).optional(),
+	});
+
+	const RawParams = z.object({
+		query: OrbitQuerySchema.describe(
+			"Orbit query DSL object. EXAMPLE (single-node traversal = search): " +
+				'{"query_type":"traversal","nodes":[{"id":"file","entity":"File",' +
+				'"filters":{"path":{"ends_with":"app/models/project.rb"}},"columns":["path","language"]}],"limit":5}. ' +
+				"MUST include a selective node (filters, node_ids, or a narrow id_range) -- an unselective query is " +
+				"rejected AND billed. Call gitlab_graph_schema for the entity/relationship ontology.",
+		),
 	});
 	server.tool(
 		"gitlab_orbit_query_graph",
 		"Escape hatch: run an arbitrary GitLab Orbit query DSL object for cross-project questions the purpose-built " +
-			"tools do not cover. Every query MUST be selective (a filter or node_ids). Consumes GitLab Credits.",
+			"tools do not cover. Every query MUST be selective (a filter or node_ids). Consumes GitLab Credits. " +
+			'Search = single-node traversal, e.g. {"query_type":"traversal","nodes":[{"id":"f","entity":"File",' +
+			'"filters":{"path":{"ends_with":"README.md"}},"columns":["path"]}],"limit":5}.',
 		RawParams.shape,
 		async (args) =>
 			traceToolCall("gitlab_orbit_query_graph", async () => {
@@ -502,9 +581,16 @@ export function registerOrbitTools(server: McpServer, ctx: OrbitToolContext): nu
 				// query. The purpose-built tools enforce this via requireSelector; the
 				// raw path must validate the LLM's query before the billed call.
 				if (!hasSelectiveAnchor(query)) {
+					// SIO-1408: the rejection now SHOWS a valid query rather than only naming the rule.
+					// A model that gets the shape wrong ten times in a row (measured) cannot recover from
+					// a description of the constraint -- it needs the payload.
 					const prose =
 						"Orbit query rejected: every query must include a selective node (a `filters` object, " +
-						"`node_ids`, or `id_range`). Call gitlab_graph_schema to ground the query, then retry.";
+						"`node_ids`, or `id_range`). Example of a valid selective query:\n" +
+						'{"query_type":"traversal","nodes":[{"id":"file","entity":"File",' +
+						'"filters":{"path":{"ends_with":"README.md"}},"columns":["path","language"]}],"limit":5}\n' +
+						"Note: single-node traversal IS the search shape (there is no `search` query_type), and " +
+						"filters take operator objects, not bare values. Call gitlab_graph_schema for the ontology.";
 					return textResult(
 						envelopeText(prose, { kind: "bad-query", message: "Unselective Orbit query rejected" }),
 						true,

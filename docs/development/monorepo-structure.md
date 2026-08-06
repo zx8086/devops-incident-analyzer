@@ -305,7 +305,7 @@ GitLab MCP server with proxy + 5-8 custom tools for CI/CD pipelines, merge reque
 |------------|---------|
 | Tools | Proxy (from GitLab native MCP) + 5-8 custom REST tools: issues, merge requests, pipelines, search, code analysis (blame, diff, file content, tree, commits) |
 | Architecture | Proxy (forwards to GitLab `/api/v4/mcp`) + custom REST tools for code analysis |
-| Configuration | `GITLAB_PERSONAL_ACCESS_TOKEN`, `GITLAB_INSTANCE_URL`, `GITLAB_DEFAULT_PROJECT_ID` |
+| Configuration | `GITLAB_PERSONAL_ACCESS_TOKEN`, `GITLAB_INSTANCE_URL` |
 | Transports | SSE, HTTP (Streamable HTTP), stdio, AgentCore |
 | Port | 9084 (default) |
 

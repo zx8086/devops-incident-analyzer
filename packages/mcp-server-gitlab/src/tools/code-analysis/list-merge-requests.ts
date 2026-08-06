@@ -5,11 +5,10 @@ import { z } from "zod";
 import type { GitLabRestClient } from "../../gitlab-client/index.js";
 import { traceToolCall } from "../../utils/tracing.js";
 import { restErrorResult } from "../error-envelope.js";
+import { NumericPreferredProjectIdParam } from "./project-id-param.js";
 
-// SIO-771: numeric project_id is required -- URL-encoded paths 404 against
-// /api/v4 endpoints. See memory: reference_gitlab_internal_vs_public.
 const ListMergeRequestsParams = z.object({
-	project_id: z.number().int().describe("Numeric GitLab project ID. URL-encoded paths return 404 against /api/v4."),
+	project_id: NumericPreferredProjectIdParam,
 	state: z
 		.enum(["merged", "opened", "closed", "all"])
 		.optional()

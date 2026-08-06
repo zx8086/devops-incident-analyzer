@@ -5,9 +5,10 @@ import { z } from "zod";
 import type { GitLabRestClient } from "../../gitlab-client/index.js";
 import { traceToolCall } from "../../utils/tracing.js";
 import { restErrorResult } from "../error-envelope.js";
+import { ProjectIdParam } from "./project-id-param.js";
 
 const ListCommitsParams = z.object({
-	project_id: z.string().describe("GitLab project ID or URL-encoded path"),
+	project_id: ProjectIdParam,
 	ref_name: z.string().optional().describe("Branch or tag name (default: default branch)"),
 	since: z.string().optional().describe("ISO 8601 date to list commits after"),
 	until: z.string().optional().describe("ISO 8601 date to list commits before"),

@@ -29,6 +29,10 @@ export {
 	type ModelName,
 } from "./model-registry.ts";
 export { getRelatedTools, withRelatedTools } from "./related-tools.ts";
+// SIO-1398: the two runbook tool-citation readers, exported so eval coverage targets derive
+// from the SAME parse runbook-validator enforces (frontmatter `tools:` first, tail CSV as the
+// documented SIO-1288 fallback) instead of a second hand-rolled parser that could drift.
+export { extractFrontmatterTools, extractTailSection } from "./runbook-validator.ts";
 export { loadSchedules, type ScheduleDef, ScheduleDefSchema } from "./schedule.ts";
 export { mergeShared, type SharedMergeResult } from "./shared-merge.ts";
 export {

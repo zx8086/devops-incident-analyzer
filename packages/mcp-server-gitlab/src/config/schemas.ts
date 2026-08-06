@@ -16,7 +16,6 @@ export const ConfigSchema = z.object({
 		.object({
 			instanceUrl: z.string().url().describe("GitLab instance base URL"),
 			personalAccessToken: z.string().min(1, "GitLab personal access token is required").describe("PAT with api scope"),
-			defaultProjectId: z.string().optional().describe("Default project ID for queries"),
 			timeout: z.number().min(1000).max(60000).describe("API request timeout in milliseconds"),
 			retryAttempts: z.number().min(0).max(5).describe("Number of retry attempts for failed requests"),
 			retryDelay: z.number().min(100).max(5000).describe("Delay between retry attempts in milliseconds"),

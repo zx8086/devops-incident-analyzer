@@ -139,7 +139,8 @@ describe("SIO-1044: gitlab-mcp-server cached factory replay", () => {
 		const proxyCallToolSpy = mock(async () => ({ content: [] }));
 		const spiedProxy = { ...stubProxy, callTool: proxyCallToolSpy } as unknown as GitLabMcpProxy;
 
-		const listMergeRequestsSpy = mock(async (_projectId: number, _options?: Record<string, unknown>) => []);
+		// SIO-1403: string, matching the widened client signature.
+		const listMergeRequestsSpy = mock(async (_projectId: string, _options?: Record<string, unknown>) => []);
 		const spiedRestClient = { listMergeRequests: listMergeRequestsSpy } as unknown as GitLabRestClient;
 
 		const ds: GitLabDatasource = {
@@ -157,7 +158,10 @@ describe("SIO-1044: gitlab-mcp-server cached factory replay", () => {
 		await client.close();
 
 		expect(listMergeRequestsSpy).toHaveBeenCalledTimes(1);
-		expect(listMergeRequestsSpy.mock.calls[0]?.[0]).toBe(42);
+		// SIO-1403: the tool now accepts a project id as EITHER a number or a string and coerces
+		// to string at the schema boundary, so the client receives "42" for the numeric 42 sent
+		// above. GitLab puts the identifier in a path segment, so both build the same URL.
+		expect(listMergeRequestsSpy.mock.calls[0]?.[0]).toBe("42");
 		expect(proxyCallToolSpy).not.toHaveBeenCalled();
 	});
 

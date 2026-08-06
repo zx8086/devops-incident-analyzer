@@ -50,7 +50,18 @@ const SearchParams = z.object({
 		.describe(
 			"Sort order. Accepts any of: ['@timestamp'] | [{'@timestamp': 'desc'}] | [{'@timestamp': {order: 'desc'}}] | [{'@timestamp': {order: 'desc', missing: '_last'}}]",
 		),
-	aggs: z.object({}).passthrough().optional().describe("Aggregations object for analytics queries"),
+	aggs: z
+		.object({})
+		.passthrough()
+		.optional()
+		// SIO-1398: the bare "Aggregations object for analytics queries" gave the model nothing to
+		// avoid, and it emitted `value_count` on `_id` live -- which ES rejects outright, failing the
+		// entire search including every valid sibling aggregation. Naming the already-available
+		// alternative (the total hit count) is what actually stops the call being made; the server
+		// also prunes the clause defensively.
+		.describe(
+			"Aggregations object for analytics queries. Do NOT aggregate on `_id` (value_count, cardinality, terms): Elasticsearch disallows fielddata on `_id` and the whole search fails, taking valid sibling aggregations with it. To count matching documents use `size: 0` and read the total hit count, which is always returned -- no aggregation needed. For a text field, aggregate on its `.keyword` sub-field.",
+		),
 	_source: z
 		.union([z.array(z.string()), z.boolean(), z.string()])
 		.optional()
@@ -81,6 +92,103 @@ function needsKeywordRetry(result: Pick<estypes.SearchResponse, "_shards">): boo
 		const reason = failure.reason?.reason ?? "";
 		return reason.includes("Fielddata is disabled") || reason.includes("do not support sorting and aggregations");
 	});
+}
+
+// SIO-1398: aggregating on `_id` is rejected outright by ES --
+// `illegal_argument_exception: Fielddata access on the _id field is disallowed`. Unlike the
+// fielddata case below there is NO valid rewrite: `.keyword` is meaningless on `_id`, and the
+// count the model is reaching for is ALREADY in the response as `hits.total` (a `size: 0`
+// search returns it with no aggregation at all). So the clause is dropped rather than
+// rewritten or retried.
+//
+// Observed live (mcp-tool-eval, elastic leg): the sub-agent emitted
+// `{"error_count":{"value_count":{"field":"_id"}}}` alongside valid sibling aggregations, and
+// the whole search failed -- taking the legitimate `terms` aggregations down with it. Dropping
+// only the offending clause keeps the rest of the analytics working.
+//
+// Scoped to metric clauses that read field values. A `terms` agg on `_id` would fail the same
+// way, so it is included; `top_hits` and friends do not take a `field` and are untouched.
+const ID_FIELD_AGG_CLAUSES = new Set([
+	"value_count",
+	"cardinality",
+	"terms",
+	"rare_terms",
+	"significant_terms",
+	"missing",
+]);
+
+// Returns the aggs with every `_id`-targeting clause removed, or undefined when nothing would
+// change (so the caller skips a pointless rebuild). An aggregation whose ONLY child was the
+// dropped clause is itself removed, rather than left as an empty object that ES rejects.
+export function withoutIdFieldAggs(aggs: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+	if (!aggs) return undefined;
+	let changed = false;
+
+	const targetsIdField = (clause: unknown): boolean =>
+		typeof clause === "object" && clause !== null && (clause as { field?: unknown }).field === "_id";
+
+	// CodeRabbit (PR #599): the first version pruned clauses recursively but only dropped EMPTIED
+	// named aggregations at the ROOT map, so a nested definition such as
+	// `{by_service: {terms: {...}, aggs: {doc_ids: {cardinality: {field: "_id"}}}}}` was left as
+	// `doc_ids: {}` and still sent to ES -- which rejects an empty aggregation body, swapping one
+	// bad-query for another. Verified live before fixing.
+	//
+	// The prune now walks named-aggregation MAPS explicitly (the root, plus every nested `aggs` /
+	// `aggregations`), so an aggregation emptied at any depth is removed by its owner.
+
+	// Sub-aggregation maps: each key is a user-chosen NAME whose value is a definition object.
+	const SUB_AGG_KEYS = new Set(["aggs", "aggregations"]);
+
+	// A definition is dead once nothing executable survives. `meta` is metadata that cannot run on
+	// its own, and an emptied `aggs` map leaves nothing either, so both count as empty.
+	const isDeadDefinition = (definition: Record<string, unknown>): boolean =>
+		Object.entries(definition).every(([key, value]) => {
+			if (key === "meta") return true;
+			if (SUB_AGG_KEYS.has(key)) {
+				return value == null || (typeof value === "object" && Object.keys(value as object).length === 0);
+			}
+			return false;
+		});
+
+	// Prunes one named-aggregation map, returning the surviving entries.
+	const pruneAggMap = (map: Record<string, unknown>): Record<string, unknown> => {
+		const out: Record<string, unknown> = {};
+		for (const [name, rawDefinition] of Object.entries(map)) {
+			if (rawDefinition == null || typeof rawDefinition !== "object" || Array.isArray(rawDefinition)) {
+				out[name] = rawDefinition;
+				continue;
+			}
+			const definition: Record<string, unknown> = {};
+			for (const [key, value] of Object.entries(rawDefinition as Record<string, unknown>)) {
+				// The offending clause itself, e.g. `value_count: {field: "_id"}`.
+				if (ID_FIELD_AGG_CLAUSES.has(key) && targetsIdField(value)) {
+					changed = true;
+					continue;
+				}
+				// Recurse into nested named-aggregation maps.
+				if (SUB_AGG_KEYS.has(key) && value != null && typeof value === "object" && !Array.isArray(value)) {
+					const nested = pruneAggMap(value as Record<string, unknown>);
+					if (Object.keys(nested).length > 0) definition[key] = nested;
+					else changed = true;
+					continue;
+				}
+				definition[key] = value;
+			}
+			// Drop the owner when the prune left it with nothing that can execute.
+			if (Object.keys(definition).length === 0 || isDeadDefinition(definition)) {
+				changed = true;
+				continue;
+			}
+			out[name] = definition;
+		}
+		return out;
+	};
+
+	const pruned = pruneAggMap(aggs);
+	if (!changed) return undefined;
+	// Everything was dropped -- return an empty object so the caller omits `aggs` entirely
+	// rather than sending `{}`.
+	return pruned;
 }
 
 // Aggregation clauses where a text field is the failure and `.keyword` is the documented fix.
@@ -251,6 +359,28 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 				}
 			}
 
+			// SIO-1398: drop any `_id`-targeting aggregation BEFORE the request is built. ES rejects
+			// the whole search with `Fielddata access on the _id field is disallowed`, so one bad
+			// clause takes every valid sibling aggregation down with it. There is no rewrite to
+			// attempt (unlike the fielddata/.keyword case) -- the count is already in hits.total --
+			// so this is a pre-flight prune rather than a post-failure retry, saving the round trip
+			// entirely. Logged at info so a silently-corrected call is still auditable.
+			const prunedAggs = withoutIdFieldAggs(aggs);
+			if (prunedAggs) {
+				logger.info(
+					// CodeRabbit (PR #599): this logged EVERY input name as `droppedFrom`, including the
+					// valid aggregations that survived -- so the audit record contradicted the actual
+					// correction on any mixed request. Log the difference.
+					{
+						dropped: Object.keys(aggs ?? {}).filter((name) => !(name in prunedAggs)),
+						retained: Object.keys(prunedAggs),
+					},
+					"Dropped _id-targeting aggregation(s); ES disallows fielddata on _id and hits.total already carries the count",
+				);
+			}
+			const effectiveAggs = prunedAggs ?? aggs;
+			const hasAggs = effectiveAggs !== undefined && Object.keys(effectiveAggs).length > 0;
+
 			// Build search request from natural parameters. aggs/highlight/sort/fields/query
 			// come from Zod passthrough validators which TS sees as `Record<string, unknown>`;
 			// double-cast to the SDK's strict shapes since runtime structure is user-supplied
@@ -261,7 +391,7 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 				size: size ?? 10,
 				...(from !== undefined && { from }),
 				...(sort && { sort: sort as unknown as estypes.Sort }),
-				...(aggs && { aggs: aggs as unknown as Record<string, estypes.AggregationsAggregationContainer> }),
+				...(hasAggs && { aggs: effectiveAggs as unknown as Record<string, estypes.AggregationsAggregationContainer> }),
 				...(_source !== undefined && { _source }),
 				...(fields && fields.length > 0 && { fields: fields as unknown as estypes.QueryDslFieldAndFormat[] }),
 				...(highlight && { highlight: highlight as unknown as estypes.SearchHighlight }),

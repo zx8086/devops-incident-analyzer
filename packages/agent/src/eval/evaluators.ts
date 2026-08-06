@@ -1,8 +1,17 @@
 // packages/agent/src/eval/evaluators.ts
+import { isRetryableCategory } from "@devops-agent/shared";
 import type { Example, Run } from "langsmith/schemas";
 import OpenAI from "openai";
 import { z } from "zod";
 import { parseLlmJson } from "../llm-json.ts";
+import type { ExpectedToolUse } from "./dataset.ts";
+import {
+	callIdentity,
+	isBadArgumentCall,
+	isHallucinatedCall,
+	type ResponseHealthFinding,
+	type ToolTrajectory,
+} from "./tool-trajectory.ts";
 
 const DATASOURCE_VERDICT_DEFAULT = { verdict: "missed" as const, gapsHonest: false, fabricated: false };
 
@@ -495,4 +504,267 @@ export async function subagentEvidenceJudge(run: Run, example?: Example) {
 		{};
 	if (Object.keys(referenceFindings).length === 0) return [];
 	return judgeSubagentReports(subagentReports, referenceFindings);
+}
+
+// --- SIO-1398: tool-correctness evaluators -------------------------------------------------
+//
+// All deterministic. They read run.outputs.output.toolTrajectory, the projection added by
+// tool-trajectory.ts -- the first evaluators in this file to grade the tool CALL rather than
+// the report prose.
+//
+// Two conventions, both load-bearing:
+//   1. 1.0 = good for every key, so rate metrics emit (1 - rate). LangSmith's Compare view
+//      reads uniformly across these and the older keys; a key where "higher is worse" sitting
+//      next to response_quality is actively misleading.
+//   2. When there are no tool calls at all, emit NO feedback rather than a score. A run where
+//      every sub-agent was skipped would otherwise score a perfect 1.0 on every key -- the
+//      failure mode rewarded as success. Mirrors the not_determinable omission in
+//      judgeFeedback above.
+
+function readTrajectory(run: Run): ToolTrajectory | undefined {
+	const trajectory = (run.outputs as { output?: { toolTrajectory?: unknown } } | undefined)?.output?.toolTrajectory;
+	if (typeof trajectory !== "object" || trajectory === null) return undefined;
+	const candidate = trajectory as Partial<ToolTrajectory>;
+	if (!Array.isArray(candidate.calls) || typeof candidate.totalCalls !== "number") return undefined;
+	return candidate as ToolTrajectory;
+}
+
+function readExpectedToolUse(example?: Example): ExpectedToolUse | undefined {
+	const expected = (example?.outputs as { expectedToolUse?: unknown } | undefined)?.expectedToolUse;
+	if (typeof expected !== "object" || expected === null) return undefined;
+	const candidate = expected as Partial<ExpectedToolUse>;
+	if (!Array.isArray(candidate.requiredToolGroups)) return undefined;
+	return candidate as ExpectedToolUse;
+}
+
+// Names the offending tools rather than only counting them -- for "the LLM calls tools
+// incorrectly", the actionable payload IS which tool and which argument class.
+function summarizeOffenders(names: string[], cap = 5): string {
+	const unique = [...new Set(names)];
+	const shown = unique.slice(0, cap).join(", ");
+	return unique.length > cap ? `${shown} (+${unique.length - cap} more)` : shown;
+}
+
+export function toolArgValidity(run: Run, example?: Example): { key: string; score: number; comment: string }[] {
+	const trajectory = readTrajectory(run);
+	if (!trajectory || trajectory.totalCalls === 0) return [];
+	const bad = trajectory.calls.filter(isBadArgumentCall);
+	const score = 1 - bad.length / trajectory.totalCalls;
+	return [
+		{
+			key: "tool_arg_validity",
+			score,
+			comment:
+				bad.length === 0
+					? `All ${trajectory.totalCalls} tool call(s) had valid arguments`
+					: `${bad.length}/${trajectory.totalCalls} call(s) rejected for bad arguments: ${summarizeOffenders(bad.map((c) => c.toolName))}`,
+		},
+	];
+}
+
+export function toolNameValidity(run: Run, example?: Example): { key: string; score: number; comment: string }[] {
+	const trajectory = readTrajectory(run);
+	if (!trajectory || trajectory.totalCalls === 0) return [];
+	const invented = trajectory.calls.filter(isHallucinatedCall);
+	const score = 1 - invented.length / trajectory.totalCalls;
+	return [
+		{
+			key: "tool_name_validity",
+			score,
+			comment:
+				invented.length === 0
+					? `All ${trajectory.totalCalls} tool call(s) named a bound tool`
+					: `${invented.length}/${trajectory.totalCalls} call(s) named a tool that does not exist: ${summarizeOffenders(
+							invented.map((c) => c.hallucinatedName ?? c.toolName),
+						)}`,
+		},
+	];
+}
+
+// Partial credit, unlike the binary datasources_covered. A tool-level check scored all-or-
+// nothing cannot show improvement between runs, which is most of what this metric is for.
+export function expectedToolsFired(run: Run, example?: Example): { key: string; score: number; comment: string }[] {
+	const trajectory = readTrajectory(run);
+	const expected = readExpectedToolUse(example);
+	// No ground truth on this example -> no opinion. Keeps a partial rollout well-defined.
+	if (!expected || expected.requiredToolGroups.length === 0) return [];
+	// CodeRabbit (PR #599): this checked only that a trajectory EXISTED, so a run where every
+	// sub-agent was skipped (totalCalls === 0) scored 0 here while every sibling key emitted
+	// nothing -- an inconsistent key set for the same run, and a 0 that blames the model for a
+	// dispatch failure it did not cause. The no-calls rule documented at the top of this section
+	// applies to this key too.
+	if (!trajectory || trajectory.totalCalls === 0) return [];
+
+	const called = new Set(trajectory.calls.map((c) => c.toolName));
+	const satisfied: string[] = [];
+	const missing: string[] = [];
+	for (const group of expected.requiredToolGroups) {
+		// Disjunctive within a group: any member satisfies it.
+		// CodeRabbit (PR #599): record the member that ACTUALLY fired, not anyOf[0]. Only the
+		// length is scored today, but a list naming the wrong tool is a trap for anyone who later
+		// reads it (e.g. to report which alternative the model preferred).
+		const firedMember = group.anyOf.find((name) => called.has(name));
+		if (firedMember !== undefined) satisfied.push(firedMember);
+		else missing.push(`[${group.anyOf.join(" | ")}] (${group.why})`);
+	}
+
+	const forbiddenCalled = (expected.forbiddenTools ?? []).filter((name) => called.has(name));
+	const groupScore = satisfied.length / expected.requiredToolGroups.length;
+	// A forbidden call is a correctness failure, not a style issue: it zeroes the key rather
+	// than shading it, so it cannot hide behind otherwise-satisfied groups.
+	const score = forbiddenCalled.length > 0 ? 0 : groupScore;
+
+	const parts: string[] = [`${satisfied.length}/${expected.requiredToolGroups.length} required tool group(s) fired`];
+	if (missing.length > 0) parts.push(`missing: ${missing.join("; ")}`);
+	if (forbiddenCalled.length > 0) parts.push(`FORBIDDEN tool(s) called: ${forbiddenCalled.join(", ")}`);
+	return [{ key: "expected_tools_fired", score, comment: parts.join(" -- ") }];
+}
+
+// "Did the right data come back." Reads the response-health findings the trajectory projection
+// derived in-process from rawJson (the payload itself never reaches LangSmith).
+export function toolResponseHealth(run: Run, example?: Example): { key: string; score: number; comment: string }[] {
+	const trajectory = readTrajectory(run);
+	if (!trajectory || trajectory.totalCalls === 0) return [];
+	const findings = (run.outputs as { output?: { responseHealth?: unknown } } | undefined)?.output?.responseHealth;
+	if (!Array.isArray(findings)) return [];
+	const typed = findings as ResponseHealthFinding[];
+	// Binary: any structural problem in what the tools returned fails the key. Unlike the rate
+	// metrics, one bad payload is not diluted by a hundred healthy ones -- an empty known-good
+	// anchor or a 1000x unit error is a defect regardless of how much else worked.
+	const score = typed.length === 0 ? 1 : 0;
+	return [
+		{
+			key: "tool_response_health",
+			score,
+			comment:
+				typed.length === 0
+					? `No response-health findings across ${trajectory.totalCalls} call(s)`
+					: typed.map((f) => `${f.rule} on ${f.toolName}: ${f.detail}`).join(" | "),
+		},
+	];
+}
+
+// SOFT comparative signal -- gate nothing on it. State carries toolName but NOT args (they are
+// deliberately not projected; see the ToolCallRecord privacy invariant), so this cannot tell a
+// paginated sweep with an advancing cursor from a genuinely redundant repeat. Useful for "did
+// this run call the same tool more times than that one", not as a correctness threshold.
+export function toolEfficiency(run: Run, example?: Example): { key: string; score: number; comment: string }[] {
+	const trajectory = readTrajectory(run);
+	if (!trajectory || trajectory.totalCalls === 0) return [];
+
+	// Exclusions, both mandatory or the metric is noise:
+	//  - alignment retries are the supervisor deliberately re-dispatching a failed sub-agent,
+	//    not the model repeating itself
+	//  - a retry after a retryable-category failure (throttled/timeout/5xx) is correct behavior
+	const graded = trajectory.calls.filter(
+		(call) => !call.isAlignmentRetry && !(call.category !== undefined && isRetryableCategory(call.category)),
+	);
+	if (graded.length === 0) return [];
+
+	const distinct = new Set(graded.map(callIdentity));
+	const score = distinct.size / graded.length;
+	const repeats = graded.length - distinct.size;
+	return [
+		{
+			key: "tool_efficiency",
+			score,
+			comment:
+				repeats === 0
+					? `${graded.length} graded call(s), no repeats`
+					: `${repeats} repeated call(s) across ${graded.length} graded (soft signal: args are not observable, so a paginated sweep reads as a repeat)`,
+		},
+	];
+}
+
+// --- SIO-1398: tool_data_utilization (the one new judge) -----------------------------------
+//
+// The only irreducibly semantic question in this set: tools returned data -- did the report
+// actually USE it? Neither evidence_<datasource> nor subagent_accuracy_<datasource> catches
+// this, because both grade what was FOUND against referenceFindings, not whether what was
+// found reached the answer. The failure it targets is the silent drop: tools succeed, real data
+// comes back, and the response is vague prose that ignores it.
+//
+// PRIVACY: this judge receives tool NAMES + subagentReports + response. It NEVER receives tool
+// results. subagentReports and response already go to OpenAI via the two existing judges, so
+// this adds no new egress surface; sending rawJson would.
+
+export const UTILIZATION_JUDGE_SYSTEM_PROMPT = [
+	"You are grading whether an AI incident-analysis agent actually USED the data its tools returned.",
+	"You will be given, per datasource: the names of the tools that returned successfully, the sub-agent's own raw findings, and the final response the agent produced.",
+	"You are NOT grading whether the findings are correct, complete, or well written -- another judge does that. Grade ONLY the link between retrieval and reporting.",
+	'Return "used" when the response carries concrete, specific content attributable to what those tools retrieved (named entities, counts, states, timestamps, identifiers).',
+	'Return "partially_used" when some retrieved material surfaces but notable retrieved content is dropped or flattened into generalities.',
+	'Return "ignored" when tools returned successfully yet the response is generic, hedges as though nothing was retrieved, or claims an absence of data that the retrieval contradicts.',
+	"A truthful, well-evidenced report that says a check came back clean COUNTS AS USED -- reporting a negative finding is using the data. Do not penalise it.",
+	'Respond with JSON only: {"verdict": "used|partially_used|ignored", "reasoning": "<one or two sentences>"}',
+].join("\n");
+
+export const UtilizationGradeSchema = z.object({
+	verdict: z.enum(["used", "partially_used", "ignored"]).catch("ignored"),
+	reasoning: z
+		.union([z.string(), z.number(), z.null()])
+		.optional()
+		.transform((v) => (v === null || v === undefined ? "" : String(v))),
+});
+export type UtilizationGrade = z.output<typeof UtilizationGradeSchema>;
+
+// Pure mapping, split out so the score semantics are unit-testable without an OpenAI call --
+// same split as judgeFeedback/subagentJudgeFeedback above.
+export function utilizationFeedback(grade: UtilizationGrade): { key: string; score: number; comment: string }[] {
+	const score = grade.verdict === "used" ? 1 : grade.verdict === "partially_used" ? 0.5 : 0;
+	return [{ key: "tool_data_utilization", score, comment: `verdict=${grade.verdict} -- ${grade.reasoning}` }];
+}
+
+export async function toolDataUtilization(
+	run: Run,
+	_example?: Example,
+): Promise<{ key: string; score: number; comment: string }[]> {
+	const trajectory = readTrajectory(run);
+	if (!trajectory || trajectory.totalCalls === 0) return [];
+
+	// Only datasources whose tools actually SUCCEEDED can be graded on utilization: if every
+	// call errored there is nothing that could have been used, and scoring 0 would blame the
+	// report for a tool failure the other keys already capture.
+	const succeededByDatasource = new Map<string, Set<string>>();
+	for (const call of trajectory.calls) {
+		if (call.outcome !== "success") continue;
+		const names = succeededByDatasource.get(call.dataSourceId) ?? new Set<string>();
+		names.add(call.toolName);
+		succeededByDatasource.set(call.dataSourceId, names);
+	}
+	if (succeededByDatasource.size === 0) return [];
+
+	const output = (run.outputs as { output?: { response?: unknown; subagentReports?: unknown } } | undefined)?.output;
+	const response = typeof output?.response === "string" ? output.response : "";
+	if (response.trim().length === 0) return [];
+	const subagentReports = (output?.subagentReports ?? {}) as { [dataSourceId: string]: string };
+
+	const perDatasource = [...succeededByDatasource.entries()]
+		.map(([datasource, names]) => {
+			const report = truncateForJudge(
+				subagentReports[datasource] ?? "(no findings produced by the sub-agent for this datasource)",
+			);
+			return `Datasource: ${datasource}\nTools that returned successfully: ${[...names].join(", ")}\nSub-agent's raw findings:\n${report}`;
+		})
+		.join("\n\n");
+
+	const openai = new OpenAI();
+	let r: Awaited<ReturnType<typeof openai.chat.completions.create>>;
+	try {
+		r = await openai.chat.completions.create({
+			...judgeModelConfig(),
+			response_format: { type: "json_object" },
+			messages: [
+				{ role: "system", content: UTILIZATION_JUDGE_SYSTEM_PROMPT },
+				{ role: "user", content: `${perDatasource}\n\nFinal response to grade:\n${truncateForJudge(response)}` },
+			],
+		});
+	} catch {
+		// Degrade to no feedback rather than killing the run over one example -- same contract as
+		// the two judges above.
+		return [];
+	}
+	const grade = parseLlmJson(r.choices[0]?.message?.content ?? "", UtilizationGradeSchema);
+	if (!grade.ok) return [];
+	return utilizationFeedback(grade.data);
 }

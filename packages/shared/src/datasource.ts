@@ -36,10 +36,14 @@ export const KonnectConfigSchema = z.object({
 });
 export type KonnectConfig = z.infer<typeof KonnectConfigSchema>;
 
+// SIO-1401: `defaultProjectId` removed. It was parsed from GITLAB_DEFAULT_PROJECT_ID into
+// config in three places and read by ZERO tool handlers -- every gitlab tool takes an explicit
+// project_id argument. A dead default is worse than none here: it read as authoritative
+// (its stale value, 57520959, does not exist on gitlab.com at all) and sent this session
+// chasing a project-not-found that no code path ever consulted.
 export const GitLabConfigSchema = z.object({
 	instanceUrl: z.string().url(),
 	personalAccessToken: z.string().min(1),
-	defaultProjectId: z.string().optional(),
 });
 export type GitLabConfig = z.infer<typeof GitLabConfigSchema>;
 

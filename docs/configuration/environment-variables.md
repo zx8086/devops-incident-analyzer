@@ -385,7 +385,6 @@ Authentication and connection configuration for the GitLab MCP server, which pro
 |----------|----------|---------|-------------|
 | `GITLAB_INSTANCE_URL` | No | `https://gitlab.com` | GitLab instance base URL (supports self-hosted) |
 | `GITLAB_PERSONAL_ACCESS_TOKEN` | Yes | -- | Personal access token with `api` scope |
-| `GITLAB_DEFAULT_PROJECT_ID` | No | -- | Default project ID for queries (optional) |
 | `GITLAB_TIMEOUT` | No | `30000` | API request timeout in milliseconds |
 | `GITLAB_RETRY_ATTEMPTS` | No | `3` | Number of retry attempts for failed requests |
 | `GITLAB_RETRY_DELAY` | No | `1000` | Base delay between retry attempts in milliseconds |

@@ -18,7 +18,6 @@ export const envMapping: readonly EnvMappingEntry[] = [
 	// gitlab
 	{ configPath: "gitlab.instanceUrl", envVar: "GITLAB_INSTANCE_URL", default: configDefaults.gitlab.instanceUrl },
 	{ configPath: "gitlab.personalAccessToken", envVar: "GITLAB_PERSONAL_ACCESS_TOKEN", default: "" },
-	{ configPath: "gitlab.defaultProjectId", envVar: "GITLAB_DEFAULT_PROJECT_ID", default: "" },
 	{ configPath: "gitlab.timeout", envVar: "GITLAB_TIMEOUT", default: configDefaults.gitlab.timeout },
 	{ configPath: "gitlab.retryAttempts", envVar: "GITLAB_RETRY_ATTEMPTS", default: configDefaults.gitlab.retryAttempts },
 	{ configPath: "gitlab.retryDelay", envVar: "GITLAB_RETRY_DELAY", default: configDefaults.gitlab.retryDelay },
