@@ -127,23 +127,42 @@ uniformly beside `response_quality`.
   it? Catches the silent drop that `evidence_<ds>` and `subagent_accuracy_<ds>` miss, since
   both grade what was FOUND rather than whether it reached the answer.
 
-### First live run (2026-08-06, elastic leg)
+### First full sweep (2026-08-06, all 7 datasources)
 
-Experiment `mcp-tool-eval-dda7575d-elastic`, 3 examples, all 8 keys emitted:
+11 examples, 118 tool calls. Per-datasource averages:
 
-| key | scores | note |
-|---|---|---|
-| `tool_arg_validity` | 0.75, 1, 1 | **`2/8 call(s) rejected for bad arguments: elasticsearch_search`** |
-| `tool_efficiency` | 0.125, 0.5, 0.5 | 7/8 repeated on the search example |
-| `tool_name_validity` | 1, 1, 1 | no invented tool names |
-| `expected_tools_fired` | 1, 1, 1 | required group fired on every example |
-| `tool_response_health` | 1, 1, 1 | anchors returned rows; no findings |
-| `tool_data_utilization` | 1, 1, 1 | judge: `used` -- report cited real retrieved values |
+| datasource | arg_validity | name_validity | expected_fired | response_health | utilization | efficiency |
+|---|---|---|---|---|---|---|
+| elastic | **0.75** / 1 / 1 | 1 | 1 | 1 | 1 | 0.125 / 0.5 / 0.5 |
+| kafka | 1, 1 | 1, 1 | 1, 1 | 1, 1 | 1, 1 | 0.5 / 0.19 |
+| couchbase | 1 | 1 | 1 | 1 | 1 | 0.5 |
+| gitlab | 1 | 1 | 1 | 1 | 1 | 0.3 |
+| atlassian | 1 | 1 | 1 | 1 | 1 | 0.17 |
+| aws | 1, 1 | 1, 1 | 1, 1 | 1, 1 | 1, 1 | 0.087 / 0.5 |
+| konnect | *(no feedback)* | *(no feedback)* | **0** | *(no feedback)* | *(no feedback)* | *(no feedback)* |
 
-The first row is the point: the reported "LLM calls tools incorrectly" behaviour now shows up
-as a score with the offending tool named, on the argument-heavy `search` action group exactly
-where it was predicted to appear. `elasticsearch_search` was also called 8 times for one
-question, which `tool_efficiency` surfaces as a soft signal.
+Three things this sweep established:
+
+1. **`tool_arg_validity` 0.75 on elastic** -- `2/8 call(s) rejected for bad arguments:
+   elasticsearch_search`. The reported "LLM calls tools incorrectly" behaviour reproducing as a
+   score with the offending tool named, on the argument-heavy `search` group exactly where the
+   dataset comment predicted it. Every other datasource was clean, so the signal is specific,
+   not noise.
+2. **gitlab surfaced a real environment defect** (SIO-1401): 4/10 calls returned HTTP 404
+   `Project Not Found` against `GITLAB_DEFAULT_PROJECT_ID`, reproduced independently with a raw
+   `curl` against `:9084`. `tool_arg_validity` correctly stayed 1.0 -- a 404 is not a malformed
+   argument -- which is the evaluator separation working as designed.
+3. **konnect (disabled) emitted NO feedback on the five call-based keys** rather than a false
+   1.0, and `expected_tools_fired` correctly reported `0/1 required tool group(s) fired`. The
+   "zero calls is a visible signal, not silent absence" contract holds.
+
+### Reading `tool_efficiency`
+
+It is below 1.0 nearly everywhere, and that is expected -- it counts same-tool-same-target
+calls without seeing arguments. Two verified examples of legitimate work it scores as
+"repeats": kafka's `kafka_get_consumer_group_lag` called once per consumer group (iterations
+3-8), and aws's `aws_ecs_list_services` called once per cluster. **Use it only to compare two
+runs of the same example, never as a threshold.**
 
 ### Ground truth is deliberately argument-free
 
