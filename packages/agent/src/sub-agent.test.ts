@@ -1,6 +1,10 @@
 // packages/agent/src/sub-agent.test.ts
 import { describe, expect, test } from "bun:test";
 import { redactPiiContent } from "@devops-agent/shared";
+// SIO-1399: imported from the source module, NOT the "@devops-agent/shared" barrel. Sibling
+// test files mock.module() that barrel process-wide (see REDACTION_ACTIVE below), which would
+// hand back an undefined constant and make the drift assertion pass vacuously.
+import { TOOL_ERROR_KIND_TO_CATEGORY } from "@devops-agent/shared/src/agent-state.ts";
 import {
 	buildPersistedToolOutput,
 	classifyToolError,
@@ -438,13 +442,25 @@ describe("extractToolErrors SIO-1054 AWS _error capture", () => {
 	});
 
 	test("captures a bad-input _error (e.g. MalformedQueryException) as NON-auth", () => {
-		// SIO-1078: MalformedQueryException from a retention-window rejection now maps to
-		// kind "bad-input" (still the "unknown" toolError category), not "aws-unknown".
+		// SIO-1078: MalformedQueryException from a retention-window rejection maps to kind
+		// "bad-input", not "aws-unknown".
 		const errors = extractToolErrors([awsErrorMsg({ kind: "bad-input", awsErrorName: "MalformedQueryException" })]);
 		expect(errors).toHaveLength(1);
-		expect(errors[0]?.category).toBe("unknown");
+		// SIO-1399: bad-input now buckets as "bad-query" (caller-fixable, non-retryable, and
+		// NOT counted as a degraded datasource) rather than the old catch-all "unknown".
+		expect(errors[0]?.category).toBe("bad-query");
+		expect(errors[0]?.retryable).toBe(false);
 		// The whole point of SIO-1054: a non-authz kind must NOT read as auth.
 		expect(errors[0]?.category).not.toBe("auth");
+	});
+
+	// SIO-1399: the AWS-specific kind union shares exactly one member with the shared
+	// ToolErrorKind union. AWS_KIND_TO_CATEGORY delegates that member to the canonical map, so
+	// the two paths cannot drift; this pins the invariant against a future edit that re-inlines
+	// the literal on either side.
+	test("SIO-1399: the AWS bad-input category matches the shared canonical mapping", () => {
+		const errors = extractToolErrors([awsErrorMsg({ kind: "bad-input", awsErrorName: "ValidationException" })]);
+		expect(errors[0]?.category).toBe(TOOL_ERROR_KIND_TO_CATEGORY["bad-input"]);
 	});
 
 	test("SIO-1079: normalizes a retention-window message so the aggregator can't read it as 'expired'", () => {
