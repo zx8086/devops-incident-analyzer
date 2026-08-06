@@ -368,7 +368,13 @@ export const registerSearchTool: ToolRegistrationFunction = (server: McpServer, 
 			const prunedAggs = withoutIdFieldAggs(aggs);
 			if (prunedAggs) {
 				logger.info(
-					{ droppedFrom: Object.keys(aggs ?? {}), remaining: Object.keys(prunedAggs) },
+					// CodeRabbit (PR #599): this logged EVERY input name as `droppedFrom`, including the
+					// valid aggregations that survived -- so the audit record contradicted the actual
+					// correction on any mixed request. Log the difference.
+					{
+						dropped: Object.keys(aggs ?? {}).filter((name) => !(name in prunedAggs)),
+						retained: Object.keys(prunedAggs),
+					},
 					"Dropped _id-targeting aggregation(s); ES disallows fielddata on _id and hits.total already carries the count",
 				);
 			}

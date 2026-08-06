@@ -89,7 +89,7 @@ bun run eval:mcp-tool                                               # all 7
 > LangSmith `401` or missing MCP URLs, not an obvious "file not found". Point at the real file:
 > `bun --env-file=/path/to/main/checkout/.env run src/eval/run-mcp-tool-eval.ts --datasource elastic`.
 
-- Dataset: `mcp-tool-dataset.ts` -> LangSmith dataset `mcp-tool-eval`. 11 examples across all
+- Dataset: `mcp-tool-dataset.ts` -> LangSmith dataset `mcp-tool-eval`. 25 examples across all
   7 datasources.
 - **Separate from `incident-replay-eval` on purpose.** That one is a model A/B harness
   (`--sub-agent-model`); its variable under test is the model. This one tests the tooling and
@@ -99,7 +99,7 @@ bun run eval:mcp-tool                                               # all 7
   failure is attributable to that server. Queries force a specific action group from that
   datasource's `action_tool_map`, anchored on an entity that returns rows today
   (`LIVE_ANCHORS`, verified against the live `.env`, not `.env.example`).
-- **An example returning zero tool calls means the anchor or query is wrong**, not that the
+- **An example returning zero tool calls is never a healthy pass** -- it can mean a wrong anchor or query, but equally a binder regression, a skipped sub-agent, or an execution failure, not that the
   tools are healthy. The evaluators emit no feedback at `totalCalls === 0` rather than scoring
   a perfect 1.0 -- otherwise a run where the sub-agent was skipped would look like a clean pass.
 - konnect is included but intentionally disabled in this environment (`precheck.ts` marks it

@@ -14,8 +14,10 @@
 //
 // Queries are written to force a specific action group from that datasource's
 // agents/incident-analyzer/tools/<ds>-*.yaml action_tool_map, anchored on an entity that
-// returns rows TODAY. An example that returns zero calls means the anchor or the query is
-// wrong -- not that the tools are healthy.
+// returns rows TODAY. An example that returns ZERO tool calls is never a healthy pass: it can
+// mean a wrong anchor or query, but equally a binder regression, a skipped sub-agent, or an
+// execution failure. The evaluators emit NO feedback in that case rather than scoring it, so a
+// zero-call example is an investigation trigger, not a silent success.
 
 import type { EvalExample } from "./dataset.ts";
 

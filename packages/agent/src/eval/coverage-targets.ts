@@ -27,7 +27,7 @@ import { getAgentsDir } from "../paths.ts";
 import { RESOLUTION_TOOLS_BY_DATASOURCE } from "../sub-agent.ts";
 import { TYPED_FINDING_TOOLS } from "../sub-agent-instrumentation.ts";
 
-export type CoverageSource = "runbook" | "typed-finding" | "resolution";
+export type CoverageSource = "runbook" | "typed-finding" | "resolution" | "orbit";
 
 export interface CoverageTarget {
 	toolName: string;
@@ -105,9 +105,11 @@ export function buildCoverageTargets(runbookDir?: string): CoverageTarget[] {
 	for (const [runbook, tools] of runbookToolCitations(runbookDir)) {
 		for (const tool of tools) add(tool, "runbook", runbook);
 	}
-	// ORBIT_TOOL_NAMES is a subset of TYPED_FINDING_TOOLS today, but unioned explicitly so a
-	// future orbit tool added to only one of the two still becomes a coverage target.
-	for (const tool of [...TYPED_FINDING_TOOLS, ...ORBIT_TOOL_NAMES]) add(tool, "typed-finding");
+	// CodeRabbit (PR #599): these were unioned into one "typed-finding" loop, which recorded
+	// every Orbit tool under the wrong provenance and would give a misleading priority signal the
+	// moment the two sets diverge. Separate loops, correct source each.
+	for (const tool of TYPED_FINDING_TOOLS) add(tool, "typed-finding");
+	for (const tool of ORBIT_TOOL_NAMES) add(tool, "orbit");
 	for (const tools of Object.values(RESOLUTION_TOOLS_BY_DATASOURCE)) {
 		for (const tool of tools) add(tool, "resolution");
 	}
