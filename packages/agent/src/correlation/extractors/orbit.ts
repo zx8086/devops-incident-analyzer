@@ -24,7 +24,9 @@ import { matchesFocus } from "../focus-match.ts";
 //    { type, id, properties: {...} } -- still read for backward compat.
 // All entity ids come back as strings.
 
-const ORBIT_TOOL_NAMES = new Set([
+// SIO-1398: exported so eval coverage targets derive from the same set the extractor gates on.
+// A tool here that is never called means the orbit findings card silently renders empty.
+export const ORBIT_TOOL_NAMES = new Set([
 	"gitlab_blast_radius",
 	"gitlab_cross_project_callers",
 	"gitlab_recent_deploys",

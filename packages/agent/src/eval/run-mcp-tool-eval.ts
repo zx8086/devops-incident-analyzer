@@ -17,6 +17,7 @@ import { spawnSync } from "node:child_process";
 import { Client } from "langsmith";
 import { evaluate } from "langsmith/evaluation";
 import type { Example } from "langsmith/schemas";
+import { reportCoverage } from "./coverage-targets.ts";
 import {
 	confidenceThreshold,
 	datasourcesCovered,
@@ -143,6 +144,34 @@ const results = await evaluate(
 		},
 	},
 );
+
+// SIO-1398: report coverage against the DERIVED targets (runbook frontmatter +
+// TYPED_FINDING_TOOLS + RESOLUTION_TOOLS_BY_DATASOURCE), so every run says plainly which
+// load-bearing tools were never exercised. Printed rather than asserted: this eval measures
+// tool CORRECTNESS, and failing a run for breadth would conflate two different questions.
+try {
+	const exercised = new Set<string>();
+	for (const result of results.results ?? []) {
+		const trajectory = (result.run?.outputs as { output?: { toolTrajectory?: { calls?: { toolName: string }[] } } })
+			?.output?.toolTrajectory;
+		for (const call of trajectory?.calls ?? []) exercised.add(call.toolName);
+	}
+	const report = reportCoverage(exercised);
+	const scope = datasource ? report.byDatasource.get(datasource) : undefined;
+	console.log("\n--- coverage vs derived targets (runbooks + typed-finding + resolution) ---");
+	if (scope) {
+		console.log(`${datasource}: ${scope.covered}/${scope.total} target tools exercised`);
+		if (scope.missing.length > 0) console.log(`  not exercised: ${scope.missing.join(", ")}`);
+	} else {
+		console.log(`overall: ${report.covered}/${report.total} target tools exercised`);
+		for (const [ds, stats] of [...report.byDatasource.entries()].sort()) {
+			console.log(`  ${ds.padEnd(11)} ${stats.covered}/${stats.total}`);
+		}
+	}
+} catch (error) {
+	// Reporting must never fail a completed eval run.
+	console.warn(`coverage report skipped: ${error instanceof Error ? error.message : String(error)}`);
+}
 
 console.log("Done. View results in LangSmith UI under the experiment prefix above.");
 console.log(`Compare at: Datasets -> ${DATASET_NAME} -> Compare (filter by "mcp-tool-eval-${gitSha}")`);

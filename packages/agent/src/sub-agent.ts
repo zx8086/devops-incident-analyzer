@@ -969,7 +969,11 @@ const MIN_FILTERED_TOOLS = 1;
 // is already in the `search` group, and list_indices/indices_summary resolve index
 // names, not service.name. Each set is tiny, keeping the datasource under
 // MAX_TOOLS_PER_AGENT (25).
-const RESOLUTION_TOOLS_BY_DATASOURCE: Record<string, string[]> = {
+// SIO-1398: exported so the mcp-tool-eval coverage targets can be DERIVED from it rather than
+// hand-listed. These tools are force-included on every turn, i.e. the repo already declares
+// they must always be reachable -- which makes them exactly the set an eval must exercise.
+// Export only; the value and every consumer are unchanged.
+export const RESOLUTION_TOOLS_BY_DATASOURCE: Record<string, string[]> = {
 	// SIO-1178: gitlab_list_merge_requests is the sole input to extractGitLabFindings
 	// and the gitlab-deploy-vs-datastore-runtime rule -- force-include it so the
 	// flagship correlation path survives every action selection under the 25-tool cap.
