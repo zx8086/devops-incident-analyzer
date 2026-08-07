@@ -2,7 +2,7 @@
 
 **Scope:** Deploy a new container image to an existing Bedrock AgentCore MCP runtime (image swap only — estates, env vars, and network config are preserved). Covers the Kafka and AWS runtimes; the procedure is identical except for the per-runtime values below.
 
-**Last validated:** 2026-08-06 — kafka v14 -> v16 and aws v11 -> v13 deploys (SIO-1400/1402/1407), following the 2026-07-19 kafka v11 -> v12 / aws v9 -> v10 deploy (SIO-1161) and the SIO-710 hotfix deploy (v8 -> v10) that originated this runbook.
+**Last validated:** 2026-08-07 — kafka v17 -> v18 and aws v14 -> v15 deploys (SIO-1420/1421/1422/1423), following the 2026-08-06 kafka v14 -> v16 / aws v11 -> v13 deploy (SIO-1400/1402/1407), the 2026-07-19 kafka v11 -> v12 / aws v9 -> v10 deploy (SIO-1161), and the SIO-710 hotfix deploy (v8 -> v10) that originated this runbook.
 
 ---
 
@@ -17,7 +17,7 @@
 | Network mode | **VPC** (MSK subnets + SG — see the VPC gotcha below) | PUBLIC |
 | SigV4 proxy port (local) | 3000 | 3001 |
 | CloudWatch log group | `/aws/bedrock-agentcore/runtimes/kafka_mcp_server-7RjmF16MqA-DEFAULT` | `/aws/bedrock-agentcore/runtimes/aws_mcp_server-iM1Cnu3VtR-DEFAULT` |
-| Boot toolCount canary | compare against the previous boot (61 as of 2026-07-19) | **63** (was 61 pre-SIO-1161) |
+| Boot toolCount canary | **61** (confirmed 2026-08-07; unchanged since 2026-07-19) | **70** (confirmed 2026-08-07; was 63 pre-SIO-1420/1421, 61 pre-SIO-1161) |
 | Image architecture | linux/arm64 — never push amd64 | same |
 
 **Do not assume — verify the account before every deploy.** `eu-shared-services-prd` is account `399987695868`. Profile stanzas in `~/.aws/credentials` are hand-pasted SSO keys and have held the wrong account's keys before; the stanza header comment controls nothing. Run `aws sts get-caller-identity --profile eu-shared-services-prd` and confirm the account id before touching ECR or the runtime.
@@ -140,6 +140,15 @@ A hand-rolled `invoke-agent-runtime` JSON-RPC probe can misreport a 400 from an 
 No image is deleted from ECR by a normal deploy, so rollback is always available: edit `containerUri` back to the previous known-good digest and re-run step 5. This creates a new version pointing at the old image, READY within a minute.
 
 ## Lessons learned
+
+**2026-08-07 (kafka v17 -> v18, aws v14 -> v15, SIO-1420/1421/1422/1423):**
+
+- Rebuilt both images to pick up the AWS/Kafka `registerTool` conversions (SIO-1420/1421), the structuredContent/outputSchema wave 1 (SIO-1422, PR #622), and the `bootstrap-lifecycle.ts` extraction from `packages/shared/src/bootstrap.ts` (SIO-1423, PR #624) — the latter is a shared-package change that reaches both runtimes' boot path the same way the SIO-1400/1402/1407 metrics/proxy changes did on the prior deploy.
+- Image tag `sio-1420-1421-1422-1423` on both repos. Live digests after this deploy:
+  - kafka: `399987695868.dkr.ecr.eu-central-1.amazonaws.com/kafka-mcp-agentcore@sha256:55dda9df7b91f9a3369a8ac4149f13e4b1666df6f525962408ef6a66b71c543d`
+  - aws: `399987695868.dkr.ecr.eu-central-1.amazonaws.com/aws-mcp-agentcore@sha256:3e2693033fda93c2d9f5dd6a3ca4c47ddf26f586783a7bf76237eda68aeb0fd0`
+- Hit the same transient ECR push 403 documented below (2026-08-06 entry) on both images again, on the first push attempt each time. Re-login + retry resolved both immediately, same as before — this is now a recurring-but-benign pattern on this repo, not a one-off.
+- toolCount canary unchanged from the prior deploy: kafka 61, aws 70. `MCP_TOOL_METRICS_DB_PATH` confirmed absent on both runtimes before and after (the 2026-08-06 stopgap removal held; not reintroduced by this deploy).
 
 **2026-08-06 (kafka v14 -> v16, aws v11 -> v13, SIO-1400/1402/1407):**
 
