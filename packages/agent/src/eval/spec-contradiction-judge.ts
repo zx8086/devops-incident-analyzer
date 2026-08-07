@@ -9,14 +9,19 @@ import { z } from "zod";
 import { parseLlmJson } from "../llm-json.ts";
 import { judgeModelConfig } from "./evaluators.ts";
 
+// CodeRabbit (PR #632): .catch() here previously made a missing/invalid field parse as
+// SUCCESS with a defaulted value, so a schema-invalid judge response silently became "no
+// contradictions found" instead of routing through judgeSpecContradictions' failure path
+// (ContradictionScanResult's ok: false case). Reject invalid payloads instead of defaulting --
+// the caller already has a designed path for "the judge call failed."
 const ContradictionSchema = z.object({
 	soulClaim: z.string(),
 	rulesConstraint: z.string(),
-	severity: z.enum(["low", "medium", "high"]).catch("low" as const),
+	severity: z.enum(["low", "medium", "high"]),
 });
 
 export const ContradictionGradeSchema = z.object({
-	contradictions: z.array(ContradictionSchema).catch([]),
+	contradictions: z.array(ContradictionSchema),
 });
 export type ContradictionGrade = z.output<typeof ContradictionGradeSchema>;
 

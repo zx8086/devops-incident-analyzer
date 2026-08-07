@@ -31,16 +31,22 @@ describe("ContradictionGradeSchema", () => {
 		expect(grade.contradictions).toEqual([]);
 	});
 
-	test("tolerates a missing contradictions key by defaulting to empty (malformed JSON should not crash the scan)", () => {
-		const grade = ContradictionGradeSchema.parse({});
-		expect(grade.contradictions).toEqual([]);
+	// CodeRabbit (PR #632): .catch([]) on a missing/invalid contradictions field made
+	// parseLlmJson report SUCCESS for a malformed judge response, so judgeSpecContradictions
+	// never took the failure path -- a schema-invalid response silently became "no
+	// contradictions found" (score: 1), the same false-clean-pass bug already fixed once at the
+	// network layer (see the "a failed judge call" test below). Fixed by rejecting instead of
+	// defaulting; verified live against the installed Zod version that safeParse now fails here.
+	test("REJECTS a missing contradictions key rather than defaulting to empty", () => {
+		const result = ContradictionGradeSchema.safeParse({});
+		expect(result.success).toBe(false);
 	});
 
-	test("tolerates an unknown severity by defaulting to low rather than rejecting the whole response", () => {
-		const grade = ContradictionGradeSchema.parse({
+	test("REJECTS an unknown severity rather than defaulting to low", () => {
+		const result = ContradictionGradeSchema.safeParse({
 			contradictions: [{ soulClaim: "a", rulesConstraint: "b", severity: "extreme" }],
 		});
-		expect(grade.contradictions[0]?.severity).toBe("low");
+		expect(result.success).toBe(false);
 	});
 });
 

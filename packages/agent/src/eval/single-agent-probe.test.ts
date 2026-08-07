@@ -5,7 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import type { DataSourceResult } from "@devops-agent/shared";
 import { AgentState } from "../state.ts";
-import { buildOrchestratorProbeState, buildProbeState } from "./single-agent-probe.ts";
+import { buildOrchestratorProbeState, buildProbeState, parseProbeEnv } from "./single-agent-probe.ts";
 
 describe("buildProbeState", () => {
 	test("sets currentDataSource and a single human message from the scenario text", () => {
@@ -60,5 +60,80 @@ describe("buildOrchestratorProbeState", () => {
 		const state = buildOrchestratorProbeState(results, "Investigate pipeline failures.");
 		expect(state.messages).toHaveLength(1);
 		expect(state.messages[0]?.content).toBe("Investigate pipeline failures.");
+	});
+});
+
+// CodeRabbit (PR #632): env vars were read with manual checks + an unchecked JSON.parse type
+// assertion -- an unknown PROBE_DATASOURCE silently fell back to elastic-agent inside
+// queryDataSource, and malformed/null PROBE_REFERENCE_FINDINGS threw an unhandled exception
+// instead of a clean CLI error. Verified live: DATA_SOURCE_IDS-unknown ids fall through
+// AGENT_NAMES[id] ?? "elastic-agent" (sub-agent.ts:2021), and JSON.parse("not json") /
+// JSON.parse("null") both throw or produce a non-object that crashes downstream.
+describe("parseProbeEnv", () => {
+	test("accepts a known datasource id and a non-empty scenario", () => {
+		const result = parseProbeEnv({ PROBE_DATASOURCE: "gitlab", PROBE_SCENARIO: "Investigate X." });
+		expect(result.success).toBe(true);
+		if (result.success) {
+			expect(result.data.dataSourceId).toBe("gitlab");
+			expect(result.data.scenario).toBe("Investigate X.");
+			expect(result.data.runOrchestrator).toBe(false);
+			expect(result.data.referenceFindings).toBeUndefined();
+		}
+	});
+
+	test("rejects an unknown datasource id instead of silently falling back", () => {
+		const result = parseProbeEnv({ PROBE_DATASOURCE: "not-a-datasource", PROBE_SCENARIO: "x" });
+		expect(result.success).toBe(false);
+	});
+
+	test("rejects a missing PROBE_SCENARIO", () => {
+		const result = parseProbeEnv({ PROBE_DATASOURCE: "gitlab" });
+		expect(result.success).toBe(false);
+	});
+
+	test("rejects an empty-string PROBE_SCENARIO", () => {
+		const result = parseProbeEnv({ PROBE_DATASOURCE: "gitlab", PROBE_SCENARIO: "" });
+		expect(result.success).toBe(false);
+	});
+
+	test('PROBE_RUN_ORCHESTRATOR only true for the literal string "true"', () => {
+		const truthy = parseProbeEnv({ PROBE_DATASOURCE: "gitlab", PROBE_SCENARIO: "x", PROBE_RUN_ORCHESTRATOR: "true" });
+		expect(truthy.success && truthy.data.runOrchestrator).toBe(true);
+
+		const other = parseProbeEnv({ PROBE_DATASOURCE: "gitlab", PROBE_SCENARIO: "x", PROBE_RUN_ORCHESTRATOR: "yes" });
+		expect(other.success).toBe(false);
+	});
+
+	test("parses well-formed PROBE_REFERENCE_FINDINGS as a string-to-string record", () => {
+		const result = parseProbeEnv({
+			PROBE_DATASOURCE: "gitlab",
+			PROBE_SCENARIO: "x",
+			PROBE_REFERENCE_FINDINGS: '{"gitlab":"pipeline failed"}',
+		});
+		expect(result.success).toBe(true);
+		if (result.success) expect(result.data.referenceFindings).toEqual({ gitlab: "pipeline failed" });
+	});
+
+	test("rejects malformed JSON in PROBE_REFERENCE_FINDINGS instead of throwing", () => {
+		const result = parseProbeEnv({
+			PROBE_DATASOURCE: "gitlab",
+			PROBE_SCENARIO: "x",
+			PROBE_REFERENCE_FINDINGS: "not json",
+		});
+		expect(result.success).toBe(false);
+	});
+
+	test('rejects the literal string "null" in PROBE_REFERENCE_FINDINGS instead of crashing downstream', () => {
+		const result = parseProbeEnv({ PROBE_DATASOURCE: "gitlab", PROBE_SCENARIO: "x", PROBE_REFERENCE_FINDINGS: "null" });
+		expect(result.success).toBe(false);
+	});
+
+	test("rejects PROBE_REFERENCE_FINDINGS with a non-string value", () => {
+		const result = parseProbeEnv({
+			PROBE_DATASOURCE: "gitlab",
+			PROBE_SCENARIO: "x",
+			PROBE_REFERENCE_FINDINGS: '{"gitlab":123}',
+		});
+		expect(result.success).toBe(false);
 	});
 });
