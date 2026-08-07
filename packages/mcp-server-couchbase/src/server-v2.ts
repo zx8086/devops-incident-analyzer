@@ -18,6 +18,7 @@ import { connectionManager } from "./lib/connectionManager.ts";
 import { installReadOnlyChokepointV2, installToolCallLoggingV2, type ToolCallLogger } from "./v2/tool-call-wrappers.ts";
 import { registerCoreToolsV2 } from "./v2/tools/core.ts";
 import { registerDocumentationToolsV2 } from "./v2/tools/documentation.ts";
+import { registerEchoToolV2 } from "./v2/tools/echo.ts";
 import { registerPlaybookToolsV2 } from "./v2/tools/playbooks.ts";
 import { registerQueryAnalysisToolsAV2 } from "./v2/tools/query-analysis-a.ts";
 import { registerQueryAnalysisToolsBV2 } from "./v2/tools/query-analysis-b.ts";
@@ -106,6 +107,9 @@ export function buildServerFactory(logger: ToolCallLogger): McpServerFactory {
 		// SIO-1443: query analysis tools, part B (10 of 21 -- system-catalog reads plus the
 		// offline/live query-optimization advisor).
 		registerQueryAnalysisToolsBV2(server, tools);
+
+		// SIO-1443: echo tool (diagnostic/connectivity-test tool for debugging).
+		registerEchoToolV2(server, tools);
 
 		// SIO-1424: composition order matches v1's serverFactory closure in bootstrap.ts --
 		// read-only INNER (installed first), tool-call logging OUTER (installed second, so a
