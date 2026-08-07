@@ -16,6 +16,7 @@ import {
 import { z } from "zod";
 import { connectionManager } from "./lib/connectionManager.ts";
 import { installReadOnlyChokepointV2, installToolCallLoggingV2, type ToolCallLogger } from "./v2/tool-call-wrappers.ts";
+import { registerCoreToolsV2 } from "./v2/tools/core.ts";
 
 const PING_ANNOTATIONS: ToolAnnotations = {
 	readOnlyHint: true,
@@ -84,6 +85,10 @@ export function buildServerFactory(logger: ToolCallLogger): McpServerFactory {
 			},
 		);
 		tools.set("capella_ping", ping);
+
+		// SIO-1443: core/database tools (buckets, cluster health, scopes/collections, schema,
+		// SQL++ query/explain, single-document CRUD).
+		registerCoreToolsV2(server, tools);
 
 		// SIO-1424: composition order matches v1's serverFactory closure in bootstrap.ts --
 		// read-only INNER (installed first), tool-call logging OUTER (installed second, so a
