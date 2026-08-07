@@ -538,6 +538,18 @@ export function registerDocumentationToolsV2(server: McpServer, tools: Map<strin
 				resourceUri = `docs://${scope_name}`;
 			}
 
+			// SIO-1443 follow-up: v1 only wires the docs:// resource handler when documentation is
+			// enabled (registerAllResources in resources/index.ts); with the default (disabled)
+			// config, v1's readResourceByUri docs:// fast path is skipped entirely and the request
+			// falls through to a generic "No resource handler found for URI" error. resolveDocsUri()
+			// has no such gate, so without this check this tool would succeed (real filesystem read
+			// or placeholder text) where v1 errors -- an uncaught throw here (not the try/catch
+			// below, which turns errors into a plain-text success response) is what actually
+			// reproduces "fails" for a caller checking isError.
+			if (!config.documentation.enabled) {
+				throw createError("NOT_FOUND", `No resource handler found for URI: ${resourceUri}`);
+			}
+
 			try {
 				logger.info(
 					{ resourceUri, scope: scope_name, collection: collection_name, file: file_name },

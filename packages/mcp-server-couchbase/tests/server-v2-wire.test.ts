@@ -10,11 +10,12 @@
 // result rather than throwing -- see server-v2.ts), so these tests run without a Couchbase
 // cluster: they verify PROTOCOL shape (JSON-RPC envelope, era negotiation, tool dispatch), not
 // database connectivity.
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpHandler } from "@modelcontextprotocol/server";
+import { config } from "../src/config/index.ts";
 import { registerPingHandlers } from "../src/lib/pingHandler.ts";
 import { buildServerFactory } from "../src/server-v2.ts";
 
@@ -230,5 +231,67 @@ describe("SIO-1424: v2 pilot wire protocol (three-era matrix)", () => {
 
 		expect(v1Text).toBeDefined();
 		expect(v2Text).toBe(v1Text);
+	});
+});
+
+describe("SIO-1443 follow-up: capella_read_documentation respects config.documentation.enabled", () => {
+	const priorDocumentation = config.documentation;
+
+	afterEach(() => {
+		config.documentation = priorDocumentation;
+	});
+
+	// Regression test for the reviewer finding on the v2 documentation port: resolveDocsUri() had
+	// no gate on config.documentation.enabled, so under the DEFAULT config (disabled) the tool
+	// silently succeeded with placeholder content where v1 errors ("No resource handler found for
+	// URI", via registerAllResources only constructing a DocumentationHandler when
+	// config.documentation.enabled -- see resources/index.ts). Asserts the v2 tool now fails
+	// (isError: true) instead of returning a success result, matching v1's behavioral contract for
+	// the default/common configuration.
+	test("documentation disabled (the default): capella_read_documentation errors instead of returning placeholder content", async () => {
+		config.documentation = { enabled: false, baseDirectory: "/tmp/docs", fileExtension: ".md" };
+
+		const handler = buildHandler();
+		const response = await handler.fetch(
+			new Request("http://localhost/mcp", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Accept: "application/json, text/event-stream",
+					"Mcp-Method": "tools/call",
+					"Mcp-Name": "capella_read_documentation",
+				},
+				body: JSON.stringify({
+					jsonrpc: "2.0",
+					id: 5,
+					method: "tools/call",
+					params: {
+						name: "capella_read_documentation",
+						arguments: { scope_name: "inventory", collection_name: "products", file_name: "overview" },
+						_meta: {
+							"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+							"io.modelcontextprotocol/clientCapabilities": {},
+							"io.modelcontextprotocol/clientInfo": { name: "probe", version: "0" },
+						},
+					},
+				}),
+			}),
+		);
+		await handler.close();
+
+		expect(response.status).toBe(200);
+		const body = (await parseJsonRpcBody(response)) as {
+			jsonrpc: string;
+			id: number;
+			result?: { content?: Array<{ type: string; text: string }>; isError?: boolean };
+			error?: unknown;
+		};
+		expect(body.jsonrpc).toBe("2.0");
+		expect(body.id).toBe(5);
+		// An uncaught throw from a registerTool handler surfaces as a JSON-RPC result with
+		// isError: true (not a top-level JSON-RPC error and not a plain-text success result) --
+		// this is what "the tool must fail" means at the protocol layer.
+		expect(body.result?.isError).toBe(true);
+		expect(body.result?.content?.[0]?.text).toContain("No resource handler found for URI");
 	});
 });
