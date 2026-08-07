@@ -89,9 +89,21 @@ agents/
     knowledge/
       index.yaml                        # Knowledge base category registry
       runbooks/
-        kafka-consumer-lag.md           # Playbook: stalled/lagging Kafka consumers
-        high-error-rate.md              # Playbook: 5xx spikes on Kong Konnect
-        database-slow-queries.md        # Playbook: slow N1QL queries on Capella
+        cross-datasource/
+          code-change-correlation.md    # Trace errors to the causing code change
+          mcp-tool-audit.md             # Datasource-agnostic MCP tool audit
+        aws/
+          aws-cloudwatch-alarm-triage.md
+          aws-ecs-task-failures.md
+          aws-iam-permission-troubleshooting.md
+          aws-msk-broker-unreachable.md
+          msk-iam-permissions.md
+        kafka/
+          kafka-consumer-lag.md         # Playbook: stalled/lagging Kafka consumers
+        couchbase/
+          database-slow-queries.md      # Playbook: slow N1QL queries on Capella
+        elastic/
+          high-error-rate.md            # Playbook: 5xx spikes on Kong Konnect
       systems-map/
         service-dependencies.md         # 4-plane infrastructure dependency graph
       slo-policies/
@@ -236,8 +248,8 @@ The incident analyzer defines three skills:
 
 The `knowledge/` directory contains reference material the agent can consult opportunistically when matching incident signals against known patterns. Unlike skills, knowledge entries are **bulk-loaded and always-on**: every file in every registered category is appended to the orchestrator's system prompt for the life of each request.
 
-`knowledge/index.yaml` declares categories and their paths. The incident analyzer registers three:
-- **runbooks/** -- Operational playbooks for common incident patterns (`kafka-consumer-lag.md`, `high-error-rate.md`, `database-slow-queries.md`). Each runbook describes identification steps, drill-down queries, and cross-datasource correlation, and references MCP tool names directly in prose.
+`knowledge/index.yaml` declares categories and their paths. The incident analyzer registers seven:
+- **runbooks/** -- Operational playbooks for common incident patterns, split into per-datasource subfolders (`runbooks/aws/`, `runbooks/kafka/`, `runbooks/couchbase/`, `runbooks/elastic/`) plus `runbooks/cross-datasource/` for correlation and audit runbooks that span sources. Each subfolder is its own registered `index.yaml` category (`runbooks-aws`, `runbooks-kafka`, etc.). Each runbook describes identification steps, drill-down queries, and cross-datasource correlation, and references MCP tool names directly in prose.
 - **systems-map/** -- Service dependency graphs and topology (`service-dependencies.md`). Helps the agent reason about upstream/downstream blast radius.
 - **slo-policies/** -- SLO/SLA definitions and thresholds (`api-latency-slo.md`). Tier definitions, error budgets, and latency targets.
 
@@ -279,12 +291,12 @@ Two files define the compliance posture:
 5. `agents/<name>/` -- recursively calls `loadAgent()` for each sub-agent listed in `manifest.agents`
 6. `knowledge/` -- delegated to `loadKnowledge()` (see below)
 
-**`loadKnowledge(agentDir: string): KnowledgeEntry[]`** reads reference material registered in `knowledge/index.yaml`. For each category declared there (`runbooks`, `systems-map`, `slo-policies`, ...), it walks the category's `path` directory and loads every `.md` file (excluding `.gitkeep`) into a `KnowledgeEntry` tagged with its category name. Non-empty contents only. If `index.yaml` is missing or fails `KnowledgeIndexSchema` validation, the loader returns an empty array -- knowledge is strictly additive and never blocks agent loading.
+**`loadKnowledge(agentDir: string): KnowledgeEntry[]`** reads reference material registered in `knowledge/index.yaml`. For each category declared there (`runbooks-aws`, `runbooks-kafka`, ..., `systems-map`, `slo-policies`, ...), it walks the category's `path` directory and loads every `.md` file (excluding `.gitkeep`) into a `KnowledgeEntry` tagged with its category name. Non-empty contents only. Any category whose name is exactly `runbooks` or starts with `runbooks-` is treated as a runbook category (triggers frontmatter parsed, subject to `runbook_selection` filename validation) -- see `isRunbookCategory()`. If `index.yaml` is missing or fails `KnowledgeIndexSchema` validation, the loader returns an empty array -- knowledge is strictly additive and never blocks agent loading.
 
 **Return type:**
 ```typescript
 interface KnowledgeEntry {
-    category: string;    // e.g. "runbooks", "systems-map", "slo-policies"
+    category: string;    // e.g. "runbooks-aws", "systems-map", "slo-policies"
     filename: string;    // e.g. "kafka-consumer-lag.md"
     content: string;     // trimmed file body
 }

@@ -198,6 +198,15 @@ export const KnowledgeCategorySchema = z.object({
 	description: z.string(),
 });
 
+// Runbook-category convention: a category counts as a runbook category (triggers
+// frontmatter meaningful, subject to runbook_selection filename validation) when its
+// key is exactly "runbooks" (flat single-folder shape, e.g. elastic-iac) or prefixed
+// "runbooks-" (per-datasource subfolder shape, e.g. "runbooks-aws"). Centralized here
+// so the loader, validator, and prompt-context matching logic can never drift.
+export function isRunbookCategory(category: string): boolean {
+	return category === "runbooks" || category.startsWith("runbooks-");
+}
+
 // SIO-640: Lazy runbook selection fallback config. When present, selectRunbooks
 // is wired into the graph; when absent, the feature is disabled entirely.
 export const RunbookSelectionConfigSchema = z.object({

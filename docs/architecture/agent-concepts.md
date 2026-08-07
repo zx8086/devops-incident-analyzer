@@ -132,11 +132,18 @@ The **always-on reference knowledge** for an agent: hand-authored Markdown index
 name: incident-analyzer-knowledge
 version: 0.1.0
 categories:
-  runbooks:    { path: runbooks/,    description: Operational runbooks for common incident patterns }
+  # One category per datasource-scoped runbook subfolder -- the loader walks each
+  # `path` non-recursively, so per-datasource nesting needs one category per folder
+  # rather than a single "runbooks" category pointing at a directory tree. Any
+  # category name that is exactly "runbooks" or prefixed "runbooks-" is treated as
+  # a runbook category (see isRunbookCategory()).
+  runbooks-aws:      { path: runbooks/aws/,      description: AWS operational runbooks }
+  runbooks-kafka:    { path: runbooks/kafka/,    description: Kafka operational runbooks }
+  runbooks-couchbase:{ path: runbooks/couchbase/,description: Couchbase operational runbooks }
   systems-map: { path: systems-map/, description: Service dependency maps and topology }
   slo-policies:{ path: slo-policies/, description: SLO/SLA definitions and thresholds }
 runbook_selection:        # SIO-640: severity-keyed fallback when the LLM router fails
-  fallback_by_severity:
+  fallback_by_severity:   # filenames are bare basenames, matched across ALL runbook-* dirs
     critical: [kafka-consumer-lag.md, high-error-rate.md, database-slow-queries.md]
     low: []
 ```

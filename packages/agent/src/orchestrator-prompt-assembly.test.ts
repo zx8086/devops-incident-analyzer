@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { buildSystemPrompt, loadAgent } from "@devops-agent/gitagent-bridge";
+import { buildSystemPrompt, isRunbookCategory, loadAgent } from "@devops-agent/gitagent-bridge";
 import { assembleOrchestratorPromptParts, filterAgentRunbooks } from "./orchestrator-prompt-assembly.ts";
 
 const AGENTS_DIR = join(import.meta.dir, "../../../agents/incident-analyzer");
@@ -44,7 +44,7 @@ describe("assembleOrchestratorPromptParts byte-identity (SIO-1040)", () => {
 
 	test("filter named runbooks: stable + volatile === legacy prompt for the filtered agent", () => {
 		const base = loadAgent(AGENTS_DIR);
-		const firstRunbook = base.knowledge.find((k) => k.category === "runbooks")?.filename;
+		const firstRunbook = base.knowledge.find((k) => isRunbookCategory(k.category))?.filename;
 		expect(firstRunbook).toBeDefined();
 		const agent = filterAgentRunbooks(base, [firstRunbook as string]);
 		const parts = assembleOrchestratorPromptParts(agent, SECTIONS);
@@ -55,7 +55,7 @@ describe("assembleOrchestratorPromptParts byte-identity (SIO-1040)", () => {
 
 	test("stable prefix is invariant across runbook filters (the cache-hit property)", () => {
 		const base = loadAgent(AGENTS_DIR);
-		const firstRunbook = base.knowledge.find((k) => k.category === "runbooks")?.filename as string;
+		const firstRunbook = base.knowledge.find((k) => isRunbookCategory(k.category))?.filename as string;
 		const unfiltered = assembleOrchestratorPromptParts(base, SECTIONS);
 		const suppressed = assembleOrchestratorPromptParts(filterAgentRunbooks(base, []), SECTIONS);
 		const named = assembleOrchestratorPromptParts(filterAgentRunbooks(base, [firstRunbook]), SECTIONS);
@@ -76,12 +76,12 @@ describe("assembleOrchestratorPromptParts byte-identity (SIO-1040)", () => {
 
 	test("filterAgentRunbooks keeps non-runbook knowledge categories untouched", () => {
 		const agent = loadAgent(AGENTS_DIR);
-		const nonRunbook = agent.knowledge.filter((k) => k.category !== "runbooks");
+		const nonRunbook = agent.knowledge.filter((k) => !isRunbookCategory(k.category));
 		const filtered = filterAgentRunbooks(agent, []);
-		const filteredNonRunbook = filtered.knowledge.filter((k) => k.category !== "runbooks");
+		const filteredNonRunbook = filtered.knowledge.filter((k) => !isRunbookCategory(k.category));
 		expect(filteredNonRunbook).toEqual(nonRunbook);
 		// all runbooks removed by the empty filter
-		expect(filtered.knowledge.some((k) => k.category === "runbooks")).toBe(false);
+		expect(filtered.knowledge.some((k) => isRunbookCategory(k.category))).toBe(false);
 	});
 
 	// SIO-1305: downstreamImpact is optional and appended LAST (after mlAnomaly),

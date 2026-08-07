@@ -15,7 +15,11 @@ category's `path`.
 
 | Directory | `type:` values | Files |
 |---|---|---|
-| `runbooks/` | Runbook | 10 |
+| `runbooks/cross-datasource/` | Runbook | 2 |
+| `runbooks/aws/` | Runbook | 5 |
+| `runbooks/kafka/` | Runbook | 1 |
+| `runbooks/couchbase/` | Runbook | 1 |
+| `runbooks/elastic/` | Runbook | 1 |
 | `systems-map/` | Reference | 1 |
 | `slo-policies/` | Reference | 1 |
 

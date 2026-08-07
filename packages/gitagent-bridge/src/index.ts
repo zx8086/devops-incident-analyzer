@@ -67,6 +67,7 @@ export {
 	type AgentManifest,
 	AgentManifestSchema,
 	type ComplianceConfig,
+	isRunbookCategory,
 	KnowledgeCategorySchema,
 	type KnowledgeIndex,
 	KnowledgeIndexSchema,

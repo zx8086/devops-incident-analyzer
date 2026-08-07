@@ -1,7 +1,7 @@
 // gitagent-bridge/src/elastic-iac-load.test.ts
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { loadAgent } from "./index.ts";
+import { isRunbookCategory, loadAgent } from "./index.ts";
 import { parseRunbookFrontmatter } from "./manifest-loader.ts";
 import { buildSystemPrompt } from "./skill-loader.ts";
 
@@ -159,7 +159,7 @@ describe("knowledge frontmatter stripping across categories (SIO-1282)", () => {
 	});
 
 	test("converted runbooks keep their triggers and lose their frontmatter", () => {
-		const runbooks = incident.knowledge.filter((k) => k.category === "runbooks");
+		const runbooks = incident.knowledge.filter((k) => isRunbookCategory(k.category));
 		expect(runbooks.length).toBe(10);
 		// SIO-1282 PR 2 converted all 10; 7 declare triggers (SIO-1293 made the
 		// cross-cutting code-change-correlation runbook deliberately trigger-less so

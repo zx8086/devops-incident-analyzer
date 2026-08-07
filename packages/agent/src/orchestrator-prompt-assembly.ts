@@ -4,7 +4,7 @@
 // Kept in its OWN module (no getAgent, no file IO) so its byte-identity unit test
 // is immune to the process-global mock.module("./prompt-context.ts") that sibling
 // suites register (see reference_prompt_context_mock_pollutes_direct_imports).
-import { buildSystemPromptParts, type LoadedAgent } from "@devops-agent/gitagent-bridge";
+import { buildSystemPromptParts, isRunbookCategory, type LoadedAgent } from "@devops-agent/gitagent-bridge";
 
 export interface OrchestratorPromptParts {
 	stable: string;
@@ -39,7 +39,7 @@ export function filterAgentRunbooks(agent: LoadedAgent, runbookFilter: string[] 
 	if (runbookFilter === undefined) return agent;
 	const filterSet = new Set(runbookFilter);
 	const filteredKnowledge = agent.knowledge.filter((entry) => {
-		if (entry.category !== "runbooks") return true;
+		if (!isRunbookCategory(entry.category)) return true;
 		return filterSet.has(entry.filename);
 	});
 	return { ...agent, knowledge: filteredKnowledge };

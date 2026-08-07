@@ -10,6 +10,7 @@ import {
 	complianceToMetadata,
 	getRecursionLimit,
 	getUncoveredTools,
+	isRunbookCategory,
 	loadAgent,
 	RunbookFrontmatterSchema,
 	RunbookTriggersSchema,
@@ -660,7 +661,7 @@ describe("knowledge-loader", () => {
 
 	test("loads runbook entries with correct category", () => {
 		const agent = loadAgent(AGENTS_DIR);
-		const runbooks = agent.knowledge.filter((k) => k.category === "runbooks");
+		const runbooks = agent.knowledge.filter((k) => isRunbookCategory(k.category));
 		expect(runbooks.length).toBeGreaterThanOrEqual(1);
 		for (const entry of runbooks) {
 			expect(entry.filename).toMatch(/\.md$/);
