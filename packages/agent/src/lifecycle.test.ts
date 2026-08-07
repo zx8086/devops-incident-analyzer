@@ -173,6 +173,28 @@ describe("recalled-context stash (SIO-1446)", () => {
 		expect(getRecalledMemoryContext("t-none")).toBeUndefined();
 	});
 
+	// CodeRabbit (PR #636): without the up-front delete in runBootstrap, this
+	// sequence read the PRIOR session's recall after a recall-less re-bootstrap.
+	test("re-bootstrapping a thread with no recall clears its stale stash entry", async () => {
+		registerMemoryRecaller(async ({ threadId }) => `recalled-for-${threadId}`);
+		await runBootstrap({ agentName: "incident-analyzer", threadId: "t-rebootstrap" });
+		expect(getRecalledMemoryContext("t-rebootstrap")).toBe("recalled-for-t-rebootstrap");
+		registerMemoryRecaller(async () => undefined);
+		await runBootstrap({ agentName: "incident-analyzer", threadId: "t-rebootstrap" });
+		expect(getRecalledMemoryContext("t-rebootstrap")).toBeUndefined();
+	});
+
+	test("re-bootstrapping a thread with a THROWING recaller clears its stale stash entry", async () => {
+		registerMemoryRecaller(async ({ threadId }) => `recalled-for-${threadId}`);
+		await runBootstrap({ agentName: "incident-analyzer", threadId: "t-rethrow" });
+		expect(getRecalledMemoryContext("t-rethrow")).toBe("recalled-for-t-rethrow");
+		registerMemoryRecaller(async () => {
+			throw new Error("agent-memory unreachable");
+		});
+		await runBootstrap({ agentName: "incident-analyzer", threadId: "t-rethrow" });
+		expect(getRecalledMemoryContext("t-rethrow")).toBeUndefined();
+	});
+
 	test("teardown clears the stash for its thread only", async () => {
 		registerMemoryRecaller(async ({ threadId }) => `recalled-for-${threadId}`);
 		await runBootstrap({ agentName: "incident-analyzer", threadId: "t-a" });

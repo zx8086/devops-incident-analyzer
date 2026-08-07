@@ -166,6 +166,12 @@ async function runBootstrapStep(step: BootstrapStep, result: BootstrapResult, ct
 // Runs the agent's bootstrap hooks in declared order. Returns the gathered
 // context. No hooks configured -> returns an empty result without a span.
 export async function runBootstrap(ctx: BootstrapContext): Promise<BootstrapResult> {
+	// SIO-1446 (CodeRabbit PR #636): drop any prior stash entry up front, not only
+	// on successful recall -- a re-bootstrapped thread whose recall now returns
+	// undefined or throws must not read the previous session's recall. Today's web
+	// caller makes that unreachable (teardown clears both the stash and its own
+	// re-bootstrap guard), but the seam must not depend on caller discipline.
+	recalledMemoryByThread.delete(ctx.threadId);
 	// SIO-938: resolve hooks for the INVOKED agent (incident-analyzer vs
 	// elastic-iac), not the default — each agent has its own hooks.yaml.
 	const hooks = getAgentByName(ctx.agentName).hooks;
