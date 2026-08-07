@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { logger } from "../../utils/logger";
+import { couchbaseToolAnnotations } from "../tool-classification";
 import { DEFAULT_ANALYSIS_LIMIT, mostExpensiveQueries } from "./analysisQueries";
 import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
@@ -51,19 +52,23 @@ export function buildQuery(input: MostExpensiveQueriesInput): {
 }
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_get_most_expensive_queries",
-		"Get the most expensive queries based on execution time and resource usage (defaults: last 8 weeks, limit 50)",
 		{
-			limit: z
-				.number()
-				.int()
-				.optional()
-				.describe("Optional integer limit for the number of results to return (default 50)"),
-			period: z
-				.enum(["day", "week", "month"])
-				.optional()
-				.describe("Optional period to analyze (day, week, month); defaults to the last 8 weeks"),
+			description:
+				"Get the most expensive queries based on execution time and resource usage (defaults: last 8 weeks, limit 50)",
+			inputSchema: {
+				limit: z
+					.number()
+					.int()
+					.optional()
+					.describe("Optional integer limit for the number of results to return (default 50)"),
+				period: z
+					.enum(["day", "week", "month"])
+					.optional()
+					.describe("Optional period to analyze (day, week, month); defaults to the last 8 weeks"),
+			},
+			annotations: couchbaseToolAnnotations("capella_get_most_expensive_queries"),
 		},
 		async (input) => {
 			logger.info(input, "Getting most expensive queries");

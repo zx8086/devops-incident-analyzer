@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { logger } from "../../utils/logger";
+import { couchbaseToolAnnotations } from "../tool-classification";
 import { systemVitalsQuery } from "./analysisQueries";
 import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
@@ -27,11 +28,14 @@ export function buildQuery(input: SystemVitalsInput): {
 }
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_get_system_vitals",
-		"Get detailed system vitals and performance metrics for the Couchbase cluster",
 		{
-			node_filter: z.string().optional().describe("Filter by node name (e.g., 'node1.example.com:8091')"),
+			description: "Get detailed system vitals and performance metrics for the Couchbase cluster",
+			inputSchema: {
+				node_filter: z.string().optional().describe("Filter by node name (e.g., 'node1.example.com:8091')"),
+			},
+			annotations: couchbaseToolAnnotations("capella_get_system_vitals"),
 		},
 		async (input) => {
 			logger.info(input, "Getting system vitals information");

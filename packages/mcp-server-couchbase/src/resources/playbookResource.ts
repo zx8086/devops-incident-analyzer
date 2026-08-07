@@ -254,7 +254,7 @@ export function registerPlaybookResources(
 		logger.info({ uri: uri.href }, "Handling direct resource request for playbook-directory");
 		return handler.listPlaybooks();
 	};
-	server.resource("playbook-directory", "playbook://", readPlaybookDirectory);
+	server.registerResource("playbook-directory", "playbook://", {}, readPlaybookDirectory);
 	registry.addExact("playbook://", readPlaybookDirectory);
 
 	// Also register specific handlers for individual playbooks
@@ -266,7 +266,7 @@ export function registerPlaybookResources(
 			logger.info({ uri: uri.href }, `Handling direct resource request for playbook: ${resourceId}`);
 			return handler.getPlaybook(resourceId);
 		};
-		server.resource(`playbook-${resourceId}`, resourceUri, readPlaybook);
+		server.registerResource(`playbook-${resourceId}`, resourceUri, {}, readPlaybook);
 		registry.addExact(resourceUri, readPlaybook);
 	}
 

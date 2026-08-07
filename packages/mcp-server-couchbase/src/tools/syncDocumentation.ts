@@ -8,6 +8,7 @@ import { z } from "zod";
 import { config } from "../config";
 import { connectionManager } from "../lib/connectionManager";
 import { logger } from "../utils/logger";
+import { couchbaseToolAnnotations } from "./tool-classification";
 
 // Function to sanitize file paths to prevent directory traversal
 const sanitizePath = (inputPath: string): string => {
@@ -15,14 +16,17 @@ const sanitizePath = (inputPath: string): string => {
 };
 
 export default (server: McpServer, _bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_sync_documentation_with_database",
-		"Generate a documentation skeleton based on the database structure",
 		{
-			scope_name: z
-				.string()
-				.optional()
-				.describe("Name of the scope to sync (optional, syncs all scopes if not provided)"),
+			description: "Generate a documentation skeleton based on the database structure",
+			inputSchema: {
+				scope_name: z
+					.string()
+					.optional()
+					.describe("Name of the scope to sync (optional, syncs all scopes if not provided)"),
+			},
+			annotations: couchbaseToolAnnotations("capella_sync_documentation_with_database"),
 		},
 		async ({ scope_name }) => {
 			if (!config.documentation?.enabled) {

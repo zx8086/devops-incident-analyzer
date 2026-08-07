@@ -4,59 +4,71 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { logger } from "../utils/logger";
+import { couchbaseToolAnnotations } from "./tool-classification";
 
 type ReadResourceByUri = (uri: string) => Promise<{ contents?: Array<{ mimeType?: string; text?: string }> }>;
 
 export default (server: McpServer, _bucket: Bucket) => {
-	server.tool("capella_list_playbooks", "List all available playbooks", {}, async () => {
-		try {
-			logger.info("Listing available playbooks");
+	server.registerTool(
+		"capella_list_playbooks",
+		{
+			description: "List all available playbooks",
+			inputSchema: {},
+			annotations: couchbaseToolAnnotations("capella_list_playbooks"),
+		},
+		async () => {
+			try {
+				logger.info("Listing available playbooks");
 
-			// Use the server's readResourceByUri method to access the playbook directory
-			const readResourceByUri = (server as unknown as { readResourceByUri: ReadResourceByUri }).readResourceByUri;
-			const resourceResult = await readResourceByUri("playbook://");
+				// Use the server's readResourceByUri method to access the playbook directory
+				const readResourceByUri = (server as unknown as { readResourceByUri: ReadResourceByUri }).readResourceByUri;
+				const resourceResult = await readResourceByUri("playbook://");
 
-			if (!resourceResult?.contents?.length) {
+				if (!resourceResult?.contents?.length) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: "No playbooks found",
+							},
+						],
+					};
+				}
+
+				return {
+					content: resourceResult.contents.map((content: { mimeType?: string; text?: string }) => ({
+						type: "text" as const,
+						text: content.text || "[Binary content]",
+					})),
+				};
+			} catch (error) {
+				logger.error(
+					{
+						error: error instanceof Error ? error.message : String(error),
+					},
+					"Error in list_playbooks tool",
+				);
+
 				return {
 					content: [
 						{
 							type: "text",
-							text: "No playbooks found",
+							text: `Error listing playbooks: ${error instanceof Error ? error.message : String(error)}`,
 						},
 					],
 				};
 			}
+		},
+	);
 
-			return {
-				content: resourceResult.contents.map((content: { mimeType?: string; text?: string }) => ({
-					type: "text" as const,
-					text: content.text || "[Binary content]",
-				})),
-			};
-		} catch (error) {
-			logger.error(
-				{
-					error: error instanceof Error ? error.message : String(error),
-				},
-				"Error in list_playbooks tool",
-			);
-
-			return {
-				content: [
-					{
-						type: "text",
-						text: `Error listing playbooks: ${error instanceof Error ? error.message : String(error)}`,
-					},
-				],
-			};
-		}
-	});
-
-	server.tool(
+	server.registerTool(
 		"capella_get_playbook",
-		"Get a specific playbook by ID",
 		{
-			playbook_id: z.string().describe("ID of the playbook to retrieve"),
+			description: "Get a specific playbook by ID",
+			inputSchema: {
+				playbook_id: z.string().describe("ID of the playbook to retrieve"),
+			},
+			annotations: couchbaseToolAnnotations("capella_get_playbook"),
 		},
 		async ({ playbook_id }) => {
 			try {

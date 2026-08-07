@@ -13,6 +13,7 @@ import { AppError } from "../lib/errors";
 import { runSqlPlusPlusQuery } from "../lib/runSqlPlusPlusQuery";
 import { sqlppParser } from "../lib/sqlppParser";
 import { logger } from "../utils/logger";
+import { couchbaseToolAnnotations } from "./tool-classification";
 
 // Ensure all queries use only the collection name in the FROM clause when using scope context
 // Exported for unit testing (SIO-744).
@@ -114,14 +115,17 @@ export const runQuery = async (params: { scope_name: string; query: string }, bu
 };
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_run_sql_plus_plus_query",
-		"Execute a SQL++ query against a specific scope in the Couchbase bucket",
 		{
-			scope_name: z.string().describe("Name of the scope"),
-			query: z
-				.string()
-				.describe("SQL++ query to execute. Use only the collection name in the FROM clause if using scope context."),
+			description: "Execute a SQL++ query against a specific scope in the Couchbase bucket",
+			inputSchema: {
+				scope_name: z.string().describe("Name of the scope"),
+				query: z
+					.string()
+					.describe("SQL++ query to execute. Use only the collection name in the FROM clause if using scope context."),
+			},
+			annotations: couchbaseToolAnnotations("capella_run_sql_plus_plus_query"),
 		},
 		async (params, _extra) => {
 			return runQuery(params, bucket);

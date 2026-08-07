@@ -83,7 +83,7 @@ export function registerDatabaseStructureResource(server: McpServer, bucket: Buc
 		}
 	};
 
-	server.resource("database-structure", "database://structure", readDatabaseStructure);
+	server.registerResource("database-structure", "database://structure", {}, readDatabaseStructure);
 	registry.addExact("database://structure", readDatabaseStructure);
 
 	logger.info("Database structure resource registered successfully");

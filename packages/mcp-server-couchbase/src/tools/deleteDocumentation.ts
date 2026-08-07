@@ -8,6 +8,7 @@ import { z } from "zod";
 import { config } from "../config";
 import { createError } from "../lib/errors";
 import { logger } from "../utils/logger";
+import { couchbaseToolAnnotations } from "./tool-classification";
 
 // Function to sanitize file paths to prevent directory traversal
 const sanitizePath = (inputPath: string): string => {
@@ -15,17 +16,20 @@ const sanitizePath = (inputPath: string): string => {
 };
 
 export default (server: McpServer, _bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_delete_documentation",
-		"Delete documentation for a scope, collection, or specific file",
 		{
-			scope_name: z.string().describe("Name of the scope"),
-			collection_name: z.string().optional().describe("Name of the collection (optional)"),
-			file_name: z.string().optional().describe("Name of the document file (without extension, optional)"),
-			recursive: z
-				.boolean()
-				.optional()
-				.describe("Whether to recursively delete all documentation under the specified path"),
+			description: "Delete documentation for a scope, collection, or specific file",
+			inputSchema: {
+				scope_name: z.string().describe("Name of the scope"),
+				collection_name: z.string().optional().describe("Name of the collection (optional)"),
+				file_name: z.string().optional().describe("Name of the document file (without extension, optional)"),
+				recursive: z
+					.boolean()
+					.optional()
+					.describe("Whether to recursively delete all documentation under the specified path"),
+			},
+			annotations: couchbaseToolAnnotations("capella_delete_documentation"),
 		},
 		async ({ scope_name, collection_name, file_name, recursive }) => {
 			if (!config.documentation?.enabled) {

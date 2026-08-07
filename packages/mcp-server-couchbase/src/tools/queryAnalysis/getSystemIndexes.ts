@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { logger } from "../../utils/logger";
+import { couchbaseToolAnnotations } from "../tool-classification";
 import { n1qlSystemIndexes } from "./analysisQueries";
 import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
@@ -42,13 +43,16 @@ export function buildQuery(input: SystemIndexesInput): {
 }
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_get_system_indexes",
-		"Get information about all indexes in the system",
 		{
-			bucket_name: z.string().optional().describe("Filter by bucket name"),
-			index_type: z.string().optional().describe("Filter by index type (e.g., GSI, FTS)"),
-			include_system: z.boolean().optional().describe("Whether to include system indexes"),
+			description: "Get information about all indexes in the system",
+			inputSchema: {
+				bucket_name: z.string().optional().describe("Filter by bucket name"),
+				index_type: z.string().optional().describe("Filter by index type (e.g., GSI, FTS)"),
+				include_system: z.boolean().optional().describe("Whether to include system indexes"),
+			},
+			annotations: couchbaseToolAnnotations("capella_get_system_indexes"),
 		},
 		async (input) => {
 			logger.info(input, "Getting system indexes");

@@ -6,6 +6,7 @@ import { z } from "zod";
 import { isNoIndexError } from "../lib/classifyCouchbaseError";
 import { resolveBucket } from "../lib/resolveBucket";
 import { logger } from "../utils/logger";
+import { couchbaseToolAnnotations } from "./tool-classification";
 
 interface SchemaParams {
 	scope_name: string;
@@ -199,13 +200,17 @@ const getSchemaHandler = async (params: SchemaParams, bucket: Bucket): Promise<S
 };
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_get_schema_for_collection",
-		"Get the schema for a collection via INFER (samples many documents, no index required), falling back to single-document sampling",
 		{
-			scope_name: z.string().describe("Name of the scope"),
-			collection_name: z.string().describe("Name of the collection"),
-			bucket_name: z.string().optional().describe("Optional bucket name (defaults to the configured bucket)"),
+			description:
+				"Get the schema for a collection via INFER (samples many documents, no index required), falling back to single-document sampling",
+			inputSchema: {
+				scope_name: z.string().describe("Name of the scope"),
+				collection_name: z.string().describe("Name of the collection"),
+				bucket_name: z.string().optional().describe("Optional bucket name (defaults to the configured bucket)"),
+			},
+			annotations: couchbaseToolAnnotations("capella_get_schema_for_collection"),
 		},
 		async (params: SchemaParams) => {
 			return getSchemaHandler(params, bucket);

@@ -5,16 +5,20 @@ import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { summarizeCouchbaseError } from "../../lib/classifyCouchbaseError";
 import { logger } from "../../utils/logger";
+import { couchbaseToolAnnotations } from "../tool-classification";
 import { buildAnalysisErrorResponse } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_analyze_document_structure",
-		"Analyze the structure of a document type",
 		{
-			document_key: z.string().describe("Document key to analyze"),
-			scope_name: z.string().optional().default("_default").describe("Scope name"),
-			collection_name: z.string().optional().default("_default").describe("Collection name"),
+			description: "Analyze the structure of a document type",
+			inputSchema: {
+				document_key: z.string().describe("Document key to analyze"),
+				scope_name: z.string().optional().default("_default").describe("Scope name"),
+				collection_name: z.string().optional().default("_default").describe("Collection name"),
+			},
+			annotations: couchbaseToolAnnotations("capella_analyze_document_structure"),
 		},
 		async ({ document_key, scope_name, collection_name }) => {
 			logger.info({ document_key, scope_name, collection_name }, "Analyzing document structure");

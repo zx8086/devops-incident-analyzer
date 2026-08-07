@@ -4,16 +4,20 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { logger } from "../../utils/logger";
+import { couchbaseToolAnnotations } from "../tool-classification";
 import { n1qlMostFrequentQueries } from "./analysisQueries";
 import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_get_most_frequent_queries",
-		"Get the most frequently executed queries",
 		{
-			limit: z.number().optional().describe("Optional limit for the number of results to return"),
-			min_count: z.number().optional().describe("Minimum execution count to include"),
+			description: "Get the most frequently executed queries",
+			inputSchema: {
+				limit: z.number().optional().describe("Optional limit for the number of results to return"),
+				min_count: z.number().optional().describe("Minimum execution count to include"),
+			},
+			annotations: couchbaseToolAnnotations("capella_get_most_frequent_queries"),
 		},
 		async ({ limit, min_count }) => {
 			logger.info({ limit, min_count }, "Getting most frequent queries");

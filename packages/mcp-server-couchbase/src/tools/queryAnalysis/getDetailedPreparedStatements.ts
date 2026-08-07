@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { logger } from "../../utils/logger";
+import { couchbaseToolAnnotations } from "../tool-classification";
 import { detailedPreparedStatementsQuery } from "./analysisQueries";
 import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
@@ -58,13 +59,16 @@ export function buildQuery(input: DetailedPreparedStatementsInput): {
 }
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_get_detailed_prepared_statements",
-		"Get detailed information about prepared statements with usage statistics",
 		{
-			limit: z.number().optional().describe("Optional limit for the number of results to return"),
-			node_filter: z.string().optional().describe("Filter by node name (e.g., 'node1.example.com:8091')"),
-			query_pattern: z.string().optional().describe("Filter by query pattern (e.g., 'SELECT')"),
+			description: "Get detailed information about prepared statements with usage statistics",
+			inputSchema: {
+				limit: z.number().optional().describe("Optional limit for the number of results to return"),
+				node_filter: z.string().optional().describe("Filter by node name (e.g., 'node1.example.com:8091')"),
+				query_pattern: z.string().optional().describe("Filter by query pattern (e.g., 'SELECT')"),
+			},
+			annotations: couchbaseToolAnnotations("capella_get_detailed_prepared_statements"),
 		},
 		async (input) => {
 			logger.info(input, "Getting detailed prepared statements");

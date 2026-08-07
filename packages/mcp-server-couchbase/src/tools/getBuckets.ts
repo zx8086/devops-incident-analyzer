@@ -3,6 +3,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { logger } from "../utils/logger";
+import { couchbaseToolAnnotations } from "./tool-classification";
 
 // SIO-1107: bucket enumeration (ported from the official Couchbase MCP server's
 // get_buckets_in_cluster). Bare-JSON output so the agent's resolveIdentifiers
@@ -32,10 +33,14 @@ export const getBucketsHandler = async (bucket: Bucket) => {
 };
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_get_buckets",
-		"Get the names and settings of all accessible buckets in the cluster, plus which bucket is the configured default",
-		{},
+		{
+			description:
+				"Get the names and settings of all accessible buckets in the cluster, plus which bucket is the configured default",
+			inputSchema: {},
+			annotations: couchbaseToolAnnotations("capella_get_buckets"),
+		},
 		async () => {
 			logger.info("Listing buckets in cluster");
 			return getBucketsHandler(bucket);

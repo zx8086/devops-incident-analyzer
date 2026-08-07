@@ -49,7 +49,7 @@ export function registerDocumentResource(server: McpServer, bucket: Bucket, regi
 		}
 	};
 
-	server.resource("document", documentTemplate, readDocument);
+	server.registerResource("document", documentTemplate, {}, readDocument);
 	registry.addTemplate(documentTemplate, readDocument);
 
 	logger.info("Document resource registered successfully");

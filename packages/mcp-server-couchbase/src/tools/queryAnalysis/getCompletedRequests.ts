@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { logger } from "../../utils/logger";
+import { couchbaseToolAnnotations } from "../tool-classification";
 import { DEFAULT_ANALYSIS_LIMIT, n1qlCompletedRequests } from "./analysisQueries";
 import { executeAnalysisQuery } from "./queryAnalysisUtils";
 
@@ -74,16 +75,19 @@ export function buildQuery(input: CompletedRequestsInput): {
 }
 
 export default (server: McpServer, bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_get_completed_requests",
-		"Get recent completed query requests with detailed execution information",
 		{
-			limit: z.number().optional().describe("Optional limit for the number of results to return"),
-			period: z
-				.enum(["day", "week", "month", "quarter"])
-				.optional()
-				.describe("Time period to analyze (day, week, month, quarter)"),
-			status: z.enum(["success", "fatal", "timeout", "all"]).optional().describe("Filter by request status"),
+			description: "Get recent completed query requests with detailed execution information",
+			inputSchema: {
+				limit: z.number().optional().describe("Optional limit for the number of results to return"),
+				period: z
+					.enum(["day", "week", "month", "quarter"])
+					.optional()
+					.describe("Time period to analyze (day, week, month, quarter)"),
+				status: z.enum(["success", "fatal", "timeout", "all"]).optional().describe("Filter by request status"),
+			},
+			annotations: couchbaseToolAnnotations("capella_get_completed_requests"),
 		},
 		async (input) => {
 			logger.info(input, "Getting completed requests");

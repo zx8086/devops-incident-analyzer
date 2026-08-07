@@ -5,16 +5,20 @@ import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { config } from "../config";
 import { logger } from "../utils/logger";
+import { couchbaseToolAnnotations } from "./tool-classification";
 
 type ReadResourceByUri = (uri: string) => Promise<{ contents?: Array<{ mimeType?: string; text?: string }> }>;
 
 export default (server: McpServer, _bucket: Bucket) => {
-	server.tool(
+	server.registerTool(
 		"capella_list_documentation",
-		"List available documentation resources",
 		{
-			scope_name: z.string().optional().describe("Name of the scope to list documentation for"),
-			collection_name: z.string().optional().describe("Name of the collection to list documentation for"),
+			description: "List available documentation resources",
+			inputSchema: {
+				scope_name: z.string().optional().describe("Name of the scope to list documentation for"),
+				collection_name: z.string().optional().describe("Name of the collection to list documentation for"),
+			},
+			annotations: couchbaseToolAnnotations("capella_list_documentation"),
 		},
 		async ({ scope_name, collection_name }) => {
 			if (!config.documentation?.enabled) {

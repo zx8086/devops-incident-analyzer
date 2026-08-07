@@ -72,7 +72,7 @@ export function registerQueryResource(server: McpServer, bucket: Bucket, registr
 		}
 	};
 
-	server.resource("query-results", queryTemplate, readQuery);
+	server.registerResource("query-results", queryTemplate, {}, readQuery);
 	registry.addTemplate(queryTemplate, readQuery);
 
 	logger.info("Query resource registered successfully");
