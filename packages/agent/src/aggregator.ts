@@ -46,6 +46,7 @@ import {
 } from "./downstream-impact.ts";
 import { isGapsJudgeEnabled, judgeDegradingGapBullets } from "./gaps-judge.ts";
 import { getGraphDeadlineAt, hasAggregationBudget } from "./graph-budget.ts";
+import { getRecalledMemoryContext } from "./lifecycle.ts";
 import { createLlm } from "./llm.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import { buildMlAnomalyExplainer, summarizeMlAnomalyExplainerForPrompt } from "./ml-anomaly-explainer.ts";
@@ -149,6 +150,10 @@ export function buildAggregatorMessages(
 	state: AgentStateType,
 	resultsBlock: string,
 	results: DataSourceResult[],
+	// SIO-1446: per-session semantic recall (getRecalledMemoryContext). Optional so
+	// the tier-2 probe harness (single-agent-probe.ts), which runs without a live
+	// session, keeps producing byte-identical prompts.
+	recalledMemory?: string,
 ): BaseMessage[] {
 	// SIO-640: Tri-state selectedRunbooks field drives the runbook filter.
 	//   null      -> no filter (preserve current behavior)
@@ -214,6 +219,7 @@ export function buildAggregatorMessages(
 		networkContext,
 		mlAnomalyContext,
 		downstreamImpactContext,
+		recalledMemory,
 	});
 	const priorAnswer = state.finalAnswer;
 	const lastUserMessage = state.messages.filter((m) => m._getType() === "human").pop();
@@ -1666,7 +1672,14 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 	const resultsBlock = buildResultsBlock(results);
 
 	const llm = createLlm("aggregator");
-	const messages = buildAggregatorMessages(state, resultsBlock, results);
+	// SIO-1446: per-session semantic recall stashed at bootstrap. The thread id
+	// lives only in the runnable config (same idiom as iac/nodes.ts), and the
+	// getter returns undefined for unknown/absent threads, so the file-backend
+	// and eval paths are byte-identical to before.
+	const recalledMemory = getRecalledMemoryContext(
+		typeof config?.configurable?.thread_id === "string" ? config.configurable.thread_id : undefined,
+	);
+	const messages = buildAggregatorMessages(state, resultsBlock, results, recalledMemory);
 
 	logger.info("Invoking LLM for aggregation");
 	const startTime = Date.now();

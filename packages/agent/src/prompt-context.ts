@@ -18,13 +18,13 @@ import {
 
 export type { OrchestratorPromptParts } from "./orchestrator-prompt-assembly.ts";
 
+import { renderLiveMemorySection } from "./live-memory-section.ts";
 import { readLiveMemory } from "./memory-writer.ts";
 import { getAgentsDir } from "./paths.ts";
 import { buildWikiSection, type WikiFocus } from "./wiki/reader.ts";
 
 // SIO-845: cap how many key-decisions tail entries are inlined into the prompt
 // so durable memory growth does not blow the context budget.
-const MAX_KEY_DECISION_CHARS = 4000;
 
 // Name-keyed registry so a second agent (elastic-iac) can be loaded alongside the
 // incident-analyzer without disturbing the existing nodes, which call getAgent().
@@ -72,23 +72,10 @@ function buildComplianceBoundary(): string {
 // SIO-845: Build the live-memory section appended to the orchestrator prompt.
 // Inlines durable context.md plus the tail of key-decisions.md (bounded). Empty
 // string when live memory is disabled/absent so the happy path is unchanged.
-export function buildLiveMemorySection(): string {
-	const memory = readLiveMemory();
-	const sections: string[] = [];
-
-	if (memory.context?.trim()) {
-		sections.push(memory.context.trim());
-	}
-
-	if (memory.keyDecisions?.trim()) {
-		// Inline only the tail so the prompt stays bounded as decisions accumulate.
-		const full = memory.keyDecisions.trim();
-		const tail = full.length > MAX_KEY_DECISION_CHARS ? `...\n${full.slice(-MAX_KEY_DECISION_CHARS)}` : full;
-		sections.push(`### Recent Key Decisions\n\n${tail}`);
-	}
-
-	if (sections.length === 0) return "";
-	return ["\n\n---\n\n## Live Memory", ...sections].join("\n\n");
+// SIO-1446: optionally appends the per-session semantic recall block (rendering
+// lives in live-memory-section.ts; see that file for why it is separate).
+export function buildLiveMemorySection(recalledContext?: string): string {
+	return renderLiveMemorySection(readLiveMemory(), recalledContext);
 }
 
 // SIO-640: runbook filter semantics for the orchestrator prompt.
@@ -114,6 +101,11 @@ export interface OrchestratorPromptOptions {
 	// runtime radius + Orbit code radius). Already-rendered string; inlined
 	// verbatim. Empty when the graph is disabled or no dependents are known.
 	downstreamImpactContext?: string;
+	// SIO-1446: semantic recall over the agent's past sessions, gathered once at
+	// bootstrap (agent-memory backend) and stashed per thread in lifecycle.ts
+	// (getRecalledMemoryContext). Rendered inside the Live Memory section; omitted
+	// on the file backend, where the recaller returns nothing.
+	recalledMemory?: string;
 }
 
 function buildNetworkSection(networkContext: string | undefined): string {
@@ -148,7 +140,7 @@ export function buildOrchestratorPromptParts(options: OrchestratorPromptOptions 
 	const agent = filterAgentRunbooks(getAgent(), options.runbookFilter);
 	return assembleOrchestratorPromptParts(agent, {
 		compliance: buildComplianceBoundary(),
-		liveMemory: buildLiveMemorySection(),
+		liveMemory: buildLiveMemorySection(options.recalledMemory),
 		wiki: wikiSectionFor(options),
 		// SIO-1028: prepend a usage instruction to the raw graph block so recall
 		// questions answer from prior-incident entries instead of LLM inference.
