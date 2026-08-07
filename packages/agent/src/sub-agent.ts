@@ -506,35 +506,62 @@ function tryParseJson(s: string): unknown {
 // 500KB elastic "Document ID:" block string capped at 32KB parses to zero
 // findings (observed live: ElasticFindingsCard rawCount 0 in run 270378e0).
 // Bounded regardless: pruneThreadState resets dataSourceResults every turn.
+// SIO-1425/1437: structuredContent, when provided, is the MCP tool's own
+// structuredContent payload (already a parsed object, byte-identical in shape to
+// what tryParseJson(text) would produce for the 4 SIO-1422 wave-1 tools -- see
+// docs/superpowers/specs/2026-08-07-agent-structuredcontent-consumption-design.md).
+// Using it directly skips a redundant JSON.parse. For TYPED_FINDING_TOOLS, byte
+// accounting (capSkippedBytes) runs against `text` unchanged since that branch
+// bypasses the cap entirely. For all other tools, structuredContent is its OWN
+// payload and can differ in size from `text` -- it is measured and capped against
+// stateCapBytes on its own terms, never returned uncapped just because `text` was
+// small (or vice versa).
 export function buildPersistedToolOutput(
 	toolName: string,
 	text: string,
 	stateCapBytes: number | null,
+	structuredContent?: unknown,
 ): {
 	rawJson: unknown;
 	capSkippedBytes: number | null;
 	truncation: { strategy: string; originalBytes: number; finalBytes: number } | null;
 } {
 	if (stateCapBytes == null) {
-		return { rawJson: tryParseJson(text), capSkippedBytes: null, truncation: null };
+		return {
+			rawJson: structuredContent !== undefined ? structuredContent : tryParseJson(text),
+			capSkippedBytes: null,
+			truncation: null,
+		};
 	}
 	if (TYPED_FINDING_TOOLS.has(toolName)) {
 		const bytes = Buffer.byteLength(text, "utf8");
 		return {
-			rawJson: tryParseJson(text),
+			rawJson: structuredContent !== undefined ? structuredContent : tryParseJson(text),
 			capSkippedBytes: bytes > stateCapBytes ? bytes : null,
 			truncation: null,
 		};
 	}
+	// Text is parsed only inside the branches below (never unconditionally up front) --
+	// the non-typed-tool branch parses `capped.content` (post-truncation) instead of the
+	// full unbounded `text`, so a huge non-typed-tool result is never JSON.parse'd whole
+	// just to compute a value this branch doesn't use.
 	const capped = truncateToolOutput(text, stateCapBytes);
-	return {
-		rawJson: tryParseJson(capped.content),
-		capSkippedBytes: null,
-		truncation:
-			capped.strategy === "none"
-				? null
-				: { strategy: capped.strategy, originalBytes: capped.originalBytes, finalBytes: capped.finalBytes },
-	};
+	const cappedTruncation =
+		capped.strategy === "none"
+			? null
+			: { strategy: capped.strategy, originalBytes: capped.originalBytes, finalBytes: capped.finalBytes };
+	if (structuredContent !== undefined) {
+		// structuredContent is a DIFFERENT payload than `text` -- re-measure its own size
+		// rather than trusting `capped`'s numbers, which describe `text`. Otherwise the
+		// checkpoint byte cap is silently defeated (an oversized structured object persists
+		// uncapped) while the truncation metadata reports a phantom (or missing) truncation.
+		const structuredBytes = Buffer.byteLength(JSON.stringify(structuredContent) ?? "", "utf8");
+		if (structuredBytes > stateCapBytes) {
+			return { rawJson: tryParseJson(capped.content), capSkippedBytes: null, truncation: cappedTruncation };
+		}
+		return { rawJson: structuredContent, capSkippedBytes: null, truncation: null };
+	}
+	return { rawJson: tryParseJson(capped.content), capSkippedBytes: null, truncation: cappedTruncation };
 }
 
 // SIO-786: when an MCP tool returns multiple content blocks (e.g. elastic's
@@ -1713,13 +1740,18 @@ ${state.correlationFetchDirective}`
 				"Raw tool-output capture diverged from tool messages; persisted findings may be incomplete",
 			);
 		}
-		const persistSource: Array<{ name?: string; content: unknown }> =
+		const persistSource: Array<{ name?: string; content: unknown; structuredContent?: unknown }> =
 			rawOutputs.length > 0
-				? rawOutputs.map((o) => ({ name: o.toolName, content: o.content }))
+				? rawOutputs.map((o) => ({ name: o.toolName, content: o.content, structuredContent: o.structuredContent }))
 				: toolMessages.map((m: { name?: string; content: unknown }) => ({ name: m.name, content: m.content }));
-		const toolOutputs = persistSource.map((m: { name?: string; content: unknown }) => {
+		const toolOutputs = persistSource.map((m: { name?: string; content: unknown; structuredContent?: unknown }) => {
 			const toolName = m.name ?? "unknown";
-			const out = buildPersistedToolOutput(toolName, normalizeToolContent(m.content), stateCapBytes);
+			const out = buildPersistedToolOutput(
+				toolName,
+				normalizeToolContent(m.content),
+				stateCapBytes,
+				m.structuredContent,
+			);
 			if (out.capSkippedBytes != null) {
 				log.info(
 					{ event: "subagent.state_output_cap_skipped", deploymentId, toolName, bytes: out.capSkippedBytes },

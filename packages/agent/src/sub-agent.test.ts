@@ -945,6 +945,78 @@ describe("buildPersistedToolOutput SIO-1159 typed-finding exemption", () => {
 			expect(out.capSkippedBytes).toBeNull();
 		});
 	});
+
+	test("structuredContent, when provided, is used directly without re-parsing text", () => {
+		const structured = { groupId: "g1", totalLag: "42", topics: [] };
+		// Deliberately mismatched text: if tryParseJson(text) were used instead of the
+		// structured payload, rawJson would equal this different object, not `structured`.
+		const mismatchedText = JSON.stringify({ groupId: "WRONG", totalLag: "0", topics: [] });
+		const out = buildPersistedToolOutput("kafka_get_consumer_group_lag", mismatchedText, CAP, structured);
+		expect(out.rawJson).toEqual(structured);
+	});
+
+	test("falls back to tryParseJson(text) when structuredContent is undefined", () => {
+		const out = buildPersistedToolOutput(
+			"kafka_get_consumer_group_lag",
+			'{"groupId":"g1","totalLag":"1","topics":[]}',
+			CAP,
+			undefined,
+		);
+		expect(out.rawJson).toEqual({ groupId: "g1", totalLag: "1", topics: [] });
+	});
+
+	test("structuredContent does not change capSkippedBytes/truncation accounting", () => {
+		const structured = { groupId: "g1", totalLag: "42", topics: [] };
+		const bigText = `Total: ${"x".repeat(CAP * 4)}`;
+		const out = buildPersistedToolOutput("kafka_get_consumer_group_lag", bigText, CAP, structured);
+		// still a TYPED_FINDING_TOOLS member -> cap-skip branch, same as without structuredContent
+		expect(out.capSkippedBytes).toBe(Buffer.byteLength(bigText, "utf8"));
+		expect(out.truncation).toBeNull();
+	});
+
+	// SIO-1437 latent-bug fix: a non-typed-finding tool with structuredContent present.
+	// This combination is currently unreachable in practice (all 4 SIO-1422 wave-1
+	// tools that populate structuredContent are TYPED_FINDING_TOOLS members), but any
+	// future tool that gets structuredContent without a TYPED_FINDING_TOOLS entry must
+	// still honor the checkpoint byte cap against structuredContent's OWN size, not
+	// against `text`'s size -- they can differ.
+	test("non-typed tool with small structuredContent is returned uncapped with no truncation", () => {
+		const structured = { hostname: "svc-1", statusCode: 200 };
+		// `text` is deliberately large so a bug that measures `text` instead of
+		// structuredContent would (wrongly) report truncation for this case.
+		const bigText = `Total: ${"x".repeat(CAP * 4)}`;
+		const out = buildPersistedToolOutput("gitlab_get_blame", bigText, CAP, structured);
+		expect(out.rawJson).toEqual(structured);
+		expect(out.capSkippedBytes).toBeNull();
+		expect(out.truncation).toBeNull();
+	});
+
+	test("non-typed tool with large structuredContent falls back to the capped text-parse path with real (non-phantom) truncation metadata", () => {
+		// Both payloads exceed CAP but differ in size -- proves the fallback measures
+		// structuredContent's own bytes to decide to fall back, then reports truncation
+		// metadata that actually describes what got persisted (`text`, truncated), not
+		// borrowed/phantom numbers from the other payload.
+		const structured = { hostname: "svc-1", padding: "p".repeat(CAP * 4) };
+		const structuredBytes = Buffer.byteLength(JSON.stringify(structured), "utf8");
+		expect(structuredBytes).toBeGreaterThan(CAP);
+		const bigText = `Total: ${"x".repeat(CAP * 8)}`;
+		const textBytes = Buffer.byteLength(bigText, "utf8");
+		expect(textBytes).toBeGreaterThan(CAP);
+		expect(textBytes).not.toBe(structuredBytes);
+
+		const out = buildPersistedToolOutput("gitlab_get_blame", bigText, CAP, structured);
+
+		// Falls back to the capped parse of `text`, not a truncated version of `structured`.
+		expect(out.rawJson).not.toEqual(structured);
+		expect(String(out.rawJson).length).toBeLessThan(bigText.length);
+		expect(out.capSkippedBytes).toBeNull();
+		expect(out.truncation).not.toBeNull();
+		// Real metadata describes `text`'s own size, not structuredContent's (which is a
+		// different, larger number) -- the previous bug would report `text`'s truncation
+		// metadata as if it applied to the (much larger, uncapped) structuredContent.
+		expect(out.truncation?.originalBytes).toBe(textBytes);
+		expect(out.truncation?.originalBytes).not.toBe(structuredBytes);
+	});
 });
 
 // SIO-1268: default-ON kill switch, matching the RESOLVE_IDENTIFIERS_ENABLED idiom.
