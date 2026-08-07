@@ -151,41 +151,44 @@ describe("SIO-1424: v2 pilot wire protocol (three-era matrix)", () => {
 	// MCP_NAME_HEADER_SOURCE and needs no Mcp-Name header -- dist/src-CX2iR2pK.mjs:4990-4993).
 	test("server/discover: modern probe returns a DiscoverResult", async () => {
 		const handler = buildHandler();
-		const response = await handler.fetch(
-			new Request("http://localhost/mcp", {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-					Accept: "application/json, text/event-stream",
-					"Mcp-Method": "server/discover",
-				},
-				body: JSON.stringify({
-					jsonrpc: "2.0",
-					id: 3,
-					method: "server/discover",
-					params: {
-						_meta: {
-							"io.modelcontextprotocol/protocolVersion": "2026-07-28",
-							"io.modelcontextprotocol/clientCapabilities": {},
-							"io.modelcontextprotocol/clientInfo": { name: "probe", version: "0" },
-						},
+		try {
+			const response = await handler.fetch(
+				new Request("http://localhost/mcp", {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						Accept: "application/json, text/event-stream",
+						"Mcp-Method": "server/discover",
 					},
+					body: JSON.stringify({
+						jsonrpc: "2.0",
+						id: 3,
+						method: "server/discover",
+						params: {
+							_meta: {
+								"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+								"io.modelcontextprotocol/clientCapabilities": {},
+								"io.modelcontextprotocol/clientInfo": { name: "probe", version: "0" },
+							},
+						},
+					}),
 				}),
-			}),
-		);
-		await handler.close();
+			);
 
-		expect(response.status).toBe(200);
-		const body = (await parseJsonRpcBody(response)) as {
-			jsonrpc: string;
-			id: number;
-			error?: unknown;
-			result?: unknown;
-		};
-		expect(body.jsonrpc).toBe("2.0");
-		expect(body.id).toBe(3);
-		expect(body.error).toBeUndefined();
-		expect(body.result).toBeDefined();
+			expect(response.status).toBe(200);
+			const body = (await parseJsonRpcBody(response)) as {
+				jsonrpc: string;
+				id: number;
+				error?: unknown;
+				result?: unknown;
+			};
+			expect(body.jsonrpc).toBe("2.0");
+			expect(body.id).toBe(3);
+			expect(body.error).toBeUndefined();
+			expect(body.result).toBeDefined();
+		} finally {
+			await handler.close();
+		}
 	});
 
 	test("v1 text-equivalence: v2's not-connected text matches v1's REAL pingHandler.ts response (not a hardcoded literal)", async () => {
