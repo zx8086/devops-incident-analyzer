@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	findFrontmatterDegradations,
+	findMissingDeclaredSubAgents,
 	findOrphanedKnowledgeFiles,
 	findSkillDeclarationDrift,
 	KnowledgeIndexSchema,
@@ -28,7 +29,8 @@ interface AuditFinding {
 		| "orphaned_knowledge"
 		| "skill_declaration_drift"
 		| "spec_contradiction"
-		| "spec_contradiction_check_failed";
+		| "spec_contradiction_check_failed"
+		| "sub_agent_declaration_gap";
 	detail: string;
 }
 
@@ -80,6 +82,14 @@ async function auditAgent(name: string, agent: LoadedAgent, agentDir: string): P
 	// flattened tree, which is what extends the SIO-1281 root-only drift guarantee to sub-agents.
 	for (const d of findSkillDeclarationDrift(agentDir, agent.manifest.skills ?? [])) {
 		findings.push({ agentName: name, kind: "skill_declaration_drift", detail: `${d.kind}: ${d.path}` });
+	}
+
+	// CodeRabbit (PR #635): flattenAgents walks the LOADED subAgents map, and loadAgent drops a
+	// declared child whose agent.yaml is missing -- such a child would otherwise escape this
+	// entire audit (and run with the ROOT agent's prompt at dispatch time, the SIO-1229 failure
+	// mode). Compare the declared map against disk so the walk's own completeness is audited.
+	for (const g of findMissingDeclaredSubAgents(agentDir, Object.keys(agent.manifest.agents ?? {}))) {
+		findings.push({ agentName: name, kind: "sub_agent_declaration_gap", detail: `${g.name}: ${g.path} missing` });
 	}
 
 	if (agent.soul && agent.rules) {

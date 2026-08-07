@@ -10,6 +10,7 @@ import { parse } from "yaml";
 import { type LoadedAgent, loadAgent } from "./manifest-loader.ts";
 import {
 	findFrontmatterDegradations,
+	findMissingDeclaredSubAgents,
 	findOrphanedKnowledgeFiles,
 	findSkillDeclarationDrift,
 } from "./okf-spec-audit.ts";
@@ -183,7 +184,30 @@ describe("SIO-1444 check 4: skill-declaration drift, sub-agents included", () =>
 
 		for (const { agent, dir } of flat) {
 			expect(findSkillDeclarationDrift(dir, agent.manifest.skills ?? [])).toEqual([]);
+			// CodeRabbit (PR #635): the flatten above iterates the LOADED subAgents map, which
+			// cannot contain a declared child whose agent.yaml is missing -- loadAgent's
+			// existsSync guard drops it silently. Check the DECLARED map against disk too, so
+			// the walk itself is proven complete before its per-agent assertions mean anything.
+			expect(findMissingDeclaredSubAgents(dir, Object.keys(agent.manifest.agents ?? {}))).toEqual([]);
 		}
+	});
+
+	test("a declared sub-agent whose agent.yaml is missing IS reported", () => {
+		const dir = makeSkillFixture({
+			// Directory exists (so the on-disk-undeclared check would not see anything odd),
+			// but the declared child has no agent.yaml -- loadAgent silently skips it.
+			"agents/ghost-agent/SOUL.md": "# ghost\n",
+		});
+		expect(findMissingDeclaredSubAgents(dir, ["ghost-agent"])).toEqual([
+			{ name: "ghost-agent", path: "agents/ghost-agent/agent.yaml" },
+		]);
+	});
+
+	test("a declared sub-agent with agent.yaml present is NOT reported", () => {
+		const dir = makeSkillFixture({
+			"agents/real-agent/agent.yaml": 'spec_version: "0.1.0"\nname: real-agent\nversion: 0.1.0\ndescription: x\n',
+		});
+		expect(findMissingDeclaredSubAgents(dir, ["real-agent"])).toEqual([]);
 	});
 
 	test("an undeclared skills/<name>/ dir with a SKILL.md IS reported", () => {

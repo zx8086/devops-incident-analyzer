@@ -171,3 +171,26 @@ export function findSkillDeclarationDrift(agentDir: string, declaredSkills: stri
 
 	return drifts;
 }
+
+export interface SubAgentDeclarationGap {
+	name: string;
+	path: string;
+}
+
+// CodeRabbit (PR #635): loadAgent adds a declared child to `subAgents` only when
+// agents/<name>/agent.yaml exists (manifest-loader.ts existsSync guard), so a declared child
+// whose agent.yaml is missing silently vanishes from the loaded tree. Every walk that iterates
+// `subAgents` -- the spec-audit CLI's flattenAgents, the repo-level drift test above, and
+// buildSubAgentPrompt's lookup (which then falls back to the ROOT prompt for that agent, the
+// SIO-1229 failure mode) -- would skip it without a trace. The audit must therefore compare
+// the DECLARED map against the disk, not the loaded map against itself.
+export function findMissingDeclaredSubAgents(agentDir: string, declaredAgents: string[]): SubAgentDeclarationGap[] {
+	const gaps: SubAgentDeclarationGap[] = [];
+	for (const name of declaredAgents) {
+		const yamlPath = join(agentDir, "agents", name, "agent.yaml");
+		if (!existsSync(yamlPath)) {
+			gaps.push({ name, path: relative(agentDir, yamlPath) });
+		}
+	}
+	return gaps;
+}
