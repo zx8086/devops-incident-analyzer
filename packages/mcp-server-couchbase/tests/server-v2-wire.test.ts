@@ -787,14 +787,21 @@ describe("SIO-1443 Critical fix: documentation resources (resources/read) genuin
 	// handlers in v2/resources.ts (documentation-browser, scope-documentation,
 	// collection-documentation, documentation-file) previously `return`ed { contents: [...] } with
 	// error-shaped TEXT when config.documentation.enabled was false, which is always a 200 JSON-RPC
-	// SUCCESS at the wire level regardless of what the text says. v1's real behavior (verified by
-	// reading the installed @modelcontextprotocol/server@2.0.0 bundle) is that the resource is never
-	// registered at all when disabled, so a real client gets a genuine JSON-RPC protocol-level error
-	// (top-level `error` field), not a disguised success. The fix makes each handler `throw` instead,
-	// mirroring v2/tools/documentation.ts's capella_read_documentation (already reviewed/approved for
-	// the identical tool-surface gating problem). Asserts on the wire-level resources/read response,
-	// not tools/call -- this is the resource protocol path, not the tool path.
-	test("docs:// disabled: resources/read returns a top-level JSON-RPC error, not a 200 success", async () => {
+	// SUCCESS at the wire level regardless of what the text says.
+	//
+	// SIO-1443 (reviewer follow-up fix): the original fix made each handler `throw` while still
+	// registering all 4 resources unconditionally, which fixed resources/read but left
+	// resources/list showing all 4 as available even though reading them always failed -- a
+	// discovery-level divergence from v1 (v1 never registers these resources at all when
+	// config.documentation.enabled is false; see resources/index.ts:37). The fix now wraps the
+	// registration itself in the config check (mirroring v1 exactly), so resources/read for a
+	// disabled-config request hits the SDK's own "resource not found" dispatch -- because the
+	// resource was never registered -- instead of a custom thrown error. Live-verified (throwaway
+	// probe, not committed): the SDK's own not-found response is
+	// { error: { code: -32602, message: "Resource not found: <uri>", data: { uri: "<uri>" } } },
+	// distinct from the previous custom createError("NOT_FOUND", ...) text and from the -32603
+	// internal-error code a thrown handler body would have produced.
+	test("docs:// disabled: resources/read returns the SDK's own resource-not-found error, not a 200 success", async () => {
 		config.documentation = { enabled: false, baseDirectory: "/tmp/docs", fileExtension: ".md" };
 
 		const handler = buildHandler();
@@ -829,25 +836,24 @@ describe("SIO-1443 Critical fix: documentation resources (resources/read) genuin
 			jsonrpc: string;
 			id: number;
 			result?: unknown;
-			error?: { code?: number; message?: string };
+			error?: { code?: number; message?: string; data?: { uri?: string } };
 		};
 		expect(body.jsonrpc).toBe("2.0");
 		expect(body.id).toBe(7);
 		// The load-bearing assertion: a genuine top-level JSON-RPC `error`, not a `result` carrying
-		// "Error: ..." text. Verified live (throwaway probe, not committed) that a thrown
-		// registerResource callback error surfaces as { error: { code: -32603, message: "<thrown
-		// message>" } } -- an internal-error code, distinct from tools/call's isError:true-in-result
-		// shape (thrown tool errors and thrown resource errors are handled by different SDK code
-		// paths).
+		// "Error: ..." text -- and specifically the SDK's own "resource was never registered" error
+		// (code -32602), not a handler-thrown -32603.
 		expect(body.result).toBeUndefined();
 		expect(body.error).toBeDefined();
-		expect(body.error?.message).toContain("No resource handler found for URI");
+		expect(body.error?.code).toBe(-32602);
+		expect(body.error?.message).toContain("Resource not found");
+		expect(body.error?.message).toContain("docs://");
 	});
 
 	// scope-documentation:// is one of the 3 scheme-less-fixed resources (see resources.ts's header
-	// comment on the scheme-less URI finding) -- confirms the throw fix applies uniformly across all
-	// 4 gated resources, not just the one with a "real" scheme.
-	test("scope-documentation:// disabled: resources/read returns a top-level JSON-RPC error", async () => {
+	// comment on the scheme-less URI finding) -- confirms the conditional-registration fix applies
+	// uniformly across all 4 gated resources, not just the one with a "real" scheme.
+	test("scope-documentation:// disabled: resources/read returns the SDK's own resource-not-found error", async () => {
 		config.documentation = { enabled: false, baseDirectory: "/tmp/docs", fileExtension: ".md" };
 
 		const handler = buildHandler();
@@ -882,12 +888,118 @@ describe("SIO-1443 Critical fix: documentation resources (resources/read) genuin
 			jsonrpc: string;
 			id: number;
 			result?: unknown;
-			error?: { code?: number; message?: string };
+			error?: { code?: number; message?: string; data?: { uri?: string } };
 		};
 		expect(body.jsonrpc).toBe("2.0");
 		expect(body.id).toBe(8);
 		expect(body.result).toBeUndefined();
 		expect(body.error).toBeDefined();
-		expect(body.error?.message).toContain("No resource handler found for URI");
+		expect(body.error?.code).toBe(-32602);
+		expect(body.error?.message).toContain("Resource not found");
+		expect(body.error?.message).toContain("scope-documentation://");
+	});
+
+	// Direct regression coverage for the actual gap the reviewer flagged: resources/list must omit
+	// the 4 documentation resources entirely when documentation is disabled, not just fail their
+	// individual reads. Live-verified counts (throwaway probe, not committed): default/disabled
+	// config returns exactly 1 resource (database-structure); enabling documentation returns 5
+	// (database-structure + the 4 documentation resources) -- matching v1's registerAllResources
+	// gating (resources/index.ts:37) 1:1.
+	test("resources/list omits the 4 documentation resources when config.documentation.enabled is false", async () => {
+		config.documentation = { enabled: false, baseDirectory: "/tmp/docs", fileExtension: ".md" };
+
+		const handler = buildHandler();
+		const response = await handler.fetch(
+			new Request("http://localhost/mcp", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Accept: "application/json, text/event-stream",
+					"Mcp-Method": "resources/list",
+				},
+				body: JSON.stringify({
+					jsonrpc: "2.0",
+					id: 20,
+					method: "resources/list",
+					params: {
+						_meta: {
+							"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+							"io.modelcontextprotocol/clientCapabilities": {},
+							"io.modelcontextprotocol/clientInfo": { name: "probe", version: "0" },
+						},
+					},
+				}),
+			}),
+		);
+		await handler.close();
+
+		expect(response.status).toBe(200);
+		const body = (await parseJsonRpcBody(response)) as {
+			jsonrpc: string;
+			id: number;
+			result?: { resources?: Array<{ uri: string; name: string }> };
+			error?: unknown;
+		};
+		expect(body.jsonrpc).toBe("2.0");
+		expect(body.id).toBe(20);
+		expect(body.error).toBeUndefined();
+		const uris = (body.result?.resources ?? []).map((r) => r.uri).sort();
+		expect(uris).toEqual(["database://structure"]);
+		expect(uris).not.toContain("docs://");
+		expect(uris).not.toContain("scope-documentation://");
+		expect(uris).not.toContain("collection-documentation://");
+		expect(uris).not.toContain("documentation-file://");
+	});
+
+	// Positive-side counterpart: with documentation enabled, all 4 documentation resources ARE
+	// discoverable via resources/list, alongside the always-on database-structure resource.
+	test("resources/list includes the 4 documentation resources when config.documentation.enabled is true", async () => {
+		config.documentation = { enabled: true, baseDirectory: "/tmp/docs", fileExtension: ".md" };
+
+		const handler = buildHandler();
+		const response = await handler.fetch(
+			new Request("http://localhost/mcp", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Accept: "application/json, text/event-stream",
+					"Mcp-Method": "resources/list",
+				},
+				body: JSON.stringify({
+					jsonrpc: "2.0",
+					id: 21,
+					method: "resources/list",
+					params: {
+						_meta: {
+							"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+							"io.modelcontextprotocol/clientCapabilities": {},
+							"io.modelcontextprotocol/clientInfo": { name: "probe", version: "0" },
+						},
+					},
+				}),
+			}),
+		);
+		await handler.close();
+
+		expect(response.status).toBe(200);
+		const body = (await parseJsonRpcBody(response)) as {
+			jsonrpc: string;
+			id: number;
+			result?: { resources?: Array<{ uri: string; name: string }> };
+			error?: unknown;
+		};
+		expect(body.jsonrpc).toBe("2.0");
+		expect(body.id).toBe(21);
+		expect(body.error).toBeUndefined();
+		const uris = (body.result?.resources ?? []).map((r) => r.uri).sort();
+		expect(uris).toEqual(
+			[
+				"collection-documentation://",
+				"database://structure",
+				"docs://",
+				"documentation-file://",
+				"scope-documentation://",
+			].sort(),
+		);
 	});
 });

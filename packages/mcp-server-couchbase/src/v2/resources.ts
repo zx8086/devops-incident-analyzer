@@ -50,7 +50,6 @@ import { ResourceTemplate } from "@modelcontextprotocol/server";
 import { config } from "../config";
 import { isNoIndexError, isNotFoundError } from "../lib/classifyCouchbaseError";
 import { connectionManager } from "../lib/connectionManager";
-import { createError } from "../lib/errors";
 import { ResponseBuilder } from "../lib/responseBuilder";
 import { sqlppParser } from "../lib/sqlppParser";
 import type { DocumentContent } from "../lib/types";
@@ -396,63 +395,50 @@ export async function registerResourcesV2(server: McpServer): Promise<void> {
 		}
 	});
 
-	// Ported verbatim from documentationResource.ts's documentation-browser registration. Uses a
-	// real scheme ("docs://"), so it is NOT affected by the scheme-less URI finding above.
-	server.registerResource("documentation-browser", "docs://", {}, async (uri: URL) => {
-		logger.info({ uri: uri.href }, "Handling documentation browser request");
-		if (!config.documentation?.enabled) {
-			// SIO-1443 (reviewer fix): mirrors v1's gate -- registerAllResources (resources/index.ts)
-			// only calls registerMarkdownDocumentationResource when config.documentation.enabled, so
-			// under the default (disabled) config this resource is never registered on the SDK server
-			// in v1 at all, and a docs:// read genuinely fails at the protocol layer (v1's SDK reports
-			// "No resource handler found for URI" as a real error, not a 200-success response). v2 has
-			// only one registration call site (no conditional registerResource call would be reachable
-			// the same way without restructuring registerResourcesV2 itself), so the gate is enforced
-			// inside the handler instead -- but it must THROW, not return { contents } (a returned
-			// value is always a 200 success at the wire level, even when its text says "Error: ...").
-			// Same fix, same reasoning as v2/tools/documentation.ts's capella_read_documentation
-			// (see that file's inline comment on its own equivalent gate).
-			throw createError("NOT_FOUND", `No resource handler found for URI: ${uri.href}`);
-		}
-		return listDocumentation(config.documentation.baseDirectory || "./docs");
-	});
+	// SIO-1443 (reviewer fix, resources/list discovery divergence): mirrors v1's gate exactly --
+	// registerAllResources (resources/index.ts:37) only calls registerMarkdownDocumentationResource
+	// when config.documentation.enabled, so under the default (disabled) config v1 never registers
+	// ANY of these 4 resources on the SDK server, and a client calling resources/list sees zero
+	// documentation resources. The previous version of this file registered all 4 unconditionally
+	// and gated inside each handler instead, which kept resources/read correctly failing but left
+	// resources/list showing 4 resources that can never actually be read -- a genuine discovery-level
+	// divergence from v1 (live-verified: v2 returned 5 resources under default config, v1 returned
+	// 1). Wrapping the registration itself in the same config check IS the fix: the SDK's own
+	// "resource not found" error now fires for resources/read on a disabled config (nothing was ever
+	// registered), and resources/list correctly omits them too -- both derive from the same single
+	// gate, exactly like v1's absence-of-registration mechanism (v1 has no in-handler check either).
+	if (config.documentation?.enabled) {
+		const documentationBaseDirectory = config.documentation.baseDirectory || "./docs";
 
-	// SCHEME-LESS URI FIX (see file header for the probe finding): v1 registers these 3 resources
-	// with bare scheme-less URI strings ("scope-documentation", "collection-documentation",
-	// "documentation-file"). v2's resources/read wire dispatch rejects a scheme-less URI with
-	// -32602 "invalid_uri" before any handler runs (confirmed live). Registering with a trailing
-	// "://" makes the URI parseable and the handler reachable -- this is a deliberate, minimal
-	// scheme addition to preserve v2 reachability, not a silent behavioral change: the resource
-	// name and content are otherwise identical to v1's placeholder implementation.
-	server.registerResource("scope-documentation", "scope-documentation://", {}, async (uri: URL) => {
-		logger.info({ uri: uri.href }, "Handling scope documentation request");
-		if (!config.documentation?.enabled) {
-			// SIO-1443 (reviewer fix): must throw, not return { contents } -- see documentation-browser
-			// above for the full rationale.
-			throw createError("NOT_FOUND", "No resource handler found for URI: scope-documentation");
-		}
-		return getScopeDocumentation("default");
-	});
+		// Ported verbatim from documentationResource.ts's documentation-browser registration. Uses a
+		// real scheme ("docs://"), so it is NOT affected by the scheme-less URI finding above.
+		server.registerResource("documentation-browser", "docs://", {}, async (uri: URL) => {
+			logger.info({ uri: uri.href }, "Handling documentation browser request");
+			return listDocumentation(documentationBaseDirectory);
+		});
 
-	server.registerResource("collection-documentation", "collection-documentation://", {}, async (uri: URL) => {
-		logger.info({ uri: uri.href }, "Handling collection documentation request");
-		if (!config.documentation?.enabled) {
-			// SIO-1443 (reviewer fix): must throw, not return { contents } -- see documentation-browser
-			// above for the full rationale.
-			throw createError("NOT_FOUND", "No resource handler found for URI: collection-documentation");
-		}
-		return getCollectionDocumentation("default", "default");
-	});
+		// SCHEME-LESS URI FIX (see file header for the probe finding): v1 registers these 3 resources
+		// with bare scheme-less URI strings ("scope-documentation", "collection-documentation",
+		// "documentation-file"). v2's resources/read wire dispatch rejects a scheme-less URI with
+		// -32602 "invalid_uri" before any handler runs (confirmed live). Registering with a trailing
+		// "://" makes the URI parseable and the handler reachable -- this is a deliberate, minimal
+		// scheme addition to preserve v2 reachability, not a silent behavioral change: the resource
+		// name and content are otherwise identical to v1's placeholder implementation.
+		server.registerResource("scope-documentation", "scope-documentation://", {}, async (uri: URL) => {
+			logger.info({ uri: uri.href }, "Handling scope documentation request");
+			return getScopeDocumentation("default");
+		});
 
-	server.registerResource("documentation-file", "documentation-file://", {}, async (uri: URL) => {
-		logger.info({ uri: uri.href }, "Handling documentation file request");
-		if (!config.documentation?.enabled) {
-			// SIO-1443 (reviewer fix): must throw, not return { contents } -- see documentation-browser
-			// above for the full rationale.
-			throw createError("NOT_FOUND", "No resource handler found for URI: documentation-file");
-		}
-		return getDocumentationFile("default", "default", "default");
-	});
+		server.registerResource("collection-documentation", "collection-documentation://", {}, async (uri: URL) => {
+			logger.info({ uri: uri.href }, "Handling collection documentation request");
+			return getCollectionDocumentation("default", "default");
+		});
+
+		server.registerResource("documentation-file", "documentation-file://", {}, async (uri: URL) => {
+			logger.info({ uri: uri.href }, "Handling documentation file request");
+			return getDocumentationFile("default", "default", "default");
+		});
+	}
 
 	// --- Dynamic resources (ResourceTemplate) ---
 
