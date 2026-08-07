@@ -8,11 +8,12 @@
 
 import type { McpServer, RegisteredTool, ToolAnnotations } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { logger } from "../../utils/logger";
+import { createContextLogger } from "../../utils/logger";
 
 const READ_ONLY_ANNOTATIONS: ToolAnnotations = { readOnlyHint: true, destructiveHint: false };
 
 export function registerEchoToolV2(server: McpServer, tools: Map<string, RegisteredTool>): void {
+	const echoLogger = createContextLogger("EchoTool");
 	const echo = server.registerTool(
 		"capella_echo",
 		{
@@ -21,7 +22,7 @@ export function registerEchoToolV2(server: McpServer, tools: Map<string, Registe
 			annotations: READ_ONLY_ANNOTATIONS,
 		},
 		async (params: Record<string, unknown>) => {
-			logger.info({ raw_params: JSON.stringify(params) }, "EchoTool RAW params");
+			echoLogger.info({ raw_params: JSON.stringify(params) }, "EchoTool RAW params");
 			return { content: [{ type: "text" as const, text: JSON.stringify(params) }] };
 		},
 	);
