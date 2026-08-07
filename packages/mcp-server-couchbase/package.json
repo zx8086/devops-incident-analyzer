@@ -12,7 +12,10 @@
 	},
 	"dependencies": {
 		"@devops-agent/shared": "workspace:*",
+		"@modelcontextprotocol/core": "2.0.0",
+		"@modelcontextprotocol/node": "2.0.0",
 		"@modelcontextprotocol/sdk": "catalog:",
+		"@modelcontextprotocol/server": "2.0.0",
 		"@opentelemetry/api": "^1.9.0",
 		"couchbase": "^4.7.0",
 		"pino": "catalog:",
