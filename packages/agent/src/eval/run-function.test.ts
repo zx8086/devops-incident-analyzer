@@ -99,3 +99,36 @@ describe("FrozenOutputSchema toolTrajectory backward compatibility (SIO-1398)", 
 		).toThrow();
 	});
 });
+
+// SIO-1442: selectedRunbooks + severity thread through the same output shape, for the tier-3
+// runbook-selection-vs-usage evaluator. Same backward-compat contract as toolTrajectory above --
+// a fixture recorded before this field existed must still parse under replay-outputs.
+describe("FrozenOutputSchema selectedRunbooks/severity backward compatibility (SIO-1442)", () => {
+	const legacyFixture = {
+		response: "a report recorded before selectedRunbooks existed",
+		targetDataSources: ["elastic"],
+		firstAttempts: [],
+		subagentReports: {},
+	};
+
+	test("a fixture recorded before selectedRunbooks existed still parses, defaulting to null", () => {
+		const parsed = FrozenOutputSchema.parse(legacyFixture);
+		expect(parsed.selectedRunbooks).toBeNull();
+		expect(parsed.severity).toBeUndefined();
+	});
+
+	test("a recorded selectedRunbooks + severity round-trips intact", () => {
+		const parsed = FrozenOutputSchema.parse({
+			...legacyFixture,
+			selectedRunbooks: ["database-slow-queries.md", "code-change-correlation.md"],
+			severity: "high",
+		});
+		expect(parsed.selectedRunbooks).toEqual(["database-slow-queries.md", "code-change-correlation.md"]);
+		expect(parsed.severity).toBe("high");
+	});
+
+	test("an empty-array selectedRunbooks (selector ran, chose none) round-trips as [], not null", () => {
+		const parsed = FrozenOutputSchema.parse({ ...legacyFixture, selectedRunbooks: [] });
+		expect(parsed.selectedRunbooks).toEqual([]);
+	});
+});

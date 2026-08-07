@@ -138,6 +138,15 @@ export const FrozenOutputSchema = z.object({
 			}),
 		)
 		.default([]),
+	// SIO-1442: same tri-state contract as state.ts's selectedRunbooks (null = selector didn't
+	// run; [] = ran, chose none; [names] = these). Default null, not [], so a pre-SIO-1442
+	// fixture reads as "unknown" rather than misreporting "the selector ran and chose nothing."
+	selectedRunbooks: z.array(z.string()).nullable().default(null),
+	// SIO-1442: the incident's severity at aggregation time, needed to compare selectedRunbooks
+	// against runbook-selector.ts's fallbackBySeverity contract. Absent (not defaulted to a
+	// fabricated value) on fixtures recorded before this field existed or when the classifier
+	// never populated normalizedIncident.severity.
+	severity: z.enum(["critical", "high", "medium", "low"]).optional(),
 });
 
 let frozenOutputs: Map<string, unknown> | undefined;
@@ -169,6 +178,8 @@ export async function runAgent(inputs: z.infer<typeof RunAgentInputsSchema>): Pr
 		subagentReports: { [dataSourceId: string]: string };
 		toolTrajectory: ToolTrajectory;
 		responseHealth: ResponseHealthFinding[];
+		selectedRunbooks: string[] | null;
+		severity?: "critical" | "high" | "medium" | "low";
 	};
 }> {
 	const parsed = RunAgentInputsSchema.parse(inputs);
@@ -241,6 +252,11 @@ export async function runAgent(inputs: z.infer<typeof RunAgentInputsSchema>): Pr
 				subagentReports,
 				toolTrajectory,
 				responseHealth,
+				// SIO-1442: threaded for the tier-3 runbook-selection-vs-usage evaluator, same
+				// pattern as toolTrajectory/responseHealth above -- graph state the evaluator (which
+				// runs against the LangSmith run, not the graph) could otherwise never see.
+				selectedRunbooks: finalState.selectedRunbooks ?? null,
+				severity: finalState.normalizedIncident?.severity,
 			},
 		};
 	};
