@@ -21,8 +21,8 @@
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parse } from "yaml";
 import { extractFrontmatterTools, extractTailSection, isRunbookCategory } from "@devops-agent/gitagent-bridge";
+import { parse } from "yaml";
 import { ORBIT_TOOL_NAMES } from "../correlation/extractors/orbit.ts";
 import { getAgentsDir } from "../paths.ts";
 import { RESOLUTION_TOOLS_BY_DATASOURCE } from "../sub-agent.ts";
