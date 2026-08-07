@@ -1,25 +1,25 @@
 // shared/src/bootstrap.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type pino from "pino";
-import { OAuthRequiresInteractiveAuthError } from "./oauth/errors.ts";
-import { installReadOnlyChokepoint, type ReadOnlyMiddlewareConfig } from "./read-only-chokepoint.ts";
-import { initTelemetry, shutdownTelemetry, type TelemetryConfig } from "./telemetry/telemetry.ts";
-import { installToolCallLogging } from "./tool-call-logging.ts";
 import {
-	createToolCallMetricsRecorder,
-	resolveToolCallMetricsDbPath,
-	type ToolCallMetricsRecorder,
-} from "./tool-call-metrics.ts";
-import { buildIdentityCard, type IdentityCard, type McpRole } from "./transport/identity.ts";
+	type BootstrapLogger,
+	buildIdentityCard,
+	handleStartupFailure,
+	type IdentityCard,
+	initTelemetry,
+	installProcessErrorHandlers,
+	installShutdownSignalHandlers,
+	isBenignStreamCancel,
+	type McpRole,
+	openMetricsRecorder,
+	shutdownTelemetry,
+	type TelemetryConfig,
+} from "./bootstrap-lifecycle.ts";
+import { installReadOnlyChokepoint, type ReadOnlyMiddlewareConfig } from "./read-only-chokepoint.ts";
+import { installToolCallLogging } from "./tool-call-logging.ts";
 
-export type { TelemetryConfig };
-
-export interface BootstrapLogger {
-	info(message: string, meta?: Record<string, unknown>): void;
-	error(message: string, meta?: Record<string, unknown>): void;
-	warn(message: string, meta?: Record<string, unknown>): void;
-	flush?(): void;
-}
+export type { BootstrapLogger, TelemetryConfig };
+export { isBenignStreamCancel };
 
 // Bridges Pino's (mergeObj, message) arg order to BootstrapLogger's (message, meta?) interface
 export function createBootstrapAdapter(pinoLogger: pino.Logger): BootstrapLogger {
@@ -43,17 +43,6 @@ export interface TransportListenInfo {
 export interface BootstrapTransportResult {
 	listen?: TransportListenInfo;
 	closeAll(): Promise<void>;
-}
-
-// SIO-869: an SSE client that disconnects mid-stream (e.g. the agent pausing at a
-// plan-review gate) cancels the response stream reader, surfacing a benign AbortError.
-// It must not escalate to process.exit() and take the whole MCP server down.
-export function isBenignStreamCancel(reason: unknown): boolean {
-	return (
-		reason instanceof Error &&
-		reason.name === "AbortError" &&
-		/releaseLock|stream reader (?:was )?cancelled/i.test(reason.message)
-	);
 }
 
 export interface McpApplicationOptions<T> {
@@ -102,44 +91,12 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 	// rejection during initDatasource/createTransport would otherwise hit the runtime
 	// default (crash) in the window before registration. SIO-986: skip in embedded
 	// mode; these are process-GLOBAL and the host app owns them there.
-	if (!options.embedded) {
-		process.on("uncaughtException", (error) => {
-			// Runtime can pass non-Error values (throw "string", throw null); accessing
-			// .message on those would throw inside the crash handler itself.
-			const err = error instanceof Error ? error : new Error(String(error));
-			logger.error(`Uncaught exception in ${name}`, {
-				error: err.message,
-				stack: err.stack,
-				name: err.name,
-			});
-			if (logger.flush) logger.flush();
-			process.exit(1);
-		});
-
-		// Log-and-continue: a stray background rejection (e.g. an SDK promise resolving
-		// after its caller moved on) must not take down a long-running MCP server and
-		// every tool it serves. uncaughtException above still exits -- a thrown
-		// exception mid-stack means corrupted state; an orphaned rejection does not.
-		process.on("unhandledRejection", (reason) => {
-			if (isBenignStreamCancel(reason)) {
-				logger.warn(`Ignoring benign stream-cancel in ${name}`, {
-					reason: reason instanceof Error ? reason.message : String(reason),
-				});
-				return;
-			}
-			logger.error(`Unhandled rejection in ${name} (continuing)`, {
-				reason: reason instanceof Error ? reason.message : String(reason),
-				name: reason instanceof Error ? reason.name : undefined,
-				stack: reason instanceof Error ? reason.stack : undefined,
-			});
-			if (logger.flush) logger.flush();
-		});
-	}
+	installProcessErrorHandlers({ name, logger, embedded: options.embedded });
 
 	// SIO-1400 (CodeRabbit): declared outside the try so a startup failure after the
 	// recorder opened can close it -- matters in embedded mode, where the process
 	// (and its SQLite handle) outlives the failed start.
-	let toolMetrics: ToolCallMetricsRecorder | undefined;
+	let toolMetrics: Awaited<ReturnType<typeof openMetricsRecorder>>;
 
 	try {
 		// Step 1: LangSmith tracing (must be first -- sets env vars before anything reads them)
@@ -164,10 +121,7 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 		// Created ONCE per process and shared by every server instance -- the factory
 		// below can run per-connection (cached-server-factory), so the recorder must
 		// not live inside it. Proxy mode counts in the agentcore proxy itself.
-		const metricsDbPath = mode === "proxy" ? undefined : resolveToolCallMetricsDbPath();
-		toolMetrics = metricsDbPath
-			? await createToolCallMetricsRecorder({ serverName: name, dbPath: metricsDbPath, logger })
-			: undefined;
+		toolMetrics = await openMetricsRecorder({ mode, name, logger });
 		// const capture: the factory closure below outlives this scope, and TS cannot
 		// narrow the outer `let` (declared before the try for the error path).
 		const metricsSink = toolMetrics;
@@ -268,10 +222,7 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 		// The uncaughtException/unhandledRejection handlers are registered at function entry,
 		// before any startup await. SIO-986: skip in embedded mode -- process-GLOBAL; an
 		// in-process server would hijack the host app's SIGINT/SIGTERM. The host owns these.
-		if (!options.embedded) {
-			process.on("SIGINT", () => shutdown());
-			process.on("SIGTERM", () => shutdown());
-		}
+		installShutdownSignalHandlers({ embedded: options.embedded, shutdown: () => shutdown() });
 
 		// Step 8: Notify startup complete
 		if (options.onStarted) {
@@ -284,34 +235,6 @@ export async function createMcpApplication<T>(options: McpApplicationOptions<T>)
 		// SIO-1400: a startup failure never reaches the shutdown handle, so close the
 		// recorder here (no-op if it never opened; close() is soft-failing).
 		toolMetrics?.close();
-		// An un-authorized OAuth server (no valid seeded tokens under headless /
-		// non-interactive stdout) surfaces a typed error. The deep SDK auth stack
-		// (auth.js -> streamableHttp.js) is noise -- the fix is a one-time
-		// interactive seed -- so render one actionable line, then exit non-zero.
-		if (error instanceof OAuthRequiresInteractiveAuthError) {
-			logger.error(
-				`Cannot start ${name}: ${error.namespace} OAuth is not authorized (no valid seeded tokens under ` +
-					`MCP_OAUTH_HEADLESS / non-interactive stdout). Run \`bun run oauth:seed:${error.namespace}\` once ` +
-					"interactively to seed tokens (add `-- --force` to re-seed expired tokens), then restart.",
-				{ namespace: error.namespace },
-			);
-			if (logger.flush) logger.flush();
-			process.exit(1);
-		}
-		// SIO-986: embedded servers must NOT take the host app down. Rethrow so the host's try/catch
-		// (.catch) handles it gracefully; only a standalone process exits.
-		// SIO-987: and do NOT log a level:50 "Fatal" line in embedded mode -- a start failure there is
-		// expected/recoverable (the host logs its own actionable WARN), so a scary Fatal is misleading
-		// noise. A standalone process logs Fatal + exits, unchanged.
-		if (options.embedded) {
-			if (logger.flush) logger.flush();
-			throw error;
-		}
-		logger.error(`Fatal error starting ${name}`, {
-			error: error instanceof Error ? error.message : String(error),
-			stack: error instanceof Error ? error.stack : undefined,
-		});
-		if (logger.flush) logger.flush();
-		process.exit(1);
+		handleStartupFailure({ error, name, logger, embedded: options.embedded });
 	}
 }
