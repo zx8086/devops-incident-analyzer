@@ -1,25 +1,25 @@
 // packages/agent/src/eval/runbook-selection-evaluator.test.ts
-// SIO-1442: did the agent select the runbook(s) the SIO-640 contract says it should have, for
-// this incident's severity? Pure comparison logic tested here; the live run.outputs/getAgent()
-// reading glue (runbookSelectionVsUsage) is thin and untested by unit tests, same split as
-// SIO-1440's spec-contradiction-judge.ts (judgeSpecContradictions vs contradictionJudgeFeedback).
+// SIO-1442: did the agent honor the SIO-640 always_select contract? Pure comparison logic tested
+// here; the live run.outputs/getAgent() reading glue (runbookSelectionVsUsage) is thin and
+// untested by unit tests, same split as SIO-1440's spec-contradiction-judge.ts
+// (judgeSpecContradictions vs contradictionJudgeFeedback).
+//
+// CodeRabbit (PR #633): compareRunbookSelection originally gated always_select grading on
+// severity being present, even though always_select is unconditional (SIO-1302: "appended...
+// every complex turn, unconditionally... all incidents are software incidents") and the
+// comparison logic never actually read severity or fallbackBySeverity. A run with a completed
+// selection but no populated normalizedIncident.severity (plausible -- it's .optional()) would
+// silently skip grading a real, gradable contract. Removed severity/fallbackBySeverity from the
+// input entirely -- they were dead weight the comparison logic never used.
 import { describe, expect, test } from "bun:test";
 import { compareRunbookSelection } from "./runbook-selection-evaluator.ts";
 
-const fallbackBySeverity = {
-	critical: ["kafka-consumer-lag.md", "high-error-rate.md", "database-slow-queries.md", "code-change-correlation.md"],
-	high: ["kafka-consumer-lag.md", "high-error-rate.md", "database-slow-queries.md", "code-change-correlation.md"],
-	medium: ["code-change-correlation.md"],
-	low: [],
-};
 const alwaysSelect = ["code-change-correlation.md"];
 
 describe("compareRunbookSelection", () => {
-	test("exact match against the severity fallback scores 1", () => {
+	test("always_select present scores 1", () => {
 		const verdict = compareRunbookSelection({
-			severity: "medium",
 			selectedRunbooks: ["code-change-correlation.md"],
-			fallbackBySeverity,
 			alwaysSelect,
 		});
 		expect(verdict).not.toBeNull();
@@ -27,18 +27,9 @@ describe("compareRunbookSelection", () => {
 		expect(verdict?.missing).toEqual([]);
 	});
 
-	// The LLM router (runSelectRunbooks) picks 0-3 runbooks by trigger relevance, not by blindly
-	// copying the severity fallback -- the fallback only fires when the router itself fails. A
-	// router pick that omits some fallback entries is normal, expected behavior, not a defect.
-	// The contract this evaluator actually enforces is always_select: those must ALWAYS appear,
-	// router or fallback, every complex turn, unconditionally (runbook-selector.ts's SIO-1302
-	// comment). Only always_select entries count toward "missing" -- the wider severity list is
-	// informational context, not itself pass/fail.
 	test("missing an always_select entry scores 0 and names it", () => {
 		const verdict = compareRunbookSelection({
-			severity: "critical",
 			selectedRunbooks: ["kafka-consumer-lag.md"],
-			fallbackBySeverity,
 			alwaysSelect,
 		});
 		expect(verdict).not.toBeNull();
@@ -48,9 +39,7 @@ describe("compareRunbookSelection", () => {
 
 	test("a superset of always_select still scores 1 (extra runbooks are not a defect)", () => {
 		const verdict = compareRunbookSelection({
-			severity: "critical",
 			selectedRunbooks: ["kafka-consumer-lag.md", "high-error-rate.md", "code-change-correlation.md"],
-			fallbackBySeverity,
 			alwaysSelect,
 		});
 		expect(verdict?.score).toBe(1);
@@ -61,9 +50,7 @@ describe("compareRunbookSelection", () => {
 	// must emit no verdict rather than a false failure.
 	test("selectedRunbooks === null (selector did not run) yields no verdict", () => {
 		const verdict = compareRunbookSelection({
-			severity: "critical",
 			selectedRunbooks: null,
-			fallbackBySeverity,
 			alwaysSelect,
 		});
 		expect(verdict).toBeNull();
@@ -71,21 +58,20 @@ describe("compareRunbookSelection", () => {
 
 	test("an empty selection when always_select is empty scores 1, not a false failure", () => {
 		const verdict = compareRunbookSelection({
-			severity: "low",
 			selectedRunbooks: [],
-			fallbackBySeverity,
 			alwaysSelect: [],
 		});
 		expect(verdict?.score).toBe(1);
 	});
 
-	test("missing severity yields no verdict (cannot compare against an unknown fallback tier)", () => {
+	// The regression this guards: grading must not depend on severity being populated, since
+	// always_select is unconditional and has nothing to do with severity.
+	test("grades always_select regardless of severity -- there is no severity parameter at all", () => {
 		const verdict = compareRunbookSelection({
-			severity: undefined,
-			selectedRunbooks: ["code-change-correlation.md"],
-			fallbackBySeverity,
+			selectedRunbooks: ["kafka-consumer-lag.md"],
 			alwaysSelect,
 		});
-		expect(verdict).toBeNull();
+		expect(verdict).not.toBeNull();
+		expect(verdict?.score).toBe(0);
 	});
 });

@@ -100,10 +100,21 @@ describe("FrozenOutputSchema toolTrajectory backward compatibility (SIO-1398)", 
 	});
 });
 
-// SIO-1442: selectedRunbooks + severity thread through the same output shape, for the tier-3
-// runbook-selection-vs-usage evaluator. Same backward-compat contract as toolTrajectory above --
-// a fixture recorded before this field existed must still parse under replay-outputs.
-describe("FrozenOutputSchema selectedRunbooks/severity backward compatibility (SIO-1442)", () => {
+// SIO-1442: selectedRunbooks + alwaysSelectRunbooks thread through the same output shape, for
+// the tier-3 runbook-selection-vs-usage evaluator. Same backward-compat contract as
+// toolTrajectory above -- a fixture recorded before this field existed must still parse under
+// replay-outputs.
+//
+// CodeRabbit (PR #633): the evaluator originally called getAgent() live to read
+// runbookSelection.always_select, which meant re-grading a recorded run under replay-outputs
+// used TODAY's config, not the config that governed the run when it was recorded -- editing
+// always_select after recording a fixture would silently change historical scores. Fixed by
+// snapshotting always_select at RECORD time (here, alongside selectedRunbooks) instead of
+// reading it live at evaluation time; the evaluator itself now only reads run.outputs. severity
+// was dropped entirely -- compareRunbookSelection never used it (a separate CodeRabbit finding:
+// the severity gate on always_select grading was itself a bug, since always_select is
+// unconditional), so there was nothing left needing it once that gate was removed.
+describe("FrozenOutputSchema selectedRunbooks/alwaysSelectRunbooks backward compatibility (SIO-1442)", () => {
 	const legacyFixture = {
 		response: "a report recorded before selectedRunbooks existed",
 		targetDataSources: ["elastic"],
@@ -111,24 +122,54 @@ describe("FrozenOutputSchema selectedRunbooks/severity backward compatibility (S
 		subagentReports: {},
 	};
 
-	test("a fixture recorded before selectedRunbooks existed still parses, defaulting to null", () => {
+	test("a fixture recorded before selectedRunbooks existed still parses, defaulting to null/[]", () => {
 		const parsed = FrozenOutputSchema.parse(legacyFixture);
 		expect(parsed.selectedRunbooks).toBeNull();
-		expect(parsed.severity).toBeUndefined();
+		expect(parsed.alwaysSelectRunbooks).toEqual([]);
 	});
 
-	test("a recorded selectedRunbooks + severity round-trips intact", () => {
+	test("a recorded selectedRunbooks + alwaysSelectRunbooks round-trips intact", () => {
 		const parsed = FrozenOutputSchema.parse({
 			...legacyFixture,
 			selectedRunbooks: ["database-slow-queries.md", "code-change-correlation.md"],
-			severity: "high",
+			alwaysSelectRunbooks: ["code-change-correlation.md"],
 		});
 		expect(parsed.selectedRunbooks).toEqual(["database-slow-queries.md", "code-change-correlation.md"]);
-		expect(parsed.severity).toBe("high");
+		expect(parsed.alwaysSelectRunbooks).toEqual(["code-change-correlation.md"]);
 	});
 
 	test("an empty-array selectedRunbooks (selector ran, chose none) round-trips as [], not null", () => {
 		const parsed = FrozenOutputSchema.parse({ ...legacyFixture, selectedRunbooks: [] });
 		expect(parsed.selectedRunbooks).toEqual([]);
+	});
+});
+
+// CodeRabbit (PR #633): the citation-grounding evaluator originally called getAgent() live to
+// read runbook knowledge, breaking replay-outputs the same way runbook-selection-evaluator's
+// always_select read did. knowledgeSnapshot is the same fix -- snapshotted at record time so the
+// evaluator only ever reads run.outputs, never today's on-disk knowledge.
+describe("FrozenOutputSchema knowledgeSnapshot backward compatibility (SIO-1442)", () => {
+	const legacyFixture = {
+		response: "a report recorded before knowledgeSnapshot existed",
+		targetDataSources: ["elastic"],
+		firstAttempts: [],
+		subagentReports: {},
+	};
+
+	test("a fixture recorded before knowledgeSnapshot existed still parses, defaulting to []", () => {
+		const parsed = FrozenOutputSchema.parse(legacyFixture);
+		expect(parsed.knowledgeSnapshot).toEqual([]);
+	});
+
+	test("a recorded knowledgeSnapshot round-trips intact", () => {
+		const parsed = FrozenOutputSchema.parse({
+			...legacyFixture,
+			knowledgeSnapshot: [
+				{ filename: "database-slow-queries.md", content: "...", title: "Couchbase Slow Query Investigation" },
+			],
+		});
+		expect(parsed.knowledgeSnapshot).toEqual([
+			{ filename: "database-slow-queries.md", content: "...", title: "Couchbase Slow Query Investigation" },
+		]);
 	});
 });

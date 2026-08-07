@@ -13,7 +13,6 @@ import type { Example, Run } from "langsmith/schemas";
 import OpenAI from "openai";
 import { z } from "zod";
 import { parseLlmJson } from "../llm-json.ts";
-import { getAgent } from "../prompt-context.ts";
 import { judgeModelConfig } from "./evaluators.ts";
 
 export interface KnowledgeCitationCandidate {
@@ -48,6 +47,22 @@ export function findCitedRunbooks(response: string, knowledge: KnowledgeCitation
 		}
 	}
 	return [...cited.values()];
+}
+
+// Matches any bare token shaped like "some-name.md" -- a plausible runbook filename citation --
+// independent of whether it is a real, known runbook. Requires a filename-safe character class
+// (no spaces) so ordinary prose ("the database was slow") never matches; a real .md reference is
+// always a single contiguous token in practice (this codebase's runbook filenames are kebab-case).
+const MD_FILENAME_PATTERN = /\b[a-zA-Z0-9][a-zA-Z0-9_-]*\.md\b/g;
+
+// CodeRabbit (PR #633): findCitedRunbooks alone only ever matches a KNOWN filename -- a response
+// citing a completely invented filename produced no match at all, missing the exact
+// hallucination case this evaluator exists to catch. Scans independently for anything
+// filename-shaped and flags names not in the known set. Deduped, order-independent.
+export function findUnknownMdCitations(response: string, knownFilenames: string[]): string[] {
+	const known = new Set(knownFilenames);
+	const found = response.match(MD_FILENAME_PATTERN) ?? [];
+	return [...new Set(found.filter((name) => !known.has(name)))];
 }
 
 const CitationVerdictSchema = z.object({
@@ -88,18 +103,51 @@ export function buildCitationScanInput(response: string, cited: CitedRunbook[]):
 		.join("\n\n---\n\n");
 }
 
+// CodeRabbit (PR #633): the system prompt ASKS (in prose) for "one verdict per runbook
+// provided, in the order given," but CitationGradeSchema only validates shape, not coverage -- a
+// response with zero verdicts, a subset, duplicates, or verdicts for unrelated filenames still
+// passes schema validation. Order does not matter here (only exact-set membership does); the
+// prompt's "in the order given" is a hint for the model, not something this check enforces.
+export function validateVerdictCoverage(verdicts: CitationGrade["verdicts"], cited: CitedRunbook[]): boolean {
+	if (verdicts.length !== cited.length) return false;
+	const citedFilenames = new Set(cited.map((c) => c.filename));
+	const verdictFilenames = new Set(verdicts.map((v) => v.filename));
+	if (verdictFilenames.size !== verdicts.length) return false; // duplicate filename in verdicts
+	if (verdictFilenames.size !== citedFilenames.size) return false;
+	for (const filename of verdictFilenames) {
+		if (!citedFilenames.has(filename)) return false;
+	}
+	return true;
+}
+
 // Same failure-isolation shape as SIO-1440's ContradictionScanResult: a failed judge call must
 // not collapse to the same shape as "the judge ran and found everything grounded."
 export type CitationScanResult = { ok: true; verdicts: CitationGrade["verdicts"] } | { ok: false; reason: string };
 
 // Pure mapping, unit-testable without an OpenAI call, same split as contradictionJudgeFeedback.
 // score is omitted (not defaulted) on judge failure so a LangSmith consumer sees "no score
-// recorded" rather than a false pass.
-export function citationJudgeFeedback(result: CitationScanResult): { key: string; score?: number; comment: string }[] {
+// recorded" rather than a false pass. unknownFilenames (CodeRabbit PR #633) is graded
+// independently of the judge verdicts -- a hallucinated filename is itself the finding, reported
+// even when there were no known citations to send to the judge at all.
+export function citationJudgeFeedback(
+	result: CitationScanResult,
+	unknownFilenames: string[],
+): { key: string; score?: number; comment: string }[] {
 	const key = "citation_grounding";
 	if (!result.ok) {
 		return [{ key, comment: `judge call failed, check did not run: ${result.reason}` }];
 	}
+
+	if (unknownFilenames.length > 0) {
+		return [
+			{
+				key,
+				score: 0,
+				comment: `cited unknown/hallucinated runbook filename(s): ${unknownFilenames.join(", ")}`,
+			},
+		];
+	}
+
 	if (result.verdicts.length === 0) return [];
 
 	const ungrounded = result.verdicts.filter((v) => !v.grounded);
@@ -140,7 +188,14 @@ export async function judgeCitationGrounding(response: string, cited: CitedRunbo
 		return { ok: false, reason: err instanceof Error ? err.message : String(err) };
 	}
 	const parsed = parseLlmJson(r.choices[0]?.message?.content ?? "", CitationGradeSchema);
-	return parsed.ok ? { ok: true, verdicts: parsed.data.verdicts } : { ok: false, reason: parsed.message };
+	if (!parsed.ok) return { ok: false, reason: parsed.message };
+	if (!validateVerdictCoverage(parsed.data.verdicts, cited)) {
+		return {
+			ok: false,
+			reason: `judge returned incomplete/mismatched verdict coverage: expected ${cited.length} verdict(s) for [${cited.map((c) => c.filename).join(", ")}], got ${JSON.stringify(parsed.data.verdicts.map((v) => v.filename))}`,
+		};
+	}
+	return { ok: true, verdicts: parsed.data.verdicts };
 }
 
 // KnowledgeEntry (manifest-loader.ts) does not carry a title field through -- OKF frontmatter's
@@ -154,34 +209,53 @@ export function deriveTitleFromContent(content: string): string {
 	return match?.[1]?.trim() ?? "";
 }
 
-function readResponse(run: Run): string | undefined {
-	const response = (run.outputs as { output?: { response?: unknown } } | undefined)?.output?.response;
-	return typeof response === "string" ? response : undefined;
-}
-
-// LangSmith run-evaluator entrypoint. Reads run.outputs.output.response and the live agent's
-// runbook knowledge via getAgent() (the same source the aggregator prompt itself renders runbook
-// content from), so citation ground truth can never drift from what was actually available to
-// the model that produced the response being graded.
-export async function citationGrounding(
-	run: Run,
-	_example?: Example,
-): Promise<{ key: string; score?: number; comment: string }[]> {
-	const response = readResponse(run);
-	if (!response) return [];
-
-	const agent = getAgent();
-	const candidates: KnowledgeCitationCandidate[] = agent.knowledge
+// Snapshots the current agent's runbook knowledge as citation candidates -- called at RUN time
+// by run-function.ts's runAgent, not at evaluation time. See citationGrounding below for why:
+// this used to be read live via getAgent() inside the evaluator itself, which broke
+// replay-outputs (CodeRabbit PR #633).
+export function buildKnowledgeCandidates(
+	knowledge: { filename: string; content: string }[],
+): KnowledgeCitationCandidate[] {
+	return knowledge
 		.filter((entry) => entry.filename.endsWith(".md"))
 		.map((entry) => ({
 			filename: entry.filename,
 			content: entry.content,
 			title: deriveTitleFromContent(entry.content),
 		}));
+}
 
-	const cited = findCitedRunbooks(response, candidates);
-	if (cited.length === 0) return [];
+function readCitationGroundingOutput(
+	run: Run,
+): { response: string; candidates: KnowledgeCitationCandidate[] } | undefined {
+	const output = (run.outputs as { output?: { response?: unknown; knowledgeSnapshot?: unknown } } | undefined)?.output;
+	if (!output || typeof output.response !== "string") return undefined;
+	const candidates = Array.isArray(output.knowledgeSnapshot)
+		? (output.knowledgeSnapshot as KnowledgeCitationCandidate[])
+		: [];
+	return { response: output.response, candidates };
+}
 
-	const result = await judgeCitationGrounding(response, cited);
-	return citationJudgeFeedback(result);
+// LangSmith run-evaluator entrypoint. Reads run.outputs.output.response/knowledgeSnapshot only
+// (both threaded by run-function.ts's runAgent) -- no live config read. CodeRabbit (PR #633):
+// this originally called getAgent() live at evaluation time, so re-grading a recorded run under
+// replay-outputs used TODAY's runbook content, not the content actually available to the model
+// that produced the response when the run was recorded -- editing a runbook after recording a
+// fixture would silently change historical citation-grounding scores.
+export async function citationGrounding(
+	run: Run,
+	_example?: Example,
+): Promise<{ key: string; score?: number; comment: string }[]> {
+	const input = readCitationGroundingOutput(run);
+	if (!input) return [];
+
+	const cited = findCitedRunbooks(input.response, input.candidates);
+	const unknownFilenames = findUnknownMdCitations(
+		input.response,
+		input.candidates.map((c) => c.filename),
+	);
+	if (cited.length === 0 && unknownFilenames.length === 0) return [];
+
+	const result = await judgeCitationGrounding(input.response, cited);
+	return citationJudgeFeedback(result, unknownFilenames);
 }
