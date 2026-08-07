@@ -137,30 +137,55 @@ describe("SIO-1424: v2 pilot wire protocol (three-era matrix)", () => {
 		expect(body.result?.isError).not.toBe(true);
 	});
 
-	// SIO-1424 discovery finding: `server/discover` returns -32601 "Method not found" from this
-	// handler in every combination tried (no headers, matching the initialize pattern; with
-	// Mcp-Method: server/discover) despite McpServer's own Protocol class having a private
-	// `_ondiscover` handler installed and `assertCapabilityForMethod("server/discover")` NOT
-	// throwing when probed directly on the raw server instance -- so the gap is in
-	// createMcpHandler's HTTP routing layer, not McpServer's method dispatch. Left as an
-	// UNRESOLVED finding per the ticket's tolerance for "exact request shapes may need
-	// adjusting" rather than force-fitting a workaround; documented in the PR for follow-up.
-	test.skip("server/discover (UNRESOLVED: -32601 Method not found from every header/meta combination tried)", async () => {
+	// SIO-1436: resolved. SIO-1424's original -32601 repro sent a bare
+	// {jsonrpc, id, method: "server/discover", params: {}} with no envelope claim -- that
+	// classifies as LEGACY at the HTTP routing layer (classifyRequestBody, installed
+	// @modelcontextprotocol/server bundle dist/src-CX2iR2pK.mjs:5101-5140; confirmed by the public
+	// isLegacyRequest doc comment at dist/index.mjs:1152-1155), so it never reached the modern
+	// dispatch path where _ondiscover lives. A second, independent gate also had to be closed:
+	// McpServer only self-registers server/discover when its _supportedProtocolVersions includes a
+	// modern (2026-07-28+) entry (dist/mcp-DXXb3Vv3.mjs:733), which the SDK's default
+	// SUPPORTED_PROTOCOL_VERSIONS does not -- fixed in server-v2.ts's McpServer construction. This
+	// test now sends the same full _meta envelope trio the passing tools/call test above uses, plus
+	// Mcp-Method: server/discover (server/discover carries no params.name/uri, so it is NOT in
+	// MCP_NAME_HEADER_SOURCE and needs no Mcp-Name header -- dist/src-CX2iR2pK.mjs:4990-4993).
+	test("server/discover: modern probe returns a DiscoverResult", async () => {
 		const handler = buildHandler();
 		const response = await handler.fetch(
 			new Request("http://localhost/mcp", {
 				method: "POST",
-				headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
-				body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "server/discover", params: {} }),
+				headers: {
+					"Content-Type": "application/json",
+					Accept: "application/json, text/event-stream",
+					"Mcp-Method": "server/discover",
+				},
+				body: JSON.stringify({
+					jsonrpc: "2.0",
+					id: 3,
+					method: "server/discover",
+					params: {
+						_meta: {
+							"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+							"io.modelcontextprotocol/clientCapabilities": {},
+							"io.modelcontextprotocol/clientInfo": { name: "probe", version: "0" },
+						},
+					},
+				}),
 			}),
 		);
 		await handler.close();
 
 		expect(response.status).toBe(200);
-		const body = (await parseJsonRpcBody(response)) as { jsonrpc: string; id: number; error?: unknown };
+		const body = (await parseJsonRpcBody(response)) as {
+			jsonrpc: string;
+			id: number;
+			error?: unknown;
+			result?: unknown;
+		};
 		expect(body.jsonrpc).toBe("2.0");
 		expect(body.id).toBe(3);
 		expect(body.error).toBeUndefined();
+		expect(body.result).toBeDefined();
 	});
 
 	test("v1 text-equivalence: v2's not-connected text matches v1's REAL pingHandler.ts response (not a hardcoded literal)", async () => {
