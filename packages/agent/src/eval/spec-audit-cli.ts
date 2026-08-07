@@ -1,16 +1,19 @@
 // packages/agent/src/eval/spec-audit-cli.ts
 //
-// SIO-1440: tier-1 OKF spec audit entrypoint. Runs the three static/semantic checks
-// (frontmatter degradation, orphaned knowledge, RULES-vs-SOUL contradictions) across the root
-// agent and every declared sub-agent, exits non-zero on any finding -- same convention as
-// wiki:lint (packages/agent/src/wiki/lint-cli.ts) and yaml:check. Checks 2/3 are pure/local;
-// check 1 makes one OpenAI call per agent, so this script is not free to run and is invoked
-// deliberately (`bun run packages/agent/src/eval/spec-audit-cli.ts`), not as a pre-commit hook.
+// SIO-1440: tier-1 OKF spec audit entrypoint. Runs the four static/semantic checks
+// (frontmatter degradation, orphaned knowledge, RULES-vs-SOUL contradictions, and the SIO-1444
+// skill-declaration drift check) across the root agent and every declared sub-agent, exits
+// non-zero on any finding -- same convention as wiki:lint (packages/agent/src/wiki/lint-cli.ts)
+// and yaml:check. The contradiction judge makes one OpenAI call per agent, so this script is
+// not free to run and is invoked deliberately
+// (`bun run packages/agent/src/eval/spec-audit-cli.ts`), not as a pre-commit hook.
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	findFrontmatterDegradations,
+	findMissingDeclaredSubAgents,
 	findOrphanedKnowledgeFiles,
+	findSkillDeclarationDrift,
 	KnowledgeIndexSchema,
 	type LoadedAgent,
 	loadAgent,
@@ -21,7 +24,13 @@ import { contradictionJudgeFeedback, judgeSpecContradictions } from "./spec-cont
 
 interface AuditFinding {
 	agentName: string;
-	kind: "frontmatter_degradation" | "orphaned_knowledge" | "spec_contradiction" | "spec_contradiction_check_failed";
+	kind:
+		| "frontmatter_degradation"
+		| "orphaned_knowledge"
+		| "skill_declaration_drift"
+		| "spec_contradiction"
+		| "spec_contradiction_check_failed"
+		| "sub_agent_declaration_gap";
 	detail: string;
 }
 
@@ -68,6 +77,20 @@ async function auditAgent(name: string, agent: LoadedAgent, agentDir: string): P
 	}
 	// else: no knowledge/index.yaml (GAP dialect, manifest-enumerated knowledge) -- nothing to
 	// walk for checks 2/3 on this agent.
+
+	// SIO-1444: unlike checks 2/3 this needs no index.yaml -- it runs for every agent in the
+	// flattened tree, which is what extends the SIO-1281 root-only drift guarantee to sub-agents.
+	for (const d of findSkillDeclarationDrift(agentDir, agent.manifest.skills ?? [])) {
+		findings.push({ agentName: name, kind: "skill_declaration_drift", detail: `${d.kind}: ${d.path}` });
+	}
+
+	// CodeRabbit (PR #635): flattenAgents walks the LOADED subAgents map, and loadAgent drops a
+	// declared child whose agent.yaml is missing -- such a child would otherwise escape this
+	// entire audit (and run with the ROOT agent's prompt at dispatch time, the SIO-1229 failure
+	// mode). Compare the declared map against disk so the walk's own completeness is audited.
+	for (const g of findMissingDeclaredSubAgents(agentDir, Object.keys(agent.manifest.agents ?? {}))) {
+		findings.push({ agentName: name, kind: "sub_agent_declaration_gap", detail: `${g.name}: ${g.path} missing` });
+	}
 
 	if (agent.soul && agent.rules) {
 		const result = await judgeSpecContradictions(agent.soul, agent.rules);

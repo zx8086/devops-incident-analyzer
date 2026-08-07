@@ -5,7 +5,8 @@
 // malformed knowledge file never takes down agent load in production. This module answers a
 // different question: "does any file rely on that tolerance right now?" -- which the loader itself
 // cannot report, since its tolerant path swallows the error instead of surfacing it.
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import type { Dirent } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { parseRunbookFrontmatter } from "./manifest-loader.ts";
 import type { KnowledgeIndex } from "./types.ts";
@@ -112,4 +113,84 @@ export function findOrphanedKnowledgeFiles(agentDir: string, index: KnowledgeInd
 	walk(knowledgeDir);
 
 	return orphans;
+}
+
+export interface SkillDeclarationDrift {
+	kind: "undeclared_skill_dir" | "missing_skill_file";
+	name: string;
+	path: string;
+}
+
+// SIO-1444: local skills are a manifest ALLOWLIST, not a directory scan -- manifest-loader.ts
+// iterates `manifest.skills` and existsSync-checks each, so a skills/<name>/ directory that is
+// not declared in agent.yaml never loads (the SIO-1281 failure mode: 16 elastic-iac skill
+// directories silently dropped ~1,300 lines), and a declared name with no SKILL.md silently
+// loads as nothing. index.test.ts pins this for the ROOT incident-analyzer and elastic-iac
+// agents only; this function is the per-agent-dir form the spec-audit CLI runs across the root
+// AND every declared sub-agent (capella/elastic/gitlab ship sub-agent skills today).
+//
+// `declaredSkills` is the LOADED manifest's list (manifest.skills ?? []): both agent.yaml
+// dialects (plain strings, GAP `- id:` objects) normalize to string[] through toIdList in
+// AgentManifestSchema, so callers pass the parsed manifest rather than re-parsing YAML here.
+//
+// An undeclared directory WITHOUT a SKILL.md is deliberately not flagged (same rule as the
+// SIO-1281 test): it is unloadable under any declaration, so nothing live is being lost.
+export function findSkillDeclarationDrift(agentDir: string, declaredSkills: string[]): SkillDeclarationDrift[] {
+	const skillsDir = join(agentDir, "skills");
+	const declared = new Set(declaredSkills);
+	const drifts: SkillDeclarationDrift[] = [];
+
+	let entries: Dirent[];
+	try {
+		entries = readdirSync(skillsDir, { withFileTypes: true });
+	} catch {
+		entries = [];
+	}
+	for (const entry of entries) {
+		// Dirent.isDirectory() is false for symlinks, so a link is treated as a leaf --
+		// same no-follow rule the ELOOP fix above applies to the knowledge walk.
+		if (!entry.isDirectory()) continue;
+		if (declared.has(entry.name)) continue;
+		if (!existsSync(join(skillsDir, entry.name, "SKILL.md"))) continue;
+		drifts.push({
+			kind: "undeclared_skill_dir",
+			name: entry.name,
+			path: relative(agentDir, join(skillsDir, entry.name)),
+		});
+	}
+
+	for (const name of declaredSkills) {
+		if (!existsSync(join(skillsDir, name, "SKILL.md"))) {
+			drifts.push({
+				kind: "missing_skill_file",
+				name,
+				path: relative(agentDir, join(skillsDir, name, "SKILL.md")),
+			});
+		}
+	}
+
+	return drifts;
+}
+
+export interface SubAgentDeclarationGap {
+	name: string;
+	path: string;
+}
+
+// CodeRabbit (PR #635): loadAgent adds a declared child to `subAgents` only when
+// agents/<name>/agent.yaml exists (manifest-loader.ts existsSync guard), so a declared child
+// whose agent.yaml is missing silently vanishes from the loaded tree. Every walk that iterates
+// `subAgents` -- the spec-audit CLI's flattenAgents, the repo-level drift test above, and
+// buildSubAgentPrompt's lookup (which then falls back to the ROOT prompt for that agent, the
+// SIO-1229 failure mode) -- would skip it without a trace. The audit must therefore compare
+// the DECLARED map against the disk, not the loaded map against itself.
+export function findMissingDeclaredSubAgents(agentDir: string, declaredAgents: string[]): SubAgentDeclarationGap[] {
+	const gaps: SubAgentDeclarationGap[] = [];
+	for (const name of declaredAgents) {
+		const yamlPath = join(agentDir, "agents", name, "agent.yaml");
+		if (!existsSync(yamlPath)) {
+			gaps.push({ name, path: relative(agentDir, yamlPath) });
+		}
+	}
+	return gaps;
 }
