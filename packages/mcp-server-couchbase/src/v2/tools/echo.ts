@@ -21,9 +21,8 @@ export function registerEchoToolV2(server: McpServer, tools: Map<string, Registe
 			annotations: READ_ONLY_ANNOTATIONS,
 		},
 		async (params: Record<string, unknown>) => {
-			const echoLogger = logger.child({ context: "EchoTool" });
-			echoLogger.info({ raw_params: JSON.stringify(params) }, "EchoTool RAW params");
-			return { content: [{ type: "text", text: JSON.stringify(params) }] };
+			logger.info({ raw_params: JSON.stringify(params) }, "EchoTool RAW params");
+			return { content: [{ type: "text" as const, text: JSON.stringify(params) }] };
 		},
 	);
 	tools.set("capella_echo", echo);
