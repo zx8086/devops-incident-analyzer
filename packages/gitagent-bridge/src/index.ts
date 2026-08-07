@@ -28,6 +28,12 @@ export {
 	type ModelCapabilities,
 	type ModelName,
 } from "./model-registry.ts";
+export {
+	type FrontmatterDegradation,
+	findFrontmatterDegradations,
+	findOrphanedKnowledgeFiles,
+	type OrphanedKnowledgeFile,
+} from "./okf-spec-audit.ts";
 export { getRelatedTools, withRelatedTools } from "./related-tools.ts";
 // SIO-1398: the two runbook tool-citation readers, exported so eval coverage targets derive
 // from the SAME parse runbook-validator enforces (frontmatter `tools:` first, tail CSV as the
