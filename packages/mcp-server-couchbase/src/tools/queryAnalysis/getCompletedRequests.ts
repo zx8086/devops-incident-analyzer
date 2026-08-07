@@ -64,7 +64,7 @@ export function buildQuery(input: CompletedRequestsInput): {
 
 	// Always bound the result set: an unbounded query materialized and sorted the
 	// whole 8-week completed_requests window (~3.7s per call).
-	const effectiveLimit = limit && limit > 0 ? limit : DEFAULT_ANALYSIS_LIMIT;
+	const effectiveLimit = limit && Number.isInteger(limit) && limit > 0 ? limit : DEFAULT_ANALYSIS_LIMIT;
 	if (query.includes("LIMIT")) {
 		query = query.replace(/LIMIT \d+/i, `LIMIT ${effectiveLimit}`);
 	} else {

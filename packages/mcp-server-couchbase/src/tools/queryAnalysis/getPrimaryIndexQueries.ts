@@ -25,7 +25,7 @@ export default (server: McpServer, bucket: Bucket) => {
 			let query = n1qlPrimaryIndexes;
 
 			// Apply limit if specified
-			if (limit && limit > 0) {
+			if (limit && Number.isInteger(limit) && limit > 0) {
 				// Add or replace LIMIT clause
 				if (query.includes("LIMIT")) {
 					query = query.replace(/LIMIT \d+/i, `LIMIT ${limit}`);

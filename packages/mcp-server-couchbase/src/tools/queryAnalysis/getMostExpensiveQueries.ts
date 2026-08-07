@@ -41,7 +41,7 @@ export function buildQuery(input: MostExpensiveQueriesInput): {
 		query = query.replace(/DATE_ADD_STR\(NOW_STR\(\), -\d+, '\w+'\)/, `DATE_ADD_STR(NOW_STR(), -1, '${periodUnit}')`);
 	}
 
-	const effectiveLimit = limit && limit > 0 ? limit : DEFAULT_ANALYSIS_LIMIT;
+	const effectiveLimit = limit && Number.isInteger(limit) && limit > 0 ? limit : DEFAULT_ANALYSIS_LIMIT;
 	if (/LIMIT \d+/i.test(query)) {
 		query = query.replace(/LIMIT \d+/i, `LIMIT ${effectiveLimit}`);
 	} else {

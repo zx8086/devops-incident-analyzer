@@ -47,8 +47,8 @@ function formatAnalysisResponse(
 	// SIO-664: honest applied-limit metadata. Without this, callers trusted the
 	// requested limit even when the SQL++ predicate or upstream returned fewer rows.
 	// Only emit when the LIMIT was actually applied -- the call sites guard with
-	// `if (limit && limit > 0)` before splicing into SQL, so mirror that condition here.
-	if (requestedLimit !== undefined && requestedLimit > 0) {
+	// `if (limit && Number.isInteger(limit) && limit > 0)` before splicing into SQL (SIO-1430), so mirror it here.
+	if (requestedLimit !== undefined && Number.isInteger(requestedLimit) && requestedLimit > 0) {
 		const actualCount = rows.length;
 		const effectiveLimit = Math.min(requestedLimit, actualCount);
 		const capped = actualCount >= requestedLimit;

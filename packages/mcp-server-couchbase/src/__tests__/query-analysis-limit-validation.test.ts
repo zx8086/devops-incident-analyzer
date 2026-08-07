@@ -11,6 +11,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Bucket } from "couchbase";
 import { createMcpServerFactory } from "../server.ts";
+import { DEFAULT_ANALYSIS_LIMIT } from "../tools/queryAnalysis/analysisQueries.ts";
+import { buildQuery as buildCompletedRequestsQuery } from "../tools/queryAnalysis/getCompletedRequests.ts";
+import { buildQuery as buildFatalRequestsQuery } from "../tools/queryAnalysis/getFatalRequests.ts";
 
 // Validation failures must never reach the handler; a throwing bucket proves it.
 const throwingBucket = new Proxy(
@@ -54,14 +57,30 @@ describe("SIO-1430: queryAnalysis limit must be a positive integer", () => {
 				const { result, text } = await callTool(tool, { limit });
 				expect(result.isError).toBe(true);
 				expect(text).toMatch(VALIDATION_TEXT_RE);
+				expect(text).toContain("-32602");
 			}
 		});
 	}
 
 	test("a valid positive integer limit passes validation and reaches the handler", async () => {
-		const { text } = await callTool("capella_get_completed_requests", { limit: 5 });
-		// The throwing bucket makes the HANDLER fail -- but that failure is not a
-		// validation rejection, proving limit: 5 got through the schema.
+		const { result, text } = await callTool("capella_get_completed_requests", { limit: 5 });
+		// limit: 5 clears the schema, so the handler runs and hits the throwing
+		// bucket -- a handler-level failure carrying the bucket's message, not a
+		// validation rejection.
+		expect(result.isError).toBe(true);
+		expect(text).toContain("bucket should not be touched when argument validation fails");
 		expect(text).not.toMatch(VALIDATION_TEXT_RE);
+	});
+
+	// CodeRabbit (PR #621): direct callers bypass the MCP schema entirely, so the
+	// exported query builders must enforce the positive-integer contract themselves
+	// instead of splicing "LIMIT 0.5" into SQL.
+	test("exported builders fall back to the default for non-integer limits", () => {
+		for (const limit of [0.5, 0, -3]) {
+			expect(buildCompletedRequestsQuery({ limit }).query).toContain(`LIMIT ${DEFAULT_ANALYSIS_LIMIT}`);
+			expect(buildFatalRequestsQuery({ limit }).query).toContain(`LIMIT ${DEFAULT_ANALYSIS_LIMIT}`);
+		}
+		expect(buildCompletedRequestsQuery({ limit: 7 }).query).toContain("LIMIT 7");
+		expect(buildFatalRequestsQuery({ limit: 7 }).query).toContain("LIMIT 7");
 	});
 });
