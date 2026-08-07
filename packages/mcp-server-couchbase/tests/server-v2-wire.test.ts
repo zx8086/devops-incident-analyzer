@@ -295,3 +295,72 @@ describe("SIO-1443 follow-up: capella_read_documentation respects config.documen
 		expect(body.result?.content?.[0]?.text).toContain("No resource handler found for URI");
 	});
 });
+
+describe("SIO-1443 follow-up: capella_list_playbooks respects the loadPlaybooks fallback-directory search", () => {
+	const priorPlaybooks = config.playbooks;
+
+	afterEach(() => {
+		config.playbooks = priorPlaybooks;
+	});
+
+	// Regression test for the reviewer finding on the v2 playbooks port: v1's PlaybookRegistry is
+	// null under TWO independent conditions -- config.playbooks.enabled === false (already covered
+	// by the tool's own gate) OR enabled === true but no directory among baseDirectory/cwd-playbook/
+	// __dirname-playbook/packageRoot-playbook has a matching markdown file. Both produce the SAME
+	// clean "No resource handler found for URI: playbook://" error in v1. Before this fix, the v2
+	// port only checked the first condition, so enabled=true with a missing baseDirectory fell
+	// through to listPlaybooksContent's own fs.readdir(), which threw ENOENT and got caught into a
+	// 200 success result containing raw filesystem-path text -- a materially different (and leakier)
+	// signal than v1's isError: true. Uses a baseDirectory guaranteed not to exist so the assertion
+	// holds regardless of whether a real ./playbook directory happens to be present in the checkout.
+	test("playbooks enabled but no fallback directory has markdown files: capella_list_playbooks errors instead of returning ENOENT text", async () => {
+		config.playbooks = {
+			enabled: true,
+			baseDirectory: "/tmp/sio-1443-nonexistent-playbook-dir-does-not-exist",
+			fileExtension: ".md",
+		};
+
+		const handler = buildHandler();
+		const response = await handler.fetch(
+			new Request("http://localhost/mcp", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Accept: "application/json, text/event-stream",
+					"Mcp-Method": "tools/call",
+					"Mcp-Name": "capella_list_playbooks",
+				},
+				body: JSON.stringify({
+					jsonrpc: "2.0",
+					id: 6,
+					method: "tools/call",
+					params: {
+						name: "capella_list_playbooks",
+						arguments: {},
+						_meta: {
+							"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+							"io.modelcontextprotocol/clientCapabilities": {},
+							"io.modelcontextprotocol/clientInfo": { name: "probe", version: "0" },
+						},
+					},
+				}),
+			}),
+		);
+		await handler.close();
+
+		expect(response.status).toBe(200);
+		const body = (await parseJsonRpcBody(response)) as {
+			jsonrpc: string;
+			id: number;
+			result?: { content?: Array<{ type: string; text: string }>; isError?: boolean };
+			error?: unknown;
+		};
+		expect(body.jsonrpc).toBe("2.0");
+		expect(body.id).toBe(6);
+		// Must be a clean isError: true, matching v1's "No resource handler found for URI"
+		// contract -- NOT a 200 success result carrying "Error listing playbooks: ENOENT..." text.
+		expect(body.result?.isError).toBe(true);
+		expect(body.result?.content?.[0]?.text).toContain("No resource handler found for URI");
+		expect(body.result?.content?.[0]?.text).not.toContain("ENOENT");
+	});
+});

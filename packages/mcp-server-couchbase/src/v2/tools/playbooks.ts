@@ -38,6 +38,40 @@ interface PlaybookResourceContent {
 	contents?: Array<{ mimeType?: string; text?: string }>;
 }
 
+// Ported from playbookResource.ts's loadPlaybooks -- v1's PlaybookRegistry is null under TWO
+// independent conditions: config.playbooks.enabled === false (handled by the caller's own gate),
+// OR enabled === true but none of the 3 fallback directories has a matching markdown file. Both
+// conditions produce the SAME "No resource handler found for URI: playbook://" error in v1's
+// buildReadResourceByUri fast path. Without reproducing this directory probe, a v2 call with
+// enabled=true but a missing/empty baseDirectory would fall through to listPlaybooksContent's own
+// fs.readdir(), which throws ENOENT and gets caught into a 200 success result with raw filesystem
+// path text -- a materially different (and leakier) failure signal than v1's.
+async function resolvePlaybookDirectory(): Promise<string | null> {
+	const packageRoot = path.resolve(import.meta.dir, "../../..");
+	const possibleDirs = [
+		config.playbooks?.baseDirectory,
+		path.join(process.cwd(), "playbook"),
+		path.join(import.meta.dir, "../../../playbook"),
+		path.join(packageRoot, "playbook"),
+	].filter((dir): dir is string => !!dir);
+
+	const fileExtension = config.playbooks.fileExtension || ".md";
+
+	for (const dir of possibleDirs) {
+		try {
+			await fs.access(dir);
+			const files = await fs.readdir(dir);
+			if (files.some((file) => file.endsWith(fileExtension))) {
+				return dir;
+			}
+		} catch (_err) {
+			// Directory not accessible -- try the next fallback, same as loadPlaybooks.
+		}
+	}
+
+	return null;
+}
+
 // Ported from playbookResource.ts's PlaybookHandler.listPlaybooks -- builds a markdown listing of
 // every playbook file in baseDirectory, using each file's first line (stripped of a leading "#
 // ") as its description.
@@ -135,13 +169,19 @@ export function registerPlaybookToolsV2(server: McpServer, tools: Map<string, Re
 				throw createError("NOT_FOUND", "No resource handler found for URI: playbook://");
 			}
 
+			// SIO-1443 follow-up: v1's PlaybookRegistry is also null when enabled=true but none of
+			// loadPlaybooks's 3 fallback directories has a matching markdown file -- that produces
+			// the SAME clean error in v1, so mirror it here instead of letting listPlaybooksContent's
+			// own fs.readdir() throw ENOENT into a 200 success result with a leaked filesystem path.
+			const playbookDir = await resolvePlaybookDirectory();
+			if (!playbookDir) {
+				throw createError("NOT_FOUND", "No resource handler found for URI: playbook://");
+			}
+
 			try {
 				logger.info("Listing available playbooks");
 
-				const resourceResult = await listPlaybooksContent(
-					config.playbooks.baseDirectory || "./playbook",
-					config.playbooks.fileExtension || ".md",
-				);
+				const resourceResult = await listPlaybooksContent(playbookDir, config.playbooks.fileExtension || ".md");
 
 				if (!resourceResult?.contents?.length) {
 					return { content: [{ type: "text" as const, text: "No playbooks found" }] };
@@ -184,11 +224,17 @@ export function registerPlaybookToolsV2(server: McpServer, tools: Map<string, Re
 				throw createError("NOT_FOUND", `No resource handler found for URI: playbook://${playbook_id}`);
 			}
 
+			// SIO-1443 follow-up: same fallback-directory parity as capella_list_playbooks above.
+			const playbookDir = await resolvePlaybookDirectory();
+			if (!playbookDir) {
+				throw createError("NOT_FOUND", `No resource handler found for URI: playbook://${playbook_id}`);
+			}
+
 			try {
 				logger.info({ playbook_id }, "Getting playbook");
 
 				const resourceResult = await getPlaybookContent(
-					config.playbooks.baseDirectory || "./playbook",
+					playbookDir,
 					config.playbooks.fileExtension || ".md",
 					playbook_id,
 				);
