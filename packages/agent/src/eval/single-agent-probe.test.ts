@@ -15,6 +15,17 @@ describe("buildProbeState", () => {
 		expect(state.messages[0]?.content).toBe("Investigate a spike in pipeline failures for project X.");
 	});
 
+	// CodeRabbit (PR #632): buildProbeState/probeSubAgent are exported and callable directly by
+	// any caller, bypassing parseProbeEnv's validation entirely -- an unknown dataSourceId would
+	// reach queryDataSource, which falls back to elastic-agent silently (sub-agent.ts:2021,
+	// AGENT_NAMES[dataSourceId] ?? "elastic-agent"). Same bug class as the CLI's env-var
+	// validation gap, at a different call boundary. dataSourceId is now typed DataSourceId (a
+	// TypeScript caller can't even compile a bad literal); this test proves the runtime Zod
+	// parse also rejects it for a caller that bypasses the type check (JS, an `as` cast, etc.).
+	test("rejects an unknown datasource id at runtime, not just at the type level", () => {
+		expect(() => buildProbeState("not-a-datasource" as never, "x")).toThrow();
+	});
+
 	test("every other AgentState field is present with its declared default (no missing keys)", () => {
 		const state = buildProbeState("gitlab", "scenario text");
 		const expectedKeys = Object.keys(AgentState.spec);

@@ -69,8 +69,11 @@ async function main(): Promise<void> {
 		if (feedback.length === 0) {
 			process.stdout.write("No feedback produced (judge call failed or no overlapping datasources).\n");
 		}
+		// CodeRabbit (PR #632): the judge's reasoning summarizes/references the raw sub-agent
+		// report and reference findings, both of which can contain real PII from live MCP tool
+		// results -- redact here too, same policy as the sub-agent/orchestrator output above.
 		for (const f of feedback) {
-			process.stdout.write(`  [${f.key}] score=${f.score}: ${f.comment}\n`);
+			process.stdout.write(`  [${f.key}] score=${f.score}: ${redactPiiContent(f.comment)}\n`);
 		}
 	}
 }

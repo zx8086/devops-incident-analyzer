@@ -13,6 +13,13 @@ import { AgentState, type AgentStateType } from "../state.ts";
 import { queryDataSource } from "../sub-agent.ts";
 import { buildEvalMcpConfig } from "./run-function.ts";
 
+// CodeRabbit (PR #632): buildProbeState/probeSubAgent are exported and callable directly,
+// bypassing parseProbeEnv's env-var validation entirely -- an unknown dataSourceId would reach
+// queryDataSource, which falls back to elastic-agent silently (sub-agent.ts:2021). Shared with
+// ProbeEnvSchema below so both call boundaries (env-var and direct) enforce the same set.
+const DataSourceIdSchema = z.enum(DATA_SOURCE_IDS);
+export type DataSourceId = z.infer<typeof DataSourceIdSchema>;
+
 // Materializes AgentState's full default state mechanically from its own channel defaults
 // (AnnotationRoot.spec[key].initialValueFactory()) rather than hand-listing all ~65 fields --
 // a hand-written literal would silently drift out of sync every time state.ts gains a field.
@@ -29,10 +36,11 @@ function defaultAgentState(): AgentStateType {
 // call needs: default state for every field queryDataSource/runSubAgent do not read for this
 // path, plus the two fields that actually drive behavior -- currentDataSource (which sub-agent
 // and MCP server queryDataSource dispatches to) and one HumanMessage carrying the scenario.
-export function buildProbeState(dataSourceId: string, scenario: string): AgentStateType {
+export function buildProbeState(dataSourceId: DataSourceId, scenario: string): AgentStateType {
+	const validated = DataSourceIdSchema.parse(dataSourceId);
 	return {
 		...defaultAgentState(),
-		currentDataSource: dataSourceId,
+		currentDataSource: validated,
 		messages: [new HumanMessage(scenario)],
 	};
 }
@@ -54,7 +62,7 @@ function ensureMcpConnected(): Promise<void> {
 // produces (usually one; elastic/aws can fan out to multiple deployments/estates, though the
 // default empty targetDeployments/awsTargetEstates from buildProbeState keeps this a single call
 // for every datasource except when the caller populates those fields itself).
-export async function probeSubAgent(dataSourceId: string, scenario: string): Promise<DataSourceResult[]> {
+export async function probeSubAgent(dataSourceId: DataSourceId, scenario: string): Promise<DataSourceResult[]> {
 	await ensureMcpConnected();
 	const state = buildProbeState(dataSourceId, scenario);
 	const result = await queryDataSource(state);
@@ -99,7 +107,7 @@ export async function probeOrchestrator(results: DataSourceResult[], scenario: s
 // because single-agent-probe-cli.ts calls main() unconditionally at module scope -- importing
 // it (e.g. from a test) would trigger a live run and process.exit().
 const ProbeEnvSchema = z.object({
-	PROBE_DATASOURCE: z.enum(DATA_SOURCE_IDS),
+	PROBE_DATASOURCE: DataSourceIdSchema,
 	PROBE_SCENARIO: z.string().min(1),
 	PROBE_RUN_ORCHESTRATOR: z.literal("true").optional(),
 	PROBE_REFERENCE_FINDINGS: z
