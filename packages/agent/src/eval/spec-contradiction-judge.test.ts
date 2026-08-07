@@ -1,4 +1,4 @@
-// agent/src/eval/spec-contradiction-judge.test.ts
+// packages/agent/src/eval/spec-contradiction-judge.test.ts
 // SIO-1440 check 1: RULES-vs-SOUL contradiction scan. Same split as evaluators.test.ts --
 // unit-test the pure schema/prompt-building/feedback-shaping pieces; the live OpenAI call in
 // judgeSpecContradictions is thin glue, deliberately left to a manual/opt-in probe (see SIO-1372
@@ -56,7 +56,7 @@ describe("buildContradictionScanInput", () => {
 
 describe("contradictionJudgeFeedback", () => {
 	test("zero contradictions yields a passing feedback record", () => {
-		const feedback = contradictionJudgeFeedback({ contradictions: [] }, "elastic-agent");
+		const feedback = contradictionJudgeFeedback({ ok: true, grade: { contradictions: [] } }, "elastic-agent");
 		expect(feedback).toEqual([
 			{ key: "spec_contradiction_elastic-agent", score: 1, comment: "no contradictions found" },
 		]);
@@ -65,10 +65,13 @@ describe("contradictionJudgeFeedback", () => {
 	test("any contradiction yields a failing feedback record naming the worst severity", () => {
 		const feedback = contradictionJudgeFeedback(
 			{
-				contradictions: [
-					{ soulClaim: "a", rulesConstraint: "b", severity: "low" },
-					{ soulClaim: "c", rulesConstraint: "d", severity: "high" },
-				],
+				ok: true,
+				grade: {
+					contradictions: [
+						{ soulClaim: "a", rulesConstraint: "b", severity: "low" },
+						{ soulClaim: "c", rulesConstraint: "d", severity: "high" },
+					],
+				},
 			},
 			"elastic-agent",
 		);
@@ -77,6 +80,17 @@ describe("contradictionJudgeFeedback", () => {
 		expect(feedback[0]?.score).toBe(0);
 		expect(feedback[0]?.comment).toContain("2 contradiction");
 		expect(feedback[0]?.comment).toContain("high");
+	});
+
+	// CodeRabbit (PR #630): a failed judge call (network error, malformed JSON, invalid
+	// schema) used to collapse to { contradictions: [] } and report score: 1 -- indistinguishable
+	// from a genuine clean pass. The CLI would exit 0 having never actually run the check.
+	test("a failed judge call yields neither a pass nor a fail score -- score is undefined, not 1", () => {
+		const feedback = contradictionJudgeFeedback({ ok: false, reason: "OpenAI request failed" }, "elastic-agent");
+		expect(feedback).toHaveLength(1);
+		expect(feedback[0]?.key).toBe("spec_contradiction_elastic-agent");
+		expect(feedback[0]?.score).toBeUndefined();
+		expect(feedback[0]?.comment).toContain("OpenAI request failed");
 	});
 });
 

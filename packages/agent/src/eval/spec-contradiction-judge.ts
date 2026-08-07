@@ -1,4 +1,4 @@
-// agent/src/eval/spec-contradiction-judge.ts
+// packages/agent/src/eval/spec-contradiction-judge.ts
 // SIO-1440 check 1: flags RULES.md constraints that conflict with SOUL.md identity claims.
 // SIO-1257's ban-pattern scan (packages/gitagent-bridge/src/skill-tool-coverage.test.ts) only
 // catches ONE contradiction shape ("prose defers to a human"); general SOUL-vs-RULES conflict
@@ -46,12 +46,24 @@ const SEVERITY_RANK: Record<ContradictionGrade["contradictions"][number]["severi
 	high: 2,
 };
 
+// CodeRabbit (PR #630): a failed judge call (network error, missing/malformed JSON, invalid
+// schema) must NOT collapse to the same shape as "the judge ran and found nothing" -- that
+// silently reported a passing score for a check that never actually ran. This discriminated
+// union forces every caller to handle failure as its own case rather than defaulting through it.
+export type ContradictionScanResult = { ok: true; grade: ContradictionGrade } | { ok: false; reason: string };
+
 // Pure mapping, unit-testable without an OpenAI call, same split as subagentJudgeFeedback.
+// score is omitted (not defaulted to a number) on judge failure, so a LangSmith consumer sees
+// "no score recorded" rather than a false pass or an arbitrary sentinel fail value.
 export function contradictionJudgeFeedback(
-	grade: ContradictionGrade,
+	result: ContradictionScanResult,
 	agentName: string,
-): { key: string; score: number; comment: string }[] {
+): { key: string; score?: number; comment: string }[] {
 	const key = `spec_contradiction_${agentName}`;
+	if (!result.ok) {
+		return [{ key, comment: `judge call failed, check did not run: ${result.reason}` }];
+	}
+	const { grade } = result;
 	if (grade.contradictions.length === 0) {
 		return [{ key, score: 1, comment: "no contradictions found" }];
 	}
@@ -68,7 +80,7 @@ export function contradictionJudgeFeedback(
 // Live OpenAI call. Deliberately thin and untested by unit tests -- mirrors
 // judgeSubagentReports/responseQualityJudge's own openai.chat.completions.create call, which
 // carries the same integration-boundary exemption in evaluators.test.ts.
-export async function judgeSpecContradictions(soul: string, rules: string): Promise<ContradictionGrade> {
+export async function judgeSpecContradictions(soul: string, rules: string): Promise<ContradictionScanResult> {
 	const openai = new OpenAI();
 	let r: Awaited<ReturnType<typeof openai.chat.completions.create>>;
 	try {
@@ -80,9 +92,9 @@ export async function judgeSpecContradictions(soul: string, rules: string): Prom
 				{ role: "user", content: buildContradictionScanInput(soul, rules) },
 			],
 		});
-	} catch {
-		return { contradictions: [] };
+	} catch (err) {
+		return { ok: false, reason: err instanceof Error ? err.message : String(err) };
 	}
 	const parsed = parseLlmJson(r.choices[0]?.message?.content ?? "", ContradictionGradeSchema);
-	return parsed.ok ? parsed.data : { contradictions: [] };
+	return parsed.ok ? { ok: true, grade: parsed.data } : { ok: false, reason: parsed.message };
 }

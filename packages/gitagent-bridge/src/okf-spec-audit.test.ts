@@ -3,13 +3,31 @@
 // that the whole-pipeline eval program does not cover. See skill-tool-coverage.test.ts for the
 // SIO-1228/1257/1229 checks this file deliberately does NOT duplicate.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { findFrontmatterDegradations, findOrphanedKnowledgeFiles } from "./okf-spec-audit.ts";
-import { KnowledgeIndexSchema } from "./types.ts";
+import { type KnowledgeIndex, KnowledgeIndexSchema } from "./types.ts";
 
 const AGENTS_DIR = join(import.meta.dir, "../../../agents/incident-analyzer");
+
+// CodeRabbit (PR #630): the existing tests below verify the CURRENT repo state (already
+// clean), which proves nothing about detection behavior -- a check that always returns []
+// passes them too. These fixture-based tests build an isolated knowledge/ tree per case and
+// assert the specific finding shape, matching the mkdtempSync convention used across this
+// package's other *.test.ts files (see hooks.test.ts, memory.test.ts).
+function makeKnowledgeFixture(indexYaml: KnowledgeIndex, files: Record<string, string>): string {
+	const dir = mkdtempSync(join(tmpdir(), "gitagent-okf-audit-test-"));
+	mkdirSync(join(dir, "knowledge"), { recursive: true });
+	writeFileSync(join(dir, "knowledge", "index.yaml"), JSON.stringify(indexYaml));
+	for (const [relPath, content] of Object.entries(files)) {
+		const filePath = join(dir, "knowledge", relPath);
+		mkdirSync(join(filePath, ".."), { recursive: true });
+		writeFileSync(filePath, content);
+	}
+	return dir;
+}
 
 describe("SIO-1440 check 2: knowledge frontmatter must not silently degrade", () => {
 	test("every knowledge file's frontmatter parses cleanly (no tolerant-catch fallback)", () => {
@@ -17,6 +35,38 @@ describe("SIO-1440 check 2: knowledge frontmatter must not silently degrade", ()
 		const index = KnowledgeIndexSchema.parse(indexYaml);
 		const degradations = findFrontmatterDegradations(AGENTS_DIR, index);
 		expect(degradations).toEqual([]);
+	});
+
+	test("a malformed frontmatter block IS reported, with category/filename/error", () => {
+		const dir = makeKnowledgeFixture(
+			{
+				name: "fixture",
+				description: "fixture",
+				version: "0.1.0",
+				categories: { "runbooks-general": { path: "general/runbooks/", description: "test" } },
+			},
+			{ "general/runbooks/broken.md": "---\ntype: [unterminated\n---\n\nbroken\n" },
+		);
+		const index = KnowledgeIndexSchema.parse(parse(readFileSync(join(dir, "knowledge/index.yaml"), "utf-8")));
+		const degradations = findFrontmatterDegradations(dir, index);
+		expect(degradations).toHaveLength(1);
+		expect(degradations[0]?.category).toBe("runbooks-general");
+		expect(degradations[0]?.filename).toBe("broken.md");
+		expect(degradations[0]?.error.length).toBeGreaterThan(0);
+	});
+
+	test("well-formed frontmatter in a fixture is NOT reported (no false positive)", () => {
+		const dir = makeKnowledgeFixture(
+			{
+				name: "fixture",
+				description: "fixture",
+				version: "0.1.0",
+				categories: { "runbooks-general": { path: "general/runbooks/", description: "test" } },
+			},
+			{ "general/runbooks/ok.md": '---\ntype: Runbook\ntitle: "OK"\n---\n\nbody\n' },
+		);
+		const index = KnowledgeIndexSchema.parse(parse(readFileSync(join(dir, "knowledge/index.yaml"), "utf-8")));
+		expect(findFrontmatterDegradations(dir, index)).toEqual([]);
 	});
 });
 
@@ -26,5 +76,34 @@ describe("SIO-1440 check 3: dead/orphan knowledge files in the spec tree", () =>
 		const index = KnowledgeIndexSchema.parse(indexYaml);
 		const orphans = findOrphanedKnowledgeFiles(AGENTS_DIR, index);
 		expect(orphans).toEqual([]);
+	});
+
+	test("a file in an undeclared subdirectory IS reported as orphaned", () => {
+		const dir = makeKnowledgeFixture(
+			{
+				name: "fixture",
+				description: "fixture",
+				version: "0.1.0",
+				categories: { "runbooks-general": { path: "general/runbooks/", description: "test" } },
+			},
+			{ "general/stray-dir/stray.md": "# stray\n" },
+		);
+		const index = KnowledgeIndexSchema.parse(parse(readFileSync(join(dir, "knowledge/index.yaml"), "utf-8")));
+		const orphans = findOrphanedKnowledgeFiles(dir, index);
+		expect(orphans).toEqual([{ path: "knowledge/general/stray-dir/stray.md" }]);
+	});
+
+	test("knowledge/index.md (the OKF bundle-root file) is exempted, not flagged", () => {
+		const dir = makeKnowledgeFixture(
+			{
+				name: "fixture",
+				description: "fixture",
+				version: "0.1.0",
+				categories: { "runbooks-general": { path: "general/runbooks/", description: "test" } },
+			},
+			{ "index.md": "---\nokf_version: 0.2\n---\n\n# bundle root\n" },
+		);
+		const index = KnowledgeIndexSchema.parse(parse(readFileSync(join(dir, "knowledge/index.yaml"), "utf-8")));
+		expect(findOrphanedKnowledgeFiles(dir, index)).toEqual([]);
 	});
 });
