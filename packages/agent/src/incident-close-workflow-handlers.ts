@@ -146,7 +146,7 @@ export async function runIncidentClose(ctx: ClosureContext, deps: ClosureDeps): 
 	}
 
 	const learnStep = result.steps.find((s) => s.name === "learn");
-	if (!learnStep || learnStep.status !== "ok") {
+	if (learnStep?.status !== "ok") {
 		return { status: "no-fragment", reason: learnStep?.error ?? "learn step did not run" };
 	}
 	const status = learnStep.outputs.status;
