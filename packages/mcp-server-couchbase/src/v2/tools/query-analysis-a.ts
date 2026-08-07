@@ -542,10 +542,11 @@ export function registerQueryAnalysisToolsAV2(server: McpServer, tools: Map<stri
 
 			let query = n1qlLongestRunningQueries;
 			if (min_time_ms && min_time_ms > 0) {
+				const minTimeNs = Math.round(min_time_ms * 1_000_000);
 				query = query.replace(
 					"LETTING avgServiceTime = AVG(STR_TO_DURATION(serviceTime))",
 					`LETTING avgServiceTime = AVG(STR_TO_DURATION(serviceTime))
-           HAVING avgServiceTime >= ${min_time_ms}000000`, // Convert ms to ns for N1QL
+           HAVING avgServiceTime >= ${minTimeNs}`, // Convert ms to ns for N1QL
 				);
 			}
 			if (limit && Number.isInteger(limit) && limit > 0) {

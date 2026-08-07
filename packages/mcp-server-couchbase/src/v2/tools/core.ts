@@ -149,10 +149,10 @@ export function registerCoreToolsV2(server: McpServer, tools: Map<string, Regist
 			formattedText += "Here are all the scopes and collections in the bucket:\n\n";
 
 			for (const [scope, collections] of Object.entries(scopesCollections)) {
-				formattedText += `📁 Scope: ${scope}\n`;
+				formattedText += `Scope: ${scope}\n`;
 				if (collections && collections.length > 0) {
 					for (const collection of collections) {
-						formattedText += `  └─ 📄 Collection: ${collection}\n`;
+						formattedText += `  - Collection: ${collection}\n`;
 					}
 				} else {
 					formattedText += "  └─ (No collections)\n";
@@ -197,9 +197,10 @@ export function registerCoreToolsV2(server: McpServer, tools: Map<string, Regist
 			}
 
 			try {
+				const escapedCollection = backtickIdentifier(collection_name);
 				const inferResult = await resolved
 					.scope(scope_name)
-					.query(`INFER \`${collection_name}\` WITH {"sample_size": 100, "num_sample_values": 2}`);
+					.query(`INFER ${escapedCollection} WITH {"sample_size": 100, "num_sample_values": 2}`);
 				const inferRows = await inferResult.rows;
 				const inferText = formatInferSchema(inferRows);
 				if (inferText !== null) {
@@ -214,12 +215,14 @@ export function registerCoreToolsV2(server: McpServer, tools: Map<string, Regist
 			}
 
 			try {
-				const result = await resolved.scope(scope_name).query(`SELECT * FROM \`${collection_name}\` LIMIT 1`);
+				const result = await resolved
+					.scope(scope_name)
+					.query(`SELECT * FROM ${backtickIdentifier(collection_name)} LIMIT 1`);
 				const rows = await result.rows;
 
 				if (rows.length === 0) {
 					return {
-						content: [{ type: "text" as const, text: "❌ No documents found in collection to infer schema" }],
+						content: [{ type: "text" as const, text: "No documents found in collection to infer schema" }],
 					};
 				}
 
@@ -230,7 +233,7 @@ export function registerCoreToolsV2(server: McpServer, tools: Map<string, Regist
 						content: [
 							{
 								type: "text" as const,
-								text: "❌ Database error: index failure. Please create a primary index on this collection to enable schema inference. Example:\n\nCREATE PRIMARY INDEX ON `bucket`.`scope`.`collection`;",
+								text: "Database error: index failure. Please create a primary index on this collection to enable schema inference. Example:\n\nCREATE PRIMARY INDEX ON `bucket`.`scope`.`collection`;",
 							},
 						],
 					};
@@ -401,7 +404,7 @@ function backtickIdentifier(name: string): string {
 
 // Exported for potential unit testing (Task 9), mirrors v1's formatSchema.
 function formatSchema(doc: Record<string, unknown>): string {
-	let formattedText = "📋 Collection Schema:\n\n";
+	let formattedText = "Collection Schema:\n\n";
 
 	const formatField = (key: string, value: unknown, indent: number = 0): string => {
 		const padding = "  ".repeat(indent);

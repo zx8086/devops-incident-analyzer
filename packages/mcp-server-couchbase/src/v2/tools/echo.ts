@@ -18,7 +18,7 @@ export function registerEchoToolV2(server: McpServer, tools: Map<string, Registe
 		"capella_echo",
 		{
 			description: "Echoes back the input parameters for debugging",
-			inputSchema: z.object({}),
+			inputSchema: z.looseObject({}),
 			annotations: READ_ONLY_ANNOTATIONS,
 		},
 		async (params: Record<string, unknown>) => {

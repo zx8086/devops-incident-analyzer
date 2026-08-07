@@ -15,7 +15,7 @@
 - No emojis in code, logs, comments, or output.
 - File headers: single-line relative path only.
 - Comments: only for non-obvious "why" -- do not restate what code already says.
-- Run `bun run --filter '@devops-agent/mcp-server-couchbase' typecheck` and `bun run --filter '@devops-agent/mcp-server-couchbase' test` after every task.
+- Run `bun run typecheck`, `bun run lint`, and the relevant `bun test` after every change -- matching this repo's CLAUDE.md testing convention. Task steps below cite the package-scoped `bun run --filter '@devops-agent/mcp-server-couchbase' typecheck && bun run --filter '@devops-agent/mcp-server-couchbase' test` shorthand for speed during iteration, but `bun run lint` must also be run (repo-wide or package-scoped) before considering a task's verification complete.
 - **v1 is untouched.** No task in this plan modifies `packages/mcp-server-couchbase/src/server.ts`, `src/index.ts`, `src/tools/*.ts` (v1 originals), `src/resources/*.ts` (v1 originals), or `src/prompts/sqlppQueryGenerator.ts` (v1 original) -- these are read-only references for porting, never edited. `COUCHBASE_MCP_URL` (agent-facing) stays pointed at v1, port 9082.
 - Every ported tool/resource/prompt's **behavior** for the same input must match its v1 counterpart -- this is a protocol-surface port, not a rewrite. Where a v1 handler has a business-logic quirk (e.g. a specific error-handling branch), port it faithfully; do not "clean up" behavior as part of this migration.
 - v1's `ResourceRegistry`/`readResourceByUri` (`packages/mcp-server-couchbase/src/resources/resource-registry.ts`) is **out of scope** -- it's v1-internal plumbing for an in-process fallback read path (`server.ts:126-127`), not part of the actual MCP `resources/read` protocol handler (which is the SDK's own dispatch via each `registerResource` callback). Do not port it or attempt to replicate its behavior in v2.
@@ -161,7 +161,7 @@ registerDocumentationToolsV2(server, tools);
 
 - [ ] **Step 4: Typecheck and test**
 
-Run: `bun run --filter '@devops-agent/mcp-server-couchbase' typecheck && bun run --filter '@devops-agent/mcp-server-couchbase' test`
+Run: `bun run --filter '@devops-agent/mcp-server-couchbase' typecheck && bun run --filter '@devops-agent/mcp-server-couchbase' test && bun run lint`
 Expected: clean, all pass.
 
 - [ ] **Step 5: Commit**
@@ -204,7 +204,7 @@ registerPlaybookToolsV2(server, tools);
 
 - [ ] **Step 4: Typecheck and test**
 
-Run: `bun run --filter '@devops-agent/mcp-server-couchbase' typecheck && bun run --filter '@devops-agent/mcp-server-couchbase' test`
+Run: `bun run --filter '@devops-agent/mcp-server-couchbase' typecheck && bun run --filter '@devops-agent/mcp-server-couchbase' test && bun run lint`
 
 - [ ] **Step 5: Commit**
 
@@ -246,7 +246,7 @@ registerQueryAnalysisToolsAV2(server, tools);
 
 - [ ] **Step 4: Typecheck and test**
 
-Run: `bun run --filter '@devops-agent/mcp-server-couchbase' typecheck && bun run --filter '@devops-agent/mcp-server-couchbase' test`
+Run: `bun run --filter '@devops-agent/mcp-server-couchbase' typecheck && bun run --filter '@devops-agent/mcp-server-couchbase' test && bun run lint`
 
 - [ ] **Step 5: Commit**
 
@@ -288,7 +288,7 @@ registerQueryAnalysisToolsBV2(server, tools);
 
 - [ ] **Step 4: Typecheck and test**
 
-Run: `bun run --filter '@devops-agent/mcp-server-couchbase' typecheck && bun run --filter '@devops-agent/mcp-server-couchbase' test`
+Run: `bun run --filter '@devops-agent/mcp-server-couchbase' typecheck && bun run --filter '@devops-agent/mcp-server-couchbase' test && bun run lint`
 
 - [ ] **Step 5: Commit**
 
@@ -349,7 +349,7 @@ registerEchoToolV2(server, tools);
 
 - [ ] **Step 4: Typecheck and test**
 
-Run: `bun run --filter '@devops-agent/mcp-server-couchbase' typecheck && bun run --filter '@devops-agent/mcp-server-couchbase' test`
+Run: `bun run --filter '@devops-agent/mcp-server-couchbase' typecheck && bun run --filter '@devops-agent/mcp-server-couchbase' test && bun run lint`
 
 - [ ] **Step 5: Commit**
 
@@ -360,7 +360,7 @@ git commit -m "SIO-1443: port capella_echo to v2 (final tool, full tool-surface 
 
 ---
 
-### Task 7: All resources (11 total: 8 static + 3 templates)
+### Task 7: All resources (config-dependent: 9 fixed registrations + 1 per discovered playbook)
 
 **Files:**
 - Create: `packages/mcp-server-couchbase/src/v2/resources.ts`
@@ -369,9 +369,9 @@ git commit -m "SIO-1443: port capella_echo to v2 (final tool, full tool-surface 
 
 **Interfaces:**
 - Consumes: `McpServer`'s `registerResource` (v2 confirmed same signature as v1: `registerResource(name: string, uriOrTemplate: string | ResourceTemplate, config: ResourceMetadata, callback): RegisteredResource | RegisteredResourceTemplate` -- verified against the installed v2 SDK's type declarations, `node_modules/.bun/@modelcontextprotocol+server@2.0.0/.../createMcpHandler-CLhGwQTn.d.mts:3264-3268`).
-- Produces: `registerResourcesV2(server: McpServer): void`. No `tools` Map involvement -- resources are not chokepoint/logging-wrapped in v1 either, so this function takes only `server`.
+- Produces: `async function registerResourcesV2(server: McpServer): Promise<void>`. No `tools` Map involvement -- resources are not chokepoint/logging-wrapped in v1 either, so this function takes only `server`. Async because playbook discovery (scanning the fallback directories for markdown files, see the playbook resources entry below) must complete before the playbook resources can be registered -- the caller must `await` this call.
 
-The 11 resources, by file:
+The 9 fixed resources, by file (plus N additional resources at runtime -- one per discovered playbook, see `playbookResource.ts` entry below -- so the total resource count is config-dependent, not a fixed number; a live parity check should compare v1 and v2 inventories under identical configuration rather than asserting a hardcoded count):
 - `documentResource.ts:52` -- `document` (dynamic, `ResourceTemplate`)
 - `databaseStructureResource.ts:86` -- `database-structure` (static URI `database://structure`)
 - `queryResource.ts:75` -- `query-results` (dynamic, `ResourceTemplate`)
@@ -393,7 +393,7 @@ Before porting `documentationResource.ts`'s 3 scheme-less-URI resources (`scope-
 // src/v2/resources.ts
 import type { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 
-export function registerResourcesV2(server: McpServer): void {
+export async function registerResourcesV2(server: McpServer): Promise<void> {
 	// Static resources
 	server.registerResource("database-structure", "database://structure", {}, async (uri) => {
 		// verbatim from v1 databaseStructureResource.ts
@@ -407,8 +407,11 @@ export function registerResourcesV2(server: McpServer): void {
 	// documentTemplate, queryTemplate, schemaTemplate: port each v1 ResourceTemplate
 	// construction verbatim (URI template string + list/complete callbacks if v1 has them)
 
-	// Playbook resources: port the v1 loop (playbookResource.ts:261-271) as-is --
-	// register "playbook-directory" once, then one resource per discovered playbook ID
+	// Playbook resources: discovery must complete (await the directory/markdown-file scan,
+	// mirroring playbookResource.ts:261-271's loadPlaybooks) BEFORE registration -- register
+	// "playbook-directory" once, then one resource per discovered playbook ID. The number of
+	// playbook resources registered depends on what discovery finds, so the function's total
+	// resource count is config-dependent (see Task 7's header note above).
 }
 ```
 
@@ -418,13 +421,15 @@ export function registerResourcesV2(server: McpServer): void {
 import { registerResourcesV2 } from "./v2/resources.ts";
 // ... after registerEchoToolV2(server, tools), before the chokepoint/logging wrap calls
 // (resources are NOT wrapped, so order relative to the wrap calls doesn't matter, but
-// keep it grouped with the other registration calls for readability):
-registerResourcesV2(server);
+// keep it grouped with the other registration calls for readability). Must be awaited --
+// registerResourcesV2 is async because playbook discovery has to finish before the
+// playbook resources it discovers can be registered:
+await registerResourcesV2(server);
 ```
 
 - [ ] **Step 5: Typecheck and test**
 
-Run: `bun run --filter '@devops-agent/mcp-server-couchbase' typecheck && bun run --filter '@devops-agent/mcp-server-couchbase' test`
+Run: `bun run --filter '@devops-agent/mcp-server-couchbase' typecheck && bun run --filter '@devops-agent/mcp-server-couchbase' test && bun run lint`
 
 - [ ] **Step 6: Commit**
 
@@ -476,13 +481,13 @@ export function registerPromptsV2(server: McpServer): void {
 
 ```typescript
 import { registerPromptsV2 } from "./v2/prompts.ts";
-// ... after registerResourcesV2(server):
+// ... after `await registerResourcesV2(server)`:
 registerPromptsV2(server);
 ```
 
 - [ ] **Step 4: Typecheck and test**
 
-Run: `bun run --filter '@devops-agent/mcp-server-couchbase' typecheck && bun run --filter '@devops-agent/mcp-server-couchbase' test`
+Run: `bun run --filter '@devops-agent/mcp-server-couchbase' typecheck && bun run --filter '@devops-agent/mcp-server-couchbase' test && bun run lint`
 
 - [ ] **Step 5: Commit**
 
@@ -554,6 +559,8 @@ Expected: all green. Confirm 0 lint errors in every new `v2/tools/*.ts`, `v2/res
 Write a throwaway script (not committed) that starts the v2 handler, sends a `tools/list`, `resources/list`, and `prompts/list` request each, and diffs the returned names against the v1 snapshot's `tools`/`resources`/`resourceTemplates`/`prompts` keys (`packages/mcp-server-couchbase/src/__tests__/tools-list-snapshot.json`). Report any mismatch explicitly -- a name present in v1's snapshot but missing from v2 (or vice versa) means a tool/resource was missed or mis-named during porting. This is the "done" check from the design spec, made concrete and mechanical rather than manual.
 
 - [ ] **Step 3: Three-era curl re-check against 1-2 newly-ported tools**
+
+Before starting anything, check the port is free: `lsof -i :<COUCHBASE_MCP_V2_PORT>` (see `packages/mcp-server-couchbase/src/index-v2.ts`/`.env` for the actual configured value). If an existing listener is found that this task did not start itself, stop and ask before proceeding -- do not kill a process you didn't start (per this repo's CLAUDE.md port-check convention).
 
 Start the v2 pilot server locally (`bun packages/mcp-server-couchbase/src/index-v2.ts`, track the PID), run the three-era curl matrix from the original SIO-1424 handover (`initialize` handshake, stateless `tools/call`, `server/discover`) against `capella_get_buckets` or another newly-ported tool with a real input schema (not just `capella_ping`, which has no input to validate). Kill the server by tracked PID afterward; confirm the port is free (`lsof -nP -iTCP:<COUCHBASE_MCP_V2_PORT> -sTCP:LISTEN`).
 

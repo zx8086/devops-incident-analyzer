@@ -380,7 +380,10 @@ export function registerQueryAnalysisToolsBV2(server: McpServer, tools: Map<stri
 			annotations: READ_ONLY_ANNOTATIONS,
 		},
 		async ({ query, bucket_name, scope_name, collection_name }) => {
-			logger.info({ query, bucket_name, scope_name, collection_name }, "Analyzing query for optimizations");
+			logger.info(
+				{ queryLength: query.length, bucket_name, scope_name, collection_name },
+				"Analyzing query for optimizations",
+			);
 			const bucket = await connectionManager.getConnection();
 
 			try {

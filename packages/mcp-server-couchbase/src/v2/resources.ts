@@ -50,6 +50,7 @@ import { ResourceTemplate } from "@modelcontextprotocol/server";
 import { config } from "../config";
 import { isNoIndexError, isNotFoundError } from "../lib/classifyCouchbaseError";
 import { connectionManager } from "../lib/connectionManager";
+import { assertIdentifier } from "../lib/identifiers";
 import { ResponseBuilder } from "../lib/responseBuilder";
 import { sqlppParser } from "../lib/sqlppParser";
 import type { DocumentContent } from "../lib/types";
@@ -568,9 +569,11 @@ export async function registerResourcesV2(server: McpServer): Promise<void> {
 			}
 
 			try {
+				const safeScope = assertIdentifier(scopeName, "scope");
+				const safeCollection = assertIdentifier(collectionName, "collection");
 				const result = await bucket
 					.scope(scopeName)
-					.query(`SELECT RAW META().id FROM \`${bucket.name}\`.\`${scopeName}\`.\`${collectionName}\` LIMIT 1`);
+					.query(`SELECT RAW META().id FROM \`${bucket.name}\`.\`${safeScope}\`.\`${safeCollection}\` LIMIT 1`);
 
 				const rows = await result.rows;
 

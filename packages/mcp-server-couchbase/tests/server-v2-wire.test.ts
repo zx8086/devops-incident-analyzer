@@ -10,7 +10,9 @@
 // result rather than throwing -- see server-v2.ts), so these tests run without a Couchbase
 // cluster: they verify PROTOCOL shape (JSON-RPC envelope, era negotiation, tool dispatch), not
 // database connectivity.
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -296,11 +298,94 @@ describe("SIO-1443 follow-up: capella_read_documentation respects config.documen
 	});
 });
 
+describe("SIO-1443 follow-up: capella_list_documentation respects config.documentation.enabled", () => {
+	const priorDocumentation = config.documentation;
+
+	afterEach(() => {
+		config.documentation = priorDocumentation;
+	});
+
+	// Regression test for the CodeRabbit review finding on the v2 documentation port: the disabled
+	// path for capella_list_documentation returned a success-shaped response ("Documentation tools
+	// are disabled...") instead of throwing, unlike capella_read_documentation's disabled path
+	// (which throws createError("NOT_FOUND", ...)) -- see the describe block above. Asserts the two
+	// tools' disabled-path behavior is now consistent: both fail (isError: true) rather than one
+	// succeeding and one failing for the same configuration state.
+	test("documentation disabled (the default): capella_list_documentation errors instead of returning a success result", async () => {
+		config.documentation = { enabled: false, baseDirectory: "/tmp/docs", fileExtension: ".md" };
+
+		const handler = buildHandler();
+		const response = await handler.fetch(
+			new Request("http://localhost/mcp", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Accept: "application/json, text/event-stream",
+					"Mcp-Method": "tools/call",
+					"Mcp-Name": "capella_list_documentation",
+				},
+				body: JSON.stringify({
+					jsonrpc: "2.0",
+					id: 5,
+					method: "tools/call",
+					params: {
+						name: "capella_list_documentation",
+						arguments: {},
+						_meta: {
+							"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+							"io.modelcontextprotocol/clientCapabilities": {},
+							"io.modelcontextprotocol/clientInfo": { name: "probe", version: "0" },
+						},
+					},
+				}),
+			}),
+		);
+		await handler.close();
+
+		expect(response.status).toBe(200);
+		const body = (await parseJsonRpcBody(response)) as {
+			jsonrpc: string;
+			id: number;
+			result?: { content?: Array<{ type: string; text: string }>; isError?: boolean };
+			error?: unknown;
+		};
+		expect(body.jsonrpc).toBe("2.0");
+		expect(body.id).toBe(5);
+		expect(body.result?.isError).toBe(true);
+		expect(body.result?.content?.[0]?.text).toContain("Documentation tools are disabled in the server configuration");
+	});
+});
+
 describe("SIO-1443 follow-up: capella_list_playbooks respects the loadPlaybooks fallback-directory search", () => {
 	const priorPlaybooks = config.playbooks;
 
 	afterEach(() => {
 		config.playbooks = priorPlaybooks;
+	});
+
+	// resolvePlaybookDirectory() (src/v2/tools/playbooks.ts) checks 4 candidates in order:
+	// config.playbooks.baseDirectory, process.cwd()/playbook, <this-file's-dir>/../../../playbook,
+	// and the package-root/playbook (import.meta.dir-derived). The test below only controls the
+	// FIRST candidate (baseDirectory, pointed at a guaranteed-nonexistent path) -- if any of the
+	// other 3 fallback candidates resolved to a real directory containing markdown files in this
+	// checkout, the test would silently fall through to real playbook content and stop testing the
+	// "no playbooks found anywhere" path. Bun test has no first-class module-mocking primitive for a
+	// module-private async function (resolvePlaybookDirectory is not exported), so instead of adding
+	// new mocking machinery this asserts the invariant directly: none of the 3 uncontrolled
+	// candidates exist with markdown content in the actual test-run environment. If this ever fails,
+	// it means a real ./playbook or <package>/playbook directory was added to the checkout and the
+	// test below needs a real isolation mechanism (e.g. exporting resolvePlaybookDirectory for
+	// injection) rather than just documentation.
+	beforeAll(async () => {
+		const packageRoot = path.resolve(import.meta.dir, "..");
+		const uncontrolledCandidates = [path.join(process.cwd(), "playbook"), path.join(packageRoot, "playbook")];
+		for (const dir of uncontrolledCandidates) {
+			const hasMarkdown = await fs
+				.readdir(dir)
+				.then((files) => files.some((file) => file.endsWith(".md")))
+				.catch(() => false);
+			expect(hasMarkdown).toBe(false);
+		}
 	});
 
 	// Regression test for the reviewer finding on the v2 playbooks port: v1's PlaybookRegistry is
@@ -311,8 +396,9 @@ describe("SIO-1443 follow-up: capella_list_playbooks respects the loadPlaybooks 
 	// port only checked the first condition, so enabled=true with a missing baseDirectory fell
 	// through to listPlaybooksContent's own fs.readdir(), which threw ENOENT and got caught into a
 	// 200 success result containing raw filesystem-path text -- a materially different (and leakier)
-	// signal than v1's isError: true. Uses a baseDirectory guaranteed not to exist so the assertion
-	// holds regardless of whether a real ./playbook directory happens to be present in the checkout.
+	// signal than v1's isError: true. Uses a baseDirectory guaranteed not to exist, PLUS the
+	// beforeAll guard above confirming the other 3 fallback candidates are also clean, so the
+	// assertion is airtight rather than incidentally true in this checkout.
 	test("playbooks enabled but no fallback directory has markdown files: capella_list_playbooks errors instead of returning ENOENT text", async () => {
 		config.playbooks = {
 			enabled: true,
@@ -560,7 +646,7 @@ describe("SIO-1443 Task 9: representative wire-level coverage across the ported 
 		LIVE_CONNECTION_TEST_TIMEOUT_MS,
 	);
 
-	test("capella_echo: different registration group (echo.ts) dispatches; its empty inputSchema strips caller arguments", async () => {
+	test("capella_echo: different registration group (echo.ts) dispatches; its loose inputSchema passes through caller arguments", async () => {
 		const handler = buildHandler();
 		const response = await handler.fetch(
 			new Request("http://localhost/mcp", {
@@ -599,11 +685,13 @@ describe("SIO-1443 Task 9: representative wire-level coverage across the ported 
 		expect(body.jsonrpc).toBe("2.0");
 		expect(body.id).toBe(12);
 		expect(body.result?.isError).not.toBe(true);
-		// capella_echo's inputSchema is z.object({}) -- no fields declared -- so the SDK's Zod-parse
-		// step strips the caller's "probe" argument before the handler ever sees it, and the handler
-		// echoes back exactly what it received: an empty object. This is correct v2 behavior (not a
-		// bug), confirming the tool dispatched and its schema was actually enforced by the SDK.
-		expect(body.result?.content?.[0]?.text).toBe(JSON.stringify({}));
+		// capella_echo's inputSchema is z.looseObject({}) (CodeRabbit finding, SIO-1443 review round):
+		// z.object({}) strips unknown keys by default under Zod 4, silently dropping any parameters a
+		// caller passes -- a behavioral regression from v1, which accepted arbitrary properties.
+		// z.looseObject({}) passes unknown keys through unchanged, so the handler echoes back exactly
+		// what the caller sent, confirming both that the tool dispatched and that the schema no longer
+		// strips caller-supplied fields.
+		expect(body.result?.content?.[0]?.text).toBe(JSON.stringify({ probe: "sio-1443-task-9" }));
 	});
 
 	test(

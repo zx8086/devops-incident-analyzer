@@ -177,9 +177,6 @@ export function registerDocumentationToolsV2(server: McpServer, tools: Map<strin
 				{
 					baseDirectory,
 					cwd: process.cwd(),
-					user: process.env.USER,
-					uid: process.getuid?.(),
-					gid: process.getgid?.(),
 					scope_name,
 					collection_name,
 					file_name,
@@ -261,9 +258,7 @@ export function registerDocumentationToolsV2(server: McpServer, tools: Map<strin
 		},
 		async ({ scope_name, collection_name }) => {
 			if (!config.documentation.enabled) {
-				return {
-					content: [{ type: "text" as const, text: "Documentation tools are disabled in the server configuration." }],
-				};
+				throw createError("NOT_FOUND", "Documentation tools are disabled in the server configuration.");
 			}
 
 			let resourceUri: string;
@@ -415,9 +410,6 @@ export function registerDocumentationToolsV2(server: McpServer, tools: Map<strin
 				{
 					baseDirectory,
 					cwd: process.cwd(),
-					user: process.env.USER,
-					uid: process.getuid?.(),
-					gid: process.getgid?.(),
 					scope_name,
 				},
 				"[sync_documentation_with_database] Debug info",
