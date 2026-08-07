@@ -8,6 +8,8 @@ import {
 	buildSystemPromptParts,
 	buildToolPrompt,
 	complianceToMetadata,
+	findFrontmatterDegradations,
+	findOrphanedKnowledgeFiles,
 	getRecursionLimit,
 	getUncoveredTools,
 	isRunbookCategory,
@@ -94,6 +96,14 @@ describe("manifest-loader", () => {
 		// baseline showed it beats the SIO-1367 claude-haiku-4-5 swap).
 		expect(elastic.manifest.model?.preferred).toBe("claude-sonnet-4-6");
 		expect(elastic.soul).toContain("Elasticsearch specialist");
+	});
+
+	// SIO-1440: findFrontmatterDegradations/findOrphanedKnowledgeFiles are re-exported from
+	// the package barrel; this proves the re-export resolves and is wired to the real
+	// implementation, not just that okf-spec-audit.ts's own module-local tests pass.
+	test("SIO-1440: barrel re-exports the tier-1 audit functions", () => {
+		expect(typeof findFrontmatterDegradations).toBe("function");
+		expect(typeof findOrphanedKnowledgeFiles).toBe("function");
 	});
 
 	// SIO-1229: the regression this guards is NOT the count -- it is that every
