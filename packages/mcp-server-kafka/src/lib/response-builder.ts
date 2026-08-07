@@ -2,7 +2,7 @@
 
 import { buildToolErrorEnvelope, type StructuredToolError } from "@devops-agent/shared";
 
-interface ToolResponse {
+export interface ToolResponse {
 	[key: string]: unknown;
 	content: Array<{ type: "text"; text: string }>;
 	isError?: boolean;
@@ -24,6 +24,18 @@ export class ResponseBuilder {
 	static success(data: unknown): ToolResponse {
 		const text = typeof data === "string" ? data : JSON.stringify(data, bigintReplacer, 2);
 		return { content: [{ type: "text", text }] };
+	}
+
+	// SIO-1422: same text-serialization path as success() (byte-identical output), plus
+	// structuredContent for tools that declare an outputSchema. `data` must already validate
+	// against that schema -- the MCP SDK enforces it on every successful call once declared.
+	// `structured` defaults to `data` (the common case); pass it explicitly when the wire
+	// format for structuredContent must diverge from the text serialization -- e.g. the MCP
+	// protocol requires structuredContent to be a JSON object, so a tool whose text payload is
+	// a bare array needs `structured` to be that array wrapped in an object.
+	static successTyped(data: unknown, structured: unknown = data): ToolResponse & { structuredContent: unknown } {
+		const text = typeof data === "string" ? data : JSON.stringify(data, bigintReplacer, 2);
+		return { content: [{ type: "text", text }], structuredContent: structured };
 	}
 
 	// SIO-728: when `structured` is provided, append the sentinel + JSON payload

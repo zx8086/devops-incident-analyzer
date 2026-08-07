@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AppConfig } from "../../config/schemas.ts";
 import { ResponseBuilder } from "../../lib/response-builder.ts";
 import type { KafkaService } from "../../services/kafka-service.ts";
+import { ListConsumerGroupsOutputSchema } from "../output-schemas.ts";
 import { kafkaToolAnnotations } from "../tool-classification.ts";
 import { wrapHandler } from "../wrap.ts";
 import * as ops from "./operations.ts";
@@ -67,11 +68,15 @@ export function registerReadTools(server: McpServer, service: KafkaService, conf
 		{
 			description: prompts.LIST_CONSUMER_GROUPS_DESCRIPTION,
 			inputSchema: params.ListConsumerGroupsParams.shape,
+			outputSchema: ListConsumerGroupsOutputSchema.shape,
 			annotations: kafkaToolAnnotations("kafka_list_consumer_groups"),
 		},
 		wrapHandler("kafka_list_consumer_groups", config, async (args) => {
 			const result = await ops.listConsumerGroups(service, args);
-			return ResponseBuilder.success(result);
+			// structuredContent must be a JSON object (MCP wire constraint); the array branch
+			// wraps under `groups`, the ToolErrorEnvelope branch is already an object.
+			const structured = Array.isArray(result) ? { groups: result } : result;
+			return ResponseBuilder.successTyped(result, structured);
 		}),
 	);
 

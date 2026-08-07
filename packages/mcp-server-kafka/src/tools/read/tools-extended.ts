@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AppConfig } from "../../config/schemas.ts";
 import { ResponseBuilder } from "../../lib/response-builder.ts";
 import type { KafkaService } from "../../services/kafka-service.ts";
+import { GetConsumerGroupLagOutputSchema } from "../output-schemas.ts";
 import { kafkaToolAnnotations } from "../tool-classification.ts";
 import { wrapHandler } from "../wrap.ts";
 import * as ops from "./operations-extended.ts";
@@ -15,11 +16,12 @@ export function registerExtendedReadTools(server: McpServer, service: KafkaServi
 		{
 			description: prompts.GET_CONSUMER_GROUP_LAG_DESCRIPTION,
 			inputSchema: params.GetConsumerGroupLagParams.shape,
+			outputSchema: GetConsumerGroupLagOutputSchema.shape,
 			annotations: kafkaToolAnnotations("kafka_get_consumer_group_lag"),
 		},
 		wrapHandler("kafka_get_consumer_group_lag", config, async (args) => {
 			const result = await ops.getConsumerGroupLag(service, args);
-			return ResponseBuilder.success(result);
+			return ResponseBuilder.successTyped(result);
 		}),
 	);
 
