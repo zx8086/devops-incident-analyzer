@@ -138,10 +138,11 @@ categories:
   # "runbooks" category pointing at a directory tree. Any category name that is exactly
   # "runbooks" or prefixed "runbooks-" is treated as a runbook category (see
   # isRunbookCategory()) regardless of how deep its `path` actually is.
-  runbooks-aws:      { path: aws/runbooks/,      description: AWS operational runbooks }
-  runbooks-kafka:    { path: kafka/runbooks/,    description: Kafka operational runbooks }
-  runbooks-couchbase:{ path: couchbase/runbooks/,description: Couchbase operational runbooks }
-  runbooks-general:  { path: general/runbooks/,  description: Cross-datasource runbooks }
+  runbooks-aws:       { path: aws/runbooks/,       description: AWS operational runbooks }
+  runbooks-kafka:     { path: kafka/runbooks/,     description: Kafka operational runbooks }
+  runbooks-couchbase: { path: couchbase/runbooks/, description: Couchbase operational runbooks }
+  runbooks-elastic:   { path: elastic/runbooks/,   description: Elastic operational runbooks }
+  runbooks-general:   { path: general/runbooks/,   description: Cross-datasource runbooks }
   systems-map: { path: general/systems-map/, description: Service dependency maps and topology }
   slo-policies:{ path: general/slo-policies/, description: SLO/SLA definitions and thresholds }
 runbook_selection:        # SIO-640: severity-keyed fallback when the LLM router fails
