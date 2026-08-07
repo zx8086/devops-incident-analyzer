@@ -50,6 +50,7 @@ import { ResourceTemplate } from "@modelcontextprotocol/server";
 import { config } from "../config";
 import { isNoIndexError, isNotFoundError } from "../lib/classifyCouchbaseError";
 import { connectionManager } from "../lib/connectionManager";
+import { createError } from "../lib/errors";
 import { ResponseBuilder } from "../lib/responseBuilder";
 import { sqlppParser } from "../lib/sqlppParser";
 import type { DocumentContent } from "../lib/types";
@@ -400,18 +401,18 @@ export async function registerResourcesV2(server: McpServer): Promise<void> {
 	server.registerResource("documentation-browser", "docs://", {}, async (uri: URL) => {
 		logger.info({ uri: uri.href }, "Handling documentation browser request");
 		if (!config.documentation?.enabled) {
-			// SIO-1443: mirrors v1's gate -- registerAllResources (resources/index.ts) only calls
-			// registerMarkdownDocumentationResource when config.documentation.enabled, so under the
-			// default (disabled) config this resource is never registered on the SDK server in v1 at
-			// all, and a docs:// read falls through to "No resource handler found for URI". v2 has
+			// SIO-1443 (reviewer fix): mirrors v1's gate -- registerAllResources (resources/index.ts)
+			// only calls registerMarkdownDocumentationResource when config.documentation.enabled, so
+			// under the default (disabled) config this resource is never registered on the SDK server
+			// in v1 at all, and a docs:// read genuinely fails at the protocol layer (v1's SDK reports
+			// "No resource handler found for URI" as a real error, not a 200-success response). v2 has
 			// only one registration call site (no conditional registerResource call would be reachable
 			// the same way without restructuring registerResourcesV2 itself), so the gate is enforced
-			// inside the handler instead, returning the same v1-shaped error text.
-			return {
-				contents: [
-					{ uri: uri.href, mimeType: "text/plain", text: "Error: No resource handler found for URI: docs://" },
-				],
-			};
+			// inside the handler instead -- but it must THROW, not return { contents } (a returned
+			// value is always a 200 success at the wire level, even when its text says "Error: ...").
+			// Same fix, same reasoning as v2/tools/documentation.ts's capella_read_documentation
+			// (see that file's inline comment on its own equivalent gate).
+			throw createError("NOT_FOUND", `No resource handler found for URI: ${uri.href}`);
 		}
 		return listDocumentation(config.documentation.baseDirectory || "./docs");
 	});
@@ -426,15 +427,9 @@ export async function registerResourcesV2(server: McpServer): Promise<void> {
 	server.registerResource("scope-documentation", "scope-documentation://", {}, async (uri: URL) => {
 		logger.info({ uri: uri.href }, "Handling scope documentation request");
 		if (!config.documentation?.enabled) {
-			return {
-				contents: [
-					{
-						uri: uri.href,
-						mimeType: "text/plain",
-						text: "Error: No resource handler found for URI: scope-documentation",
-					},
-				],
-			};
+			// SIO-1443 (reviewer fix): must throw, not return { contents } -- see documentation-browser
+			// above for the full rationale.
+			throw createError("NOT_FOUND", "No resource handler found for URI: scope-documentation");
 		}
 		return getScopeDocumentation("default");
 	});
@@ -442,15 +437,9 @@ export async function registerResourcesV2(server: McpServer): Promise<void> {
 	server.registerResource("collection-documentation", "collection-documentation://", {}, async (uri: URL) => {
 		logger.info({ uri: uri.href }, "Handling collection documentation request");
 		if (!config.documentation?.enabled) {
-			return {
-				contents: [
-					{
-						uri: uri.href,
-						mimeType: "text/plain",
-						text: "Error: No resource handler found for URI: collection-documentation",
-					},
-				],
-			};
+			// SIO-1443 (reviewer fix): must throw, not return { contents } -- see documentation-browser
+			// above for the full rationale.
+			throw createError("NOT_FOUND", "No resource handler found for URI: collection-documentation");
 		}
 		return getCollectionDocumentation("default", "default");
 	});
@@ -458,15 +447,9 @@ export async function registerResourcesV2(server: McpServer): Promise<void> {
 	server.registerResource("documentation-file", "documentation-file://", {}, async (uri: URL) => {
 		logger.info({ uri: uri.href }, "Handling documentation file request");
 		if (!config.documentation?.enabled) {
-			return {
-				contents: [
-					{
-						uri: uri.href,
-						mimeType: "text/plain",
-						text: "Error: No resource handler found for URI: documentation-file",
-					},
-				],
-			};
+			// SIO-1443 (reviewer fix): must throw, not return { contents } -- see documentation-browser
+			// above for the full rationale.
+			throw createError("NOT_FOUND", "No resource handler found for URI: documentation-file");
 		}
 		return getDocumentationFile("default", "default", "default");
 	});

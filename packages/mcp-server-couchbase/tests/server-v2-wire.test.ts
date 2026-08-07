@@ -364,3 +364,119 @@ describe("SIO-1443 follow-up: capella_list_playbooks respects the loadPlaybooks 
 		expect(body.result?.content?.[0]?.text).not.toContain("ENOENT");
 	});
 });
+
+describe("SIO-1443 Critical fix: documentation resources (resources/read) genuinely fail, not 200-success with error text", () => {
+	const priorDocumentation = config.documentation;
+
+	afterEach(() => {
+		config.documentation = priorDocumentation;
+	});
+
+	// Regression test for the task-7 reviewer's Critical finding: the 4 documentation resource
+	// handlers in v2/resources.ts (documentation-browser, scope-documentation,
+	// collection-documentation, documentation-file) previously `return`ed { contents: [...] } with
+	// error-shaped TEXT when config.documentation.enabled was false, which is always a 200 JSON-RPC
+	// SUCCESS at the wire level regardless of what the text says. v1's real behavior (verified by
+	// reading the installed @modelcontextprotocol/server@2.0.0 bundle) is that the resource is never
+	// registered at all when disabled, so a real client gets a genuine JSON-RPC protocol-level error
+	// (top-level `error` field), not a disguised success. The fix makes each handler `throw` instead,
+	// mirroring v2/tools/documentation.ts's capella_read_documentation (already reviewed/approved for
+	// the identical tool-surface gating problem). Asserts on the wire-level resources/read response,
+	// not tools/call -- this is the resource protocol path, not the tool path.
+	test("docs:// disabled: resources/read returns a top-level JSON-RPC error, not a 200 success", async () => {
+		config.documentation = { enabled: false, baseDirectory: "/tmp/docs", fileExtension: ".md" };
+
+		const handler = buildHandler();
+		const response = await handler.fetch(
+			new Request("http://localhost/mcp", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Accept: "application/json, text/event-stream",
+					"Mcp-Method": "resources/read",
+					"Mcp-Name": "docs://",
+				},
+				body: JSON.stringify({
+					jsonrpc: "2.0",
+					id: 7,
+					method: "resources/read",
+					params: {
+						uri: "docs://",
+						_meta: {
+							"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+							"io.modelcontextprotocol/clientCapabilities": {},
+							"io.modelcontextprotocol/clientInfo": { name: "probe", version: "0" },
+						},
+					},
+				}),
+			}),
+		);
+		await handler.close();
+
+		expect(response.status).toBe(200);
+		const body = (await parseJsonRpcBody(response)) as {
+			jsonrpc: string;
+			id: number;
+			result?: unknown;
+			error?: { code?: number; message?: string };
+		};
+		expect(body.jsonrpc).toBe("2.0");
+		expect(body.id).toBe(7);
+		// The load-bearing assertion: a genuine top-level JSON-RPC `error`, not a `result` carrying
+		// "Error: ..." text. Verified live (throwaway probe, not committed) that a thrown
+		// registerResource callback error surfaces as { error: { code: -32603, message: "<thrown
+		// message>" } } -- an internal-error code, distinct from tools/call's isError:true-in-result
+		// shape (thrown tool errors and thrown resource errors are handled by different SDK code
+		// paths).
+		expect(body.result).toBeUndefined();
+		expect(body.error).toBeDefined();
+		expect(body.error?.message).toContain("No resource handler found for URI");
+	});
+
+	// scope-documentation:// is one of the 3 scheme-less-fixed resources (see resources.ts's header
+	// comment on the scheme-less URI finding) -- confirms the throw fix applies uniformly across all
+	// 4 gated resources, not just the one with a "real" scheme.
+	test("scope-documentation:// disabled: resources/read returns a top-level JSON-RPC error", async () => {
+		config.documentation = { enabled: false, baseDirectory: "/tmp/docs", fileExtension: ".md" };
+
+		const handler = buildHandler();
+		const response = await handler.fetch(
+			new Request("http://localhost/mcp", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Accept: "application/json, text/event-stream",
+					"Mcp-Method": "resources/read",
+					"Mcp-Name": "scope-documentation://",
+				},
+				body: JSON.stringify({
+					jsonrpc: "2.0",
+					id: 8,
+					method: "resources/read",
+					params: {
+						uri: "scope-documentation://",
+						_meta: {
+							"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+							"io.modelcontextprotocol/clientCapabilities": {},
+							"io.modelcontextprotocol/clientInfo": { name: "probe", version: "0" },
+						},
+					},
+				}),
+			}),
+		);
+		await handler.close();
+
+		expect(response.status).toBe(200);
+		const body = (await parseJsonRpcBody(response)) as {
+			jsonrpc: string;
+			id: number;
+			result?: unknown;
+			error?: { code?: number; message?: string };
+		};
+		expect(body.jsonrpc).toBe("2.0");
+		expect(body.id).toBe(8);
+		expect(body.result).toBeUndefined();
+		expect(body.error).toBeDefined();
+		expect(body.error?.message).toContain("No resource handler found for URI");
+	});
+});
