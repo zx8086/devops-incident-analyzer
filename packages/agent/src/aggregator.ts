@@ -112,6 +112,37 @@ export function aggregateResultBudget(resultCount: number, env: NodeJS.ProcessEn
 	return Math.max(AGGREGATE_RESULT_CAP_FLOOR, Math.min(per, fairShare));
 }
 
+// SIO-1441: extracted from aggregate()'s previously-inline resultsBlock construction so the
+// tier-2 single-agent-probe harness (packages/agent/src/eval/) can build the identical block
+// without duplicating this formatting logic (header shape, tool-error surfacing, per-result
+// truncation). Pure -- no behavior change from the pre-extraction inline version.
+export function buildResultsBlock(results: DataSourceResult[]): string {
+	// SIO-833: per-result byte budget bounds the prompt under AWS estate fan-out.
+	const perResultCap = aggregateResultBudget(results.length);
+	return results
+		.map((r) => {
+			const status = r.status === "success" ? "OK" : `ERROR: ${r.error ?? "unknown"}`;
+			const rawData = r.status === "success" ? String(r.data) : "No data";
+			const data = perResultCap == null ? rawData : truncateToolOutput(rawData, perResultCap).content;
+			// SIO-649: include deploymentId so the LLM distinguishes per-deployment results
+			// when the elastic sub-agent fans out across multiple deployments
+			const label = r.deploymentId ? `${r.dataSourceId}/${r.deploymentId}` : r.dataSourceId;
+			const header = `### ${label} [${status}] (${r.duration ?? 0}ms)`;
+
+			// Surface tool-level errors so the LLM can distinguish "some tools failed"
+			// from "all tools failed" and identify the failure pattern (auth, connectivity, etc.)
+			const toolErrorBlock =
+				r.toolErrors && r.toolErrors.length > 0
+					? `\n\nTool errors (${r.toolErrors.length} failures):\n${r.toolErrors
+							.map((e) => `- ${e.toolName} [${e.category}]: ${e.message}`)
+							.join("\n")}`
+					: "";
+
+			return `${header}${toolErrorBlock}\n${data}`;
+		})
+		.join("\n\n");
+}
+
 // Exported for SIO-1169: aggregator-verbatim-ddl.test.ts asserts the verbatimDdlRule
 // prompt nudge is present/absent based on toolOutputs, independent of resultsBlock prose.
 export function buildAggregatorMessages(
@@ -1632,30 +1663,7 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 		);
 	}
 
-	// SIO-833: per-result byte budget bounds the prompt under AWS estate fan-out.
-	const perResultCap = aggregateResultBudget(results.length);
-	const resultsBlock = results
-		.map((r) => {
-			const status = r.status === "success" ? "OK" : `ERROR: ${r.error ?? "unknown"}`;
-			const rawData = r.status === "success" ? String(r.data) : "No data";
-			const data = perResultCap == null ? rawData : truncateToolOutput(rawData, perResultCap).content;
-			// SIO-649: include deploymentId so the LLM distinguishes per-deployment results
-			// when the elastic sub-agent fans out across multiple deployments
-			const label = r.deploymentId ? `${r.dataSourceId}/${r.deploymentId}` : r.dataSourceId;
-			const header = `### ${label} [${status}] (${r.duration ?? 0}ms)`;
-
-			// Surface tool-level errors so the LLM can distinguish "some tools failed"
-			// from "all tools failed" and identify the failure pattern (auth, connectivity, etc.)
-			const toolErrorBlock =
-				r.toolErrors && r.toolErrors.length > 0
-					? `\n\nTool errors (${r.toolErrors.length} failures):\n${r.toolErrors
-							.map((e) => `- ${e.toolName} [${e.category}]: ${e.message}`)
-							.join("\n")}`
-					: "";
-
-			return `${header}${toolErrorBlock}\n${data}`;
-		})
-		.join("\n\n");
+	const resultsBlock = buildResultsBlock(results);
 
 	const llm = createLlm("aggregator");
 	const messages = buildAggregatorMessages(state, resultsBlock, results);
