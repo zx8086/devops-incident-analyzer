@@ -111,3 +111,49 @@ describe("SIO-1248 in-flight cap vs persisted fidelity", () => {
 		expect(findings.syntheticMonitors?.length ?? 0).toBeLessThan(MONITOR_COUNT);
 	});
 });
+
+describe("SIO-1425/1437 structuredContent capture", () => {
+	test("captures ToolMessage.artifact's mcp_structured_content alongside text content", async () => {
+		const structured = { groupId: "g1", totalLag: "42", topics: [] };
+		const fake = tool(async () => [JSON.stringify(structured), [{ type: "mcp_structured_content", data: structured }]], {
+			name: "kafka_get_consumer_group_lag",
+			description: "x",
+			schema: z.object({}),
+			responseFormat: "content_and_artifact",
+		});
+
+		const rawOutputs: RawToolOutput[] = [];
+		const wrapped = instrumentTools([fake], {
+			dataSourceId: "kafka",
+			log: { info: () => {}, warn: () => {} },
+			rawOutputs,
+		})[0];
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+		await wrapped.invoke({ id: "c", name: "kafka_get_consumer_group_lag", args: {}, type: "tool_call" });
+
+		expect(rawOutputs).toHaveLength(1);
+		expect(rawOutputs[0]?.structuredContent).toEqual(structured);
+	});
+
+	test("leaves structuredContent undefined when the tool has no artifact", async () => {
+		const fake = tool(async () => "plain text result", {
+			name: "gitlab_get_blame",
+			description: "x",
+			schema: z.object({}),
+		});
+
+		const rawOutputs: RawToolOutput[] = [];
+		const wrapped = instrumentTools([fake], {
+			dataSourceId: "gitlab",
+			log: { info: () => {}, warn: () => {} },
+			rawOutputs,
+		})[0];
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+		await wrapped.invoke({ id: "c", name: "gitlab_get_blame", args: {}, type: "tool_call" });
+
+		expect(rawOutputs).toHaveLength(1);
+		expect(rawOutputs[0]?.structuredContent).toBeUndefined();
+	});
+});
