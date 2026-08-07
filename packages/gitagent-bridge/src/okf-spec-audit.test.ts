@@ -3,11 +3,16 @@
 // that the whole-pipeline eval program does not cover. See skill-tool-coverage.test.ts for the
 // SIO-1228/1257/1229 checks this file deliberately does NOT duplicate.
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "yaml";
-import { findFrontmatterDegradations, findOrphanedKnowledgeFiles } from "./okf-spec-audit.ts";
+import { type LoadedAgent, loadAgent } from "./manifest-loader.ts";
+import {
+	findFrontmatterDegradations,
+	findOrphanedKnowledgeFiles,
+	findSkillDeclarationDrift,
+} from "./okf-spec-audit.ts";
 import { type KnowledgeIndex, KnowledgeIndexSchema } from "./types.ts";
 
 const AGENTS_DIR = join(import.meta.dir, "../../../agents/incident-analyzer");
@@ -143,5 +148,70 @@ describe("SIO-1440 check 3: dead/orphan knowledge files in the spec tree", () =>
 		symlinkSync(".", join(dir, "knowledge", "general", "loop"), "dir");
 		const index = KnowledgeIndexSchema.parse(parse(readFileSync(join(dir, "knowledge/index.yaml"), "utf-8")));
 		expect(() => findOrphanedKnowledgeFiles(dir, index)).not.toThrow();
+	});
+});
+
+function makeSkillFixture(files: Record<string, string>): string {
+	const dir = mkdtempSync(join(tmpdir(), "gitagent-okf-audit-skill-"));
+	for (const [relPath, content] of Object.entries(files)) {
+		const filePath = join(dir, relPath);
+		mkdirSync(join(filePath, ".."), { recursive: true });
+		writeFileSync(filePath, content);
+	}
+	return dir;
+}
+
+describe("SIO-1444 check 4: skill-declaration drift, sub-agents included", () => {
+	// index.test.ts's SIO-1281 test covers the ROOT incident-analyzer and elastic-iac skills/
+	// dirs only. This walks the whole declared tree, so the sub-agent skill dirs
+	// (capella/elastic/gitlab today) get the same guarantee. Iterates the manifest-declared
+	// tree from loadAgent -- an UNDECLARED sub-agent directory is index.test.ts's own
+	// "every sub-agent directory on disk is declared" concern, not re-checked here.
+	test("no skill dir drifts from its agent.yaml declaration anywhere in the agent tree", () => {
+		const flatten = (agent: LoadedAgent, dir: string): { agent: LoadedAgent; dir: string }[] => {
+			const flat = [{ agent, dir }];
+			for (const [subName, sub] of agent.subAgents) {
+				flat.push(...flatten(sub, join(dir, "agents", subName)));
+			}
+			return flat;
+		};
+		const flat = flatten(loadAgent(AGENTS_DIR), AGENTS_DIR);
+
+		// Anti-vacuity: the tree must actually reach sub-agent skill dirs, not just the root's.
+		const withSkillsDir = flat.filter(({ dir }) => dir !== AGENTS_DIR && existsSync(join(dir, "skills")));
+		expect(withSkillsDir.length).toBeGreaterThan(0);
+
+		for (const { agent, dir } of flat) {
+			expect(findSkillDeclarationDrift(dir, agent.manifest.skills ?? [])).toEqual([]);
+		}
+	});
+
+	test("an undeclared skills/<name>/ dir with a SKILL.md IS reported", () => {
+		const dir = makeSkillFixture({
+			"skills/stray-skill/SKILL.md": "---\nname: stray-skill\ndescription: x\n---\n\nbody\n",
+		});
+		expect(findSkillDeclarationDrift(dir, [])).toEqual([
+			{ kind: "undeclared_skill_dir", name: "stray-skill", path: "skills/stray-skill" },
+		]);
+	});
+
+	test("a declared skill with no SKILL.md IS reported", () => {
+		const dir = makeSkillFixture({});
+		expect(findSkillDeclarationDrift(dir, ["ghost-skill"])).toEqual([
+			{ kind: "missing_skill_file", name: "ghost-skill", path: "skills/ghost-skill/SKILL.md" },
+		]);
+	});
+
+	test("a declared skill with SKILL.md is clean; an undeclared dir without SKILL.md is ignored", () => {
+		const dir = makeSkillFixture({
+			"skills/real-skill/SKILL.md": "---\nname: real-skill\ndescription: x\n---\n\nbody\n",
+			"skills/scratch/notes.txt": "not a skill\n",
+		});
+		expect(findSkillDeclarationDrift(dir, ["real-skill"])).toEqual([]);
+	});
+
+	test("an agent with no skills/ directory and no declared skills is clean", () => {
+		const dir = mkdtempSync(join(tmpdir(), "gitagent-okf-audit-noskills-"));
+		expect(findSkillDeclarationDrift(dir, [])).toEqual([]);
 	});
 });

@@ -32,7 +32,9 @@ export {
 	type FrontmatterDegradation,
 	findFrontmatterDegradations,
 	findOrphanedKnowledgeFiles,
+	findSkillDeclarationDrift,
 	type OrphanedKnowledgeFile,
+	type SkillDeclarationDrift,
 } from "./okf-spec-audit.ts";
 export { getRelatedTools, withRelatedTools } from "./related-tools.ts";
 // SIO-1398: the two runbook tool-citation readers, exported so eval coverage targets derive
