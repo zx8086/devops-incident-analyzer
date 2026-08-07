@@ -4,6 +4,7 @@ import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch";
 import { ToolMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
+import { z } from "zod";
 import {
 	awsEcsAbsenceProven,
 	consumeAbsenceExitLog,
@@ -465,16 +466,19 @@ function extractContent(result: unknown): unknown {
 // artifact is a ToolMessage-only field, so a structural guard would be pointless.
 // The MCP adapter's artifact shape (confirmed live, @langchain/mcp-adapters@1.1.3
 // dist/tools.js:311-325) is an array of entries; the structuredContent one is
-// tagged "mcp_structured_content".
+// tagged "mcp_structured_content". artifact is external MCP-adapter data, so it is
+// validated with Zod (safeParse) rather than a manual cast.
+const McpStructuredContentEntrySchema = z.object({ type: z.literal("mcp_structured_content"), data: z.unknown() });
+
 function extractStructuredContent(result: unknown): unknown | undefined {
 	if (!(result instanceof ToolMessage)) return undefined;
 	const artifact = result.artifact;
 	if (!Array.isArray(artifact)) return undefined;
-	const entry = artifact.find(
-		(a): a is { type: "mcp_structured_content"; data: unknown } =>
-			typeof a === "object" && a !== null && (a as { type?: unknown }).type === "mcp_structured_content",
-	);
-	return entry?.data;
+	for (const entry of artifact) {
+		const parsed = McpStructuredContentEntrySchema.safeParse(entry);
+		if (parsed.success) return parsed.data.data;
+	}
+	return undefined;
 }
 
 function stringifyContent(content: unknown): string {

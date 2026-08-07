@@ -526,18 +526,25 @@ export function buildPersistedToolOutput(
 	capSkippedBytes: number | null;
 	truncation: { strategy: string; originalBytes: number; finalBytes: number } | null;
 } {
-	const parsedOrStructured = structuredContent !== undefined ? structuredContent : tryParseJson(text);
 	if (stateCapBytes == null) {
-		return { rawJson: parsedOrStructured, capSkippedBytes: null, truncation: null };
+		return {
+			rawJson: structuredContent !== undefined ? structuredContent : tryParseJson(text),
+			capSkippedBytes: null,
+			truncation: null,
+		};
 	}
 	if (TYPED_FINDING_TOOLS.has(toolName)) {
 		const bytes = Buffer.byteLength(text, "utf8");
 		return {
-			rawJson: parsedOrStructured,
+			rawJson: structuredContent !== undefined ? structuredContent : tryParseJson(text),
 			capSkippedBytes: bytes > stateCapBytes ? bytes : null,
 			truncation: null,
 		};
 	}
+	// Text is parsed only inside the branches below (never unconditionally up front) --
+	// the non-typed-tool branch parses `capped.content` (post-truncation) instead of the
+	// full unbounded `text`, so a huge non-typed-tool result is never JSON.parse'd whole
+	// just to compute a value this branch doesn't use.
 	const capped = truncateToolOutput(text, stateCapBytes);
 	const cappedTruncation =
 		capped.strategy === "none"

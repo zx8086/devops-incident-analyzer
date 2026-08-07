@@ -161,6 +161,33 @@ describe("SIO-1425/1437 structuredContent capture", () => {
 		expect(rawOutputs[0]?.structuredContent).toBeUndefined();
 	});
 
+	// A malformed/unrecognized artifact array is a DIFFERENT code path from an absent
+	// artifact: an absent artifact exits extractStructuredContent before Array.isArray,
+	// while an artifact array with no matching entry runs the full safeParse loop and
+	// falls through to undefined. Exercises that fall-through explicitly.
+	test("leaves structuredContent undefined when the artifact array has no matching entry", async () => {
+		const structured = { groupId: "g1", totalLag: "42", topics: [] };
+		const fake = tool(async () => ["plain text result", [{ type: "other", data: structured }]], {
+			name: "kafka_get_consumer_group_lag",
+			description: "x",
+			schema: z.object({}),
+			responseFormat: "content_and_artifact",
+		});
+
+		const rawOutputs: RawToolOutput[] = [];
+		const wrapped = instrumentTools([fake], {
+			dataSourceId: "kafka",
+			log: { info: () => {}, warn: () => {} },
+			rawOutputs,
+		})[0];
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+		await wrapped.invoke({ id: "c", name: "kafka_get_consumer_group_lag", args: {}, type: "tool_call" });
+
+		expect(rawOutputs).toHaveLength(1);
+		expect(rawOutputs[0]?.structuredContent).toBeUndefined();
+	});
+
 	test("end-to-end: kafka_get_consumer_group_lag structuredContent reaches extractKafkaFindings identically to text re-parse", async () => {
 		const structured = {
 			groupId: "checkout-workers",
@@ -208,19 +235,24 @@ describe("SIO-1425/1437 structuredContent capture", () => {
 
 		const raw = rawOutputs[0];
 		if (!raw) throw new Error("no raw output captured");
-		const persisted = buildPersistedToolOutput(
-			raw.toolName,
-			normalizeToolContent(raw.content),
-			65_536,
-			raw.structuredContent,
-		);
+		const normalizedText = normalizeToolContent(raw.content);
 
-		const findings = extractKafkaFindings([
-			{ toolName: "kafka_get_consumer_group_lag", rawJson: persisted.rawJson },
+		const structuredPersisted = buildPersistedToolOutput(raw.toolName, normalizedText, 65_536, raw.structuredContent);
+		// The no-drift contract this whole feature depends on: the structured route and the
+		// pre-existing text-reparse route (structuredContent explicitly undefined, same
+		// underlying text) must produce byte-identical extractor output.
+		const textPersisted = buildPersistedToolOutput(raw.toolName, normalizedText, 65_536, undefined);
+
+		const structuredFindings = extractKafkaFindings([
+			{ toolName: "kafka_get_consumer_group_lag", rawJson: structuredPersisted.rawJson },
+		] as never);
+		const textFindings = extractKafkaFindings([
+			{ toolName: "kafka_get_consumer_group_lag", rawJson: textPersisted.rawJson },
 		] as never);
 
-		expect(findings.consumerGroups).toHaveLength(1);
-		expect(findings.consumerGroups?.[0]?.id).toBe("checkout-workers");
-		expect(findings.consumerGroups?.[0]?.totalLag).toBe(150);
+		expect(structuredFindings).toEqual(textFindings);
+		expect(structuredFindings.consumerGroups).toHaveLength(1);
+		expect(structuredFindings.consumerGroups?.[0]?.id).toBe("checkout-workers");
+		expect(structuredFindings.consumerGroups?.[0]?.totalLag).toBe(150);
 	});
 });
