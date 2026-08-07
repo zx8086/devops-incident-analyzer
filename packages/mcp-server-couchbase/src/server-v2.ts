@@ -20,6 +20,7 @@ import { registerCoreToolsV2 } from "./v2/tools/core.ts";
 import { registerDocumentationToolsV2 } from "./v2/tools/documentation.ts";
 import { registerPlaybookToolsV2 } from "./v2/tools/playbooks.ts";
 import { registerQueryAnalysisToolsAV2 } from "./v2/tools/query-analysis-a.ts";
+import { registerQueryAnalysisToolsBV2 } from "./v2/tools/query-analysis-b.ts";
 
 const PING_ANNOTATIONS: ToolAnnotations = {
 	readOnlyHint: true,
@@ -101,6 +102,10 @@ export function buildServerFactory(logger: ToolCallLogger): McpServerFactory {
 
 		// SIO-1443: query analysis tools, part A (11 of 21 -- pure system-catalog reads).
 		registerQueryAnalysisToolsAV2(server, tools);
+
+		// SIO-1443: query analysis tools, part B (10 of 21 -- system-catalog reads plus the
+		// offline/live query-optimization advisor).
+		registerQueryAnalysisToolsBV2(server, tools);
 
 		// SIO-1424: composition order matches v1's serverFactory closure in bootstrap.ts --
 		// read-only INNER (installed first), tool-call logging OUTER (installed second, so a
