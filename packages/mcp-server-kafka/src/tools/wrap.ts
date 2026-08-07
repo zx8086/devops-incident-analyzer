@@ -14,7 +14,8 @@ type ToolResponse = {
 	isError?: boolean;
 };
 
-const WRITE_TOOLS = new Set([
+// SIO-1421: exported as the classification core for tool-classification.ts (annotations).
+export const WRITE_TOOLS = new Set([
 	"kafka_produce_message",
 	"kafka_create_topic",
 	"kafka_alter_topic_config",
@@ -23,7 +24,7 @@ const WRITE_TOOLS = new Set([
 	"ksql_execute_statement",
 ]);
 
-const DESTRUCTIVE_TOOLS = new Set([
+export const DESTRUCTIVE_TOOLS = new Set([
 	"kafka_delete_topic",
 	"kafka_reset_consumer_group_offsets",
 	"kafka_delete_schema_subject",
