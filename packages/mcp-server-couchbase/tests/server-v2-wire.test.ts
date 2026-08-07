@@ -11,8 +11,29 @@
 // cluster: they verify PROTOCOL shape (JSON-RPC envelope, era negotiation, tool dispatch), not
 // database connectivity.
 import { describe, expect, test } from "bun:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpHandler } from "@modelcontextprotocol/server";
+import { registerPingHandlers } from "../src/lib/pingHandler.ts";
 import { buildServerFactory } from "../src/server-v2.ts";
+
+// v1's real capella_ping, called through a live v1 Client/InMemoryTransport pair -- NOT a
+// hardcoded literal, so wording drift in pingHandler.ts (the actual source of truth) fails this
+// test instead of silently passing. Mirrors the existing v1 test pattern in
+// src/__tests__/docs-resolution.test.ts.
+async function callV1PingHandler(): Promise<string | undefined> {
+	const server = new McpServer({ name: "couchbase-v1-ping-probe", version: "0.0.0" });
+	registerPingHandlers(server);
+	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+	const client = new Client({ name: "couchbase-v1-ping-probe-client", version: "0.0.0" });
+	await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+	const result = (await client.callTool({ name: "capella_ping", arguments: {} })) as {
+		content?: Array<{ text?: string }>;
+	};
+	await client.close();
+	return result.content?.[0]?.text;
+}
 
 const silentLogger = { info: () => {}, warn: () => {}, debug: () => {} };
 
@@ -142,11 +163,11 @@ describe("SIO-1424: v2 pilot wire protocol (three-era matrix)", () => {
 		expect(body.error).toBeUndefined();
 	});
 
-	test("v1 text-equivalence: capella_ping's not-connected text matches the v1 pingHandler's wording", async () => {
-		// Live-cluster equivalence isn't feasible in CI (no Couchbase available), so this checks
-		// the shared "not connected" branch text is byte-identical between v1's pingHandler.ts and
-		// the v2 pilot's server-v2.ts -- the one code path both can exercise without a live
-		// cluster, and the one most likely to silently drift since it's duplicated, not shared.
+	test("v1 text-equivalence: v2's not-connected text matches v1's REAL pingHandler.ts response (not a hardcoded literal)", async () => {
+		// Live-cluster equivalence isn't feasible in CI (no Couchbase available), so this compares
+		// v2's response against v1's ACTUAL registerPingHandlers output, called live through a v1
+		// Client/InMemoryTransport pair (callV1PingHandler above) -- not a copy-pasted literal. A
+		// future wording change in pingHandler.ts now fails this test instead of silently passing.
 		const handler = buildHandler();
 		const response = await handler.fetch(
 			new Request("http://localhost/mcp", {
@@ -176,7 +197,10 @@ describe("SIO-1424: v2 pilot wire protocol (three-era matrix)", () => {
 		await handler.close();
 
 		const body = (await parseJsonRpcBody(response)) as { result?: { content?: Array<{ text: string }> } };
-		const text = body.result?.content?.[0]?.text;
-		expect(text).toBe("Server is running but not connected to a database.");
+		const v2Text = body.result?.content?.[0]?.text;
+		const v1Text = await callV1PingHandler();
+
+		expect(v1Text).toBeDefined();
+		expect(v2Text).toBe(v1Text);
 	});
 });

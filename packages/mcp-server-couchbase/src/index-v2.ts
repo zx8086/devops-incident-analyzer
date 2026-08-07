@@ -7,7 +7,12 @@
 // out of the default `start`/`dev` scripts so it never boots unless explicitly invoked.
 import "./set-global.ts";
 
-import { buildTelemetryConfig, canonicalizeUpstream, createBootstrapAdapter } from "@devops-agent/shared";
+import {
+	buildTelemetryConfig,
+	canonicalizeUpstream,
+	createBootstrapAdapter,
+	readPositiveIntEnv,
+} from "@devops-agent/shared";
 // SIO-1424: bootstrap-v2.ts is deliberately NOT exported from @devops-agent/shared's default
 // barrel ("."/index.ts) -- reached via the package's existing `./src/*` deep-import convention
 // instead (see e.g. `@devops-agent/shared/src/confidence.ts` elsewhere in the repo), so it stays
@@ -25,7 +30,7 @@ import { buildServerFactory } from "./server-v2.ts";
 import { logger } from "./utils/logger.ts";
 import { initializeTracing } from "./utils/tracing.ts";
 
-const V2_PORT = Number(Bun.env.COUCHBASE_MCP_V2_PORT ?? 9182);
+const V2_PORT = readPositiveIntEnv("COUCHBASE_MCP_V2_PORT", 9182);
 
 if (import.meta.main) {
 	createMcpApplicationV2({

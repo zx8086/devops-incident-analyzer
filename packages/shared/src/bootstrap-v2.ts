@@ -65,14 +65,22 @@ export async function createMcpApplicationV2<T>(options: McpApplicationV2Options
 
 	installProcessErrorHandlers({ name, logger, embedded: options.embedded });
 
+	// SIO-1424 (CodeRabbit): tracked outside the try, in acquisition order, so a startup failure
+	// AFTER one of these resources opens can release exactly what was acquired (reverse order) --
+	// not just the metrics recorder. A partially-started listener/handler/datasource otherwise
+	// leaks silently, which matters most in embedded mode where the process outlives the failure.
 	let toolMetrics: Awaited<ReturnType<typeof openMetricsRecorder>>;
+	let otelSdk: ReturnType<typeof initTelemetry> | undefined;
+	let datasource: T | undefined;
+	let handler: ReturnType<McpApplicationV2Options<T>["createHandler"]> | undefined;
+	let server: ReturnType<McpApplicationV2Options<T>["listen"]> | undefined;
 
 	try {
 		options.initTracing();
-		const otelSdk = initTelemetry(options.telemetry);
+		otelSdk = initTelemetry(options.telemetry);
 
 		logger.info(`Initializing datasource for ${name}`);
-		const datasource = await options.initDatasource();
+		datasource = await options.initDatasource();
 
 		toolMetrics = await openMetricsRecorder({ mode: "server", name, logger });
 
@@ -88,10 +96,17 @@ export async function createMcpApplicationV2<T>(options: McpApplicationV2Options
 			upstreamFingerprint: identityCard.upstreamFingerprint,
 		});
 
-		const handler = options.createHandler(datasource, identityCard);
-		const server = options.listen(handler.fetch);
+		handler = options.createHandler(datasource, identityCard);
+		server = options.listen(handler.fetch);
 
 		logger.info(`${name} (v2) listening on ${server.url}`, { port: server.port, mode: "http" });
+
+		// Non-null past this point: every step above either assigned these or threw, so a
+		// reference here only runs after all of them succeeded.
+		const readyDatasource = datasource;
+		const readyHandler = handler;
+		const readyServer = server;
+		const readyOtelSdk = otelSdk;
 
 		let isShuttingDown = false;
 		const shutdown = async () => {
@@ -101,7 +116,7 @@ export async function createMcpApplicationV2<T>(options: McpApplicationV2Options
 			logger.info(`Shutting down ${name} (v2)...`);
 
 			try {
-				await handler.close();
+				await readyHandler.close();
 			} catch (error) {
 				logger.warn("Error closing v2 handler", {
 					error: error instanceof Error ? error.message : String(error),
@@ -109,7 +124,7 @@ export async function createMcpApplicationV2<T>(options: McpApplicationV2Options
 			}
 
 			try {
-				await server.stop();
+				await readyServer.stop();
 			} catch (error) {
 				logger.warn("Error stopping v2 listener", {
 					error: error instanceof Error ? error.message : String(error),
@@ -118,7 +133,7 @@ export async function createMcpApplicationV2<T>(options: McpApplicationV2Options
 
 			if (options.cleanupDatasource) {
 				try {
-					await options.cleanupDatasource(datasource);
+					await options.cleanupDatasource(readyDatasource);
 				} catch (error) {
 					logger.warn("Error cleaning up datasource", {
 						error: error instanceof Error ? error.message : String(error),
@@ -129,7 +144,7 @@ export async function createMcpApplicationV2<T>(options: McpApplicationV2Options
 			toolMetrics?.close();
 
 			try {
-				await shutdownTelemetry(otelSdk);
+				await shutdownTelemetry(readyOtelSdk);
 			} catch (error) {
 				logger.warn("Error shutting down telemetry", {
 					error: error instanceof Error ? error.message : String(error),
@@ -138,17 +153,51 @@ export async function createMcpApplicationV2<T>(options: McpApplicationV2Options
 
 			if (logger.flush) logger.flush();
 			logger.info(`${name} (v2) shutdown completed`);
-			process.exit(0);
+			// SIO-986 parity: an embedded server's host process owns its own lifecycle -- exiting
+			// here would take the whole host down. Standalone processes still exit (unchanged).
+			if (!options.embedded) process.exit(0);
 		};
 
 		installShutdownSignalHandlers({ embedded: options.embedded, shutdown: () => shutdown() });
 
-		if (options.onStarted) options.onStarted(datasource);
+		if (options.onStarted) options.onStarted(readyDatasource);
 		logger.info(`${name} (v2) started successfully`);
 
-		return { datasource, port: server.port, url: server.url, shutdown };
+		return { datasource: readyDatasource, port: readyServer.port, url: readyServer.url, shutdown };
 	} catch (error) {
+		// SIO-1424 (CodeRabbit): release exactly what was acquired before the failure, in reverse
+		// order -- a partial startup (e.g. listen() throws after createHandler() succeeded) must
+		// not leak the handler/listener/datasource, especially in embedded mode where the process
+		// outlives the failed start.
+		if (server) {
+			try {
+				await server.stop();
+			} catch {
+				// best-effort during failure cleanup
+			}
+		}
+		if (handler) {
+			try {
+				await handler.close();
+			} catch {
+				// best-effort during failure cleanup
+			}
+		}
+		if (datasource !== undefined && options.cleanupDatasource) {
+			try {
+				await options.cleanupDatasource(datasource);
+			} catch {
+				// best-effort during failure cleanup
+			}
+		}
 		toolMetrics?.close();
+		if (otelSdk) {
+			try {
+				await shutdownTelemetry(otelSdk);
+			} catch {
+				// best-effort during failure cleanup
+			}
+		}
 		handleStartupFailure({ error, name, logger, embedded: options.embedded });
 	}
 }
