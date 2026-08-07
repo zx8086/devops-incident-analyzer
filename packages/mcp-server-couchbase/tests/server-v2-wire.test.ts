@@ -365,6 +365,417 @@ describe("SIO-1443 follow-up: capella_list_playbooks respects the loadPlaybooks 
 	});
 });
 
+// SIO-1443 Task 9: representative wire-level coverage across the ported v2 surface.
+//
+// Selection rationale (avoids duplicating existing coverage above): capella_ping already proves
+// the no-arg + graceful-no-connection pattern; capella_read_documentation and
+// capella_list_playbooks already have dedicated fix-round regression suites (disabled-gate and
+// fallback-directory-missing paths). The 4 tools below are chosen instead for genuinely different
+// input shapes AND to touch registration groups (core.ts, echo.ts) with no prior wire coverage.
+//
+// Live-cluster finding (this checkout's .env carries real Capella credentials, unlike the
+// "no live cluster" assumption baked into capella_ping's header comment above): a live probe
+// during this task showed connectionManager.getConnection() sometimes succeeds against the real
+// cluster and sometimes hits an UnambiguousTimeoutError or an "unhealthy" fast-fail, depending on
+// network reachability from this sandbox AND on what earlier tests in the SAME process did to the
+// module-singleton connectionManager (its initializationPromise is cached process-wide -- see
+// connectionManager.ts -- so a full `bun run test` invocation across many files can leave it in a
+// different state than running this file alone). Every core.ts tool (capella_get_buckets,
+// capella_get_document_by_id, capella_run_sql_plus_plus_query included) calls
+// connectionManager.getConnection() UNCONDITIONALLY FIRST, before any of its own guard/validation
+// logic -- so capella_run_sql_plus_plus_query's own full-bucket-path guard is not reachable
+// deterministically either without a live, healthy connection. That non-determinism means any test
+// asserting a SPECIFIC success-or-failure outcome (or a specific error envelope shape) for a
+// tool/resource that calls getConnection() would be flaky. Per this file's own stated goal
+// ("verify PROTOCOL shape... not database connectivity"), the tools below that DO touch the
+// connection are asserted on dispatch/shape only (valid JSON-RPC envelope, a well-formed
+// content/isError shape) -- never on which branch the live network took. Each such test also
+// carries a generous per-test timeout (the observed connect attempt can approach or exceed bun
+// test's 5000ms default) so a slow real network round-trip doesn't itself fail the test.
+//   - capella_get_buckets: no-arg tool (proves the no-arg pattern generalizes to a SECOND tool
+//     beyond capella_ping); dispatch-shape assertions only, per the flakiness note above.
+//   - capella_get_document_by_id: required string params (3 fields) -- proves the Zod inputSchema
+//     accepts a well-formed args object before the tool ever reaches
+//     connectionManager.getConnection(); dispatch-shape assertions only.
+//   - capella_run_sql_plus_plus_query: multi-field schema (scope_name + query) -- proves both
+//     schema fields round-trip through dispatch; dispatch-shape assertions only (its
+//     full-bucket-path guard is NOT reachable deterministically -- see above).
+//   - capella_echo: different registration file (echo.ts, not core.ts); its inputSchema is
+//     z.object({}) (no fields declared), so the SDK's Zod-parse step strips any caller-supplied
+//     arguments before the handler ever sees them -- deterministic without a database connection.
+const LIVE_CONNECTION_TEST_TIMEOUT_MS = 15_000;
+
+describe("SIO-1443 Task 9: representative wire-level coverage across the ported v2 surface", () => {
+	test(
+		"capella_get_buckets: no-arg tool call dispatches through the chokepoint+logging composition",
+		async () => {
+			const handler = buildHandler();
+			const response = await handler.fetch(
+				new Request("http://localhost/mcp", {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						Accept: "application/json, text/event-stream",
+						"Mcp-Method": "tools/call",
+						"Mcp-Name": "capella_get_buckets",
+					},
+					body: JSON.stringify({
+						jsonrpc: "2.0",
+						id: 9,
+						method: "tools/call",
+						params: {
+							name: "capella_get_buckets",
+							arguments: {},
+							_meta: {
+								"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+								"io.modelcontextprotocol/clientCapabilities": {},
+								"io.modelcontextprotocol/clientInfo": { name: "probe", version: "0" },
+							},
+						},
+					}),
+				}),
+			);
+			await handler.close();
+
+			expect(response.status).toBe(200);
+			const body = (await parseJsonRpcBody(response)) as {
+				jsonrpc: string;
+				id: number;
+				result?: { content?: Array<{ type: string; text: string }>; isError?: boolean };
+				error?: unknown;
+			};
+			expect(body.jsonrpc).toBe("2.0");
+			expect(body.id).toBe(9);
+			// Not a protocol-level error either way (a live-network success or a caught DB failure are
+			// both legitimate JSON-RPC results at the protocol layer) -- proves the no-arg tool
+			// dispatched through the read-only chokepoint + logging wrap, independent of live network
+			// reachability from this sandbox (see the file-level comment above).
+			expect(body.error).toBeUndefined();
+			expect(body.result?.content?.[0]?.type).toBe("text");
+			expect(typeof body.result?.isError === "boolean" || body.result?.isError === undefined).toBe(true);
+		},
+		LIVE_CONNECTION_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"capella_get_document_by_id: required string params are accepted by the Zod inputSchema and the tool dispatches",
+		async () => {
+			const handler = buildHandler();
+			const response = await handler.fetch(
+				new Request("http://localhost/mcp", {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						Accept: "application/json, text/event-stream",
+						"Mcp-Method": "tools/call",
+						"Mcp-Name": "capella_get_document_by_id",
+					},
+					body: JSON.stringify({
+						jsonrpc: "2.0",
+						id: 10,
+						method: "tools/call",
+						params: {
+							name: "capella_get_document_by_id",
+							arguments: { scope_name: "inventory", collection_name: "b2b", document_id: "sio-1443-task-9-probe" },
+							_meta: {
+								"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+								"io.modelcontextprotocol/clientCapabilities": {},
+								"io.modelcontextprotocol/clientInfo": { name: "probe", version: "0" },
+							},
+						},
+					}),
+				}),
+			);
+			await handler.close();
+
+			expect(response.status).toBe(200);
+			const body = (await parseJsonRpcBody(response)) as {
+				jsonrpc: string;
+				id: number;
+				result?: { content?: Array<{ type: string; text: string }>; isError?: boolean };
+				error?: unknown;
+			};
+			expect(body.jsonrpc).toBe("2.0");
+			expect(body.id).toBe(10);
+			// Proves the 3 required string params were accepted by the Zod inputSchema (a malformed-args
+			// request would fail differently, at the schema layer, with a top-level JSON-RPC error before
+			// ever reaching connectionManager.getConnection()) -- the tool genuinely dispatched. The
+			// live-network outcome itself (document found/not-found/connection timeout) is not asserted;
+			// see the file-level comment above.
+			expect(body.error).toBeUndefined();
+			expect(body.result?.content?.[0]?.type).toBe("text");
+		},
+		LIVE_CONNECTION_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"capella_run_sql_plus_plus_query: complex multi-field schema (scope_name + query) dispatches",
+		async () => {
+			const handler = buildHandler();
+			const response = await handler.fetch(
+				new Request("http://localhost/mcp", {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						Accept: "application/json, text/event-stream",
+						"Mcp-Method": "tools/call",
+						"Mcp-Name": "capella_run_sql_plus_plus_query",
+					},
+					body: JSON.stringify({
+						jsonrpc: "2.0",
+						id: 11,
+						method: "tools/call",
+						params: {
+							name: "capella_run_sql_plus_plus_query",
+							arguments: {
+								scope_name: "inventory",
+								query: "SELECT * FROM `b2b` LIMIT 1",
+							},
+							_meta: {
+								"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+								"io.modelcontextprotocol/clientCapabilities": {},
+								"io.modelcontextprotocol/clientInfo": { name: "probe", version: "0" },
+							},
+						},
+					}),
+				}),
+			);
+			await handler.close();
+
+			expect(response.status).toBe(200);
+			const body = (await parseJsonRpcBody(response)) as {
+				jsonrpc: string;
+				id: number;
+				result?: { content?: Array<{ type: string; text: string }>; isError?: boolean };
+				error?: unknown;
+			};
+			expect(body.jsonrpc).toBe("2.0");
+			expect(body.id).toBe(11);
+			// Proves both schema fields (scope_name + query) were accepted and the tool dispatched --
+			// the live-network outcome (query success, no-index error, or connection failure) is not
+			// asserted; see the file-level comment above.
+			expect(body.error).toBeUndefined();
+			expect(body.result?.content?.[0]?.type).toBe("text");
+		},
+		LIVE_CONNECTION_TEST_TIMEOUT_MS,
+	);
+
+	test("capella_echo: different registration group (echo.ts) dispatches; its empty inputSchema strips caller arguments", async () => {
+		const handler = buildHandler();
+		const response = await handler.fetch(
+			new Request("http://localhost/mcp", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Accept: "application/json, text/event-stream",
+					"Mcp-Method": "tools/call",
+					"Mcp-Name": "capella_echo",
+				},
+				body: JSON.stringify({
+					jsonrpc: "2.0",
+					id: 12,
+					method: "tools/call",
+					params: {
+						name: "capella_echo",
+						arguments: { probe: "sio-1443-task-9" },
+						_meta: {
+							"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+							"io.modelcontextprotocol/clientCapabilities": {},
+							"io.modelcontextprotocol/clientInfo": { name: "probe", version: "0" },
+						},
+					},
+				}),
+			}),
+		);
+		await handler.close();
+
+		expect(response.status).toBe(200);
+		const body = (await parseJsonRpcBody(response)) as {
+			jsonrpc: string;
+			id: number;
+			result?: { content?: Array<{ type: string; text: string }>; isError?: boolean };
+			error?: unknown;
+		};
+		expect(body.jsonrpc).toBe("2.0");
+		expect(body.id).toBe(12);
+		expect(body.result?.isError).not.toBe(true);
+		// capella_echo's inputSchema is z.object({}) -- no fields declared -- so the SDK's Zod-parse
+		// step strips the caller's "probe" argument before the handler ever sees it, and the handler
+		// echoes back exactly what it received: an empty object. This is correct v2 behavior (not a
+		// bug), confirming the tool dispatched and its schema was actually enforced by the SDK.
+		expect(body.result?.content?.[0]?.text).toBe(JSON.stringify({}));
+	});
+
+	test(
+		"resources/read: database-structure (static resource) dispatches through the real handler, not a protocol error",
+		async () => {
+			const handler = buildHandler();
+			const response = await handler.fetch(
+				new Request("http://localhost/mcp", {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						Accept: "application/json, text/event-stream",
+						"Mcp-Method": "resources/read",
+						"Mcp-Name": "database://structure",
+					},
+					body: JSON.stringify({
+						jsonrpc: "2.0",
+						id: 13,
+						method: "resources/read",
+						params: {
+							uri: "database://structure",
+							_meta: {
+								"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+								"io.modelcontextprotocol/clientCapabilities": {},
+								"io.modelcontextprotocol/clientInfo": { name: "probe", version: "0" },
+							},
+						},
+					}),
+				}),
+			);
+			await handler.close();
+
+			expect(response.status).toBe(200);
+			const body = (await parseJsonRpcBody(response)) as {
+				jsonrpc: string;
+				id: number;
+				result?: { contents?: Array<{ uri: string; mimeType: string; text: string }> };
+				error?: unknown;
+			};
+			expect(body.jsonrpc).toBe("2.0");
+			expect(body.id).toBe(13);
+			// database-structure's handler catches its own errors and always returns { contents } (a
+			// genuine 200 success at the wire level) whether or not the underlying getConnection() call
+			// succeeds against the live cluster -- unlike the gated documentation resources below, this
+			// is not a throw-on-disabled scenario. The load-bearing assertion is that the real static-URI
+			// resource dispatched to its own handler and returned resource content addressed by the
+			// requested URI (not a JSON-RPC protocol error) -- the live-network outcome itself is not
+			// asserted; see the file-level comment above.
+			expect(body.error).toBeUndefined();
+			expect(body.result?.contents?.[0]?.uri).toBe("database://structure");
+			expect(typeof body.result?.contents?.[0]?.text).toBe("string");
+			expect((body.result?.contents?.[0]?.text?.length ?? 0) > 0).toBe(true);
+		},
+		LIVE_CONNECTION_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"resources/read: query-results (dynamic ResourceTemplate) extracts {scope}/{encodedQuery} variables and dispatches",
+		async () => {
+			const handler = buildHandler();
+			// The {scope} and {encodedQuery} template variables are asserted via the response's own uri
+			// field (see below), which round-trips the exact request URI regardless of which branch the
+			// live network took inside the handler -- deterministic proof of template-variable
+			// extraction without depending on cluster reachability from this sandbox.
+			const encodedQuery = encodeURIComponent("SELECT META().id FROM `b2b` LIMIT 1");
+			const uri = `query://inventory/${encodedQuery}`;
+			const response = await handler.fetch(
+				new Request("http://localhost/mcp", {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						Accept: "application/json, text/event-stream",
+						"Mcp-Method": "resources/read",
+						"Mcp-Name": uri,
+					},
+					body: JSON.stringify({
+						jsonrpc: "2.0",
+						id: 14,
+						method: "resources/read",
+						params: {
+							uri,
+							_meta: {
+								"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+								"io.modelcontextprotocol/clientCapabilities": {},
+								"io.modelcontextprotocol/clientInfo": { name: "probe", version: "0" },
+							},
+						},
+					}),
+				}),
+			);
+			await handler.close();
+
+			expect(response.status).toBe(200);
+			const body = (await parseJsonRpcBody(response)) as {
+				jsonrpc: string;
+				id: number;
+				result?: { contents?: Array<{ uri: string; mimeType: string; text: string }> };
+				error?: unknown;
+			};
+			expect(body.jsonrpc).toBe("2.0");
+			expect(body.id).toBe(14);
+			expect(body.error).toBeUndefined();
+			// The load-bearing assertion: the response's own uri field round-trips the exact request URI
+			// (ResponseBuilder...buildResourceResponse(uri.href)), proving the ResourceTemplate correctly
+			// matched and dispatched with {scope}="inventory" and {encodedQuery}=<the encoded SELECT
+			// statement> extracted from the URI path segments, not just that SOME handler ran.
+			expect(body.result?.contents?.[0]?.uri).toBe(uri);
+			expect(typeof body.result?.contents?.[0]?.text).toBe("string");
+		},
+		LIVE_CONNECTION_TEST_TIMEOUT_MS,
+	);
+
+	test("prompts/get: generate_sqlpp_query returns a well-formed prompt message referencing the supplied bucket/scope/collection", async () => {
+		const handler = buildHandler();
+		const response = await handler.fetch(
+			new Request("http://localhost/mcp", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Accept: "application/json, text/event-stream",
+					"Mcp-Method": "prompts/get",
+					"Mcp-Name": "generate_sqlpp_query",
+				},
+				body: JSON.stringify({
+					jsonrpc: "2.0",
+					id: 15,
+					method: "prompts/get",
+					params: {
+						name: "generate_sqlpp_query",
+						arguments: {
+							description: "find all hotels in the UK",
+							bucket: "travel-sample",
+							scope: "inventory",
+							collection: "hotel",
+							filters: "country = 'United Kingdom'",
+							limit: "10",
+						},
+						_meta: {
+							"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+							"io.modelcontextprotocol/clientCapabilities": {},
+							"io.modelcontextprotocol/clientInfo": { name: "probe", version: "0" },
+						},
+					},
+				}),
+			}),
+		);
+		await handler.close();
+
+		expect(response.status).toBe(200);
+		const body = (await parseJsonRpcBody(response)) as {
+			jsonrpc: string;
+			id: number;
+			result?: { messages?: Array<{ role: string; content?: { type?: string; text?: string } }> };
+			error?: unknown;
+		};
+		expect(body.jsonrpc).toBe("2.0");
+		expect(body.id).toBe(15);
+		expect(body.error).toBeUndefined();
+		const message = body.result?.messages?.[0];
+		expect(message?.role).toBe("user");
+		expect(message?.content?.type).toBe("text");
+		// Not byte-identical parity with v1 (out of scope per the task brief) -- asserts the
+		// callback actually consumed the supplied arguments (bucket/scope/collection/description)
+		// rather than returning a generic or empty template.
+		const text = message?.content?.text ?? "";
+		expect(text).toContain("find all hotels in the UK");
+		expect(text).toContain("`travel-sample`");
+		expect(text).toContain("`inventory`");
+		expect(text).toContain("`hotel`");
+	});
+});
+
 describe("SIO-1443 Critical fix: documentation resources (resources/read) genuinely fail, not 200-success with error text", () => {
 	const priorDocumentation = config.documentation;
 
