@@ -367,12 +367,15 @@ function findRunbookCategoryPathsByName(agentDir: string): [string, string][] {
 	} catch {
 		return DEFAULT_RUNBOOK_CATEGORY;
 	}
-	const categories = (parsed as { categories?: Record<string, { path?: string }> } | undefined)?.categories;
-	if (!categories) return DEFAULT_RUNBOOK_CATEGORY;
+	const categories = (parsed as { categories?: Record<string, unknown> } | undefined)?.categories;
+	if (!categories || typeof categories !== "object") return DEFAULT_RUNBOOK_CATEGORY;
 	const runbookCategories = Object.entries(categories)
 		.filter(([category]) => isRunbookCategory(category))
-		.filter((entry): entry is [string, { path: string }] => typeof entry[1].path === "string")
-		.map(([category, config]): [string, string] => [category, config.path]);
+		.map(([category, config]): [string, unknown] => [
+			category,
+			config && typeof config === "object" ? (config as { path?: unknown }).path : undefined,
+		])
+		.filter((entry): entry is [string, string] => typeof entry[1] === "string");
 	return runbookCategories.length > 0 ? runbookCategories : DEFAULT_RUNBOOK_CATEGORY;
 }
 

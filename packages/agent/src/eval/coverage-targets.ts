@@ -86,12 +86,12 @@ function resolveRunbookDirs(runbookDir: string): string[] {
 	} catch {
 		return [runbookDir];
 	}
-	const categories = (parsed as { categories?: Record<string, { path?: string }> } | undefined)?.categories;
-	if (!categories) return [runbookDir];
+	const categories = (parsed as { categories?: Record<string, unknown> } | undefined)?.categories;
+	if (!categories || typeof categories !== "object") return [runbookDir];
 
 	const dirs = Object.entries(categories)
 		.filter(([category]) => isRunbookCategory(category))
-		.map(([, config]) => config.path)
+		.map(([, config]) => (config && typeof config === "object" ? (config as { path?: unknown }).path : undefined))
 		.filter((p): p is string => typeof p === "string")
 		.map((p) => join(knowledgeDir, p));
 

@@ -158,7 +158,7 @@ span sources). Pick the subfolder matching your runbook's primary datasource; if
 fits, use `cross-datasource/`. Placing the file in the right subfolder is the only
 registration step for an EXISTING datasource -- there is no per-file manifest entry:
 
-```
+```text
 agents/incident-analyzer/knowledge/
   index.yaml
   runbooks/
@@ -308,7 +308,7 @@ Scenario: a new failure pattern where Konnect upstream timeouts correlate with K
 4. `bun run yaml:check && bun run typecheck && bun run lint`.
 5. Submit an incident query matching the new pattern and verify the aggregator's correlation block cites the runbook.
 
-If the datasource already has a `runbooks-<datasource>/` category (e.g. adding another
+If the datasource already has a `runbooks-<datasource>` category (e.g. adding another
 AWS runbook), skip step 1 -- drop the file directly into the existing subfolder.
 
 ---

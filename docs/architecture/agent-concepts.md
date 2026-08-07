@@ -150,9 +150,9 @@ runbook_selection:        # SIO-640: severity-keyed fallback when the LLM router
 
 ### Loading
 
-`loadKnowledge()` (`packages/gitagent-bridge/src/manifest-loader.ts`) reads `index.yaml`, validates against `KnowledgeIndexSchema`, then walks each category's `path` loading every `*.md` file **directly** under it (no subdirectory recursion). Files in the `runbooks` category get their optional YAML frontmatter parsed (`triggers`: severity/services/metrics) via `parseRunbookFrontmatter()`; other categories load verbatim. When `index.yaml` is absent (GAP agents), it falls back to auto-discovering the manifest's `knowledge:` list.
+`loadKnowledge()` (`packages/gitagent-bridge/src/manifest-loader.ts`) reads `index.yaml`, validates against `KnowledgeIndexSchema`, then walks each category's `path` loading every `*.md` file **directly** under it (no subdirectory recursion). Files in any *runbook category* -- a category whose name is exactly `runbooks` or prefixed `runbooks-` (`isRunbookCategory()`), covering both the flat single-folder shape and the per-datasource `runbooks-aws`/`runbooks-kafka`/... shape -- get their optional YAML frontmatter parsed (`triggers`: severity/services/metrics) via `parseRunbookFrontmatter()`; other categories load verbatim. When `index.yaml` is absent (GAP agents), it falls back to auto-discovering the manifest's `knowledge:` list.
 
-`runbook_selection` (SIO-640) is validated at load time — every filename it names must exist under the runbooks path, or the load throws. It feeds the incident-analyzer's lazy `selectRunbooks` node; the IaC graph has no such node, so elastic-iac omits it.
+`runbook_selection` (SIO-640) is validated at load time — every filename it names (a bare basename, no datasource prefix) must exist under the `path` of at least one runbook category, checked as a union across all of them, or the load throws. It feeds the incident-analyzer's lazy `selectRunbooks` node; the IaC graph has no such node, so elastic-iac omits it.
 
 ### Into the prompt
 
