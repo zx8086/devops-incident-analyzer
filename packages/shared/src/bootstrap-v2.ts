@@ -108,54 +108,58 @@ export async function createMcpApplicationV2<T>(options: McpApplicationV2Options
 		const readyServer = server;
 		const readyOtelSdk = otelSdk;
 
-		let isShuttingDown = false;
-		const shutdown = async () => {
-			if (isShuttingDown) return;
-			isShuttingDown = true;
+		// SIO-1424 (CodeRabbit): a second concurrent shutdown() call must wait for the FIRST call's
+		// cleanup to actually finish, not resolve immediately -- store the in-flight promise and
+		// return it to every caller instead of a bare early return.
+		let shutdownPromise: Promise<void> | undefined;
+		const shutdown = (): Promise<void> => {
+			if (shutdownPromise) return shutdownPromise;
+			shutdownPromise = (async () => {
+				logger.info(`Shutting down ${name} (v2)...`);
 
-			logger.info(`Shutting down ${name} (v2)...`);
-
-			try {
-				await readyHandler.close();
-			} catch (error) {
-				logger.warn("Error closing v2 handler", {
-					error: error instanceof Error ? error.message : String(error),
-				});
-			}
-
-			try {
-				await readyServer.stop();
-			} catch (error) {
-				logger.warn("Error stopping v2 listener", {
-					error: error instanceof Error ? error.message : String(error),
-				});
-			}
-
-			if (options.cleanupDatasource) {
 				try {
-					await options.cleanupDatasource(readyDatasource);
+					await readyHandler.close();
 				} catch (error) {
-					logger.warn("Error cleaning up datasource", {
+					logger.warn("Error closing v2 handler", {
 						error: error instanceof Error ? error.message : String(error),
 					});
 				}
-			}
 
-			toolMetrics?.close();
+				try {
+					await readyServer.stop();
+				} catch (error) {
+					logger.warn("Error stopping v2 listener", {
+						error: error instanceof Error ? error.message : String(error),
+					});
+				}
 
-			try {
-				await shutdownTelemetry(readyOtelSdk);
-			} catch (error) {
-				logger.warn("Error shutting down telemetry", {
-					error: error instanceof Error ? error.message : String(error),
-				});
-			}
+				if (options.cleanupDatasource) {
+					try {
+						await options.cleanupDatasource(readyDatasource);
+					} catch (error) {
+						logger.warn("Error cleaning up datasource", {
+							error: error instanceof Error ? error.message : String(error),
+						});
+					}
+				}
 
-			if (logger.flush) logger.flush();
-			logger.info(`${name} (v2) shutdown completed`);
-			// SIO-986 parity: an embedded server's host process owns its own lifecycle -- exiting
-			// here would take the whole host down. Standalone processes still exit (unchanged).
-			if (!options.embedded) process.exit(0);
+				toolMetrics?.close();
+
+				try {
+					await shutdownTelemetry(readyOtelSdk);
+				} catch (error) {
+					logger.warn("Error shutting down telemetry", {
+						error: error instanceof Error ? error.message : String(error),
+					});
+				}
+
+				if (logger.flush) logger.flush();
+				logger.info(`${name} (v2) shutdown completed`);
+				// SIO-986 parity: an embedded server's host process owns its own lifecycle --
+				// exiting here would take the whole host down. Standalone processes still exit.
+				if (!options.embedded) process.exit(0);
+			})();
+			return shutdownPromise;
 		};
 
 		installShutdownSignalHandlers({ embedded: options.embedded, shutdown: () => shutdown() });
