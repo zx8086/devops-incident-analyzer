@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { extractElasticFindings } from "./correlation/extractors/elastic.ts";
+import { extractKafkaFindings } from "./correlation/extractors/kafka.ts";
 import { buildPersistedToolOutput, normalizeToolContent } from "./sub-agent.ts";
 import { instrumentTools, type RawToolOutput } from "./sub-agent-instrumentation.ts";
 
@@ -115,12 +116,15 @@ describe("SIO-1248 in-flight cap vs persisted fidelity", () => {
 describe("SIO-1425/1437 structuredContent capture", () => {
 	test("captures ToolMessage.artifact's mcp_structured_content alongside text content", async () => {
 		const structured = { groupId: "g1", totalLag: "42", topics: [] };
-		const fake = tool(async () => [JSON.stringify(structured), [{ type: "mcp_structured_content", data: structured }]], {
-			name: "kafka_get_consumer_group_lag",
-			description: "x",
-			schema: z.object({}),
-			responseFormat: "content_and_artifact",
-		});
+		const fake = tool(
+			async () => [JSON.stringify(structured), [{ type: "mcp_structured_content", data: structured }]],
+			{
+				name: "kafka_get_consumer_group_lag",
+				description: "x",
+				schema: z.object({}),
+				responseFormat: "content_and_artifact",
+			},
+		);
 
 		const rawOutputs: RawToolOutput[] = [];
 		const wrapped = instrumentTools([fake], {
@@ -155,5 +159,68 @@ describe("SIO-1425/1437 structuredContent capture", () => {
 
 		expect(rawOutputs).toHaveLength(1);
 		expect(rawOutputs[0]?.structuredContent).toBeUndefined();
+	});
+
+	test("end-to-end: kafka_get_consumer_group_lag structuredContent reaches extractKafkaFindings identically to text re-parse", async () => {
+		const structured = {
+			groupId: "checkout-workers",
+			groupState: "Stable",
+			totalLag: "150",
+			topics: [
+				{
+					topic: "orders",
+					partitions: [
+						{
+							partition: 0,
+							committedOffset: "100",
+							latestOffset: "250",
+							lag: "150",
+						},
+					],
+					totalLag: "150",
+				},
+			],
+		};
+		const fake = tool(
+			async () => [JSON.stringify(structured), [{ type: "mcp_structured_content", data: structured }]],
+			{
+				name: "kafka_get_consumer_group_lag",
+				description: "x",
+				schema: z.object({}),
+				responseFormat: "content_and_artifact",
+			},
+		);
+
+		const rawOutputs: RawToolOutput[] = [];
+		const wrapped = instrumentTools([fake], {
+			dataSourceId: "kafka",
+			log: { info: () => {}, warn: () => {} },
+			rawOutputs,
+		})[0];
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+		await wrapped.invoke({
+			id: "c",
+			name: "kafka_get_consumer_group_lag",
+			args: {},
+			type: "tool_call",
+		});
+
+		const raw = rawOutputs[0];
+		if (!raw) throw new Error("no raw output captured");
+		const persisted = buildPersistedToolOutput(
+			raw.toolName,
+			normalizeToolContent(raw.content),
+			65_536,
+			raw.structuredContent,
+		);
+
+		const findings = extractKafkaFindings([
+			{ toolName: "kafka_get_consumer_group_lag", rawJson: persisted.rawJson },
+		] as never);
+
+		expect(findings.consumerGroups).toHaveLength(1);
+		expect(findings.consumerGroups?.[0]?.id).toBe("checkout-workers");
+		expect(findings.consumerGroups?.[0]?.totalLag).toBe(150);
 	});
 });
