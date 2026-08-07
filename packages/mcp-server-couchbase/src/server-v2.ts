@@ -15,6 +15,7 @@ import {
 } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { connectionManager } from "./lib/connectionManager.ts";
+import { registerResourcesV2 } from "./v2/resources.ts";
 import { installReadOnlyChokepointV2, installToolCallLoggingV2, type ToolCallLogger } from "./v2/tool-call-wrappers.ts";
 import { registerCoreToolsV2 } from "./v2/tools/core.ts";
 import { registerDocumentationToolsV2 } from "./v2/tools/documentation.ts";
@@ -110,6 +111,14 @@ export function buildServerFactory(logger: ToolCallLogger): McpServerFactory {
 
 		// SIO-1443: echo tool (diagnostic/connectivity-test tool for debugging).
 		registerEchoToolV2(server, tools);
+
+		// SIO-1443: all 11 v1 resources (document, database-structure, query-results,
+		// collection-schema, 4 documentation resources, playbook-directory + N discovered
+		// playbooks). Not chokepoint/logging-wrapped -- v1 doesn't wrap resources either -- so
+		// this call sits outside the tools Map entirely and can run in any order relative to the
+		// wrap calls below. Async: the playbook loop must know the discovered playbook IDs before
+		// registering (see resources.ts's own header comment).
+		await registerResourcesV2(server);
 
 		// SIO-1424: composition order matches v1's serverFactory closure in bootstrap.ts --
 		// read-only INNER (installed first), tool-call logging OUTER (installed second, so a
