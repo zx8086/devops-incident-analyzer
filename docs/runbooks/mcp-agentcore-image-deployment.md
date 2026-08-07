@@ -2,7 +2,7 @@
 
 **Scope:** Deploy a new container image to an existing Bedrock AgentCore MCP runtime (image swap only — estates, env vars, and network config are preserved). Covers the Kafka and AWS runtimes; the procedure is identical except for the per-runtime values below.
 
-**Last validated:** 2026-07-19 — kafka v11 -> v12 and aws v9 -> v10 deploys (SIO-1161), following the SIO-710 hotfix deploy (v8 -> v10) that originated this runbook.
+**Last validated:** 2026-08-06 — kafka v14 -> v16 and aws v11 -> v13 deploys (SIO-1400/1402/1407), following the 2026-07-19 kafka v11 -> v12 / aws v9 -> v10 deploy (SIO-1161) and the SIO-710 hotfix deploy (v8 -> v10) that originated this runbook.
 
 ---
 
@@ -140,6 +140,12 @@ A hand-rolled `invoke-agent-runtime` JSON-RPC probe can misreport a 400 from an 
 No image is deleted from ECR by a normal deploy, so rollback is always available: edit `containerUri` back to the previous known-good digest and re-run step 5. This creates a new version pointing at the old image, READY within a minute.
 
 ## Lessons learned
+
+**2026-08-06 (kafka v14 -> v16, aws v11 -> v13, SIO-1400/1402/1407):**
+
+- `Dockerfile.agentcore`'s deps stage `COPY`s an explicit, hand-maintained list of workspace `package.json` files rather than globbing `packages/*/package.json`. When SIO-1388 added `packages/tools-verify` it was never added to that list, so `bun install --frozen-lockfile` failed inside the container (workspace member missing from the copied context) while passing cleanly on the host (`bun install --frozen-lockfile --dry-run` sees the real, complete workspace). If a build fails at that step with "lockfile had changes, but lockfile is frozen" and the host-side dry-run is clean, suspect a `Dockerfile.agentcore` COPY-list drift before suspecting the lockfile itself — diff `ls packages/*/package.json` against the `COPY packages/.../package.json` lines.
+- `docker push` to this ECR repo intermittently 403'd mid-push (`unexpected status from HEAD request ... 403 Forbidden`) on both images, after a `Login Succeeded` and after the build/smoke-test already passed. Re-running `aws ecr get-login-password | docker login` and retrying the same `docker push` immediately succeeded both times (already-pushed layers correctly reported `Layer already exists`). Treat this as a transient token/session hiccup first: re-login and retry before anything else. Only if the retry still 403s should you move on to checking IAM permissions, the AWS account/region, and the target repository policy — don't rule those out entirely on the strength of two occurrences resolving on retry.
+- **Do not enable `MCP_TOOL_METRICS_DB_PATH` on the kafka/aws AgentCore runtimes.** The SIO-1400/1402 tool-call metrics feature (`packages/shared/src/tool-call-metrics.ts`) writes to a local `bun:sqlite` file opened directly by the process — there is no network write path. It works for local dev because every MCP server process shares one filesystem via `.env`. In production, kafka and aws run as two separate AgentCore containers with no shared filesystem with each other or with `apps/web`; setting the env var on both just creates two isolated, unreadable, `/tmp`-ephemeral files (wiped on every redeploy) that nobody can query. It was set live on both runtimes on 2026-08-06 as a stopgap, immediately recognized as inert (`apps/web` has no read path to either container's disk), and removed the same day. If central tool-call visibility is wanted, use the SigV4 proxy's existing CloudWatch logging instead (`Tool call started: <name>` / `tools/call ok` per runtime's log group — see Verification above) — it already provides this without the architecture gap. Centralizing the SQLite-based counters into `apps/web` would need a real design change (counters shipped over HTTP to `apps/web`, or written to a store `apps/web` can query) — file a ticket rather than re-attempting the env var.
 
 **2026-07-19 (kafka v11 -> v12, aws v9 -> v10, SIO-1161):**
 

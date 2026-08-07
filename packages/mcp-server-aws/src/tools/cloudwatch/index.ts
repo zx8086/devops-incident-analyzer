@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AwsConfig } from "../../config/schemas.ts";
 import { AWS_READ_ONLY_ANNOTATIONS } from "../annotations.ts";
 import { withEstate } from "../estate-schema.ts";
+import { describeAlarmsOutputSchema } from "../output-schemas.ts";
 import { toMcp } from "../wrap.ts";
 import { type DescribeAlarmsParams, describeAlarms, describeAlarmsSchema } from "./describe-alarms.ts";
 import { type GetMetricDataParams, getMetricData, getMetricDataSchema } from "./get-metric-data.ts";
@@ -43,8 +44,16 @@ export function registerCloudWatchTools(server: McpServer, config: AwsConfig): v
 		{
 			description: "List or describe CloudWatch metric alarms with current state, threshold, and comparison operator.",
 			inputSchema: withEstate(config, describeAlarmsSchema.shape),
+			outputSchema: describeAlarmsOutputSchema,
 			annotations: AWS_READ_ONLY_ANNOTATIONS,
 		},
-		async (params) => toMcp(await alarms(params as DescribeAlarmsParams)),
+		async (params) => {
+			const result = await alarms(params as DescribeAlarmsParams);
+			// wrapListTool's return type has no index signature (raw AWS SDK response shape);
+			// structuredContent is validated against describeAlarmsOutputSchema at the SDK
+			// boundary, so this is a type-level widening of an already-plain-object value, not
+			// an unchecked cast.
+			return { ...toMcp(result), structuredContent: result as Record<string, unknown> };
+		},
 	);
 }

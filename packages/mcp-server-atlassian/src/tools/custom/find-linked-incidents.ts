@@ -257,6 +257,7 @@ export function registerFindLinkedIncidents(
 				withinDays: z.number().int().positive().default(30).describe("How many days back to search"),
 				limit: z.number().int().positive().default(10).describe("Maximum number of issues to return"),
 			},
+			outputSchema: OutputSchema.shape,
 			annotations: CUSTOM_READ_ONLY_ANNOTATIONS,
 		},
 		async (args) => {
@@ -279,7 +280,10 @@ export function registerFindLinkedIncidents(
 					const warnings = [effective.configWarning, output.configWarning].filter((w): w is string => w !== undefined);
 					const payload: FindLinkedIncidentsOutput =
 						warnings.length > 0 ? { ...output, configWarning: warnings.join(" ") } : output;
-					return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }] };
+					return {
+						content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+						structuredContent: payload,
+					};
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					log.error({ error: message }, "findLinkedIncidents tool failed");
