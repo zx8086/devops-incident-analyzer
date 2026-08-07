@@ -190,7 +190,7 @@ describe("SIO-1256: the AWS registration-order fixture matches the real MCP serv
 			const path = imports.get(key);
 			if (!path) throw new Error(`no import found for register${key}`);
 			const src = await Bun.file(join(AWS_MCP_TOOLS_DIR, path)).text();
-			for (const t of src.matchAll(/server\.tool\(\s*"(aws_[a-z0-9_]+)"/g)) {
+			for (const t of src.matchAll(/server\.registerTool\(\s*"(aws_[a-z0-9_]+)"/g)) {
 				const name = t[1];
 				if (name) names.push(name);
 			}
