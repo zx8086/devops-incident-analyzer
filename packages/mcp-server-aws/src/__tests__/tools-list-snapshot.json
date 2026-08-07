@@ -1,0 +1,492 @@
+{
+	"aws_cloudformation_describe_stack_events": {
+		"surfaceHash": "191adbc3d4243d2c29f885f1497de598084919c9e9ca46e6121c5a0dd0a477b1",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_cloudformation_describe_stacks": {
+		"surfaceHash": "c55ada932b5a958e2598c4a9d7401e6a610f1e1e20c833d9bcbc9572df1cac7c",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_cloudformation_list_stacks": {
+		"surfaceHash": "5c042db82a60714d8ac711008226d09666f9fda8d620759c4fdaff3c2826f4ce",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_cloudtrail_describe_trails": {
+		"surfaceHash": "0c3a18a6da7413a74a226a3570ae23007b2d51a692dd109c24ae6e91c45b9b8d",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_cloudtrail_get_trail_status": {
+		"surfaceHash": "cc600495b4d8193393eb69ef24ad74dada8f28c4d7e18147cde29b2027fe3104",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_cloudtrail_list_trails": {
+		"surfaceHash": "760d75d147133b9f371a5206a57dd46af656bc9d89f8804fca04ac8d4fc5acb0",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_cloudwatch_describe_alarms": {
+		"surfaceHash": "0e01ddc42a4d5d98da37f78ba625a5fb70e425e80b26561844a4134589ed11ae",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_cloudwatch_get_metric_data": {
+		"surfaceHash": "8f4ad5677b9c2aea0ba8060639b469188f60597787f1bacaf167d28571bc1205",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_cloudwatch_metrics_insights_query": {
+		"surfaceHash": "9bf1a8af36369d8a9c199a1593882a33c1a0f931f9342766c5031906d8c6b10f",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_config_describe_config_rules": {
+		"surfaceHash": "d7eeda5a9813594fe9666c74b48914fffa285e46d330c0245ea80774d48492cb",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_config_get_discovered_resource_counts": {
+		"surfaceHash": "d2277d097cb8ade8822c5da4a871427a8f8562c596d99edb8fc8a320a91fe1c2",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_config_list_discovered_resources": {
+		"surfaceHash": "964a865ded7c8d2f18730a17fdad9c678586445600434652aa6e82fcdd1f904a",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_dynamodb_describe_table": {
+		"surfaceHash": "fedb1e224f06b9444fbdbd3affbc242d5014c117c7f9e0a7168df939101b00bd",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_dynamodb_list_tables": {
+		"surfaceHash": "0d3db9af82c5afe76afa5e5e89ded8cb8cab9c7164d06ecb7bf5d00205eaf0ab",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_ec2_describe_flow_logs": {
+		"surfaceHash": "3e7b88f1c0fa8f22de5eb88922a0eb36a16250f4156b563a3760c7c3fef18ba6",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_ec2_describe_instances": {
+		"surfaceHash": "852bdb9ed6767c524cf03e2d133f944c8d2426b212053361defa5e719af97ae1",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_ec2_describe_nat_gateways": {
+		"surfaceHash": "452890c19e2f220fbae46a0f5038fb6e230f1f2119957e85fcb92353117d567e",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_ec2_describe_network_acls": {
+		"surfaceHash": "61a47fc6e2ac1786608a0f080a3b610f27bb23c1fbcd9642c5eb58587ee0f2cf",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_ec2_describe_network_interfaces": {
+		"surfaceHash": "876a50f5832ca32fc00548cd8960d53f3c6683f966ab97b07118b1ae55681018",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_ec2_describe_route_tables": {
+		"surfaceHash": "4f5d98f2269170c94ba1ef2ceb0e9ace65a06ee895df9484648b4565b4de4e7d",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_ec2_describe_security_groups": {
+		"surfaceHash": "dd2620886c4573d32c7c2f7847bee854c5fd7c53f661f10b562d7bbcf1a44fcf",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_ec2_describe_subnets": {
+		"surfaceHash": "a5a7c0aa4c7347b857b44346885abf9663d07895956af136af59e3bfa496df48",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_ec2_describe_transit_gateways": {
+		"surfaceHash": "425462c2f59f8805458f63051c19efb76b88050b72b441096354c72f9a454b23",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_ec2_describe_vpc_endpoints": {
+		"surfaceHash": "655831b0385be7405902a1146095ba06759c171b0475f9419e12b4c64d67bc29",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_ec2_describe_vpc_peering_connections": {
+		"surfaceHash": "b34635a40abb8bb4262d8aef455e733373d6d3174fa45eef9e55a969a10443f7",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_ec2_describe_vpcs": {
+		"surfaceHash": "a96e23dd58a44ab47c772295666290c329263c714f548a8fff89a80e6a2625b0",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_ecs_describe_services": {
+		"surfaceHash": "b03b9a882a79a04449bcba89e8f8661bf129d57cc5beb447566a27396819b7b7",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_ecs_describe_task_definition": {
+		"surfaceHash": "3b09d8cef693f8e89e38cf781e325af92d8c039a6a2d8763e40227cfdb4b3260",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_ecs_describe_tasks": {
+		"surfaceHash": "2052fc1491b45237ccdc98fbe36caed55ddb0b9c36fe673b9770ec39580f76ee",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_ecs_list_clusters": {
+		"surfaceHash": "7dfaf692ec4497d04b8bc62fb5d28a777cacd3b9a2599e21a3c3e891e9f71d50",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_ecs_list_services": {
+		"surfaceHash": "50f9c2dceef0e7bd37e322b9ff6f5bd75c0783d23704c6440844f4e694e6e4aa",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_ecs_list_tasks": {
+		"surfaceHash": "f9339e75fd3497df7e9a6e04ff4dd401b1480e870bc4238574ec2a6a54922ce0",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_elasticache_describe_cache_clusters": {
+		"surfaceHash": "ba12c2e47381e7a6dc3863982a9ec84cb8d2ec1371e655f3ced4e718a8afc122",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_elasticache_describe_replication_groups": {
+		"surfaceHash": "4d00b7a79fc144865c5595da2d5818fc1768556d27de8e9036463b408fa4844e",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_elbv2_describe_listeners": {
+		"surfaceHash": "db29f9ec0e4e27ad1074a28d13f04253daab20fb281aeb78451ae48842ec23d4",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_elbv2_describe_load_balancers": {
+		"surfaceHash": "5430d40203f31c4e028e782d569891054804c0d528e568caafbe6ee439b5ada2",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_elbv2_describe_target_groups": {
+		"surfaceHash": "58d343fe6b614c3cc5ef0cc4f0298d835953434bd9de93c79fdadf2c2ff2d77e",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_elbv2_describe_target_health": {
+		"surfaceHash": "7cf912e13e0f64445537a7941b04cf330b2082aa5b0d0d451a4b1bca811e3c22",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_eventbridge_describe_rule": {
+		"surfaceHash": "f3dfeeacafb47ae07cdd27ef43506ea35c81e5ce9d7adfc7f172280840ff4394",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_eventbridge_list_rules": {
+		"surfaceHash": "66338c7e3a02597f5881f98cb95ee70bf331c19d0d78ddebdf9c50a88dae13e6",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_guardduty_get_detector": {
+		"surfaceHash": "3b90bd32b64732ee55b4ba96fea269a640340f5e8555decfdb87f2f7effbd138",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_guardduty_get_findings": {
+		"surfaceHash": "614525cf3cf72f2b015f138900831d7cf43233788743a1a18a530fcb3c0dcbef",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_guardduty_list_detectors": {
+		"surfaceHash": "09006a63c418fee66ada0068ea83ed3c722a825495b3e293c089966d29fa80fa",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_guardduty_list_findings": {
+		"surfaceHash": "1c52717ba830b2e54c2ef17dd44014348d9207675b736697ad5b99abfa9f11ba",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_health_describe_events": {
+		"surfaceHash": "2a1cdf370136ecac5a730fb062cbb3c91b6db5c9178a6a371a3c96190cbcd8cb",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_lambda_get_function_configuration": {
+		"surfaceHash": "69654a1eafb8088c6a33a40b15ecfaa91faede82f20fbf4d37dbfe1f1aeb8e95",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_lambda_list_functions": {
+		"surfaceHash": "e57783262d41d9d08da769a2cb1bcdbb6f64bfebb8f2d5cfe051ca2ba27fe916",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_list_estates": {
+		"surfaceHash": "71c9b02fdc0c2a03dd9a13328ba56d836b236863a84db96f1a53a4ed84bd3cbb",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_logs_describe_log_groups": {
+		"surfaceHash": "cbcbcfd18dd63e7c4bf8bc1e2539605bcfe86199a257c093b17b572164f66dcd",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_logs_get_log_group_fields": {
+		"surfaceHash": "4b74f1a1c34d0fda4958515fb0a632de0e6f292e4093914fcfd1fcd8e97b98a5",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_logs_get_query_results": {
+		"surfaceHash": "c7112ba3ce126c97afc2594486cb12d4e261a4e6a0ac114c245d72f8fdd9f7f6",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_logs_start_query": {
+		"surfaceHash": "87118ed3e68473887562731120bb35dcc55b2a9de8f4036d0f2bc222934abe5f",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_rds_describe_db_clusters": {
+		"surfaceHash": "3327269986bf2dd44322f06423f217726ca6caa981d8da1e7dd782e45fe16655",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_rds_describe_db_instances": {
+		"surfaceHash": "a6cb2b398e64ad9840e2900d0a921db2f061aa66f02799958cf465404ee8a5f4",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_resourcegroupstagging_get_resources": {
+		"surfaceHash": "9e018ef7bd1cfed6a32b8d7e0adb380b6f336d261dca998a6ccb0cd988a60eb6",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_route53_list_hosted_zones": {
+		"surfaceHash": "1545ad87c2b260a43366f3497aff83e3b98242665d9cabf158332fa7d636194e",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_route53_list_resource_record_sets": {
+		"surfaceHash": "124d09b0250669d1192eda68f2377b25b32e560ecc364db117d70957eb903590",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_s3_get_bucket_location": {
+		"surfaceHash": "1d38a6bd4033fa87a4c2b0cf7954624e181287992ba9d8f6976c2b4ad9d497d2",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_s3_get_bucket_policy_status": {
+		"surfaceHash": "22d7ee82fe63d1a72270dbd17579adc61ac4dca1ff8dba84369d8aac7bc60282",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_s3_list_buckets": {
+		"surfaceHash": "326a98917a79b63e787aca359e920de3b1e0ba5d8e4c00153b598cd42172cbb1",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_securityhub_describe_hub": {
+		"surfaceHash": "1ca925047b7fd22027e1f821d9fdd3f1c788650365e7f759bfd5ea67cc39c88f",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_securityhub_get_enabled_standards": {
+		"surfaceHash": "9aedb3dc815ac9f7738df2187397a2b1f521ef8d83243869ba2329b8175aa345",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_securityhub_get_findings": {
+		"surfaceHash": "ef887555fb8411b07cfa77da61e0a0fcc297361d509a9c3b273f7bcf765ef1f0",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_sns_get_topic_attributes": {
+		"surfaceHash": "832fdd94298647d04aef959cb0cd5322a57c9798e2d888a77c8e1673a797474c",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_sns_list_topics": {
+		"surfaceHash": "f0de8f836cdb17b894f37fd9a941be47da75c1d614e00ee03bda6cdb35000f2a",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_sqs_get_queue_attributes": {
+		"surfaceHash": "9bb3889006bc741585ff159bfab3359ec32c2d1e6c3d954350f7a42f4be57131",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_sqs_list_queues": {
+		"surfaceHash": "f6ddded9c57e094f4b37a83afe616b04786e519d1fa79ccd6e5ab0eae4aaf190",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_stepfunctions_list_state_machines": {
+		"surfaceHash": "8120bbcf8ea21870288601ef5303993c5888895f78ba11fa239c16a747c59517",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_xray_get_service_graph": {
+		"surfaceHash": "7abd4957837a7784a7fe49a3f508b44ca8e3355504c8112f9d38c958b95a844e",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"aws_xray_get_trace_summaries": {
+		"surfaceHash": "c544fb948cdefe7f5f30f9e5bbfca58aa51977daaf2264ca06eaff45608fb6de",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	}
+}

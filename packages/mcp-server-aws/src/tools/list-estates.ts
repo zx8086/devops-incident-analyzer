@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { AwsConfig } from "../config/schemas.ts";
 import { getEstateHealth } from "../services/estate-validator.ts";
+import { AWS_READ_ONLY_ANNOTATIONS } from "./annotations.ts";
 import { toMcp } from "./wrap.ts";
 
 // SIO-828: introspection + health tool. Returns the configured estate IDs
@@ -13,10 +14,14 @@ import { toMcp } from "./wrap.ts";
 const schema = z.object({});
 
 export function registerListEstatesTool(server: McpServer, config: AwsConfig): void {
-	server.tool(
+	server.registerTool(
 		"aws_list_estates",
-		"List the AWS estates this runtime is CONFIGURED to query (for routing), plus each estate's boot-time STS:AssumeRole health snapshot and effective region. NOTE: this is the configured/reachable set, NOT the estates assessed in the current investigation -- a healthy entry here only means the role assumed at boot, not that the estate was probed. Do not report 'all N accounts healthy' from this output; scope findings to the estate(s) actually queried this run.",
-		schema.shape,
+		{
+			description:
+				"List the AWS estates this runtime is CONFIGURED to query (for routing), plus each estate's boot-time STS:AssumeRole health snapshot and effective region. NOTE: this is the configured/reachable set, NOT the estates assessed in the current investigation -- a healthy entry here only means the role assumed at boot, not that the estate was probed. Do not report 'all N accounts healthy' from this output; scope findings to the estate(s) actually queried this run.",
+			inputSchema: schema.shape,
+			annotations: AWS_READ_ONLY_ANNOTATIONS,
+		},
 		async () =>
 			toMcp({
 				// SIO-832: surface effective region per estate so the LLM and operators can see

@@ -28,7 +28,7 @@ export function estateField(config: AwsConfig) {
 
 // Merge the estate field (a permissive z.string from estateField, SIO-853 -- not a
 // z.enum) into an existing tool's ZodRawShape. The resulting ZodRawShape is what
-// register*Tools passes to server.tool(name, desc, shape, fn). Tool functions read
+// register*Tools passes to server.registerTool(name, config, fn). Tool functions read
 // params.estate as a string; resolveEstate (client-factory.ts) validates the value.
 export function withEstate(config: AwsConfig, shape: ZodRawShape): ZodRawShape {
 	// Spread shape first so a tool that accidentally declared `estate` cannot
