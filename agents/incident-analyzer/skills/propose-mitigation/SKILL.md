@@ -55,8 +55,8 @@ Next update: in 30 minutes or on material change
 Owner: payments on-call (per escalation item 1; do not post while unassigned)
 
 ### Related Runbooks
-- knowledge/runbooks/kafka-consumer-lag.md
-- knowledge/runbooks/database-slow-query.md
+- knowledge/runbooks/kafka/kafka-consumer-lag.md
+- knowledge/runbooks/couchbase/database-slow-queries.md
 ```
 
 ## Edge Cases

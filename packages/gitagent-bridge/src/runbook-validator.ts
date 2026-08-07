@@ -12,10 +12,11 @@
 // Every export is pure: no file IO except collectAgents/collectSubAgentFixtures, which
 // walk the agent tree to build fixtures.
 
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { type LoadedAgent, loadAgent, type ToolDefinition } from "./index.ts";
+import { isRunbookCategory } from "./types.ts";
 
 // ============================================================================
 // Types
@@ -350,6 +351,34 @@ export function isClean(report: ValidationReport): boolean {
 	);
 }
 
+// Reads knowledge/index.yaml directly (not via loadAgent's schema-validated output) to
+// keep this a lightweight, tolerant filesystem probe. Falls back to the pre-restructure
+// hardcoded "runbooks/" path when index.yaml is absent or unparsable -- this is the
+// legacy/no-manifest shape that some fixtures (and the sub-agent path) still rely on.
+// loadAgent() below still does full validation and throws on a genuinely broken agent.
+const DEFAULT_RUNBOOK_CATEGORY: [string, string][] = [["runbooks", "runbooks/"]];
+
+function findRunbookCategoryPathsByName(agentDir: string): [string, string][] {
+	const indexPath = join(agentDir, "knowledge", "index.yaml");
+	if (!existsSync(indexPath)) return DEFAULT_RUNBOOK_CATEGORY;
+	let parsed: unknown;
+	try {
+		parsed = parse(readFileSync(indexPath, "utf-8"));
+	} catch {
+		return DEFAULT_RUNBOOK_CATEGORY;
+	}
+	const categories = (parsed as { categories?: Record<string, unknown> } | undefined)?.categories;
+	if (!categories || typeof categories !== "object") return DEFAULT_RUNBOOK_CATEGORY;
+	const runbookCategories = Object.entries(categories)
+		.filter(([category]) => isRunbookCategory(category))
+		.map(([category, config]): [string, unknown] => [
+			category,
+			config && typeof config === "object" ? (config as { path?: unknown }).path : undefined,
+		])
+		.filter((entry): entry is [string, string] => typeof entry[1] === "string");
+	return runbookCategories.length > 0 ? runbookCategories : DEFAULT_RUNBOOK_CATEGORY;
+}
+
 export function collectAgents(agentsRoot: string): AgentFixture[] {
 	if (!existsSync(agentsRoot)) return [];
 	const entries = readdirSync(agentsRoot);
@@ -359,13 +388,17 @@ export function collectAgents(agentsRoot: string): AgentFixture[] {
 		const agentDir = join(agentsRoot, entry);
 		if (!statSync(agentDir).isDirectory()) continue;
 
-		const runbooksDir = join(agentDir, "knowledge", "runbooks");
-		if (!existsSync(runbooksDir)) continue;
-		if (!statSync(runbooksDir).isDirectory()) continue;
+		const runbookCategoryPaths = findRunbookCategoryPathsByName(agentDir).map(([, path]) => path);
+		if (runbookCategoryPaths.length === 0) continue;
 
-		const runbookPaths = readdirSync(runbooksDir)
-			.filter((f) => f.endsWith(".md"))
-			.map((f) => join(runbooksDir, f));
+		const runbookPaths: string[] = [];
+		for (const relPath of runbookCategoryPaths) {
+			const dir = join(agentDir, "knowledge", relPath);
+			if (!existsSync(dir) || !statSync(dir).isDirectory()) continue;
+			for (const f of readdirSync(dir).filter((f) => f.endsWith(".md"))) {
+				runbookPaths.push(join(dir, f));
+			}
+		}
 
 		if (runbookPaths.length === 0) continue;
 
@@ -388,13 +421,21 @@ export function collectSubAgentFixtures(parentFixtures: AgentFixture[]): SubAgen
 			// Extract runbook entries from the already-loaded knowledge. Avoids
 			// a second filesystem walk; loadAgent() already recursed and
 			// populated each sub-agent's knowledge[] with its own runbooks.
-			const runbookEntries = subAgent.knowledge.filter((e) => e.category === "runbooks");
+			const runbookEntries = subAgent.knowledge.filter((e) => isRunbookCategory(e.category));
 			if (runbookEntries.length === 0) continue;
 
-			// Reconstruct absolute paths for each runbook file
-			const runbookPaths = runbookEntries.map((entry) =>
-				join(parent.agentDir, "agents", subAgentName, "knowledge", "runbooks", entry.filename),
-			);
+			const subAgentDir = join(parent.agentDir, "agents", subAgentName);
+			const categoryPathByName = new Map(findRunbookCategoryPathsByName(subAgentDir));
+
+			// Reconstruct absolute paths for each runbook file, resolving each entry's
+			// own category to its index.yaml path (handles both the legacy flat
+			// "runbooks" category and per-datasource "runbooks-*"). Falls back to
+			// "runbooks/" when no index.yaml is found on disk (e.g. synthetic test
+			// fixtures that build a LoadedAgent in-memory without a real index.yaml).
+			const runbookPaths = runbookEntries.map((entry) => {
+				const categoryPath = categoryPathByName.get(entry.category) ?? "runbooks/";
+				return join(subAgentDir, "knowledge", categoryPath, entry.filename);
+			});
 
 			fixtures.push({
 				parentName: parent.name,

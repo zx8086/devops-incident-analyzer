@@ -152,26 +152,43 @@ No dedicated unit test is needed for skill content -- but if your skill encodes 
 
 ### Step 1: Drop the file in place
 
-Runbooks live under `agents/incident-analyzer/knowledge/runbooks/`. There is no registration step beyond placing the file:
+Runbooks live under `agents/incident-analyzer/knowledge/runbooks/<datasource>/`, one
+subfolder per datasource (plus `cross-datasource/` for correlation/audit runbooks that
+span sources). Pick the subfolder matching your runbook's primary datasource; if none
+fits, use `cross-datasource/`. Placing the file in the right subfolder is the only
+registration step for an EXISTING datasource -- there is no per-file manifest entry:
 
-```
+```text
 agents/incident-analyzer/knowledge/
   index.yaml
   runbooks/
-    kafka-consumer-lag.md
-    high-error-rate.md
-    database-slow-queries.md
-    my-new-pattern.md      <-- your new runbook
+    kafka/
+      kafka-consumer-lag.md
+    elastic/
+      high-error-rate.md
+    couchbase/
+      database-slow-queries.md
+    aws/
+      my-new-pattern.md      <-- your new runbook, if AWS-specific
 ```
 
-The loader walks every `.md` file (excluding `.gitkeep`) in each directory registered under `knowledge/index.yaml`. As long as `runbooks/` is listed in the index (it already is), any new file is picked up on the next agent load.
+The loader walks every `.md` file (excluding `.gitkeep`) in each directory registered under
+`knowledge/index.yaml`. Each `runbooks/<datasource>/` subfolder is its own registered
+category (`runbooks-aws`, `runbooks-kafka`, ...; any category name that is exactly
+`runbooks` or prefixed `runbooks-` is treated as a runbook category, see
+`isRunbookCategory()`). Adding a runbook to an EXISTING subfolder needs no `index.yaml`
+change; a runbook for a brand-new datasource needs a new `runbooks-<datasource>` entry
+added to `categories:` first (see `agents/incident-analyzer/knowledge/index.yaml`).
 
 Two things that surprise people here:
 
 - **The walk is not recursive.** `loadKnowledge` reads only the `.md` files sitting *directly*
   under a category's `path`; subdirectories are invisible to it. That is load-bearing, not
   incidental -- it is how `knowledge/_archive/eu-b2b-ilm/` stays out of the prompt while
-  remaining in git. Nesting a file one level down is the crude way to exclude it.
+  remaining in git, and it is also why the per-datasource runbook layout needs one
+  registered category per subfolder rather than a single `runbooks` category pointing at
+  the whole tree. Nesting a file one level down without a matching category is the crude
+  way to exclude it.
 - **Pickup is not free.** A new file enlarges every prompt that selects its category (see the
   prompt-presence note above). For a large file, prefer a category the relevant intent does
   not select, or leave it unregistered and reference it from a runbook by path.
@@ -279,11 +296,20 @@ Scenario: you want the orchestrator to emit a post-incident blameless summary af
 
 Scenario: a new failure pattern where Konnect upstream timeouts correlate with Kafka producer throttling.
 
-1. Create `agents/incident-analyzer/knowledge/runbooks/konnect-upstream-timeout.md`.
-2. Write "When to use", "Identification", "Drill-down", "Cross-datasource correlation", and "Remediation hints" sections. Reference real tool names -- double-check against `agents/incident-analyzer/tools/*.yaml`.
-3. No manifest update needed -- `runbooks/` is already registered in `knowledge/index.yaml`.
+1. No `runbooks-konnect` category exists yet (Konnect has zero runbooks today), so first
+   add one to `agents/incident-analyzer/knowledge/index.yaml`:
+   ```yaml
+   runbooks-konnect:
+     path: runbooks/konnect/
+     description: Kong Konnect operational runbooks
+   ```
+2. Create `agents/incident-analyzer/knowledge/runbooks/konnect/konnect-upstream-timeout.md`.
+3. Write "When to use", "Identification", "Drill-down", "Cross-datasource correlation", and "Remediation hints" sections. Reference real tool names -- double-check against `agents/incident-analyzer/tools/*.yaml`.
 4. `bun run yaml:check && bun run typecheck && bun run lint`.
 5. Submit an incident query matching the new pattern and verify the aggregator's correlation block cites the runbook.
+
+If the datasource already has a `runbooks-<datasource>` category (e.g. adding another
+AWS runbook), skip step 1 -- drop the file directly into the existing subfolder.
 
 ---
 

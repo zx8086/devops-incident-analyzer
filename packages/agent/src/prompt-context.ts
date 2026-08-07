@@ -2,6 +2,7 @@
 import {
 	buildSubAgentSystemPrompt,
 	extractSkillToolNames,
+	isRunbookCategory,
 	type LoadedAgent,
 	loadAgent,
 	type RunbookTriggers,
@@ -182,7 +183,7 @@ export function getToolDefinitionForDataSource(dataSourceId: string): ToolDefini
 
 export function getRunbookFilenames(): string[] {
 	const agent = getAgent();
-	return agent.knowledge.filter((k) => k.category === "runbooks").map((k) => k.filename);
+	return agent.knowledge.filter((k) => isRunbookCategory(k.category)).map((k) => k.filename);
 }
 
 // SIO-1018: the local skill names active in the orchestrator prompt this turn --
@@ -242,7 +243,7 @@ export interface RunbookCatalogEntry {
 export function getRunbookCatalog(): RunbookCatalogEntry[] {
 	const agent = getAgent();
 	return agent.knowledge
-		.filter((k) => k.category === "runbooks")
+		.filter((k) => isRunbookCategory(k.category))
 		.map((k) => ({
 			...parseRunbookCatalogEntry(k.filename, k.content),
 			triggers: k.triggers,

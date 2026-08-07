@@ -8,6 +8,7 @@ import { mergeShared } from "./shared-merge.ts";
 import {
 	type AgentManifest,
 	AgentManifestSchema,
+	isRunbookCategory,
 	KnowledgeIndexSchema,
 	type KnowledgeSelectionConfig,
 	RunbookFrontmatterSchema,
@@ -209,7 +210,7 @@ function loadKnowledge(
 			// loudly. Other categories degrade instead -- a bad block there costs prompt
 			// noise, not selection correctness, and killing agent load over a playbook typo
 			// would be a worse failure than the one it prevents.
-			if (category === "runbooks") {
+			if (isRunbookCategory(category)) {
 				try {
 					const { triggers, status, staleAfter, body } = parseRunbookFrontmatter(rawContent);
 					entries.push({
@@ -239,17 +240,29 @@ function loadKnowledge(
 
 	// SIO-640: validate runbook_selection filenames exist on disk
 	if (index.data.runbook_selection) {
-		const runbooksCategory = index.data.categories.runbooks;
-		if (!runbooksCategory) {
+		const runbookCategoryEntries = Object.entries(index.data.categories).filter(([category]) =>
+			isRunbookCategory(category),
+		);
+		if (runbookCategoryEntries.length === 0) {
 			throw new Error(
-				"knowledge/index.yaml: runbook_selection is present but categories.runbooks is not defined. " +
-					"runbook_selection requires a runbooks category.",
+				"knowledge/index.yaml: runbook_selection is present but no runbook category is defined. " +
+					'runbook_selection requires at least one "runbooks" or "runbooks-*" category.',
 			);
 		}
-		const runbooksDir = join(knowledgeDir, runbooksCategory.path);
-		const existingFiles = isDirectory(runbooksDir)
-			? new Set(readdirSync(runbooksDir).filter((f) => f.endsWith(".md")))
-			: new Set<string>();
+		// Filenames in fallback_by_severity/always_select are bare basenames with no
+		// datasource prefix, so existence is checked against the UNION of every
+		// runbook-* category's directory. Assumes basenames are globally unique across
+		// all runbook-* folders (true today; a duplicate basename in two datasource
+		// folders would silently shadow in this Set, so keep basenames unique).
+		const existingFiles = new Set<string>();
+		for (const [, config] of runbookCategoryEntries) {
+			const dir = join(knowledgeDir, config.path);
+			if (!isDirectory(dir)) continue;
+			for (const f of readdirSync(dir).filter((f) => f.endsWith(".md"))) {
+				existingFiles.add(f);
+			}
+		}
+		const runbookPaths = runbookCategoryEntries.map(([, config]) => config.path).join(", ");
 
 		const { fallback_by_severity, always_select } = index.data.runbook_selection;
 		for (const [severity, filenames] of Object.entries(fallback_by_severity)) {
@@ -257,7 +270,7 @@ function loadKnowledge(
 				if (!existingFiles.has(filename)) {
 					throw new Error(
 						`knowledge/index.yaml: runbook_selection.fallback_by_severity.${severity} references ` +
-							`"${filename}" but no such file exists under ${runbooksCategory.path}`,
+							`"${filename}" but no such file exists under any of: ${runbookPaths}`,
 					);
 				}
 			}
@@ -267,7 +280,7 @@ function loadKnowledge(
 			if (!existingFiles.has(filename)) {
 				throw new Error(
 					`knowledge/index.yaml: runbook_selection.always_select references ` +
-						`"${filename}" but no such file exists under ${runbooksCategory.path}`,
+						`"${filename}" but no such file exists under any of: ${runbookPaths}`,
 				);
 			}
 		}
@@ -335,7 +348,7 @@ function loadKnowledgeFromManifest(agentDir: string, paths: string[]): Knowledge
 // Runbook frontmatter is parsed when present but tolerated when absent/malformed
 // in GAP mode (the portable runbooks are write-ups, not always trigger-tagged).
 function makeKnowledgeEntry(category: string, filename: string, content: string): KnowledgeEntry {
-	if (category === "runbooks") {
+	if (isRunbookCategory(category)) {
 		try {
 			const { triggers, status, staleAfter, body } = parseRunbookFrontmatter(content);
 			return { category, filename, content: body, triggers, status, staleAfter };

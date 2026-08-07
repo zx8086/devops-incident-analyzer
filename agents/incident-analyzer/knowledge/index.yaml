@@ -3,9 +3,21 @@ description: Domain knowledge for DevOps incident analysis
 version: 0.1.0
 
 categories:
-  runbooks:
-    path: runbooks/
-    description: Operational runbooks for common incident patterns
+  runbooks-cross-datasource:
+    path: runbooks/cross-datasource/
+    description: Cross-datasource and datasource-agnostic runbooks (code-change correlation, MCP tool audit)
+  runbooks-aws:
+    path: runbooks/aws/
+    description: AWS operational runbooks (CloudWatch, ECS, IAM, MSK)
+  runbooks-kafka:
+    path: runbooks/kafka/
+    description: Kafka operational runbooks (consumer lag)
+  runbooks-couchbase:
+    path: runbooks/couchbase/
+    description: Couchbase operational runbooks (slow queries)
+  runbooks-elastic:
+    path: runbooks/elastic/
+    description: Elastic operational runbooks (high error rate)
   systems-map:
     path: systems-map/
     description: Service dependency maps and topology
@@ -15,8 +27,10 @@ categories:
 
 # SIO-640: Phase 2A lazy runbook selection fallback config.
 # Consumed by packages/agent/src/runbook-selector.ts when the LLM router
-# fails. Filenames must exist under categories.runbooks.path (validated
-# at load time by packages/gitagent-bridge/src/manifest-loader.ts).
+# fails. Filenames are bare basenames (no datasource prefix) and must exist
+# under the path of SOME categories.runbooks-* entry (validated at load time
+# by packages/gitagent-bridge/src/manifest-loader.ts, which checks the union
+# of all runbook-* category directories).
 runbook_selection:
   fallback_by_severity:
     critical:

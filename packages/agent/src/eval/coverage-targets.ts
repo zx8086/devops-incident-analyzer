@@ -19,9 +19,10 @@
 // signal, and many are write tools an eval must never call), couchbase playbooks (server-side
 // only, no in-repo tool list), and skillflow presets (they name skills, not MCP tools).
 
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { extractFrontmatterTools, extractTailSection } from "@devops-agent/gitagent-bridge";
+import { extractFrontmatterTools, extractTailSection, isRunbookCategory } from "@devops-agent/gitagent-bridge";
+import { parse } from "yaml";
 import { ORBIT_TOOL_NAMES } from "../correlation/extractors/orbit.ts";
 import { getAgentsDir } from "../paths.ts";
 import { RESOLUTION_TOOLS_BY_DATASOURCE } from "../sub-agent.ts";
@@ -69,6 +70,34 @@ export function datasourceForTool(toolName: string): string {
 	return "unknown";
 }
 
+// Resolves the set of runbook directories to scan. Runbooks now live in per-datasource
+// subfolders (runbooks/aws/, runbooks/kafka/, ...), each its own registered category in
+// knowledge/index.yaml (see isRunbookCategory). Falls back to treating runbookDir itself
+// as a single flat directory when no index.yaml/categories are found there, so passing a
+// synthetic flat directory (e.g. in a test) still works.
+function resolveRunbookDirs(runbookDir: string): string[] {
+	const knowledgeDir = join(runbookDir, "..");
+	const indexPath = join(knowledgeDir, "index.yaml");
+	if (!existsSync(indexPath)) return [runbookDir];
+
+	let parsed: unknown;
+	try {
+		parsed = parse(readFileSync(indexPath, "utf-8"));
+	} catch {
+		return [runbookDir];
+	}
+	const categories = (parsed as { categories?: Record<string, unknown> } | undefined)?.categories;
+	if (!categories || typeof categories !== "object") return [runbookDir];
+
+	const dirs = Object.entries(categories)
+		.filter(([category]) => isRunbookCategory(category))
+		.map(([, config]) => (config && typeof config === "object" ? (config as { path?: unknown }).path : undefined))
+		.filter((p): p is string => typeof p === "string")
+		.map((p) => join(knowledgeDir, p));
+
+	return dirs.length > 0 ? dirs : [runbookDir];
+}
+
 // Reads every runbook's declared tool list. Frontmatter `tools:` is authoritative when
 // present; extractTailSection is the documented fallback (SIO-1288's dual-read), matching
 // runbook-validator's own precedence exactly.
@@ -76,10 +105,13 @@ export function runbookToolCitations(
 	runbookDir: string = join(getAgentsDir("incident-analyzer"), "knowledge/runbooks"),
 ): Map<string, string[]> {
 	const byRunbook = new Map<string, string[]>();
-	for (const file of readdirSync(runbookDir).filter((f) => f.endsWith(".md"))) {
-		const content = readFileSync(join(runbookDir, file), "utf-8");
-		const tools = extractFrontmatterTools(content) ?? extractTailSection(content).citations.map((c) => c.name);
-		if (tools.length > 0) byRunbook.set(file.replace(/\.md$/, ""), tools);
+	for (const dir of resolveRunbookDirs(runbookDir)) {
+		if (!existsSync(dir)) continue;
+		for (const file of readdirSync(dir).filter((f) => f.endsWith(".md"))) {
+			const content = readFileSync(join(dir, file), "utf-8");
+			const tools = extractFrontmatterTools(content) ?? extractTailSection(content).citations.map((c) => c.name);
+			if (tools.length > 0) byRunbook.set(file.replace(/\.md$/, ""), tools);
+		}
 	}
 	return byRunbook;
 }

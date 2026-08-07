@@ -132,20 +132,27 @@ The **always-on reference knowledge** for an agent: hand-authored Markdown index
 name: incident-analyzer-knowledge
 version: 0.1.0
 categories:
-  runbooks:    { path: runbooks/,    description: Operational runbooks for common incident patterns }
+  # One category per datasource-scoped runbook subfolder -- the loader walks each
+  # `path` non-recursively, so per-datasource nesting needs one category per folder
+  # rather than a single "runbooks" category pointing at a directory tree. Any
+  # category name that is exactly "runbooks" or prefixed "runbooks-" is treated as
+  # a runbook category (see isRunbookCategory()).
+  runbooks-aws:      { path: runbooks/aws/,      description: AWS operational runbooks }
+  runbooks-kafka:    { path: runbooks/kafka/,    description: Kafka operational runbooks }
+  runbooks-couchbase:{ path: runbooks/couchbase/,description: Couchbase operational runbooks }
   systems-map: { path: systems-map/, description: Service dependency maps and topology }
   slo-policies:{ path: slo-policies/, description: SLO/SLA definitions and thresholds }
 runbook_selection:        # SIO-640: severity-keyed fallback when the LLM router fails
-  fallback_by_severity:
+  fallback_by_severity:   # filenames are bare basenames, matched across ALL runbook-* dirs
     critical: [kafka-consumer-lag.md, high-error-rate.md, database-slow-queries.md]
     low: []
 ```
 
 ### Loading
 
-`loadKnowledge()` (`packages/gitagent-bridge/src/manifest-loader.ts`) reads `index.yaml`, validates against `KnowledgeIndexSchema`, then walks each category's `path` loading every `*.md` file **directly** under it (no subdirectory recursion). Files in the `runbooks` category get their optional YAML frontmatter parsed (`triggers`: severity/services/metrics) via `parseRunbookFrontmatter()`; other categories load verbatim. When `index.yaml` is absent (GAP agents), it falls back to auto-discovering the manifest's `knowledge:` list.
+`loadKnowledge()` (`packages/gitagent-bridge/src/manifest-loader.ts`) reads `index.yaml`, validates against `KnowledgeIndexSchema`, then walks each category's `path` loading every `*.md` file **directly** under it (no subdirectory recursion). Files in any *runbook category* -- a category whose name is exactly `runbooks` or prefixed `runbooks-` (`isRunbookCategory()`), covering both the flat single-folder shape and the per-datasource `runbooks-aws`/`runbooks-kafka`/... shape -- get their optional YAML frontmatter parsed (`triggers`: severity/services/metrics) via `parseRunbookFrontmatter()`; other categories load verbatim. When `index.yaml` is absent (GAP agents), it falls back to auto-discovering the manifest's `knowledge:` list.
 
-`runbook_selection` (SIO-640) is validated at load time — every filename it names must exist under the runbooks path, or the load throws. It feeds the incident-analyzer's lazy `selectRunbooks` node; the IaC graph has no such node, so elastic-iac omits it.
+`runbook_selection` (SIO-640) is validated at load time — every filename it names (a bare basename, no datasource prefix) must exist under the `path` of at least one runbook category, checked as a union across all of them, or the load throws. It feeds the incident-analyzer's lazy `selectRunbooks` node; the IaC graph has no such node, so elastic-iac omits it.
 
 ### Into the prompt
 
