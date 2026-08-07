@@ -14,7 +14,7 @@ export default (server: McpServer, bucket: Bucket) => {
 		{
 			description: "Get the most frequently executed queries",
 			inputSchema: {
-				limit: z.number().optional().describe("Optional limit for the number of results to return"),
+				limit: z.number().int().positive().optional().describe("Optional limit for the number of results to return"),
 				min_count: z.number().optional().describe("Minimum execution count to include"),
 			},
 			annotations: couchbaseToolAnnotations("capella_get_most_frequent_queries"),

@@ -14,7 +14,7 @@ export default (server: McpServer, bucket: Bucket) => {
 		{
 			description: "Get queries that return the largest result sizes in bytes",
 			inputSchema: {
-				limit: z.number().optional().describe("Optional limit for the number of results to return"),
+				limit: z.number().int().positive().optional().describe("Optional limit for the number of results to return"),
 				min_size_kb: z.number().optional().describe("Minimum result size in KB to include"),
 			},
 			annotations: couchbaseToolAnnotations("capella_get_largest_result_size_queries"),

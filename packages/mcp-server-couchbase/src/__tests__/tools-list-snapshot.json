@@ -57,7 +57,7 @@
 			}
 		},
 		"capella_get_completed_requests": {
-			"surfaceHash": "54ea876ef0cddb706c7eb348996d632a7d9af92ded8c877c496e611867395726",
+			"surfaceHash": "df993c874513601abc9dfbd18aceec6be9c1cbdb6384982949948c9f26c1a016",
 			"annotations": {
 				"readOnlyHint": true,
 				"destructiveHint": false
@@ -92,7 +92,7 @@
 			}
 		},
 		"capella_get_fatal_requests": {
-			"surfaceHash": "3e8d3890c848607b0254fdd27efde96bb1411f9ed04fe5313eedf5ed7f51fd2f",
+			"surfaceHash": "9f2101d32cd9601f3c8d72df522a72cf6c55e5fe7a358c68481590919fb45b0d",
 			"annotations": {
 				"readOnlyHint": true,
 				"destructiveHint": false
@@ -120,14 +120,14 @@
 			}
 		},
 		"capella_get_largest_result_size_queries": {
-			"surfaceHash": "15d1d27c4b838b9648f6090f617b60edb005769f3123c36a9e205775ed74e9d7",
+			"surfaceHash": "cdf5055927b3d27afebecb8c0933353d19b6496e5dc41548bacaf7c247591562",
 			"annotations": {
 				"readOnlyHint": true,
 				"destructiveHint": false
 			}
 		},
 		"capella_get_longest_running_queries": {
-			"surfaceHash": "6d60e16aaf5708e9e8fb311ca5a08940de621bf479b56742f912dbd98212888b",
+			"surfaceHash": "7dc05ae064c62970d9dd3196d83b81864f1c5b1b9ecbc5ad587f073bc9242771",
 			"annotations": {
 				"readOnlyHint": true,
 				"destructiveHint": false
@@ -148,7 +148,7 @@
 			}
 		},
 		"capella_get_most_frequent_queries": {
-			"surfaceHash": "a799697ae5e0adc668d673d3faec0f24e7bdf9633f70d92e800133578bd011a0",
+			"surfaceHash": "47fbf308263f7211b79e52a728423d13939a06101e05f13942ffc00ad88e9122",
 			"annotations": {
 				"readOnlyHint": true,
 				"destructiveHint": false

@@ -67,7 +67,7 @@ export default (server: McpServer, bucket: Bucket) => {
 					.enum(["day", "week", "month", "quarter"])
 					.optional()
 					.describe("Time period to analyze (day, week, month, quarter)"),
-				limit: z.number().optional().describe("Optional limit for the number of results to return"),
+				limit: z.number().int().positive().optional().describe("Optional limit for the number of results to return"),
 			},
 			annotations: couchbaseToolAnnotations("capella_get_fatal_requests"),
 		},

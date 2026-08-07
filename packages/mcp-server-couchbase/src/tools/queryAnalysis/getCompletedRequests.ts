@@ -80,7 +80,7 @@ export default (server: McpServer, bucket: Bucket) => {
 		{
 			description: "Get recent completed query requests with detailed execution information",
 			inputSchema: {
-				limit: z.number().optional().describe("Optional limit for the number of results to return"),
+				limit: z.number().int().positive().optional().describe("Optional limit for the number of results to return"),
 				period: z
 					.enum(["day", "week", "month", "quarter"])
 					.optional()
