@@ -19,11 +19,24 @@
 // actually executes (same pattern as selectedRunbooks/toolTrajectory), so this evaluator reads
 // only run.outputs -- no live config, ever.
 import type { Example, Run } from "langsmith/schemas";
+import { z } from "zod";
 
 export interface RunbookSelectionInput {
 	selectedRunbooks: string[] | null;
 	alwaysSelect: string[];
 }
+
+// CodeRabbit (PR #633, round 3): the previous Array.isArray(...) checks validated the array
+// wrapper but not element shape -- a malformed element (e.g. a number in selectedRunbooks, an
+// object in alwaysSelectRunbooks) passed through and either produced a silently wrong score
+// (missing.filter comparing a string Set against non-string elements never matches) or would
+// throw downstream. z.array(z.string()) rejects the whole array if any element is the wrong
+// type, so malformed run.outputs fails loudly (readRunbookSelectionOutput returns undefined,
+// runbookSelectionVsUsage emits no verdict) instead of grading garbage.
+const RunbookSelectionOutputSchema = z.object({
+	selectedRunbooks: z.array(z.string()).nullable().optional(),
+	alwaysSelectRunbooks: z.array(z.string()).optional(),
+});
 
 export interface RunbookSelectionVerdict {
 	score: number;
@@ -41,17 +54,15 @@ export function compareRunbookSelection(input: RunbookSelectionInput): RunbookSe
 	return { score: missing.length === 0 ? 1 : 0, missing };
 }
 
-function readRunbookSelectionOutput(run: Run): RunbookSelectionInput | undefined {
-	const output = (
-		run.outputs as { output?: { selectedRunbooks?: unknown; alwaysSelectRunbooks?: unknown } } | undefined
-	)?.output;
-	if (!output) return undefined;
-	const selectedRunbooks =
-		Array.isArray(output.selectedRunbooks) || output.selectedRunbooks === null
-			? (output.selectedRunbooks as string[] | null)
-			: null;
-	const alwaysSelect = Array.isArray(output.alwaysSelectRunbooks) ? (output.alwaysSelectRunbooks as string[]) : [];
-	return { selectedRunbooks, alwaysSelect };
+export function readRunbookSelectionOutput(run: Run): RunbookSelectionInput | undefined {
+	const output = (run.outputs as { output?: unknown } | undefined)?.output;
+	if (!output || typeof output !== "object") return undefined;
+	const parsed = RunbookSelectionOutputSchema.safeParse(output);
+	if (!parsed.success) return undefined;
+	return {
+		selectedRunbooks: parsed.data.selectedRunbooks ?? null,
+		alwaysSelect: parsed.data.alwaysSelectRunbooks ?? [],
+	};
 }
 
 // LangSmith run-evaluator entrypoint. Reads run.outputs.output.selectedRunbooks/

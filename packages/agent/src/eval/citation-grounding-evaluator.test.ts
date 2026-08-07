@@ -13,11 +13,13 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { Run } from "langsmith/schemas";
 import {
 	citationJudgeFeedback,
 	deriveTitleFromContent,
 	findCitedRunbooks,
 	findUnknownMdCitations,
+	readCitationGroundingOutput,
 	validateVerdictCoverage,
 } from "./citation-grounding-evaluator.ts";
 
@@ -269,5 +271,62 @@ describe("citationJudgeFeedback", () => {
 		expect(feedback).toHaveLength(1);
 		expect(feedback[0]?.score).toBe(0);
 		expect(feedback[0]?.comment).toContain("invented-runbook.md");
+	});
+
+	// CodeRabbit (PR #633, round 3): an unknown filename is detected independently of the judge
+	// (findUnknownMdCitations needs no judge call at all), but a FAILED judge call for a separate,
+	// real citation used to mask it -- !result.ok short-circuited before unknownFilenames was ever
+	// checked, so a flaky/errored OpenAI call silently swallowed a certain hallucination finding.
+	test("an unknown filename still scores 0 even when the judge call for other citations failed", () => {
+		const feedback = citationJudgeFeedback({ ok: false, reason: "OpenAI request failed" }, ["invented-runbook.md"]);
+		expect(feedback).toHaveLength(1);
+		expect(feedback[0]?.score).toBe(0);
+		expect(feedback[0]?.comment).toContain("invented-runbook.md");
+	});
+});
+
+// CodeRabbit (PR #633, round 3): the previous Array.isArray(...) check validated the array
+// wrapper but not element shape -- a malformed knowledgeSnapshot element (e.g. {} missing
+// filename/content/title) passed through and crashed findCitedRunbooks downstream
+// (entry.title.trim() on undefined). Live-verified: findCitedRunbooks("see runbook.md", [{}])
+// against the OLD code threw "Cannot read properties of undefined (reading 'trim')".
+describe("readCitationGroundingOutput", () => {
+	test("valid output with well-shaped knowledgeSnapshot elements parses", () => {
+		const run = {
+			outputs: {
+				output: {
+					response: "see database-slow-queries.md",
+					knowledgeSnapshot: [{ filename: "database-slow-queries.md", content: "...", title: "Slow Queries" }],
+				},
+			},
+		} as unknown as Run;
+		expect(readCitationGroundingOutput(run)).toEqual({
+			response: "see database-slow-queries.md",
+			candidates: [{ filename: "database-slow-queries.md", content: "...", title: "Slow Queries" }],
+		});
+	});
+
+	test("a knowledgeSnapshot element missing required fields is rejected, not crashed on downstream", () => {
+		const run = {
+			outputs: { output: { response: "see runbook.md", knowledgeSnapshot: [{}] } },
+		} as unknown as Run;
+		expect(readCitationGroundingOutput(run)).toBeUndefined();
+	});
+
+	test("a knowledgeSnapshot element that is a bare primitive is rejected", () => {
+		const run = {
+			outputs: { output: { response: "see runbook.md", knowledgeSnapshot: [null] } },
+		} as unknown as Run;
+		expect(readCitationGroundingOutput(run)).toBeUndefined();
+	});
+
+	test("missing knowledgeSnapshot defaults to empty candidates, response still required", () => {
+		const run = { outputs: { output: { response: "no citations here" } } } as unknown as Run;
+		expect(readCitationGroundingOutput(run)).toEqual({ response: "no citations here", candidates: [] });
+	});
+
+	test("missing response entirely yields undefined", () => {
+		const run = { outputs: { output: { knowledgeSnapshot: [] } } } as unknown as Run;
+		expect(readCitationGroundingOutput(run)).toBeUndefined();
 	});
 });

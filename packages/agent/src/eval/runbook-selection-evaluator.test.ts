@@ -12,7 +12,8 @@
 // silently skip grading a real, gradable contract. Removed severity/fallbackBySeverity from the
 // input entirely -- they were dead weight the comparison logic never used.
 import { describe, expect, test } from "bun:test";
-import { compareRunbookSelection } from "./runbook-selection-evaluator.ts";
+import type { Run } from "langsmith/schemas";
+import { compareRunbookSelection, readRunbookSelectionOutput } from "./runbook-selection-evaluator.ts";
 
 const alwaysSelect = ["code-change-correlation.md"];
 
@@ -73,5 +74,45 @@ describe("compareRunbookSelection", () => {
 		});
 		expect(verdict).not.toBeNull();
 		expect(verdict?.score).toBe(0);
+	});
+});
+
+// CodeRabbit (PR #633, round 3): the previous Array.isArray(...) check validated the array
+// wrapper but not element shape -- a malformed element (a number in selectedRunbooks, an object
+// in alwaysSelectRunbooks) passed through and produced a silently wrong score/comment instead of
+// failing loudly. Live-verified: selectedRunbooks: [7] + alwaysSelectRunbooks: [{}] against the
+// OLD Array.isArray-only code produced {score: 0, missing: [{}]} -- a bogus comparison result.
+describe("readRunbookSelectionOutput", () => {
+	test("valid output with real string arrays parses", () => {
+		const run = {
+			outputs: { output: { selectedRunbooks: ["a.md"], alwaysSelectRunbooks: ["a.md"] } },
+		} as unknown as Run;
+		expect(readRunbookSelectionOutput(run)).toEqual({ selectedRunbooks: ["a.md"], alwaysSelect: ["a.md"] });
+	});
+
+	test("selectedRunbooks containing a non-string element is rejected, not silently coerced", () => {
+		const run = {
+			outputs: { output: { selectedRunbooks: [7], alwaysSelectRunbooks: [] } },
+		} as unknown as Run;
+		expect(readRunbookSelectionOutput(run)).toBeUndefined();
+	});
+
+	test("alwaysSelectRunbooks containing a non-string element is rejected, not silently coerced", () => {
+		const run = {
+			outputs: { output: { selectedRunbooks: [], alwaysSelectRunbooks: [{}] } },
+		} as unknown as Run;
+		expect(readRunbookSelectionOutput(run)).toBeUndefined();
+	});
+
+	test("selectedRunbooks: null (selector did not run) still parses", () => {
+		const run = {
+			outputs: { output: { selectedRunbooks: null, alwaysSelectRunbooks: ["a.md"] } },
+		} as unknown as Run;
+		expect(readRunbookSelectionOutput(run)).toEqual({ selectedRunbooks: null, alwaysSelect: ["a.md"] });
+	});
+
+	test("missing output entirely yields undefined", () => {
+		const run = { outputs: {} } as unknown as Run;
+		expect(readRunbookSelectionOutput(run)).toBeUndefined();
 	});
 });

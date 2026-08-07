@@ -134,10 +134,10 @@ export function citationJudgeFeedback(
 	unknownFilenames: string[],
 ): { key: string; score?: number; comment: string }[] {
 	const key = "citation_grounding";
-	if (!result.ok) {
-		return [{ key, comment: `judge call failed, check did not run: ${result.reason}` }];
-	}
 
+	// Checked before result.ok: an unknown filename is detected independently of the judge (no
+	// OpenAI call needed), so a failed judge call for a separate, real citation must never mask an
+	// already-certain hallucination finding.
 	if (unknownFilenames.length > 0) {
 		return [
 			{
@@ -146,6 +146,10 @@ export function citationJudgeFeedback(
 				comment: `cited unknown/hallucinated runbook filename(s): ${unknownFilenames.join(", ")}`,
 			},
 		];
+	}
+
+	if (!result.ok) {
+		return [{ key, comment: `judge call failed, check did not run: ${result.reason}` }];
 	}
 
 	if (result.verdicts.length === 0) return [];
@@ -225,15 +229,25 @@ export function buildKnowledgeCandidates(
 		}));
 }
 
-function readCitationGroundingOutput(
+// CodeRabbit (PR #633, round 3): the previous Array.isArray(...) check validated the array
+// wrapper but not element shape -- a malformed knowledgeSnapshot element (null, {}, a number)
+// passed through and crashed downstream in findCitedRunbooks (entry.title.trim() on a missing
+// title). z.array(...) with a full element shape rejects the whole array on any malformed
+// element, so readCitationGroundingOutput returns undefined and citationGrounding emits no
+// verdict instead of throwing or grading garbage.
+const CitationGroundingOutputSchema = z.object({
+	response: z.string(),
+	knowledgeSnapshot: z.array(z.object({ filename: z.string(), content: z.string(), title: z.string() })).optional(),
+});
+
+export function readCitationGroundingOutput(
 	run: Run,
 ): { response: string; candidates: KnowledgeCitationCandidate[] } | undefined {
-	const output = (run.outputs as { output?: { response?: unknown; knowledgeSnapshot?: unknown } } | undefined)?.output;
-	if (!output || typeof output.response !== "string") return undefined;
-	const candidates = Array.isArray(output.knowledgeSnapshot)
-		? (output.knowledgeSnapshot as KnowledgeCitationCandidate[])
-		: [];
-	return { response: output.response, candidates };
+	const output = (run.outputs as { output?: unknown } | undefined)?.output;
+	if (!output || typeof output !== "object") return undefined;
+	const parsed = CitationGroundingOutputSchema.safeParse(output);
+	if (!parsed.success) return undefined;
+	return { response: parsed.data.response, candidates: parsed.data.knowledgeSnapshot ?? [] };
 }
 
 // LangSmith run-evaluator entrypoint. Reads run.outputs.output.response/knowledgeSnapshot only
