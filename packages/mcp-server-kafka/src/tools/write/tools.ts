@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AppConfig } from "../../config/schemas.ts";
 import { ResponseBuilder } from "../../lib/response-builder.ts";
 import type { KafkaService } from "../../services/kafka-service.ts";
+import { kafkaToolAnnotations } from "../tool-classification.ts";
 import { wrapHandler } from "../wrap.ts";
 import * as ops from "./operations.ts";
 import * as params from "./parameters.ts";
@@ -16,30 +17,39 @@ export function registerWriteTools(server: McpServer, service: KafkaService, con
 	// with their own fixture.
 	if (!config.kafka.allowWrites) return;
 
-	server.tool(
+	server.registerTool(
 		"kafka_produce_message",
-		prompts.PRODUCE_MESSAGE_DESCRIPTION,
-		params.ProduceMessageParams.shape,
+		{
+			description: prompts.PRODUCE_MESSAGE_DESCRIPTION,
+			inputSchema: params.ProduceMessageParams.shape,
+			annotations: kafkaToolAnnotations("kafka_produce_message"),
+		},
 		wrapHandler("kafka_produce_message", config, async (args) => {
 			const result = await ops.produceMessage(service, args);
 			return ResponseBuilder.success(result);
 		}),
 	);
 
-	server.tool(
+	server.registerTool(
 		"kafka_create_topic",
-		prompts.CREATE_TOPIC_DESCRIPTION,
-		params.CreateTopicParams.shape,
+		{
+			description: prompts.CREATE_TOPIC_DESCRIPTION,
+			inputSchema: params.CreateTopicParams.shape,
+			annotations: kafkaToolAnnotations("kafka_create_topic"),
+		},
 		wrapHandler("kafka_create_topic", config, async (args) => {
 			const result = await ops.createTopic(service, args);
 			return ResponseBuilder.success(result);
 		}),
 	);
 
-	server.tool(
+	server.registerTool(
 		"kafka_alter_topic_config",
-		prompts.ALTER_TOPIC_CONFIG_DESCRIPTION,
-		params.AlterTopicConfigParams.shape,
+		{
+			description: prompts.ALTER_TOPIC_CONFIG_DESCRIPTION,
+			inputSchema: params.AlterTopicConfigParams.shape,
+			annotations: kafkaToolAnnotations("kafka_alter_topic_config"),
+		},
 		wrapHandler("kafka_alter_topic_config", config, async (args) => {
 			const result = await ops.alterTopicConfig(service, args);
 			return ResponseBuilder.success(result);

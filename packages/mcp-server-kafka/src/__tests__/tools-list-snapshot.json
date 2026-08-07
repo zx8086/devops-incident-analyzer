@@ -1,0 +1,429 @@
+{
+	"connect_delete_connector": {
+		"surfaceHash": "fdafd22c791eb39333c910e854c99c1b2a8e6b910f418d99e6975ffe2045ca2f",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"connect_get_cluster_info": {
+		"surfaceHash": "3135f5f763aa331533c145f61f580d8497e9fefabe5ed19d11074e8568ab9994",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"connect_get_connector_status": {
+		"surfaceHash": "10b18081e515db8dac5db1f8851b775de3e7edc9dbf0aa379aaa397cbb673df7",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"connect_get_connector_task_status": {
+		"surfaceHash": "53fecaf996e59161c5c76c67d66cb123ac0f18da8f00c762ac47c0c66b583f18",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"connect_health_check": {
+		"surfaceHash": "2b3946c793c5417c0ecce7f5f8dbf3af49f8db39cc59e8f9031f4dd7c96b68e1",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"connect_list_connectors": {
+		"surfaceHash": "02450c98bebee77a229417d7c848d4c2de7ba4cc983f297b1d363f41de24a219",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"connect_pause_connector": {
+		"surfaceHash": "a06a593bf2ac3053801433d54f2adfc4fb612656dcd4f47914ad9de000f03cc9",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"connect_restart_connector": {
+		"surfaceHash": "dd57d4508846c778ef24bfc0ff83f68d2d8e5e3727423b5479c3909dc7c7b9ed",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"connect_restart_connector_task": {
+		"surfaceHash": "0581cd5b9f8f2509567ee52671516f07efd175b4d6c6f584ca94c420bd4af3fc",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"connect_resume_connector": {
+		"surfaceHash": "25be8be4c87af6857c9e6f568b64fbd43c3f002ee2c34a74e20684388d638315",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"kafka_alter_topic_config": {
+		"surfaceHash": "964344cebf4de42ae3a43129c0789db5879212a51102699b68d05bf7f79180be",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"kafka_check_compatibility": {
+		"surfaceHash": "1c310bacc754254cfe9b8864dc774f21bac1b20e0f34a597220270299fa22e89",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kafka_consume_messages": {
+		"surfaceHash": "83cb5801a0e4b5fdb0e57e9396c81edb8a07c81c1ce3d3deae8de97fa625d669",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kafka_create_topic": {
+		"surfaceHash": "3eafeae082eff9c51307091aa012122bd6369d6ad60f4c05c712a23454ea1ea6",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"kafka_delete_schema_subject": {
+		"surfaceHash": "ae932a94efe9bc1752c4d0eb2cf7dd33178b27aeadcc997f3e36657651d549a6",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"kafka_delete_topic": {
+		"surfaceHash": "a4cc2142904506c4189faa4db4245c01bfd6600a86bfea1c1e314883ae8eeee2",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"kafka_describe_cluster": {
+		"surfaceHash": "216cf60aa93e21339faa04d694430e6cdd2a29c2267cf7142f5d97e670e69629",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kafka_describe_consumer_group": {
+		"surfaceHash": "066399537a15281ea689ecd6a5b4afc93f7b94b0e38d7f4d2eb9591293b495c4",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kafka_describe_topic": {
+		"surfaceHash": "92b9a33219c1bda14fdebb3c21764c8d0f56eab8b8450904cbdbaf8075166584",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kafka_get_cluster_info": {
+		"surfaceHash": "ae9f137a5c07423424325760e31e6885256eac72249ccbbe8974151d72fdf782",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kafka_get_consumer_group_lag": {
+		"surfaceHash": "7e5e8ed7daa5812353f53a67102635eca46abc96b96c7dd3bb575cc1fbe0784d",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kafka_get_message_by_offset": {
+		"surfaceHash": "457459685fbd3baba8d86fa2d55de48127df7794712e3aabd8fdcff022a6a666",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kafka_get_schema": {
+		"surfaceHash": "5a615c60d4f453b4c7dd71c56258e145a3e46b14ef0b1efc48f8275ce3fc4be6",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kafka_get_schema_config": {
+		"surfaceHash": "8d4725156bd7265fb2607cedae57e13cb4057335970c0d056574ebb4a1d90292",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kafka_get_schema_versions": {
+		"surfaceHash": "b41d9806fce3d7af5a09bf6f2d0dfb817c335cb530401cb5a5253a945c99fa7f",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kafka_get_topic_offsets": {
+		"surfaceHash": "c7a84607bf0ea3cb9c46f80ef9987fa1e89f9e1ded8dccc0b0b57e6b3cc09176",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kafka_list_consumer_groups": {
+		"surfaceHash": "a8d8e5d55ead9827181d780f1953e83417b8dfa95d7072a24037028101362629",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kafka_list_dlq_topics": {
+		"surfaceHash": "d557ecedbb756241ecebdbaf50194aade06c5f4eed1138a2750820e10c9aaedb",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kafka_list_schemas": {
+		"surfaceHash": "fb337bf4c9aa90c8baaec90b298ffe4ada1806544e039c8ccf85fd26943b0afa",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kafka_list_topics": {
+		"surfaceHash": "7f4931a9e0a3dbf591cb531ceb365049db5e0145d81791cec0a8de3c5bcb8dd7",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"kafka_produce_message": {
+		"surfaceHash": "a58a7d78a1e776a67f307c7b6dec6524cbb6e79b2f37414555ae0ccd6f66f517",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"kafka_register_schema": {
+		"surfaceHash": "fa2b393485492f0e0997be42535f2ac2430e74d63d097a636b29762d8722c950",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"kafka_reset_consumer_group_offsets": {
+		"surfaceHash": "7c2ad4d1f11f81738a7a1d5151a7435cedf41f41cd74ce354de89a3c587a89e3",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"kafka_set_schema_config": {
+		"surfaceHash": "d014d1312707c1fd5c72d23abb7ad78e77320fb1dd69331ca365a7cdb5cd1ead",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"ksql_cluster_status": {
+		"surfaceHash": "7a56c7f7ce8f706161ecd016e8cd783e9542bade54ca5b4a166877f86b754113",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"ksql_describe": {
+		"surfaceHash": "ebf8f0638f46bd29a89d75f704858ff46eaa56418c92132621b225551340343c",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"ksql_execute_statement": {
+		"surfaceHash": "5023549f04411ef1b229a386bfd47d9d474c3ecb9f0721a450b242a36b412809",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"ksql_get_server_info": {
+		"surfaceHash": "d8c5c81c7fbc4aeccc686f651c4abbdcf003960effb8ea02ec9f1abaf73ef829",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"ksql_health_check": {
+		"surfaceHash": "db40838984ee0fb4d90b3563484f868fbf695df4b83885fdd54aa15d94080f95",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"ksql_list_queries": {
+		"surfaceHash": "adf4e2ff75753b2847435f0227bcf0e6be93ffd38df3fa373d030079241000c1",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"ksql_list_streams": {
+		"surfaceHash": "c9ba6c78d71796e3fe4078e0ab46057d2c4b6ae0af632d458d2486d910c062ef",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"ksql_list_tables": {
+		"surfaceHash": "ba5045ca6dfc6a4ecce2b7da97ad86d44e052ec5e11fae5d739a11ed36ce177e",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"ksql_run_query": {
+		"surfaceHash": "4d022b8ad676cb63a2f757e8fd3007f4efe8f05d7e06b0b214c7367ead88bbea",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"restproxy_commit_offsets": {
+		"surfaceHash": "b8a226dd6b718f8bb48012bb802c514b74cedeb3b710fdc0deea74b5a06989d2",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"restproxy_consume": {
+		"surfaceHash": "acc4204c8566a784056553d56015f36a4f0dc108069adfda8cd824ffafdfd561",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"restproxy_create_consumer": {
+		"surfaceHash": "891cd94d39c2514b1feff75a1d1c210182962867a26cb73c0aa3308eec269776",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"restproxy_delete_consumer": {
+		"surfaceHash": "7b30827da89ce0eb29d2df7c8b3a475e7ed5962c042abb759e73e3c1abbe1d7e",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"restproxy_get_partitions": {
+		"surfaceHash": "e2e5029e05150b68f1dba6949c4c4b049a21338d7718c75ea1b3ead6d530cba0",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"restproxy_get_topic": {
+		"surfaceHash": "265a5a7bf100ee8899fbd75ffe1e081d264c052d81e15cd89328af6ffa1a7fd5",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"restproxy_health_check": {
+		"surfaceHash": "eef1a6152f5f5931e57c5e153f8496ba04ed9b3547927e07db6ebc341d422ddc",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"restproxy_list_topics": {
+		"surfaceHash": "1788ff4f38b2cda9fcd5f4e0f1f03a9b9573cf25f4476de5459f05f370740b36",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"restproxy_produce": {
+		"surfaceHash": "59633b0bac410c7f7abea1f28ba295beb47138f3141cc439e55d98edd9198d0f",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"restproxy_subscribe": {
+		"surfaceHash": "7de23d3d11dfd10bc10122685ba8f68985e0a63bafa336d141ca02893cc3171e",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"schema_registry_health_check": {
+		"surfaceHash": "11f5393d5c6371df1c70e7143886435509e94bc582e2f2aeefc066c2b73b6fa9",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"sr_check_compatibility": {
+		"surfaceHash": "26701ece91bcee0c814551f3d31f3c25cb9d734d7f671d3f0ae3a26a6686ed88",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
+	"sr_hard_delete_subject": {
+		"surfaceHash": "6f2b6bd93bc0240707b183d2fb9519b3a39f156658b721f03bf6079c5d4a5c90",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"sr_hard_delete_subject_version": {
+		"surfaceHash": "e92f6479064e767581a5cb90ffc40c8f72985066a368d84e23d8e2fe662980eb",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"sr_register_schema": {
+		"surfaceHash": "b51ef8576ee83176666417a6268421c474640174688383cf58ae9016eafe9a9d",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"sr_set_compatibility": {
+		"surfaceHash": "943f194938aed84ef0e64d073fd7efdce66004f419de00c19a53bc98db1c8ee7",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
+	"sr_soft_delete_subject": {
+		"surfaceHash": "0d2f2f04c4e0c56c356dcff99d008bdd9ad38ebd4bb1118028804e4728010406",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	},
+	"sr_soft_delete_subject_version": {
+		"surfaceHash": "92110c9ac608ecd01d56af6890aeefabc3d7b46637f03cbf2cb9ff9f7a79f44a",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": true
+		}
+	}
+}

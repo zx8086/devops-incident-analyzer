@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AppConfig } from "../../config/schemas.ts";
 import { ResponseBuilder } from "../../lib/response-builder.ts";
 import type { KafkaService } from "../../services/kafka-service.ts";
+import { kafkaToolAnnotations } from "../tool-classification.ts";
 import { wrapHandler } from "../wrap.ts";
 import * as ops from "./operations.ts";
 import * as params from "./parameters.ts";
@@ -16,20 +17,26 @@ export function registerDestructiveTools(server: McpServer, service: KafkaServic
 	// tests can drive registration with their own fixture.
 	if (!config.kafka.allowDestructive) return;
 
-	server.tool(
+	server.registerTool(
 		"kafka_delete_topic",
-		prompts.DELETE_TOPIC_DESCRIPTION,
-		params.DeleteTopicParams.shape,
+		{
+			description: prompts.DELETE_TOPIC_DESCRIPTION,
+			inputSchema: params.DeleteTopicParams.shape,
+			annotations: kafkaToolAnnotations("kafka_delete_topic"),
+		},
 		wrapHandler("kafka_delete_topic", config, async (args) => {
 			const result = await ops.deleteTopic(service, args);
 			return ResponseBuilder.success(result);
 		}),
 	);
 
-	server.tool(
+	server.registerTool(
 		"kafka_reset_consumer_group_offsets",
-		prompts.RESET_CONSUMER_GROUP_OFFSETS_DESCRIPTION,
-		params.ResetConsumerGroupOffsetsParams.shape,
+		{
+			description: prompts.RESET_CONSUMER_GROUP_OFFSETS_DESCRIPTION,
+			inputSchema: params.ResetConsumerGroupOffsetsParams.shape,
+			annotations: kafkaToolAnnotations("kafka_reset_consumer_group_offsets"),
+		},
 		wrapHandler("kafka_reset_consumer_group_offsets", config, async (args) => {
 			const result = await ops.resetConsumerGroupOffsets(service, args);
 			return ResponseBuilder.success(result);

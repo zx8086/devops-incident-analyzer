@@ -18,14 +18,10 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PACKAGES_DIR = join(HERE, "../../..", "packages");
 
-// Packages still using the legacy sugar API. Each C-series PR converts one server
-// and deletes its entry here in the same commit. When the last entry goes, the
-// guard enforces zero sugar registration repo-wide.
-const NOT_YET_CONVERTED = new Set([
-	"mcp-server-kafka", // SIO-1421 (C-8)
-]);
-// mcp-server-elastic is absent: fully converted since SIO-1050 (v1.17.5 signature
-// incompatibility forced it) -- it is the proof the guard passes on a converted tree.
+// SIO-1421 (C-8) completed the C-series sweep: the allowlist is EMPTY and the
+// guard now enforces zero sugar registration repo-wide, strictly. A new package
+// must register via register* config style from its first commit.
+const NOT_YET_CONVERTED = new Set<string>([]);
 
 // Live sugar call on a registration receiver, in dot or bracket form
 // (server.tool( / server["tool"]( / server['tool']( -- CodeRabbit).
