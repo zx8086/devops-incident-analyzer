@@ -1,4 +1,5 @@
 // shared/src/bootstrap-lifecycle.ts
+//
 // SIO-1423: SDK-agnostic pieces of createMcpApplication (bootstrap.ts), split out so the F2 v2
 // pilot (createMcpApplicationV2) can reuse them without importing anything v1-McpServer-typed.
 // NOT exported from index.ts -- internal to the shared package; F2 imports by path. Everything
