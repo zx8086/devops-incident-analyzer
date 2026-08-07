@@ -24,6 +24,7 @@ tools:
   - aws_ecs_describe_services
   - aws_ecs_list_tasks
   - aws_ecs_describe_tasks
+  - aws_ecs_describe_task_definition
   - aws_logs_describe_log_groups
   - aws_logs_start_query
   - aws_logs_get_query_results
@@ -69,11 +70,10 @@ Use `aws_ecs_describe_tasks` with up to 100 task ARNs per call. The critical fie
 Use `aws_logs_describe_log_groups` with `logGroupNamePrefix: /aws/ecs/<service-name>` (or `/ecs/<service-name>` for legacy naming). If the service uses the awslogs driver, the log group name is in the task definition's `containerDefinitions[].logConfiguration.options.awslogs-group`.
 
 ### 6. Query application logs around the failure window
-Use `aws_logs_start_query` against the log group identified in step 5. A focused Insights query:
+Use `aws_logs_start_query` against the log group identified in step 5, with `startRelative: "now-30m"` to scope the window. A focused Insights query:
 
 ```
 fields @timestamp, @message
-| filter @timestamp >= now(-30m)
 | filter @message like /ERROR|FATAL|panic|Exception/
 | sort @timestamp desc
 | limit 50
@@ -82,10 +82,12 @@ fields @timestamp, @message
 Wait 5–15 seconds, then call `aws_logs_get_query_results` with the queryId. If the query is still `Running`, poll once more after a short delay before giving up.
 
 ### 7. Check the security group and VPC posture
-If `stoppedReason` mentions networking failure (`unable to assume role`, `network interface not found`, `health check timeout`), use `aws_ec2_describe_security_groups` on the service's security group(s). Look for missing egress rules to dependent services (DynamoDB, RDS, third-party APIs).
+If `stoppedReason` mentions a networking failure (`network interface not found`, `health check timeout`), use `aws_ec2_describe_security_groups` on the service's security group(s). Look for missing egress rules to dependent services (DynamoDB, RDS, third-party APIs).
+
+If `stoppedReason` mentions `unable to assume role`, this is an IAM trust-policy issue, not a networking problem — go to [`aws-iam-permission-troubleshooting.md`](./aws-iam-permission-troubleshooting.md#trust-policy-issues) and check the task role's trust relationship (ExternalId, caller principal) rather than security groups.
 
 ### 8. Correlate against the rollout history
-If the failures correlate with a recent service revision (deployment), the task definition itself is the likely culprit. Service events will reference `taskDefinition: arn:aws:ecs:...:task-definition/<family>:<rev>`. Compare the failing revision against the previous one for environment-variable changes, image-tag changes, or memory/CPU reductions.
+If the failures correlate with a recent service revision (deployment), the task definition itself is the likely culprit. Service events will reference `taskDefinition: arn:aws:ecs:...:task-definition/<family>:<rev>`. Use `aws_ecs_describe_task_definition` on both the failing revision and the previous one to compare environment-variable changes, image-tag changes, and memory/CPU allocations directly rather than inferring them from event text.
 
 ## Cross-Datasource Correlation
 
@@ -110,4 +112,4 @@ The Phase 5 (SIO-761) correlation rule `aws-ecs-degraded-needs-elastic-traces` f
 - Adjust task-definition memory/CPU and create a new revision
 
 ## All Tools Used Are Read-Only
-aws_ecs_list_clusters, aws_ecs_describe_services, aws_ecs_list_tasks, aws_ecs_describe_tasks, aws_logs_describe_log_groups, aws_logs_start_query, aws_logs_get_query_results, aws_ec2_describe_security_groups
+aws_ecs_list_clusters, aws_ecs_describe_services, aws_ecs_list_tasks, aws_ecs_describe_tasks, aws_ecs_describe_task_definition, aws_logs_describe_log_groups, aws_logs_start_query, aws_logs_get_query_results, aws_ec2_describe_security_groups

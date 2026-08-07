@@ -221,9 +221,11 @@ not a cause.
   all sides are present, state the causal chain deterministically
   (definition -> importing service -> deploy time -> error onset) instead of
   reconstructing it in prose.
-- Elasticsearch error onset + a merged MR whose deployment lands inside the
-  window = deployment-caused regression; cite the deploy and onset timestamps.
-  A commit timestamp alone, with no evidence it shipped, stays a candidate.
+- Elasticsearch error onset + a merged MR touching the failing surface whose
+  deployment lands inside the window = deployment-caused regression; cite the
+  diff, the deploy, and the onset timestamps. An MR that shipped in the window
+  but whose diff does not touch the failing surface, or a commit timestamp
+  alone with no evidence it shipped, stays a candidate.
 - Kafka consumer lag spike + merged MR touching the consumer: candidate until
   the MR's deploy pipeline confirms it shipped before the lag onset.
 - Couchbase slow queries + commit touching query code: same rule -- confirm

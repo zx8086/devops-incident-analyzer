@@ -43,14 +43,14 @@ Use `aws_cloudwatch_describe_alarms`. Filter by `StateValue: ALARM` or `StateVal
 For each alarm, the fields that matter:
 - `AlarmName`, `AlarmDescription` (operator intent)
 - `Namespace`, `MetricName`, `Dimensions` (what the alarm is watching)
-- `Statistic`, `Period`, `EvaluationPeriods`, `Threshold`, `ComparisonOperator` (what triggers it)
+- `Statistic`, `Period`, `EvaluationPeriods`, `DatapointsToAlarm`, `TreatMissingData`, `Threshold`, `ComparisonOperator` (what triggers it)
 - `StateValue`, `StateReason`, `StateReasonData` (current state plus the datapoint that triggered the transition; quote `StateReason` verbatim in any finding)
 - `StateUpdatedTimestamp` (when the alarm last changed state — anchor the investigation window here, not at "now")
 
 ### 2. Interpret the alarm state
-- **`ALARM`** — the metric has crossed the threshold for `EvaluationPeriods` consecutive periods. The alarm has fired and is currently active. Drill down on the underlying metric next.
+- **`ALARM`** — at least `DatapointsToAlarm` (M) of the last `EvaluationPeriods` (N) datapoints breached the threshold. These breaching datapoints do NOT need to be consecutive — only that at least M of the N most recent periods breached. If `DatapointsToAlarm` is unset/absent from `aws_cloudwatch_describe_alarms` output, CloudWatch defaults it to `EvaluationPeriods`, meaning all N periods (i.e., consecutive) must breach. Always check `DatapointsToAlarm` vs `EvaluationPeriods` before describing the alarm as "sustained" — an M-of-N alarm with M < N can fire on intermittent spikes. The alarm has fired and is currently active. Drill down on the underlying metric next.
 - **`OK`** — the metric is within the configured bounds. If the user reports a problem despite all `OK` alarms, suspect a coverage gap (no alarm exists for the actual failure mode), not a false negative.
-- **`INSUFFICIENT_DATA`** — the metric did not report enough datapoints in the evaluation window. This is NOT the same as `ALARM`. Common causes:
+- **`INSUFFICIENT_DATA`** — the metric did not report enough datapoints in the evaluation window. This is NOT the same as `ALARM`. Note that this state only occurs when `TreatMissingData` is `missing` (the default) and all evaluated datapoints are absent; if the alarm's `TreatMissingData` is set to `breaching` or `notBreaching`, missing datapoints are instead counted toward the M-of-N evaluation and the alarm goes straight to `ALARM` or `OK` rather than `INSUFFICIENT_DATA` — check `TreatMissingData` before assuming a data gap will surface as this state. Common causes:
   - The resource being watched is stopped or terminated (e.g., alarm on an EC2 instance after the instance was deleted)
   - The metric is push-based and the producer is not emitting (custom CloudWatch metrics, Lambda invocations on an idle function)
   - The alarm period is shorter than the metric's emission cadence (e.g., 1-minute period on a metric that publishes every 5 minutes)
@@ -63,7 +63,7 @@ Use `aws_cloudwatch_get_metric_data` for the namespace + metric + dimensions ide
 The metric values around the transition point reveal whether the alarm fired on a sustained shift (real signal) or a single spike that exceeded the threshold for the minimum evaluation count (noise).
 
 ### 4. Walk the alarm hierarchy
-If the alarm is a composite alarm (rule built on top of other alarms), `AlarmRule` lists the constituent alarm ARNs. Recurse into each via `aws_cloudwatch_describe_alarms` to find the leaf alarm(s) that actually fired.
+If the alarm is a composite alarm, `AlarmRule` is a Boolean expression string, not a list of ARNs — e.g. `ALARM("cpu-high") AND ALARM("disk-high")` or `ALARM("child1") OR ALARM("child2")`. Each referenced alarm is wrapped in a state function (`ALARM(...)`, `OK(...)`, or `INSUFFICIENT_DATA(...)`) naming the child alarm by name or ARN, combined with `AND`/`OR`/`NOT` and optional parentheses for grouping. To walk the hierarchy: extract every alarm name/ARN token that appears inside an `ALARM(...)`, `OK(...)`, or `INSUFFICIENT_DATA(...)` call in the expression, then look each one up via `aws_cloudwatch_describe_alarms` (repeating recursively if a referenced alarm is itself composite) to find the leaf alarm(s) that actually fired.
 
 ### 5. Correlate with the resource state
 The alarm's `Dimensions` field identifies the resource:

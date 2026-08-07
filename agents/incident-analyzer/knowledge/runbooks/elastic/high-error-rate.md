@@ -1,7 +1,7 @@
 ---
 type: Runbook
 title: "High Error Rate Investigation"
-description: "Investigate a spike in application error rate using Elastic APM."
+description: "Investigate a spike in application error rate across the API gateway, Elasticsearch logs, Couchbase, and Kafka."
 status: stable
 tags: [elastic, apm, errors]
 generated:
@@ -40,7 +40,7 @@ tools:
 ---
 # High Error Rate Investigation
 
-Investigate a spike in application error rate using Elastic APM.
+Investigate a spike in application error rate across the API gateway, Elasticsearch logs, Couchbase, and Kafka.
 
 ## Symptoms
 - Elevated 5xx responses on API gateway (Kong Konnect)

@@ -66,12 +66,12 @@ host: b-1.<cluster-name>.<uuid>.<region>.amazonaws.com
 The leading `b-N.` identifies the broker number. Use `aws_ec2_describe_instances` with a filter on the MSK ENI's private IP to find the underlying instance (MSK runs on EC2 under the hood, though the API treats brokers as managed nodes).
 
 ### 4. Check security groups for recent changes
-Use `aws_ec2_describe_security_groups` on the SGs attached to the MSK cluster's network interfaces. A common cause of "broker becomes unreachable" is an out-of-band SG-rule change that removed the agent's source CIDR or principal from the `kafka:Connect` permission set.
+Use `aws_ec2_describe_security_groups` on the SGs attached to the MSK cluster's network interfaces. A common cause of "broker becomes unreachable" is an out-of-band SG-rule change that removed the agent's source CIDR from the allowed ingress/egress rules — a network-layer failure, distinct from IAM authorization (the `kafka-cluster:Connect` action; see [`msk-iam-permissions.md`](./msk-iam-permissions.md)). SG changes affect whether the client can reach the broker's port at all; they have no effect on IAM policy evaluation, which happens only after network connectivity is established, during the TLS/SASL_IAM handshake.
 
-Compare the current `IpPermissions` to the expected list. If a rule was recently removed for the agent's egress source, the network team's audit log will have a corresponding CloudTrail entry — escalate the SG change as the root cause.
+Compare the current `IpPermissions` to the expected list. If a rule was recently removed for the agent's source CIDR, the network team's audit log will have a corresponding CloudTrail entry — escalate the SG change as the root cause. If instead the client connects but the handshake itself is rejected, that points to an IAM `kafka-cluster:Connect` denial, not a security-group issue — see [`msk-iam-permissions.md`](./msk-iam-permissions.md).
 
 ### 5. Pull CloudWatch Logs for the broker
-MSK ships broker logs to a CloudWatch log group named `/aws/msk/<cluster-name>` (if logging is enabled at cluster-create time). Use `aws_logs_describe_log_groups` with the prefix to confirm the log group exists, then `aws_logs_start_query` + `aws_logs_get_query_results` with:
+MSK broker logs are delivered to CloudWatch only if broker logging was explicitly enabled on the cluster (`LoggingInfo.BrokerLogs.CloudWatchLogs.Enabled`), and the destination log group name (`LoggingInfo.BrokerLogs.CloudWatchLogs.LogGroup`) is an arbitrary string chosen at cluster-create or update-monitoring time — there is no fixed naming convention, so do not assume a path like `/aws/msk/<cluster-name>`. No MCP tool in this deployment surfaces the MSK control-plane `LoggingInfo` directly (`kafka_describe_cluster` only returns Kafka-protocol broker metadata, not AWS-side logging config), so use `aws_logs_describe_log_groups` without a fixed prefix assumption — search broadly (e.g. by the cluster or service name) and confirm the returned group is the one actually wired to this cluster before querying it. Then use `aws_logs_start_query` + `aws_logs_get_query_results` with:
 
 ```
 fields @timestamp, @message
@@ -81,7 +81,7 @@ fields @timestamp, @message
 | limit 50
 ```
 
-Empty results mean MSK logging is not enabled at the cluster level — report as a coverage gap, not as a healthy broker.
+Empty results are consistent with MSK logging being disabled at the cluster level, but can equally mean the log group was never located (wrong name guessed, or logging routes to S3/Firehose instead of CloudWatch) — verify the log group was actually found in the previous step before concluding logging is off. Either way, report as a coverage gap, not as a healthy broker.
 
 ### 6. Check AWS Health for cluster-level events
 Use `aws_health_describe_events`. AWS Health surfaces MSK-specific events (`MSK_OPERATIONAL_NOTIFICATION`, `MSK_SCHEDULED_CHANGE`) that explain symptoms the metrics alone cannot. `SubscriptionRequiredException` on Basic support means this check is unavailable — note the gap.
@@ -100,7 +100,7 @@ The Phase 5 (SIO-761) correlation rule `kafka-broker-timeout-needs-aws-metrics` 
 
 ## Escalation Criteria
 - Multiple brokers unreachable simultaneously with `OfflinePartitionsCount > 0`: page on-call
-- Single broker unreachable but cluster `ActiveControllerCount == 1`: monitor; MSK will auto-replace within ~15 minutes
+- Single broker unreachable but cluster `ActiveControllerCount == 1`: monitor `aws_health_describe_events` and CloudWatch `OfflinePartitionsCount`/broker state; MSK does not publish a guaranteed replacement SLA (the MSK SLA covers only 99.9% monthly uptime), so escalate to on-call if the broker has not rejoined the cluster within your environment's own escalation-policy window rather than waiting on a fixed duration
 - Disk-full broker (`KafkaDataLogsDiskUsed == 100%`): page on-call AND open a capacity-planning ticket (auto-scaling MSK storage may not be enabled)
 
 ## Known Configuration Gaps (don't re-flag as findings)
