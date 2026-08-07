@@ -21,6 +21,7 @@ import { loadAgent } from "@devops-agent/gitagent-bridge";
 import { evaluate } from "langsmith/evaluation";
 import { resolveRoleModelConfig } from "../llm.ts";
 import { getAgentsDir } from "../paths.ts";
+import { citationGrounding } from "./citation-grounding-evaluator.ts";
 import {
 	confidenceThreshold,
 	datasourcesCovered,
@@ -29,6 +30,7 @@ import {
 	subagentEvidenceJudge,
 } from "./evaluators.ts";
 import { runAgent } from "./run-function.ts";
+import { runbookSelectionVsUsage } from "./runbook-selection-evaluator.ts";
 
 const DATASET_NAME = "incident-replay-eval";
 
@@ -120,7 +122,18 @@ const results = await evaluate(
 	(inputs: Record<string, unknown>) => runAgent(inputs as Parameters<typeof runAgent>[0]),
 	{
 		data: DATASET_NAME,
-		evaluators: [datasourcesCovered, confidenceThreshold, responseQualityJudge, subagentEvidenceJudge],
+		evaluators: [
+			datasourcesCovered,
+			confidenceThreshold,
+			responseQualityJudge,
+			subagentEvidenceJudge,
+			// SIO-1442: tier 3 of the OKF spec audit -- grounds grading in whether the agent
+			// actually USED the right knowledge, not just whether the final prose sounds
+			// plausible. runbookSelectionVsUsage is deterministic; citationGrounding makes one
+			// OpenAI call per example when the response cites a runbook by name/title.
+			runbookSelectionVsUsage,
+			citationGrounding,
+		],
 		experimentPrefix,
 		maxConcurrency: 1,
 		numRepetitions: repetitions,

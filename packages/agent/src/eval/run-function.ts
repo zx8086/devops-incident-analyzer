@@ -6,6 +6,8 @@ import { type FirstAttemptSummary, summarizeFirstAttempts } from "../alignment.t
 import { buildGraph } from "../graph.ts";
 import { createMcpClient } from "../mcp-bridge.ts";
 import { extractTextFromContent } from "../message-utils.ts";
+import { getAgent } from "../prompt-context.ts";
+import { buildKnowledgeCandidates } from "./citation-grounding-evaluator.ts";
 import {
 	appendRecordedOutput,
 	exampleKey,
@@ -138,6 +140,24 @@ export const FrozenOutputSchema = z.object({
 			}),
 		)
 		.default([]),
+	// SIO-1442: same tri-state contract as state.ts's selectedRunbooks (null = selector didn't
+	// run; [] = ran, chose none; [names] = these). Default null, not [], so a pre-SIO-1442
+	// fixture reads as "unknown" rather than misreporting "the selector ran and chose nothing."
+	selectedRunbooks: z.array(z.string()).nullable().default(null),
+	// CodeRabbit (PR #633): the runbook-selection-vs-usage evaluator originally called getAgent()
+	// LIVE at evaluation time to read runbookSelection.always_select -- so re-grading a recorded
+	// run under replay-outputs graded against TODAY's config, not the config that governed the
+	// run when it was recorded. Snapshotting always_select here (alongside selectedRunbooks, at
+	// the same point the run actually executed) pins the evaluator to run.outputs only, with no
+	// live config read. Defaults to [] on a pre-SIO-1442 fixture -- the evaluator only skips
+	// grading when selectedRunbooks is null, so an empty alwaysSelectRunbooks on a legacy fixture
+	// is inert rather than incorrectly reporting missing entries.
+	alwaysSelectRunbooks: z.array(z.string()).default([]),
+	// CodeRabbit (PR #633): same fix, same reason, for the citation-grounding evaluator -- it
+	// originally called getAgent() live to read runbook knowledge for citation matching, which
+	// broke replay-outputs identically. Snapshotted here at record time; defaults to [] on a
+	// pre-SIO-1442 fixture, which is inert (citationGrounding finds nothing to match against).
+	knowledgeSnapshot: z.array(z.object({ filename: z.string(), content: z.string(), title: z.string() })).default([]),
 });
 
 let frozenOutputs: Map<string, unknown> | undefined;
@@ -169,6 +189,9 @@ export async function runAgent(inputs: z.infer<typeof RunAgentInputsSchema>): Pr
 		subagentReports: { [dataSourceId: string]: string };
 		toolTrajectory: ToolTrajectory;
 		responseHealth: ResponseHealthFinding[];
+		selectedRunbooks: string[] | null;
+		alwaysSelectRunbooks: string[];
+		knowledgeSnapshot: { filename: string; content: string; title: string }[];
 	};
 }> {
 	const parsed = RunAgentInputsSchema.parse(inputs);
@@ -241,6 +264,18 @@ export async function runAgent(inputs: z.infer<typeof RunAgentInputsSchema>): Pr
 				subagentReports,
 				toolTrajectory,
 				responseHealth,
+				// SIO-1442: threaded for the tier-3 runbook-selection-vs-usage evaluator, same
+				// pattern as toolTrajectory/responseHealth above -- graph state the evaluator (which
+				// runs against the LangSmith run, not the graph) could otherwise never see.
+				selectedRunbooks: finalState.selectedRunbooks ?? null,
+				// CodeRabbit (PR #633): snapshotted HERE, at the moment the run actually executes, so
+				// replay-outputs re-grades against the config that governed THIS run rather than
+				// whatever agents/incident-analyzer/knowledge/index.yaml says today.
+				alwaysSelectRunbooks: getAgent().runbookSelection?.always_select ?? [],
+				// CodeRabbit (PR #633): same snapshot-at-record-time fix for the citation-grounding
+				// evaluator, which previously read runbook knowledge live via getAgent() at evaluation
+				// time instead of at the point the run actually executed.
+				knowledgeSnapshot: buildKnowledgeCandidates(getAgent().knowledge),
 			},
 		};
 	};
