@@ -19,6 +19,7 @@ import { installReadOnlyChokepointV2, installToolCallLoggingV2, type ToolCallLog
 import { registerCoreToolsV2 } from "./v2/tools/core.ts";
 import { registerDocumentationToolsV2 } from "./v2/tools/documentation.ts";
 import { registerPlaybookToolsV2 } from "./v2/tools/playbooks.ts";
+import { registerQueryAnalysisToolsAV2 } from "./v2/tools/query-analysis-a.ts";
 
 const PING_ANNOTATIONS: ToolAnnotations = {
 	readOnlyHint: true,
@@ -97,6 +98,9 @@ export function buildServerFactory(logger: ToolCallLogger): McpServerFactory {
 
 		// SIO-1443: playbook tools (list/get markdown playbooks).
 		registerPlaybookToolsV2(server, tools);
+
+		// SIO-1443: query analysis tools, part A (11 of 21 -- pure system-catalog reads).
+		registerQueryAnalysisToolsAV2(server, tools);
 
 		// SIO-1424: composition order matches v1's serverFactory closure in bootstrap.ts --
 		// read-only INNER (installed first), tool-call logging OUTER (installed second, so a
