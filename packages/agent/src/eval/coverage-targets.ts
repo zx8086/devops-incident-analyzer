@@ -21,7 +21,12 @@
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { extractFrontmatterTools, extractTailSection, isRunbookCategory } from "@devops-agent/gitagent-bridge";
+import {
+	extractFrontmatterTools,
+	extractTailSection,
+	isRunbookCategory,
+	KnowledgeIndexSchema,
+} from "@devops-agent/gitagent-bridge";
 import { parse } from "yaml";
 import { ORBIT_TOOL_NAMES } from "../correlation/extractors/orbit.ts";
 import { getAgentsDir } from "../paths.ts";
@@ -70,30 +75,45 @@ export function datasourceForTool(toolName: string): string {
 	return "unknown";
 }
 
-// Resolves the set of runbook directories to scan. Runbooks now live in per-datasource
-// subfolders (runbooks/aws/, runbooks/kafka/, ...), each its own registered category in
-// knowledge/index.yaml (see isRunbookCategory). Falls back to treating runbookDir itself
-// as a single flat directory when no index.yaml/categories are found there, so passing a
-// synthetic flat directory (e.g. in a test) still works.
+// Walks upward from `runbookDir` looking for the knowledge/ directory that owns it (the
+// one containing index.yaml). Runbook categories nest at varying depths under knowledge/
+// (e.g. general/runbooks/, aws/runbooks/), so the parent cannot be assumed to be a fixed
+// number of `..` hops away. Capped at 4 levels to avoid an unbounded upward search.
+function findKnowledgeDir(runbookDir: string): string | undefined {
+	let dir = runbookDir;
+	for (let i = 0; i < 4; i++) {
+		if (existsSync(join(dir, "index.yaml"))) return dir;
+		const parent = join(dir, "..");
+		if (parent === dir) return undefined;
+		dir = parent;
+	}
+	return undefined;
+}
+
+// Resolves the set of runbook directories to scan. Runbooks live under one top-level
+// directory per datasource (aws/runbooks/, kafka/runbooks/, ..., general/runbooks/ for
+// cross-datasource ones), each its own registered category in knowledge/index.yaml (see
+// isRunbookCategory). Falls back to treating runbookDir itself as a single flat directory
+// when no index.yaml/categories are found there, so passing a synthetic flat directory
+// (e.g. in a test) still works.
 function resolveRunbookDirs(runbookDir: string): string[] {
-	const knowledgeDir = join(runbookDir, "..");
-	const indexPath = join(knowledgeDir, "index.yaml");
-	if (!existsSync(indexPath)) return [runbookDir];
+	const knowledgeDir = findKnowledgeDir(runbookDir);
+	if (!knowledgeDir) return [runbookDir];
 
 	let parsed: unknown;
 	try {
-		parsed = parse(readFileSync(indexPath, "utf-8"));
+		parsed = parse(readFileSync(join(knowledgeDir, "index.yaml"), "utf-8"));
 	} catch {
 		return [runbookDir];
 	}
-	const categories = (parsed as { categories?: Record<string, unknown> } | undefined)?.categories;
-	if (!categories || typeof categories !== "object") return [runbookDir];
+	// Validated with the same schema manifest-loader.ts enforces at agent-load time, so a
+	// malformed index.yaml degrades to the flat-directory fallback instead of throwing here.
+	const index = KnowledgeIndexSchema.safeParse(parsed);
+	if (!index.success) return [runbookDir];
 
-	const dirs = Object.entries(categories)
+	const dirs = Object.entries(index.data.categories)
 		.filter(([category]) => isRunbookCategory(category))
-		.map(([, config]) => (config && typeof config === "object" ? (config as { path?: unknown }).path : undefined))
-		.filter((p): p is string => typeof p === "string")
-		.map((p) => join(knowledgeDir, p));
+		.map(([, config]) => join(knowledgeDir, config.path));
 
 	return dirs.length > 0 ? dirs : [runbookDir];
 }
@@ -102,15 +122,25 @@ function resolveRunbookDirs(runbookDir: string): string[] {
 // present; extractTailSection is the documented fallback (SIO-1288's dual-read), matching
 // runbook-validator's own precedence exactly.
 export function runbookToolCitations(
-	runbookDir: string = join(getAgentsDir("incident-analyzer"), "knowledge/runbooks"),
+	runbookDir: string = join(getAgentsDir("incident-analyzer"), "knowledge/general/runbooks"),
 ): Map<string, string[]> {
 	const byRunbook = new Map<string, string[]>();
 	for (const dir of resolveRunbookDirs(runbookDir)) {
 		if (!existsSync(dir)) continue;
 		for (const file of readdirSync(dir).filter((f) => f.endsWith(".md"))) {
+			const key = file.replace(/\.md$/, "");
+			// manifest-loader.ts rejects a duplicate basename across runbook-* categories at
+			// agent-load time (a stricter, load-bearing guarantee); this is a lightweight
+			// defense-in-depth check for the eval tool, which reads the tree independently.
+			if (byRunbook.has(key)) {
+				throw new Error(
+					`coverage-targets: duplicate runbook basename "${file}" found under ${dir} and another ` +
+						"runbook directory -- runbook filenames must be globally unique across all datasource folders.",
+				);
+			}
 			const content = readFileSync(join(dir, file), "utf-8");
 			const tools = extractFrontmatterTools(content) ?? extractTailSection(content).citations.map((c) => c.name);
-			if (tools.length > 0) byRunbook.set(file.replace(/\.md$/, ""), tools);
+			if (tools.length > 0) byRunbook.set(key, tools);
 		}
 	}
 	return byRunbook;

@@ -1,15 +1,20 @@
 // agent/src/learn/runbook.ts
 //
 // SIO-1127: render a PR-gated DRAFT runbook from a HIL-corrected root cause. The file is
-// NEVER written into agents/incident-analyzer/knowledge/runbooks/ directly -- the manifest
-// loader auto-catalogs every *.md there on the next load, so the merge of the memory PR is
+// NEVER written into the knowledge tree directly -- the manifest loader auto-catalogs every
+// *.md in a registered category directory on the next load, so the merge of the memory PR is
 // the ONLY control. The frontmatter MUST be valid (loadKnowledge throws on malformed
 // runbook frontmatter, which would break the whole manifest load), so the shape here mirrors
 // the existing catalog runbooks: a `triggers:` block + an H1 title + prose sections.
+//
+// RootCauseCorrection carries no datasource field (causeClass is free-form kebab-case), so
+// drafts cannot be reliably routed to a specific datasource folder -- they land in
+// knowledge/general/runbooks/ (the registered `runbooks-general` category) and a human
+// re-files into a datasource folder at PR-review time if warranted.
 
 import type { RootCauseCorrection } from "./schema.ts";
 
-export const RUNBOOK_DIR = "agents/incident-analyzer/knowledge/runbooks";
+export const RUNBOOK_DIR = "agents/incident-analyzer/knowledge/general/runbooks";
 
 // Derive the draft filename from the (already kebab-case, schema-validated) cause class.
 export function draftRunbookFilename(causeClass: string): string {

@@ -251,14 +251,25 @@ function loadKnowledge(
 		}
 		// Filenames in fallback_by_severity/always_select are bare basenames with no
 		// datasource prefix, so existence is checked against the UNION of every
-		// runbook-* category's directory. Assumes basenames are globally unique across
-		// all runbook-* folders (true today; a duplicate basename in two datasource
-		// folders would silently shadow in this Set, so keep basenames unique).
+		// runbook-* category's directory. This requires basenames to be globally unique
+		// across all runbook-* folders -- a duplicate would silently shadow in the Set
+		// below and in the coverage-target/tool-citation collectors that key off the same
+		// assumption, so a collision is rejected here at load time rather than left latent.
 		const existingFiles = new Set<string>();
-		for (const [, config] of runbookCategoryEntries) {
+		const basenameOwner = new Map<string, string>();
+		for (const [category, config] of runbookCategoryEntries) {
 			const dir = join(knowledgeDir, config.path);
 			if (!isDirectory(dir)) continue;
 			for (const f of readdirSync(dir).filter((f) => f.endsWith(".md"))) {
+				const owner = basenameOwner.get(f);
+				if (owner && owner !== category) {
+					throw new Error(
+						`knowledge/index.yaml: runbook basename "${f}" exists in both "${owner}" and "${category}" ` +
+							"-- runbook filenames must be globally unique across all runbook-* categories " +
+							"(runbook_selection and the eval coverage-target collector both key by bare basename).",
+					);
+				}
+				basenameOwner.set(f, category);
 				existingFiles.add(f);
 			}
 		}

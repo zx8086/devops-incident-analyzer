@@ -3,26 +3,26 @@ description: Domain knowledge for DevOps incident analysis
 version: 0.1.0
 
 categories:
-  runbooks-cross-datasource:
-    path: runbooks/cross-datasource/
+  runbooks-general:
+    path: general/runbooks/
     description: Cross-datasource and datasource-agnostic runbooks (code-change correlation, MCP tool audit)
   runbooks-aws:
-    path: runbooks/aws/
+    path: aws/runbooks/
     description: AWS operational runbooks (CloudWatch, ECS, IAM, MSK)
   runbooks-kafka:
-    path: runbooks/kafka/
+    path: kafka/runbooks/
     description: Kafka operational runbooks (consumer lag)
   runbooks-couchbase:
-    path: runbooks/couchbase/
+    path: couchbase/runbooks/
     description: Couchbase operational runbooks (slow queries)
   runbooks-elastic:
-    path: runbooks/elastic/
+    path: elastic/runbooks/
     description: Elastic operational runbooks (high error rate)
   systems-map:
-    path: systems-map/
+    path: general/systems-map/
     description: Service dependency maps and topology
   slo-policies:
-    path: slo-policies/
+    path: general/slo-policies/
     description: SLO/SLA definitions and thresholds
 
 # SIO-640: Phase 2A lazy runbook selection fallback config.

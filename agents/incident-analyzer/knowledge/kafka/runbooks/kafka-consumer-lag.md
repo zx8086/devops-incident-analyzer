@@ -94,7 +94,7 @@ If the consumer writes to Couchbase, use `capella_get_completed_requests` and `c
 - Lag causing user-visible staleness: notify product team
 
 ## Known Configuration Gaps (don't re-flag as findings)
-- If `kafka_describe_cluster` returns incomplete broker metadata or any tool surfaces an `AccessDenied` / `kafka:DescribeClusterV2 not authorized` error against an MSK cluster, link to [`msk-iam-permissions.md`](../aws/msk-iam-permissions.md) instead of treating it as a cluster-health finding. The fix is an IAM policy update on the MCP server's role, not a Kafka cluster issue.
+- If `kafka_describe_cluster` returns incomplete broker metadata or any tool surfaces an `AccessDenied` / `kafka:DescribeClusterV2 not authorized` error against an MSK cluster, link to [`msk-iam-permissions.md`](../../aws/runbooks/msk-iam-permissions.md) instead of treating it as a cluster-health finding. The fix is an IAM policy update on the MCP server's role, not a Kafka cluster issue.
 
 ## Cluster Service Mapping
 When the runbook says "infer the service name and query Elastic / GitLab", use these per-cluster defaults to skip discovery:

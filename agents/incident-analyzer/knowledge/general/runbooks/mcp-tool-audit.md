@@ -106,7 +106,7 @@ prevent.
 - A tool absent from the action map: still audit it, and report the
   reachability gap as a Phase 5 finding.
 
-## All Tools Used Are Read-Only
+## Baseline Probes Are Read-Only
 elasticsearch_get_cluster_health, kafka_describe_cluster, capella_get_cluster_health, capella_ping, gitlab_graph_schema
 
 Only the Phase 0 baseline probes are named here; this runbook is
