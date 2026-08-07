@@ -9,6 +9,14 @@
 // tool-classification.ts's READ_ONLY_TOOLS/WRITE_TOOLS/DESTRUCTIVE_TOOLS for the source of
 // truth) since couchbaseToolAnnotations() itself is v1-only (imports ToolAnnotations from the
 // v1 SDK's types module).
+//
+// Exception to "reference only, not imported": adviseQuery, withLatencyMs, and
+// buildExplainStatement are imported directly from their v1 source files (getIndexAdvisor.ts,
+// getClusterHealth.ts, explainSqlPlusPlusQuery.ts). Each of those files' only
+// @modelcontextprotocol/sdk reference is `import type { McpServer }`, erased at compile time, so
+// importing their runtime exports does not pull in v1 SDK types. This keeps the latency_us ->
+// latencyMs/latencyNs fix (SIO-1264) and the EXPLAIN-statement builder as single sources of truth
+// instead of drifting local copies (SIO-1443 review finding).
 import { buildToolErrorEnvelope } from "@devops-agent/shared";
 import type { McpServer, RegisteredTool, ToolAnnotations } from "@modelcontextprotocol/server";
 import type { Bucket, ScopeSpec } from "couchbase";
@@ -23,6 +31,8 @@ import { resolveBucket } from "../../lib/resolveBucket";
 import { runSqlPlusPlusQuery } from "../../lib/runSqlPlusPlusQuery";
 import { sqlppParser } from "../../lib/sqlppParser";
 import { TtlCache } from "../../lib/ttlCache";
+import { buildExplainStatement } from "../../tools/explainSqlPlusPlusQuery";
+import { withLatencyMs } from "../../tools/getClusterHealth";
 import { adviseQuery } from "../../tools/queryAnalysis/getIndexAdvisor";
 import { logger } from "../../utils/logger";
 
@@ -37,27 +47,6 @@ const DESTRUCTIVE_ANNOTATIONS: ToolAnnotations = { readOnlyHint: false, destruct
 function sqlQueryAnnotations(): ToolAnnotations {
 	const readOnly = config.server.readOnlyQueryMode;
 	return { readOnlyHint: readOnly, destructiveHint: !readOnly };
-}
-
-// SIO-1264: withLatencyMs is intentionally NOT ported here -- getClusterHealth.ts's own
-// exported function stays the single source of truth for the latency_us -> latencyMs/latencyNs
-// fix; duplicating the conversion here would let the two copies drift.
-function withLatencyMs(raw: unknown): unknown {
-	if (typeof raw !== "object" || raw === null) return raw;
-	const report = raw as { services?: Record<string, Array<Record<string, unknown>>> };
-	if (!report.services || typeof report.services !== "object") return raw;
-	const services: Record<string, Array<Record<string, unknown>>> = {};
-	for (const [serviceType, entries] of Object.entries(report.services)) {
-		services[serviceType] = Array.isArray(entries)
-			? entries.map((entry) => {
-					const ns = entry?.latency_us;
-					if (typeof ns !== "number" || !Number.isFinite(ns)) return entry;
-					const { latency_us: _dropped, ...rest } = entry;
-					return { latencyMs: Math.round(ns / 1_000_000), latencyNs: ns, ...rest };
-				})
-			: entries;
-	}
-	return { ...report, services };
 }
 
 // Same TTL/dedup posture as v1's getScopesAndCollections.ts -- topology changes rarely, but a
@@ -545,15 +534,9 @@ async function runQuery(params: { scope_name: string; query: string }, bucket: B
 	}
 }
 
-// Strip any leading EXPLAIN token (and trailing semicolon), then prepend exactly one. Ported
-// verbatim from explainSqlPlusPlusQuery.ts.
-function buildExplainStatement(query: string): string {
-	const trimmed = query.trim().replace(/;\s*$/, "");
-	const inner = trimmed.replace(/^EXPLAIN\s+/i, "");
-	return `EXPLAIN ${inner}`;
-}
-
-// Ported verbatim from explainSqlPlusPlusQuery.ts.
+// Ported verbatim from explainSqlPlusPlusQuery.ts. buildExplainStatement itself is imported
+// directly from that file (see the import block above) rather than re-ported, closing one of the
+// query-analysis helper triplication risks flagged in review.
 async function explainQuery(params: { scope_name: string; query: string; bucket_name?: string }, bucket: Bucket) {
 	const { scope_name, query, bucket_name } = params;
 

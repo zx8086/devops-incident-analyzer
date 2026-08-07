@@ -21,12 +21,14 @@
 // capella_suggest_query_optimizations additionally needs getIndexAdvisor.ts's buildQuery/
 // extractAdvisorSections. getIndexAdvisor.ts's only SDK reference is `import type { McpServer }`
 // (type-only, erased at compile time -- core.ts already imports its `adviseQuery` directly for
-// the same reason), but Task 4 chose to PORT a local copy of extractAdvisorSections/
-// formatAdvisorResult into query-analysis-a.ts rather than import them, for
-// capella_get_index_advisor_recommendations's own local helper. Following that precedent here:
-// buildQuery (renamed buildAdvisorQuery to avoid a name collision with this file's other
-// buildQuery-shaped locals) and extractAdvisorSections are ported verbatim as local helpers
-// rather than imported from the v1 tool file.
+// the same reason), so both are imported directly here (SIO-1443 reviewer follow-up: the earlier
+// version of this file ported local copies instead, which is exactly the query-analysis helper
+// triplication the review flagged -- query-analysis-a.ts now does the same for
+// formatAdvisorResult/extractAdvisorSections). buildQuery is imported aliased to
+// buildAdvisorQuery to avoid a name collision with this file's other buildQuery-shaped locals.
+// buildExplainStatement (also needed by the live-analysis EXPLAIN leg below) is imported directly
+// from explainSqlPlusPlusQuery.ts for the same reason (core.ts does the same for its own
+// capella_explain_sql_plus_plus_query).
 //
 // Hidden-gate check (SIO-1443 lesson from Tasks 2/3): 9 of these 10 tools (everything except
 // capella_suggest_query_optimizations) have no config/feature-flag gate -- confirmed by grepping
@@ -45,10 +47,10 @@ import { connectionManager } from "../../lib/connectionManager";
 import { evaluateQueryPlan, formatPlanFindings } from "../../lib/queryPlan";
 import { resolveBucket } from "../../lib/resolveBucket";
 import { sqlppParser } from "../../lib/sqlppParser";
+import { buildExplainStatement } from "../../tools/explainSqlPlusPlusQuery";
 import {
 	DEFAULT_ANALYSIS_LIMIT,
 	mostExpensiveQueries,
-	n1qlIndexAdvisor,
 	n1qlLowSelectivityQueries,
 	n1qlMostFrequentQueries,
 	n1qlNonCoveringIndexQueries,
@@ -58,6 +60,7 @@ import {
 	systemNodesQuery,
 	systemVitalsQuery,
 } from "../../tools/queryAnalysis/analysisQueries";
+import { buildQuery as buildAdvisorQuery, extractAdvisorSections } from "../../tools/queryAnalysis/getIndexAdvisor";
 import { executeAnalysisQuery } from "../../tools/queryAnalysis/queryAnalysisUtils";
 import { logger } from "../../utils/logger";
 
@@ -425,65 +428,9 @@ export function registerQueryAnalysisToolsBV2(server: McpServer, tools: Map<stri
 	tools.set("capella_suggest_query_optimizations", suggestQueryOptimizations);
 }
 
-// ---- capella_suggest_query_optimizations helpers, ported from getIndexAdvisor.ts (SIO-1443:
-// Task 4 precedent -- local copy rather than an import, since capella_get_index_advisor_recommendations
-// in query-analysis-a.ts already ported its own local copy of extractAdvisorSections instead of
-// importing the v1 tool file) ----
-
-interface AdvisorSections {
-	current: string[];
-	recommended: string[];
-	covering: string[];
-}
-
-// The analyzed statement binds as $advise_statement -- injection-closed by construction (SIO-667
-// posture; mirrors the official Python server). Renamed from getIndexAdvisor.ts's `buildQuery` to
-// avoid colliding with this file's other buildQuery-shaped local logic.
-function buildAdvisorQuery(query: string): { query: string; parameters: Record<string, unknown> } {
-	return { query: n1qlIndexAdvisor, parameters: { advise_statement: query } };
-}
-
-// ADVISOR() output shape varies across server versions (adviseinfo nesting, current_indexes vs
-// current_used_indexes; recommended entries carry `index_statement` while current entries carry
-// `index` -- both hold DDL, validated against the live Capella cluster). Walk the whole result and
-// classify every DDL string by the nearest meaningful ancestor key instead of hardcoding one shape.
-function extractAdvisorSections(result: unknown): AdvisorSections {
-	const sections: AdvisorSections = { current: [], recommended: [], covering: [] };
-	const push = (list: string[], value: string) => {
-		if (!list.includes(value)) list.push(value);
-	};
-	const walk = (node: unknown, path: string[]): void => {
-		if (node === null || typeof node !== "object") return;
-		if (Array.isArray(node)) {
-			for (const item of node) walk(item, path);
-			return;
-		}
-		for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
-			// The CREATE guard keeps non-DDL `index` fields (e.g. an index NAME) out.
-			const isDdl =
-				typeof value === "string" &&
-				(key === "index_statement" || (key === "index" && /^CREATE\s/i.test(value.trim())));
-			if (isDdl && typeof value === "string") {
-				if (path.some((p) => /covering/i.test(p))) push(sections.covering, value);
-				else if (path.some((p) => /current/i.test(p))) push(sections.current, value);
-				else push(sections.recommended, value);
-				continue;
-			}
-			walk(value, [...path, key]);
-		}
-	};
-	walk(result, []);
-	return sections;
-}
-
-// Strip any leading EXPLAIN token (and trailing semicolon), then prepend exactly one. Ported
-// verbatim from explainSqlPlusPlusQuery.ts (also ported locally into v2/tools/core.ts for
-// capella_explain_sql_plus_plus_query -- same precedent applies here).
-function buildExplainStatement(query: string): string {
-	const trimmed = query.trim().replace(/;\s*$/, "");
-	const inner = trimmed.replace(/^EXPLAIN\s+/i, "");
-	return `EXPLAIN ${inner}`;
-}
+// capella_suggest_query_optimizations's buildAdvisorQuery (aliased from getIndexAdvisor.ts's
+// buildQuery), extractAdvisorSections, and buildExplainStatement are all imported directly (see
+// the import block above) rather than re-ported as local helpers here.
 
 // SIO-1107: live analysis via the server-computed Index Advisor + EXPLAIN plan. Returns null when
 // the cluster path yields nothing (both legs failed), so the caller can fall back to the offline
@@ -496,7 +443,7 @@ async function runLiveOptimizationAnalysis(
 ): Promise<string | null> {
 	const resolved = resolveBucket(bucket, bucketName);
 	const scope = resolved.scope(scopeName);
-	const { query: advisorStmt, parameters } = buildAdvisorQuery(query);
+	const { query: advisorStmt, parameters } = buildAdvisorQuery({ query });
 
 	// ADVISOR only evaluates the statement (never executes it), so it is always
 	// safe. The EXPLAIN leg is skipped for mutations under readOnlyQueryMode to

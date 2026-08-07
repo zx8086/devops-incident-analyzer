@@ -18,6 +18,13 @@
 // than ported, so the underlying SQL++ stays byte-identical between v1 and v2 by construction.
 // Task 5 (query-analysis-b.ts, the other 10 tools) should make the SAME import decision.
 //
+// SIO-1443 (reviewer follow-up): formatAdvisorResult (capella_get_index_advisor_recommendations's
+// formatter, which internally calls getIndexAdvisor.ts's own extractAdvisorSections) is likewise
+// imported directly from getIndexAdvisor.ts rather than re-ported as a local copy -- that file's
+// only @modelcontextprotocol/sdk reference is `import type { McpServer }`, erased at compile time,
+// same reasoning as core.ts's adviseQuery import. Closes the duplicated-logic risk the original
+// port introduced by hand-copying these helpers here (and again in query-analysis-b.ts).
+//
 // Hidden-gate check (SIO-1443 lesson from Tasks 2/3): none of these 11 tools gate on a config
 // flag or feature flag the way capella_run_sql_plus_plus_query gates on
 // config.server.readOnlyQueryMode (see core.ts's sqlQueryAnnotations/runQuery). They are plain
@@ -45,6 +52,7 @@ import {
 	n1qlLongestRunningQueries,
 	n1qlQueryFatalRequests,
 } from "../../tools/queryAnalysis/analysisQueries";
+import { formatAdvisorResult } from "../../tools/queryAnalysis/getIndexAdvisor";
 import {
 	buildAnalysisErrorResponse,
 	executeAnalysisQuery,
@@ -710,70 +718,9 @@ function formatAnalysis(documentKey: string, document: Record<string, unknown>, 
 	return output;
 }
 
-// ---- capella_get_index_advisor_recommendations helpers (ported verbatim from getIndexAdvisor.ts) ----
-
-interface AdvisorSections {
-	current: string[];
-	recommended: string[];
-	covering: string[];
-}
-
-// ADVISOR() output shape varies across server versions (adviseinfo nesting, current_indexes vs
-// current_used_indexes; recommended entries carry `index_statement` while current entries carry
-// `index` -- both hold DDL, validated against the live Capella cluster). Walk the whole result and
-// classify every DDL string by the nearest meaningful ancestor key instead of hardcoding one shape.
-function extractAdvisorSections(result: unknown): AdvisorSections {
-	const sections: AdvisorSections = { current: [], recommended: [], covering: [] };
-	const push = (list: string[], value: string) => {
-		if (!list.includes(value)) list.push(value);
-	};
-	const walk = (node: unknown, path: string[]): void => {
-		if (node === null || typeof node !== "object") return;
-		if (Array.isArray(node)) {
-			for (const item of node) walk(item, path);
-			return;
-		}
-		for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
-			// The CREATE guard keeps non-DDL `index` fields (e.g. an index NAME) out.
-			const isDdl =
-				typeof value === "string" &&
-				(key === "index_statement" || (key === "index" && /^CREATE\s/i.test(value.trim())));
-			if (isDdl && typeof value === "string") {
-				if (path.some((p) => /covering/i.test(p))) push(sections.covering, value);
-				else if (path.some((p) => /current/i.test(p))) push(sections.current, value);
-				else push(sections.recommended, value);
-				continue;
-			}
-			walk(value, [...path, key]);
-		}
-	};
-	walk(result, []);
-	return sections;
-}
-
-function formatAdvisorResult(analyzedQuery: string, rows: unknown[]): string {
-	const sections = extractAdvisorSections(rows);
-	const total = sections.recommended.length + sections.covering.length;
-
-	let text = "# Index Advisor Recommendations\n\n";
-	text += `## Analyzed Statement\n\n\`\`\`sql\n${analyzedQuery}\n\`\`\`\n\n`;
-	text += "## Summary\n\n";
-	text += `- Current indexes used: ${sections.current.length}\n`;
-	text += `- Recommended indexes: ${sections.recommended.length}\n`;
-	text += `- Recommended covering indexes: ${sections.covering.length}\n`;
-	text += `- Has recommendations: ${total > 0}\n\n`;
-
-	const renderList = (title: string, statements: string[]) => {
-		if (statements.length === 0) return "";
-		return `## ${title}\n\n${statements.map((s) => `\`\`\`sql\n${s}\n\`\`\``).join("\n\n")}\n\n`;
-	};
-	text += renderList("Current Indexes Used", sections.current);
-	text += renderList("Recommended Indexes", sections.recommended);
-	text += renderList("Recommended Covering Indexes", sections.covering);
-
-	if (total === 0) {
-		text += "The advisor returned no index recommendations -- the query may already be served by existing indexes.\n\n";
-	}
-	text += `## Raw Advisor Output\n\n\`\`\`json\n${JSON.stringify(rows, null, 2)}\n\`\`\`\n`;
-	return text;
-}
+// capella_get_index_advisor_recommendations' formatAdvisorResult (and the extractAdvisorSections
+// it depends on internally) is imported directly from getIndexAdvisor.ts (see the import block
+// above) rather than re-ported locally -- getIndexAdvisor.ts's only @modelcontextprotocol/sdk
+// reference is `import type { McpServer }`, erased at compile time, so it is safely importable at
+// runtime. Closes one of the query-analysis helper triplication risks flagged in review
+// (SIO-1443).
