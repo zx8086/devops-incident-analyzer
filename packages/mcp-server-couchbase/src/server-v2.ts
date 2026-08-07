@@ -15,6 +15,7 @@ import {
 } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { connectionManager } from "./lib/connectionManager.ts";
+import { registerPromptsV2 } from "./v2/prompts.ts";
 import { registerResourcesV2 } from "./v2/resources.ts";
 import { installReadOnlyChokepointV2, installToolCallLoggingV2, type ToolCallLogger } from "./v2/tool-call-wrappers.ts";
 import { registerCoreToolsV2 } from "./v2/tools/core.ts";
@@ -119,6 +120,10 @@ export function buildServerFactory(logger: ToolCallLogger): McpServerFactory {
 		// wrap calls below. Async: the playbook loop must know the discovered playbook IDs before
 		// registering (see resources.ts's own header comment).
 		await registerResourcesV2(server);
+
+		// SIO-1443: the generate_sqlpp_query prompt (v1's sole prompt). Not chokepoint/logging-
+		// wrapped -- same as resources -- so order relative to registerResourcesV2 doesn't matter.
+		registerPromptsV2(server);
 
 		// SIO-1424: composition order matches v1's serverFactory closure in bootstrap.ts --
 		// read-only INNER (installed first), tool-call logging OUTER (installed second, so a
