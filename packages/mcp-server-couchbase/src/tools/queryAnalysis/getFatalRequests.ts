@@ -51,7 +51,7 @@ export function buildQuery(input: FatalRequestsInput): {
 	// Always bound the result set: without a LIMIT the trailing ORDER BY sorted the
 	// full 8-week fatal-request window on every call (~3.7s). The LIMIT goes after
 	// the UNION ALL, so it caps the combined row set.
-	const effectiveLimit = limit && limit > 0 ? limit : DEFAULT_ANALYSIS_LIMIT;
+	const effectiveLimit = limit && Number.isInteger(limit) && limit > 0 ? limit : DEFAULT_ANALYSIS_LIMIT;
 	query = query.replace("ORDER BY requestTime DESC;", `ORDER BY requestTime DESC LIMIT ${effectiveLimit};`);
 
 	return { query, parameters: {} };
@@ -67,7 +67,7 @@ export default (server: McpServer, bucket: Bucket) => {
 					.enum(["day", "week", "month", "quarter"])
 					.optional()
 					.describe("Time period to analyze (day, week, month, quarter)"),
-				limit: z.number().optional().describe("Optional limit for the number of results to return"),
+				limit: z.number().int().positive().optional().describe("Optional limit for the number of results to return"),
 			},
 			annotations: couchbaseToolAnnotations("capella_get_fatal_requests"),
 		},

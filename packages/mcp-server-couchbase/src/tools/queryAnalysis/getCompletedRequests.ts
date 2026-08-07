@@ -64,7 +64,7 @@ export function buildQuery(input: CompletedRequestsInput): {
 
 	// Always bound the result set: an unbounded query materialized and sorted the
 	// whole 8-week completed_requests window (~3.7s per call).
-	const effectiveLimit = limit && limit > 0 ? limit : DEFAULT_ANALYSIS_LIMIT;
+	const effectiveLimit = limit && Number.isInteger(limit) && limit > 0 ? limit : DEFAULT_ANALYSIS_LIMIT;
 	if (query.includes("LIMIT")) {
 		query = query.replace(/LIMIT \d+/i, `LIMIT ${effectiveLimit}`);
 	} else {
@@ -80,7 +80,7 @@ export default (server: McpServer, bucket: Bucket) => {
 		{
 			description: "Get recent completed query requests with detailed execution information",
 			inputSchema: {
-				limit: z.number().optional().describe("Optional limit for the number of results to return"),
+				limit: z.number().int().positive().optional().describe("Optional limit for the number of results to return"),
 				period: z
 					.enum(["day", "week", "month", "quarter"])
 					.optional()

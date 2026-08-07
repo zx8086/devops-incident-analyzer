@@ -15,7 +15,7 @@ export default (server: McpServer, bucket: Bucket) => {
 			description:
 				"Get the longest running queries based on service time. Returns bare JSON array of {statement, avgServiceTime, lastExecutionTime, queries} -- machine-readable for correlation extractors.",
 			inputSchema: {
-				limit: z.number().optional().describe("Optional limit for the number of results to return"),
+				limit: z.number().int().positive().optional().describe("Optional limit for the number of results to return"),
 				min_time_ms: z.number().optional().describe("Minimum execution time in milliseconds to include"),
 			},
 			annotations: couchbaseToolAnnotations("capella_get_longest_running_queries"),
@@ -36,7 +36,7 @@ export default (server: McpServer, bucket: Bucket) => {
 			}
 
 			// Apply limit if specified
-			if (limit && limit > 0) {
+			if (limit && Number.isInteger(limit) && limit > 0) {
 				// Add or replace LIMIT clause
 				if (query.includes("LIMIT")) {
 					query = query.replace(/LIMIT \d+/i, `LIMIT ${limit}`);

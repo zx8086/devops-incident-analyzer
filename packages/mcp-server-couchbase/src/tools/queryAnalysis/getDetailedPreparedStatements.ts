@@ -47,7 +47,7 @@ export function buildQuery(input: DetailedPreparedStatementsInput): {
 		}
 	}
 
-	if (limit && limit > 0) {
+	if (limit && Number.isInteger(limit) && limit > 0) {
 		if (query.includes("LIMIT")) {
 			query = query.replace(/LIMIT \d+/i, `LIMIT ${limit}`);
 		} else {

@@ -14,7 +14,7 @@ export default (server: McpServer, bucket: Bucket) => {
 		{
 			description: "Get the most frequently executed queries",
 			inputSchema: {
-				limit: z.number().optional().describe("Optional limit for the number of results to return"),
+				limit: z.number().int().positive().optional().describe("Optional limit for the number of results to return"),
 				min_count: z.number().optional().describe("Minimum execution count to include"),
 			},
 			annotations: couchbaseToolAnnotations("capella_get_most_frequent_queries"),
@@ -35,7 +35,7 @@ export default (server: McpServer, bucket: Bucket) => {
 			}
 
 			// Apply limit if specified
-			if (limit && limit > 0) {
+			if (limit && Number.isInteger(limit) && limit > 0) {
 				// Add or replace LIMIT clause
 				if (query.includes("LIMIT")) {
 					query = query.replace(/LIMIT \d+/i, `LIMIT ${limit}`);
