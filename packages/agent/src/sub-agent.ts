@@ -510,9 +510,12 @@ function tryParseJson(s: string): unknown {
 // structuredContent payload (already a parsed object, byte-identical in shape to
 // what tryParseJson(text) would produce for the 4 SIO-1422 wave-1 tools -- see
 // docs/superpowers/specs/2026-08-07-agent-structuredcontent-consumption-design.md).
-// Using it directly skips a redundant JSON.parse; byte accounting (capSkippedBytes/
-// truncation) still runs against `text` unchanged, since those numbers describe the
-// text payload's size, not the structured object's.
+// Using it directly skips a redundant JSON.parse. For TYPED_FINDING_TOOLS, byte
+// accounting (capSkippedBytes) runs against `text` unchanged since that branch
+// bypasses the cap entirely. For all other tools, structuredContent is its OWN
+// payload and can differ in size from `text` -- it is measured and capped against
+// stateCapBytes on its own terms, never returned uncapped just because `text` was
+// small (or vice versa).
 export function buildPersistedToolOutput(
 	toolName: string,
 	text: string,
@@ -536,14 +539,22 @@ export function buildPersistedToolOutput(
 		};
 	}
 	const capped = truncateToolOutput(text, stateCapBytes);
-	return {
-		rawJson: structuredContent !== undefined ? structuredContent : tryParseJson(capped.content),
-		capSkippedBytes: null,
-		truncation:
-			capped.strategy === "none"
-				? null
-				: { strategy: capped.strategy, originalBytes: capped.originalBytes, finalBytes: capped.finalBytes },
-	};
+	const cappedTruncation =
+		capped.strategy === "none"
+			? null
+			: { strategy: capped.strategy, originalBytes: capped.originalBytes, finalBytes: capped.finalBytes };
+	if (structuredContent !== undefined) {
+		// structuredContent is a DIFFERENT payload than `text` -- re-measure its own size
+		// rather than trusting `capped`'s numbers, which describe `text`. Otherwise the
+		// checkpoint byte cap is silently defeated (an oversized structured object persists
+		// uncapped) while the truncation metadata reports a phantom (or missing) truncation.
+		const structuredBytes = Buffer.byteLength(JSON.stringify(structuredContent) ?? "", "utf8");
+		if (structuredBytes > stateCapBytes) {
+			return { rawJson: tryParseJson(capped.content), capSkippedBytes: null, truncation: cappedTruncation };
+		}
+		return { rawJson: structuredContent, capSkippedBytes: null, truncation: null };
+	}
+	return { rawJson: tryParseJson(capped.content), capSkippedBytes: null, truncation: cappedTruncation };
 }
 
 // SIO-786: when an MCP tool returns multiple content blocks (e.g. elastic's

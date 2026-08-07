@@ -461,9 +461,11 @@ function extractContent(result: unknown): unknown {
 	return result;
 }
 
-// SIO-1425/1437: mirrors extractContent's instanceof narrowing. The MCP adapter's
-// artifact shape (confirmed live, @langchain/mcp-adapters@1.1.3 dist/tools.js:311-325)
-// is an array of entries; the structuredContent one is tagged "mcp_structured_content".
+// SIO-1425/1437: the instanceof check is the stricter, correct choice here --
+// artifact is a ToolMessage-only field, so a structural guard would be pointless.
+// The MCP adapter's artifact shape (confirmed live, @langchain/mcp-adapters@1.1.3
+// dist/tools.js:311-325) is an array of entries; the structuredContent one is
+// tagged "mcp_structured_content".
 function extractStructuredContent(result: unknown): unknown | undefined {
 	if (!(result instanceof ToolMessage)) return undefined;
 	const artifact = result.artifact;
