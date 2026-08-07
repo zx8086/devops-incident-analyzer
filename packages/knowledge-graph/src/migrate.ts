@@ -8,7 +8,7 @@ import { getGraphStore, isKnowledgeGraphEnabled } from "./store.ts";
 import { upsertEntities } from "./writer.ts";
 
 // Service dependency edges distilled from
-// agents/incident-analyzer/knowledge/systems-map/service-dependencies.md.
+// agents/incident-analyzer/knowledge/general/systems-map/service-dependencies.md.
 const SEED_DEPENDENCIES = [
 	{ from: "konnect-gateway", to: "backend-services" },
 	{ from: "backend-services", to: "couchbase" },

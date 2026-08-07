@@ -82,7 +82,7 @@ Five whys:
 
 ### Related
 - Tickets: <Jira keys from atlassian findings, e.g. OPS-123>
-- Runbooks: knowledge/runbooks/<relevant>.md
+- Runbooks: knowledge/<datasource>/runbooks/<relevant>.md
 ```
 
 ## Sourcing

@@ -88,26 +88,30 @@ agents/
         SKILL.md                        # Procedure: safe remediation suggestions
     knowledge/
       index.yaml                        # Knowledge base category registry
-      runbooks/
-        cross-datasource/
+      general/                          # Cross-cutting, not owned by one datasource
+        runbooks/
           code-change-correlation.md    # Trace errors to the causing code change
           mcp-tool-audit.md             # Datasource-agnostic MCP tool audit
-        aws/
+        systems-map/
+          service-dependencies.md       # 4-plane infrastructure dependency graph
+        slo-policies/
+          api-latency-slo.md            # Tiered latency/error-budget definitions
+      aws/
+        runbooks/
           aws-cloudwatch-alarm-triage.md
           aws-ecs-task-failures.md
           aws-iam-permission-troubleshooting.md
           aws-msk-broker-unreachable.md
           msk-iam-permissions.md
-        kafka/
+      kafka/
+        runbooks/
           kafka-consumer-lag.md         # Playbook: stalled/lagging Kafka consumers
-        couchbase/
+      couchbase/
+        runbooks/
           database-slow-queries.md      # Playbook: slow N1QL queries on Capella
-        elastic/
+      elastic/
+        runbooks/
           high-error-rate.md            # Playbook: 5xx spikes on Kong Konnect
-      systems-map/
-        service-dependencies.md         # 4-plane infrastructure dependency graph
-      slo-policies/
-        api-latency-slo.md              # Tiered latency/error-budget definitions
     compliance/
       risk-assessment.md                # Medium risk classification with justification
       allowed-actions.yaml              # Permitted read ops, prohibited write ops
@@ -249,9 +253,9 @@ The incident analyzer defines three skills:
 The `knowledge/` directory contains reference material the agent can consult opportunistically when matching incident signals against known patterns. Unlike skills, knowledge entries are **bulk-loaded and always-on**: every file in every registered category is appended to the orchestrator's system prompt for the life of each request.
 
 `knowledge/index.yaml` declares categories and their paths. The incident analyzer registers seven:
-- **runbooks/** -- Operational playbooks for common incident patterns, split into per-datasource subfolders (`runbooks/aws/`, `runbooks/kafka/`, `runbooks/couchbase/`, `runbooks/elastic/`) plus `runbooks/cross-datasource/` for correlation and audit runbooks that span sources. Each subfolder is its own registered `index.yaml` category (`runbooks-aws`, `runbooks-kafka`, etc.). Each runbook describes identification steps, drill-down queries, and cross-datasource correlation, and references MCP tool names directly in prose.
-- **systems-map/** -- Service dependency graphs and topology (`service-dependencies.md`). Helps the agent reason about upstream/downstream blast radius.
-- **slo-policies/** -- SLO/SLA definitions and thresholds (`api-latency-slo.md`). Tier definitions, error budgets, and latency targets.
+- **`<datasource>/runbooks/`** -- Operational playbooks for common incident patterns, one top-level directory per datasource (`aws/`, `kafka/`, `couchbase/`, `elastic/`) plus `general/runbooks/` for correlation and audit runbooks that span sources. Each `<datasource>/runbooks/` directory is its own registered `index.yaml` category (`runbooks-aws`, `runbooks-kafka`, `runbooks-general`, etc.). Each runbook describes identification steps, drill-down queries, and cross-datasource correlation, and references MCP tool names directly in prose.
+- **`general/systems-map/`** -- Service dependency graphs and topology (`service-dependencies.md`). Cross-cutting by nature (spans every datasource), so it lives under `general/` rather than any single datasource directory. Helps the agent reason about upstream/downstream blast radius.
+- **`general/slo-policies/`** -- SLO/SLA definitions and thresholds (`api-latency-slo.md`). Also cross-cutting. Tier definitions, error budgets, and latency targets.
 
 **Skill vs knowledge at a glance:**
 

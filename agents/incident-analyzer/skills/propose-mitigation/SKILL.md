@@ -27,7 +27,7 @@ human approval before execution.
    Owner field requires a named human or on-call role -- when none is assigned
    yet, the first Escalate item IS the assignment request, and the draft stays
    a draft until a human takes ownership
-5. Reference relevant runbooks from knowledge/runbooks/ if available
+5. Reference relevant runbooks from the knowledge tree (e.g. `knowledge/<datasource>/runbooks/`) if available
 6. Never suggest destructive operations (restart, delete, drop, reset)
 
 ## Output Format
@@ -55,8 +55,8 @@ Next update: in 30 minutes or on material change
 Owner: payments on-call (per escalation item 1; do not post while unassigned)
 
 ### Related Runbooks
-- knowledge/runbooks/kafka/kafka-consumer-lag.md
-- knowledge/runbooks/couchbase/database-slow-queries.md
+- knowledge/kafka/runbooks/kafka-consumer-lag.md
+- knowledge/couchbase/runbooks/database-slow-queries.md
 ```
 
 ## Edge Cases

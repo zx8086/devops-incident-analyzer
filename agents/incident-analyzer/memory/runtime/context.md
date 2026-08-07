@@ -30,5 +30,5 @@ GitLab, Atlassian, and AWS:
 | Slow API responses | Couchbase slow queries | Kafka backpressure, Kong rate limits |
 | Missing logs | Elasticsearch cluster health | Backend service health |
 
-See `knowledge/systems-map/service-dependencies.md` for the full dependency graph
+See `knowledge/general/systems-map/service-dependencies.md` for the full dependency graph
 and `memory/wiki/index.md` for compiled domain knowledge.

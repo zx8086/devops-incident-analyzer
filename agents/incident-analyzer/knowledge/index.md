@@ -15,13 +15,13 @@ category's `path`.
 
 | Directory | `type:` values | Files |
 |---|---|---|
-| `runbooks/cross-datasource/` | Runbook | 2 |
-| `runbooks/aws/` | Runbook | 5 |
-| `runbooks/kafka/` | Runbook | 1 |
-| `runbooks/couchbase/` | Runbook | 1 |
-| `runbooks/elastic/` | Runbook | 1 |
-| `systems-map/` | Reference | 1 |
-| `slo-policies/` | Reference | 1 |
+| `general/runbooks/` | Runbook | 2 |
+| `general/systems-map/` | Reference | 1 |
+| `general/slo-policies/` | Reference | 1 |
+| `aws/runbooks/` | Runbook | 5 |
+| `kafka/runbooks/` | Runbook | 1 |
+| `couchbase/runbooks/` | Runbook | 1 |
+| `elastic/runbooks/` | Runbook | 1 |
 
 ## Producer extensions
 

@@ -1,6 +1,6 @@
 ---
 sources:
-  - knowledge/systems-map/service-dependencies.md
+  - knowledge/general/systems-map/service-dependencies.md
 updated: 2026-05-30T23:59:00.000Z
 ---
 
@@ -28,4 +28,4 @@ Elasticsearch; Konnect logs API request metrics separately.
 - Missing logs: Elasticsearch cluster health, then backend service health.
 
 For raw detail see the source systems-map. Related runbooks live under
-`knowledge/runbooks/`.
+`knowledge/<datasource>/runbooks/`.
