@@ -29,6 +29,7 @@ function installPromptContextMock(): void {
 installPromptContextMock();
 
 import {
+	getRecalledMemoryContext,
 	registerGraphWarmer,
 	registerMemoryFlusher,
 	registerMemoryPrOpener,
@@ -151,6 +152,36 @@ describe("agent-memory seams", () => {
 		});
 		const steps = await runTeardown({ agentName: "incident-analyzer", threadId: "t-1" });
 		expect(steps).toContain("flush_daily_log");
+	});
+});
+
+// SIO-1446: the recalled block must survive past runBootstrap -- its only caller
+// discards the BootstrapResult, so the per-thread stash is what the aggregator
+// prompt actually reads (prompt-context.buildLiveMemorySection(recalledMemory)).
+describe("recalled-context stash (SIO-1446)", () => {
+	test("bootstrap stashes the recalled block per thread; other threads see nothing", async () => {
+		registerMemoryRecaller(async ({ threadId }) => `recalled-for-${threadId}`);
+		await runBootstrap({ agentName: "incident-analyzer", threadId: "t-stash", firstUserQuery: "q" });
+		expect(getRecalledMemoryContext("t-stash")).toBe("recalled-for-t-stash");
+		expect(getRecalledMemoryContext("t-other")).toBeUndefined();
+		expect(getRecalledMemoryContext(undefined)).toBeUndefined();
+	});
+
+	test("a recaller returning undefined leaves no stash entry (file backend)", async () => {
+		registerMemoryRecaller(async () => undefined);
+		await runBootstrap({ agentName: "incident-analyzer", threadId: "t-none" });
+		expect(getRecalledMemoryContext("t-none")).toBeUndefined();
+	});
+
+	test("teardown clears the stash for its thread only", async () => {
+		registerMemoryRecaller(async ({ threadId }) => `recalled-for-${threadId}`);
+		await runBootstrap({ agentName: "incident-analyzer", threadId: "t-a" });
+		await runBootstrap({ agentName: "incident-analyzer", threadId: "t-b" });
+		await runTeardown({ agentName: "incident-analyzer", threadId: "t-a" });
+		expect(getRecalledMemoryContext("t-a")).toBeUndefined();
+		expect(getRecalledMemoryContext("t-b")).toBe("recalled-for-t-b");
+		await runTeardown({ agentName: "incident-analyzer", threadId: "t-b" });
+		expect(getRecalledMemoryContext("t-b")).toBeUndefined();
 	});
 });
 

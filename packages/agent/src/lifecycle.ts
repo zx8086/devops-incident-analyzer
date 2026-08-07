@@ -52,6 +52,18 @@ export function registerMemoryFlusher(fn: (ctx: { agentName: string; threadId: s
 	memoryFlusher = fn;
 }
 
+// SIO-1446: per-session stash for the recalled block. runBootstrap's only caller
+// (sessionBootstrap in apps/web) discards the returned BootstrapResult, so before
+// this stash the semantic recall was computed and then lost -- it never reached a
+// prompt. The aggregator reads it from here on every turn of the session (recall
+// stays relevant beyond the first turn); teardown deletes the entry so a
+// long-lived process never leaks one session's recall into another thread.
+const recalledMemoryByThread = new Map<string, string>();
+
+export function getRecalledMemoryContext(threadId: string | undefined): string | undefined {
+	return threadId ? recalledMemoryByThread.get(threadId) : undefined;
+}
+
 // SIO-942: post-turn flush seam. Unlike memoryFlusher (teardown: drain + end +
 // clear), this drains the write-behind queue while keeping the session open, so
 // blocks persist after every completed turn even when teardown never fires.
@@ -111,6 +123,10 @@ async function runBootstrapStep(step: BootstrapStep, result: BootstrapResult, ct
 						result.liveMemoryContext = result.liveMemoryContext
 							? `${result.liveMemoryContext}\n\n${recalled}`
 							: recalled;
+						// SIO-1446: also stash per thread -- the BootstrapResult itself is
+						// discarded by sessionBootstrap, so this is the copy that actually
+						// reaches the aggregator prompt (via getRecalledMemoryContext).
+						recalledMemoryByThread.set(ctx.threadId, recalled);
 					}
 				} catch (error) {
 					logger.warn(
@@ -210,6 +226,9 @@ async function runTeardownStep(step: TeardownStep, ctx: TeardownContext): Promis
 
 // Runs the agent's teardown hooks in declared order. No hooks -> no-op.
 export async function runTeardown(ctx: TeardownContext = {}): Promise<TeardownStep[]> {
+	// SIO-1446: drop the session's recalled-context stash before the hook walk (and
+	// regardless of hook config), so the entry cannot outlive its session.
+	if (ctx.threadId) recalledMemoryByThread.delete(ctx.threadId);
 	// SIO-938: resolve hooks for the invoked agent (defaults to incident-analyzer).
 	const hooks = getAgentByName(ctx.agentName ?? "incident-analyzer").hooks;
 	const steps = hooks?.teardown?.steps ?? [];
