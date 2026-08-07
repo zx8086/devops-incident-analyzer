@@ -55,6 +55,11 @@ async function captureSnapshot(): Promise<Snapshot> {
 	// Docs enabled so the 4 documentation resources register (registration reads no fs).
 	const priorDocumentation = config.documentation;
 	config.documentation = { enabled: true, baseDirectory: "./docs-snapshot-unused", fileExtension: ".md" };
+	// CodeRabbit: capella_run_sql_plus_plus_query's annotations derive from
+	// readOnlyQueryMode; pin the default so a READ_ONLY_QUERY_MODE=false env leak
+	// cannot flip the captured annotations against the committed fixture.
+	const priorReadOnlyQueryMode = config.server.readOnlyQueryMode;
+	config.server.readOnlyQueryMode = true;
 	try {
 		const factory = createMcpServerFactory({ bucket: stubBucket, playbooks: makePlaybooks() });
 		const server = factory();
@@ -90,6 +95,7 @@ async function captureSnapshot(): Promise<Snapshot> {
 		};
 	} finally {
 		config.documentation = priorDocumentation;
+		config.server.readOnlyQueryMode = priorReadOnlyQueryMode;
 	}
 }
 
