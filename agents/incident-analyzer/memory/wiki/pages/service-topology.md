@@ -1,7 +1,7 @@
 ---
 sources:
   - knowledge/general/systems-map/service-dependencies.md
-updated: 2026-05-30T23:59:00.000Z
+updated: 2026-08-07T23:59:00.000Z
 ---
 
 # Service Topology
