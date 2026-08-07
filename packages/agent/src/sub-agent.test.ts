@@ -945,6 +945,34 @@ describe("buildPersistedToolOutput SIO-1159 typed-finding exemption", () => {
 			expect(out.capSkippedBytes).toBeNull();
 		});
 	});
+
+	test("structuredContent, when provided, is used directly without re-parsing text", () => {
+		const structured = { groupId: "g1", totalLag: "42", topics: [] };
+		// Deliberately mismatched text: if tryParseJson(text) were used instead of the
+		// structured payload, rawJson would equal this different object, not `structured`.
+		const mismatchedText = JSON.stringify({ groupId: "WRONG", totalLag: "0", topics: [] });
+		const out = buildPersistedToolOutput("kafka_get_consumer_group_lag", mismatchedText, CAP, structured);
+		expect(out.rawJson).toEqual(structured);
+	});
+
+	test("falls back to tryParseJson(text) when structuredContent is undefined", () => {
+		const out = buildPersistedToolOutput(
+			"kafka_get_consumer_group_lag",
+			'{"groupId":"g1","totalLag":"1","topics":[]}',
+			CAP,
+			undefined,
+		);
+		expect(out.rawJson).toEqual({ groupId: "g1", totalLag: "1", topics: [] });
+	});
+
+	test("structuredContent does not change capSkippedBytes/truncation accounting", () => {
+		const structured = { groupId: "g1", totalLag: "42", topics: [] };
+		const bigText = `Total: ${"x".repeat(CAP * 4)}`;
+		const out = buildPersistedToolOutput("kafka_get_consumer_group_lag", bigText, CAP, structured);
+		// still a TYPED_FINDING_TOOLS member -> cap-skip branch, same as without structuredContent
+		expect(out.capSkippedBytes).toBe(Buffer.byteLength(bigText, "utf8"));
+		expect(out.truncation).toBeNull();
+	});
 });
 
 // SIO-1268: default-ON kill switch, matching the RESOLVE_IDENTIFIERS_ENABLED idiom.

@@ -506,29 +506,38 @@ function tryParseJson(s: string): unknown {
 // 500KB elastic "Document ID:" block string capped at 32KB parses to zero
 // findings (observed live: ElasticFindingsCard rawCount 0 in run 270378e0).
 // Bounded regardless: pruneThreadState resets dataSourceResults every turn.
+// SIO-1425/1437: structuredContent, when provided, is the MCP tool's own
+// structuredContent payload (already a parsed object, byte-identical in shape to
+// what tryParseJson(text) would produce for the 4 SIO-1422 wave-1 tools -- see
+// docs/superpowers/specs/2026-08-07-agent-structuredcontent-consumption-design.md).
+// Using it directly skips a redundant JSON.parse; byte accounting (capSkippedBytes/
+// truncation) still runs against `text` unchanged, since those numbers describe the
+// text payload's size, not the structured object's.
 export function buildPersistedToolOutput(
 	toolName: string,
 	text: string,
 	stateCapBytes: number | null,
+	structuredContent?: unknown,
 ): {
 	rawJson: unknown;
 	capSkippedBytes: number | null;
 	truncation: { strategy: string; originalBytes: number; finalBytes: number } | null;
 } {
+	const parsedOrStructured = structuredContent !== undefined ? structuredContent : tryParseJson(text);
 	if (stateCapBytes == null) {
-		return { rawJson: tryParseJson(text), capSkippedBytes: null, truncation: null };
+		return { rawJson: parsedOrStructured, capSkippedBytes: null, truncation: null };
 	}
 	if (TYPED_FINDING_TOOLS.has(toolName)) {
 		const bytes = Buffer.byteLength(text, "utf8");
 		return {
-			rawJson: tryParseJson(text),
+			rawJson: parsedOrStructured,
 			capSkippedBytes: bytes > stateCapBytes ? bytes : null,
 			truncation: null,
 		};
 	}
 	const capped = truncateToolOutput(text, stateCapBytes);
 	return {
-		rawJson: tryParseJson(capped.content),
+		rawJson: structuredContent !== undefined ? structuredContent : tryParseJson(capped.content),
 		capSkippedBytes: null,
 		truncation:
 			capped.strategy === "none"
@@ -1713,13 +1722,18 @@ ${state.correlationFetchDirective}`
 				"Raw tool-output capture diverged from tool messages; persisted findings may be incomplete",
 			);
 		}
-		const persistSource: Array<{ name?: string; content: unknown }> =
+		const persistSource: Array<{ name?: string; content: unknown; structuredContent?: unknown }> =
 			rawOutputs.length > 0
-				? rawOutputs.map((o) => ({ name: o.toolName, content: o.content }))
+				? rawOutputs.map((o) => ({ name: o.toolName, content: o.content, structuredContent: o.structuredContent }))
 				: toolMessages.map((m: { name?: string; content: unknown }) => ({ name: m.name, content: m.content }));
-		const toolOutputs = persistSource.map((m: { name?: string; content: unknown }) => {
+		const toolOutputs = persistSource.map((m: { name?: string; content: unknown; structuredContent?: unknown }) => {
 			const toolName = m.name ?? "unknown";
-			const out = buildPersistedToolOutput(toolName, normalizeToolContent(m.content), stateCapBytes);
+			const out = buildPersistedToolOutput(
+				toolName,
+				normalizeToolContent(m.content),
+				stateCapBytes,
+				m.structuredContent,
+			);
 			if (out.capSkippedBytes != null) {
 				log.info(
 					{ event: "subagent.state_output_cap_skipped", deploymentId, toolName, bytes: out.capSkippedBytes },
