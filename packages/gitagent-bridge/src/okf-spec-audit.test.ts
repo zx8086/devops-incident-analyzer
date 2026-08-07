@@ -3,7 +3,7 @@
 // that the whole-pipeline eval program does not cover. See skill-tool-coverage.test.ts for the
 // SIO-1228/1257/1229 checks this file deliberately does NOT duplicate.
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "yaml";
@@ -105,5 +105,43 @@ describe("SIO-1440 check 3: dead/orphan knowledge files in the spec tree", () =>
 		);
 		const index = KnowledgeIndexSchema.parse(parse(readFileSync(join(dir, "knowledge/index.yaml"), "utf-8")));
 		expect(findOrphanedKnowledgeFiles(dir, index)).toEqual([]);
+	});
+
+	// CodeRabbit (PR #632): join() preserves a trailing backslash from a Windows-style
+	// config.path (e.g. "general\\runbooks\\"), which the prior .replace(/\/$/, "") never
+	// stripped -- declaredDirs.has(dir) would then never match on Windows, so every file in a
+	// declared category would be misreported as orphaned. Not exercisable on macOS/Bun (no
+	// backslash separators here), but the fix widens the character class at zero cost.
+	test("a category path with a trailing backslash (Windows-style) is still recognized as declared", () => {
+		const dir = makeKnowledgeFixture(
+			{
+				name: "fixture",
+				description: "fixture",
+				version: "0.1.0",
+				categories: { "runbooks-general": { path: "general/runbooks\\", description: "test" } },
+			},
+			{ "general/runbooks/ok.md": "# ok\n" },
+		);
+		const index = KnowledgeIndexSchema.parse(parse(readFileSync(join(dir, "knowledge/index.yaml"), "utf-8")));
+		expect(findOrphanedKnowledgeFiles(dir, index)).toEqual([]);
+	});
+
+	// CodeRabbit (PR #632): statSync() follows directory symlinks, so a self-referential
+	// symlink under knowledge/ threw ELOOP and crashed the whole audit uncaught (reproduced
+	// live: a "loop" -> "." symlink hit statSync's ELOOP within ~32 recursive calls). lstatSync()
+	// identifies the link itself instead of following it, so the walk treats it as a leaf.
+	test("a self-referential directory symlink does not crash the walk with ELOOP", () => {
+		const dir = makeKnowledgeFixture(
+			{
+				name: "fixture",
+				description: "fixture",
+				version: "0.1.0",
+				categories: { "runbooks-general": { path: "general/runbooks/", description: "test" } },
+			},
+			{ "general/runbooks/ok.md": "# ok\n" },
+		);
+		symlinkSync(".", join(dir, "knowledge", "general", "loop"), "dir");
+		const index = KnowledgeIndexSchema.parse(parse(readFileSync(join(dir, "knowledge/index.yaml"), "utf-8")));
+		expect(() => findOrphanedKnowledgeFiles(dir, index)).not.toThrow();
 	});
 });

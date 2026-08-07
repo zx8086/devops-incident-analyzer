@@ -5,7 +5,7 @@
 // malformed knowledge file never takes down agent load in production. This module answers a
 // different question: "does any file rely on that tolerance right now?" -- which the loader itself
 // cannot report, since its tolerant path swallows the error instead of surfacing it.
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { parseRunbookFrontmatter } from "./manifest-loader.ts";
 import type { KnowledgeIndex } from "./types.ts";
@@ -74,11 +74,12 @@ const OKF_BUNDLE_ROOT_FILE = "index.md";
 // an author may believe is live.
 export function findOrphanedKnowledgeFiles(agentDir: string, index: KnowledgeIndex): OrphanedKnowledgeFile[] {
 	const knowledgeDir = join(agentDir, "knowledge");
-	// join() normalizes internal separators but preserves a trailing slash from
-	// config.path (e.g. "general/runbooks/"), while the walk below produces dirs
-	// with no trailing slash -- strip it so both sides compare equal.
+	// join() normalizes internal separators but preserves a trailing separator from
+	// config.path (e.g. "general/runbooks/" or, on Windows, "general\\runbooks\\"), while the
+	// walk below produces dirs with no trailing separator -- strip either kind so both sides
+	// compare equal (CodeRabbit, PR #632: /\/$/ alone missed the Windows backslash case).
 	const declaredDirs = new Set(
-		Object.values(index.categories).map((c) => join(knowledgeDir, c.path).replace(/\/$/, "")),
+		Object.values(index.categories).map((c) => join(knowledgeDir, c.path).replace(/[\\/]$/, "")),
 	);
 
 	const orphans: OrphanedKnowledgeFile[] = [];
@@ -91,7 +92,12 @@ export function findOrphanedKnowledgeFiles(agentDir: string, index: KnowledgeInd
 		}
 		for (const entry of entries) {
 			const full = join(dir, entry);
-			if (statSync(full).isDirectory()) {
+			// CodeRabbit (PR #632): statSync() follows directory symlinks, so a self-referential
+			// link under knowledge/ threw ELOOP and crashed the whole audit uncaught. lstatSync()
+			// identifies the link itself rather than following it, so the walk treats a symlink
+			// as a leaf (never recurses into or through it) instead of looping or escaping the
+			// intended knowledge/ tree.
+			if (lstatSync(full).isDirectory()) {
 				walk(full);
 			} else if (
 				entry.endsWith(".md") &&
