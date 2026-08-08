@@ -45,7 +45,7 @@ operation on structured data that already carries the key.
 Every input is hard-capped at generation time (3 incidents, 5 network lines, 3 runbooks/
 incident). A real fixture entry (`graph-knowledge.test.ts`) renders as roughly:
 
-```
+```text
 - [high] kafka lag outage (id inc1) -- prior root cause: consumer lag > 10K -- resolved by rb-1.md, rb-2.md, rb-3.md
 ```
 
@@ -182,15 +182,15 @@ latency roughly linearly at this scale).
   more than a spike.
 
 **Narrower alternative worth a follow-up spike, not this one:** inject the slice **once,
-into the volatile block only on the FIRST LLM turn** (mirroring how `focusBlock` already
-works, but explicitly excluded from the block on later iterations rather than resent
-every turn) -- this collapses the "x turns" multiplier back down to "x1 per sub-agent,"
-making the cost closer to the ~110-320 tokens/sub-agent estimated in section 6, not the
+on the FIRST LLM turn only**, through a separate first-turn-only prompt path -- NOT by
+reusing `volatileBlock` as-is. `focusBlock` (part of `volatileBlock`, section 5) is
+resent on every ReAct iteration by design; a first-turn-only variant would need new
+plumbing (a "first turn only" flag threaded through `runSubAgent`'s message-building
+path, which doesn't exist today), not a mirror of `focusBlock`'s current behavior. Done
+right, this collapses the "x turns" multiplier back down to "x1 per sub-agent," making
+the cost closer to the ~110-320 tokens/sub-agent estimated in section 6, not the
 1.4K-6.4K per-sub-agent figure. That is a materially different, much cheaper proposal
-and deserves its own ticket if pursued, since it changes the injection mechanism (would
-need a "first turn only" flag threaded through `runSubAgent`'s message-building path,
-which doesn't exist today) rather than reusing the existing `volatileBlock` pattern
-as-is.
+and deserves its own ticket if pursued.
 
 ## If a follow-up ticket is filed
 
