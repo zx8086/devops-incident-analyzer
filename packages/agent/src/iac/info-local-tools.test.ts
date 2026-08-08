@@ -44,3 +44,11 @@ describe("infoTools binds the MCP kg_* tools + local memory tool (SIO-967)", () 
 		expect(names).not.toContain("query_knowledge_graph");
 	});
 });
+
+describe("infoTools binds the local lookup_examples tool (SIO-1450)", () => {
+	test("lookup_examples is present in the read tool set", async () => {
+		const { infoTools } = await import("./nodes.ts");
+		const names = infoTools().map((t) => t.name);
+		expect(names).toContain("lookup_examples");
+	});
+});
