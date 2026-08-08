@@ -1,7 +1,7 @@
 # Frontend Development
 
 > **Targets:** SvelteKit 2.0 | Svelte 5 | Tailwind CSS v4 | Bun 1.3.9+
-> **Last updated:** 2026-07-19
+> **Last updated:** 2026-08-08
 
 The SvelteKit frontend provides the user interface for the DevOps Incident Analyzer. It renders chat-based interactions, streams agent responses via SSE, and displays pipeline progress across the seven datasources (Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, GitLab, Atlassian, AWS).
 
@@ -67,7 +67,9 @@ The app has grown to 34 components (`ls apps/web/src/lib/components/*.svelte`). 
 | `FollowUpSuggestions` | Clickable follow-up question buttons after an agent response | `suggestions`, `onSelect` |
 | `DataSourceSelector` | Toggle bar for selecting active datasources, shows connection status | `dataSources`, `connected`, `selected` (bindable) |
 
-**Findings and topology cards** — one structured card per datasource result, a per-turn network topology card, plus the pipeline progress card: `ElasticFindingsCard`, `KafkaFindingsCard`, `CouchbaseFindingsCard`, `GitLabFindingsCard`, `AtlassianFindingsCard`, `AWSFindingsCard`, `PipelineProgressCard`. SIO-1204 adds `NetworkTopologyCard` -- the per-turn network map rendered as an ECharts `graph` series (force layout, roam/zoom, category legend per node kind, dashed CIDR-derived edges, red ring on unhealthy target groups; SSR-guarded dynamic import of modular `echarts/core`, pure option transform in `src/lib/network-chart.ts`). SIO-1457 adds `ApplicationTopologyCard` -- the per-turn application map (services, runtime call edges, kafka consumer edges, datastore/external dependencies) on the same structure: pure option transform in `src/lib/app-chart.ts`, hues disjoint from the network map's, dashed KG prior-knowledge edges, red ring on services above the 5 percent APM error-rate threshold.
+**Findings and topology cards** — one structured card per datasource result, a per-turn network topology card, plus the pipeline progress card: `ElasticFindingsCard`, `KafkaFindingsCard`, `CouchbaseFindingsCard`, `GitLabFindingsCard`, `AtlassianFindingsCard`, `AWSFindingsCard`, `PipelineProgressCard`. `MlAnomalyExplainerCard` (SIO-1215) renders the elastic ML anomaly-detection explainer (severity bands, contributing influencers) when the elastic-agent surfaces ML anomaly records. `ConfidenceBadge` (SIO-1194) is the small shared badge that renders the answer's confidence class (grounded / partial / degraded) next to the response; see [Agent Pipeline: confidence](../architecture/agent-pipeline.md). SIO-1204 adds `NetworkTopologyCard` -- the per-turn network map rendered as an ECharts `graph` series (force layout, roam/zoom, category legend per node kind, dashed CIDR-derived edges, red ring on unhealthy target groups; SSR-guarded dynamic import of modular `echarts/core`, pure option transform in `src/lib/network-chart.ts`). SIO-1457 adds `ApplicationTopologyCard` -- the per-turn application map (services, runtime call edges, kafka consumer edges, datastore/external dependencies) on the same structure: pure option transform in `src/lib/app-chart.ts`, hues disjoint from the network map's, dashed KG prior-knowledge edges, red ring on services above the 5 percent APM error-rate threshold.
+
+**Accessibility -- topology text view (SIO-1459).** Both `NetworkTopologyCard` and `ApplicationTopologyCard` ship a keyboard- and screen-reader-accessible text equivalent of the ECharts canvas: a `<details>`/`<summary>` region (`role="region"`, `aria-label="... text view"`) that lists the same nodes and edges as structured text, so the map is not canvas-only. The ECharts graph stays the primary visual; the text view is the a11y fallback for the same `networkTopology` / `applicationTopology` data.
 
 **IaC / HITL cards** — the elastic-iac proposer and its human-in-the-loop gates: `PlanReviewCard`, `DriftReportCard`, `ReconcileChoiceCard`, `SyntheticsDriftCard`, `SyntheticsPushChoiceCard`, `FleetUpgradeChoiceCard`, `ActionConfirmationCard`.
 
@@ -226,6 +228,7 @@ The SSE stream emits events that the `agentStore` processes:
 - **Token events** -- append to `currentContent`, rendered incrementally by `ChatMessage`
 - **Node start/end events** -- update `activeNodes` and `completedNodes`, rendered by `StreamingProgress`
 - **Data source events** -- update `dataSourceProgress` with status per datasource
+- **`subagent_progress`** -- live per-sub-agent status during the `queryDataSource` fan-out (which datasource is querying / done / failed), so the fan-out is not an opaque single spinner; handled in `apps/web/src/lib/server/sse-pump.ts` + `agent-reducer.ts`
 - **`network_topology`** (SIO-1204) -- the once-per-turn merged network map (replace semantics); rendered by `NetworkTopologyCard` as an interactive ECharts force graph
 - **`application_topology`** (SIO-1457) -- the once-per-turn merged application map (replace semantics); rendered by `ApplicationTopologyCard` as an interactive ECharts force graph with dashed KG prior-knowledge edges
 - **Completion events** -- finalize the message with `suggestions`, `responseTime`, `toolsUsed`, `runId`
@@ -246,16 +249,12 @@ The SSE stream emits events that the `agentStore` processes:
 
 ### Pipeline Node Labels
 
-The `StreamingProgress` component maps node IDs to human-readable labels:
+Node ID -> human-readable label mapping lives in **`apps/web/src/lib/node-labels.ts`** (a single `{ id, activeLabel, completeLabel }` table, ~42 entries), consolidated there so `StreamingProgress` shows the **full pipeline** live, not just a handful of hardcoded steps (previously only 6 node IDs were labelled). The table covers every `PIPELINE_NODES` id across both graphs:
 
-| Node ID | Active Label | Complete Label |
-|---------|-------------|----------------|
-| `classify` | Classifying... | Classified |
-| `entityExtractor` | Extracting... | Extracted |
-| `queryDataSource` | Querying... | Queried |
-| `align` | Aligning... | Aligned |
-| `aggregate` | Analyzing... | Analyzed |
-| `validate` | Validating... | Validated |
+- **Incident pipeline:** `classify`, `normalize`, `entityExtractor`, `detectTopicShift`, `queryDataSource`, `align`, `aggregate`, `extractFindings`, `checkConfidence`, `validate`, the mutually-exclusive mitigation branch (`proposeInvestigate` / `proposeMonitor` / `proposeEscalate` -> `aggregateMitigation`), `followUp`, `responder`, and the HIL-learning lane (`learnFetchTicket` -> `learnMatchIncident` -> `learnMatchGate` -> `learnDistill` -> `learnReviewGate` -> `applyLearnings`).
+- **Elastic-IaC proposer:** `parseIntent`, `readClusterState`, `draftChange`, `reviewPlan`/`reviewGate`, `openMr`, `watchPipeline`, and the drift / synthetics-drift / fleet-upgrade sub-flow nodes.
+
+Add the node's id + labels to `node-labels.ts` when you add a pipeline node; an unlabelled id falls back to the raw id in the progress UI.
 
 ---
 
@@ -360,3 +359,4 @@ Example skeleton:
 | 2026-04-04 | Initial version |
 | 2026-04-23 | Updated datasource count from 5 to 6 (added Atlassian alongside Elasticsearch, Kafka, Couchbase, Konnect, GitLab) |
 | 2026-07-19 | SIO-1039..1161 sync: datasource count 6 -> 7 (AWS); component list 9 -> 30, grouped into five families (chat shell, per-datasource findings cards, IaC/HITL cards, HIL-learning cards, ticket/selectors); added the Create ticket flow section (SIO-1124/1139/1145). |
+| 2026-08-08 | SIO-1204..1459 sync: component count 30 -> **34**. Added `MlAnomalyExplainerCard` (SIO-1215) and `ConfidenceBadge` (SIO-1194) to the findings family; documented the **SIO-1459 topology text view** (a11y `<details>` fallback for both ECharts topology cards); added the **`subagent_progress`** SSE event to the stream-event list; replaced the stale 6-row node-label table with a pointer to the consolidated `apps/web/src/lib/node-labels.ts` full-pipeline map. |

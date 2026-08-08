@@ -1,9 +1,11 @@
 # MCP Server Integration
 
-> **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
-> **Last updated:** 2026-07-19
+> **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x | MCP SDK 1.30.0
+> **Last updated:** 2026-08-08
 
 The agent connects to seven MCP (Model Context Protocol) servers over Streamable HTTP transport, providing access to 210+ tools across Elasticsearch, Kafka, Couchbase Capella, Kong Konnect, GitLab, Atlassian (Jira/Confluence), and AWS. The `mcp-bridge.ts` module manages connections via `MultiServerMCPClient`, handles independent failure isolation, periodic health polling, automatic reconnection, and W3C traceparent propagation for cross-service observability. AWS additionally fans out per-estate via the `awsEstateRouter` graph node — one logical MCP connection serves N target AWS accounts via cross-account `AssumeRole`.
+
+All eight MCP servers (the seven datasources plus the peer `elastic-iac` server) share a unified bootstrap and a single MCP SDK baseline. As of the SIO-1410..1443 modernization wave they pin `@modelcontextprotocol/sdk` on `1.30.0` (root catalog + override), register every tool/prompt/resource through the SDK's `server.registerTool()` / `registerPrompt()` / `registerResource()` API (the older `server.tool()` sugar is now build-forbidden — see [Tool registration](#tool-registration-registertool--toolannotations) below), attach machine-readable `ToolAnnotations` via `deriveToolAnnotations`, and are progressively adopting `outputSchema` + `structuredContent` on tool responses. See [Adding MCP Tools](../development/adding-mcp-tools.md) for the authoring contract.
 
 ---
 
@@ -28,7 +30,7 @@ The agent connects to seven MCP (Model Context Protocol) servers over Streamable
 | elastic | | kafka | |couchbase| | konnect | | gitlab  | |atlassian |
 |  -mcp   | | -mcp  | |  -mcp  | |  -mcp   | |  -mcp   | |  -mcp    |
 |         | |       | |        | |         | |         | |          |
-| 96-112  | | 15-55 | | ~37    | | 67+     | | proxy+  | | proxy+   |
+| 101-117 | | 11-61 | | ~39    | | 67+     | | proxy+  | | proxy+   |
 | tools   | | gated | | tools  | | tools   | | custom  | | custom   |
 |         | |       | |        | |         | |         | |          |
 | :9080   | | :9081 | | :9082  | | :9083   | | :9084   | | :9085    |
@@ -101,9 +103,9 @@ The `getToolsForDataSource()` function routes datasource IDs to their correspond
 
 | DataSource ID | Server Name | MCP URL Env Var | Tool Count |
 |---------------|-------------|-----------------|------------|
-| `elastic` | `elastic-mcp` | `ELASTIC_MCP_URL` | 112 (96 cluster incl. 9 ML anomaly-detection + 16 conditional cloud/billing on `EC_API_KEY`) |
-| `kafka` | `kafka-mcp` | `KAFKA_MCP_URL` | 15-55 (15 base + up to 40 gated SR + ksqlDB + Connect + REST Proxy) |
-| `couchbase` | `couchbase-mcp` | `CAPELLA_MCP_URL` | ~37 (official Couchbase tools, SIO-1107) |
+| `elastic` | `elastic-mcp` | `ELASTIC_MCP_URL` | 117 (101 cluster incl. 9 ML anomaly-detection + 4 ES\|QL/async-search SIO-1391 + 16 conditional cloud/billing on `EC_API_KEY`) |
+| `kafka` | `kafka-mcp` | `KAFKA_MCP_URL` | 11-61 (11 base + up to 50 gated SR + ksqlDB + Connect + REST Proxy) |
+| `couchbase` | `couchbase-mcp` | `CAPELLA_MCP_URL` | ~39 (official Couchbase tools, SIO-1107) |
 | `konnect` | `konnect-mcp` | `KONNECT_MCP_URL` | 15 enhanced + proxy |
 | `gitlab` | `gitlab-mcp` | `GITLAB_MCP_URL` | proxy + 5-8 custom |
 | `atlassian` | `atlassian-mcp` | `ATLASSIAN_MCP_URL` | proxy + custom |
@@ -205,11 +207,11 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 
 ## MCP Server Summary
 
-### Elasticsearch MCP (112 tools)
+### Elasticsearch MCP (117 tools)
 
 **Purpose:** Read-only access to Elasticsearch clusters for log search, index management, cluster health, shard allocation, mapping inspection, and snapshot operations. When `EC_API_KEY` is set, also exposes Elastic Cloud organization tools (deployment topology, plan auditing, hardware-profile simulation, and billing).
 
-**Tool count:** 96 cluster tools always (incl. 9 ML anomaly-detection tools, SIO-1148); +16 cloud/billing tools registered conditionally on `EC_API_KEY` (SIO-822–826) by `registerCloudAndBillingTools` in `server.ts` (which logs "Registered 16..."). 112 total with `EC_API_KEY`. Counts verified by a live `registerAllTools` recount, not a grep of tool-name literals.
+**Tool count:** 101 cluster tools always (incl. 9 ML anomaly-detection tools SIO-1148, and the 4 ES|QL/async-search tools `elasticsearch_esql_query` / `elasticsearch_async_search_submit` / `_get` / `_delete` added by SIO-1391); +16 cloud/billing tools registered conditionally on `EC_API_KEY` (SIO-822–826) by `registerCloudAndBillingTools` in `server.ts` (which logs "Registered 16..."). 117 total with `EC_API_KEY`. Counts verified by a live `registerAllTools` recount (returns `ToolInfo[].length === 101`), not a grep of tool-name literals.
 
 **Tool categories:**
 - Cluster operations: health, stats, settings, allocation explanation
@@ -227,12 +229,12 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 
 **Transport:** Streamable HTTP (`/mcp`), SSE, stdio, and AWS Bedrock AgentCore.
 
-### Kafka MCP (15-55 tools depending on gating)
+### Kafka MCP (11-61 tools depending on gating)
 
-**Purpose:** Multi-component access to Kafka clusters and the surrounding Confluent stack. 15 core read tools always register; up to 40 additional tools register conditionally based on which Confluent components are enabled and whether write/destructive flags are set.
+**Purpose:** Multi-component access to Kafka clusters and the surrounding Confluent stack. 11 core read tools always register; up to 50 additional tools register conditionally based on which Confluent components are enabled and whether write/destructive flags are set.
 
 **Tool categories:**
-- Kafka core (15, always): broker list, cluster info, topics list/describe, partition details, consumer groups list/describe/lag, message consume, plus write/destructive (`kafka_produce_message`, `kafka_create_topic`, `kafka_alter_topic_config`, `kafka_delete_topic`, `kafka_reset_consumer_group_offsets`) gated by `KAFKA_ALLOW_WRITES`/`KAFKA_ALLOW_DESTRUCTIVE`.
+- Kafka core (11 core reads always; `coreReads = 11` in `packages/mcp-server-kafka/src/tools/index.ts:83`): broker list, cluster info, topics list/describe, partition details, consumer groups list/describe/lag, message consume, plus write/destructive (`kafka_produce_message`, `kafka_create_topic`, `kafka_alter_topic_config`, `kafka_delete_topic`, `kafka_reset_consumer_group_offsets`) gated by `KAFKA_ALLOW_WRITES`/`KAFKA_ALLOW_DESTRUCTIVE`.
 - Schema Registry (`SCHEMA_REGISTRY_ENABLED=true`): 8 reads (list/get subjects, schemas, versions, configs). With write gates: 3 writes (`sr_register_schema`, `sr_check_compatibility`, `sr_set_compatibility`) and 4 destructives (soft/hard delete subject + version) —.
 - ksqlDB (`KSQL_ENABLED=true`): 7 tools (list streams/tables/queries, execute statement, server info, etc.).
 - Connect (`CONNECT_ENABLED=true`): 4 reads (cluster info, list connectors, get connector status, get task status). With write gates: 3 writes (`connect_pause_connector`, `connect_resume_connector`, `connect_restart_connector`) and 2 destructives (`connect_restart_connector_task`, `connect_delete_connector`) —.
@@ -242,13 +244,15 @@ This creates a complete trace from the SvelteKit frontend through the LangGraph 
 
 **Configuration:** Provider-based selection via `KAFKA_PROVIDER=local|msk|confluent`. Feature gates `KAFKA_ALLOW_WRITES` / `KAFKA_ALLOW_DESTRUCTIVE` control write operations across kafka-core, Connect, SR, and REST Proxy in a unified way.
 
-**Tool count formula:** see `tests/tools/full-stack-tools.test.ts` — the formula is asserted directly. Maximum (full Confluent stack with both write flags on) is 55.
+**Tool count formula:** see `tests/tools/full-stack-tools.test.ts` — the formula is asserted directly (`expect(tools.length).toBe(11)` baseline, `toBe(61)` full stack). Maximum (full Confluent stack with both write flags on) is 61.
 
 **Transport:** Streamable HTTP (`/mcp`), SSE, stdio, and AWS Bedrock AgentCore.
 
-### Couchbase Capella MCP (~37 tools)
+### Couchbase Capella MCP (~39 tools)
 
 **Purpose:** Read-only access to Couchbase Capella clusters for bucket health, N1QL query execution (SELECT only), index analysis, and system vitals.
+
+> **SDK v2 dual-era pilot (SIO-1424/1436/1443):** this server carries a second, side-by-side entrypoint (`src/server-v2.ts` / `index-v2.ts`, `src/v2/`) that ports the same tool surface onto MCP SDK v2.0.0, plus its own `ResourceRegistry` (`src/resources/resource-registry.ts`, SIO-1412) that walks its own registered-resource map instead of reaching into the SDK's private `_registeredResources`. The v2 port is a parity pilot — it does not add tools to the agent's connected surface, so the count is unchanged.
 
 **Tool categories:**
 - Cluster: health check, node status, system vitals, auto-failover status
@@ -328,6 +332,20 @@ GitLab and Atlassian MCP both use OAuth 2.0 Dynamic Client Registration through 
 
 ---
 
+## Tool registration (registerTool + ToolAnnotations)
+
+All MCP servers share one SDK baseline and one registration idiom, enforced at build time (SIO-1410..1421):
+
+- **SDK 1.30.0, pinned centrally.** The root `package.json` declares `@modelcontextprotocol/sdk` in the workspace `catalog` at `^1.30.0` plus an `overrides` entry pinning `1.30.0`; every server package depends on `"catalog:"` rather than its own range, so there is exactly one SDK version in the tree (SIO-1410).
+- **`server.registerTool()` only — no sugar.** Servers register tools, prompts, and resources through the SDK's typed `registerTool()` / `registerPrompt()` / `registerResource()` API. The older `server.tool()` / `server.prompt()` / `server.resource()` sugar is **build-forbidden**: `packages/tools-verify/src/verify-no-sugar-registration.ts` fails the build on any sugar call (its `NOT_YET_CONVERTED` allowlist is empty — zero sugar repo-wide). When adding a tool, grep for `server.registerTool(`, not `server.tool(`.
+- **`ToolAnnotations` on every tool.** Each `registerTool` call attaches machine-readable annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) derived by the shared `deriveToolAnnotations` helper (`packages/shared/src/tool-annotations.ts`), so read-only vs. destructive intent is declared in the protocol, not just in prose.
+- **`outputSchema` + `structuredContent` (wave 1, in progress).** Newer tools declare an `outputSchema` and return `structuredContent` alongside the text block (SIO-1422); the agent consumes it directly in `sub-agent-instrumentation.ts` / `sub-agent.ts` (SIO-1437) instead of re-parsing the text. Response builders (e.g. `packages/mcp-server-kafka/src/lib/response-builder.ts`) support both shapes. Not every tool has an output schema yet — this is a rolling conversion.
+- **SDK-agnostic bootstrap seam.** The lifecycle glue (`registerMcpApplication`, transport wiring, logging) lives in `packages/shared/src/bootstrap-lifecycle.ts` (SIO-1423), separate from the SDK-version-specific `bootstrap.ts` (v1) and `bootstrap-v2.ts` (the couchbase v2 pilot), so a server can be moved to a newer SDK era without rewriting its lifecycle.
+
+The full author-facing contract (step-by-step, with the annotation and output-schema examples) is in [Adding MCP Tools](../development/adding-mcp-tools.md).
+
+---
+
 ## Dynamic Tool Prompts
 
 ### Gitagent-Driven Descriptions
@@ -373,4 +391,5 @@ The bridge's `buildRelatedToolsMap()` collects these into a lookup table, and `w
 | 2026-04-23 | Added Atlassian MCP as 6th server (Jira/Confluence, OAuth 2.0, read-only enforced, port 9085) |
 | 2026-05-07 | Documented Elastic Cloud + Billing tool family and per-call `deployment` arg fallback chain; updated tool count from ~78 to ~84 |
 | 2026-05-09 | Extracted shared OAuth provider base; GitLab MCP switched to public-client + PKCE (`auth_method: "none"`, `scope: "mcp"`); added `MCP_OAUTH_HEADLESS` env, `bun run oauth:seed:<service>` CLIs, stale-registration auto-discard, file-mode 0o600 enforcement |
-| 2026-07-19 | SIO-1039..1161 sync: refreshed stale tool counts — elastic ~84/~93 -> **112** with `EC_API_KEY` (96 cluster incl. 9 ML anomaly-detection tools SIO-1148 + 16 cloud/billing; live-recount corrected the long-standing cluster undercount); couchbase ~15 -> **~37** (official Couchbase tools, SIO-1107). |
+| 2026-07-19 | SIO-1039..1161 sync: refreshed stale tool counts — elastic ~84/~93 -> **112** with `EC_API_KEY` (96 cluster incl. 9 ML anomaly-detection tools SIO-1148 + 16 cloud/billing; live-recount corrected the long-standing cluster undercount); couchbase ~15 -> **~39** (official Couchbase tools, SIO-1107). |
+| 2026-08-08 | SIO-1162..1459 sync. Corrected tool counts to live recounts: elastic **112 -> 117** (cluster **96 -> 101**: SIO-1391 added 4 ES\|QL/async-search tools; `registerAllTools` returns `ToolInfo[].length === 101`); kafka **15-55 -> 11-61** (`coreReads = 11`, full-stack test asserts `toBe(61)` — the old 15/55 figures never matched the asserted formula); couchbase **~39 -> ~39**. Documented the SIO-1410..1443 MCP SDK modernization wave: the unified **SDK 1.30.0** baseline, the build-forbidden `server.tool()` sugar / `registerTool` + `deriveToolAnnotations` idiom, `outputSchema`/`structuredContent` (SIO-1422/1437), the `bootstrap-lifecycle.ts` SDK-agnostic seam (SIO-1423), and the couchbase **SDK v2 dual-era pilot** + own `ResourceRegistry` (SIO-1424/1436/1443/1412). Added the new "[Tool registration](#tool-registration-registertool--toolannotations)" section. |

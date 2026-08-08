@@ -702,7 +702,8 @@ const MAX_PROBED_BUCKETS = 3;
 const MAX_BUCKET_NAMES = 10;
 
 // SIO-1353: preset-workflow dispatch for couchbase, behind
-// RESOLVE_IDENTIFIERS_PRESETS_ENABLED (default OFF). The capella-agent's
+// RESOLVE_IDENTIFIERS_PRESETS_ENABLED (default ON; SIO-1355 made the flag
+// list-valued and default `all`, so unset -> ON). The capella-agent's
 // workflows/resolve-identifiers.yaml declares the same three discovery tools
 // the legacy probe invokes; assembly is SHARED (assembleCouchbaseFromRaws) so
 // the two paths cannot drift. Preset absent/unloadable -> legacy probe, so the

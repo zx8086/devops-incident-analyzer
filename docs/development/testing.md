@@ -285,24 +285,27 @@ test("loads all 6 tool definitions", () => {
 
 ---
 
-## Agent Eval (LangSmith final_response)
+## Evals & quality harness
 
-End-to-end regression for the full 31-node incident-analysis graph. 5 incident-shaped queries × 3 evaluators (datasources_covered, confidence_threshold, response_quality LLM judge). Lives at `packages/agent/src/eval/`; canonical README at `packages/agent/src/eval/README.md`.
+The eval layer lives at `packages/agent/src/eval/` with the canonical, always-current reference at **`packages/agent/src/eval/README.md`** (run/cost/feedback-key detail, historical run logs). This section is the map; the README is the manual. All evals are on-demand (none in CI). Runtime evals that call Bedrock or live MCP need AWS Bedrock creds; the static/semantic checks (`eval:spec-audit`) need none. The LLM-judge and LangSmith-backed evals additionally need `OPENAI_API_KEY`, `LANGSMITH_API_KEY` + `LANGSMITH_PROJECT`, and the `langsmith` CLI on PATH (for `*upload*` scripts).
 
-```bash
-# 1. Sanity-check infra (free, fast). Probes :9080-:9085.
-bun run --filter @devops-agent/agent eval:precheck
+The npm scripts live in `packages/agent/package.json`; the day-to-day ones are **mirrored into the root `package.json`** (SIO-1458) so `bun run eval:*` works from the repo root:
 
-# 2. Upload (or update) the dataset to LangSmith (free, fast, one-shot per dataset change).
-bun run --filter @devops-agent/agent eval:upload-dataset
+| Script | What it does |
+|--------|--------------|
+| `eval:agent` | End-to-end LangSmith `final_response` regression for the full 31-node incident graph (5 incident-shaped queries x evaluators: `datasources_covered`, `confidence_threshold`, `response_quality` LLM judge). `eval:precheck` sanity-checks infra first; `eval:upload-dataset` (re)uploads the dataset. |
+| `eval:incident-replay` | Live-replay incident eval (SIO-1371/1372/1374/1378). Adds the tier-3 trajectory-grounded evaluators `runbook_selection_vs_usage` (deterministic) and `citation_grounding` (LLM judge) from SIO-1442. `--ticket DEVOPS-XXXX` (SIO-1454) scopes the run to a single dataset example. |
+| `eval:mcp-tool` | MCP tool-call correctness eval (SIO-1398): a LangSmith set auditing whether each datasource's tools are called correctly and return usable data. `--datasource <id>` scopes it. |
+| `eval:tool-probe` | Direct per-tool health probe -- calls each MCP tool and reports which return data vs. error. This is the tool-**health** measure; `eval:mcp-tool` only observes tools the agent chose to call. |
+| `eval:spec-audit` | Tier-1 static/semantic OKF spec audit (SIO-1440): grades the spec layer (agent.yaml + SOUL.md + RULES.md + `knowledge/`) for frontmatter validity, orphaned knowledge, RULES-vs-SOUL contradictions. |
+| `eval:single-agent-probe` | Tier-2 isolated single-agent probe (SIO-1441): runs one sub-agent against real MCP with **no `buildGraph`, no mocks**, driven by `PROBE_DATASOURCE` / `PROBE_SCENARIO`. |
+| `model:probe` | Model-conformance probe (SIO-1224), not a graph eval -- verifies a model's capability assumptions; committed reports live in [`docs/reference/model-probes/`](../reference/model-probes/). See the [Model Upgrade Checklist](./model-upgrade-checklist.md). |
 
-# 3. Run the eval (~$0.50-1.50 Bedrock + ~$0.025 OpenAI judge, ~5-10min wall-clock).
-bun run eval:agent
-```
+**OKF spec-audit tiers (SIO-1440/1441/1442/1444).** Four tiers grade the spec layer rather than the graph's answers: tier 1 = `eval:spec-audit` (static/semantic), tier 2 = `eval:single-agent-probe` (isolated live probe), tier 3 = the two trajectory evaluators inside `eval:incident-replay`, tier 4 = static checks in tier-1's CLI plus `bun test` (`okf-spec-audit.test.ts`).
 
-Each evaluator returns 1 (pass) or 0 (fail) per query, visible in LangSmith under the experiment prefix `agent-eval-<git-sha>` against the `devops-incident-eval` dataset. To add a query, edit `packages/agent/src/eval/dataset.ts` and re-run `eval:upload-dataset`.
+**Sound-freeze record/replay (SIO-1379).** `EVAL_FIXTURE_MODE` freezes eval inputs at the **output** level, not the tool level: `record` runs live and appends the turn's agent outputs + an MCP tool-call audit trail to a fixture; `replay-outputs` re-grades that frozen behavior with **no live systems touched** (skips the MCP precheck), so judge-only iterations cost pennies. Tool-level replay is deliberately absent (the README explains why). See [`EVAL_FIXTURE_MODE`](../configuration/environment-variables.md).
 
-Prerequisites: AWS Bedrock creds, `OPENAI_API_KEY`, `LANGSMITH_API_KEY` + `LANGSMITH_PROJECT`, the `langsmith` CLI on PATH (`eval:upload-dataset` only), and all 6 MCP servers reachable. The eval is on-demand; not in CI.
+**MCP tool-call counters (SIO-1400/1402).** Setting [`MCP_TOOL_METRICS_DB_PATH`](../configuration/environment-variables.md) makes every MCP server append per-server/per-tool lifetime call + failure counts to a shared SQLite file, with a failure-class breakdown (`bad-input` / `unstructured` / `unknown-tool`). It is soft-failing and never breaks a tool call -- it is production telemetry, not a test, but it is the data source the `eval:mcp-tool` audit cross-checks against.
 
 ---
 
@@ -321,3 +324,4 @@ Prerequisites: AWS Bedrock creds, `OPENAI_API_KEY`, `LANGSMITH_API_KEY` + `LANGS
 |------|--------|
 | 2026-04-04 | Initial version |
 | 2026-05-09 | Added Agent Eval section (/682) |
+| 2026-08-08 | SIO-1378..1458 sync: rewrote the "Agent Eval" section into "Evals & quality harness" -- documented the full script table (`eval:agent` / `eval:incident-replay` / `eval:mcp-tool` / `eval:tool-probe` / `eval:spec-audit` / `eval:single-agent-probe` / `model:probe`, mirrored into root `package.json` via SIO-1458), the four OKF spec-audit tiers (SIO-1440/1441/1442/1444), sound-freeze `EVAL_FIXTURE_MODE` record/replay (SIO-1379), the `--ticket` scoping (SIO-1454), and the MCP tool-call SQLite counters (SIO-1400/1402). |

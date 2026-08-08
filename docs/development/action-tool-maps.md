@@ -1,7 +1,7 @@
 # Action Tool Maps
 
-> **Targets:** Bun 1.3.9+ | MCP SDK 1.27+ | TypeScript 5.x
-> **Last updated:** 2026-04-09
+> **Targets:** Bun 1.3.9+ | MCP SDK 1.30.0 | TypeScript 5.x
+> **Last updated:** 2026-08-08
 
 The action-driven tool selection system reduces the number of MCP tools passed to each sub-agent's ReAct loop. Without filtering, sub-agents receive 15-80 tools from their connected MCP server, which risks exceeding the LLM's context window and degrades tool selection accuracy. Action tool maps solve this by grouping MCP tools into named action categories in the tool YAML, then selecting only the categories relevant to the user's query.
 
@@ -45,13 +45,14 @@ Start the MCP server and list its registered tools. The tool names are what you 
 bun run packages/mcp-server-elastic/src/index.ts
 
 # List tools via MCP inspector or check the server's tool registration files
-# Look in packages/mcp-server-*/src/tools/*/tools.ts for server.tool() calls
+# Look in packages/mcp-server-*/src/tools/*/tools.ts for server.registerTool() calls
 ```
 
-Alternatively, search the tool registration files directly:
+Alternatively, search the tool registration files directly (grep for `registerTool`, not the
+build-forbidden `server.tool()` sugar — see [Adding MCP Tools](adding-mcp-tools.md)):
 
 ```bash
-grep -rh 'server.tool(' packages/mcp-server-elastic/src/tools/ | grep -oP '"[^"]*"' | head -20
+grep -rh 'server.registerTool(' packages/mcp-server-elastic/src/tools/ | grep -oP '"[^"]*"' | head -20
 ```
 
 ### Step 2: Group Tools by Purpose
@@ -190,9 +191,9 @@ If an MCP tool is removed from the server, remove its name from all action categ
 
 | File | Role |
 |------|------|
-| `agents/incident-analyzer/tools/elastic-logs.yaml` | Elastic action map: 15 categories (incl. `transform_management`, `ml_monitoring`, `cloud_deployment`, `billing`), 112 tools (96 cluster incl. 9 ML anomaly-detection + 16 conditional cloud/billing on EC_API_KEY) |
-| `agents/incident-analyzer/tools/kafka-introspect.yaml` | Kafka action map: 12 categories, 15-55 tools (15 base + up to 40 gated SR + ksqlDB + Connect + REST Proxy; v2.0.0) |
-| `agents/incident-analyzer/tools/couchbase-health.yaml` | Couchbase action map: 8 categories, ~37 tools (official Couchbase tools, SIO-1107) |
+| `agents/incident-analyzer/tools/elastic-logs.yaml` | Elastic action map: 15 categories (incl. `transform_management`, `ml_monitoring`, `cloud_deployment`, `billing`), 117 tools (101 cluster incl. 9 ML anomaly-detection + 4 ES\|QL/async-search + 16 conditional cloud/billing on EC_API_KEY) |
+| `agents/incident-analyzer/tools/kafka-introspect.yaml` | Kafka action map: 12 categories, 11-61 tools (11 base + up to 50 gated SR + ksqlDB + Connect + REST Proxy; v2.0.0) |
+| `agents/incident-analyzer/tools/couchbase-health.yaml` | Couchbase action map: 8 categories, ~39 tools (official Couchbase tools, SIO-1107) |
 | `agents/incident-analyzer/tools/konnect-gateway.yaml` | Konnect action map: 9 categories, 15 enhanced + proxy tools |
 | `agents/incident-analyzer/tools/gitlab-api.yaml` | GitLab action map: CI/CD, merge-request, code-analysis categories (proxy + custom) |
 | `agents/incident-analyzer/tools/atlassian-api.yaml` | Atlassian action map: Jira issue search, Confluence pages, ticket metadata (proxy + custom) |

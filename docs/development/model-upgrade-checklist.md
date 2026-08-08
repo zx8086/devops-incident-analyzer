@@ -97,7 +97,7 @@ This is the gate SIO-1213 skipped. Record the experiment prefix (`agent-eval-<sh
 
 ### 9. Exercise elastic-iac by hand, if its manifest changed
 
-The elastic-iac graph has no token stream and its own 30-node pipeline, so the eval above does
+The elastic-iac graph has no token stream and its own 31-node pipeline, so the eval above does
 not cover it. Drive one read-only `info` request and one `gitops` request through to plan
 review. Link the run in the MR.
 

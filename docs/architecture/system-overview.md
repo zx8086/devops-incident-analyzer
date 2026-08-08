@@ -54,7 +54,7 @@ The agent's investigation is strictly read-only against production systems. It o
 | ES   | | Kafka| | Capella| | Konnect| | GitLab | |Atlassian|
 | MCP  | | MCP  | | MCP    | | MCP    | | MCP    | | MCP     |
 | :9080| | :9081| | :9082  | | :9083  | | :9084  | | :9085   |
-|96-112| | 15-55| | ~37    | | 67+    | | proxy+ | | proxy+  |
+|101-117| | 11-61| | ~39    | | 67+    | | proxy+ | | proxy+  |
 | tools| | gated| | tools  | | tools  | | custom | | custom  |
 +------+ +------+ +--------+ +--------+ +--------+ +---------+
     |        |          |         |         |         |
@@ -66,7 +66,7 @@ The agent's investigation is strictly read-only against production systems. It o
 +------+ +------+ +--------+ +--------+ +--------+ +---------+
 ```
 
-Tool counts are dynamic -- they reflect connected MCP tools at runtime. The Elasticsearch `96-112` range depends on `EC_API_KEY`: 96 cluster tools always, plus 16 conditional cloud/billing tools only when that org-scoped key is set (see the component table below). Proxy-based servers (GitLab, Atlassian) discover tools from the remote native MCP endpoint at startup, so totals vary. The agent targets 210+ tools end-to-end when all servers are connected.
+Tool counts are dynamic -- they reflect connected MCP tools at runtime. The Elasticsearch `101-117` range depends on `EC_API_KEY`: 101 cluster tools always, plus 16 conditional cloud/billing tools only when that org-scoped key is set (see the component table below). Proxy-based servers (GitLab, Atlassian) discover tools from the remote native MCP endpoint at startup, so totals vary. The agent targets 210+ tools end-to-end when all servers are connected.
 
 ---
 
@@ -125,14 +125,14 @@ Each MCP server is an independent deployable package with its own entry point, c
 | Shared Library | `packages/shared` | Cross-package types, Zod schemas, bootstrap function, telemetry, logging |
 | Checkpointer | `packages/checkpointer` | LangGraph state persistence (memory or bun:sqlite) |
 | Observability | `packages/observability` | Pino logger factory, OpenTelemetry span helpers, request-scoped child loggers |
-| Elasticsearch MCP | `packages/mcp-server-elastic` | 112 tools (96 cluster incl. 9 ML anomaly-detection + 16 conditional cloud/billing on `EC_API_KEY`) for cluster health, index management, search, snapshots, mappings, ML jobs/datafeeds, Elastic Cloud deployments, hardware profiles, plan auditing, and billing |
-| Kafka MCP | `packages/mcp-server-kafka` | 15 base tools + up to 40 gated tools (Schema Registry + ksqlDB + Connect + REST Proxy) for cluster info, topic management, consumer groups, message consumption |
-| Couchbase MCP | `packages/mcp-server-couchbase` | ~37 tools (SIO-1107 official Couchbase tools) for cluster health, bucket listing, N1QL queries, INFER-based schema, EXPLAIN, Index Advisor + covering-index detectors, playbooks |
+| Elasticsearch MCP | `packages/mcp-server-elastic` | 117 tools (101 cluster incl. 9 ML anomaly-detection + 4 ES\|QL/async-search + 16 conditional cloud/billing on `EC_API_KEY`) for cluster health, index management, search, snapshots, mappings, ML jobs/datafeeds, ES\|QL + async search, Elastic Cloud deployments, hardware profiles, plan auditing, and billing |
+| Kafka MCP | `packages/mcp-server-kafka` | 11 base tools + up to 50 gated tools (Schema Registry + ksqlDB + Connect + REST Proxy) for cluster info, topic management, consumer groups, message consumption |
+| Couchbase MCP | `packages/mcp-server-couchbase` | ~39 tools (SIO-1107 official Couchbase tools) for cluster health, bucket listing, N1QL queries, INFER-based schema, EXPLAIN, Index Advisor + covering-index detectors, playbooks |
 | Konnect MCP | `packages/mcp-server-konnect` | 15 enhanced tools + proxy surface for services, routes, plugins, consumers, upstreams, analytics |
 | GitLab MCP | `packages/mcp-server-gitlab` | Proxy + 5-8 custom tools for CI/CD pipelines, merge requests, code analysis, issues |
 | Atlassian MCP | `packages/mcp-server-atlassian` | Proxy + custom tools for Jira issues, Confluence pages, projects, and ticket metadata |
 | AWS MCP | `packages/mcp-server-aws` | Multi-estate AWS read-only tools — CloudWatch (logs, Logs Insights, metrics, Metrics Insights SQL, alarms), EC2 + network-path tracing (route tables, NAT gateways, NACLs, flow logs, transit gateways, VPC peering), ECS, Lambda, RDS, S3, X-Ray, CloudFormation, DynamoDB, ElastiCache, EventBridge/SNS/SQS, Step Functions, Config, Health, Tags. Cross-account `AssumeRole` per estate; `aws_list_estates` enumerates configured targets. See [AWS Estate Onboarding](../runbooks/aws-estate-onboarding.md). |
-| Web Frontend | `apps/web` | SvelteKit app with SSE streaming, 30 components (chat shell, per-datasource findings cards, IaC/HITL cards, HIL-learning cards, create-ticket), Tailwind CSS |
+| Web Frontend | `apps/web` | SvelteKit app with SSE streaming, 34 components (chat shell, per-datasource findings cards incl. network/application topology + ML-anomaly explainer, IaC/HITL cards, HIL-learning cards, create-ticket), Tailwind CSS |
 | Agent Definitions | `agents/incident-analyzer` | YAML/Markdown: SOUL.md, RULES.md, agent.yaml, tools/*.yaml, skills/*.md, compliance/ |
 
 ### Package Dependency Graph
@@ -373,4 +373,4 @@ The system enforces several security boundaries:
 | 2026-06-17 | Added `aws` to the fan-out diagrams. Elastic IaC agent expanded (SIO-911..932): see [Elastic IaC GitOps Proposer](elastic-iac-proposer.md) — config-edit proposers, Fleet-upgrade sub-flow, conversational follow-ups (proposer graph now 24 nodes). |
 | 2026-06-30 | Added the in-process Knowledge Graph MCP server (port 9087, SIO-967) and the [Knowledge Graph](knowledge-graph.md) component; corrected verified node counts (incident 20/22-with-KG; elastic-iac proposer 24→29). Part of the SIO-1025 docs sync. |
 | 2026-07-09 | SIO-1030..1038 docs sync (SIO-1039): re-verified node counts to greps — incident 22→23 with KG (`recordRootCause` from SIO-1026, previously undercounted); elastic-iac proposer 29→30 (`recordIacPrompt`, SIO-1038). New `ilm-delete` workflow (SIO-1037). |
-| 2026-07-19 | SIO-1039..1161 docs sync. Reconciled the incident node count (the two conflicting 22/23 figures here) to the verified grep = **31** (21 base + 4 gated KG incl. `recordBindings` + 6 gated HIL-learning nodes); added `resolveIdentifiers` to the node list. Refreshed component-summary tool counts (elastic ~93→**112** with `EC_API_KEY` — 96 cluster incl. 9 ML anomaly tools SIO-1148 + 16 cloud/billing, a live recount that corrected the prior cluster undercount; couchbase (this doc's prior ~15, README's prior 24+)→~37 SIO-1107; AWS +CloudWatch Metrics Insights + network-path EC2 SIO-1161/1120). Frontend 9→30 components. Noted the two user-initiated Atlassian write paths (create-ticket SIO-1124, HIL Jira comments SIO-1145) alongside the read-only production stance. |
+| 2026-07-19 | SIO-1039..1161 docs sync. Reconciled the incident node count (the two conflicting 22/23 figures here) to the verified grep = **31** (21 base + 4 gated KG incl. `recordBindings` + 6 gated HIL-learning nodes); added `resolveIdentifiers` to the node list. Refreshed component-summary tool counts (elastic ~93→**112** with `EC_API_KEY` — 96 cluster incl. 9 ML anomaly tools SIO-1148 + 16 cloud/billing, a live recount that corrected the prior cluster undercount; couchbase (this doc's prior ~15, README's prior 24+)→~39 SIO-1107; AWS +CloudWatch Metrics Insights + network-path EC2 SIO-1161/1120). Frontend 9→30 components. Noted the two user-initiated Atlassian write paths (create-ticket SIO-1124, HIL Jira comments SIO-1145) alongside the read-only production stance. |

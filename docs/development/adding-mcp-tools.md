@@ -1,7 +1,7 @@
 # Adding MCP Tools
 
-> **Targets:** Bun 1.3.9+ | MCP SDK 1.27+ | TypeScript 5.x
-> **Last updated:** 2026-04-23
+> **Targets:** Bun 1.3.9+ | MCP SDK 1.30.0 | TypeScript 5.x
+> **Last updated:** 2026-08-08
 
 Adding and modifying MCP tools is the most common development task in this project. Each MCP server exposes tools via the Model Context Protocol, which the LangGraph agent discovers at runtime through `MultiServerMCPClient`. This guide walks through the full lifecycle of adding a tool, from the TypeScript implementation to the gitagent YAML definition.
 
@@ -80,6 +80,13 @@ export const ListTopicsParams = z.object({
     .optional()
     .describe("Substring filter to match against topic names"),
 });
+
+// Output schema (used by the outputSchema/structuredContent example below).
+// Describe every field, same as the input schema.
+export const ListTopicsOutput = z.object({
+  topics: z.array(z.string()).describe("Matching topic names"),
+  count: z.number().describe("Number of topics returned"),
+});
 ```
 
 ### Step 3: Write the Tool Description
@@ -94,11 +101,16 @@ export const LIST_TOPICS_DESCRIPTION =
 
 ### Step 4: Register in the MCP Server
 
-Add the `server.registerTool()` call in the tools registration file. Use `wrapHandler` to get feature gate checks, tracing, and error normalization for free. (Historically this was `server.tool()`; the project migrated to `registerTool` after MCP SDK v1.17.5 made the old signature incompatible -- see `packages/mcp-server-elastic/src/tools/index.ts` for the compatibility wrapper.)
+Add the `server.registerTool()` call in the tools registration file. Use `wrapHandler` to get feature gate checks, tracing, and error normalization for free.
+
+> **`server.registerTool()` is mandatory — the old `server.tool()` sugar is build-forbidden (SIO-1413).** `packages/tools-verify/src/verify-no-sugar-registration.ts` fails the build on any `server.tool(` / `server.prompt(` / `server.resource(` call; its `NOT_YET_CONVERTED` allowlist is empty, so zero sugar is allowed repo-wide. The same rule applies to prompts and resources: use `server.registerPrompt()` and `server.registerResource()`. If you copy an old example that uses the sugar, the build will reject it.
+
+Every `registerTool` call also declares `annotations` (a `ToolAnnotations` object) so read-only vs. destructive intent is machine-readable in the protocol, not just in prose. Derive them with the shared `deriveToolAnnotations` helper (`packages/shared/src/tool-annotations.ts`) rather than hand-writing the four hint flags:
 
 ```typescript
 // src/tools/read/tools.ts
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { deriveToolAnnotations } from "@devops-agent/shared";
 import type { AppConfig } from "../../config/schemas.ts";
 import { ResponseBuilder } from "../../lib/response-builder.ts";
 import type { KafkaService } from "../../services/kafka-service.ts";
@@ -115,8 +127,12 @@ export function registerReadTools(
   server.registerTool(
     "kafka_list_topics",
     {
+      title: "List Kafka Topics",
       description: prompts.LIST_TOPICS_DESCRIPTION,
       inputSchema: params.ListTopicsParams.shape,
+      // deriveToolAnnotations sets readOnlyHint / destructiveHint /
+      // idempotentHint / openWorldHint from the tool's classification.
+      annotations: deriveToolAnnotations("kafka_list_topics", { readOnly: true }),
     },
     wrapHandler("kafka_list_topics", config, async (args) => {
       const result = await ops.listTopics(service, args);
@@ -125,6 +141,8 @@ export function registerReadTools(
   );
 }
 ```
+
+The `konnect` server (SIO-1414) is the canonical template for the conversion — copy its registration shape when adding a new tool or converting an old one.
 
 ### Step 5: Wire into registerAllTools
 
@@ -241,8 +259,29 @@ Do not change tool names after deployment. Tool names are part of the MCP contra
 
 - All input parameters use Zod schemas with `.describe()` on every field
 - Shared parameters (topic name, group ID, filters) are defined once in `tools/shared/parameters.ts`
-- Output is always `{ content: [{ type: "text", text: string }], isError?: boolean }`
+- The base output shape is `{ content: [{ type: "text", text: string }], isError?: boolean }`
 - Use `ResponseBuilder.success(data)` and `ResponseBuilder.error(message)` for consistent formatting
+
+**Structured output (`outputSchema` + `structuredContent`, SIO-1422/1437).** New tools should also declare an `outputSchema` in the registration config and return `structuredContent` alongside the text block, so the agent consumes typed data directly instead of re-parsing prose:
+
+```typescript
+server.registerTool(
+  "kafka_list_topics",
+  {
+    description: prompts.LIST_TOPICS_DESCRIPTION,
+    inputSchema: params.ListTopicsParams.shape,
+    outputSchema: params.ListTopicsOutput.shape,   // Zod schema, .describe() on fields
+    annotations: deriveToolAnnotations("kafka_list_topics", { readOnly: true }),
+  },
+  wrapHandler("kafka_list_topics", config, async (args) => {
+    const result = await ops.listTopics(service, args);
+    // ResponseBuilder emits BOTH content[] (text) and structuredContent (typed).
+    return ResponseBuilder.success(result);
+  }),
+);
+```
+
+The agent reads `structuredContent` when present in `packages/agent/src/sub-agent-instrumentation.ts` / `sub-agent.ts`. Response builders (e.g. `packages/mcp-server-kafka/src/lib/response-builder.ts`) emit both shapes so a tool with an `outputSchema` stays backward-compatible with clients that only read `content[]`. This is a rolling conversion (wave 1) — not every tool has an `outputSchema` yet, but new tools should include one.
 
 ### Error Handling
 
@@ -378,3 +417,4 @@ GitLab and Atlassian MCP servers don't follow the standard "implement every tool
 | 2026-04-04 | Initial version |
 | 2026-04-23 | Updated `server.tool()` references to `server.registerTool()` (MCP SDK v1.17.5+); added `gitlab_` and `atlassian_` to server-prefix list |
 | 2026-05-07 | Documented Konnect per-tool registry pattern, shared bootstrap read-only chokepoint, Elastic Cloud + Billing tool family, per-call `deployment` arg; swapped Elastic example IDs to canonical `eu-cld,us-cld` |
+| 2026-08-08 | SIO-1410..1443 MCP SDK wave. Bumped the target header to SDK 1.30.0. Reframed the `server.tool()` note from "historical" to **build-forbidden** (SIO-1413 `verify-no-sugar-registration` guard, empty allowlist); added `ToolAnnotations` / `deriveToolAnnotations` to the Step-4 registration example; added `outputSchema` + `structuredContent` guidance to the Input/Output Schema conventions (SIO-1422/1437). Named `konnect` (SIO-1414) as the conversion template. |
