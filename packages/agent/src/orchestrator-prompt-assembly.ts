@@ -22,6 +22,9 @@ export interface VolatileSections {
 	// last so an empty/absent value keeps the assembly byte-identical to the
 	// pre-network output (the SIO-1040 byte-identity contract).
 	network?: string;
+	// SIO-1457: this turn's derived application-map summary. Same optional,
+	// appended-last convention as network above.
+	applicationMap?: string;
 	// SIO-1215: this turn's derived ML anomaly-record summary. Same optional,
 	// appended-last convention as network above.
 	mlAnomaly?: string;
@@ -64,6 +67,7 @@ export function assembleOrchestratorPromptParts(
 		sections.wiki +
 		sections.graph +
 		(sections.network ?? "") +
+		(sections.applicationMap ?? "") +
 		(sections.mlAnomaly ?? "") +
 		(sections.downstreamImpact ?? "");
 	return { stable: core, volatile };

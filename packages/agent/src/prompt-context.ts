@@ -94,6 +94,11 @@ export interface OrchestratorPromptOptions {
 	// summarizeNetworkTopologyForPrompt). Rendered as its own volatile section with
 	// a do-not-reproduce instruction: the full map reaches the user as a card.
 	networkContext?: string;
+	// SIO-1457: this turn's derived application-map summary (buildApplicationTopology
+	// -> summarizeApplicationTopologyForPrompt). Same volatile-section contract as
+	// networkContext; never includes the KG overlay (aggregate re-runs the pure
+	// builder, which has no KG access).
+	applicationMapContext?: string;
 	// SIO-1215: this turn's derived ML anomaly-record summary
 	// (buildMlAnomalyExplainer -> summarizeMlAnomalyExplainerForPrompt).
 	mlAnomalyContext?: string;
@@ -111,6 +116,11 @@ export interface OrchestratorPromptOptions {
 function buildNetworkSection(networkContext: string | undefined): string {
 	if (!networkContext) return "";
 	return `\n\n## Network Map (derived this turn)\n${networkContext}\nMention the network path in the report only where it bears on the root cause; the full map is rendered to the user as an interactive card -- do not reproduce it in the report body.\n`;
+}
+
+function buildApplicationMapSection(applicationMapContext: string | undefined): string {
+	if (!applicationMapContext) return "";
+	return `\n\n## Application Map (derived this turn)\n${applicationMapContext}\nMention service dependencies in the report only where they bear on the root cause; the full map is rendered to the user as an interactive card -- do not reproduce it in the report body.\n`;
 }
 
 function buildMlAnomalySection(mlAnomalyContext: string | undefined): string {
@@ -146,6 +156,7 @@ export function buildOrchestratorPromptParts(options: OrchestratorPromptOptions 
 		// questions answer from prior-incident entries instead of LLM inference.
 		graph: buildGraphSection(options.graphContext),
 		network: buildNetworkSection(options.networkContext),
+		applicationMap: buildApplicationMapSection(options.applicationMapContext),
 		mlAnomaly: buildMlAnomalySection(options.mlAnomalyContext),
 		downstreamImpact: buildDownstreamImpactSection(options.downstreamImpactContext),
 	});

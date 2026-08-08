@@ -16,6 +16,7 @@ import { type BaseMessage, HumanMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
+import { fetchAppMapBaseline, isAppMapBaselineEnabled } from "./app-map-baseline.ts";
 import { capSubAgentTimeoutMs, getGraphDeadlineAt } from "./graph-budget.ts";
 import { createLlm, type InvokableLlm } from "./llm.ts";
 import { getToolsForDataSource, withAwsEstate, withElasticDeployment } from "./mcp-bridge.ts";
@@ -1831,6 +1832,64 @@ ${state.correlationFetchDirective}`
 						error: error instanceof Error ? error.message : String(error),
 					},
 					"Network placement baseline failed; continuing without it",
+				);
+			}
+		}
+
+		// SIO-1457: deterministic APM call-graph baseline for the application map --
+		// the elastic sibling of the SIO-1208 AWS placement baseline above. ONE
+		// bounded elasticsearch_search destination aggregation, skipped when the
+		// loop already ran one (its output would parse identically); soft-failing.
+		if (dataSourceId === "elastic" && isAppMapBaselineEnabled()) {
+			const baselineStart = Date.now();
+			try {
+				const alreadyFetched = toolOutputs.some(
+					(o) =>
+						o.toolName === "elasticsearch_search" &&
+						typeof o.rawJson === "string" &&
+						o.rawJson.includes("by_destination"),
+				);
+				if (!alreadyFetched) {
+					const toolsByName = new Map(allTools.map((t) => [t.name, t]));
+					const { outputs: baseline, diagnostics: baselineDiagnostics } = await fetchAppMapBaseline({
+						invoke: async (toolName, args) => {
+							const tool = toolsByName.get(toolName);
+							if (!tool) throw new Error(`tool unavailable: ${toolName}`);
+							return normalizeToolContent(await tool.invoke(args));
+						},
+						hasTool: (name) => toolsByName.has(name),
+					});
+					if (baseline.length > 0) {
+						toolOutputs.push(
+							...baseline.map((o) => ({
+								toolName: o.toolName,
+								rawJson: buildPersistedToolOutput(
+									o.toolName,
+									typeof o.rawJson === "string" ? o.rawJson : JSON.stringify(o.rawJson),
+									stateCapBytes,
+								).rawJson,
+							})),
+						);
+					}
+					log.info(
+						{
+							event: "subagent.app_map_baseline",
+							deploymentId,
+							added: baseline.map((o) => o.toolName),
+							durationMs: Date.now() - baselineStart,
+							...baselineDiagnostics,
+						},
+						"Application-map call-graph baseline fetched",
+					);
+				}
+			} catch (error) {
+				log.warn(
+					{
+						deploymentId,
+						durationMs: Date.now() - baselineStart,
+						error: error instanceof Error ? error.message : String(error),
+					},
+					"Application-map baseline failed; continuing without it",
 				);
 			}
 		}

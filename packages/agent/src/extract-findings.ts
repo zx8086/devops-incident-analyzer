@@ -1,6 +1,7 @@
 // agent/src/extract-findings.ts
 import { getLogger } from "@devops-agent/observability";
 import type { DataSourceResult } from "@devops-agent/shared";
+import { buildApplicationTopology, mergeApplicationTopologyOverlay } from "./application-topology.ts";
 import { extractAtlassianFindings } from "./correlation/extractors/atlassian.ts";
 import { extractAwsFindings } from "./correlation/extractors/aws.ts";
 import { collectCouchbaseKeyspaces, extractCouchbaseFindings } from "./correlation/extractors/couchbase.ts";
@@ -305,6 +306,35 @@ export async function extractFindings(state: AgentStateType): Promise<Partial<Ag
 		logger.warn({ error: err instanceof Error ? err.message : String(err) }, "buildNetworkTopology failed");
 	}
 
+	// SIO-1457: per-turn application map. Same guarded/always-returned-key contract
+	// as networkTopology above. The KG prior-knowledge overlay was read earlier
+	// this turn by graphEnrich (which runs before the fan-out); merging it here
+	// keeps the builder itself pure/sync. Overlay-only turns still render.
+	let applicationTopology: ReturnType<typeof buildApplicationTopology>;
+	try {
+		const built = buildApplicationTopology(dataSourceResults, focusServices, state.messages.length);
+		applicationTopology = mergeApplicationTopologyOverlay(
+			built,
+			state.applicationTopologyOverlay ?? [],
+			state.messages.length,
+		);
+		if (applicationTopology) {
+			logCard(
+				"ApplicationTopologyCard",
+				focusServices,
+				applicationTopology.nodes.length,
+				applicationTopology.nodes.length,
+				{
+					edges: applicationTopology.edges.length,
+					sources: applicationTopology.sources,
+					truncated: applicationTopology.truncated ?? false,
+				},
+			);
+		}
+	} catch (err) {
+		logger.warn({ error: err instanceof Error ? err.message : String(err) }, "buildApplicationTopology failed");
+	}
+
 	// SIO-1215: per-turn ML anomaly explainer. Same guarded/always-returned-key
 	// contract as networkTopology above -- a turn with no anomaly-record query
 	// clears a stale prior-turn card via the replace reducer.
@@ -328,5 +358,5 @@ export async function extractFindings(state: AgentStateType): Promise<Partial<Ag
 		logger.warn({ error: err instanceof Error ? err.message : String(err) }, "buildMlAnomalyExplainer failed");
 	}
 
-	return { dataSourceResults, networkTopology, mlAnomalyExplainer };
+	return { dataSourceResults, networkTopology, applicationTopology, mlAnomalyExplainer };
 }
