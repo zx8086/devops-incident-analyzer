@@ -208,38 +208,54 @@ describe("AtlassianMcpProxy.probeReadiness (SIO-1111)", () => {
 		expect(proxy.getCloudId()).toBe("c-migrated");
 	});
 
-	test("SIO-1452: stale-window re-resolve logs at debug, not info", async () => {
+	test.each([
+		[undefined, "Resolved cloudId (first resource)"],
+		["tommy", "Resolved cloudId by siteName"],
+	])("SIO-1452: stale-window re-resolve logs at debug, not info (siteName=%p)", async (siteName, expectedMsg) => {
 		let t = 0;
-		const state = { upstreamCalls: 0, resourceId: "c-1" };
+		const state = { upstreamCalls: 0, resourceId: siteName ? "c-target" : "c-1" };
+		const client = makeClient({
+			callTool: async (req: { name: string }) => {
+				state.upstreamCalls++;
+				if (req.name === "getAccessibleAtlassianResources") {
+					return {
+						content: [
+							{
+								type: "text",
+								text: JSON.stringify([{ id: state.resourceId, name: siteName ?? "s" }]),
+							},
+						],
+					};
+				}
+				return { content: [{ type: "text", text: "ok" }] };
+			},
+		});
 		const proxy = new AtlassianMcpProxy({
 			mcpEndpoint: "x",
 			callbackPort: 0,
-			client: makeCountingClient(state),
-			siteName: undefined,
+			client,
+			siteName,
+			readinessFreshnessWindowMs: 10_000,
 			now: () => t,
 		});
 		const infoSpy = spyOn(logger, "info");
 		const debugSpy = spyOn(logger, "debug");
 
-		await proxy.resolveCloudId();
-		expect(infoSpy).toHaveBeenCalledWith(
-			expect.objectContaining({ cloudId: "c-1" }),
-			"Resolved cloudId (first resource)",
-		);
+		try {
+			await proxy.resolveCloudId();
+			expect(infoSpy).toHaveBeenCalledWith(expect.objectContaining({ cloudId: state.resourceId }), expectedMsg);
 
-		infoSpy.mockClear();
-		debugSpy.mockClear();
+			infoSpy.mockClear();
+			debugSpy.mockClear();
 
-		t = 91_000;
-		await proxy.probeReadiness();
-		expect(debugSpy).toHaveBeenCalledWith(
-			expect.objectContaining({ cloudId: "c-1" }),
-			"Resolved cloudId (first resource)",
-		);
-		expect(infoSpy).not.toHaveBeenCalled();
-
-		infoSpy.mockRestore();
-		debugSpy.mockRestore();
+			t = 10_001;
+			await proxy.probeReadiness();
+			expect(debugSpy).toHaveBeenCalledWith(expect.objectContaining({ cloudId: state.resourceId }), expectedMsg);
+			expect(infoSpy).not.toHaveBeenCalled();
+		} finally {
+			infoSpy.mockRestore();
+			debugSpy.mockRestore();
+		}
 	});
 
 	test("honors a custom readinessFreshnessWindowMs", async () => {
