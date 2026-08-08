@@ -733,6 +733,49 @@ export const NetworkTopologySchema = z.object({
 });
 export type NetworkTopology = z.infer<typeof NetworkTopologySchema>;
 
+// SIO-1457: per-turn application map derived from the turn's toolOutputs[] by the pure
+// buildApplicationTopology builder (packages/agent/src/application-topology.ts). The
+// service-to-service layer ABOVE NetworkTopology: APM runtime call edges, Kafka
+// consumer-group->topic edges, datastore/external dependencies, plus a prior-knowledge
+// KG overlay (DEPENDS_ON/CONSUMES_FROM/ROUTES_TO/RUNS_ON) merged in extractFindings.
+// Node ids are stable natural keys ("svc:<name>", "topic:<name>", "cg:<groupId>",
+// "aws:<arn>", "dep:<resource>") preserving exactly what APM/Kafka reported -- focus
+// matching normalizes for COMPARISON only, never for the id, so KG MERGE keys stay
+// byte-stable across turns.
+export const ApplicationTopologyNodeSchema = z.object({
+	id: z.string(),
+	kind: z.enum(["service", "kafkaTopic", "consumerGroup", "awsResource", "dependency"]),
+	name: z.string().optional(),
+	// APM health tint, only populated on kind:"service" source buckets.
+	errorRate: z.number().optional(),
+	avgDurationMs: z.number().optional(),
+	transactionCount: z.number().optional(),
+	service: z.string().optional(), // linked focus Service name, when resolved (KG-write anchor)
+});
+export type ApplicationTopologyNode = z.infer<typeof ApplicationTopologyNodeSchema>;
+
+export const ApplicationTopologyEdgeSchema = z.object({
+	from: z.string(),
+	to: z.string(),
+	kind: z.enum(["calls", "consumes", "runs-on"]),
+	detail: z.string().optional(), // "p95 240ms, 2.1% err", "lag 1200"
+	// true when the edge is prior knowledge from the KG overlay (graphEnrich read),
+	// not observed this turn. The card renders these dashed; the KG writer skips
+	// them entirely (they already came FROM the KG -- writing them back could reset
+	// topology-job/orbit-name-match provenance).
+	priorKnowledge: z.boolean().optional(),
+});
+export type ApplicationTopologyEdge = z.infer<typeof ApplicationTopologyEdgeSchema>;
+
+export const ApplicationTopologySchema = z.object({
+	builtAtTurn: z.number().int(),
+	sources: z.array(z.string()), // datasource ids that contributed nodes
+	nodes: z.array(ApplicationTopologyNodeSchema),
+	edges: z.array(ApplicationTopologyEdgeSchema),
+	truncated: z.boolean().optional(), // MAX_NODES/MAX_EDGES cap hit in the builder
+});
+export type ApplicationTopology = z.infer<typeof ApplicationTopologySchema>;
+
 // SIO-1215: per-turn ML anomaly-record explainer, derived from a single
 // elasticsearch_ml_get_anomaly_records tool output by the pure
 // buildMlAnomalyExplainer builder (packages/agent/src/ml-anomaly-explainer.ts).
@@ -858,6 +901,9 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 	// unlike the per-datasource datasource_result above). Emitted from the
 	// extractFindings on_chain_end branch when the builder produced any nodes.
 	z.object({ type: z.literal("network_topology"), topology: NetworkTopologySchema }),
+	// SIO-1457: once-per-turn merged application map (replace semantics), emitted from
+	// the extractFindings on_chain_end branch when the builder produced any nodes.
+	z.object({ type: z.literal("application_topology"), topology: ApplicationTopologySchema }),
 	// SIO-1215: once-per-turn ML anomaly explainer (replace semantics), emitted from
 	// the extractFindings on_chain_end branch when the builder found matching records.
 	z.object({ type: z.literal("ml_anomaly_explainer"), explainer: MlAnomalyExplainerSchema }),

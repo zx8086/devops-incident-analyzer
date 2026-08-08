@@ -22,6 +22,12 @@ export {
 	SessionAlreadyEndedError,
 } from "./agent-memory.ts";
 export {
+	type ApplicationTopology,
+	type ApplicationTopologyEdge,
+	ApplicationTopologyEdgeSchema,
+	type ApplicationTopologyNode,
+	ApplicationTopologyNodeSchema,
+	ApplicationTopologySchema,
 	type AtlassianFindings,
 	AtlassianFindingsSchema,
 	type AtlassianLinkedIssue,
