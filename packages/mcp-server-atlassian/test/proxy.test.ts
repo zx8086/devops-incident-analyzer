@@ -1,6 +1,7 @@
 // test/proxy.test.ts
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { AtlassianMcpProxy, type McpClientLike } from "../src/atlassian-client/proxy.js";
+import { logger } from "../src/utils/logger.js";
 
 function makeClient(overrides: Partial<McpClientLike> = {}): McpClientLike {
 	return {
@@ -205,6 +206,40 @@ describe("AtlassianMcpProxy.probeReadiness (SIO-1111)", () => {
 		await proxy.probeReadiness();
 		expect(state.upstreamCalls).toBe(2);
 		expect(proxy.getCloudId()).toBe("c-migrated");
+	});
+
+	test("SIO-1452: stale-window re-resolve logs at debug, not info", async () => {
+		let t = 0;
+		const state = { upstreamCalls: 0, resourceId: "c-1" };
+		const proxy = new AtlassianMcpProxy({
+			mcpEndpoint: "x",
+			callbackPort: 0,
+			client: makeCountingClient(state),
+			siteName: undefined,
+			now: () => t,
+		});
+		const infoSpy = spyOn(logger, "info");
+		const debugSpy = spyOn(logger, "debug");
+
+		await proxy.resolveCloudId();
+		expect(infoSpy).toHaveBeenCalledWith(
+			expect.objectContaining({ cloudId: "c-1" }),
+			"Resolved cloudId (first resource)",
+		);
+
+		infoSpy.mockClear();
+		debugSpy.mockClear();
+
+		t = 91_000;
+		await proxy.probeReadiness();
+		expect(debugSpy).toHaveBeenCalledWith(
+			expect.objectContaining({ cloudId: "c-1" }),
+			"Resolved cloudId (first resource)",
+		);
+		expect(infoSpy).not.toHaveBeenCalled();
+
+		infoSpy.mockRestore();
+		debugSpy.mockRestore();
 	});
 
 	test("honors a custom readinessFreshnessWindowMs", async () => {
