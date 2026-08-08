@@ -19,6 +19,7 @@ import {
 	hasBinding,
 	invalidateBinding,
 	isKnowledgeGraphEnabled,
+	recordAppMapTopologyEdges,
 	recordNetworkTopology,
 	recordServiceBinding,
 	type ServiceBinding,
@@ -26,6 +27,7 @@ import {
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
 import { type DataSourceResult, isDegradingCategory, type ResolvedIdentifiers } from "@devops-agent/shared";
+import { deriveApplicationTopology } from "./application-topology-kg.ts";
 import { normalize } from "./correlation/focus-match.ts";
 import { recordKeyDecision } from "./memory-writer.ts";
 import { deriveNetworkTopology } from "./network-kg.ts";
@@ -59,6 +61,14 @@ export function isStalenessEnabled(env: NodeJS.ProcessEnv = process.env): boolea
 // when the turn produced no state.networkTopology.
 export function isNetworkWriteEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 	const v = env.KG_NETWORK_WRITE_ENABLED;
+	return v !== "false" && v !== "0";
+}
+
+// SIO-1457: the application-map persistence gate (same default-ON idiom). Inert
+// without KNOWLEDGE_GRAPH_ENABLED, and inert when the turn produced no
+// state.applicationTopology or the map carried only prior-knowledge edges.
+export function isAppMapWriteEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+	const v = env.KG_APP_MAP_WRITE_ENABLED;
 	return v !== "false" && v !== "0";
 }
 
@@ -357,7 +367,10 @@ export async function recordConfirmedBindings(state: AgentStateType): Promise<Pa
 		const networkRecord = isNetworkWriteEnabled()
 			? deriveNetworkTopology(state.networkTopology, state.requestId)
 			: undefined;
-		if (records.length === 0 && !hasStalenessWork && !networkRecord) return {};
+		// SIO-1457: same independence for the application map's observed service
+		// edges (priorKnowledge overlay edges are excluded by the derive).
+		const appMapRecord = isAppMapWriteEnabled() ? deriveApplicationTopology(state.applicationTopology) : undefined;
+		if (records.length === 0 && !hasStalenessWork && !networkRecord && !appMapRecord) return {};
 		const store = await getGraphStore();
 		const contradicted = hasStalenessWork ? await applyStaleness(store, state) : 0;
 		let newCount = 0;
@@ -405,6 +418,22 @@ export async function recordConfirmedBindings(state: AgentStateType): Promise<Pa
 				);
 			}
 		}
+		// SIO-1457: the app-map write gets its OWN try/catch for the same isolation
+		// reason -- a failed DEPENDS_ON/CONSUMES_FROM merge must not mask bindings or
+		// the network map (both already wrote above).
+		let appMapFailed = false;
+		if (appMapRecord) {
+			try {
+				await recordAppMapTopologyEdges(store, "depends-on", appMapRecord.dependsOn);
+				await recordAppMapTopologyEdges(store, "consumes-from", appMapRecord.consumesFrom);
+			} catch (error) {
+				appMapFailed = true;
+				logger.warn(
+					{ error: error instanceof Error ? error.message : String(error) },
+					"recordBindings app-map write failed; continuing",
+				);
+			}
+		}
 		// SIO-1102/1103: per-turn telemetry. `contradicted` = seeded bindings retired this
 		// turn because their datasource reported not-found (staleness).
 		logger.info(
@@ -422,12 +451,15 @@ export async function recordConfirmedBindings(state: AgentStateType): Promise<Pa
 						networkRecord.endpoints.length
 					: 0,
 				networkIpBindings: networkRecord?.ipBindings.length ?? 0,
+				appMapDependsOn: appMapRecord?.dependsOn.length ?? 0,
+				appMapConsumesFrom: appMapRecord?.consumesFrom.length ?? 0,
 			},
 			"agent:record-bindings",
 		);
-		if (networkFailed) {
-			return { partialFailures: [{ node: "recordBindings", reason: "network-write-failed" }] };
-		}
+		const partialFailures: Array<{ node: string; reason: string }> = [];
+		if (networkFailed) partialFailures.push({ node: "recordBindings", reason: "network-write-failed" });
+		if (appMapFailed) partialFailures.push({ node: "recordBindings", reason: "app-map-write-failed" });
+		if (partialFailures.length > 0) return { partialFailures };
 		return {};
 	} catch (error) {
 		logger.warn(

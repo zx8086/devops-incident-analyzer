@@ -8,6 +8,8 @@
 
 import { createHash } from "node:crypto";
 import {
+	type AppMapEdge,
+	appMapForServices,
 	blastRadiusForServices,
 	buildGraphContext,
 	type GraphStore,
@@ -27,7 +29,7 @@ import {
 	upsertEntities,
 } from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
-import { type OrbitBlastRadius, truncateForEmbedding } from "@devops-agent/shared";
+import { type ApplicationTopologyEdge, type OrbitBlastRadius, truncateForEmbedding } from "@devops-agent/shared";
 import { evaluate } from "./correlation/engine.ts";
 import { correlationRules } from "./correlation/rules.ts";
 import { orbitBlastRadiusFindings, resolveOrbitConsumerEdges } from "./downstream-impact.ts";
@@ -41,6 +43,29 @@ import type { AgentStateType } from "./state.ts";
 const NETWORK_CONTEXT_MAX_LINES = 5;
 // Per-read budget, mirroring GRAPH_SEED_TIMEOUT_MS in resolve-identifiers.ts.
 const NETWORK_CONTEXT_TIMEOUT_MS = 1000;
+// SIO-1457: the overlay state slot round-trips through the checkpointer every
+// turn, so it is bounded at the source (well under the builder's MAX_EDGES).
+const APP_MAP_OVERLAY_MAX_EDGES = 100;
+
+// SIO-1457: convert reader AppMapEdge rows into the shared ApplicationTopologyEdge
+// shape via the id-prefix contract shared with application-topology.ts
+// (svc:/topic:/cg:/aws:/route:). The collector stamp rides `detail` so the card
+// tooltip can attribute a dashed edge to topology-job / orbit-name-match / app-map.
+// priorKnowledge is NOT set here -- mergeApplicationTopologyOverlay stamps it, so
+// a same-turn observed duplicate can win.
+function overlayEdgeFromAppMapEdge(edge: AppMapEdge): ApplicationTopologyEdge {
+	const detail = edge.discoveredBy ? { detail: edge.discoveredBy } : {};
+	switch (edge.kind) {
+		case "depends-on":
+			return { from: `svc:${edge.from}`, to: `svc:${edge.to}`, kind: "calls", ...detail };
+		case "consumes-from":
+			return { from: `cg:${edge.from}`, to: `topic:${edge.to}`, kind: "consumes", ...detail };
+		case "routes-to":
+			return { from: `route:${edge.from}`, to: `svc:${edge.to}`, kind: "calls", ...detail };
+		case "runs-on":
+			return { from: `svc:${edge.from}`, to: `aws:${edge.to}`, kind: "runs-on", ...detail };
+	}
+}
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -286,7 +311,31 @@ export async function graphEnrich(state: AgentStateType): Promise<Partial<AgentS
 			);
 		}
 
-		return { graphContext: buildGraphContext(deps, similar) + networkContext, graphBlastRadius, knownServiceNames };
+		// SIO-1457: prior-knowledge application-map edges (DEPENDS_ON/CONSUMES_FROM/
+		// ROUTES_TO/RUNS_ON) for the focus services -- the KG overlay extractFindings
+		// merges into this turn's built map as dashed priorKnowledge edges. Own
+		// try/catch + timeout (the network-context pattern); bounded here because the
+		// state slot round-trips through the checkpointer.
+		let applicationTopologyOverlay: ApplicationTopologyEdge[] = [];
+		try {
+			const edges = await withTimeout(
+				appMapForServices(store, services.slice(0, NETWORK_CONTEXT_MAX_LINES)),
+				NETWORK_CONTEXT_TIMEOUT_MS,
+			);
+			applicationTopologyOverlay = edges.slice(0, APP_MAP_OVERLAY_MAX_EDGES).map(overlayEdgeFromAppMapEdge);
+		} catch (error) {
+			logger.warn(
+				{ error: error instanceof Error ? error.message : String(error) },
+				"graphEnrich app-map overlay read failed; continuing",
+			);
+		}
+
+		return {
+			graphContext: buildGraphContext(deps, similar) + networkContext,
+			graphBlastRadius,
+			knownServiceNames,
+			applicationTopologyOverlay,
+		};
 	} catch (error) {
 		logger.warn(
 			{ error: error instanceof Error ? error.message : String(error) },
@@ -297,8 +346,8 @@ export async function graphEnrich(state: AgentStateType): Promise<Partial<AgentS
 		// untouched -- an outer-catch failure (e.g. getGraphStore() itself throwing,
 		// before either inner try/catch runs) must explicitly clear it, or a stale
 		// service list from a prior successful turn would silently feed this turn's
-		// downstream-impact resolution.
-		return { knownServiceNames: [] };
+		// downstream-impact resolution. Same hazard for the SIO-1457 overlay slot.
+		return { knownServiceNames: [], applicationTopologyOverlay: [] };
 	}
 }
 

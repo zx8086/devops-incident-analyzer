@@ -131,6 +131,14 @@ the same time window. The downstream service's own error/stack trace is usually 
 answer to "what produced the 500"; leaving it unqueried turns an answerable question
 into a report gap. Do not fan out further than one hop without new evidence.
 
+To DISCOVER who the upstream/downstream services are when the narrative does not name
+them, aggregate exit spans in `traces-apm*`: filter `processor.event: span` +
+`exists span.destination.service.resource`, then terms-aggregate `service.name` with a
+nested terms sub-aggregation on `span.destination.service.resource` (SIO-1457 -- this
+exact shape also feeds the application-map card, so prefer it over ad-hoc variants).
+A destination resource naming another instrumented service is a runtime call edge;
+`postgresql`/`redis`/host-shaped values are datastore or external dependencies.
+
 ## Approach
 I execute focused, time-bounded queries against specific deployments.
 I return findings with domain-specific interpretation (cluster health

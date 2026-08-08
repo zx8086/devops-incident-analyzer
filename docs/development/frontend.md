@@ -51,7 +51,7 @@ lsof -i :5173
 
 ## Component Architecture
 
-The app has grown to 30 components (`ls apps/web/src/lib/components/*.svelte`). They fall into five families.
+The app has grown to 34 components (`ls apps/web/src/lib/components/*.svelte`). They fall into five families.
 
 **Chat shell** — the core conversation UI:
 
@@ -67,7 +67,7 @@ The app has grown to 30 components (`ls apps/web/src/lib/components/*.svelte`). 
 | `FollowUpSuggestions` | Clickable follow-up question buttons after an agent response | `suggestions`, `onSelect` |
 | `DataSourceSelector` | Toggle bar for selecting active datasources, shows connection status | `dataSources`, `connected`, `selected` (bindable) |
 
-**Findings and topology cards** — one structured card per datasource result, a per-turn network topology card, plus the pipeline progress card: `ElasticFindingsCard`, `KafkaFindingsCard`, `CouchbaseFindingsCard`, `GitLabFindingsCard`, `AtlassianFindingsCard`, `AWSFindingsCard`, `PipelineProgressCard`. SIO-1204 adds `NetworkTopologyCard` -- the per-turn network map rendered as an ECharts `graph` series (force layout, roam/zoom, category legend per node kind, dashed CIDR-derived edges, red ring on unhealthy target groups; SSR-guarded dynamic import of modular `echarts/core`, pure option transform in `src/lib/network-chart.ts`).
+**Findings and topology cards** — one structured card per datasource result, a per-turn network topology card, plus the pipeline progress card: `ElasticFindingsCard`, `KafkaFindingsCard`, `CouchbaseFindingsCard`, `GitLabFindingsCard`, `AtlassianFindingsCard`, `AWSFindingsCard`, `PipelineProgressCard`. SIO-1204 adds `NetworkTopologyCard` -- the per-turn network map rendered as an ECharts `graph` series (force layout, roam/zoom, category legend per node kind, dashed CIDR-derived edges, red ring on unhealthy target groups; SSR-guarded dynamic import of modular `echarts/core`, pure option transform in `src/lib/network-chart.ts`). SIO-1457 adds `ApplicationTopologyCard` -- the per-turn application map (services, runtime call edges, kafka consumer edges, datastore/external dependencies) on the same structure: pure option transform in `src/lib/app-chart.ts`, hues disjoint from the network map's, dashed KG prior-knowledge edges, red ring on services above the 5 percent APM error-rate threshold.
 
 **IaC / HITL cards** — the elastic-iac proposer and its human-in-the-loop gates: `PlanReviewCard`, `DriftReportCard`, `ReconcileChoiceCard`, `SyntheticsDriftCard`, `SyntheticsPushChoiceCard`, `FleetUpgradeChoiceCard`, `ActionConfirmationCard`.
 
@@ -227,6 +227,7 @@ The SSE stream emits events that the `agentStore` processes:
 - **Node start/end events** -- update `activeNodes` and `completedNodes`, rendered by `StreamingProgress`
 - **Data source events** -- update `dataSourceProgress` with status per datasource
 - **`network_topology`** (SIO-1204) -- the once-per-turn merged network map (replace semantics); rendered by `NetworkTopologyCard` as an interactive ECharts force graph
+- **`application_topology`** (SIO-1457) -- the once-per-turn merged application map (replace semantics); rendered by `ApplicationTopologyCard` as an interactive ECharts force graph with dashed KG prior-knowledge edges
 - **Completion events** -- finalize the message with `suggestions`, `responseTime`, `toolsUsed`, `runId`
 - **Error events** -- display error state in the UI
 

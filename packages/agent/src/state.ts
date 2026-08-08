@@ -2,6 +2,8 @@
 
 import type {
 	ActionResult,
+	ApplicationTopology,
+	ApplicationTopologyEdge,
 	AttachmentMeta,
 	DataSourceContext,
 	DataSourceResult,
@@ -216,6 +218,26 @@ export const AgentState = Annotation.Root({
 	networkTopology: Annotation<NetworkTopology | undefined>({
 		reducer: (_, next) => next,
 		default: () => undefined,
+	}),
+
+	// SIO-1457: per-turn application map derived from toolOutputs[] by extractFindings
+	// (pure buildApplicationTopology + mergeApplicationTopologyOverlay). REPLACE
+	// reducer -- recomputed each turn, and the node always returns the key
+	// (undefined included) so a turn with no app-level data clears a stale
+	// prior-turn map. Read by recordBindings for the KG write.
+	applicationTopology: Annotation<ApplicationTopology | undefined>({
+		reducer: (_, next) => next,
+		default: () => undefined,
+	}),
+
+	// SIO-1457: KG prior-knowledge overlay edges (DEPENDS_ON/CONSUMES_FROM/
+	// ROUTES_TO/RUNS_ON for the focus services), read by graphEnrich -- which runs
+	// BEFORE the fan-out, so the value is fresh-this-turn when extractFindings
+	// merges it into the built map. Replace reducer; default [] so a KG-disabled
+	// run (graphEnrich never edged) simply merges nothing.
+	applicationTopologyOverlay: Annotation<ApplicationTopologyEdge[]>({
+		reducer: (_, next) => next,
+		default: () => [],
 	}),
 
 	// SIO-1215: per-turn ML anomaly explainer derived from toolOutputs[] by

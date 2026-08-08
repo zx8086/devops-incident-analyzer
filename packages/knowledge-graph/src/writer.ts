@@ -6,6 +6,7 @@
 
 import { validTopologyEdges } from "./reader.ts";
 import {
+	APP_MAP_DISCOVERED_BY,
 	type BindingKind,
 	type IpBindingRecord,
 	NETWORK_DISCOVERED_BY,
@@ -762,6 +763,52 @@ export async function recordOrbitDependsOnEdges(store: GraphStore, edges: Topolo
 		await store.run(
 			`MATCH (a:${fromLabel} {${fromKey}: $from}), (b:${toLabel} {${toKey}: $to}) MERGE (a)-[r:${rel}]->(b) WITH r WHERE coalesce(r.discoveredBy, '') = '' OR r.discoveredBy = $orbitDiscoveredBy SET r.discoveredBy = $orbitDiscoveredBy, r.tInvalid = '', r.consecutiveMisses = 0`,
 			{ from: edge.from, to: edge.to, orbitDiscoveredBy: ORBIT_DISCOVERED_BY },
+		);
+		await backfillEdgeTValid(
+			store,
+			`(a:${fromLabel} {${fromKey}: $from})-[r:${rel}]->(b:${toLabel} {${toKey}: $to})`,
+			"r",
+			{ from: edge.from, to: edge.to },
+			now,
+		);
+	}
+}
+
+// SIO-1457: DEPENDS_ON / CONSUMES_FROM edges observed by the per-incident
+// application map (APM destination aggregation, kafka consumer-group tools).
+// Third writer on these rel tables (after the topology sweep and Orbit), so it
+// reuses recordOrbitDependsOnEdges's never-demote collision policy verbatim:
+//   1. a currently-valid sweep-owned edge for the pair -> no-op (the sweep's
+//      confirmation is authoritative and lifecycle-managed; a per-incident
+//      sighting adds nothing and must not perturb miss-counting state);
+//   2. claim/re-claim only unowned or app-map-owned edges -- an edge owned by
+//      ANY other writer (orbit today, future collectors tomorrow) is left
+//      untouched.
+// Not a call to recordTopologyEdges (its unconditional re-observe-claims-
+// ownership SET is only correct for the single-writer sweep). App-map edges are
+// create-only/revalidate-on-reobservation: deliberately OUTSIDE the sweep's
+// K-miss lifecycle (see APP_MAP_DISCOVERED_BY in schema.ts).
+export async function recordAppMapTopologyEdges(
+	store: GraphStore,
+	kind: Extract<TopologyEdgeKind, "depends-on" | "consumes-from">,
+	edges: TopologyEdgeRecord[],
+): Promise<void> {
+	const { rel, fromLabel, fromKey, toLabel, toKey } = TOPOLOGY_KINDS[kind];
+	for (const raw of edges) {
+		const parsed = TopologyEdgeRecordSchema.safeParse(raw);
+		if (!parsed.success || parsed.data.kind !== kind) continue;
+		const edge = parsed.data;
+		const now = edge.createdAt ?? new Date().toISOString();
+		await store.run(`MERGE (a:${fromLabel} {${fromKey}: $from})`, { from: edge.from });
+		await store.run(`MERGE (b:${toLabel} {${toKey}: $to})`, { to: edge.to });
+		const owned = await store.run<{ n: number }>(
+			`MATCH (a:${fromLabel} {${fromKey}: $from})-[r:${rel}]->(b:${toLabel} {${toKey}: $to}) WHERE r.discoveredBy = $topologyDiscoveredBy AND r.tInvalid = '' RETURN count(r) AS n`,
+			{ from: edge.from, to: edge.to, topologyDiscoveredBy: TOPOLOGY_DISCOVERED_BY },
+		);
+		if ((owned[0]?.n ?? 0) > 0) continue;
+		await store.run(
+			`MATCH (a:${fromLabel} {${fromKey}: $from}), (b:${toLabel} {${toKey}: $to}) MERGE (a)-[r:${rel}]->(b) WITH r WHERE coalesce(r.discoveredBy, '') = '' OR r.discoveredBy = $appMapDiscoveredBy SET r.discoveredBy = $appMapDiscoveredBy, r.tInvalid = '', r.consecutiveMisses = 0`,
+			{ from: edge.from, to: edge.to, appMapDiscoveredBy: APP_MAP_DISCOVERED_BY },
 		);
 		await backfillEdgeTValid(
 			store,

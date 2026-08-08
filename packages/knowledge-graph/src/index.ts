@@ -2,7 +2,9 @@
 
 export {
 	type AppliedChange,
+	type AppMapEdge,
 	appliedChanges,
+	appMapForServices,
 	type BlastRadiusHit,
 	bindingsForServices,
 	blastRadiusForServices,
@@ -53,6 +55,7 @@ export {
 	ALTER_MIGRATIONS,
 	type AliasNode,
 	AliasNodeSchema,
+	APP_MAP_DISCOVERED_BY,
 	type BindingKind,
 	BindingKindSchema,
 	type ConfigChangeNode,
@@ -144,6 +147,7 @@ export {
 	type PurgeUncuratedResult,
 	purgeUncuratedIncidents,
 	type RootCauseRecord,
+	recordAppMapTopologyEdges,
 	recordIacChange,
 	recordIacPrompt,
 	recordIncident,

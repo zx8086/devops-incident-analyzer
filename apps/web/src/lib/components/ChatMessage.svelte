@@ -8,6 +8,7 @@ import type { CreatedTicket } from "@devops-agent/shared/src/ticket-types.ts";
 import type { ChatMessage } from "$lib/stores/agent.svelte";
 import ActionConfirmationCard from "./ActionConfirmationCard.svelte";
 import AddCommentCard from "./AddCommentCard.svelte";
+import ApplicationTopologyCard from "./ApplicationTopologyCard.svelte";
 import AtlassianFindingsCard from "./AtlassianFindingsCard.svelte";
 import AWSFindingsCard from "./AWSFindingsCard.svelte";
 import CompletedProgress from "./CompletedProgress.svelte";
@@ -153,6 +154,10 @@ const commentMode = $derived(canCommentOnThreadTicket && threadTicket !== null);
 
         {#if !isStreaming && message.networkTopology}
           <NetworkTopologyCard topology={message.networkTopology} />
+        {/if}
+
+        {#if !isStreaming && message.applicationTopology}
+          <ApplicationTopologyCard topology={message.applicationTopology} />
         {/if}
 
         {#if !isStreaming && message.mlAnomalyExplainer}

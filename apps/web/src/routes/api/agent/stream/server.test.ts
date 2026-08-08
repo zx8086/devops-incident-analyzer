@@ -156,6 +156,15 @@ mock.module("@devops-agent/shared", () => ({
 		edges: z.array(z.object({ from: z.string(), to: z.string(), kind: z.string() }).passthrough()),
 		truncated: z.boolean().optional(),
 	}),
+	// SIO-1457: sse-pump value-imports this to validate the application_topology
+	// payload before forwarding. Same load-bearing mirror as NetworkTopologySchema.
+	ApplicationTopologySchema: z.object({
+		builtAtTurn: z.number(),
+		sources: z.array(z.string()),
+		nodes: z.array(z.object({ id: z.string(), kind: z.string() }).passthrough()),
+		edges: z.array(z.object({ from: z.string(), to: z.string(), kind: z.string() }).passthrough()),
+		truncated: z.boolean().optional(),
+	}),
 	// SIO-1215: sse-pump value-imports this to validate the ml_anomaly_explainer
 	// payload before forwarding. Mirrors the real schema's load-bearing shape
 	// (records array) closely enough to reject malformed payloads.

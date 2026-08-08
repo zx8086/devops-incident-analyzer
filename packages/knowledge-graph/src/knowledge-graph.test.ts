@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	ALTER_MIGRATIONS,
 	appliedChanges,
+	appMapForServices,
 	bindingsForServices,
 	blastRadiusForServices,
 	buildGraphContext,
@@ -26,6 +27,7 @@ import {
 	priorRootCauses,
 	proposedChangesWithMr,
 	purgeUncuratedIncidents,
+	recordAppMapTopologyEdges,
 	recordIacChange,
 	recordIacPrompt,
 	recordIncident,
@@ -1477,6 +1479,126 @@ describe("SIO-1305 Orbit DEPENDS_ON writer", () => {
 			{ kind: "runs-on", from: "orders", to: "arn:x" },
 			{ kind: "depends-on", from: "", to: "styles-v3-service" },
 			{ kind: "depends-on", from: "lists-api", to: "" },
+		]);
+		expect(store.calls).toHaveLength(0);
+	});
+});
+
+// SIO-1457: the prior-knowledge overlay reader behind the ApplicationTopologyCard's
+// dashed edges. Row validation is the load-bearing behavior (CodeRabbit PR #644):
+// GraphStore.run does not validate rows, so missing endpoints must be skipped,
+// never stringified into "null"/"undefined" identifiers.
+describe("SIO-1457 appMapForServices reader", () => {
+	test("maps valid rows to edges and binds LIMIT in every query", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("-[r:DEPENDS_ON]->", [{ from: "checkout", to: "payment", discoveredBy: "topology-job" }]);
+		store.stub("-[r:RUNS_ON]->", [{ arn: "arn:aws:ecs:eu-west-1:1:service/prod/checkout", discoveredBy: null }]);
+		store.stub("-[r:CONSUMES_FROM]->", [{ group: "checkout-workers", topic: "orders", discoveredBy: "app-map" }]);
+		const edges = await appMapForServices(store, ["checkout"]);
+		expect(edges).toContainEqual({ kind: "depends-on", from: "checkout", to: "payment", discoveredBy: "topology-job" });
+		expect(edges).toContainEqual({
+			kind: "runs-on",
+			from: "checkout",
+			to: "arn:aws:ecs:eu-west-1:1:service/prod/checkout",
+			discoveredBy: "",
+		});
+		expect(edges).toContainEqual({
+			kind: "consumes-from",
+			from: "checkout-workers",
+			to: "orders",
+			discoveredBy: "app-map",
+		});
+		for (const call of store.calls) {
+			expect(call.cypher).toContain("LIMIT $limit");
+			expect(call.params?.limit).toBeDefined();
+		}
+	});
+
+	test("skips rows with missing endpoints instead of stringifying null/undefined", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("-[r:DEPENDS_ON]->", [
+			{ from: "checkout", to: null, discoveredBy: "" },
+			{ from: null, to: "payment" },
+			{ from: "checkout", to: "" },
+		]);
+		store.stub("-[r:RUNS_ON]->", [{ arn: null }]);
+		store.stub("-[r:CONSUMES_FROM]->", [{ group: "checkout-workers", topic: null }]);
+		const edges = await appMapForServices(store, ["checkout"]);
+		expect(edges).toEqual([]);
+	});
+
+	test("consumer groups without name affinity to any focus service are dropped", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("-[r:CONSUMES_FROM]->", [{ group: "billing-workers", topic: "invoices", discoveredBy: "" }]);
+		const edges = await appMapForServices(store, ["checkout"]);
+		expect(edges).toEqual([]);
+	});
+
+	// CodeRabbit PR #644 round 2: the layer cap bounds ACCEPTED edges after
+	// affinity filtering -- the wider fetch limit is filtering headroom only.
+	test("consumes-from layer caps accepted edges at 50 even when more rows match affinity", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub(
+			"-[r:CONSUMES_FROM]->",
+			Array.from({ length: 80 }, (_, i) => ({ group: "checkout-workers", topic: `topic-${i}`, discoveredBy: "" })),
+		);
+		const edges = await appMapForServices(store, ["checkout"]);
+		expect(edges.length).toBe(50);
+		expect(edges.every((e) => e.kind === "consumes-from")).toBe(true);
+	});
+});
+
+// SIO-1457: DEPENDS_ON/CONSUMES_FROM edges from the per-incident application map.
+// Third writer on the shared rel tables -- the Orbit never-demote collision policy
+// is duplicated verbatim and is the load-bearing behavior under test.
+describe("SIO-1457 app-map topology writer", () => {
+	test("recordAppMapTopologyEdges stamps app-map provenance on a new depends-on edge", async () => {
+		const store = new InMemoryGraphStore();
+		await recordAppMapTopologyEdges(store, "depends-on", [
+			{ kind: "depends-on", from: "checkout-service", to: "payment-service" },
+		]);
+		const merge = store.calls.find((c) => c.cypher.includes("MERGE (a)-[r:DEPENDS_ON]->(b)"));
+		expect(merge?.cypher).toContain(
+			"SET r.discoveredBy = $appMapDiscoveredBy, r.tInvalid = '', r.consecutiveMisses = 0",
+		);
+		expect(merge?.params?.appMapDiscoveredBy).toBe("app-map");
+		const backfill = store.calls.find(
+			(c) => c.cypher.includes("[r:DEPENDS_ON]") && c.cypher.includes("coalesce(r.tValid, '') = ''"),
+		);
+		expect(backfill?.cypher).toContain("SET r.tValid = $now");
+	});
+
+	test("recordAppMapTopologyEdges writes consumes-from on the ConsumerGroup->KafkaTopic table", async () => {
+		const store = new InMemoryGraphStore();
+		await recordAppMapTopologyEdges(store, "consumes-from", [
+			{ kind: "consumes-from", from: "order-workers", to: "orders" },
+		]);
+		expect(
+			store.calls.some(
+				(c) => c.cypher === "MERGE (a:ConsumerGroup {name: $from})" && c.params?.from === "order-workers",
+			),
+		).toBe(true);
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (a)-[r:CONSUMES_FROM]->(b)"))).toBe(true);
+	});
+
+	test("recordAppMapTopologyEdges NEVER demotes an edge already owned by the topology sweep", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("r.discoveredBy = $topologyDiscoveredBy AND r.tInvalid = ''", [{ n: 1 }]);
+		await recordAppMapTopologyEdges(store, "depends-on", [
+			{ kind: "depends-on", from: "checkout-service", to: "payment-service" },
+		]);
+		expect(store.calls.some((c) => c.cypher.includes("count(r) AS n"))).toBe(true);
+		// No edge MERGE, no discoveredBy SET, no tValid backfill: the sweep-owned
+		// edge's provenance, tValid, and tInvalid are all left untouched.
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (a)-[r:DEPENDS_ON]->(b)"))).toBe(false);
+		expect(store.calls.some((c) => c.params?.appMapDiscoveredBy === "app-map")).toBe(false);
+	});
+
+	test("recordAppMapTopologyEdges skips records whose kind mismatches the call", async () => {
+		const store = new InMemoryGraphStore();
+		await recordAppMapTopologyEdges(store, "depends-on", [
+			{ kind: "consumes-from", from: "order-workers", to: "orders" },
+			{ kind: "depends-on", from: "", to: "payment-service" },
 		]);
 		expect(store.calls).toHaveLength(0);
 	});

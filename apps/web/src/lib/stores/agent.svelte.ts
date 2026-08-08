@@ -2,6 +2,7 @@
 
 import type {
 	ActionResult,
+	ApplicationTopology,
 	DataSourceContext,
 	HilApplyReport,
 	HilItemEdits,
@@ -62,6 +63,8 @@ export interface ChatMessage {
 	dataSourceFindings?: Map<string, DataSourceFindings>;
 	// SIO-1204: this turn's merged network map (NetworkTopologyCard).
 	networkTopology?: NetworkTopology;
+	// SIO-1457: this turn's merged application map (ApplicationTopologyCard).
+	applicationTopology?: ApplicationTopology;
 	// SIO-1215: this turn's ML anomaly explainer (MlAnomalyExplainerCard).
 	mlAnomalyExplainer?: MlAnomalyExplainer;
 	feedback?: "up" | "down" | null;
@@ -102,6 +105,7 @@ function createAgentStore() {
 	let dataSourceProgress = $state<Map<string, { status: string; message?: string }>>(new Map());
 	let dataSourceFindings = $state<Map<string, DataSourceFindings>>(new Map());
 	let networkTopology = $state<NetworkTopology | null>(null);
+	let applicationTopology = $state<ApplicationTopology | null>(null);
 	let mlAnomalyExplainer = $state<MlAnomalyExplainer | null>(null);
 	let subAgentProgress = $state<Map<string, SubAgentProgressEntry>>(new Map());
 	let isStreaming = $state(false);
@@ -191,6 +195,7 @@ function createAgentStore() {
 			dataSourceResults: new Map(dataSourceProgress),
 			dataSourceFindings: new Map(dataSourceFindings),
 			...(networkTopology && { networkTopology }),
+			...(applicationTopology && { applicationTopology }),
 			...(mlAnomalyExplainer && { mlAnomalyExplainer }),
 			feedback: null,
 			runId: lastRunId,
@@ -234,6 +239,7 @@ function createAgentStore() {
 		dataSourceProgress = new Map();
 		dataSourceFindings = new Map();
 		networkTopology = null;
+		applicationTopology = null;
 		mlAnomalyExplainer = null;
 		subAgentProgress = new Map();
 		activeNodes = new Set();
@@ -322,6 +328,7 @@ function createAgentStore() {
 			dataSourceProgress = new Map();
 			dataSourceFindings = new Map();
 			networkTopology = null;
+			applicationTopology = null;
 			mlAnomalyExplainer = null;
 			// SIO-934: when this turn paused on an IaC interrupt, the resume leg continues the
 			// SAME turn -- keep the live pipeline ticker (completedNodes) + iacPipelineProgress so
@@ -344,6 +351,7 @@ function createAgentStore() {
 			dataSourceProgress,
 			dataSourceFindings,
 			networkTopology,
+			applicationTopology,
 			mlAnomalyExplainer,
 			subAgentProgress,
 			lastSuggestions,
@@ -385,6 +393,7 @@ function createAgentStore() {
 		dataSourceProgress = next.dataSourceProgress;
 		dataSourceFindings = next.dataSourceFindings;
 		networkTopology = next.networkTopology;
+		applicationTopology = next.applicationTopology;
 		mlAnomalyExplainer = next.mlAnomalyExplainer;
 		subAgentProgress = next.subAgentProgress;
 		lastSuggestions = next.lastSuggestions;
@@ -611,6 +620,7 @@ function createAgentStore() {
 		dataSourceProgress = new Map();
 		dataSourceFindings = new Map();
 		networkTopology = null;
+		applicationTopology = null;
 		mlAnomalyExplainer = null;
 		subAgentProgress = new Map();
 		activeNodes = new Set();
@@ -838,7 +848,12 @@ function createAgentStore() {
 		// SIO-1215 (CodeRabbit): a fresh topic starts a new investigation -- clear the prior
 		// topic's anomaly card before the resumed stream begins, so a fresh turn that never
 		// fires ml_anomaly_explainer doesn't inherit a stale card via buildAssistantMessage.
-		if (decision === "fresh") mlAnomalyExplainer = null;
+		// SIO-1457 (CodeRabbit PR #644): same stale-inherit exposure for both topology maps.
+		if (decision === "fresh") {
+			mlAnomalyExplainer = null;
+			networkTopology = null;
+			applicationTopology = null;
+		}
 		try {
 			const response = await fetch("/api/agent/topic-shift", {
 				method: "POST",
@@ -868,6 +883,7 @@ function createAgentStore() {
 			dataSourceProgress = new Map();
 			dataSourceFindings = new Map();
 			networkTopology = null;
+			applicationTopology = null;
 			mlAnomalyExplainer = null;
 			subAgentProgress = new Map();
 		}

@@ -44,6 +44,8 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		graphBlastRadius: [],
 		knownServiceNames: [],
 		networkTopology: undefined,
+		applicationTopology: undefined,
+		applicationTopologyOverlay: [],
 		mlAnomalyExplainer: undefined,
 		dataSourceContext: undefined,
 		requestId: "test-123",

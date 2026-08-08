@@ -158,6 +158,15 @@ export const NETWORK_DISCOVERED_BY = "network-map";
 // recordOrbitDependsOnEdges's never-demote-a-topology-job-edge collision policy.
 export const ORBIT_DISCOVERED_BY = "orbit-name-match";
 
+// SIO-1457: discoveredBy stamp for DEPENDS_ON/CONSUMES_FROM edges written from the
+// per-incident application map (APM destination aggregation + kafka consumer-group
+// observations). Same three-writer coexistence rules as ORBIT_DISCOVERED_BY: the
+// sweep's confirmation always wins (never demoted), and app-map edges are NOT in
+// the TOPOLOGY_KINDS sweep lifecycle -- a per-incident observation is a partial
+// slice, so miss-counting it would invalidate real edges the incident's queries
+// simply never touched (the SIO-1207 network-edge rationale).
+export const APP_MAP_DISCOVERED_BY = "app-map";
+
 // Writer-boundary shape for one observed topology edge (collector output is parsed
 // external data -- validate the WHOLE record, not just the kind).
 export const TopologyEdgeRecordSchema = z

@@ -21,6 +21,7 @@ import {
 	judgeOvergeneralizedAbsenceClaims,
 } from "./absence-judge.ts";
 import { summarizeFirstAttempts } from "./alignment.ts";
+import { buildApplicationTopology, summarizeApplicationTopologyForPrompt } from "./application-topology.ts";
 import { extractIamActions } from "./aws-policy-actions.ts";
 import { deriveConfidenceCap, getConfidenceThreshold } from "./confidence-gate.ts";
 import {
@@ -179,6 +180,17 @@ export function buildAggregatorMessages(
 		// Builder is pure/total; belt-and-braces only -- a network summary must
 		// never sink report generation.
 	}
+	// SIO-1457: same re-run-the-pure-builder convention as networkContext above --
+	// aggregate runs before extractFindings, so state.applicationTopology is stale.
+	// Deliberately NO overlay merge here: the aggregate prompt excludes KG content
+	// (SIO-1026/1027 enrichment-seam rule); only this turn's observed edges render.
+	let applicationMapContext = "";
+	try {
+		const appTopology = buildApplicationTopology(state.dataSourceResults, wikiFocus.services, state.messages.length);
+		if (appTopology) applicationMapContext = summarizeApplicationTopologyForPrompt(appTopology);
+	} catch {
+		// Builder is pure/total; belt-and-braces only.
+	}
 	// SIO-1215: same re-run-the-pure-builder convention as networkContext above --
 	// aggregate runs before extractFindings, so state.mlAnomalyExplainer is stale.
 	let mlAnomalyContext = "";
@@ -217,6 +229,7 @@ export function buildAggregatorMessages(
 		wikiFocus,
 		graphContext: state.graphContext,
 		networkContext,
+		applicationMapContext,
 		mlAnomalyContext,
 		downstreamImpactContext,
 		recalledMemory,
