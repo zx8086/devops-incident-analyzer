@@ -153,7 +153,7 @@ describe("enforceCorrelationsAggregate confidence rewrite (SIO-860)", () => {
 });
 
 describe("Phase 5 correlation rules — pipeline integration", () => {
-	test("aws-agent ECS-degraded prose dispatches elastic-agent Send", () => {
+	test("aws-agent ECS-degraded prose dispatches elastic-agent Send", async () => {
 		const awsResult: DataSourceResult = {
 			dataSourceId: "aws",
 			status: "success",
@@ -193,7 +193,7 @@ describe("Phase 5 correlation rules — pipeline integration", () => {
 			partialFailures: [],
 		} as never;
 
-		const result = enforceCorrelationsRouter(state);
+		const result = await enforceCorrelationsRouter(state);
 
 		// Router returns Send[] when one or more rules need invocation.
 		expect(Array.isArray(result)).toBe(true);
@@ -343,12 +343,12 @@ Confidence: 0.59 (capped from evidence score 0.87 -- unresolved data gaps)`;
 		expect(result.finalAnswer).not.toContain("recovered via elastic");
 	});
 
-	test("router attaches the targeted fetch directive to the elastic Send", () => {
+	test("router attaches the targeted fetch directive to the elastic Send", async () => {
 		const state = makeLogGapState({
 			pendingCorrelations: [],
 			dataSourceResults: [],
 		});
-		const result = enforceCorrelationsRouter(state);
+		const result = await enforceCorrelationsRouter(state);
 		expect(Array.isArray(result)).toBe(true);
 		if (!Array.isArray(result)) throw new Error("expected Send[]");
 		const elasticSend = result.find((s) => s.args.currentDataSource === "elastic");

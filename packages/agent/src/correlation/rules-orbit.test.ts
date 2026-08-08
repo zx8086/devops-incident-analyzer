@@ -207,7 +207,7 @@ describe("orbit-deploy-needs-blast-radius (cost gate)", () => {
 	// SIO-1299: end-to-end through enforceCorrelationsRouter -- the directive must
 	// actually reach the dispatched Send's correlationFetchDirective, not just be
 	// buildable in isolation.
-	test("router attaches the fetchDirective to the gitlab-agent re-fan Send", () => {
+	test("router attaches the fetchDirective to the gitlab-agent re-fan Send", async () => {
 		const state = makeState({
 			orbit: {
 				recentDeploys: [
@@ -226,7 +226,7 @@ describe("orbit-deploy-needs-blast-radius (cost gate)", () => {
 				],
 			},
 		});
-		const result = enforceCorrelationsRouter(state);
+		const result = await enforceCorrelationsRouter(state);
 		expect(Array.isArray(result)).toBe(true);
 		if (!Array.isArray(result)) throw new Error("expected Send[]");
 		const gitlabSend = result.find((s) => s.args.currentDataSource === "gitlab");

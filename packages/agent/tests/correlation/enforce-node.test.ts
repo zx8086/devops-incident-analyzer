@@ -1,7 +1,31 @@
 // packages/agent/tests/correlation/enforce-node.test.ts
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import type { StructuredToolInterface } from "@langchain/core/tools";
 import { Send } from "@langchain/langgraph";
+
+// SIO-1451: enforceCorrelationsRouter now calls availableAwsEstates() (aws-estate-router.ts),
+// which calls getToolsForDataSource("aws") to find aws_list_estates for server reconciliation.
+// Mirrors the mocking pattern already established in src/aws-estate-router.test.ts for the
+// sibling awsEstateRouter() function -- same underlying primitives (loadConfiguredEstates() via
+// AWS_ESTATES env, reconcileEstatesWithServer() via this mock), no new mechanism.
+let serverEstateIds: string[] = ["prod-aws"];
+let listEstatesPresent = true;
+
+mock.module("../../src/mcp-bridge.ts", () => ({
+	getToolsForDataSource: (dataSourceId: string) => {
+		if (dataSourceId !== "aws" || !listEstatesPresent) return [];
+		const stub: Partial<StructuredToolInterface> = {
+			name: "aws_list_estates",
+			async invoke() {
+				return JSON.stringify({ estates: serverEstateIds.map((id) => ({ id, region: "eu-west-1" })), health: {} });
+			},
+		};
+		return [stub as unknown as StructuredToolInterface];
+	},
+}));
+
+import { _resetEstateCacheForTests, _resetEstateReconcileForTests } from "../../src/aws-estate-router.ts";
 import {
 	correlationFetch,
 	enforceCorrelationsAggregate,
@@ -20,12 +44,20 @@ import {
 	withKafkaToolErrors,
 } from "./test-helpers";
 
+function setAwsEstateFixture(configuredEstates: Record<string, unknown>, serverIds: string[]): void {
+	process.env.AWS_ESTATES = JSON.stringify(configuredEstates);
+	serverEstateIds = serverIds;
+	listEstatesPresent = true;
+	_resetEstateCacheForTests();
+	_resetEstateReconcileForTests();
+}
+
 // ---------------------------------------------------------------------------
 // Router tests
 // ---------------------------------------------------------------------------
 
 describe("enforceCorrelationsRouter — Send objects when rules fire", () => {
-	test("returns Send[] when kafka has an Empty group", () => {
+	test("returns Send[] when kafka has an Empty group", async () => {
 		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
 		const state = withKafkaFindings(baseState(), {
 			consumerGroups: [
@@ -33,7 +65,7 @@ describe("enforceCorrelationsRouter — Send objects when rules fire", () => {
 				{ id: "payments-service", state: "STABLE", totalLag: 0 },
 			],
 		});
-		const result = enforceCorrelationsRouter(state);
+		const result = await enforceCorrelationsRouter(state);
 		expect(Array.isArray(result)).toBe(true);
 		const sends = result as Send[];
 		expect(sends.length).toBeGreaterThanOrEqual(1);
@@ -42,18 +74,18 @@ describe("enforceCorrelationsRouter — Send objects when rules fire", () => {
 });
 
 describe("enforceCorrelationsRouter — returns string when no rules fire", () => {
-	test("returns 'enforceCorrelationsAggregate' when all groups are Stable with zero lag", () => {
+	test("returns 'enforceCorrelationsAggregate' when all groups are Stable with zero lag", async () => {
 		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
 		const state = withKafkaFindings(baseState(), {
 			consumerGroups: [{ id: "payments-service", state: "STABLE", totalLag: 0 }],
 		});
-		const result = enforceCorrelationsRouter(state);
+		const result = await enforceCorrelationsRouter(state);
 		expect(result).toBe("enforceCorrelationsAggregate");
 	});
 });
 
 describe("enforceCorrelationsRouter — dedups by agent", () => {
-	test("collapses multiple rules targeting the same agent into one Send", () => {
+	test("collapses multiple rules targeting the same agent into one Send", async () => {
 		// kafka-empty-or-dead-groups and kafka-significant-lag both target elastic-agent
 		// Trigger both by having an Empty group AND a Stable group with high lag
 		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
@@ -63,7 +95,7 @@ describe("enforceCorrelationsRouter — dedups by agent", () => {
 				{ id: "payments-service", state: "STABLE", totalLag: 50_000 },
 			],
 		});
-		const result = enforceCorrelationsRouter(state);
+		const result = await enforceCorrelationsRouter(state);
 		expect(Array.isArray(result)).toBe(true);
 		const sends = result as Send[];
 		// All 4 rules target elastic-agent — must collapse to exactly 1 Send
@@ -97,8 +129,8 @@ describe("enforceCorrelationsRouter — synthetic cross-check reaches elastic wi
 		});
 	}
 
-	test("a Confluent 5xx dispatches the cross-check to the elastic datasource", () => {
-		const result = enforceCorrelationsRouter(confluent503State());
+	test("a Confluent 5xx dispatches the cross-check to the elastic datasource", async () => {
+		const result = await enforceCorrelationsRouter(confluent503State());
 		expect(Array.isArray(result)).toBe(true);
 		const send = syntheticSend(result as Send[]);
 		expect(send).toBeDefined();
@@ -107,8 +139,8 @@ describe("enforceCorrelationsRouter — synthetic cross-check reaches elastic wi
 		expect(args?.currentDataSource).toBe("elastic");
 	});
 
-	test("the Send carries the fetchDirective naming the index, deployment and hostname", () => {
-		const result = enforceCorrelationsRouter(confluent503State());
+	test("the Send carries the fetchDirective naming the index, deployment and hostname", async () => {
+		const result = await enforceCorrelationsRouter(confluent503State());
 		const send = syntheticSend(result as Send[]);
 		expect(send).toBeDefined();
 		const args = send?.args as { correlationFetchDirective?: string } | undefined;
@@ -121,9 +153,9 @@ describe("enforceCorrelationsRouter — synthetic cross-check reaches elastic wi
 
 	// The coverage half of the fix: once the monitor for that host HAS been retrieved the
 	// rule is genuinely satisfied and must not re-dispatch.
-	test("does not re-dispatch once a synthetic monitor for that host was retrieved", () => {
+	test("does not re-dispatch once a synthetic monitor for that host was retrieved", async () => {
 		const state = withElasticSyntheticUp(confluent503State(), HOST, "2026-07-26T12:00:00.000Z");
-		const result = enforceCorrelationsRouter(state);
+		const result = await enforceCorrelationsRouter(state);
 		const sends = Array.isArray(result) ? (result as Send[]) : [];
 		expect(syntheticSend(sends)).toBeUndefined();
 	});
@@ -138,16 +170,28 @@ describe("enforceCorrelationsRouter — synthetic cross-check reaches elastic wi
 		}
 	});
 
-	// SIO-1448: kafka-broker-timeout-needs-aws-metrics requires aws-agent, but the router
-	// builds its Send from a bare state spread with no awsEstateRouter re-run and no scope
-	// check. When the triggering turn never selected AWS (the common case -- AWS only enters
-	// via this correlation rule), state.awsTargetEstates is [] (its default), and dispatching
-	// correlationFetch -> queryDataSource with no estates hits the non-fan-out fallback,
-	// which calls runSubAgent with zero withAwsEstate wrapping -- any AWS tool the ReAct loop
-	// picks then throws the estate-scope guard mid-run. supervisor.ts's SIO-1142 guard
-	// already prevents this exact condition on the primary dispatch path; the correlation
-	// re-dispatch path had no equivalent check.
-	describe("SIO-1448: AWS estate scope on the correlationFetch re-dispatch path", () => {
+	// SIO-1448/SIO-1451: kafka-broker-timeout-needs-aws-metrics requires aws-agent. SIO-1448
+	// closed the empty-awsTargetEstates case (was silently dispatching into a scope-less run
+	// that throws mid-ReAct-loop). SIO-1451 goes further: the router no longer trusts
+	// state.awsTargetEstates AT ALL for this dispatch (that field reflects the ORIGINAL turn's
+	// prompt classification, unrelated to what the correlation rule investigates) -- it always
+	// re-resolves fresh scope via availableAwsEstates() and fans out to every configured +
+	// server-reconciled estate, mirroring awsEstateRouter's own "ambiguous -> fan out to all"
+	// philosophy for a rule with no estate-identifying signal in its triggerContext.
+	describe("SIO-1448/SIO-1451: AWS estate scope on the correlationFetch re-dispatch path", () => {
+		const ORIG_ESTATES = process.env.AWS_ESTATES;
+
+		beforeEach(() => {
+			setAwsEstateFixture({ "prod-aws": { assumedRoleArn: "arn:aws:iam::1:role/r", externalId: "e" } }, ["prod-aws"]);
+		});
+
+		afterEach(() => {
+			if (ORIG_ESTATES === undefined) delete process.env.AWS_ESTATES;
+			else process.env.AWS_ESTATES = ORIG_ESTATES;
+			_resetEstateCacheForTests();
+			_resetEstateReconcileForTests();
+		});
+
 		function brokerTimeoutState(awsTargetEstates: string[]): AgentStateType {
 			return {
 				...withKafkaToolErrors(baseState(), [
@@ -169,8 +213,9 @@ describe("enforceCorrelationsRouter — synthetic cross-check reaches elastic wi
 			});
 		}
 
-		test("does not dispatch a correlationFetch Send targeting aws when awsTargetEstates is empty", () => {
-			const result = enforceCorrelationsRouter(brokerTimeoutState([]));
+		test("SIO-1448: does not dispatch a correlationFetch Send targeting aws when no estates are configured/reconciled", async () => {
+			setAwsEstateFixture({}, []);
+			const result = await enforceCorrelationsRouter(brokerTimeoutState([]));
 			const sends = Array.isArray(result) ? (result as Send[]) : [];
 			const send = awsSend(sends);
 			// The rule must not be silently dropped either -- it must reach
@@ -187,17 +232,45 @@ describe("enforceCorrelationsRouter — synthetic cross-check reaches elastic wi
 			expect(args.currentDataSource).not.toBe("aws");
 		});
 
-		test("still dispatches normally when awsTargetEstates is populated", () => {
-			const result = enforceCorrelationsRouter(brokerTimeoutState(["prod-aws"]));
+		test("SIO-1451: dispatches with FRESH estates, not the stale original-turn awsTargetEstates value", async () => {
+			// The original turn was scoped to a single, DIFFERENT estate ("eu-legacy") than what
+			// is actually configured/reconciled right now ("prod-aws", "us-dev") -- e.g. an
+			// earlier, unrelated AWS question. The correlation-triggered dispatch must ignore
+			// that stale value entirely, not merely tolerate it happening to overlap.
+			setAwsEstateFixture(
+				{
+					"prod-aws": { assumedRoleArn: "arn:aws:iam::1:role/r", externalId: "e" },
+					"us-dev": { assumedRoleArn: "arn:aws:iam::2:role/r", externalId: "e" },
+				},
+				["prod-aws", "us-dev"],
+			);
+			const result = await enforceCorrelationsRouter(brokerTimeoutState(["eu-legacy"]));
 			const sends = Array.isArray(result) ? (result as Send[]) : [];
 			const send = awsSend(sends);
 			expect(send).toBeDefined();
-			const args = send?.args as { currentDataSource?: string } | undefined;
+			const args = send?.args as { currentDataSource?: string; awsTargetEstates?: string[] } | undefined;
 			expect(args?.currentDataSource).toBe("aws");
+			expect(args?.awsTargetEstates).toEqual(["prod-aws", "us-dev"]);
+			expect(args?.awsTargetEstates).not.toContain("eu-legacy");
+		});
+
+		test("SIO-1451: dispatches with fresh estates even when the original-turn awsTargetEstates was empty", async () => {
+			// The common case per SIO-1448's own comment: AWS only enters via this correlation
+			// rule, so the original turn's awsTargetEstates is [] -- but estates ARE configured
+			// and reconciled, so the dispatch must still happen (not fall into the empty-scope
+			// skip branch just because the STALE field was empty).
+			const result = await enforceCorrelationsRouter(brokerTimeoutState([]));
+			const sends = Array.isArray(result) ? (result as Send[]) : [];
+			const send = awsSend(sends);
+			expect(send).toBeDefined();
+			const args = send?.args as { currentDataSource?: string; awsTargetEstates?: string[] } | undefined;
+			expect(args?.currentDataSource).toBe("aws");
+			expect(args?.awsTargetEstates).toEqual(["prod-aws"]);
 		});
 
 		test("the skipped rule still surfaces as degraded via enforceCorrelationsAggregate, with a reason that does not claim the specialist was invoked", async () => {
-			const routed = enforceCorrelationsRouter(brokerTimeoutState([]));
+			setAwsEstateFixture({}, []);
+			const routed = await enforceCorrelationsRouter(brokerTimeoutState([]));
 			const sends = Array.isArray(routed) ? (routed as Send[]) : [];
 			// Simulate the graph's own dispatch: every Send this router emitted actually runs
 			// (mirroring supervisor.ts's skipped-datasource pattern, SIO-1142), so the pending
@@ -345,7 +418,7 @@ describe("correlationFetch — delegates to queryDataSource", () => {
 // ---------------------------------------------------------------------------
 
 describe("enforceCorrelationsRouter skip-coverage routing", () => {
-	test("routes skipCoverageCheck rules directly to enforceCorrelationsAggregate without a fetch", () => {
+	test("routes skipCoverageCheck rules directly to enforceCorrelationsAggregate without a fetch", async () => {
 		// SIO-862: dates must be RELATIVE to now -- the rule only fires within
 		// DEPLOY_RUNTIME_WINDOW_MS (30 days) of the merge, so hardcoded 2026-04/05
 		// dates aged out of the window and the rule stopped triggering. merged 10d
@@ -371,7 +444,7 @@ describe("enforceCorrelationsRouter skip-coverage routing", () => {
 				},
 			],
 		});
-		const result = enforceCorrelationsRouter(state);
+		const result = await enforceCorrelationsRouter(state);
 		expect(Array.isArray(result)).toBe(true);
 		const sends = result as Send[];
 		expect(sends).toHaveLength(1);

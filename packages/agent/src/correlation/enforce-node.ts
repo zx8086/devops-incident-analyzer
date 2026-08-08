@@ -2,6 +2,7 @@
 import { getLogger } from "@devops-agent/observability";
 import { Send } from "@langchain/langgraph";
 import { GAPS_BULLET_THRESHOLD, rewriteConfidenceInAnswer } from "../aggregator";
+import { availableAwsEstates } from "../aws-estate-router.ts";
 import { deriveConfidenceCap, getConfidenceThreshold } from "../confidence-gate";
 import {
 	CAP_REASON_CLASS,
@@ -42,7 +43,9 @@ function bannerForDegraded(degraded: DegradedRule[], cap: number): string | unde
 	return banners.size > 0 ? [...banners].join("\n\n") : undefined;
 }
 
-export function enforceCorrelationsRouter(state: AgentStateType): Send[] | "enforceCorrelationsAggregate" {
+export async function enforceCorrelationsRouter(
+	state: AgentStateType,
+): Promise<Send[] | "enforceCorrelationsAggregate"> {
 	const decisions = evaluate(state, correlationRules);
 	const needsInvocation = decisions.filter((d) => d.status === "needs-invocation");
 
@@ -105,21 +108,46 @@ export function enforceCorrelationsRouter(state: AgentStateType): Send[] | "enfo
 		// failure.
 		const dataSourceId = agentToDataSourceId(agent);
 
-		// SIO-1448: correlationFetch calls queryDataSource directly (bypassing awsEstateRouter
-		// and resolveIdentifiers entirely), so an AWS dispatch here relies solely on whatever
-		// awsTargetEstates was left over from the ORIGINAL turn -- often [] when AWS only enters
-		// via this correlation rule. queryDataSource's AWS fan-out only wraps calls in
-		// withAwsEstate when awsTargetEstates is non-empty (sub-agent.ts); the empty case falls
-		// to a non-fan-out path with zero estate scope, so any AWS tool the ReAct loop picks
-		// throws the estate-scope guard mid-run. Mirrors supervisor.ts's SIO-1142
-		// awsHasNoEstates guard on the primary dispatch path: skip the fetch and let the rule
-		// surface as degraded via enforceCorrelationsAggregate instead of crashing the turn.
-		if (dataSourceId === "aws" && state.awsTargetEstates.length === 0) {
+		// SIO-1448/SIO-1451: correlationFetch calls queryDataSource directly (bypassing
+		// awsEstateRouter and resolveIdentifiers entirely), so an AWS dispatch here cannot
+		// trust state.awsTargetEstates -- that field reflects the ORIGINAL turn's prompt
+		// classification, which has no relationship to what THIS correlation rule is
+		// investigating (the only AWS rule, kafka-broker-timeout-needs-aws-metrics, carries no
+		// estate-identifying signal in its triggerContext at all). Re-resolve fresh scope for
+		// every correlation-triggered AWS dispatch instead: fan out to every configured +
+		// server-reconciled estate, mirroring awsEstateRouter's own "ambiguous -> fan out to
+		// all" philosophy (aws-estate-router.ts, state.ts's awsTargetEstates doc comment) for a
+		// rule with no way to narrow further. queryDataSource's AWS fan-out only wraps calls in
+		// withAwsEstate when awsTargetEstates is non-empty (sub-agent.ts); an empty result here
+		// (no estates configured/reconciled) mirrors supervisor.ts's SIO-1142 awsHasNoEstates
+		// guard: skip the fetch and let the rule surface as degraded via
+		// enforceCorrelationsAggregate instead of crashing the turn.
+		if (dataSourceId === "aws") {
+			const correlationAwsEstates = await availableAwsEstates();
+			if (correlationAwsEstates.length === 0) {
+				sends.push(
+					new Send("enforceCorrelationsAggregate", {
+						...state,
+						pendingCorrelations: pendings,
+						correlationFetchDirective: undefined,
+					}),
+				);
+				continue;
+			}
+			const awsDirectives = pendings
+				.map((p) => {
+					const ruleDef = correlationRules.find((r) => r.name === p.ruleName);
+					return ruleDef?.fetchDirective?.(p.triggerContext);
+				})
+				.filter((d): d is string => typeof d === "string" && d.length > 0);
 			sends.push(
-				new Send("enforceCorrelationsAggregate", {
+				new Send("correlationFetch", {
 					...state,
+					currentDataSource: dataSourceId,
+					// SIO-1451: override, never inherit, the original turn's stale scope.
+					awsTargetEstates: correlationAwsEstates,
 					pendingCorrelations: pendings,
-					correlationFetchDirective: undefined,
+					correlationFetchDirective: awsDirectives.length > 0 ? awsDirectives.join("\n\n") : undefined,
 				}),
 			);
 			continue;
@@ -246,16 +274,22 @@ export async function enforceCorrelationsAggregate(state: AgentStateType): Promi
 
 	const decisions = evaluate(state, correlationRules);
 	const degraded: DegradedRule[] = [];
+	// SIO-1451: resolved once per aggregate call (availableAwsEstates() is internally
+	// memoized after its first resolution anyway); do not read state.awsTargetEstates here --
+	// the router no longer trusts it for AWS dispatch decisions either.
+	const hasAwsPending = state.pendingCorrelations.some((p) => p.requiredAgent === "aws-agent");
+	const resolvedAwsEstates = hasAwsPending ? await availableAwsEstates() : [];
 
 	for (const pending of state.pendingCorrelations) {
 		const decision = decisions.find((d) => d.rule.name === pending.ruleName);
 		if (!decision || decision.status === "satisfied") continue;
-		// SIO-1448: the aws-agent fetch was never dispatched (no estate scope resolved for this
-		// turn) -- do not claim the specialist ran when it didn't.
+		// SIO-1448/SIO-1451: the aws-agent fetch was never dispatched (no estate scope
+		// configured/reconciled for this dispatch) -- do not claim the specialist ran when it
+		// didn't.
 		const awsSkippedForScope =
 			pending.requiredAgent === "aws-agent" &&
 			agentToDataSourceId(pending.requiredAgent) === "aws" &&
-			state.awsTargetEstates.length === 0;
+			resolvedAwsEstates.length === 0;
 		const reason =
 			decision.rule.skipCoverageCheck === true
 				? "unresolved cross-source contradiction"
