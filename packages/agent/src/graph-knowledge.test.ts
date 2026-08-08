@@ -305,7 +305,42 @@ describe("graphEnrich", () => {
 		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
 		_setGraphStoreFactoryForTesting(() => Promise.reject(new Error("store open failed")));
 		const result = await graphEnrich(stateWith(["svc-a"], "kafka lag"));
-		expect(result).toEqual({ knownServiceNames: [] });
+		// SIO-1457: applicationTopologyOverlay is a REPLACE-reducer slot with the
+		// same stale-value hazard, so the outer catch clears it too.
+		expect(result).toEqual({ knownServiceNames: [], applicationTopologyOverlay: [] });
+	});
+
+	// SIO-1457: the overlay read converts AppMapEdge rows into ApplicationTopologyEdge
+	// values via the shared id-prefix contract; the collector stamp rides `detail`.
+	test("populates applicationTopologyOverlay from KG app-map edges", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		store.stub("-[r:DEPENDS_ON]->", [{ from: "svc-a", to: "svc-b", discoveredBy: "orbit-name-match" }]);
+		store.stub("-[r:RUNS_ON]->", [{ arn: "arn:aws:ecs:eu-west-1:1:service/prod/svc-a", discoveredBy: "topology-job" }]);
+		store.stub("-[r:CONSUMES_FROM]->", [{ group: "svc-a-workers", topic: "orders", discoveredBy: "topology-job" }]);
+		_setGraphStoreForTesting(store);
+		_setEmbedderForTesting(async () => [0.1, 0.2, 0.3]);
+
+		const result = await graphEnrich(stateWith(["svc-a"], "kafka lag"));
+		const overlay = result.applicationTopologyOverlay ?? [];
+		expect(overlay).toContainEqual({
+			from: "svc:svc-a",
+			to: "svc:svc-b",
+			kind: "calls",
+			detail: "orbit-name-match",
+		});
+		expect(overlay).toContainEqual({
+			from: "svc:svc-a",
+			to: "aws:arn:aws:ecs:eu-west-1:1:service/prod/svc-a",
+			kind: "runs-on",
+			detail: "topology-job",
+		});
+		expect(overlay).toContainEqual({
+			from: "cg:svc-a-workers",
+			to: "topic:orders",
+			kind: "consumes",
+			detail: "topology-job",
+		});
 	});
 
 	test("soft-fails to dependencies-only when the embedder throws", async () => {

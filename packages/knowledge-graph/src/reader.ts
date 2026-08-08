@@ -1062,3 +1062,99 @@ export async function ipToWorkload(store: GraphStore, ip: string, asOf?: string)
 	}
 	return hits;
 }
+
+// SIO-1457: prior-knowledge application-map edges for a bounded service set --
+// the KG overlay behind the ApplicationTopologyCard's dashed edges. One flat
+// edge list (not a per-service map): the consumer (graphEnrich) converts rows
+// straight into ApplicationTopologyEdge values keyed by the shared id-prefix
+// contract, so no per-service structure is needed. discoveredBy is carried so
+// the card tooltip can attribute an edge to its collector (topology-job /
+// orbit-name-match / app-map).
+export interface AppMapEdge {
+	kind: "depends-on" | "consumes-from" | "routes-to" | "runs-on";
+	from: string; // Service.name | ConsumerGroup.name | ApiRoute.path
+	to: string; // Service.name | KafkaTopic.name | AwsResource.arn
+	discoveredBy: string;
+}
+
+const APP_MAP_LAYER_CAP = 50;
+
+// ConsumerGroup has no Service edge in the schema, so group relevance is a name
+// affinity check (group ids conventionally embed the service name). Normalized
+// substring either way; a 3-char floor keeps a short service name like "api"
+// from claiming every group.
+function nameAffinity(groupName: string, service: string): boolean {
+	const g = groupName.toLowerCase();
+	const s = service.toLowerCase();
+	if (g.length < 3 || s.length < 3) return false;
+	return g.includes(s) || s.includes(g);
+}
+
+export async function appMapForServices(store: GraphStore, services: string[], asOf?: string): Promise<AppMapEdge[]> {
+	const out: AppMapEdge[] = [];
+	const seen = new Set<string>();
+	const params = (base: Record<string, unknown>): Record<string, unknown> => (asOf ? { ...base, asOf } : base);
+	const add = (edge: AppMapEdge): void => {
+		const key = `${edge.kind}|${edge.from}|${edge.to}`;
+		if (seen.has(key)) return;
+		seen.add(key);
+		out.push(edge);
+	};
+	const cleanServices = services.filter((s) => s.length > 0);
+
+	for (const service of cleanServices) {
+		const outgoing = await store.run<{ from: string; to: string; discoveredBy: string | null }>(
+			`MATCH (a:Service {name: $name})-[r:DEPENDS_ON]->(b:Service) WHERE ${validityClause("r", asOf)} RETURN a.name AS from, b.name AS to, r.discoveredBy AS discoveredBy`,
+			params({ name: service }),
+		);
+		const incoming = await store.run<{ from: string; to: string; discoveredBy: string | null }>(
+			`MATCH (a:Service)-[r:DEPENDS_ON]->(b:Service {name: $name}) WHERE ${validityClause("r", asOf)} RETURN a.name AS from, b.name AS to, r.discoveredBy AS discoveredBy`,
+			params({ name: service }),
+		);
+		for (const row of [...outgoing, ...incoming].slice(0, APP_MAP_LAYER_CAP)) {
+			add({
+				kind: "depends-on",
+				from: String(row.from),
+				to: String(row.to),
+				discoveredBy: String(row.discoveredBy ?? ""),
+			});
+		}
+
+		const runsOn = await store.run<{ arn: string; discoveredBy: string | null }>(
+			`MATCH (s:Service {name: $name})-[r:RUNS_ON]->(x:AwsResource) WHERE ${validityClause("r", asOf)} RETURN x.arn AS arn, r.discoveredBy AS discoveredBy`,
+			params({ name: service }),
+		);
+		for (const row of runsOn.slice(0, APP_MAP_LAYER_CAP)) {
+			add({ kind: "runs-on", from: service, to: String(row.arn), discoveredBy: String(row.discoveredBy ?? "") });
+		}
+
+		const routes = await store.run<{ path: string; discoveredBy: string | null }>(
+			`MATCH (a:ApiRoute)-[r:ROUTES_TO]->(s:Service {name: $name}) WHERE ${validityClause("r", asOf)} RETURN a.path AS path, r.discoveredBy AS discoveredBy`,
+			params({ name: service }),
+		);
+		for (const row of routes.slice(0, APP_MAP_LAYER_CAP)) {
+			add({ kind: "routes-to", from: String(row.path), to: service, discoveredBy: String(row.discoveredBy ?? "") });
+		}
+	}
+
+	// One capped fetch (not per-service): CONSUMES_FROM has no Service anchor to
+	// MATCH on, so relevance is decided in TS by name affinity against ANY focus
+	// service.
+	if (cleanServices.length > 0) {
+		const consumes = await store.run<{ group: string; topic: string; discoveredBy: string | null }>(
+			`MATCH (g:ConsumerGroup)-[r:CONSUMES_FROM]->(t:KafkaTopic) WHERE ${validityClause("r", asOf)} RETURN g.name AS group, t.name AS topic, r.discoveredBy AS discoveredBy LIMIT $limit`,
+			params({ limit: APP_MAP_LAYER_CAP * 4 }),
+		);
+		for (const row of consumes) {
+			const group = String(row.group);
+			if (!cleanServices.some((s) => nameAffinity(group, s))) continue;
+			add({
+				kind: "consumes-from",
+				from: group,
+				to: String(row.topic),
+				discoveredBy: String(row.discoveredBy ?? ""),
+			});
+		}
+	}
+	return out;
+}

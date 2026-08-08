@@ -2,7 +2,9 @@
 
 export {
 	type AppliedChange,
+	type AppMapEdge,
 	appliedChanges,
+	appMapForServices,
 	type BlastRadiusHit,
 	bindingsForServices,
 	blastRadiusForServices,
