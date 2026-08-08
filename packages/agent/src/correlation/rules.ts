@@ -122,6 +122,17 @@ function extractConfluentHostname(message: string): string | null {
 	return match ? match[0] : null;
 }
 
+// SIO-1451: extract MSK broker hostnames (e.g. "b-1.msk.amazonaws.com") from kafka-agent
+// prose/tool-error text, mirroring extractConfluentHostname above. Used by
+// kafka-broker-timeout-needs-aws-metrics to give its fetchDirective something concrete to
+// point the AWS sub-agent at instead of just re-running the original incident prompt.
+// Degrades gracefully to [] when no hostname is present -- the trigger must not fail just
+// because the sub-agent's prose didn't happen to name a broker.
+function extractMskBrokerHostnames(text: string): string[] {
+	const matches = text.match(/\b[\w-]+\.msk\.[\w.-]*amazonaws\.com\b/gi) ?? [];
+	return [...new Set(matches)];
+}
+
 // SIO-723: keywords that signal the kafka sub-agent has correctly framed
 // MSK-offset-derived group names as inferences, not confirmations. At least
 // one must appear in the prose when Connect/ksqlDB REST is 5xx-ing AND the
@@ -187,6 +198,16 @@ export const SyntheticCrossCheckContextSchema = z.object({
 	signal: z.string(),
 });
 export type SyntheticCrossCheckContext = z.infer<typeof SyntheticCrossCheckContextSchema>;
+
+// SIO-1451: mirrors SyntheticCrossCheckContextSchema/LogGapTriggerContextSchema -- the
+// trigger and the fetchDirective builder both parse this, so neither can drift from the
+// other. brokerHostnames may be [] when no hostname was extractable from the kafka
+// sub-agent's prose/tool-error text.
+export const KafkaBrokerTimeoutContextSchema = z.object({
+	signal: z.string(),
+	brokerHostnames: z.array(z.string()),
+});
+export type KafkaBrokerTimeoutContext = z.infer<typeof KafkaBrokerTimeoutContextSchema>;
 
 export const correlationRules: CorrelationRule[] = [
 	{
@@ -509,10 +530,38 @@ This is a targeted fetch -- do NOT re-investigate the incident's focus service, 
 				/\bMSK\b.*(timeout|unreachable|unavailable)/i.test(prose) ||
 				/\bkafka\b.*\bconnection\b.*\btimeout\b/i.test(prose);
 			if (!networkErrorTransient && !proseBrokerTimeout) return null;
-			return { context: { signal: "kafka-broker-timeout-needs-aws" } };
+			// SIO-1451: capture whatever broker hostname is available so fetchDirective can
+			// give the AWS sub-agent a targeted instruction instead of just the original
+			// incident prompt. [] when the prose/tool-error text names no hostname -- the
+			// trigger degrades gracefully rather than failing.
+			const brokerHostnames = [
+				...extractMskBrokerHostnames(prose),
+				...toolErrors.flatMap((e) => extractMskBrokerHostnames(e.message)),
+			];
+			return {
+				context: { signal: "kafka-broker-timeout-needs-aws", brokerHostnames: [...new Set(brokerHostnames)] },
+			};
 		},
 		requiredAgent: "aws-agent",
 		retry: { attempts: 2, timeoutMs: 30_000 },
+		// SIO-1451: without this, correlationFetch just re-runs the original incident prompt
+		// against the AWS sub-agent (SIO-1155's flagged gap) -- give it a targeted instruction
+		// instead. Since the AWS dispatch now fans out across every configured estate
+		// (enforce-node.ts), the same directive reaches every estate branch; only the
+		// estate(s) where the implicated cluster actually lives will find anything relevant,
+		// which is the intended behavior for a rule with no way to narrow to one estate.
+		fetchDirective: (context) => {
+			const parsed = KafkaBrokerTimeoutContextSchema.safeParse(context);
+			const hostnames = parsed.success ? parsed.data.brokerHostnames : [];
+			if (hostnames.length > 0) {
+				return `CORRELATION FETCH (SIO-761/SIO-1451): The kafka sub-agent reported a broker timeout / connection failure against MSK, implicating: ${hostnames.join(", ")}. Check MSK cluster health, broker status, and security groups for the cluster(s) these brokers belong to in this estate. If this estate has no matching cluster, say so plainly rather than reporting on an unrelated cluster.
+
+Report: cluster status (ACTIVE/degraded/failed), any recent configuration or security-group changes, broker-level health for the named broker(s) if identifiable, and whether EC2/networking issues on the AWS side could explain a client-observed connection timeout.`;
+			}
+			return `CORRELATION FETCH (SIO-761/SIO-1451): The kafka sub-agent reported a broker timeout / connection failure against MSK, but no specific broker hostname was captured from its output. Check MSK cluster health, broker status, and security groups broadly for any cluster in this estate that could explain a client-observed connection timeout in the current incident window.
+
+Report: cluster status (ACTIVE/degraded/failed) for any cluster showing recent issues, recent configuration or security-group changes, and whether EC2/networking issues on the AWS side could explain the timeout. If this estate has no relevant activity, say so plainly.`;
+		},
 	},
 ];
 

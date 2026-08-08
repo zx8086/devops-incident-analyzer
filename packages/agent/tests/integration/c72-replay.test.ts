@@ -103,27 +103,27 @@ describe("c72-style replay — elastic-agent reachable, findings cover triggered
 // ---------------------------------------------------------------------------
 
 describe("c72-style replay — all-Stable kafka, no rules fire", () => {
-	test("router returns 'enforceCorrelationsAggregate' string (no Send dispatched)", () => {
+	test("router returns 'enforceCorrelationsAggregate' string (no Send dispatched)", async () => {
 		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
 		const state = withKafkaFindings(baseState(), {
 			consumerGroups: [{ id: "stable-svc", state: "STABLE", totalLag: 100 }],
 		});
 
-		const result = enforceCorrelationsRouter(state);
+		const result = await enforceCorrelationsRouter(state);
 
 		// Must return the literal node name, not a Send array
 		expect(result).toBe("enforceCorrelationsAggregate");
 		expect(Array.isArray(result)).toBe(false);
 	});
 
-	test("router returns Send[] when a rule fires (confirms the stable test is testing the right path)", () => {
+	test("router returns Send[] when a rule fires (confirms the stable test is testing the right path)", async () => {
 		// Contrast: same shape but with an Empty group triggers a Send
 		// SIO-764: withKafkaFindings populates result.kafkaFindings; getKafkaData reads that field.
 		const state = withKafkaFindings(baseState(), {
 			consumerGroups: [{ id: "notification-service", state: "EMPTY" }],
 		});
 
-		const result = enforceCorrelationsRouter(state);
+		const result = await enforceCorrelationsRouter(state);
 
 		expect(Array.isArray(result)).toBe(true);
 		const sends = result as Send[];

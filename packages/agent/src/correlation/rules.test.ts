@@ -157,6 +157,51 @@ describe("kafka-broker-timeout-needs-aws-metrics", () => {
 		]);
 		expect(rule.trigger(state)).not.toBeNull();
 	});
+
+	// SIO-1451: without a fetchDirective the AWS re-dispatch just re-runs the original
+	// incident prompt (SIO-1155's flagged gap on this specific rule). brokerHostnames lets
+	// the directive tell the AWS sub-agent exactly which MSK broker/cluster to check.
+	describe("SIO-1451: brokerHostnames extraction + fetchDirective", () => {
+		test("triggerContext captures a broker hostname from prose", () => {
+			const state = makeStateWithKafkaProse("broker b-1.msk.amazonaws.com unreachable: connection timeout after 30s");
+			const match = rule.trigger(state);
+			expect(match?.context.brokerHostnames).toEqual(["b-1.msk.amazonaws.com"]);
+		});
+
+		test("triggerContext captures a broker hostname from a tool-error message", () => {
+			const state = makeStateWithKafkaProse("successful query", [
+				{
+					toolName: "kafka_list_topics",
+					category: "transient",
+					message: "ENOTFOUND b-2.msk.amazonaws.com",
+					retryable: true,
+				} as never,
+			]);
+			const match = rule.trigger(state);
+			expect(match?.context.brokerHostnames).toEqual(["b-2.msk.amazonaws.com"]);
+		});
+
+		test("triggerContext degrades gracefully to an empty array when no hostname is present", () => {
+			const state = makeStateWithKafkaProse("broker unreachable: connection timeout after 30s");
+			const match = rule.trigger(state);
+			expect(match?.context.brokerHostnames).toEqual([]);
+		});
+
+		test("fetchDirective names the broker hostname when present", () => {
+			const directive = rule.fetchDirective?.({
+				signal: "kafka-broker-timeout-needs-aws",
+				brokerHostnames: ["b-1.msk.amazonaws.com"],
+			});
+			expect(directive).toBeDefined();
+			expect(directive).toContain("b-1.msk.amazonaws.com");
+		});
+
+		test("fetchDirective still produces a non-empty targeted instruction when no hostname was extracted", () => {
+			const directive = rule.fetchDirective?.({ signal: "kafka-broker-timeout-needs-aws", brokerHostnames: [] });
+			expect(directive).toBeDefined();
+			expect(directive?.length).toBeGreaterThan(0);
+		});
+	});
 });
 
 // SIO-1103: shared-infra blast-radius rule.
