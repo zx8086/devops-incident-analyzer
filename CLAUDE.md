@@ -23,7 +23,7 @@ packages/
   agent/                   LangGraph supervisor + 31-node pipeline (21 base + 4 gated KG + 6 gated HIL-learning; incl. SIO-681 correlation enforcement, SIO-764 findings extraction, SIO-828 AWS estate router, SIO-1084 resolveIdentifiers, mitigation split into investigate/monitor/escalate, detectTopicShift, SIO-1126 HIL learning lane)
   mcp-server-elastic/      Elasticsearch MCP server (multi-deployment, 117 tools: 101 cluster incl. 9 ML anomaly-detection (SIO-1148) + 4 ES|QL/async-search (SIO-1391) + 16 conditional cloud/billing on EC_API_KEY)
   mcp-server-kafka/        Kafka MCP server (local/MSK/Confluent, 11-61 tools gated: kafka-core + SR + ksqlDB + Connect + REST Proxy)
-  mcp-server-couchbase/    Couchbase Capella MCP server (query analysis, playbooks, ~37 tools: SIO-1107 official Couchbase tools)
+  mcp-server-couchbase/    Couchbase Capella MCP server (query analysis, playbooks, ~39 tools: SIO-1107 official Couchbase tools)
   mcp-server-konnect/      Kong Konnect MCP server (API gateway management, 67+ tools)
   mcp-server-gitlab/       GitLab MCP server (proxy + code analysis, 21+ tools)
   mcp-server-atlassian/    Atlassian MCP server (Jira + Confluence proxy via Rovo OAuth 2.1)

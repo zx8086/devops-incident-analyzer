@@ -37,7 +37,7 @@ Incident Report
 
 An explicit `learn from TICKET-123` turn routes into the human-in-the-loop **learning lane** (`classify -> learnFetchTicket -> ... -> applyLearnings`, gated by `HIL_LEARNING_ENABLED`), which distills confirmed root causes and diagnostic knowledge from a resolved ticket back into the knowledge graph and durable memory. See [docs/architecture/agent-pipeline.md](docs/architecture/agent-pipeline.md#hil-learning-lane).
 
-See [docs/architecture/agent-pipeline.md](docs/architecture/agent-pipeline.md) for the full 31-node StateGraph (21 base nodes + 4 gated knowledge-graph nodes + 6 gated HIL-learning nodes; `grep -c addNode packages/agent/src/graph.ts` = 31) including retry loops, conditional edges, the SIO-828 AWS estate router, the SIO-681 cross-agent correlation enforcement detour, and the SIO-1126 human-in-the-loop learning lane. The separate 30-node elastic-iac proposer graph is documented in [docs/architecture/elastic-iac-proposer.md](docs/architecture/elastic-iac-proposer.md).
+See [docs/architecture/agent-pipeline.md](docs/architecture/agent-pipeline.md) for the full 31-node StateGraph (21 base nodes + 4 gated knowledge-graph nodes + 6 gated HIL-learning nodes; `grep -c addNode packages/agent/src/graph.ts` = 31) including retry loops, conditional edges, the SIO-828 AWS estate router, the SIO-681 cross-agent correlation enforcement detour, and the SIO-1126 human-in-the-loop learning lane. The separate 31-node elastic-iac proposer graph is documented in [docs/architecture/elastic-iac-proposer.md](docs/architecture/elastic-iac-proposer.md).
 
 ## Quick Start
 
@@ -72,7 +72,7 @@ agents/                          Gitagent declarative definitions (YAML/Markdown
 
 packages/
   gitagent-bridge/               YAML-to-LangGraph adapter
-  agent/                         LangGraph 31-node pipeline (21 base + 4 gated knowledge-graph + 6 gated HIL-learning nodes) plus a separate 30-node elastic-iac proposer graph
+  agent/                         LangGraph 31-node pipeline (21 base + 4 gated knowledge-graph + 6 gated HIL-learning nodes) plus a separate 31-node elastic-iac proposer graph
   shared/                        Cross-package types, Zod schemas, Agent Memory REST client (SIO-938)
   checkpointer/                  Transient per-thread LangGraph state (memory / bun:sqlite)
   observability/                 Pino logging, OpenTelemetry, LangSmith
@@ -90,16 +90,16 @@ packages/
   mcp-server-knowledge-graph/    In-process Knowledge Graph MCP (curated kg_* + read-only Cypher, port 9087)
 
 apps/
-  web/                           SvelteKit frontend (Svelte 5, Tailwind, SSE streaming; 30 components)
+  web/                           SvelteKit frontend (Svelte 5, Tailwind, SSE streaming; 34 components)
 ```
 
 ## MCP Servers
 
 | Server | Port | Tools | Config |
 |--------|------|-------|--------|
-| Elasticsearch | 9080 | 112 (96 cluster incl. 9 ML anomaly-detection + 16 conditional cloud/billing on `EC_API_KEY`) | `ES_URL`, `ES_API_KEY`, multi-deployment via `ELASTIC_DEPLOYMENTS` |
-| Kafka | 9081 | 15-55 (15 base + up to 40 gated: SR + ksqlDB + Connect + REST Proxy) | `KAFKA_PROVIDER` (local/msk/confluent), `KAFKA_BROKERS` |
-| Couchbase Capella | 9082 | ~37 (SIO-1107 official Couchbase tools: buckets, INFER, EXPLAIN, Index Advisor, covering-index detectors) | `COUCHBASE_URL`, `COUCHBASE_USERNAME`, `COUCHBASE_PASSWORD` |
+| Elasticsearch | 9080 | 117 (101 cluster incl. 9 ML anomaly-detection + 4 ES\|QL/async-search + 16 conditional cloud/billing on `EC_API_KEY`) | `ES_URL`, `ES_API_KEY`, multi-deployment via `ELASTIC_DEPLOYMENTS` |
+| Kafka | 9081 | 11-61 (11 base + up to 50 gated: SR + ksqlDB + Connect + REST Proxy) | `KAFKA_PROVIDER` (local/msk/confluent), `KAFKA_BROKERS` |
+| Couchbase Capella | 9082 | ~39 (SIO-1107 official Couchbase tools: buckets, INFER, EXPLAIN, Index Advisor, covering-index detectors) | `COUCHBASE_URL`, `COUCHBASE_USERNAME`, `COUCHBASE_PASSWORD` |
 | Kong Konnect | 9083 | 67+ | `KONNECT_ACCESS_TOKEN`, `KONNECT_REGION` |
 | GitLab | 9084 | 21+ (proxy + code analysis) | `GITLAB_PERSONAL_ACCESS_TOKEN`, `GITLAB_INSTANCE_URL` |
 | Atlassian | 9085 (OAuth :9185) | proxy + custom | `ATLASSIAN_SITE_NAME`, `ATLASSIAN_UPSTREAM_MCP_URL`, `ATLASSIAN_READ_ONLY` |

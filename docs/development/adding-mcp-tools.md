@@ -80,6 +80,13 @@ export const ListTopicsParams = z.object({
     .optional()
     .describe("Substring filter to match against topic names"),
 });
+
+// Output schema (used by the outputSchema/structuredContent example below).
+// Describe every field, same as the input schema.
+export const ListTopicsOutput = z.object({
+  topics: z.array(z.string()).describe("Matching topic names"),
+  count: z.number().describe("Number of topics returned"),
+});
 ```
 
 ### Step 3: Write the Tool Description

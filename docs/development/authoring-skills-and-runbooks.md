@@ -283,13 +283,13 @@ tools:
 ---
 ```
 
-The validator reads the `tools:` frontmatter when present (`runbook-validator.ts:203`) and cross-checks it against the prose citations the same way it cross-checks the tail section.
+**`tools:` frontmatter is authoritative when present.** The validator picks the tool declaration in `runbook-validator.ts:243-247`: if valid `tools:` frontmatter exists, that is the declared set and the prose tail section is **not read at all** (optional, ignored); only when `tools:` is absent (or not a valid list) does it fall back to requiring and reading the `## All Tools Used Are Read-Only` tail section. Either way, the declared set is cross-checked against the prose citations the same way.
 
 **Authoring rules enforced by the validator:**
 
 1. Every tool name cited in prose (wrapped in single backticks, lowercase snake_case with at least one underscore) must exist in some `action_tool_map` entry in the agent's tool YAMLs.
-2. Every runbook must have a `## All Tools Used Are Read-Only` section at the bottom.
-3. The tail section must be a comma-separated list matching every tool name cited in prose. Extras in either direction fail the validator.
+2. Every runbook must declare its tools **either** via `tools:` frontmatter **or** a `## All Tools Used Are Read-Only` tail section at the bottom. A runbook with valid `tools:` frontmatter and no tail section passes `bun test`; the tail is required only when frontmatter is absent.
+3. The declared set (whichever source wins) must match every tool name cited in prose -- extras in either direction fail the validator.
 4. The ordering constraint: if you need to cite a new tool in a runbook, add it to an `action_tool_map` entry first, then reference it in the runbook. Runbook-first authoring is not supported.
 
 **There is no escape hatch.** No inline exemption markers, no allowlist config. If the validator fails on a tool name, either the citation is wrong or the action map is wrong -- fix one or the other.
@@ -309,6 +309,8 @@ Fix:
   - For each "prose only" entry: add the name to the tail section.
   - For each "tail only" entry: either cite it in prose or remove it from the tail.
 ```
+
+(When the declaration comes from `tools:` frontmatter rather than the tail section, the "prose only" / "tail only" buckets compare prose against the frontmatter list instead -- the mechanism is identical, only the source differs.)
 
 ---
 
@@ -368,4 +370,4 @@ The extension of the runbook tool-name validator enforces this rule statically. 
 
 | Date | Change |
 |------|--------|
-| 2026-08-08 | SIO-1282..1434 OKF sync: validator path corrected (`runbook-validator.test.ts` -> extracted `runbook-validator.ts`, SIO-1288); documented the `tools:` frontmatter tool declaration (SIO-1289) as an alternative to the prose tail section; documented lifecycle-aware selection (`status: deprecated` / past `stale_after` excludes a runbook from the prompt, SIO-1287/1289) and the OKF `knowledge/index.md` bundle roots with `okf_version` (SIO-1290). Per-datasource runbook bundles (SIO-1432/1433/1434) were already covered. |
+| 2026-08-08 | SIO-1282..1434 OKF sync: validator path corrected (`runbook-validator.test.ts` -> extracted `runbook-validator.ts`, SIO-1288); documented the `tools:` frontmatter tool declaration (SIO-1289), which is authoritative when present (the prose tail section becomes optional and is ignored; the tail is required only when frontmatter is absent); documented lifecycle-aware selection (`status: deprecated` / past `stale_after` excludes a runbook from the prompt, SIO-1287/1289) and the OKF `knowledge/index.md` bundle roots with `okf_version` (SIO-1290). Per-datasource runbook bundles (SIO-1432/1433/1434) were already covered. |

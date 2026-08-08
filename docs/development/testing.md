@@ -287,7 +287,7 @@ test("loads all 6 tool definitions", () => {
 
 ## Evals & quality harness
 
-The eval layer lives at `packages/agent/src/eval/` with the canonical, always-current reference at **`packages/agent/src/eval/README.md`** (run/cost/feedback-key detail, historical run logs). This section is the map; the README is the manual. All evals are on-demand (none in CI) and need AWS Bedrock creds; the LLM-judge and LangSmith-backed ones additionally need `OPENAI_API_KEY`, `LANGSMITH_API_KEY` + `LANGSMITH_PROJECT`, and the `langsmith` CLI on PATH (for `*upload*` scripts).
+The eval layer lives at `packages/agent/src/eval/` with the canonical, always-current reference at **`packages/agent/src/eval/README.md`** (run/cost/feedback-key detail, historical run logs). This section is the map; the README is the manual. All evals are on-demand (none in CI). Runtime evals that call Bedrock or live MCP need AWS Bedrock creds; the static/semantic checks (`eval:spec-audit`) need none. The LLM-judge and LangSmith-backed evals additionally need `OPENAI_API_KEY`, `LANGSMITH_API_KEY` + `LANGSMITH_PROJECT`, and the `langsmith` CLI on PATH (for `*upload*` scripts).
 
 The npm scripts live in `packages/agent/package.json`; the day-to-day ones are **mirrored into the root `package.json`** (SIO-1458) so `bun run eval:*` works from the repo root:
 
