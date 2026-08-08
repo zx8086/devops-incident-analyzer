@@ -245,7 +245,18 @@ $effect(() => {
       <summary class="cursor-pointer text-[0.5625rem] text-gray-500 hover:text-gray-700">
         Text view: {textSummary.nodes.length} nodes, {textSummary.edges.length} links
       </summary>
-      <div class="mt-1 max-h-48 overflow-y-auto rounded border border-gray-200 bg-white/70 px-2 py-1.5 text-[0.625rem] text-gray-600">
+      <!-- tabindex makes the clipped list reachable and Arrow/PageDown-scrollable
+           for keyboard users (scroll containers without focusable children are not
+           reliably focusable cross-browser); role+label give it an accessible name. -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -- scrollable region:
+           the WCAG scrollable-region-focusable rule REQUIRES a nonnegative
+           tabindex here precisely because the region has no focusable children. -->
+      <div
+        class="mt-1 max-h-48 overflow-y-auto rounded border border-gray-200 bg-white/70 px-2 py-1.5 text-[0.625rem] text-gray-600"
+        tabindex="0"
+        role="region"
+        aria-label="Network map text view"
+      >
         <p class="font-medium text-gray-700">Nodes</p>
         <ul class="mb-1.5 list-disc pl-4">
           <!-- Index-keyed: lines are a positional projection, and raw line text
