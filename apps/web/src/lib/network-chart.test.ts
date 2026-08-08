@@ -1,7 +1,7 @@
 // apps/web/src/lib/network-chart.test.ts
 import { describe, expect, test } from "bun:test";
 import type { NetworkTopology } from "@devops-agent/shared";
-import { buildNetworkChartOption } from "./network-chart.ts";
+import { buildNetworkChartOption, buildNetworkTextSummary } from "./network-chart.ts";
 
 const TOPOLOGY: NetworkTopology = {
 	builtAtTurn: 1,
@@ -106,5 +106,22 @@ describe("buildNetworkChartOption", () => {
 		const ep = graphSeries(option).data.find((d) => d.id === "ep:kafka:b-1.example.com:9098");
 		expect(ep?.name).toBe("broker-1 (b-1.example.com:9098)");
 		expect(ep?.tooltip?.formatter).toContain("via kafka");
+	});
+});
+
+// SIO-1459: the accessible text view's data source -- one plain line per
+// node/edge, no HTML markup, same fields the tooltips carry.
+describe("buildNetworkTextSummary", () => {
+	test("renders every node and edge as plain text with tooltip-equivalent detail", () => {
+		const summary = buildNetworkTextSummary(TOPOLOGY);
+		expect(summary.nodes.length).toBe(TOPOLOGY.nodes.length);
+		expect(summary.edges.length).toBe(TOPOLOGY.edges.length);
+		expect(summary.nodes).toContainEqual("orders-tg: targetGroup, arn:tg/orders, 1/3 targets healthy");
+		expect(summary.edges).toContainEqual("orders-tg targets orders-service (port 8080)");
+		expect(summary.edges).toContainEqual("orders-service in-subnet subnet-1 (derived from CIDR containment)");
+		for (const line of [...summary.nodes, ...summary.edges]) {
+			expect(line).not.toContain("<b>");
+			expect(line).not.toContain("&lt;");
+		}
 	});
 });

@@ -8,7 +8,7 @@
 // mounting {#if} container), zoom/expand toolbar, focus-trapped dialog.
 import type { ApplicationTopology } from "@devops-agent/shared";
 import { tick } from "svelte";
-import { buildApplicationChartOption } from "$lib/app-chart";
+import { buildApplicationChartOption, buildApplicationTextSummary } from "$lib/app-chart";
 import Icon from "./Icon.svelte";
 
 let { topology }: { topology: ApplicationTopology } = $props();
@@ -34,6 +34,9 @@ let expandTrigger: HTMLButtonElement | undefined = $state();
 let lastFocused: HTMLElement | null = null;
 
 const option = $derived(buildApplicationChartOption(topology));
+// SIO-1459: accessible text representation -- the same node/edge data the canvas
+// tooltips carry, reachable without a pointer via the details element below.
+const textSummary = $derived(buildApplicationTextSummary(topology));
 
 const MIN_ZOOM = 0.4;
 const MAX_ZOOM = 4;
@@ -153,7 +156,12 @@ $effect(() => {
       </span>
     </div>
     <div class={expanded ? "relative min-h-0 flex-1" : "relative"}>
-      <div bind:this={container} class={expanded ? "h-full w-full" : "h-[28rem] w-full"}></div>
+      <div
+        bind:this={container}
+        class={expanded ? "h-full w-full" : "h-[28rem] w-full"}
+        role="img"
+        aria-label="Application map graph with {topology.nodes.length} nodes and {topology.edges.length} links. An expandable text view listing every node and link follows this chart."
+      ></div>
       {#if !ready}
         <div class="absolute inset-0 flex items-center justify-center text-[0.6875rem] text-gray-400">
           Rendering application map...
@@ -205,5 +213,28 @@ $effect(() => {
         <span class="text-gray-500">Truncated to the first {topology.nodes.length} nodes.</span>
       {/if}
     </div>
+    <!-- SIO-1459: keyboard/screen-reader-reachable equivalent of the canvas.
+         Native details/summary is focusable and toggleable without ARIA wiring. -->
+    <details class="mt-1">
+      <summary class="cursor-pointer text-[0.5625rem] text-gray-500 hover:text-gray-700">
+        Text view: {textSummary.nodes.length} nodes, {textSummary.edges.length} links
+      </summary>
+      <div class="mt-1 max-h-48 overflow-y-auto rounded border border-gray-200 bg-white/70 px-2 py-1.5 text-[0.625rem] text-gray-600">
+        <p class="font-medium text-gray-700">Nodes</p>
+        <ul class="mb-1.5 list-disc pl-4">
+          <!-- Index-keyed: lines are a positional projection, and raw line text
+               can collide when distinct node ids share a label. -->
+          {#each textSummary.nodes as line, i (i)}
+            <li>{line}</li>
+          {/each}
+        </ul>
+        <p class="font-medium text-gray-700">Links</p>
+        <ul class="list-disc pl-4">
+          {#each textSummary.edges as line, i (i)}
+            <li>{line}</li>
+          {/each}
+        </ul>
+      </div>
+    </details>
   </div>
 {/if}

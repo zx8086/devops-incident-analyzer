@@ -1,6 +1,12 @@
 // apps/web/src/lib/app-chart.ts
 import type { ApplicationTopology, ApplicationTopologyNode } from "@devops-agent/shared";
-import type { ChartCategory, ChartGraphLink, ChartGraphNode, NetworkChartOption } from "./network-chart.ts";
+import type {
+	ChartCategory,
+	ChartGraphLink,
+	ChartGraphNode,
+	NetworkChartOption,
+	TopologyTextSummary,
+} from "./network-chart.ts";
 
 // SIO-1457: pure ApplicationTopology -> ECharts graph-series option transform,
 // mirroring network-chart.ts (unit-testable, no echarts/DOM imports; the option
@@ -52,15 +58,37 @@ function escapeHtml(s: string): string {
 		.replace(/'/g, "&#39;");
 }
 
-function tooltipLines(node: ApplicationTopologyNode): string[] {
-	const lines: string[] = [`<b>${escapeHtml(nodeLabel(node))}</b>`];
-	lines.push(escapeHtml(node.kind));
-	if (node.id !== nodeLabel(node)) lines.push(escapeHtml(node.id));
-	if (node.errorRate !== undefined) lines.push(escapeHtml(`error rate ${(node.errorRate * 100).toFixed(1)}%`));
-	if (node.avgDurationMs !== undefined) lines.push(escapeHtml(`avg ${Math.round(node.avgDurationMs)}ms`));
-	if (node.transactionCount !== undefined) lines.push(escapeHtml(`${node.transactionCount} transactions`));
-	if (node.service) lines.push(escapeHtml(`service: ${node.service}`));
+// Plain-text description lines for one node -- the single source both renderers
+// share: the HTML tooltip escapes+wraps them, the SIO-1459 accessible text view
+// interpolates them as Svelte text (no escaping needed there).
+function nodeDescriptionLines(node: ApplicationTopologyNode): string[] {
+	const lines: string[] = [node.kind];
+	if (node.id !== nodeLabel(node)) lines.push(node.id);
+	if (node.errorRate !== undefined) lines.push(`error rate ${(node.errorRate * 100).toFixed(1)}%`);
+	if (node.avgDurationMs !== undefined) lines.push(`avg ${Math.round(node.avgDurationMs)}ms`);
+	if (node.transactionCount !== undefined) lines.push(`${node.transactionCount} transactions`);
+	if (node.service) lines.push(`service: ${node.service}`);
 	return lines;
+}
+
+function tooltipLines(node: ApplicationTopologyNode): string[] {
+	return [`<b>${escapeHtml(nodeLabel(node))}</b>`, ...nodeDescriptionLines(node).map(escapeHtml)];
+}
+
+// SIO-1459: accessible text representation (see network-chart.ts's
+// buildNetworkTextSummary -- same shape, reused by the card's text view).
+export function buildApplicationTextSummary(topology: ApplicationTopology): TopologyTextSummary {
+	const byId = new Map(topology.nodes.map((n) => [n.id, n]));
+	const label = (id: string): string => {
+		const n = byId.get(id);
+		return n ? nodeLabel(n) : id;
+	};
+	const nodes = topology.nodes.map((n) => `${nodeLabel(n)}: ${nodeDescriptionLines(n).join(", ")}`);
+	const edges = topology.edges.map((e) => {
+		const notes = [e.detail, e.priorKnowledge ? "prior knowledge from earlier incidents" : undefined].filter(Boolean);
+		return `${label(e.from)} ${e.kind} ${label(e.to)}${notes.length > 0 ? ` (${notes.join("; ")})` : ""}`;
+	});
+	return { nodes, edges };
 }
 
 export function buildApplicationChartOption(topology: ApplicationTopology): NetworkChartOption {

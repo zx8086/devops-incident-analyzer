@@ -105,21 +105,49 @@ function escapeHtml(s: string): string {
 		.replace(/'/g, "&#39;");
 }
 
-function tooltipLines(node: NetworkTopologyNode): string[] {
-	const lines: string[] = [`<b>${escapeHtml(nodeLabel(node))}</b>`];
-	lines.push(escapeHtml(node.kind));
-	if (node.id !== nodeLabel(node)) lines.push(escapeHtml(node.id));
-	if (node.cidr) lines.push(escapeHtml(`cidr ${node.cidr}`));
-	if (node.availabilityZone) lines.push(escapeHtml(node.availabilityZone));
-	if (node.privateIps?.length) lines.push(escapeHtml(node.privateIps.join(", ")));
-	if (node.dnsName) lines.push(escapeHtml(node.dnsName));
-	if (node.recordType) lines.push(escapeHtml(`type ${node.recordType}`));
-	if (node.scheme || node.lbType) lines.push(escapeHtml([node.lbType, node.scheme].filter(Boolean).join(" / ")));
-	if (node.health) lines.push(escapeHtml(`${node.health.healthy}/${node.health.total} targets healthy`));
-	if (node.endpoint) lines.push(escapeHtml(`via ${node.endpoint.datasource}`));
-	if (node.service) lines.push(escapeHtml(`service: ${node.service}`));
-	if (node.estate) lines.push(escapeHtml(`estate: ${node.estate}`));
+// Plain-text description lines for one node -- the single source both renderers
+// share: the HTML tooltip escapes+wraps them, the SIO-1459 accessible text view
+// interpolates them as Svelte text (no escaping needed there).
+function nodeDescriptionLines(node: NetworkTopologyNode): string[] {
+	const lines: string[] = [node.kind];
+	if (node.id !== nodeLabel(node)) lines.push(node.id);
+	if (node.cidr) lines.push(`cidr ${node.cidr}`);
+	if (node.availabilityZone) lines.push(node.availabilityZone);
+	if (node.privateIps?.length) lines.push(node.privateIps.join(", "));
+	if (node.dnsName) lines.push(node.dnsName);
+	if (node.recordType) lines.push(`type ${node.recordType}`);
+	if (node.scheme || node.lbType) lines.push([node.lbType, node.scheme].filter(Boolean).join(" / "));
+	if (node.health) lines.push(`${node.health.healthy}/${node.health.total} targets healthy`);
+	if (node.endpoint) lines.push(`via ${node.endpoint.datasource}`);
+	if (node.service) lines.push(`service: ${node.service}`);
+	if (node.estate) lines.push(`estate: ${node.estate}`);
 	return lines;
+}
+
+function tooltipLines(node: NetworkTopologyNode): string[] {
+	return [`<b>${escapeHtml(nodeLabel(node))}</b>`, ...nodeDescriptionLines(node).map(escapeHtml)];
+}
+
+// SIO-1459: accessible text representation of the map -- one plain-text line per
+// node and per edge, carrying the same data the canvas tooltips do, for the
+// cards' keyboard/screen-reader-reachable text view. Pure and unit-testable.
+export interface TopologyTextSummary {
+	nodes: string[];
+	edges: string[];
+}
+
+export function buildNetworkTextSummary(topology: NetworkTopology): TopologyTextSummary {
+	const byId = new Map(topology.nodes.map((n) => [n.id, n]));
+	const label = (id: string): string => {
+		const n = byId.get(id);
+		return n ? nodeLabel(n) : id;
+	};
+	const nodes = topology.nodes.map((n) => `${nodeLabel(n)}: ${nodeDescriptionLines(n).join(", ")}`);
+	const edges = topology.edges.map((e) => {
+		const notes = [e.detail, e.derived ? "derived from CIDR containment" : undefined].filter(Boolean);
+		return `${label(e.from)} ${e.kind} ${label(e.to)}${notes.length > 0 ? ` (${notes.join("; ")})` : ""}`;
+	});
+	return { nodes, edges };
 }
 
 export function buildNetworkChartOption(topology: NetworkTopology): NetworkChartOption {
