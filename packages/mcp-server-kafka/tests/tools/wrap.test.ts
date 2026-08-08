@@ -1,6 +1,6 @@
 // tests/tools/wrap.test.ts
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { MultipleErrors } from "@platformatic/kafka";
+import { MultipleErrors, NetworkError } from "@platformatic/kafka";
 import { z } from "zod";
 import type { AppConfig } from "../../src/config/schemas.ts";
 import { upstreamError } from "../../src/lib/errors.ts";
@@ -379,6 +379,35 @@ describe("wrapHandler", () => {
 			expect(text).toBe("MCP error -32603: Describing groups failed.");
 			expect(text).not.toContain("_error");
 			expect(text).not.toContain("---STRUCTURED---");
+		});
+
+		// SIO-1447: the live-repro shape for kafka_get_consumer_group_lag /
+		// kafka_list_consumer_groups against an unreachable broker. Previously classified to
+		// null (no envelope at all) because classifyKafkaError only checked one level of
+		// err.errors for a protocol apiCode/errorCode; this generic admin.js wrapper message
+		// carries neither. Nested MultipleErrors + NetworkError(cause: ECONNREFUSED) mirrors the
+		// real @platformatic/kafka@2.0.1 call chain: admin.js:908 -> connection-pool.js:155 ->
+		// connection.js:411.
+		test("SIO-1447: 'Listing consumer group offsets failed.' with a connection-refused cause -> network envelope", async () => {
+			const econnrefused = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:9092"), {
+				code: "ECONNREFUSED",
+			});
+			const failingHandler = async () => {
+				throw new MultipleErrors("Listing consumer group offsets failed.", [
+					new MultipleErrors("Cannot connect to any broker.", [
+						new NetworkError("Connection to broker:9092 failed.", { cause: econnrefused }),
+					]),
+				]);
+			};
+			const handler = wrapHandler("kafka_get_consumer_group_lag", makeConfig({}), failingHandler);
+			const result = await handler({});
+
+			expect(result.isError).toBe(true);
+			const text = result.content[0]?.text ?? "";
+			expect(text.startsWith("MCP error -32603: Listing consumer group offsets failed.")).toBe(true);
+			const env = parseEnvelope(text);
+			expect(env.kind).toBe("network");
+			expect(env.category).toBe("transient");
 		});
 	});
 });

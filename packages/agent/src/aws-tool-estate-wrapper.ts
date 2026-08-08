@@ -23,11 +23,20 @@ export function wrapAwsToolsWithEstate(awsTools: StructuredToolInterface[]): Str
 			async (args: unknown) => {
 				const estate = currentAwsEstate();
 				if (!estate) {
-					// The fan-out wrapper in queryDataSource is the only legitimate
-					// caller path; missing context is a programming error worth surfacing.
+					// SIO-1448: state the observable fact only -- currentAwsEstate() found no
+					// scope -- rather than naming a specific caller. This error reaches the
+					// LLM's own ReAct loop as a tool result, not just a human debugger, so an
+					// incorrect diagnosis here (the prior wording named "the AWS sub-agent
+					// fan-out" even when a different, non-fan-out caller was responsible)
+					// misdirects both. Every AWS tool call must run inside
+					// withAwsEstate(estate, ...); check whichever caller dispatched this
+					// invocation (queryDataSource's fan-out is the primary one, but not the
+					// only one -- see correlationFetch).
 					throw new Error(
-						`AWS tool "${original.name}" invoked outside withAwsEstate scope. ` +
-							"This indicates a bug in the AWS sub-agent fan-out.",
+						`AWS tool "${original.name}" invoked with no estate scope established ` +
+							"(currentAwsEstate() returned undefined). Every AWS tool call must run " +
+							"inside withAwsEstate(estate, ...) -- check the caller that dispatched " +
+							"this sub-agent invocation.",
 					);
 				}
 				const withEstate = { ...(args as Record<string, unknown>), estate };

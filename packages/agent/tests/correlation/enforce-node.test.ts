@@ -137,6 +137,83 @@ describe("enforceCorrelationsRouter — synthetic cross-check reaches elastic wi
 			expect(known.has(agentToDataSourceId(rule.requiredAgent))).toBe(true);
 		}
 	});
+
+	// SIO-1448: kafka-broker-timeout-needs-aws-metrics requires aws-agent, but the router
+	// builds its Send from a bare state spread with no awsEstateRouter re-run and no scope
+	// check. When the triggering turn never selected AWS (the common case -- AWS only enters
+	// via this correlation rule), state.awsTargetEstates is [] (its default), and dispatching
+	// correlationFetch -> queryDataSource with no estates hits the non-fan-out fallback,
+	// which calls runSubAgent with zero withAwsEstate wrapping -- any AWS tool the ReAct loop
+	// picks then throws the estate-scope guard mid-run. supervisor.ts's SIO-1142 guard
+	// already prevents this exact condition on the primary dispatch path; the correlation
+	// re-dispatch path had no equivalent check.
+	describe("SIO-1448: AWS estate scope on the correlationFetch re-dispatch path", () => {
+		function brokerTimeoutState(awsTargetEstates: string[]): AgentStateType {
+			return {
+				...withKafkaToolErrors(baseState(), [
+					{
+						toolName: "kafka_get_consumer_group_lag",
+						category: "transient",
+						retryable: true,
+						message: "MCP error -32603: broker connection timeout unreachable",
+					} as never,
+				]),
+				awsTargetEstates,
+			};
+		}
+
+		function awsSend(sends: Send[]): Send | undefined {
+			return sends.find((s) => {
+				const args = s.args as { pendingCorrelations?: Array<{ ruleName: string }> };
+				return args.pendingCorrelations?.some((p) => p.ruleName === "kafka-broker-timeout-needs-aws-metrics");
+			});
+		}
+
+		test("does not dispatch a correlationFetch Send targeting aws when awsTargetEstates is empty", () => {
+			const result = enforceCorrelationsRouter(brokerTimeoutState([]));
+			const sends = Array.isArray(result) ? (result as Send[]) : [];
+			const send = awsSend(sends);
+			// The rule must not be silently dropped either -- it should still reach
+			// enforceCorrelationsAggregate (as a degraded/capped rule), just never via a Send
+			// that would call queryDataSource with dataSourceId "aws" and no estate scope.
+			if (send) {
+				const args = send.args as { currentDataSource?: string };
+				expect(args.currentDataSource).not.toBe("aws");
+			}
+		});
+
+		test("still dispatches normally when awsTargetEstates is populated", () => {
+			const result = enforceCorrelationsRouter(brokerTimeoutState(["prod-aws"]));
+			const sends = Array.isArray(result) ? (result as Send[]) : [];
+			const send = awsSend(sends);
+			expect(send).toBeDefined();
+			const args = send?.args as { currentDataSource?: string } | undefined;
+			expect(args?.currentDataSource).toBe("aws");
+		});
+
+		test("the skipped rule still surfaces as degraded via enforceCorrelationsAggregate, with a reason that does not claim the specialist was invoked", async () => {
+			const routed = enforceCorrelationsRouter(brokerTimeoutState([]));
+			const sends = Array.isArray(routed) ? (routed as Send[]) : [];
+			// Simulate the graph's own dispatch: every Send this router emitted actually runs
+			// (mirroring supervisor.ts's skipped-datasource pattern, SIO-1142), so the pending
+			// entry for the AWS rule must arrive at the aggregate via a Send that does NOT
+			// invoke queryDataSource("aws"). Feed the router's own pendingCorrelations forward.
+			const awsPending = sends
+				.flatMap((s) => (s.args as { pendingCorrelations?: PendingCorrelation[] }).pendingCorrelations ?? [])
+				.filter((p) => p.ruleName === "kafka-broker-timeout-needs-aws-metrics");
+			expect(awsPending.length).toBeGreaterThan(0);
+
+			const aggregateInput = {
+				...brokerTimeoutState([]),
+				pendingCorrelations: awsPending,
+			};
+			const result = await enforceCorrelationsAggregate(aggregateInput);
+			expect(result.degradedRules).toHaveLength(1);
+			const degraded = result.degradedRules?.[0];
+			expect(degraded?.ruleName).toBe("kafka-broker-timeout-needs-aws-metrics");
+			expect(degraded?.reason).not.toContain("specialist invoked but findings did not cover");
+		});
+	});
 });
 
 // ---------------------------------------------------------------------------

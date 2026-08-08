@@ -104,6 +104,27 @@ export function enforceCorrelationsRouter(state: AgentStateType): Send[] | "enfo
 		// rule targets capella-agent), so this closes the trap rather than fixing an observed
 		// failure.
 		const dataSourceId = agentToDataSourceId(agent);
+
+		// SIO-1448: correlationFetch calls queryDataSource directly (bypassing awsEstateRouter
+		// and resolveIdentifiers entirely), so an AWS dispatch here relies solely on whatever
+		// awsTargetEstates was left over from the ORIGINAL turn -- often [] when AWS only enters
+		// via this correlation rule. queryDataSource's AWS fan-out only wraps calls in
+		// withAwsEstate when awsTargetEstates is non-empty (sub-agent.ts); the empty case falls
+		// to a non-fan-out path with zero estate scope, so any AWS tool the ReAct loop picks
+		// throws the estate-scope guard mid-run. Mirrors supervisor.ts's SIO-1142
+		// awsHasNoEstates guard on the primary dispatch path: skip the fetch and let the rule
+		// surface as degraded via enforceCorrelationsAggregate instead of crashing the turn.
+		if (dataSourceId === "aws" && state.awsTargetEstates.length === 0) {
+			sends.push(
+				new Send("enforceCorrelationsAggregate", {
+					...state,
+					pendingCorrelations: pendings,
+					correlationFetchDirective: undefined,
+				}),
+			);
+			continue;
+		}
+
 		// SIO-1155: rules may provide a targeted fetch directive; without one the
 		// refetch re-runs the original incident prompt and rarely covers the rule's
 		// entities. Multiple directives for one agent concatenate.
@@ -229,10 +250,18 @@ export async function enforceCorrelationsAggregate(state: AgentStateType): Promi
 	for (const pending of state.pendingCorrelations) {
 		const decision = decisions.find((d) => d.rule.name === pending.ruleName);
 		if (!decision || decision.status === "satisfied") continue;
+		// SIO-1448: the aws-agent fetch was never dispatched (no estate scope resolved for this
+		// turn) -- do not claim the specialist ran when it didn't.
+		const awsSkippedForScope =
+			pending.requiredAgent === "aws-agent" &&
+			agentToDataSourceId(pending.requiredAgent) === "aws" &&
+			state.awsTargetEstates.length === 0;
 		const reason =
 			decision.rule.skipCoverageCheck === true
 				? "unresolved cross-source contradiction"
-				: "specialist invoked but findings did not cover the triggered entities (or invocation failed upstream)";
+				: awsSkippedForScope
+					? "aws-agent not invoked: no AWS estate scope resolved for this turn"
+					: "specialist invoked but findings did not cover the triggered entities (or invocation failed upstream)";
 		degraded.push({
 			ruleName: pending.ruleName,
 			requiredAgent: pending.requiredAgent,
