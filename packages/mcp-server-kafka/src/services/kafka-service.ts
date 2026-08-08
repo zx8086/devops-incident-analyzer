@@ -141,12 +141,12 @@ function classifyRecursive(err: MultipleErrors, depth: number): { code: number |
 		if (child instanceof MultipleErrors) {
 			const nested = classifyRecursive(child, depth + 1);
 			firstCode ??= nested.code;
-			if (nested.kind !== null) return nested;
+			if (nested.kind !== null) return { code: firstCode, kind: nested.kind };
 			continue;
 		}
 		const leaf = classifyLeaf(child);
 		firstCode ??= leaf.code;
-		if (leaf.kind !== null) return leaf;
+		if (leaf.kind !== null) return { code: firstCode, kind: leaf.kind };
 	}
 	return { code: firstCode, kind: null };
 }

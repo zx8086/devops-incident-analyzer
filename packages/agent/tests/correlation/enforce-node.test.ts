@@ -173,13 +173,18 @@ describe("enforceCorrelationsRouter — synthetic cross-check reaches elastic wi
 			const result = enforceCorrelationsRouter(brokerTimeoutState([]));
 			const sends = Array.isArray(result) ? (result as Send[]) : [];
 			const send = awsSend(sends);
-			// The rule must not be silently dropped either -- it should still reach
-			// enforceCorrelationsAggregate (as a degraded/capped rule), just never via a Send
-			// that would call queryDataSource with dataSourceId "aws" and no estate scope.
-			if (send) {
-				const args = send.args as { currentDataSource?: string };
-				expect(args.currentDataSource).not.toBe("aws");
-			}
+			// The rule must not be silently dropped either -- it must reach
+			// enforceCorrelationsAggregate directly (as a degraded/capped rule), never via
+			// correlationFetch (which would call queryDataSource with dataSourceId "aws" and
+			// no estate scope). Assert the Send's actual destination node, not just that
+			// currentDataSource isn't "aws" -- the aggregate-bound Send never sets
+			// currentDataSource at all, so a looser check could pass even if the pending
+			// correlation were silently dropped instead of routed anywhere.
+			expect(send).toBeDefined();
+			expect(send?.node).toBe("enforceCorrelationsAggregate");
+			const args = send?.args as { pendingCorrelations?: Array<{ ruleName: string }>; currentDataSource?: string };
+			expect(args.pendingCorrelations?.some((p) => p.ruleName === "kafka-broker-timeout-needs-aws-metrics")).toBe(true);
+			expect(args.currentDataSource).not.toBe("aws");
 		});
 
 		test("still dispatches normally when awsTargetEstates is populated", () => {

@@ -90,17 +90,19 @@ describe("classifyKafkaError (SIO-1087)", () => {
 			expect(classifyKafkaError(err).kind).toBe("network");
 		});
 
-		test("TimeoutError classifies as a transient kind (library bug: TimeoutError.code is actually PLT_KFK_NETWORK in 2.0.1)", () => {
+		test("TimeoutError classifies as timeout despite the library bug (TimeoutError.code is actually PLT_KFK_NETWORK in 2.0.1)", () => {
 			// @platformatic/kafka@2.0.1's TimeoutError constructor calls
 			// super(NetworkError.code, ...) instead of super(TimeoutError.code, ...), so a real
-			// TimeoutError instance's .code is 'PLT_KFK_NETWORK', not 'PLT_KFK_TIMEOUT'. Classify
-			// defensively on both the (buggy) .code string AND instanceof so this doesn't silently
-			// regress to unknown if the upstream library fixes its own bug in a later version.
+			// TimeoutError instance's .code is 'PLT_KFK_NETWORK', not 'PLT_KFK_TIMEOUT'.
+			// classifyLeaf's instanceof TimeoutError check (checked before the generic
+			// PLT_KFK_* code map) is what makes this resolve to "timeout" rather than the
+			// misleading "network" the buggy .code would otherwise produce. Assert the exact
+			// kind -- a regression that dropped the instanceof fallback would silently produce
+			// "network" instead, which a loose timeout-or-network assertion would not catch.
 			const err = new MultipleErrors("Listing consumer group offsets failed.", [
 				new TimeoutError("Connection to broker:9092 timed out."),
 			]);
-			const kind = classifyKafkaError(err).kind;
-			expect(kind === "timeout" || kind === "network").toBe(true);
+			expect(classifyKafkaError(err).kind).toBe("timeout");
 		});
 
 		test("ECONNRESET cause classifies as network", () => {
@@ -125,6 +127,22 @@ describe("classifyKafkaError (SIO-1087)", () => {
 			const child = Object.assign(new Error("protocol error 3"), { apiCode: 3 });
 			const err = new MultipleErrors("aggregate", [child, new NetworkError("unrelated network noise")]);
 			expect(classifyKafkaError(err).kind).toBe("not-found");
+		});
+
+		test("an earlier unmapped protocol code is preserved as kafkaErrorCode even when a later child resolves the kind", () => {
+			// Regression guard: classifyRecursive accumulates firstCode across siblings so a
+			// numeric code seen early (even unmapped, e.g. FENCED_LEADER_EPOCH=74) is not lost
+			// when a LATER child is what actually resolves `kind` -- returning that child's
+			// own {code: null, ...} directly would silently drop the earlier code.
+			const unmappedProtocolChild = Object.assign(new Error("protocol error 74"), { apiCode: 74 });
+			const econnrefused = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+			const err = new MultipleErrors("aggregate", [
+				unmappedProtocolChild,
+				new NetworkError("Connection failed.", { cause: econnrefused }),
+			]);
+			const c = classifyKafkaError(err);
+			expect(c.kind).toBe("network");
+			expect(c.kafkaErrorCode).toBe(74);
 		});
 
 		test("a MultipleErrors with only truly uninformative children (no code, no cause) still yields kind=null", () => {
