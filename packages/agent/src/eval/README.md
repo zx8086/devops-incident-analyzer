@@ -23,6 +23,10 @@ bun run eval:incident-replay -- --sub-agent-model claude-haiku-4-5 --repetitions
 - `--repetitions N` maps to the SDK's `numRepetitions`. n=32 single-shot runs sit inside
   judge/model noise (the SIO-1375 A/B conclusion flipped on a config bug); use >= 2 for any
   model decision.
+- `--ticket DEVOPS-XXXX` (SIO-1454) scopes the run to the dataset example(s) whose
+  `metadata.ticketKey` matches -- the cheap way (~$0.10-0.50) to exercise the full pipeline and
+  every evaluator on one incident. An unknown ticket exits non-zero listing the known keys. A
+  scoped run's aggregate scores are NOT comparable to a full leg (metadata stamps `ticketFilter`).
 - `EVAL_JUDGE_MODEL` overrides the LLM judge (default `gpt-4o-mini`). Scores are only
   comparable within one judge model -- the resolved judge is stamped on experiment metadata.
 
@@ -34,6 +38,13 @@ bun run eval:incident-replay -- --sub-agent-model claude-haiku-4-5 --repetitions
 - `subagent_accuracy_<datasource>` -- independent judge over raw serialized sub-agent findings,
   isolating the sub-agent model from the aggregator (SIO-1374)
 - `datasources_covered`, `confidence_threshold` -- deterministic code checks
+- `runbook_selection_vs_usage` -- deterministic (SIO-1442, OKF audit tier 3): every
+  `always_select` runbook reached the run's `selectedRunbooks`; emits no verdict on turns where
+  the selector never ran (`selectedRunbooks: null`, e.g. simple turns and pre-SIO-1442 fixtures)
+- `citation_grounding` -- LLM judge (SIO-1442, OKF audit tier 3): claims about cited runbooks
+  match the runbook's real content, graded against a knowledge snapshot taken at RUN time (so
+  replay-outputs re-grades against the content that governed the run, not today's); a
+  hallucinated `.md` filename scores 0 deterministically, no judge call needed
 
 Judge-emitted datasource names are canonicalized (`elasticsearch`->`elastic`,
 `capella`->`couchbase`, ...) before feedback emission (SIO-1378): previously a free-formed name
@@ -368,6 +379,41 @@ bun run model:probe -- claude-sonnet-5 --agent incident-analyzer --report
 
 It is gate 1 of `docs/development/model-upgrade-checklist.md`; committed output lands in
 `docs/reference/model-probes/`.
+
+## OKF spec audit tiers (SIO-1440/1441/1442/1444)
+
+Four audit tiers grade the OKF spec layer itself (agent.yaml + SOUL.md + RULES.md +
+knowledge/) rather than the graph's answers. Tier 3 lives inside the incident-replay eval
+above (`runbook_selection_vs_usage` + `citation_grounding`); tier 4's static checks run inside
+tier 1's CLI plus `bun test` (`okf-spec-audit.test.ts`). Tiers 1-2 have their own entrypoints.
+
+### Tier 1 -- static/semantic spec audit
+
+```bash
+bun run --filter @devops-agent/agent eval:spec-audit
+```
+
+Runs five checks across the root agent AND every declared sub-agent (recursively), exits
+non-zero on any finding: knowledge frontmatter degradation (the SIO-1282 silent-strip class),
+orphaned knowledge files, RULES-vs-SOUL contradictions, skill-declaration drift (SIO-1444),
+and declared-sub-agents missing on disk. The contradiction scan is an LLM judge -- one OpenAI
+call per agent -- so this is invoked deliberately (same convention as `wiki:lint`), never as a
+pre-commit hook.
+
+### Tier 2 -- isolated single-agent probe (no buildGraph, no mocks)
+
+```bash
+PROBE_DATASOURCE=elastic PROBE_SCENARIO="High error rate on the styles service" \
+  bun run --filter @devops-agent/agent eval:single-agent-probe
+```
+
+Invokes ONE sub-agent standalone against live MCP + Bedrock -- `buildGraph()` is nowhere in the
+path -- isolating "does this SOUL/RULES/knowledge produce correct behavior" from graph routing.
+Env contract (not CLI flags): `PROBE_DATASOURCE` (required), `PROBE_SCENARIO` (required),
+`PROBE_RUN_ORCHESTRATOR=true` to also run the aggregator's single-shot synthesis,
+`PROBE_REFERENCE_FINDINGS='{"<ds>": "ground truth"}'` to grade via `judgeSubagentReports`.
+To A/B a SOUL.md/RULES.md edit: run once per git worktree containing the variant, with
+`WORKSPACE_ROOT` pinned per invocation so each process resolves its own agents/ tree.
 
 ## Prerequisites
 

@@ -16,7 +16,9 @@
 		"model:probe": "bun --env-file=../../.env src/eval/probe-model.ts",
 		"eval:upload-mcp-tool-dataset": "bun --env-file=../../.env run src/eval/build-mcp-tool-dataset.ts",
 		"eval:mcp-tool": "bun --env-file=../../.env run src/eval/run-mcp-tool-eval.ts",
-		"eval:tool-probe": "bun --env-file=../../.env run src/eval/run-tool-probe.ts"
+		"eval:tool-probe": "bun --env-file=../../.env run src/eval/run-tool-probe.ts",
+		"eval:spec-audit": "bun --env-file=../../.env run src/eval/spec-audit-cli.ts",
+		"eval:single-agent-probe": "bun --env-file=../../.env run src/eval/single-agent-probe-cli.ts"
 	},
 	"dependencies": {
 		"@devops-agent/checkpointer": "workspace:*",

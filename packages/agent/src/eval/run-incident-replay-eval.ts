@@ -18,7 +18,9 @@
 
 import { spawnSync } from "node:child_process";
 import { loadAgent } from "@devops-agent/gitagent-bridge";
+import { Client } from "langsmith";
 import { evaluate } from "langsmith/evaluation";
+import type { Example } from "langsmith/schemas";
 import { resolveRoleModelConfig } from "../llm.ts";
 import { getAgentsDir } from "../paths.ts";
 import { citationGrounding } from "./citation-grounding-evaluator.ts";
@@ -29,6 +31,7 @@ import {
 	responseQualityJudge,
 	subagentEvidenceJudge,
 } from "./evaluators.ts";
+import { filterExamplesByTicket } from "./example-ticket-filter.ts";
 import { runAgent } from "./run-function.ts";
 import { runbookSelectionVsUsage } from "./runbook-selection-evaluator.ts";
 
@@ -83,6 +86,31 @@ const resolvedSubAgentModel =
 
 const repetitions = intOpt("repetitions") ?? 1;
 
+// SIO-1454: scope the run to the dataset example(s) whose metadata.ticketKey matches -- the
+// cheap way to exercise the full pipeline and every evaluator on one incident instead of a full
+// 32-example leg. Resolved BEFORE the cost banner so a typo'd ticket exits before anything is
+// spent. A fresh single-example recording is also the only way the SIO-1442 tier-3 evaluators
+// can score: pre-SIO-1442 fixtures carry selectedRunbooks: null, which reads as "selector never
+// ran" and skips grading.
+const ticketFilter = opt("ticket");
+let evalData: string | Example[] = DATASET_NAME;
+if (ticketFilter) {
+	const client = new Client();
+	const allExamples: Example[] = [];
+	for await (const example of client.listExamples({ datasetName: DATASET_NAME })) {
+		allExamples.push(example);
+	}
+	const { matched, availableTicketKeys } = filterExamplesByTicket(allExamples, ticketFilter);
+	if (matched.length === 0) {
+		console.error(
+			`--ticket "${ticketFilter}" matched no examples in ${DATASET_NAME}. Known ticketKeys: ${availableTicketKeys.join(", ")}`,
+		);
+		process.exit(1);
+	}
+	console.log(`--ticket ${ticketFilter}: scoped to ${matched.length} of ${allExamples.length} examples.`);
+	evalData = matched;
+}
+
 console.log("WARNING: this hits the systems your .env points at (Bedrock, OpenAI, all 7 MCP servers).");
 console.log(
 	`Sub-agent model: ${resolvedSubAgentModel} | judge: ${judgeModelConfig().model} | repetitions: ${repetitions}`,
@@ -121,7 +149,7 @@ console.log(`Starting evaluation, experiment prefix: ${experimentPrefix}`);
 const results = await evaluate(
 	(inputs: Record<string, unknown>) => runAgent(inputs as Parameters<typeof runAgent>[0]),
 	{
-		data: DATASET_NAME,
+		data: evalData,
 		evaluators: [
 			datasourcesCovered,
 			confidenceThreshold,
@@ -143,6 +171,9 @@ const results = await evaluate(
 			judgeModel: judgeModelConfig().model,
 			repetitions,
 			fixtureMode: process.env.EVAL_FIXTURE_MODE ?? "live",
+			// SIO-1454: a scoped run's aggregate scores are not comparable to a full-dataset leg;
+			// stamp the scope so Compare readers can tell the two apart.
+			ticketFilter: ticketFilter ?? "full-dataset",
 		},
 	},
 );
