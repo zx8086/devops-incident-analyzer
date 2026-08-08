@@ -17,6 +17,7 @@ import CreateTicketCard from "./CreateTicketCard.svelte";
 import ElasticFindingsCard from "./ElasticFindingsCard.svelte";
 import FeedbackBar from "./FeedbackBar.svelte";
 import FollowUpSuggestions from "./FollowUpSuggestions.svelte";
+import ApplicationTopologyCard from "./ApplicationTopologyCard.svelte";
 import GitLabFindingsCard from "./GitLabFindingsCard.svelte";
 import Icon from "./Icon.svelte";
 import KafkaFindingsCard from "./KafkaFindingsCard.svelte";
@@ -153,6 +154,10 @@ const commentMode = $derived(canCommentOnThreadTicket && threadTicket !== null);
 
         {#if !isStreaming && message.networkTopology}
           <NetworkTopologyCard topology={message.networkTopology} />
+        {/if}
+
+        {#if !isStreaming && message.applicationTopology}
+          <ApplicationTopologyCard topology={message.applicationTopology} />
         {/if}
 
         {#if !isStreaming && message.mlAnomalyExplainer}

@@ -7,6 +7,7 @@
 import { extractStreamDeltaText } from "@devops-agent/agent";
 import type { InvestigationFocus } from "@devops-agent/shared";
 import {
+	ApplicationTopologySchema,
 	HilApplyReportSchema,
 	MlAnomalyExplainerSchema,
 	NetworkTopologySchema,
@@ -340,6 +341,15 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 					const parsed = NetworkTopologySchema.safeParse(rawTopology);
 					if (parsed.success && parsed.data.nodes.length > 0) {
 						send({ type: "network_topology", topology: parsed.data });
+					}
+				}
+				// SIO-1457: once-per-turn merged application map, same guarded-parse
+				// convention as network_topology above.
+				const rawAppTopology = (event.data?.output as { applicationTopology?: unknown })?.applicationTopology;
+				if (rawAppTopology !== undefined) {
+					const parsed = ApplicationTopologySchema.safeParse(rawAppTopology);
+					if (parsed.success && parsed.data.nodes.length > 0) {
+						send({ type: "application_topology", topology: parsed.data });
 					}
 				}
 				// SIO-1215: once-per-turn ML anomaly explainer, same guarded-parse
