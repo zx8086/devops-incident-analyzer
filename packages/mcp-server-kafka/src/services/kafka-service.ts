@@ -8,6 +8,7 @@ import {
 	type ListedOffsetsTopic,
 	ListOffsetTimestamps,
 	MultipleErrors,
+	TimeoutError,
 } from "@platformatic/kafka";
 import type { DlqTopic } from "../config/schemas.ts";
 import { compileFilterOrThrow } from "../lib/filter.ts";
@@ -64,26 +65,105 @@ interface ClassifiedKafkaError {
 	message: string;
 }
 
-// Exported for unit tests (SIO-1087).
+// SIO-1447: @platformatic/kafka's own GenericError.code (its PLT_KFK_* strings), for the many
+// admin operations (kPerformWithRetry / runConcurrentCallbacks wrappers, e.g. admin.js:908's
+// `new MultipleErrors('Listing consumer group offsets failed.', [error])`) that carry no Kafka
+// protocol apiCode/errorCode at all -- only the library's own classification of what went wrong.
+// NOTE: in @platformatic/kafka@2.0.1, TimeoutError's constructor passes NetworkError.code to
+// super() instead of TimeoutError.code (a library bug), so a real TimeoutError instance's .code
+// is 'PLT_KFK_NETWORK'. Map both codes so a future library fix doesn't silently regress this to
+// unknown; classifyGenericErrorCode's instanceof check gives a second, code-independent path to
+// "timeout" for as long as the bug persists.
+const PLT_KFK_CODE_TO_KIND: Record<string, ToolErrorKind> = {
+	PLT_KFK_NETWORK: "network",
+	PLT_KFK_TIMEOUT: "timeout",
+	PLT_KFK_AUTHENTICATION: "auth-denied",
+};
+
+// Node system error codes for a raw connection failure, one level deeper than the library's own
+// NetworkError -- e.g. connection.js:411's `new NetworkError(msg, { cause })` where `cause` is
+// the underlying net.Socket 'error' event's Error object.
+const NODE_TIMEOUT_CODES = new Set(["ETIMEDOUT"]);
+const NODE_NETWORK_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "EHOSTUNREACH", "ENOTFOUND"]);
+
+function classifyNodeCause(cause: unknown): ToolErrorKind | null {
+	const code = (cause as { code?: unknown } | undefined)?.code;
+	if (typeof code !== "string") return null;
+	if (NODE_TIMEOUT_CODES.has(code)) return "timeout";
+	if (NODE_NETWORK_CODES.has(code)) return "network";
+	return null;
+}
+
+// Classifies a single leaf error (not itself a MultipleErrors) using, in order: the protocol
+// apiCode/errorCode (existing SIO-1087 behavior -- returned even when unmapped, since the
+// numeric code is still useful downstream logging/telemetry even without a resolved kind), a raw
+// Node system error code on .cause (most specific signal for a connection failure), the
+// library's own GenericError code, and an instanceof fallback for the TimeoutError library bug
+// noted above.
+function classifyLeaf(child: unknown): { code: number | null; kind: ToolErrorKind | null } {
+	const apiCode = (child as { apiCode?: number }).apiCode ?? (child as { errorCode?: number }).errorCode;
+	if (typeof apiCode === "number" && apiCode !== 0) {
+		return { code: apiCode, kind: KAFKA_CODE_TO_KIND[apiCode] ?? null };
+	}
+
+	const causeKind = classifyNodeCause((child as { cause?: unknown }).cause);
+	if (causeKind !== null) {
+		return { code: null, kind: causeKind };
+	}
+
+	// TimeoutError library bug (see comment above): its .code lies about being PLT_KFK_NETWORK,
+	// so check instanceof before trusting the generic PLT_KFK_* code map.
+	if (child instanceof TimeoutError) {
+		return { code: null, kind: "timeout" };
+	}
+
+	const pltCode = (child as { code?: unknown }).code;
+	const pltKind = typeof pltCode === "string" ? (PLT_KFK_CODE_TO_KIND[pltCode] ?? null) : null;
+	if (pltKind !== null) {
+		return { code: null, kind: pltKind };
+	}
+
+	return { code: null, kind: null };
+}
+
+// Bounds the walk into nested MultipleErrors (connection-pool exhaustion wrapped by a retry
+// wrapper wrapped by an operation-level wrapper is 2-3 levels deep in practice).
+const MAX_MULTIPLE_ERRORS_DEPTH = 4;
+
+// Walks err.errors depth-first looking for a resolved kind. Separately remembers the first
+// numeric protocol code seen (even if unmapped) so callers can still report kafkaErrorCode for
+// an unmapped-but-present code, matching pre-SIO-1447 behavior.
+function classifyRecursive(err: MultipleErrors, depth: number): { code: number | null; kind: ToolErrorKind | null } {
+	if (depth > MAX_MULTIPLE_ERRORS_DEPTH) return { code: null, kind: null };
+	let firstCode: number | null = null;
+	for (const child of err.errors) {
+		if (!child) continue;
+		if (child instanceof MultipleErrors) {
+			const nested = classifyRecursive(child, depth + 1);
+			firstCode ??= nested.code;
+			if (nested.kind !== null) return { code: firstCode, kind: nested.kind };
+			continue;
+		}
+		const leaf = classifyLeaf(child);
+		firstCode ??= leaf.code;
+		if (leaf.kind !== null) return { code: firstCode, kind: leaf.kind };
+	}
+	return { code: firstCode, kind: null };
+}
+
+// Exported for unit tests (SIO-1087, SIO-1447).
 export function classifyKafkaError(err: unknown): ClassifiedKafkaError {
 	const message = err instanceof Error ? err.message : String(err);
 	if (!(err instanceof MultipleErrors)) {
 		return { kafkaErrorCode: null, kafkaErrorName: null, kind: null, message };
 	}
-	for (const child of err.errors) {
-		// SIO-1087: @platformatic/kafka's ProtocolError exposes the numeric code on `apiCode`; some
-		// wrapped errors use `errorCode`. Read both so a native-broker error isn't silently dropped.
-		const code = (child as { apiCode?: number }).apiCode ?? (child as { errorCode?: number }).errorCode;
-		if (typeof code === "number" && code !== 0) {
-			return {
-				kafkaErrorCode: code,
-				kafkaErrorName: KAFKA_ERROR_NAMES[code] ?? null,
-				kind: KAFKA_CODE_TO_KIND[code] ?? null,
-				message,
-			};
-		}
-	}
-	return { kafkaErrorCode: null, kafkaErrorName: null, kind: null, message };
+	const { code, kind } = classifyRecursive(err, 0);
+	return {
+		kafkaErrorCode: code,
+		kafkaErrorName: code !== null ? (KAFKA_ERROR_NAMES[code] ?? null) : null,
+		kind,
+		message,
+	};
 }
 
 async function getPartitionOffsetBounds(

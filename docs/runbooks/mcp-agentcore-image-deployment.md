@@ -147,7 +147,7 @@ No image is deleted from ECR by a normal deploy, so rollback is always available
 - Image tag `sio-1420-1421-1422-1423` on both repos. Live digests after this deploy:
   - kafka: `399987695868.dkr.ecr.eu-central-1.amazonaws.com/kafka-mcp-agentcore@sha256:55dda9df7b91f9a3369a8ac4149f13e4b1666df6f525962408ef6a66b71c543d`
   - aws: `399987695868.dkr.ecr.eu-central-1.amazonaws.com/aws-mcp-agentcore@sha256:3e2693033fda93c2d9f5dd6a3ca4c47ddf26f586783a7bf76237eda68aeb0fd0`
-- Hit the same transient ECR push 403 documented below (2026-08-06 entry) on both images again, on the first push attempt each time. Re-login + retry resolved both immediately, same as before — this is now a recurring-but-benign pattern on this repo, not a one-off.
+- Hit the same transient ECR push 403 documented below (2026-08-06 entry) on both images again, on the first push attempt each time. Re-login + retry resolved both immediately, same as before — this is now a recurring transient pattern observed on this repo, not a one-off; verify the account, IAM permissions, and repository policy if re-login and retry do not succeed.
 - toolCount canary unchanged from the prior deploy: kafka 61, aws 70. `MCP_TOOL_METRICS_DB_PATH` confirmed absent on both runtimes before and after (the 2026-08-06 stopgap removal held; not reintroduced by this deploy).
 
 **2026-08-06 (kafka v14 -> v16, aws v11 -> v13, SIO-1400/1402/1407):**

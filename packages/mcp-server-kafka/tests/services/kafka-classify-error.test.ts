@@ -2,7 +2,7 @@
 // SIO-1087: classifyKafkaError maps the Kafka protocol code onto the shared ToolErrorKind. These
 // pure-function tests protect the cross-datasource confidence/retry behavior that mapping drives.
 import { describe, expect, test } from "bun:test";
-import { MultipleErrors } from "@platformatic/kafka";
+import { MultipleErrors, NetworkError, TimeoutError } from "@platformatic/kafka";
 import { classifyKafkaError, KAFKA_CODE_TO_KIND } from "../../src/services/kafka-service.ts";
 
 // Build a MultipleErrors whose child carries a protocol code. The classifier reads `apiCode`
@@ -59,5 +59,96 @@ describe("classifyKafkaError (SIO-1087)", () => {
 		for (const [code, kind] of Object.entries(KAFKA_CODE_TO_KIND)) {
 			expect(classifyKafkaError(multiWithCode(Number(code))).kind).toBe(kind);
 		}
+	});
+
+	// SIO-1447: admin operations routed through kPerformWithRetry/#findCoordinator wrap a
+	// connection failure in a generic MultipleErrors with no protocol code at all -- e.g.
+	// admin.js:908 `new MultipleErrors('Listing consumer group offsets failed.', [error])`.
+	// The one-level apiCode/errorCode scan above never sees these; classifyKafkaError must
+	// recurse into nested MultipleErrors and read the library's own GenericError.code.
+	describe("SIO-1447: generic connection-failure wrappers with no protocol code", () => {
+		test("live repro shape: nested MultipleErrors -> MultipleErrors -> NetworkError(cause: ECONNREFUSED) classifies as network", () => {
+			// Mirrors the real call chain verified against @platformatic/kafka@2.0.1:
+			// admin.js:908 wraps #findCoordinator's error, which is connection-pool.js:155's
+			// 'Cannot connect to any broker.' MultipleErrors, whose child is connection.js:411's
+			// NetworkError carrying the raw Node ECONNREFUSED as .cause.
+			const econnrefused = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:9092"), {
+				code: "ECONNREFUSED",
+			});
+			const networkErr = new NetworkError("Connection to broker:9092 failed.", { cause: econnrefused });
+			const poolExhausted = new MultipleErrors("Cannot connect to any broker.", [networkErr]);
+			const err = new MultipleErrors("Listing consumer group offsets failed.", [poolExhausted]);
+
+			const c = classifyKafkaError(err);
+			expect(c.kind).toBe("network");
+		});
+
+		test("NetworkError with no .cause still classifies via GenericError.code alone", () => {
+			const err = new MultipleErrors("Describing groups failed.", [
+				new NetworkError("Connection closed while waiting for ready."),
+			]);
+			expect(classifyKafkaError(err).kind).toBe("network");
+		});
+
+		test("TimeoutError classifies as timeout despite the library bug (TimeoutError.code is actually PLT_KFK_NETWORK in 2.0.1)", () => {
+			// @platformatic/kafka@2.0.1's TimeoutError constructor calls
+			// super(NetworkError.code, ...) instead of super(TimeoutError.code, ...), so a real
+			// TimeoutError instance's .code is 'PLT_KFK_NETWORK', not 'PLT_KFK_TIMEOUT'.
+			// classifyLeaf's instanceof TimeoutError check (checked before the generic
+			// PLT_KFK_* code map) is what makes this resolve to "timeout" rather than the
+			// misleading "network" the buggy .code would otherwise produce. Assert the exact
+			// kind -- a regression that dropped the instanceof fallback would silently produce
+			// "network" instead, which a loose timeout-or-network assertion would not catch.
+			const err = new MultipleErrors("Listing consumer group offsets failed.", [
+				new TimeoutError("Connection to broker:9092 timed out."),
+			]);
+			expect(classifyKafkaError(err).kind).toBe("timeout");
+		});
+
+		test("ECONNRESET cause classifies as network", () => {
+			const econnreset = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+			const err = new MultipleErrors("Describing client quotas failed.", [
+				new NetworkError("Connection closed", { cause: econnreset }),
+			]);
+			expect(classifyKafkaError(err).kind).toBe("network");
+		});
+
+		test("ETIMEDOUT cause classifies as timeout", () => {
+			const etimedout = Object.assign(new Error("connect ETIMEDOUT"), { code: "ETIMEDOUT" });
+			const err = new MultipleErrors("Altering client quotas failed.", [
+				new NetworkError("Connection to broker:9092 failed.", { cause: etimedout }),
+			]);
+			expect(classifyKafkaError(err).kind).toBe("timeout");
+		});
+
+		test("protocol code still wins when both a code and a nested connection failure are present", () => {
+			// Precedence check: apiCode/errorCode (existing, most specific) must still be
+			// checked before falling into the new GenericError.code / .cause walk.
+			const child = Object.assign(new Error("protocol error 3"), { apiCode: 3 });
+			const err = new MultipleErrors("aggregate", [child, new NetworkError("unrelated network noise")]);
+			expect(classifyKafkaError(err).kind).toBe("not-found");
+		});
+
+		test("an earlier unmapped protocol code is preserved as kafkaErrorCode even when a later child resolves the kind", () => {
+			// Regression guard: classifyRecursive accumulates firstCode across siblings so a
+			// numeric code seen early (even unmapped, e.g. FENCED_LEADER_EPOCH=74) is not lost
+			// when a LATER child is what actually resolves `kind` -- returning that child's
+			// own {code: null, ...} directly would silently drop the earlier code.
+			const unmappedProtocolChild = Object.assign(new Error("protocol error 74"), { apiCode: 74 });
+			const econnrefused = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+			const err = new MultipleErrors("aggregate", [
+				unmappedProtocolChild,
+				new NetworkError("Connection failed.", { cause: econnrefused }),
+			]);
+			const c = classifyKafkaError(err);
+			expect(c.kind).toBe("network");
+			expect(c.kafkaErrorCode).toBe(74);
+		});
+
+		test("a MultipleErrors with only truly uninformative children (no code, no cause) still yields kind=null", () => {
+			const err = new MultipleErrors("Something failed.", [new Error("no signal here")]);
+			const c = classifyKafkaError(err);
+			expect(c.kind).toBeNull();
+		});
 	});
 });
