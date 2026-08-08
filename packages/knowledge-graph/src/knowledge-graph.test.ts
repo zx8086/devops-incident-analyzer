@@ -26,6 +26,7 @@ import {
 	priorRootCauses,
 	proposedChangesWithMr,
 	purgeUncuratedIncidents,
+	recordAppMapTopologyEdges,
 	recordIacChange,
 	recordIacPrompt,
 	recordIncident,
@@ -1477,6 +1478,62 @@ describe("SIO-1305 Orbit DEPENDS_ON writer", () => {
 			{ kind: "runs-on", from: "orders", to: "arn:x" },
 			{ kind: "depends-on", from: "", to: "styles-v3-service" },
 			{ kind: "depends-on", from: "lists-api", to: "" },
+		]);
+		expect(store.calls).toHaveLength(0);
+	});
+});
+
+// SIO-1457: DEPENDS_ON/CONSUMES_FROM edges from the per-incident application map.
+// Third writer on the shared rel tables -- the Orbit never-demote collision policy
+// is duplicated verbatim and is the load-bearing behavior under test.
+describe("SIO-1457 app-map topology writer", () => {
+	test("recordAppMapTopologyEdges stamps app-map provenance on a new depends-on edge", async () => {
+		const store = new InMemoryGraphStore();
+		await recordAppMapTopologyEdges(store, "depends-on", [
+			{ kind: "depends-on", from: "checkout-service", to: "payment-service" },
+		]);
+		const merge = store.calls.find((c) => c.cypher.includes("MERGE (a)-[r:DEPENDS_ON]->(b)"));
+		expect(merge?.cypher).toContain(
+			"SET r.discoveredBy = $appMapDiscoveredBy, r.tInvalid = '', r.consecutiveMisses = 0",
+		);
+		expect(merge?.params?.appMapDiscoveredBy).toBe("app-map");
+		const backfill = store.calls.find(
+			(c) => c.cypher.includes("[r:DEPENDS_ON]") && c.cypher.includes("coalesce(r.tValid, '') = ''"),
+		);
+		expect(backfill?.cypher).toContain("SET r.tValid = $now");
+	});
+
+	test("recordAppMapTopologyEdges writes consumes-from on the ConsumerGroup->KafkaTopic table", async () => {
+		const store = new InMemoryGraphStore();
+		await recordAppMapTopologyEdges(store, "consumes-from", [
+			{ kind: "consumes-from", from: "order-workers", to: "orders" },
+		]);
+		expect(
+			store.calls.some(
+				(c) => c.cypher === "MERGE (a:ConsumerGroup {name: $from})" && c.params?.from === "order-workers",
+			),
+		).toBe(true);
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (a)-[r:CONSUMES_FROM]->(b)"))).toBe(true);
+	});
+
+	test("recordAppMapTopologyEdges NEVER demotes an edge already owned by the topology sweep", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("r.discoveredBy = $topologyDiscoveredBy AND r.tInvalid = ''", [{ n: 1 }]);
+		await recordAppMapTopologyEdges(store, "depends-on", [
+			{ kind: "depends-on", from: "checkout-service", to: "payment-service" },
+		]);
+		expect(store.calls.some((c) => c.cypher.includes("count(r) AS n"))).toBe(true);
+		// No edge MERGE, no discoveredBy SET, no tValid backfill: the sweep-owned
+		// edge's provenance, tValid, and tInvalid are all left untouched.
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (a)-[r:DEPENDS_ON]->(b)"))).toBe(false);
+		expect(store.calls.some((c) => c.params?.appMapDiscoveredBy === "app-map")).toBe(false);
+	});
+
+	test("recordAppMapTopologyEdges skips records whose kind mismatches the call", async () => {
+		const store = new InMemoryGraphStore();
+		await recordAppMapTopologyEdges(store, "depends-on", [
+			{ kind: "consumes-from", from: "order-workers", to: "orders" },
+			{ kind: "depends-on", from: "", to: "payment-service" },
 		]);
 		expect(store.calls).toHaveLength(0);
 	});
