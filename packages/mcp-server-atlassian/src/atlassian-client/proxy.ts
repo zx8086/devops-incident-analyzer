@@ -207,7 +207,9 @@ export class AtlassianMcpProxy {
 		const windowMs = this.options.readinessFreshnessWindowMs ?? DEFAULT_READINESS_FRESHNESS_WINDOW_MS;
 		if (this.cloudId !== null && this.now() - this.lastUpstreamSuccessAt <= windowMs) return;
 		try {
-			await this.resolveCloudId();
+			// SIO-1452: this re-resolve just re-verifies an already-known cloudId on a
+			// stale readiness window -- log at debug so idle polling doesn't spam info.
+			await this.resolveCloudId({ logLevel: "debug" });
 		} catch (error) {
 			// A live probe can fail AFTER the transport call fulfilled (malformed
 			// body, configured site missing) -- the enqueue stamp would then mark
@@ -218,7 +220,7 @@ export class AtlassianMcpProxy {
 		}
 	}
 
-	async resolveCloudId(): Promise<void> {
+	async resolveCloudId(opts?: { logLevel?: "info" | "debug" }): Promise<void> {
 		// Rovo's Zod schema requires an object for arguments even when the tool takes no params.
 		// Omitting it yields a -32602 "expected object, received undefined" from the server.
 		// SIO-1097: serialize on the shared transport (see upstreamQueue) so the 30s
@@ -251,6 +253,7 @@ export class AtlassianMcpProxy {
 			throw new Error("No accessible resources: Atlassian returned an empty resource list");
 		}
 
+		const level = opts?.logLevel ?? "info";
 		const { siteName } = this.options;
 		if (siteName) {
 			const match = resources.find((r) => r.name === siteName);
@@ -258,13 +261,13 @@ export class AtlassianMcpProxy {
 				throw new Error(`No accessible resources: site "${siteName}" not found in Atlassian resources`);
 			}
 			this.cloudId = match.id;
-			log.info({ cloudId: this.cloudId, siteName }, "Resolved cloudId by siteName");
+			log[level]({ cloudId: this.cloudId, siteName }, "Resolved cloudId by siteName");
 		} else {
 			// resources.length > 0 is guaranteed by the empty check above
 			// biome-ignore lint/style/noNonNullAssertion: guarded by length check
 			const first = resources[0]!;
 			this.cloudId = first.id;
-			log.info({ cloudId: this.cloudId, site: first.name }, "Resolved cloudId (first resource)");
+			log[level]({ cloudId: this.cloudId, site: first.name }, "Resolved cloudId (first resource)");
 		}
 	}
 
