@@ -1533,6 +1533,19 @@ describe("SIO-1457 appMapForServices reader", () => {
 		const edges = await appMapForServices(store, ["checkout"]);
 		expect(edges).toEqual([]);
 	});
+
+	// CodeRabbit PR #644 round 2: the layer cap bounds ACCEPTED edges after
+	// affinity filtering -- the wider fetch limit is filtering headroom only.
+	test("consumes-from layer caps accepted edges at 50 even when more rows match affinity", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub(
+			"-[r:CONSUMES_FROM]->",
+			Array.from({ length: 80 }, (_, i) => ({ group: "checkout-workers", topic: `topic-${i}`, discoveredBy: "" })),
+		);
+		const edges = await appMapForServices(store, ["checkout"]);
+		expect(edges.length).toBe(50);
+		expect(edges.every((e) => e.kind === "consumes-from")).toBe(true);
+	});
 });
 
 // SIO-1457: DEPENDS_ON/CONSUMES_FROM edges from the per-incident application map.

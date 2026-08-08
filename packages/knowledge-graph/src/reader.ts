@@ -1169,7 +1169,11 @@ export async function appMapForServices(store: GraphStore, services: string[], a
 			`MATCH (g:ConsumerGroup)-[r:CONSUMES_FROM]->(t:KafkaTopic) WHERE ${validityClause("r", asOf)} RETURN g.name AS group, t.name AS topic, r.discoveredBy AS discoveredBy LIMIT $limit`,
 			asOf ? { limit: APP_MAP_LAYER_CAP * 4, asOf } : { limit: APP_MAP_LAYER_CAP * 4 },
 		);
+		// CodeRabbit PR #644 round 2: the layer cap applies to ACCEPTED edges, after
+		// affinity filtering -- the wider fetch limit only buys filtering headroom.
+		let accepted = 0;
 		for (const raw of consumes) {
+			if (accepted >= APP_MAP_LAYER_CAP) break;
 			const row = ConsumesRowSchema.safeParse(raw);
 			if (!row.success) continue;
 			if (!cleanServices.some((s) => nameAffinity(row.data.group, s))) continue;
@@ -1179,6 +1183,7 @@ export async function appMapForServices(store: GraphStore, services: string[], a
 				to: row.data.topic,
 				discoveredBy: row.data.discoveredBy ?? "",
 			});
+			accepted += 1;
 		}
 	}
 	return out;
