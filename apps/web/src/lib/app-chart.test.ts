@@ -1,7 +1,7 @@
 // apps/web/src/lib/app-chart.test.ts
 import { describe, expect, test } from "bun:test";
 import type { ApplicationTopology } from "@devops-agent/shared";
-import { buildApplicationChartOption } from "./app-chart.ts";
+import { buildApplicationChartOption, buildApplicationTextSummary } from "./app-chart.ts";
 
 const TOPOLOGY: ApplicationTopology = {
 	builtAtTurn: 1,
@@ -71,6 +71,26 @@ describe("buildApplicationChartOption", () => {
 		const observed = links.find((l) => l.source === "cg:order-workers");
 		expect(observed?.lineStyle).toBeUndefined();
 		expect(observed?.label?.formatter).toBe("lag 1200");
+	});
+
+	// SIO-1459: the accessible text view's data source -- one plain line per
+	// node/edge, no HTML markup, same fields the tooltips carry.
+	test("buildApplicationTextSummary renders every node and edge as plain text", () => {
+		const summary = buildApplicationTextSummary(TOPOLOGY);
+		expect(summary.nodes.length).toBe(TOPOLOGY.nodes.length);
+		expect(summary.edges.length).toBe(TOPOLOGY.edges.length);
+		expect(summary.nodes).toContainEqual(
+			"checkout-service: service, svc:checkout-service, error rate 8.0%, avg 240ms, 10000 transactions, service: checkout-service",
+		);
+		expect(summary.edges).toContainEqual("checkout-service calls payment-service (avg 240ms, 2.1% err)");
+		expect(summary.edges).toContainEqual(
+			"checkout-service runs-on payment-service (prior knowledge from earlier incidents)",
+		);
+		// Plain text only -- no markup from the tooltip path leaks in.
+		for (const line of [...summary.nodes, ...summary.edges]) {
+			expect(line).not.toContain("<b>");
+			expect(line).not.toContain("&lt;");
+		}
 	});
 
 	test("tooltip values are HTML-escaped and legend lists only used categories", () => {
