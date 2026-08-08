@@ -27,6 +27,7 @@ import { appendDailyLog, recordKeyDecision } from "../memory-writer.ts";
 import { extractTextFromContent } from "../message-utils.ts";
 import { getAgentByName } from "../prompt-context.ts";
 import { formatCommitSubject } from "./commit-style.ts";
+import { createLookupExamplesTool } from "./examples-tool.ts";
 // SIO-1072: the pure fleet-apply parsers/classifiers moved to fleet-apply-result.ts (dependency-free
 // leaf, mirroring SIO-1047's mr-live-state.ts extraction) so reconcile.ts's fleet-settlement pass
 // shares the SAME classification without importing nodes.ts (nodes.ts imports reconcile.ts -- a
@@ -1283,13 +1284,16 @@ const INFO_TOOL_NAMES = [
 // (supersedes SIO-966's local createQueryKnowledgeGraphTool). They are read-only by
 // construction, so the whole kg_* set is bound (no allowlist needed). Durable-memory
 // recall stays a LOCAL tool (search_memory): agent memory is REST infrastructure, not
-// MCP-exposed. Built per call (the memory tool closes over the agent name) -- cheap, and
-// keeps infoTools() pure. Exported for tests: asserts kg_* + search_memory are bound.
+// MCP-exposed. SIO-1450: lookup_examples is also LOCAL -- it reads on-disk markdown, not
+// an MCP server, and is agent-initiated (the model decides to call it, e.g. after a tool
+// error) rather than graph-selected like runbook_selection. Built per call (both local
+// tools close over the agent name) -- cheap, and keeps infoTools() pure. Exported for
+// tests: asserts kg_* + search_memory + lookup_examples are bound.
 export function infoTools(): StructuredToolInterface[] {
 	const allowed = new Set<string>(INFO_TOOL_NAMES);
 	const elasticReads = getToolsForDataSource(AGENT).filter((t) => allowed.has(t.name));
 	const kgTools = getToolsForDataSource("knowledge-graph");
-	return [...elasticReads, ...kgTools, createSearchMemoryTool(AGENT)];
+	return [...elasticReads, ...kgTools, createSearchMemoryTool(AGENT), createLookupExamplesTool(AGENT)];
 }
 
 // SIO-966: invoke a tool the LLM called, resolving it from the in-scope tools array
