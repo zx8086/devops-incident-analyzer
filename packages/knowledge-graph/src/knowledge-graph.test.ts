@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	ALTER_MIGRATIONS,
 	appliedChanges,
+	appMapForServices,
 	bindingsForServices,
 	blastRadiusForServices,
 	buildGraphContext,
@@ -1480,6 +1481,57 @@ describe("SIO-1305 Orbit DEPENDS_ON writer", () => {
 			{ kind: "depends-on", from: "lists-api", to: "" },
 		]);
 		expect(store.calls).toHaveLength(0);
+	});
+});
+
+// SIO-1457: the prior-knowledge overlay reader behind the ApplicationTopologyCard's
+// dashed edges. Row validation is the load-bearing behavior (CodeRabbit PR #644):
+// GraphStore.run does not validate rows, so missing endpoints must be skipped,
+// never stringified into "null"/"undefined" identifiers.
+describe("SIO-1457 appMapForServices reader", () => {
+	test("maps valid rows to edges and binds LIMIT in every query", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("-[r:DEPENDS_ON]->", [{ from: "checkout", to: "payment", discoveredBy: "topology-job" }]);
+		store.stub("-[r:RUNS_ON]->", [{ arn: "arn:aws:ecs:eu-west-1:1:service/prod/checkout", discoveredBy: null }]);
+		store.stub("-[r:CONSUMES_FROM]->", [{ group: "checkout-workers", topic: "orders", discoveredBy: "app-map" }]);
+		const edges = await appMapForServices(store, ["checkout"]);
+		expect(edges).toContainEqual({ kind: "depends-on", from: "checkout", to: "payment", discoveredBy: "topology-job" });
+		expect(edges).toContainEqual({
+			kind: "runs-on",
+			from: "checkout",
+			to: "arn:aws:ecs:eu-west-1:1:service/prod/checkout",
+			discoveredBy: "",
+		});
+		expect(edges).toContainEqual({
+			kind: "consumes-from",
+			from: "checkout-workers",
+			to: "orders",
+			discoveredBy: "app-map",
+		});
+		for (const call of store.calls) {
+			expect(call.cypher).toContain("LIMIT $limit");
+			expect(call.params?.limit).toBeDefined();
+		}
+	});
+
+	test("skips rows with missing endpoints instead of stringifying null/undefined", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("-[r:DEPENDS_ON]->", [
+			{ from: "checkout", to: null, discoveredBy: "" },
+			{ from: null, to: "payment" },
+			{ from: "checkout", to: "" },
+		]);
+		store.stub("-[r:RUNS_ON]->", [{ arn: null }]);
+		store.stub("-[r:CONSUMES_FROM]->", [{ group: "checkout-workers", topic: null }]);
+		const edges = await appMapForServices(store, ["checkout"]);
+		expect(edges).toEqual([]);
+	});
+
+	test("consumer groups without name affinity to any focus service are dropped", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("-[r:CONSUMES_FROM]->", [{ group: "billing-workers", topic: "invoices", discoveredBy: "" }]);
+		const edges = await appMapForServices(store, ["checkout"]);
+		expect(edges).toEqual([]);
 	});
 });
 

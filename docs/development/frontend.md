@@ -51,7 +51,7 @@ lsof -i :5173
 
 ## Component Architecture
 
-The app has grown to 30 components (`ls apps/web/src/lib/components/*.svelte`). They fall into five families.
+The app has grown to 34 components (`ls apps/web/src/lib/components/*.svelte`). They fall into five families.
 
 **Chat shell** — the core conversation UI:
 

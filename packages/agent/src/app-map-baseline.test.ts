@@ -16,11 +16,25 @@ describe("env tunables", () => {
 		expect(isAppMapBaselineEnabled({ APP_MAP_BASELINE_ENABLED: "0" } as NodeJS.ProcessEnv)).toBe(false);
 	});
 
+	// readPositiveIntEnv reads process.env directly; save/restore around each case.
 	test("timeout defaults to 8000 and rejects junk", () => {
-		expect(appMapBaselineTimeoutMs({} as NodeJS.ProcessEnv)).toBe(8000);
-		expect(appMapBaselineTimeoutMs({ APP_MAP_BASELINE_TIMEOUT_MS: "2500" } as NodeJS.ProcessEnv)).toBe(2500);
-		expect(appMapBaselineTimeoutMs({ APP_MAP_BASELINE_TIMEOUT_MS: "-5" } as NodeJS.ProcessEnv)).toBe(8000);
-		expect(appMapBaselineTimeoutMs({ APP_MAP_BASELINE_TIMEOUT_MS: "soon" } as NodeJS.ProcessEnv)).toBe(8000);
+		const prev = process.env.APP_MAP_BASELINE_TIMEOUT_MS;
+		try {
+			delete process.env.APP_MAP_BASELINE_TIMEOUT_MS;
+			expect(appMapBaselineTimeoutMs()).toBe(8000);
+			process.env.APP_MAP_BASELINE_TIMEOUT_MS = "2500";
+			expect(appMapBaselineTimeoutMs()).toBe(2500);
+			process.env.APP_MAP_BASELINE_TIMEOUT_MS = "-5";
+			expect(appMapBaselineTimeoutMs()).toBe(8000);
+			process.env.APP_MAP_BASELINE_TIMEOUT_MS = "soon";
+			expect(appMapBaselineTimeoutMs()).toBe(8000);
+			// The setTimeout max-delay clamp survives the helper migration.
+			process.env.APP_MAP_BASELINE_TIMEOUT_MS = "9999999999";
+			expect(appMapBaselineTimeoutMs()).toBe(2_147_483_647);
+		} finally {
+			if (prev === undefined) delete process.env.APP_MAP_BASELINE_TIMEOUT_MS;
+			else process.env.APP_MAP_BASELINE_TIMEOUT_MS = prev;
+		}
 	});
 
 	test("lookback defaults to now-1h and rejects non-relative windows", () => {

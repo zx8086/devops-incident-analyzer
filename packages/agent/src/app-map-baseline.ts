@@ -8,7 +8,7 @@
 // elasticsearch_search aggregation AFTER the ReAct loop and appending its output
 // to toolOutputs where the builder picks it up unchanged. Soft-failing:
 // a timeout/absence/error contributes nothing and never affects the answer.
-import type { ToolOutput } from "@devops-agent/shared";
+import { readPositiveIntEnv, type ToolOutput } from "@devops-agent/shared";
 
 // Default ON (the sub-agent env-tunable idiom): set APP_MAP_BASELINE_ENABLED=false
 // (or 0) to disable. Inert for non-elastic datasources regardless.
@@ -19,10 +19,11 @@ export function isAppMapBaselineEnabled(env: NodeJS.ProcessEnv = process.env): b
 
 const DEFAULT_TIMEOUT_MS = 8000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
-export function appMapBaselineTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
-	const parsed = Number(env.APP_MAP_BASELINE_TIMEOUT_MS);
-	if (Number.isInteger(parsed) && parsed > 0 && parsed <= MAX_TIMER_DELAY_MS) return parsed;
-	return DEFAULT_TIMEOUT_MS;
+// CodeRabbit PR #644: the shared helper supplies the fallback and logs invalid
+// input; the timer-delay clamp is preserved on top (a value past the setTimeout
+// max would fire immediately).
+export function appMapBaselineTimeoutMs(): number {
+	return Math.min(readPositiveIntEnv("APP_MAP_BASELINE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS), MAX_TIMER_DELAY_MS);
 }
 
 // Lookback for the destination aggregation. A fixed recent window (not the

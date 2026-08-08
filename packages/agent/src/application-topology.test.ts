@@ -7,6 +7,7 @@ import { describe, expect, test } from "bun:test";
 import type { ApplicationTopologyEdge, DataSourceResult } from "@devops-agent/shared";
 import {
 	buildApplicationTopology,
+	hasDestinationAggregation,
 	MAX_NODES,
 	mergeApplicationTopologyOverlay,
 	summarizeApplicationTopologyForPrompt,
@@ -302,6 +303,36 @@ describe("mergeApplicationTopologyOverlay", () => {
 		const built = buildApplicationTopology([kafkaResult([DESCRIBE_CG_OUT])], []);
 		expect(mergeApplicationTopologyOverlay(built, [], 0)).toBe(built);
 		expect(mergeApplicationTopologyOverlay(undefined, [], 0)).toBeUndefined();
+	});
+
+	// CodeRabbit PR #644: overlay edges arrive after observed ones; observed
+	// latency/error detail must survive a duplicate overlay edge carrying its
+	// own detail (the KG discoveredBy stamp).
+	test("observed detail survives an overlay duplicate carrying its own detail", () => {
+		const built = buildApplicationTopology([elasticResult([DESTINATION_AGG_OUT])], []);
+		const t = mergeApplicationTopologyOverlay(
+			built,
+			[{ from: "svc:checkout-service", to: "svc:payment-service", kind: "calls", detail: "orbit-name-match" }],
+			0,
+		);
+		const dup = t?.edges.find((e) => e.from === "svc:checkout-service" && e.to === "svc:payment-service");
+		expect(dup?.detail).toBe("avg 240ms, 2.1% err");
+		expect(dup?.priorKnowledge).toBeUndefined();
+	});
+});
+
+describe("hasDestinationAggregation", () => {
+	test("recognizes both string-wrapped and object-shaped payloads", () => {
+		expect(hasDestinationAggregation(DESTINATION_AGG_OUT.rawJson)).toBe(true);
+		expect(hasDestinationAggregation({ aggregations: DESTINATION_AGG_JSON })).toBe(true);
+		expect(hasDestinationAggregation(DESTINATION_AGG_JSON)).toBe(true);
+	});
+
+	test("rejects unrelated text containing the substring and non-matching shapes", () => {
+		expect(hasDestinationAggregation('log line mentioning by_destination routing {"hits": 3}')).toBe(false);
+		expect(hasDestinationAggregation({ by_service: { buckets: [] } })).toBe(false);
+		expect(hasDestinationAggregation(undefined)).toBe(false);
+		expect(hasDestinationAggregation(42)).toBe(false);
 	});
 });
 

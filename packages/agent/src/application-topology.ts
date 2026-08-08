@@ -153,9 +153,12 @@ function addEdge(acc: Accumulator, edge: ApplicationTopologyEdge): void {
 		return;
 	}
 	// An observed-this-turn sighting always wins over a prior-knowledge overlay
-	// duplicate of the same edge (and fills detail gaps either way): the merged
-	// edge stays priorKnowledge only when BOTH sightings were overlay-sourced.
-	const detail = edge.detail ?? existing.detail;
+	// duplicate of the same edge: the merged edge stays priorKnowledge only when
+	// BOTH sightings were overlay-sourced, and the EXISTING detail is preferred
+	// (CodeRabbit PR #644: overlay edges arrive after observed ones, so an
+	// incoming-priority detail would let a KG discoveredBy stamp overwrite this
+	// turn's observed latency/error text). Incoming detail only fills a gap.
+	const detail = existing.detail ?? edge.detail;
 	const merged: ApplicationTopologyEdge = { from: existing.from, to: existing.to, kind: existing.kind };
 	if (detail !== undefined) merged.detail = detail;
 	if (existing.priorKnowledge === true && edge.priorKnowledge === true) merged.priorKnowledge = true;
@@ -189,6 +192,15 @@ function edgeDetail(avgUs: number | null | undefined, errors: number | undefined
 	// SIO-787 idiom: divide-by-zero guard, never emit 0/0.
 	if (errors !== undefined && calls > 0) parts.push(`${((errors / calls) * 100).toFixed(1)}% err`);
 	return parts.length > 0 ? parts.join(", ") : undefined;
+}
+
+// SIO-1457 (CodeRabbit PR #644): the baseline-skip check in sub-agent.ts must use
+// the SAME structural detection as the builder -- a substring probe misses
+// object-shaped rawJson (buildPersistedToolOutput preserves structured JSON) and
+// false-positives on unrelated text containing "by_destination".
+export function hasDestinationAggregation(rawJson: unknown): boolean {
+	const root = aggregationRoot(rawJson);
+	return root !== undefined && DestinationAggSchema.safeParse(root).success;
 }
 
 function parseElasticOutputs(acc: Accumulator, outputs: ToolOutput[], focus: string[]): void {

@@ -17,6 +17,7 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { fetchAppMapBaseline, isAppMapBaselineEnabled } from "./app-map-baseline.ts";
+import { hasDestinationAggregation } from "./application-topology.ts";
 import { capSubAgentTimeoutMs, getGraphDeadlineAt } from "./graph-budget.ts";
 import { createLlm, type InvokableLlm } from "./llm.ts";
 import { getToolsForDataSource, withAwsEstate, withElasticDeployment } from "./mcp-bridge.ts";
@@ -1843,11 +1844,12 @@ ${state.correlationFetchDirective}`
 		if (dataSourceId === "elastic" && isAppMapBaselineEnabled()) {
 			const baselineStart = Date.now();
 			try {
+				// Structural detection (CodeRabbit PR #644): rawJson can be a string
+				// (prefixed-text payload) OR an object (structuredContent preserved by
+				// buildPersistedToolOutput) -- a substring probe misses the latter and
+				// false-positives on unrelated text.
 				const alreadyFetched = toolOutputs.some(
-					(o) =>
-						o.toolName === "elasticsearch_search" &&
-						typeof o.rawJson === "string" &&
-						o.rawJson.includes("by_destination"),
+					(o) => o.toolName === "elasticsearch_search" && hasDestinationAggregation(o.rawJson),
 				);
 				if (!alreadyFetched) {
 					const toolsByName = new Map(allTools.map((t) => [t.name, t]));

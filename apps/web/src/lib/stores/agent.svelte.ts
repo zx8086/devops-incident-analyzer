@@ -848,7 +848,12 @@ function createAgentStore() {
 		// SIO-1215 (CodeRabbit): a fresh topic starts a new investigation -- clear the prior
 		// topic's anomaly card before the resumed stream begins, so a fresh turn that never
 		// fires ml_anomaly_explainer doesn't inherit a stale card via buildAssistantMessage.
-		if (decision === "fresh") mlAnomalyExplainer = null;
+		// SIO-1457 (CodeRabbit PR #644): same stale-inherit exposure for both topology maps.
+		if (decision === "fresh") {
+			mlAnomalyExplainer = null;
+			networkTopology = null;
+			applicationTopology = null;
+		}
 		try {
 			const response = await fetch("/api/agent/topic-shift", {
 				method: "POST",
