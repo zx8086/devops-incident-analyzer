@@ -54,7 +54,7 @@ The agent's investigation is strictly read-only against production systems. It o
 | ES   | | Kafka| | Capella| | Konnect| | GitLab | |Atlassian|
 | MCP  | | MCP  | | MCP    | | MCP    | | MCP    | | MCP     |
 | :9080| | :9081| | :9082  | | :9083  | | :9084  | | :9085   |
-|96-112| | 15-55| | ~37    | | 67+    | | proxy+ | | proxy+  |
+|101-117| | 11-61| | ~39    | | 67+    | | proxy+ | | proxy+  |
 | tools| | gated| | tools  | | tools  | | custom | | custom  |
 +------+ +------+ +--------+ +--------+ +--------+ +---------+
     |        |          |         |         |         |
@@ -66,7 +66,7 @@ The agent's investigation is strictly read-only against production systems. It o
 +------+ +------+ +--------+ +--------+ +--------+ +---------+
 ```
 
-Tool counts are dynamic -- they reflect connected MCP tools at runtime. The Elasticsearch `96-112` range depends on `EC_API_KEY`: 96 cluster tools always, plus 16 conditional cloud/billing tools only when that org-scoped key is set (see the component table below). Proxy-based servers (GitLab, Atlassian) discover tools from the remote native MCP endpoint at startup, so totals vary. The agent targets 210+ tools end-to-end when all servers are connected.
+Tool counts are dynamic -- they reflect connected MCP tools at runtime. The Elasticsearch `101-117` range depends on `EC_API_KEY`: 101 cluster tools always, plus 16 conditional cloud/billing tools only when that org-scoped key is set (see the component table below). Proxy-based servers (GitLab, Atlassian) discover tools from the remote native MCP endpoint at startup, so totals vary. The agent targets 210+ tools end-to-end when all servers are connected.
 
 ---
 
@@ -125,14 +125,14 @@ Each MCP server is an independent deployable package with its own entry point, c
 | Shared Library | `packages/shared` | Cross-package types, Zod schemas, bootstrap function, telemetry, logging |
 | Checkpointer | `packages/checkpointer` | LangGraph state persistence (memory or bun:sqlite) |
 | Observability | `packages/observability` | Pino logger factory, OpenTelemetry span helpers, request-scoped child loggers |
-| Elasticsearch MCP | `packages/mcp-server-elastic` | 112 tools (96 cluster incl. 9 ML anomaly-detection + 16 conditional cloud/billing on `EC_API_KEY`) for cluster health, index management, search, snapshots, mappings, ML jobs/datafeeds, Elastic Cloud deployments, hardware profiles, plan auditing, and billing |
-| Kafka MCP | `packages/mcp-server-kafka` | 15 base tools + up to 40 gated tools (Schema Registry + ksqlDB + Connect + REST Proxy) for cluster info, topic management, consumer groups, message consumption |
+| Elasticsearch MCP | `packages/mcp-server-elastic` | 117 tools (101 cluster incl. 9 ML anomaly-detection + 4 ES|QL/async-search + 16 conditional cloud/billing on `EC_API_KEY`) for cluster health, index management, search, snapshots, mappings, ML jobs/datafeeds, ES|QL + async search, Elastic Cloud deployments, hardware profiles, plan auditing, and billing |
+| Kafka MCP | `packages/mcp-server-kafka` | 11 base tools + up to 50 gated tools (Schema Registry + ksqlDB + Connect + REST Proxy) for cluster info, topic management, consumer groups, message consumption |
 | Couchbase MCP | `packages/mcp-server-couchbase` | ~37 tools (SIO-1107 official Couchbase tools) for cluster health, bucket listing, N1QL queries, INFER-based schema, EXPLAIN, Index Advisor + covering-index detectors, playbooks |
 | Konnect MCP | `packages/mcp-server-konnect` | 15 enhanced tools + proxy surface for services, routes, plugins, consumers, upstreams, analytics |
 | GitLab MCP | `packages/mcp-server-gitlab` | Proxy + 5-8 custom tools for CI/CD pipelines, merge requests, code analysis, issues |
 | Atlassian MCP | `packages/mcp-server-atlassian` | Proxy + custom tools for Jira issues, Confluence pages, projects, and ticket metadata |
 | AWS MCP | `packages/mcp-server-aws` | Multi-estate AWS read-only tools — CloudWatch (logs, Logs Insights, metrics, Metrics Insights SQL, alarms), EC2 + network-path tracing (route tables, NAT gateways, NACLs, flow logs, transit gateways, VPC peering), ECS, Lambda, RDS, S3, X-Ray, CloudFormation, DynamoDB, ElastiCache, EventBridge/SNS/SQS, Step Functions, Config, Health, Tags. Cross-account `AssumeRole` per estate; `aws_list_estates` enumerates configured targets. See [AWS Estate Onboarding](../runbooks/aws-estate-onboarding.md). |
-| Web Frontend | `apps/web` | SvelteKit app with SSE streaming, 30 components (chat shell, per-datasource findings cards, IaC/HITL cards, HIL-learning cards, create-ticket), Tailwind CSS |
+| Web Frontend | `apps/web` | SvelteKit app with SSE streaming, 34 components (chat shell, per-datasource findings cards incl. network/application topology + ML-anomaly explainer, IaC/HITL cards, HIL-learning cards, create-ticket), Tailwind CSS |
 | Agent Definitions | `agents/incident-analyzer` | YAML/Markdown: SOUL.md, RULES.md, agent.yaml, tools/*.yaml, skills/*.md, compliance/ |
 
 ### Package Dependency Graph

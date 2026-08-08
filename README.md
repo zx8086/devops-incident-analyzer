@@ -138,6 +138,21 @@ bun test packages/gitagent-bridge/src/index.test.ts
 bun test packages/agent/src/validation.test.ts
 ```
 
+### Evals & audits
+
+On-demand quality harness (none run in CI). Scripts are mirrored into the root `package.json`, so `bun run eval:*` works from the repo root:
+
+```bash
+bun run eval:agent                 # end-to-end LangSmith final_response regression (full graph)
+bun run eval:incident-replay       # live-replay incident eval + trajectory-grounded evaluators
+bun run eval:incident-replay -- --ticket DEVOPS-1234   # scope to one dataset example (SIO-1454)
+bun run eval:mcp-tool              # MCP tool-call correctness eval (per datasource)
+bun run eval:tool-probe            # direct per-tool health probe (which tools return data)
+bun run eval:spec-audit            # tier-1 static/semantic OKF spec audit
+```
+
+Full reference (tiers, sound-freeze record/replay, feedback keys, cost) in [`packages/agent/src/eval/README.md`](packages/agent/src/eval/README.md) and [docs/development/testing.md](docs/development/testing.md).
+
 ## Environment Variables
 
 See [.env.example](.env.example) for the full list. Minimum required:

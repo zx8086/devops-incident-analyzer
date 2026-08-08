@@ -56,7 +56,7 @@ schemas.ts (Zod) -------> configSchema.parse()
 
 **Package:** `packages/mcp-server-elastic`
 **Config directory:** `packages/mcp-server-elastic/src/config/`
-**Tool count:** 112 (96 cluster incl. 9 ML anomaly-detection + 16 conditional cloud/billing on `EC_API_KEY`)
+**Tool count:** 117 (101 cluster incl. 9 ML anomaly-detection + 4 ES|QL/async-search SIO-1391 + 16 conditional cloud/billing on `EC_API_KEY`)
 
 ### Configuration Schema
 
@@ -201,7 +201,7 @@ Notes:
 
 **Package:** `packages/mcp-server-kafka`
 **Config directory:** `packages/mcp-server-kafka/src/config/`
-**Tool count:** 15 base + up to 40 gated (8 SR reads + 7 ksqlDB + 4 Connect reads + 5 Connect writes/destructive + 7 SR writes/destructive + 9 REST Proxy). Maximum with full Confluent stack and `KAFKA_ALLOW_WRITES`+`KAFKA_ALLOW_DESTRUCTIVE` enabled is 55 tools. Asserted by `tests/tools/full-stack-tools.test.ts`.
+**Tool count:** 11 base + up to 50 gated (8 SR reads + 7 ksqlDB + 4 Connect reads + 5 Connect writes/destructive + 7 SR writes/destructive + 9 REST Proxy). Maximum with full Confluent stack and `KAFKA_ALLOW_WRITES`+`KAFKA_ALLOW_DESTRUCTIVE` enabled is 61 tools. Asserted by `tests/tools/full-stack-tools.test.ts` (`toBe(11)` baseline, `toBe(61)` full stack).
 
 ### Configuration Schema
 

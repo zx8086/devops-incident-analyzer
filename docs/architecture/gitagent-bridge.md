@@ -168,8 +168,14 @@ the Haiku fallback). Changing either model requires the
 
 **Model configuration example (sub-agent):**
 ```yaml
+# All seven sub-agent manifests currently declare claude-sonnet-4-6 (SIO-1404,
+# after SIO-1367 briefly moved them to claude-haiku-4-5). A sub-agent is a
+# TOOL_BINDING_ROLE, so it declares no `fallback:` (RunnableWithFallbacks does
+# not implement bindTools()); see the comment in each agent.yaml. The
+# SUB_AGENT_MANIFEST_MODEL_ENABLED flag (default on) governs whether this
+# manifest model actually applies.
 model:
-  preferred: claude-haiku-4-5
+  preferred: claude-sonnet-4-6
   constraints:
     temperature: 0.1
     max_tokens: 2048

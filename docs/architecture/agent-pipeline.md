@@ -642,7 +642,7 @@ Tool scoping is handled by `getToolsForDataSource()` in `mcp-bridge.ts`, which r
 
 ## Tool Selection
 
-Sub-agents can receive anywhere from ~15 to 112 MCP tools from their connected server (the per-server totals in the table below). Passing all tools to a ReAct agent in a single prompt risks exceeding context window limits and degrades tool selection accuracy. The action-driven tool selection system reduces each sub-agent's tool set to 5-25 tools based on what the user's query actually needs.
+Sub-agents can receive anywhere from ~11 to 117 MCP tools from their connected server (the per-server totals in the table below). Passing all tools to a ReAct agent in a single prompt risks exceeding context window limits and degrades tool selection accuracy. The action-driven tool selection system reduces each sub-agent's tool set to 5-25 tools based on what the user's query actually needs.
 
 ### Selection Flow
 
@@ -693,8 +693,8 @@ The `input_schema.properties.action.enum` array in the same YAML lists all valid
 
 | Datasource | Total MCP Tools | Action Categories | Typical Filtered Set |
 |------------|----------------|-------------------|---------------------|
-| elastic | 112 (96 cluster incl. 9 ML anomaly-detection + 16 cloud/billing on `EC_API_KEY`) | 13 (search, cluster_health, node_info, index_management, shard_analysis, ingest_pipeline, template_management, alias_management, document_ops, snapshot, diagnostics, transform_management, ml_monitoring) plus cloud/billing (cloud_deployment, billing) | 3-15 |
-| kafka | 15-55 (gated by SR/ksqlDB/Connect/REST Proxy + write/destructive flags) | 8 (consumer_lag, topic_throughput, dlq_messages, cluster_info, describe_topic, schema_registry, ksql, write_ops) | 3-10 |
+| elastic | 117 (101 cluster incl. 9 ML anomaly-detection + 4 ES|QL/async-search + 16 cloud/billing on `EC_API_KEY`) | 13 (search, cluster_health, node_info, index_management, shard_analysis, ingest_pipeline, template_management, alias_management, document_ops, snapshot, diagnostics, transform_management, ml_monitoring) plus cloud/billing (cloud_deployment, billing) | 3-15 |
+| kafka | 11-61 (gated by SR/ksqlDB/Connect/REST Proxy + write/destructive flags) | 8 (consumer_lag, topic_throughput, dlq_messages, cluster_info, describe_topic, schema_registry, ksql, write_ops) | 3-10 |
 | couchbase | ~37 (SIO-1107 adopted the official Couchbase tools: buckets, INFER-based schema, EXPLAIN, Index Advisor, covering-index detectors) | 8 (system_vitals, fatal_requests, slow_queries, expensive_queries, index_analysis, node_status, document_ops, query_execution) | 3-8 |
 | konnect | 67+ | 9 (api_requests, service_config, route_config, plugin_chain, data_plane_health, certificate_status, control_plane_management, consumer_management, portal_management) | 3-12 |
 | gitlab | 21+ (proxy-discovered + 5 custom code-analysis) | 5 (issues, merge_requests, pipelines, search, code_analysis) | 3-12 |

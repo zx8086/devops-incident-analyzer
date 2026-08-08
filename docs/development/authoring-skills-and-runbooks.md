@@ -1,7 +1,7 @@
 # Authoring Skills and Runbooks
 
 > **Targets:** Gitagent 0.1 | Bun 1.3.9+ | DevOps Incident Analyzer orchestrator
-> **Last updated:** 2026-04-10
+> **Last updated:** 2026-08-08
 
 The incident analyzer's orchestrator agent reasons with two kinds of Markdown content that are loaded into its system prompt at startup: **skills** (multi-step procedures the agent follows) and **knowledge entries** (reference material the agent consults, of which **runbooks** are the most common). This guide explains when to author each, the file conventions, the activation flow, and the known footguns.
 
@@ -233,7 +233,11 @@ Read-only suggestions only. Never embed write operations. HITL or
 escalation guidance if appropriate.
 ```
 
-Runbooks are pure prose read by the LLM. There is no schema enforcement on their structure beyond "it must be valid Markdown." (OKF frontmatter -- `type`, `title`, `status`, `triggers`, `generated`, `stale_after` -- is validated separately; see the OKF design spec.)
+Runbooks are pure prose read by the LLM. There is no schema enforcement on their structure beyond "it must be valid Markdown." (OKF frontmatter -- `type`, `title`, `status`, `triggers`, `generated`, `stale_after`, `tools` -- is validated by `RunbookFrontmatterSchema` in `packages/gitagent-bridge/src/types.ts`; see the OKF design spec `docs/superpowers/specs/2026-07-29-okf-runbook-alignment-design.md`.)
+
+**Lifecycle fields gate selection, not just honesty (SIO-1287/1289).** The `status` and `stale_after` frontmatter fields are threaded into the runbook selector (`manifest-loader.ts`): a runbook with `status: deprecated`, or whose `stale_after` date is in the past, is treated as a "do not put in the prompt" signal -- it is excluded from selection rather than merely flagged. Set `status: stable` on a runbook you want selectable; use `draft` while authoring and `deprecated` to retire one without deleting the file.
+
+**OKF bundle roots (SIO-1290).** Each agent's `knowledge/` directory carries an OKF bundle-root file `knowledge/index.md` with an `okf_version:` header (alongside the `knowledge/index.yaml` category registry). Both the incident-analyzer and elastic-iac knowledge bundles have one; leave the `okf_version` in place when adding categories.
 
 #### Conventions worth stealing (SIO-1347, guidance only)
 
@@ -264,7 +268,22 @@ Runbooks reference MCP tool names directly in prose (for example, `capella_get_l
 
 **As of, this binding is enforced statically by `bun test`.**
 
-The validator lives at `packages/gitagent-bridge/src/runbook-validator.test.ts`. It runs on every `bun test` invocation and fails if any runbook cites a tool name that is not present in the union of `action_tool_map` entries across the agent's `tools/*.yaml` files. It also fails if the prose backticks and the `## All Tools Used Are Read-Only` tail section disagree within a single runbook.
+The validator logic lives at `packages/gitagent-bridge/src/runbook-validator.ts` (extracted from the test in SIO-1288; `runbook-validator.test.ts` now just imports and drives it). It runs on every `bun test` invocation and fails if any runbook cites a tool name that is not present in the union of `action_tool_map` entries across the agent's `tools/*.yaml` files. It also fails if the prose backticks and the tool declaration disagree within a single runbook.
+
+**Declaring a runbook's tools -- two ways (SIO-1289).** A runbook can declare its tool list either as the `## All Tools Used Are Read-Only` prose tail section (below) **or** as a `tools:` list in the OKF frontmatter, e.g.:
+
+```yaml
+---
+type: runbook
+title: High error rate on a service
+status: stable
+tools:
+  - elasticsearch_esql_query
+  - kafka_get_consumer_group_lag
+---
+```
+
+The validator reads the `tools:` frontmatter when present (`runbook-validator.ts:203`) and cross-checks it against the prose citations the same way it cross-checks the tail section.
 
 **Authoring rules enforced by the validator:**
 
@@ -342,3 +361,11 @@ The extension of the runbook tool-name validator enforces this rule statically. 
 - [Agent Pipeline](../architecture/agent-pipeline.md) -- which pipeline node applies which skill
 - [Adding MCP Tools](adding-mcp-tools.md) -- the other side of the tool-name binding
 - [CLAUDE.md](../../CLAUDE.md) -- project-wide rules (no emojis, Linear issue conventions)
+
+---
+
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-08-08 | SIO-1282..1434 OKF sync: validator path corrected (`runbook-validator.test.ts` -> extracted `runbook-validator.ts`, SIO-1288); documented the `tools:` frontmatter tool declaration (SIO-1289) as an alternative to the prose tail section; documented lifecycle-aware selection (`status: deprecated` / past `stale_after` excludes a runbook from the prompt, SIO-1287/1289) and the OKF `knowledge/index.md` bundle roots with `okf_version` (SIO-1290). Per-datasource runbook bundles (SIO-1432/1433/1434) were already covered. |
