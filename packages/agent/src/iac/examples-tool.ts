@@ -41,16 +41,19 @@ function parseExample(content: string): ParsedExample {
 	const lines = content.split("\n");
 	const heading = (lines[0] ?? "").replace(/^#+\s*/, "").trim();
 	let tags: string[] = [];
-	// Scan (rather than assume a fixed line index) so blank lines between the heading and the
-	// Tags line don't shift it out from under a hardcoded offset.
-	const tagLineIndex = lines.findIndex((line) => /^Tags:\s*(.+)$/i.test(line));
+	// CodeRabbit (PR #638): only the metadata block immediately after the heading may declare
+	// tags -- skip blank lines, then look at the FIRST non-blank line only. Scanning the whole
+	// file (the prior findIndex-over-everything approach) let a body line that merely started
+	// with "Tags:" (e.g. prose describing another file's frontmatter) be mistaken for the real
+	// metadata line, silently swallowing genuine body content that preceded it.
 	let bodyStart = 1;
-	if (tagLineIndex !== -1) {
-		const tagLine = lines[tagLineIndex]?.match(/^Tags:\s*(.+)$/i);
-		if (tagLine?.[1]) {
-			tags = tagLine[1].split(",").map((t) => t.trim().toLowerCase());
-			bodyStart = tagLineIndex + 1;
-		}
+	while (bodyStart < lines.length && lines[bodyStart]?.trim() === "") bodyStart++;
+	const tagLine = lines[bodyStart]?.match(/^Tags:\s*(.+)$/i);
+	if (tagLine?.[1]) {
+		tags = tagLine[1].split(",").map((t) => t.trim().toLowerCase());
+		bodyStart += 1;
+	} else {
+		bodyStart = 1;
 	}
 	const body = lines.slice(bodyStart).join("\n").trim();
 	return { heading, tags, body };

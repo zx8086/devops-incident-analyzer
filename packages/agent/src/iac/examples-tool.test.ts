@@ -67,8 +67,10 @@ describe("runExamplesLookup", () => {
 
 		const out = await runExamplesLookup(TEST_AGENT, { query: "general" });
 
+		// All 5 fixtures match "general" -- assert the cap actually bites (exactly 3), not just
+		// "at most 3", which would also pass if the cap silently broke and returned 0 or 1.
 		const matchCount = out.split("\n## ").length; // headings are joined with "\n## "
-		expect(matchCount).toBeLessThanOrEqual(3);
+		expect(matchCount).toBe(3);
 	});
 
 	test("returns the empty-result string when the agent has no examples directory at all", async () => {
@@ -89,6 +91,35 @@ describe("runExamplesLookup", () => {
 		const out = await runExamplesLookup(TEST_AGENT, { query: "beta" });
 
 		expect(out).toContain("Some heading");
+	});
+
+	// CodeRabbit (PR #638): tag detection scanned the WHOLE file for a "Tags:"-prefixed line,
+	// so a body line that happens to start with "Tags:" (e.g. describing another file's
+	// frontmatter) was wrongly treated as the metadata line -- silently swallowing the real
+	// intro body content that preceded it into a "tags" region that gets discarded, and
+	// treating the coincidental line's content as if it were real tags.
+	test("does not mistake a body-prose line starting with 'Tags:' for the metadata line", async () => {
+		// No legitimate "Tags:" metadata line at all -- the only line starting with "Tags:" is
+		// body prose describing another file's frontmatter. Heading alone must still be enough
+		// to match, and the real intro content must survive into the returned body.
+		writeExample(
+			"body-tags-lookalike.md",
+			[
+				"# A heading about situation handling",
+				"",
+				"Real intro body content explaining the situation clearly here.",
+				"",
+				"Example runbook frontmatter looks like this:",
+				"Tags: production, urgent",
+				"",
+				"That frontmatter pattern is what OKF runbooks use, for contrast.",
+			].join("\n"),
+		);
+
+		const out = await runExamplesLookup(TEST_AGENT, { query: "situation handling" });
+
+		expect(out).toContain("Real intro body content");
+		expect(out).toContain("frontmatter pattern is what OKF runbooks use");
 	});
 
 	// SIO-1450 regression: found via manual smoke test with two real examples whose headings
