@@ -53,10 +53,16 @@ describe("destinationAggregationArgs", () => {
 		expect(query.bool.filter).toContainEqual({ exists: { field: "span.destination.service.resource" } });
 		expect(query.bool.filter).toContainEqual({ range: { "@timestamp": { gte: "now-1h" } } });
 		const aggs = args.aggs as {
-			by_source: { terms: { field: string }; aggs: { by_destination: { terms: { field: string } } } };
+			by_source: {
+				terms: { field: string; size: number };
+				aggs: { by_destination: { terms: { field: string; size: number } } };
+			};
 		};
 		expect(aggs.by_source.terms.field).toBe("service.name");
 		expect(aggs.by_source.aggs.by_destination.terms.field).toBe("span.destination.service.resource");
+		// SIO-1460: shrunk fan-out (the card/prompt/KG use far less; KG caps at 50 edges).
+		expect(aggs.by_source.terms.size).toBe(50);
+		expect(aggs.by_source.aggs.by_destination.terms.size).toBe(25);
 	});
 });
 

@@ -35,8 +35,11 @@ export function appMapBaselineLookback(env: NodeJS.ProcessEnv = process.env): st
 	return v && /^now-\d+[mhd]$/.test(v) ? v : DEFAULT_LOOKBACK;
 }
 
-const MAX_SOURCE_SERVICES = 100;
-const MAX_DESTINATIONS_PER_SERVICE = 50;
+// SIO-1460: shrunk from 100x50. The card, prompt summary, and KG derive all consume
+// far less than the old fan-out (KG caps at 50 edges), so a smaller aggregation is a
+// pure payload/latency saving with no loss to any downstream consumer.
+const MAX_SOURCE_SERVICES = 50;
+const MAX_DESTINATIONS_PER_SERVICE = 25;
 
 export type BaselineInvoke = (toolName: string, args: Record<string, unknown>) => Promise<unknown>;
 

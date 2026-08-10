@@ -54,6 +54,9 @@ describe("buildApplicationChartOption", () => {
 		// Short-named kinds are labeled at rest; ARN-named AWS resources only on hover.
 		expect(service.label?.show).toBe(true);
 		expect(awsResource.label?.show).toBe(false);
+		// SIO-1460: dependency nodes are unlabeled at rest (hover/emphasis only) to cut
+		// the label storm now that host families are collapsed.
+		expect(byId.get("dep:postgresql")?.label?.show).toBe(false);
 	});
 
 	test("services above the APM error-rate threshold get the red ring; healthy ones do not", () => {
