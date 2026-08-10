@@ -26,6 +26,7 @@ const realMemoryBackend = { ...realMemoryBackendNs };
 
 mock.module("../memory-backend.ts", () => realMemoryBackend);
 
+import { _setGraphStoreForTesting, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
 import {
 	buildFleetFactDecision,
 	buildFleetFactRationale,
@@ -1028,6 +1029,69 @@ describe("fleet-upgrade MAX_AGENTS blast-radius override (SIO-927)", () => {
 		expect(previewArgs).toHaveLength(1);
 		expect(previewArgs[0]?.deployment).toBe("eu-cld");
 		expect(previewArgs[0]).not.toHaveProperty("maxAgents");
+	});
+});
+
+// SIO-1461: applyFleetUpgrade records a fleet-upgrade ConfigChange (no MR) so the imperative
+// bulk_upgrade shows in the deployment's "recent changes" history.
+describe("applyFleetUpgrade KG ConfigChange write (SIO-1461)", () => {
+	const prev = process.env.KNOWLEDGE_GRAPH_ENABLED;
+	afterEach(() => {
+		if (prev === undefined) delete process.env.KNOWLEDGE_GRAPH_ENABLED;
+		else process.env.KNOWLEDGE_GRAPH_ENABLED = prev;
+		_setGraphStoreForTesting(null);
+	});
+
+	test("a successful apply writes an applied fleet-upgrade ConfigChange with NO MR/stack instance", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		mockTools({
+			gitlab_trigger_fleet_upgrade_apply: () =>
+				'[201] {"deployment":"eu-cld","version":"9.4.2","pipelineId":2606400810,"status":"created"}',
+			gitlab_get_pipeline: () => '[200] {"id":2606400810,"status":"success"}',
+			gitlab_get_fleet_upgrade_apply_result: () =>
+				`[200] ${JSON.stringify({
+					pipelineId: 2606400810,
+					status: "success",
+					report: JSON.stringify({
+						mode: "apply",
+						action_id: "act-1",
+						apply: { poll_status: "COMPLETE", acked: 1608, created: 1608, failed_silent: 0 },
+					}),
+				})}`,
+		});
+		const { applyFleetUpgrade } = await import("./nodes.ts");
+		const out = await applyFleetUpgrade(
+			stateWith({ requestId: "fleet-1", fleetUpgradeReport: report({ deployment: "eu-cld", targetVersion: "9.4.2" }) }),
+		);
+		expect(out.fleetUpgradeResult?.status).toBe("applied");
+		const change = store.calls.find((c) => c.cypher.includes("MERGE (c:ConfigChange"));
+		expect(change?.params?.id).toBe("fleet-1");
+		expect(change?.params?.outcome).toBe("applied");
+		expect(
+			store.calls.some((c) => c.cypher.includes("MERGE (d:ElasticDeployment") && c.params?.name === "eu-cld"),
+		).toBe(true);
+		expect(store.calls.some((c) => c.cypher.includes("VIA_WORKFLOW") && c.params?.name === "fleet-upgrade")).toBe(true);
+		// Fleet has no config MR and no single repo stack.
+		expect(store.calls.some((c) => c.cypher.includes("PROPOSED_IN"))).toBe(false);
+		expect(store.calls.some((c) => c.cypher.includes("TARGETS"))).toBe(false);
+	});
+
+	test("a blocked (locked) apply writes no ConfigChange", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		mockTools({
+			gitlab_trigger_fleet_upgrade_apply: () =>
+				'[423] {"status":"locked","note":"a fleet pipeline is already running"}',
+		});
+		const { applyFleetUpgrade } = await import("./nodes.ts");
+		const out = await applyFleetUpgrade(
+			stateWith({ requestId: "fleet-2", fleetUpgradeReport: report({ deployment: "eu-cld", targetVersion: "9.4.2" }) }),
+		);
+		expect(out.fleetUpgradeResult?.status).toBe("blocked");
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (c:ConfigChange"))).toBe(false);
 	});
 });
 

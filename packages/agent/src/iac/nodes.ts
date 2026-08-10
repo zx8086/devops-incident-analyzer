@@ -44,6 +44,15 @@ import {
 } from "./fleet-apply-result.ts";
 import { evaluateGuards, validateIlmPhaseOrdering } from "./guards.ts";
 import { filterAgentKnowledge } from "./knowledge-selector.ts";
+// SIO-1461: ConfigChange KG writes for the non-gitops maker lanes (drift-reconcile,
+// fleet-upgrade, synthetics-push). lane-knowledge.ts is a dependency-free leaf; it
+// imports no runtime code from this file, so nodes.ts -> lane-knowledge.ts is acyclic.
+import {
+	fleetChangeOutcome,
+	reconcileChangeOutcome,
+	recordLaneConfigChange,
+	syntheticsChangeOutcome,
+} from "./lane-knowledge.ts";
 import { classifyLiveState, lifecycleRank, lifecycleTag } from "./lifecycle.ts";
 import {
 	computeIlmLiveParity,
@@ -9924,6 +9933,22 @@ export async function reconcileStack(state: IacStateType): Promise<Partial<IacSt
 		...(result.note && { note: result.note }),
 	});
 
+	// SIO-1461: record the reconcile MR as a ConfigChange so it appears in the
+	// deployment's "recent changes" history. Keyed per (turn, stack, direction) --
+	// distinct from the turn requestId (there can be several reconcile MRs per turn),
+	// stable so a reused MR MERGEs the same node. opened/reused -> "proposed" (the KG
+	// reconciler promotes it post-merge, like a gitops MR); skipped/blocked -> no write.
+	await recordLaneConfigChange({
+		id: `${state.requestId}:${current.stack}:${result.direction}`,
+		deployment: state.targetDeployment,
+		workflow: "drift-reconcile",
+		outcome: reconcileChangeOutcome(result.status),
+		summary: `reconcile ${current.stack} (${result.direction})`,
+		mrUrl: result.mrUrl,
+		stackInstanceId: state.targetDeployment && current.stack ? `${state.targetDeployment}/${current.stack}` : undefined,
+		threadId: state.threadId || undefined,
+	});
+
 	return { reconcileResults: [...state.reconcileResults, result] };
 }
 
@@ -10981,6 +11006,18 @@ export async function pushSynthetics(state: IacStateType): Promise<Partial<IacSt
 		"iac synthetics push: result",
 	);
 	await emitSyntheticsPushResult(result);
+	// SIO-1461: record the synthetics push as a ConfigChange so it appears in the
+	// deployment's "recent changes" history. A remote Kibana push has no MR/repo
+	// stack -> no mrUrl/stackInstanceId; the outcome is terminal. pushed -> applied;
+	// failed -> failed; blocked (the early return above) writes nothing.
+	await recordLaneConfigChange({
+		id: state.requestId,
+		deployment: report.deployment,
+		workflow: "synthetics-push",
+		outcome: syntheticsChangeOutcome(result.status),
+		summary: `synthetics push ${report.deployment}${result.project ? ` (${result.project})` : ""}`,
+		threadId: state.threadId || undefined,
+	});
 	return { syntheticsPushResult: result };
 }
 
@@ -11610,6 +11647,19 @@ export async function applyFleetUpgrade(state: IacStateType): Promise<Partial<Ia
 		"iac fleet upgrade: apply result",
 	);
 	await emitFleetResult(result);
+	// SIO-1461: record the fleet upgrade as a ConfigChange so it appears in the
+	// deployment's "recent changes" history. Fleet has no config MR -> no mrUrl/
+	// stackInstanceId, and the outcome is written terminal here (the MR-gated KG
+	// reconciler never sees it). applied/partial -> applied; dispatched -> proposed;
+	// failed -> failed; blocked (the early return above) writes nothing.
+	await recordLaneConfigChange({
+		id: state.requestId,
+		deployment,
+		workflow: "fleet-upgrade",
+		outcome: fleetChangeOutcome(result.status),
+		summary: `fleet upgrade ${deployment} -> ${targetVersion}`,
+		threadId: state.threadId || undefined,
+	});
 	// SIO-926: persist the apply pipeline id so a follow-up "how's the upgrade going?" re-polls it.
 	// Only meaningful while still in flight (dispatched); a terminal apply needs no re-check.
 	return {
