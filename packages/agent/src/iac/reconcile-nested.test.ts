@@ -1,8 +1,9 @@
 // agent/src/iac/reconcile-nested.test.ts
 // SIO-1315: nested-layout reconcile-to-live (security / fleet-integrations / agent-policies).
 // Fixtures mirror the REAL eu-b2b repo layouts fetched live 2026-07-31.
-import { describe, expect, mock, test } from "bun:test";
-import type { StackDrift, StackDriftResource } from "./state.ts";
+import { afterEach, describe, expect, mock, test } from "bun:test";
+import { _setGraphStoreForTesting, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
+import type { DriftReport, IacStateType, StackDrift, StackDriftResource } from "./state.ts";
 
 function mockTools(handlers: Record<string, (args: Record<string, unknown>) => string>): { calls: string[] } {
 	const sink = { calls: [] as string[] };
@@ -308,6 +309,72 @@ describe("skip-note hygiene (CodeRabbit PR #557)", () => {
 		expect(built.blocked).toContain("Skipped 2 unresolvable entries");
 		expect(built.blocked).toContain("(no 'roles' object)");
 		expect(built.blocked).toContain("(no for_each key)");
+	});
+});
+
+// SIO-1461: reconcileStack records a drift-reconcile ConfigChange per opened MR so the
+// reconcile shows in the deployment's "recent changes" history. Uses reconcile-to-json
+// (a plain marker commit) to exercise the openReconcileMr -> opened path cheaply.
+describe("reconcileStack KG ConfigChange write (SIO-1461)", () => {
+	const prev = process.env.KNOWLEDGE_GRAPH_ENABLED;
+	afterEach(() => {
+		if (prev === undefined) delete process.env.KNOWLEDGE_GRAPH_ENABLED;
+		else process.env.KNOWLEDGE_GRAPH_ENABLED = prev;
+		_setGraphStoreForTesting(null);
+	});
+
+	function driftState(direction: "reconcile-to-json" | "skip"): IacStateType {
+		const report: DriftReport = {
+			deployment: "eu-b2b",
+			generatedAt: "2026-08-10T00:00:00Z",
+			stacks: [drift("lifecycle-policies", [])],
+		};
+		return {
+			requestId: "rec-1",
+			threadId: "thread-1",
+			targetDeployment: "eu-b2b",
+			driftReport: report,
+			driftIndex: 0,
+			currentDirection: direction,
+			reconcileResults: [],
+		} as unknown as IacStateType;
+	}
+
+	test("an opened reconcile MR writes a proposed drift-reconcile ConfigChange with the MR + stack instance", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		mockTools({
+			gitlab_list_agent_merge_requests: () => `[200] ${JSON.stringify([])}`,
+			gitlab_create_branch: () => "[201] created",
+			gitlab_commit_file: () => "[200] committed",
+			gitlab_create_merge_request: () =>
+				`[201] ${JSON.stringify({ web_url: "https://gitlab.com/x/-/merge_requests/42" })}`,
+		});
+		const { reconcileStack } = await import("./nodes.ts");
+		const out = await reconcileStack(driftState("reconcile-to-json"));
+		expect(out.reconcileResults?.[0]?.status).toBe("opened");
+		const change = store.calls.find((c) => c.cypher.includes("MERGE (c:ConfigChange"));
+		expect(change?.params?.id).toBe("rec-1:lifecycle-policies:reconcile-to-json");
+		expect(change?.params?.outcome).toBe("proposed");
+		expect(store.calls.some((c) => c.cypher.includes("VIA_WORKFLOW") && c.params?.name === "drift-reconcile")).toBe(
+			true,
+		);
+		expect(store.calls.some((c) => c.cypher.includes("TARGETS") && c.params?.sid === "eu-b2b/lifecycle-policies")).toBe(
+			true,
+		);
+		expect(store.calls.some((c) => c.cypher.includes("PROPOSED_IN"))).toBe(true);
+	});
+
+	test("a skipped stack writes no ConfigChange", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		mockTools({});
+		const { reconcileStack } = await import("./nodes.ts");
+		const out = await reconcileStack(driftState("skip"));
+		expect(out.reconcileResults?.[0]?.status).toBe("skipped");
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (c:ConfigChange"))).toBe(false);
 	});
 });
 

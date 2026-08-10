@@ -1,5 +1,6 @@
 // agent/src/iac/synthetics-drift.test.ts
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
+import { _setGraphStoreForTesting, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
 import {
 	explainSyntheticsDrift,
 	formatSyntheticsSummary,
@@ -464,5 +465,64 @@ describe("pushSynthetics (mocked tools)", () => {
 		const { pushSynthetics } = await import("./nodes.ts");
 		const out = await pushSynthetics({ syntheticsDriftReport: changedReport } as unknown as IacStateType);
 		expect(out.syntheticsPushResult?.status).toBe("failed");
+	});
+});
+
+// SIO-1461: pushSynthetics records a synthetics-push ConfigChange (no MR) so the push
+// shows in the deployment's "recent changes" history.
+describe("pushSynthetics KG ConfigChange write (SIO-1461)", () => {
+	const changedReport = report({
+		drift: [{ project: "eu-oit.prd", monitorId: "a", monitorName: "a", category: "changed" }],
+	});
+	const prev = process.env.KNOWLEDGE_GRAPH_ENABLED;
+	afterEach(() => {
+		if (prev === undefined) delete process.env.KNOWLEDGE_GRAPH_ENABLED;
+		else process.env.KNOWLEDGE_GRAPH_ENABLED = prev;
+		_setGraphStoreForTesting(null);
+	});
+
+	test("a successful push writes an applied synthetics-push ConfigChange", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		mockTools({
+			gitlab_trigger_synthetics_push: () =>
+				`[200] ${JSON.stringify({ deployment: "eu-b2b", project: "eu-oit.prd", pipelineId: 7, status: "created" })}`,
+			gitlab_get_synthetics_push_result: () => `[200] ${JSON.stringify({ pipelineId: 7, status: "success" })}`,
+		});
+		const { pushSynthetics } = await import("./nodes.ts");
+		await pushSynthetics({
+			syntheticsDriftReport: changedReport,
+			requestId: "syn-1",
+			targetDeployment: "eu-b2b",
+		} as unknown as IacStateType);
+		const change = store.calls.find((c) => c.cypher.includes("MERGE (c:ConfigChange"));
+		expect(change?.params?.id).toBe("syn-1");
+		expect(change?.params?.outcome).toBe("applied");
+		expect(store.calls.some((c) => c.cypher.includes("VIA_WORKFLOW") && c.params?.name === "synthetics-push")).toBe(
+			true,
+		);
+		expect(
+			store.calls.some((c) => c.cypher.includes("MERGE (d:ElasticDeployment") && c.params?.name === "eu-b2b"),
+		).toBe(true);
+		// A remote push has no MR.
+		expect(store.calls.some((c) => c.cypher.includes("PROPOSED_IN"))).toBe(false);
+	});
+
+	test("a locked (blocked) trigger writes no ConfigChange", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		mockTools({
+			gitlab_trigger_synthetics_push: () =>
+				`[200] ${JSON.stringify({ pipelineId: null, status: "locked", note: "running" })}`,
+		});
+		const { pushSynthetics } = await import("./nodes.ts");
+		await pushSynthetics({
+			syntheticsDriftReport: changedReport,
+			requestId: "syn-2",
+			targetDeployment: "eu-b2b",
+		} as unknown as IacStateType);
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (c:ConfigChange"))).toBe(false);
 	});
 });
