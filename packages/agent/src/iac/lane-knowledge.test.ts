@@ -66,6 +66,23 @@ describe("recordLaneConfigChange", () => {
 		expect(store.calls).toEqual([]);
 	});
 
+	test("is a no-op when workflow is empty (would drop the VIA_WORKFLOW edge)", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		await recordLaneConfigChange(laneInput({ workflow: "" }));
+		expect(store.calls).toEqual([]);
+	});
+
+	test("is a no-op when outcome is not a valid ChangeOutcome", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		// A caller bypassing the type system (the exported seam) must not corrupt the graph.
+		await recordLaneConfigChange(laneInput({ outcome: "bogus" as unknown as LaneChangeInput["outcome"] }));
+		expect(store.calls).toEqual([]);
+	});
+
 	test("writes deployment + ConfigChange + CHANGED_BY + PROPOSED_IN + TARGETS for a reconcile MR", async () => {
 		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
 		const store = new InMemoryGraphStore();

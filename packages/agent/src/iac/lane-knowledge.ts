@@ -26,6 +26,14 @@ import type { FleetUpgradeResult, ReconcileResult, SyntheticsPushResult } from "
 
 const logger = getLogger("agent:iac:lane-knowledge");
 
+// The valid ChangeOutcome values, as a runtime set (ChangeOutcome is a type-only
+// union upstream). recordLaneConfigChange is an exported seam, so a future caller
+// could pass a value the type system does not catch -- an empty workflow would drop
+// the VIA_WORKFLOW edge and a bad outcome would be written straight to the graph.
+// A plain guard (matching the id/deployment guard below and recordIacChange's own
+// guard) rejects both without a Zod dependency the sibling writers don't carry.
+const VALID_OUTCOMES: ReadonlySet<ChangeOutcome> = new Set(["proposed", "applied", "rejected", "failed"]);
+
 export interface LaneChangeInput {
 	id: string;
 	deployment: string;
@@ -46,7 +54,18 @@ export interface LaneChangeInput {
 // and a null outcome, and soft-fails -- exactly like recordIacEntities.
 export async function recordLaneConfigChange(input: LaneChangeInput): Promise<void> {
 	if (!isKnowledgeGraphEnabled()) return;
+	// outcome === null is the caller's "skipped/blocked -> do not record" signal.
 	if (!input.id || !input.deployment || input.outcome === null) return;
+	// Guard the two values a bad caller could otherwise corrupt the graph with:
+	// an empty workflow silently drops the VIA_WORKFLOW edge; an out-of-enum outcome
+	// would be MERGEd onto the ConfigChange as-is. Both self-skip rather than throw.
+	if (!input.workflow || !VALID_OUTCOMES.has(input.outcome)) {
+		logger.warn(
+			{ id: input.id, workflow: input.workflow, outcome: input.outcome },
+			"recordLaneConfigChange: skipping write for invalid workflow/outcome",
+		);
+		return;
+	}
 	try {
 		const store = await getGraphStore();
 		await recordIacChange(store, {
