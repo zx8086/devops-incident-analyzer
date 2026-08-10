@@ -132,7 +132,8 @@ describe("buildApplicationTopology - elastic APM", () => {
 						by_destination: {
 							buckets: [
 								{ key: "kafka/orders", doc_count: 20 },
-								{ key: "vert.x/contact", doc_count: 30 },
+								{ key: "kafka://broker:9092", doc_count: 12 },
+								{ key: "VERT.X/contact", doc_count: 30 },
 								{ key: "AMQP 1.0/ddm.contact.sync", doc_count: 25 },
 								{ key: "AMQP 1.0/ddm.voucher.sync", doc_count: 15 },
 								{ key: "postgresql", doc_count: 10 },
@@ -143,9 +144,12 @@ describe("buildApplicationTopology - elastic APM", () => {
 			},
 		};
 		const t = buildApplicationTopology([elasticResult([{ toolName: "elasticsearch_search", rawJson: json }])], []);
-		// kafka + vert.x: no node, no edge.
+		// kafka (path + URI forms) + vert.x (any case): no node, no edge.
 		expect(t?.nodes.find((n) => n.id === "dep:kafka/orders")).toBeUndefined();
-		expect(t?.nodes.find((n) => n.name === "vert.x/contact")).toBeUndefined();
+		expect(t?.nodes.find((n) => n.id === "dep:kafka://broker:9092")).toBeUndefined();
+		expect(t?.nodes.find((n) => n.name === "VERT.X/contact")).toBeUndefined();
+		// A URI-form kafka host must not slip through as a host-family dependency either.
+		expect(t?.nodes.some((n) => n.kind === "dependency" && /kafka/i.test(n.name ?? ""))).toBe(false);
 		// AMQP: one broker node, one edge (both queues collapse to it).
 		const bus = t?.nodes.filter((n) => n.id === "dep:amqp-bus") ?? [];
 		expect(bus.length).toBe(1);
@@ -205,6 +209,32 @@ describe("buildApplicationTopology - elastic APM", () => {
 		const t = buildApplicationTopology([elasticResult([{ toolName: "elasticsearch_search", rawJson: json }])], []);
 		const n = t?.nodes.find((x) => x.id === "dep:example.com");
 		expect(n?.name).toBe("api.internal.example.com:8080");
+	});
+
+	// SIO-1460 (CodeRabbit PR #650): the same host reached on different ports (or with
+	// different casing) is ONE host -- membership is keyed on the normalized host, not
+	// the raw host:port endpoint, so the count does not over-report.
+	test("same host on differing ports counts as one host", () => {
+		const json = {
+			by_source: {
+				buckets: [
+					{
+						key: "svc",
+						doc_count: 10,
+						by_destination: {
+							buckets: [
+								{ key: "api.shop.example.com:443", doc_count: 5 },
+								{ key: "api.shop.example.com:8443", doc_count: 3 },
+							],
+						},
+					},
+				],
+			},
+		};
+		const t = buildApplicationTopology([elasticResult([{ toolName: "elasticsearch_search", rawJson: json }])], []);
+		// One distinct host -> single-host display (raw endpoint), not "(2 hosts)".
+		const n = t?.nodes.find((x) => x.id === "dep:example.com");
+		expect(n?.name).toBe("api.shop.example.com:443");
 	});
 
 	test("bare single-label host and IP literals are not collapsed", () => {
@@ -455,17 +485,24 @@ describe("buildApplicationTopology - caps", () => {
 		expect(t?.nodes.find((n) => n.id === "svc:hub-service")).toBeDefined();
 	});
 
-	// SIO-1460: a focus anchor survives truncation even when inserted last.
+	// SIO-1460: a focus anchor survives ranked truncation even when inserted last.
+	// The anchor is the LAST source bucket but calls MAX_NODES+ distinct services, so
+	// scopeToFocus retains all of them (1-hop neighborhood) and the surviving set still
+	// exceeds MAX_NODES -- forcing capTopology to truncate. Ranking (service anchor
+	// first) must keep the late-inserted checkout-service.
 	test("ranked cap keeps the focus anchor even when inserted last", () => {
-		const noise = Array.from({ length: MAX_NODES + 20 }, (_, i) => ({
-			key: `svc-${i}`,
+		// noise sources come first so the anchor lands last in Map insertion order.
+		const noise = Array.from({ length: 20 }, (_, i) => ({
+			key: `noise-${i}`,
 			doc_count: 1,
-			by_destination: { buckets: [{ key: `svc-${i + 1}`, doc_count: 1 }] },
+			by_destination: { buckets: [{ key: `ndep-${i}`, doc_count: 1 }] },
 		}));
 		const anchored = {
 			key: "checkout-service",
 			doc_count: 999,
-			by_destination: { buckets: [{ key: "payment-service", doc_count: 999 }] },
+			by_destination: {
+				buckets: Array.from({ length: MAX_NODES + 10 }, (_, i) => ({ key: `neighbor-${i}`, doc_count: 5 })),
+			},
 		};
 		const t = buildApplicationTopology(
 			[
@@ -475,7 +512,13 @@ describe("buildApplicationTopology - caps", () => {
 			],
 			["checkout-service"],
 		);
+		// Scoping kept the anchor + its 1-hop neighbors (> MAX_NODES), so cap fired.
+		expect(t?.truncated).toBe(true);
+		expect(t?.nodes.length).toBe(MAX_NODES);
+		// The focus anchor survives despite being inserted last.
 		expect(t?.nodes.find((n) => n.id === "svc:checkout-service")).toBeDefined();
+		// The unrelated noise subgraph was scoped out entirely.
+		expect(t?.nodes.find((n) => n.id === "svc:noise-0")).toBeUndefined();
 	});
 });
 

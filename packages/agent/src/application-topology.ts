@@ -209,13 +209,14 @@ function registrableDomain(host: string): string {
 
 // Rename the provisional dep:<family> nodes to "<family> (N hosts)" once every
 // member host is known. Direct acc.nodes.set (NOT upsertNode): merge-not-clobber
-// would keep the provisional name. A single-host family reads better as its raw host.
-function collapseHostFamilies(acc: Accumulator, familyMembers: Map<string, Set<string>>): void {
+// would keep the provisional name. Membership is keyed on normalized host, so N is
+// the distinct-host count; a single-host family reads better as its raw endpoint.
+function collapseHostFamilies(acc: Accumulator, familyMembers: Map<string, Map<string, string>>): void {
 	for (const [family, hosts] of familyMembers) {
 		const id = dependencyNodeId(family);
 		const node = acc.nodes.get(id);
 		if (!node) continue;
-		const name = hosts.size > 1 ? `${family} (${hosts.size} hosts)` : [...hosts][0];
+		const name = hosts.size > 1 ? `${family} (${hosts.size} hosts)` : [...hosts.values()][0];
 		acc.nodes.set(id, { ...node, name });
 	}
 }
@@ -234,7 +235,10 @@ export const AMQP_BUS_ID = "dep:amqp-bus";
 
 function busDestinationKind(resource: string): "skip" | "amqp" | undefined {
 	const r = resource.trim();
-	if (/^kafka(\/|$)/i.test(r) || /^vert\.x\//i.test(r)) return "skip";
+	// The [/:]|$ tail matches every bus-address form (kafka/orders, kafka://broker,
+	// kafka:9092, bare kafka) without swallowing real names that merely start with
+	// the prefix (kafkacat-service, vert.xyz.com). Both are case-insensitive.
+	if (/^kafka(?:[/:]|$)/i.test(r) || /^vert\.x(?:[/:]|$)/i.test(r)) return "skip";
 	if (/^amqp\b/i.test(r)) return "amqp";
 	return undefined;
 }
@@ -260,7 +264,7 @@ function parseElasticOutputs(
 	acc: Accumulator,
 	outputs: ToolOutput[],
 	focus: string[],
-	familyMembers: Map<string, Set<string>>,
+	familyMembers: Map<string, Map<string, string>>,
 ): void {
 	for (const o of outputs) {
 		if (o.toolName !== "elasticsearch_search" && o.toolName !== "elasticsearch_multi_search") continue;
@@ -307,15 +311,18 @@ function parseElasticOutputs(
 					} else {
 						const parsed = parseHost(resource);
 						if (parsed) {
-							// Host-shaped: route the edge at the family node now, record the raw
-							// host for the post-loop "(N hosts)" rename. addEdge dedups on
-							// kind|from|to, so multiple hosts of one family from one source
-							// collapse to a single edge.
+							// Host-shaped: route the edge at the family node now, record the host
+							// for the post-loop "(N hosts)" rename. Membership is keyed on the
+							// normalized host (lowercased, port-stripped) so api.example.com:443 and
+							// :8443 count as ONE host; the raw endpoint is kept for the single-host
+							// display name. addEdge dedups on kind|from|to, so multiple hosts of one
+							// family from one source collapse to a single edge.
 							const family = registrableDomain(parsed.host);
 							const dstId = dependencyNodeId(family);
-							const set = familyMembers.get(family) ?? new Set<string>();
-							set.add(resource);
-							familyMembers.set(family, set);
+							const hosts = familyMembers.get(family) ?? new Map<string, string>();
+							const hostKey = parsed.host.toLowerCase();
+							if (!hosts.has(hostKey)) hosts.set(hostKey, resource);
+							familyMembers.set(family, hosts);
 							upsertNode(acc, { id: dstId, kind: "dependency", name: family });
 							addEdge(acc, { from: srcId, to: dstId, kind: "calls", detail });
 						} else {
@@ -465,7 +472,7 @@ export function buildApplicationTopology(
 	turn = 0,
 ): ApplicationTopology | undefined {
 	const acc: Accumulator = { nodes: new Map(), edges: new Map(), sources: new Set() };
-	const familyMembers = new Map<string, Set<string>>();
+	const familyMembers = new Map<string, Map<string, string>>();
 	for (const r of results) {
 		const outputs = r.toolOutputs ?? [];
 		if (outputs.length === 0) continue;
