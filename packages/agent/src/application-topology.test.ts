@@ -160,9 +160,9 @@ describe("buildApplicationTopology - elastic APM", () => {
 		expect(t?.nodes.find((n) => n.id === "dep:postgresql")?.kind).toBe("dependency");
 	});
 
-	// SIO-1460: per-locale storefront hosts sharing a registrable domain collapse to
-	// one dep node named "(N hosts)"; different TLDs are different families.
-	test("host-family dependencies collapse to one node named '(N hosts)'", () => {
+	// SIO-1460: subdomains of one registrable domain collapse to one dep node named
+	// "<regdomain> (N hosts)". The family is keyed on the brand label (SLD label).
+	test("subdomains of one domain collapse to one '(N hosts)' node", () => {
 		const json = {
 			by_source: {
 				buckets: [
@@ -173,7 +173,6 @@ describe("buildApplicationTopology - elastic APM", () => {
 							buckets: [
 								{ key: "www.calvinklein.de:443", doc_count: 10 },
 								{ key: "img.calvinklein.de:443", doc_count: 8 },
-								{ key: "www.calvinklein.co.uk:443", doc_count: 6 },
 								{ key: "postgresql", doc_count: 5 },
 							],
 						},
@@ -182,16 +181,63 @@ describe("buildApplicationTopology - elastic APM", () => {
 			},
 		};
 		const t = buildApplicationTopology([elasticResult([{ toolName: "elasticsearch_search", rawJson: json }])], []);
-		// Two .de hosts collapse to one family node with a count.
-		const de = t?.nodes.find((n) => n.id === "dep:calvinklein.de");
-		expect(de?.kind).toBe("dependency");
-		expect(de?.name).toBe("calvinklein.de (2 hosts)");
-		// Even from two hosts of one source, a single edge to the family node.
-		expect(t?.edges.filter((e) => e.to === "dep:calvinklein.de").length).toBe(1);
-		// co.uk keeps three labels (two-part public suffix).
-		expect(t?.nodes.find((n) => n.id === "dep:calvinklein.co.uk")).toBeDefined();
+		// Both .de hosts collapse to one brand-keyed family node with a host count.
+		const fam = t?.nodes.find((n) => n.id === "dep:calvinklein");
+		expect(fam?.kind).toBe("dependency");
+		expect(fam?.name).toBe("calvinklein.de (2 hosts)");
+		expect(t?.edges.filter((e) => e.to === "dep:calvinklein").length).toBe(1);
 		// Non-host resource passes through unchanged.
 		expect(t?.nodes.find((n) => n.id === "dep:postgresql")).toBeDefined();
+	});
+
+	// SIO-1460 (live probe PR #650): the per-locale storefronts (www.calvinklein.de,
+	// .es, .fr, .co.uk, ...) differ only by ccTLD -- they collapse to ONE brand node
+	// named "<brand> (N locales)", the exact noise the ticket screenshot flagged.
+	test("per-locale storefronts collapse to one brand node with a locale count", () => {
+		const tlds = ["de", "es", "fr", "co.uk", "nl", "pl"];
+		const json = {
+			by_source: {
+				buckets: [
+					{
+						key: "storefront",
+						doc_count: 100,
+						by_destination: {
+							buckets: tlds.map((tld) => ({ key: `www.calvinklein.${tld}:443`, doc_count: 10 })),
+						},
+					},
+				],
+			},
+		};
+		const t = buildApplicationTopology([elasticResult([{ toolName: "elasticsearch_search", rawJson: json }])], []);
+		const fam = t?.nodes.find((n) => n.id === "dep:calvinklein");
+		expect(fam?.kind).toBe("dependency");
+		expect(fam?.name).toBe("calvinklein (6 locales)");
+		// One node, one edge for the whole storefront fleet.
+		expect(t?.nodes.filter((n) => n.kind === "dependency").length).toBe(1);
+		expect(t?.edges.filter((e) => e.to === "dep:calvinklein").length).toBe(1);
+	});
+
+	// Different brand labels do NOT merge even under the same TLD.
+	test("distinct brand labels stay separate", () => {
+		const json = {
+			by_source: {
+				buckets: [
+					{
+						key: "svc",
+						doc_count: 10,
+						by_destination: {
+							buckets: [
+								{ key: "baas.calvinkleinservice.com:443", doc_count: 5 },
+								{ key: "baas.tommyhilfigercrm.com:443", doc_count: 4 },
+							],
+						},
+					},
+				],
+			},
+		};
+		const t = buildApplicationTopology([elasticResult([{ toolName: "elasticsearch_search", rawJson: json }])], []);
+		expect(t?.nodes.find((n) => n.id === "dep:calvinkleinservice")).toBeDefined();
+		expect(t?.nodes.find((n) => n.id === "dep:tommyhilfigercrm")).toBeDefined();
 	});
 
 	test("single-host family renders the raw host, not '(1 hosts)'", () => {
@@ -207,7 +253,7 @@ describe("buildApplicationTopology - elastic APM", () => {
 			},
 		};
 		const t = buildApplicationTopology([elasticResult([{ toolName: "elasticsearch_search", rawJson: json }])], []);
-		const n = t?.nodes.find((x) => x.id === "dep:example.com");
+		const n = t?.nodes.find((x) => x.id === "dep:example");
 		expect(n?.name).toBe("api.internal.example.com:8080");
 	});
 
@@ -233,8 +279,35 @@ describe("buildApplicationTopology - elastic APM", () => {
 		};
 		const t = buildApplicationTopology([elasticResult([{ toolName: "elasticsearch_search", rawJson: json }])], []);
 		// One distinct host -> single-host display (raw endpoint), not "(2 hosts)".
-		const n = t?.nodes.find((x) => x.id === "dep:example.com");
+		const n = t?.nodes.find((x) => x.id === "dep:example");
 		expect(n?.name).toBe("api.shop.example.com:443");
+	});
+
+	// SIO-1460 (live probe PR #650): APM emits placeholder exit-span destinations
+	// keyed "0" (uninstrumented spans). Numeric/letterless resources are dropped.
+	test("junk resource keys (no letters) produce no dependency node", () => {
+		const json = {
+			by_source: {
+				buckets: [
+					{
+						key: "martech-voucher",
+						doc_count: 10,
+						by_destination: {
+							buckets: [
+								{ key: "0", doc_count: 5 },
+								{ key: "-", doc_count: 2 },
+								{ key: "redis", doc_count: 3 },
+							],
+						},
+					},
+				],
+			},
+		};
+		const t = buildApplicationTopology([elasticResult([{ toolName: "elasticsearch_search", rawJson: json }])], []);
+		expect(t?.nodes.find((n) => n.id === "dep:0")).toBeUndefined();
+		expect(t?.nodes.find((n) => n.id === "dep:-")).toBeUndefined();
+		// A real dependency in the same bucket still renders.
+		expect(t?.nodes.find((n) => n.id === "dep:redis")).toBeDefined();
 	});
 
 	test("bare single-label host and IP literals are not collapsed", () => {

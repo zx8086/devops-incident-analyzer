@@ -178,11 +178,12 @@ export function dependencyNodeId(resource: string): string {
 	return `dep:${resource}`;
 }
 
-// SIO-1460: per-locale storefront hosts (www.calvinklein.de:443, .fr:443, ...) are
-// ONE logical dependency each. Host-shaped destinations group by an approximate
-// registrable domain so the family renders as one node; everything else
-// (postgresql, redis, bare hostnames, IP literals) passes through unchanged. The
-// grouping is display-only -- dep: ids never reach the KG (application-topology-kg.ts).
+// SIO-1460: per-locale storefront hosts (www.calvinklein.de:443, .es:443, .co.uk:443,
+// ...) are ONE logical dependency. Host-shaped destinations group by their BRAND LABEL
+// (the label before the public suffix, TLD-agnostic) so a fleet of ccTLD storefronts
+// collapses to one node; everything else (postgresql, redis, bare hostnames, IP
+// literals, junk keys) passes through or is dropped. Grouping is display-only -- dep:
+// ids never reach the KG (application-topology-kg.ts).
 const TWO_PART_SLD = new Set(["co", "com", "org", "net", "gov", "edu", "ac"]);
 
 function parseHost(resource: string): { host: string; port?: string } | undefined {
@@ -196,27 +197,45 @@ function parseHost(resource: string): { host: string; port?: string } | undefine
 	return { host, port: m?.[2] };
 }
 
-// Approximate registrable domain: last two labels, three when the penultimate label
-// is a known two-part public suffix followed by a 2-letter ccTLD (co.uk, com.au).
-function registrableDomain(host: string): string {
+// Split a host into { brand, domain }: the brand label (the label before the public
+// suffix -- "calvinklein" for www.calvinklein.de AND www.calvinklein.co.uk) and the
+// approximate registrable domain (last two labels, three for a two-part public suffix
+// like co.uk / com.au). Brand is the family key so per-locale ccTLD storefronts merge;
+// domain drives the display name (one domain -> "(N hosts)", many -> "(N locales)").
+function hostFamily(host: string): { brand: string; domain: string } {
 	const labels = host.toLowerCase().split(".").filter(Boolean);
-	if (labels.length <= 2) return labels.join(".");
+	if (labels.length <= 1) return { brand: labels[0] ?? host.toLowerCase(), domain: labels.join(".") };
 	const a = labels[labels.length - 2] ?? "";
 	const b = labels[labels.length - 1] ?? "";
-	if (TWO_PART_SLD.has(a) && b.length === 2) return labels.slice(-3).join(".");
-	return labels.slice(-2).join(".");
+	const twoPart = TWO_PART_SLD.has(a) && b.length === 2;
+	const brandIdx = twoPart ? labels.length - 3 : labels.length - 2;
+	const brand = labels[brandIdx] ?? a;
+	const domain = (twoPart ? labels.slice(-3) : labels.slice(-2)).join(".");
+	return { brand, domain };
 }
 
-// Rename the provisional dep:<family> nodes to "<family> (N hosts)" once every
-// member host is known. Direct acc.nodes.set (NOT upsertNode): merge-not-clobber
-// would keep the provisional name. Membership is keyed on normalized host, so N is
-// the distinct-host count; a single-host family reads better as its raw endpoint.
-function collapseHostFamilies(acc: Accumulator, familyMembers: Map<string, Map<string, string>>): void {
-	for (const [family, hosts] of familyMembers) {
-		const id = dependencyNodeId(family);
+interface HostFamily {
+	hosts: Map<string, string>; // normalizedHost -> raw endpoint
+	domains: Set<string>; // distinct registrable domains seen
+}
+
+// Rename the provisional dep:<brand> nodes once every member host is known, via direct
+// acc.nodes.set (NOT upsertNode -- merge-not-clobber would keep the provisional name).
+// One host -> raw endpoint; many hosts of one registrable domain -> "<domain> (N hosts)";
+// many hosts spanning multiple TLDs of one brand -> "<brand> (N locales)".
+function collapseHostFamilies(acc: Accumulator, familyMembers: Map<string, HostFamily>): void {
+	for (const [brand, fam] of familyMembers) {
+		const id = dependencyNodeId(brand);
 		const node = acc.nodes.get(id);
 		if (!node) continue;
-		const name = hosts.size > 1 ? `${family} (${hosts.size} hosts)` : [...hosts.values()][0];
+		let name: string;
+		if (fam.hosts.size <= 1) {
+			name = [...fam.hosts.values()][0] ?? brand;
+		} else if (fam.domains.size > 1) {
+			name = `${brand} (${fam.hosts.size} locales)`;
+		} else {
+			name = `${[...fam.domains][0]} (${fam.hosts.size} hosts)`;
+		}
 		acc.nodes.set(id, { ...node, name });
 	}
 }
@@ -264,7 +283,7 @@ function parseElasticOutputs(
 	acc: Accumulator,
 	outputs: ToolOutput[],
 	focus: string[],
-	familyMembers: Map<string, Map<string, string>>,
+	familyMembers: Map<string, HostFamily>,
 ): void {
 	for (const o of outputs) {
 		if (o.toolName !== "elasticsearch_search" && o.toolName !== "elasticsearch_multi_search") continue;
@@ -311,21 +330,26 @@ function parseElasticOutputs(
 					} else {
 						const parsed = parseHost(resource);
 						if (parsed) {
-							// Host-shaped: route the edge at the family node now, record the host
-							// for the post-loop "(N hosts)" rename. Membership is keyed on the
-							// normalized host (lowercased, port-stripped) so api.example.com:443 and
-							// :8443 count as ONE host; the raw endpoint is kept for the single-host
-							// display name. addEdge dedups on kind|from|to, so multiple hosts of one
-							// family from one source collapse to a single edge.
-							const family = registrableDomain(parsed.host);
-							const dstId = dependencyNodeId(family);
-							const hosts = familyMembers.get(family) ?? new Map<string, string>();
+							// Host-shaped: route the edge at the BRAND family node now, record the
+							// host + its registrable domain for the post-loop rename. Membership is
+							// keyed on the normalized host (lowercased, port-stripped) so
+							// api.example.com:443 and :8443 count as ONE host; addEdge dedups on
+							// kind|from|to, so many hosts of one brand from one source collapse to a
+							// single edge.
+							const { brand, domain } = hostFamily(parsed.host);
+							const dstId = dependencyNodeId(brand);
+							const fam = familyMembers.get(brand) ?? { hosts: new Map<string, string>(), domains: new Set<string>() };
 							const hostKey = parsed.host.toLowerCase();
-							if (!hosts.has(hostKey)) hosts.set(hostKey, resource);
-							familyMembers.set(family, hosts);
-							upsertNode(acc, { id: dstId, kind: "dependency", name: family });
+							if (!fam.hosts.has(hostKey)) fam.hosts.set(hostKey, resource);
+							fam.domains.add(domain);
+							familyMembers.set(brand, fam);
+							upsertNode(acc, { id: dstId, kind: "dependency", name: brand });
 							addEdge(acc, { from: srcId, to: dstId, kind: "calls", detail });
-						} else {
+						} else if (/[a-z]/i.test(resource) || resource.includes(".")) {
+							// Non-host but a real named dependency (postgresql, redis) or an IP
+							// literal (10.0.0.5:6379 -- has dots). A resource with NO letters and NO
+							// dot ("0", "-") is an APM placeholder for an uninstrumented exit span
+							// (SIO-1460 live probe), dropped rather than rendered as a junk node.
 							const dstId = dependencyNodeId(resource);
 							upsertNode(acc, { id: dstId, kind: "dependency", name: resource });
 							addEdge(acc, { from: srcId, to: dstId, kind: "calls", detail });
@@ -472,7 +496,7 @@ export function buildApplicationTopology(
 	turn = 0,
 ): ApplicationTopology | undefined {
 	const acc: Accumulator = { nodes: new Map(), edges: new Map(), sources: new Set() };
-	const familyMembers = new Map<string, Map<string, string>>();
+	const familyMembers = new Map<string, HostFamily>();
 	for (const r of results) {
 		const outputs = r.toolOutputs ?? [];
 		if (outputs.length === 0) continue;
