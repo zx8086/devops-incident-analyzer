@@ -178,12 +178,88 @@ export function dependencyNodeId(resource: string): string {
 	return `dep:${resource}`;
 }
 
-// span.destination.service.resource values pointing at the message bus (e.g.
-// "kafka", "kafka/orders") are skipped: Kafka edges come from the kafka
-// datasource's consumer-group tools, and a producer-side guess from APM would
-// conflict with the deliberate PRODUCES_TO absence (no system of record).
-function isKafkaDestination(resource: string): boolean {
-	return /^kafka(\/|$)/i.test(resource.trim());
+// SIO-1460: per-locale storefront hosts (www.calvinklein.de:443, .es:443, .co.uk:443,
+// ...) are ONE logical dependency. Host-shaped destinations group by their BRAND LABEL
+// (the label before the public suffix, TLD-agnostic) so a fleet of ccTLD storefronts
+// collapses to one node; everything else (postgresql, redis, bare hostnames, IP
+// literals, junk keys) passes through or is dropped. Grouping is display-only -- dep:
+// ids never reach the KG (application-topology-kg.ts).
+const TWO_PART_SLD = new Set(["co", "com", "org", "net", "gov", "edu", "ac"]);
+
+function parseHost(resource: string): { host: string; port?: string } | undefined {
+	const r = resource.trim();
+	const m = /^([a-z0-9.-]+?)(?::(\d+))?$/i.exec(r);
+	const host = m?.[1];
+	if (!host) return undefined;
+	if (!host.includes(".")) return undefined; // bare single-label -> not a family
+	if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return undefined; // IPv4 literal -> not a family
+	if (!/[a-z]/i.test(host)) return undefined; // no letters -> not a hostname
+	return { host, port: m?.[2] };
+}
+
+// Split a host into { brand, domain }: the brand label (the label before the public
+// suffix -- "calvinklein" for www.calvinklein.de AND www.calvinklein.co.uk) and the
+// approximate registrable domain (last two labels, three for a two-part public suffix
+// like co.uk / com.au). Brand is the family key so per-locale ccTLD storefronts merge;
+// domain drives the display name (one domain -> "(N hosts)", many -> "(N locales)").
+function hostFamily(host: string): { brand: string; domain: string } {
+	const labels = host.toLowerCase().split(".").filter(Boolean);
+	if (labels.length <= 1) return { brand: labels[0] ?? host.toLowerCase(), domain: labels.join(".") };
+	const a = labels[labels.length - 2] ?? "";
+	const b = labels[labels.length - 1] ?? "";
+	const twoPart = TWO_PART_SLD.has(a) && b.length === 2;
+	const brandIdx = twoPart ? labels.length - 3 : labels.length - 2;
+	const brand = labels[brandIdx] ?? a;
+	const domain = (twoPart ? labels.slice(-3) : labels.slice(-2)).join(".");
+	return { brand, domain };
+}
+
+interface HostFamily {
+	hosts: Map<string, string>; // normalizedHost -> raw endpoint
+	domains: Set<string>; // distinct registrable domains seen
+}
+
+// Rename the provisional dep:<brand> nodes once every member host is known, via direct
+// acc.nodes.set (NOT upsertNode -- merge-not-clobber would keep the provisional name).
+// One host -> raw endpoint; many hosts of one registrable domain -> "<domain> (N hosts)";
+// many hosts spanning multiple TLDs of one brand -> "<brand> (N locales)".
+function collapseHostFamilies(acc: Accumulator, familyMembers: Map<string, HostFamily>): void {
+	for (const [brand, fam] of familyMembers) {
+		const id = dependencyNodeId(brand);
+		const node = acc.nodes.get(id);
+		if (!node) continue;
+		let name: string;
+		if (fam.hosts.size <= 1) {
+			name = [...fam.hosts.values()][0] ?? brand;
+		} else if (fam.domains.size > 1) {
+			name = `${brand} (${fam.hosts.size} locales)`;
+		} else {
+			name = `${[...fam.domains][0]} (${fam.hosts.size} hosts)`;
+		}
+		acc.nodes.set(id, { ...node, name });
+	}
+}
+
+// SIO-1460: message-bus / in-process span.destination.service.resource values get
+// special handling instead of one node per destination string:
+//  - kafka*   : SKIP -- kafka edges come from the kafka datasource's consumer-group
+//               tools; a producer-side guess from APM would conflict with the
+//               deliberate PRODUCES_TO absence (no system of record).
+//  - vert.x/* : SKIP -- an in-process event-bus address, never a network dependency.
+//  - AMQP ... : COLLAPSE to one dep:amqp-bus broker node. RabbitMQ has no
+//               consumer-group system of record (unlike kafka), so a single broker
+//               node keeps its presence on the map instead of one node per
+//               per-entity sync queue (observed live as "AMQP 1.0/ddm.contact.sync").
+export const AMQP_BUS_ID = "dep:amqp-bus";
+
+function busDestinationKind(resource: string): "skip" | "amqp" | undefined {
+	const r = resource.trim();
+	// The [/:]|$ tail matches every bus-address form (kafka/orders, kafka://broker,
+	// kafka:9092, bare kafka) without swallowing real names that merely start with
+	// the prefix (kafkacat-service, vert.xyz.com). Both are case-insensitive.
+	if (/^kafka(?:[/:]|$)/i.test(r) || /^vert\.x(?:[/:]|$)/i.test(r)) return "skip";
+	if (/^amqp\b/i.test(r)) return "amqp";
+	return undefined;
 }
 
 function edgeDetail(avgUs: number | null | undefined, errors: number | undefined, calls: number): string | undefined {
@@ -203,7 +279,12 @@ export function hasDestinationAggregation(rawJson: unknown): boolean {
 	return root !== undefined && DestinationAggSchema.safeParse(root).success;
 }
 
-function parseElasticOutputs(acc: Accumulator, outputs: ToolOutput[], focus: string[]): void {
+function parseElasticOutputs(
+	acc: Accumulator,
+	outputs: ToolOutput[],
+	focus: string[],
+	familyMembers: Map<string, HostFamily>,
+): void {
 	for (const o of outputs) {
 		if (o.toolName !== "elasticsearch_search" && o.toolName !== "elasticsearch_multi_search") continue;
 		const root = aggregationRoot(o.rawJson);
@@ -222,8 +303,15 @@ function parseElasticOutputs(acc: Accumulator, outputs: ToolOutput[], focus: str
 				});
 				for (const d of src.by_destination.buckets) {
 					const resource = d.key.trim();
-					if (resource.length === 0 || isKafkaDestination(resource)) continue;
+					if (resource.length === 0) continue;
+					const bus = busDestinationKind(resource);
+					if (bus === "skip") continue;
 					const detail = edgeDetail(d.avg_duration?.value, d.error_count?.doc_count, d.doc_count);
+					if (bus === "amqp") {
+						upsertNode(acc, { id: AMQP_BUS_ID, kind: "dependency", name: "AMQP broker" });
+						addEdge(acc, { from: srcId, to: AMQP_BUS_ID, kind: "calls", detail });
+						continue;
+					}
 					// A destination naming another instrumented service (or a focus
 					// service) is a service-to-service call; anything else (postgresql,
 					// redis, external hosts) is a datastore/external dependency. The
@@ -240,9 +328,32 @@ function parseElasticOutputs(acc: Accumulator, outputs: ToolOutput[], focus: str
 						});
 						addEdge(acc, { from: srcId, to: dstId, kind: "calls", detail });
 					} else {
-						const dstId = dependencyNodeId(resource);
-						upsertNode(acc, { id: dstId, kind: "dependency", name: resource });
-						addEdge(acc, { from: srcId, to: dstId, kind: "calls", detail });
+						const parsed = parseHost(resource);
+						if (parsed) {
+							// Host-shaped: route the edge at the BRAND family node now, record the
+							// host + its registrable domain for the post-loop rename. Membership is
+							// keyed on the normalized host (lowercased, port-stripped) so
+							// api.example.com:443 and :8443 count as ONE host; addEdge dedups on
+							// kind|from|to, so many hosts of one brand from one source collapse to a
+							// single edge.
+							const { brand, domain } = hostFamily(parsed.host);
+							const dstId = dependencyNodeId(brand);
+							const fam = familyMembers.get(brand) ?? { hosts: new Map<string, string>(), domains: new Set<string>() };
+							const hostKey = parsed.host.toLowerCase();
+							if (!fam.hosts.has(hostKey)) fam.hosts.set(hostKey, resource);
+							fam.domains.add(domain);
+							familyMembers.set(brand, fam);
+							upsertNode(acc, { id: dstId, kind: "dependency", name: brand });
+							addEdge(acc, { from: srcId, to: dstId, kind: "calls", detail });
+						} else if (/[a-z]/i.test(resource) || resource.includes(".")) {
+							// Non-host but a real named dependency (postgresql, redis) or an IP
+							// literal (10.0.0.5:6379 -- has dots). A resource with NO letters and NO
+							// dot ("0", "-") is an APM placeholder for an uninstrumented exit span
+							// (SIO-1460 live probe), dropped rather than rendered as a junk node.
+							const dstId = dependencyNodeId(resource);
+							upsertNode(acc, { id: dstId, kind: "dependency", name: resource });
+							addEdge(acc, { from: srcId, to: dstId, kind: "calls", detail });
+						}
 					}
 				}
 			}
@@ -320,12 +431,48 @@ function parseKafkaOutputs(acc: Accumulator, outputs: ToolOutput[], focus: strin
 	}
 }
 
+// SIO-1460: on focused turns keep focus-anchored nodes (ANY node with `service`
+// set -- svc: AND cg:) plus their 1-hop neighborhood; drop the rest. No-op on
+// unfocused turns (matchesFocus([]) anchors everything -> show-all). An empty anchor
+// set (focus matched nothing in this map) falls back to show-all: scoping to nothing
+// must never blank a card that has real data (the SIO-1030 empty-collapse contract).
+function scopeToFocus(acc: Accumulator, focusServices: string[]): void {
+	if (focusServices.length === 0) return;
+	const anchors = new Set<string>();
+	for (const n of acc.nodes.values()) if (n.service !== undefined) anchors.add(n.id);
+	if (anchors.size === 0) return;
+	const keep = new Set(anchors);
+	for (const e of acc.edges.values()) {
+		if (anchors.has(e.from)) keep.add(e.to);
+		if (anchors.has(e.to)) keep.add(e.from);
+	}
+	if (keep.size === acc.nodes.size) return;
+	for (const id of [...acc.nodes.keys()]) if (!keep.has(id)) acc.nodes.delete(id);
+	for (const [k, e] of [...acc.edges]) if (!keep.has(e.from) || !keep.has(e.to)) acc.edges.delete(k);
+}
+
 function capTopology(acc: Accumulator, turn: number): ApplicationTopology | undefined {
 	if (acc.nodes.size === 0) return undefined;
 	let truncated = false;
 	let nodes = Array.from(acc.nodes.values());
 	if (nodes.length > MAX_NODES) {
-		nodes = nodes.slice(0, MAX_NODES);
+		// SIO-1460: rank before slicing so the LEAST relevant nodes are dropped, not
+		// whatever landed last in insertion order. Rank: focus anchor (service set) >
+		// kind:"service" > degree desc (edges touching the node) > insertion order
+		// (stable tie-break). Also runs on the overlay cap path (shared) -- harmless,
+		// overlay sets are small.
+		const degree = new Map<string, number>();
+		for (const e of acc.edges.values()) {
+			degree.set(e.from, (degree.get(e.from) ?? 0) + 1);
+			degree.set(e.to, (degree.get(e.to) ?? 0) + 1);
+		}
+		const rank = (n: ApplicationTopologyNode): number =>
+			(n.service !== undefined ? 4 : 0) + (n.kind === "service" ? 2 : 0);
+		nodes = nodes
+			.map((n, i) => ({ n, i }))
+			.sort((a, b) => rank(b.n) - rank(a.n) || (degree.get(b.n.id) ?? 0) - (degree.get(a.n.id) ?? 0) || a.i - b.i)
+			.slice(0, MAX_NODES)
+			.map((x) => x.n);
 		truncated = true;
 	}
 	const keptIds = new Set(nodes.map((n) => n.id));
@@ -349,17 +496,20 @@ export function buildApplicationTopology(
 	turn = 0,
 ): ApplicationTopology | undefined {
 	const acc: Accumulator = { nodes: new Map(), edges: new Map(), sources: new Set() };
+	const familyMembers = new Map<string, HostFamily>();
 	for (const r of results) {
 		const outputs = r.toolOutputs ?? [];
 		if (outputs.length === 0) continue;
 		const before = acc.nodes.size;
 		if (r.dataSourceId === "elastic") {
-			parseElasticOutputs(acc, outputs, focusServices);
+			parseElasticOutputs(acc, outputs, focusServices, familyMembers);
 		} else if (r.dataSourceId === "kafka") {
 			parseKafkaOutputs(acc, outputs, focusServices);
 		}
 		if (acc.nodes.size > before) acc.sources.add(r.dataSourceId);
 	}
+	collapseHostFamilies(acc, familyMembers);
+	scopeToFocus(acc, focusServices);
 	return capTopology(acc, turn);
 }
 

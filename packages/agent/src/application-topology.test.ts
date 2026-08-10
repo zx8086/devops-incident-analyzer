@@ -120,6 +120,218 @@ describe("buildApplicationTopology - elastic APM", () => {
 		expect(t?.edges.find((e) => e.to === "dep:kafka/orders")).toBeUndefined();
 	});
 
+	// SIO-1460: kafka + vert.x skip entirely; AMQP collapses to ONE broker node so
+	// RabbitMQ presence stays visible without the per-queue storm.
+	test("bus destinations: kafka+vert.x skipped, AMQP collapses to one broker node", () => {
+		const json = {
+			by_source: {
+				buckets: [
+					{
+						key: "contact-service",
+						doc_count: 100,
+						by_destination: {
+							buckets: [
+								{ key: "kafka/orders", doc_count: 20 },
+								{ key: "kafka://broker:9092", doc_count: 12 },
+								{ key: "VERT.X/contact", doc_count: 30 },
+								{ key: "AMQP 1.0/ddm.contact.sync", doc_count: 25 },
+								{ key: "AMQP 1.0/ddm.voucher.sync", doc_count: 15 },
+								{ key: "postgresql", doc_count: 10 },
+							],
+						},
+					},
+				],
+			},
+		};
+		const t = buildApplicationTopology([elasticResult([{ toolName: "elasticsearch_search", rawJson: json }])], []);
+		// kafka (path + URI forms) + vert.x (any case): no node, no edge.
+		expect(t?.nodes.find((n) => n.id === "dep:kafka/orders")).toBeUndefined();
+		expect(t?.nodes.find((n) => n.id === "dep:kafka://broker:9092")).toBeUndefined();
+		expect(t?.nodes.find((n) => n.name === "VERT.X/contact")).toBeUndefined();
+		// A URI-form kafka host must not slip through as a host-family dependency either.
+		expect(t?.nodes.some((n) => n.kind === "dependency" && /kafka/i.test(n.name ?? ""))).toBe(false);
+		// AMQP: one broker node, one edge (both queues collapse to it).
+		const bus = t?.nodes.filter((n) => n.id === "dep:amqp-bus") ?? [];
+		expect(bus.length).toBe(1);
+		expect(bus[0]?.name).toBe("AMQP broker");
+		expect(bus[0]?.kind).toBe("dependency");
+		expect(t?.edges.filter((e) => e.to === "dep:amqp-bus").length).toBe(1);
+		// Non-bus dependency still renders.
+		expect(t?.nodes.find((n) => n.id === "dep:postgresql")?.kind).toBe("dependency");
+	});
+
+	// SIO-1460: subdomains of one registrable domain collapse to one dep node named
+	// "<regdomain> (N hosts)". The family is keyed on the brand label (SLD label).
+	test("subdomains of one domain collapse to one '(N hosts)' node", () => {
+		const json = {
+			by_source: {
+				buckets: [
+					{
+						key: "storefront",
+						doc_count: 100,
+						by_destination: {
+							buckets: [
+								{ key: "www.calvinklein.de:443", doc_count: 10 },
+								{ key: "img.calvinklein.de:443", doc_count: 8 },
+								{ key: "postgresql", doc_count: 5 },
+							],
+						},
+					},
+				],
+			},
+		};
+		const t = buildApplicationTopology([elasticResult([{ toolName: "elasticsearch_search", rawJson: json }])], []);
+		// Both .de hosts collapse to one brand-keyed family node with a host count.
+		const fam = t?.nodes.find((n) => n.id === "dep:calvinklein");
+		expect(fam?.kind).toBe("dependency");
+		expect(fam?.name).toBe("calvinklein.de (2 hosts)");
+		expect(t?.edges.filter((e) => e.to === "dep:calvinklein").length).toBe(1);
+		// Non-host resource passes through unchanged.
+		expect(t?.nodes.find((n) => n.id === "dep:postgresql")).toBeDefined();
+	});
+
+	// SIO-1460 (live probe PR #650): the per-locale storefronts (www.calvinklein.de,
+	// .es, .fr, .co.uk, ...) differ only by ccTLD -- they collapse to ONE brand node
+	// named "<brand> (N locales)", the exact noise the ticket screenshot flagged.
+	test("per-locale storefronts collapse to one brand node with a locale count", () => {
+		const tlds = ["de", "es", "fr", "co.uk", "nl", "pl"];
+		const json = {
+			by_source: {
+				buckets: [
+					{
+						key: "storefront",
+						doc_count: 100,
+						by_destination: {
+							buckets: tlds.map((tld) => ({ key: `www.calvinklein.${tld}:443`, doc_count: 10 })),
+						},
+					},
+				],
+			},
+		};
+		const t = buildApplicationTopology([elasticResult([{ toolName: "elasticsearch_search", rawJson: json }])], []);
+		const fam = t?.nodes.find((n) => n.id === "dep:calvinklein");
+		expect(fam?.kind).toBe("dependency");
+		expect(fam?.name).toBe("calvinklein (6 locales)");
+		// One node, one edge for the whole storefront fleet.
+		expect(t?.nodes.filter((n) => n.kind === "dependency").length).toBe(1);
+		expect(t?.edges.filter((e) => e.to === "dep:calvinklein").length).toBe(1);
+	});
+
+	// Different brand labels do NOT merge even under the same TLD.
+	test("distinct brand labels stay separate", () => {
+		const json = {
+			by_source: {
+				buckets: [
+					{
+						key: "svc",
+						doc_count: 10,
+						by_destination: {
+							buckets: [
+								{ key: "baas.calvinkleinservice.com:443", doc_count: 5 },
+								{ key: "baas.tommyhilfigercrm.com:443", doc_count: 4 },
+							],
+						},
+					},
+				],
+			},
+		};
+		const t = buildApplicationTopology([elasticResult([{ toolName: "elasticsearch_search", rawJson: json }])], []);
+		expect(t?.nodes.find((n) => n.id === "dep:calvinkleinservice")).toBeDefined();
+		expect(t?.nodes.find((n) => n.id === "dep:tommyhilfigercrm")).toBeDefined();
+	});
+
+	test("single-host family renders the raw host, not '(1 hosts)'", () => {
+		const json = {
+			by_source: {
+				buckets: [
+					{
+						key: "svc",
+						doc_count: 10,
+						by_destination: { buckets: [{ key: "api.internal.example.com:8080", doc_count: 5 }] },
+					},
+				],
+			},
+		};
+		const t = buildApplicationTopology([elasticResult([{ toolName: "elasticsearch_search", rawJson: json }])], []);
+		const n = t?.nodes.find((x) => x.id === "dep:example");
+		expect(n?.name).toBe("api.internal.example.com:8080");
+	});
+
+	// SIO-1460 (CodeRabbit PR #650): the same host reached on different ports (or with
+	// different casing) is ONE host -- membership is keyed on the normalized host, not
+	// the raw host:port endpoint, so the count does not over-report.
+	test("same host on differing ports counts as one host", () => {
+		const json = {
+			by_source: {
+				buckets: [
+					{
+						key: "svc",
+						doc_count: 10,
+						by_destination: {
+							buckets: [
+								{ key: "api.shop.example.com:443", doc_count: 5 },
+								{ key: "api.shop.example.com:8443", doc_count: 3 },
+							],
+						},
+					},
+				],
+			},
+		};
+		const t = buildApplicationTopology([elasticResult([{ toolName: "elasticsearch_search", rawJson: json }])], []);
+		// One distinct host -> single-host display (raw endpoint), not "(2 hosts)".
+		const n = t?.nodes.find((x) => x.id === "dep:example");
+		expect(n?.name).toBe("api.shop.example.com:443");
+	});
+
+	// SIO-1460 (live probe PR #650): APM emits placeholder exit-span destinations
+	// keyed "0" (uninstrumented spans). Numeric/letterless resources are dropped.
+	test("junk resource keys (no letters) produce no dependency node", () => {
+		const json = {
+			by_source: {
+				buckets: [
+					{
+						key: "martech-voucher",
+						doc_count: 10,
+						by_destination: {
+							buckets: [
+								{ key: "0", doc_count: 5 },
+								{ key: "-", doc_count: 2 },
+								{ key: "redis", doc_count: 3 },
+							],
+						},
+					},
+				],
+			},
+		};
+		const t = buildApplicationTopology([elasticResult([{ toolName: "elasticsearch_search", rawJson: json }])], []);
+		expect(t?.nodes.find((n) => n.id === "dep:0")).toBeUndefined();
+		expect(t?.nodes.find((n) => n.id === "dep:-")).toBeUndefined();
+		// A real dependency in the same bucket still renders.
+		expect(t?.nodes.find((n) => n.id === "dep:redis")).toBeDefined();
+	});
+
+	test("bare single-label host and IP literals are not collapsed", () => {
+		const json = {
+			by_source: {
+				buckets: [
+					{
+						key: "svc",
+						doc_count: 10,
+						by_destination: {
+							buckets: [
+								{ key: "redis", doc_count: 5 },
+								{ key: "10.0.0.5:6379", doc_count: 3 },
+							],
+						},
+					},
+				],
+			},
+		};
+		const t = buildApplicationTopology([elasticResult([{ toolName: "elasticsearch_search", rawJson: json }])], []);
+		expect(t?.nodes.find((n) => n.id === "dep:redis")).toBeDefined();
+		expect(t?.nodes.find((n) => n.id === "dep:10.0.0.5:6379")).toBeDefined();
+	});
+
 	test("by_service health aggregation tints service nodes without creating edges", () => {
 		const t = buildApplicationTopology([elasticResult([DESTINATION_AGG_OUT, HEALTH_AGG_OUT])], []);
 		const svc = t?.nodes.find((n) => n.id === "svc:checkout-service");
@@ -134,6 +346,50 @@ describe("buildApplicationTopology - elastic APM", () => {
 		const t = buildApplicationTopology([elasticResult([DESTINATION_AGG_OUT])], ["checkout-service"]);
 		expect(t?.nodes.find((n) => n.id === "svc:checkout-service")?.service).toBe("checkout-service");
 		expect(t?.nodes.find((n) => n.id === "svc:payment-service")?.service).toBeUndefined();
+	});
+
+	// SIO-1460: focused turns keep anchors + their 1-hop neighborhood; unrelated
+	// subgraphs are dropped. Empty focus is show-all (matchesFocus([]) anchors all).
+	// Both endpoints of each subgraph are source buckets so they classify as svc:
+	// nodes (an instrumented service calling another), not dep: nodes.
+	const SCOPE_AGG = {
+		by_source: {
+			buckets: [
+				{
+					key: "checkout-service",
+					doc_count: 10,
+					by_destination: { buckets: [{ key: "payment-service", doc_count: 5 }] },
+				},
+				{ key: "payment-service", doc_count: 8, by_destination: { buckets: [] } },
+				{
+					key: "unrelated-service",
+					doc_count: 10,
+					by_destination: { buckets: [{ key: "other-service", doc_count: 5 }] },
+				},
+				{ key: "other-service", doc_count: 6, by_destination: { buckets: [] } },
+			],
+		},
+	};
+	const SCOPE_OUT = { toolName: "elasticsearch_search", rawJson: SCOPE_AGG };
+
+	test("focused turn keeps anchors + 1-hop, drops unrelated nodes", () => {
+		const t = buildApplicationTopology([elasticResult([SCOPE_OUT])], ["checkout"]);
+		expect(t?.nodes.find((n) => n.id === "svc:checkout-service")).toBeDefined(); // anchor
+		expect(t?.nodes.find((n) => n.id === "svc:payment-service")).toBeDefined(); // 1-hop
+		expect(t?.nodes.find((n) => n.id === "svc:unrelated-service")).toBeUndefined();
+		expect(t?.nodes.find((n) => n.id === "svc:other-service")).toBeUndefined();
+	});
+
+	test("unfocused turn scopes nothing (show-all)", () => {
+		const t = buildApplicationTopology([elasticResult([SCOPE_OUT])], []);
+		expect(t?.nodes.find((n) => n.id === "svc:unrelated-service")).toBeDefined();
+		expect(t?.nodes.find((n) => n.id === "svc:other-service")).toBeDefined();
+	});
+
+	test("focus that matches nothing falls back to show-all (never blank)", () => {
+		const t = buildApplicationTopology([elasticResult([SCOPE_OUT])], ["zzz-nomatch-service"]);
+		expect((t?.nodes.length ?? 0) > 0).toBe(true);
+		expect(t?.nodes.find((n) => n.id === "svc:unrelated-service")).toBeDefined();
 	});
 
 	test("malformed rawJson is skipped, never thrown", () => {
@@ -164,6 +420,15 @@ describe("buildApplicationTopology - kafka", () => {
 		expect(t.edges).toContainEqual({ from: "cg:order-workers", to: "topic:orders", kind: "consumes" });
 		expect(t.edges).toContainEqual({ from: "cg:order-workers", to: "topic:orders-dlq", kind: "consumes" });
 		expect(t.sources).toEqual(["kafka"]);
+	});
+
+	// SIO-1460: a focus-matching consumer group is an anchor (service field set), so
+	// scopeToFocus retains it AND its 1-hop topics -- anchoring is not kind:"service".
+	test("focus-matching consumer group anchor is retained with its topic 1-hop", () => {
+		const t = buildApplicationTopology([kafkaResult([DESCRIBE_CG_OUT])], ["order-workers"]);
+		expect(t?.nodes.find((n) => n.id === "cg:order-workers")?.service).toBe("order-workers");
+		expect(t?.nodes.find((n) => n.id === "topic:orders")).toBeDefined();
+		expect(t?.nodes.find((n) => n.id === "topic:orders-dlq")).toBeDefined();
 	});
 
 	test("consumer_group_lag contributes lag detail; zero lag renders no detail", () => {
@@ -265,6 +530,68 @@ describe("buildApplicationTopology - caps", () => {
 			expect(kept.has(e.from)).toBe(true);
 			expect(kept.has(e.to)).toBe(true);
 		}
+	});
+
+	// SIO-1460: ranked truncation keeps a high-degree hub over degree-1 noise even
+	// when the hub is inserted LAST (blind slice would drop it).
+	test("ranked cap keeps a high-degree hub inserted last, over degree-1 noise", () => {
+		// MAX_NODES degree-1 noise services (svc-i -> ndep-i), then a hub calling 10
+		// of the noise services (so the hub has degree 10). Unfocused: no scoping.
+		const noise = Array.from({ length: MAX_NODES }, (_, i) => ({
+			key: `svc-${i}`,
+			doc_count: 1,
+			by_destination: { buckets: [{ key: `ndep-${i}`, doc_count: 1 }] },
+		}));
+		const hub = {
+			key: "hub-service",
+			doc_count: 999,
+			by_destination: {
+				buckets: Array.from({ length: 10 }, (_, i) => ({ key: `svc-${i}`, doc_count: 50 })),
+			},
+		};
+		const t = buildApplicationTopology(
+			[elasticResult([{ toolName: "elasticsearch_search", rawJson: { by_source: { buckets: [...noise, hub] } } }])],
+			[],
+		);
+		expect(t?.truncated).toBe(true);
+		expect(t?.nodes.length).toBe(MAX_NODES);
+		expect(t?.nodes.find((n) => n.id === "svc:hub-service")).toBeDefined();
+	});
+
+	// SIO-1460: a focus anchor survives ranked truncation even when inserted last.
+	// The anchor is the LAST source bucket but calls MAX_NODES+ distinct services, so
+	// scopeToFocus retains all of them (1-hop neighborhood) and the surviving set still
+	// exceeds MAX_NODES -- forcing capTopology to truncate. Ranking (service anchor
+	// first) must keep the late-inserted checkout-service.
+	test("ranked cap keeps the focus anchor even when inserted last", () => {
+		// noise sources come first so the anchor lands last in Map insertion order.
+		const noise = Array.from({ length: 20 }, (_, i) => ({
+			key: `noise-${i}`,
+			doc_count: 1,
+			by_destination: { buckets: [{ key: `ndep-${i}`, doc_count: 1 }] },
+		}));
+		const anchored = {
+			key: "checkout-service",
+			doc_count: 999,
+			by_destination: {
+				buckets: Array.from({ length: MAX_NODES + 10 }, (_, i) => ({ key: `neighbor-${i}`, doc_count: 5 })),
+			},
+		};
+		const t = buildApplicationTopology(
+			[
+				elasticResult([
+					{ toolName: "elasticsearch_search", rawJson: { by_source: { buckets: [...noise, anchored] } } },
+				]),
+			],
+			["checkout-service"],
+		);
+		// Scoping kept the anchor + its 1-hop neighbors (> MAX_NODES), so cap fired.
+		expect(t?.truncated).toBe(true);
+		expect(t?.nodes.length).toBe(MAX_NODES);
+		// The focus anchor survives despite being inserted last.
+		expect(t?.nodes.find((n) => n.id === "svc:checkout-service")).toBeDefined();
+		// The unrelated noise subgraph was scoped out entirely.
+		expect(t?.nodes.find((n) => n.id === "svc:noise-0")).toBeUndefined();
 	});
 });
 
@@ -374,5 +701,17 @@ describe("summarizeApplicationTopologyForPrompt", () => {
 		const lines = summarizeApplicationTopologyForPrompt(t).split("\n");
 		expect(lines.length).toBeLessThanOrEqual(20);
 		expect(lines[lines.length - 1]).toContain("more lines");
+	});
+
+	// SIO-1460: on a focused turn the summary reflects the scoped map. redis is 2
+	// hops from the checkout anchor (only payment-service, an unanchored 1-hop
+	// neighbor, calls it), so it is dropped; the checkout->payment calls line stays.
+	test("prompt summary reflects the scoped map on a focused turn", () => {
+		const built = buildApplicationTopology([elasticResult([DESTINATION_AGG_OUT])], ["checkout-service"]);
+		expect(built).toBeDefined();
+		if (!built) return;
+		const summary = summarizeApplicationTopologyForPrompt(built);
+		expect(summary).toContain("checkout-service -> payment-service");
+		expect(summary).not.toContain("redis");
 	});
 });

@@ -34,14 +34,10 @@ const SYMBOL_SIZE: Record<ApplicationTopologyNode["kind"], number> = {
 	awsResource: 16,
 };
 
-// AWS resource labels (long ARNs) stay hidden until hover; everything else on
-// an application map is a short name worth showing at default zoom.
-const LABELED_KINDS: ReadonlySet<ApplicationTopologyNode["kind"]> = new Set([
-	"service",
-	"dependency",
-	"kafkaTopic",
-	"consumerGroup",
-]);
+// AWS resource labels (long ARNs) stay hidden until hover. SIO-1460: dependency
+// nodes are also unlabeled at rest -- even with host families collapsed they are the
+// densest kind, and hover/emphasis plus the SIO-1459 text view still surface names.
+const LABELED_KINDS: ReadonlySet<ApplicationTopologyNode["kind"]> = new Set(["service", "kafkaTopic", "consumerGroup"]);
 
 function nodeLabel(node: ApplicationTopologyNode): string {
 	return node.name ?? node.id;
