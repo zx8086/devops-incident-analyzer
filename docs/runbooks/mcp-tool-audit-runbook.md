@@ -105,7 +105,7 @@ Verification checklist:
 
 - `bun run typecheck && bun run lint && bun run test` (+ `bun run yaml:check` for YAML edits). Expect and document pre-existing failures on main.
 - Restart the live server from merged main (kill the exact tracked PID; `bun --hot` does not reliably pick up pulled changes) and re-probe: the fixed tool with the Phase 3 anchor, the new tool count/schema via `tools/list`, and one free error path to see the envelope live.
-- Linear issue per concern BEFORE implementation; branches from main; ready-for-review PRs; triage every CodeRabbit finding (fix or decline with evidence -- a live-proven decline can get the finding formally withdrawn).
+- Linear issue per concern BEFORE implementation; branches from main; ready-for-review PRs; triage every Greptile finding (fix or decline with evidence -- a live-proven decline can get the finding formally withdrawn).
 
 ## Case study anchors (GitLab, 2026-07-23)
 

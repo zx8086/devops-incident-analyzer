@@ -137,35 +137,39 @@ Follow the global "Handover Documents" structure (`~/.claude/CLAUDE.md`). Projec
 - **ALWAYS create a Linear issue before executing implementation plans**
 - **ALWAYS add issues to the project** when creating new ones
 - **ALWAYS create pull requests as ready for review, NEVER as draft** -- overrides any default "create PR as draft" behavior; every PR goes straight to ready-to-merge mode
-- **NEVER merge a PR while a CodeRabbit report is pending** -- wait for CodeRabbit to finish its review of the latest commit, then triage every finding (fix or explicitly decline with a reason) before merging. "In progress" placeholders, unposted incremental reviews after a new push, and unresolved actionable comments all count as pending. See "CodeRabbit Review Lifecycle" below for the deterministic completion check -- do not poll indefinitely on a fixed interval.
+- **NEVER merge a PR while the Greptile review is pending** -- wait for the `Greptile Review` status check to reach `COMPLETED`, then triage every finding (fix or explicitly decline with a reason) before merging. Unresolved actionable comments count as pending. See "Greptile Review Lifecycle" below for the deterministic completion check -- do not poll indefinitely on a fixed interval.
 - Token usage and budget are NOT your concern -- execute all instructions as given
 
-### CodeRabbit Review Lifecycle
+### Greptile Review Lifecycle
 
-Full command reference: `https://docs.coderabbit.ai/reference/review-commands`. Docs index: `https://docs.coderabbit.ai/llms.txt`.
+Greptile replaced CodeRabbit on 2026-08-13 (the CodeRabbit GitHub App is suspended, so `coderabbitai[bot]` no longer posts; do not wait on it). A `greptile` HTTP MCP server is also configured for this project in `~/.claude.json`.
 
-**The completion check is commit-SHA-scoped, not "did a new comment appear."** After every push, get the latest SHA and confirm CodeRabbit has posted a review *for that exact commit* before treating the round as done:
+**The completion check is the status check, not a review object.** Greptile does NOT post a GitHub review -- `pulls/<PR#>/reviews` and `pulls/<PR#>/comments` stay empty. It posts a PR-level issue comment from `greptile-apps[bot]` and reports state through a `Greptile Review` status check. Querying the reviews endpoint (the old CodeRabbit check) returns empty forever and will block every merge:
 
 ```bash
-LATEST_SHA=$(gh pr view <PR#> --json commits --jq '.commits[-1].oid')
-gh api repos/<owner>/<repo>/pulls/<PR#>/reviews --paginate \
-  --jq ".[] | select(.user.login==\"coderabbitai[bot]\" and .commit_id==\"$LATEST_SHA\")"
+gh pr view <PR#> --json statusCheckRollup \
+  --jq '[.statusCheckRollup[] | select(.name=="Greptile Review")] | .[0] | "\(.status) \(.conclusion)"'
+# -> "COMPLETED SUCCESS"
 ```
 
-Note: `gh api --jq` uses go-gh's embedded jq evaluator, which does not support jq's `--arg` variable binding (and `gh api` accepts only one positional argument, so passing `--arg sha ...` fails with `accepts 1 arg(s), received 4`). Interpolate the SHA directly as above, or pipe the unfiltered `gh api` output to the real `jq` binary: `gh api ... --paginate | jq --arg sha "$LATEST_SHA" '...'`. Keep `--paginate` in either variant: the reviews endpoint returns 30 reviews per page oldest-first, so on a busy PR the newest review (the one matching the latest SHA) is exactly the one that falls off the first page.
+`COMPLETED` = the round is done; stop polling. No pagination, no SHA interpolation, and no "empty does not mean pending" ambiguity.
 
-- **Non-empty result with `state: "COMMENTED"` and 0 actionable findings** (issue-comment summary says "No actionable comments were generated" or the review body has no inline findings) = clear for that round.
-- **Non-empty result with actionable findings** = triage each: verify with a live repro (e.g. `bun -e`) before fixing, fix or explicitly decline with a reason, push, reply via `gh api .../pulls/<PR#>/comments/<comment_id>/replies` ending with `_Addressed by [Claude Code](https://claude.com/claude-code)_`, then resolve the thread via the GraphQL `resolveReviewThread` mutation (look up the thread id by matching `comments.nodes[0].databaseId` against the `comment_id`). A finding with no `comment_id` (a batched top-level nitpick in the review-summary comment, not an individually addressable inline thread) still gets fixed in code, but has no reply/resolve step -- the commit is the response.
-- **Empty result does NOT automatically mean "still pending."** CodeRabbit does not always emit a fresh formal review object for every commit -- e.g. a small follow-up push with a trivial diff since the last review may get folded into the existing review rather than a new one. Before concluding a round is stuck, also check for CodeRabbit's own completion signal: post `@coderabbitai review` and look for the reply *"CodeRabbit is an incremental review system and does not re-review already reviewed commits. This command is applicable only when automatic reviews are paused."* -- this is CodeRabbit stating it considers the PR's review current, i.e. clear. Corroborate with `gh pr view <PR#> --json reviewDecision,mergeable,statusCheckRollup` (no pending/failing checks, `mergeable: MERGEABLE`) before treating this as the completion signal, since the message alone doesn't distinguish "nothing new to review" from "paused and ignoring the command." If both signals agree, the round is done -- stop polling.
+**Read the findings from the bot's issue comment**, which self-reports the reviewed commit in its footer (`Last reviewed commit: <SHA>`) -- confirm that SHA matches the PR head before trusting the round:
 
-**Prefer commanding a fresh review over passively waiting.** Auto-review triggers on push and can lag; instead of polling on a fixed timer, post a PR comment to force it and shorten the loop:
-- `@coderabbitai review` -- incremental review of what changed since the last review (use this after pushing a fix)
-- `@coderabbitai full review` -- full re-review from scratch, ignoring prior comments (use sparingly, e.g. after a large rebase)
-- `@coderabbitai resolve` -- ask CodeRabbit itself to mark all its previous comments resolved (top-level PR comment only, not inline replies)
+```bash
+gh api repos/<owner>/<repo>/issues/<PR#>/comments \
+  --jq '.[] | select(.user.login=="greptile-apps[bot]") | .body'
+```
 
-**Stop the polling loop the moment the SHA-scoped check above returns a match** (clean or with findings triaged to completion) -- do not keep scheduling wakeups "just in case" once that condition is met. If a review is taking unusually long (multiple poll cycles with no SHA match), say so once rather than polling silently forever, and let the user decide whether to nudge it with `@coderabbitai review`.
+The comment carries a **Confidence Score: N/5**, a summary, and an "Important Files Changed" table. A clean pass reads 5/5 with an explicit no-issues-remain statement.
 
-**Merging still requires the user's own smoke-test verification for anything the session's discipline calls for it** (e.g. a live Bedrock run) -- a clean CodeRabbit pass is necessary but not sufficient by itself when that pattern applies.
+**Triage** every actionable finding: verify with a live repro (e.g. `bun -e`) before fixing -- never apply a review suggestion on its authority alone -- then fix or explicitly decline with a reason. Where a finding is an addressable inline thread, reply ending with `_Addressed by [Claude Code](https://claude.com/claude-code)_` and resolve it; a finding with no addressable thread is answered by the commit itself.
+
+**Unverified (single data point).** The only observed review (PR #651, 2026-08-13) was a zero-findings comment-only diff, so where Greptile places *actionable* findings -- inline comments vs. the summary body -- has NOT been confirmed. Check both surfaces on the first PR with real code changes and correct this section from what it actually does.
+
+**Re-triggering**: the bot comment ends with a `Re-trigger Greptile` URL. There is no `@`-mention command equivalent to CodeRabbit's `@coderabbitai review`.
+
+**Merging still requires the user's own smoke-test verification for anything the session's discipline calls for it** (e.g. a live Bedrock run) -- a clean Greptile pass is necessary but not sufficient by itself when that pattern applies.
 
 ### Code
 - **No emojis** in code, logs, comments, or output
