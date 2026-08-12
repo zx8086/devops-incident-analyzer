@@ -47,10 +47,6 @@ current/
 # Local git worktrees (kept outside the indexed tree)
 .worktrees/
 
-# Per-session handover docs live in experiments/ and commit directly to main.
-# The directory used to be gitignored; that rule is removed so handovers are
-# discoverable via git log from any branch/worktree.
-
 # Local-only build artifacts that exceed GitHub's per-file size limit
 *-mcp-agentcore.tar.gz
 
