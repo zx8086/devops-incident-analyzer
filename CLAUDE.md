@@ -144,7 +144,7 @@ Follow the global "Handover Documents" structure (`~/.claude/CLAUDE.md`). Projec
 
 Greptile replaced CodeRabbit on 2026-08-13 (the CodeRabbit GitHub App is suspended, so `coderabbitai[bot]` no longer posts; do not wait on it). A `greptile` HTTP MCP server is also configured for this project in `~/.claude.json`.
 
-**The completion check is the status check, not a review object.** Greptile does NOT post a GitHub review -- `pulls/<PR#>/reviews` and `pulls/<PR#>/comments` stay empty. It posts a PR-level issue comment from `greptile-apps[bot]` and reports state through a `Greptile Review` status check. Querying the reviews endpoint (the old CodeRabbit check) returns empty forever and will block every merge:
+**The completion check is the `Greptile Review` status check.** Greptile always posts a PR-level issue comment from `greptile-apps[bot]`; it ALSO posts a review object plus inline comments **when it has findings** (a zero-findings pass posts the issue comment only, which is why `pulls/<PR#>/reviews` can legitimately be empty on a clean PR). Never gate on the reviews endpoint -- an empty result there does not distinguish "clean" from "still running". Gate on the check:
 
 ```bash
 gh pr view <PR#> --json statusCheckRollup \
@@ -152,20 +152,20 @@ gh pr view <PR#> --json statusCheckRollup \
 # -> "COMPLETED SUCCESS"
 ```
 
-`COMPLETED` = the round is done; stop polling. No pagination, no SHA interpolation, and no "empty does not mean pending" ambiguity.
+**Both fields matter: require `status == COMPLETED` AND `conclusion == SUCCESS`.** `COMPLETED` alone is only a terminal GitHub state -- `FAILURE`, `ERROR`, `CANCELLED`, and `TIMED_OUT` are all `COMPLETED` too, and treating them as done would pass the merge gate with no usable review. On a non-`SUCCESS` conclusion the round is NOT clear: re-trigger and re-poll, or escalate to the user. Do not merge on it.
 
-**Read the findings from the bot's issue comment**, which self-reports the reviewed commit in its footer (`Last reviewed commit: <SHA>`) -- confirm that SHA matches the PR head before trusting the round:
+**Read the findings from the bot's issue comment**, which self-reports the reviewed commit in its footer (`Last reviewed commit: <SHA>`) -- confirm that SHA matches the PR head before trusting the round. Keep `--paginate`: issue comments return 30 per page, so on a busy PR the Greptile report is exactly what falls off page 1, and without it the command succeeds while emitting nothing.
 
 ```bash
-gh api repos/<owner>/<repo>/issues/<PR#>/comments \
+gh api repos/<owner>/<repo>/issues/<PR#>/comments --paginate \
   --jq '.[] | select(.user.login=="greptile-apps[bot]") | .body'
 ```
 
-The comment carries a **Confidence Score: N/5**, a summary, and an "Important Files Changed" table. A clean pass reads 5/5 with an explicit no-issues-remain statement.
+The comment carries a **Confidence Score: N/5**, a summary, and an "Important Files Changed" table. A clean pass reads 5/5 with an explicit no-issues-remain statement. When there ARE findings, the score drops (3/5 observed for two P1s), the summary names the offending `file:line`s, and the findings appear BOTH as inline comments and in a "Comments Outside Diff" block with Bug/Cause/Fix subsections. Greptile runs executable fixtures to verify its own claims ("T-Rex"), so its findings tend to be reproducible -- but still verify before applying, per the triage rule below.
 
 **Triage** every actionable finding: verify with a live repro (e.g. `bun -e`) before fixing -- never apply a review suggestion on its authority alone -- then fix or explicitly decline with a reason. Where a finding is an addressable inline thread, reply ending with `_Addressed by [Claude Code](https://claude.com/claude-code)_` and resolve it; a finding with no addressable thread is answered by the commit itself.
 
-**Unverified (single data point).** The only observed review (PR #651, 2026-08-13) was a zero-findings comment-only diff, so where Greptile places *actionable* findings -- inline comments vs. the summary body -- has NOT been confirmed. Check both surfaces on the first PR with real code changes and correct this section from what it actually does.
+**Observed behavior** (PR #651 clean pass, PR #652 two P1 findings, both 2026-08-13): a zero-findings review posts ONLY the issue comment; a review with findings posts the issue comment, a `COMMENTED` review object, and one inline comment per finding. Findings carry P-level severity badges (P1 observed). Turnaround was about a minute on small diffs.
 
 **Re-triggering**: the bot comment ends with a `Re-trigger Greptile` URL. There is no `@`-mention command equivalent to CodeRabbit's `@coderabbitai review`.
 
