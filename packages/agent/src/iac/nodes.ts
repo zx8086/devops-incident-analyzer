@@ -7979,18 +7979,46 @@ export function parseRepoTreeFiles(toolResult: string): string[] {
 	}
 }
 
-// Deployment names from elastic_cloud_list_deployments' "[status] {deployments:[{name}]}".
+// SIO-1463: discriminated parse of elastic_cloud_list_deployments' "[status] {deployments:[{name}]}".
+// A failed list call (dead EC_API_KEY, server down, network error) previously collapsed into
+// names:[] -- indistinguishable from "org has no deployments" -- so an auth outage silently became
+// the generic "which deployment?" clarify. listError carries an operator-facing cause instead.
 // (Pure; unit-tested.)
-export function parseEcDeploymentNames(toolResult: string): string[] {
+export function parseEcDeploymentList(toolResult: string): { names: string[]; listError?: string } {
+	// callTool placeholders: server not connected / tool invoke threw (cloudFetch itself never throws).
+	if (/^\[[^\]]*unavailable - /.test(toolResult)) return { names: [], listError: "elastic-iac server not connected" };
+	if (/^\[[^\]]* error: /.test(toolResult)) return { names: [], listError: "deployment list call failed" };
+	// cloudFetch's own non-HTTP failure shapes (elastic.ts): missing key, fetch threw.
+	if (toolResult.startsWith("[elastic cloud api key not configured"))
+		return { names: [], listError: "EC_API_KEY not configured" };
+	if (toolResult.startsWith("[elastic cloud request failed"))
+		return { names: [], listError: "Elastic Cloud API unreachable" };
+	const status = /^\[(\d{3})\]/.exec(toolResult)?.[1];
+	if (status && !status.startsWith("2")) {
+		const authHint = status === "401" || status === "403" ? " -- authentication invalid; check EC_API_KEY" : "";
+		return { names: [], listError: `HTTP ${status} from the Elastic Cloud API${authHint}` };
+	}
 	const jsonStart = toolResult.indexOf("{");
-	if (jsonStart < 0) return [];
+	if (jsonStart < 0) return { names: [], listError: "unparseable Elastic Cloud response" };
 	try {
 		const parsed = JSON.parse(toolResult.slice(jsonStart)) as { deployments?: Array<{ name?: unknown }> };
 		const rows = Array.isArray(parsed.deployments) ? parsed.deployments : [];
-		return rows.map((r) => (typeof r.name === "string" ? r.name : "")).filter(Boolean);
+		return { names: rows.map((r) => (typeof r.name === "string" ? r.name : "")).filter(Boolean) };
 	} catch {
-		return [];
+		return { names: [], listError: "unparseable Elastic Cloud response" };
 	}
+}
+
+// Back-compat name-only view of parseEcDeploymentList. (Pure; unit-tested.)
+export function parseEcDeploymentNames(toolResult: string): string[] {
+	return parseEcDeploymentList(toolResult).names;
+}
+
+// SIO-1463: prefix a deployment clarify question with the list-call failure when there is one, so
+// an EC auth/connectivity outage reads as an outage instead of the agent "not understanding" a
+// deployment named verbatim in the message. (Pure; unit-tested.)
+export function deploymentClarifyQuestion(base: string, listError?: string): string {
+	return listError ? `I couldn't list Elastic Cloud deployments (${listError}). ${base}` : base;
 }
 
 // Pipeline id/status from gitlab_trigger_drift_check's JSON. (Pure; unit-tested.)
@@ -9543,20 +9571,30 @@ export function parseTargetVersion(text: string, requestVersion?: string): strin
 
 // Resolve the target deployment for a drift audit from the user's text, matched against the
 // live Elastic Cloud deployment names (no local clone).
-async function resolveDriftDeployment(state: IacStateType): Promise<string> {
-	if (state.targetDeployment) return state.targetDeployment;
+async function resolveDriftDeployment(state: IacStateType): Promise<{ deployment: string; listError?: string }> {
+	if (state.targetDeployment) return { deployment: state.targetDeployment };
 	const query = lastHumanText(state).toLowerCase();
-	const names = parseEcDeploymentNames(await callTool("elastic_cloud_list_deployments", {}));
+	const toolResult = await callTool("elastic_cloud_list_deployments", {});
+	const { names, listError } = parseEcDeploymentList(toolResult);
+	// SIO-1463: a failed list call is NOT "no match" -- surface it so the caller's clarify names
+	// the outage (a dead EC_API_KEY looked like the agent failing to read a verbatim deployment).
+	if (listError) {
+		log.warn(
+			{ listError, toolResult: toolResult.slice(0, 300) },
+			"iac: elastic_cloud_list_deployments failed; deployment resolution degraded to clarify",
+		);
+		return { deployment: "", listError };
+	}
 	// Exact (case-insensitive) match wins; otherwise accept a partial only when it's the unique
 	// candidate -- a naive substring find lets a shorter name (eu-b2b) beat eu-b2b-prod. No
 	// unambiguous match -> "" routes to the iac_clarify interrupt.
 	const exact = names.find((d) => d.toLowerCase() === query);
-	if (exact) return exact;
+	if (exact) return { deployment: exact };
 	const partial = names.filter((d) => {
 		const n = d.toLowerCase();
 		return query.includes(n) || n.includes(query);
 	});
-	return partial.length === 1 ? (partial[0] ?? "") : "";
+	return { deployment: partial.length === 1 ? (partial[0] ?? "") : "" };
 }
 
 function driftedStacks(state: IacStateType): StackDrift[] {
@@ -9715,13 +9753,14 @@ async function driftCheckStack(deployment: string, stack: string): Promise<Stack
 // clone), fans out the repo's on-demand drift-check per stack, and emits the full report
 // once (iac_drift_report) for the UI overview. No writes here.
 export async function detectDrift(state: IacStateType): Promise<Partial<IacStateType>> {
-	let deployment = await resolveDriftDeployment(state);
+	const resolved = await resolveDriftDeployment(state);
+	let deployment = resolved.deployment;
 	if (!deployment) {
-		const answer = interrupt({
-			type: "iac_clarify",
-			question: "Which deployment should I check for drift? (e.g. eu-b2b)",
-			message: "Which deployment should I check for drift? (e.g. eu-b2b)",
-		}) as { answer?: string };
+		const question = deploymentClarifyQuestion(
+			"Which deployment should I check for drift? (e.g. eu-b2b)",
+			resolved.listError,
+		);
+		const answer = interrupt({ type: "iac_clarify", question, message: question }) as { answer?: string };
 		deployment = (answer?.answer ?? "").trim();
 	}
 	if (!deployment) {
@@ -10813,13 +10852,14 @@ async function emitSyntheticsReport(report: SyntheticsDriftReport): Promise<void
 // the SYNTH_DRIFT_CHECK pipeline, poll, parse, emit the report. The explanation is folded in
 // (the report is already grounded + category-grouped, so no separate explain node).
 export async function detectSyntheticsDrift(state: IacStateType): Promise<Partial<IacStateType>> {
-	let deployment = await resolveDriftDeployment(state);
+	const resolved = await resolveDriftDeployment(state);
+	let deployment = resolved.deployment;
 	if (!deployment) {
-		const answer = interrupt({
-			type: "iac_clarify",
-			question: "Which deployment's synthetics should I check for drift? (e.g. eu-b2b)",
-			message: "Which deployment's synthetics should I check for drift? (e.g. eu-b2b)",
-		}) as { answer?: string };
+		const question = deploymentClarifyQuestion(
+			"Which deployment's synthetics should I check for drift? (e.g. eu-b2b)",
+			resolved.listError,
+		);
+		const answer = interrupt({ type: "iac_clarify", question, message: question }) as { answer?: string };
 		deployment = (answer?.answer ?? "").trim();
 	}
 	if (!deployment) {
@@ -11333,13 +11373,17 @@ export async function detectFleetUpgrade(state: IacStateType): Promise<Partial<I
 	// the message isn't an exact name and depends on a live MCP round-trip. This mirrors how `version`
 	// already prefers state.iacRequest?.version. resolveDriftDeployment stays the fallback for the
 	// drift/synthetics flows (and the fresh-turn case with no parsed cluster).
-	let deployment = state.iacRequest?.cluster?.trim() || (await resolveDriftDeployment(state));
+	const parsedCluster = state.iacRequest?.cluster?.trim() || "";
+	const resolved: { deployment: string; listError?: string } = parsedCluster
+		? { deployment: parsedCluster }
+		: await resolveDriftDeployment(state);
+	let deployment = resolved.deployment;
 	if (!deployment) {
-		const answer = interrupt({
-			type: "iac_clarify",
-			question: "Which deployment's Fleet agents should I upgrade? (e.g. eu-b2b)",
-			message: "Which deployment's Fleet agents should I upgrade? (e.g. eu-b2b)",
-		}) as { answer?: string };
+		const question = deploymentClarifyQuestion(
+			"Which deployment's Fleet agents should I upgrade? (e.g. eu-b2b)",
+			resolved.listError,
+		);
+		const answer = interrupt({ type: "iac_clarify", question, message: question }) as { answer?: string };
 		deployment = (answer?.answer ?? "").trim();
 	}
 	const version = parseTargetVersion(lastHumanText(state), state.iacRequest?.version);

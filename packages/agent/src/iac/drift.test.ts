@@ -7,6 +7,7 @@ import {
 	applyReportValuesToConfig,
 	classifyStackByName,
 	configStackFamily,
+	deploymentClarifyQuestion,
 	detectLostIlmActions,
 	driftFingerprint,
 	explainStackDrift,
@@ -21,6 +22,7 @@ import {
 	parseAgentMrBySourceBranch,
 	parseDriftCheckResult,
 	parseDriftReport,
+	parseEcDeploymentList,
 	parseEcDeploymentNames,
 	parseLeafPath,
 	parseRepoTreeDirs,
@@ -77,6 +79,63 @@ describe("parseEcDeploymentNames", () => {
 	test("extracts deployment names from the EC list", () => {
 		const body = `[200] ${JSON.stringify({ deployments: [{ name: "eu-b2b" }, { name: "us-cld" }] })}`;
 		expect(parseEcDeploymentNames(body)).toEqual(["eu-b2b", "us-cld"]);
+	});
+});
+
+// SIO-1463: a failed list call must be distinguishable from "org has no deployments" -- a dead
+// EC_API_KEY previously collapsed into names:[] and surfaced as the generic deployment clarify.
+describe("parseEcDeploymentList", () => {
+	test("healthy 200 body yields names and no listError", () => {
+		const body = `[200] ${JSON.stringify({ deployments: [{ name: "eu-b2b" }] })}`;
+		expect(parseEcDeploymentList(body)).toEqual({ names: ["eu-b2b"] });
+	});
+	test("a 200 with no deployments key is an empty org, not an error", () => {
+		expect(parseEcDeploymentList("[200] {}")).toEqual({ names: [] });
+	});
+	test("a 401 body flags authentication and points at EC_API_KEY", () => {
+		const body =
+			'[401] {"errors":[{"code":"root.unauthenticated","message":"The supplied authentication is invalid"}]}';
+		const r = parseEcDeploymentList(body);
+		expect(r.names).toEqual([]);
+		expect(r.listError).toContain("401");
+		expect(r.listError).toContain("EC_API_KEY");
+	});
+	test("a 5xx body flags the status without the auth hint", () => {
+		const r = parseEcDeploymentList("[503] upstream unavailable");
+		expect(r.listError).toContain("503");
+		expect(r.listError).not.toContain("EC_API_KEY");
+	});
+	test("the not-configured placeholder from cloudFetch is an error", () => {
+		const r = parseEcDeploymentList("[elastic cloud api key not configured: set EC_API_KEY]");
+		expect(r.listError).toBe("EC_API_KEY not configured");
+	});
+	test("the fetch-threw placeholder from cloudFetch is an error", () => {
+		const r = parseEcDeploymentList("[elastic cloud request failed: fetch failed]");
+		expect(r.listError).toBe("Elastic Cloud API unreachable");
+	});
+	test("the callTool server-not-connected placeholder is an error", () => {
+		const r = parseEcDeploymentList("[elastic_cloud_list_deployments unavailable - elastic-iac server not connected]");
+		expect(r.listError).toBe("elastic-iac server not connected");
+	});
+	test("the callTool invoke-threw placeholder is an error", () => {
+		const r = parseEcDeploymentList("[elastic_cloud_list_deployments error: socket hang up]");
+		expect(r.listError).toBe("deployment list call failed");
+	});
+});
+
+describe("deploymentClarifyQuestion (SIO-1463)", () => {
+	const base = "Which deployment's Fleet agents should I upgrade? (e.g. eu-b2b)";
+	test("no listError leaves the question unchanged", () => {
+		expect(deploymentClarifyQuestion(base)).toBe(base);
+	});
+	test("a listError leads with the cause and keeps the question", () => {
+		const q = deploymentClarifyQuestion(
+			base,
+			"HTTP 401 from the Elastic Cloud API -- authentication invalid; check EC_API_KEY",
+		);
+		expect(q).toContain("couldn't list Elastic Cloud deployments");
+		expect(q).toContain("401");
+		expect(q).toContain(base);
 	});
 });
 
