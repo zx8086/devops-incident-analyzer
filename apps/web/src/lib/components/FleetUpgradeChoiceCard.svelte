@@ -111,6 +111,22 @@ const skippedByLabel = $derived.by(() => {
       </div>
     {/if}
 
+    <!-- SIO-1462: knowledge-graph change history for this deployment (prior ConfigChanges + their
+         pass/fail outcome), so the operator sees whether a similar upgrade applied or failed last
+         time before approving. The fleet-path twin of PlanReviewCard's SIO-969 "Recent changes"
+         panel; the fleet lane bypasses graphEnrichIac, so detectFleetUpgrade reads the KG itself.
+         Gated on presence (like the memory block below), not a three-state status -- an off/empty KG
+         yields no markdown and the panel simply stays hidden. NOTE: a deployment's own upgrade only
+         surfaces here on its NEXT upgrade (the KG read precedes this turn's write, by design). -->
+    {#if prompt.recentChanges}
+      <details class="mt-2" open>
+        <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">Recent changes (knowledge graph)</summary>
+        <div class="mt-1 rounded bg-white border border-tommy-accent-blue/30 px-2 py-1 text-xs text-tommy-navy">
+          <MarkdownRenderer content={prompt.recentChanges} />
+        </div>
+      </details>
+    {/if}
+
     <!-- SIO-971: cross-session agent-memory recall of prior fleet upgrades for this deployment,
          so the operator sees "we've upgraded this deployment before" (and how it went) before
          approving. The fleet-path twin of SIO-970's plan-review "Prior learnings" block. -->

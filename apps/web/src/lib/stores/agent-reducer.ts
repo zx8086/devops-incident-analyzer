@@ -297,6 +297,10 @@ export interface FleetUpgradeChoice {
 	// Undefined when the agent-memory backend is off or recall found nothing. Like SIO-970's
 	// priorLearnings, this field must exist on the client type or the card can't read it.
 	priorUpgrades?: string;
+	// SIO-1462: rendered knowledge-graph change history for this deployment, markdown. Undefined when
+	// the KG is off/empty. The fleet-path twin of IacReview.recentChanges; same silent-drop gotcha --
+	// this field must exist here or the card can't read it.
+	recentChanges?: string;
 	message: string;
 }
 
@@ -782,6 +786,7 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 					byReason: event.byReason,
 					versionCrosstab: event.versionCrosstab, // SIO-935
 					priorUpgrades: event.priorUpgrades, // SIO-971
+					recentChanges: event.recentChanges, // SIO-1462
 					message: event.message,
 				},
 			};

@@ -1212,6 +1212,9 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		// SIO-971: rendered agent-memory recall of prior fleet upgrades for this deployment
 		// (markdown). Absent when the agent-memory backend is off or recall found nothing.
 		priorUpgrades: z.string().optional(),
+		// SIO-1462: rendered knowledge-graph change history for this deployment (markdown).
+		// Absent when the KG is off/empty. The fleet-path twin of the gitops review card's recentChanges.
+		recentChanges: z.string().optional(),
 		message: z.string(),
 	}),
 	// The single apply outcome (from applyFleetUpgrade). failedSilent is the verify-sweep

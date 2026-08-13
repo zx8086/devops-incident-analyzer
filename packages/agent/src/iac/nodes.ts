@@ -2,7 +2,12 @@
 
 import { createHash } from "node:crypto";
 import { buildSystemPrompt } from "@devops-agent/gitagent-bridge";
-import { isKnowledgeGraphEnabled } from "@devops-agent/knowledge-graph";
+import {
+	buildIacGraphContext,
+	getGraphStore,
+	isKnowledgeGraphEnabled,
+	priorChangesForDeployment,
+} from "@devops-agent/knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
 import { type AnnotationMap, readPositiveIntEnv, readPositiveMsEnv } from "@devops-agent/shared";
 import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch";
@@ -11223,6 +11228,29 @@ export async function recallPriorFleetUpgrades(deployment: string, _version: str
 	}
 }
 
+// SIO-1462: the fleet lane's twin of graphEnrichIac's KG read. The fleet path bypasses
+// graphEnrichIac (graph.ts: detectFleetUpgrade -> fleetUpgradeGate), so the "Recent changes
+// (knowledge graph)" panel never got its data. Read the deployment's prior ConfigChanges here and
+// render the same markdown buildIacGraphContext produces for the gitops card. Deployment-level
+// only -- fleet ConfigChanges (SIO-1461) carry no mrUrl/stackInstanceId, so the per-stack + blast-
+// radius sections would be empty noise. Gated on the KG flag, soft-fails to "" (never blocks the
+// preview). TIMING: this read runs before this turn's SIO-1461 write, so a deployment's own upgrade
+// appears only on its NEXT upgrade -- by design, exactly like graphEnrichIac.
+export async function recallDeploymentKgChanges(deployment: string): Promise<string> {
+	if (!isKnowledgeGraphEnabled() || !deployment) return "";
+	try {
+		const store = await getGraphStore();
+		const changes = await priorChangesForDeployment(store, deployment);
+		return buildIacGraphContext(deployment, changes);
+	} catch (error) {
+		log.warn(
+			{ error: error instanceof Error ? error.message : String(error), deployment },
+			"iac fleet upgrade: KG change-history read failed; continuing without it",
+		);
+		return "";
+	}
+}
+
 // SIO-1032: raw-text scoping parsers for the fleet-upgrade flow. The fleet-upgrade INTENT routes
 // straight to detectFleetUpgrade and never runs parseIntent, so deployment/version (and now the host
 // scope) are parsed from the message text here, deterministically -- same idiom as parseTargetVersion.
@@ -11393,7 +11421,12 @@ export async function detectFleetUpgrade(state: IacStateType): Promise<Partial<I
 
 	// SIO-971: recall prior terminal fleet upgrades for this deployment (best-effort) and fold them
 	// onto the report so the gate card surfaces "we've upgraded this deployment before".
-	const priorUpgrades = await recallPriorFleetUpgrades(deployment, version);
+	// SIO-1462: also read the KG change history (the fleet lane bypasses graphEnrichIac), so the gate
+	// card can show the "Recent changes (knowledge graph)" panel the gitops card has.
+	const [priorUpgrades, recentChanges] = await Promise.all([
+		recallPriorFleetUpgrades(deployment, version),
+		recallDeploymentKgChanges(deployment),
+	]);
 	const report: FleetUpgradeReport = {
 		...parsed,
 		generatedAt: parsed.generatedAt || new Date().toISOString(),
@@ -11402,6 +11435,7 @@ export async function detectFleetUpgrade(state: IacStateType): Promise<Partial<I
 		...(requestedSelector && { requestedSelector }),
 		...(expectedAgentCount != null && { expectedAgentCount }),
 		...(priorUpgrades && { priorUpgrades }),
+		...(recentChanges && { recentChanges }),
 	};
 	log.info(
 		{
@@ -11411,6 +11445,7 @@ export async function detectFleetUpgrade(state: IacStateType): Promise<Partial<I
 			upgradeable: report.crosstab.upgradeable,
 			versionAvailable: report.versionAvailable,
 			hasPriorUpgrades: Boolean(priorUpgrades),
+			hasRecentChanges: Boolean(recentChanges),
 		},
 		"iac fleet upgrade: preview assessed",
 	);
@@ -11480,6 +11515,7 @@ export function fleetUpgradeGate(state: IacStateType): Partial<IacStateType> {
 		byReason: report.crosstab.byReason,
 		...(vc && { versionCrosstab: vc }), // SIO-935
 		...(report.priorUpgrades && { priorUpgrades: report.priorUpgrades }), // SIO-971
+		...(report.recentChanges && { recentChanges: report.recentChanges }), // SIO-1462
 		message,
 	}) as { approve?: boolean };
 	return { fleetUpgradeApproved: choice?.approve === true };
