@@ -171,7 +171,7 @@ describe("curated kg_* tools", () => {
 	// SIO-1203: fallback -- applied changes whether or not they have a linked Prompt.
 	test("kg_applied_changes renders a row with a prompt", async () => {
 		const store = new InMemoryGraphStore();
-		store.stub("MATCH (c:ConfigChange)-[:PROPOSED_IN]", [
+		store.stub("MATCH (c:ConfigChange) WHERE c.outcome = 'applied'", [
 			{
 				prompt: "widen the ILM policy retention to 30 days on eu-b2b",
 				summary: "ilm retention widened",
@@ -190,12 +190,33 @@ describe("curated kg_* tools", () => {
 
 	test("kg_applied_changes renders a pre-SIO-1038 row with no linked prompt", async () => {
 		const store = new InMemoryGraphStore();
-		store.stub("MATCH (c:ConfigChange)-[:PROPOSED_IN]", [
+		store.stub("MATCH (c:ConfigChange) WHERE c.outcome = 'applied'", [
 			{ prompt: null, summary: "ilm retention widened", workflow: "ilm-rollout", mrUrl: "u1", createdAt: "2026-06-20" },
 		]);
 		_setGraphStoreForTesting(store);
 		const out = await call(await connectedClient(), "kg_applied_changes", {});
 		expect(out).toContain("2026-06-20 — (no prompt recorded) -> ilm-rollout: ilm retention widened (u1)");
+	});
+
+	// SIO-1464: an MR-less lane change (fleet-upgrade/synthetics-push, SIO-1461) renders
+	// without the trailing "(url)" instead of being dropped by an inner MR join.
+	test("kg_applied_changes renders an MR-less fleet-upgrade row without an MR suffix", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("MATCH (c:ConfigChange) WHERE c.outcome = 'applied'", [
+			{
+				prompt: "In the eu-b2b deployment, upgrade the Elastic Fleet agents to version 9.5.1",
+				summary: "fleet upgrade eu-b2b -> 9.5.1",
+				workflow: "fleet-upgrade",
+				mrUrl: null,
+				createdAt: "2026-08-13",
+			},
+		]);
+		_setGraphStoreForTesting(store);
+		const out = await call(await connectedClient(), "kg_applied_changes", {});
+		expect(out).toContain(
+			'2026-08-13 — "In the eu-b2b deployment, upgrade the Elastic Fleet agents to version 9.5.1" -> fleet-upgrade: fleet upgrade eu-b2b -> 9.5.1',
+		);
+		expect(out).not.toContain("fleet upgrade eu-b2b -> 9.5.1 (");
 	});
 
 	test("kg_applied_changes empty result is an authoritative graph result", async () => {
