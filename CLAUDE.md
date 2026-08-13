@@ -144,7 +144,7 @@ Follow the global "Handover Documents" structure (`~/.claude/CLAUDE.md`). Projec
 
 Greptile replaced CodeRabbit on 2026-08-13 (the CodeRabbit GitHub App is suspended, so `coderabbitai[bot]` no longer posts; do not wait on it). A `greptile` HTTP MCP server is also configured for this project in `~/.claude.json`.
 
-**The completion check is the `Greptile Review` status check.** Greptile always posts a PR-level issue comment from `greptile-apps[bot]`; it ALSO posts a review object plus inline comments **when it has findings** (a zero-findings pass posts the issue comment only, which is why `pulls/<PR#>/reviews` can legitimately be empty on a clean PR). Never gate on the reviews endpoint -- an empty result there does not distinguish "clean" from "still running". Gate on the check:
+**The completion check is the `Greptile Review` status check.** Greptile always posts a PR-level issue comment from `greptile-apps[bot]`, and on completion also posts an **`APPROVED` review object**; findings additionally arrive as `COMMENTED` reviews with one inline comment each (#653 clean: 1 `APPROVED`, 0 inline. #652 with two P1s: 3 `COMMENTED` + 1 `APPROVED`, 4 inline). Never gate on the reviews endpoint alone -- it is empty until the review lands, so an empty result does not distinguish "clean" from "still running". Gate on the check:
 
 ```bash
 gh pr view <PR#> --json statusCheckRollup \
@@ -152,7 +152,7 @@ gh pr view <PR#> --json statusCheckRollup \
 # -> "COMPLETED SUCCESS"
 ```
 
-**Both fields matter: require `status == COMPLETED` AND `conclusion == SUCCESS`.** `COMPLETED` alone is only a terminal GitHub state -- `FAILURE`, `ERROR`, `CANCELLED`, and `TIMED_OUT` are all `COMPLETED` too, and treating them as done would pass the merge gate with no usable review. On a non-`SUCCESS` conclusion the round is NOT clear: re-trigger and re-poll, or escalate to the user. Do not merge on it.
+**Both fields matter: require `status == COMPLETED` AND `conclusion == SUCCESS`.** `COMPLETED` alone is only a terminal GitHub state -- `FAILURE`, `ERROR`, `CANCELLED`, and `TIMED_OUT` are all `COMPLETED` too, and treating them as done would pass the merge gate with no usable review. On a non-`SUCCESS` conclusion the round is NOT clear: re-trigger and re-poll, or escalate to the user. Do not merge on it. `gh pr view <PR#> --json reviewDecision` returning `APPROVED` is a useful corroborating signal (Greptile approves on a clean pass), but the status check is the primary gate -- `reviewDecision` also reflects human reviews.
 
 **Read the findings from the bot's issue comment**, which self-reports the reviewed commit in its footer (`Last reviewed commit: <SHA>`) -- confirm that SHA matches the PR head before trusting the round. Greptile **edits the same comment in place** on each round rather than posting a new one (observed on #652: one comment, `created_at` 7 minutes before `updated_at`, 3/5 rewritten to 5/5). So the round count is not visible in comment history, `created_at` ordering is meaningless for freshness, and the footer SHA is the ONLY way to tell which commit a verdict belongs to -- always check it. Keep `--paginate`: issue comments return 30 per page, so on a busy PR the Greptile report is exactly what falls off page 1, and without it the command succeeds while emitting nothing.
 
