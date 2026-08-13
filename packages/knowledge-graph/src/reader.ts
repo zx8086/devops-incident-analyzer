@@ -568,20 +568,24 @@ export interface AppliedChange {
 	prompt: string; // "" for a change recorded before the Prompt node existed (SIO-1038)
 	summary: string;
 	workflow: string;
-	mrUrl: string;
+	mrUrl: string; // "" for an MR-less lane change (fleet-upgrade/synthetics-push, SIO-1461/SIO-1464)
 	createdAt: string;
 }
 
 export async function appliedChanges(store: GraphStore, limit = 20): Promise<AppliedChange[]> {
 	const safeLimit = LIMIT_SCHEMA.parse(limit);
+	// SIO-1464: OPTIONAL MATCH on the MergeRequest too. Fleet binary upgrades and synthetics
+	// pushes (SIO-1461 lane ConfigChanges) are imperative CI actions with no MR by design
+	// (SIO-913/SIO-902); a mandatory PROPOSED_IN join made every one of them invisible here
+	// despite outcome = 'applied'.
 	const rows = await store.run<{
 		prompt: string | null;
 		summary: string | null;
 		workflow: string | null;
-		mrUrl: string;
+		mrUrl: string | null;
 		createdAt: string;
 	}>(
-		"MATCH (c:ConfigChange)-[:PROPOSED_IN]->(m:MergeRequest) WHERE c.outcome = 'applied' OPTIONAL MATCH (p:Prompt {id: c.id}) RETURN p.text AS prompt, c.summary AS summary, c.workflow AS workflow, m.url AS mrUrl, c.createdAt AS createdAt ORDER BY c.createdAt DESC LIMIT $limit",
+		"MATCH (c:ConfigChange) WHERE c.outcome = 'applied' OPTIONAL MATCH (c)-[:PROPOSED_IN]->(m:MergeRequest) OPTIONAL MATCH (p:Prompt {id: c.id}) RETURN p.text AS prompt, c.summary AS summary, c.workflow AS workflow, m.url AS mrUrl, c.createdAt AS createdAt ORDER BY c.createdAt DESC LIMIT $limit",
 		{ limit: safeLimit },
 	);
 	return rows.map((r) => ({

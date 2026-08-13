@@ -712,7 +712,7 @@ describe("reader", () => {
 	// has no Prompt to join and must still surface, with prompt: "").
 	test("appliedChanges maps rows with a prompt, [] on an empty graph", async () => {
 		const store = new InMemoryGraphStore();
-		store.stub("MATCH (c:ConfigChange)-[:PROPOSED_IN]", [
+		store.stub("MATCH (c:ConfigChange) WHERE c.outcome = 'applied'", [
 			{
 				prompt: "widen the ILM policy retention to 30 days on eu-b2b",
 				summary: "ilm retention widened",
@@ -736,7 +736,7 @@ describe("reader", () => {
 
 	test("appliedChanges coalesces a missing Prompt to an empty string (pre-SIO-1038 row)", async () => {
 		const store = new InMemoryGraphStore();
-		store.stub("MATCH (c:ConfigChange)-[:PROPOSED_IN]", [
+		store.stub("MATCH (c:ConfigChange) WHERE c.outcome = 'applied'", [
 			{
 				prompt: null,
 				summary: "ilm retention widened",
@@ -751,15 +751,41 @@ describe("reader", () => {
 		]);
 	});
 
+	// SIO-1464: fleet-upgrade/synthetics-push ConfigChanges (SIO-1461) have no MR by design;
+	// they must still surface, with mrUrl coalesced to "".
+	test("appliedChanges coalesces a missing MergeRequest to an empty string (MR-less lane change)", async () => {
+		const store = new InMemoryGraphStore();
+		store.stub("MATCH (c:ConfigChange) WHERE c.outcome = 'applied'", [
+			{
+				prompt: "In the eu-b2b deployment, upgrade the Elastic Fleet agents to version 9.5.1",
+				summary: "fleet upgrade eu-b2b -> 9.5.1",
+				workflow: "fleet-upgrade",
+				mrUrl: null,
+				createdAt: "2026-08-13",
+			},
+		]);
+		const rows = await appliedChanges(store);
+		expect(rows).toEqual([
+			{
+				prompt: "In the eu-b2b deployment, upgrade the Elastic Fleet agents to version 9.5.1",
+				summary: "fleet upgrade eu-b2b -> 9.5.1",
+				workflow: "fleet-upgrade",
+				mrUrl: "",
+				createdAt: "2026-08-13",
+			},
+		]);
+	});
+
 	// CodeRabbit (PR #463): assert the actual query shape, not just formatted output --
 	// an OPTIONAL MATCH regression to an inner join would silently drop no-Prompt rows
-	// while every prior assertion here (output-shape only) would still pass.
-	test("appliedChanges' query OPTIONAL MATCHes Prompt, filters outcome = 'applied', and binds the limit", async () => {
+	// while every prior assertion here (output-shape only) would still pass. SIO-1464
+	// extends the same guard to the MergeRequest join (an inner join drops MR-less lanes).
+	test("appliedChanges' query OPTIONAL MATCHes Prompt AND MergeRequest, filters outcome = 'applied', and binds the limit", async () => {
 		const store = new InMemoryGraphStore();
 		await appliedChanges(store, 42);
 		const call = store.calls.at(-1);
-		expect(call?.cypher).toContain("MATCH (c:ConfigChange)-[:PROPOSED_IN]->(m:MergeRequest)");
-		expect(call?.cypher).toContain("WHERE c.outcome = 'applied'");
+		expect(call?.cypher).toContain("MATCH (c:ConfigChange) WHERE c.outcome = 'applied'");
+		expect(call?.cypher).toContain("OPTIONAL MATCH (c)-[:PROPOSED_IN]->(m:MergeRequest)");
 		expect(call?.cypher).toContain("OPTIONAL MATCH (p:Prompt {id: c.id})");
 		expect(call?.cypher).toContain("ORDER BY c.createdAt DESC LIMIT $limit");
 		expect(call?.params).toEqual({ limit: 42 });
