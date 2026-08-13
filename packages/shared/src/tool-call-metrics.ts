@@ -181,6 +181,85 @@ ON CONFLICT (server, tool) DO UPDATE SET
 	unknown_tool_failures = unknown_tool_failures + excluded.unknown_tool_failures,
 	last_called_at = excluded.last_called_at`;
 
+// Minimal common surface over the two SQLite drivers. bun:sqlite stays the
+// default; node:sqlite (Node >= 22.5) is the fallback for the one consumer that
+// does not run under Bun: the in-process knowledge-graph MCP server, whose host
+// process is `vite dev` running under Node, where the "bun:" scheme fails with
+// "Received protocol 'bun:'". Bun 1.3 does NOT implement node:sqlite ("No such
+// built-in module"), so detection must prefer bun:sqlite under Bun -- the
+// reverse fallback direction is impossible. Both drivers are sqlite3 on disk,
+// so mixed Bun/Node processes share the same WAL DB safely.
+interface MetricsSqliteStatement {
+	run(params: Record<string, string | number>): void;
+}
+
+interface MetricsSqliteDb {
+	exec(sql: string): void;
+	prepare(sql: string): MetricsSqliteStatement;
+	tableColumnNames(table: string): string[];
+	close(): void;
+}
+
+async function openBunSqliteDb(dbPath: string): Promise<MetricsSqliteDb> {
+	// bun:sqlite is imported lazily: the shared package is bundled as source into
+	// the web app's Vite SSR build (ssr.noExternal), where a top-level "bun:"
+	// specifier is unresolvable. @vite-ignore keeps Vite from touching it.
+	const { Database } = await import(/* @vite-ignore */ "bun:sqlite");
+	const db = new Database(dbPath, { create: true, strict: true });
+	return {
+		exec(sql) {
+			db.run(sql);
+		},
+		prepare(sql) {
+			const stmt = db.query(sql);
+			return {
+				run(params) {
+					stmt.run(params);
+				},
+			};
+		},
+		tableColumnNames(table) {
+			return db
+				.query<{ name: string }, []>(`PRAGMA table_info(${table})`)
+				.all()
+				.map((c) => c.name);
+		},
+		close() {
+			db.close(false);
+		},
+	};
+}
+
+async function openNodeSqliteDb(dbPath: string): Promise<MetricsSqliteDb> {
+	const { DatabaseSync } = await import(/* @vite-ignore */ "node:sqlite");
+	const db = new DatabaseSync(dbPath);
+	return {
+		exec(sql) {
+			db.exec(sql);
+		},
+		prepare(sql) {
+			const stmt = db.prepare(sql);
+			// bun:sqlite strict mode binds bare object keys to $-parameters;
+			// node:sqlite requires this opt-in for the same params shape to bind.
+			stmt.setAllowBareNamedParameters(true);
+			return {
+				run(params) {
+					stmt.run(params);
+				},
+			};
+		},
+		tableColumnNames(table) {
+			return db
+				.prepare(`PRAGMA table_info(${table})`)
+				.all()
+				.map((c) => String(c.name));
+		},
+		close() {
+			db.close();
+		},
+	};
+}
+
 export async function createToolCallMetricsRecorder(options: {
 	serverName: string;
 	dbPath: string;
@@ -190,48 +269,38 @@ export async function createToolCallMetricsRecorder(options: {
 	const { serverName, dbPath, logger } = options;
 	const nowIso = options.nowIso ?? (() => new Date().toISOString());
 	try {
-		// bun:sqlite is imported lazily: the shared package is bundled as source into
-		// the web app's Vite SSR build (ssr.noExternal), where a top-level "bun:"
-		// specifier is unresolvable. @vite-ignore keeps Vite from touching it; at
-		// runtime every consumer of this factory runs under Bun, where it resolves.
-		const { Database } = await import(/* @vite-ignore */ "bun:sqlite");
 		mkdirSync(dirname(dbPath), { recursive: true });
-		const db = new Database(dbPath, { create: true, strict: true });
+		const db = typeof Bun === "undefined" ? await openNodeSqliteDb(dbPath) : await openBunSqliteDb(dbPath);
 		// busy_timeout BEFORE journal_mode: switching to WAL takes a lock, and with
 		// no busy handler a concurrent opener (8+ servers cold-starting on one DB)
 		// fails instantly with "database is locked" -- measured 11/40 in a race
 		// harness; 0/40 with this order.
-		db.run("PRAGMA busy_timeout = 5000;");
-		db.run("PRAGMA journal_mode = WAL;");
-		db.run(CREATE_TABLE_SQL);
+		db.exec("PRAGMA busy_timeout = 5000;");
+		db.exec("PRAGMA journal_mode = WAL;");
+		db.exec(CREATE_TABLE_SQL);
 		// SIO-1402 (CodeRabbit): BEGIN IMMEDIATE serializes concurrent legacy-DB
 		// migrations -- without it, two cold-starting processes can both observe a
 		// missing column and the loser's ALTER fails (duplicate column), disabling
 		// its recorder. The write lock makes the check-then-alter atomic; the loser
 		// re-checks after the winner commits and finds nothing left to add.
-		db.run("BEGIN IMMEDIATE");
+		db.exec("BEGIN IMMEDIATE");
 		try {
-			const existing = new Set(
-				db
-					.query<{ name: string }, []>("PRAGMA table_info(mcp_tool_call_counts)")
-					.all()
-					.map((c) => c.name),
-			);
+			const existing = new Set(db.tableColumnNames("mcp_tool_call_counts"));
 			for (const column of MIGRATED_COLUMNS) {
 				if (!existing.has(column)) {
-					db.run(`ALTER TABLE mcp_tool_call_counts ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
+					db.exec(`ALTER TABLE mcp_tool_call_counts ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
 				}
 			}
-			db.run("COMMIT");
+			db.exec("COMMIT");
 		} catch (error) {
 			try {
-				db.run("ROLLBACK");
+				db.exec("ROLLBACK");
 			} catch {
 				// rollback is best-effort; the original error is what matters
 			}
 			throw error;
 		}
-		const upsert = db.query(UPSERT_SQL);
+		const upsert = db.prepare(UPSERT_SQL);
 		let closed = false;
 		let warned = false;
 		return {
@@ -263,7 +332,7 @@ export async function createToolCallMetricsRecorder(options: {
 				if (closed) return;
 				closed = true;
 				try {
-					db.close(false);
+					db.close();
 				} catch {
 					// best-effort: per-call upserts are already committed (WAL)
 				}
