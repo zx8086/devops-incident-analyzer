@@ -1,6 +1,6 @@
 # Successful elastic-iac Prompts
 
-A catalog of real user prompts that produced a successfully **applied** elastic-iac merge request — concrete examples of "what to ask to get a working change." Sourced from the knowledge graph's `Prompt` -> `ConfigChange` -> `MergeRequest` chain (SIO-1202), filtered to `ConfigChange.outcome = 'applied'`.
+A catalog of real user prompts that produced a successfully **applied** elastic-iac change — concrete examples of "what to ask to get a working change." Sourced from the knowledge graph's `Prompt` -> `ConfigChange` -> `MergeRequest` chain (SIO-1202), filtered to `ConfigChange.outcome = 'applied'`. Since SIO-1461/SIO-1464 the `MergeRequest` link is optional: MR-less lane changes (fleet binary upgrades, synthetics pushes — imperative CI actions with no MR by design) are included too, rendered without an MR link.
 
 ## How this is populated
 
@@ -18,9 +18,65 @@ This repository's own worktrees have no local `.data/knowledge-graph` and no `lb
 
 ## Entries
 
-Populated via `kg_applied_changes { "limit": 200 }` (the 76-row full history, not just the 23 rows with a linked `Prompt`) so pre-SIO-1038 and any soft-failed-write changes are represented too, newest first:
+Populated via `kg_applied_changes { "limit": 200 }` (the 84-row full history, not just the rows with a linked `Prompt`) so pre-SIO-1038 and any soft-failed-write changes are represented too, newest first. (2026-08-13 sync: the 8 rows down to `2026-08-10` were fetched with the SIO-1464 query via `kg_run_cypher`, because the live 9087 tool still served the pre-SIO-1464 code at sync time — same rows the fixed tool returns.)
 
 <!-- markdownlint-disable MD027 -- prompts below are quoted VERBATIM from the knowledge graph; their original indentation (multiple spaces after ">") is part of the captured ask and must not be normalized. Keep this disable when re-rendering the catalog. -->
+
+### 2026-08-13T11:28:18.958Z — fleet-upgrade
+
+**Prompt:**
+> In the eu-b2b cluster, upgrade the elastic fleet agent to 9.5.1
+
+**Result:** fleet upgrade eu-b2b -> 9.5.1 (no MR — imperative `bulk_upgrade` via CI; see [fleet-agent-binary-upgrade.md](../runbooks/fleet-agent-binary-upgrade.md))
+
+### 2026-08-12T22:25:49.091Z — version-upgrade
+
+**Prompt:**
+> Upgrade the eu-b2b deployment to version 9.5.1
+
+**Result:** [eu-b2b] 9.4.4 -> 9.5.1: version-upgrade ([MR](https://gitlab.com/pvhcorp/dhco/observability/observability-elastic-iac/-/merge_requests/467))
+
+### 2026-08-12T18:10:18.952Z — version-upgrade
+
+**Prompt:**
+> Upgrade the us-cld-monitor deployment to version 9.5.1
+
+**Result:** [us-cld-monitor] 9.4.4 -> 9.5.1: version-upgrade ([MR](https://gitlab.com/pvhcorp/dhco/observability/observability-elastic-iac/-/merge_requests/461))
+
+### 2026-08-12T11:20:46.648Z — version-upgrade
+
+**Prompt:**
+> Upgrade the ap-cld-monitor deployment to version 9.5.1
+
+**Result:** [ap-cld-monitor] 9.4.4 -> 9.5.1: version-upgrade ([MR](https://gitlab.com/pvhcorp/dhco/observability/observability-elastic-iac/-/merge_requests/445))
+
+### 2026-08-12T09:12:33.910Z — version-upgrade
+
+**Prompt:**
+> Upgrade the eu-onboarding deployment to version 9.5.1
+
+**Result:** [eu-onboarding] 9.5.0 -> 9.5.1: version-upgrade ([MR](https://gitlab.com/pvhcorp/dhco/observability/observability-elastic-iac/-/merge_requests/443))
+
+### 2026-08-12T08:44:11.555Z — version-upgrade
+
+**Prompt:**
+> Upgrade the gl-cld-reporting deployment to version 9.5.1
+
+**Result:** [gl-cld-reporting] 9.5.0 -> 9.5.1: version-upgrade ([MR](https://gitlab.com/pvhcorp/dhco/observability/observability-elastic-iac/-/merge_requests/442))
+
+### 2026-08-12T07:56:01.842Z — version-upgrade
+
+**Prompt:**
+> Upgrade deployment gl-testing to version 9.5.1
+
+**Result:** [gl-testing] 9.5.0 -> 9.5.1: version-upgrade ([MR](https://gitlab.com/pvhcorp/dhco/observability/observability-elastic-iac/-/merge_requests/441))
+
+### 2026-08-10T08:57:21.173Z — version-upgrade
+
+**Prompt:**
+> In the gl-testing deployment, upgrade the elastic version to 9.5.0
+
+**Result:** [gl-testing] 9.4.4 -> 9.5.0: version-upgrade ([MR](https://gitlab.com/pvhcorp/dhco/observability/observability-elastic-iac/-/merge_requests/438))
 
 ### 2026-07-25T00:54:03.929Z — version-upgrade
 
