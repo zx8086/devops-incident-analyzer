@@ -46,6 +46,7 @@ import {
 	parseFleetUpgradeReport,
 	parseSinglePipeline,
 	parseTargetVersion,
+	recallDeploymentKgChanges,
 	recallPriorFleetUpgrades,
 } from "./nodes.ts";
 import type { FleetUpgradeReport, FleetUpgradeResult, IacStateType } from "./state.ts";
@@ -1426,6 +1427,57 @@ describe("recallPriorFleetUpgrades (SIO-971)", () => {
 		withTerminalFacts([]);
 		expect(await recallPriorFleetUpgrades("us-cld", "9.4.2")).toBe("");
 		reset();
+	});
+});
+
+// SIO-1462: the fleet lane bypasses graphEnrichIac, so detectFleetUpgrade reads the KG change
+// history itself. recallDeploymentKgChanges is the KG twin of recallPriorFleetUpgrades (memory).
+// InMemoryGraphStore is a call-recorder that returns [] for a MATCH unless stub()-ed with a canned
+// row set (it does NOT execute Cypher), so the read-back tests stub the priorChangesForDeployment
+// query directly -- the write-side is covered by the applyFleetUpgrade ConfigChange tests above.
+describe("recallDeploymentKgChanges (SIO-1462)", () => {
+	const prevKg = process.env.KNOWLEDGE_GRAPH_ENABLED;
+	afterEach(() => {
+		_setGraphStoreForTesting(null);
+		if (prevKg === undefined) delete process.env.KNOWLEDGE_GRAPH_ENABLED;
+		else process.env.KNOWLEDGE_GRAPH_ENABLED = prevKg;
+	});
+
+	test("renders the deployment's prior ConfigChanges as markdown when the KG is enabled", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		// priorChangesForDeployment's MATCH is keyed on CHANGED_BY -> ConfigChange; stub that shape.
+		store.stub("CHANGED_BY", [
+			{ id: "2600000001", workflow: "fleet-upgrade", summary: "Fleet agents upgraded to 9.4.4", mrUrl: null },
+		]);
+		_setGraphStoreForTesting(store);
+		const out = await recallDeploymentKgChanges("ap-cld");
+		expect(out).toContain("Recent changes to ap-cld");
+		expect(out).toContain("fleet-upgrade: Fleet agents upgraded to 9.4.4");
+	});
+
+	test("returns '' when the knowledge graph is disabled (no read attempted)", async () => {
+		delete process.env.KNOWLEDGE_GRAPH_ENABLED;
+		const store = new InMemoryGraphStore();
+		store.stub("CHANGED_BY", [
+			{ id: "2600000002", workflow: "fleet-upgrade", summary: "Fleet agents upgraded to 9.4.4", mrUrl: null },
+		]);
+		_setGraphStoreForTesting(store);
+		expect(await recallDeploymentKgChanges("ap-cld")).toBe("");
+		// the guard short-circuits before any store access
+		expect(store.calls).toHaveLength(0);
+	});
+
+	test("returns '' when the deployment has no prior changes", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		_setGraphStoreForTesting(new InMemoryGraphStore());
+		expect(await recallDeploymentKgChanges("ap-cld")).toBe("");
+	});
+
+	test("returns '' when no deployment is resolved", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		_setGraphStoreForTesting(new InMemoryGraphStore());
+		expect(await recallDeploymentKgChanges("")).toBe("");
 	});
 });
 

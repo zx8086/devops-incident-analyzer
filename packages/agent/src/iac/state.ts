@@ -520,6 +520,13 @@ export interface FleetUpgradeReport {
 	// fleet-path twin of SIO-970's priorLearnings. Undefined when the agent-memory backend is
 	// off or recall found nothing. Carried onto the fleet_upgrade_choice gate card.
 	priorUpgrades?: string;
+	// SIO-1462: rendered knowledge-graph change history for this deployment (prior ConfigChanges +
+	// outcomes), the fleet-path twin of the gitops card's SIO-969 recentChanges (state.iacGraphContext).
+	// The fleet lane bypasses graphEnrichIac, so detectFleetUpgrade reads priorChangesForDeployment
+	// itself. Undefined when the KG is off/empty. TIMING: the KG read runs BEFORE this turn's own
+	// SIO-1461 write, so a deployment's own upgrade surfaces only on its NEXT upgrade (by design,
+	// mirrors the gitops card). Carried onto the fleet_upgrade_choice gate card.
+	recentChanges?: string;
 }
 
 // Outcome of the operator-approved apply (single). applied = the bulk_upgrade ran to a
