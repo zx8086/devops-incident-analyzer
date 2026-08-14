@@ -260,7 +260,11 @@ describe("schedule slot singleton (SIO-1468)", () => {
 			{ mode: "once", cron: undefined, runAt },
 		);
 		expect(getScheduleSlot("s")).toBe(firstSlot); // pending timeout survives
-		await new Promise((resolve) => setTimeout(resolve, 100));
+		// Poll instead of a fixed sleep: the workflow run adds latency on loaded CI.
+		const deadline = Date.now() + 2_000;
+		while (calls.length === 0 && Date.now() < deadline) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
 		expect(calls).toEqual(["live-graph"]);
 		expect(getScheduleSlot("s")).toBeUndefined(); // fired -> slot released
 	});

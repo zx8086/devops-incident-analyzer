@@ -174,9 +174,11 @@ function statusDotClass(status: string): string {
     >
       <Icon name={outcomeView.icon} class="w-3.5 h-3.5 {outcomeView.text}" />
       <span class="text-xs font-medium {outcomeView.text}">
-        <!-- Space lives inside the expression: Svelte trims whitespace at {#if} block
-             boundaries, which rendered "Completedin 2.6s". -->
-        {outcomeView.label}{isCompleted && formattedTime ? ` in ${formattedTime}` : ""}
+        {outcomeView.label}{isCompleted && formattedTime
+          ? /* space lives in the expression: Svelte trims whitespace at block boundaries,
+               and an HTML comment here would leak into the SSR output the tests assert on */
+            ` in ${formattedTime}`
+          : ""}
         {#if isCompleted && dataSources.length > 0}
           <span class="text-green-500 font-normal">
             -- {dataSources.length} data source{dataSources.length !== 1 ? "s" : ""}

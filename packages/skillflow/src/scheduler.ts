@@ -148,7 +148,13 @@ function registerRepeat(id: string, cron: string, run: () => Promise<void>): (()
 	// in-flight sweep from a previous module graph still blocks the repointed one.
 	const guarded = async (): Promise<void> => {
 		const slot = slots.get(id);
-		if (!slot || slot.sweeping) return;
+		if (!slot) return;
+		if (slot.sweeping) {
+			// The flag lives on the process-wide slot, so a sweep that never settles
+			// would silence the schedule permanently -- make every skip visible.
+			log.warn({ id }, "previous sweep still in flight; skipping this tick");
+			return;
+		}
 		slot.sweeping = true;
 		try {
 			await run();

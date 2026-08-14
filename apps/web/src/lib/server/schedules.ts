@@ -65,18 +65,26 @@ export function startSchedules(): void {
 		// before registering their Bun.cron/setInterval timer. `enabled: false` in a
 		// schedule's YAML is the human on/off switch; these are a second, orthogonal
 		// gate (does the dependency this sweep needs even exist in this deployment).
+		// SIO-1468: gate by DISABLING the entry, not deleting it -- a deleted id never
+		// reaches the scheduler's disabled path, so a slot armed by a previous module
+		// graph (before the backend went away) would keep sweeping in a dead graph.
 		const filtered = new Map(schedules);
+		const gate = (id: string, reason: string) => {
+			const def = filtered.get(id);
+			if (def) filtered.set(id, { ...def, enabled: false });
+			log.info(reason);
+		};
 		if (!reconcileEnabled()) {
-			filtered.delete("iac-reconcile-sweep");
-			log.info("iac-reconcile-sweep: neither agent-memory backend nor knowledge graph enabled; not registering");
+			gate(
+				"iac-reconcile-sweep",
+				"iac-reconcile-sweep: neither agent-memory backend nor knowledge graph enabled; not registering",
+			);
 		}
 		if (!topologyBackendAvailable()) {
-			filtered.delete("kg-topology-sweep");
-			log.info("kg-topology-sweep: knowledge graph not enabled; not registering");
+			gate("kg-topology-sweep", "kg-topology-sweep: knowledge graph not enabled; not registering");
 		}
 		if (!purgeBackendAvailable()) {
-			filtered.delete("kg-purge-sweep");
-			log.info("kg-purge-sweep: knowledge graph not enabled; not registering");
+			gate("kg-purge-sweep", "kg-purge-sweep: knowledge graph not enabled; not registering");
 		}
 
 		registerSchedules(filtered, workflows, {
