@@ -68,14 +68,35 @@ export interface ConnectDeploymentsLogger {
 // - If every spec fails -> throw (nothing to serve).
 // - `defaultId` stays as requested when that deployment connected; otherwise it falls back
 //   to the first surviving client so the registry's default-must-exist invariant holds.
+// - On a FATAL rethrow (DeploymentConfigError / DeploymentAuthError), every client already
+//   connected in this pass is closed via `closeOne` first, so a fatal failure part-way through
+//   does not leak the pools of earlier successful deployments (SIO-1467 / CodeRabbit #660).
 export async function connectDeployments<S extends DeploymentConnectSpec, C = Client>(
 	specs: S[],
 	requestedDefaultId: string,
 	connectOne: (spec: S) => Promise<C>,
 	log: ConnectDeploymentsLogger,
+	closeOne?: (client: C) => Promise<void>,
 ): Promise<ConnectDeploymentsResult<C>> {
 	const clients = new Map<string, C>();
 	const failures: Array<{ id: string; error: string }> = [];
+
+	// Best-effort close of every already-connected client. Used before a fatal rethrow so the pools
+	// opened for earlier successful deployments are not leaked. Never throws -- a close failure is
+	// logged and must not mask the fatal error we are about to propagate.
+	const closeConnected = async (): Promise<void> => {
+		if (!closeOne) return;
+		for (const [id, client] of clients) {
+			try {
+				await closeOne(client);
+			} catch (closeError) {
+				log.warn(
+					{ deploymentId: id, error: closeError instanceof Error ? closeError.message : String(closeError) },
+					"Failed to close an Elasticsearch client while unwinding after a fatal startup error.",
+				);
+			}
+		}
+	};
 
 	for (const spec of specs) {
 		try {
@@ -85,6 +106,7 @@ export async function connectDeployments<S extends DeploymentConnectSpec, C = Cl
 			// loudly rather than silently routing the operator's requests through a different,
 			// surviving cluster while hiding a broken credential or config.
 			if (error instanceof DeploymentConfigError || error instanceof DeploymentAuthError) {
+				await closeConnected();
 				throw error;
 			}
 			const message = error instanceof Error ? error.message : String(error);

@@ -163,18 +163,59 @@ describe("connectDeployments", () => {
 		expect(err.name).toBe("DeploymentAuthError");
 		expect(err.message).toContain("403");
 	});
+
+	// CodeRabbit #660: a fatal failure part-way through must close the pools already opened for
+	// earlier successful deployments, not leak them.
+	test("on a fatal rethrow, closeOne is called for every already-connected client", async () => {
+		const log = makeLogger();
+		const closed: string[] = [];
+		const closeOne = mock(async (client: { id: string }) => {
+			closed.push(client.id);
+		});
+		await expect(
+			connectDeployments<Spec, { id: string }>(
+				specs, // eu-cld, us-cld, eu-b2b
+				"eu-cld",
+				async (s) => {
+					if (s.id === "eu-b2b") throw new DeploymentAuthError(s.id, 401, new Error("security_exception"));
+					return { id: s.id };
+				},
+				log,
+				closeOne,
+			),
+		).rejects.toThrow(DeploymentAuthError);
+		// eu-cld + us-cld connected before eu-b2b failed fatally -> both must be closed.
+		expect(closed.sort()).toEqual(["eu-cld", "us-cld"]);
+	});
+
+	test("a close failure during fatal unwind is logged and does not mask the fatal error", async () => {
+		const log = makeLogger();
+		await expect(
+			connectDeployments<Spec, { id: string }>(
+				specs,
+				"eu-cld",
+				async (s) => {
+					if (s.id === "us-cld") throw new DeploymentConfigError(s.id, new Error("bad caCert"));
+					return { id: s.id };
+				},
+				log,
+				async () => {
+					throw new Error("close failed");
+				},
+			),
+		).rejects.toThrow(DeploymentConfigError); // the fatal error, not the close error
+		expect(log.warn).toHaveBeenCalled(); // the close failure was logged
+	});
 });
 
 describe("isAuthProbeFailure", () => {
 	const responseError = (statusCode: number) =>
 		new errors.ResponseError({
 			statusCode,
-			// biome-ignore lint/suspicious/noExplicitAny: SIO-1467 - minimal ResponseError meta for a test fixture
-			body: { error: { type: "security_exception" } } as any,
+			body: { error: { type: "security_exception" } },
 			warnings: [],
-			// biome-ignore lint/suspicious/noExplicitAny: SIO-1467 - minimal ResponseError meta for a test fixture
-			meta: {} as any,
-		});
+			meta: {},
+		} as unknown as ConstructorParameters<typeof errors.ResponseError>[0]);
 
 	test("401 ResponseError -> true", () => {
 		expect(isAuthProbeFailure(responseError(401))).toBe(true);

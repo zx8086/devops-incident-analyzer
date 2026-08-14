@@ -300,6 +300,8 @@ export async function initializeElasticsearchClient(config: Config): Promise<Cli
 		defaultId,
 		(spec) => buildDeploymentClient(spec, config),
 		logger,
+		// Close already-connected clients if a later deployment fails fatally (SIO-1467).
+		(client) => client.close(),
 	);
 
 	// Pass both ids: resolvedDefaultId is the survivor used for routing, defaultId is what the
