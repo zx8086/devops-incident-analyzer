@@ -174,7 +174,9 @@ function statusDotClass(status: string): string {
     >
       <Icon name={outcomeView.icon} class="w-3.5 h-3.5 {outcomeView.text}" />
       <span class="text-xs font-medium {outcomeView.text}">
-        {outcomeView.label}{#if isCompleted && formattedTime} in {formattedTime}{/if}
+        <!-- Space lives inside the expression: Svelte trims whitespace at {#if} block
+             boundaries, which rendered "Completedin 2.6s". -->
+        {outcomeView.label}{isCompleted && formattedTime ? ` in ${formattedTime}` : ""}
         {#if isCompleted && dataSources.length > 0}
           <span class="text-green-500 font-normal">
             -- {dataSources.length} data source{dataSources.length !== 1 ? "s" : ""}
