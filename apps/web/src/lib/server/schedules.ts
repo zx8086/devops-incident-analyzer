@@ -27,7 +27,13 @@ const log = getLogger("agent:schedules");
 let started = false;
 
 export function startSchedules(): void {
-	if (started) return; // module load can run more than once under HMR; register once
+	// Module load can run more than once under HMR; register once per module instance.
+	// SIO-1468: cross-graph protection (a dev-server restart that closes the Vite module
+	// runner WITHOUT hot.dispose leaves this flag reset in the fresh graph while the old
+	// graph's timers survive) lives in the scheduler itself -- registerSchedules keys its
+	// timers on globalThis slots and repoints dispatch at the latest registration, so a
+	// re-register from a fresh graph takes over the surviving timers instead of stacking.
+	if (started) return;
 	started = true;
 
 	// loadWorkflows() THROWS on a schema-invalid workflows/*.yaml (any workflow

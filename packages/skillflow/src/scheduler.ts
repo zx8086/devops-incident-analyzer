@@ -38,6 +38,49 @@ export interface RegisteredSchedule {
 
 const DEFAULT_INTERVAL_MS = 60 * 60_000; // 1h; used only when a repeat schedule's cron is unparseable under Node
 
+// SIO-1468: schedule timers are PROCESS-wide slots keyed on globalThis, same idiom as
+// the mcp-bridge health poll (HEALTH_POLL_TICK_KEY). Under Vite, a dev-server restart
+// can close and recreate the SSR module runner WITHOUT running hot.dispose: the old
+// module graph's timers survive AND the fresh graph registers a second set, so the
+// sweeps run stacked and the old set executes inside a dead module graph. Each slot
+// holds the one live timer per schedule id plus a `run` closure that every
+// re-registration repoints at the CALLING module instance -- the surviving timer then
+// always dispatches into the live graph, and no second timer is ever armed for the
+// same cadence. The re-entrancy guard lives on the slot so it survives repointing.
+const SCHEDULE_SLOTS_KEY = Symbol.for("devops-agent.skillflow.scheduleSlots");
+interface ScheduleSlot {
+	run: () => Promise<void>;
+	sweeping: boolean;
+	// `repeat:<cron>` or `once:<runAt>`; a cadence change re-arms instead of repointing.
+	cadence: string;
+	stopTimer: () => void;
+}
+function getScheduleSlots(): Map<string, ScheduleSlot> {
+	const g = globalThis as Record<symbol, unknown>;
+	let slots = g[SCHEDULE_SLOTS_KEY] as Map<string, ScheduleSlot> | undefined;
+	if (!slots) {
+		slots = new Map();
+		g[SCHEDULE_SLOTS_KEY] = slots;
+	}
+	return slots;
+}
+function stopSlot(id: string): void {
+	const slots = getScheduleSlots();
+	const slot = slots.get(id);
+	if (slot) {
+		slot.stopTimer();
+		slots.delete(id);
+	}
+}
+
+// Test escape hatches. Underscore prefix marks these as internal -- do not import from production code.
+export function _getScheduleSlotForTest(id: string): { run: () => Promise<void> } | undefined {
+	return getScheduleSlots().get(id);
+}
+export function _resetScheduleSlotsForTest(): void {
+	for (const id of [...getScheduleSlots().keys()]) stopSlot(id);
+}
+
 // Translates a 5-field cron minute/hour shape to a setInterval cadence for the
 // Node fallback (no `Bun` global). Supports: every-minute ("* ..."), a minute
 // step that divides 60 ("*/N ..."), and a fixed minute with a wildcard hour
@@ -100,33 +143,60 @@ function runScheduledWorkflow(def: WorkflowDef, nodeFn: () => Promise<unknown>):
 }
 
 function registerRepeat(id: string, cron: string, run: () => Promise<void>): (() => void) | undefined {
-	let sweeping = false;
+	const slots = getScheduleSlots();
+	// SIO-1468: the re-entrancy flag lives on the SLOT, not this closure, so an
+	// in-flight sweep from a previous module graph still blocks the repointed one.
 	const guarded = async (): Promise<void> => {
-		if (sweeping) return;
-		sweeping = true;
+		const slot = slots.get(id);
+		if (!slot || slot.sweeping) return;
+		slot.sweeping = true;
 		try {
 			await run();
 		} catch (error) {
 			log.warn({ id, error: error instanceof Error ? error.message : String(error) }, "schedule run threw");
 		} finally {
-			sweeping = false;
+			slot.sweeping = false;
 		}
 	};
 
+	const cadence = `repeat:${cron}`;
+	const existing = slots.get(id);
+	if (existing && existing.cadence === cadence) {
+		// Same schedule, same cadence: the timer survives; only dispatch moves to the
+		// latest (live) module graph. Never arm a second timer.
+		existing.run = guarded;
+		log.info({ id, cron }, "schedule already armed; dispatch repointed at latest registration");
+		return () => stopSlot(id);
+	}
+
 	try {
+		let stopTimer: () => void;
+		// The timer dispatches through the slot so a later registration can take over.
+		const tick = () => void slots.get(id)?.run();
 		if (typeof Bun !== "undefined") {
-			const job = Bun.cron(cron, guarded);
+			const job = Bun.cron(cron, tick);
 			job.unref();
 			log.info({ id, cron, runtime: "bun" }, "schedule registered");
-			return () => job.stop();
+			stopTimer = () => job.stop();
+		} else {
+			const intervalMs = scheduleToIntervalMs(cron, (c) =>
+				log.warn({ id, cron: c }, "schedule: cron expression unsupported under Node; defaulting to hourly"),
+			);
+			const timer = setInterval(tick, intervalMs);
+			timer.unref();
+			log.info({ id, cron, intervalMs, runtime: "node" }, "schedule registered");
+			stopTimer = () => clearInterval(timer);
 		}
-		const intervalMs = scheduleToIntervalMs(cron, (c) =>
-			log.warn({ id, cron: c }, "schedule: cron expression unsupported under Node; defaulting to hourly"),
-		);
-		const timer = setInterval(() => void guarded(), intervalMs);
-		timer.unref();
-		log.info({ id, cron, intervalMs, runtime: "node" }, "schedule registered");
-		return () => clearInterval(timer);
+		// Cadence changed: stop the old timer only AFTER the new one armed, so a
+		// registration that throws above leaves the previous schedule running.
+		if (existing) {
+			existing.stopTimer();
+			log.info({ id, cron, previous: existing.cadence }, "schedule cadence changed; re-armed");
+		}
+		// Fresh sweeping flag: an in-flight sweep from the replaced slot clears the OLD
+		// slot object it captured, so inheriting its true value would wedge this slot.
+		slots.set(id, { run: guarded, sweeping: false, cadence, stopTimer });
+		return () => stopSlot(id);
 	} catch (error) {
 		log.warn(
 			{ id, cron, error: error instanceof Error ? error.message : String(error) },
@@ -137,6 +207,8 @@ function registerRepeat(id: string, cron: string, run: () => Promise<void>): (()
 }
 
 function registerOnce(id: string, runAt: string, run: () => Promise<void>): (() => void) | undefined {
+	// Validate BEFORE touching the slot: an invalid or past runAt must not tear down
+	// a previously armed slot (the surviving timer stays the source of truth).
 	const target = new Date(runAt).getTime();
 	if (Number.isNaN(target)) {
 		log.warn({ id, runAt }, "schedule has invalid runAt; skipping");
@@ -147,14 +219,37 @@ function registerOnce(id: string, runAt: string, run: () => Promise<void>): (() 
 		log.warn({ id, runAt }, "schedule's runAt is in the past; skipping");
 		return undefined;
 	}
-	const timer = setTimeout(() => {
-		void run().catch((error) => {
+
+	const slots = getScheduleSlots();
+	const guarded = async (): Promise<void> => {
+		try {
+			await run();
+		} catch (error) {
 			log.warn({ id, error: error instanceof Error ? error.message : String(error) }, "schedule run threw");
-		});
+		}
+	};
+
+	const cadence = `once:${runAt}`;
+	const existing = slots.get(id);
+	if (existing && existing.cadence === cadence) {
+		existing.run = guarded; // SIO-1468: pending timeout survives; dispatch moves to the live graph
+		log.info({ id, runAt }, "one-time schedule already armed; dispatch repointed at latest registration");
+		return () => stopSlot(id);
+	}
+
+	const timer = setTimeout(() => {
+		const slot = slots.get(id);
+		slots.delete(id); // fired: a later registration may arm a fresh one-time slot
+		void slot?.run();
 	}, delayMs);
 	timer.unref();
+	if (existing) {
+		existing.stopTimer();
+		log.info({ id, runAt, previous: existing.cadence }, "one-time schedule runAt changed; re-armed");
+	}
+	slots.set(id, { run: guarded, sweeping: false, cadence, stopTimer: () => clearTimeout(timer) });
 	log.info({ id, runAt, delayMs }, "one-time schedule registered");
-	return () => clearTimeout(timer);
+	return () => stopSlot(id);
 }
 
 // Registers a real timer for every enabled schedule. Never throws: a bad cron
@@ -169,6 +264,9 @@ export function registerSchedules(
 
 	for (const [id, scheduleDef] of schedules) {
 		if (!scheduleDef.enabled) {
+			// SIO-1468: disabling in YAML is the explicit off switch -- also stop a slot
+			// a previous module graph armed, or it would keep sweeping forever.
+			stopSlot(id);
 			log.info({ id }, "schedule disabled; skipping");
 			continue;
 		}
