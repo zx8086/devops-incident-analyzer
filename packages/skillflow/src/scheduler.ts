@@ -193,8 +193,8 @@ function registerRepeat(id: string, cron: string, run: () => Promise<void>): (()
 			log.info({ id, cron, intervalMs, runtime: "node" }, "schedule registered");
 			stopTimer = () => clearInterval(timer);
 		}
-		// Cadence changed: stop the old timer only AFTER the new one armed, so a
-		// registration that throws above leaves the previous schedule running.
+		// Cadence changed: the old timer stops AFTER the new one armed (on an arming
+		// throw, the catch below stops it instead -- either way it never survives).
 		if (existing) {
 			existing.stopTimer();
 			log.info({ id, cron, previous: existing.cadence }, "schedule cadence changed; re-armed");
@@ -204,6 +204,11 @@ function registerRepeat(id: string, cron: string, run: () => Promise<void>): (()
 		slots.set(id, { run: guarded, sweeping: false, cadence, stopTimer });
 		return () => stopSlot(id);
 	} catch (error) {
+		// SIO-1468: the current registration is the source of truth. Arming failed
+		// (e.g. Bun.cron rejects the changed cron), so the schedule as now defined
+		// is unusable -- stop any slot a previous registration armed rather than
+		// leaving its timer dispatching the dead module graph's closure.
+		stopSlot(id);
 		log.warn(
 			{ id, cron, error: error instanceof Error ? error.message : String(error) },
 			"schedule failed to register",
@@ -296,29 +301,37 @@ export function registerSchedules(
 		let run: (() => Promise<void>) | undefined;
 		if (scheduleDef.workflow) {
 			const def = workflows.get(scheduleDef.workflow);
-			if (!def) {
+			if (def) {
+				const nodeTarget = resolveNodeTarget(id, def);
+				if (nodeTarget) {
+					const nodeFn = handlers.nodes[nodeTarget];
+					if (nodeFn) {
+						run = () => runScheduledWorkflow(def, nodeFn);
+					} else {
+						log.warn({ id, node: nodeTarget }, "no handler bound for schedule's node target; skipping");
+					}
+				}
+			} else {
 				log.warn({ id, workflow: scheduleDef.workflow }, "schedule's workflow not found; skipping");
-				continue;
 			}
-			const nodeTarget = resolveNodeTarget(id, def);
-			if (!nodeTarget) continue;
-			const nodeFn = handlers.nodes[nodeTarget];
-			if (!nodeFn) {
-				log.warn({ id, node: nodeTarget }, "no handler bound for schedule's node target; skipping");
-				continue;
-			}
-			run = () => runScheduledWorkflow(def, nodeFn);
 		} else if (scheduleDef.prompt) {
-			if (!handlers.prompt) {
+			if (handlers.prompt) {
+				const { prompt, agent } = scheduleDef;
+				const promptHandler = handlers.prompt;
+				run = () => promptHandler(agent ?? "", prompt).then(() => undefined);
+			} else {
 				log.warn({ id }, "schedule targets a prompt but no prompt handler is wired; skipping");
-				continue;
 			}
-			const { prompt, agent } = scheduleDef;
-			run = () => handlers.prompt?.(agent ?? "", prompt).then(() => undefined) ?? Promise.resolve();
 		} else {
 			// ScheduleDefSchema's superRefine guarantees exactly one target for a
 			// schema-validated schedule; unreachable in practice.
 			log.warn({ id }, "schedule has no workflow or prompt target; skipping");
+		}
+		if (!run) {
+			// SIO-1468: a schedule whose target cannot be resolved is as dead as a
+			// removed one -- an armed slot from a previous registration must stop,
+			// or its timer keeps dispatching the dead module graph's closure.
+			stopSlot(id);
 			continue;
 		}
 

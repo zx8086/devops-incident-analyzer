@@ -251,6 +251,38 @@ describe("schedule slot singleton (SIO-1468)", () => {
 		expect(getScheduleSlot("s")).toBeUndefined();
 	});
 
+	test("a skipped registration (workflow missing) stops the surviving slot", () => {
+		register(async () => undefined);
+		expect(getScheduleSlot("s")).toBeDefined();
+		// Same id, but its workflow no longer resolves -- the schedule is as dead as
+		// a removed one and must not keep the old graph's timer.
+		const schedules = new Map([["s", scheduleDef({ workflow: "missing" })]]);
+		const registered = registerSchedules(schedules, new Map(), { nodes: {} });
+		expect(registered).toEqual([]);
+		expect(getScheduleSlot("s")).toBeUndefined();
+	});
+
+	test("a skipped registration (no handler bound) stops the surviving slot", () => {
+		register(async () => undefined);
+		expect(getScheduleSlot("s")).toBeDefined();
+		const schedules = new Map([["s", scheduleDef()]]);
+		const workflows = new Map([["w", nodeWorkflow("w", "sweep-node")]]);
+		const registered = registerSchedules(schedules, workflows, { nodes: {} });
+		expect(registered).toEqual([]);
+		expect(getScheduleSlot("s")).toBeUndefined();
+	});
+
+	test("a cadence change to an unusable cron stops the surviving slot", () => {
+		register(async () => undefined);
+		expect(getScheduleSlot("s")).toBeDefined();
+		// Under Bun the invalid expression throws in Bun.cron; under Node it falls
+		// back to hourly and re-arms. Either way the OLD slot must not survive with
+		// the dead graph's dispatch: it is stopped (Bun) or replaced (Node).
+		const firstSlot = getScheduleSlot("s");
+		register(async () => undefined, { cron: "not a cron at all, definitely invalid !!" });
+		expect(getScheduleSlot("s")).not.toBe(firstSlot);
+	});
+
 	test("re-registering mode:once with an INVALID runAt stops the surviving slot", () => {
 		const runAt = new Date(Date.now() + 60_000).toISOString();
 		register(async () => undefined, { mode: "once", cron: undefined, runAt });
