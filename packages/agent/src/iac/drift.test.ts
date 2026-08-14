@@ -160,6 +160,10 @@ describe("matchDeploymentName", () => {
 	test("exact (case-insensitive) whole-query match wins", () => {
 		expect(matchDeploymentName("eu-cld", names)).toBe("eu-cld");
 		expect(matchDeploymentName("eu-cld", ["EU-CLD"])).toBe("EU-CLD");
+		// Greptile PR #658 P1: the query is normalized INSIDE the helper -- a mixed-case caller
+		// must resolve without pre-lowercasing.
+		expect(matchDeploymentName("EU-CLD", names)).toBe("eu-cld");
+		expect(matchDeploymentName("In the EU-CLD deployment, upgrade the agent", names)).toBe("eu-cld");
 	});
 	test("a name embedded in a longer message resolves when unique", () => {
 		expect(matchDeploymentName("in the eu-cld deployment, upgrade the fleet elastic agent to 9.5.1", names)).toBe(

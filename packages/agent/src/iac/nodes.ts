@@ -8018,11 +8018,12 @@ export function parseEcDeploymentNames(toolResult: string): string[] {
 // candidate -- a naive substring find lets a shorter name (eu-b2b) beat eu-b2b-prod. No
 // unambiguous match -> "". (Pure; unit-tested.)
 export function matchDeploymentName(query: string, names: string[]): string {
-	const exact = names.find((d) => d.toLowerCase() === query);
+	const q = query.toLowerCase();
+	const exact = names.find((d) => d.toLowerCase() === q);
 	if (exact) return exact;
 	const partial = names.filter((d) => {
 		const n = d.toLowerCase();
-		return query.includes(n) || n.includes(query);
+		return q.includes(n) || n.includes(q);
 	});
 	return partial.length === 1 ? (partial[0] ?? "") : "";
 }
