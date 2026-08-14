@@ -7,6 +7,7 @@ import { Client } from "@elastic/elasticsearch";
 import { HttpConnection } from "@elastic/transport";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type CloudClient, initializeCloudClient } from "./clients/cloudClient.js";
+import { connectDeployments } from "./clients/connect-deployments.js";
 import { createClientProxy, registerClients } from "./clients/registry.js";
 import type { Config, DeploymentConfig } from "./config/index.js";
 import { registerBillingGetDeploymentCostsTool } from "./tools/billing/get_deployment_costs.js";
@@ -244,15 +245,17 @@ export async function initializeElasticsearchClient(config: Config): Promise<Cli
 		`Loaded ${specs.length} deployment${specs.length === 1 ? "" : "s"}`,
 	);
 
-	const clients = new Map<string, Client>();
-	// Connect sequentially so a failing deployment surfaces a clear per-id error rather than a
-	// Promise.all reject that masks which connection broke.
-	for (const spec of specs) {
-		const client = await buildDeploymentClient(spec, config);
-		clients.set(spec.id, client);
-	}
+	// Connect sequentially, but a single deployment's transient connect failure must not crash
+	// the whole server: skip+warn failures, throw only if ALL fail, and re-point the default to
+	// a survivor when the configured default is the one that failed. See connect-deployments.ts.
+	const { clients, defaultId: resolvedDefaultId } = await connectDeployments(
+		specs,
+		defaultId,
+		(spec) => buildDeploymentClient(spec, config),
+		logger,
+	);
 
-	registerClients(clients, defaultId);
+	registerClients(clients, resolvedDefaultId);
 
 	return createClientProxy();
 }
