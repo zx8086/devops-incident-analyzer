@@ -27,7 +27,13 @@ const log = getLogger("agent:schedules");
 let started = false;
 
 export function startSchedules(): void {
-	if (started) return; // module load can run more than once under HMR; register once
+	// Module load can run more than once under HMR; register once per module instance.
+	// SIO-1468: cross-graph protection (a dev-server restart that closes the Vite module
+	// runner WITHOUT hot.dispose leaves this flag reset in the fresh graph while the old
+	// graph's timers survive) lives in the scheduler itself -- registerSchedules keys its
+	// timers on globalThis slots and repoints dispatch at the latest registration, so a
+	// re-register from a fresh graph takes over the surviving timers instead of stacking.
+	if (started) return;
 	started = true;
 
 	// loadWorkflows() THROWS on a schema-invalid workflows/*.yaml (any workflow
@@ -46,6 +52,9 @@ export function startSchedules(): void {
 			);
 		});
 		if (schedules.size === 0) {
+			// SIO-1468: still run the registration pass -- its absent-id reaper stops
+			// any slots a previous module graph armed for schedules that no longer exist.
+			registerSchedules(schedules, new Map(), { nodes: {} });
 			log.info("no schedule definitions found under schedules/*.yaml; nothing to register");
 			return;
 		}
@@ -59,18 +68,26 @@ export function startSchedules(): void {
 		// before registering their Bun.cron/setInterval timer. `enabled: false` in a
 		// schedule's YAML is the human on/off switch; these are a second, orthogonal
 		// gate (does the dependency this sweep needs even exist in this deployment).
+		// SIO-1468: gate by DISABLING the entry, not deleting it -- a deleted id never
+		// reaches the scheduler's disabled path, so a slot armed by a previous module
+		// graph (before the backend went away) would keep sweeping in a dead graph.
 		const filtered = new Map(schedules);
+		const gate = (id: string, reason: string) => {
+			const def = filtered.get(id);
+			if (def) filtered.set(id, { ...def, enabled: false });
+			log.info(reason);
+		};
 		if (!reconcileEnabled()) {
-			filtered.delete("iac-reconcile-sweep");
-			log.info("iac-reconcile-sweep: neither agent-memory backend nor knowledge graph enabled; not registering");
+			gate(
+				"iac-reconcile-sweep",
+				"iac-reconcile-sweep: neither agent-memory backend nor knowledge graph enabled; not registering",
+			);
 		}
 		if (!topologyBackendAvailable()) {
-			filtered.delete("kg-topology-sweep");
-			log.info("kg-topology-sweep: knowledge graph not enabled; not registering");
+			gate("kg-topology-sweep", "kg-topology-sweep: knowledge graph not enabled; not registering");
 		}
 		if (!purgeBackendAvailable()) {
-			filtered.delete("kg-purge-sweep");
-			log.info("kg-purge-sweep: knowledge graph not enabled; not registering");
+			gate("kg-purge-sweep", "kg-purge-sweep: knowledge graph not enabled; not registering");
 		}
 
 		registerSchedules(filtered, workflows, {
@@ -82,6 +99,10 @@ export function startSchedules(): void {
 		});
 	} catch (error) {
 		started = false;
+		// SIO-1468: no registration pass ran to take ownership of surviving slots, so
+		// stop them all (empty-set reap) rather than leave a previous module graph's
+		// timers dispatching dead closures. The next successful boot re-arms them.
+		registerSchedules(new Map(), new Map(), { nodes: {} });
 		log.error(
 			{ error: error instanceof Error ? error.message : String(error) },
 			"startSchedules failed; no schedules registered this boot",

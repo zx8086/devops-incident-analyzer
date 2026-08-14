@@ -810,6 +810,38 @@ describe("bootstrapIac proactive in-flight surfacing (SIO-960)", () => {
 		else process.env.LIVE_MEMORY_BACKEND = prev;
 	});
 
+	// The not-connected chat message is user-facing: it must never disclose internal
+	// topology or configuration (package name, port, env var) -- that detail goes to
+	// the operator log only.
+	test("not-connected message contains no internal topology or configuration detail", async () => {
+		mock.module("../mcp-bridge.ts", () => ({
+			getToolsForDataSource: () => [],
+			getConnectedServers: () => [], // elastic-iac-mcp NOT connected
+		}));
+		try {
+			const { bootstrapIac } = await import("./nodes.ts");
+			const state = {
+				messages: [{ getType: () => "human", content: "upgrade the Fleet agent to 9.5.1" }],
+			} as unknown as IacStateType;
+
+			const out = await bootstrapIac(state);
+
+			expect(out.connected).toBe(false);
+			const injected = (out.messages ?? []) as { getType?: () => string; content?: unknown }[];
+			const ai = injected.find((m) => m.getType?.() === "ai");
+			expect(ai).toBeDefined();
+			const text = String(ai?.content);
+			expect(text.length).toBeGreaterThan(0);
+			expect(text).not.toContain("9086");
+			expect(text).not.toContain("ELASTIC_IAC_MCP_URL");
+			expect(text).not.toContain("mcp-server");
+			expect(text.toLowerCase()).not.toContain("env");
+		} finally {
+			// A failing assertion must not leak the disconnected bridge mock into later tests.
+			mockTools({});
+		}
+	});
+
 	test("first turn with NOTHING in flight stays silent (no system message)", async () => {
 		mockTools({});
 		const prev = process.env.LIVE_MEMORY_BACKEND;

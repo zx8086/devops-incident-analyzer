@@ -1,7 +1,12 @@
 // skillflow/src/scheduler.test.ts
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { ScheduleDef, WorkflowDef } from "@devops-agent/gitagent-bridge";
-import { registerSchedules, scheduleToIntervalMs } from "./scheduler.ts";
+import {
+	_getScheduleSlotForTest as getScheduleSlot,
+	registerSchedules,
+	_resetScheduleSlotsForTest as resetScheduleSlots,
+	scheduleToIntervalMs,
+} from "./scheduler.ts";
 
 describe("scheduleToIntervalMs", () => {
 	test("every-minute * -> 60s", () => {
@@ -56,6 +61,11 @@ function nodeWorkflow(name: string, nodeTarget: string): WorkflowDef {
 }
 
 describe("registerSchedules", () => {
+	// SIO-1468: slots are a globalThis singleton; own them per test so no timer
+	// (or repoint state) leaks between tests.
+	beforeEach(() => resetScheduleSlots());
+	afterEach(() => resetScheduleSlots());
+
 	test("skips a disabled schedule and never registers a timer", () => {
 		const schedules = new Map([["s", scheduleDef({ enabled: false })]]);
 		const workflows = new Map([["w", nodeWorkflow("w", "sweep-node")]]);
@@ -152,5 +162,175 @@ describe("registerSchedules", () => {
 		const workflows = new Map([["w", nodeWorkflow("w", "sweep-node")]]);
 		const registered = registerSchedules(schedules, workflows, { nodes: { "sweep-node": async () => undefined } });
 		expect(registered).toEqual([]);
+	});
+});
+
+// SIO-1468: schedule timers are globalThis slots (same idiom as the mcp-bridge health
+// poll, SIO-1113). A dev-server restart can close the Vite module runner WITHOUT
+// running hot.dispose: the fresh module graph re-registers every schedule while the old
+// graph's timers survive. Re-registration must repoint dispatch at the latest
+// registration instead of arming a second timer, so the sweeps neither stack nor keep
+// running inside the dead module graph.
+describe("schedule slot singleton (SIO-1468)", () => {
+	beforeEach(() => resetScheduleSlots());
+	afterEach(() => resetScheduleSlots());
+
+	function register(handler: () => Promise<undefined>, over: Partial<ScheduleDef> = {}) {
+		const schedules = new Map([["s", scheduleDef(over)]]);
+		const workflows = new Map([["w", nodeWorkflow("w", "sweep-node")]]);
+		return registerSchedules(schedules, workflows, { nodes: { "sweep-node": handler } });
+	}
+
+	test("re-registering the same schedule repoints dispatch without arming a second timer", async () => {
+		const calls: string[] = [];
+		register(async () => {
+			calls.push("old-graph");
+			return undefined;
+		});
+		const firstSlot = getScheduleSlot("s");
+		expect(firstSlot).toBeDefined();
+		const firstRun = firstSlot?.run;
+
+		// A fresh module graph re-registering after a runner swap.
+		const second = register(async () => {
+			calls.push("live-graph");
+			return undefined;
+		});
+		expect(second).toHaveLength(1);
+		const secondSlot = getScheduleSlot("s");
+		expect(secondSlot).toBe(firstSlot); // same slot -> same timer, no stacking
+		expect(secondSlot?.run).not.toBe(firstRun); // dispatch repointed at the new registration
+
+		await secondSlot?.run(); // what the surviving timer now invokes
+		// The armed cron is real; assert dispatch OWNERSHIP, not an exact count, so a
+		// minute-boundary tick during the test cannot flake it.
+		expect(calls).toContain("live-graph");
+		expect(calls).not.toContain("old-graph");
+	});
+
+	test("a cadence change re-arms instead of repointing", () => {
+		register(async () => undefined);
+		const firstSlot = getScheduleSlot("s");
+		register(async () => undefined, { cron: "*/15 * * * *" });
+		const secondSlot = getScheduleSlot("s");
+		expect(secondSlot).toBeDefined();
+		expect(secondSlot).not.toBe(firstSlot); // old timer stopped, new one armed
+	});
+
+	test("a schedule absent from the registration map stops its surviving slot", () => {
+		register(async () => undefined);
+		expect(getScheduleSlot("s")).toBeDefined();
+		// A fresh module graph registers the CURRENT map, from which "s" is gone
+		// (schedule deleted, renamed, or its YAML skipped as malformed).
+		const registered = registerSchedules(new Map(), new Map(), { nodes: {} });
+		expect(registered).toEqual([]);
+		expect(getScheduleSlot("s")).toBeUndefined();
+	});
+
+	test("disabling a schedule stops a previously armed slot", () => {
+		register(async () => undefined);
+		expect(getScheduleSlot("s")).toBeDefined();
+		const registered = register(async () => undefined, { enabled: false });
+		expect(registered).toEqual([]);
+		expect(getScheduleSlot("s")).toBeUndefined();
+	});
+
+	test("stop() clears the slot and is idempotent", () => {
+		const registered = register(async () => undefined);
+		expect(getScheduleSlot("s")).toBeDefined();
+		registered[0]?.stop();
+		expect(getScheduleSlot("s")).toBeUndefined();
+		registered[0]?.stop(); // safe with no slot
+		expect(getScheduleSlot("s")).toBeUndefined();
+	});
+
+	test("a repointed stop() tears down the surviving timer", () => {
+		register(async () => undefined);
+		const second = register(async () => undefined);
+		second[0]?.stop(); // stop handle from the repointed registration
+		expect(getScheduleSlot("s")).toBeUndefined();
+	});
+
+	test("a skipped registration (workflow missing) stops the surviving slot", () => {
+		register(async () => undefined);
+		expect(getScheduleSlot("s")).toBeDefined();
+		// Same id, but its workflow no longer resolves -- the schedule is as dead as
+		// a removed one and must not keep the old graph's timer.
+		const schedules = new Map([["s", scheduleDef({ workflow: "missing" })]]);
+		const registered = registerSchedules(schedules, new Map(), { nodes: {} });
+		expect(registered).toEqual([]);
+		expect(getScheduleSlot("s")).toBeUndefined();
+	});
+
+	test("a skipped registration (no handler bound) stops the surviving slot", () => {
+		register(async () => undefined);
+		expect(getScheduleSlot("s")).toBeDefined();
+		const schedules = new Map([["s", scheduleDef()]]);
+		const workflows = new Map([["w", nodeWorkflow("w", "sweep-node")]]);
+		const registered = registerSchedules(schedules, workflows, { nodes: {} });
+		expect(registered).toEqual([]);
+		expect(getScheduleSlot("s")).toBeUndefined();
+	});
+
+	test("a cadence change to an unusable cron stops the surviving slot", () => {
+		register(async () => undefined);
+		expect(getScheduleSlot("s")).toBeDefined();
+		// Under Bun the invalid expression throws in Bun.cron; under Node it falls
+		// back to hourly and re-arms. Either way the OLD slot must not survive with
+		// the dead graph's dispatch: it is stopped (Bun) or replaced (Node).
+		const firstSlot = getScheduleSlot("s");
+		register(async () => undefined, { cron: "not a cron at all, definitely invalid !!" });
+		expect(getScheduleSlot("s")).not.toBe(firstSlot);
+	});
+
+	test("re-registering mode:once with an INVALID runAt stops the surviving slot", () => {
+		const runAt = new Date(Date.now() + 60_000).toISOString();
+		register(async () => undefined, { mode: "once", cron: undefined, runAt });
+		expect(getScheduleSlot("s")).toBeDefined();
+		// The current definition is broken -- the old graph's timeout must not fire.
+		const registered = register(async () => undefined, { mode: "once", cron: undefined, runAt: "not-a-date" });
+		expect(registered).toEqual([]);
+		expect(getScheduleSlot("s")).toBeUndefined();
+	});
+
+	test("re-registering mode:once with a PAST runAt stops the surviving slot", () => {
+		const runAt = new Date(Date.now() + 60_000).toISOString();
+		register(async () => undefined, { mode: "once", cron: undefined, runAt });
+		expect(getScheduleSlot("s")).toBeDefined();
+		const registered = register(async () => undefined, {
+			mode: "once",
+			cron: undefined,
+			runAt: new Date(Date.now() - 1000).toISOString(),
+		});
+		expect(registered).toEqual([]);
+		expect(getScheduleSlot("s")).toBeUndefined();
+	});
+
+	test("mode:once with the same runAt repoints and only the latest handler fires", async () => {
+		const calls: string[] = [];
+		const runAt = new Date(Date.now() + 30).toISOString();
+		register(
+			async () => {
+				calls.push("old-graph");
+				return undefined;
+			},
+			{ mode: "once", cron: undefined, runAt },
+		);
+		const firstSlot = getScheduleSlot("s");
+		register(
+			async () => {
+				calls.push("live-graph");
+				return undefined;
+			},
+			{ mode: "once", cron: undefined, runAt },
+		);
+		expect(getScheduleSlot("s")).toBe(firstSlot); // pending timeout survives
+		// Poll instead of a fixed sleep: the workflow run adds latency on loaded CI.
+		const deadline = Date.now() + 2_000;
+		while (calls.length === 0 && Date.now() < deadline) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		expect(calls).toEqual(["live-graph"]);
+		expect(getScheduleSlot("s")).toBeUndefined(); // fired -> slot released
 	});
 });

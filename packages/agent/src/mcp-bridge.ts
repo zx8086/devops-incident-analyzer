@@ -129,13 +129,37 @@ const HEALTH_POLL_INTERVAL_MS = 30_000;
 // stack another interval; the orphaned loops then fail reconnects against the closed
 // module runner and re-detect the same replacement forever. A globalThis key survives
 // across module graphs so start/stop always see the one live timer.
+//
+// The timer's callback must NOT close over any one module instance: when Vite closes
+// the whole SSR module runner without running hot.dispose (dev-server restart in the
+// same process), the singleton timer survives but a callback bound to the dead module
+// graph fails every reconnect's dynamic import with "Vite module runner has been
+// closed" forever, while the fresh graph's startHealthPolling() no-ops on the existing
+// timer. So the callback dispatches through a second globalThis slot -- the tick --
+// which every startHealthPolling() call repoints at the CALLING module instance's
+// pollServerHealth. The surviving timer then always drives the live module graph.
 const HEALTH_POLL_KEY = Symbol.for("devops-agent.mcp-bridge.healthPollTimer");
+const HEALTH_POLL_TICK_KEY = Symbol.for("devops-agent.mcp-bridge.healthPollTick");
 type HealthPollTimer = ReturnType<typeof setInterval>;
+type HealthPollTick = () => void;
 function getHealthPollTimer(): HealthPollTimer | null {
 	return ((globalThis as Record<symbol, unknown>)[HEALTH_POLL_KEY] as HealthPollTimer | undefined) ?? null;
 }
 function setHealthPollTimer(timer: HealthPollTimer | null): void {
 	(globalThis as Record<symbol, unknown>)[HEALTH_POLL_KEY] = timer ?? undefined;
+}
+function getHealthPollTick(): HealthPollTick | null {
+	return ((globalThis as Record<symbol, unknown>)[HEALTH_POLL_TICK_KEY] as HealthPollTick | undefined) ?? null;
+}
+function setHealthPollTick(tick: HealthPollTick | null): void {
+	(globalThis as Record<symbol, unknown>)[HEALTH_POLL_TICK_KEY] = tick ?? undefined;
+}
+
+// A dynamic import() inside a Vite SSR module graph whose runner was closed throws
+// this. It is terminal for the throwing module instance: no retry from that graph can
+// ever succeed, so the poll loop must stop and let the next live bootstrap re-arm it.
+export function isClosedModuleRunnerError(error: unknown): boolean {
+	return error instanceof Error && error.message.includes("module runner has been closed");
 }
 
 // SIO-774: AgentCore-backed servers cold-start through a SigV4 proxy whose
@@ -675,6 +699,19 @@ async function reconnectServer(name: string, mcpUrl: string): Promise<void> {
 		connectedServers.add(name);
 		logger.info({ serverName: name, toolCount: tools.length }, "MCP server reconnected with tools");
 	} catch (error) {
+		// Self-heal: this module graph's runner is gone (see isClosedModuleRunnerError),
+		// so every future reconnect from here is guaranteed to fail identically. Stop the
+		// shared poll timer -- but only while this instance still owns the tick; an
+		// in-flight poll from the dead graph must not tear down a timer a fresh live
+		// graph has already taken over.
+		if (isClosedModuleRunnerError(error)) {
+			logger.warn(
+				{ serverName: name },
+				"MCP reconnect attempted from a disposed Vite module graph; stopping this poll loop until the live graph re-arms it",
+			);
+			if (getHealthPollTick() === moduleTick) stopHealthPolling();
+			return;
+		}
 		// SIO-705: same serializer as the boot path so reconnect failures expose
 		// AggregateError causes (DNS/socket) instead of an opaque ECONNREFUSED.
 		logger.warn({ serverName: name, ...serializeMcpConnectError(error, mcpUrl) }, "Failed to reconnect MCP server");
@@ -796,13 +833,23 @@ async function pollServerHealth(): Promise<void> {
 	}
 }
 
+// This module instance's own tick, for the reconnect self-heal's ownership check:
+// a dead graph may only stop the shared timer while its tick is still the one
+// being dispatched.
+let moduleTick: HealthPollTick | null = null;
+
 function startHealthPolling(): void {
-	if (getHealthPollTimer()) return; // SIO-1113: HMR reload must not stack poll loops
-	const timer = setInterval(() => {
+	// Repoint the tick at THIS module instance before the singleton guard: a fresh
+	// module graph calling start must take over dispatch even when the timer itself
+	// survived from a graph whose Vite module runner has since been closed.
+	moduleTick = () => {
 		pollServerHealth().catch((error) => {
 			logger.error({ error: error instanceof Error ? error.message : String(error) }, "Health poll cycle failed");
 		});
-	}, HEALTH_POLL_INTERVAL_MS);
+	};
+	setHealthPollTick(moduleTick);
+	if (getHealthPollTimer()) return; // SIO-1113: HMR reload must not stack poll loops
+	const timer = setInterval(() => getHealthPollTick()?.(), HEALTH_POLL_INTERVAL_MS);
 	timer.unref?.(); // never keep the process alive solely for the poll loop
 	setHealthPollTimer(timer);
 	logger.info({ intervalMs: HEALTH_POLL_INTERVAL_MS }, "MCP health polling started");
@@ -813,6 +860,7 @@ export function stopHealthPolling(): void {
 	if (timer) {
 		clearInterval(timer);
 		setHealthPollTimer(null);
+		setHealthPollTick(null);
 		logger.info("MCP health polling stopped");
 	}
 }
@@ -830,6 +878,9 @@ export const _pollServerHealthForTest = pollServerHealth;
 export const _startHealthPollingForTest = startHealthPolling;
 export function _getHealthPollTimerForTest(): HealthPollTimer | null {
 	return getHealthPollTimer();
+}
+export function _getHealthPollTickForTest(): HealthPollTick | null {
+	return getHealthPollTick();
 }
 export function _setServerUrlsForTest(entries: Array<[string, string]>): void {
 	serverUrls = new Map(entries);

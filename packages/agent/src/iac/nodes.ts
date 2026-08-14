@@ -874,13 +874,18 @@ export async function bootstrapIac(state: IacStateType, config?: RunnableConfig)
 
 	const connected = getConnectedServers().includes(IAC_SERVER);
 	if (!connected) {
-		log.warn({ server: IAC_SERVER }, "elastic-iac server not connected");
+		// Remediation detail (server name, port, env var) belongs in the operator log
+		// ONLY -- the chat message must not disclose internal topology or configuration.
+		log.warn(
+			{ server: IAC_SERVER, remediation: "start mcp-server-elastic-iac (:9086) and set ELASTIC_IAC_MCP_URL" },
+			"elastic-iac server not connected",
+		);
 		return {
 			connected: false,
 			...(threadId && { threadId }),
 			messages: [
 				new AIMessage(
-					"The Elastic IaC server is not connected. Start mcp-server-elastic-iac (:9086) and set ELASTIC_IAC_MCP_URL, then retry.",
+					"I can't reach the Elastic configuration service right now, so I'm unable to process this request. Please try again in a few minutes, and contact your platform team if the problem persists.",
 				),
 			],
 		};

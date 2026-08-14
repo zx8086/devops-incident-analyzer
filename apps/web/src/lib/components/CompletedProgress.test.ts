@@ -82,10 +82,12 @@ describe("CompletedProgress outcome chip (SIO-934 / SIO-930)", () => {
 		expect(body).not.toContain("Completed");
 	});
 
-	test("completed chip shows the response time when present", () => {
+	test("completed chip shows the response time with its separator", () => {
 		const { body } = render(CompletedProgress, {
 			props: { completedNodes: nodes, responseTime: 13166, outcome: "completed" },
 		});
-		expect(body).toContain("13.2s");
+		// Exact separator: "13.2s" alone also passed for the "Completedin 13.2s"
+		// regression (Svelte trims whitespace at {#if} block boundaries).
+		expect(body).toContain("Completed in 13.2s");
 	});
 });
