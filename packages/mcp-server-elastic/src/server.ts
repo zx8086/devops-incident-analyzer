@@ -291,7 +291,10 @@ export async function initializeElasticsearchClient(config: Config): Promise<Cli
 		logger,
 	);
 
-	registerClients(clients, resolvedDefaultId);
+	// Pass both ids: resolvedDefaultId is the survivor used for routing, defaultId is what the
+	// operator configured. When they differ (the default failed and was re-pointed), the registry
+	// fails implicit operations closed instead of silently using the survivor.
+	registerClients(clients, resolvedDefaultId, defaultId);
 
 	return createClientProxy();
 }
