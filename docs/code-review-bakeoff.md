@@ -25,7 +25,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | PR | Date | Rounds | Greptile: real / missed | CodeRabbit: real / missed | Notes |
 |---|---|---|---|---|---|
 | [#658](https://github.com/zx8086/devops-incident-analyzer/pull/658) | 2026-08-14 | 3 | 2 / 0 | 1 / 1 | First dual-review PR; detail below |
-| [#661](https://github.com/zx8086/devops-incident-analyzer/pull/661) | 2026-08-14 | 2 | 1 / 0 (round 2 only) | 5 / 0 | Greptile skipped round 1 (credits); detail below |
+| [#661](https://github.com/zx8086/devops-incident-analyzer/pull/661) | 2026-08-14 | 3 | 2 / 0 (rounds 2-3) | 5 / 0 | Greptile skipped round 1 (credits); detail below |
 
 ## PR #661 detail (Vite module-runner timer leaks + IaC message sanitization)
 
@@ -33,7 +33,9 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 
 - Real: "Removed schedules retain active slots" -- an armed slot whose id disappears from the schedule map entirely (YAML deleted, renamed, or skipped as malformed) is never visited by the registration loop, so `stopSlot` never runs and the dead graph's timer keeps firing. The residual sibling of CodeRabbit's round-1 Major (which covered ids present-but-gated, not absent). Verified with a failing unit test before fixing; registerSchedules now reaps every slot id absent from the input map.
 
-Head-to-head on the slot-ownership hole: CodeRabbit caught the gated-id variant in round 1; Greptile caught the absent-id variant in round 2 after CodeRabbit had approved that same commit. Each bot found a real coverage gap the other missed on this PR.
+**Greptile round 3** (on the absent-id fix `da0f3704`, still 4/5): NEW P1 "Rejected schedule retains old timeout" -- re-registering a once-mode schedule with an invalid or past `runAt` early-returned before the slot handling, so a previously armed timeout kept its former firing time with the dead graph's closure. Real (reproduced with two failing tests before fixing); the fix makes the validation paths stop the surviving slot, consistent with the absent-id reaper's "current registration is the source of truth" rule. Incremental-round behavior mirrors #658: each fix push got a genuine re-examination that found a follow-on gap in the fix itself.
+
+Head-to-head on the slot-ownership hole: CodeRabbit caught the gated-id variant in round 1; Greptile caught the absent-id variant in round 2 and the rejected-runAt variant in round 3, both AFTER CodeRabbit had approved those same commits. Each bot found real coverage gaps the other missed on this PR.
 
 **CodeRabbit: 2 actionable + 3 nitpicks, all verified real, 0 false positives.**
 

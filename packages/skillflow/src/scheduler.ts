@@ -213,15 +213,19 @@ function registerRepeat(id: string, cron: string, run: () => Promise<void>): (()
 }
 
 function registerOnce(id: string, runAt: string, run: () => Promise<void>): (() => void) | undefined {
-	// Validate BEFORE touching the slot: an invalid or past runAt must not tear down
-	// a previously armed slot (the surviving timer stays the source of truth).
+	// The current registration is the source of truth (same rule as the absent-id
+	// reaper in registerSchedules): a definition that is now invalid or already past
+	// must ALSO stop a slot a previous module graph armed, or that old timeout would
+	// fire at its former runAt with the dead graph's closure.
 	const target = new Date(runAt).getTime();
 	if (Number.isNaN(target)) {
+		stopSlot(id);
 		log.warn({ id, runAt }, "schedule has invalid runAt; skipping");
 		return undefined;
 	}
 	const delayMs = target - Date.now();
 	if (delayMs <= 0) {
+		stopSlot(id);
 		log.warn({ id, runAt }, "schedule's runAt is in the past; skipping");
 		return undefined;
 	}

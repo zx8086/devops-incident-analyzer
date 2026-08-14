@@ -251,6 +251,29 @@ describe("schedule slot singleton (SIO-1468)", () => {
 		expect(getScheduleSlot("s")).toBeUndefined();
 	});
 
+	test("re-registering mode:once with an INVALID runAt stops the surviving slot", () => {
+		const runAt = new Date(Date.now() + 60_000).toISOString();
+		register(async () => undefined, { mode: "once", cron: undefined, runAt });
+		expect(getScheduleSlot("s")).toBeDefined();
+		// The current definition is broken -- the old graph's timeout must not fire.
+		const registered = register(async () => undefined, { mode: "once", cron: undefined, runAt: "not-a-date" });
+		expect(registered).toEqual([]);
+		expect(getScheduleSlot("s")).toBeUndefined();
+	});
+
+	test("re-registering mode:once with a PAST runAt stops the surviving slot", () => {
+		const runAt = new Date(Date.now() + 60_000).toISOString();
+		register(async () => undefined, { mode: "once", cron: undefined, runAt });
+		expect(getScheduleSlot("s")).toBeDefined();
+		const registered = register(async () => undefined, {
+			mode: "once",
+			cron: undefined,
+			runAt: new Date(Date.now() - 1000).toISOString(),
+		});
+		expect(registered).toEqual([]);
+		expect(getScheduleSlot("s")).toBeUndefined();
+	});
+
 	test("mode:once with the same runAt repoints and only the latest handler fires", async () => {
 		const calls: string[] = [];
 		const runAt = new Date(Date.now() + 30).toISOString();
