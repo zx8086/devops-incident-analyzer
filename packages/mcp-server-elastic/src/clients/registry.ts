@@ -79,6 +79,18 @@ export function configuredDefaultDeploymentId(): string | undefined {
 	return registry?.configuredDefaultId;
 }
 
+// The tool-layer fail-closed decision for a cluster operation that supplied no `deployment` arg.
+// Reject only when BOTH: the configured default was re-pointed to a survivor, AND the request has
+// not selected a valid deployment via the x-elastic-deployment header (which the transport places
+// in the request context before the handler runs). An HTTP header selection of a connected
+// deployment is an explicit choice and must be honored; a truly implicit op against a re-pointed
+// default is rejected so it never silently runs on a cluster the caller never chose.
+export function shouldRejectImplicitOperation(headerDeploymentId: string | undefined): boolean {
+	if (!isDefaultReassigned()) return false;
+	const headerSelectsValid = headerDeploymentId !== undefined && !!registry && registry.clients.has(headerDeploymentId);
+	return !headerSelectsValid;
+}
+
 // Proxy forwards every property read and method call to the request-resolved Client.
 // Using `any` as the target lets us intercept arbitrary getters (info, indices, search,
 // transport, etc.) without enumerating the Client surface area.

@@ -8,6 +8,7 @@ import {
 	DeploymentUnavailableError,
 	isDefaultReassigned,
 	registerClients,
+	shouldRejectImplicitOperation,
 } from "./registry.js";
 
 // A tagged fake; the registry never inspects the client's shape, only its identity.
@@ -77,5 +78,38 @@ describe("registry fail-closed routing", () => {
 		// configuredDefaultId omitted -> equals defaultId -> healthy, no throw
 		registerClients(clients, "eu-cld");
 		expect(proxyId()).toBe("eu-cld");
+	});
+
+	// Greptile follow-up on 12e53295: the tool-layer implicit-op gate must honor an
+	// x-elastic-deployment header that selects a CONNECTED deployment, even after a re-point.
+	describe("shouldRejectImplicitOperation", () => {
+		test("default healthy -> never rejects (regardless of header)", () => {
+			registerClients(new Map([["eu-cld", fakeClient("eu-cld")]]), "eu-cld");
+			expect(shouldRejectImplicitOperation(undefined)).toBe(false);
+			expect(shouldRejectImplicitOperation("eu-cld")).toBe(false);
+		});
+
+		test("default re-pointed + no header -> rejects (truly implicit)", () => {
+			registerClients(new Map([["us-cld", fakeClient("us-cld")]]), "us-cld", "eu-cld");
+			expect(shouldRejectImplicitOperation(undefined)).toBe(true);
+		});
+
+		test("default re-pointed + header selects a CONNECTED deployment -> does NOT reject", () => {
+			registerClients(
+				new Map([
+					["us-cld", fakeClient("us-cld")],
+					["eu-b2b", fakeClient("eu-b2b")],
+				]),
+				"us-cld",
+				"eu-cld",
+			);
+			expect(shouldRejectImplicitOperation("us-cld")).toBe(false);
+			expect(shouldRejectImplicitOperation("eu-b2b")).toBe(false);
+		});
+
+		test("default re-pointed + header names an UNAVAILABLE deployment -> rejects", () => {
+			registerClients(new Map([["us-cld", fakeClient("us-cld")]]), "us-cld", "eu-cld");
+			expect(shouldRejectImplicitOperation("eu-cld")).toBe(true); // eu-cld is the dead default
+		});
 	});
 });
