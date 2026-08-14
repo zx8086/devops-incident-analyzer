@@ -4,7 +4,7 @@
 // and killed all N). Skip+warn failures, throw only when ALL fail, and re-point the default
 // to a surviving deployment when the configured default is the one that failed.
 
-import type { Client } from "@elastic/elasticsearch";
+import { type Client, errors } from "@elastic/elasticsearch";
 
 // A deterministic local misconfiguration (e.g. an unreadable caCert path, invalid client
 // options) as opposed to a transient connectivity failure. connectDeployments tolerates
@@ -21,6 +21,32 @@ export class DeploymentConfigError extends Error {
 		// so a string/object cause is preserved rather than dropped.
 		this.cause = cause;
 	}
+}
+
+// SIO-1467: an authentication/authorization rejection (HTTP 401/403) from the startup probe. Unlike
+// a transient outage, a bad/expired credential or a permissions gap will not fix itself, so this is
+// fatal: connectDeployments rethrows it rather than skipping the deployment, so the operator sees
+// the broken credential at startup instead of it being masked by a surviving deployment.
+export class DeploymentAuthError extends Error {
+	readonly deploymentId: string;
+	readonly statusCode: number;
+	constructor(deploymentId: string, statusCode: number, cause: unknown) {
+		const detail = cause instanceof Error ? cause.message : String(cause);
+		super(
+			`Deployment "${deploymentId}" rejected authentication during the startup probe (HTTP ${statusCode}): ${detail}`,
+		);
+		this.name = "DeploymentAuthError";
+		this.deploymentId = deploymentId;
+		this.statusCode = statusCode;
+		this.cause = cause;
+	}
+}
+
+// True when a probe error is an Elasticsearch auth/authz rejection (401/403), as opposed to a
+// transient connectivity failure (ConnectionError, TimeoutError, NoLivingConnectionsError, 5xx).
+// The @elastic SDK surfaces HTTP-level failures as ResponseError with a numeric statusCode.
+export function isAuthProbeFailure(error: unknown): boolean {
+	return error instanceof errors.ResponseError && (error.statusCode === 401 || error.statusCode === 403);
 }
 
 export interface DeploymentConnectSpec {
@@ -55,9 +81,10 @@ export async function connectDeployments<S extends DeploymentConnectSpec, C = Cl
 		try {
 			clients.set(spec.id, await connectOne(spec));
 		} catch (error) {
-			// A local misconfiguration is not a transient outage -- fail loudly rather than
-			// silently routing the operator's requests through a different, surviving cluster.
-			if (error instanceof DeploymentConfigError) {
+			// A local misconfiguration or an auth/authz rejection is not a transient outage -- fail
+			// loudly rather than silently routing the operator's requests through a different,
+			// surviving cluster while hiding a broken credential or config.
+			if (error instanceof DeploymentConfigError || error instanceof DeploymentAuthError) {
 				throw error;
 			}
 			const message = error instanceof Error ? error.message : String(error);
