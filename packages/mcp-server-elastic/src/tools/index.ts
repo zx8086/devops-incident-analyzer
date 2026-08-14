@@ -11,8 +11,12 @@ import {
 	type ServerRequest,
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { runWithDeployment } from "../clients/context.js";
-import { listRegisteredDeploymentIds } from "../clients/registry.js";
+import { currentDeploymentId, runWithDeployment } from "../clients/context.js";
+import {
+	configuredDefaultDeploymentId,
+	listRegisteredDeploymentIds,
+	shouldRejectImplicitOperation,
+} from "../clients/registry.js";
 import { withStructuredToolError } from "../lib/toolErrorInterceptor.js";
 import { logger } from "../utils/logger.js";
 import { withSecurityValidation } from "../utils/securityEnhancer.js";
@@ -434,6 +438,22 @@ export function registerAllTools(server: McpServer, esClient: Client): ToolInfo[
 					typeof toolArgs !== "object" ||
 					(toolArgs as Record<string, unknown>).deployment === undefined
 				) {
+					// Greptile #659 Issue 1: fail an implicit (deployment-omitted) operation closed when
+					// the configured default failed at startup and routing was re-pointed to a survivor --
+					// otherwise the request runs against a cluster the caller never chose (a write could
+					// mutate the wrong data). Explicit targeting still works. This lives at the tool layer,
+					// not resolveClient(), so boot-time proxy reads are unaffected.
+					// Fail closed on a truly implicit op when the default was re-pointed -- but honor an
+					// x-elastic-deployment HTTP header selecting a connected deployment (the transport put it in
+					// the request context before this handler ran). See shouldRejectImplicitOperation.
+					if (shouldRejectImplicitOperation(currentDeploymentId())) {
+						const validIds = listRegisteredDeploymentIds();
+						throw new McpError(
+							ErrorCode.InvalidParams,
+							`The default Elasticsearch deployment "${configuredDefaultDeploymentId() ?? "?"}" is unavailable (it failed to connect at startup). ` +
+								`Specify an available deployment explicitly via the 'deployment' argument or the x-elastic-deployment header. Valid deployment IDs: ${validIds.join(", ") || "<none registered>"}.`,
+						);
+					}
 					return innerHandler(toolArgs, extra);
 				}
 				const { deployment, ...rest } = toolArgs as Record<string, unknown>;

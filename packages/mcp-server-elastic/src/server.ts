@@ -7,6 +7,7 @@ import { Client } from "@elastic/elasticsearch";
 import { HttpConnection } from "@elastic/transport";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type CloudClient, initializeCloudClient } from "./clients/cloudClient.js";
+import { connectDeployments, DeploymentConfigError } from "./clients/connect-deployments.js";
 import { createClientProxy, registerClients } from "./clients/registry.js";
 import type { Config, DeploymentConfig } from "./config/index.js";
 import { registerBillingGetDeploymentCostsTool } from "./tools/billing/get_deployment_costs.js";
@@ -41,6 +42,23 @@ interface DeploymentSpec {
 // SIO-649: Build a single ES client for one deployment, tests the connection. Shared helper so
 // the multi-deployment and legacy single-deployment paths go through the same code.
 async function buildDeploymentClient(spec: DeploymentSpec, config: Config): Promise<Client> {
+	// Deterministic local config/construction (reading the caCert file, building options,
+	// instantiating the client) is wrapped so a misconfiguration surfaces as a
+	// DeploymentConfigError. connectDeployments rethrows those instead of tolerating them, so a
+	// bad caCert path fails loudly at startup rather than being masked as a transient outage.
+	let esClient: Client;
+	try {
+		esClient = buildClientFromSpec(spec, config);
+	} catch (error) {
+		throw new DeploymentConfigError(spec.id, error);
+	}
+
+	return probeDeploymentClient(esClient, spec);
+}
+
+// Pure construction: build options (incl. reading the caCert file) and instantiate the client.
+// Throws synchronously on a local misconfiguration; performs no network I/O.
+function buildClientFromSpec(spec: DeploymentSpec, config: Config): Client {
 	const clientOptions: ConstructorParameters<typeof Client>[0] = {
 		node: spec.url,
 		auth: spec.apiKey
@@ -96,8 +114,13 @@ async function buildDeploymentClient(spec: DeploymentSpec, config: Config): Prom
 		"Initializing Elasticsearch client with configuration:",
 	);
 
-	const esClient = new Client(clientOptions);
+	return new Client(clientOptions);
+}
 
+// Register observability listeners and probe the connection with esClient.info(). A probe
+// failure is a (potentially transient) connectivity problem: log it, close the client's pool to
+// avoid leaking sockets, and rethrow so connectDeployments can skip+warn this deployment.
+async function probeDeploymentClient(esClient: Client, spec: DeploymentSpec): Promise<Client> {
 	// Register connection pool event listeners for observability
 	try {
 		const pool = esClient.connectionPool as unknown as Record<string, unknown>;
@@ -173,6 +196,20 @@ async function buildDeploymentClient(spec: DeploymentSpec, config: Config): Prom
 			},
 			"Failed to connect to Elasticsearch:",
 		);
+		// new Client() already opened a keep-alive connection pool; the failed probe means the
+		// caller (connectDeployments) will discard this client, so close its pool to avoid leaking
+		// sockets. Guarded so a close() error never masks the original probe error we rethrow.
+		try {
+			await esClient.close();
+		} catch (closeError) {
+			logger.warn(
+				{
+					deploymentId: spec.id,
+					error: closeError instanceof Error ? closeError.message : String(closeError),
+				},
+				"Failed to close Elasticsearch client after a failed connection probe",
+			);
+		}
 		throw error;
 	}
 
@@ -244,15 +281,20 @@ export async function initializeElasticsearchClient(config: Config): Promise<Cli
 		`Loaded ${specs.length} deployment${specs.length === 1 ? "" : "s"}`,
 	);
 
-	const clients = new Map<string, Client>();
-	// Connect sequentially so a failing deployment surfaces a clear per-id error rather than a
-	// Promise.all reject that masks which connection broke.
-	for (const spec of specs) {
-		const client = await buildDeploymentClient(spec, config);
-		clients.set(spec.id, client);
-	}
+	// Connect sequentially, but a single deployment's transient connect failure must not crash
+	// the whole server: skip+warn failures, throw only if ALL fail, and re-point the default to
+	// a survivor when the configured default is the one that failed. See connect-deployments.ts.
+	const { clients, defaultId: resolvedDefaultId } = await connectDeployments(
+		specs,
+		defaultId,
+		(spec) => buildDeploymentClient(spec, config),
+		logger,
+	);
 
-	registerClients(clients, defaultId);
+	// Pass both ids: resolvedDefaultId is the survivor used for routing, defaultId is what the
+	// operator configured. When they differ (the default failed and was re-pointed), the registry
+	// fails implicit operations closed instead of silently using the survivor.
+	registerClients(clients, resolvedDefaultId, defaultId);
 
 	return createClientProxy();
 }
