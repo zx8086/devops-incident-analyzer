@@ -188,6 +188,31 @@ describe("connectDeployments", () => {
 		expect(closed.sort()).toEqual(["eu-cld", "us-cld"]);
 	});
 
+	// Greptile #660: a duplicate deployment id overwrites its Map entry, so the fatal-unwind close
+	// must still close EVERY client opened (including the shadowed one), not just the latest.
+	test("on a fatal rethrow, closeOne closes even a duplicate-id client shadowed in the map", async () => {
+		const log = makeLogger();
+		let seq = 0;
+		const closed: string[] = [];
+		await expect(
+			connectDeployments<Spec, { id: string; n: number }>(
+				[{ id: "dup" }, { id: "dup" }, { id: "boom" }],
+				"dup",
+				async (s) => {
+					if (s.id === "boom") throw new DeploymentAuthError(s.id, 403, new Error("forbidden"));
+					seq += 1;
+					return { id: s.id, n: seq }; // two distinct client instances for the two "dup" specs
+				},
+				log,
+				async (client) => {
+					closed.push(`${client.id}#${client.n}`);
+				},
+			),
+		).rejects.toThrow(DeploymentAuthError);
+		// Both "dup" instances (n=1 shadowed, n=2 current) must be closed -- not just the latest.
+		expect(closed.sort()).toEqual(["dup#1", "dup#2"]);
+	});
+
 	test("a close failure during fatal unwind is logged and does not mask the fatal error", async () => {
 		const log = makeLogger();
 		await expect(

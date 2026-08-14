@@ -80,13 +80,17 @@ export async function connectDeployments<S extends DeploymentConnectSpec, C = Cl
 ): Promise<ConnectDeploymentsResult<C>> {
 	const clients = new Map<string, C>();
 	const failures: Array<{ id: string; error: string }> = [];
+	// Every client actually opened, tracked as a flat list rather than only via `clients`. A
+	// duplicate deployment id in ELASTIC_DEPLOYMENTS overwrites its Map entry, so iterating the Map
+	// would miss the shadowed client; the list closes every pool we opened (Greptile #660).
+	const connectedClients: Array<{ id: string; client: C }> = [];
 
 	// Best-effort close of every already-connected client. Used before a fatal rethrow so the pools
 	// opened for earlier successful deployments are not leaked. Never throws -- a close failure is
 	// logged and must not mask the fatal error we are about to propagate.
 	const closeConnected = async (): Promise<void> => {
 		if (!closeOne) return;
-		for (const [id, client] of clients) {
+		for (const { id, client } of connectedClients) {
 			try {
 				await closeOne(client);
 			} catch (closeError) {
@@ -100,7 +104,9 @@ export async function connectDeployments<S extends DeploymentConnectSpec, C = Cl
 
 	for (const spec of specs) {
 		try {
-			clients.set(spec.id, await connectOne(spec));
+			const client = await connectOne(spec);
+			connectedClients.push({ id: spec.id, client });
+			clients.set(spec.id, client);
 		} catch (error) {
 			// A local misconfiguration or an auth/authz rejection is not a transient outage -- fail
 			// loudly rather than silently routing the operator's requests through a different,
