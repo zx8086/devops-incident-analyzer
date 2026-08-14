@@ -122,4 +122,11 @@ describe("connectDeployments", () => {
 		expect(err.cause).toBe(cause);
 		expect(err.name).toBe("DeploymentConfigError");
 	});
+
+	// CodeRabbit #659: a non-Error cause must be preserved too, not dropped.
+	test("DeploymentConfigError preserves a non-Error cause", () => {
+		const err = new DeploymentConfigError("eu-b2b", "raw string failure");
+		expect(err.cause).toBe("raw string failure");
+		expect(err.message).toContain("raw string failure");
+	});
 });

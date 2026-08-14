@@ -17,7 +17,9 @@ export class DeploymentConfigError extends Error {
 		super(`Deployment "${deploymentId}" has an invalid configuration: ${detail}`);
 		this.name = "DeploymentConfigError";
 		this.deploymentId = deploymentId;
-		if (cause instanceof Error) this.cause = cause;
+		// Retain the original cause for diagnostics regardless of its type. Error.cause is `unknown`,
+		// so a string/object cause is preserved rather than dropped.
+		this.cause = cause;
 	}
 }
 
