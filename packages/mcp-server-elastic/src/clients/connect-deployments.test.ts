@@ -1,6 +1,6 @@
 // src/clients/connect-deployments.test.ts
 import { describe, expect, mock, test } from "bun:test";
-import { connectDeployments } from "./connect-deployments.js";
+import { connectDeployments, DeploymentConfigError } from "./connect-deployments.js";
 
 interface Spec {
 	id: string;
@@ -93,5 +93,33 @@ describe("connectDeployments", () => {
 		);
 		expect(res.failures).toEqual([{ id: "a", error: "string failure" }]);
 		expect(res.defaultId).toBe("b");
+	});
+
+	// Greptile #659 Issue 3: a local misconfiguration must NOT be silently tolerated as a
+	// transient outage -- it has to fail loudly so operators fix the config rather than have
+	// requests silently routed through a different surviving cluster.
+	test("a DeploymentConfigError propagates (throws), even when later deployments would succeed", async () => {
+		const log = makeLogger();
+		await expect(
+			connectDeployments(
+				specs,
+				"eu-cld",
+				async (s) => {
+					if (s.id === "eu-cld") throw new DeploymentConfigError(s.id, new Error("ENOENT: bad caCert path"));
+					return fakeClient(s.id);
+				},
+				log,
+			),
+		).rejects.toThrow(/invalid configuration.*bad caCert path/);
+		// It must not be recorded as a tolerable skip.
+		expect(log.warn).not.toHaveBeenCalled();
+	});
+
+	test("DeploymentConfigError carries the deploymentId and wraps the original cause", () => {
+		const cause = new Error("permission denied");
+		const err = new DeploymentConfigError("eu-b2b", cause);
+		expect(err.deploymentId).toBe("eu-b2b");
+		expect(err.cause).toBe(cause);
+		expect(err.name).toBe("DeploymentConfigError");
 	});
 });

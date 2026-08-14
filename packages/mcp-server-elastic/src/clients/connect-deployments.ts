@@ -6,6 +6,21 @@
 
 import type { Client } from "@elastic/elasticsearch";
 
+// A deterministic local misconfiguration (e.g. an unreadable caCert path, invalid client
+// options) as opposed to a transient connectivity failure. connectDeployments tolerates
+// connectivity failures (skip+warn) but rethrows these so a broken config fails loudly at
+// startup instead of being silently masked by a surviving deployment.
+export class DeploymentConfigError extends Error {
+	readonly deploymentId: string;
+	constructor(deploymentId: string, cause: unknown) {
+		const detail = cause instanceof Error ? cause.message : String(cause);
+		super(`Deployment "${deploymentId}" has an invalid configuration: ${detail}`);
+		this.name = "DeploymentConfigError";
+		this.deploymentId = deploymentId;
+		if (cause instanceof Error) this.cause = cause;
+	}
+}
+
 export interface DeploymentConnectSpec {
 	id: string;
 }
@@ -38,6 +53,11 @@ export async function connectDeployments<S extends DeploymentConnectSpec, C = Cl
 		try {
 			clients.set(spec.id, await connectOne(spec));
 		} catch (error) {
+			// A local misconfiguration is not a transient outage -- fail loudly rather than
+			// silently routing the operator's requests through a different, surviving cluster.
+			if (error instanceof DeploymentConfigError) {
+				throw error;
+			}
 			const message = error instanceof Error ? error.message : String(error);
 			failures.push({ id: spec.id, error: message });
 			log.warn(
