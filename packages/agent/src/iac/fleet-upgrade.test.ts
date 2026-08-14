@@ -671,6 +671,45 @@ describe("detectFleetUpgrade deployment resolution (SIO-923)", () => {
 	});
 });
 
+// SIO-1466: when the live elastic_cloud_list_deployments call fails (EC outage / dead key), the
+// resolver falls back to the env-configured inventory (ELASTIC_DEPLOYMENTS) instead of degrading
+// to the clarify interrupt. Reproduced live: "In the eu-cld deployment, upgrade the Fleet Elastic
+// agent to 9.5.1" clarified despite eu-cld being named verbatim.
+describe("detectFleetUpgrade ELASTIC_DEPLOYMENTS fallback (SIO-1466)", () => {
+	test("resolves the deployment from ELASTIC_DEPLOYMENTS when the live list call fails", async () => {
+		const { detectFleetUpgrade } = await import("./nodes.ts");
+		const triggerArgs: Array<Record<string, unknown>> = [];
+		mockTools({
+			elastic_cloud_list_deployments: () => "[elastic cloud request failed: Unable to connect]",
+			// Short-circuit right after resolution, as in the SIO-923 test above.
+			gitlab_trigger_fleet_upgrade_preview: (args) => {
+				triggerArgs.push(args);
+				return '[423] {"status":"locked","note":"a fleet pipeline is already running"}';
+			},
+		});
+		const prev = process.env.ELASTIC_DEPLOYMENTS;
+		process.env.ELASTIC_DEPLOYMENTS = "eu-cld,us-cld,eu-b2b";
+		try {
+			// Fresh turn: no parsed iacRequest.cluster, so resolution goes through resolveDriftDeployment.
+			const state = {
+				messages: [
+					{ getType: () => "human", content: "In the eu-cld deployment, upgrade the Fleet Elastic agent to 9.5.1" },
+				],
+			} as unknown as IacStateType;
+
+			const result = await detectFleetUpgrade(state);
+
+			expect(triggerArgs).toHaveLength(1);
+			expect(triggerArgs[0]?.deployment).toBe("eu-cld");
+			expect(result.targetDeployment).toBe("eu-cld");
+			expect(result.fleetUpgradeReport?.planError).toBe(true);
+		} finally {
+			if (prev === undefined) delete process.env.ELASTIC_DEPLOYMENTS;
+			else process.env.ELASTIC_DEPLOYMENTS = prev;
+		}
+	});
+});
+
 describe("parseSinglePipeline (SIO-924)", () => {
 	test("extracts status + web_url from a [200] pipeline body", () => {
 		const r = parseSinglePipeline('[200] {"id":42,"status":"running","web_url":"https://gitlab.com/x/-/pipelines/42"}');

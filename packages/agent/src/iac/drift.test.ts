@@ -10,6 +10,7 @@ import {
 	deploymentClarifyQuestion,
 	detectLostIlmActions,
 	driftFingerprint,
+	elasticDeploymentNamesFromEnv,
 	explainStackDrift,
 	extractLiveTopology,
 	extractLiveVersion,
@@ -19,6 +20,7 @@ import {
 	ilmRepoShapeToFile,
 	isActionableDrift,
 	liveIlmToRepoShape,
+	matchDeploymentName,
 	parseAgentMrBySourceBranch,
 	parseDriftCheckResult,
 	parseDriftReport,
@@ -136,6 +138,73 @@ describe("deploymentClarifyQuestion (SIO-1463)", () => {
 		expect(q).toContain("couldn't list Elastic Cloud deployments");
 		expect(q).toContain("401");
 		expect(q).toContain(base);
+	});
+	// SIO-1466: when the env fallback also missed, the clarify names the known deployments so it
+	// is answerable without the live API.
+	test("appends the known deployments when the env fallback also had no match", () => {
+		const q = deploymentClarifyQuestion(base, "Elastic Cloud API unreachable", ["eu-cld", "us-cld"]);
+		expect(q).toContain("Known deployments: eu-cld, us-cld.");
+	});
+	test("no known-deployments suffix when the fallback list is empty or absent", () => {
+		expect(deploymentClarifyQuestion(base, "Elastic Cloud API unreachable", [])).not.toContain("Known deployments");
+		expect(deploymentClarifyQuestion(base, "Elastic Cloud API unreachable")).not.toContain("Known deployments");
+	});
+	test("known deployments are only named alongside a listError", () => {
+		expect(deploymentClarifyQuestion(base, undefined, ["eu-cld"])).toBe(base);
+	});
+});
+
+// SIO-1466: the shared matcher behind resolveDriftDeployment (live list and env fallback).
+describe("matchDeploymentName", () => {
+	const names = ["eu-cld", "us-cld", "eu-b2b"];
+	test("exact (case-insensitive) whole-query match wins", () => {
+		expect(matchDeploymentName("eu-cld", names)).toBe("eu-cld");
+		expect(matchDeploymentName("eu-cld", ["EU-CLD"])).toBe("EU-CLD");
+		// Greptile PR #658 P1: the query is normalized INSIDE the helper -- a mixed-case caller
+		// must resolve without pre-lowercasing.
+		expect(matchDeploymentName("EU-CLD", names)).toBe("eu-cld");
+		expect(matchDeploymentName("In the EU-CLD deployment, upgrade the agent", names)).toBe("eu-cld");
+	});
+	test("a name embedded in a longer message resolves when unique", () => {
+		expect(matchDeploymentName("in the eu-cld deployment, upgrade the fleet elastic agent to 9.5.1", names)).toBe(
+			"eu-cld",
+		);
+	});
+	test("ambiguous partial (query contained in several names) resolves to nothing", () => {
+		expect(matchDeploymentName("eu-b2b", ["eu-b2b-prod", "eu-b2b-stg"])).toBe("");
+		expect(matchDeploymentName("cld", names)).toBe("");
+	});
+	test("no match and empty candidate list resolve to nothing", () => {
+		expect(matchDeploymentName("check ap-cld for drift", names)).toBe("");
+		expect(matchDeploymentName("eu-cld", [])).toBe("");
+	});
+	// Greptile PR #658 round-2 P1: n.includes("") is true for every name, so a blank query with a
+	// single candidate silently selected that deployment the user never named.
+	test("a blank query never matches, even against a sole candidate", () => {
+		expect(matchDeploymentName("", ["eu-cld"])).toBe("");
+		expect(matchDeploymentName("   ", ["eu-cld"])).toBe("");
+	});
+});
+
+describe("elasticDeploymentNamesFromEnv (SIO-1466)", () => {
+	test("returns the trimmed comma-separated names from ELASTIC_DEPLOYMENTS", () => {
+		const prev = process.env.ELASTIC_DEPLOYMENTS;
+		process.env.ELASTIC_DEPLOYMENTS = "eu-cld, us-cld ,eu-b2b";
+		try {
+			expect(elasticDeploymentNamesFromEnv()).toEqual(["eu-cld", "us-cld", "eu-b2b"]);
+		} finally {
+			if (prev === undefined) delete process.env.ELASTIC_DEPLOYMENTS;
+			else process.env.ELASTIC_DEPLOYMENTS = prev;
+		}
+	});
+	test("returns [] when the var is unset (no undefined sentinel leaks through)", () => {
+		const prev = process.env.ELASTIC_DEPLOYMENTS;
+		delete process.env.ELASTIC_DEPLOYMENTS;
+		try {
+			expect(elasticDeploymentNamesFromEnv()).toEqual([]);
+		} finally {
+			if (prev !== undefined) process.env.ELASTIC_DEPLOYMENTS = prev;
+		}
 	});
 });
 
