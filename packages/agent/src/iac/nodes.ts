@@ -8014,11 +8014,40 @@ export function parseEcDeploymentNames(toolResult: string): string[] {
 	return parseEcDeploymentList(toolResult).names;
 }
 
+// Exact (case-insensitive) match wins; otherwise accept a partial only when it's the unique
+// candidate -- a naive substring find lets a shorter name (eu-b2b) beat eu-b2b-prod. No
+// unambiguous match -> "". (Pure; unit-tested.)
+export function matchDeploymentName(query: string, names: string[]): string {
+	const exact = names.find((d) => d.toLowerCase() === query);
+	if (exact) return exact;
+	const partial = names.filter((d) => {
+		const n = d.toLowerCase();
+		return query.includes(n) || n.includes(query);
+	});
+	return partial.length === 1 ? (partial[0] ?? "") : "";
+}
+
+// SIO-1466: the env-configured deployment inventory (ELASTIC_DEPLOYMENTS) as plain names --
+// the fallback candidate list when the live elastic_cloud_list_deployments call fails. Same comma
+// parse as kg-topology's configuredElasticDeployments, duplicated deliberately: importing
+// kg-topology here would pull mcp-bridge's full export surface into nodes.ts's module graph and
+// break every test that stubs mcp-bridge with a minimal mock.module before importing nodes.ts.
+export function elasticDeploymentNamesFromEnv(env: NodeJS.ProcessEnv = process.env): string[] {
+	return (env.ELASTIC_DEPLOYMENTS ?? "")
+		.split(",")
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0);
+}
+
 // SIO-1463: prefix a deployment clarify question with the list-call failure when there is one, so
 // an EC auth/connectivity outage reads as an outage instead of the agent "not understanding" a
-// deployment named verbatim in the message. (Pure; unit-tested.)
-export function deploymentClarifyQuestion(base: string, listError?: string): string {
-	return listError ? `I couldn't list Elastic Cloud deployments (${listError}). ${base}` : base;
+// deployment named verbatim in the message. SIO-1466: when the env fallback list also failed to
+// match, name the known deployments so the clarify is answerable without the live API.
+// (Pure; unit-tested.)
+export function deploymentClarifyQuestion(base: string, listError?: string, knownNames?: string[]): string {
+	if (!listError) return base;
+	const known = knownNames?.length ? ` Known deployments: ${knownNames.join(", ")}.` : "";
+	return `I couldn't list Elastic Cloud deployments (${listError}). ${base}${known}`;
 }
 
 // Pipeline id/status from gitlab_trigger_drift_check's JSON. (Pure; unit-tested.)
@@ -9571,30 +9600,35 @@ export function parseTargetVersion(text: string, requestVersion?: string): strin
 
 // Resolve the target deployment for a drift audit from the user's text, matched against the
 // live Elastic Cloud deployment names (no local clone).
-async function resolveDriftDeployment(state: IacStateType): Promise<{ deployment: string; listError?: string }> {
+async function resolveDriftDeployment(
+	state: IacStateType,
+): Promise<{ deployment: string; listError?: string; fallbackNames?: string[] }> {
 	if (state.targetDeployment) return { deployment: state.targetDeployment };
 	const query = lastHumanText(state).toLowerCase();
 	const toolResult = await callTool("elastic_cloud_list_deployments", {});
 	const { names, listError } = parseEcDeploymentList(toolResult);
 	// SIO-1463: a failed list call is NOT "no match" -- surface it so the caller's clarify names
 	// the outage (a dead EC_API_KEY looked like the agent failing to read a verbatim deployment).
+	// SIO-1466: before degrading to clarify, try the env-configured inventory (ELASTIC_DEPLOYMENTS)
+	// -- an EC outage should not block resolving a deployment the message names verbatim. The live
+	// list stays authoritative whenever it is reachable.
 	if (listError) {
+		const fallbackNames = elasticDeploymentNamesFromEnv();
+		const match = matchDeploymentName(query, fallbackNames);
+		if (match) {
+			log.warn(
+				{ listError, deployment: match, source: "ELASTIC_DEPLOYMENTS" },
+				"iac: elastic_cloud_list_deployments failed; resolved deployment from ELASTIC_DEPLOYMENTS fallback",
+			);
+			return { deployment: match };
+		}
 		log.warn(
-			{ listError, toolResult: toolResult.slice(0, 300) },
+			{ listError, fallbackNames, toolResult: toolResult.slice(0, 300) },
 			"iac: elastic_cloud_list_deployments failed; deployment resolution degraded to clarify",
 		);
-		return { deployment: "", listError };
+		return { deployment: "", listError, fallbackNames };
 	}
-	// Exact (case-insensitive) match wins; otherwise accept a partial only when it's the unique
-	// candidate -- a naive substring find lets a shorter name (eu-b2b) beat eu-b2b-prod. No
-	// unambiguous match -> "" routes to the iac_clarify interrupt.
-	const exact = names.find((d) => d.toLowerCase() === query);
-	if (exact) return { deployment: exact };
-	const partial = names.filter((d) => {
-		const n = d.toLowerCase();
-		return query.includes(n) || n.includes(query);
-	});
-	return { deployment: partial.length === 1 ? (partial[0] ?? "") : "" };
+	return { deployment: matchDeploymentName(query, names) };
 }
 
 function driftedStacks(state: IacStateType): StackDrift[] {
@@ -9759,6 +9793,7 @@ export async function detectDrift(state: IacStateType): Promise<Partial<IacState
 		const question = deploymentClarifyQuestion(
 			"Which deployment should I check for drift? (e.g. eu-b2b)",
 			resolved.listError,
+			resolved.fallbackNames,
 		);
 		const answer = interrupt({ type: "iac_clarify", question, message: question }) as { answer?: string };
 		deployment = (answer?.answer ?? "").trim();
@@ -10858,6 +10893,7 @@ export async function detectSyntheticsDrift(state: IacStateType): Promise<Partia
 		const question = deploymentClarifyQuestion(
 			"Which deployment's synthetics should I check for drift? (e.g. eu-b2b)",
 			resolved.listError,
+			resolved.fallbackNames,
 		);
 		const answer = interrupt({ type: "iac_clarify", question, message: question }) as { answer?: string };
 		deployment = (answer?.answer ?? "").trim();
@@ -11374,7 +11410,7 @@ export async function detectFleetUpgrade(state: IacStateType): Promise<Partial<I
 	// already prefers state.iacRequest?.version. resolveDriftDeployment stays the fallback for the
 	// drift/synthetics flows (and the fresh-turn case with no parsed cluster).
 	const parsedCluster = state.iacRequest?.cluster?.trim() || "";
-	const resolved: { deployment: string; listError?: string } = parsedCluster
+	const resolved: { deployment: string; listError?: string; fallbackNames?: string[] } = parsedCluster
 		? { deployment: parsedCluster }
 		: await resolveDriftDeployment(state);
 	let deployment = resolved.deployment;
@@ -11382,6 +11418,7 @@ export async function detectFleetUpgrade(state: IacStateType): Promise<Partial<I
 		const question = deploymentClarifyQuestion(
 			"Which deployment's Fleet agents should I upgrade? (e.g. eu-b2b)",
 			resolved.listError,
+			resolved.fallbackNames,
 		);
 		const answer = interrupt({ type: "iac_clarify", question, message: question }) as { answer?: string };
 		deployment = (answer?.answer ?? "").trim();
