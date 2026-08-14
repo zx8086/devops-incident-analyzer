@@ -7,7 +7,12 @@ import { Client } from "@elastic/elasticsearch";
 import { HttpConnection } from "@elastic/transport";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type CloudClient, initializeCloudClient } from "./clients/cloudClient.js";
-import { connectDeployments, DeploymentConfigError } from "./clients/connect-deployments.js";
+import {
+	connectDeployments,
+	DeploymentAuthError,
+	DeploymentConfigError,
+	isAuthProbeFailure,
+} from "./clients/connect-deployments.js";
 import { createClientProxy, registerClients } from "./clients/registry.js";
 import type { Config, DeploymentConfig } from "./config/index.js";
 import { registerBillingGetDeploymentCostsTool } from "./tools/billing/get_deployment_costs.js";
@@ -210,6 +215,12 @@ async function probeDeploymentClient(esClient: Client, spec: DeploymentSpec): Pr
 				"Failed to close Elasticsearch client after a failed connection probe",
 			);
 		}
+		// SIO-1467: a 401/403 is a credential/permissions problem that will not self-heal. Wrap it so
+		// connectDeployments treats it as fatal (fail startup loudly) instead of a transient skip+warn.
+		if (isAuthProbeFailure(error)) {
+			const statusCode = (error as { statusCode?: number }).statusCode ?? 0;
+			throw new DeploymentAuthError(spec.id, statusCode, error);
+		}
 		throw error;
 	}
 
@@ -289,6 +300,8 @@ export async function initializeElasticsearchClient(config: Config): Promise<Cli
 		defaultId,
 		(spec) => buildDeploymentClient(spec, config),
 		logger,
+		// Close already-connected clients if a later deployment fails fatally (SIO-1467).
+		(client) => client.close(),
 	);
 
 	// Pass both ids: resolvedDefaultId is the survivor used for routing, defaultId is what the
