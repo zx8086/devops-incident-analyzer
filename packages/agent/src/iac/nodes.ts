@@ -8016,9 +8016,12 @@ export function parseEcDeploymentNames(toolResult: string): string[] {
 
 // Exact (case-insensitive) match wins; otherwise accept a partial only when it's the unique
 // candidate -- a naive substring find lets a shorter name (eu-b2b) beat eu-b2b-prod. No
-// unambiguous match -> "". (Pure; unit-tested.)
+// unambiguous match -> "". A blank query never matches: n.includes("") is true for every name,
+// so a sole candidate would be silently selected without the user naming any deployment.
+// (Pure; unit-tested.)
 export function matchDeploymentName(query: string, names: string[]): string {
-	const q = query.toLowerCase();
+	const q = query.toLowerCase().trim();
+	if (!q) return "";
 	const exact = names.find((d) => d.toLowerCase() === q);
 	if (exact) return exact;
 	const partial = names.filter((d) => {

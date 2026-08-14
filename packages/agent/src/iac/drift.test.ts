@@ -178,6 +178,12 @@ describe("matchDeploymentName", () => {
 		expect(matchDeploymentName("check ap-cld for drift", names)).toBe("");
 		expect(matchDeploymentName("eu-cld", [])).toBe("");
 	});
+	// Greptile PR #658 round-2 P1: n.includes("") is true for every name, so a blank query with a
+	// single candidate silently selected that deployment the user never named.
+	test("a blank query never matches, even against a sole candidate", () => {
+		expect(matchDeploymentName("", ["eu-cld"])).toBe("");
+		expect(matchDeploymentName("   ", ["eu-cld"])).toBe("");
+	});
 });
 
 describe("elasticDeploymentNamesFromEnv (SIO-1466)", () => {
