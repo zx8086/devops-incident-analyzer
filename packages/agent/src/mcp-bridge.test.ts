@@ -2,7 +2,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
 	_connectTimeoutForTest as connectTimeoutFor,
+	_getHealthPollTickForTest as getHealthPollTick,
 	_getHealthPollTimerForTest as getHealthPollTimer,
+	isClosedModuleRunnerError,
 	serializeMcpConnectError,
 	_startHealthPollingForTest as startHealthPolling,
 	stopHealthPolling,
@@ -211,5 +213,42 @@ describe("health polling singleton (SIO-1113)", () => {
 		expect(getHealthPollTimer()).toBeNull();
 		stopHealthPolling(); // safe to call with no timer
 		expect(getHealthPollTimer()).toBeNull();
+	});
+
+	// A dev-server restart can close the Vite module runner WITHOUT running
+	// hot.dispose, leaving the singleton timer bound to a dead module graph whose
+	// reconnect import()s fail with "Vite module runner has been closed" forever.
+	// The timer therefore dispatches through a globalThis tick slot that every
+	// startHealthPolling() call repoints at the calling module instance.
+	test("a later startHealthPolling call takes over dispatch without re-arming the timer", () => {
+		startHealthPolling();
+		const timer = getHealthPollTimer();
+		const firstTick = getHealthPollTick();
+		expect(firstTick).not.toBeNull();
+		startHealthPolling(); // a fresh module graph re-bootstrapping after a runner swap
+		expect(getHealthPollTimer()).toBe(timer); // same timer -- no stacking
+		expect(getHealthPollTick()).not.toBe(firstTick); // dispatch repointed at the new caller
+	});
+
+	test("stopHealthPolling clears the tick slot alongside the timer", () => {
+		startHealthPolling();
+		expect(getHealthPollTick()).not.toBeNull();
+		stopHealthPolling();
+		expect(getHealthPollTick()).toBeNull();
+	});
+});
+
+// Terminal-error classification for the reconnect self-heal: a closed-runner
+// import failure stops the dead graph's poll loop instead of warning every 30s.
+describe("isClosedModuleRunnerError", () => {
+	test("matches the Vite closed-runner import failure", () => {
+		expect(isClosedModuleRunnerError(new Error("Vite module runner has been closed."))).toBe(true);
+		expect(isClosedModuleRunnerError(new Error("Vite module runner has been closed"))).toBe(true);
+	});
+
+	test("rejects ordinary connect errors and non-Errors", () => {
+		expect(isClosedModuleRunnerError(new Error("fetch failed"))).toBe(false);
+		expect(isClosedModuleRunnerError("Vite module runner has been closed")).toBe(false);
+		expect(isClosedModuleRunnerError(undefined)).toBe(false);
 	});
 });

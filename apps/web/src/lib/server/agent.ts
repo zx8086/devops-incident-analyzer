@@ -244,6 +244,10 @@ export function ensureMcpConnected(): Promise<void> {
 // memoized promise so the next turn reconnects cleanly. import.meta.hot is untyped
 // here (no vite/client in the server tsconfig types), so narrow it inline rather than
 // widening the type surface; undefined in prod builds, where this is a no-op anyway.
+// NOTE: a dev-server restart can close the module runner WITHOUT running this dispose
+// callback; that path is covered inside the bridge itself -- startHealthPolling
+// repoints the timer's globalThis tick slot at the live module graph, and a reconnect
+// that fails with the closed-runner error stops the dead graph's loop (mcp-bridge.ts).
 {
 	const hot = (import.meta as { hot?: { dispose(cb: () => void): void } }).hot;
 	hot?.dispose(() => {
