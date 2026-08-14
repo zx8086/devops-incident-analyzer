@@ -268,6 +268,18 @@ export function registerSchedules(
 ): RegisteredSchedule[] {
 	const registered: RegisteredSchedule[] = [];
 
+	// SIO-1468: this function owns every id in the global slot map. The caller
+	// passes the FULL current schedule set, so an armed slot whose id is absent
+	// from it (schedule deleted, renamed, or its YAML skipped as malformed)
+	// belongs to a previous registration and must stop -- otherwise the surviving
+	// timer keeps dispatching a dead module graph's closure forever.
+	for (const id of [...getScheduleSlots().keys()]) {
+		if (!schedules.has(id)) {
+			stopSlot(id);
+			log.info({ id }, "schedule no longer defined; stopped surviving slot");
+		}
+	}
+
 	for (const [id, scheduleDef] of schedules) {
 		if (!scheduleDef.enabled) {
 			// SIO-1468: disabling in YAML is the explicit off switch -- also stop a slot

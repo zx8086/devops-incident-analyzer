@@ -217,6 +217,16 @@ describe("schedule slot singleton (SIO-1468)", () => {
 		expect(secondSlot).not.toBe(firstSlot); // old timer stopped, new one armed
 	});
 
+	test("a schedule absent from the registration map stops its surviving slot", () => {
+		register(async () => undefined);
+		expect(getScheduleSlot("s")).toBeDefined();
+		// A fresh module graph registers the CURRENT map, from which "s" is gone
+		// (schedule deleted, renamed, or its YAML skipped as malformed).
+		const registered = registerSchedules(new Map(), new Map(), { nodes: {} });
+		expect(registered).toEqual([]);
+		expect(getScheduleSlot("s")).toBeUndefined();
+	});
+
 	test("disabling a schedule stops a previously armed slot", () => {
 		register(async () => undefined);
 		expect(getScheduleSlot("s")).toBeDefined();

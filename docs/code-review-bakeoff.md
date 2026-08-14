@@ -25,11 +25,15 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | PR | Date | Rounds | Greptile: real / missed | CodeRabbit: real / missed | Notes |
 |---|---|---|---|---|---|
 | [#658](https://github.com/zx8086/devops-incident-analyzer/pull/658) | 2026-08-14 | 3 | 2 / 0 | 1 / 1 | First dual-review PR; detail below |
-| [#661](https://github.com/zx8086/devops-incident-analyzer/pull/661) | 2026-08-14 | 1 | n/a (credit-exhausted) | 5 / 0 | Greptile absent; detail below |
+| [#661](https://github.com/zx8086/devops-incident-analyzer/pull/661) | 2026-08-14 | 2 | 1 / 0 (round 2 only) | 5 / 0 | Greptile skipped round 1 (credits); detail below |
 
 ## PR #661 detail (Vite module-runner timer leaks + IaC message sanitization)
 
-**Greptile: no review.** The org hit the 50-credit trial limit; every trigger (auto on push, explicit `@greptile review`) returned only "reached the 50-credit limit for trial accounts. To continue receiving code reviews, upgrade your plan." The `Greptile Review` status check never registered on the PR, so the normal merge gate could not run. This voids the head-to-head for this PR and blocks the gate until the plan question is settled.
+**Greptile round 1: no review.** On PR open, every trigger (auto on push, explicit `@greptile review`) returned only "reached the 50-credit limit for trial accounts. To continue receiving code reviews, upgrade your plan," and the `Greptile Review` status check never registered -- so CodeRabbit had round 1 to itself. On the round-2 fix push the check registered and completed normally (credits apparently refreshed or the limit applied per-trigger), reviewing commit `ee4552b5` at Confidence Score 4/5 with ONE actionable finding:
+
+- Real: "Removed schedules retain active slots" -- an armed slot whose id disappears from the schedule map entirely (YAML deleted, renamed, or skipped as malformed) is never visited by the registration loop, so `stopSlot` never runs and the dead graph's timer keeps firing. The residual sibling of CodeRabbit's round-1 Major (which covered ids present-but-gated, not absent). Verified with a failing unit test before fixing; registerSchedules now reaps every slot id absent from the input map.
+
+Head-to-head on the slot-ownership hole: CodeRabbit caught the gated-id variant in round 1; Greptile caught the absent-id variant in round 2 after CodeRabbit had approved that same commit. Each bot found a real coverage gap the other missed on this PR.
 
 **CodeRabbit: 2 actionable + 3 nitpicks, all verified real, 0 false positives.**
 
