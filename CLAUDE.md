@@ -142,7 +142,7 @@ Follow the global "Handover Documents" structure (`~/.claude/CLAUDE.md`). Projec
 
 ### Greptile Review Lifecycle
 
-Greptile replaced CodeRabbit on 2026-08-13 (the CodeRabbit GitHub App is suspended, so `coderabbitai[bot]` no longer posts; do not wait on it). A `greptile` HTTP MCP server is also configured for this project in `~/.claude.json`.
+Greptile became the primary reviewer on 2026-08-13. Since 2026-08-14 the CodeRabbit GitHub App is ACTIVE AGAIN **deliberately**: both bots review every PR side by side during an evaluation bake-off to decide which to keep (first head-to-head: PR #658). Do NOT suggest suspending either app. Triage BOTH bots' findings before merging, and append every PR's head-to-head result to `docs/code-review-bakeoff.md` (findings caught/missed by each, severity calibration, verified-vs-unverified, incremental-round behavior, latency). The `Greptile Review` status check remains the ONLY merge gate (CodeRabbit registers no status check here), but note `reviewDecision` now also reflects CodeRabbit's verdict: its `CHANGES_REQUESTED` holds the PR until it re-approves on the fix push. A `greptile` HTTP MCP server is also configured for this project in `~/.claude.json`.
 
 **The completion check is the `Greptile Review` status check.** Greptile always posts a PR-level issue comment from `greptile-apps[bot]`, and on completion also posts an **`APPROVED` review object**; findings additionally arrive as `COMMENTED` reviews with one inline comment each (#653 clean: 1 `APPROVED`, 0 inline. #652 with two P1s: 3 `COMMENTED` + 1 `APPROVED`, 4 inline). Never gate on the reviews endpoint alone -- it is empty until the review lands, so an empty result does not distinguish "clean" from "still running". Gate on the check:
 
