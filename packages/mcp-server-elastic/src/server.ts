@@ -174,6 +174,20 @@ async function buildDeploymentClient(spec: DeploymentSpec, config: Config): Prom
 			},
 			"Failed to connect to Elasticsearch:",
 		);
+		// new Client() already opened a keep-alive connection pool; the failed probe means the
+		// caller (connectDeployments) will discard this client, so close its pool to avoid leaking
+		// sockets. Guarded so a close() error never masks the original probe error we rethrow.
+		try {
+			await esClient.close();
+		} catch (closeError) {
+			logger.warn(
+				{
+					deploymentId: spec.id,
+					error: closeError instanceof Error ? closeError.message : String(closeError),
+				},
+				"Failed to close Elasticsearch client after a failed connection probe",
+			);
+		}
 		throw error;
 	}
 
