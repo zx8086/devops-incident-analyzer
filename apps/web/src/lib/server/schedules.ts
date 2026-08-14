@@ -52,6 +52,9 @@ export function startSchedules(): void {
 			);
 		});
 		if (schedules.size === 0) {
+			// SIO-1468: still run the registration pass -- its absent-id reaper stops
+			// any slots a previous module graph armed for schedules that no longer exist.
+			registerSchedules(schedules, new Map(), { nodes: {} });
 			log.info("no schedule definitions found under schedules/*.yaml; nothing to register");
 			return;
 		}
@@ -96,6 +99,10 @@ export function startSchedules(): void {
 		});
 	} catch (error) {
 		started = false;
+		// SIO-1468: no registration pass ran to take ownership of surviving slots, so
+		// stop them all (empty-set reap) rather than leave a previous module graph's
+		// timers dispatching dead closures. The next successful boot re-arms them.
+		registerSchedules(new Map(), new Map(), { nodes: {} });
 		log.error(
 			{ error: error instanceof Error ? error.message : String(error) },
 			"startSchedules failed; no schedules registered this boot",
