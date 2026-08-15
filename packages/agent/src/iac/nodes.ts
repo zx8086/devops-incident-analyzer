@@ -380,6 +380,58 @@ export async function resolveRenovateMarker(state: IacStateType): Promise<Partia
 	};
 }
 
+// (Pure; unit-tested.)
+export function buildRenovateGateMessage(marker: { marker: string; line: string }): string {
+	const cleanLine = marker.line.replace(/^\s*-\s*\[[ x]\]\s*<!--.*?-->\s*/, "").trim();
+	return `This will tick '${marker.marker}' (${cleanLine || marker.line.trim()}) and trigger an off-schedule Renovate run. Proceed?`;
+}
+
+// Single operator approve/decline interrupt, matching fleetUpgradeGate's role
+// (nodes.ts:11822) exactly. Only reached when hasSingleRenovateMatch routed here.
+export function renovateTriggerGate(state: IacStateType): Partial<IacStateType> {
+	const marker = state.renovateMarker;
+	if (!marker) return { renovateTriggerApproved: false };
+	const choice = interrupt({
+		type: "renovate_trigger_choice",
+		marker: marker.marker,
+		line: marker.line,
+		message: buildRenovateGateMessage(marker),
+	}) as { approve?: boolean };
+	return { renovateTriggerApproved: choice?.approve === true };
+}
+
+// Calls the two SIO-1470 tools in sequence: tick the checkbox, then play the schedule.
+// A schedule-triggered Renovate run only ever creates branches/MRs -- apply:* stays
+// when: manual -- so this cannot deploy anything.
+export async function triggerRenovateUpdate(state: IacStateType): Promise<Partial<IacStateType>> {
+	const marker = state.renovateMarker;
+	const issueIid = state.renovateIssueIid;
+	if (!marker || issueIid === null) return {};
+
+	await dispatchCustomEvent("iac_pipeline_progress", { pipelineId: null, status: "renovate: triggered" });
+
+	const tickRes = await callTool("gitlab_unschedule_renovate_branches", {
+		issueIid,
+		markers: [marker.marker],
+	});
+	if (!isGitlabSuccess(tickRes)) {
+		return {
+			blockedReason: `Could not tick the dashboard checkbox: ${tickRes.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot trigger the update: ticking the Dependency Dashboard checkbox failed.")],
+		};
+	}
+
+	const playRes = await callTool("gitlab_play_pipeline_schedule", { descriptionContains: "Renovate" });
+	if (!isGitlabSuccess(playRes)) {
+		return {
+			blockedReason: `Could not play the Renovate schedule: ${playRes.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot trigger the update: playing the Renovate pipeline schedule failed.")],
+		};
+	}
+
+	return {};
+}
+
 // SIO-1003: the instruction-string fragment listing the legal workflow values, e.g.
 // "'tier-resize'|'ilm-rollout'|...", built from the same WORKFLOW_VALUES (imported from state.ts) that
 // the zod enum uses -- so the planner instruction can never drift from what the parser accepts.

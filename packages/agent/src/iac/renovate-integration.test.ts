@@ -1,6 +1,17 @@
 // agent/src/iac/renovate-integration.test.ts
 import { describe, expect, test } from "bun:test";
-import { parseRenovateTargetJson } from "./nodes.ts";
+import { buildRenovateGateMessage, parseRenovateTargetJson } from "./nodes.ts";
+
+describe("buildRenovateGateMessage", () => {
+	test("names the exact marker and describes the trigger", () => {
+		const msg = buildRenovateGateMessage({
+			marker: "renovate/eu-b2b-prometheus",
+			line: " - [ ] <!-- unschedule-branch=renovate/eu-b2b-prometheus -->chore(deps): [eu-b2b] prometheus to v1.24.4",
+		});
+		expect(msg).toContain("renovate/eu-b2b-prometheus");
+		expect(msg).toContain("chore(deps): [eu-b2b] prometheus to v1.24.4");
+	});
+});
 
 // Renovate on-demand MR automation: extractRenovateTarget's LLM call returns a JSON
 // object with deployment+integration; parseRenovateTargetJson validates and normalizes
