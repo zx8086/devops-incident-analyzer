@@ -246,8 +246,12 @@ export async function extractRenovateTarget(state: IacStateType): Promise<Partia
 
 // Mirrors mcp-server-elastic-iac's parseDashboardEntries (gitlab.ts) -- duplicated rather
 // than shared across the package boundary (nodes.ts never imports MCP-server-side code;
-// it only consumes tool string output). Same regex, same shape.
-const RENOVATE_DASHBOARD_LINE_RE = /^(\s*-\s*\[)[ x]\](\s*<!--\s*unschedule-branch=(.*?)\s*-->)/;
+// it only consumes tool string output). Same regex, same shape. UNLIKE
+// parseDashboardEntries (which parses both checked/unchecked for tickDashboardCheckboxes'
+// idempotency check), this only matches UNCHECKED "- [ ]" lines: an already-checked entry
+// means Renovate already read the tick and it is no longer a pending, re-triggerable
+// update (Greptile, PR #663).
+const RENOVATE_DASHBOARD_LINE_RE = /^(\s*-\s*\[) \](\s*<!--\s*unschedule-branch=(.*?)\s*-->)/;
 
 export function parseRenovateDashboardEntries(description: string): Array<{ marker: string; line: string }> {
 	const entries: Array<{ marker: string; line: string }> = [];
@@ -441,9 +445,12 @@ export function renovateTriggerGate(state: IacStateType): Partial<IacStateType> 
 export async function triggerRenovateUpdate(state: IacStateType): Promise<Partial<IacStateType>> {
 	const marker = state.renovateMarker;
 	const issueIid = state.renovateIssueIid;
-	if (!marker || issueIid === null) return {};
-
-	await dispatchCustomEvent("iac_pipeline_progress", { pipelineId: null, status: "renovate: triggered" });
+	if (!marker || issueIid === null) {
+		return {
+			blockedReason: "No resolved Renovate marker to trigger.",
+			messages: [new AIMessage("Cannot trigger the update: no resolved dashboard entry.")],
+		};
+	}
 
 	const tickRes = await callTool("gitlab_unschedule_renovate_branches", {
 		issueIid,
@@ -463,6 +470,11 @@ export async function triggerRenovateUpdate(state: IacStateType): Promise<Partia
 			messages: [new AIMessage("Cannot trigger the update: playing the Renovate pipeline schedule failed.")],
 		};
 	}
+
+	// CodeRabbit (PR #663): emit AFTER both calls succeed, not before -- a failure on
+	// either call above now returns early without ever showing "triggered", so the UI
+	// never claims success ahead of the real outcome.
+	await dispatchCustomEvent("iac_pipeline_progress", { pipelineId: null, status: "renovate: triggered" });
 
 	return {};
 }
@@ -1236,6 +1248,23 @@ export const TURN_START_RESET = {
 	editDrift: null,
 	stackDriftAdvisory: "",
 	selectedKnowledge: null,
+	// Greptile (PR #663): the renovate-integration-update sub-flow's 6 fields are
+	// checkpointed state -- without this reset, a declined gate (renovateTriggerApproved:
+	// false) or a resolved marker/candidates from one turn leaks into a LATER, unrelated
+	// turn on the same thread. iacTurnOutcome's declined-check reads these fields without
+	// also checking state.intent, so a stale false approval would misreport an unrelated
+	// turn as "declined".
+	renovateTarget: null,
+	// The object's `as const` makes a bare `[]` a readonly tuple, incompatible with the
+	// state annotation's mutable `Array<{marker,line}>` type -- the first array-typed field
+	// added to this object. Cast the empty array itself rather than dropping `as const` from
+	// the whole object (every sibling primitive/null field still benefits from the narrower
+	// literal types `as const` gives).
+	renovateCandidates: [] as Array<{ marker: string; line: string }>,
+	renovateMarker: null,
+	renovateTriggerApproved: null,
+	renovateIssueIid: null,
+	renovateMrUrl: "",
 } as const;
 
 // (context the turn's response weaves in), once per session, best-effort, never blocking.

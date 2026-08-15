@@ -234,6 +234,21 @@ describe("parseRenovateDashboardEntries", () => {
 	test("empty array on a body with no marker lines", () => {
 		expect(parseRenovateDashboardEntries("nothing here")).toEqual([]);
 	});
+
+	// Greptile (PR #663): an already-checked entry ("- [x]") means Renovate already read
+	// this tick -- it is not a PENDING update and must not be re-triggerable. Only
+	// unchecked ("- [ ]") lines are genuinely awaiting-schedule candidates.
+	test("excludes an already-checked entry", () => {
+		const body =
+			" - [x] <!-- unschedule-branch=renovate/eu-b2b-prometheus -->chore(deps): [eu-b2b] prometheus to v1.24.4\n" +
+			" - [ ] <!-- unschedule-branch=renovate/ap-cld-cisco_ftd -->chore(deps): [ap-cld] cisco_ftd to v3.13.10\n";
+		expect(parseRenovateDashboardEntries(body)).toEqual([
+			{
+				marker: "renovate/ap-cld-cisco_ftd",
+				line: " - [ ] <!-- unschedule-branch=renovate/ap-cld-cisco_ftd -->chore(deps): [ap-cld] cisco_ftd to v3.13.10",
+			},
+		]);
+	});
 });
 
 describe("filterDashboardMatches", () => {
@@ -366,5 +381,25 @@ describe("parseFirstOpenMrUrl", () => {
 
 	test("real gitlabFetch envelope: '[200] []' empty array -> null", () => {
 		expect(parseFirstOpenMrUrl("[200] []")).toBeNull();
+	});
+});
+
+// Greptile (PR #663): the 6 renovate-integration-update sub-flow fields are checkpointed
+// state, not reset at turn start like blockedReason/versionDrift/etc. -- a declined gate
+// (renovateTriggerApproved: false) or a resolved marker would otherwise leak into a LATER,
+// unrelated turn on the same thread, and iacTurnOutcome's declined-check (which reads these
+// fields without also checking state.intent) would misreport that unrelated turn as declined.
+import { TURN_START_RESET } from "./nodes.ts";
+
+describe("TURN_START_RESET (renovate-integration-update fields)", () => {
+	test("resets all 6 renovate sub-flow fields", () => {
+		expect(TURN_START_RESET).toMatchObject({
+			renovateTarget: null,
+			renovateCandidates: [],
+			renovateMarker: null,
+			renovateTriggerApproved: null,
+			renovateIssueIid: null,
+			renovateMrUrl: "",
+		});
 	});
 });

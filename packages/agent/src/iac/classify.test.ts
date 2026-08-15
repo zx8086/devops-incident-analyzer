@@ -80,6 +80,7 @@ describe("intentFromText", () => {
 
 	test("maps renovate-integration-update replies", () => {
 		expect(intentFromText("renovate-integration-update")).toBe("renovate-integration-update");
+		expect(intentFromText("renovate_integration_update")).toBe("renovate-integration-update");
 	});
 });
 

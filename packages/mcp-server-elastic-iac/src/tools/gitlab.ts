@@ -1658,16 +1658,25 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 	// Renovate on-demand MR automation: gitlab_list_agent_merge_requests is hardcoded to
 	// labels=agent-generated (gitlab_create_merge_request's own default label set) -- a
 	// Renovate-authored MR never carries that label, so watchRenovateMr needs its own
-	// lookup by exact source branch. Read-only.
+	// lookup by exact source branch. Greptile/CodeRabbit (PR #663): the branch name carries
+	// no version, so a stale merged/closed MR from a PRIOR release on the same branch would
+	// otherwise be indistinguishable from a freshly-created one -- state=opened scopes this
+	// to a genuinely new, unmerged MR. Read-only.
 	server.registerTool(
 		"gitlab_list_merge_requests_by_source_branch",
 		{
 			description:
-				"List merge requests by exact source branch name, any state, newest first. Used to detect a " +
+				"List OPEN merge requests by exact source branch name, newest first. Used to detect a " +
 				"Renovate-created MR after gitlab_play_pipeline_schedule triggers a run (Renovate MRs are not " +
-				"labeled agent-generated, so gitlab_list_agent_merge_requests cannot find them). Read-only.",
+				"labeled agent-generated, so gitlab_list_agent_merge_requests cannot find them). Scoped to " +
+				"state=opened so a stale merged/closed MR from a prior release on the same branch is never " +
+				"mistaken for a freshly-created one. Read-only.",
 			inputSchema: {
-				sourceBranch: z.string().describe("Exact source branch name, e.g. 'renovate/eu-b2b-prometheus'."),
+				sourceBranch: z
+					.string()
+					.trim()
+					.min(1, "Source branch is required.")
+					.describe("Exact source branch name, e.g. 'renovate/eu-b2b-prometheus'."),
 			},
 			annotations: iacToolAnnotations("gitlab_list_merge_requests_by_source_branch"),
 		},
@@ -1676,7 +1685,7 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 				await gitlabFetch(
 					gitlabBaseUrl,
 					token,
-					`/projects/${project}/merge_requests?source_branch=${encodeURIComponent(sourceBranch)}&order_by=created_at&sort=desc&per_page=5`,
+					`/projects/${project}/merge_requests?source_branch=${encodeURIComponent(sourceBranch)}&state=opened&order_by=created_at&sort=desc&per_page=5`,
 				),
 			),
 	);
