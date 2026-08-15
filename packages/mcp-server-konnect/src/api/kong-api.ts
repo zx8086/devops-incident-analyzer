@@ -40,18 +40,10 @@ import type {
 } from "../types.js";
 import { KongMCPError } from "../utils/error-handling.js";
 import { createContextLogger } from "../utils/logger.js";
+import { API_REGIONS } from "./constants.js";
 import { PortalApi, type PortalApiOptions } from "./portal-api.js";
 
 const log = createContextLogger("api");
-
-// Kong Konnect API region prefixes (subdomain on api.konghq.com)
-export const API_REGIONS = {
-	US: "us",
-	EU: "eu",
-	AU: "au",
-	ME: "me",
-	IN: "in",
-} as const;
 
 export interface KongApiOptions {
 	apiKey?: string;
