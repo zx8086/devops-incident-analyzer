@@ -570,13 +570,26 @@ export function capabilityMessage(): string {
 // "fleet-upgrade", and "drift" are explicit; anything else defaults to "info". (Pure; unit-tested.)
 export function intentFromText(
 	raw: string,
-): "info" | "gitops" | "pipeline-status" | "drift" | "synthetics-drift" | "fleet-upgrade" | "converse" {
+):
+	| "info"
+	| "gitops"
+	| "pipeline-status"
+	| "drift"
+	| "synthetics-drift"
+	| "fleet-upgrade"
+	| "renovate-integration-update"
+	| "converse" {
 	const r = raw.toLowerCase();
 	if (r.includes("pipeline-status") || r.includes("pipeline_status")) return "pipeline-status";
 	// SIO-913: a Fleet agent BINARY upgrade (imperative bulk_upgrade) is distinct from a cluster
 	// version-upgrade config edit. The classifier emits "fleet-upgrade"; this also catches direct
 	// phrasings. Checked before synthetics/drift but it does not overlap their keywords.
 	if (r.includes("fleet-upgrade") || r.includes("fleet_upgrade") || r.includes("fleet upgrade")) return "fleet-upgrade";
+	// Renovate integration-package update, distinct from a Fleet agent binary upgrade above --
+	// checked first since "renovate-integration-update" also contains no fleet-upgrade keywords,
+	// but keeping it ordered alongside the fleet-upgrade branch it is most easily confused with.
+	if (r.includes("renovate-integration-update") || r.includes("renovate_integration_update"))
+		return "renovate-integration-update";
 	// SIO-902: synthetics drift must be checked BEFORE plain drift -- a synthetics request also
 	// contains "drift"/"reconcile" (e.g. "reconcile the synthetics monitors"), so "synthetic"
 	// has to win the tiebreak.
@@ -807,6 +820,15 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 		"'upgrade the agents on X to 9.4.2', 'upgrade all Elastic agents for X', 'bulk-upgrade fleet agents'. This is an " +
 		"imperative Fleet bulk_upgrade (NOT Terraform, NOT a cluster version change). The tell is the words 'agent(s)' " +
 		"or 'fleet' being what is upgraded.\n" +
+		"- 'renovate-integration-update': a request to update a Fleet INTEGRATION PACKAGE (e.g. prometheus, " +
+		"cisco_ftd, system, a specific Elastic Agent integration) to its latest available version on a deployment -- " +
+		"'update prometheus on eu-b2b', 'bump the cisco_ftd integration for ap-cld', 'get the latest system integration " +
+		"on us-cld', 'update the fleet-server integration'. This is the DEFAULT classification for ANY integration-" +
+		"package update request, whether or not the user names a target version -- Fleet integrations only ever " +
+		"install the latest registry version, so naming an explicit version does not change the classification. This " +
+		"is NOT a deployment/cluster version change (that's 'gitops') and NOT a Fleet AGENT BINARY upgrade (that's " +
+		"'fleet-upgrade'). The tell: the thing being updated is a named integration/package the deployment ingests " +
+		"data through, not the cluster itself or the enrolled agents.\n" +
 		"- 'drift': a request to DETECT or RECONCILE Terraform configuration drift for a deployment -- 'check X for drift', " +
 		"'what has drifted', 'reconcile X with live', 'compare the repo with the live cluster', 'show drift by stack'. " +
 		"This audits ALL Terraform stacks of one deployment and offers a per-stack reconcile choice.\n" +
@@ -825,7 +847,8 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 		"request to change infrastructure. Examples: 'why was that wrong?', 'explain that', 'what would you " +
 		"change about that policy?', 'I don't think that config is complete'. If the user instead asks for a " +
 		"NEW change (even right after a proposal), that is 'gitops', not 'converse'.\n" +
-		"Reply with ONLY one word: 'info', 'gitops', 'fleet-upgrade', 'drift', 'synthetics-drift', 'pipeline-status', or 'converse'. " +
+		"Reply with ONLY one word: 'info', 'gitops', 'fleet-upgrade', 'renovate-integration-update', 'drift', " +
+		"'synthetics-drift', 'pipeline-status', or 'converse'. " +
 		"If the user asks for a recommendation or 'should I…' that implies a single change, answer 'gitops'.";
 	// SIO-981: pass recent history (not just the latest line) so the LLM can recognise a follow-up
 	// against the prior proposal it refers to. On a first turn this is just the one human message.
