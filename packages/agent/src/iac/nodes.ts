@@ -322,6 +322,15 @@ function renovateProjectId(): string {
 	return process.env.ELASTIC_IAC_GITLAB_PROJECT_ID ?? "82850717";
 }
 
+// SIO-XXXX: live-verified against project 82850717 that a bare "Dependency Dashboard"
+// search is too generic -- five issues match as a substring (iid 6/8/9: stale/superseded
+// issues literally titled "Dependency Dashboard"; iid 10: "Terraform Dependency Dashboard",
+// a different dashboard for Terraform provider updates). This is the exact title of the
+// ONE dashboard this sub-flow targets, whose body carries the `unschedule-branch=` marker
+// lines parseRenovateDashboardEntries parses. Passed as a plain string param to
+// gitlab_search (not a URL), so no URL-encoding here.
+export const RENOVATE_DASHBOARD_TITLE = "Elastic Fleet & Agent Dependency Dashboard";
+
 // Discovers the Dependency Dashboard issue by title (never hardcoded -- its iid has
 // already changed once when the title changed, per the original handover), fetches its
 // description via the native gitlab_get_issue proxy tool, and resolves the extracted
@@ -338,7 +347,7 @@ export async function resolveRenovateMarker(state: IacStateType): Promise<Partia
 	// against the native tool's schema); scope "work_items" covers issues.
 	const searchRes = await callGitlabProxyTool("gitlab_search", {
 		scope: "work_items",
-		search: "Dependency Dashboard",
+		search: RENOVATE_DASHBOARD_TITLE,
 		project_id: projectId,
 	});
 	const issueIid = parseFirstIssueIid(searchRes);

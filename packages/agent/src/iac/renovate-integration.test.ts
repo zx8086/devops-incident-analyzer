@@ -244,7 +244,20 @@ describe("hasSingleRenovateMatch (graph-edge predicate)", () => {
 	});
 });
 
-import { parseFirstIssueIid, parseIssueDescription } from "./nodes.ts";
+import { parseFirstIssueIid, parseIssueDescription, RENOVATE_DASHBOARD_TITLE } from "./nodes.ts";
+
+// SIO-XXXX: live-verified against project 82850717 -- a bare "Dependency Dashboard" search
+// string matches FIVE issues as a substring (iid 6/8/9 stale/superseded "Dependency
+// Dashboard" issues, iid 10 "Terraform Dependency Dashboard"), so resolveRenovateMarker
+// resolved the wrong (stale) issue. RENOVATE_DASHBOARD_TITLE must be the exact, unique
+// title of the correct dashboard (iid 11) so the gitlab_search call disambiguates by title
+// rather than relying on "first substring match wins".
+describe("RENOVATE_DASHBOARD_TITLE", () => {
+	test("is the exact title of the Elastic Fleet & Agent Dependency Dashboard, not the generic prefix", () => {
+		expect(RENOVATE_DASHBOARD_TITLE).toBe("Elastic Fleet & Agent Dependency Dashboard");
+		expect(RENOVATE_DASHBOARD_TITLE).not.toBe("Dependency Dashboard");
+	});
+});
 
 // gitlab_search (scope: work_items) response shape: an array of GitLab search-result
 // objects. Only the numeric `iid` field is needed here.
