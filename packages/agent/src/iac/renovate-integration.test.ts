@@ -301,10 +301,22 @@ describe("buildRenovateFactDecision / buildRenovateFactAnnotations", () => {
 		expect(decision).toContain("https://gitlab.example/x/-/merge_requests/517");
 	});
 
-	test("decision falls back to the marker's own deployment prefix when targetDeployment is unset", async () => {
+	// Greptile + CodeRabbit (PR #665 round 1): the renovate-integration-update sub-flow's own
+	// nodes never set state.targetDeployment (that field is only written by drift/gitops/
+	// fleet-upgrade) -- extractRenovateTarget sets state.renovateTarget.deployment instead. On
+	// the REAL path targetDeployment and iacRequest.cluster are both empty, so without this
+	// fallback the durable fact always recorded the generic "an Elastic deployment" placeholder
+	// and the deployment annotation was omitted entirely, making the fact unfindable by a later
+	// deployment-scoped recall. Assert the actual resolved value, not just non-emptiness -- the
+	// original version of this test only checked decision.length > 0, which is why it passed
+	// against the placeholder text and missed the bug both bots caught.
+	test("decision resolves the deployment from renovateTarget on the real path (targetDeployment unset)", async () => {
 		const { buildRenovateFactDecision } = await import("./nodes.ts");
-		const decision = buildRenovateFactDecision(renovateState({ targetDeployment: "" }));
-		expect(decision.length).toBeGreaterThan(0);
+		const decision = buildRenovateFactDecision(
+			renovateState({ targetDeployment: "", renovateTarget: { deployment: "eu-b2b", integration: "prometheus" } }),
+		);
+		expect(decision).toContain("eu-b2b");
+		expect(decision).not.toContain("an Elastic deployment");
 	});
 
 	test("annotations carry kind, deployment, marker, and mr_url", async () => {
@@ -316,6 +328,14 @@ describe("buildRenovateFactDecision / buildRenovateFactAnnotations", () => {
 			marker: "renovate/eu-b2b-prometheus",
 			mr_url: "https://gitlab.example/x/-/merge_requests/517",
 		});
+	});
+
+	test("annotations resolve the deployment from renovateTarget on the real path (targetDeployment unset)", async () => {
+		const { buildRenovateFactAnnotations } = await import("./nodes.ts");
+		const a = buildRenovateFactAnnotations(
+			renovateState({ targetDeployment: "", renovateTarget: { deployment: "eu-b2b", integration: "prometheus" } }),
+		);
+		expect(a.deployment).toBe("eu-b2b");
 	});
 
 	test("annotations omit mr_url when no MR was found", async () => {

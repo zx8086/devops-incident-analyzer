@@ -10628,7 +10628,12 @@ function buildFleetFactAnnotations(state: IacStateType, result: FleetUpgradeResu
 // session can recall "eu-b2b/renovate-eu-b2b-prometheus -> MR opened" the same way it recalls
 // a fleet upgrade or a gitops change.
 export function buildRenovateFactDecision(state: IacStateType): string {
-	const dep = state.targetDeployment || state.iacRequest?.cluster || "an Elastic deployment";
+	// Greptile + CodeRabbit (PR #665 round 1): the renovate-integration-update sub-flow's own
+	// nodes never set state.targetDeployment (only drift/gitops/fleet-upgrade write it) --
+	// extractRenovateTarget sets state.renovateTarget.deployment instead, so that must come
+	// first or the real path always falls through to the generic placeholder.
+	const dep =
+		state.renovateTarget?.deployment || state.targetDeployment || state.iacRequest?.cluster || "an Elastic deployment";
 	const marker = state.renovateMarker?.marker ?? "an outdated dependency";
 	const mrUrl = state.renovateMrUrl;
 	return `Renovate update triggered on ${dep} for '${marker}': MR opened at ${mrUrl}.`;
@@ -10639,7 +10644,7 @@ export function buildRenovateFactDecision(state: IacStateType): string {
 // same deployment/mr_url join keys.
 export function buildRenovateFactAnnotations(state: IacStateType): AnnotationMap {
 	const a: AnnotationMap = { kind: "renovate-trigger" };
-	const dep = state.targetDeployment || state.iacRequest?.cluster;
+	const dep = state.renovateTarget?.deployment || state.targetDeployment || state.iacRequest?.cluster;
 	if (dep) a.deployment = dep;
 	if (state.renovateMarker?.marker) a.marker = state.renovateMarker.marker;
 	if (state.renovateMrUrl) a.mr_url = state.renovateMrUrl;
