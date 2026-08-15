@@ -5,13 +5,25 @@ Origin: follow-up to [SIO-1470](https://linear.app/siobytes/issue/SIO-1470/add-r
 
 ## Problem
 
-SIO-1470 built the *mechanism* — the two GitLab REST calls a human today performs by hand (tick a Dependency Dashboard checkbox, play the Renovate pipeline schedule). Nothing in the LangGraph pipeline calls them. The elastic-iac graph's existing `gitops` intent authors Terraform diffs itself (via `draftChange`/`gitlab_commit_file(s)`/`gitlab_create_merge_request`) and has no concept of "trigger an existing dependency-bot workflow instead of authoring a diff." A request like "update prometheus on eu-b2b" today either misclassifies into `gitops` (which would try to hand-author a version bump the agent has no business computing — Renovate already does this) or `fleet-upgrade` (which is Fleet agent *binaries*, a different axis entirely — see `nodes.ts:806-809`'s explicit "NOT fleet-upgrade" carve-out for deployment/cluster version).
+SIO-1470 built the *mechanism* — the two GitLab REST calls a human today performs by hand (tick a Dependency Dashboard checkbox, play the Renovate pipeline schedule). Nothing in the LangGraph pipeline calls them. A request like "update prometheus on eu-b2b" today has no correct classification: `fleet-upgrade` is Fleet agent *binaries*, a different axis entirely (`nodes.ts:806-809`'s explicit "NOT fleet-upgrade" carve-out for deployment/cluster version), and while `gitops`'s `fleet-integration` workflow (`proposeFleetIntegration`, `nodes.ts:4037-4150`) sounds adjacent, it is out of scope here — see "Relationship to the existing `fleet-integration` gitops workflow" below.
+
+## Relationship to the existing `fleet-integration` gitops workflow
+
+`packages/agent/src/iac/nodes.ts` already has a `gitops` sub-workflow named `fleet-integration` (classifier text at `nodes.ts:1045-1050`, implementation `proposeFleetIntegration` at `nodes.ts:4037-4150`) that hand-authors a version pin for an integration package by editing `environments/<dep>/fleet-integrations/integrations.json` directly and opening an MR via `gitlab_commit_file`/`gitlab_create_merge_request`.
+
+Verified live against the real target repo (`pvhcorp/dhco/observability/observability-elastic-iac`, project 82850717) that this is **not** an equivalent alternative to what this spec builds:
+
+- `renovate.json`'s `fleet-integrations` custom regex manager owns BOTH surfaces per package: `environments/<dep>/fleet-integrations/integrations.json` (install pin) AND `environments/<dep>/agent-policies/*.json` (policy pin), grouped by `depName` so Renovate opens **one MR moving both pins atomically**.
+- `docs/operational/renovate-fleet-packages-runbook.md` (live-read) documents this atomicity as the reason the install-before-policy `ORDER GUARD`/`ORDER VIOLATION` checks in `stacks/agent-policies/main.tf` and `modules/agent-policy/main.tf` never fire in the normal flow — both pins always move together.
+- `proposeFleetIntegration` only writes the install-pin file. It does not touch the agent-policies pin, which the runbook documents as exactly the lagging-pin scenario the `ORDER GUARD` warns about.
+
+This is a pre-existing gap in `proposeFleetIntegration`, not something this spec is chartered to fix. **Decision: leave the existing `fleet-integration` gitops workflow untouched** — no code change, no deletion. The new intent this spec adds becomes the effective default path for "update an integration package" requests because its classifier bucket is worded to claim that phrasing (see §1) — Renovate is the complete, atomic, already-proven mechanism (its own dashboard only ever proposes the registry-latest version, confirmed live: every checkbox line on the real Dependency Dashboard reads `chore(deps): [<dep>] <package> to v<latest>`, there is no explicit-older-version variant to request). `fleet-integration`'s existing prompt text is left as-is and becomes reachable in practice only for phrasing this spec's new bucket doesn't claim.
 
 ## Scope
 
-In scope: one new intent, its 5-node sub-flow, one new pure helper in `mcp-server-elastic-iac`, and the minimal cross-datasource tool-lookup addition needed to discover the Dependency Dashboard issue by title via the existing native GitLab MCP proxy (no new MCP tool).
+In scope: one new intent, its 5-node sub-flow, one new pure helper + one new MCP tool in `mcp-server-elastic-iac` (see §3a — `gitlab_list_merge_requests_by_source_branch` did not already exist, verified), and the minimal cross-datasource tool-lookup addition needed to discover the Dependency Dashboard issue by title via the existing native GitLab MCP proxy (no new tool needed for that part).
 
-Out of scope (unchanged from the original Renovate handover): merge/apply automation, selection-policy beyond "one deployment + one integration per request", a dedicated service-account token (this reuses `ELASTIC_IAC_GITLAB_TOKEN`, same as every other `mcp-server-elastic-iac` tool today), and any change to `DATASOURCE_TO_MCP_SERVER`'s 1:1 mapping.
+Out of scope: merge/apply automation, selection-policy beyond "one deployment + one integration per request" (the real dashboard's `<!-- create-all-awaiting-schedule-prs -->` bulk-trigger marker, confirmed live, is a possible future extension, not built here), a dedicated service-account token (reuses `ELASTIC_IAC_GITLAB_TOKEN`, same as every other `mcp-server-elastic-iac` tool today), any change to `DATASOURCE_TO_MCP_SERVER`'s 1:1 mapping, and any change to the existing `fleet-integration` gitops workflow (see above).
 
 ## Design
 
@@ -33,9 +45,9 @@ export const INTENT_VALUES = [
 ] as const;
 ```
 
-`classifyIacIntent`'s LLM prompt (`nodes.ts:798-829`) gets one new bucket, inserted after the existing `fleet-upgrade` line (whose own text already explicitly disambiguates itself from cluster-version `gitops` — the new bucket needs the same explicit disambiguation against both neighbors):
+`classifyIacIntent`'s LLM prompt (`nodes.ts:798-829`) gets one new bucket, inserted after the existing `fleet-upgrade` line (whose own text already explicitly disambiguates itself from cluster-version `gitops` — the new bucket needs the same explicit disambiguation against both neighbors, plus a third disambiguation against `gitops`'s own `fleet-integration` sub-workflow, which the new bucket's phrasing supersedes for this class of request per the "Relationship" section above):
 
-> `'renovate-integration-update'`: a request to update an INTEGRATION PACKAGE (e.g. prometheus, fleet-server, a specific Elastic Agent integration) to its latest version on a deployment, via the existing dependency-bot automation — "update prometheus on eu-b2b", "bump the fleet-server integration for ap-cld", "get the latest kafka integration on b2b". This is NOT a deployment/cluster version change (that's 'gitops') and NOT a Fleet AGENT BINARY upgrade (that's 'fleet-upgrade'). The tell: the thing being updated is a named *integration/package* the deployment ingests data through, not the cluster itself or the enrolled agents.
+> `'renovate-integration-update'`: a request to update a Fleet INTEGRATION PACKAGE (e.g. prometheus, cisco_ftd, system, a specific Elastic Agent integration) to its latest available version on a deployment — "update prometheus on eu-b2b", "bump the cisco_ftd integration for ap-cld", "get the latest system integration on us-cld", "update the fleet-server integration". This is the default classification for ANY integration-package update request, whether or not the user names a target version — Fleet integrations only ever install the latest registry version, so naming an explicit version does not change the classification. This is NOT a deployment/cluster version change (that's 'gitops') and NOT a Fleet AGENT BINARY upgrade (that's 'fleet-upgrade'). The tell: the thing being updated is a named *integration/package* the deployment ingests data through, not the cluster itself or the enrolled agents.
 
 No new deterministic pre-LLM guard is needed — unlike the `gitops-amend`/`pipeline-status` guards (which exist because they must override *conversational* ambiguity on a follow-up turn), this intent is a same-shape first-turn classification the LLM prompt already handles adequately, matching how `fleet-upgrade`/`drift`/`synthetics-drift` also rely on the prompt alone.
 
@@ -50,7 +62,16 @@ classifyIacIntent --(intent=renovate-integration-update)--> extractRenovateTarge
 
 This is the same shape as `detectFleetUpgrade`/`fleetUpgradeGate`/`applyFleetUpgrade` → `teardown` (`graph.ts:159-165,296-309`), extended by one extra detect-stage node because target *resolution* (matching free text to a live marker) is a separate concern from target *extraction* (parsing the user's words) — collapsing them into one node would make the 0/2+-match early-exit harder to express as a clean conditional edge.
 
-**`extractRenovateTarget`** — one small LLM call, same shape as `classifyIacIntent`'s own classification call (`llm.invoke([new SystemMessage(sys), ...recentMessages(state)])`, `nodes.ts:832`): extracts `{ deployment: string, integration: string }` from the request. On extraction failure (either field empty), routes straight to `teardown` with a clarifying message — no separate node needed for this, handled inline like `watchPipeline`'s early-return pattern (`nodes.ts:7801-7805`).
+**`extractRenovateTarget`** — a structured-output LLM call, matching the `parseIntent`/`IntentSchema` pattern (`nodes.ts:183-198,960-...`, JSON-instruction prompt + `zod.safeParse`) rather than `classifyIacIntent`'s bare one-word call, since this extracts two named fields, not a single enum:
+
+```ts
+const RenovateTargetSchema = z.object({
+	deployment: z.string().nullish(),
+	integration: z.string().nullish(),
+});
+```
+
+Prompt instructs the LLM to extract `deployment` and `integration` as a strict JSON object with those two keys from the request, mirroring `parseIntent`'s "Extract ... as a single strict JSON object with keys: ..." instruction shape (`nodes.ts:962-963`). On extraction failure (either field empty/null after `safeParse`), routes straight to `teardown` with a clarifying message — no separate node needed for this, handled inline like `watchPipeline`'s early-return pattern (`nodes.ts:7801-7805`).
 
 **`resolveRenovateMarker`** — three steps:
 1. Discover the Dependency Dashboard issue by title search — see §3 for the new tool this requires.
@@ -69,7 +90,7 @@ Emits `iac_pipeline_progress` before/after, matching `detectFleetUpgrade`'s exac
 await dispatchCustomEvent("iac_pipeline_progress", { pipelineId: null, status: "renovate: triggered" });
 ```
 
-**`watchRenovateMr`** — reuses `watchPipeline`'s exact bounded poll-loop shape (`nodes.ts:7838-7861`): same `IAC_PIPELINE_POLL_INTERVAL_MS`/`IAC_PIPELINE_POLL_BUDGET_MS` env vars (10s/90s defaults via `readPositiveMsEnv`), same `while (Date.now() < deadline)` structure, same `dispatchCustomEvent("iac_pipeline_progress", ...)` mid-loop emission. The one difference: it polls for MR *existence* (`gitlab_list_merge_requests` filtered `state=opened&source_branch=renovate/<marker>`, an existing `mcp-server-elastic-iac` tool — confirm it accepts a `source_branch` filter arg; if not, filter client-side over its unfiltered response, the same client-side-filter approach `findPipelineScheduleId` already uses) rather than polling an existing pipeline to a terminal status. On timeout, returns the same "still running, ask again" UX as `watchPipeline`'s own budget-exceeded path — no new mechanism, no new user-facing behavior class.
+**`watchRenovateMr`** — reuses `watchPipeline`'s exact bounded poll-loop shape (`nodes.ts:7838-7861`): same `IAC_PIPELINE_POLL_INTERVAL_MS`/`IAC_PIPELINE_POLL_BUDGET_MS` env vars (10s/90s defaults via `readPositiveMsEnv`), same `while (Date.now() < deadline)` structure, same `dispatchCustomEvent("iac_pipeline_progress", ...)` mid-loop emission. It polls for MR *existence* by `source_branch=renovate/<marker>` rather than polling an existing pipeline to a terminal status — see §3a for the new tool this requires (`gitlab_list_agent_merge_requests`, the only existing MR-listing tool, is filtered to `labels=agent-generated`, `gitlab.ts:1616-1633`, which a bot-authored Renovate MR never carries — verified by reading the tool, not assumed). On timeout, returns the same "still running, ask again" UX as `watchPipeline`'s own budget-exceeded path — no new mechanism, no new user-facing behavior class.
 
 **`teardown`** — the existing shared terminal node (`graph.ts:310`), unchanged.
 
@@ -100,6 +121,36 @@ function findGitlabProxyTool(name: string): StructuredToolInterface | undefined 
 
 **Why not add `gitlab_find_issue_by_title` as a new tool in `mcp-server-elastic-iac` instead** (the alternative considered): the native `gitlab-mcp` proxy already exposes `search`/`get_issue` capability live (confirmed in the SIO-1470 session's live tool-list check) — building a duplicate title-search tool in `mcp-server-elastic-iac` using its own `glJson` helper would re-solve a problem the proxy already solves, just with PAT auth instead of OAuth. Given the cross-datasource read is confirmed safe and connection-free, reuse wins over duplication here — unlike SIO-1470's issue *write* (`gitlab_unschedule_renovate_branches`), which had no native-proxy analog at all and genuinely needed new code.
 
+### 3a. New tool: `gitlab_list_merge_requests_by_source_branch`
+
+Verified live (read `gitlab.ts:1604-1633` in full): the only existing MR-listing tool is `gitlab_list_agent_merge_requests`, which is hardcoded to `labels=agent-generated&state=opened` — a label this repo's own `gitlab_create_merge_request` tool applies to agent-authored MRs (`gitlab.ts:423`, defaulting `labels` to `["agent-generated", "iac"]`), but Renovate is a separate bot that never applies it. `watchRenovateMr` needs its own tool.
+
+New tool in `packages/mcp-server-elastic-iac/src/tools/gitlab.ts`, inserted next to `gitlab_list_agent_merge_requests`, following the identical pattern:
+
+```ts
+server.registerTool(
+	"gitlab_list_merge_requests_by_source_branch",
+	{
+		description:
+			"List merge requests by exact source branch name, any state, newest first. Used to detect a " +
+			"Renovate-created MR after gitlab_play_pipeline_schedule triggers a run (Renovate MRs are not " +
+			"labeled agent-generated, so gitlab_list_agent_merge_requests cannot find them). Read-only.",
+		inputSchema: { sourceBranch: z.string().describe("Exact source branch name, e.g. 'renovate/eu-b2b-prometheus'.") },
+		annotations: iacToolAnnotations("gitlab_list_merge_requests_by_source_branch"),
+	},
+	async ({ sourceBranch }) =>
+		text(
+			await gitlabFetch(
+				gitlabBaseUrl,
+				token,
+				`/projects/${project}/merge_requests?source_branch=${encodeURIComponent(sourceBranch)}&order_by=created_at&sort=desc&per_page=5`,
+			),
+		),
+);
+```
+
+Classified `READ_ONLY_TOOLS` in `tool-classification.ts` (a GET, matching the read-only classification of `gitlab_list_agent_merge_requests` and `gitlab_get_merge_request` — listing MRs never mutates).
+
 ### 4. New pure helper: `parseDashboardEntries`
 
 Colocated in `mcp-server-elastic-iac/src/tools/gitlab.ts` next to `tickDashboardCheckboxes` (`gitlab.ts:81-98`), TDD'd the same way:
@@ -128,13 +179,16 @@ No new event type. Reuses `iac_pipeline_progress` exactly as `detectFleetUpgrade
 | `packages/agent/src/iac/state.ts` | Add `"renovate-integration-update"` to `INTENT_VALUES` |
 | `packages/agent/src/iac/nodes.ts` | New classifier prompt bucket; 5 new node functions (`extractRenovateTarget`, `resolveRenovateMarker`, `renovateTriggerGate`, `triggerRenovateUpdate`, `watchRenovateMr`); `findGitlabProxyTool` helper |
 | `packages/agent/src/iac/graph.ts` | Register 5 nodes; add `"renovate-integration-update"` branch to `intentTarget`/`INTENT_TARGETS`; wire detect→gate→apply→watch→teardown edges |
-| `packages/mcp-server-elastic-iac/src/tools/gitlab.ts` | New pure helper `parseDashboardEntries` (shares the marker regex with `tickDashboardCheckboxes`), unit-tested in `gitlab.test.ts` |
+| `packages/mcp-server-elastic-iac/src/tools/gitlab.ts` | New pure helper `parseDashboardEntries` (shares the marker regex with `tickDashboardCheckboxes`); new tool `gitlab_list_merge_requests_by_source_branch`; both unit-tested in `gitlab.test.ts` |
+| `packages/mcp-server-elastic-iac/src/tools/tool-classification.ts` | Add `gitlab_list_merge_requests_by_source_branch` to `READ_ONLY_TOOLS` |
+| `packages/mcp-server-elastic-iac/src/__tests__/tools-list-snapshot.json` | Regenerate (additive) for the new tool's surface |
 
-No changes to `packages/mcp-server-elastic-iac/src/tools/tool-classification.ts` (no new MCP tool registered — `parseDashboardEntries` is a plain function, and `gitlab_get_issue` is an existing native tool with its own classification in `mcp-server-gitlab`, untouched). No changes to `DATASOURCE_TO_MCP_SERVER`.
+No changes to `DATASOURCE_TO_MCP_SERVER`. `gitlab_get_issue` is an existing native tool with its own classification in `mcp-server-gitlab`, untouched.
 
 ## Testing
 
 - `parseDashboardEntries`: TDD, same pattern as `tickDashboardCheckboxes`'s test suite (`gitlab.test.ts`) — multi-entry body, no entries, malformed/missing marker comment, already-ticked lines still parsed (marker extraction is independent of checkbox state).
 - `resolveRenovateMarker`'s substring-matching logic: pure and unit-testable in isolation (extract as its own small function, not inlined in the node, so it gets the same TDD treatment as `findPipelineScheduleId`) — 0 matches, 1 match, 2+ matches (ambiguous), case-insensitivity.
+- `gitlab_list_merge_requests_by_source_branch`: covered by the package's `tools-list-snapshot.test.ts` regeneration (surface-shape lock) — no separate pure-helper test needed since it's a thin `gitlabFetch` passthrough, matching how `gitlab_get_pipeline`/`gitlab_get_merge_request` (equally thin) have no dedicated unit test either.
 - Graph wiring: extend the existing `graph.ts` structural test (if one exists covering `INTENT_TARGETS`/node count, per the "verified node count" convention CLAUDE.md documents for the main graph) to cover the new intent's edges.
 - Manual verification: exercise the full turn against the real GitLab project once implemented (per this repo's `feedback_validate_every_claim_against_source` discipline) — trigger on a known pending dashboard entry, confirm the MR appears, confirm a 0-match and 2+-match phrasing both produce the disambiguation message instead of a silent wrong pick.
