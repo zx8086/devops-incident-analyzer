@@ -172,6 +172,79 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
 	}
 }
 
+// Renovate on-demand MR automation: the native GitLab MCP's get_issue tool is not in
+// mcp-server-elastic-iac's own tool set (that server has no issue-read tool) -- it
+// belongs to the separately-routed "gitlab" data source (gitlab-mcp), reached today only
+// by the main incident-analyzer graph. Cross-datasource read, following the exact
+// precedent infoTools() already establishes with getToolsForDataSource("knowledge-graph")
+// (nodes.ts:1337): no DATASOURCE_TO_MCP_SERVER change, no new connection (gitlab-mcp and
+// elastic-iac-mcp are already independently connected in apps/web's runtime).
+function findGitlabProxyTool(name: string): StructuredToolInterface | undefined {
+	return getToolsForDataSource("gitlab").find((t) => t.name === name);
+}
+
+// biome-ignore lint/correctness/noUnusedVariables: SIO-XXXX - consumed by resolveRenovateMarker, added in the next task of this same plan
+async function callGitlabProxyTool(name: string, args: Record<string, unknown>): Promise<string> {
+	const tool = findGitlabProxyTool(name);
+	if (!tool) return `[${name} unavailable - gitlab server not connected]`;
+	try {
+		const res = await tool.invoke(args);
+		return typeof res === "string" ? res : JSON.stringify(res);
+	} catch (err) {
+		return `[${name} error: ${err instanceof Error ? err.message : String(err)}]`;
+	}
+}
+
+const RenovateTargetSchema = z.object({
+	deployment: z.string().nullish(),
+	integration: z.string().nullish(),
+});
+
+// Extract the LLM's JSON reply into {deployment, integration}, or null when either field
+// is missing/empty (the node clarifies rather than guessing). Mirrors parseIntentJson's
+// extract+validate split (nodes.ts:335). (Pure; unit-tested.)
+export function parseRenovateTargetJson(raw: string): { deployment: string; integration: string } | null {
+	const extracted = extractJsonBlock(raw);
+	if (!extracted) return null;
+	try {
+		const parsed = RenovateTargetSchema.safeParse(JSON.parse(sanitizeJsonControlChars(extracted)));
+		if (!parsed.success) return null;
+		const { deployment, integration } = parsed.data;
+		if (!deployment || !integration) return null;
+		return { deployment, integration };
+	} catch {
+		return null;
+	}
+}
+
+// Extract {deployment, integration} from the request via a small structured-output LLM
+// call, matching the parseIntent/IntentSchema pattern (a JSON-instruction prompt +
+// zod-validated parse) rather than classifyIacIntent's bare one-word call, since this
+// extracts two named fields. On extraction failure, ends the turn with a clarifying
+// message instead of proceeding with a guessed/partial target.
+export async function extractRenovateTarget(state: IacStateType): Promise<Partial<IacStateType>> {
+	const query = lastHumanText(state);
+	const llm = createLlm("iacPlanner", AGENT);
+	const sys =
+		"Extract the requested Fleet integration update as a single strict JSON object with keys: " +
+		"deployment (the named deployment/cluster, e.g. 'eu-b2b') and integration (the named integration " +
+		"package alias, e.g. 'prometheus', 'cisco_ftd', 'system'). If either is not named in the request, " +
+		"set that key to null.";
+	const res = await llm.invoke([new SystemMessage(sys), new HumanMessage(query)]);
+	const target = parseRenovateTargetJson(extractTextFromContent(res.content));
+	if (!target) {
+		return {
+			blockedReason: "Could not identify the deployment and/or integration to update.",
+			messages: [
+				new AIMessage(
+					"I couldn't tell which deployment and integration to update. Name both, e.g. 'update prometheus on eu-b2b'.",
+				),
+			],
+		};
+	}
+	return { renovateTarget: target };
+}
+
 // SIO-1003: the instruction-string fragment listing the legal workflow values, e.g.
 // "'tier-resize'|'ilm-rollout'|...", built from the same WORKFLOW_VALUES (imported from state.ts) that
 // the zod enum uses -- so the planner instruction can never drift from what the parser accepts.
