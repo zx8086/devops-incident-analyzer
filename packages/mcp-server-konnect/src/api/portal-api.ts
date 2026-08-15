@@ -15,7 +15,7 @@ import type {
 	PortalDeveloper,
 } from "../types.js";
 import { createContextLogger } from "../utils/logger.js";
-import { API_REGIONS } from "./kong-api.js";
+import { API_REGIONS } from "./constants.js";
 
 const log = createContextLogger("api");
 
