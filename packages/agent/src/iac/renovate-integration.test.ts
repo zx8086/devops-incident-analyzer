@@ -599,7 +599,7 @@ describe("parseFirstOpenMrUrl", () => {
 import { TURN_START_RESET } from "./nodes.ts";
 
 describe("TURN_START_RESET (renovate-integration-update fields)", () => {
-	test("resets all 7 renovate sub-flow fields", () => {
+	test("resets all 11 renovate-integration-update fields", () => {
 		expect(TURN_START_RESET).toMatchObject({
 			renovateTarget: null,
 			renovateCandidates: [],
@@ -608,6 +608,10 @@ describe("TURN_START_RESET (renovate-integration-update fields)", () => {
 			renovateIssueIid: null,
 			renovateMrUrl: "",
 			renovateTriggerAtIso: "",
+			renovateInstalledVersion: null,
+			renovateTargetVersion: null,
+			renovatePolicyCount: null,
+			renovateChangelog: [],
 		});
 	});
 });

@@ -1352,6 +1352,10 @@ export const TURN_START_RESET = {
 	renovateIssueIid: null,
 	renovateMrUrl: "",
 	renovateTriggerAtIso: "",
+	renovateInstalledVersion: null,
+	renovateTargetVersion: null,
+	renovatePolicyCount: null,
+	renovateChangelog: [] as Array<{ version: string; changes: Array<{ description: string; type: string; link?: string }> }>,
 } as const;
 
 // (context the turn's response weaves in), once per session, best-effort, never blocking.
