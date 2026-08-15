@@ -28,6 +28,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#659](https://github.com/zx8086/devops-incident-analyzer/pull/659) | 2026-08-14 | 5 | 4 / 0 | 1 / 3 | Elastic boot resilience; Greptile drove a fail-closed security redesign; detail below |
 | [#660](https://github.com/zx8086/devops-incident-analyzer/pull/660) | 2026-08-14 | 3 | 1 / 0 | 2 / 1 | Auth-probe classification; CodeRabbit caught the Major leak, Greptile caught the dup-id edge; detail below |
 | [#661](https://github.com/zx8086/devops-incident-analyzer/pull/661) | 2026-08-14 | 6 | 4 / 0 (rounds 2-6) | 2 / 0 (+3 valid nitpicks) | Greptile skipped round 1 (credits); detail below |
+| [#662](https://github.com/zx8086/devops-incident-analyzer/pull/662) | 2026-08-15 | 2 | 3 / 0 | 3 / 0 (2 duplicate) | Renovate on-demand MR tools; near-total overlap; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -119,3 +120,29 @@ All three reproduced with failing unit tests before fixing. Note round 5's repor
 **Head-to-head:** CodeRabbit caught the gated-id variant in round 1; Greptile caught the absent-id, rejected-runAt, and failure-branch variants in rounds 2-5. Each bot found real coverage gaps the other missed. CodeRabbit approved after round 2 and did not re-flag the later variants; Greptile's incremental rounds kept re-examining the fix code (same pattern as #658/#659).
 
 **Infra note:** GitHub Actions dropped the `pull_request` events for three consecutive heads on this PR (two pushes, one close/reopen) -- no CI runs were created at all while both review webhooks fired normally. An empty commit finally re-fired CI. Worth remembering when a "green gate, no CI" state appears: check `gh run list` per SHA before trusting the rollup.
+
+## PR #662 detail (SIO-1470, Renovate on-demand MR trigger tools)
+
+Two rounds on a single-file feature addition (`gitlab.ts` + tests + classification + snapshot). Unusually high overlap between the two bots -- both found the same three root issues in round 1, independently.
+
+**Round 1 (initial commit `5e0846da`):**
+
+- Greptile: Confidence Score 4/5, 3 findings, all real. P1 "Dashboard updates lose concurrent changes" (the GET-then-PUT on the Dependency Dashboard issue has a reachable lost-update race against a concurrent Renovate regeneration). P2 "Schedule matching is ambiguous" (`descriptionContains` had no `.min(1)`, so an empty/whitespace filter matches and plays every schedule via `.includes("")`). P2 "Schedule lookup ignores later pages" (unpaginated GET only reads GitLab's default first page).
+- CodeRabbit: `CHANGES_REQUESTED`, 3 actionable comments -- functionally the same three findings (concurrency race Major, empty-filter Major, plus one Greptile missed: **null/undefined schedule-array entries crash `findPipelineScheduleId`** via an unguarded destructure). Did not independently surface the pagination issue (folded into its own concurrency/matching framing).
+- Both bots cited real GitLab API behavior to support the concurrency finding; CodeRabbit's review included a live web-search citation confirming GitLab's Issues API has no ETag/If-Match conditional-update support, which shaped the fix (documented as best-effort rather than built as false-atomic).
+
+**Triage (all verified before fixing, no false positives):**
+
+- Null-entry crash: live-repro'd with `bun -e` before touching code -- confirmed `TypeError: Cannot destructure property 'id' from null or undefined value`. Fixed by skipping non-object entries; added 2 regression tests.
+- Empty-filter ambiguity: confirmed by reading the schema (bare `z.string()`, no `.min`). Fixed with `.trim().min(1, ...)`.
+- Pagination: confirmed by reading the unpaginated `glJson` call. Fixed with `per_page=100` (GitLab's max).
+- Concurrency race: confirmed as real and unfixable server-side (no conditional-update support), but the fix was **documentation, not locking** -- the original code comment overstated the protection a plain GET-then-PUT provides; narrowed to "best-effort, re-run on suspected loss" per the originating handover's own low-frequency/low-consequence assessment of this race, rather than building client-side coordination disproportionate to the risk.
+
+**Round 2 (fix commit `fd402eb4`):**
+
+- Greptile: `COMPLETED SUCCESS`, footer confirmed it reviewed `fd402eb4`.
+- CodeRabbit: re-approved (`reviewDecision: APPROVED`) after the fix push.
+
+**Latency:** both bots reported within roughly a minute of the PR open; round 2 landed within a couple of minutes of the fix push.
+
+**Takeaway:** the strongest overlap observed in this series so far -- 2 of 3 root issues were found by both bots independently, with only the null-entry crash unique to CodeRabbit and only the pagination gap unique to Greptile (arguably the two lowest-severity items). Neither bot suggested the concurrency fix actually applied (narrowing the claim rather than adding locking); that call required checking GitLab's actual API capabilities, which CodeRabbit's cited research made easy to verify but did not itself recommend.
