@@ -658,3 +658,65 @@ describe("compareSemver", () => {
 		expect(compareSemver("2.22.0", "2.22")).toBe(0);
 	});
 });
+
+import { type ChangelogEntry, filterChangelogRange } from "./nodes.ts";
+
+describe("filterChangelogRange", () => {
+	const entries: ChangelogEntry[] = [
+		{ version: "2.9.4", changes: [{ description: "Add system.cpu.cores", type: "enhancement" }] },
+		{ version: "2.9.3", changes: [{ description: "Fix X", type: "bugfix" }] },
+		{ version: "2.9.1", changes: [{ description: "Fix Y", type: "bugfix" }] },
+		{ version: "2.8.1", changes: [{ description: "Fix Z", type: "bugfix" }] },
+		{ version: "2.8.0", changes: [{ description: "Initial", type: "enhancement" }] },
+	];
+
+	test("returns every entry strictly above installed and up to and including target", () => {
+		const result = filterChangelogRange(entries, "2.8.0", "2.9.4");
+		expect(result.map((e) => e.version)).toEqual(["2.9.4", "2.9.3", "2.9.1", "2.8.1"]);
+	});
+
+	test("excludes the installed version itself", () => {
+		const result = filterChangelogRange(entries, "2.8.1", "2.9.4");
+		expect(result.map((e) => e.version)).not.toContain("2.8.1");
+	});
+
+	test("excludes versions above the target", () => {
+		const result = filterChangelogRange(entries, "2.8.0", "2.9.1");
+		expect(result.map((e) => e.version)).toEqual(["2.9.1", "2.8.1"]);
+	});
+
+	test("returns an empty array when installed already equals target", () => {
+		expect(filterChangelogRange(entries, "2.9.4", "2.9.4")).toEqual([]);
+	});
+
+	test("falls back to only the target version's own entry when installedVersion is null", () => {
+		const result = filterChangelogRange(entries, null, "2.9.3");
+		expect(result.map((e) => e.version)).toEqual(["2.9.3"]);
+	});
+
+	test("returns an empty array when installedVersion is null and the target has no matching entry", () => {
+		expect(filterChangelogRange(entries, null, "3.0.0")).toEqual([]);
+	});
+
+	test("preserves newest-first order from the input", () => {
+		const result = filterChangelogRange(entries, "2.8.0", "2.9.4");
+		for (let i = 1; i < result.length; i++) {
+			const prev = result[i - 1];
+			const curr = result[i];
+			if (prev && curr) {
+				expect(compareSemverForTest(prev.version, curr.version)).toBeGreaterThanOrEqual(0);
+			}
+		}
+	});
+});
+
+// Local helper for the ordering assertion above -- avoids re-exporting compareSemver just for the test.
+function compareSemverForTest(a: string, b: string): number {
+	const pa = a.split(".").map(Number);
+	const pb = b.split(".").map(Number);
+	for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+		const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+		if (diff !== 0) return diff;
+	}
+	return 0;
+}

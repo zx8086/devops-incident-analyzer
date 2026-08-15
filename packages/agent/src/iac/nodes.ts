@@ -437,6 +437,30 @@ export function compareSemver(a: string, b: string): number {
 	return 0;
 }
 
+export interface ChangelogEntry {
+	version: string;
+	changes: Array<{ description: string; type: string; link?: string }>;
+}
+
+// Filters a package's changelog.yml entries (already newest-first, matching the source file's
+// own order -- see fetchRenovateChangelog) to the range the operator is actually upgrading
+// through: strictly above the installed version, up to and including the target. When
+// installedVersion is unknown (Kibana lookup skipped/failed/never-installed), the range can't
+// be computed -- falls back to showing only the target version's own entry (the spec's
+// documented degraded behavior, not the default). (Pure; unit-tested.)
+export function filterChangelogRange(
+	entries: ChangelogEntry[],
+	installedVersion: string | null,
+	targetVersion: string,
+): ChangelogEntry[] {
+	if (installedVersion === null) {
+		return entries.filter((e) => compareSemver(e.version, targetVersion) === 0);
+	}
+	return entries.filter(
+		(e) => compareSemver(e.version, installedVersion) > 0 && compareSemver(e.version, targetVersion) <= 0,
+	);
+}
+
 // Single operator approve/decline interrupt, matching fleetUpgradeGate's role
 // (see fleetUpgradeGate) exactly. Only reached when hasSingleRenovateMatch routed here.
 export function renovateTriggerGate(state: IacStateType): Partial<IacStateType> {
