@@ -179,6 +179,150 @@ describe("teardownIac renovate-integration-update branch (SIO-1471)", () => {
 		expect(capturedSummary).toContain("marker=renovate/eu-b2b-prometheus");
 		expect(capturedSummary).toContain("MR=https://gitlab.example/x/-/merge_requests/517");
 	});
+
+	// SIO-1471 follow-up: a completed renovate trigger (an MR was found) is a durable Profile
+	// fact on the agent-memory backend, mirroring the fleet-upgrade and gitops iac-change facts
+	// (buildFleetFactDecision / buildIacChangeDecision) -- otherwise a later session can recall
+	// "eu-b2b fleet -> 9.4.2" or "eu-b2b/lifecycle-policies changed" but NOT "gl-testing-system
+	// was updated via Renovate", even though the daily-log breadcrumb (tested above) exists.
+	test("records a durable renovate-trigger fact on the agent-memory backend when an MR was found", async () => {
+		let capturedDecision: string | undefined;
+		let capturedAnnotations: Record<string, string> | undefined;
+		mock.module("../memory-writer.ts", () => ({
+			appendDailyLog: () => {},
+			recordKeyDecision: (entry: { decision: string; annotations?: Record<string, string> }) => {
+				capturedDecision = entry.decision;
+				capturedAnnotations = entry.annotations;
+			},
+		}));
+		mock.module("../memory-backend.ts", () => ({
+			selectedBackend: () => "agent-memory",
+			recallInFlightFleetUpgrades: async () => [],
+			searchAgentMemory: async () => [],
+			dedupeHitsBy: <T>(hits: T[]) => hits,
+		}));
+		const { teardownIac } = await import("./nodes.ts");
+		await teardownIac({
+			requestId: "req-1",
+			threadId: "thread-abc",
+			intent: "renovate-integration-update",
+			targetDeployment: "eu-b2b",
+			renovateMarker: { marker: "renovate/eu-b2b-prometheus", line: "x" },
+			renovateMrUrl: "https://gitlab.example/x/-/merge_requests/517",
+		} as unknown as IacStateType);
+
+		expect(capturedDecision).toBeDefined();
+		expect(capturedDecision).toContain("eu-b2b");
+		expect(capturedDecision).toContain("renovate/eu-b2b-prometheus");
+		expect(capturedAnnotations).toMatchObject({
+			kind: "renovate-trigger",
+			deployment: "eu-b2b",
+			marker: "renovate/eu-b2b-prometheus",
+			mr_url: "https://gitlab.example/x/-/merge_requests/517",
+		});
+	});
+
+	test("does NOT record a durable fact when no MR was found yet (nothing settled to recall)", async () => {
+		let recordCalled = false;
+		mock.module("../memory-writer.ts", () => ({
+			appendDailyLog: () => {},
+			recordKeyDecision: () => {
+				recordCalled = true;
+			},
+		}));
+		mock.module("../memory-backend.ts", () => ({
+			selectedBackend: () => "agent-memory",
+			recallInFlightFleetUpgrades: async () => [],
+			searchAgentMemory: async () => [],
+			dedupeHitsBy: <T>(hits: T[]) => hits,
+		}));
+		const { teardownIac } = await import("./nodes.ts");
+		await teardownIac({
+			requestId: "req-1",
+			threadId: "thread-abc",
+			intent: "renovate-integration-update",
+			targetDeployment: "eu-b2b",
+			renovateMarker: { marker: "renovate/eu-b2b-prometheus", line: "x" },
+			renovateMrUrl: "",
+		} as unknown as IacStateType);
+
+		expect(recordCalled).toBe(false);
+	});
+
+	test("does NOT record a durable fact on the file backend (durable learnings stay PR-gated)", async () => {
+		let recordCalled = false;
+		mock.module("../memory-writer.ts", () => ({
+			appendDailyLog: () => {},
+			recordKeyDecision: () => {
+				recordCalled = true;
+			},
+		}));
+		mock.module("../memory-backend.ts", () => ({
+			selectedBackend: () => "file",
+			recallInFlightFleetUpgrades: async () => [],
+			searchAgentMemory: async () => [],
+			dedupeHitsBy: <T>(hits: T[]) => hits,
+		}));
+		const { teardownIac } = await import("./nodes.ts");
+		await teardownIac({
+			requestId: "req-1",
+			threadId: "thread-abc",
+			intent: "renovate-integration-update",
+			targetDeployment: "eu-b2b",
+			renovateMarker: { marker: "renovate/eu-b2b-prometheus", line: "x" },
+			renovateMrUrl: "https://gitlab.example/x/-/merge_requests/517",
+		} as unknown as IacStateType);
+
+		expect(recordCalled).toBe(false);
+	});
+});
+
+// SIO-1471 follow-up: the durable renovate-trigger fact builders, mirroring
+// buildFleetFactDecision/buildFleetFactAnnotations (fleet-upgrade.test.ts) and
+// buildIacChangeDecision/buildIacChangeAnnotations (iac-change-memory.test.ts).
+describe("buildRenovateFactDecision / buildRenovateFactAnnotations", () => {
+	function renovateState(over: Partial<IacStateType> = {}): IacStateType {
+		return {
+			requestId: "req-1",
+			threadId: "thread-abc",
+			intent: "renovate-integration-update",
+			targetDeployment: "eu-b2b",
+			renovateMarker: { marker: "renovate/eu-b2b-prometheus", line: "x" },
+			renovateMrUrl: "https://gitlab.example/x/-/merge_requests/517",
+			...over,
+		} as unknown as IacStateType;
+	}
+
+	test("decision names the deployment, the marker, and the MR", async () => {
+		const { buildRenovateFactDecision } = await import("./nodes.ts");
+		const decision = buildRenovateFactDecision(renovateState());
+		expect(decision).toContain("eu-b2b");
+		expect(decision).toContain("renovate/eu-b2b-prometheus");
+		expect(decision).toContain("https://gitlab.example/x/-/merge_requests/517");
+	});
+
+	test("decision falls back to the marker's own deployment prefix when targetDeployment is unset", async () => {
+		const { buildRenovateFactDecision } = await import("./nodes.ts");
+		const decision = buildRenovateFactDecision(renovateState({ targetDeployment: "" }));
+		expect(decision.length).toBeGreaterThan(0);
+	});
+
+	test("annotations carry kind, deployment, marker, and mr_url", async () => {
+		const { buildRenovateFactAnnotations } = await import("./nodes.ts");
+		const a = buildRenovateFactAnnotations(renovateState());
+		expect(a).toMatchObject({
+			kind: "renovate-trigger",
+			deployment: "eu-b2b",
+			marker: "renovate/eu-b2b-prometheus",
+			mr_url: "https://gitlab.example/x/-/merge_requests/517",
+		});
+	});
+
+	test("annotations omit mr_url when no MR was found", async () => {
+		const { buildRenovateFactAnnotations } = await import("./nodes.ts");
+		const a = buildRenovateFactAnnotations(renovateState({ renovateMrUrl: "" }));
+		expect(a.mr_url).toBeUndefined();
+	});
 });
 
 // Renovate on-demand MR automation: extractRenovateTarget's LLM call returns a JSON
