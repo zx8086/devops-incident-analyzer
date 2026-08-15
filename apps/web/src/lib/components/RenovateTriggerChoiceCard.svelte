@@ -26,16 +26,6 @@ let {
     </h3>
     <p class="text-sm text-tommy-navy/80 mt-1">{prompt.message}</p>
 
-    {#if prompt.marker}
-      <code class="mt-2 block break-all rounded bg-white/70 border border-tommy-accent-blue/20 px-2 py-1 text-xs font-mono text-tommy-navy/80">
-        {prompt.marker}
-      </code>
-    {/if}
-
-    {#if prompt.line}
-      <p class="mt-1 text-xs text-tommy-navy/60 break-all">{prompt.line}</p>
-    {/if}
-
     <div class="mt-3 flex flex-wrap gap-2">
       <button
         type="button"

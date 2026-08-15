@@ -10623,6 +10623,34 @@ function buildFleetFactAnnotations(state: IacStateType, result: FleetUpgradeResu
 	return a;
 }
 
+// SIO-1471 follow-up: the durable renovate-trigger fact, mirroring buildFleetFactDecision --
+// a completed on-demand Renovate trigger (an MR was found) is a Profile fact so a later
+// session can recall "eu-b2b/renovate-eu-b2b-prometheus -> MR opened" the same way it recalls
+// a fleet upgrade or a gitops change.
+export function buildRenovateFactDecision(state: IacStateType): string {
+	// Greptile + CodeRabbit (PR #665 round 1): the renovate-integration-update sub-flow's own
+	// nodes never set state.targetDeployment (only drift/gitops/fleet-upgrade write it) --
+	// extractRenovateTarget sets state.renovateTarget.deployment instead, so that must come
+	// first or the real path always falls through to the generic placeholder.
+	const dep =
+		state.renovateTarget?.deployment || state.targetDeployment || state.iacRequest?.cluster || "an Elastic deployment";
+	const marker = state.renovateMarker?.marker ?? "an outdated dependency";
+	const mrUrl = state.renovateMrUrl;
+	return `Renovate update triggered on ${dep} for '${marker}': MR opened at ${mrUrl}.`;
+}
+
+// SIO-1471 follow-up: structured labels on the durable renovate-trigger fact, mirroring
+// buildFleetFactAnnotations/buildIacChangeAnnotations so all three durable-fact kinds share the
+// same deployment/mr_url join keys.
+export function buildRenovateFactAnnotations(state: IacStateType): AnnotationMap {
+	const a: AnnotationMap = { kind: "renovate-trigger" };
+	const dep = state.renovateTarget?.deployment || state.targetDeployment || state.iacRequest?.cluster;
+	if (dep) a.deployment = dep;
+	if (state.renovateMarker?.marker) a.marker = state.renovateMarker.marker;
+	if (state.renovateMrUrl) a.mr_url = state.renovateMrUrl;
+	return a;
+}
+
 // SIO-965: structured labels on the durable gitops-change fact. These mirror the
 // knowledge-graph node keys so the two durable systems join on the SAME values:
 // thread_id == KG Session.threadId, config_change_id == KG ConfigChange.id (the
@@ -10928,6 +10956,25 @@ export async function teardownIac(state: IacStateType): Promise<Partial<IacState
 			datasources: ["elastic-iac"],
 			summary: summaryParts.join(" "),
 		});
+
+		// SIO-1471 follow-up: a completed renovate trigger (Renovate's own MR was found) is a
+		// durable Profile fact, mirroring the fleet-upgrade and gitops iac-change facts below --
+		// without it a later session's recall covers fleet upgrades and gitops MRs but not
+		// on-demand Renovate triggers, even though the daily-log breadcrumb above already exists.
+		// Gated the same way as the other two durable facts: agent-memory backend only (file
+		// backend durable learnings stay PR-gated), and only once an MR actually exists (a trigger
+		// that hasn't produced an MR yet has nothing settled worth recalling).
+		if (state.intent === "renovate-integration-update" && state.renovateMrUrl && selectedBackend() === "agent-memory") {
+			recordKeyDecision({
+				requestId: state.requestId,
+				decision: buildRenovateFactDecision(state),
+				annotations: buildRenovateFactAnnotations(state),
+			});
+			log.info(
+				{ deployment: state.targetDeployment, marker: state.renovateMarker?.marker, mrUrl: state.renovateMrUrl },
+				"teardownIac: recorded durable renovate-trigger fact",
+			);
+		}
 
 		// SIO-943 / SIO-957: a fleet upgrade is a durable Profile fact so a later
 		// session recalls "eu-cld fleet -> 9.4.2 (applied)" OR "us-cld fleet -> 9.4.2
