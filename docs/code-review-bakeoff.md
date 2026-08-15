@@ -146,3 +146,20 @@ Two rounds on a single-file feature addition (`gitlab.ts` + tests + classificati
 **Latency:** both bots reported within roughly a minute of the PR open; round 2 landed within a couple of minutes of the fix push.
 
 **Takeaway:** the strongest overlap observed in this series so far -- 2 of 3 root issues were found by both bots independently, with only the null-entry crash unique to CodeRabbit and only the pagination gap unique to Greptile (arguably the two lowest-severity items). Neither bot suggested the concurrency fix actually applied (narrowing the claim rather than adding locking); that call required checking GitLab's actual API capabilities, which CodeRabbit's cited research made easy to verify but did not itself recommend.
+
+## PR #664 detail (refactor, break kong-api <-> portal-api import cycle)
+
+The smallest diff in the series so far: 3 files, +17/-10, no ticket. A pure refactor extracting `API_REGIONS` into `api/constants.ts` to break one of four circular dependencies fallow reported. Both bots approved on round 1 with zero findings.
+
+**Round 1 (initial commit `abe60a23`), the only round:**
+
+- Greptile: `COMPLETED SUCCESS`, Confidence Score **5/5**, zero actionable defects, zero inline comments. Footer SHA matched head. Its summary independently restated the intent ("eliminating the runtime import cycle ... without changing region values or client behavior") and rendered a mermaid flowchart confirming the resulting one-way shape (`kong-api -> constants`, `kong-api -> portal-api`, `portal-api -> constants`).
+- CodeRabbit: `APPROVED`, zero inline comments, no findings write-up beyond its in-progress placeholder.
+
+**Head-to-head: a tie at zero findings.** Nothing to triage on either side, so this round exercises the bots' false-positive rate rather than their recall -- both correctly declined to invent work on a mechanical, behavior-preserving change. Greptile's report was the more substantive of the two: it explicitly enumerated four things it had checked and cleared (no stale internal import, no public re-export left behind, no emitted-declaration issue, no package-entry compatibility break). That third and fourth check are the ones with teeth on an extract-to-leaf-module refactor.
+
+**Notable near-miss, caught pre-push rather than by either bot:** the first local iteration re-exported `API_REGIONS` from `kong-api.ts` for backward compatibility. A repo-wide grep showed no importer of that path, and fallow's unused-export count rose 263 -> 264, so the re-export was removed before the commit. Had it shipped, Greptile's "no public re-export remains" check is precisely where it would have surfaced -- suggesting the check is real and not boilerplate, but also that a static-analysis pass before pushing catches this class earlier and cheaper than a review round.
+
+**Latency: the outlier of the series.** Greptile's check sat at `IN_PROGRESS` for roughly 20+ minutes on a 3-file diff, against the ~1-2 min reported on every prior PR in this ledger (#658 through #662). It did complete cleanly on its own with no re-trigger, so this was slowness, not the #661 dropped-event failure mode. CodeRabbit posted its in-progress placeholder within about a minute but its approval landed in the same late window. No re-trigger was issued -- per the lifecycle rules, a trigger comment while the check is already `IN_PROGRESS` is redundant.
+
+**Takeaway:** on a trivial, mechanically-verifiable diff both bots behave correctly and identically, and the differentiator collapses to report quality (Greptile) and latency (neither, this round). Consistent with the series pattern that Greptile's value shows up in incremental re-examination of non-trivial fix code; there was none here to examine. One data point against reading too much into any single small-PR round.
