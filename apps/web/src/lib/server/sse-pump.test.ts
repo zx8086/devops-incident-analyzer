@@ -337,7 +337,7 @@ describe("emitIacInterrupt renovate_trigger_choice", () => {
 		const handled = emitIacInterrupt((e) => sent.push(e as Record<string, unknown>), "t-renovate", {
 			type: "renovate_trigger_choice",
 			marker: "renovate/elasticsearch-9.x",
-			line: "- [ ] <!-- rebase-check -->renovate/elasticsearch-9.x",
+			line: " - [ ] <!-- unschedule-branch=renovate/elasticsearch-9.x -->chore(deps): elasticsearch to v9.x",
 			message: "Trigger the elasticsearch-9.x Renovate update?",
 		});
 		expect(handled).toBe(true);
@@ -346,7 +346,7 @@ describe("emitIacInterrupt renovate_trigger_choice", () => {
 			type: "renovate_trigger_choice",
 			threadId: "t-renovate",
 			marker: "renovate/elasticsearch-9.x",
-			line: "- [ ] <!-- rebase-check -->renovate/elasticsearch-9.x",
+			line: " - [ ] <!-- unschedule-branch=renovate/elasticsearch-9.x -->chore(deps): elasticsearch to v9.x",
 			message: "Trigger the elasticsearch-9.x Renovate update?",
 		});
 	});

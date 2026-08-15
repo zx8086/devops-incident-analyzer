@@ -148,6 +148,37 @@ describe("teardownIac renovate-integration-update branch (SIO-1471)", () => {
 		const out = await runTeardown({ mrUrl: "" });
 		expect(out.messages).toBeUndefined();
 	});
+
+	// SIO-1471: the generic memory-summary branch keys on state.mrUrl, which this sub-flow
+	// never sets, so its durable-memory breadcrumb was contentless ("intent=renovate-integration-update"
+	// and nothing else). teardownIac now adds the resolved marker + the Renovate-created MR link
+	// (when present) to the breadcrumb so a later session can recall what actually happened.
+	test("records the resolved marker and Renovate MR link in the durable memory breadcrumb", async () => {
+		let capturedSummary: string | undefined;
+		mock.module("../memory-writer.ts", () => ({
+			appendDailyLog: (entry: { summary: string }) => {
+				capturedSummary = entry.summary;
+			},
+			recordKeyDecision: () => {},
+		}));
+		mock.module("../memory-backend.ts", () => ({
+			selectedBackend: () => "file",
+			recallInFlightFleetUpgrades: async () => [],
+			searchAgentMemory: async () => [],
+			dedupeHitsBy: <T>(hits: T[]) => hits,
+		}));
+		const { teardownIac } = await import("./nodes.ts");
+		await teardownIac({
+			requestId: "req-1",
+			threadId: "thread-abc",
+			intent: "renovate-integration-update",
+			renovateMarker: { marker: "renovate/eu-b2b-prometheus", line: "x" },
+			renovateMrUrl: "https://gitlab.example/x/-/merge_requests/517",
+		} as unknown as IacStateType);
+
+		expect(capturedSummary).toContain("marker=renovate/eu-b2b-prometheus");
+		expect(capturedSummary).toContain("MR=https://gitlab.example/x/-/merge_requests/517");
+	});
 });
 
 // Renovate on-demand MR automation: extractRenovateTarget's LLM call returns a JSON
@@ -260,7 +291,9 @@ describe("RENOVATE_DASHBOARD_TITLE", () => {
 });
 
 // gitlab_search (scope: work_items) response shape: an array of GitLab search-result
-// objects. Only the numeric `iid` field is needed here.
+// objects. Only the numeric `iid` field is needed here, but the `title` must exactly
+// match RENOVATE_DASHBOARD_TITLE -- gitlab_search's title match is not guaranteed
+// exact/unique (five issues collided on a bare "Dependency Dashboard" substring search).
 describe("parseFirstIssueIid", () => {
 	test("returns the iid of the first result", () => {
 		const raw = JSON.stringify([{ iid: 11, title: "Elastic Fleet & Agent Dependency Dashboard" }]);
@@ -276,7 +309,17 @@ describe("parseFirstIssueIid", () => {
 	});
 
 	test("null when the first result has no numeric iid", () => {
-		expect(parseFirstIssueIid(JSON.stringify([{ title: "no iid here" }]))).toBeNull();
+		expect(parseFirstIssueIid(JSON.stringify([{ title: "Elastic Fleet & Agent Dependency Dashboard" }]))).toBeNull();
+	});
+
+	test("null when the first result's title does not exactly match RENOVATE_DASHBOARD_TITLE", () => {
+		const raw = JSON.stringify([{ iid: 6, title: "Dependency Dashboard" }]);
+		expect(parseFirstIssueIid(raw)).toBeNull();
+	});
+
+	test("null when the first result is a different dashboard entirely (e.g. Terraform's)", () => {
+		const raw = JSON.stringify([{ iid: 10, title: "Terraform Dependency Dashboard" }]);
+		expect(parseFirstIssueIid(raw)).toBeNull();
 	});
 });
 
@@ -296,8 +339,12 @@ describe("parseIssueDescription", () => {
 	});
 });
 
-// gitlab_list_merge_requests_by_source_branch response shape: a raw GitLab merge-request
-// array (newest first), same envelope watchPipeline's other parsers already handle.
+// gitlab_list_merge_requests_by_source_branch is a gitlabFetch-backed elastic-iac tool
+// (packages/mcp-server-elastic-iac/src/tools/shared.ts), so its real response is ALWAYS
+// prefixed with the HTTP status: `[${res.status}] ${text}`. The bare-JSON cases below (no
+// prefix) do not exercise that envelope; the "[200] [...]" case is the shape this function
+// actually receives in production, same envelope parseNewestPipeline/parseLatestAgentMr
+// already handle.
 describe("parseFirstOpenMrUrl", () => {
 	test("returns the web_url of the first MR in the array", () => {
 		const raw = JSON.stringify([{ iid: 42, web_url: "https://gitlab.example/x/-/merge_requests/42", state: "opened" }]);
@@ -310,5 +357,14 @@ describe("parseFirstOpenMrUrl", () => {
 
 	test("null on malformed/error response", () => {
 		expect(parseFirstOpenMrUrl("[404] not found")).toBeNull();
+	});
+
+	test("real gitlabFetch envelope: '[200] [...]' status prefix -- the shape this function actually receives", () => {
+		const raw = `[200] ${JSON.stringify([{ iid: 517, web_url: "https://gitlab.example/x/-/merge_requests/517", state: "opened" }])}`;
+		expect(parseFirstOpenMrUrl(raw)).toBe("https://gitlab.example/x/-/merge_requests/517");
+	});
+
+	test("real gitlabFetch envelope: '[200] []' empty array -> null", () => {
+		expect(parseFirstOpenMrUrl("[200] []")).toBeNull();
 	});
 });

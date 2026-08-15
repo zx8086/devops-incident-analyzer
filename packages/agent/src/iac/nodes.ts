@@ -177,7 +177,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
 // belongs to the separately-routed "gitlab" data source (gitlab-mcp), reached today only
 // by the main incident-analyzer graph. Cross-datasource read, following the exact
 // precedent infoTools() already establishes with getToolsForDataSource("knowledge-graph")
-// (nodes.ts:1337): no DATASOURCE_TO_MCP_SERVER change, no new connection (gitlab-mcp and
+// (see infoTools): no DATASOURCE_TO_MCP_SERVER change, no new connection (gitlab-mcp and
 // elastic-iac-mcp are already independently connected in apps/web's runtime).
 function findGitlabProxyTool(name: string): StructuredToolInterface | undefined {
 	return getToolsForDataSource("gitlab").find((t) => t.name === name);
@@ -201,7 +201,7 @@ const RenovateTargetSchema = z.object({
 
 // Extract the LLM's JSON reply into {deployment, integration}, or null when either field
 // is missing/empty (the node clarifies rather than guessing). Mirrors parseIntentJson's
-// extract+validate split (nodes.ts:335). (Pure; unit-tested.)
+// extract+validate split (see parseIntentJson). (Pure; unit-tested.)
 export function parseRenovateTargetJson(raw: string): { deployment: string; integration: string } | null {
 	const extracted = extractJsonBlock(raw);
 	if (!extracted) return null;
@@ -262,7 +262,11 @@ export function parseRenovateDashboardEntries(description: string): Array<{ mark
 // Deterministic substring match (never LLM-assisted -- exactness matters more than
 // phrasing flexibility here) against the live marker strings. Case-insensitive,
 // matching findPipelineScheduleId's precedent (mcp-server-elastic-iac/gitlab.ts).
-// (Pure; unit-tested.)
+// Substring-not-token matching is INTENTIONAL, not a bug: this is deliberately loose so
+// a partial deployment/integration name still surfaces candidates, backstopped by the
+// renovateTriggerGate approval showing the operator the exact matched marker before
+// anything fires -- do not "fix" this into stricter token matching, it could break
+// legitimate partial-name requests. (Pure; unit-tested.)
 export function filterDashboardMatches(
 	entries: Array<{ marker: string; line: string }>,
 	deployment: string,
@@ -282,14 +286,25 @@ export function hasSingleRenovateMatch(candidates: Array<{ marker: string; line:
 	return candidates.length === 1;
 }
 
+// parseFirstIssueIid and parseIssueDescription both parse output from
+// callGitlabProxyTool, which wraps the NATIVE gitlab-mcp proxy's tools -- a different
+// server from mcp-server-elastic-iac. Live-verified this session: unlike gitlabFetch-backed
+// elastic-iac tools (see parseFirstOpenMrUrl), the native gitlab-mcp proxy returns bare
+// JSON with no status-prefix envelope. Do not add prefix-stripping here.
+
 // gitlab_search (scope: work_items) response: an array of result objects. Defensive
 // parse -- malformed/empty input returns null rather than throwing, matching
-// parseNewestPipeline/parseLatestAgentMr's style elsewhere in this file. (Pure; unit-tested.)
+// parseNewestPipeline/parseLatestAgentMr's style elsewhere in this file. Only the first
+// result is accepted, and only when its title exactly matches RENOVATE_DASHBOARD_TITLE --
+// gitlab_search's title match is not guaranteed exact/unique (see RENOVATE_DASHBOARD_TITLE's
+// own comment on the five-issue substring collision), so this is a structural guarantee
+// rather than an incidental one. (Pure; unit-tested.)
 export function parseFirstIssueIid(raw: string): number | null {
 	try {
 		const parsed = JSON.parse(raw);
 		if (!Array.isArray(parsed) || parsed.length === 0) return null;
-		const first = parsed[0] as { iid?: unknown };
+		const first = parsed[0] as { iid?: unknown; title?: unknown };
+		if (first.title !== RENOVATE_DASHBOARD_TITLE) return null;
 		return typeof first.iid === "number" ? first.iid : null;
 	} catch {
 		return null;
@@ -396,7 +411,7 @@ export function buildRenovateGateMessage(marker: { marker: string; line: string 
 }
 
 // Single operator approve/decline interrupt, matching fleetUpgradeGate's role
-// (nodes.ts:11822) exactly. Only reached when hasSingleRenovateMatch routed here.
+// (see fleetUpgradeGate) exactly. Only reached when hasSingleRenovateMatch routed here.
 export function renovateTriggerGate(state: IacStateType): Partial<IacStateType> {
 	const marker = state.renovateMarker;
 	if (!marker) return { renovateTriggerApproved: false };
@@ -454,10 +469,15 @@ export async function triggerRenovateUpdate(state: IacStateType): Promise<Partia
 
 // gitlab_list_merge_requests_by_source_branch returns a raw GitLab MR array, newest
 // first; only the first entry's web_url is needed to report the Renovate-created MR.
-// (Pure; unit-tested.)
+// This tool is gitlabFetch-backed (packages/mcp-server-elastic-iac/src/tools/shared.ts),
+// so the real response is always prefixed with the HTTP status: `[${res.status}] ${text}`
+// -- same envelope parseNewestPipeline/parseLatestAgentMr already handle. (Pure; unit-tested.)
 export function parseFirstOpenMrUrl(raw: string): string | null {
+	// Skip the "[200] " status prefix: find the first "[" that opens the JSON array.
+	const m = raw.match(/\[\s*(?:\{|\])/);
+	if (!m || m.index === undefined) return null;
 	try {
-		const parsed = JSON.parse(raw);
+		const parsed = JSON.parse(raw.slice(m.index));
 		if (!Array.isArray(parsed) || parsed.length === 0) return null;
 		const first = parsed[0] as { web_url?: unknown };
 		return typeof first.web_url === "string" ? first.web_url : null;
@@ -8015,6 +8035,7 @@ export function iacTurnOutcome(state: IacStateType): IacTurnOutcome {
 	if (state.reviewDecision === "rejected") return "rejected";
 	if (state.syntheticsPushApproved === false && state.syntheticsDriftReport) return "declined";
 	if (state.fleetUpgradeApproved === false && state.fleetUpgradeReport) return "declined";
+	if (state.renovateTriggerApproved === false && state.renovateMarker) return "declined";
 	// SIO-1020: a no-op is not a failure -- the requested config already matches current state. It
 	// renders as a neutral "No change needed", distinct from an amber "Blocked" guard rejection.
 	if (state.noopReason) return "no-op";
@@ -10822,6 +10843,15 @@ export async function teardownIac(state: IacStateType): Promise<Partial<IacState
 					state.reviewDecision === "rejected" ? "rejected" : state.mrUrl ? `MR=${state.mrUrl}` : "",
 					state.pipelineStatus && state.pipelineStatus !== "unknown" ? `pipeline=${state.pipelineStatus}` : "",
 				].filter((p) => p.length > 0);
+		// SIO-1471: the renovate-integration-update sub-flow never sets state.mrUrl (it opens
+		// no MR of its own -- Renovate does), so the generic branch above produces a contentless
+		// "intent=renovate-integration-update" breadcrumb. Add the resolved marker + the
+		// Renovate-created MR link (when watchRenovateMr found one) so the durable-memory
+		// breadcrumb for this intent is actually recallable.
+		if (state.intent === "renovate-integration-update") {
+			if (state.renovateMarker) summaryParts.push(`marker=${state.renovateMarker.marker}`);
+			if (state.renovateMrUrl) summaryParts.push(`MR=${state.renovateMrUrl}`);
+		}
 		const services = cluster ? [cluster] : isFleet && state.targetDeployment ? [state.targetDeployment] : [];
 		appendDailyLog({
 			requestId: state.requestId,
@@ -10920,8 +10950,9 @@ export async function teardownIac(state: IacStateType): Promise<Partial<IacState
 	// at whichever point the turn ended -- no summary to build here, and the generic
 	// gitops-flavored fallback below would be misleading (it assumes an MR-authoring flow this
 	// intent never enters: state.mrUrl is never set by this sub-flow, so the fallback's
-	// `state.mrUrl ? ... : "MR step complete."` check always hit the no-MR branch, and the real
-	// MR link -- state.renovateMrUrl, set by watchRenovateMr -- was ignored entirely).
+	// `state.mrUrl ? ... : "MR step complete."` check always hit the no-MR branch). The user
+	// reaches the MR link only via watchRenovateMr's own AIMessage; state.renovateMrUrl's only
+	// consumer is the durable-memory breadcrumb built earlier in this same function.
 	if (state.intent === "renovate-integration-update") {
 		return {};
 	}
