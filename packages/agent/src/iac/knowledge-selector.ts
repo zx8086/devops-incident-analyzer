@@ -44,6 +44,7 @@ export const DEFAULT_BY_INTENT: Record<IacIntent, readonly string[]> = {
 	"synthetics-drift": ALL_LIVE_CATEGORIES,
 	"fleet-upgrade": ALL_LIVE_CATEGORIES,
 	"pipeline-status": ALL_LIVE_CATEGORIES,
+	"renovate-integration-update": ALL_LIVE_CATEGORIES,
 };
 
 // Narrow agent.knowledge to the selected categories.

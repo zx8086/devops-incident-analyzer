@@ -89,6 +89,16 @@ describe("buildIacGraph", () => {
 		const nodeNames = Object.keys(graph.getGraph().nodes);
 		expect(nodeNames).toContain("recordIacPrompt");
 	});
+
+	test("graph contains the renovate-integration-update sub-flow nodes", async () => {
+		const graph = await buildIacGraph({ checkpointerType: "memory" });
+		const nodeNames = Object.keys(graph.getGraph().nodes);
+		expect(nodeNames).toContain("extractRenovateTarget");
+		expect(nodeNames).toContain("resolveRenovateMarker");
+		expect(nodeNames).toContain("renovateTriggerGate");
+		expect(nodeNames).toContain("triggerRenovateUpdate");
+		expect(nodeNames).toContain("watchRenovateMr");
+	});
 });
 
 import { END } from "@langchain/langgraph";

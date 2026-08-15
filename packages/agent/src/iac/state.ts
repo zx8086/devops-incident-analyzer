@@ -49,6 +49,7 @@ export const INTENT_VALUES = [
 	"drift",
 	"synthetics-drift",
 	"fleet-upgrade",
+	"renovate-integration-update",
 	"converse",
 ] as const;
 
@@ -772,6 +773,30 @@ export const IacState = Annotation.Root({
 	// (pipeline-status intent) re-polls THIS imperative pipeline -- there is no MR for a binary
 	// upgrade, so watchPipeline's MR-recovery path can't find it. Set when the apply is dispatched.
 	fleetApplyPipelineId: Annotation<number | null>({ reducer: last, default: () => null }),
+	// Renovate on-demand MR automation sub-flow. renovateTarget holds the extracted
+	// {deployment, integration} pair; renovateCandidates holds every dashboard entry
+	// matched by resolveRenovateMarker (0, 1, or 2+ -- exactly 1 proceeds to the gate,
+	// else the turn ends with a disambiguation/no-match message); renovateMarker is the
+	// single resolved match once disambiguation succeeds; renovateTriggerApproved is the
+	// operator's gate decision; renovateIssueIid is the discovered Dependency Dashboard
+	// issue iid (read once per turn, not persisted cross-turn -- the issue is
+	// rediscovered by title every turn per the original handover's stability warning);
+	// renovateMrUrl is the resulting Renovate MR link once watchRenovateMr finds it.
+	// renovateTriggerAtIso (Greptile round 2, PR #663): the ISO timestamp captured by
+	// triggerRenovateUpdate right before firing the tick/play calls, so watchRenovateMr can
+	// require the MR's updated_at to be at or after this instant -- proving the MR it finds
+	// was actually touched by THIS run, not a stale open MR left over on the same
+	// versionless, reused Renovate branch.
+	renovateTarget: Annotation<{ deployment: string; integration: string } | null>({
+		reducer: last,
+		default: () => null,
+	}),
+	renovateCandidates: Annotation<Array<{ marker: string; line: string }>>({ reducer: last, default: () => [] }),
+	renovateMarker: Annotation<{ marker: string; line: string } | null>({ reducer: last, default: () => null }),
+	renovateTriggerApproved: Annotation<boolean | null>({ reducer: last, default: () => null }),
+	renovateIssueIid: Annotation<number | null>({ reducer: last, default: () => null }),
+	renovateMrUrl: Annotation<string>({ reducer: last, default: () => "" }),
+	renovateTriggerAtIso: Annotation<string>({ reducer: last, default: () => "" }),
 	// SIO-930: set by the request (UI message-count signal). Gates whether the conversational
 	// "converse" intent is selectable -- a first turn cannot be a follow-up about a prior answer.
 	isFollowUp: Annotation<boolean>({ reducer: last, default: () => false }),

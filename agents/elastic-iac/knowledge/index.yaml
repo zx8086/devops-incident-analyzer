@@ -73,12 +73,13 @@ knowledge_selection:
     # place. Narrowing it would silently starve every novel or misclassified request, so
     # it gets the full set permanently. knowledge-selector-sync.test.ts pins this.
     info: [reference, playbook, specs, issues, cost-plans, runbooks]
-    # These four route to nodes that build no knowledge-bearing prompt, so their mapping
+    # These five route to nodes that build no knowledge-bearing prompt, so their mapping
     # is inert; kept at the full set so nothing starves if that ever changes.
     drift: [reference, playbook, specs, issues, cost-plans, runbooks]
     synthetics-drift: [reference, playbook, specs, issues, cost-plans, runbooks]
     fleet-upgrade: [reference, playbook, specs, issues, cost-plans, runbooks]
     pipeline-status: [reference, playbook, specs, issues, cost-plans, runbooks]
+    renovate-integration-update: [reference, playbook, specs, issues, cost-plans, runbooks]
   # Always unioned into every selection, so no lane can starve. reference/ holds the repo
   # map, conventions, cluster inventory, stack modules and the MR template.
   floor: [reference]

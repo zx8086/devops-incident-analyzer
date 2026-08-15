@@ -195,6 +195,13 @@
 			"destructiveHint": false
 		}
 	},
+	"gitlab_list_merge_requests_by_source_branch": {
+		"surfaceHash": "b8f8a40964e43b02caf35d757d92e3a5fa621c89160ef24178e74c34da24d406",
+		"annotations": {
+			"readOnlyHint": true,
+			"destructiveHint": false
+		}
+	},
 	"gitlab_list_pipelines_for_sha": {
 		"surfaceHash": "71b7eece4e4e696fdd112e7bf4fea9f0f7637854b8c42c245a3aff0f21822311",
 		"annotations": {

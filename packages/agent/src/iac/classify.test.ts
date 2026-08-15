@@ -77,6 +77,11 @@ describe("intentFromText", () => {
 		expect(intentFromText("check eu-b2b for drift")).toBe("drift");
 		expect(intentFromText("reconcile the lifecycle-policies stack")).toBe("drift");
 	});
+
+	test("maps renovate-integration-update replies", () => {
+		expect(intentFromText("renovate-integration-update")).toBe("renovate-integration-update");
+		expect(intentFromText("renovate_integration_update")).toBe("renovate-integration-update");
+	});
 });
 
 // SIO-928: a dispatched fleet binary apply has NO merge request, so its follow-ups ("how is the

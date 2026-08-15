@@ -25,6 +25,17 @@ describe("iacTurnOutcome (SIO-930)", () => {
 		);
 	});
 
+	test("declined when the renovate trigger gate was declined", () => {
+		expect(
+			iacTurnOutcome(
+				s({
+					renovateTriggerApproved: false,
+					renovateMarker: { marker: "renovate/eu-b2b-prometheus", line: "x" },
+				}),
+			),
+		).toBe("declined");
+	});
+
 	test("unsupported when blocked by a workflow:other capability message", () => {
 		expect(
 			iacTurnOutcome(

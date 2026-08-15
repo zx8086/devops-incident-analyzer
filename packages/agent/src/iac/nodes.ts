@@ -172,6 +172,407 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
 	}
 }
 
+// Renovate on-demand MR automation: the native GitLab MCP's get_issue tool is not in
+// mcp-server-elastic-iac's own tool set (that server has no issue-read tool) -- it
+// belongs to the separately-routed "gitlab" data source (gitlab-mcp), reached today only
+// by the main incident-analyzer graph. Cross-datasource read, following the exact
+// precedent infoTools() already establishes with getToolsForDataSource("knowledge-graph")
+// (see infoTools): no DATASOURCE_TO_MCP_SERVER change, no new connection (gitlab-mcp and
+// elastic-iac-mcp are already independently connected in apps/web's runtime).
+function findGitlabProxyTool(name: string): StructuredToolInterface | undefined {
+	return getToolsForDataSource("gitlab").find((t) => t.name === name);
+}
+
+async function callGitlabProxyTool(name: string, args: Record<string, unknown>): Promise<string> {
+	const tool = findGitlabProxyTool(name);
+	if (!tool) return `[${name} unavailable - gitlab server not connected]`;
+	try {
+		const res = await tool.invoke(args);
+		return typeof res === "string" ? res : JSON.stringify(res);
+	} catch (err) {
+		return `[${name} error: ${err instanceof Error ? err.message : String(err)}]`;
+	}
+}
+
+const RenovateTargetSchema = z.object({
+	deployment: z.string().nullish(),
+	integration: z.string().nullish(),
+});
+
+// Extract the LLM's JSON reply into {deployment, integration}, or null when either field
+// is missing/empty (the node clarifies rather than guessing). Mirrors parseIntentJson's
+// extract+validate split (see parseIntentJson). (Pure; unit-tested.)
+export function parseRenovateTargetJson(raw: string): { deployment: string; integration: string } | null {
+	const extracted = extractJsonBlock(raw);
+	if (!extracted) return null;
+	try {
+		const parsed = RenovateTargetSchema.safeParse(JSON.parse(sanitizeJsonControlChars(extracted)));
+		if (!parsed.success) return null;
+		const { deployment, integration } = parsed.data;
+		if (!deployment || !integration) return null;
+		return { deployment, integration };
+	} catch {
+		return null;
+	}
+}
+
+// Extract {deployment, integration} from the request via a small structured-output LLM
+// call, matching the parseIntent/IntentSchema pattern (a JSON-instruction prompt +
+// zod-validated parse) rather than classifyIacIntent's bare one-word call, since this
+// extracts two named fields. On extraction failure, ends the turn with a clarifying
+// message instead of proceeding with a guessed/partial target.
+export async function extractRenovateTarget(state: IacStateType): Promise<Partial<IacStateType>> {
+	const query = lastHumanText(state);
+	const llm = createLlm("iacPlanner", AGENT);
+	const sys =
+		"Extract the requested Fleet integration update as a single strict JSON object with keys: " +
+		"deployment (the named deployment/cluster, e.g. 'eu-b2b') and integration (the named integration " +
+		"package alias, e.g. 'prometheus', 'cisco_ftd', 'system'). If either is not named in the request, " +
+		"set that key to null.";
+	const res = await llm.invoke([new SystemMessage(sys), new HumanMessage(query)]);
+	const target = parseRenovateTargetJson(extractTextFromContent(res.content));
+	if (!target) {
+		return {
+			blockedReason: "Could not identify the deployment and/or integration to update.",
+			messages: [
+				new AIMessage(
+					"I couldn't tell which deployment and integration to update. Name both, e.g. 'update prometheus on eu-b2b'.",
+				),
+			],
+		};
+	}
+	return { renovateTarget: target };
+}
+
+// Mirrors mcp-server-elastic-iac's parseDashboardEntries (gitlab.ts) -- duplicated rather
+// than shared across the package boundary (nodes.ts never imports MCP-server-side code;
+// it only consumes tool string output). Same regex, same shape. UNLIKE
+// parseDashboardEntries (which parses both checked/unchecked for tickDashboardCheckboxes'
+// idempotency check), this only matches UNCHECKED "- [ ]" lines: an already-checked entry
+// means Renovate already read the tick and it is no longer a pending, re-triggerable
+// update (Greptile, PR #663).
+const RENOVATE_DASHBOARD_LINE_RE = /^(\s*-\s*\[) \](\s*<!--\s*unschedule-branch=(.*?)\s*-->)/;
+
+export function parseRenovateDashboardEntries(description: string): Array<{ marker: string; line: string }> {
+	const entries: Array<{ marker: string; line: string }> = [];
+	for (const line of description.split("\n")) {
+		const match = line.match(RENOVATE_DASHBOARD_LINE_RE);
+		const marker = match?.[3];
+		if (marker !== undefined) entries.push({ marker, line });
+	}
+	return entries;
+}
+
+// Deterministic substring match (never LLM-assisted -- exactness matters more than
+// phrasing flexibility here) against the live marker strings. Case-insensitive,
+// matching findPipelineScheduleId's precedent (mcp-server-elastic-iac/gitlab.ts).
+// Substring-not-token matching is INTENTIONAL, not a bug: this is deliberately loose so
+// a partial deployment/integration name still surfaces candidates, backstopped by the
+// renovateTriggerGate approval showing the operator the exact matched marker before
+// anything fires -- do not "fix" this into stricter token matching, it could break
+// legitimate partial-name requests. (Pure; unit-tested.)
+export function filterDashboardMatches(
+	entries: Array<{ marker: string; line: string }>,
+	deployment: string,
+	integration: string,
+): Array<{ marker: string; line: string }> {
+	const dep = deployment.toLowerCase();
+	const pkg = integration.toLowerCase();
+	return entries.filter((e) => {
+		const m = e.marker.toLowerCase();
+		return (dep === "" || m.includes(dep)) && (pkg === "" || m.includes(pkg));
+	});
+}
+
+// Graph-edge predicate: exactly one match proceeds to the approval gate; 0 or 2+ ends
+// the turn with a disambiguation/no-match message. (Pure; unit-tested.)
+export function hasSingleRenovateMatch(candidates: Array<{ marker: string; line: string }>): boolean {
+	return candidates.length === 1;
+}
+
+// parseFirstIssueIid and parseIssueDescription both parse output from
+// callGitlabProxyTool, which wraps the NATIVE gitlab-mcp proxy's tools -- a different
+// server from mcp-server-elastic-iac. Live-verified this session: unlike gitlabFetch-backed
+// elastic-iac tools (see parseFirstOpenMrUrl), the native gitlab-mcp proxy returns bare
+// JSON with no status-prefix envelope. Do not add prefix-stripping here.
+
+// gitlab_search (scope: work_items) response: an array of result objects. Defensive
+// parse -- malformed/empty input returns null rather than throwing, matching
+// parseNewestPipeline/parseLatestAgentMr's style elsewhere in this file. Only the first
+// result is accepted, and only when its title exactly matches RENOVATE_DASHBOARD_TITLE --
+// gitlab_search's title match is not guaranteed exact/unique (see RENOVATE_DASHBOARD_TITLE's
+// own comment on the five-issue substring collision), so this is a structural guarantee
+// rather than an incidental one. (Pure; unit-tested.)
+export function parseFirstIssueIid(raw: string): number | null {
+	try {
+		const parsed = JSON.parse(raw);
+		if (!Array.isArray(parsed) || parsed.length === 0) return null;
+		const first = parsed[0] as { iid?: unknown; title?: unknown };
+		if (first.title !== RENOVATE_DASHBOARD_TITLE) return null;
+		return typeof first.iid === "number" ? first.iid : null;
+	} catch {
+		return null;
+	}
+}
+
+// gitlab_get_issue response: a single issue object with a `description` field.
+// (Pure; unit-tested.)
+export function parseIssueDescription(raw: string): string {
+	try {
+		const parsed = JSON.parse(raw) as { description?: unknown };
+		return typeof parsed.description === "string" ? parsed.description : "";
+	} catch {
+		return "";
+	}
+}
+
+// The Renovate IaC target repo (observability-elastic-iac). Fixed per the original
+// Renovate handover's scope ("use the project we currently use" -- confirmed during
+// brainstorming): mcp-server-elastic-iac's own config already targets exactly this repo
+// via ELASTIC_IAC_GITLAB_PROJECT/_PROJECT_ID (mcp-server-elastic-iac/src/config.ts:126,131),
+// but that config is server-side and not reachable from packages/agent. The native
+// gitlab_get_issue/gitlab_search proxy tools need a project id/path supplied by the
+// CALLER (verified live: gitlab_get_issue's schema requires both `id` and `issue_iid`),
+// so this small mirror read is unavoidable -- read directly via process.env inside the
+// function body (nodes.ts has no existing helper for a non-numeric env value; this
+// follows the same "read inside the node, not module scope" discipline every
+// readPositiveMsEnv call in this file already follows).
+function renovateProjectId(): string {
+	return process.env.ELASTIC_IAC_GITLAB_PROJECT_ID ?? "82850717";
+}
+
+// SIO-XXXX: live-verified against project 82850717 that a bare "Dependency Dashboard"
+// search is too generic -- five issues match as a substring (iid 6/8/9: stale/superseded
+// issues literally titled "Dependency Dashboard"; iid 10: "Terraform Dependency Dashboard",
+// a different dashboard for Terraform provider updates). This is the exact title of the
+// ONE dashboard this sub-flow targets, whose body carries the `unschedule-branch=` marker
+// lines parseRenovateDashboardEntries parses. Passed as a plain string param to
+// gitlab_search (not a URL), so no URL-encoding here.
+export const RENOVATE_DASHBOARD_TITLE = "Elastic Fleet & Agent Dependency Dashboard";
+
+// Discovers the Dependency Dashboard issue by title (never hardcoded -- its iid has
+// already changed once when the title changed, per the original handover), fetches its
+// description via the native gitlab_get_issue proxy tool, and resolves the extracted
+// {deployment, integration} target to a live marker. Exactly one match -> renovateMarker
+// set, proceeds to the approval gate. 0 or 2+ matches -> renovateCandidates set (possibly
+// empty), the turn ends with a disambiguation/no-match message (routed by
+// hasSingleRenovateMatch in graph.ts).
+export async function resolveRenovateMarker(state: IacStateType): Promise<Partial<IacStateType>> {
+	const target = state.renovateTarget;
+	if (!target) return { renovateCandidates: [] };
+
+	const projectId = renovateProjectId();
+	// gitlab_search's project_id accepts a numeric id or URL-encoded path (verified live
+	// against the native tool's schema); scope "work_items" covers issues.
+	const searchRes = await callGitlabProxyTool("gitlab_search", {
+		scope: "work_items",
+		search: RENOVATE_DASHBOARD_TITLE,
+		project_id: projectId,
+	});
+	const issueIid = parseFirstIssueIid(searchRes);
+	if (issueIid === null) {
+		return {
+			renovateCandidates: [],
+			messages: [new AIMessage("I couldn't find the Dependency Dashboard issue to check for pending updates.")],
+		};
+	}
+
+	// gitlab_get_issue requires BOTH `id` (project) and `issue_iid` (verified live against
+	// the native tool's schema -- issue_iid alone is not sufficient, a common mistake when
+	// assuming the elastic-iac-mcp tool shapes, which resolve project server-side).
+	const issueRes = await callGitlabProxyTool("gitlab_get_issue", { id: projectId, issue_iid: issueIid });
+	const description = parseIssueDescription(issueRes);
+	const entries = parseRenovateDashboardEntries(description);
+	const candidates = filterDashboardMatches(entries, target.deployment, target.integration);
+
+	if (candidates.length === 1) {
+		return { renovateIssueIid: issueIid, renovateMarker: candidates[0], renovateCandidates: candidates };
+	}
+	if (candidates.length === 0) {
+		return {
+			renovateCandidates: [],
+			messages: [
+				new AIMessage(
+					`No pending Renovate update found for '${target.integration}' on '${target.deployment}'. It may already be up to date, or the name may not match — check the Dependency Dashboard.`,
+				),
+			],
+		};
+	}
+	return {
+		renovateCandidates: candidates,
+		messages: [
+			new AIMessage(
+				`Multiple pending updates match '${target.integration}' on '${target.deployment}': ${candidates.map((c) => c.marker).join(", ")}. Be more specific.`,
+			),
+		],
+	};
+}
+
+// (Pure; unit-tested.)
+export function buildRenovateGateMessage(marker: { marker: string; line: string }): string {
+	const cleanLine = marker.line.replace(/^\s*-\s*\[[ x]\]\s*<!--.*?-->\s*/, "").trim();
+	return `This will tick '${marker.marker}' (${cleanLine || marker.line.trim()}) and trigger an off-schedule Renovate run. Proceed?`;
+}
+
+// Single operator approve/decline interrupt, matching fleetUpgradeGate's role
+// (see fleetUpgradeGate) exactly. Only reached when hasSingleRenovateMatch routed here.
+export function renovateTriggerGate(state: IacStateType): Partial<IacStateType> {
+	const marker = state.renovateMarker;
+	if (!marker) return { renovateTriggerApproved: false };
+	const choice = interrupt({
+		type: "renovate_trigger_choice",
+		marker: marker.marker,
+		line: marker.line,
+		message: buildRenovateGateMessage(marker),
+	}) as { approve?: boolean };
+	const approved = choice?.approve === true;
+	// SIO-1471: a decline previously set no message at all -- teardownIac has no
+	// renovate-specific fallback (see its own SIO-1471 branch below), so a declined
+	// turn rendered nothing. Set the terminal message here, matching every other
+	// terminal node in this sub-flow (resolveRenovateMarker / watchRenovateMr).
+	if (!approved) {
+		return {
+			renovateTriggerApproved: false,
+			messages: [new AIMessage(`Declined. '${marker.marker}' was not triggered.`)],
+		};
+	}
+	return { renovateTriggerApproved: true };
+}
+
+// Calls the two SIO-1470 tools in sequence: tick the checkbox, then play the schedule.
+// A schedule-triggered Renovate run only ever creates branches/MRs -- apply:* stays
+// when: manual -- so this cannot deploy anything.
+export async function triggerRenovateUpdate(state: IacStateType): Promise<Partial<IacStateType>> {
+	const marker = state.renovateMarker;
+	const issueIid = state.renovateIssueIid;
+	if (!marker || issueIid === null) {
+		return {
+			blockedReason: "No resolved Renovate marker to trigger.",
+			messages: [new AIMessage("Cannot trigger the update: no resolved dashboard entry.")],
+		};
+	}
+
+	// Greptile round 2 (PR #663): captured HERE, immediately before this run's first real
+	// GitLab write -- watchRenovateMr uses this as the freshness cutoff so a stale MR left
+	// open from an earlier trigger on the same reused branch is never mistaken for this
+	// run's result.
+	const triggerAtIso = new Date().toISOString();
+
+	const tickRes = await callTool("gitlab_unschedule_renovate_branches", {
+		issueIid,
+		markers: [marker.marker],
+	});
+	if (!isGitlabSuccess(tickRes)) {
+		return {
+			blockedReason: `Could not tick the dashboard checkbox: ${tickRes.slice(0, 120)}.`,
+			messages: [new AIMessage("Cannot trigger the update: ticking the Dependency Dashboard checkbox failed.")],
+		};
+	}
+
+	const playRes = await callTool("gitlab_play_pipeline_schedule", { descriptionContains: "Renovate" });
+	if (!isGitlabSuccess(playRes)) {
+		// Greptile round 2 (PR #663): the checkbox tick above already succeeded, so the
+		// dashboard now shows this entry as checked -- resolveRenovateMarker's unchecked-only
+		// filter (added in round 1, to stop re-triggering an entry Renovate already processed)
+		// means a plain retry of this SAME request would find zero candidates, even though
+		// Renovate never actually ran. Not auto-unsticking the checkbox here (racing an
+		// in-flight Renovate run that DID start processing it is worse than a clear message) --
+		// tell the operator exactly what state this left GitLab in and how to recover.
+		return {
+			blockedReason: `Could not play the Renovate schedule: ${playRes.slice(0, 120)}.`,
+			messages: [
+				new AIMessage(
+					`Ticked the dashboard checkbox for '${marker.marker}', but playing the Renovate schedule failed, so ` +
+						"the run never actually happened. The checkbox is now checked in GitLab, so re-asking for this " +
+						'same update won\'t find it as pending -- play the "Renovate" pipeline schedule directly in ' +
+						"GitLab (CI/CD -> Schedules), or untick the checkbox first and ask again.",
+				),
+			],
+		};
+	}
+
+	// CodeRabbit (PR #663): emit AFTER both calls succeed, not before -- a failure on
+	// either call above now returns early without ever showing "triggered", so the UI
+	// never claims success ahead of the real outcome.
+	await dispatchCustomEvent("iac_pipeline_progress", { pipelineId: null, status: "renovate: triggered" });
+
+	return { renovateTriggerAtIso: triggerAtIso };
+}
+
+// gitlab_list_merge_requests_by_source_branch returns a raw GitLab MR array, newest
+// first; only the first entry's web_url is needed to report the Renovate-created MR.
+// This tool is gitlabFetch-backed (packages/mcp-server-elastic-iac/src/tools/shared.ts),
+// so the real response is always prefixed with the HTTP status: `[${res.status}] ${text}`
+// -- same envelope parseNewestPipeline/parseLatestAgentMr already handle. (Pure; unit-tested.)
+// Greptile round 2 (PR #663): the branch name is versionless and reused across releases
+// (per the design's own "one open MR per branch" invariant), so an open MR found on it
+// could be a STALE one this trigger never actually touched -- e.g. this run's tick/play
+// silently no-op'd while an unrelated earlier open MR happened to still be open. An
+// optional `sinceIso` cutoff (the trigger timestamp, captured by the caller before firing
+// the tick/play calls) proves freshness: only an MR Renovate touched AT OR AFTER the
+// trigger is accepted as "created/updated by this run". Omitting it preserves the
+// original "first MR in the array" behavior (GitLab already orders newest-first).
+export function parseFirstOpenMrUrl(raw: string, sinceIso?: string): string | null {
+	// Skip the "[200] " status prefix: find the first "[" that opens the JSON array.
+	const m = raw.match(/\[\s*(?:\{|\])/);
+	if (!m || m.index === undefined) return null;
+	try {
+		const parsed = JSON.parse(raw.slice(m.index));
+		if (!Array.isArray(parsed)) return null;
+		const sinceMs = sinceIso ? Date.parse(sinceIso) : null;
+		for (const entry of parsed) {
+			const mr = entry as { web_url?: unknown; updated_at?: unknown };
+			if (typeof mr.web_url !== "string") continue;
+			if (sinceMs === null) return mr.web_url;
+			const updatedMs = typeof mr.updated_at === "string" ? Date.parse(mr.updated_at) : Number.NaN;
+			if (!Number.isNaN(updatedMs) && updatedMs >= sinceMs) return mr.web_url;
+		}
+		return null;
+	} catch {
+		return null;
+	}
+}
+
+// Bounded poll loop for the Renovate-created MR, reusing watchPipeline's exact shape
+// (same env-configurable interval/budget, same dispatchCustomEvent mid-loop emission)
+// but polling for MR EXISTENCE by source branch rather than an existing pipeline's
+// terminal status.
+export async function watchRenovateMr(state: IacStateType): Promise<Partial<IacStateType>> {
+	const marker = state.renovateMarker;
+	if (!marker) return {};
+
+	const budgetMs = readPositiveMsEnv("IAC_PIPELINE_POLL_BUDGET_MS", 90000, log);
+	const intervalMs = readPositiveMsEnv("IAC_PIPELINE_POLL_INTERVAL_MS", 10000, log);
+	const deadline = Date.now() + budgetMs;
+	const sourceBranch = marker.marker;
+	// Greptile round 2 (PR #663): require the found MR's updated_at to be at or after this
+	// run's own trigger instant, so a stale MR left open on the same reused branch from an
+	// earlier trigger is never reported as this run's result.
+	const sinceIso = state.renovateTriggerAtIso || undefined;
+
+	while (Date.now() < deadline) {
+		const listRes = await callTool("gitlab_list_merge_requests_by_source_branch", { sourceBranch });
+		const mrUrl = parseFirstOpenMrUrl(listRes, sinceIso);
+		if (mrUrl) {
+			await dispatchCustomEvent("iac_pipeline_progress", { pipelineId: null, status: "renovate: MR created" });
+			return {
+				renovateMrUrl: mrUrl,
+				messages: [new AIMessage(`Renovate opened the update MR: ${mrUrl}`)],
+			};
+		}
+		if (Date.now() + intervalMs >= deadline) break;
+		await new Promise((r) => setTimeout(r, intervalMs));
+	}
+
+	return {
+		messages: [
+			new AIMessage(
+				`Triggered the Renovate run for '${sourceBranch}', but no MR has appeared yet. Ask me to check again in a minute.`,
+			),
+		],
+	};
+}
+
 // SIO-1003: the instruction-string fragment listing the legal workflow values, e.g.
 // "'tier-resize'|'ilm-rollout'|...", built from the same WORKFLOW_VALUES (imported from state.ts) that
 // the zod enum uses -- so the planner instruction can never drift from what the parser accepts.
@@ -570,13 +971,26 @@ export function capabilityMessage(): string {
 // "fleet-upgrade", and "drift" are explicit; anything else defaults to "info". (Pure; unit-tested.)
 export function intentFromText(
 	raw: string,
-): "info" | "gitops" | "pipeline-status" | "drift" | "synthetics-drift" | "fleet-upgrade" | "converse" {
+):
+	| "info"
+	| "gitops"
+	| "pipeline-status"
+	| "drift"
+	| "synthetics-drift"
+	| "fleet-upgrade"
+	| "renovate-integration-update"
+	| "converse" {
 	const r = raw.toLowerCase();
 	if (r.includes("pipeline-status") || r.includes("pipeline_status")) return "pipeline-status";
 	// SIO-913: a Fleet agent BINARY upgrade (imperative bulk_upgrade) is distinct from a cluster
 	// version-upgrade config edit. The classifier emits "fleet-upgrade"; this also catches direct
 	// phrasings. Checked before synthetics/drift but it does not overlap their keywords.
 	if (r.includes("fleet-upgrade") || r.includes("fleet_upgrade") || r.includes("fleet upgrade")) return "fleet-upgrade";
+	// Renovate integration-package update, distinct from a Fleet agent binary upgrade above --
+	// checked first since "renovate-integration-update" also contains no fleet-upgrade keywords,
+	// but keeping it ordered alongside the fleet-upgrade branch it is most easily confused with.
+	if (r.includes("renovate-integration-update") || r.includes("renovate_integration_update"))
+		return "renovate-integration-update";
 	// SIO-902: synthetics drift must be checked BEFORE plain drift -- a synthetics request also
 	// contains "drift"/"reconcile" (e.g. "reconcile the synthetics monitors"), so "synthetic"
 	// has to win the tiebreak.
@@ -807,6 +1221,15 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 		"'upgrade the agents on X to 9.4.2', 'upgrade all Elastic agents for X', 'bulk-upgrade fleet agents'. This is an " +
 		"imperative Fleet bulk_upgrade (NOT Terraform, NOT a cluster version change). The tell is the words 'agent(s)' " +
 		"or 'fleet' being what is upgraded.\n" +
+		"- 'renovate-integration-update': a request to update a Fleet INTEGRATION PACKAGE (e.g. prometheus, " +
+		"cisco_ftd, system, a specific Elastic Agent integration) to its latest available version on a deployment -- " +
+		"'update prometheus on eu-b2b', 'bump the cisco_ftd integration for ap-cld', 'get the latest system integration " +
+		"on us-cld', 'update the fleet-server integration'. This is the DEFAULT classification for ANY integration-" +
+		"package update request, whether or not the user names a target version -- Fleet integrations only ever " +
+		"install the latest registry version, so naming an explicit version does not change the classification. This " +
+		"is NOT a deployment/cluster version change (that's 'gitops') and NOT a Fleet AGENT BINARY upgrade (that's " +
+		"'fleet-upgrade'). The tell: the thing being updated is a named integration/package the deployment ingests " +
+		"data through, not the cluster itself or the enrolled agents.\n" +
 		"- 'drift': a request to DETECT or RECONCILE Terraform configuration drift for a deployment -- 'check X for drift', " +
 		"'what has drifted', 'reconcile X with live', 'compare the repo with the live cluster', 'show drift by stack'. " +
 		"This audits ALL Terraform stacks of one deployment and offers a per-stack reconcile choice.\n" +
@@ -825,7 +1248,8 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 		"request to change infrastructure. Examples: 'why was that wrong?', 'explain that', 'what would you " +
 		"change about that policy?', 'I don't think that config is complete'. If the user instead asks for a " +
 		"NEW change (even right after a proposal), that is 'gitops', not 'converse'.\n" +
-		"Reply with ONLY one word: 'info', 'gitops', 'fleet-upgrade', 'drift', 'synthetics-drift', 'pipeline-status', or 'converse'. " +
+		"Reply with ONLY one word: 'info', 'gitops', 'fleet-upgrade', 'renovate-integration-update', 'drift', " +
+		"'synthetics-drift', 'pipeline-status', or 'converse'. " +
 		"If the user asks for a recommendation or 'should I…' that implies a single change, answer 'gitops'.";
 	// SIO-981: pass recent history (not just the latest line) so the LLM can recognise a follow-up
 	// against the prior proposal it refers to. On a first turn this is just the one human message.
@@ -863,6 +1287,24 @@ export const TURN_START_RESET = {
 	editDrift: null,
 	stackDriftAdvisory: "",
 	selectedKnowledge: null,
+	// Greptile (PR #663): the renovate-integration-update sub-flow's 6 fields are
+	// checkpointed state -- without this reset, a declined gate (renovateTriggerApproved:
+	// false) or a resolved marker/candidates from one turn leaks into a LATER, unrelated
+	// turn on the same thread. iacTurnOutcome's declined-check reads these fields without
+	// also checking state.intent, so a stale false approval would misreport an unrelated
+	// turn as "declined".
+	renovateTarget: null,
+	// The object's `as const` makes a bare `[]` a readonly tuple, incompatible with the
+	// state annotation's mutable `Array<{marker,line}>` type -- the first array-typed field
+	// added to this object. Cast the empty array itself rather than dropping `as const` from
+	// the whole object (every sibling primitive/null field still benefits from the narrower
+	// literal types `as const` gives).
+	renovateCandidates: [] as Array<{ marker: string; line: string }>,
+	renovateMarker: null,
+	renovateTriggerApproved: null,
+	renovateIssueIid: null,
+	renovateMrUrl: "",
+	renovateTriggerAtIso: "",
 } as const;
 
 // (context the turn's response weaves in), once per session, best-effort, never blocking.
@@ -7662,6 +8104,7 @@ export function iacTurnOutcome(state: IacStateType): IacTurnOutcome {
 	if (state.reviewDecision === "rejected") return "rejected";
 	if (state.syntheticsPushApproved === false && state.syntheticsDriftReport) return "declined";
 	if (state.fleetUpgradeApproved === false && state.fleetUpgradeReport) return "declined";
+	if (state.renovateTriggerApproved === false && state.renovateMarker) return "declined";
 	// SIO-1020: a no-op is not a failure -- the requested config already matches current state. It
 	// renders as a neutral "No change needed", distinct from an amber "Blocked" guard rejection.
 	if (state.noopReason) return "no-op";
@@ -10469,6 +10912,15 @@ export async function teardownIac(state: IacStateType): Promise<Partial<IacState
 					state.reviewDecision === "rejected" ? "rejected" : state.mrUrl ? `MR=${state.mrUrl}` : "",
 					state.pipelineStatus && state.pipelineStatus !== "unknown" ? `pipeline=${state.pipelineStatus}` : "",
 				].filter((p) => p.length > 0);
+		// SIO-1471: the renovate-integration-update sub-flow never sets state.mrUrl (it opens
+		// no MR of its own -- Renovate does), so the generic branch above produces a contentless
+		// "intent=renovate-integration-update" breadcrumb. Add the resolved marker + the
+		// Renovate-created MR link (when watchRenovateMr found one) so the durable-memory
+		// breadcrumb for this intent is actually recallable.
+		if (state.intent === "renovate-integration-update") {
+			if (state.renovateMarker) summaryParts.push(`marker=${state.renovateMarker.marker}`);
+			if (state.renovateMrUrl) summaryParts.push(`MR=${state.renovateMrUrl}`);
+		}
 		const services = cluster ? [cluster] : isFleet && state.targetDeployment ? [state.targetDeployment] : [];
 		appendDailyLog({
 			requestId: state.requestId,
@@ -10561,6 +11013,17 @@ export async function teardownIac(state: IacStateType): Promise<Partial<IacState
 	// SIO-882: the drift flow renders its own per-stack reconcile summary.
 	if (state.intent === "drift") {
 		return { messages: [new AIMessage(formatDriftSummary(state))] };
+	}
+	// SIO-1471: the renovate-integration-update sub-flow's own nodes (resolveRenovateMarker /
+	// renovateTriggerGate / watchRenovateMr) already set the terminal message on state.messages
+	// at whichever point the turn ended -- no summary to build here, and the generic
+	// gitops-flavored fallback below would be misleading (it assumes an MR-authoring flow this
+	// intent never enters: state.mrUrl is never set by this sub-flow, so the fallback's
+	// `state.mrUrl ? ... : "MR step complete."` check always hit the no-MR branch). The user
+	// reaches the MR link only via watchRenovateMr's own AIMessage; state.renovateMrUrl's only
+	// consumer is the durable-memory breadcrumb built earlier in this same function.
+	if (state.intent === "renovate-integration-update") {
+		return {};
 	}
 	if (state.reviewDecision === "rejected") {
 		return { messages: [new AIMessage("Plan rejected. No MR opened. Nothing was applied.")] };

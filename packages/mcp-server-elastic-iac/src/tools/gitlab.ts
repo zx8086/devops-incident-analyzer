@@ -78,6 +78,11 @@ export function flipCommitAction(action: "create" | "update", response: string):
 	return null;
 }
 
+// Shared by tickDashboardCheckboxes and parseDashboardEntries: matches a Dependency
+// Dashboard checkbox line and captures [1]="- [ or - [x] prefix-with-bracket-open",
+// [2]=full HTML comment span, [3]=the marker itself.
+const DASHBOARD_CHECKBOX_LINE_RE = /^(\s*-\s*\[)[ x]\](\s*<!--\s*unschedule-branch=(.*?)\s*-->)/;
+
 // Renovate on-demand MR automation: flip "- [ ]" to "- [x]" on Dependency Dashboard
 // lines whose unschedule-branch=<marker> HTML comment exactly matches one of the
 // requested markers. The board is fully regenerated every Renovate run, so matching
@@ -95,6 +100,24 @@ export function tickDashboardCheckboxes(description: string, markers: string[]):
 			return line.replace(`${match[1]} ]`, `${match[1]}x]`);
 		})
 		.join("\n");
+}
+
+// Parses the Dependency Dashboard issue body into {marker, line} pairs, one per
+// checkbox line carrying an unschedule-branch=<marker> HTML comment (checked or
+// unchecked -- marker extraction is independent of checkbox state). Used to resolve a
+// free-text deployment+integration name to the live marker string before calling
+// gitlab_unschedule_renovate_branches -- never construct/guess a marker, always match
+// against what the board actually contains this run. Lines with no marker comment
+// (e.g. the create-all-awaiting-schedule-prs bulk-trigger line) are skipped.
+// (Pure; unit-tested.)
+export function parseDashboardEntries(description: string): Array<{ marker: string; line: string }> {
+	const entries: Array<{ marker: string; line: string }> = [];
+	for (const line of description.split("\n")) {
+		const match = line.match(DASHBOARD_CHECKBOX_LINE_RE);
+		const marker = match?.[3];
+		if (marker !== undefined) entries.push({ marker, line });
+	}
+	return entries;
 }
 
 // The repo's tf-report.jq shape (artifacts.reports.terraform): create/update/delete
@@ -1628,6 +1651,41 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 					gitlabBaseUrl,
 					token,
 					`/projects/${project}/merge_requests?labels=agent-generated&state=opened&order_by=created_at&sort=desc&per_page=10`,
+				),
+			),
+	);
+
+	// Renovate on-demand MR automation: gitlab_list_agent_merge_requests is hardcoded to
+	// labels=agent-generated (gitlab_create_merge_request's own default label set) -- a
+	// Renovate-authored MR never carries that label, so watchRenovateMr needs its own
+	// lookup by exact source branch. Greptile/CodeRabbit (PR #663): the branch name carries
+	// no version, so a stale merged/closed MR from a PRIOR release on the same branch would
+	// otherwise be indistinguishable from a freshly-created one -- state=opened scopes this
+	// to a genuinely new, unmerged MR. Read-only.
+	server.registerTool(
+		"gitlab_list_merge_requests_by_source_branch",
+		{
+			description:
+				"List OPEN merge requests by exact source branch name, newest first. Used to detect a " +
+				"Renovate-created MR after gitlab_play_pipeline_schedule triggers a run (Renovate MRs are not " +
+				"labeled agent-generated, so gitlab_list_agent_merge_requests cannot find them). Scoped to " +
+				"state=opened so a stale merged/closed MR from a prior release on the same branch is never " +
+				"mistaken for a freshly-created one. Read-only.",
+			inputSchema: {
+				sourceBranch: z
+					.string()
+					.trim()
+					.min(1, "Source branch is required.")
+					.describe("Exact source branch name, e.g. 'renovate/eu-b2b-prometheus'."),
+			},
+			annotations: iacToolAnnotations("gitlab_list_merge_requests_by_source_branch"),
+		},
+		async ({ sourceBranch }) =>
+			text(
+				await gitlabFetch(
+					gitlabBaseUrl,
+					token,
+					`/projects/${project}/merge_requests?source_branch=${encodeURIComponent(sourceBranch)}&state=opened&order_by=created_at&sort=desc&per_page=5`,
 				),
 			),
 	);

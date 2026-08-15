@@ -329,6 +329,46 @@ describe("emitIacInterrupt fleet_upgrade_choice", () => {
 	});
 });
 
+// SIO-XXXX: renovateTriggerGate's interrupt was never translated by emitIacInterrupt, so the
+// approve/decline gate for the renovate-integration-update sub-flow rendered nothing.
+describe("emitIacInterrupt renovate_trigger_choice", () => {
+	test("translates the gate interrupt into a renovate_trigger_choice SSE event", () => {
+		const sent: Array<Record<string, unknown>> = [];
+		const handled = emitIacInterrupt((e) => sent.push(e as Record<string, unknown>), "t-renovate", {
+			type: "renovate_trigger_choice",
+			marker: "renovate/elasticsearch-9.x",
+			line: " - [ ] <!-- unschedule-branch=renovate/elasticsearch-9.x -->chore(deps): elasticsearch to v9.x",
+			message: "Trigger the elasticsearch-9.x Renovate update?",
+		});
+		expect(handled).toBe(true);
+		expect(sent).toHaveLength(1);
+		expect(sent[0]).toMatchObject({
+			type: "renovate_trigger_choice",
+			threadId: "t-renovate",
+			marker: "renovate/elasticsearch-9.x",
+			line: " - [ ] <!-- unschedule-branch=renovate/elasticsearch-9.x -->chore(deps): elasticsearch to v9.x",
+			message: "Trigger the elasticsearch-9.x Renovate update?",
+		});
+	});
+
+	test("defaults marker/line/message when malformed", () => {
+		const sent: Array<Record<string, unknown>> = [];
+		const handled = emitIacInterrupt((e) => sent.push(e as Record<string, unknown>), "t-renovate", {
+			type: "renovate_trigger_choice",
+			marker: 42,
+			line: null,
+		});
+		expect(handled).toBe(true);
+		expect(sent[0]).toMatchObject({
+			type: "renovate_trigger_choice",
+			threadId: "t-renovate",
+			marker: "",
+			line: "",
+			message: "Trigger this Renovate update?",
+		});
+	});
+});
+
 // SIO-1126: the HIL learning lane's two interrupt payloads translate to SSE
 // events; the pump flags learn turns so the handlers read the final AIMessage
 // from state (the lane streams no output node).

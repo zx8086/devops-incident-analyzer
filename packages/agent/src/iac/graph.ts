@@ -26,10 +26,12 @@ import {
 	detectSyntheticsDrift,
 	draftChange,
 	explainDrift,
+	extractRenovateTarget,
 	fleetUpgradeGate,
 	guardNode,
 	hasApplicableFleetUpgrade,
 	hasPushableSyntheticsDrift,
+	hasSingleRenovateMatch,
 	openMr,
 	parseIntent,
 	planReviewGate,
@@ -37,10 +39,14 @@ import {
 	readClusterState,
 	reconcileGate,
 	reconcileStack,
+	renovateTriggerGate,
+	resolveRenovateMarker,
 	reviewPlan,
 	syntheticsPushGate,
 	teardownIac,
+	triggerRenovateUpdate,
 	watchPipeline,
+	watchRenovateMr,
 } from "./nodes.ts";
 import { IacState } from "./state.ts";
 
@@ -102,20 +108,23 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 				? "amendChange"
 				: s.intent === "fleet-upgrade"
 					? "detectFleetUpgrade"
-					: s.intent === "synthetics-drift"
-						? "detectSyntheticsDrift"
-						: s.intent === "drift"
-							? "detectDrift"
-							: s.intent === "pipeline-status"
-								? "watchPipeline"
-								: s.intent === "converse"
-									? "converseIac"
-									: "answerInfo";
+					: s.intent === "renovate-integration-update"
+						? "extractRenovateTarget"
+						: s.intent === "synthetics-drift"
+							? "detectSyntheticsDrift"
+							: s.intent === "drift"
+								? "detectDrift"
+								: s.intent === "pipeline-status"
+									? "watchPipeline"
+									: s.intent === "converse"
+										? "converseIac"
+										: "answerInfo";
 	// `as const` keeps these as literal node names rather than widening to string[].
 	const INTENT_TARGETS = [
 		"parseIntent",
 		"amendChange",
 		"detectFleetUpgrade",
+		"extractRenovateTarget",
 		"detectSyntheticsDrift",
 		"detectDrift",
 		"answerInfo",
@@ -163,6 +172,17 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		.addNode("detectFleetUpgrade", detectFleetUpgrade)
 		.addNode("fleetUpgradeGate", fleetUpgradeGate)
 		.addNode("applyFleetUpgrade", applyFleetUpgrade)
+		// Renovate on-demand MR automation sub-flow. extractRenovateTarget parses the
+		// {deployment, integration} pair; resolveRenovateMarker discovers the Dependency
+		// Dashboard issue and matches it to a live marker (0/2+ matches end the turn with
+		// a message, no gate); renovateTriggerGate holds the single operator approve/
+		// decline interrupt; triggerRenovateUpdate ticks the checkbox + plays the
+		// schedule; watchRenovateMr polls for the resulting MR.
+		.addNode("extractRenovateTarget", extractRenovateTarget)
+		.addNode("resolveRenovateMarker", resolveRenovateMarker)
+		.addNode("renovateTriggerGate", renovateTriggerGate)
+		.addNode("triggerRenovateUpdate", triggerRenovateUpdate)
+		.addNode("watchRenovateMr", watchRenovateMr)
 		// SIO-954: KG read/write nodes (registered always; reached only when enabled).
 		.addNode("graphEnrichIac", graphEnrichIac)
 		// SIO-970: agent-memory recall node (registered always; reached only when the
@@ -307,6 +327,30 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 			"teardown",
 		])
 		.addEdge("applyFleetUpgrade", "teardown")
+		// extractRenovateTarget can block (clarify) before resolving -- blockedReason -> END.
+		.addConditionalEdges("extractRenovateTarget", (s) => (s.blockedReason ? END : "resolveRenovateMarker"), [
+			"resolveRenovateMarker",
+			END,
+		])
+		// Exactly one dashboard match -> the approval gate; 0 or 2+ -> teardown (the
+		// disambiguation/no-match message is already set on state.messages).
+		.addConditionalEdges(
+			"resolveRenovateMarker",
+			(s) => (hasSingleRenovateMatch(s.renovateCandidates) ? "renovateTriggerGate" : "teardown"),
+			["renovateTriggerGate", "teardown"],
+		)
+		// Operator approval routes to the trigger or to teardown (declined).
+		.addConditionalEdges(
+			"renovateTriggerGate",
+			(s) => (s.renovateTriggerApproved ? "triggerRenovateUpdate" : "teardown"),
+			["triggerRenovateUpdate", "teardown"],
+		)
+		// triggerRenovateUpdate can block (a tick/play API failure) before watching -- blockedReason -> teardown.
+		.addConditionalEdges("triggerRenovateUpdate", (s) => (s.blockedReason ? "teardown" : "watchRenovateMr"), [
+			"watchRenovateMr",
+			"teardown",
+		])
+		.addEdge("watchRenovateMr", "teardown")
 		.addEdge("teardown", END);
 
 	const checkpointer = createCheckpointer(config?.checkpointerType ?? "memory");
