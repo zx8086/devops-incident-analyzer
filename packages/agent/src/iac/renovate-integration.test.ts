@@ -1,6 +1,6 @@
 // agent/src/iac/renovate-integration.test.ts
 import { describe, expect, test } from "bun:test";
-import { buildRenovateGateMessage, parseRenovateTargetJson } from "./nodes.ts";
+import { buildRenovateGateMessage, parseFirstOpenMrUrl, parseRenovateTargetJson } from "./nodes.ts";
 
 describe("buildRenovateGateMessage", () => {
 	test("names the exact marker and describes the trigger", () => {
@@ -143,5 +143,22 @@ describe("parseIssueDescription", () => {
 
 	test("empty string on malformed JSON", () => {
 		expect(parseIssueDescription("not json")).toBe("");
+	});
+});
+
+// gitlab_list_merge_requests_by_source_branch response shape: a raw GitLab merge-request
+// array (newest first), same envelope watchPipeline's other parsers already handle.
+describe("parseFirstOpenMrUrl", () => {
+	test("returns the web_url of the first MR in the array", () => {
+		const raw = JSON.stringify([{ iid: 42, web_url: "https://gitlab.example/x/-/merge_requests/42", state: "opened" }]);
+		expect(parseFirstOpenMrUrl(raw)).toBe("https://gitlab.example/x/-/merge_requests/42");
+	});
+
+	test("null on an empty array", () => {
+		expect(parseFirstOpenMrUrl("[]")).toBeNull();
+	});
+
+	test("null on malformed/error response", () => {
+		expect(parseFirstOpenMrUrl("[404] not found")).toBeNull();
 	});
 });

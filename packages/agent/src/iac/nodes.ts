@@ -432,6 +432,56 @@ export async function triggerRenovateUpdate(state: IacStateType): Promise<Partia
 	return {};
 }
 
+// gitlab_list_merge_requests_by_source_branch returns a raw GitLab MR array, newest
+// first; only the first entry's web_url is needed to report the Renovate-created MR.
+// (Pure; unit-tested.)
+export function parseFirstOpenMrUrl(raw: string): string | null {
+	try {
+		const parsed = JSON.parse(raw);
+		if (!Array.isArray(parsed) || parsed.length === 0) return null;
+		const first = parsed[0] as { web_url?: unknown };
+		return typeof first.web_url === "string" ? first.web_url : null;
+	} catch {
+		return null;
+	}
+}
+
+// Bounded poll loop for the Renovate-created MR, reusing watchPipeline's exact shape
+// (same env-configurable interval/budget, same dispatchCustomEvent mid-loop emission)
+// but polling for MR EXISTENCE by source branch rather than an existing pipeline's
+// terminal status.
+export async function watchRenovateMr(state: IacStateType): Promise<Partial<IacStateType>> {
+	const marker = state.renovateMarker;
+	if (!marker) return {};
+
+	const budgetMs = readPositiveMsEnv("IAC_PIPELINE_POLL_BUDGET_MS", 90000, log);
+	const intervalMs = readPositiveMsEnv("IAC_PIPELINE_POLL_INTERVAL_MS", 10000, log);
+	const deadline = Date.now() + budgetMs;
+	const sourceBranch = marker.marker;
+
+	while (Date.now() < deadline) {
+		const listRes = await callTool("gitlab_list_merge_requests_by_source_branch", { sourceBranch });
+		const mrUrl = parseFirstOpenMrUrl(listRes);
+		if (mrUrl) {
+			await dispatchCustomEvent("iac_pipeline_progress", { pipelineId: null, status: "renovate: MR created" });
+			return {
+				renovateMrUrl: mrUrl,
+				messages: [new AIMessage(`Renovate opened the update MR: ${mrUrl}`)],
+			};
+		}
+		if (Date.now() + intervalMs >= deadline) break;
+		await new Promise((r) => setTimeout(r, intervalMs));
+	}
+
+	return {
+		messages: [
+			new AIMessage(
+				`Triggered the Renovate run for '${sourceBranch}', but no MR has appeared yet. Ask me to check again in a minute.`,
+			),
+		],
+	};
+}
+
 // SIO-1003: the instruction-string fragment listing the legal workflow values, e.g.
 // "'tier-resize'|'ilm-rollout'|...", built from the same WORKFLOW_VALUES (imported from state.ts) that
 // the zod enum uses -- so the planner instruction can never drift from what the parser accepts.
