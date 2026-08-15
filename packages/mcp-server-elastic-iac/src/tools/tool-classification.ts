@@ -48,6 +48,7 @@ const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 	"gitlab_get_fleet_upgrade_preview_result",
 	"gitlab_get_fleet_upgrade_apply_result",
 	"gitlab_list_agent_merge_requests",
+	"gitlab_list_merge_requests_by_source_branch",
 ]);
 
 // Every write POSTs to GitLab: repo mutations (branch/commit/MR) or pipeline

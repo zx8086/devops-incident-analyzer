@@ -1654,4 +1654,30 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 				),
 			),
 	);
+
+	// Renovate on-demand MR automation: gitlab_list_agent_merge_requests is hardcoded to
+	// labels=agent-generated (gitlab_create_merge_request's own default label set) -- a
+	// Renovate-authored MR never carries that label, so watchRenovateMr needs its own
+	// lookup by exact source branch. Read-only.
+	server.registerTool(
+		"gitlab_list_merge_requests_by_source_branch",
+		{
+			description:
+				"List merge requests by exact source branch name, any state, newest first. Used to detect a " +
+				"Renovate-created MR after gitlab_play_pipeline_schedule triggers a run (Renovate MRs are not " +
+				"labeled agent-generated, so gitlab_list_agent_merge_requests cannot find them). Read-only.",
+			inputSchema: {
+				sourceBranch: z.string().describe("Exact source branch name, e.g. 'renovate/eu-b2b-prometheus'."),
+			},
+			annotations: iacToolAnnotations("gitlab_list_merge_requests_by_source_branch"),
+		},
+		async ({ sourceBranch }) =>
+			text(
+				await gitlabFetch(
+					gitlabBaseUrl,
+					token,
+					`/projects/${project}/merge_requests?source_branch=${encodeURIComponent(sourceBranch)}&order_by=created_at&sort=desc&per_page=5`,
+				),
+			),
+	);
 }
