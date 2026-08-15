@@ -203,7 +203,7 @@
 		}
 	},
 	"gitlab_play_pipeline_schedule": {
-		"surfaceHash": "9ce369547ab43c6fae002bb60da49d8c78f6a02e6508cf87d2fa32cefa40f1f4",
+		"surfaceHash": "eb1accc060ba50cf1c7825a2e7681dd1bfb9170bfb2d182445a39900d469cb60",
 		"annotations": {
 			"readOnlyHint": false,
 			"destructiveHint": false
@@ -245,7 +245,7 @@
 		}
 	},
 	"gitlab_unschedule_renovate_branches": {
-		"surfaceHash": "65544c97e6e4ce1cb51883ef4d2222f6b59ae2bc346f34ff4084417928426c4b",
+		"surfaceHash": "01b6ed23fb89fd73f0a8201ec79d09c8b44b6e8fb6ea6dc8816d8821f220f3cd",
 		"annotations": {
 			"readOnlyHint": false,
 			"destructiveHint": false

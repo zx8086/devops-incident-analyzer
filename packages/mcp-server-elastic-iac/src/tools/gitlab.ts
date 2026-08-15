@@ -212,6 +212,7 @@ export function findPipelineScheduleId(schedulesJson: unknown, descriptionContai
 	if (!Array.isArray(schedulesJson)) return null;
 	const needle = descriptionContains.toLowerCase();
 	for (const s of schedulesJson) {
+		if (s === null || typeof s !== "object") continue;
 		const { id, description } = s as { id?: unknown; description?: unknown };
 		if (typeof id === "number" && typeof description === "string" && description.toLowerCase().includes(needle)) {
 			return id;
@@ -521,11 +522,14 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 	);
 
 	// Renovate on-demand MR automation: the Dependency Dashboard issue is regenerated every
-	// Renovate run, so a checkbox toggle must be read-modify-write against the CURRENT
-	// description (never a caller-supplied stale copy) to avoid clobbering a concurrent
-	// Renovate run's edits. Ticking a checkbox is the documented trigger -- the next
-	// scheduled/played run creates the branch + MR and unchecks it. Write, not destructive
-	// (additive edit to an issue body).
+	// Renovate run, so a checkbox toggle reads the CURRENT description (never a caller-supplied
+	// stale copy) to minimize the window for a lost update. This is best-effort, NOT atomic --
+	// GitLab's Issues API has no ETag/If-Match conditional-update support, so a Renovate run that
+	// regenerates the dashboard between this GET and PUT can still overwrite it; a dropped tick is
+	// recoverable by re-calling this tool, so no locking is implemented for what is a low-frequency,
+	// low-consequence race. Ticking a checkbox is the documented trigger -- the next scheduled/played
+	// run creates the branch + MR and unchecks it. Write, not destructive (additive edit to an issue
+	// body).
 	server.registerTool(
 		"gitlab_unschedule_renovate_branches",
 		{
@@ -534,7 +538,9 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 				"branches. Reads the issue fresh, flips each '- [ ]' line whose 'unschedule-branch=<marker>' HTML " +
 				"comment exactly matches one of the given markers to '- [x]', and writes the updated description " +
 				"back. Matches on the marker, never line position (the board is fully regenerated each Renovate " +
-				"run). Ticking alone does not create MRs -- follow with gitlab_play_pipeline_schedule.",
+				"run). Best-effort, not atomic: GitLab has no conditional-update support, so a Renovate run that " +
+				"regenerates the dashboard between the read and write can still overwrite this tick -- re-run on " +
+				"suspected loss. Ticking alone does not create MRs -- follow with gitlab_play_pipeline_schedule.",
 			inputSchema: {
 				issueIid: z.number().describe("The Dependency Dashboard issue's IID."),
 				markers: z
@@ -570,12 +576,18 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 				"trigger an off-schedule Renovate run after gitlab_unschedule_renovate_branches ticks the desired " +
 				"checkboxes. A schedule-triggered Renovate run only creates branches/MRs -- it cannot deploy.",
 			inputSchema: {
-				descriptionContains: z.string().describe("Case-insensitive substring to match against schedule descriptions."),
+				descriptionContains: z
+					.string()
+					.trim()
+					.min(1, "Schedule description filter is required (an empty filter would match every schedule).")
+					.describe("Case-insensitive substring to match against schedule descriptions."),
 			},
 			annotations: iacToolAnnotations("gitlab_play_pipeline_schedule"),
 		},
 		async ({ descriptionContains }) => {
-			const schedules = await glJson(`/projects/${project}/pipeline_schedules`);
+			// per_page=100: GitLab defaults to 20/page, which would silently miss a match past
+			// page 1 on a project with many schedules. 100 is GitLab's max per_page.
+			const schedules = await glJson(`/projects/${project}/pipeline_schedules?per_page=100`);
 			const scheduleId = findPipelineScheduleId(schedules, descriptionContains);
 			if (scheduleId === null) {
 				return text(`[404] no pipeline schedule found with description containing "${descriptionContains}"`);

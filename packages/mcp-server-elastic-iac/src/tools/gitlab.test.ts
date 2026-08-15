@@ -402,4 +402,21 @@ describe("findPipelineScheduleId", () => {
 		const schedules = [{ id: 4385002, description: "RENOVATE weekly run" }];
 		expect(findPipelineScheduleId(schedules, "renovate")).toBe(4385002);
 	});
+
+	// CodeRabbit-flagged (live-verified with a throw repro): a malformed entry must be
+	// skipped, not crash the whole scan -- a later valid match should still be found.
+	test("skips null/undefined/malformed entries and still finds a later valid match", () => {
+		const schedules = [
+			null,
+			undefined,
+			{},
+			{ id: "4385002", description: 7 },
+			{ id: 4385002, description: "Renovate" },
+		];
+		expect(findPipelineScheduleId(schedules, "renovate")).toBe(4385002);
+	});
+
+	test("null when every entry is malformed", () => {
+		expect(findPipelineScheduleId([null, undefined, {}], "renovate")).toBeNull();
+	});
 });
