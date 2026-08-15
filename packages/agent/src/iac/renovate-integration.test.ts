@@ -1,6 +1,24 @@
 // agent/src/iac/renovate-integration.test.ts
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
+import { Command, END, MemorySaver, START, StateGraph } from "@langchain/langgraph";
+// SIO-1045: captured BEFORE any mock.module() call in this file runs, so afterEach can restore the
+// real implementations -- mock.module() is process-global and bun:test's mock.restore() does NOT
+// undo it (only resets spy call state), so without this the last mock.module(...) registered below
+// leaks into every OTHER test file that runs later in the same bun test process. Spreading into a
+// plain object at load time copies the function VALUES, immune to bun's later namespace live-patching
+// (see iac-change-memory.test.ts for the full rationale).
+import * as realMemoryBackendNs from "../memory-backend.ts";
+import * as realMemoryWriterNs from "../memory-writer.ts";
 import { buildRenovateGateMessage, parseFirstOpenMrUrl, parseRenovateTargetJson } from "./nodes.ts";
+import { IacState, type IacStateType } from "./state.ts";
+
+const realMemoryBackend = { ...realMemoryBackendNs };
+const realMemoryWriter = { ...realMemoryWriterNs };
+
+function restoreRealMemoryMocks(): void {
+	mock.module("../memory-backend.ts", () => realMemoryBackend);
+	mock.module("../memory-writer.ts", () => realMemoryWriter);
+}
 
 describe("buildRenovateGateMessage", () => {
 	test("names the exact marker and describes the trigger", () => {
@@ -10,6 +28,125 @@ describe("buildRenovateGateMessage", () => {
 		});
 		expect(msg).toContain("renovate/eu-b2b-prometheus");
 		expect(msg).toContain("chore(deps): [eu-b2b] prometheus to v1.24.4");
+	});
+});
+
+// SIO-1471: renovateTriggerGate's decline path (approve: false, or approve omitted from the
+// interrupt payload) must leave a message on state.messages -- previously it set NOTHING,
+// so a declined turn fell all the way through to teardownIac's generic gitops fallback and
+// showed a misleading "MR opened"/"MR step complete" line for a turn that never entered the
+// MR-authoring flow. Exercised as a real interrupt()/Command({resume}) round-trip inside a
+// minimal IacState graph, matching topic-shift.integration.test.ts's established pattern for
+// testing interrupt()-driven nodes (interrupt() throws GraphInterrupt outside a running graph,
+// so it cannot be unit-called directly).
+describe("renovateTriggerGate interrupt round-trip (SIO-1471)", () => {
+	function buildMiniGateGraph() {
+		const graph = new StateGraph(IacState)
+			.addNode("renovateTriggerGate", async (state: IacStateType) => {
+				const { renovateTriggerGate } = await import("./nodes.ts");
+				return renovateTriggerGate(state);
+			})
+			.addEdge(START, "renovateTriggerGate")
+			.addEdge("renovateTriggerGate", END);
+		return graph.compile({ checkpointer: new MemorySaver() });
+	}
+
+	const marker = { marker: "renovate/eu-b2b-prometheus", line: "chore(deps): [eu-b2b] prometheus to v1.24.4" };
+
+	test("approve: false sets a decline message naming the marker", async () => {
+		const compiled = buildMiniGateGraph();
+		const config = { configurable: { thread_id: `t-renovate-decline-${Date.now()}` } };
+		const inputState = { requestId: "req-1", renovateMarker: marker };
+
+		await compiled.invoke(inputState as unknown as Parameters<typeof compiled.invoke>[0], config);
+
+		const resumeInput = new Command({ resume: { approve: false } }) as unknown as Parameters<typeof compiled.invoke>[0];
+		await compiled.invoke(resumeInput, config);
+
+		const after = await compiled.getState(config);
+		const values = after.values as IacStateType;
+		expect(values.renovateTriggerApproved).toBe(false);
+		expect(values.messages.length).toBeGreaterThan(0);
+		const lastMessage = String(values.messages[values.messages.length - 1]?.content ?? "");
+		expect(lastMessage).toContain(marker.marker);
+		expect(lastMessage.toLowerCase()).toContain("declin");
+	});
+
+	test("approve omitted (undefined) is treated as a decline and still sets a message", async () => {
+		const compiled = buildMiniGateGraph();
+		const config = { configurable: { thread_id: `t-renovate-undefined-${Date.now()}` } };
+		const inputState = { requestId: "req-1", renovateMarker: marker };
+
+		await compiled.invoke(inputState as unknown as Parameters<typeof compiled.invoke>[0], config);
+
+		const resumeInput = new Command({ resume: {} }) as unknown as Parameters<typeof compiled.invoke>[0];
+		await compiled.invoke(resumeInput, config);
+
+		const after = await compiled.getState(config);
+		const values = after.values as IacStateType;
+		expect(values.renovateTriggerApproved).toBe(false);
+		expect(values.messages.length).toBeGreaterThan(0);
+	});
+
+	test("approve: true does NOT set a decline message", async () => {
+		const compiled = buildMiniGateGraph();
+		const config = { configurable: { thread_id: `t-renovate-approve-${Date.now()}` } };
+		const inputState = { requestId: "req-1", renovateMarker: marker };
+
+		await compiled.invoke(inputState as unknown as Parameters<typeof compiled.invoke>[0], config);
+
+		const resumeInput = new Command({ resume: { approve: true } }) as unknown as Parameters<typeof compiled.invoke>[0];
+		await compiled.invoke(resumeInput, config);
+
+		const after = await compiled.getState(config);
+		const values = after.values as IacStateType;
+		expect(values.renovateTriggerApproved).toBe(true);
+		expect(values.messages.length).toBe(0);
+	});
+});
+
+// SIO-1471: teardownIac must NOT append its generic gitops-flavored fallback lines ("MR
+// opened: ..." / "MR step complete. Review and apply manually...") for the
+// renovate-integration-update intent -- that fallback assumes an MR-authoring flow this
+// sub-flow never enters, and its own nodes (resolveRenovateMarker / renovateTriggerGate /
+// watchRenovateMr) already set the correct terminal message earlier in the turn. The fix
+// returns {} for this intent so no new message is appended.
+describe("teardownIac renovate-integration-update branch (SIO-1471)", () => {
+	afterEach(() => {
+		mock.restore();
+		// SIO-1045: undo this block's mock.module("../memory-backend.ts" / "../memory-writer.ts", ...)
+		// so it cannot leak into a test file that runs later in the same bun test process.
+		restoreRealMemoryMocks();
+	});
+
+	async function runTeardown(state: Partial<IacStateType>) {
+		mock.module("../memory-writer.ts", () => ({
+			appendDailyLog: () => {},
+			recordKeyDecision: () => {},
+		}));
+		mock.module("../memory-backend.ts", () => ({
+			selectedBackend: () => "file",
+			recallInFlightFleetUpgrades: async () => [],
+			searchAgentMemory: async () => [],
+			dedupeHitsBy: <T>(hits: T[]) => hits,
+		}));
+		const { teardownIac } = await import("./nodes.ts");
+		return teardownIac({
+			requestId: "req-1",
+			threadId: "thread-abc",
+			intent: "renovate-integration-update",
+			...state,
+		} as unknown as IacStateType);
+	}
+
+	test("returns {} (no new messages) so the sub-flow's own terminal message stands alone", async () => {
+		const out = await runTeardown({});
+		expect(out).toEqual({});
+	});
+
+	test("does not append the generic gitops fallback even when mrUrl happens to be unset", async () => {
+		const out = await runTeardown({ mrUrl: "" });
+		expect(out.messages).toBeUndefined();
 	});
 });
 

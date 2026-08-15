@@ -397,7 +397,18 @@ export function renovateTriggerGate(state: IacStateType): Partial<IacStateType> 
 		line: marker.line,
 		message: buildRenovateGateMessage(marker),
 	}) as { approve?: boolean };
-	return { renovateTriggerApproved: choice?.approve === true };
+	const approved = choice?.approve === true;
+	// SIO-1471: a decline previously set no message at all -- teardownIac has no
+	// renovate-specific fallback (see its own SIO-1471 branch below), so a declined
+	// turn rendered nothing. Set the terminal message here, matching every other
+	// terminal node in this sub-flow (resolveRenovateMarker / watchRenovateMr).
+	if (!approved) {
+		return {
+			renovateTriggerApproved: false,
+			messages: [new AIMessage(`Declined. '${marker.marker}' was not triggered.`)],
+		};
+	}
+	return { renovateTriggerApproved: true };
 }
 
 // Calls the two SIO-1470 tools in sequence: tick the checkbox, then play the schedule.
@@ -10894,6 +10905,16 @@ export async function teardownIac(state: IacStateType): Promise<Partial<IacState
 	// SIO-882: the drift flow renders its own per-stack reconcile summary.
 	if (state.intent === "drift") {
 		return { messages: [new AIMessage(formatDriftSummary(state))] };
+	}
+	// SIO-1471: the renovate-integration-update sub-flow's own nodes (resolveRenovateMarker /
+	// renovateTriggerGate / watchRenovateMr) already set the terminal message on state.messages
+	// at whichever point the turn ended -- no summary to build here, and the generic
+	// gitops-flavored fallback below would be misleading (it assumes an MR-authoring flow this
+	// intent never enters: state.mrUrl is never set by this sub-flow, so the fallback's
+	// `state.mrUrl ? ... : "MR step complete."` check always hit the no-MR branch, and the real
+	// MR link -- state.renovateMrUrl, set by watchRenovateMr -- was ignored entirely).
+	if (state.intent === "renovate-integration-update") {
+		return {};
 	}
 	if (state.reviewDecision === "rejected") {
 		return { messages: [new AIMessage("Plan rejected. No MR opened. Nothing was applied.")] };
