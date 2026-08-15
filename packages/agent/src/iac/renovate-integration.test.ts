@@ -611,3 +611,50 @@ describe("TURN_START_RESET (renovate-integration-update fields)", () => {
 		});
 	});
 });
+
+import { compareSemver, parseRenovateTargetVersion } from "./nodes.ts";
+
+describe("parseRenovateTargetVersion", () => {
+	test("parses the target version from a real dashboard line", () => {
+		const line =
+			" - [ ] <!-- unschedule-branch=renovate/eu-onboarding-elastic_agent -->chore(deps): [eu-onboarding] elastic_agent to v2.9.4";
+		expect(parseRenovateTargetVersion(line)).toBe("2.9.4");
+	});
+
+	test("parses a version with only major.minor (no patch)", () => {
+		const line = " - [ ] <!-- unschedule-branch=x -->chore(deps): [eu-b2b] system to v2.22";
+		expect(parseRenovateTargetVersion(line)).toBe("2.22");
+	});
+
+	test("returns null when the line has no 'to vX.Y.Z' suffix", () => {
+		expect(parseRenovateTargetVersion("chore(deps): bump something")).toBeNull();
+	});
+
+	test("returns null for an empty string", () => {
+		expect(parseRenovateTargetVersion("")).toBeNull();
+	});
+});
+
+describe("compareSemver", () => {
+	test("orders a lower version before a higher one", () => {
+		expect(compareSemver("2.8.0", "2.9.4")).toBeLessThan(0);
+	});
+
+	test("orders a higher version after a lower one", () => {
+		expect(compareSemver("2.9.4", "2.8.0")).toBeGreaterThan(0);
+	});
+
+	test("returns 0 for equal versions", () => {
+		expect(compareSemver("2.9.4", "2.9.4")).toBe(0);
+	});
+
+	test("compares patch versions correctly (numeric, not lexical)", () => {
+		// Lexical comparison would wrongly order "2.9.10" before "2.9.9" -- must compare numerically.
+		expect(compareSemver("2.9.9", "2.9.10")).toBeLessThan(0);
+	});
+
+	test("treats a missing patch component as 0", () => {
+		expect(compareSemver("2.22", "2.22.1")).toBeLessThan(0);
+		expect(compareSemver("2.22.0", "2.22")).toBe(0);
+	});
+});

@@ -414,6 +414,29 @@ export function buildRenovateGateMessage(marker: { marker: string; line: string 
 	return `This will tick '${marker.marker}' (${cleanLine || marker.line.trim()}) and trigger an off-schedule Renovate run. Proceed?`;
 }
 
+// The dashboard line's title always ends "... to vX.Y[.Z]" (Renovate's own generated format,
+// live-verified across every entry in the Elastic Fleet & Agent Dependency Dashboard this
+// session -- e.g. "chore(deps): [eu-onboarding] elastic_agent to v2.9.4"). Extracts just the
+// version, without the "v" prefix, for use as the changelog range's upper bound. (Pure; unit-tested.)
+export function parseRenovateTargetVersion(line: string): string | null {
+	const match = line.match(/\bto\s+v(\d+(?:\.\d+){1,2})\s*$/);
+	return match?.[1] ?? null;
+}
+
+// Numeric (not lexical) semver comparison for filterChangelogRange -- a missing component
+// (e.g. "2.22" vs "2.22.1") is treated as 0. Deliberately minimal: no pre-release/build-metadata
+// handling, since every version this sub-flow compares (Renovate dashboard targets, Kibana
+// installationInfo.version, changelog.yml entries) is a plain X.Y[.Z] release. (Pure; unit-tested.)
+export function compareSemver(a: string, b: string): number {
+	const pa = a.split(".").map(Number);
+	const pb = b.split(".").map(Number);
+	for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+		const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+		if (diff !== 0) return diff;
+	}
+	return 0;
+}
+
 // Single operator approve/decline interrupt, matching fleetUpgradeGate's role
 // (see fleetUpgradeGate) exactly. Only reached when hasSingleRenovateMatch routed here.
 export function renovateTriggerGate(state: IacStateType): Partial<IacStateType> {
