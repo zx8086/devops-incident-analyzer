@@ -420,3 +420,52 @@ describe("findPipelineScheduleId", () => {
 		expect(findPipelineScheduleId([null, undefined, {}], "renovate")).toBeNull();
 	});
 });
+
+import { parseDashboardEntries } from "./gitlab.ts";
+
+describe("parseDashboardEntries", () => {
+	test("extracts marker+line pairs for every checkbox line", () => {
+		const body =
+			"## Awaiting Schedule\n\n" +
+			" - [ ] <!-- unschedule-branch=renovate/eu-b2b-prometheus -->chore(deps): [eu-b2b] prometheus to v1.24.4\n" +
+			" - [ ] <!-- unschedule-branch=renovate/ap-cld-cisco_ftd -->chore(deps): [ap-cld] cisco_ftd to v3.13.10\n";
+
+		expect(parseDashboardEntries(body)).toEqual([
+			{
+				marker: "renovate/eu-b2b-prometheus",
+				line: " - [ ] <!-- unschedule-branch=renovate/eu-b2b-prometheus -->chore(deps): [eu-b2b] prometheus to v1.24.4",
+			},
+			{
+				marker: "renovate/ap-cld-cisco_ftd",
+				line: " - [ ] <!-- unschedule-branch=renovate/ap-cld-cisco_ftd -->chore(deps): [ap-cld] cisco_ftd to v3.13.10",
+			},
+		]);
+	});
+
+	test("also extracts an already-ticked line (marker extraction is independent of checkbox state)", () => {
+		const body = " - [x] <!-- unschedule-branch=renovate/eu-b2b-prometheus -->chore(deps): prometheus\n";
+		expect(parseDashboardEntries(body)).toEqual([
+			{
+				marker: "renovate/eu-b2b-prometheus",
+				line: " - [x] <!-- unschedule-branch=renovate/eu-b2b-prometheus -->chore(deps): prometheus",
+			},
+		]);
+	});
+
+	test("empty array when the body has no marker lines", () => {
+		expect(parseDashboardEntries("## Awaiting Schedule\n\nNothing pending.\n")).toEqual([]);
+		expect(parseDashboardEntries("")).toEqual([]);
+	});
+
+	test("skips lines with no unschedule-branch marker (e.g. the bulk-trigger line)", () => {
+		const body =
+			" - [ ] <!-- unschedule-branch=renovate/eu-b2b-prometheus -->chore(deps): prometheus\n" +
+			" - [ ] <!-- create-all-awaiting-schedule-prs -->Create all awaiting schedule MRs at once\n";
+		expect(parseDashboardEntries(body)).toEqual([
+			{
+				marker: "renovate/eu-b2b-prometheus",
+				line: " - [ ] <!-- unschedule-branch=renovate/eu-b2b-prometheus -->chore(deps): prometheus",
+			},
+		]);
+	});
+});

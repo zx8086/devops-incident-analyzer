@@ -78,6 +78,11 @@ export function flipCommitAction(action: "create" | "update", response: string):
 	return null;
 }
 
+// Shared by tickDashboardCheckboxes and parseDashboardEntries: matches a Dependency
+// Dashboard checkbox line and captures [1]="- [ or - [x] prefix-with-bracket-open",
+// [2]=full HTML comment span, [3]=the marker itself.
+const DASHBOARD_CHECKBOX_LINE_RE = /^(\s*-\s*\[)[ x]\](\s*<!--\s*unschedule-branch=(.*?)\s*-->)/;
+
 // Renovate on-demand MR automation: flip "- [ ]" to "- [x]" on Dependency Dashboard
 // lines whose unschedule-branch=<marker> HTML comment exactly matches one of the
 // requested markers. The board is fully regenerated every Renovate run, so matching
@@ -95,6 +100,24 @@ export function tickDashboardCheckboxes(description: string, markers: string[]):
 			return line.replace(`${match[1]} ]`, `${match[1]}x]`);
 		})
 		.join("\n");
+}
+
+// Parses the Dependency Dashboard issue body into {marker, line} pairs, one per
+// checkbox line carrying an unschedule-branch=<marker> HTML comment (checked or
+// unchecked -- marker extraction is independent of checkbox state). Used to resolve a
+// free-text deployment+integration name to the live marker string before calling
+// gitlab_unschedule_renovate_branches -- never construct/guess a marker, always match
+// against what the board actually contains this run. Lines with no marker comment
+// (e.g. the create-all-awaiting-schedule-prs bulk-trigger line) are skipped.
+// (Pure; unit-tested.)
+export function parseDashboardEntries(description: string): Array<{ marker: string; line: string }> {
+	const entries: Array<{ marker: string; line: string }> = [];
+	for (const line of description.split("\n")) {
+		const match = line.match(DASHBOARD_CHECKBOX_LINE_RE);
+		const marker = match?.[3];
+		if (marker !== undefined) entries.push({ marker, line });
+	}
+	return entries;
 }
 
 // The repo's tf-report.jq shape (artifacts.reports.terraform): create/update/delete
