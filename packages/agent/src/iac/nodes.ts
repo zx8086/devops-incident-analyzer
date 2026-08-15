@@ -183,7 +183,6 @@ function findGitlabProxyTool(name: string): StructuredToolInterface | undefined 
 	return getToolsForDataSource("gitlab").find((t) => t.name === name);
 }
 
-// biome-ignore lint/correctness/noUnusedVariables: SIO-XXXX - consumed by resolveRenovateMarker, added in the next task of this same plan
 async function callGitlabProxyTool(name: string, args: Record<string, unknown>): Promise<string> {
 	const tool = findGitlabProxyTool(name);
 	if (!tool) return `[${name} unavailable - gitlab server not connected]`;
@@ -243,6 +242,142 @@ export async function extractRenovateTarget(state: IacStateType): Promise<Partia
 		};
 	}
 	return { renovateTarget: target };
+}
+
+// Mirrors mcp-server-elastic-iac's parseDashboardEntries (gitlab.ts) -- duplicated rather
+// than shared across the package boundary (nodes.ts never imports MCP-server-side code;
+// it only consumes tool string output). Same regex, same shape.
+const RENOVATE_DASHBOARD_LINE_RE = /^(\s*-\s*\[)[ x]\](\s*<!--\s*unschedule-branch=(.*?)\s*-->)/;
+
+export function parseRenovateDashboardEntries(description: string): Array<{ marker: string; line: string }> {
+	const entries: Array<{ marker: string; line: string }> = [];
+	for (const line of description.split("\n")) {
+		const match = line.match(RENOVATE_DASHBOARD_LINE_RE);
+		const marker = match?.[3];
+		if (marker !== undefined) entries.push({ marker, line });
+	}
+	return entries;
+}
+
+// Deterministic substring match (never LLM-assisted -- exactness matters more than
+// phrasing flexibility here) against the live marker strings. Case-insensitive,
+// matching findPipelineScheduleId's precedent (mcp-server-elastic-iac/gitlab.ts).
+// (Pure; unit-tested.)
+export function filterDashboardMatches(
+	entries: Array<{ marker: string; line: string }>,
+	deployment: string,
+	integration: string,
+): Array<{ marker: string; line: string }> {
+	const dep = deployment.toLowerCase();
+	const pkg = integration.toLowerCase();
+	return entries.filter((e) => {
+		const m = e.marker.toLowerCase();
+		return (dep === "" || m.includes(dep)) && (pkg === "" || m.includes(pkg));
+	});
+}
+
+// Graph-edge predicate: exactly one match proceeds to the approval gate; 0 or 2+ ends
+// the turn with a disambiguation/no-match message. (Pure; unit-tested.)
+export function hasSingleRenovateMatch(candidates: Array<{ marker: string; line: string }>): boolean {
+	return candidates.length === 1;
+}
+
+// gitlab_search (scope: work_items) response: an array of result objects. Defensive
+// parse -- malformed/empty input returns null rather than throwing, matching
+// parseNewestPipeline/parseLatestAgentMr's style elsewhere in this file. (Pure; unit-tested.)
+export function parseFirstIssueIid(raw: string): number | null {
+	try {
+		const parsed = JSON.parse(raw);
+		if (!Array.isArray(parsed) || parsed.length === 0) return null;
+		const first = parsed[0] as { iid?: unknown };
+		return typeof first.iid === "number" ? first.iid : null;
+	} catch {
+		return null;
+	}
+}
+
+// gitlab_get_issue response: a single issue object with a `description` field.
+// (Pure; unit-tested.)
+export function parseIssueDescription(raw: string): string {
+	try {
+		const parsed = JSON.parse(raw) as { description?: unknown };
+		return typeof parsed.description === "string" ? parsed.description : "";
+	} catch {
+		return "";
+	}
+}
+
+// The Renovate IaC target repo (observability-elastic-iac). Fixed per the original
+// Renovate handover's scope ("use the project we currently use" -- confirmed during
+// brainstorming): mcp-server-elastic-iac's own config already targets exactly this repo
+// via ELASTIC_IAC_GITLAB_PROJECT/_PROJECT_ID (mcp-server-elastic-iac/src/config.ts:126,131),
+// but that config is server-side and not reachable from packages/agent. The native
+// gitlab_get_issue/gitlab_search proxy tools need a project id/path supplied by the
+// CALLER (verified live: gitlab_get_issue's schema requires both `id` and `issue_iid`),
+// so this small mirror read is unavoidable -- read directly via process.env inside the
+// function body (nodes.ts has no existing helper for a non-numeric env value; this
+// follows the same "read inside the node, not module scope" discipline every
+// readPositiveMsEnv call in this file already follows).
+function renovateProjectId(): string {
+	return process.env.ELASTIC_IAC_GITLAB_PROJECT_ID ?? "82850717";
+}
+
+// Discovers the Dependency Dashboard issue by title (never hardcoded -- its iid has
+// already changed once when the title changed, per the original handover), fetches its
+// description via the native gitlab_get_issue proxy tool, and resolves the extracted
+// {deployment, integration} target to a live marker. Exactly one match -> renovateMarker
+// set, proceeds to the approval gate. 0 or 2+ matches -> renovateCandidates set (possibly
+// empty), the turn ends with a disambiguation/no-match message (routed by
+// hasSingleRenovateMatch in graph.ts).
+export async function resolveRenovateMarker(state: IacStateType): Promise<Partial<IacStateType>> {
+	const target = state.renovateTarget;
+	if (!target) return { renovateCandidates: [] };
+
+	const projectId = renovateProjectId();
+	// gitlab_search's project_id accepts a numeric id or URL-encoded path (verified live
+	// against the native tool's schema); scope "work_items" covers issues.
+	const searchRes = await callGitlabProxyTool("gitlab_search", {
+		scope: "work_items",
+		search: "Dependency Dashboard",
+		project_id: projectId,
+	});
+	const issueIid = parseFirstIssueIid(searchRes);
+	if (issueIid === null) {
+		return {
+			renovateCandidates: [],
+			messages: [new AIMessage("I couldn't find the Dependency Dashboard issue to check for pending updates.")],
+		};
+	}
+
+	// gitlab_get_issue requires BOTH `id` (project) and `issue_iid` (verified live against
+	// the native tool's schema -- issue_iid alone is not sufficient, a common mistake when
+	// assuming the elastic-iac-mcp tool shapes, which resolve project server-side).
+	const issueRes = await callGitlabProxyTool("gitlab_get_issue", { id: projectId, issue_iid: issueIid });
+	const description = parseIssueDescription(issueRes);
+	const entries = parseRenovateDashboardEntries(description);
+	const candidates = filterDashboardMatches(entries, target.deployment, target.integration);
+
+	if (candidates.length === 1) {
+		return { renovateIssueIid: issueIid, renovateMarker: candidates[0], renovateCandidates: candidates };
+	}
+	if (candidates.length === 0) {
+		return {
+			renovateCandidates: [],
+			messages: [
+				new AIMessage(
+					`No pending Renovate update found for '${target.integration}' on '${target.deployment}'. It may already be up to date, or the name may not match — check the Dependency Dashboard.`,
+				),
+			],
+		};
+	}
+	return {
+		renovateCandidates: candidates,
+		messages: [
+			new AIMessage(
+				`Multiple pending updates match '${target.integration}' on '${target.deployment}': ${candidates.map((c) => c.marker).join(", ")}. Be more specific.`,
+			),
+		],
+	};
 }
 
 // SIO-1003: the instruction-string fragment listing the legal workflow values, e.g.
