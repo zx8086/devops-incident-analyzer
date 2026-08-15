@@ -78,6 +78,25 @@ export function flipCommitAction(action: "create" | "update", response: string):
 	return null;
 }
 
+// Renovate on-demand MR automation: flip "- [ ]" to "- [x]" on Dependency Dashboard
+// lines whose unschedule-branch=<marker> HTML comment exactly matches one of the
+// requested markers. The board is fully regenerated every Renovate run, so matching
+// must key on the stable marker, never on line position. Idempotent (an already-ticked
+// line is left as-is) and a non-matching marker leaves the body unchanged.
+// (Pure; unit-tested.)
+export function tickDashboardCheckboxes(description: string, markers: string[]): string {
+	const markerSet = new Set(markers);
+	return description
+		.split("\n")
+		.map((line) => {
+			const match = line.match(/^(\s*-\s*\[) \](\s*<!--\s*unschedule-branch=(.*?)\s*-->)/);
+			const marker = match?.[3];
+			if (!match || marker === undefined || !markerSet.has(marker)) return line;
+			return line.replace(`${match[1]} ]`, `${match[1]}x]`);
+		})
+		.join("\n");
+}
+
 // The repo's tf-report.jq shape (artifacts.reports.terraform): create/update/delete
 // counts + the changed resources. This is what the MR Terraform widget consumes.
 export interface TerraformReport {
@@ -182,6 +201,23 @@ export function pickMergeCommitPipeline(
 // silently returns []. (Pure.)
 export function isFullSha(sha: string): boolean {
 	return /^[0-9a-f]{40}$/i.test(sha);
+}
+
+// Renovate on-demand MR automation: the pipeline schedule id is not stable across
+// re-creation (mirrors the dashboard issue iid instability), so it is discovered by a
+// case-insensitive substring match against the schedule's description rather than
+// hardcoded. Returns the first match's id, or null when none matches / input is
+// malformed. (Pure; unit-tested.)
+export function findPipelineScheduleId(schedulesJson: unknown, descriptionContains: string): number | null {
+	if (!Array.isArray(schedulesJson)) return null;
+	const needle = descriptionContains.toLowerCase();
+	for (const s of schedulesJson) {
+		const { id, description } = s as { id?: unknown; description?: unknown };
+		if (typeof id === "number" && typeof description === "string" && description.toLowerCase().includes(needle)) {
+			return id;
+		}
+	}
+	return null;
 }
 
 // SIO-904: detect a Terraform state-lock anywhere in the FULL job trace. Terraform prints the
@@ -482,6 +518,74 @@ export function registerGitlabTools(server: McpServer, config: Config): void {
 		},
 		async ({ pipelineId }) =>
 			text(await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/pipelines/${pipelineId}`)),
+	);
+
+	// Renovate on-demand MR automation: the Dependency Dashboard issue is regenerated every
+	// Renovate run, so a checkbox toggle must be read-modify-write against the CURRENT
+	// description (never a caller-supplied stale copy) to avoid clobbering a concurrent
+	// Renovate run's edits. Ticking a checkbox is the documented trigger -- the next
+	// scheduled/played run creates the branch + MR and unchecks it. Write, not destructive
+	// (additive edit to an issue body).
+	server.registerTool(
+		"gitlab_unschedule_renovate_branches",
+		{
+			description:
+				"Tick Renovate Dependency Dashboard checkboxes to request an on-demand update run for the given " +
+				"branches. Reads the issue fresh, flips each '- [ ]' line whose 'unschedule-branch=<marker>' HTML " +
+				"comment exactly matches one of the given markers to '- [x]', and writes the updated description " +
+				"back. Matches on the marker, never line position (the board is fully regenerated each Renovate " +
+				"run). Ticking alone does not create MRs -- follow with gitlab_play_pipeline_schedule.",
+			inputSchema: {
+				issueIid: z.number().describe("The Dependency Dashboard issue's IID."),
+				markers: z
+					.array(z.string())
+					.min(1)
+					.describe("unschedule-branch values to tick, e.g. 'renovate/eu-b2b-prometheus'."),
+			},
+			annotations: iacToolAnnotations("gitlab_unschedule_renovate_branches"),
+		},
+		async ({ issueIid, markers }) => {
+			const issue = (await glJson(`/projects/${project}/issues/${issueIid}`)) as { description?: unknown };
+			const description = typeof issue.description === "string" ? issue.description : "";
+			const updated = tickDashboardCheckboxes(description, markers);
+			return text(
+				await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/issues/${issueIid}`, {
+					method: "PUT",
+					body: JSON.stringify({ description: updated }),
+				}),
+			);
+		},
+	);
+
+	// Renovate on-demand MR automation: playing the schedule (rather than gitlab_trigger_*'s
+	// direct pipeline creation) is what makes Renovate read the ticked checkboxes -- a
+	// schedule-triggered run only ever creates branches + MRs (apply:* stays when: manual),
+	// so this cannot deploy anything. The schedule id is discovered by description match
+	// (not hardcoded) since, like the dashboard issue, its id is not guaranteed stable.
+	server.registerTool(
+		"gitlab_play_pipeline_schedule",
+		{
+			description:
+				"Play (run now) a GitLab pipeline schedule by matching its description, e.g. 'Renovate'. Used to " +
+				"trigger an off-schedule Renovate run after gitlab_unschedule_renovate_branches ticks the desired " +
+				"checkboxes. A schedule-triggered Renovate run only creates branches/MRs -- it cannot deploy.",
+			inputSchema: {
+				descriptionContains: z.string().describe("Case-insensitive substring to match against schedule descriptions."),
+			},
+			annotations: iacToolAnnotations("gitlab_play_pipeline_schedule"),
+		},
+		async ({ descriptionContains }) => {
+			const schedules = await glJson(`/projects/${project}/pipeline_schedules`);
+			const scheduleId = findPipelineScheduleId(schedules, descriptionContains);
+			if (scheduleId === null) {
+				return text(`[404] no pipeline schedule found with description containing "${descriptionContains}"`);
+			}
+			return text(
+				await gitlabFetch(gitlabBaseUrl, token, `/projects/${project}/pipeline_schedules/${scheduleId}/play`, {
+					method: "POST",
+				}),
+			);
+		},
 	);
 
 	// SIO-993: the post-merge terraform APPLY runs on the target branch (main), not as an MR pipeline,

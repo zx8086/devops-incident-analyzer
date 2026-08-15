@@ -324,3 +324,82 @@ describe("isFullSha (SIO-1196)", () => {
 		expect(isFullSha("ab78971fbccf99841110e1d0aa98d3266cc15edc00")).toBe(false);
 	});
 });
+
+import { tickDashboardCheckboxes } from "./gitlab.ts";
+
+// Renovate on-demand MR automation: the Dependency Dashboard issue body is fully
+// regenerated every Renovate run, so a checkbox must be matched by its stable
+// unschedule-branch=<marker> HTML comment, never by line position.
+describe("tickDashboardCheckboxes", () => {
+	test("ticks the line whose unschedule-branch marker matches", () => {
+		const body =
+			"## Awaiting Schedule\n\n" +
+			" - [ ] <!-- unschedule-branch=renovate/eu-b2b-prometheus -->chore(deps): [eu-b2b] prometheus to v1.24.4\n" +
+			" - [ ] <!-- unschedule-branch=renovate/ap-cld-fleet-server -->chore(deps): [ap-cld] fleet-server to v9.4.2\n";
+
+		const result = tickDashboardCheckboxes(body, ["renovate/eu-b2b-prometheus"]);
+
+		expect(result).toContain(
+			" - [x] <!-- unschedule-branch=renovate/eu-b2b-prometheus -->chore(deps): [eu-b2b] prometheus to v1.24.4",
+		);
+		expect(result).toContain(
+			" - [ ] <!-- unschedule-branch=renovate/ap-cld-fleet-server -->chore(deps): [ap-cld] fleet-server to v9.4.2",
+		);
+	});
+
+	test("ticks multiple requested markers in one pass", () => {
+		const body =
+			" - [ ] <!-- unschedule-branch=renovate/a -->chore(deps): a\n" +
+			" - [ ] <!-- unschedule-branch=renovate/b -->chore(deps): b\n" +
+			" - [ ] <!-- unschedule-branch=renovate/c -->chore(deps): c\n";
+
+		const result = tickDashboardCheckboxes(body, ["renovate/a", "renovate/c"]);
+
+		expect(result).toContain(" - [x] <!-- unschedule-branch=renovate/a -->");
+		expect(result).toContain(" - [ ] <!-- unschedule-branch=renovate/b -->");
+		expect(result).toContain(" - [x] <!-- unschedule-branch=renovate/c -->");
+	});
+
+	test("leaves an already-ticked line untouched (idempotent)", () => {
+		const body = " - [x] <!-- unschedule-branch=renovate/eu-b2b-prometheus -->chore(deps): prometheus\n";
+		expect(tickDashboardCheckboxes(body, ["renovate/eu-b2b-prometheus"])).toBe(body);
+	});
+
+	test("leaves the body unchanged when no marker matches", () => {
+		const body = " - [ ] <!-- unschedule-branch=renovate/eu-b2b-prometheus -->chore(deps): prometheus\n";
+		expect(tickDashboardCheckboxes(body, ["renovate/does-not-exist"])).toBe(body);
+	});
+
+	test("does not tick a marker only matched by substring (exact marker match)", () => {
+		const body = " - [ ] <!-- unschedule-branch=renovate/eu-b2b-prometheus-extra -->chore(deps): prometheus\n";
+		expect(tickDashboardCheckboxes(body, ["renovate/eu-b2b-prometheus"])).toBe(body);
+	});
+});
+
+import { findPipelineScheduleId } from "./gitlab.ts";
+
+// Renovate on-demand MR automation: the schedule id (like the dashboard issue iid)
+// is not stable across re-creation, so it must be discovered by matching the
+// schedule's description rather than hardcoded.
+describe("findPipelineScheduleId", () => {
+	test("returns the id of the schedule whose description matches", () => {
+		const schedules = [
+			{ id: 111, description: "Nightly backup" },
+			{ id: 4385002, description: "Renovate (weekly dependency updates)" },
+		];
+		expect(findPipelineScheduleId(schedules, "Renovate")).toBe(4385002);
+	});
+
+	test("null when no schedule description matches", () => {
+		expect(findPipelineScheduleId([{ id: 111, description: "Nightly backup" }], "Renovate")).toBeNull();
+	});
+
+	test("null on non-array input", () => {
+		expect(findPipelineScheduleId("[401] unauthorized", "Renovate")).toBeNull();
+	});
+
+	test("matches case-insensitively", () => {
+		const schedules = [{ id: 4385002, description: "RENOVATE weekly run" }];
+		expect(findPipelineScheduleId(schedules, "renovate")).toBe(4385002);
+	});
+});
