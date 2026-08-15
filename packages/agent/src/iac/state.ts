@@ -782,6 +782,11 @@ export const IacState = Annotation.Root({
 	// issue iid (read once per turn, not persisted cross-turn -- the issue is
 	// rediscovered by title every turn per the original handover's stability warning);
 	// renovateMrUrl is the resulting Renovate MR link once watchRenovateMr finds it.
+	// renovateTriggerAtIso (Greptile round 2, PR #663): the ISO timestamp captured by
+	// triggerRenovateUpdate right before firing the tick/play calls, so watchRenovateMr can
+	// require the MR's updated_at to be at or after this instant -- proving the MR it finds
+	// was actually touched by THIS run, not a stale open MR left over on the same
+	// versionless, reused Renovate branch.
 	renovateTarget: Annotation<{ deployment: string; integration: string } | null>({
 		reducer: last,
 		default: () => null,
@@ -791,6 +796,7 @@ export const IacState = Annotation.Root({
 	renovateTriggerApproved: Annotation<boolean | null>({ reducer: last, default: () => null }),
 	renovateIssueIid: Annotation<number | null>({ reducer: last, default: () => null }),
 	renovateMrUrl: Annotation<string>({ reducer: last, default: () => "" }),
+	renovateTriggerAtIso: Annotation<string>({ reducer: last, default: () => "" }),
 	// SIO-930: set by the request (UI message-count signal). Gates whether the conversational
 	// "converse" intent is selectable -- a first turn cannot be a follow-up about a prior answer.
 	isFollowUp: Annotation<boolean>({ reducer: last, default: () => false }),

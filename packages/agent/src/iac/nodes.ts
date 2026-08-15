@@ -452,6 +452,12 @@ export async function triggerRenovateUpdate(state: IacStateType): Promise<Partia
 		};
 	}
 
+	// Greptile round 2 (PR #663): captured HERE, immediately before this run's first real
+	// GitLab write -- watchRenovateMr uses this as the freshness cutoff so a stale MR left
+	// open from an earlier trigger on the same reused branch is never mistaken for this
+	// run's result.
+	const triggerAtIso = new Date().toISOString();
+
 	const tickRes = await callTool("gitlab_unschedule_renovate_branches", {
 		issueIid,
 		markers: [marker.marker],
@@ -465,9 +471,23 @@ export async function triggerRenovateUpdate(state: IacStateType): Promise<Partia
 
 	const playRes = await callTool("gitlab_play_pipeline_schedule", { descriptionContains: "Renovate" });
 	if (!isGitlabSuccess(playRes)) {
+		// Greptile round 2 (PR #663): the checkbox tick above already succeeded, so the
+		// dashboard now shows this entry as checked -- resolveRenovateMarker's unchecked-only
+		// filter (added in round 1, to stop re-triggering an entry Renovate already processed)
+		// means a plain retry of this SAME request would find zero candidates, even though
+		// Renovate never actually ran. Not auto-unsticking the checkbox here (racing an
+		// in-flight Renovate run that DID start processing it is worse than a clear message) --
+		// tell the operator exactly what state this left GitLab in and how to recover.
 		return {
 			blockedReason: `Could not play the Renovate schedule: ${playRes.slice(0, 120)}.`,
-			messages: [new AIMessage("Cannot trigger the update: playing the Renovate pipeline schedule failed.")],
+			messages: [
+				new AIMessage(
+					`Ticked the dashboard checkbox for '${marker.marker}', but playing the Renovate schedule failed, so ` +
+						"the run never actually happened. The checkbox is now checked in GitLab, so re-asking for this " +
+						'same update won\'t find it as pending -- play the "Renovate" pipeline schedule directly in ' +
+						"GitLab (CI/CD -> Schedules), or untick the checkbox first and ask again.",
+				),
+			],
 		};
 	}
 
@@ -476,7 +496,7 @@ export async function triggerRenovateUpdate(state: IacStateType): Promise<Partia
 	// never claims success ahead of the real outcome.
 	await dispatchCustomEvent("iac_pipeline_progress", { pipelineId: null, status: "renovate: triggered" });
 
-	return {};
+	return { renovateTriggerAtIso: triggerAtIso };
 }
 
 // gitlab_list_merge_requests_by_source_branch returns a raw GitLab MR array, newest
@@ -484,15 +504,30 @@ export async function triggerRenovateUpdate(state: IacStateType): Promise<Partia
 // This tool is gitlabFetch-backed (packages/mcp-server-elastic-iac/src/tools/shared.ts),
 // so the real response is always prefixed with the HTTP status: `[${res.status}] ${text}`
 // -- same envelope parseNewestPipeline/parseLatestAgentMr already handle. (Pure; unit-tested.)
-export function parseFirstOpenMrUrl(raw: string): string | null {
+// Greptile round 2 (PR #663): the branch name is versionless and reused across releases
+// (per the design's own "one open MR per branch" invariant), so an open MR found on it
+// could be a STALE one this trigger never actually touched -- e.g. this run's tick/play
+// silently no-op'd while an unrelated earlier open MR happened to still be open. An
+// optional `sinceIso` cutoff (the trigger timestamp, captured by the caller before firing
+// the tick/play calls) proves freshness: only an MR Renovate touched AT OR AFTER the
+// trigger is accepted as "created/updated by this run". Omitting it preserves the
+// original "first MR in the array" behavior (GitLab already orders newest-first).
+export function parseFirstOpenMrUrl(raw: string, sinceIso?: string): string | null {
 	// Skip the "[200] " status prefix: find the first "[" that opens the JSON array.
 	const m = raw.match(/\[\s*(?:\{|\])/);
 	if (!m || m.index === undefined) return null;
 	try {
 		const parsed = JSON.parse(raw.slice(m.index));
-		if (!Array.isArray(parsed) || parsed.length === 0) return null;
-		const first = parsed[0] as { web_url?: unknown };
-		return typeof first.web_url === "string" ? first.web_url : null;
+		if (!Array.isArray(parsed)) return null;
+		const sinceMs = sinceIso ? Date.parse(sinceIso) : null;
+		for (const entry of parsed) {
+			const mr = entry as { web_url?: unknown; updated_at?: unknown };
+			if (typeof mr.web_url !== "string") continue;
+			if (sinceMs === null) return mr.web_url;
+			const updatedMs = typeof mr.updated_at === "string" ? Date.parse(mr.updated_at) : Number.NaN;
+			if (!Number.isNaN(updatedMs) && updatedMs >= sinceMs) return mr.web_url;
+		}
+		return null;
 	} catch {
 		return null;
 	}
@@ -510,10 +545,14 @@ export async function watchRenovateMr(state: IacStateType): Promise<Partial<IacS
 	const intervalMs = readPositiveMsEnv("IAC_PIPELINE_POLL_INTERVAL_MS", 10000, log);
 	const deadline = Date.now() + budgetMs;
 	const sourceBranch = marker.marker;
+	// Greptile round 2 (PR #663): require the found MR's updated_at to be at or after this
+	// run's own trigger instant, so a stale MR left open on the same reused branch from an
+	// earlier trigger is never reported as this run's result.
+	const sinceIso = state.renovateTriggerAtIso || undefined;
 
 	while (Date.now() < deadline) {
 		const listRes = await callTool("gitlab_list_merge_requests_by_source_branch", { sourceBranch });
-		const mrUrl = parseFirstOpenMrUrl(listRes);
+		const mrUrl = parseFirstOpenMrUrl(listRes, sinceIso);
 		if (mrUrl) {
 			await dispatchCustomEvent("iac_pipeline_progress", { pipelineId: null, status: "renovate: MR created" });
 			return {
@@ -1265,6 +1304,7 @@ export const TURN_START_RESET = {
 	renovateTriggerApproved: null,
 	renovateIssueIid: null,
 	renovateMrUrl: "",
+	renovateTriggerAtIso: "",
 } as const;
 
 // (context the turn's response weaves in), once per session, best-effort, never blocking.

@@ -366,6 +366,48 @@ describe("parseFirstOpenMrUrl", () => {
 		expect(parseFirstOpenMrUrl(raw)).toBe("https://gitlab.example/x/-/merge_requests/42");
 	});
 
+	// Greptile round 2 (PR #663): the branch is versionless and reused across releases, so
+	// an open MR on it could be a STALE one this trigger never touched (e.g. this run's
+	// tick/schedule silently failed while an older, unrelated open MR happened to exist).
+	// A sinceIso cutoff proves freshness -- only an MR Renovate actually touched AT OR AFTER
+	// the trigger counts as "created by this run".
+	test("with a sinceIso cutoff, skips an MR updated before the trigger", () => {
+		const raw = JSON.stringify([
+			{
+				iid: 42,
+				web_url: "https://gitlab.example/x/-/merge_requests/42",
+				state: "opened",
+				updated_at: "2026-08-15T10:00:00.000Z",
+			},
+		]);
+		expect(parseFirstOpenMrUrl(raw, "2026-08-15T12:00:00.000Z")).toBeNull();
+	});
+
+	test("with a sinceIso cutoff, returns an MR updated at or after the trigger", () => {
+		const raw = JSON.stringify([
+			{
+				iid: 42,
+				web_url: "https://gitlab.example/x/-/merge_requests/42",
+				state: "opened",
+				updated_at: "2026-08-15T12:00:00.000Z",
+			},
+		]);
+		expect(parseFirstOpenMrUrl(raw, "2026-08-15T12:00:00.000Z")).toBe("https://gitlab.example/x/-/merge_requests/42");
+	});
+
+	test("with a sinceIso cutoff, finds the first FRESH MR even if it is not array index 0", () => {
+		const raw = JSON.stringify([
+			{ iid: 41, web_url: "https://gitlab.example/x/-/merge_requests/41", updated_at: "2026-08-15T09:00:00.000Z" },
+			{ iid: 42, web_url: "https://gitlab.example/x/-/merge_requests/42", updated_at: "2026-08-15T12:30:00.000Z" },
+		]);
+		expect(parseFirstOpenMrUrl(raw, "2026-08-15T12:00:00.000Z")).toBe("https://gitlab.example/x/-/merge_requests/42");
+	});
+
+	test("without a sinceIso cutoff, behaves exactly as before (back-compat)", () => {
+		const raw = JSON.stringify([{ iid: 42, web_url: "https://gitlab.example/x/-/merge_requests/42" }]);
+		expect(parseFirstOpenMrUrl(raw)).toBe("https://gitlab.example/x/-/merge_requests/42");
+	});
+
 	test("null on an empty array", () => {
 		expect(parseFirstOpenMrUrl("[]")).toBeNull();
 	});
@@ -384,15 +426,16 @@ describe("parseFirstOpenMrUrl", () => {
 	});
 });
 
-// Greptile (PR #663): the 6 renovate-integration-update sub-flow fields are checkpointed
-// state, not reset at turn start like blockedReason/versionDrift/etc. -- a declined gate
-// (renovateTriggerApproved: false) or a resolved marker would otherwise leak into a LATER,
-// unrelated turn on the same thread, and iacTurnOutcome's declined-check (which reads these
-// fields without also checking state.intent) would misreport that unrelated turn as declined.
+// Greptile (PR #663): the 7 renovate-integration-update sub-flow fields are now reset at
+// turn start by TURN_START_RESET (bootstrapIac spreads it on every turn), matching every
+// other turn-scoped field (blockedReason, versionDrift, etc.) -- this prevents a declined
+// gate (renovateTriggerApproved: false) or a resolved marker from a PRIOR turn leaking into
+// a LATER, unrelated turn on the same thread, which would otherwise cause
+// iacTurnOutcome's declined-check to misreport that unrelated turn as declined.
 import { TURN_START_RESET } from "./nodes.ts";
 
 describe("TURN_START_RESET (renovate-integration-update fields)", () => {
-	test("resets all 6 renovate sub-flow fields", () => {
+	test("resets all 7 renovate sub-flow fields", () => {
 		expect(TURN_START_RESET).toMatchObject({
 			renovateTarget: null,
 			renovateCandidates: [],
@@ -400,6 +443,7 @@ describe("TURN_START_RESET (renovate-integration-update fields)", () => {
 			renovateTriggerApproved: null,
 			renovateIssueIid: null,
 			renovateMrUrl: "",
+			renovateTriggerAtIso: "",
 		});
 	});
 });
