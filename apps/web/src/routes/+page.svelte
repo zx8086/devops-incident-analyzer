@@ -15,6 +15,7 @@ import LearningProposalCard from "$lib/components/LearningProposalCard.svelte";
 import PipelineProgressCard from "$lib/components/PipelineProgressCard.svelte";
 import PlanReviewCard from "$lib/components/PlanReviewCard.svelte";
 import ReconcileChoiceCard from "$lib/components/ReconcileChoiceCard.svelte";
+import RenovateTriggerChoiceCard from "$lib/components/RenovateTriggerChoiceCard.svelte";
 import StreamingProgress from "$lib/components/StreamingProgress.svelte";
 import SyntheticsDriftCard from "$lib/components/SyntheticsDriftCard.svelte";
 import SyntheticsPushChoiceCard from "$lib/components/SyntheticsPushChoiceCard.svelte";
@@ -502,6 +503,16 @@ function handleSuggestionClick(suggestion: string) {
       disabled={agentStore.isStreaming}
       onApprove={() => agentStore.approveFleetUpgrade(true)}
       onDecline={() => agentStore.approveFleetUpgrade(false)}
+    />
+  {/if}
+
+  {#if agentStore.renovateTriggerChoice}
+    <!-- SIO-XXXX: single renovate-integration-update trigger approve/decline gate. -->
+    <RenovateTriggerChoiceCard
+      prompt={agentStore.renovateTriggerChoice}
+      disabled={agentStore.isStreaming}
+      onApprove={() => agentStore.approveRenovateTrigger(true)}
+      onDecline={() => agentStore.approveRenovateTrigger(false)}
     />
   {/if}
 

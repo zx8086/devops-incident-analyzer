@@ -1232,5 +1232,15 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		pipelineUrl: z.string().optional(),
 		note: z.string().optional(),
 	}),
+	// SIO-XXXX: renovate-integration-update trigger sub-flow. The single operator
+	// approve/decline gate (renovateTriggerGate), surfaced with the thread's id. No
+	// dedicated result event -- the turn just ends with a final message.
+	z.object({
+		type: z.literal("renovate_trigger_choice"),
+		threadId: z.string(),
+		marker: z.string(),
+		line: z.string(),
+		message: z.string(),
+	}),
 ]);
 export type StreamEvent = z.infer<typeof StreamEventSchema>;

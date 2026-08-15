@@ -743,6 +743,9 @@ export function emitIacInterrupt(send: SendFn, threadId: string, interruptValue:
 		versionCrosstab?: unknown; // SIO-935
 		priorUpgrades?: unknown; // SIO-971
 		recentChanges?: unknown; // SIO-1462
+		// SIO-XXXX: renovate-integration-update trigger gate fields.
+		marker?: unknown;
+		line?: unknown;
 	};
 
 	if (obj.type === "iac_clarify") {
@@ -879,6 +882,19 @@ export function emitIacInterrupt(send: SendFn, threadId: string, interruptValue:
 			...(typeof obj.recentChanges === "string" && obj.recentChanges ? { recentChanges: obj.recentChanges } : {}), // SIO-1462
 			message:
 				typeof obj.message === "string" ? obj.message : "Approve the Fleet agent upgrade (runs via CI), or decline.",
+		});
+		return true;
+	}
+
+	// SIO-XXXX: the single renovate-integration-update trigger approve/decline gate
+	// (renovateTriggerGate). The UI POSTs { approve } to the resume endpoint.
+	if (obj.type === "renovate_trigger_choice") {
+		send({
+			type: "renovate_trigger_choice",
+			threadId,
+			marker: typeof obj.marker === "string" ? obj.marker : "",
+			line: typeof obj.line === "string" ? obj.line : "",
+			message: typeof obj.message === "string" ? obj.message : "Trigger this Renovate update?",
 		});
 		return true;
 	}

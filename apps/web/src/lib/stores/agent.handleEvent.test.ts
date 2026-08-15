@@ -591,3 +591,24 @@ describe("applyStreamEvent", () => {
 		expect(state.fleetUpgradeResult?.progressLog).toBeUndefined();
 	});
 });
+
+// SIO-XXXX: renovateTriggerGate's interrupt had no reducer case, so the approve/decline gate
+// for the renovate-integration-update sub-flow never populated any UI state.
+describe("applyStreamEvent renovate_trigger_choice", () => {
+	test("sets the gate prompt", () => {
+		const state = applyStreamEvent(initialReducerState(), {
+			type: "renovate_trigger_choice",
+			threadId: "t-renovate",
+			marker: "renovate/elasticsearch-9.x",
+			line: "- [ ] <!-- rebase-check -->renovate/elasticsearch-9.x",
+			message: "Trigger the elasticsearch-9.x Renovate update?",
+		});
+		expect(state.renovateTriggerChoice).toEqual({
+			threadId: "t-renovate",
+			marker: "renovate/elasticsearch-9.x",
+			line: "- [ ] <!-- rebase-check -->renovate/elasticsearch-9.x",
+			message: "Trigger the elasticsearch-9.x Renovate update?",
+		});
+		expect(state.threadId).toBe("t-renovate");
+	});
+});

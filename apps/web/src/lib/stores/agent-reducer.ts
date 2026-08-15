@@ -304,6 +304,16 @@ export interface FleetUpgradeChoice {
 	message: string;
 }
 
+// SIO-XXXX: renovate-integration-update trigger sub-flow. The single operator approve/decline
+// gate (renovateTriggerGate). No dedicated result event -- the turn just ends with a final
+// message, so the card clears via the same optimistic-clear resumeIac uses for fleet/synthetics.
+export interface RenovateTriggerChoice {
+	threadId: string;
+	marker: string;
+	line: string;
+	message: string;
+}
+
 export interface FleetUpgradeResultRow {
 	// SIO-926: dispatched = the bulk_upgrade started and is still running past the status window
 	// (a long rollout we did not block on), distinct from a real failed pipeline.
@@ -439,6 +449,9 @@ export interface ReducerState {
 	fleetUpgradePreview: FleetUpgradePreview | null;
 	fleetUpgradeChoice: FleetUpgradeChoice | null;
 	fleetUpgradeResult: FleetUpgradeResultRow | null;
+	// SIO-XXXX: renovate-integration-update trigger sub-flow. Single approve/decline prompt
+	// (interrupt); no dedicated result event (see RenovateTriggerChoice doc comment).
+	renovateTriggerChoice: RenovateTriggerChoice | null;
 }
 
 export function initialReducerState(): ReducerState {
@@ -482,6 +495,7 @@ export function initialReducerState(): ReducerState {
 		fleetUpgradePreview: null,
 		fleetUpgradeChoice: null,
 		fleetUpgradeResult: null,
+		renovateTriggerChoice: null,
 	};
 }
 
@@ -807,6 +821,19 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 					// SIO-928: capture the live progress lines NOW, before the `done` handler clears
 					// iacPipelineProgress, so the timeline persists as a collapsed log under the result.
 					...(state.iacPipelineProgress.length > 0 && { progressLog: [...state.iacPipelineProgress] }),
+				},
+			};
+		// SIO-XXXX: renovate-integration-update trigger sub-flow. No dedicated result event --
+		// the card is cleared client-side (resumeIac's optimistic clear), not here.
+		case "renovate_trigger_choice":
+			return {
+				...state,
+				threadId: event.threadId,
+				renovateTriggerChoice: {
+					threadId: event.threadId,
+					marker: event.marker,
+					line: event.line,
+					message: event.message,
 				},
 			};
 		default:

@@ -34,6 +34,7 @@ import {
 	type IacReconcileResultRow,
 	type ReconcileDirection,
 	type ReducerState,
+	type RenovateTriggerChoice,
 	type SubAgentProgressEntry,
 	type SyntheticsDriftReport,
 	type SyntheticsPushChoice,
@@ -176,6 +177,9 @@ function createAgentStore() {
 	let fleetUpgradePreview = $state<FleetUpgradePreview | null>(null);
 	let fleetUpgradeChoice = $state<FleetUpgradeChoice | null>(null);
 	let fleetUpgradeResult = $state<FleetUpgradeResultRow | null>(null);
+	// SIO-XXXX: renovate-integration-update trigger sub-flow. Single approve/decline gate
+	// (interrupt); no dedicated result event -- cleared by the resumeIac optimistic-clear idiom.
+	let renovateTriggerChoice = $state<RenovateTriggerChoice | null>(null);
 	let abortController: AbortController | null = null;
 	let healthPollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -222,7 +226,8 @@ function createAgentStore() {
 			iacClarify !== null ||
 			iacReconcileChoice !== null ||
 			syntheticsPushChoice !== null ||
-			fleetUpgradeChoice !== null
+			fleetUpgradeChoice !== null ||
+			renovateTriggerChoice !== null
 		);
 	}
 
@@ -270,6 +275,8 @@ function createAgentStore() {
 		fleetUpgradePreview = null;
 		fleetUpgradeChoice = null;
 		fleetUpgradeResult = null;
+		// SIO-XXXX: same for the renovate-integration-update trigger sub-flow.
+		renovateTriggerChoice = null;
 		iacPipelineLog = undefined; // SIO-982: clear the prior GitOps pipeline log on a new turn
 		// SIO-1146: a new turn dismisses the prior learning outcome card.
 		hilLearningOutcome = null;
@@ -384,6 +391,7 @@ function createAgentStore() {
 			fleetUpgradePreview,
 			fleetUpgradeChoice,
 			fleetUpgradeResult,
+			renovateTriggerChoice,
 		};
 		const next = applyStreamEvent(snapshot, event);
 		currentContent = next.currentContent;
@@ -426,6 +434,7 @@ function createAgentStore() {
 		fleetUpgradePreview = next.fleetUpgradePreview;
 		fleetUpgradeChoice = next.fleetUpgradeChoice;
 		fleetUpgradeResult = next.fleetUpgradeResult;
+		renovateTriggerChoice = next.renovateTriggerChoice;
 	}
 
 	// SIO-1145: record the FIRST ticket created in this thread (called from ChatMessage's
@@ -646,6 +655,7 @@ function createAgentStore() {
 		fleetUpgradePreview = null;
 		fleetUpgradeChoice = null;
 		fleetUpgradeResult = null;
+		renovateTriggerChoice = null;
 		iacPipelineLog = undefined; // SIO-982: clear the prior GitOps pipeline log on a new turn
 		// SIO-1145: a new conversation has no thread ticket yet.
 		threadTicket = null;
@@ -682,8 +692,10 @@ function createAgentStore() {
 		const pendingReconcileChoice = iacReconcileChoice;
 		const pendingFleetUpgradeChoice = fleetUpgradeChoice;
 		const pendingSyntheticsPushChoice = syntheticsPushChoice;
+		const pendingRenovateTriggerChoice = renovateTriggerChoice;
 		fleetUpgradeChoice = null;
 		syntheticsPushChoice = null;
+		renovateTriggerChoice = null;
 		iacPipelineProgress = [];
 		isStreaming = true;
 		currentContent = "";
@@ -709,6 +721,7 @@ function createAgentStore() {
 			iacReconcileChoice = iacReconcileChoice ?? pendingReconcileChoice;
 			fleetUpgradeChoice = fleetUpgradeChoice ?? pendingFleetUpgradeChoice;
 			syntheticsPushChoice = syntheticsPushChoice ?? pendingSyntheticsPushChoice;
+			renovateTriggerChoice = renovateTriggerChoice ?? pendingRenovateTriggerChoice;
 			currentContent += `\n\n[Error resuming IaC agent: ${error instanceof Error ? error.message : String(error)}]`;
 			// SIO-1110: resume-leg failures never reach the reducer's error case.
 			lastOutcome = "error";
@@ -763,6 +776,14 @@ function createAgentStore() {
 	function approveFleetUpgrade(approve: boolean) {
 		if (!fleetUpgradeChoice) return;
 		return resumeIac({ approve }, fleetUpgradeChoice.threadId);
+	}
+
+	// SIO-XXXX: answer the single renovate-integration-update trigger gate (approve / decline).
+	// On approve the agent ticks the Dependency Dashboard checkbox and plays the Renovate
+	// schedule (branches/MRs only -- apply:* stays manual); on decline it stops without triggering.
+	function approveRenovateTrigger(approve: boolean) {
+		if (!renovateTriggerChoice) return;
+		return resumeIac({ approve }, renovateTriggerChoice.threadId);
 	}
 
 	// SIO-1126: POST a HIL learning gate answer to the resume endpoint and pipe
@@ -1030,6 +1051,9 @@ function createAgentStore() {
 		get fleetUpgradeResult() {
 			return fleetUpgradeResult;
 		},
+		get renovateTriggerChoice() {
+			return renovateTriggerChoice;
+		},
 		sendMessage,
 		setFeedback,
 		setThreadTicket,
@@ -1050,6 +1074,7 @@ function createAgentStore() {
 		resolveReconcileChoice,
 		approveSyntheticsPush,
 		approveFleetUpgrade,
+		approveRenovateTrigger,
 	};
 }
 
