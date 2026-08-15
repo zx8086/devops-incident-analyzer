@@ -202,6 +202,13 @@
 			"destructiveHint": false
 		}
 	},
+	"gitlab_play_pipeline_schedule": {
+		"surfaceHash": "eb1accc060ba50cf1c7825a2e7681dd1bfb9170bfb2d182445a39900d469cb60",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
+		}
+	},
 	"gitlab_trigger_drift_check": {
 		"surfaceHash": "b50fb477709a5dee556dfcced8b16092b1d55e088100891f414f3b4345928b5f",
 		"annotations": {
@@ -235,6 +242,13 @@
 		"annotations": {
 			"readOnlyHint": false,
 			"destructiveHint": true
+		}
+	},
+	"gitlab_unschedule_renovate_branches": {
+		"surfaceHash": "01b6ed23fb89fd73f0a8201ec79d09c8b44b6e8fb6ea6dc8816d8821f220f3cd",
+		"annotations": {
+			"readOnlyHint": false,
+			"destructiveHint": false
 		}
 	},
 	"iac_list_deployments": {

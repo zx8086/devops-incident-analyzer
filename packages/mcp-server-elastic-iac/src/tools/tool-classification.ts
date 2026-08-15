@@ -64,6 +64,8 @@ const WRITE_TOOLS: ReadonlySet<string> = new Set([
 	"gitlab_trigger_synthetics_push",
 	"gitlab_trigger_fleet_upgrade_preview",
 	"gitlab_trigger_fleet_upgrade_apply",
+	"gitlab_unschedule_renovate_branches",
+	"gitlab_play_pipeline_schedule",
 ]);
 
 // Destructive per the spec's non-additive semantics: the commit tools carry
