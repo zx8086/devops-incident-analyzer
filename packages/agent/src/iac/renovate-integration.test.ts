@@ -11,11 +11,13 @@ import { Command, END, MemorySaver, START, StateGraph } from "@langchain/langgra
 // (see iac-change-memory.test.ts for the full rationale).
 import * as realMemoryBackendNs from "../memory-backend.ts";
 import * as realMemoryWriterNs from "../memory-writer.ts";
+import * as realLaneKnowledgeNs from "./lane-knowledge.ts";
 import { buildRenovateGateMessage, parseFirstOpenMrUrl, parseRenovateTargetJson } from "./nodes.ts";
 import { IacState, type IacStateType } from "./state.ts";
 
 const realMemoryBackend = { ...realMemoryBackendNs };
 const realMemoryWriter = { ...realMemoryWriterNs };
+const realLaneKnowledge = { ...realLaneKnowledgeNs };
 
 function restoreRealMemoryMocks(): void {
 	mock.module("../memory-backend.ts", () => realMemoryBackend);
@@ -1610,5 +1612,69 @@ describe("watchRenovateMr falls back to renovateInFlightMarker (SIO-1475)", () =
 		const { watchRenovateMr: freshWatchRenovateMr } = await import("./nodes.ts");
 		const out = await freshWatchRenovateMr({ renovateMarker: null, renovateInFlightMarker: null } as IacStateType);
 		expect(out).toEqual({});
+	});
+});
+
+describe("triggerRenovateUpdate records a KG ConfigChange (SIO-1475)", () => {
+	afterEach(() => {
+		mock.module("./lane-knowledge.ts", () => realLaneKnowledge);
+	});
+
+	test("calls recordLaneConfigChange with workflow: 'renovate' and outcome: 'proposed' on a successful trigger", async () => {
+		const recordSpy = mock(async () => {});
+		mock.module("./lane-knowledge.ts", () => ({ ...realLaneKnowledge, recordLaneConfigChange: recordSpy }));
+		mockRenovateTools({
+			gitlab_unschedule_renovate_branches: () => '[200] {"status":"ok"}',
+			gitlab_play_pipeline_schedule: () => '[200] {"status":"ok"}',
+		});
+		const { triggerRenovateUpdate: freshTriggerRenovateUpdate } = await import("./nodes.ts");
+
+		const state = {
+			renovateTarget: { deployment: "ap-cld", integration: "udp" },
+			renovateMarker: {
+				marker: "renovate/ap-cld-udp",
+				line: " - [ ] <!-- unschedule-branch=renovate/ap-cld-udp -->chore(deps): [ap-cld] udp to v2.5.1",
+			},
+			renovateIssueIid: 11,
+			requestId: "req-123",
+			threadId: "thread-abc",
+		} as IacStateType;
+
+		await freshTriggerRenovateUpdate(state);
+
+		expect(recordSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				id: "req-123",
+				deployment: "ap-cld",
+				workflow: "renovate",
+				outcome: "proposed",
+				summary: "renovate ap-cld -> renovate/ap-cld-udp",
+				threadId: "thread-abc",
+			}),
+		);
+	});
+
+	test("does NOT call recordLaneConfigChange when the tick call fails", async () => {
+		const recordSpy = mock(async () => {});
+		mock.module("./lane-knowledge.ts", () => ({ ...realLaneKnowledge, recordLaneConfigChange: recordSpy }));
+		mockRenovateTools({
+			gitlab_unschedule_renovate_branches: () => '[500] {"error":"internal error"}',
+		});
+		const { triggerRenovateUpdate: freshTriggerRenovateUpdate } = await import("./nodes.ts");
+
+		const state = {
+			renovateTarget: { deployment: "ap-cld", integration: "udp" },
+			renovateMarker: {
+				marker: "renovate/ap-cld-udp",
+				line: " - [ ] <!-- unschedule-branch=renovate/ap-cld-udp -->chore(deps): [ap-cld] udp to v2.5.1",
+			},
+			renovateIssueIid: 11,
+			requestId: "req-123",
+		} as IacStateType;
+
+		const out = await freshTriggerRenovateUpdate(state);
+
+		expect(out.blockedReason).toBeDefined();
+		expect(recordSpy).not.toHaveBeenCalled();
 	});
 });

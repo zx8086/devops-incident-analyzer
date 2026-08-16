@@ -902,6 +902,20 @@ export async function triggerRenovateUpdate(state: IacStateType): Promise<Partia
 		triggerAtIso,
 	};
 
+	// SIO-1475: one KG ConfigChange write per trigger, here (not in watchRenovateMr) so a
+	// later "check again" re-poll never writes a duplicate node for the same logical trigger --
+	// mirrors exactly where the fleet-upgrade lane's own write happens (nodes.ts:12749, after
+	// dispatch, not after each subsequent poll). mrUrl is intentionally omitted -- it is not
+	// known yet at trigger time; see the design spec's explicit "what this does NOT do" note.
+	await recordLaneConfigChange({
+		id: state.requestId,
+		deployment: inFlight.deployment,
+		workflow: "renovate",
+		outcome: "proposed",
+		summary: `renovate ${inFlight.deployment} -> ${marker.marker}`,
+		threadId: state.threadId || undefined,
+	});
+
 	return { renovateTriggerAtIso: triggerAtIso, renovateInFlightMarker: inFlight };
 }
 
