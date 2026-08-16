@@ -1675,6 +1675,9 @@ describe("recallPriorRenovateTriggers (SIO-1472)", () => {
 	// Promise.all forever -- the local Promise.race timeout must still resolve the recall to "".
 	test("returns '' when the memory backend never responds (hung request)", async () => {
 		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		// CodeRabbit (PR #667): proves the timeout path specifically ran, not just that "" came back
+		// via the earlier backend/deployment/marker guard (which also returns "").
+		let searchStarted = false;
 		const { __setAgentMemoryClient } = require("../memory-backend.ts");
 		__setAgentMemoryClient({
 			async ensureUser() {},
@@ -1685,7 +1688,10 @@ describe("recallPriorRenovateTriggers (SIO-1472)", () => {
 			async addMessages() {
 				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
 			},
-			searchMemory: () => new Promise(() => {}),
+			searchMemory: () => {
+				searchStarted = true;
+				return new Promise<never>(() => {});
+			},
 			async updateSession() {},
 			async endSession() {},
 			async checkHealth() {
@@ -1694,6 +1700,7 @@ describe("recallPriorRenovateTriggers (SIO-1472)", () => {
 		} satisfies AgentMemoryClient);
 		const out = await recallPriorRenovateTriggers("ap-cld", "renovate/ap-cld-elastic_agent");
 		expect(out).toBe("");
+		expect(searchStarted).toBe(true);
 		reset();
 	}, 8_000);
 });
