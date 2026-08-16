@@ -832,7 +832,12 @@ export const IacState = Annotation.Root({
 	// SIO-1473: affected-policy names (Kibana Fleet package_policies call) + the pre-cap changelog
 	// entry count, so the card can show real policy names in a collapsed section and an honest
 	// "+N more releases" note when the changelog display is capped at 10 entries.
-	renovateAffectedPolicies: Annotation<string[]>({ reducer: last, default: () => [] }),
+	// SIO-1479: each entry now carries a per-policy agent count (withAgentCount=true); agentCount
+	// is null when Kibana omits it, so the card can show "(N Agents)" only when known.
+	renovateAffectedPolicies: Annotation<{ name: string; agentCount: number | null }[]>({
+		reducer: last,
+		default: () => [],
+	}),
 	renovateChangelogTotal: Annotation<number>({ reducer: last, default: () => 0 }),
 	// SIO-930: set by the request (UI message-count signal). Gates whether the conversational
 	// "converse" intent is selectable -- a first turn cannot be a follow-up about a prior answer.

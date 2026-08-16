@@ -541,42 +541,51 @@ async function fetchRenovateChangelog(integration: string): Promise<ChangelogEnt
 const AFFECTED_POLICIES_PER_PAGE = 100;
 const AFFECTED_POLICIES_MAX_PAGES = 50;
 
+// SIO-1479: per-policy agent count for the renovate_trigger_choice card's "Affected policies" list.
+// The Kibana Fleet package_policies list endpoint omits agent counts by default; `withAgentCount=true`
+// adds an `agents` number per item (live-verified against ap-cld: agents:108 for ap_windows_prod_windows;
+// note the sibling `agent_count` key is present-but-always-null, so read `agents`, not `agent_count`).
+// agentCount is null when the field is absent (older Kibana / param not honored) so the card can omit
+// the suffix rather than render "undefined Agents".
 async function fetchAffectedPolicyNames(
 	kibanaConfig: { url: string; apiKey: string },
 	integration: string,
-): Promise<string[]> {
+): Promise<{ name: string; agentCount: number | null }[]> {
 	// SIO-1473: integration is LLM-extracted from free-form user text (extractRenovateTarget),
 	// not literal dashboard text -- strip quote/backslash so it can't break out of the KQL string
 	// literal below. encodeURIComponent alone stops URL/param injection but not this.
 	const safeIntegration = integration.replace(/["\\]/g, "");
 	const kuery = `ingest-package-policies.package.name:"${safeIntegration}"`;
-	const names: string[] = [];
+	const policies: { name: string; agentCount: number | null }[] = [];
 	try {
 		for (let page = 1; page <= AFFECTED_POLICIES_MAX_PAGES; page++) {
 			const res = await fetch(
-				`${kibanaConfig.url}/api/fleet/package_policies?kuery=${encodeURIComponent(kuery)}&page=${page}&perPage=${AFFECTED_POLICIES_PER_PAGE}`,
+				`${kibanaConfig.url}/api/fleet/package_policies?kuery=${encodeURIComponent(kuery)}&page=${page}&perPage=${AFFECTED_POLICIES_PER_PAGE}&withAgentCount=true`,
 				{
 					headers: { Authorization: `ApiKey ${kibanaConfig.apiKey}` },
 					signal: AbortSignal.timeout(8_000),
 				},
 			);
-			if (!res.ok) return names;
+			if (!res.ok) return policies;
 			const body = (await res.json()) as { items?: unknown; total?: unknown };
 			const items = Array.isArray(body.items) ? body.items : [];
-			names.push(
+			policies.push(
 				...items
 					.filter(
-						(item): item is { name: string } =>
+						(item): item is { name: string; agents?: unknown } =>
 							typeof item === "object" && item !== null && typeof (item as { name?: unknown }).name === "string",
 					)
-					.map((item) => item.name),
+					.map((item) => ({
+						name: item.name,
+						agentCount: typeof item.agents === "number" ? item.agents : null,
+					})),
 			);
-			const total = typeof body.total === "number" ? body.total : names.length;
-			if (names.length >= total || items.length === 0) break;
+			const total = typeof body.total === "number" ? body.total : policies.length;
+			if (policies.length >= total || items.length === 0) break;
 		}
-		return names;
+		return policies;
 	} catch {
-		return names;
+		return policies;
 	}
 }
 
@@ -597,7 +606,7 @@ export async function enrichRenovateTarget(state: IacStateType): Promise<Partial
 	const targetVersion = parseRenovateTargetVersion(marker.line);
 	let installedVersion: string | null = null;
 	let policyCount: number | null = null;
-	let affectedPolicies: string[] = [];
+	let affectedPolicies: { name: string; agentCount: number | null }[] = [];
 	let resolvedTargetVersion = targetVersion;
 
 	const kibanaConfig = resolveKibanaConfig(target.deployment);
@@ -655,7 +664,7 @@ export async function enrichRenovateTarget(state: IacStateType): Promise<Partial
 			}
 		})();
 
-		const [match, names] = await Promise.all([
+		const [match, policies] = await Promise.all([
 			packagesListCall,
 			fetchAffectedPolicyNames(kibanaConfig, target.integration),
 		]);
@@ -664,7 +673,7 @@ export async function enrichRenovateTarget(state: IacStateType): Promise<Partial
 			if (typeof match.packagePoliciesInfo?.count === "number") policyCount = match.packagePoliciesInfo.count;
 			if (!resolvedTargetVersion && typeof match.version === "string") resolvedTargetVersion = match.version;
 		}
-		affectedPolicies = names;
+		affectedPolicies = policies;
 	}
 
 	const CHANGELOG_DISPLAY_CAP = 10;
@@ -1794,7 +1803,7 @@ export const TURN_START_RESET = {
 	renovateRecentChanges: "",
 	renovateDeploymentHistory: "",
 	renovatePriorTriggers: "",
-	renovateAffectedPolicies: [] as string[],
+	renovateAffectedPolicies: [] as { name: string; agentCount: number | null }[],
 	renovateChangelogTotal: 0,
 } as const;
 

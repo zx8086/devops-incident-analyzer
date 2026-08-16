@@ -105,6 +105,17 @@ const PIPELINE_NODES = new Set([
 	"detectFleetUpgrade",
 	"fleetUpgradeGate",
 	"applyFleetUpgrade",
+	// SIO-1479: elastic-iac renovate integration-update sub-flow. Without these the on_chain_start/
+	// on_chain_end gate below drops renovate node events, so the tracing pills never light up during
+	// a Renovate trigger (extractRenovateTarget -> resolveIntegrationSlug -> resolveRenovateMarker ->
+	// enrichRenovateTarget -> PAUSE at renovateTriggerGate -> triggerRenovateUpdate -> watchRenovateMr).
+	"extractRenovateTarget",
+	"resolveIntegrationSlug",
+	"resolveRenovateMarker",
+	"enrichRenovateTarget",
+	"renovateTriggerGate",
+	"triggerRenovateUpdate",
+	"watchRenovateMr",
 	// SIO-1126: HIL learning lane nodes (incident-analyzer "learn from TICKET-123").
 	"learnFetchTicket",
 	"learnMatchIncident",

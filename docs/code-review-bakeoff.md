@@ -31,6 +31,8 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#662](https://github.com/zx8086/devops-incident-analyzer/pull/662) | 2026-08-15 | 2 | 3 / 0 | 3 / 0 (2 duplicate) | Renovate on-demand MR tools; near-total overlap; detail below |
 | [#670](https://github.com/zx8086/devops-incident-analyzer/pull/670) | 2026-08-16 | 2 | 1 / 0 | 1 / 0 (+1 declined-then-withdrawn) | Cwd-aware OAuth seed command; non-overlapping recall, CodeRabbit withdrew its Zod finding after an adversarial repro; detail below |
 | [#671](https://github.com/zx8086/devops-incident-analyzer/pull/671) | 2026-08-16 | 3 | 2 / 0 | 1 / 0 (duplicate of round-1 Greptile) | Renovate follow-up guard + history; round 1 both bots caught the same bug, round 2 Greptile caught a fix-introduced regression alone; detail below |
+| [#673](https://github.com/zx8086/devops-incident-analyzer/pull/673) | 2026-08-16 | 3 | 2 / 0 | 3 / 0 (1 duplicate) | gitlabFetch timeout + probe classification; first convergence (both caught the caller-cancellation mislabel), CodeRabbit's readPositiveIntEnv pointer beat the hand-rolled fix; detail below |
+| [#674](https://github.com/zx8086/devops-incident-analyzer/pull/674) | 2026-08-16 | 1 | 0 / 0 (1 declined) | 0 / 0 | Renovate stage-tracker wiring + per-policy agent counts; Greptile 4/5 with one convention finding declined as a false premise, CodeRabbit clean; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -302,3 +304,26 @@ Three rounds on a small resilience fix: 4 files (+190/-2) round 1, (+94/-11) rou
 2. *CodeRabbit's repo-awareness beat a hand-rolled fix.* Its "use `readPositiveIntEnv()`" note cited repo learnings and pointed at an existing helper the author had duplicated worse. This is a different KIND of value from Greptile's correctness findings -- convention/reuse rather than defect detection -- and is the strongest argument yet for keeping it alongside.
 3. *A green local gate is not a green CI gate.* The round-1 typecheck failure was invisible locally because the check was grepped rather than exit-coded. Second occurrence this session of local verification being weaker than CI's; exit codes are the only reliable signal.
 4. *The fix reproduced its own bug class.* Both the "timed out after Nms" mislabel and the tiny-deadline parse were instances of "assert something that did not happen" -- exactly what SIO-1477/1478 were filed to remove. Worth watching for in any change whose subject is diagnostics.
+
+## PR #674 detail (SIO-1479, Renovate stage-tracker wiring + per-policy agent counts)
+
+A single-commit UI/observability PR, +150/-34 across 11 files, bundling two independent fixes (SSE stage-tracker wiring for the Renovate lane; per-policy Fleet agent counts threaded through the shared event contract to the approval card). One review round, no re-triggers. Both bots reviewed the correct HEAD SHA (`8f0cc3e3`, confirmed in each footer).
+
+**Round 1 (`8f0cc3e3`):**
+
+- Greptile: `COMPLETED SUCCESS`, `reviewDecision: APPROVED`, Confidence Score **4/5**, one non-blocking finding (`nodes.ts:574-580`): the newly consumed Fleet `agents` field is validated with an inline `typeof` guard rather than "the repository-required Zod runtime validation pattern", framed as fragmenting validation of the external response.
+- CodeRabbit: "No actionable comments were generated." Clean. (Walkthrough + change-summary only, effort rated 3/Moderate.)
+
+**Triage (verified against the file, not applied on the bot's authority):** the finding's premise -- that Zod is *required* for these external responses -- is false for this specific call class. All three Kibana Fleet `fetch` responses in this file use the identical inline pattern: `(await res.json()) as { items?: unknown }` + a `typeof` guard + soft-fail, at `nodes.ts:459` (`resolveIntegrationSlug`), `:570` (this PR's new call), and `:629` (`enrichRenovateTarget`'s packages-list call). The two others predate this PR and were reviewed/merged as-is across #668/#669/#671. Zod *is* imported and heavily used in this file (112 occurrences) -- but for LangGraph state annotations and tool-arg schemas, deliberately NOT for these raw external Fleet HTTP payloads, which are intentionally guarded lightly so any shape drift degrades to `agentCount: null` rather than throwing on the approval-gate path. Adding a Zod schema for only the new `agents` field would make this call *inconsistent* with its two siblings, not more consistent. **Declined in-thread** with this reasoning (attribution appended) and the inline thread resolved.
+
+**No fix push:** the sole finding was declined on merit; nothing to fix. Local verification before opening the PR was already green -- typecheck (0 errors, 19 packages), lint (0 errors, 12 pre-existing warnings none in changed files), 140 agent+shared and 286 web tests, plus an SSR render probe confirming the card's `(108 Agents)`/`(0 Agents)`/`(1 Agent)`/null-omitted output and the `iacNodes` selector returning `IAC_RENOVATE_NODES` with all 7 ids matching graph node names.
+
+**Latency:** Greptile completed within ~1-2 minutes of PR open; no re-trigger needed.
+
+**Takeaways:**
+
+1. *First declined-as-false-premise entry in the series.* Prior declines (#660 Minor, #670 Zod) were judgment calls on defensibility of already-correct code. This one is different: the finding asserted a repo *convention* ("Zod required") that the surrounding code demonstrably does not follow for this call class. The verify step here was reading the two sibling calls in the same file, not a runtime repro -- the right form of verification for a convention claim, and the counter-evidence (two merged siblings using the exact declined pattern) was decisive.
+2. *A convention finding is only as good as the convention.* Greptile correctly observed the pattern-divergence-from-Zod-elsewhere but mis-scoped which code the convention governs. Rule-shaped findings that cite a "repository-required pattern" warrant checking whether the cited pattern actually applies to the specific construct, not just whether it exists somewhere in the file -- the same lesson as #658/#670's declined Zod findings, now a three-peat for Zod-convention false positives specifically.
+3. *CodeRabbit clean where Greptile flagged.* On a mechanical/threading PR with no correctness surface, CodeRabbit found nothing and Greptile found one convention nit. Neither a miss (the nit was declined, not a real defect), but a data point that Greptile is the noisier of the two on style/convention while CodeRabbit stayed silent -- the inverse of the recall advantage Greptile has shown on correctness bugs (#658/#659/#671/#672).
+4. *4/5 with a declined finding still merges cleanly.* The `Greptile Review` check was `SUCCESS` and `reviewDecision` `APPROVED` despite the 4/5 -- the score reflects the open convention nit, not a merge block. Reading the body confirmed the finding was non-blocking and declinable, exactly the "a clean check is not the whole story, but here the body agrees" case.
+

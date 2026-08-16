@@ -326,7 +326,8 @@ export interface RenovateTriggerChoice {
 	// priorTriggers above (which is scoped to this exact integration/marker).
 	deploymentHistory?: string;
 	// SIO-1473: real affected-policy names + the pre-cap changelog entry count.
-	affectedPolicies?: string[];
+	// SIO-1479: each entry now carries a per-policy agent count (null when Kibana omits it).
+	affectedPolicies?: Array<{ name: string; agentCount: number | null }>;
 	changelogTotal?: number;
 }
 

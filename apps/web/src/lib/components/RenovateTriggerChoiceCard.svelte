@@ -129,8 +129,10 @@ const changelogCount = $derived(prompt.changelog?.length ?? 0);
           Affected policies ({prompt.policyCount ?? prompt.affectedPolicies.length})
         </summary>
         <ul class="mt-1 ml-3 list-disc space-y-0.5 text-xs text-tommy-navy/70">
-          {#each prompt.affectedPolicies as name (name)}
-            <li>{name}</li>
+          <!-- SIO-1479: per-policy agent count (Kibana withAgentCount=true); omit the suffix when
+               agentCount is null so a policy Kibana can't count for renders cleanly, not "null Agents". -->
+          {#each prompt.affectedPolicies as policy (policy.name)}
+            <li>{policy.name}{#if policy.agentCount != null} ({policy.agentCount} Agent{policy.agentCount === 1 ? "" : "s"}){/if}</li>
           {/each}
         </ul>
       </details>
