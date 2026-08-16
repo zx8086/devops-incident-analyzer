@@ -103,6 +103,35 @@ describe("renovateTriggerGate interrupt round-trip (SIO-1471)", () => {
 		expect(values.renovateTriggerApproved).toBe(true);
 		expect(values.messages.length).toBe(0);
 	});
+
+	test("interrupt payload carries the enrichment fields set by enrichRenovateTarget", async () => {
+		const compiled = buildMiniGateGraph();
+		const config = { configurable: { thread_id: `t-renovate-enrichment-${Date.now()}` } };
+		const inputState = {
+			requestId: "req-1",
+			renovateMarker: marker,
+			renovateInstalledVersion: "2.8.0",
+			renovateTargetVersion: "2.9.4",
+			renovatePolicyCount: 24,
+			renovateChangelog: [{ version: "2.9.4", changes: [{ description: "Add X", type: "enhancement" }] }],
+		};
+
+		await compiled.invoke(inputState as unknown as Parameters<typeof compiled.invoke>[0], config);
+
+		// LangGraph's getState() returns a StateSnapshot whose .tasks[N].interrupts[N] array holds
+		// each paused task's Interrupt objects; Interrupt.value is exactly the object passed to
+		// interrupt({...}) inside the node (confirmed against @langchain/langgraph's own type
+		// definitions: PregelTaskDescription.interrupts: Interrupt[], Interrupt<Value>.value?: Value).
+		// This graph has exactly one node that can pause, so tasks[0].interrupts[0] is unambiguous.
+		const after = await compiled.getState(config);
+		const interruptValue = after.tasks[0]?.interrupts[0]?.value as Record<string, unknown> | undefined;
+		expect(interruptValue).toMatchObject({
+			installedVersion: "2.8.0",
+			targetVersion: "2.9.4",
+			policyCount: 24,
+			changelog: [{ version: "2.9.4", changes: [{ description: "Add X", type: "enhancement" }] }],
+		});
+	});
 });
 
 // SIO-1471: teardownIac must NOT append its generic gitops-flavored fallback lines ("MR
@@ -599,7 +628,7 @@ describe("parseFirstOpenMrUrl", () => {
 import { TURN_START_RESET } from "./nodes.ts";
 
 describe("TURN_START_RESET (renovate-integration-update fields)", () => {
-	test("resets all 7 renovate sub-flow fields", () => {
+	test("resets all 11 renovate-integration-update fields", () => {
 		expect(TURN_START_RESET).toMatchObject({
 			renovateTarget: null,
 			renovateCandidates: [],
@@ -608,6 +637,455 @@ describe("TURN_START_RESET (renovate-integration-update fields)", () => {
 			renovateIssueIid: null,
 			renovateMrUrl: "",
 			renovateTriggerAtIso: "",
+			renovateInstalledVersion: null,
+			renovateTargetVersion: null,
+			renovatePolicyCount: null,
+			renovateChangelog: [],
 		});
+	});
+});
+
+import { compareSemver, parseRenovateTargetVersion } from "./nodes.ts";
+
+describe("parseRenovateTargetVersion", () => {
+	test("parses the target version from a real dashboard line", () => {
+		const line =
+			" - [ ] <!-- unschedule-branch=renovate/eu-onboarding-elastic_agent -->chore(deps): [eu-onboarding] elastic_agent to v2.9.4";
+		expect(parseRenovateTargetVersion(line)).toBe("2.9.4");
+	});
+
+	test("parses a version with only major.minor (no patch)", () => {
+		const line = " - [ ] <!-- unschedule-branch=x -->chore(deps): [eu-b2b] system to v2.22";
+		expect(parseRenovateTargetVersion(line)).toBe("2.22");
+	});
+
+	test("returns null when the line has no 'to vX.Y.Z' suffix", () => {
+		expect(parseRenovateTargetVersion("chore(deps): bump something")).toBeNull();
+	});
+
+	test("returns null for an empty string", () => {
+		expect(parseRenovateTargetVersion("")).toBeNull();
+	});
+});
+
+describe("compareSemver", () => {
+	test("orders a lower version before a higher one", () => {
+		expect(compareSemver("2.8.0", "2.9.4")).toBeLessThan(0);
+	});
+
+	test("orders a higher version after a lower one", () => {
+		expect(compareSemver("2.9.4", "2.8.0")).toBeGreaterThan(0);
+	});
+
+	test("returns 0 for equal versions", () => {
+		expect(compareSemver("2.9.4", "2.9.4")).toBe(0);
+	});
+
+	test("compares patch versions correctly (numeric, not lexical)", () => {
+		// Lexical comparison would wrongly order "2.9.10" before "2.9.9" -- must compare numerically.
+		expect(compareSemver("2.9.9", "2.9.10")).toBeLessThan(0);
+	});
+
+	test("treats a missing patch component as 0", () => {
+		expect(compareSemver("2.22", "2.22.1")).toBeLessThan(0);
+		expect(compareSemver("2.22.0", "2.22")).toBe(0);
+	});
+
+	// SIO-XXXX (PR #666 Greptile + CodeRabbit): a prerelease must sort BELOW its matching
+	// stable release (true SemVer precedence), not collapse to equal -- treating
+	// "1.32.0-beta.2" as equal to "1.32.0" let a beta-of-the-target-version's changelog
+	// entry pass filterChangelogRange's inclusive "<= target" check as if it were the real
+	// release, showing an operator changelog content for a version that was never actually
+	// installed/targeted.
+	test("orders a prerelease below its matching stable release", () => {
+		expect(compareSemver("1.32.0-beta.2", "1.32.0")).toBeLessThan(0);
+		expect(compareSemver("1.32.0", "1.32.0-beta.2")).toBeGreaterThan(0);
+	});
+
+	test("orders two prereleases of the same base version by their prerelease identifiers", () => {
+		expect(compareSemver("1.32.0-beta.1", "1.32.0-beta.2")).toBeLessThan(0);
+		expect(compareSemver("1.32.0-beta.2", "1.32.0-beta.1")).toBeGreaterThan(0);
+	});
+
+	test("still compares the base version first when prerelease bases differ", () => {
+		expect(compareSemver("1.31.0", "1.32.0-beta")).toBeLessThan(0);
+		expect(compareSemver("1.32.1-beta.1", "1.32.0")).toBeGreaterThan(0);
+	});
+
+	test("treats equal prerelease identifiers (or none) as equal", () => {
+		expect(compareSemver("1.32.0-beta.2", "1.32.0-beta.2")).toBe(0);
+		expect(compareSemver("1.32.0", "1.32.0")).toBe(0);
+	});
+
+	test("ignores build-metadata (+) but still applies prerelease precedence", () => {
+		expect(compareSemver("1.32.0+build.5", "1.32.0")).toBe(0);
+		expect(compareSemver("1.32.0-beta.1+build.5", "1.32.0")).toBeLessThan(0);
+	});
+
+	// SIO-XXXX (PR #666 CodeRabbit round 2): the PREVIOUS fix used `.split("-", 2)`, which in
+	// JavaScript does NOT mean "split into at most 2 parts, joining the remainder back together"
+	// -- the `limit` argument on String.split just caps how many array entries come BACK, it
+	// silently DROPS everything past that cap rather than rejoining it. "1.32.0-alpha-1".split("-",
+	// 2) is ["1.32.0", "alpha"] -- the "-1" is gone, not merged into "alpha-1". This meant two
+	// DIFFERENT prerelease identifiers that happen to contain their own hyphen (a real,
+	// SemVer-legal shape) silently compared as equal.
+	test("does not truncate a prerelease identifier that itself contains a hyphen", () => {
+		expect(compareSemver("1.32.0-alpha-1", "1.32.0-alpha-2")).toBeLessThan(0);
+		expect(compareSemver("1.32.0-alpha-2", "1.32.0-alpha-1")).toBeGreaterThan(0);
+	});
+
+	// Real SemVer precedence: a numeric identifier ALWAYS sorts below an alphanumeric one,
+	// regardless of what the alphanumeric one "looks like" -- "2" < "1a" even though 2 > 1,
+	// because SemVer never compares a numeric identifier against a non-numeric one by value.
+	test("orders a numeric prerelease identifier below an alphanumeric one, per SemVer", () => {
+		expect(compareSemver("1.32.0-2", "1.32.0-1a")).toBeLessThan(0);
+		expect(compareSemver("1.32.0-1a", "1.32.0-2")).toBeGreaterThan(0);
+	});
+});
+
+import { type ChangelogEntry, filterChangelogRange } from "./nodes.ts";
+
+describe("filterChangelogRange", () => {
+	const entries: ChangelogEntry[] = [
+		{ version: "2.9.4", changes: [{ description: "Add system.cpu.cores", type: "enhancement" }] },
+		{ version: "2.9.3", changes: [{ description: "Fix X", type: "bugfix" }] },
+		{ version: "2.9.1", changes: [{ description: "Fix Y", type: "bugfix" }] },
+		{ version: "2.8.1", changes: [{ description: "Fix Z", type: "bugfix" }] },
+		{ version: "2.8.0", changes: [{ description: "Initial", type: "enhancement" }] },
+	];
+
+	test("returns every entry strictly above installed and up to and including target", () => {
+		const result = filterChangelogRange(entries, "2.8.0", "2.9.4");
+		expect(result.map((e) => e.version)).toEqual(["2.9.4", "2.9.3", "2.9.1", "2.8.1"]);
+	});
+
+	test("excludes the installed version itself", () => {
+		const result = filterChangelogRange(entries, "2.8.1", "2.9.4");
+		expect(result.map((e) => e.version)).not.toContain("2.8.1");
+	});
+
+	test("excludes versions above the target", () => {
+		const result = filterChangelogRange(entries, "2.8.0", "2.9.1");
+		expect(result.map((e) => e.version)).toEqual(["2.9.1", "2.8.1"]);
+	});
+
+	test("returns an empty array when installed already equals target", () => {
+		expect(filterChangelogRange(entries, "2.9.4", "2.9.4")).toEqual([]);
+	});
+
+	test("falls back to only the target version's own entry when installedVersion is null", () => {
+		const result = filterChangelogRange(entries, null, "2.9.3");
+		expect(result.map((e) => e.version)).toEqual(["2.9.3"]);
+	});
+
+	test("returns an empty array when installedVersion is null and the target has no matching entry", () => {
+		expect(filterChangelogRange(entries, null, "3.0.0")).toEqual([]);
+	});
+
+	test("preserves newest-first order from the input", () => {
+		const result = filterChangelogRange(entries, "2.8.0", "2.9.4");
+		for (let i = 1; i < result.length; i++) {
+			const prev = result[i - 1];
+			const curr = result[i];
+			if (prev && curr) {
+				expect(compareSemverForTest(prev.version, curr.version)).toBeGreaterThanOrEqual(0);
+			}
+		}
+	});
+});
+
+// Local helper for the ordering assertion above -- avoids re-exporting compareSemver just for the test.
+function compareSemverForTest(a: string, b: string): number {
+	const pa = a.split(".").map(Number);
+	const pb = b.split(".").map(Number);
+	for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+		const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+		if (diff !== 0) return diff;
+	}
+	return 0;
+}
+
+import { enrichRenovateTarget } from "./nodes.ts";
+
+// SIO-XXXX: best-effort enrichment for the renovate_trigger_choice card -- one Kibana Fleet
+// call (installed/target version + policy count) and one GitHub raw-content call (changelog),
+// each independently wrapped so a failure in one never suppresses the other and neither ever
+// blocks the turn (renovateTriggerGate must still fire even if both external calls fail).
+// Mocking convention matches this repo's established pattern for fetch-mocked node tests (see
+// mcp-bridge.boot-strict-integration.test.ts / mcp-bridge-probe-budget.test.ts): capture the
+// real global.fetch once, restore it in afterEach, and use bun:test's mock() wrapper typed as
+// (input: string | URL | Request) rather than a bare url:string cast.
+describe("enrichRenovateTarget (SIO-XXXX)", () => {
+	const ORIGINAL_FETCH = global.fetch;
+	const ORIGINAL_ENV = { ...process.env };
+
+	afterEach(() => {
+		global.fetch = ORIGINAL_FETCH;
+		process.env = { ...ORIGINAL_ENV };
+	});
+
+	function baseState(): Partial<IacStateType> {
+		return {
+			renovateTarget: { deployment: "eu-onboarding", integration: "elastic_agent" },
+			renovateMarker: {
+				marker: "renovate/eu-onboarding-elastic_agent",
+				line: " - [ ] <!-- unschedule-branch=renovate/eu-onboarding-elastic_agent -->chore(deps): [eu-onboarding] elastic_agent to v2.9.4",
+			},
+		};
+	}
+
+	test("returns installed/target/policyCount from a successful Kibana call, changelog empty when GitHub call not mocked to succeed", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages?")) {
+				return Response.json({
+					items: [
+						{
+							name: "elastic_agent",
+							version: "2.9.4",
+							installationInfo: { version: "2.8.0" },
+							packagePoliciesInfo: { count: 24 },
+						},
+					],
+				});
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateInstalledVersion).toBe("2.8.0");
+		expect(out.renovateTargetVersion).toBe("2.9.4");
+		expect(out.renovatePolicyCount).toBe(24);
+		expect(out.renovateChangelog).toEqual([]);
+		expect(out.blockedReason).toBeUndefined();
+	});
+
+	test("also returns a filtered changelog when the GitHub fetch succeeds", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		const changelogYaml = [
+			'- version: "2.9.4"',
+			"  changes:",
+			'    - description: "Add system.cpu.cores"',
+			"      type: enhancement",
+			'- version: "2.8.0"',
+			"  changes:",
+			'    - description: "Initial"',
+			"      type: enhancement",
+		].join("\n");
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages?")) {
+				return Response.json({
+					items: [
+						{
+							name: "elastic_agent",
+							version: "2.9.4",
+							installationInfo: { version: "2.8.0" },
+							packagePoliciesInfo: { count: 24 },
+						},
+					],
+				});
+			}
+			if (url.includes("raw.githubusercontent.com")) {
+				return new Response(changelogYaml, { status: 200 });
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateChangelog).toEqual([
+			{ version: "2.9.4", changes: [{ description: "Add system.cpu.cores", type: "enhancement" }] },
+		]);
+	});
+
+	test("degrades cleanly when ELASTIC_<DEPLOYMENT>_URL is unset for this deployment", async () => {
+		delete process.env.ELASTIC_EU_ONBOARDING_URL;
+		delete process.env.ELASTIC_EU_ONBOARDING_API_KEY;
+		global.fetch = mock(async () => new Response("should not be called", { status: 500 })) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateInstalledVersion ?? null).toBeNull();
+		expect(out.renovatePolicyCount ?? null).toBeNull();
+		expect(out.blockedReason).toBeUndefined();
+	});
+
+	test("degrades cleanly when the Kibana call errors (network failure)", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		global.fetch = mock(async () => {
+			throw new Error("connection reset");
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateInstalledVersion ?? null).toBeNull();
+		expect(out.blockedReason).toBeUndefined();
+	});
+
+	test("degrades cleanly when the Kibana call returns a non-2xx status", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		global.fetch = mock(async () => new Response("unauthorized", { status: 401 })) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateInstalledVersion ?? null).toBeNull();
+		expect(out.blockedReason).toBeUndefined();
+	});
+
+	test("degrades cleanly when the changelog fetch 404s (package not found)", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages?")) {
+				return Response.json({
+					items: [{ name: "elastic_agent", version: "2.9.4", installationInfo: { version: "2.8.0" } }],
+				});
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateInstalledVersion).toBe("2.8.0"); // Kibana part still succeeded
+		expect(out.renovateChangelog).toEqual([]); // changelog part degraded independently
+		expect(out.blockedReason).toBeUndefined();
+	});
+
+	test("derives the Kibana URL from ELASTIC_<DEPLOYMENT>_URL via .es. -> .kb. substitution", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		let calledUrl = "";
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages?")) {
+				calledUrl = url;
+				return Response.json({ items: [{ name: "elastic_agent", version: "2.9.4" }] });
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(calledUrl.startsWith("https://eu-onboarding.kb.eu-central-1.aws.cloud.es.io")).toBe(true);
+		expect(calledUrl).toContain("/api/fleet/epm/packages?withPackagePoliciesCount=true");
+	});
+
+	test("returns no enrichment (all null/[]) when renovateTarget is missing", async () => {
+		const out = await enrichRenovateTarget({ renovateMarker: baseState().renovateMarker } as IacStateType);
+		expect(out).toEqual({});
+	});
+
+	test("changelog fetch succeeds independently when ONLY the Kibana call fails (network error)", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		const changelogYaml = [
+			'- version: "2.9.4"',
+			"  changes:",
+			'    - description: "Add system.cpu.cores"',
+			"      type: enhancement",
+			'- version: "2.8.0"',
+			"  changes:",
+			'    - description: "Initial"',
+			"      type: enhancement",
+		].join("\n");
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages?")) {
+				throw new Error("connection reset");
+			}
+			if (url.includes("raw.githubusercontent.com")) {
+				return new Response(changelogYaml, { status: 200 });
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateInstalledVersion ?? null).toBeNull();
+		expect(out.renovateChangelog).toEqual([
+			{ version: "2.9.4", changes: [{ description: "Add system.cpu.cores", type: "enhancement" }] },
+		]);
+		expect(out.blockedReason).toBeUndefined();
+	});
+
+	test("degrades cleanly when the Kibana response body is not valid JSON", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages?")) {
+				return new Response("not json{{{", { status: 200 });
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateInstalledVersion ?? null).toBeNull();
+		expect(out.blockedReason).toBeUndefined();
+	});
+
+	test("degrades cleanly when the GitHub changelog response body is not valid YAML", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages?")) {
+				return Response.json({
+					items: [{ name: "elastic_agent", version: "2.9.4", installationInfo: { version: "2.8.0" } }],
+				});
+			}
+			if (url.includes("raw.githubusercontent.com")) {
+				return new Response(":\n  - broken: [unclosed", { status: 200 });
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateChangelog).toEqual([]);
+		expect(out.blockedReason).toBeUndefined();
+	});
+
+	test("degrades cleanly when the Kibana fetch rejects with an AbortSignal.timeout TimeoutError", async () => {
+		// Simulates what AbortSignal.timeout(ms) produces on expiry (a hung/black-holed connection
+		// that never settles on its own) -- proves the existing try/catch catches this rejection
+		// the same as any other fetch error, so renovateTriggerGate is never left unreachable.
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		global.fetch = mock(async () => {
+			throw new DOMException("The operation was aborted.", "TimeoutError");
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateInstalledVersion ?? null).toBeNull();
+		expect(out.blockedReason).toBeUndefined();
+	});
+
+	test("degrades cleanly when the integration is not found in the Kibana packages list (200 but no matching name)", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages?")) {
+				return Response.json({ items: [{ name: "some_other_integration", version: "1.0.0" }] });
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateInstalledVersion ?? null).toBeNull();
+		expect(out.renovatePolicyCount ?? null).toBeNull();
+		expect(out.blockedReason).toBeUndefined();
 	});
 });

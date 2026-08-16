@@ -797,6 +797,19 @@ export const IacState = Annotation.Root({
 	renovateIssueIid: Annotation<number | null>({ reducer: last, default: () => null }),
 	renovateMrUrl: Annotation<string>({ reducer: last, default: () => "" }),
 	renovateTriggerAtIso: Annotation<string>({ reducer: last, default: () => "" }),
+	// SIO-XXXX: pre-trigger enrichment for the renovate_trigger_choice card (installed/target
+	// version, affected-policy count, and a version-range changelog), set by enrichRenovateTarget.
+	// All four are best-effort -- null/[] when Kibana or the GitHub changelog fetch is unavailable,
+	// never a signal that anything went wrong (the card degrades to today's plain marker/line text).
+	renovateInstalledVersion: Annotation<string | null>({ reducer: last, default: () => null }),
+	renovateTargetVersion: Annotation<string | null>({ reducer: last, default: () => null }),
+	renovatePolicyCount: Annotation<number | null>({ reducer: last, default: () => null }),
+	renovateChangelog: Annotation<
+		Array<{ version: string; changes: Array<{ description: string; type: string; link?: string }> }>
+	>({
+		reducer: last,
+		default: () => [],
+	}),
 	// SIO-930: set by the request (UI message-count signal). Gates whether the conversational
 	// "converse" intent is selectable -- a first turn cannot be a follow-up about a prior answer.
 	isFollowUp: Annotation<boolean>({ reducer: last, default: () => false }),

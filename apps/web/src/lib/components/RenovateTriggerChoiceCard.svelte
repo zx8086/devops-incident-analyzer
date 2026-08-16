@@ -13,6 +13,14 @@ let {
 	onApprove: () => void;
 	onDecline: () => void;
 } = $props();
+
+// SIO-XXXX: stat tiles render only when at least one Kibana enrichment value is present --
+// best-effort, degrades cleanly to today's plain card when Kibana lookup failed/wasn't
+// configured for this deployment.
+const hasStats = $derived(
+	prompt.installedVersion != null || prompt.targetVersion != null || prompt.policyCount != null,
+);
+const changelogCount = $derived(prompt.changelog?.length ?? 0);
 </script>
 
 <div
@@ -25,6 +33,43 @@ let {
       Trigger Renovate update
     </h3>
     <p class="text-sm text-tommy-navy/80 mt-1">{prompt.message}</p>
+
+    {#if hasStats}
+      <div class="mt-2 grid grid-cols-3 gap-2">
+        <div class="rounded-md bg-white/70 border border-gray-200 p-2 text-center">
+          <p class="text-lg font-semibold text-gray-600">{prompt.installedVersion ?? "?"}</p>
+          <p class="text-xs text-gray-500">installed</p>
+        </div>
+        <div class="rounded-md bg-white/70 border border-tommy-accent-blue/20 p-2 text-center">
+          <p class="text-lg font-semibold text-tommy-navy">{prompt.targetVersion ?? "?"}</p>
+          <p class="text-xs text-tommy-navy/70">target</p>
+        </div>
+        <div class="rounded-md bg-white/70 border border-gray-200 p-2 text-center">
+          <p class="text-lg font-semibold text-gray-600">{prompt.policyCount ?? "?"}</p>
+          <p class="text-xs text-gray-500">affected policies</p>
+        </div>
+      </div>
+    {/if}
+
+    {#if changelogCount > 0}
+      <details class="mt-2">
+        <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">
+          Changelog ({prompt.installedVersion ?? "?"} &rarr; {prompt.targetVersion ?? "?"}, {changelogCount} release{changelogCount === 1 ? "" : "s"})
+        </summary>
+        <ul class="mt-1 space-y-1.5 text-xs">
+          {#each prompt.changelog ?? [] as entry (entry.version)}
+            <li>
+              <p class="font-medium text-tommy-navy">{entry.version}</p>
+              <ul class="ml-3 list-disc space-y-0.5 text-tommy-navy/70">
+                {#each entry.changes as change, i (i)}
+                  <li>{change.description}</li>
+                {/each}
+              </ul>
+            </li>
+          {/each}
+        </ul>
+      </details>
+    {/if}
 
     <div class="mt-3 flex flex-wrap gap-2">
       <button

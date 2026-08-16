@@ -15,7 +15,7 @@ import { AIMessage, type BaseMessage, HumanMessage, SystemMessage, ToolMessage }
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { interrupt } from "@langchain/langgraph";
-import { isMap, parseDocument } from "yaml";
+import { isMap, parseDocument, parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { createLlm, createLlmWithTools } from "../llm.ts";
 import { extractJsonBlock, sanitizeJsonControlChars } from "../llm-json.ts";
@@ -408,10 +408,246 @@ export async function resolveRenovateMarker(state: IacStateType): Promise<Partia
 	};
 }
 
+// Resolves this deployment's existing Elasticsearch env-var pair and derives the Kibana URL
+// from it (.es. -> .kb. hostname substitution -- live-verified across 9 of this repo's 10
+// configured deployments this session, spanning 3 different Elastic Cloud domain suffixes).
+// The SAME ELASTIC_<DEPLOYMENT>_API_KEY authenticates against both Elasticsearch and Kibana
+// (also live-verified) -- no separate Kibana credential exists or is needed. null when the
+// deployment has no ELASTIC_<DEPLOYMENT>_URL configured, or its hostname doesn't contain ".es."
+// to substitute (an unexpected shape -- degrade rather than guess).
+function resolveKibanaConfig(deployment: string): { url: string; apiKey: string } | null {
+	const suffix = deployment.toUpperCase().replace(/-/g, "_");
+	const esUrl = process.env[`ELASTIC_${suffix}_URL`];
+	const apiKey = process.env[`ELASTIC_${suffix}_API_KEY`];
+	if (!esUrl || !apiKey) return null;
+	if (!esUrl.includes(".es.")) return null;
+	return { url: esUrl.replace(".es.", ".kb."), apiKey };
+}
+
+// elastic/integrations' per-package changelog.yml, fetched via raw.githubusercontent.com --
+// no auth needed (public repo), no gh-CLI subprocess dependency (this file has never shelled
+// out to an external CLI; a raw-content HTTP GET is a strictly better fit for a server-side
+// node than depending on a local `gh` install). Returns [] on any failure (404 for an
+// integration with no changelog.yml, network error, malformed YAML) -- best-effort, this
+// function never throws. (Not exported: a thin I/O wrapper, exercised via enrichRenovateTarget's
+// own mocked-fetch tests rather than in isolation.)
+async function fetchRenovateChangelog(integration: string): Promise<ChangelogEntry[]> {
+	try {
+		const res = await fetch(
+			`https://raw.githubusercontent.com/elastic/integrations/main/packages/${encodeURIComponent(integration)}/changelog.yml`,
+			{ signal: AbortSignal.timeout(5_000) },
+		);
+		if (!res.ok) return [];
+		const text = await res.text();
+		const parsed = parseYaml(text);
+		if (!Array.isArray(parsed)) return [];
+		return parsed
+			.filter(
+				(e): e is ChangelogEntry =>
+					typeof e === "object" && e !== null && typeof e.version === "string" && Array.isArray(e.changes),
+			)
+			.map((e) => ({
+				version: e.version,
+				changes: e.changes
+					.filter(
+						(c: unknown): c is { description: string; type: string; link?: string } =>
+							typeof (c as { description?: unknown })?.description === "string",
+					)
+					.map((c: { description: string; type?: string; link?: string }) => ({
+						description: c.description,
+						type: typeof c.type === "string" ? c.type : "unknown",
+						...(typeof c.link === "string" && { link: c.link }),
+					})),
+			}));
+	} catch {
+		return [];
+	}
+}
+
+// Best-effort pre-trigger enrichment for the renovate_trigger_choice card: currently-installed
+// version, target version, affected-policy count (all from one Kibana Fleet call, reusing the
+// existing ELASTIC_<DEPLOYMENT>_URL/_API_KEY -- see resolveKibanaConfig), and a version-range
+// changelog (from elastic/integrations on GitHub, no credential needed -- see
+// fetchRenovateChangelog). Inserted between resolveRenovateMarker and renovateTriggerGate;
+// reached only when hasSingleRenovateMatch routed here (graph.ts). NEVER sets blockedReason and
+// NEVER throws -- every external call is independently wrapped so a Kibana failure does not
+// suppress a working changelog fetch or vice versa, and any failure degrades the card to
+// today's plain marker/line text rather than blocking the approval gate.
+export async function enrichRenovateTarget(state: IacStateType): Promise<Partial<IacStateType>> {
+	const target = state.renovateTarget;
+	const marker = state.renovateMarker;
+	if (!target || !marker) return {};
+
+	const targetVersion = parseRenovateTargetVersion(marker.line);
+	let installedVersion: string | null = null;
+	let policyCount: number | null = null;
+	let resolvedTargetVersion = targetVersion;
+
+	const kibanaConfig = resolveKibanaConfig(target.deployment);
+	if (kibanaConfig) {
+		try {
+			// The single-package detail endpoint (/api/fleet/epm/packages/{pkgName}) does NOT
+			// accept withPackagePoliciesCount as a query param (HTTP 400). Only the list endpoint
+			// does, returning an `items` array we filter client-side. Live-verified against eu-cld.
+			const res = await fetch(`${kibanaConfig.url}/api/fleet/epm/packages?withPackagePoliciesCount=true`, {
+				headers: { Authorization: `ApiKey ${kibanaConfig.apiKey}`, "kbn-xsrf": "true" },
+				signal: AbortSignal.timeout(8_000),
+			});
+			if (res.ok) {
+				const body = (await res.json()) as { items?: unknown };
+				const items = Array.isArray(body.items) ? body.items : [];
+				const match = items.find(
+					(
+						item,
+					): item is {
+						name: string;
+						version?: unknown;
+						installationInfo?: { version?: unknown };
+						packagePoliciesInfo?: { count?: unknown };
+					} => typeof item === "object" && item !== null && (item as { name?: unknown }).name === target.integration,
+				);
+				if (match) {
+					if (typeof match.installationInfo?.version === "string") installedVersion = match.installationInfo.version;
+					if (typeof match.packagePoliciesInfo?.count === "number") policyCount = match.packagePoliciesInfo.count;
+					if (!resolvedTargetVersion && typeof match.version === "string") resolvedTargetVersion = match.version;
+				} else {
+					log.warn(
+						{ deployment: target.deployment, integration: target.integration },
+						"enrichRenovateTarget: integration not found in Kibana Fleet packages list; continuing without installed-version enrichment",
+					);
+				}
+			} else {
+				log.warn(
+					{ deployment: target.deployment, integration: target.integration, status: res.status },
+					"enrichRenovateTarget: Kibana Fleet call returned non-2xx; continuing without installed-version enrichment",
+				);
+			}
+		} catch (error) {
+			log.warn(
+				{
+					deployment: target.deployment,
+					integration: target.integration,
+					error: error instanceof Error ? error.message : String(error),
+				},
+				"enrichRenovateTarget: Kibana Fleet call failed; continuing without installed-version enrichment",
+			);
+		}
+	}
+
+	const changelog = resolvedTargetVersion
+		? filterChangelogRange(await fetchRenovateChangelog(target.integration), installedVersion, resolvedTargetVersion)
+		: [];
+
+	return {
+		renovateInstalledVersion: installedVersion,
+		renovateTargetVersion: resolvedTargetVersion,
+		renovatePolicyCount: policyCount,
+		renovateChangelog: changelog,
+	};
+}
+
 // (Pure; unit-tested.)
 export function buildRenovateGateMessage(marker: { marker: string; line: string }): string {
 	const cleanLine = marker.line.replace(/^\s*-\s*\[[ x]\]\s*<!--.*?-->\s*/, "").trim();
 	return `This will tick '${marker.marker}' (${cleanLine || marker.line.trim()}) and trigger an off-schedule Renovate run. Proceed?`;
+}
+
+// The dashboard line's title always ends "... to vX.Y[.Z]" (Renovate's own generated format,
+// live-verified across every entry in the Elastic Fleet & Agent Dependency Dashboard this
+// session -- e.g. "chore(deps): [eu-onboarding] elastic_agent to v2.9.4"). Extracts just the
+// version, without the "v" prefix, for use as the changelog range's upper bound. (Pure; unit-tested.)
+export function parseRenovateTargetVersion(line: string): string | null {
+	const match = line.match(/\bto\s+v(\d+(?:\.\d+){1,2})\s*$/);
+	return match?.[1] ?? null;
+}
+
+// Numeric (not lexical) semver comparison for filterChangelogRange -- a missing component
+// (e.g. "2.22" vs "2.22.1") is treated as 0. Some versions this sub-flow compares (changelog.yml
+// entries in particular -- live-verified against elastic/integrations, e.g. "1.32.0-beta.2",
+// "1.26.0-next") carry a prerelease/build-metadata suffix. Build metadata (+...) is ignored
+// entirely (per SemVer, it never affects precedence). A prerelease (-...) sorts BELOW its
+// matching base release, and two prereleases of the same base compare their dot-separated
+// identifiers left-to-right (numeric-if-both-numeric, else lexical) -- real SemVer precedence,
+// not the "treat as equal" simplification this had before PR #666's Greptile/CodeRabbit review
+// caught it collapsing a beta-of-the-target into the target itself in filterChangelogRange's
+// inclusive upper bound. (Pure; unit-tested.)
+// Splits "1.32.0-alpha-1+build.5" into { core: "1.32.0", prerelease: "alpha-1" }. The prerelease
+// identifier itself may legally contain hyphens (SemVer's own examples include "x-y-z"), so this
+// finds the FIRST "-" (before any "+") and takes everything after it as one string -- unlike
+// `.split("-", N)`, whose `limit` argument silently DROPS entries past the cap rather than
+// rejoining them (CodeRabbit round 2 caught this: "1.32.0-alpha-1".split("-", 2) produces
+// ["1.32.0", "alpha"], quietly discarding "-1", so two different prereleases compared as equal).
+function splitPrerelease(version: string): { core: string; prerelease: string | null } {
+	const withoutBuild = version.split("+")[0] ?? version;
+	const dashIndex = withoutBuild.indexOf("-");
+	if (dashIndex === -1) return { core: withoutBuild, prerelease: null };
+	return { core: withoutBuild.slice(0, dashIndex), prerelease: withoutBuild.slice(dashIndex + 1) };
+}
+
+// True only when every character is a digit -- SemVer's own definition of a "numeric identifier"
+// (not merely "Number(x) doesn't return NaN", which also accepts non-SemVer-legal forms like
+// "1a" partially parsing or leading/trailing whitespace).
+function isNumericIdentifier(id: string): boolean {
+	return /^\d+$/.test(id);
+}
+
+export function compareSemver(a: string, b: string): number {
+	const { core: coreA, prerelease: preA } = splitPrerelease(a);
+	const { core: coreB, prerelease: preB } = splitPrerelease(b);
+	const pa = coreA.split(".").map(Number);
+	const pb = coreB.split(".").map(Number);
+	for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+		const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+		if (diff !== 0) return diff;
+	}
+	// Same numeric core: a version WITH a prerelease sorts before one WITHOUT (SemVer precedence).
+	if (preA !== null && preB === null) return -1;
+	if (preA === null && preB !== null) return 1;
+	if (preA === null && preB === null) return 0;
+	// Both have prereleases: compare dot-separated identifiers left-to-right per SemVer's actual
+	// rule -- numeric identifiers compare numerically, alphanumeric compare lexically (ASCII), and
+	// a numeric identifier ALWAYS has lower precedence than an alphanumeric one regardless of its
+	// value (e.g. "2" < "1a" -- SemVer never compares a numeric against a non-numeric by value).
+	const idA = (preA ?? "").split(".");
+	const idB = (preB ?? "").split(".");
+	for (let i = 0; i < Math.max(idA.length, idB.length); i++) {
+		const a1 = idA[i];
+		const b1 = idB[i];
+		if (a1 === undefined) return -1;
+		if (b1 === undefined) return 1;
+		if (a1 === b1) continue;
+		const aNumeric = isNumericIdentifier(a1);
+		const bNumeric = isNumericIdentifier(b1);
+		if (aNumeric && bNumeric) return Number(a1) - Number(b1);
+		if (aNumeric && !bNumeric) return -1;
+		if (!aNumeric && bNumeric) return 1;
+		return a1 < b1 ? -1 : 1;
+	}
+	return 0;
+}
+
+export interface ChangelogEntry {
+	version: string;
+	changes: Array<{ description: string; type: string; link?: string }>;
+}
+
+// Filters a package's changelog.yml entries (already newest-first, matching the source file's
+// own order -- see fetchRenovateChangelog) to the range the operator is actually upgrading
+// through: strictly above the installed version, up to and including the target. When
+// installedVersion is unknown (Kibana lookup skipped/failed/never-installed), the range can't
+// be computed -- falls back to showing only the target version's own entry (the spec's
+// documented degraded behavior, not the default). (Pure; unit-tested.)
+export function filterChangelogRange(
+	entries: ChangelogEntry[],
+	installedVersion: string | null,
+	targetVersion: string,
+): ChangelogEntry[] {
+	if (installedVersion === null) {
+		return entries.filter((e) => compareSemver(e.version, targetVersion) === 0);
+	}
+	return entries.filter(
+		(e) => compareSemver(e.version, installedVersion) > 0 && compareSemver(e.version, targetVersion) <= 0,
+	);
 }
 
 // Single operator approve/decline interrupt, matching fleetUpgradeGate's role
@@ -424,6 +660,12 @@ export function renovateTriggerGate(state: IacStateType): Partial<IacStateType> 
 		marker: marker.marker,
 		line: marker.line,
 		message: buildRenovateGateMessage(marker),
+		// SIO-XXXX: pre-trigger enrichment from enrichRenovateTarget -- best-effort, any/all may
+		// be null/[] when Kibana or the changelog fetch was unavailable for this deployment.
+		installedVersion: state.renovateInstalledVersion,
+		targetVersion: state.renovateTargetVersion,
+		policyCount: state.renovatePolicyCount,
+		changelog: state.renovateChangelog,
 	}) as { approve?: boolean };
 	const approved = choice?.approve === true;
 	// SIO-1471: a decline previously set no message at all -- teardownIac has no
@@ -1305,6 +1547,10 @@ export const TURN_START_RESET = {
 	renovateIssueIid: null,
 	renovateMrUrl: "",
 	renovateTriggerAtIso: "",
+	renovateInstalledVersion: null,
+	renovateTargetVersion: null,
+	renovatePolicyCount: null,
+	renovateChangelog: [] as ChangelogEntry[],
 } as const;
 
 // (context the turn's response weaves in), once per session, best-effort, never blocking.

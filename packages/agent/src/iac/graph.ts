@@ -25,6 +25,7 @@ import {
 	detectFleetUpgrade,
 	detectSyntheticsDrift,
 	draftChange,
+	enrichRenovateTarget,
 	explainDrift,
 	extractRenovateTarget,
 	fleetUpgradeGate,
@@ -180,6 +181,7 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		// schedule; watchRenovateMr polls for the resulting MR.
 		.addNode("extractRenovateTarget", extractRenovateTarget)
 		.addNode("resolveRenovateMarker", resolveRenovateMarker)
+		.addNode("enrichRenovateTarget", enrichRenovateTarget)
 		.addNode("renovateTriggerGate", renovateTriggerGate)
 		.addNode("triggerRenovateUpdate", triggerRenovateUpdate)
 		.addNode("watchRenovateMr", watchRenovateMr)
@@ -332,13 +334,16 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 			"resolveRenovateMarker",
 			END,
 		])
-		// Exactly one dashboard match -> the approval gate; 0 or 2+ -> teardown (the
-		// disambiguation/no-match message is already set on state.messages).
+		// Exactly one dashboard match -> enrichRenovateTarget (best-effort pre-gate context);
+		// 0 or 2+ -> teardown (the disambiguation/no-match message is already set on
+		// state.messages).
 		.addConditionalEdges(
 			"resolveRenovateMarker",
-			(s) => (hasSingleRenovateMatch(s.renovateCandidates) ? "renovateTriggerGate" : "teardown"),
-			["renovateTriggerGate", "teardown"],
+			(s) => (hasSingleRenovateMatch(s.renovateCandidates) ? "enrichRenovateTarget" : "teardown"),
+			["enrichRenovateTarget", "teardown"],
 		)
+		// enrichRenovateTarget never blocks -- always proceeds to the approval gate.
+		.addEdge("enrichRenovateTarget", "renovateTriggerGate")
 		// Operator approval routes to the trigger or to teardown (declined).
 		.addConditionalEdges(
 			"renovateTriggerGate",
