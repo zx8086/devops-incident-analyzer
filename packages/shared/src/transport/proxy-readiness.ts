@@ -65,6 +65,28 @@ function describeStsFailure(status: number, body: string): string {
 		: `sts:GetCallerIdentity returned ${status}`;
 }
 
+// GetCallerIdentity success bodies, like its errors, come back as XML or JSON
+// depending on the Accept header. Returns undefined when the account cannot be
+// read, so an unparseable success body degrades to "key is live" rather than
+// failing the probe on a parsing detail.
+const STS_ACCOUNT_XML_RE = /<Account>(\d+)<\/Account>/;
+
+function parseStsAccountId(body: string): string | undefined {
+	const xml = STS_ACCOUNT_XML_RE.exec(body)?.[1];
+	if (xml) return xml;
+	try {
+		const parsed: unknown = JSON.parse(body);
+		const account = (parsed as { GetCallerIdentityResponse?: { GetCallerIdentityResult?: { Account?: unknown } } })
+			?.GetCallerIdentityResponse?.GetCallerIdentityResult?.Account;
+		if (typeof account === "string") return account;
+		const flat = (parsed as { Account?: unknown })?.Account;
+		if (typeof flat === "string") return flat;
+	} catch {
+		// not JSON -- fall through
+	}
+	return undefined;
+}
+
 export interface CreateProxyReadinessProbeOptions {
 	role: "aws-proxy" | "kafka-proxy";
 	getCredentials: () => Promise<unknown>;
@@ -75,6 +97,13 @@ export interface CreateProxyReadinessProbeOptions {
 	// absent the credentials component falls back to the presence check.
 	stsFetch?: (req: Request) => Promise<Response>;
 	stsUrl?: string;
+	// SIO-1477 (Greptile): the AWS account the configured runtime ARN lives in.
+	// A VALID key from a DIFFERENT account returns HTTP 200 from
+	// GetCallerIdentity, so status alone cannot catch the wrong-account case --
+	// live-verified: the previously-configured key returns 200 for account
+	// 356994971776 while the runtime is in 399987695868. That mismatch is this
+	// repo's documented historical failure mode, so compare identities.
+	expectedAccountId?: string;
 	ttlMs?: number;
 	timeoutMs?: number;
 	now?: () => number;
@@ -99,6 +128,19 @@ export function createProxyReadinessProbe(opts: CreateProxyReadinessProbeOptions
 				const res = await stsFetch(req);
 				if (!res.ok) {
 					throw new Error(describeStsFailure(res.status, await res.text().catch(() => "")));
+				}
+				// A 200 only proves the key is live -- not that it belongs to the
+				// account owning the runtime. Without this the wrong-account case
+				// still reports credentials:"ok" and the blame lands on
+				// agentcoreUpstream, which is the exact misattribution this ticket
+				// exists to remove.
+				if (opts.expectedAccountId) {
+					const actual = parseStsAccountId(await res.text().catch(() => ""));
+					if (actual && actual !== opts.expectedAccountId) {
+						throw new Error(
+							`credentials belong to AWS account ${actual} but the configured runtime is in ${opts.expectedAccountId} -- the proxy cannot invoke it`,
+						);
+					}
 				}
 			},
 			agentcoreUpstream: async () => {

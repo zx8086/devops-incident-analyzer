@@ -351,3 +351,74 @@ describe("SIO-1477 STS error parsing covers both wire formats", () => {
 		expect(snap.errors?.credentials).toContain("500");
 	});
 });
+
+// SIO-1477 (Greptile P1): a VALID key from the WRONG account returns HTTP 200
+// from GetCallerIdentity. Live-verified against real AWS: the previously
+// configured key returns 200 for account 356994971776 while the runtime lives
+// in 399987695868. Status alone therefore cannot catch this -- and wrong-account
+// is this repo's documented historical AgentCore failure mode.
+describe("SIO-1477 wrong-account credentials are rejected", () => {
+	const base = {
+		role: "aws-proxy" as const,
+		getCredentials: async () => ({ accessKeyId: "AKIA...", secretAccessKey: "x" }),
+		upstreamUrl: "http://example.test/mcp",
+		sigv4Fetch: mockSigv4Fetch({ result: { tools: [{ name: "aws_cloudwatch_describe_alarms" }] } }),
+		stsUrl: "https://sts.eu-central-1.amazonaws.com/",
+	};
+	const identityJson = (account: string) =>
+		JSON.stringify({ GetCallerIdentityResponse: { GetCallerIdentityResult: { Account: account } } });
+
+	test("valid key from another account -> credentials fails, naming both accounts", async () => {
+		const snap = await createProxyReadinessProbe({
+			...base,
+			expectedAccountId: "399987695868",
+			stsFetch: async () => new Response(identityJson("356994971776"), { status: 200 }),
+		})();
+		expect(snap.ready).toBe(false);
+		expect(snap.components.credentials).not.toBe("ok");
+		expect(snap.errors?.credentials).toContain("356994971776");
+		expect(snap.errors?.credentials).toContain("399987695868");
+	});
+
+	test("matching account -> credentials ok", async () => {
+		const snap = await createProxyReadinessProbe({
+			...base,
+			expectedAccountId: "399987695868",
+			stsFetch: async () => new Response(identityJson("399987695868"), { status: 200 }),
+		})();
+		expect(snap.ready).toBe(true);
+		expect(snap.components.credentials).toBe("ok");
+	});
+
+	test("XML identity body is parsed too", async () => {
+		const snap = await createProxyReadinessProbe({
+			...base,
+			expectedAccountId: "399987695868",
+			stsFetch: async () =>
+				new Response(
+					"<GetCallerIdentityResponse><GetCallerIdentityResult><Account>111122223333</Account></GetCallerIdentityResult></GetCallerIdentityResponse>",
+					{
+						status: 200,
+					},
+				),
+		})();
+		expect(snap.errors?.credentials).toContain("111122223333");
+	});
+
+	test("no expectedAccountId -> account check skipped (back-compat)", async () => {
+		const snap = await createProxyReadinessProbe({
+			...base,
+			stsFetch: async () => new Response(identityJson("356994971776"), { status: 200 }),
+		})();
+		expect(snap.components.credentials).toBe("ok");
+	});
+
+	test("unparseable success body -> degrades to 'key is live', does not fail the probe", async () => {
+		const snap = await createProxyReadinessProbe({
+			...base,
+			expectedAccountId: "399987695868",
+			stsFetch: async () => new Response("<<unparseable>>", { status: 200 }),
+		})();
+		expect(snap.components.credentials).toBe("ok");
+	});
+});

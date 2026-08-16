@@ -778,10 +778,15 @@ async function pollServerHealth(): Promise<void> {
 						// and read as a network fault. Emit the reasons alongside, minus
 						// the internal _-prefixed markers, each capped so one verbose
 						// upstream body cannot blow out the log line.
+						// The snapshot is an unvalidated `as ReadinessSnapshot` cast over
+						// r.json() (see probeServer), so `errors` values are whatever the
+						// upstream sent. String(value) before truncating: a non-string
+						// would throw inside the poll loop and drop every remaining
+						// server's result for that cycle.
 						const componentErrors = Object.fromEntries(
 							Object.entries(result.snapshot.errors ?? {})
 								.filter(([key]) => !key.startsWith("_"))
-								.map(([key, value]) => [key, value.slice(0, 300)]),
+								.map(([key, value]) => [key, String(value).slice(0, 300)]),
 						);
 						const logFields = {
 							serverName: name,

@@ -533,6 +533,8 @@ export async function startAgentCoreProxy(
 		// SIO-1477: validates the credential itself rather than merely resolving
 		// it. Signed for the sts service scope, not bedrock-agentcore.
 		stsUrl: `https://sts.${config.region}.amazonaws.com/`,
+		// SIO-1477 (Greptile): arn:aws:bedrock-agentcore:<region>:<account>:runtime/...
+		expectedAccountId: config.runtimeArn.split(":")[4] || undefined,
 		stsFetch: async (req) => {
 			const reqUrl = new URL(req.url);
 			const reqBody = await req.text();
