@@ -1234,13 +1234,33 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 	}),
 	// SIO-XXXX: renovate-integration-update trigger sub-flow. The single operator
 	// approve/decline gate (renovateTriggerGate), surfaced with the thread's id. No
-	// dedicated result event -- the turn just ends with a final message.
+	// dedicated result event -- the turn just ends with a final message. installedVersion/
+	// targetVersion/policyCount/changelog are pre-trigger enrichment from enrichRenovateTarget --
+	// all optional/best-effort, absent when Kibana or the GitHub changelog lookup failed for
+	// this deployment (the card degrades to the plain marker/line text in that case).
 	z.object({
 		type: z.literal("renovate_trigger_choice"),
 		threadId: z.string(),
 		marker: z.string(),
 		line: z.string(),
 		message: z.string(),
+		installedVersion: z.string().nullable().optional(),
+		targetVersion: z.string().nullable().optional(),
+		policyCount: z.number().nullable().optional(),
+		changelog: z
+			.array(
+				z.object({
+					version: z.string(),
+					changes: z.array(
+						z.object({
+							description: z.string(),
+							type: z.string(),
+							link: z.string().optional(),
+						}),
+					),
+				}),
+			)
+			.optional(),
 	}),
 ]);
 export type StreamEvent = z.infer<typeof StreamEventSchema>;
