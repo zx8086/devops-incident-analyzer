@@ -793,6 +793,15 @@ export const IacState = Annotation.Root({
 	}),
 	renovateCandidates: Annotation<Array<{ marker: string; line: string }>>({ reducer: last, default: () => [] }),
 	renovateMarker: Annotation<{ marker: string; line: string } | null>({ reducer: last, default: () => null }),
+	// SIO-1475: durable, cross-turn "a Renovate trigger is in flight, no MR found yet" marker --
+	// the Renovate-lane twin of fleetApplyPipelineId (SIO-928). Deliberately NOT reset by
+	// TURN_START_RESET (see that object's own comment) so a later turn's classifyIacIntent guard
+	// can route a "check again" follow-up straight to watchRenovateMr instead of re-extracting.
+	// Set by triggerRenovateUpdate on a successful trigger; cleared by watchRenovateMr once the
+	// MR is found.
+	renovateInFlightMarker: Annotation<{ deployment: string; marker: string; line: string; triggerAtIso: string } | null>(
+		{ reducer: last, default: () => null },
+	),
 	renovateTriggerApproved: Annotation<boolean | null>({ reducer: last, default: () => null }),
 	renovateIssueIid: Annotation<number | null>({ reducer: last, default: () => null }),
 	renovateMrUrl: Annotation<string>({ reducer: last, default: () => "" }),

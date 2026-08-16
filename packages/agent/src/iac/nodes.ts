@@ -1435,6 +1435,39 @@ export function looksLikeFleetStatusCheck(text: string): boolean {
 	return STATUS_CUES.some((cue) => r.includes(cue));
 }
 
+// SIO-1475: the renovate-lane twin of looksLikeFleetStatusCheck (nodes.ts:1409) -- reused cue
+// list plus two phrasings this bug's own repro used verbatim ("check again", "ask again"),
+// since triggerRenovateUpdate's own "no MR yet" message (nodes.ts:966) explicitly suggests
+// "Ask me to check again in a minute." (Pure; unit-tested.)
+export function looksLikeRenovateStatusCheck(text: string): boolean {
+	const r = text.toLowerCase();
+	if (/\b\d+\.\d+(\.\d+)?\b/.test(r)) return false;
+	const STATUS_CUES = [
+		"how is",
+		"how's",
+		"hows",
+		"how are",
+		"how far",
+		"status",
+		"progress",
+		"check on",
+		"check it",
+		"check again",
+		"ask again",
+		"watch the pipeline",
+		"watch it",
+		"going",
+		"done yet",
+		"is it done",
+		"finished",
+		"complete",
+		"any update",
+		"update on",
+		"still running",
+	];
+	return STATUS_CUES.some((cue) => r.includes(cue));
+}
+
 // SIO-983: is this an explicit imperative request to OPEN THE MR / MAKE THE CHANGE? After a proposal
 // is rejected, the user often re-asks as a reaction to the rejected proposal ("no, follow my prompt
 // and open the MR") and the classifier LLM mis-emits "converse" -- routing to the read-only

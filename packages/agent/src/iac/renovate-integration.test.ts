@@ -1456,3 +1456,37 @@ describe("resolveIntegrationSlug (SIO-1474)", () => {
 		expect(out).toEqual({});
 	});
 });
+
+import { looksLikeRenovateStatusCheck } from "./nodes.ts";
+
+describe("looksLikeRenovateStatusCheck (SIO-1475)", () => {
+	test("matches 'Please check again'", () => {
+		expect(looksLikeRenovateStatusCheck("Please check again")).toBe(true);
+	});
+
+	test("matches 'check on it'", () => {
+		expect(looksLikeRenovateStatusCheck("check on it")).toBe(true);
+	});
+
+	test("matches 'any update?'", () => {
+		expect(looksLikeRenovateStatusCheck("any update?")).toBe(true);
+	});
+
+	test("matches 'ask again'", () => {
+		expect(looksLikeRenovateStatusCheck("ok, ask again in a minute")).toBe(true);
+	});
+
+	test("does not match a fresh upgrade request naming a version", () => {
+		expect(looksLikeRenovateStatusCheck("upgrade udp to 2.5.1 on ap-cld")).toBe(false);
+	});
+
+	test("does not match a fresh upgrade request naming an integration, no status cue", () => {
+		expect(looksLikeRenovateStatusCheck("In the ap-cld deployment, upgrade the 'Custom UDP Logs' integration")).toBe(
+			false,
+		);
+	});
+
+	test("does not match unrelated text", () => {
+		expect(looksLikeRenovateStatusCheck("what deployments do we have")).toBe(false);
+	});
+});
