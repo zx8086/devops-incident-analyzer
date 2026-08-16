@@ -475,7 +475,11 @@ async function fetchAffectedPolicyNames(
 	integration: string,
 ): Promise<string[]> {
 	try {
-		const kuery = `ingest-package-policies.package.name:"${integration}"`;
+		// SIO-1473: integration is LLM-extracted from free-form user text (extractRenovateTarget),
+		// not literal dashboard text -- strip quote/backslash so it can't break out of the KQL
+		// string literal below. encodeURIComponent alone stops URL/param injection but not this.
+		const safeIntegration = integration.replace(/["\\]/g, "");
+		const kuery = `ingest-package-policies.package.name:"${safeIntegration}"`;
 		const res = await fetch(`${kibanaConfig.url}/api/fleet/package_policies?kuery=${encodeURIComponent(kuery)}`, {
 			headers: { Authorization: `ApiKey ${kibanaConfig.apiKey}` },
 			signal: AbortSignal.timeout(8_000),
