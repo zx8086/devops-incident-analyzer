@@ -1,5 +1,6 @@
 <script lang="ts">
 // apps/web/src/lib/components/RenovateTriggerChoiceCard.svelte
+import MarkdownRenderer from "$lib/components/MarkdownRenderer.svelte";
 import type { RenovateTriggerChoice } from "$lib/stores/agent-reducer.ts";
 
 let {
@@ -49,6 +50,33 @@ const changelogCount = $derived(prompt.changelog?.length ?? 0);
           <p class="text-xs text-gray-500">affected policies</p>
         </div>
       </div>
+    {/if}
+
+    <!-- SIO-1472: knowledge-graph change history for this deployment, mirroring
+         FleetUpgradeChoiceCard's own "Recent changes (knowledge graph)" panel -- the
+         renovate-integration-update lane also bypasses graphEnrichIac, so enrichRenovateTarget
+         reads the KG itself via the same recallDeploymentKgChanges function fleet-upgrade uses.
+         Gated on presence -- an off/empty KG yields "" and the panel stays hidden. -->
+    {#if prompt.recentChanges}
+      <details class="mt-2" open>
+        <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">Recent changes (knowledge graph)</summary>
+        <div class="mt-1 rounded bg-white border border-tommy-accent-blue/30 px-2 py-1 text-xs text-tommy-navy">
+          <MarkdownRenderer content={prompt.recentChanges} />
+        </div>
+      </details>
+    {/if}
+
+    <!-- SIO-1472: cross-session agent-memory recall of prior Renovate triggers for this exact
+         deployment+integration pair, so the operator sees "we've triggered this before" (and its
+         MR, if one was found) before approving -- the renovate-path twin of
+         FleetUpgradeChoiceCard's "Prior upgrades (memory)" block. -->
+    {#if prompt.priorTriggers}
+      <details class="mt-2" open>
+        <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">Prior triggers (memory)</summary>
+        <div class="mt-1 rounded bg-white border border-tommy-accent-blue/30 px-2 py-1 text-xs text-tommy-navy">
+          <MarkdownRenderer content={prompt.priorTriggers} />
+        </div>
+      </details>
     {/if}
 
     {#if changelogCount > 0}
