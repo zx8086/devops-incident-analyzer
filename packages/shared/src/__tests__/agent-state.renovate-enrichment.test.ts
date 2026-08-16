@@ -57,4 +57,32 @@ describe("StreamEventSchema renovate_trigger_choice enrichment fields", () => {
 		});
 		expect(parsed.success).toBe(false);
 	});
+
+	test("accepts recentChanges and priorTriggers when present", () => {
+		const parsed = StreamEventSchema.safeParse({
+			type: "renovate_trigger_choice",
+			threadId: "t1",
+			marker: "x",
+			line: "y",
+			message: "z",
+			recentChanges: "- [eu-onboarding] elastic_agent changed on 2026-08-01 (applied)",
+			priorTriggers: "- Renovate update triggered on eu-onboarding for 'renovate/eu-onboarding-elastic_agent'.",
+		});
+		expect(parsed.success).toBe(true);
+		if (parsed.success && parsed.data.type === "renovate_trigger_choice") {
+			expect(parsed.data.recentChanges).toContain("elastic_agent changed");
+			expect(parsed.data.priorTriggers).toContain("Renovate update triggered");
+		}
+	});
+
+	test("still accepts the event when recentChanges/priorTriggers are absent (older/degraded payload)", () => {
+		const parsed = StreamEventSchema.safeParse({
+			type: "renovate_trigger_choice",
+			threadId: "t1",
+			marker: "x",
+			line: "y",
+			message: "z",
+		});
+		expect(parsed.success).toBe(true);
+	});
 });
