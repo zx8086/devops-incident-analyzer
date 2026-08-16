@@ -118,6 +118,8 @@ describe("renovateTriggerGate interrupt round-trip (SIO-1471)", () => {
 			renovateChangelog: [{ version: "2.9.4", changes: [{ description: "Add X", type: "enhancement" }] }],
 			renovateRecentChanges: "- [eu-onboarding] elastic_agent changed on 2026-08-01 (applied)",
 			renovatePriorTriggers: "- Renovate update triggered on eu-onboarding for 'renovate/eu-onboarding-elastic_agent'.",
+			renovateAffectedPolicies: ["eu-onboarding-agent-policy-1", "eu-onboarding-agent-policy-2"],
+			renovateChangelogTotal: 23,
 		};
 
 		await compiled.invoke(inputState as unknown as Parameters<typeof compiled.invoke>[0], config);
@@ -136,6 +138,8 @@ describe("renovateTriggerGate interrupt round-trip (SIO-1471)", () => {
 			changelog: [{ version: "2.9.4", changes: [{ description: "Add X", type: "enhancement" }] }],
 			recentChanges: "- [eu-onboarding] elastic_agent changed on 2026-08-01 (applied)",
 			priorTriggers: "- Renovate update triggered on eu-onboarding for 'renovate/eu-onboarding-elastic_agent'.",
+			affectedPolicies: ["eu-onboarding-agent-policy-1", "eu-onboarding-agent-policy-2"],
+			changelogTotal: 23,
 		});
 	});
 });
