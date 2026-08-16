@@ -50,6 +50,7 @@ export const INTENT_VALUES = [
 	"synthetics-drift",
 	"fleet-upgrade",
 	"renovate-integration-update",
+	"renovate-status-check",
 	"converse",
 ] as const;
 

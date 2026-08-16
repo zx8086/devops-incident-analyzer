@@ -1375,6 +1375,7 @@ export function intentFromText(
 	| "synthetics-drift"
 	| "fleet-upgrade"
 	| "renovate-integration-update"
+	| "renovate-status-check"
 	| "converse" {
 	const r = raw.toLowerCase();
 	if (r.includes("pipeline-status") || r.includes("pipeline_status")) return "pipeline-status";
@@ -1616,6 +1617,18 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 			"iac intent: fleet-status guard -> pipeline-status",
 		);
 		return { intent: "pipeline-status" };
+	}
+	// SIO-1475: the renovate-lane twin of the fleetApplyPipelineId guard immediately above --
+	// same rationale (SIO-928): a Renovate trigger with no MR found yet has no reliable way for
+	// the LLM classifier to recognize "check again" as a continuation rather than a fresh
+	// request, since renovateTarget/renovateMarker are turn-scoped and already null by now.
+	// renovateInFlightMarker survives TURN_START_RESET specifically so this guard can fire.
+	if (state.renovateInFlightMarker != null && looksLikeRenovateStatusCheck(query)) {
+		log.info(
+			{ query, renovateInFlightMarker: state.renovateInFlightMarker },
+			"iac intent: renovate-status guard -> renovate-status-check",
+		);
+		return { intent: "renovate-status-check" };
 	}
 	// SIO-990: a CORRECTION to the change already proposed this session enters the amend lane, which
 	// re-commits onto the SAME branch (updating the existing MR in place) instead of proposing from

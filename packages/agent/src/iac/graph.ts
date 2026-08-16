@@ -112,21 +112,24 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 					? "detectFleetUpgrade"
 					: s.intent === "renovate-integration-update"
 						? "extractRenovateTarget"
-						: s.intent === "synthetics-drift"
-							? "detectSyntheticsDrift"
-							: s.intent === "drift"
-								? "detectDrift"
-								: s.intent === "pipeline-status"
-									? "watchPipeline"
-									: s.intent === "converse"
-										? "converseIac"
-										: "answerInfo";
+						: s.intent === "renovate-status-check"
+							? "watchRenovateMr"
+							: s.intent === "synthetics-drift"
+								? "detectSyntheticsDrift"
+								: s.intent === "drift"
+									? "detectDrift"
+									: s.intent === "pipeline-status"
+										? "watchPipeline"
+										: s.intent === "converse"
+											? "converseIac"
+											: "answerInfo";
 	// `as const` keeps these as literal node names rather than widening to string[].
 	const INTENT_TARGETS = [
 		"parseIntent",
 		"amendChange",
 		"detectFleetUpgrade",
 		"extractRenovateTarget",
+		"watchRenovateMr",
 		"detectSyntheticsDrift",
 		"detectDrift",
 		"answerInfo",

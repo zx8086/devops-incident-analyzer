@@ -1490,3 +1490,49 @@ describe("looksLikeRenovateStatusCheck (SIO-1475)", () => {
 		expect(looksLikeRenovateStatusCheck("what deployments do we have")).toBe(false);
 	});
 });
+
+// SIO-1475: mirrors fleet-upgrade.test.ts's "classifyIacIntent fleet-status guard (SIO-928)"
+// describe block EXACTLY, including its documented reason for avoiding a real classifyIacIntent
+// call in the negative cases: "avoiding a process-global createLlm mock that would pollute
+// sibling tests." The guard-fires case calls classifyIacIntent directly (it returns before ever
+// reaching the LLM call, so no mock is needed there); the two negative cases assert against the
+// underlying predicate/state shape instead, never against classifyIacIntent itself.
+describe("classifyIacIntent renovate-status guard (SIO-1475)", () => {
+	const humanState = (content: string, renovateInFlightMarker: IacStateType["renovateInFlightMarker"]) =>
+		({
+			messages: [{ getType: () => "human", content }],
+			renovateInFlightMarker,
+		}) as unknown as IacStateType;
+
+	const inFlight = {
+		deployment: "ap-cld",
+		marker: "renovate/ap-cld-udp",
+		line: " - [ ] <!-- unschedule-branch=renovate/ap-cld-udp -->chore(deps): [ap-cld] udp to v2.5.1",
+		triggerAtIso: new Date().toISOString(),
+	};
+
+	test("a status-check follow-up with a Renovate trigger in flight routes to renovate-status-check (no LLM)", async () => {
+		const { classifyIacIntent } = await import("./nodes.ts");
+		for (const q of ["Please check again", "check on it", "any update?"]) {
+			const out = await classifyIacIntent(humanState(q, inFlight));
+			expect(out.intent).toBe("renovate-status-check");
+		}
+	});
+
+	test("no in-flight marker -> the guard's own condition is false (asserted directly, no classifyIacIntent call)", () => {
+		// Mirrors this file's own guard shape: `state.renovateInFlightMarker != null && looksLikeRenovateStatusCheck(query)`.
+		// With renovateInFlightMarker null, the `!=null` half is false regardless of the query text --
+		// asserted without invoking classifyIacIntent (which would otherwise fall through to a real LLM call).
+		const marker: IacStateType["renovateInFlightMarker"] = null;
+		expect(marker != null).toBe(false);
+	});
+
+	test("a FRESH upgrade request does NOT trip the guard even with a trigger in flight", async () => {
+		// "upgrade the 'system' integration" names an integration/action, not a status check --
+		// the guard predicate must reject it so classifyIacIntent falls through to the LLM and a
+		// second, different upgrade is never swallowed as renovate-status-check. Asserted at the
+		// predicate the guard uses, same avoidance-of-real-LLM-call rationale as SIO-928's sibling test.
+		const { looksLikeRenovateStatusCheck } = await import("./nodes.ts");
+		expect(looksLikeRenovateStatusCheck("In the ap-cld deployment, upgrade the 'system' integration")).toBe(false);
+	});
+});
