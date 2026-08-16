@@ -435,6 +435,7 @@ async function fetchRenovateChangelog(integration: string): Promise<ChangelogEnt
 	try {
 		const res = await fetch(
 			`https://raw.githubusercontent.com/elastic/integrations/main/packages/${encodeURIComponent(integration)}/changelog.yml`,
+			{ signal: AbortSignal.timeout(5_000) },
 		);
 		if (!res.ok) return [];
 		const text = await res.text();
@@ -490,6 +491,7 @@ export async function enrichRenovateTarget(state: IacStateType): Promise<Partial
 			// does, returning an `items` array we filter client-side. Live-verified against eu-cld.
 			const res = await fetch(`${kibanaConfig.url}/api/fleet/epm/packages?withPackagePoliciesCount=true`, {
 				headers: { Authorization: `ApiKey ${kibanaConfig.apiKey}`, "kbn-xsrf": "true" },
+				signal: AbortSignal.timeout(8_000),
 			});
 			if (res.ok) {
 				const body = (await res.json()) as { items?: unknown };
@@ -560,12 +562,16 @@ export function parseRenovateTargetVersion(line: string): string | null {
 }
 
 // Numeric (not lexical) semver comparison for filterChangelogRange -- a missing component
-// (e.g. "2.22" vs "2.22.1") is treated as 0. Deliberately minimal: no pre-release/build-metadata
-// handling, since every version this sub-flow compares (Renovate dashboard targets, Kibana
-// installationInfo.version, changelog.yml entries) is a plain X.Y[.Z] release. (Pure; unit-tested.)
+// (e.g. "2.22" vs "2.22.1") is treated as 0. Some versions this sub-flow compares (changelog.yml
+// entries in particular -- live-verified against elastic/integrations, e.g. "1.32.0-beta.2",
+// "1.26.0-next") carry a prerelease/build-metadata suffix; that suffix is stripped before
+// splitting, so a prerelease is treated as equal to its base release rather than corrupting the
+// numeric comparison with NaN. This is a simplification, not full semver precedence (a true
+// prerelease should sort before its release) -- precise enough for this range filter. (Pure;
+// unit-tested.)
 export function compareSemver(a: string, b: string): number {
-	const pa = a.split(".").map(Number);
-	const pb = b.split(".").map(Number);
+	const pa = (a.split(/[-+]/)[0] ?? a).split(".").map(Number);
+	const pb = (b.split(/[-+]/)[0] ?? b).split(".").map(Number);
 	for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
 		const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
 		if (diff !== 0) return diff;

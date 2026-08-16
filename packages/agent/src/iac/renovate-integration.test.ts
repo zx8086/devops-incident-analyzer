@@ -690,6 +690,18 @@ describe("compareSemver", () => {
 		expect(compareSemver("2.22", "2.22.1")).toBeLessThan(0);
 		expect(compareSemver("2.22.0", "2.22")).toBe(0);
 	});
+
+	test("strips a prerelease suffix, treating it as equal to its base release", () => {
+		expect(compareSemver("1.32.0-beta.2", "1.32.0")).toBe(0);
+	});
+
+	test("strips a prerelease suffix on the other side of the comparison too", () => {
+		expect(compareSemver("1.31.0", "1.32.0-beta")).toBeLessThan(0);
+	});
+
+	test("strips a build-metadata suffix", () => {
+		expect(compareSemver("1.32.0+build.5", "1.32.0")).toBe(0);
+	});
 });
 
 import { type ChangelogEntry, filterChangelogRange } from "./nodes.ts";
@@ -1001,6 +1013,22 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 		const out = await enrichRenovateTarget(baseState() as IacStateType);
 
 		expect(out.renovateChangelog).toEqual([]);
+		expect(out.blockedReason).toBeUndefined();
+	});
+
+	test("degrades cleanly when the Kibana fetch rejects with an AbortSignal.timeout TimeoutError", async () => {
+		// Simulates what AbortSignal.timeout(ms) produces on expiry (a hung/black-holed connection
+		// that never settles on its own) -- proves the existing try/catch catches this rejection
+		// the same as any other fetch error, so renovateTriggerGate is never left unreachable.
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		global.fetch = mock(async () => {
+			throw new DOMException("The operation was aborted.", "TimeoutError");
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateInstalledVersion ?? null).toBeNull();
 		expect(out.blockedReason).toBeUndefined();
 	});
 
