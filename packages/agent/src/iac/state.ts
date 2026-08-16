@@ -804,7 +804,9 @@ export const IacState = Annotation.Root({
 	renovateInstalledVersion: Annotation<string | null>({ reducer: last, default: () => null }),
 	renovateTargetVersion: Annotation<string | null>({ reducer: last, default: () => null }),
 	renovatePolicyCount: Annotation<number | null>({ reducer: last, default: () => null }),
-	renovateChangelog: Annotation<Array<{ version: string; changes: Array<{ description: string; type: string; link?: string }> }>>({
+	renovateChangelog: Annotation<
+		Array<{ version: string; changes: Array<{ description: string; type: string; link?: string }> }>
+	>({
 		reducer: last,
 		default: () => [],
 	}),
