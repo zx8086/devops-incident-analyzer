@@ -241,14 +241,19 @@ function uriEncodePathForSigV4(pathname: string): string {
 		.join("/");
 }
 
+// SIO-1477: `service` and the content/accept headers are parameterised so the
+// readiness probe can reuse this signer for a signed sts:GetCallerIdentity
+// (different host, different service scope, form-encoded body) instead of
+// duplicating the SigV4 implementation.
 function signRequest(
 	method: string,
 	url: URL,
 	body: string,
 	creds: ProxyCredentials,
 	region: string,
+	options?: { service?: string; contentType?: string; accept?: string },
 ): Record<string, string> {
-	const service = "bedrock-agentcore";
+	const service = options?.service ?? "bedrock-agentcore";
 	const now = new Date();
 	const amzDate = now
 		.toISOString()
@@ -259,8 +264,8 @@ function signRequest(
 	const headers: Record<string, string> = {
 		host: url.host,
 		"x-amz-date": amzDate,
-		"content-type": "application/json",
-		accept: "application/json, text/event-stream",
+		"content-type": options?.contentType ?? "application/json",
+		accept: options?.accept ?? "application/json, text/event-stream",
 	};
 
 	if (creds.sessionToken) {
@@ -523,6 +528,22 @@ export async function startAgentCoreProxy(
 			const reqBody = await req.text();
 			const creds = await getCredentials();
 			const headers = signRequest(req.method, reqUrl, reqBody, creds, config.region);
+			return fetch(reqUrl.toString(), { method: req.method, headers, body: reqBody });
+		},
+		// SIO-1477: validates the credential itself rather than merely resolving
+		// it. Signed for the sts service scope, not bedrock-agentcore.
+		stsUrl: `https://sts.${config.region}.amazonaws.com/`,
+		// SIO-1477 (Greptile): arn:aws:bedrock-agentcore:<region>:<account>:runtime/...
+		expectedAccountId: config.runtimeArn.split(":")[4] || undefined,
+		stsFetch: async (req) => {
+			const reqUrl = new URL(req.url);
+			const reqBody = await req.text();
+			const creds = await getCredentials();
+			const headers = signRequest(req.method, reqUrl, reqBody, creds, config.region, {
+				service: "sts",
+				contentType: "application/x-www-form-urlencoded",
+				accept: "application/json",
+			});
 			return fetch(reqUrl.toString(), { method: req.method, headers, body: reqBody });
 		},
 		timeoutMs: 20_000,

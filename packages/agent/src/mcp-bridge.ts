@@ -772,9 +772,26 @@ async function pollServerHealth(): Promise<void> {
 					unreadyStreak.set(name, streak);
 					if (streak === UNREADY_WARN_THRESHOLD) {
 						const probeTimeout = result.snapshot.errors?._probeTimeout === "true";
+						// SIO-1477: the snapshot already carries a per-component error map,
+						// but only the status strings were logged -- so an explicit
+						// "security token ... is expired" arrived as a bare "unreachable"
+						// and read as a network fault. Emit the reasons alongside, minus
+						// the internal _-prefixed markers, each capped so one verbose
+						// upstream body cannot blow out the log line.
+						// The snapshot is an unvalidated `as ReadinessSnapshot` cast over
+						// r.json() (see probeServer), so `errors` values are whatever the
+						// upstream sent. String(value) before truncating: a non-string
+						// would throw inside the poll loop and drop every remaining
+						// server's result for that cycle.
+						const componentErrors = Object.fromEntries(
+							Object.entries(result.snapshot.errors ?? {})
+								.filter(([key]) => !key.startsWith("_"))
+								.map(([key, value]) => [key, String(value).slice(0, 300)]),
+						);
 						const logFields = {
 							serverName: name,
 							components: result.snapshot.components,
+							...(Object.keys(componentErrors).length > 0 ? { componentErrors } : {}),
 							streak,
 							probeTimeout,
 						};
