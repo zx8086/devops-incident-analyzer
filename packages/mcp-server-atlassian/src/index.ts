@@ -5,6 +5,7 @@ import {
 	createBootstrapAdapter,
 	createMcpApplication,
 	createReadinessProbe,
+	seedCommandFor,
 	warnIfOAuthNotSeeded,
 } from "@devops-agent/shared";
 import pkg from "../package.json" with { type: "json" };
@@ -49,7 +50,7 @@ if (import.meta.main) {
 				namespace: "atlassian",
 				key: config.atlassian.mcpEndpoint,
 				endpointLabel: "mcpEndpoint",
-				seedCommand: "bun run oauth:seed:atlassian",
+				seedCommand: seedCommandFor("atlassian"),
 				logger: serverLog,
 			});
 
