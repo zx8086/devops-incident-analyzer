@@ -24,6 +24,7 @@ import {
 	OAuthRequiresInteractiveAuthError,
 } from "./errors.ts";
 import { isHeadless } from "./headless.ts";
+import { seedCommandFor } from "./seed-command.ts";
 
 export const OAUTH_CALLBACK_PATH = "/oauth/callback";
 
@@ -466,7 +467,7 @@ export abstract class BaseOAuthClientProvider implements OAuthClientProvider {
 						{
 							namespace: this.storageNamespace,
 							error: error.message,
-							remediation: `bun run oauth:seed:${this.storageNamespace}`,
+							remediation: seedCommandFor(this.storageNamespace),
 						},
 						"OAuth proactive refresh failed terminally; interval stopped, re-seed required",
 					);
@@ -512,7 +513,7 @@ export abstract class BaseOAuthClientProvider implements OAuthClientProvider {
 		if (isHeadless()) {
 			this.logger.error(
 				{ namespace: this.storageNamespace, url: authorizationUrl.toString() },
-				`OAuth interactive authorization required but interactive auth is disabled (MCP_OAUTH_HEADLESS=true or non-interactive stdout); run \`bun run oauth:seed:${this.storageNamespace}\``,
+				`OAuth interactive authorization required but interactive auth is disabled (MCP_OAUTH_HEADLESS=true or non-interactive stdout); run \`${seedCommandFor(this.storageNamespace)}\``,
 			);
 			throw new OAuthRequiresInteractiveAuthError(this.storageNamespace, authorizationUrl);
 		}

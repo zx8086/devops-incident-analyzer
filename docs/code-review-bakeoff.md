@@ -183,3 +183,34 @@ Small, single-concern fix: 3 files, +199/-2 on round 1 (new `resolveIntegrationS
 **Latency:** both bots' round 1 completed within a few minutes of PR open (comparable to the #658-#662 baseline, not the #664 20-minute outlier); round 2 landed within about 2-3 minutes of the fix push.
 
 **Takeaway:** the first round in this series where Greptile reported a clean 5/5 on a genuine, real (if Minor) gap that CodeRabbit caught -- a coverage gap in a soft-fail/never-throws contract, exactly the kind of "does this test suite prove the safety property it claims" finding that benefits from an independent second reviewer. Verifying before fixing mattered here: the finding's suggested framing ("must preserve the target... on invalid shape") could be read as implying a live correctness bug, but the actual gap was narrower (missing coverage of an already-caught exception) -- worth distinguishing in the fix commit message and PR reply rather than accepting the more alarming framing at face value.
+
+## PR #670 detail (SIO-1476, cwd-aware OAuth seed command)
+
+Small diagnostics fix across two rounds: 8 files (+105/-11) on round 1, 4 files (+16/-5) on the round-2 fix commit. Both bots found real defects the author missed, and they found *different* ones -- the strongest head-to-head case in this ledger so far for keeping both.
+
+**Origin:** an operator hit `OAuth refresh chain expired ... run 'bun run oauth:seed:atlassian' to re-seed`, followed that instruction, and got `error: Script not found`. The seeder is exposed as `oauth:seed:<ns>` at the workspace root but as a bare `oauth:seed` inside each package, and the error is thrown from a process usually started in the package directory. Round 1 added `seedCommandFor(namespace, cwd)` and applied it to the throwing paths.
+
+**Round 1 (initial commit `834a43e2`):**
+
+- Greptile: `COMPLETED SUCCESS`, Confidence Score **4/5**, one **P1** inline finding -- "Startup remediation bypasses resolver". Three remediation strings still hardcoded the root-only name: `bootstrap-lifecycle.ts:147` (the fatal interactive-auth path) plus the `seedCommand` literals at `mcp-server-atlassian/src/index.ts:52` and `mcp-server-gitlab/src/index.ts:55`, which `warnIfOAuthNotSeeded` interpolates at `boot-warn.ts:65`. Its flowchart correctly showed the two-path split (resolver vs hardcoded) converging on "Script not found from package cwd".
+- CodeRabbit: `CHANGES_REQUESTED`, two inline findings -- one Minor (test leaked one temp dir per `mkdtempSync` call, no cleanup) and one Major (validate the parsed `package.json` with Zod, citing the repo's "Zod for all runtime validation" rule).
+
+**Triage (all three verified before acting):**
+
+- *Greptile P1 -- valid, fixed.* Confirmed all three sites by grep, then confirmed the fix live from each package directory (both now yield `bun run oauth:seed`). This was a genuine author miss: round 1 fixed the error-throwing paths but not the startup paths, which are the ones most likely to actually be read. Notably `bootstrap-lifecycle.ts:147` is the precise line that emitted the original report, so the PR would have shipped without fixing its own motivating case.
+- *CodeRabbit Minor -- valid, fixed.* Tracked each `manifestDir` result and `rmSync`'d in `afterEach`. Verified by purging `$TMPDIR/seed-cmd-*`, re-running, and confirming 0 leftover directories rather than assuming.
+- *CodeRabbit Major (Zod) -- declined, with evidence.* `readScripts` already performs exactly the checks the proposed schema would express (`typeof scripts !== "object" || scripts === null`, plus a per-key `typeof === "string"` at each call site) inside a `try/catch` that returns `null` on any failure. Adversarially tested 10 hostile manifests -- `scripts` as array/string/null, values as number/object, manifest as array/bare-string/`null`, a `__proto__` pollution attempt, truncated JSON: **10/10 fell back safely, 0 threw.** Declined in-thread with that repro and an explicit invitation to supply a counterexample.
+
+**Round 2 (fix commit `e607f4c6`):**
+
+- Greptile: `COMPLETED SUCCESS`, **5/5**, footer SHA confirmed `e607f4c6`, "The PR appears safe to merge" and explicitly noted the previously reported bypass is now addressed in all three locations.
+- CodeRabbit: re-approved (`APPROVED` @ 15:47:11, after `CHANGES_REQUESTED` @ 15:40:16). Both its threads auto-resolved. On the Zod thread it replied: *"I cannot identify an input that causes an incorrect command or an exception. I withdraw this finding."* Greptile's thread did not auto-resolve and needed an explicit `resolveReviewThread` mutation -- a divergence from the #652/#669 pattern where threads self-resolved on the fix push.
+
+**Latency:** round 1 both bots within ~1-2 min of PR open. Round 2 Greptile took noticeably longer (multiple 25s poll cycles) but completed cleanly with no re-trigger.
+
+**Takeaways:**
+
+1. *Non-overlapping recall.* Greptile found the P1 correctness/completeness gap; CodeRabbit found the test hygiene issue. Neither found the other's. On a diff this small that is a strong argument against dropping either bot on the basis of "the other would have caught it".
+2. *Verify-before-apply earned its keep, again.* The Zod finding was rule-shaped and superficially plausible -- an auto-applying loop would have added a dependency to the shared OAuth error path to re-express checks that already held. The 10-case adversarial repro both justified the decline and persuaded the bot to withdraw. This is the second ledger entry (after #669) where the bot's *framing* was more alarming than the underlying reality.
+3. *Severity calibration.* Greptile's P1 was correctly rated -- it defeated the PR's own purpose on the most-read path. CodeRabbit's "Major" for the Zod suggestion was overrated for what was, by its own eventual admission, a style preference over already-correct code; its "Minor" for the temp-dir leak was rated about right.
+4. *A clean status check is not a clean review.* Round 1 reported `Greptile Review: COMPLETED SUCCESS` while carrying an unresolved P1. Gating on the check alone would have merged the bug. The check means "the review ran", not "the review found nothing" -- read the comment body and the confidence score.
