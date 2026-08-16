@@ -136,7 +136,18 @@ export function createProxyReadinessProbe(opts: CreateProxyReadinessProbeOptions
 				// exists to remove.
 				if (opts.expectedAccountId) {
 					const actual = parseStsAccountId(await res.text().catch(() => ""));
-					if (actual && actual !== opts.expectedAccountId) {
+					if (!actual) {
+						// Fail CLOSED. Configuring expectedAccountId is a request for
+						// account verification; if the account cannot be read, the check
+						// did not run, and reporting "ok" would claim a verification that
+						// never happened -- the same false-reassurance this ticket exists
+						// to remove. Both real STS shapes (JSON and XML) parse, so this
+						// path means something genuinely unexpected.
+						throw new Error(
+							`sts:GetCallerIdentity succeeded but no account could be read from the response, so the credential could not be verified against runtime account ${opts.expectedAccountId}`,
+						);
+					}
+					if (actual !== opts.expectedAccountId) {
 						throw new Error(
 							`credentials belong to AWS account ${actual} but the configured runtime is in ${opts.expectedAccountId} -- the proxy cannot invoke it`,
 						);

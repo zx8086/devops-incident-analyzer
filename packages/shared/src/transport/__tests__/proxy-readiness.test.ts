@@ -413,11 +413,68 @@ describe("SIO-1477 wrong-account credentials are rejected", () => {
 		expect(snap.components.credentials).toBe("ok");
 	});
 
-	test("unparseable success body -> degrades to 'key is live', does not fail the probe", async () => {
+	// Greptile round 2: this originally asserted the OPPOSITE -- that an
+	// unparseable success body degraded to "ok". That is fail-OPEN on the very
+	// check the operator asked for by setting expectedAccountId, and reporting
+	// "ok" for a verification that never ran is the same false reassurance this
+	// ticket exists to remove. Both real STS shapes parse (live-verified over
+	// Accept: application/json and text/plain), so reaching this path means
+	// something genuinely unexpected and the probe should say so.
+	test("unparseable success body -> fails closed rather than claiming ok", async () => {
 		const snap = await createProxyReadinessProbe({
 			...base,
 			expectedAccountId: "399987695868",
 			stsFetch: async () => new Response("<<unparseable>>", { status: 200 }),
+		})();
+		expect(snap.ready).toBe(false);
+		expect(snap.components.credentials).not.toBe("ok");
+		expect(snap.errors?.credentials).toContain("no account could be read");
+	});
+});
+
+// Guards the fail-closed path added in Greptile round 2: it must be reachable
+// only by genuinely malformed responses, never by a normal STS success. Both
+// bodies below are the real shapes captured live from
+// sts.eu-central-1.amazonaws.com (JSON over Accept: application/json, XML over
+// Accept: text/plain).
+describe("SIO-1477 real STS success shapes parse and do not trip the fail-closed path", () => {
+	const base = {
+		role: "aws-proxy" as const,
+		getCredentials: async () => ({ accessKeyId: "AKIA...", secretAccessKey: "x" }),
+		upstreamUrl: "http://example.test/mcp",
+		sigv4Fetch: mockSigv4Fetch({ result: { tools: [{ name: "aws_cloudwatch_describe_alarms" }] } }),
+		stsUrl: "https://sts.eu-central-1.amazonaws.com/",
+		expectedAccountId: "399987695868",
+	};
+
+	test("real JSON success shape -> ok", async () => {
+		const body = JSON.stringify({
+			GetCallerIdentityResponse: {
+				GetCallerIdentityResult: {
+					Account: "399987695868",
+					Arn: "arn:aws:iam::399987695868:user/service/kafka-mcp-agentcore-invoker-prd",
+					UserId: "AIDAEXAMPLE",
+				},
+				ResponseMetadata: { RequestId: "00000000-0000-0000-0000-000000000000" },
+			},
+		});
+		const snap = await createProxyReadinessProbe({
+			...base,
+			stsFetch: async () => new Response(body, { status: 200 }),
+		})();
+		expect(snap.components.credentials).toBe("ok");
+		expect(snap.ready).toBe(true);
+	});
+
+	test("real XML success shape -> ok", async () => {
+		const body =
+			'<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><GetCallerIdentityResult>' +
+			"<Arn>arn:aws:iam::399987695868:user/service/kafka-mcp-agentcore-invoker-prd</Arn>" +
+			"<UserId>AIDAEXAMPLE</UserId><Account>399987695868</Account>" +
+			"</GetCallerIdentityResult></GetCallerIdentityResponse>";
+		const snap = await createProxyReadinessProbe({
+			...base,
+			stsFetch: async () => new Response(body, { status: 200 }),
 		})();
 		expect(snap.components.credentials).toBe("ok");
 	});
