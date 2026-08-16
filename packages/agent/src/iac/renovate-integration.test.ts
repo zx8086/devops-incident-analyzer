@@ -103,6 +103,35 @@ describe("renovateTriggerGate interrupt round-trip (SIO-1471)", () => {
 		expect(values.renovateTriggerApproved).toBe(true);
 		expect(values.messages.length).toBe(0);
 	});
+
+	test("interrupt payload carries the enrichment fields set by enrichRenovateTarget", async () => {
+		const compiled = buildMiniGateGraph();
+		const config = { configurable: { thread_id: `t-renovate-enrichment-${Date.now()}` } };
+		const inputState = {
+			requestId: "req-1",
+			renovateMarker: marker,
+			renovateInstalledVersion: "2.8.0",
+			renovateTargetVersion: "2.9.4",
+			renovatePolicyCount: 24,
+			renovateChangelog: [{ version: "2.9.4", changes: [{ description: "Add X", type: "enhancement" }] }],
+		};
+
+		await compiled.invoke(inputState as unknown as Parameters<typeof compiled.invoke>[0], config);
+
+		// LangGraph's getState() returns a StateSnapshot whose .tasks[N].interrupts[N] array holds
+		// each paused task's Interrupt objects; Interrupt.value is exactly the object passed to
+		// interrupt({...}) inside the node (confirmed against @langchain/langgraph's own type
+		// definitions: PregelTaskDescription.interrupts: Interrupt[], Interrupt<Value>.value?: Value).
+		// This graph has exactly one node that can pause, so tasks[0].interrupts[0] is unambiguous.
+		const after = await compiled.getState(config);
+		const interruptValue = after.tasks[0]?.interrupts[0]?.value as Record<string, unknown> | undefined;
+		expect(interruptValue).toMatchObject({
+			installedVersion: "2.8.0",
+			targetVersion: "2.9.4",
+			policyCount: 24,
+			changelog: [{ version: "2.9.4", changes: [{ description: "Add X", type: "enhancement" }] }],
+		});
+	});
 });
 
 // SIO-1471: teardownIac must NOT append its generic gitops-flavored fallback lines ("MR
