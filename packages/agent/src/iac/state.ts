@@ -825,6 +825,9 @@ export const IacState = Annotation.Root({
 	// reads (this sub-flow bypasses graphEnrichIac/memoryEnrichIac exactly like fleet-upgrade does).
 	// Both best-effort -- "" when KG is disabled/empty or agent-memory isn't the selected backend.
 	renovateRecentChanges: Annotation<string>({ reducer: last, default: () => "" }),
+	// SIO-1475: deployment-wide (any integration) Renovate-trigger recall, distinct from
+	// renovatePriorTriggers (marker-scoped, "have we triggered THIS integration before").
+	renovateDeploymentHistory: Annotation<string>({ reducer: last, default: () => "" }),
 	renovatePriorTriggers: Annotation<string>({ reducer: last, default: () => "" }),
 	// SIO-1473: affected-policy names (Kibana Fleet package_policies call) + the pre-cap changelog
 	// entry count, so the card can show real policy names in a collapsed section and an honest

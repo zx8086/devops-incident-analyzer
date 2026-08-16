@@ -1310,6 +1310,96 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 	});
 });
 
+import { recallPriorRenovateTriggersForDeployment } from "./nodes.ts";
+
+// SIO-1475: the deployment-wide twin of recallPriorRenovateTriggers -- "what Renovate updates has
+// this deployment had, for ANY integration" rather than the marker-scoped "have we triggered THIS
+// exact integration before". Mirrors recallPriorFleetUpgrades' deployment-only filter shape.
+describe("recallPriorRenovateTriggersForDeployment (SIO-1475)", () => {
+	afterEach(() => {
+		const { __setAgentMemoryClient } = require("../memory-backend.ts");
+		__setAgentMemoryClient(null);
+		delete process.env.LIVE_MEMORY_BACKEND;
+	});
+
+	test("queries deployment + kind only, no marker key, and renders hits", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { __setAgentMemoryClient } = require("../memory-backend.ts");
+		let seenAnnotations: Record<string, string> | undefined;
+		__setAgentMemoryClient({
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async addMessages() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async searchMemory(_ref: unknown, _q: string, opts?: { annotations?: Record<string, string> }) {
+				seenAnnotations = opts?.annotations;
+				return [
+					{
+						text: "Renovate update triggered on ap-cld for 'renovate/ap-cld-prometheus'.",
+						score: 0.9,
+						annotations: {
+							kind: "renovate-trigger",
+							deployment: "ap-cld",
+							marker: "renovate/ap-cld-prometheus",
+							mr_url: "https://gitlab.example/x/-/merge_requests/519",
+						},
+					},
+				];
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true };
+			},
+		} satisfies AgentMemoryClient);
+
+		const out = await recallPriorRenovateTriggersForDeployment("ap-cld");
+
+		expect(seenAnnotations).toEqual({ deployment: "ap-cld", kind: "renovate-trigger" });
+		expect(out).toContain("Renovate update triggered on ap-cld for 'renovate/ap-cld-prometheus'");
+		expect(out).toContain("[https://gitlab.example/x/-/merge_requests/519]");
+	});
+
+	test("returns '' when the agent-memory backend is not selected", async () => {
+		delete process.env.LIVE_MEMORY_BACKEND;
+		expect(await recallPriorRenovateTriggersForDeployment("ap-cld")).toBe("");
+	});
+
+	test("returns '' when deployment is empty", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		expect(await recallPriorRenovateTriggersForDeployment("")).toBe("");
+	});
+
+	test("soft-fails to '' when the search throws", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { __setAgentMemoryClient } = require("../memory-backend.ts");
+		__setAgentMemoryClient({
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async addMessages() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async searchMemory() {
+				throw new Error("connection reset");
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true };
+			},
+		} satisfies AgentMemoryClient);
+
+		expect(await recallPriorRenovateTriggersForDeployment("ap-cld")).toBe("");
+	});
+});
+
 import { resolveIntegrationSlug } from "./nodes.ts";
 
 // SIO-1474: resolves a Kibana Fleet display name (e.g. "Custom UDP Logs") to its EPM package

@@ -669,7 +669,7 @@ export async function enrichRenovateTarget(state: IacStateType): Promise<Partial
 
 	const CHANGELOG_DISPLAY_CAP = 10;
 	let changelogTotal = 0;
-	const [changelog, renovateRecentChanges, renovatePriorTriggers] = await Promise.all([
+	const [changelog, renovateRecentChanges, renovatePriorTriggers, renovateDeploymentHistory] = await Promise.all([
 		(async () => {
 			if (!resolvedTargetVersion) return [];
 			const filtered = filterChangelogRange(
@@ -682,6 +682,7 @@ export async function enrichRenovateTarget(state: IacStateType): Promise<Partial
 		})(),
 		recallDeploymentKgChanges(target.deployment),
 		recallPriorRenovateTriggers(target.deployment, marker.marker),
+		recallPriorRenovateTriggersForDeployment(target.deployment),
 	]);
 
 	return {
@@ -691,6 +692,7 @@ export async function enrichRenovateTarget(state: IacStateType): Promise<Partial
 		renovateChangelog: changelog,
 		renovateRecentChanges,
 		renovatePriorTriggers,
+		renovateDeploymentHistory,
 		renovateAffectedPolicies: affectedPolicies,
 		renovateChangelogTotal: changelogTotal,
 	};
@@ -1779,6 +1781,7 @@ export const TURN_START_RESET = {
 	renovatePolicyCount: null,
 	renovateChangelog: [] as ChangelogEntry[],
 	renovateRecentChanges: "",
+	renovateDeploymentHistory: "",
 	renovatePriorTriggers: "",
 	renovateAffectedPolicies: [] as string[],
 	renovateChangelogTotal: 0,
@@ -12359,6 +12362,26 @@ export async function recallPriorRenovateTriggers(deployment: string, marker: st
 		log.warn(
 			{ error: error instanceof Error ? error.message : String(error), deployment, marker },
 			"iac renovate trigger: prior-trigger recall failed; continuing without it",
+		);
+		return "";
+	}
+}
+
+// SIO-1475: the deployment-wide twin of recallPriorRenovateTriggers immediately above -- mirrors
+// recallPriorFleetUpgrades exactly: same deployment-only filter shape, no marker/version narrowing,
+// so a deployment's Renovate history across ALL integrations surfaces, not just the one currently
+// pending. Reuses renderRenovateLearnings unchanged.
+export async function recallPriorRenovateTriggersForDeployment(deployment: string): Promise<string> {
+	if (selectedBackend() !== "agent-memory" || !deployment) return "";
+	try {
+		const hits = await searchAgentMemory("elastic-iac", "", { deployment, kind: "renovate-trigger" }, 8, {
+			deterministic: true,
+		});
+		return renderRenovateLearnings(hits);
+	} catch (error) {
+		log.warn(
+			{ error: error instanceof Error ? error.message : String(error), deployment },
+			"iac renovate trigger: deployment-wide prior-trigger recall failed; continuing without it",
 		);
 		return "";
 	}
