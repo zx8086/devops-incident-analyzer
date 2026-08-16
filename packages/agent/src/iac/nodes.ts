@@ -15,7 +15,7 @@ import { AIMessage, type BaseMessage, HumanMessage, SystemMessage, ToolMessage }
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { interrupt } from "@langchain/langgraph";
-import { isMap, parseDocument } from "yaml";
+import { isMap, parseDocument, parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { createLlm, createLlmWithTools } from "../llm.ts";
 import { extractJsonBlock, sanitizeJsonControlChars } from "../llm-json.ts";
@@ -405,6 +405,126 @@ export async function resolveRenovateMarker(state: IacStateType): Promise<Partia
 				`Multiple pending updates match '${target.integration}' on '${target.deployment}': ${candidates.map((c) => c.marker).join(", ")}. Be more specific.`,
 			),
 		],
+	};
+}
+
+// Resolves this deployment's existing Elasticsearch env-var pair and derives the Kibana URL
+// from it (.es. -> .kb. hostname substitution -- live-verified across 9 of this repo's 10
+// configured deployments this session, spanning 3 different Elastic Cloud domain suffixes).
+// The SAME ELASTIC_<DEPLOYMENT>_API_KEY authenticates against both Elasticsearch and Kibana
+// (also live-verified) -- no separate Kibana credential exists or is needed. null when the
+// deployment has no ELASTIC_<DEPLOYMENT>_URL configured, or its hostname doesn't contain ".es."
+// to substitute (an unexpected shape -- degrade rather than guess).
+function resolveKibanaConfig(deployment: string): { url: string; apiKey: string } | null {
+	const suffix = deployment.toUpperCase().replace(/-/g, "_");
+	const esUrl = process.env[`ELASTIC_${suffix}_URL`];
+	const apiKey = process.env[`ELASTIC_${suffix}_API_KEY`];
+	if (!esUrl || !apiKey) return null;
+	if (!esUrl.includes(".es.")) return null;
+	return { url: esUrl.replace(".es.", ".kb."), apiKey };
+}
+
+// elastic/integrations' per-package changelog.yml, fetched via raw.githubusercontent.com --
+// no auth needed (public repo), no gh-CLI subprocess dependency (this file has never shelled
+// out to an external CLI; a raw-content HTTP GET is a strictly better fit for a server-side
+// node than depending on a local `gh` install). Returns [] on any failure (404 for an
+// integration with no changelog.yml, network error, malformed YAML) -- best-effort, this
+// function never throws. (Not exported: a thin I/O wrapper, exercised via enrichRenovateTarget's
+// own mocked-fetch tests rather than in isolation.)
+async function fetchRenovateChangelog(integration: string): Promise<ChangelogEntry[]> {
+	try {
+		const res = await fetch(
+			`https://raw.githubusercontent.com/elastic/integrations/main/packages/${integration}/changelog.yml`,
+		);
+		if (!res.ok) return [];
+		const text = await res.text();
+		const parsed = parseYaml(text);
+		if (!Array.isArray(parsed)) return [];
+		return parsed
+			.filter(
+				(e): e is ChangelogEntry =>
+					typeof e === "object" && e !== null && typeof e.version === "string" && Array.isArray(e.changes),
+			)
+			.map((e) => ({
+				version: e.version,
+				changes: e.changes
+					.filter(
+						(c: unknown): c is { description: string; type: string; link?: string } =>
+							typeof (c as { description?: unknown })?.description === "string",
+					)
+					.map((c: { description: string; type?: string; link?: string }) => ({
+						description: c.description,
+						type: typeof c.type === "string" ? c.type : "unknown",
+						...(typeof c.link === "string" && { link: c.link }),
+					})),
+			}));
+	} catch {
+		return [];
+	}
+}
+
+// Best-effort pre-trigger enrichment for the renovate_trigger_choice card: currently-installed
+// version, target version, affected-policy count (all from one Kibana Fleet call, reusing the
+// existing ELASTIC_<DEPLOYMENT>_URL/_API_KEY -- see resolveKibanaConfig), and a version-range
+// changelog (from elastic/integrations on GitHub, no credential needed -- see
+// fetchRenovateChangelog). Inserted between resolveRenovateMarker and renovateTriggerGate;
+// reached only when hasSingleRenovateMatch routed here (graph.ts). NEVER sets blockedReason and
+// NEVER throws -- every external call is independently wrapped so a Kibana failure does not
+// suppress a working changelog fetch or vice versa, and any failure degrades the card to
+// today's plain marker/line text rather than blocking the approval gate.
+export async function enrichRenovateTarget(state: IacStateType): Promise<Partial<IacStateType>> {
+	const target = state.renovateTarget;
+	const marker = state.renovateMarker;
+	if (!target || !marker) return {};
+
+	const targetVersion = parseRenovateTargetVersion(marker.line);
+	let installedVersion: string | null = null;
+	let policyCount: number | null = null;
+	let resolvedTargetVersion = targetVersion;
+
+	const kibanaConfig = resolveKibanaConfig(target.deployment);
+	if (kibanaConfig) {
+		try {
+			const res = await fetch(
+				`${kibanaConfig.url}/api/fleet/epm/packages/${encodeURIComponent(target.integration)}?withPackagePoliciesCount=true`,
+				{ headers: { Authorization: `ApiKey ${kibanaConfig.apiKey}`, "kbn-xsrf": "true" } },
+			);
+			if (res.ok) {
+				const body = (await res.json()) as {
+					version?: unknown;
+					installationInfo?: { version?: unknown };
+					packagePoliciesInfo?: { count?: unknown };
+				};
+				if (typeof body.installationInfo?.version === "string") installedVersion = body.installationInfo.version;
+				if (typeof body.packagePoliciesInfo?.count === "number") policyCount = body.packagePoliciesInfo.count;
+				if (!resolvedTargetVersion && typeof body.version === "string") resolvedTargetVersion = body.version;
+			} else {
+				log.warn(
+					{ deployment: target.deployment, integration: target.integration, status: res.status },
+					"enrichRenovateTarget: Kibana Fleet call returned non-2xx; continuing without installed-version enrichment",
+				);
+			}
+		} catch (error) {
+			log.warn(
+				{
+					deployment: target.deployment,
+					integration: target.integration,
+					error: error instanceof Error ? error.message : String(error),
+				},
+				"enrichRenovateTarget: Kibana Fleet call failed; continuing without installed-version enrichment",
+			);
+		}
+	}
+
+	const changelog = resolvedTargetVersion
+		? filterChangelogRange(await fetchRenovateChangelog(target.integration), installedVersion, resolvedTargetVersion)
+		: [];
+
+	return {
+		renovateInstalledVersion: installedVersion,
+		renovateTargetVersion: resolvedTargetVersion,
+		renovatePolicyCount: policyCount,
+		renovateChangelog: changelog,
 	};
 }
 

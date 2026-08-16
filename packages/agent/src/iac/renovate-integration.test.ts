@@ -724,3 +724,169 @@ function compareSemverForTest(a: string, b: string): number {
 	}
 	return 0;
 }
+
+import { enrichRenovateTarget } from "./nodes.ts";
+
+// SIO-XXXX: best-effort enrichment for the renovate_trigger_choice card -- one Kibana Fleet
+// call (installed/target version + policy count) and one GitHub raw-content call (changelog),
+// each independently wrapped so a failure in one never suppresses the other and neither ever
+// blocks the turn (renovateTriggerGate must still fire even if both external calls fail).
+// Mocking convention matches this repo's established pattern for fetch-mocked node tests (see
+// mcp-bridge.boot-strict-integration.test.ts / mcp-bridge-probe-budget.test.ts): capture the
+// real global.fetch once, restore it in afterEach, and use bun:test's mock() wrapper typed as
+// (input: string | URL | Request) rather than a bare url:string cast.
+describe("enrichRenovateTarget (SIO-XXXX)", () => {
+	const ORIGINAL_FETCH = global.fetch;
+	const ORIGINAL_ENV = { ...process.env };
+
+	afterEach(() => {
+		global.fetch = ORIGINAL_FETCH;
+		process.env = { ...ORIGINAL_ENV };
+	});
+
+	function baseState(): Partial<IacStateType> {
+		return {
+			renovateTarget: { deployment: "eu-onboarding", integration: "elastic_agent" },
+			renovateMarker: {
+				marker: "renovate/eu-onboarding-elastic_agent",
+				line: " - [ ] <!-- unschedule-branch=renovate/eu-onboarding-elastic_agent -->chore(deps): [eu-onboarding] elastic_agent to v2.9.4",
+			},
+		};
+	}
+
+	test("returns installed/target/policyCount from a successful Kibana call, changelog empty when GitHub call not mocked to succeed", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages/")) {
+				return Response.json({
+					version: "2.9.4",
+					installationInfo: { version: "2.8.0" },
+					packagePoliciesInfo: { count: 24 },
+				});
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateInstalledVersion).toBe("2.8.0");
+		expect(out.renovateTargetVersion).toBe("2.9.4");
+		expect(out.renovatePolicyCount).toBe(24);
+		expect(out.renovateChangelog).toEqual([]);
+		expect(out.blockedReason).toBeUndefined();
+	});
+
+	test("also returns a filtered changelog when the GitHub fetch succeeds", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		const changelogYaml = [
+			'- version: "2.9.4"',
+			"  changes:",
+			'    - description: "Add system.cpu.cores"',
+			"      type: enhancement",
+			'- version: "2.8.0"',
+			"  changes:",
+			'    - description: "Initial"',
+			"      type: enhancement",
+		].join("\n");
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages/")) {
+				return Response.json({
+					version: "2.9.4",
+					installationInfo: { version: "2.8.0" },
+					packagePoliciesInfo: { count: 24 },
+				});
+			}
+			if (url.includes("raw.githubusercontent.com")) {
+				return new Response(changelogYaml, { status: 200 });
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateChangelog).toEqual([
+			{ version: "2.9.4", changes: [{ description: "Add system.cpu.cores", type: "enhancement" }] },
+		]);
+	});
+
+	test("degrades cleanly when ELASTIC_<DEPLOYMENT>_URL is unset for this deployment", async () => {
+		delete process.env.ELASTIC_EU_ONBOARDING_URL;
+		delete process.env.ELASTIC_EU_ONBOARDING_API_KEY;
+		global.fetch = mock(async () => new Response("should not be called", { status: 500 })) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateInstalledVersion ?? null).toBeNull();
+		expect(out.renovatePolicyCount ?? null).toBeNull();
+		expect(out.blockedReason).toBeUndefined();
+	});
+
+	test("degrades cleanly when the Kibana call errors (network failure)", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		global.fetch = mock(async () => {
+			throw new Error("connection reset");
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateInstalledVersion ?? null).toBeNull();
+		expect(out.blockedReason).toBeUndefined();
+	});
+
+	test("degrades cleanly when the Kibana call returns a non-2xx status", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		global.fetch = mock(async () => new Response("unauthorized", { status: 401 })) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateInstalledVersion ?? null).toBeNull();
+		expect(out.blockedReason).toBeUndefined();
+	});
+
+	test("degrades cleanly when the changelog fetch 404s (package not found)", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages/")) {
+				return Response.json({ version: "2.9.4", installationInfo: { version: "2.8.0" } });
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateInstalledVersion).toBe("2.8.0"); // Kibana part still succeeded
+		expect(out.renovateChangelog).toEqual([]); // changelog part degraded independently
+		expect(out.blockedReason).toBeUndefined();
+	});
+
+	test("derives the Kibana URL from ELASTIC_<DEPLOYMENT>_URL via .es. -> .kb. substitution", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		let calledUrl = "";
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages/")) {
+				calledUrl = url;
+				return Response.json({ version: "2.9.4" });
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(calledUrl.startsWith("https://eu-onboarding.kb.eu-central-1.aws.cloud.es.io")).toBe(true);
+	});
+
+	test("returns no enrichment (all null/[]) when renovateTarget is missing", async () => {
+		const out = await enrichRenovateTarget({ renovateMarker: baseState().renovateMarker } as IacStateType);
+		expect(out).toEqual({});
+	});
+});
