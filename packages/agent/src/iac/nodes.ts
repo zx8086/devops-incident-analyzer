@@ -892,7 +892,17 @@ export async function triggerRenovateUpdate(state: IacStateType): Promise<Partia
 	// never claims success ahead of the real outcome.
 	await dispatchCustomEvent("iac_pipeline_progress", { pipelineId: null, status: "renovate: triggered" });
 
-	return { renovateTriggerAtIso: triggerAtIso };
+	// SIO-1475: durable marker for a later "check again" turn to resume watching, since
+	// renovateMarker/renovateTriggerAtIso are both turn-scoped (TURN_START_RESET) and will be
+	// null by the time a follow-up turn's classifyIacIntent guard needs to route back here.
+	const inFlight = {
+		deployment: state.renovateTarget?.deployment ?? "",
+		marker: marker.marker,
+		line: marker.line,
+		triggerAtIso,
+	};
+
+	return { renovateTriggerAtIso: triggerAtIso, renovateInFlightMarker: inFlight };
 }
 
 // gitlab_list_merge_requests_by_source_branch returns a raw GitLab MR array, newest
@@ -934,7 +944,7 @@ export function parseFirstOpenMrUrl(raw: string, sinceIso?: string): string | nu
 // but polling for MR EXISTENCE by source branch rather than an existing pipeline's
 // terminal status.
 export async function watchRenovateMr(state: IacStateType): Promise<Partial<IacStateType>> {
-	const marker = state.renovateMarker;
+	const marker = state.renovateMarker ?? state.renovateInFlightMarker;
 	if (!marker) return {};
 
 	const budgetMs = readPositiveMsEnv("IAC_PIPELINE_POLL_BUDGET_MS", 90000, log);
@@ -944,7 +954,9 @@ export async function watchRenovateMr(state: IacStateType): Promise<Partial<IacS
 	// Greptile round 2 (PR #663): require the found MR's updated_at to be at or after this
 	// run's own trigger instant, so a stale MR left open on the same reused branch from an
 	// earlier trigger is never reported as this run's result.
-	const sinceIso = state.renovateTriggerAtIso || undefined;
+	// SIO-1475: renovateTriggerAtIso is also turn-scoped -- fall back to the durable marker's
+	// own triggerAtIso on a re-check turn where the turn-scoped field has already been reset.
+	const sinceIso = state.renovateTriggerAtIso || state.renovateInFlightMarker?.triggerAtIso || undefined;
 
 	while (Date.now() < deadline) {
 		const listRes = await callTool("gitlab_list_merge_requests_by_source_branch", { sourceBranch });
@@ -953,6 +965,7 @@ export async function watchRenovateMr(state: IacStateType): Promise<Partial<IacS
 			await dispatchCustomEvent("iac_pipeline_progress", { pipelineId: null, status: "renovate: MR created" });
 			return {
 				renovateMrUrl: mrUrl,
+				renovateInFlightMarker: null,
 				messages: [new AIMessage(`Renovate opened the update MR: ${mrUrl}`)],
 			};
 		}

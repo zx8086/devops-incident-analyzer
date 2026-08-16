@@ -1536,3 +1536,79 @@ describe("classifyIacIntent renovate-status guard (SIO-1475)", () => {
 		expect(looksLikeRenovateStatusCheck("In the ap-cld deployment, upgrade the 'system' integration")).toBe(false);
 	});
 });
+
+// Mirrors fleet-upgrade.test.ts's mockTools() helper exactly (same file also uses this
+// convention for drift.test.ts) -- stubs mcp-bridge so callTool resolves through it.
+function mockRenovateTools(handlers: Record<string, (args: Record<string, unknown>) => string>) {
+	const tools = Object.entries(handlers).map(([name, fn]) => ({
+		name,
+		invoke: async (args: Record<string, unknown>) => fn(args),
+	}));
+	mock.module("../mcp-bridge.ts", () => ({
+		getToolsForDataSource: () => tools,
+		getConnectedServers: () => ["elastic-iac-mcp"],
+	}));
+}
+
+describe("triggerRenovateUpdate sets renovateInFlightMarker (SIO-1475)", () => {
+	test("sets renovateInFlightMarker on a successful trigger", async () => {
+		mockRenovateTools({
+			gitlab_unschedule_renovate_branches: () => '[200] {"status":"ok"}',
+			gitlab_play_pipeline_schedule: () => '[200] {"status":"ok"}',
+		});
+		const { triggerRenovateUpdate: freshTriggerRenovateUpdate } = await import("./nodes.ts");
+
+		const state = {
+			renovateTarget: { deployment: "ap-cld", integration: "udp" },
+			renovateMarker: {
+				marker: "renovate/ap-cld-udp",
+				line: " - [ ] <!-- unschedule-branch=renovate/ap-cld-udp -->chore(deps): [ap-cld] udp to v2.5.1",
+			},
+			renovateIssueIid: 11,
+		} as IacStateType;
+
+		const out = await freshTriggerRenovateUpdate(state);
+
+		expect(out.renovateInFlightMarker).toEqual({
+			deployment: "ap-cld",
+			marker: "renovate/ap-cld-udp",
+			line: " - [ ] <!-- unschedule-branch=renovate/ap-cld-udp -->chore(deps): [ap-cld] udp to v2.5.1",
+			triggerAtIso: expect.any(String),
+		});
+	});
+});
+
+describe("watchRenovateMr falls back to renovateInFlightMarker (SIO-1475)", () => {
+	test("uses renovateInFlightMarker when renovateMarker is null (a re-check turn)", async () => {
+		mockRenovateTools({
+			gitlab_list_merge_requests_by_source_branch: () => "[200] []",
+		});
+		const { watchRenovateMr: freshWatchRenovateMr } = await import("./nodes.ts");
+		process.env.IAC_PIPELINE_POLL_BUDGET_MS = "100";
+		process.env.IAC_PIPELINE_POLL_INTERVAL_MS = "50";
+
+		const state = {
+			renovateMarker: null,
+			renovateTriggerAtIso: "",
+			renovateInFlightMarker: {
+				deployment: "ap-cld",
+				marker: "renovate/ap-cld-udp",
+				line: " - [ ] <!-- unschedule-branch=renovate/ap-cld-udp -->chore(deps): [ap-cld] udp to v2.5.1",
+				triggerAtIso: new Date().toISOString(),
+			},
+		} as IacStateType;
+
+		const out = await freshWatchRenovateMr(state);
+
+		expect(out.messages?.[0]?.content).toContain("renovate/ap-cld-udp");
+
+		delete process.env.IAC_PIPELINE_POLL_BUDGET_MS;
+		delete process.env.IAC_PIPELINE_POLL_INTERVAL_MS;
+	});
+
+	test("returns {} when both renovateMarker and renovateInFlightMarker are null", async () => {
+		const { watchRenovateMr: freshWatchRenovateMr } = await import("./nodes.ts");
+		const out = await freshWatchRenovateMr({ renovateMarker: null, renovateInFlightMarker: null } as IacStateType);
+		expect(out).toEqual({});
+	});
+});
