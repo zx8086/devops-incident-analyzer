@@ -564,17 +564,41 @@ export function parseRenovateTargetVersion(line: string): string | null {
 // Numeric (not lexical) semver comparison for filterChangelogRange -- a missing component
 // (e.g. "2.22" vs "2.22.1") is treated as 0. Some versions this sub-flow compares (changelog.yml
 // entries in particular -- live-verified against elastic/integrations, e.g. "1.32.0-beta.2",
-// "1.26.0-next") carry a prerelease/build-metadata suffix; that suffix is stripped before
-// splitting, so a prerelease is treated as equal to its base release rather than corrupting the
-// numeric comparison with NaN. This is a simplification, not full semver precedence (a true
-// prerelease should sort before its release) -- precise enough for this range filter. (Pure;
-// unit-tested.)
+// "1.26.0-next") carry a prerelease/build-metadata suffix. Build metadata (+...) is ignored
+// entirely (per SemVer, it never affects precedence). A prerelease (-...) sorts BELOW its
+// matching base release, and two prereleases of the same base compare their dot-separated
+// identifiers left-to-right (numeric-if-both-numeric, else lexical) -- real SemVer precedence,
+// not the "treat as equal" simplification this had before PR #666's Greptile/CodeRabbit review
+// caught it collapsing a beta-of-the-target into the target itself in filterChangelogRange's
+// inclusive upper bound. (Pure; unit-tested.)
 export function compareSemver(a: string, b: string): number {
-	const pa = (a.split(/[-+]/)[0] ?? a).split(".").map(Number);
-	const pb = (b.split(/[-+]/)[0] ?? b).split(".").map(Number);
+	const [coreA, preA] = a.split("+")[0]?.split("-", 2) ?? [a];
+	const [coreB, preB] = b.split("+")[0]?.split("-", 2) ?? [b];
+	const pa = (coreA ?? a).split(".").map(Number);
+	const pb = (coreB ?? b).split(".").map(Number);
 	for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
 		const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
 		if (diff !== 0) return diff;
+	}
+	// Same numeric core: a version WITH a prerelease sorts before one WITHOUT.
+	if (preA !== undefined && preB === undefined) return -1;
+	if (preA === undefined && preB !== undefined) return 1;
+	if (preA === undefined && preB === undefined) return 0;
+	// Both have prereleases: compare dot-separated identifiers left-to-right.
+	const idA = (preA ?? "").split(".");
+	const idB = (preB ?? "").split(".");
+	for (let i = 0; i < Math.max(idA.length, idB.length); i++) {
+		const a1 = idA[i];
+		const b1 = idB[i];
+		if (a1 === undefined) return -1;
+		if (b1 === undefined) return 1;
+		const na = Number(a1);
+		const nb = Number(b1);
+		if (!Number.isNaN(na) && !Number.isNaN(nb)) {
+			if (na !== nb) return na - nb;
+		} else if (a1 !== b1) {
+			return a1 < b1 ? -1 : 1;
+		}
 	}
 	return 0;
 }

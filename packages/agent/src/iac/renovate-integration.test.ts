@@ -691,16 +691,35 @@ describe("compareSemver", () => {
 		expect(compareSemver("2.22.0", "2.22")).toBe(0);
 	});
 
-	test("strips a prerelease suffix, treating it as equal to its base release", () => {
-		expect(compareSemver("1.32.0-beta.2", "1.32.0")).toBe(0);
+	// SIO-XXXX (PR #666 Greptile + CodeRabbit): a prerelease must sort BELOW its matching
+	// stable release (true SemVer precedence), not collapse to equal -- treating
+	// "1.32.0-beta.2" as equal to "1.32.0" let a beta-of-the-target-version's changelog
+	// entry pass filterChangelogRange's inclusive "<= target" check as if it were the real
+	// release, showing an operator changelog content for a version that was never actually
+	// installed/targeted.
+	test("orders a prerelease below its matching stable release", () => {
+		expect(compareSemver("1.32.0-beta.2", "1.32.0")).toBeLessThan(0);
+		expect(compareSemver("1.32.0", "1.32.0-beta.2")).toBeGreaterThan(0);
 	});
 
-	test("strips a prerelease suffix on the other side of the comparison too", () => {
+	test("orders two prereleases of the same base version by their prerelease identifiers", () => {
+		expect(compareSemver("1.32.0-beta.1", "1.32.0-beta.2")).toBeLessThan(0);
+		expect(compareSemver("1.32.0-beta.2", "1.32.0-beta.1")).toBeGreaterThan(0);
+	});
+
+	test("still compares the base version first when prerelease bases differ", () => {
 		expect(compareSemver("1.31.0", "1.32.0-beta")).toBeLessThan(0);
+		expect(compareSemver("1.32.1-beta.1", "1.32.0")).toBeGreaterThan(0);
 	});
 
-	test("strips a build-metadata suffix", () => {
+	test("treats equal prerelease identifiers (or none) as equal", () => {
+		expect(compareSemver("1.32.0-beta.2", "1.32.0-beta.2")).toBe(0);
+		expect(compareSemver("1.32.0", "1.32.0")).toBe(0);
+	});
+
+	test("ignores build-metadata (+) but still applies prerelease precedence", () => {
 		expect(compareSemver("1.32.0+build.5", "1.32.0")).toBe(0);
+		expect(compareSemver("1.32.0-beta.1+build.5", "1.32.0")).toBeLessThan(0);
 	});
 });
 

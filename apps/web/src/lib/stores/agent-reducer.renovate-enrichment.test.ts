@@ -1,3 +1,4 @@
+// apps/web/src/lib/stores/agent-reducer.renovate-enrichment.test.ts
 import { describe, expect, test } from "bun:test";
 import { applyStreamEvent, initialReducerState } from "./agent-reducer.ts";
 
