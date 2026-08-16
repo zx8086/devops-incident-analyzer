@@ -6,6 +6,7 @@ import {
 	OAUTH_CALLBACK_PATH,
 	type OAuthProviderLogger,
 	OAuthRefreshChainExpiredError,
+	seedCommandFor,
 } from "@devops-agent/shared";
 import type { OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { createContextLogger } from "../utils/logger.js";
@@ -74,7 +75,7 @@ export class GitLabOAuthProvider extends BaseOAuthClientProvider {
 		if (!refreshToken) {
 			throw new OAuthRefreshChainExpiredError(
 				this.storageNamespace,
-				`seeded token file lacks refresh_token; run \`bun run oauth:seed:${this.storageNamespace}\` to re-seed`,
+				`seeded token file lacks refresh_token; run \`${seedCommandFor(this.storageNamespace)}\` to re-seed`,
 			);
 		}
 
@@ -82,7 +83,7 @@ export class GitLabOAuthProvider extends BaseOAuthClientProvider {
 		if (!clientId) {
 			throw new OAuthRefreshChainExpiredError(
 				this.storageNamespace,
-				`seeded token file lacks client_id; run \`bun run oauth:seed:${this.storageNamespace}\` to re-seed`,
+				`seeded token file lacks client_id; run \`${seedCommandFor(this.storageNamespace)}\` to re-seed`,
 			);
 		}
 
@@ -100,7 +101,7 @@ export class GitLabOAuthProvider extends BaseOAuthClientProvider {
 		if (!response.ok) {
 			throw new OAuthRefreshChainExpiredError(
 				this.storageNamespace,
-				`refresh_token rejected by ${this.instanceUrl} (HTTP ${response.status}); run \`bun run oauth:seed:${this.storageNamespace}\` to re-seed`,
+				`refresh_token rejected by ${this.instanceUrl} (HTTP ${response.status}); run \`${seedCommandFor(this.storageNamespace)}\` to re-seed`,
 			);
 		}
 
@@ -108,7 +109,7 @@ export class GitLabOAuthProvider extends BaseOAuthClientProvider {
 		if (!parsed || typeof parsed.access_token !== "string" || parsed.access_token.length === 0) {
 			throw new OAuthRefreshChainExpiredError(
 				this.storageNamespace,
-				`refresh response from ${this.instanceUrl} missing access_token; run \`bun run oauth:seed:${this.storageNamespace}\` to re-seed`,
+				`refresh response from ${this.instanceUrl} missing access_token; run \`${seedCommandFor(this.storageNamespace)}\` to re-seed`,
 			);
 		}
 

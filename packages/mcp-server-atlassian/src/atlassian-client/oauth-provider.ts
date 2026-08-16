@@ -6,6 +6,7 @@ import {
 	OAUTH_CALLBACK_PATH,
 	type OAuthProviderLogger,
 	OAuthRefreshChainExpiredError,
+	seedCommandFor,
 } from "@devops-agent/shared";
 import type { OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { createContextLogger } from "../utils/logger.js";
@@ -93,7 +94,7 @@ export class AtlassianOAuthProvider extends BaseOAuthClientProvider {
 		if (!refreshToken) {
 			throw new OAuthRefreshChainExpiredError(
 				this.storageNamespace,
-				`seeded token file lacks refresh_token; run \`bun run oauth:seed:${this.storageNamespace}\` to re-seed`,
+				`seeded token file lacks refresh_token; run \`${seedCommandFor(this.storageNamespace)}\` to re-seed`,
 			);
 		}
 
@@ -103,7 +104,7 @@ export class AtlassianOAuthProvider extends BaseOAuthClientProvider {
 		if (!clientId || !clientSecret) {
 			throw new OAuthRefreshChainExpiredError(
 				this.storageNamespace,
-				`seeded token file lacks client_id/client_secret; run \`bun run oauth:seed:${this.storageNamespace}\` to re-seed`,
+				`seeded token file lacks client_id/client_secret; run \`${seedCommandFor(this.storageNamespace)}\` to re-seed`,
 			);
 		}
 
@@ -125,7 +126,7 @@ export class AtlassianOAuthProvider extends BaseOAuthClientProvider {
 		if (!response.ok) {
 			throw new OAuthRefreshChainExpiredError(
 				this.storageNamespace,
-				`refresh_token rejected by ${tokenEndpoint} (HTTP ${response.status}); run \`bun run oauth:seed:${this.storageNamespace}\` to re-seed`,
+				`refresh_token rejected by ${tokenEndpoint} (HTTP ${response.status}); run \`${seedCommandFor(this.storageNamespace)}\` to re-seed`,
 			);
 		}
 
@@ -133,7 +134,7 @@ export class AtlassianOAuthProvider extends BaseOAuthClientProvider {
 		if (!parsed || typeof parsed.access_token !== "string" || parsed.access_token.length === 0) {
 			throw new OAuthRefreshChainExpiredError(
 				this.storageNamespace,
-				`refresh response from ${tokenEndpoint} missing access_token; run \`bun run oauth:seed:${this.storageNamespace}\` to re-seed`,
+				`refresh response from ${tokenEndpoint} missing access_token; run \`${seedCommandFor(this.storageNamespace)}\` to re-seed`,
 			);
 		}
 

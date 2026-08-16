@@ -6,6 +6,7 @@
 // here is pure code motion from bootstrap.ts: zero behavior deltas, including handler
 // registration order and the SIO-986 embedded-mode contract (see installProcessLifecycle).
 import { OAuthRequiresInteractiveAuthError } from "./oauth/errors.ts";
+import { seedCommandFor } from "./oauth/seed-command.ts";
 import { initTelemetry, shutdownTelemetry, type TelemetryConfig } from "./telemetry/telemetry.ts";
 import {
 	createToolCallMetricsRecorder,
@@ -144,7 +145,7 @@ export function handleStartupFailure(options: {
 	if (error instanceof OAuthRequiresInteractiveAuthError) {
 		logger.error(
 			`Cannot start ${name}: ${error.namespace} OAuth is not authorized (no valid seeded tokens under ` +
-				`MCP_OAUTH_HEADLESS / non-interactive stdout). Run \`bun run oauth:seed:${error.namespace}\` once ` +
+				`MCP_OAUTH_HEADLESS / non-interactive stdout). Run \`${seedCommandFor(error.namespace)}\` once ` +
 				"interactively to seed tokens (add `-- --force` to re-seed expired tokens), then restart.",
 			{ namespace: error.namespace },
 		);

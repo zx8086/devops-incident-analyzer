@@ -5,6 +5,7 @@ import {
 	createBootstrapAdapter,
 	createMcpApplication,
 	createReadinessProbe,
+	seedCommandFor,
 	warnIfOAuthNotSeeded,
 } from "@devops-agent/shared";
 import pkg from "../package.json" with { type: "json" };
@@ -52,7 +53,7 @@ if (import.meta.main) {
 				namespace: "gitlab",
 				key: config.gitlab.instanceUrl,
 				endpointLabel: "instanceUrl",
-				seedCommand: "bun run oauth:seed:gitlab",
+				seedCommand: seedCommandFor("gitlab"),
 				logger: serverLog,
 			});
 
