@@ -721,6 +721,26 @@ describe("compareSemver", () => {
 		expect(compareSemver("1.32.0+build.5", "1.32.0")).toBe(0);
 		expect(compareSemver("1.32.0-beta.1+build.5", "1.32.0")).toBeLessThan(0);
 	});
+
+	// SIO-XXXX (PR #666 CodeRabbit round 2): the PREVIOUS fix used `.split("-", 2)`, which in
+	// JavaScript does NOT mean "split into at most 2 parts, joining the remainder back together"
+	// -- the `limit` argument on String.split just caps how many array entries come BACK, it
+	// silently DROPS everything past that cap rather than rejoining it. "1.32.0-alpha-1".split("-",
+	// 2) is ["1.32.0", "alpha"] -- the "-1" is gone, not merged into "alpha-1". This meant two
+	// DIFFERENT prerelease identifiers that happen to contain their own hyphen (a real,
+	// SemVer-legal shape) silently compared as equal.
+	test("does not truncate a prerelease identifier that itself contains a hyphen", () => {
+		expect(compareSemver("1.32.0-alpha-1", "1.32.0-alpha-2")).toBeLessThan(0);
+		expect(compareSemver("1.32.0-alpha-2", "1.32.0-alpha-1")).toBeGreaterThan(0);
+	});
+
+	// Real SemVer precedence: a numeric identifier ALWAYS sorts below an alphanumeric one,
+	// regardless of what the alphanumeric one "looks like" -- "2" < "1a" even though 2 > 1,
+	// because SemVer never compares a numeric identifier against a non-numeric one by value.
+	test("orders a numeric prerelease identifier below an alphanumeric one, per SemVer", () => {
+		expect(compareSemver("1.32.0-2", "1.32.0-1a")).toBeLessThan(0);
+		expect(compareSemver("1.32.0-1a", "1.32.0-2")).toBeGreaterThan(0);
+	});
 });
 
 import { type ChangelogEntry, filterChangelogRange } from "./nodes.ts";

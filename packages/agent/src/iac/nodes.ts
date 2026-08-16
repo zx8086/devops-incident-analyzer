@@ -571,20 +571,43 @@ export function parseRenovateTargetVersion(line: string): string | null {
 // not the "treat as equal" simplification this had before PR #666's Greptile/CodeRabbit review
 // caught it collapsing a beta-of-the-target into the target itself in filterChangelogRange's
 // inclusive upper bound. (Pure; unit-tested.)
+// Splits "1.32.0-alpha-1+build.5" into { core: "1.32.0", prerelease: "alpha-1" }. The prerelease
+// identifier itself may legally contain hyphens (SemVer's own examples include "x-y-z"), so this
+// finds the FIRST "-" (before any "+") and takes everything after it as one string -- unlike
+// `.split("-", N)`, whose `limit` argument silently DROPS entries past the cap rather than
+// rejoining them (CodeRabbit round 2 caught this: "1.32.0-alpha-1".split("-", 2) produces
+// ["1.32.0", "alpha"], quietly discarding "-1", so two different prereleases compared as equal).
+function splitPrerelease(version: string): { core: string; prerelease: string | null } {
+	const withoutBuild = version.split("+")[0] ?? version;
+	const dashIndex = withoutBuild.indexOf("-");
+	if (dashIndex === -1) return { core: withoutBuild, prerelease: null };
+	return { core: withoutBuild.slice(0, dashIndex), prerelease: withoutBuild.slice(dashIndex + 1) };
+}
+
+// True only when every character is a digit -- SemVer's own definition of a "numeric identifier"
+// (not merely "Number(x) doesn't return NaN", which also accepts non-SemVer-legal forms like
+// "1a" partially parsing or leading/trailing whitespace).
+function isNumericIdentifier(id: string): boolean {
+	return /^\d+$/.test(id);
+}
+
 export function compareSemver(a: string, b: string): number {
-	const [coreA, preA] = a.split("+")[0]?.split("-", 2) ?? [a];
-	const [coreB, preB] = b.split("+")[0]?.split("-", 2) ?? [b];
-	const pa = (coreA ?? a).split(".").map(Number);
-	const pb = (coreB ?? b).split(".").map(Number);
+	const { core: coreA, prerelease: preA } = splitPrerelease(a);
+	const { core: coreB, prerelease: preB } = splitPrerelease(b);
+	const pa = coreA.split(".").map(Number);
+	const pb = coreB.split(".").map(Number);
 	for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
 		const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
 		if (diff !== 0) return diff;
 	}
-	// Same numeric core: a version WITH a prerelease sorts before one WITHOUT.
-	if (preA !== undefined && preB === undefined) return -1;
-	if (preA === undefined && preB !== undefined) return 1;
-	if (preA === undefined && preB === undefined) return 0;
-	// Both have prereleases: compare dot-separated identifiers left-to-right.
+	// Same numeric core: a version WITH a prerelease sorts before one WITHOUT (SemVer precedence).
+	if (preA !== null && preB === null) return -1;
+	if (preA === null && preB !== null) return 1;
+	if (preA === null && preB === null) return 0;
+	// Both have prereleases: compare dot-separated identifiers left-to-right per SemVer's actual
+	// rule -- numeric identifiers compare numerically, alphanumeric compare lexically (ASCII), and
+	// a numeric identifier ALWAYS has lower precedence than an alphanumeric one regardless of its
+	// value (e.g. "2" < "1a" -- SemVer never compares a numeric against a non-numeric by value).
 	const idA = (preA ?? "").split(".");
 	const idB = (preB ?? "").split(".");
 	for (let i = 0; i < Math.max(idA.length, idB.length); i++) {
@@ -592,13 +615,13 @@ export function compareSemver(a: string, b: string): number {
 		const b1 = idB[i];
 		if (a1 === undefined) return -1;
 		if (b1 === undefined) return 1;
-		const na = Number(a1);
-		const nb = Number(b1);
-		if (!Number.isNaN(na) && !Number.isNaN(nb)) {
-			if (na !== nb) return na - nb;
-		} else if (a1 !== b1) {
-			return a1 < b1 ? -1 : 1;
-		}
+		if (a1 === b1) continue;
+		const aNumeric = isNumericIdentifier(a1);
+		const bNumeric = isNumericIdentifier(b1);
+		if (aNumeric && bNumeric) return Number(a1) - Number(b1);
+		if (aNumeric && !bNumeric) return -1;
+		if (!aNumeric && bNumeric) return 1;
+		return a1 < b1 ? -1 : 1;
 	}
 	return 0;
 }
