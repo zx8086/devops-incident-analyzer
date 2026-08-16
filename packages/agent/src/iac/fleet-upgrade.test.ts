@@ -13,7 +13,9 @@
 // applyFleetUpgrade/recallPriorFleetUpgrades exercise the real searchAgentMemory/selectedBackend/
 // dedupeHitsBy/dedupePreferring/recallInFlightFleetUpgrades logic; per-test control is layered on
 // top via the real __setAgentMemoryClient injection seam (unchanged from before this fix).
+
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import type { AgentMemoryClient } from "@devops-agent/shared";
 import * as realMemoryBackendNs from "../memory-backend.ts";
 
 // SIO-1045: a namespace import (`import * as ns`) is a LIVE VIEW -- when any file registers a
@@ -48,6 +50,7 @@ import {
 	parseTargetVersion,
 	recallDeploymentKgChanges,
 	recallPriorFleetUpgrades,
+	recallPriorRenovateTriggers,
 } from "./nodes.ts";
 import type { FleetUpgradeReport, FleetUpgradeResult, IacStateType } from "./state.ts";
 
@@ -1550,6 +1553,156 @@ describe("recallDeploymentKgChanges (SIO-1462)", () => {
 		_setGraphStoreForTesting(new InMemoryGraphStore());
 		expect(await recallDeploymentKgChanges("")).toBe("");
 	});
+});
+
+describe("recallPriorRenovateTriggers (SIO-1472)", () => {
+	const prevBackend = process.env.LIVE_MEMORY_BACKEND;
+	function withRenovateTriggerFacts(
+		rows: Array<{ deployment: string; marker: string; mrUrl?: string; text?: string }>,
+	) {
+		const { __setAgentMemoryClient } = require("../memory-backend.ts");
+		__setAgentMemoryClient({
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async addMessages() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async searchMemory(_ref, _q, opts) {
+				// proves the recall filters on the SAME keys buildRenovateFactAnnotations stamps
+				expect(opts?.annotations).toEqual({
+					deployment: "ap-cld",
+					marker: "renovate/ap-cld-elastic_agent",
+					kind: "renovate-trigger",
+				});
+				return rows.map((r) => ({
+					text: r.text ?? `Renovate update triggered on ${r.deployment} for '${r.marker}'.`,
+					score: 0.9,
+					annotations: {
+						kind: "renovate-trigger",
+						deployment: r.deployment,
+						marker: r.marker,
+						...(r.mrUrl && { mr_url: r.mrUrl }),
+					},
+				}));
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true };
+			},
+		} satisfies AgentMemoryClient);
+	}
+	function reset() {
+		const { __setAgentMemoryClient } = require("../memory-backend.ts");
+		__setAgentMemoryClient(null);
+		if (prevBackend === undefined) delete process.env.LIVE_MEMORY_BACKEND;
+		else process.env.LIVE_MEMORY_BACKEND = prevBackend;
+	}
+
+	test("renders prior renovate triggers as markdown with the MR URL tag", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		withRenovateTriggerFacts([
+			{
+				deployment: "ap-cld",
+				marker: "renovate/ap-cld-elastic_agent",
+				mrUrl: "https://gitlab.example/x/-/merge_requests/518",
+			},
+		]);
+		const out = await recallPriorRenovateTriggers("ap-cld", "renovate/ap-cld-elastic_agent");
+		expect(out).toContain("Renovate update triggered on ap-cld for 'renovate/ap-cld-elastic_agent'");
+		expect(out).toContain("[https://gitlab.example/x/-/merge_requests/518]");
+		reset();
+	});
+
+	test("renders a fact with no mr_url without a trailing empty tag", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		withRenovateTriggerFacts([{ deployment: "ap-cld", marker: "renovate/ap-cld-elastic_agent" }]);
+		const out = await recallPriorRenovateTriggers("ap-cld", "renovate/ap-cld-elastic_agent");
+		expect(out).toBe("- Renovate update triggered on ap-cld for 'renovate/ap-cld-elastic_agent'.");
+		reset();
+	});
+
+	// A re-recorded trigger for the SAME MR must render once, not twice (mirrors SIO-973's
+	// pipeline_id dedup for fleet-upgrade facts).
+	test("dedups recall hits sharing an mr_url into a single bullet", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		withRenovateTriggerFacts([
+			{
+				deployment: "ap-cld",
+				marker: "renovate/ap-cld-elastic_agent",
+				mrUrl: "https://gitlab.example/x/-/merge_requests/518",
+			},
+			{
+				deployment: "ap-cld",
+				marker: "renovate/ap-cld-elastic_agent",
+				mrUrl: "https://gitlab.example/x/-/merge_requests/518",
+			},
+		]);
+		const out = await recallPriorRenovateTriggers("ap-cld", "renovate/ap-cld-elastic_agent");
+		expect(out.split("\n")).toHaveLength(1);
+		reset();
+	});
+
+	test("returns '' when the agent-memory backend is not selected", async () => {
+		delete process.env.LIVE_MEMORY_BACKEND;
+		expect(await recallPriorRenovateTriggers("ap-cld", "renovate/ap-cld-elastic_agent")).toBe("");
+		reset();
+	});
+
+	test("returns '' when no deployment is resolved", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		expect(await recallPriorRenovateTriggers("", "renovate/ap-cld-elastic_agent")).toBe("");
+		reset();
+	});
+
+	test("returns '' when no marker is resolved", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		expect(await recallPriorRenovateTriggers("ap-cld", "")).toBe("");
+		reset();
+	});
+
+	test("returns '' (no hits) when nothing prior exists", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		withRenovateTriggerFacts([]);
+		expect(await recallPriorRenovateTriggers("ap-cld", "renovate/ap-cld-elastic_agent")).toBe("");
+		reset();
+	});
+
+	// Greptile (PR #667): a searchMemory call that never settles must not hang enrichRenovateTarget's
+	// Promise.all forever -- the local Promise.race timeout must still resolve the recall to "".
+	test("returns '' when the memory backend never responds (hung request)", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		// CodeRabbit (PR #667): proves the timeout path specifically ran, not just that "" came back
+		// via the earlier backend/deployment/marker guard (which also returns "").
+		let searchStarted = false;
+		const { __setAgentMemoryClient } = require("../memory-backend.ts");
+		__setAgentMemoryClient({
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async addMessages() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			searchMemory: () => {
+				searchStarted = true;
+				return new Promise<never>(() => {});
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true };
+			},
+		} satisfies AgentMemoryClient);
+		const out = await recallPriorRenovateTriggers("ap-cld", "renovate/ap-cld-elastic_agent");
+		expect(out).toBe("");
+		expect(searchStarted).toBe(true);
+		reset();
+	}, 8_000);
 });
 
 // SIO-1032: host-scoped fleet upgrade + expected-count guard. The repo already honors a SELECTOR

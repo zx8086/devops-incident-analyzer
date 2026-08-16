@@ -318,6 +318,10 @@ export interface RenovateTriggerChoice {
 	targetVersion?: string | null;
 	policyCount?: number | null;
 	changelog?: Array<{ version: string; changes: Array<{ description: string; type: string; link?: string }> }>;
+	// SIO-1472: KG change-history + prior-trigger memory recall, mirroring FleetUpgradeChoice's
+	// own recentChanges/priorUpgrades fields.
+	recentChanges?: string;
+	priorTriggers?: string;
 }
 
 export interface FleetUpgradeResultRow {
@@ -844,6 +848,8 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 					targetVersion: event.targetVersion,
 					policyCount: event.policyCount,
 					changelog: event.changelog,
+					recentChanges: event.recentChanges,
+					priorTriggers: event.priorTriggers,
 				},
 			};
 		default:

@@ -810,6 +810,12 @@ export const IacState = Annotation.Root({
 		reducer: last,
 		default: () => [],
 	}),
+	// SIO-1472: KG change-history + prior-trigger memory recall for this deployment/marker,
+	// mirroring the fleet-upgrade gate card's own recallDeploymentKgChanges/recallPriorFleetUpgrades
+	// reads (this sub-flow bypasses graphEnrichIac/memoryEnrichIac exactly like fleet-upgrade does).
+	// Both best-effort -- "" when KG is disabled/empty or agent-memory isn't the selected backend.
+	renovateRecentChanges: Annotation<string>({ reducer: last, default: () => "" }),
+	renovatePriorTriggers: Annotation<string>({ reducer: last, default: () => "" }),
 	// SIO-930: set by the request (UI message-count signal). Gates whether the conversational
 	// "converse" intent is selectable -- a first turn cannot be a follow-up about a prior answer.
 	isFollowUp: Annotation<boolean>({ reducer: last, default: () => false }),

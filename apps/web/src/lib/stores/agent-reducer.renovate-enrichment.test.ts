@@ -34,4 +34,32 @@ describe("applyStreamEvent renovate_trigger_choice enrichment fields", () => {
 		expect(result.renovateTriggerChoice?.installedVersion).toBeUndefined();
 		expect(result.renovateTriggerChoice?.changelog).toBeUndefined();
 	});
+
+	test("populates recentChanges and priorTriggers when present", () => {
+		const event = {
+			type: "renovate_trigger_choice" as const,
+			threadId: "t1",
+			marker: "x",
+			line: "y",
+			message: "z",
+			recentChanges: "- [eu-onboarding] elastic_agent changed on 2026-08-01 (applied)",
+			priorTriggers: "- Renovate update triggered on eu-onboarding for 'renovate/eu-onboarding-elastic_agent'.",
+		};
+		const result = applyStreamEvent(initialReducerState(), event);
+		expect(result.renovateTriggerChoice?.recentChanges).toContain("elastic_agent changed");
+		expect(result.renovateTriggerChoice?.priorTriggers).toContain("Renovate update triggered");
+	});
+
+	test("tolerates missing recentChanges/priorTriggers (older/degraded payload)", () => {
+		const event = {
+			type: "renovate_trigger_choice" as const,
+			threadId: "t1",
+			marker: "x",
+			line: "y",
+			message: "z",
+		};
+		const result = applyStreamEvent(initialReducerState(), event);
+		expect(result.renovateTriggerChoice?.recentChanges).toBeUndefined();
+		expect(result.renovateTriggerChoice?.priorTriggers).toBeUndefined();
+	});
 });

@@ -1261,6 +1261,10 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 				}),
 			)
 			.optional(),
+		// SIO-1472: KG change-history + prior-trigger memory recall, mirroring the fleet-upgrade
+		// gate's recentChanges/priorUpgrades fields (this sub-flow's own twin of that same pattern).
+		recentChanges: z.string().optional(),
+		priorTriggers: z.string().optional(),
 	}),
 ]);
 export type StreamEvent = z.infer<typeof StreamEventSchema>;
