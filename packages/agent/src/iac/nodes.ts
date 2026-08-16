@@ -11113,9 +11113,18 @@ export function buildRenovateFactDecision(state: IacStateType): string {
 	// nodes never set state.targetDeployment (only drift/gitops/fleet-upgrade write it) --
 	// extractRenovateTarget sets state.renovateTarget.deployment instead, so that must come
 	// first or the real path always falls through to the generic placeholder.
+	// SIO-1475: on a "renovate-status-check" turn (routed straight to watchRenovateMr),
+	// renovateTarget is ALSO turn-scoped and null -- only the durable renovateInFlightMarker
+	// survives across turns, so it is checked first as the most specific/authoritative source
+	// when present, ahead of the turn-scoped fields that are only populated on the original
+	// "renovate-integration-update" turn.
 	const dep =
-		state.renovateTarget?.deployment || state.targetDeployment || state.iacRequest?.cluster || "an Elastic deployment";
-	const marker = state.renovateMarker?.marker ?? "an outdated dependency";
+		state.renovateInFlightMarker?.deployment ||
+		state.renovateTarget?.deployment ||
+		state.targetDeployment ||
+		state.iacRequest?.cluster ||
+		"an Elastic deployment";
+	const marker = state.renovateMarker?.marker ?? state.renovateInFlightMarker?.marker ?? "an outdated dependency";
 	const mrUrl = state.renovateMrUrl;
 	return `Renovate update triggered on ${dep} for '${marker}': MR opened at ${mrUrl}.`;
 }
@@ -11125,9 +11134,16 @@ export function buildRenovateFactDecision(state: IacStateType): string {
 // same deployment/mr_url join keys.
 export function buildRenovateFactAnnotations(state: IacStateType): AnnotationMap {
 	const a: AnnotationMap = { kind: "renovate-trigger" };
-	const dep = state.renovateTarget?.deployment || state.targetDeployment || state.iacRequest?.cluster;
+	// SIO-1475: same renovateInFlightMarker fallback as buildRenovateFactDecision above -- the
+	// durable marker is the only source of deployment/marker on a "renovate-status-check" turn.
+	const dep =
+		state.renovateInFlightMarker?.deployment ||
+		state.renovateTarget?.deployment ||
+		state.targetDeployment ||
+		state.iacRequest?.cluster;
 	if (dep) a.deployment = dep;
-	if (state.renovateMarker?.marker) a.marker = state.renovateMarker.marker;
+	const marker = state.renovateMarker?.marker ?? state.renovateInFlightMarker?.marker;
+	if (marker) a.marker = marker;
 	if (state.renovateMrUrl) a.mr_url = state.renovateMrUrl;
 	return a;
 }
@@ -11402,6 +11418,14 @@ function iacClosingLine(state: IacStateType): string {
 	return `Review and apply manually in GitLab. ${merge}`;
 }
 
+// SIO-1475: teardownIac gates renovate-specific behavior on the sub-flow's intent in three
+// places. "renovate-status-check" (the "check again" follow-up, routed straight to
+// watchRenovateMr) must be treated identically to "renovate-integration-update" at every one
+// of those gates -- extracted once so the three sites can't drift out of sync again.
+function isRenovateTeardownIntent(intent: IacStateType["intent"]): boolean {
+	return intent === "renovate-integration-update" || intent === "renovate-status-check";
+}
+
 export async function teardownIac(state: IacStateType): Promise<Partial<IacStateType>> {
 	// SIO-938: record one durable breadcrumb per completed IaC job under the
 	// elastic-iac Agent Memory user (closes the SOUL.md "I write back after every
@@ -11426,8 +11450,12 @@ export async function teardownIac(state: IacStateType): Promise<Partial<IacState
 		// "intent=renovate-integration-update" breadcrumb. Add the resolved marker + the
 		// Renovate-created MR link (when watchRenovateMr found one) so the durable-memory
 		// breadcrumb for this intent is actually recallable.
-		if (state.intent === "renovate-integration-update") {
-			if (state.renovateMarker) summaryParts.push(`marker=${state.renovateMarker.marker}`);
+		// SIO-1475: also covers the "renovate-status-check" follow-up intent -- its turn-scoped
+		// state.renovateMarker is null (reset every turn), so fall back to the durable
+		// renovateInFlightMarker the same way watchRenovateMr already does.
+		if (isRenovateTeardownIntent(state.intent)) {
+			const renovateMarker = state.renovateMarker ?? state.renovateInFlightMarker;
+			if (renovateMarker) summaryParts.push(`marker=${renovateMarker.marker}`);
 			if (state.renovateMrUrl) summaryParts.push(`MR=${state.renovateMrUrl}`);
 		}
 		const services = cluster ? [cluster] : isFleet && state.targetDeployment ? [state.targetDeployment] : [];
@@ -11445,14 +11473,20 @@ export async function teardownIac(state: IacStateType): Promise<Partial<IacState
 		// Gated the same way as the other two durable facts: agent-memory backend only (file
 		// backend durable learnings stay PR-gated), and only once an MR actually exists (a trigger
 		// that hasn't produced an MR yet has nothing settled worth recalling).
-		if (state.intent === "renovate-integration-update" && state.renovateMrUrl && selectedBackend() === "agent-memory") {
+		// SIO-1475: also covers "renovate-status-check" -- the MR is most likely to first be found
+		// on exactly this "check again" turn, since that is the whole purpose of the follow-up.
+		if (isRenovateTeardownIntent(state.intent) && state.renovateMrUrl && selectedBackend() === "agent-memory") {
 			recordKeyDecision({
 				requestId: state.requestId,
 				decision: buildRenovateFactDecision(state),
 				annotations: buildRenovateFactAnnotations(state),
 			});
 			log.info(
-				{ deployment: state.targetDeployment, marker: state.renovateMarker?.marker, mrUrl: state.renovateMrUrl },
+				{
+					deployment: state.targetDeployment,
+					marker: (state.renovateMarker ?? state.renovateInFlightMarker)?.marker,
+					mrUrl: state.renovateMrUrl,
+				},
 				"teardownIac: recorded durable renovate-trigger fact",
 			);
 		}
@@ -11550,7 +11584,9 @@ export async function teardownIac(state: IacStateType): Promise<Partial<IacState
 	// `state.mrUrl ? ... : "MR step complete."` check always hit the no-MR branch). The user
 	// reaches the MR link only via watchRenovateMr's own AIMessage; state.renovateMrUrl's only
 	// consumer is the durable-memory breadcrumb built earlier in this same function.
-	if (state.intent === "renovate-integration-update") {
+	// SIO-1475: "renovate-status-check" (the "check again" follow-up) routes straight to
+	// watchRenovateMr too, so it ends the turn the same way -- same short-circuit applies.
+	if (isRenovateTeardownIntent(state.intent)) {
 		return {};
 	}
 	if (state.reviewDecision === "rejected") {

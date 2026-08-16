@@ -318,6 +318,152 @@ describe("teardownIac renovate-integration-update branch (SIO-1471)", () => {
 	});
 });
 
+// SIO-1475: teardownIac's three renovate-specific gates (daily-log breadcrumb, durable
+// renovate-trigger fact, final summary short-circuit) must ALSO fire for the
+// "renovate-status-check" follow-up intent (the "check again" turn routed straight to
+// watchRenovateMr), not just the original "renovate-integration-update" turn. On this intent
+// state.renovateMarker/renovateTarget are turn-scoped and null (reset every turn) -- only the
+// durable state.renovateInFlightMarker survives, so each gate must also read that fallback.
+describe("teardownIac renovate-status-check branch (SIO-1475)", () => {
+	afterEach(() => {
+		mock.restore();
+		restoreRealMemoryMocks();
+	});
+
+	const inFlightMarker = {
+		deployment: "ap-cld",
+		marker: "renovate/ap-cld-udp",
+		line: " - [ ] <!-- unschedule-branch=renovate/ap-cld-udp -->chore(deps): [ap-cld] udp to v2.5.1",
+		triggerAtIso: new Date().toISOString(),
+	};
+
+	// Site 3: the final summary short-circuit must return {} for renovate-status-check exactly
+	// like renovate-integration-update -- watchRenovateMr already set the terminal message on
+	// state.messages before teardownIac ran, so the generic gitops fallback must not fire.
+	test("returns {} (no new messages) for a renovate-status-check turn", async () => {
+		mock.module("../memory-writer.ts", () => ({
+			appendDailyLog: () => {},
+			recordKeyDecision: () => {},
+		}));
+		mock.module("../memory-backend.ts", () => ({
+			selectedBackend: () => "file",
+			recallInFlightFleetUpgrades: async () => [],
+			searchAgentMemory: async () => [],
+			dedupeHitsBy: <T>(hits: T[]) => hits,
+		}));
+		const { teardownIac } = await import("./nodes.ts");
+		const out = await teardownIac({
+			requestId: "req-1",
+			threadId: "thread-abc",
+			intent: "renovate-status-check",
+			renovateInFlightMarker: inFlightMarker,
+			renovateMrUrl: "https://gitlab.example/x/-/merge_requests/518",
+		} as unknown as IacStateType);
+
+		expect(out).toEqual({});
+	});
+
+	// Site 1: the daily-log breadcrumb must build the marker= string from renovateInFlightMarker
+	// when renovateMarker is null -- the exact input shape of a renovate-status-check turn.
+	test("daily-log breadcrumb reads marker from renovateInFlightMarker when renovateMarker is null", async () => {
+		let capturedSummary: string | undefined;
+		mock.module("../memory-writer.ts", () => ({
+			appendDailyLog: (entry: { summary: string }) => {
+				capturedSummary = entry.summary;
+			},
+			recordKeyDecision: () => {},
+		}));
+		mock.module("../memory-backend.ts", () => ({
+			selectedBackend: () => "file",
+			recallInFlightFleetUpgrades: async () => [],
+			searchAgentMemory: async () => [],
+			dedupeHitsBy: <T>(hits: T[]) => hits,
+		}));
+		const { teardownIac } = await import("./nodes.ts");
+		await teardownIac({
+			requestId: "req-1",
+			threadId: "thread-abc",
+			intent: "renovate-status-check",
+			renovateMarker: null,
+			renovateInFlightMarker: inFlightMarker,
+			renovateMrUrl: "https://gitlab.example/x/-/merge_requests/518",
+		} as unknown as IacStateType);
+
+		expect(capturedSummary).toContain("marker=renovate/ap-cld-udp");
+		expect(capturedSummary).toContain("MR=https://gitlab.example/x/-/merge_requests/518");
+	});
+
+	// Site 2: the durable renovate-trigger fact must be recorded on a renovate-status-check turn
+	// too -- this is the load-bearing case, since the MR is most likely to first be found on
+	// exactly this "check again" turn (that is the whole purpose of the follow-up).
+	test("records a durable renovate-trigger fact on a renovate-status-check turn when an MR was found", async () => {
+		let capturedDecision: string | undefined;
+		let capturedAnnotations: Record<string, string> | undefined;
+		mock.module("../memory-writer.ts", () => ({
+			appendDailyLog: () => {},
+			recordKeyDecision: (entry: { decision: string; annotations?: Record<string, string> }) => {
+				capturedDecision = entry.decision;
+				capturedAnnotations = entry.annotations;
+			},
+		}));
+		mock.module("../memory-backend.ts", () => ({
+			selectedBackend: () => "agent-memory",
+			recallInFlightFleetUpgrades: async () => [],
+			searchAgentMemory: async () => [],
+			dedupeHitsBy: <T>(hits: T[]) => hits,
+		}));
+		const { teardownIac } = await import("./nodes.ts");
+		await teardownIac({
+			requestId: "req-1",
+			threadId: "thread-abc",
+			intent: "renovate-status-check",
+			renovateMarker: null,
+			renovateTarget: null,
+			targetDeployment: "",
+			renovateInFlightMarker: inFlightMarker,
+			renovateMrUrl: "https://gitlab.example/x/-/merge_requests/518",
+		} as unknown as IacStateType);
+
+		expect(capturedDecision).toBeDefined();
+		expect(capturedDecision).toContain("ap-cld");
+		expect(capturedDecision).toContain("renovate/ap-cld-udp");
+		expect(capturedDecision).not.toContain("an outdated dependency");
+		expect(capturedDecision).not.toContain("an Elastic deployment");
+		expect(capturedAnnotations).toMatchObject({
+			kind: "renovate-trigger",
+			deployment: "ap-cld",
+			marker: "renovate/ap-cld-udp",
+			mr_url: "https://gitlab.example/x/-/merge_requests/518",
+		});
+	});
+
+	test("does NOT record a durable fact on a renovate-status-check turn with no MR found yet", async () => {
+		let recordCalled = false;
+		mock.module("../memory-writer.ts", () => ({
+			appendDailyLog: () => {},
+			recordKeyDecision: () => {
+				recordCalled = true;
+			},
+		}));
+		mock.module("../memory-backend.ts", () => ({
+			selectedBackend: () => "agent-memory",
+			recallInFlightFleetUpgrades: async () => [],
+			searchAgentMemory: async () => [],
+			dedupeHitsBy: <T>(hits: T[]) => hits,
+		}));
+		const { teardownIac } = await import("./nodes.ts");
+		await teardownIac({
+			requestId: "req-1",
+			threadId: "thread-abc",
+			intent: "renovate-status-check",
+			renovateInFlightMarker: inFlightMarker,
+			renovateMrUrl: "",
+		} as unknown as IacStateType);
+
+		expect(recordCalled).toBe(false);
+	});
+});
+
 // SIO-1471 follow-up: the durable renovate-trigger fact builders, mirroring
 // buildFleetFactDecision/buildFleetFactAnnotations (fleet-upgrade.test.ts) and
 // buildIacChangeDecision/buildIacChangeAnnotations (iac-change-memory.test.ts).
@@ -383,6 +529,65 @@ describe("buildRenovateFactDecision / buildRenovateFactAnnotations", () => {
 		const { buildRenovateFactAnnotations } = await import("./nodes.ts");
 		const a = buildRenovateFactAnnotations(renovateState({ renovateMrUrl: "" }));
 		expect(a.mr_url).toBeUndefined();
+	});
+
+	// SIO-1475: on a renovate-status-check turn, renovateMarker/renovateTarget/targetDeployment
+	// are ALL turn-scoped and null -- only renovateInFlightMarker (durable, cross-turn) carries
+	// the deployment/marker. Both builders must resolve the CORRECT value from it, not just avoid
+	// the placeholder text -- a regression here writes wrong data to durable memory.
+	const inFlightMarker = {
+		deployment: "ap-cld",
+		marker: "renovate/ap-cld-udp",
+		line: "x",
+		triggerAtIso: new Date().toISOString(),
+	};
+
+	test("decision resolves deployment and marker from renovateInFlightMarker when renovateMarker/renovateTarget are null", async () => {
+		const { buildRenovateFactDecision } = await import("./nodes.ts");
+		const decision = buildRenovateFactDecision(
+			renovateState({
+				targetDeployment: "",
+				renovateTarget: null,
+				renovateMarker: null,
+				renovateInFlightMarker: inFlightMarker,
+			}),
+		);
+		expect(decision).toContain("ap-cld");
+		expect(decision).toContain("renovate/ap-cld-udp");
+		expect(decision).not.toContain("an Elastic deployment");
+		expect(decision).not.toContain("an outdated dependency");
+	});
+
+	test("annotations resolve deployment and marker from renovateInFlightMarker when renovateMarker/renovateTarget are null", async () => {
+		const { buildRenovateFactAnnotations } = await import("./nodes.ts");
+		const a = buildRenovateFactAnnotations(
+			renovateState({
+				targetDeployment: "",
+				renovateTarget: null,
+				renovateMarker: null,
+				renovateInFlightMarker: inFlightMarker,
+			}),
+		);
+		expect(a.deployment).toBe("ap-cld");
+		expect(a.marker).toBe("renovate/ap-cld-udp");
+	});
+
+	// renovateInFlightMarker.deployment is checked first for `dep` (most specific/authoritative
+	// source when present); renovateMarker (turn-scoped) still wins for `marker` when both happen
+	// to be set -- in real traffic these two fields are mutually exclusive (renovateMarker is only
+	// set on the original renovate-integration-update turn, renovateInFlightMarker only survives
+	// into a later renovate-status-check turn), so only the deployment precedence is asserted here.
+	test("renovateInFlightMarker.deployment takes precedence for dep when renovateTarget is also present", async () => {
+		const { buildRenovateFactDecision } = await import("./nodes.ts");
+		const decision = buildRenovateFactDecision(
+			renovateState({
+				renovateTarget: { deployment: "eu-b2b", integration: "prometheus" },
+				renovateMarker: null,
+				renovateInFlightMarker: inFlightMarker,
+			}),
+		);
+		expect(decision).toContain("ap-cld");
+		expect(decision).not.toContain("eu-b2b");
 	});
 });
 
