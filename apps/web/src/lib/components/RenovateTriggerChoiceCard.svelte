@@ -82,7 +82,7 @@ const changelogCount = $derived(prompt.changelog?.length ?? 0);
     {#if changelogCount > 0}
       <details class="mt-2">
         <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">
-          Changelog ({prompt.installedVersion ?? "?"} &rarr; {prompt.targetVersion ?? "?"}, {changelogCount} release{changelogCount === 1 ? "" : "s"})
+          Changelog ({prompt.installedVersion ?? "?"} &rarr; {prompt.targetVersion ?? "?"}, {changelogCount} of {prompt.changelogTotal ?? changelogCount} release{(prompt.changelogTotal ?? changelogCount) === 1 ? "" : "s"})
         </summary>
         <ul class="mt-1 space-y-1.5 text-xs">
           {#each prompt.changelog ?? [] as entry (entry.version)}
@@ -94,6 +94,31 @@ const changelogCount = $derived(prompt.changelog?.length ?? 0);
                 {/each}
               </ul>
             </li>
+          {/each}
+          {#if prompt.changelogTotal && prompt.changelogTotal > changelogCount}
+            <li class="text-tommy-navy/50 italic">
+              +{prompt.changelogTotal - changelogCount} more release{prompt.changelogTotal - changelogCount === 1 ? "" : "s"} (see the full changelog on GitHub)
+            </li>
+          {/if}
+        </ul>
+      </details>
+    {/if}
+
+    <!-- SIO-1473: real affected-policy names (from a second Kibana Fleet call in
+         enrichRenovateTarget), mirroring the Changelog section's own collapsed-list pattern.
+         Summary count prefers prompt.policyCount (the original, always-reliable count from the
+         existing packages-list call) over the names array's own length, so it stays accurate even
+         if the names-fetch and count-fetch briefly disagree (e.g. a policy created between the two
+         calls). Gated on presence -- an empty/failed names-fetch yields [] and the section stays
+         hidden, never showing an empty "Affected policies (0)" with no rows. -->
+    {#if prompt.affectedPolicies && prompt.affectedPolicies.length > 0}
+      <details class="mt-2">
+        <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">
+          Affected policies ({prompt.policyCount ?? prompt.affectedPolicies.length})
+        </summary>
+        <ul class="mt-1 ml-3 list-disc space-y-0.5 text-xs text-tommy-navy/70">
+          {#each prompt.affectedPolicies as name (name)}
+            <li>{name}</li>
           {/each}
         </ul>
       </details>
