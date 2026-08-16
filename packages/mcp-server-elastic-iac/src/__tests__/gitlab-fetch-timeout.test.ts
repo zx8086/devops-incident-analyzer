@@ -9,10 +9,14 @@ import { gitlabFetch } from "../tools/shared.ts";
 // while it was healthy either side of the stall.
 
 const realFetch = globalThis.fetch;
+// CodeRabbit: the deleted key may have been supplied by the test process, so
+// capture and restore it rather than unconditionally removing it.
+const originalTimeoutEnv = Bun.env.ELASTIC_IAC_GITLAB_TIMEOUT_MS;
 
 afterEach(() => {
 	globalThis.fetch = realFetch;
-	delete Bun.env.ELASTIC_IAC_GITLAB_TIMEOUT_MS;
+	if (originalTimeoutEnv === undefined) delete Bun.env.ELASTIC_IAC_GITLAB_TIMEOUT_MS;
+	else Bun.env.ELASTIC_IAC_GITLAB_TIMEOUT_MS = originalTimeoutEnv;
 });
 
 describe("gitlabFetch timeout", () => {
@@ -147,6 +151,20 @@ describe("gitlabFetch timeout override parsing", () => {
 
 	test('"0" falls back to the default', async () => {
 		expect(await timeoutUsedFor("0")).toBe(30_000);
+	});
+
+	// CodeRabbit: parseInt("50ms") === 50 and parseInt("1.5") === 1 both bypassed
+	// the intended positive-integer validation before readPositiveIntEnv.
+	test('"50ms" falls back to the default', async () => {
+		expect(await timeoutUsedFor("50ms")).toBe(30_000);
+	});
+
+	test('"1.5" falls back to the default rather than becoming 1ms', async () => {
+		expect(await timeoutUsedFor("1.5")).toBe(30_000);
+	});
+
+	test('"-5" falls back to the default', async () => {
+		expect(await timeoutUsedFor("-5")).toBe(30_000);
 	});
 });
 

@@ -1,4 +1,5 @@
 // src/tools/shared.ts
+import { readPositiveIntEnv } from "@devops-agent/shared";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 export function text(body: string): CallToolResult {
@@ -33,16 +34,14 @@ export async function run(cmd: string[], cwd: string): Promise<string> {
 // sites so every GitLab tool is covered by construction.
 const DEFAULT_GITLAB_TIMEOUT_MS = 30_000;
 
-// Greptile: parseInt stops at the first non-digit, so "30s" silently became a
-// 30 MILLISECOND deadline and "30_000" became 30ms -- both plausible operator
-// input, and both turn this safety net into a guaranteed failure. Require the
-// whole string to be digits so a unit-bearing or separator-bearing value falls
-// back to the default instead of being half-read.
+// Greptile/CodeRabbit: a hand-rolled parseInt silently produced a TINY deadline
+// rather than rejecting bad input -- "30s" became 30ms and "30_000" became 30ms,
+// both plausible operator input that turn this safety net into a guaranteed
+// failure. readPositiveIntEnv is the repo's canonical tunable reader: Zod-backed
+// (finite, positive, integer), so "30s"/"30_000"/"1.5"/"50ms"/"0"/"-5" all fall
+// back to the default, and it logs the invalid value instead of failing silently.
 function gitlabTimeoutMs(): number {
-	const raw = Bun.env.ELASTIC_IAC_GITLAB_TIMEOUT_MS?.trim();
-	if (!raw || !/^\d+$/.test(raw)) return DEFAULT_GITLAB_TIMEOUT_MS;
-	const parsed = Number.parseInt(raw, 10);
-	return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_GITLAB_TIMEOUT_MS;
+	return readPositiveIntEnv("ELASTIC_IAC_GITLAB_TIMEOUT_MS", DEFAULT_GITLAB_TIMEOUT_MS);
 }
 
 // GitLab REST helper. Returns parsed JSON text or a clear message when the token
