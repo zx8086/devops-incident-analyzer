@@ -85,4 +85,32 @@ describe("StreamEventSchema renovate_trigger_choice enrichment fields", () => {
 		});
 		expect(parsed.success).toBe(true);
 	});
+
+	test("accepts affectedPolicies and changelogTotal when present", () => {
+		const parsed = StreamEventSchema.safeParse({
+			type: "renovate_trigger_choice",
+			threadId: "t1",
+			marker: "x",
+			line: "y",
+			message: "z",
+			affectedPolicies: ["eu-onboarding-agent-policy-1", "eu-onboarding-agent-policy-2"],
+			changelogTotal: 23,
+		});
+		expect(parsed.success).toBe(true);
+		if (parsed.success && parsed.data.type === "renovate_trigger_choice") {
+			expect(parsed.data.affectedPolicies).toEqual(["eu-onboarding-agent-policy-1", "eu-onboarding-agent-policy-2"]);
+			expect(parsed.data.changelogTotal).toBe(23);
+		}
+	});
+
+	test("still accepts the event when affectedPolicies/changelogTotal are absent (older/degraded payload)", () => {
+		const parsed = StreamEventSchema.safeParse({
+			type: "renovate_trigger_choice",
+			threadId: "t1",
+			marker: "x",
+			line: "y",
+			message: "z",
+		});
+		expect(parsed.success).toBe(true);
+	});
 });
