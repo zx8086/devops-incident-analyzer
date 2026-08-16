@@ -485,19 +485,35 @@ export async function enrichRenovateTarget(state: IacStateType): Promise<Partial
 	const kibanaConfig = resolveKibanaConfig(target.deployment);
 	if (kibanaConfig) {
 		try {
-			const res = await fetch(
-				`${kibanaConfig.url}/api/fleet/epm/packages/${encodeURIComponent(target.integration)}?withPackagePoliciesCount=true`,
-				{ headers: { Authorization: `ApiKey ${kibanaConfig.apiKey}`, "kbn-xsrf": "true" } },
-			);
+			// The single-package detail endpoint (/api/fleet/epm/packages/{pkgName}) does NOT
+			// accept withPackagePoliciesCount as a query param (HTTP 400). Only the list endpoint
+			// does, returning an `items` array we filter client-side. Live-verified against eu-cld.
+			const res = await fetch(`${kibanaConfig.url}/api/fleet/epm/packages?withPackagePoliciesCount=true`, {
+				headers: { Authorization: `ApiKey ${kibanaConfig.apiKey}`, "kbn-xsrf": "true" },
+			});
 			if (res.ok) {
-				const body = (await res.json()) as {
-					version?: unknown;
-					installationInfo?: { version?: unknown };
-					packagePoliciesInfo?: { count?: unknown };
-				};
-				if (typeof body.installationInfo?.version === "string") installedVersion = body.installationInfo.version;
-				if (typeof body.packagePoliciesInfo?.count === "number") policyCount = body.packagePoliciesInfo.count;
-				if (!resolvedTargetVersion && typeof body.version === "string") resolvedTargetVersion = body.version;
+				const body = (await res.json()) as { items?: unknown };
+				const items = Array.isArray(body.items) ? body.items : [];
+				const match = items.find(
+					(
+						item,
+					): item is {
+						name: string;
+						version?: unknown;
+						installationInfo?: { version?: unknown };
+						packagePoliciesInfo?: { count?: unknown };
+					} => typeof item === "object" && item !== null && (item as { name?: unknown }).name === target.integration,
+				);
+				if (match) {
+					if (typeof match.installationInfo?.version === "string") installedVersion = match.installationInfo.version;
+					if (typeof match.packagePoliciesInfo?.count === "number") policyCount = match.packagePoliciesInfo.count;
+					if (!resolvedTargetVersion && typeof match.version === "string") resolvedTargetVersion = match.version;
+				} else {
+					log.warn(
+						{ deployment: target.deployment, integration: target.integration },
+						"enrichRenovateTarget: integration not found in Kibana Fleet packages list; continuing without installed-version enrichment",
+					);
+				}
 			} else {
 				log.warn(
 					{ deployment: target.deployment, integration: target.integration, status: res.status },

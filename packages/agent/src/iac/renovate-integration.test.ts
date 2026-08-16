@@ -788,11 +788,16 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
 		global.fetch = mock(async (input: string | URL | Request) => {
 			const url = typeof input === "string" ? input : input.toString();
-			if (url.includes("/api/fleet/epm/packages/")) {
+			if (url.includes("/api/fleet/epm/packages?")) {
 				return Response.json({
-					version: "2.9.4",
-					installationInfo: { version: "2.8.0" },
-					packagePoliciesInfo: { count: 24 },
+					items: [
+						{
+							name: "elastic_agent",
+							version: "2.9.4",
+							installationInfo: { version: "2.8.0" },
+							packagePoliciesInfo: { count: 24 },
+						},
+					],
 				});
 			}
 			return new Response("Not Found", { status: 404 });
@@ -822,11 +827,16 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 		].join("\n");
 		global.fetch = mock(async (input: string | URL | Request) => {
 			const url = typeof input === "string" ? input : input.toString();
-			if (url.includes("/api/fleet/epm/packages/")) {
+			if (url.includes("/api/fleet/epm/packages?")) {
 				return Response.json({
-					version: "2.9.4",
-					installationInfo: { version: "2.8.0" },
-					packagePoliciesInfo: { count: 24 },
+					items: [
+						{
+							name: "elastic_agent",
+							version: "2.9.4",
+							installationInfo: { version: "2.8.0" },
+							packagePoliciesInfo: { count: 24 },
+						},
+					],
 				});
 			}
 			if (url.includes("raw.githubusercontent.com")) {
@@ -883,8 +893,10 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
 		global.fetch = mock(async (input: string | URL | Request) => {
 			const url = typeof input === "string" ? input : input.toString();
-			if (url.includes("/api/fleet/epm/packages/")) {
-				return Response.json({ version: "2.9.4", installationInfo: { version: "2.8.0" } });
+			if (url.includes("/api/fleet/epm/packages?")) {
+				return Response.json({
+					items: [{ name: "elastic_agent", version: "2.9.4", installationInfo: { version: "2.8.0" } }],
+				});
 			}
 			return new Response("Not Found", { status: 404 });
 		}) as unknown as typeof fetch;
@@ -902,9 +914,9 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 		let calledUrl = "";
 		global.fetch = mock(async (input: string | URL | Request) => {
 			const url = typeof input === "string" ? input : input.toString();
-			if (url.includes("/api/fleet/epm/packages/")) {
+			if (url.includes("/api/fleet/epm/packages?")) {
 				calledUrl = url;
-				return Response.json({ version: "2.9.4" });
+				return Response.json({ items: [{ name: "elastic_agent", version: "2.9.4" }] });
 			}
 			return new Response("Not Found", { status: 404 });
 		}) as unknown as typeof fetch;
@@ -912,6 +924,7 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 		await enrichRenovateTarget(baseState() as IacStateType);
 
 		expect(calledUrl.startsWith("https://eu-onboarding.kb.eu-central-1.aws.cloud.es.io")).toBe(true);
+		expect(calledUrl).toContain("/api/fleet/epm/packages?withPackagePoliciesCount=true");
 	});
 
 	test("returns no enrichment (all null/[]) when renovateTarget is missing", async () => {
@@ -934,7 +947,7 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 		].join("\n");
 		global.fetch = mock(async (input: string | URL | Request) => {
 			const url = typeof input === "string" ? input : input.toString();
-			if (url.includes("/api/fleet/epm/packages/")) {
+			if (url.includes("/api/fleet/epm/packages?")) {
 				throw new Error("connection reset");
 			}
 			if (url.includes("raw.githubusercontent.com")) {
@@ -957,7 +970,7 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
 		global.fetch = mock(async (input: string | URL | Request) => {
 			const url = typeof input === "string" ? input : input.toString();
-			if (url.includes("/api/fleet/epm/packages/")) {
+			if (url.includes("/api/fleet/epm/packages?")) {
 				return new Response("not json{{{", { status: 200 });
 			}
 			return new Response("Not Found", { status: 404 });
@@ -974,8 +987,10 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
 		global.fetch = mock(async (input: string | URL | Request) => {
 			const url = typeof input === "string" ? input : input.toString();
-			if (url.includes("/api/fleet/epm/packages/")) {
-				return Response.json({ version: "2.9.4", installationInfo: { version: "2.8.0" } });
+			if (url.includes("/api/fleet/epm/packages?")) {
+				return Response.json({
+					items: [{ name: "elastic_agent", version: "2.9.4", installationInfo: { version: "2.8.0" } }],
+				});
 			}
 			if (url.includes("raw.githubusercontent.com")) {
 				return new Response(":\n  - broken: [unclosed", { status: 200 });
