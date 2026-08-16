@@ -511,6 +511,7 @@ export async function enrichRenovateTarget(state: IacStateType): Promise<Partial
 	const targetVersion = parseRenovateTargetVersion(marker.line);
 	let installedVersion: string | null = null;
 	let policyCount: number | null = null;
+	let affectedPolicies: string[] = [];
 	let resolvedTargetVersion = targetVersion;
 
 	const kibanaConfig = resolveKibanaConfig(target.deployment);
@@ -562,17 +563,25 @@ export async function enrichRenovateTarget(state: IacStateType): Promise<Partial
 				"enrichRenovateTarget: Kibana Fleet call failed; continuing without installed-version enrichment",
 			);
 		}
+		// Second, independent Kibana call for policy names. Runs regardless of whether the first
+		// call found a match (fetchAffectedPolicyNames soft-fails to [] on its own if the package
+		// doesn't exist / query fails -- no need to gate this on `match` above).
+		affectedPolicies = await fetchAffectedPolicyNames(kibanaConfig, target.integration);
 	}
 
+	const CHANGELOG_DISPLAY_CAP = 10;
+	let changelogTotal = 0;
 	const [changelog, renovateRecentChanges, renovatePriorTriggers] = await Promise.all([
-		(async () =>
-			resolvedTargetVersion
-				? filterChangelogRange(
-						await fetchRenovateChangelog(target.integration),
-						installedVersion,
-						resolvedTargetVersion,
-					)
-				: [])(),
+		(async () => {
+			if (!resolvedTargetVersion) return [];
+			const filtered = filterChangelogRange(
+				await fetchRenovateChangelog(target.integration),
+				installedVersion,
+				resolvedTargetVersion,
+			);
+			changelogTotal = filtered.length;
+			return filtered.slice(0, CHANGELOG_DISPLAY_CAP);
+		})(),
 		recallDeploymentKgChanges(target.deployment),
 		recallPriorRenovateTriggers(target.deployment, marker.marker),
 	]);
@@ -584,6 +593,8 @@ export async function enrichRenovateTarget(state: IacStateType): Promise<Partial
 		renovateChangelog: changelog,
 		renovateRecentChanges,
 		renovatePriorTriggers,
+		renovateAffectedPolicies: affectedPolicies,
+		renovateChangelogTotal: changelogTotal,
 	};
 }
 

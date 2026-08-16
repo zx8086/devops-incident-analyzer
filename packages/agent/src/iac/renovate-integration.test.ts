@@ -1152,4 +1152,107 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 
 		__setAgentMemoryClient(null);
 	});
+
+	test("returns affected policy names from a successful package_policies call", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages?")) {
+				return Response.json({
+					items: [
+						{
+							name: "elastic_agent",
+							version: "2.9.4",
+							installationInfo: { version: "2.8.0" },
+							packagePoliciesInfo: { count: 2 },
+						},
+					],
+				});
+			}
+			if (url.includes("/api/fleet/package_policies?")) {
+				return Response.json({
+					items: [
+						{ name: "eu-onboarding-agent-policy-1", package: { name: "elastic_agent", version: "2.9.4" } },
+						{ name: "eu-onboarding-agent-policy-2", package: { name: "elastic_agent", version: "2.9.4" } },
+					],
+					total: 2,
+					page: 1,
+					perPage: 20,
+				});
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateAffectedPolicies).toEqual(["eu-onboarding-agent-policy-1", "eu-onboarding-agent-policy-2"]);
+	});
+
+	test("returns empty affected policies when the package_policies call fails (soft-fail, does not affect policyCount)", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages?")) {
+				return Response.json({
+					items: [
+						{
+							name: "elastic_agent",
+							version: "2.9.4",
+							installationInfo: { version: "2.8.0" },
+							packagePoliciesInfo: { count: 24 },
+						},
+					],
+				});
+			}
+			// package_policies call falls through to 404 (not explicitly mocked)
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateAffectedPolicies).toEqual([]);
+		expect(out.renovatePolicyCount).toBe(24);
+		expect(out.blockedReason).toBeUndefined();
+	});
+
+	test("caps the changelog to 10 entries and reports the pre-cap total", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		// baseState()'s marker line already carries "to v2.9.4", so parseRenovateTargetVersion resolves
+		// a truthy targetVersion BEFORE the Kibana call runs; resolvedTargetVersion is only overridden
+		// by Kibana's match.version when it was null (see enrichRenovateTarget's `if (!resolvedTargetVersion
+		// && ...)` guard). So the effective range here is (installationInfo.version, "2.9.4"] regardless
+		// of the mocked package `version` field -- generate all 15 entries below that ceiling so every one
+		// falls in range, exercising the cap purely on count rather than on range-filtering semantics.
+		const versions = Array.from({ length: 15 }, (_, i) => `2.8.${15 - i}`); // newest-first, 15 entries, all < 2.9.4 ceiling
+		const changelogYaml = versions
+			.map((v) => `- version: "${v}"\n  changes:\n    - description: "Change for ${v}"\n      type: enhancement`)
+			.join("\n");
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages?")) {
+				return Response.json({
+					items: [
+						{
+							name: "elastic_agent",
+							version: "2.15.0",
+							installationInfo: { version: "2.0.0" },
+							packagePoliciesInfo: { count: 1 },
+						},
+					],
+				});
+			}
+			if (url.includes("raw.githubusercontent.com")) {
+				return new Response(changelogYaml, { status: 200 });
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateChangelog).toHaveLength(10);
+		expect(out.renovateChangelogTotal).toBe(15);
+	});
 });
