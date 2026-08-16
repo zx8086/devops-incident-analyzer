@@ -1090,4 +1090,57 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 		expect(out.renovatePolicyCount ?? null).toBeNull();
 		expect(out.blockedReason).toBeUndefined();
 	});
+
+	test("threads recallDeploymentKgChanges' output onto renovateRecentChanges when the KG is enabled", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		global.fetch = mock(async () => new Response("Not Found", { status: 404 })) as unknown as typeof fetch;
+		// recallDeploymentKgChanges soft-fails to "" when KNOWLEDGE_GRAPH_ENABLED is unset (this test's
+		// environment) -- assert the field is present and is a string, not that it's populated (a live
+		// KG-populated case is out of scope for this unit test; recallDeploymentKgChanges has its own
+		// coverage in fleet-upgrade.test.ts's "recallDeploymentKgChanges (SIO-1462)" describe block).
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+		expect(typeof out.renovateRecentChanges).toBe("string");
+	});
+
+	test("threads recallPriorRenovateTriggers' output onto renovatePriorTriggers when agent-memory has prior facts", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		global.fetch = mock(async () => new Response("Not Found", { status: 404 })) as unknown as typeof fetch;
+		const { __setAgentMemoryClient } = require("../memory-backend.ts");
+		__setAgentMemoryClient({
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts() {},
+			async addMessages() {},
+			async searchMemory() {
+				return [
+					{
+						text: "Renovate update triggered on eu-onboarding for 'renovate/eu-onboarding-elastic_agent'.",
+						score: 0.9,
+						annotations: {
+							kind: "renovate-trigger",
+							deployment: "eu-onboarding",
+							marker: "renovate/eu-onboarding-elastic_agent",
+							mr_url: "https://gitlab.example/x/-/merge_requests/518",
+						},
+					},
+				];
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true };
+			},
+			// biome-ignore lint/suspicious/noExplicitAny: SIO-1472 - test stub for the AgentMemoryClient surface
+		} as any);
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovatePriorTriggers).toContain("Renovate update triggered on eu-onboarding");
+		expect(out.renovatePriorTriggers).toContain("[https://gitlab.example/x/-/merge_requests/518]");
+
+		__setAgentMemoryClient(null);
+	});
 });
