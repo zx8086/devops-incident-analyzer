@@ -33,9 +33,14 @@ export async function run(cmd: string[], cwd: string): Promise<string> {
 // sites so every GitLab tool is covered by construction.
 const DEFAULT_GITLAB_TIMEOUT_MS = 30_000;
 
+// Greptile: parseInt stops at the first non-digit, so "30s" silently became a
+// 30 MILLISECOND deadline and "30_000" became 30ms -- both plausible operator
+// input, and both turn this safety net into a guaranteed failure. Require the
+// whole string to be digits so a unit-bearing or separator-bearing value falls
+// back to the default instead of being half-read.
 function gitlabTimeoutMs(): number {
-	const raw = Bun.env.ELASTIC_IAC_GITLAB_TIMEOUT_MS;
-	if (!raw) return DEFAULT_GITLAB_TIMEOUT_MS;
+	const raw = Bun.env.ELASTIC_IAC_GITLAB_TIMEOUT_MS?.trim();
+	if (!raw || !/^\d+$/.test(raw)) return DEFAULT_GITLAB_TIMEOUT_MS;
 	const parsed = Number.parseInt(raw, 10);
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_GITLAB_TIMEOUT_MS;
 }
@@ -50,12 +55,17 @@ export async function gitlabFetch(
 ): Promise<string> {
 	if (!token) return "[gitlab token not configured: set GITLAB_PERSONAL_ACCESS_TOKEN]";
 	const timeoutMs = gitlabTimeoutMs();
+	// Greptile: when the caller supplies its own signal, OUR timeout never fires,
+	// so reporting "timed out after ${timeoutMs}ms" would assert a deadline that
+	// was never armed -- the same class of false claim this ticket exists to fix.
+	// Track which signal is in play and describe the abort accordingly.
+	const callerSignal = init?.signal ?? undefined;
 	try {
 		const res = await fetch(`${baseUrl}/api/v4${apiPath}`, {
 			...init,
 			headers: { "PRIVATE-TOKEN": token, "Content-Type": "application/json", ...(init?.headers ?? {}) },
 			// A caller-supplied signal wins, so existing cancellation still works.
-			signal: init?.signal ?? AbortSignal.timeout(timeoutMs),
+			signal: callerSignal ?? AbortSignal.timeout(timeoutMs),
 		});
 		const text = await res.text();
 		return `[${res.status}] ${text}`;
@@ -63,7 +73,9 @@ export async function gitlabFetch(
 		// Name the timeout explicitly: "aborted" alone reads as a bug, when the
 		// actionable fact is that GitLab did not answer inside the budget.
 		if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
-			return `[gitlab request timed out after ${timeoutMs}ms: ${apiPath}]`;
+			return callerSignal
+				? `[gitlab request cancelled by caller: ${apiPath}]`
+				: `[gitlab request timed out after ${timeoutMs}ms: ${apiPath}]`;
 		}
 		return `[gitlab request failed: ${err instanceof Error ? err.message : String(err)}]`;
 	}
