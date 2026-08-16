@@ -1003,4 +1003,22 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 		expect(out.renovateChangelog).toEqual([]);
 		expect(out.blockedReason).toBeUndefined();
 	});
+
+	test("degrades cleanly when the integration is not found in the Kibana packages list (200 but no matching name)", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages?")) {
+				return Response.json({ items: [{ name: "some_other_integration", version: "1.0.0" }] });
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateInstalledVersion ?? null).toBeNull();
+		expect(out.renovatePolicyCount ?? null).toBeNull();
+		expect(out.blockedReason).toBeUndefined();
+	});
 });
