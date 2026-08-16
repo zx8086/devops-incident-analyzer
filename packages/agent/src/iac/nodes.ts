@@ -434,7 +434,7 @@ function resolveKibanaConfig(deployment: string): { url: string; apiKey: string 
 async function fetchRenovateChangelog(integration: string): Promise<ChangelogEntry[]> {
 	try {
 		const res = await fetch(
-			`https://raw.githubusercontent.com/elastic/integrations/main/packages/${integration}/changelog.yml`,
+			`https://raw.githubusercontent.com/elastic/integrations/main/packages/${encodeURIComponent(integration)}/changelog.yml`,
 		);
 		if (!res.ok) return [];
 		const text = await res.text();

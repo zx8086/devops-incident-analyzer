@@ -889,4 +889,74 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 		const out = await enrichRenovateTarget({ renovateMarker: baseState().renovateMarker } as IacStateType);
 		expect(out).toEqual({});
 	});
+
+	test("changelog fetch succeeds independently when ONLY the Kibana call fails (network error)", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		const changelogYaml = [
+			'- version: "2.9.4"',
+			"  changes:",
+			'    - description: "Add system.cpu.cores"',
+			"      type: enhancement",
+			'- version: "2.8.0"',
+			"  changes:",
+			'    - description: "Initial"',
+			"      type: enhancement",
+		].join("\n");
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages/")) {
+				throw new Error("connection reset");
+			}
+			if (url.includes("raw.githubusercontent.com")) {
+				return new Response(changelogYaml, { status: 200 });
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateInstalledVersion ?? null).toBeNull();
+		expect(out.renovateChangelog).toEqual([
+			{ version: "2.9.4", changes: [{ description: "Add system.cpu.cores", type: "enhancement" }] },
+		]);
+		expect(out.blockedReason).toBeUndefined();
+	});
+
+	test("degrades cleanly when the Kibana response body is not valid JSON", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages/")) {
+				return new Response("not json{{{", { status: 200 });
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateInstalledVersion ?? null).toBeNull();
+		expect(out.blockedReason).toBeUndefined();
+	});
+
+	test("degrades cleanly when the GitHub changelog response body is not valid YAML", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages/")) {
+				return Response.json({ version: "2.9.4", installationInfo: { version: "2.8.0" } });
+			}
+			if (url.includes("raw.githubusercontent.com")) {
+				return new Response(":\n  - broken: [unclosed", { status: 200 });
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateChangelog).toEqual([]);
+		expect(out.blockedReason).toBeUndefined();
+	});
 });
