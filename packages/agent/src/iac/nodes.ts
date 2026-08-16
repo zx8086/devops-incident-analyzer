@@ -464,6 +464,36 @@ async function fetchRenovateChangelog(integration: string): Promise<ChangelogEnt
 	}
 }
 
+// Kibana Fleet package-policies list, filtered by integration package name via kuery. No simpler
+// alternative exists -- /api/fleet/epm/packages/{pkgName} and its /stats sibling return package
+// metadata/counts only, never individual policy names (verified against the Fleet OpenAPI spec:
+// https://www.elastic.co/docs/api/doc/kibana/v9/operation/operation-get-fleet-package-policies).
+// Soft-fails to [] on any error/non-2xx -- the existing policyCount stat tile (from the sibling
+// packages-list call) must still render even if this second call fails independently.
+async function fetchAffectedPolicyNames(
+	kibanaConfig: { url: string; apiKey: string },
+	integration: string,
+): Promise<string[]> {
+	try {
+		const kuery = `ingest-package-policies.package.name:"${integration}"`;
+		const res = await fetch(`${kibanaConfig.url}/api/fleet/package_policies?kuery=${encodeURIComponent(kuery)}`, {
+			headers: { Authorization: `ApiKey ${kibanaConfig.apiKey}` },
+			signal: AbortSignal.timeout(8_000),
+		});
+		if (!res.ok) return [];
+		const body = (await res.json()) as { items?: unknown };
+		const items = Array.isArray(body.items) ? body.items : [];
+		return items
+			.filter(
+				(item): item is { name: string } =>
+					typeof item === "object" && item !== null && typeof (item as { name?: unknown }).name === "string",
+			)
+			.map((item) => item.name);
+	} catch {
+		return [];
+	}
+}
+
 // Best-effort pre-trigger enrichment for the renovate_trigger_choice card: currently-installed
 // version, target version, affected-policy count (all from one Kibana Fleet call, reusing the
 // existing ELASTIC_<DEPLOYMENT>_URL/_API_KEY -- see resolveKibanaConfig), and a version-range
