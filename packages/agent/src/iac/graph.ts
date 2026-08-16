@@ -41,6 +41,7 @@ import {
 	reconcileGate,
 	reconcileStack,
 	renovateTriggerGate,
+	resolveIntegrationSlug,
 	resolveRenovateMarker,
 	reviewPlan,
 	syntheticsPushGate,
@@ -180,6 +181,7 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		// decline interrupt; triggerRenovateUpdate ticks the checkbox + plays the
 		// schedule; watchRenovateMr polls for the resulting MR.
 		.addNode("extractRenovateTarget", extractRenovateTarget)
+		.addNode("resolveIntegrationSlug", resolveIntegrationSlug)
 		.addNode("resolveRenovateMarker", resolveRenovateMarker)
 		.addNode("enrichRenovateTarget", enrichRenovateTarget)
 		.addNode("renovateTriggerGate", renovateTriggerGate)
@@ -330,10 +332,12 @@ export async function buildIacGraph(config?: { checkpointerType?: "memory" | "sq
 		])
 		.addEdge("applyFleetUpgrade", "teardown")
 		// extractRenovateTarget can block (clarify) before resolving -- blockedReason -> END.
-		.addConditionalEdges("extractRenovateTarget", (s) => (s.blockedReason ? END : "resolveRenovateMarker"), [
-			"resolveRenovateMarker",
+		.addConditionalEdges("extractRenovateTarget", (s) => (s.blockedReason ? END : "resolveIntegrationSlug"), [
+			"resolveIntegrationSlug",
 			END,
 		])
+		// resolveIntegrationSlug never blocks -- always proceeds to dashboard matching.
+		.addEdge("resolveIntegrationSlug", "resolveRenovateMarker")
 		// Exactly one dashboard match -> enrichRenovateTarget (best-effort pre-gate context);
 		// 0 or 2+ -> teardown (the disambiguation/no-match message is already set on
 		// state.messages).

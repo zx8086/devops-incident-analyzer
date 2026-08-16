@@ -424,6 +424,66 @@ function resolveKibanaConfig(deployment: string): { url: string; apiKey: string 
 	return { url: esUrl.replace(".es.", ".kb."), apiKey };
 }
 
+// SIO-1474: resolves a Kibana Fleet display name ("Custom UDP Logs") to its EPM package slug
+// ("udp") before resolveRenovateMarker's substring match against the Renovate dashboard marker
+// runs -- extractRenovateTarget's LLM extraction has no display-name-vs-slug guidance, and
+// filterDashboardMatches' substring looseness is intentional/don't-touch (see its own comment),
+// so the fix belongs here: a deterministic lookup against Kibana's own package list, which is
+// ground truth. Reuses the exact same /api/fleet/epm/packages call enrichRenovateTarget already
+// makes (same auth/config via resolveKibanaConfig) -- not deduplicated across the two call
+// sites, matching how enrichRenovateTarget and fetchAffectedPolicyNames already run as two
+// independent Kibana calls per turn. Exact-match only against title (case-insensitive) -- no
+// substring/fuzzy fallback here, to keep exactly one fuzzy-matching stage in this sub-flow
+// (filterDashboardMatches), not two. Never blocks the turn: any failure (no deployment config,
+// network error, non-2xx, no match) falls through with target.integration unchanged, preserving
+// today's behavior for input that already names a correct slug. (Best-effort; unit-tested.)
+export async function resolveIntegrationSlug(state: IacStateType): Promise<Partial<IacStateType>> {
+	const target = state.renovateTarget;
+	if (!target) return {};
+
+	const kibanaConfig = resolveKibanaConfig(target.deployment);
+	if (!kibanaConfig) return {};
+
+	try {
+		const res = await fetch(`${kibanaConfig.url}/api/fleet/epm/packages?withPackagePoliciesCount=true`, {
+			headers: { Authorization: `ApiKey ${kibanaConfig.apiKey}`, "kbn-xsrf": "true" },
+			signal: AbortSignal.timeout(8_000),
+		});
+		if (!res.ok) {
+			log.warn(
+				{ deployment: target.deployment, integration: target.integration, status: res.status },
+				"resolveIntegrationSlug: Kibana Fleet call returned non-2xx; continuing without slug resolution",
+			);
+			return {};
+		}
+		const body = (await res.json()) as { items?: unknown };
+		const items = Array.isArray(body.items) ? body.items : [];
+		const packages = items.filter(
+			(item): item is { name: string; title?: unknown } =>
+				typeof item === "object" && item !== null && typeof (item as { name?: unknown }).name === "string",
+		);
+
+		const wanted = target.integration.toLowerCase();
+		const alreadySlug = packages.some((p) => p.name.toLowerCase() === wanted);
+		if (alreadySlug) return {};
+
+		const titleMatch = packages.find((p) => typeof p.title === "string" && p.title.toLowerCase() === wanted);
+		if (!titleMatch) return {};
+
+		return { renovateTarget: { deployment: target.deployment, integration: titleMatch.name } };
+	} catch (error) {
+		log.warn(
+			{
+				deployment: target.deployment,
+				integration: target.integration,
+				error: error instanceof Error ? error.message : String(error),
+			},
+			"resolveIntegrationSlug: Kibana Fleet call failed; continuing without slug resolution",
+		);
+		return {};
+	}
+}
+
 // elastic/integrations' per-package changelog.yml, fetched via raw.githubusercontent.com --
 // no auth needed (public repo), no gh-CLI subprocess dependency (this file has never shelled
 // out to an external CLI; a raw-content HTTP GET is a strictly better fit for a server-side

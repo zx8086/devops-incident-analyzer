@@ -1307,3 +1307,136 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 		expect(out.renovateChangelogTotal).toBe(15);
 	});
 });
+
+import { resolveIntegrationSlug } from "./nodes.ts";
+
+// SIO-1474: resolves a Kibana Fleet display name (e.g. "Custom UDP Logs") to its EPM package
+// slug (e.g. "udp") before resolveRenovateMarker's substring match against the Renovate
+// dashboard marker runs. Never blocks the turn -- any failure (no deployment config, network
+// error, non-2xx, no title match) falls through with target.integration unchanged. Mocking
+// convention matches enrichRenovateTarget's established pattern (capture/restore global.fetch
+// and process.env in afterEach).
+describe("resolveIntegrationSlug (SIO-1474)", () => {
+	const ORIGINAL_FETCH = global.fetch;
+	const ORIGINAL_ENV = { ...process.env };
+
+	afterEach(() => {
+		global.fetch = ORIGINAL_FETCH;
+		process.env = { ...ORIGINAL_ENV };
+	});
+
+	function baseState(integration: string): Partial<IacStateType> {
+		return {
+			renovateTarget: { deployment: "ap-cld", integration },
+		};
+	}
+
+	test("returns no change when target.integration already equals a package's slug (name)", async () => {
+		process.env.ELASTIC_AP_CLD_URL = "https://ap-cld.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_AP_CLD_API_KEY = "test-key";
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages?")) {
+				return Response.json({ items: [{ name: "udp", title: "Custom UDP Logs", version: "2.5.1" }] });
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await resolveIntegrationSlug(baseState("udp") as IacStateType);
+
+		expect(out).toEqual({});
+	});
+
+	test("resolves a display-name match to the package's slug", async () => {
+		process.env.ELASTIC_AP_CLD_URL = "https://ap-cld.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_AP_CLD_API_KEY = "test-key";
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages?")) {
+				return Response.json({ items: [{ name: "udp", title: "Custom UDP Logs", version: "2.5.1" }] });
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await resolveIntegrationSlug(baseState("Custom UDP Logs") as IacStateType);
+
+		expect(out).toEqual({ renovateTarget: { deployment: "ap-cld", integration: "udp" } });
+	});
+
+	test("resolves a display-name match case-insensitively", async () => {
+		process.env.ELASTIC_AP_CLD_URL = "https://ap-cld.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_AP_CLD_API_KEY = "test-key";
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages?")) {
+				return Response.json({ items: [{ name: "udp", title: "Custom UDP Logs", version: "2.5.1" }] });
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await resolveIntegrationSlug(baseState("custom udp logs") as IacStateType);
+
+		expect(out).toEqual({ renovateTarget: { deployment: "ap-cld", integration: "udp" } });
+	});
+
+	test("returns no change when no package name or title matches", async () => {
+		process.env.ELASTIC_AP_CLD_URL = "https://ap-cld.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_AP_CLD_API_KEY = "test-key";
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages?")) {
+				return Response.json({ items: [{ name: "udp", title: "Custom UDP Logs", version: "2.5.1" }] });
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await resolveIntegrationSlug(baseState("totally unrelated package") as IacStateType);
+
+		expect(out).toEqual({});
+	});
+
+	test("returns {} immediately when renovateTarget is null, without calling fetch", async () => {
+		let fetchCalled = false;
+		global.fetch = mock(async () => {
+			fetchCalled = true;
+			return new Response("should not be called", { status: 500 });
+		}) as unknown as typeof fetch;
+
+		const out = await resolveIntegrationSlug({ renovateTarget: null } as IacStateType);
+
+		expect(out).toEqual({});
+		expect(fetchCalled).toBe(false);
+	});
+
+	test("returns no change when ELASTIC_<DEPLOYMENT>_URL is unset for this deployment", async () => {
+		delete process.env.ELASTIC_AP_CLD_URL;
+		delete process.env.ELASTIC_AP_CLD_API_KEY;
+		global.fetch = mock(async () => new Response("should not be called", { status: 500 })) as unknown as typeof fetch;
+
+		const out = await resolveIntegrationSlug(baseState("Custom UDP Logs") as IacStateType);
+
+		expect(out).toEqual({});
+	});
+
+	test("returns no change when the Kibana call errors (network failure)", async () => {
+		process.env.ELASTIC_AP_CLD_URL = "https://ap-cld.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_AP_CLD_API_KEY = "test-key";
+		global.fetch = mock(async () => {
+			throw new Error("connection reset");
+		}) as unknown as typeof fetch;
+
+		const out = await resolveIntegrationSlug(baseState("Custom UDP Logs") as IacStateType);
+
+		expect(out).toEqual({});
+	});
+
+	test("returns no change when the Kibana call returns a non-2xx status", async () => {
+		process.env.ELASTIC_AP_CLD_URL = "https://ap-cld.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_AP_CLD_API_KEY = "test-key";
+		global.fetch = mock(async () => new Response("unauthorized", { status: 401 })) as unknown as typeof fetch;
+
+		const out = await resolveIntegrationSlug(baseState("Custom UDP Logs") as IacStateType);
+
+		expect(out).toEqual({});
+	});
+});
