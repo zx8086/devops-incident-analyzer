@@ -12092,6 +12092,43 @@ export async function recallDeploymentKgChanges(deployment: string): Promise<str
 	}
 }
 
+// The renovate-trigger twin of recallPriorFleetUpgrades (SIO-971) -- deployment+marker-scoped
+// recall of prior Renovate triggers for this EXACT integration, so the gate card can show "we've
+// triggered this integration before" (and its MR, if one was found). Filters on the SAME keys
+// buildRenovateFactAnnotations stamps (kind:"renovate-trigger", deployment, marker) -- scoped to
+// marker (not just deployment) per design decision, since a marker uniquely identifies "this
+// integration on this deployment" and a deployment-only scope would mix in unrelated integrations'
+// triggers. Soft-fails to "" so a memory outage never blocks the gate. agent-memory backend only
+// (the file backend never writes this fact -- see teardownIac's existing gate).
+export async function recallPriorRenovateTriggers(deployment: string, marker: string): Promise<string> {
+	if (selectedBackend() !== "agent-memory" || !deployment || !marker) return "";
+	try {
+		const hits = await searchAgentMemory("elastic-iac", "", { deployment, marker, kind: "renovate-trigger" }, 8, {
+			deterministic: true,
+		});
+		return renderRenovateLearnings(hits);
+	} catch (error) {
+		log.warn(
+			{ error: error instanceof Error ? error.message : String(error), deployment, marker },
+			"iac renovate trigger: prior-trigger recall failed; continuing without it",
+		);
+		return "";
+	}
+}
+
+// Renders recalled renovate-trigger facts as a markdown bullet list. "" for no hits (the gate
+// card panel stays hidden). Mirrors renderFleetLearnings' shape; renovate facts carry mr_url (not
+// version/pipeline_id), so the tag differs and dedup keys on mr_url instead of pipeline_id.
+function renderRenovateLearnings(hits: MemorySearchHit[]): string {
+	if (hits.length === 0) return "";
+	return dedupeHitsBy(hits, (h) => h.annotations.mr_url ?? h.text)
+		.map((h) => {
+			const mrUrl = h.annotations.mr_url;
+			return mrUrl ? `- ${h.text} [${mrUrl}]` : `- ${h.text}`;
+		})
+		.join("\n");
+}
+
 // SIO-1032: raw-text scoping parsers for the fleet-upgrade flow. The fleet-upgrade INTENT routes
 // straight to detectFleetUpgrade and never runs parseIntent, so deployment/version (and now the host
 // scope) are parsed from the message text here, deterministically -- same idiom as parseTargetVersion.
