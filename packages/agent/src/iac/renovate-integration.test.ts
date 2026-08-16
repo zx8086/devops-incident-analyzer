@@ -1195,6 +1195,51 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 		expect(out.renovateAffectedPolicies).toEqual(["eu-onboarding-agent-policy-1", "eu-onboarding-agent-policy-2"]);
 	});
 
+	// Greptile (PR #668): the list endpoint paginates (Fleet's own default perPage is 20), so an
+	// unpaginated call would silently drop every name past the first page. This mocks a 3-item
+	// total split across 2 pages (perPage=2) and asserts all 3 names are collected.
+	test("paginates through multiple package_policies pages to collect all affected policy names", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		let policyPolicyCallCount = 0;
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages?")) {
+				return Response.json({
+					items: [
+						{
+							name: "elastic_agent",
+							version: "2.9.4",
+							installationInfo: { version: "2.8.0" },
+							packagePoliciesInfo: { count: 3 },
+						},
+					],
+				});
+			}
+			if (url.includes("/api/fleet/package_policies?")) {
+				policyPolicyCallCount++;
+				const isPageOne = url.includes("page=1&");
+				return Response.json({
+					items: isPageOne
+						? [
+								{ name: "policy-1", package: { name: "elastic_agent", version: "2.9.4" } },
+								{ name: "policy-2", package: { name: "elastic_agent", version: "2.9.4" } },
+							]
+						: [{ name: "policy-3", package: { name: "elastic_agent", version: "2.9.4" } }],
+					total: 3,
+					page: isPageOne ? 1 : 2,
+					perPage: 2,
+				});
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateAffectedPolicies).toEqual(["policy-1", "policy-2", "policy-3"]);
+		expect(policyPolicyCallCount).toBe(2);
+	});
+
 	test("returns empty affected policies when the package_policies call fails (soft-fail, does not affect policyCount)", async () => {
 		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
 		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";

@@ -470,31 +470,53 @@ async function fetchRenovateChangelog(integration: string): Promise<ChangelogEnt
 // https://www.elastic.co/docs/api/doc/kibana/v9/operation/operation-get-fleet-package-policies).
 // Soft-fails to [] on any error/non-2xx -- the existing policyCount stat tile (from the sibling
 // packages-list call) must still render even if this second call fails independently.
+//
+// Greptile (PR #668): the list endpoint paginates (Fleet's own default perPage is 20), so an
+// integration with more affected policies than one page would otherwise silently return only the
+// first page while the card's summary count (from the sibling call's policyCount) stays accurate
+// -- a real "count says 21, list shows 20" bug. Paginate using the response's own total/page/
+// perPage fields until every page is collected. maxPages bounds the loop defensively (a
+// misbehaving/adversarial API could otherwise report an ever-growing total and loop forever); 50
+// pages * 100/page covers any realistic policy count for a single integration with room to spare.
+const AFFECTED_POLICIES_PER_PAGE = 100;
+const AFFECTED_POLICIES_MAX_PAGES = 50;
+
 async function fetchAffectedPolicyNames(
 	kibanaConfig: { url: string; apiKey: string },
 	integration: string,
 ): Promise<string[]> {
+	// SIO-1473: integration is LLM-extracted from free-form user text (extractRenovateTarget),
+	// not literal dashboard text -- strip quote/backslash so it can't break out of the KQL string
+	// literal below. encodeURIComponent alone stops URL/param injection but not this.
+	const safeIntegration = integration.replace(/["\\]/g, "");
+	const kuery = `ingest-package-policies.package.name:"${safeIntegration}"`;
+	const names: string[] = [];
 	try {
-		// SIO-1473: integration is LLM-extracted from free-form user text (extractRenovateTarget),
-		// not literal dashboard text -- strip quote/backslash so it can't break out of the KQL
-		// string literal below. encodeURIComponent alone stops URL/param injection but not this.
-		const safeIntegration = integration.replace(/["\\]/g, "");
-		const kuery = `ingest-package-policies.package.name:"${safeIntegration}"`;
-		const res = await fetch(`${kibanaConfig.url}/api/fleet/package_policies?kuery=${encodeURIComponent(kuery)}`, {
-			headers: { Authorization: `ApiKey ${kibanaConfig.apiKey}` },
-			signal: AbortSignal.timeout(8_000),
-		});
-		if (!res.ok) return [];
-		const body = (await res.json()) as { items?: unknown };
-		const items = Array.isArray(body.items) ? body.items : [];
-		return items
-			.filter(
-				(item): item is { name: string } =>
-					typeof item === "object" && item !== null && typeof (item as { name?: unknown }).name === "string",
-			)
-			.map((item) => item.name);
+		for (let page = 1; page <= AFFECTED_POLICIES_MAX_PAGES; page++) {
+			const res = await fetch(
+				`${kibanaConfig.url}/api/fleet/package_policies?kuery=${encodeURIComponent(kuery)}&page=${page}&perPage=${AFFECTED_POLICIES_PER_PAGE}`,
+				{
+					headers: { Authorization: `ApiKey ${kibanaConfig.apiKey}` },
+					signal: AbortSignal.timeout(8_000),
+				},
+			);
+			if (!res.ok) return names;
+			const body = (await res.json()) as { items?: unknown; total?: unknown };
+			const items = Array.isArray(body.items) ? body.items : [];
+			names.push(
+				...items
+					.filter(
+						(item): item is { name: string } =>
+							typeof item === "object" && item !== null && typeof (item as { name?: unknown }).name === "string",
+					)
+					.map((item) => item.name),
+			);
+			const total = typeof body.total === "number" ? body.total : names.length;
+			if (names.length >= total || items.length === 0) break;
+		}
+		return names;
 	} catch {
-		return [];
+		return names;
 	}
 }
 
@@ -520,57 +542,69 @@ export async function enrichRenovateTarget(state: IacStateType): Promise<Partial
 
 	const kibanaConfig = resolveKibanaConfig(target.deployment);
 	if (kibanaConfig) {
-		try {
-			// The single-package detail endpoint (/api/fleet/epm/packages/{pkgName}) does NOT
-			// accept withPackagePoliciesCount as a query param (HTTP 400). Only the list endpoint
-			// does, returning an `items` array we filter client-side. Live-verified against eu-cld.
-			const res = await fetch(`${kibanaConfig.url}/api/fleet/epm/packages?withPackagePoliciesCount=true`, {
-				headers: { Authorization: `ApiKey ${kibanaConfig.apiKey}`, "kbn-xsrf": "true" },
-				signal: AbortSignal.timeout(8_000),
-			});
-			if (res.ok) {
-				const body = (await res.json()) as { items?: unknown };
-				const items = Array.isArray(body.items) ? body.items : [];
-				const match = items.find(
-					(
-						item,
-					): item is {
-						name: string;
-						version?: unknown;
-						installationInfo?: { version?: unknown };
-						packagePoliciesInfo?: { count?: unknown };
-					} => typeof item === "object" && item !== null && (item as { name?: unknown }).name === target.integration,
-				);
-				if (match) {
-					if (typeof match.installationInfo?.version === "string") installedVersion = match.installationInfo.version;
-					if (typeof match.packagePoliciesInfo?.count === "number") policyCount = match.packagePoliciesInfo.count;
-					if (!resolvedTargetVersion && typeof match.version === "string") resolvedTargetVersion = match.version;
-				} else {
-					log.warn(
-						{ deployment: target.deployment, integration: target.integration },
-						"enrichRenovateTarget: integration not found in Kibana Fleet packages list; continuing without installed-version enrichment",
+		// Greptile (PR #668): this call and fetchAffectedPolicyNames are fully independent (the
+		// names call never depended on this one's `match` result -- see the comment that used to
+		// sit here), so running them sequentially only added avoidable latency. Promise.all runs
+		// both concurrently; each keeps its own try/catch so a failure in one never suppresses the
+		// other's result.
+		const packagesListCall = (async () => {
+			try {
+				// The single-package detail endpoint (/api/fleet/epm/packages/{pkgName}) does NOT
+				// accept withPackagePoliciesCount as a query param (HTTP 400). Only the list endpoint
+				// does, returning an `items` array we filter client-side. Live-verified against eu-cld.
+				const res = await fetch(`${kibanaConfig.url}/api/fleet/epm/packages?withPackagePoliciesCount=true`, {
+					headers: { Authorization: `ApiKey ${kibanaConfig.apiKey}`, "kbn-xsrf": "true" },
+					signal: AbortSignal.timeout(8_000),
+				});
+				if (res.ok) {
+					const body = (await res.json()) as { items?: unknown };
+					const items = Array.isArray(body.items) ? body.items : [];
+					const match = items.find(
+						(
+							item,
+						): item is {
+							name: string;
+							version?: unknown;
+							installationInfo?: { version?: unknown };
+							packagePoliciesInfo?: { count?: unknown };
+						} => typeof item === "object" && item !== null && (item as { name?: unknown }).name === target.integration,
 					);
+					if (!match) {
+						log.warn(
+							{ deployment: target.deployment, integration: target.integration },
+							"enrichRenovateTarget: integration not found in Kibana Fleet packages list; continuing without installed-version enrichment",
+						);
+					}
+					return match ?? null;
 				}
-			} else {
 				log.warn(
 					{ deployment: target.deployment, integration: target.integration, status: res.status },
 					"enrichRenovateTarget: Kibana Fleet call returned non-2xx; continuing without installed-version enrichment",
 				);
+				return null;
+			} catch (error) {
+				log.warn(
+					{
+						deployment: target.deployment,
+						integration: target.integration,
+						error: error instanceof Error ? error.message : String(error),
+					},
+					"enrichRenovateTarget: Kibana Fleet call failed; continuing without installed-version enrichment",
+				);
+				return null;
 			}
-		} catch (error) {
-			log.warn(
-				{
-					deployment: target.deployment,
-					integration: target.integration,
-					error: error instanceof Error ? error.message : String(error),
-				},
-				"enrichRenovateTarget: Kibana Fleet call failed; continuing without installed-version enrichment",
-			);
+		})();
+
+		const [match, names] = await Promise.all([
+			packagesListCall,
+			fetchAffectedPolicyNames(kibanaConfig, target.integration),
+		]);
+		if (match) {
+			if (typeof match.installationInfo?.version === "string") installedVersion = match.installationInfo.version;
+			if (typeof match.packagePoliciesInfo?.count === "number") policyCount = match.packagePoliciesInfo.count;
+			if (!resolvedTargetVersion && typeof match.version === "string") resolvedTargetVersion = match.version;
 		}
-		// Second, independent Kibana call for policy names. Runs regardless of whether the first
-		// call found a match (fetchAffectedPolicyNames soft-fails to [] on its own if the package
-		// doesn't exist / query fails -- no need to gate this on `match` above).
-		affectedPolicies = await fetchAffectedPolicyNames(kibanaConfig, target.integration);
+		affectedPolicies = names;
 	}
 
 	const CHANGELOG_DISPLAY_CAP = 10;
