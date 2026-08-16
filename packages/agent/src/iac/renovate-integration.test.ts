@@ -1439,4 +1439,20 @@ describe("resolveIntegrationSlug (SIO-1474)", () => {
 
 		expect(out).toEqual({});
 	});
+
+	// CodeRabbit (PR #669): a 2xx response with a valid-JSON-but-wrong-shape body (e.g. a bare
+	// `null`) makes `body.items` throw (TypeError: Cannot read property 'items' of null) --
+	// caught by the function's own try/catch, so it still soft-fails to {} rather than escaping,
+	// but this exact malformed-shape path had no direct test coverage.
+	test("returns no change when the Kibana response body is malformed (bare null)", async () => {
+		process.env.ELASTIC_AP_CLD_URL = "https://ap-cld.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_AP_CLD_API_KEY = "test-key";
+		global.fetch = mock(
+			async () => new Response("null", { headers: { "content-type": "application/json" } }),
+		) as unknown as typeof fetch;
+
+		const out = await resolveIntegrationSlug(baseState("Custom UDP Logs") as IacStateType);
+
+		expect(out).toEqual({});
+	});
 });
