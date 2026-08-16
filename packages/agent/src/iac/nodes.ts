@@ -537,7 +537,11 @@ export async function enrichRenovateTarget(state: IacStateType): Promise<Partial
 	const [changelog, renovateRecentChanges, renovatePriorTriggers] = await Promise.all([
 		(async () =>
 			resolvedTargetVersion
-				? filterChangelogRange(await fetchRenovateChangelog(target.integration), installedVersion, resolvedTargetVersion)
+				? filterChangelogRange(
+						await fetchRenovateChangelog(target.integration),
+						installedVersion,
+						resolvedTargetVersion,
+					)
 				: [])(),
 		recallDeploymentKgChanges(target.deployment),
 		recallPriorRenovateTriggers(target.deployment, marker.marker),
