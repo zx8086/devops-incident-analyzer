@@ -322,6 +322,9 @@ export interface RenovateTriggerChoice {
 	// own recentChanges/priorUpgrades fields.
 	recentChanges?: string;
 	priorTriggers?: string;
+	// SIO-1473: real affected-policy names + the pre-cap changelog entry count.
+	affectedPolicies?: string[];
+	changelogTotal?: number;
 }
 
 export interface FleetUpgradeResultRow {
@@ -850,6 +853,8 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 					changelog: event.changelog,
 					recentChanges: event.recentChanges,
 					priorTriggers: event.priorTriggers,
+					affectedPolicies: event.affectedPolicies,
+					changelogTotal: event.changelogTotal,
 				},
 			};
 		default:

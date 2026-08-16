@@ -118,6 +118,8 @@ describe("renovateTriggerGate interrupt round-trip (SIO-1471)", () => {
 			renovateChangelog: [{ version: "2.9.4", changes: [{ description: "Add X", type: "enhancement" }] }],
 			renovateRecentChanges: "- [eu-onboarding] elastic_agent changed on 2026-08-01 (applied)",
 			renovatePriorTriggers: "- Renovate update triggered on eu-onboarding for 'renovate/eu-onboarding-elastic_agent'.",
+			renovateAffectedPolicies: ["eu-onboarding-agent-policy-1", "eu-onboarding-agent-policy-2"],
+			renovateChangelogTotal: 23,
 		};
 
 		await compiled.invoke(inputState as unknown as Parameters<typeof compiled.invoke>[0], config);
@@ -136,6 +138,8 @@ describe("renovateTriggerGate interrupt round-trip (SIO-1471)", () => {
 			changelog: [{ version: "2.9.4", changes: [{ description: "Add X", type: "enhancement" }] }],
 			recentChanges: "- [eu-onboarding] elastic_agent changed on 2026-08-01 (applied)",
 			priorTriggers: "- Renovate update triggered on eu-onboarding for 'renovate/eu-onboarding-elastic_agent'.",
+			affectedPolicies: ["eu-onboarding-agent-policy-1", "eu-onboarding-agent-policy-2"],
+			changelogTotal: 23,
 		});
 	});
 });
@@ -634,7 +638,7 @@ describe("parseFirstOpenMrUrl", () => {
 import { TURN_START_RESET } from "./nodes.ts";
 
 describe("TURN_START_RESET (renovate-integration-update fields)", () => {
-	test("resets all 13 renovate-integration-update fields", () => {
+	test("resets all 15 renovate-integration-update fields", () => {
 		expect(TURN_START_RESET).toMatchObject({
 			renovateTarget: null,
 			renovateCandidates: [],
@@ -649,6 +653,8 @@ describe("TURN_START_RESET (renovate-integration-update fields)", () => {
 			renovateChangelog: [],
 			renovateRecentChanges: "",
 			renovatePriorTriggers: "",
+			renovateAffectedPolicies: [],
+			renovateChangelogTotal: 0,
 		});
 	});
 });
@@ -1151,5 +1157,153 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 		expect(out.renovatePriorTriggers).toContain("[https://gitlab.example/x/-/merge_requests/518]");
 
 		__setAgentMemoryClient(null);
+	});
+
+	test("returns affected policy names from a successful package_policies call", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages?")) {
+				return Response.json({
+					items: [
+						{
+							name: "elastic_agent",
+							version: "2.9.4",
+							installationInfo: { version: "2.8.0" },
+							packagePoliciesInfo: { count: 2 },
+						},
+					],
+				});
+			}
+			if (url.includes("/api/fleet/package_policies?")) {
+				return Response.json({
+					items: [
+						{ name: "eu-onboarding-agent-policy-1", package: { name: "elastic_agent", version: "2.9.4" } },
+						{ name: "eu-onboarding-agent-policy-2", package: { name: "elastic_agent", version: "2.9.4" } },
+					],
+					total: 2,
+					page: 1,
+					perPage: 20,
+				});
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateAffectedPolicies).toEqual(["eu-onboarding-agent-policy-1", "eu-onboarding-agent-policy-2"]);
+	});
+
+	// Greptile (PR #668): the list endpoint paginates (Fleet's own default perPage is 20), so an
+	// unpaginated call would silently drop every name past the first page. This mocks a 3-item
+	// total split across 2 pages (perPage=2) and asserts all 3 names are collected.
+	test("paginates through multiple package_policies pages to collect all affected policy names", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		let policyPolicyCallCount = 0;
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages?")) {
+				return Response.json({
+					items: [
+						{
+							name: "elastic_agent",
+							version: "2.9.4",
+							installationInfo: { version: "2.8.0" },
+							packagePoliciesInfo: { count: 3 },
+						},
+					],
+				});
+			}
+			if (url.includes("/api/fleet/package_policies?")) {
+				policyPolicyCallCount++;
+				const isPageOne = url.includes("page=1&");
+				return Response.json({
+					items: isPageOne
+						? [
+								{ name: "policy-1", package: { name: "elastic_agent", version: "2.9.4" } },
+								{ name: "policy-2", package: { name: "elastic_agent", version: "2.9.4" } },
+							]
+						: [{ name: "policy-3", package: { name: "elastic_agent", version: "2.9.4" } }],
+					total: 3,
+					page: isPageOne ? 1 : 2,
+					perPage: 2,
+				});
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateAffectedPolicies).toEqual(["policy-1", "policy-2", "policy-3"]);
+		expect(policyPolicyCallCount).toBe(2);
+	});
+
+	test("returns empty affected policies when the package_policies call fails (soft-fail, does not affect policyCount)", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages?")) {
+				return Response.json({
+					items: [
+						{
+							name: "elastic_agent",
+							version: "2.9.4",
+							installationInfo: { version: "2.8.0" },
+							packagePoliciesInfo: { count: 24 },
+						},
+					],
+				});
+			}
+			// package_policies call falls through to 404 (not explicitly mocked)
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateAffectedPolicies).toEqual([]);
+		expect(out.renovatePolicyCount).toBe(24);
+		expect(out.blockedReason).toBeUndefined();
+	});
+
+	test("caps the changelog to 10 entries and reports the pre-cap total", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		// baseState()'s marker line already carries "to v2.9.4", so parseRenovateTargetVersion resolves
+		// a truthy targetVersion BEFORE the Kibana call runs; resolvedTargetVersion is only overridden
+		// by Kibana's match.version when it was null (see enrichRenovateTarget's `if (!resolvedTargetVersion
+		// && ...)` guard). So the effective range here is (installationInfo.version, "2.9.4"] regardless
+		// of the mocked package `version` field -- generate all 15 entries below that ceiling so every one
+		// falls in range, exercising the cap purely on count rather than on range-filtering semantics.
+		const versions = Array.from({ length: 15 }, (_, i) => `2.8.${15 - i}`); // newest-first, 15 entries, all < 2.9.4 ceiling
+		const changelogYaml = versions
+			.map((v) => `- version: "${v}"\n  changes:\n    - description: "Change for ${v}"\n      type: enhancement`)
+			.join("\n");
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages?")) {
+				return Response.json({
+					items: [
+						{
+							name: "elastic_agent",
+							version: "2.15.0",
+							installationInfo: { version: "2.0.0" },
+							packagePoliciesInfo: { count: 1 },
+						},
+					],
+				});
+			}
+			if (url.includes("raw.githubusercontent.com")) {
+				return new Response(changelogYaml, { status: 200 });
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateChangelog).toHaveLength(10);
+		expect(out.renovateChangelogTotal).toBe(15);
 	});
 });

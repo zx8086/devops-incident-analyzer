@@ -752,6 +752,8 @@ export function emitIacInterrupt(send: SendFn, threadId: string, interruptValue:
 		policyCount?: unknown;
 		changelog?: unknown;
 		priorTriggers?: unknown;
+		affectedPolicies?: unknown;
+		changelogTotal?: unknown;
 	};
 
 	if (obj.type === "iac_clarify") {
@@ -910,6 +912,9 @@ export function emitIacInterrupt(send: SendFn, threadId: string, interruptValue:
 			...(Array.isArray(obj.changelog) && obj.changelog.length > 0 && { changelog: obj.changelog }),
 			...(typeof obj.recentChanges === "string" && obj.recentChanges && { recentChanges: obj.recentChanges }),
 			...(typeof obj.priorTriggers === "string" && obj.priorTriggers && { priorTriggers: obj.priorTriggers }),
+			...(Array.isArray(obj.affectedPolicies) &&
+				obj.affectedPolicies.length > 0 && { affectedPolicies: obj.affectedPolicies }),
+			...(typeof obj.changelogTotal === "number" && obj.changelogTotal > 0 && { changelogTotal: obj.changelogTotal }),
 		});
 		return true;
 	}
