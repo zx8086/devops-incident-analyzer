@@ -11596,8 +11596,18 @@ export async function teardownIac(state: IacStateType): Promise<Partial<IacState
 	// consumer is the durable-memory breadcrumb built earlier in this same function.
 	// SIO-1475: "renovate-status-check" (the "check again" follow-up) routes straight to
 	// watchRenovateMr too, so it ends the turn the same way -- same short-circuit applies.
+	// Greptile round 2 (PR #671): clear renovateInFlightMarker HERE, once teardown has finished
+	// using it (the breadcrumb + durable fact above already ran) -- not in watchRenovateMr's
+	// success return, which cleared it too early for teardown to see it (round 1's fix moved the
+	// clear out of watchRenovateMr entirely, but forgot to put it anywhere else: with no clear at
+	// all, a resolved trigger's marker persisted on the thread forever, since it's deliberately
+	// excluded from TURN_START_RESET -- live-repro'd: a later, wholly unrelated status-check-
+	// shaped message on the same thread was silently rerouted into renovate-status-check months
+	// after the original trigger resolved). Only clear when an MR was actually found
+	// (state.renovateMrUrl set) -- a "still no MR yet" turn must leave the marker set so the
+	// NEXT "check again" can still resume watching.
 	if (isRenovateTeardownIntent(state.intent)) {
-		return {};
+		return state.renovateMrUrl ? { renovateInFlightMarker: null } : {};
 	}
 	if (state.reviewDecision === "rejected") {
 		return { messages: [new AIMessage("Plan rejected. No MR opened. Nothing was applied.")] };

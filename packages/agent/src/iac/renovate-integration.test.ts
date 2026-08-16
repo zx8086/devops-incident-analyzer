@@ -337,10 +337,17 @@ describe("teardownIac renovate-status-check branch (SIO-1475)", () => {
 		triggerAtIso: new Date().toISOString(),
 	};
 
-	// Site 3: the final summary short-circuit must return {} for renovate-status-check exactly
-	// like renovate-integration-update -- watchRenovateMr already set the terminal message on
-	// state.messages before teardownIac ran, so the generic gitops fallback must not fire.
-	test("returns {} (no new messages) for a renovate-status-check turn", async () => {
+	// Site 3: the final summary short-circuit must never fall through to the generic gitops
+	// fallback for renovate-status-check, exactly like renovate-integration-update --
+	// watchRenovateMr already set the terminal message on state.messages before teardownIac ran,
+	// so no new message may be added here. Greptile round 2 (PR #671): once an MR was found,
+	// this same short-circuit is ALSO responsible for clearing renovateInFlightMarker (round 1's
+	// fix removed the premature clear from watchRenovateMr but left nothing to clear it at all --
+	// a resolved trigger's marker would otherwise persist on the thread forever, since it is
+	// deliberately excluded from TURN_START_RESET, silently hijacking any later unrelated
+	// status-check-shaped message). So the correct return here is `{ renovateInFlightMarker:
+	// null }`, not a bare `{}`.
+	test("returns no new messages, and clears renovateInFlightMarker, for a renovate-status-check turn with an MR found", async () => {
 		mock.module("../memory-writer.ts", () => ({
 			appendDailyLog: () => {},
 			recordKeyDecision: () => {},
@@ -360,7 +367,35 @@ describe("teardownIac renovate-status-check branch (SIO-1475)", () => {
 			renovateMrUrl: "https://gitlab.example/x/-/merge_requests/518",
 		} as unknown as IacStateType);
 
+		expect(out).toEqual({ renovateInFlightMarker: null });
+		expect(out.messages).toBeUndefined();
+	});
+
+	// Companion negative case: no MR found yet -> the marker must stay set (absent from the
+	// partial update, meaning the checkpointed value is left unchanged) so a LATER "check again"
+	// can still resume watching for it.
+	test("leaves renovateInFlightMarker untouched for a renovate-status-check turn with no MR found yet", async () => {
+		mock.module("../memory-writer.ts", () => ({
+			appendDailyLog: () => {},
+			recordKeyDecision: () => {},
+		}));
+		mock.module("../memory-backend.ts", () => ({
+			selectedBackend: () => "file",
+			recallInFlightFleetUpgrades: async () => [],
+			searchAgentMemory: async () => [],
+			dedupeHitsBy: <T>(hits: T[]) => hits,
+		}));
+		const { teardownIac } = await import("./nodes.ts");
+		const out = await teardownIac({
+			requestId: "req-1",
+			threadId: "thread-abc",
+			intent: "renovate-status-check",
+			renovateInFlightMarker: inFlightMarker,
+			renovateMrUrl: "",
+		} as unknown as IacStateType);
+
 		expect(out).toEqual({});
+		expect("renovateInFlightMarker" in out).toBe(false);
 	});
 
 	// Site 1: the daily-log breadcrumb must build the marker= string from renovateInFlightMarker
@@ -1985,7 +2020,7 @@ describe("watchRenovateMr falls back to renovateInFlightMarker (SIO-1475)", () =
 		} as unknown as IacStateType;
 
 		const watchOut = await freshWatchRenovateMr(turnStart);
-		await teardownIac({ ...turnStart, ...watchOut } as IacStateType);
+		const teardownOut = await teardownIac({ ...turnStart, ...watchOut } as IacStateType);
 
 		expect(capturedDecision).toContain("ap-cld");
 		expect(capturedDecision).toContain("renovate/ap-cld-udp");
@@ -1993,6 +2028,16 @@ describe("watchRenovateMr falls back to renovateInFlightMarker (SIO-1475)", () =
 		expect(capturedDecision).not.toContain("an Elastic deployment");
 		expect(capturedAnnotations?.deployment).toBe("ap-cld");
 		expect(capturedAnnotations?.marker).toBe("renovate/ap-cld-udp");
+
+		// Greptile round 2 (PR #671): after the full watchRenovateMr -> teardownIac chain
+		// completes with an MR found, renovateInFlightMarker must end up cleared -- otherwise a
+		// resolved trigger's marker persists on the thread forever (it is deliberately excluded
+		// from TURN_START_RESET) and can hijack a later, wholly unrelated status-check-shaped
+		// message via classifyIacIntent's guard. Live-repro'd before this fix: a message like "any
+		// update on the eu-b2b cluster health?" sent long after this trigger resolved was
+		// incorrectly classified as renovate-status-check.
+		const finalState = { ...turnStart, ...watchOut, ...teardownOut };
+		expect(finalState.renovateInFlightMarker).toBeNull();
 	});
 });
 
