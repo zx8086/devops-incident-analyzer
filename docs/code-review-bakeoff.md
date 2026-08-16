@@ -272,3 +272,33 @@ Three review rounds on a diagnostics fix: 4 files (+283/-5) round 1, (+121/-1) r
 3. *A bot catching the author overclaiming in the PR description.* The round-1 P1 falsified a specific claim in the PR body ("catches wrong-account keys"). Worth noting that review value is not only about code -- it caught a description that would have misled a future reader of the merge commit.
 4. *Verify-before-apply, third consecutive entry.* Every accepted finding was reproduced first (real STS call for wrong-account, live `TypeError` for the crash) and the declined one was argued from properties of the actual data path. Two of the three fixes were shaped differently than the bot's suggested framing implied.
 5. *Fail-open is the recurring anti-pattern.* Both Greptile P1s were the same underlying mistake in different clothes: a check reporting "ok" for a verification that never ran. That is exactly the defect SIO-1477 was filed to remove, which suggests it is a shape worth grepping for elsewhere in the readiness code.
+
+## PR #673 detail (SIO-1478, gitlabFetch timeout + probe classification)
+
+Three rounds on a small resilience fix: 4 files (+190/-2) round 1, (+94/-11) round 2, (+27/-10) round 3. **First entry in this ledger where the two bots CONVERGED on the same defect independently** -- and also the round where CodeRabbit's suggestion was materially better than the author's own fix.
+
+**Origin:** `elastic-iac-mcp` was logged as `MCP server down ... identity unreachable: aborted due to timeout` while healthy. The line before it: `tools/call ok gitlab_list_merge_requests_by_source_branch durationMs: 136597` -- 136.6s against 227/236/263/243/336ms for the five preceding invocations of the same tool. `gitlabFetch` issued a bare `fetch()` with no `AbortSignal` (20 call sites, zero timeouts anywhere in that server), and because the server runs one event loop, a stalled GitLab call starved the agent's `/identity` probe (1s budget, tighter than `/health`'s 2s -- which is why health passed and identity failed).
+
+**Round 1 (`eb381bf6`):** 30s default timeout at the shared helper, plus `describeProbeFailure` distinguishing timeout ("may be alive but blocked") from refusal ("unreachable").
+
+- **CI Typecheck: FAILURE** -- three zero-arg `fetch` mocks cast straight to `typeof fetch` (TS2352). Author error, and instructive: the local gate had been read by grepping output for error strings instead of checking the **exit code**, so a real failure was reported as clean. Switched to exit-code checks, which is how the subsequent passes were confirmed.
+- Greptile: **4/5**, two findings. (a) `parseInt` stops at the first non-digit, so `ELASTIC_IAC_GITLAB_TIMEOUT_MS=30s` silently became a **30 millisecond** deadline and `30_000` became 30ms -- both plausible operator input, both converting the new safety net into a guaranteed failure. (b) When the caller supplies its own signal, the helper's timeout is never armed, so reporting `timed out after 30000ms` asserted a deadline that never existed.
+- CodeRabbit: `CHANGES_REQUESTED`, three findings -- **independently including the same caller-cancellation bug** ("Report caller cancellation as an abort"), plus a stricter version of the parsing finding, plus a test-hygiene issue Greptile missed (`delete Bun.env...` unconditionally removes a key the test process may have supplied).
+
+**Triage, all five verified before acting:**
+
+- *Unit-bearing timeout -- fixed.* Repro'd the exact silent-tiny-deadline behaviour across `"30s"`, `"30_000"`, `"1e4"` before changing anything.
+- *Caller cancellation -- fixed.* Live-repro'd that a caller abort surfaces as `AbortError`, indistinguishable from the timeout path. Notable that this is the same class of false claim SIO-1477 and SIO-1478 themselves exist to remove -- the fix had reproduced the bug it was fixing.
+- *`readPositiveIntEnv` (CodeRabbit) -- fixed, and better than the author's fix.* Round 2 hand-rolled a `/^\d+$/` guard; CodeRabbit pointed at the repo's existing canonical tunable reader. Verified the shared helper directly: `"30s"`, `"30_000"`, `"1.5"`, `"50ms"`, `"0"`, `"-5"` all fall back while `"75"` is accepted -- and it **logs** invalid input rather than falling back silently, which the hand-rolled version did not. Strictly better; replaced.
+- *Test env restore (CodeRabbit) -- fixed.* Captured once and restored in `afterEach` rather than unconditionally deleted.
+
+**Round 3 (`4d039435`):** Greptile **5/5**, CodeRabbit `APPROVED`, all 5 threads resolved, `reviewDecision: APPROVED`.
+
+**Explicitly left unsolved:** why the call took 136s. The tool is a single GitLab GET with no retry loop, driven by a poll loop at `iac/nodes.ts:978` (90s budget / 10s interval), so GitLab-side throttling of the repeated identical query is the leading hypothesis but is unproven. Recorded as out of scope in both the ticket and the PR body rather than implying the root cause was closed; the new timeout message will make a recurrence obvious.
+
+**Takeaways:**
+
+1. *First convergence.* Both bots independently found the caller-cancellation mislabel on the same commit. Previous entries (#670, #672) showed zero overlap; this one shows the overlap is real but partial -- each still carried findings the other missed (Greptile: none unique this round; CodeRabbit: test-hygiene + the `readPositiveIntEnv` pointer).
+2. *CodeRabbit's repo-awareness beat a hand-rolled fix.* Its "use `readPositiveIntEnv()`" note cited repo learnings and pointed at an existing helper the author had duplicated worse. This is a different KIND of value from Greptile's correctness findings -- convention/reuse rather than defect detection -- and is the strongest argument yet for keeping it alongside.
+3. *A green local gate is not a green CI gate.* The round-1 typecheck failure was invisible locally because the check was grepped rather than exit-coded. Second occurrence this session of local verification being weaker than CI's; exit codes are the only reliable signal.
+4. *The fix reproduced its own bug class.* Both the "timed out after Nms" mislabel and the tiny-deadline parse were instances of "assert something that did not happen" -- exactly what SIO-1477/1478 were filed to remove. Worth watching for in any change whose subject is diagnostics.

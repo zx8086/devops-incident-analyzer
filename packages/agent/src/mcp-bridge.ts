@@ -535,6 +535,20 @@ function probeErrorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
 
+// SIO-1478: a probe timeout and a refused connection both used to read
+// "<tier> unreachable: ...", but they call for opposite responses: a refusal
+// means the process is gone (restart it), a timeout usually means the process
+// is alive and BLOCKED (find the slow call). Observed live: a 136s GitLab tool
+// call on elastic-iac-mcp starved the 1s /identity probe, and the server was
+// reported "down" while it was serving traffic normally either side of it.
+function describeProbeFailure(tier: string, err: unknown): string {
+	const message = probeErrorMessage(err);
+	if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
+		return `${tier} timed out (server may be alive but blocked by a long-running call): ${message}`;
+	}
+	return `${tier} unreachable: ${message}`;
+}
+
 async function probeServer(name: string, url: string): Promise<ProbeResult> {
 	const baseUrl = url.replace(/\/mcp$/, "");
 
@@ -543,7 +557,7 @@ async function probeServer(name: string, url: string): Promise<ProbeResult> {
 		const r = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(2_000) });
 		if (!r.ok) return { state: "down", reason: `health returned ${r.status}` };
 	} catch (err) {
-		return { state: "down", reason: `health unreachable: ${probeErrorMessage(err)}` };
+		return { state: "down", reason: describeProbeFailure("health", err) };
 	}
 
 	// Tier 2: identity (1s budget)
@@ -553,7 +567,7 @@ async function probeServer(name: string, url: string): Promise<ProbeResult> {
 		if (!r.ok) return { state: "down", reason: `identity returned ${r.status}` };
 		card = (await r.json()) as IdentityCard;
 	} catch (err) {
-		return { state: "down", reason: `identity unreachable: ${probeErrorMessage(err)}` };
+		return { state: "down", reason: describeProbeFailure("identity", err) };
 	}
 
 	// Seed on first probe; subsequent probes compare against the seeded card.
@@ -885,8 +899,11 @@ export function stopHealthPolling(): void {
 // SIO-680/682: exported for testing only. Do not import from production code.
 // SIO-774: same test-only export pattern for the per-server connect-timeout helper.
 // SIO-782: pollServerHealth + serverUrls + unreadyStreak exposed for debounce tests.
+// SIO-1478: describeProbeFailure exposed so the busy-vs-gone distinction is
+// asserted directly rather than through a live probe.
 export {
 	connectTimeoutFor as _connectTimeoutForTest,
+	describeProbeFailure as _describeProbeFailureForTest,
 	toolTimeoutFor as _toolTimeoutForTest,
 	withTimeout as _withTimeoutForTest,
 };
