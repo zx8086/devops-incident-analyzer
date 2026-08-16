@@ -322,6 +322,9 @@ export interface RenovateTriggerChoice {
 	// own recentChanges/priorUpgrades fields.
 	recentChanges?: string;
 	priorTriggers?: string;
+	// SIO-1475: deployment-wide (any integration) Renovate-trigger history, distinct from
+	// priorTriggers above (which is scoped to this exact integration/marker).
+	deploymentHistory?: string;
 	// SIO-1473: real affected-policy names + the pre-cap changelog entry count.
 	affectedPolicies?: string[];
 	changelogTotal?: number;
@@ -853,6 +856,7 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 					changelog: event.changelog,
 					recentChanges: event.recentChanges,
 					priorTriggers: event.priorTriggers,
+					deploymentHistory: event.deploymentHistory,
 					affectedPolicies: event.affectedPolicies,
 					changelogTotal: event.changelogTotal,
 				},

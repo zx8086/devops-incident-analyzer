@@ -1265,6 +1265,9 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		// gate's recentChanges/priorUpgrades fields (this sub-flow's own twin of that same pattern).
 		recentChanges: z.string().optional(),
 		priorTriggers: z.string().optional(),
+		// SIO-1475: deployment-wide (any integration) Renovate-trigger history, distinct from
+		// priorTriggers above (which is scoped to this exact integration/marker).
+		deploymentHistory: z.string().optional(),
 		// SIO-1473: real affected-policy names (from a second Kibana Fleet call) + the pre-cap
 		// changelog entry count, so the card can render a policy-names section and an honest
 		// "+N more releases" note.

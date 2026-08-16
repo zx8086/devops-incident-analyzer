@@ -669,7 +669,7 @@ export async function enrichRenovateTarget(state: IacStateType): Promise<Partial
 
 	const CHANGELOG_DISPLAY_CAP = 10;
 	let changelogTotal = 0;
-	const [changelog, renovateRecentChanges, renovatePriorTriggers] = await Promise.all([
+	const [changelog, renovateRecentChanges, renovatePriorTriggers, renovateDeploymentHistory] = await Promise.all([
 		(async () => {
 			if (!resolvedTargetVersion) return [];
 			const filtered = filterChangelogRange(
@@ -682,6 +682,7 @@ export async function enrichRenovateTarget(state: IacStateType): Promise<Partial
 		})(),
 		recallDeploymentKgChanges(target.deployment),
 		recallPriorRenovateTriggers(target.deployment, marker.marker),
+		recallPriorRenovateTriggersForDeployment(target.deployment),
 	]);
 
 	return {
@@ -691,6 +692,7 @@ export async function enrichRenovateTarget(state: IacStateType): Promise<Partial
 		renovateChangelog: changelog,
 		renovateRecentChanges,
 		renovatePriorTriggers,
+		renovateDeploymentHistory,
 		renovateAffectedPolicies: affectedPolicies,
 		renovateChangelogTotal: changelogTotal,
 	};
@@ -818,6 +820,7 @@ export function renovateTriggerGate(state: IacStateType): Partial<IacStateType> 
 		changelog: state.renovateChangelog,
 		recentChanges: state.renovateRecentChanges,
 		priorTriggers: state.renovatePriorTriggers,
+		deploymentHistory: state.renovateDeploymentHistory,
 		affectedPolicies: state.renovateAffectedPolicies,
 		changelogTotal: state.renovateChangelogTotal,
 	}) as { approve?: boolean };
@@ -892,7 +895,31 @@ export async function triggerRenovateUpdate(state: IacStateType): Promise<Partia
 	// never claims success ahead of the real outcome.
 	await dispatchCustomEvent("iac_pipeline_progress", { pipelineId: null, status: "renovate: triggered" });
 
-	return { renovateTriggerAtIso: triggerAtIso };
+	// SIO-1475: durable marker for a later "check again" turn to resume watching, since
+	// renovateMarker/renovateTriggerAtIso are both turn-scoped (TURN_START_RESET) and will be
+	// null by the time a follow-up turn's classifyIacIntent guard needs to route back here.
+	const inFlight = {
+		deployment: state.renovateTarget?.deployment ?? "",
+		marker: marker.marker,
+		line: marker.line,
+		triggerAtIso,
+	};
+
+	// SIO-1475: one KG ConfigChange write per trigger, here (not in watchRenovateMr) so a
+	// later "check again" re-poll never writes a duplicate node for the same logical trigger --
+	// mirrors exactly where the fleet-upgrade lane's own write happens (nodes.ts:12749, after
+	// dispatch, not after each subsequent poll). mrUrl is intentionally omitted -- it is not
+	// known yet at trigger time; see the design spec's explicit "what this does NOT do" note.
+	await recordLaneConfigChange({
+		id: state.requestId,
+		deployment: inFlight.deployment,
+		workflow: "renovate",
+		outcome: "proposed",
+		summary: `renovate ${inFlight.deployment} -> ${marker.marker}`,
+		threadId: state.threadId || undefined,
+	});
+
+	return { renovateTriggerAtIso: triggerAtIso, renovateInFlightMarker: inFlight };
 }
 
 // gitlab_list_merge_requests_by_source_branch returns a raw GitLab MR array, newest
@@ -934,7 +961,7 @@ export function parseFirstOpenMrUrl(raw: string, sinceIso?: string): string | nu
 // but polling for MR EXISTENCE by source branch rather than an existing pipeline's
 // terminal status.
 export async function watchRenovateMr(state: IacStateType): Promise<Partial<IacStateType>> {
-	const marker = state.renovateMarker;
+	const marker = state.renovateMarker ?? state.renovateInFlightMarker;
 	if (!marker) return {};
 
 	const budgetMs = readPositiveMsEnv("IAC_PIPELINE_POLL_BUDGET_MS", 90000, log);
@@ -944,13 +971,26 @@ export async function watchRenovateMr(state: IacStateType): Promise<Partial<IacS
 	// Greptile round 2 (PR #663): require the found MR's updated_at to be at or after this
 	// run's own trigger instant, so a stale MR left open on the same reused branch from an
 	// earlier trigger is never reported as this run's result.
-	const sinceIso = state.renovateTriggerAtIso || undefined;
+	// SIO-1475: renovateTriggerAtIso is also turn-scoped -- fall back to the durable marker's
+	// own triggerAtIso on a re-check turn where the turn-scoped field has already been reset.
+	const sinceIso = state.renovateTriggerAtIso || state.renovateInFlightMarker?.triggerAtIso || undefined;
 
 	while (Date.now() < deadline) {
 		const listRes = await callTool("gitlab_list_merge_requests_by_source_branch", { sourceBranch });
 		const mrUrl = parseFirstOpenMrUrl(listRes, sinceIso);
 		if (mrUrl) {
 			await dispatchCustomEvent("iac_pipeline_progress", { pipelineId: null, status: "renovate: MR created" });
+			// Greptile (PR #671): do NOT clear renovateInFlightMarker here -- teardownIac (this
+			// node's only successor) still needs it this same turn to build the daily-log
+			// breadcrumb and the durable renovate-trigger memory fact (both fall back to
+			// renovateInFlightMarker when the turn-scoped renovateMarker/renovateTarget are
+			// already null). Clearing it in this return meant teardownIac saw it as null on the
+			// very success path where a real MR was just found, so the fact was written with
+			// placeholder text ("an outdated dependency"/"an Elastic deployment") and no
+			// deployment/marker annotations -- live-repro'd before this fix. TURN_START_RESET
+			// already nulls this field at the start of the NEXT turn regardless, so leaving it
+			// set here is not a leak; a later "check again" would be moot anyway once an MR
+			// exists (there's nothing left to poll for).
 			return {
 				renovateMrUrl: mrUrl,
 				messages: [new AIMessage(`Renovate opened the update MR: ${mrUrl}`)],
@@ -1375,6 +1415,7 @@ export function intentFromText(
 	| "synthetics-drift"
 	| "fleet-upgrade"
 	| "renovate-integration-update"
+	| "renovate-status-check"
 	| "converse" {
 	const r = raw.toLowerCase();
 	if (r.includes("pipeline-status") || r.includes("pipeline_status")) return "pipeline-status";
@@ -1431,6 +1472,39 @@ export function looksLikeFleetStatusCheck(text: string): boolean {
 		"update on",
 		"still running",
 		"rollout",
+	];
+	return STATUS_CUES.some((cue) => r.includes(cue));
+}
+
+// SIO-1475: the renovate-lane twin of looksLikeFleetStatusCheck (nodes.ts:1409) -- reused cue
+// list plus two phrasings this bug's own repro used verbatim ("check again", "ask again"),
+// since triggerRenovateUpdate's own "no MR yet" message (nodes.ts:966) explicitly suggests
+// "Ask me to check again in a minute." (Pure; unit-tested.)
+export function looksLikeRenovateStatusCheck(text: string): boolean {
+	const r = text.toLowerCase();
+	if (/\b\d+\.\d+(\.\d+)?\b/.test(r)) return false;
+	const STATUS_CUES = [
+		"how is",
+		"how's",
+		"hows",
+		"how are",
+		"how far",
+		"status",
+		"progress",
+		"check on",
+		"check it",
+		"check again",
+		"ask again",
+		"watch the pipeline",
+		"watch it",
+		"going",
+		"done yet",
+		"is it done",
+		"finished",
+		"complete",
+		"any update",
+		"update on",
+		"still running",
 	];
 	return STATUS_CUES.some((cue) => r.includes(cue));
 }
@@ -1584,6 +1658,18 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 		);
 		return { intent: "pipeline-status" };
 	}
+	// SIO-1475: the renovate-lane twin of the fleetApplyPipelineId guard immediately above --
+	// same rationale (SIO-928): a Renovate trigger with no MR found yet has no reliable way for
+	// the LLM classifier to recognize "check again" as a continuation rather than a fresh
+	// request, since renovateTarget/renovateMarker are turn-scoped and already null by now.
+	// renovateInFlightMarker survives TURN_START_RESET specifically so this guard can fire.
+	if (state.renovateInFlightMarker != null && looksLikeRenovateStatusCheck(query)) {
+		log.info(
+			{ query, renovateInFlightMarker: state.renovateInFlightMarker },
+			"iac intent: renovate-status guard -> renovate-status-check",
+		);
+		return { intent: "renovate-status-check" };
+	}
 	// SIO-990: a CORRECTION to the change already proposed this session enters the amend lane, which
 	// re-commits onto the SAME branch (updating the existing MR in place) instead of proposing from
 	// scratch. Gated on an existing activeChange.branch so a first-turn message can never be an amend.
@@ -1706,6 +1792,7 @@ export const TURN_START_RESET = {
 	renovatePolicyCount: null,
 	renovateChangelog: [] as ChangelogEntry[],
 	renovateRecentChanges: "",
+	renovateDeploymentHistory: "",
 	renovatePriorTriggers: "",
 	renovateAffectedPolicies: [] as string[],
 	renovateChangelogTotal: 0,
@@ -11036,9 +11123,18 @@ export function buildRenovateFactDecision(state: IacStateType): string {
 	// nodes never set state.targetDeployment (only drift/gitops/fleet-upgrade write it) --
 	// extractRenovateTarget sets state.renovateTarget.deployment instead, so that must come
 	// first or the real path always falls through to the generic placeholder.
+	// SIO-1475: on a "renovate-status-check" turn (routed straight to watchRenovateMr),
+	// renovateTarget is ALSO turn-scoped and null -- only the durable renovateInFlightMarker
+	// survives across turns, so it is checked first as the most specific/authoritative source
+	// when present, ahead of the turn-scoped fields that are only populated on the original
+	// "renovate-integration-update" turn.
 	const dep =
-		state.renovateTarget?.deployment || state.targetDeployment || state.iacRequest?.cluster || "an Elastic deployment";
-	const marker = state.renovateMarker?.marker ?? "an outdated dependency";
+		state.renovateInFlightMarker?.deployment ||
+		state.renovateTarget?.deployment ||
+		state.targetDeployment ||
+		state.iacRequest?.cluster ||
+		"an Elastic deployment";
+	const marker = state.renovateMarker?.marker ?? state.renovateInFlightMarker?.marker ?? "an outdated dependency";
 	const mrUrl = state.renovateMrUrl;
 	return `Renovate update triggered on ${dep} for '${marker}': MR opened at ${mrUrl}.`;
 }
@@ -11048,9 +11144,16 @@ export function buildRenovateFactDecision(state: IacStateType): string {
 // same deployment/mr_url join keys.
 export function buildRenovateFactAnnotations(state: IacStateType): AnnotationMap {
 	const a: AnnotationMap = { kind: "renovate-trigger" };
-	const dep = state.renovateTarget?.deployment || state.targetDeployment || state.iacRequest?.cluster;
+	// SIO-1475: same renovateInFlightMarker fallback as buildRenovateFactDecision above -- the
+	// durable marker is the only source of deployment/marker on a "renovate-status-check" turn.
+	const dep =
+		state.renovateInFlightMarker?.deployment ||
+		state.renovateTarget?.deployment ||
+		state.targetDeployment ||
+		state.iacRequest?.cluster;
 	if (dep) a.deployment = dep;
-	if (state.renovateMarker?.marker) a.marker = state.renovateMarker.marker;
+	const marker = state.renovateMarker?.marker ?? state.renovateInFlightMarker?.marker;
+	if (marker) a.marker = marker;
 	if (state.renovateMrUrl) a.mr_url = state.renovateMrUrl;
 	return a;
 }
@@ -11325,6 +11428,14 @@ function iacClosingLine(state: IacStateType): string {
 	return `Review and apply manually in GitLab. ${merge}`;
 }
 
+// SIO-1475: teardownIac gates renovate-specific behavior on the sub-flow's intent in three
+// places. "renovate-status-check" (the "check again" follow-up, routed straight to
+// watchRenovateMr) must be treated identically to "renovate-integration-update" at every one
+// of those gates -- extracted once so the three sites can't drift out of sync again.
+function isRenovateTeardownIntent(intent: IacStateType["intent"]): boolean {
+	return intent === "renovate-integration-update" || intent === "renovate-status-check";
+}
+
 export async function teardownIac(state: IacStateType): Promise<Partial<IacStateType>> {
 	// SIO-938: record one durable breadcrumb per completed IaC job under the
 	// elastic-iac Agent Memory user (closes the SOUL.md "I write back after every
@@ -11349,8 +11460,12 @@ export async function teardownIac(state: IacStateType): Promise<Partial<IacState
 		// "intent=renovate-integration-update" breadcrumb. Add the resolved marker + the
 		// Renovate-created MR link (when watchRenovateMr found one) so the durable-memory
 		// breadcrumb for this intent is actually recallable.
-		if (state.intent === "renovate-integration-update") {
-			if (state.renovateMarker) summaryParts.push(`marker=${state.renovateMarker.marker}`);
+		// SIO-1475: also covers the "renovate-status-check" follow-up intent -- its turn-scoped
+		// state.renovateMarker is null (reset every turn), so fall back to the durable
+		// renovateInFlightMarker the same way watchRenovateMr already does.
+		if (isRenovateTeardownIntent(state.intent)) {
+			const renovateMarker = state.renovateMarker ?? state.renovateInFlightMarker;
+			if (renovateMarker) summaryParts.push(`marker=${renovateMarker.marker}`);
 			if (state.renovateMrUrl) summaryParts.push(`MR=${state.renovateMrUrl}`);
 		}
 		const services = cluster ? [cluster] : isFleet && state.targetDeployment ? [state.targetDeployment] : [];
@@ -11368,14 +11483,20 @@ export async function teardownIac(state: IacStateType): Promise<Partial<IacState
 		// Gated the same way as the other two durable facts: agent-memory backend only (file
 		// backend durable learnings stay PR-gated), and only once an MR actually exists (a trigger
 		// that hasn't produced an MR yet has nothing settled worth recalling).
-		if (state.intent === "renovate-integration-update" && state.renovateMrUrl && selectedBackend() === "agent-memory") {
+		// SIO-1475: also covers "renovate-status-check" -- the MR is most likely to first be found
+		// on exactly this "check again" turn, since that is the whole purpose of the follow-up.
+		if (isRenovateTeardownIntent(state.intent) && state.renovateMrUrl && selectedBackend() === "agent-memory") {
 			recordKeyDecision({
 				requestId: state.requestId,
 				decision: buildRenovateFactDecision(state),
 				annotations: buildRenovateFactAnnotations(state),
 			});
 			log.info(
-				{ deployment: state.targetDeployment, marker: state.renovateMarker?.marker, mrUrl: state.renovateMrUrl },
+				{
+					deployment: state.targetDeployment,
+					marker: (state.renovateMarker ?? state.renovateInFlightMarker)?.marker,
+					mrUrl: state.renovateMrUrl,
+				},
 				"teardownIac: recorded durable renovate-trigger fact",
 			);
 		}
@@ -11473,8 +11594,20 @@ export async function teardownIac(state: IacStateType): Promise<Partial<IacState
 	// `state.mrUrl ? ... : "MR step complete."` check always hit the no-MR branch). The user
 	// reaches the MR link only via watchRenovateMr's own AIMessage; state.renovateMrUrl's only
 	// consumer is the durable-memory breadcrumb built earlier in this same function.
-	if (state.intent === "renovate-integration-update") {
-		return {};
+	// SIO-1475: "renovate-status-check" (the "check again" follow-up) routes straight to
+	// watchRenovateMr too, so it ends the turn the same way -- same short-circuit applies.
+	// Greptile round 2 (PR #671): clear renovateInFlightMarker HERE, once teardown has finished
+	// using it (the breadcrumb + durable fact above already ran) -- not in watchRenovateMr's
+	// success return, which cleared it too early for teardown to see it (round 1's fix moved the
+	// clear out of watchRenovateMr entirely, but forgot to put it anywhere else: with no clear at
+	// all, a resolved trigger's marker persisted on the thread forever, since it's deliberately
+	// excluded from TURN_START_RESET -- live-repro'd: a later, wholly unrelated status-check-
+	// shaped message on the same thread was silently rerouted into renovate-status-check months
+	// after the original trigger resolved). Only clear when an MR was actually found
+	// (state.renovateMrUrl set) -- a "still no MR yet" turn must leave the marker set so the
+	// NEXT "check again" can still resume watching.
+	if (isRenovateTeardownIntent(state.intent)) {
+		return state.renovateMrUrl ? { renovateInFlightMarker: null } : {};
 	}
 	if (state.reviewDecision === "rejected") {
 		return { messages: [new AIMessage("Plan rejected. No MR opened. Nothing was applied.")] };
@@ -12286,6 +12419,26 @@ export async function recallPriorRenovateTriggers(deployment: string, marker: st
 		log.warn(
 			{ error: error instanceof Error ? error.message : String(error), deployment, marker },
 			"iac renovate trigger: prior-trigger recall failed; continuing without it",
+		);
+		return "";
+	}
+}
+
+// SIO-1475: the deployment-wide twin of recallPriorRenovateTriggers immediately above -- mirrors
+// recallPriorFleetUpgrades exactly: same deployment-only filter shape, no marker/version narrowing,
+// so a deployment's Renovate history across ALL integrations surfaces, not just the one currently
+// pending. Reuses renderRenovateLearnings unchanged.
+export async function recallPriorRenovateTriggersForDeployment(deployment: string): Promise<string> {
+	if (selectedBackend() !== "agent-memory" || !deployment) return "";
+	try {
+		const hits = await searchAgentMemory("elastic-iac", "", { deployment, kind: "renovate-trigger" }, 8, {
+			deterministic: true,
+		});
+		return renderRenovateLearnings(hits);
+	} catch (error) {
+		log.warn(
+			{ error: error instanceof Error ? error.message : String(error), deployment },
+			"iac renovate trigger: deployment-wide prior-trigger recall failed; continuing without it",
 		);
 		return "";
 	}

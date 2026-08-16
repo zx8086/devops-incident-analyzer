@@ -45,6 +45,9 @@ export const DEFAULT_BY_INTENT: Record<IacIntent, readonly string[]> = {
 	"fleet-upgrade": ALL_LIVE_CATEGORIES,
 	"pipeline-status": ALL_LIVE_CATEGORIES,
 	"renovate-integration-update": ALL_LIVE_CATEGORIES,
+	// SIO-1475: routes straight to watchRenovateMr, which -- like the pipeline-status/drift/
+	// fleet-upgrade/synthetics-drift entries above -- builds no knowledge-bearing prompt at all.
+	"renovate-status-check": ALL_LIVE_CATEGORIES,
 };
 
 // Narrow agent.knowledge to the selected categories.

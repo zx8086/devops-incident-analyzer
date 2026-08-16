@@ -50,6 +50,7 @@ export const INTENT_VALUES = [
 	"synthetics-drift",
 	"fleet-upgrade",
 	"renovate-integration-update",
+	"renovate-status-check",
 	"converse",
 ] as const;
 
@@ -793,6 +794,15 @@ export const IacState = Annotation.Root({
 	}),
 	renovateCandidates: Annotation<Array<{ marker: string; line: string }>>({ reducer: last, default: () => [] }),
 	renovateMarker: Annotation<{ marker: string; line: string } | null>({ reducer: last, default: () => null }),
+	// SIO-1475: durable, cross-turn "a Renovate trigger is in flight, no MR found yet" marker --
+	// the Renovate-lane twin of fleetApplyPipelineId (SIO-928). Deliberately NOT reset by
+	// TURN_START_RESET (see that object's own comment) so a later turn's classifyIacIntent guard
+	// can route a "check again" follow-up straight to watchRenovateMr instead of re-extracting.
+	// Set by triggerRenovateUpdate on a successful trigger; cleared by watchRenovateMr once the
+	// MR is found.
+	renovateInFlightMarker: Annotation<{ deployment: string; marker: string; line: string; triggerAtIso: string } | null>(
+		{ reducer: last, default: () => null },
+	),
 	renovateTriggerApproved: Annotation<boolean | null>({ reducer: last, default: () => null }),
 	renovateIssueIid: Annotation<number | null>({ reducer: last, default: () => null }),
 	renovateMrUrl: Annotation<string>({ reducer: last, default: () => "" }),
@@ -815,6 +825,9 @@ export const IacState = Annotation.Root({
 	// reads (this sub-flow bypasses graphEnrichIac/memoryEnrichIac exactly like fleet-upgrade does).
 	// Both best-effort -- "" when KG is disabled/empty or agent-memory isn't the selected backend.
 	renovateRecentChanges: Annotation<string>({ reducer: last, default: () => "" }),
+	// SIO-1475: deployment-wide (any integration) Renovate-trigger recall, distinct from
+	// renovatePriorTriggers (marker-scoped, "have we triggered THIS integration before").
+	renovateDeploymentHistory: Annotation<string>({ reducer: last, default: () => "" }),
 	renovatePriorTriggers: Annotation<string>({ reducer: last, default: () => "" }),
 	// SIO-1473: affected-policy names (Kibana Fleet package_policies call) + the pre-cap changelog
 	// entry count, so the card can show real policy names in a collapsed section and an honest
