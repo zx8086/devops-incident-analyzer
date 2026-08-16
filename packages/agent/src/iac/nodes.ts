@@ -980,9 +980,19 @@ export async function watchRenovateMr(state: IacStateType): Promise<Partial<IacS
 		const mrUrl = parseFirstOpenMrUrl(listRes, sinceIso);
 		if (mrUrl) {
 			await dispatchCustomEvent("iac_pipeline_progress", { pipelineId: null, status: "renovate: MR created" });
+			// Greptile (PR #671): do NOT clear renovateInFlightMarker here -- teardownIac (this
+			// node's only successor) still needs it this same turn to build the daily-log
+			// breadcrumb and the durable renovate-trigger memory fact (both fall back to
+			// renovateInFlightMarker when the turn-scoped renovateMarker/renovateTarget are
+			// already null). Clearing it in this return meant teardownIac saw it as null on the
+			// very success path where a real MR was just found, so the fact was written with
+			// placeholder text ("an outdated dependency"/"an Elastic deployment") and no
+			// deployment/marker annotations -- live-repro'd before this fix. TURN_START_RESET
+			// already nulls this field at the start of the NEXT turn regardless, so leaving it
+			// set here is not a leak; a later "check again" would be moot anyway once an MR
+			// exists (there's nothing left to poll for).
 			return {
 				renovateMrUrl: mrUrl,
-				renovateInFlightMarker: null,
 				messages: [new AIMessage(`Renovate opened the update MR: ${mrUrl}`)],
 			};
 		}

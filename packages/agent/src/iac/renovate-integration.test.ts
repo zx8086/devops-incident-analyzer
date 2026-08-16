@@ -1908,6 +1908,92 @@ describe("watchRenovateMr falls back to renovateInFlightMarker (SIO-1475)", () =
 		const out = await freshWatchRenovateMr({ renovateMarker: null, renovateInFlightMarker: null } as IacStateType);
 		expect(out).toEqual({});
 	});
+
+	// Greptile (PR #671): watchRenovateMr's ONLY graph successor is teardownIac (same turn, no
+	// intervening node), and teardownIac's daily-log breadcrumb + durable renovate-trigger fact
+	// both fall back to renovateInFlightMarker when renovateMarker is null (the exact shape of a
+	// renovate-status-check turn). If the MR-found success return cleared renovateInFlightMarker,
+	// teardownIac would see it as null on the very turn a real MR was just found, and the durable
+	// fact would be written with placeholder text instead of the real deployment/marker -- live
+	// repro'd via bun -e before this fix. TURN_START_RESET already nulls the field at the start of
+	// the NEXT turn regardless, so there is no leak risk in leaving it set through teardown.
+	test("does NOT clear renovateInFlightMarker on the MR-found success return (teardownIac needs it this same turn)", async () => {
+		mockRenovateTools({
+			gitlab_list_merge_requests_by_source_branch: () =>
+				`[200] [{"web_url":"https://gitlab.example/x/-/merge_requests/999","source_branch":"renovate/ap-cld-udp","updated_at":"${new Date().toISOString()}"}]`,
+		});
+		const { watchRenovateMr: freshWatchRenovateMr } = await import("./nodes.ts");
+
+		const inFlightMarker = {
+			deployment: "ap-cld",
+			marker: "renovate/ap-cld-udp",
+			line: " - [ ] <!-- unschedule-branch=renovate/ap-cld-udp -->chore(deps): [ap-cld] udp to v2.5.1",
+			triggerAtIso: new Date(Date.now() - 1000).toISOString(),
+		};
+		const state = {
+			renovateMarker: null,
+			renovateTriggerAtIso: "",
+			renovateInFlightMarker: inFlightMarker,
+		} as IacStateType;
+
+		const out = await freshWatchRenovateMr(state);
+
+		expect(out.renovateMrUrl).toBe("https://gitlab.example/x/-/merge_requests/999");
+		expect("renovateInFlightMarker" in out).toBe(false);
+	});
+
+	// Greptile (PR #671): end-to-end regression guard for the exact bug -- chains the real
+	// watchRenovateMr success return directly into the real teardownIac (matching graph.ts's own
+	// unconditional watchRenovateMr -> teardown edge), and asserts the durable fact records the
+	// REAL deployment/marker, not the placeholder fallback text. A future re-introduction of an
+	// early renovateInFlightMarker clear would make this test fail on the placeholder assertion.
+	test("watchRenovateMr success -> teardownIac records the real deployment/marker, not placeholder text", async () => {
+		mockRenovateTools({
+			gitlab_list_merge_requests_by_source_branch: () =>
+				`[200] [{"web_url":"https://gitlab.example/x/-/merge_requests/999","source_branch":"renovate/ap-cld-udp","updated_at":"${new Date().toISOString()}"}]`,
+		});
+		let capturedDecision: string | undefined;
+		let capturedAnnotations: Record<string, string> | undefined;
+		mock.module("../memory-writer.ts", () => ({
+			appendDailyLog: () => {},
+			recordKeyDecision: (entry: { decision: string; annotations?: Record<string, string> }) => {
+				capturedDecision = entry.decision;
+				capturedAnnotations = entry.annotations;
+			},
+		}));
+		mock.module("../memory-backend.ts", () => ({
+			selectedBackend: () => "agent-memory",
+			recallInFlightFleetUpgrades: async () => [],
+			searchAgentMemory: async () => [],
+			dedupeHitsBy: <T>(hits: T[]) => hits,
+		}));
+		const { watchRenovateMr: freshWatchRenovateMr, teardownIac } = await import("./nodes.ts");
+
+		const inFlightMarker = {
+			deployment: "ap-cld",
+			marker: "renovate/ap-cld-udp",
+			line: " - [ ] <!-- unschedule-branch=renovate/ap-cld-udp -->chore(deps): [ap-cld] udp to v2.5.1",
+			triggerAtIso: new Date(Date.now() - 1000).toISOString(),
+		};
+		const turnStart = {
+			requestId: "req-1",
+			threadId: "thread-abc",
+			intent: "renovate-status-check",
+			renovateMarker: null,
+			renovateTriggerAtIso: "",
+			renovateInFlightMarker: inFlightMarker,
+		} as unknown as IacStateType;
+
+		const watchOut = await freshWatchRenovateMr(turnStart);
+		await teardownIac({ ...turnStart, ...watchOut } as IacStateType);
+
+		expect(capturedDecision).toContain("ap-cld");
+		expect(capturedDecision).toContain("renovate/ap-cld-udp");
+		expect(capturedDecision).not.toContain("an outdated dependency");
+		expect(capturedDecision).not.toContain("an Elastic deployment");
+		expect(capturedAnnotations?.deployment).toBe("ap-cld");
+		expect(capturedAnnotations?.marker).toBe("renovate/ap-cld-udp");
+	});
 });
 
 describe("triggerRenovateUpdate records a KG ConfigChange (SIO-1475)", () => {
