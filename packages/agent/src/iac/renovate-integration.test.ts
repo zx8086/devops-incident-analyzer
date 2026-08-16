@@ -120,7 +120,10 @@ describe("renovateTriggerGate interrupt round-trip (SIO-1471)", () => {
 			renovateChangelog: [{ version: "2.9.4", changes: [{ description: "Add X", type: "enhancement" }] }],
 			renovateRecentChanges: "- [eu-onboarding] elastic_agent changed on 2026-08-01 (applied)",
 			renovatePriorTriggers: "- Renovate update triggered on eu-onboarding for 'renovate/eu-onboarding-elastic_agent'.",
-			renovateAffectedPolicies: ["eu-onboarding-agent-policy-1", "eu-onboarding-agent-policy-2"],
+			renovateAffectedPolicies: [
+				{ name: "eu-onboarding-agent-policy-1", agentCount: 42 },
+				{ name: "eu-onboarding-agent-policy-2", agentCount: 7 },
+			],
 			renovateChangelogTotal: 23,
 		};
 
@@ -140,7 +143,10 @@ describe("renovateTriggerGate interrupt round-trip (SIO-1471)", () => {
 			changelog: [{ version: "2.9.4", changes: [{ description: "Add X", type: "enhancement" }] }],
 			recentChanges: "- [eu-onboarding] elastic_agent changed on 2026-08-01 (applied)",
 			priorTriggers: "- Renovate update triggered on eu-onboarding for 'renovate/eu-onboarding-elastic_agent'.",
-			affectedPolicies: ["eu-onboarding-agent-policy-1", "eu-onboarding-agent-policy-2"],
+			affectedPolicies: [
+				{ name: "eu-onboarding-agent-policy-1", agentCount: 42 },
+				{ name: "eu-onboarding-agent-policy-2", agentCount: 7 },
+			],
 			changelogTotal: 23,
 		});
 	});
@@ -1419,10 +1425,11 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 				});
 			}
 			if (url.includes("/api/fleet/package_policies?")) {
+				// SIO-1479: withAgentCount=true adds an `agents` number per item (live-verified against ap-cld).
 				return Response.json({
 					items: [
-						{ name: "eu-onboarding-agent-policy-1", package: { name: "elastic_agent", version: "2.9.4" } },
-						{ name: "eu-onboarding-agent-policy-2", package: { name: "elastic_agent", version: "2.9.4" } },
+						{ name: "eu-onboarding-agent-policy-1", agents: 42, package: { name: "elastic_agent", version: "2.9.4" } },
+						{ name: "eu-onboarding-agent-policy-2", agents: 7, package: { name: "elastic_agent", version: "2.9.4" } },
 					],
 					total: 2,
 					page: 1,
@@ -1434,7 +1441,56 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 
 		const out = await enrichRenovateTarget(baseState() as IacStateType);
 
-		expect(out.renovateAffectedPolicies).toEqual(["eu-onboarding-agent-policy-1", "eu-onboarding-agent-policy-2"]);
+		expect(out.renovateAffectedPolicies).toEqual([
+			{ name: "eu-onboarding-agent-policy-1", agentCount: 42 },
+			{ name: "eu-onboarding-agent-policy-2", agentCount: 7 },
+		]);
+	});
+
+	// SIO-1479: Kibana's package_policies list omits agent counts unless withAgentCount=true is sent;
+	// even then, an item may lack the `agents` field. agentCount must degrade to null (card omits the
+	// suffix), never NaN/undefined, and the request must carry withAgentCount=true.
+	test("reads per-policy agent counts, falling back to null when the agents field is absent", async () => {
+		process.env.ELASTIC_EU_ONBOARDING_URL = "https://eu-onboarding.es.eu-central-1.aws.cloud.es.io";
+		process.env.ELASTIC_EU_ONBOARDING_API_KEY = "test-key";
+		let packagePoliciesUrl = "";
+		global.fetch = mock(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/api/fleet/epm/packages?")) {
+				return Response.json({
+					items: [
+						{
+							name: "elastic_agent",
+							version: "2.9.4",
+							installationInfo: { version: "2.8.0" },
+							packagePoliciesInfo: { count: 2 },
+						},
+					],
+				});
+			}
+			if (url.includes("/api/fleet/package_policies?")) {
+				packagePoliciesUrl = url;
+				return Response.json({
+					items: [
+						{ name: "policy-with-agents", agents: 108, package: { name: "elastic_agent", version: "2.9.4" } },
+						// no `agents` field -> agentCount must be null, not undefined/NaN
+						{ name: "policy-without-agents", package: { name: "elastic_agent", version: "2.9.4" } },
+					],
+					total: 2,
+					page: 1,
+					perPage: 20,
+				});
+			}
+			return new Response("Not Found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		const out = await enrichRenovateTarget(baseState() as IacStateType);
+
+		expect(out.renovateAffectedPolicies).toEqual([
+			{ name: "policy-with-agents", agentCount: 108 },
+			{ name: "policy-without-agents", agentCount: null },
+		]);
+		expect(packagePoliciesUrl).toContain("withAgentCount=true");
 	});
 
 	// Greptile (PR #668): the list endpoint paginates (Fleet's own default perPage is 20), so an
@@ -1464,10 +1520,10 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 				return Response.json({
 					items: isPageOne
 						? [
-								{ name: "policy-1", package: { name: "elastic_agent", version: "2.9.4" } },
-								{ name: "policy-2", package: { name: "elastic_agent", version: "2.9.4" } },
+								{ name: "policy-1", agents: 5, package: { name: "elastic_agent", version: "2.9.4" } },
+								{ name: "policy-2", agents: 0, package: { name: "elastic_agent", version: "2.9.4" } },
 							]
-						: [{ name: "policy-3", package: { name: "elastic_agent", version: "2.9.4" } }],
+						: [{ name: "policy-3", agents: 11, package: { name: "elastic_agent", version: "2.9.4" } }],
 					total: 3,
 					page: isPageOne ? 1 : 2,
 					perPage: 2,
@@ -1478,7 +1534,11 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 
 		const out = await enrichRenovateTarget(baseState() as IacStateType);
 
-		expect(out.renovateAffectedPolicies).toEqual(["policy-1", "policy-2", "policy-3"]);
+		expect(out.renovateAffectedPolicies).toEqual([
+			{ name: "policy-1", agentCount: 5 },
+			{ name: "policy-2", agentCount: 0 },
+			{ name: "policy-3", agentCount: 11 },
+		]);
 		expect(policyPolicyCallCount).toBe(2);
 	});
 

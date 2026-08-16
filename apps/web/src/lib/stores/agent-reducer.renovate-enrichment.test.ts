@@ -70,13 +70,17 @@ describe("applyStreamEvent renovate_trigger_choice enrichment fields", () => {
 			marker: "x",
 			line: "y",
 			message: "z",
-			affectedPolicies: ["eu-onboarding-agent-policy-1", "eu-onboarding-agent-policy-2"],
+			// SIO-1479: affectedPolicies entries now carry a per-policy agent count (nullable).
+			affectedPolicies: [
+				{ name: "eu-onboarding-agent-policy-1", agentCount: 42 },
+				{ name: "eu-onboarding-agent-policy-2", agentCount: null },
+			],
 			changelogTotal: 23,
 		};
 		const result = applyStreamEvent(initialReducerState(), event);
 		expect(result.renovateTriggerChoice?.affectedPolicies).toEqual([
-			"eu-onboarding-agent-policy-1",
-			"eu-onboarding-agent-policy-2",
+			{ name: "eu-onboarding-agent-policy-1", agentCount: 42 },
+			{ name: "eu-onboarding-agent-policy-2", agentCount: null },
 		]);
 		expect(result.renovateTriggerChoice?.changelogTotal).toBe(23);
 	});

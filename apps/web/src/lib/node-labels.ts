@@ -91,6 +91,18 @@ export const IAC_FLEET_NODES: readonly NodeLabel[] = [
 	{ id: "applyFleetUpgrade", activeLabel: "Upgrading", completeLabel: "Upgraded" },
 ] as const;
 
+// SIO-1479: renovate integration-update sub-flow. Mutually exclusive with
+// maker/drift/fleet -- a renovate run only ever executes these seven nodes.
+export const IAC_RENOVATE_NODES: readonly NodeLabel[] = [
+	{ id: "extractRenovateTarget", activeLabel: "Reading request", completeLabel: "Request read" },
+	{ id: "resolveIntegrationSlug", activeLabel: "Resolving integration", completeLabel: "Resolved" },
+	{ id: "resolveRenovateMarker", activeLabel: "Finding update", completeLabel: "Update found" },
+	{ id: "enrichRenovateTarget", activeLabel: "Gathering context", completeLabel: "Context gathered" },
+	{ id: "renovateTriggerGate", activeLabel: "Awaiting approval", completeLabel: "Approved" },
+	{ id: "triggerRenovateUpdate", activeLabel: "Triggering update", completeLabel: "Triggered" },
+	{ id: "watchRenovateMr", activeLabel: "Watching for MR", completeLabel: "MR found" },
+] as const;
+
 // Nodes intentionally excluded from every live row (plumbing / covered
 // elsewhere) but still labeled for the historical view.
 const EXTRA_COMPLETED_ONLY_NODES: readonly NodeLabel[] = [
@@ -109,6 +121,7 @@ export const ALL_NODE_LABELS: Readonly<Record<string, NodeLabel>> = Object.fromE
 		...IAC_MAKER_NODES,
 		...IAC_DRIFT_NODES,
 		...IAC_FLEET_NODES,
+		...IAC_RENOVATE_NODES,
 		...EXTRA_COMPLETED_ONLY_NODES,
 	].map((n) => [n.id, n]),
 );

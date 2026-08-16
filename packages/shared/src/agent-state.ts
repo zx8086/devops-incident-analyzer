@@ -1271,7 +1271,8 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 		// SIO-1473: real affected-policy names (from a second Kibana Fleet call) + the pre-cap
 		// changelog entry count, so the card can render a policy-names section and an honest
 		// "+N more releases" note.
-		affectedPolicies: z.array(z.string()).optional(),
+		// SIO-1479: each entry now carries a per-policy agent count (null when Kibana omits it).
+		affectedPolicies: z.array(z.object({ name: z.string(), agentCount: z.number().nullable() })).optional(),
 		changelogTotal: z.number().optional(),
 	}),
 ]);

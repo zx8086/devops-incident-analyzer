@@ -5,6 +5,7 @@ import {
 	IAC_DRIFT_NODES,
 	IAC_FLEET_NODES,
 	IAC_MAKER_NODES,
+	IAC_RENOVATE_NODES,
 	INCIDENT_MITIGATION_NODES,
 	INCIDENT_NODES,
 } from "$lib/node-labels";
@@ -34,6 +35,8 @@ const iacNodes = $derived.by(() => {
 	const seen = (id: string) => activeNodes.has(id) || completedNodes.has(id);
 	// SIO-935: fleet first -- a fleet run executes detect/gate/apply and never the drift or maker nodes.
 	if (IAC_FLEET_NODES.some((n) => seen(n.id))) return IAC_FLEET_NODES;
+	// SIO-1479: renovate next -- a renovate run never executes fleet/drift/maker nodes.
+	if (IAC_RENOVATE_NODES.some((n) => seen(n.id))) return IAC_RENOVATE_NODES;
 	const isDrift = IAC_DRIFT_NODES.some((n) => seen(n.id));
 	return isDrift ? IAC_DRIFT_NODES : IAC_MAKER_NODES;
 });
