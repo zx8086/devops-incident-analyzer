@@ -13,7 +13,9 @@
 // applyFleetUpgrade/recallPriorFleetUpgrades exercise the real searchAgentMemory/selectedBackend/
 // dedupeHitsBy/dedupePreferring/recallInFlightFleetUpgrades logic; per-test control is layered on
 // top via the real __setAgentMemoryClient injection seam (unchanged from before this fix).
+
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import type { AgentMemoryClient } from "@devops-agent/shared";
 import * as realMemoryBackendNs from "../memory-backend.ts";
 
 // SIO-1045: a namespace import (`import * as ns`) is a LIVE VIEW -- when any file registers a
@@ -1562,9 +1564,13 @@ describe("recallPriorRenovateTriggers (SIO-1472)", () => {
 		__setAgentMemoryClient({
 			async ensureUser() {},
 			async ensureSession() {},
-			async addFacts() {},
-			async addMessages() {},
-			async searchMemory(_ref: unknown, _q: string, opts?: { annotations?: Record<string, string> }) {
+			async addFacts() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async addMessages() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async searchMemory(_ref, _q, opts) {
 				// proves the recall filters on the SAME keys buildRenovateFactAnnotations stamps
 				expect(opts?.annotations).toEqual({
 					deployment: "ap-cld",
@@ -1587,8 +1593,7 @@ describe("recallPriorRenovateTriggers (SIO-1472)", () => {
 			async checkHealth() {
 				return { ok: true };
 			},
-			// biome-ignore lint/suspicious/noExplicitAny: SIO-1472 - test stub for the AgentMemoryClient surface
-		} as any);
+		} satisfies AgentMemoryClient);
 	}
 	function reset() {
 		const { __setAgentMemoryClient } = require("../memory-backend.ts");
@@ -1665,6 +1670,32 @@ describe("recallPriorRenovateTriggers (SIO-1472)", () => {
 		expect(await recallPriorRenovateTriggers("ap-cld", "renovate/ap-cld-elastic_agent")).toBe("");
 		reset();
 	});
+
+	// Greptile (PR #667): a searchMemory call that never settles must not hang enrichRenovateTarget's
+	// Promise.all forever -- the local Promise.race timeout must still resolve the recall to "".
+	test("returns '' when the memory backend never responds (hung request)", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { __setAgentMemoryClient } = require("../memory-backend.ts");
+		__setAgentMemoryClient({
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async addMessages() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			searchMemory: () => new Promise(() => {}),
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true };
+			},
+		} satisfies AgentMemoryClient);
+		const out = await recallPriorRenovateTriggers("ap-cld", "renovate/ap-cld-elastic_agent");
+		expect(out).toBe("");
+		reset();
+	}, 8_000);
 });
 
 // SIO-1032: host-scoped fleet upgrade + expected-count guard. The repo already honors a SELECTOR

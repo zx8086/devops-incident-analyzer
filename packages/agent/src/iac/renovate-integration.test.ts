@@ -1,5 +1,7 @@
 // agent/src/iac/renovate-integration.test.ts
+
 import { afterEach, describe, expect, mock, test } from "bun:test";
+import type { AgentMemoryClient } from "@devops-agent/shared";
 import { Command, END, MemorySaver, START, StateGraph } from "@langchain/langgraph";
 // SIO-1045: captured BEFORE any mock.module() call in this file runs, so afterEach can restore the
 // real implementations -- mock.module() is process-global and bun:test's mock.restore() does NOT
@@ -1116,8 +1118,12 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 		__setAgentMemoryClient({
 			async ensureUser() {},
 			async ensureSession() {},
-			async addFacts() {},
-			async addMessages() {},
+			async addFacts() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async addMessages() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
 			async searchMemory() {
 				return [
 					{
@@ -1137,8 +1143,7 @@ describe("enrichRenovateTarget (SIO-XXXX)", () => {
 			async checkHealth() {
 				return { ok: true };
 			},
-			// biome-ignore lint/suspicious/noExplicitAny: SIO-1472 - test stub for the AgentMemoryClient surface
-		} as any);
+		} satisfies AgentMemoryClient);
 
 		const out = await enrichRenovateTarget(baseState() as IacStateType);
 

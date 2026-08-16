@@ -12115,12 +12115,29 @@ export async function recallDeploymentKgChanges(deployment: string): Promise<str
 // integration on this deployment" and a deployment-only scope would mix in unrelated integrations'
 // triggers. Soft-fails to "" so a memory outage never blocks the gate. agent-memory backend only
 // (the file backend never writes this fact -- see teardownIac's existing gate).
+// Greptile (PR #667): searchAgentMemory's underlying HTTP call has no client-side timeout, so an
+// agent-memory service that accepts a connection but never responds would otherwise hang this
+// recall forever inside enrichRenovateTarget's Promise.all -- blocking the renovateTriggerGate
+// interrupt from ever firing and leaving the operator with no approve/decline card at all. This
+// timeout is local to the new call site (not a fix to searchAgentMemory itself, which every other
+// caller -- e.g. recallPriorFleetUpgrades -- shares the same unbounded-request exposure with; that
+// is a pre-existing, broader concern out of scope for this card-enrichment change).
+const RENOVATE_TRIGGER_RECALL_TIMEOUT_MS = 5_000;
+
 export async function recallPriorRenovateTriggers(deployment: string, marker: string): Promise<string> {
 	if (selectedBackend() !== "agent-memory" || !deployment || !marker) return "";
 	try {
-		const hits = await searchAgentMemory("elastic-iac", "", { deployment, marker, kind: "renovate-trigger" }, 8, {
-			deterministic: true,
-		});
+		const hits = await Promise.race([
+			searchAgentMemory("elastic-iac", "", { deployment, marker, kind: "renovate-trigger" }, 8, {
+				deterministic: true,
+			}),
+			new Promise<never>((_resolve, reject) =>
+				setTimeout(
+					() => reject(new Error(`timed out after ${RENOVATE_TRIGGER_RECALL_TIMEOUT_MS}ms`)),
+					RENOVATE_TRIGGER_RECALL_TIMEOUT_MS,
+				),
+			),
+		]);
 		return renderRenovateLearnings(hits);
 	} catch (error) {
 		log.warn(
