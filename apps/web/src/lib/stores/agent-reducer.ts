@@ -307,11 +307,17 @@ export interface FleetUpgradeChoice {
 // SIO-XXXX: renovate-integration-update trigger sub-flow. The single operator approve/decline
 // gate (renovateTriggerGate). No dedicated result event -- the turn just ends with a final
 // message, so the card clears via the same optimistic-clear resumeIac uses for fleet/synthetics.
+// installedVersion/targetVersion/policyCount/changelog are pre-trigger enrichment from
+// enrichRenovateTarget -- optional, absent when Kibana/GitHub lookup failed for this deployment.
 export interface RenovateTriggerChoice {
 	threadId: string;
 	marker: string;
 	line: string;
 	message: string;
+	installedVersion?: string | null;
+	targetVersion?: string | null;
+	policyCount?: number | null;
+	changelog?: Array<{ version: string; changes: Array<{ description: string; type: string; link?: string }> }>;
 }
 
 export interface FleetUpgradeResultRow {
@@ -834,6 +840,10 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 					marker: event.marker,
 					line: event.line,
 					message: event.message,
+					installedVersion: event.installedVersion,
+					targetVersion: event.targetVersion,
+					policyCount: event.policyCount,
+					changelog: event.changelog,
 				},
 			};
 		default:
