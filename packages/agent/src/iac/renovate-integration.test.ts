@@ -114,6 +114,8 @@ describe("renovateTriggerGate interrupt round-trip (SIO-1471)", () => {
 			renovateTargetVersion: "2.9.4",
 			renovatePolicyCount: 24,
 			renovateChangelog: [{ version: "2.9.4", changes: [{ description: "Add X", type: "enhancement" }] }],
+			renovateRecentChanges: "- [eu-onboarding] elastic_agent changed on 2026-08-01 (applied)",
+			renovatePriorTriggers: "- Renovate update triggered on eu-onboarding for 'renovate/eu-onboarding-elastic_agent'.",
 		};
 
 		await compiled.invoke(inputState as unknown as Parameters<typeof compiled.invoke>[0], config);
@@ -130,6 +132,8 @@ describe("renovateTriggerGate interrupt round-trip (SIO-1471)", () => {
 			targetVersion: "2.9.4",
 			policyCount: 24,
 			changelog: [{ version: "2.9.4", changes: [{ description: "Add X", type: "enhancement" }] }],
+			recentChanges: "- [eu-onboarding] elastic_agent changed on 2026-08-01 (applied)",
+			priorTriggers: "- Renovate update triggered on eu-onboarding for 'renovate/eu-onboarding-elastic_agent'.",
 		});
 	});
 });

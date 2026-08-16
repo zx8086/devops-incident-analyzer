@@ -673,6 +673,8 @@ export function renovateTriggerGate(state: IacStateType): Partial<IacStateType> 
 		targetVersion: state.renovateTargetVersion,
 		policyCount: state.renovatePolicyCount,
 		changelog: state.renovateChangelog,
+		recentChanges: state.renovateRecentChanges,
+		priorTriggers: state.renovatePriorTriggers,
 	}) as { approve?: boolean };
 	const approved = choice?.approve === true;
 	// SIO-1471: a decline previously set no message at all -- teardownIac has no
