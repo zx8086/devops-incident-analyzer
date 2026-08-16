@@ -1,5 +1,7 @@
 // src/oauth/errors.ts
 
+import { seedCommandFor } from "./seed-command.ts";
+
 export class OAuthRequiresInteractiveAuthError extends Error {
 	readonly namespace: string;
 	readonly authorizationUrl: URL;
@@ -8,7 +10,7 @@ export class OAuthRequiresInteractiveAuthError extends Error {
 		super(
 			`OAuth interactive authorization required for ${namespace} but interactive auth is disabled ` +
 				`(MCP_OAUTH_HEADLESS=true or non-interactive/piped stdout); ` +
-				`run \`bun run oauth:seed:${namespace}\` once interactively to seed tokens`,
+				`run \`${seedCommandFor(namespace)}\` once interactively to seed tokens`,
 		);
 		this.name = "OAuthRequiresInteractiveAuthError";
 		this.namespace = namespace;

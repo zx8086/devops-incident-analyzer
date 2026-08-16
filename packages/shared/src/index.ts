@@ -244,6 +244,7 @@ export {
 	type PersistedOAuthState,
 	type SeedOAuthOptions,
 	STALE_INVALIDATION_WINDOW_MS,
+	seedCommandFor,
 	seedOAuth,
 	TOKEN_EXPIRY_SKEW_MS,
 	type WarnIfOAuthNotSeededOptions,

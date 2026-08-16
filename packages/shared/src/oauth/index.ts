@@ -26,4 +26,5 @@ export {
 } from "./errors.ts";
 export { isHeadless } from "./headless.ts";
 export { type SeedOAuthOptions, seedOAuth } from "./seed.ts";
+export { seedCommandFor } from "./seed-command.ts";
 export { hasSeededTokens } from "./seeded-tokens.ts";
