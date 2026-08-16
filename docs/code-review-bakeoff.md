@@ -163,3 +163,23 @@ The smallest diff in the series so far: 3 files, +17/-10, no ticket. A pure refa
 **Latency: the outlier of the series.** Greptile's check sat at `IN_PROGRESS` for roughly 20+ minutes on a 3-file diff, against the ~1-2 min reported on every prior PR in this ledger (#658 through #662). It did complete cleanly on its own with no re-trigger, so this was slowness, not the #661 dropped-event failure mode. CodeRabbit posted its in-progress placeholder within about a minute but its approval landed in the same late window. No re-trigger was issued -- per the lifecycle rules, a trigger comment while the check is already `IN_PROGRESS` is redundant.
 
 **Takeaway:** on a trivial, mechanically-verifiable diff both bots behave correctly and identically, and the differentiator collapses to report quality (Greptile) and latency (neither, this round). Consistent with the series pattern that Greptile's value shows up in incremental re-examination of non-trivial fix code; there was none here to examine. One data point against reading too much into any single small-PR round.
+
+## PR #669 detail (SIO-1474, Renovate display-name-to-slug resolution)
+
+Small, single-concern fix: 3 files, +199/-2 on round 1 (new `resolveIntegrationSlug` node + graph wiring + 8 tests), +16 on the round-2 fix commit (one added test, no production code change). The two bots diverged this round -- Greptile clean on round 1, CodeRabbit found a real gap Greptile missed.
+
+**Round 1 (initial commit `9955031f`):**
+
+- Greptile: `COMPLETED SUCCESS`, Confidence Score **5/5**, zero findings. Its summary correctly restated the node's soft-fail contract ("preserves the extracted target on every soft-failure path, replaces the complete target on a confirmed title match") and rendered an accurate flowchart of the new graph edge placement.
+- CodeRabbit: `CHANGES_REQUESTED`, one inline Minor finding ("Add a malformed-response regression test") -- Kibana returning a 2xx with a valid-JSON-but-wrong-shape body (a bare `null`) had no direct test. It supplied a ready-to-apply test as a committable suggestion.
+
+**Triage (verified before fixing, not applied on the bot's authority alone):** live-repro'd via `bun -e` whether `body.items` actually throws on a bare-`null` body -- confirmed `TypeError: null is not an object (evaluating 'body.items')`. Then checked whether that throw escapes the function: it does not -- the whole `res.json()`/parse block sits inside the node's own `try/catch`, so the throw is caught and the function still soft-fails to `{}`, matching the spec's never-blocks contract. So the underlying *behavior* was already correct; only test coverage was missing. Added CodeRabbit's suggested test verbatim (commit `dba681f3`) rather than defensively rewriting the parsing logic, since the code path was already safe.
+
+**Round 2 (fix commit `dba681f3`):**
+
+- Greptile: `COMPLETED SUCCESS`, footer confirmed it reviewed `dba681f3` (the fix commit) -- re-ran clean on the addition-only diff.
+- CodeRabbit: re-approved (`reviewDecision: APPROVED`) after the fix push; the inline thread auto-resolved (`isResolved: true` via GraphQL, no manual `resolveReviewThread` needed) without a distinguishable resolution event in the API response, consistent with the #652 pattern noted in this repo's lifecycle rules.
+
+**Latency:** both bots' round 1 completed within a few minutes of PR open (comparable to the #658-#662 baseline, not the #664 20-minute outlier); round 2 landed within about 2-3 minutes of the fix push.
+
+**Takeaway:** the first round in this series where Greptile reported a clean 5/5 on a genuine, real (if Minor) gap that CodeRabbit caught -- a coverage gap in a soft-fail/never-throws contract, exactly the kind of "does this test suite prove the safety property it claims" finding that benefits from an independent second reviewer. Verifying before fixing mattered here: the finding's suggested framing ("must preserve the target... on invalid shape") could be read as implying a live correctness bug, but the actual gap was narrower (missing coverage of an already-caught exception) -- worth distinguishing in the fix commit message and PR reply rather than accepting the more alarming framing at face value.
