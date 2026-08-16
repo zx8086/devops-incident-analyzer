@@ -170,3 +170,184 @@ describe("createProxyReadinessProbe", () => {
 		expect(snap.errors?.agentcoreUpstream).toContain("cold-start");
 	});
 });
+
+// SIO-1477: the credentials component used to be a presence check -- it only
+// proved getCredentials() did not throw. An expired/revoked/wrong-account key
+// still resolves cleanly, so the probe reported credentials:"ok" while every
+// signed request was rejected, and the failure surfaced as
+// "agentcoreUpstream: unreachable" -- pointing at the network, not at auth.
+describe("SIO-1477 credentials validation via signed sts:GetCallerIdentity", () => {
+	const STS_URL = "https://sts.eu-central-1.amazonaws.com/";
+	const okUpstream = () => mockSigv4Fetch({ result: { tools: [{ name: "aws_cloudwatch_describe_alarms" }] } });
+
+	test("expired token -> credentials fails with the STS reason, not 'ok'", async () => {
+		const probe = createProxyReadinessProbe({
+			role: "aws-proxy",
+			getCredentials: async () => ({ accessKeyId: "ASIA...", secretAccessKey: "x" }),
+			upstreamUrl: "http://example.test/mcp",
+			sigv4Fetch: okUpstream(),
+			stsUrl: STS_URL,
+			stsFetch: async () =>
+				new Response(
+					"<ErrorResponse><Error><Code>ExpiredToken</Code><Message>The security token included in the request is expired</Message></Error></ErrorResponse>",
+					{ status: 403 },
+				),
+		});
+		const snap = await probe();
+		expect(snap.ready).toBe(false);
+		expect(snap.components.credentials).not.toBe("ok");
+		expect(snap.errors?.credentials).toContain("ExpiredToken");
+		expect(snap.errors?.credentials).toContain("security token included in the request is expired");
+	});
+
+	test("wrong-account key -> surfaces InvalidClientTokenId", async () => {
+		const probe = createProxyReadinessProbe({
+			role: "kafka-proxy",
+			getCredentials: async () => ({ accessKeyId: "AKIA...", secretAccessKey: "x" }),
+			upstreamUrl: "http://example.test/mcp",
+			sigv4Fetch: mockSigv4Fetch({ result: { tools: [{ name: "kafka_list_topics" }] } }),
+			stsUrl: STS_URL,
+			stsFetch: async () =>
+				new Response(
+					"<ErrorResponse><Error><Code>InvalidClientTokenId</Code><Message>The security token included in the request is invalid</Message></Error></ErrorResponse>",
+					{ status: 403 },
+				),
+		});
+		const snap = await probe();
+		expect(snap.ready).toBe(false);
+		expect(snap.errors?.credentials).toContain("InvalidClientTokenId");
+	});
+
+	test("valid credentials -> credentials ok and probe ready", async () => {
+		const probe = createProxyReadinessProbe({
+			role: "aws-proxy",
+			getCredentials: async () => ({ accessKeyId: "AKIA...", secretAccessKey: "x" }),
+			upstreamUrl: "http://example.test/mcp",
+			sigv4Fetch: okUpstream(),
+			stsUrl: STS_URL,
+			stsFetch: async () => new Response(JSON.stringify({ GetCallerIdentityResponse: {} }), { status: 200 }),
+		});
+		const snap = await probe();
+		expect(snap.ready).toBe(true);
+		expect(snap.components).toEqual({ credentials: "ok", agentcoreUpstream: "ok" });
+	});
+
+	test("no STS seam wired -> falls back to the presence check (back-compat)", async () => {
+		const probe = createProxyReadinessProbe({
+			role: "aws-proxy",
+			getCredentials: async () => ({}),
+			upstreamUrl: "http://example.test/mcp",
+			sigv4Fetch: okUpstream(),
+		});
+		const snap = await probe();
+		expect(snap.components.credentials).toBe("ok");
+	});
+
+	test("getCredentials resolving null -> fails rather than passing silently", async () => {
+		const probe = createProxyReadinessProbe({
+			role: "aws-proxy",
+			getCredentials: async () => null,
+			upstreamUrl: "http://example.test/mcp",
+			sigv4Fetch: okUpstream(),
+		});
+		const snap = await probe();
+		expect(snap.ready).toBe(false);
+		expect(snap.errors?.credentials).toContain("no AWS credentials");
+	});
+});
+
+// SIO-1477: a 401/403 from the upstream is an auth REJECTION -- the endpoint
+// answered. Reporting it as "unreachable" sent operators hunting for a network
+// fault when the real cause was a bad credential.
+describe("SIO-1477 auth rejection is distinguished from unreachability", () => {
+	test("403 -> names authorization, not a transport failure", async () => {
+		const probe = createProxyReadinessProbe({
+			role: "aws-proxy",
+			getCredentials: async () => ({}),
+			upstreamUrl: "http://example.test/mcp",
+			sigv4Fetch: async () =>
+				new Response('{"message":"The security token included in the request is expired"}', { status: 403 }),
+		});
+		const snap = await probe();
+		expect(snap.ready).toBe(false);
+		expect(snap.errors?.agentcoreUpstream).toContain("authorization rejected");
+		expect(snap.errors?.agentcoreUpstream).toContain("HTTP 403");
+		// the upstream's own explanation must survive into the snapshot
+		expect(snap.errors?.agentcoreUpstream).toContain("security token included in the request is expired");
+	});
+
+	test("401 -> also classified as authorization", async () => {
+		const probe = createProxyReadinessProbe({
+			role: "kafka-proxy",
+			getCredentials: async () => ({}),
+			upstreamUrl: "http://example.test/mcp",
+			sigv4Fetch: async () => new Response("denied", { status: 401 }),
+		});
+		const snap = await probe();
+		expect(snap.errors?.agentcoreUpstream).toContain("authorization rejected");
+	});
+
+	test("503 -> stays a plain status failure, not mislabelled as auth", async () => {
+		const probe = createProxyReadinessProbe({
+			role: "kafka-proxy",
+			getCredentials: async () => ({}),
+			upstreamUrl: "http://example.test/mcp",
+			sigv4Fetch: async () => new Response("upstream boom", { status: 503 }),
+		});
+		const snap = await probe();
+		expect(snap.errors?.agentcoreUpstream).toContain("503");
+		expect(snap.errors?.agentcoreUpstream).not.toContain("authorization rejected");
+	});
+});
+
+// SIO-1477: STS answers in XML or JSON depending on Accept/error class. The
+// JSON shape is what a bad key actually returns over Accept: application/json
+// (live-verified), so both must parse to a clean "Code: Message".
+describe("SIO-1477 STS error parsing covers both wire formats", () => {
+	const base = {
+		role: "aws-proxy" as const,
+		getCredentials: async () => ({ accessKeyId: "AKIA...", secretAccessKey: "x" }),
+		upstreamUrl: "http://example.test/mcp",
+		sigv4Fetch: mockSigv4Fetch({ result: { tools: [{ name: "aws_cloudwatch_describe_alarms" }] } }),
+		stsUrl: "https://sts.eu-central-1.amazonaws.com/",
+	};
+
+	test("JSON error body -> Code: Message, no raw JSON leaked", async () => {
+		const snap = await createProxyReadinessProbe({
+			...base,
+			stsFetch: async () =>
+				new Response(
+					JSON.stringify({
+						Error: { Code: "InvalidClientTokenId", Message: "The security token included in the request is invalid" },
+					}),
+					{ status: 403 },
+				),
+		})();
+		expect(snap.errors?.credentials).toBe(
+			"InvalidClientTokenId: The security token included in the request is invalid",
+		);
+		expect(snap.errors?.credentials).not.toContain("{");
+	});
+
+	test("XML error body -> Code: Message", async () => {
+		const snap = await createProxyReadinessProbe({
+			...base,
+			stsFetch: async () =>
+				new Response(
+					"<ErrorResponse><Error><Code>ExpiredToken</Code><Message>Token expired</Message></Error></ErrorResponse>",
+					{
+						status: 403,
+					},
+				),
+		})();
+		expect(snap.errors?.credentials).toBe("ExpiredToken: Token expired");
+	});
+
+	test("unparseable body -> still reports status without throwing", async () => {
+		const snap = await createProxyReadinessProbe({
+			...base,
+			stsFetch: async () => new Response("<<not xml or json>>", { status: 500 }),
+		})();
+		expect(snap.errors?.credentials).toContain("500");
+	});
+});

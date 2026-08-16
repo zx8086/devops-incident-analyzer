@@ -28,11 +28,53 @@ function parseAgentCoreBody(rawBody: string): unknown {
 	return JSON.parse(jsonText);
 }
 
+// SIO-1477: an expired/revoked/wrong-account credential still RESOLVES -- the
+// AWS CLI returns three well-formed values for a dead token, and a
+// shared-credentials-file profile carries no local Expiration to inspect. So a
+// presence check cannot distinguish a working credential from a broken one, and
+// the failure surfaced one component later as "agentcoreUpstream: unreachable",
+// pointing the operator at the network instead of at auth. The only reliable
+// check is a remote one: a signed sts:GetCallerIdentity, which is cheap, has no
+// AgentCore dependency, and fails with the real reason (ExpiredToken,
+// InvalidClientTokenId, SignatureDoesNotMatch).
+const STS_ERROR_CODE_RE = /<Code>([^<]+)<\/Code>/;
+const STS_ERROR_MESSAGE_RE = /<Message>([^<]+)<\/Message>/;
+
+// STS answers in EITHER format depending on the Accept header and error class:
+// XML (<ErrorResponse><Error><Code>) or JSON ({"Error":{"Code","Message"}}).
+// Live-verified: an invalid key over Accept: application/json returns the JSON
+// shape, so parsing only XML would leak a raw body into the log line.
+function describeStsFailure(status: number, body: string): string {
+	let code = STS_ERROR_CODE_RE.exec(body)?.[1];
+	let message = STS_ERROR_MESSAGE_RE.exec(body)?.[1];
+	if (!code) {
+		try {
+			const parsed: unknown = JSON.parse(body);
+			const err = (parsed as { Error?: { Code?: unknown; Message?: unknown } })?.Error;
+			if (typeof err?.Code === "string") code = err.Code;
+			if (typeof err?.Message === "string") message = err.Message;
+		} catch {
+			// not JSON either -- fall through to the raw-body branch below
+		}
+	}
+	if (code && message) return `${code}: ${message}`;
+	if (code) return code;
+	const trimmed = body.trim();
+	return trimmed
+		? `sts:GetCallerIdentity returned ${status}: ${trimmed.slice(0, 200)}`
+		: `sts:GetCallerIdentity returned ${status}`;
+}
+
 export interface CreateProxyReadinessProbeOptions {
 	role: "aws-proxy" | "kafka-proxy";
 	getCredentials: () => Promise<unknown>;
 	upstreamUrl: string;
 	sigv4Fetch: (req: Request) => Promise<Response>;
+	// SIO-1477: signs against sts.<region>.amazonaws.com rather than the
+	// AgentCore host. Optional so existing callers/tests keep working; when
+	// absent the credentials component falls back to the presence check.
+	stsFetch?: (req: Request) => Promise<Response>;
+	stsUrl?: string;
 	ttlMs?: number;
 	timeoutMs?: number;
 	now?: () => number;
@@ -44,7 +86,20 @@ export function createProxyReadinessProbe(opts: CreateProxyReadinessProbeOptions
 	return createReadinessProbe({
 		components: {
 			credentials: async () => {
-				await opts.getCredentials();
+				const creds = await opts.getCredentials();
+				if (!creds) throw new Error("no AWS credentials resolved");
+				const { stsFetch, stsUrl } = opts;
+				// No STS seam wired -> presence check only (pre-SIO-1477 behaviour).
+				if (!stsFetch || !stsUrl) return;
+				const req = new Request(stsUrl, {
+					method: "POST",
+					headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+					body: "Action=GetCallerIdentity&Version=2011-06-15",
+				});
+				const res = await stsFetch(req);
+				if (!res.ok) {
+					throw new Error(describeStsFailure(res.status, await res.text().catch(() => "")));
+				}
 			},
 			agentcoreUpstream: async () => {
 				const req = new Request(opts.upstreamUrl, {
@@ -54,7 +109,18 @@ export function createProxyReadinessProbe(opts: CreateProxyReadinessProbeOptions
 				});
 				const res = await opts.sigv4Fetch(req);
 				if (!res.ok) {
-					throw new Error(`tools/list returned ${res.status}`);
+					// SIO-1477: a 401/403 is an auth REJECTION -- the endpoint answered,
+					// so reporting it as "unreachable" sends the operator hunting for a
+					// network fault. Name it for what it is and keep the upstream's own
+					// explanation, which carries the actionable detail (e.g. "The
+					// security token included in the request is expired").
+					const detail = (await res.text().catch(() => "")).trim();
+					if (res.status === 401 || res.status === 403) {
+						throw new Error(
+							`authorization rejected (HTTP ${res.status}) -- check the proxy's AWS credentials${detail ? `: ${detail.slice(0, 200)}` : ""}`,
+						);
+					}
+					throw new Error(`tools/list returned ${res.status}${detail ? `: ${detail.slice(0, 200)}` : ""}`);
 				}
 				const rawBody = await res.text();
 				const body = parseAgentCoreBody(rawBody) as {
