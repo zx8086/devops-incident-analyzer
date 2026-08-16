@@ -62,4 +62,35 @@ describe("applyStreamEvent renovate_trigger_choice enrichment fields", () => {
 		expect(result.renovateTriggerChoice?.recentChanges).toBeUndefined();
 		expect(result.renovateTriggerChoice?.priorTriggers).toBeUndefined();
 	});
+
+	test("populates affectedPolicies and changelogTotal when present", () => {
+		const event = {
+			type: "renovate_trigger_choice" as const,
+			threadId: "t1",
+			marker: "x",
+			line: "y",
+			message: "z",
+			affectedPolicies: ["eu-onboarding-agent-policy-1", "eu-onboarding-agent-policy-2"],
+			changelogTotal: 23,
+		};
+		const result = applyStreamEvent(initialReducerState(), event);
+		expect(result.renovateTriggerChoice?.affectedPolicies).toEqual([
+			"eu-onboarding-agent-policy-1",
+			"eu-onboarding-agent-policy-2",
+		]);
+		expect(result.renovateTriggerChoice?.changelogTotal).toBe(23);
+	});
+
+	test("tolerates missing affectedPolicies/changelogTotal (older/degraded payload)", () => {
+		const event = {
+			type: "renovate_trigger_choice" as const,
+			threadId: "t1",
+			marker: "x",
+			line: "y",
+			message: "z",
+		};
+		const result = applyStreamEvent(initialReducerState(), event);
+		expect(result.renovateTriggerChoice?.affectedPolicies).toBeUndefined();
+		expect(result.renovateTriggerChoice?.changelogTotal).toBeUndefined();
+	});
 });
