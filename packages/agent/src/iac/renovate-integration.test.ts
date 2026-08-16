@@ -634,7 +634,7 @@ describe("parseFirstOpenMrUrl", () => {
 import { TURN_START_RESET } from "./nodes.ts";
 
 describe("TURN_START_RESET (renovate-integration-update fields)", () => {
-	test("resets all 13 renovate-integration-update fields", () => {
+	test("resets all 15 renovate-integration-update fields", () => {
 		expect(TURN_START_RESET).toMatchObject({
 			renovateTarget: null,
 			renovateCandidates: [],
@@ -649,6 +649,8 @@ describe("TURN_START_RESET (renovate-integration-update fields)", () => {
 			renovateChangelog: [],
 			renovateRecentChanges: "",
 			renovatePriorTriggers: "",
+			renovateAffectedPolicies: [],
+			renovateChangelogTotal: 0,
 		});
 	});
 });

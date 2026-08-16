@@ -1607,6 +1607,8 @@ export const TURN_START_RESET = {
 	renovateChangelog: [] as ChangelogEntry[],
 	renovateRecentChanges: "",
 	renovatePriorTriggers: "",
+	renovateAffectedPolicies: [] as string[],
+	renovateChangelogTotal: 0,
 } as const;
 
 // (context the turn's response weaves in), once per session, best-effort, never blocking.
