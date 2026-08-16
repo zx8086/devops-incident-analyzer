@@ -820,6 +820,7 @@ export function renovateTriggerGate(state: IacStateType): Partial<IacStateType> 
 		changelog: state.renovateChangelog,
 		recentChanges: state.renovateRecentChanges,
 		priorTriggers: state.renovatePriorTriggers,
+		deploymentHistory: state.renovateDeploymentHistory,
 		affectedPolicies: state.renovateAffectedPolicies,
 		changelogTotal: state.renovateChangelogTotal,
 	}) as { approve?: boolean };

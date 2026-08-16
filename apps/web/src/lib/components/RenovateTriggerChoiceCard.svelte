@@ -79,6 +79,18 @@ const changelogCount = $derived(prompt.changelog?.length ?? 0);
       </details>
     {/if}
 
+    <!-- SIO-1475: deployment-wide (any integration) Renovate-trigger history, distinct from the
+         panel above -- that one is scoped to this exact integration/marker; this one answers
+         "what other Renovate updates has this deployment had". -->
+    {#if prompt.deploymentHistory}
+      <details class="mt-2" open>
+        <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">Deployment history (memory)</summary>
+        <div class="mt-1 rounded bg-white border border-tommy-accent-blue/30 px-2 py-1 text-xs text-tommy-navy">
+          <MarkdownRenderer content={prompt.deploymentHistory} />
+        </div>
+      </details>
+    {/if}
+
     {#if changelogCount > 0}
       <details class="mt-2">
         <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">
