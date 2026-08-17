@@ -8,32 +8,25 @@ Multi-datasource DevOps incident analysis agent. A LangGraph supervisor orchestr
 
 ## Current State
 
-Fully implemented monorepo with 10 packages, 7 MCP servers, a 31-node LangGraph pipeline (21 base + 4 gated KG + 6 gated HIL-learning nodes; SIO-681 added `correlationFetch` + `enforceCorrelationsAggregate` between aggregate and checkConfidence; SIO-764 added `extractFindings` after aggregate; SIO-828 added `awsEstateRouter` between entityExtractor and the fan-out; SIO-1084 added `resolveIdentifiers` between awsEstateRouter and the fan-out; `detectTopicShift` runs on follow-up turns; mitigation is split into `proposeInvestigate` / `proposeMonitor` / `proposeEscalate` + `aggregateMitigation`; SIO-1126 added the 6-node HIL learning lane off `classify`; SIO-1030 focus-scopes finding cards via `matchesFocus()` and SIO-1031 grounds IAM/permission blockers in observed auth errors; SIO-1204 builds a per-incident network map (pure builder in extractFindings/aggregate, ECharts NetworkTopologyCard via the network_topology SSE event) and persists static topology + bi-temporal IP bindings to the KG with a KG-cache-first reverse-IP step, backed by SIO-1205's new ELBv2/Route53/DescribeSubnets MCP tools and ingress_state action), gitagent declarative agent definitions, and a SvelteKit frontend. The separate 31-node elastic-iac proposer graph now offers an `ilm-delete` workflow (SIO-1037) and a pre-fan-out `recordIacPrompt` node that captures each turn's verbatim prompt to the knowledge graph (`Prompt` node) and agent memory (SIO-1038); SIO-1285 added the `selectIacKnowledge` node between `classifyIacIntent` and the intent fan-out, which narrows the prompt's knowledge categories per intent (deterministic, no model call -- it reuses the intent the classifier already computed) and dropped the always-on `_archive`/`health-snapshots` categories, reducing the unconditional prompt from 568,446 bytes to 485,959, with `gitops` at 357,844 and `converse` at 154,237 while `info` (the classifier's catch-all) stays deliberately unnarrowed; SIO-1196 grounded the version-upgrade no-op decision in the LIVE deployment (three-way repo/live/target check; repo==target with live!=target auto-routes `draftChange -> explainDrift` into the drift-reconcile lane with `liveReconcilable: false`, attributing the unapplied MR + pending manual apply job), added live-parity advisories for the deployment-JSON workflows, a repo-only caveat on all remaining repo-only no-ops, and made `gitlab_get_merge_commit_apply_result` prefer push-source pipelines. All MCP servers use a unified bootstrap (`createMcpApplication` from `@devops-agent/shared`) with standardized logging, 3 transport modes (stdio/http/agentcore), and action-driven tool selection replacing regex filtering. GitLab MCP uses a proxy pattern (forwarding to GitLab's native `/api/v4/mcp` endpoint) plus custom code-analysis tools. The `devops-incident-analyzer-setup-guide.md` is the original architecture blueprint (historical reference).
+Fully implemented monorepo: 10 packages, 7 MCP servers, the 31-node LangGraph pipeline below, a separate elastic-iac proposer graph, gitagent declarative agent definitions, and a SvelteKit frontend. All MCP servers use a unified bootstrap (`createMcpApplication` from `@devops-agent/shared`) with standardized logging, 3 transport modes (stdio/http/agentcore), and action-driven tool selection replacing regex filtering. GitLab MCP uses a proxy pattern (forwarding to GitLab's native `/api/v4/mcp` endpoint) plus custom code-analysis tools. The `devops-incident-analyzer-setup-guide.md` is the original architecture blueprint (historical reference).
 
 ## Architecture
 
 ### Monorepo Structure
 
-```
-agents/                    Gitagent YAML/Markdown definitions
-  incident-analyzer/       Orchestrator: agent.yaml, SOUL.md, RULES.md, tools/, skills/
-    agents/                Sub-agents: elastic-agent/, kafka-agent/, capella-agent/, konnect-agent/, gitlab-agent/, atlassian-agent/, aws-agent/
-packages/
-  gitagent-bridge/         YAML-to-LangGraph adapter (manifest loading, tool mapping, prompt construction)
-  agent/                   LangGraph supervisor + 31-node pipeline (21 base + 4 gated KG + 6 gated HIL-learning; incl. SIO-681 correlation enforcement, SIO-764 findings extraction, SIO-828 AWS estate router, SIO-1084 resolveIdentifiers, mitigation split into investigate/monitor/escalate, detectTopicShift, SIO-1126 HIL learning lane)
-  mcp-server-elastic/      Elasticsearch MCP server (multi-deployment, 117 tools: 101 cluster incl. 9 ML anomaly-detection (SIO-1148) + 4 ES|QL/async-search (SIO-1391) + 16 conditional cloud/billing on EC_API_KEY)
-  mcp-server-kafka/        Kafka MCP server (local/MSK/Confluent, 11-61 tools gated: kafka-core + SR + ksqlDB + Connect + REST Proxy)
-  mcp-server-couchbase/    Couchbase Capella MCP server (query analysis, playbooks, ~39 tools: SIO-1107 official Couchbase tools)
-  mcp-server-konnect/      Kong Konnect MCP server (API gateway management, 67+ tools)
-  mcp-server-gitlab/       GitLab MCP server (proxy + code analysis, 21+ tools)
-  mcp-server-atlassian/    Atlassian MCP server (Jira + Confluence proxy via Rovo OAuth 2.1)
-  mcp-server-aws/          AWS MCP server (multi-estate via cross-account AssumeRole; CloudWatch, EC2, ECS, Lambda, RDS, S3, X-Ray, etc.)
-  shared/                  Cross-package types, Zod schemas, unified bootstrap, AgentCore proxy, Agent Memory REST client (SIO-938)
-  checkpointer/            Transient per-thread LangGraph state (memory + bun:sqlite)
-  observability/           OpenTelemetry + LangSmith, Pino logging
-apps/
-  web/                     SvelteKit frontend (Svelte 5 runes, Tailwind, SSE streaming)
-```
+Layout is discoverable via `ls packages/ apps/ agents/`. Non-obvious facts about
+individual packages:
+
+- `gitagent-bridge/` -- YAML-to-LangGraph adapter (manifest loading, tool mapping, prompt construction)
+- `agent/` -- LangGraph supervisor + the 31-node pipeline (see below)
+- `mcp-server-elastic/` -- 117 tools: 101 cluster incl. 9 ML anomaly-detection (SIO-1148) + 4 ES|QL/async-search (SIO-1391) + 16 conditional cloud/billing gated on `EC_API_KEY`
+- `mcp-server-kafka/` -- 11-61 tools gated: kafka-core + SR + ksqlDB + Connect + REST Proxy
+- `mcp-server-couchbase/` -- ~39 tools (SIO-1107 official Couchbase tools)
+- `mcp-server-konnect/` -- 67+ tools | `mcp-server-gitlab/` -- 21+ tools (proxy + code analysis)
+- `mcp-server-atlassian/` -- Jira + Confluence proxy via Rovo OAuth 2.1
+- `mcp-server-aws/` -- multi-estate via cross-account AssumeRole
+- `shared/` -- cross-package types, Zod schemas, unified bootstrap, AgentCore proxy, Agent Memory REST client (SIO-938)
+- `checkpointer/` -- **transient** per-thread LangGraph state only (memory + bun:sqlite)
 
 ### Agent Pipeline (31-node LangGraph StateGraph: 21 base + 4 gated KG + 6 gated HIL-learning)
 
@@ -48,7 +41,15 @@ START -> classify -> {simple: responder -> followUp -> END, complex: normalize}
 ```
 (`detectTopicShift` sits between `resolveIdentifiers` and the supervisor fan-out; it fast-paths to a no-op on first turns and only interrupts for cross-turn topic shifts on follow-up turns.)
 
-The `enforceCorrelationsRouter` (SIO-681) sits between `aggregate` and `checkConfidence`; it dispatches `correlationFetch` Sends for any unsatisfied correlation rule (e.g. kafka-significant-lag must have a matching elastic-agent finding), then `enforceCorrelationsAggregate` re-evaluates rules and caps `confidenceCap` at 0.6 when rules remain degraded. See `docs/architecture/agent-pipeline.md` for the full diagram and rule list. SIO-764 added the `extractFindings` node immediately after `aggregate`; it reads each sub-agent's `toolOutputs[]` and derives per-domain typed findings (`kafkaFindings`) onto the `DataSourceResult` for the rule engine to consume. SIO-828 added `awsEstateRouter` between `entityExtractor` and the fan-out; when AWS is in `dataSources`, it expands a single AWS dispatch into one Send per target estate (cross-account AssumeRole) so the LLM never sees per-account credentials. SIO-850 added two opt-in knowledge-graph nodes (`recordEntities` + `graphEnrich`) between `entityExtractor` and `awsEstateRouter`, and SIO-1026 added a third (`recordRootCause`, after `aggregateMitigation`), reachable only when `KNOWLEDGE_GRAPH_ENABLED=true` (the SIO-640 edge-gate idiom: registered always, edged only when enabled). SIO-1084 added a `resolveIdentifiers` node between `awsEstateRouter` and `detectTopicShift` that resolves the loose incident service to per-datasource canonical identifiers before fan-out (always edged; `RESOLVE_IDENTIFIERS_ENABLED` defaults ON, self-skips via runtime early-return when set to `false`). SIO-1100 added a fourth gated KG node `recordBindings` (after `recordRootCause`, in the `recordRootCause -> recordBindings -> followUp` tail) that MERGEs the turn's confirmed telemetry bindings (W8; `KG_BINDINGS_WRITE_ENABLED` defaults ON, needs `KNOWLEDGE_GRAPH_ENABLED`, writes are additive + soft-failing so they never change the answer). SIO-1126 added the 6-node HIL learning lane (`learnFetchTicket` / `learnMatchIncident` / `learnMatchGate` / `learnDistill` / `learnReviewGate` / `applyLearnings`), routed off `classify` on an explicit `learn from TICKET-123` command and gated by `HIL_LEARNING_ENABLED` (defaults ON; kill-switch). Verified node count: `grep -c addNode packages/agent/src/graph.ts` = 31 (21 base + 4 gated KG + 6 gated HIL-learning).
+See `docs/architecture/agent-pipeline.md` for the full diagram, node-by-node history, and correlation rule list. Non-obvious behavior worth knowing before touching the graph:
+
+- `enforceCorrelationsRouter` dispatches `correlationFetch` Sends for any unsatisfied correlation rule (e.g. kafka-significant-lag must have a matching elastic-agent finding); `enforceCorrelationsAggregate` then re-evaluates and caps `confidenceCap` at 0.6 when rules remain degraded.
+- `awsEstateRouter` expands a single AWS dispatch into one Send per target estate (cross-account AssumeRole) so the LLM never sees per-account credentials.
+- The 4 KG nodes (`recordEntities`, `graphEnrich`, `recordRootCause`, `recordBindings`) use the SIO-640 edge-gate idiom: registered always, edged only when `KNOWLEDGE_GRAPH_ENABLED=true`. KG writes are additive + soft-failing, so they never change the answer.
+- `resolveIdentifiers` is always edged; `RESOLVE_IDENTIFIERS_ENABLED` defaults ON and self-skips via runtime early-return when `false`.
+- The 6-node HIL learning lane routes off `classify` only on an explicit `learn from TICKET-123` command, gated by `HIL_LEARNING_ENABLED` (defaults ON; kill-switch).
+
+Verified node count: `grep -c addNode packages/agent/src/graph.ts` = 31 (21 base + 4 gated KG + 6 gated HIL-learning).
 
 ### Live Memory + Agent Memory backend (SIO-938)
 
@@ -65,15 +66,17 @@ The LangGraph checkpointer's `messages` array is bounded per turn so long-lived 
 
 ### Sub-Agents (named by MCP server)
 
-| Agent | MCP Port | Config Pattern |
-|-------|----------|----------------|
-| elastic-agent | :9080 | Multi-deployment: `ELASTIC_DEPLOYMENTS=prod,staging` per-deployment URL/auth |
-| kafka-agent | :9081 | Provider: `KAFKA_PROVIDER=local\|msk\|confluent`, feature gates for writes |
-| capella-agent | :9082 | Single cluster: `CB_HOSTNAME`, `CB_USERNAME`, `CB_PASSWORD` |
-| konnect-agent | :9083 | Token + region: `KONNECT_ACCESS_TOKEN`, `KONNECT_REGION=us\|eu\|au\|me\|in` |
-| gitlab-agent | :9084 | Token + instance: `GITLAB_PERSONAL_ACCESS_TOKEN`, `GITLAB_INSTANCE_URL` |
-| atlassian-agent | :9085 | OAuth 2.1 (Rovo): `ATLASSIAN_UPSTREAM_MCP_URL`, `ATLASSIAN_SITE_NAME`; proxies Atlassian Cloud |
-| aws-agent | :3001 (SigV4 proxy) | AgentCore runtime: `AWS_AGENTCORE_RUNTIME_ARN`, `AWS_AGENTCORE_PROXY_PORT`; agent reads `AWS_MCP_URL` |
+Ports are listed under Critical Rules > Servers. Config patterns:
+
+| Agent | Config Pattern |
+|-------|----------------|
+| elastic-agent | Multi-deployment: `ELASTIC_DEPLOYMENTS=prod,staging` per-deployment URL/auth |
+| kafka-agent | Provider: `KAFKA_PROVIDER=local\|msk\|confluent`, feature gates for writes |
+| capella-agent | Single cluster: `CB_HOSTNAME`, `CB_USERNAME`, `CB_PASSWORD` |
+| konnect-agent | Token + region: `KONNECT_ACCESS_TOKEN`, `KONNECT_REGION=us\|eu\|au\|me\|in` |
+| gitlab-agent | Token + instance: `GITLAB_PERSONAL_ACCESS_TOKEN`, `GITLAB_INSTANCE_URL` |
+| atlassian-agent | OAuth 2.1 (Rovo): `ATLASSIAN_UPSTREAM_MCP_URL`, `ATLASSIAN_SITE_NAME`; proxies Atlassian Cloud |
+| aws-agent | AgentCore runtime: `AWS_AGENTCORE_RUNTIME_ARN`, `AWS_AGENTCORE_PROXY_PORT`; agent reads `AWS_MCP_URL` |
 
 Agent connects to MCP servers via `MultiServerMCPClient` from `@langchain/mcp-adapters`. Sub-agents use action-driven tool selection (declared in tool YAML files) to filter 210+ MCP tools down to 5-25 per invocation, preventing context overflow. What sub-agent prompts contain and deliberately exclude (no live memory per SIO-843, no KG per SIO-1026/1027 -- enrichment seam only) is documented in `docs/architecture/sub-agent-context-assembly.md` (SIO-1444).
 
@@ -83,38 +86,23 @@ SvelteKit with Svelte 5 runes, Tailwind CSS (Tommy Hilfiger brand palette), SSE 
 
 ## Commands
 
+Scripts are listed in the root `package.json`. Non-obvious invocations:
+
 ```bash
-bun install                                            # Install all workspace deps
-bun run dev                                            # All services
 bun run --filter @devops-agent/web dev                 # SvelteKit frontend (port 5173)
-bun run typecheck                                      # TypeScript check all packages
-bun run lint                                           # Biome check
-bun run lint:fix                                       # Biome auto-fix
-bun run test                                           # All packages
 bun run --filter '@devops-agent/gitagent-bridge' test  # Single package
-bun run yaml:check                                     # Validate agent YAML definitions
 ```
+
+Note `bun test` at the repo root can crash the Bun runner mid-suite; run per
+package (`cd packages/<name> && bun test`), which is also how `apps/web` tests
+must be run.
 
 ## Linear Project
 
 - Team: **Siobytes** | Commit format: `SIO-XX: message`
 - Project: [DevOps Incident Analyzer](https://linear.app/siobytes/project/devops-incident-analyzer-02f717a4b59a)
 
-### Epics
-
-| Epic | Issues | Key IDs |
-|------|--------|---------|
-| 1: Monorepo Scaffold | 4 | SIO-537 to SIO-540 |
-| 2: Gitagent Definitions | 5 | SIO-541 to SIO-545 |
-| 3: Gitagent-Bridge | 9 | SIO-546 to SIO-555 (skip SIO-549) |
-| 4: Agent (LangGraph) | 15 | SIO-556 to SIO-570 |
-| 5: MCP Servers | 8 | SIO-571 to SIO-577, SIO-592 |
-| 6: Apps (Server+Web) | 9 | SIO-578 to SIO-586 |
-| 7: CI/CD | 5 | SIO-587 to SIO-591 |
-
-### Critical Path
-
-SIO-537 -> SIO-540 -> SIO-546 -> SIO-547 -> SIO-555 -> SIO-559 -> SIO-569 -> SIO-578 -> SIO-588
+The original build-out epics (SIO-537 to SIO-592) are complete; query Linear for current issue state.
 
 ## Handover Documents
 
