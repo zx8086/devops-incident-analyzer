@@ -501,11 +501,13 @@ export async function configChangeExists(store: GraphStore, changeId: string): P
 
 export async function mrUrlHasChange(store: GraphStore, url: string): Promise<boolean> {
 	if (!url) return false;
+	// Prefix filter BEFORE the limit: an unfiltered LIMIT could evict the one non-import row when
+	// an MR accumulates many gitlab: changes. STARTS WITH is proven against the live lbug store.
 	const rows = await store.run<{ id: string }>(
-		"MATCH (c:ConfigChange)-[:PROPOSED_IN]->(m:MergeRequest {url: $url}) RETURN c.id AS id LIMIT 25",
+		"MATCH (c:ConfigChange)-[:PROPOSED_IN]->(m:MergeRequest {url: $url}) WHERE NOT c.id STARTS WITH 'gitlab:' RETURN c.id AS id LIMIT 1",
 		{ url },
 	);
-	return rows.some((r) => !String(r.id).startsWith("gitlab:"));
+	return rows.length > 0;
 }
 
 // SIO-1062: re-key a ConfigChange's MergeRequest from a poisoned url (a "[409] {...}" GitLab
