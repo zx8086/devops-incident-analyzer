@@ -998,11 +998,21 @@ export async function watchRenovateMr(state: IacStateType): Promise<Partial<IacS
 			// recordIacChange's MERGE...SET would wipe summary and bump createdAt). The PROPOSED_IN
 			// edge is what lets the reconcile sweep (proposedChangesWithMr) advance the node to its
 			// real terminal outcome after merge; without it the lane node stays "proposed" forever
-			// and the SIO-1525 import sweep deliberately never re-records the merged commit. Id
-			// recovery: a same-turn watch reuses this turn's requestId; a "check again" turn recovers
-			// the TRIGGER turn's id from the durable marker (a pre-SIO-1527 checkpointed marker lacks
-			// it -> fall back to the current requestId). Soft-failing (attachLaneChangeMr).
-			await attachLaneChangeMr(state.renovateInFlightMarker?.requestId || state.requestId, mrUrl);
+			// and the SIO-1525 import sweep deliberately never re-records the merged commit. The id
+			// comes ONLY from the durable marker (stamped by triggerRenovateUpdate, so present on
+			// both same-turn and "check again" watches): a pre-SIO-1527 checkpointed marker lacks it,
+			// and no other id can match the trigger-time node -- attaching under the current turn's
+			// requestId would be a silent wrong-id no-op (Greptile, PR #676), so skip with a log
+			// instead. Soft-failing (attachLaneChangeMr).
+			const triggerChangeId = state.renovateInFlightMarker?.requestId;
+			if (triggerChangeId) {
+				await attachLaneChangeMr(triggerChangeId, mrUrl);
+			} else {
+				log.info(
+					{ mrUrl },
+					"watchRenovateMr: in-flight marker predates SIO-1527 (no trigger requestId); skipping MR attach",
+				);
+			}
 			// Greptile (PR #671): do NOT clear renovateInFlightMarker here -- teardownIac (this
 			// node's only successor) still needs it this same turn to build the daily-log
 			// breadcrumb and the durable renovate-trigger memory fact (both fall back to

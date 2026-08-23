@@ -81,7 +81,9 @@ describe("watchRenovateMr MR attach (SIO-1527)", () => {
 		expect(attachCalls).toEqual([{ changeId: "trigger-req", mrUrl: MR_URL }]);
 	});
 
-	test("a pre-SIO-1527 marker (no requestId) falls back to the current turn's requestId", async () => {
+	test("a pre-SIO-1527 marker (no requestId) skips the attach entirely", async () => {
+		// No other id can match the trigger-time node, so attaching under the current turn's
+		// requestId would be a silent wrong-id no-op (and MERGE an orphan MergeRequest node).
 		const out = await watchRenovateMr(
 			stateWith({
 				renovateInFlightMarker: {
@@ -92,7 +94,7 @@ describe("watchRenovateMr MR attach (SIO-1527)", () => {
 				},
 			}),
 		);
-		expect(out.renovateMrUrl).toBe(MR_URL);
-		expect(attachCalls).toEqual([{ changeId: "fresh-req", mrUrl: MR_URL }]);
+		expect(out.renovateMrUrl).toBe(MR_URL); // the MR discovery itself is unaffected
+		expect(attachCalls).toEqual([]);
 	});
 });
