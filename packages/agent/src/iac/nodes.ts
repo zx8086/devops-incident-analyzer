@@ -1815,6 +1815,22 @@ export async function bootstrapIac(state: IacStateType, config?: RunnableConfig)
 	// state input; checkpointing it here on leg 1 makes it survive the resume leg.
 	const threadId = typeof config?.configurable?.thread_id === "string" ? config.configurable.thread_id : "";
 
+	// First turn of a fresh session iff the thread has no prior assistant turn yet.
+	const firstTurn = !state.messages.some((m) => m.getType() === "ai");
+	if (firstTurn) {
+		// SIO-1525: backfill/import externally-made GitLab config changes. Fire-and-log, never
+		// awaited -- a slow first backfill (30-day lookback) must not delay session start; the
+		// hourly iac-gitlab-import-sweep is the exhaustive pass. importEnabled() self-gates inside.
+		// Runs BEFORE the MCP connectivity guard: the importer needs only the GitLab token + a
+		// durable store, so a disconnected elastic-iac server must not skip the backfill.
+		importExternalChanges({ source: "bootstrap", limit: 50 }).catch((error: unknown) => {
+			log.warn(
+				{ error: error instanceof Error ? error.message : String(error) },
+				"bootstrapIac gitlab-import failed; continuing",
+			);
+		});
+	}
+
 	const connected = getConnectedServers().includes(IAC_SERVER);
 	if (!connected) {
 		// Remediation detail (server name, port, env var) belongs in the operator log
@@ -1834,8 +1850,6 @@ export async function bootstrapIac(state: IacStateType, config?: RunnableConfig)
 		};
 	}
 
-	// First turn of a fresh session iff the thread has no prior assistant turn yet.
-	const firstTurn = !state.messages.some((m) => m.getType() === "ai");
 	if (firstTurn) {
 		// SIO-1005: opportunistically reconcile a small handful of recent proposed MRs to their true
 		// terminal state BEFORE building the in-flight note, so a returning user sees current state
@@ -1850,15 +1864,6 @@ export async function bootstrapIac(state: IacStateType, config?: RunnableConfig)
 				"bootstrapIac reconcile failed; continuing",
 			);
 		}
-		// SIO-1525: backfill/import externally-made GitLab config changes. Fire-and-log, never
-		// awaited -- a slow first backfill (30-day lookback) must not delay session start; the
-		// hourly iac-gitlab-import-sweep is the exhaustive pass. importEnabled() self-gates inside.
-		importExternalChanges({ source: "bootstrap", limit: 50 }).catch((error: unknown) => {
-			log.warn(
-				{ error: error instanceof Error ? error.message : String(error) },
-				"bootstrapIac gitlab-import failed; continuing",
-			);
-		});
 		const note = await buildInFlightSessionNote();
 		if (note) {
 			log.info({ note }, "bootstrapIac: surfacing in-flight work at session start");

@@ -33,6 +33,7 @@ type FetchRoute = (url: string) => Response | null;
 let backend: string = "agent-memory";
 let kgEnabled = true;
 let kgStoreFails = false;
+let kgWriteFails = false;
 let recordNowSucceeds = true;
 let searchHits: Array<{ text: string; annotations: Record<string, string> }> = [];
 let renovateHits: Array<{ text: string; annotations: Record<string, string> }> = [];
@@ -76,6 +77,7 @@ beforeAll(() => {
 			return fakeStore;
 		},
 		recordIacChange: async (_store: unknown, change: Record<string, unknown>) => {
+			if (kgWriteFails) throw new Error("kg write refused");
 			kgChanges.push(change);
 		},
 		configChangeExists: async (_store: unknown, id: string) => kgExistingIds.has(id),
@@ -108,6 +110,7 @@ beforeEach(() => {
 	backend = "agent-memory";
 	kgEnabled = true;
 	kgStoreFails = false;
+	kgWriteFails = false;
 	recordNowSucceeds = true;
 	searchHits = [];
 	renovateHits = [];
@@ -504,6 +507,56 @@ describe("importExternalChanges sweep", () => {
 		const summary = await importExternalChanges({ source: "cron", limit: 10 });
 		expect(summary.errors).toBe(1);
 		expect(summary.imported).toBe(1);
+	});
+
+	test("a KG write failure with a memory success is PARTIAL: counted as an error, watermark frozen", async () => {
+		kgWriteFails = true;
+		versionUpgradeScenario();
+		const first = await importExternalChanges({ source: "cron", limit: 10 });
+		expect(first.errors).toBe(1);
+		expect(first.imported).toBe(0);
+		expect(recordedNowFacts).toHaveLength(1); // the memory leg DID accept it
+
+		// Frozen watermark re-lists the commit; the memory store dedupes, the KG leg retries clean.
+		kgWriteFails = false;
+		searchHits = recordedNowFacts.map((f) => ({ text: f.text, annotations: f.annotations }));
+		const second = await importExternalChanges({ source: "cron", limit: 10 });
+		expect(second.imported).toBe(1); // KG leg newly accepted
+		expect(kgChanges).toHaveLength(1);
+		expect(recordedNowFacts).toHaveLength(1); // no duplicate memory fact
+	});
+
+	test("KG enabled but store unavailable aborts the sweep instead of importing memory-only", async () => {
+		kgStoreFails = true;
+		versionUpgradeScenario();
+		const summary = await importExternalChanges({ source: "cron", limit: 10 });
+		expect(summary.errors).toBe(1);
+		expect(summary.imported).toBe(0);
+		expect(recordedNowFacts).toHaveLength(0);
+	});
+
+	test("mixed committed_date UTC offsets order by epoch, not lexicographically", async () => {
+		// SHA_A is OLDER by epoch (11:30+02:00 = 09:30Z) but lexicographically larger than
+		// SHA_B (10:00Z). With limit 1 the epoch-older, out-of-scope SHA_A must be processed.
+		seedGitlab({
+			commits: [
+				{ id: SHA_B, parent_ids: [SHA_A], title: "newer utc", committed_date: "2026-08-20T10:00:00.000Z" },
+				{ id: SHA_A, parent_ids: [PARENT], title: "older cet", committed_date: "2026-08-20T11:30:00.000+02:00" },
+			],
+			diffs: {
+				[SHA_A]: [{ old_path: "README.md", new_path: "README.md" }],
+				[SHA_B]: [
+					{ old_path: "environments/_deployments/eu-b2b.json", new_path: "environments/_deployments/eu-b2b.json" },
+				],
+			},
+			raw: {
+				[`environments/_deployments/eu-b2b.json@${SHA_A}`]: { version: "9.4.2" },
+				[`environments/_deployments/eu-b2b.json@${SHA_B}`]: { version: "9.5.2" },
+			},
+		});
+		const summary = await importExternalChanges({ source: "cron", limit: 1 });
+		expect(summary.skippedOutOfScope).toBe(1);
+		expect(summary.imported).toBe(0);
 	});
 
 	test("a failed memory write is an error and the next sweep re-lists from the frozen watermark", async () => {

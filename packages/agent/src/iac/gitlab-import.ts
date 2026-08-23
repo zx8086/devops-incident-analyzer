@@ -1,4 +1,4 @@
-// packages/agent/src/iac/gitlab-import.ts
+// agent/src/iac/gitlab-import.ts
 // SIO-1525: import externally-made config changes from the elastic-iac GitLab repo into BOTH
 // durable stores (Agent Memory facts + knowledge-graph ConfigChange nodes). Every pre-existing
 // write path is keyed on an MR the agent itself opened (state.mrUrl), so a human editing
@@ -57,8 +57,6 @@ export function importEnabled(): boolean {
 	if (!process.env.ELASTIC_IAC_GITLAB_TOKEN) return false;
 	return selectedBackend() === "agent-memory" || isKnowledgeGraphEnabled();
 }
-
-// --- Path -> workflow classification (pure) ---------------------------------------------------
 
 export interface PathClassification {
 	deployment: string;
@@ -160,8 +158,6 @@ export function classifyRepoPath(input: DiffPathInput): PathClassification | nul
 	}
 }
 
-// --- _deployments field-diff disambiguation (pure) --------------------------------------------
-
 function isPlainObject(v: unknown): v is Record<string, unknown> {
 	return typeof v === "object" && v !== null && !Array.isArray(v);
 }
@@ -214,8 +210,6 @@ export function externalChangeId(sha: string, deployment: string, workflow: stri
 	return `gitlab:${sha.slice(0, 12)}:${deployment}:${workflow}`;
 }
 
-// --- GitLab REST (plain fetch; seed-iac.ts precedent) -----------------------------------------
-
 interface GitlabConfig {
 	base: string;
 	token: string;
@@ -251,9 +245,16 @@ interface GitlabCommitMr {
 	web_url: string;
 }
 
+// Bounded request timeout: a stalled GitLab connection would otherwise hold the sweep (and its
+// sweepRunning re-entrancy guard) open for the process lifetime, disabling the importer.
+const GITLAB_TIMEOUT_MS = 30_000;
+
 async function gitlabJson<T>(cfg: GitlabConfig, pathAndQuery: string): Promise<T> {
 	const url = `${cfg.base}/api/v4/projects/${cfg.projectEnc}/${pathAndQuery}`;
-	const res = await fetch(url, { headers: { "PRIVATE-TOKEN": cfg.token } });
+	const res = await fetch(url, {
+		headers: { "PRIVATE-TOKEN": cfg.token },
+		signal: AbortSignal.timeout(GITLAB_TIMEOUT_MS),
+	});
 	if (!res.ok) throw new Error(`GitLab ${pathAndQuery.split("?")[0]}: ${res.status} ${res.statusText}`);
 	return (await res.json()) as T;
 }
@@ -271,23 +272,54 @@ async function gitlabPaged<T>(cfg: GitlabConfig, pathAndQuery: string, maxItems:
 	return out.slice(0, maxItems);
 }
 
-// Hard bound on one sweep's full window listing (pagination pages, not processing). A window
-// bigger than this loses its newest overflow until later sweeps re-list it; logged when hit.
+// Per-round bound on the window listing; a window with more commits back-walks via `until`.
 const LISTING_CAP = 1000;
+// Back-walk rounds: LISTING_CAP * MAX_LISTING_ROUNDS is the absolute per-sweep listing bound. A
+// window still capped after all rounds makes the sweep abort with an error rather than silently
+// strand its oldest commits (5000 first-parent commits in one lookback window is an anomaly).
+const MAX_LISTING_ROUNDS = 5;
 
 // first_parent=true collapses merged branches to their merge/squash commit, so one main-branch
 // commit represents one landed change (branch-interior commits never double-import).
-async function listMainCommitsSince(cfg: GitlabConfig, sinceIso: string): Promise<GitlabCommit[]> {
-	const commits = await gitlabPaged<GitlabCommit>(
-		cfg,
-		`repository/commits?ref_name=main&first_parent=true&since=${encodeURIComponent(sinceIso)}`,
-		LISTING_CAP,
-	);
-	// GitLab returns newest-first; the sweep processes oldest-first so the watermark only ever
-	// advances past commits it has actually handled. The processing cap (opts.limit) must then
-	// keep the OLDEST commits: truncating the newest leaves them ABOVE the watermark for the next
-	// sweep, whereas truncating the oldest would strand them below it forever (live-probe finding).
-	return commits.sort((a, b) => a.committed_date.localeCompare(b.committed_date));
+//
+// GitLab lists newest-first with no ascending option, so a window bigger than one LISTING_CAP
+// page set would otherwise retain only the NEWEST commits -- and the sweep's oldest-first
+// processing would then advance the watermark past unlisted older commits, stranding them
+// forever. When a round comes back full, anchor `until` at the oldest commit seen and re-list
+// the older region (the boundary commit repeats across rounds; the sha map dedupes it).
+// `capped` is true only when the final round was still full -- the true oldest commits are then
+// still unreached and the caller must NOT process (or advance the watermark) at all.
+async function listMainCommitsSince(
+	cfg: GitlabConfig,
+	sinceIso: string,
+): Promise<{ commits: GitlabCommit[]; capped: boolean }> {
+	const bySha = new Map<string, GitlabCommit>();
+	let untilIso: string | null = null;
+	let capped = false;
+	for (let round = 0; round < MAX_LISTING_ROUNDS; round++) {
+		// Explicit annotations break the untilIso -> query -> batch -> untilIso inference cycle.
+		const query: string =
+			`repository/commits?ref_name=main&first_parent=true&since=${encodeURIComponent(sinceIso)}` +
+			(untilIso ? `&until=${encodeURIComponent(untilIso)}` : "");
+		const batch: GitlabCommit[] = await gitlabPaged<GitlabCommit>(cfg, query, LISTING_CAP);
+		for (const c of batch) bySha.set(c.id, c);
+		if (batch.length < LISTING_CAP) {
+			capped = false;
+			break;
+		}
+		capped = true;
+		const oldest: GitlabCommit = batch.reduce((a, b) =>
+			Date.parse(a.committed_date) <= Date.parse(b.committed_date) ? a : b,
+		);
+		untilIso = oldest.committed_date;
+	}
+	// The sweep processes oldest-first so the watermark only ever advances past commits it has
+	// actually handled; the processing cap (opts.limit) must then keep the OLDEST commits
+	// (truncating the newest leaves them ABOVE the watermark for the next sweep; live-probe
+	// finding). Sort by epoch, NOT lexicographically: committed_date carries the commit author's
+	// UTC offset (e.g. "+02:00" observed live), so string order diverges from time order.
+	const commits = [...bySha.values()].sort((a, b) => Date.parse(a.committed_date) - Date.parse(b.committed_date));
+	return { commits, capped };
 }
 
 async function getCommitDiff(cfg: GitlabConfig, sha: string): Promise<GitlabDiffEntry[]> {
@@ -302,16 +334,22 @@ async function getCommitMergedMrUrl(cfg: GitlabConfig, sha: string): Promise<{ u
 
 async function getRawJsonAtRef(cfg: GitlabConfig, path: string, ref: string): Promise<unknown> {
 	const url = `${cfg.base}/api/v4/projects/${cfg.projectEnc}/repository/files/${encodeURIComponent(path)}/raw?ref=${encodeURIComponent(ref)}`;
-	const res = await fetch(url, { headers: { "PRIVATE-TOKEN": cfg.token } });
-	if (!res.ok) return null; // new file at parent ref, or transient -- classifier falls back
+	const res = await fetch(url, {
+		headers: { "PRIVATE-TOKEN": cfg.token },
+		signal: AbortSignal.timeout(GITLAB_TIMEOUT_MS),
+	});
+	// Only a genuinely missing blob (new file at the parent ref) may fall through to the
+	// topology-edit classifier default. A transient 429/5xx must THROW so the commit errors and
+	// is retried next sweep -- silently classifying it would persist the wrong workflow under a
+	// permanent record id (the id embeds the workflow, so it would never self-correct).
+	if (res.status === 404) return null;
+	if (!res.ok) throw new Error(`GitLab raw ${path}@${ref.slice(0, 12)}: ${res.status} ${res.statusText}`);
 	try {
 		return JSON.parse(await res.text()) as unknown;
 	} catch {
-		return null;
+		return null; // malformed JSON IN the repo is a real (permanent) state -> classifier fallback
 	}
 }
-
-// --- Record building --------------------------------------------------------------------------
 
 interface ImportedRecord {
 	id: string;
@@ -359,14 +397,13 @@ export function buildImportedDecision(record: ImportedRecord): string {
 			? `version upgraded to ${record.version}`
 			: `${record.workflow} (${redactPiiContent(record.commit.title).trim() || record.filePaths[0] || "config change"})`;
 	const via = record.mrUrl ? `via MR ${record.mrUrl}` : "by direct push";
+	const when = new Date(record.commit.committed_date).toISOString();
 	return (
 		`Elastic IaC change APPLIED (made outside this agent) on ${scope}: ${what}. ` +
-		`Landed on main in GitLab ${via} (commit ${record.commit.id.slice(0, 12)}, ${record.commit.committed_date}); ` +
+		`Landed on main in GitLab ${via} (commit ${record.commit.id.slice(0, 12)}, ${when}); ` +
 		"imported by the gitlab-import sweep."
 	);
 }
-
-// --- The sweep --------------------------------------------------------------------------------
 
 export interface ImportOptions {
 	source: "cron" | "bootstrap";
@@ -454,7 +491,7 @@ async function buildRecordsForCommit(
 			version = result.version;
 		}
 
-		const key = `${classified.deployment} ${workflow}`;
+		const key = `${classified.deployment}:${workflow}`;
 		const existing = groups.get(key);
 		if (existing) {
 			existing.filePaths.push(path);
@@ -475,14 +512,16 @@ async function buildRecordsForCommit(
 	return [...groups.values()];
 }
 
-// Write one record into every enabled store it is missing from. Returns "imported" when at least
-// one store newly accepted it, "already" when every enabled store had it, "failed" when a write
-// was attempted and no store accepted it (retried next sweep -- dedupe makes the retry safe).
+// Write one record into every enabled store it is missing from. Returns "imported" when every
+// enabled store now holds it and at least one write was new, "already" when every enabled store
+// had it, "partial" when one store accepted the write but another enabled store failed, and
+// "failed" when no store accepted it. partial/failed freeze the watermark so the commit is
+// re-listed next sweep -- per-store dedupe makes the retry write only the missing side.
 async function persistRecord(
 	record: ImportedRecord,
 	store: GraphStore | null,
 	importedIds: Set<string>,
-): Promise<"imported" | "already" | "failed"> {
+): Promise<"imported" | "already" | "partial" | "failed"> {
 	let wrote = false;
 	let had = false;
 	let failed = false;
@@ -500,7 +539,9 @@ async function persistRecord(
 					summary: buildKgSummary(record),
 					...(record.mrUrl ? { mrUrl: record.mrUrl } : {}),
 					stackInstanceId: `${record.deployment}/${record.stack}`,
-					createdAt: record.commit.committed_date,
+					// Normalized to UTC: committed_date carries the author's offset, and the KG's
+					// createdAt ordering is lexicographic, so mixed offsets would break it.
+					createdAt: new Date(record.commit.committed_date).toISOString(),
 					outcome: "applied",
 				});
 				wrote = true;
@@ -528,6 +569,7 @@ async function persistRecord(
 		}
 	}
 
+	if (wrote && failed) return "partial";
 	if (wrote) return "imported";
 	if (failed) return "failed";
 	return had ? "already" : "failed"; // neither store enabled should not reach here (importEnabled gate)
@@ -561,7 +603,18 @@ export async function importExternalChanges(opts: ImportOptions): Promise<Import
 			? new Date(new Date(watermarkIso).getTime() - WATERMARK_OVERLAP_MS).toISOString()
 			: new Date(Date.now() - importLookbackDays() * 24 * 60 * 60 * 1000).toISOString();
 
-		const listed = await listMainCommitsSince(cfg, since);
+		const { commits: listed, capped } = await listMainCommitsSince(cfg, since);
+		if (capped) {
+			// The oldest commits of the window are still unreached (see listMainCommitsSince);
+			// processing now would advance the watermark past them forever. Operator signal.
+			summary.errors += 1;
+			log.error(
+				{ source: opts.source, since, cap: LISTING_CAP * MAX_LISTING_ROUNDS },
+				"gitlab-import: window exceeds the listing bound; aborting sweep without processing",
+			);
+			log.info(summary, "gitlab-import sweep complete");
+			return summary;
+		}
 		summary.truncated = listed.length > limit;
 		// Oldest `limit` commits: the newest overflow stays above the watermark for later sweeps.
 		const commits = listed.slice(0, limit);
@@ -577,10 +630,15 @@ export async function importExternalChanges(opts: ImportOptions): Promise<Import
 			try {
 				store = await getGraphStore();
 			} catch (error) {
+				// Abort rather than continue memory-only: a clean sweep here would advance the
+				// watermark past records the enabled KG never received, and they'd never retry.
+				summary.errors += 1;
 				log.warn(
 					{ source: opts.source, error: error instanceof Error ? error.message : String(error) },
-					"gitlab-import: getGraphStore failed; KG leg skipped this sweep",
+					"gitlab-import: getGraphStore failed; aborting sweep (retried next tick)",
 				);
+				log.info(summary, "gitlab-import sweep complete");
+				return summary;
 			}
 		}
 
@@ -616,6 +674,9 @@ export async function importExternalChanges(opts: ImportOptions): Promise<Import
 							} else if (outcome === "already") {
 								summary.alreadyImported += 1;
 							} else {
+								// "partial" and "failed" both freeze the watermark: at least one
+								// enabled store is still missing the record, so the commit must
+								// re-list next sweep (the store that has it dedupes the retry).
 								summary.errors += 1;
 								commitClean = false;
 							}
@@ -632,7 +693,8 @@ export async function importExternalChanges(opts: ImportOptions): Promise<Import
 			}
 			// Advance past clean commits only; the first failure freezes the watermark so the failed
 			// commit is re-listed next sweep (later successes still import now and dedupe then).
-			if (commitClean && !watermarkFrozen) watermarkIso = commit.committed_date;
+			// Normalized to UTC so watermark comparisons never mix author offsets.
+			if (commitClean && !watermarkFrozen) watermarkIso = new Date(commit.committed_date).toISOString();
 			else watermarkFrozen = true;
 		}
 
