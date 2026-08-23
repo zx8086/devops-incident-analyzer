@@ -168,6 +168,9 @@ describe("attachLaneChangeMr (SIO-1527)", () => {
 	test("edge-only: MERGEs the MergeRequest + PROPOSED_IN and never touches ConfigChange properties", async () => {
 		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
 		const store = new InMemoryGraphStore();
+		// The existence pre-check (no orphan MergeRequest when the trigger write soft-failed)
+		// must see the trigger-time node.
+		store.stub("MATCH (c:ConfigChange {id: $id}) RETURN c.id", [{ id: "req-1" }]);
 		_setGraphStoreForTesting(store);
 		await attachLaneChangeMr("req-1", MR_URL);
 		expect(store.calls.some((c) => c.cypher.includes("MERGE (m:MergeRequest") && c.params?.url === MR_URL)).toBe(true);
@@ -176,6 +179,15 @@ describe("attachLaneChangeMr (SIO-1527)", () => {
 		// must NOT be re-SET by this write.
 		expect(store.calls.some((c) => c.cypher.includes("MERGE (c:ConfigChange"))).toBe(false);
 		expect(store.calls.some((c) => c.cypher.includes("SET c."))).toBe(false);
+	});
+
+	test("writes nothing (no orphan MergeRequest) when the ConfigChange does not exist", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		await attachLaneChangeMr("req-unknown", MR_URL);
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (m:MergeRequest"))).toBe(false);
+		expect(store.calls.some((c) => c.cypher.includes("PROPOSED_IN"))).toBe(false);
 	});
 
 	test("soft-fails (no throw) when the store throws", async () => {

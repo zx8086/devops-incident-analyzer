@@ -490,9 +490,12 @@ export async function setChangeOutcome(store: GraphStore, changeId: string, outc
 // renovate lane (which learns its MR url only after the trigger-time node was recorded) needs
 // this edge-only form. The PROPOSED_IN edge is what qualifies the node for proposedChangesWithMr,
 // letting the reconcile sweep advance it to its real terminal outcome after merge.
-// MERGE-idempotent; an unknown changeId makes the edge MATCH a no-op.
+// MERGE-idempotent. The ConfigChange is verified FIRST (CodeRabbit, PR #676): if the
+// trigger-time node write soft-failed, writing the MergeRequest before the edge MATCH no-ops
+// would leave an orphan MR node -- harmless to readers (see repairChangeMrUrl) but avoidable.
 export async function attachChangeMr(store: GraphStore, changeId: string, mrUrl: string): Promise<void> {
 	if (!changeId || !mrUrl) return;
+	if (!(await configChangeExists(store, changeId))) return;
 	await store.run("MERGE (m:MergeRequest {url: $url})", { url: mrUrl });
 	await store.run("MATCH (c:ConfigChange {id: $id}), (m:MergeRequest {url: $url}) MERGE (c)-[:PROPOSED_IN]->(m)", {
 		id: changeId,
