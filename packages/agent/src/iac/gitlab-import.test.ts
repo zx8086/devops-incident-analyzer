@@ -521,7 +521,12 @@ describe("importExternalChanges sweep", () => {
 		searchHits = [
 			{
 				text: "imported",
-				annotations: { kind: "iac-change", external_import: "true", config_change_id: "gitlab:other:x:y", mr_url: mrUrl },
+				annotations: {
+					kind: "iac-change",
+					external_import: "true",
+					config_change_id: "gitlab:other:x:y",
+					mr_url: mrUrl,
+				},
 			},
 		];
 		const summary = await importExternalChanges({ source: "cron", limit: 10 });

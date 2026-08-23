@@ -108,13 +108,20 @@ export async function attachLaneChangeMr(changeId: string, mrUrl: string): Promi
 
 // SIO-1527: id-less variant for markers checkpointed BEFORE the marker carried the trigger
 // requestId -- the node is recovered by its deterministic trigger-time summary instead
-// (findProposedChangeIdBySummary). No matching proposed node -> logged no-op.
-export async function attachLaneChangeMrBySummary(workflow: string, summary: string, mrUrl: string): Promise<void> {
+// (findProposedChangeIdBySummary). nearIso (the marker's triggerAtIso) anchors the selection to
+// the marker's OWN trigger so a newer re-trigger of the same summary cannot steal the attach.
+// No matching proposed node -> logged no-op.
+export async function attachLaneChangeMrBySummary(
+	workflow: string,
+	summary: string,
+	mrUrl: string,
+	nearIso?: string,
+): Promise<void> {
 	if (!isKnowledgeGraphEnabled()) return;
 	if (!workflow || !summary || !mrUrl) return;
 	try {
 		const store = await getGraphStore();
-		const changeId = await findProposedChangeIdBySummary(store, workflow, summary);
+		const changeId = await findProposedChangeIdBySummary(store, workflow, summary, nearIso);
 		if (!changeId) {
 			logger.info({ workflow, summary }, "attachLaneChangeMrBySummary: no matching proposed change; skipping");
 			return;

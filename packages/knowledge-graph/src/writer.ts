@@ -506,13 +506,16 @@ export async function attachChangeMr(store: GraphStore, changeId: string, mrUrl:
 // SIO-1527: recover a still-proposed lane change's id by its deterministic summary -- the
 // fallback for pre-SIO-1527 renovate markers, which never carried the trigger turn's requestId.
 // The renovate lane writes `renovate <deployment> -> <marker>` at trigger time, so the summary
-// reconstructs exactly from the durable marker fields. Newest match wins (all writers store UTC
-// ISO createdAt, so lexicographic order is time order): a re-trigger of the same dep/marker
-// supersedes the older node, and the in-flight marker always refers to the latest.
+// reconstructs exactly from the durable marker fields. Selection (Greptile P1 + CodeRabbit,
+// PR #676): when `nearIso` is given (the marker's own triggerAtIso -- the node was written
+// moments after that instant), the candidate CLOSEST to it wins, so a NEWER re-trigger of the
+// same deployment/marker can never steal a legacy marker's attach; without it, newest wins.
+// Ties break on id (lexicographic) so equal-createdAt rows resolve identically on every read.
 export async function findProposedChangeIdBySummary(
 	store: GraphStore,
 	workflow: string,
 	summary: string,
+	nearIso?: string,
 ): Promise<string | null> {
 	if (!workflow || !summary) return null;
 	const rows = await store.run<{ id: string; createdAt: string }>(
@@ -520,8 +523,24 @@ export async function findProposedChangeIdBySummary(
 		{ workflow, summary },
 	);
 	if (rows.length === 0) return null;
-	const newest = rows.reduce((a, b) => (String(a.createdAt) >= String(b.createdAt) ? a : b));
-	return String(newest.id);
+	// Unparseable createdAt degrades to epoch: deterministically oldest / farthest, never NaN.
+	const ts = (v: unknown): number => {
+		const n = Date.parse(String(v));
+		return Number.isNaN(n) ? 0 : n;
+	};
+	const anchor = nearIso ? ts(nearIso) : null;
+	const ranked = [...rows].sort((a, b) => {
+		if (anchor !== null) {
+			const d = Math.abs(ts(a.createdAt) - anchor) - Math.abs(ts(b.createdAt) - anchor);
+			if (d !== 0) return d;
+		} else {
+			const d = ts(b.createdAt) - ts(a.createdAt);
+			if (d !== 0) return d;
+		}
+		return String(a.id).localeCompare(String(b.id));
+	});
+	const best = ranked[0];
+	return best ? String(best.id) : null;
 }
 
 // SIO-1525: existence probes for the gitlab-import sweep's dedupe. configChangeExists keys the

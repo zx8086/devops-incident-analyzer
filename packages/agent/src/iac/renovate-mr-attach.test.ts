@@ -18,7 +18,7 @@ const realLaneKnowledge = { ...realLaneKnowledgeNs };
 const MR_URL = "https://gitlab.example/x/-/merge_requests/42";
 
 let attachCalls: Array<{ changeId: string; mrUrl: string }> = [];
-let summaryAttachCalls: Array<{ workflow: string; summary: string; mrUrl: string }> = [];
+let summaryAttachCalls: Array<{ workflow: string; summary: string; mrUrl: string; nearIso?: string }> = [];
 
 beforeAll(() => {
 	mock.module("@langchain/core/callbacks/dispatch", () => ({
@@ -41,8 +41,8 @@ beforeAll(() => {
 		attachLaneChangeMr: async (changeId: string, mrUrl: string) => {
 			attachCalls.push({ changeId, mrUrl });
 		},
-		attachLaneChangeMrBySummary: async (workflow: string, summary: string, mrUrl: string) => {
-			summaryAttachCalls.push({ workflow, summary, mrUrl });
+		attachLaneChangeMrBySummary: async (workflow: string, summary: string, mrUrl: string, nearIso?: string) => {
+			summaryAttachCalls.push({ workflow, summary, mrUrl, ...(nearIso ? { nearIso } : {}) });
 		},
 	}));
 });
@@ -102,7 +102,12 @@ describe("watchRenovateMr MR attach (SIO-1527)", () => {
 		expect(out.renovateMrUrl).toBe(MR_URL); // the MR discovery itself is unaffected
 		expect(attachCalls).toEqual([]);
 		expect(summaryAttachCalls).toEqual([
-			{ workflow: "renovate", summary: "renovate eu-b2b -> renovate-eu-b2b-prometheus", mrUrl: MR_URL },
+			{
+				workflow: "renovate",
+				summary: "renovate eu-b2b -> renovate-eu-b2b-prometheus",
+				mrUrl: MR_URL,
+				nearIso: "2026-08-20T10:00:00.000Z",
+			},
 		]);
 	});
 });

@@ -221,6 +221,40 @@ describe("attachLaneChangeMrBySummary (SIO-1527 legacy-marker recovery)", () => 
 		expect(store.calls.some((c) => c.cypher.includes("PROPOSED_IN") && c.params?.id === "req-new")).toBe(true);
 	});
 
+	test("nearIso anchors selection to the marker's OWN trigger, not a newer re-trigger", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		store.stub("c.summary = $summary", [
+			{ id: "req-legacy", createdAt: "2026-08-19T10:00:05.000Z" },
+			{ id: "req-newer-trigger", createdAt: "2026-08-22T09:00:00.000Z" },
+		]);
+		store.stub("MATCH (c:ConfigChange {id: $id}) RETURN c.id", [{ id: "req-legacy" }]);
+		_setGraphStoreForTesting(store);
+		// The legacy marker's triggerAtIso is seconds before its own node's createdAt.
+		await attachLaneChangeMrBySummary("renovate", SUMMARY, MR_URL, "2026-08-19T10:00:00.000Z");
+		expect(store.calls.some((c) => c.cypher.includes("PROPOSED_IN") && c.params?.id === "req-legacy")).toBe(true);
+		expect(store.calls.some((c) => c.cypher.includes("PROPOSED_IN") && c.params?.id === "req-newer-trigger")).toBe(
+			false,
+		);
+	});
+
+	test("equal createdAt resolves deterministically via the id tiebreak", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		for (const order of [0, 1]) {
+			const store = new InMemoryGraphStore();
+			const rows = [
+				{ id: "req-a", createdAt: "2026-08-20T10:00:00.000Z" },
+				{ id: "req-b", createdAt: "2026-08-20T10:00:00.000Z" },
+			];
+			store.stub("c.summary = $summary", order === 0 ? rows : [...rows].reverse());
+			store.stub("MATCH (c:ConfigChange {id: $id}) RETURN c.id", [{ id: "req-a" }]);
+			_setGraphStoreForTesting(store);
+			await attachLaneChangeMrBySummary("renovate", SUMMARY, MR_URL);
+			// Same winner regardless of row order returned by the store.
+			expect(store.calls.some((c) => c.cypher.includes("PROPOSED_IN") && c.params?.id === "req-a")).toBe(true);
+		}
+	});
+
 	test("no matching proposed node is a logged no-op", async () => {
 		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
 		const store = new InMemoryGraphStore();

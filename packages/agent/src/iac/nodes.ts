@@ -1018,11 +1018,14 @@ export async function watchRenovateMr(state: IacStateType): Promise<Partial<IacS
 			} else if (state.renovateInFlightMarker) {
 				// Legacy marker (checkpointed before SIO-1527, no trigger requestId): recover the
 				// trigger-time node by its deterministic summary instead -- the same string
-				// triggerRenovateUpdate wrote, reconstructed from the marker's own fields.
+				// triggerRenovateUpdate wrote, reconstructed from the marker's own fields. The
+				// marker's triggerAtIso anchors the lookup to ITS trigger so a newer re-trigger of
+				// the same deployment/marker cannot steal the attach (Greptile P1, PR #676).
 				await attachLaneChangeMrBySummary(
 					"renovate",
 					renovateChangeSummary(state.renovateInFlightMarker.deployment, state.renovateInFlightMarker.marker),
 					mrUrl,
+					state.renovateInFlightMarker.triggerAtIso,
 				);
 			} else {
 				// No durable marker at all (same-turn renovateMarker only): the trigger that wrote
