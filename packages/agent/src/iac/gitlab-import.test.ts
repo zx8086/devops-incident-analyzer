@@ -509,6 +509,28 @@ describe("importExternalChanges sweep", () => {
 		expect(summary.imported).toBe(1);
 	});
 
+	test("a partially-imported MR commit is NOT commit-skipped: the import's own fact/edge is excluded from the mr_url skip", async () => {
+		const mrUrl = "https://gitlab.com/x/-/merge_requests/88";
+		const id = externalChangeId(SHA_A, "eu-b2b", "version-upgrade");
+		versionUpgradeScenario({ mrs: { [SHA_A]: [{ iid: 88, state: "merged", web_url: mrUrl }] } });
+		// First sweep wrote the KG record (with its PROPOSED_IN edge) but the memory write failed.
+		// The real mrUrlHasChange ignores gitlab:-prefixed changes, so the mock's set stays empty;
+		// only the per-record kg id exists. The import's own fact (if any) carries external_import
+		// and must feed importedIds, never the commit-level skip.
+		kgExistingIds = new Set([id]);
+		searchHits = [
+			{
+				text: "imported",
+				annotations: { kind: "iac-change", external_import: "true", config_change_id: "gitlab:other:x:y", mr_url: mrUrl },
+			},
+		];
+		const summary = await importExternalChanges({ source: "cron", limit: 10 });
+		expect(summary.skippedAlreadyRecorded).toBe(0);
+		expect(summary.imported).toBe(1); // memory leg retried and accepted
+		expect(recordedNowFacts).toHaveLength(1);
+		expect(kgChanges).toHaveLength(0); // KG leg deduped, not re-written
+	});
+
 	test("a KG write failure with a memory success is PARTIAL: counted as an error, watermark frozen", async () => {
 		kgWriteFails = true;
 		versionUpgradeScenario();

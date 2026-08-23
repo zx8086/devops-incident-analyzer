@@ -459,7 +459,14 @@ async function loadMemoryDedupe(): Promise<{ importedIds: Set<string>; recordedM
 		const hits = await searchAgentMemory(AGENT, "", { kind }, MEMORY_DEDUPE_LIMIT, { deterministic: true });
 		for (const hit of hits) {
 			const a = hit.annotations;
-			if (a.external_import === "true" && a.config_change_id) importedIds.add(a.config_change_id);
+			if (a.external_import === "true") {
+				// The importer's own facts feed the per-record id set ONLY -- never the commit-level
+				// mr_url skip. A partially-imported MR commit (fact written, KG write failed) must
+				// re-enter persistRecord so the missing store retries; counting its mr_url here
+				// would skip the whole commit first. mrUrlHasChange applies the same exclusion.
+				if (a.config_change_id) importedIds.add(a.config_change_id);
+				continue;
+			}
 			if (a.mr_url) recordedMrUrls.add(a.mr_url);
 		}
 	}
