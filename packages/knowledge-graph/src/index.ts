@@ -135,6 +135,7 @@ export {
 	configChangeExists,
 	type DeploymentSeed,
 	type EntityGraph,
+	findProposedChangeIdBySummary,
 	flagBindingForReview,
 	type IacChangeRecord,
 	type IacPromptRecord,

@@ -18,6 +18,7 @@
 import {
 	attachChangeMr,
 	type ChangeOutcome,
+	findProposedChangeIdBySummary,
 	getGraphStore,
 	isKnowledgeGraphEnabled,
 	recordIacChange,
@@ -101,6 +102,28 @@ export async function attachLaneChangeMr(changeId: string, mrUrl: string): Promi
 		logger.warn(
 			{ error: error instanceof Error ? error.message : String(error), changeId },
 			"attachLaneChangeMr graph write failed; continuing",
+		);
+	}
+}
+
+// SIO-1527: id-less variant for markers checkpointed BEFORE the marker carried the trigger
+// requestId -- the node is recovered by its deterministic trigger-time summary instead
+// (findProposedChangeIdBySummary). No matching proposed node -> logged no-op.
+export async function attachLaneChangeMrBySummary(workflow: string, summary: string, mrUrl: string): Promise<void> {
+	if (!isKnowledgeGraphEnabled()) return;
+	if (!workflow || !summary || !mrUrl) return;
+	try {
+		const store = await getGraphStore();
+		const changeId = await findProposedChangeIdBySummary(store, workflow, summary);
+		if (!changeId) {
+			logger.info({ workflow, summary }, "attachLaneChangeMrBySummary: no matching proposed change; skipping");
+			return;
+		}
+		await attachChangeMr(store, changeId, mrUrl);
+	} catch (error) {
+		logger.warn(
+			{ error: error instanceof Error ? error.message : String(error), workflow, summary },
+			"attachLaneChangeMrBySummary graph write failed; continuing",
 		);
 	}
 }

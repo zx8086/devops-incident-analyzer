@@ -503,6 +503,27 @@ export async function attachChangeMr(store: GraphStore, changeId: string, mrUrl:
 	});
 }
 
+// SIO-1527: recover a still-proposed lane change's id by its deterministic summary -- the
+// fallback for pre-SIO-1527 renovate markers, which never carried the trigger turn's requestId.
+// The renovate lane writes `renovate <deployment> -> <marker>` at trigger time, so the summary
+// reconstructs exactly from the durable marker fields. Newest match wins (all writers store UTC
+// ISO createdAt, so lexicographic order is time order): a re-trigger of the same dep/marker
+// supersedes the older node, and the in-flight marker always refers to the latest.
+export async function findProposedChangeIdBySummary(
+	store: GraphStore,
+	workflow: string,
+	summary: string,
+): Promise<string | null> {
+	if (!workflow || !summary) return null;
+	const rows = await store.run<{ id: string; createdAt: string }>(
+		"MATCH (c:ConfigChange) WHERE c.workflow = $workflow AND c.summary = $summary AND c.outcome = 'proposed' RETURN c.id AS id, c.createdAt AS createdAt",
+		{ workflow, summary },
+	);
+	if (rows.length === 0) return null;
+	const newest = rows.reduce((a, b) => (String(a.createdAt) >= String(b.createdAt) ? a : b));
+	return String(newest.id);
+}
+
 // SIO-1525: existence probes for the gitlab-import sweep's dedupe. configChangeExists keys the
 // per-record idempotency check; mrUrlHasChange answers "did a NON-import write path (the agent's
 // own maker/reconcile lanes) already record the change behind this MR". Changes the importer

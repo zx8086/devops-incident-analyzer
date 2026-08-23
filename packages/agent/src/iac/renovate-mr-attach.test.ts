@@ -18,6 +18,7 @@ const realLaneKnowledge = { ...realLaneKnowledgeNs };
 const MR_URL = "https://gitlab.example/x/-/merge_requests/42";
 
 let attachCalls: Array<{ changeId: string; mrUrl: string }> = [];
+let summaryAttachCalls: Array<{ workflow: string; summary: string; mrUrl: string }> = [];
 
 beforeAll(() => {
 	mock.module("@langchain/core/callbacks/dispatch", () => ({
@@ -40,6 +41,9 @@ beforeAll(() => {
 		attachLaneChangeMr: async (changeId: string, mrUrl: string) => {
 			attachCalls.push({ changeId, mrUrl });
 		},
+		attachLaneChangeMrBySummary: async (workflow: string, summary: string, mrUrl: string) => {
+			summaryAttachCalls.push({ workflow, summary, mrUrl });
+		},
 	}));
 });
 
@@ -51,6 +55,7 @@ afterAll(() => {
 
 beforeEach(() => {
 	attachCalls = [];
+	summaryAttachCalls = [];
 });
 
 function stateWith(over: Record<string, unknown>): IacStateType {
@@ -81,9 +86,9 @@ describe("watchRenovateMr MR attach (SIO-1527)", () => {
 		expect(attachCalls).toEqual([{ changeId: "trigger-req", mrUrl: MR_URL }]);
 	});
 
-	test("a pre-SIO-1527 marker (no requestId) skips the attach entirely", async () => {
-		// No other id can match the trigger-time node, so attaching under the current turn's
-		// requestId would be a silent wrong-id no-op (and MERGE an orphan MergeRequest node).
+	test("a pre-SIO-1527 marker (no requestId) recovers the node by its deterministic summary", async () => {
+		// The current turn's requestId can never match the trigger-time node, so the legacy path
+		// looks the node up by the exact summary triggerRenovateUpdate wrote.
 		const out = await watchRenovateMr(
 			stateWith({
 				renovateInFlightMarker: {
@@ -96,5 +101,8 @@ describe("watchRenovateMr MR attach (SIO-1527)", () => {
 		);
 		expect(out.renovateMrUrl).toBe(MR_URL); // the MR discovery itself is unaffected
 		expect(attachCalls).toEqual([]);
+		expect(summaryAttachCalls).toEqual([
+			{ workflow: "renovate", summary: "renovate eu-b2b -> renovate-eu-b2b-prometheus", mrUrl: MR_URL },
+		]);
 	});
 });

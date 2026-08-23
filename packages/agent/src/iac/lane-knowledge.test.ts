@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { _setGraphStoreForTesting, type GraphRow, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
 import {
 	attachLaneChangeMr,
+	attachLaneChangeMrBySummary,
 	fleetChangeOutcome,
 	type LaneChangeInput,
 	reconcileChangeOutcome,
@@ -199,6 +200,51 @@ describe("attachLaneChangeMr (SIO-1527)", () => {
 		}
 		_setGraphStoreForTesting(new ThrowingGraphStore());
 		await expect(attachLaneChangeMr("req-1", MR_URL)).resolves.toBeUndefined();
+	});
+});
+
+describe("attachLaneChangeMrBySummary (SIO-1527 legacy-marker recovery)", () => {
+	const MR_URL = "https://gitlab.com/x/-/merge_requests/42";
+	const SUMMARY = "renovate eu-b2b -> renovate-eu-b2b-prometheus";
+
+	test("recovers the newest proposed node by summary and attaches the MR", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		store.stub("c.summary = $summary", [
+			{ id: "req-old", createdAt: "2026-08-19T10:00:00.000Z" },
+			{ id: "req-new", createdAt: "2026-08-20T10:00:00.000Z" },
+		]);
+		// The attach's own existence pre-check must also see the recovered node.
+		store.stub("MATCH (c:ConfigChange {id: $id}) RETURN c.id", [{ id: "req-new" }]);
+		_setGraphStoreForTesting(store);
+		await attachLaneChangeMrBySummary("renovate", SUMMARY, MR_URL);
+		expect(store.calls.some((c) => c.cypher.includes("PROPOSED_IN") && c.params?.id === "req-new")).toBe(true);
+	});
+
+	test("no matching proposed node is a logged no-op", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		await attachLaneChangeMrBySummary("renovate", SUMMARY, MR_URL);
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (m:MergeRequest"))).toBe(false);
+		expect(store.calls.some((c) => c.cypher.includes("PROPOSED_IN"))).toBe(false);
+	});
+
+	test("gated off and soft-failing like the id-keyed attach", async () => {
+		delete process.env.KNOWLEDGE_GRAPH_ENABLED;
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		await attachLaneChangeMrBySummary("renovate", SUMMARY, MR_URL);
+		expect(store.calls).toHaveLength(0);
+
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		class ThrowingGraphStore extends InMemoryGraphStore {
+			override async run<T extends GraphRow = GraphRow>(): Promise<T[]> {
+				throw new Error("graph down");
+			}
+		}
+		_setGraphStoreForTesting(new ThrowingGraphStore());
+		await expect(attachLaneChangeMrBySummary("renovate", SUMMARY, MR_URL)).resolves.toBeUndefined();
 	});
 });
 
