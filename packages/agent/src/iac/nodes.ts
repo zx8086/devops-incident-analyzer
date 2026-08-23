@@ -54,6 +54,8 @@ import { importExternalChanges } from "./gitlab-import.ts";
 import { evaluateGuards, validateIlmPhaseOrdering } from "./guards.ts";
 import { filterAgentKnowledge } from "./knowledge-selector.ts";
 import {
+	attachLaneChangeMr,
+	attachLaneChangeMrBySummary,
 	fleetChangeOutcome,
 	reconcileChangeOutcome,
 	recordLaneConfigChange,
@@ -851,6 +853,13 @@ export function renovateTriggerGate(state: IacStateType): Partial<IacStateType> 
 // Calls the two SIO-1470 tools in sequence: tick the checkbox, then play the schedule.
 // A schedule-triggered Renovate run only ever creates branches/MRs -- apply:* stays
 // when: manual -- so this cannot deploy anything.
+// SIO-1527: the deterministic trigger-time ConfigChange summary, shared by the trigger write and
+// the legacy-marker recovery in watchRenovateMr (findProposedChangeIdBySummary matches on this
+// exact string, so the two sites must never drift). (Pure.)
+export function renovateChangeSummary(deployment: string, marker: string): string {
+	return `renovate ${deployment} -> ${marker}`;
+}
+
 export async function triggerRenovateUpdate(state: IacStateType): Promise<Partial<IacStateType>> {
 	const marker = state.renovateMarker;
 	const issueIid = state.renovateIssueIid;
@@ -913,6 +922,9 @@ export async function triggerRenovateUpdate(state: IacStateType): Promise<Partia
 		marker: marker.marker,
 		line: marker.line,
 		triggerAtIso,
+		// SIO-1527: carried so a "check again" turn attaches the discovered MR to THIS turn's
+		// ConfigChange (the recordLaneConfigChange id below) instead of minting a new node.
+		requestId: state.requestId,
 	};
 
 	// SIO-1475: one KG ConfigChange write per trigger, here (not in watchRenovateMr) so a
@@ -925,7 +937,7 @@ export async function triggerRenovateUpdate(state: IacStateType): Promise<Partia
 		deployment: inFlight.deployment,
 		workflow: "renovate",
 		outcome: "proposed",
-		summary: `renovate ${inFlight.deployment} -> ${marker.marker}`,
+		summary: renovateChangeSummary(inFlight.deployment, marker.marker),
 		threadId: state.threadId || undefined,
 	});
 
@@ -990,6 +1002,36 @@ export async function watchRenovateMr(state: IacStateType): Promise<Partial<IacS
 		const mrUrl = parseFirstOpenMrUrl(listRes, sinceIso);
 		if (mrUrl) {
 			await dispatchCustomEvent("iac_pipeline_progress", { pipelineId: null, status: "renovate: MR created" });
+			// SIO-1527: attach the discovered MR to the trigger-time ConfigChange (edge-only write --
+			// recordIacChange's MERGE...SET would wipe summary and bump createdAt). The PROPOSED_IN
+			// edge is what lets the reconcile sweep (proposedChangesWithMr) advance the node to its
+			// real terminal outcome after merge; without it the lane node stays "proposed" forever
+			// and the SIO-1525 import sweep deliberately never re-records the merged commit. The id
+			// comes ONLY from the durable marker (stamped by triggerRenovateUpdate, so present on
+			// both same-turn and "check again" watches): a pre-SIO-1527 checkpointed marker lacks it,
+			// and no other id can match the trigger-time node -- attaching under the current turn's
+			// requestId would be a silent wrong-id no-op (Greptile, PR #676), so skip with a log
+			// instead. Soft-failing (attachLaneChangeMr).
+			const triggerChangeId = state.renovateInFlightMarker?.requestId;
+			if (triggerChangeId) {
+				await attachLaneChangeMr(triggerChangeId, mrUrl);
+			} else if (state.renovateInFlightMarker) {
+				// Legacy marker (checkpointed before SIO-1527, no trigger requestId): recover the
+				// trigger-time node by its deterministic summary instead -- the same string
+				// triggerRenovateUpdate wrote, reconstructed from the marker's own fields. The
+				// marker's triggerAtIso anchors the lookup to ITS trigger so a newer re-trigger of
+				// the same deployment/marker cannot steal the attach (Greptile P1, PR #676).
+				await attachLaneChangeMrBySummary(
+					"renovate",
+					renovateChangeSummary(state.renovateInFlightMarker.deployment, state.renovateInFlightMarker.marker),
+					mrUrl,
+					state.renovateInFlightMarker.triggerAtIso,
+				);
+			} else {
+				// No durable marker at all (same-turn renovateMarker only): the trigger that wrote
+				// the ConfigChange did not run in a recoverable context; nothing to attach to.
+				log.info({ mrUrl }, "watchRenovateMr: no in-flight marker; skipping MR attach");
+			}
 			// Greptile (PR #671): do NOT clear renovateInFlightMarker here -- teardownIac (this
 			// node's only successor) still needs it this same turn to build the daily-log
 			// breadcrumb and the durable renovate-trigger memory fact (both fall back to

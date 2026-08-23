@@ -129,11 +129,13 @@ export {
 	LadybugStore,
 } from "./store.ts";
 export {
+	attachChangeMr,
 	type ChangeOutcome,
 	type CorrelationLink,
 	configChangeExists,
 	type DeploymentSeed,
 	type EntityGraph,
+	findProposedChangeIdBySummary,
 	flagBindingForReview,
 	type IacChangeRecord,
 	type IacPromptRecord,

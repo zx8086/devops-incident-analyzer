@@ -7,6 +7,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { _setGraphStoreForTesting, type GraphRow, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
 import {
+	attachLaneChangeMr,
+	attachLaneChangeMrBySummary,
 	fleetChangeOutcome,
 	type LaneChangeInput,
 	reconcileChangeOutcome,
@@ -141,6 +143,142 @@ describe("recordLaneConfigChange", () => {
 		_setGraphStoreForTesting(new ThrowingGraphStore());
 		// Must resolve (not reject) so the lane continues.
 		await expect(recordLaneConfigChange(laneInput())).resolves.toBeUndefined();
+	});
+});
+
+describe("attachLaneChangeMr (SIO-1527)", () => {
+	const MR_URL = "https://gitlab.com/x/-/merge_requests/42";
+
+	test("is a no-op when the graph is disabled", async () => {
+		delete process.env.KNOWLEDGE_GRAPH_ENABLED;
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		await attachLaneChangeMr("req-1", MR_URL);
+		expect(store.calls).toHaveLength(0);
+	});
+
+	test("empty changeId or mrUrl is a no-op", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		await attachLaneChangeMr("", MR_URL);
+		await attachLaneChangeMr("req-1", "");
+		expect(store.calls).toHaveLength(0);
+	});
+
+	test("edge-only: MERGEs the MergeRequest + PROPOSED_IN and never touches ConfigChange properties", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		// The existence pre-check (no orphan MergeRequest when the trigger write soft-failed)
+		// must see the trigger-time node.
+		store.stub("MATCH (c:ConfigChange {id: $id}) RETURN c.id", [{ id: "req-1" }]);
+		_setGraphStoreForTesting(store);
+		await attachLaneChangeMr("req-1", MR_URL);
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (m:MergeRequest") && c.params?.url === MR_URL)).toBe(true);
+		expect(store.calls.some((c) => c.cypher.includes("PROPOSED_IN") && c.params?.id === "req-1")).toBe(true);
+		// The whole point vs recordIacChange: the ConfigChange node's summary/createdAt/outcome
+		// must NOT be re-SET by this write.
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (c:ConfigChange"))).toBe(false);
+		expect(store.calls.some((c) => c.cypher.includes("SET c."))).toBe(false);
+	});
+
+	test("writes nothing (no orphan MergeRequest) when the ConfigChange does not exist", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		await attachLaneChangeMr("req-unknown", MR_URL);
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (m:MergeRequest"))).toBe(false);
+		expect(store.calls.some((c) => c.cypher.includes("PROPOSED_IN"))).toBe(false);
+	});
+
+	test("soft-fails (no throw) when the store throws", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		class ThrowingGraphStore extends InMemoryGraphStore {
+			override async run<T extends GraphRow = GraphRow>(): Promise<T[]> {
+				throw new Error("graph down");
+			}
+		}
+		_setGraphStoreForTesting(new ThrowingGraphStore());
+		await expect(attachLaneChangeMr("req-1", MR_URL)).resolves.toBeUndefined();
+	});
+});
+
+describe("attachLaneChangeMrBySummary (SIO-1527 legacy-marker recovery)", () => {
+	const MR_URL = "https://gitlab.com/x/-/merge_requests/42";
+	const SUMMARY = "renovate eu-b2b -> renovate-eu-b2b-prometheus";
+
+	test("recovers the newest proposed node by summary and attaches the MR", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		store.stub("c.summary = $summary", [
+			{ id: "req-old", createdAt: "2026-08-19T10:00:00.000Z" },
+			{ id: "req-new", createdAt: "2026-08-20T10:00:00.000Z" },
+		]);
+		// The attach's own existence pre-check must also see the recovered node.
+		store.stub("MATCH (c:ConfigChange {id: $id}) RETURN c.id", [{ id: "req-new" }]);
+		_setGraphStoreForTesting(store);
+		await attachLaneChangeMrBySummary("renovate", SUMMARY, MR_URL);
+		expect(store.calls.some((c) => c.cypher.includes("PROPOSED_IN") && c.params?.id === "req-new")).toBe(true);
+	});
+
+	test("nearIso anchors selection to the marker's OWN trigger, not a newer re-trigger", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		store.stub("c.summary = $summary", [
+			{ id: "req-legacy", createdAt: "2026-08-19T10:00:05.000Z" },
+			{ id: "req-newer-trigger", createdAt: "2026-08-22T09:00:00.000Z" },
+		]);
+		store.stub("MATCH (c:ConfigChange {id: $id}) RETURN c.id", [{ id: "req-legacy" }]);
+		_setGraphStoreForTesting(store);
+		// The legacy marker's triggerAtIso is seconds before its own node's createdAt.
+		await attachLaneChangeMrBySummary("renovate", SUMMARY, MR_URL, "2026-08-19T10:00:00.000Z");
+		expect(store.calls.some((c) => c.cypher.includes("PROPOSED_IN") && c.params?.id === "req-legacy")).toBe(true);
+		expect(store.calls.some((c) => c.cypher.includes("PROPOSED_IN") && c.params?.id === "req-newer-trigger")).toBe(
+			false,
+		);
+	});
+
+	test("equal createdAt resolves deterministically via the id tiebreak", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		for (const order of [0, 1]) {
+			const store = new InMemoryGraphStore();
+			const rows = [
+				{ id: "req-a", createdAt: "2026-08-20T10:00:00.000Z" },
+				{ id: "req-b", createdAt: "2026-08-20T10:00:00.000Z" },
+			];
+			store.stub("c.summary = $summary", order === 0 ? rows : [...rows].reverse());
+			store.stub("MATCH (c:ConfigChange {id: $id}) RETURN c.id", [{ id: "req-a" }]);
+			_setGraphStoreForTesting(store);
+			await attachLaneChangeMrBySummary("renovate", SUMMARY, MR_URL);
+			// Same winner regardless of row order returned by the store.
+			expect(store.calls.some((c) => c.cypher.includes("PROPOSED_IN") && c.params?.id === "req-a")).toBe(true);
+		}
+	});
+
+	test("no matching proposed node is a logged no-op", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		await attachLaneChangeMrBySummary("renovate", SUMMARY, MR_URL);
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (m:MergeRequest"))).toBe(false);
+		expect(store.calls.some((c) => c.cypher.includes("PROPOSED_IN"))).toBe(false);
+	});
+
+	test("gated off and soft-failing like the id-keyed attach", async () => {
+		delete process.env.KNOWLEDGE_GRAPH_ENABLED;
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		await attachLaneChangeMrBySummary("renovate", SUMMARY, MR_URL);
+		expect(store.calls).toHaveLength(0);
+
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		class ThrowingGraphStore extends InMemoryGraphStore {
+			override async run<T extends GraphRow = GraphRow>(): Promise<T[]> {
+				throw new Error("graph down");
+			}
+		}
+		_setGraphStoreForTesting(new ThrowingGraphStore());
+		await expect(attachLaneChangeMrBySummary("renovate", SUMMARY, MR_URL)).resolves.toBeUndefined();
 	});
 });
 

@@ -16,7 +16,9 @@
 // cycle. Callers pass primitives + a pre-resolved outcome, not IacStateType.
 
 import {
+	attachChangeMr,
 	type ChangeOutcome,
+	findProposedChangeIdBySummary,
 	getGraphStore,
 	isKnowledgeGraphEnabled,
 	recordIacChange,
@@ -82,6 +84,53 @@ export async function recordLaneConfigChange(input: LaneChangeInput): Promise<vo
 		logger.warn(
 			{ error: error instanceof Error ? error.message : String(error), lane: input.workflow },
 			"recordLaneConfigChange graph write failed; continuing",
+		);
+	}
+}
+
+// SIO-1527: edge-only follow-up write for a lane whose MR url is discovered AFTER its
+// ConfigChange was recorded (renovate: trigger writes the node, watchRenovateMr finds the MR).
+// Deliberately NOT recordLaneConfigChange/recordIacChange -- their MERGE...SET would wipe the
+// node's summary and bump createdAt. Same gating + soft-fail contract as the writer above.
+export async function attachLaneChangeMr(changeId: string, mrUrl: string): Promise<void> {
+	if (!isKnowledgeGraphEnabled()) return;
+	if (!changeId || !mrUrl) return;
+	try {
+		const store = await getGraphStore();
+		await attachChangeMr(store, changeId, mrUrl);
+	} catch (error) {
+		logger.warn(
+			{ error: error instanceof Error ? error.message : String(error), changeId },
+			"attachLaneChangeMr graph write failed; continuing",
+		);
+	}
+}
+
+// SIO-1527: id-less variant for markers checkpointed BEFORE the marker carried the trigger
+// requestId -- the node is recovered by its deterministic trigger-time summary instead
+// (findProposedChangeIdBySummary). nearIso (the marker's triggerAtIso) anchors the selection to
+// the marker's OWN trigger so a newer re-trigger of the same summary cannot steal the attach.
+// No matching proposed node -> logged no-op.
+export async function attachLaneChangeMrBySummary(
+	workflow: string,
+	summary: string,
+	mrUrl: string,
+	nearIso?: string,
+): Promise<void> {
+	if (!isKnowledgeGraphEnabled()) return;
+	if (!workflow || !summary || !mrUrl) return;
+	try {
+		const store = await getGraphStore();
+		const changeId = await findProposedChangeIdBySummary(store, workflow, summary, nearIso);
+		if (!changeId) {
+			logger.info({ workflow, summary }, "attachLaneChangeMrBySummary: no matching proposed change; skipping");
+			return;
+		}
+		await attachChangeMr(store, changeId, mrUrl);
+	} catch (error) {
+		logger.warn(
+			{ error: error instanceof Error ? error.message : String(error), workflow, summary },
+			"attachLaneChangeMrBySummary graph write failed; continuing",
 		);
 	}
 }

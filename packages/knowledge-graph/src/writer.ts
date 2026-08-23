@@ -485,6 +485,64 @@ export async function setChangeOutcome(store: GraphStore, changeId: string, outc
 	await store.run("MATCH (c:ConfigChange {id: $id}) SET c.outcome = $outcome", { id: changeId, outcome });
 }
 
+// SIO-1527: attach an MR to an existing ConfigChange WITHOUT touching its other properties.
+// recordIacChange's MERGE...SET would wipe summary and bump createdAt on a re-write, so the
+// renovate lane (which learns its MR url only after the trigger-time node was recorded) needs
+// this edge-only form. The PROPOSED_IN edge is what qualifies the node for proposedChangesWithMr,
+// letting the reconcile sweep advance it to its real terminal outcome after merge.
+// MERGE-idempotent. The ConfigChange is verified FIRST (CodeRabbit, PR #676): if the
+// trigger-time node write soft-failed, writing the MergeRequest before the edge MATCH no-ops
+// would leave an orphan MR node -- harmless to readers (see repairChangeMrUrl) but avoidable.
+export async function attachChangeMr(store: GraphStore, changeId: string, mrUrl: string): Promise<void> {
+	if (!changeId || !mrUrl) return;
+	if (!(await configChangeExists(store, changeId))) return;
+	await store.run("MERGE (m:MergeRequest {url: $url})", { url: mrUrl });
+	await store.run("MATCH (c:ConfigChange {id: $id}), (m:MergeRequest {url: $url}) MERGE (c)-[:PROPOSED_IN]->(m)", {
+		id: changeId,
+		url: mrUrl,
+	});
+}
+
+// SIO-1527: recover a still-proposed lane change's id by its deterministic summary -- the
+// fallback for pre-SIO-1527 renovate markers, which never carried the trigger turn's requestId.
+// The renovate lane writes `renovate <deployment> -> <marker>` at trigger time, so the summary
+// reconstructs exactly from the durable marker fields. Selection (Greptile P1 + CodeRabbit,
+// PR #676): when `nearIso` is given (the marker's own triggerAtIso -- the node was written
+// moments after that instant), the candidate CLOSEST to it wins, so a NEWER re-trigger of the
+// same deployment/marker can never steal a legacy marker's attach; without it, newest wins.
+// Ties break on id (lexicographic) so equal-createdAt rows resolve identically on every read.
+export async function findProposedChangeIdBySummary(
+	store: GraphStore,
+	workflow: string,
+	summary: string,
+	nearIso?: string,
+): Promise<string | null> {
+	if (!workflow || !summary) return null;
+	const rows = await store.run<{ id: string; createdAt: string }>(
+		"MATCH (c:ConfigChange) WHERE c.workflow = $workflow AND c.summary = $summary AND c.outcome = 'proposed' RETURN c.id AS id, c.createdAt AS createdAt",
+		{ workflow, summary },
+	);
+	if (rows.length === 0) return null;
+	// Unparseable createdAt degrades to epoch: deterministically oldest / farthest, never NaN.
+	const ts = (v: unknown): number => {
+		const n = Date.parse(String(v));
+		return Number.isNaN(n) ? 0 : n;
+	};
+	const anchor = nearIso ? ts(nearIso) : null;
+	const ranked = [...rows].sort((a, b) => {
+		if (anchor !== null) {
+			const d = Math.abs(ts(a.createdAt) - anchor) - Math.abs(ts(b.createdAt) - anchor);
+			if (d !== 0) return d;
+		} else {
+			const d = ts(b.createdAt) - ts(a.createdAt);
+			if (d !== 0) return d;
+		}
+		return String(a.id).localeCompare(String(b.id));
+	});
+	const best = ranked[0];
+	return best ? String(best.id) : null;
+}
+
 // SIO-1525: existence probes for the gitlab-import sweep's dedupe. configChangeExists keys the
 // per-record idempotency check; mrUrlHasChange answers "did a NON-import write path (the agent's
 // own maker/reconcile lanes) already record the change behind this MR". Changes the importer
