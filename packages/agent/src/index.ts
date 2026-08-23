@@ -30,6 +30,12 @@ export {
 	hasRetryBudget,
 } from "./graph-budget.ts";
 export { createBedrockEmbedder, graphEnrich, installGraphWarmer, recordGraphEntities } from "./graph-knowledge.ts";
+export {
+	type ImportOptions,
+	type ImportSummary,
+	importEnabled,
+	importExternalChanges,
+} from "./iac/gitlab-import.ts";
 export { buildIacGraph } from "./iac/graph.ts";
 export { evaluateGuards } from "./iac/guards.ts";
 export { converseIac, type IacTurnOutcome, iacTurnOutcome } from "./iac/nodes.ts";

@@ -1,0 +1,19 @@
+name: gitlab-import-sweep
+version: 0.1.0
+description: >
+  Imports externally-made config changes from the elastic-iac GitLab repo
+  (human commits and other agents' MRs) into agent memory and the knowledge
+  graph via importExternalChanges(), scoped to the change types the agent can
+  itself make. SIO-1525; scheduled declaratively (SIO-1358) via
+  schedules/iac-gitlab-import-sweep.yaml rather than a hand-wired Bun.cron
+  call. A single opaque node step -- the sweep itself isn't a multi-step DAG,
+  so this workflow exists only to give the scheduler a named,
+  runWorkflow()-executed target.
+
+triggers:
+  - type: manual
+
+steps:
+  - name: sweep
+    node: iac-gitlab-import-sweep
+    outputs: []

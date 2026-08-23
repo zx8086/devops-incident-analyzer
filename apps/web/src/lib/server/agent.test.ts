@@ -151,6 +151,9 @@ mock.module("@devops-agent/agent", () => ({
 	topologyCronEnabled: mock(() => false),
 	runUncuratedPurgeSweep: mock(() => Promise.resolve({ incidents: 0, edges: 0 })),
 	purgeCronEnabled: mock(() => false),
+	// SIO-1525: the gitlab-import sweep's registration gate + node function, same pattern.
+	importExternalChanges: mock(() => Promise.resolve({ imported: 0, errors: 0 })),
+	importEnabled: mock(() => false),
 	// SIO-1358: schedules.ts's other @devops-agent/agent imports -- getWorkspaceRoot resolves the
 	// real repo root (harmless; loadSchedules/loadWorkflows below are gitagent-bridge stubs so no
 	// real YAML is read), registerSchedules is a no-op stub since the schedules map is empty here.

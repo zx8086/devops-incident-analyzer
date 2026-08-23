@@ -485,6 +485,31 @@ export async function setChangeOutcome(store: GraphStore, changeId: string, outc
 	await store.run("MATCH (c:ConfigChange {id: $id}) SET c.outcome = $outcome", { id: changeId, outcome });
 }
 
+// SIO-1525: existence probes for the gitlab-import sweep's dedupe. configChangeExists keys the
+// per-record idempotency check; mrUrlHasChange answers "did a NON-import write path (the agent's
+// own maker/reconcile lanes) already record the change behind this MR". Changes the importer
+// itself created (id prefix "gitlab:") are deliberately EXCLUDED: they are governed by the
+// per-record configChangeExists check, and counting them here would make a partially-imported
+// commit skip at the commit level before the missing store's retry could run.
+export async function configChangeExists(store: GraphStore, changeId: string): Promise<boolean> {
+	if (!changeId) return false;
+	const rows = await store.run<{ id: string }>("MATCH (c:ConfigChange {id: $id}) RETURN c.id AS id LIMIT 1", {
+		id: changeId,
+	});
+	return rows.length > 0;
+}
+
+export async function mrUrlHasChange(store: GraphStore, url: string): Promise<boolean> {
+	if (!url) return false;
+	// Prefix filter BEFORE the limit: an unfiltered LIMIT could evict the one non-import row when
+	// an MR accumulates many gitlab: changes. STARTS WITH is proven against the live lbug store.
+	const rows = await store.run<{ id: string }>(
+		"MATCH (c:ConfigChange)-[:PROPOSED_IN]->(m:MergeRequest {url: $url}) WHERE NOT c.id STARTS WITH 'gitlab:' RETURN c.id AS id LIMIT 1",
+		{ url },
+	);
+	return rows.length > 0;
+}
+
 // SIO-1062: re-key a ConfigChange's MergeRequest from a poisoned url (a "[409] {...}" GitLab
 // error blob stored as mrUrl before the openMr guard existed) to the MR's real web_url.
 // MERGE-first ordering so a crash mid-repair leaves both links (safe: reconcile still works via

@@ -47,11 +47,12 @@ import {
 	parseFleetApplyOutcome,
 	parseSinglePipeline,
 } from "./fleet-apply-result.ts";
-import { evaluateGuards, validateIlmPhaseOrdering } from "./guards.ts";
-import { filterAgentKnowledge } from "./knowledge-selector.ts";
 // SIO-1461: ConfigChange KG writes for the non-gitops maker lanes (drift-reconcile,
 // fleet-upgrade, synthetics-push). lane-knowledge.ts is a dependency-free leaf; it
 // imports no runtime code from this file, so nodes.ts -> lane-knowledge.ts is acyclic.
+import { importExternalChanges } from "./gitlab-import.ts";
+import { evaluateGuards, validateIlmPhaseOrdering } from "./guards.ts";
+import { filterAgentKnowledge } from "./knowledge-selector.ts";
 import {
 	fleetChangeOutcome,
 	reconcileChangeOutcome,
@@ -1814,6 +1815,22 @@ export async function bootstrapIac(state: IacStateType, config?: RunnableConfig)
 	// state input; checkpointing it here on leg 1 makes it survive the resume leg.
 	const threadId = typeof config?.configurable?.thread_id === "string" ? config.configurable.thread_id : "";
 
+	// First turn of a fresh session iff the thread has no prior assistant turn yet.
+	const firstTurn = !state.messages.some((m) => m.getType() === "ai");
+	if (firstTurn) {
+		// SIO-1525: backfill/import externally-made GitLab config changes. Fire-and-log, never
+		// awaited -- a slow first backfill (30-day lookback) must not delay session start; the
+		// hourly iac-gitlab-import-sweep is the exhaustive pass. importEnabled() self-gates inside.
+		// Runs BEFORE the MCP connectivity guard: the importer needs only the GitLab token + a
+		// durable store, so a disconnected elastic-iac server must not skip the backfill.
+		importExternalChanges({ source: "bootstrap", limit: 50 }).catch((error: unknown) => {
+			log.warn(
+				{ error: error instanceof Error ? error.message : String(error) },
+				"bootstrapIac gitlab-import failed; continuing",
+			);
+		});
+	}
+
 	const connected = getConnectedServers().includes(IAC_SERVER);
 	if (!connected) {
 		// Remediation detail (server name, port, env var) belongs in the operator log
@@ -1833,8 +1850,6 @@ export async function bootstrapIac(state: IacStateType, config?: RunnableConfig)
 		};
 	}
 
-	// First turn of a fresh session iff the thread has no prior assistant turn yet.
-	const firstTurn = !state.messages.some((m) => m.getType() === "ai");
 	if (firstTurn) {
 		// SIO-1005: opportunistically reconcile a small handful of recent proposed MRs to their true
 		// terminal state BEFORE building the in-flight note, so a returning user sees current state
@@ -3369,6 +3384,9 @@ const WORKFLOW_STACK: Record<string, string> = {
 	"alerting-edit": "alerting",
 	"dataview-edit": "dataviews",
 	"cluster-default-edit": "cluster-defaults",
+	// SIO-1525: was missing (drift caught by the gitlab-import enum-sync test) -- the delete
+	// proposer removes a file under the same cluster-defaults stack the edit proposer writes.
+	"cluster-default-delete": "cluster-defaults",
 	"cluster-settings-edit": "cluster-settings",
 	"space-edit": "spaces",
 	"security-edit": "security",
