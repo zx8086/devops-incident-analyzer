@@ -11,6 +11,8 @@
 import { join } from "node:path";
 import {
 	getWorkspaceRoot,
+	importEnabled,
+	importExternalChanges,
 	purgeCronEnabled as purgeBackendAvailable,
 	reconcileAll,
 	reconcileEnabled,
@@ -89,12 +91,19 @@ export function startSchedules(): void {
 		if (!purgeBackendAvailable()) {
 			gate("kg-purge-sweep", "kg-purge-sweep: knowledge graph not enabled; not registering");
 		}
+		if (!importEnabled()) {
+			gate(
+				"iac-gitlab-import-sweep",
+				"iac-gitlab-import-sweep: GitLab token missing or neither agent-memory backend nor knowledge graph enabled; not registering",
+			);
+		}
 
 		registerSchedules(filtered, workflows, {
 			nodes: {
 				"iac-reconcile-sweep": () => reconcileAll({ source: "cron" }),
 				"kg-topology-sweep": () => runTopologySweep({ source: "cron" }),
 				"kg-purge-sweep": () => runUncuratedPurgeSweep({ source: "cron" }),
+				"iac-gitlab-import-sweep": () => importExternalChanges({ source: "cron" }),
 			},
 		});
 	} catch (error) {

@@ -485,6 +485,26 @@ export async function setChangeOutcome(store: GraphStore, changeId: string, outc
 	await store.run("MATCH (c:ConfigChange {id: $id}) SET c.outcome = $outcome", { id: changeId, outcome });
 }
 
+// SIO-1525: existence probes for the gitlab-import sweep's dedupe. configChangeExists keys the
+// per-record idempotency check; mrUrlHasChange answers "did THIS agent already record the change
+// behind this MR" (an MR url only gets a PROPOSED_IN edge through the agent's own write paths).
+export async function configChangeExists(store: GraphStore, changeId: string): Promise<boolean> {
+	if (!changeId) return false;
+	const rows = await store.run<{ id: string }>("MATCH (c:ConfigChange {id: $id}) RETURN c.id AS id LIMIT 1", {
+		id: changeId,
+	});
+	return rows.length > 0;
+}
+
+export async function mrUrlHasChange(store: GraphStore, url: string): Promise<boolean> {
+	if (!url) return false;
+	const rows = await store.run<{ url: string }>(
+		"MATCH (:ConfigChange)-[:PROPOSED_IN]->(m:MergeRequest {url: $url}) RETURN m.url AS url LIMIT 1",
+		{ url },
+	);
+	return rows.length > 0;
+}
+
 // SIO-1062: re-key a ConfigChange's MergeRequest from a poisoned url (a "[409] {...}" GitLab
 // error blob stored as mrUrl before the openMr guard existed) to the MR's real web_url.
 // MERGE-first ordering so a crash mid-repair leaves both links (safe: reconcile still works via

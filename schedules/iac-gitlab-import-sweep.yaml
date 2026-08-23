@@ -1,0 +1,15 @@
+# SIO-1525 / SIO-1358: imports externally-made config changes (human edits or
+# other agents' MRs in the elastic-iac GitLab repo) into agent memory and the
+# knowledge graph, scoped to the change types the agent can itself make.
+# Cadence and enablement both live ONLY here -- no env var overrides either
+# (see docs/superpowers/specs/2026-08-01-declarative-schedules-design.md).
+# Offset to :10 so it never contends with the :00/:30 iac-reconcile-sweep.
+# Backend availability ((agent-memory backend OR knowledge graph configured)
+# AND ELASTIC_IAC_GITLAB_TOKEN) is checked by the scheduler at registration
+# time as a precondition, not a second on/off switch -- see importEnabled()
+# in packages/agent.
+id: iac-gitlab-import-sweep
+mode: repeat
+cron: "10 * * * *"
+enabled: true
+workflow: gitlab-import-sweep

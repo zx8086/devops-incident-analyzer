@@ -131,6 +131,7 @@ export {
 export {
 	type ChangeOutcome,
 	type CorrelationLink,
+	configChangeExists,
 	type DeploymentSeed,
 	type EntityGraph,
 	flagBindingForReview,
@@ -143,6 +144,7 @@ export {
 	linkIncidentTicket,
 	linkResolution,
 	linkStackModule,
+	mrUrlHasChange,
 	type PipelineRecord,
 	type PurgeUncuratedResult,
 	purgeUncuratedIncidents,
