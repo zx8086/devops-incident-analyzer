@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { _setGraphStoreForTesting, type GraphRow, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
 import {
+	attachLaneChangeMr,
 	fleetChangeOutcome,
 	type LaneChangeInput,
 	reconcileChangeOutcome,
@@ -141,6 +142,51 @@ describe("recordLaneConfigChange", () => {
 		_setGraphStoreForTesting(new ThrowingGraphStore());
 		// Must resolve (not reject) so the lane continues.
 		await expect(recordLaneConfigChange(laneInput())).resolves.toBeUndefined();
+	});
+});
+
+describe("attachLaneChangeMr (SIO-1527)", () => {
+	const MR_URL = "https://gitlab.com/x/-/merge_requests/42";
+
+	test("is a no-op when the graph is disabled", async () => {
+		delete process.env.KNOWLEDGE_GRAPH_ENABLED;
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		await attachLaneChangeMr("req-1", MR_URL);
+		expect(store.calls).toHaveLength(0);
+	});
+
+	test("empty changeId or mrUrl is a no-op", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		await attachLaneChangeMr("", MR_URL);
+		await attachLaneChangeMr("req-1", "");
+		expect(store.calls).toHaveLength(0);
+	});
+
+	test("edge-only: MERGEs the MergeRequest + PROPOSED_IN and never touches ConfigChange properties", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		const store = new InMemoryGraphStore();
+		_setGraphStoreForTesting(store);
+		await attachLaneChangeMr("req-1", MR_URL);
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (m:MergeRequest") && c.params?.url === MR_URL)).toBe(true);
+		expect(store.calls.some((c) => c.cypher.includes("PROPOSED_IN") && c.params?.id === "req-1")).toBe(true);
+		// The whole point vs recordIacChange: the ConfigChange node's summary/createdAt/outcome
+		// must NOT be re-SET by this write.
+		expect(store.calls.some((c) => c.cypher.includes("MERGE (c:ConfigChange"))).toBe(false);
+		expect(store.calls.some((c) => c.cypher.includes("SET c."))).toBe(false);
+	});
+
+	test("soft-fails (no throw) when the store throws", async () => {
+		process.env.KNOWLEDGE_GRAPH_ENABLED = "true";
+		class ThrowingGraphStore extends InMemoryGraphStore {
+			override async run<T extends GraphRow = GraphRow>(): Promise<T[]> {
+				throw new Error("graph down");
+			}
+		}
+		_setGraphStoreForTesting(new ThrowingGraphStore());
+		await expect(attachLaneChangeMr("req-1", MR_URL)).resolves.toBeUndefined();
 	});
 });
 

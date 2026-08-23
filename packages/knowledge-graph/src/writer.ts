@@ -485,6 +485,21 @@ export async function setChangeOutcome(store: GraphStore, changeId: string, outc
 	await store.run("MATCH (c:ConfigChange {id: $id}) SET c.outcome = $outcome", { id: changeId, outcome });
 }
 
+// SIO-1527: attach an MR to an existing ConfigChange WITHOUT touching its other properties.
+// recordIacChange's MERGE...SET would wipe summary and bump createdAt on a re-write, so the
+// renovate lane (which learns its MR url only after the trigger-time node was recorded) needs
+// this edge-only form. The PROPOSED_IN edge is what qualifies the node for proposedChangesWithMr,
+// letting the reconcile sweep advance it to its real terminal outcome after merge.
+// MERGE-idempotent; an unknown changeId makes the edge MATCH a no-op.
+export async function attachChangeMr(store: GraphStore, changeId: string, mrUrl: string): Promise<void> {
+	if (!changeId || !mrUrl) return;
+	await store.run("MERGE (m:MergeRequest {url: $url})", { url: mrUrl });
+	await store.run("MATCH (c:ConfigChange {id: $id}), (m:MergeRequest {url: $url}) MERGE (c)-[:PROPOSED_IN]->(m)", {
+		id: changeId,
+		url: mrUrl,
+	});
+}
+
 // SIO-1525: existence probes for the gitlab-import sweep's dedupe. configChangeExists keys the
 // per-record idempotency check; mrUrlHasChange answers "did a NON-import write path (the agent's
 // own maker/reconcile lanes) already record the change behind this MR". Changes the importer

@@ -129,6 +129,7 @@ export {
 	LadybugStore,
 } from "./store.ts";
 export {
+	attachChangeMr,
 	type ChangeOutcome,
 	type CorrelationLink,
 	configChangeExists,

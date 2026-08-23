@@ -800,9 +800,17 @@ export const IacState = Annotation.Root({
 	// can route a "check again" follow-up straight to watchRenovateMr instead of re-extracting.
 	// Set by triggerRenovateUpdate on a successful trigger; cleared by watchRenovateMr once the
 	// MR is found.
-	renovateInFlightMarker: Annotation<{ deployment: string; marker: string; line: string; triggerAtIso: string } | null>(
-		{ reducer: last, default: () => null },
-	),
+	// SIO-1527: requestId is the TRIGGER turn's requestId (== the lane ConfigChange id), so a
+	// later "check again" turn can attach the discovered MR to the SAME node instead of minting a
+	// second one under its own fresh requestId. Optional: markers checkpointed before SIO-1527
+	// lack it (the attach then falls back to the current turn's requestId).
+	renovateInFlightMarker: Annotation<{
+		deployment: string;
+		marker: string;
+		line: string;
+		triggerAtIso: string;
+		requestId?: string;
+	} | null>({ reducer: last, default: () => null }),
 	renovateTriggerApproved: Annotation<boolean | null>({ reducer: last, default: () => null }),
 	renovateIssueIid: Annotation<number | null>({ reducer: last, default: () => null }),
 	renovateMrUrl: Annotation<string>({ reducer: last, default: () => "" }),

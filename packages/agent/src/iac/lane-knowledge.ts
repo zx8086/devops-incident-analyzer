@@ -16,6 +16,7 @@
 // cycle. Callers pass primitives + a pre-resolved outcome, not IacStateType.
 
 import {
+	attachChangeMr,
 	type ChangeOutcome,
 	getGraphStore,
 	isKnowledgeGraphEnabled,
@@ -82,6 +83,24 @@ export async function recordLaneConfigChange(input: LaneChangeInput): Promise<vo
 		logger.warn(
 			{ error: error instanceof Error ? error.message : String(error), lane: input.workflow },
 			"recordLaneConfigChange graph write failed; continuing",
+		);
+	}
+}
+
+// SIO-1527: edge-only follow-up write for a lane whose MR url is discovered AFTER its
+// ConfigChange was recorded (renovate: trigger writes the node, watchRenovateMr finds the MR).
+// Deliberately NOT recordLaneConfigChange/recordIacChange -- their MERGE...SET would wipe the
+// node's summary and bump createdAt. Same gating + soft-fail contract as the writer above.
+export async function attachLaneChangeMr(changeId: string, mrUrl: string): Promise<void> {
+	if (!isKnowledgeGraphEnabled()) return;
+	if (!changeId || !mrUrl) return;
+	try {
+		const store = await getGraphStore();
+		await attachChangeMr(store, changeId, mrUrl);
+	} catch (error) {
+		logger.warn(
+			{ error: error instanceof Error ? error.message : String(error), changeId },
+			"attachLaneChangeMr graph write failed; continuing",
 		);
 	}
 }

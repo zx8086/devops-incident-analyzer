@@ -54,6 +54,7 @@ import { importExternalChanges } from "./gitlab-import.ts";
 import { evaluateGuards, validateIlmPhaseOrdering } from "./guards.ts";
 import { filterAgentKnowledge } from "./knowledge-selector.ts";
 import {
+	attachLaneChangeMr,
 	fleetChangeOutcome,
 	reconcileChangeOutcome,
 	recordLaneConfigChange,
@@ -913,6 +914,9 @@ export async function triggerRenovateUpdate(state: IacStateType): Promise<Partia
 		marker: marker.marker,
 		line: marker.line,
 		triggerAtIso,
+		// SIO-1527: carried so a "check again" turn attaches the discovered MR to THIS turn's
+		// ConfigChange (the recordLaneConfigChange id below) instead of minting a new node.
+		requestId: state.requestId,
 	};
 
 	// SIO-1475: one KG ConfigChange write per trigger, here (not in watchRenovateMr) so a
@@ -990,6 +994,15 @@ export async function watchRenovateMr(state: IacStateType): Promise<Partial<IacS
 		const mrUrl = parseFirstOpenMrUrl(listRes, sinceIso);
 		if (mrUrl) {
 			await dispatchCustomEvent("iac_pipeline_progress", { pipelineId: null, status: "renovate: MR created" });
+			// SIO-1527: attach the discovered MR to the trigger-time ConfigChange (edge-only write --
+			// recordIacChange's MERGE...SET would wipe summary and bump createdAt). The PROPOSED_IN
+			// edge is what lets the reconcile sweep (proposedChangesWithMr) advance the node to its
+			// real terminal outcome after merge; without it the lane node stays "proposed" forever
+			// and the SIO-1525 import sweep deliberately never re-records the merged commit. Id
+			// recovery: a same-turn watch reuses this turn's requestId; a "check again" turn recovers
+			// the TRIGGER turn's id from the durable marker (a pre-SIO-1527 checkpointed marker lacks
+			// it -> fall back to the current requestId). Soft-failing (attachLaneChangeMr).
+			await attachLaneChangeMr(state.renovateInFlightMarker?.requestId || state.requestId, mrUrl);
 			// Greptile (PR #671): do NOT clear renovateInFlightMarker here -- teardownIac (this
 			// node's only successor) still needs it this same turn to build the daily-log
 			// breadcrumb and the durable renovate-trigger memory fact (both fall back to
