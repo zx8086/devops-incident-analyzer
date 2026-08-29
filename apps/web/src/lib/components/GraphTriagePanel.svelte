@@ -52,10 +52,14 @@ $effect(() => {
 const layout = $derived<GraphLayout | null>(topology ? computeLayout(topology) : null);
 
 const runStarted = $derived(activeNodes.size > 0 || completedNodes.size > 0);
-// A paused turn (HITL gate) and an errored turn both stop streaming with
-// completed nodes on screen -- neither is a FINISHED run, so END stays unlit.
+// END lights only for a SUCCESSFUL finish: paused turns (HITL gates) and every
+// non-completed terminal outcome (error/rejected/declined/blocked/unsupported/
+// pipeline-failed) keep END unlit and get named in the status line instead.
+// undefined outcome = the live path (mid-turn / paused), where the snapshot
+// message that carries the outcome does not exist yet.
+const runSucceeded = $derived(outcome === undefined || outcome === "completed");
 const runFinished = $derived(
-	!isStreaming && !paused && outcome !== "error" && activeNodes.size === 0 && completedNodes.size > 0,
+	!isStreaming && !paused && runSucceeded && activeNodes.size === 0 && completedNodes.size > 0,
 );
 
 type NodeVisual = "running" | "done" | "idle";
@@ -104,6 +108,7 @@ const statusLine = $derived.by(() => {
 	if (running.length > 0) return `${running.join(", ")} running`;
 	if (paused) return "paused · awaiting your input";
 	if (!isStreaming && outcome === "error") return "ended with error";
+	if (!isStreaming && !runSucceeded && outcome) return `ended · ${outcome}`;
 	if (runFinished) return `finished · ${completedNodes.size} nodes`;
 	// Mid-turn with no active node: either the very start of the turn or the
 	// output node token-streaming the answer after its node_end already fired.
