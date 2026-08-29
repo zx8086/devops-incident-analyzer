@@ -381,7 +381,12 @@ export interface SubAgentProgressEntry {
 export interface ReducerState {
 	currentContent: string;
 	threadId: string;
-	activeNodes: Set<string>;
+	// SIO-1572 (Greptile #679): keyed by nodeId with a live run COUNT, not a Set.
+	// Parallel Sends (supervisor fan-out, correlationFetch, per-estate AWS) emit
+	// one node_start/node_end pair PER BRANCH under the same node name; a Set let
+	// the first node_end mark the node done while sibling branches still ran.
+	// Consumers keep using .has()/.size, which Map shares with Set.
+	activeNodes: Map<string, number>;
 	completedNodes: Map<string, { duration: number }>;
 	dataSourceProgress: Map<string, { status: string; message?: string }>;
 	dataSourceFindings: Map<string, DataSourceFindings>;
@@ -475,7 +480,7 @@ export function initialReducerState(): ReducerState {
 	return {
 		currentContent: "",
 		threadId: "",
-		activeNodes: new Set(),
+		activeNodes: new Map(),
 		completedNodes: new Map(),
 		dataSourceProgress: new Map(),
 		dataSourceFindings: new Map(),
@@ -572,12 +577,20 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 		case "ml_anomaly_explainer":
 			return { ...state, mlAnomalyExplainer: event.explainer };
 		case "node_start": {
-			const next = new Set(state.activeNodes);
-			next.add(event.nodeId);
+			const next = new Map(state.activeNodes);
+			next.set(event.nodeId, (next.get(event.nodeId) ?? 0) + 1);
 			return { ...state, activeNodes: next };
 		}
 		case "node_end": {
-			const active = new Set(state.activeNodes);
+			const active = new Map(state.activeNodes);
+			const remaining = (active.get(event.nodeId) ?? 1) - 1;
+			if (remaining > 0) {
+				// Sibling parallel branches of this node are still running; the node
+				// stays active and only the LAST branch's end completes it (its
+				// duration is the slowest branch -- the honest wave time).
+				active.set(event.nodeId, remaining);
+				return { ...state, activeNodes: active };
+			}
 			active.delete(event.nodeId);
 			const completed = new Map(state.completedNodes);
 			completed.set(event.nodeId, { duration: event.duration });

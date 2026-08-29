@@ -1,6 +1,4 @@
 // apps/web/src/lib/server/topology.ts
-//
-// SIO-1572: drawable-edge normalization for /api/agent/topology.
 
 // A conditional edge registered WITHOUT a path map (it cannot carry one:
 // LangGraph compile() validation would then flag the deliberately-unwired

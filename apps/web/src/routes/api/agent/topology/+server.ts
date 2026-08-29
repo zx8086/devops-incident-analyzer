@@ -1,10 +1,4 @@
 // apps/web/src/routes/api/agent/topology/+server.ts
-//
-// SIO-1572: graph topology for the live graph triage panel. Data-driven from
-// the compiled LangGraph's own drawable (getGraphAsync), so the chart the UI
-// renders is provably the topology the engine runs -- the waku dashboard's
-// anti-drift lesson. Node ids match the node_start/node_end SSE events the
-// stream route already forwards.
 
 import { getLogger } from "@devops-agent/observability";
 import { json } from "@sveltejs/kit";
@@ -14,6 +8,9 @@ import type { RequestHandler } from "./$types";
 
 const log = getLogger("api.agent.topology");
 
+// SIO-1572: serves the compiled LangGraph's own drawable (getGraphAsync) so
+// the graph triage chart is provably the topology the engine runs. Node ids
+// match the node_start/node_end SSE events the stream route already forwards.
 export const GET: RequestHandler = async ({ url }) => {
 	const agent = url.searchParams.get("agent") ?? "incident-analyzer";
 	if (agent !== "incident-analyzer" && agent !== "elastic-iac") {

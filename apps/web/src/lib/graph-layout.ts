@@ -1,10 +1,4 @@
 // apps/web/src/lib/graph-layout.ts
-//
-// SIO-1572: pure layered layout for the live graph triage panel. The topology
-// comes from /api/agent/topology (the compiled LangGraph's own drawable), so
-// the picture is provably the graph the engine runs -- never hand-edit a
-// workflow shape here. Vertical flow: START at the top, each node one row
-// below its furthest predecessor. Small graphs only (~31 nodes) -- no library.
 
 export const START_NODE = "__start__";
 export const END_NODE = "__end__";
@@ -100,6 +94,11 @@ function nodeSize(id: string): { width: number; height: number } {
 	return id === START_NODE || id === END_NODE ? { width: PILL_W, height: PILL_H } : { width: NODE_W, height: NODE_H };
 }
 
+// SIO-1572: pure layered layout for the live graph triage panel. The topology
+// comes from /api/agent/topology (the compiled LangGraph's own drawable), so
+// the picture is provably the graph the engine runs -- never hand-edit a
+// workflow shape here. Vertical flow: START at the top, each node one row
+// below its furthest predecessor. Small graphs only (~31 nodes) -- no library.
 export function computeLayout(topology: Topology): GraphLayout {
 	const layers = computeLayers(topology);
 

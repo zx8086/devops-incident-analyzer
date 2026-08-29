@@ -1,14 +1,5 @@
 <script lang="ts">
 // apps/web/src/lib/components/GraphTriagePanel.svelte
-//
-// SIO-1572: live graph triage (waku-dashboard idiom). Renders the agent's own
-// compiled topology (from /api/agent/topology) as a vertical SVG chart and
-// lights it from the node_start/node_end state the agent store already tracks:
-// active node = held highlight (lit for as long as it is WORKING), completed =
-// settled tint + duration chip, and the edge into a running node pulses.
-// Edge traversal is inferred client-side (source done + target running/done),
-// so no new SSE events are needed; back edges (retries) are never marked taken
-// because completion order cannot prove a retry actually happened.
 import { computeLayout, END_NODE, type GraphLayout, START_NODE, type Topology } from "$lib/graph-layout";
 import { ALL_NODE_LABELS } from "$lib/node-labels";
 import Icon from "./Icon.svelte";
@@ -18,11 +9,23 @@ let {
 	activeNodes,
 	completedNodes,
 	isStreaming,
+	paused = false,
+	outcome,
 }: {
 	agent: string;
-	activeNodes: Set<string>;
+	// nodeId -> live run count (parallel branches share a node name; see the
+	// agent-reducer node_start/node_end cases).
+	activeNodes: Map<string, number>;
 	completedNodes: Map<string, { duration: number }>;
 	isStreaming: boolean;
+	// True while the graph is paused on a HITL gate (topic shift, HIL learning,
+	// IaC clarify/review/reconcile/push/upgrade/renovate). A paused turn keeps
+	// its completedNodes for the resume leg, so without this flag the panel
+	// would read the pause as a finished run.
+	paused?: boolean;
+	// Terminal outcome of the displayed run ("completed"/"error"/"rejected"/...);
+	// "error" keeps END unlit so a failed turn never reads as a clean finish.
+	outcome?: string;
 } = $props();
 
 let topology = $state<Topology | null>(null);
@@ -49,7 +52,11 @@ $effect(() => {
 const layout = $derived<GraphLayout | null>(topology ? computeLayout(topology) : null);
 
 const runStarted = $derived(activeNodes.size > 0 || completedNodes.size > 0);
-const runFinished = $derived(!isStreaming && activeNodes.size === 0 && completedNodes.size > 0);
+// A paused turn (HITL gate) and an errored turn both stop streaming with
+// completed nodes on screen -- neither is a FINISHED run, so END stays unlit.
+const runFinished = $derived(
+	!isStreaming && !paused && outcome !== "error" && activeNodes.size === 0 && completedNodes.size > 0,
+);
 
 type NodeVisual = "running" | "done" | "idle";
 function nodeVisual(id: string): NodeVisual {
@@ -67,6 +74,9 @@ function sourceDone(id: string): boolean {
 }
 
 type EdgeVisual = "flowing" | "taken" | "idle";
+// Edge traversal is INFERRED client-side (source done + target running/done)
+// rather than from dedicated route events. Back edges (retries) are never
+// marked taken: completion order cannot prove a retry actually happened.
 function edgeVisual(edge: GraphLayout["edges"][number]): EdgeVisual {
 	if (edge.back) return "idle";
 	if (!sourceDone(edge.source)) return "idle";
@@ -90,8 +100,10 @@ function nodeSubtitle(id: string): string {
 }
 
 const statusLine = $derived.by(() => {
-	const running = [...activeNodes];
+	const running = [...activeNodes.keys()];
 	if (running.length > 0) return `${running.join(", ")} running`;
+	if (paused) return "paused · awaiting your input";
+	if (!isStreaming && outcome === "error" && completedNodes.size > 0) return "ended with error";
 	if (runFinished) return `finished · ${completedNodes.size} nodes`;
 	// Mid-turn with no active node: either the very start of the turn or the
 	// output node token-streaming the answer after its node_end already fired.

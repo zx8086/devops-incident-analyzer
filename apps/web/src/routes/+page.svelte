@@ -42,16 +42,37 @@ function toggleGraphPane() {
 // SIO-1572: persist-last-run behavior. While a turn streams (or is paused on an
 // interrupt) the live ticker drives the chart; once the turn finalizes, the
 // store clears the live maps but buildAssistantMessage snapshotted them onto
-// the message -- fall back to the last assistant snapshot so the finished run
-// stays on screen until the next turn starts.
-const graphCompletedNodes = $derived.by(() => {
-	if (agentStore.isStreaming || agentStore.completedNodes.size > 0) return agentStore.completedNodes;
+// the message -- fall back to the last assistant snapshot (and ITS outcome, so
+// an errored turn never renders as a clean finish) until the next turn starts.
+const graphRun = $derived.by(() => {
+	if (agentStore.isStreaming || agentStore.completedNodes.size > 0) {
+		return { completedNodes: agentStore.completedNodes, outcome: undefined };
+	}
 	for (let i = agentStore.messages.length - 1; i >= 0; i--) {
 		const msg = agentStore.messages[i];
-		if (msg?.role === "assistant" && msg.completedNodes?.size) return msg.completedNodes;
+		if (msg?.role === "assistant" && msg.completedNodes?.size) {
+			return { completedNodes: msg.completedNodes, outcome: msg.outcome };
+		}
 	}
-	return agentStore.completedNodes;
+	return { completedNodes: agentStore.completedNodes, outcome: undefined };
 });
+
+// SIO-1572 (Greptile #679): a turn paused on any HITL gate keeps its completed
+// nodes live for the resume leg; without this flag the pane would read the
+// pause as a finished run and light END.
+const graphPaused = $derived(
+	Boolean(
+		agentStore.topicShiftPrompt ||
+			agentStore.hilLearningMatch ||
+			agentStore.hilLearningReview ||
+			agentStore.iacClarify ||
+			agentStore.iacPlanReview ||
+			agentStore.iacReconcileChoice ||
+			agentStore.syntheticsPushChoice ||
+			agentStore.fleetUpgradeChoice ||
+			agentStore.renovateTriggerChoice,
+	),
+);
 
 const isIac = $derived(agentStore.currentAgent === "elastic-iac");
 const agentTitle = $derived(isIac ? "Elastic IaC Agent" : "Incident Analyzer");
@@ -431,8 +452,10 @@ function handleSuggestionClick(suggestion: string) {
       <GraphTriagePanel
         agent={agentStore.currentAgent}
         activeNodes={agentStore.activeNodes}
-        completedNodes={graphCompletedNodes}
+        completedNodes={graphRun.completedNodes}
         isStreaming={agentStore.isStreaming}
+        paused={graphPaused}
+        outcome={graphRun.outcome}
       />
     </div>
   {/if}

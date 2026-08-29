@@ -18,7 +18,10 @@ let {
 	subAgentProgress = new Map(),
 	variant = "incident",
 }: {
-	activeNodes: Set<string>;
+	// SIO-1572: nodeId -> live run count (parallel Sends share a node name; the
+	// node stays active until its last branch ends). Same .has()/.size surface
+	// this component always used.
+	activeNodes: Map<string, number>;
 	completedNodes: Map<string, { duration: number }>;
 	// Live per-sub-agent status during the queryDataSource fan-out (see
 	// node-labels.ts / sse-pump.ts's "subagent_progress" event) -- fills the
