@@ -216,6 +216,11 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		// reaches every sub-agent via the ...state spread in supervise()).
 		.addEdge("awsEstateRouter", "resolveIdentifiers")
 		.addEdge("resolveIdentifiers", "detectTopicShift")
+		// SIO-1572: no path map here ON PURPOSE. A path map makes compile()
+		// validation treat the listed targets as the ONLY reachability route,
+		// which breaks the SIO-640 edge-gate idiom (gated KG nodes are registered
+		// but unwired when disabled and would become UnreachableNodeError). The
+		// topology endpoint normalizes the resulting drawable fan-out instead.
 		.addConditionalEdges("detectTopicShift", supervise)
 
 		// Sub-agent results flow to alignment

@@ -60,6 +60,18 @@
   --animate-pop-in: pop-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
   --animate-cascade-in: cascade-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
   --animate-fade-slide-up: fade-slide-up 0.7s ease-out forwards;
+  /* SIO-1572: dash-flow along a live graph-triage edge (pairs with an SVG
+     stroke-dasharray on the path). */
+  --animate-edge-flow: edge-flow 0.8s linear infinite;
+}
+
+@keyframes edge-flow {
+	from {
+		stroke-dashoffset: 12;
+	}
+	to {
+		stroke-dashoffset: 0;
+	}
 }
 
 @keyframes pulse-dot {

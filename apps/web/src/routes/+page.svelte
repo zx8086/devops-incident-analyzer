@@ -8,6 +8,7 @@ import DataSourceSelector from "$lib/components/DataSourceSelector.svelte";
 import DriftReportCard from "$lib/components/DriftReportCard.svelte";
 import ElasticDeploymentSelector from "$lib/components/ElasticDeploymentSelector.svelte";
 import FleetUpgradeChoiceCard from "$lib/components/FleetUpgradeChoiceCard.svelte";
+import GraphTriagePanel from "$lib/components/GraphTriagePanel.svelte";
 import Icon from "$lib/components/Icon.svelte";
 import LearningMatchCard from "$lib/components/LearningMatchCard.svelte";
 import LearningOutcomeCard from "$lib/components/LearningOutcomeCard.svelte";
@@ -23,6 +24,59 @@ import { agentStore } from "$lib/stores/agent.svelte";
 
 let messagesContainer: HTMLDivElement;
 let clarifyAnswer = $state("");
+
+// SIO-1572: live graph triage split-screen. Persisted so the pane survives
+// reloads; read lazily in onMount (localStorage is absent during SSR).
+const GRAPH_PANE_STORAGE_KEY = "graph-triage-pane-open";
+let showGraphPane = $state(false);
+
+function toggleGraphPane() {
+	showGraphPane = !showGraphPane;
+	try {
+		localStorage.setItem(GRAPH_PANE_STORAGE_KEY, showGraphPane ? "1" : "0");
+	} catch {
+		// Storage unavailable (private mode); the toggle still works for the session.
+	}
+}
+
+// SIO-1572: persist-last-run behavior. While a turn streams (or is paused on an
+// interrupt) the live ticker drives the chart; once the turn finalizes, the
+// store clears the live maps but buildAssistantMessage snapshotted them onto
+// the message -- fall back to the last assistant snapshot (and ITS outcome, so
+// an errored turn never renders as a clean finish) until the next turn starts.
+const graphRun = $derived.by(() => {
+	if (agentStore.isStreaming || agentStore.completedNodes.size > 0) {
+		return { completedNodes: agentStore.completedNodes, outcome: undefined };
+	}
+	// Greptile #679 round 2: only the LATEST turn's assistant messages may supply
+	// the snapshot. Scanning past a user message would resurrect an older run's
+	// finished chart after a turn that failed before completing any node -- the
+	// failed turn's (empty) snapshot and outcome must win instead.
+	for (let i = agentStore.messages.length - 1; i >= 0; i--) {
+		const msg = agentStore.messages[i];
+		if (!msg || msg.role === "user") break;
+		if (msg.completedNodes?.size) return { completedNodes: msg.completedNodes, outcome: msg.outcome };
+		if (msg.outcome) return { completedNodes: new Map(), outcome: msg.outcome };
+	}
+	return { completedNodes: agentStore.completedNodes, outcome: undefined };
+});
+
+// SIO-1572 (Greptile #679): a turn paused on any HITL gate keeps its completed
+// nodes live for the resume leg; without this flag the pane would read the
+// pause as a finished run and light END.
+const graphPaused = $derived(
+	Boolean(
+		agentStore.topicShiftPrompt ||
+			agentStore.hilLearningMatch ||
+			agentStore.hilLearningReview ||
+			agentStore.iacClarify ||
+			agentStore.iacPlanReview ||
+			agentStore.iacReconcileChoice ||
+			agentStore.syntheticsPushChoice ||
+			agentStore.fleetUpgradeChoice ||
+			agentStore.renovateTriggerChoice,
+	),
+);
 
 const isIac = $derived(agentStore.currentAgent === "elastic-iac");
 const agentTitle = $derived(isIac ? "Elastic IaC Agent" : "Incident Analyzer");
@@ -99,6 +153,13 @@ function submitClarify() {
 }
 
 onMount(() => {
+	// SIO-1572: restore the graph pane's open/closed state.
+	try {
+		showGraphPane = localStorage.getItem(GRAPH_PANE_STORAGE_KEY) === "1";
+	} catch {
+		// Storage unavailable; default stays closed.
+	}
+
 	let es: EventSource | undefined;
 	(async () => {
 		await agentStore.loadDataSources();
@@ -156,7 +217,10 @@ function handleSuggestionClick(suggestion: string) {
 }
 </script>
 
-<div class="min-h-screen bg-tommy-cream flex flex-col">
+<!-- SIO-1572: h-screen (was min-h-screen) so the split row is viewport-bound and
+     both the chat column and the graph pane scroll internally; min-h-screen let a
+     tall graph SVG push the chat input below the fold. -->
+<div class="h-screen bg-tommy-cream flex flex-col">
   <header class="bg-tommy-navy text-white px-6 py-4 flex items-center justify-between">
     <div class="flex items-center gap-3">
       <button
@@ -179,6 +243,17 @@ function handleSuggestionClick(suggestion: string) {
         <div class="w-2 h-2 rounded-full bg-green-500"></div>
         <span class="text-xs text-white/60">Connected</span>
       </div>
+      <!-- SIO-1572: split the screen vertically with the live graph triage pane. -->
+      <button
+        type="button"
+        onclick={toggleGraphPane}
+        title="Live graph triage"
+        aria-label="Toggle live graph triage pane"
+        aria-pressed={showGraphPane}
+        class="min-w-[44px] min-h-[44px] p-2 rounded-lg transition-all border-2 border-transparent {showGraphPane ? 'bg-tommy-accent-blue text-white' : 'text-white/70 hover:text-white hover:bg-white/10'}"
+      >
+        <Icon name="graph" class="w-5 h-5" />
+      </button>
       <button
         onclick={() => agentStore.clearChat()}
         class="min-w-[44px] min-h-[44px] p-2 text-red-500 hover:text-white hover:bg-red-500 bg-transparent border-2 border-transparent hover:border-red-500 rounded-lg transition-all disabled:text-gray-300"
@@ -204,6 +279,8 @@ function handleSuggestionClick(suggestion: string) {
     {/if}
   {/if}
 
+  <!-- SIO-1572: split row -- chat (left, flexible) | live graph triage pane (right). -->
+  <div class="flex-1 flex overflow-hidden min-h-0">
   <div bind:this={messagesContainer} class="flex-1 overflow-y-auto bg-white">
     <div class="max-w-4xl mx-auto py-4">
       {#if agentStore.messages.length === 0 && !agentStore.isStreaming}
@@ -372,6 +449,20 @@ function handleSuggestionClick(suggestion: string) {
       {/if}
 
     </div>
+  </div>
+
+  {#if showGraphPane}
+    <div class="w-2/5 max-w-xl shrink-0 border-l border-gray-200 bg-tommy-cream overflow-hidden">
+      <GraphTriagePanel
+        agent={agentStore.currentAgent}
+        activeNodes={agentStore.activeNodes}
+        completedNodes={graphRun.completedNodes}
+        isStreaming={agentStore.isStreaming}
+        paused={graphPaused}
+        outcome={graphRun.outcome}
+      />
+    </div>
+  {/if}
   </div>
 
   {#if agentStore.topicShiftPrompt}

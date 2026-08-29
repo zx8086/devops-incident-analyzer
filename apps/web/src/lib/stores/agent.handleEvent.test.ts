@@ -128,6 +128,33 @@ describe("applyStreamEvent", () => {
 		expect(state.completedNodes.get("classify")).toEqual({ duration: 42 });
 	});
 
+	// SIO-1572 (Greptile #679): parallel Sends emit one node_start/node_end pair
+	// PER BRANCH under the same node name; the node must stay active until its
+	// LAST branch ends, and that end's duration (the slowest branch) wins.
+	test("a fan-out node stays active until its last parallel branch ends", () => {
+		let state = initialReducerState();
+		state = applyStreamEvent(state, { type: "node_start", nodeId: "queryDataSource" });
+		state = applyStreamEvent(state, { type: "node_start", nodeId: "queryDataSource" });
+		state = applyStreamEvent(state, { type: "node_start", nodeId: "queryDataSource" });
+		expect(state.activeNodes.get("queryDataSource")).toBe(3);
+
+		state = applyStreamEvent(state, { type: "node_end", nodeId: "queryDataSource", duration: 100 });
+		expect(state.activeNodes.has("queryDataSource")).toBe(true);
+		expect(state.completedNodes.has("queryDataSource")).toBe(false);
+
+		state = applyStreamEvent(state, { type: "node_end", nodeId: "queryDataSource", duration: 250 });
+		state = applyStreamEvent(state, { type: "node_end", nodeId: "queryDataSource", duration: 900 });
+		expect(state.activeNodes.has("queryDataSource")).toBe(false);
+		expect(state.completedNodes.get("queryDataSource")).toEqual({ duration: 900 });
+	});
+
+	test("an unmatched node_end still completes the node (defensive)", () => {
+		let state = initialReducerState();
+		state = applyStreamEvent(state, { type: "node_end", nodeId: "align", duration: 7 });
+		expect(state.activeNodes.has("align")).toBe(false);
+		expect(state.completedNodes.get("align")).toEqual({ duration: 7 });
+	});
+
 	test("captures suggestions", () => {
 		const next = applyStreamEvent(initialReducerState(), {
 			type: "suggestions",

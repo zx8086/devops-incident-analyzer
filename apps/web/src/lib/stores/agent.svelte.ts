@@ -131,7 +131,7 @@ function createAgentStore() {
 	// later follow-ups comment on.
 	let threadTicket = $state<CreatedTicket | null>(null);
 	let threadTicketCreatedAtIndex = $state<number>(-1);
-	let activeNodes = $state<Set<string>>(new Set());
+	let activeNodes = $state<Map<string, number>>(new Map());
 	let completedNodes = $state<Map<string, { duration: number }>>(new Map());
 	let lastSuggestions = $state<string[]>([]);
 	let lastResponseTime = $state<number | undefined>(undefined);
@@ -247,7 +247,7 @@ function createAgentStore() {
 		applicationTopology = null;
 		mlAnomalyExplainer = null;
 		subAgentProgress = new Map();
-		activeNodes = new Set();
+		activeNodes = new Map();
 		completedNodes = new Map();
 		lastSuggestions = [];
 		lastResponseTime = undefined;
@@ -330,7 +330,7 @@ function createAgentStore() {
 				currentContent = "";
 			}
 			isStreaming = false;
-			activeNodes = new Set();
+			activeNodes = new Map();
 			lastSuggestions = [];
 			dataSourceProgress = new Map();
 			dataSourceFindings = new Map();
@@ -632,7 +632,7 @@ function createAgentStore() {
 		applicationTopology = null;
 		mlAnomalyExplainer = null;
 		subAgentProgress = new Map();
-		activeNodes = new Set();
+		activeNodes = new Map();
 		completedNodes = new Map();
 		lastSuggestions = [];
 		lastDataSourceContext = undefined;
@@ -699,7 +699,7 @@ function createAgentStore() {
 		iacPipelineProgress = [];
 		isStreaming = true;
 		currentContent = "";
-		activeNodes = new Set();
+		activeNodes = new Map();
 		// SIO-934: do NOT reset completedNodes here -- this resume continues the SAME turn that
 		// paused at the interrupt, so leg 2 (e.g. openMr -> watchPipeline) must accumulate onto the
 		// pipeline already built in leg 1 (parseIntent ... reviewPlan). Resetting here is what made
@@ -734,7 +734,7 @@ function createAgentStore() {
 				currentContent = "";
 			}
 			isStreaming = false;
-			activeNodes = new Set();
+			activeNodes = new Map();
 			// SIO-934: a chained interrupt (e.g. clarify -> plan-review, or the per-stack reconcile
 			// loop) means the turn pauses again -- keep completedNodes so the next resume leg keeps
 			// building the same pipeline. Only clear once the turn truly ends.
@@ -833,7 +833,7 @@ function createAgentStore() {
 				currentContent = "";
 			}
 			isStreaming = false;
-			activeNodes = new Set();
+			activeNodes = new Map();
 			// A chained gate (match -> review) means the turn pauses again -- keep the
 			// pipeline building across legs (the SIO-934 idiom).
 			if (hilLearningMatch === null && hilLearningReview === null) {
@@ -898,7 +898,7 @@ function createAgentStore() {
 				currentContent = "";
 			}
 			isStreaming = false;
-			activeNodes = new Set();
+			activeNodes = new Map();
 			completedNodes = new Map();
 			lastSuggestions = [];
 			dataSourceProgress = new Map();
