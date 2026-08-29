@@ -43,6 +43,15 @@ interface InstanceConfiguration {
 		default_size?: number;
 		resource?: string;
 	};
+	// SIO-1571: vCPU per GB RAM. Verified against live cgroup quotas -- aws.es.datahot.i3
+	// reports 0.138, matching a measured 2.069 vCPU at 15 GB.
+	cpu_multiplier?: number;
+	// Disk per GB RAM, e.g. 30.0 on aws.es.datahot.i3 (450 GiB on a 15 GB node).
+	storage_multiplier?: number;
+	// The IC version to pin in a topology change. NOTE the API field is `config_version`,
+	// not `instance_configuration_version`. Genuinely absent on some ICs (e.g. aws.es.ml.m6gd
+	// in aws-cpu-optimized-arm-v3), so it stays optional and is reported as null, never guessed.
+	config_version?: number;
 }
 
 interface DeploymentTemplate {
@@ -112,6 +121,11 @@ export const registerCloudGetHardwareProfileTool: CloudToolRegistrationFunction 
 				return {
 					topology_id: t.id ?? null,
 					instance_configuration_id: icId,
+					// Null means the API did not return the field (or the IC did not resolve) --
+					// never a default, since a wrong version/density is worse than a stated unknown.
+					config_version: ic?.config_version ?? null,
+					cpu_multiplier: ic?.cpu_multiplier ?? null,
+					storage_multiplier: ic?.storage_multiplier ?? null,
 					zone_count: t.zone_count ?? null,
 					default_size_mb_ram: defaultMib && defaultMib > 0 ? defaultMib : null,
 					default_size_gb_ram: mibToGb(defaultMib),
