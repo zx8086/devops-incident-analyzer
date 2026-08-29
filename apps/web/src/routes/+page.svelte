@@ -48,11 +48,15 @@ const graphRun = $derived.by(() => {
 	if (agentStore.isStreaming || agentStore.completedNodes.size > 0) {
 		return { completedNodes: agentStore.completedNodes, outcome: undefined };
 	}
+	// Greptile #679 round 2: only the LATEST turn's assistant messages may supply
+	// the snapshot. Scanning past a user message would resurrect an older run's
+	// finished chart after a turn that failed before completing any node -- the
+	// failed turn's (empty) snapshot and outcome must win instead.
 	for (let i = agentStore.messages.length - 1; i >= 0; i--) {
 		const msg = agentStore.messages[i];
-		if (msg?.role === "assistant" && msg.completedNodes?.size) {
-			return { completedNodes: msg.completedNodes, outcome: msg.outcome };
-		}
+		if (!msg || msg.role === "user") break;
+		if (msg.completedNodes?.size) return { completedNodes: msg.completedNodes, outcome: msg.outcome };
+		if (msg.outcome) return { completedNodes: new Map(), outcome: msg.outcome };
 	}
 	return { completedNodes: agentStore.completedNodes, outcome: undefined };
 });

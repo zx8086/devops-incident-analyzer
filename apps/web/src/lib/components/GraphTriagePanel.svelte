@@ -103,7 +103,7 @@ const statusLine = $derived.by(() => {
 	const running = [...activeNodes.keys()];
 	if (running.length > 0) return `${running.join(", ")} running`;
 	if (paused) return "paused · awaiting your input";
-	if (!isStreaming && outcome === "error" && completedNodes.size > 0) return "ended with error";
+	if (!isStreaming && outcome === "error") return "ended with error";
 	if (runFinished) return `finished · ${completedNodes.size} nodes`;
 	// Mid-turn with no active node: either the very start of the turn or the
 	// output node token-streaming the answer after its node_end already fired.
