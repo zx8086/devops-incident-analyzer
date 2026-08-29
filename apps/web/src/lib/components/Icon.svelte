@@ -25,7 +25,8 @@ type IconName =
 	| "zoom-out"
 	| "fit-view"
 	| "expand"
-	| "collapse";
+	| "collapse"
+	| "graph";
 
 let { name, class: className = "" }: { name: IconName; class?: string } = $props();
 </script>
@@ -126,5 +127,14 @@ let { name, class: className = "" }: { name: IconName; class?: string } = $props
     <path d="M20 10h-6V4" />
     <path d="M14 10l7-7" />
     <path d="M10 14l-7 7" />
+  {:else if name === "graph"}
+    <circle cx="12" cy="4" r="2" />
+    <circle cx="5" cy="12" r="2" />
+    <circle cx="19" cy="12" r="2" />
+    <circle cx="12" cy="20" r="2" />
+    <path d="M10.6 5.4 6.4 10.6" />
+    <path d="M13.4 5.4l4.2 5.2" />
+    <path d="M6.4 13.4l4.2 5.2" />
+    <path d="M17.6 13.4l-4.2 5.2" />
   {/if}
 </svg>

@@ -1,0 +1,224 @@
+<script lang="ts">
+// apps/web/src/lib/components/GraphTriagePanel.svelte
+//
+// SIO-1572: live graph triage (waku-dashboard idiom). Renders the agent's own
+// compiled topology (from /api/agent/topology) as a vertical SVG chart and
+// lights it from the node_start/node_end state the agent store already tracks:
+// active node = held highlight (lit for as long as it is WORKING), completed =
+// settled tint + duration chip, and the edge into a running node pulses.
+// Edge traversal is inferred client-side (source done + target running/done),
+// so no new SSE events are needed; back edges (retries) are never marked taken
+// because completion order cannot prove a retry actually happened.
+import { computeLayout, END_NODE, type GraphLayout, START_NODE, type Topology } from "$lib/graph-layout";
+import { ALL_NODE_LABELS } from "$lib/node-labels";
+import Icon from "./Icon.svelte";
+
+let {
+	agent,
+	activeNodes,
+	completedNodes,
+	isStreaming,
+}: {
+	agent: string;
+	activeNodes: Set<string>;
+	completedNodes: Map<string, { duration: number }>;
+	isStreaming: boolean;
+} = $props();
+
+let topology = $state<Topology | null>(null);
+let loadError = $state("");
+
+// Refetch when the agent toggles; ignore stale responses from a superseded fetch.
+$effect(() => {
+	const requested = agent;
+	topology = null;
+	loadError = "";
+	fetch(`/api/agent/topology?agent=${encodeURIComponent(requested)}`)
+		.then(async (res) => {
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			return (await res.json()) as Topology;
+		})
+		.then((data) => {
+			if (agent === requested) topology = data;
+		})
+		.catch((error) => {
+			if (agent === requested) loadError = error instanceof Error ? error.message : String(error);
+		});
+});
+
+const layout = $derived<GraphLayout | null>(topology ? computeLayout(topology) : null);
+
+const runStarted = $derived(activeNodes.size > 0 || completedNodes.size > 0);
+const runFinished = $derived(!isStreaming && activeNodes.size === 0 && completedNodes.size > 0);
+
+type NodeVisual = "running" | "done" | "idle";
+function nodeVisual(id: string): NodeVisual {
+	if (id === START_NODE) return runStarted ? "done" : "idle";
+	if (id === END_NODE) return runFinished ? "done" : "idle";
+	if (activeNodes.has(id)) return "running";
+	if (completedNodes.has(id)) return "done";
+	return "idle";
+}
+
+// START counts as "completed" for edge inference the moment the run starts.
+function sourceDone(id: string): boolean {
+	if (id === START_NODE) return runStarted;
+	return completedNodes.has(id);
+}
+
+type EdgeVisual = "flowing" | "taken" | "idle";
+function edgeVisual(edge: GraphLayout["edges"][number]): EdgeVisual {
+	if (edge.back) return "idle";
+	if (!sourceDone(edge.source)) return "idle";
+	if (activeNodes.has(edge.target)) return "flowing";
+	if (edge.target === END_NODE) return runFinished ? "taken" : "idle";
+	if (completedNodes.has(edge.target)) return "taken";
+	return "idle";
+}
+
+function nodeLabel(id: string): string {
+	if (id === START_NODE) return "START";
+	if (id === END_NODE) return "END";
+	return id;
+}
+
+function nodeSubtitle(id: string): string {
+	const duration = completedNodes.get(id);
+	if (duration) return `${(duration.duration / 1000).toFixed(1)}s`;
+	if (activeNodes.has(id)) return `${ALL_NODE_LABELS[id]?.activeLabel ?? "Running"}...`;
+	return "";
+}
+
+const statusLine = $derived.by(() => {
+	const running = [...activeNodes];
+	if (running.length > 0) return `${running.join(", ")} running`;
+	if (runFinished) return `finished · ${completedNodes.size} nodes`;
+	// Mid-turn with no active node: either the very start of the turn or the
+	// output node token-streaming the answer after its node_end already fired.
+	if (isStreaming) return completedNodes.size > 0 ? "streaming answer..." : "starting...";
+	return "nodes light up as a turn flows through";
+});
+</script>
+
+<div class="flex flex-col h-full">
+  <div class="flex items-center gap-2 px-4 py-3 border-b border-gray-200 bg-white">
+    <Icon name="graph" class="w-4 h-4 text-tommy-navy" />
+    <div class="flex-1 min-w-0">
+      <h2 class="text-xs font-semibold text-tommy-navy leading-tight">Live graph triage</h2>
+      <p class="text-[0.625rem] text-gray-500 truncate">{agent} &middot; {statusLine}</p>
+    </div>
+    {#if isStreaming}
+      <span class="relative flex h-2 w-2 shrink-0">
+        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-tommy-accent-blue opacity-75"></span>
+        <span class="relative inline-flex rounded-full h-2 w-2 bg-tommy-accent-blue"></span>
+      </span>
+    {/if}
+  </div>
+
+  <div class="flex-1 overflow-auto p-3">
+    {#if loadError}
+      <div class="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg p-3">
+        Failed to load the graph topology: {loadError}
+      </div>
+    {:else if !layout}
+      <div class="flex items-center gap-2 text-xs text-gray-500 p-3">
+        <Icon name="spinner" class="w-3.5 h-3.5 animate-spin" />
+        Loading topology...
+      </div>
+    {:else}
+      <svg
+        viewBox="0 0 {layout.width} {layout.height}"
+        class="w-full h-auto"
+        style="max-width: {layout.width}px"
+        role="img"
+        aria-label="Agent pipeline graph"
+      >
+        <defs>
+          <marker
+            id="triage-arrow"
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="6"
+            markerHeight="6"
+            orient="auto-start-reverse"
+          >
+            <path d="M0 0 L10 5 L0 10 z" class="fill-gray-300" />
+          </marker>
+        </defs>
+
+        {#each layout.edges as edge (`${edge.source}->${edge.target}`)}
+          {@const visual = edgeVisual(edge)}
+          <path
+            d={edge.path}
+            fill="none"
+            marker-end="url(#triage-arrow)"
+            stroke-dasharray={visual === "flowing" ? "6 6" : edge.conditional ? "4 4" : undefined}
+            class={visual === "flowing"
+              ? "stroke-tommy-accent-blue stroke-2 animate-edge-flow"
+              : visual === "taken"
+                ? "stroke-green-500 stroke-2"
+                : "stroke-gray-300 stroke-1"}
+          />
+        {/each}
+
+        {#each layout.nodes as node (node.id)}
+          {@const visual = nodeVisual(node.id)}
+          {#if node.id === START_NODE || node.id === END_NODE}
+            <rect
+              x={node.x}
+              y={node.y}
+              width={node.width}
+              height={node.height}
+              rx={node.height / 2}
+              class={visual === "done"
+                ? "fill-green-100 stroke-green-500 stroke-1"
+                : "fill-white stroke-gray-300 stroke-1"}
+            />
+            <text
+              x={node.x + node.width / 2}
+              y={node.y + node.height / 2 + 3.5}
+              text-anchor="middle"
+              class="text-[10px] font-semibold {visual === 'done' ? 'fill-green-700' : 'fill-gray-500'}"
+            >
+              {nodeLabel(node.id)}
+            </text>
+          {:else}
+            <rect
+              x={node.x}
+              y={node.y}
+              width={node.width}
+              height={node.height}
+              rx="8"
+              class={visual === "running"
+                ? "fill-tommy-offwhite stroke-tommy-accent-blue stroke-2 animate-pulse"
+                : visual === "done"
+                  ? "fill-green-50 stroke-green-500 stroke-1"
+                  : "fill-white stroke-gray-300 stroke-1"}
+            />
+            <text
+              x={node.x + 10}
+              y={node.y + 17}
+              class="text-[10px] font-medium {visual === 'running'
+                ? 'fill-tommy-accent-blue'
+                : visual === 'done'
+                  ? 'fill-green-700'
+                  : 'fill-gray-600'}"
+            >
+              {nodeLabel(node.id)}
+            </text>
+            {#if nodeSubtitle(node.id)}
+              <text
+                x={node.x + 10}
+                y={node.y + 31}
+                class="text-[9px] {visual === 'running' ? 'fill-tommy-accent-blue' : 'fill-green-600'}"
+              >
+                {nodeSubtitle(node.id)}
+              </text>
+            {/if}
+          {/if}
+        {/each}
+      </svg>
+    {/if}
+  </div>
+</div>
