@@ -33,6 +33,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#671](https://github.com/zx8086/devops-incident-analyzer/pull/671) | 2026-08-16 | 3 | 2 / 0 | 1 / 0 (duplicate of round-1 Greptile) | Renovate follow-up guard + history; round 1 both bots caught the same bug, round 2 Greptile caught a fix-introduced regression alone; detail below |
 | [#673](https://github.com/zx8086/devops-incident-analyzer/pull/673) | 2026-08-16 | 3 | 2 / 0 | 3 / 0 (1 duplicate) | gitlabFetch timeout + probe classification; first convergence (both caught the caller-cancellation mislabel), CodeRabbit's readPositiveIntEnv pointer beat the hand-rolled fix; detail below |
 | [#674](https://github.com/zx8086/devops-incident-analyzer/pull/674) | 2026-08-16 | 1 | 0 / 0 (1 declined) | 0 / 0 | Renovate stage-tracker wiring + per-policy agent counts; Greptile 4/5 with one convention finding declined as a false premise, CodeRabbit clean; detail below |
+| [#679](https://github.com/zx8086/devops-incident-analyzer/pull/679) | 2026-08-30 | 4 | 5 / 0 | 0 / 0 (never reviewed) | Live graph triage panel (SIO-1572); Greptile alone drove 3 rounds of real UI-state fixes incl. a parallel-Send store bug; CodeRabbit posted no review at all; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -377,3 +378,28 @@ A small follow-up PR (+203/-3 initial) that became a four-round study in reviewi
 2. *The bots contradicted each other on convention for the first time.* Greptile demanded the repo-relative header the sibling files (and CodeRabbit's own learning) reject. Convention findings need checking against the ACTUAL neighbors, not the rule text -- same lesson as #674, now with the two reviewers on opposite sides.
 3. *Round-3 convergence again, complementary angles.* Same target (the selection rule), different failure modes (steal vs nondeterminism), one shared fix. Third convergence in the ledger (#673, #675, #676).
 4. *A 4/5 merge is legitimate when the residual is a declined floor-case.* The prose gate ("not yet safe to merge") flagged rounds 2-4; rounds 2-3 were real and fixed, round 4 was declined on merit with the reasoning in-thread. The check + decision + resolved-threads gates all passed; the score alone is not the gate.
+
+## PR #679 detail (SIO-1572, live graph triage split-screen panel)
+
+A frontend-heavy feature PR (+782/-2 initial: topology endpoint, layered SVG layout, live-lighting panel, split layout). Four Greptile rounds (3/5 -> 4/5 -> 4/5 -> 5/5 "appears safe to merge"), five accepted findings, zero declined. **First entry where CodeRabbit posted no review at all** across the PR's ~80-minute open life, so the head-to-head column is empty by absence, not by a clean pass. Also the first PR where Greptile's auto-review did not fire on open: the check never registered until an explicit `@greptile review` comment ~25 minutes in.
+
+**Round 1 (`b18978df`):** 3/5, three findings, all accepted.
+
+- *Parallel executions finish prematurely* (the strongest finding): the store tracked `activeNodes` as a `Set`, and parallel Sends (supervisor fan-out, correlationFetch, per-estate AWS) emit one `node_start`/`node_end` pair PER BRANCH under the same node name -- so the first branch's end marked the node done while siblings still ran. **Verified before fixing with a live LangGraph `Send` probe** (3 starts then 3 ends observed for one node name). Fixed by making `activeNodes` a `Map<nodeId, run count>` that completes only on the last branch's end (its duration = the slowest branch). Map shares `.has()`/`.size` with Set, so the fix also repaired the same early-green in the existing StreamingProgress pills -- a pre-existing bug caught only because the new panel re-consumed the same state.
+- *Completion conflates paused states*: a turn paused on any HITL gate keeps its completedNodes for the resume leg, so the panel read every pause as a finished run. Fixed with a `paused` prop derived from the nine gate states plus an `outcome` prop.
+- *File headers*: multi-paragraph header blocks violated the single-line-path convention. Accepted (unlike #674/#676 where header findings were declined -- this one matched the actual convention).
+
+**Round 2 (`54d1bb43`):** 4/5, one new P1 -- against the round-1 fix's fallback: with a prior successful run on screen, a next turn failing before any node completed left an empty snapshot, so the persist-last-run scan walked PAST it and resurrected the older successful chart with END lit. Fixed by bounding the scan at the latest turn's user-message boundary.
+
+**Round 3 (`2b802ab5`):** 4/5, one new P1 -- against the round-2 fix's outcome handling: `runFinished` excluded only `"error"`, so IaC terminal outcomes (rejected/declined/blocked/unsupported/pipeline-failed) lit END green. Fixed by requiring outcome `"completed"` (or undefined on the live path) and naming any other terminal outcome in the status line. Greptile's inline ```suggestion``` was adopted in refined form (the undefined allowance it lacked would have broken the live path).
+
+**Round 4 (`615a0d63`):** 5/5, "The PR appears safe to merge", footer SHA == head, zero unresolved threads. Merged.
+
+**Latency:** auto-review never fired on PR open (check absent after 20+ minutes; explicit `@greptile review` needed). Once triggered, each round landed within ~2-5 minutes of trigger/push. CodeRabbit: no review, no check, no comment for the PR's entire life.
+
+**Takeaways:**
+
+1. *The #675/#676 fix-chain pattern repeated solo.* Rounds 2 and 3 each attacked the previous round's fix (fallback scan, then outcome gating). With CodeRabbit absent, Greptile alone sustained the incremental-round pressure that #676 needed both bots for -- its strongest single-bot showing in the ledger.
+2. *A reviewer found a pre-existing bug by reviewing new code.* The parallel-Send Set bug predated this PR (StreamingProgress had it since the fan-out existed); it surfaced because the new panel made the state's semantics load-bearing. The live LangGraph probe confirming per-branch event multiplicity is the verify-before-apply form that matters for state-model findings.
+3. *CodeRabbit's absence is itself a data point.* Nine prior entries recorded its latency as "varies widely"; this one records a full no-show on a 10-file feature PR. For the bake-off decision, availability consistency now belongs next to recall in the comparison.
+4. *Greptile's auto-trigger failed on PR open.* First observed auto-review no-fire; the deterministic completion check caught it (check never registered, distinct from "running"), and the documented `@greptile review` re-trigger recovered. The 20-minute monitor timeout was the right backstop.
