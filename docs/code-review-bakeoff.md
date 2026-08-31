@@ -34,6 +34,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#673](https://github.com/zx8086/devops-incident-analyzer/pull/673) | 2026-08-16 | 3 | 2 / 0 | 3 / 0 (1 duplicate) | gitlabFetch timeout + probe classification; first convergence (both caught the caller-cancellation mislabel), CodeRabbit's readPositiveIntEnv pointer beat the hand-rolled fix; detail below |
 | [#674](https://github.com/zx8086/devops-incident-analyzer/pull/674) | 2026-08-16 | 1 | 0 / 0 (1 declined) | 0 / 0 | Renovate stage-tracker wiring + per-policy agent counts; Greptile 4/5 with one convention finding declined as a false premise, CodeRabbit clean; detail below |
 | [#679](https://github.com/zx8086/devops-incident-analyzer/pull/679) | 2026-08-30 | 4 | 5 / 0 | 0 / 0 (never reviewed) | Live graph triage panel (SIO-1572); Greptile alone drove 3 rounds of real UI-state fixes incl. a parallel-Send store bug; CodeRabbit posted no review at all; detail below |
+| [#680](https://github.com/zx8086/devops-incident-analyzer/pull/680) | 2026-08-31 | 0 | n/a (SKIPPED, docs-only) | n/a (no review) | Combined DevOpsAgentReadOnly IAM reference doc; Greptile logged both triggers as terminal SKIPPED so the status check never registered, CodeRabbit silent; merged on green CI; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -403,3 +404,19 @@ A frontend-heavy feature PR (+782/-2 initial: topology endpoint, layered SVG lay
 2. *A reviewer found a pre-existing bug by reviewing new code.* The parallel-Send Set bug predated this PR (StreamingProgress had it since the fan-out existed); it surfaced because the new panel made the state's semantics load-bearing. The live LangGraph probe confirming per-branch event multiplicity is the verify-before-apply form that matters for state-model findings.
 3. *CodeRabbit's absence is itself a data point.* Nine prior entries recorded its latency as "varies widely"; this one records a full no-show on a 10-file feature PR. For the bake-off decision, availability consistency now belongs next to recall in the comparison.
 4. *Greptile's auto-trigger failed on PR open.* First observed auto-review no-fire; the deterministic completion check caught it (check never registered, distinct from "running"), and the documented `@greptile review` re-trigger recovered. The 20-minute monitor timeout was the right backstop.
+
+## PR #680 detail (combined DevOpsAgentReadOnly IAM reference doc)
+
+A docs-only PR (one added file, `docs/reference/devops-agent-readonly-iam.md`, +416) bundling the three already-committed IAM policy JSONs into one reference. Zero review rounds from either bot -- but HOW each bot declined to review is the ledger-worthy part.
+
+**Greptile:** the auto-trigger on PR open AND an explicit `@greptile review` comment ~9 minutes later were both received and both logged as terminal **SKIPPED** reviews (visible only via the Greptile MCP `list_code_reviews`; ids 21596457 and 21597765, both on head `cc11489c`, `changedFiles` = the single .md). No status check, no bot comment, no review object -- from the GitHub side the bot is indistinguishable from the #679-style no-fire. The MCP was the only way to tell "skipped deliberately (docs-only)" from "never arrived", and it turned an indefinite wait into a deterministic answer.
+
+**CodeRabbit:** nothing at all -- no review, no comment, consistent with its #679 absence.
+
+**Merge gate implication:** on a docs-only diff the `Greptile Review` status check NEVER registers, so the documented completion gate cannot be satisfied and must not be waited on. The merge proceeded on: both Greptile reviews terminal SKIPPED via MCP, zero findings to triage, CI green (Test/Lint/Typecheck/YAML), `MERGEABLE`/`CLEAN`, and explicit user authorization. Merged at 4 CI checks green, squash `756493c6`.
+
+**Takeaways:**
+
+1. *Docs-only diffs are outside both bots' review surface.* Neither bot posts anything; the dual-review comparison is structurally empty for this PR class. Rows like this one record availability behavior, not recall.
+2. *The Greptile MCP is the disambiguator for silent-bot states.* #679's lesson was "re-trigger when the check never registers"; #680 extends it: when the re-trigger ALSO stays silent, `list_code_reviews` distinguishes SKIPPED (stop waiting) from stuck (keep escalating). Check it before any long poll.
+3. *The status-check gate needs a docs-only carve-out.* "Never merge while Greptile is pending" presumes a review will exist; SKIPPED is not pending. The operative gate for docs-only PRs is CI + MCP-confirmed SKIPPED + user sign-off.
