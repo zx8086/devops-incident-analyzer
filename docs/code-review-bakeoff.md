@@ -35,6 +35,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#674](https://github.com/zx8086/devops-incident-analyzer/pull/674) | 2026-08-16 | 1 | 0 / 0 (1 declined) | 0 / 0 | Renovate stage-tracker wiring + per-policy agent counts; Greptile 4/5 with one convention finding declined as a false premise, CodeRabbit clean; detail below |
 | [#679](https://github.com/zx8086/devops-incident-analyzer/pull/679) | 2026-08-30 | 4 | 5 / 0 | 0 / 0 (never reviewed) | Live graph triage panel (SIO-1572); Greptile alone drove 3 rounds of real UI-state fixes incl. a parallel-Send store bug; CodeRabbit posted no review at all; detail below |
 | [#680](https://github.com/zx8086/devops-incident-analyzer/pull/680) | 2026-08-31 | 0 | n/a (SKIPPED, docs-only) | n/a (no review) | Combined DevOpsAgentReadOnly IAM reference doc; Greptile logged both triggers as terminal SKIPPED so the status check never registered, CodeRabbit silent; merged on green CI; detail below |
+| [#681](https://github.com/zx8086/devops-incident-analyzer/pull/681) | 2026-09-01 | 0 | n/a (SKIPPED, docs-only) | n/a (no review) | Periodic AWS self-check strategy doc; auto-trigger logged as terminal SKIPPED (MCP-confirmed before any long wait, per the #680 lesson), CodeRabbit silent through a 30-min watch; merged on green CI; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -420,3 +421,18 @@ A docs-only PR (one added file, `docs/reference/devops-agent-readonly-iam.md`, +
 1. *Docs-only diffs are outside both bots' review surface.* Neither bot posts anything; the dual-review comparison is structurally empty for this PR class. Rows like this one record availability behavior, not recall.
 2. *The Greptile MCP is the disambiguator for silent-bot states.* #679's lesson was "re-trigger when the check never registers"; #680 extends it: when the re-trigger ALSO stays silent, `list_code_reviews` distinguishes SKIPPED (stop waiting) from stuck (keep escalating). Check it before any long poll.
 3. *The status-check gate needs a docs-only carve-out.* "Never merge while Greptile is pending" presumes a review will exist; SKIPPED is not pending. The operative gate for docs-only PRs is CI + MCP-confirmed SKIPPED + user sign-off.
+
+## PR #681 detail (periodic AWS self-check strategy doc)
+
+A docs-only PR (one added file, `docs/operations/aws-periodic-self-check-strategy.md`, +171). Second consecutive docs-only entry; its value is confirming #680's behavior is stable, not incidental.
+
+**Greptile:** the auto-trigger on PR open was logged as a single terminal **SKIPPED** review (MCP `list_code_reviews` id 21783725, head `1c299f5d`, `changedFiles` = the single .md). No status check, no comment, no review object. Unlike #680, no explicit `@greptile review` re-trigger was attempted -- the MCP was consulted after a 30-minute CI-plus-bots poll came back empty, immediately converting the silence into a deterministic SKIPPED answer.
+
+**CodeRabbit:** nothing -- no review, no comment, through the full watch window. Third consecutive absence (#679 feature PR, #680 docs-only, #681 docs-only).
+
+**Merge gate:** CI green (Typecheck/Lint/YAML/Test), Greptile SKIPPED via MCP, zero findings to triage, standing user authorization to merge once clear. Squash `c020785c`; remote branch auto-deleted on merge.
+
+**Takeaways:**
+
+1. *#680's docs-only skip behavior reproduced exactly* (n=2): auto-trigger accepted then terminally SKIPPED, no GitHub-visible trace, CodeRabbit fully silent. The docs-only carve-out (CI + MCP-confirmed SKIPPED + user sign-off) can now be treated as the standard gate for this PR class rather than a one-off exception.
+2. *Check the MCP before the long poll, not after.* This round spent 30 minutes polling GitHub surfaces that were never going to change; one `list_code_reviews` call at PR-open time would have answered immediately. Order of operations for future PRs: MCP status first, then poll only if the review is genuinely PENDING/REVIEWING.
