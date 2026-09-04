@@ -36,6 +36,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#679](https://github.com/zx8086/devops-incident-analyzer/pull/679) | 2026-08-30 | 4 | 5 / 0 | 0 / 0 (never reviewed) | Live graph triage panel (SIO-1572); Greptile alone drove 3 rounds of real UI-state fixes incl. a parallel-Send store bug; CodeRabbit posted no review at all; detail below |
 | [#680](https://github.com/zx8086/devops-incident-analyzer/pull/680) | 2026-08-31 | 0 | n/a (SKIPPED, docs-only) | n/a (no review) | Combined DevOpsAgentReadOnly IAM reference doc; Greptile logged both triggers as terminal SKIPPED so the status check never registered, CodeRabbit silent; merged on green CI; detail below |
 | [#681](https://github.com/zx8086/devops-incident-analyzer/pull/681) | 2026-09-01 | 0 | n/a (SKIPPED, docs-only) | n/a (no review) | Periodic AWS self-check strategy doc; auto-trigger logged as terminal SKIPPED (MCP-confirmed before any long wait, per the #680 lesson), CodeRabbit silent through a 30-min watch; merged on green CI; detail below |
+| [#682](https://github.com/zx8086/devops-incident-analyzer/pull/682) | 2026-09-04 | 0 | skipped (3 triggers) | silent | SIO-1635 pi-coms handoff, 20-file CODE PR; first non-docs skip, all three trigger paths; detail below |
 | [#683](https://github.com/zx8086/devops-incident-analyzer/pull/683) | 2026-09-05 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1640 agent-toolkit-for-aws content port (7 files incl. wrap.ts + 2 tests); auto-trigger logged terminal SKIPPED within ~100 ms, CodeRabbit silent (5th straight); first CODE PR merged on a skip, on green CI + MCP-confirmed SKIPPED + explicit per-PR user instruction; detail below |
 | [#684](https://github.com/zx8086/devops-incident-analyzer/pull/684) | 2026-09-05 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1641 SSE pump node allowlist derived from the compiled graph (14 files, all apps/web + 1 doc); auto-trigger logged terminal SKIPPED within ~150 ms, CodeRabbit silent (6th straight); merged on green CI + MCP-confirmed SKIPPED + explicit per-PR user instruction; detail below |
 | [#689](https://github.com/zx8086/devops-incident-analyzer/pull/689) | 2026-09-06 | 0 | n/a (SKIPPED, docs-only) | n/a (no review) | pi-fleet gitagent feasibility report (docs only); seven heads, seven terminal SKIPPED within 125-160 ms via MCP, CodeRabbit silent (10th straight); merged on user authorization; detail below |
@@ -440,6 +441,21 @@ A docs-only PR (one added file, `docs/operations/aws-periodic-self-check-strateg
 1. *#680's docs-only skip behavior reproduced exactly* (n=2): auto-trigger accepted then terminally SKIPPED, no GitHub-visible trace, CodeRabbit fully silent. The docs-only carve-out (CI + MCP-confirmed SKIPPED + user sign-off) can now be treated as the standard gate for this PR class rather than a one-off exception.
 2. *Check the MCP before the long poll, not after.* This round spent 30 minutes polling GitHub surfaces that were never going to change; one `list_code_reviews` call at PR-open time would have answered immediately. Order of operations for future PRs: MCP status first, then poll only if the review is genuinely PENDING/REVIEWING.
 
+## PR #682 detail (SIO-1635, pi-coms hub verification and investigation handoff)
+
+A code PR: 20 changed files, six new TypeScript sources (hub client, verifier, shared contracts) plus a Svelte card rewrite, tests, docs and `.env.example`. Head `670a4d77`. CI green on the first run (Typecheck, Lint, YAML check, Test).
+
+**Greptile:** three terminal **SKIPPED** reviews on the same head, each completed about 150 ms after creation, one per trigger path: the auto-trigger on PR open (MCP id 22602629), the `@greptile review` comment (22602846), and a dispatch through the Greptile MCP `trigger_code_review` (22602981, which answered "Code review triggered successfully"). No status check registered, no bot comment, no review object, and `get_code_review` returns `body: null` with no reason. `list_custom_context` timed out when probed for a skip rule.
+
+**CodeRabbit:** nothing through the watch window. Fourth consecutive absence (#679, #680, #681, #682).
+
+**Merge gate:** not satisfied from the session side. The docs-only carve-out (CI + MCP-confirmed SKIPPED + user sign-off) was defined for diffs Greptile has nothing to say about; it does not extend to a 20-file code change. Left open for the user to check the Greptile dashboard (repo enabled, quota, skip rules) and to run their own smoke test against the corp hub.
+
+**Takeaways:**
+
+1. *The skip is no longer explained by docs-only diffs.* Every PR since #680 has been skipped regardless of content, so the cause is repo- or account-level in Greptile, not the classifier. The MCP still answers in one call what GitHub-side polling never would; the escalation path after a skipped code PR is the dashboard, not another re-trigger.
+2. *The MCP trigger does not bypass the skip.* It reports success and is skipped like the others, so it is not a workaround.
+3. *Review coverage for this PR came from the session itself:* unit tests at the fetch boundary, `--isolate` full-suite run, and a live smoke against the real hub that caught one real routing bug (a stale session's queue was being reported as a mailbox send). Record kept in the PR body.
 ## PR #683 detail (SIO-1640, agent-toolkit-for-aws content port)
 
 A mixed PR: one new OKF runbook, two edited runbooks/RULES files, one doc, plus a two-line advice-string change in `packages/mcp-server-aws/src/tools/wrap.ts` and two test edits (7 files, +81/-3). Not docs-only, so the #680/#681 carve-out does not apply on its own terms. Its ledger value is that it is the first CODE PR merged after a terminal Greptile skip, and the third data point (after #682) that the skip is not diff-class-specific.
