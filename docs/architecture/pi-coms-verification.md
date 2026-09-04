@@ -20,7 +20,7 @@ aggregateMitigation
 
 user approves "Verify with pi agent"
   -> POST /api/agent/actions               executeAction -> executePiVerify
-     -> hub: register short-lived sender   POST /v1/agents/register (name incident-analyzer, explicit)
+     -> hub: register short-lived sender   POST /v1/agents/register (name incident-analyzer-<8 hex>, explicit)
      -> hub: list agents                   GET  /v1/agents?include_explicit=true
      -> route: estate agent status online? yes: send to it   no: send to fallback inbox with 24 h ttl (queued)
      -> hub: send                          POST /v1/messages  { prompt, response_schema, conversation_id }
@@ -90,8 +90,13 @@ action route stays synchronous for the whole budget.
 
 See the `pi-coms hub` block in `.env.example`. The feature is off unless both
 `PI_COMS_NET_SERVER_URL` and `PI_COMS_NET_AUTH_TOKEN` are set. In the hub's
-directory auth mode the token's principal must be allowed to register the name
-`incident-analyzer`.
+directory auth mode the token's principal must allow the name pattern
+`incident-analyzer-*`: every action registers a fresh session under
+`incident-analyzer-<8 hex of the session id>`, because a directory-mode hub
+answers `409 name_taken` for a name a live session already holds, and two
+cards approved at the same time would otherwise collide. Mint it on the hub
+side with `just token-create incident-analyzer "incident-analyzer-*" service`
+(pi-coms repo).
 
 ## Security notes
 

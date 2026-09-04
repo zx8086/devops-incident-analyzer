@@ -46,7 +46,15 @@ export class PiComsHttpError extends Error {
 	}
 }
 
-export const PI_COMS_SENDER_NAME = "incident-analyzer";
+// Directory-mode hubs bind names to principals and answer 409 name_taken when a
+// live session already holds the name, so each short-lived registration takes a
+// unique suffix. The principal's name list must therefore allow the prefix
+// pattern "incident-analyzer-*" (see docs/architecture/pi-coms-verification.md).
+export const PI_COMS_SENDER_NAME_PREFIX = "incident-analyzer";
+
+export function senderNameFor(sessionId: string): string {
+	return `${PI_COMS_SENDER_NAME_PREFIX}-${sessionId.replace(/-/g, "").slice(0, 8)}`;
+}
 // Under the hub's 30 s default await and its 30 s stale threshold: each slice is
 // followed by a heartbeat so the sender stays online for the whole budget.
 export const PI_COMS_AWAIT_SLICE_MS = 25_000;
@@ -113,7 +121,7 @@ export class PiComsClient {
 		await this.http("POST", "/v1/agents/register", {
 			project: this.config.project,
 			session_id: this.sessionId,
-			name: PI_COMS_SENDER_NAME,
+			name: senderNameFor(this.sessionId),
 			purpose: "DevOps incident analyzer: report verification and investigation handoff",
 			model: "none",
 			color: "#00174F",
