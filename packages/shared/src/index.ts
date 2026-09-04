@@ -2,6 +2,8 @@
 export {
 	type ActionResult,
 	ActionResultSchema,
+	type ActionTool,
+	ActionToolSchema,
 	type PendingAction,
 	PendingActionSchema,
 } from "./action-types.ts";
@@ -163,6 +165,8 @@ export {
 	AgentConfigSchema,
 	type LinearConfig,
 	LinearConfigSchema,
+	type PiComsConfig,
+	PiComsConfigSchema,
 	type ServerConfig,
 	ServerConfigSchema,
 	type SlackConfig,
@@ -268,6 +272,27 @@ export {
 	TRUNCATION_OVERHEAD_BYTES,
 	type TruncationMarker,
 } from "./pagination.ts";
+export {
+	isPiActionTool,
+	PI_ACTION_TOOLS,
+	PI_INVESTIGATION_RESPONSE_SCHEMA,
+	PI_VERDICT_RESPONSE_SCHEMA,
+	type PiActionResultPayload,
+	PiActionResultPayloadSchema,
+	type PiActionTool,
+	type PiClaimStatus,
+	PiClaimStatusSchema,
+	type PiInvestigateResult,
+	PiInvestigateResultSchema,
+	type PiInvestigation,
+	PiInvestigationSchema,
+	type PiQueuedResult,
+	PiQueuedResultSchema,
+	type PiVerdict,
+	PiVerdictSchema,
+	type PiVerifyResult,
+	PiVerifyResultSchema,
+} from "./pi-coms-types.ts";
 export { redactPiiContent } from "./pii-redactor.ts";
 export {
 	installReadOnlyChokepoint,

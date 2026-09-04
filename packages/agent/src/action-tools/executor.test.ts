@@ -130,3 +130,69 @@ describe("executor", () => {
 		expect(result.error).toContain("Unknown action tool");
 	});
 });
+
+// SIO-1635: the pi-coms tools dispatch through the verifier, which refuses
+// before touching the network when the hub is not configured.
+describe("executor pi-coms dispatch", () => {
+	const originalEnv = { ...process.env };
+	const originalFetch = globalThis.fetch;
+
+	beforeEach(() => {
+		delete process.env.PI_COMS_NET_SERVER_URL;
+		delete process.env.PI_COMS_NET_AUTH_TOKEN;
+	});
+
+	afterEach(() => {
+		process.env = { ...originalEnv };
+		globalThis.fetch = originalFetch;
+	});
+
+	test("verify-with-pi reports the unconfigured hub as an action error", async () => {
+		const action: PendingAction = { id: "a-pi-1", tool: "verify-with-pi", params: { estate: "e" }, reason: "r" };
+		const result = await executeAction(action, { reportContent: "report", threadId: "t" });
+		expect(result).toEqual({
+			actionId: "a-pi-1",
+			tool: "verify-with-pi",
+			status: "error",
+			error: "pi-coms hub is not configured",
+		});
+	});
+
+	test("investigate-with-pi reports the unconfigured hub as an action error", async () => {
+		const action: PendingAction = {
+			id: "a-pi-2",
+			tool: "investigate-with-pi",
+			params: { estate: "e", focus: ["q"] },
+			reason: "r",
+		};
+		const result = await executeAction(action, { reportContent: "report", threadId: "t" });
+		expect(result.status).toBe("error");
+		expect(result.error).toBe("pi-coms hub is not configured");
+	});
+
+	test("verify-with-pi maps a hub verdict and follow-up onto the ActionResult", async () => {
+		process.env.PI_COMS_NET_SERVER_URL = "http://hub.test";
+		process.env.PI_COMS_NET_AUTH_TOKEN = "tok";
+		const verdict = {
+			verdict: "partially_confirmed",
+			summary: "s",
+			claims: [{ claim: "c", status: "unverifiable", evidence: "e" }],
+		};
+		globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			const path = String(input).replace("http://hub.test", "");
+			const json = (b: unknown) => new Response(JSON.stringify(b), { headers: { "content-type": "application/json" } });
+			if (path === "/v1/agents/register") return json({ ok: true, agent: { name: "incident-analyzer" } });
+			if (path.startsWith("/v1/agents?")) return json({ agents: [{ session_id: "s", name: "est", status: "online" }] });
+			if (path === "/v1/messages") return json({ ok: true, msg_id: "m1", status: "delivered", target_session: "t" });
+			if (path.startsWith("/v1/messages/m1/await"))
+				return json({ msg_id: "m1", status: "complete", response: verdict, error: null });
+			if (init?.method === "DELETE") return json({ ok: true });
+			return json({ ok: true });
+		}) as typeof fetch;
+		const action: PendingAction = { id: "a-pi-3", tool: "verify-with-pi", params: { estate: "est" }, reason: "r" };
+		const result = await executeAction(action, { reportContent: "report", threadId: "t" });
+		expect(result.status).toBe("success");
+		expect(result.result?.kind).toBe("verdict");
+		expect(result.followUpActions?.[0]?.tool).toBe("investigate-with-pi");
+	});
+});

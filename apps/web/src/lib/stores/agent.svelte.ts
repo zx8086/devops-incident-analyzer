@@ -488,7 +488,11 @@ function createAgentStore() {
 			});
 			const result: ActionResult = await res.json();
 			actionResults = [...actionResults, result];
-			pendingActions = pendingActions.filter((a) => a.id !== action.id);
+			// SIO-1635: keep the executed action so its card can switch to the result
+			// view (the verdict IS the deliverable), and surface any follow-up cards
+			// the executor proposed (verify -> investigate).
+			const followUps = result.followUpActions ?? [];
+			pendingActions = [...pendingActions, ...followUps];
 			return result;
 		} catch {
 			return null;
