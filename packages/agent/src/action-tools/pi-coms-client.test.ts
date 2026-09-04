@@ -3,7 +3,13 @@
 // boundary; no hub process is spawned.
 import { describe, expect, test } from "bun:test";
 import type { PiComsConfig } from "@devops-agent/shared";
-import { PI_COMS_AWAIT_SLICE_MS, PI_COMS_SENDER_NAME, PiComsClient, PiComsHttpError } from "./pi-coms-client.ts";
+import {
+	PI_COMS_AWAIT_SLICE_MS,
+	PI_COMS_SENDER_NAME_PREFIX,
+	PiComsClient,
+	PiComsHttpError,
+	senderNameFor,
+} from "./pi-coms-client.ts";
 
 const config: PiComsConfig = {
 	serverUrl: "http://hub.test",
@@ -42,15 +48,20 @@ function scripted(handlers: Array<(call: Call) => { status?: number; body?: unkn
 }
 
 describe("PiComsClient", () => {
+	test("senderNameFor derives a unique prefixed name from the session id", () => {
+		expect(senderNameFor("0f1e2d3c-4b5a-6978-8899-aabbccddeeff")).toBe(`${PI_COMS_SENDER_NAME_PREFIX}-0f1e2d3c`);
+		expect(senderNameFor("abc")).toBe(`${PI_COMS_SENDER_NAME_PREFIX}-abc`);
+	});
+
 	test("register posts an explicit sender card with the bearer token", async () => {
-		const { calls, fetchImpl } = scripted([() => ({ body: { ok: true, agent: { name: PI_COMS_SENDER_NAME } } })]);
+		const { calls, fetchImpl } = scripted([() => ({ body: { ok: true, agent: { name: "incident-analyzer-sid1" } } })]);
 		const client = new PiComsClient(config, { fetchImpl, sessionId: "sid-1" });
 		await client.register();
 		expect(calls[0]?.path).toBe("/v1/agents/register");
 		expect(calls[0]?.headers.authorization).toBe("Bearer tok");
 		const body = calls[0]?.body as Record<string, unknown>;
 		expect(body.session_id).toBe("sid-1");
-		expect(body.name).toBe(PI_COMS_SENDER_NAME);
+		expect(body.name).toBe(`${PI_COMS_SENDER_NAME_PREFIX}-sid1`);
 		expect(body.explicit).toBe(true);
 		expect(body.project).toBe("default");
 	});
@@ -153,7 +164,7 @@ describe("PiComsClient", () => {
 
 	test("deregister only fires after a registration and swallows hub errors", async () => {
 		const { calls, fetchImpl } = scripted([
-			() => ({ body: { ok: true, agent: { name: PI_COMS_SENDER_NAME } } }),
+			() => ({ body: { ok: true, agent: { name: "incident-analyzer-sid9" } } }),
 			() => ({ status: 404, body: { ok: false, error: "agent_not_found" } }),
 		]);
 		const client = new PiComsClient(config, { fetchImpl, sessionId: "sid-9" });
