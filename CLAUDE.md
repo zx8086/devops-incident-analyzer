@@ -84,6 +84,8 @@ Agent connects to MCP servers via `MultiServerMCPClient` from `@langchain/mcp-ad
 
 SvelteKit with Svelte 5 runes, Tailwind CSS (Tommy Hilfiger brand palette), SSE streaming. 9 components: ChatMessage, ChatInput, Icon, MarkdownRenderer, StreamingProgress, CompletedProgress, FeedbackBar, FollowUpSuggestions, DataSourceSelector.
 
+Action cards (`ActionConfirmationCard`) carry four tools: `notify-slack`, `create-ticket` (LLM-proposed, severity-gated) and `verify-with-pi`, `investigate-with-pi` (SIO-1635, deterministic per assessed AWS estate when the pi-coms hub is configured; see `docs/architecture/pi-coms-verification.md`). Executed actions stay in `pendingActions` so their card can show the result.
+
 ## Commands
 
 Scripts are listed in the root `package.json`. Non-obvious invocations:
