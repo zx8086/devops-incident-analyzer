@@ -41,3 +41,16 @@ export const LinearConfigSchema = z.object({
 	projectId: z.string(),
 });
 export type LinearConfig = z.infer<typeof LinearConfigSchema>;
+
+// SIO-1635: pi-coms hub client config. No .default() here (project rule); defaults
+// are applied in resolvePiComsConfig (packages/agent/src/action-tools/pi-verifier.ts).
+export const PiComsConfigSchema = z.object({
+	serverUrl: z.string().url(),
+	authToken: z.string().min(1),
+	project: z.string().min(1),
+	fallbackTarget: z.string().min(1),
+	estateAgentMap: z.record(z.string(), z.string()),
+	verifyTimeoutMs: z.number().int().positive(),
+	investigateTimeoutMs: z.number().int().positive(),
+});
+export type PiComsConfig = z.infer<typeof PiComsConfigSchema>;

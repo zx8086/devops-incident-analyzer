@@ -794,6 +794,15 @@ Seventeen config-edit workflows ride the `gitops` path -- version-upgrade, tier-
 
 ## Changelog
 
+### pi-coms verification handoff (SIO-1635)
+
+`aggregateMitigation` also appends one deterministic `verify-with-pi` card per
+assessed AWS estate when the pi-coms hub is configured (`PI_COMS_NET_SERVER_URL`
+and `PI_COMS_NET_AUTH_TOKEN`). The card is executed through the existing
+`POST /api/agent/actions` lane, not the graph; a non-confirmed verdict proposes a
+follow-up `investigate-with-pi` card. See `docs/architecture/pi-coms-verification.md`.
+
+
 | Date | Change |
 |------|--------|
 | 2026-04-04 | Initial document created from codebase analysis |
