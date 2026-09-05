@@ -36,6 +36,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#679](https://github.com/zx8086/devops-incident-analyzer/pull/679) | 2026-08-30 | 4 | 5 / 0 | 0 / 0 (never reviewed) | Live graph triage panel (SIO-1572); Greptile alone drove 3 rounds of real UI-state fixes incl. a parallel-Send store bug; CodeRabbit posted no review at all; detail below |
 | [#680](https://github.com/zx8086/devops-incident-analyzer/pull/680) | 2026-08-31 | 0 | n/a (SKIPPED, docs-only) | n/a (no review) | Combined DevOpsAgentReadOnly IAM reference doc; Greptile logged both triggers as terminal SKIPPED so the status check never registered, CodeRabbit silent; merged on green CI; detail below |
 | [#681](https://github.com/zx8086/devops-incident-analyzer/pull/681) | 2026-09-01 | 0 | n/a (SKIPPED, docs-only) | n/a (no review) | Periodic AWS self-check strategy doc; auto-trigger logged as terminal SKIPPED (MCP-confirmed before any long wait, per the #680 lesson), CodeRabbit silent through a 30-min watch; merged on green CI; detail below |
+| [#683](https://github.com/zx8086/devops-incident-analyzer/pull/683) | 2026-09-05 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1640 agent-toolkit-for-aws content port (7 files incl. wrap.ts + 2 tests); auto-trigger logged terminal SKIPPED within ~100 ms, CodeRabbit silent (5th straight); first CODE PR merged on a skip, on green CI + MCP-confirmed SKIPPED + explicit per-PR user instruction; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -436,3 +437,19 @@ A docs-only PR (one added file, `docs/operations/aws-periodic-self-check-strateg
 
 1. *#680's docs-only skip behavior reproduced exactly* (n=2): auto-trigger accepted then terminally SKIPPED, no GitHub-visible trace, CodeRabbit fully silent. The docs-only carve-out (CI + MCP-confirmed SKIPPED + user sign-off) can now be treated as the standard gate for this PR class rather than a one-off exception.
 2. *Check the MCP before the long poll, not after.* This round spent 30 minutes polling GitHub surfaces that were never going to change; one `list_code_reviews` call at PR-open time would have answered immediately. Order of operations for future PRs: MCP status first, then poll only if the review is genuinely PENDING/REVIEWING.
+
+## PR #683 detail (SIO-1640, agent-toolkit-for-aws content port)
+
+A mixed PR: one new OKF runbook, two edited runbooks/RULES files, one doc, plus a two-line advice-string change in `packages/mcp-server-aws/src/tools/wrap.ts` and two test edits (7 files, +81/-3). Not docs-only, so the #680/#681 carve-out does not apply on its own terms. Its ledger value is that it is the first CODE PR merged after a terminal Greptile skip, and the third data point (after #682) that the skip is not diff-class-specific.
+
+**Greptile:** the auto-trigger on push logged one terminal **SKIPPED** review (MCP `list_code_reviews` id 22714467, head `3ba94efd`, `changedFiles` = all 7, `completedAt` about 100 ms after `createdAt`). No status check, no comment, no review object. Consulted the MCP at PR-open time per the #681 lesson, so no poll was wasted. No re-trigger was attempted: #682 had already shown all three trigger paths (auto, `@greptile review`, MCP `trigger_code_review`) skip identically on a code PR, so a fourth attempt would have added nothing.
+
+**CodeRabbit:** nothing, through CI completion. Fifth consecutive absence (#679, #680, #681, #682, #683).
+
+**Merge gate:** CI green (Typecheck/Lint/YAML/Test), `MERGEABLE`/`CLEAN`, Greptile SKIPPED on the head SHA via MCP, zero findings to triage. Because this is code, the session reported that the documented gate could not be satisfied and did not merge on its own; the user then explicitly instructed the merge. Squash `d45e7407`. #682 (SIO-1635, 20 files) remains open under the same skip.
+
+**Takeaways:**
+
+1. *The skip is repo/account level, confirmed a third time.* Docs-only (#680, #681), a 20-file feature PR (#682), and a 7-file mixed PR (#683) all skip in ~100 ms with `body: null`. The cause is not the diff; it needs the Greptile dashboard (repo enablement, quota, or a skip rule), which the session cannot see.
+2. *Gate for code PRs on a skip: explicit per-PR user authorization, not the docs-only carve-out.* The carve-out exists because docs are outside the review surface; code is not. Report the unsatisfiable gate, let the user decide, record the decision here.
+3. *Both bots absent means the bake-off has produced no comparative signal since #679.* Five PRs of availability data and zero recall data. Until the Greptile skip is resolved on the dashboard, new rows here measure the outage, not the reviewers.
