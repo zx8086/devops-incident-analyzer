@@ -357,6 +357,35 @@ The extension of the runbook tool-name validator enforces this rule statically. 
 
 ---
 
+## External reference sources
+
+The AWS Agent Toolkit (`github.com/aws/agent-toolkit-for-aws`, Apache-2.0) is a Markdown
+skills repo, not a library: ~112 skills under `skills/core-skills/` and
+`skills/specialized-skills/`, each with a `references/` folder of procedures, thresholds,
+and query cookbooks. It is a good source when authoring AWS runbooks or extending
+`aws-agent/RULES.md`, with these rules (SIO-1640 established the pattern):
+
+- **Port, do not wrap.** The toolkit's own MCP wiring is the managed AWS MCP endpoint
+  (`call_aws`, `run_script`, `retrieve_skill`). It has no multi-account model and its
+  read-only guarantee is prompt-enforced, so it cannot replace `packages/mcp-server-aws`.
+  Copy procedures and thresholds into our OKF runbooks and RULES files instead.
+- **Attribution.** Ported text carries a Source line naming the toolkit file, its license,
+  and the copyright holder (see the header of
+  `agents/incident-analyzer/knowledge/aws/runbooks/aws-msk-consumer-lag.md`).
+- **Rewrite, do not paste.** Toolkit prose uses em dashes and cites the AWS CLI; this repo
+  forbids em dashes and every tool citation must be one of our MCP tool names (the validator
+  above enforces the second rule). Drop any step that needs a write API or a tool we do not
+  ship, and say so in the runbook's Known Configuration Gaps section.
+- **Budget.** `aws-agent/RULES.md` sits at the SIO-1234 tool-promise ratchet; ports into it
+  may add query text and thresholds but must not name a tool it does not already name.
+- **Authoring-time lookup.** The managed AWS MCP server configured in Claude Code for this
+  repo (`mcp-server-aws`) serves the same files: `search_documentation` with topic
+  `agent_skills` returns skill names, and `retrieve_skill` with `skill_name` plus a
+  `file` argument (for example `references/log-insights.md`) returns the file verbatim.
+  A local checkout is equivalent and easier to diff.
+
+---
+
 ## Related
 
 - [Gitagent Bridge](../architecture/gitagent-bridge.md) -- skill and knowledge loader internals
@@ -370,4 +399,5 @@ The extension of the runbook tool-name validator enforces this rule statically. 
 
 | Date | Change |
 |------|--------|
+| 2026-09-05 | SIO-1640: added "External reference sources" (porting rules for the AWS Agent Toolkit: port not wrap, attribution line, em-dash and tool-name rewrite, RULES.md budget, authoring-time lookup via the managed AWS MCP `retrieve_skill`). |
 | 2026-08-08 | SIO-1282..1434 OKF sync: validator path corrected (`runbook-validator.test.ts` -> extracted `runbook-validator.ts`, SIO-1288); documented the `tools:` frontmatter tool declaration (SIO-1289), which is authoritative when present (the prose tail section becomes optional and is ignored; the tail is required only when frontmatter is absent); documented lifecycle-aware selection (`status: deprecated` / past `stale_after` excludes a runbook from the prompt, SIO-1287/1289) and the OKF `knowledge/index.md` bundle roots with `okf_version` (SIO-1290). Per-datasource runbook bundles (SIO-1432/1433/1434) were already covered. |

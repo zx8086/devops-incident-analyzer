@@ -160,11 +160,12 @@ describe("knowledge frontmatter stripping across categories (SIO-1282)", () => {
 
 	test("converted runbooks keep their triggers and lose their frontmatter", () => {
 		const runbooks = incident.knowledge.filter((k) => isRunbookCategory(k.category));
-		expect(runbooks.length).toBe(10);
+		expect(runbooks.length).toBe(11);
 		// SIO-1282 PR 2 converted all 10; 7 declare triggers (SIO-1293 made the
 		// cross-cutting code-change-correlation runbook deliberately trigger-less so
 		// it always survives trigger narrowing), and every body starts at its H1.
-		expect(runbooks.filter((k) => k.triggers).length).toBe(7);
+		// SIO-1640 added the triggered aws-msk-consumer-lag runbook: 11 total, 8 triggered.
+		expect(runbooks.filter((k) => k.triggers).length).toBe(8);
 		for (const rb of runbooks) {
 			expect(rb.content.trimStart().startsWith("#")).toBe(true);
 		}
