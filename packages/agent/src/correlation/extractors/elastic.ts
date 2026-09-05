@@ -562,11 +562,23 @@ function parseLogsHitsFromText(content: string): unknown[] {
 	}
 }
 
+// SIO-1643: mirrors couchbase SIO-1138 / aws SIO-1159 UNSCOPED_FALLBACK_LIMIT --
+// top-N per array when focus scoping drops everything, so the card is not silently
+// blank (run a54d89c4: an LLM-chosen focus of cni-plugin/container-runtime scoped
+// 126 rows to 0). Rule-engine consumers skip unscoped rows; the card labels them.
+const UNSCOPED_FALLBACK_LIMIT = 5;
+
+// Fallback ordering for monitors: an off-focus DOWN is a better triage signal than
+// an off-focus UP.
+const MONITOR_STATUS_PRIORITY: Record<string, number> = { down: 0, degraded: 1, up: 2 };
+
 // SIO-1030: focusServices scopes the elastic card to the incident. Strict drop —
 // APM services match on service.name, log clusters on service ?? sampleMessage,
 // synthetic monitors on monitor.name (matchesFocus short-circuits show-all on empty
 // focus). The log filter runs BEFORE the existing top-10 slice so the cap operates
-// on the scoped set. No high-signal pass-through per the product decision.
+// on the scoped set. SIO-1030's "no pass-through" decision was superseded by the
+// SIO-1138/SIO-1159 unscoped fallback, applied here by SIO-1643: scoped hits always
+// win, and only an all-dropped result falls back to a flagged top-N.
 export function extractElasticFindings(outputs: ToolOutput[], focusServices: string[] = []): ElasticFindings {
 	const monitorsByName = new Map<string, ElasticSyntheticMonitor>();
 	const apmByName = new Map<string, ElasticApmService>();
@@ -689,5 +701,34 @@ export function extractElasticFindings(outputs: ToolOutput[], focusServices: str
 		const all = Array.from(clustersBySignature.values()).sort((a, b) => b.count - a.count);
 		findings.logClusters = all.slice(0, 10);
 	}
-	return findings;
+	const scopedCount =
+		(findings.syntheticMonitors?.length ?? 0) +
+		(findings.apmServices?.length ?? 0) +
+		(findings.logClusters?.length ?? 0);
+	if (scopedCount > 0 || focusServices.length === 0) return findings;
+
+	// SIO-1643: focus dropped every row. Re-run show-all (pure; extract-findings
+	// already does this for its rawCount diagnostic) and surface a flagged top-N.
+	const unscoped = extractElasticFindings(outputs, []);
+	const fallback: ElasticFindings = {};
+	if (unscoped.syntheticMonitors && unscoped.syntheticMonitors.length > 0) {
+		fallback.syntheticMonitors = [...unscoped.syntheticMonitors]
+			.sort(
+				(a, b) =>
+					(MONITOR_STATUS_PRIORITY[a.status.toLowerCase()] ?? 3) -
+					(MONITOR_STATUS_PRIORITY[b.status.toLowerCase()] ?? 3),
+			)
+			.slice(0, UNSCOPED_FALLBACK_LIMIT);
+	}
+	if (unscoped.apmServices && unscoped.apmServices.length > 0) {
+		fallback.apmServices = [...unscoped.apmServices]
+			.sort((a, b) => (b.errorRate ?? -1) - (a.errorRate ?? -1))
+			.slice(0, UNSCOPED_FALLBACK_LIMIT);
+	}
+	if (unscoped.logClusters && unscoped.logClusters.length > 0) {
+		// Already count-desc from the show-all pass.
+		fallback.logClusters = unscoped.logClusters.slice(0, UNSCOPED_FALLBACK_LIMIT);
+	}
+	if (Object.keys(fallback).length === 0) return findings;
+	return { ...fallback, unscoped: true };
 }

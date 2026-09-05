@@ -69,4 +69,30 @@ describe("ElasticFindingsCard.svelte", () => {
 		expect(body).toContain("bg-red-500");
 		expect(body).toContain("bg-amber-500");
 	});
+
+	// SIO-1643: mirrors the AWS (SIO-1245) / Couchbase (SIO-1138) badge so deployment-wide
+	// fallback rows never render exactly like focus-scoped evidence.
+	test("renders unscoped badge and explanatory line when unscoped is true", () => {
+		const { body } = render(ElasticFindingsCard, {
+			props: {
+				findings: {
+					unscoped: true,
+					syntheticMonitors: [{ name: "kong-hc", status: "down" }],
+				},
+			},
+		});
+		expect(body).toContain("Unscoped");
+		expect(body).toContain(
+			"No monitor, APM service or log cluster referenced the focus services -- showing top deployment-wide rows.",
+		);
+	});
+
+	test("does not render unscoped badge or explanatory line without the flag", () => {
+		const { body } = render(ElasticFindingsCard, {
+			props: { findings: { syntheticMonitors: [{ name: "kong-hc", status: "down" }] } },
+		});
+		expect(body).toContain("Elastic findings");
+		expect(body).not.toContain("Unscoped");
+		expect(body).not.toContain("showing top deployment-wide rows");
+	});
 });

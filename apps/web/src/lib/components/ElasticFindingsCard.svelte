@@ -73,7 +73,15 @@ function errorRateClass(rate: number | undefined): string {
   <div class="mt-2 rounded-lg border border-purple-100 bg-purple-50/40 px-3 py-2.5">
     <div class="flex items-center gap-1.5 mb-2">
       <span class="text-[0.5625rem] font-medium text-purple-700 uppercase tracking-wider">Elastic findings</span>
+      {#if findings.unscoped}
+        <!-- SIO-1643: deployment-wide fallback rows must not render like focus-scoped
+             evidence. Mirrors the AWS (SIO-1245) / Couchbase (SIO-1138) badge. -->
+        <span class="text-[0.5625rem] font-medium text-purple-700 bg-purple-100 uppercase tracking-wider rounded px-1">Unscoped</span>
+      {/if}
     </div>
+    {#if findings.unscoped}
+      <p class="-mt-1 mb-2 text-[0.625rem] text-gray-500">No monitor, APM service or log cluster referenced the focus services -- showing top deployment-wide rows.</p>
+    {/if}
 
     {#if syntheticMonitors.length > 0}
       <div>

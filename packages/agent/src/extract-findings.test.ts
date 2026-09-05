@@ -1062,3 +1062,38 @@ describe("extractFindings multi-deployment merge (SIO-1245)", () => {
 		}
 	});
 });
+
+// SIO-1643: when focus scoping drops every elastic row the node persists the extractor's
+// unscoped top-N (mirrors the aws/couchbase branches) instead of an empty card.
+describe("extractFindings: elastic unscoped fallback is persisted (SIO-1643)", () => {
+	test("elasticFindings carries unscoped: true and the fallback rows when focus matches nothing", async () => {
+		const state: AgentStateType = {
+			...baseState(),
+			investigationFocus: {
+				services: ["cni-plugin", "container-runtime"],
+				datasources: [],
+				summary: "",
+				establishedAtTurn: 1,
+			},
+			dataSourceResults: [
+				{
+					dataSourceId: "elastic",
+					data: "prose summary",
+					status: "success",
+					duration: 100,
+					toolOutputs: [
+						{
+							toolName: "elasticsearch_search",
+							toolArgs: { index: "synthetics-prod-*" },
+							rawJson: { hits: { hits: [{ _source: { monitor: { name: "kong-hc", status: "down" } } }] } },
+						} as unknown as ToolOutput,
+					],
+				},
+			],
+		};
+		const out = await extractFindings(state);
+		const elastic = out.dataSourceResults?.find((r) => r.dataSourceId === "elastic");
+		expect(elastic?.elasticFindings?.unscoped).toBe(true);
+		expect(elastic?.elasticFindings?.syntheticMonitors?.map((m) => m.name)).toEqual(["kong-hc"]);
+	});
+});

@@ -173,6 +173,22 @@ describe("hostname-keyed coverage reads elasticFindings.syntheticMonitors (SIO-1
 		expect(decision?.reason).toContain("already covered");
 	});
 
+	// SIO-1643: an unscoped-fallback monitor row is deployment-wide context, not evidence
+	// that the rule's host was checked -- it must not cancel the fetch.
+	test("needs-invocation when the only matching monitor is an unscoped fallback row", () => {
+		const state = elasticState({
+			data: "synthetics",
+			elasticFindings: {
+				unscoped: true,
+				syntheticMonitors: [
+					{ name: "DS - Kafka Server - prd | KSQL Db", status: "up", url: `https://${HOST}/healthcheck` },
+				],
+			},
+		});
+		const [decision] = evaluate(state, [hostnameRule()]);
+		expect(decision?.status).toBe("needs-invocation");
+	});
+
 	// A monitor can be named for its endpoint with url absent from the parsed document.
 	test("satisfied when the monitor NAME carries the hostname and url is absent", () => {
 		const state = elasticState({

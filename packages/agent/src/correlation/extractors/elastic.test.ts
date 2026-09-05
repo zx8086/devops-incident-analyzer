@@ -761,3 +761,106 @@ describe("extractElasticFindings focus scoping (SIO-1030)", () => {
 		expect(out.logClusters).toHaveLength(1);
 	});
 });
+
+// SIO-1643: unscoped top-N fallback (mirrors aws SIO-1159 / couchbase SIO-1138). Run
+// a54d89c4 (focus cni-plugin/container-runtime, chosen by the LLM from a Kubernetes
+// error message) scoped 126 elastic rows to 0 and shipped a blank card; now they
+// return as an explicit deployment-wide fallback the card labels "Unscoped".
+describe("extractElasticFindings unscoped fallback (SIO-1643)", () => {
+	const FOCUS = ["cni-plugin", "container-runtime"];
+
+	function syntheticHits(...monitors: Array<{ name: string; status: string }>): ToolOutput {
+		return {
+			toolName: "elasticsearch_search",
+			toolArgs: { index: "synthetics-*" },
+			rawJson: { hits: { hits: monitors.map((monitor) => ({ _source: { monitor } })) } },
+		} as unknown as ToolOutput;
+	}
+	function apmAgg(...buckets: Array<{ key: string; errors: number }>): ToolOutput {
+		return {
+			toolName: "elasticsearch_search",
+			toolArgs: { index: "traces-apm-*" },
+			rawJson: {
+				by_service: {
+					buckets: buckets.map((b) => ({ key: b.key, doc_count: 1000, errors: { doc_count: b.errors } })),
+				},
+			},
+		} as unknown as ToolOutput;
+	}
+	function logsHits(...rows: Array<{ message: string; service?: string }>): ToolOutput {
+		return {
+			toolName: "elasticsearch_search",
+			toolArgs: { index: "logs-app-*" },
+			rawJson: {
+				hits: {
+					hits: rows.map((r) => ({
+						_source: { message: r.message, level: "error", ...(r.service ? { service: r.service } : {}) },
+					})),
+				},
+			},
+		} as unknown as ToolOutput;
+	}
+
+	test("droppedAll with focus returns top-5 per array flagged unscoped, down monitors first", () => {
+		const monitors = Array.from({ length: 7 }, (_, i) => ({
+			name: `monitor-${i}-healthcheck`,
+			status: i === 2 || i === 5 ? "down" : "up",
+		}));
+		const out = extractElasticFindings([syntheticHits(...monitors)], FOCUS);
+		expect(out.unscoped).toBe(true);
+		expect(out.syntheticMonitors).toHaveLength(5);
+		expect(out.syntheticMonitors?.[0]?.status).toBe("down");
+		expect(out.syntheticMonitors?.[1]?.status).toBe("down");
+		expect(out.syntheticMonitors?.[2]?.status).toBe("up");
+	});
+
+	test("apm fallback rows are ordered by errorRate desc and capped at 5", () => {
+		const out = extractElasticFindings(
+			[
+				apmAgg(
+					{ key: "svc-a", errors: 1 },
+					{ key: "svc-b", errors: 50 },
+					{ key: "svc-c", errors: 10 },
+					{ key: "svc-d", errors: 0 },
+					{ key: "svc-e", errors: 5 },
+					{ key: "svc-f", errors: 2 },
+				),
+			],
+			FOCUS,
+		);
+		expect(out.unscoped).toBe(true);
+		expect(out.apmServices?.map((s) => s.serviceName)).toEqual(["svc-b", "svc-c", "svc-e", "svc-f", "svc-a"]);
+	});
+
+	test("log-cluster fallback keeps the top clusters by count", () => {
+		const rows = [
+			...Array.from({ length: 3 }, () => ({
+				message: "kong upstream timeout distinct alpha beta gamma",
+				service: "kong",
+			})),
+			{ message: "single occurrence failure distinct delta epsilon zeta", service: "kong" },
+		];
+		const out = extractElasticFindings([logsHits(...rows)], FOCUS);
+		expect(out.unscoped).toBe(true);
+		expect(out.logClusters?.[0]?.count).toBe(3);
+	});
+
+	test("scoped hits suppress the fallback and carry no unscoped flag", () => {
+		const out = extractElasticFindings(
+			[syntheticHits({ name: "cni-plugin-healthcheck", status: "up" }, { name: "kong-hc", status: "down" })],
+			FOCUS,
+		);
+		expect(out.unscoped).toBeUndefined();
+		expect(out.syntheticMonitors?.map((m) => m.name)).toEqual(["cni-plugin-healthcheck"]);
+	});
+
+	test("empty focus never engages the fallback (show-all has no unscoped flag)", () => {
+		const out = extractElasticFindings([syntheticHits({ name: "anything", status: "up" })], []);
+		expect(out.unscoped).toBeUndefined();
+		expect(out.syntheticMonitors).toHaveLength(1);
+	});
+
+	test("no rows at all stays empty even with focus", () => {
+		expect(extractElasticFindings([], FOCUS)).toEqual({});
+	});
+});

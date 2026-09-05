@@ -12,6 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	appMapForServices,
 	bindingsForServices,
 	changeHistoryForStackInstance,
 	deploymentsRunningStack,
@@ -35,6 +36,7 @@ import {
 	linkResolution,
 	linkStackModule,
 	purgeUncuratedIncidents,
+	recordAppMapTopologyEdges,
 	recordIacChange,
 	recordIncident,
 	recordIpBinding,
@@ -668,5 +670,27 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 		expect(Number(rows[0]?.n ?? 0)).toBe(1);
 
 		await store.close();
+	});
+
+	// SIO-1643: appMapForServices had never run against the real binder. `group` is a
+	// reserved word in lbug's Cypher grammar (so are `order` and `end`; `from`/`to`/
+	// `type`/`class`/`name` are accepted), and `RETURN g.name AS group` threw a parser
+	// exception that graphEnrich swallowed as "app-map overlay read failed" -- the
+	// CONSUMES_FROM overlay layer was silently missing from every application map.
+	// The InMemoryGraphStore fake substring-matches Cypher and never parses it, so
+	// only a real-engine round-trip can catch a reserved alias.
+	test("SIO-1643 appMapForServices consumes-from layer round-trips through the real binder", async () => {
+		const store = new LadybugStore(join(dir, "db-appmap"));
+		await store.init();
+		await recordAppMapTopologyEdges(store, "consumes-from", [
+			{ kind: "consumes-from", from: "checkout-workers", to: "orders" },
+		]);
+		const edges = await appMapForServices(store, ["checkout"]);
+		expect(edges).toContainEqual({
+			kind: "consumes-from",
+			from: "checkout-workers",
+			to: "orders",
+			discoveredBy: "app-map",
+		});
 	});
 });

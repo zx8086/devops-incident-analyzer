@@ -342,6 +342,39 @@ describe("gitlab-deploy-vs-datastore-runtime (SIO-1138 unscoped guard)", () => {
 	});
 });
 
+// SIO-1643: unscoped-fallback elastic rows are display-only (mirrors the SIO-1138 /
+// SIO-1159 guards) -- an "elastic error" that is really deployment-wide noise must
+// not satisfy the "real incident" guard of the blast-radius rules.
+describe("shared-infra-blast-radius (SIO-1643 unscoped elastic guard)", () => {
+	const rule = findRule("shared-infra-blast-radius");
+
+	function makeState(unscoped: boolean): AgentStateType {
+		const partial: Partial<AgentStateType> = {
+			dataSourceResults: [
+				{
+					dataSourceId: "elastic",
+					status: "success",
+					data: "",
+					elasticFindings: {
+						apmServices: [{ serviceName: "orders", errorRate: 0.2 }],
+						...(unscoped ? { unscoped: true } : {}),
+					},
+				},
+			],
+			graphBlastRadius: [{ service: "orders", neighbour: "refunds", via: "kafka-topic", sharedResource: "events" }],
+		};
+		return partial as unknown as AgentStateType;
+	}
+
+	test("fires for scoped elastic errors", () => {
+		expect(rule.trigger(makeState(false))).not.toBeNull();
+	});
+
+	test("does not fire when elastic findings are the unscoped fallback", () => {
+		expect(rule.trigger(makeState(true))).toBeNull();
+	});
+});
+
 // SIO-1155: the log-gap recovery rule -- Gaps-bullet parsing, service-token
 // extraction, elastic-coverage suppression, and the targeted fetch directive.
 // Fixtures are the real bullets from the 2026-07-19 localcore replay.
