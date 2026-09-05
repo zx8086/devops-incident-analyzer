@@ -317,7 +317,9 @@ describe("graphEnrich", () => {
 		const store = new InMemoryGraphStore();
 		store.stub("-[r:DEPENDS_ON]->", [{ from: "svc-a", to: "svc-b", discoveredBy: "orbit-name-match" }]);
 		store.stub("-[r:RUNS_ON]->", [{ arn: "arn:aws:ecs:eu-west-1:1:service/prod/svc-a", discoveredBy: "topology-job" }]);
-		store.stub("-[r:CONSUMES_FROM]->", [{ group: "svc-a-workers", topic: "orders", discoveredBy: "topology-job" }]);
+		store.stub("-[r:CONSUMES_FROM]->", [
+			{ consumerGroup: "svc-a-workers", topic: "orders", discoveredBy: "topology-job" },
+		]);
 		_setGraphStoreForTesting(store);
 		_setEmbedderForTesting(async () => [0.1, 0.2, 0.3]);
 

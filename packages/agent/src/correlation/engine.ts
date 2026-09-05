@@ -102,6 +102,9 @@ function extractHostnames(context: Record<string, unknown>): string[] {
 // url.full; `name` is included because a monitor can be named for its endpoint even when
 // the URL field is absent from the parsed document.
 function syntheticMonitorTargets(result: DataSourceResult): string[] {
+	// SIO-1643: an unscoped-fallback row is deployment-wide context, not evidence that
+	// the rule's host was checked -- it must never count as coverage.
+	if (result.elasticFindings?.unscoped) return [];
 	const monitors = result.elasticFindings?.syntheticMonitors ?? [];
 	return monitors.flatMap((m) => [m.url, m.name].filter((v): v is string => typeof v === "string"));
 }

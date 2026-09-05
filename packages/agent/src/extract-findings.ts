@@ -24,12 +24,16 @@ type ToolOutputs = NonNullable<DataSourceResult["toolOutputs"]>;
 // filter by `agent:extract-findings`). `droppedAll` is the tell that focusServices
 // (unnormalized user/LLM strings) matched nothing and the card was over-scoped —
 // warn on it so an accidentally-empty card is not silently shipped.
+// SIO-1643: `droppedAllLevel` lets a card-less tag (Orbit) report an all-dropped set
+// at info -- every Orbit rule re-checks matchesFocus itself, so an off-focus turn
+// dropping every Orbit row is expected, not an over-scoped card.
 function logCard(
 	tag: string,
 	focusServices: string[],
 	rawCount: number,
 	filteredCount: number,
 	extra: Record<string, unknown> = {},
+	opts: { droppedAllLevel?: "warn" | "info" } = {},
 ): void {
 	const filterMode = focusServices.length === 0 ? "show-all" : "scoped";
 	const droppedAll = filterMode === "scoped" && rawCount > 0 && filteredCount === 0;
@@ -44,7 +48,11 @@ function logCard(
 		...extra,
 	};
 	if (droppedAll) {
-		logger.warn(payload, "findings card scoped to empty");
+		if (opts.droppedAllLevel === "info") {
+			logger.info(payload, "findings scoped to empty (rule-only tag, no card)");
+		} else {
+			logger.warn(payload, "findings card scoped to empty");
+		}
 	} else {
 		logger.info(payload, "findings extracted");
 	}
@@ -149,12 +157,21 @@ export async function extractFindings(state: AgentStateType): Promise<Partial<Ag
 				(orbitRaw.pipelineFailures?.length ?? 0) +
 				(orbitRaw.vulnerabilities?.length ?? 0);
 			if (orbitRawCount > 0) {
-				logCard("OrbitFindingsCard", focusServices, orbitRawCount, orbitFilteredCount, {
-					blastRadius: orbitFindings.blastRadius?.length ?? 0,
-					recentDeploys: orbitFindings.recentDeploys?.length ?? 0,
-					pipelineFailures: orbitFindings.pipelineFailures?.length ?? 0,
-					vulnerabilities: orbitFindings.vulnerabilities?.length ?? 0,
-				});
+				// SIO-1643: Orbit has no findings card (rules.ts is its only reader) and
+				// every Orbit rule re-checks matchesFocus, so droppedAll is info here.
+				logCard(
+					"OrbitFindingsCard",
+					focusServices,
+					orbitRawCount,
+					orbitFilteredCount,
+					{
+						blastRadius: orbitFindings.blastRadius?.length ?? 0,
+						recentDeploys: orbitFindings.recentDeploys?.length ?? 0,
+						pipelineFailures: orbitFindings.pipelineFailures?.length ?? 0,
+						vulnerabilities: orbitFindings.vulnerabilities?.length ?? 0,
+					},
+					{ droppedAllLevel: "info" },
+				);
 			}
 			return orbitFilteredCount > 0 ? { gitlabFindings, orbitFindings } : { gitlabFindings };
 		},
@@ -189,11 +206,27 @@ export async function extractFindings(state: AgentStateType): Promise<Partial<Ag
 				(elasticFindings.apmServices?.length ?? 0) +
 				(elasticFindings.logClusters?.length ?? 0) +
 				(elasticFindings.syntheticMonitors?.length ?? 0);
-			logCard("ElasticFindingsCard", focusServices, rawCount, filteredCount, {
-				apmServices: elasticFindings.apmServices?.length ?? 0,
-				logClusters: elasticFindings.logClusters?.length ?? 0,
-				syntheticMonitors: elasticFindings.syntheticMonitors?.length ?? 0,
-			});
+			if (elasticFindings.unscoped) {
+				// SIO-1643: fallback engaged -- the card is populated but the rows are
+				// not focus-linked. Distinct info line instead of the droppedAll warn
+				// (mirrors the SIO-1138 couchbase / SIO-1159 aws branches).
+				logger.info(
+					{
+						tag: "ElasticFindingsCard",
+						focusServices,
+						rawCount,
+						fallbackCount: filteredCount,
+						filterMode: "unscoped-fallback",
+					},
+					"findings card fell back to unscoped top-N",
+				);
+			} else {
+				logCard("ElasticFindingsCard", focusServices, rawCount, filteredCount, {
+					apmServices: elasticFindings.apmServices?.length ?? 0,
+					logClusters: elasticFindings.logClusters?.length ?? 0,
+					syntheticMonitors: elasticFindings.syntheticMonitors?.length ?? 0,
+				});
+			}
 			return { elasticFindings };
 		},
 		// SIO-785 Phase 2 (2026-05-18): AWS CloudWatch alarms.

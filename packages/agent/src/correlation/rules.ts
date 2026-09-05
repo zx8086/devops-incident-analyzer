@@ -700,6 +700,10 @@ function getOrbitFindings(state: AgentStateType): OrbitFindings {
 function getElasticFindings(state: AgentStateType): ElasticFindings {
 	const result = selectResultWithFindings(state.dataSourceResults, "elastic", "elasticFindings");
 	if (result?.status !== "success") return {};
+	// SIO-1643: unscoped-fallback rows are display-only (mirrors the SIO-1138 /
+	// SIO-1159 guards) -- they are NOT linked to the focus services and must not
+	// satisfy the "real runtime error" gate of the blast-radius rules.
+	if (result.elasticFindings?.unscoped) return {};
 	return result.elasticFindings ?? {};
 }
 

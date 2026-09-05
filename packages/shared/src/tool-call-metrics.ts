@@ -230,8 +230,40 @@ async function openBunSqliteDb(dbPath: string): Promise<MetricsSqliteDb> {
 	};
 }
 
+// SIO-1643: Node prints "ExperimentalWarning: SQLite is an experimental feature" the
+// first time node:sqlite loads -- per-process noise on every `vite dev` boot of the
+// in-process knowledge-graph server, which is the one deliberate node:sqlite consumer
+// (see the driver note above). The predicate matches ONLY that warning so the scoped
+// emitWarning swap in openNodeSqliteDb forwards everything else untouched. When Node
+// passes an Error, its `name` carries the type (Node ignores the type argument then).
+export function shouldSuppressNodeWarning(
+	warning: string | Error,
+	typeOrOptions?: string | { type?: string },
+): boolean {
+	const type =
+		warning instanceof Error ? warning.name : typeof typeOrOptions === "string" ? typeOrOptions : typeOrOptions?.type;
+	const message = typeof warning === "string" ? warning : warning.message;
+	return type === "ExperimentalWarning" && message.includes("SQLite");
+}
+
+type EmitWarning = typeof process.emitWarning;
+
 async function openNodeSqliteDb(dbPath: string): Promise<MetricsSqliteDb> {
-	const { DatabaseSync } = await import(/* @vite-ignore */ "node:sqlite");
+	// Node calls emitWarning synchronously while loading the builtin, so swapping it
+	// for the duration of the import covers the whole window; `finally` restores it
+	// even if the import throws (e.g. Node < 22.5 without node:sqlite).
+	const originalEmitWarning: EmitWarning = process.emitWarning;
+	const filtered = (warning: string | Error, typeOrOptions?: string | { type?: string }, ...rest: unknown[]): void => {
+		if (shouldSuppressNodeWarning(warning, typeOrOptions)) return;
+		Reflect.apply(originalEmitWarning, process, [warning, typeOrOptions, ...rest]);
+	};
+	process.emitWarning = filtered as unknown as EmitWarning;
+	let DatabaseSync: typeof import("node:sqlite")["DatabaseSync"];
+	try {
+		({ DatabaseSync } = await import(/* @vite-ignore */ "node:sqlite"));
+	} finally {
+		process.emitWarning = originalEmitWarning;
+	}
 	const db = new DatabaseSync(dbPath);
 	return {
 		exec(sql) {

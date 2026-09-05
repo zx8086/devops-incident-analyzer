@@ -1519,7 +1519,9 @@ describe("SIO-1457 appMapForServices reader", () => {
 		const store = new InMemoryGraphStore();
 		store.stub("-[r:DEPENDS_ON]->", [{ from: "checkout", to: "payment", discoveredBy: "topology-job" }]);
 		store.stub("-[r:RUNS_ON]->", [{ arn: "arn:aws:ecs:eu-west-1:1:service/prod/checkout", discoveredBy: null }]);
-		store.stub("-[r:CONSUMES_FROM]->", [{ group: "checkout-workers", topic: "orders", discoveredBy: "app-map" }]);
+		store.stub("-[r:CONSUMES_FROM]->", [
+			{ consumerGroup: "checkout-workers", topic: "orders", discoveredBy: "app-map" },
+		]);
 		const edges = await appMapForServices(store, ["checkout"]);
 		expect(edges).toContainEqual({ kind: "depends-on", from: "checkout", to: "payment", discoveredBy: "topology-job" });
 		expect(edges).toContainEqual({
@@ -1537,6 +1539,9 @@ describe("SIO-1457 appMapForServices reader", () => {
 		for (const call of store.calls) {
 			expect(call.cypher).toContain("LIMIT $limit");
 			expect(call.params?.limit).toBeDefined();
+			// SIO-1643: `group`, `order` and `end` are reserved words in lbug's Cypher
+			// grammar; the fake never parses Cypher, so guard the RETURN aliases here.
+			expect(call.cypher).not.toMatch(/\bAS (group|order|end)\b/i);
 		}
 	});
 
@@ -1548,14 +1553,14 @@ describe("SIO-1457 appMapForServices reader", () => {
 			{ from: "checkout", to: "" },
 		]);
 		store.stub("-[r:RUNS_ON]->", [{ arn: null }]);
-		store.stub("-[r:CONSUMES_FROM]->", [{ group: "checkout-workers", topic: null }]);
+		store.stub("-[r:CONSUMES_FROM]->", [{ consumerGroup: "checkout-workers", topic: null }]);
 		const edges = await appMapForServices(store, ["checkout"]);
 		expect(edges).toEqual([]);
 	});
 
 	test("consumer groups without name affinity to any focus service are dropped", async () => {
 		const store = new InMemoryGraphStore();
-		store.stub("-[r:CONSUMES_FROM]->", [{ group: "billing-workers", topic: "invoices", discoveredBy: "" }]);
+		store.stub("-[r:CONSUMES_FROM]->", [{ consumerGroup: "billing-workers", topic: "invoices", discoveredBy: "" }]);
 		const edges = await appMapForServices(store, ["checkout"]);
 		expect(edges).toEqual([]);
 	});
@@ -1566,7 +1571,11 @@ describe("SIO-1457 appMapForServices reader", () => {
 		const store = new InMemoryGraphStore();
 		store.stub(
 			"-[r:CONSUMES_FROM]->",
-			Array.from({ length: 80 }, (_, i) => ({ group: "checkout-workers", topic: `topic-${i}`, discoveredBy: "" })),
+			Array.from({ length: 80 }, (_, i) => ({
+				consumerGroup: "checkout-workers",
+				topic: `topic-${i}`,
+				discoveredBy: "",
+			})),
 		);
 		const edges = await appMapForServices(store, ["checkout"]);
 		expect(edges.length).toBe(50);

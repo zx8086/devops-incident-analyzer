@@ -866,7 +866,7 @@ export async function networkMapForService(store: GraphStore, service: string, a
 				protocol: String(row.protocol ?? ""),
 				workloadArn: String(row.workloadArn),
 			})),
-			(row) => `${row.arn} ${row.workloadArn}`,
+			(row) => `${row.arn}\u0000${row.workloadArn}`,
 		);
 	}
 
@@ -892,7 +892,7 @@ export async function networkMapForService(store: GraphStore, service: string, a
 				scheme: String(row.scheme ?? ""),
 				targetGroupArn: String(row.targetGroupArn),
 			})),
-			(row) => `${row.arn} ${row.targetGroupArn}`,
+			(row) => `${row.arn}\u0000${row.targetGroupArn}`,
 		);
 	}
 
@@ -909,7 +909,7 @@ export async function networkMapForService(store: GraphStore, service: string, a
 				target: String(row.target ?? ""),
 				loadBalancerArn: String(row.loadBalancerArn),
 			})),
-			(row) => `${row.name} ${row.type} ${row.loadBalancerArn}`,
+			(row) => `${row.name}\u0000${row.type}\u0000${row.loadBalancerArn}`,
 		);
 		// Placement is one chained single-MATCH clause (LB -> Subnet -> Vpc).
 		const placementRows = await store.run<{
@@ -934,7 +934,7 @@ export async function networkMapForService(store: GraphStore, service: string, a
 				vpcCidr: String(row.vpcCidr ?? ""),
 				vpcName: String(row.vpcName ?? ""),
 			})),
-			(row) => `${row.loadBalancerArn} ${row.subnetId}`,
+			(row) => `${row.loadBalancerArn}\u0000${row.subnetId}`,
 		);
 	}
 
@@ -956,7 +956,7 @@ export async function networkMapForService(store: GraphStore, service: string, a
 				lastVerified: String(row.lastVerified ?? ""),
 				discoveredBy: String(row.discoveredBy ?? ""),
 			})),
-			(row) => `${row.ip} ${row.workloadArn}`,
+			(row) => `${row.ip}\u0000${row.workloadArn}`,
 		);
 		const ips = [...new Set(map.ipAddresses.map((row) => row.ip))];
 		if (ips.length > 0) {
@@ -1106,7 +1106,7 @@ const DependsOnRowSchema = z.object({
 const RunsOnRowSchema = z.object({ arn: z.string().min(1), discoveredBy: z.string().nullish() });
 const RoutesRowSchema = z.object({ path: z.string().min(1), discoveredBy: z.string().nullish() });
 const ConsumesRowSchema = z.object({
-	group: z.string().min(1),
+	consumerGroup: z.string().min(1),
 	topic: z.string().min(1),
 	discoveredBy: z.string().nullish(),
 });
@@ -1168,9 +1168,11 @@ export async function appMapForServices(store: GraphStore, services: string[], a
 	// MATCH on, so relevance is decided in TS by name affinity against ANY focus
 	// service. The engine LIMIT is wider than a per-layer cap because affinity
 	// filtering happens after the fetch.
+	// SIO-1643: `group` is a reserved word in lbug's Cypher grammar (as are `order`
+	// and `end`); `AS group` threw a parser exception the overlay read swallowed.
 	if (cleanServices.length > 0) {
 		const consumes = await store.run(
-			`MATCH (g:ConsumerGroup)-[r:CONSUMES_FROM]->(t:KafkaTopic) WHERE ${validityClause("r", asOf)} RETURN g.name AS group, t.name AS topic, r.discoveredBy AS discoveredBy LIMIT $limit`,
+			`MATCH (g:ConsumerGroup)-[r:CONSUMES_FROM]->(t:KafkaTopic) WHERE ${validityClause("r", asOf)} RETURN g.name AS consumerGroup, t.name AS topic, r.discoveredBy AS discoveredBy LIMIT $limit`,
 			asOf ? { limit: APP_MAP_LAYER_CAP * 4, asOf } : { limit: APP_MAP_LAYER_CAP * 4 },
 		);
 		// CodeRabbit PR #644 round 2: the layer cap applies to ACCEPTED edges, after
@@ -1180,10 +1182,10 @@ export async function appMapForServices(store: GraphStore, services: string[], a
 			if (accepted >= APP_MAP_LAYER_CAP) break;
 			const row = ConsumesRowSchema.safeParse(raw);
 			if (!row.success) continue;
-			if (!cleanServices.some((s) => nameAffinity(row.data.group, s))) continue;
+			if (!cleanServices.some((s) => nameAffinity(row.data.consumerGroup, s))) continue;
 			add({
 				kind: "consumes-from",
-				from: row.data.group,
+				from: row.data.consumerGroup,
 				to: row.data.topic,
 				discoveredBy: row.data.discoveredBy ?? "",
 			});

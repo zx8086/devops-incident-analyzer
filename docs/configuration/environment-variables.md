@@ -517,7 +517,7 @@ URLs the agent uses to connect to each MCP server via `MultiServerMCPClient`. Th
 | `ELASTIC_MCP_URL` | Yes | `http://localhost:9080` | Elasticsearch MCP server URL |
 | `KAFKA_MCP_URL` | Yes | `http://localhost:9081` | Kafka MCP server URL |
 | `COUCHBASE_MCP_URL` | Yes | `http://localhost:9082` | Couchbase Capella MCP server URL |
-| `KONNECT_MCP_URL` | Yes | `http://localhost:9083` | Kong Konnect MCP server URL |
+| `KONNECT_MCP_URL` | No | `http://localhost:9083` | Kong Konnect MCP server URL. Leave unset while konnect is offline by design (SIO-1439): when set, the bridge dials it at boot, logs a `Failed to connect to MCP server, skipping` warn, and `/health` reports `degraded` for as long as it stays down (SIO-1643) |
 | `GITLAB_MCP_URL` | Yes | `http://localhost:9084` | GitLab MCP server URL |
 | `ATLASSIAN_MCP_URL` | Yes | `http://localhost:9085` | URL the agent uses to reach the local Atlassian MCP server (the upstream Rovo endpoint the proxy forwards to is `ATLASSIAN_UPSTREAM_MCP_URL`) |
 | `AWS_MCP_URL` | Yes (for AWS datasource) | `http://localhost:3001` | URL the agent uses to reach the AWS MCP server. Locally points at the SigV4 proxy; in production points at the deployed AgentCore endpoint. See [AWS MCP — Multi-Estate](#aws-mcp--multi-estate) for the full AgentCore configuration. |

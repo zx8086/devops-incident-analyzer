@@ -9,6 +9,7 @@ import {
 	classifyFailureText,
 	createToolCallMetricsRecorder,
 	resolveToolCallMetricsDbPath,
+	shouldSuppressNodeWarning,
 	type ToolCallMetricsRecorder,
 } from "../tool-call-metrics.ts";
 import { buildToolErrorEnvelope } from "../tool-error.ts";
@@ -298,5 +299,36 @@ describe("createToolCallMetricsRecorder", () => {
 		expect(() => recorder.record("search", true)).not.toThrow();
 		expect(() => recorder.close()).not.toThrow();
 		expect(readRows(dbPath)[0]?.calls).toBe(1);
+	});
+});
+
+// SIO-1643: the node:sqlite fallback (in-process KG server under `vite dev`) makes Node
+// print "ExperimentalWarning: SQLite is an experimental feature" on every dev boot. The
+// import is wrapped in a scoped process.emitWarning filter; this pure predicate is the
+// part of it that decides what gets dropped, and it must match ONLY that one warning.
+describe("shouldSuppressNodeWarning (SIO-1643)", () => {
+	const SQLITE_MSG = "SQLite is an experimental feature and might change at any time";
+
+	test("drops the SQLite ExperimentalWarning in the (message, type) form", () => {
+		expect(shouldSuppressNodeWarning(SQLITE_MSG, "ExperimentalWarning")).toBe(true);
+	});
+
+	test("drops the SQLite ExperimentalWarning in the (message, options) form", () => {
+		expect(shouldSuppressNodeWarning(SQLITE_MSG, { type: "ExperimentalWarning" })).toBe(true);
+	});
+
+	test("drops the SQLite ExperimentalWarning in the Error form (name carries the type)", () => {
+		const err = new Error(SQLITE_MSG);
+		err.name = "ExperimentalWarning";
+		expect(shouldSuppressNodeWarning(err)).toBe(true);
+	});
+
+	test("keeps other experimental warnings", () => {
+		expect(shouldSuppressNodeWarning("VM Modules is an experimental feature", "ExperimentalWarning")).toBe(false);
+	});
+
+	test("keeps SQLite warnings of any other type", () => {
+		expect(shouldSuppressNodeWarning(SQLITE_MSG, "DeprecationWarning")).toBe(false);
+		expect(shouldSuppressNodeWarning(SQLITE_MSG)).toBe(false);
 	});
 });

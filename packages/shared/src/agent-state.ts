@@ -382,6 +382,12 @@ export const ElasticFindingsSchema = z.object({
 	syntheticMonitors: z.array(ElasticSyntheticMonitorSchema).optional(),
 	apmServices: z.array(ElasticApmServiceSchema).optional(),
 	logClusters: z.array(ElasticLogClusterSchema).optional(),
+	unscoped: z
+		.boolean()
+		.optional()
+		.describe(
+			"SIO-1643: true when no synthetic monitor, APM service or log cluster matched the focus services and the arrays are a top-N deployment-wide fallback (mirrors SIO-1138 couchbase / SIO-1159 aws); rule-engine consumers must skip unscoped rows",
+		),
 });
 export type ElasticFindings = z.infer<typeof ElasticFindingsSchema>;
 
