@@ -469,3 +469,19 @@ A code PR: 14 files, +258/-95, all under `apps/web` plus one doc. It removes the
 
 1. *Fourth code-class skip in a row, same ~100-150 ms signature.* The dashboard-level cause first flagged on #682 is still unresolved; the ledger keeps measuring the outage, not the reviewers.
 2. *A self-verified change with no reviewer signal.* The PR's own evidence (live-probe of `streamEvents` metadata, a 23-node end-to-end run, TDD tests for the allowlist and the duration refcount) is the only review this change received. That is the operating mode until the skip is fixed; note it, do not normalise it.
+
+## PR #685 detail (SIO-1643, dev-server warning triage: KG reserved alias, reader NULs, node:sqlite noise, Elastic unscoped fallback)
+
+A code PR: 19 files, +445/-35, spanning four packages (knowledge-graph, shared, agent, apps/web) plus two docs. It renames a Cypher RETURN alias that lbug rejects as a reserved word (`group`), strips six raw NUL bytes from `reader.ts`, scopes a `process.emitWarning` filter around the `node:sqlite` import, and adds the SIO-1138/SIO-1159-style unscoped fallback to the Elastic findings card with matching rule-engine and coverage guards. Fifth consecutive CODE-class data point for the Greptile skip.
+
+**Greptile:** two pushes, two terminal **SKIPPED** reviews (MCP `list_code_reviews` ids 22724142 on head `1de160c5` and 22724334 on head `53c14044`, `changedFiles` = all 19, `completedAt` 120-150 ms after `createdAt`, `strictness: 2`, body null). No status check, no comment, no review object. Consulted the MCP at PR-open time (one call); no re-trigger attempted, per the #682 finding that all three trigger paths skip identically.
+
+**CodeRabbit:** nothing, through CI completion on both heads. Seventh consecutive absence (#679 to #685).
+
+**Merge gate:** CI green on the second head (the first head failed Lint on one over-width line in a test stub edited after the format pass; fixed and re-pushed), `MERGEABLE`/`CLEAN`, Greptile SKIPPED on the head SHA via MCP, zero findings to triage. Code-class skip: the session reported the unsatisfiable gate and did not merge on its own. The user then explicitly instructed the merge. Squash `9aef66d9`.
+
+**Takeaways:**
+
+1. *Fifth code-class skip, same signature, now spanning a four-package diff.* Nothing about diff size, package mix, or file class changes the outcome; the SIO-1642 dashboard/billing cause is still the only lead.
+2. *The CI Lint failure is exactly the kind of thing a reviewer would not have caught either, but it is a reminder that "local lint was clean" is only true for the tree at the moment it ran.* Any edit after the format pass needs a re-run before push; the PR's second commit exists only because of that ordering.
+3. *Self-verified again.* The review this change received was its own evidence: a real-engine test that reproduced the production parser exception pre-fix, a Node-side before/after probe of the warning filter, and a live replay of the original incident query from a worktree server showing the three code-owned warns gone and the Elastic fallback engaging (126 raw -> 5 unscoped). Record it, do not normalise it.
