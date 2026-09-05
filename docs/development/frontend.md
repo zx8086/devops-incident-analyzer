@@ -249,12 +249,12 @@ The SSE stream emits events that the `agentStore` processes:
 
 ### Pipeline Node Labels
 
-Node ID -> human-readable label mapping lives in **`apps/web/src/lib/node-labels.ts`** (a single `{ id, activeLabel, completeLabel }` table, ~42 entries), consolidated there so `StreamingProgress` shows the **full pipeline** live, not just a handful of hardcoded steps (previously only 6 node IDs were labelled). The table covers every `PIPELINE_NODES` id across both graphs:
+Node ID -> human-readable label mapping lives in **`apps/web/src/lib/node-labels.ts`** (a single `{ id, activeLabel, completeLabel }` table, ~42 entries), consolidated there so `StreamingProgress` shows the **full pipeline** live, not just a handful of hardcoded steps (previously only 6 node IDs were labelled). Which nodes emit `node_start`/`node_end` at all is NOT decided here: since SIO-1641 the SSE pump takes the compiled graph's own node list (`getPipelineNodes` in `apps/web/src/lib/server/agent.ts`, built from `graph.getGraphAsync()`), so every registered node lights up in the live graph triage panel without a hand-maintained allowlist. The label table is cosmetic and covers both graphs:
 
 - **Incident pipeline:** `classify`, `normalize`, `entityExtractor`, `detectTopicShift`, `queryDataSource`, `align`, `aggregate`, `extractFindings`, `checkConfidence`, `validate`, the mutually-exclusive mitigation branch (`proposeInvestigate` / `proposeMonitor` / `proposeEscalate` -> `aggregateMitigation`), `followUp`, `responder`, and the HIL-learning lane (`learnFetchTicket` -> `learnMatchIncident` -> `learnMatchGate` -> `learnDistill` -> `learnReviewGate` -> `applyLearnings`).
 - **Elastic-IaC proposer:** `parseIntent`, `readClusterState`, `draftChange`, `reviewPlan`/`reviewGate`, `openMr`, `watchPipeline`, and the drift / synthetics-drift / fleet-upgrade sub-flow nodes.
 
-Add the node's id + labels to `node-labels.ts` when you add a pipeline node; an unlabelled id falls back to the raw id in the progress UI.
+Add the node's id + labels to `node-labels.ts` when you add a pipeline node (plumbing nodes go in the completed-only group so they stay out of the live strip); an unlabelled id still emits and lights up, it just falls back to the raw id in the progress UI.
 
 ---
 

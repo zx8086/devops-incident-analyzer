@@ -2,9 +2,10 @@
 //
 // Single source of truth for pipeline node display labels, shared by
 // StreamingProgress.svelte (live view) and CompletedProgress.svelte
-// (historical view). Node ids must match PIPELINE_NODES in
-// apps/web/src/lib/server/sse-pump.ts -- that set controls which node_start/
-// node_end SSE events the server forwards at all.
+// (historical view) and GraphTriagePanel.svelte (running subtitle). Labels are
+// cosmetic: since SIO-1641 the set of nodes that emit node_start/node_end is the
+// compiled graph's own node list (getPipelineNodes in apps/web/src/lib/server/
+// agent.ts), so an unlabelled id still lights up and falls back to the raw id.
 
 export interface NodeLabel {
 	id: string;
@@ -104,14 +105,38 @@ export const IAC_RENOVATE_NODES: readonly NodeLabel[] = [
 ] as const;
 
 // Nodes intentionally excluded from every live row (plumbing / covered
-// elsewhere) but still labeled for the historical view.
+// elsewhere) but still labeled for the historical view and the graph panel.
+// SIO-1641: the incident and IaC plumbing nodes now emit progress events too;
+// they stay out of the live strip on purpose (it shows the user-facing phases).
 const EXTRA_COMPLETED_ONLY_NODES: readonly NodeLabel[] = [
 	{ id: "bootstrap", activeLabel: "Bootstrapping", completeLabel: "Bootstrapped" },
 	{ id: "teardown", activeLabel: "Finishing", completeLabel: "Finished" },
+	// incident-analyzer plumbing (graph.ts)
+	{ id: "selectRunbooks", activeLabel: "Selecting runbooks", completeLabel: "Runbooks selected" },
+	{ id: "recordEntities", activeLabel: "Recording entities", completeLabel: "Entities recorded" },
+	{ id: "graphEnrich", activeLabel: "Enriching from graph", completeLabel: "Graph enriched" },
+	{ id: "awsEstateRouter", activeLabel: "Routing AWS estates", completeLabel: "Estates routed" },
+	{ id: "resolveIdentifiers", activeLabel: "Resolving identifiers", completeLabel: "Identifiers resolved" },
+	{ id: "correlationFetch", activeLabel: "Fetching correlations", completeLabel: "Correlations fetched" },
+	{ id: "enforceCorrelationsAggregate", activeLabel: "Enforcing correlations", completeLabel: "Correlations enforced" },
+	{ id: "recordRootCause", activeLabel: "Recording root cause", completeLabel: "Root cause recorded" },
+	{ id: "recordBindings", activeLabel: "Recording bindings", completeLabel: "Bindings recorded" },
+	// elastic-iac plumbing (iac/graph.ts)
+	{ id: "classifyIacIntent", activeLabel: "Classifying request", completeLabel: "Request classified" },
+	{ id: "selectIacKnowledge", activeLabel: "Selecting knowledge", completeLabel: "Knowledge selected" },
+	{ id: "answerInfo", activeLabel: "Answering", completeLabel: "Answered" },
+	{ id: "converseIac", activeLabel: "Conversing", completeLabel: "Conversed" },
+	{ id: "amendChange", activeLabel: "Amending change", completeLabel: "Change amended" },
+	{ id: "explainDrift", activeLabel: "Explaining drift", completeLabel: "Drift explained" },
+	{ id: "graphEnrichIac", activeLabel: "Enriching from graph", completeLabel: "Graph enriched" },
+	{ id: "memoryEnrichIac", activeLabel: "Recalling memory", completeLabel: "Memory recalled" },
+	{ id: "recordIacPrompt", activeLabel: "Recording prompt", completeLabel: "Prompt recorded" },
+	{ id: "recordIacEntities", activeLabel: "Recording entities", completeLabel: "Entities recorded" },
+	{ id: "recordIacOutcome", activeLabel: "Recording outcome", completeLabel: "Outcome recorded" },
 ] as const;
 
-// Flat lookup covering every id in sse-pump.ts's PIPELINE_NODES, for
-// CompletedProgress.svelte's `completeLabel` needs.
+// Flat lookup covering every registered node of both graphs, for
+// CompletedProgress.svelte's `completeLabel` and GraphTriagePanel's subtitle.
 export const ALL_NODE_LABELS: Readonly<Record<string, NodeLabel>> = Object.fromEntries(
 	[
 		...INCIDENT_NODES,

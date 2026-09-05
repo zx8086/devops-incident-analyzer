@@ -10,7 +10,7 @@ import { flushLangSmithCallbacks } from "@devops-agent/agent";
 import { getLogger, runWithRequestContext, traceSpan } from "@devops-agent/observability";
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
-import { getPendingInterrupt, pruneThreadState, resumeAgent, runPostTurn } from "$lib/server/agent";
+import { getPendingInterrupt, getPipelineNodes, pruneThreadState, resumeAgent, runPostTurn } from "$lib/server/agent";
 import { buildLangSmithTags } from "$lib/server/langsmith-tags";
 import { emitTopicShiftPrompt, pumpEventStream } from "$lib/server/sse-pump";
 import type { RequestHandler } from "./$types";
@@ -68,7 +68,7 @@ export const POST: RequestHandler = async ({ request }) => {
 								capReasons,
 								lowConfidence,
 								responseContent,
-							} = await pumpEventStream(eventStream, send);
+							} = await pumpEventStream(eventStream, send, await getPipelineNodes());
 							await flushLangSmithCallbacks();
 
 							// Defensive: a second topic shift could theoretically fire if

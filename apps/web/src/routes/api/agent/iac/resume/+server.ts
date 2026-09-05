@@ -13,6 +13,7 @@ import {
 	getIacTurnOutcome,
 	getLastAssistantText,
 	getPendingInterrupt,
+	getPipelineNodes,
 	pruneThreadState,
 	resumeAgent,
 	runPostTurn,
@@ -92,7 +93,7 @@ export const POST: RequestHandler = async ({ request }) => {
 								metadata: { request_id: requestId, session_id: body.threadId },
 							});
 
-							const { toolsUsed } = await pumpEventStream(eventStream, send);
+							const { toolsUsed } = await pumpEventStream(eventStream, send, await getPipelineNodes(AGENT));
 							await flushLangSmithCallbacks();
 
 							// A follow-on interrupt (e.g. clarify -> plan-review) re-pauses the graph.

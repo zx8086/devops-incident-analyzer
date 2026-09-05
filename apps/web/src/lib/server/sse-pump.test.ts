@@ -2,7 +2,7 @@
 // SIO-775: verify pumpEventStream emits datasource_result events with typed
 // findings when extractFindings completes.
 import { describe, expect, test } from "bun:test";
-import { emitIacInterrupt, pumpEventStream } from "./sse-pump.ts";
+import { emitIacInterrupt, pumpEventStream as pumpEventStreamImpl } from "./sse-pump.ts";
 
 type LangGraphEvent = {
 	event?: string;
@@ -20,6 +20,31 @@ type LangGraphEvent = {
 
 async function* fromArray(events: LangGraphEvent[]): AsyncIterable<LangGraphEvent> {
 	for (const e of events) yield e;
+}
+
+// SIO-1641: pumpEventStream takes the node allowlist from the compiled graph (see
+// getPipelineNodes in agent.ts). Tests here feed a fixed set covering every node name the
+// fixtures below emit; the allowlist-specific tests at the bottom call the impl directly.
+const PIPELINE: ReadonlySet<string> = new Set([
+	"classify",
+	"aggregate",
+	"extractFindings",
+	"enforceCorrelationsAggregate",
+	"checkConfidence",
+	"validate",
+	"aggregateMitigation",
+	"followUp",
+	"learnFetchTicket",
+	"applyLearnings",
+	"openMr",
+	"watchPipeline",
+	"detectFleetUpgrade",
+	"fleetUpgradeGate",
+	"applyFleetUpgrade",
+]);
+
+function pumpEventStream(eventStream: AsyncIterable<LangGraphEvent>, send: (event: Record<string, unknown>) => void) {
+	return pumpEventStreamImpl(eventStream, send, PIPELINE);
 }
 
 describe("pumpEventStream datasource_result", () => {
@@ -710,5 +735,118 @@ describe("SIO-1271: only answer-producing roles stream to the browser", () => {
 	test("a judge role is suppressed even outside the known output nodes", async () => {
 		const { messages } = await pump([streamEvent("absenceJudge", "someFutureNode", '{"verdicts":[')]);
 		expect(messages).toEqual([]);
+	});
+});
+
+// SIO-1641: the node allowlist used to be a hand-maintained PIPELINE_NODES set that had
+// drifted from graph.ts (selectRunbooks, recordEntities, graphEnrich, awsEstateRouter,
+// resolveIdentifiers, enforceCorrelationsAggregate, recordRootCause, recordBindings and
+// correlationFetch never emitted, so the live graph triage panel left them and every
+// adjacent edge grey). The caller now passes the compiled graph's own node set.
+describe("pumpEventStream node allowlist (SIO-1641)", () => {
+	test("emits node_start/node_end for every name in the provided set and nothing else", async () => {
+		const captured: Array<Record<string, unknown>> = [];
+		const send = (event: Record<string, unknown>) => {
+			captured.push(event);
+		};
+
+		await pumpEventStreamImpl(
+			fromArray([
+				{ event: "on_chain_start", name: "selectRunbooks" },
+				{ event: "on_chain_end", name: "selectRunbooks", data: { output: {} } },
+				// A runnable nested inside a node carries its own name; it must not light a node.
+				{ event: "on_chain_start", name: "innerStep" },
+				{ event: "on_chain_end", name: "innerStep", data: { output: {} } },
+				// createReactAgent's inner graph nodes (sub-agent ReAct loop).
+				{ event: "on_chain_start", name: "agent" },
+				{ event: "on_chain_end", name: "agent", data: { output: {} } },
+				{ event: "on_chain_start", name: "recordBindings" },
+				{ event: "on_chain_end", name: "recordBindings", data: { output: {} } },
+			]),
+			send,
+			new Set(["selectRunbooks", "recordBindings"]),
+		);
+
+		const starts = captured.filter((e) => e.type === "node_start").map((e) => e.nodeId);
+		const ends = captured.filter((e) => e.type === "node_end").map((e) => e.nodeId);
+		expect(starts).toEqual(["selectRunbooks", "recordBindings"]);
+		expect(ends).toEqual(["selectRunbooks", "recordBindings"]);
+	});
+
+	test("a node_end with no matching start still emits with duration 0", async () => {
+		const captured: Array<Record<string, unknown>> = [];
+		await pumpEventStreamImpl(
+			fromArray([{ event: "on_chain_end", name: "align", data: { output: {} } }]),
+			(e) => {
+				captured.push(e);
+			},
+			new Set(["align"]),
+		);
+		expect(captured.filter((e) => e.type === "node_end")).toEqual([{ type: "node_end", nodeId: "align", duration: 0 }]);
+	});
+});
+
+// SIO-1641: parallel Send branches (supervisor fan-out, correlationFetch, per-estate AWS)
+// share one node name. The pump used to delete the start time on the FIRST branch's end,
+// so every later branch reported duration 0 and the panel showed "queryDataSource 0.0s"
+// after a two-minute fan-out. The reducer completes the node on the LAST branch end and
+// keeps that end's duration, so the last end must carry first-start-to-last-end.
+describe("pumpEventStream parallel-branch durations (SIO-1641)", () => {
+	async function* paced(events: LangGraphEvent[], gapMs: number): AsyncIterable<LangGraphEvent> {
+		for (const e of events) {
+			yield e;
+			await Bun.sleep(gapMs);
+		}
+	}
+
+	test("the last node_end of a fanned-out node carries the wave time, not zero", async () => {
+		const captured: Array<Record<string, unknown>> = [];
+		await pumpEventStreamImpl(
+			paced(
+				[
+					{ event: "on_chain_start", name: "queryDataSource" },
+					{ event: "on_chain_start", name: "queryDataSource" },
+					{ event: "on_chain_end", name: "queryDataSource", data: { output: {} } },
+					{ event: "on_chain_end", name: "queryDataSource", data: { output: {} } },
+				],
+				20,
+			),
+			(e) => {
+				captured.push(e);
+			},
+			new Set(["queryDataSource"]),
+		);
+
+		const starts = captured.filter((e) => e.type === "node_start");
+		const ends = captured.filter((e) => e.type === "node_end") as Array<{ duration: number }>;
+		expect(starts).toHaveLength(2);
+		expect(ends).toHaveLength(2);
+		// Three 20ms gaps separate the first start from the last end.
+		expect(ends[1]?.duration).toBeGreaterThanOrEqual(40);
+		// The first end is measured from the first start too (no reset between branches).
+		expect(ends[0]?.duration).toBeGreaterThanOrEqual(20);
+	});
+
+	test("a node that runs again after fully completing measures from its new start", async () => {
+		const captured: Array<Record<string, unknown>> = [];
+		await pumpEventStreamImpl(
+			paced(
+				[
+					{ event: "on_chain_start", name: "aggregate" },
+					{ event: "on_chain_end", name: "aggregate", data: { output: {} } },
+					{ event: "on_chain_start", name: "aggregate" },
+					{ event: "on_chain_end", name: "aggregate", data: { output: {} } },
+				],
+				20,
+			),
+			(e) => {
+				captured.push(e);
+			},
+			new Set(["aggregate"]),
+		);
+		const ends = captured.filter((e) => e.type === "node_end") as Array<{ duration: number }>;
+		expect(ends).toHaveLength(2);
+		// Second run must not include the gap spent before its own start (would be >= 60).
+		expect(ends[1]?.duration).toBeLessThan(60);
 	});
 });

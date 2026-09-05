@@ -33,6 +33,7 @@ import type { AttachmentMeta, DataSourceContext } from "@devops-agent/shared";
 import { isKillSwitchActive, KillSwitchError } from "@devops-agent/shared";
 import type { BaseMessage, MessageContentComplex } from "@langchain/core/messages";
 import { startSchedules } from "./schedules.ts";
+import { pipelineNodeNames } from "./topology.ts";
 
 // SIO-849/SIO-850: wire the lifecycle teardown (open_memory_pr) and bootstrap
 // (warm_knowledge_graph) seams once, at module load. Both no-op until their
@@ -303,6 +304,24 @@ export async function getIacGraph() {
 		iacGraphPromise = buildIacGraph({ checkpointerType: resolveCheckpointerType() });
 	}
 	return iacGraphPromise;
+}
+
+// SIO-1641: the node ids whose start/end the SSE pump forwards to the progress UI. Derived
+// from the compiled graph's own drawable (the list /api/agent/topology draws) so the
+// emitting set and the drawn set share one source of truth; a hand-maintained allowlist in
+// sse-pump.ts drifted from graph.ts and left executed nodes grey. Cached per agent for the
+// life of the process, like the compiled graphs themselves.
+const pipelineNodesCache = new Map<string, Promise<ReadonlySet<string>>>();
+
+export function getPipelineNodes(agentName = "incident-analyzer"): Promise<ReadonlySet<string>> {
+	let cached = pipelineNodesCache.get(agentName);
+	if (!cached) {
+		cached = (agentName === "elastic-iac" ? getIacGraph() : getGraph())
+			.then((graph) => graph.getGraphAsync())
+			.then((drawable) => pipelineNodeNames(Object.keys(drawable.nodes)));
+		pipelineNodesCache.set(agentName, cached);
+	}
+	return cached;
 }
 
 export async function invokeAgent(
