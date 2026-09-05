@@ -453,3 +453,18 @@ A mixed PR: one new OKF runbook, two edited runbooks/RULES files, one doc, plus 
 1. *The skip is repo/account level, confirmed a third time.* Docs-only (#680, #681), a 20-file feature PR (#682), and a 7-file mixed PR (#683) all skip in ~100 ms with `body: null`. The cause is not the diff; it needs the Greptile dashboard (repo enablement, quota, or a skip rule), which the session cannot see.
 2. *Gate for code PRs on a skip: explicit per-PR user authorization, not the docs-only carve-out.* The carve-out exists because docs are outside the review surface; code is not. Report the unsatisfiable gate, let the user decide, record the decision here.
 3. *Both bots absent means the bake-off has produced no comparative signal since #679.* Five PRs of availability data and zero recall data. Until the Greptile skip is resolved on the dashboard, new rows here measure the outage, not the reviewers.
+
+## PR #684 detail (SIO-1641, SSE pump node allowlist derived from the compiled graph)
+
+A code PR: 14 files, +258/-95, all under `apps/web` plus one doc. It removes the hand-maintained `PIPELINE_NODES` allowlist from `sse-pump.ts` in favour of the compiled graph's own node list, refcounts parallel-branch start times, wires four routes and three route-test mocks, and adds labels for 20 plumbing nodes. Fourth consecutive CODE-class data point for the Greptile skip.
+
+**Greptile:** the auto-trigger on push logged one terminal **SKIPPED** review (MCP `list_code_reviews` id 22718874, head `55efdd46`, `changedFiles` = all 14, `completedAt` about 150 ms after `createdAt`). No status check, no comment, no review object. Consulted the MCP at PR-open time; no re-trigger attempted (#682 proved all three trigger paths skip identically).
+
+**CodeRabbit:** nothing, through CI completion. Sixth consecutive absence (#679 to #684).
+
+**Merge gate:** CI green (Typecheck/Lint/YAML/Test), `MERGEABLE`/`CLEAN`, Greptile SKIPPED on the head SHA via MCP, zero findings to triage. Code-class skip: the session reported the unsatisfiable gate and did not merge on its own. The user then explicitly instructed the merge. Squash `70d5c4ec`.
+
+**Takeaways:**
+
+1. *Fourth code-class skip in a row, same ~100-150 ms signature.* The dashboard-level cause first flagged on #682 is still unresolved; the ledger keeps measuring the outage, not the reviewers.
+2. *A self-verified change with no reviewer signal.* The PR's own evidence (live-probe of `streamEvents` metadata, a 23-node end-to-end run, TDD tests for the allowlist and the duration refcount) is the only review this change received. That is the operating mode until the skip is fixed; note it, do not normalise it.
