@@ -39,6 +39,10 @@ describe("mapAwsError retention-window handling (SIO-1078)", () => {
 		expect(mapped.advice).toBeDefined();
 		expect(mapped.advice).toContain("SYNTAX");
 		expect(mapped.advice).toContain("fields @timestamp");
+		// SIO-1640: the two syntax traps ported from the AWS Agent Toolkit log-insights
+		// reference ride along on the same branch (bin() unit caps, backticked hyphens).
+		expect(mapped.advice).toContain("bin(5m)");
+		expect(mapped.advice).toContain("backticks");
 		// must NOT steer to re-anchoring the window
 		expect(mapped.advice).not.toContain("aws_logs_describe_log_groups");
 		expect(mapped.advice).not.toContain("retention window");

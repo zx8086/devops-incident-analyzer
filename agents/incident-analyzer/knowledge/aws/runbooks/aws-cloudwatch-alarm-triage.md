@@ -57,6 +57,40 @@ For each alarm, the fields that matter:
 
 `INSUFFICIENT_DATA` should be reported as a **coverage gap**, not as the underlying resource being healthy.
 
+#### Cause tables
+
+Symptom-to-cause tables adapted from the AWS Agent Toolkit `aws-observability` skill
+(`references/troubleshooting.md`, github.com/aws/agent-toolkit-for-aws, Apache-2.0,
+Copyright Amazon.com, Inc. or its affiliates). Use them to name the cause in the finding
+instead of stopping at the state.
+
+`INSUFFICIENT_DATA`:
+
+| Symptom | Cause | What to check |
+|---|---|---|
+| Alarm went to INSUFFICIENT_DATA as soon as it was created and never left | Wrong namespace or dimension names (namespaces are case-sensitive: `AWS/Lambda`, not `aws/lambda`) | Compare `Namespace` and `Dimensions` from step 1 against a metric that returns datapoints in step 3 |
+| Alarm worked, then went to INSUFFICIENT_DATA | The metric stopped being published: resource stopped, deleted, or scaled to zero | Step 5 resource check |
+| Alarm stays in INSUFFICIENT_DATA although the resource is live | No datapoints in the evaluation window: emission cadence longer than `Period`, or an idle push-based metric | `aws_cloudwatch_get_metric_data` at the alarm's period; if datapoints exist only at a coarser cadence, the alarm period is wrong |
+| Brand-new alarm in INSUFFICIENT_DATA | Normal until one full evaluation period of data arrives | Wait; not a finding |
+
+Alarm did not trigger although the metric breached:
+
+| Symptom | Cause | What to check |
+|---|---|---|
+| Metric breaching but alarm stays `OK` | M-of-N not met: only some of the last N datapoints breached | `DatapointsToAlarm` vs `EvaluationPeriods` (step 2) against the datapoints in step 3 |
+| Metric breaching but alarm in INSUFFICIENT_DATA | `TreatMissingData` is `missing` (the default) and the metric is sparse | `TreatMissingData`; for error-count metrics `notBreaching` is the usual fix |
+| Multi-day alarm fires hours late | Total window (`EvaluationPeriods` x `Period`) exceeds one day; such alarms are evaluated once per hour | Report the delay as expected behaviour, not a lost signal |
+| Alarm fires then returns to `OK` immediately | Single spike with M = N = 1 | Recommend M-of-N (2 of 3) if the spike was noise |
+| Metric-math alarm did not stop or recover an EC2 instance | Metric math alarms cannot perform EC2 actions | Recommend a plain metric alarm with the `InstanceId` dimension |
+
+Flapping (`OK` to `ALARM` to `OK` in quick succession):
+
+| Cause | What to check or recommend |
+|---|---|
+| Threshold sits inside the metric's normal range | Step 3 datapoints hover around `Threshold`; recommend a higher threshold or anomaly detection |
+| M = N = 1 catches transient spikes | Recommend M-of-N (2 of 3 or 3 of 5) |
+| Metric is naturally spiky (latency) | Recommend `p90`/`p99` instead of `Maximum`; for CPU-style metrics `Average` is acceptable |
+
 ### 3. Pull the underlying metric datapoints
 Use `aws_cloudwatch_get_metric_data` for the namespace + metric + dimensions identified in step 1. Window the query to start ~30 minutes before `StateUpdatedTimestamp` and end at "now". Use a `Statistic` that matches the alarm's (`Average`, `Sum`, `Minimum`, `Maximum`, etc.) — comparing the wrong statistic against the alarm's threshold produces misleading findings.
 
