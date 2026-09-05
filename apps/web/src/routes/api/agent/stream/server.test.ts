@@ -219,6 +219,8 @@ mock.module("$lib/server/langsmith-tags", () => ({
 
 mock.module("$lib/server/agent", () => ({
 	invokeAgent: invokeAgentMock,
+	// SIO-1641: stream/+server.ts resolves the node allowlist from the compiled graph.
+	getPipelineNodes: mock(async () => new Set(["classify", "aggregateMitigation", "followUp", "proposeMonitor"])),
 	getPendingInterrupt: mock(async () => undefined),
 	// stream/+server.ts imports this for the elastic-iac final-message path.
 	getLastAssistantText: mock(async () => ""),

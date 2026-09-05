@@ -41,3 +41,13 @@ export function normalizeEdges(edges: DrawableEdge[], nodeCount: number): Drawab
 	}
 	return result;
 }
+
+// SIO-1641: node ids whose on_chain_start/on_chain_end the SSE pump forwards as
+// node_start/node_end. Derived from the compiled graph's own drawable (the same
+// list /api/agent/topology draws) so the emitting set can never drift from
+// graph.ts the way the old hand-maintained PIPELINE_NODES did. LangGraph's
+// synthetic entry/exit pseudo-nodes are excluded: the panel draws START/END
+// itself from run state.
+export function pipelineNodeNames(drawableNodes: readonly string[]): ReadonlySet<string> {
+	return new Set(drawableNodes.filter((n) => n !== "__start__" && n !== "__end__"));
+}

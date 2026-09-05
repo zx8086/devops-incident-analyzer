@@ -14,6 +14,7 @@ import { z } from "zod";
 import {
 	getLastAssistantText,
 	getPendingInterrupt,
+	getPipelineNodes,
 	pruneThreadState,
 	resumeAgent,
 	runPostTurn,
@@ -104,7 +105,7 @@ export const POST: RequestHandler = async ({ request }) => {
 								metadata: { request_id: requestId, session_id: body.threadId },
 							});
 
-							const { toolsUsed } = await pumpEventStream(eventStream, send);
+							const { toolsUsed } = await pumpEventStream(eventStream, send, await getPipelineNodes());
 							await flushLangSmithCallbacks();
 
 							// The match gate chains into the review gate; surface it and

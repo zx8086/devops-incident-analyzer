@@ -54,76 +54,6 @@ const OUTPUT_ROLES = new Set(["aggregator", "responder"]);
 // Roles that run inside an OUTPUT_NODE but must never reach the browser. Consulted ONLY on the
 // no-role fallback path below, so the fallback cannot re-open the leak it exists to survive.
 const NON_STREAMING_ROLES = new Set(["gapsJudge", "absenceJudge"]);
-const PIPELINE_NODES = new Set([
-	"classify",
-	"normalize",
-	"entityExtractor",
-	"queryDataSource",
-	"align",
-	"aggregate",
-	// SIO-775: surface extractFindings in the pipeline display; this is also
-	// where we emit datasource_result events carrying typed findings.
-	"extractFindings",
-	"checkConfidence",
-	"validate",
-	"proposeInvestigate",
-	"proposeMonitor",
-	"proposeEscalate",
-	"aggregateMitigation",
-	"responder",
-	"followUp",
-	// SIO-751: surface the topic-shift node in the UI's node-progress display
-	// so the user sees the brief pause before the banner appears.
-	"detectTopicShift",
-	// elastic-iac maker graph nodes (separate graph; harmless for the incident graph).
-	"bootstrap",
-	"parseIntent",
-	"readClusterState",
-	"guard",
-	"draftChange",
-	"reviewPlan",
-	"reviewGate",
-	"openMr",
-	// SIO-984: the post-MR pipeline watch -- without it the gitops flow shows "MR opened" then a
-	// sudden result with no pill for the (now poll-to-terminal) watch phase. Also fires on the
-	// pipeline-status "check my MR" re-check.
-	"watchPipeline",
-	"teardown",
-	// SIO-882: elastic-iac drift sub-flow nodes.
-	"detectDrift",
-	"reconcileGate",
-	"reconcileStack",
-	"advanceDrift",
-	// SIO-902: elastic-iac synthetics drift sub-flow nodes.
-	"detectSyntheticsDrift",
-	"syntheticsPushGate",
-	"pushSynthetics",
-	// SIO-935: elastic-iac fleet-upgrade sub-flow nodes. Without these the on_chain_start/
-	// on_chain_end gate below drops fleet node events, so the tracing pills never light up
-	// during a fleet upgrade (two-leg flow: detectFleetUpgrade -> PAUSE at fleetUpgradeGate
-	// -> applyFleetUpgrade on resume).
-	"detectFleetUpgrade",
-	"fleetUpgradeGate",
-	"applyFleetUpgrade",
-	// SIO-1479: elastic-iac renovate integration-update sub-flow. Without these the on_chain_start/
-	// on_chain_end gate below drops renovate node events, so the tracing pills never light up during
-	// a Renovate trigger (extractRenovateTarget -> resolveIntegrationSlug -> resolveRenovateMarker ->
-	// enrichRenovateTarget -> PAUSE at renovateTriggerGate -> triggerRenovateUpdate -> watchRenovateMr).
-	"extractRenovateTarget",
-	"resolveIntegrationSlug",
-	"resolveRenovateMarker",
-	"enrichRenovateTarget",
-	"renovateTriggerGate",
-	"triggerRenovateUpdate",
-	"watchRenovateMr",
-	// SIO-1126: HIL learning lane nodes (incident-analyzer "learn from TICKET-123").
-	"learnFetchTicket",
-	"learnMatchIncident",
-	"learnMatchGate",
-	"learnDistill",
-	"learnReviewGate",
-	"applyLearnings",
-]);
 const PARTIAL_FAILURE_SOURCES = new Set([
 	"proposeInvestigate",
 	"proposeMonitor",
@@ -179,8 +109,18 @@ const ANSWER_REWRITE_NODES = new Set(["aggregate", "enforceCorrelationsAggregate
 
 const HIL_LEARNING_ENTRY_NODE = "learnFetchTicket";
 
-export async function pumpEventStream(eventStream: EventStream, send: SendFn): Promise<PumpResult> {
-	const nodeStartTimes = new Map<string, number>();
+export async function pumpEventStream(
+	eventStream: EventStream,
+	send: SendFn,
+	// SIO-1641: the compiled graph's own node ids (getPipelineNodes in agent.ts). A hand-maintained
+	// list here drifted from graph.ts eight times and left executed nodes grey in the graph panel.
+	pipelineNodes: ReadonlySet<string>,
+): Promise<PumpResult> {
+	// SIO-1641: refcounted per node name. Parallel Send branches (supervisor fan-out,
+	// correlationFetch, per-estate AWS) share a name and the reducer keeps the LAST branch's
+	// duration, so every end is measured from the FIRST start of the wave; deleting the entry
+	// on the first end (the old behavior) made later branches report 0.
+	const nodeRuns = new Map<string, { startedAt: number; running: number }>();
 	const emittedFailures = new Set<string>();
 	let responseContent = "";
 	let hilLearningTurn = false;
@@ -228,8 +168,8 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 
 		// SIO-1141: capture the corrected report body + confidence from any answer-mutating
 		// node's output (aggregate streams pre-cap tokens live; the cap/rewrite lands on
-		// finalAnswer AFTER generation). enforceCorrelationsAggregate is NOT a PIPELINE_NODE, so
-		// this check is independent of the pill-emitting block below. Latest writer wins.
+		// finalAnswer AFTER generation). This check does not consult the pipelineNodes allowlist, so it
+		// is independent of the node_start/node_end block below. Latest writer wins.
 		if (event.event === "on_chain_end" && event.name && ANSWER_REWRITE_NODES.has(event.name)) {
 			const output = event.data?.output as
 				| {
@@ -262,15 +202,20 @@ export async function pumpEventStream(eventStream: EventStream, send: SendFn): P
 			}
 		}
 
-		if (event.event === "on_chain_start" && event.name && PIPELINE_NODES.has(event.name)) {
-			nodeStartTimes.set(event.name, Date.now());
+		if (event.event === "on_chain_start" && event.name && pipelineNodes.has(event.name)) {
+			const run = nodeRuns.get(event.name);
+			if (run) run.running += 1;
+			else nodeRuns.set(event.name, { startedAt: Date.now(), running: 1 });
 			send({ type: "node_start", nodeId: event.name });
 		}
 
-		if (event.event === "on_chain_end" && event.name && PIPELINE_NODES.has(event.name)) {
-			const startTime = nodeStartTimes.get(event.name);
-			const duration = startTime ? Date.now() - startTime : 0;
-			nodeStartTimes.delete(event.name);
+		if (event.event === "on_chain_end" && event.name && pipelineNodes.has(event.name)) {
+			const run = nodeRuns.get(event.name);
+			const duration = run ? Date.now() - run.startedAt : 0;
+			if (run) {
+				run.running -= 1;
+				if (run.running <= 0) nodeRuns.delete(event.name);
+			}
 			send({ type: "node_end", nodeId: event.name, duration });
 
 			if (event.name === "followUp") {

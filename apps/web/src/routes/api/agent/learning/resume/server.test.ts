@@ -81,6 +81,8 @@ const getLastAssistantTextMock = mock(async () => "Learned from DEVOPS-1355.");
 
 mock.module("$lib/server/agent", () => ({
 	resumeAgent: resumeAgentMock,
+	// SIO-1641: the resume route resolves the node allowlist from the compiled graph.
+	getPipelineNodes: mock(async () => new Set(["classify", "aggregate", "followUp"])),
 	getPendingInterrupt: getPendingInterruptMock,
 	getLastAssistantText: getLastAssistantTextMock,
 	pruneThreadState: mock(() => Promise.resolve()),

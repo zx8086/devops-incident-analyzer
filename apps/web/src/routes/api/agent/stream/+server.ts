@@ -17,6 +17,7 @@ import {
 	getIacTurnOutcome,
 	getLastAssistantText,
 	getPendingInterrupt,
+	getPipelineNodes,
 	incrementSseConnections,
 	invokeAgent,
 	pruneThreadState,
@@ -118,6 +119,8 @@ export const POST: RequestHandler = async ({ request }) => {
 									send({ type: "attachment_warnings", warnings: processedAttachments.warnings });
 								}
 
+								// SIO-1641: node ids the pump forwards as node_start/node_end come from the compiled graph.
+								const pipelineNodes = await getPipelineNodes(body.agentName);
 								const eventStream = await invokeAgent(body.messages, {
 									threadId,
 									runId,
@@ -155,7 +158,7 @@ export const POST: RequestHandler = async ({ request }) => {
 									capReasons,
 									lowConfidence,
 									responseContent,
-								} = await pumpEventStream(eventStream, send);
+								} = await pumpEventStream(eventStream, send, pipelineNodes);
 
 								await flushLangSmithCallbacks();
 

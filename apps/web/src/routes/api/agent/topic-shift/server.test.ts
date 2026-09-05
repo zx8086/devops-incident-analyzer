@@ -86,6 +86,8 @@ const resumeAgentMock = mock(
 
 mock.module("$lib/server/agent", () => ({
 	resumeAgent: resumeAgentMock,
+	// SIO-1641: the resume route resolves the node allowlist from the compiled graph.
+	getPipelineNodes: mock(async () => new Set(["classify", "aggregate", "followUp"])),
 	getPendingInterrupt: mock(async () => undefined),
 	pruneThreadState: mock(() => Promise.resolve()),
 	// SIO-942: topic-shift/+server.ts calls this after the resumed turn (live-memory flush).
