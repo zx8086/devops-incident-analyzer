@@ -50,6 +50,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#697](https://github.com/zx8086/devops-incident-analyzer/pull/697) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1655 Phase 2c PR 1: graphFor(agentName) registry replacing the two-agent assumption, pure refactor (8 files); SKIPPED once in about 150 ms, CodeRabbit silent (18th straight); all five CI jobs green first run; merged on user authorization; detail below |
 | [#698](https://github.com/zx8086/devops-incident-analyzer/pull/698) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1655 Phase 2c PR 2: fleet console graph, five hub tools, the untrusted-reply boundary (23 files); SKIPPED three times in about 130 ms each, CodeRabbit silent (19th straight); Typecheck and Lint both failed the first run (a union-typed graph thunk svelte-check caught, and three unformatted files); green on the third; merged on user authorization; detail below |
 | [#699](https://github.com/zx8086/devops-incident-analyzer/pull/699) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1655 follow-up: pi-coms capabilities default ON and move into the config schema (15 files); SKIPPED once in about 165 ms, CodeRabbit silent (20th straight); all five CI jobs green first run; merged on user authorization; detail below |
+| [#700](https://github.com/zx8086/devops-incident-analyzer/pull/700) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | gitlab-mcp proxy schema conversion: array and enum types honoured when converting GitLab's discovered tool schemas (2 files); SKIPPED once in about 130 ms, CodeRabbit silent (21st straight); all five CI jobs green first run; merged on user authorization; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -725,6 +726,24 @@ A pure refactor of 8 files, deliberately carrying no new behaviour: a `graphFor(
 2. *"On by default" and "available by default" are different questions.* The capability defaults on, but the fleet console is still offered only where a pi-coms hub is configured, because without one its graph cannot build and the selector entry would be a dead end. Separating the two kept a deployment with no `PI_COMS_HUBS` completely unaffected by the flip -- worth checking with the user rather than assuming, which is what happened here.
 3. *Kill-switch semantics change the failure direction of a typo.* Under opt-in, `PI_FLEET_GRAPH_ENABLED=ture` silently leaves a shipped feature off; under kill-switch it reads as on. For a capability gate that is the safer direction, and a test now pins it (`"no"`, `"FALSE"`, `""` all read as enabled).
 4. *Scope check on the user's framing:* the "4-pillar config setup" (`defaults.ts`/`envMapping.ts`/`schemas.ts`/`loader.ts`) is specifically the MCP servers' structure; `packages/agent` has no such directory, and its established equivalent is a shared Zod schema plus a resolver applying defaults. Following the pattern actually in use beat inventing a config directory in a package that has none -- and the difference was surfaced to the user rather than silently decided.
+
+## PR #700 detail (gitlab-mcp proxy schema conversion, found by a live regression check)
+
+Two files. `jsonSchemaTypeToZod` handled string/number/integer/boolean and sent everything else to `z.unknown()`, so every ARRAY parameter on every proxied GitLab tool was schema-less. The converter now recurses on `items` and honours a string `enum` at either level.
+
+**Greptile:** terminal **SKIPPED** (id 22806530 on `b1183a03`), about 130 ms, `strictness: 2`, body null.
+
+**CodeRabbit:** nothing, through CI completion. Twenty-first consecutive absence (#679 to #700).
+
+**Merge gate:** all five CI jobs green on the first run. Zero findings to triage. Code-class; merged on the user's explicit instruction. Squash `f7b12fd2`.
+
+**Takeaways:**
+
+1. *The bug was found by a post-change regression check, not by a reviewer or a test.* The user ran a real incident query after the pi-fleet work and pasted the log; `gitlab_get_merge_request` failed with "Validation error: include is invalid" while the turn as a whole succeeded. A recovered sub-agent error is exactly the kind of finding that survives indefinitely because nothing fails loudly -- worth reading tool-error arrays in run logs even when the run is green.
+2. *A permissive local schema is worse than no schema.* `z.unknown()` meant the model's guess was accepted here and rejected at GitLab, so the model received a tool error it could not learn from rather than a schema violation it could correct. The fix pushes the contract back to where the model can see it.
+3. *The upstream sources disagreed, and the difference mattered.* The REST API has no `include` parameter at all (only `include_*` booleans); only the MCP tool declares `include`, as an array of enum facets. Reading only the REST docs would have produced a confident wrong fix. The live `/api/v4/mcp` `tools/list` could not be read to confirm first-hand -- the configured PAT is project-scoped and the endpoint answers 403 -- so the published tool documentation is the source, and that limitation is recorded in the PR body rather than glossed.
+4. *The test was verified to catch the bug.* Removing the `array` case again made 3 of 6 fail; restoring it made 6 pass. Writing a test after a fix proves nothing until it has been seen to fail.
+5. *One deliberate non-strictness:* an array with no `items` still accepts any element, because GitLab shipped array params that way before gitlab-org/gitlab!211286. Tightening that too would have traded a wasted call for a refused one.
 
 ## PR #689 detail (pi-fleet gitagent feasibility report)
 
