@@ -71,3 +71,25 @@ jobs:
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
       - run: bun install --frozen-lockfile
       - run: bun run test
+
+  pi-coms:
+    name: pi-coms deploy checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/pi-coms
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - uses: hashicorp/setup-terraform@v3
+      - name: extension syntax
+        run: bun build extensions/coms-net.ts --external '*' --outfile /dev/null
+      - name: shell syntax
+        run: |
+          bash -n deploy/bootstrap/agent-bootstrap.sh
+          bash -n deploy/publish-fleet.sh
+          bash -n deploy/token-admin.sh
+      - name: terraform fmt
+        run: terraform fmt -check -recursive deploy/
