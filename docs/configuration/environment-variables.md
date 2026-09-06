@@ -104,7 +104,7 @@ The Elastic IaC MCP server (`packages/mcp-server-elastic-iac`, port 9086) backs 
 | `ELASTIC_IAC_GITLAB_BASE_URL` | No | `https://gitlab.com` | GitLab REST base for MRs, file blobs, and repository tree (SIO-891 migration name; falls back to `GITLAB_BASE_URL`) |
 | `ELASTIC_IAC_GITLAB_PROJECT` | No | `pvhcorp/dhco/observability/observability-elastic-iac` | GitLab project path of the IaC repo |
 | `ELASTIC_IAC_GITLAB_PROJECT_ID` | No | `82850717` | GitLab numeric project ID (alternative to the path) |
-| `ELASTIC_IAC_GITLAB_TOKEN` | No | -- | GitLab token used to branch/commit/open MRs (SIO-891 migration name; falls back to `GITLAB_PERSONAL_ACCESS_TOKEN`) |
+| `ELASTIC_IAC_GITLAB_TOKEN` | No | -- | GitLab token used to branch/commit/open MRs (SIO-891 migration name; falls back to `GITLAB_PERSONAL_ACCESS_TOKEN`) Rotating it in `.env` requires restarting the process: the elastic-iac MCP (`bun --env-file`) picks a new value up only on its own restart. |
 | `ELASTIC_IAC_WORKSPACE_DIR` | No | `/tmp/elastic-iac-workspace` | Local directory the git/task tools clone and operate inside (never the agent's CWD) |
 | `ELASTIC_IAC_TASK_BIN` | No | `task` | Path to the Task binary the on-demand CI/pipeline tools invoke |
 | `ELASTIC_CLOUD_BASE_URL` | No | `https://api.elastic-cloud.com` | Elastic Cloud API base for deployment / plan-history reads |
@@ -121,7 +121,7 @@ The Elastic IaC MCP server (`packages/mcp-server-elastic-iac`, port 9086) backs 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `ELASTIC_IAC_MCP_URL` | Yes (for the IaC agent) | `http://localhost:9086` | URL the web server/agent connects to (`apps/web/src/lib/server/agent.ts`). Its `/identity` role must be `elastic-iac-mcp`. |
-| `ELASTIC_IAC_GITLAB_TOKEN` | No | -- | Agent-side GitLab token for branch/commit/MR; mirrors the MCP-side default so no extra config is needed when shared. |
+| `ELASTIC_IAC_GITLAB_TOKEN` | No | -- | Agent-side GitLab token for branch/commit/MR; mirrors the MCP-side default so no extra config is needed when shared. Rotating it in `.env` requires a full web dev-server restart: Vite restarts in place on the `.env` change but its `loadEnv` keeps the existing (stale) `process.env` value, so the importer keeps 401ing; since SIO-1647 the importer backs off 15 min per rejected token value and logs one warn saying so. |
 
 ### Agent-side config-edit JSON path templates
 

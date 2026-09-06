@@ -17,6 +17,7 @@
 // Leaf module: must NOT import nodes.ts (nodes.ts calls importExternalChanges from bootstrapIac,
 // which would form the reconcile.ts-class cycle SIO-1047 untangled).
 
+import { createHash } from "node:crypto";
 import {
 	configChangeExists,
 	type GraphStore,
@@ -249,13 +250,27 @@ interface GitlabCommitMr {
 // sweepRunning re-entrancy guard) open for the process lifetime, disabling the importer.
 const GITLAB_TIMEOUT_MS = 30_000;
 
+// SIO-1647: GitLab rejected the token (401) or the token cannot see the project (403). Neither
+// is fixed by retrying with the same token, so the sweep backs off instead of re-failing on every
+// new thread's first turn and every hourly tick.
+export class GitlabAuthError extends Error {
+	constructor(
+		readonly status: number,
+		path: string,
+	) {
+		super(`GitLab ${path}: ${status} auth rejected`);
+	}
+}
+
 async function gitlabJson<T>(cfg: GitlabConfig, pathAndQuery: string): Promise<T> {
 	const url = `${cfg.base}/api/v4/projects/${cfg.projectEnc}/${pathAndQuery}`;
 	const res = await fetch(url, {
 		headers: { "PRIVATE-TOKEN": cfg.token },
 		signal: AbortSignal.timeout(GITLAB_TIMEOUT_MS),
 	});
-	if (!res.ok) throw new Error(`GitLab ${pathAndQuery.split("?")[0]}: ${res.status} ${res.statusText}`);
+	const path = pathAndQuery.split("?")[0] ?? pathAndQuery;
+	if (res.status === 401 || res.status === 403) throw new GitlabAuthError(res.status, path);
+	if (!res.ok) throw new Error(`GitLab ${path}: ${res.status} ${res.statusText}`);
 	return (await res.json()) as T;
 }
 
@@ -427,9 +442,44 @@ const DEFAULT_SWEEP_LIMIT = 200;
 let watermarkIso: string | null = null;
 let sweepRunning = false;
 
+// SIO-1647: auth backoff. Root cause of the 2026-09-06 401 storm: the token was rotated in .env
+// while the web process lived, and Vite's in-place restart re-applied the STALE process.env value
+// (loadEnv gives existing process.env keys precedence over the re-parsed file), so every new
+// thread's first turn and every hourly tick 401'd until a full process restart. The backoff is
+// keyed on the token VALUE (a short sha256 prefix, never logged): a rotated token that actually
+// reaches process.env retries immediately; the same bad token waits out the window.
+const AUTH_BACKOFF_MS = 15 * 60 * 1000;
+export interface AuthBackoffState {
+	until: number;
+	tokenFingerprint: string;
+}
+let authBackoff: AuthBackoffState | null = null;
+
+export function tokenFingerprint(token: string): string {
+	return createHash("sha256").update(token).digest("hex").slice(0, 16);
+}
+
+// Pure: active only inside the window AND while the token value is unchanged.
+export function authBackoffActive(state: AuthBackoffState | null, now: number, currentToken: string): boolean {
+	return state !== null && now < state.until && state.tokenFingerprint === tokenFingerprint(currentToken);
+}
+
+function armAuthBackoff(source: string, error: GitlabAuthError): void {
+	authBackoff = {
+		until: Date.now() + AUTH_BACKOFF_MS,
+		tokenFingerprint: tokenFingerprint(process.env.ELASTIC_IAC_GITLAB_TOKEN ?? ""),
+	};
+	log.warn(
+		{ source, status: error.status, backoffMinutes: AUTH_BACKOFF_MS / 60_000 },
+		"gitlab-import: GitLab rejected ELASTIC_IAC_GITLAB_TOKEN; sweeps paused until the backoff expires or the token value changes. " +
+			"If the token was rotated in .env, RESTART the web dev server -- a Vite in-place restart keeps the stale process.env value",
+	);
+}
+
 export function resetImportStateForTests(): void {
 	watermarkIso = null;
 	sweepRunning = false;
+	authBackoff = null;
 }
 
 function emptySummary(source: string): ImportSummary {
@@ -602,6 +652,11 @@ export async function importExternalChanges(opts: ImportOptions): Promise<Import
 		log.info({ source: opts.source }, "gitlab-import skipped: a sweep is already running");
 		return summary;
 	}
+	if (authBackoffActive(authBackoff, Date.now(), process.env.ELASTIC_IAC_GITLAB_TOKEN ?? "")) {
+		log.debug({ source: opts.source }, "gitlab-import skipped: auth backoff active");
+		return summary;
+	}
+	authBackoff = null;
 	sweepRunning = true;
 	try {
 		const cfg = loadGitlabConfig();
@@ -610,7 +665,19 @@ export async function importExternalChanges(opts: ImportOptions): Promise<Import
 			? new Date(new Date(watermarkIso).getTime() - WATERMARK_OVERLAP_MS).toISOString()
 			: new Date(Date.now() - importLookbackDays() * 24 * 60 * 60 * 1000).toISOString();
 
-		const { commits: listed, capped } = await listMainCommitsSince(cfg, since);
+		let listing: Awaited<ReturnType<typeof listMainCommitsSince>>;
+		try {
+			listing = await listMainCommitsSince(cfg, since);
+		} catch (error) {
+			// SIO-1647: an auth rejection is not a transient listing failure; one warn, then back off.
+			// Every other error propagates as before (the caller's catch logs it; the next trigger retries).
+			if (!(error instanceof GitlabAuthError)) throw error;
+			summary.errors += 1;
+			armAuthBackoff(opts.source, error);
+			log.info(summary, "gitlab-import sweep complete");
+			return summary;
+		}
+		const { commits: listed, capped } = listing;
 		if (capped) {
 			// The oldest commits of the window are still unreached (see listMainCommitsSince);
 			// processing now would advance the watermark past them forever. Operator signal.
@@ -693,6 +760,13 @@ export async function importExternalChanges(opts: ImportOptions): Promise<Import
 			} catch (error) {
 				summary.errors += 1;
 				commitClean = false;
+				if (error instanceof GitlabAuthError) {
+					// SIO-1647: the token stopped working mid-sweep; every remaining commit would fail
+					// the same way. Freeze the watermark (this commit re-lists after the backoff) and stop.
+					armAuthBackoff(opts.source, error);
+					watermarkFrozen = true;
+					break;
+				}
 				log.warn(
 					{ sha: commit.id, error: error instanceof Error ? error.message : String(error) },
 					"gitlab-import: commit failed; continuing sweep",
