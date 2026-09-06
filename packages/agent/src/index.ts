@@ -28,7 +28,12 @@ export {
 	resolvePiComsConfig,
 	senderNameFor,
 } from "./action-tools/pi-coms-client.ts";
-export { environmentForEstate, type HubSelection, selectHubForEstate } from "./action-tools/pi-verifier.ts";
+export {
+	environmentForEstate,
+	estatesFromState,
+	type HubSelection,
+	selectHubForEstate,
+} from "./action-tools/pi-verifier.ts";
 export { installAgentMemory } from "./agent-memory-install.ts";
 export { aggregate } from "./aggregator.ts";
 export { checkAlignment, getDataSourceErrorCategories, routeAfterAlignment } from "./alignment.ts";
@@ -155,6 +160,16 @@ export { aggregateMitigation } from "./mitigation.ts";
 export { proposeEscalate, proposeInvestigate, proposeMonitor } from "./mitigation-branches.ts";
 export { normalizeIncident } from "./normalizer.ts";
 export { getWorkspaceRoot, skillFilePath } from "./paths.ts";
+// SIO-1651: the pi-handoff workflow's production entry point (post-turn
+// background hook) plus the flag apps/web gates it on.
+export {
+	isPiHandoffEnabled,
+	type PiHandoffContext,
+	type PiHandoffResult,
+	runPiHandoff,
+	runPiHandoffForClosingTurn,
+} from "./pi-handoff-workflow-handlers.ts";
+export { buildVerdictDecision, recordVerdictDecision } from "./pi-verdict-memory.ts";
 export {
 	buildOrchestratorPrompt,
 	buildSubAgentPrompt,

@@ -13,6 +13,20 @@ const runIncidentCloseForClosingTurnMock = mock(
 );
 const getClosureRequestMock = mock((): Promise<ClosureRequest | null> => Promise.resolve(null));
 
+// SIO-1651: the same pattern for the pi hand-off hook.
+type PiHandoffRequest = { threadId: string; estate: string; requestId: string; report: string };
+type PiHandoffResult =
+	| { status: "verdict"; verdict: string; target: string; msgId: string }
+	| { status: "queued"; target: string; msgId: string }
+	| { status: "skipped"; reason: string }
+	| { status: "failed"; reason: string };
+const isPiHandoffEnabledMock = mock(() => false);
+const runPiHandoffForClosingTurnMock = mock(
+	(_ctx: PiHandoffRequest, _read: (id: string) => Promise<string>): Promise<PiHandoffResult> =>
+		Promise.resolve({ status: "skipped", reason: "test default" }),
+);
+const getPiHandoffRequestMock = mock((): Promise<PiHandoffRequest | null> => Promise.resolve(null));
+
 mock.module("@devops-agent/agent", () => ({
 	AttachmentError: class AttachmentError extends Error {},
 	flushLangSmithCallbacks: mock(() => Promise.resolve()),
@@ -72,6 +86,10 @@ mock.module("@devops-agent/agent", () => ({
 	// in this file's existing tests unless a test explicitly overrides the mock.
 	isClosureLearningEnabled: isClosureLearningEnabledMock,
 	runIncidentCloseForClosingTurn: runIncidentCloseForClosingTurnMock,
+	// SIO-1651: the stream route's post-turn pi hand-off hook imports these.
+	// Default OFF, matching production.
+	isPiHandoffEnabled: isPiHandoffEnabledMock,
+	runPiHandoffForClosingTurn: runPiHandoffForClosingTurnMock,
 	// SIO-1217: sse-pump.ts imports this from the same specifier at module scope. Mirror
 	// the real helper's array-of-content-blocks extraction (not a plain String() coercion)
 	// so this mock can't mask the exact "[object Object]" regression it exists to prevent.
@@ -241,6 +259,7 @@ mock.module("$lib/server/agent", () => ({
 	// SIO-1357: stream/+server.ts reads this before pruning to decide whether to
 	// fire the background closure workflow. null = no closure this turn.
 	getClosureRequest: getClosureRequestMock,
+	getPiHandoffRequest: getPiHandoffRequestMock,
 	// SIO-1045: union of every sibling route test's $lib/server/agent imports (ensureMcpConnected,
 	// resumeAgent, sessionTeardown, getActiveSseConnections, getAgentRuntimeStatus), so the
 	// process-global mock cache stays link-compatible regardless of file ordering.
@@ -882,6 +901,94 @@ describe("POST /api/agent/stream — SIO-1357 incident-close background hook", (
 
 		expect(response.status).toBe(200);
 		const events = await collectSse(response);
+		expect(events[events.length - 1]?.type).toBe("done");
+	});
+});
+
+describe("POST /api/agent/stream — SIO-1651 pi hand-off background hook", () => {
+	function clearHandoffMocks() {
+		isPiHandoffEnabledMock.mockClear();
+		getPiHandoffRequestMock.mockClear();
+		runPiHandoffForClosingTurnMock.mockClear();
+	}
+
+	test("does not fire the hand-off when the flag is off (default)", async () => {
+		clearHandoffMocks();
+		isPiHandoffEnabledMock.mockImplementationOnce(() => false);
+
+		const response = await POST(makeRequest({ messages: [{ role: "user", content: "close incident" }] }));
+		await collectSse(response);
+
+		expect(isPiHandoffEnabledMock).toHaveBeenCalled();
+		expect(getPiHandoffRequestMock).not.toHaveBeenCalled();
+		expect(runPiHandoffForClosingTurnMock).not.toHaveBeenCalled();
+	});
+
+	test("does not fire the hand-off when the turn closed no incident with an estate", async () => {
+		clearHandoffMocks();
+		isPiHandoffEnabledMock.mockImplementationOnce(() => true);
+		getPiHandoffRequestMock.mockImplementationOnce(async () => null);
+
+		const response = await POST(makeRequest({ messages: [{ role: "user", content: "check kafka lag" }] }));
+		await collectSse(response);
+
+		expect(getPiHandoffRequestMock).toHaveBeenCalled();
+		expect(runPiHandoffForClosingTurnMock).not.toHaveBeenCalled();
+	});
+
+	test("fires the hand-off (detached) with the report captured before pruning", async () => {
+		clearHandoffMocks();
+		isPiHandoffEnabledMock.mockImplementationOnce(() => true);
+		getPiHandoffRequestMock.mockImplementationOnce(async () => ({
+			threadId: "thread-pi",
+			estate: "eu-oit-prd",
+			requestId: "thread-pi",
+			report: "the completed report",
+		}));
+		runPiHandoffForClosingTurnMock.mockImplementationOnce(() =>
+			Promise.resolve({ status: "verdict" as const, verdict: "confirmed", target: "eu-oit-prd", msgId: "m1" }),
+		);
+
+		const response = await POST(
+			makeRequest({ messages: [{ role: "user", content: "close incident" }], threadId: "thread-pi" }),
+		);
+
+		expect(response.status).toBe(200);
+		const events = await collectSse(response);
+		expect(events[events.length - 1]?.type).toBe("done");
+		expect(runPiHandoffForClosingTurnMock).toHaveBeenCalled();
+
+		// The reader closes over the pre-prune report rather than re-reading a
+		// checkpoint that pruneThreadState has since rewritten.
+		const call = runPiHandoffForClosingTurnMock.mock.calls[0];
+		expect(call?.[0]).toEqual({
+			threadId: "thread-pi",
+			estate: "eu-oit-prd",
+			requestId: "thread-pi",
+			report: "the completed report",
+		});
+		const readCompletedReport = call?.[1];
+		expect(await readCompletedReport?.("thread-pi")).toBe("the completed report");
+	});
+
+	test("a rejecting hand-off promise does not affect the response", async () => {
+		clearHandoffMocks();
+		isPiHandoffEnabledMock.mockImplementationOnce(() => true);
+		getPiHandoffRequestMock.mockImplementationOnce(async () => ({
+			threadId: "thread-pi-fail",
+			estate: "eu-oit-prd",
+			requestId: "thread-pi-fail",
+			report: "r",
+		}));
+		runPiHandoffForClosingTurnMock.mockImplementationOnce(() => Promise.reject(new Error("hub down")));
+
+		const response = await POST(
+			makeRequest({ messages: [{ role: "user", content: "close incident" }], threadId: "thread-pi-fail" }),
+		);
+
+		expect(response.status).toBe(200);
+		const events = await collectSse(response);
+		expect(events.some((e) => e.type === "error")).toBe(false);
 		expect(events[events.length - 1]?.type).toBe("done");
 	});
 });

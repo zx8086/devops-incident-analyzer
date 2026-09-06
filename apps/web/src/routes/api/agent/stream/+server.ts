@@ -4,8 +4,10 @@ import {
 	AttachmentError,
 	flushLangSmithCallbacks,
 	isClosureLearningEnabled,
+	isPiHandoffEnabled,
 	processAttachments,
 	runIncidentCloseForClosingTurn,
+	runPiHandoffForClosingTurn,
 } from "@devops-agent/agent";
 import { getLogger, runWithRequestContext, traceSpan } from "@devops-agent/observability";
 import { AttachmentBlockSchema, DataSourceContextSchema } from "@devops-agent/shared";
@@ -17,6 +19,7 @@ import {
 	getIacTurnOutcome,
 	getLastAssistantText,
 	getPendingInterrupt,
+	getPiHandoffRequest,
 	getPipelineNodes,
 	incrementSseConnections,
 	invokeAgent,
@@ -243,6 +246,9 @@ export const POST: RequestHandler = async ({ request }) => {
 								// clears dataSourceResults; closeIncidentRequested/finalAnswer are not
 								// pruned today, but reading first keeps this independent of that fact).
 								const closureRequest = isClosureLearningEnabled() ? await getClosureRequest(threadId) : null;
+								// SIO-1651: same pre-prune read for the pi hand-off (estatesFromState
+								// falls back to dataSourceResults, which pruning clears).
+								const piHandoffRequest = isPiHandoffEnabled() ? await getPiHandoffRequest(threadId) : null;
 								// SIO-476: prune the checkpoint after the turn completes (best-effort).
 								await pruneThreadState(threadId, body.agentName);
 								// SIO-942: persist this turn's live-memory blocks (best-effort). Default
@@ -266,6 +272,27 @@ export const POST: RequestHandler = async ({ request }) => {
 											log.warn(
 												{ threadId, error: error instanceof Error ? error.message : String(error) },
 												"incident-close workflow rejected unexpectedly",
+											);
+										});
+								}
+								// SIO-1651: hand the closed incident's report to the estate's pi
+								// spoke as a DETACHED background run -- same contract as the
+								// closure chain above: never awaited, never allowed to affect the
+								// response, .catch() as defense-in-depth over the entry point's
+								// own never-throws guarantee.
+								if (piHandoffRequest) {
+									const handoffReport = piHandoffRequest.report;
+									void runPiHandoffForClosingTurn(piHandoffRequest, async () => handoffReport)
+										.then((result) => {
+											log.info(
+												{ threadId, status: result.status, estate: piHandoffRequest.estate },
+												"pi hand-off workflow completed",
+											);
+										})
+										.catch((error) => {
+											log.warn(
+												{ threadId, error: error instanceof Error ? error.message : String(error) },
+												"pi hand-off workflow rejected unexpectedly",
 											);
 										});
 								}

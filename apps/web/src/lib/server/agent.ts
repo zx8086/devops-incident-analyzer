@@ -1,9 +1,11 @@
 // apps/web/src/lib/server/agent.ts
 import {
+	type AgentStateType,
 	appliedSkillsForNames,
 	buildGraph,
 	buildIacGraph,
 	createMcpClient,
+	estatesFromState,
 	extractTextFromContent,
 	GRAPH_DEADLINE_KEY,
 	getAgent,
@@ -633,6 +635,57 @@ export async function getClosureRequest(threadId: string): Promise<ClosureReques
 		getLogger("web:closure-workflow").warn(
 			{ threadId, error: error instanceof Error ? error.message : String(error) },
 			"getClosureRequest failed; skipping closure workflow for this turn",
+		);
+		return null;
+	}
+}
+
+// SIO-1651: read the closing turn's state for the post-turn pi hand-off
+// workflow. Same access pattern and best-effort contract as
+// getClosureRequest, and likewise MUST be called before pruneThreadState:
+// pruning writes dataSourceResults: [], which estatesFromState falls back to
+// when awsTargetEstates is empty.
+//
+// Reads closingReport (not finalAnswer) for the reason getClosureRequest
+// documents. awsTargetEstates survives the close turn: turnReset (classifier)
+// does not clear it, and the close command routes to the SIMPLE path so
+// awsEstateRouter never runs to overwrite it -- so the report being closed and
+// the estates it assessed both come from this one snapshot.
+//
+// One hand-off per close: the FIRST assessed estate. Fanning out to every
+// estate would multiply spoke traffic per close and is out of scope (SIO-1651).
+export interface PiHandoffRequest {
+	threadId: string;
+	estate: string;
+	requestId: string;
+	// Captured HERE, at the same pre-prune read, so the background run never has
+	// to go back to a checkpoint that pruning has since rewritten.
+	report: string;
+}
+
+export async function getPiHandoffRequest(threadId: string): Promise<PiHandoffRequest | null> {
+	try {
+		const graph = await getGraph();
+		const snapshot = await graph.getState({ configurable: { thread_id: threadId } });
+		const values = snapshot.values as {
+			closeIncidentRequested?: boolean;
+			closingReport?: string;
+			awsTargetEstates?: string[];
+			dataSourceResults?: Array<{ dataSourceId: string; deploymentId?: string }>;
+		};
+		if (!values?.closeIncidentRequested) return null;
+		if (!values.closingReport?.trim()) return null;
+		const estates = estatesFromState({
+			awsTargetEstates: values.awsTargetEstates ?? [],
+			dataSourceResults: (values.dataSourceResults ?? []) as AgentStateType["dataSourceResults"],
+		});
+		const estate = estates[0];
+		if (!estate) return null;
+		return { threadId, estate, requestId: threadId, report: values.closingReport };
+	} catch (error) {
+		getLogger("web:pi-handoff").warn(
+			{ threadId, error: error instanceof Error ? error.message : String(error) },
+			"getPiHandoffRequest failed; skipping pi hand-off for this turn",
 		);
 		return null;
 	}
