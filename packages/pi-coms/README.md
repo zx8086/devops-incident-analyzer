@@ -102,6 +102,9 @@ Both gate `main` in CI (`.github/workflows/ci.yml`). Unit tests cover the monito
 
 ## Deployment
 
+Fleet-wide: `just fleet preflight`, `just fleet deploy <names>` (SIO-1653; see `docs/deployment/deployment.md`, section "Accounts and roots").
+
+
 See [`docs/deployment/deployment.md`](docs/deployment/deployment.md): a private EC2 hub, a Terraform module that puts one read-only Pi agent (plus its monitor) into each AWS account, and the S3 bundle every host converges from. Operational pitfalls are collected in [`docs/deployment/operations-gotchas.md`](docs/deployment/operations-gotchas.md).
 
 ## Safety rails
