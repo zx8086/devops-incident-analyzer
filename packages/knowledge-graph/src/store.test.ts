@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import {
 	_setGraphStoreFactoryForTesting,
+	_setGraphStoreForTesting,
 	_setLbugLoaderForTesting,
 	getGraphStore,
 	graphPath,
@@ -362,4 +363,67 @@ describe("LadybugStore corruption-window hardening (SIO-1236)", () => {
 			const store = new LadybugStore(join(dir, "knowledge-graph"));
 			await expect(store.init()).resolves.toBeUndefined();
 		}));
+});
+
+describe("getGraphStore process-wide slot (survives a re-evaluated module graph)", () => {
+	// Restore the real factory once this suite finishes.
+	afterAll(() => _setGraphStoreFactoryForTesting(undefined));
+
+	// Vite restarts its dev server in place on a root .env change: same PID, new SSR
+	// module runner, linked workspace packages re-evaluated. A second module instance
+	// of store.ts must find the store the first one opened, never open a second
+	// lbug.Database on the same path. A query-string import is a fresh module instance.
+	test("a re-evaluated store module shares the store opened by the first module instance", async () =>
+		withTempDir(async (dir) => {
+			// A regression would make the fresh module open a REAL store at the default path;
+			// point it at a scratch dir so that can never land in a checkout's apps/web/.data.
+			const previous = process.env.KNOWLEDGE_GRAPH_PATH;
+			process.env.KNOWLEDGE_GRAPH_PATH = join(dir, "knowledge-graph");
+			try {
+				let attempts = 0;
+				_setGraphStoreFactoryForTesting(async () => {
+					attempts += 1;
+					return new InMemoryGraphStore();
+				});
+				const first = await getGraphStore();
+
+				const fresh = (await import(`./store.ts?module-graph=${Date.now()}`)) as typeof import("./store.ts");
+				const second = await fresh.getGraphStore();
+
+				expect(second).toBe(first);
+				expect(attempts).toBe(1);
+			} finally {
+				if (previous === undefined) delete process.env.KNOWLEDGE_GRAPH_PATH;
+				else process.env.KNOWLEDGE_GRAPH_PATH = previous;
+			}
+		}));
+
+	test("a test seam in one module instance is visible to another (seams write the shared slot)", async () => {
+		const seeded = new InMemoryGraphStore();
+		_setGraphStoreForTesting(seeded);
+
+		const fresh = (await import(`./store.ts?module-graph=${Date.now()}-seam`)) as typeof import("./store.ts");
+
+		expect(await fresh.getGraphStore()).toBe(seeded);
+	});
+
+	test("reset-on-rejection does not clobber a store swapped in while the attempt was in flight", async () => {
+		let release: () => void = () => undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		_setGraphStoreFactoryForTesting(async () => {
+			await gate;
+			throw new Error("Runtime exception: Corrupted wal file. Read out invalid WAL record type.");
+		});
+		const inFlight = getGraphStore();
+		inFlight.catch(() => undefined);
+
+		const swapped = new InMemoryGraphStore();
+		_setGraphStoreForTesting(swapped);
+		release();
+		await expect(inFlight).rejects.toThrow(/corrupted wal file/i);
+
+		expect(await getGraphStore()).toBe(swapped);
+	});
 });

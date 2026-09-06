@@ -46,7 +46,7 @@ The trailing question nudges the classifier to complex + the router toward code-
    cd /Users/Simon.Owusu@Tommy.com/WebstormProjects/devops-incident-analyzer/apps/web
    KNOWLEDGE_GRAPH_ENABLED=false LIVE_MEMORY_ENABLED=false AGENT_MEMORY_ENABLED=false PORT=5174 bun run dev -- --port 5174 > /tmp/scratch-5174.log 2>&1 &
    ```
-   Track the PID. `KNOWLEDGE_GRAPH_ENABLED=false` is REQUIRED while the user's :5173 runs (the in-process KG MCP would collide on :9087). MCP URLs are in the main root `.env` (base URLs, no `/mcp` suffix -- the bridge appends it).
+   Track the PID. `KNOWLEDGE_GRAPH_ENABLED=false` is REQUIRED while the user's :5173 runs (a second process cannot open the lbug store; since SIO-1645 the pre-flight logs `occupant: kg-same-store` via `/identity` rather than a collision, but writes would still be locked out). MCP URLs are in the main root `.env` (base URLs, no `/mcp` suffix -- the bridge appends it).
 3. Kick off the replay (SSE, 60-180s; `messages[]` shape, NOT a bare `message` string):
    ```bash
    curl -sS -X POST http://localhost:5174/api/agent/stream \

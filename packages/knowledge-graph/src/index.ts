@@ -118,6 +118,7 @@ export {
 	WorkflowNodeSchema,
 } from "./schema.ts";
 export {
+	_getStoreSlotForTest,
 	_setGraphStoreFactoryForTesting,
 	_setGraphStoreForTesting,
 	type GraphRow,
