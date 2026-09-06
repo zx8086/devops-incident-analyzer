@@ -40,6 +40,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#683](https://github.com/zx8086/devops-incident-analyzer/pull/683) | 2026-09-05 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1640 agent-toolkit-for-aws content port (7 files incl. wrap.ts + 2 tests); auto-trigger logged terminal SKIPPED within ~100 ms, CodeRabbit silent (5th straight); first CODE PR merged on a skip, on green CI + MCP-confirmed SKIPPED + explicit per-PR user instruction; detail below |
 | [#684](https://github.com/zx8086/devops-incident-analyzer/pull/684) | 2026-09-05 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1641 SSE pump node allowlist derived from the compiled graph (14 files, all apps/web + 1 doc); auto-trigger logged terminal SKIPPED within ~150 ms, CodeRabbit silent (6th straight); merged on green CI + MCP-confirmed SKIPPED + explicit per-PR user instruction; detail below |
 | [#689](https://github.com/zx8086/devops-incident-analyzer/pull/689) | 2026-09-06 | 0 | n/a (SKIPPED, docs-only) | n/a (no review) | pi-fleet gitagent feasibility report (docs only); seven heads, seven terminal SKIPPED within 125-160 ms via MCP, CodeRabbit silent (10th straight); merged on user authorization; detail below |
+| [#690](https://github.com/zx8086/devops-incident-analyzer/pull/690) | 2026-09-06 | 0 | n/a (never registered) | n/a (no review) | SIO-1654 pi-coms subtree import into packages/pi-coms (about 120 files); Greptile never created a review record on any of four heads, CodeRabbit silent (11th straight); merged on user authorization; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -456,6 +457,8 @@ A code PR: 20 changed files, six new TypeScript sources (hub client, verifier, s
 1. *The skip is no longer explained by docs-only diffs.* Every PR since #680 has been skipped regardless of content, so the cause is repo- or account-level in Greptile, not the classifier. The MCP still answers in one call what GitHub-side polling never would; the escalation path after a skipped code PR is the dashboard, not another re-trigger.
 2. *The MCP trigger does not bypass the skip.* It reports success and is skipped like the others, so it is not a workaround.
 3. *Review coverage for this PR came from the session itself:* unit tests at the fetch boundary, `--isolate` full-suite run, and a live smoke against the real hub that caught one real routing bug (a stale session's queue was being reported as a mailbox send). Record kept in the PR body.
+**Merge 2026-09-06:** rebased twice onto main (`768ebf10`, then `9234c5cf` after #690 landed; only the ledger conflicted the first time). Greptile logged terminal SKIPPED on both rebased heads (ids 22786127, 22787353, about 115 ms each; seven SKIPPED records on this PR in total). CodeRabbit silent throughout. CI green on the final head; squash `e004441c`, merged on the user's "merge all" authorization without the corp-hub smoke test (the user's call; the hub token still has to be minted per hub before the cards work live).
+
 ## PR #683 detail (SIO-1640, agent-toolkit-for-aws content port)
 
 A mixed PR: one new OKF runbook, two edited runbooks/RULES files, one doc, plus a two-line advice-string change in `packages/mcp-server-aws/src/tools/wrap.ts` and two test edits (7 files, +81/-3). Not docs-only, so the #680/#681 carve-out does not apply on its own terms. Its ledger value is that it is the first CODE PR merged after a terminal Greptile skip, and the third data point (after #682) that the skip is not diff-class-specific.
@@ -550,6 +553,22 @@ A code PR: 3 files (gitlab-import source + test, one doc). It stops the `bootstr
 1. *Eighth code-class skip, smallest diff of the run (3 files) and same signature.* Diff size is irrelevant to the skip; the SIO-1642 cause is unchanged.
 2. *The 401 was a config-propagation trap, not a code bug* -- the same rotated token worked for the separately-restarted elastic-iac MCP (bun `--env-file`) while the Vite web process kept the stale value. The backoff makes an invalid token cost one warn per 15 min instead of per trigger; the real remedy (restart after rotation) is now documented at the point it bites.
 3. *Self-verified.* Unit tests for the backoff helper (expired window, changed-token clear, 401 vs 500 handling) and live confirmation that both the rotated `ELASTIC_IAC_GITLAB_TOKEN` and `GITLAB_PERSONAL_ACCESS_TOKEN` reach GitLab (commits + pipelines 200) so the 401 was purely the stale in-process value.
+
+## PR #690 detail (SIO-1654, pi-coms moved into packages/pi-coms by git subtree)
+
+A code PR of about 120 files: the `git subtree add --squash` import of the pi-coms repository (hub, Pi extension, monitor, Terraform, deploy scripts) plus the workspace wiring (package rename, scripts that run the nested monitor install first, root Biome exclusions), the hub wire types moved into `packages/pi-coms/contracts/`, the fleet bundle staged from the subtree with a standalone lockfile and a `--stage-only` dry run, an AWS SDK major-version parity test, a root `justfile`, a CI deploy-checks job, and the sanitizing of an account id default, internal hostnames and personal paths on import. Two CI rounds failed on the pi-coms package only: the imported nested lockfile was Bun lockfile v2 (regenerated as v1), then one hub SSE integration test failed deterministically on Bun 1.3.14 and passed on 1.4.x, so the CI pin moved to 1.4.2 (the standalone pi-coms CI ran 1.4.0; dev machines and fleet hosts run 1.4).
+
+**Greptile:** no review record at all. MCP `list_code_reviews` answered "Merge request not found" for the whole life of the PR across four heads (`e48449f6`, `6de5d2aa`, `af777352`, `ec25457d`), no status check, no comment. This differs from the terminal SKIPPED signature of #680 to #689 and #691: the PR was never registered. Working hypothesis: a file-count or diff-size cutoff before registration; noted on SIO-1642.
+
+**CodeRabbit:** nothing, through CI completion on every head. Eleventh consecutive absence (#679 to #690).
+
+**Merge gate:** CI green on the final head (Typecheck, Lint, YAML check, Test, pi-coms deploy checks), `MERGEABLE`/`CLEAN`, no review record to triage. Code-class; merged on the user's "merge all" authorization. Squash `7847dfbf`. Linear moved SIO-1654 to Done through the PR link.
+
+**Takeaways:**
+
+1. *A large import can fall below Greptile's radar entirely*, which is worse than a skip: nothing to poll, nothing to re-trigger. The MCP call at PR-open time is the only way to tell the two apart.
+2. *Both CI failures were toolchain, not code:* lockfile format and Bun stream semantics. A subtree import brings the source repository's toolchain assumptions with it; check the Bun pin and lockfile versions before the first push.
+3. *Self-verified:* full monorepo suites on 1.4.2, a two-hub isolation smoke on the real hub, `--stage-only` staging test, secret sweep on added lines.
 
 ## PR #689 detail (pi-fleet gitagent feasibility report)
 

@@ -21,6 +21,8 @@ beforeEach(() => {
 	delete process.env.LINEAR_API_KEY;
 	delete process.env.PI_COMS_NET_SERVER_URL;
 	delete process.env.PI_COMS_NET_AUTH_TOKEN;
+	delete process.env.PI_COMS_NET_ENVIRONMENT;
+	delete process.env.PI_COMS_HUBS;
 });
 
 afterEach(() => {
@@ -78,6 +80,8 @@ describe("aggregateMitigation pi verification cards", () => {
 	test("one verify card per assessed estate even at low severity", async () => {
 		process.env.PI_COMS_NET_SERVER_URL = "http://hub.test";
 		process.env.PI_COMS_NET_AUTH_TOKEN = "tok";
+		// The fixture estates are prd; the single hub must serve that environment.
+		process.env.PI_COMS_NET_ENVIRONMENT = "prd";
 		const result = await aggregateMitigation(baseState());
 		const tools = (result.pendingActions ?? []).map((a) => a.tool);
 		expect(tools).toEqual(["verify-with-pi", "verify-with-pi"]);
@@ -89,6 +93,8 @@ describe("aggregateMitigation pi verification cards", () => {
 	test("no cards when the report is too short", async () => {
 		process.env.PI_COMS_NET_SERVER_URL = "http://hub.test";
 		process.env.PI_COMS_NET_AUTH_TOKEN = "tok";
+		// The fixture estates are prd; the single hub must serve that environment.
+		process.env.PI_COMS_NET_ENVIRONMENT = "prd";
 		const result = await aggregateMitigation(baseState({ finalAnswer: "short" }));
 		expect(result.pendingActions).toEqual([]);
 	});

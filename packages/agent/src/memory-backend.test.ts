@@ -48,7 +48,9 @@ import {
 	recallAgentMemory,
 	recallInFlightFleetUpgrades,
 	recordAgentFactNow,
+	resolveRole,
 	resolveUserId,
+	roleForUserId,
 	searchAgentMemory,
 	selectedBackend,
 	setActiveMemorySession,
@@ -185,10 +187,18 @@ describe("selectedBackend / resolveUserId", () => {
 		expect(selectedBackend()).toBe("agent-memory");
 	});
 
-	test("maps each agent to its own user id", () => {
+	test("maps each registered agent to its own user id and role", () => {
 		expect(resolveUserId("incident-analyzer")).toBe("incident-analyzer");
 		expect(resolveUserId("elastic-iac")).toBe("elastic-iac");
-		expect(resolveUserId("anything-else")).toBe("incident-analyzer");
+		expect(resolveRole("incident-analyzer")).toBe("incident-correlator");
+		expect(resolveRole("elastic-iac")).toBe("iac-maker");
+		expect(roleForUserId("elastic-iac")).toBe("iac-maker");
+	});
+
+	test("an unregistered agent name throws instead of sharing the incident-analyzer user (SIO-1635 Phase 0)", () => {
+		expect(() => resolveUserId("pi-fleet")).toThrow('No Agent Memory identity registered for agent "pi-fleet"');
+		expect(() => resolveRole("pi-fleet")).toThrow("pi-fleet");
+		expect(() => roleForUserId("nobody")).toThrow('No Agent Memory identity has user id "nobody"');
 	});
 });
 
