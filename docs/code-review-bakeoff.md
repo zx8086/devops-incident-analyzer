@@ -43,6 +43,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#690](https://github.com/zx8086/devops-incident-analyzer/pull/690) | 2026-09-06 | 0 | n/a (never registered) | n/a (no review) | SIO-1654 pi-coms subtree import into packages/pi-coms (about 120 files); Greptile never created a review record on any of four heads, CodeRabbit silent (11th straight); merged on user authorization; detail below |
 | [#691](https://github.com/zx8086/devops-incident-analyzer/pull/691) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1635 Phase 0: per-environment hubs, hub client mailbox and sender prefix, Agent Memory identity map (17 files); three terminal SKIPPED records on two heads, CodeRabbit silent (12th straight); merged on user authorization; detail below |
 | [#692](https://github.com/zx8086/devops-incident-analyzer/pull/692) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1649 pi-fleet Phase 1: agents/pi-fleet definitions, bridge exporter and semver gate, persona in the fleet bundle, agent-release workflow (44 files); terminal SKIPPED in about 100 ms, CodeRabbit silent (13th straight); merged on user authorization; detail below |
+| [#693](https://github.com/zx8086/devops-incident-analyzer/pull/693) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1653 pi-fleet Phase 1b: fleet manifest, just fleet CLI, adopt mode, nine generated roots, S3 backend (56 files); SKIPPED in about 2.5 s, CodeRabbit silent (14th straight); Test job segfaulted once in packages/agent and passed on re-run; merged on user authorization; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -603,6 +604,22 @@ A code PR of 44 files across agents/, the gitagent bridge, pi-coms and CI: two n
 1. *Coverage came from the session:* 442 bridge tests including a fixture tree that proves memory, hooks, compliance, workflows and the MCP table never reach the package, learned-skill and account-id refusals, section-order equality with the runtime prompt, and a byte-for-byte pin of the generated console file; the staging test runs the exporter end to end inside `publish-fleet.sh`.
 2. *A reviewer would have been useful on the persona text itself* (two long markdown personas distilled from three sources); no automated gate reads prose for contradictions, so that review is now the user's.
 3. *Greptile registers a 44-file PR and skips it in the usual 100 ms*, which narrows the #690 anomaly to something other than size alone (SIO-1642).
+
+## PR #693 detail (SIO-1653 pi-fleet Phase 1b, manifest-driven fleet deploy)
+
+A code PR of 56 files under `packages/pi-coms` plus docs: the gitignored `deploy/fleet.yaml` manifest with a committed nine-account example, the `just fleet` CLI (`scripts/fleet.ts` and `scripts/fleet/` modules behind an injectable AWS layer), the agent module's `readonly_role_mode` adopt path (import block, trust merged by Sid, only the managed `pi-coms-extensions` policy attached), nine generated Terraform roots whose committed files carry no identifiers, and an S3 state backend per environment hub account addressed from a gitignored `backend.hcl`. Nothing applied to AWS.
+
+**Greptile:** terminal **SKIPPED** (id 22790642 on `26bc96fd`), about 2.5 s from creation to completion rather than the usual 100 ms, `strictness: 2`, body null. No status check, no comment, no review object.
+
+**CodeRabbit:** nothing, through CI completion. Fourteenth consecutive absence (#679 to #693).
+
+**Merge gate:** first CI run: Lint, Typecheck, YAML check and pi-coms deploy checks green, Test job died with a Bun 1.4.2 `SIGSEGV` panic inside the `@devops-agent/agent` test process (a package the PR does not touch; every other package exited 0; the same suite passed on #692 minutes earlier). `gh run rerun --failed` passed. Final state `MERGEABLE`/`CLEAN`, Greptile SKIPPED via MCP, zero findings to triage. Code-class; merged on the user's explicit instruction. Squash `41523088`. Linear moved SIO-1653 to Done through the PR link.
+
+**Takeaways:**
+
+1. *A native Bun crash in an untouched package is not a signal about the PR;* the per-package exit lines in the log locate it in seconds, and a re-run settles it. Worth a ticket if it recurs on Bun 1.4.2 in CI.
+2. *Coverage came from the session:* 26 tests over manifest validation, the renderer's "no identifier in a committed file" pin, a preflight decision table with a fake AWS layer, token minting and rotation, hub expectations and rollout commands; `terraform validate` on an adopt root, the prd hub root and a dev root.
+3. *A review would have been most valuable on the adopt-mode trust merge and the S3 backend split;* both are the kind of IAM and state edge a reviewer with Terraform context catches and no test here exercises against AWS.
 
 ## PR #689 detail (pi-fleet gitagent feasibility report)
 
