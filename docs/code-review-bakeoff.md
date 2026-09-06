@@ -47,6 +47,8 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#694](https://github.com/zx8086/devops-incident-analyzer/pull/694) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1650 pi-fleet Phase 2a: pi-fleet pane next to the incident chat, /api/pi routes, sliced await with browser re-poll, pi-coms client exported from the agent barrel (23 files); SKIPPED twice in about 150 ms, CodeRabbit silent (15th straight); Test job segfaulted once in packages/agent and passed on re-run; merged on user authorization; detail below |
 | [#695](https://github.com/zx8086/devops-incident-analyzer/pull/695) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1652 pi-fleet Phase 2b: fetchFleetInbox node before aggregate, fleetInboxDigest sidecar, fleet_inbox SSE event and FleetInboxCard, node count 32 (36 files); SKIPPED twice in about 130 ms, CodeRabbit silent (16th straight); CI green first run; merged on user authorization; detail below |
 | [#696](https://github.com/zx8086/devops-incident-analyzer/pull/696) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1651 pi-fleet Phase 3: pi-handoff workflow registering the skillflow `graph` and `agent` step handlers, structured verdicts into live memory (17 files); SKIPPED twice in about 150 ms, CodeRabbit silent (17th straight); Lint failed the first run on a self-inflicted export-ordering slip, green on the second; merged on user authorization; detail below |
+| [#697](https://github.com/zx8086/devops-incident-analyzer/pull/697) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1655 Phase 2c PR 1: graphFor(agentName) registry replacing the two-agent assumption, pure refactor (8 files); SKIPPED once in about 150 ms, CodeRabbit silent (18th straight); all five CI jobs green first run; merged on user authorization; detail below |
+| [#698](https://github.com/zx8086/devops-incident-analyzer/pull/698) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1655 Phase 2c PR 2: fleet console graph, five hub tools, the untrusted-reply boundary (23 files); SKIPPED three times in about 130 ms each, CodeRabbit silent (19th straight); Typecheck and Lint both failed the first run (a union-typed graph thunk svelte-check caught, and three unformatted files); green on the third; merged on user authorization; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -672,6 +674,39 @@ A code PR of 17 files: the first production wiring of the skillflow executor's `
 2. *A baseline diff turned an ambiguous red into a decision.* Lint also reports 14 pre-existing findings on `main`. Rather than assert they were pre-existing, the session linted `origin/main` in a throwaway worktree and diffed the two sorted lists: identical after the fix. That converted "probably not mine" into evidence, and is cheap enough to be the default when inheriting a red-lint repo.
 3. *The handover's two flagged risks were both retired by reading the code, and a third design point was overturned.* `graph: true` was the correct schema literal, and the workflow needs no `pi-fleet` principal because `senderPrefix` already defaults to the analyzer's own. More consequentially, the handover specified a `graph` handler that re-invokes the pipeline; `classify` already snapshots the report into `closingReport` precisely so closing an incident never re-runs a multi-minute fan-out, so the handler reads the completed turn instead. A reviewer with pipeline context would have been well placed to catch that, and no reviewer ran.
 4. *Where a reviewer would still earn their keep:* the trigger takes only the first assessed estate, and the `readCompletedReport` dependency closes over a report captured before pruning rather than re-reading state. Both are deliberate and documented, and both are the kind of single-call-site assumption that rots quietly when the surrounding code changes.
+
+## PR #697 detail (SIO-1655 Phase 2c PR 1, graphFor registry)
+
+A pure refactor of 8 files, deliberately carrying no new behaviour: a `graphFor(agentName)` registry plus a runtime-free `agent-ids.ts`, replacing four of six graph ternaries, both `!== "incident-analyzer"` early returns, the stream route's hardcoded Zod enum, the topology route's two-name guard, and the binary UI toggle. Two ternaries were deliberately left (they select a different code path over a different state shape, not just a different graph object).
+
+**Greptile:** terminal **SKIPPED** (id 22799662 on `aa1e4e29`), about 146 ms, `strictness: 2`, body null. No status check, no comment, no review object.
+
+**CodeRabbit:** nothing, through CI completion. Eighteenth consecutive absence (#679 to #697).
+
+**Merge gate:** all five CI jobs green on the first run. Zero findings to triage. Code-class; merged on the user's explicit instruction. Squash `756716e2`.
+
+**Takeaways:**
+
+1. *The changed-file lint discipline from #696 paid off immediately:* linting `git diff --name-only origin/main` locally caught two `organizeImports` findings that would otherwise have failed CI exactly as #696's did. The habit converted a repeat CI failure into a local fix.
+2. *A refactor's real gate is "no test changed":* the suite went 368 to 374 with every pre-existing test untouched, which is stronger evidence of behaviour preservation than any assertion in the PR body. One new test pins that cycling the agent list reproduces the old binary toggle exactly.
+3. *Not everything that looks binary is:* `schedules.ts` was listed in the issue as a two-agent site; on inspection its `elastic-iac` reference is a workflow directory path. Reading before refactoring kept an unrelated file out of the diff.
+
+## PR #698 detail (SIO-1655 Phase 2c PR 2, fleet console graph)
+
+23 files: the `agents/pi-fleet-console/` in-process persona (deliberately separate from the export-only `agents/pi-fleet/`), a `createReactAgent` graph with a teardown node, five hub tools, the `wrapUntrusted` injection boundary, an Agent Memory identity, an `/api/agents` endpoint for the selectable list, and the feature doc. Gated by `PI_FLEET_GRAPH_ENABLED`, default off.
+
+**Greptile:** terminal **SKIPPED** three times (ids 22800891 on `415d19d8`, 22801352 on `eeb43fa7`, 22801442 on `cb3cf570`), about 130 ms each, `strictness: 2`, body null.
+
+**CodeRabbit:** nothing, through CI completion. Nineteenth consecutive absence (#679 to #698).
+
+**Merge gate:** Typecheck and Lint both FAILED the first run and were green by the third; the other three jobs were green throughout. Zero findings to triage. Code-class; merged on the user's explicit instruction. Squash `9f125775`.
+
+**Takeaways:**
+
+1. *CI caught a design defect that no local check could have.* `AgentDescriptor.graph` was typed as a union of the two existing graphs, and a `CompiledStateGraph`'s type parameters include its own node-name literals -- so the third graph did not fit, and every agent added would have forced the union wider, in the very registry built to make adding agents cheap. The thunk is now structural. **The root `bun run typecheck` does not run `svelte-check`**, so `apps/web` must be typechecked separately (`cd apps/web && bun run typecheck`); that gap is why it reached CI at all, and it is the single most reusable fact from this PR.
+2. *A misread failure log cost a round.* CI's Lint output listed the 14 pre-existing findings, and the session first read that as the baseline failing. It was not: those are WARNINGS and have never failed CI. The actual failure was three **format** errors in new files, which `biome check` reports separately from lint rules -- so the per-file "any `lint/` or `assist/` findings?" grep used while building sailed straight past them. The corrected habit is to read the `Found N errors` line, not the finding list.
+3. *This is the first path where a hub reply reaches a model,* a deliberate, documented departure from the PR #682 invariant, confined to `wrapUntrusted`. That function and its tests (a reply carrying "ignore previous instructions" stays bounded inside the wrapper; an agent card's `purpose` never reaches the model at all) are what a reviewer with security context should look at hardest -- and no reviewer ran, for the seventh and eighth consecutive code PR.
+4. *Where a reviewer would still earn their keep:* the wrapper is a prompt-level defence, not a parser-level one. It is the right shape for this threat, but its strength is untested against a live adversarial spoke, and the live run is still user-run.
 
 ## PR #689 detail (pi-fleet gitagent feasibility report)
 
