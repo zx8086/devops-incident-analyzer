@@ -110,6 +110,16 @@ pi-coms:
 
 Verify: exporter test asserts section order equals `buildSystemPromptParts` minus skill bodies and that denylisted paths are absent; run the exported persona locally with `pi -e extensions/coms-net.ts --skill <exported skill>` from a cwd holding the exported `AGENTS.override.md` and confirm `/skill:cite-sources` resolves; after one `pi-coms-update` on a dev host, `curl $HUB/v1/agents` shows the persona version in `purpose`.
 
+### Phase 1b: manifest-driven fleet deploy (5 to 8 days, pi-coms side)
+
+Added 2026-09-06 after the user asked for a deploy mechanism that takes a list of accounts and does the bundling, token refresh and deployment through the existing pi-coms path plus the gitagent persona release. Target list: eu-oit-dev, eu-shared-services-dev, eu-shared-services-prd, eu-oit-prd, eu-ediservices-prd, eu-mendix-platform-prd, eu-b2b-ecom-prd, eu-b2becom-v2-prd, eu-b2bonboarding-prd. Two exist today; the seven new ones are all production accounts.
+
+What exists in pi-coms (verified): one hand-written Terraform root per account under `deploy/accounts/<name>/` with gitignored tfvars and gitignored local state; `deploy/modules/agent` creates the host, the `/pi-agent/auth-token` parameter and, when asked, a role named `DevOpsAgentReadOnly`; one private hub in eu-shared-services-dev reached over the Transit Gateway and allow-listed by CIDR; `deploy/publish-fleet.sh` plus State Manager convergence for code; `deploy/token-admin.sh` for per-principal hub tokens. Local access to all nine accounts is by temporary portal credentials in `~/.aws/credentials`, which expire and cannot be refreshed by a script.
+
+Design: a single `deploy/fleet.yaml` (hub block, pinned `persona` release tag from Phase 1, defaults, one `spokes` entry per account with profile, subnet, and `readonly_role: create | adopt`) and a Bun CLI `scripts/fleet.ts` behind `just fleet <cmd> [names]` with idempotent, per-account resumable steps: `preflight` (STS per profile, stopping with the expired list; hub principal present; TGW route and hub allow-list; org membership for the bucket policy; Bedrock inference-profile access; in adopt mode the existing role and trust policy), `tokens ensure|rotate` (per-spoke principal `<name>,monitor-<name>` minted in the hub SSM path and mirrored into the spoke account's parameter, bootstrap re-run over SSM), `render` (roots generated from a template), `plan` and `apply` (prd defaults to plan-only, apply needs `--yes`), `publish` (vendor the persona asset, publish the bundle), `rollout` (Run Command plus the agent restart dance, then poll `GET /v1/agents` for name, bundle SHA and persona version), `status`, and `deploy` as the composition.
+
+The production-account work is the real cost: the seven prd accounts already carry `DevOpsAgentReadOnly` for the incident analyzer, so the module needs an adopt mode that adds the instance role to the existing trust policy without replacing the analyzer's statement and attaches a separate `pi-coms-extensions` policy; prd VPCs must route to the dev shared-services VPC over the TGW and be allow-listed on the hub; one dev hub serving prd spokes works technically but governance may want a prd hub later; the roots should move to an S3 state backend before there are nine of them; Bedrock model access must be enabled per account.
+
 ### Phase 2: side by side (user decision 2026-09-06: 2a thin hub pane first, 2b inbox node added the same day, 2c third graph stays a later option)
 
 - **2a Thin hub pane (1 to 2 days, chosen).** `apps/web/src/routes/api/pi/{agents,messages}/+server.ts` wrapping `PiComsClient` with sender prefix `pi-fleet`, a `PiFleetPane.svelte` and a `pi-fleet.svelte.ts` store. No `AgentId` change, no LangGraph. The human addresses a spoke directly next to the incident chat. Needs a `pi-fleet` hub principal (`just token-create pi-fleet "pi-fleet-*" service`).
@@ -147,6 +157,9 @@ Deferred, separate design: a Pi extension on spokes calling the Couchbase Agent 
 | Two version numbers (bundle SHA vs persona tag) confuse operators | Medium | Persona version stamped in `purpose` and in the context header |
 | Prompt injection from spoke replies into analyzer memory | Medium | Structured-only writes; never `summary` or `evidence` free text |
 | Third-graph tax spreads across ~21 sites | Certain if 2c | Registry refactor first; prefer 2a until synthesis is needed |
+| Trust-policy edit on a prd `DevOpsAgentReadOnly` clobbers the analyzer's access | Medium | Adopt mode merges statements, never replaces; prd defaults to plan-only with per-account approval |
+| Missing TGW route from a prd VPC to the dev hub | Medium | Preflight proves the route before apply; network team owns the attachment |
+| Portal credentials expire mid-deploy | High | Idempotent, per-account resumable steps; preflight per step; the tool cannot refresh portal credentials |
 | Inbox bodies reach the prompt | Medium | Structured-only summary into the prompt; bodies only on the card; test asserts the aggregator context carries no body text |
 | Hub token minted in prd while the hub polls dev | High (open from SIO-1635) | Re-mint in dev; `just token-list eu-shared-services-dev` |
 | Greptile skips reviews org-wide | High | Merges only on explicit per-PR go-ahead (SIO-1642) |
@@ -161,6 +174,7 @@ Replacing Pi with LangGraph on the spokes; making spokes in-process sub-agents; 
 |---|---|---|
 | 0: land #682, widen the two-agent assumptions | [SIO-1635](https://linear.app/siobytes/issue/SIO-1635) (comment of 2026-09-06) | In Progress |
 | 1: definitions, Pi package export, tagged release | [SIO-1649](https://linear.app/siobytes/issue/SIO-1649) | Backlog |
+| 1b: manifest-driven fleet deploy | [SIO-1653](https://linear.app/siobytes/issue/SIO-1653) | Backlog |
 | 2a: thin hub pane in the web app | [SIO-1650](https://linear.app/siobytes/issue/SIO-1650) | Backlog |
 | 2b: fleet inbox enrichment node | [SIO-1652](https://linear.app/siobytes/issue/SIO-1652) | Backlog |
 | 3: skillflow handlers, structured verdicts into memory | [SIO-1651](https://linear.app/siobytes/issue/SIO-1651) | Backlog |
