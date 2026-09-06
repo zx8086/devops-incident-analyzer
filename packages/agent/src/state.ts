@@ -8,6 +8,7 @@ import type {
 	DataSourceContext,
 	DataSourceResult,
 	ExtractedEntities,
+	FleetInboxDigest,
 	GraphBlastRadiusHit,
 	HilApplyReport,
 	HilItemEdits,
@@ -216,6 +217,13 @@ export const AgentState = Annotation.Root({
 	// node always returns the key (undefined included) so a turn with no network
 	// data clears a stale prior-turn map. Read by recordBindings for the KG write.
 	networkTopology: Annotation<NetworkTopology | undefined>({
+		reducer: (_, next) => next,
+		default: () => undefined,
+	}),
+	// SIO-1652: per-turn fleet inbox digest written by fetchFleetInbox (before
+	// aggregate). REPLACE reducer; the node returns the key (undefined included)
+	// whenever it is enabled so a turn without assessed estates clears a stale digest.
+	fleetInboxDigest: Annotation<FleetInboxDigest | undefined>({
 		reducer: (_, next) => next,
 		default: () => undefined,
 	}),

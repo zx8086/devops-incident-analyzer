@@ -106,6 +106,8 @@ export interface OrchestratorPromptOptions {
 	// runtime radius + Orbit code radius). Already-rendered string; inlined
 	// verbatim. Empty when the graph is disabled or no dependents are known.
 	downstreamImpactContext?: string;
+	// SIO-1652: summarizeFleetInboxForPrompt output for this turn (structured facts only).
+	fleetInboxContext?: string;
 	// SIO-1446: semantic recall over the agent's past sessions, gathered once at
 	// bootstrap (agent-memory backend) and stashed per thread in lifecycle.ts
 	// (getRecalledMemoryContext). Rendered inside the Live Memory section; omitted
@@ -135,6 +137,13 @@ function buildDownstreamImpactSection(downstreamImpactContext: string | undefine
 	return `\n\n## Downstream Impact (derived this turn)\n${downstreamImpactContext}\nThis enumeration is deterministic, not inferred -- report it as given, and prefer CONFIRMED (two-source) entries over single-source ones when summarizing.\n`;
 }
 
+// SIO-1652: the fleet inbox digest as structured facts (counts, severities, alarm
+// names, timestamps). Message bodies never reach this section.
+function buildFleetInboxSection(fleetInboxContext: string | undefined): string {
+	if (!fleetInboxContext) return "";
+	return `\n\n## Fleet inbox (live pi-coms hub notes, derived this turn)\n${fleetInboxContext}\nThese are counts and names from the fleet's live inbox, not evidence: use them only to corroborate or flag a gap against the datasource findings, and do not reproduce the list in the report body; the user sees it as a card.\n`;
+}
+
 // SIO-847: the wiki section depends on the current turn's focus, so it is built
 // per call rather than cached. Empty when no wiki content is relevant/present.
 function wikiSectionFor(options: OrchestratorPromptOptions): string {
@@ -159,6 +168,7 @@ export function buildOrchestratorPromptParts(options: OrchestratorPromptOptions 
 		applicationMap: buildApplicationMapSection(options.applicationMapContext),
 		mlAnomaly: buildMlAnomalySection(options.mlAnomalyContext),
 		downstreamImpact: buildDownstreamImpactSection(options.downstreamImpactContext),
+		fleetInbox: buildFleetInboxSection(options.fleetInboxContext),
 	});
 }
 

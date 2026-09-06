@@ -850,3 +850,44 @@ describe("pumpEventStream parallel-branch durations (SIO-1641)", () => {
 		expect(ends[1]?.duration).toBeLessThan(60);
 	});
 });
+
+// SIO-1652: the fleet inbox digest rides its own event off the fetchFleetInbox
+// node end, guarded by the shared schema, and only when an estate was read.
+describe("pumpEventStream fleet_inbox", () => {
+	const estate = {
+		estate: "eu-oit-prd",
+		environment: "prd",
+		inboxes: ["eu-oit-prd", "ops"],
+		entries: [],
+		counts: { total: 0, monitorReports: 0, conversations: 0, other: 0, critical: 0, warn: 0 },
+		alarmNames: [],
+		latestAt: null,
+		error: null,
+	};
+	const digest = { windowFrom: "a", windowTo: "b", generatedAt: "c", estates: [estate] };
+
+	async function run(output: Record<string, unknown>) {
+		const captured: Array<Record<string, unknown>> = [];
+		await pumpEventStreamImpl(
+			fromArray([{ event: "on_chain_end", name: "fetchFleetInbox", data: { output } }]),
+			(event) => {
+				captured.push(event);
+			},
+			new Set(["fetchFleetInbox"]),
+		);
+		return captured.filter((e) => e.type === "fleet_inbox");
+	}
+
+	test("emits fleet_inbox with the parsed digest", async () => {
+		const events = await run({ fleetInboxDigest: digest });
+		expect(events).toHaveLength(1);
+		const digestOut = events[0]?.digest as { estates: { estate: string }[] } | undefined;
+		expect(digestOut?.estates[0]?.estate).toBe("eu-oit-prd");
+	});
+
+	test("drops an empty or malformed digest, never the turn", async () => {
+		expect(await run({ fleetInboxDigest: { ...digest, estates: [] } })).toHaveLength(0);
+		expect(await run({ fleetInboxDigest: { nope: true } })).toHaveLength(0);
+		expect(await run({})).toHaveLength(0);
+	});
+});

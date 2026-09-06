@@ -2,6 +2,7 @@
 import { z } from "zod";
 import { PendingActionSchema } from "./action-types.ts";
 import { HilApplyReportSchema, HilMatchCandidateSchema, LearningProposalSchema } from "./hil-learning.ts";
+import { FleetInboxDigestSchema } from "./pi-coms-types.ts";
 
 export const ToolOutputSchema = z.object({
 	toolName: z.string(),
@@ -913,6 +914,9 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
 	// SIO-1215: once-per-turn ML anomaly explainer (replace semantics), emitted from
 	// the extractFindings on_chain_end branch when the builder found matching records.
 	z.object({ type: z.literal("ml_anomaly_explainer"), explainer: MlAnomalyExplainerSchema }),
+	// SIO-1652: once-per-turn fleet inbox digest (replace semantics), emitted from the
+	// fetchFleetInbox on_chain_end branch when at least one estate was read.
+	z.object({ type: z.literal("fleet_inbox"), digest: FleetInboxDigestSchema }),
 	z.object({ type: z.literal("node_start"), nodeId: z.string() }),
 	z.object({ type: z.literal("node_end"), nodeId: z.string(), duration: z.number() }),
 	z.object({ type: z.literal("suggestions"), suggestions: z.array(z.string()) }),

@@ -3,7 +3,7 @@
 > **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
 > **Last updated:** 2026-07-19
 
-The agent pipeline is a LangGraph StateGraph that processes user queries through classification, normalization, optional runbook selection, entity extraction, optional AWS estate expansion, canonical identifier resolution, parallel datasource querying, cross-datasource alignment, aggregation, typed-findings extraction, mandatory cross-agent correlation enforcement, confidence gating, validation, branched mitigation proposal (investigate / monitor / escalate), follow-up generation, and topic-shift detection. A separate human-in-the-loop learning lane branches off `classify` on an explicit `learn from TICKET-123` command. The graph is defined in `packages/agent/src/graph.ts` and compiled with a checkpointer for conversation persistence. Node count: **31 total = 21 base nodes + 4 gated knowledge-graph nodes + 6 gated HIL-learning nodes**. The 4 KG nodes (`recordEntities`, `graphEnrich`, `recordRootCause`, SIO-1100 `recordBindings`) are always registered but edged only when `KNOWLEDGE_GRAPH_ENABLED` is exactly `"true"` or `"1"`; the 6 HIL-learning nodes (`learnFetchTicket`, `learnMatchIncident`, `learnMatchGate`, `learnDistill`, `learnReviewGate`, `applyLearnings`, SIO-1126) are always registered but routed only when `HIL_LEARNING_ENABLED` (default on) and a learn command is detected (the SIO-640 edge-gate idiom), so `grep -c addNode packages/agent/src/graph.ts` = 31. See [knowledge-graph.md](knowledge-graph.md) for the KG nodes and the [HIL learning lane](#hil-learning-lane) section below.
+The agent pipeline is a LangGraph StateGraph that processes user queries through classification, normalization, optional runbook selection, entity extraction, optional AWS estate expansion, canonical identifier resolution, parallel datasource querying, cross-datasource alignment, aggregation, typed-findings extraction, mandatory cross-agent correlation enforcement, confidence gating, validation, branched mitigation proposal (investigate / monitor / escalate), follow-up generation, and topic-shift detection. A separate human-in-the-loop learning lane branches off `classify` on an explicit `learn from TICKET-123` command. The graph is defined in `packages/agent/src/graph.ts` and compiled with a checkpointer for conversation persistence. Node count: **32 total = 22 base nodes + 4 gated knowledge-graph nodes + 6 gated HIL-learning nodes**. The 22nd base node, `fetchFleetInbox` (SIO-1652), is registered always and reached from `align` only when `PI_COMS_INBOX_ENABLED` is `"true"` or `"1"`. The 4 KG nodes (`recordEntities`, `graphEnrich`, `recordRootCause`, SIO-1100 `recordBindings`) are always registered but edged only when `KNOWLEDGE_GRAPH_ENABLED` is exactly `"true"` or `"1"`; the 6 HIL-learning nodes (`learnFetchTicket`, `learnMatchIncident`, `learnMatchGate`, `learnDistill`, `learnReviewGate`, `applyLearnings`, SIO-1126) are always registered but routed only when `HIL_LEARNING_ENABLED` (default on) and a learn command is detected (the SIO-640 edge-gate idiom), so `grep -c addNode packages/agent/src/graph.ts` = 32. See [knowledge-graph.md](knowledge-graph.md) for the KG nodes and the [HIL learning lane](#hil-learning-lane) section below.
 
 ---
 
@@ -75,8 +75,13 @@ elastic kafka capella konnect gitlab atlassian aws  (one per datasource, paralle
         | aligned         | retryTargets.length > 0
         |                 | && alignmentRetries < 2
         v                 |
++------------------+       |
+| fetchFleetInbox  |       |  (PI_COMS_INBOX_ENABLED, default off; SIO-1652:
++--------+---------+       |   hub inboxes -> fleetInboxDigest, before the prompt)
+         |                |
+         v                |
 +-------+------+          |
-|  aggregate   | ---------+  (via routeAfterAlignment)
+|  aggregate   | ---------+  (via routeAfterAlignment; the retry re-enters here)
 +-------+------+
         |
         v
@@ -380,6 +385,10 @@ All four severity keys are required; the schema rejects partial configs. Filenam
 **LLM model:** None (deterministic logic)
 
 ---
+
+### fetchFleetInbox
+
+SIO-1652 (pi-fleet Phase 2b). Deterministic, registered always, reached from `align` only when `PI_COMS_INBOX_ENABLED` is `"true"` or `"1"` (the SIO-640 edge-gate idiom; `routeAfterAlignmentThenInbox` in `graph.ts` redirects the alignment router's plain `"aggregate"` answer through this node and leaves retry `Send`s untouched). It runs BEFORE `aggregate` so the structured summary is in state when the report prompt is built; the validate retry loop re-enters at `aggregate` directly, so it runs once per turn. For each assessed AWS estate (`estatesFromState`) it reads the estate's pi-coms inbox and its hub's `ops` inbox from the hub of the estate's own environment (never another environment's hub), filters to the incident window and drops the analyzer's own senders, classifies rows (monitor report parsed from the monitor's report format, completed conversation, other) and writes the `fleetInboxDigest` sidecar (replace reducer). Every read is bounded by `PI_COMS_INBOX_TIMEOUT_MS` (default 5 s) and soft-fails per estate. Only counts, severities, alarm names and timestamps reach the prompt (`summarizeFleetInboxForPrompt`); bodies reach the `FleetInboxCard` only, as inert text, via the `fleet_inbox` SSE event. Pure no-op when disabled or when `PI_COMS_HUBS` is unset. See [fleet-inbox-enrichment.md](fleet-inbox-enrichment.md).
 
 ### aggregate
 

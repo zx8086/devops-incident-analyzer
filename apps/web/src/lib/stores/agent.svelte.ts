@@ -4,6 +4,7 @@ import type {
 	ActionResult,
 	ApplicationTopology,
 	DataSourceContext,
+	FleetInboxDigest,
 	HilApplyReport,
 	HilItemEdits,
 	MlAnomalyExplainer,
@@ -68,6 +69,8 @@ export interface ChatMessage {
 	applicationTopology?: ApplicationTopology;
 	// SIO-1215: this turn's ML anomaly explainer (MlAnomalyExplainerCard).
 	mlAnomalyExplainer?: MlAnomalyExplainer;
+	// SIO-1652: this turn's fleet inbox digest (FleetInboxCard).
+	fleetInboxDigest?: FleetInboxDigest;
 	feedback?: "up" | "down" | null;
 	runId?: string;
 	// SIO-1134: the turn's requestId (== KG incident id) for ticket-creation curation.
@@ -106,6 +109,7 @@ function createAgentStore() {
 	let dataSourceProgress = $state<Map<string, { status: string; message?: string }>>(new Map());
 	let dataSourceFindings = $state<Map<string, DataSourceFindings>>(new Map());
 	let networkTopology = $state<NetworkTopology | null>(null);
+	let fleetInboxDigest = $state<FleetInboxDigest | null>(null);
 	let applicationTopology = $state<ApplicationTopology | null>(null);
 	let mlAnomalyExplainer = $state<MlAnomalyExplainer | null>(null);
 	let subAgentProgress = $state<Map<string, SubAgentProgressEntry>>(new Map());
@@ -201,6 +205,7 @@ function createAgentStore() {
 			...(networkTopology && { networkTopology }),
 			...(applicationTopology && { applicationTopology }),
 			...(mlAnomalyExplainer && { mlAnomalyExplainer }),
+			...(fleetInboxDigest && { fleetInboxDigest }),
 			feedback: null,
 			runId: lastRunId,
 			requestId: lastRequestId,
@@ -246,6 +251,7 @@ function createAgentStore() {
 		networkTopology = null;
 		applicationTopology = null;
 		mlAnomalyExplainer = null;
+		fleetInboxDigest = null;
 		subAgentProgress = new Map();
 		activeNodes = new Map();
 		completedNodes = new Map();
@@ -337,6 +343,7 @@ function createAgentStore() {
 			networkTopology = null;
 			applicationTopology = null;
 			mlAnomalyExplainer = null;
+			fleetInboxDigest = null;
 			// SIO-934: when this turn paused on an IaC interrupt, the resume leg continues the
 			// SAME turn -- keep the live pipeline ticker (completedNodes) + iacPipelineProgress so
 			// resumeIac accumulates onto it instead of resetting to just the post-resume nodes.
@@ -360,6 +367,7 @@ function createAgentStore() {
 			networkTopology,
 			applicationTopology,
 			mlAnomalyExplainer,
+			fleetInboxDigest,
 			subAgentProgress,
 			lastSuggestions,
 			lastResponseTime,
@@ -403,6 +411,7 @@ function createAgentStore() {
 		networkTopology = next.networkTopology;
 		applicationTopology = next.applicationTopology;
 		mlAnomalyExplainer = next.mlAnomalyExplainer;
+		fleetInboxDigest = next.fleetInboxDigest;
 		subAgentProgress = next.subAgentProgress;
 		lastSuggestions = next.lastSuggestions;
 		lastResponseTime = next.lastResponseTime;
@@ -635,6 +644,7 @@ function createAgentStore() {
 		networkTopology = null;
 		applicationTopology = null;
 		mlAnomalyExplainer = null;
+		fleetInboxDigest = null;
 		subAgentProgress = new Map();
 		activeNodes = new Map();
 		completedNodes = new Map();
@@ -876,6 +886,7 @@ function createAgentStore() {
 		// SIO-1457 (CodeRabbit PR #644): same stale-inherit exposure for both topology maps.
 		if (decision === "fresh") {
 			mlAnomalyExplainer = null;
+			fleetInboxDigest = null;
 			networkTopology = null;
 			applicationTopology = null;
 		}
@@ -910,6 +921,7 @@ function createAgentStore() {
 			networkTopology = null;
 			applicationTopology = null;
 			mlAnomalyExplainer = null;
+			fleetInboxDigest = null;
 			subAgentProgress = new Map();
 		}
 	}

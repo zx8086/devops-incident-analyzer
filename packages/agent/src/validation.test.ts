@@ -47,6 +47,7 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		applicationTopology: undefined,
 		applicationTopologyOverlay: [],
 		mlAnomalyExplainer: undefined,
+		fleetInboxDigest: undefined,
 		dataSourceContext: undefined,
 		requestId: "test-123",
 		attachmentMeta: [],

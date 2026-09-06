@@ -639,3 +639,29 @@ describe("applyStreamEvent renovate_trigger_choice", () => {
 		expect(state.threadId).toBe("t-renovate");
 	});
 });
+
+// SIO-1652: once-per-turn fleet inbox digest for the FleetInboxCard.
+describe("fleet_inbox (SIO-1652)", () => {
+	test("records fleet_inbox and replaces it on the next event", () => {
+		const estate = {
+			estate: "eu-oit-prd",
+			environment: "prd" as const,
+			inboxes: ["eu-oit-prd", "ops"],
+			entries: [],
+			counts: { total: 0, monitorReports: 0, conversations: 0, other: 0, critical: 0, warn: 0 },
+			alarmNames: [],
+			latestAt: null,
+			error: null,
+		};
+		const digest = { windowFrom: "a", windowTo: "b", generatedAt: "c", estates: [estate] };
+		const initial = initialReducerState();
+		expect(initial.fleetInboxDigest).toBeNull();
+		const next = applyStreamEvent(initial, { type: "fleet_inbox", digest });
+		expect(next.fleetInboxDigest?.estates[0]?.estate).toBe("eu-oit-prd");
+		const replaced = applyStreamEvent(next, {
+			type: "fleet_inbox",
+			digest: { ...digest, estates: [{ ...estate, estate: "eu-b2b-dev", environment: "dev" as const }] },
+		});
+		expect(replaced.fleetInboxDigest?.estates[0]?.estate).toBe("eu-b2b-dev");
+	});
+});

@@ -18,7 +18,7 @@ Layout is discoverable via `ls packages/ apps/ agents/`. Non-obvious facts about
 individual packages:
 
 - `gitagent-bridge/` -- YAML-to-LangGraph adapter (manifest loading, tool mapping, prompt construction); also the pi-fleet persona exporter and semver version gate (SIO-1649): `agents/pi-fleet/` (console) and `agents/pi-fleet/agents/aws-spoke/` (spoke) are exported as a Pi package into the fleet bundle, never dispatched in-process
-- `agent/` -- LangGraph supervisor + the 31-node pipeline (see below)
+- `agent/` -- LangGraph supervisor + the 32-node pipeline (see below)
 - `mcp-server-elastic/` -- 117 tools: 101 cluster incl. 9 ML anomaly-detection (SIO-1148) + 4 ES|QL/async-search (SIO-1391) + 16 conditional cloud/billing gated on `EC_API_KEY`
 - `mcp-server-kafka/` -- 11-61 tools gated: kafka-core + SR + ksqlDB + Connect + REST Proxy
 - `mcp-server-couchbase/` -- ~39 tools (SIO-1107 official Couchbase tools)
@@ -29,12 +29,12 @@ individual packages:
 - `checkpointer/` -- **transient** per-thread LangGraph state only (memory + bun:sqlite)
 - `pi-coms/` -- the pi-coms hub, Pi extension, fleet monitor, Terraform and deploy scripts (SIO-1654 subtree import, layout intact). Its monitor deps live in a nested NON-workspace `scripts/package.json` (never move them into the package manifest: Pi reads that file on install, SIO-1632); the package-local CLAUDE.md and AGENTS.md are read by Pi and stay there. Hub wire types: `packages/pi-coms/contracts/`. Bundle staging: `packages/pi-coms/deploy/publish-fleet.sh --stage-only`. Fleet deploy (SIO-1653): `just fleet <cmd>` over the gitignored `packages/pi-coms/deploy/fleet.yaml`; rendered Terraform roots carry no identifiers.
 
-### Agent Pipeline (31-node LangGraph StateGraph: 21 base + 4 gated KG + 6 gated HIL-learning)
+### Agent Pipeline (32-node LangGraph StateGraph: 22 base + 4 gated KG + 6 gated HIL-learning)
 
 ```text
 START -> classify -> {simple: responder -> followUp -> END, complex: normalize}
   -> [selectRunbooks] -> entityExtractor -> [awsEstateRouter ->] [resolveIdentifiers ->] detectTopicShift -> fan-out [elastic, kafka, capella, konnect, gitlab, atlassian, aws]
-  -> align -> aggregate -> extractFindings -> {enforceCorrelationsRouter}
+  -> align -> [fetchFleetInbox ->] aggregate -> extractFindings -> {enforceCorrelationsRouter}
   -> [correlationFetch ->] enforceCorrelationsAggregate
   -> checkConfidence -> validate -> {mitigationRouter}
   -> {proposeInvestigate | proposeMonitor | proposeEscalate} -> aggregateMitigation
@@ -50,7 +50,7 @@ See `docs/architecture/agent-pipeline.md` for the full diagram, node-by-node his
 - `resolveIdentifiers` is always edged; `RESOLVE_IDENTIFIERS_ENABLED` defaults ON and self-skips via runtime early-return when `false`.
 - The 6-node HIL learning lane routes off `classify` only on an explicit `learn from TICKET-123` command, gated by `HIL_LEARNING_ENABLED` (defaults ON; kill-switch).
 
-Verified node count: `grep -c addNode packages/agent/src/graph.ts` = 31 (21 base + 4 gated KG + 6 gated HIL-learning).
+Verified node count: `grep -c addNode packages/agent/src/graph.ts` = 32 (22 base + 4 gated KG + 6 gated HIL-learning; the 22nd base node is the SIO-1652 `fetchFleetInbox`, registered always and edged only when `PI_COMS_INBOX_ENABLED=true`).
 
 ### Live Memory + Agent Memory backend (SIO-938)
 

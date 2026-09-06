@@ -17,6 +17,8 @@ import {
 } from "./correlation/enforce-node.ts";
 import { extractEntities } from "./entity-extractor.ts";
 import { extractFindings } from "./extract-findings.ts";
+import { isFleetInboxEnabled } from "./fleet-inbox.ts";
+import { fetchFleetInbox } from "./fleet-inbox-node.ts";
 import { generateSuggestions } from "./follow-up-generator.ts";
 import { graphEnrich, recordGraphEntities, recordRootCauseData } from "./graph-knowledge.ts";
 import { initializeLangSmith } from "./langsmith.ts";
@@ -43,6 +45,16 @@ const graphLogger = getLogger("agent:graph");
 
 // SIO-741: validate -> retry-aggregate OR three parallel mitigation branches.
 // Exported so the dispatcher can be unit-tested without booting the whole graph.
+// SIO-1652: wrap routeAfterAlignment so the plain "aggregate" answer goes through
+// fetchFleetInbox when the node is enabled. Retry Sends pass through untouched.
+export function routeAfterAlignmentThenInbox(fleetInboxEnabled: boolean) {
+	return (state: AgentStateType, config?: RunnableConfig): Send[] | "aggregate" | "fetchFleetInbox" => {
+		const next = routeAfterAlignment(state, config);
+		if (next === "aggregate" && fleetInboxEnabled) return "fetchFleetInbox";
+		return next;
+	};
+}
+
 export function routeAfterValidate(state: AgentStateType): "aggregate" | Send[] {
 	if (shouldRetryValidation(state)) return "aggregate";
 	return [new Send("proposeInvestigate", state), new Send("proposeMonitor", state), new Send("proposeEscalate", state)];
@@ -90,6 +102,11 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 	// graph is enabled, route entityExtractor -> recordEntities -> graphEnrich ->
 	// awsEstateRouter so the aggregator prompt carries graph context. When
 	// disabled, the nodes are registered but unreachable (no edge points at them).
+	// SIO-1652: fleet inbox enrichment (opt-in). The node is registered always and
+	// reached from align only when enabled, immediately before aggregate, so the
+	// structured summary is in state when the report prompt is built.
+	const fleetInboxEnabled = isFleetInboxEnabled();
+	graphLogger.info({ fleetInboxEnabled }, fleetInboxEnabled ? "Fleet inbox node enabled" : "Fleet inbox node disabled");
 	const knowledgeGraphEnabled = isKnowledgeGraphEnabled();
 	graphLogger.info(
 		{ knowledgeGraphEnabled },
@@ -112,6 +129,7 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		.addNode("entityExtractor", traceNode("entityExtractor", extractEntities))
 		.addNode("queryDataSource", traceNode("queryDataSource", queryDataSource))
 		.addNode("align", traceNode("align", checkAlignment))
+		.addNode("fetchFleetInbox", traceNode("fetchFleetInbox", fetchFleetInbox))
 		.addNode("aggregate", traceNode("aggregate", aggregate))
 		.addNode("extractFindings", traceNode("extractFindings", extractFindings))
 		.addNode("correlationFetch", traceNode("correlationFetch", correlationFetch))
@@ -227,7 +245,14 @@ export async function buildGraph(config?: { checkpointerType?: "memory" | "sqlit
 		.addEdge("queryDataSource", "align")
 
 		// Alignment -> Send[] retries or aggregate
-		.addConditionalEdges("align", routeAfterAlignment, ["queryDataSource", "aggregate"])
+		// SIO-1652: the alignment router answers "aggregate" or retry Sends; when the
+		// fleet inbox node is enabled the "aggregate" answer is redirected through it.
+		// routeAfterValidate re-enters at aggregate directly, so the node runs once.
+		.addConditionalEdges("align", routeAfterAlignmentThenInbox(fleetInboxEnabled), [
+			"queryDataSource",
+			fleetInboxEnabled ? "fetchFleetInbox" : "aggregate",
+		])
+		.addEdge("fetchFleetInbox", "aggregate")
 
 		// SIO-681 + SIO-764: Aggregate -> extractFindings -> enforceCorrelations router. extractFindings
 		// derives typed per-domain findings from each sub-agent's toolOutputs[] so the router can read

@@ -110,3 +110,29 @@ describe("assembleOrchestratorPromptParts byte-identity (SIO-1040)", () => {
 		expect(impactIdx).toBeGreaterThan(mlIdx);
 	});
 });
+
+// SIO-1652: fleetInbox is optional and appended LAST (after downstreamImpact),
+// same convention as the sections above.
+describe("fleetInbox section (SIO-1652)", () => {
+	test("fleetInbox omitted keeps the output byte-identical", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const without = assembleOrchestratorPromptParts(agent, SECTIONS);
+		const withUndefined = assembleOrchestratorPromptParts(agent, { ...SECTIONS, fleetInbox: undefined });
+		expect(withUndefined.volatile).toBe(without.volatile);
+		expect(withUndefined.stable).toBe(without.stable);
+	});
+
+	test("fleetInbox provided appends after downstreamImpact", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		const withAll = assembleOrchestratorPromptParts(agent, {
+			...SECTIONS,
+			downstreamImpact: "\n\n## Downstream Impact\nimpact-line",
+			fleetInbox: "\n\n## Fleet inbox\nfleet-line",
+		});
+		const impactIdx = withAll.volatile.indexOf("impact-line");
+		const fleetIdx = withAll.volatile.indexOf("fleet-line");
+		expect(impactIdx).toBeGreaterThan(-1);
+		expect(fleetIdx).toBeGreaterThan(impactIdx);
+		expect(withAll.volatile.endsWith("fleet-line")).toBe(true);
+	});
+});

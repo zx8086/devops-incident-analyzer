@@ -17,6 +17,7 @@ import CouchbaseFindingsCard from "./CouchbaseFindingsCard.svelte";
 import CreateTicketCard from "./CreateTicketCard.svelte";
 import ElasticFindingsCard from "./ElasticFindingsCard.svelte";
 import FeedbackBar from "./FeedbackBar.svelte";
+import FleetInboxCard from "./FleetInboxCard.svelte";
 import FollowUpSuggestions from "./FollowUpSuggestions.svelte";
 import GitLabFindingsCard from "./GitLabFindingsCard.svelte";
 import Icon from "./Icon.svelte";
@@ -162,6 +163,10 @@ const commentMode = $derived(canCommentOnThreadTicket && threadTicket !== null);
 
         {#if !isStreaming && message.mlAnomalyExplainer}
           <MlAnomalyExplainerCard explainer={message.mlAnomalyExplainer} />
+        {/if}
+
+        {#if !isStreaming && message.fleetInboxDigest}
+          <FleetInboxCard digest={message.fleetInboxDigest} />
         {/if}
 
         {#if !isStreaming}

@@ -31,6 +31,9 @@ export interface VolatileSections {
 	// SIO-1305: this turn's fused downstream-impact enumeration. Same optional,
 	// appended-last convention as network/mlAnomaly above.
 	downstreamImpact?: string;
+	// SIO-1652: this turn's fleet inbox summary (structured facts only). Same
+	// optional, appended-last convention as the sections above.
+	fleetInbox?: string;
 }
 
 // Filter the knowledge array to remove non-selected runbooks when a filter is
@@ -69,6 +72,7 @@ export function assembleOrchestratorPromptParts(
 		(sections.network ?? "") +
 		(sections.applicationMap ?? "") +
 		(sections.mlAnomaly ?? "") +
-		(sections.downstreamImpact ?? "");
+		(sections.downstreamImpact ?? "") +
+		(sections.fleetInbox ?? "");
 	return { stable: core, volatile };
 }
