@@ -14,6 +14,8 @@
 // AgentState); collapsing those would hide a real difference behind a lookup.
 
 import { isPiFleetGraphEnabled } from "@devops-agent/agent";
+import type { RunnableConfig } from "@langchain/core/runnables";
+import type { StateSnapshot } from "@langchain/langgraph";
 import { AGENT_IDS, type AgentId, DEFAULT_AGENT_ID, isAgentId } from "$lib/agent-ids";
 import { getGraph, getIacGraph, getPiFleetGraph } from "./agent";
 
@@ -32,7 +34,30 @@ export interface AgentDescriptor {
 	readonly streamsTokens: boolean;
 	// Resolves this agent's compiled graph. Kept as a thunk so registering an
 	// agent never eagerly compiles its graph or connects MCP.
-	readonly graph: () => Promise<Awaited<ReturnType<typeof getGraph>> | Awaited<ReturnType<typeof getIacGraph>>>;
+	//
+	// Typed by what registry CALLERS use, not as a union of concrete graph types.
+	// A CompiledStateGraph's type parameters include its own node-name literals,
+	// so a union would have to be widened for every agent added -- and adding an
+	// agent is exactly what this registry exists to make cheap. Callers that need
+	// a specific graph's state shape (invokeAgent, iacResume) go on calling
+	// getGraph/getIacGraph directly, which is also why those two sites keep their
+	// explicit branch.
+	readonly graph: () => Promise<CompiledGraphLike>;
+}
+
+// The surface every graphFor() caller uses: read a thread's state, write pruning
+// removals back, and draw the topology. Deliberately structural.
+export interface CompiledGraphLike {
+	getState: (config: RunnableConfig) => Promise<StateSnapshot>;
+	// pruneThreadState writes RemoveMessage entries back after a turn.
+	updateState: (config: RunnableConfig, values: unknown, asNode?: string) => Promise<RunnableConfig>;
+	getGraphAsync: (config?: RunnableConfig) => Promise<{ nodes: Record<string, unknown>; edges: DrawableEdge[] }>;
+}
+
+export interface DrawableEdge {
+	source: string;
+	target: string;
+	conditional?: boolean;
 }
 
 const REGISTRY: Readonly<Record<AgentId, AgentDescriptor>> = {
