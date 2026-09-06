@@ -1042,8 +1042,11 @@ describe("backend-unavailable degraded mode (SIO-1646)", () => {
 		expect(rec.sessions).toEqual(["t-memo"]);
 	});
 
-	test("a backend outage warns ONCE per cooldown window across all call sites and stops calling the service", async () => {
+	// SIO-1646 amendment: the observed outage class is WRITE-ONLY (reads keep working). A write
+	// outage must not suppress reads, and must still cost ONE warn per window from the write sites.
+	test("a write outage warns ONCE across the write sites while reads are still attempted", async () => {
 		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		// ensureUser (a write) fails; searchMemory (a read) succeeds -- exactly the write-only shape.
 		const { client, calls } = fakeClient({
 			async ensureUser() {
 				calls.ensureUser++;
@@ -1054,18 +1057,21 @@ describe("backend-unavailable degraded mode (SIO-1646)", () => {
 		setActiveMemorySession("elastic-iac", "t-outage");
 		const warnSpy = spyOnLoggerMethod("warn");
 		try {
+			// Reads: best-effort ensure swallows the write failure, the read proceeds (empty result here).
 			expect(await recallAgentMemory("elastic-iac", "t-outage", "q")).toBeUndefined();
 			expect(await searchAgentMemory("elastic-iac", "q", {}, 5)).toEqual([]);
 			expect(await searchAgentMemory("elastic-iac", "q2", {}, 5)).toEqual([]);
 			expect(await recallInFlightFleetUpgrades("elastic-iac")).toEqual([]);
+			// Writes: gated by the cooldown; the FIRST write warns and arms the window.
 			expect(await recordAgentFactNow("elastic-iac", "fact", { kind: "x" })).toBe(false);
+			expect(await recordAgentFactNow("elastic-iac", "fact2", { kind: "x" })).toBe(false);
 		} finally {
 			warnSpy.restore();
 		}
 		const outageWarns = warnSpy.calls.filter((args) => /agent-memory backend unavailable/.test(String(args[1])));
 		expect(outageWarns).toHaveLength(1);
-		expect(calls.ensureUser).toBe(1);
-		expect(calls.search).toBe(0);
+		// Reads reached searchMemory (not hard-skipped); the write path armed the window once.
+		expect(calls.search).toBeGreaterThan(0);
 	});
 
 	test("a flush that fails in the ensure preamble requeues the batch; teardown drains it after recovery", async () => {
@@ -1126,7 +1132,8 @@ describe("backend-unavailable degraded mode (SIO-1646)", () => {
 		});
 		__setAgentMemoryClient(client);
 		setActiveMemorySession("incident-analyzer", "t-cap");
-		await recallAgentMemory("incident-analyzer", "t-cap", "q"); // arms the cooldown, queue untouched
+		// A write arms the cooldown (SIO-1646 amendment: reads no longer arm it); the queue is untouched.
+		await recordAgentFactNow("incident-analyzer", "arm", { kind: "x" });
 		for (let i = 0; i < MAX_QUEUED_WRITES + 5; i++) enqueueFact(`decision ${i}`, "2026-06-17T00:00:00Z");
 		expect(pendingWriteCount()).toBe(MAX_QUEUED_WRITES);
 		down = false;
@@ -1176,10 +1183,13 @@ describe("backend-unavailable degraded mode (SIO-1646)", () => {
 		__setAgentMemoryClient(client);
 		setActiveMemorySession("incident-analyzer", "t-net");
 		recordKeyDecision({ requestId: "r1", decision: "irrelevant" });
-		await flushAgentMemory();
+		await flushAgentMemory(); // fetch failure -> SIO-1170 drop, cooldown armed
 		expect(pendingWriteCount()).toBe(0);
+		// SIO-1646 amendment: a read is still attempted during the window (write-only outage), so it
+		// re-hits ensure best-effort rather than hard-skipping -- 1 from the flush + 1 from the recall.
 		await recallAgentMemory("incident-analyzer", "t-net", "q");
-		expect(calls.ensureUser).toBe(1); // recall skipped inside the window
+		expect(calls.ensureUser).toBe(2);
+		expect(calls.search).toBe(1); // the read reached searchMemory despite the degraded window
 	});
 
 	test("teardown of a session the backend never created is a debug no-op, not a warn", async () => {

@@ -203,8 +203,11 @@ let saturatedUntil = 0;
 // session that was never created). Three pieces make that cost ONE warn per window instead:
 //   - ensureUser/ensureSession are memoized per process (added only after success);
 //   - any BackendUnavailableError or fetch-level failure arms a process-wide cooldown that
-//     short-circuits every read/write site (debug while inside the window); the teardown
-//     flush stays ungated (SIO-1364 invariant) as the last chance to drain;
+//     short-circuits the WRITE sites (queued flush, per-turn flush, direct fact write) while
+//     inside the window; READ sites (recall/search/fleet-recall) are still attempted because the
+//     observed outage class is write-only (reads keep working), and a read that does fail folds
+//     into the same window via noteBackendUnavailable. The teardown flush stays ungated
+//     (SIO-1364 invariant) as the last chance to drain;
 //   - the queue is bounded so a dead backend cannot grow it without limit across a long session.
 export const MAX_QUEUED_WRITES = 200;
 const DEFAULT_DEGRADED_COOLDOWN_SECONDS = 60;
@@ -239,6 +242,30 @@ async function ensureUserAndSession(
 	}
 }
 
+// Best-effort variant for READ paths. The observed outage class is WRITE-ONLY: the service's
+// Couchbase reads (get/search) keep working while mutations fail with a network error (verified
+// live 2026-09-06 -- a degraded write path, reads and FTS search unaffected). ensureUserAndSession
+// is itself a write, so on a write-only outage it throws and would block a recall that could still
+// run against an already-created session. Swallow a transient ensure failure and let the caller
+// attempt the read anyway: if the session already exists the search succeeds; if it does not the
+// search fails its own 404/transient and folds into the same cooldown window. A non-transient
+// ensure error still throws (a real problem, not a degraded backend).
+async function ensureUserAndSessionForRead(
+	c: AgentMemoryClient,
+	userId: string,
+	sessionId: string,
+	name: string,
+	userMetadata: AnnotationMap,
+	sessionAnnotations: AnnotationMap,
+): Promise<void> {
+	try {
+		await ensureUserAndSession(c, userId, sessionId, name, userMetadata, sessionAnnotations);
+	} catch (error) {
+		if (isTransientBackendFailure(error)) return;
+		throw error;
+	}
+}
+
 function isTransientBackendFailure(error: unknown): boolean {
 	return error instanceof BackendUnavailableError || isNetworkFailure(error);
 }
@@ -258,9 +285,11 @@ function noteBackendUnavailable(site: string, error: unknown, extra: Record<stri
 	else logger.warn(fields, "agent-memory backend unavailable; skipping memory calls for the cooldown window");
 }
 
+// Gate for WRITE sites only: reads stay attempted during a write-only outage (see the block
+// comment above). Callers that skip on true are the direct-fact write and the two flush triggers.
 function backendDegraded(site: string): boolean {
 	if (Date.now() >= backendDegradedUntil) return false;
-	logger.debug({ site }, "agent-memory backend degraded; skipping");
+	logger.debug({ site }, "agent-memory backend degraded; skipping write");
 	return true;
 }
 
@@ -535,10 +564,10 @@ export async function recallAgentMemory(
 	query: string,
 ): Promise<string | undefined> {
 	const ref: AgentMemoryUserRef = { userId: resolveUserId(agentName), sessionId: threadId };
-	if (backendDegraded("recall")) return undefined;
+	// A write-only outage must not suppress recall (reads keep working); attempt it, best-effort ensure.
 	try {
 		const c = client();
-		await ensureUserAndSession(
+		await ensureUserAndSessionForRead(
 			c,
 			ref.userId,
 			ref.sessionId,
@@ -672,10 +701,10 @@ export async function searchAgentMemory(
 	const userId = resolveUserId(agentName);
 	const ref: AgentMemoryUserRef = { userId, sessionId: activeRef?.sessionId ?? "recall" };
 	const deterministic = opts?.deterministic ?? false;
-	if (backendDegraded("search")) return [];
+	// Read path: attempt during a write-only outage (best-effort ensure), do not hard-skip.
 	try {
 		const c = client();
-		await ensureUserAndSession(
+		await ensureUserAndSessionForRead(
 			c,
 			userId,
 			ref.sessionId,
@@ -815,10 +844,10 @@ export async function recallInFlightFleetUpgrades(agentName: string): Promise<In
 	// allSessions search needs a session ref; bind a transient one (any session id
 	// works -- the filter spans all sessions for the user).
 	const ref: AgentMemoryUserRef = { userId, sessionId: activeRef?.sessionId ?? "recall" };
-	if (backendDegraded("fleet-recall")) return [];
+	// Read path: attempt during a write-only outage (best-effort ensure), do not hard-skip.
 	try {
 		const c = client();
-		await ensureUserAndSession(
+		await ensureUserAndSessionForRead(
 			c,
 			userId,
 			ref.sessionId,
