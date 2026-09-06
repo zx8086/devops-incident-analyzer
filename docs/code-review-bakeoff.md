@@ -42,6 +42,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#689](https://github.com/zx8086/devops-incident-analyzer/pull/689) | 2026-09-06 | 0 | n/a (SKIPPED, docs-only) | n/a (no review) | pi-fleet gitagent feasibility report (docs only); seven heads, seven terminal SKIPPED within 125-160 ms via MCP, CodeRabbit silent (10th straight); merged on user authorization; detail below |
 | [#690](https://github.com/zx8086/devops-incident-analyzer/pull/690) | 2026-09-06 | 0 | n/a (never registered) | n/a (no review) | SIO-1654 pi-coms subtree import into packages/pi-coms (about 120 files); Greptile never created a review record on any of four heads, CodeRabbit silent (11th straight); merged on user authorization; detail below |
 | [#691](https://github.com/zx8086/devops-incident-analyzer/pull/691) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1635 Phase 0: per-environment hubs, hub client mailbox and sender prefix, Agent Memory identity map (17 files); three terminal SKIPPED records on two heads, CodeRabbit silent (12th straight); merged on user authorization; detail below |
+| [#692](https://github.com/zx8086/devops-incident-analyzer/pull/692) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1649 pi-fleet Phase 1: agents/pi-fleet definitions, bridge exporter and semver gate, persona in the fleet bundle, agent-release workflow (44 files); terminal SKIPPED in about 100 ms, CodeRabbit silent (13th straight); merged on user authorization; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -586,6 +587,22 @@ A code PR: 17 files (shared config schema and barrel, hub client, verifier, memo
 1. *A push can produce two SKIPPED records for one head* (retarget plus force-push landed within the same second); the count is per event, not per head, consistent with the #687 per-review observation.
 2. *Coverage came from the session:* fetch-boundary unit tests asserting the absolute hub URL per estate, a two-hub smoke on the real hub code with log assertions, and the full monorepo suites on Bun 1.4.2.
 3. *The identity map surfaced a latent bug* the reviewers would have been well placed to catch: the write-behind queue resolved a role from an already-resolved user id, correct only because both agents' user ids equal their names.
+
+## PR #692 detail (SIO-1649 pi-fleet Phase 1, personas as gitagent definitions, Pi package exporter, semver version gate, persona in the fleet bundle)
+
+A code PR of 44 files across agents/, the gitagent bridge, pi-coms and CI: two new agent definitions (`agents/pi-fleet/` console and `agents/pi-fleet/agents/aws-spoke/` spoke with a `verify-incident-report` skill), semver validation of `agent.yaml` `version` in `loadAgent`, the shared context split into portable and analyzer-runtime halves, an allowlist-only Pi package exporter with a CLI, the fleet bundle carrying `vendor/pi-fleet/` and the bootstrap installing it (context file, global skills, `persona=pi-fleet-vX.Y.Z` in the register purpose), a generated console `AGENTS.md` pinned by a bridge test, and `agent-release.yml` on `pi-fleet-v*` tags. Also the approved `@devops-agent/pi-coms` workspace dependency in `packages/agent` so the hub client imports the wire contract.
+
+**Greptile:** terminal **SKIPPED** on the first head (id 22789330 on `eb48e100`, about 100 ms, `strictness: 2`, body null); registered normally at 44 changed files, so the #690 non-registration was not a plain file-count cutoff at that size. No status check, no comment, no review object.
+
+**CodeRabbit:** nothing, through CI completion on both heads. Thirteenth consecutive absence (#679 to #692).
+
+**Merge gate:** CI green on the final head `cb7a638c` (Typecheck, Lint, YAML check, Test, pi-coms deploy checks), `MERGEABLE`/`CLEAN`, Greptile SKIPPED via MCP, zero findings to triage. Code-class; merged on the user's explicit instruction. Squash `fc5d96cb`. Linear moved SIO-1649 to Done through the PR link.
+
+**Takeaways:**
+
+1. *Coverage came from the session:* 442 bridge tests including a fixture tree that proves memory, hooks, compliance, workflows and the MCP table never reach the package, learned-skill and account-id refusals, section-order equality with the runtime prompt, and a byte-for-byte pin of the generated console file; the staging test runs the exporter end to end inside `publish-fleet.sh`.
+2. *A reviewer would have been useful on the persona text itself* (two long markdown personas distilled from three sources); no automated gate reads prose for contradictions, so that review is now the user's.
+3. *Greptile registers a 44-file PR and skips it in the usual 100 ms*, which narrows the #690 anomaly to something other than size alone (SIO-1642).
 
 ## PR #689 detail (pi-fleet gitagent feasibility report)
 
