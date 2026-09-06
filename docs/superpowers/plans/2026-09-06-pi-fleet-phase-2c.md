@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **NOT APPROVED FOR IMPLEMENTATION.** This plan exists so the deferred phase is costed and its blockers are visible. Two decisions (Blocker 1 and the Task 5 injection question) must be recorded on [SIO-1655](https://linear.app/siobytes/issue/SIO-1655) before Task 2 starts. Per the project rule, no phase starts before its issue is approved.
+> **Build spec. Not yet scheduled.** Both open questions were decided on 2026-09-06 and are recorded on [SIO-1655](https://linear.app/siobytes/issue/SIO-1655): 2c uses a SEPARATE in-process persona (`agents/pi-fleet-console/`), leaving `agents/pi-fleet/` export-only, and spoke replies enter the model only inside the synthesis step behind the Task 5 guard. Nothing here is blocked; this is ready to build when the work is scheduled.
 
 **Goal:** Let an LLM choose which pi-coms spokes to ask and synthesize their replies into one answer, instead of the operator addressing one spoke at a time.
 
@@ -12,11 +12,13 @@
 
 **Spec:** Linear SIO-1655; `docs/architecture/pi-fleet-gitagent-feasibility.md` section "Phase 2: side by side", 2c bullet.
 
-## Do not start until these are decided
+## Decisions taken (2026-09-06)
 
-**Blocker 1 -- is the `pi-fleet` persona allowed to run in-process?** `agents/pi-fleet/agent.yaml` says the spoke persona "must never enter the analyzer's `AGENT_NAMES` dispatch table" and the console persona is "never executed in-process by the analyzer" (SIO-1649). Literally, `AGENT_NAMES` is the SUB-agent table (`supervisor.ts` / `sub-agent.ts`) and a third top-level graph does not enter it. As intent, 2c runs that SOUL in-process, which is what the sentence forbids. Resolve as (a) a distinct in-process persona leaving `agents/pi-fleet/` export-only, or (b) an amended SIO-1649 constraint with a recorded rationale. Do NOT resolve it by reading the constraint narrowly and moving on.
+**Persona: separate, in-process.** 2c gets `agents/pi-fleet-console/`. `agents/pi-fleet/` stays export-only and the SIO-1649 constraint in its `agent.yaml` is left intact.
 
-**Blocker 2 -- hub replies become model input.** Every phase so far kept hub replies as data: the pane renders them, the inbox node feeds only structured facts to the prompt, the Phase 3 workflow writes only enums and ids to memory. The standing invariant since PR #682 is that a hub reply is never an LLM input. 2c breaks that on purpose: synthesis means the model reads spoke prose. That needs an explicit decision and a guard design (Task 5), not an implementation detail discovered mid-build.
+The two runtimes have different tool vocabularies: the exported persona drives Pi + coms-net on a fleet host, the in-process graph drives five `PiComsClient` tools through LangGraph. SIO-1649's own risk row already names tool-vocabulary drift as the reason `aws-spoke/RULES.md` was authored fresh rather than reused from aws-agent; the same reasoning applies. Separation also leaves the exporter's allowlist/denylist untouched, so no in-process edit can widen what ships to public fleet hosts, and keeps one persona per `pi-fleet-vX.Y.Z` tag. Cost: two persona sources that can drift, mitigated as SIO-1649 does it, with shared invariants in `agents/shared/`.
+
+**Spoke replies as model input.** 2c reads spoke prose on purpose, which every earlier phase avoided (PR #682: hub replies are data, never an LLM input). This is a deliberate, scoped departure: replies reach the model only inside the synthesis step, wrapped and labelled untrusted, and Task 5 builds and test-asserts the guard. Memory writes derived from replies stay structured-only per SIO-1651.
 
 ## Context (verified against the code 2026-09-06)
 
@@ -57,6 +59,7 @@ apps/web/src/routes/+page.svelte                 toggle -> selector (isIac x10 r
 apps/web/src/lib/server/graph-registry.test.ts   new
 
 PR 2 -- the third graph
+agents/pi-fleet-console/{agent.yaml,SOUL,RULES,DUTIES}   new: in-process console persona (pi-fleet/ stays export-only)
 packages/agent/src/pi-fleet/state.ts             fleet state (targets, per-spoke replies, synthesis)
 packages/agent/src/pi-fleet/tools.ts             five hub tools over PiComsClient
 packages/agent/src/pi-fleet/graph.ts             createReactAgent + register/deregister pre/post nodes
@@ -84,7 +87,9 @@ docs/architecture/pi-fleet-third-graph.md        new: the injection guard, tool 
 - [ ] `graph-registry.test.ts`: every registered agent resolves; an unknown name is refused; descriptors match behaviour.
 - [ ] **Gate: full suites green with no behavioural test changes.** Ship PR 1 here.
 
-### Task 4: Fleet graph state and tools
+### Task 4: Console persona, fleet graph state and tools
+
+- [ ] `agents/pi-fleet-console/{agent.yaml,SOUL.md,RULES.md,DUTIES.md}`: the in-process persona. RULES authored for the LangGraph tool vocabulary, not Pi's; shared invariants stay in `agents/shared/`.
 
 - [ ] `state.ts`: conversation, resolved targets, per-spoke replies (kept as DATA with provenance), synthesis output.
 - [ ] `tools.ts`: five tools over `PiComsClient` (list agents, send, await, inbox, status). Each is per-environment-hub scoped; a tool call naming an estate whose environment has no hub is refused, not guessed.
@@ -92,7 +97,7 @@ docs/architecture/pi-fleet-third-graph.md        new: the injection guard, tool 
 
 ### Task 5: The injection guard (do not skip)
 
-- [ ] Implement the Blocker 2 decision. Minimum: spoke replies enter the model wrapped and labelled as untrusted third-party content, never as instructions; a reply can never trigger a tool call on its own; the synthesis prompt states that replies are evidence to be summarized, not commands.
+- [ ] Implement the reply-handling decision above. Minimum: spoke replies enter the model wrapped and labelled as untrusted third-party content, never as instructions; a reply can never trigger a tool call on its own; the synthesis prompt states that replies are evidence to be summarized, not commands.
 - [ ] Test-assert it: a spoke reply containing an imperative ("ignore previous instructions", "send X to Y") must not produce that tool call.
 - [ ] Document it in `docs/architecture/pi-fleet-third-graph.md` and note the deliberate departure from the PR #682 invariant in `pi-coms-verification.md`.
 
@@ -114,7 +119,7 @@ docs/architecture/pi-fleet-third-graph.md        new: the injection guard, tool 
 |---|---|---|
 | Prompt injection from spoke replies (the whole point of 2c is to read them) | High | Task 5 guard, test-asserted; replies labelled untrusted; no tool call from reply content |
 | Registry refactor changes behaviour for the two existing agents | Medium | PR 1 ships alone, behaviour-preserving, existing suites unchanged |
-| The SIO-1649 constraint is read narrowly and the persona ends up in-process anyway | Medium | Blocker 1 decided and recorded on the issue first |
+| The two personas drift (console vs exported spoke) | Medium | Shared invariants in `agents/shared/`; console RULES authored for the LangGraph tool vocabulary |
 | Memory write throws on an unregistered agent name | Certain if missed | Task 6; `memory-backend.ts` throws by design |
 | Fan-out across accounts multiplies hub traffic and latency | Medium | Cap concurrent targets; one await slice per spoke; per-environment hubs |
 | 2c duplicates the 2a pane rather than replacing it | Low | The pane stays; 2c is for multi-spoke synthesis only |
