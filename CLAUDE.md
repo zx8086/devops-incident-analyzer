@@ -8,7 +8,7 @@ Multi-datasource DevOps incident analysis agent. A LangGraph supervisor orchestr
 
 ## Current State
 
-Fully implemented monorepo: 19 packages, 7 MCP servers, the 31-node LangGraph pipeline below, a separate elastic-iac proposer graph, gitagent declarative agent definitions, and a SvelteKit frontend. All MCP servers use a unified bootstrap (`createMcpApplication` from `@devops-agent/shared`) with standardized logging, 3 transport modes (stdio/http/agentcore), and action-driven tool selection replacing regex filtering. GitLab MCP uses a proxy pattern (forwarding to GitLab's native `/api/v4/mcp` endpoint) plus custom code-analysis tools. The `devops-incident-analyzer-setup-guide.md` is the original architecture blueprint (historical reference).
+Fully implemented monorepo: 19 packages, 7 MCP servers, the 32-node LangGraph pipeline below, a separate elastic-iac proposer graph, the pi-fleet console graph (SIO-1655), gitagent declarative agent definitions, and a SvelteKit frontend. All MCP servers use a unified bootstrap (`createMcpApplication` from `@devops-agent/shared`) with standardized logging, 3 transport modes (stdio/http/agentcore), and action-driven tool selection replacing regex filtering. GitLab MCP uses a proxy pattern (forwarding to GitLab's native `/api/v4/mcp` endpoint) plus custom code-analysis tools. The `devops-incident-analyzer-setup-guide.md` is the original architecture blueprint (historical reference).
 
 ## Architecture
 
@@ -17,7 +17,7 @@ Fully implemented monorepo: 19 packages, 7 MCP servers, the 31-node LangGraph pi
 Layout is discoverable via `ls packages/ apps/ agents/`. Non-obvious facts about
 individual packages:
 
-- `gitagent-bridge/` -- YAML-to-LangGraph adapter (manifest loading, tool mapping, prompt construction); also the pi-fleet persona exporter and semver version gate (SIO-1649): `agents/pi-fleet/` (console) and `agents/pi-fleet/agents/aws-spoke/` (spoke) are exported as a Pi package into the fleet bundle, never dispatched in-process
+- `gitagent-bridge/` -- YAML-to-LangGraph adapter (manifest loading, tool mapping, prompt construction); also the pi-fleet persona exporter and semver version gate (SIO-1649): `agents/pi-fleet/` (console) and `agents/pi-fleet/agents/aws-spoke/` (spoke) are exported as a Pi package into the fleet bundle, never dispatched in-process. Not to be confused with `agents/pi-fleet-console/`, the SEPARATE in-process persona the SIO-1655 fleet graph runs (different tool vocabulary; keeping them apart keeps the exporter's allowlist off the in-process path)
 - `agent/` -- LangGraph supervisor + the 32-node pipeline (see below)
 - `mcp-server-elastic/` -- 117 tools: 101 cluster incl. 9 ML anomaly-detection (SIO-1148) + 4 ES|QL/async-search (SIO-1391) + 16 conditional cloud/billing gated on `EC_API_KEY`
 - `mcp-server-kafka/` -- 11-61 tools gated: kafka-core + SR + ksqlDB + Connect + REST Proxy
@@ -46,18 +46,33 @@ See `docs/architecture/agent-pipeline.md` for the full diagram, node-by-node his
 
 - `enforceCorrelationsRouter` dispatches `correlationFetch` Sends for any unsatisfied correlation rule (e.g. kafka-significant-lag must have a matching elastic-agent finding); `enforceCorrelationsAggregate` then re-evaluates and caps `confidenceCap` at 0.6 when rules remain degraded.
 - `awsEstateRouter` expands a single AWS dispatch into one Send per target estate (cross-account AssumeRole) so the LLM never sees per-account credentials.
+- **Capability flags default ON** (SIO-1655, kill-switch semantics): a gate reads `v !== "false" && v !== "0"`, matching `HIL_LEARNING_ENABLED` / `RESOLVE_IDENTIFIERS_ENABLED`. Only a feature genuinely awaiting live verification uses the opt-in form. The pi-coms gates (`PI_HANDOFF_ENABLED`, `PI_COMS_INBOX_ENABLED`, `PI_FLEET_GRAPH_ENABLED`) are declared in `PiComsCapabilitiesSchema` (`packages/shared/src/config.ts`) with defaults applied in `resolvePiComsConfig` and ONE read point (`readPiComsCapability`), not ad-hoc `process.env` reads at call sites. No `.default()` in the schema. Availability still follows infrastructure: each self-skips without a configured hub, and the fleet console is hidden from the selector without one.
 - The 4 KG nodes (`recordEntities`, `graphEnrich`, `recordRootCause`, `recordBindings`) use the SIO-640 edge-gate idiom: registered always, edged only when `KNOWLEDGE_GRAPH_ENABLED=true`. KG writes are additive + soft-failing, so they never change the answer.
 - `resolveIdentifiers` is always edged; `RESOLVE_IDENTIFIERS_ENABLED` defaults ON and self-skips via runtime early-return when `false`.
 - The 6-node HIL learning lane routes off `classify` only on an explicit `learn from TICKET-123` command, gated by `HIL_LEARNING_ENABLED` (defaults ON; kill-switch).
 
-Verified node count: `grep -c addNode packages/agent/src/graph.ts` = 32 (22 base + 4 gated KG + 6 gated HIL-learning; the 22nd base node is the SIO-1652 `fetchFleetInbox`, registered always and edged only when `PI_COMS_INBOX_ENABLED=true`).
+Verified node count: `grep -c addNode packages/agent/src/graph.ts` = 32 (22 base + 4 gated KG + 6 gated HIL-learning; the 22nd base node is the SIO-1652 `fetchFleetInbox`, registered always and edged when `PI_COMS_INBOX_ENABLED` is not `false`/`0` -- see the capability rule below).
+
+### Three top-level agents (SIO-1655)
+
+The web app runs three compiled graphs, resolved through `graphFor(agentName)` in `apps/web/src/lib/server/graph-registry.ts`. Adding a fourth is one id in `apps/web/src/lib/agent-ids.ts` plus one registry entry, NOT a new `agentName === ...` branch:
+
+| Agent | Graph | Notes |
+|---|---|---|
+| `incident-analyzer` | the 32-node pipeline below | default; the only one with confidence + datasource signals |
+| `elastic-iac` | `packages/agent/src/iac/` | distinct state shape (`IacState`); appends AIMessages instead of streaming tokens |
+| `pi-fleet-console` | `packages/agent/src/pi-fleet/` | SIO-1655: `createReactAgent` over five hub tools; asks several account spokes one question and synthesizes one attributed answer |
+
+Two `agentName === "elastic-iac"` branches REMAIN on purpose in `invokeAgent` and `iacResume`: they select a different code path over a different state shape, not just a different graph object. The descriptor (`hasConfidence`, `hasDataSources`, `streamsTokens`) replaced the name checks that were really capability questions; the `graph` thunk is typed STRUCTURALLY, never as a union of concrete graph types (a `CompiledStateGraph`'s type parameters carry its own node names). `agents/pi-fleet-console/` is a distinct persona from the exported `agents/pi-fleet/`.
+
+**`wrapUntrusted` (`packages/agent/src/pi-fleet/tools.ts`) is the ONLY place in the system where a hub reply reaches a model.** Everywhere else the PR #682 invariant holds: hub replies are data, never an LLM input (the 2a pane renders them, `fetchFleetInbox` feeds only structured facts, the SIO-1651 workflow writes only enums and ids). Inside the console, spoke text is fenced, origin-labelled, capped at 4000 chars and framed as evidence to report rather than obey; `fleet_list_agents` omits the agent-authored `purpose` field entirely. See `docs/architecture/pi-fleet-third-graph.md`.
 
 ### Live Memory + Agent Memory backend (SIO-938)
 
 Both agents keep durable cross-session **live memory**, distinct from the checkpointer (which is transient per-thread graph state only). The single writer is `packages/agent/src/memory-writer.ts` (`readLiveMemory` / `appendDailyLog` / `recordKeyDecision`), gated by `LIVE_MEMORY_ENABLED`, always PII-redacted. Storage is swappable via `LIVE_MEMORY_BACKEND`:
 
 - `file` (default): git-tracked markdown under `agents/<agent>/memory/runtime/*.md` + `memory/wiki/`.
-- `agent-memory`: the Couchbase Agent Memory REST service. `context`/`key-decisions`/wiki -> durable **facts** (no TTL); `dailylog` turns -> conversational **messages** (short TTL via `AGENT_MEMORY_DAILYLOG_TTL_SECONDS`); semantic recall over past sessions at bootstrap. One Agent Memory user per agent (`incident-analyzer`, `elastic-iac`); threadId = session_id.
+- `agent-memory`: the Couchbase Agent Memory REST service. `context`/`key-decisions`/wiki -> durable **facts** (no TTL); `dailylog` turns -> conversational **messages** (short TTL via `AGENT_MEMORY_DAILYLOG_TTL_SECONDS`); semantic recall over past sessions at bootstrap. One Agent Memory user per agent (`incident-analyzer`, `elastic-iac`, `pi-fleet-console`); threadId = session_id. The identity map in `memory-backend.ts` THROWS for an unregistered agent name by design, so a new agent needs an entry there.
 
 The backend is a direct REST client in `packages/shared/src/agent-memory.ts` (no MCP server, no LLM tool surface). It is wired through the `lifecycle.ts` registration seams (`registerMemoryRecaller` / `registerMemoryFlusher`, installed by `installAgentMemory()` in `apps/web/src/lib/server/agent.ts`). A **write-behind queue** in `memory-backend.ts` bridges the synchronous writer to async REST and drains at session teardown, so the writer signatures and the default file path are unchanged when the backend is unset. Env: `AGENT_MEMORY_BASE_URL`, `AGENT_MEMORY_ENABLED`, `AGENT_MEMORY_BEARER_TOKEN` (OIDC). Spec: `docs/superpowers/specs/2026-06-17-couchbase-agent-memory-backend-design.md`.
 
@@ -83,7 +98,7 @@ Agent connects to MCP servers via `MultiServerMCPClient` from `@langchain/mcp-ad
 
 ### Frontend
 
-SvelteKit with Svelte 5 runes, Tailwind CSS (Tommy Hilfiger brand palette), SSE streaming. 9 components: ChatMessage, ChatInput, Icon, MarkdownRenderer, StreamingProgress, CompletedProgress, FeedbackBar, FollowUpSuggestions, DataSourceSelector, plus the SIO-1572 `GraphTriagePanel` and the SIO-1650 `PiFleetPane` split-screen panes (the fleet pane mounts only when `/api/pi/agents` reports a configured pi-coms hub).
+SvelteKit with Svelte 5 runes, Tailwind CSS (Tommy Hilfiger brand palette), SSE streaming. 9 components: ChatMessage, ChatInput, Icon, MarkdownRenderer, StreamingProgress, CompletedProgress, FeedbackBar, FollowUpSuggestions, DataSourceSelector, plus the SIO-1572 `GraphTriagePanel` and the SIO-1650 `PiFleetPane` split-screen panes (the fleet pane mounts only when `/api/pi/agents` reports a configured pi-coms hub). The header agent control cycles the agents `/api/agents` reports (SIO-1655), not a two-agent toggle; `isIac` still gates genuinely IaC-specific rendering.
 
 Action cards (`ActionConfirmationCard`) carry four tools: `notify-slack`, `create-ticket` (LLM-proposed, severity-gated) and `verify-with-pi`, `investigate-with-pi` (SIO-1635, deterministic per assessed AWS estate when the pi-coms hub is configured; see `docs/architecture/pi-coms-verification.md`; hubs are per environment via `PI_COMS_HUBS`, chosen by the estate suffix, never across environments). Executed actions stay in `pendingActions` so their card can show the result. The Agent Memory identity map in `memory-backend.ts` throws for unregistered agent names. The pi-fleet pane (SIO-1650, `apps/web/src/lib/server/pi-fleet.ts`, `/api/pi/{agents,messages,mailbox}`) addresses live spokes directly through the same hub client: one 25 s await slice per request, browser re-polls by message id, replies rendered as data and never fed to an LLM; see `docs/architecture/pi-fleet-pane.md`.
 
