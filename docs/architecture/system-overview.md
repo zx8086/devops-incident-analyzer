@@ -115,11 +115,26 @@ Each MCP server is an independent deployable package with its own entry point, c
 
 ---
 
+## Top-level agents
+
+Three compiled graphs, resolved through `graphFor(agentName)` (`apps/web/src/lib/server/graph-registry.ts`, SIO-1655). Adding a fourth is one id in `apps/web/src/lib/agent-ids.ts` plus one registry entry, not a new `agentName === ...` branch.
+
+| Agent | Graph | Role |
+|---|---|---|
+| `incident-analyzer` | the 32-node pipeline below | Default. The only one carrying confidence and datasource signals. |
+| `elastic-iac` | `packages/agent/src/iac/` | GitOps change proposer. Distinct state shape (`IacState`); appends AIMessages rather than streaming tokens. |
+| `pi-fleet-console` | `packages/agent/src/pi-fleet/` | Asks several live account spokes one question and synthesizes one attributed answer. Offered only where a pi-coms hub is configured. |
+
+Two `agentName === "elastic-iac"` branches remain deliberately in `invokeAgent` and `iacResume`: they select a different code path over a different state shape, not merely a different graph object. The registry descriptor (`hasConfidence`, `hasDataSources`, `streamsTokens`) replaced the name checks that were really capability questions.
+
+**`wrapUntrusted` (`packages/agent/src/pi-fleet/tools.ts`) is the only place in the system where a hub reply reaches a model.** Everywhere else the PR #682 invariant holds -- hub replies are data, never an LLM input.
+
 ## Component Summary
 
 | Component | Package | Responsibility |
 |-----------|---------|---------------|
-| Agent Orchestrator | `packages/agent` | 32-node LangGraph StateGraph (22 base + 4 gated KG + 6 gated HIL-learning): classify, normalize, selectRunbooks, entityExtractor, awsEstateRouter, resolveIdentifiers, fan-out (queryDataSource), align, fetchFleetInbox (SIO-1652, edged only when `PI_COMS_INBOX_ENABLED`), aggregate, extractFindings, enforceCorrelations (correlationFetch + enforceCorrelationsAggregate), checkConfidence, validate, mitigation split (proposeInvestigate / proposeMonitor / proposeEscalate + aggregateMitigation), followUp, detectTopicShift, + gated KG `recordEntities` / `graphEnrich` / `recordRootCause` / `recordBindings`, + gated HIL-learning `learnFetchTicket` / `learnMatchIncident` / `learnMatchGate` / `learnDistill` / `learnReviewGate` / `applyLearnings` |
+| Agent Orchestrator | `packages/agent` | 32-node LangGraph StateGraph (22 base + 4 gated KG + 6 gated HIL-learning): classify, normalize, selectRunbooks, entityExtractor, awsEstateRouter, resolveIdentifiers, fan-out (queryDataSource), align, fetchFleetInbox (SIO-1652, edged unless `PI_COMS_INBOX_ENABLED` is `"false"`/`"0"`), aggregate, extractFindings, enforceCorrelations (correlationFetch + enforceCorrelationsAggregate), checkConfidence, validate, mitigation split (proposeInvestigate / proposeMonitor / proposeEscalate + aggregateMitigation), followUp, detectTopicShift, + gated KG `recordEntities` / `graphEnrich` / `recordRootCause` / `recordBindings`, + gated HIL-learning `learnFetchTicket` / `learnMatchIncident` / `learnMatchGate` / `learnDistill` / `learnReviewGate` / `applyLearnings` |
+| Fleet Console Agent | `packages/agent/src/pi-fleet` | SIO-1655: the third top-level graph. A `createReactAgent` over five pi-coms hub tools (`fleet_list_agents`, `fleet_send`, `fleet_await_reply`, `fleet_inbox`, `fleet_status`) with a teardown node that releases hub registrations on the failure path too. Asks several account spokes one question and synthesizes one attributed answer. Persona `agents/pi-fleet-console/` (distinct from the exported `agents/pi-fleet/`); offered only where a pi-coms hub is configured. See [pi-fleet-third-graph.md](pi-fleet-third-graph.md) |
 | Knowledge Graph MCP Server | `packages/mcp-server-knowledge-graph` | In-process MCP server (:9087, SIO-967) over the embedded lbug graph: curated `kg_*` tools + read-only Cypher; gated on `KNOWLEDGE_GRAPH_ENABLED`. See [knowledge-graph.md](knowledge-graph.md) |
 | Gitagent Bridge | `packages/gitagent-bridge` | Compiles YAML/Markdown agent definitions into runtime config (prompts, models, compliance) |
 | Shared Library | `packages/shared` | Cross-package types, Zod schemas, bootstrap function, telemetry, logging |
@@ -303,7 +318,7 @@ elastic kafka capella konnect gitlab atlassian aws
 17. **followUp** -- Generates 3-4 follow-up question suggestions based on the response context.
 18. **detectTopicShift** -- On follow-up turns, detects whether the new question is a topic shift (warranting a fresh classify) or a continuation (carrying forward prior findings).
 
-Verified node count: `grep -c addNode packages/agent/src/graph.ts` = **32** — **22 base nodes** (the groups above, counting `resolveIdentifiers`, `fetchFleetInbox` (SIO-1652, reached only when `PI_COMS_INBOX_ENABLED` is `"true"` or `"1"`) and `proposeInvestigate` / `proposeMonitor` / `proposeEscalate` separately), plus **4 gated knowledge-graph nodes** (`recordEntities`, `graphEnrich`, `recordRootCause`, `recordBindings`) edged only when `KNOWLEDGE_GRAPH_ENABLED` is exactly `"true"` or `"1"`, plus **6 gated HIL-learning nodes** (`learnFetchTicket`, `learnMatchIncident`, `learnMatchGate`, `learnDistill`, `learnReviewGate`, `applyLearnings`) reachable only when `HIL_LEARNING_ENABLED` (default on) and an explicit `learn from TICKET-123` command routes off `classify`. See [knowledge-graph.md](knowledge-graph.md) for the KG nodes and [agent-pipeline.md](agent-pipeline.md#hil-learning-lane) for the learning lane.
+Verified node count: `grep -c addNode packages/agent/src/graph.ts` = **32** — **22 base nodes** (the groups above, counting `resolveIdentifiers`, `fetchFleetInbox` (SIO-1652, reached unless `PI_COMS_INBOX_ENABLED` is `"false"` or `"0"` -- capability gates default ON since SIO-1655) and `proposeInvestigate` / `proposeMonitor` / `proposeEscalate` separately), plus **4 gated knowledge-graph nodes** (`recordEntities`, `graphEnrich`, `recordRootCause`, `recordBindings`) edged only when `KNOWLEDGE_GRAPH_ENABLED` is exactly `"true"` or `"1"`, plus **6 gated HIL-learning nodes** (`learnFetchTicket`, `learnMatchIncident`, `learnMatchGate`, `learnDistill`, `learnReviewGate`, `applyLearnings`) reachable only when `HIL_LEARNING_ENABLED` (default on) and an explicit `learn from TICKET-123` command routes off `classify`. See [knowledge-graph.md](knowledge-graph.md) for the KG nodes and [agent-pipeline.md](agent-pipeline.md#hil-learning-lane) for the learning lane.
 
 ---
 

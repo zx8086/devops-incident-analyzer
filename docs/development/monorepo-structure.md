@@ -195,7 +195,7 @@ Source: `packages/gitagent-bridge/src/`
 
 ### @devops-agent/agent
 
-LangGraph supervisor with a 31-node StateGraph pipeline (21 base + 4 gated KG + 6 gated HIL-learning). This is the core orchestration package that processes incident queries. See [Agent Pipeline](../architecture/agent-pipeline.md) for the canonical reference; the table below is a summary.
+LangGraph supervisor with a 32-node StateGraph pipeline (22 base + 4 gated KG + 6 gated HIL-learning). This is the core orchestration package that processes incident queries. See [Agent Pipeline](../architecture/agent-pipeline.md) for the canonical reference; the table below is a summary.
 
 | Node | Responsibility |
 |------|----------------|

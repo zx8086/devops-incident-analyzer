@@ -118,7 +118,7 @@ describe("manifest-loader", () => {
 
 ### agent
 
-The LangGraph agent package tests cover the 31-node pipeline (incl. correlation enforcement, typed findings, AWS estate router, resolveIdentifiers, mitigation branch split, gated KG and HIL-learning nodes). Because tests should not require running MCP servers, MCP dependencies are mocked.
+The LangGraph agent package tests cover the 32-node pipeline (incl. correlation enforcement, typed findings, AWS estate router, resolveIdentifiers, mitigation branch split, gated KG and HIL-learning nodes). Because tests should not require running MCP servers, MCP dependencies are mocked.
 
 - **Graph compilation** -- StateGraph builds and compiles without error
 - **Node functions** -- classify, entityExtractor, supervise, align, aggregate, validate
@@ -293,7 +293,7 @@ The npm scripts live in `packages/agent/package.json`; the day-to-day ones are *
 
 | Script | What it does |
 |--------|--------------|
-| `eval:agent` | End-to-end LangSmith `final_response` regression for the full 31-node incident graph (5 incident-shaped queries x evaluators: `datasources_covered`, `confidence_threshold`, `response_quality` LLM judge). `eval:precheck` sanity-checks infra first; `eval:upload-dataset` (re)uploads the dataset. |
+| `eval:agent` | End-to-end LangSmith `final_response` regression for the full 32-node incident graph (5 incident-shaped queries x evaluators: `datasources_covered`, `confidence_threshold`, `response_quality` LLM judge). `eval:precheck` sanity-checks infra first; `eval:upload-dataset` (re)uploads the dataset. |
 | `eval:incident-replay` | Live-replay incident eval (SIO-1371/1372/1374/1378). Adds the tier-3 trajectory-grounded evaluators `runbook_selection_vs_usage` (deterministic) and `citation_grounding` (LLM judge) from SIO-1442. `--ticket DEVOPS-XXXX` (SIO-1454) scopes the run to a single dataset example. |
 | `eval:mcp-tool` | MCP tool-call correctness eval (SIO-1398): a LangSmith set auditing whether each datasource's tools are called correctly and return usable data. `--datasource <id>` scopes it. |
 | `eval:tool-probe` | Direct per-tool health probe -- calls each MCP tool and reports which return data vs. error. This is the tool-**health** measure; `eval:mcp-tool` only observes tools the agent chose to call. |

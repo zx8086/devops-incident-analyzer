@@ -10,7 +10,7 @@ operator's direct line to a spoke; this node never sends anything.
 
 ## Placement and gating
 
-- Registered always, reached only when `PI_COMS_INBOX_ENABLED` is `"true"` or
+- Registered always, reached unless `PI_COMS_INBOX_ENABLED` is `"false"` or
   `"1"` (SIO-640 edge-gate idiom). SIO-1655 flipped this to ON by default
   (kill-switch semantics: `false` or `0` disables); the node self-skips when no
   hub is configured, so a deployment without pi-coms is unaffected. `packages/agent/src/graph.ts`
