@@ -1,6 +1,6 @@
 # Getting Started
 
-> **Targets:** Bun 1.3.9+ | LangGraph | TypeScript 5.x
+> **Targets:** Bun 1.4.2+ | LangGraph | TypeScript 5.x
 > **Last updated:** 2026-04-23
 
 Onboarding guide for the DevOps Incident Analyzer monorepo. Covers prerequisites, initial setup, first run, running tests, and the development workflow. Follow these steps to get a working local environment with all seven MCP servers and the SvelteKit frontend.
@@ -13,7 +13,7 @@ Onboarding guide for the DevOps Incident Analyzer monorepo. Covers prerequisites
 
 | Software | Minimum Version | Verify Command |
 |----------|----------------|----------------|
-| Bun | 1.3.9+ | `bun --version` |
+| Bun | 1.4.2+ | `bun --version` |
 | Docker | 24.0+ | `docker --version` |
 | Docker Compose | 2.20+ | `docker compose version` |
 | Git | 2.40+ | `git --version` |
@@ -70,7 +70,7 @@ bun run typecheck
 bun run lint
 ```
 
-Both commands should complete with zero errors. If `typecheck` fails, confirm you are running Bun 1.3.9+ and that `bun install` completed without errors.
+Both commands should complete with zero errors. If `typecheck` fails, confirm you are running Bun 1.4.2+ and that `bun install` completed without errors.
 
 ---
 
