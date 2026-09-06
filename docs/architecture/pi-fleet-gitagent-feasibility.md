@@ -59,6 +59,8 @@ Total effort roughly 10 to 17 days across both repos depending on the side-by-si
 
 The first draft of this report kept two repositories with a versioned artifact between them. The user overruled that for simplicity: pi-coms moves into this monorepo as `packages/pi-coms/` with its internal layout intact (git subtree import), the fleet bundle is built from that subtree, operators install the console from the local checkout path instead of a git URL, and the analyzer imports the hub wire contract from the package instead of copying it. Tracked as Phase 0b (SIO-1654), which precedes Phases 1 and 1b. Consequences: no GitHub release asset, no version pin file in pi-coms, one CI, one Linear flow, one review ledger; the pi-coms repo is archived only after a full fleet publish from this repo has converged. Every path below that says `deploy/...` in pi-coms means `packages/pi-coms/deploy/...` after the move.
 
+Dependency layout inside the package (user decision 2026-09-06): the monitor and hub runtime dependencies stay in `packages/pi-coms/scripts/package.json` as a nested, non-workspace package. The root install already carries seven of its nine AWS SDK clients through the AWS MCP server package, so registering it with the workspace would save little; what matters is that the manifest Pi reads for the laptop console install stays free of the monitor's dependencies, which is the regression SIO-1632 fixed. The fleet bundle staging step remains the only place that installs that list, and a major-version parity test between the two AWS SDK lists guards against drift.
+
 ## Recommended architecture
 
 ```text
