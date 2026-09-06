@@ -42,13 +42,25 @@ export const LinearConfigSchema = z.object({
 });
 export type LinearConfig = z.infer<typeof LinearConfigSchema>;
 
-// SIO-1635: pi-coms hub client config. No .default() here (project rule); defaults
-// are applied in resolvePiComsConfig (packages/agent/src/action-tools/pi-verifier.ts).
-export const PiComsConfigSchema = z.object({
+// SIO-1635: pi-coms hub client config. One hub per environment (no cross-environment
+// access, user decision 2026-09-06); the estate name suffix selects the hub. No
+// .default() here (project rule); defaults are applied in resolvePiComsConfig
+// (packages/agent/src/action-tools/pi-coms-client.ts).
+export const PiComsEnvironmentSchema = z.enum(["dev", "stg", "prd"]);
+export type PiComsEnvironment = z.infer<typeof PiComsEnvironmentSchema>;
+
+export const PiComsHubConfigSchema = z.object({
 	serverUrl: z.string().url(),
 	authToken: z.string().min(1),
 	project: z.string().min(1),
 	fallbackTarget: z.string().min(1),
+});
+export type PiComsHubConfig = z.infer<typeof PiComsHubConfigSchema>;
+
+export const PiComsConfigSchema = z.object({
+	hubs: z
+		.partialRecord(PiComsEnvironmentSchema, PiComsHubConfigSchema)
+		.refine((hubs) => Object.keys(hubs).length > 0, { message: "at least one hub must be configured" }),
 	estateAgentMap: z.record(z.string(), z.string()),
 	verifyTimeoutMs: z.number().int().positive(),
 	investigateTimeoutMs: z.number().int().positive(),

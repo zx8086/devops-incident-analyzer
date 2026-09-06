@@ -10,21 +10,28 @@ import {
 	PI_VERDICT_RESPONSE_SCHEMA,
 	type PiActionResultPayload,
 	type PiComsConfig,
-	PiComsConfigSchema,
+	type PiComsEnvironment,
+	PiComsEnvironmentSchema,
+	type PiComsHubConfig,
 	PiInvestigationSchema,
 	type PiVerdict,
 	PiVerdictSchema,
 } from "@devops-agent/shared";
 import { z } from "zod";
 import type { AgentStateType } from "../state.ts";
-import { type FetchLike, type PiAgentCard, PiComsClient } from "./pi-coms-client.ts";
+import {
+	type FetchLike,
+	isPiComsConfigured,
+	type PiAgentCard,
+	PiComsClient,
+	resolvePiComsConfig,
+} from "./pi-coms-client.ts";
+
+// Re-exported so executor.ts and the tests keep their import path.
+export { isPiComsConfigured, resolvePiComsConfig };
 
 const logger = getLogger("agent:action-tools:pi-verifier");
 
-const DEFAULT_PROJECT = "default";
-const DEFAULT_FALLBACK_TARGET = "ops";
-const DEFAULT_VERIFY_TIMEOUT_MS = 300_000;
-const DEFAULT_INVESTIGATE_TIMEOUT_MS = 900_000;
 // Above the hub's 30 min default message TTL, so an offline target gets a durable
 // mailbox entry instead of a 404.
 export const PI_MAILBOX_TTL_MS = 24 * 60 * 60 * 1000;
@@ -34,6 +41,7 @@ const ESTATE_DEPLOYMENT_PREFIX = "estate:";
 
 export const PiVerifyParamsSchema = z.object({
 	estate: z.string().min(1),
+	environment: PiComsEnvironmentSchema.optional(),
 	target: z.string().optional(),
 	severity: z.string().optional(),
 	confidence: z.number().optional(),
@@ -45,6 +53,7 @@ export type PiVerifyParams = z.infer<typeof PiVerifyParamsSchema>;
 
 export const PiInvestigateParamsSchema = z.object({
 	estate: z.string().min(1),
+	environment: PiComsEnvironmentSchema.optional(),
 	target: z.string().optional(),
 	severity: z.string().optional(),
 	focus: z.array(z.string()),
@@ -65,58 +74,40 @@ export type PiVerifierDeps = {
 	env?: NodeJS.ProcessEnv;
 };
 
-export function isPiComsConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
-	return !!env.PI_COMS_NET_SERVER_URL && !!env.PI_COMS_NET_AUTH_TOKEN;
+// Environment from the estate name suffix. Estate ids are free-form (keys of
+// AWS_ESTATES), so this is the only convention the router relies on; anything
+// else is refused rather than guessed (no cross-environment access).
+const ESTATE_ENVIRONMENT_SUFFIXES: ReadonlyArray<readonly [suffix: string, environment: PiComsEnvironment]> = [
+	["-dev", "dev"],
+	["-stg", "stg"],
+	["-prd", "prd"],
+	["-prod", "prd"],
+];
+
+export function environmentForEstate(estate: string): PiComsEnvironment | undefined {
+	return ESTATE_ENVIRONMENT_SUFFIXES.find(([suffix]) => estate.endsWith(suffix))?.[1];
 }
 
-function readPositiveInt(raw: string | undefined, fallback: number, name: string): number {
-	if (raw === undefined || raw === "") return fallback;
-	const n = Number(raw);
-	if (!Number.isInteger(n) || n <= 0) {
-		logger.warn({ name, raw, fallback }, "Invalid positive integer env value; using default");
-		return fallback;
+export type HubSelection =
+	| { ok: true; environment: PiComsEnvironment; hub: PiComsHubConfig }
+	| { ok: false; error: string };
+
+export function selectHubForEstate(estate: string, config: Pick<PiComsConfig, "hubs">): HubSelection {
+	const environment = environmentForEstate(estate);
+	if (!environment) {
+		return {
+			ok: false,
+			error: `estate "${estate}" has no recognised environment suffix (-dev, -stg, -prd); refusing to pick a hub`,
+		};
 	}
-	return n;
-}
-
-function readEstateAgentMap(raw: string | undefined): Record<string, string> {
-	if (raw === undefined || raw.trim() === "") return {};
-	try {
-		const parsed: unknown = JSON.parse(raw);
-		const result = z.record(z.string(), z.string()).safeParse(parsed);
-		if (result.success) return result.data;
-		logger.warn({ issues: result.error.issues.length }, "PI_COMS_ESTATE_AGENT_MAP is not a string map; ignoring");
-	} catch (error) {
-		logger.warn(
-			{ error: error instanceof Error ? error.message : String(error) },
-			"PI_COMS_ESTATE_AGENT_MAP is not valid JSON; ignoring",
-		);
+	const hub = config.hubs[environment];
+	if (!hub) {
+		return {
+			ok: false,
+			error: `no pi-coms hub configured for environment "${environment}" (estate "${estate}"); set PI_COMS_HUBS`,
+		};
 	}
-	return {};
-}
-
-// Defaults live here, not in the schema (project rule: no .default() in config schemas).
-export function resolvePiComsConfig(env: NodeJS.ProcessEnv = process.env): PiComsConfig {
-	return PiComsConfigSchema.parse({
-		serverUrl: env.PI_COMS_NET_SERVER_URL,
-		authToken: env.PI_COMS_NET_AUTH_TOKEN,
-		project: env.PI_COMS_NET_PROJECT && env.PI_COMS_NET_PROJECT !== "" ? env.PI_COMS_NET_PROJECT : DEFAULT_PROJECT,
-		fallbackTarget:
-			env.PI_COMS_FALLBACK_TARGET && env.PI_COMS_FALLBACK_TARGET !== ""
-				? env.PI_COMS_FALLBACK_TARGET
-				: DEFAULT_FALLBACK_TARGET,
-		estateAgentMap: readEstateAgentMap(env.PI_COMS_ESTATE_AGENT_MAP),
-		verifyTimeoutMs: readPositiveInt(
-			env.PI_COMS_VERIFY_TIMEOUT_MS,
-			DEFAULT_VERIFY_TIMEOUT_MS,
-			"PI_COMS_VERIFY_TIMEOUT_MS",
-		),
-		investigateTimeoutMs: readPositiveInt(
-			env.PI_COMS_INVESTIGATE_TIMEOUT_MS,
-			DEFAULT_INVESTIGATE_TIMEOUT_MS,
-			"PI_COMS_INVESTIGATE_TIMEOUT_MS",
-		),
-	});
+	return { ok: true, environment, hub };
 }
 
 // The agent name an estate maps to before checking who is online.
@@ -132,7 +123,7 @@ export type ResolvedTarget = { target: string; online: boolean; preferred: strin
 export function resolvePiTarget(
 	estate: string,
 	agents: PiAgentCard[],
-	config: Pick<PiComsConfig, "estateAgentMap" | "fallbackTarget">,
+	config: Pick<PiComsConfig, "estateAgentMap"> & Pick<PiComsHubConfig, "fallbackTarget">,
 	explicitTarget?: string,
 ): ResolvedTarget {
 	const preferred = explicitTarget && explicitTarget !== "" ? explicitTarget : preferredTargetForEstate(estate, config);
@@ -180,11 +171,32 @@ export function proposePiVerification(
 	if (!report || report.length < 50) return [];
 	const estates = estatesFromState(state);
 	if (estates.length === 0) return [];
-	const config = resolvePiComsConfig(env);
+	let config: PiComsConfig;
+	try {
+		config = resolvePiComsConfig(env);
+	} catch (error) {
+		logger.warn(
+			{ error: error instanceof Error ? error.message : String(error) },
+			"pi-coms config invalid; no verification cards",
+		);
+		return [];
+	}
 	const caveats = (state.reportCaveats ?? []).map((c) => `${c.claim} (${c.note})`).slice(0, 10);
-	return estates.slice(0, MAX_VERIFY_CARDS).map((estate) => {
+	// One card per estate that has a hub for its environment; the rest are skipped
+	// with a log line rather than routed anywhere else.
+	const routed = estates.flatMap((estate) => {
+		const selection = selectHubForEstate(estate, config);
+		if (!selection.ok) {
+			logger.warn({ estate, reason: selection.error }, "Skipping verify card: no hub for estate");
+			return [];
+		}
+		return [{ estate, environment: selection.environment }];
+	});
+	routed.sort((a, b) => a.environment.localeCompare(b.environment) || a.estate.localeCompare(b.estate));
+	return routed.slice(0, MAX_VERIFY_CARDS).map(({ estate, environment }) => {
 		const params: PiVerifyParams = {
 			estate,
+			environment,
 			target: preferredTargetForEstate(estate, config),
 			severity: state.normalizedIncident?.severity ?? "medium",
 			confidence: state.confidenceScore,
@@ -271,6 +283,7 @@ export function buildInvestigateFollowUp(
 	if (focus.length === 0) focus.push(`verdict ${verdict.verdict}: ${verdict.summary}`);
 	const followUp: PiInvestigateParams = {
 		estate: params.estate,
+		environment: params.environment,
 		target,
 		severity: params.severity,
 		focus,
@@ -299,11 +312,14 @@ async function runHubTask(input: {
 	config: PiComsConfig;
 	deps: PiVerifierDeps;
 }): Promise<HubOutcome> {
-	const client = new PiComsClient(input.config, { fetchImpl: input.deps.fetchImpl, now: input.deps.now });
+	const selection = selectHubForEstate(input.estate, input.config);
+	if (!selection.ok) return { kind: "failed", error: selection.error };
+	const routing = { estateAgentMap: input.config.estateAgentMap, fallbackTarget: selection.hub.fallbackTarget };
+	const client = new PiComsClient(selection.hub, { fetchImpl: input.deps.fetchImpl, now: input.deps.now });
 	try {
 		await client.register();
 		const agents = await client.listAgents();
-		const resolved = resolvePiTarget(input.estate, agents, input.config, input.explicitTarget);
+		const resolved = resolvePiTarget(input.estate, agents, routing, input.explicitTarget);
 		if (!resolved.online) {
 			logger.info(
 				{ estate: input.estate, preferred: resolved.preferred, fallback: resolved.target },

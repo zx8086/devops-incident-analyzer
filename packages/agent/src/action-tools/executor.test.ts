@@ -140,6 +140,7 @@ describe("executor pi-coms dispatch", () => {
 	beforeEach(() => {
 		delete process.env.PI_COMS_NET_SERVER_URL;
 		delete process.env.PI_COMS_NET_AUTH_TOKEN;
+		delete process.env.PI_COMS_NET_ENVIRONMENT;
 	});
 
 	afterEach(() => {
@@ -173,6 +174,8 @@ describe("executor pi-coms dispatch", () => {
 	test("verify-with-pi maps a hub verdict and follow-up onto the ActionResult", async () => {
 		process.env.PI_COMS_NET_SERVER_URL = "http://hub.test";
 		process.env.PI_COMS_NET_AUTH_TOKEN = "tok";
+		// The single hub serves prd; the estate's suffix must match it (SIO-1635 Phase 0).
+		process.env.PI_COMS_NET_ENVIRONMENT = "prd";
 		const verdict = {
 			verdict: "partially_confirmed",
 			summary: "s",
@@ -182,14 +185,15 @@ describe("executor pi-coms dispatch", () => {
 			const path = String(input).replace("http://hub.test", "");
 			const json = (b: unknown) => new Response(JSON.stringify(b), { headers: { "content-type": "application/json" } });
 			if (path === "/v1/agents/register") return json({ ok: true, agent: { name: "incident-analyzer" } });
-			if (path.startsWith("/v1/agents?")) return json({ agents: [{ session_id: "s", name: "est", status: "online" }] });
+			if (path.startsWith("/v1/agents?"))
+				return json({ agents: [{ session_id: "s", name: "est-prd", status: "online" }] });
 			if (path === "/v1/messages") return json({ ok: true, msg_id: "m1", status: "delivered", target_session: "t" });
 			if (path.startsWith("/v1/messages/m1/await"))
 				return json({ msg_id: "m1", status: "complete", response: verdict, error: null });
 			if (init?.method === "DELETE") return json({ ok: true });
 			return json({ ok: true });
 		}) as typeof fetch;
-		const action: PendingAction = { id: "a-pi-3", tool: "verify-with-pi", params: { estate: "est" }, reason: "r" };
+		const action: PendingAction = { id: "a-pi-3", tool: "verify-with-pi", params: { estate: "est-prd" }, reason: "r" };
 		const result = await executeAction(action, { reportContent: "report", threadId: "t" });
 		expect(result.status).toBe("success");
 		expect(result.result?.kind).toBe("verdict");

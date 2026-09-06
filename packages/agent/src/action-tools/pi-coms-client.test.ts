@@ -2,23 +2,22 @@
 // SIO-1635: the client is exercised against a scripted fetch at the network
 // boundary; no hub process is spawned.
 import { describe, expect, test } from "bun:test";
-import type { PiComsConfig } from "@devops-agent/shared";
+import type { PiComsHubConfig } from "@devops-agent/shared";
 import {
+	isPiComsConfigured,
 	PI_COMS_AWAIT_SLICE_MS,
 	PI_COMS_SENDER_NAME_PREFIX,
 	PiComsClient,
 	PiComsHttpError,
+	resolvePiComsConfig,
 	senderNameFor,
 } from "./pi-coms-client.ts";
 
-const config: PiComsConfig = {
+const hub: PiComsHubConfig = {
 	serverUrl: "http://hub.test",
 	authToken: "tok",
 	project: "default",
 	fallbackTarget: "ops",
-	estateAgentMap: {},
-	verifyTimeoutMs: 60_000,
-	investigateTimeoutMs: 120_000,
 };
 
 type Call = { method: string; path: string; body: unknown; headers: Record<string, string> };
@@ -31,7 +30,7 @@ function scripted(handlers: Array<(call: Call) => { status?: number; body?: unkn
 		);
 		const call: Call = {
 			method: init?.method ?? "GET",
-			path: input.replace(config.serverUrl, ""),
+			path: input.replace(hub.serverUrl, ""),
 			body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
 			headers,
 		};
@@ -55,7 +54,7 @@ describe("PiComsClient", () => {
 
 	test("register posts an explicit sender card with the bearer token", async () => {
 		const { calls, fetchImpl } = scripted([() => ({ body: { ok: true, agent: { name: "incident-analyzer-sid1" } } })]);
-		const client = new PiComsClient(config, { fetchImpl, sessionId: "sid-1" });
+		const client = new PiComsClient(hub, { fetchImpl, sessionId: "sid-1" });
 		await client.register();
 		expect(calls[0]?.path).toBe("/v1/agents/register");
 		expect(calls[0]?.headers.authorization).toBe("Bearer tok");
@@ -71,7 +70,7 @@ describe("PiComsClient", () => {
 			() => ({ body: { ok: true, msg_id: "m1", status: "delivered", target_session: "t1" } }),
 			() => ({ body: { ok: true, msg_id: "m2", status: "queued", target_session: null } }),
 		]);
-		const client = new PiComsClient(config, { fetchImpl, sessionId: "sid-1" });
+		const client = new PiComsClient(hub, { fetchImpl, sessionId: "sid-1" });
 		const sent = await client.send("eu-oit-prd", "check this", {
 			responseSchema: { type: "object" },
 			conversationId: "conv-1",
@@ -93,7 +92,7 @@ describe("PiComsClient", () => {
 
 	test("hub errors surface the status and hub error code", async () => {
 		const { fetchImpl } = scripted([() => ({ status: 404, body: { ok: false, error: "target_not_found" } })]);
-		const client = new PiComsClient(config, { fetchImpl });
+		const client = new PiComsClient(hub, { fetchImpl });
 		const err = await client.send("ghost", "hi").catch((e: unknown) => e);
 		expect(err).toBeInstanceOf(PiComsHttpError);
 		expect((err as PiComsHttpError).status).toBe(404);
@@ -104,7 +103,7 @@ describe("PiComsClient", () => {
 		const { calls, fetchImpl } = scripted([
 			() => ({ body: { msg_id: "m1", status: "complete", response: { ok: 1 }, error: null } }),
 		]);
-		const client = new PiComsClient(config, { fetchImpl });
+		const client = new PiComsClient(hub, { fetchImpl });
 		const reply = await client.awaitReply("m1", 60_000);
 		expect(reply).toEqual({ status: "complete", response: { ok: 1 }, error: null });
 		expect(calls[0]?.path).toBe(`/v1/messages/m1/await?timeout_ms=${PI_COMS_AWAIT_SLICE_MS}`);
@@ -123,7 +122,7 @@ describe("PiComsClient", () => {
 			// slice 2 completes
 			() => ({ body: { msg_id: "m1", status: "complete", response: "done", error: null } }),
 		]);
-		const client = new PiComsClient(config, { fetchImpl, sessionId: "sid-1", now: () => clock });
+		const client = new PiComsClient(hub, { fetchImpl, sessionId: "sid-1", now: () => clock });
 		const reply = await client.awaitReply("m1", 60_000);
 		expect(reply.status).toBe("complete");
 		expect(reply.response).toBe("done");
@@ -140,7 +139,7 @@ describe("PiComsClient", () => {
 			() => ({ body: { msg_id: "m1", status: "timeout", response: null, error: "timeout" } }),
 			() => ({ body: { msg_id: "m1", status: "timeout", response: null, error: "timeout" } }),
 		]);
-		const client = new PiComsClient(config, { fetchImpl });
+		const client = new PiComsClient(hub, { fetchImpl });
 		const reply = await client.awaitReply("m1", 60_000);
 		expect(reply.status).toBe("timeout");
 	});
@@ -155,11 +154,50 @@ describe("PiComsClient", () => {
 			() => ({ body: { msg_id: "m1", status: "delivered", response: null, error: null } }),
 			() => ({ body: { ok: true } }),
 		]);
-		const client = new PiComsClient(config, { fetchImpl, now: () => clock });
+		const client = new PiComsClient(hub, { fetchImpl, now: () => clock });
 		const reply = await client.awaitReply("m1", 10_000);
 		expect(reply.status).toBe("budget_exhausted");
 		expect(reply.error).toContain("10000");
 		expect(calls[0]?.path).toBe("/v1/messages/m1/await?timeout_ms=10000");
+	});
+
+	test("senderNameFor accepts a prefix and the client registers with it", async () => {
+		expect(senderNameFor("abcd1234-x", "fleet-inbox")).toBe("fleet-inbox-abcd1234");
+		const { calls, fetchImpl } = scripted([() => ({ body: { ok: true } })]);
+		const client = new PiComsClient(hub, { fetchImpl, sessionId: "sid-1", senderPrefix: "fleet-inbox" });
+		await client.register();
+		const body = calls[0]?.body as Record<string, unknown>;
+		expect(body.name).toBe("fleet-inbox-sid1");
+	});
+
+	test("heartbeat is public and posts the online status", async () => {
+		const { calls, fetchImpl } = scripted([() => ({ body: { ok: true } })]);
+		const client = new PiComsClient(hub, { fetchImpl, sessionId: "sid-1" });
+		await client.heartbeat();
+		expect(calls[0]?.path).toBe("/v1/agents/sid-1/heartbeat");
+		const body = calls[0]?.body as Record<string, unknown>;
+		expect(body.status).toBe("online");
+	});
+
+	test("mailbox reads the durable inbox with project, name, limit and since", async () => {
+		const message = {
+			msg_id: "01H",
+			sender_name: "monitor-aws-1",
+			target_name: "ops",
+			prompt: "p",
+			status: "queued",
+			error: null,
+			response: null,
+			created_at: "t",
+			delivered_at: null,
+			completed_at: null,
+		};
+		const { calls, fetchImpl } = scripted([() => ({ body: { ok: true, name: "ops", messages: [message] } })]);
+		const client = new PiComsClient(hub, { fetchImpl });
+		const messages = await client.mailbox("ops", { limit: 5, since: "01G" });
+		expect(calls[0]?.method).toBe("GET");
+		expect(calls[0]?.path).toBe("/v1/mailbox?project=default&name=ops&limit=5&since=01G");
+		expect(messages).toEqual([message]);
 	});
 
 	test("deregister only fires after a registration and swallows hub errors", async () => {
@@ -167,7 +205,7 @@ describe("PiComsClient", () => {
 			() => ({ body: { ok: true, agent: { name: "incident-analyzer-sid9" } } }),
 			() => ({ status: 404, body: { ok: false, error: "agent_not_found" } }),
 		]);
-		const client = new PiComsClient(config, { fetchImpl, sessionId: "sid-9" });
+		const client = new PiComsClient(hub, { fetchImpl, sessionId: "sid-9" });
 		await client.deregister();
 		expect(calls.length).toBe(0);
 		await client.register();
@@ -176,5 +214,55 @@ describe("PiComsClient", () => {
 		expect(calls[1]?.path).toBe("/v1/agents/sid-9?project=default");
 		await client.deregister();
 		expect(calls.length).toBe(2);
+	});
+});
+
+describe("resolvePiComsConfig (per-environment hubs)", () => {
+	test("PI_COMS_HUBS json wins and fills project and fallback defaults per hub", () => {
+		const cfg = resolvePiComsConfig({
+			PI_COMS_HUBS: JSON.stringify({
+				dev: { serverUrl: "http://dev.hub.test", authToken: "d" },
+				prd: { serverUrl: "http://prd.hub.test", authToken: "p", project: "fleet", fallbackTarget: "ops-prd" },
+			}),
+		});
+		expect(cfg.hubs.dev).toEqual({
+			serverUrl: "http://dev.hub.test",
+			authToken: "d",
+			project: "default",
+			fallbackTarget: "ops",
+		});
+		expect(cfg.hubs.prd?.project).toBe("fleet");
+		expect(cfg.hubs.stg).toBeUndefined();
+	});
+
+	test("the single-hub variables become a one-entry map for PI_COMS_NET_ENVIRONMENT (default dev)", () => {
+		const cfg = resolvePiComsConfig({ PI_COMS_NET_SERVER_URL: "http://hub.test", PI_COMS_NET_AUTH_TOKEN: "t" });
+		expect(Object.keys(cfg.hubs)).toEqual(["dev"]);
+		const prd = resolvePiComsConfig({
+			PI_COMS_NET_SERVER_URL: "http://hub.test",
+			PI_COMS_NET_AUTH_TOKEN: "t",
+			PI_COMS_NET_ENVIRONMENT: "prd",
+		});
+		expect(Object.keys(prd.hubs)).toEqual(["prd"]);
+	});
+
+	test("a malformed PI_COMS_HUBS is a readable error, never a silent fallback", () => {
+		expect(() =>
+			resolvePiComsConfig({
+				PI_COMS_HUBS: "{not json",
+				PI_COMS_NET_SERVER_URL: "http://hub.test",
+				PI_COMS_NET_AUTH_TOKEN: "t",
+			}),
+		).toThrow("PI_COMS_HUBS");
+		expect(() =>
+			resolvePiComsConfig({ PI_COMS_HUBS: JSON.stringify({ qa: { serverUrl: "http://x.test", authToken: "t" } }) }),
+		).toThrow("PI_COMS_HUBS");
+	});
+
+	test("isPiComsConfigured accepts either form", () => {
+		expect(isPiComsConfigured({})).toBe(false);
+		expect(isPiComsConfigured({ PI_COMS_HUBS: "{}" })).toBe(false);
+		expect(isPiComsConfigured({ PI_COMS_HUBS: '{"dev":{"serverUrl":"http://x.test","authToken":"t"}}' })).toBe(true);
+		expect(isPiComsConfigured({ PI_COMS_NET_SERVER_URL: "http://x.test", PI_COMS_NET_AUTH_TOKEN: "t" })).toBe(true);
 	});
 });

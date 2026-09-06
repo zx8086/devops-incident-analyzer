@@ -8,6 +8,7 @@ import {
 	buildInvestigateFollowUp,
 	buildInvestigatePrompt,
 	buildVerifyPrompt,
+	environmentForEstate,
 	estatesFromState,
 	executePiInvestigate,
 	executePiVerify,
@@ -19,24 +20,36 @@ import {
 	REPORT_CHAR_BUDGET,
 	resolvePiComsConfig,
 	resolvePiTarget,
+	selectHubForEstate,
 } from "./pi-verifier.ts";
 
+// Single-hub form: the hub serves prd, where the fixtures' estates live.
 const env: NodeJS.ProcessEnv = {
 	PI_COMS_NET_SERVER_URL: "http://hub.test",
 	PI_COMS_NET_AUTH_TOKEN: "tok",
+	PI_COMS_NET_ENVIRONMENT: "prd",
+};
+
+// Two hubs, one per environment (no cross-environment access).
+const hubsEnv: NodeJS.ProcessEnv = {
+	PI_COMS_HUBS: JSON.stringify({
+		dev: { serverUrl: "http://dev.hub.test", authToken: "d" },
+		prd: { serverUrl: "http://prd.hub.test", authToken: "p" },
+	}),
 };
 
 const report = `## Summary\n\nALB 5xx spike on checkout at 10:02 UTC caused by target group draining.\n\n## Root Cause\n\nDeployment rolled out with zero healthy targets.\n\nConfidence: 0.72`;
 
-type Call = { method: string; path: string; body: Record<string, unknown> | undefined };
+type Call = { method: string; path: string; url: string; body: Record<string, unknown> | undefined };
 
 function scriptedHub(opts: { agents: PiAgentCard[]; reply?: unknown; replyStatus?: string; sendStatus?: string }) {
 	const calls: Call[] = [];
 	const fetchImpl = async (input: string, init?: RequestInit): Promise<Response> => {
-		const path = input.replace("http://hub.test", "");
+		const parsed = new URL(input);
+		const path = parsed.pathname + parsed.search;
 		const method = init?.method ?? "GET";
 		const body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
-		calls.push({ method, path, body });
+		calls.push({ method, path, url: input, body });
 		const json = (b: unknown, status = 200) =>
 			new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
 		if (path === "/v1/agents/register") return json({ ok: true, agent: { name: "incident-analyzer" } });
@@ -78,6 +91,16 @@ const partialVerdict: PiVerdict = {
 	recommended_investigation: "Check ECS service events around 10:00 UTC.",
 };
 
+const baseState = {
+	finalAnswer: report,
+	awsTargetEstates: ["eu-oit-prd"],
+	dataSourceResults: [],
+	normalizedIncident: { severity: "high" as const },
+	confidenceScore: 0.72,
+	rootCauseDataSources: ["aws"],
+	reportCaveats: [{ guard: "g", claim: "no alarms fired", occurrences: 1, note: "alarms were unscoped" }],
+};
+
 describe("config", () => {
 	test("isPiComsConfigured requires url and token", () => {
 		expect(isPiComsConfigured(env)).toBe(true);
@@ -87,8 +110,8 @@ describe("config", () => {
 
 	test("resolvePiComsConfig applies defaults outside the schema", () => {
 		const cfg = resolvePiComsConfig(env);
-		expect(cfg.project).toBe("default");
-		expect(cfg.fallbackTarget).toBe("ops");
+		expect(cfg.hubs.prd?.project).toBe("default");
+		expect(cfg.hubs.prd?.fallbackTarget).toBe("ops");
 		expect(cfg.estateAgentMap).toEqual({});
 		expect(cfg.verifyTimeoutMs).toBe(300_000);
 		expect(cfg.investigateTimeoutMs).toBe(900_000);
@@ -103,8 +126,8 @@ describe("config", () => {
 			PI_COMS_VERIFY_TIMEOUT_MS: "1000",
 			PI_COMS_INVESTIGATE_TIMEOUT_MS: "oops",
 		});
-		expect(cfg.project).toBe("ops-net");
-		expect(cfg.fallbackTarget).toBe("duty");
+		expect(cfg.hubs.prd?.project).toBe("ops-net");
+		expect(cfg.hubs.prd?.fallbackTarget).toBe("duty");
 		expect(cfg.estateAgentMap).toEqual({ "eu-oit-prd": "eu-oit-dev" });
 		expect(cfg.verifyTimeoutMs).toBe(1000);
 		expect(cfg.investigateTimeoutMs).toBe(900_000);
@@ -168,16 +191,6 @@ describe("estatesFromState", () => {
 });
 
 describe("proposePiVerification", () => {
-	const baseState = {
-		finalAnswer: report,
-		awsTargetEstates: ["eu-oit-prd"],
-		dataSourceResults: [],
-		normalizedIncident: { severity: "high" as const },
-		confidenceScore: 0.72,
-		rootCauseDataSources: ["aws"],
-		reportCaveats: [{ guard: "g", claim: "no alarms fired", occurrences: 1, note: "alarms were unscoped" }],
-	};
-
 	test("returns nothing when the hub is not configured", () => {
 		expect(proposePiVerification(baseState, {})).toEqual([]);
 	});
@@ -203,7 +216,7 @@ describe("proposePiVerification", () => {
 	});
 
 	test("caps the number of cards", () => {
-		const estates = ["e1", "e2", "e3", "e4", "e5"];
+		const estates = ["e1-prd", "e2-prd", "e3-prd", "e4-prd", "e5-prd"];
 		const cards = proposePiVerification({ ...baseState, awsTargetEstates: estates }, env);
 		expect(cards.length).toBe(MAX_VERIFY_CARDS);
 	});
@@ -373,6 +386,71 @@ describe("executePiInvestigate", () => {
 		const out = await executePiInvestigate({ estate: "e" }, report, { env });
 		expect(out.status).toBe("error");
 		expect(out.error).toContain("focus");
+	});
+});
+
+describe("environment routing (no cross-environment access)", () => {
+	test("environmentForEstate reads the suffix and treats -prod as prd", () => {
+		expect(environmentForEstate("eu-oit-dev")).toBe("dev");
+		expect(environmentForEstate("eu-b2b-stg")).toBe("stg");
+		expect(environmentForEstate("eu-oit-prd")).toBe("prd");
+		expect(environmentForEstate("eu-b2b-prod")).toBe("prd");
+		expect(environmentForEstate("eu-oit")).toBeUndefined();
+	});
+
+	test("selectHubForEstate refuses unknown suffixes and unconfigured environments", () => {
+		const config = resolvePiComsConfig(hubsEnv);
+		const prdHub = config.hubs.prd;
+		if (!prdHub) throw new Error("fixture: prd hub missing");
+		expect(selectHubForEstate("eu-oit-prd", config)).toEqual({ ok: true, environment: "prd", hub: prdHub });
+		expect(selectHubForEstate("eu-b2b-stg", config)).toMatchObject({
+			ok: false,
+			error: expect.stringContaining('no pi-coms hub configured for environment "stg"'),
+		});
+		expect(selectHubForEstate("eu-oit", config)).toMatchObject({
+			ok: false,
+			error: expect.stringContaining("no recognised environment suffix"),
+		});
+	});
+
+	test("a prd estate only ever talks to the prd hub", async () => {
+		const { calls, fetchImpl } = scriptedHub({ agents: online, reply: confirmedVerdict });
+		const out = await executePiVerify({ estate: "eu-oit-prd" }, report, { fetchImpl, env: hubsEnv });
+		expect(out.status).toBe("success");
+		expect(calls.length).toBeGreaterThan(0);
+		expect(calls.every((c) => c.url.startsWith("http://prd.hub.test/"))).toBe(true);
+	});
+
+	test("a dev estate only ever talks to the dev hub", async () => {
+		const { calls, fetchImpl } = scriptedHub({
+			agents: [{ session_id: "s1", name: "eu-oit-dev", status: "online" }],
+			reply: confirmedVerdict,
+		});
+		await executePiVerify({ estate: "eu-oit-dev" }, report, { fetchImpl, env: hubsEnv });
+		expect(calls.length).toBeGreaterThan(0);
+		expect(calls.every((c) => c.url.startsWith("http://dev.hub.test/"))).toBe(true);
+	});
+
+	test("an estate with no hub is a readable error and makes no hub call", async () => {
+		const { calls, fetchImpl } = scriptedHub({ agents: online });
+		const out = await executePiVerify({ estate: "eu-b2b-stg" }, report, { fetchImpl, env: hubsEnv });
+		expect(out).toMatchObject({ status: "error", error: expect.stringContaining('environment "stg"') });
+		expect(calls).toEqual([]);
+	});
+
+	test("proposePiVerification skips estates without a hub and orders cards by environment", () => {
+		const cards = proposePiVerification(
+			{ ...baseState, awsTargetEstates: ["eu-oit-prd", "eu-b2b-stg", "eu-oit-dev"] },
+			hubsEnv,
+		);
+		expect(cards.map((c) => [c.params.environment, c.params.estate])).toEqual([
+			["dev", "eu-oit-dev"],
+			["prd", "eu-oit-prd"],
+		]);
+	});
+
+	test("proposePiVerification yields no cards on a malformed hubs map", () => {
+		expect(proposePiVerification(baseState, { PI_COMS_HUBS: "{oops" })).toEqual([]);
 	});
 });
 
