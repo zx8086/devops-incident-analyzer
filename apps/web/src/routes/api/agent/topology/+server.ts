@@ -2,7 +2,7 @@
 
 import { getLogger } from "@devops-agent/observability";
 import { json } from "@sveltejs/kit";
-import { getGraph, getIacGraph } from "$lib/server/agent";
+import { DEFAULT_AGENT_ID, graphFor, isAgentId } from "$lib/server/graph-registry";
 import { normalizeEdges } from "$lib/server/topology";
 import type { RequestHandler } from "./$types";
 
@@ -12,12 +12,12 @@ const log = getLogger("api.agent.topology");
 // the graph triage chart is provably the topology the engine runs. Node ids
 // match the node_start/node_end SSE events the stream route already forwards.
 export const GET: RequestHandler = async ({ url }) => {
-	const agent = url.searchParams.get("agent") ?? "incident-analyzer";
-	if (agent !== "incident-analyzer" && agent !== "elastic-iac") {
+	const agent = url.searchParams.get("agent") ?? DEFAULT_AGENT_ID;
+	if (!isAgentId(agent)) {
 		return json({ error: "Unknown agent" }, { status: 400 });
 	}
 	try {
-		const graph = agent === "elastic-iac" ? await getIacGraph() : await getGraph();
+		const graph = await graphFor(agent);
 		const drawable = await graph.getGraphAsync();
 		const nodes = Object.keys(drawable.nodes);
 		const edges = drawable.edges.map((edge) => ({

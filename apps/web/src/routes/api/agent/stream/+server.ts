@@ -13,6 +13,7 @@ import { getLogger, runWithRequestContext, traceSpan } from "@devops-agent/obser
 import { AttachmentBlockSchema, DataSourceContextSchema } from "@devops-agent/shared";
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
+import { AGENT_IDS } from "$lib/agent-ids";
 import {
 	decrementSseConnections,
 	getClosureRequest,
@@ -46,7 +47,8 @@ const StreamRequestSchema = z.object({
 	),
 	threadId: z.string().optional(),
 	// Which agent/graph to run. Defaults to incident-analyzer.
-	agentName: z.enum(["incident-analyzer", "elastic-iac"]).optional(),
+	// SIO-1655: derived from the registry, so a new agent needs no edit here.
+	agentName: z.enum(AGENT_IDS).optional(),
 	dataSources: z.array(z.string()).optional(),
 	// SIO-649: Elastic deployment IDs to fan out to. Undefined = legacy single-deployment behavior.
 	targetDeployments: z.array(z.string()).optional(),
