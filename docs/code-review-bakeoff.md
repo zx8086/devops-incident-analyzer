@@ -38,7 +38,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#681](https://github.com/zx8086/devops-incident-analyzer/pull/681) | 2026-09-01 | 0 | n/a (SKIPPED, docs-only) | n/a (no review) | Periodic AWS self-check strategy doc; auto-trigger logged as terminal SKIPPED (MCP-confirmed before any long wait, per the #680 lesson), CodeRabbit silent through a 30-min watch; merged on green CI; detail below |
 | [#683](https://github.com/zx8086/devops-incident-analyzer/pull/683) | 2026-09-05 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1640 agent-toolkit-for-aws content port (7 files incl. wrap.ts + 2 tests); auto-trigger logged terminal SKIPPED within ~100 ms, CodeRabbit silent (5th straight); first CODE PR merged on a skip, on green CI + MCP-confirmed SKIPPED + explicit per-PR user instruction; detail below |
 | [#684](https://github.com/zx8086/devops-incident-analyzer/pull/684) | 2026-09-05 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1641 SSE pump node allowlist derived from the compiled graph (14 files, all apps/web + 1 doc); auto-trigger logged terminal SKIPPED within ~150 ms, CodeRabbit silent (6th straight); merged on green CI + MCP-confirmed SKIPPED + explicit per-PR user instruction; detail below |
-| [#689](https://github.com/zx8086/devops-incident-analyzer/pull/689) | 2026-09-06 | 0 | n/a (SKIPPED, docs-only) | n/a (no review) | pi-fleet gitagent feasibility report (docs only); every head logged terminal SKIPPED within 125-160 ms via MCP, CodeRabbit silent (10th straight); merge decision left to the user; detail below |
+| [#689](https://github.com/zx8086/devops-incident-analyzer/pull/689) | 2026-09-06 | 0 | n/a (SKIPPED, docs-only) | n/a (no review) | pi-fleet gitagent feasibility report (docs only); seven heads, seven terminal SKIPPED within 125-160 ms via MCP, CodeRabbit silent (10th straight); merged on user authorization; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -539,11 +539,11 @@ A code PR: 3 files (gitlab-import source + test, one doc). It stops the `bootstr
 
 A docs-only PR: `docs/architecture/pi-fleet-gitagent-feasibility.md` (new) plus the docs index row and changelog entry in `docs/README.md`, later the fleet-inbox section and this ledger row. No code. Tenth consecutive PR logged SKIPPED (#680 to #689: three docs-only, seven code-class).
 
-**Greptile:** four pushes before the rebase onto main, four terminal **SKIPPED** reviews (MCP `list_code_reviews` ids 22779277, 22779340, 22779474, 22780001 on heads `27289de8`, `c7804168`, `63b2cf14`, `98044af0`), `changedFiles` = the docs files, `completedAt` 125-160 ms after `createdAt`, `strictness: 2`, body null. No status check, no comment, no review object. Consulted the MCP after each push; no re-trigger attempted, per the #682 finding that all three trigger paths skip identically.
+**Greptile:** seven pushes (four before the rebase onto main, three after), seven terminal **SKIPPED** reviews (MCP `list_code_reviews` ids 22779277, 22779340, 22779474, 22780001, 22781272, 22782108, 22782497 on heads `27289de8`, `c7804168`, `63b2cf14`, `98044af0`, `b29de45e`, `3da8d48b`, `d1d51502`), `changedFiles` = the docs files, `completedAt` 125-160 ms after `createdAt`, `strictness: 2`, body null. No status check, no comment, no review object. Consulted the MCP after each push; no re-trigger attempted, per the #682 finding that all three trigger paths skip identically.
 
 **CodeRabbit:** nothing, through CI completion on every head. Tenth consecutive absence (#679 to #689).
 
-**Merge gate:** CI green, Greptile SKIPPED on the head SHA via MCP, zero findings to triage. Not merged by the session: the report ends with a merge decision that belongs to the user.
+**Merge gate:** CI green on the final head, `MERGEABLE`/`CLEAN`, Greptile SKIPPED on the head SHA via MCP, zero findings to triage. Docs-only, merged on the user's explicit instruction. Squash `6c935bb2`.
 
 **Takeaways:**
 
