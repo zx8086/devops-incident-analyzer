@@ -24,6 +24,7 @@ import {
 	buildVerifyPrompt,
 	isPiComsConfigured,
 	type PiVerifierDeps,
+	readPiComsCapability,
 	resolvePiComsConfig,
 	runHubTask,
 } from "./action-tools/pi-verifier.ts";
@@ -37,11 +38,11 @@ const logger = getLogger("agent:piHandoffWorkflow");
 // memory-pr guard in incident-close-workflow-handlers.ts).
 const VERIFY_AGENT_TARGET = "aws-spoke";
 
-// SIO-1651: default OFF until live-verified against a hub with a registered
-// spoke (the CLOSURE_LEARNING_ENABLED idiom).
+// SIO-1655: default ON (kill-switch semantics). Set PI_HANDOFF_ENABLED=false (or
+// 0) to disable. runPiHandoff already skips when no hub is configured, so a
+// deployment without pi-coms never sends anything.
 export function isPiHandoffEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-	const v = env.PI_HANDOFF_ENABLED;
-	return v === "true" || v === "1";
+	return readPiComsCapability(env, "handoff");
 }
 
 export interface PiHandoffContext {

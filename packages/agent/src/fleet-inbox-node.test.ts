@@ -69,10 +69,19 @@ const state = {
 };
 
 describe("runFetchFleetInbox", () => {
+	// SIO-1655: the capability defaults ON, so "disabled" is now an explicit
+	// "false"/"0" rather than an unset/empty value. The two no-op paths are
+	// unchanged: explicitly disabled, or enabled with no hub configured.
 	test("is a pure no-op when disabled or unconfigured, without any network call", async () => {
 		const { calls, fetchImpl } = hubFake(() => undefined);
-		expect(await runFetchFleetInbox(state, { env: { ...env, PI_COMS_INBOX_ENABLED: "" }, fetchImpl, now })).toEqual({});
-		expect(await runFetchFleetInbox(state, { env: { PI_COMS_INBOX_ENABLED: "true" }, fetchImpl, now })).toEqual({});
+		expect(
+			await runFetchFleetInbox(state, { env: { ...env, PI_COMS_INBOX_ENABLED: "false" }, fetchImpl, now }),
+		).toEqual({});
+		expect(await runFetchFleetInbox(state, { env: { ...env, PI_COMS_INBOX_ENABLED: "0" }, fetchImpl, now })).toEqual(
+			{},
+		);
+		// Enabled by default but no hub configured: still no network call.
+		expect(await runFetchFleetInbox(state, { env: {}, fetchImpl, now })).toEqual({});
 		expect(calls).toEqual([]);
 	});
 

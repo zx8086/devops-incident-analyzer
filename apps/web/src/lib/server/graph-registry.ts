@@ -13,7 +13,7 @@
 // selects a whole different code path over a different state shape (IacState vs
 // AgentState); collapsing those would hide a real difference behind a lookup.
 
-import { isPiFleetGraphEnabled } from "@devops-agent/agent";
+import { isPiComsConfigured, isPiFleetGraphEnabled } from "@devops-agent/agent";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StateSnapshot } from "@langchain/langgraph";
 import { AGENT_IDS, type AgentId, DEFAULT_AGENT_ID, isAgentId } from "$lib/agent-ids";
@@ -111,11 +111,17 @@ export function listAgents(): readonly AgentDescriptor[] {
 	return Object.values(REGISTRY);
 }
 
-// The agents a user may actually pick this deployment. The fleet console is
-// hidden unless its flag is on: it needs a configured pi-coms hub, and offering
-// an agent whose graph cannot build would be a dead end in the UI.
+// The agents a user may actually pick this deployment.
+//
+// SIO-1655: the fleet console's CAPABILITY is on by default, but its
+// AVAILABILITY follows the infrastructure that serves it. Without a configured
+// pi-coms hub its graph cannot build, so offering it would be a dead end in the
+// UI -- the flag says whether the feature is wanted, isPiComsConfigured says
+// whether it can work, and both must hold.
 export function listSelectableAgents(env: NodeJS.ProcessEnv = process.env): readonly AgentDescriptor[] {
-	return listAgents().filter((a) => a.id !== "pi-fleet-console" || isPiFleetGraphEnabled(env));
+	return listAgents().filter(
+		(a) => a.id !== "pi-fleet-console" || (isPiFleetGraphEnabled(env) && isPiComsConfigured(env)),
+	);
 }
 
 // The lookup that replaces `agentName === "elastic-iac" ? getIacGraph() : getGraph()`.

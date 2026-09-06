@@ -11,8 +11,13 @@ describe("PiComsConfigSchema (SIO-1635 Phase 0 hubs map)", () => {
 			estateAgentMap: {},
 			verifyTimeoutMs: 1,
 			investigateTimeoutMs: 1,
+			// SIO-1655: capability gates are part of the config now. No .default()
+			// in the schema (project rule), so a caller supplies them; the defaults
+			// are applied by resolvePiComsConfig.
+			capabilities: { handoff: true, inbox: true, fleetGraph: true },
 		});
 		expect(Object.keys(parsed.hubs)).toEqual(["prd"]);
+		expect(parsed.capabilities.fleetGraph).toBe(true);
 	});
 	test("rejects an empty hubs map and unknown environments", () => {
 		expect(() =>

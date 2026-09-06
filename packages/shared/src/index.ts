@@ -167,6 +167,8 @@ export {
 	AgentConfigSchema,
 	type LinearConfig,
 	LinearConfigSchema,
+	type PiComsCapabilities,
+	PiComsCapabilitiesSchema,
 	type PiComsConfig,
 	PiComsConfigSchema,
 	type PiComsEnvironment,

@@ -46,11 +46,14 @@ function message(over: Partial<PiInboxMessage> = {}): PiInboxMessage {
 }
 
 describe("gates and config", () => {
-	test("the node is off unless PI_COMS_INBOX_ENABLED is true or 1", () => {
-		expect(isFleetInboxEnabled({})).toBe(false);
-		expect(isFleetInboxEnabled({ PI_COMS_INBOX_ENABLED: "false" })).toBe(false);
+	// SIO-1655: capability gates default ON (kill-switch semantics). Only an
+	// explicit "false" or "0" disables; anything else, including unset, is on.
+	test("the node is on unless PI_COMS_INBOX_ENABLED is false or 0", () => {
+		expect(isFleetInboxEnabled({})).toBe(true);
 		expect(isFleetInboxEnabled({ PI_COMS_INBOX_ENABLED: "true" })).toBe(true);
 		expect(isFleetInboxEnabled({ PI_COMS_INBOX_ENABLED: "1" })).toBe(true);
+		expect(isFleetInboxEnabled({ PI_COMS_INBOX_ENABLED: "false" })).toBe(false);
+		expect(isFleetInboxEnabled({ PI_COMS_INBOX_ENABLED: "0" })).toBe(false);
 	});
 
 	test("the read budget defaults to 5000 ms and ignores invalid values", () => {

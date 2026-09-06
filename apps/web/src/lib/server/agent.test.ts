@@ -71,8 +71,10 @@ mock.module("@devops-agent/agent", () => ({
 		}),
 	),
 	createMcpClient: mock(() => Promise.resolve()),
-	// SIO-1655: graph-registry imports this from the barrel to gate the console.
-	isPiFleetGraphEnabled: mock(() => false),
+	// SIO-1655: graph-registry imports both from the barrel to gate the console:
+	// the capability flag AND whether a hub exists to serve it.
+	isPiFleetGraphEnabled: mock(() => true),
+	isPiComsConfigured: mock(() => false),
 	buildPiFleetGraph: mock(() => Promise.resolve({})),
 	// SIO-1651: getPiHandoffRequest reads the closing turn's assessed estates.
 	estatesFromState: mock((state: { awsTargetEstates?: string[] }) => state.awsTargetEstates ?? []),
