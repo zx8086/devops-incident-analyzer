@@ -10,7 +10,7 @@
 // stream route's Zod enum, the topology route's guard, the UI selector) derives
 // from those two places.
 
-export const AGENT_IDS = ["incident-analyzer", "elastic-iac"] as const;
+export const AGENT_IDS = ["incident-analyzer", "elastic-iac", "pi-fleet-console"] as const;
 
 export type AgentId = (typeof AGENT_IDS)[number];
 
@@ -38,6 +38,11 @@ export const AGENT_CHOICES: readonly AgentChoice[] = [
 		id: "elastic-iac",
 		title: "Elastic IaC Agent",
 		subtitle: "Elastic Cloud IaC change assistant",
+	},
+	{
+		id: "pi-fleet-console",
+		title: "Fleet Console",
+		subtitle: "Ask the live account agents across the fleet",
 	},
 ];
 

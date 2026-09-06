@@ -1,0 +1,29 @@
+spec_version: "0.1.0"
+name: pi-fleet-console
+version: 0.1.0
+description: >
+  In-process fleet console: asks the read-only pi-coms account agents a
+  question, gathers their replies and synthesizes one answer. Runs inside the
+  analyzer as a LangGraph graph (SIO-1655 Phase 2c).
+
+# SIO-1655: DELIBERATELY separate from agents/pi-fleet/, which is exported to
+# fleet hosts and run there by Pi + coms-net. The two share intent but not tool
+# vocabulary: that one drives Pi's own toolbelt, this one drives five hub tools
+# through LangGraph. Keeping them apart also leaves the exporter's
+# allowlist/denylist untouched, so no edit here can widen what ships to public
+# fleet hosts. Shared invariants belong in agents/shared/, not copied.
+
+runtime:
+  max_turns: 12
+  timeout: 300
+
+compliance:
+  risk_tier: low
+  data_governance:
+    pii_handling: redact
+    data_classification: internal
+
+tags:
+  - pi-fleet
+  - pi-coms
+  - console

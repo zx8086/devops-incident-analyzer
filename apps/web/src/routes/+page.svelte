@@ -1,7 +1,7 @@
 <script lang="ts">
 // apps/web/src/routes/+page.svelte
 import { onDestroy, onMount } from "svelte";
-import { AGENT_CHOICES, agentChoice, DEFAULT_AGENT_ID } from "$lib/agent-ids";
+import { AGENT_CHOICES, type AgentId, agentChoice, DEFAULT_AGENT_ID, isAgentId } from "$lib/agent-ids";
 import AwsEstateSelector from "$lib/components/AwsEstateSelector.svelte";
 import ChatInput from "$lib/components/ChatInput.svelte";
 import ChatMessage from "$lib/components/ChatMessage.svelte";
@@ -149,10 +149,27 @@ const fleetLogIndex = $derived.by(() => {
 // old global gitopsLogIndex (last-message-only) was wiped by the next sendMessage. The fleet log
 // (fleetLogIndex) still rides the global fleetUpgradeResult.progressLog (separate path).
 
-// Cycles through the registered agents in order. With two agents this behaves
-// exactly like the old toggle; with three it keeps working.
+// SIO-1655: which agents this deployment can run is a SERVER question (the fleet
+// console needs its flag and a configured hub), so the list comes from
+// /api/agents. Falls back to the two always-available agents if the probe fails,
+// so a transient error never strands the operator on one agent.
+let selectableIds = $state<AgentId[]>(AGENT_CHOICES.filter((c) => c.id !== "pi-fleet-console").map((c) => c.id));
+
+async function loadSelectableAgents() {
+	try {
+		const res = await fetch("/api/agents");
+		if (!res.ok) return;
+		const body = (await res.json()) as { agents?: Array<{ id: string }> };
+		const ids = (body.agents ?? []).map((a) => a.id).filter(isAgentId);
+		if (ids.length > 0) selectableIds = ids;
+	} catch {
+		// Keep the fallback list.
+	}
+}
+
+// Cycles through the agents this deployment offers, in registry order.
 function cycleAgent() {
-	const ids = AGENT_CHOICES.map((c) => c.id);
+	const ids = selectableIds;
 	const next = ids[(ids.indexOf(agentStore.currentAgent) + 1) % ids.length];
 	if (next) agentStore.switchAgent(next);
 }
@@ -171,6 +188,9 @@ onMount(() => {
 	} catch {
 		// Storage unavailable; default stays closed.
 	}
+
+	// SIO-1655: which agents this deployment offers.
+	void loadSelectableAgents();
 
 	// SIO-1650: the pi-fleet pane is hidden until /api/pi/agents reports a configured hub.
 	piFleetStore.restoreOpen();
