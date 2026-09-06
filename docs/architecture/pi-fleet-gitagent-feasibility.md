@@ -185,7 +185,7 @@ Replacing Pi with LangGraph on the spokes; making spokes in-process sub-agents; 
 | Phase | Linear | State |
 |---|---|---|
 | 0: land #682, widen the two-agent assumptions | [SIO-1635](https://linear.app/siobytes/issue/SIO-1635) (comment of 2026-09-06) | In Progress |
-| 0b: move pi-coms into this monorepo | [SIO-1654](https://linear.app/siobytes/issue/SIO-1654) | Backlog |
+| 0b: move pi-coms into this monorepo | [SIO-1654](https://linear.app/siobytes/issue/SIO-1654) | In Review |
 | 1: definitions, Pi package export, tagged release | [SIO-1649](https://linear.app/siobytes/issue/SIO-1649) | Backlog |
 | 1b: manifest-driven fleet deploy | [SIO-1653](https://linear.app/siobytes/issue/SIO-1653) | Backlog |
 | 2a: thin hub pane in the web app | [SIO-1650](https://linear.app/siobytes/issue/SIO-1650) | Backlog |

@@ -8,7 +8,8 @@ Peer-to-peer messaging between Pi Coding Agent instances (`coms-net` over HTTP/S
 
 ## Commands
 
-- Package manager: `bun` (not npm/yarn/pnpm). `bun install` plus `bun install --cwd scripts` to set up: the monitor and hub runtime deps live in `scripts/package.json` so `pi install` of the extension downloads nothing.
+- This package lives inside the devops-incident-analyzer monorepo (`packages/pi-coms/`, SIO-1654). Root `bun run typecheck`, `bun run lint` and `bun run test` include it; run its tests directly with `cd packages/pi-coms && bun test` (the `test` script runs the nested `scripts/` install first). The repository-root `justfile` delegates `just coms`, `just coms-net-server`, `just token-*` and `just hub-tunnel` here. The fleet bundle is staged from this subtree by `deploy/publish-fleet.sh` (`--stage-only` for a local dry run); the git-clone host path (`REPO_URL`) is unsupported after the move, bundle mode only.
+- Package manager: `bun` (not npm/yarn/pnpm). Root `bun install` plus `bun run deps:monitor` (`bun install --frozen-lockfile --cwd scripts`) to set up: the monitor and hub runtime deps live in the nested, non-workspace `scripts/package.json` so `pi install` of the extension downloads nothing. Never move them into this package's manifest.
 - Task runner: `just`; run `just` with no args to list recipes.
 - Run a client: `just coms <name>` (sets pi `--name "<name> <timestamp>"`, `--cname <name>`, `--explicit`; extra args pass to pi); same-machine peers use a hub on `127.0.0.1` (`just coms-net-server`).
 - Hub: `just coms-net-server` (localhost) or `just coms-net-server-lan` (requires `PI_COMS_NET_AUTH_TOKEN`).

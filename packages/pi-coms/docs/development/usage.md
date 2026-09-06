@@ -10,7 +10,7 @@ Day-to-day operation: starting peers, connecting to the deployed hub, addressing
 | Connect to the corp hub | SSM tunnel + token (see below) |
 | List every just recipe | `just` |
 
-Pi does not auto-load `.env`; the `just` recipes do (`set dotenv-load`). Running `pi` directly requires `source .env` first.
+Pi does not auto-load `.env`; the `just` recipes do (`set dotenv-load`, reading `packages/pi-coms/.env`; the repository-root `justfile` delegates, so `just coms` works from the root too). Running `pi` directly requires `source .env` first.
 
 ## Naming
 
@@ -45,7 +45,7 @@ The hub instance id changes when the instance is replaced; find the current
 one via the EC2 console or `tag:Name=pi-coms-hub-hub` (repo users can run
 `just hub-tunnel`, which does the lookup automatically).
 
-Operator sessions load `AGENTS.md` from the repo root -- the console scope
+Operator sessions load `AGENTS.md` from `packages/pi-coms/` (run Pi with that directory as cwd, which `just coms` does) -- the console scope
 and synthesis rules. Personal tokens come from the directory
 (`just token-create <principal> <names-csv>` for an admin; each operator
 self-fetches their own SSM parameter). Non-human clients get a `service`

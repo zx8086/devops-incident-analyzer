@@ -21,9 +21,9 @@ Each AWS account runs its own agent with a read-only IAM role; from one session 
 ## Setup
 
 ```bash
-bun install                       # extension, tests, tooling
-bun install --cwd scripts         # monitor and hub runtime deps (AWS SDK)
-cp .env.sample .env   # fill in provider API keys
+bun install                                              # from the monorepo root (workspace)
+bun run --filter @devops-agent/pi-coms deps:monitor      # monitor and hub runtime deps (AWS SDK), nested install
+cp packages/pi-coms/.env.sample packages/pi-coms/.env    # fill in provider API keys
 ```
 
 Pi does not auto-load `.env`. The `just` recipes load it via `set dotenv-load`; running `pi` directly requires `source .env` first.
@@ -59,14 +59,11 @@ For a remote hub, set `PI_COMS_NET_SERVER_URL` and `PI_COMS_NET_AUTH_TOKEN` in `
 
 ## Install as a Pi package
 
-The repository is a [Pi package](https://pi.dev/docs/latest/packages): the `pi` manifest in `package.json` points at `extensions/coms-net.ts`. Anyone running Pi can install the extension without cloning this repo or installing Bun.
+The package directory `packages/pi-coms` is a [Pi package](https://pi.dev/docs/latest/packages): the `pi` manifest in its `package.json` points at `extensions/coms-net.ts`. Install it from the local checkout path (every operator has this repository); the old git-URL install of the standalone `pi-coms` repository is retired with the move into the monorepo (SIO-1654).
 
 ```bash
-# From GitHub, pinned to a tag
-pi install https://github.com/zx8086/pi-coms@v0.1.0
-
-# From a shared bundle: unpack pi-coms-<version>.tgz (built with `npm pack`) and point Pi at the directory
-pi install /absolute/path/to/pi-coms
+# From this checkout; -l keeps the install project-local (.pi/settings.json)
+pi install /absolute/path/to/devops-incident-analyzer/packages/pi-coms -l
 ```
 
 Then connect to a hub and start Pi:
@@ -79,7 +76,7 @@ pi --cname <name> --explicit
 
 On the same machine as a hub, both variables can be left unset: the extension discovers `~/.pi/coms-net/projects/default/server.json` and the auto-generated token.
 
-To roll the extension out with a team repository, commit a `.pi/settings.json` containing `"packages": ["https://github.com/zx8086/pi-coms@v0.1.0"]`; Pi installs it on the first trusted start. Running a hub still requires Bun: `bun <package path>/scripts/coms-net-server.ts`.
+Running a hub still requires Bun: `bun packages/pi-coms/scripts/coms-net-server.ts` (or `just coms-net-server` from the repository root).
 
 Do not install the package on a machine where you also run `just coms` from this checkout: the extension would load twice and its tools would collide.
 
