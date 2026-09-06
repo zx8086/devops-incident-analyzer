@@ -51,6 +51,13 @@ user approves "Launch pi investigation"
 
 ## Routing rule
 
+0. The estate name suffix (`-dev`, `-stg`, `-prd`; `-prod` is read as prd)
+   selects the hub before any online check (no cross-environment access, user
+   decision 2026-09-06). An unknown suffix, or an environment without a hub in
+   `PI_COMS_HUBS`, is a readable error on the card; the analyzer never falls
+   back to another environment's hub, and `proposePiVerification` emits no card
+   for such an estate (it logs the skip). Cards are ordered by environment, then
+   estate.
 1. `PI_COMS_ESTATE_AGENT_MAP[estate]` when set, otherwise the estate id itself
    is the agent name (estate ids and pi agent names share the account-alias
    naming convention).
@@ -88,15 +95,32 @@ action route stays synchronous for the whole budget.
 
 ## Configuration
 
-See the `pi-coms hub` block in `.env.example`. The feature is off unless both
-`PI_COMS_NET_SERVER_URL` and `PI_COMS_NET_AUTH_TOKEN` are set. In the hub's
-directory auth mode the token's principal must allow the name pattern
-`incident-analyzer-*`: every action registers a fresh session under
+See the `pi-coms hub` block in `.env.example`. One hub per environment:
+`PI_COMS_HUBS` is a JSON map keyed by `dev`, `stg` and `prd`, each entry
+carrying `serverUrl` and `authToken` plus optional `project` (default
+`default`) and `fallbackTarget` (default `ops`). The single-hub variables
+(`PI_COMS_NET_SERVER_URL`, `PI_COMS_NET_AUTH_TOKEN`, `PI_COMS_NET_PROJECT`,
+`PI_COMS_FALLBACK_TARGET`) remain as a one-entry map for the environment named
+by `PI_COMS_NET_ENVIRONMENT` (default `dev`); a prd estate then gets a "no hub
+configured for prd" card error rather than the dev hub. The feature is off
+unless one of the two forms is set; a malformed `PI_COMS_HUBS` is a readable
+error at execute time and suppresses card proposals with a warn log.
+
+In the hub's directory auth mode the token's principal must allow the name
+pattern `incident-analyzer-*`: every action registers a fresh session under
 `incident-analyzer-<8 hex of the session id>`, because a directory-mode hub
 answers `409 name_taken` for a name a live session already holds, and two
-cards approved at the same time would otherwise collide. Mint it on the hub
-side with `just token-create incident-analyzer "incident-analyzer-*" service`
-(pi-coms repo).
+cards approved at the same time would otherwise collide. Mint one
+`incident-analyzer` principal per hub with
+`just token-create incident-analyzer "incident-analyzer-*" service <profile>`
+(root justfile, delegating to `packages/pi-coms`). The client's constructor
+takes a `senderPrefix` for other callers (the fleet inbox node registers under
+its own prefix), exposes `heartbeat()` and reads the durable inbox with
+`mailbox(name, { limit, since })`.
+
+The Agent Memory identity map in `packages/agent/src/memory-backend.ts`
+(`AGENT_MEMORY_IDENTITIES`) is explicit: an agent name outside the map throws
+at first use instead of silently sharing the `incident-analyzer` user.
 
 ## Security notes
 
