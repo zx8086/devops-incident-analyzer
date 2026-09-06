@@ -486,6 +486,22 @@ A code PR: 19 files, +445/-35, spanning four packages (knowledge-graph, shared, 
 2. *The CI Lint failure is exactly the kind of thing a reviewer would not have caught either, but it is a reminder that "local lint was clean" is only true for the tree at the moment it ran.* Any edit after the format pass needs a re-run before push; the PR's second commit exists only because of that ordering.
 3. *Self-verified again.* The review this change received was its own evidence: a real-engine test that reproduced the production parser exception pre-fix, a Node-side before/after probe of the warning filter, and a live replay of the original incident query from a worktree server showing the three code-owned warns gone and the Elastic fallback engaging (126 raw -> 5 unscoped). Record it, do not normalise it.
 
+## PR #686 detail (SIO-1645, process-wide KG store + in-process server slots; identity-aware port pre-flight)
+
+A code PR: 12 files across knowledge-graph, mcp-server-knowledge-graph and apps/web, plus three docs (two new source files, two new test files). It fixes the false "a knowledge-graph server is already running on this port (likely started standalone)" warning: Vite restarts its dev server in-place on a root `.env` change (same PID, new SSR module runner, `hot.dispose` not run) and re-evaluates the linked workspace packages, so the module-scoped `storePromise` and the in-process KG server were recreated -- the reloaded module probed 9087, found its OWN previous module graph's listener, and warned about a nonexistent standalone server while `warm_knowledge_graph` opened a SECOND lbug `Database` on the same store (a corruption vector). Moves the lbug store singleton and the in-process KG server onto `globalThis` `Symbol.for` slots (the SIO-1113/SIO-1468 idiom) so an in-place restart reuses them, and replaces the raw-TCP "standalone" guess with an identity-aware pre-flight (`GET /identity` -> self / same-store other process / different store / non-KG / unidentifiable) that only registers kg_* tools when safe. Seventh consecutive CODE-class data point for the Greptile skip.
+
+**Greptile:** terminal **SKIPPED** on head `14d5b73e` (MCP `list_code_reviews` id 22772055, `changedFiles` = all 12, `completedAt` ~140 ms after `createdAt`, `strictness: 2`, body null). No status check, no comment, no review object. Consulted the MCP at merge time (no re-trigger; #687 this same session proved a re-trigger skips identically).
+
+**CodeRabbit:** nothing, through CI completion. Consistent with the run since #679.
+
+**Merge gate:** CI green on the head (Typecheck, Lint, YAML check, Test all COMPLETED/SUCCESS), `MERGEABLE`/`CLEAN`, Greptile SKIPPED on the head SHA via MCP, zero findings to triage. Code-class skip; the session reported the unsatisfiable gate and merged on the user's "merge all" per-PR authorization. Squash `18a81a7d`.
+
+**Takeaways:**
+
+1. *Seventh code-class skip, same signature.* Same SIO-1642 dashboard/billing cause, still unresolved.
+2. *The warning this PR fixes is the one that opened this whole session* -- the user's "false positive" instinct was right: the raw-TCP probe cannot tell its own reloaded self from a foreign standalone server, and the fix is the existing globalThis-slot idiom the codebase already uses for the health poll and the scheduler. No reviewer surfaced it; live diagnosis (curl `/identity` on 9087 returning the vite PID) did.
+3. *Self-verified.* New unit tests for the store slot and the identity classifier, typecheck clean across all packages, and the identity-card evidence that the 9087 listener was the process's own previous module graph.
+
 ## PR #687 detail (SIO-1646, agent-memory degraded mode: backend-unavailable class, memoized ensure, bounded requeue, SESSION_NOT_FOUND teardown, read-site amendment)
 
 A code PR: 10 files, spanning shared and agent plus three docs. It hardens the agent-memory client against a write-only backend outage observed live (service `GET /health` 200 while `GET /health/couchbase` 503 and every KV mutation returned `ec=1004 couchbase.network`): a `BackendUnavailableError` class (matched narrowly on `DATABASE_UNAVAILABLE`/`category=couchbase.network`), memoized `ensureUser`/`ensureSession`, a process-wide cooldown that costs one warn per window, requeue of only the unsent tail (also fixing a pre-existing mid-batch-503 double-write), a 200-write cap, a typed `SESSION_NOT_FOUND` teardown no-op, and a startup `/health/couchbase` probe. A second commit (`a7857aba`) amended the cooldown to gate only the WRITE sites, because the outage was write-only and reads kept working: gating recall/search/fleet-recall would have discarded functioning recall. Sixth consecutive CODE-class data point for the Greptile skip.
@@ -501,3 +517,19 @@ A code PR: 10 files, spanning shared and agent plus three docs. It hardens the a
 1. *Sixth code-class skip, same ~100-190 ms signature, and a re-trigger this round proved it is per-review not per-head.* The SIO-1642 dashboard/billing cause is still the only lead and still unresolved.
 2. *The change that mattered most had no reviewer to catch it.* The read-site amendment corrects a design error (gating reads during a write-only outage) that only surfaced from reading the live service's own logs after a user challenge; the evidence was a raw-SDK probe from inside the service container showing reads and body-less deletes succeeding while every mutation failed. A reviewer bot would likely not have reached that evidence; the human challenge did.
 3. *Self-verified again.* 53+4 tests green in the agent package, typecheck clean across all packages, Biome clean on the changed files, and a live end-to-end write round-trip (create session + add fact + end) confirming the modelled failure and its recovery. Record it, do not normalise it.
+
+## PR #688 detail (SIO-1647, gitlab-import auth backoff keyed on the token value; document the restart after a token rotation)
+
+A code PR: 3 files (gitlab-import source + test, one doc). It stops the `bootstrapIac gitlab-import failed; GitLab repository/commits: 401 Unauthorized` warn from repeating on every new thread's first turn plus hourly on the cron. Root cause of the 401 was a rotated PAT the web process never picked up: Vite restarts on the `.env` change but its `loadEnv` gives existing `process.env` keys precedence over the re-parsed file (and `vite.config.ts` does `Object.assign(process.env, loadEnv(...))`), so the restarted server kept the stale token. The fix adds a per-process auth backoff (15 min) keyed on a hash of the token value, so a genuine rotation clears the backoff immediately while an unchanged bad token warns once per window, and documents that rotating `ELASTIC_IAC_GITLAB_TOKEN` needs a web dev-server restart. Eighth consecutive CODE-class data point for the Greptile skip.
+
+**Greptile:** terminal **SKIPPED** on head `ff5b1020` (MCP `list_code_reviews` id 22772934, `changedFiles` = all 3, `completedAt` ~130 ms after `createdAt`, `strictness: 2`, body null). No status check, no comment, no review object.
+
+**CodeRabbit:** nothing, through CI completion. Ninth consecutive absence (#679 to #688).
+
+**Merge gate:** CI green on the head (Typecheck, Lint, YAML check, Test all COMPLETED/SUCCESS), `MERGEABLE`/`CLEAN`, Greptile SKIPPED on the head SHA via MCP, zero findings to triage. Code-class skip; merged on the user's "merge all" per-PR authorization. Squash `fc15dfc1`.
+
+**Takeaways:**
+
+1. *Eighth code-class skip, smallest diff of the run (3 files) and same signature.* Diff size is irrelevant to the skip; the SIO-1642 cause is unchanged.
+2. *The 401 was a config-propagation trap, not a code bug* -- the same rotated token worked for the separately-restarted elastic-iac MCP (bun `--env-file`) while the Vite web process kept the stale value. The backoff makes an invalid token cost one warn per 15 min instead of per trigger; the real remedy (restart after rotation) is now documented at the point it bites.
+3. *Self-verified.* Unit tests for the backoff helper (expired window, changed-token clear, 401 vs 500 handling) and live confirmation that both the rotated `ELASTIC_IAC_GITLAB_TOKEN` and `GITLAB_PERSONAL_ACCESS_TOKEN` reach GitLab (commits + pipelines 200) so the 401 was purely the stale in-process value.
