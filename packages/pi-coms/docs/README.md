@@ -58,7 +58,7 @@ Project-specific documentation for pi-coms: peer-to-peer messaging between Pi Co
 
 - [`README.md`](../README.md) -- prerequisites, setup, quick starts
 - [`CLAUDE.md`](../CLAUDE.md) -- assistant working notes for this repository
-- [`AGENTS.md`](../AGENTS.md) -- operator-console instructions; [`deploy/AGENTS-spoke.md`](../deploy/AGENTS-spoke.md) -- the spoke agents' investigation discipline
+- [`AGENTS.md`](../AGENTS.md) -- operator-console instructions; `vendor/pi-fleet/aws-spoke/AGENTS.override.md` in the fleet bundle (exported from `agents/pi-fleet/agents/aws-spoke/` by the gitagent bridge, SIO-1649) -- the spoke agents' investigation discipline
 - The private guides collection's documentation guide (not in this repository) -- the standards these docs follow
 
 ## Service Overview

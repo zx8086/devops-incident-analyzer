@@ -37,3 +37,7 @@ token-list *args:
 # SSM port-forward to the corp hub
 hub-tunnel *args:
     {{pi_just}} hub-tunnel "$@"
+
+# Regenerate packages/pi-coms/AGENTS.md from agents/pi-fleet (SIO-1649)
+sync-persona:
+    {{pi_just}} sync-persona

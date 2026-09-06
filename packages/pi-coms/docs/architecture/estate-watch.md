@@ -41,7 +41,7 @@ designed around the walls, not surprised by them:
 - **Log content is name-scoped.** A group outside the readable prefixes is a
   scoping fact to report, not a mystery.
 - Field-proven quirks encoded in the spoke instructions
-  (`deploy/AGENTS-spoke.md`): `logs:Describe*` list calls cannot be
+  (the exported spoke persona, `agents/pi-fleet/agents/aws-spoke/RULES.md`): `logs:Describe*` list calls cannot be
   prefix-restricted; EC2 denies with `UnauthorizedOperation` while S3 uses
   bare `AccessDenied`; a denial probed against a fake resource id returns
   NotFound before IAM evaluation and proves nothing.
@@ -75,7 +75,7 @@ Durable, human-readable memory turns a stateless checker into a watch:
 | Baseline document (what normal looks like) | `state.db` snapshots, cost history, ingestion baselines; the deployment reference artifact for the estate itself |
 | Known-gap ledger ("don't re-flag") | `suppressions` table; operator-owned, reasons required, journaled matches, footnote counts. The single most effective anti-fatigue device |
 | Daily log and key decisions | The `journal` table (findings, check errors, runs; 90 d retention) plus the daily digest -- when a human asks "why did you page me", the answer is already written |
-| Runbooks as skills | Diagnoses come from the account's Pi agent under `deploy/AGENTS-spoke.md` discipline, with prior-incident context injected from the journal |
+| Runbooks as skills | Diagnoses come from the account's Pi agent under the exported spoke persona's discipline, with prior-incident context injected from the journal |
 
 ## Field rules that keep the watch honest
 
@@ -128,4 +128,4 @@ state change is evidence-supported, the correct move is a proposal.
 
 - [Monitoring](monitoring.md) -- the implementation: checks, ledger, mailbox
 - [Security Model](../security/security-model.md) -- the permission surface
-- `deploy/AGENTS-spoke.md` -- the investigation discipline agents load
+- `agents/pi-fleet/agents/aws-spoke/` (exported into the bundle as `vendor/pi-fleet/aws-spoke/AGENTS.override.md`, SIO-1649) -- the investigation discipline agents load
