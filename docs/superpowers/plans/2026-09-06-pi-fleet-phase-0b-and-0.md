@@ -16,7 +16,7 @@ The feasibility work for the pi-fleet program is merged (PR #689). Two decisions
 
 Facts verified this session that change the work as written in the issues:
 
-- Both repos are public. pi-coms tracked files carry one real 12-digit account id (`deploy/accounts/eu-oit-dev/main.tf:73` default `pi-coms-dist-352896877281` and the usage example at `deploy/publish-fleet.sh:9`) and one personal token-file path (`AGENTS.md:147`). They are already public in pi-coms, but the import PR removes them anyway (feedback: never add new occurrences).
+- Both repos are public. pi-coms tracked files carry one real 12-digit account id (`deploy/accounts/eu-oit-dev/main.tf:73` default `pi-coms-dist-<hub-account-id>` and the usage example at `deploy/publish-fleet.sh:9`) and one personal token-file path (`AGENTS.md:147`). They are already public in pi-coms, but the import PR removes them anyway (feedback: never add new occurrences).
 - `packages/pi-coms/package.json` auto-joins the workspace; the root `bun run typecheck` and `bun run test` fan out with `--filter '*'` and silently skip a package without those scripts; root `lint` is one `biome check .` over the tree, and a second Biome root config under `packages/pi-coms/` would break it.
 - pi-coms's `deploy/publish-fleet.sh` archives `git rev-parse --show-toplevel` (the whole monorepo after the move) and needs two lockfiles that a workspace does not have at the package root. `git archive HEAD:packages/pi-coms` plus `bun install --lockfile-only` in the stage fixes both; `bun install --help` confirms `--lockfile-only` exists locally.
 - Every pi-coms test resolves paths with `import.meta.dir`; the hub resolves state from `os.homedir()`. No test or script depends on cwd. The tests do depend on `scripts/node_modules` (checks import `@aws-sdk/client-*`), which only `bun install --cwd scripts` provides.
@@ -41,7 +41,7 @@ Approving this plan authorizes the commits listed below on the two feature branc
 - No emojis anywhere. No em dashes in prose.
 - Root `package.json` is not edited (the `packages/*` glob already matches `packages/pi-coms`). After every `bun install`, run `git diff --stat package.json bun.lock`; if the root manifest changed (catalog refs rewritten to concrete versions), `git checkout package.json bun.lock && bun install` and re-check.
 - `packages/pi-coms/scripts/package.json` stays nested and NON-workspace; its `bun.lock` stays; the package-root `bun.lock` is deleted (the workspace root owns the only lockfile).
-- Public repo: no 12-digit account ids, personal names, tokens, tfstate or tfvars in any commit. Sweep every diff with `git diff origin/main..HEAD | grep -nE '[0-9]{12}|simon|pvhcorp|tommy\.com'` before pushing.
+- Public repo: no 12-digit account ids, personal names, tokens, tfstate or tfvars in any commit. Sweep every diff with `git diff origin/main..HEAD | grep -nE '[0-9]{12}|<first-name>|pvhcorp|tommy\.com'` before pushing.
 - No cross-environment access: a prd estate never produces a request on the dev hub and vice versa.
 - Hub replies and inbox bodies never reach an LLM prompt; only structured fields do.
 - Commit format `SIO-XXXX: message`; commit body ends with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`; commit with a HEREDOC (`git commit -F - <<'MSG' ... MSG`).
@@ -290,14 +290,14 @@ Run `terraform fmt -check -recursive packages/pi-coms/deploy` (exit 0). Add a li
 
 - [ ] **Step 2: Generic operator strings**
 
-`AGENTS.md:147`: replace `~/.pi-coms-corp-token-simon` with `~/.pi-coms-corp-token-<you>`.
+`AGENTS.md:147`: replace `~/.pi-coms-corp-token-<name>` with `~/.pi-coms-corp-token-<you>`.
 `docs/README.md:3` and `:62`: the `guides/` links point at an untracked symlink; replace the link text with plain text `the private guides collection (not in this repo)` and drop the two links.
 `extensions/coms-net.ts:1012` and `:1036`: `(from the pi-coms package)` becomes `(from packages/pi-coms)`.
 
 - [ ] **Step 3: Sweep and commit**
 
 ```bash
-git diff origin/main..HEAD -- packages/pi-coms | grep -nE '[0-9]{12}|simon|pvhcorp|tommy\.com' | grep -v 'tests/checks-identity.test.ts'
+git diff origin/main..HEAD -- packages/pi-coms | grep -nE '[0-9]{12}|<first-name>|pvhcorp|tommy\.com' | grep -v 'tests/checks-identity.test.ts'
 ```
 
 Expected: no output (the checks-identity test uses the synthetic `111122223333`).
@@ -840,7 +840,7 @@ git status --short           # clean
 lsof -nP -iTCP -sTCP:LISTEN | grep -E 'bun|pi-coms' ; echo "(no hub listeners above)"
 ```
 
-Expected: all green; if root `bun run test` crashes the runner mid-suite (known), rely on the per-package runs and say so in the PR body. Sweep: `git diff origin/main..HEAD | grep -nE '[0-9]{12}|simon|pvhcorp|tommy\.com' | grep -v checks-identity` prints nothing.
+Expected: all green; if root `bun run test` crashes the runner mid-suite (known), rely on the per-package runs and say so in the PR body. Sweep: `git diff origin/main..HEAD | grep -nE '[0-9]{12}|<first-name>|pvhcorp|tommy\.com' | grep -v checks-identity` prints nothing.
 
 - [ ] **Step 2: Push and open the PR**
 
@@ -1667,7 +1667,7 @@ bun run typecheck && bun run lint
 cd packages/agent && bun test --isolate; cd -
 cd packages/shared && bun test; cd -
 cd apps/web && bun run test; cd -
-git diff origin/main..HEAD | grep -nE '[0-9]{12}|simon|pvhcorp|tommy\.com' ; echo "(empty)"
+git diff origin/main..HEAD | grep -nE '[0-9]{12}|<first-name>|pvhcorp|tommy\.com' ; echo "(empty)"
 git push -u origin claude/sio-1635-phase0-hub-map
 gh api repos/zx8086/devops-incident-analyzer/pulls -f title="SIO-1635: per-environment pi-coms hubs, hub client mailbox and sender prefix, explicit Agent Memory identity map" -f head=claude/sio-1635-phase0-hub-map -f base=<main or the #682 branch> -F draft=false -F body=@<scratchpad>/pr-1635.md --jq .number
 ```
