@@ -4,9 +4,11 @@
 // knowledge-graph so no GitLab, REST, or lbug is touched.
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import * as realKnowledgeGraphNs from "@devops-agent/knowledge-graph";
+import { getLogger } from "@devops-agent/observability";
 import * as realMemoryBackendNs from "../memory-backend.ts";
 import * as realMemoryWriterNs from "../memory-writer.ts";
 import {
+	authBackoffActive,
 	buildImportedAnnotations,
 	buildImportedDecision,
 	changedJsonKeyPaths,
@@ -17,6 +19,7 @@ import {
 	importExternalChanges,
 	importLookbackDays,
 	resetImportStateForTests,
+	tokenFingerprint,
 } from "./gitlab-import.ts";
 // Test-only import of nodes.ts (the module under test must stay a leaf; the test may not).
 import { stackForWorkflow } from "./nodes.ts";
@@ -647,5 +650,92 @@ describe("importExternalChanges sweep", () => {
 		// The oldest (out-of-scope) commit was the one processed; the in-scope newest waits.
 		expect(summary.skippedOutOfScope).toBe(1);
 		expect(summary.imported).toBe(0);
+	});
+});
+
+// SIO-1647: a rejected token must cost one warn per backoff window, not one per new thread plus one
+// per hourly tick. The backoff is keyed on the token VALUE so a rotation retries immediately.
+describe("auth backoff (SIO-1647)", () => {
+	// Same prototype-spy idiom as memory-backend.test.ts (SIO-1340).
+	function spyOnWarn(): { calls: unknown[][]; restore: () => void } {
+		const proto = Object.getPrototypeOf(getLogger("spy-probe"));
+		const calls: unknown[][] = [];
+		const orig = proto.warn;
+		proto.warn = function (this: unknown, ...args: unknown[]) {
+			calls.push(args);
+			return orig.apply(this, args);
+		};
+		return { calls, restore: () => (proto.warn = orig) };
+	}
+	const rejectedWarns = (calls: unknown[][]) =>
+		calls.filter((args) => /rejected ELASTIC_IAC_GITLAB_TOKEN/.test(String(args[1])));
+
+	function reject401(pathFragment: string): void {
+		routes.unshift((url) =>
+			url.includes(pathFragment) ? new Response("unauthorized", { status: 401, statusText: "Unauthorized" }) : null,
+		);
+	}
+
+	test("authBackoffActive is pure: inside the window with the same token only", () => {
+		const state = { until: 1_000_000, tokenFingerprint: tokenFingerprint("tok") };
+		expect(authBackoffActive(state, 999_999, "tok")).toBe(true);
+		expect(authBackoffActive(state, 1_000_000, "tok")).toBe(false); // window elapsed
+		expect(authBackoffActive(state, 999_999, "rotated")).toBe(false); // token value changed
+		expect(authBackoffActive(null, 0, "tok")).toBe(false);
+	});
+
+	test("a 401 on the commit listing warns once, counts one error, and pauses later sweeps until the token changes", async () => {
+		versionUpgradeScenario();
+		reject401("/repository/commits?");
+		const spy = spyOnWarn();
+		let first: Awaited<ReturnType<typeof importExternalChanges>>;
+		try {
+			first = await importExternalChanges({ source: "bootstrap", limit: 10 });
+			const fetchesAfterFirst = fetchedUrls.length;
+			const second = await importExternalChanges({ source: "cron", limit: 10 });
+			expect(second.commitsListed).toBe(0);
+			expect(fetchedUrls.length).toBe(fetchesAfterFirst); // paused: no GitLab call at all
+			expect(rejectedWarns(spy.calls)).toHaveLength(1); // the paused sweep is a debug skip, not a warn
+			process.env.ELASTIC_IAC_GITLAB_TOKEN = "rotated-token";
+			await importExternalChanges({ source: "cron", limit: 10 });
+			expect(fetchedUrls.length).toBeGreaterThan(fetchesAfterFirst); // rotation lifts the pause
+		} finally {
+			spy.restore();
+		}
+		expect(first.errors).toBe(1);
+		// The stub rejects the rotated token too: a NEW token value opens a new window with its own warn.
+		expect(rejectedWarns(spy.calls)).toHaveLength(2);
+	});
+
+	test("a 500 on the commit listing still propagates and does not arm the backoff", async () => {
+		versionUpgradeScenario();
+		routes.unshift((url) =>
+			url.includes("/repository/commits?") ? new Response("boom", { status: 500, statusText: "ISE" }) : null,
+		);
+		await expect(importExternalChanges({ source: "cron", limit: 10 })).rejects.toThrow(/500/);
+		const fetchesAfterFirst = fetchedUrls.length;
+		await expect(importExternalChanges({ source: "cron", limit: 10 })).rejects.toThrow(/500/);
+		expect(fetchedUrls.length).toBeGreaterThan(fetchesAfterFirst); // retried, not paused
+	});
+
+	test("a 401 mid-sweep warns once, stops the sweep, and never touches the remaining commits", async () => {
+		seedGitlab({
+			commits: [
+				{ id: SHA_A, parent_ids: [PARENT], title: "first", committed_date: "2026-08-20T10:00:00.000Z" },
+				{ id: SHA_B, parent_ids: [SHA_A], title: "second", committed_date: "2026-08-21T10:00:00.000Z" },
+			],
+		});
+		reject401(`/repository/commits/${SHA_A}/merge_requests`);
+		const spy = spyOnWarn();
+		let summary: Awaited<ReturnType<typeof importExternalChanges>>;
+		try {
+			summary = await importExternalChanges({ source: "cron", limit: 10 });
+		} finally {
+			spy.restore();
+		}
+		expect(summary.commitsListed).toBe(2);
+		expect(summary.errors).toBe(1);
+		expect(rejectedWarns(spy.calls)).toHaveLength(1);
+		expect(fetchedUrls.some((u) => u.includes(`/repository/commits/${SHA_B}/`))).toBe(false);
 	});
 });
