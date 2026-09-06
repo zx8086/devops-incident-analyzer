@@ -67,22 +67,59 @@ function clearEmbeddingsNotReady(projectId: string | undefined): void {
 	embeddingsNotReadyProjects.delete(projectId);
 }
 
+// SIO-1656: an `enum` on a JSON-Schema property is the upstream contract, so
+// honour it instead of widening to a bare string. Without this the model can
+// send any value, the local schema accepts it, and GitLab rejects the call --
+// the error surfaces as a tool failure mid-investigation rather than as a
+// schema violation the model can correct.
+function enumValues(prop: Record<string, unknown>): string[] | undefined {
+	const raw = prop.enum;
+	if (!Array.isArray(raw) || raw.length === 0) return undefined;
+	const values = raw.filter((v): v is string => typeof v === "string");
+	return values.length === raw.length ? values : undefined;
+}
+
 function jsonSchemaTypeToZod(key: string, prop: Record<string, unknown>): z.ZodTypeAny {
 	const description = typeof prop.description === "string" ? prop.description : key;
 	switch (prop.type) {
-		case "string":
+		case "string": {
+			const values = enumValues(prop);
+			// z.enum needs a non-empty tuple; enumValues guarantees length > 0.
+			if (values) return z.enum(values as [string, ...string[]]).describe(description);
 			return z.union([z.string(), z.number().transform(String)]).describe(description);
+		}
 		case "number":
 		case "integer":
 			return z.number().describe(description);
 		case "boolean":
 			return z.boolean().describe(description);
+		// SIO-1656: array was falling through to z.unknown(), so every array
+		// parameter on a proxied tool was schema-less. Observed as
+		// gitlab_get_merge_request rejecting `include` ("Validation error: include
+		// is invalid"): upstream declares it as an array of enum strings, the
+		// unknown-typed local schema accepted the model's guess, and GitLab
+		// refused the call. Recursing on `items` keeps the element contract --
+		// including its enum -- so the model is constrained before the request
+		// leaves this process.
+		case "array": {
+			const items = prop.items;
+			const element =
+				items && typeof items === "object" && !Array.isArray(items)
+					? jsonSchemaTypeToZod(key, items as Record<string, unknown>)
+					: // No `items` (or a tuple form we do not model): accept any element
+						// rather than reject the call outright. GitLab shipped tools without
+						// `items` before gitlab-org/gitlab!211286 added it.
+						z.unknown();
+			return z.array(element).describe(description);
+		}
 		default:
 			return z.unknown().describe(description);
 	}
 }
 
-function buildZodShapeFromJsonSchema(inputSchema: ProxyToolInfo["inputSchema"]): Record<string, z.ZodTypeAny> {
+// Exported for tests: the discovered-schema conversion is the contract between
+// GitLab's tool declarations and what this server will accept from the model.
+export function buildZodShapeFromJsonSchema(inputSchema: ProxyToolInfo["inputSchema"]): Record<string, z.ZodTypeAny> {
 	const properties = inputSchema.properties ?? {};
 	const required = new Set(inputSchema.required ?? []);
 	const shape: Record<string, z.ZodTypeAny> = {};
