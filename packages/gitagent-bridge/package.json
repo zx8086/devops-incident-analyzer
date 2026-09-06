@@ -6,6 +6,7 @@
 	"types": "src/index.ts",
 	"scripts": {
 		"test": "bun test",
+		"export:pi-package": "bun run src/export-pi-package-cli.ts",
 		"typecheck": "bunx tsc --noEmit"
 	},
 	"dependencies": {

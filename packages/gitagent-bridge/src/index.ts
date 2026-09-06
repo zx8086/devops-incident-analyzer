@@ -38,6 +38,15 @@ export {
 	type SkillDeclarationDrift,
 	type SubAgentDeclarationGap,
 } from "./okf-spec-audit.ts";
+export {
+	assertNoAccountIds,
+	buildPiPackage,
+	type ExportedFile,
+	foldSkillFrontmatter,
+	type PiPackageExport,
+	type RenderContextOptions,
+	renderContextFile,
+} from "./pi-package-export.ts";
 export { getRelatedTools, withRelatedTools } from "./related-tools.ts";
 // SIO-1398: the two runbook tool-citation readers, exported so eval coverage targets derive
 // from the SAME parse runbook-validator enforces (frontmatter `tools:` first, tail CSV as the
@@ -46,9 +55,11 @@ export { extractFrontmatterTools, extractTailSection } from "./runbook-validator
 export { loadSchedules, type ScheduleDef, ScheduleDefSchema } from "./schedule.ts";
 export { mergeShared, type SharedMergeResult } from "./shared-merge.ts";
 export {
+	buildSkillsCatalog,
 	buildSubAgentSystemPrompt,
 	buildSystemPrompt,
 	buildSystemPromptParts,
+	renderSkill,
 	SUB_AGENT_NON_INTERACTIVE_PREAMBLE,
 	type SystemPromptParts,
 } from "./skill-loader.ts";
