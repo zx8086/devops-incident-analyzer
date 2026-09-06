@@ -160,6 +160,14 @@ export { aggregateMitigation } from "./mitigation.ts";
 export { proposeEscalate, proposeInvestigate, proposeMonitor } from "./mitigation-branches.ts";
 export { normalizeIncident } from "./normalizer.ts";
 export { getWorkspaceRoot, skillFilePath } from "./paths.ts";
+// SIO-1655: the in-process fleet console graph (Phase 2c). Gated OFF by default.
+export {
+	buildPiFleetGraph,
+	isPiFleetGraphEnabled,
+	PI_FLEET_AGENT_NAME,
+} from "./pi-fleet/graph.ts";
+export { PiFleetState, type PiFleetStateType, type SpokeReply } from "./pi-fleet/state.ts";
+export { buildFleetTools, SPOKE_TEXT_CAP, wrapUntrusted } from "./pi-fleet/tools.ts";
 // SIO-1651: the pi-handoff workflow's production entry point (post-turn
 // background hook) plus the flag apps/web gates it on.
 export {

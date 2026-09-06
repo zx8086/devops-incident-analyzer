@@ -194,6 +194,20 @@ checkpoint in between. One hand-off per close: the first assessed estate.
 Registration uses the analyzer's own principal (`incident-analyzer-*`), not a
 separate `pi-fleet` one, so the workflow needs no additional hub token.
 
+## Where hub replies may reach a model (SIO-1655)
+
+The invariant on this page -- hub replies are rendered as data and never fed
+into an LLM call -- holds for every path documented above, and for the 2b inbox
+node and the SIO-1651 workflow.
+
+The ONE exception is the Phase 2c fleet console graph
+(`agents/pi-fleet-console/`, gated off by `PI_FLEET_GRAPH_ENABLED`), whose
+purpose is to summarize replies from several spokes. There, replies reach the
+model only through `wrapUntrusted` in `packages/agent/src/pi-fleet/tools.ts`:
+fenced, origin-labelled, capped, and framed as evidence that must be reported
+rather than obeyed. See `pi-fleet-third-graph.md`. No other code path may feed a
+hub reply to a model.
+
 ## Out of scope for SIO-1635
 
 Persistent peer registration so hub agents can push to the analyzer, async

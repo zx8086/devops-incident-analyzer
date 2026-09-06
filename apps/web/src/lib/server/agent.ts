@@ -4,6 +4,7 @@ import {
 	appliedSkillsForNames,
 	buildGraph,
 	buildIacGraph,
+	buildPiFleetGraph,
 	createMcpClient,
 	estatesFromState,
 	extractTextFromContent,
@@ -248,6 +249,19 @@ export async function getIacGraph() {
 		iacGraphPromise = buildIacGraph({ checkpointerType: resolveCheckpointerType() });
 	}
 	return iacGraphPromise;
+}
+
+// SIO-1655: the in-process fleet console graph (Phase 2c). Its own compiled
+// graph and checkpointer, like the IaC graph. Built lazily so a deployment with
+// no pi-coms hub configured never pays for it (buildPiFleetGraph throws when the
+// hub is unset, which is why the registry entry is gated).
+let piFleetGraphPromise: ReturnType<typeof buildPiFleetGraph> | null = null;
+
+export async function getPiFleetGraph() {
+	if (!piFleetGraphPromise) {
+		piFleetGraphPromise = buildPiFleetGraph({ checkpointerType: resolveCheckpointerType() });
+	}
+	return piFleetGraphPromise;
 }
 
 // SIO-1641: the node ids whose start/end the SSE pump forwards to the progress UI. Derived

@@ -13,8 +13,11 @@
 // selects a whole different code path over a different state shape (IacState vs
 // AgentState); collapsing those would hide a real difference behind a lookup.
 
+import { isPiFleetGraphEnabled } from "@devops-agent/agent";
+import type { RunnableConfig } from "@langchain/core/runnables";
+import type { StateSnapshot } from "@langchain/langgraph";
 import { AGENT_IDS, type AgentId, DEFAULT_AGENT_ID, isAgentId } from "$lib/agent-ids";
-import { getGraph, getIacGraph } from "./agent";
+import { getGraph, getIacGraph, getPiFleetGraph } from "./agent";
 
 // What a caller needs to know about an agent without naming it. Each flag
 // replaces a name comparison that was really asking this question:
@@ -31,7 +34,30 @@ export interface AgentDescriptor {
 	readonly streamsTokens: boolean;
 	// Resolves this agent's compiled graph. Kept as a thunk so registering an
 	// agent never eagerly compiles its graph or connects MCP.
-	readonly graph: () => Promise<Awaited<ReturnType<typeof getGraph>> | Awaited<ReturnType<typeof getIacGraph>>>;
+	//
+	// Typed by what registry CALLERS use, not as a union of concrete graph types.
+	// A CompiledStateGraph's type parameters include its own node-name literals,
+	// so a union would have to be widened for every agent added -- and adding an
+	// agent is exactly what this registry exists to make cheap. Callers that need
+	// a specific graph's state shape (invokeAgent, iacResume) go on calling
+	// getGraph/getIacGraph directly, which is also why those two sites keep their
+	// explicit branch.
+	readonly graph: () => Promise<CompiledGraphLike>;
+}
+
+// The surface every graphFor() caller uses: read a thread's state, write pruning
+// removals back, and draw the topology. Deliberately structural.
+export interface CompiledGraphLike {
+	getState: (config: RunnableConfig) => Promise<StateSnapshot>;
+	// pruneThreadState writes RemoveMessage entries back after a turn.
+	updateState: (config: RunnableConfig, values: unknown, asNode?: string) => Promise<RunnableConfig>;
+	getGraphAsync: (config?: RunnableConfig) => Promise<{ nodes: Record<string, unknown>; edges: DrawableEdge[] }>;
+}
+
+export interface DrawableEdge {
+	source: string;
+	target: string;
+	conditional?: boolean;
 }
 
 const REGISTRY: Readonly<Record<AgentId, AgentDescriptor>> = {
@@ -42,6 +68,19 @@ const REGISTRY: Readonly<Record<AgentId, AgentDescriptor>> = {
 		hasDataSources: true,
 		streamsTokens: true,
 		graph: getGraph,
+	},
+	// SIO-1655 (Phase 2c). Registered always so the id resolves and routes give a
+	// coherent error; SELECTABLE only when PI_FLEET_GRAPH_ENABLED is set and a hub
+	// is configured (see listSelectableAgents) -- the edge-gate idiom applied to a
+	// whole agent rather than a node.
+	"pi-fleet-console": {
+		id: "pi-fleet-console",
+		label: "Fleet Console",
+		hasConfidence: false,
+		hasDataSources: false,
+		// The console composes one answer at the end rather than streaming tokens.
+		streamsTokens: false,
+		graph: getPiFleetGraph,
 	},
 	"elastic-iac": {
 		id: "elastic-iac",
@@ -70,6 +109,13 @@ export function describeAgent(agentName: string = DEFAULT_AGENT_ID): AgentDescri
 
 export function listAgents(): readonly AgentDescriptor[] {
 	return Object.values(REGISTRY);
+}
+
+// The agents a user may actually pick this deployment. The fleet console is
+// hidden unless its flag is on: it needs a configured pi-coms hub, and offering
+// an agent whose graph cannot build would be a dead end in the UI.
+export function listSelectableAgents(env: NodeJS.ProcessEnv = process.env): readonly AgentDescriptor[] {
+	return listAgents().filter((a) => a.id !== "pi-fleet-console" || isPiFleetGraphEnabled(env));
 }
 
 // The lookup that replaces `agentName === "elastic-iac" ? getIacGraph() : getGraph()`.

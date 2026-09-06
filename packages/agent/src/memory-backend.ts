@@ -87,6 +87,9 @@ type AgentMemoryIdentity = { userId: string; role: string };
 const AGENT_MEMORY_IDENTITIES: Readonly<Record<string, AgentMemoryIdentity>> = {
 	"incident-analyzer": { userId: "incident-analyzer", role: "incident-correlator" },
 	"elastic-iac": { userId: "elastic-iac", role: "iac-maker" },
+	// SIO-1655: the in-process fleet console. Its own identity, so fleet
+	// observations never land in the incident analyzer's memory.
+	"pi-fleet-console": { userId: "pi-fleet-console", role: "fleet-console" },
 };
 
 export function resolveAgentMemoryIdentity(agentName: string): AgentMemoryIdentity {
