@@ -18,6 +18,7 @@ import {
 	PiVerdictSchema,
 } from "@devops-agent/shared";
 import { z } from "zod";
+import { recordVerdictDecision } from "../pi-verdict-memory.ts";
 import type { AgentStateType } from "../state.ts";
 import {
 	type FetchLike,
@@ -297,12 +298,15 @@ export function buildInvestigateFollowUp(
 	};
 }
 
-type HubOutcome =
+export type HubOutcome =
 	| { kind: "queued"; target: string; msg_id: string }
 	| { kind: "reply"; target: string; msg_id: string; response: unknown }
 	| { kind: "failed"; error: string };
 
-async function runHubTask(input: {
+// SIO-1651: exported so the pi-handoff workflow's `agent` step reuses this exact
+// hub path (register, resolve target, send, await, deregister) instead of a
+// second implementation that could drift from the card path.
+export async function runHubTask(input: {
 	estate: string;
 	explicitTarget?: string;
 	prompt: string;
@@ -386,6 +390,16 @@ export async function executePiVerify(
 		logger.warn({ target: outcome.target, msg_id: outcome.msg_id }, "pi verdict did not match schema");
 		return { status: "error", error: `pi agent ${outcome.target} replied with an unusable verdict (schema mismatch)` };
 	}
+	// SIO-1651: remember the verdict as structured fields (enums, counts, ids).
+	// The workflow path writes through the same builder, so a verdict is
+	// remembered identically however it was asked for. Never throws.
+	recordVerdictDecision({
+		estate: params.estate,
+		target: outcome.target,
+		msgId: outcome.msg_id,
+		requestId: outcome.msg_id,
+		verdict: verdict.data,
+	});
 	const result: PiActionOutcome = {
 		status: "success",
 		result: {

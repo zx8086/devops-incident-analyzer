@@ -139,8 +139,64 @@ The web app's pi-fleet pane (SIO-1650) reads the same `PI_COMS_HUBS` and adds
 - The pi agents are read-only by IAM policy on their side; the prompts also
   instruct read-only behaviour, but the IAM boundary is the real control.
 
+## Verdict memory (SIO-1651)
+
+A verdict is remembered as a durable key decision, so a later session knows the
+estate was checked and how it came out. Both paths write through the same
+builder in `packages/agent/src/pi-verdict-memory.ts`, so a verdict is recorded
+identically however it was asked for:
+
+- the SIO-1635 card path (`executePiVerify`), on a successful reply, and
+- the SIO-1651 `pi-handoff` workflow's verify step.
+
+**Structured fields only.** `recordKeyDecision` renders the decision text into
+`key-decisions.md` and forwards it to the Agent Memory backend as a durable
+fact, and that text is rendered into the next turn's prompt. A verdict carries
+free text the spoke's model wrote (`summary`, `claims[].evidence`,
+`additional_observations`, `recommended_investigation`) and NONE of it may
+cross that boundary, because a hub reply is data and must never become an LLM
+input. Only enums, counts and ids are written:
+
+```text
+pi verify <estate>: <verdict> (claims: N confirmed, N contradicted, N unverifiable) target <target> msg <msg_id>
+```
+
+with annotations `{ kind: "pi-verify", estate, target, verdict, msg_id,
+claims_confirmed, claims_contradicted, claims_unverifiable }` for filtered
+recall. No `rationale` (it is rendered free text) and no TTL (a verdict is
+durable). A queued send writes nothing: there is no verdict yet. The write is
+wrapped so a memory failure can never change the outcome of a verify that
+already succeeded, and `pi-verdict-memory.test.ts` asserts that no
+spoke-authored text reaches either the decision line or the annotations.
+
+## The pi-handoff workflow (SIO-1651)
+
+`agents/incident-analyzer/workflows/pi-handoff.yaml` chains two steps, and is
+the first production wiring of the skillflow executor's `graph` and `agent`
+step handlers:
+
+- `analyze` (`graph: true`) READS the closing turn's completed report. It does
+  not re-invoke the pipeline: `classify` already snapshots the prior
+  investigation into `closingReport` precisely so closing an incident never
+  re-runs a multi-minute fan-out, so re-invoking would repeat a full 7-agent
+  investigation to reproduce a report that already exists.
+- `verify` (`agent: aws-spoke`) hands that report to the estate's spoke through
+  the same `runHubTask` path the card uses, so the two cannot drift.
+
+It runs detached POST-TURN from the stream route, next to the incident-close
+chain and under the same contract: never awaited, never able to affect the
+response, every failure folded into a soft result. Gated by
+`PI_HANDOFF_ENABLED` (default off). The estate and the report are read from one
+pre-prune state snapshot (`getPiHandoffRequest`), and the report is captured
+there rather than re-read later, because `pruneThreadState` rewrites the
+checkpoint in between. One hand-off per close: the first assessed estate.
+
+Registration uses the analyzer's own principal (`incident-analyzer-*`), not a
+separate `pi-fleet` one, so the workflow needs no additional hub token.
+
 ## Out of scope for SIO-1635
 
-Feeding the verdict into later turns, persistent peer registration so hub
-agents can push to the analyzer, async action polling, and verification for
-non-AWS data sources.
+Persistent peer registration so hub agents can push to the analyzer, async
+action polling, and verification for non-AWS data sources. (Feeding the verdict
+into later turns was out of scope for SIO-1635 and is now implemented by
+SIO-1651; see "Verdict memory" above.)

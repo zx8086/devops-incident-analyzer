@@ -150,9 +150,11 @@ Settled at build time (SIO-1652, 2026-09-06): the corp fleet reports to `ops` (`
 
 ### Phase 3: after each other, and memory (3 to 4 days)
 
-- `packages/agent/src/pi-handoff-workflow-handlers.ts` registering `graph` (invoke the incident graph for a thread and read `finalAnswer`) and `agent` (hub send and await through `PiComsClient`) handlers for `runWorkflow`; `agents/incident-analyzer/workflows/pi-handoff.yaml` chaining `graph:` to `agent: aws-spoke` with the report passed by template. Trigger from incident close or manually.
+- `packages/agent/src/pi-handoff-workflow-handlers.ts` registering `graph` and `agent` handlers for `runWorkflow`; `agents/incident-analyzer/workflows/pi-handoff.yaml` chaining `graph:` to `agent: aws-spoke` with the report passed by template. Triggered post-turn from incident close.
 - After `executePiVerify` success, `recordKeyDecision` with structured fields only; optional knowledge-graph write of the verdict against the incident entity.
 - Verify: skillflow test with fake handlers; end to end, close an incident, the workflow sends the report to the estate spoke, the verdict lands in `memory/runtime/key-decisions.md` as enums, and the next turn's prompt shows the decision line with no free text.
+
+Settled at build time (SIO-1651, 2026-09-06): the `graph` handler READS the closing turn's completed report rather than re-invoking the pipeline for a thread. `classify` already snapshots the prior investigation into `closingReport` precisely so closing an incident never re-runs a multi-minute fan-out (SIO-1357), so re-invoking would repeat a full 7-agent investigation to reproduce a report that already exists; `awsTargetEstates` likewise survives the close turn, so the estate and the report come from one pre-prune snapshot. The workflow registers as the analyzer's own principal (`incident-analyzer-*`), so it needs no `pi-fleet` hub token. See `pi-coms-verification.md`.
 
 Deferred, separate design: a Pi extension on spokes calling the Couchbase Agent Memory REST service. It needs an outbound network path from every account, a per-account bearer secret in SSM, and a trust decision about spokes reading analyzer memory.
 
@@ -190,7 +192,7 @@ Replacing Pi with LangGraph on the spokes; making spokes in-process sub-agents; 
 | 1b: manifest-driven fleet deploy | [SIO-1653](https://linear.app/siobytes/issue/SIO-1653) | Done (PR #693, squash `41523088`); AWS apply user-run |
 | 2a: thin hub pane in the web app | [SIO-1650](https://linear.app/siobytes/issue/SIO-1650) | Done (PR #694, squash `62c8a59d`); pi-fleet principal and manual pane run user-run |
 | 2b: fleet inbox enrichment node | [SIO-1652](https://linear.app/siobytes/issue/SIO-1652) | Done (PR #695, squash `cb2fcdca`); manual run with the flag against real monitor traffic user-run |
-| 3: skillflow handlers, structured verdicts into memory | [SIO-1651](https://linear.app/siobytes/issue/SIO-1651) | Not started; handover `experiments/HANDOFF-2026-09-06-SIO-1651-pi-fleet-phase-3.md` |
+| 3: skillflow handlers, structured verdicts into memory | [SIO-1651](https://linear.app/siobytes/issue/SIO-1651) | In review; plan `docs/superpowers/plans/2026-09-06-pi-fleet-phase-3.md`; live run with `PI_HANDOFF_ENABLED` against a hub with a registered spoke user-run |
 
 No phase starts before its issue is approved. Phase 2 decision recorded 2026-09-06: the thin hub pane (2a) first, the fleet inbox node (2b) added the same day; the third graph (2c) stays a later option.
 

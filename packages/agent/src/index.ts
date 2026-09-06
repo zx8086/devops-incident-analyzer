@@ -28,7 +28,12 @@ export {
 	resolvePiComsConfig,
 	senderNameFor,
 } from "./action-tools/pi-coms-client.ts";
-export { environmentForEstate, type HubSelection, selectHubForEstate } from "./action-tools/pi-verifier.ts";
+export {
+	environmentForEstate,
+	estatesFromState,
+	type HubSelection,
+	selectHubForEstate,
+} from "./action-tools/pi-verifier.ts";
 export { installAgentMemory } from "./agent-memory-install.ts";
 export { aggregate } from "./aggregator.ts";
 export { checkAlignment, getDataSourceErrorCategories, routeAfterAlignment } from "./alignment.ts";
@@ -65,6 +70,16 @@ export {
 	isClosureLearningEnabled,
 	runIncidentCloseForClosingTurn,
 } from "./incident-close-workflow-handlers.ts";
+// SIO-1651: the pi-handoff workflow's production entry point (post-turn
+// background hook) plus the flag apps/web gates it on.
+export {
+	isPiHandoffEnabled,
+	type PiHandoffContext,
+	type PiHandoffResult,
+	runPiHandoff,
+	runPiHandoffForClosingTurn,
+} from "./pi-handoff-workflow-handlers.ts";
+export { buildVerdictDecision, recordVerdictDecision } from "./pi-verdict-memory.ts";
 // SIO-1135: retention sweep (uncurated incident purge) wired beside the topology cron.
 export {
 	type PurgeSweepSummary,

@@ -434,3 +434,82 @@ describe("shouldTrigger", () => {
 		expect(shouldTrigger(def, { type: "event", name: "push" })).toBe(false);
 	});
 });
+
+// SIO-1651: the pi-handoff shape -- a `graph` step feeding an `agent` step.
+// Both handler kinds had no production wiring (and so no coverage here) until
+// Phase 3 registered them.
+describe("SIO-1651 graph -> agent step wiring", () => {
+	const handoffDef = () =>
+		WorkflowSchema.parse({
+			name: "pi-handoff",
+			version: "0.1.0",
+			description: "graph then agent",
+			steps: [
+				{ name: "analyze", graph: true, with: { thread_id: "${{ trigger.thread_id }}" }, outputs: ["report"] },
+				{
+					name: "verify",
+					agent: "aws-spoke",
+					depends_on: ["analyze"],
+					with: { estate: "${{ trigger.estate }}", report: "${{ steps.analyze.outputs.report }}" },
+					outputs: ["verdict", "msg_id"],
+				},
+			],
+			error_handling: "best_effort",
+		});
+
+	test("runs graph before agent and threads the report between them", async () => {
+		const order: string[] = [];
+		let agentInputs: Record<string, string> = {};
+		const handlers: StepHandlers = {
+			graph: async (resolved: ResolvedStep) => {
+				order.push(`graph:${resolved.target}:${resolved.inputs.thread_id}`);
+				return { report: "the completed report" };
+			},
+			agent: async (resolved: ResolvedStep) => {
+				order.push(`agent:${resolved.target}`);
+				agentInputs = resolved.inputs;
+				return { verdict: "confirmed", msg_id: "01JMSG" };
+			},
+		};
+
+		const result = await runWorkflow(handoffDef(), {
+			handlers,
+			trigger: { thread_id: "thread-1", estate: "acme-prd" },
+		});
+
+		expect(result.ok).toBe(true);
+		// stepTarget returns the literal "graph" for a graph step.
+		expect(order).toEqual(["graph:graph:thread-1", "agent:aws-spoke"]);
+		expect(agentInputs.report).toBe("the completed report");
+		expect(agentInputs.estate).toBe("acme-prd");
+		expect(result.steps.find((s) => s.name === "verify")?.outputs).toEqual({
+			verdict: "confirmed",
+			msg_id: "01JMSG",
+		});
+	});
+
+	test("an unregistered graph handler rejects the whole run (caller wiring bug)", async () => {
+		const handlers: StepHandlers = { agent: async () => ({ verdict: "confirmed", msg_id: "x" }) };
+		await expect(
+			runWorkflow(handoffDef(), { handlers, trigger: { thread_id: "thread-1", estate: "acme-prd" } }),
+		).rejects.toThrow(MissingHandlerError);
+	});
+
+	test("a failing agent step leaves the successful graph step recorded", async () => {
+		const handlers: StepHandlers = {
+			graph: async () => ({ report: "r" }),
+			agent: async () => {
+				throw new Error("hub unreachable");
+			},
+		};
+		const result = await runWorkflow(handoffDef(), {
+			handlers,
+			trigger: { thread_id: "thread-1", estate: "acme-prd" },
+		});
+		expect(result.ok).toBe(false);
+		expect(result.steps.find((s) => s.name === "analyze")?.status).toBe("ok");
+		const verify = result.steps.find((s) => s.name === "verify");
+		expect(verify?.status).toBe("failed");
+		expect(verify?.error).toContain("hub unreachable");
+	});
+});

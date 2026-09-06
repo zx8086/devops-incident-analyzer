@@ -1,0 +1,43 @@
+name: pi-handoff
+version: 0.1.0
+description: >
+  SIO-1651: sequenced analyzer-to-spoke hand-off. Runs as a POST-TURN
+  background workflow after an incident close that assessed an AWS estate --
+  never inside the SSE/interrupt path. The analyze step READS the completed
+  turn's investigation report (it does not re-run the pipeline: classify
+  already snapshotted it into closingReport, and re-invoking would repeat a
+  multi-minute fan-out). The verify step sends that report to the estate's
+  pi-coms spoke and returns a structured verdict. Best-effort throughout: a
+  failure here must never affect the user-facing turn that already answered.
+
+triggers:
+  - type: manual
+
+steps:
+  # Read the closing turn's report from the checkpoint. No LLM call, no graph
+  # invocation -- the report already exists by the time this workflow runs.
+  - name: analyze
+    graph: true
+    description: Read the completed investigation report for this thread
+    with:
+      thread_id: ${{ trigger.thread_id }}
+    outputs:
+      - report
+
+  # Hand the report to the estate's spoke for read-only verification. Tolerant:
+  # an offline spoke queues to the fallback mailbox and reports no verdict,
+  # which must not fail a run whose analyze step already succeeded.
+  - name: verify
+    agent: aws-spoke
+    description: Ask the estate's pi spoke to verify the report's claims
+    depends_on:
+      - analyze
+    with:
+      estate: ${{ trigger.estate }}
+      report: ${{ steps.analyze.outputs.report }}
+    outputs:
+      - verdict
+      - msg_id
+    error_handling: continue
+
+error_handling: best_effort
