@@ -97,6 +97,14 @@ export {
 	type ToolMapping,
 } from "./types.ts";
 export {
+	assertValidVersion,
+	assertVersionMatchesTag,
+	parseSemver,
+	provenanceHeader,
+	SEMVER_RE,
+	type Semver,
+} from "./version.ts";
+export {
 	loadWorkflows,
 	type SkillFlowDef,
 	SkillFlowSchema,

@@ -19,6 +19,7 @@ import {
 	type ToolDefinition,
 	ToolDefinitionSchema,
 } from "./types.ts";
+import { assertValidVersion } from "./version.ts";
 import { loadWorkflows, type WorkflowDef } from "./workflow.ts";
 
 export interface KnowledgeEntry {
@@ -67,6 +68,9 @@ export interface LoadedAgent {
 	// SIO-1014: typed frontmatter for shared skills (same contract as skillMeta).
 	sharedSkillMeta: Map<string, SkillFrontmatter>;
 	sharedContext?: string;
+	// SIO-1649: context.md only; the exporter uses this so analyzer runtime facts
+	// (context-runtime.md) never reach a Pi persona.
+	sharedContextPortable?: string;
 }
 
 // SIO-843: Internal recursion options. Lifecycle asset trees (hooks/memory)
@@ -85,6 +89,8 @@ export function loadAgent(agentDir: string, options?: LoadAgentOptions): LoadedA
 	const yamlContent = readFileSync(join(agentDir, "agent.yaml"), "utf-8");
 	const rawManifest = parse(yamlContent);
 	const manifest = AgentManifestSchema.parse(rawManifest);
+	// SIO-1649: version is load-bearing (release tag gate, exported provenance header).
+	assertValidVersion(manifest.name, manifest.version);
 
 	const soul = loadOptionalFile(join(agentDir, "SOUL.md"));
 	const rules = loadOptionalFile(join(agentDir, "RULES.md"));
@@ -162,6 +168,7 @@ export function loadAgent(agentDir: string, options?: LoadAgentOptions): LoadedA
 		sharedSkills: merged.sharedSkills,
 		sharedSkillMeta: merged.sharedSkillMeta,
 		sharedContext: merged.sharedContext,
+		sharedContextPortable: merged.sharedContextPortable,
 	};
 }
 
