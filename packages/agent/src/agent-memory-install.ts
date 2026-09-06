@@ -10,6 +10,7 @@ import { registerMemoryFlusher, registerMemoryRecaller, registerPostTurnFlusher 
 import {
 	agentMemoryBaseUrl,
 	agentMemoryHealthy,
+	checkAgentMemoryDatabaseHealth,
 	checkAgentMemoryHealth,
 	endAgentMemorySession,
 	flushAgentMemoryAfterTurn,
@@ -27,7 +28,19 @@ const logger = getLogger("agent:memory-backend");
 function probeAgentMemoryAtStartup(): void {
 	if (selectedBackend() !== "agent-memory") return;
 	void checkAgentMemoryHealth().then((health) => {
-		if (health.ok) return;
+		if (health.ok) {
+			// SIO-1646: /health stays 200 while the service's Couchbase store is unreachable
+			// (observed live 2026-09-06), so a "healthy" probe is not enough -- ask the database
+			// probe too. Informational: the first real call arms the degraded-mode cooldown.
+			void checkAgentMemoryDatabaseHealth().then((db) => {
+				if (db.ok) return;
+				logger.warn(
+					{ baseUrl: agentMemoryBaseUrl(), detail: db.detail },
+					"agent-memory service is up but its Couchbase database is unreachable; recall/flush will degrade until it recovers",
+				);
+			});
+			return;
+		}
 		// CodeRabbit (PR #437): the probe only reflects THIS moment -- a backend that recovers can
 		// still service later recall/flush calls, so the message must not assert session-wide fate.
 		logger.error(

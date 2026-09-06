@@ -2,10 +2,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
 	type AgentMemoryConfig,
+	BackendUnavailableError,
 	createFetchAgentMemoryClient,
 	resolveAgentMemoryConfig,
 	ServiceUnavailableError,
 	SessionAlreadyEndedError,
+	SessionNotFoundError,
 } from "../agent-memory.ts";
 
 const CONFIG: AgentMemoryConfig = { baseUrl: "http://mem.test", enabled: true };
@@ -440,5 +442,114 @@ describe("resolveAgentMemoryConfig syncWrites", () => {
 			AGENT_MEMORY_SYNC_WRITES: "true",
 		} as unknown as NodeJS.ProcessEnv);
 		expect(cfg.syncWrites).toBe(true);
+	});
+});
+
+// SIO-1646: the service's Couchbase backend can be down while GET /health still says healthy. The
+// unguarded data paths then return 400 USER_ERROR with the raw SDK error (a service-side mislabel),
+// and the guarded ones return 503 DATABASE_UNAVAILABLE. Both are transient and must be typed so the
+// backend can arm a cooldown instead of warning on every call.
+describe("backend-unavailable and session-not-found classification (SIO-1646)", () => {
+	// Verbatim shape observed live 2026-09-06.
+	const COUCHBASE_NETWORK_400 = {
+		error: "USER_ERROR",
+		message:
+			"Couchbase operation failed: <ec=1004, category=couchbase.network, message=Operation failed, " +
+			"context=KeyValueErrorContext:{'key': 'elastic-iac', 'bucket_name': 'agent_memory', 'scope_name': 'agentmemory', " +
+			"'collection_name': 'users', 'opaque': 679, 'status_code': 0, 'retry_attempts': 0, 'retry_reasons': set()}, " +
+			"C Source=/couchbase-python-client/src/connection.hxx:230>",
+	};
+
+	async function caught(fn: () => Promise<unknown>): Promise<unknown> {
+		try {
+			await fn();
+		} catch (e) {
+			return e;
+		}
+		return undefined;
+	}
+
+	test("a 400 USER_ERROR carrying category=couchbase.network is a BackendUnavailableError", async () => {
+		const { restore } = stubFetch({ "POST /users": { status: 400, body: COUCHBASE_NETWORK_400 } });
+		const client = createFetchAgentMemoryClient(CONFIG);
+		const err = await caught(() => client.ensureUser("elastic-iac", "elastic-iac"));
+		expect(err).toBeInstanceOf(BackendUnavailableError);
+		expect(err).not.toBeInstanceOf(ServiceUnavailableError);
+		restore();
+	});
+
+	test("a 503 DATABASE_UNAVAILABLE is a BackendUnavailableError, not the 503 saturation class", async () => {
+		const { restore } = stubFetch({
+			"POST /users/incident-analyzer/sessions/t-1/memory": {
+				status: 503,
+				body: { error: "DATABASE_UNAVAILABLE", message: "AgentMemoryCouchbaseException: probe failed" },
+			},
+		});
+		const client = createFetchAgentMemoryClient(CONFIG);
+		const err = await caught(() => client.addFacts(REF, ["f"]));
+		expect(err).toBeInstanceOf(BackendUnavailableError);
+		expect(err).not.toBeInstanceOf(ServiceUnavailableError);
+		restore();
+	});
+
+	test("a 503 saturation response still maps to ServiceUnavailableError (which is a BackendUnavailableError)", async () => {
+		const { restore } = stubFetch({
+			"POST /users/incident-analyzer/sessions/t-1/memory": { status: 503, body: { retry_after_seconds: 12 } },
+		});
+		const client = createFetchAgentMemoryClient(CONFIG);
+		const err = await caught(() => client.addFacts(REF, ["f"]));
+		expect(err).toBeInstanceOf(ServiceUnavailableError);
+		expect(err).toBeInstanceOf(BackendUnavailableError);
+		restore();
+	});
+
+	test("a 400 Couchbase error WITHOUT the network marker stays a plain Error (narrow predicate)", async () => {
+		const { restore } = stubFetch({
+			"POST /users": {
+				status: 400,
+				body: { error: "USER_ERROR", message: "Couchbase operation failed: value too large" },
+			},
+		});
+		const client = createFetchAgentMemoryClient(CONFIG);
+		const err = await caught(() => client.ensureUser("u", "u"));
+		expect(err).toBeInstanceOf(Error);
+		expect(err).not.toBeInstanceOf(BackendUnavailableError);
+		restore();
+	});
+
+	test("a 404 SESSION_NOT_FOUND on end and update is a SessionNotFoundError", async () => {
+		const notFound = {
+			status: 404,
+			body: {
+				error: "SESSION_NOT_FOUND",
+				message: "Session ID t-1 under User ID incident-analyzer - Session not found",
+			},
+		};
+		const { restore } = stubFetch({
+			"POST /users/incident-analyzer/sessions/t-1/end": notFound,
+			"PUT /users/incident-analyzer/sessions/t-1": notFound,
+		});
+		const client = createFetchAgentMemoryClient(CONFIG);
+		expect(await caught(() => client.endSession(REF))).toBeInstanceOf(SessionNotFoundError);
+		expect(await caught(() => client.updateSession(REF, { annotations: { outcome: "x" } }))).toBeInstanceOf(
+			SessionNotFoundError,
+		);
+		restore();
+	});
+
+	test("checkDatabaseHealth maps GET /health/couchbase 200 to ok and 503 to ok:false with the body as detail", async () => {
+		const { restore } = stubFetch({ "GET /health/couchbase": { status: 200, body: { status: "healthy" } } });
+		const client = createFetchAgentMemoryClient(CONFIG);
+		expect(await client.checkDatabaseHealth?.()).toMatchObject({ ok: true });
+		restore();
+
+		const { restore: restore2 } = stubFetch({
+			"GET /health/couchbase": { status: 503, body: { error: "DATABASE_UNAVAILABLE", message: "probe failed" } },
+		});
+		const client2 = createFetchAgentMemoryClient(CONFIG);
+		const health = await client2.checkDatabaseHealth?.();
+		expect(health?.ok).toBe(false);
+		expect(health?.detail).toContain("DATABASE_UNAVAILABLE");
+		restore2();
 	});
 });

@@ -13,10 +13,12 @@ import {
 	type AgentMemoryClient,
 	type AgentMemoryUserRef,
 	type AnnotationMap,
+	BackendUnavailableError,
 	type ChatMessageBlock,
 	redactPiiContent,
 	ServiceUnavailableError,
 	SessionAlreadyEndedError,
+	SessionNotFoundError,
 } from "@devops-agent/shared";
 import * as realMemoryBackendNs from "./memory-backend.ts";
 
@@ -41,9 +43,11 @@ import {
 	enqueueMessage,
 	flushAgentMemory,
 	flushAgentMemoryAfterTurn,
+	MAX_QUEUED_WRITES,
 	pendingWriteCount,
 	recallAgentMemory,
 	recallInFlightFleetUpgrades,
+	recordAgentFactNow,
 	resolveUserId,
 	searchAgentMemory,
 	selectedBackend,
@@ -972,5 +976,226 @@ describe("dedupePreferring (SIO-1005)", () => {
 
 	test("empty in -> empty out", () => {
 		expect(dedupePreferring([], (h) => h.annotations.mr_url, rank)).toEqual([]);
+	});
+});
+
+// SIO-1646: a Couchbase outage behind a "healthy" service must cost ONE warn per cooldown window,
+// never drop writes that were never sent, and never re-issue the user/session bootstrap calls that
+// already succeeded.
+describe("backend-unavailable degraded mode (SIO-1646)", () => {
+	const DB_DOWN = () =>
+		new BackendUnavailableError("AgentMemory POST /users backend unavailable: 400 couchbase.network");
+
+	interface CallCounts {
+		ensureUser: number;
+		ensureSession: number;
+		addFacts: number;
+		search: number;
+		end: number;
+	}
+	function fakeClient(over: Partial<AgentMemoryClient> = {}): {
+		client: AgentMemoryClient;
+		calls: CallCounts;
+	} {
+		const calls: CallCounts = { ensureUser: 0, ensureSession: 0, addFacts: 0, search: 0, end: 0 };
+		const client: AgentMemoryClient = {
+			async ensureUser() {
+				calls.ensureUser++;
+			},
+			async ensureSession() {
+				calls.ensureSession++;
+			},
+			async addFacts(_ref, facts) {
+				calls.addFacts++;
+				return { blockIds: facts.map((_, i) => `fact-${i}`), acceptedCount: facts.length, rejectedCount: 0 };
+			},
+			async addMessages() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async searchMemory() {
+				calls.search++;
+				return [];
+			},
+			async updateSession() {},
+			async endSession() {
+				calls.end++;
+			},
+			async checkHealth() {
+				return { ok: true };
+			},
+			...over,
+		};
+		return { client, calls };
+	}
+
+	test("ensureUser/ensureSession run once per user and session across flushes and recalls", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { client, rec } = makeFakeClient();
+		__setAgentMemoryClient(client);
+		setActiveMemorySession("incident-analyzer", "t-memo");
+		recordKeyDecision({ requestId: "r1", decision: "one" });
+		await flushAgentMemory();
+		recordKeyDecision({ requestId: "r2", decision: "two" });
+		await flushAgentMemory();
+		await recallAgentMemory("incident-analyzer", "t-memo", "anything");
+		expect(rec.users).toEqual(["incident-analyzer"]);
+		expect(rec.sessions).toEqual(["t-memo"]);
+	});
+
+	test("a backend outage warns ONCE per cooldown window across all call sites and stops calling the service", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { client, calls } = fakeClient({
+			async ensureUser() {
+				calls.ensureUser++;
+				throw DB_DOWN();
+			},
+		});
+		__setAgentMemoryClient(client);
+		setActiveMemorySession("elastic-iac", "t-outage");
+		const warnSpy = spyOnLoggerMethod("warn");
+		try {
+			expect(await recallAgentMemory("elastic-iac", "t-outage", "q")).toBeUndefined();
+			expect(await searchAgentMemory("elastic-iac", "q", {}, 5)).toEqual([]);
+			expect(await searchAgentMemory("elastic-iac", "q2", {}, 5)).toEqual([]);
+			expect(await recallInFlightFleetUpgrades("elastic-iac")).toEqual([]);
+			expect(await recordAgentFactNow("elastic-iac", "fact", { kind: "x" })).toBe(false);
+		} finally {
+			warnSpy.restore();
+		}
+		const outageWarns = warnSpy.calls.filter((args) => /agent-memory backend unavailable/.test(String(args[1])));
+		expect(outageWarns).toHaveLength(1);
+		expect(calls.ensureUser).toBe(1);
+		expect(calls.search).toBe(0);
+	});
+
+	test("a flush that fails in the ensure preamble requeues the batch; teardown drains it after recovery", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		let down = true;
+		const { client, calls } = fakeClient({
+			async ensureUser() {
+				calls.ensureUser++;
+				if (down) throw DB_DOWN();
+			},
+		});
+		__setAgentMemoryClient(client);
+		setActiveMemorySession("incident-analyzer", "t-preamble");
+		recordKeyDecision({ requestId: "r1", decision: "keep me" });
+		await flushAgentMemory();
+		expect(pendingWriteCount()).toBe(1);
+		expect(calls.addFacts).toBe(0);
+		down = false;
+		await endAgentMemorySession("incident-analyzer", "t-preamble");
+		expect(pendingWriteCount()).toBe(0);
+		expect(calls.addFacts).toBe(1);
+	});
+
+	test("a mid-batch 503 requeues only the unsent tail (no double-write of accepted facts)", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		let failOnCall = 2;
+		const accepted: string[] = [];
+		const { client } = fakeClient({
+			async addFacts(_ref, facts) {
+				if (accepted.length + 1 === failOnCall) {
+					failOnCall = -1;
+					throw new ServiceUnavailableError("queue full", 0.01);
+				}
+				accepted.push(...facts);
+				return { blockIds: facts.map((_, i) => `fact-${i}`), acceptedCount: facts.length, rejectedCount: 0 };
+			},
+		});
+		__setAgentMemoryClient(client);
+		setActiveMemorySession("incident-analyzer", "t-tail");
+		enqueueFact("first", "2026-06-17T00:00:00Z");
+		enqueueFact("second", "2026-06-17T00:00:01Z");
+		enqueueFact("third", "2026-06-17T00:00:02Z");
+		await flushAgentMemory(); // "first" accepted, "second" hits the 503, "third" never sent
+		expect(accepted).toEqual(["first"]);
+		expect(pendingWriteCount()).toBe(2);
+		await Bun.sleep(20);
+		await flushAgentMemory();
+		expect(accepted).toEqual(["first", "second", "third"]);
+	});
+
+	test("during an outage the queue is capped at MAX_QUEUED_WRITES (drop oldest) and the overflow is reported once", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		let down = true;
+		const { client } = fakeClient({
+			async ensureUser() {
+				if (down) throw DB_DOWN();
+			},
+		});
+		__setAgentMemoryClient(client);
+		setActiveMemorySession("incident-analyzer", "t-cap");
+		await recallAgentMemory("incident-analyzer", "t-cap", "q"); // arms the cooldown, queue untouched
+		for (let i = 0; i < MAX_QUEUED_WRITES + 5; i++) enqueueFact(`decision ${i}`, "2026-06-17T00:00:00Z");
+		expect(pendingWriteCount()).toBe(MAX_QUEUED_WRITES);
+		down = false;
+		const infoSpy = spyOnLoggerMethod("info");
+		try {
+			await endAgentMemorySession("incident-analyzer", "t-cap");
+		} finally {
+			infoSpy.restore();
+		}
+		const flushed = infoSpy.calls.find((args) => args[1] === "flushed agent-memory writes");
+		expect((flushed?.[0] as { droppedOverflow?: number } | undefined)?.droppedOverflow).toBe(5);
+		expect(pendingWriteCount()).toBe(0);
+	});
+
+	test("the outage cooldown suppresses threshold and per-turn flushes; teardown still drains", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		let down = true;
+		const { client, calls } = fakeClient({
+			async ensureUser() {
+				calls.ensureUser++;
+				if (down) throw DB_DOWN();
+			},
+		});
+		__setAgentMemoryClient(client);
+		setActiveMemorySession("incident-analyzer", "t-gate");
+		recordKeyDecision({ requestId: "r1", decision: "first" });
+		await flushAgentMemory(); // outage -> requeued, cooldown armed
+		expect(calls.ensureUser).toBe(1);
+		for (let i = 0; i < 30; i++) enqueueFact(`decision ${i}`, "2026-06-17T00:00:00Z");
+		await flushAgentMemoryAfterTurn("incident-analyzer", "t-gate");
+		expect(calls.ensureUser).toBe(1); // nothing re-hit the service while cooling down
+		expect(pendingWriteCount()).toBe(31);
+		down = false;
+		await endAgentMemorySession("incident-analyzer", "t-gate");
+		expect(pendingWriteCount()).toBe(0);
+		expect(calls.addFacts).toBe(31);
+	});
+
+	test("a total-outage fetch failure also arms the cooldown (the SIO-1170 drop is unchanged)", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { client, calls } = fakeClient({
+			async ensureUser() {
+				calls.ensureUser++;
+				throw new TypeError("fetch failed", { cause: new Error("ECONNREFUSED") });
+			},
+		});
+		__setAgentMemoryClient(client);
+		setActiveMemorySession("incident-analyzer", "t-net");
+		recordKeyDecision({ requestId: "r1", decision: "irrelevant" });
+		await flushAgentMemory();
+		expect(pendingWriteCount()).toBe(0);
+		await recallAgentMemory("incident-analyzer", "t-net", "q");
+		expect(calls.ensureUser).toBe(1); // recall skipped inside the window
+	});
+
+	test("teardown of a session the backend never created is a debug no-op, not a warn", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		const { client } = fakeClient({
+			async endSession() {
+				throw new SessionNotFoundError('{"error":"SESSION_NOT_FOUND"}');
+			},
+		});
+		__setAgentMemoryClient(client);
+		const warnSpy = spyOnLoggerMethod("warn");
+		try {
+			await endAgentMemorySession("elastic-iac", "t-never-created");
+		} finally {
+			warnSpy.restore();
+		}
+		expect(warnSpy.calls.filter((args) => /endSession failed/.test(String(args[1])))).toHaveLength(0);
 	});
 });

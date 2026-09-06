@@ -14,12 +14,14 @@ export {
 	type AgentMemoryHealth,
 	type AgentMemoryUserRef,
 	type AnnotationMap,
+	BackendUnavailableError,
 	type ChatMessageBlock,
 	createFetchAgentMemoryClient,
 	type MemoryHit,
 	resolveAgentMemoryConfig,
 	ServiceUnavailableError,
 	SessionAlreadyEndedError,
+	SessionNotFoundError,
 } from "./agent-memory.ts";
 export {
 	type ApplicationTopology,

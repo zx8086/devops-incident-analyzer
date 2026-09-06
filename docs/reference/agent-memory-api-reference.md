@@ -123,6 +123,9 @@ Verify that AgentMemory can reach and query the Couchbase database.
 | code | type | description |
 |---|---|---|
 | 200 | CouchbaseHealthResponse | Successful Response |
+| 503 | `{"error":"DATABASE_UNAVAILABLE", ...}` | Observed live 2026-09-06: the store is unreachable (`ec=1004, category=couchbase.network`) |
+
+Note (SIO-1646): `GET /health` keeps returning 200 `healthy` during a database outage; only this route reports it. In that state the data endpoints return `400 {"error":"USER_ERROR","message":"Couchbase operation failed: <ec=1004, category=couchbase.network, ...>"}` (a service-side mislabel of a transient failure); the client treats that body as backend-unavailable and backs off.
 
 #### `GET /health/memory`
 

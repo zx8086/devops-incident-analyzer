@@ -129,6 +129,10 @@ export interface AgentMemoryClient {
 	deleteMemoryBlocks?(ref: AgentMemoryUserRef, blockIds: string[]): Promise<{ deletedCount: number }>;
 	// Readiness probe (GET /health). Never throws; returns ok:false on any failure.
 	checkHealth(): Promise<AgentMemoryHealth>;
+	// SIO-1646: database probe (GET /health/couchbase). /health stays 200 while the service's
+	// Couchbase store is unreachable, so the startup probe asks this one too. Never throws.
+	// Optional so the many test fakes implementing this interface need no stub.
+	checkDatabaseHealth?(): Promise<AgentMemoryHealth>;
 }
 
 // Minimal response shapes (subset of the AgentMemory OpenAPI schemas).
@@ -162,8 +166,21 @@ class ConflictError extends Error {}
 // caller treats it as success rather than a dropped-write/failed-end error.
 export class SessionAlreadyEndedError extends Error {}
 
-// Raised on 503 (extraction queue saturated); carries the service's retry hint.
-class ServiceUnavailableError extends Error {
+// SIO-1646: raised on 404 SESSION_NOT_FOUND from end/update. The session was never
+// created (ensureSession failed at session start because the backend was down),
+// so there is nothing to end -- benign at teardown, like SESSION_ALREADY_ENDED.
+export class SessionNotFoundError extends Error {}
+
+// SIO-1646: the service itself is up but its Couchbase store is not. Nothing about
+// the request is wrong, so the failure is transient and the backend arms a
+// process-wide cooldown instead of warning on every call. The service reports this
+// two ways: its guarded paths return 503 DATABASE_UNAVAILABLE, while an unguarded
+// data path wraps the raw SDK error as 400 USER_ERROR "Couchbase operation failed:
+// <ec=1004, category=couchbase.network, ...>" (observed live 2026-09-06; a
+// service-side mislabel). Only those two markers are matched -- a plain "Couchbase
+// operation failed" without the network category can be a real request error
+// (e.g. a value too large) and must stay a hard failure.
+export class BackendUnavailableError extends Error {
 	constructor(
 		message: string,
 		readonly retryAfterSeconds?: number,
@@ -171,6 +188,15 @@ class ServiceUnavailableError extends Error {
 		super(message);
 	}
 }
+
+function isBackendUnavailableBody(text: string): boolean {
+	return text.includes("DATABASE_UNAVAILABLE") || text.includes("category=couchbase.network");
+}
+
+// Raised on 503 (extraction queue saturated); carries the service's retry hint.
+// A BackendUnavailableError subclass: the flush path keeps its SIO-1364-specific
+// handling (requeue + saturation cooldown), every other site treats it as transient.
+export class ServiceUnavailableError extends BackendUnavailableError {}
 
 async function amFetch<T>(config: AgentMemoryConfig, method: string, path: string, body?: unknown): Promise<T> {
 	const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -188,6 +214,16 @@ async function amFetch<T>(config: AgentMemoryConfig, method: string, path: strin
 		// can treat it as idempotent success instead of a noisy failure.
 		if (res.status === 400 && text.includes("SESSION_ALREADY_ENDED")) {
 			throw new SessionAlreadyEndedError(text);
+		}
+		if (res.status === 404 && text.includes("SESSION_NOT_FOUND")) {
+			throw new SessionNotFoundError(text);
+		}
+		// SIO-1646: checked BEFORE the 503 branch so a 503 DATABASE_UNAVAILABLE is classified as
+		// backend-unavailable (process-wide cooldown), not as extraction-queue saturation.
+		if ((res.status === 400 || res.status >= 500) && isBackendUnavailableBody(text)) {
+			throw new BackendUnavailableError(
+				`AgentMemory ${method} ${path} backend unavailable: ${res.status} ${text}`.trim(),
+			);
 		}
 		if (res.status === 503) {
 			// retry_after_seconds may arrive in the body (preferred) or the header.
@@ -344,10 +380,18 @@ export function createFetchAgentMemoryClient(config: AgentMemoryConfig): AgentMe
 				return { ok: false, detail: error instanceof Error ? error.message : String(error) };
 			}
 		},
+
+		async checkDatabaseHealth() {
+			try {
+				const res = await amFetch<{ status?: string }>(config, "GET", "/health/couchbase");
+				const status = res?.status;
+				return { ok: status === undefined || status === "ok" || status === "healthy", status };
+			} catch (error) {
+				return { ok: false, detail: error instanceof Error ? error.message : String(error) };
+			}
+		},
 	};
 }
-
-export { ServiceUnavailableError };
 
 // Builds the config from AGENT_MEMORY_* env vars then validates. No .default()
 // in the schema (project rule); defaults applied here, same as resolveMemoryPrConfig.
