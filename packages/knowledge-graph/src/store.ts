@@ -57,7 +57,33 @@ function findWebAppRoot(): string {
 	return process.cwd();
 }
 
-let loggedResolvedPath = false;
+// SIO-1645: every process-lifetime singleton in this module lives on ONE globalThis slot,
+// the same idiom as the mcp-bridge health poll (SIO-1113) and the skillflow scheduler
+// (SIO-1468). Vite restarts its dev server in place on a root .env change: same PID, new
+// SSR module runner, import.meta.hot.dispose NOT run, and linked workspace packages are
+// re-evaluated. A module-level `let storePromise` therefore started over and
+// warm_knowledge_graph opened a SECOND lbug.Database on the same path in the same process
+// (observed live 2026-09-06). A same-process second open succeeds, but the two handles do
+// not share buffers or uncommitted writes (memory: reference_lbug_exclusive_file_lock), and
+// close() is a deliberate no-op (SIO-954), so the first handle is never released. One
+// process, one Database, many Connections: the slot outlives any module graph.
+const STORE_SLOT_KEY = Symbol.for("devops-agent.knowledge-graph.storeSlot");
+interface StoreSlot {
+	storePromise: Promise<GraphStore> | null;
+	// null = "the calling module graph's openRealStore", so a re-evaluated graph is never
+	// pinned to the first graph's closure. A test override is process-wide by design.
+	storeFactory: (() => Promise<GraphStore>) | null;
+	loggedResolvedPath: boolean;
+}
+function getStoreSlot(): StoreSlot {
+	const g = globalThis as Record<symbol, unknown>;
+	let slot = g[STORE_SLOT_KEY] as StoreSlot | undefined;
+	if (!slot) {
+		slot = { storePromise: null, storeFactory: null, loggedResolvedPath: false };
+		g[STORE_SLOT_KEY] = slot;
+	}
+	return slot;
+}
 
 export function graphPath(env: NodeJS.ProcessEnv = process.env): string {
 	const path =
@@ -71,8 +97,9 @@ export function graphPath(env: NodeJS.ProcessEnv = process.env): string {
 	// obvious immediately instead of requiring temporary source instrumentation.
 	// Guarded to fire once (graphPath() is called from several places, incl. on
 	// every test), not once per call.
-	if (!loggedResolvedPath) {
-		loggedResolvedPath = true;
+	const slot = getStoreSlot();
+	if (!slot.loggedResolvedPath) {
+		slot.loggedResolvedPath = true;
 		logger.info({ path }, "resolved knowledge-graph store path");
 	}
 	return path;
@@ -377,8 +404,6 @@ export class InMemoryGraphStore implements GraphStore {
 
 // --- Lazy singleton ---------------------------------------------------------
 
-let storePromise: Promise<GraphStore> | null = null;
-
 async function openRealStore(): Promise<GraphStore> {
 	const path = graphPath();
 	logger.debug({ path }, "opening knowledge-graph store");
@@ -387,36 +412,42 @@ async function openRealStore(): Promise<GraphStore> {
 	return store;
 }
 
-// Test seam: override how a fresh store is constructed (default: openRealStore).
-// Lets tests exercise the reset-on-failure control flow in getGraphStore()
-// without the native lbug module installed.
-let storeFactory: () => Promise<GraphStore> = openRealStore;
-
 // Returns the process-wide embedded store, initializing the schema on first
-// use. Mirrors the agent's mcpReady/graphPromise memoization.
+// use. Mirrors the agent's mcpReady/graphPromise memoization, but on the
+// globalThis slot (SIO-1645) so a re-evaluated module graph reuses the open store.
 export function getGraphStore(): Promise<GraphStore> {
-	if (!storePromise) {
-		storePromise = storeFactory().catch((error) => {
+	const slot = getStoreSlot();
+	if (!slot.storePromise) {
+		const attempt: Promise<GraphStore> = (slot.storeFactory ?? openRealStore)().catch((error) => {
 			// SIO-1163: a rejected promise is a permanently cached rejection in JS --
 			// without this reset, one transient failure (e.g. a WAL the auto-recovery
 			// above couldn't repair) would poison every caller for the rest of the
 			// process lifetime instead of getting a fresh attempt next time.
-			storePromise = null;
+			// Identity-guarded: a seam that swapped the slot while this attempt was in
+			// flight must not be clobbered by the stale attempt's cleanup.
+			if (slot.storePromise === attempt) slot.storePromise = null;
 			throw error;
 		});
+		slot.storePromise = attempt;
 	}
-	return storePromise;
+	return slot.storePromise;
 }
 
 // Test seam: inject a store (e.g. InMemoryGraphStore) and reset the singleton.
 export function _setGraphStoreForTesting(store: GraphStore | null): void {
-	storePromise = store ? Promise.resolve(store) : null;
+	getStoreSlot().storePromise = store ? Promise.resolve(store) : null;
 }
 
 // Test seam: override the factory getGraphStore() uses on a cache miss, and
 // reset the singleton so the next call invokes it. Pass undefined to restore
 // the real LadybugStore factory.
 export function _setGraphStoreFactoryForTesting(factory?: () => Promise<GraphStore>): void {
-	storeFactory = factory ?? openRealStore;
-	storePromise = null;
+	const slot = getStoreSlot();
+	slot.storeFactory = factory ?? null;
+	slot.storePromise = null;
+}
+
+// Test seam: read the process-wide slot (SIO-1645) without touching it.
+export function _getStoreSlotForTest(): Readonly<StoreSlot> {
+	return getStoreSlot();
 }

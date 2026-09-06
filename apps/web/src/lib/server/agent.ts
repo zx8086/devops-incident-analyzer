@@ -1,5 +1,4 @@
 // apps/web/src/lib/server/agent.ts
-import { connect as netConnect } from "node:net";
 import {
 	appliedSkillsForNames,
 	buildGraph,
@@ -27,11 +26,11 @@ import {
 	stopHealthPolling,
 } from "@devops-agent/agent";
 import { complianceToMetadata, getRecursionLimit } from "@devops-agent/gitagent-bridge";
-import { startKnowledgeGraphServer } from "@devops-agent/mcp-server-knowledge-graph";
 import { getLogger } from "@devops-agent/observability";
 import type { AttachmentMeta, DataSourceContext } from "@devops-agent/shared";
 import { isKillSwitchActive, KillSwitchError } from "@devops-agent/shared";
 import type { BaseMessage, MessageContentComplex } from "@langchain/core/messages";
+import { getKnowledgeGraphMcpUrl, mountKnowledgeGraphServer } from "./knowledge-graph-server.ts";
 import { startSchedules } from "./schedules.ts";
 import { pipelineNodeNames } from "./topology.ts";
 
@@ -56,72 +55,10 @@ installSkillLearner(readCompletedTurn, undefined, readCompletedTurnOutcome);
 // preconditions (agent-memory/KG configured) are still checked before registering.
 startSchedules();
 
-// SIO-987: is a TCP server already listening on host:port? A successful connect means yes (something
-// -- a standalone KG server -- already owns the port). Resolves false on connect refused/timeout.
-// Short timeout so module-load is not delayed. Never throws.
-function isPortInUse(host: string, port: number, timeoutMs = 300): Promise<boolean> {
-	return new Promise((resolve) => {
-		const socket = netConnect({ host, port });
-		const done = (inUse: boolean) => {
-			socket.destroy();
-			resolve(inUse);
-		};
-		socket.setTimeout(timeoutMs);
-		socket.once("connect", () => done(true));
-		socket.once("timeout", () => done(false));
-		socket.once("error", () => done(false)); // ECONNREFUSED -> nothing listening
-	});
-}
-
-// SIO-967: mount the knowledge-graph MCP server IN-PROCESS. Embedded lbug takes an
-// exclusive file lock, so the graph can only be opened by ONE process -- and the agent
-// pipeline's record* nodes already open it here. Running the server in this same
-// process lets its kg_* tools reuse the single getGraphStore() singleton while still
-// being reachable over localhost like every other MCP server. Gated on
-// KNOWLEDGE_GRAPH_ENABLED; best-effort so a start failure never blocks the app.
-const kgMcpLog = getLogger("agent:knowledge-graph-mcp");
-let knowledgeGraphMcpUrl: string | undefined;
-if (process.env.KNOWLEDGE_GRAPH_ENABLED === "true" || process.env.KNOWLEDGE_GRAPH_ENABLED === "1") {
-	const host = process.env.KNOWLEDGE_GRAPH_MCP_HOST ?? "127.0.0.1";
-	const port = process.env.KNOWLEDGE_GRAPH_MCP_PORT ?? "9087";
-	const probeHost = host === "0.0.0.0" ? "127.0.0.1" : host;
-	knowledgeGraphMcpUrl = `http://${probeHost}:${port}`;
-	const onKgStartFailure = (err: unknown) => {
-		knowledgeGraphMcpUrl = undefined;
-		kgMcpLog.warn(
-			{ error: err instanceof Error ? err.message : String(err) },
-			"in-process knowledge-graph MCP server failed to start; kg_* tools unavailable",
-		);
-	};
-	// SIO-987: pre-flight check. If something is ALREADY listening on the KG port, a standalone KG
-	// server is running -- do NOT try to bind (that produced a misleading EADDRINUSE + "Fatal" log).
-	// Skip the in-process start and warn clearly: the agent writes the graph IN-PROCESS via the
-	// getGraphStore() singleton, so a standalone server holding the embedded-lbug exclusive lock will
-	// LOCK OUT those writes (the graph silently never populates). The kg_* read tools still register
-	// against the existing instance (knowledgeGraphMcpUrl stays set). The check runs in a fire-and-
-	// forget async IIFE so module evaluation is never blocked.
-	(async () => {
-		if (await isPortInUse(probeHost, Number(port))) {
-			kgMcpLog.warn(
-				{ url: knowledgeGraphMcpUrl },
-				"a knowledge-graph server is already running on this port (likely started standalone). The agent " +
-					"writes the graph IN-PROCESS and will be LOCKED OUT by a standalone server's exclusive lbug lock -- " +
-					"graph writes will fail silently. Stop the standalone server; the agent starts the KG itself when " +
-					"KNOWLEDGE_GRAPH_ENABLED=true. Registering the existing instance's read-only kg_* tools for now.",
-			);
-			return;
-		}
-		// SIO-986: truly best-effort. startKnowledgeGraphServer() can throw SYNCHRONOUSLY during eager
-		// module evaluation (loadConfig / transport setup), so wrap in try/catch (sync) AND .catch (async)
-		// -- neither a thrown error nor a rejected promise propagates past here; a failure only disables kg_*.
-		try {
-			await startKnowledgeGraphServer();
-			kgMcpLog.info({ url: knowledgeGraphMcpUrl }, "in-process knowledge-graph MCP server started");
-		} catch (err) {
-			onKgStartFailure(err);
-		}
-	})();
-}
+// SIO-967/SIO-1645: mount the knowledge-graph MCP server IN-PROCESS (process-wide slot,
+// identity-aware port pre-flight; see knowledge-graph-server.ts). Fire-and-forget so module
+// evaluation is never blocked; the function never rejects.
+void mountKnowledgeGraphServer();
 
 const pruneLog = getLogger("agent:state-pruning");
 // SIO-958: session lifecycle visibility (why/when a conversation's session ends).
@@ -224,9 +161,10 @@ function getMcpConfig() {
 		atlassianUrl: process.env.ATLASSIAN_MCP_URL,
 		awsUrl: process.env.AWS_MCP_URL,
 		elasticIacUrl: process.env.ELASTIC_IAC_MCP_URL,
-		// SIO-967: in-process server started above; undefined when KG is disabled or
-		// the server failed to start, so the bridge simply registers no kg_* tools.
-		knowledgeGraphUrl: knowledgeGraphMcpUrl,
+		// SIO-967: in-process server mounted above; undefined when KG is disabled, the
+		// server failed to start, or the port's occupant must not have its tools registered
+		// (SIO-1645), so the bridge simply registers no kg_* tools.
+		knowledgeGraphUrl: getKnowledgeGraphMcpUrl(),
 	};
 }
 
@@ -249,6 +187,9 @@ export function ensureMcpConnected(): Promise<void> {
 // callback; that path is covered inside the bridge itself -- startHealthPolling
 // repoints the timer's globalThis tick slot at the live module graph, and a reconnect
 // that fails with the closed-runner error stops the dead graph's loop (mcp-bridge.ts).
+// SIO-1645: the in-process knowledge-graph server and the lbug store are deliberately NOT
+// closed here. Both live on globalThis slots (knowledge-graph-server.ts, store.ts) and are
+// reused by the next module graph; closing the store is never safe (SIO-954).
 {
 	const hot = (import.meta as { hot?: { dispose(cb: () => void): void } }).hot;
 	hot?.dispose(() => {

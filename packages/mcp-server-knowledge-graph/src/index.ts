@@ -72,6 +72,18 @@ export async function startKnowledgeGraphServer(): Promise<McpApplication<Config
 	});
 }
 
+// SIO-1645: the web app's pre-flight helpers (identity-aware port classification).
+export {
+	classifyPortOccupant,
+	isPortInUse,
+	ownGraphPath,
+	type PortOccupant,
+	type PortOccupantVerdict,
+	type PortProbeResult,
+	type ProbedIdentity,
+	probeKnowledgeGraphIdentity,
+} from "./preflight.ts";
+
 if (import.meta.main) {
 	// SIO-967: standalone process entrypoint. NOTE: only safe when the agent process
 	// is NOT also opening the graph (lbug exclusive lock). In the default deployment

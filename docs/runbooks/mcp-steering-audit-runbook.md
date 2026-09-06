@@ -54,7 +54,7 @@ KNOWLEDGE_GRAPH_ENABLED=false LIVE_MEMORY_ENABLED=false AGENT_MEMORY_ENABLED=fal
 echo "TRACKED_PID:$!"; disown
 ```
 
-`KNOWLEDGE_GRAPH_ENABLED=false` is required whenever the user's own `:5173` is running (the in-process KG server would collide on `:9087`). Wait for the port to actually bind (`lsof -nP -iTCP:5174 -sTCP:LISTEN`) before sending traffic -- don't sleep-and-hope.
+`KNOWLEDGE_GRAPH_ENABLED=false` is still the right setting whenever the user's own `:5173` is running: a second dev-server PROCESS cannot open the lbug store (exclusive lock), so its graph writes would fail. Since SIO-1645 the pre-flight identifies the occupant of `:9087` via `/identity` and logs `occupant: kg-same-store` (read-only `kg_*` tools registered against the user's server) instead of a collision, but the write lock-out remains. Wait for the port to actually bind (`lsof -nP -iTCP:5174 -sTCP:LISTEN`) before sending traffic -- don't sleep-and-hope.
 
 **Port-tracking gotcha**: killing a tracked PID does not guarantee the port is free if an earlier, untracked instance of the same dev server is still running -- Vite silently falls back to the next port (`:5175`, etc.) instead of erroring, so checking only your intended port can show clean while a collision is happening one port over. After any restart, check `lsof` on the EXACT port you expect (not just "is something listening"), and if a replay unexpectedly targets a different port than you started, `ps aux | grep vite` to find the full parent/child chain before assuming the new instance is the one you're testing.
 
