@@ -13,7 +13,7 @@ So the recommended shape is:
 - **Definition layer (gitagent, this repo)**: a new root agent `agents/pi-fleet/` (the operator console persona) with one sub-agent `agents/pi-fleet/agents/aws-spoke/` (the account-agnostic spoke persona). Both are authored once, share `agents/shared/`, and reuse analyzer skills and AWS runbooks.
 - **Release layer (the unused gitagent capabilities)**: make `agent.yaml` `version` load-bearing, tag releases `pi-fleet-vX.Y.Z`, and have CI validate, export a Pi package (AGENTS.override.md + skills + package.json with a `pi` manifest) and publish it as a release asset. pi-coms pins the version and vendors it into the fleet bundle it already ships from S3.
 - **Runtime layer (unchanged)**: spokes stay Pi + coms-net, the hub stays the transport, the analyzer stays a hub service principal (PR #682).
-- **Side by side / in sequence / after each other**: a hub pane or a third graph in the web app for live inspection; the #682 verify and investigate cards for sequencing; the existing `packages/skillflow` executor with two new handlers for chained workflows.
+- **Side by side / in sequence / after each other**: a hub pane in the web app for live inspection; a deterministic node that reads the hub's `ops` and estate inboxes into the pipeline (the passive live signal, no spoke turn); the #682 verify and investigate cards for sequencing (the active live check); the existing `packages/skillflow` executor with two new handlers for chained workflows.
 - **Shared memory**: knowledge and skills are shared by release; verdicts flow back into the analyzer's live memory and knowledge graph as structured fields only; live memory access from spokes is deferred as a separate design because it adds a cross-account trust edge.
 
 Total effort roughly 10 to 17 days across both repos depending on the side-by-side choice in Phase 2.
@@ -110,11 +110,24 @@ pi-coms:
 
 Verify: exporter test asserts section order equals `buildSystemPromptParts` minus skill bodies and that denylisted paths are absent; run the exported persona locally with `pi -e extensions/coms-net.ts --skill <exported skill>` from a cwd holding the exported `AGENTS.override.md` and confirm `/skill:cite-sources` resolves; after one `pi-coms-update` on a dev host, `curl $HUB/v1/agents` shows the persona version in `purpose`.
 
-### Phase 2: side by side (user decision 2026-09-06: 2a thin hub pane first; 2b stays a later option)
+### Phase 2: side by side (user decision 2026-09-06: 2a thin hub pane first, 2b inbox node added the same day, 2c third graph stays a later option)
 
 - **2a Thin hub pane (1 to 2 days, chosen).** `apps/web/src/routes/api/pi/{agents,messages}/+server.ts` wrapping `PiComsClient` with sender prefix `pi-fleet`, a `PiFleetPane.svelte` and a `pi-fleet.svelte.ts` store. No `AgentId` change, no LangGraph. The human addresses a spoke directly next to the incident chat. Needs a `pi-fleet` hub principal (`just token-create pi-fleet "pi-fleet-*" service`).
-- **2b Third graph (5 to 7 days).** `packages/agent/src/pi-fleet/{graph.ts,tools.ts,state.ts}`: a `createReactAgent` over five hub tools (list agents, send, await, inbox, status) with register/deregister pre and post nodes and the `pi-fleet` SOUL from `getAgentByName`. Web app: replace the nine two-way sites in `apps/web/src/lib/server/agent.ts` with a `graphFor(agentName)` registry, widen the stream route enum, topology route, `AgentId`, and turn the `+page.svelte:145` binary toggle into a selector. Worth it only when an LLM must choose which spokes to ask and synthesize replies.
+- **2c Third graph (5 to 7 days, deferred).** `packages/agent/src/pi-fleet/{graph.ts,tools.ts,state.ts}`: a `createReactAgent` over five hub tools (list agents, send, await, inbox, status) with register/deregister pre and post nodes and the `pi-fleet` SOUL from `getAgentByName`. Web app: replace the nine two-way sites in `apps/web/src/lib/server/agent.ts` with a `graphFor(agentName)` registry, widen the stream route enum, topology route, `AgentId`, and turn the `+page.svelte:145` binary toggle into a selector. Worth it only when an LLM must choose which spokes to ask and synthesize replies.
 - Zero-code fallback: the Pi TUI console (`just coms <cname>`) in a second window.
+
+#### 2b Fleet inbox enrichment node (2 to 3 days)
+
+Added 2026-09-06 after the user asked whether a small node could pull the hub's `ops` inbox into the analyzer. It gives the historical inspector the live inspector's recent notes without spending a spoke turn: the verify card stays the active check, this node is the passive one. Hub facts verified against pi-coms `scripts/coms-net-server.ts` and `docs/architecture/monitoring.md`:
+
+- `GET /v1/mailbox?name=&limit=&since=` is a non-destructive, read-many listing open to every authenticated peer. No session registration and no name ownership are needed, the existing `incident-analyzer` token suffices, and the analyzer holds no SSE stream, so operators never see it. Operator access to the hub is unchanged: every reader sees the same list, and the console keeps working as today.
+- `since` is a stateless cursor on ULID ids, which sort by time, so a cursor can be synthesized from the incident window start. `limit` caps at 100.
+- The `ops` inbox holds monitor incident reports and digests (14-day TTL) plus the analyzer's own fallback sends. An estate inbox holds completed operator and analyzer conversations with that spoke for 14 days, replies included.
+- Monitor reports travel as prose and their diagnoses come from the spoke's model; operator messages are free text. Inbox bodies are therefore untrusted input.
+
+Design: a deterministic node `fetchFleetInbox`, registered always and edged only when `PI_COMS_INBOX_ENABLED=true` (the SIO-640 edge-gate idiom), placed after `aggregate` and before `extractFindings`, soft-failing with a short budget. It reads `ops` filtered by account alias and the incident window plus each assessed estate's inbox, drops senders matching `incident-analyzer-*` to avoid its own echo, and writes a typed `fleetInboxDigest` sidecar (message id, sender, target, kind, timestamp, severity, capped excerpt) rendered as a Fleet inbox card. Only structured facts (counts, alarm names, severities, timestamps) reach the prompt; bodies never do, matching the #682 invariant. A later step can feed alarm names and log groups into the resolve-identifiers presets as deterministic hints.
+
+Open before building: the corp fleet's `PI_MONITOR_REPORT_TO` value (code default `laptop`, docs assume `ops`), and how much of a monitor report parses deterministically from the monitor's own report format.
 
 ### Phase 3: after each other, and memory (3 to 4 days)
 
@@ -133,7 +146,8 @@ Deferred, separate design: a Pi extension on spokes calling the Couchbase Agent 
 | Public-repo exposure through export scope creep | Medium | Allowlist-only exporter, denylist `memory/` and learned skills, 12-digit account-id scan fails the build |
 | Two version numbers (bundle SHA vs persona tag) confuse operators | Medium | Persona version stamped in `purpose` and in the context header |
 | Prompt injection from spoke replies into analyzer memory | Medium | Structured-only writes; never `summary` or `evidence` free text |
-| Third-graph tax spreads across ~21 sites | Certain if 2b | Registry refactor first; prefer 2a until synthesis is needed |
+| Third-graph tax spreads across ~21 sites | Certain if 2c | Registry refactor first; prefer 2a until synthesis is needed |
+| Inbox bodies reach the prompt | Medium | Structured-only summary into the prompt; bodies only on the card; test asserts the aggregator context carries no body text |
 | Hub token minted in prd while the hub polls dev | High (open from SIO-1635) | Re-mint in dev; `just token-list eu-shared-services-dev` |
 | Greptile skips reviews org-wide | High | Merges only on explicit per-PR go-ahead (SIO-1642) |
 
@@ -148,9 +162,10 @@ Replacing Pi with LangGraph on the spokes; making spokes in-process sub-agents; 
 | 0: land #682, widen the two-agent assumptions | [SIO-1635](https://linear.app/siobytes/issue/SIO-1635) (comment of 2026-09-06) | In Progress |
 | 1: definitions, Pi package export, tagged release | [SIO-1649](https://linear.app/siobytes/issue/SIO-1649) | Backlog |
 | 2a: thin hub pane in the web app | [SIO-1650](https://linear.app/siobytes/issue/SIO-1650) | Backlog |
+| 2b: fleet inbox enrichment node | [SIO-1652](https://linear.app/siobytes/issue/SIO-1652) | Backlog |
 | 3: skillflow handlers, structured verdicts into memory | [SIO-1651](https://linear.app/siobytes/issue/SIO-1651) | Backlog |
 
-No phase starts before its issue is approved. Phase 2 decision recorded 2026-09-06: the thin hub pane (2a) first; the third graph (2b) stays a later option.
+No phase starts before its issue is approved. Phase 2 decision recorded 2026-09-06: the thin hub pane (2a) first, the fleet inbox node (2b) added the same day; the third graph (2c) stays a later option.
 
 ## Memory references
 
