@@ -186,7 +186,8 @@ step handlers:
 It runs detached POST-TURN from the stream route, next to the incident-close
 chain and under the same contract: never awaited, never able to affect the
 response, every failure folded into a soft result. Gated by
-`PI_HANDOFF_ENABLED` (default off). The estate and the report are read from one
+`PI_HANDOFF_ENABLED`, ON by default since SIO-1655 (set it to `false` or `0` to
+disable); the run skips anyway when no hub is configured. The estate and the report are read from one
 pre-prune state snapshot (`getPiHandoffRequest`), and the report is captured
 there rather than re-read later, because `pruneThreadState` rewrites the
 checkpoint in between. One hand-off per close: the first assessed estate.
@@ -201,7 +202,8 @@ into an LLM call -- holds for every path documented above, and for the 2b inbox
 node and the SIO-1651 workflow.
 
 The ONE exception is the Phase 2c fleet console graph
-(`agents/pi-fleet-console/`, gated off by `PI_FLEET_GRAPH_ENABLED`), whose
+(`agents/pi-fleet-console/`, gated by `PI_FLEET_GRAPH_ENABLED` and a configured
+hub), whose
 purpose is to summarize replies from several spokes. There, replies reach the
 model only through `wrapUntrusted` in `packages/agent/src/pi-fleet/tools.ts`:
 fenced, origin-labelled, capped, and framed as evidence that must be reported

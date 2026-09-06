@@ -5,9 +5,12 @@ The operator asks one question about the AWS estate; the console decides which
 account spokes can answer, asks them, and composes their replies into a single
 attributed answer.
 
-Gated by `PI_FLEET_GRAPH_ENABLED` (default off) and a configured pi-coms hub.
-When either is missing the agent is hidden from the selector rather than
-offered and broken: `listSelectableAgents` filters it out, while the id itself
+Gated by `PI_FLEET_GRAPH_ENABLED` and a configured pi-coms hub. The capability
+is ON by default (SIO-1655 kill-switch semantics: set the variable to `false` or
+`0` to disable), but availability follows the infrastructure -- without a hub the
+graph cannot build, so a deployment with no `PI_COMS_HUBS` never sees the agent.
+When either is missing it is hidden from the selector rather than offered and
+broken: `listSelectableAgents` filters it out, while the id itself
 stays registered so an explicit request still returns a coherent error instead
 of "unknown agent".
 

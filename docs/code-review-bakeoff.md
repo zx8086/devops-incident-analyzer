@@ -49,6 +49,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#696](https://github.com/zx8086/devops-incident-analyzer/pull/696) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1651 pi-fleet Phase 3: pi-handoff workflow registering the skillflow `graph` and `agent` step handlers, structured verdicts into live memory (17 files); SKIPPED twice in about 150 ms, CodeRabbit silent (17th straight); Lint failed the first run on a self-inflicted export-ordering slip, green on the second; merged on user authorization; detail below |
 | [#697](https://github.com/zx8086/devops-incident-analyzer/pull/697) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1655 Phase 2c PR 1: graphFor(agentName) registry replacing the two-agent assumption, pure refactor (8 files); SKIPPED once in about 150 ms, CodeRabbit silent (18th straight); all five CI jobs green first run; merged on user authorization; detail below |
 | [#698](https://github.com/zx8086/devops-incident-analyzer/pull/698) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1655 Phase 2c PR 2: fleet console graph, five hub tools, the untrusted-reply boundary (23 files); SKIPPED three times in about 130 ms each, CodeRabbit silent (19th straight); Typecheck and Lint both failed the first run (a union-typed graph thunk svelte-check caught, and three unformatted files); green on the third; merged on user authorization; detail below |
+| [#699](https://github.com/zx8086/devops-incident-analyzer/pull/699) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1655 follow-up: pi-coms capabilities default ON and move into the config schema (15 files); SKIPPED once in about 165 ms, CodeRabbit silent (20th straight); all five CI jobs green first run; merged on user authorization; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -707,6 +708,23 @@ A pure refactor of 8 files, deliberately carrying no new behaviour: a `graphFor(
 2. *A misread failure log cost a round.* CI's Lint output listed the 14 pre-existing findings, and the session first read that as the baseline failing. It was not: those are WARNINGS and have never failed CI. The actual failure was three **format** errors in new files, which `biome check` reports separately from lint rules -- so the per-file "any `lint/` or `assist/` findings?" grep used while building sailed straight past them. The corrected habit is to read the `Found N errors` line, not the finding list.
 3. *This is the first path where a hub reply reaches a model,* a deliberate, documented departure from the PR #682 invariant, confined to `wrapUntrusted`. That function and its tests (a reply carrying "ignore previous instructions" stays bounded inside the wrapper; an agent card's `purpose` never reaches the model at all) are what a reviewer with security context should look at hardest -- and no reviewer ran, for the seventh and eighth consecutive code PR.
 4. *Where a reviewer would still earn their keep:* the wrapper is a prompt-level defence, not a parser-level one. It is the right shape for this threat, but its strength is untested against a live adversarial spoke, and the live run is still user-run.
+
+## PR #699 detail (SIO-1655 follow-up, capability defaults and config placement)
+
+15 files. Two user-directed changes: the three pi-coms capability gates (`PI_HANDOFF_ENABLED`, `PI_COMS_INBOX_ENABLED`, `PI_FLEET_GRAPH_ENABLED`) flip from opt-in to kill-switch semantics, and their declaration moves from ad-hoc `process.env` reads at each call site into `PiComsCapabilitiesSchema` alongside the connection settings they govern, with defaults applied in `resolvePiComsConfig` (no `.default()` in the schema, per the project rule).
+
+**Greptile:** terminal **SKIPPED** (id 22803524 on `fc36b4c6`), about 165 ms, `strictness: 2`, body null.
+
+**CodeRabbit:** nothing, through CI completion. Twentieth consecutive absence (#679 to #699).
+
+**Merge gate:** all five CI jobs green on the first run. Zero findings to triage. Code-class; merged on the user's explicit instruction. Squash `74b795bc`.
+
+**Takeaways:**
+
+1. *A default flip is a behaviour change, and the test suite said so.* Three tests failed, each for a different real reason: the inbox node's no-op test expressed "disabled" as an empty string (now ON under the new rule), the shared schema test lacked the newly required field, and the web barrel mock lacked an export the registry had started importing. None was a test rewritten to fit the change; the first in particular was the suite correctly reporting that a node which used to no-op now runs.
+2. *"On by default" and "available by default" are different questions.* The capability defaults on, but the fleet console is still offered only where a pi-coms hub is configured, because without one its graph cannot build and the selector entry would be a dead end. Separating the two kept a deployment with no `PI_COMS_HUBS` completely unaffected by the flip -- worth checking with the user rather than assuming, which is what happened here.
+3. *Kill-switch semantics change the failure direction of a typo.* Under opt-in, `PI_FLEET_GRAPH_ENABLED=ture` silently leaves a shipped feature off; under kill-switch it reads as on. For a capability gate that is the safer direction, and a test now pins it (`"no"`, `"FALSE"`, `""` all read as enabled).
+4. *Scope check on the user's framing:* the "4-pillar config setup" (`defaults.ts`/`envMapping.ts`/`schemas.ts`/`loader.ts`) is specifically the MCP servers' structure; `packages/agent` has no such directory, and its established equivalent is a shared Zod schema plus a resolver applying defaults. Following the pattern actually in use beat inventing a config directory in a package that has none -- and the difference was surfaced to the user rather than silently decided.
 
 ## PR #689 detail (pi-fleet gitagent feasibility report)
 

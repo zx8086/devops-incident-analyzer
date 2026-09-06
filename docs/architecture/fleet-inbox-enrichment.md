@@ -11,7 +11,9 @@ operator's direct line to a spoke; this node never sends anything.
 ## Placement and gating
 
 - Registered always, reached only when `PI_COMS_INBOX_ENABLED` is `"true"` or
-  `"1"` (SIO-640 edge-gate idiom, default off). `packages/agent/src/graph.ts`
+  `"1"` (SIO-640 edge-gate idiom). SIO-1655 flipped this to ON by default
+  (kill-switch semantics: `false` or `0` disables); the node self-skips when no
+  hub is configured, so a deployment without pi-coms is unaffected. `packages/agent/src/graph.ts`
   wraps `routeAfterAlignment`: its plain `"aggregate"` answer is redirected
   through `fetchFleetInbox` when enabled; retry `Send`s pass through untouched,
   and the validate retry loop re-enters at `aggregate` directly, so the node
