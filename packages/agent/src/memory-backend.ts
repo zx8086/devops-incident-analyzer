@@ -78,16 +78,40 @@ export function selectedBackend(): LiveMemoryBackend {
 	return process.env.LIVE_MEMORY_BACKEND === "agent-memory" ? "agent-memory" : "file";
 }
 
-// Agent identity -> Agent Memory user_id. One user per agent (SIO-938 decision 3).
-export function resolveUserId(agentName: string): string {
-	return agentName === "elastic-iac" ? "elastic-iac" : "incident-analyzer";
+// Agent identity -> Agent Memory user_id and role. One user per agent (SIO-938
+// decision 3; role recorded as user metadata, SIO-952). The map is explicit and
+// an unregistered agent throws at first use, so a new agent can never silently
+// share another agent's memory (SIO-1635 Phase 0).
+type AgentMemoryIdentity = { userId: string; role: string };
+
+const AGENT_MEMORY_IDENTITIES: Readonly<Record<string, AgentMemoryIdentity>> = {
+	"incident-analyzer": { userId: "incident-analyzer", role: "incident-correlator" },
+	"elastic-iac": { userId: "elastic-iac", role: "iac-maker" },
+};
+
+export function resolveAgentMemoryIdentity(agentName: string): AgentMemoryIdentity {
+	const identity = AGENT_MEMORY_IDENTITIES[agentName];
+	if (!identity) {
+		throw new Error(
+			`No Agent Memory identity registered for agent "${agentName}"; add it to AGENT_MEMORY_IDENTITIES in memory-backend.ts`,
+		);
+	}
+	return identity;
 }
 
-// SIO-952: the agent's role, recorded as user metadata for annotation-based
-// attribution/access control. elastic-iac is the IaC maker; the orchestrator
-// correlates incidents.
-function resolveRole(agentName: string): string {
-	return agentName === "elastic-iac" ? "iac-maker" : "incident-correlator";
+export function resolveUserId(agentName: string): string {
+	return resolveAgentMemoryIdentity(agentName).userId;
+}
+
+export function resolveRole(agentName: string): string {
+	return resolveAgentMemoryIdentity(agentName).role;
+}
+
+// For call sites that only hold the resolved user id (the write-behind queue).
+export function roleForUserId(userId: string): string {
+	const hit = Object.values(AGENT_MEMORY_IDENTITIES).find((identity) => identity.userId === userId);
+	if (!hit) throw new Error(`No Agent Memory identity has user id "${userId}"`);
+	return hit.role;
 }
 
 // Short TTL (seconds) for dailylog breadcrumb messages, read defensively from
@@ -427,7 +451,7 @@ export async function flushAgentMemory(): Promise<void> {
 					w.ref.userId,
 					w.ref.sessionId,
 					w.ref.userId,
-					{ agent: w.ref.userId, role: resolveRole(w.ref.userId) },
+					{ agent: w.ref.userId, role: roleForUserId(w.ref.userId) },
 					sessionAnnotations(),
 				);
 				ensured.add(ensureKey);
