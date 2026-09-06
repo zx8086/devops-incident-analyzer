@@ -1,0 +1,2014 @@
+// extensions/coms-net.ts
+
+import * as crypto from "node:crypto";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "@earendil-works/pi-coding-agent";
+import { Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
+import { buildIdentityNote } from "./identityNote.ts";
+import { formatInbox } from "./inboxFormat.ts";
+import { reconnectDelay } from "./reconnectBackoff.ts";
+import { makeSseParser } from "./sseParser.ts";
+import { claimTurnReplies, lastAssistantText, outboundHops } from "./turnReply.ts";
+
+const COMS_NET_DIR = path.join(os.homedir(), ".pi", "coms-net");
+const MAX_HOPS = Number(process.env.PI_COMS_NET_MAX_HOPS) || 5;
+const HEARTBEAT_MS = Number(process.env.PI_COMS_NET_HEARTBEAT_MS) || 10_000;
+const MESSAGE_TIMEOUT_MS = Number(process.env.PI_COMS_NET_MESSAGE_TTL_MS) || 1_800_000;
+// The shared duty inbox every monitor reports to; coms_net_inbox reads it by
+// default. A personal inbox is never the intended read (SIO-1618).
+const INBOX_NAME = process.env.PI_COMS_NET_INBOX_NAME || "ops";
+const HTTP_TIMEOUT_MS = 10_000;
+const SHUTDOWN_DELETE_TIMEOUT_MS = 2_000;
+
+const SERVER_URL_ENV = process.env.PI_COMS_NET_SERVER_URL;
+const AUTH_TOKEN_ENV = process.env.PI_COMS_NET_AUTH_TOKEN;
+const PROJECT_ENV = process.env.PI_COMS_NET_PROJECT;
+
+const FALLBACK_PALETTE = ["#72F1B8", "#36F9F6", "#FF7EDB", "#FEDE5D", "#C792EA", "#FF8B39", "#4D9DE0", "#FFAA8B"];
+
+type AgentStatus = "online" | "stale" | "offline";
+type MessageStatus = "queued" | "delivered" | "complete" | "error" | "timeout";
+
+interface AgentCard {
+	session_id: string;
+	name: string;
+	purpose: string;
+	model: string;
+	provider?: string;
+	color: string;
+	cwd: string;
+	project: string;
+	explicit: boolean;
+	started_at: string;
+	context_used_pct: number;
+	queue_depth: number;
+	status: AgentStatus;
+}
+
+interface RegisterRequest {
+	project: string;
+	session_id: string;
+	name: string;
+	purpose: string;
+	model: string;
+	provider?: string;
+	color: string;
+	cwd: string;
+	explicit: boolean;
+}
+
+interface RegisterResponse {
+	ok: true;
+	agent: AgentCard;
+	heartbeat_interval_ms: number;
+	sse_url: string;
+}
+
+interface HeartbeatRequest {
+	project: string;
+	context_used_pct: number;
+	queue_depth: number;
+	model?: string;
+	status?: AgentStatus;
+}
+
+interface SendRequest {
+	project: string;
+	sender_session: string;
+	target: string;
+	target_session: string | null;
+	prompt: string;
+	conversation_id: string | null;
+	response_schema: object | null;
+	hops: number;
+	ttl_ms?: number | null;
+}
+
+interface SendResponse {
+	ok: true;
+	msg_id: string;
+	status: MessageStatus;
+	target_session: string | null;
+}
+
+interface ResponseSubmitRequest {
+	project: string;
+	responder_session: string;
+	response: unknown;
+	error: string | null;
+}
+
+interface InboundContext {
+	msg_id: string;
+	hops: number;
+	sender_session: string;
+	sender_name: string;
+	sender_cwd: string;
+	response_schema?: object | null;
+	fulfilled: boolean;
+}
+
+type ReplyResult = { response?: unknown; error?: string | null };
+
+interface PendingReply {
+	resolve: (value: ReplyResult) => void;
+	promise: Promise<ReplyResult>;
+	result?: ReplyResult;
+	target_name?: string;
+	target_session?: string | null;
+	created_at: string;
+}
+
+interface ServerJson {
+	version: number;
+	project: string;
+	pid?: number;
+	host?: string;
+	port?: number;
+	local_url: string;
+	public_url?: string;
+	started_at?: string;
+}
+
+interface ServerSecretJson {
+	token: string;
+}
+
+interface AgentsResponse {
+	agents?: AgentCard[];
+}
+
+interface HealthResponse {
+	version?: string;
+	server_id?: string;
+}
+
+interface MessageStatusResponse {
+	status?: MessageStatus | "pending";
+	response?: unknown;
+	error?: string | null;
+}
+
+interface MailboxMessage {
+	msg_id: string;
+	sender_name: string;
+	target_name: string | null;
+	prompt: string;
+	status: string;
+	error: string | null;
+	response: unknown;
+	created_at: string;
+	delivered_at: string | null;
+	completed_at: string | null;
+}
+
+interface MailboxResponse {
+	messages?: MailboxMessage[];
+}
+
+// Tool result `details` shapes, cast back in each renderResult.
+
+interface ListDetails {
+	agents: AgentCard[];
+	project: string;
+}
+
+interface SendDetails {
+	msg_id: string;
+	target: string;
+	target_session: string | null;
+	status: MessageStatus;
+	hops: number;
+}
+
+interface GetDetails {
+	status: string;
+	response: unknown;
+	error: string | null;
+}
+
+interface InboxDetails {
+	name: string;
+	count: number;
+	messages: MailboxMessage[];
+}
+
+interface AwaitDetails {
+	response: unknown;
+	error: string | null;
+}
+
+interface BroadcastResult {
+	target: string;
+	msg_id: string | null;
+	response: unknown;
+	error: string | null;
+}
+
+interface BroadcastDetails {
+	results: BroadcastResult[];
+	hops: number;
+	replied: number;
+	total: number;
+}
+
+class HttpError extends Error {
+	status: number;
+	body: unknown;
+	constructor(status: number, body: unknown, message?: string) {
+		super(message ?? `HTTP ${status}`);
+		this.status = status;
+		this.body = body;
+	}
+	// The hub answers errors with `{ error: string }`; a text or empty body
+	// falls back to the HTTP status message.
+	detail(): string {
+		const b = this.body;
+		const e = b && typeof b === "object" && "error" in b ? b.error : undefined;
+		return e ? String(e) : this.message;
+	}
+}
+
+const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+function ulid(): string {
+	const time = Date.now();
+	const rand = crypto.randomBytes(10);
+	let timeStr = "";
+	let t = time;
+	for (let i = 9; i >= 0; i--) {
+		timeStr = CROCKFORD[t % 32] + timeStr;
+		t = Math.floor(t / 32);
+	}
+	let randStr = "";
+	let bits = 0;
+	let value = 0;
+	for (const byte of rand) {
+		value = (value << 8) | byte;
+		bits += 8;
+		while (bits >= 5) {
+			bits -= 5;
+			randStr += CROCKFORD[(value >> bits) & 31];
+		}
+	}
+	return (timeStr + randStr).slice(0, 26);
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+	return typeof v === "object" && v !== null;
+}
+
+function hexFg(hex: string, s: string): string {
+	const r = parseInt(hex.slice(1, 3), 16);
+	const g = parseInt(hex.slice(3, 5), 16);
+	const b = parseInt(hex.slice(5, 7), 16);
+	return `\x1b[38;2;${r};${g};${b}m${s}\x1b[39m`;
+}
+
+function isValidHex(hex: string): boolean {
+	return /^#[0-9a-fA-F]{6}$/.test(hex);
+}
+
+function fallbackColor(sessionId: string): string {
+	const h = crypto.createHash("sha256").update(sessionId).digest("hex").slice(0, 8);
+	return FALLBACK_PALETTE[Number(BigInt(`0x${h}`)) % FALLBACK_PALETTE.length];
+}
+
+function parseFrontmatter(raw: string): { name?: string; description?: string; color?: string; body: string } {
+	const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+	if (!match) return { body: raw };
+	const frontmatter: Record<string, string> = {};
+	for (const line of match[1].split("\n")) {
+		const idx = line.indexOf(":");
+		if (idx > 0) {
+			const key = line.slice(0, idx).trim();
+			let val = line.slice(idx + 1).trim();
+			if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+				val = val.slice(1, -1);
+			}
+			frontmatter[key] = val;
+		}
+	}
+	return {
+		name: frontmatter.name,
+		description: frontmatter.description,
+		color: frontmatter.color,
+		body: match[2],
+	};
+}
+
+function nowIso(): string {
+	return new Date().toISOString();
+}
+
+function abbreviateModel(model: string): string {
+	let m = model || "";
+	if (m.startsWith("claude-")) m = m.slice("claude-".length);
+	if (m.length > 14) m = m.slice(0, 14);
+	return m;
+}
+
+function findSystemPromptPath(argv: string[]): string | null {
+	const scan = (flag: string): string | null => {
+		for (let i = 0; i < argv.length; i++) {
+			if (argv[i] === flag && i + 1 < argv.length) {
+				const candidate = argv[i + 1];
+				if (candidate.endsWith(".md")) {
+					try {
+						if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+							return candidate;
+						}
+					} catch {}
+				}
+			}
+		}
+		return null;
+	};
+	return scan("--system-prompt") ?? scan("--append-system-prompt");
+}
+
+function readFrontmatterFromArgv(argv: string[]): { name?: string; description?: string; color?: string } {
+	const p = findSystemPromptPath(argv);
+	if (!p) return {};
+	try {
+		const raw = fs.readFileSync(p, "utf-8");
+		const { name, description, color } = parseFrontmatter(raw);
+		return { name, description, color };
+	} catch {
+		return {};
+	}
+}
+
+function projectDir(project: string): string {
+	return path.join(COMS_NET_DIR, "projects", project);
+}
+
+function readServerJson(project: string): ServerJson | null {
+	const p = path.join(projectDir(project), "server.json");
+	try {
+		if (!fs.existsSync(p)) return null;
+		const raw = fs.readFileSync(p, "utf-8");
+		const parsed = JSON.parse(raw) as ServerJson;
+		if (!parsed || typeof parsed.local_url !== "string") return null;
+		return parsed;
+	} catch {
+		return null;
+	}
+}
+
+function readServerSecret(project: string): ServerSecretJson | null {
+	const p = path.join(projectDir(project), "server.secret.json");
+	try {
+		if (!fs.existsSync(p)) return null;
+		// Only trust the token if the file is mode 0600.
+		const st = fs.statSync(p);
+		const mode = st.mode & 0o777;
+		if (mode !== 0o600) return null;
+		const raw = fs.readFileSync(p, "utf-8");
+		const parsed = JSON.parse(raw) as ServerSecretJson;
+		if (!parsed || typeof parsed.token !== "string" || parsed.token.length === 0) return null;
+		return parsed;
+	} catch {
+		return null;
+	}
+}
+
+function resolveServerUrl(project: string, cliFlag: string | undefined): string | null {
+	if (cliFlag && cliFlag.length > 0) return cliFlag.replace(/\/+$/, "");
+	if (SERVER_URL_ENV && SERVER_URL_ENV.length > 0) return SERVER_URL_ENV.replace(/\/+$/, "");
+	const sj = readServerJson(project);
+	if (sj?.local_url) return sj.local_url.replace(/\/+$/, "");
+	return null;
+}
+
+function resolveAuthToken(project: string, cliFlag: string | undefined): string | null {
+	if (cliFlag && cliFlag.length > 0) return cliFlag;
+	if (AUTH_TOKEN_ENV && AUTH_TOKEN_ENV.length > 0) return AUTH_TOKEN_ENV;
+	const sec = readServerSecret(project);
+	if (sec) return sec.token;
+	return null;
+}
+
+interface CliFlags {
+	name?: string;
+	purpose?: string;
+	project?: string;
+	color?: string;
+	explicit?: boolean;
+	serverUrl?: string;
+	authToken?: string;
+}
+
+function readCliFlags(pi: ExtensionAPI): CliFlags {
+	const name = pi.getFlag("cname") as string | undefined;
+	const purpose = pi.getFlag("purpose") as string | undefined;
+	const project = pi.getFlag("project") as string | undefined;
+	const color = pi.getFlag("color") as string | undefined;
+	const explicit = pi.getFlag("explicit") as boolean | undefined;
+	const serverUrl = pi.getFlag("server-url") as string | undefined;
+	const authToken = pi.getFlag("auth-token") as string | undefined;
+	return {
+		name: name && name.length > 0 ? name : undefined,
+		purpose: purpose && purpose.length > 0 ? purpose : undefined,
+		project: project && project.length > 0 ? project : undefined,
+		color: color && color.length > 0 ? color : undefined,
+		explicit: explicit === true,
+		serverUrl: serverUrl && serverUrl.length > 0 ? serverUrl : undefined,
+		authToken: authToken && authToken.length > 0 ? authToken : undefined,
+	};
+}
+
+export default function (pi: ExtensionAPI) {
+	// Agent name flag is `--cname`: pi's harness owns `--name` and resumes it.
+	pi.registerFlag("cname", {
+		description:
+			"Override coms-net agent name (otherwise from frontmatter or auto-generated). Distinct from pi's own --name, which the harness owns and resumes.",
+		type: "string",
+		default: undefined,
+	});
+	pi.registerFlag("purpose", {
+		description: "Override agent purpose (otherwise from frontmatter description)",
+		type: "string",
+		default: undefined,
+	});
+	pi.registerFlag("project", {
+		description: "Project namespace for the coms-net hub",
+		type: "string",
+		default: "default",
+	});
+	pi.registerFlag("color", {
+		description: "Hex color #RRGGBB (otherwise from frontmatter or palette fallback)",
+		type: "string",
+		default: undefined,
+	});
+	pi.registerFlag("explicit", {
+		description: "Hide this agent from auto-discovery; only addressable by exact name",
+		type: "boolean",
+		default: false,
+	});
+	pi.registerFlag("server-url", {
+		description: "coms-net server base URL (overrides env and local server.json)",
+		type: "string",
+		default: undefined,
+	});
+	pi.registerFlag("auth-token", {
+		description: "Bearer token for the coms-net hub (overrides env and server.secret.json). NEVER logged.",
+		type: "string",
+		default: undefined,
+	});
+
+	let identity: {
+		session_id: string;
+		name: string;
+		purpose: string;
+		color: string;
+		project: string;
+		explicit: boolean;
+		cwd: string;
+		model: string;
+		started_at: string;
+	} | null = null;
+	let serverUrl: string | null = null;
+	let authToken: string | null = null;
+	let sseUrlPath: string | null = null;
+	const peerCards: Map<string, AgentCard> = new Map();
+	const pendingReplies: Map<string, PendingReply> = new Map();
+	// Resolved entries stay in the map so coms_net_get answers locally, but a
+	// fleet agent runs for weeks: cap by insertion order, the hub's
+	// /v1/messages/:id lookup covers anything evicted (SIO-1612).
+	const PENDING_CAP = 200;
+	function rememberPending(msg_id: string, entry: PendingReply): void {
+		pendingReplies.set(msg_id, entry);
+		while (pendingReplies.size > PENDING_CAP) {
+			const oldest = pendingReplies.keys().next().value;
+			if (oldest === undefined) break;
+			pendingReplies.delete(oldest);
+		}
+	}
+	const inboundQueue: Map<string, InboundContext> = new Map();
+	let sseAbort: AbortController | null = null;
+	let heartbeatTimer: NodeJS.Timeout | null = null;
+	let reconnectTimer: NodeJS.Timeout | null = null;
+	let reconnectAttempts = 0;
+	let notifiedReconnectCap = false;
+	let currentCtx: ExtensionContext | null = null;
+	let includeExplicit = false;
+	let displayProject: string | null = null;
+	let lastWidgetSnapshot = "";
+	let shuttingDown = false;
+
+	async function httpFetch<T = unknown>(
+		method: string,
+		urlPath: string,
+		body?: unknown,
+		opts?: { timeoutMs?: number; signal?: AbortSignal },
+	): Promise<T> {
+		if (!serverUrl) throw new Error("coms-net: no server URL");
+		if (!authToken) throw new Error("coms-net: no auth token");
+		const url = serverUrl + urlPath;
+		const headers: Record<string, string> = {
+			Authorization: `Bearer ${authToken}`,
+			Accept: "application/json",
+		};
+		const init: RequestInit = { method, headers };
+		if (body !== undefined) {
+			headers["Content-Type"] = "application/json";
+			init.body = JSON.stringify(body);
+		}
+		// Timeout via AbortController. A caller's signal (tool abort from Esc,
+		// shutdown) is combined with the timeout rather than replacing it.
+		const ac = new AbortController();
+		const timeoutMs = opts?.timeoutMs ?? HTTP_TIMEOUT_MS;
+		const timer = setTimeout(() => {
+			try {
+				ac.abort();
+			} catch {}
+		}, timeoutMs);
+		try {
+			timer.unref?.();
+		} catch {}
+		init.signal = opts?.signal ? AbortSignal.any([opts.signal, ac.signal]) : ac.signal;
+		let resp: Response;
+		try {
+			resp = await fetch(url, init);
+		} catch (err) {
+			try {
+				clearTimeout(timer);
+			} catch {}
+			if (opts?.signal?.aborted) throw new Error("coms-net: cancelled");
+			throw new Error(`coms-net: fetch failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
+		try {
+			clearTimeout(timer);
+		} catch {}
+		const text = await resp.text();
+		let parsed: unknown = null;
+		if (text.length > 0) {
+			try {
+				parsed = JSON.parse(text);
+			} catch {
+				parsed = text;
+			}
+		}
+		if (!resp.ok) {
+			throw new HttpError(resp.status, parsed, `HTTP ${resp.status} ${method} ${urlPath}`);
+		}
+		return parsed as T;
+	}
+
+	function audit(event: string, extra: Record<string, unknown> = {}): void {
+		try {
+			pi.appendEntry("coms-net-log", { event, ts: nowIso(), ...extra });
+		} catch {}
+	}
+
+	function safeError(err: unknown): string {
+		const msg = err instanceof Error ? err.message : String(err);
+		if (!authToken) return msg;
+		// Defense in depth: never leak the bearer.
+		return msg.split(authToken).join("<redacted>");
+	}
+
+	// Peer replies and inbox bodies are unbounded; what reaches the model is
+	// not (pi's own tools stop at 50 KB / 2000 lines). Past the cap the full
+	// text goes to a temp file the model can read on demand.
+	function clampToolText(text: string, label: string): string {
+		const t = truncateHead(text, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
+		if (!t.truncated) return text;
+		let note =
+			`[Output truncated: ${t.outputLines} of ${t.totalLines} lines ` +
+			`(${formatSize(t.outputBytes)} of ${formatSize(t.totalBytes)}).`;
+		try {
+			const dir = path.join(os.tmpdir(), "pi-coms-net");
+			fs.mkdirSync(dir, { recursive: true });
+			const file = path.join(dir, `${label.replace(/[^A-Za-z0-9_.-]/g, "_")}-${ulid()}.txt`);
+			fs.writeFileSync(file, text, "utf-8");
+			note += ` Full output saved to: ${file}`;
+		} catch {}
+		return `${t.content}\n\n${note}]`;
+	}
+
+	function poolSnapshotKey(): string {
+		const arr = [...peerCards.values()]
+			.map(
+				(c) =>
+					`${c.session_id}|${c.name}|${c.color}|${c.model}|${c.context_used_pct}|${c.queue_depth}|${c.status}|${c.purpose}|${c.explicit ? 1 : 0}`,
+			)
+			.sort();
+		return arr.join("\n");
+	}
+
+	function maybeRequestRender(): void {
+		const next = poolSnapshotKey();
+		if (next === lastWidgetSnapshot) return;
+		lastWidgetSnapshot = next;
+		// The widget render closure pulls from `peerCards` directly; we just need
+		// to re-install / re-render. Pi's TUI invalidates on setWidget no-op; we
+		// rely on the next frame.
+		if (currentCtx?.hasUI) {
+			try {
+				installPoolWidget(currentCtx);
+			} catch {}
+		}
+	}
+
+	function applyAgentPatch(prev: AgentCard, patch: Partial<AgentCard>): AgentCard {
+		return { ...prev, ...patch };
+	}
+
+	function handleSseEvent(event: string, data: unknown, _id?: string): void {
+		if (!isRecord(data)) return;
+		switch (event) {
+			case "hello": {
+				audit("sse_hello", { server_id: data.server_id, server_time: data.server_time });
+				return;
+			}
+			case "pool_snapshot": {
+				peerCards.clear();
+				const agents: AgentCard[] = Array.isArray(data.agents) ? data.agents : [];
+				for (const a of agents) {
+					if (!a || typeof a.session_id !== "string") continue;
+					if (identity && a.session_id === identity.session_id) continue;
+					peerCards.set(a.session_id, a);
+				}
+				maybeRequestRender();
+				return;
+			}
+			case "agent_joined": {
+				const a = data.agent as AgentCard | undefined;
+				if (!a || typeof a.session_id !== "string") return;
+				if (identity && a.session_id === identity.session_id) return;
+				peerCards.set(a.session_id, a);
+				maybeRequestRender();
+				return;
+			}
+			case "agent_updated": {
+				const a = data.agent as Partial<AgentCard> | undefined;
+				if (!a || typeof a.session_id !== "string") return;
+				if (identity && a.session_id === identity.session_id) return;
+				const prev = peerCards.get(a.session_id);
+				if (prev) {
+					peerCards.set(a.session_id, applyAgentPatch(prev, a));
+				} else if (a.name && a.color && a.model) {
+					// Defensive: treat as a join.
+					peerCards.set(a.session_id, a as AgentCard);
+				}
+				maybeRequestRender();
+				return;
+			}
+			case "agent_stale": {
+				const sid = data.session_id as string | undefined;
+				if (!sid) return;
+				const prev = peerCards.get(sid);
+				if (prev) {
+					peerCards.set(sid, { ...prev, status: "stale" });
+					maybeRequestRender();
+				}
+				return;
+			}
+			case "agent_left": {
+				const sid = data.session_id as string | undefined;
+				if (!sid) return;
+				if (peerCards.delete(sid)) {
+					maybeRequestRender();
+				}
+				return;
+			}
+			case "prompt": {
+				handleInboundPrompt(data);
+				return;
+			}
+			case "response": {
+				handleInboundResponse(data);
+				return;
+			}
+			case "message_status": {
+				// Informational. No-op beyond audit at debug level.
+				return;
+			}
+			case "server_ping": {
+				return;
+			}
+			case "error": {
+				audit("sse_error", { code: data.code, message: data.message });
+				return;
+			}
+			default:
+				return;
+		}
+	}
+
+	function handleInboundPrompt(data: Record<string, unknown>): void {
+		const msg_id = data?.msg_id;
+		if (!msg_id || typeof msg_id !== "string") return;
+		const sender: Record<string, unknown> = isRecord(data.sender) ? data.sender : {};
+		const senderName = typeof sender.name === "string" ? sender.name : "unknown";
+		const senderCwd = typeof sender.cwd === "string" ? sender.cwd : "?";
+		const senderSession = typeof sender.session_id === "string" ? sender.session_id : "?";
+		const promptText = typeof data.prompt === "string" ? data.prompt : "";
+		const hops = typeof data.hops === "number" ? data.hops : 0;
+		const responseSchema =
+			data.response_schema && typeof data.response_schema === "object" ? data.response_schema : null;
+
+		// Mail is not conversation: mailbox-class messages (monitor reports,
+		// anything sent with a long ttl_ms) must never trigger an unrequested
+		// turn on the recipient. Show a passive notice; the content stays in the
+		// hub's durable inbox for on-demand reads via coms_net_inbox.
+		if (data.mailbox === true) {
+			try {
+				pi.sendMessage(
+					{
+						customType: "coms-net-mail-notice",
+						content:
+							`[coms-net mail] new inbox message from ${senderName} (msg_id ${msg_id}). ` +
+							`Not delivered to the model; read it on request with coms_net_inbox.`,
+						display: true,
+						details: { msg_id, sender_session: senderSession },
+					},
+					{ deliverAs: "followUp", triggerTurn: false },
+				);
+			} catch {}
+			try {
+				pi.appendEntry("coms-net-log", {
+					event: "mail_in",
+					ts: nowIso(),
+					msg_id,
+					sender: senderSession,
+				});
+			} catch {}
+			return;
+		}
+
+		const inbound: InboundContext = {
+			msg_id,
+			hops,
+			sender_session: senderSession,
+			sender_name: senderName,
+			sender_cwd: senderCwd,
+			response_schema: responseSchema,
+			fulfilled: false,
+		};
+		inboundQueue.set(msg_id, inbound);
+
+		// The schema must be in the turn content: `details` is metadata the model
+		// never sees, and a schema the recipient cannot read is a contract it can
+		// only guess at (both account agents guessed the same wrong shape).
+		const schemaBlock = responseSchema
+			? `\n\n[the sender expects a JSON reply matching this response schema:]\n${JSON.stringify(responseSchema, null, 2)}`
+			: "";
+
+		try {
+			pi.sendMessage(
+				{
+					customType: "coms-net-inbound",
+					content:
+						`[inbound coms-net message from ${senderName} @ ${senderCwd}]\n` +
+						`[reply by writing a normal assistant message — your turn output is auto-returned to ${senderName}. ` +
+						`DO NOT call coms_net_send/coms_net_await/coms_net_get to reply; that creates a ping-pong loop. ` +
+						`msg_id ${msg_id} belongs to ${senderName}'s outbound, not yours.]\n\n` +
+						`${promptText}${schemaBlock}`,
+					display: true,
+					details: {
+						msg_id,
+						sender_session: senderSession,
+						response_schema: responseSchema,
+						hops,
+					},
+				},
+				{ deliverAs: "followUp", triggerTurn: true },
+			);
+			try {
+				pi.appendEntry("coms-net-log", {
+					event: "prompt_in",
+					ts: nowIso(),
+					msg_id,
+					sender: senderSession,
+					hops,
+				});
+			} catch {}
+		} catch (err) {
+			inboundQueue.delete(msg_id);
+			audit("prompt_in_failed", { msg_id, reason: safeError(err) });
+		}
+	}
+
+	function handleInboundResponse(data: Record<string, unknown>): void {
+		const msg_id = data?.msg_id as string | undefined;
+		if (!msg_id) return;
+		const responseVal = data.response;
+		const errVal: string | null = typeof data.error === "string" ? data.error : null;
+		const pending = pendingReplies.get(msg_id);
+		if (pending) {
+			pending.result = { response: responseVal, error: errVal };
+			try {
+				pending.resolve(pending.result);
+			} catch {}
+			try {
+				pi.appendEntry("coms-net-log", {
+					event: "response_in",
+					ts: nowIso(),
+					msg_id,
+					error: errVal,
+				});
+			} catch {}
+		} else {
+			audit("orphan_response", { msg_id });
+		}
+	}
+
+	async function openSse(): Promise<void> {
+		if (!serverUrl || !authToken || !sseUrlPath || !identity) return;
+		if (sseAbort) {
+			try {
+				sseAbort.abort();
+			} catch {}
+		}
+		const ac = new AbortController();
+		sseAbort = ac;
+		const url = serverUrl + sseUrlPath;
+		const headers: Record<string, string> = {
+			Authorization: `Bearer ${authToken}`,
+			Accept: "text/event-stream",
+		};
+		let resp: Response;
+		try {
+			resp = await fetch(url, { method: "GET", headers, signal: ac.signal });
+		} catch (err) {
+			audit("sse_connect_failed", { reason: safeError(err) });
+			scheduleReconnect();
+			return;
+		}
+		if (!resp.ok || !resp.body) {
+			audit("sse_connect_http_error", { status: resp.status });
+			scheduleReconnect();
+			return;
+		}
+		reconnectAttempts = 0;
+		notifiedReconnectCap = false;
+		try {
+			pi.appendEntry("coms-net-log", { event: "sse_open", ts: nowIso(), url: sseUrlPath });
+		} catch {}
+
+		const parser = makeSseParser((event, data, id) => handleSseEvent(event, data, id));
+		const reader = resp.body.getReader();
+		try {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				if (value) parser.feed(value);
+			}
+			audit("sse_disconnect", { reason: "stream_end" });
+		} catch (err) {
+			if (ac.signal.aborted) {
+				audit("sse_disconnect", { reason: "aborted" });
+				return;
+			}
+			audit("sse_disconnect", { reason: safeError(err) });
+		} finally {
+			try {
+				reader.releaseLock();
+			} catch {}
+		}
+		if (!shuttingDown) {
+			scheduleReconnect();
+		}
+	}
+
+	function scheduleReconnect(): void {
+		if (shuttingDown) return;
+		if (reconnectTimer) return;
+		const { delayMs: backoff, atCeiling } = reconnectDelay(reconnectAttempts);
+		reconnectAttempts++;
+		audit("sse_reconnect_scheduled", { attempt: reconnectAttempts, backoff_ms: backoff });
+		if (atCeiling && !notifiedReconnectCap) {
+			notifiedReconnectCap = true;
+			if (currentCtx?.hasUI) {
+				try {
+					currentCtx.ui.notify("coms-net: reconnect backoff at ceiling", "warning");
+				} catch {}
+			}
+		}
+		reconnectTimer = setTimeout(async () => {
+			reconnectTimer = null;
+			if (shuttingDown) return;
+			try {
+				await reRegisterAndOpen();
+			} catch (err) {
+				audit("sse_reconnect_failed", { reason: safeError(err) });
+				scheduleReconnect();
+			}
+		}, backoff);
+		try {
+			reconnectTimer.unref?.();
+		} catch {}
+	}
+
+	async function reRegisterAndOpen(): Promise<void> {
+		if (!identity) return;
+		// Re-register (server upserts), then re-open SSE.
+		const reg = await registerAgent();
+		sseUrlPath = reg.sse_url;
+		audit("sse_reconnect", { attempt: reconnectAttempts });
+		void openSse();
+	}
+
+	async function registerAgent(): Promise<RegisterResponse> {
+		if (!identity) throw new Error("coms-net: not initialised");
+		const ctx = currentCtx;
+		const req: RegisterRequest = {
+			project: identity.project,
+			session_id: identity.session_id,
+			name: identity.name,
+			purpose: identity.purpose,
+			model: ctx?.model?.id ?? identity.model,
+			color: identity.color,
+			cwd: identity.cwd,
+			explicit: identity.explicit,
+		};
+		const resp = (await httpFetch("POST", "/v1/agents/register", req)) as RegisterResponse;
+		if (!resp?.agent) {
+			throw new Error("coms-net: malformed register response");
+		}
+		// Server may auto-suffix the name on collision.
+		if (resp.agent.name !== identity.name) {
+			try {
+				pi.appendEntry("coms-net-log", {
+					event: "name_collision",
+					ts: nowIso(),
+					desired: identity.name,
+					assigned: resp.agent.name,
+					project: identity.project,
+				});
+			} catch {}
+			// Mail addressed to the requested name will not reach this session;
+			// the operator has to know, not just the audit log (SIO-1613).
+			if (ctx?.hasUI) {
+				try {
+					ctx.ui.notify(
+						`coms-net: name "${identity.name}" was taken; registered as "${resp.agent.name}". Messages sent to "${identity.name}" will not reach you.`,
+						"warning",
+					);
+				} catch {}
+			}
+			identity.name = resp.agent.name;
+		}
+		try {
+			pi.appendEntry("coms-net-log", {
+				event: "register",
+				ts: nowIso(),
+				session_id: identity.session_id,
+				name: identity.name,
+				project: identity.project,
+			});
+		} catch {}
+		return resp;
+	}
+
+	pi.on("session_start", async (_event, ctx) => {
+		currentCtx = ctx;
+		const notify = (msg: string, level: "info" | "warning" | "error"): void => {
+			if (ctx.hasUI) ctx.ui.notify(msg, level);
+		};
+
+		const flags = readCliFlags(pi);
+		const fm = readFrontmatterFromArgv(process.argv);
+		const project = flags.project || PROJECT_ENV || "default";
+		const explicit = flags.explicit === true;
+		const session_id = ulid();
+
+		const defaultName = `agent-${session_id.slice(-6)}`;
+		const desiredName = flags.name || fm.name || defaultName;
+		const purpose = flags.purpose || fm.description || "";
+
+		let color = fallbackColor(session_id);
+		if (fm.color && isValidHex(fm.color)) color = fm.color;
+		if (flags.color && isValidHex(flags.color)) color = flags.color;
+
+		const cwd = ctx.cwd || process.cwd();
+		const model = ctx.model?.id ?? "unknown";
+		const started_at = nowIso();
+
+		identity = {
+			session_id,
+			name: desiredName,
+			purpose,
+			color,
+			project,
+			explicit,
+			cwd,
+			model,
+			started_at,
+		};
+		displayProject = project;
+		includeExplicit = false;
+
+		serverUrl = resolveServerUrl(project, flags.serverUrl);
+		if (!serverUrl) {
+			notify(
+				`coms-net: no server URL for project "${project}". Start a hub with: bun scripts/coms-net-server.ts (from the pi-coms package) or set PI_COMS_NET_SERVER_URL`,
+				"error",
+			);
+			audit("boot_failed", { reason: "no_server_url", project });
+			return;
+		}
+
+		authToken = resolveAuthToken(project, flags.authToken);
+		if (!authToken) {
+			notify(
+				`coms-net: no auth token for project "${project}". Set PI_COMS_NET_AUTH_TOKEN or pass --auth-token. ` +
+					`If running a local server, ensure ~/.pi/coms-net/projects/${project}/server.secret.json exists with mode 0600.`,
+				"error",
+			);
+			audit("boot_failed", { reason: "no_auth_token", project });
+			return;
+		}
+
+		// Health check: verify reachability without consuming auth surface.
+		try {
+			await httpFetch("GET", "/health");
+		} catch (err) {
+			notify(
+				`coms-net: server unreachable at ${serverUrl} — ${safeError(err)}. ` +
+					`Start a hub with: bun scripts/coms-net-server.ts (from the pi-coms package) or check PI_COMS_NET_SERVER_URL`,
+				"error",
+			);
+			audit("boot_failed", { reason: "health_failed", error: safeError(err) });
+			return;
+		}
+
+		let reg: RegisterResponse;
+		try {
+			reg = await registerAgent();
+		} catch (err) {
+			notify(`coms-net: register failed — ${safeError(err)}`, "error");
+			audit("boot_failed", { reason: "register_failed", error: safeError(err) });
+			return;
+		}
+		sseUrlPath = reg.sse_url;
+
+		try {
+			pi.appendEntry("coms-net-log", {
+				event: "boot",
+				ts: nowIso(),
+				session_id: identity.session_id,
+				name: identity.name,
+				project: identity.project,
+				server_url: serverUrl,
+			});
+		} catch {}
+
+		// Seed the agent's own coms name into context (SIO-1600). Uses the
+		// post-registration identity.name so a hub-renamed session (name2)
+		// reports its real name. Context-only: no turn, not shown to the operator.
+		try {
+			pi.sendMessage(
+				{
+					customType: "coms-net-identity",
+					content: buildIdentityNote(identity.name),
+					display: false,
+					details: { name: identity.name, project: identity.project },
+				},
+				{ deliverAs: "followUp", triggerTurn: false },
+			);
+		} catch {}
+
+		// Success is the default: only failures notify (status line + widget
+		// already convey the connected state).
+		try {
+			ctx.ui.setStatus("coms-net", `coms-net ${identity.name}@${identity.project}`);
+			installPoolWidget(ctx);
+		} catch {}
+
+		void openSse();
+
+		heartbeatTimer = setInterval(() => {
+			if (!identity || shuttingDown) return;
+			const ctxNow = currentCtx;
+			const pct = Math.round(ctxNow?.getContextUsage()?.percent ?? 0);
+			const hbReq: HeartbeatRequest = {
+				project: identity.project,
+				context_used_pct: pct,
+				queue_depth: inboundQueue.size,
+				model: ctxNow?.model?.id ?? identity.model,
+				status: "online",
+			};
+			httpFetch("POST", `/v1/agents/${encodeURIComponent(identity.session_id)}/heartbeat`, hbReq, {
+				timeoutMs: 5_000,
+			}).catch((err) => {
+				audit("heartbeat_failed", { reason: safeError(err) });
+			});
+		}, HEARTBEAT_MS);
+		try {
+			heartbeatTimer.unref?.();
+		} catch {}
+	});
+
+	function renderPool(width: number, theme: Theme): string[] {
+		interface Row {
+			name: string;
+			model: string;
+			color: string;
+			purpose: string;
+			pct: number | null;
+			pending: boolean;
+			stale: boolean;
+		}
+
+		const rows: Row[] = [];
+		for (const [sid, card] of peerCards.entries()) {
+			if (identity && sid === identity.session_id) continue;
+			if (!includeExplicit && card.explicit) continue;
+			rows.push({
+				name: card.name,
+				model: card.model,
+				color: card.color,
+				purpose: card.purpose,
+				pct: typeof card.context_used_pct === "number" ? card.context_used_pct : null,
+				pending: card.status === "stale",
+				stale: card.status === "offline",
+			});
+		}
+
+		const safeWidth = Math.max(0, width);
+		let topBorder: string;
+		let bottomBorder: string;
+		if (safeWidth < 16) {
+			topBorder = theme.fg("dim", "━".repeat(safeWidth));
+			bottomBorder = theme.fg("dim", "━".repeat(safeWidth));
+		} else {
+			const left = theme.fg("dim", "┏━") + theme.fg("border", " coms-net ");
+			const leftFill = theme.fg("dim", "━");
+			const nameLen = identity ? identity.name.length : 0;
+			const rightTagVisLen = identity ? nameLen + 4 : 0;
+			// "┏━ coms-net ━" prefix has 13 visible cells.
+			const remaining = safeWidth - 13 - rightTagVisLen - 1; // -1 for "┓"
+			if (identity && remaining >= 1) {
+				const rightTag = theme.fg("dim", " ") + hexFg(identity.color, identity.name) + theme.fg("dim", " ━");
+				const middle = theme.fg("dim", "━".repeat(remaining));
+				const right = theme.fg("dim", "┓");
+				topBorder = left + leftFill + middle + rightTag + right;
+			} else {
+				const fallbackRemaining = Math.max(0, safeWidth - 2 /* "┏━" */ - 10 /* " coms-net " */ - 1 /* "┓" */);
+				const right = theme.fg("dim", `${"━".repeat(fallbackRemaining)}┓`);
+				topBorder = left + right;
+			}
+			bottomBorder = theme.fg("dim", `┗${"━".repeat(safeWidth - 2)}┛`);
+		}
+
+		if (rows.length === 0) {
+			const emptyMsg = theme.fg("muted", "no peers connected");
+			return [topBorder, truncateToWidth(theme.fg("dim", " ") + emptyMsg, width), bottomBorder];
+		}
+
+		rows.sort((a, b) => a.name.localeCompare(b.name));
+
+		const out: string[] = [topBorder];
+
+		for (const r of rows) {
+			const pctNum = r.pct ?? 0;
+			const filled = Math.max(0, Math.min(15, Math.round((pctNum / 100) * 15)));
+			const empty = 15 - filled;
+			const pctLabel = r.pct == null ? "--%" : `${r.pct}%`;
+
+			if (r.stale) {
+				const dimRow = `✗ ${r.name.padEnd(12)} ${abbreviateModel(r.model).padEnd(14)} [${"-".repeat(15)}] ${pctLabel.padStart(4)}  —  ${r.purpose || ""}`;
+				out.push(truncateToWidth(` ${theme.fg("dim", dimRow)}`, width));
+				continue;
+			}
+
+			const swatch = r.pending ? theme.fg("dim", "●") : hexFg(r.color, "●");
+			const namePart = theme.fg("accent", r.name.padEnd(12));
+			const modelPart = theme.fg("dim", abbreviateModel(r.model).padEnd(14));
+			const barFill = r.pending
+				? theme.fg("dim", "-".repeat(15))
+				: hexFg(r.color, "#".repeat(filled)) + theme.fg("dim", "-".repeat(empty));
+			const bar = theme.fg("warning", "[") + barFill + theme.fg("warning", "]");
+			const pctPart = ` ${theme.fg("accent", pctLabel.padStart(4))}`;
+			const sep = theme.fg("dim", "  —  ");
+			const purposePart = theme.fg("muted", r.purpose || "");
+
+			const line = ` ${swatch} ${namePart} ${modelPart} ${bar}${pctPart}${sep}${purposePart}`;
+			out.push(truncateToWidth(line, width));
+		}
+
+		out.push(bottomBorder);
+		return out;
+	}
+
+	function installPoolWidget(ctx: ExtensionContext): void {
+		if (!ctx.hasUI) return;
+		try {
+			ctx.ui.setWidget(
+				"coms-net-pool",
+				(_tui, theme) => ({
+					invalidate() {},
+					render(width: number): string[] {
+						return renderPool(width, theme);
+					},
+				}),
+				{ placement: "belowEditor" },
+			);
+		} catch {}
+	}
+
+	pi.registerTool({
+		name: "coms_net_list",
+		label: "Coms Net List",
+		promptSnippet: "List peer agents on the coms-net hub with their model and context usage",
+		description:
+			"List peer agents on the coms-net hub for the current project. Returns names, models, and live context-window usage. " +
+			"Set include_explicit=true to reveal agents launched with --explicit.",
+		parameters: Type.Object({
+			project: Type.Optional(Type.String({ description: "Project name (defaults to caller's project)." })),
+			include_explicit: Type.Optional(
+				Type.Boolean({ description: "Include agents launched with --explicit. Default false." }),
+			),
+		}),
+		async execute(_callId, params, signal) {
+			if (!identity) {
+				throw new Error("coms-net not initialised");
+			}
+			const projectFilter = params.project ?? identity.project;
+			const includeExp = params.include_explicit === true;
+			const qs = `?project=${encodeURIComponent(projectFilter)}&include_explicit=${includeExp ? "true" : "false"}`;
+			const resp = await httpFetch<AgentsResponse>("GET", `/v1/agents${qs}`, undefined, { signal });
+			const agents: AgentCard[] = Array.isArray(resp?.agents) ? resp.agents : [];
+			const mySession = identity.session_id;
+			const peers = agents.filter((a) => a.session_id !== mySession);
+
+			const lines =
+				peers.length === 0
+					? "No peer agents found."
+					: peers
+							.map((a) => {
+								const live = a.status === "online" ? "●" : a.status === "stale" ? "~" : "✗";
+								const ctxStr = typeof a.context_used_pct === "number" ? ` ${a.context_used_pct}%` : " ?%";
+								return `${live} ${a.name} (${abbreviateModel(a.model)})${ctxStr}${a.purpose ? ` — ${a.purpose}` : ""}`;
+							})
+							.join("\n");
+
+			return {
+				content: [{ type: "text" as const, text: `${peers.length} peer(s):\n${lines}` }],
+				details: { agents: peers, project: projectFilter },
+			};
+		},
+		renderCall(args, theme) {
+			const proj = args.project;
+			const filter = proj ? ` ${proj}` : "";
+			return new Text(theme.fg("toolTitle", theme.bold("coms_net_list")) + theme.fg("dim", filter), 0, 0);
+		},
+		renderResult(result, options, theme) {
+			const details = result.details as ListDetails | undefined;
+			const agents: AgentCard[] = details?.agents ?? [];
+			const header = theme.fg("accent", `${agents.length} peer(s)`);
+			if (!options.expanded || agents.length === 0) {
+				return new Text(header, 0, 0);
+			}
+			const rows = agents
+				.map((a) => {
+					const dot =
+						a.status === "online"
+							? theme.fg("success", "●")
+							: a.status === "stale"
+								? theme.fg("warning", "~")
+								: theme.fg("error", "✗");
+					const pct = typeof a.context_used_pct === "number" ? `${a.context_used_pct}%` : "?%";
+					return `${dot} ${theme.fg("accent", a.name)} ${theme.fg("dim", abbreviateModel(a.model))} ${theme.fg("warning", pct)}`;
+				})
+				.join("\n");
+			return new Text(`${header}\n${rows}`, 0, 0);
+		},
+	});
+
+	pi.registerTool({
+		name: "coms_net_send",
+		label: "Coms Net Send",
+		promptSnippet: "Start a new conversation with one peer agent; returns a msg_id to poll or await",
+		promptGuidelines: [
+			"Never call coms_net_send to reply to an inbound coms-net message. Reply with a normal assistant message; the extension returns your final text to the sender automatically.",
+		],
+		description:
+			"INITIATE a new outbound message to a peer agent on the coms-net hub. " +
+			"Returns synchronously with a msg_id once the server queues the prompt. " +
+			"Use coms_net_get (non-blocking) or coms_net_await (blocking) with that msg_id to retrieve the peer's reply.\n\n" +
+			"WARNING: DO NOT call this tool to REPLY to an inbound message. " +
+			"When you receive a `[from <peer>] …` follow-up, just write your answer as your normal assistant message — " +
+			"the coms-net extension automatically captures the final assistant text at the end of your turn and " +
+			"submits it back to the original caller. Calling coms_net_send in response creates an infinite ping-pong loop.\n\n" +
+			"Only valid uses: (a) you, the user, or your task explicitly ask to start a new conversation with a peer; " +
+			"(b) you are forwarding/delegating to a *different* peer than the one whose prompt you are currently answering; " +
+			"in that case `hops` is auto-incremented and the hop limit will eventually stop runaway chains.",
+		parameters: Type.Object({
+			target: Type.String({ description: "Peer name (preferred, scoped to your project) or session_id." }),
+			prompt: Type.String({ description: "The prompt to send." }),
+			response_schema: Type.Optional(
+				Type.Any({ description: "Optional JSON Schema describing the expected response shape." }),
+			),
+			ttl_ms: Type.Optional(
+				Type.Number({
+					description:
+						"Optional TTL in ms. Beyond the server default (30 min) the message is queued durably for an offline peer name and delivered when it next registers. Capped by the server (default 14 days).",
+				}),
+			),
+		}),
+		async execute(_callId, params) {
+			if (!identity) throw new Error("coms-net not initialised");
+
+			const hops = outboundHops(inboundQueue.values());
+			if (hops >= MAX_HOPS) {
+				throw new Error(`coms-net: hop limit reached (${hops} >= ${MAX_HOPS})`);
+			}
+
+			const req: SendRequest = {
+				project: identity.project,
+				sender_session: identity.session_id,
+				target: params.target,
+				target_session: null,
+				prompt: params.prompt,
+				conversation_id: null,
+				response_schema: (params.response_schema as object | undefined) ?? null,
+				hops,
+				ttl_ms: typeof params.ttl_ms === "number" && params.ttl_ms > 0 ? params.ttl_ms : null,
+			};
+
+			let resp: SendResponse;
+			try {
+				resp = (await httpFetch("POST", "/v1/messages", req)) as SendResponse;
+			} catch (err) {
+				if (err instanceof HttpError) {
+					const detail = err.detail();
+					throw new Error(`coms-net: send failed (${err.status}): ${detail}`);
+				}
+				throw new Error(`coms-net: send failed: ${safeError(err)}`);
+			}
+			const { msg_id, target_session } = resp;
+
+			// Park a pending entry that the SSE `response` event will resolve.
+			let resolveFn!: (v: ReplyResult) => void;
+			const promise = new Promise<ReplyResult>((res) => {
+				resolveFn = res;
+			});
+			rememberPending(msg_id, {
+				resolve: resolveFn,
+				promise,
+				target_name: params.target,
+				target_session,
+				created_at: nowIso(),
+			});
+
+			try {
+				pi.appendEntry("coms-net-log", {
+					event: "prompt_out",
+					ts: nowIso(),
+					msg_id,
+					target: params.target,
+					target_session,
+					hops,
+				});
+			} catch {}
+
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: `coms_net_send → ${params.target}\nmsg_id ${msg_id}\nstatus ${resp.status}\nhops ${hops}`,
+					},
+				],
+				details: { msg_id, target: params.target, target_session, status: resp.status, hops },
+			};
+		},
+		renderCall(args, theme) {
+			const tgt = args.target ?? "?";
+			const prompt = args.prompt ?? "";
+			const preview = prompt.length > 60 ? `${prompt.slice(0, 57)}...` : prompt;
+			return new Text(
+				theme.fg("toolTitle", theme.bold("coms_net_send ")) +
+					theme.fg("accent", tgt) +
+					theme.fg("dim", " — ") +
+					theme.fg("muted", preview),
+				0,
+				0,
+			);
+		},
+		renderResult(result, _options, theme) {
+			const d = result.details as SendDetails | undefined;
+			if (!d) {
+				const t = result.content[0];
+				return new Text(t?.type === "text" ? t.text : "", 0, 0);
+			}
+			return new Text(
+				theme.fg("success", "→ ") +
+					theme.fg("accent", d.target) +
+					theme.fg("dim", `  msg_id `) +
+					theme.fg("warning", d.msg_id),
+				0,
+				0,
+			);
+		},
+	});
+
+	pi.registerTool({
+		name: "coms_net_get",
+		label: "Coms Net Get",
+		promptSnippet: "Non-blocking poll for the reply to your own coms_net_send",
+		promptGuidelines: [
+			"Only pass coms_net_get or coms_net_await a msg_id returned by your own coms_net_send, never a msg_id quoted in an inbound coms-net message.",
+		],
+		description:
+			"Non-blocking poll of a reply to YOUR OWN coms_net_send. Returns status pending|complete|error and (when complete) the response. " +
+			"Same caveat as coms_net_await: only use msg_ids you got back from coms_net_send, never msg_ids from an inbound `[from <peer>] …` prompt — " +
+			"those belong to the peer, and replying to them happens automatically via your normal assistant message at end of turn.",
+		parameters: Type.Object({
+			msg_id: Type.String({ description: "msg_id returned by coms_net_send." }),
+		}),
+		async execute(_callId, params, signal) {
+			const msg_id = params.msg_id;
+			const pending = pendingReplies.get(msg_id);
+			if (pending?.result) {
+				const r = pending.result;
+				const text = r.error
+					? `coms_net_get: error — ${r.error}`
+					: `coms_net_get: complete\n${typeof r.response === "string" ? r.response : JSON.stringify(r.response, null, 2)}`;
+				return {
+					content: [{ type: "text" as const, text: clampToolText(text, `get-${msg_id}`) }],
+					details: { status: "complete", response: r.response, error: r.error ?? null },
+				};
+			}
+			let resp: MessageStatusResponse;
+			try {
+				resp = await httpFetch<MessageStatusResponse>("GET", `/v1/messages/${encodeURIComponent(msg_id)}`, undefined, {
+					signal,
+				});
+			} catch (err) {
+				if (err instanceof HttpError && err.status === 404) {
+					return {
+						content: [{ type: "text" as const, text: `coms_net_get: unknown msg_id ${msg_id}` }],
+						details: { status: "error", response: null, error: "unknown msg_id" },
+					};
+				}
+				return {
+					content: [{ type: "text" as const, text: `coms_net_get: error — ${safeError(err)}` }],
+					details: { status: "error", response: null, error: safeError(err) },
+				};
+			}
+			const status = resp?.status ?? "pending";
+			if (status === "complete" || status === "error" || status === "timeout") {
+				const text = resp.error
+					? `coms_net_get: ${status} — ${resp.error}`
+					: `coms_net_get: ${status}\n${typeof resp.response === "string" ? resp.response : JSON.stringify(resp.response, null, 2)}`;
+				return {
+					content: [{ type: "text" as const, text: clampToolText(text, `get-${msg_id}`) }],
+					details: { status, response: resp.response, error: resp.error ?? null },
+				};
+			}
+			return {
+				content: [{ type: "text" as const, text: `coms_net_get: ${status}` }],
+				details: { status, response: null, error: null },
+			};
+		},
+		renderCall(args, theme) {
+			const id = args.msg_id ?? "?";
+			return new Text(theme.fg("toolTitle", theme.bold("coms_net_get ")) + theme.fg("warning", id), 0, 0);
+		},
+		renderResult(result, _options, theme) {
+			const d = result.details as GetDetails | undefined;
+			const status = d?.status ?? "?";
+			const color =
+				status === "complete"
+					? "success"
+					: status === "pending" || status === "queued" || status === "delivered"
+						? "warning"
+						: "error";
+			return new Text(theme.fg(color, status), 0, 0);
+		},
+	});
+
+	pi.registerTool({
+		name: "coms_net_inbox",
+		label: "Coms Net Inbox",
+		promptSnippet: "Read the shared durable inbox (monitor reports, mail) or a peer's conversation history",
+		promptGuidelines: [
+			"Use coms_net_inbox to read monitor reports and other mailbox messages; they arrive as a passive notice and are never delivered as prompts.",
+		],
+		description:
+			"Read a durable inbox: long-TTL mailbox messages (e.g. monitor reports) are retained on the hub until their TTL expires and stay readable by everyone. " +
+			"Non-destructive and identical for every reader, so any operator connecting at any time sees the same messages on demand. " +
+			`Reads the shared duty inbox "${INBOX_NAME}" unless name says otherwise; every operator sees the same history. ` +
+			"An agent's inbox (name=<agent>) is its conversation history: every prompt it was asked, by whom, when, and its reply, kept 14 days. " +
+			"Use since with a msg_id to fetch only newer messages. " +
+			"Listing bodies are previews; pass msg_id to read one message in full (e.g. a monitor incident report whose findings run past the preview).",
+		parameters: Type.Object({
+			name: Type.Optional(
+				Type.String({ description: `Inbox name to read (default: the shared "${INBOX_NAME}" inbox).` }),
+			),
+			limit: Type.Optional(Type.Number({ description: "Maximum messages to return (default 10, server cap 100)." })),
+			since: Type.Optional(Type.String({ description: "Only messages newer than this msg_id (ascending)." })),
+			msg_id: Type.Optional(Type.String({ description: "Return only this message, with its full untruncated body." })),
+		}),
+		async execute(_callId, params, signal) {
+			if (!identity) throw new Error("coms-net not initialised");
+			const name = params.name || INBOX_NAME;
+			const msgId = params.msg_id;
+			// A full-body read must find its target: search at the server cap
+			// unless the caller narrowed the fetch explicitly.
+			const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : msgId ? 100 : 10;
+			const since = params.since;
+			const qs =
+				`?project=${encodeURIComponent(identity.project)}&name=${encodeURIComponent(name)}&limit=${limit}` +
+				(since ? `&since=${encodeURIComponent(since)}` : "");
+			const resp = await httpFetch<MailboxResponse>("GET", `/v1/mailbox${qs}`, undefined, { signal });
+			const messages: MailboxMessage[] = Array.isArray(resp?.messages) ? resp.messages : [];
+			const text = formatInbox(
+				name,
+				messages.map((m) => ({
+					msg_id: String(m.msg_id ?? ""),
+					sender_name: String(m.sender_name ?? ""),
+					status: String(m.status ?? ""),
+					created_at: String(m.created_at ?? ""),
+					prompt: typeof m.prompt === "string" ? m.prompt : "",
+					response: m.response ?? null,
+					error: typeof m.error === "string" ? m.error : null,
+				})),
+				{ msgId },
+			);
+			return {
+				content: [{ type: "text" as const, text: clampToolText(text, `inbox-${name}`) }],
+				details: { name, count: messages.length, messages },
+			};
+		},
+		renderCall(args, theme) {
+			const n = args.name;
+			return new Text(theme.fg("toolTitle", theme.bold("coms_net_inbox")) + theme.fg("dim", n ? ` ${n}` : ""), 0, 0);
+		},
+		renderResult(result, _options, theme) {
+			const d = result.details as InboxDetails | undefined;
+			return new Text(
+				theme.fg("accent", `${d?.count ?? "?"} message(s)`) + theme.fg("dim", ` in ${d?.name ?? "inbox"}`),
+				0,
+				0,
+			);
+		},
+	});
+
+	pi.registerTool({
+		name: "coms_net_await",
+		label: "Coms Net Await",
+		promptSnippet: "Block until the reply to your own coms_net_send arrives (default 30 min)",
+		promptGuidelines: [
+			"When coms_net_await or coms_net_broadcast targets a prompt that makes the peer investigate, keep the default timeout or set minutes, not seconds; replies only arrive when the peer's whole turn ends.",
+		],
+		description:
+			"Block until the reply to YOUR OWN outbound coms_net_send arrives, or the timeout fires (default 30 min). " +
+			"Only call this with a msg_id that YOU received as the return value of a coms_net_send call you just made.\n\n" +
+			"WARNING: Do NOT call this with a msg_id that came in via an inbound `[from <peer>] …` prompt — those msg_ids belong to the *peer's* outbound, not yours. " +
+			"To reply to an inbound message, do nothing special: just answer normally as your assistant message, " +
+			"and the extension will auto-submit your final text back to the caller when your turn ends.\n\n" +
+			"The reply only arrives when the target's whole turn ends. A prompt that makes the target investigate " +
+			"(paginate CloudTrail, run many tool calls) routinely takes several minutes, so keep the 30-min default " +
+			"or override with minutes, not seconds — a 45-60s timeout on an investigation prompt times out while " +
+			"the target is still working.",
+		parameters: Type.Object({
+			msg_id: Type.String({ description: "msg_id returned by coms_net_send." }),
+			timeout_ms: Type.Optional(
+				Type.Number({
+					description:
+						"Override the default timeout (ms). Server cap applies. Use minutes, not seconds, for prompts that make the target investigate — replies only arrive when its whole turn ends.",
+				}),
+			),
+		}),
+		async execute(_callId, params, signal) {
+			const msg_id = params.msg_id;
+			const timeoutMs =
+				typeof params.timeout_ms === "number" && params.timeout_ms > 0 ? params.timeout_ms : MESSAGE_TIMEOUT_MS;
+
+			const r = await awaitReplyResult(msg_id, timeoutMs, signal);
+			const details: { response: unknown; error: string | null } = {
+				response: r.response ?? null,
+				error: r.error ?? null,
+			};
+			if (details.error) {
+				return {
+					content: [{ type: "text" as const, text: `coms_net_await: error — ${details.error}` }],
+					details,
+				};
+			}
+			const text = typeof r.response === "string" ? r.response : JSON.stringify(r.response, null, 2);
+			return {
+				content: [{ type: "text" as const, text: clampToolText(text, `await-${msg_id}`) }],
+				details,
+			};
+		},
+		renderCall(args, theme) {
+			const id = args.msg_id ?? "?";
+			return new Text(theme.fg("toolTitle", theme.bold("coms_net_await ")) + theme.fg("warning", id), 0, 0);
+		},
+		renderResult(result, _options, theme) {
+			const d = result.details as AwaitDetails | undefined;
+			if (d?.error) return new Text(theme.fg("error", `✗ ${d.error}`), 0, 0);
+			return new Text(theme.fg("success", "✓ response received"), 0, 0);
+		},
+	});
+
+	// Shared by coms_net_await and coms_net_broadcast: race the SSE-resolved
+	// local promise against the server long-poll, capped at timeoutMs. The tool
+	// abort signal (Esc) ends the wait early; the pending entry and the hub copy
+	// survive, so coms_net_get still finds the reply afterwards.
+	async function awaitReplyResult(msg_id: string, timeoutMs: number, signal?: AbortSignal): Promise<ReplyResult> {
+		const pending = pendingReplies.get(msg_id);
+		if (pending?.result) return pending.result;
+		if (signal?.aborted) return { response: null, error: "cancelled" };
+
+		const localPromise: Promise<ReplyResult> = pending ? pending.promise : new Promise(() => {});
+
+		const serverTimeoutMs = Math.min(timeoutMs, MESSAGE_TIMEOUT_MS);
+		const ac = new AbortController();
+		const serverPromise: Promise<ReplyResult> = httpFetch<MessageStatusResponse>(
+			"GET",
+			`/v1/messages/${encodeURIComponent(msg_id)}/await?timeout_ms=${serverTimeoutMs}`,
+			undefined,
+			{ timeoutMs: serverTimeoutMs + 5_000, signal: ac.signal },
+		)
+			.then((data) => {
+				if (data?.status === "complete") return { response: data.response, error: null };
+				if (data?.status === "error") return { response: null, error: data.error ?? "error" };
+				if (data?.status === "timeout") return { response: null, error: "timeout" };
+				return { response: data?.response, error: data?.error ?? null };
+			})
+			.catch((err) => {
+				if (err instanceof HttpError && err.status === 404) {
+					return { response: null, error: "unknown msg_id" };
+				}
+				return { response: null, error: safeError(err) };
+			});
+
+		let timer: ReturnType<typeof setTimeout> | null = null;
+		const timeoutPromise = new Promise<ReplyResult>((resolve) => {
+			timer = setTimeout(() => resolve({ response: null, error: "timeout" }), timeoutMs);
+			try {
+				timer.unref?.();
+			} catch {}
+		});
+
+		let onAbort: (() => void) | null = null;
+		const abortPromise = new Promise<ReplyResult>((resolve) => {
+			if (!signal) return;
+			onAbort = () => resolve({ response: null, error: "cancelled" });
+			signal.addEventListener("abort", onAbort, { once: true });
+		});
+
+		try {
+			return await Promise.race([localPromise, serverPromise, timeoutPromise, abortPromise]);
+		} finally {
+			try {
+				ac.abort();
+			} catch {}
+			if (timer) clearTimeout(timer);
+			if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+		}
+	}
+
+	pi.registerTool({
+		name: "coms_net_broadcast",
+		label: "Coms Net Broadcast",
+		promptSnippet: "Send one prompt to many peers at once and gather every reply",
+		promptGuidelines: [
+			"Never call coms_net_broadcast to reply to an inbound coms-net message; it starts new conversations.",
+		],
+		description:
+			"Send ONE prompt to MANY peers at once and block until every reply (or the timeout) lands. " +
+			"Targets default to every online/stale peer in your project; pass `targets` to address a subset by name. " +
+			"Use this to speak to the whole pool simultaneously; use coms_net_send for a single peer.\n\n" +
+			"Same rule as coms_net_send: never call this to REPLY to an inbound `[from <peer>] ...` message. " +
+			"Replies happen automatically from your normal assistant text at end of turn.",
+		parameters: Type.Object({
+			prompt: Type.String({ description: "The prompt sent verbatim to each target." }),
+			targets: Type.Optional(
+				Type.Array(Type.String(), { description: "Peer names. Defaults to all online/stale peers in the project." }),
+			),
+			timeout_ms: Type.Optional(
+				Type.Number({
+					description:
+						"Per-peer reply timeout (ms). Default 30 min. Use minutes, not seconds, for prompts that make peers investigate — replies only arrive when their whole turn ends.",
+				}),
+			),
+		}),
+		async execute(_callId, params, signal) {
+			if (!identity) throw new Error("coms-net not initialised");
+			const me = identity;
+
+			const hops = outboundHops(inboundQueue.values());
+			if (hops >= MAX_HOPS) {
+				throw new Error(`coms-net: hop limit reached (${hops} >= ${MAX_HOPS})`);
+			}
+
+			const prompt = params.prompt;
+			const timeoutMs =
+				typeof params.timeout_ms === "number" && params.timeout_ms > 0 ? params.timeout_ms : MESSAGE_TIMEOUT_MS;
+
+			let targets: string[] = params.targets ?? [];
+			if (targets.length === 0) {
+				const resp = await httpFetch<AgentsResponse>(
+					"GET",
+					`/v1/agents?project=${encodeURIComponent(identity.project)}&include_explicit=false`,
+					undefined,
+					{ signal },
+				);
+				const agents: AgentCard[] = Array.isArray(resp?.agents) ? resp.agents : [];
+				targets = agents.filter((a) => a.session_id !== me.session_id && a.status !== "offline").map((a) => a.name);
+			}
+			if (targets.length === 0) {
+				return {
+					content: [{ type: "text" as const, text: "coms_net_broadcast: no reachable peers." }],
+					details: { results: [], hops, replied: 0, total: 0 },
+				};
+			}
+
+			// Fan out. A failed send to one peer becomes that peer's result, not a
+			// broadcast-wide failure.
+			const sends = await Promise.all(
+				targets.map(async (target) => {
+					try {
+						const req: SendRequest = {
+							project: me.project,
+							sender_session: me.session_id,
+							target,
+							target_session: null,
+							prompt,
+							conversation_id: null,
+							response_schema: null,
+							hops,
+						};
+						const resp = (await httpFetch("POST", "/v1/messages", req)) as SendResponse;
+						let resolveFn!: (v: ReplyResult) => void;
+						const promise = new Promise<ReplyResult>((res) => {
+							resolveFn = res;
+						});
+						rememberPending(resp.msg_id, {
+							resolve: resolveFn,
+							promise,
+							target_name: target,
+							target_session: resp.target_session,
+							created_at: nowIso(),
+						});
+						try {
+							pi.appendEntry("coms-net-log", {
+								event: "prompt_out",
+								ts: nowIso(),
+								msg_id: resp.msg_id,
+								target,
+								target_session: resp.target_session,
+								hops,
+								broadcast: true,
+							});
+						} catch {}
+						return { target, msg_id: resp.msg_id as string | null, error: null as string | null };
+					} catch (err) {
+						const detail = err instanceof HttpError ? err.detail() : safeError(err);
+						return { target, msg_id: null as string | null, error: `send failed: ${detail}` };
+					}
+				}),
+			);
+
+			const results = await Promise.all(
+				sends.map(async (s) => {
+					if (!s.msg_id) return { target: s.target, msg_id: null as string | null, response: null, error: s.error };
+					const r = await awaitReplyResult(s.msg_id, timeoutMs, signal);
+					return { target: s.target, msg_id: s.msg_id, response: r.response ?? null, error: r.error ?? null };
+				}),
+			);
+
+			const ok = results.filter((r) => !r.error).length;
+			const lines = results
+				.map((r) => {
+					if (r.error) return `✗ ${r.target}: ${r.error}`;
+					const text = typeof r.response === "string" ? r.response : JSON.stringify(r.response, null, 2);
+					return `● ${r.target}:\n${text}`;
+				})
+				.join("\n\n");
+
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: clampToolText(`coms_net_broadcast: ${ok}/${results.length} replied\n\n${lines}`, "broadcast"),
+					},
+				],
+				details: { results, hops, replied: ok, total: results.length },
+			};
+		},
+		renderCall(args, theme) {
+			const tgts = Array.isArray(args.targets) && args.targets.length > 0 ? args.targets.join(", ") : "all peers";
+			const prompt = args.prompt ?? "";
+			const preview = prompt.length > 50 ? `${prompt.slice(0, 47)}...` : prompt;
+			return new Text(
+				theme.fg("toolTitle", theme.bold("coms_net_broadcast ")) +
+					theme.fg("accent", tgts) +
+					theme.fg("dim", " — ") +
+					theme.fg("muted", preview),
+				0,
+				0,
+			);
+		},
+		renderResult(result, options, theme) {
+			const d = result.details as BroadcastDetails | undefined;
+			if (!d) {
+				const t = result.content[0];
+				return new Text(t?.type === "text" ? t.text : "", 0, 0);
+			}
+			const color = d.replied === d.total ? "success" : d.replied > 0 ? "warning" : "error";
+			const header = theme.fg(color, `${d.replied}/${d.total} replied`);
+			if (!options.expanded || !Array.isArray(d.results) || d.results.length === 0) {
+				return new Text(header, 0, 0);
+			}
+			const rows = d.results
+				.map((r) => {
+					const dot = r.error ? theme.fg("error", "✗") : theme.fg("success", "●");
+					const tail = r.error ? theme.fg("error", r.error) : theme.fg("dim", `msg_id ${r.msg_id}`);
+					return `${dot} ${theme.fg("accent", r.target)} ${tail}`;
+				})
+				.join("\n");
+			return new Text(`${header}\n${rows}`, 0, 0);
+		},
+	});
+
+	pi.on("agent_end", async (event) => {
+		if (!identity || inboundQueue.size === 0) return;
+
+		// Follow-ups drain inside the run, so every stacked inbound prompt is
+		// answered by this run's final assistant text (SIO-1598). Claim the
+		// queue entries before any await so a second agent_end cannot submit
+		// the same replies again, then post them concurrently (SIO-1611).
+		const replies = claimTurnReplies(inboundQueue, lastAssistantText(event.messages));
+		const project = identity.project;
+		const responderSession = identity.session_id;
+		await Promise.all(
+			replies.map(async (reply) => {
+				const req: ResponseSubmitRequest = {
+					project,
+					responder_session: responderSession,
+					response: reply.response,
+					error: reply.error,
+				};
+				try {
+					await httpFetch("POST", `/v1/messages/${encodeURIComponent(reply.msg_id)}/response`, req);
+					try {
+						pi.appendEntry("coms-net-log", {
+							event: "response_out",
+							ts: nowIso(),
+							msg_id: reply.msg_id,
+							error: reply.error,
+						});
+					} catch {}
+				} catch (e) {
+					audit("response_out_failed", { msg_id: reply.msg_id, reason: safeError(e) });
+				}
+			}),
+		);
+	});
+
+	pi.registerCommand("coms-net", {
+		description: "Refresh the coms-net pool widget; or --all / --project <name> / --server / --reconnect",
+		handler: async (args, ctx) => {
+			const trimmed = (args ?? "").trim();
+			if (trimmed.includes("--all")) {
+				includeExplicit = !includeExplicit;
+				try {
+					ctx.ui.notify(`coms-net: include_explicit = ${includeExplicit}`, "info");
+				} catch {}
+			}
+			if (trimmed.includes("--reconnect")) {
+				try {
+					ctx.ui.notify("coms-net: reconnecting SSE...", "info");
+				} catch {}
+				if (sseAbort) {
+					try {
+						sseAbort.abort();
+					} catch {}
+					sseAbort = null;
+				}
+				// A scheduled reconnect must not race the manual one.
+				if (reconnectTimer) {
+					clearTimeout(reconnectTimer);
+					reconnectTimer = null;
+				}
+				reconnectAttempts = 0;
+				notifiedReconnectCap = false;
+				try {
+					await reRegisterAndOpen();
+				} catch (err) {
+					audit("manual_reconnect_failed", { reason: safeError(err) });
+				}
+			}
+			if (trimmed.includes("--server")) {
+				try {
+					const health = await httpFetch<HealthResponse>("GET", "/health");
+					ctx.ui.notify(
+						`coms-net server: ${serverUrl} · version ${health?.version ?? "?"} · server_id ${health?.server_id ?? "?"}`,
+						"info",
+					);
+				} catch (err) {
+					ctx.ui.notify(`coms-net: server health failed — ${safeError(err)}`, "error");
+				}
+			}
+			const projectMatch = trimmed.match(/--project\s+(\S+)/);
+			if (projectMatch) {
+				displayProject = projectMatch[1];
+				try {
+					ctx.ui.notify(`coms-net: displaying project ${displayProject}`, "info");
+				} catch {}
+			}
+
+			try {
+				const projectFilter = displayProject ?? identity?.project ?? "default";
+				const qs = `?project=${encodeURIComponent(projectFilter)}&include_explicit=${includeExplicit ? "true" : "false"}`;
+				const resp = await httpFetch<AgentsResponse>("GET", `/v1/agents${qs}`);
+				const agents: AgentCard[] = Array.isArray(resp?.agents) ? resp.agents : [];
+				peerCards.clear();
+				for (const a of agents) {
+					if (identity && a.session_id === identity.session_id) continue;
+					peerCards.set(a.session_id, a);
+				}
+				maybeRequestRender();
+			} catch (err) {
+				audit("refresh_failed", { reason: safeError(err) });
+			}
+		},
+	});
+
+	async function cleanShutdown(): Promise<void> {
+		if (shuttingDown) return;
+		shuttingDown = true;
+
+		if (heartbeatTimer) {
+			try {
+				clearInterval(heartbeatTimer);
+			} catch {}
+			heartbeatTimer = null;
+		}
+		if (reconnectTimer) {
+			try {
+				clearTimeout(reconnectTimer);
+			} catch {}
+			reconnectTimer = null;
+		}
+		if (sseAbort) {
+			try {
+				sseAbort.abort();
+			} catch {}
+			sseAbort = null;
+		}
+
+		if (identity && serverUrl && authToken) {
+			const ac = new AbortController();
+			const t = setTimeout(() => {
+				try {
+					ac.abort();
+				} catch {}
+			}, SHUTDOWN_DELETE_TIMEOUT_MS);
+			try {
+				t.unref?.();
+			} catch {}
+			try {
+				await httpFetch(
+					"DELETE",
+					`/v1/agents/${encodeURIComponent(identity.session_id)}?project=${encodeURIComponent(identity.project)}`,
+					undefined,
+					{ signal: ac.signal },
+				);
+			} catch {
+			} finally {
+				try {
+					clearTimeout(t);
+				} catch {}
+			}
+		}
+
+		if (identity) {
+			try {
+				pi.appendEntry("coms-net-log", {
+					event: "shutdown",
+					ts: nowIso(),
+					session_id: identity.session_id,
+				});
+			} catch {}
+		}
+
+		if (currentCtx?.hasUI) {
+			try {
+				currentCtx.ui.setWidget("coms-net-pool", undefined);
+			} catch {}
+			try {
+				currentCtx.ui.setStatus("coms-net", undefined);
+			} catch {}
+		}
+	}
+
+	// Pi emits session_shutdown itself on Ctrl+C, SIGHUP and SIGTERM.
+	pi.on("session_shutdown", async () => {
+		await cleanShutdown();
+	});
+}

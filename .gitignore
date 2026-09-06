@@ -1,0 +1,16 @@
+node_modules/
+.DS_Store
+*.swp
+*.swo
+
+# API keys -- never commit real credentials
+.env
+
+.pi/agent-sessions/
+tmp/
+
+# Terraform: providers, state, and per-account variable files stay local
+**/.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
