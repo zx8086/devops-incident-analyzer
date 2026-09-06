@@ -114,6 +114,42 @@ describe("fleet preflight decision table (SIO-1653)", () => {
 		expect(byCheck["manifest cidr"]).toMatchObject({ ok: false });
 	});
 
+	// The dev accounts were deployed before the fleet CLI existed: their
+	// DevOpsAgentReadOnly trusts the LOCAL pi-agent instance role with the
+	// devops-agent-dev-access ExternalId and carries no analyzer statement.
+	// That is the role this fleet adopts, so refusing it was a false negative
+	// (observed against 352896877281 and 120999474587, 2026-09-07).
+	test("adopt mode accepts a role trusted by this account's own pi-agent-agent", async () => {
+		const aws = fakeAws({
+			roleTrust: async () => ({
+				arn: "arn:aws:iam::120999474587:role/DevOpsAgentReadOnly",
+				statements: [{ sid: "TrustLocalPiAgent", principals: ["arn:aws:iam::120999474587:role/pi-agent-agent"] }],
+			}),
+		});
+		const rows = await preflight(manifest, ["eu-oit-prd"], aws);
+		expect(rows.find((r) => r.check === "adopt role")).toMatchObject({ ok: true });
+	});
+
+	// The widening must stay narrow: anything that is neither the analyzer nor
+	// pi-agent-agent still fails, on dev and prd alike. This is the check that
+	// stops `adopt` clobbering a same-named role belonging to something else.
+	test("adopt mode still refuses an unrecognised principal", async () => {
+		for (const principal of [
+			"arn:aws:iam::1:role/SomeOtherTeamRole",
+			"arn:aws:iam::1:role/pi-agent",
+			"arn:aws:iam::1:user/a-human",
+		]) {
+			const aws = fakeAws({
+				roleTrust: async () => ({
+					arn: "arn:aws:iam::1:role/DevOpsAgentReadOnly",
+					statements: [{ sid: "Other", principals: [principal] }],
+				}),
+			});
+			const rows = await preflight(manifest, ["eu-oit-prd"], aws);
+			expect(rows.find((r) => r.check === "adopt role")).toMatchObject({ ok: false });
+		}
+	});
+
 	test("adopt mode refuses a role without the analyzer's trust statement, create mode refuses an existing role", async () => {
 		const aws = fakeAws({
 			roleTrust: async () => ({
