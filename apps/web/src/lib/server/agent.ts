@@ -32,6 +32,7 @@ import { getLogger } from "@devops-agent/observability";
 import type { AttachmentMeta, DataSourceContext } from "@devops-agent/shared";
 import { isKillSwitchActive, KillSwitchError } from "@devops-agent/shared";
 import type { BaseMessage, MessageContentComplex } from "@langchain/core/messages";
+import { DEFAULT_AGENT_ID, describeAgent, graphFor } from "./graph-registry.ts";
 import { getKnowledgeGraphMcpUrl, mountKnowledgeGraphServer } from "./knowledge-graph-server.ts";
 import { startSchedules } from "./schedules.ts";
 import { pipelineNodeNames } from "./topology.ts";
@@ -73,7 +74,7 @@ const sessionLog = getLogger("agent:session-lifecycle");
 
 // SIO-621: Derive recursion limit from gitagent runtime.max_turns instead of hardcoding.
 // getRecursionLimit doubles max_turns to account for agent->tool round trips.
-function getGraphRecursionLimit(agentName = "incident-analyzer"): number {
+function getGraphRecursionLimit(agentName: string = DEFAULT_AGENT_ID): number {
 	const agent = getAgentByName(agentName);
 	return getRecursionLimit(agent.manifest.runtime?.max_turns);
 }
@@ -85,7 +86,7 @@ function getGraphRecursionLimit(agentName = "incident-analyzer"): number {
 // SIO-1110: raised to 15 min so pre-fan-out (~30s) + 360s fan-out + 360s retry +
 // the 120s aggregation reserve (~870s) fit inside the budget.
 const DEFAULT_GRAPH_TIMEOUT_S = 900;
-function getGraphTimeoutMs(agentName = "incident-analyzer"): number {
+function getGraphTimeoutMs(agentName: string = DEFAULT_AGENT_ID): number {
 	const envRaw = process.env.GRAPH_TIMEOUT_MS;
 	if (envRaw != null && envRaw !== "") {
 		const parsed = Number(envRaw);
@@ -256,10 +257,10 @@ export async function getIacGraph() {
 // life of the process, like the compiled graphs themselves.
 const pipelineNodesCache = new Map<string, Promise<ReadonlySet<string>>>();
 
-export function getPipelineNodes(agentName = "incident-analyzer"): Promise<ReadonlySet<string>> {
+export function getPipelineNodes(agentName: string = DEFAULT_AGENT_ID): Promise<ReadonlySet<string>> {
 	let cached = pipelineNodesCache.get(agentName);
 	if (!cached) {
-		cached = (agentName === "elastic-iac" ? getIacGraph() : getGraph())
+		cached = graphFor(agentName)
 			.then((graph) => graph.getGraphAsync())
 			.then((drawable) => pipelineNodeNames(Object.keys(drawable.nodes)));
 		pipelineNodesCache.set(agentName, cached);
@@ -292,7 +293,7 @@ export async function invokeAgent(
 	// SIO-637: Kill switch prevents new graph invocations
 	if (isKillSwitchActive()) throw new KillSwitchError();
 
-	const agentName = options.agentName ?? "incident-analyzer";
+	const agentName = options.agentName ?? DEFAULT_AGENT_ID;
 
 	// SIO-846/SIO-938: run agent-session bootstrap once per thread before the
 	// first turn. The latest user message seeds agent-memory semantic recall.
@@ -389,7 +390,7 @@ export async function resumeAgent(options: {
 }) {
 	if (isKillSwitchActive()) throw new KillSwitchError();
 
-	const agentName = options.agentName ?? "incident-analyzer";
+	const agentName = options.agentName ?? DEFAULT_AGENT_ID;
 	// SIO-751: lazy import. See top-of-file comment.
 	const { Command } = await import("@langchain/langgraph");
 	// SIO-1110: a resume arms a fresh signal, so it gets a matching fresh deadline.
@@ -432,9 +433,9 @@ export async function resumeAgent(options: {
 // drops messages beyond the window (RemoveMessage honored by MessagesAnnotation;
 // a shorter array would merge, not truncate), and resets dataSourceResults via
 // its reducer's empty-array reset branch. Best-effort: never breaks the response.
-export async function pruneThreadState(threadId: string, agentName = "incident-analyzer"): Promise<void> {
+export async function pruneThreadState(threadId: string, agentName: string = DEFAULT_AGENT_ID): Promise<void> {
 	try {
-		const graph = agentName === "elastic-iac" ? await getIacGraph() : await getGraph();
+		const graph = await graphFor(agentName);
 		const config = { configurable: { thread_id: threadId } };
 		const snapshot = await graph.getState(config);
 		const messages = (snapshot.values?.messages ?? []) as BaseMessage[];
@@ -466,7 +467,8 @@ export async function pruneThreadState(threadId: string, agentName = "incident-a
 // Builds a compact transcript (latest user ask + assistant report) for the judge;
 // the learner core PII-redacts before any write.
 async function readCompletedTurn(ctx: { agentName: string; threadId: string }): Promise<SkillLearnerTurn | null> {
-	if (ctx.agentName !== "incident-analyzer") return null;
+	// SIO-1655: the capability this site actually depends on, not the agent's name.
+	if (!describeAgent(ctx.agentName).hasConfidence) return null;
 	try {
 		const graph = await getGraph();
 		const snapshot = await graph.getState({ configurable: { thread_id: ctx.threadId } });
@@ -519,7 +521,8 @@ async function readCompletedTurn(ctx: { agentName: string; threadId: string }): 
 // body-only skill, so only learned-frontmatter skills are counted. Scoped to
 // incident-analyzer (matches readCompletedTurn).
 async function readCompletedTurnOutcome(ctx: { agentName: string; threadId: string }): Promise<OutcomeTurn | null> {
-	if (ctx.agentName !== "incident-analyzer") return null;
+	// SIO-1655: capability check (see readCompletedTurn).
+	if (!describeAgent(ctx.agentName).hasConfidence) return null;
 	try {
 		const graph = await getGraph();
 		const snapshot = await graph.getState({ configurable: { thread_id: ctx.threadId } });
@@ -560,9 +563,9 @@ export { runPostTurn, setSessionOutcome };
 // completed normally.
 export async function getPendingInterrupt(
 	threadId: string,
-	agentName = "incident-analyzer",
+	agentName: string = DEFAULT_AGENT_ID,
 ): Promise<{ value: unknown; id?: string } | undefined> {
-	const graph = agentName === "elastic-iac" ? await getIacGraph() : await getGraph();
+	const graph = await graphFor(agentName);
 	const snapshot = await graph.getState({ configurable: { thread_id: threadId } });
 	const tasks = snapshot.tasks ?? [];
 	for (const task of tasks) {
@@ -577,8 +580,8 @@ export async function getPendingInterrupt(
 // The IaC graph appends its user-facing output as AIMessages rather than streaming
 // tokens through an output node, so the SSE handler reads the final message from
 // the checkpointed state once the graph completes (no interrupt pending).
-export async function getLastAssistantText(threadId: string, agentName = "incident-analyzer"): Promise<string> {
-	const graph = agentName === "elastic-iac" ? await getIacGraph() : await getGraph();
+export async function getLastAssistantText(threadId: string, agentName: string = DEFAULT_AGENT_ID): Promise<string> {
+	const graph = await graphFor(agentName);
 	const snapshot = await graph.getState({ configurable: { thread_id: threadId } });
 	const values = snapshot.values as { messages?: Array<{ getType?: () => string; content?: unknown }> };
 	const messages = values?.messages ?? [];

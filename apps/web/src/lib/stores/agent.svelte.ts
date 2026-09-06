@@ -44,7 +44,12 @@ import {
 } from "./agent-reducer.ts";
 import { parseSseChunks } from "./sse-buffer.ts";
 
-export type AgentId = "incident-analyzer" | "elastic-iac";
+// SIO-1655: the union moved to lib/agent-ids.ts (runtime-free, so server code
+// can import it without pulling in a runes module). Re-exported here for the
+// existing client consumers.
+export { AGENT_IDS, type AgentId, DEFAULT_AGENT_ID, isAgentId } from "$lib/agent-ids";
+
+import type { AgentId } from "$lib/agent-ids";
 
 // SIO-1172: allow-list, not exclude-list -- a new AgentId added here defaults to
 // hiding "Create ticket" until explicitly opted in.

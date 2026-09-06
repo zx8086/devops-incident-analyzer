@@ -1,6 +1,7 @@
 <script lang="ts">
 // apps/web/src/routes/+page.svelte
 import { onDestroy, onMount } from "svelte";
+import { AGENT_CHOICES, agentChoice, DEFAULT_AGENT_ID } from "$lib/agent-ids";
 import AwsEstateSelector from "$lib/components/AwsEstateSelector.svelte";
 import ChatInput from "$lib/components/ChatInput.svelte";
 import ChatMessage from "$lib/components/ChatMessage.svelte";
@@ -80,9 +81,14 @@ const graphPaused = $derived(
 	),
 );
 
+// SIO-1655: isIac still gates genuinely IaC-SPECIFIC rendering (drift reports,
+// the plan-review card, the message variant) -- those are features of that
+// agent, not a two-agent assumption. What is no longer binary is the SWITCH and
+// the labels: both come from AGENT_CHOICES, so a third agent needs no edit here.
 const isIac = $derived(agentStore.currentAgent === "elastic-iac");
-const agentTitle = $derived(isIac ? "Elastic IaC Agent" : "Incident Analyzer");
-const agentSubtitle = $derived(isIac ? "Elastic Cloud IaC change assistant" : "DevOps Incident Analysis Assistant");
+const currentChoice = $derived(agentChoice(agentStore.currentAgent));
+const agentTitle = $derived(currentChoice.title);
+const agentSubtitle = $derived(currentChoice.subtitle);
 // SIO-1172: Create ticket is only relevant for agents that support it (allow-listed in agentStore).
 const ticketProviders = $derived(agentStore.supportsTicketCreation ? agentStore.availableTicketProviders : []);
 
@@ -143,8 +149,12 @@ const fleetLogIndex = $derived.by(() => {
 // old global gitopsLogIndex (last-message-only) was wiped by the next sendMessage. The fleet log
 // (fleetLogIndex) still rides the global fleetUpgradeResult.progressLog (separate path).
 
-function toggleAgent() {
-	agentStore.switchAgent(isIac ? "incident-analyzer" : "elastic-iac");
+// Cycles through the registered agents in order. With two agents this behaves
+// exactly like the old toggle; with three it keeps working.
+function cycleAgent() {
+	const ids = AGENT_CHOICES.map((c) => c.id);
+	const next = ids[(ids.indexOf(agentStore.currentAgent) + 1) % ids.length];
+	if (next) agentStore.switchAgent(next);
 }
 
 function submitClarify() {
@@ -231,11 +241,11 @@ function handleSuggestionClick(suggestion: string) {
     <div class="flex items-center gap-3">
       <button
         type="button"
-        onclick={toggleAgent}
+        onclick={cycleAgent}
         disabled={agentStore.isStreaming}
-        title="Switch agent"
-        aria-label="Switch agent"
-        class="w-7 h-7 rounded-full flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed {isIac ? 'bg-tommy-accent-blue ring-2 ring-white/70' : 'bg-tommy-navy hover:bg-tommy-accent-blue'}"
+        title="Switch agent ({agentTitle})"
+        aria-label="Switch agent (current: {agentTitle})"
+        class="w-7 h-7 rounded-full flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed {agentStore.currentAgent === DEFAULT_AGENT_ID ? 'bg-tommy-navy hover:bg-tommy-accent-blue' : 'bg-tommy-accent-blue ring-2 ring-white/70'}"
       >
         <Icon name="bot" class="w-4 h-4 text-white" />
       </button>
