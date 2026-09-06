@@ -1,34 +1,74 @@
 #!/usr/bin/env bash
-# deploy/publish-fleet.sh <s3-bucket> [profile]
+# packages/pi-coms/deploy/publish-fleet.sh [--stage-only] <s3-bucket> [profile]
 #
-# Build and upload the fleet bundle: a git archive of HEAD plus vendored
-# node_modules (all deps are pure JS, so the vendor tree is platform-
-# independent). Hosts running in S3 bundle mode converge on it within the
-# State Manager window, or immediately via Run Command.
+# Build and upload the fleet bundle: a git archive of the packages/pi-coms
+# subtree at HEAD plus vendored node_modules (all deps are pure JS, so the
+# vendor tree is platform-independent). Hosts running in S3 bundle mode
+# converge on it within the State Manager window, or immediately via Run
+# Command.
 #
-#   ./deploy/publish-fleet.sh pi-coms-dist-352896877281 eu-shared-services-dev
+#   ./packages/pi-coms/deploy/publish-fleet.sh pi-coms-dist-<hub-account-id> eu-shared-services-dev
+#
+# --stage-only builds the stage (in PI_COMS_STAGE_DIR when set), prints its
+# path and exits without uploading; the dirty-tree check is skipped because it
+# is a local dry run. PI_FLEET_PERSONA_DIR, when set, is copied to
+# vendor/pi-fleet/ in the stage (the persona exporter hook, SIO-1649).
 set -euo pipefail
 
-BUCKET="${1:?usage: publish-fleet.sh <s3-bucket> [aws-profile]}"
-PROFILE="${2:-}"
+STAGE_ONLY=0
+ARGS=()
+for a in "$@"; do
+  case "$a" in
+    --stage-only) STAGE_ONLY=1 ;;
+    *) ARGS+=("$a") ;;
+  esac
+done
+BUCKET="${ARGS[0]:-}"
+PROFILE="${ARGS[1]:-}"
+if [ "$STAGE_ONLY" = 0 ] && [ -z "$BUCKET" ]; then
+  echo "usage: publish-fleet.sh [--stage-only] <s3-bucket> [aws-profile]" >&2
+  exit 1
+fi
 PROFILE_ARGS=()
 [ -n "$PROFILE" ] && PROFILE_ARGS=(--profile "$PROFILE")
 
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+PKG_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(git -C "$PKG_ROOT" rev-parse --show-toplevel)"
+PKG_PREFIX="$(git -C "$PKG_ROOT" rev-parse --show-prefix)"
+PKG_PREFIX="${PKG_PREFIX%/}"
 VERSION="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
-if [ -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)" ]; then
-  echo "refusing to publish: uncommitted changes in tracked files" >&2
+if [ "$STAGE_ONLY" = 0 ] && [ -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no -- "$PKG_PREFIX")" ]; then
+  echo "refusing to publish: uncommitted changes in tracked files under $PKG_PREFIX" >&2
   exit 1
 fi
 
-STAGE="$(mktemp -d)"
-trap 'rm -rf "$STAGE"' EXIT
+if [ -n "${PI_COMS_STAGE_DIR:-}" ]; then
+  STAGE="$PI_COMS_STAGE_DIR"
+  mkdir -p "$STAGE"
+else
+  STAGE="$(mktemp -d)"
+  [ "$STAGE_ONLY" = 1 ] || trap 'rm -rf "$STAGE"' EXIT
+fi
 
-git -C "$REPO_ROOT" archive HEAD | tar -x -C "$STAGE"
-(cd "$STAGE" && bun install --frozen-lockfile --production --omit=peer)
+# The subtree only, with the packages/pi-coms prefix stripped: the bundle root
+# is the package root, exactly what the bootstrap and the hub userdata expect.
+git -C "$REPO_ROOT" archive "HEAD:$PKG_PREFIX" | tar -x -C "$STAGE"
+# The workspace root owns the only lockfile, so the staged tree gets a
+# standalone one before the frozen production install the hosts repeat.
+# Install output goes to stderr so --stage-only prints only the stage path.
+(cd "$STAGE" && bun install --lockfile-only >&2 && bun install --frozen-lockfile --production --omit=peer >&2)
 # The monitor and hub runtime deps live in scripts/package.json (SIO-1632).
-(cd "$STAGE/scripts" && bun install --frozen-lockfile --production)
+(cd "$STAGE/scripts" && bun install --frozen-lockfile --production >&2)
+if [ -n "${PI_FLEET_PERSONA_DIR:-}" ]; then
+  mkdir -p "$STAGE/vendor"
+  cp -R "$PI_FLEET_PERSONA_DIR" "$STAGE/vendor/pi-fleet"
+fi
 echo "$VERSION" > "$STAGE/.bundle-version"
+
+if [ "$STAGE_ONLY" = 1 ]; then
+  echo "$STAGE"
+  exit 0
+fi
 
 tar -czf "$STAGE.tar.gz" -C "$STAGE" .
 aws s3 cp "$STAGE.tar.gz" "s3://$BUCKET/fleet/bundle.tar.gz" "${PROFILE_ARGS[@]}"
