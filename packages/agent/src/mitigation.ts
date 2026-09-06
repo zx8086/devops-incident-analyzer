@@ -5,6 +5,7 @@ import type { MitigationSteps, PendingAction } from "@devops-agent/shared";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 import { getAvailableActionTools } from "./action-tools/executor.ts";
+import { proposePiVerification } from "./action-tools/pi-verifier.ts";
 import { createLlm, DeadlineExceededError, type InvokableLlm, invokeWithDeadline } from "./llm.ts";
 import { parseLlmJson } from "./llm-json.ts";
 import { extractTextFromContent } from "./message-utils.ts";
@@ -153,6 +154,14 @@ export async function aggregateMitigation(
 				);
 			}
 		}
+	}
+
+	// SIO-1635: deterministic verify-with-pi cards, one per assessed AWS estate,
+	// independent of the severity gate above. Empty when the hub is not configured.
+	const piActions = proposePiVerification(state);
+	if (piActions.length > 0) {
+		pendingActions = [...pendingActions, ...piActions];
+		logger.info({ count: piActions.length }, "pi verification cards proposed");
 	}
 
 	return { mitigationSteps, pendingActions, partialFailures };
