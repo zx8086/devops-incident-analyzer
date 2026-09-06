@@ -26,6 +26,7 @@
 		"@devops-agent/knowledge-graph": "workspace:*",
 		"@devops-agent/memory-pr": "workspace:*",
 		"@devops-agent/observability": "workspace:*",
+		"@devops-agent/pi-coms": "workspace:*",
 		"@devops-agent/shared": "workspace:*",
 		"@devops-agent/skillflow": "workspace:*",
 		"@langchain/aws": "catalog:",
