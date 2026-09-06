@@ -122,6 +122,10 @@ The Agent Memory identity map in `packages/agent/src/memory-backend.ts`
 (`AGENT_MEMORY_IDENTITIES`) is explicit: an agent name outside the map throws
 at first use instead of silently sharing the `incident-analyzer` user.
 
+The web app's pi-fleet pane (SIO-1650) reads the same `PI_COMS_HUBS` and adds
+`PI_COMS_PANE_TOKENS`, `PI_COMS_PANE_SENDER_PREFIX`, `PI_COMS_PANE_AWAIT_MS` and
+`PI_COMS_PANE_TIMEOUT_MS`; see `docs/architecture/pi-fleet-pane.md`.
+
 ## Security notes
 
 - The analyzer registers as an `explicit` peer, hidden from pool snapshots, and

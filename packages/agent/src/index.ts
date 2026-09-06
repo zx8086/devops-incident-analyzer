@@ -12,6 +12,23 @@ export {
 	type ScheduleHandlers,
 } from "@devops-agent/skillflow";
 export { executeAction, getAvailableActionTools } from "./action-tools/executor.ts";
+// SIO-1650: the web app's pi-fleet pane reuses the hub client through this barrel.
+export {
+	type FetchLike,
+	isPiComsConfigured,
+	PI_COMS_AWAIT_SLICE_MS,
+	type PiAgentCard,
+	PiComsClient,
+	type PiComsClientDeps,
+	PiComsHttpError,
+	type PiInboxMessage,
+	type PiMessageStatus,
+	type PiReply,
+	type PiSendResult,
+	resolvePiComsConfig,
+	senderNameFor,
+} from "./action-tools/pi-coms-client.ts";
+export { environmentForEstate, type HubSelection, selectHubForEstate } from "./action-tools/pi-verifier.ts";
 export { installAgentMemory } from "./agent-memory-install.ts";
 export { aggregate } from "./aggregator.ts";
 export { checkAlignment, getDataSourceErrorCategories, routeAfterAlignment } from "./alignment.ts";

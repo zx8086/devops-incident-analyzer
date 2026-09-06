@@ -13,6 +13,7 @@ import Icon from "$lib/components/Icon.svelte";
 import LearningMatchCard from "$lib/components/LearningMatchCard.svelte";
 import LearningOutcomeCard from "$lib/components/LearningOutcomeCard.svelte";
 import LearningProposalCard from "$lib/components/LearningProposalCard.svelte";
+import PiFleetPane from "$lib/components/PiFleetPane.svelte";
 import PipelineProgressCard from "$lib/components/PipelineProgressCard.svelte";
 import PlanReviewCard from "$lib/components/PlanReviewCard.svelte";
 import ReconcileChoiceCard from "$lib/components/ReconcileChoiceCard.svelte";
@@ -21,6 +22,7 @@ import StreamingProgress from "$lib/components/StreamingProgress.svelte";
 import SyntheticsDriftCard from "$lib/components/SyntheticsDriftCard.svelte";
 import SyntheticsPushChoiceCard from "$lib/components/SyntheticsPushChoiceCard.svelte";
 import { agentStore } from "$lib/stores/agent.svelte";
+import { piFleetStore } from "$lib/stores/pi-fleet.svelte";
 
 let messagesContainer: HTMLDivElement;
 let clarifyAnswer = $state("");
@@ -160,6 +162,10 @@ onMount(() => {
 		// Storage unavailable; default stays closed.
 	}
 
+	// SIO-1650: the pi-fleet pane is hidden until /api/pi/agents reports a configured hub.
+	piFleetStore.restoreOpen();
+	void piFleetStore.load();
+
 	let es: EventSource | undefined;
 	(async () => {
 		await agentStore.loadDataSources();
@@ -254,6 +260,19 @@ function handleSuggestionClick(suggestion: string) {
       >
         <Icon name="graph" class="w-5 h-5" />
       </button>
+      <!-- SIO-1650: pi-fleet pane toggle, only when a pi-coms hub is configured. -->
+      {#if piFleetStore.configured}
+        <button
+          type="button"
+          onclick={() => piFleetStore.toggle()}
+          title="Fleet spokes"
+          aria-label="Toggle the fleet spokes pane"
+          aria-pressed={piFleetStore.open}
+          class="min-w-[44px] min-h-[44px] p-2 rounded-lg transition-all border-2 border-transparent {piFleetStore.open ? 'bg-tommy-accent-blue text-white' : 'text-white/70 hover:text-white hover:bg-white/10'}"
+        >
+          <Icon name="message-square" class="w-5 h-5" />
+        </button>
+      {/if}
       <button
         onclick={() => agentStore.clearChat()}
         class="min-w-[44px] min-h-[44px] p-2 text-red-500 hover:text-white hover:bg-red-500 bg-transparent border-2 border-transparent hover:border-red-500 rounded-lg transition-all disabled:text-gray-300"
@@ -460,6 +479,20 @@ function handleSuggestionClick(suggestion: string) {
         isStreaming={agentStore.isStreaming}
         paused={graphPaused}
         outcome={graphRun.outcome}
+      />
+    </div>
+  {/if}
+  <!-- SIO-1650: live spokes pane (right), addressed directly, replies as data. -->
+  {#if piFleetStore.configured && piFleetStore.open}
+    <div class="w-2/5 max-w-xl shrink-0 border-l border-gray-200 bg-tommy-cream overflow-hidden">
+      <PiFleetPane
+        pane={piFleetStore.state}
+        busy={piFleetStore.busy}
+        mailboxBusy={piFleetStore.mailboxBusy}
+        onSend={(prompt) => piFleetStore.send(prompt)}
+        onRefresh={() => piFleetStore.load()}
+        onSelect={(selection) => piFleetStore.select(selection)}
+        onLoadMailbox={(environment) => piFleetStore.loadMailbox(environment)}
       />
     </div>
   {/if}

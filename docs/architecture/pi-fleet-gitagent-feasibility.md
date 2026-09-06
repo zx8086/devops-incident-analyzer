@@ -188,7 +188,7 @@ Replacing Pi with LangGraph on the spokes; making spokes in-process sub-agents; 
 | 0b: move pi-coms into this monorepo | [SIO-1654](https://linear.app/siobytes/issue/SIO-1654) | Done (PR #690, squash `7847dfbf`) |
 | 1: definitions, Pi package export, tagged release | [SIO-1649](https://linear.app/siobytes/issue/SIO-1649) | Done (PR #692, squash `fc5d96cb`); dev-bucket publish and host check pending |
 | 1b: manifest-driven fleet deploy | [SIO-1653](https://linear.app/siobytes/issue/SIO-1653) | Done (PR #693, squash `41523088`); AWS apply user-run |
-| 2a: thin hub pane in the web app | [SIO-1650](https://linear.app/siobytes/issue/SIO-1650) | Backlog |
+| 2a: thin hub pane in the web app | [SIO-1650](https://linear.app/siobytes/issue/SIO-1650) | In Review (PR #694) |
 | 2b: fleet inbox enrichment node | [SIO-1652](https://linear.app/siobytes/issue/SIO-1652) | Backlog |
 | 3: skillflow handlers, structured verdicts into memory | [SIO-1651](https://linear.app/siobytes/issue/SIO-1651) | Backlog |
 
