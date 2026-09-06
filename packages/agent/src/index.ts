@@ -70,16 +70,6 @@ export {
 	isClosureLearningEnabled,
 	runIncidentCloseForClosingTurn,
 } from "./incident-close-workflow-handlers.ts";
-// SIO-1651: the pi-handoff workflow's production entry point (post-turn
-// background hook) plus the flag apps/web gates it on.
-export {
-	isPiHandoffEnabled,
-	type PiHandoffContext,
-	type PiHandoffResult,
-	runPiHandoff,
-	runPiHandoffForClosingTurn,
-} from "./pi-handoff-workflow-handlers.ts";
-export { buildVerdictDecision, recordVerdictDecision } from "./pi-verdict-memory.ts";
 // SIO-1135: retention sweep (uncurated incident purge) wired beside the topology cron.
 export {
 	type PurgeSweepSummary,
@@ -170,6 +160,16 @@ export { aggregateMitigation } from "./mitigation.ts";
 export { proposeEscalate, proposeInvestigate, proposeMonitor } from "./mitigation-branches.ts";
 export { normalizeIncident } from "./normalizer.ts";
 export { getWorkspaceRoot, skillFilePath } from "./paths.ts";
+// SIO-1651: the pi-handoff workflow's production entry point (post-turn
+// background hook) plus the flag apps/web gates it on.
+export {
+	isPiHandoffEnabled,
+	type PiHandoffContext,
+	type PiHandoffResult,
+	runPiHandoff,
+	runPiHandoffForClosingTurn,
+} from "./pi-handoff-workflow-handlers.ts";
+export { buildVerdictDecision, recordVerdictDecision } from "./pi-verdict-memory.ts";
 export {
 	buildOrchestratorPrompt,
 	buildSubAgentPrompt,
