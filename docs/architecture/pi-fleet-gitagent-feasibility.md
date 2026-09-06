@@ -146,7 +146,7 @@ Added 2026-09-06 after the user asked whether a small node could pull the hub's 
 
 Design: a deterministic node `fetchFleetInbox`, registered always and edged only when `PI_COMS_INBOX_ENABLED=true` (the SIO-640 edge-gate idiom), placed after `aggregate` and before `extractFindings`, soft-failing with a short budget. It reads `ops` filtered by account alias and the incident window plus each assessed estate's inbox, drops senders matching `incident-analyzer-*` to avoid its own echo, and writes a typed `fleetInboxDigest` sidecar (message id, sender, target, kind, timestamp, severity, capped excerpt) rendered as a Fleet inbox card. Only structured facts (counts, alarm names, severities, timestamps) reach the prompt; bodies never do, matching the #682 invariant. A later step can feed alarm names and log groups into the resolve-identifiers presets as deterministic hints.
 
-Open before building: the corp fleet's `PI_MONITOR_REPORT_TO` value (code default `laptop`, docs assume `ops`), and how much of a monitor report parses deterministically from the monitor's own report format.
+Settled at build time (SIO-1652, 2026-09-06): the corp fleet reports to `ops` (`PI_MONITOR_REPORT_TO` is set by `deploy/bootstrap/agent-bootstrap.sh`, code default `laptop`), and a monitor report parses deterministically from `formatIncidentReport` (header, then one `- (<sev>/<family>) <resource>: <summary>` line per finding). The node runs before `aggregate`, not after it, because the prompt is built there; see `fleet-inbox-enrichment.md`.
 
 ### Phase 3: after each other, and memory (3 to 4 days)
 
@@ -189,7 +189,7 @@ Replacing Pi with LangGraph on the spokes; making spokes in-process sub-agents; 
 | 1: definitions, Pi package export, tagged release | [SIO-1649](https://linear.app/siobytes/issue/SIO-1649) | Done (PR #692, squash `fc5d96cb`); dev-bucket publish and host check pending |
 | 1b: manifest-driven fleet deploy | [SIO-1653](https://linear.app/siobytes/issue/SIO-1653) | Done (PR #693, squash `41523088`); AWS apply user-run |
 | 2a: thin hub pane in the web app | [SIO-1650](https://linear.app/siobytes/issue/SIO-1650) | Done (PR #694, squash `62c8a59d`); pi-fleet principal and manual pane run user-run |
-| 2b: fleet inbox enrichment node | [SIO-1652](https://linear.app/siobytes/issue/SIO-1652) | In Progress |
+| 2b: fleet inbox enrichment node | [SIO-1652](https://linear.app/siobytes/issue/SIO-1652) | In Review (PR #695) |
 | 3: skillflow handlers, structured verdicts into memory | [SIO-1651](https://linear.app/siobytes/issue/SIO-1651) | Backlog |
 
 No phase starts before its issue is approved. Phase 2 decision recorded 2026-09-06: the thin hub pane (2a) first, the fleet inbox node (2b) added the same day; the third graph (2c) stays a later option.

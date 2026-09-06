@@ -279,6 +279,18 @@ export {
 	type TruncationMarker,
 } from "./pagination.ts";
 export {
+	type FleetInboxCounts,
+	FleetInboxCountsSchema,
+	type FleetInboxDigest,
+	FleetInboxDigestSchema,
+	type FleetInboxEntry,
+	FleetInboxEntrySchema,
+	type FleetInboxEstate,
+	FleetInboxEstateSchema,
+	type FleetInboxKind,
+	FleetInboxKindSchema,
+	type FleetInboxSeverity,
+	FleetInboxSeveritySchema,
 	isPiActionTool,
 	PI_ACTION_TOOLS,
 	PI_INVESTIGATION_RESPONSE_SCHEMA,

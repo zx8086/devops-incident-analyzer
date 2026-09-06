@@ -116,3 +116,58 @@ export const PiActionResultPayloadSchema = z.discriminatedUnion("kind", [
 	PiQueuedResultSchema,
 ]);
 export type PiActionResultPayload = z.infer<typeof PiActionResultPayloadSchema>;
+
+// SIO-1652: fleet inbox digest written by the fetchFleetInbox node. Structured
+// facts (kind, severity, counts, alarm names, timestamps) feed the aggregator
+// prompt and the card; `excerpt` is display-only untrusted text (spoke model
+// output or operator free text), capped, and never enters a prompt.
+export const FleetInboxKindSchema = z.enum(["monitor-report", "conversation", "other"]);
+export type FleetInboxKind = z.infer<typeof FleetInboxKindSchema>;
+
+export const FleetInboxSeveritySchema = z.enum(["info", "warn", "critical"]);
+export type FleetInboxSeverity = z.infer<typeof FleetInboxSeveritySchema>;
+
+export const FleetInboxEntrySchema = z.object({
+	msgId: z.string(),
+	inbox: z.string(),
+	sender: z.string(),
+	target: z.string().nullable(),
+	kind: FleetInboxKindSchema,
+	severity: FleetInboxSeveritySchema.nullable(),
+	findingCount: z.number().int().nonnegative().nullable(),
+	alarmNames: z.array(z.string()),
+	createdAt: z.string(),
+	completedAt: z.string().nullable(),
+	excerpt: z.string(),
+});
+export type FleetInboxEntry = z.infer<typeof FleetInboxEntrySchema>;
+
+export const FleetInboxCountsSchema = z.object({
+	total: z.number().int().nonnegative(),
+	monitorReports: z.number().int().nonnegative(),
+	conversations: z.number().int().nonnegative(),
+	other: z.number().int().nonnegative(),
+	critical: z.number().int().nonnegative(),
+	warn: z.number().int().nonnegative(),
+});
+export type FleetInboxCounts = z.infer<typeof FleetInboxCountsSchema>;
+
+export const FleetInboxEstateSchema = z.object({
+	estate: z.string(),
+	environment: z.enum(["dev", "stg", "prd"]),
+	inboxes: z.array(z.string()),
+	entries: z.array(FleetInboxEntrySchema),
+	counts: FleetInboxCountsSchema,
+	alarmNames: z.array(z.string()),
+	latestAt: z.string().nullable(),
+	error: z.string().nullable(),
+});
+export type FleetInboxEstate = z.infer<typeof FleetInboxEstateSchema>;
+
+export const FleetInboxDigestSchema = z.object({
+	windowFrom: z.string(),
+	windowTo: z.string(),
+	generatedAt: z.string(),
+	estates: z.array(FleetInboxEstateSchema),
+});
+export type FleetInboxDigest = z.infer<typeof FleetInboxDigestSchema>;

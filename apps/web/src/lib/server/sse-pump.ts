@@ -8,6 +8,7 @@ import { extractStreamDeltaText } from "@devops-agent/agent";
 import type { InvestigationFocus } from "@devops-agent/shared";
 import {
 	ApplicationTopologySchema,
+	FleetInboxDigestSchema,
 	HilApplyReportSchema,
 	MlAnomalyExplainerSchema,
 	NetworkTopologySchema,
@@ -316,6 +317,18 @@ export async function pumpEventStream(
 					const parsed = MlAnomalyExplainerSchema.safeParse(rawExplainer);
 					if (parsed.success && parsed.data.records.length > 0) {
 						send({ type: "ml_anomaly_explainer", explainer: parsed.data });
+					}
+				}
+			}
+
+			// SIO-1652: once-per-turn fleet inbox digest, same guarded-parse convention as
+			// the extractFindings sidecars above; a malformed digest drops the event, never the turn.
+			if (event.name === "fetchFleetInbox") {
+				const rawDigest = (event.data?.output as { fleetInboxDigest?: unknown })?.fleetInboxDigest;
+				if (rawDigest !== undefined) {
+					const parsed = FleetInboxDigestSchema.safeParse(rawDigest);
+					if (parsed.success && parsed.data.estates.length > 0) {
+						send({ type: "fleet_inbox", digest: parsed.data });
 					}
 				}
 			}

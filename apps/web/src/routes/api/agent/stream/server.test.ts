@@ -168,6 +168,8 @@ mock.module("@devops-agent/shared", () => ({
 	// SIO-1215: sse-pump value-imports this to validate the ml_anomaly_explainer
 	// payload before forwarding. Mirrors the real schema's load-bearing shape
 	// (records array) closely enough to reject malformed payloads.
+	// SIO-1652: sse-pump value-imports this to validate the fleet_inbox payload.
+	FleetInboxDigestSchema: z.object({ estates: z.array(z.object({ estate: z.string() }).passthrough()) }).passthrough(),
 	MlAnomalyExplainerSchema: z.object({
 		builtAtTurn: z.number(),
 		mode: z.enum(["overview", "detail"]),

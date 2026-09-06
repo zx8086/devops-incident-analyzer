@@ -24,6 +24,7 @@ export const INCIDENT_NODES: readonly NodeLabel[] = [
 	{ id: "detectTopicShift", activeLabel: "Checking topic", completeLabel: "Topic checked" },
 	{ id: "queryDataSource", activeLabel: "Querying", completeLabel: "Queried" },
 	{ id: "align", activeLabel: "Aligning", completeLabel: "Aligned" },
+	{ id: "fetchFleetInbox", activeLabel: "Reading fleet inbox", completeLabel: "Fleet inbox read" },
 	{ id: "aggregate", activeLabel: "Analyzing", completeLabel: "Analyzed" },
 	{ id: "extractFindings", activeLabel: "Extracting findings", completeLabel: "Findings" },
 	{ id: "checkConfidence", activeLabel: "Checking confidence", completeLabel: "Confidence checked" },

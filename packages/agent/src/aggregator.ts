@@ -45,6 +45,7 @@ import {
 	resolveOrbitConsumerEdges,
 	summarizeDownstreamImpactForPrompt,
 } from "./downstream-impact.ts";
+import { summarizeFleetInboxForPrompt } from "./fleet-inbox.ts";
 import { isGapsJudgeEnabled, judgeDegradingGapBullets } from "./gaps-judge.ts";
 import { getGraphDeadlineAt, hasAggregationBudget } from "./graph-budget.ts";
 import { getRecalledMemoryContext } from "./lifecycle.ts";
@@ -211,6 +212,9 @@ export function buildAggregatorMessages(
 	// against, read once by graphEnrich (CodeRabbit, PR #547: a narrower
 	// incident-services-plus-graphBlastRadius set silently omitted code-only
 	// consumers from this turn's render even though the write path persisted them).
+	// SIO-1652: the fleet inbox digest is written by fetchFleetInbox right before
+	// this node, so the slot is current. Structured facts only (no bodies).
+	const fleetInboxContext = state.fleetInboxDigest ? summarizeFleetInboxForPrompt(state.fleetInboxDigest) : "";
 	let downstreamImpactContext = "";
 	try {
 		const incidentServices = state.normalizedIncident.affectedServices?.map((s) => s.name) ?? [];
@@ -232,6 +236,7 @@ export function buildAggregatorMessages(
 		applicationMapContext,
 		mlAnomalyContext,
 		downstreamImpactContext,
+		fleetInboxContext,
 		recalledMemory,
 	});
 	const priorAnswer = state.finalAnswer;

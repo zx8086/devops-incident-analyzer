@@ -7,6 +7,7 @@ import type {
 	CouchbaseFindings,
 	DataSourceContext,
 	ElasticFindings,
+	FleetInboxDigest,
 	GitLabFindings,
 	HilApplyReport,
 	HilMatchCandidate,
@@ -399,6 +400,9 @@ export interface ReducerState {
 	// SIO-1215: once-per-turn ML anomaly explainer from the ml_anomaly_explainer
 	// event. Same replace semantics as networkTopology.
 	mlAnomalyExplainer: MlAnomalyExplainer | null;
+	// SIO-1652: once-per-turn fleet inbox digest from the fleet_inbox event. Same
+	// replace semantics as mlAnomalyExplainer.
+	fleetInboxDigest: FleetInboxDigest | null;
 	// Live in-flight status during the queryDataSource fan-out, keyed by
 	// dataSourceId, or dataSourceId:deploymentId when deploymentId is set
 	// (distinguishes concurrent AWS multi-estate branches). Populated well before
@@ -487,6 +491,7 @@ export function initialReducerState(): ReducerState {
 		networkTopology: null,
 		applicationTopology: null,
 		mlAnomalyExplainer: null,
+		fleetInboxDigest: null,
 		subAgentProgress: new Map(),
 		lastSuggestions: [],
 		lastResponseTime: undefined,
@@ -576,6 +581,9 @@ export function applyStreamEvent(state: ReducerState, event: StreamEvent): Reduc
 		// SIO-1215: per-turn ML anomaly explainer.
 		case "ml_anomaly_explainer":
 			return { ...state, mlAnomalyExplainer: event.explainer };
+		// SIO-1652: per-turn fleet inbox digest.
+		case "fleet_inbox":
+			return { ...state, fleetInboxDigest: event.digest };
 		case "node_start": {
 			const next = new Map(state.activeNodes);
 			next.set(event.nodeId, (next.get(event.nodeId) ?? 0) + 1);
