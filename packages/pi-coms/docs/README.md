@@ -1,6 +1,6 @@
 # Documentation Index
 
-Project-specific documentation for pi-coms: peer-to-peer messaging between Pi Coding Agent instances plus the hub-and-spoke deployment. Reusable, project-agnostic guides live in the top-level [`guides/`](../guides/) directory.
+Project-specific documentation for pi-coms: peer-to-peer messaging between Pi Coding Agent instances plus the hub-and-spoke deployment. Reusable, project-agnostic guides live in a private guides collection that is not part of this repository.
 
 ## Quick Navigation
 
@@ -59,7 +59,7 @@ Project-specific documentation for pi-coms: peer-to-peer messaging between Pi Co
 - [`README.md`](../README.md) -- prerequisites, setup, quick starts
 - [`CLAUDE.md`](../CLAUDE.md) -- assistant working notes for this repository
 - [`AGENTS.md`](../AGENTS.md) -- operator-console instructions; [`deploy/AGENTS-spoke.md`](../deploy/AGENTS-spoke.md) -- the spoke agents' investigation discipline
-- [`guides/documentation-guide.md`](../guides/documentation-guide.md) -- the standards these docs follow
+- The private guides collection's documentation guide (not in this repository) -- the standards these docs follow
 
 ## Service Overview
 

@@ -38,7 +38,7 @@ For multi-user deployments the single shared token can be replaced with one toke
 | Variable | Source |
 |----------|--------|
 | `PI_COMS_NET_AUTH_SSM_PATH` | SSM Parameter Store path (e.g. `/pi-coms/auth`), one `SecureString` per principal, polled via the host's `aws` CLI |
-| `PI_COMS_NET_AUTH_FILE` | A `tokens.json` file for non-AWS hubs: `{"principals": {"simon": {"token": "...", "kind": "operator", "names": ["simon", "ops"]}}}` |
+| `PI_COMS_NET_AUTH_FILE` | A `tokens.json` file for non-AWS hubs: `{"principals": {"alice": {"token": "...", "kind": "operator", "names": ["alice", "ops"]}}}` |
 | `PI_COMS_NET_AUTH_REFRESH_MS` | Directory refresh interval (default 60 s) |
 
 Semantics:

@@ -33,7 +33,7 @@ need follow up"). Investigation traced four independent mechanisms, each
 ticketed and fixed the same day. Originating conversation facts are recorded in
 the ticket Problem sections; the arc supersedes nothing -- it builds on
 `experiments/HANDOFF-2026-09-02-coms-net-fixes-1598-1599-1600.md` (note: that
-file lives on the unmerged branch `simonowusupvh/handoff-coms-net-fixes`).
+file lives on the unmerged branch `<owner>/handoff-coms-net-fixes`).
 
 ## What shipped, where the code is
 
@@ -69,7 +69,7 @@ review, env vars), `docs/architecture/communication.md` (inbox tool row).
 | When | Expect |
 |---|---|
 | Tonight 00:00 UTC | Both digests carry `notable warn+ findings` section; oit's cert count jumps once as the 3 expired us-east-1 certs enter (then fingerprints hold) |
-| Next cert re-alert window | The two eu-central-1 expired certs (`prana-dev.pvhcorp.com`, `vpc.dev.oit.eu.pvh.cloud`) come back as `info` superseded/unattached instead of critical -- IF a valid same-region successor exists; otherwise still critical (the DigiCert->AWS renewals were confirmed by live agent enumeration) |
+| Next cert re-alert window | The two eu-central-1 expired certs (`<cert-a>.example.test`, `<cert-b>.example.test`) come back as `info` superseded/unattached instead of critical -- IF a valid same-region successor exists; otherwise still critical (the DigiCert->AWS renewals were confirmed by live agent enumeration) |
 | Sunday 00:00 UTC | First scheduled suppression review mail from both monitors |
 | Next Statistics alarm state change | First `suppressed_finding` match for the corrected pattern (0 matches right after adding is EXPECTED -- suppression applies at emission time, existing fingerprints sit in their re-alert window) |
 
@@ -80,8 +80,8 @@ review, env vars), `docs/architecture/communication.md` (inbox tool row).
 aws ssm start-session --profile eu-shared-services-dev --region eu-central-1 \
   --target i-042d0fed0cb5d8702 --document-name AWS-StartPortForwardingSession \
   --parameters portNumber=8787,localPortNumber=8788
-# one-shot script (re-create in scratchpad; registers as `simon` via
-# ~/.pi-coms-corp-token-simon, reuses scripts/monitor/coms.ts MonitorComs):
+# one-shot script (re-create in scratchpad; registers as `<you>` via
+# ~/.pi-coms-corp-token-<you>, reuses scripts/monitor/coms.ts MonitorComs):
 #   bun ask-monitors.ts "<command>" monitor-eu-oit-dev [monitor-eu-shared-services-dev]
 # commands: run-checks status digest review history suppressions suppress|unsuppress
 ```

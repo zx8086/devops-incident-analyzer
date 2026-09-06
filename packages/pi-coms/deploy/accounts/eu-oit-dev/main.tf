@@ -68,9 +68,8 @@ variable "agent_subnet_id" {
 }
 
 variable "dist_bucket" {
-  description = "Fleet distribution bucket in shared-services (org-scoped read)."
+  description = "Fleet distribution bucket in the hub account (pi-coms-dist-<hub-account-id>, org-scoped read); set in terraform.tfvars."
   type        = string
-  default     = "pi-coms-dist-352896877281"
 }
 
 variable "pi_model" {

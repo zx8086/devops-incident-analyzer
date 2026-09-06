@@ -144,7 +144,7 @@ operator role.
 
 ## Hygiene
 
-- Auth tokens live in files (for example `~/.pi-coms-corp-token-simon`) and
+- Auth tokens live in files (for example `~/.pi-coms-corp-token-<you>`) and
   environment variables. Never print one into the conversation or a reply.
 - One name per person on the hub; names are exclusive addresses. If your
   name is taken you were auto-suffixed and are no longer receiving mail

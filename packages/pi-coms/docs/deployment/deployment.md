@@ -33,7 +33,9 @@ pitfalls are collected in [operations-gotchas.md](operations-gotchas.md).
 ## Accounts and roots
 
 One Terraform root per account under `deploy/accounts/`, each with local
-state and gitignored tfvars:
+state and gitignored tfvars. Spoke roots take `dist_bucket` (the hub
+account's `pi-coms-dist-<hub-account-id>`) from that tfvars file; the tree
+carries no default for it (SIO-1654):
 
 | Root | Instantiates |
 |------|--------------|

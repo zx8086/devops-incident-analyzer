@@ -174,14 +174,14 @@ describe("digest notables", () => {
 				notable({
 					severity: "critical",
 					family: "cert",
-					resource: "prana-dev.pvhcorp.com",
-					summary: "Certificate prana-dev.pvhcorp.com expires in -979 day(s)",
+					resource: "cert-example.example.test",
+					summary: "Certificate cert-example.example.test expires in -979 day(s)",
 				}),
 				notable(),
 			],
 		});
 		expect(text).toContain(
-			"(critical/cert) prana-dev.pvhcorp.com: Certificate prana-dev.pvhcorp.com expires in -979 day(s)",
+			"(critical/cert) cert-example.example.test: Certificate cert-example.example.test expires in -979 day(s)",
 		);
 		expect(text).toContain("(warn/drift) i-059a799316e6d8f5d: instance changed state running -> terminated");
 	});
@@ -326,14 +326,14 @@ describe("suppression review", () => {
 
 	test("formatter renders header, entries, and flags zero-match entries", () => {
 		const text = formatSuppressionReview({
-			accountId: "120999474587",
+			accountId: "111122223333",
 			windowDays: 7,
 			entries: [
 				{ ...ledger[0], matches: 43, sampleKeys: ["alarm:kong:ALARM"] },
 				{ ...ledger[1], matches: 0, sampleKeys: [] },
 			],
 		});
-		expect(text.split("\n")[0]).toBe("[info] aws-120999474587 suppression review (last 7d)");
+		expect(text.split("\n")[0]).toBe("[info] aws-111122223333 suppression review (last 7d)");
 		expect(text).toContain("alarm:%-Utilization-Low-20:%");
 		expect(text).toContain("accepted dev rightsizing noise");
 		expect(text).toContain("matches last 7d: 43");
@@ -342,7 +342,7 @@ describe("suppression review", () => {
 	});
 
 	test("formatter renders an explicit nothing-masked line for an empty ledger", () => {
-		const text = formatSuppressionReview({ accountId: "120999474587", windowDays: 7, entries: [] });
+		const text = formatSuppressionReview({ accountId: "111122223333", windowDays: 7, entries: [] });
 		expect(text).toContain("suppression ledger is empty");
 		expect(text).toContain("nothing is being masked");
 	});
