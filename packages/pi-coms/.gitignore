@@ -14,3 +14,7 @@ tmp/
 *.tfstate
 *.tfstate.*
 terraform.tfvars
+
+# Fleet manifest: subnets, CIDRs, hub IPs and account ids stay local (SIO-1653)
+deploy/fleet.yaml
+deploy/accounts/*/backend.hcl
