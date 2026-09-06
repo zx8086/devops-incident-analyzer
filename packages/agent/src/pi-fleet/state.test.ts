@@ -16,7 +16,13 @@ function reduce<K extends keyof typeof PiFleetState.spec>(key: K, prev: unknown,
 	return channel.operator(base, next);
 }
 
-const answered: SpokeReply = { estate: "eu-oit-prd", target: "eu-oit-prd", msgId: "m1", status: "answered", text: "ok" };
+const answered: SpokeReply = {
+	estate: "eu-oit-prd",
+	target: "eu-oit-prd",
+	msgId: "m1",
+	status: "answered",
+	text: "ok",
+};
 const queued: SpokeReply = { estate: "eu-b2b-prd", target: "ops", msgId: "m2", status: "queued" };
 
 describe("SIO-1655 PiFleetState", () => {

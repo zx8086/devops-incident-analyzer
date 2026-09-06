@@ -163,7 +163,11 @@ describe("SIO-1655 fleet tools", () => {
 
 	test("an estate whose environment has no configured hub is refused", async () => {
 		const hub = scriptedHub({});
-		const deps = { config: { ...config, hubs: { prd: config.hubs.prd } }, fetchImpl: hub.fetchImpl, clients: new Map() };
+		const deps = {
+			config: { ...config, hubs: { prd: config.hubs.prd } },
+			fetchImpl: hub.fetchImpl,
+			clients: new Map(),
+		};
 		const byName = new Map(buildFleetTools(deps).map((t) => [t.name, t]));
 		const out = (await byName.get("fleet_status")?.invoke({ estate: "eu-oit-dev" })) as string;
 		expect(out).toContain("Refused");

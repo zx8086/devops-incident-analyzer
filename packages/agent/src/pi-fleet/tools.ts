@@ -18,12 +18,7 @@ import { getLogger } from "@devops-agent/observability";
 import type { PiComsConfig } from "@devops-agent/shared";
 import { tool as createTool, type StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
-import {
-	type FetchLike,
-	type PiAgentCard,
-	PiComsClient,
-	type PiInboxMessage,
-} from "../action-tools/pi-coms-client.ts";
+import { type FetchLike, type PiAgentCard, PiComsClient, type PiInboxMessage } from "../action-tools/pi-coms-client.ts";
 import { selectHubForEstate } from "../action-tools/pi-verifier.ts";
 
 const logger = getLogger("agent:piFleet:tools");
