@@ -10,7 +10,9 @@
 			"!.claude/worktrees",
 			"!guides",
 			"!docs/reference/agent-memory-openapi.json",
-			"!.fallow"
+			"!.fallow",
+			"!packages/pi-coms/deploy",
+			"!packages/pi-coms/scripts/node_modules"
 		]
 	},
 	"assist": { "actions": { "source": { "organizeImports": "on" } } },

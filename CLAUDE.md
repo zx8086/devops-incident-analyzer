@@ -8,7 +8,7 @@ Multi-datasource DevOps incident analysis agent. A LangGraph supervisor orchestr
 
 ## Current State
 
-Fully implemented monorepo: 10 packages, 7 MCP servers, the 31-node LangGraph pipeline below, a separate elastic-iac proposer graph, gitagent declarative agent definitions, and a SvelteKit frontend. All MCP servers use a unified bootstrap (`createMcpApplication` from `@devops-agent/shared`) with standardized logging, 3 transport modes (stdio/http/agentcore), and action-driven tool selection replacing regex filtering. GitLab MCP uses a proxy pattern (forwarding to GitLab's native `/api/v4/mcp` endpoint) plus custom code-analysis tools. The `devops-incident-analyzer-setup-guide.md` is the original architecture blueprint (historical reference).
+Fully implemented monorepo: 19 packages, 7 MCP servers, the 31-node LangGraph pipeline below, a separate elastic-iac proposer graph, gitagent declarative agent definitions, and a SvelteKit frontend. All MCP servers use a unified bootstrap (`createMcpApplication` from `@devops-agent/shared`) with standardized logging, 3 transport modes (stdio/http/agentcore), and action-driven tool selection replacing regex filtering. GitLab MCP uses a proxy pattern (forwarding to GitLab's native `/api/v4/mcp` endpoint) plus custom code-analysis tools. The `devops-incident-analyzer-setup-guide.md` is the original architecture blueprint (historical reference).
 
 ## Architecture
 
@@ -27,6 +27,7 @@ individual packages:
 - `mcp-server-aws/` -- multi-estate via cross-account AssumeRole
 - `shared/` -- cross-package types, Zod schemas, unified bootstrap, AgentCore proxy, Agent Memory REST client (SIO-938)
 - `checkpointer/` -- **transient** per-thread LangGraph state only (memory + bun:sqlite)
+- `pi-coms/` -- the pi-coms hub, Pi extension, fleet monitor, Terraform and deploy scripts (SIO-1654 subtree import, layout intact). Its monitor deps live in a nested NON-workspace `scripts/package.json` (never move them into the package manifest: Pi reads that file on install, SIO-1632); the package-local CLAUDE.md and AGENTS.md are read by Pi and stay there. Hub wire types: `packages/pi-coms/contracts/`. Bundle staging: `packages/pi-coms/deploy/publish-fleet.sh --stage-only`.
 
 ### Agent Pipeline (31-node LangGraph StateGraph: 21 base + 4 gated KG + 6 gated HIL-learning)
 
@@ -91,6 +92,7 @@ Scripts are listed in the root `package.json`. Non-obvious invocations:
 ```bash
 bun run --filter @devops-agent/web dev                 # SvelteKit frontend (port 5173)
 bun run --filter '@devops-agent/gitagent-bridge' test  # Single package
+just coms laptop                                       # pi-coms console (root justfile delegates to packages/pi-coms/justfile)
 ```
 
 Note `bun test` at the repo root can crash the Bun runner mid-suite; run per
@@ -202,9 +204,9 @@ ALWAYS REMOVE: multi-line file header JSDoc, JSDoc restating names, obvious `@re
 ALWAYS KEEP: Zod `.describe()` calls, business logic "why" comments, ticket references (`SIO-XXX`), non-obvious algorithm explanations.
 
 ### Servers
-- Elastic MCP: 9080 | Kafka MCP: 9081 | Couchbase MCP: 9082 | Konnect MCP: 9083 | GitLab MCP: 9084 | Atlassian MCP: 9085 | AWS MCP (SigV4 proxy): 3001 | Elastic IaC MCP: 9086 | Knowledge Graph MCP: 9087 (SIO-967, in-process in the web app) | Web: 5173
+- Elastic MCP: 9080 | Kafka MCP: 9081 | Couchbase MCP: 9082 | Konnect MCP: 9083 | GitLab MCP: 9084 | Atlassian MCP: 9085 | AWS MCP (SigV4 proxy): 3001 | Elastic IaC MCP: 9086 | Knowledge Graph MCP: 9087 (SIO-967, in-process in the web app) | Web: 5173 | pi-coms hub (local, `just coms-net-server`): 52965
 - Check ports before starting: `lsof -i :<port>`
-- Kill background processes after testing -- see the MANDATORY kill rule at the top of Critical Rules > Workflow: every service you start dies before the turn ends, verified with `lsof -nP -iTCP:<port> -sTCP:LISTEN`
+- Kill background processes after testing -- see the MANDATORY kill rule at the top of Critical Rules > Workflow: every service you start dies before the turn ends, verified with `lsof -nP -iTCP:<port> -sTCP:LISTEN`. This covers `just coms-net-server` and any pi-coms hub spawned for a smoke test.
 - `/health` (SIO-482, `apps/web/src/routes/health/+server.ts`): always HTTP 200 (liveness/info, not a k8s readiness gate); `status` is `"ok"` or `"degraded"` (any probed MCP server not `"ready"`). Reports live MCP states (`getServerStates`/`getConnectedServers`), graph readiness + checkpointer type (`getAgentRuntimeStatus()` in `apps/web/src/lib/server/agent.ts`), and `activeSseConnections` (counter inc/dec in the stream route's ReadableStream start/close/cancel). `status`/`timestamp`/`services` (env-presence) preserved for backward compat.
 
 ### Testing
