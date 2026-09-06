@@ -12,7 +12,7 @@
 
 ## TL;DR
 
-Status 2026-09-06: Phase 0b implemented on branch `claude/sio-1654-pi-coms-subtree` following `docs/superpowers/plans/2026-09-06-pi-fleet-phase-0b-and-0.md` (Tasks 0b.1 to 0b.9); Phase 0 follows on `claude/sio-1635-phase0-hub-map` once PR #682 is landed.
+Status 2026-09-06: Phase 0b implemented on PR #690 (branch `claude/sio-1654-pi-coms-subtree`) following `docs/superpowers/plans/2026-09-06-pi-fleet-phase-0b-and-0.md` (Tasks 0b.1 to 0b.9); Phase 0 follows on `claude/sio-1635-phase0-hub-map` once PR #682 is landed.
 
 The feasibility work is finished and merged. Verdict: gitagent can own the definition, versioning and release of the pi-coms spoke and console personas, never their execution; spokes stay Pi Coding Agent processes on per-account EC2 hosts and the hub stays the transport. Three user decisions shape everything: one codebase (pi-coms moves into this monorepo as `packages/pi-coms/`), no cross-environment access (a dev hub for dev spokes, a production hub in eu-shared-services-prd for prd spokes), and the monitor's dependencies stay in a nested non-workspace package. Nothing is implemented yet; the next session starts with Phase 0 (land PR #682, widen the two-agent assumptions, per-environment hub map) or Phase 0b (the subtree move), whichever the user approves first. Every phase needs explicit approval of its issue before code is written.
 
