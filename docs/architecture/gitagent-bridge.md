@@ -444,6 +444,15 @@ Returns `{ valid, missing, extra, unmappedFacades, facadeMap }`.
 
 ---
 
+## Persona export and versioned release (SIO-1649)
+
+The bridge is also the definition, versioning and release layer for the pi-coms fleet personas (`agents/pi-fleet/`, the operator console, and `agents/pi-fleet/agents/aws-spoke/`, the account-agnostic spoke). Runtime for those personas is Pi Coding Agent plus the coms-net extension on the fleet hosts, never the analyzer's in-process graph, and the spoke must never enter `AGENT_NAMES`.
+
+- `version.ts`: `agent.yaml` `version` is validated as semver in `loadAgent` (`assertValidVersion`); `assertVersionMatchesTag` gates a `pi-fleet-vX.Y.Z` tag against the manifest; `provenanceHeader` stamps `<!-- pi-fleet vX.Y.Z (analyzer <sha>) -->` on every exported context file.
+- `pi-package-export.ts`: `renderContextFile(agent, { inlineSkills: false })` keeps the `buildSystemPromptParts` section order (SOUL, portable shared context, RULES, DUTIES, skills catalog, knowledge) and drops only the inlined skill bodies, because Pi discloses skills progressively from `skills/<name>/SKILL.md`. `foldSkillFrontmatter` moves the documented repo extension fields under `metadata` and refuses learned skills. `buildPiPackage` writes `AGENTS.md` (console), `<sub-agent>/AGENTS.override.md`, the union of hand-authored and shared skills, and a `package.json` with `"keywords": ["pi-package"]` and `"pi": {"skills": ["./skills"]}`. It is allowlist-only: `memory/`, `hooks/`, `compliance/`, `workflows/` and the analyzer runtime half of the shared context (`agents/shared/context-runtime.md`) never reach a persona, and any 12-digit account id refuses the export. It never calls `buildSubAgentSystemPrompt`.
+- `export-pi-package-cli.ts` (`bun packages/gitagent-bridge/src/export-pi-package-cli.ts --out <dir> [--tag ...] [--sha ...]`) writes the package; `packages/pi-coms/deploy/publish-fleet.sh` runs it into `vendor/pi-fleet/` of the fleet bundle, and `packages/pi-coms/justfile` `sync-persona` regenerates the committed console `AGENTS.md` (pinned by a bridge test).
+- `.github/workflows/agent-release.yml` runs on `pi-fleet-v*` tags: typecheck, yaml check, bridge tests, export with the version-equals-tag gate, and an inspection artifact. The tag is the version marker; the bundle is the delivery.
+
 ## How the Runtime Consumes Bridge Output
 
 The `packages/agent/` package imports from the bridge at two key points:
@@ -501,3 +510,4 @@ Each sub-agent gets its own system prompt built from its SOUL.md and RULES.md. T
 | Date | Change |
 |------|--------|
 | 2026-04-04 | Initial document created from codebase analysis |
+| 2026-09-06 | SIO-1649: persona export (`pi-package-export.ts`), semver `version` validation and tag gate (`version.ts`), `renderSkill`/`buildSkillsCatalog` exported, shared context split into `context.md` and `context-runtime.md` |

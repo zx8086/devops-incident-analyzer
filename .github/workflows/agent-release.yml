@@ -1,0 +1,39 @@
+# .github/workflows/agent-release.yml
+# SIO-1649: a pi-fleet-vX.Y.Z tag is the persona release marker. The job
+# validates the agent tree, exports the Pi package with the gitagent bridge and
+# fails unless agents/pi-fleet/agent.yaml `version` equals the tag. There is no
+# release asset: the fleet bundle (packages/pi-coms/deploy/publish-fleet.sh)
+# runs the same exporter at publish time; the artifact here is for inspection.
+name: Agent release
+
+on:
+  push:
+    tags: ["pi-fleet-v*"]
+
+jobs:
+  pi-fleet:
+    name: pi-fleet persona release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - name: Cache bun install cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - name: Install yamllint
+        run: pip install yamllint
+      - run: bun run yaml:check
+      - name: Bridge tests (skill spec, OKF audit, exporter, version gate)
+        run: bun run --filter @devops-agent/gitagent-bridge test
+      - name: Export the persona and gate version-equals-tag
+        run: bun packages/gitagent-bridge/src/export-pi-package-cli.ts --agent pi-fleet --out pi-fleet-export --tag "$GITHUB_REF_NAME" --sha "$GITHUB_SHA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.ref_name }}
+          path: pi-fleet-export

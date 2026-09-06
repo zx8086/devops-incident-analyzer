@@ -17,7 +17,7 @@ Fully implemented monorepo: 19 packages, 7 MCP servers, the 31-node LangGraph pi
 Layout is discoverable via `ls packages/ apps/ agents/`. Non-obvious facts about
 individual packages:
 
-- `gitagent-bridge/` -- YAML-to-LangGraph adapter (manifest loading, tool mapping, prompt construction)
+- `gitagent-bridge/` -- YAML-to-LangGraph adapter (manifest loading, tool mapping, prompt construction); also the pi-fleet persona exporter and semver version gate (SIO-1649): `agents/pi-fleet/` (console) and `agents/pi-fleet/agents/aws-spoke/` (spoke) are exported as a Pi package into the fleet bundle, never dispatched in-process
 - `agent/` -- LangGraph supervisor + the 31-node pipeline (see below)
 - `mcp-server-elastic/` -- 117 tools: 101 cluster incl. 9 ML anomaly-detection (SIO-1148) + 4 ES|QL/async-search (SIO-1391) + 16 conditional cloud/billing gated on `EC_API_KEY`
 - `mcp-server-kafka/` -- 11-61 tools gated: kafka-core + SR + ksqlDB + Connect + REST Proxy
