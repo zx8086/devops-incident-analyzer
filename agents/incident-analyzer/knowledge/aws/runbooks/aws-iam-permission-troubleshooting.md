@@ -48,7 +48,7 @@ The `ToolError` from the failing tool call carries:
 If the advice field is empty, the underlying SDK error didn't include an `Action` — fall back to the AWS docs for the failing service to find the read-only action name (`<service>:Describe*`, `<service>:Get*`, `<service>:List*` patterns).
 
 ### 2. Confirm the role being used
-The role is `DevOpsAgentReadOnly` in account `352896877281` (the AgentCore deployment account). The trust policy allows AgentCore to assume it via `sts:AssumeRole` with the ExternalId `aws-mcp-readonly-2026`.
+The role is `DevOpsAgentReadOnly` in account `<agentcore-account-id>` (the AgentCore deployment account). The trust policy allows AgentCore to assume it via `sts:AssumeRole` with the ExternalId configured for that estate (`<external-id>`, from `AWS_ESTATES`).
 
 If the failure is `assume-role-denied`, the policy edit below will NOT help — see [Trust-policy issues](#trust-policy-issues) instead.
 

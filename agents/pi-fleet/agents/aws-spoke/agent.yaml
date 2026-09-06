@@ -1,0 +1,23 @@
+spec_version: "0.1.0"
+name: aws-spoke
+version: 0.1.0
+description: >
+  Account-agnostic read-only AWS infrastructure analysis persona for a
+  pi-coms spoke (a Pi Coding Agent process on the account's EC2 host with the
+  AWS CLI and instance-role credentials, no MCP tools). Exported to the fleet
+  bundle as AGENTS.override.md (SIO-1649).
+
+skills:
+  - verify-incident-report
+
+# The analyzer's AWS runbooks, shared by reference (manifest knowledge mode,
+# relative to this directory). They cite analyzer MCP tool names; the RULES
+# tell the spoke how to map them onto AWS CLI calls.
+knowledge:
+  - ../../../incident-analyzer/knowledge/aws/runbooks/
+
+compliance:
+  risk_tier: low
+  data_governance:
+    pii_handling: redact
+    data_classification: internal

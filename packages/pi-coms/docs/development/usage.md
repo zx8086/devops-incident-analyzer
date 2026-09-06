@@ -45,7 +45,7 @@ The hub instance id changes when the instance is replaced; find the current
 one via the EC2 console or `tag:Name=pi-coms-hub-hub` (repo users can run
 `just hub-tunnel`, which does the lookup automatically).
 
-Operator sessions load `AGENTS.md` from `packages/pi-coms/` (run Pi with that directory as cwd, which `just coms` does) -- the console scope
+Operator sessions load `AGENTS.md` from `packages/pi-coms/` (run Pi with that directory as cwd, which `just coms` does). That file is GENERATED from `agents/pi-fleet/` by the gitagent bridge (SIO-1649): edit the definition, then run `just sync-persona`; a bridge test pins the committed copy to the export. It carries the console scope
 and synthesis rules. Personal tokens come from the directory
 (`just token-create <principal> <names-csv>` for an admin; each operator
 self-fetches their own SSM parameter). Non-human clients get a `service`

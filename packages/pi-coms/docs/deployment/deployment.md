@@ -97,7 +97,7 @@ exist anywhere in the system. Details: [Security Model](../security/security-mod
 2. Wait for STS (`sts get-caller-identity` poll) before the first
    credentialed call -- first boot has an IMDS credential gap.
 3. Resolve secrets into `~/.coms-env`, mode 0600.
-4. Copy `deploy/AGENTS-spoke.md` into the clone as `AGENTS.override.md`
+4. Copy `vendor/pi-fleet/aws-spoke/AGENTS.override.md` (the persona the bridge exported at publish time, SIO-1649) into the checkout as `AGENTS.override.md`, install `vendor/pi-fleet/skills/` under `~/.pi/agent/skills/pi-fleet/`, and append `persona=pi-fleet-vX.Y.Z` to the register purpose
    (agent hosts only) so spokes load the investigation discipline instead of
    the repo's development instructions.
 5. Install `herdr.service`, `pi-agent.service`, `pi-monitor.service`. The

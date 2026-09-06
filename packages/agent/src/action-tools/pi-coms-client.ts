@@ -4,6 +4,13 @@
 // sender does not break /await or the target's reply, so we register, send, await,
 // and deregister inside a single executeAction call.
 import { getLogger } from "@devops-agent/observability";
+import type {
+	AgentCard,
+	InboxListing,
+	InboxMessage,
+	MessageStatus,
+	SendResponse,
+} from "@devops-agent/pi-coms/contracts";
 import {
 	type PiComsConfig,
 	PiComsConfigSchema,
@@ -135,35 +142,13 @@ export function resolvePiComsConfig(env: NodeJS.ProcessEnv = process.env): PiCom
 	});
 }
 
-export type PiMessageStatus = "queued" | "delivered" | "complete" | "error" | "timeout";
-
-// One row of the hub's durable inbox (GET /v1/mailbox); mirrors the hub's
-// InboxMessage contract in packages/pi-coms/contracts/wire.ts (SIO-1654).
-export type PiInboxMessage = {
-	msg_id: string;
-	sender_name: string;
-	target_name: string | null;
-	prompt: string;
-	status: string;
-	error: string | null;
-	response: unknown;
-	created_at: string;
-	delivered_at: string | null;
-	completed_at: string | null;
-};
-
-export type PiAgentCard = {
-	session_id: string;
-	name: string;
-	status: string;
-	purpose?: string;
-};
-
-export type PiSendResult = {
-	msg_id: string;
-	status: PiMessageStatus;
-	target_session: string | null;
-};
+// Wire shapes come from the hub's own contract (packages/pi-coms/contracts,
+// SIO-1654) so the client cannot drift from the server.
+export type PiMessageStatus = MessageStatus;
+export type PiInboxMessage = InboxMessage;
+// The subset of the hub's agent card the verifier routes on.
+export type PiAgentCard = Pick<AgentCard, "session_id" | "name" | "status"> & Partial<Pick<AgentCard, "purpose">>;
+export type PiSendResult = Pick<SendResponse, "msg_id" | "status" | "target_session">;
 
 export type PiReply = {
 	status: PiMessageStatus | "budget_exhausted";
@@ -368,10 +353,7 @@ export class PiComsClient {
 		const params = new URLSearchParams({ project: this.hub.project, name });
 		if (opts.limit !== undefined) params.set("limit", String(opts.limit));
 		if (opts.since !== undefined) params.set("since", opts.since);
-		const reply = await this.http<{ ok: true; name: string; messages?: PiInboxMessage[] }>(
-			"GET",
-			`/v1/mailbox?${params.toString()}`,
-		);
+		const reply = await this.http<InboxListing>("GET", `/v1/mailbox?${params.toString()}`);
 		return reply.messages ?? [];
 	}
 

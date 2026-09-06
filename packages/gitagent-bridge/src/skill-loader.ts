@@ -24,7 +24,7 @@ function buildKnowledgeSection(knowledge: KnowledgeEntry[]): string {
 	return sections.join("\n\n");
 }
 
-function renderSkill(name: string, content: string | undefined): string | undefined {
+export function renderSkill(name: string, content: string | undefined): string | undefined {
 	if (!content) return undefined;
 	const bodyOnly = content.replace(/^---[\s\S]*?---\s*/m, "").trim();
 	if (!bodyOnly) return undefined;
@@ -35,7 +35,7 @@ function renderSkill(name: string, content: string | undefined): string | undefi
 // sees which skills exist at a glance, mirroring how tools expose action
 // descriptions. Skipped for skills with no description (markdown-only authoring).
 // Respects the same active/shadow rules as the body rendering below.
-function buildSkillsCatalog(agent: LoadedAgent, activeSkills?: string[]): string | undefined {
+export function buildSkillsCatalog(agent: LoadedAgent, activeSkills?: string[]): string | undefined {
 	const lines: string[] = [];
 	const seen = new Set<string>();
 

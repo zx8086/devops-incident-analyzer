@@ -11,8 +11,8 @@
 #
 # --stage-only builds the stage (in PI_COMS_STAGE_DIR when set), prints its
 # path and exits without uploading; the dirty-tree check is skipped because it
-# is a local dry run. PI_FLEET_PERSONA_DIR, when set, is copied to
-# vendor/pi-fleet/ in the stage (the persona exporter hook, SIO-1649).
+# is a local dry run. The pi-fleet persona is exported into vendor/pi-fleet/
+# by the gitagent bridge; PI_FLEET_PERSONA_DIR substitutes a pre-built export.
 set -euo pipefail
 
 STAGE_ONLY=0
@@ -37,8 +37,10 @@ REPO_ROOT="$(git -C "$PKG_ROOT" rev-parse --show-toplevel)"
 PKG_PREFIX="$(git -C "$PKG_ROOT" rev-parse --show-prefix)"
 PKG_PREFIX="${PKG_PREFIX%/}"
 VERSION="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
-if [ "$STAGE_ONLY" = 0 ] && [ -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no -- "$PKG_PREFIX")" ]; then
-  echo "refusing to publish: uncommitted changes in tracked files under $PKG_PREFIX" >&2
+# The persona exporter reads the working tree (agents/ and the bridge), so
+# those must be clean too: the bundle then matches HEAD end to end.
+if [ "$STAGE_ONLY" = 0 ] && [ -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no -- "$PKG_PREFIX" agents packages/gitagent-bridge)" ]; then
+  echo "refusing to publish: uncommitted changes in tracked files under $PKG_PREFIX, agents/ or packages/gitagent-bridge/" >&2
   exit 1
 fi
 
@@ -59,10 +61,19 @@ git -C "$REPO_ROOT" archive "HEAD:$PKG_PREFIX" | tar -x -C "$STAGE"
 (cd "$STAGE" && bun install --lockfile-only >&2 && bun install --frozen-lockfile --production --omit=peer >&2)
 # The monitor and hub runtime deps live in scripts/package.json (SIO-1632).
 (cd "$STAGE/scripts" && bun install --frozen-lockfile --production >&2)
+# The pi-fleet persona (SIO-1649): the gitagent bridge exports agents/pi-fleet
+# into vendor/pi-fleet/ (console AGENTS.md, aws-spoke/AGENTS.override.md,
+# skills/, package.json). PI_FLEET_PERSONA_DIR substitutes a pre-built export
+# (tests, offline builds). Always a fresh directory: cp -R into an existing
+# target would nest.
+rm -rf "$STAGE/vendor/pi-fleet"
+mkdir -p "$STAGE/vendor"
 if [ -n "${PI_FLEET_PERSONA_DIR:-}" ]; then
-  mkdir -p "$STAGE/vendor"
-  cp -R "$PI_FLEET_PERSONA_DIR" "$STAGE/vendor/pi-fleet"
+  cp -R "$PI_FLEET_PERSONA_DIR/." "$STAGE/vendor/pi-fleet"
+else
+  (cd "$REPO_ROOT" && bun packages/gitagent-bridge/src/export-pi-package-cli.ts --agent pi-fleet --out "$STAGE/vendor/pi-fleet" --sha "$VERSION" >&2)
 fi
+[ -f "$STAGE/vendor/pi-fleet/aws-spoke/AGENTS.override.md" ] || { echo "persona export missing aws-spoke/AGENTS.override.md" >&2; exit 1; }
 echo "$VERSION" > "$STAGE/.bundle-version"
 
 if [ "$STAGE_ONLY" = 1 ]; then

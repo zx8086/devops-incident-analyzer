@@ -62,3 +62,17 @@ hub-tunnel profile="eu-shared-services-dev" region="eu-central-1" port="8787" lo
     exec aws ssm start-session --profile {{profile}} --region {{region}} --target "$HUB_ID" \
       --document-name AWS-StartPortForwardingSession \
       --parameters "{\"portNumber\":[\"{{port}}\"],\"localPortNumber\":[\"$LOCAL\"]}"
+
+
+# Regenerate AGENTS.md (the operator console persona) from agents/pi-fleet via
+# the gitagent bridge exporter (SIO-1649). Run after editing the definition;
+# a bridge test pins the committed file to the export.
+sync-persona:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="$(git rev-parse --show-toplevel)"
+    out="$(mktemp -d)"
+    (cd "$root" && bun packages/gitagent-bridge/src/export-pi-package-cli.ts --agent pi-fleet --out "$out")
+    cp "$out/AGENTS.md" "{{justfile_directory()}}/AGENTS.md"
+    rm -rf "$out"
+    echo "AGENTS.md regenerated from agents/pi-fleet"

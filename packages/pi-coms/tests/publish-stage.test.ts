@@ -27,7 +27,11 @@ describe("publish-fleet.sh --stage-only", () => {
 		for (const f of [
 			"extensions/coms-net.ts",
 			"scripts/coms-net-server.ts",
-			"deploy/AGENTS-spoke.md",
+			"vendor/pi-fleet/package.json",
+			"vendor/pi-fleet/AGENTS.md",
+			"vendor/pi-fleet/aws-spoke/AGENTS.override.md",
+			"vendor/pi-fleet/skills/cite-sources/SKILL.md",
+			"vendor/pi-fleet/skills/verify-incident-report/SKILL.md",
 			"bun.lock",
 			"scripts/bun.lock",
 			".bundle-version",
@@ -36,7 +40,12 @@ describe("publish-fleet.sh --stage-only", () => {
 		}
 		expect(fs.existsSync(path.join(stage, "scripts", "node_modules", "@aws-sdk"))).toBe(true);
 		expect(fs.existsSync(path.join(stage, "packages"))).toBe(false);
-		expect(fs.readFileSync(path.join(stage, ".bundle-version"), "utf8").trim()).toMatch(/^[0-9a-f]{7,}$/);
+		const version = fs.readFileSync(path.join(stage, ".bundle-version"), "utf8").trim();
+		expect(version).toMatch(/^[0-9a-f]{7,}$/);
+		// SIO-1649: the persona export is stamped with the bundle sha as provenance.
+		const override = fs.readFileSync(path.join(stage, "vendor", "pi-fleet", "aws-spoke", "AGENTS.override.md"), "utf8");
+		expect(override.startsWith(`<!-- pi-fleet v`)).toBe(true);
+		expect(override.split("\n")[0]).toContain(`(analyzer ${version})`);
 		fs.rmSync(stage, { recursive: true, force: true });
 	}, 180_000);
 });

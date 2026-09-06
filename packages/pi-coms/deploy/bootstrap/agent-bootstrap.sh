@@ -167,12 +167,30 @@ else
 fi
 sudo -u "$AGENT_USER" -H bash -lc "cd '$AGENT_HOME/pi-coms' && \$HOME/.bun/bin/bun install --frozen-lockfile --production --omit=peer && cd scripts && \$HOME/.bun/bin/bun install --frozen-lockfile --production"
 
-# Spoke operating instructions: Pi loads AGENTS.override.md from cwd ahead of
-# CLAUDE.md, so the agent gets its operating context instead of the repo's
-# developer instructions. Host-only copy; operator checkouts are untouched.
-if [ -f "$AGENT_HOME/pi-coms/deploy/AGENTS-spoke.md" ]; then
-  cp "$AGENT_HOME/pi-coms/deploy/AGENTS-spoke.md" "$AGENT_HOME/pi-coms/AGENTS.override.md"
-  chown "$AGENT_USER:$AGENT_USER" "$AGENT_HOME/pi-coms/AGENTS.override.md"
+# Spoke persona (SIO-1649): the bundle carries the gitagent export under
+# vendor/pi-fleet/. Pi loads AGENTS.override.md from cwd ahead of AGENTS.md and
+# CLAUDE.md, so the spoke gets its operating context instead of the console or
+# developer instructions. Skills go to the agent user's global Pi skills dir
+# under a pi-fleet/ folder that is replaced whole on every convergence. The
+# persona version is stamped into the register purpose so GET /v1/agents shows
+# which persona each spoke runs.
+PERSONA_DIR="$AGENT_HOME/pi-coms/vendor/pi-fleet"
+if [ ! -f "$PERSONA_DIR/aws-spoke/AGENTS.override.md" ]; then
+  echo "bundle has no pi-fleet persona (vendor/pi-fleet/aws-spoke/AGENTS.override.md); refusing to start a spoke without one" >&2
+  exit 1
+fi
+cp "$PERSONA_DIR/aws-spoke/AGENTS.override.md" "$AGENT_HOME/pi-coms/AGENTS.override.md"
+chown "$AGENT_USER:$AGENT_USER" "$AGENT_HOME/pi-coms/AGENTS.override.md"
+SKILLS_DIR="$AGENT_HOME/.pi/agent/skills/pi-fleet"
+rm -rf "$SKILLS_DIR"
+mkdir -p "$SKILLS_DIR"
+if [ -d "$PERSONA_DIR/skills" ]; then
+  cp -R "$PERSONA_DIR/skills/." "$SKILLS_DIR/"
+fi
+chown -R "$AGENT_USER:$AGENT_USER" "$AGENT_HOME/.pi"
+PERSONA_VERSION="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$PERSONA_DIR/package.json" | head -1)"
+if [ -n "$PERSONA_VERSION" ]; then
+  AGENT_PURPOSE="$AGENT_PURPOSE persona=pi-fleet-v$PERSONA_VERSION"
 fi
 
 # ── Secrets ────────────────────────────────────────────────────────────────

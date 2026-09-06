@@ -1,0 +1,27 @@
+spec_version: "0.1.0"
+name: pi-fleet
+version: 0.1.0
+description: >
+  Operator console persona for the pi-coms fleet: relays questions to the
+  read-only account agents, synthesizes their replies and reads monitor
+  reports. Exported as the Pi package the fleet bundle carries (SIO-1649);
+  never executed in-process by the analyzer.
+
+# SIO-1649: the spoke persona is a sub-agent definition only. It is exported
+# to the fleet hosts and run there by Pi + coms-net; it must never enter the
+# analyzer's AGENT_NAMES dispatch table.
+agents:
+  aws-spoke:
+    delegation: explicit
+
+compliance:
+  risk_tier: low
+  data_governance:
+    pii_handling: redact
+    data_classification: internal
+
+tags:
+  - pi-fleet
+  - pi-coms
+  - aws
+  - console
