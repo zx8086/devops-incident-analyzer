@@ -392,9 +392,12 @@ fi
 # it and it is current; nothing to do. Ask the hub rather than Herdr -- `herdr
 # agent list` returns empty on some hosts even while Pi is running, so it cannot
 # answer this question.
+# Project-scoped like every other hub read here: unfiltered this looks in the
+# "default" namespace, never matches, and the script relaunches an agent that is
+# already running.
 if [ "$RELOAD" -eq 0 ] \
    && curl -fsS -H "Authorization: Bearer $PI_COMS_NET_AUTH_TOKEN" \
-        "$PI_COMS_NET_SERVER_URL/v1/agents" 2>/dev/null \
+        "$PI_COMS_NET_SERVER_URL/v1/agents?project=COMS_PROJECT_PLACEHOLDER" 2>/dev/null \
         | grep -q "\"name\":\"AGENT_NAME_PLACEHOLDER\""; then
   echo "agent already registered as AGENT_NAME_PLACEHOLDER; leaving it alone"
   exit 0
@@ -420,7 +423,7 @@ done
 if [ "$RELOAD" -eq 1 ]; then
   for i in $(seq 1 20); do
     curl -fsS -H "Authorization: Bearer $PI_COMS_NET_AUTH_TOKEN" \
-         "$PI_COMS_NET_SERVER_URL/v1/agents" 2>/dev/null \
+         "$PI_COMS_NET_SERVER_URL/v1/agents?project=COMS_PROJECT_PLACEHOLDER" 2>/dev/null \
          | grep -q "\"name\":\"AGENT_NAME_PLACEHOLDER\"" || { echo "old registration cleared after $i check(s)"; break; }
     [ "$i" -eq 20 ] && echo "old registration still present after 60s; relaunching anyway" >&2
     sleep 3
@@ -469,9 +472,16 @@ herdr agent start "AGENT_NAME_PLACEHOLDER" --kind pi --pane "$PANE_ID" --timeout
   --project "COMS_PROJECT_PLACEHOLDER" \
   --purpose "AGENT_PURPOSE_PLACEHOLDER" || echo "herdr agent start reported failure; verifying against the hub"
 
+# The readiness poll MUST carry the same project the agent registered under:
+# /v1/agents defaults to the "default" project, so once coms_project is anything
+# else (SIO-1653 sets one project per environment) an unfiltered poll looks in an
+# empty namespace, never sees the agent, and fails after 60s -- while the agent
+# is in fact registered and online. Observed on eu-oit-dev / eu-shared-services-dev
+# (2026-09-07) after moving both to project pi-coms-dev: systemd reported the unit
+# failed, `just fleet status` was fine, and the hub listed both agents.
 for i in $(seq 1 20); do
   if curl -fsS -H "Authorization: Bearer $PI_COMS_NET_AUTH_TOKEN" \
-       "$PI_COMS_NET_SERVER_URL/v1/agents" | grep -q '"name":"AGENT_NAME_PLACEHOLDER"'; then
+       "$PI_COMS_NET_SERVER_URL/v1/agents?project=COMS_PROJECT_PLACEHOLDER" | grep -q '"name":"AGENT_NAME_PLACEHOLDER"'; then
     echo "agent registered with the hub as AGENT_NAME_PLACEHOLDER"
     exit 0
   fi

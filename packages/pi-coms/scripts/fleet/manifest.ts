@@ -27,6 +27,15 @@ export const HubSchema = z.object({
 	private_ip: z.string().min(1),
 	subnet_id: z.string().min(1),
 	allowed_cidrs: z.array(CidrSchema),
+	// coms-net project namespace every spoke in this environment registers under.
+	// One project per ENVIRONMENT, not one for the whole fleet: the registry is
+	// read by more than the incident analyzer, and a shared "default" would
+	// interleave dev and prd agents so a consumer could only tell them apart by
+	// parsing name suffixes. That is the one place the standing no-cross-
+	// environment rule (separate hubs, per-environment tokens, estate-suffix
+	// routing) was not expressed. Omitted -> the module default "default", which
+	// is what the pre-fleet dev deployment registered under.
+	project: z.string().min(1).optional(),
 	// Name of the environment variable holding an operator token for this hub's
 	// API (rollout polling). Defaults to PI_COMS_NET_AUTH_TOKEN_<ENV>.
 	token_env: z.string().min(1).optional(),

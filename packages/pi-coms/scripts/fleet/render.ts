@@ -226,6 +226,7 @@ module "agent" {
   coms_auth_token      = var.coms_auth_token
   repo_url             = var.repo_url
   agent_name           = var.agent_name
+  coms_project         = ${hcl(hub.project ?? "default")}
   subnet_id            = var.agent_subnet_id
   associate_public_ip  = false
   instance_type        = ${hcl(spoke.instance_type ?? manifest.defaults.instance_type)}
