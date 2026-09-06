@@ -68,6 +68,10 @@ so `lifecycle.ts` never imports the client and all calls are best-effort (never 
 - `POST /users/{uid}/sessions/{sid}/memory` — body `{ messages?: ChatMessage[], facts?: string[], annotations?, memory_block_ttl?, async_processing? }`.
 - `POST /users/{uid}/sessions/{sid}/memory/search` — body `{ query?, filters?: { session_ids?: "all", relevant_k? } }`; returns `{ memory_blocks: MemoryBlock[], count }`. Only `status:"ready"` blocks appear (async extraction).
 - `POST /users/{uid}/sessions/{sid}/end` — end session. `PUT /users/{uid}/ttl` — bulk TTL (reserved; not on the hot path).
+
+### Amendment: degraded mode (2026-09, SIO-1646)
+
+The contract above assumed the service is either up or down. Live on 2026-09-06 it was a third thing: up (`GET /health` 200 healthy) with its Couchbase store unreachable (`GET /health/couchbase` 503 `DATABASE_UNAVAILABLE`), and the unguarded data paths returned `400 USER_ERROR "Couchbase operation failed: <ec=1004, category=couchbase.network, ...>"`. The client now types that as `BackendUnavailableError` (matched narrowly on `DATABASE_UNAVAILABLE` or `category=couchbase.network`; `ServiceUnavailableError` is a subclass), memoizes `ensureUser`/`ensureSession` per process, arms a process-wide cooldown on any transient failure (one warn per window, debug thereafter), requeues only the unsent tail of a failed flush, caps the queue at 200 writes, treats a 404 `SESSION_NOT_FOUND` at teardown as a debug no-op, and probes `GET /health/couchbase` at startup. Because the outage was **write-only**, the cooldown gates only the write sites (direct fact write, flushes); read sites (recall/search/fleet-recall) stay attempted with a best-effort ensure so recall keeps working against existing sessions during a write outage. See `docs/architecture/agent-memory.md` (Resilience).
 - Auth: optional OIDC `Authorization: Bearer <jwt>` (when `OIDC_AUTH_ENABLED`). Base URL is **required config** (docs are inconsistent 8070 vs 8080, so no default).
 
 ## Components

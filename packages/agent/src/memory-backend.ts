@@ -13,11 +13,13 @@ import {
 	type AgentMemoryHealth,
 	type AgentMemoryUserRef,
 	type AnnotationMap,
+	BackendUnavailableError,
 	type ChatMessageBlock,
 	createFetchAgentMemoryClient,
 	resolveAgentMemoryConfig,
 	ServiceUnavailableError,
 	SessionAlreadyEndedError,
+	SessionNotFoundError,
 } from "@devops-agent/shared";
 import { z } from "zod";
 
@@ -195,6 +197,117 @@ const DEFAULT_SATURATION_COOLDOWN_SECONDS = 30;
 const retryAfterHintSchema = z.number().finite().positive();
 let saturatedUntil = 0;
 
+// SIO-1646: the service's Couchbase store can be down while GET /health still says healthy
+// (observed live 2026-09-06: every data call returned 400 USER_ERROR "couchbase.network", six
+// warns per request, the flush dropped its batch on the ensure preamble, and teardown 404'd a
+// session that was never created). Three pieces make that cost ONE warn per window instead:
+//   - ensureUser/ensureSession are memoized per process (added only after success);
+//   - any BackendUnavailableError or fetch-level failure arms a process-wide cooldown that
+//     short-circuits the WRITE sites (queued flush, per-turn flush, direct fact write) while
+//     inside the window; READ sites (recall/search/fleet-recall) are still attempted because the
+//     observed outage class is write-only (reads keep working), and a read that does fail folds
+//     into the same window via noteBackendUnavailable. The teardown flush stays ungated
+//     (SIO-1364 invariant) as the last chance to drain;
+//   - the queue is bounded so a dead backend cannot grow it without limit across a long session.
+export const MAX_QUEUED_WRITES = 200;
+const DEFAULT_DEGRADED_COOLDOWN_SECONDS = 60;
+let backendDegradedUntil = 0;
+let droppedOverflow = 0;
+const ensuredUsers = new Set<string>();
+const ensuredSessions = new Set<string>();
+
+function sessionKey(userId: string, sessionId: string): string {
+	return `${userId}/${sessionId}`;
+}
+
+// Memoized user + session bootstrap. A transient failure leaves the memo untouched (nothing was
+// confirmed), so the next call after the cooldown retries; a success is remembered for the
+// process lifetime because the service-side effect (409-tolerant create) is permanent.
+async function ensureUserAndSession(
+	c: AgentMemoryClient,
+	userId: string,
+	sessionId: string,
+	name: string,
+	userMetadata: AnnotationMap,
+	sessionAnnotations: AnnotationMap,
+): Promise<void> {
+	if (!ensuredUsers.has(userId)) {
+		await c.ensureUser(userId, name, userMetadata);
+		ensuredUsers.add(userId);
+	}
+	const key = sessionKey(userId, sessionId);
+	if (!ensuredSessions.has(key)) {
+		await c.ensureSession(userId, sessionId, { annotations: sessionAnnotations });
+		ensuredSessions.add(key);
+	}
+}
+
+// Best-effort variant for READ paths. The observed outage class is WRITE-ONLY: the service's
+// Couchbase reads (get/search) keep working while mutations fail with a network error (verified
+// live 2026-09-06 -- a degraded write path, reads and FTS search unaffected). ensureUserAndSession
+// is itself a write, so on a write-only outage it throws and would block a recall that could still
+// run against an already-created session. Swallow a transient ensure failure and let the caller
+// attempt the read anyway: if the session already exists the search succeeds; if it does not the
+// search fails its own 404/transient and folds into the same cooldown window. A non-transient
+// ensure error still throws (a real problem, not a degraded backend).
+async function ensureUserAndSessionForRead(
+	c: AgentMemoryClient,
+	userId: string,
+	sessionId: string,
+	name: string,
+	userMetadata: AnnotationMap,
+	sessionAnnotations: AnnotationMap,
+): Promise<void> {
+	try {
+		await ensureUserAndSession(c, userId, sessionId, name, userMetadata, sessionAnnotations);
+	} catch (error) {
+		if (isTransientBackendFailure(error)) return;
+		throw error;
+	}
+}
+
+function isTransientBackendFailure(error: unknown): boolean {
+	return error instanceof BackendUnavailableError || isNetworkFailure(error);
+}
+
+// The single place a backend outage is logged: warn on entering the window, debug while inside
+// it (every later site extends the window instead of re-warning).
+function noteBackendUnavailable(site: string, error: unknown, extra: Record<string, unknown> = {}): void {
+	const now = Date.now();
+	const inWindow = now < backendDegradedUntil;
+	const hint = retryAfterHintSchema.safeParse(
+		error instanceof BackendUnavailableError ? error.retryAfterSeconds : undefined,
+	);
+	const cooldownSeconds = hint.success ? hint.data : DEFAULT_DEGRADED_COOLDOWN_SECONDS;
+	backendDegradedUntil = now + cooldownSeconds * 1000;
+	const fields = { site, cooldownSeconds, ...extra, ...describeError(error) };
+	if (inWindow) logger.debug(fields, "agent-memory backend still unavailable; cooldown extended");
+	else logger.warn(fields, "agent-memory backend unavailable; skipping memory calls for the cooldown window");
+}
+
+// Gate for WRITE sites only: reads stay attempted during a write-only outage (see the block
+// comment above). Callers that skip on true are the direct-fact write and the two flush triggers.
+function backendDegraded(site: string): boolean {
+	if (Date.now() >= backendDegradedUntil) return false;
+	logger.debug({ site }, "agent-memory backend degraded; skipping write");
+	return true;
+}
+
+// Drop-oldest past the cap: the most recent turn's writes are the ones teardown cares about.
+// The count is reported once, on the next flush log line, never per write.
+function trimQueue(): void {
+	while (queue.length > MAX_QUEUED_WRITES) {
+		queue.shift();
+		droppedOverflow += 1;
+	}
+}
+function takeDroppedOverflow(): { droppedOverflow?: number } {
+	if (droppedOverflow === 0) return {};
+	const n = droppedOverflow;
+	droppedOverflow = 0;
+	return { droppedOverflow: n };
+}
+
 // SIO-952: stamp block kind so recall can filter daily-log noise from durable
 // key-decisions; merge any caller-supplied annotations (e.g. { intent }).
 function factAnnotations(extra?: AnnotationMap): AnnotationMap {
@@ -208,6 +321,7 @@ export function enqueueFact(text: string, createdAt: string, annotations?: Annot
 	// SIO-1005: ttlSeconds is optional and defaults to undefined -> a durable fact (no decay), so every
 	// existing caller is unchanged. Only the proposal iac-change fact passes a TTL.
 	queue.push({ kind: "fact", text, createdAt, annotations: factAnnotations(annotations), ttlSeconds, ref: activeRef });
+	trimQueue();
 	maybeFlush();
 }
 
@@ -225,6 +339,7 @@ export function enqueueMessage(
 		annotations: messageAnnotations(annotations),
 		ref: activeRef,
 	});
+	trimQueue();
 	maybeFlush();
 }
 
@@ -237,10 +352,14 @@ export function pendingWriteCount(): number {
 export function __resetMemoryQueue(): void {
 	queue.length = 0;
 	saturatedUntil = 0;
+	backendDegradedUntil = 0;
+	droppedOverflow = 0;
+	ensuredUsers.clear();
+	ensuredSessions.clear();
 }
 
 function maybeFlush(): void {
-	if (Date.now() < saturatedUntil) return;
+	if (Date.now() < saturatedUntil || Date.now() < backendDegradedUntil) return;
 	if (queue.length >= FLUSH_THRESHOLD) {
 		void flushAgentMemory().catch(() => {
 			// flushAgentMemory already logs; swallow here so enqueue stays sync/safe.
@@ -277,6 +396,10 @@ export async function flushAgentMemory(): Promise<void> {
 		);
 	}
 	if (sendable.length === 0) return;
+	// SIO-1646: how many writes the service ACCEPTED before a failure, and which ref was in
+	// flight -- the catch requeues only the unsent tail and invalidates only that session's memo.
+	let sent = 0;
+	let failingRef: AgentMemoryUserRef | null = null;
 	try {
 		const c = client();
 		// Ensure user + session once per distinct ref in the batch (idempotent,
@@ -294,10 +417,19 @@ export async function flushAgentMemory(): Promise<void> {
 		let primary = fallbackRef;
 		for (const w of sendable) {
 			primary ??= w.ref;
-			const ensureKey = `${w.ref.userId}/${w.ref.sessionId}`;
+			failingRef = w.ref;
+			const ensureKey = sessionKey(w.ref.userId, w.ref.sessionId);
 			if (!ensured.has(ensureKey)) {
-				await c.ensureUser(w.ref.userId, w.ref.userId, { agent: w.ref.userId, role: resolveRole(w.ref.userId) });
-				await c.ensureSession(w.ref.userId, w.ref.sessionId, { annotations: sessionAnnotations() });
+				// SIO-1646: memoized per process inside ensureUserAndSession; the batch-local
+				// set only keeps the per-flush "sessions" count.
+				await ensureUserAndSession(
+					c,
+					w.ref.userId,
+					w.ref.sessionId,
+					w.ref.userId,
+					{ agent: w.ref.userId, role: resolveRole(w.ref.userId) },
+					sessionAnnotations(),
+				);
 				ensured.add(ensureKey);
 			}
 			const res =
@@ -317,6 +449,7 @@ export async function flushAgentMemory(): Promise<void> {
 			if (w.kind === "fact") facts++;
 			blockIds.push(...res.blockIds);
 			rejected += res.rejectedCount;
+			sent += 1;
 		}
 		logger.info(
 			{
@@ -327,23 +460,29 @@ export async function flushAgentMemory(): Promise<void> {
 				total: sendable.length,
 				blockIds,
 				...(rejected > 0 && { rejected }),
+				...takeDroppedOverflow(),
 				sync: syncWritesEnabled(),
 			},
 			"flushed agent-memory writes",
 		);
 		saturatedUntil = 0;
+		backendDegradedUntil = 0;
 	} catch (error) {
+		// SIO-1646: writes the service already accepted earlier in this batch are never
+		// resent (facts are undeletable, so a whole-batch requeue double-wrote them).
+		const unsent = sendable.slice(sent);
 		if (error instanceof ServiceUnavailableError) {
 			// Requeue (front) and let the next flush/teardown retry. Don't drop.
 			// Refs were pinned above, so a retry under a different bound session
 			// still lands each write in its originating session.
-			queue.unshift(...sendable);
+			queue.unshift(...unsent);
+			trimQueue();
 			const hint = retryAfterHintSchema.safeParse(error.retryAfterSeconds);
 			const cooldownSeconds = hint.success ? hint.data : DEFAULT_SATURATION_COOLDOWN_SECONDS;
 			saturatedUntil = Date.now() + cooldownSeconds * 1000;
 			logger.warn(
 				{
-					requeued: sendable.length,
+					requeued: unsent.length,
 					retryAfterSeconds: error.retryAfterSeconds,
 					cooldownSeconds,
 					// SIO-1364: surface the service's 503 response body (method, path, and
@@ -355,27 +494,46 @@ export async function flushAgentMemory(): Promise<void> {
 			);
 			return;
 		}
+		if (error instanceof BackendUnavailableError) {
+			// SIO-1646: the service's store is down (ensure preamble or a data call); nothing
+			// partial was applied, so requeue and let the cooldown pace the retry.
+			queue.unshift(...unsent);
+			trimQueue();
+			noteBackendUnavailable("flush", error, { requeued: unsent.length });
+			return;
+		}
 		if (error instanceof SessionAlreadyEndedError) {
 			// SIO-956: the conversation's session is closed; these late writes cannot
 			// land and there is nothing to retry. Clear the stale ref and move on
 			// quietly — this is expected after a conversation ends, not a failure.
+			if (failingRef) ensuredSessions.delete(sessionKey(failingRef.userId, failingRef.sessionId));
 			clearActiveMemorySession();
-			logger.debug({ dropped: sendable.length }, "agent-memory flush after session end; writes discarded");
+			logger.debug({ dropped: unsent.length }, "agent-memory flush after session end; writes discarded");
 			return;
+		}
+		if (error instanceof SessionNotFoundError && failingRef) {
+			// The service lost (or never had) this session; the next flush recreates it.
+			ensuredSessions.delete(sessionKey(failingRef.userId, failingRef.sessionId));
 		}
 		if (isNetworkFailure(error)) {
 			// SIO-1170: a total-outage fetch failure is not transient like a 503, so still
 			// drop the batch, but log loudly with the unwrapped cause -- this is the case
 			// that previously read as an opaque "fetch failed" warn with no signal that the
 			// backend itself was unreachable for the whole session.
+			// SIO-1646: it does arm the cooldown, so the rest of the session stops hammering.
+			noteBackendUnavailable("flush", error, { dropped: unsent.length });
 			logger.error(
-				{ dropped: sendable.length, ...describeError(error) },
+				{ dropped: unsent.length, ...describeError(error) },
 				"agent-memory unreachable; flush dropped writes",
 			);
 			return;
 		}
 		logger.warn(
-			{ dropped: sendable.length, error: error instanceof Error ? error.message : String(error) },
+			{
+				dropped: unsent.length,
+				...takeDroppedOverflow(),
+				error: error instanceof Error ? error.message : String(error),
+			},
 			"agent-memory flush failed; writes dropped",
 		);
 	}
@@ -393,7 +551,8 @@ export async function flushAgentMemoryAfterTurn(agentName: string, threadId: str
 	setActiveMemorySession(agentName, threadId);
 	// SIO-1364: respect an active saturation cooldown; queued writes ride along
 	// to a later turn or teardown instead of re-hitting a 503ing service.
-	if (Date.now() < saturatedUntil) return;
+	// SIO-1646: same for the backend-unavailable cooldown.
+	if (Date.now() < saturatedUntil || Date.now() < backendDegradedUntil) return;
 	await flushAgentMemory();
 }
 
@@ -405,10 +564,17 @@ export async function recallAgentMemory(
 	query: string,
 ): Promise<string | undefined> {
 	const ref: AgentMemoryUserRef = { userId: resolveUserId(agentName), sessionId: threadId };
+	// A write-only outage must not suppress recall (reads keep working); attempt it, best-effort ensure.
 	try {
 		const c = client();
-		await c.ensureUser(ref.userId, agentName, { agent: agentName, role: resolveRole(agentName) });
-		await c.ensureSession(ref.userId, ref.sessionId, { annotations: { agent: agentName } });
+		await ensureUserAndSessionForRead(
+			c,
+			ref.userId,
+			ref.sessionId,
+			agentName,
+			{ agent: agentName, role: resolveRole(agentName) },
+			{ agent: agentName },
+		);
 		const hits = await c.searchMemory(ref, query, { allSessions: true, relevantK: 8 });
 		// SIO-991: trace the bootstrap recall to its Capella documents (userId/sessionId/blockIds).
 		logger.info(
@@ -438,6 +604,10 @@ export async function recallAgentMemory(
 		}
 		return lines.length > 0 ? lines.join("\n") : undefined;
 	} catch (error) {
+		if (isTransientBackendFailure(error)) {
+			noteBackendUnavailable("recall", error);
+			return undefined;
+		}
 		logger.warn({ error: error instanceof Error ? error.message : String(error) }, "agent-memory recall failed");
 		return undefined;
 	}
@@ -531,10 +701,17 @@ export async function searchAgentMemory(
 	const userId = resolveUserId(agentName);
 	const ref: AgentMemoryUserRef = { userId, sessionId: activeRef?.sessionId ?? "recall" };
 	const deterministic = opts?.deterministic ?? false;
+	// Read path: attempt during a write-only outage (best-effort ensure), do not hard-skip.
 	try {
 		const c = client();
-		await c.ensureUser(userId, agentName, { agent: agentName, role: resolveRole(agentName) });
-		await c.ensureSession(userId, ref.sessionId, { annotations: { agent: agentName } });
+		await ensureUserAndSessionForRead(
+			c,
+			userId,
+			ref.sessionId,
+			agentName,
+			{ agent: agentName, role: resolveRole(agentName) },
+			{ agent: agentName },
+		);
 		const hits = await c.searchMemory(ref, deterministic ? "" : query, {
 			allSessions: opts?.allSessions ?? true,
 			// In deterministic mode the client omits relevant_k; passing it here is harmless (ignored).
@@ -567,6 +744,10 @@ export async function searchAgentMemory(
 			...(h.sessionId && { sessionId: h.sessionId }),
 		}));
 	} catch (error) {
+		if (isTransientBackendFailure(error)) {
+			noteBackendUnavailable("search", error);
+			return [];
+		}
 		logger.warn({ error: error instanceof Error ? error.message : String(error) }, "agent-memory search failed");
 		return [];
 	}
@@ -587,10 +768,17 @@ export async function recordAgentFactNow(
 	// Mirrors searchAgentMemory's transient-session binding: any session id works as the write
 	// container; recall is user-scoped (allSessions), not session-scoped.
 	const ref: AgentMemoryUserRef = { userId, sessionId: activeRef?.sessionId ?? "recall" };
+	if (backendDegraded("direct-fact")) return false;
 	try {
 		const c = client();
-		await c.ensureUser(userId, agentName, { agent: agentName, role: resolveRole(agentName) });
-		await c.ensureSession(userId, ref.sessionId, { annotations: { agent: agentName } });
+		await ensureUserAndSession(
+			c,
+			userId,
+			ref.sessionId,
+			agentName,
+			{ agent: agentName, role: resolveRole(agentName) },
+			{ agent: agentName },
+		);
 		const res = await c.addFacts(ref, [text], { annotations });
 		logger.info(
 			{ userId, sessionId: ref.sessionId, blockIds: res.blockIds, accepted: res.acceptedCount },
@@ -598,6 +786,10 @@ export async function recordAgentFactNow(
 		);
 		return res.acceptedCount > 0;
 	} catch (error) {
+		if (isTransientBackendFailure(error)) {
+			noteBackendUnavailable("direct-fact", error);
+			return false;
+		}
 		logger.warn(
 			{ error: error instanceof Error ? error.message : String(error) },
 			"agent-memory direct fact write failed",
@@ -652,10 +844,17 @@ export async function recallInFlightFleetUpgrades(agentName: string): Promise<In
 	// allSessions search needs a session ref; bind a transient one (any session id
 	// works -- the filter spans all sessions for the user).
 	const ref: AgentMemoryUserRef = { userId, sessionId: activeRef?.sessionId ?? "recall" };
+	// Read path: attempt during a write-only outage (best-effort ensure), do not hard-skip.
 	try {
 		const c = client();
-		await c.ensureUser(userId, agentName, { agent: agentName, role: resolveRole(agentName) });
-		await c.ensureSession(userId, ref.sessionId, { annotations: { agent: agentName } });
+		await ensureUserAndSessionForRead(
+			c,
+			userId,
+			ref.sessionId,
+			agentName,
+			{ agent: agentName, role: resolveRole(agentName) },
+			{ agent: agentName },
+		);
 		// SIO-998: keyed by kind -> deterministic filter-only retrieval (empty query omits relevant_k so
 		// the annotation filter is authoritative, not a top-k window of a ranked "in-flight" query).
 		const hits = await c.searchMemory(ref, "", {
@@ -685,6 +884,10 @@ export async function recallInFlightFleetUpgrades(agentName: string): Promise<In
 			};
 		});
 	} catch (error) {
+		if (isTransientBackendFailure(error)) {
+			noteBackendUnavailable("fleet-recall", error);
+			return [];
+		}
 		logger.warn(
 			{ error: error instanceof Error ? error.message : String(error) },
 			"agent-memory in-flight fleet recall failed",
@@ -714,12 +917,25 @@ export async function endAgentMemorySession(agentName?: string, threadId?: strin
 			await c.updateSession(ref, { annotations: { outcome: activeOutcome } });
 		}
 		await c.endSession(ref);
+		ensuredSessions.delete(sessionKey(ref.userId, ref.sessionId));
 	} catch (error) {
 		// SIO-956: ending an already-ended session is idempotent success, not a
 		// failure — a second teardown (pagehide after Clear, re-fired beacon) is
 		// expected. Log at debug; only real failures warn.
 		if (error instanceof SessionAlreadyEndedError) {
+			ensuredSessions.delete(sessionKey(ref.userId, ref.sessionId));
 			logger.debug({ sessionId: ref.sessionId }, "agent-memory session already ended; teardown is a no-op");
+		} else if (error instanceof SessionNotFoundError) {
+			// SIO-1646: the session was never created (the backend was down at session
+			// start), so there is nothing to end. The /end POST stays unconditional because
+			// the SIO-955 cold path must still end sessions this process never ensured.
+			ensuredSessions.delete(sessionKey(ref.userId, ref.sessionId));
+			logger.debug(
+				{ sessionId: ref.sessionId },
+				"agent-memory session was never created (backend unavailable at session start); nothing to end",
+			);
+		} else if (isTransientBackendFailure(error)) {
+			noteBackendUnavailable("endSession", error);
 		} else {
 			logger.warn({ error: error instanceof Error ? error.message : String(error) }, "agent-memory endSession failed");
 		}
@@ -741,6 +957,18 @@ export async function agentMemoryHealthy(): Promise<boolean> {
 export async function checkAgentMemoryHealth(): Promise<AgentMemoryHealth> {
 	try {
 		return await client().checkHealth();
+	} catch (error) {
+		const { error: message, cause } = describeError(error);
+		return { ok: false, detail: cause ? `${message} (${cause})` : message };
+	}
+}
+
+// SIO-1646: database probe (GET /health/couchbase); ok:true when the client predates it.
+export async function checkAgentMemoryDatabaseHealth(): Promise<AgentMemoryHealth> {
+	try {
+		const c = client();
+		if (!c.checkDatabaseHealth) return { ok: true };
+		return await c.checkDatabaseHealth();
 	} catch (error) {
 		const { error: message, cause } = describeError(error);
 		return { ok: false, detail: cause ? `${message} (${cause})` : message };

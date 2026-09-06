@@ -114,3 +114,38 @@ describe("installAgentMemory startup probe (SIO-1170)", () => {
 		expect(checkHealthCalls).toBe(0);
 	});
 });
+
+// SIO-1646: /health stays 200 while the service's Couchbase store is unreachable, so the startup
+// probe must ALSO ask /health/couchbase -- otherwise the log says "healthy" during a DB outage.
+describe("installAgentMemory startup database probe (SIO-1646)", () => {
+	test("dispatches the database probe once after a healthy /health", async () => {
+		process.env.LIVE_MEMORY_BACKEND = "agent-memory";
+		let dbProbes = 0;
+		const client: AgentMemoryClient = {
+			async ensureUser() {},
+			async ensureSession() {},
+			async addFacts() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async addMessages() {
+				return { blockIds: [], acceptedCount: 0, rejectedCount: 0 };
+			},
+			async searchMemory() {
+				return [];
+			},
+			async updateSession() {},
+			async endSession() {},
+			async checkHealth() {
+				return { ok: true, status: "healthy" };
+			},
+			async checkDatabaseHealth() {
+				dbProbes++;
+				return { ok: false, detail: '{"error":"DATABASE_UNAVAILABLE"}' };
+			},
+		};
+		__setAgentMemoryClient(client);
+		installAgentMemory();
+		await Bun.sleep(5);
+		expect(dbProbes).toBe(1);
+	});
+});
