@@ -49,6 +49,10 @@ export interface SharedMergeResult {
 	// SIO-1014: typed frontmatter for the (post-shadow) shared skills.
 	sharedSkillMeta: Map<string, SkillFrontmatter>;
 	sharedContext?: string;
+	// SIO-1649: agents/shared/context.md alone (portable invariants); sharedContext
+	// above is context.md plus context-runtime.md (analyzer runtime facts that must
+	// never reach an exported Pi persona).
+	sharedContextPortable?: string;
 	// agent.tools with shared tools appended (local override by name).
 	tools: ToolDefinition[];
 	// Shared skill names shadowed by a local skill of the same name; surfaced
@@ -80,7 +84,11 @@ export function mergeShared(sharedRoot: string, agent: LoadedAgent): SharedMerge
 	}
 
 	const contextPath = join(sharedRoot, "context.md");
-	const sharedContext = existsSync(contextPath) ? readFileSync(contextPath, "utf-8") : undefined;
+	const sharedContextPortable = existsSync(contextPath) ? readFileSync(contextPath, "utf-8") : undefined;
+	const runtimePath = join(sharedRoot, "context-runtime.md");
+	const runtimeContext = existsSync(runtimePath) ? readFileSync(runtimePath, "utf-8") : undefined;
+	const parts = [sharedContextPortable, runtimeContext].filter((c): c is string => typeof c === "string");
+	const sharedContext = parts.length > 0 ? parts.map((c) => c.trimEnd()).join("\n\n") : undefined;
 
-	return { sharedSkills, sharedSkillMeta, sharedContext, tools, shadowedSkills };
+	return { sharedSkills, sharedSkillMeta, sharedContext, sharedContextPortable, tools, shadowedSkills };
 }

@@ -17,20 +17,6 @@ override shared content of the same name; shared fills the gaps.
   necessary (no specific cluster -> all connected clusters; no time window ->
   last 24 hours; no environment -> production).
 
-## Datasource to MCP server mapping
-
-| Datasource | Sub-agent | MCP server |
-|------------|-----------|------------|
-| Elasticsearch | elastic-agent | elastic |
-| Kafka / Confluent | kafka-agent | kafka |
-| Couchbase Capella | capella-agent | couchbase |
-| Kong Konnect | konnect-agent | konnect |
-| GitLab | gitlab-agent | gitlab |
-| Atlassian (Jira/Confluence) | atlassian-agent | atlassian |
-| AWS | aws-agent | aws |
-
 ## Conventions
 
 - Team: Siobytes. Commit and ticket format: `SIO-XX: message`.
-- Compiled domain knowledge lives in `memory/wiki/`; consult `memory/wiki/index.md`
-  before re-deriving service topology or runbook steps from raw sources.

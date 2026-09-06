@@ -111,6 +111,31 @@ describe("mergeShared", () => {
 
 const AGENTS_DIR = join(import.meta.dir, "../../../agents/incident-analyzer");
 
+describe("mergeShared context split (SIO-1649)", () => {
+	test("context.md is the portable part; context-runtime.md is appended for the runtime prompt", () => {
+		const root = mkdtempSync(join(tmpdir(), "gitagent-shared-ctx-"));
+		try {
+			mkdirSync(join(root, "skills"), { recursive: true });
+			writeFileSync(join(root, "context.md"), "# Shared\n\n- invariant\n");
+			writeFileSync(join(root, "context-runtime.md"), "# Runtime\n\n| Datasource | MCP |\n");
+			const result = mergeShared(root, baseAgent(new Map()));
+			expect(result.sharedContextPortable).toBe("# Shared\n\n- invariant\n");
+			expect(result.sharedContext).toBe("# Shared\n\n- invariant\n\n# Runtime\n\n| Datasource | MCP |");
+		} finally {
+			rmSync(root, { recursive: true });
+		}
+	});
+
+	test("the real shared root keeps the MCP table in the runtime prompt and out of the portable part", () => {
+		const agent = loadAgent(AGENTS_DIR);
+		expect(agent.sharedContext).toContain("Datasource to MCP server mapping");
+		expect(agent.sharedContext).toContain("Operating invariants");
+		expect(agent.sharedContextPortable).toContain("Operating invariants");
+		expect(agent.sharedContextPortable).not.toContain("MCP server");
+		expect(agent.sharedContextPortable).not.toContain("memory/wiki");
+	});
+});
+
 describe("loadAgent: SIO-843 dynamic-pattern fields", () => {
 	test("root agent exposes hooks/memory/workflows/sharedSkills fields", () => {
 		const agent = loadAgent(AGENTS_DIR);
