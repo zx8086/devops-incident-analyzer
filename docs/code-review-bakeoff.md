@@ -44,6 +44,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#691](https://github.com/zx8086/devops-incident-analyzer/pull/691) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1635 Phase 0: per-environment hubs, hub client mailbox and sender prefix, Agent Memory identity map (17 files); three terminal SKIPPED records on two heads, CodeRabbit silent (12th straight); merged on user authorization; detail below |
 | [#692](https://github.com/zx8086/devops-incident-analyzer/pull/692) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1649 pi-fleet Phase 1: agents/pi-fleet definitions, bridge exporter and semver gate, persona in the fleet bundle, agent-release workflow (44 files); terminal SKIPPED in about 100 ms, CodeRabbit silent (13th straight); merged on user authorization; detail below |
 | [#693](https://github.com/zx8086/devops-incident-analyzer/pull/693) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1653 pi-fleet Phase 1b: fleet manifest, just fleet CLI, adopt mode, nine generated roots, S3 backend (56 files); SKIPPED in about 2.5 s, CodeRabbit silent (14th straight); Test job segfaulted once in packages/agent and passed on re-run; merged on user authorization; detail below |
+| [#694](https://github.com/zx8086/devops-incident-analyzer/pull/694) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1650 pi-fleet Phase 2a: pi-fleet pane next to the incident chat, /api/pi routes, sliced await with browser re-poll, pi-coms client exported from the agent barrel (23 files); SKIPPED twice in about 150 ms, CodeRabbit silent (15th straight); Test job segfaulted once in packages/agent and passed on re-run; merged on user authorization; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -620,6 +621,22 @@ A code PR of 56 files under `packages/pi-coms` plus docs: the gitignored `deploy
 1. *A native Bun crash in an untouched package is not a signal about the PR;* the per-package exit lines in the log locate it in seconds, and a re-run settles it. Worth a ticket if it recurs on Bun 1.4.2 in CI.
 2. *Coverage came from the session:* 26 tests over manifest validation, the renderer's "no identifier in a committed file" pin, a preflight decision table with a fake AWS layer, token minting and rotation, hub expectations and rollout commands; `terraform validate` on an adopt root, the prd hub root and a dev root.
 3. *A review would have been most valuable on the adopt-mode trust merge and the S3 backend split;* both are the kind of IAM and state edge a reviewer with Terraform context catches and no test here exercises against AWS.
+
+## PR #694 detail (SIO-1650 pi-fleet Phase 2a, thin hub pane next to the incident chat)
+
+A code PR of 23 files: the pi-coms hub client, its config resolver and the estate router exported from the `@devops-agent/agent` barrel; a web server module that lists spokes per environment hub, sends one operator prompt to one spoke on that hub and waits one 25 s await slice per request; three `/api/pi` routes; a pure reducer, a runes store and the `PiFleetPane` component mounted as a second split-row pane; four `PI_COMS_PANE_*` variables; the feature doc and the pi-coms principal section. Replies are rendered as data and never reach an LLM.
+
+**Greptile:** terminal **SKIPPED** twice (ids 22792816 on `1ec8c6f2` and 22792832 on `c133872a`), about 150 ms each, `strictness: 2`, body null. No status check, no comment, no review object.
+
+**CodeRabbit:** nothing, through CI completion. Fifteenth consecutive absence (#679 to #694).
+
+**Merge gate:** first CI run: Lint, Typecheck, YAML check and pi-coms deploy checks green, the web suite itself green (359 pass) inside the Test job, then the job died with a Bun 1.4.2 `SIGSEGV` panic in the `@devops-agent/agent` test process, exactly as on #693 (the PR touches only that package's barrel exports; every other package exited 0). `gh run rerun --failed` passed. Final state `CLEAN`, Greptile SKIPPED via MCP, zero findings to triage. Code-class; merged on the user's explicit instruction. Squash `62c8a59d`.
+
+**Takeaways:**
+
+1. *Second `SIGSEGV` in the `@devops-agent/agent` suite on Bun 1.4.2 CI in two consecutive PRs;* both cleared on re-run. That is now a pattern worth a ticket rather than a footnote: the suite runs without `--isolate` in CI (`bun test` via the package script) while the session runs it with `--isolate`.
+2. *Coverage came from the session:* 35 tests, the server module against a scripted fetch with the real client (per-hub tokens, hub isolation, register/send/await/deregister order, one-slice `budget_exhausted`, the environment refusal), route validation and envelopes, reducer transitions and the pane's SSR shape. The Svelte MCP autofixer ran clean.
+3. *A review would have been most valuable on two runtime seams no test reaches:* the prop named `state` that silently broke the `$state` rune until the SSR probe caught it (svelte-check passes), and the long-poll shape under the SvelteKit adapter. The first is recorded in memory; the second is the design's whole point and still needs the manual run against a hub.
 
 ## PR #689 detail (pi-fleet gitagent feasibility report)
 
