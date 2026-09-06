@@ -45,6 +45,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#692](https://github.com/zx8086/devops-incident-analyzer/pull/692) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1649 pi-fleet Phase 1: agents/pi-fleet definitions, bridge exporter and semver gate, persona in the fleet bundle, agent-release workflow (44 files); terminal SKIPPED in about 100 ms, CodeRabbit silent (13th straight); merged on user authorization; detail below |
 | [#693](https://github.com/zx8086/devops-incident-analyzer/pull/693) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1653 pi-fleet Phase 1b: fleet manifest, just fleet CLI, adopt mode, nine generated roots, S3 backend (56 files); SKIPPED in about 2.5 s, CodeRabbit silent (14th straight); Test job segfaulted once in packages/agent and passed on re-run; merged on user authorization; detail below |
 | [#694](https://github.com/zx8086/devops-incident-analyzer/pull/694) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1650 pi-fleet Phase 2a: pi-fleet pane next to the incident chat, /api/pi routes, sliced await with browser re-poll, pi-coms client exported from the agent barrel (23 files); SKIPPED twice in about 150 ms, CodeRabbit silent (15th straight); Test job segfaulted once in packages/agent and passed on re-run; merged on user authorization; detail below |
+| [#695](https://github.com/zx8086/devops-incident-analyzer/pull/695) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1652 pi-fleet Phase 2b: fetchFleetInbox node before aggregate, fleetInboxDigest sidecar, fleet_inbox SSE event and FleetInboxCard, node count 32 (36 files); SKIPPED twice in about 130 ms, CodeRabbit silent (16th straight); CI green first run; merged on user authorization; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -637,6 +638,22 @@ A code PR of 23 files: the pi-coms hub client, its config resolver and the estat
 1. *Second `SIGSEGV` in the `@devops-agent/agent` suite on Bun 1.4.2 CI in two consecutive PRs;* both cleared on re-run. That is now a pattern worth a ticket rather than a footnote: the suite runs without `--isolate` in CI (`bun test` via the package script) while the session runs it with `--isolate`.
 2. *Coverage came from the session:* 35 tests, the server module against a scripted fetch with the real client (per-hub tokens, hub isolation, register/send/await/deregister order, one-slice `budget_exhausted`, the environment refusal), route validation and envelopes, reducer transitions and the pane's SSR shape. The Svelte MCP autofixer ran clean.
 3. *A review would have been most valuable on two runtime seams no test reaches:* the prop named `state` that silently broke the `$state` rune until the SSR probe caught it (svelte-check passes), and the long-poll shape under the SvelteKit adapter. The first is recorded in memory; the second is the design's whole point and still needs the manual run against a hub.
+
+## PR #695 detail (SIO-1652 pi-fleet Phase 2b, fetchFleetInbox enrichment node)
+
+A code PR of 36 files: pure helpers and a deterministic graph node that read each assessed AWS estate's pi-coms inbox and its hub's `ops` inbox for the incident window into a typed `fleetInboxDigest` (registered always, reached from `align` only when `PI_COMS_INBOX_ENABLED` is true, placed BEFORE `aggregate` through a wrapper around the alignment router so the structured summary reaches this turn's prompt), the shared schemas and `fleet_inbox` SSE event, the web reducer and store plumbing and a `FleetInboxCard`, three `PI_COMS_INBOX_*` variables, node count 31 to 32 across the docs, and the feature doc.
+
+**Greptile:** terminal **SKIPPED** twice (ids 22794995 on `73d75d0b` and 22795006 on `f0cc59bc`), about 130 ms each, `strictness: 2`, body null. No status check, no comment, no review object.
+
+**CodeRabbit:** nothing, through CI completion. Sixteenth consecutive absence (#679 to #695).
+
+**Merge gate:** all five CI jobs green on the first run (no `@devops-agent/agent` segfault this time, after two in a row on #693 and #694). Final state `CLEAN`, Greptile SKIPPED via MCP, zero findings to triage. Code-class; merged on the user's explicit instruction. Squash `cb2fcdca`.
+
+**Takeaways:**
+
+1. *The one design question a reviewer would have had to raise was caught by the pre-plan survey instead:* the ticket placed the node after `aggregate` while requiring its output in the aggregator prompt, which `aggregate` builds. The plan moved it before `aggregate`; the deviation is recorded on the issue, in the plan and in the feature doc.
+2. *Coverage came from the session:* 13 helper tests (report parser, classification, window and attribution filters, a prompt summary asserted free of a body marker), 5 node tests against a scripted hub (two hubs, isolation, timeout, environment refusal, self-sender exclusion), 2 byte-identity assembly tests, and web pump, reducer and SSR card tests.
+3. *Where a reviewer would still earn their keep:* the `ops` attribution rule (account id from `AWS_ESTATES` role ARNs or agent and monitor sender names) is a convention, not a contract, and the report parser is keyed on today's `formatIncidentReport`; both are exactly the kind of drift a reviewer with pi-coms context would flag.
 
 ## PR #689 detail (pi-fleet gitagent feasibility report)
 
