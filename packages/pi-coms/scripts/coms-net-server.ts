@@ -5,6 +5,22 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type {
+	AgentCard,
+	AgentStatus,
+	ComsMessage,
+	ErrorResponse,
+	HeartbeatRequest,
+	InboxMessage,
+	MessageStatus,
+	RegisterRequest,
+	RegisterResponse,
+	ResponseSubmitRequest,
+	SendRequest,
+	SendResponse,
+} from "../contracts/wire.ts";
+
+export type { AgentCard, AgentStatus, ComsMessage, ErrorResponse, MessageStatus, RegisterResponse, SendResponse };
 
 const HOST = process.env.PI_COMS_NET_HOST ?? "127.0.0.1";
 const PORT = Number(process.env.PI_COMS_NET_PORT ?? 0);
@@ -133,109 +149,13 @@ function logRejected(reason: string, detail: string): void {
 	logLine("✗", C_YELLOW, "rejected", `${reason} ${dim(detail)}`);
 }
 
-export type AgentStatus = "online" | "stale" | "offline";
-// No in_progress state: dropped from v1.
-export type MessageStatus = "queued" | "delivered" | "complete" | "error" | "timeout";
-
-export type AgentCard = {
-	session_id: string;
-	name: string;
-	purpose: string;
-	model: string;
-	provider?: string;
-	color: string;
-	cwd: string;
-	project: string;
-	explicit: boolean;
-	started_at: string;
-	context_used_pct: number;
-	queue_depth: number;
-	status: AgentStatus;
-};
-
+// Wire types live in contracts/wire.ts (SIO-1654); RegistryEntry is server-internal.
 export type RegistryEntry = AgentCard & {
 	last_seen_at: string;
 	registered_at: string;
 	token_hash?: string; // directory-mode sessions carry their token hash for revocation
 	principal?: string;
 };
-
-export type ComsMessage = {
-	msg_id: string;
-	project: string;
-	sender_session: string;
-	sender_name: string;
-	sender_cwd: string;
-	target_session: string | null; // null = queued by name, unclaimed
-	target_name: string | null;
-	prompt: string;
-	conversation_id: string | null;
-	response_schema: object | null;
-	hops: number;
-	status: MessageStatus;
-	mailbox: boolean; // requested TTL beyond the default: retained as inbox history until expiry
-	response?: unknown;
-	error?: string | null;
-	created_at: string;
-	delivered_at?: string;
-	completed_at?: string;
-	expires_at: string;
-};
-
-export type RegisterRequest = {
-	project: string;
-	session_id: string;
-	name: string;
-	purpose: string;
-	model: string;
-	provider?: string;
-	color: string;
-	cwd: string;
-	explicit: boolean;
-};
-
-export type RegisterResponse = {
-	ok: true;
-	agent: AgentCard;
-	heartbeat_interval_ms: number;
-	sse_url: string;
-};
-
-export type HeartbeatRequest = {
-	project: string;
-	context_used_pct: number;
-	queue_depth: number;
-	model?: string;
-	status?: AgentStatus;
-};
-
-export type SendRequest = {
-	project: string;
-	sender_session: string;
-	target: string;
-	target_session: string | null;
-	prompt: string;
-	conversation_id: string | null;
-	response_schema: object | null;
-	hops: number;
-	ttl_ms?: number | null;
-};
-
-export type SendResponse = {
-	ok: true;
-	msg_id: string;
-	status: MessageStatus;
-	target_session: string | null;
-};
-
-export type ResponseSubmitRequest = {
-	project: string;
-	responder_session: string;
-	response: unknown;
-	error: string | null;
-};
-
-export type ErrorResponse = { ok: false; error: string; details?: unknown };
 
 type Awaiter = {
 	resolve: (m: ComsMessage) => void;
@@ -657,22 +577,7 @@ export class MailStore {
 	// completed conversation addressed to it (prompt, status, reply), ascending
 	// by msg_id (ULIDs sort by creation time). Without `since`, the newest
 	// `limit` messages; with it, only newer ones.
-	inbox(
-		targetName: string,
-		limit: number,
-		since?: string,
-	): {
-		msg_id: string;
-		sender_name: string;
-		target_name: string | null;
-		prompt: string;
-		status: string;
-		error: string | null;
-		response: unknown;
-		created_at: string;
-		delivered_at: string | null;
-		completed_at: string | null;
-	}[] {
+	inbox(targetName: string, limit: number, since?: string): InboxMessage[] {
 		const cols =
 			"msg_id, sender_name, target_name, prompt, status, error, response, created_at, delivered_at, completed_at";
 		const scope = "(mailbox = 1 OR status IN ('complete','error','timeout')) AND target_name = ?";

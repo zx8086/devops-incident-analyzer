@@ -12,13 +12,9 @@ import type {
 	SendResponse,
 } from "../scripts/coms-net-server.ts";
 
-export type { ErrorResponse, RegisterResponse, SendResponse };
-
 // Response bodies as the hub builds them (scripts/coms-net-server.ts).
-export type AgentListing = { agents: AgentCard[] };
-export type InboxMessage = ReturnType<MailStore["inbox"]>[number];
-export type InboxListing = { ok: true; name: string; messages: InboxMessage[] };
-export type MessageLookup = { msg_id: string; status: MessageStatus; response: unknown; error: string | null };
+export type { AgentListing, InboxListing, InboxMessage, MessageLookup } from "../contracts/wire.ts";
+export type { ErrorResponse, RegisterResponse, SendResponse };
 
 // SSE event payloads by event name.
 export type PromptEvent = {

@@ -9,5 +9,5 @@
 		"skipLibCheck": true,
 		"types": ["bun"]
 	},
-	"include": ["extensions/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts"]
+	"include": ["contracts/**/*.ts", "extensions/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts"]
 }
