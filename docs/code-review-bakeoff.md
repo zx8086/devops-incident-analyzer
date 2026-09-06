@@ -41,6 +41,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#684](https://github.com/zx8086/devops-incident-analyzer/pull/684) | 2026-09-05 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1641 SSE pump node allowlist derived from the compiled graph (14 files, all apps/web + 1 doc); auto-trigger logged terminal SKIPPED within ~150 ms, CodeRabbit silent (6th straight); merged on green CI + MCP-confirmed SKIPPED + explicit per-PR user instruction; detail below |
 | [#689](https://github.com/zx8086/devops-incident-analyzer/pull/689) | 2026-09-06 | 0 | n/a (SKIPPED, docs-only) | n/a (no review) | pi-fleet gitagent feasibility report (docs only); seven heads, seven terminal SKIPPED within 125-160 ms via MCP, CodeRabbit silent (10th straight); merged on user authorization; detail below |
 | [#690](https://github.com/zx8086/devops-incident-analyzer/pull/690) | 2026-09-06 | 0 | n/a (never registered) | n/a (no review) | SIO-1654 pi-coms subtree import into packages/pi-coms (about 120 files); Greptile never created a review record on any of four heads, CodeRabbit silent (11th straight); merged on user authorization; detail below |
+| [#691](https://github.com/zx8086/devops-incident-analyzer/pull/691) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1635 Phase 0: per-environment hubs, hub client mailbox and sender prefix, Agent Memory identity map (17 files); three terminal SKIPPED records on two heads, CodeRabbit silent (12th straight); merged on user authorization; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -569,6 +570,22 @@ A code PR of about 120 files: the `git subtree add --squash` import of the pi-co
 1. *A large import can fall below Greptile's radar entirely*, which is worse than a skip: nothing to poll, nothing to re-trigger. The MCP call at PR-open time is the only way to tell the two apart.
 2. *Both CI failures were toolchain, not code:* lockfile format and Bun stream semantics. A subtree import brings the source repository's toolchain assumptions with it; check the Bun pin and lockfile versions before the first push.
 3. *Self-verified:* full monorepo suites on 1.4.2, a two-hub isolation smoke on the real hub, `--stage-only` staging test, secret sweep on added lines.
+
+## PR #691 detail (SIO-1635 Phase 0, per-environment pi-coms hubs, hub client mailbox and sender prefix, explicit Agent Memory identity map)
+
+A code PR: 17 files (shared config schema and barrel, hub client, verifier, memory backend, their tests, `.env.example`, three docs). It replaces the two-agent ternaries in `memory-backend.ts` with an explicit identity map that throws for unregistered agents, introduces `PiComsConfigSchema.hubs` keyed by environment with `PI_COMS_HUBS` (single-hub variables map to `PI_COMS_NET_ENVIRONMENT`), scopes the hub client to one hub with a sender prefix, public heartbeat and `mailbox()`, and routes by estate suffix before any online check so a prd estate never reaches the dev hub. Stacked on #682 until that merged, then rebased onto main and retargeted.
+
+**Greptile:** terminal **SKIPPED** on both heads (id 22787137 on `e86f60fc`; ids 22787589 and 22787590 on `81a2d0f4`, two records for one push, 115-130 ms each, `strictness: 2`, body null). No status check, no comment, no review object. Registered normally, unlike #690.
+
+**CodeRabbit:** nothing, through CI completion on both heads. Twelfth consecutive absence (#679 to #691).
+
+**Merge gate:** CI green on the final head (Typecheck, Lint, YAML check, Test, pi-coms deploy checks), `MERGEABLE`/`CLEAN`, Greptile SKIPPED on the head SHA via MCP, zero findings to triage. Code-class; merged on the user's "merge all" authorization. Squash `4caddf23`.
+
+**Takeaways:**
+
+1. *A push can produce two SKIPPED records for one head* (retarget plus force-push landed within the same second); the count is per event, not per head, consistent with the #687 per-review observation.
+2. *Coverage came from the session:* fetch-boundary unit tests asserting the absolute hub URL per estate, a two-hub smoke on the real hub code with log assertions, and the full monorepo suites on Bun 1.4.2.
+3. *The identity map surfaced a latent bug* the reviewers would have been well placed to catch: the write-behind queue resolved a role from an already-resolved user id, correct only because both agents' user ids equal their names.
 
 ## PR #689 detail (pi-fleet gitagent feasibility report)
 
