@@ -1,0 +1,111 @@
+# deploy/fleet.example.yaml -- copy to deploy/fleet.yaml (gitignored) and fill in.
+#
+# Policy (user, 2026-09-06): no cross-environment access. Dev talks to dev,
+# production to production. One hub per environment; a spoke only ever
+# registers with the hub of its own environment, reads code only from its own
+# environment's distribution bucket, and its token is minted in its own hub's
+# directory. `just fleet preflight` refuses any env mismatch and any CIDR that
+# appears under two environments.
+#
+# Identifiers here (subnets, CIDRs, private IPs, account ids) are internal:
+# keep them in deploy/fleet.yaml, never in a committed file.
+hubs:
+  dev:
+    profile: eu-shared-services-dev
+    region: eu-central-1
+    account_id: "111111111111"
+    url: http://10.0.0.10:8787
+    private_ip: 10.0.0.10
+    subnet_id: subnet-0dev0hub0000000000
+    dist_bucket: pi-coms-dist-111111111111
+    allowed_cidrs:
+      - 10.0.0.0/23        # dev shared-services VPC
+      - 10.0.2.0/23        # dev oit VPC
+      - 10.99.0.0/24       # operator VPN range (dev)
+    token_env: PI_COMS_NET_AUTH_TOKEN_DEV
+  prd:
+    profile: eu-shared-services-prd
+    region: eu-central-1
+    account_id: "222222222222"
+    url: http://10.10.0.10:8787
+    private_ip: 10.10.0.10
+    subnet_id: subnet-0prd0hub0000000000
+    dist_bucket: pi-coms-dist-222222222222
+    allowed_cidrs:
+      - 10.10.0.0/23       # prd shared-services VPC
+      - 10.10.2.0/23       # prd oit VPC
+      - 10.10.4.0/23       # prd ediservices VPC
+      - 10.10.6.0/23       # prd mendix-platform VPC
+      - 10.10.8.0/23       # prd b2b-ecom VPC
+      - 10.10.10.0/23      # prd b2becom-v2 VPC
+      - 10.10.12.0/23      # prd b2bonboarding VPC
+    token_env: PI_COMS_NET_AUTH_TOKEN_PRD
+
+persona:
+  min_version: 0.1.0       # rollout refuses a bundle whose persona is older
+
+defaults:
+  region: eu-central-1
+  instance_type: t4g.small
+  pi_model: eu.anthropic.claude-sonnet-5
+  external_id:
+    dev: devops-agent-dev-access
+    prd: devops-agent-prod-access   # the analyzer's ExternalId on DevOpsAgentReadOnly
+
+spokes:
+  eu-shared-services-dev:
+    env: dev
+    profile: eu-shared-services-dev
+    subnet_id: subnet-0dev0agent00000000
+    vpc_cidr: 10.0.0.0/23
+    readonly_role: create
+    hosts_hub: true
+  eu-oit-dev:
+    env: dev
+    profile: eu-oit-dev
+    subnet_id: subnet-0dev0oit000000000
+    vpc_cidr: 10.0.2.0/23
+    readonly_role: create
+  eu-shared-services-prd:
+    env: prd
+    profile: eu-shared-services-prd
+    subnet_id: subnet-0prd0agent00000000
+    vpc_cidr: 10.10.0.0/23
+    readonly_role: adopt
+    hosts_hub: true
+  eu-oit-prd:
+    env: prd
+    profile: eu-oit-prd
+    subnet_id: subnet-0prd0oit000000000
+    vpc_cidr: 10.10.2.0/23
+    readonly_role: adopt
+  eu-ediservices-prd:
+    env: prd
+    profile: eu-ediservices-prd
+    subnet_id: subnet-0prd0edi000000000
+    vpc_cidr: 10.10.4.0/23
+    readonly_role: adopt
+  eu-mendix-platform-prd:
+    env: prd
+    profile: eu-mendix-platform-prd
+    subnet_id: subnet-0prd0mendix0000000
+    vpc_cidr: 10.10.6.0/23
+    readonly_role: adopt
+  eu-b2b-ecom-prd:
+    env: prd
+    profile: eu-b2b-ecom-prd
+    subnet_id: subnet-0prd0b2becom000000
+    vpc_cidr: 10.10.8.0/23
+    readonly_role: adopt
+  eu-b2becom-v2-prd:
+    env: prd
+    profile: eu-b2becom-v2-prd
+    subnet_id: subnet-0prd0b2becomv20000
+    vpc_cidr: 10.10.10.0/23
+    readonly_role: adopt
+  eu-b2bonboarding-prd:
+    env: prd
+    profile: eu-b2bonboarding-prd
+    subnet_id: subnet-0prd0onboarding000
+    vpc_cidr: 10.10.12.0/23
+    readonly_role: adopt

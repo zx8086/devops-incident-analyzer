@@ -13,6 +13,12 @@ locals {
   region        = data.aws_region.current.name
   agent_name    = var.agent_name != "" ? var.agent_name : "aws-${local.account_id}"
   agent_purpose = var.agent_purpose != "" ? var.agent_purpose : "Read-only AWS devops agent for account ${local.account_id} (${local.region})"
+  # SIO-1653: create | adopt | none (see variables.tf). readonly_role stays the
+  # legacy switch; the mode refines it.
+  readonly_mode    = var.readonly_role_mode != "" ? var.readonly_role_mode : (var.readonly_role ? "create" : "none")
+  readonly_enabled = local.readonly_mode != "none"
+  readonly_create  = local.readonly_mode == "create"
+  readonly_adopt   = local.readonly_mode == "adopt"
 }
 
 // ── Network placement ──────────────────────────────────────────────────────
@@ -101,7 +107,7 @@ resource "aws_iam_role" "agent" {
 // ReadOnlyAccess -- metadata-only, no s3:GetObject, no DynamoDB item reads,
 // no secret values. Widen deliberately, one named action at a time.
 resource "aws_iam_role_policy_attachment" "agent_viewonly" {
-  count      = var.readonly_role ? 0 : 1
+  count      = local.readonly_enabled ? 0 : 1
   role       = aws_iam_role.agent.name
   policy_arn = "arn:aws:iam::aws:policy/job-function/ViewOnlyAccess"
 }
@@ -111,7 +117,7 @@ resource "aws_iam_role_policy_attachment" "agent_viewonly" {
 // "which alarms are firing" or read log events. These are the named widenings
 // the comment above calls for: still read-only, but data-plane reads on logs.
 resource "aws_iam_role_policy" "agent_cloudwatch_read" {
-  count = var.readonly_role ? 0 : 1
+  count = local.readonly_enabled ? 0 : 1
   name  = "cloudwatch-logs-read"
   role  = aws_iam_role.agent.id
 
@@ -134,7 +140,7 @@ resource "aws_iam_role_policy" "agent_cloudwatch_read" {
 
 // The monitor's daily cost check. Cost Explorer has no resource-level scoping.
 resource "aws_iam_role_policy" "agent_cost_read" {
-  count = var.readonly_role ? 0 : 1
+  count = local.readonly_enabled ? 0 : 1
   name  = "cost-explorer-read"
   role  = aws_iam_role.agent.id
 
@@ -154,7 +160,7 @@ resource "aws_iam_role_policy" "agent_cost_read" {
 resource "aws_iam_role_policy" "agent_bedrock_invoke" {
   // In readonly mode, Bedrock invoke lives on DevOpsAgentReadOnly instead so
   // the whole workload runs under one assumed-role session.
-  count = var.enable_bedrock && !var.readonly_role ? 1 : 0
+  count = var.enable_bedrock && !local.readonly_enabled ? 1 : 0
   name  = "bedrock-invoke-anthropic"
   role  = aws_iam_role.agent.id
 
@@ -182,42 +188,66 @@ resource "aws_iam_role_policy" "agent_bedrock_invoke" {
 // with the local agent instance role; add the prod DevOpsAgentCoreRole via
 // readonly_extra_trusted_arns when the analyzer expands here.
 
+// Adopt mode (SIO-1653): the production accounts already carry this role for
+// the incident analyzer. The root imports it (import block), the existing trust
+// statements are read back and kept verbatim, and exactly one statement for the
+// local instance role is merged in by Sid. Attached analyzer policies, tags and
+// the description are never managed here.
+data "aws_iam_role" "devops_readonly_existing" {
+  count = local.readonly_adopt ? 1 : 0
+  name  = "DevOpsAgentReadOnly"
+}
+
+locals {
+  readonly_trust_statement = {
+    Sid       = "TrustLocalPiAgent"
+    Effect    = "Allow"
+    Principal = { AWS = concat([aws_iam_role.agent.arn], var.readonly_extra_trusted_arns) }
+    Action    = "sts:AssumeRole"
+    Condition = { StringEquals = { "sts:ExternalId" = var.readonly_external_id } }
+  }
+  readonly_existing_statements = local.readonly_adopt ? [
+    for st in jsondecode(data.aws_iam_role.devops_readonly_existing[0].assume_role_policy).Statement : st
+    if try(st.Sid, "") != "TrustLocalPiAgent"
+  ] : []
+  readonly_trust_document = {
+    Version   = "2012-10-17"
+    Statement = concat(local.readonly_existing_statements, [local.readonly_trust_statement])
+  }
+}
+
 resource "aws_iam_role" "devops_readonly" {
-  count = var.readonly_role ? 1 : 0
+  count = local.readonly_enabled ? 1 : 0
   name  = "DevOpsAgentReadOnly"
 
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Sid       = "TrustLocalPiAgent"
-      Effect    = "Allow"
-      Principal = { AWS = concat([aws_iam_role.agent.arn], var.readonly_extra_trusted_arns) }
-      Action    = "sts:AssumeRole"
-      Condition = { StringEquals = { "sts:ExternalId" = var.readonly_external_id } }
-    }]
-  })
+  assume_role_policy = jsonencode(local.readonly_trust_document)
+
+  lifecycle {
+    # Adopted roles keep whatever the analyzer's onboarding set here.
+    ignore_changes = [description, max_session_duration, tags, tags_all, path, permissions_boundary, force_detach_policies]
+  }
 }
 
 resource "aws_iam_policy" "devops_readonly_base" {
-  count  = var.readonly_role ? 1 : 0
+  count  = local.readonly_create ? 1 : 0
   name   = "DevOpsAgentReadOnlyPermissions"
   policy = file("${path.module}/policies/devops-agent-readonly-policy.json")
 }
 
 resource "aws_iam_policy" "devops_readonly_troubleshooting" {
-  count  = var.readonly_role ? 1 : 0
+  count  = local.readonly_create ? 1 : 0
   name   = "DevOpsAgentReadOnlyTroubleshooting"
   policy = file("${path.module}/policies/devops-agent-readonly-troubleshooting-policy.json")
 }
 
 resource "aws_iam_role_policy_attachment" "devops_readonly_base" {
-  count      = var.readonly_role ? 1 : 0
+  count      = local.readonly_create ? 1 : 0
   role       = aws_iam_role.devops_readonly[0].name
   policy_arn = aws_iam_policy.devops_readonly_base[0].arn
 }
 
 resource "aws_iam_role_policy_attachment" "devops_readonly_troubleshooting" {
-  count      = var.readonly_role ? 1 : 0
+  count      = local.readonly_create ? 1 : 0
   role       = aws_iam_role.devops_readonly[0].name
   policy_arn = aws_iam_policy.devops_readonly_troubleshooting[0].arn
 }
@@ -227,10 +257,12 @@ resource "aws_iam_role_policy_attachment" "devops_readonly_troubleshooting" {
 // piagent workload (checks, investigation reads, model calls) runs under one
 // assumed-role session -- CloudTrail then attributes every agent action to
 // DevOpsAgentReadOnly, cleanly separated from host plumbing.
-resource "aws_iam_role_policy" "devops_readonly_dev_extensions" {
-  count = var.readonly_role ? 1 : 0
-  name  = "pi-coms-dev-extensions"
-  role  = aws_iam_role.devops_readonly[0].id
+// SIO-1653: a managed policy (was an inline dev policy), attached in both
+// create and adopt mode. In adopt mode it is the ONLY policy pi-coms attaches
+// to the analyzer's role.
+resource "aws_iam_policy" "pi_coms_extensions" {
+  count = local.readonly_enabled ? 1 : 0
+  name  = "pi-coms-extensions"
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -383,10 +415,16 @@ resource "aws_iam_role_policy" "devops_readonly_dev_extensions" {
   })
 }
 
+resource "aws_iam_role_policy_attachment" "pi_coms_extensions" {
+  count      = local.readonly_enabled ? 1 : 0
+  role       = aws_iam_role.devops_readonly[0].name
+  policy_arn = aws_iam_policy.pi_coms_extensions[0].arn
+}
+
 // The instance role's only workload grant in readonly mode: assume the
 // account's DevOpsAgentReadOnly.
 resource "aws_iam_role_policy" "agent_assume_readonly" {
-  count = var.readonly_role ? 1 : 0
+  count = local.readonly_enabled ? 1 : 0
   name  = "assume-devops-readonly"
   role  = aws_iam_role.agent.id
 
@@ -476,8 +514,8 @@ resource "aws_instance" "agent" {
     ssh_public_key       = var.ssh_public_key
     repo_url             = var.repo_url
     bundle_s3_uri        = var.bundle_s3_uri
-    readonly_role_arn    = var.readonly_role ? aws_iam_role.devops_readonly[0].arn : ""
-    readonly_external_id = var.readonly_role ? var.readonly_external_id : ""
+    readonly_role_arn    = local.readonly_enabled ? aws_iam_role.devops_readonly[0].arn : ""
+    readonly_external_id = local.readonly_enabled ? var.readonly_external_id : ""
   })
 
   metadata_options {

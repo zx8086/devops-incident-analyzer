@@ -22,7 +22,7 @@ output "agent_role_arn" {
 
 output "devops_readonly_role_arn" {
   description = "DevOpsAgentReadOnly role the workload assumes for AWS reads (empty when readonly_role = false)."
-  value       = var.readonly_role ? aws_iam_role.devops_readonly[0].arn : ""
+  value       = local.readonly_enabled ? aws_iam_role.devops_readonly[0].arn : ""
 }
 
 output "provider_keys_parameter_name" {

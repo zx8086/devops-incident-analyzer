@@ -27,7 +27,7 @@ individual packages:
 - `mcp-server-aws/` -- multi-estate via cross-account AssumeRole
 - `shared/` -- cross-package types, Zod schemas, unified bootstrap, AgentCore proxy, Agent Memory REST client (SIO-938)
 - `checkpointer/` -- **transient** per-thread LangGraph state only (memory + bun:sqlite)
-- `pi-coms/` -- the pi-coms hub, Pi extension, fleet monitor, Terraform and deploy scripts (SIO-1654 subtree import, layout intact). Its monitor deps live in a nested NON-workspace `scripts/package.json` (never move them into the package manifest: Pi reads that file on install, SIO-1632); the package-local CLAUDE.md and AGENTS.md are read by Pi and stay there. Hub wire types: `packages/pi-coms/contracts/`. Bundle staging: `packages/pi-coms/deploy/publish-fleet.sh --stage-only`.
+- `pi-coms/` -- the pi-coms hub, Pi extension, fleet monitor, Terraform and deploy scripts (SIO-1654 subtree import, layout intact). Its monitor deps live in a nested NON-workspace `scripts/package.json` (never move them into the package manifest: Pi reads that file on install, SIO-1632); the package-local CLAUDE.md and AGENTS.md are read by Pi and stay there. Hub wire types: `packages/pi-coms/contracts/`. Bundle staging: `packages/pi-coms/deploy/publish-fleet.sh --stage-only`. Fleet deploy (SIO-1653): `just fleet <cmd>` over the gitignored `packages/pi-coms/deploy/fleet.yaml`; rendered Terraform roots carry no identifiers.
 
 ### Agent Pipeline (31-node LangGraph StateGraph: 21 base + 4 gated KG + 6 gated HIL-learning)
 

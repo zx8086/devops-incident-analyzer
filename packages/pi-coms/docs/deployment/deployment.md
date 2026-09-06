@@ -32,17 +32,48 @@ pitfalls are collected in [operations-gotchas.md](operations-gotchas.md).
 
 ## Accounts and roots
 
-One Terraform root per account under `deploy/accounts/`, each with local
-state and gitignored tfvars. Spoke roots take `dist_bucket` (the hub
-account's `pi-coms-dist-<hub-account-id>`) from that tfvars file; the tree
-carries no default for it (SIO-1654):
+Since SIO-1653 the roots are generated: `deploy/fleet.yaml` (gitignored; copy
+`deploy/fleet.example.yaml`) is the single input, and `just fleet render`
+writes one root per spoke under `deploy/accounts/<name>/`. The committed
+`main.tf` and `backend.tf` carry no identifiers; subnets, CIDRs, the hub IP,
+the token and the state-bucket address live in the gitignored
+`terraform.tfvars` and `backend.hcl` the same command writes. Never edit a
+rendered root by hand: change the manifest or `scripts/fleet/render.ts`.
 
-| Root | Instantiates |
-|------|--------------|
-| `eu-shared-services-dev` | Hub (private IP pinned) + the local agent |
-| `eu-oit-dev` | Agent only, `hub_url` pointed at the hub's private IP |
+| Command | What it does |
+|---------|--------------|
+| `just fleet preflight [names]` | STS per profile (stops on an expired portal session), hub principal present, TGW route from the subnet, subnet CIDR on the hub allow-list, same AWS Organization as the hub, Bedrock inference profile visible, adopt-mode role readable and trusting the analyzer. Touches nothing. |
+| `just fleet tokens ensure\|rotate [names]` | Mints one `agent` principal per spoke (`<name>`, `monitor-<name>`) in that spoke's OWN environment hub directory and writes the token into the spoke tfvars; Terraform then owns the spoke's `/pi-agent/auth-token`. Never prints a token. |
+| `just fleet render [names]` | Renders the roots (keeps a minted token). |
+| `just fleet backend-init <env>` | Creates the versioned, non-public `pi-coms-tfstate-<hub account>` bucket in that environment's hub account. |
+| `just fleet plan\|apply [names] [--yes]` | `terraform init -backend-config=backend.hcl` (migrating a local `terraform.tfstate` into the bucket on first use), then plan or apply. Production spokes apply only with `--yes`. |
+| `just fleet publish [--env dev\|prd]` | `deploy/publish-fleet.sh` per hub bucket (persona export included). |
+| `just fleet rollout [names] [--token-changed]` | Run Command `pi-coms-update` per host (it writes the reload sentinel), or the bootstrap re-run after a token change; then polls `GET /v1/agents` through an SSM port-forward to that environment's hub until agent and monitor are online with the persona version. Needs an operator token for the hub in `PI_COMS_NET_AUTH_TOKEN_<ENV>` (or the manifest's `token_env`). |
+| `just fleet status [names]` | Credentials plus hub registration per spoke. |
+| `just fleet deploy [names] [--yes]` | preflight, tokens ensure, render, apply, publish per environment, rollout, status. |
 
-Both roots use `lifecycle ignore_changes [ami]` and
+Environments never cross: every spoke declares `env`, a hub exists per
+environment (dev in eu-shared-services-dev, prd in eu-shared-services-prd),
+tokens are minted in the spoke's own hub directory, the bundle is read from the
+own environment's bucket, and the manifest loader refuses a CIDR that appears
+under two environments.
+
+Production accounts already carry `DevOpsAgentReadOnly` for the incident
+analyzer. Their spokes use `readonly_role: adopt`: the rendered root imports
+the role (`import` block), the module keeps the existing trust statements and
+merges in one `TrustLocalPiAgent` statement for the instance role, and attaches
+only the managed `pi-coms-extensions` policy (Cost Explorer, scheduling reads,
+Bedrock invoke and the explicit Deny on secret values). The analyzer's own
+policies and trust are never replaced. The first `plan` on a production account
+shows the import and that one trust update; review it before `--yes`.
+
+Legacy roots: the two hand-written dev roots kept local state on one laptop.
+Copy each `terraform.tfstate` into the rendered root before the first
+`just fleet apply`; init migrates it into the S3 backend and the local copy can
+go. The inline `pi-coms-dev-extensions` policy is replaced by the managed
+`pi-coms-extensions` policy on that apply.
+
+Both modules use `lifecycle ignore_changes [ami]` and
 `user_data_replace_on_change = true`: **any userdata-affecting change
 replaces instances**. Always read the "forces replacement" lines of a plan.
 Per-host configuration that must not churn instances belongs in the

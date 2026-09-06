@@ -41,3 +41,7 @@ hub-tunnel *args:
 # Regenerate packages/pi-coms/AGENTS.md from agents/pi-fleet (SIO-1649)
 sync-persona:
     {{pi_just}} sync-persona
+
+# just fleet <cmd> [names]: manifest-driven fleet deploy (SIO-1653)
+fleet *args:
+    {{pi_just}} fleet "$@"

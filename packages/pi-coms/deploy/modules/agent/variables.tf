@@ -111,3 +111,14 @@ variable "repo_url" {
   description = "Git clone URL of this repo; the host clones it at boot for the extension code and bootstrap script."
   type        = string
 }
+
+variable "readonly_role_mode" {
+  description = "SIO-1653: how DevOpsAgentReadOnly is obtained. \"create\" builds the role and attaches the vendored analyzer policies (dev accounts); \"adopt\" imports the account's existing role (production accounts already carry it for the incident analyzer), adds one trust statement for the local instance role and attaches only the pi-coms-extensions policy; \"none\" keeps the legacy ViewOnlyAccess model. Empty string derives create/none from readonly_role."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "create", "adopt", "none"], var.readonly_role_mode)
+    error_message = "readonly_role_mode must be create, adopt, none or empty."
+  }
+}

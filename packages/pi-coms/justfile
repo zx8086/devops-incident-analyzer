@@ -76,3 +76,7 @@ sync-persona:
     cp "$out/AGENTS.md" "{{justfile_directory()}}/AGENTS.md"
     rm -rf "$out"
     echo "AGENTS.md regenerated from agents/pi-fleet"
+
+# Manifest-driven fleet deploy (SIO-1653): just fleet <preflight|tokens ensure|rotate|render|backend-init <env>|plan|apply [--yes]|publish|rollout|status|deploy> [names]
+fleet *args:
+    bun scripts/fleet.ts {{args}}
