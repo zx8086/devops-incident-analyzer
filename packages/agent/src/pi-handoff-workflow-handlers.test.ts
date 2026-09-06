@@ -51,14 +51,18 @@ const confirmed: PiVerdict = {
 const ctx = { threadId: "thread-1", estate: "eu-oit-prd", requestId: "thread-1" };
 
 describe("SIO-1651 isPiHandoffEnabled", () => {
-	test("defaults off", () => {
-		expect(isPiHandoffEnabled({})).toBe(false);
-		expect(isPiHandoffEnabled({ PI_HANDOFF_ENABLED: "false" })).toBe(false);
-	});
-
-	test("on for true/1", () => {
+	// SIO-1655: flipped to default ON (kill-switch semantics). The hand-off still
+	// self-skips when no hub is configured, so a deployment without pi-coms sends
+	// nothing regardless of this flag.
+	test("defaults on", () => {
+		expect(isPiHandoffEnabled({})).toBe(true);
 		expect(isPiHandoffEnabled({ PI_HANDOFF_ENABLED: "true" })).toBe(true);
 		expect(isPiHandoffEnabled({ PI_HANDOFF_ENABLED: "1" })).toBe(true);
+	});
+
+	test("off only for an explicit false or 0", () => {
+		expect(isPiHandoffEnabled({ PI_HANDOFF_ENABLED: "false" })).toBe(false);
+		expect(isPiHandoffEnabled({ PI_HANDOFF_ENABLED: "0" })).toBe(false);
 	});
 });
 

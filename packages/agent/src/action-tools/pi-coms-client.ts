@@ -124,9 +124,22 @@ function readEstateAgentMap(raw: string | undefined): Record<string, string> {
 	return {};
 }
 
+// SIO-1655: a capability flag defaults ON. Only an explicit "false" or "0" turns
+// a shipped feature off (kill-switch semantics, the HIL_LEARNING_ENABLED /
+// RESOLVE_IDENTIFIERS_ENABLED idiom). Read at CALL time, so flipping one needs a
+// restart rather than a redeploy.
+function readCapability(raw: string | undefined): boolean {
+	return raw !== "false" && raw !== "0";
+}
+
 // Defaults live here, not in the schema (project rule: no .default() in config schemas).
 export function resolvePiComsConfig(env: NodeJS.ProcessEnv = process.env): PiComsConfig {
 	return PiComsConfigSchema.parse({
+		capabilities: {
+			handoff: readCapability(env.PI_HANDOFF_ENABLED),
+			inbox: readCapability(env.PI_COMS_INBOX_ENABLED),
+			fleetGraph: readCapability(env.PI_FLEET_GRAPH_ENABLED),
+		},
 		hubs: readHubs(env),
 		estateAgentMap: readEstateAgentMap(env.PI_COMS_ESTATE_AGENT_MAP),
 		verifyTimeoutMs: readPositiveInt(

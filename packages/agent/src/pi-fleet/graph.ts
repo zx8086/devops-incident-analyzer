@@ -15,7 +15,7 @@ import { buildSubAgentSystemPrompt } from "@devops-agent/gitagent-bridge";
 import { getLogger } from "@devops-agent/observability";
 import { END, START, StateGraph } from "@langchain/langgraph";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
-import { isPiComsConfigured, resolvePiComsConfig } from "../action-tools/pi-verifier.ts";
+import { isPiComsConfigured, readPiComsCapability, resolvePiComsConfig } from "../action-tools/pi-verifier.ts";
 import { initializeLangSmith } from "../langsmith.ts";
 import { createLlm } from "../llm.ts";
 import { getAgentByName } from "../prompt-context.ts";
@@ -26,11 +26,14 @@ const logger = getLogger("agent:piFleet:graph");
 
 export const PI_FLEET_AGENT_NAME = "pi-fleet-console";
 
-// SIO-1655: default OFF until live-verified against a hub with registered
-// spokes (the CLOSURE_LEARNING_ENABLED / PI_HANDOFF_ENABLED idiom).
+// SIO-1655: default ON (kill-switch semantics, the HIL_LEARNING_ENABLED /
+// RESOLVE_IDENTIFIERS_ENABLED idiom) -- a shipped capability is available unless
+// explicitly switched off with PI_FLEET_GRAPH_ENABLED=false (or 0). Availability
+// still follows the infrastructure: the console is only offered where a pi-coms
+// hub is configured, because without one its graph cannot build. Resolved through
+// the pi-coms config so every capability gate has one declaration site.
 export function isPiFleetGraphEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-	const v = env.PI_FLEET_GRAPH_ENABLED;
-	return v === "true" || v === "1";
+	return readPiComsCapability(env, "fleetGraph");
 }
 
 export interface BuildPiFleetGraphOptions {

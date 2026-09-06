@@ -5,6 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PiComsConfig } from "@devops-agent/shared";
 import type { PiAgentCard } from "../action-tools/pi-coms-client.ts";
+import { readPiComsCapability, resolvePiComsConfig } from "../action-tools/pi-verifier.ts";
 import { buildFleetTools, releaseClients, SPOKE_TEXT_CAP, wrapUntrusted } from "./tools.ts";
 
 const config: PiComsConfig = {
@@ -15,6 +16,7 @@ const config: PiComsConfig = {
 	estateAgentMap: { "eu-oit-prd": "eu-oit-prd" },
 	verifyTimeoutMs: 1_000,
 	investigateTimeoutMs: 1_000,
+	capabilities: { handoff: true, inbox: true, fleetGraph: true },
 };
 
 type Call = { method: string; path: string; body: Record<string, unknown> | undefined };
@@ -201,5 +203,46 @@ describe("SIO-1655 fleet tools", () => {
 		const byName = new Map(buildFleetTools(deps).map((t) => [t.name, t]));
 		const out = (await byName.get("fleet_list_agents")?.invoke({ estate: "eu-oit-prd" })) as string;
 		expect(out).toContain("ECONNREFUSED");
+	});
+});
+
+describe("SIO-1655 pi-coms capability gates", () => {
+	// Capabilities are ON by default (kill-switch semantics), matching
+	// HIL_LEARNING_ENABLED and RESOLVE_IDENTIFIERS_ENABLED. Only an explicit
+	// "false" or "0" disables one.
+	test("every capability defaults on", () => {
+		expect(readPiComsCapability({}, "handoff")).toBe(true);
+		expect(readPiComsCapability({}, "inbox")).toBe(true);
+		expect(readPiComsCapability({}, "fleetGraph")).toBe(true);
+	});
+
+	test("off only for an explicit false or 0", () => {
+		expect(readPiComsCapability({ PI_FLEET_GRAPH_ENABLED: "false" }, "fleetGraph")).toBe(false);
+		expect(readPiComsCapability({ PI_FLEET_GRAPH_ENABLED: "0" }, "fleetGraph")).toBe(false);
+		expect(readPiComsCapability({ PI_HANDOFF_ENABLED: "false" }, "handoff")).toBe(false);
+		expect(readPiComsCapability({ PI_COMS_INBOX_ENABLED: "0" }, "inbox")).toBe(false);
+	});
+
+	test("any other value reads as on (a typo never silently disables a feature)", () => {
+		expect(readPiComsCapability({ PI_FLEET_GRAPH_ENABLED: "" }, "fleetGraph")).toBe(true);
+		expect(readPiComsCapability({ PI_FLEET_GRAPH_ENABLED: "no" }, "fleetGraph")).toBe(true);
+		expect(readPiComsCapability({ PI_FLEET_GRAPH_ENABLED: "FALSE" }, "fleetGraph")).toBe(true);
+	});
+
+	test("each capability reads its own variable, not another's", () => {
+		const env = { PI_HANDOFF_ENABLED: "false" };
+		expect(readPiComsCapability(env, "handoff")).toBe(false);
+		expect(readPiComsCapability(env, "inbox")).toBe(true);
+		expect(readPiComsCapability(env, "fleetGraph")).toBe(true);
+	});
+
+	test("resolvePiComsConfig carries the capabilities into the parsed config", () => {
+		const resolved = resolvePiComsConfig({
+			PI_COMS_NET_SERVER_URL: "http://hub.test",
+			PI_COMS_NET_AUTH_TOKEN: "tok",
+			PI_COMS_NET_ENVIRONMENT: "prd",
+			PI_FLEET_GRAPH_ENABLED: "false",
+		});
+		expect(resolved.capabilities).toEqual({ handoff: true, inbox: true, fleetGraph: false });
 	});
 });

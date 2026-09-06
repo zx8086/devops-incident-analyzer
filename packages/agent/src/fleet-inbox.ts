@@ -12,6 +12,7 @@ import type {
 	PiComsEnvironment,
 } from "@devops-agent/shared";
 import type { PiInboxMessage } from "./action-tools/pi-coms-client.ts";
+import { readPiComsCapability } from "./action-tools/pi-verifier.ts";
 import type { AgentStateType } from "./state.ts";
 
 export const EXCERPT_MAX = 280;
@@ -27,10 +28,11 @@ const DEFAULT_WINDOW_MS = 24 * 3600_000;
 const DEFAULT_EXCLUDED_SENDER_PREFIXES = ["incident-analyzer-", "pi-fleet-"];
 const TERMINAL_STATUSES = new Set(["complete", "error", "timeout"]);
 
-// Default OFF, same form as KNOWLEDGE_GRAPH_ENABLED: only "true" or "1" enables.
+// SIO-1655: default ON (kill-switch semantics). Set PI_COMS_INBOX_ENABLED=false
+// (or 0) to disable. The node self-skips when no hub is configured, so a
+// deployment without pi-coms is unaffected either way.
 export function isFleetInboxEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-	const v = env.PI_COMS_INBOX_ENABLED;
-	return v === "true" || v === "1";
+	return readPiComsCapability(env, "inbox");
 }
 
 export function fleetInboxTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {

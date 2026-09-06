@@ -9,6 +9,7 @@ import {
 	PI_INVESTIGATION_RESPONSE_SCHEMA,
 	PI_VERDICT_RESPONSE_SCHEMA,
 	type PiActionResultPayload,
+	type PiComsCapabilities,
 	type PiComsConfig,
 	type PiComsEnvironment,
 	PiComsEnvironmentSchema,
@@ -30,6 +31,28 @@ import {
 
 // Re-exported so executor.ts and the tests keep their import path.
 export { isPiComsConfigured, resolvePiComsConfig };
+
+// SIO-1655: the single read point for a pi-coms capability gate. Resolving through
+// the config keeps every gate declared in PiComsCapabilitiesSchema rather than as
+// an ad-hoc process.env read at each call site, and gives them all one default
+// rule (ON unless explicitly "false"/"0").
+//
+// Deliberately does NOT require a configured hub: whether a capability is WANTED
+// is separate from whether the infrastructure to serve it exists, and each caller
+// already handles an unconfigured hub (the inbox node self-skips, runPiHandoff
+// returns "skipped", the console is filtered out of the agent selector). Reading
+// the flag alone therefore stays cheap and side-effect free -- resolvePiComsConfig
+// would throw here when no hub is set.
+export function readPiComsCapability(env: NodeJS.ProcessEnv, capability: keyof PiComsCapabilities): boolean {
+	const raw = env[PI_COMS_CAPABILITY_ENV[capability]];
+	return raw !== "false" && raw !== "0";
+}
+
+const PI_COMS_CAPABILITY_ENV: Record<keyof PiComsCapabilities, string> = {
+	handoff: "PI_HANDOFF_ENABLED",
+	inbox: "PI_COMS_INBOX_ENABLED",
+	fleetGraph: "PI_FLEET_GRAPH_ENABLED",
+};
 
 const logger = getLogger("agent:action-tools:pi-verifier");
 

@@ -57,6 +57,23 @@ export const PiComsHubConfigSchema = z.object({
 });
 export type PiComsHubConfig = z.infer<typeof PiComsHubConfigSchema>;
 
+// SIO-1655: the pi-coms CAPABILITY gates, alongside the connection settings they
+// govern, so every pi-coms knob is declared in one schema rather than read ad hoc
+// from process.env at the call site. Capabilities default ON (kill-switch
+// semantics, the HIL_LEARNING_ENABLED / RESOLVE_IDENTIFIERS_ENABLED idiom): a
+// feature that shipped is available unless it is explicitly switched off. As with
+// every field here there is no .default() in the schema -- defaults live in
+// resolvePiComsConfig (project rule).
+export const PiComsCapabilitiesSchema = z.object({
+	// The post-turn hand-off that verifies a closed incident with its estate spoke.
+	handoff: z.boolean(),
+	// The fetchFleetInbox enrichment node.
+	inbox: z.boolean(),
+	// The in-process fleet console graph (Phase 2c).
+	fleetGraph: z.boolean(),
+});
+export type PiComsCapabilities = z.infer<typeof PiComsCapabilitiesSchema>;
+
 export const PiComsConfigSchema = z.object({
 	hubs: z
 		.partialRecord(PiComsEnvironmentSchema, PiComsHubConfigSchema)
@@ -64,5 +81,6 @@ export const PiComsConfigSchema = z.object({
 	estateAgentMap: z.record(z.string(), z.string()),
 	verifyTimeoutMs: z.number().int().positive(),
 	investigateTimeoutMs: z.number().int().positive(),
+	capabilities: PiComsCapabilitiesSchema,
 });
 export type PiComsConfig = z.infer<typeof PiComsConfigSchema>;
