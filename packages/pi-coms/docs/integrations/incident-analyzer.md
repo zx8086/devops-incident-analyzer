@@ -34,6 +34,20 @@ with `PI_COMS_NET_SERVER_URL` pointing at the hub (the SSM tunnel,
 project the spokes registered under. Revoke with `just token-revoke
 incident-analyzer`; the hub drops it on its next directory refresh.
 
+## The pane principal (SIO-1650)
+
+The analyzer web app also carries a live-spoke pane that registers senders as
+`pi-fleet-<8 hex>`. On a directory-mode hub that prefix is its own principal:
+
+```bash
+just token-create pi-fleet "pi-fleet-*" service [profile]
+```
+
+The token goes into the analyzer's `PI_COMS_PANE_TOKENS` keyed by environment.
+Unset, the pane reuses the hub token from `PI_COMS_HUBS` (token-mode hubs, or
+`PI_COMS_PANE_SENDER_PREFIX=incident-analyzer`). See
+`docs/architecture/pi-fleet-pane.md` in the monorepo.
+
 ## Wire sequence per action
 
 ```text

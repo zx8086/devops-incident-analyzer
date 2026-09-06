@@ -83,9 +83,9 @@ Agent connects to MCP servers via `MultiServerMCPClient` from `@langchain/mcp-ad
 
 ### Frontend
 
-SvelteKit with Svelte 5 runes, Tailwind CSS (Tommy Hilfiger brand palette), SSE streaming. 9 components: ChatMessage, ChatInput, Icon, MarkdownRenderer, StreamingProgress, CompletedProgress, FeedbackBar, FollowUpSuggestions, DataSourceSelector.
+SvelteKit with Svelte 5 runes, Tailwind CSS (Tommy Hilfiger brand palette), SSE streaming. 9 components: ChatMessage, ChatInput, Icon, MarkdownRenderer, StreamingProgress, CompletedProgress, FeedbackBar, FollowUpSuggestions, DataSourceSelector, plus the SIO-1572 `GraphTriagePanel` and the SIO-1650 `PiFleetPane` split-screen panes (the fleet pane mounts only when `/api/pi/agents` reports a configured pi-coms hub).
 
-Action cards (`ActionConfirmationCard`) carry four tools: `notify-slack`, `create-ticket` (LLM-proposed, severity-gated) and `verify-with-pi`, `investigate-with-pi` (SIO-1635, deterministic per assessed AWS estate when the pi-coms hub is configured; see `docs/architecture/pi-coms-verification.md`; hubs are per environment via `PI_COMS_HUBS`, chosen by the estate suffix, never across environments). Executed actions stay in `pendingActions` so their card can show the result. The Agent Memory identity map in `memory-backend.ts` throws for unregistered agent names.
+Action cards (`ActionConfirmationCard`) carry four tools: `notify-slack`, `create-ticket` (LLM-proposed, severity-gated) and `verify-with-pi`, `investigate-with-pi` (SIO-1635, deterministic per assessed AWS estate when the pi-coms hub is configured; see `docs/architecture/pi-coms-verification.md`; hubs are per environment via `PI_COMS_HUBS`, chosen by the estate suffix, never across environments). Executed actions stay in `pendingActions` so their card can show the result. The Agent Memory identity map in `memory-backend.ts` throws for unregistered agent names. The pi-fleet pane (SIO-1650, `apps/web/src/lib/server/pi-fleet.ts`, `/api/pi/{agents,messages,mailbox}`) addresses live spokes directly through the same hub client: one 25 s await slice per request, browser re-polls by message id, replies rendered as data and never fed to an LLM; see `docs/architecture/pi-fleet-pane.md`.
 
 ## Commands
 
