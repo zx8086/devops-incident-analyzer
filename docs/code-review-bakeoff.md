@@ -38,6 +38,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#681](https://github.com/zx8086/devops-incident-analyzer/pull/681) | 2026-09-01 | 0 | n/a (SKIPPED, docs-only) | n/a (no review) | Periodic AWS self-check strategy doc; auto-trigger logged as terminal SKIPPED (MCP-confirmed before any long wait, per the #680 lesson), CodeRabbit silent through a 30-min watch; merged on green CI; detail below |
 | [#683](https://github.com/zx8086/devops-incident-analyzer/pull/683) | 2026-09-05 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1640 agent-toolkit-for-aws content port (7 files incl. wrap.ts + 2 tests); auto-trigger logged terminal SKIPPED within ~100 ms, CodeRabbit silent (5th straight); first CODE PR merged on a skip, on green CI + MCP-confirmed SKIPPED + explicit per-PR user instruction; detail below |
 | [#684](https://github.com/zx8086/devops-incident-analyzer/pull/684) | 2026-09-05 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1641 SSE pump node allowlist derived from the compiled graph (14 files, all apps/web + 1 doc); auto-trigger logged terminal SKIPPED within ~150 ms, CodeRabbit silent (6th straight); merged on green CI + MCP-confirmed SKIPPED + explicit per-PR user instruction; detail below |
+| [#689](https://github.com/zx8086/devops-incident-analyzer/pull/689) | 2026-09-06 | 0 | n/a (SKIPPED, docs-only) | n/a (no review) | pi-fleet gitagent feasibility report (docs only); every head logged terminal SKIPPED within 125-160 ms via MCP, CodeRabbit silent (10th straight); merge decision left to the user; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -533,3 +534,18 @@ A code PR: 3 files (gitlab-import source + test, one doc). It stops the `bootstr
 1. *Eighth code-class skip, smallest diff of the run (3 files) and same signature.* Diff size is irrelevant to the skip; the SIO-1642 cause is unchanged.
 2. *The 401 was a config-propagation trap, not a code bug* -- the same rotated token worked for the separately-restarted elastic-iac MCP (bun `--env-file`) while the Vite web process kept the stale value. The backoff makes an invalid token cost one warn per 15 min instead of per trigger; the real remedy (restart after rotation) is now documented at the point it bites.
 3. *Self-verified.* Unit tests for the backoff helper (expired window, changed-token clear, 401 vs 500 handling) and live confirmation that both the rotated `ELASTIC_IAC_GITLAB_TOKEN` and `GITLAB_PERSONAL_ACCESS_TOKEN` reach GitLab (commits + pipelines 200) so the 401 was purely the stale in-process value.
+
+## PR #689 detail (pi-fleet gitagent feasibility report)
+
+A docs-only PR: `docs/architecture/pi-fleet-gitagent-feasibility.md` (new) plus the docs index row and changelog entry in `docs/README.md`, later the fleet-inbox section and this ledger row. No code. Tenth consecutive PR logged SKIPPED (#680 to #689: three docs-only, seven code-class).
+
+**Greptile:** four pushes before the rebase onto main, four terminal **SKIPPED** reviews (MCP `list_code_reviews` ids 22779277, 22779340, 22779474, 22780001 on heads `27289de8`, `c7804168`, `63b2cf14`, `98044af0`), `changedFiles` = the docs files, `completedAt` 125-160 ms after `createdAt`, `strictness: 2`, body null. No status check, no comment, no review object. Consulted the MCP after each push; no re-trigger attempted, per the #682 finding that all three trigger paths skip identically.
+
+**CodeRabbit:** nothing, through CI completion on every head. Tenth consecutive absence (#679 to #689).
+
+**Merge gate:** CI green, Greptile SKIPPED on the head SHA via MCP, zero findings to triage. Not merged by the session: the report ends with a merge decision that belongs to the user.
+
+**Takeaways:**
+
+1. *The skip signature is unchanged for a pure-markdown diff*, which keeps the SIO-1642 account-level cause as the only lead. Nothing in this PR could have exercised a reviewer anyway.
+2. *A side effect worth recording for docs PRs that plan future work:* the first head's title named the three phase issues (SIO-1649, SIO-1650, SIO-1651); Linear's GitHub integration linked the PR to all three within a minute and moved them from Backlog to In Progress, and a merge would have closed them. The commit, title and body were amended to drop the identifiers, the attachments deleted, and the issues restored to Backlog. Planning documents must reference their issues only inside the document body, never in the PR title, branch name or commit subject.
