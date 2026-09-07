@@ -931,3 +931,56 @@ Observability work rather than a bug fix, prompted by the operator noticing ther
 3. *Adding logging can create its own noise, and the fix belongs at the seam.* Heartbeats route through the same `http()` and fire once per await slice, so at info they would have emitted a line every 25 s and buried the calls that matter. They log at debug via a path check inside `http()`, not by skipping instrumentation.
 4. *A redaction rule with no enforcement mechanism has to be enforced by construction.* `packages/observability/src/logger.ts` has no redact config, so every log call was written to carry identity and outcome only, then verified against REAL output by grepping the running server's log for the actual tokens from `.env`, the `Bearer` header and the probe's prompt text -- all absent. Reading the diff would not have proved that.
 5. *The acceptance test was the original incident, replayed.* Re-triggering the 403 now produces three lines pairing the sender name with `name_not_allowed` on `POST /v1/agents/register` -- the whole diagnosis, no curl. Verifying observability work means reproducing the failure it was meant to explain, not just confirming the code compiles.
+
+## PR #710 detail (SIO-1661, name the rejected sender when pi-coms registration fails)
+
+The other half of the `403 name_not_allowed` investigation that produced #709. Where that
+PR made the failure visible in the server log, this one makes it legible in the response
+body the operator actually sees. Four files, two of them tests.
+
+**Greptile:** terminal **SKIPPED** three times -- id 22919165 on `8541481e`, then 22919493
+and 22919793 on `f2232685` after an explicit `trigger_code_review` via the MCP. 113-130 ms
+each, `strictness: 2`, body null. Thirty-first consecutive skip, and the first entry where
+a deliberate re-trigger was tried and skipped identically, which is further evidence the
+cause is account-level rather than per-PR or per-commit.
+
+**CodeRabbit:** nothing, through CI completion. Thirty-first consecutive absence (#679 to #710).
+
+**Merge gate:** all five CI jobs green. Zero findings to triage. Held for the user's
+explicit per-PR go-ahead rather than merged.
+
+**Takeaways:**
+
+1. *The information needed to diagnose the 403 was already on the wire and thrown away.*
+   The hub answers `errorJson("name_not_allowed", 403, { name, principal })`, and the
+   client's `http()` extracted only `.error`, dropping `details`. The fix is a pass-through,
+   not new data. Worth checking what an upstream already sends before concluding a failure
+   is inherently opaque.
+2. *An error's most useful context often lives in a frame that does not see the failure.*
+   `senderNameFor()` ran only after a successful register, so the one frame that knew the
+   attempted name never saw the rejection. Two small rethrows -- the client adds the name,
+   the pane adds the hub and prefix -- compose into a complete message without either layer
+   knowing the whole story.
+3. *Preserving an error's TYPE across a rethrow was the real hazard.* `piFleetErrorResponse`
+   maps `PiComsHttpError` to 502 and everything else to 500, so wrapping in a plain `Error`
+   would have silently changed the status. `withContext()` returns the same class, and the
+   test asserts the resulting 502 rather than only the message text.
+4. *A passing new test proves nothing until it has been made to fail.* The pane test was
+   verified by deliberately breaking the implementation: it failed with
+   `Expected to contain: "prd hub"`, and the surviving output confirmed the client layer had
+   still contributed the sender name. That one run distinguished a real assertion from a
+   vacuous one and also demonstrated the two layers compose.
+5. *"Pre-existing failure" is a claim that needs proof, not assertion.* 15 `packages/agent`
+   test failures and the `packages/pi-coms` typecheck errors were reproduced by stashing the
+   change, re-running, and restoring -- identical counts. Both are artifacts of this worktree
+   (missing vendored Pi deps); the same jobs are green in CI.
+6. *A ticket's premise can be wrong even when its conclusion is right.* SIO-1660 states the
+   shared logger has NO redaction. It does (`packages/shared/src/logger.ts:107`), and `token`
+   IS redacted -- but `authToken` is absent from `SENSITIVE_KEYS` and paths only go two deep,
+   so the pi-coms secret leaks at every level. Confirmed by running the logger, not by reading
+   it. The operational advice held; the reason given for it did not.
+7. *Concurrent work on the same files is a merge problem, not a race to be won.* SIO-1660
+   merged mid-implementation, touching both files including `http()` and `sendFleetMessage`.
+   The changes were complementary -- a log for whoever watches the server, an explanation for
+   whoever watches the browser -- so the resolution kept both and re-ran the live render to
+   confirm behaviour survived.

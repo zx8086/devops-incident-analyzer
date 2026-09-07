@@ -3,7 +3,7 @@
 // fetch. The real PiComsClient runs; only the hub is faked. This file does not
 // mock @devops-agent/agent (the package test script runs with --isolate).
 import { describe, expect, test } from "bun:test";
-import type { FetchLike } from "@devops-agent/agent";
+import { type FetchLike, PiComsHttpError } from "@devops-agent/agent";
 import {
 	awaitFleetMessage,
 	listFleetAgents,
@@ -12,6 +12,7 @@ import {
 	resolvePaneConfig,
 	sendFleetMessage,
 } from "./pi-fleet.ts";
+import { piFleetErrorResponse } from "./pi-fleet-http.ts";
 
 type Call = { method: string; url: string; path: string; auth: string | undefined; body: unknown };
 type Route = (call: Call) => { status?: number; body?: unknown } | undefined;
@@ -161,6 +162,52 @@ describe("sendFleetMessage", () => {
 			prompt: "Is the ALB healthy?",
 			response_schema: null,
 		});
+	});
+
+	// SIO-1661: the misconfiguration that cost a session of curl probing against a
+	// live hub. The prefix has no principal, so register is refused -- while
+	// listing keeps working (it needs only the bearer token), which is exactly what
+	// made it read as a spoke problem. The error must name the sender and the fix.
+	test("a refused registration names the rejected sender, the hub and the remedy, and stays a 502", async () => {
+		const { calls, fetchImpl } = hubFake((call) => {
+			if (call.path === "/v1/agents/register") {
+				const name = (call.body as { name: string }).name;
+				return {
+					status: 403,
+					body: { ok: false, error: "name_not_allowed", details: { name, principal: "incident-analyzer" } },
+				};
+			}
+			return undefined;
+		});
+
+		const err = await sendFleetMessage(
+			{ environment: "prd", target: "eu-oit-prd", prompt: "Is the ALB healthy?" },
+			{ env, fetchImpl, now: () => 1_000 },
+		).then(
+			() => undefined,
+			(e: unknown) => e,
+		);
+
+		// Still a PiComsHttpError, so piFleetErrorResponse answers 502 and not 500.
+		expect(err).toBeInstanceOf(PiComsHttpError);
+		const { message, status, code } = err as InstanceType<typeof PiComsHttpError>;
+		expect(status).toBe(403);
+		expect(code).toBe("name_not_allowed");
+		expect(piFleetErrorResponse(err).status).toBe(502);
+
+		// The first line keeps the original format; the detail is added below it.
+		expect(message.split("\n")[0]).toBe("pi-coms hub POST /v1/agents/register failed: 403 name_not_allowed");
+		const sender = (calls[0]?.body as { name: string } | undefined)?.name;
+		expect(sender).toMatch(/^pi-fleet-[0-9a-f]{8}$/);
+		expect(message).toContain(`sender "${sender}"`);
+		expect(message).toContain('principal "incident-analyzer"');
+		expect(message).toContain("prd hub");
+		expect(message).toContain("PI_COMS_PANE_SENDER_PREFIX=pi-fleet");
+		expect(message).toContain('just token-create pi-fleet "pi-fleet-*" service');
+
+		// Nothing was sent, and no token leaked into the message.
+		expect(calls.map((c) => `${c.method} ${c.path.split("?")[0]}`)).toEqual(["POST /v1/agents/register"]);
+		expect(message).not.toContain("pane-prd-tok");
 	});
 
 	test("a spoke that does not answer within the slice yields budget_exhausted, not a hung request", async () => {

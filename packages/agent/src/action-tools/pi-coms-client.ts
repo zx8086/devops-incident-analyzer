@@ -177,16 +177,48 @@ export type PiSendOptions = {
 	conversationId?: string | null;
 };
 
+// The hub reports a rejection as { error, details }, where details carries the
+// operator-relevant nouns (a refused registration names the desired name and the
+// principal that refused it -- coms-net-server.ts errorJson). SIO-1661: keep that
+// detail on the error instead of discarding it, and let a caller that knows more
+// than the transport append a line explaining the fix. The first line keeps the
+// original format byte-for-byte: pi-fleet-http.ts and existing tests read it.
 export class PiComsHttpError extends Error {
 	readonly status: number;
 	readonly code: string;
+	readonly details: PiComsErrorDetails;
 
-	constructor(status: number, code: string, method: string, path: string) {
+	constructor(status: number, code: string, method: string, path: string, details: PiComsErrorDetails = {}) {
 		super(`pi-coms hub ${method} ${path} failed: ${status} ${code}`);
 		this.name = "PiComsHttpError";
 		this.status = status;
 		this.code = code;
+		this.details = details;
 	}
+
+	// Returns a new error of the SAME type carrying extra explanatory lines.
+	// Preserving the type matters: piFleetErrorResponse maps PiComsHttpError to
+	// 502 and anything else to 500, so a plain Error here would change the status.
+	withContext(...lines: string[]): PiComsHttpError {
+		const next = new PiComsHttpError(this.status, this.code, "", "", this.details);
+		next.message = [this.message, ...lines].join("\n");
+		next.stack = this.stack;
+		return next;
+	}
+}
+
+export type PiComsErrorDetails = { name?: string; principal?: string };
+
+// The hub's details object, narrowed. Unknown shapes degrade to {} rather than
+// throwing: a diagnostic path must never be the thing that breaks the request.
+function readErrorDetails(parsed: unknown): PiComsErrorDetails {
+	if (typeof parsed !== "object" || parsed === null || !("details" in parsed)) return {};
+	const raw = parsed.details;
+	if (typeof raw !== "object" || raw === null) return {};
+	const details: PiComsErrorDetails = {};
+	if ("name" in raw && typeof raw.name === "string") details.name = raw.name;
+	if ("principal" in raw && typeof raw.principal === "string") details.principal = raw.principal;
+	return details;
 }
 
 // Directory-mode hubs bind names to principals and answer 409 name_taken when a
@@ -288,7 +320,7 @@ export class PiComsClient {
 					{ method, path, status: resp.status, error: code, duration_ms: this.now() - started },
 					"pi.hub.call.failed",
 				);
-				throw new PiComsHttpError(resp.status, code, method, path);
+				throw new PiComsHttpError(resp.status, code, method, path, readErrorDetails(parsed));
 			}
 			// Heartbeats fire on a timer during every await slice; logging them at
 			// info would bury the calls that matter under a beat every 25 s.
@@ -318,10 +350,27 @@ export class PiComsClient {
 	}
 
 	async register(): Promise<void> {
+		const name = senderNameFor(this.sessionId, this.senderPrefix);
+		try {
+			await this.registerAs(name);
+		} catch (error) {
+			// SIO-1661: this is the only frame that knows the name it just sent, and
+			// a rejection is always ABOUT that name (403 name_not_allowed when no
+			// principal covers it, 409 name_taken when a live session holds it). Kept
+			// generic over the status: the hub uses one details shape for both.
+			if (error instanceof PiComsHttpError) {
+				const principal = error.details.principal;
+				throw error.withContext(`  (sender "${name}"${principal ? `; principal "${principal}"` : ""})`);
+			}
+			throw error;
+		}
+	}
+
+	private async registerAs(name: string): Promise<void> {
 		await this.http("POST", "/v1/agents/register", {
 			project: this.hub.project,
 			session_id: this.sessionId,
-			name: senderNameFor(this.sessionId, this.senderPrefix),
+			name,
 			purpose: "DevOps incident analyzer: report verification and investigation handoff",
 			model: "none",
 			color: "#00174F",
