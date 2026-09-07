@@ -1,28 +1,36 @@
-# HANDOFF 2026-09-07 — cannot speak to a pi-coms spoke (reads work, sends 403)
+# HANDOFF 2026-09-07 — pi-coms spoke connectivity + fleet observability
 
 **Date**: 2026-09-07
-**Repo state**: `main` @ `972c2887`, clean tree
+**Repo state**: `main` @ `36ae39e3`, clean tree
 **Suggested branch**: `claude/pi-coms-sender-principal`
-**Linear**: none yet — create one before implementing (project rule).
+**Linear**: https://linear.app/siobytes/issue/SIO-1660 (logging). Problem 1 is a
+config change and needs an issue only if it turns into code.
 Relates to https://linear.app/siobytes/issue/SIO-1650 (fleet pane),
 https://linear.app/siobytes/issue/SIO-1653 (fleet deploy CLI),
 https://linear.app/siobytes/issue/SIO-1635 (hub client)
 
 ## TL;DR
 
-Two **separate** problems, both diagnosed to root cause and both **configuration,
-not code**. No code fix is required for either.
+Three findings. The first two are **configuration, not code** — no code fix is
+required for either. The third is a real gap and is ticketed.
 
 1. **Sending to a spoke fails with `403 name_not_allowed`** (reads work). The
    fleet pane registers a sender named `pi-fleet-<sessionId>`, but no principal
    on the prd hub allows that name. Fix: mint a `pi-fleet` principal and set
    `PI_COMS_PANE_TOKENS`, **or** set `PI_COMS_PANE_SENDER_PREFIX=incident-analyzer`
    to reuse the principal that already exists. One line either way.
-2. **`just coms eu-shared-services-prd simon` cannot reach the hub.** It was run
-   from the **standalone `~/WebstormProjects/pi-coms` repo**, which has no
+2. **`just coms eu-shared-services-prd simon` could not reach the hub** --
+   **RESOLVED 2026-09-07, confirmed working by the operator.** It was run from
+   the **standalone `~/WebstormProjects/pi-coms` repo**, which has no
    `deploy/fleet.yaml` and an **old justfile without `--strict-selector`**. It
    silently fell through to a local hub on 8787 (nothing listening). The
-   monorepo copy resolves correctly. Fix: run it from the monorepo.
+   monorepo copy resolves correctly. Running it from the monorepo fixed it; the
+   hardening note below is still open, so the trap can be re-entered.
+
+3. **The fleet path is effectively unobservable** -- 10 log calls across ~1,600
+   lines, ZERO on the whole web surface. This is why problem 1 needed manual
+   curl probing. Written up as
+   https://linear.app/siobytes/issue/SIO-1660; see "Problem 3" below.
 
 Everything else is healthy: the prd tunnel is up on 8788, the hub authenticates,
 and all three prd spokes report `status: "online"`.
@@ -215,6 +223,64 @@ wrong port. Two cheap options:
 
 Neither is required to unblock; both prevent a repeat.
 
+## Problem 3 — the fleet path has almost no logging (SIO-1660)
+
+Diagnosing problem 1 took a sequence of hand-rolled curl probes against a live
+production hub. It should have taken one glance at the server log. It could not,
+because nothing in the request path logs anything.
+
+### Measured
+
+| File | Lines | Log calls |
+|---|---|---|
+| `apps/web/src/lib/server/pi-fleet.ts` | 237 | **0** |
+| `apps/web/src/routes/api/pi/{agents,mailbox,messages}/+server.ts` | — | **0** |
+| `packages/agent/src/action-tools/pi-coms-client.ts` | 385 | 3 |
+| `packages/agent/src/action-tools/pi-verifier.ts` | 489 | 5 |
+| `packages/agent/src/pi-fleet/{tools,graph}.ts` | — | 2 |
+
+10 calls across ~1,600 lines, and **8 of the 10 are warn/error on config or
+schema edge cases**. Almost nothing describes normal operation, and the entire
+web-facing surface is silent.
+
+### The one seam that matters most
+
+Every hub call funnels through `pi-coms-client.ts:245`:
+
+```ts
+private async http<T>(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<T>
+```
+
+It already throws `PiComsHttpError(resp.status, code, method, path)` — precisely
+the data problem 1 needed — but never logs it, so it only survives if a caller
+surfaces it. Instrumenting this ONE method would have printed
+`403 name_not_allowed on POST /v1/agents/register` the first time the operator
+clicked send.
+
+### Decisions already taken (do not re-litigate)
+
+- **info for normal operation**, warn/error for failures — the flow must be
+  visible in a normal dev run without raising `LOG_LEVEL`.
+- **`duration_ms` on every hub call** — makes the 25 s await slice and hub
+  latency visible, and shows a tunnel degrading before it fails outright.
+- Follow the existing dotted-event convention
+  (`apps/web/src/routes/api/agent/stream/+server.ts:111,246`:
+  `agent.request.start` / `.end`). Suggested namespace: `pi.fleet.*` / `pi.hub.*`.
+- `heartbeat` (`pi-coms-client.ts:319`) stays quiet or debug — it fires on a
+  timer and would drown the log.
+
+### Hard constraint
+
+`packages/observability/src/logger.ts` has **no redaction configuration**:
+whatever is passed is emitted. Never log `authToken` (a live secret in
+`PI_COMS_HUBS`) or the `hub` object that carries it, and never log `prompt` or
+spoke reply text — hub replies are data, never an LLM input outside
+`wrapUntrusted` (the PR #682 invariant), and incident content must not leak into
+logs. Log identity and outcome only: `environment`, `project`, `target`,
+`msg_id`, `status`, HTTP `status`, `error` code, `duration_ms`.
+
+Full scope, seams and acceptance criteria are in SIO-1660.
+
 ## Files to modify
 
 | File | Change |
@@ -222,9 +288,13 @@ Neither is required to unblock; both prevent a repeat.
 | `.env` (monorepo, gitignored) | add `PI_COMS_PANE_SENDER_PREFIX=incident-analyzer` (Option A) **or** `PI_COMS_PANE_TOKENS` (Option B) |
 | `.env.example` | document whichever key is chosen, with the principal contract |
 | `packages/pi-coms/justfile` | *(optional)* fail loudly when the manifest is missing but a selector was given |
+| `packages/agent/src/action-tools/pi-coms-client.ts` | SIO-1660: log `http()` + the lifecycle methods |
+| `apps/web/src/lib/server/pi-fleet.ts`, `apps/web/src/routes/api/pi/*/+server.ts` | SIO-1660: request start/end |
 
-No application code changes are expected. `pi-fleet.ts` already implements both
-options; this is a configuration gap the code comment at `:27-30` predicted.
+No application code changes are expected **for problems 1 and 2**. `pi-fleet.ts`
+already implements both options; that is a configuration gap the code comment at
+`:27-30` predicted. The logging work (SIO-1660) is the only code change here, and
+it is independent — it can land before or after the config fix.
 
 ## Verification (full)
 
