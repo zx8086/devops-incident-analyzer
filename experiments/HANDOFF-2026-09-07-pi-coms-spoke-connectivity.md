@@ -484,10 +484,20 @@ Results:
 Two different spokes, two fresh registrations, no `403`. The tunnel was torn
 down afterwards and `lsof -nP -iTCP:8788 -sTCP:LISTEN` confirmed free.
 
-**Still unverified:** the dev hub. `PI_COMS_PANE_SENDER_PREFIX` applies to BOTH
-environments, so once a dev tunnel exists the dev hub's principal list must also
-allow `incident-analyzer-*` or dev will 403 exactly as prd did. Check with
-`just token-list <dev profile>` before assuming dev works.
+**Dev hub: VERIFIED 2026-09-07, no change needed.** The concern was that
+`PI_COMS_PANE_SENDER_PREFIX` applies to BOTH environments, so dev might 403 as
+prd did. It does not -- dev already carries the same principal:
+
+```
+incident-analyzer   kind=service   names=incident-analyzer-*
+```
+
+and the dev token in `PI_COMS_HUBS` matches that principal's SSM token (compared
+by SHA-256, never printed). Confirmed live over a dev tunnel: 4 spokes online,
+and a send to `eu-shared-services-dev` returned HTTP 200 / `status: complete` as
+`incident-analyzer-6db1b46a`, the spoke replying with its own account id
+352896877281 (correct account -- no cross-environment leakage). Tunnel torn down;
+8787 free. Both hubs are now proven end to end.
 
 **Operational note:** a pane showing `fetch failed` on EVERY hub is most often
 expired AWS credentials, not a pi-coms fault — check
