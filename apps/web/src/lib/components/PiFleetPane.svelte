@@ -15,6 +15,7 @@ let {
 	onRefresh,
 	onSelect,
 	onLoadMailbox,
+	onAskAll,
 }: {
 	pane: PiFleetState;
 	busy: boolean;
@@ -23,6 +24,11 @@ let {
 	onRefresh: () => void;
 	onSelect: (selection: PiFleetSelection | null) => void;
 	onLoadMailbox: (environment: PiFleetEnvironment) => void;
+	// SIO-1662: switch to the fleet-console AGENT. Distinct from onSend, which
+	// addresses ONE spoke and renders its raw reply here: the console asks several
+	// spokes and synthesizes one attributed answer in the chat. Optional, so the
+	// pane still renders where the console is not available (no hub, flag off).
+	onAskAll?: () => void;
 } = $props();
 
 let prompt = $state("");
@@ -85,6 +91,20 @@ function shortPrompt(text: string): string {
     <div>
       <h2 class="text-sm font-semibold text-tommy-navy">Fleet spokes</h2>
       <p class="text-xs text-gray-500">Live pi agents on the pi-coms hubs. Replies are shown as data.</p>
+      <!-- SIO-1662: the fleet console lives here rather than as a second header
+           icon. Below the description because it LEAVES this pane: it switches
+           agent, where one question reaches several spokes and comes back as one
+           attributed answer, instead of the raw single-spoke reply shown here. -->
+      {#if onAskAll}
+        <button
+          type="button"
+          onclick={onAskAll}
+          class="mt-1 text-xs font-medium text-tommy-accent-blue hover:underline disabled:opacity-50 disabled:no-underline"
+          disabled={busy}
+        >
+          Ask all spokes at once &rarr;
+        </button>
+      {/if}
     </div>
     <button
       type="button"
