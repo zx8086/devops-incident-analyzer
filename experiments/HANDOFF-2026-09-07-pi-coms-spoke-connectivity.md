@@ -1,24 +1,34 @@
 # HANDOFF 2026-09-07 — pi-coms spoke connectivity + fleet observability
 
 **Date**: 2026-09-07
-**Repo state**: `main` @ `36ae39e3`, clean tree
-**Suggested branch**: `claude/pi-coms-sender-principal`
-**Linear**: https://linear.app/siobytes/issue/SIO-1660 (logging). Problem 1 is a
-config change and needs an issue only if it turns into code.
+**Repo state**: `main` @ `738593b1`, clean tree
+**Status**: **ALL THREE RESOLVED 2026-09-07.** Kept for the diagnosis trail and
+the two open hardening notes (justfile fall-through, stale standalone clone).
+**Linear**: https://linear.app/siobytes/issue/SIO-1660 (logging, merged as PR
+#709), https://linear.app/siobytes/issue/SIO-1661 (surface the rejected sender,
+merged as PR #710). Problem 1's config half needed no issue.
 Relates to https://linear.app/siobytes/issue/SIO-1650 (fleet pane),
 https://linear.app/siobytes/issue/SIO-1653 (fleet deploy CLI),
 https://linear.app/siobytes/issue/SIO-1635 (hub client)
 
 ## TL;DR
 
-Three findings. The first two are **configuration, not code** — no code fix is
-required for either. The third is a real gap and is ticketed.
+Three findings, **all three now resolved**. The first two were configuration;
+problem 1 also turned out to have a code half worth fixing (the error was
+undiagnosable, not just wrong), and problem 3 was a real gap. Both code halves
+are merged.
 
-1. **Sending to a spoke fails with `403 name_not_allowed`** (reads work). The
-   fleet pane registers a sender named `pi-fleet-<sessionId>`, but no principal
-   on the prd hub allows that name. Fix: mint a `pi-fleet` principal and set
-   `PI_COMS_PANE_TOKENS`, **or** set `PI_COMS_PANE_SENDER_PREFIX=incident-analyzer`
-   to reuse the principal that already exists. One line either way.
+1. **Sending to a spoke failed with `403 name_not_allowed`** (reads worked) --
+   **RESOLVED 2026-09-07, verified end to end against the live prd hub.** The
+   fleet pane registered a sender named `pi-fleet-<sessionId>`, but no principal
+   on the prd hub allowed that name. Fixed by setting
+   `PI_COMS_PANE_SENDER_PREFIX=incident-analyzer` (Option A below), reusing the
+   principal that already exists.
+
+   A **second, separate** defect surfaced while diagnosing it: the error named
+   neither the sender it tried to register nor the principal that refused it,
+   even though the hub sends both -- which is why this took hand-rolled curl
+   probing. Fixed in code as SIO-1661 (PR #710). See "Problem 1" below.
 2. **`just coms eu-shared-services-prd simon` could not reach the hub** --
    **RESOLVED 2026-09-07, confirmed working by the operator.** It was run from
    the **standalone `~/WebstormProjects/pi-coms` repo**, which has no
@@ -27,15 +37,22 @@ required for either. The third is a real gap and is ticketed.
    monorepo copy resolves correctly. Running it from the monorepo fixed it; the
    hardening note below is still open, so the trap can be re-entered.
 
-3. **The fleet path is effectively unobservable** -- 10 log calls across ~1,600
-   lines, ZERO on the whole web surface. This is why problem 1 needed manual
-   curl probing. Written up as
-   https://linear.app/siobytes/issue/SIO-1660; see "Problem 3" below.
+3. **The fleet path was effectively unobservable** -- 10 log calls across ~1,600
+   lines, ZERO on the whole web surface -- which is why problem 1 needed manual
+   curl probing. **RESOLVED 2026-09-07**: instrumented as SIO-1660, merged as
+   PR #709. See "Problem 3" below.
 
-Everything else is healthy: the prd tunnel is up on 8788, the hub authenticates,
-and all three prd spokes report `status: "online"`.
+Everything else is healthy: with the prd tunnel up on 8788 the hub
+authenticates and all three prd spokes report `status: "online"`.
 
-## Verified state at handover (2026-09-07 ~13:05Z)
+**Still open** (neither blocking): the justfile fall-through hardening under
+"Problem 2", and retiring the stale standalone `~/WebstormProjects/pi-coms`
+clone.
+
+## Verified state BEFORE the fix (2026-09-07 ~13:05Z)
+
+Kept as the failing baseline. For the post-fix state see "Verified end to end"
+under Problem 1.
 
 ```
 tunnel        127.0.0.1:8788 LISTEN (session-manager-plugin)  -> prd hub, alive
@@ -55,9 +72,46 @@ recovered on its own — the prd tunnel is up and `/api/pi/agents` now returns a
 three spokes online. Treat a prd `fetch failed` as a dropped SSM tunnel
 (see [[reference_mcp_boot_resilience_and_transients]]), not this bug.
 
-## Problem 1 — `403 name_not_allowed` on send
+## Problem 1 — `403 name_not_allowed` on send (RESOLVED)
 
-### Where the bodies are buried
+**RESOLVED 2026-09-07.** Two halves, both done:
+
+- **Config** (the unblock): `PI_COMS_PANE_SENDER_PREFIX=incident-analyzer` is set
+  in the monorepo `.env`. The pane now registers `incident-analyzer-<8 hex>`,
+  which the existing `incident-analyzer-*` principal allows.
+- **Code** (the reason it was hard): SIO-1661, merged as PR #710 (`738593b1`).
+  The hub already sent `{ error, details: { name, principal } }` and the client
+  discarded `details`; `senderNameFor()` also ran only AFTER a successful
+  register, so the failure path never saw the name it had just sent. A rejection
+  now names the sender, the hub, the prefix and the remedy.
+
+### Verified end to end, 2026-09-07 ~13:51Z
+
+Live prd hub, real spoke, after restarting the web server:
+
+```
+GET  /api/pi/agents   -> senderPrefix: incident-analyzer
+                         prd: 6 peers, all online (3 spokes + 3 monitors)
+POST /api/pi/messages {environment:prd,target:eu-shared-services-prd}
+  -> HTTP 200
+     sender:   incident-analyzer-46362cd9
+     msgId:    01M1Y27KF1HWGPRXBNHFCGRPWE
+     status:   complete      error: None
+     response: OK
+```
+
+Was `502 {"error":"pi-coms hub POST /v1/agents/register failed: 403
+name_not_allowed"}`.
+
+**The restart is load-bearing.** The running server was confirmed to report
+`senderPrefix: incident-analyzer` via `/api/pi/agents` -- checking the file alone
+would not have caught a stale in-place Vite restart.
+
+**A probe run from `apps/web` reports `NOT CONFIGURED` even when `.env` is
+correct**: Bun does not pick up the ROOT `.env` from a subdirectory. Run config
+probes from the repo root, or the fix looks like it failed when it has not.
+
+### Where the bodies were buried
 
 The pane registers a sender session before sending; reads need no registration,
 which is exactly why fetching works and speaking does not.
@@ -104,10 +158,10 @@ So the pane authenticates with the **`incident-analyzer`** token (from
 `PI_COMS_HUBS`) while registering the name **`pi-fleet-<sessionId>`**. The
 allowed pattern for that principal is `incident-analyzer-*`. No match → 403.
 
-### The fix — pick ONE
+### The fix — pick ONE (Option A was taken)
 
-**Option A (recommended, zero new secrets).** Reuse the principal that already
-exists, in the monorepo `.env`:
+**Option A (CHOSEN 2026-09-07; recommended, zero new secrets).** Reuse the
+principal that already exists, in the monorepo `.env` (now set at `.env:264`):
 
 ```
 PI_COMS_PANE_SENDER_PREFIX=incident-analyzer
@@ -152,7 +206,7 @@ Expect HTTP 200 with a `msg_id` and a `status`, **not** 502
 survives a hot restart — see [[reference_vite_inplace_restart_env_precedence_and_kg_slots]].
 Kill the process and start it fresh, or the fix will look like it did nothing.
 
-## Problem 2 — `just coms <hub> <cname>` cannot reach the hub
+## Problem 2 — `just coms <hub> <cname>` could not reach the hub (RESOLVED)
 
 ### What actually happened
 
@@ -223,7 +277,7 @@ wrong port. Two cheap options:
 
 Neither is required to unblock; both prevent a repeat.
 
-## Problem 3 — the fleet path has almost no logging (SIO-1660)
+## Problem 3 — the fleet path had almost no logging (RESOLVED, SIO-1660)
 
 Diagnosing problem 1 took a sequence of hand-rolled curl probes against a live
 production hub. It should have taken one glance at the server log. It could not,
@@ -271,6 +325,27 @@ clicked send.
 
 ### Hard constraint
 
+**CORRECTION (2026-09-07): the "no redaction" claim below is wrong, though the
+rule it produced is right.** `packages/shared/src/logger.ts:107` DOES configure
+`redact: { paths: SENSITIVE_PATHS, censor: "[REDACTED]" }`, and `createMcpLogger`
+uses it, so a field literally named `token` IS redacted. The real gap, confirmed
+by RUNNING the logger rather than reading it:
+
+```
+probe.token.toplevel     {"token":"[REDACTED]"}       <- works
+probe.authToken.toplevel {"authToken":"SECRET..."}    <- LEAKS
+probe.hub.nested         {"hub":{"authToken":"..."}}  <- LEAKS
+probe.deep.3level        {"a":{"b":{"token":"..."}}}  <- LEAKS
+```
+
+`authToken` -- the field pi-coms actually uses for the hub secret -- is absent
+from `SENSITIVE_KEYS` (`logger.ts:8-18`), and `SENSITIVE_PATHS` (`:21`) is only
+`[...KEYS, ...KEYS.map(k => "*." + k)]`, i.e. two levels deep. So the practical
+advice stands unchanged -- never pass `authToken` or the `hub` object to a log
+call, because redaction will NOT save you -- but the reason is a key-list and
+depth gap, not an absent config. Being fixed separately.
+
+Original text, for the record:
 `packages/observability/src/logger.ts` has **no redaction configuration**:
 whatever is passed is emitted. Never log `authToken` (a live secret in
 `PI_COMS_HUBS`) or the `hub` object that carries it, and never log `prompt` or
@@ -281,20 +356,25 @@ logs. Log identity and outcome only: `environment`, `project`, `target`,
 
 Full scope, seams and acceptance criteria are in SIO-1660.
 
-## Files to modify
+## Files changed (all DONE except the last row)
 
-| File | Change |
-|---|---|
-| `.env` (monorepo, gitignored) | add `PI_COMS_PANE_SENDER_PREFIX=incident-analyzer` (Option A) **or** `PI_COMS_PANE_TOKENS` (Option B) |
-| `.env.example` | document whichever key is chosen, with the principal contract |
-| `packages/pi-coms/justfile` | *(optional)* fail loudly when the manifest is missing but a selector was given |
-| `packages/agent/src/action-tools/pi-coms-client.ts` | SIO-1660: log `http()` + the lifecycle methods |
-| `apps/web/src/lib/server/pi-fleet.ts`, `apps/web/src/routes/api/pi/*/+server.ts` | SIO-1660: request start/end |
+| File | Change | Status |
+|---|---|---|
+| `.env` (monorepo, gitignored) | `PI_COMS_PANE_SENDER_PREFIX=incident-analyzer` (Option A), at `.env:264` | DONE |
+| `.env.example` | none needed -- `:456-470` already documented both keys AND named this exact remedy | n/a |
+| `packages/agent/src/action-tools/pi-coms-client.ts` | SIO-1660 logging (`http()` + lifecycle); SIO-1661 `details` on `PiComsHttpError`, `register()` names the sender | DONE, PRs #709 + #710 |
+| `apps/web/src/lib/server/pi-fleet.ts`, `apps/web/src/routes/api/pi/*/+server.ts` | SIO-1660 request start/end; SIO-1661 hub + prefix + remedy on a registration failure | DONE, PRs #709 + #710 |
+| `packages/pi-coms/justfile` | *(optional, STILL OPEN)* fail loudly when the manifest is missing but a selector was given | open |
 
-No application code changes are expected **for problems 1 and 2**. `pi-fleet.ts`
-already implements both options; that is a configuration gap the code comment at
-`:27-30` predicted. The logging work (SIO-1660) is the only code change here, and
-it is independent — it can land before or after the config fix.
+The original note said no application code was expected for problem 1. That held
+for the *unblock* -- `pi-fleet.ts` already implemented both options, exactly as
+the code comment at `:27-30` predicted -- but not for the *diagnosability*: the
+transport discarded the hub's `details`, which no configuration could fix. Worth
+separating the two next time a "config, not code" call is made.
+
+SIO-1660 and SIO-1661 touched the same two files and landed within minutes of
+each other; the second was rebased onto the first, keeping BOTH (a log for
+whoever watches the server, an enriched error for whoever watches the browser).
 
 ## Verification (full)
 
@@ -376,4 +456,6 @@ which is easy to misread as a hub fault.
 `reference_fleet_deploy_live_gotchas` (hub returns an EMPTY LIST for an unknown project),
 `feedback_one_codebase_pi_coms_in_monorepo` (the standalone repo is superseded),
 `reference_vite_inplace_restart_env_precedence_and_kg_slots` (stale env after an in-place restart),
-`feedback_no_cross_environment_access` (dev hub for dev, prd hub for prd)
+`feedback_no_cross_environment_access` (dev hub for dev, prd hub for prd),
+`reference_sio1661_pi_coms_error_detail_passthrough` (hub sends details the client dropped; a rethrow must keep the error TYPE or 502 silently becomes 500),
+`reference_shared_logger_redaction_authtoken_gap` (the logger DOES redact, but `authToken` is not in the key list and paths are only two deep)
