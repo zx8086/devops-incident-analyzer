@@ -24,6 +24,13 @@ provider "aws" {
       ManagedBy   = "terraform"
       Stack       = "shared-services-prd"
       Environment = "prd"
+      // The coms-net project namespace these agents register into. Informational:
+      // routing is by hub (per environment) and the tunnel is selected by AWS
+      // profile, so nothing filters on this tag. It exists so an operator reading
+      // the console can tell which registry an instance belongs to without
+      // cross-referencing the manifest. NOT the same thing as the Project tag
+      // above, which is the Terraform stack marker.
+      ComsProject = "pi-coms-prd"
     }
   }
 }
@@ -174,6 +181,7 @@ module "agent" {
   coms_auth_token      = var.coms_auth_token
   repo_url             = var.repo_url
   agent_name           = var.agent_name
+  coms_project         = "pi-coms-prd"
   subnet_id            = var.agent_subnet_id
   associate_public_ip  = false
   instance_type        = "t4g.small"
