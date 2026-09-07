@@ -57,6 +57,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#704](https://github.com/zx8086/devops-incident-analyzer/pull/704) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1656 elastic-iac MR change-class label, a High-severity defect reported from a failed CI gate rather than by either bot (5 files); SKIPPED once in 125 ms; CodeRabbit silent (25th straight); all five CI jobs green first run; merged on user authorization with the gate overridden; detail below |
 | [#705](https://github.com/zx8086/devops-incident-analyzer/pull/705) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1657 fleet console made contextual + triage SVG rendered at natural size (7 files); SKIPPED once in 115 ms; CodeRabbit silent (26th straight); all five CI jobs green first run; merged on user authorization with the gate overridden; detail below |
 | [#706](https://github.com/zx8086/devops-incident-analyzer/pull/706) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1657 follow-up, reverting #705's horizontal scroll and wrapping wide graph layers instead (3 files); SKIPPED once in 103 ms; CodeRabbit silent (27th straight); all five CI jobs green first run; merged on user authorization with the gate overridden; detail below |
+| [#707](https://github.com/zx8086/devops-incident-analyzer/pull/707) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1658, a tall HITL gate card collapsing the triage pane to zero height (1 file); SKIPPED once in 144 ms; CodeRabbit silent (28th straight); all five CI jobs green first run; merged on user authorization with the gate overridden; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -874,3 +875,21 @@ A same-day revert-and-refix of #705's second item. #705 made the triage graph le
 3. *The binding constraint was one row, not the graph.* Chart width is the widest row, and a single 8-node fan-out (the IaC intent router) set 1644px for a graph whose other 18 layers need at most 4 nodes. Wrapping layers wider than three caps the chart at 654px -- the incident analyzer's own width -- so both graphs fit the pane whole at the same scale and neither scrolls. Diagnosing "which row sets the width" would have found this in #705.
 4. *The cheaper-looking fix was tried and rejected on numbers.* Narrowing `NODE_W` reaches only 5.7px even at an unrealistic 100px, and the IaC graph has 22-character node names. Recording it here so it is not re-proposed.
 5. *A screenshot belongs in the verification of any layout change.* #705's evidence was a table of scale percentages; #706's is two screenshots plus `scrollWidth === clientWidth`. The first proves a number, the second proves the thing the user actually asked for.
+
+## PR #707 detail (SIO-1658, HITL gate card collapses the triage pane)
+
+A one-file layout fix, reported by the user from the running app: the live graph triage pane disappeared whenever a plan-review card came up. Third consecutive PR in this run whose defect was found by a human looking at the product.
+
+**Greptile:** terminal **SKIPPED** (id 22899198 on `80397b71`), 144 ms, `strictness: 2`, body null. Twenty-eighth consecutive skip.
+
+**CodeRabbit:** nothing, through CI completion. Twenty-eighth consecutive absence (#679 to #707).
+
+**Merge gate:** all five CI jobs green first run. Zero findings to triage. Merged on the user's explicit instruction with the documented gate knowingly overridden. Squash `32bfc9e6`.
+
+**Takeaways:**
+
+1. *The reported symptom named the wrong component.* "We lose the triage when the card comes up" reads as a bug in the triage pane, and the pane's own gating (`showGraphPane`) was the obvious suspect -- it was untouched and correct. The defect was in the CARD's layout: the ten HITL gate blocks render as full-width siblings of the split row, and on an `h-screen` page with a `flex-1 min-h-0` row, an uncapped tall card squeezes the row to nothing. Reading the gating first and only then measuring saved a fix in the wrong file.
+2. *Confirming the old behaviour was the bug is cheap and worth doing.* Removing the cap live in the browser put the pane at exactly 0px, which turned "the pane disappears" from a report into a reproduced measurement before any fix was judged.
+3. *The first cap satisfied the letter of the request and not its point.* 60vh kept the pane "visible" at 205px -- a strip too thin to read a graph in. Measuring the trade-off across 60/50/45/40/35vh produced 45vh (405px card, 340px pane), where both halves are actually usable. "Visible" was the wrong success criterion, the same class of mistake as #705's "labels are legible".
+4. *A cap has to be checked in the cases where it should do nothing.* Verified that with no gate the region is 0px and the pane keeps its full 745px, and that a short banner (topic-shift) renders at its natural 45px with no scrollbar. A cap that silently pads or scrolls small content would have been a new bug.
+5. *The fix covers all ten gate cards*, not only the plan review that surfaced it -- reconcile, synthetics push, fleet upgrade, renovate trigger and the HIL-learning gates shared the defect. Worth noting that 45vh is tuned against a 900px-tall viewport; a much shorter window gives the card proportionally less room.
