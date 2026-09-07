@@ -60,6 +60,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#707](https://github.com/zx8086/devops-incident-analyzer/pull/707) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1658, a tall HITL gate card collapsing the triage pane to zero height (1 file); SKIPPED once in 144 ms; CodeRabbit silent (28th straight); all five CI jobs green first run; merged on user authorization with the gate overridden; detail below |
 | [#708](https://github.com/zx8086/devops-incident-analyzer/pull/708) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1659, gate cards bounded to the chat column so they stop running under the panes (1 file); SKIPPED once in 92 ms; CodeRabbit silent (29th straight); Test job aborted once with the known packages/agent SIGABRT and passed on re-run; merged on user authorization with the gate overridden; detail below |
 | [#709](https://github.com/zx8086/devops-incident-analyzer/pull/709) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1660, instrumenting the pi-coms fleet path after a 403 took a live-hub curl investigation (2 files); SKIPPED once in 128 ms; CodeRabbit silent (30th straight); all five CI jobs green first run; merged on user authorization with the gate overridden; detail below |
+| [#711](https://github.com/zx8086/devops-incident-analyzer/pull/711) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1662, dropping the duplicate fleet-console header button and moving the entry into the pane (2 files); SKIPPED once in 139 ms; CodeRabbit silent (31st straight); all five CI jobs green first run; merged on user authorization with the gate overridden; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -984,3 +985,20 @@ explicit per-PR go-ahead rather than merged.
    The changes were complementary -- a log for whoever watches the server, an explanation for
    whoever watches the browser -- so the resolution kept both and re-ran the live render to
    confirm behaviour survived.
+
+## PR #711 detail (SIO-1662, one fleet control with the console entry in the pane)
+
+Reported by the operator from the running app: the header showed a robot icon that duplicated the mode switch beside it, when the fleet was already reachable through the spokes pane. Two files.
+
+**Greptile:** terminal **SKIPPED** (id 22938351 on `546f340d`), 139 ms, `strictness: 2`, body null. Thirty-first consecutive skip.
+
+**CodeRabbit:** nothing, through CI completion. Thirty-first consecutive absence (#679 to #711).
+
+**Merge gate:** all five CI jobs green first run. Zero findings to triage. Merged on the user's explicit instruction with the documented gate knowingly overridden. Squash `d75895ca`.
+
+**Takeaways:**
+
+1. *Driving the browser corrected the report before any code changed.* The symptom read as "there is a mode between the two agents", which would have meant a broken rotation. Clicking the mode control five times gave analyzer -> IaC -> analyzer, never the console: the rotation was already correct and the real defect was a redundant BUTTON reaching the console outside the cycle. Fixing the rotation would have been work on something that was not broken.
+2. *The first attempt at the fix stranded the feature.* Deleting the header button removed the console's only entry point -- it is excluded from the mode cycle by design and the pane did not link to it -- so the agent became unreachable. Caught by grepping for remaining entry points before committing, and resolved by asking rather than guessing which of two readings ("the pane replaces the console" vs "keep it, elsewhere") was intended.
+3. *Gating a control is not the same as gating what it controls.* Restricting the pane TOGGLE to the incident analyzer left the pane itself rendering in the IaC agent with nothing to close it -- a worse state than before. The pane's own `{#if}` needed the same condition. Browser verification found this; reading the diff would not have.
+4. *An inconsistency inherited from an earlier PR surfaced only when a user looked.* #705 established that the fleet belongs to the incident analyzer, applied it to the console agent, and missed the pane, which kept rendering everywhere for three more PRs. Worth noting for the bake-off: neither bot has commented in 31 PRs, so partial applications of a rule are currently caught by the operator or not at all.
