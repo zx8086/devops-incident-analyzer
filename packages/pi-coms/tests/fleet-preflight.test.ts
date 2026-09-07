@@ -41,6 +41,7 @@ function fakeAws(overrides: Overrides = {}): FleetAws {
 				? {
 						arn: `arn:aws:iam::222222222222:role/DevOpsAgentReadOnly`,
 						statements: [{ sid: "AnalyzerTrust", principals: ["arn:aws:iam::333333333333:role/DevOpsAgentCoreRole"] }],
+						tags: {},
 					}
 				: undefined,
 		bucketExists: async () => true,
@@ -124,6 +125,7 @@ describe("fleet preflight decision table (SIO-1653)", () => {
 			roleTrust: async () => ({
 				arn: "arn:aws:iam::120999474587:role/DevOpsAgentReadOnly",
 				statements: [{ sid: "TrustLocalPiAgent", principals: ["arn:aws:iam::120999474587:role/pi-agent-agent"] }],
+				tags: {},
 			}),
 		});
 		const rows = await preflight(manifest, ["eu-oit-prd"], aws);
@@ -143,10 +145,52 @@ describe("fleet preflight decision table (SIO-1653)", () => {
 				roleTrust: async () => ({
 					arn: "arn:aws:iam::1:role/DevOpsAgentReadOnly",
 					statements: [{ sid: "Other", principals: [principal] }],
+					tags: {},
 				}),
 			});
 			const rows = await preflight(manifest, ["eu-oit-prd"], aws);
 			expect(rows.find((r) => r.check === "adopt role")).toMatchObject({ ok: false });
+		}
+	});
+
+	// "create" asks whether THIS fleet may keep managing the role, not whether the
+	// role is absent. A fleet pi-coms deployed itself has the role present AND in
+	// terraform state; requiring absence blocked that steady state entirely, while
+	// `adopt` would have stopped managing the vendored policies and destroyed 207
+	// read actions. The module stamps ManagedBy=terraform + Project=pi-coms-net on
+	// what it creates, so those tags answer ownership.
+	test("create mode accepts a role this fleet already manages", async () => {
+		const aws = fakeAws({
+			roleTrust: async () => ({
+				arn: "arn:aws:iam::120999474587:role/DevOpsAgentReadOnly",
+				statements: [{ sid: "TrustLocalPiAgent", principals: ["arn:aws:iam::120999474587:role/pi-agent-agent"] }],
+				tags: { ManagedBy: "terraform", Project: "pi-coms-net", Stack: "oit-dev" },
+			}),
+		});
+		const rows = await preflight(manifest, ["eu-oit-dev"], aws);
+		expect(rows.find((r) => r.check === "create role")).toMatchObject({ ok: true });
+	});
+
+	test("create mode still refuses a same-named role this fleet does not own", async () => {
+		// Both tags must match: a role tagged by some other terraform stack, or
+		// carrying only one of the two, is somebody else's and needs `adopt`.
+		const cases: Array<Record<string, string>> = [
+			{},
+			{ ManagedBy: "terraform" },
+			{ Project: "pi-coms-net" },
+			{ ManagedBy: "terraform", Project: "some-other-stack" },
+			{ ManagedBy: "cloudformation", Project: "pi-coms-net" },
+		];
+		for (const tags of cases) {
+			const aws = fakeAws({
+				roleTrust: async () => ({
+					arn: "arn:aws:iam::1:role/DevOpsAgentReadOnly",
+					statements: [{ sid: "Other", principals: ["arn:aws:iam::1:role/something"] }],
+					tags,
+				}),
+			});
+			const rows = await preflight(manifest, ["eu-oit-dev"], aws);
+			expect(rows.find((r) => r.check === "create role")).toMatchObject({ ok: false });
 		}
 	});
 
@@ -155,6 +199,7 @@ describe("fleet preflight decision table (SIO-1653)", () => {
 			roleTrust: async () => ({
 				arn: "arn:aws:iam::1:role/DevOpsAgentReadOnly",
 				statements: [{ sid: "Other", principals: ["arn:aws:iam::1:role/something"] }],
+				tags: {},
 			}),
 		});
 		const rows = await preflight(manifest, ["eu-oit-prd", "eu-oit-dev"], aws);
