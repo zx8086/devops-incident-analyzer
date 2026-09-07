@@ -30,7 +30,7 @@ just token-create incident-analyzer "incident-analyzer-*" service [profile]
 
 The printed token goes into the analyzer's `.env` as `PI_COMS_NET_AUTH_TOKEN`,
 with `PI_COMS_NET_SERVER_URL` pointing at the hub (the SSM tunnel,
-`just hub-tunnel <dev|prd>`, for a corp hub) and `PI_COMS_NET_PROJECT` matching
+`just hub-tunnel <profile>`, for a corp hub) and `PI_COMS_NET_PROJECT` matching
 the project the spokes registered under. The analyzer itself reads
 `PI_COMS_HUBS` instead, one entry per environment, each carrying that hub's url,
 token and project; the token must be the `incident-analyzer` service principal,

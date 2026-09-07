@@ -110,8 +110,8 @@ Scripts are listed in the root `package.json`. Non-obvious invocations:
 bun run --filter @devops-agent/web dev                 # SvelteKit frontend (port 5173)
 bun run --filter '@devops-agent/gitagent-bridge' test  # Single package
 just coms laptop                                       # pi-coms console, LOCAL hub (root justfile delegates to packages/pi-coms/justfile)
-just hub-tunnel dev & just hub-tunnel prd              # SSM tunnels, one per environment (dev 8787, prd 8788)
-just coms-env prd simon                                # pi-coms console against a DEPLOYED hub (needs that tunnel up)
+just hub-tunnel eu-shared-services-prd 8787            # SSM tunnel to that account's hub (local port auto-assigned)
+just coms eu-shared-services-prd simon                 # pi-coms console against a DEPLOYED hub (needs that tunnel up)
 ```
 
 Note `bun test` at the repo root can crash the Bun runner mid-suite; run per

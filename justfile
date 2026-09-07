@@ -18,13 +18,9 @@ coms-net-server *args:
 coms-net-server-lan *args:
     {{pi_just}} coms-net-server-lan "$@"
 
-# Open a Pi console session against a LOCAL hub: just coms <cname> [pi args]
+# Pi console: just coms <env|profile|account> <cname>, or just coms <cname> for a local hub
 coms *args:
     {{pi_just}} coms "$@"
-
-# Pi console against a deployed environment's hub: just coms-env <dev|prd> <cname>
-coms-env *args:
-    {{pi_just}} coms-env "$@"
 
 # just token-create <principal> "<names>" <kind> [profile]
 token-create *args:
@@ -38,19 +34,9 @@ token-revoke *args:
 token-list *args:
     {{pi_just}} token-list "$@"
 
-# SSM port-forward to an environment's hub: just hub-tunnel <dev|prd> [local-port]
+# SSM port-forward to a hub: just hub-tunnel <env|profile|account> [hub-port] [--local-port N]
 hub-tunnel *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    # Guard the OLD call shape here, not in the package recipe: with 3+ words
-    # just parses the extras as further recipe invocations ("does not contain
-    # recipe `8787`") before any recipe body runs.
-    if [ "$#" -gt 2 ]; then
-      echo "hub-tunnel now takes an ENVIRONMENT, not <profile> <region> <port>: just hub-tunnel <dev|prd> [local-port]" >&2
-      echo "(profile, region and hub port come from packages/pi-coms/deploy/fleet.yaml)" >&2
-      exit 1
-    fi
-    exec {{pi_just}} hub-tunnel "$@"
+    {{pi_just}} hub-tunnel "$@"
 
 # Regenerate packages/pi-coms/AGENTS.md from agents/pi-fleet (SIO-1649)
 sync-persona:

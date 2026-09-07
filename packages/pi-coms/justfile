@@ -20,55 +20,49 @@ coms-net-server-lan:
 # pi's session list, and --explicit keeps the operator out of peer auto-discovery.
 # Extra args pass through to pi, e.g.: just coms laptop --model claude-opus-4-7
 
-# Pi with the coms-net client (auto-discovers local server.json)
-coms cname *args:
-    pi -e extensions/coms-net.ts --name "{{cname}} $(date +%Y-%m-%dT%H:%M)" --cname "{{cname}}" --explicit {{args}}
-
-# Pi console against a DEPLOYED environment's hub: just coms-env <env> <cname>
-#   just coms-env dev simon   &   just coms-env prd simon
-# Mirrors `just hub-tunnel <env>`: the hub is chosen by ENVIRONMENT, never by a
-# bare name that silently inherits whatever PI_COMS_NET_* happens to be exported.
-# Requires that environment's tunnel to be open (just hub-tunnel <env>) -- the
-# hub listens on a private IP, so the local port is the only route in.
-# `just coms <cname>` is unchanged and still targets a LOCAL hub.
-
-# Pi console against a deployed environment's hub: just coms-env <env> <cname>
-coms-env env cname *args:
+# Pi console: `just coms <env|profile|account> <cname>` against a DEPLOYED hub
+# (needs that hub's tunnel open), or `just coms <cname>` against a local one.
+coms first *rest:
     #!/usr/bin/env bash
     set -euo pipefail
-    ENV="{{env}}"
     MANIFEST="{{justfile_directory()}}/deploy/fleet.yaml"
-    if [ ! -f "$MANIFEST" ]; then echo "no deploy/fleet.yaml; cannot resolve environment \"$ENV\"" >&2; exit 1; fi
-    PROFILE=""; REGION=""; PORT=""; PROJECT=""
-    RESOLVED="$(bun {{justfile_directory()}}/scripts/hub-tunnel-target.ts "$MANIFEST" "$ENV")" || exit 1
-    eval "$RESOLVED"
-    if [ -z "$PROJECT" ]; then echo "hub \"$ENV\" has no project in the manifest" >&2; exit 1; fi
-    # Same local-port derivation as hub-tunnel, so the console and the tunnel
-    # agree without either hardcoding a number.
-    LOCAL="$PORT"
-    case "$ENV" in
-      prd|prod) LOCAL=$((LOCAL + 1)) ;;
-      stg)      LOCAL=$((LOCAL + 2)) ;;
-    esac
-    if ! lsof -nP -iTCP:"$LOCAL" -sTCP:LISTEN >/dev/null 2>&1; then
-      echo "no tunnel on localhost:$LOCAL -- run: just hub-tunnel $ENV" >&2
+    ENV_KEY=""; PROFILE=""; REGION=""; PORT=""; LOCAL_PORT=""; PROJECT=""
+    SEL=""; CNAME="{{first}}"; ARGS=({{rest}})
+    # `just coms <selector> <cname>` targets a DEPLOYED hub; `just coms <cname>`
+    # keeps its local-hub meaning. The first word is a selector only when the
+    # manifest actually has a hub by that name/profile/account (resolver exit 3
+    # = no match), so a cname can never be mistaken for a hub.
+    if [ -f "$MANIFEST" ] && [ ${#ARGS[@]} -gt 0 ]; then
+      # --strict-selector: only a PROFILE or ACCOUNT ID counts here, never a bare
+      # env key. `just coms dev` has always meant a local session named "dev",
+      # and a cname must never be swallowed as a hub selector.
+      if RESOLVED="$(bun {{justfile_directory()}}/scripts/hub-tunnel-target.ts "$MANIFEST" "{{first}}" --strict-selector 2>/dev/null)"; then
+        eval "$RESOLVED"
+        SEL="{{first}}"; CNAME="${ARGS[0]}"; ARGS=("${ARGS[@]:1}")
+      fi
+    fi
+    if [ -z "$SEL" ]; then
+      exec pi -e extensions/coms-net.ts --name "$CNAME $(date +%Y-%m-%dT%H:%M)" --cname "$CNAME" --explicit "${ARGS[@]}"
+    fi
+    if [ -z "$PROJECT" ]; then echo "hub \"$SEL\" has no project in the manifest" >&2; exit 1; fi
+    if ! lsof -nP -iTCP:"$LOCAL_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+      echo "no tunnel on localhost:$LOCAL_PORT -- run: just hub-tunnel $SEL" >&2
       exit 1
     fi
     # Operator token from SSM, never echoed. The console registers under this
     # principal, so its name must be in the principal's allowed names.
     TOKEN="$(aws ssm get-parameter --profile "$PROFILE" --region "$REGION" \
-      --name "/pi-coms/auth/{{cname}}" --with-decryption \
+      --name "/pi-coms/auth/$CNAME" --with-decryption \
       --query Parameter.Value --output text 2>/dev/null \
       | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])' 2>/dev/null || true)"
     if [ -z "$TOKEN" ]; then
-      echo "no principal \"{{cname}}\" on the $ENV hub; mint one: just token-create {{cname}} \"{{cname}},ops\" operator $PROFILE" >&2
+      echo "no principal \"$CNAME\" on the $ENV_KEY hub; mint one: just token-create $CNAME \"$CNAME,ops\" operator $PROFILE" >&2
       exit 1
     fi
-    echo "coms-net: $ENV hub via localhost:$LOCAL (project $PROJECT) as {{cname}}"
+    echo "coms-net: $ENV_KEY hub via localhost:$LOCAL_PORT (project $PROJECT) as $CNAME"
     exec pi -e extensions/coms-net.ts \
-      --name "{{cname}} $(date +%Y-%m-%dT%H:%M)" --cname "{{cname}}" --explicit \
-      --server-url "http://127.0.0.1:$LOCAL" --auth-token "$TOKEN" --project "$PROJECT" {{args}}
-
+      --name "$CNAME $(date +%Y-%m-%dT%H:%M)" --cname "$CNAME" --explicit \
+      --server-url "http://127.0.0.1:$LOCAL_PORT" --auth-token "$TOKEN" --project "$PROJECT" "${ARGS[@]}"
 # Fleet auth principals (SSM-backed; IAM on /pi-coms/auth decides who may run these)
 
 # Mint a principal token: just token-create <principal> ["name1,name2"] [kind] [profile]
@@ -83,70 +77,80 @@ token-revoke principal profile="":
 token-list profile="":
     ./deploy/token-admin.sh list "{{profile}}"
 
-# SSM port-forward to an environment's hub: just hub-tunnel <env> (dev|prd|stg).
-# Takes an ENVIRONMENT, not a profile, so both sides read the same either way:
-#   just hub-tunnel dev   &   just hub-tunnel prd
-# Profile, region and hub port come from deploy/fleet.yaml when it exists (the
-# same manifest `just fleet` uses), so a hub that moves account or port is
-# corrected in one place. Falls back to built-in defaults when the manifest is
-# absent -- it is gitignored, so this recipe must work without it.
+# SSM port-forward to a hub. The selector is an environment key, an AWS profile
+# or an account id -- a fleet can run more than one hub per environment, so
+# keying only on the environment would make a second one unaddressable. All
+# three of these open the same tunnel:
+#   just hub-tunnel prd
+#   just hub-tunnel eu-shared-services-prd
+#   just hub-tunnel 399987695868
+# Profile, region, hub port and local port come from deploy/fleet.yaml (the same
+# manifest `just fleet` reads), falling back to built-in defaults when that
+# gitignored file is absent.
 #
 # The instance is resolved by its Name tag at connect time: instance ids change
-# on replacement, the tag does not. Each environment gets a distinct LOCAL port
-# (dev 8787, prd +1, stg +2) so several tunnels can be open at once; both used
-# to default to 8787 and the second silently bound nothing, leaving the operator
-# querying the wrong hub. Override the local port with a second argument.
+# on replacement, the tag does not. Each hub gets a distinct LOCAL port so
+# several tunnels can be open at once -- set `local_port` on the hub in the
+# manifest, or let it derive from the environment (prd +1, stg +2). Override per
+# invocation with `--local-port N`. A positional second argument is the HUB's
+# port (what the tunnel forwards to), e.g. `just hub-tunnel eu-shared-services-prd
+# 8787`; it never changes the local port.
 
-# SSM port-forward to an environment's hub: just hub-tunnel <dev|prd> [local-port]
-hub-tunnel env="dev" local_port="":
+# SSM port-forward to a hub: just hub-tunnel <env|profile|account> [hub-port] [--local-port N]
+hub-tunnel selector="dev" port="" *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    ENV="{{env}}"
-    # This recipe used to take <profile> <region> <port> <local-port>. Catch the
-    # old call shape and say what replaced it, rather than failing later with an
-    # opaque error (just reads a stray 3rd positional as a recipe name).
-    case "$ENV" in
-      *-dev|*-prd|*-prod|*-stg)
-        SHORT="${ENV##*-}"
-        echo "hub-tunnel now takes an ENVIRONMENT, not a profile: just hub-tunnel $SHORT" >&2
-        echo "(profile, region and hub port come from deploy/fleet.yaml)" >&2
-        exit 1 ;;
-    esac
+    SEL="{{selector}}"
+    PORT_OVERRIDE="{{port}}"
+    LOCAL_OVERRIDE=""
+    ARGS=({{args}})
+    i=0
+    while [ $i -lt ${#ARGS[@]} ]; do
+      case "${ARGS[$i]}" in
+        --local-port) i=$((i+1)); LOCAL_OVERRIDE="${ARGS[$i]:-}" ;;
+        --local-port=*) LOCAL_OVERRIDE="${ARGS[$i]#*=}" ;;
+        *) echo "unexpected argument \"${ARGS[$i]}\" (usage: just hub-tunnel <env|profile|account> [hub-port] [--local-port N])" >&2; exit 1 ;;
+      esac
+      i=$((i+1))
+    done
     MANIFEST="{{justfile_directory()}}/deploy/fleet.yaml"
-    PROFILE=""; REGION=""; PORT=""
+    ENV_KEY=""; PROFILE=""; REGION=""; PORT=""; LOCAL_PORT=""
     if [ -f "$MANIFEST" ]; then
-      # Resolve profile/region/port from the same manifest `just fleet` reads.
-      RESOLVED="$(bun {{justfile_directory()}}/scripts/hub-tunnel-target.ts "$MANIFEST" "$ENV")" || exit 1
+      RESOLVED="$(bun {{justfile_directory()}}/scripts/hub-tunnel-target.ts "$MANIFEST" "$SEL")" || exit 1
       eval "$RESOLVED"
     fi
     # Built-in fallback when the manifest is absent (it is gitignored).
     if [ -z "$PROFILE" ]; then
-      case "$ENV" in
-        dev) PROFILE="eu-shared-services-dev" ;;
-        prd) PROFILE="eu-shared-services-prd" ;;
-        stg) PROFILE="eu-shared-services-stg" ;;
-        *)   echo "unknown environment \"$ENV\" and no deploy/fleet.yaml to resolve it (expected dev|prd|stg)" >&2; exit 1 ;;
+      case "$SEL" in
+        dev) PROFILE="eu-shared-services-dev"; ENV_KEY="dev" ;;
+        prd) PROFILE="eu-shared-services-prd"; ENV_KEY="prd" ;;
+        stg) PROFILE="eu-shared-services-stg"; ENV_KEY="stg" ;;
+        *-dev|*-prd|*-prod|*-stg) PROFILE="$SEL"; ENV_KEY="${SEL##*-}" ;;
+        *) echo "unknown hub \"$SEL\" and no deploy/fleet.yaml to resolve it" >&2; exit 1 ;;
+      esac
+      PORT="8787"
+      case "$ENV_KEY" in
+        prd|prod) LOCAL_PORT=$((PORT + 1)) ;;
+        stg)      LOCAL_PORT=$((PORT + 2)) ;;
+        *)        LOCAL_PORT="$PORT" ;;
       esac
     fi
     REGION="${REGION:-eu-central-1}"
-    PORT="${PORT:-8787}"
-    LOCAL="{{local_port}}"
-    if [ -z "$LOCAL" ]; then
-      LOCAL="$PORT"
-      case "$ENV" in
-        prd|prod) LOCAL=$((LOCAL + 1)) ;;
-        stg)      LOCAL=$((LOCAL + 2)) ;;
-      esac
-    fi
+    # A positional port is the HUB's listening port (what the tunnel forwards
+    # TO), matching the AWS-side meaning. The local port stays derived unless
+    # --local-port says otherwise, so naming the hub port cannot silently move
+    # the local one onto another environment's port.
+    if [ -n "$PORT_OVERRIDE" ]; then PORT="$PORT_OVERRIDE"; fi
+    LOCAL="${LOCAL_OVERRIDE:-$LOCAL_PORT}"
     HUB_ID=$(aws ec2 describe-instances --profile "$PROFILE" --region "$REGION" \
       --filters "Name=tag:Name,Values=pi-coms-hub" "Name=instance-state-name,Values=running" \
       --query "Reservations[].Instances[].InstanceId" --output text)
     if [ -z "$HUB_ID" ] || [ "$HUB_ID" = "None" ]; then echo "no running hub instance found in $PROFILE" >&2; exit 1; fi
     if lsof -nP -iTCP:"$LOCAL" -sTCP:LISTEN >/dev/null 2>&1; then
-      echo "local port $LOCAL is already in use (another hub tunnel?); pass a free one: just hub-tunnel $ENV <local-port>" >&2
+      echo "local port $LOCAL is already in use (another hub tunnel?): just hub-tunnel $SEL --local-port <free-port>" >&2
       exit 1
     fi
-    echo "hub instance: $HUB_ID ($ENV / $PROFILE) port $PORT -> localhost:$LOCAL"
+    echo "hub instance: $HUB_ID ($ENV_KEY / $PROFILE) port $PORT -> localhost:$LOCAL"
     exec aws ssm start-session --profile "$PROFILE" --region "$REGION" --target "$HUB_ID" \
       --document-name AWS-StartPortForwardingSession \
       --parameters "{\"portNumber\":[\"$PORT\"],\"localPortNumber\":[\"$LOCAL\"]}"
