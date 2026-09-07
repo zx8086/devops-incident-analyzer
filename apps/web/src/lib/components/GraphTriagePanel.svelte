@@ -143,23 +143,18 @@ const statusLine = $derived.by(() => {
         Loading topology...
       </div>
     {:else}
-      <!-- SIO-1657: render at natural size and let the body scroll, rather than
-           scaling to fit the pane. `w-full` shrank a wide graph to the column
-           width: elastic-iac lays out 1644px wide (its intent router fans out to
-           10 targets), so in the ~575px pane it rendered at 35% and its 10px
-           node labels became 3.5px -- unreadable. The incident analyzer's 654px
-           graph was already ~88%, i.e. near natural size, which is why only one
-           agent looked wrong. Both now render at 100% and scroll instead
-           (measured in-browser at 1440x900: IaC 1644px, incident 654px).
-           Scrolling is the deliberate trade: in a pane this narrow a wide graph
-           can be legible or fully visible, not both. -->
-      <!-- The scroll lives on the parent (overflow-auto); shrink-0 stops the
-           flex column from squeezing the SVG back down to the pane width. -->
+      <!-- SIO-1657: fit the graph to the pane width; never scroll horizontally.
+           A natural-size render (tried first) made the labels bigger but the
+           picture unusable: the elastic-iac graph is 1644px wide, so the pane
+           opened on a near-empty region with the flow running off both edges.
+           Whole-graph overview is the point of this panel -- it is a map of a
+           turn in flight, and a map you have to scroll to read is not one.
+           `w-full` keeps every graph fully visible; the max-width stops a
+           narrow graph being stretched past its own size. -->
       <svg
         viewBox="0 0 {layout.width} {layout.height}"
-        width={layout.width}
-        height={layout.height}
-        class="block shrink-0"
+        class="w-full h-auto"
+        style="max-width: {layout.width}px"
         role="img"
         aria-label="Agent pipeline graph"
       >
