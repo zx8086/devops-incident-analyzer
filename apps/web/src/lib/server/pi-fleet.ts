@@ -13,6 +13,7 @@ import {
 	resolvePiComsConfig,
 	senderNameFor,
 } from "@devops-agent/agent";
+import { getLogger } from "@devops-agent/observability";
 import type { PiComsEnvironment, PiComsHubConfig } from "@devops-agent/shared";
 import { z } from "zod";
 import {
@@ -27,6 +28,11 @@ import {
 // Directory-mode hubs bind names to principals: the pane's prefix needs its own
 // principal (`just token-create pi-fleet "pi-fleet-*" service <profile>`) and its
 // token in PI_COMS_PANE_TOKENS, or the prefix is set to the analyzer's own.
+// SIO-1660: this module had no logging at all, so a failing hub surfaced only as
+// a string in the pane. Log identity and outcome; never the token, the hub
+// object that carries it, the prompt, or the spoke's reply.
+const log = getLogger("web:pi-fleet");
+
 const DEFAULT_SENDER_PREFIX = "pi-fleet";
 const DEFAULT_AWAIT_MS = PI_COMS_AWAIT_SLICE_MS;
 // Above this a single route request outlives the hub's 30 s stale threshold by too much.
@@ -154,8 +160,18 @@ export async function listFleetAgents(deps: PiFleetDeps = {}): Promise<PiFleetAg
 				const peers = agents
 					.map((a) => ({ name: a.name, status: a.status, purpose: a.purpose ?? null, sessionId: a.session_id }))
 					.sort((a, b) => a.name.localeCompare(b.name));
+				log.info(
+					{ environment: paneHub.environment, project: paneHub.hub.project, peers: peers.length },
+					"pi.fleet.agents.listed",
+				);
 				return { ...base, peers, error: null };
 			} catch (error) {
+				// This error was previously visible ONLY as a string in the pane
+				// ("fetch failed"), with nothing server-side to say which hub or why.
+				log.warn(
+					{ environment: paneHub.environment, project: paneHub.hub.project, error: describeError(error) },
+					"pi.fleet.agents.failed",
+				);
 				return { ...base, peers: [], error: describeError(error) };
 			}
 		}),
@@ -183,15 +199,34 @@ export async function sendFleetMessage(
 	const sentAt = new Date((deps.now ?? Date.now)()).toISOString();
 	// The hub requires a registered sender to send; the registration is short-lived
 	// and hidden from peer listings (explicit: true in the client).
-	await client.register();
+	// SIO-1660: the send path, start to finish. `register` is the step that fails
+	// with name_not_allowed when the sender prefix has no matching principal, so
+	// the name and environment are logged before the attempt -- that pairing is
+	// what a 403 needs in order to be self-explanatory.
+	const senderName = senderNameFor(client.sessionId, pane.senderPrefix);
+	log.info({ environment: input.environment, target: input.target, sender: senderName }, "pi.fleet.send.start");
+	try {
+		await client.register();
+	} catch (error) {
+		log.warn(
+			{ environment: input.environment, sender: senderName, error: describeError(error) },
+			"pi.fleet.send.register_failed",
+		);
+		throw error;
+	}
 	try {
 		// No response_schema: the operator reads a free-form reply, no LLM parses it.
 		const sent = await client.send(input.target, input.prompt);
 		const reply = await client.awaitReply(sent.msg_id, pane.awaitMs);
+		// Reply TEXT is never logged: it is spoke-authored and stays data.
+		log.info(
+			{ environment: input.environment, target: input.target, msg_id: sent.msg_id, status: reply.status },
+			"pi.fleet.send.done",
+		);
 		return {
 			...statusOf(input.environment, sent.msg_id, reply),
 			target: input.target,
-			sender: senderNameFor(client.sessionId, pane.senderPrefix),
+			sender: senderName,
 			sentAt,
 		};
 	} finally {
@@ -219,6 +254,10 @@ export async function readFleetMailbox(
 	const paneHub = requireHub(pane, input.environment);
 	const name = input.name ?? paneHub.hub.fallbackTarget;
 	const messages = await clientFor(paneHub, pane, deps).mailbox(name, { limit: input.limit ?? MAILBOX_DEFAULT_LIMIT });
+	// SIO-1660: count only. Mailbox entries carry monitor-authored prompts and
+	// spoke replies, which must never reach the log.
+	// awaitFleetMessage needs nothing here: pi.hub.await.done already reports it.
+	log.info({ environment: input.environment, name, messages: messages.length }, "pi.fleet.mailbox.read");
 	return {
 		environment: input.environment,
 		name,
