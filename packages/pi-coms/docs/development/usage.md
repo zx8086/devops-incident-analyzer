@@ -42,8 +42,23 @@ just coms <you>
 ```
 
 The hub instance id changes when the instance is replaced; find the current
-one via the EC2 console or `tag:Name=pi-coms-hub-hub` (repo users can run
-`just hub-tunnel`, which does the lookup automatically).
+one via the EC2 console or `tag:Name=pi-coms-hub` (repo users can run
+`just hub-tunnel <dev|prd>`, which does the lookup automatically).
+
+`hub-tunnel` takes an ENVIRONMENT, not a profile: profile, region and hub port
+come from `deploy/fleet.yaml`. Each environment gets its own local port (dev
+8787, prd 8788, stg 8789) so several tunnels can be open at once:
+
+```bash
+just hub-tunnel dev & just hub-tunnel prd
+```
+
+To open a Pi console against a deployed hub rather than a local one, use
+`just coms-env <env> <cname>` (it needs that environment's tunnel up):
+
+```bash
+just coms-env prd simon
+```
 
 Operator sessions load `AGENTS.md` from `packages/pi-coms/` (run Pi with that directory as cwd, which `just coms` does). That file is GENERATED from `agents/pi-fleet/` by the gitagent bridge (SIO-1649): edit the definition, then run `just sync-persona`; a bridge test pins the committed copy to the export. It carries the console scope
 and synthesis rules. Personal tokens come from the directory
