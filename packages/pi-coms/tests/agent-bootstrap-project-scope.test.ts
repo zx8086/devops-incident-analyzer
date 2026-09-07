@@ -39,6 +39,15 @@ describe("agent-bootstrap.sh project scoping", () => {
 		expect(scoped.length).toBe(3);
 	});
 
+	// The monitor is a SEPARATE process that registers itself, reading the project
+	// from .coms-env (coms-net-monitor.ts falls back to "default" when unset). With
+	// it missing, the monitor landed in a different namespace from its own agent:
+	// `fleet status` reported "monitor-<name> not registered" and every
+	// monitor->agent send failed 404 target_not_found (observed 2026-09-07).
+	test(".coms-env exports the project so the monitor shares its agent's namespace", () => {
+		expect(SCRIPT).toContain("export PI_COMS_NET_PROJECT='$COMS_PROJECT'");
+	});
+
 	test("the placeholder the reads use is the one the substitution fills", () => {
 		// A global sed replaces COMS_PROJECT_PLACEHOLDER with $COMS_PROJECT; if the
 		// placeholder is ever renamed, the URLs must move with it.

@@ -224,6 +224,12 @@ ENV_FILE="$AGENT_HOME/.coms-env"
   # Monitor identity follows the agent name, so friendly names (e.g.
   # eu-oit-dev) keep the pair aligned: monitor-<agent> investigates <agent>.
   # With the default aws-<account_id> name this matches the old derivation.
+  # The monitor registers itself, so it needs the same coms-net project as its
+  # agent. coms-net-monitor.ts falls back to "default" when this is unset, which
+  # put the monitor in a different namespace from its agent: `fleet status`
+  # reported "monitor-<name> not registered" and every monitor->agent send failed
+  # with 404 target_not_found, because the target lives in another project.
+  echo "export PI_COMS_NET_PROJECT='$COMS_PROJECT'"
   echo "export PI_MONITOR_NAME='monitor-$AGENT_NAME'"
   echo "export PI_MONITOR_INVESTIGATE_TARGET='$AGENT_NAME'"
   # Reports and the daily digest need an owner that is not the operator's
