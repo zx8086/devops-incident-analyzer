@@ -167,3 +167,55 @@ describe("openMr (SIO-1062)", () => {
 		expect(result.blockedReason).toContain("could not be resolved");
 	});
 });
+
+// SIO-1656 (DEFECT 2026-09-07-01): the labels that actually reach the create call.
+// mr-labels.test.ts proves the mapping; these prove openMr SENDS it -- the defect
+// was a correct contract with the wrong payload on the wire (MR !630 went out as
+// [agent-generated, iac] and failed check-mr-labels).
+describe("openMr MR labels (SIO-1656)", () => {
+	// Capture the create payload rather than asserting on the returned url.
+	async function labelsSentFor(state: IacStateType): Promise<string[]> {
+		const { openMr } = await import("./nodes.ts");
+		let sent: unknown;
+		mockTools({
+			gitlab_create_merge_request: (args) => {
+				sent = args.labels;
+				return `[201] {"web_url":"${REAL_URL}","iid":256}`;
+			},
+		});
+		await openMr(state);
+		return sent as string[];
+	}
+
+	test("a version-upgrade MR carries config-change (the MR !630 case)", async () => {
+		const labels = await labelsSentFor(baseState());
+		expect(labels).toEqual(["agent-generated", "iac", "config-change"]);
+	});
+
+	test("an ILM change carries ilm, a fleet pin carries fleet-integrations", async () => {
+		const ilm = await labelsSentFor(
+			baseState({ iacRequest: { workflow: "ilm-rollout", cluster: "eu-b2b" } as IacStateType["iacRequest"] }),
+		);
+		expect(ilm).toContain("ilm");
+		expect(ilm).not.toContain("config-change");
+
+		const fleet = await labelsSentFor(
+			baseState({ iacRequest: { workflow: "fleet-integration", cluster: "eu-b2b" } as IacStateType["iacRequest"] }),
+		);
+		expect(fleet).toContain("fleet-integrations");
+	});
+
+	// iacRequest is IacRequest | null. A class-less MR is the defect, so even the
+	// degenerate path must send one.
+	test("a missing iacRequest still sends a change class", async () => {
+		const labels = await labelsSentFor(baseState({ iacRequest: null }));
+		expect(labels).toEqual(["agent-generated", "iac", "config-change"]);
+	});
+
+	// The exact regression: never the bare pair the CI gate rejects.
+	test("never sends the bare agent-generated + iac pair", async () => {
+		const labels = await labelsSentFor(baseState());
+		expect(labels).not.toEqual(["agent-generated", "iac"]);
+		expect(labels.length).toBe(3);
+	});
+});
