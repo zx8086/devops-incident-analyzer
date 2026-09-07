@@ -9,12 +9,9 @@ import type { AgentCard, AgentListing } from "../../contracts/wire.ts";
 // out its 10-minute deadline reporting "not registered" for agents that were
 // online the whole time. Defaults to "default" for fleets that never set one.
 export async function listAgents(baseUrl: string, token: string, project = "default"): Promise<AgentCard[]> {
-	const resp = await fetch(
-		`${baseUrl}/v1/agents?project=${encodeURIComponent(project)}&include_explicit=true`,
-		{
-			headers: { authorization: `Bearer ${token}` },
-		},
-	);
+	const resp = await fetch(`${baseUrl}/v1/agents?project=${encodeURIComponent(project)}&include_explicit=true`, {
+		headers: { authorization: `Bearer ${token}` },
+	});
 	if (!resp.ok) throw new Error(`GET /v1/agents: ${resp.status} ${await resp.text()}`);
 	const listing = (await resp.json()) as AgentListing;
 	return listing.agents ?? [];
