@@ -774,6 +774,15 @@ export const IacState = Annotation.Root({
 	// (pipeline-status intent) re-polls THIS imperative pipeline -- there is no MR for a binary
 	// upgrade, so watchPipeline's MR-recovery path can't find it. Set when the apply is dispatched.
 	fleetApplyPipelineId: Annotation<number | null>({ reducer: last, default: () => null }),
+	// SIO-1664: target version of an upgrade RECOVERED from durable memory on a cross-session
+	// status check. That turn has no fleetUpgradeReport (written only by detectFleetUpgrade in the
+	// session that dispatched the upgrade, and never persisted), so report.targetVersion -- the only
+	// other home for the version -- is null. Without this the summary cannot name the version, and
+	// buildFleetFactAnnotations rewrites the durable fact with no version at all, degrading what a
+	// later session can recall. Deliberately NOT a synthesized report: formatFleetUpgradeSummary
+	// reads versionAvailable/crosstab BEFORE it reads the result, so a zeroed stub would print a
+	// confidently wrong "not in available_versions" or "no agents are upgradeable".
+	recoveredFleetVersion: Annotation<string>({ reducer: last, default: () => "" }),
 	// Renovate on-demand MR automation sub-flow. renovateTarget holds the extracted
 	// {deployment, integration} pair; renovateCandidates holds every dashboard entry
 	// matched by resolveRenovateMarker (0, 1, or 2+ -- exactly 1 proceeds to the gate,

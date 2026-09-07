@@ -483,6 +483,54 @@ export async function priorChangesForDeployment(
 	}));
 }
 
+// SIO-1664: fleet AGENT-BINARY upgrade history across every deployment, newest first, optionally
+// bounded to changes at/after `since` (an ISO instant). This answers a retrospective question --
+// "what agent upgrades did we do today" -- which the memory-fact path cannot: durable fleet facts
+// are keyed by kind/deployment/pipeline and the recall collapses to ONE upgrade, while the KG
+// already stores a dated ConfigChange per upgrade (written by applyFleetUpgrade via
+// recordLaneConfigChange, SIO-1461). createdAt is an ISO string, so a lexicographic comparison is
+// chronological -- the same assumption the ORDER BY in every sibling reader here relies on.
+// The target version lives in the summary ("fleet upgrade <deployment> -> <version>"), so it is
+// parsed out rather than re-derived; an unparseable summary yields "" instead of a wrong version.
+export interface FleetUpgradeChange {
+	deployment: string;
+	version: string;
+	outcome: string;
+	summary: string;
+	createdAt: string;
+}
+
+export function parseFleetUpgradeVersion(summary: string): string {
+	// Mirrors applyFleetUpgrade's `fleet upgrade ${deployment} -> ${targetVersion}` summary.
+	const m = /->\s*(\S+)\s*$/.exec(summary ?? "");
+	return m?.[1] ?? "";
+}
+
+export async function fleetUpgradeHistory(
+	store: GraphStore,
+	since?: string,
+	limit = 50,
+): Promise<FleetUpgradeChange[]> {
+	const rows = await store.run<{
+		deployment: string;
+		outcome: string | null;
+		summary: string | null;
+		createdAt: string | null;
+	}>(
+		`MATCH (d:ElasticDeployment)-[:CHANGED_BY]->(c:ConfigChange) WHERE c.workflow = 'fleet-upgrade'${
+			since ? " AND c.createdAt >= $since" : ""
+		} RETURN d.name AS deployment, c.outcome AS outcome, c.summary AS summary, c.createdAt AS createdAt ORDER BY c.createdAt DESC LIMIT $limit`,
+		since ? { since, limit } : { limit },
+	);
+	return rows.map((r) => ({
+		deployment: String(r.deployment ?? ""),
+		version: parseFleetUpgradeVersion(String(r.summary ?? "")),
+		outcome: String(r.outcome ?? ""),
+		summary: String(r.summary ?? ""),
+		createdAt: String(r.createdAt ?? ""),
+	}));
+}
+
 // SIO-965: change history scoped to one (deployment, stack) cell. createdAt is an
 // ISO string so a lexicographic ORDER BY DESC is chronological.
 export interface StackInstanceChange {

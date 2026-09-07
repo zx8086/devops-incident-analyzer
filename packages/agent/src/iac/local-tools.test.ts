@@ -135,3 +135,62 @@ describe("tool factories", () => {
 		expect(mem.description.toLowerCase()).toContain("memory");
 	});
 });
+
+// SIO-1664: the retrospective fleet-upgrade history tool. This exists because the durable-memory
+// path structurally could not answer "what agent upgrades did we do today": the in-flight recall
+// collapses to ONE upgrade, and fleet facts carry no queryable date. The KG already stores a dated
+// ConfigChange per apply, so this returns a LIST bounded by `since`. Uses a stubbed graph store --
+// the real-engine round trip is covered in the knowledge-graph package's integration suite.
+describe("runFleetUpgradeHistory (SIO-1664)", () => {
+	const rows = [
+		{ deployment: "us-cld", version: "9.5.3", outcome: "applied", summary: "", createdAt: "2026-09-08T09:00:00.000Z" },
+		{ deployment: "eu-cld", version: "9.5.3", outcome: "proposed", summary: "", createdAt: "2026-09-08T08:00:00.000Z" },
+	];
+
+	test("renders EVERY upgrade as its own line, never collapsing to one", async () => {
+		mock.module("@devops-agent/knowledge-graph", () => ({
+			isKnowledgeGraphEnabled: () => true,
+			getGraphStore: async () => ({}),
+			fleetUpgradeHistory: async () => rows,
+		}));
+		const { runFleetUpgradeHistory } = await import("./local-tools.ts");
+		const out = await runFleetUpgradeHistory({ since: "2026-09-08T00:00:00.000Z" });
+		const lines = out.split("\n").filter(Boolean);
+		expect(lines).toHaveLength(2);
+		expect(lines[0]).toContain("us-cld");
+		expect(lines[0]).toContain("9.5.3");
+		expect(lines[1]).toContain("eu-cld");
+	});
+
+	test("an empty window says so rather than implying nothing ever ran", async () => {
+		mock.module("@devops-agent/knowledge-graph", () => ({
+			isKnowledgeGraphEnabled: () => true,
+			getGraphStore: async () => ({}),
+			fleetUpgradeHistory: async () => [],
+		}));
+		const { runFleetUpgradeHistory } = await import("./local-tools.ts");
+		expect(await runFleetUpgradeHistory({ since: "2027-01-01T00:00:00.000Z" })).toContain(
+			"at or after 2027-01-01T00:00:00.000Z",
+		);
+	});
+
+	test("soft-fails when the graph is disabled or the read throws (never errors the turn)", async () => {
+		mock.module("@devops-agent/knowledge-graph", () => ({
+			isKnowledgeGraphEnabled: () => false,
+			getGraphStore: async () => ({}),
+			fleetUpgradeHistory: async () => rows,
+		}));
+		const disabled = await import("./local-tools.ts");
+		expect(await disabled.runFleetUpgradeHistory({})).toContain("knowledge graph is disabled");
+
+		mock.module("@devops-agent/knowledge-graph", () => ({
+			isKnowledgeGraphEnabled: () => true,
+			getGraphStore: async () => {
+				throw new Error("cold store");
+			},
+			fleetUpgradeHistory: async () => rows,
+		}));
+		const throwing = await import("./local-tools.ts");
+		expect(await throwing.runFleetUpgradeHistory({})).toContain("unavailable");
+	});
+});
