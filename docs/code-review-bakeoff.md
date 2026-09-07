@@ -53,6 +53,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#700](https://github.com/zx8086/devops-incident-analyzer/pull/700) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | gitlab-mcp proxy schema conversion: array and enum types honoured when converting GitLab's discovered tool schemas (2 files); SKIPPED once in about 130 ms, CodeRabbit silent (21st straight); all five CI jobs green first run; merged on user authorization; detail below |
 | [#701](https://github.com/zx8086/devops-incident-analyzer/pull/701) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | fleet CLI: nine fixes taking `just fleet deploy` from unrunnable to a clean end-to-end dev deployment (14 files); SKIPPED once in about 156 ms, CodeRabbit silent (22nd straight); all five CI jobs green first run; merged on user authorization; detail below |
 | [#702](https://github.com/zx8086/devops-incident-analyzer/pull/702) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | `just hub-tunnel` takes an environment instead of a profile, new `just coms-env` (11 files); SKIPPED three times in 115-165 ms, including an explicit MCP re-trigger; CodeRabbit silent (23rd straight); all five CI jobs green; merged on user authorization with the gate knowingly overridden; detail below |
+| [#703](https://github.com/zx8086/devops-incident-analyzer/pull/703) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | hub addressed by AWS account, positional port is the hub port, coms-env folded into `just coms` (8 files); SKIPPED once in 108 ms; CodeRabbit silent (24th straight); all five CI jobs green; merged on user authorization with the gate again overridden; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -782,6 +783,24 @@ Two files. `jsonSchemaTypeToZod` handled string/number/integer/boolean and sent 
 3. *Two review-substitute findings came from the human, not from CI.* The user caught the stale `just hub-tunnel eu-shared-services-prd eu-central-1 8787` invocation failing with `does not contain recipe 8787` (just parses a 3rd positional as another recipe, so the guard had to move to the root delegation), and then asked for a repo-wide sweep that turned up `tag:Name=pi-coms-hub-hub` in `usage.md` -- stale since SIO-1653 dropped the module's redundant suffix, and wrong in a doc whose whole purpose is finding the instance by hand. Neither is the kind of defect CI can see.
 4. *A verification claim in this session was wrong in a way a reviewer would have caught.* The recipe change was first applied to the worktree copy while `just` from the repo root reads the main checkout's justfile -- a different file -- so an early "verified working" claim was made against code that was not the code being run. The worktree/main justfile split is worth treating as a standing hazard, not a one-off slip.
 5. *The PR is deliberately broader than its title.* It carries `83381d0b`, the user's own unpushed prd Terraform render, because `publish-fleet.sh` refuses to build a bundle while those tracked files are uncommitted. It was surfaced in the PR body and the user chose to keep it rather than split it -- the alternative was leaving a commit stranded on a local main that the prd fleet already depends on.
+
+## PR #703 detail (hub addressed by AWS account; a doc sweep catches a live regression)
+
+8 files. Follow-up to #702: `prd` names an environment, not a hub, so it cannot address a second hub in another account's production. The selector is now the AWS account (profile or id). Also fixes a positional-argument trap and folds `coms-env` into `just coms`.
+
+**Greptile:** terminal **SKIPPED** (id 22869623 on `88154b1d`), 108 ms, `strictness: 2`, body null. No re-trigger attempted -- #702 re-confirmed that an explicit MCP trigger skips identically.
+
+**CodeRabbit:** nothing, through CI completion. Twenty-fourth consecutive absence (#679 to #703).
+
+**Merge gate:** all five CI jobs green. Zero findings to triage. Ninth consecutive code PR merged with no review from either bot. Merged on the user's explicit instruction. Squash `1d42f3fe`.
+
+**Takeaways:**
+
+1. *The bug this PR fixes was a self-inflicted regression from the PR before it, and it presented as an auth failure.* `just hub-tunnel prd 8787` read `8787` as the LOCAL port, so a prd tunnel bound **8787 -- dev's port**; `just coms simon` then reached the prd hub with dev-shaped credentials and returned `HTTP 401 POST /v1/agents/register`. A wrong-hub bug wearing a credentials error. Worth checking which hub a tunnel actually points at before believing a 401.
+2. *Sweeping the docs found a regression the tests could not.* `dev` is both a manifest hub key and a legitimate cname, so `just coms dev --model X` -- the example printed in README.md and usage.md -- stopped opening a local session and tried the dev hub. The fix (`--strict-selector`: profile or account id only for the console) came from reading the docs against the new behaviour, not from CI. Docs that contain runnable examples are a test surface.
+3. *A truncated tool output nearly hid a lint failure.* `bunx biome check | tail -2` printed "Checked 1 file. No fixes applied." and cut off "Found 1 error" -- a formatter error that would have failed CI. Read the `Found N errors` line, never a trimmed tail.
+4. *The design work was parked deliberately rather than done.* `hubs` is keyed `dev|stg|prd` across the fleet CLI and the analyzer, so a genuine rekey touches spoke-to-hub binding, CIDR isolation, `token_env`, and `PI_COMS_HUBS`. The user chose KISS -- profile selector now, replace it when a second hub appears -- and the rekey is written up in `docs/superpowers/specs/2026-09-07-multi-hub-addressing.md` so it need not be re-derived under pressure.
+5. *One silent hazard is now documented but NOT fixed:* `environmentForEstate` (`pi-verifier.ts:104`) routes an estate to a hub by name suffix, so `eu-oit-prd` and `eu-shared-services-prd` both resolve to `prd`. Correct only while one prd hub exists; a second would be routed to the wrong hub with no error.
 
 ## PR #689 detail (pi-fleet gitagent feasibility report)
 
