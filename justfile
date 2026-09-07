@@ -18,13 +18,9 @@ coms-net-server *args:
 coms-net-server-lan *args:
     {{pi_just}} coms-net-server-lan "$@"
 
-# Open a Pi console session against a LOCAL hub: just coms <cname> [pi args]
+# Pi console: just coms <env|profile|account> <cname>, or just coms <cname> for a local hub
 coms *args:
     {{pi_just}} coms "$@"
-
-# Pi console against a deployed hub: just coms-env <env|profile|account> <cname>
-coms-env *args:
-    {{pi_just}} coms-env "$@"
 
 # just token-create <principal> "<names>" <kind> [profile]
 token-create *args:
@@ -38,7 +34,7 @@ token-revoke *args:
 token-list *args:
     {{pi_just}} token-list "$@"
 
-# SSM port-forward to a hub: just hub-tunnel <env|profile|account> [--local-port N]
+# SSM port-forward to a hub: just hub-tunnel <env|profile|account> [hub-port] [--local-port N]
 hub-tunnel *args:
     {{pi_just}} hub-tunnel "$@"
 

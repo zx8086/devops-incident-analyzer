@@ -29,6 +29,9 @@ if (!manifestPath || !selector) {
 	console.error("usage: hub-tunnel-target.ts <manifest> <env|profile|account-id>");
 	process.exit(2);
 }
+// A cname is not a hub. Callers that accept both (just coms) probe with the
+// first word and treat a non-zero exit as "this is a local-hub cname", so the
+// probe must not be noisy: exit 3 distinguishes "no match" from a real error.
 if (!existsSync(manifestPath)) process.exit(0);
 
 const doc = parse(readFileSync(manifestPath, "utf8")) as { hubs?: Record<string, Hub> };
@@ -43,7 +46,7 @@ if (matches.length === 0) {
 		.sort()
 		.join(", ");
 	console.error(`no hub "${selector}" in ${manifestPath} (have: ${known || "none"})`);
-	process.exit(1);
+	process.exit(3);
 }
 // Two hubs answering one selector would silently pick one; name them instead.
 if (matches.length > 1) {
