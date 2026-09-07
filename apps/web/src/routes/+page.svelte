@@ -153,23 +153,44 @@ const fleetLogIndex = $derived.by(() => {
 // console needs its flag and a configured hub), so the list comes from
 // /api/agents. Falls back to the two always-available agents if the probe fails,
 // so a transient error never strands the operator on one agent.
-let selectableIds = $state<AgentId[]>(AGENT_CHOICES.filter((c) => c.id !== "pi-fleet-console").map((c) => c.id));
+// SIO-1657: the modes the header control cycles. The fallback is the two
+// always-available agents; the fleet console is contextual, never a mode.
+let modeIds = $state<AgentId[]>(AGENT_CHOICES.filter((c) => c.id !== "pi-fleet-console").map((c) => c.id));
+// SIO-1657: whether this deployment can run the fleet console at all (its flag
+// AND a configured hub, both server-side). Availability only -- where it is
+// OFFERED is decided by consoleOffered below.
+let consoleAvailable = $state(false);
 
 async function loadSelectableAgents() {
 	try {
 		const res = await fetch("/api/agents");
 		if (!res.ok) return;
-		const body = (await res.json()) as { agents?: Array<{ id: string }> };
-		const ids = (body.agents ?? []).map((a) => a.id).filter(isAgentId);
-		if (ids.length > 0) selectableIds = ids;
+		const body = (await res.json()) as { agents?: Array<{ id: string; surface?: string }> };
+		const agents = (body.agents ?? []).filter((a) => isAgentId(a.id));
+		const ids = agents.filter((a) => a.surface === "mode").map((a) => a.id as AgentId);
+		if (ids.length > 0) modeIds = ids;
+		consoleAvailable = agents.some((a) => a.id === "pi-fleet-console");
 	} catch {
 		// Keep the fallback list.
 	}
 }
 
-// Cycles through the agents this deployment offers, in registry order.
+// SIO-1657: the fleet console asks live account spokes about an incident, so it
+// is offered only while analyzing one -- not from the IaC config maker.
+const consoleOffered = $derived(consoleAvailable && agentStore.currentAgent === "incident-analyzer");
+// The console is NOT in the cycle, so switching to it would otherwise be a
+// one-way trip; while it is current the control returns to the default agent.
+const onContextualAgent = $derived(!modeIds.includes(agentStore.currentAgent));
+
+// Cycles the header's modes, in registry order.
 function cycleAgent() {
-	const ids = selectableIds;
+	const ids = modeIds;
+	if (ids.length === 0) return;
+	// From a contextual agent (the fleet console) the control is a way back.
+	if (onContextualAgent) {
+		agentStore.switchAgent(ids.includes(DEFAULT_AGENT_ID) ? DEFAULT_AGENT_ID : (ids[0] as AgentId));
+		return;
+	}
 	const next = ids[(ids.indexOf(agentStore.currentAgent) + 1) % ids.length];
 	if (next) agentStore.switchAgent(next);
 }
@@ -263,8 +284,10 @@ function handleSuggestionClick(suggestion: string) {
         type="button"
         onclick={cycleAgent}
         disabled={agentStore.isStreaming}
-        title="Switch agent ({agentTitle})"
-        aria-label="Switch agent (current: {agentTitle})"
+        title={onContextualAgent ? "Back to Incident Analyzer" : `Switch mode (${agentTitle})`}
+        aria-label={onContextualAgent
+          ? "Back to the Incident Analyzer"
+          : `Switch mode (current: ${agentTitle})`}
         class="w-7 h-7 rounded-full flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed {agentStore.currentAgent === DEFAULT_AGENT_ID ? 'bg-tommy-navy hover:bg-tommy-accent-blue' : 'bg-tommy-accent-blue ring-2 ring-white/70'}"
       >
         <Icon name="bot" class="w-4 h-4 text-white" />
@@ -290,6 +313,21 @@ function handleSuggestionClick(suggestion: string) {
       >
         <Icon name="graph" class="w-5 h-5" />
       </button>
+      <!-- SIO-1657: the fleet console is a capability of the incident analyzer's
+           context, not a peer mode, so it is offered here rather than cycled by
+           the mode control. Hidden in the IaC agent, where it means nothing. -->
+      {#if consoleOffered}
+        <button
+          type="button"
+          onclick={() => agentStore.switchAgent("pi-fleet-console")}
+          disabled={agentStore.isStreaming}
+          title="Ask the fleet console"
+          aria-label="Switch to the fleet console"
+          class="min-w-[44px] min-h-[44px] p-2 rounded-lg transition-all border-2 border-transparent text-white/70 hover:text-white hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <Icon name="bot" class="w-5 h-5" />
+        </button>
+      {/if}
       <!-- SIO-1650: pi-fleet pane toggle, only when a pi-coms hub is configured. -->
       {#if piFleetStore.configured}
         <button
