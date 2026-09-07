@@ -7,7 +7,26 @@ import { DEFAULT_AUTH_PATH, type FleetManifest, hubFor, spokeFor, spokeNames } f
 
 export type PreflightRow = { spoke: string; check: string; ok: boolean; detail: string };
 
-const ANALYZER_TRUST_HINT = /DevOpsAgentCoreRole|bedrock-agentcore/;
+// Principals that legitimately own a DevOpsAgentReadOnly this fleet may adopt.
+// The check exists to stop `adopt` from touching a same-named role belonging to
+// something else -- clobbering its trust policy would silently cut off whatever
+// depends on it (the risk the feasibility doc rates "trust-policy edit on a prd
+// DevOpsAgentReadOnly clobbers the analyzer's access").
+//
+// Two legitimate owners, hence two patterns:
+//   - the incident analyzer, which assumes the role from AgentCore; and
+//   - `pi-agent-agent`, the spoke's OWN instance role. The dev accounts
+//     (352896877281, 120999474587) were deployed this way before the fleet CLI
+//     existed: the role trusts the local pi-agent with the
+//     `devops-agent-*-access` ExternalId and no analyzer statement. That is the
+//     role this fleet is meant to adopt, so refusing it was a false negative.
+//
+// Deliberately still a NARROW allow-list, not a blanket pass: an unrecognised
+// principal keeps failing preflight, on dev and prd alike.
+// The Project tag this module stamps on every resource it creates.
+const PI_COMS_STACK = "pi-coms-net";
+
+const ADOPTABLE_TRUST_HINT = /DevOpsAgentCoreRole|bedrock-agentcore|role\/pi-agent-agent/;
 
 export async function preflightSpoke(manifest: FleetManifest, name: string, aws: FleetAws): Promise<PreflightRow[]> {
 	const spoke = spokeFor(manifest, name);
@@ -125,13 +144,13 @@ export async function preflightSpoke(manifest: FleetManifest, name: string, aws:
 			if (!trust)
 				row("adopt role", false, "DevOpsAgentReadOnly does not exist in this account; use readonly_role: create");
 			else {
-				const analyzer = trust.statements.some((st) => st.principals.some((p) => ANALYZER_TRUST_HINT.test(p)));
+				const adoptable = trust.statements.some((st) => st.principals.some((p) => ADOPTABLE_TRUST_HINT.test(p)));
 				row(
 					"adopt role",
-					analyzer,
-					analyzer
-						? `${trust.arn} trusts the analyzer; pi-coms adds one statement`
-						: `${trust.arn} has no analyzer trust statement; confirm this is the analyzer's role before adopting`,
+					adoptable,
+					adoptable
+						? `${trust.arn} trusts the analyzer or this account's pi-agent; pi-coms adds one statement`
+						: `${trust.arn} trusts neither the analyzer nor pi-agent-agent; confirm whose role this is before adopting`,
 				);
 			}
 		} catch (error) {
@@ -140,11 +159,27 @@ export async function preflightSpoke(manifest: FleetManifest, name: string, aws:
 	} else if (spoke.readonly_role === "create") {
 		try {
 			const trust = await aws.roleTrust(spoke.profile, region, "DevOpsAgentReadOnly");
+			// "create" used to require the role to be ABSENT, which refused the
+			// commonest steady state: a fleet pi-coms deployed itself, where the
+			// role exists AND terraform already manages it. Both modes then
+			// blocked -- `create` because it exists, `adopt` because adopt stops
+			// managing the vendored policies and would destroy 207 read actions
+			// (observed on eu-oit-dev / eu-shared-services-dev, 2026-09-07).
+			//
+			// Ownership is what the check actually needs, and the role's own tags
+			// answer it: this module stamps ManagedBy=terraform + Project=pi-coms-net
+			// on everything it creates. A role carrying both is ours to keep
+			// managing; one without them belongs to something else and `adopt` is
+			// the right mode. GetRole already returns tags, so this costs no extra
+			// call.
+			const ours = trust !== undefined && trust.tags.ManagedBy === "terraform" && trust.tags.Project === PI_COMS_STACK;
 			row(
 				"create role",
-				!trust || account === "",
+				!trust || ours || account === "",
 				trust
-					? `DevOpsAgentReadOnly already exists (${trust.arn}); use readonly_role: adopt`
+					? ours
+						? `${trust.arn} already exists and is managed by this fleet; terraform keeps it`
+						: `DevOpsAgentReadOnly already exists (${trust.arn}) and is NOT tagged as this fleet's; use readonly_role: adopt`
 					: "DevOpsAgentReadOnly absent, will be created",
 			);
 		} catch (error) {

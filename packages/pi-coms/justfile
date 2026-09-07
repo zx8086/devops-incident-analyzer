@@ -53,12 +53,25 @@ hub-tunnel profile="eu-shared-services-dev" region="eu-central-1" port="8787" lo
         http://127.0.0.1:*|http://localhost:*) LOCAL="${PI_COMS_NET_SERVER_URL##*:}" ;;
         *) LOCAL="{{port}}" ;;
       esac
+      # Derive a distinct local port per environment so a dev and a prd tunnel
+      # can be open at once: both used to default to 8787 and the second silently
+      # bound nothing, leaving the operator querying the wrong hub. Only applied
+      # to the DERIVED default -- an explicit local_port (or a localhost
+      # PI_COMS_NET_SERVER_URL) still wins.
+      case "{{profile}}" in
+        *-prd|*-prod) LOCAL=$((LOCAL + 1)) ;;
+        *-stg)        LOCAL=$((LOCAL + 2)) ;;
+      esac
     fi
     HUB_ID=$(aws ec2 describe-instances --profile {{profile}} --region {{region}} \
-      --filters "Name=tag:Name,Values=pi-coms-hub-hub" "Name=instance-state-name,Values=running" \
+      --filters "Name=tag:Name,Values=pi-coms-hub" "Name=instance-state-name,Values=running" \
       --query "Reservations[].Instances[].InstanceId" --output text)
     if [ -z "$HUB_ID" ] || [ "$HUB_ID" = "None" ]; then echo "no running hub instance found" >&2; exit 1; fi
-    echo "hub instance: $HUB_ID port {{port}} -> localhost:$LOCAL"
+    if lsof -nP -iTCP:"$LOCAL" -sTCP:LISTEN >/dev/null 2>&1; then
+      echo "local port $LOCAL is already in use (another hub tunnel?); pass a free one: just hub-tunnel {{profile}} {{region}} {{port}} <local-port>" >&2
+      exit 1
+    fi
+    echo "hub instance: $HUB_ID ({{profile}}) port {{port}} -> localhost:$LOCAL"
     exec aws ssm start-session --profile {{profile}} --region {{region}} --target "$HUB_ID" \
       --document-name AWS-StartPortForwardingSession \
       --parameters "{\"portNumber\":[\"{{port}}\"],\"localPortNumber\":[\"$LOCAL\"]}"

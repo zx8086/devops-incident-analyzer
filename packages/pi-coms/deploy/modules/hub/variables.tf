@@ -34,9 +34,9 @@ variable "repo_url" {
 }
 
 variable "name_prefix" {
-  description = "Prefix applied to every resource name."
+  description = "Prefix applied to every resource name; the module appends the component (-hub, -hub-mailbox)."
   type        = string
-  default     = "pi-coms-hub"
+  default     = "pi-coms"
 }
 
 variable "instance_type" {

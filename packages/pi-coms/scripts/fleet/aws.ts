@@ -35,7 +35,14 @@ import { fromIni } from "@aws-sdk/credential-providers";
 
 export type Identity = { account: string; arn: string };
 export type RouteSummary = { vpcId: string; cidr: string; transitGatewayRoute: boolean };
-export type TrustSummary = { arn: string; statements: Array<{ sid?: string; principals: string[] }> };
+export type TrustSummary = {
+	arn: string;
+	statements: Array<{ sid?: string; principals: string[] }>;
+	// The role's own tags. GetRole already returns them, so this costs no extra
+	// call; preflight uses them to tell a role THIS fleet created from one that
+	// merely shares the name.
+	tags: Record<string, string>;
+};
 
 export interface FleetAws {
 	callerIdentity(profile: string, region: string): Promise<Identity>;
@@ -159,6 +166,7 @@ export const realFleetAws: FleetAws = {
 								? st.Principal.AWS
 								: [st.Principal.AWS],
 				})),
+				tags: Object.fromEntries((out.Role?.Tags ?? []).map((t) => [t.Key ?? "", t.Value ?? ""])),
 			};
 		} catch (error) {
 			if (error instanceof Error && error.name === "NoSuchEntityException") return undefined;

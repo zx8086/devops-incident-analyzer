@@ -62,6 +62,13 @@ provider "aws" {
       ManagedBy   = "terraform"
       Stack       = ${hcl(stack)}
       Environment = ${hcl(spoke.env)}
+      // The coms-net project namespace these agents register into. Informational:
+      // routing is by hub (per environment) and the tunnel is selected by AWS
+      // profile, so nothing filters on this tag. It exists so an operator reading
+      // the console can tell which registry an instance belongs to without
+      // cross-referencing the manifest. NOT the same thing as the Project tag
+      // above, which is the Terraform stack marker.
+      ComsProject = ${hcl(hub.project ?? "default")}
     }
   }
 }
@@ -226,6 +233,7 @@ module "agent" {
   coms_auth_token      = var.coms_auth_token
   repo_url             = var.repo_url
   agent_name           = var.agent_name
+  coms_project         = ${hcl(hub.project ?? "default")}
   subnet_id            = var.agent_subnet_id
   associate_public_ip  = false
   instance_type        = ${hcl(spoke.instance_type ?? manifest.defaults.instance_type)}
@@ -353,7 +361,7 @@ export function renderTfvars(manifest: FleetManifest, name: string, existing?: s
 			`hub_subnet_id   = ${hcl(hub.subnet_id)}`,
 			`hub_private_ip  = ${hcl(hub.private_ip)}`,
 			`allowed_cidrs   = ${JSON.stringify(hub.allowed_cidrs)}`,
-			`org_id          = "<set: aws organizations describe-organization>"`,
+			`org_id          = ${hcl(manifest.org_id ?? "<set: aws organizations describe-organization>")}`,
 		);
 	}
 	return `${lines.join("\n")}\n`;
