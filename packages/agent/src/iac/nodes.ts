@@ -85,6 +85,9 @@ export {
 	parseSinglePipeline,
 } from "./fleet-apply-result.ts";
 
+// SIO-1656: the AGENTS.md section 10 MR label contract (agent-generated + iac +
+// exactly one change class, applied on the create call).
+import { changeClassForWorkflow, mrLabels } from "./mr-labels.ts";
 import { iacProposalFactTtlSeconds, reconcileAll } from "./reconcile.ts";
 import type {
 	DriftReport,
@@ -3384,10 +3387,14 @@ export function resolveBranch(state: IacStateType, req: IacRequest): string {
 	return branchName(req);
 }
 
-// SIO-965: every agent-opened MR carries these GitLab labels. The MCP tool defaults
-// to the same pair, but the callers pass them explicitly so the contract is visible
-// at the call site and cannot silently regress if the tool default ever changes. The
-// gitlab_list_agent_merge_requests recovery tool filters on "agent-generated".
+// SIO-965: the labels that identify an agent-authored MR when READING GitLab --
+// gitlab_list_agent_merge_requests filters on "agent-generated", and the MR-import
+// sweep matches on this pair.
+//
+// SIO-1656: this is NOT the create-time label set. An MR is opened with these PLUS
+// exactly one AGENTS.md section 10 change class; see mr-labels.ts (mrLabels()).
+// Sending only this pair is the defect that failed check-mr-labels on every config
+// MR, so do not reintroduce it at a create call site.
 export const AGENT_MR_LABELS = ["agent-generated", "iac"] as const;
 
 // SIO-965: derive the stack name from an edited repo path. The elastic-iac repo
@@ -8489,7 +8496,10 @@ export async function openMr(state: IacStateType): Promise<Partial<IacStateType>
 		target_branch: "main",
 		title: review?.title ?? "Elastic IaC change",
 		description,
-		labels: [...AGENT_MR_LABELS],
+		// SIO-1656: the AGENTS.md section 10 change class is required ON CREATE --
+		// a label added later is invisible to check-mr-labels, which reads
+		// CI_MERGE_REQUEST_LABELS as resolved at pipeline creation.
+		labels: mrLabels(changeClassForWorkflow(state.iacRequest?.workflow)),
 	});
 	const result = classifyCreateMrResult(mr);
 
@@ -10556,7 +10566,10 @@ async function openReconcileMr(
 		target_branch: "main",
 		title,
 		description,
-		labels: [...AGENT_MR_LABELS],
+		// SIO-1656: this lane is always drift reconciliation, so the section 10
+		// class is fixed (never "drift-detection"/"drift-check" -- the gate
+		// rejects both).
+		labels: mrLabels("drift"),
 	});
 	// Only a 409 (MR already exists for this branch) is a reuse; any other 4xx/5xx is a real
 	// failure and must block (never report a successful reconcile with an empty MR url).

@@ -57,6 +57,10 @@ function gitopsState(over: Partial<IacStateType> = {}): IacStateType {
 }
 
 describe("AGENT_MR_LABELS", () => {
+	// SIO-1656: this pair is the READ-side filter (recovery + MR import), NOT the
+	// create-time label set -- an MR is opened with these plus exactly one change
+	// class (see mr-labels.test.ts). Do not read this assertion as licence to send
+	// the bare pair at a create call; that is DEFECT 2026-09-07-01.
 	test("are exactly the agent-generated + iac pair", () => {
 		expect([...AGENT_MR_LABELS]).toEqual(["agent-generated", "iac"]);
 	});
