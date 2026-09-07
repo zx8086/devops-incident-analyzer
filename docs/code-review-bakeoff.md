@@ -51,6 +51,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#698](https://github.com/zx8086/devops-incident-analyzer/pull/698) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1655 Phase 2c PR 2: fleet console graph, five hub tools, the untrusted-reply boundary (23 files); SKIPPED three times in about 130 ms each, CodeRabbit silent (19th straight); Typecheck and Lint both failed the first run (a union-typed graph thunk svelte-check caught, and three unformatted files); green on the third; merged on user authorization; detail below |
 | [#699](https://github.com/zx8086/devops-incident-analyzer/pull/699) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1655 follow-up: pi-coms capabilities default ON and move into the config schema (15 files); SKIPPED once in about 165 ms, CodeRabbit silent (20th straight); all five CI jobs green first run; merged on user authorization; detail below |
 | [#700](https://github.com/zx8086/devops-incident-analyzer/pull/700) | 2026-09-06 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | gitlab-mcp proxy schema conversion: array and enum types honoured when converting GitLab's discovered tool schemas (2 files); SKIPPED once in about 130 ms, CodeRabbit silent (21st straight); all five CI jobs green first run; merged on user authorization; detail below |
+| [#701](https://github.com/zx8086/devops-incident-analyzer/pull/701) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | fleet CLI: nine fixes taking `just fleet deploy` from unrunnable to a clean end-to-end dev deployment (14 files); SKIPPED once in about 156 ms, CodeRabbit silent (22nd straight); all five CI jobs green first run; merged on user authorization; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -744,6 +745,24 @@ Two files. `jsonSchemaTypeToZod` handled string/number/integer/boolean and sent 
 3. *The upstream sources disagreed, and the difference mattered.* The REST API has no `include` parameter at all (only `include_*` booleans); only the MCP tool declares `include`, as an array of enum facets. Reading only the REST docs would have produced a confident wrong fix. The live `/api/v4/mcp` `tools/list` could not be read to confirm first-hand -- the configured PAT is project-scoped and the endpoint answers 403 -- so the published tool documentation is the source, and that limitation is recorded in the PR body rather than glossed.
 4. *The test was verified to catch the bug.* Removing the `array` case again made 3 of 6 fail; restoring it made 6 pass. Writing a test after a fix proves nothing until it has been seen to fail.
 5. *One deliberate non-strictness:* an array with no `items` still accepts any element, because GitLab shipped array params that way before gitlab-org/gitlab!211286. Tightening that too would have traded a wasted call for a refused one.
+
+## PR #701 detail (fleet CLI, nine fixes found by actually running the deploy)
+
+14 files. Every fix was found by driving `just fleet deploy` against two live AWS accounts, not by reading code: preflight refusing correct manifests, five instances of an unscoped hub-registry read, a doubled resource name, a tunnel port collision, and a placeholder written into a live IAM policy.
+
+**Greptile:** terminal **SKIPPED** (id 22839873 on `c53fb11f`), about 156 ms, `strictness: 2`, body null.
+
+**CodeRabbit:** nothing, through CI completion. Twenty-second consecutive absence (#679 to #701).
+
+**Merge gate:** all five CI jobs green on the first run. Zero findings to triage. Code-class; merged on the user's explicit instruction. Squash `707b1bd0`.
+
+**Takeaways:**
+
+1. *Every one of these needed a live run to find.* Types checked, tests passed, and the code read fine; the failures were an empty-list-not-an-error API contract, an IAM condition that matched nothing, and a systemd unit reporting failure for a registration that had succeeded. A reviewer reading this diff would have caught none of them. That is the strongest argument yet for the user-run live checks this ledger keeps deferring.
+2. *One API shape produced five separate bugs.* `GET /v1/agents` answers an unknown project with an empty list, never an error, so every project mismatch failed silently and differently -- a readiness poll that never sees its own agent, a short-circuit that relaunches a running agent, a drain-wait that exits immediately, a rollout that waits out its deadline, and monitors that 404 on send. When an API cannot distinguish "no results" from "wrong namespace", expect the mismatch to surface everywhere except where you look first.
+3. *Hand-patching a generated file is a latent outage.* `render` wrote an `org_id` placeholder expecting a human to fill it in; the session did that repeatedly, `deploy` re-rendered, and `apply` wrote the literal `<set: ...>` string into the dist bucket policy's `aws:PrincipalOrgID`. Cross-account reads 403'd while the hub account kept working, so it presented as one slow spoke rather than a permissions wall. Generated files need their inputs in the manifest, not in an operator's memory.
+4. *The asymmetry is what hid it.* Self-reads worked, cross-account reads failed. Any check run from the hub account -- including most of the obvious ones -- looked healthy. Worth reaching for the cross-boundary probe early when one node in a fleet misbehaves and the others do not.
+5. *Preflight was refusing correct manifests in both modes.* `adopt` rejected roles trusted by the account's own pi-agent; `create` required the role to be absent, which is never true for a fleet pi-coms deployed itself. The fix was to ask ownership (the `ManagedBy` + `Project` tags the module stamps) rather than existence -- and to keep requiring both tags, so a same-named role belonging to someone else still needs `adopt`.
 
 ## PR #689 detail (pi-fleet gitagent feasibility report)
 
