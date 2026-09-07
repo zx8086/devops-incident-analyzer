@@ -74,6 +74,7 @@ import { createSearchMemoryTool } from "./local-tools.ts";
 // are also re-exported near the bottom of this file for pipeline-status.test.ts, which imports both
 // from "./nodes.ts".
 import { mrIidFromConflictMessage, parseApplyResult, parseMrState } from "./mr-live-state.ts";
+import { ALL_SKILLS, INFO_SKILLS, READ_ONLY_SKILLS, skillsForWorkflow, withShared } from "./skill-selector.ts";
 
 export type { FleetApplyOutcome, FleetFailedAgent } from "./fleet-apply-result.ts";
 export {
@@ -1961,7 +1962,11 @@ export async function parseIntent(state: IacStateType): Promise<Partial<IacState
 	const query = lastHumanText(state);
 	const llm = createLlm("iacPlanner", AGENT);
 	// SIO-1285: narrowed to state.selectedKnowledge when the selector ran; null -> unchanged.
-	const sys = buildSystemPrompt(filterAgentKnowledge(getAgentByName(AGENT), state.selectedKnowledge));
+	// SIO-1663: skills are NOT narrowed here. parseIntent must discriminate among 19
+	// workflows and each edit skill is what tells it that workflow exists, so this is the
+	// floor -- narrowing it would starve classification. withShared keeps cite-sources.
+	const agent = getAgentByName(AGENT);
+	const sys = buildSystemPrompt(filterAgentKnowledge(agent, state.selectedKnowledge), withShared(agent, ALL_SKILLS));
 	const instruction =
 		"Extract the requested Elastic Cloud IaC change as a single strict JSON object with keys: " +
 		// SIO-1003: built from WORKFLOW_VALUES so the instruction enum can never drift from the zod enum.
@@ -2344,8 +2349,11 @@ export async function answerInfo(state: IacStateType): Promise<Partial<IacStateT
 		return { messages: [new AIMessage("Elastic IaC read tools are unavailable; cannot answer right now.")] };
 	}
 	const llm = createLlmWithTools("iacReader", tools, AGENT);
+	// SIO-1663: read-only lane -- binds INFO_TOOL_NAMES + kg_* + search_memory and cannot
+	// branch or open an MR, so the edit skills are unusable here and only inflate the prompt.
+	const infoAgent = getAgentByName(AGENT);
 	const sys =
-		`${buildSystemPrompt(filterAgentKnowledge(getAgentByName(AGENT), state.selectedKnowledge))}\n\n` +
+		`${buildSystemPrompt(filterAgentKnowledge(infoAgent, state.selectedKnowledge), withShared(infoAgent, INFO_SKILLS))}\n\n` +
 		"This is a READ-ONLY question. Use the elastic read tools to answer it precisely. " +
 		"Never draft Terraform, never open an MR, never create a branch. Answer concisely with the facts.";
 	const convo: BaseMessage[] = [new SystemMessage(sys), new HumanMessage(query)];
@@ -2384,7 +2392,10 @@ const CONVERSE_GUARDRAIL =
 
 export async function converseIac(state: IacStateType): Promise<Partial<IacStateType>> {
 	const tools = infoTools();
-	const sys = `${buildSystemPrompt(filterAgentKnowledge(getAgentByName(AGENT), state.selectedKnowledge))}\n\n${CONVERSE_GUARDRAIL}`;
+	// SIO-1663: explain-only lane -- same read-only tool binding as answerInfo, and it does
+	// not answer live-state questions, so it needs only the two recall skills.
+	const converseAgent = getAgentByName(AGENT);
+	const sys = `${buildSystemPrompt(filterAgentKnowledge(converseAgent, state.selectedKnowledge), withShared(converseAgent, READ_ONLY_SKILLS))}\n\n${CONVERSE_GUARDRAIL}`;
 
 	// No read tools available: answer from history alone (still useful -- it's an explanation).
 	if (tools.length === 0) {
@@ -8365,7 +8376,14 @@ async function buildMrDescription(state: IacStateType): Promise<string> {
 		// SIO-1285: reached only on the gitops path, so selectedKnowledge is already the
 		// gitops set. It fills reference/mr-template.md, so `reference` (in every selection
 		// via the floor) is the category it actually needs.
-		const sys = buildSystemPrompt(filterAgentKnowledge(getAgentByName(AGENT), state.selectedKnowledge));
+		// SIO-1663: reached only AFTER parseIntent, so the workflow is known and the skill set
+		// is exact -- the workflow's own skill plus the write-lane plumbing (open-mr fills
+		// mr-template.md here). An unmapped/`other` workflow falls back to the full set.
+		const mrAgent = getAgentByName(AGENT);
+		const sys = buildSystemPrompt(
+			filterAgentKnowledge(mrAgent, state.selectedKnowledge),
+			withShared(mrAgent, skillsForWorkflow(req?.workflow)),
+		);
 		const context = [
 			`Change: ${req?.workflow ?? "other"} on cluster ${req?.cluster ?? "?"}.`,
 			req?.workflow === "version-upgrade"
