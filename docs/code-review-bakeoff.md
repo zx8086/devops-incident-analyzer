@@ -54,6 +54,8 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#701](https://github.com/zx8086/devops-incident-analyzer/pull/701) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | fleet CLI: nine fixes taking `just fleet deploy` from unrunnable to a clean end-to-end dev deployment (14 files); SKIPPED once in about 156 ms, CodeRabbit silent (22nd straight); all five CI jobs green first run; merged on user authorization; detail below |
 | [#702](https://github.com/zx8086/devops-incident-analyzer/pull/702) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | `just hub-tunnel` takes an environment instead of a profile, new `just coms-env` (11 files); SKIPPED three times in 115-165 ms, including an explicit MCP re-trigger; CodeRabbit silent (23rd straight); all five CI jobs green; merged on user authorization with the gate knowingly overridden; detail below |
 | [#703](https://github.com/zx8086/devops-incident-analyzer/pull/703) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | hub addressed by AWS account, positional port is the hub port, coms-env folded into `just coms` (8 files); SKIPPED once in 108 ms; CodeRabbit silent (24th straight); all five CI jobs green; merged on user authorization with the gate again overridden; detail below |
+| [#704](https://github.com/zx8086/devops-incident-analyzer/pull/704) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1656 elastic-iac MR change-class label, a High-severity defect reported from a failed CI gate rather than by either bot (5 files); SKIPPED once in 125 ms; CodeRabbit silent (25th straight); all five CI jobs green first run; merged on user authorization with the gate overridden; detail below |
+| [#705](https://github.com/zx8086/devops-incident-analyzer/pull/705) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1657 fleet console made contextual + triage SVG rendered at natural size (7 files); SKIPPED once in 115 ms; CodeRabbit silent (26th straight); all five CI jobs green first run; merged on user authorization with the gate overridden; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -816,3 +818,40 @@ A docs-only PR: `docs/architecture/pi-fleet-gitagent-feasibility.md` (new) plus 
 
 1. *The skip signature is unchanged for a pure-markdown diff*, which keeps the SIO-1642 account-level cause as the only lead. Nothing in this PR could have exercised a reviewer anyway.
 2. *A side effect worth recording for docs PRs that plan future work:* the first head's title named the three phase issues (SIO-1649, SIO-1650, SIO-1651); Linear's GitHub integration linked the PR to all three within a minute and moved them from Backlog to In Progress, and a merge would have closed them. The commit, title and body were amended to drop the identifiers, the attachments deleted, and the issues restored to Backlog. Planning documents must reference their issues only inside the document body, never in the PR title, branch name or commit subject.
+
+## PR #704 detail (SIO-1656, elastic-iac MR change-class label)
+
+DEFECT 2026-09-07-01: every config MR the elastic-iac agent opened carried only `[agent-generated, iac]`, so the target repo's `check-mr-labels` gate rejected it and the MR could not merge without a manual relabel plus a pipeline re-create. Five files: the new `mr-labels.ts` and its test, two call sites in `nodes.ts`, and two test files.
+
+**Greptile:** terminal **SKIPPED** (id 22887397 on `53fa193f`), 125 ms, `strictness: 2`, body null. No status check, no comment, no review object. Twenty-fifth consecutive skip since #679.
+
+**CodeRabbit:** nothing, through CI completion. Twenty-fifth consecutive absence (#679 to #704).
+
+**Merge gate:** all five CI jobs green first run. Zero findings to triage. Merged on the user's explicit instruction with the documented gate knowingly overridden. Squash `466ad209`.
+
+**Takeaways:**
+
+1. *The most valuable finding in this cycle came from neither bot, but from a CI gate in a different repository.* Both reviewers have been silent for 25 PRs; the defect was caught because `check-mr-labels` failed on MR !630 and a human read the job log. Worth recording for the bake-off: the review bots are not currently the mechanism catching contract violations here.
+2. *The defect report named one call site; there were two.* `openMr` (the reported maker lane) and the drift reconcile lane both sent the bare label pair, and they need DIFFERENT classes (`config-change` derived from the workflow vs a fixed `drift`), so widening the single `AGENT_MR_LABELS` constant would have fixed only half the bug. Grepping every `gitlab_create_merge_request` call site before implementing is what surfaced the second one.
+3. *The recommended fix was not reachable and was declined with a reason.* The report's preferred option was to shell out to the target repo's `scripts/open-mr.sh`; this agent talks to GitLab only through an MCP tool, with no checkout and no shell, so adopting it would have meant granting repo-checkout plus shell execution. The alternative was taken and the report's objection to it ("the agent must own the mapping by hand") answered by deriving the mapping from `WORKFLOW_VALUES` as a `Record<IacWorkflow, ChangeClass>`, which fails to typecheck when a new workflow is added unclassified.
+4. *The regression tests were proven non-vacuous before merge* by reintroducing the defect and confirming four tests fail, then restoring the fix and confirming they pass. Worth doing whenever a test asserts the absence of a specific wrong value.
+5. *Acceptance is only partly satisfied.* Steps 2-4 of the report need a live MR against project 82850717: the version-upgrade flow against `gl-testing` must show `check-mr-labels` passing on the FIRST pipeline, then an ILM change and a fleet pin to prove the mapping rather than the default. Unit coverage asserts the payload, not the gate's verdict.
+
+## PR #705 detail (SIO-1657, fleet console surface + triage graph scaling)
+
+Two frontend items from the running app: the header control cycled the fleet console as if it were a peer mode, and the Elastic IaC triage graph was unreadable. Seven files, all `apps/web`.
+
+**Greptile:** terminal **SKIPPED** (id 22887432 on `1aa34e73`), 115 ms, `strictness: 2`, body null. Twenty-sixth consecutive skip.
+
+**CodeRabbit:** nothing, through CI completion. Twenty-sixth consecutive absence (#679 to #705).
+
+**Merge gate:** all five CI jobs green first run. Zero findings to triage. Merged on the user's explicit instruction with the gate knowingly overridden. Squash `50a3f4b4`.
+
+**Takeaways:**
+
+1. *The handover's diagnosis of the second item was wrong, and measuring beat reading.* It recorded that Elastic IaC showed no triage panel at all and listed three possible meanings for "looks small". The panel does render -- it is agent-parameterized end to end -- and the real cause was a forced downscale: the IaC graph lays out 1644px wide against a ~575px pane, so it drew at 35% and its 10px node labels became 3.5px. Running the real `computeLayout` against both topologies produced that table in minutes and replaced a three-way guess with a number.
+2. *A first estimate was wrong by 25% and was corrected before merge.* A synthetic model of the 10-way intent fan-out predicted 2040px; the real layered layout distributes it better, at 1644px. The defect and the fix were unchanged, but the code comment and the Linear issue were both corrected rather than left carrying a number that would mislead the next reader.
+3. *Only one agent looked wrong for a structural reason worth knowing.* The incident pipeline's datasource fan-out is a `Send` from a single `queryDataSource` node, so it never widens a layout layer; the IaC router's ten conditional targets do. Layout width is set by the widest row, so a `Send`-based fan-out is free and a conditional-edge fan-out is not.
+4. *The obvious fix would not have worked.* Widening the pane (`max-w-xl` to `max-w-3xl`) only takes the labels from 3.5px to 3.8px while costing the chat column width; the downscale itself had to go. Also, the first attempt reintroduced the bug by reaching for `max-w-full`, which caps the SVG at the container width exactly as `w-full` did.
+5. *One half of the change could not be verified in-browser and was covered by tests instead.* This machine has no pi-coms hub, so `/api/agents` correctly omits the console and its entry button never renders; `graph-registry.test.ts` and `agent-surface.test.ts` cover the rules, and both were confirmed to fail when the console is made a mode again. The button itself still wants a look on a hub-configured machine.
+6. *The fix trades overview for legibility, deliberately.* IaC now shows 34% of its graph at a time (the incident analyzer 85%, costing it 103px of overflow it did not have before). In a pane this narrow a wide graph can be legible or fully visible, not both.
