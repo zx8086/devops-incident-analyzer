@@ -163,8 +163,8 @@ const fleetLogIndex = $derived.by(() => {
 // always-available agents; the fleet console is contextual, never a mode.
 let modeIds = $state<AgentId[]>(AGENT_CHOICES.filter((c) => c.id !== "pi-fleet-console").map((c) => c.id));
 // SIO-1657: whether this deployment can run the fleet console at all (its flag
-// AND a configured hub, both server-side). Availability only -- where it is
-// OFFERED is decided by consoleOffered below.
+// AND a configured hub, both server-side). Availability only -- SIO-1662 decides
+// where it is offered: inside the fleet pane, as onAskAll.
 let consoleAvailable = $state(false);
 
 async function loadSelectableAgents() {
@@ -183,7 +183,18 @@ async function loadSelectableAgents() {
 
 // SIO-1657: the fleet console asks live account spokes about an incident, so it
 // is offered only while analyzing one -- not from the IaC config maker.
-const consoleOffered = $derived(consoleAvailable && agentStore.currentAgent === "incident-analyzer");
+// SIO-1662: one fleet affordance, in one place. The fleet is relevant while
+// analyzing an incident, not while making an Elastic Cloud config change, so the
+// pane toggle follows the agent as well as the hub -- it used to render in the
+// IaC agent too, which is the inconsistency this removes.
+//
+// The fleet console counts as fleet context: the pane stays available there, so
+// the "Ask all spokes" entry the operator just used does not vanish behind them
+// and the spoke list is still visible next to the console's answer.
+const fleetOffered = $derived(
+	piFleetStore.configured &&
+		(agentStore.currentAgent === "incident-analyzer" || agentStore.currentAgent === "pi-fleet-console"),
+);
 // The console is NOT in the cycle, so switching to it would otherwise be a
 // one-way trip; while it is current the control returns to the default agent.
 const onContextualAgent = $derived(!modeIds.includes(agentStore.currentAgent));
@@ -319,23 +330,14 @@ function handleSuggestionClick(suggestion: string) {
       >
         <Icon name="graph" class="w-5 h-5" />
       </button>
-      <!-- SIO-1657: the fleet console is a capability of the incident analyzer's
-           context, not a peer mode, so it is offered here rather than cycled by
-           the mode control. Hidden in the IaC agent, where it means nothing. -->
-      {#if consoleOffered}
-        <button
-          type="button"
-          onclick={() => agentStore.switchAgent("pi-fleet-console")}
-          disabled={agentStore.isStreaming}
-          title="Ask the fleet console"
-          aria-label="Switch to the fleet console"
-          class="min-w-[44px] min-h-[44px] p-2 rounded-lg transition-all border-2 border-transparent text-white/70 hover:text-white hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <Icon name="bot" class="w-5 h-5" />
-        </button>
-      {/if}
-      <!-- SIO-1650: pi-fleet pane toggle, only when a pi-coms hub is configured. -->
-      {#if piFleetStore.configured}
+      <!-- SIO-1662: the separate "switch to the fleet console" button is gone. It
+           was a second robot icon next to the mode control's own, and it
+           duplicated an affordance the fleet pane below already provides -- the
+           operator reaches the fleet through one control, not two.
+           SIO-1650/SIO-1657: the pane is offered only where the fleet means
+           something, i.e. while analyzing an incident, and only when a pi-coms
+           hub is configured to serve it. -->
+      {#if fleetOffered}
         <button
           type="button"
           onclick={() => piFleetStore.toggle()}
@@ -712,7 +714,10 @@ function handleSuggestionClick(suggestion: string) {
     </div>
   {/if}
   <!-- SIO-1650: live spokes pane (right), addressed directly, replies as data. -->
-  {#if piFleetStore.configured && piFleetStore.open}
+  <!-- SIO-1662: fleetOffered, not just `configured` -- the pane's own render gate
+       has to match its toggle's, or switching to the IaC agent leaves the pane on
+       screen with no control to close it. -->
+  {#if fleetOffered && piFleetStore.open}
     <div class="w-2/5 max-w-xl shrink-0 border-l border-gray-200 bg-tommy-cream overflow-hidden">
       <PiFleetPane
         pane={piFleetStore.state}
@@ -722,6 +727,7 @@ function handleSuggestionClick(suggestion: string) {
         onRefresh={() => piFleetStore.load()}
         onSelect={(selection) => piFleetStore.select(selection)}
         onLoadMailbox={(environment) => piFleetStore.loadMailbox(environment)}
+        onAskAll={consoleAvailable ? () => agentStore.switchAgent("pi-fleet-console") : undefined}
       />
     </div>
   {/if}
