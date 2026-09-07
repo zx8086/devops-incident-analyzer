@@ -61,6 +61,17 @@ export const SpokeSchema = z.object({
 export type Spoke = z.infer<typeof SpokeSchema>;
 
 export const FleetManifestSchema = z.object({
+	// AWS Organizations id scoping distribution-bucket reads. render used to emit
+	// a "<set: ...>" placeholder here and expect a human to patch the generated
+	// tfvars; every re-render silently reverted it, and an apply then wrote the
+	// literal placeholder into the bucket policy's aws:PrincipalOrgID condition.
+	// Nothing matches that string, so every CROSS-ACCOUNT bundle read 403s while
+	// the hub account (reading its own bucket) keeps working -- a spoke that
+	// cannot update, with no error until pi-coms-update fails on the host.
+	org_id: z
+		.string()
+		.regex(/^o-[a-z0-9]+$/, 'org_id must look like "o-abc123xyz"')
+		.optional(),
 	hubs: z.partialRecord(FleetEnvironmentSchema, HubSchema).refine((h) => Object.keys(h).length > 0, {
 		message: "at least one hub",
 	}),

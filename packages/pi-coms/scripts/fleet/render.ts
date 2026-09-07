@@ -361,7 +361,7 @@ export function renderTfvars(manifest: FleetManifest, name: string, existing?: s
 			`hub_subnet_id   = ${hcl(hub.subnet_id)}`,
 			`hub_private_ip  = ${hcl(hub.private_ip)}`,
 			`allowed_cidrs   = ${JSON.stringify(hub.allowed_cidrs)}`,
-			`org_id          = "<set: aws organizations describe-organization>"`,
+			`org_id          = ${hcl(manifest.org_id ?? "<set: aws organizations describe-organization>")}`,
 		);
 	}
 	return `${lines.join("\n")}\n`;
