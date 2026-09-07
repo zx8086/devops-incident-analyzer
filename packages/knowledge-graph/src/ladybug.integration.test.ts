@@ -16,6 +16,7 @@ import {
 	bindingsForServices,
 	changeHistoryForStackInstance,
 	deploymentsRunningStack,
+	fleetUpgradeHistory,
 	hasBinding,
 	incidentById,
 	ipToWorkload,
@@ -222,6 +223,52 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 		});
 		const changes = await priorChangesForDeployment(store, "eu-b2b");
 		expect(changes).toHaveLength(1);
+
+		// SIO-1664: dated fleet-upgrade history across ALL deployments, newest first, optionally
+		// bounded by `since`. This is what answers "what agent upgrades did we do today" -- the
+		// durable-memory path collapses to a single upgrade and its facts were corruptible, while
+		// every fleet apply already writes a dated ConfigChange here (SIO-1461). Runs against the
+		// REAL engine because the in-memory fake stubs responses instead of parsing Cypher, so it
+		// cannot prove this query's WHERE/ORDER BY actually execute.
+		await recordIacChange(store, {
+			id: "fleet-today-us",
+			deployment: "us-cld",
+			workflow: "fleet-upgrade",
+			summary: "fleet upgrade us-cld -> 9.5.3",
+			outcome: "applied",
+			createdAt: "2026-09-08T09:00:00.000Z",
+		});
+		await recordIacChange(store, {
+			id: "fleet-today-eu",
+			deployment: "eu-cld",
+			workflow: "fleet-upgrade",
+			summary: "fleet upgrade eu-cld -> 9.5.3",
+			outcome: "proposed",
+			createdAt: "2026-09-08T08:00:00.000Z",
+		});
+		await recordIacChange(store, {
+			id: "fleet-old",
+			deployment: "ap-cld",
+			workflow: "fleet-upgrade",
+			summary: "fleet upgrade ap-cld -> 9.4.4",
+			outcome: "applied",
+			createdAt: "2026-07-01T00:00:00.000Z",
+		});
+
+		// Unbounded: every fleet upgrade, newest first -- a LIST, not one row.
+		const allFleet = await fleetUpgradeHistory(store);
+		expect(allFleet.map((f) => f.deployment)).toEqual(["us-cld", "eu-cld", "ap-cld"]);
+		// The target version is recovered from the summary, not re-derived.
+		expect(allFleet[0]).toMatchObject({ deployment: "us-cld", version: "9.5.3", outcome: "applied" });
+
+		// Bounded to "today": the July upgrade is excluded, both of 2026-09-08 are kept.
+		const todayOnly = await fleetUpgradeHistory(store, "2026-09-08T00:00:00.000Z");
+		expect(todayOnly.map((f) => f.deployment)).toEqual(["us-cld", "eu-cld"]);
+		expect(todayOnly.every((f) => f.version === "9.5.3")).toBe(true);
+
+		// A non-fleet change must never leak into fleet history (workflow filter).
+		expect(allFleet.some((f) => f.deployment === "eu-b2b")).toBe(false);
+
 		expect(changes[0]).toMatchObject({
 			id: "req-1",
 			workflow: "ilm-rollout",

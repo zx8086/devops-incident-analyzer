@@ -30,6 +30,7 @@ mock.module("../memory-backend.ts", () => realMemoryBackend);
 
 import { _setGraphStoreForTesting, InMemoryGraphStore } from "@devops-agent/knowledge-graph";
 import {
+	buildFleetFactAnnotations,
 	buildFleetFactDecision,
 	buildFleetFactRationale,
 	buildFleetGateMessage,
@@ -1027,6 +1028,18 @@ describe("watchPipeline re-polls a dispatched fleet apply (SIO-926)", () => {
 		expect(seen).toContain("gitlab_get_pipeline:2614422047");
 		expect(seen).not.toContain("gitlab_list_agent_merge_requests");
 		expect(out.fleetUpgradeResult?.status).toBe("dispatched");
+		// SIO-1664: the recovered deployment/version must survive into the RETURNED partial --
+		// LangGraph merges only what the node returns, and the pre-fix code applied them to a local
+		// object that was discarded. Asserting only the poll (as this test originally did) is exactly
+		// why the "(unknown)" bug shipped: the plumbing worked, the rendered answer did not.
+		expect(out.targetDeployment).toBe("us-cld");
+		expect(out.recoveredFleetVersion).toBe("9.4.2");
+		const rendered = formatFleetUpgradeSummary({ ...state, ...out } as IacStateType);
+		expect(rendered).not.toContain("Could not assess");
+		expect(rendered).not.toContain("(unknown)");
+		expect(rendered).toContain("us-cld");
+		expect(rendered).toContain("9.4.2");
+		expect(rendered).toContain("2614422047");
 
 		__setAgentMemoryClient(null);
 		if (prevBackend === undefined) delete process.env.LIVE_MEMORY_BACKEND;
@@ -1968,5 +1981,99 @@ describe("formatFleetUpgradeSummary count agrees with the gate card (SIO-1032)",
 		// the summary agrees -- 40 agent(s), never the 1595 total
 		expect(msg).toContain("40 agent(s) upgrading");
 		expect(msg).not.toContain("1595 agent(s) upgrading");
+	});
+});
+
+// SIO-1664: a CROSS-SESSION fleet status check reaches the summary with a live fleetUpgradeResult
+// but NO fleetUpgradeReport -- the preview artifact is written by detectFleetUpgrade in the session
+// that dispatched the upgrade and is never persisted. The pre-fix code early-returned on the
+// missing report and answered "Could not assess a Fleet upgrade for (unknown)" about a pipeline it
+// had just successfully polled, then wrote that same emptiness back into durable memory.
+describe("formatFleetUpgradeSummary without a report (SIO-1664)", () => {
+	const dispatched = {
+		status: "dispatched" as const,
+		pipelineId: 2827667794,
+		pipelineStatus: "running",
+		pipelineUrl: "https://gitlab.com/p/-/pipelines/2827667794",
+		note: "Still running (status running). Re-check anytime or watch the pipeline.",
+	};
+
+	test("the live repro: no report, recovered deployment + version -> a real answer", () => {
+		const s = stateWith({
+			targetDeployment: "us-cld",
+			recoveredFleetVersion: "9.5.3",
+			fleetUpgradeReport: null,
+			fleetUpgradeResult: dispatched,
+		});
+		const msg = formatFleetUpgradeSummary(s);
+		expect(msg).not.toContain("Could not assess");
+		expect(msg).not.toContain("(unknown)");
+		expect(msg).toContain("us-cld");
+		expect(msg).toContain("9.5.3");
+		expect(msg).toContain("running");
+		expect(msg).toContain("2827667794");
+	});
+
+	test("no version recalled -> still names the deployment, never prints 'to undefined'", () => {
+		const s = stateWith({ targetDeployment: "us-cld", fleetUpgradeReport: null, fleetUpgradeResult: dispatched });
+		const msg = formatFleetUpgradeSummary(s);
+		expect(msg).toContain("us-cld");
+		expect(msg).not.toContain("undefined");
+		expect(msg).not.toContain("Could not assess");
+	});
+
+	test("every result status renders usefully and never the dead-end string", () => {
+		const statuses = ["dispatched", "applied", "partial", "failed", "blocked", "skipped"] as const;
+		for (const status of statuses) {
+			const s = stateWith({
+				targetDeployment: "us-cld",
+				recoveredFleetVersion: "9.5.3",
+				fleetUpgradeReport: null,
+				fleetUpgradeResult: { status, pipelineId: 42, note: "n" },
+			});
+			const msg = formatFleetUpgradeSummary(s);
+			expect(msg).not.toContain("Could not assess");
+			expect(msg).not.toContain("undefined");
+			expect(msg).toContain("us-cld");
+		}
+	});
+
+	test("applied without a report still LEADS with the verify-sweep ground truth", () => {
+		const s = stateWith({
+			targetDeployment: "us-cld",
+			recoveredFleetVersion: "9.5.3",
+			fleetUpgradeReport: null,
+			fleetUpgradeResult: {
+				status: "applied",
+				pipelineId: 42,
+				pollStatus: "COMPLETE",
+				acked: 6,
+				created: 8,
+				failedSilent: 2,
+			},
+		});
+		expect(formatFleetUpgradeSummary(s)).toContain("2 agent(s) reached UPG_FAILED");
+	});
+
+	// Regression guard: NEITHER report nor result is still the honest dead end.
+	test("no report AND no result -> keeps the original 'could not assess' message", () => {
+		const s = stateWith({ targetDeployment: "", fleetUpgradeReport: null, fleetUpgradeResult: null });
+		expect(formatFleetUpgradeSummary(s)).toBe("Could not assess a Fleet upgrade for (unknown).");
+	});
+
+	// The durable-memory half of the same bug: the corrupted fact this turn used to write had no
+	// deployment and no version, which broke the NEXT session's recovery (two in-flight facts for
+	// one pipeline -> the sole-match fallback selects nothing).
+	test("report-less status check still stamps deployment AND version on the durable fact", () => {
+		const a = buildFleetFactAnnotations(
+			stateWith({ targetDeployment: "us-cld", recoveredFleetVersion: "9.5.3", fleetUpgradeReport: null }),
+			{ status: "dispatched", pipelineId: 2827667794 },
+		);
+		expect(a).toMatchObject({
+			kind: "fleet-upgrade-dispatched",
+			deployment: "us-cld",
+			version: "9.5.3",
+			pipeline_id: "2827667794",
+		});
 	});
 });

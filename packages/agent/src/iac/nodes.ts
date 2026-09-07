@@ -23,6 +23,7 @@ import { getConnectedServers, getToolsForDataSource } from "../mcp-bridge.ts";
 import {
 	dedupeHitsBy,
 	dedupePreferring,
+	type InFlightFleetUpgrade,
 	type MemorySearchHit,
 	recallInFlightFleetUpgrades,
 	searchAgentMemory,
@@ -68,7 +69,7 @@ import {
 	parseEsIlmPolicyResponse,
 	renderLiveParity,
 } from "./live-parity.ts";
-import { createSearchMemoryTool } from "./local-tools.ts";
+import { createFleetHistoryTool, createSearchMemoryTool } from "./local-tools.ts";
 // SIO-1047: parseMrState/parseApplyResult moved to mr-live-state.ts (kept it a dependency-free leaf,
 // breaking the nodes.ts <-> reconcile.ts import cycle). watchPipeline below still calls both; they
 // are also re-exported near the bottom of this file for pipeline-status.test.ts, which imports both
@@ -1751,7 +1752,10 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 	const sys =
 		"Classify the user's Elastic Cloud request into exactly one word:\n" +
 		"- 'info': a read-only question answerable by reading state (versions, topology, plan history, " +
-		"ILM, health, 'what is X running', 'list deployments', 'is X healthy').\n" +
+		"ILM, health, 'what is X running', 'list deployments', 'is X healthy'). This ALSO covers " +
+		"RETROSPECTIVE/history questions about work already done -- 'what fleet agent upgrades did we run " +
+		"today', 'what changed today', 'which deployments did we upgrade', 'what did we do to X'. Past " +
+		"tense about COMPLETED work is 'info', even when it names a version.\n" +
 		"- 'gitops': a request to CHANGE one specific thing (resize, downsize, add/modify ILM, upgrade a cluster/stack " +
 		"VERSION, open an MR) -- a single targeted config edit. NOTE: 'upgrade eu-b2b to 9.4.2' (the DEPLOYMENT/cluster " +
 		"version) is gitops, NOT fleet-upgrade.\n" +
@@ -1779,8 +1783,10 @@ export async function classifyIacIntent(state: IacStateType): Promise<Partial<Ia
 		"it opened ('did the pipeline pass/fail', 'check my MR', 'show me the plan', 'is it approved', 'what's " +
 		"the CI status') OR a Fleet agent bulk_upgrade it already dispatched ('how is the rollout', 'how's the " +
 		"upgrade going', 'check on it', 'watch the pipeline', 'is the upgrade done', 'any progress on the agents'). " +
-		"Use this for ANY 'how is it going / check on it / is it done' follow-up to an in-flight change, even with " +
-		"no merge request.\n" +
+		"Use this for a 'how is it going / check on it / is it done' follow-up to an IN-FLIGHT change, even with " +
+		"no merge request. This is about work still RUNNING NOW. A retrospective question about what " +
+		"was already done ('what did we do today', 'which upgrades ran', 'what changed') is 'info', NOT " +
+		"pipeline-status -- ask for the CURRENT state of one running thing, and it is pipeline-status.\n" +
 		"- 'converse': a CONVERSATIONAL follow-up about the agent's OWN previous answer or proposal -- " +
 		"asking why it did something, to explain or justify it, to critique it, or reacting to it -- NOT a " +
 		"request to change infrastructure. Examples: 'why was that wrong?', 'explain that', 'what would you " +
@@ -1825,6 +1831,9 @@ export const TURN_START_RESET = {
 	editDrift: null,
 	stackDriftAdvisory: "",
 	selectedKnowledge: null,
+	// SIO-1664: the version recovered from durable memory is turn-scoped -- watchPipeline
+	// re-recalls it on every recovery turn, so a stale value must never leak into a later turn.
+	recoveredFleetVersion: "",
 	// Greptile (PR #663): the renovate-integration-update sub-flow's 6 fields are
 	// checkpointed state -- without this reset, a declined gate (renovateTriggerApproved:
 	// false) or a resolved marker/candidates from one turn leaks into a LATER, unrelated
@@ -2319,7 +2328,14 @@ export function infoTools(): StructuredToolInterface[] {
 	const allowed = new Set<string>(INFO_TOOL_NAMES);
 	const elasticReads = getToolsForDataSource(AGENT).filter((t) => allowed.has(t.name));
 	const kgTools = getToolsForDataSource("knowledge-graph");
-	return [...elasticReads, ...kgTools, createSearchMemoryTool(AGENT), createLookupExamplesTool(AGENT)];
+	return [
+		...elasticReads,
+		...kgTools,
+		createSearchMemoryTool(AGENT),
+		createLookupExamplesTool(AGENT),
+		// SIO-1664: retrospective fleet-upgrade history (dated, multi-row) for the info lane.
+		createFleetHistoryTool(),
+	];
 }
 
 // SIO-966: invoke a tool the LLM called, resolving it from the in-scope tools array
@@ -8791,18 +8807,48 @@ export async function watchPipeline(state: IacStateType): Promise<Partial<IacSta
 	// prompt) hijack the turn and poll an old fleet pipeline instead.
 	if (state.intent === "pipeline-status" && state.mrIid == null && !state.mrUrl) {
 		const inFlight = await recallInFlightFleetUpgrades("elastic-iac");
-		const withId = inFlight.filter((u) => u.pipelineId != null);
+		// SIO-1664: collapse duplicate records for the SAME pipeline before counting. Facts are
+		// append-only, so a re-record (retry, re-run, or a turn that rewrote the fact with missing
+		// annotations) leaves two rows for one upgrade. Counting those as two distinct in-flight
+		// upgrades defeated the sole-match fallback below and stranded the recovery entirely --
+		// live-observed on pipeline 2827667794. Prefer the richer row (one naming its deployment)
+		// so the recovered deployment/version are the populated ones.
+		const withId = inFlight
+			.filter((u) => u.pipelineId != null)
+			.reduce<InFlightFleetUpgrade[]>((acc, u) => {
+				const dup = acc.find((a) => a.pipelineId === u.pipelineId);
+				if (!dup) acc.push(u);
+				else if (!dup.deployment && u.deployment) acc[acc.indexOf(dup)] = u;
+				return acc;
+			}, []);
 		if (withId.length > 0) {
 			const query = lastHumanText(state).toLowerCase();
 			const named = withId.find((u) => u.deployment && query.includes(u.deployment.toLowerCase()));
+			// A sole in-flight upgrade is still adopted when the query names no deployment (the SIO-959
+			// "how's the upgrade going?" case). With SEVERAL in flight and none named, recovering an
+			// arbitrary one would answer confidently about work the user did not ask about -- fall
+			// through instead.
 			const chosen = named ?? (withId.length === 1 ? withId[0] : undefined);
 			if (chosen?.pipelineId != null) {
 				log.info(
 					{ pipelineId: chosen.pipelineId, deployment: chosen.deployment },
 					"recovered dispatched fleet pipeline from memory for cross-session status check",
 				);
+				// SIO-1664: recoveredState is only an INPUT override. LangGraph merges the RETURNED
+				// partial, and checkFleetApplyStatus returns fleetUpgradeResult (+ a null
+				// fleetApplyPipelineId once terminal) -- never targetDeployment. Without merging the
+				// recalled deployment/version into the partial too, state.targetDeployment stays "" and
+				// teardownIac both renders "Could not assess a Fleet upgrade for (unknown)" AND rewrites
+				// the durable fleet fact with an empty deployment/version, degrading future recall.
+				// Spread conditionally: both slots use the `last` reducer, so returning "" would CLOBBER
+				// a good value. Spread `polled` FIRST so its fleetApplyPipelineId: null survives.
 				const recoveredState = chosen.deployment ? { ...state, targetDeployment: chosen.deployment } : state;
-				return await checkFleetApplyStatus(recoveredState, chosen.pipelineId);
+				const polled = await checkFleetApplyStatus(recoveredState, chosen.pipelineId);
+				return {
+					...polled,
+					...(chosen.deployment && { targetDeployment: chosen.deployment }),
+					...(chosen.version && { recoveredFleetVersion: chosen.version }),
+				};
 			}
 		}
 	}
@@ -11151,7 +11197,9 @@ export function buildFleetMemorySummary(state: IacStateType): string[] {
 	const dep = state.targetDeployment || state.iacRequest?.cluster;
 	const parts = ["intent=fleet-upgrade"];
 	if (dep) parts.push(`deployment=${dep}`);
-	if (report?.targetVersion) parts.push(`version=${report.targetVersion}`);
+	// SIO-1664: fall back to the recovered version on a report-less cross-session status turn.
+	const breadcrumbVersion = report?.targetVersion || state.recoveredFleetVersion;
+	if (breadcrumbVersion) parts.push(`version=${breadcrumbVersion}`);
 	if (result?.status) parts.push(`status=${result.status}`);
 	if (report?.crosstab) parts.push(`upgradeable=${report.crosstab.upgradeable}`);
 	if (report?.versionCrosstab) parts.push(`already-on-target=${report.versionCrosstab.alreadyOnTarget}`);
@@ -11170,7 +11218,9 @@ export function buildFleetMemorySummary(state: IacStateType): string[] {
 // confirmed complete" -- a long apply pipeline outlives the turn that dispatched it.
 export function buildFleetFactDecision(state: IacStateType, result: FleetUpgradeResult): string {
 	const dep = state.targetDeployment || state.iacRequest?.cluster || "unknown deployment";
-	const version = state.fleetUpgradeReport?.targetVersion ?? "?";
+	// SIO-1664: same report-less fallback as buildFleetFactAnnotations -- without it a cross-session
+	// status check writes the prose "Fleet agents on unknown deployment upgrade DISPATCHED to ?."
+	const version = state.fleetUpgradeReport?.targetVersion || state.recoveredFleetVersion || "?";
 	const verb =
 		result.status === "applied"
 			? "upgraded to"
@@ -11202,14 +11252,18 @@ export function buildFleetFactRationale(state: IacStateType, result: FleetUpgrad
 // from a terminal one ("fleet-upgrade-terminal") -- a terminal status-check writes
 // a terminal-kind fact that no longer matches the in-flight filter, superseding the
 // dispatched record so a finished upgrade is never reported as still running.
-function buildFleetFactAnnotations(state: IacStateType, result: FleetUpgradeResult): AnnotationMap {
+export function buildFleetFactAnnotations(state: IacStateType, result: FleetUpgradeResult): AnnotationMap {
 	const a: AnnotationMap = {
 		kind: result.status === "dispatched" ? "fleet-upgrade-dispatched" : "fleet-upgrade-terminal",
 		status: result.status,
 	};
 	const dep = state.targetDeployment || state.iacRequest?.cluster;
 	if (dep) a.deployment = dep;
-	if (state.fleetUpgradeReport?.targetVersion) a.version = state.fleetUpgradeReport.targetVersion;
+	// SIO-1664: on a cross-session status check there is no report, so its targetVersion is null --
+	// fall back to the version this turn recovered from the durable fact itself. Without it every
+	// status-check turn REWRITES the fleet fact with no version, degrading later recall.
+	const version = state.fleetUpgradeReport?.targetVersion || state.recoveredFleetVersion;
+	if (version) a.version = version;
 	if (result.pipelineId != null) a.pipeline_id = String(result.pipelineId);
 	return a;
 }
@@ -13043,10 +13097,65 @@ export function formatRolloutDuration(rolloutSeconds: number): string {
 // Final message for the fleet-upgrade flow. Branches: planError, version-unavailable, nothing
 // upgradeable, declined, applied (leads with the failed_silent ground truth), dispatched
 // (started, still running -- SIO-926), blocked/failed. (Pure; unit-tested.)
+// SIO-1664: the summary for a CROSS-SESSION fleet status check, which has a live
+// fleetUpgradeResult but no fleetUpgradeReport -- the preview artifact is written by
+// detectFleetUpgrade in the session that dispatched the upgrade and is never persisted. Reports
+// what is actually known (deployment, version when recalled, live pipeline status, link) and
+// nothing more: deliberately NO agent counts or ETA, since those live on the absent report and
+// inventing them is how a synthesized stub prints a confident falsehood. The switch has no
+// `default`, so a seventh FleetUpgradeResult status becomes a compile error here rather than
+// silently falling through to a wrong message. (Pure; unit-tested.)
+export function formatReportlessFleetSummary(state: IacStateType, result: FleetUpgradeResult, dep: string): string {
+	const ver = state.recoveredFleetVersion ? ` to ${state.recoveredFleetVersion}` : "";
+	const link = result.pipelineId
+		? result.pipelineUrl
+			? ` Pipeline [#${result.pipelineId}](${result.pipelineUrl}).`
+			: ` Pipeline #${result.pipelineId}.`
+		: "";
+	const note = result.note ? ` ${result.note}` : "";
+	switch (result.status) {
+		case "dispatched":
+			// Started in an earlier session and still running -- not a failure. Mirrors the in-session
+			// dispatched branch: name the state, keep the link, offer the re-check.
+			return (
+				`Fleet upgrade${ver} on ${dep} is still running (pipeline status ` +
+				`${result.pipelineStatus ?? "unknown"}).${link} ` +
+				"I don't have this session's preview breakdown, so no per-agent counts -- " +
+				"ask me to check again or watch the pipeline."
+			);
+		case "applied": {
+			// SIO-926 parity: the verify sweep is the ground truth, so it leads even without a report.
+			const silent =
+				result.failedSilent && result.failedSilent > 0
+					? ` WARNING: ${result.failedSilent} agent(s) reached UPG_FAILED (verify sweep -- Fleet action_status undercounts these). Investigate before declaring success.`
+					: " Verify sweep clean (0 UPG_FAILED).";
+			const counts = result.created != null ? ` ${result.acked ?? 0}/${result.created} acked.` : "";
+			return `Fleet upgrade${ver} on ${dep} applied (poll ${result.pollStatus ?? "?"}).${counts}${silent}${link}`;
+		}
+		case "partial":
+			// SIO-961 parity: the note carries the honest in-flight breakdown.
+			return `Fleet upgrade${ver} on ${dep} --${note || " partial outcome; see logs"}${link}`;
+		case "failed":
+		case "blocked":
+			return `Fleet upgrade${ver} on ${dep} ${result.status}.${note || " See logs."}${link}`;
+		case "skipped":
+			// Declined in the dispatching session; nothing ran.
+			return `The Fleet upgrade${ver} on ${dep} was declined -- no agents were upgraded.${link}`;
+	}
+}
+
 export function formatFleetUpgradeSummary(state: IacStateType): string {
 	const report = state.fleetUpgradeReport;
 	const dep = state.targetDeployment || "(unknown)";
-	if (!report) return `Could not assess a Fleet upgrade for ${dep}.`;
+	// SIO-1664: a cross-session status check reaches here with a live result but no report. The old
+	// unconditional early return threw that result away and answered "Could not assess a Fleet
+	// upgrade for (unknown)" about a pipeline we had just successfully polled. Only the genuinely
+	// empty case (no report AND no result) keeps that message.
+	if (!report) {
+		const recovered = state.fleetUpgradeResult;
+		if (!recovered) return `Could not assess a Fleet upgrade for ${dep}.`;
+		return formatReportlessFleetSummary(state, recovered, dep);
+	}
 	if (report.planError) {
 		return `Fleet-upgrade preview for ${dep} could not be completed: ${report.planErrorReason ?? "unknown error"}`;
 	}
