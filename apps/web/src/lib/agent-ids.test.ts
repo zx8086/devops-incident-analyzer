@@ -54,11 +54,24 @@ describe("SIO-1655 agent id vocabulary", () => {
 		expect(next("elastic-iac")).toBe("incident-analyzer");
 	});
 
-	test("with the console enabled, cycling visits all three in registry order", () => {
-		const ids = AGENT_CHOICES.map((c) => c.id);
+	// SIO-1657: the console is CONTEXTUAL, not a mode -- it is reached from the
+	// incident analyzer, never by cycling. Enabling it must NOT lengthen the
+	// rotation, which is what it used to do (the icon landed on "Fleet Console"
+	// from the IaC agent, where asking live spokes about an incident is noise).
+	test("enabling the console does not add it to the mode rotation", () => {
+		const ids = AGENT_CHOICES.filter((c) => c.id !== "pi-fleet-console").map((c) => c.id);
 		const next = (current: string) => ids[(ids.indexOf(current as (typeof ids)[number]) + 1) % ids.length];
+		expect(ids).not.toContain("pi-fleet-console");
 		expect(next("incident-analyzer")).toBe("elastic-iac");
-		expect(next("elastic-iac")).toBe("pi-fleet-console");
-		expect(next("pi-fleet-console")).toBe("incident-analyzer");
+		expect(next("elastic-iac")).toBe("incident-analyzer");
+	});
+
+	// Leaving the rotation must not make it unreachable or unresolvable: the id
+	// stays valid (graphFor resolves it; the Agent Memory identity map throws for
+	// unregistered names) and keeps its display metadata for the entry point.
+	test("the console remains a registered id with display metadata", () => {
+		expect(isAgentId("pi-fleet-console")).toBe(true);
+		expect(AGENT_IDS).toContain("pi-fleet-console");
+		expect(agentChoice("pi-fleet-console").title).toBe("Fleet Console");
 	});
 });

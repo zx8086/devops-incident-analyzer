@@ -32,6 +32,16 @@ export interface AgentDescriptor {
 	readonly hasConfidence: boolean;
 	readonly hasDataSources: boolean;
 	readonly streamsTokens: boolean;
+	// SIO-1657: whether the header's mode control cycles this agent.
+	//   "mode"       -- a top-level way of working the operator switches between.
+	//   "contextual" -- a capability reached from the agent whose work it belongs
+	//                   to, not a peer mode. The fleet console asks live account
+	//                   spokes about an incident, which only means anything while
+	//                   analyzing one; offering it from the IaC agent (an Elastic
+	//                   Cloud config maker) is noise.
+	// Selectability (listSelectableAgents) is a separate question -- CAN this
+	// deployment run it at all -- and both still apply.
+	readonly surface: "mode" | "contextual";
 	// Resolves this agent's compiled graph. Kept as a thunk so registering an
 	// agent never eagerly compiles its graph or connects MCP.
 	//
@@ -67,6 +77,7 @@ const REGISTRY: Readonly<Record<AgentId, AgentDescriptor>> = {
 		hasConfidence: true,
 		hasDataSources: true,
 		streamsTokens: true,
+		surface: "mode",
 		graph: getGraph,
 	},
 	// SIO-1655 (Phase 2c). Registered always so the id resolves and routes give a
@@ -80,6 +91,10 @@ const REGISTRY: Readonly<Record<AgentId, AgentDescriptor>> = {
 		hasDataSources: false,
 		// The console composes one answer at the end rather than streaming tokens.
 		streamsTokens: false,
+		// SIO-1657: asking live account spokes about an incident belongs to the
+		// incident analyzer's context, so it is offered from there rather than
+		// cycled as a peer of the IaC config maker.
+		surface: "contextual",
 		graph: getPiFleetGraph,
 	},
 	"elastic-iac": {
@@ -90,6 +105,7 @@ const REGISTRY: Readonly<Record<AgentId, AgentDescriptor>> = {
 		// The IaC graph appends its output as AIMessages rather than streaming
 		// tokens through an output node.
 		streamsTokens: false,
+		surface: "mode",
 		graph: getIacGraph,
 	},
 };
@@ -122,6 +138,14 @@ export function listSelectableAgents(env: NodeJS.ProcessEnv = process.env): read
 	return listAgents().filter(
 		(a) => a.id !== "pi-fleet-console" || (isPiFleetGraphEnabled(env) && isPiComsConfigured(env)),
 	);
+}
+
+// SIO-1657: the agents the header's mode control cycles -- selectable AND a
+// top-level mode. Derived from the registry rather than listed again, so a new
+// agent is one entry here and nowhere else (the duplication SIO-1655 removed).
+// A contextual agent stays selectable: it is still switched to, just not cycled.
+export function listModeAgents(env: NodeJS.ProcessEnv = process.env): readonly AgentDescriptor[] {
+	return listSelectableAgents(env).filter((a) => a.surface === "mode");
 }
 
 // The lookup that replaces `agentName === "elastic-iac" ? getIacGraph() : getGraph()`.
