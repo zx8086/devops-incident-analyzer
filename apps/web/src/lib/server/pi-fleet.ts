@@ -9,6 +9,7 @@ import {
 	isPiComsConfigured,
 	PI_COMS_AWAIT_SLICE_MS,
 	PiComsClient,
+	PiComsHttpError,
 	type PiReply,
 	resolvePiComsConfig,
 	senderNameFor,
@@ -129,6 +130,26 @@ function describeError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+// SIO-1661: a registration rejection is nearly always the prefix/principal
+// mismatch documented at the top of this file, and the operator sees only the
+// route's 502 body. The client has already named the sender; this frame adds the
+// two things only it knows -- which hub, and which prefix produced that name --
+// and the exact command to fix it, the way `just coms` does for a missing
+// operator principal (packages/pi-coms/justfile). Returns a PiComsHttpError so
+// piFleetErrorResponse still answers 502; anything else would become a 500.
+function explainRegistrationFailure(error: unknown, environment: PiComsEnvironment, senderPrefix: string): unknown {
+	if (!(error instanceof PiComsHttpError)) return error;
+	const lines = [`  on the ${environment} hub (PI_COMS_PANE_SENDER_PREFIX=${senderPrefix})`];
+	if (error.code === "name_not_allowed") {
+		lines.push(
+			"  No principal on this hub allows that name. Either:",
+			`    just token-create ${senderPrefix} "${senderPrefix}-*" service <profile>   and set PI_COMS_PANE_TOKENS`,
+			"    or set PI_COMS_PANE_SENDER_PREFIX to a prefix an existing principal allows",
+		);
+	}
+	return error.withContext(...lines);
+}
+
 export async function listFleetAgents(deps: PiFleetDeps = {}): Promise<PiFleetAgentsResponse> {
 	const pane = resolvePaneConfig(deps.env ?? process.env);
 	if (!pane) {
@@ -183,7 +204,11 @@ export async function sendFleetMessage(
 	const sentAt = new Date((deps.now ?? Date.now)()).toISOString();
 	// The hub requires a registered sender to send; the registration is short-lived
 	// and hidden from peer listings (explicit: true in the client).
-	await client.register();
+	try {
+		await client.register();
+	} catch (error) {
+		throw explainRegistrationFailure(error, input.environment, pane.senderPrefix);
+	}
 	try {
 		// No response_schema: the operator reads a free-form reply, no LLM parses it.
 		const sent = await client.send(input.target, input.prompt);

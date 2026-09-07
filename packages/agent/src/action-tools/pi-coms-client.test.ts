@@ -99,6 +99,43 @@ describe("PiComsClient", () => {
 		expect((err as PiComsHttpError).code).toBe("target_not_found");
 	});
 
+	// SIO-1661: the hub reports a rejection as { error, details }; the details name
+	// the refused name and the principal that refused it. Keep them on the error
+	// rather than discarding them -- that loss is what forced live curl probing.
+	test("a rejection keeps the hub's details alongside the status and code", async () => {
+		const { fetchImpl } = scripted([
+			() => ({
+				status: 403,
+				body: {
+					ok: false,
+					error: "name_not_allowed",
+					details: { name: "pi-fleet-abcd1234", principal: "incident-analyzer" },
+				},
+			}),
+		]);
+		const client = new PiComsClient(hub, { fetchImpl, senderPrefix: "pi-fleet", sessionId: "abcd1234-0000" });
+		const err = (await client.register().catch((e: unknown) => e)) as PiComsHttpError;
+		expect(err).toBeInstanceOf(PiComsHttpError);
+		expect(err.status).toBe(403);
+		expect(err.code).toBe("name_not_allowed");
+		expect(err.details).toEqual({ name: "pi-fleet-abcd1234", principal: "incident-analyzer" });
+		// register is the only frame that knows the name it sent, so it names it.
+		expect(err.message.split("\n")[0]).toBe("pi-coms hub POST /v1/agents/register failed: 403 name_not_allowed");
+		expect(err.message).toContain('sender "pi-fleet-abcd1234"');
+		expect(err.message).toContain('principal "incident-analyzer"');
+	});
+
+	test("a rejection without a details object degrades to empty rather than throwing", async () => {
+		const { fetchImpl } = scripted([() => ({ status: 409, body: { ok: false, error: "name_taken" } })]);
+		const client = new PiComsClient(hub, { fetchImpl, sessionId: "sid-1" });
+		const err = (await client.register().catch((e: unknown) => e)) as PiComsHttpError;
+		expect(err.details).toEqual({});
+		expect(err.code).toBe("name_taken");
+		// Still names the sender; the principal clause is simply absent.
+		expect(err.message).toContain(`sender "${PI_COMS_SENDER_NAME_PREFIX}-sid1"`);
+		expect(err.message).not.toContain("principal");
+	});
+
 	test("awaitReply returns the terminal reply from a single slice", async () => {
 		const { calls, fetchImpl } = scripted([
 			() => ({ body: { msg_id: "m1", status: "complete", response: { ok: 1 }, error: null } }),
