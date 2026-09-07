@@ -256,6 +256,12 @@ export type PiComsClientDeps = {
 	senderPrefix?: string;
 };
 
+// SIO-1660: heartbeats are the one high-frequency hub call (one per await slice),
+// so they log at debug while every other call logs at info.
+function isHeartbeatPath(path: string): boolean {
+	return path.endsWith("/heartbeat");
+}
+
 // Scoped to one hub: the caller picks the hub for the estate's environment
 // (selectHubForEstate in pi-verifier.ts) so a request never crosses environments.
 export class PiComsClient {
@@ -284,24 +290,63 @@ export class PiComsClient {
 			body: body === undefined ? undefined : JSON.stringify(body),
 		};
 		if (timeoutMs !== undefined) init.signal = AbortSignal.timeout(timeoutMs);
-		const resp = await this.fetchImpl(this.hub.serverUrl + path, init);
-		const text = await resp.text();
-		let parsed: unknown = null;
-		if (text.length > 0) {
-			try {
-				parsed = JSON.parse(text);
-			} catch {
-				parsed = text;
+		// SIO-1660: every hub call funnels through here, so this is the one place
+		// that has to be instrumented for a failure to be self-evident. A
+		// name_not_allowed 403 on register cost a live-hub curl investigation
+		// because this threw a fully-formed PiComsHttpError and logged nothing.
+		//
+		// NEVER log the request/response body, `hub`, or `authToken`: the shared
+		// logger has no redaction, the token is a live secret, and bodies carry
+		// prompts and spoke replies. Path is safe (it holds project/session ids,
+		// no secrets). Identity and outcome only.
+		const started = this.now();
+		try {
+			const resp = await this.fetchImpl(this.hub.serverUrl + path, init);
+			const text = await resp.text();
+			let parsed: unknown = null;
+			if (text.length > 0) {
+				try {
+					parsed = JSON.parse(text);
+				} catch {
+					parsed = text;
+				}
 			}
+			if (!resp.ok) {
+				const code =
+					typeof parsed === "object" && parsed !== null && "error" in parsed && typeof parsed.error === "string"
+						? parsed.error
+						: text.slice(0, 120) || "unknown";
+				logger.warn(
+					{ method, path, status: resp.status, error: code, duration_ms: this.now() - started },
+					"pi.hub.call.failed",
+				);
+				throw new PiComsHttpError(resp.status, code, method, path, readErrorDetails(parsed));
+			}
+			// Heartbeats fire on a timer during every await slice; logging them at
+			// info would bury the calls that matter under a beat every 25 s.
+			if (isHeartbeatPath(path)) {
+				logger.debug({ method, path, status: resp.status, duration_ms: this.now() - started }, "pi.hub.call");
+			} else {
+				logger.info({ method, path, status: resp.status, duration_ms: this.now() - started }, "pi.hub.call");
+			}
+			return parsed as T;
+		} catch (error) {
+			// A transport failure (tunnel down, DNS, abort) never reaches the
+			// response branch above, and it is the other half of what went
+			// undiagnosed: "fetch failed" with no indication of which hub call.
+			if (!(error instanceof PiComsHttpError)) {
+				logger.warn(
+					{
+						method,
+						path,
+						error: error instanceof Error ? error.message : String(error),
+						duration_ms: this.now() - started,
+					},
+					"pi.hub.call.unreachable",
+				);
+			}
+			throw error;
 		}
-		if (!resp.ok) {
-			const code =
-				typeof parsed === "object" && parsed !== null && "error" in parsed && typeof parsed.error === "string"
-					? parsed.error
-					: text.slice(0, 120) || "unknown";
-			throw new PiComsHttpError(resp.status, code, method, path, readErrorDetails(parsed));
-		}
-		return parsed as T;
 	}
 
 	async register(): Promise<void> {
@@ -334,6 +379,12 @@ export class PiComsClient {
 			explicit: true,
 		});
 		this.registered = true;
+		// SIO-1660: the registered NAME is the thing that fails (name_not_allowed
+		// when no principal permits this prefix), so it has to be in the log.
+		logger.info(
+			{ project: this.hub.project, name: senderNameFor(this.sessionId, this.senderPrefix) },
+			"pi.hub.registered",
+		);
 	}
 
 	async listAgents(): Promise<PiAgentCard[]> {
@@ -361,6 +412,11 @@ export class PiComsClient {
 				hops: 0,
 				...(opts.ttlMs ? { ttl_ms: opts.ttlMs } : {}),
 			},
+		);
+		// SIO-1660: prompt text is deliberately absent -- identity and outcome only.
+		logger.info(
+			{ project: this.hub.project, target, msg_id: reply.msg_id, status: reply.status },
+			"pi.hub.message.sent",
 		);
 		return { msg_id: reply.msg_id, status: reply.status, target_session: reply.target_session ?? null };
 	}
@@ -399,13 +455,21 @@ export class PiComsClient {
 			if (reply.status === "timeout") {
 				const current = await this.http<MessageStatusReply>("GET", path);
 				if (isTerminal(current.status)) {
+					// SIO-1660: one summary per await, never the response body (it is
+					// spoke-authored text). Logged at the exits rather than per slice,
+					// which would emit a line every 25 s for a slow spoke.
+					logger.info({ msg_id: msgId, status: current.status, duration_ms: this.now() - start }, "pi.hub.await.done");
 					return { status: current.status, response: current.response ?? null, error: current.error ?? null };
 				}
 			} else if (isTerminal(reply.status)) {
+				logger.info({ msg_id: msgId, status: reply.status, duration_ms: this.now() - start }, "pi.hub.await.done");
 				return { status: reply.status, response: reply.response ?? null, error: reply.error ?? null };
 			}
 			await this.heartbeat();
 		}
+		// A spoke that never answers within budget is the common "it just hangs"
+		// report; without this it looked identical to a silent success.
+		logger.warn({ msg_id: msgId, budget_ms: budgetMs, duration_ms: this.now() - start }, "pi.hub.await.exhausted");
 		return { status: "budget_exhausted", response: null, error: `no reply within ${budgetMs} ms` };
 	}
 
