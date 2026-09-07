@@ -81,6 +81,12 @@ const graphPaused = $derived(
 	),
 );
 
+// SIO-1659: is any gate card showing? Drives the gate region's border, so an
+// empty region draws no stray 1px line. hilLearningOutcome is a result card
+// rather than a pause, so it renders in the region without pausing the graph --
+// hence this is graphPaused OR that, not a second copy of the list.
+const hasGateCard = $derived(graphPaused || Boolean(agentStore.hilLearningOutcome));
+
 // SIO-1655: isIac still gates genuinely IaC-SPECIFIC rendering (drift reports,
 // the plan-review card, the message variant) -- those are features of that
 // agent, not a two-agent assumption. What is no longer binary is the SWITCH and
@@ -368,7 +374,13 @@ function handleSuggestionClick(suggestion: string) {
 
   <!-- SIO-1572: split row -- chat (left, flexible) | live graph triage pane (right). -->
   <div class="flex-1 flex overflow-hidden min-h-0">
-  <div bind:this={messagesContainer} class="flex-1 overflow-y-auto bg-white">
+  <!-- SIO-1659: the chat column is a flex column -- scrolling messages on top,
+       the HITL gate region beneath. The gate cards used to live OUTSIDE the
+       split row, so they spanned the whole page width and ran underneath the
+       triage and fleet panes. Nesting them here bounds them to the chat
+       column, so a card grows downward and never covers a pane. -->
+  <div class="flex-1 flex flex-col min-w-0 min-h-0 bg-white">
+  <div bind:this={messagesContainer} class="flex-1 overflow-y-auto min-h-0">
     <div class="max-w-4xl mx-auto py-4">
       {#if agentStore.messages.length === 0 && !agentStore.isStreaming}
         <div class="flex flex-col items-center justify-center py-20 text-center animate-fade-in">
@@ -538,44 +550,11 @@ function handleSuggestionClick(suggestion: string) {
     </div>
   </div>
 
-  {#if showGraphPane}
-    <div class="w-2/5 max-w-xl shrink-0 border-l border-gray-200 bg-tommy-cream overflow-hidden">
-      <GraphTriagePanel
-        agent={agentStore.currentAgent}
-        activeNodes={agentStore.activeNodes}
-        completedNodes={graphRun.completedNodes}
-        isStreaming={agentStore.isStreaming}
-        paused={graphPaused}
-        outcome={graphRun.outcome}
-      />
-    </div>
-  {/if}
-  <!-- SIO-1650: live spokes pane (right), addressed directly, replies as data. -->
-  {#if piFleetStore.configured && piFleetStore.open}
-    <div class="w-2/5 max-w-xl shrink-0 border-l border-gray-200 bg-tommy-cream overflow-hidden">
-      <PiFleetPane
-        pane={piFleetStore.state}
-        busy={piFleetStore.busy}
-        mailboxBusy={piFleetStore.mailboxBusy}
-        onSend={(prompt) => piFleetStore.send(prompt)}
-        onRefresh={() => piFleetStore.load()}
-        onSelect={(selection) => piFleetStore.select(selection)}
-        onLoadMailbox={(environment) => piFleetStore.loadMailbox(environment)}
-      />
-    </div>
-  {/if}
-  </div>
-
-  <!-- SIO-1658: the HITL gate region. These cards are full-width siblings of the
-       split row, so on an h-screen page a tall one (a plan review carrying the
-       knowledge-graph and prior-learnings sections) grew until it squeezed the
-       row -- and the live graph triage pane with it -- to ZERO height. Capping
-       the region and scrolling it internally keeps the pane on screen exactly
-       when it is most useful: while you decide whether to approve.
-       45vh measured against a 1000px card at 1440x900: 405px of card (the diff
-       and the approve/reject buttons stay reachable) leaves 340px of pane, a
-       readable graph rather than the 205px sliver a 60vh cap left. -->
-  <div class="max-h-[45vh] shrink-0 overflow-y-auto">
+  <!-- SIO-1658/1659: a tall gate card (a plan review carrying the knowledge-graph
+       and prior-learnings sections) must not push the messages out of the column,
+       so the region is capped and scrolls internally. It sits INSIDE the chat
+       column, so its width is the chat width and the panes are never covered. -->
+  <div class="max-h-[55vh] shrink-0 overflow-y-auto {hasGateCard ? 'border-t border-gray-200' : ''}">
   {#if agentStore.topicShiftPrompt}
     <!-- SIO-751: topic-shift HITL banner. The graph is paused on detectTopicShift
          until the user picks continue or fresh. -->
@@ -716,6 +695,35 @@ function handleSuggestionClick(suggestion: string) {
       onApprove={() => agentStore.approveRenovateTrigger(true)}
       onDecline={() => agentStore.approveRenovateTrigger(false)}
     />
+  {/if}
+  </div>
+  </div>
+
+  {#if showGraphPane}
+    <div class="w-2/5 max-w-xl shrink-0 border-l border-gray-200 bg-tommy-cream overflow-hidden">
+      <GraphTriagePanel
+        agent={agentStore.currentAgent}
+        activeNodes={agentStore.activeNodes}
+        completedNodes={graphRun.completedNodes}
+        isStreaming={agentStore.isStreaming}
+        paused={graphPaused}
+        outcome={graphRun.outcome}
+      />
+    </div>
+  {/if}
+  <!-- SIO-1650: live spokes pane (right), addressed directly, replies as data. -->
+  {#if piFleetStore.configured && piFleetStore.open}
+    <div class="w-2/5 max-w-xl shrink-0 border-l border-gray-200 bg-tommy-cream overflow-hidden">
+      <PiFleetPane
+        pane={piFleetStore.state}
+        busy={piFleetStore.busy}
+        mailboxBusy={piFleetStore.mailboxBusy}
+        onSend={(prompt) => piFleetStore.send(prompt)}
+        onRefresh={() => piFleetStore.load()}
+        onSelect={(selection) => piFleetStore.select(selection)}
+        onLoadMailbox={(environment) => piFleetStore.loadMailbox(environment)}
+      />
+    </div>
   {/if}
   </div>
 
