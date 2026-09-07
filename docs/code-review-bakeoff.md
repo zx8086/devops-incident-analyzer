@@ -56,6 +56,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#703](https://github.com/zx8086/devops-incident-analyzer/pull/703) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | hub addressed by AWS account, positional port is the hub port, coms-env folded into `just coms` (8 files); SKIPPED once in 108 ms; CodeRabbit silent (24th straight); all five CI jobs green; merged on user authorization with the gate again overridden; detail below |
 | [#704](https://github.com/zx8086/devops-incident-analyzer/pull/704) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1656 elastic-iac MR change-class label, a High-severity defect reported from a failed CI gate rather than by either bot (5 files); SKIPPED once in 125 ms; CodeRabbit silent (25th straight); all five CI jobs green first run; merged on user authorization with the gate overridden; detail below |
 | [#705](https://github.com/zx8086/devops-incident-analyzer/pull/705) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1657 fleet console made contextual + triage SVG rendered at natural size (7 files); SKIPPED once in 115 ms; CodeRabbit silent (26th straight); all five CI jobs green first run; merged on user authorization with the gate overridden; detail below |
+| [#706](https://github.com/zx8086/devops-incident-analyzer/pull/706) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1657 follow-up, reverting #705's horizontal scroll and wrapping wide graph layers instead (3 files); SKIPPED once in 103 ms; CodeRabbit silent (27th straight); all five CI jobs green first run; merged on user authorization with the gate overridden; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -855,3 +856,21 @@ Two frontend items from the running app: the header control cycled the fleet con
 4. *The obvious fix would not have worked.* Widening the pane (`max-w-xl` to `max-w-3xl`) only takes the labels from 3.5px to 3.8px while costing the chat column width; the downscale itself had to go. Also, the first attempt reintroduced the bug by reaching for `max-w-full`, which caps the SVG at the container width exactly as `w-full` did.
 5. *One half of the change could not be verified in-browser and was covered by tests instead.* This machine has no pi-coms hub, so `/api/agents` correctly omits the console and its entry button never renders; `graph-registry.test.ts` and `agent-surface.test.ts` cover the rules, and both were confirmed to fail when the console is made a mode again. The button itself still wants a look on a hub-configured machine.
 6. *The fix trades overview for legibility, deliberately.* IaC now shows 34% of its graph at a time (the incident analyzer 85%, costing it 103px of overflow it did not have before). In a pane this narrow a wide graph can be legible or fully visible, not both.
+
+## PR #706 detail (SIO-1657 follow-up, wrap wide layers instead of scrolling)
+
+A same-day revert-and-refix of #705's second item. #705 made the triage graph legible by rendering it at natural size and letting the panel scroll horizontally; the user rejected that on sight of the running app and the change was redone. Three files.
+
+**Greptile:** terminal **SKIPPED** (id 22889730 on `fe905875`), 103 ms, `strictness: 2`, body null. Twenty-seventh consecutive skip.
+
+**CodeRabbit:** nothing, through CI completion. Twenty-seventh consecutive absence (#679 to #706).
+
+**Merge gate:** all five CI jobs green first run. Zero findings to triage. Merged on the user's explicit instruction with the documented gate knowingly overridden. Squash `f2740e2b`.
+
+**Takeaways:**
+
+1. *The regression was shipped, reviewed by nobody, and caught by the user looking at the app.* #705 passed five CI jobs, carried tests that encoded the wrong behaviour as correct, and was merged on a skipped review. Neither bot has spoken in 27 PRs. For the bake-off this is the second consecutive entry where the only effective review was a human opening the product -- worth weighing against any argument that the CI suite substitutes for a reviewer.
+2. *Measuring the right quantity still gave the wrong answer.* #705 measured label size in pixels, optimised it, and confirmed 100% scale in-browser -- all correct, and all beside the point. The panel is a whole-graph map, so "can you read a node" was never the success criterion; "can you see the shape of the run" was. The screenshot the user posted showed the flow running off both edges of a mostly-empty pane, which no pixel measurement in that session would have surfaced.
+3. *The binding constraint was one row, not the graph.* Chart width is the widest row, and a single 8-node fan-out (the IaC intent router) set 1644px for a graph whose other 18 layers need at most 4 nodes. Wrapping layers wider than three caps the chart at 654px -- the incident analyzer's own width -- so both graphs fit the pane whole at the same scale and neither scrolls. Diagnosing "which row sets the width" would have found this in #705.
+4. *The cheaper-looking fix was tried and rejected on numbers.* Narrowing `NODE_W` reaches only 5.7px even at an unrealistic 100px, and the IaC graph has 22-character node names. Recording it here so it is not re-proposed.
+5. *A screenshot belongs in the verification of any layout change.* #705's evidence was a table of scale percentages; #706's is two screenshots plus `scrollWidth === clientWidth`. The first proves a number, the second proves the thing the user actually asked for.
