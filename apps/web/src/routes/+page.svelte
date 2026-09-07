@@ -566,6 +566,16 @@ function handleSuggestionClick(suggestion: string) {
   {/if}
   </div>
 
+  <!-- SIO-1658: the HITL gate region. These cards are full-width siblings of the
+       split row, so on an h-screen page a tall one (a plan review carrying the
+       knowledge-graph and prior-learnings sections) grew until it squeezed the
+       row -- and the live graph triage pane with it -- to ZERO height. Capping
+       the region and scrolling it internally keeps the pane on screen exactly
+       when it is most useful: while you decide whether to approve.
+       45vh measured against a 1000px card at 1440x900: 405px of card (the diff
+       and the approve/reject buttons stay reachable) leaves 340px of pane, a
+       readable graph rather than the 205px sliver a 60vh cap left. -->
+  <div class="max-h-[45vh] shrink-0 overflow-y-auto">
   {#if agentStore.topicShiftPrompt}
     <!-- SIO-751: topic-shift HITL banner. The graph is paused on detectTopicShift
          until the user picks continue or fresh. -->
@@ -707,6 +717,7 @@ function handleSuggestionClick(suggestion: string) {
       onDecline={() => agentStore.approveRenovateTrigger(false)}
     />
   {/if}
+  </div>
 
   <div class="border-t border-gray-200 bg-white">
     <ChatInput
