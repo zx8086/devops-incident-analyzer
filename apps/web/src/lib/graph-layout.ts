@@ -52,6 +52,11 @@ const GAP_Y = 34;
 const PAD = 16;
 // How far a back edge bows out past the right edge of the chart.
 const BACK_EDGE_BOW = 46;
+// SIO-1657: most nodes a single laid-out row may hold before it wraps. Three
+// keeps the widest chart at 654px -- the incident analyzer's own width, which
+// fits the triage pane at ~88% with readable labels. Raising this re-introduces
+// the shrink it exists to prevent.
+const MAX_ROW_NODES = 3;
 
 // Longest-path layering via DFS from START, skipping back edges (an edge whose
 // target is on the current DFS stack). Cycles like queryDataSource <-> align
@@ -111,7 +116,19 @@ export function computeLayout(topology: Topology): GraphLayout {
 		row.push(id);
 		rows[layer] = row;
 	}
-	const presentRows = rows.filter((row) => row && row.length > 0);
+	// SIO-1657: wrap a wide layer over several sub-rows instead of letting it set
+	// the chart width. One 8-node fan-out (the elastic-iac intent router) made the
+	// whole graph 1644px, so fitting it to the pane shrank every label to 3.5px --
+	// while 18 of its 19 layers needed at most 4 nodes, i.e. most of that width was
+	// empty. Wrapping at MAX_ROW_NODES caps the width at the incident analyzer's,
+	// so both graphs fit the pane whole at a legible size and neither scrolls.
+	// Sub-rows keep their nodes' real layer, so edge direction is unaffected.
+	const wrapped: string[][] = [];
+	for (const row of rows) {
+		if (!row || row.length === 0) continue;
+		for (let i = 0; i < row.length; i += MAX_ROW_NODES) wrapped.push(row.slice(i, i + MAX_ROW_NODES));
+	}
+	const presentRows = wrapped;
 
 	const rowWidth = (row: string[]) => row.reduce((sum, id) => sum + nodeSize(id).width, 0) + (row.length - 1) * GAP_X;
 	const contentWidth = Math.max(...presentRows.map(rowWidth), NODE_W);

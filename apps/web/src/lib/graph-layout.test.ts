@@ -151,3 +151,63 @@ describe("computeLayout", () => {
 		}
 	});
 });
+
+// SIO-1657: a wide fan-out must not set the chart width. The elastic-iac intent
+// router fans out to 8 nodes in one layer; unwrapped that made the chart 1644px,
+// so fitting it to the ~575px triage pane shrank every label to 3.5px. Wrapping
+// caps the width at the incident analyzer's own 654px, so both graphs fit the
+// pane whole and neither scrolls horizontally.
+describe("wide-layer wrapping (SIO-1657)", () => {
+	const fanOut = (n: number): Topology => {
+		const mid = Array.from({ length: n }, (_, i) => `n${i}`);
+		return {
+			nodes: [START_NODE, "hub", ...mid, "join", END_NODE],
+			edges: [
+				{ source: START_NODE, target: "hub", conditional: false },
+				...mid.map((m) => ({ source: "hub", target: m, conditional: true })),
+				...mid.map((m) => ({ source: m, target: "join", conditional: false })),
+				{ source: "join", target: END_NODE, conditional: false },
+			],
+		};
+	};
+
+	test("an 8-way fan-out is no wider than a 3-way one", () => {
+		expect(computeLayout(fanOut(8)).width).toBe(computeLayout(fanOut(3)).width);
+	});
+
+	test("width stops growing past the wrap threshold", () => {
+		const w3 = computeLayout(fanOut(3)).width;
+		for (const n of [4, 5, 8, 10]) expect(computeLayout(fanOut(n)).width).toBe(w3);
+	});
+
+	// The regression this prevents: 10 x 180px nodes on one row.
+	test("a wide fan-out stays far below the unwrapped width", () => {
+		expect(computeLayout(fanOut(10)).width).toBeLessThan(700);
+	});
+
+	test("wrapping keeps every node of the fan-out, and inside the chart", () => {
+		const layout = computeLayout(fanOut(8));
+		for (let i = 0; i < 8; i++) expect(layout.nodes.some((n) => n.id === `n${i}`)).toBe(true);
+		for (const node of layout.nodes) {
+			expect(node.x).toBeGreaterThanOrEqual(0);
+			expect(node.x + node.width).toBeLessThanOrEqual(layout.width);
+			expect(node.y + node.height).toBeLessThanOrEqual(layout.height);
+		}
+	});
+
+	// Sub-rows must keep their nodes' real layer, or edge direction flips.
+	test("wrapped nodes keep the layer they were assigned", () => {
+		const layout = computeLayout(fanOut(8));
+		const layers = new Set(layout.nodes.filter((n) => n.id.startsWith("n")).map((n) => n.layer));
+		expect([...layers]).toEqual([2]);
+	});
+
+	// A graph that already fits must be untouched (the incident analyzer's case).
+	test("a graph with no wide layer is unchanged", () => {
+		const narrow = fanOut(2);
+		const layout = computeLayout(narrow);
+		expect(layout.nodes.filter((n) => n.id.startsWith("n")).map((n) => Math.round(n.y))).toEqual(
+			new Array(2).fill(Math.round(layout.nodes.find((n) => n.id === "n0")?.y ?? 0)),
+		);
+	});
+});
