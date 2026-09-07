@@ -263,7 +263,7 @@ async function runRollout(
 			const deadline = Date.now() + 10 * 60_000;
 			let pending = envNames;
 			while (pending.length > 0 && Date.now() < deadline) {
-				const agents = await listAgents(baseUrl, token);
+				const agents = await listAgents(baseUrl, token, hubFor(manifest, env).project);
 				pending = pending.filter((name) => {
 					const problems = missingOnHub(agents, name, persona ? { persona } : {});
 					if (problems.length === 0)
@@ -293,7 +293,7 @@ async function runStatus(manifest: FleetManifest, names: string[], aws: FleetAws
 	for (const [env, envNames] of byEnv) {
 		const token = hubToken(manifest, env);
 		await withHubTunnel(manifest, env, localPort, aws, async (baseUrl) => {
-			const agents = await listAgents(baseUrl, token);
+			const agents = await listAgents(baseUrl, token, hubFor(manifest, env).project);
 			for (const name of envNames) {
 				const problems = missingOnHub(agents, name, {});
 				const agent = agents.find((a) => a.name === name);
