@@ -8,7 +8,10 @@ import type { FleetAws } from "./aws.ts";
 import { type FleetManifest, spokeFor } from "./manifest.ts";
 
 export const AGENT_INSTANCE_TAG = "pi-agent-agent";
-export const HUB_INSTANCE_TAG = "pi-coms-hub-hub";
+// The hub instance Name tag: <name_prefix>-hub with the module default prefix
+// "pi-coms". Was "pi-coms-hub-hub" until the prefix dropped its redundant -hub
+// (it already said hub, and the module appends the component).
+export const HUB_INSTANCE_TAG = "pi-coms-hub";
 
 export function rolloutCommands(opts: { tokenChanged: boolean }): string[] {
 	if (opts.tokenChanged) {

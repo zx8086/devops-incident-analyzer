@@ -62,6 +62,13 @@ provider "aws" {
       ManagedBy   = "terraform"
       Stack       = ${hcl(stack)}
       Environment = ${hcl(spoke.env)}
+      // The coms-net project namespace these agents register into. Informational:
+      // routing is by hub (per environment) and the tunnel is selected by AWS
+      // profile, so nothing filters on this tag. It exists so an operator reading
+      // the console can tell which registry an instance belongs to without
+      // cross-referencing the manifest. NOT the same thing as the Project tag
+      // above, which is the Terraform stack marker.
+      ComsProject = ${hcl(hub.project ?? "default")}
     }
   }
 }
