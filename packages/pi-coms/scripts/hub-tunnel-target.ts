@@ -24,7 +24,12 @@ type Hub = {
 	local_port?: number | string;
 };
 
-const [manifestPath, selector] = process.argv.slice(2);
+const argv = process.argv.slice(2);
+// --strict-selector: match only a profile or account id, never a bare env key.
+// `just coms` needs this: "dev" is a legitimate cname, and swallowing it as a
+// hub selector would silently retarget a local session at the dev hub.
+const strict = argv.includes("--strict-selector");
+const [manifestPath, selector] = argv.filter((a) => a !== "--strict-selector");
 if (!manifestPath || !selector) {
 	console.error("usage: hub-tunnel-target.ts <manifest> <env|profile|account-id>");
 	process.exit(2);
@@ -38,7 +43,7 @@ const doc = parse(readFileSync(manifestPath, "utf8")) as { hubs?: Record<string,
 const entries = Object.entries(doc?.hubs ?? {});
 
 const matches = entries.filter(
-	([env, h]) => env === selector || h.profile === selector || String(h.account_id ?? "") === selector,
+	([env, h]) => h.profile === selector || String(h.account_id ?? "") === selector || (!strict && env === selector),
 );
 if (matches.length === 0) {
 	const known = entries

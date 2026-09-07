@@ -33,7 +33,10 @@ coms first *rest:
     # manifest actually has a hub by that name/profile/account (resolver exit 3
     # = no match), so a cname can never be mistaken for a hub.
     if [ -f "$MANIFEST" ] && [ ${#ARGS[@]} -gt 0 ]; then
-      if RESOLVED="$(bun {{justfile_directory()}}/scripts/hub-tunnel-target.ts "$MANIFEST" "{{first}}" 2>/dev/null)"; then
+      # --strict-selector: only a PROFILE or ACCOUNT ID counts here, never a bare
+      # env key. `just coms dev` has always meant a local session named "dev",
+      # and a cname must never be swallowed as a hub selector.
+      if RESOLVED="$(bun {{justfile_directory()}}/scripts/hub-tunnel-target.ts "$MANIFEST" "{{first}}" --strict-selector 2>/dev/null)"; then
         eval "$RESOLVED"
         SEL="{{first}}"; CNAME="${ARGS[0]}"; ARGS=("${ARGS[@]:1}")
       fi
