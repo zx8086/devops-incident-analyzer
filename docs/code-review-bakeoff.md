@@ -59,6 +59,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#706](https://github.com/zx8086/devops-incident-analyzer/pull/706) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1657 follow-up, reverting #705's horizontal scroll and wrapping wide graph layers instead (3 files); SKIPPED once in 103 ms; CodeRabbit silent (27th straight); all five CI jobs green first run; merged on user authorization with the gate overridden; detail below |
 | [#707](https://github.com/zx8086/devops-incident-analyzer/pull/707) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1658, a tall HITL gate card collapsing the triage pane to zero height (1 file); SKIPPED once in 144 ms; CodeRabbit silent (28th straight); all five CI jobs green first run; merged on user authorization with the gate overridden; detail below |
 | [#708](https://github.com/zx8086/devops-incident-analyzer/pull/708) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1659, gate cards bounded to the chat column so they stop running under the panes (1 file); SKIPPED once in 92 ms; CodeRabbit silent (29th straight); Test job aborted once with the known packages/agent SIGABRT and passed on re-run; merged on user authorization with the gate overridden; detail below |
+| [#709](https://github.com/zx8086/devops-incident-analyzer/pull/709) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1660, instrumenting the pi-coms fleet path after a 403 took a live-hub curl investigation (2 files); SKIPPED once in 128 ms; CodeRabbit silent (30th straight); all five CI jobs green first run; merged on user authorization with the gate overridden; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -912,3 +913,21 @@ The second follow-up on the same panel in one session: #707 stopped a tall gate 
 3. *The structural fix beat the CSS fix on both axes.* Nesting the gate region inside the chat column bounds it horizontally AND removes its competition for vertical space, so the pane went from 340px under #707's cap to its full 745px. When a layout fix needs a magic number (45vh), that is often a hint the element is in the wrong container.
 4. *svelte-check earned its place in the loop.* The restructure left one unbalanced `</div>`; `bun run typecheck` in `apps/web` named the exact line. The ROOT typecheck skips svelte-check, so a repo-level run would have reported success on markup that does not compile.
 5. *Third consecutive PR whose defect came from the user looking at the running app.* Four of the five entries in this run (#705, #707, #708 plus #706) are the same story: green CI, a skipped review, and a regression visible in one screenshot.
+
+## PR #709 detail (SIO-1660, instrument the pi-coms fleet path)
+
+Observability work rather than a bug fix, prompted by the operator noticing there was almost no logging around the fleet flow after a `403 name_not_allowed` had to be diagnosed with curl against a live production hub. Two files.
+
+**Greptile:** terminal **SKIPPED** (id 22917651 on `777216b6`), 128 ms, `strictness: 2`, body null. Thirtieth consecutive skip.
+
+**CodeRabbit:** nothing, through CI completion. Thirtieth consecutive absence (#679 to #709).
+
+**Merge gate:** all five CI jobs green first run. Zero findings to triage. Merged on the user's explicit instruction with the documented gate knowingly overridden. Squash `ec4fc01d`.
+
+**Takeaways:**
+
+1. *The absence of logging was itself the defect, and it was measurable.* 10 log calls across ~1,600 lines, zero on the entire web surface, and 8 of the 10 were warn/error on config or schema edges -- so nothing described normal operation. Counting call sites per file turned "we do not have much logging" into a scoped ticket in a few minutes.
+2. *One seam carried almost all the value.* Every hub call funnels through the client's private `http()`, which already threw a fully-formed `PiComsHttpError(status, code, method, path)` and logged nothing. Instrumenting that single method covers the 403 / timeout / unreachable class; the lifecycle events on top are what make a flow readable end to end.
+3. *Adding logging can create its own noise, and the fix belongs at the seam.* Heartbeats route through the same `http()` and fire once per await slice, so at info they would have emitted a line every 25 s and buried the calls that matter. They log at debug via a path check inside `http()`, not by skipping instrumentation.
+4. *A redaction rule with no enforcement mechanism has to be enforced by construction.* `packages/observability/src/logger.ts` has no redact config, so every log call was written to carry identity and outcome only, then verified against REAL output by grepping the running server's log for the actual tokens from `.env`, the `Bearer` header and the probe's prompt text -- all absent. Reading the diff would not have proved that.
+5. *The acceptance test was the original incident, replayed.* Re-triggering the 403 now produces three lines pairing the sender name with `name_not_allowed` on `POST /v1/agents/register` -- the whole diagnosis, no curl. Verifying observability work means reproducing the failure it was meant to explain, not just confirming the code compiles.
