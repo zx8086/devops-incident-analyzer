@@ -58,6 +58,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#705](https://github.com/zx8086/devops-incident-analyzer/pull/705) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1657 fleet console made contextual + triage SVG rendered at natural size (7 files); SKIPPED once in 115 ms; CodeRabbit silent (26th straight); all five CI jobs green first run; merged on user authorization with the gate overridden; detail below |
 | [#706](https://github.com/zx8086/devops-incident-analyzer/pull/706) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1657 follow-up, reverting #705's horizontal scroll and wrapping wide graph layers instead (3 files); SKIPPED once in 103 ms; CodeRabbit silent (27th straight); all five CI jobs green first run; merged on user authorization with the gate overridden; detail below |
 | [#707](https://github.com/zx8086/devops-incident-analyzer/pull/707) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1658, a tall HITL gate card collapsing the triage pane to zero height (1 file); SKIPPED once in 144 ms; CodeRabbit silent (28th straight); all five CI jobs green first run; merged on user authorization with the gate overridden; detail below |
+| [#708](https://github.com/zx8086/devops-incident-analyzer/pull/708) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1659, gate cards bounded to the chat column so they stop running under the panes (1 file); SKIPPED once in 92 ms; CodeRabbit silent (29th straight); Test job aborted once with the known packages/agent SIGABRT and passed on re-run; merged on user authorization with the gate overridden; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -893,3 +894,21 @@ A one-file layout fix, reported by the user from the running app: the live graph
 3. *The first cap satisfied the letter of the request and not its point.* 60vh kept the pane "visible" at 205px -- a strip too thin to read a graph in. Measuring the trade-off across 60/50/45/40/35vh produced 45vh (405px card, 340px pane), where both halves are actually usable. "Visible" was the wrong success criterion, the same class of mistake as #705's "labels are legible".
 4. *A cap has to be checked in the cases where it should do nothing.* Verified that with no gate the region is 0px and the pane keeps its full 745px, and that a short banner (topic-shift) renders at its natural 45px with no scrollbar. A cap that silently pads or scrolls small content would have been a new bug.
 5. *The fix covers all ten gate cards*, not only the plan review that surfaced it -- reconcile, synthetics push, fleet upgrade, renovate trigger and the HIL-learning gates shared the defect. Worth noting that 45vh is tuned against a 900px-tall viewport; a much shorter window gives the card proportionally less room.
+
+## PR #708 detail (SIO-1659, gate cards bounded to the chat column)
+
+The second follow-up on the same panel in one session: #707 stopped a tall gate card collapsing the triage pane vertically, but the card still spanned the full page width and rendered underneath the pane. One file.
+
+**Greptile:** terminal **SKIPPED** (id 22907031 on `d39c85be`), 92 ms, `strictness: 2`, body null. Twenty-ninth consecutive skip.
+
+**CodeRabbit:** nothing, through CI completion. Twenty-ninth consecutive absence (#679 to #708).
+
+**Merge gate:** the Test job failed on the first run with exit code 134 and passed unchanged on re-run; the other four were green first time. Zero findings to triage. Merged on the user's explicit instruction with the documented gate knowingly overridden. Squash `45f52d40`.
+
+**Takeaways:**
+
+1. *A green-then-abort CI failure needs reading, not re-running on reflex.* The Test job's own output ended `393 pass, 0 fail ... Exited with code 0`, and the job still failed -- exit 134 (SIGABRT) from `panic(main thread): abort() called` in `packages/agent`, the transient already recorded for #693 and #694. The re-run passed. The habit worth keeping is reading far enough up the log to see WHICH package aborted and whether any test actually failed, because the same red X would appear for a genuine failure.
+2. *Fixing the measured symptom left the real one untouched.* #707 capped the gate region's height because the reported symptom was "the pane disappears". The card was still a full-width sibling of the split row, so it laid out across the whole 1440px viewport and passed beneath the 576px pane -- a height cap cannot fix a width problem. Two rounds on one panel because the first fix treated the axis that was easiest to measure.
+3. *The structural fix beat the CSS fix on both axes.* Nesting the gate region inside the chat column bounds it horizontally AND removes its competition for vertical space, so the pane went from 340px under #707's cap to its full 745px. When a layout fix needs a magic number (45vh), that is often a hint the element is in the wrong container.
+4. *svelte-check earned its place in the loop.* The restructure left one unbalanced `</div>`; `bun run typecheck` in `apps/web` named the exact line. The ROOT typecheck skips svelte-check, so a repo-level run would have reported success on markup that does not compile.
+5. *Third consecutive PR whose defect came from the user looking at the running app.* Four of the five entries in this run (#705, #707, #708 plus #706) are the same story: green CI, a skipped review, and a regression visible in one screenshot.
