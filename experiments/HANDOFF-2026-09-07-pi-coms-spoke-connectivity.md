@@ -459,3 +459,36 @@ which is easy to misread as a hub fault.
 `feedback_no_cross_environment_access` (dev hub for dev, prd hub for prd),
 `reference_sio1661_pi_coms_error_detail_passthrough` (hub sends details the client dropped; a rethrow must keep the error TYPE or 502 silently becomes 500),
 `reference_shared_logger_redaction_authtoken_gap` (the logger DOES redact, but `authToken` is not in the key list and paths are only two deep)
+
+## Verification record — 2026-09-07 15:21Z (live prd hub)
+
+The send path was verified end to end after `PI_COMS_PANE_SENDER_PREFIX=incident-analyzer`
+was set, over a freshly established prd tunnel. Recorded here so the next
+session need not re-run it against production.
+
+Preconditions: AWS creds for `eu-shared-services-prd` had EXPIRED (`ExpiredToken`
+from `sts get-caller-identity`), which is what had dropped the tunnel and made
+BOTH hubs read `fetch failed` in the pane. Refreshing them and running
+`just hub-tunnel eu-shared-services-prd` brought 8788 back in ~4 s
+(hub instance `i-06a37a552e6a74c29`, remote 8787 -> local 8788).
+
+Results:
+
+| check | result |
+|---|---|
+| `/api/pi/agents` prd | 6 peers, all `online`; `senderPrefix: incident-analyzer` |
+| send -> `eu-shared-services-prd` | HTTP 200, `status: complete`, sender `incident-analyzer-9197de8e` |
+| reply | "Confirmed, this is eu-shared-services-prd, AWS account 399987695868." |
+| send -> `eu-oit-prd` | HTTP 200, `status: complete`, sender `incident-analyzer-b27e9622`, reply "OK." |
+
+Two different spokes, two fresh registrations, no `403`. The tunnel was torn
+down afterwards and `lsof -nP -iTCP:8788 -sTCP:LISTEN` confirmed free.
+
+**Still unverified:** the dev hub. `PI_COMS_PANE_SENDER_PREFIX` applies to BOTH
+environments, so once a dev tunnel exists the dev hub's principal list must also
+allow `incident-analyzer-*` or dev will 403 exactly as prd did. Check with
+`just token-list <dev profile>` before assuming dev works.
+
+**Operational note:** a pane showing `fetch failed` on EVERY hub is most often
+expired AWS credentials, not a pi-coms fault — check
+`aws sts get-caller-identity --profile <hub profile>` first.
