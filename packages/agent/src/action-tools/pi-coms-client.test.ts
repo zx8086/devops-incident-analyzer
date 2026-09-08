@@ -4,6 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PiComsHubConfig } from "@devops-agent/shared";
 import {
+	isMonitorAgentName,
 	isPiComsConfigured,
 	PI_COMS_AWAIT_SLICE_MS,
 	PI_COMS_SENDER_NAME_PREFIX,
@@ -11,7 +12,29 @@ import {
 	PiComsHttpError,
 	resolvePiComsConfig,
 	senderNameFor,
+	spokesOnly,
 } from "./pi-coms-client.ts";
+
+describe("SIO-1665 monitor names", () => {
+	test("the monitor- prefix marks a monitor, in both the bootstrap and code-default forms", () => {
+		expect(isMonitorAgentName("monitor-eu-oit-prd")).toBe(true);
+		expect(isMonitorAgentName("monitor-aws-123456789012")).toBe(true);
+		expect(isMonitorAgentName("eu-oit-prd")).toBe(false);
+		expect(isMonitorAgentName("ops")).toBe(false);
+		// The prefix, not a substring: a spoke whose name merely contains it stays.
+		expect(isMonitorAgentName("eu-monitor-prd")).toBe(false);
+	});
+
+	test("spokesOnly drops monitors and keeps every other card in order", () => {
+		const cards = [
+			{ name: "monitor-eu-oit-prd", status: "online" },
+			{ name: "eu-oit-prd", status: "online" },
+			{ name: "eu-shared-services-prd", status: "stale" },
+			{ name: "monitor-eu-shared-services-prd", status: "online" },
+		];
+		expect(spokesOnly(cards).map((c) => c.name)).toEqual(["eu-oit-prd", "eu-shared-services-prd"]);
+	});
+});
 
 const hub: PiComsHubConfig = {
 	serverUrl: "http://hub.test",

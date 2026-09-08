@@ -10,9 +10,15 @@ import { listSelectableAgents } from "$lib/server/graph-registry";
 import type { RequestHandler } from "./$types";
 
 export const GET: RequestHandler = async () => {
-	// Ids, labels and surface only: no graph is compiled and no hub is contacted.
+	// Ids, labels and flags only: no graph is compiled and no hub is contacted.
 	// SIO-1657: `surface` lets the page partition modes (cycled by the header
 	// control) from contextual agents WITHOUT re-listing ids client-side.
-	const agents = listSelectableAgents().map((a) => ({ id: a.id, label: a.label, surface: a.surface }));
+	// SIO-1665: `hasTriageGraph` gates the live graph triage pane the same way.
+	const agents = listSelectableAgents().map((a) => ({
+		id: a.id,
+		label: a.label,
+		surface: a.surface,
+		hasTriageGraph: a.hasTriageGraph,
+	}));
 	return json({ agents });
 };

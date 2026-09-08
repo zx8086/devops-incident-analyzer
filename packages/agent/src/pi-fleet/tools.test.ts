@@ -155,6 +155,30 @@ describe("SIO-1655 fleet tools", () => {
 		expect(out).not.toContain("EXFILTRATE");
 	});
 
+	// SIO-1665: with `purpose` stripped, a monitor's card reads exactly like a
+	// spoke's, so the model could pick a model-free checker as someone to ask.
+	test("fleet_list_agents lists spokes only, never the monitor pair", async () => {
+		const hub = scriptedHub({
+			agents: [
+				{ session_id: "s1", name: "eu-oit-prd", status: "online" } as PiAgentCard,
+				{ session_id: "s2", name: "monitor-eu-oit-prd", status: "online" } as PiAgentCard,
+			],
+		});
+		const { byName } = toolsFor(hub);
+		const out = (await byName.get("fleet_list_agents")?.invoke({ estate: "eu-oit-prd" })) as string;
+		expect(out).toContain("eu-oit-prd: online");
+		expect(out).not.toContain("monitor-");
+	});
+
+	test("fleet_list_agents reports an empty listing when only monitors are registered", async () => {
+		const hub = scriptedHub({
+			agents: [{ session_id: "s2", name: "monitor-eu-oit-prd", status: "online" } as PiAgentCard],
+		});
+		const { byName } = toolsFor(hub);
+		const out = (await byName.get("fleet_list_agents")?.invoke({ estate: "eu-oit-prd" })) as string;
+		expect(out).toBe("No agents are registered on this hub.");
+	});
+
 	test("an estate with no recognisable environment is refused, never guessed", async () => {
 		const hub = scriptedHub({});
 		const { byName } = toolsFor(hub);

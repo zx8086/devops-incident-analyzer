@@ -15,7 +15,9 @@ export { executeAction, getAvailableActionTools } from "./action-tools/executor.
 // SIO-1650: the web app's pi-fleet pane reuses the hub client through this barrel.
 export {
 	type FetchLike,
+	isMonitorAgentName,
 	isPiComsConfigured,
+	MONITOR_NAME_PREFIX,
 	PI_COMS_AWAIT_SLICE_MS,
 	type PiAgentCard,
 	PiComsClient,
@@ -27,6 +29,7 @@ export {
 	type PiSendResult,
 	resolvePiComsConfig,
 	senderNameFor,
+	spokesOnly,
 } from "./action-tools/pi-coms-client.ts";
 export {
 	environmentForEstate,

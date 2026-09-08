@@ -26,12 +26,16 @@ import { getGraph, getIacGraph, getPiFleetGraph } from "./agent";
 //   hasDataSources  -- same sites, datasource attribution
 //   streamsTokens   -- false for graphs that append a final AIMessage instead
 //                      of streaming (the SSE handler then reads terminal state)
+//   hasTriageGraph  -- SIO-1665: whether the header offers the live graph triage
+//                      pane (SIO-1572) for this agent. False for a graph with
+//                      nothing to light up as a turn flows through it.
 export interface AgentDescriptor {
 	readonly id: AgentId;
 	readonly label: string;
 	readonly hasConfidence: boolean;
 	readonly hasDataSources: boolean;
 	readonly streamsTokens: boolean;
+	readonly hasTriageGraph: boolean;
 	// SIO-1657: whether the header's mode control cycles this agent.
 	//   "mode"       -- a top-level way of working the operator switches between.
 	//   "contextual" -- a capability reached from the agent whose work it belongs
@@ -77,6 +81,7 @@ const REGISTRY: Readonly<Record<AgentId, AgentDescriptor>> = {
 		hasConfidence: true,
 		hasDataSources: true,
 		streamsTokens: true,
+		hasTriageGraph: true,
 		surface: "mode",
 		graph: getGraph,
 	},
@@ -91,6 +96,10 @@ const REGISTRY: Readonly<Record<AgentId, AgentDescriptor>> = {
 		hasDataSources: false,
 		// The console composes one answer at the end rather than streaming tokens.
 		streamsTokens: false,
+		// SIO-1665: a two-node graph (converse, teardown) has nothing to triage, and
+		// the spoke replies the operator wants are already in the fleet pane beside
+		// the chat. Offering the pane here only drew a redundant second column.
+		hasTriageGraph: false,
 		// SIO-1657: asking live account spokes about an incident belongs to the
 		// incident analyzer's context, so it is offered from there rather than
 		// cycled as a peer of the IaC config maker.
@@ -105,6 +114,7 @@ const REGISTRY: Readonly<Record<AgentId, AgentDescriptor>> = {
 		// The IaC graph appends its output as AIMessages rather than streaming
 		// tokens through an output node.
 		streamsTokens: false,
+		hasTriageGraph: true,
 		surface: "mode",
 		graph: getIacGraph,
 	},

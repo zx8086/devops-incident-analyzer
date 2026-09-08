@@ -13,6 +13,7 @@ import {
 	type PiReply,
 	resolvePiComsConfig,
 	senderNameFor,
+	spokesOnly,
 } from "@devops-agent/agent";
 import { getLogger } from "@devops-agent/observability";
 import type { PiComsEnvironment, PiComsHubConfig } from "@devops-agent/shared";
@@ -177,7 +178,11 @@ export async function listFleetAgents(deps: PiFleetDeps = {}): Promise<PiFleetAg
 				fallbackTarget: paneHub.hub.fallbackTarget,
 			};
 			try {
-				const agents = await clientFor(paneHub, pane, deps).listAgents();
+				// SIO-1665: the client lists explicit registrations too (a spoke may be
+				// explicit), which also returns every `monitor-*`. Monitors cannot answer a
+				// prompt, so they are dropped by name here; their reports still reach the
+				// pane through the hub's inbox (`Inbox ops`).
+				const agents = spokesOnly(await clientFor(paneHub, pane, deps).listAgents());
 				const peers = agents
 					.map((a) => ({ name: a.name, status: a.status, purpose: a.purpose ?? null, sessionId: a.session_id }))
 					.sort((a, b) => a.name.localeCompare(b.name));

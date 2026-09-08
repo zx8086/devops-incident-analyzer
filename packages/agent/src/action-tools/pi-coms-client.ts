@@ -230,6 +230,23 @@ export const PI_COMS_SENDER_NAME_PREFIX = "incident-analyzer";
 export function senderNameFor(sessionId: string, prefix: string = PI_COMS_SENDER_NAME_PREFIX): string {
 	return `${prefix}-${sessionId.replace(/-/g, "").slice(0, 8)}`;
 }
+
+// SIO-1665: a monitor registers as `monitor-<spoke>` (packages/pi-coms/scripts/
+// fleet/tokens.ts mints the pair; the code default is `monitor-aws-<account>`).
+// It is a deterministic checker with no model: it reports to the ops inbox but
+// cannot answer a question, so it is never a send target. The hub card carries
+// no role field, and `purpose` is agent-authored prose; the name is the one
+// hub-controlled signal, so the prefix is the discriminator.
+export const MONITOR_NAME_PREFIX = "monitor-";
+
+export function isMonitorAgentName(name: string): boolean {
+	return name.startsWith(MONITOR_NAME_PREFIX);
+}
+
+// A listing fit to address: every card the hub returned minus the monitors.
+export function spokesOnly<T extends { name: string }>(agents: readonly T[]): T[] {
+	return agents.filter((a) => !isMonitorAgentName(a.name));
+}
 // Under the hub's 30 s default await and its 30 s stale threshold: each slice is
 // followed by a heartbeat so the sender stays online for the whole budget.
 export const PI_COMS_AWAIT_SLICE_MS = 25_000;

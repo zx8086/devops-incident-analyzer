@@ -10,11 +10,16 @@
 import { describe, expect, test } from "bun:test";
 import { type AgentId, DEFAULT_AGENT_ID } from "./agent-ids.ts";
 
-type AgentRow = { id: string; surface?: string };
+type AgentRow = { id: string; surface?: string; hasTriageGraph?: boolean };
 
 // Mirrors loadSelectableAgents (+page.svelte).
 const modeIdsFrom = (agents: AgentRow[]): string[] => agents.filter((a) => a.surface === "mode").map((a) => a.id);
 const consoleAvailableFrom = (agents: AgentRow[]): boolean => agents.some((a) => a.id === "pi-fleet-console");
+// SIO-1665: mirrors triageIds + the triageOffered derived. A row without the
+// flag keeps the pane offered.
+const triageIdsFrom = (agents: AgentRow[]): string[] =>
+	agents.filter((a) => a.hasTriageGraph !== false).map((a) => a.id);
+const triageOffered = (agents: AgentRow[], current: string): boolean => triageIdsFrom(agents).includes(current);
 // Mirrors the consoleOffered / onContextualAgent deriveds.
 const consoleOffered = (agents: AgentRow[], current: string): boolean =>
 	consoleAvailableFrom(agents) && current === "incident-analyzer";
@@ -29,9 +34,9 @@ function nextAgent(agents: AgentRow[], current: string): string | undefined {
 }
 
 const HUB_CONFIGURED: AgentRow[] = [
-	{ id: "incident-analyzer", surface: "mode" },
-	{ id: "elastic-iac", surface: "mode" },
-	{ id: "pi-fleet-console", surface: "contextual" },
+	{ id: "incident-analyzer", surface: "mode", hasTriageGraph: true },
+	{ id: "elastic-iac", surface: "mode", hasTriageGraph: true },
+	{ id: "pi-fleet-console", surface: "contextual", hasTriageGraph: false },
 ];
 const NO_HUB: AgentRow[] = [
 	{ id: "incident-analyzer", surface: "mode" },
@@ -82,5 +87,21 @@ describe("SIO-1657 console entry point", () => {
 	test("availability follows the payload, not a hardcoded list", () => {
 		expect(consoleAvailableFrom(HUB_CONFIGURED)).toBe(true);
 		expect(consoleAvailableFrom(NO_HUB)).toBe(false);
+	});
+});
+
+describe("SIO-1665 live graph triage pane", () => {
+	test("offered on the modes, not on the fleet console", () => {
+		expect(triageOffered(HUB_CONFIGURED, "incident-analyzer")).toBe(true);
+		expect(triageOffered(HUB_CONFIGURED, "elastic-iac")).toBe(true);
+		// The console's two-node graph is redundant next to the fleet pane.
+		expect(triageOffered(HUB_CONFIGURED, "pi-fleet-console")).toBe(false);
+	});
+
+	// A server that predates the flag returns rows without it; the pane must
+	// not vanish from the analyzer because a field is missing.
+	test("a row without the flag keeps the pane offered", () => {
+		expect(triageOffered(NO_HUB, "incident-analyzer")).toBe(true);
+		expect(triageOffered(NO_HUB, "elastic-iac")).toBe(true);
 	});
 });

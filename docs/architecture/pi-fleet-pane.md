@@ -31,7 +31,7 @@ types reach it through the agent package.
 
 | Route | Hub traffic | Returns |
 |---|---|---|
-| `GET /api/pi/agents` | `GET /v1/agents?include_explicit=true` per hub, bearer only, no registration | `configured`, `senderPrefix`, `awaitMs`, `totalBudgetMs`, one row per hub with its peers (`online`, `stale`, `offline`), or the hub's error inline |
+| `GET /api/pi/agents` | `GET /v1/agents?include_explicit=true` per hub, bearer only, no registration | `configured`, `senderPrefix`, `awaitMs`, `totalBudgetMs`, one row per hub with its peers (`online`, `stale`, `offline`), or the hub's error inline. SIO-1665: `monitor-*` registrations are dropped by name (`spokesOnly`); a monitor has no model and cannot answer a prompt, and its reports reach the pane only through the inbox |
 | `POST /api/pi/messages` | register `<prefix>-<8 hex>` on the peer's hub, `POST /v1/messages` (no `response_schema`), one `GET /v1/messages/:id/await` slice, deregister | `msgId`, `sender`, `status`, `response`, `error`, `sentAt` |
 | `GET /api/pi/messages?environment=&msgId=` | one more await slice from an unregistered client | `status`, `response`, `error` |
 | `GET /api/pi/mailbox?environment=&name=&limit=` | `GET /v1/mailbox` | the durable inbox (the hub's fallback target by default) |
