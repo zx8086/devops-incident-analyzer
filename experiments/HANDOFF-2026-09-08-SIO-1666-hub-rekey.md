@@ -1,4 +1,4 @@
-# HANDOFF 2026-09-08 — SIO-1666 hub rekey: backend done, UI half remaining
+# HANDOFF 2026-09-08 — SIO-1666 hub rekey (COMPLETE, merged as d199b653)
 
 **Date**: 2026-09-08
 **Repo state**: branch `claude/sio-1666-hub-rekey` @ `26167e7c`, pushed, clean
@@ -7,6 +7,25 @@ tree. Branched from `main` @ `7f8d9435`.
 **Design**: `docs/superpowers/specs/2026-09-07-multi-hub-addressing.md`
 
 ## TL;DR
+
+**RESOLVED 2026-09-08. The whole rekey shipped in PR #715, squashed as
+`d199b653`, all five CI jobs green on main.** This document is kept as the
+record of how it was split and what to watch for; the "remaining" section below
+was completed in a follow-up session.
+
+Verified live before merge: send by `hubKey` returned `status: complete` with
+the spoke naming its own account; an unknown hub returned **404 listing the
+configured hubs** rather than a silent wrong-hub guess; the pane renders
+`DEV eu-shared-services-dev` / `PRD eu-shared-services-prd`, account first. All
+five spoke roots re-render byte-identical apart from one generated comment, so
+**no terraform re-apply was needed**.
+
+Two gaps CI caught that per-package local runs had not, both genuinely this
+work's: `@devops-agent/shared` was never run (the package whose schema the
+change was built on), and eight hub fixtures configured a hub without listing
+its estates, so under explicit binding they claimed nothing.
+
+--- original handoff below ---
 
 The rekey is **done and green on the backend**; the **web UI half is not
 started**. Two commits are pushed and independently verified:

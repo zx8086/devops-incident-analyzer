@@ -61,6 +61,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#708](https://github.com/zx8086/devops-incident-analyzer/pull/708) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1659, gate cards bounded to the chat column so they stop running under the panes (1 file); SKIPPED once in 92 ms; CodeRabbit silent (29th straight); Test job aborted once with the known packages/agent SIGABRT and passed on re-run; merged on user authorization with the gate overridden; detail below |
 | [#709](https://github.com/zx8086/devops-incident-analyzer/pull/709) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1660, instrumenting the pi-coms fleet path after a 403 took a live-hub curl investigation (2 files); SKIPPED once in 128 ms; CodeRabbit silent (30th straight); all five CI jobs green first run; merged on user authorization with the gate overridden; detail below |
 | [#711](https://github.com/zx8086/devops-incident-analyzer/pull/711) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1662, dropping the duplicate fleet-console header button and moving the entry into the pane (2 files); SKIPPED once in 139 ms; CodeRabbit silent (31st straight); all five CI jobs green first run; merged on user authorization with the gate overridden; detail below |
+| [#715](https://github.com/zx8086/devops-incident-analyzer/pull/715) | 2026-09-08 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1666, rekeying pi-coms hubs by AWS account across four packages (35 files); three SKIPPED records, one per push, 110-135 ms each; CodeRabbit silent (32nd straight); CI caught two real gaps a per-package local run missed; merged on user authorization with the gate overridden; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -1027,3 +1028,21 @@ Reported by the operator from the running app against the prd hub: `monitor-*` r
 2. *The hub record has no role field, so the filter is a name filter.* `explicit` covers monitors and the analyzer's own senders alike, and `purpose` is agent-authored prose the console already refuses to read. The `monitor-` prefix is hub-controlled and minted as a pair with the spoke, which is the argument for trusting it. This is the kind of design choice a reviewer would be expected to probe; neither bot saw the PR.
 3. *The same gate-both-sides rule from #711 applied again.* The triage pane needed its toggle and its mount on one derived value, or switching to the console would have left an open pane with no control to close it. Having the rule written down in the page comment from #711 made it a copy, not a rediscovery.
 4. *An environment fault masqueraded as a typecheck regression.* The worktree and the main checkout both lack the `node_modules/@devops-agent/pi-coms` link, so `bun run typecheck` fails on the contracts import before any change. A baseline check against the untouched import line proved it pre-existing; a symlink fixed it locally without `bun install`.
+
+## PR #715 detail (SIO-1666, hub identity is the AWS account)
+
+The largest change in this run: 35 files across four packages, rekeying pi-coms hubs from an environment key (`dev|stg|prd`) to the AWS account they live in. Split across two sessions -- backend first, UI half after a deliberate handoff.
+
+**Greptile:** terminal **SKIPPED** on all three heads (ids 23072545, 23073687, 23074303), 110-135 ms each, `strictness: 2`, body null. Thirty-second consecutive skip.
+
+**CodeRabbit:** nothing, through CI completion. Thirty-second consecutive absence (#679 to #715).
+
+**Merge gate:** all five CI jobs green on the third head. Zero findings to triage. Merged on the user's explicit instruction with the documented gate knowingly overridden. Squash `d199b653`.
+
+**Takeaways:**
+
+1. *CI was the only reviewer that caught anything, and it caught two real gaps.* Per-package local runs (pi-coms, agent, web) all passed while `@devops-agent/shared` -- the package whose schema the change was built on -- was never run, and eight hub fixtures configured a hub without saying which estates it served, so under explicit binding they claimed nothing. Both were genuinely this PR's. With both bots silent for 32 PRs, "run every package the change touches, not the ones you remember" is doing the work a reviewer would.
+2. *A typecheck that passes is not a lint that passes, and neither is a test run.* `bun test` accepted eight object literals that svelte-check rejected, and the repo lint surfaced dead symbols (`FleetEnvironment`, a `localPort` parameter, three unused imports) that no test could see. Three separate gates, three separate classes of defect.
+3. *The dangerous errors were the ones that typechecked.* `hubFor(manifest, spoke.env)` still compiles after the key changes meaning -- both are strings -- so it would have resolved the wrong hub silently. Grepping every call site by hand was the only way to find those; the compiler found the other half.
+4. *Verifying "no infrastructure change" is cheap and worth it.* Re-rendering all five spoke roots showed `main.tf`, `terraform.tfvars` and `backend.hcl` byte-identical, with only a generated comment differing -- which is what let the PR claim no terraform re-apply, rather than asserting it from the design doc.
+5. *A mid-change handoff cost nothing here.* The first session stopped at a coherent boundary with the backend green and a partial wire-type edit reverted; the second picked it up from the branch and the handover with no rework. Worth repeating when a change outgrows one context.
