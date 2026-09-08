@@ -1,16 +1,20 @@
 # HANDOFF 2026-09-07 — session close: IaC MR labels, frontend panes, fleet observability
 
 **Date**: 2026-09-07
-**Repo state**: `main` @ `e04d17d3`, clean tree, nothing in flight
+**Repo state**: `main` @ `37e5af39`, clean tree, nothing in flight
+**Updated**: 2026-09-08 — three follow-up PRs (#712, #713, #714) landed after this
+doc was first written; see "Landed after this handover" below
 **Suggested branch**: n/a — nothing is half-done. Branch per item if you pick one up.
 **Linear**: SIO-1656, SIO-1657, SIO-1658, SIO-1659, SIO-1660, SIO-1662 (all closed);
 SIO-1661 was done in a PARALLEL session (see "Two sessions" below)
 
 ## TL;DR
 
-**Nothing is blocked and nothing is half-finished.** Seven PRs merged (#704–#711,
-plus #710 from a parallel session), all five CI jobs green on each, and the two
-pi-coms hubs are proven end to end with live sends.
+**Nothing is blocked and nothing is half-finished.** Ten PRs merged (#704–#714),
+all five CI jobs green on each, and the two pi-coms hubs are proven end to end
+with live sends. Four of the ten came from a parallel session (#710, #712, #713,
+#714) — see "Landed after this handover" for the two that amend work described
+here.
 
 This is a close-out document, not a to-do list. Read it for what changed, the
 invariants that are easy to break, and the traps that cost time today.
@@ -31,6 +35,48 @@ pipeline) rather than force-verified with throwaway MRs. Do not re-open it.
 | #709 | SIO-1660 | pi-coms fleet path instrumented |
 | #710 | SIO-1661 | Registration failures name the rejected sender *(parallel session)* |
 | #711 | SIO-1662 | One fleet control; console entry moved into the pane |
+| #712 | SIO-1663 | `activeSkills` — each elastic-iac lane loads only its skills *(parallel)* |
+| #713 | SIO-1664 | Fleet-upgrade history answered instead of "(unknown)" *(parallel)* |
+| #714 | SIO-1665 | Monitors hidden from spoke lists; no triage graph on the console *(parallel)* |
+
+## Landed after this handover (2026-09-08)
+
+Three PRs merged from a **parallel session** between this doc being written and
+being read. Two of them touch code this session owned, so they are summarised
+here rather than left to `git log`.
+
+**#712 — SIO-1663, `activeSkills` per IaC lane.** New
+`packages/agent/src/iac/skill-selector.ts` (+ a sync test) so each lane loads
+only the skills it needs, instead of every lane paying for all of them. Isolated
+from this session's work.
+
+**#713 — SIO-1664, fleet-upgrade history.** The status question answered
+"(unknown)" and returned one upgrade rather than the list, and corrupted durable
+memory on the way. Touches `iac/nodes.ts`, `iac/local-tools.ts`, `iac/state.ts`
+and the knowledge-graph reader. Isolated from this session's work.
+
+**#714 — SIO-1665, monitors and the console's triage graph.** This one AMENDS
+two things this session shipped, and the amendments are good:
+
+- `monitor-*` registrations were listed as addressable spokes in both the fleet
+  pane and the console's `fleet_list_agents`. A new `spokesOnly` helper filters
+  them at both listing sites. The hub card carries no role field and `purpose` is
+  agent-authored prose, so the **name prefix is the only safe discriminator**.
+  Monitor reports still reach the pane through the ops inbox, and
+  `fetchFleetInbox` is unchanged.
+- The triage pane followed the agent onto the Fleet Console and drew its
+  two-node graph beside the fleet pane. The registry gains **`hasTriageGraph`**
+  (false for the console), `/api/agents` carries it, and the page gates the
+  header toggle and the mount on one derived `triageOffered`.
+
+`fleetOffered` (SIO-1662) is intact and `triageOffered` was built to the same
+rule — **one derived value gating both a control and what it controls**, which is
+invariant 2 below. That rule now has two independent applications; treat it as
+the established pattern for any new pane.
+
+Also recorded there, and worth not re-investigating: a follow-up "summarise" to a
+spoke repeating its earlier answer is **spoke-side behaviour** (one persistent Pi
+session, fresh sender per send, no `conversation_id`), not a UI defect.
 
 ## Two sessions ran against this repo today
 
@@ -66,11 +112,21 @@ a specific, known bug.
    controls — the pane's own `{#if}` needs the same condition as its toggle, or
    it renders in IaC with nothing to close it.
 
-3. **Fleet belongs to the incident analyzer.**
+3. **Fleet belongs to the incident analyzer, and panes follow the agent.**
    `fleetOffered = piFleetStore.configured && (currentAgent === "incident-analyzer"
    || currentAgent === "pi-fleet-console")`. The console is reached from **inside
    the pane** (`onAskAll` → "Ask all spokes at once"), not a header icon. There is
    exactly one fleet control.
+   SIO-1665 applied the same rule to the triage pane via `hasTriageGraph` on the
+   registry descriptor and a `triageOffered` derived. **Add a capability flag to
+   `AgentDescriptor` rather than an `agentName === ...` check** — that is what the
+   descriptor exists for (`hasConfidence`, `hasDataSources`, `streamsTokens`,
+   `surface`, `hasTriageGraph`), and it is why adding an agent stays cheap.
+
+   Also: **monitors are not addressable spokes.** `spokesOnly` filters `monitor-*`
+   at both listing sites (the pane and the console's `fleet_list_agents`). The hub
+   card has no role field and `purpose` is agent-authored prose, so the name prefix
+   is the only safe discriminator. Their reports still arrive via the ops inbox.
 
 4. **Never log a token, prompt, or spoke reply.**
    `packages/observability/src/logger.ts` has **no redaction config** — whatever
