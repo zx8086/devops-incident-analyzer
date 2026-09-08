@@ -29,7 +29,7 @@ export async function ensureToken(
 	opts: { accountsDir: string; rotate?: boolean; mint?: () => string },
 ): Promise<EnsureResult> {
 	const spoke = spokeFor(manifest, name);
-	const hub = hubFor(manifest, spoke.env);
+	const hub = hubFor(manifest, spoke.hub);
 	const principalPath = `${hub.auth_path ?? DEFAULT_AUTH_PATH}/${name}`;
 	const tfvarsPath = path.join(opts.accountsDir, name, "terraform.tfvars");
 	const existing = existsSync(tfvarsPath) ? readFileSync(tfvarsPath, "utf-8") : undefined;

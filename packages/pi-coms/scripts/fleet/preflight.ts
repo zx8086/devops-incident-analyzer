@@ -30,7 +30,7 @@ const ADOPTABLE_TRUST_HINT = /DevOpsAgentCoreRole|bedrock-agentcore|role\/pi-age
 
 export async function preflightSpoke(manifest: FleetManifest, name: string, aws: FleetAws): Promise<PreflightRow[]> {
 	const spoke = spokeFor(manifest, name);
-	const hub = hubFor(manifest, spoke.env);
+	const hub = hubFor(manifest, spoke.hub);
 	const region = manifest.defaults.region;
 	const rows: PreflightRow[] = [];
 	const row = (check: string, ok: boolean, detail: string) => rows.push({ spoke: name, check, ok, detail });

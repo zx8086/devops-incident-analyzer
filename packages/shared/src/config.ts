@@ -42,10 +42,16 @@ export const LinearConfigSchema = z.object({
 });
 export type LinearConfig = z.infer<typeof LinearConfigSchema>;
 
-// SIO-1635: pi-coms hub client config. One hub per environment (no cross-environment
-// access, user decision 2026-09-06); the estate name suffix selects the hub. No
-// .default() here (project rule); defaults are applied in resolvePiComsConfig
-// (packages/agent/src/action-tools/pi-coms-client.ts).
+// SIO-1635: pi-coms hub client config. No cross-environment access (user decision
+// 2026-09-06). No .default() here (project rule); defaults are applied in
+// resolvePiComsConfig (packages/agent/src/action-tools/pi-coms-client.ts).
+//
+// SIO-1666: hubs are keyed by SELECTOR (the AWS profile / account), not by
+// environment -- a hub's identity is the account it lives in, and a second
+// domain's prd hub had nowhere to live under an env key. Each hub declares the
+// environment it serves, and an estate is bound to a hub EXPLICITLY rather than
+// routed by name suffix (which silently picked the wrong hub once two shared an
+// environment).
 export const PiComsEnvironmentSchema = z.enum(["dev", "stg", "prd"]);
 export type PiComsEnvironment = z.infer<typeof PiComsEnvironmentSchema>;
 
@@ -54,6 +60,13 @@ export const PiComsHubConfigSchema = z.object({
 	authToken: z.string().min(1),
 	project: z.string().min(1),
 	fallbackTarget: z.string().min(1),
+	// SIO-1666: the environment this hub serves -- an attribute, not the key.
+	// Still load-bearing: it is what makes "no cross-environment access"
+	// checkable now that the key no longer encodes it.
+	environment: PiComsEnvironmentSchema,
+	// SIO-1666: the estates this hub serves, explicit. Replaces routing by estate
+	// name suffix. An estate that appears in no hub is REFUSED, never guessed.
+	estates: z.array(z.string().min(1)),
 });
 export type PiComsHubConfig = z.infer<typeof PiComsHubConfigSchema>;
 
@@ -75,8 +88,9 @@ export const PiComsCapabilitiesSchema = z.object({
 export type PiComsCapabilities = z.infer<typeof PiComsCapabilitiesSchema>;
 
 export const PiComsConfigSchema = z.object({
+	// SIO-1666: keyed by selector (AWS profile / account), not environment.
 	hubs: z
-		.partialRecord(PiComsEnvironmentSchema, PiComsHubConfigSchema)
+		.record(z.string().min(1), PiComsHubConfigSchema)
 		.refine((hubs) => Object.keys(hubs).length > 0, { message: "at least one hub must be configured" }),
 	estateAgentMap: z.record(z.string(), z.string()),
 	verifyTimeoutMs: z.number().int().positive(),

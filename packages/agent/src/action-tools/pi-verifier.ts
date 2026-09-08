@@ -98,40 +98,42 @@ export type PiVerifierDeps = {
 	env?: NodeJS.ProcessEnv;
 };
 
-// Environment from the estate name suffix. Estate ids are free-form (keys of
-// AWS_ESTATES), so this is the only convention the router relies on; anything
-// else is refused rather than guessed (no cross-environment access).
-const ESTATE_ENVIRONMENT_SUFFIXES: ReadonlyArray<readonly [suffix: string, environment: PiComsEnvironment]> = [
-	["-dev", "dev"],
-	["-stg", "stg"],
-	["-prd", "prd"],
-	["-prod", "prd"],
-];
-
-export function environmentForEstate(estate: string): PiComsEnvironment | undefined {
-	return ESTATE_ENVIRONMENT_SUFFIXES.find(([suffix]) => estate.endsWith(suffix))?.[1];
+// SIO-1666: an estate is bound to a hub EXPLICITLY, by the hub's `estates` list.
+//
+// This replaces routing by estate name suffix (-dev/-stg/-prd). That convention
+// only worked while one hub owned each environment: with a second prd hub the
+// suffix identifies an ENVIRONMENT, not a hub, so `eu-oit-prd` and a different
+// domain's prd estate both resolved to whichever prd hub happened to be
+// configured -- silently, with no error. The binding is now data, and an estate
+// no hub claims is REFUSED rather than guessed, which is how the standing
+// no-cross-environment guarantee survives the rekey.
+export function environmentForEstate(estate: string, config: Pick<PiComsConfig, "hubs">): PiComsEnvironment | undefined {
+	return Object.values(config.hubs).find((hub) => hub.estates.includes(estate))?.environment;
 }
 
 export type HubSelection =
-	| { ok: true; environment: PiComsEnvironment; hub: PiComsHubConfig }
+	| { ok: true; environment: PiComsEnvironment; hubKey: string; hub: PiComsHubConfig }
 	| { ok: false; error: string };
 
 export function selectHubForEstate(estate: string, config: Pick<PiComsConfig, "hubs">): HubSelection {
-	const environment = environmentForEstate(estate);
-	if (!environment) {
+	const matches = Object.entries(config.hubs).filter(([, hub]) => hub.estates.includes(estate));
+	if (matches.length === 0) {
+		const known = Object.keys(config.hubs).join(", ") || "(none)";
 		return {
 			ok: false,
-			error: `estate "${estate}" has no recognised environment suffix (-dev, -stg, -prd); refusing to pick a hub`,
+			error: `estate "${estate}" is not listed on any pi-coms hub (hubs: ${known}); add it to that hub's estates in PI_COMS_HUBS`,
 		};
 	}
-	const hub = config.hubs[environment];
-	if (!hub) {
+	// Two hubs claiming one estate is a config error, not something to pick from:
+	// silently choosing would be the very ambiguity this rekey removes.
+	if (matches.length > 1) {
 		return {
 			ok: false,
-			error: `no pi-coms hub configured for environment "${environment}" (estate "${estate}"); set PI_COMS_HUBS`,
+			error: `estate "${estate}" is claimed by more than one hub (${matches.map(([k]) => k).join(", ")}); an estate belongs to exactly one`,
 		};
 	}
-	return { ok: true, environment, hub };
+	const [hubKey, hub] = matches[0] as [string, PiComsHubConfig];
+	return { ok: true, environment: hub.environment, hubKey, hub };
 }
 
 // The agent name an estate maps to before checking who is online.

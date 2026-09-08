@@ -46,7 +46,11 @@ export type FleetArgs = {
 	names: string[];
 	manifest: string;
 	yes: boolean;
-	env?: FleetEnvironment;
+	// SIO-1666: selects a HUB by key (an AWS profile), not an environment -- an
+	// environment no longer identifies one hub. `--env` is gone rather than
+	// aliased: silently accepting it would pick an arbitrary hub of that
+	// environment once a second one exists.
+	hub?: string;
 	tokenChanged: boolean;
 	localPort: number;
 };
@@ -57,7 +61,7 @@ export function parseFleetArgs(argv: string[]): FleetArgs {
 		options: {
 			manifest: { type: "string", default: path.join(PKG_ROOT, "deploy", "fleet.yaml") },
 			yes: { type: "boolean", default: false },
-			env: { type: "string" },
+			hub: { type: "string" },
 			"token-changed": { type: "boolean", default: false },
 			"local-port": { type: "string", default: "8788" },
 		},
@@ -69,14 +73,14 @@ export function parseFleetArgs(argv: string[]): FleetArgs {
 			"usage: fleet <preflight|tokens|render|backend-init|plan|apply|publish|rollout|status|deploy> [names]",
 		);
 	const sub = command === "tokens" || command === "backend-init" ? rest.shift() : undefined;
-	const env = values.env as FleetEnvironment | undefined;
+	const hub = values.hub as string | undefined;
 	return {
 		command,
 		...(sub ? { sub } : {}),
 		names: rest,
 		manifest: values.manifest ?? "",
 		yes: values.yes ?? false,
-		...(env ? { env } : {}),
+		...(hub ? { hub } : {}),
 		tokenChanged: values["token-changed"] ?? false,
 		localPort: Number(values["local-port"] ?? 8788),
 	};
@@ -128,9 +132,11 @@ async function runTokens(
 	return changed;
 }
 
-async function runBackendInit(manifest: FleetManifest, env: string | undefined, aws: FleetAws): Promise<void> {
-	if (env !== "dev" && env !== "stg" && env !== "prd") throw new Error("usage: fleet backend-init <dev|stg|prd>");
-	const hub = hubFor(manifest, env);
+// SIO-1666: takes a HUB key. The state bucket lives in the hub's own account, so
+// "the prd bucket" stops meaning anything once two prd hubs exist.
+async function runBackendInit(manifest: FleetManifest, hubKey: string | undefined, aws: FleetAws): Promise<void> {
+	if (!hubKey) throw new Error(`usage: fleet backend-init <hub>; hubs are ${Object.keys(manifest.hubs).join(", ")}`);
+	const hub = hubFor(manifest, hubKey);
 	const id = await aws.callerIdentity(hub.profile, hub.region);
 	const bucket = `pi-coms-tfstate-${id.account}`;
 	if (await aws.bucketExists(hub.profile, hub.region, bucket)) {
@@ -141,7 +147,7 @@ async function runBackendInit(manifest: FleetManifest, env: string | undefined, 
 	console.log(`created state bucket ${bucket} (versioned, public access blocked) in ${hub.profile}`);
 	if (hub.account_id !== id.account) {
 		console.log(
-			`note: set hubs.${env}.account_id: "${id.account}" in the manifest so render names the bucket (${stateBucketName(manifest, env)} today)`,
+			`note: set hubs.${hubKey}.account_id: "${id.account}" in the manifest so render names the bucket (${stateBucketName(manifest, hubKey)} today)`,
 		);
 	}
 }
@@ -164,9 +170,10 @@ async function runTerraform(
 	}
 }
 
-async function runPublish(manifest: FleetManifest, env: FleetEnvironment | undefined): Promise<void> {
-	const envs = (env ? [env] : (Object.keys(manifest.hubs) as FleetEnvironment[])).filter((e) => manifest.hubs[e]);
-	for (const e of envs) {
+// SIO-1666: publishes to one hub, or to every hub when none is named.
+async function runPublish(manifest: FleetManifest, hubKey: string | undefined): Promise<void> {
+	const keys = hubKey ? [hubKey] : Object.keys(manifest.hubs);
+	for (const e of keys) {
 		const hub = hubFor(manifest, e);
 		const bucket = hub.dist_bucket ?? `pi-coms-dist-${hub.account_id ?? ""}`;
 		if (!bucket.endsWith("-") && hub.account_id === undefined && !hub.dist_bucket)
@@ -183,16 +190,18 @@ async function runPublish(manifest: FleetManifest, env: FleetEnvironment | undef
 	}
 }
 
+// SIO-1666: the local port comes from the HUB, not a shared CLI default -- two
+// hubs must be able to tunnel side by side.
 async function withHubTunnel<T>(
 	manifest: FleetManifest,
-	env: FleetEnvironment,
-	localPort: number,
+	hubKey: string,
 	aws: FleetAws,
 	fn: (baseUrl: string) => Promise<T>,
 ): Promise<T> {
-	const hub = hubFor(manifest, env);
+	const hub = hubFor(manifest, hubKey);
+	const localPort = hub.local_port;
 	const hubId = await aws.instanceIdByName(hub.profile, hub.region, HUB_INSTANCE_TAG);
-	if (!hubId) throw new Error(`${env}: no running hub instance tagged Name=${HUB_INSTANCE_TAG}`);
+	if (!hubId) throw new Error(`${hubKey}: no running hub instance tagged Name=${HUB_INSTANCE_TAG}`);
 	const port = hub.port ?? DEFAULT_HUB_PORT;
 	const tunnel = Bun.spawn(
 		[
@@ -230,12 +239,17 @@ async function withHubTunnel<T>(
 	}
 }
 
-function hubToken(manifest: FleetManifest, env: FleetEnvironment): string {
-	const hub = hubFor(manifest, env);
-	const varName = hub.token_env ?? `PI_COMS_NET_AUTH_TOKEN_${env.toUpperCase()}`;
-	const token = process.env[varName];
+// SIO-1666: token_env is required per hub. The old
+// PI_COMS_NET_AUTH_TOKEN_<ENV> default collided the moment two hubs shared an
+// environment -- both would read one variable, and the second would authenticate
+// against the wrong hub's token.
+function hubToken(manifest: FleetManifest, hubKey: string): string {
+	const hub = hubFor(manifest, hubKey);
+	const token = process.env[hub.token_env];
 	if (!token)
-		throw new Error(`${varName} is not set (an operator token for the ${env} hub is needed to read its registry)`);
+		throw new Error(
+			`${hub.token_env} is not set (an operator token for hub "${hubKey}" is needed to read its registry)`,
+		);
 	return token;
 }
 
@@ -252,18 +266,20 @@ async function runRollout(
 	}
 	const persona = manifest.persona?.min_version;
 	let allOk = true;
-	const byEnv = new Map<FleetEnvironment, string[]>();
+	// SIO-1666: group by HUB. Two hubs may share an environment, so grouping by
+	// env would open one tunnel and poll the wrong registry for half the spokes.
+	const byHub = new Map<string, string[]>();
 	for (const name of targets) {
-		const env = spokeFor(manifest, name).env;
-		byEnv.set(env, [...(byEnv.get(env) ?? []), name]);
+		const key = spokeFor(manifest, name).hub;
+		byHub.set(key, [...(byHub.get(key) ?? []), name]);
 	}
-	for (const [env, envNames] of byEnv) {
-		const token = hubToken(manifest, env);
-		const ok = await withHubTunnel(manifest, env, opts.localPort, aws, async (baseUrl) => {
+	for (const [hubKey, envNames] of byHub) {
+		const token = hubToken(manifest, hubKey);
+		const ok = await withHubTunnel(manifest, hubKey, aws, async (baseUrl) => {
 			const deadline = Date.now() + 10 * 60_000;
 			let pending = envNames;
 			while (pending.length > 0 && Date.now() < deadline) {
-				const agents = await listAgents(baseUrl, token, hubFor(manifest, env).project);
+				const agents = await listAgents(baseUrl, token, hubFor(manifest, hubKey).project);
 				pending = pending.filter((name) => {
 					const problems = missingOnHub(agents, name, persona ? { persona } : {});
 					if (problems.length === 0)
@@ -285,20 +301,20 @@ async function runStatus(manifest: FleetManifest, names: string[], aws: FleetAws
 	const credentialRows = rows.filter((r) => r.check === "credentials");
 	console.log(formatPreflight(credentialRows));
 	const targets = spokeNames(manifest, names);
-	const byEnv = new Map<FleetEnvironment, string[]>();
+	const byHub = new Map<string, string[]>();
 	for (const name of targets) {
-		const env = spokeFor(manifest, name).env;
-		byEnv.set(env, [...(byEnv.get(env) ?? []), name]);
+		const key = spokeFor(manifest, name).hub;
+		byHub.set(key, [...(byHub.get(key) ?? []), name]);
 	}
-	for (const [env, envNames] of byEnv) {
-		const token = hubToken(manifest, env);
-		await withHubTunnel(manifest, env, localPort, aws, async (baseUrl) => {
-			const agents = await listAgents(baseUrl, token, hubFor(manifest, env).project);
+	for (const [hubKey, envNames] of byHub) {
+		const token = hubToken(manifest, hubKey);
+		await withHubTunnel(manifest, hubKey, aws, async (baseUrl) => {
+			const agents = await listAgents(baseUrl, token, hubFor(manifest, hubKey).project);
 			for (const name of envNames) {
 				const problems = missingOnHub(agents, name, {});
 				const agent = agents.find((a) => a.name === name);
 				console.log(
-					`${env} ${name.padEnd(28)} ${problems.length === 0 ? "online" : problems.join("; ")}${agent ? `  purpose: ${agent.purpose}` : ""}`,
+					`${hubKey} ${name.padEnd(28)} ${problems.length === 0 ? "online" : problems.join("; ")}${agent ? `  purpose: ${agent.purpose}` : ""}`,
 				);
 			}
 		});
@@ -327,7 +343,7 @@ export async function main(argv: string[], aws: FleetAws = realFleetAws): Promis
 			await runTerraform(manifest, args.names, "apply", args.yes);
 			return 0;
 		case "publish":
-			await runPublish(manifest, args.env);
+			await runPublish(manifest, args.hub);
 			return 0;
 		case "rollout":
 			return (await runRollout(manifest, args.names, aws, {

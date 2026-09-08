@@ -1,18 +1,26 @@
 # deploy/fleet.example.yaml -- copy to deploy/fleet.yaml (gitignored) and fill in.
 #
 # Policy (user, 2026-09-06): no cross-environment access. Dev talks to dev,
-# production to production. One hub per environment; a spoke only ever
-# registers with the hub of its own environment, reads code only from its own
-# environment's distribution bucket, and its token is minted in its own hub's
-# directory. `just fleet preflight` refuses any env mismatch and any CIDR that
-# appears under two environments.
+# production to production. A spoke only ever registers with the hub it names,
+# reads code only from that hub's distribution bucket, and its token is minted
+# in that hub's directory. `just fleet preflight` refuses any env mismatch and
+# any CIDR that appears under two hubs.
+#
+# SIO-1666: hubs are keyed by SELECTOR (the AWS profile), because a hub's
+# identity is the ACCOUNT it lives in -- one hub per account, serving several
+# spoke accounts in a domain. `environment` is an ATTRIBUTE, so a second
+# department can add its own prd hub without colliding. Every spoke names its
+# hub explicitly; local_port and token_env are per hub, since both used to be
+# derived from the environment and would collide the moment two hubs share one.
 #
 # Identifiers here (subnets, CIDRs, private IPs, account ids) are internal:
 # keep them in deploy/fleet.yaml, never in a committed file.
 hubs:
-  dev:
+  eu-shared-services-dev:
     profile: eu-shared-services-dev
     region: eu-central-1
+    environment: dev
+    local_port: 8787       # the port `just hub-tunnel` binds for THIS hub
     account_id: "111111111111"
     url: http://10.0.0.10:8787
     private_ip: 10.0.0.10
@@ -23,9 +31,11 @@ hubs:
       - 10.0.2.0/23        # dev oit VPC
       - 10.99.0.0/24       # operator VPN range (dev)
     token_env: PI_COMS_NET_AUTH_TOKEN_DEV
-  prd:
+  eu-shared-services-prd:
     profile: eu-shared-services-prd
     region: eu-central-1
+    environment: prd
+    local_port: 8788
     account_id: "222222222222"
     url: http://10.10.0.10:8787
     private_ip: 10.10.0.10
@@ -55,6 +65,7 @@ defaults:
 spokes:
   eu-shared-services-dev:
     env: dev
+    hub: eu-shared-services-dev
     profile: eu-shared-services-dev
     subnet_id: subnet-0dev0agent00000000
     vpc_cidr: 10.0.0.0/23
@@ -62,12 +73,14 @@ spokes:
     hosts_hub: true
   eu-oit-dev:
     env: dev
+    hub: eu-shared-services-dev
     profile: eu-oit-dev
     subnet_id: subnet-0dev0oit000000000
     vpc_cidr: 10.0.2.0/23
     readonly_role: create
   eu-shared-services-prd:
     env: prd
+    hub: eu-shared-services-prd
     profile: eu-shared-services-prd
     subnet_id: subnet-0prd0agent00000000
     vpc_cidr: 10.10.0.0/23
@@ -75,36 +88,42 @@ spokes:
     hosts_hub: true
   eu-oit-prd:
     env: prd
+    hub: eu-shared-services-prd
     profile: eu-oit-prd
     subnet_id: subnet-0prd0oit000000000
     vpc_cidr: 10.10.2.0/23
     readonly_role: adopt
   eu-ediservices-prd:
     env: prd
+    hub: eu-shared-services-prd
     profile: eu-ediservices-prd
     subnet_id: subnet-0prd0edi000000000
     vpc_cidr: 10.10.4.0/23
     readonly_role: adopt
   eu-mendix-platform-prd:
     env: prd
+    hub: eu-shared-services-prd
     profile: eu-mendix-platform-prd
     subnet_id: subnet-0prd0mendix0000000
     vpc_cidr: 10.10.6.0/23
     readonly_role: adopt
   eu-b2b-ecom-prd:
     env: prd
+    hub: eu-shared-services-prd
     profile: eu-b2b-ecom-prd
     subnet_id: subnet-0prd0b2becom000000
     vpc_cidr: 10.10.8.0/23
     readonly_role: adopt
   eu-b2becom-v2-prd:
     env: prd
+    hub: eu-shared-services-prd
     profile: eu-b2becom-v2-prd
     subnet_id: subnet-0prd0b2becomv20000
     vpc_cidr: 10.10.10.0/23
     readonly_role: adopt
   eu-b2bonboarding-prd:
     env: prd
+    hub: eu-shared-services-prd
     profile: eu-b2bonboarding-prd
     subnet_id: subnet-0prd0onboarding000
     vpc_cidr: 10.10.12.0/23
