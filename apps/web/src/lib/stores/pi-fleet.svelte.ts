@@ -4,7 +4,6 @@
 // until the reply is terminal or the pane budget is spent. Replies stay data.
 import {
 	PiFleetAgentsResponseSchema,
-	type PiFleetEnvironment,
 	PiFleetMailboxResponseSchema,
 	PiFleetMessageResponseSchema,
 	PiFleetMessageStatusResponseSchema,

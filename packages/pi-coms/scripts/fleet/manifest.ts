@@ -17,7 +17,9 @@ export const FleetEnvironmentSchema = z.enum(["dev", "stg", "prd"]);
 export type FleetEnvironment = z.infer<typeof FleetEnvironmentSchema>;
 
 // A hub key: the AWS profile/selector an operator already types for AWS.
-export const HubKeySchema = z.string().regex(/^[a-z0-9-]+$/, "hub keys look like an AWS profile, e.g. eu-shared-services-prd");
+export const HubKeySchema = z
+	.string()
+	.regex(/^[a-z0-9-]+$/, "hub keys look like an AWS profile, e.g. eu-shared-services-prd");
 export type HubKey = z.infer<typeof HubKeySchema>;
 
 const CidrSchema = z.string().regex(/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/, "expected a CIDR like 10.0.0.0/16");

@@ -18,13 +18,12 @@ import {
 import { getLogger } from "@devops-agent/observability";
 import type { PiComsEnvironment, PiComsHubConfig } from "@devops-agent/shared";
 import { z } from "zod";
-import {
-	type PiFleetAgentsResponse,
-	PiFleetEnvironmentSchema,
-	type PiFleetHub,
-	type PiFleetMailboxResponse,
-	type PiFleetMessageResponse,
-	type PiFleetMessageStatusResponse,
+import type {
+	PiFleetAgentsResponse,
+	PiFleetHub,
+	PiFleetMailboxResponse,
+	PiFleetMessageResponse,
+	PiFleetMessageStatusResponse,
 } from "../pi-fleet-types.ts";
 
 // Directory-mode hubs bind names to principals: the pane's prefix needs its own
@@ -41,7 +40,6 @@ const DEFAULT_AWAIT_MS = PI_COMS_AWAIT_SLICE_MS;
 const MAX_AWAIT_MS = 60_000;
 const DEFAULT_TOTAL_BUDGET_MS = 300_000;
 const MAILBOX_DEFAULT_LIMIT = 20;
-const ENVIRONMENTS = PiFleetEnvironmentSchema.options;
 
 // SIO-1666: keyed by HUB, not environment -- two hubs sharing an environment need
 // two different pane tokens, and one env key could only hold one.

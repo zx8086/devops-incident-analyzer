@@ -22,15 +22,7 @@ import * as path from "node:path";
 import { parseArgs } from "node:util";
 import { type FleetAws, realFleetAws } from "./fleet/aws.ts";
 import { listAgents, missingOnHub } from "./fleet/hub.ts";
-import {
-	DEFAULT_HUB_PORT,
-	type FleetEnvironment,
-	type FleetManifest,
-	hubFor,
-	loadManifest,
-	spokeFor,
-	spokeNames,
-} from "./fleet/manifest.ts";
+import { DEFAULT_HUB_PORT, type FleetManifest, hubFor, loadManifest, spokeFor, spokeNames } from "./fleet/manifest.ts";
 import { formatPreflight, preflight, preflightPassed } from "./fleet/preflight.ts";
 import { renderRoot, stateBucketName } from "./fleet/render.ts";
 import { HUB_INSTANCE_TAG, triggerRollout } from "./fleet/rollout.ts";
@@ -296,7 +288,7 @@ async function runRollout(
 	return allOk;
 }
 
-async function runStatus(manifest: FleetManifest, names: string[], aws: FleetAws, localPort: number): Promise<void> {
+async function runStatus(manifest: FleetManifest, names: string[], aws: FleetAws): Promise<void> {
 	const rows = await preflight(manifest, names, aws);
 	const credentialRows = rows.filter((r) => r.check === "credentials");
 	console.log(formatPreflight(credentialRows));
@@ -353,7 +345,7 @@ export async function main(argv: string[], aws: FleetAws = realFleetAws): Promis
 				? 0
 				: 1;
 		case "status":
-			await runStatus(manifest, args.names, aws, args.localPort);
+			await runStatus(manifest, args.names, aws);
 			return 0;
 		case "deploy": {
 			if (!(await runPreflight(manifest, args.names, aws))) return 1;
@@ -363,7 +355,7 @@ export async function main(argv: string[], aws: FleetAws = realFleetAws): Promis
 			const envs = new Set(spokeNames(manifest, args.names).map((n) => spokeFor(manifest, n).env));
 			for (const env of envs) await runPublish(manifest, env);
 			const ok = await runRollout(manifest, args.names, aws, { tokenChanged, localPort: args.localPort });
-			await runStatus(manifest, args.names, aws, args.localPort);
+			await runStatus(manifest, args.names, aws);
 			return ok ? 0 : 1;
 		}
 		default:

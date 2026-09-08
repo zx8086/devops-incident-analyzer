@@ -64,7 +64,10 @@ describe("PiFleetPane", () => {
 	});
 
 	test("renders a reply as data with hub attribution, and a pending entry as waiting", () => {
-		const selected = selectPeer(applyAgents(initialPiFleetState(), listing), { hubKey: "eu-shared-services-dev", name: "alpha-dev" });
+		const selected = selectPeer(applyAgents(initialPiFleetState(), listing), {
+			hubKey: "eu-shared-services-dev",
+			name: "alpha-dev",
+		});
 		const pending = startEntry(selected, {
 			id: "e1",
 			hubKey: "eu-shared-services-dev",
@@ -93,7 +96,10 @@ describe("PiFleetPane", () => {
 	});
 
 	test("an expired wait reads as a timeout, not a hang", () => {
-		const selected = selectPeer(applyAgents(initialPiFleetState(), listing), { hubKey: "eu-shared-services-dev", name: "alpha-dev" });
+		const selected = selectPeer(applyAgents(initialPiFleetState(), listing), {
+			hubKey: "eu-shared-services-dev",
+			name: "alpha-dev",
+		});
 		const pending = startEntry(selected, {
 			id: "e1",
 			hubKey: "eu-shared-services-dev",

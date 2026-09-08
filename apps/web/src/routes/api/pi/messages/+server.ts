@@ -4,7 +4,6 @@
 // the reply is terminal or the pane budget is spent, so no request hangs.
 import { json } from "@sveltejs/kit";
 import { z } from "zod";
-import { PiFleetEnvironmentSchema } from "$lib/pi-fleet-types";
 import { awaitFleetMessage, sendFleetMessage } from "$lib/server/pi-fleet";
 import { piFleetErrorResponse } from "$lib/server/pi-fleet-http";
 import type { RequestHandler } from "./$types";

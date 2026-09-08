@@ -87,7 +87,10 @@ describe("applyAgents", () => {
 });
 
 describe("entries", () => {
-	const base = selectPeer(applyAgents(initialPiFleetState(), listing), { hubKey: "eu-shared-services-prd", name: "eu-oit-prd" });
+	const base = selectPeer(applyAgents(initialPiFleetState(), listing), {
+		hubKey: "eu-shared-services-prd",
+		name: "eu-oit-prd",
+	});
 	const started = startEntry(base, {
 		id: "e1",
 		hubKey: "eu-shared-services-prd",

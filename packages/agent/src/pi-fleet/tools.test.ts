@@ -10,8 +10,22 @@ import { buildFleetTools, releaseClients, SPOKE_TEXT_CAP, wrapUntrusted } from "
 
 const config: PiComsConfig = {
 	hubs: {
-		prd: { serverUrl: "http://prd.hub.test", authToken: "p", project: "fleet", fallbackTarget: "ops", environment: "prd" as const, estates: ["eu-oit-prd"] },
-		dev: { serverUrl: "http://dev.hub.test", authToken: "d", project: "fleet", fallbackTarget: "ops", environment: "dev" as const, estates: ["eu-oit-dev"] },
+		prd: {
+			serverUrl: "http://prd.hub.test",
+			authToken: "p",
+			project: "fleet",
+			fallbackTarget: "ops",
+			environment: "prd" as const,
+			estates: ["eu-oit-prd"],
+		},
+		dev: {
+			serverUrl: "http://dev.hub.test",
+			authToken: "d",
+			project: "fleet",
+			fallbackTarget: "ops",
+			environment: "dev" as const,
+			estates: ["eu-oit-dev"],
+		},
 	},
 	estateAgentMap: { "eu-oit-prd": "eu-oit-prd" },
 	verifyTimeoutMs: 1_000,

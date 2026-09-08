@@ -107,7 +107,10 @@ export type PiVerifierDeps = {
 // configured -- silently, with no error. The binding is now data, and an estate
 // no hub claims is REFUSED rather than guessed, which is how the standing
 // no-cross-environment guarantee survives the rekey.
-export function environmentForEstate(estate: string, config: Pick<PiComsConfig, "hubs">): PiComsEnvironment | undefined {
+export function environmentForEstate(
+	estate: string,
+	config: Pick<PiComsConfig, "hubs">,
+): PiComsEnvironment | undefined {
 	return Object.values(config.hubs).find((hub) => hub.estates.includes(estate))?.environment;
 }
 

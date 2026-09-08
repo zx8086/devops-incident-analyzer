@@ -73,7 +73,10 @@ describe("fleet manifest (SIO-1653)", () => {
 	// local_port used to be derived (+1 prd, +2 stg): two prd hubs would collide
 	// and the second tunnel would silently bind nothing.
 	test("two hubs sharing a local_port are refused", () => {
-		const text = EXAMPLE.replace("    environment: prd\n    local_port: 8788", "    environment: prd\n    local_port: 8787");
+		const text = EXAMPLE.replace(
+			"    environment: prd\n    local_port: 8788",
+			"    environment: prd\n    local_port: 8787",
+		);
 		expect(() => parseManifest(text)).toThrow("local_port 8787");
 	});
 
