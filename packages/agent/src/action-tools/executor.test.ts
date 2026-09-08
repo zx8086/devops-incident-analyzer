@@ -141,6 +141,7 @@ describe("executor pi-coms dispatch", () => {
 		delete process.env.PI_COMS_NET_SERVER_URL;
 		delete process.env.PI_COMS_NET_AUTH_TOKEN;
 		delete process.env.PI_COMS_NET_ENVIRONMENT;
+		delete process.env.PI_COMS_NET_ESTATES;
 	});
 
 	afterEach(() => {
@@ -174,8 +175,10 @@ describe("executor pi-coms dispatch", () => {
 	test("verify-with-pi maps a hub verdict and follow-up onto the ActionResult", async () => {
 		process.env.PI_COMS_NET_SERVER_URL = "http://hub.test";
 		process.env.PI_COMS_NET_AUTH_TOKEN = "tok";
-		// The single hub serves prd; the estate's suffix must match it (SIO-1635 Phase 0).
+		// The single hub serves prd. SIO-1666: it must also CLAIM the estate --
+		// routing is an explicit binding, not the estate's name suffix.
 		process.env.PI_COMS_NET_ENVIRONMENT = "prd";
+		process.env.PI_COMS_NET_ESTATES = "est-prd";
 		const verdict = {
 			verdict: "partially_confirmed",
 			summary: "s",

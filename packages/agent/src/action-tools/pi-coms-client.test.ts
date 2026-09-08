@@ -41,6 +41,8 @@ const hub: PiComsHubConfig = {
 	authToken: "tok",
 	project: "default",
 	fallbackTarget: "ops",
+	environment: "prd",
+	estates: ["eu-oit-prd"],
 };
 
 type Call = { method: string; path: string; body: unknown; headers: Record<string, string> };
@@ -281,8 +283,15 @@ describe("resolvePiComsConfig (per-environment hubs)", () => {
 	test("PI_COMS_HUBS json wins and fills project and fallback defaults per hub", () => {
 		const cfg = resolvePiComsConfig({
 			PI_COMS_HUBS: JSON.stringify({
-				dev: { serverUrl: "http://dev.hub.test", authToken: "d" },
-				prd: { serverUrl: "http://prd.hub.test", authToken: "p", project: "fleet", fallbackTarget: "ops-prd" },
+				dev: { serverUrl: "http://dev.hub.test", authToken: "d", environment: "dev", estates: ["eu-oit-dev"] },
+				prd: {
+					serverUrl: "http://prd.hub.test",
+					authToken: "p",
+					project: "fleet",
+					fallbackTarget: "ops-prd",
+					environment: "prd",
+					estates: ["eu-oit-prd"],
+				},
 			}),
 		});
 		expect(cfg.hubs.dev).toEqual({
@@ -290,6 +299,8 @@ describe("resolvePiComsConfig (per-environment hubs)", () => {
 			authToken: "d",
 			project: "default",
 			fallbackTarget: "ops",
+			environment: "dev",
+			estates: ["eu-oit-dev"],
 		});
 		expect(cfg.hubs.prd?.project).toBe("fleet");
 		expect(cfg.hubs.stg).toBeUndefined();
