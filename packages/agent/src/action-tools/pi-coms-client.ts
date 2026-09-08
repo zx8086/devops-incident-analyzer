@@ -29,13 +29,18 @@ const DEFAULT_INVESTIGATE_TIMEOUT_MS = 900_000;
 // The legacy single-hub variables describe one hub; this names its environment.
 const DEFAULT_SINGLE_HUB_ENVIRONMENT: PiComsEnvironment = "dev";
 
-const HubsJsonSchema = z.partialRecord(
-	PiComsEnvironmentSchema,
+// SIO-1666: keyed by selector (AWS profile / account), not environment. Each hub
+// declares the environment it serves and the estates it owns, so an estate is
+// routed by an explicit binding rather than by its name suffix.
+const HubsJsonSchema = z.record(
+	z.string().min(1),
 	z.object({
 		serverUrl: z.string().url(),
 		authToken: z.string().min(1),
 		project: z.string().min(1).optional(),
 		fallbackTarget: z.string().min(1).optional(),
+		environment: PiComsEnvironmentSchema,
+		estates: z.array(z.string().min(1)),
 	}),
 );
 
@@ -43,7 +48,7 @@ function nonEmpty(value: string | undefined): string | undefined {
 	return value && value !== "" ? value : undefined;
 }
 
-function readHubs(env: NodeJS.ProcessEnv): Partial<Record<PiComsEnvironment, PiComsHubConfig>> {
+function readHubs(env: NodeJS.ProcessEnv): Record<string, PiComsHubConfig> {
 	const raw = nonEmpty(env.PI_COMS_HUBS);
 	if (raw !== undefined) {
 		let parsed: unknown;
@@ -57,14 +62,16 @@ function readHubs(env: NodeJS.ProcessEnv): Partial<Record<PiComsEnvironment, PiC
 			const issues = result.error.issues.map((i) => `${i.path.join(".")} ${i.message}`).join("; ");
 			throw new Error(`PI_COMS_HUBS is not a valid hubs map: ${issues}`);
 		}
-		const hubs: Partial<Record<PiComsEnvironment, PiComsHubConfig>> = {};
-		for (const [environment, hub] of Object.entries(result.data)) {
+		const hubs: Record<string, PiComsHubConfig> = {};
+		for (const [key, hub] of Object.entries(result.data)) {
 			if (!hub) continue;
-			hubs[environment as PiComsEnvironment] = {
+			hubs[key] = {
 				serverUrl: hub.serverUrl,
 				authToken: hub.authToken,
 				project: hub.project ?? PI_COMS_DEFAULT_PROJECT,
 				fallbackTarget: hub.fallbackTarget ?? PI_COMS_DEFAULT_FALLBACK_TARGET,
+				environment: hub.environment,
+				estates: hub.estates,
 			};
 		}
 		return hubs;
@@ -75,12 +82,21 @@ function readHubs(env: NodeJS.ProcessEnv): Partial<Record<PiComsEnvironment, PiC
 	const environment = PiComsEnvironmentSchema.parse(
 		nonEmpty(env.PI_COMS_NET_ENVIRONMENT) ?? DEFAULT_SINGLE_HUB_ENVIRONMENT,
 	);
+	// SIO-1666: the legacy single-hub variables describe one hub, so it is keyed
+	// by its environment name and claims the estates named in
+	// PI_COMS_NET_ESTATES (comma-separated). With one hub there is nothing to
+	// disambiguate; the list still has to exist, because routing is now explicit.
 	return {
 		[environment]: {
 			serverUrl,
 			authToken,
 			project: nonEmpty(env.PI_COMS_NET_PROJECT) ?? PI_COMS_DEFAULT_PROJECT,
 			fallbackTarget: nonEmpty(env.PI_COMS_FALLBACK_TARGET) ?? PI_COMS_DEFAULT_FALLBACK_TARGET,
+			environment,
+			estates: (nonEmpty(env.PI_COMS_NET_ESTATES) ?? "")
+				.split(",")
+				.map((e) => e.trim())
+				.filter((e) => e !== ""),
 		},
 	};
 }

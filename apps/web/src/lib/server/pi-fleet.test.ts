@@ -41,10 +41,22 @@ function hubFake(route: Route) {
 
 const env: NodeJS.ProcessEnv = {
 	PI_COMS_HUBS: JSON.stringify({
-		dev: { serverUrl: "http://dev.hub.test", authToken: "dev-tok" },
-		prd: { serverUrl: "http://prd.hub.test", authToken: "prd-tok", fallbackTarget: "ops-prd" },
+		// SIO-1666: keyed by selector; each hub declares its environment + estates.
+		"eu-shared-services-dev": {
+			serverUrl: "http://dev.hub.test",
+			authToken: "dev-tok",
+			environment: "dev",
+			estates: ["eu-oit-dev"],
+		},
+		"eu-shared-services-prd": {
+			serverUrl: "http://prd.hub.test",
+			authToken: "prd-tok",
+			fallbackTarget: "ops-prd",
+			environment: "prd",
+			estates: ["eu-oit-prd"],
+		},
 	}),
-	PI_COMS_PANE_TOKENS: JSON.stringify({ prd: "pane-prd-tok" }),
+	PI_COMS_PANE_TOKENS: JSON.stringify({ "eu-shared-services-prd": "pane-prd-tok" }),
 };
 
 const devAgents = [
@@ -85,7 +97,9 @@ describe("resolvePaneConfig", () => {
 
 	test("a malformed PI_COMS_PANE_TOKENS or budget is a readable error", () => {
 		expect(() => resolvePaneConfig({ ...env, PI_COMS_PANE_TOKENS: "{oops" })).toThrow("PI_COMS_PANE_TOKENS");
-		expect(() => resolvePaneConfig({ ...env, PI_COMS_PANE_TOKENS: '{"qa":"t"}' })).toThrow("PI_COMS_PANE_TOKENS");
+		// SIO-1666: tokens are keyed by HUB, so any key parses; a token for an
+		// unknown hub is simply never read. Only malformed JSON / a non-string is an error.
+		expect(() => resolvePaneConfig({ ...env, PI_COMS_PANE_TOKENS: '{"qa":123}' })).toThrow("PI_COMS_PANE_TOKENS");
 		expect(() => resolvePaneConfig({ ...env, PI_COMS_PANE_AWAIT_MS: "soon" })).toThrow("PI_COMS_PANE_AWAIT_MS");
 	});
 });
@@ -140,11 +154,11 @@ describe("sendFleetMessage", () => {
 			return undefined;
 		});
 		const out = await sendFleetMessage(
-			{ environment: "prd", target: "eu-oit-prd", prompt: "Is the ALB healthy?" },
+			{ hubKey: "eu-shared-services-prd", target: "eu-oit-prd", prompt: "Is the ALB healthy?" },
 			{ env, fetchImpl, now: () => 1_000 },
 		);
 		expect(out).toMatchObject({
-			environment: "prd",
+			hubKey: "eu-shared-services-prd",
 			target: "eu-oit-prd",
 			msgId: "m1",
 			status: "complete",
@@ -186,7 +200,7 @@ describe("sendFleetMessage", () => {
 		});
 
 		const err = await sendFleetMessage(
-			{ environment: "prd", target: "eu-oit-prd", prompt: "Is the ALB healthy?" },
+			{ hubKey: "eu-shared-services-prd", target: "eu-oit-prd", prompt: "Is the ALB healthy?" },
 			{ env, fetchImpl, now: () => 1_000 },
 		).then(
 			() => undefined,
@@ -206,7 +220,7 @@ describe("sendFleetMessage", () => {
 		expect(sender).toMatch(/^pi-fleet-[0-9a-f]{8}$/);
 		expect(message).toContain(`sender "${sender}"`);
 		expect(message).toContain('principal "incident-analyzer"');
-		expect(message).toContain("prd hub");
+		expect(message).toContain('on hub "eu-shared-services-prd"');
 		expect(message).toContain("PI_COMS_PANE_SENDER_PREFIX=pi-fleet");
 		expect(message).toContain('just token-create pi-fleet "pi-fleet-*" service');
 
@@ -231,7 +245,7 @@ describe("sendFleetMessage", () => {
 			return undefined;
 		});
 		const out = await sendFleetMessage(
-			{ environment: "dev", target: "alpha-dev", prompt: "ping" },
+			{ hubKey: "eu-shared-services-dev", target: "alpha-dev", prompt: "ping" },
 			{ env, fetchImpl, now: () => clock },
 		);
 		expect(out).toMatchObject({ status: "budget_exhausted", response: null, msgId: "m2" });
@@ -240,21 +254,23 @@ describe("sendFleetMessage", () => {
 		expect(calls.at(-1)?.method).toBe("DELETE");
 	});
 
-	test("refuses an environment without a hub before any network call", async () => {
+	test("refuses an unknown hub before any network call", async () => {
 		const { calls, fetchImpl } = hubFake(() => undefined);
-		const err = await sendFleetMessage({ environment: "stg", target: "x", prompt: "p" }, { env, fetchImpl }).catch(
-			(e: unknown) => e,
-		);
+		const err = await sendFleetMessage(
+			{ hubKey: "eu-nowhere-prd", target: "x", prompt: "p" },
+			{ env, fetchImpl },
+		).catch((e: unknown) => e);
 		expect(err).toBeInstanceOf(PiFleetRequestError);
 		expect((err as PiFleetRequestError).status).toBe(404);
-		expect((err as PiFleetRequestError).message).toContain('environment "stg"');
+		expect((err as PiFleetRequestError).message).toContain('no pi-coms hub "eu-nowhere-prd"');
 		expect(calls).toEqual([]);
 	});
 
 	test("refuses when nothing is configured", async () => {
-		const err = await sendFleetMessage({ environment: "dev", target: "x", prompt: "p" }, { env: {} }).catch(
-			(e: unknown) => e,
-		);
+		const err = await sendFleetMessage(
+			{ hubKey: "eu-shared-services-dev", target: "x", prompt: "p" },
+			{ env: {} },
+		).catch((e: unknown) => e);
 		expect(err).toBeInstanceOf(PiFleetRequestError);
 		expect((err as PiFleetRequestError).status).toBe(404);
 	});
@@ -267,8 +283,18 @@ describe("awaitFleetMessage", () => {
 				return { body: { msg_id: "m3", status: "error", response: null, error: "spoke crashed" } };
 			return undefined;
 		});
-		const out = await awaitFleetMessage({ environment: "dev", msgId: "m3" }, { env, fetchImpl, now: () => 0 });
-		expect(out).toEqual({ environment: "dev", msgId: "m3", status: "error", response: null, error: "spoke crashed" });
+		const out = await awaitFleetMessage(
+			{ hubKey: "eu-shared-services-dev", msgId: "m3" },
+			{ env, fetchImpl, now: () => 0 },
+		);
+		expect(out).toEqual({
+			hubKey: "eu-shared-services-dev",
+			environment: "dev",
+			msgId: "m3",
+			status: "error",
+			response: null,
+			error: "spoke crashed",
+		});
 		expect(calls.map((c) => c.method)).toEqual(["GET"]);
 		expect(calls[0]?.url).toBe("http://dev.hub.test/v1/messages/m3/await?timeout_ms=25000");
 	});
@@ -292,9 +318,10 @@ describe("readFleetMailbox", () => {
 			if (call.path.startsWith("/v1/mailbox")) return { body: { ok: true, name: "ops-prd", messages: [entry] } };
 			return undefined;
 		});
-		const out = await readFleetMailbox({ environment: "prd" }, { env, fetchImpl });
+		const out = await readFleetMailbox({ hubKey: "eu-shared-services-prd" }, { env, fetchImpl });
 		expect(calls[0]?.path).toBe("/v1/mailbox?project=default&name=ops-prd&limit=20");
 		expect(out).toEqual({
+			hubKey: "eu-shared-services-prd",
 			environment: "prd",
 			name: "ops-prd",
 			messages: [
@@ -315,7 +342,7 @@ describe("readFleetMailbox", () => {
 
 	test("honours an explicit name and limit", async () => {
 		const { calls, fetchImpl } = hubFake(() => ({ body: { ok: true, name: "eu-oit-dev", messages: [] } }));
-		await readFleetMailbox({ environment: "dev", name: "eu-oit-dev", limit: 5 }, { env, fetchImpl });
+		await readFleetMailbox({ hubKey: "eu-shared-services-dev", name: "eu-oit-dev", limit: 5 }, { env, fetchImpl });
 		expect(calls[0]?.path).toBe("/v1/mailbox?project=default&name=eu-oit-dev&limit=5");
 	});
 });

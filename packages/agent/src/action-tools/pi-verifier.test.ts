@@ -28,13 +28,28 @@ const env: NodeJS.ProcessEnv = {
 	PI_COMS_NET_SERVER_URL: "http://hub.test",
 	PI_COMS_NET_AUTH_TOKEN: "tok",
 	PI_COMS_NET_ENVIRONMENT: "prd",
+	// SIO-1666: even the single-hub shape lists its estates -- routing is an
+	// explicit binding now, so a hub that claims nothing serves nothing.
+	PI_COMS_NET_ESTATES: "eu-oit-prd,eu-b2b-prd,e,e1-prd,e2-prd,e3-prd,e4-prd,e5-prd",
 };
 
-// Two hubs, one per environment (no cross-environment access).
+// Two hubs; each names the estates it serves (no cross-environment access).
 const hubsEnv: NodeJS.ProcessEnv = {
+	// SIO-1666: hubs keyed by selector; each declares its environment and the
+	// estates it owns, so routing is an explicit binding rather than a suffix.
 	PI_COMS_HUBS: JSON.stringify({
-		dev: { serverUrl: "http://dev.hub.test", authToken: "d" },
-		prd: { serverUrl: "http://prd.hub.test", authToken: "p" },
+		"eu-shared-services-dev": {
+			serverUrl: "http://dev.hub.test",
+			authToken: "d",
+			environment: "dev",
+			estates: ["eu-oit-dev"],
+		},
+		"eu-shared-services-prd": {
+			serverUrl: "http://prd.hub.test",
+			authToken: "p",
+			environment: "prd",
+			estates: ["eu-oit-prd", "eu-b2b-prod"],
+		},
 	}),
 };
 
@@ -389,28 +404,77 @@ describe("executePiInvestigate", () => {
 	});
 });
 
-describe("environment routing (no cross-environment access)", () => {
-	test("environmentForEstate reads the suffix and treats -prod as prd", () => {
-		expect(environmentForEstate("eu-oit-dev")).toBe("dev");
-		expect(environmentForEstate("eu-b2b-stg")).toBe("stg");
-		expect(environmentForEstate("eu-oit-prd")).toBe("prd");
-		expect(environmentForEstate("eu-b2b-prod")).toBe("prd");
-		expect(environmentForEstate("eu-oit")).toBeUndefined();
+describe("hub routing (SIO-1666: explicit binding, no cross-environment access)", () => {
+	test("environmentForEstate reads the hub that claims the estate", () => {
+		const config = resolvePiComsConfig(hubsEnv);
+		expect(environmentForEstate("eu-oit-dev", config)).toBe("dev");
+		expect(environmentForEstate("eu-oit-prd", config)).toBe("prd");
+		// A -prod suffix no longer implies anything: the binding is data. This
+		// estate is claimed by the prd hub, so it resolves -- by the list, not the name.
+		expect(environmentForEstate("eu-b2b-prod", config)).toBe("prd");
+		// Unclaimed estates have no environment, however they are named.
+		expect(environmentForEstate("eu-b2b-stg", config)).toBeUndefined();
+		expect(environmentForEstate("eu-oit", config)).toBeUndefined();
 	});
 
-	test("selectHubForEstate refuses unknown suffixes and unconfigured environments", () => {
+	test("selectHubForEstate resolves by the hub's estate list and names the hub", () => {
 		const config = resolvePiComsConfig(hubsEnv);
-		const prdHub = config.hubs.prd;
+		const prdHub = config.hubs["eu-shared-services-prd"];
 		if (!prdHub) throw new Error("fixture: prd hub missing");
-		expect(selectHubForEstate("eu-oit-prd", config)).toEqual({ ok: true, environment: "prd", hub: prdHub });
+		expect(selectHubForEstate("eu-oit-prd", config)).toEqual({
+			ok: true,
+			environment: "prd",
+			hubKey: "eu-shared-services-prd",
+			hub: prdHub,
+		});
+	});
+
+	// The routing hazard this rekey removes: a suffix identifies an ENVIRONMENT,
+	// not a hub, so it silently picked one once two hubs shared an environment.
+	test("an estate no hub claims is refused, never guessed from its name", () => {
+		const config = resolvePiComsConfig(hubsEnv);
 		expect(selectHubForEstate("eu-b2b-stg", config)).toMatchObject({
 			ok: false,
-			error: expect.stringContaining('no pi-coms hub configured for environment "stg"'),
+			error: expect.stringContaining('estate "eu-b2b-stg" is not listed on any pi-coms hub'),
 		});
-		expect(selectHubForEstate("eu-oit", config)).toMatchObject({
+		expect(selectHubForEstate("eu-oit", config)).toMatchObject({ ok: false });
+	});
+
+	test("an estate claimed by two hubs is refused rather than chosen between", () => {
+		const config = resolvePiComsConfig({
+			PI_COMS_HUBS: JSON.stringify({
+				"a-prd": { serverUrl: "http://a.test", authToken: "a", environment: "prd", estates: ["shared-prd"] },
+				"b-prd": { serverUrl: "http://b.test", authToken: "b", environment: "prd", estates: ["shared-prd"] },
+			}),
+		});
+		expect(selectHubForEstate("shared-prd", config)).toMatchObject({
 			ok: false,
-			error: expect.stringContaining("no recognised environment suffix"),
+			error: expect.stringContaining("claimed by more than one hub"),
 		});
+	});
+
+	// Two hubs in ONE environment is the whole point of the rekey.
+	test("two prd hubs coexist and each estate reaches its own", () => {
+		const config = resolvePiComsConfig({
+			PI_COMS_HUBS: JSON.stringify({
+				"eu-shared-services-prd": {
+					serverUrl: "http://shared.test",
+					authToken: "s",
+					environment: "prd",
+					estates: ["eu-oit-prd"],
+				},
+				"eu-other-domain-prd": {
+					serverUrl: "http://other.test",
+					authToken: "o",
+					environment: "prd",
+					estates: ["eu-other-prd"],
+				},
+			}),
+		});
+		const a = selectHubForEstate("eu-oit-prd", config);
+		const b = selectHubForEstate("eu-other-prd", config);
+		expect(a.ok && a.hub.serverUrl).toBe("http://shared.test");
+		expect(b.ok && b.hub.serverUrl).toBe("http://other.test");
 	});
 
 	test("a prd estate only ever talks to the prd hub", async () => {
@@ -434,7 +498,12 @@ describe("environment routing (no cross-environment access)", () => {
 	test("an estate with no hub is a readable error and makes no hub call", async () => {
 		const { calls, fetchImpl } = scriptedHub({ agents: online });
 		const out = await executePiVerify({ estate: "eu-b2b-stg" }, report, { fetchImpl, env: hubsEnv });
-		expect(out).toMatchObject({ status: "error", error: expect.stringContaining('environment "stg"') });
+		// SIO-1666: the refusal names the estate and the hubs that exist, rather
+		// than an environment -- an environment no longer identifies a hub.
+		expect(out).toMatchObject({
+			status: "error",
+			error: expect.stringContaining('estate "eu-b2b-stg" is not listed on any pi-coms hub'),
+		});
 		expect(calls).toEqual([]);
 	});
 

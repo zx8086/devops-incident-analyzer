@@ -15,6 +15,12 @@ export const PiFleetPeerSchema = z.object({
 export type PiFleetPeer = z.infer<typeof PiFleetPeerSchema>;
 
 export const PiFleetHubSchema = z.object({
+	// SIO-1666: the hub's IDENTITY -- its selector (the AWS profile / account it
+	// lives in). An environment no longer identifies a hub: a second domain may
+	// run its own prd hub, so every route addresses a hub by this key. In the
+	// pane it is also what the operator reads to tell two prd hubs apart.
+	hubKey: z.string().min(1),
+	// Kept as a display badge and for the no-cross-environment check.
 	environment: PiFleetEnvironmentSchema,
 	project: z.string(),
 	fallbackTarget: z.string(),
@@ -45,6 +51,8 @@ export const PiFleetMessageStatusSchema = z.enum([
 export type PiFleetMessageStatus = z.infer<typeof PiFleetMessageStatusSchema>;
 
 export const PiFleetMessageStatusResponseSchema = z.object({
+	// SIO-1666: which hub answered, by key. The browser re-polls by (hubKey, msgId).
+	hubKey: z.string().min(1),
 	environment: PiFleetEnvironmentSchema,
 	msgId: z.string(),
 	status: PiFleetMessageStatusSchema,
@@ -75,6 +83,7 @@ export const PiFleetInboxMessageSchema = z.object({
 export type PiFleetInboxMessage = z.infer<typeof PiFleetInboxMessageSchema>;
 
 export const PiFleetMailboxResponseSchema = z.object({
+	hubKey: z.string().min(1),
 	environment: PiFleetEnvironmentSchema,
 	name: z.string(),
 	messages: z.array(PiFleetInboxMessageSchema),

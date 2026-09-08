@@ -25,13 +25,21 @@ const listing: PiFleetAgentsResponse = {
 	totalBudgetMs: 300_000,
 	hubs: [
 		{
+			hubKey: "eu-shared-services-dev",
 			environment: "dev",
 			project: "default",
 			fallbackTarget: "ops",
 			peers: [{ name: "alpha-dev", status: "online", purpose: "aws spoke", sessionId: "s1" }],
 			error: null,
 		},
-		{ environment: "prd", project: "default", fallbackTarget: "ops-prd", peers: [], error: "hub GET failed: 500" },
+		{
+			hubKey: "eu-shared-services-prd",
+			environment: "prd",
+			project: "default",
+			fallbackTarget: "ops-prd",
+			peers: [],
+			error: "hub GET failed: 500",
+		},
 	],
 };
 
@@ -56,16 +64,20 @@ describe("PiFleetPane", () => {
 	});
 
 	test("renders a reply as data with hub attribution, and a pending entry as waiting", () => {
-		const selected = selectPeer(applyAgents(initialPiFleetState(), listing), { environment: "dev", name: "alpha-dev" });
+		const selected = selectPeer(applyAgents(initialPiFleetState(), listing), {
+			hubKey: "eu-shared-services-dev",
+			name: "alpha-dev",
+		});
 		const pending = startEntry(selected, {
 			id: "e1",
-			environment: "dev",
+			hubKey: "eu-shared-services-dev",
 			target: "alpha-dev",
 			prompt: "ping",
 			sentAt: 0,
 		});
 		expect(renderPane(pending, true)).toContain("Waiting for alpha-dev");
 		const done = applySendResult(pending, "e1", {
+			hubKey: "eu-shared-services-dev",
 			environment: "dev",
 			msgId: "m1",
 			status: "complete",
@@ -79,14 +91,18 @@ describe("PiFleetPane", () => {
 		expect(body).toContain("<pre");
 		expect(body).toContain('"summary": "ALB healthy"');
 		expect(body).toContain("pi-fleet-abcd1234");
-		expect(body).toContain("dev hub");
+		// SIO-1666: attribution names the HUB, which is what tells two prd hubs apart.
+		expect(body).toContain("on hub eu-shared-services-dev");
 	});
 
 	test("an expired wait reads as a timeout, not a hang", () => {
-		const selected = selectPeer(applyAgents(initialPiFleetState(), listing), { environment: "dev", name: "alpha-dev" });
+		const selected = selectPeer(applyAgents(initialPiFleetState(), listing), {
+			hubKey: "eu-shared-services-dev",
+			name: "alpha-dev",
+		});
 		const pending = startEntry(selected, {
 			id: "e1",
-			environment: "dev",
+			hubKey: "eu-shared-services-dev",
 			target: "alpha-dev",
 			prompt: "ping",
 			sentAt: 0,

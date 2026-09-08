@@ -4,7 +4,6 @@
 // until the reply is terminal or the pane budget is spent. Replies stay data.
 import {
 	PiFleetAgentsResponseSchema,
-	type PiFleetEnvironment,
 	PiFleetMailboxResponseSchema,
 	PiFleetMessageResponseSchema,
 	PiFleetMessageStatusResponseSchema,
@@ -44,7 +43,7 @@ function createPiFleetStore() {
 	let fleet = $state<PiFleetState>(initialPiFleetState());
 	let open = $state(false);
 	let busy = $state(false);
-	let mailboxBusy = $state<PiFleetEnvironment | null>(null);
+	let mailboxBusy = $state<string | null>(null);
 
 	async function load() {
 		try {
@@ -71,7 +70,7 @@ function createPiFleetStore() {
 				return;
 			}
 			// The route itself waits one hub slice, so no client-side sleep is needed.
-			const params = new URLSearchParams({ environment: entry.environment, msgId: entry.msgId ?? "" });
+			const params = new URLSearchParams({ hubKey: entry.hubKey, msgId: entry.msgId ?? "" });
 			const body = await readJson(await fetch(`/api/pi/messages?${params.toString()}`));
 			const parsed = PiFleetMessageStatusResponseSchema.safeParse(body);
 			if (!parsed.success) throw new Error("unexpected /api/pi/messages response shape");
@@ -91,7 +90,7 @@ function createPiFleetStore() {
 				await fetch("/api/pi/messages", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ environment: selection.environment, target: selection.name, prompt: text }),
+					body: JSON.stringify({ hubKey: selection.hubKey, target: selection.name, prompt: text }),
 				}),
 			);
 			const parsed = PiFleetMessageResponseSchema.safeParse(body);
@@ -105,10 +104,10 @@ function createPiFleetStore() {
 		}
 	}
 
-	async function loadMailbox(environment: PiFleetEnvironment) {
-		mailboxBusy = environment;
+	async function loadMailbox(hubKey: string) {
+		mailboxBusy = hubKey;
 		try {
-			const body = await readJson(await fetch(`/api/pi/mailbox?environment=${encodeURIComponent(environment)}`));
+			const body = await readJson(await fetch(`/api/pi/mailbox?hubKey=${encodeURIComponent(hubKey)}`));
 			const parsed = PiFleetMailboxResponseSchema.safeParse(body);
 			if (!parsed.success) throw new Error("unexpected /api/pi/mailbox response shape");
 			fleet = applyMailbox(fleet, parsed.data);

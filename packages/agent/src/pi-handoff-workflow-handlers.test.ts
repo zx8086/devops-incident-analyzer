@@ -11,6 +11,9 @@ const env: NodeJS.ProcessEnv = {
 	PI_COMS_NET_SERVER_URL: "http://hub.test",
 	PI_COMS_NET_AUTH_TOKEN: "tok",
 	PI_COMS_NET_ENVIRONMENT: "prd",
+	// SIO-1666: routing is an explicit binding, so the single hub must claim its
+	// estates. "eu-oit-dev" is deliberately absent -- that is the refusal case.
+	PI_COMS_NET_ESTATES: "eu-oit-prd",
 };
 
 const report = "## Summary\n\nALB 5xx spike on checkout at 10:02 UTC.\n\nConfidence: 0.72";
@@ -153,7 +156,7 @@ describe("SIO-1651 runPiHandoff", () => {
 		expect(result.status === "failed" && result.reason).toContain("ECONNREFUSED");
 	});
 
-	test("refuses an estate whose environment has no hub (no cross-environment access)", async () => {
+	test("refuses an estate no hub claims (no cross-environment access)", async () => {
 		const hub = scriptedHub({ agents: online, reply: confirmed });
 		const result = await runPiHandoff(
 			{ ...ctx, estate: "eu-oit-dev" },

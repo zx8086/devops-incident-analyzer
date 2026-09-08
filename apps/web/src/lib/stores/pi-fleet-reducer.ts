@@ -12,8 +12,11 @@ import type {
 	PiFleetPeer,
 } from "../pi-fleet-types.ts";
 
-export type PiFleetPeerRow = PiFleetPeer & { environment: PiFleetEnvironment; project: string };
-export type PiFleetSelection = { environment: PiFleetEnvironment; name: string };
+// SIO-1666: a peer belongs to a HUB. The environment rides along for the badge
+// and for ordering, but selection and routing key off hubKey -- two hubs may
+// share an environment, and a peer name is only unique within its hub.
+export type PiFleetPeerRow = PiFleetPeer & { hubKey: string; environment: PiFleetEnvironment; project: string };
+export type PiFleetSelection = { hubKey: string; name: string };
 
 // Local statuses on top of the hub's: sending (no msgId yet), failed (the route
 // or hub refused the send), expired (the pane budget ran out while waiting).
@@ -21,7 +24,8 @@ export type PiFleetEntryStatus = PiFleetMessageStatus | "sending" | "failed" | "
 
 export type PiFleetEntry = {
 	id: string;
-	environment: PiFleetEnvironment;
+	// SIO-1666: the hub this send went to; the browser re-polls by (hubKey, msgId).
+	hubKey: string;
 	target: string;
 	prompt: string;
 	msgId: string | null;
@@ -42,7 +46,8 @@ export type PiFleetState = {
 	peers: PiFleetPeerRow[];
 	selected: PiFleetSelection | null;
 	entries: PiFleetEntry[];
-	mailboxes: Partial<Record<PiFleetEnvironment, PiFleetMailboxResponse>>;
+	// SIO-1666: keyed by hub, not environment.
+	mailboxes: Record<string, PiFleetMailboxResponse>;
 };
 
 const ENVIRONMENT_ORDER: Record<PiFleetEnvironment, number> = { dev: 0, stg: 1, prd: 2 };
@@ -64,13 +69,15 @@ export function initialPiFleetState(): PiFleetState {
 
 export function applyAgents(state: PiFleetState, response: PiFleetAgentsResponse): PiFleetState {
 	const peers: PiFleetPeerRow[] = response.hubs
-		.flatMap((hub) => hub.peers.map((peer) => ({ ...peer, environment: hub.environment, project: hub.project })))
+		.flatMap((hub) =>
+			hub.peers.map((peer) => ({ ...peer, hubKey: hub.hubKey, environment: hub.environment, project: hub.project })),
+		)
 		.sort(
 			(a, b) => ENVIRONMENT_ORDER[a.environment] - ENVIRONMENT_ORDER[b.environment] || a.name.localeCompare(b.name),
 		);
 	const stillListed =
 		state.selected !== null &&
-		peers.some((p) => p.environment === state.selected?.environment && p.name === state.selected?.name);
+		peers.some((p) => p.hubKey === state.selected?.hubKey && p.name === state.selected?.name);
 	return {
 		...state,
 		configured: response.configured,
@@ -94,12 +101,12 @@ export function selectPeer(state: PiFleetState, selection: PiFleetSelection | nu
 }
 
 export function applyMailbox(state: PiFleetState, response: PiFleetMailboxResponse): PiFleetState {
-	return { ...state, mailboxes: { ...state.mailboxes, [response.environment]: response } };
+	return { ...state, mailboxes: { ...state.mailboxes, [response.hubKey]: response } };
 }
 
 export function startEntry(
 	state: PiFleetState,
-	input: { id: string; environment: PiFleetEnvironment; target: string; prompt: string; sentAt: number },
+	input: { id: string; hubKey: string; target: string; prompt: string; sentAt: number },
 ): PiFleetState {
 	const entry: PiFleetEntry = {
 		...input,

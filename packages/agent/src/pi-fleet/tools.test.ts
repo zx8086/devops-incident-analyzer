@@ -10,8 +10,22 @@ import { buildFleetTools, releaseClients, SPOKE_TEXT_CAP, wrapUntrusted } from "
 
 const config: PiComsConfig = {
 	hubs: {
-		prd: { serverUrl: "http://prd.hub.test", authToken: "p", project: "fleet", fallbackTarget: "ops" },
-		dev: { serverUrl: "http://dev.hub.test", authToken: "d", project: "fleet", fallbackTarget: "ops" },
+		prd: {
+			serverUrl: "http://prd.hub.test",
+			authToken: "p",
+			project: "fleet",
+			fallbackTarget: "ops",
+			environment: "prd" as const,
+			estates: ["eu-oit-prd"],
+		},
+		dev: {
+			serverUrl: "http://dev.hub.test",
+			authToken: "d",
+			project: "fleet",
+			fallbackTarget: "ops",
+			environment: "dev" as const,
+			estates: ["eu-oit-dev"],
+		},
 	},
 	estateAgentMap: { "eu-oit-prd": "eu-oit-prd" },
 	verifyTimeoutMs: 1_000,
@@ -187,10 +201,12 @@ describe("SIO-1655 fleet tools", () => {
 		expect(hub.calls).toHaveLength(0);
 	});
 
-	test("an estate whose environment has no configured hub is refused", async () => {
+	// SIO-1666: refused because no hub CLAIMS the estate, not because its
+	// environment is unconfigured -- the binding is explicit now.
+	test("an estate no configured hub claims is refused", async () => {
 		const hub = scriptedHub({});
 		const deps = {
-			config: { ...config, hubs: { prd: config.hubs.prd } },
+			config: { ...config, hubs: { prd: config.hubs.prd as NonNullable<typeof config.hubs.prd> } },
 			fetchImpl: hub.fetchImpl,
 			clients: new Map(),
 		};

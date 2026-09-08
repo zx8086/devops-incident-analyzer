@@ -19,11 +19,12 @@ let {
 }: {
 	pane: PiFleetState;
 	busy: boolean;
-	mailboxBusy: PiFleetEnvironment | null;
+	// SIO-1666: which HUB's inbox is loading, by key.
+	mailboxBusy: string | null;
 	onSend: (prompt: string) => void;
 	onRefresh: () => void;
 	onSelect: (selection: PiFleetSelection | null) => void;
-	onLoadMailbox: (environment: PiFleetEnvironment) => void;
+	onLoadMailbox: (hubKey: string) => void;
 	// SIO-1662: switch to the fleet-console AGENT. Distinct from onSend, which
 	// addresses ONE spoke and renders its raw reply here: the console asks several
 	// spokes and synthesizes one attributed answer in the chat. Optional, so the
@@ -60,12 +61,14 @@ const entryChip: Record<string, string> = {
 const budgetSeconds = $derived(Math.round(pane.totalBudgetMs / 1000));
 const canSend = $derived(pane.selected !== null && !busy && prompt.trim() !== "");
 
-function isSelected(environment: PiFleetEnvironment, name: string): boolean {
-	return pane.selected?.environment === environment && pane.selected?.name === name;
+// SIO-1666: selection keys off the HUB -- a peer name is only unique within its
+// hub, and two hubs may share an environment.
+function isSelected(hubKey: string, name: string): boolean {
+	return pane.selected?.hubKey === hubKey && pane.selected?.name === name;
 }
 
-function toggleSelect(environment: PiFleetEnvironment, name: string) {
-	onSelect(isSelected(environment, name) ? null : { environment, name });
+function toggleSelect(hubKey: string, name: string) {
+	onSelect(isSelected(hubKey, name) ? null : { hubKey, name });
 }
 
 function submit() {
@@ -124,15 +127,19 @@ function shortPrompt(text: string): string {
       {#if pane.hubs.length === 0}
         <p class="text-xs text-gray-500">No spokes are registered on any configured hub.</p>
       {/if}
-      {#each pane.hubs as hub (hub.environment)}
+      {#each pane.hubs as hub (hub.hubKey)}
         <div class="mb-3 last:mb-0">
           <div class="flex items-center gap-2 mb-1">
+            <!-- SIO-1666: the ACCOUNT identifies the hub; the environment is a
+                 badge beside it. A bare DEV/PRD badge cannot tell two prd hubs
+                 in different domains apart. -->
             <span class="text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded border {envBadge[hub.environment]}">{hub.environment}</span>
-            <span class="text-xs text-gray-500">{hub.project}</span>
+            <span class="text-xs font-medium text-tommy-navy truncate">{hub.hubKey}</span>
+            <span class="text-xs text-gray-400 truncate">{hub.project}</span>
             <button
               type="button"
-              onclick={() => onLoadMailbox(hub.environment)}
-              disabled={mailboxBusy === hub.environment}
+              onclick={() => onLoadMailbox(hub.hubKey)}
+              disabled={mailboxBusy === hub.hubKey}
               class="ml-auto text-xs text-tommy-accent-blue hover:underline disabled:opacity-50"
             >
               Inbox {hub.fallbackTarget}
@@ -148,9 +155,9 @@ function shortPrompt(text: string): string {
               <li>
                 <button
                   type="button"
-                  onclick={() => toggleSelect(hub.environment, peer.name)}
-                  aria-pressed={isSelected(hub.environment, peer.name)}
-                  class="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-lg border transition-colors {isSelected(hub.environment, peer.name) ? 'border-tommy-accent-blue bg-white' : 'border-transparent hover:bg-white/60'}"
+                  onclick={() => toggleSelect(hub.hubKey, peer.name)}
+                  aria-pressed={isSelected(hub.hubKey, peer.name)}
+                  class="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-lg border transition-colors {isSelected(hub.hubKey, peer.name) ? 'border-tommy-accent-blue bg-white' : 'border-transparent hover:bg-white/60'}"
                 >
                   <span class="w-2 h-2 rounded-full shrink-0 {statusDot[peer.status] ?? 'bg-gray-300'}"></span>
                   <span class="text-sm text-tommy-navy font-medium">{peer.name}</span>
@@ -162,8 +169,8 @@ function shortPrompt(text: string): string {
               </li>
             {/each}
           </ul>
-          {#if pane.mailboxes[hub.environment]}
-            {@const mailbox = pane.mailboxes[hub.environment]}
+          {#if pane.mailboxes[hub.hubKey]}
+            {@const mailbox = pane.mailboxes[hub.hubKey]}
             <div class="mt-2 rounded-lg border border-gray-200 bg-white p-2">
               <p class="text-xs font-medium text-tommy-navy mb-1">Inbox {mailbox?.name}</p>
               {#if !mailbox || mailbox.messages.length === 0}
@@ -192,7 +199,7 @@ function shortPrompt(text: string): string {
       {#each pane.entries as entry (entry.id)}
         <article class="rounded-lg border border-gray-200 bg-white p-3">
           <div class="flex items-center gap-2 text-xs">
-            <span class="text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded border {envBadge[entry.environment]}">{entry.environment}</span>
+            <span class="text-[10px] text-gray-500 truncate">{entry.hubKey}</span>
             <span class="font-medium text-tommy-navy">{entry.target}</span>
             <span class="ml-auto px-1.5 py-0.5 rounded border {entryChip[entry.status] ?? 'bg-gray-100 text-gray-600 border-gray-200'}">{entry.status}</span>
           </div>
@@ -212,7 +219,7 @@ function shortPrompt(text: string): string {
           {/if}
           {#if entry.sender}
             <p class="mt-2 text-[11px] text-gray-400">
-              Reply from {entry.target} via {entry.sender} on the {entry.environment} hub{entry.msgId ? `, message ${entry.msgId}` : ""}
+              Reply from {entry.target} via {entry.sender} on hub {entry.hubKey}{entry.msgId ? `, message ${entry.msgId}` : ""}
             </p>
           {/if}
         </article>
@@ -223,7 +230,7 @@ function shortPrompt(text: string): string {
   <div class="border-t border-gray-200 p-3 bg-white">
     <p class="text-xs text-gray-500 mb-1">
       {#if pane.selected}
-        To <span class="font-medium text-tommy-navy">{pane.selected.name}</span> ({pane.selected.environment})
+        To <span class="font-medium text-tommy-navy">{pane.selected.name}</span> ({pane.selected.hubKey})
       {:else}
         Select a spoke above
       {/if}

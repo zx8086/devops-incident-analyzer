@@ -18,13 +18,12 @@ import {
 import { getLogger } from "@devops-agent/observability";
 import type { PiComsEnvironment, PiComsHubConfig } from "@devops-agent/shared";
 import { z } from "zod";
-import {
-	type PiFleetAgentsResponse,
-	PiFleetEnvironmentSchema,
-	type PiFleetHub,
-	type PiFleetMailboxResponse,
-	type PiFleetMessageResponse,
-	type PiFleetMessageStatusResponse,
+import type {
+	PiFleetAgentsResponse,
+	PiFleetHub,
+	PiFleetMailboxResponse,
+	PiFleetMessageResponse,
+	PiFleetMessageStatusResponse,
 } from "../pi-fleet-types.ts";
 
 // Directory-mode hubs bind names to principals: the pane's prefix needs its own
@@ -41,9 +40,10 @@ const DEFAULT_AWAIT_MS = PI_COMS_AWAIT_SLICE_MS;
 const MAX_AWAIT_MS = 60_000;
 const DEFAULT_TOTAL_BUDGET_MS = 300_000;
 const MAILBOX_DEFAULT_LIMIT = 20;
-const ENVIRONMENTS = PiFleetEnvironmentSchema.options;
 
-const PaneTokensSchema = z.partialRecord(PiFleetEnvironmentSchema, z.string().min(1));
+// SIO-1666: keyed by HUB, not environment -- two hubs sharing an environment need
+// two different pane tokens, and one env key could only hold one.
+const PaneTokensSchema = z.record(z.string().min(1), z.string().min(1));
 
 export type PiFleetDeps = { env?: NodeJS.ProcessEnv; fetchImpl?: FetchLike; now?: () => number };
 
@@ -57,7 +57,9 @@ export class PiFleetRequestError extends Error {
 	}
 }
 
-type PaneHub = { environment: PiComsEnvironment; hub: PiComsHubConfig };
+// SIO-1666: a hub is identified by its KEY (the selector); the environment it
+// serves rides along as an attribute.
+type PaneHub = { hubKey: string; environment: PiComsEnvironment; hub: PiComsHubConfig };
 export type PaneConfig = { senderPrefix: string; awaitMs: number; totalBudgetMs: number; hubs: PaneHub[] };
 
 function nonEmpty(value: string | undefined): string | undefined {
@@ -72,7 +74,7 @@ function readPositiveInt(raw: string | undefined, fallback: number, name: string
 	return parsed;
 }
 
-function readPaneTokens(raw: string | undefined): Partial<Record<PiComsEnvironment, string>> {
+function readPaneTokens(raw: string | undefined): Record<string, string> {
 	const value = nonEmpty(raw);
 	if (value === undefined) return {};
 	let parsed: unknown;
@@ -94,11 +96,12 @@ export function resolvePaneConfig(env: NodeJS.ProcessEnv = process.env): PaneCon
 	const config = resolvePiComsConfig(env);
 	const tokens = readPaneTokens(env.PI_COMS_PANE_TOKENS);
 	const hubs: PaneHub[] = [];
-	for (const environment of ENVIRONMENTS) {
-		const hub = config.hubs[environment];
+	// SIO-1666: iterate the configured hubs, not the environment enum -- two hubs
+	// may share an environment. Pane tokens are keyed by hub for the same reason.
+	for (const [hubKey, hub] of Object.entries(config.hubs)) {
 		if (!hub) continue;
-		const paneToken = tokens[environment];
-		hubs.push({ environment, hub: paneToken ? { ...hub, authToken: paneToken } : hub });
+		const paneToken = tokens[hubKey];
+		hubs.push({ hubKey, environment: hub.environment, hub: paneToken ? { ...hub, authToken: paneToken } : hub });
 	}
 	return {
 		senderPrefix: nonEmpty(env.PI_COMS_PANE_SENDER_PREFIX) ?? DEFAULT_SENDER_PREFIX,
@@ -117,10 +120,11 @@ function requirePane(deps: PiFleetDeps): PaneConfig {
 	return pane;
 }
 
-function requireHub(pane: PaneConfig, environment: PiComsEnvironment): PaneHub {
-	const paneHub = pane.hubs.find((h) => h.environment === environment);
+function requireHub(pane: PaneConfig, hubKey: string): PaneHub {
+	const paneHub = pane.hubs.find((h) => h.hubKey === hubKey);
 	if (!paneHub) {
-		throw new PiFleetRequestError(404, `no pi-coms hub configured for environment "${environment}"; set PI_COMS_HUBS`);
+		const known = pane.hubs.map((h) => h.hubKey).join(", ") || "(none)";
+		throw new PiFleetRequestError(404, `no pi-coms hub "${hubKey}"; configured hubs are ${known}`);
 	}
 	return paneHub;
 }
@@ -144,9 +148,9 @@ function describeError(error: unknown): string {
 // and the exact command to fix it, the way `just coms` does for a missing
 // operator principal (packages/pi-coms/justfile). Returns a PiComsHttpError so
 // piFleetErrorResponse still answers 502; anything else would become a 500.
-function explainRegistrationFailure(error: unknown, environment: PiComsEnvironment, senderPrefix: string): unknown {
+function explainRegistrationFailure(error: unknown, hubKey: string, senderPrefix: string): unknown {
 	if (!(error instanceof PiComsHttpError)) return error;
-	const lines = [`  on the ${environment} hub (PI_COMS_PANE_SENDER_PREFIX=${senderPrefix})`];
+	const lines = [`  on hub "${hubKey}" (PI_COMS_PANE_SENDER_PREFIX=${senderPrefix})`];
 	if (error.code === "name_not_allowed") {
 		lines.push(
 			"  No principal on this hub allows that name. Either:",
@@ -173,6 +177,7 @@ export async function listFleetAgents(deps: PiFleetDeps = {}): Promise<PiFleetAg
 	const hubs: PiFleetHub[] = await Promise.all(
 		pane.hubs.map(async (paneHub) => {
 			const base = {
+				hubKey: paneHub.hubKey,
 				environment: paneHub.environment,
 				project: paneHub.hub.project,
 				fallbackTarget: paneHub.hub.fallbackTarget,
@@ -187,7 +192,7 @@ export async function listFleetAgents(deps: PiFleetDeps = {}): Promise<PiFleetAg
 					.map((a) => ({ name: a.name, status: a.status, purpose: a.purpose ?? null, sessionId: a.session_id }))
 					.sort((a, b) => a.name.localeCompare(b.name));
 				log.info(
-					{ environment: paneHub.environment, project: paneHub.hub.project, peers: peers.length },
+					{ hubKey: paneHub.hubKey, project: paneHub.hub.project, peers: peers.length },
 					"pi.fleet.agents.listed",
 				);
 				return { ...base, peers, error: null };
@@ -195,7 +200,7 @@ export async function listFleetAgents(deps: PiFleetDeps = {}): Promise<PiFleetAg
 				// This error was previously visible ONLY as a string in the pane
 				// ("fetch failed"), with nothing server-side to say which hub or why.
 				log.warn(
-					{ environment: paneHub.environment, project: paneHub.hub.project, error: describeError(error) },
+					{ hubKey: paneHub.hubKey, project: paneHub.hub.project, error: describeError(error) },
 					"pi.fleet.agents.failed",
 				);
 				return { ...base, peers: [], error: describeError(error) };
@@ -211,16 +216,23 @@ export async function listFleetAgents(deps: PiFleetDeps = {}): Promise<PiFleetAg
 	};
 }
 
-function statusOf(environment: PiComsEnvironment, msgId: string, reply: PiReply): PiFleetMessageStatusResponse {
-	return { environment, msgId, status: reply.status, response: reply.response, error: reply.error };
+function statusOf(paneHub: PaneHub, msgId: string, reply: PiReply): PiFleetMessageStatusResponse {
+	return {
+		hubKey: paneHub.hubKey,
+		environment: paneHub.environment,
+		msgId,
+		status: reply.status,
+		response: reply.response,
+		error: reply.error,
+	};
 }
 
 export async function sendFleetMessage(
-	input: { environment: PiComsEnvironment; target: string; prompt: string },
+	input: { hubKey: string; target: string; prompt: string },
 	deps: PiFleetDeps = {},
 ): Promise<PiFleetMessageResponse> {
 	const pane = requirePane(deps);
-	const paneHub = requireHub(pane, input.environment);
+	const paneHub = requireHub(pane, input.hubKey);
 	const client = clientFor(paneHub, pane, deps);
 	const sentAt = new Date((deps.now ?? Date.now)()).toISOString();
 	// The hub requires a registered sender to send; the registration is short-lived
@@ -230,17 +242,20 @@ export async function sendFleetMessage(
 	// the name and environment are logged before the attempt -- that pairing is
 	// what a 403 needs in order to be self-explanatory.
 	const senderName = senderNameFor(client.sessionId, pane.senderPrefix);
-	log.info({ environment: input.environment, target: input.target, sender: senderName }, "pi.fleet.send.start");
+	log.info(
+		{ hubKey: paneHub.hubKey, environment: paneHub.environment, target: input.target, sender: senderName },
+		"pi.fleet.send.start",
+	);
 	try {
 		await client.register();
 	} catch (error) {
 		log.warn(
-			{ environment: input.environment, sender: senderName, error: describeError(error) },
+			{ hubKey: paneHub.hubKey, sender: senderName, error: describeError(error) },
 			"pi.fleet.send.register_failed",
 		);
 		// SIO-1661: the log serves whoever is watching the server; this serves the
 		// operator, who sees only the route's 502 body.
-		throw explainRegistrationFailure(error, input.environment, pane.senderPrefix);
+		throw explainRegistrationFailure(error, paneHub.hubKey, pane.senderPrefix);
 	}
 	try {
 		// No response_schema: the operator reads a free-form reply, no LLM parses it.
@@ -248,11 +263,11 @@ export async function sendFleetMessage(
 		const reply = await client.awaitReply(sent.msg_id, pane.awaitMs);
 		// Reply TEXT is never logged: it is spoke-authored and stays data.
 		log.info(
-			{ environment: input.environment, target: input.target, msg_id: sent.msg_id, status: reply.status },
+			{ hubKey: paneHub.hubKey, target: input.target, msg_id: sent.msg_id, status: reply.status },
 			"pi.fleet.send.done",
 		);
 		return {
-			...statusOf(input.environment, sent.msg_id, reply),
+			...statusOf(paneHub, sent.msg_id, reply),
 			target: input.target,
 			sender: senderName,
 			sentAt,
@@ -265,29 +280,30 @@ export async function sendFleetMessage(
 // Re-await by id from a fresh, unregistered client: /await needs only the token,
 // and the heartbeat between slices is swallowed by the client when it 404s.
 export async function awaitFleetMessage(
-	input: { environment: PiComsEnvironment; msgId: string },
+	input: { hubKey: string; msgId: string },
 	deps: PiFleetDeps = {},
 ): Promise<PiFleetMessageStatusResponse> {
 	const pane = requirePane(deps);
-	const paneHub = requireHub(pane, input.environment);
+	const paneHub = requireHub(pane, input.hubKey);
 	const reply = await clientFor(paneHub, pane, deps).awaitReply(input.msgId, pane.awaitMs);
-	return statusOf(input.environment, input.msgId, reply);
+	return statusOf(paneHub, input.msgId, reply);
 }
 
 export async function readFleetMailbox(
-	input: { environment: PiComsEnvironment; name?: string; limit?: number },
+	input: { hubKey: string; name?: string; limit?: number },
 	deps: PiFleetDeps = {},
 ): Promise<PiFleetMailboxResponse> {
 	const pane = requirePane(deps);
-	const paneHub = requireHub(pane, input.environment);
+	const paneHub = requireHub(pane, input.hubKey);
 	const name = input.name ?? paneHub.hub.fallbackTarget;
 	const messages = await clientFor(paneHub, pane, deps).mailbox(name, { limit: input.limit ?? MAILBOX_DEFAULT_LIMIT });
 	// SIO-1660: count only. Mailbox entries carry monitor-authored prompts and
 	// spoke replies, which must never reach the log.
 	// awaitFleetMessage needs nothing here: pi.hub.await.done already reports it.
-	log.info({ environment: input.environment, name, messages: messages.length }, "pi.fleet.mailbox.read");
+	log.info({ hubKey: paneHub.hubKey, name, messages: messages.length }, "pi.fleet.mailbox.read");
 	return {
-		environment: input.environment,
+		hubKey: paneHub.hubKey,
+		environment: paneHub.environment,
 		name,
 		messages: messages.map((m) => ({
 			msgId: m.msg_id,
