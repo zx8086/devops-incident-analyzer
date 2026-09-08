@@ -24,6 +24,7 @@ const listing: PiFleetAgentsResponse = {
 	totalBudgetMs: 60_000,
 	hubs: [
 		{
+			hubKey: "eu-shared-services-prd",
 			environment: "prd",
 			project: "default",
 			fallbackTarget: "ops-prd",
@@ -31,6 +32,7 @@ const listing: PiFleetAgentsResponse = {
 			error: null,
 		},
 		{
+			hubKey: "eu-shared-services-dev",
 			environment: "dev",
 			project: "default",
 			fallbackTarget: "ops",
@@ -59,10 +61,13 @@ describe("applyAgents", () => {
 
 	test("keeps the selection while the peer is still listed and clears it otherwise", () => {
 		const selected = selectPeer(applyAgents(initialPiFleetState(), listing), {
-			environment: "prd",
+			hubKey: "eu-shared-services-prd",
 			name: "eu-oit-prd",
 		});
-		expect(applyAgents(selected, listing).selected).toEqual({ environment: "prd", name: "eu-oit-prd" });
+		expect(applyAgents(selected, listing).selected).toEqual({
+			hubKey: "eu-shared-services-prd",
+			name: "eu-oit-prd",
+		});
 		const gone: PiFleetAgentsResponse = {
 			...listing,
 			hubs: [listing.hubs[1] as PiFleetAgentsResponse["hubs"][number]],
@@ -82,10 +87,10 @@ describe("applyAgents", () => {
 });
 
 describe("entries", () => {
-	const base = selectPeer(applyAgents(initialPiFleetState(), listing), { environment: "prd", name: "eu-oit-prd" });
+	const base = selectPeer(applyAgents(initialPiFleetState(), listing), { hubKey: "eu-shared-services-prd", name: "eu-oit-prd" });
 	const started = startEntry(base, {
 		id: "e1",
-		environment: "prd",
+		hubKey: "eu-shared-services-prd",
 		target: "eu-oit-prd",
 		prompt: "ping",
 		sentAt: 1_000,
@@ -95,7 +100,7 @@ describe("entries", () => {
 		expect(started.entries[0]).toMatchObject({ id: "e1", status: "sending", msgId: null, response: null, error: null });
 		const second = startEntry(started, {
 			id: "e2",
-			environment: "prd",
+			hubKey: "eu-shared-services-prd",
 			target: "eu-oit-prd",
 			prompt: "pong",
 			sentAt: 2_000,
@@ -105,6 +110,7 @@ describe("entries", () => {
 
 	test("applySendResult records the hub ids and a terminal reply", () => {
 		const done = applySendResult(started, "e1", {
+			hubKey: "eu-shared-services-prd",
 			environment: "prd",
 			msgId: "m1",
 			status: "complete",
@@ -126,6 +132,7 @@ describe("entries", () => {
 
 	test("budget_exhausted keeps polling until the pane budget is spent, then expires readably", () => {
 		const waiting = applySendResult(started, "e1", {
+			hubKey: "eu-shared-services-prd",
 			environment: "prd",
 			msgId: "m1",
 			status: "budget_exhausted",
@@ -146,6 +153,7 @@ describe("entries", () => {
 
 	test("applyStatus keeps the sender from the send response and failEntry records a route failure", () => {
 		const waiting = applySendResult(started, "e1", {
+			hubKey: "eu-shared-services-prd",
 			environment: "prd",
 			msgId: "m1",
 			status: "delivered",
@@ -156,6 +164,7 @@ describe("entries", () => {
 			sentAt: "x",
 		});
 		const done = applyStatus(waiting, "e1", {
+			hubKey: "eu-shared-services-prd",
 			environment: "prd",
 			msgId: "m1",
 			status: "error",

@@ -10,13 +10,15 @@ import { piFleetErrorResponse } from "$lib/server/pi-fleet-http";
 import type { RequestHandler } from "./$types";
 
 const SendRequestSchema = z.object({
-	environment: PiFleetEnvironmentSchema,
+	// SIO-1666: addressed by hub key, not environment.
+	hubKey: z.string().min(1),
 	target: z.string().min(1),
 	prompt: z.string().trim().min(1).max(20_000),
 });
 
 const AwaitQuerySchema = z.object({
-	environment: PiFleetEnvironmentSchema,
+	// SIO-1666: addressed by hub key, not environment.
+	hubKey: z.string().min(1),
 	msgId: z.string().min(1),
 });
 
@@ -32,7 +34,7 @@ export const POST: RequestHandler = async ({ request }) => {
 export const GET: RequestHandler = async ({ url }) => {
 	try {
 		const query = AwaitQuerySchema.parse({
-			environment: url.searchParams.get("environment") ?? undefined,
+			hubKey: url.searchParams.get("hubKey") ?? undefined,
 			msgId: url.searchParams.get("msgId") ?? undefined,
 		});
 		return json(await awaitFleetMessage(query));

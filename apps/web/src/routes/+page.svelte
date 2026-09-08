@@ -745,7 +745,7 @@ function handleSuggestionClick(suggestion: string) {
         onSend={(prompt) => piFleetStore.send(prompt)}
         onRefresh={() => piFleetStore.load()}
         onSelect={(selection) => piFleetStore.select(selection)}
-        onLoadMailbox={(environment) => piFleetStore.loadMailbox(environment)}
+        onLoadMailbox={(hubKey) => piFleetStore.loadMailbox(hubKey)}
         onAskAll={consoleAvailable ? () => agentStore.switchAgent("pi-fleet-console") : undefined}
       />
     </div>
