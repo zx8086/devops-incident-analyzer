@@ -26,6 +26,12 @@ of "unknown agent".
 
 The console is the only one of these where a model chooses the spokes.
 
+The console's graph is two nodes (`converseFleet`, `teardownFleet`), so the
+live graph triage pane (SIO-1572) is not offered while it is the current agent:
+the registry marks it `hasTriageGraph: false` (SIO-1665) and the page gates the
+header toggle and the pane mount on that flag together. The fleet pane stays
+open beside the console's answer.
+
 ## Persona
 
 `agents/pi-fleet-console/`, deliberately NOT `agents/pi-fleet/`.
@@ -42,7 +48,10 @@ invariants belong in `agents/shared/`, not copied between the two.
 
 Five, all hub operations, in `packages/agent/src/pi-fleet/tools.ts`:
 
-- `fleet_list_agents` -- who is registered on this estate's hub, and online.
+- `fleet_list_agents` -- which spokes are registered on this estate's hub, and
+  online. SIO-1665: monitors (`monitor-<spoke>`) are filtered out by name; with
+  `purpose` stripped they were indistinguishable from spokes, and a monitor has
+  no model to answer with. Their findings arrive through `fleet_inbox`.
 - `fleet_send` -- ask one estate's agent a read-only question; returns a msg_id.
 - `fleet_await_reply` -- wait for one answer.
 - `fleet_inbox` -- recent messages and monitor reports for an estate.

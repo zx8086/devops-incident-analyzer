@@ -50,6 +50,9 @@ const env: NodeJS.ProcessEnv = {
 const devAgents = [
 	{ session_id: "s2", name: "zeta-dev", status: "stale", purpose: "spoke" },
 	{ session_id: "s1", name: "alpha-dev", status: "online" },
+	// SIO-1665: the hub lists the monitor pair too (include_explicit); the pane
+	// must not offer it as a spoke.
+	{ session_id: "s3", name: "monitor-alpha-dev", status: "online", purpose: "Deterministic AWS monitor" },
 ];
 
 describe("resolvePaneConfig", () => {
@@ -95,7 +98,7 @@ describe("listFleetAgents", () => {
 		expect(calls).toEqual([]);
 	});
 
-	test("lists every hub with its own token, sorts peers, and isolates a failing hub", async () => {
+	test("lists every hub with its own token, sorts peers, drops monitors, and isolates a failing hub", async () => {
 		const { calls, fetchImpl } = hubFake((call) => {
 			if (call.url.startsWith("http://dev.hub.test/v1/agents")) return { body: { agents: devAgents } };
 			if (call.url.startsWith("http://prd.hub.test/v1/agents")) return { status: 500, body: { error: "boom" } };
@@ -114,6 +117,8 @@ describe("listFleetAgents", () => {
 				{ name: "zeta-dev", status: "stale", purpose: "spoke", sessionId: "s2" },
 			],
 		});
+		expect(out.hubs[0]?.peers).toHaveLength(2);
+		expect(out.hubs[0]?.peers.map((p) => p.name)).not.toContain("monitor-alpha-dev");
 		expect(out.hubs[1]).toMatchObject({ fallbackTarget: "ops-prd", peers: [] });
 		expect(out.hubs[1]?.error).toContain("500");
 		expect(calls.map((c) => [c.path, c.auth])).toEqual([

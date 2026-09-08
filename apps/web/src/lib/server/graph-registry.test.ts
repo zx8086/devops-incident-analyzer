@@ -72,6 +72,19 @@ describe("SIO-1657 listModeAgents", () => {
 		for (const a of listModeAgents()) expect(selectable.has(a.id)).toBe(true);
 	});
 
+	// SIO-1665: the live graph triage pane is offered per agent. The console's
+	// two-node graph has nothing to light up, and its answers already sit next to
+	// the fleet pane; the two modes keep the pane.
+	test("modes declare a triage graph; the console does not", async () => {
+		graphEnabled.value = true;
+		hubConfigured.value = true;
+		const { listAgents, listModeAgents, describeAgent } = await load();
+
+		for (const a of listAgents()) expect(typeof a.hasTriageGraph).toBe("boolean");
+		for (const a of listModeAgents()) expect(a.hasTriageGraph).toBe(true);
+		expect(describeAgent("pi-fleet-console").hasTriageGraph).toBe(false);
+	});
+
 	// Leaving the rotation must not break resolution: graphFor still has to
 	// resolve the console (the route would otherwise 404) and describeAgent must
 	// keep refusing genuinely unknown names.

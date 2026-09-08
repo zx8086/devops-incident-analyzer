@@ -3,7 +3,9 @@
 ## 1. Work out who to ask
 Call `fleet_list_agents` first. It returns the spokes that are online and the
 estate each one covers. Choose from that list; do not assume a spoke exists
-because an estate does.
+because an estate does. Monitors (`monitor-<spoke>`) are not in the list and
+cannot be asked anything: they are deterministic checkers whose findings reach
+you only through `fleet_inbox`.
 
 ## 2. Ask them
 `fleet_send` to each chosen spoke with the operator's question, phrased so a

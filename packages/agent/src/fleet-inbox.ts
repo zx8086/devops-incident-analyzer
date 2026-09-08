@@ -11,7 +11,7 @@ import type {
 	FleetInboxSeverity,
 	PiComsEnvironment,
 } from "@devops-agent/shared";
-import type { PiInboxMessage } from "./action-tools/pi-coms-client.ts";
+import { MONITOR_NAME_PREFIX, type PiInboxMessage } from "./action-tools/pi-coms-client.ts";
 import { readPiComsCapability } from "./action-tools/pi-verifier.ts";
 import type { AgentStateType } from "./state.ts";
 
@@ -162,7 +162,7 @@ export type EstateIdentity = { estate: string; accountId: string | undefined; ag
 // Whether an `ops` row belongs to this estate: the report header names the
 // estate's account, or the sender is the estate's agent or its monitor.
 export function attributableToEstate(message: PiInboxMessage, identity: EstateIdentity): boolean {
-	const senders = new Set(identity.agentNames.flatMap((n) => [n, `monitor-${n}`]));
+	const senders = new Set(identity.agentNames.flatMap((n) => [n, `${MONITOR_NAME_PREFIX}${n}`]));
 	if (senders.has(message.sender_name)) return true;
 	const report = parseMonitorReport(message.prompt);
 	return report !== undefined && identity.accountId !== undefined && report.accountId === identity.accountId;

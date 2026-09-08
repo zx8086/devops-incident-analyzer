@@ -1002,3 +1002,28 @@ Reported by the operator from the running app: the header showed a robot icon th
 2. *The first attempt at the fix stranded the feature.* Deleting the header button removed the console's only entry point -- it is excluded from the mode cycle by design and the pane did not link to it -- so the agent became unreachable. Caught by grepping for remaining entry points before committing, and resolved by asking rather than guessing which of two readings ("the pane replaces the console" vs "keep it, elsewhere") was intended.
 3. *Gating a control is not the same as gating what it controls.* Restricting the pane TOGGLE to the incident analyzer left the pane itself rendering in the IaC agent with nothing to close it -- a worse state than before. The pane's own `{#if}` needed the same condition. Browser verification found this; reading the diff would not have.
 4. *An inconsistency inherited from an earlier PR surfaced only when a user looked.* #705 established that the fleet belongs to the incident analyzer, applied it to the console agent, and missed the pane, which kept rendering everywhere for three more PRs. Worth noting for the bake-off: neither bot has commented in 31 PRs, so partial applications of a rule are currently caught by the operator or not at all.
+
+## PRs #712 and #713 (SIO-1663, SIO-1664), recorded after the fact
+
+Neither PR received a ledger entry at merge time; filled in here from the Greptile API and the GitHub comment endpoints so the counts stay continuous.
+
+**Greptile:** #712 terminal **SKIPPED** (id 22962684 on `316325b3`, 130 ms), thirty-second consecutive skip. #713 terminal **SKIPPED** (id 22996271 on `324ff90d`, 155 ms), thirty-third.
+
+**CodeRabbit:** nothing on either PR, issue comments or reviews. Thirty-second and thirty-third consecutive absences.
+
+## PR #714 detail (SIO-1665, hide monitors from spoke lists, no triage graph for Fleet Console)
+
+Reported by the operator from the running app against the prd hub: `monitor-*` registrations were listed as selectable spokes, the graph triage pane drew the two-node console graph beside the fleet pane, and a follow-up "summarise" to a spoke came back with the earlier answer. Seventeen files.
+
+**Greptile:** terminal **SKIPPED** (id 23040106 on `65f8a5d5`), 444 ms, `strictness: 2`, body null. Thirty-fourth consecutive skip.
+
+**CodeRabbit:** nothing, through CI completion. Thirty-fourth consecutive absence (#679 to #714).
+
+**Merge gate:** all five CI jobs green first run. Zero findings to triage. Not merged in the authoring session; awaiting the user's explicit go-ahead.
+
+**Takeaways:**
+
+1. *One of three reported defects was not a defect.* The repeated summary is the spoke's own behaviour: one persistent Pi session, a fresh sender name per pane send, no `conversation_id`. The pane stores each card's prompt once and never rewrites it, which a reviewer reading the store would confirm in a minute; a bot that skips cannot confirm anything. Establishing this before planning kept the ticket to the two real changes.
+2. *The hub record has no role field, so the filter is a name filter.* `explicit` covers monitors and the analyzer's own senders alike, and `purpose` is agent-authored prose the console already refuses to read. The `monitor-` prefix is hub-controlled and minted as a pair with the spoke, which is the argument for trusting it. This is the kind of design choice a reviewer would be expected to probe; neither bot saw the PR.
+3. *The same gate-both-sides rule from #711 applied again.* The triage pane needed its toggle and its mount on one derived value, or switching to the console would have left an open pane with no control to close it. Having the rule written down in the page comment from #711 made it a copy, not a rediscovery.
+4. *An environment fault masqueraded as a typecheck regression.* The worktree and the main checkout both lack the `node_modules/@devops-agent/pi-coms` link, so `bun run typecheck` fails on the contracts import before any change. A baseline check against the untouched import line proved it pre-existing; a symlink fixed it locally without `bun install`.

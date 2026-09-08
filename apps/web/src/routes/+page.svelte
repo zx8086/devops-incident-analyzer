@@ -166,16 +166,24 @@ let modeIds = $state<AgentId[]>(AGENT_CHOICES.filter((c) => c.id !== "pi-fleet-c
 // AND a configured hub, both server-side). Availability only -- SIO-1662 decides
 // where it is offered: inside the fleet pane, as onAskAll.
 let consoleAvailable = $state(false);
+// SIO-1665: the agents that offer the live graph triage pane, from the registry's
+// hasTriageGraph flag. The fallback is the two always-available modes, so an
+// unreachable /api/agents changes nothing (the console is unreachable then too).
+let triageIds = $state<AgentId[]>(AGENT_CHOICES.filter((c) => c.id !== "pi-fleet-console").map((c) => c.id));
 
 async function loadSelectableAgents() {
 	try {
 		const res = await fetch("/api/agents");
 		if (!res.ok) return;
-		const body = (await res.json()) as { agents?: Array<{ id: string; surface?: string }> };
+		const body = (await res.json()) as {
+			agents?: Array<{ id: string; surface?: string; hasTriageGraph?: boolean }>;
+		};
 		const agents = (body.agents ?? []).filter((a) => isAgentId(a.id));
 		const ids = agents.filter((a) => a.surface === "mode").map((a) => a.id as AgentId);
 		if (ids.length > 0) modeIds = ids;
 		consoleAvailable = agents.some((a) => a.id === "pi-fleet-console");
+		// A row without the flag (older server) keeps the pane offered.
+		triageIds = agents.filter((a) => a.hasTriageGraph !== false).map((a) => a.id as AgentId);
 	} catch {
 		// Keep the fallback list.
 	}
@@ -195,6 +203,13 @@ const fleetOffered = $derived(
 	piFleetStore.configured &&
 		(agentStore.currentAgent === "incident-analyzer" || agentStore.currentAgent === "pi-fleet-console"),
 );
+// SIO-1665: the live graph triage pane follows the agent, so on the fleet
+// console it drew a two-node graph beside the fleet pane that already shows the
+// spoke replies. Same rule as fleetOffered: the header toggle and the mount share
+// this one gate, or switching agents leaves an open pane with no control to
+// close it. showGraphPane itself is untouched, so the pane returns in its
+// previous state when the operator cycles back.
+const triageOffered = $derived(triageIds.includes(agentStore.currentAgent));
 // The console is NOT in the cycle, so switching to it would otherwise be a
 // one-way trip; while it is current the control returns to the default agent.
 const onContextualAgent = $derived(!modeIds.includes(agentStore.currentAgent));
@@ -319,17 +334,20 @@ function handleSuggestionClick(suggestion: string) {
         <div class="w-2 h-2 rounded-full bg-green-500"></div>
         <span class="text-xs text-white/60">Connected</span>
       </div>
-      <!-- SIO-1572: split the screen vertically with the live graph triage pane. -->
-      <button
-        type="button"
-        onclick={toggleGraphPane}
-        title="Live graph triage"
-        aria-label="Toggle live graph triage pane"
-        aria-pressed={showGraphPane}
-        class="min-w-[44px] min-h-[44px] p-2 rounded-lg transition-all border-2 border-transparent {showGraphPane ? 'bg-tommy-accent-blue text-white' : 'text-white/70 hover:text-white hover:bg-white/10'}"
-      >
-        <Icon name="graph" class="w-5 h-5" />
-      </button>
+      <!-- SIO-1572: split the screen vertically with the live graph triage pane.
+           SIO-1665: offered only for agents whose graph is worth triaging. -->
+      {#if triageOffered}
+        <button
+          type="button"
+          onclick={toggleGraphPane}
+          title="Live graph triage"
+          aria-label="Toggle live graph triage pane"
+          aria-pressed={showGraphPane}
+          class="min-w-[44px] min-h-[44px] p-2 rounded-lg transition-all border-2 border-transparent {showGraphPane ? 'bg-tommy-accent-blue text-white' : 'text-white/70 hover:text-white hover:bg-white/10'}"
+        >
+          <Icon name="graph" class="w-5 h-5" />
+        </button>
+      {/if}
       <!-- SIO-1662: the separate "switch to the fleet console" button is gone. It
            was a second robot icon next to the mode control's own, and it
            duplicated an affordance the fleet pane below already provides -- the
@@ -701,7 +719,8 @@ function handleSuggestionClick(suggestion: string) {
   </div>
   </div>
 
-  {#if showGraphPane}
+  <!-- SIO-1665: triageOffered, not just showGraphPane -- same gate as the toggle. -->
+  {#if triageOffered && showGraphPane}
     <div class="w-2/5 max-w-xl shrink-0 border-l border-gray-200 bg-tommy-cream overflow-hidden">
       <GraphTriagePanel
         agent={agentStore.currentAgent}
