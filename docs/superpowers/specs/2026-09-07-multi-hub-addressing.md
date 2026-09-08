@@ -1,11 +1,21 @@
 # Multi-hub addressing: the AWS account is the hub identity
 
-Status: PARKED. No code written and none planned for now. Written 2026-09-07
-after `just coms prd simon` was rejected as unscalable; the user's decision was
-to keep the current shape (KISS) and address hubs by AWS profile, replacing the
-selector when another hub appears. This note exists so the rekey does not have to
-be re-derived when that day comes -- read it BEFORE adding a second hub to any
-environment.
+Status: PARKED (implementation), but the DIRECTION IS DECIDED — do not
+re-litigate it. Written 2026-09-07 after `just coms prd simon` was rejected as
+unscalable; the decision then was to keep the current shape (KISS) and address
+hubs by AWS profile, replacing the selector when another hub appears.
+
+**Reaffirmed and widened 2026-09-08:** a hub's identity is the AWS ACCOUNT it
+lives in, never its environment. The fleet is one hub per account serving several
+spoke accounts in a domain; `dev`/`prd` only works today because
+eu-shared-services happens to own both. The moment another department or domain
+designates a hub in its own dev/stg/prd account, the key names two different hubs.
+The selector, the config key AND the UI label must all carry the account
+(`eu-shared-services-dev` / `eu-shared-services-prd`), with the environment
+demoted to an attribute. The UI section below was added then.
+
+Read this BEFORE adding a second hub to any environment — and do not add one
+without doing the rekey.
 
 ## The problem in one line
 
@@ -52,6 +62,27 @@ The env-keyed assumption is threaded through two packages.
   as environments, `fleet.ts:255` and `:288` group work `byEnv`.
 - `hub.token_env` defaults to `PI_COMS_NET_AUTH_TOKEN_${ENV.toUpperCase()}`
   (`fleet.ts:235`), which collides once two hubs share an environment.
+
+### Web UI (`apps/web`) — added 2026-09-08
+
+The SIO-1650 fleet pane and the SIO-1655 console shipped after this note was
+first written, and both inherit the env-keyed assumption:
+
+- `apps/web/src/lib/pi-fleet-types.ts:6` `PiFleetEnvironmentSchema =
+  z.enum(["dev","stg","prd"])` — the wire type for every `/api/pi/*` route.
+- `PiFleetPane.svelte` renders a hub row as an env **badge** plus the project
+  name (`{hub.environment}` / `{hub.project}`). Two prd hubs in different domains
+  would render as two identical `PRD` rows.
+- The environment is also the ROUTING KEY, not just a label:
+  `onLoadMailbox(hub.environment)` and `sendFleetMessage({ environment, ... })`.
+  So a collision is not cosmetic — it addresses the wrong hub.
+- `envBadge` is a `Record<PiFleetEnvironment, string>`, so the colour scheme
+  assumes exactly three values.
+
+**Required UI shape:** the row must identify the ACCOUNT
+(`eu-shared-services-prd`), with the environment demoted to a secondary badge.
+The operator's mental model is the account, and it is what makes two prd hubs
+distinguishable at a glance.
 
 ### Analyzer (`packages/agent`, `packages/shared`)
 
