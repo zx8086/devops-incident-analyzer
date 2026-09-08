@@ -33,9 +33,22 @@ const REPORT =
 const env: NodeJS.ProcessEnv = {
 	PI_COMS_INBOX_ENABLED: "true",
 	PI_COMS_INBOX_TIMEOUT_MS: "50",
+	// SIO-1666: hubs are keyed by selector and claim their estates explicitly;
+	// "eu-x-stg" is deliberately claimed by NO hub, which is what the
+	// no-hub-for-this-estate case below asserts.
 	PI_COMS_HUBS: JSON.stringify({
-		dev: { serverUrl: "http://dev.hub.test", authToken: "dev-tok" },
-		prd: { serverUrl: "http://prd.hub.test", authToken: "prd-tok" },
+		"eu-shared-services-dev": {
+			serverUrl: "http://dev.hub.test",
+			authToken: "dev-tok",
+			environment: "dev",
+			estates: ["eu-b2b-dev"],
+		},
+		"eu-shared-services-prd": {
+			serverUrl: "http://prd.hub.test",
+			authToken: "prd-tok",
+			environment: "prd",
+			estates: ["eu-oit-prd"],
+		},
 	}),
 	AWS_ESTATES: JSON.stringify({
 		"eu-oit-prd": { assumedRoleArn: "arn:aws:iam::111122223333:role/DevOpsAgentReadOnly", externalId: "x" },
@@ -190,7 +203,8 @@ describe("runFetchFleetInbox", () => {
 			{ env, fetchImpl, now },
 		);
 		const stg = out.fleetInboxDigest?.estates.find((e) => e.estate === "eu-x-stg");
-		expect(stg?.error).toContain('environment "stg"');
+		// SIO-1666: refused because no hub claims it, not because its environment is unconfigured.
+		expect(stg?.error).toContain("not listed on any pi-coms hub");
 		expect(stg?.environment).toBe("stg");
 		expect(calls.every((c) => c.url.startsWith("http://prd.hub.test/"))).toBe(true);
 	});

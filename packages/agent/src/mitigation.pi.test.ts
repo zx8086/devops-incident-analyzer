@@ -22,6 +22,7 @@ beforeEach(() => {
 	delete process.env.PI_COMS_NET_SERVER_URL;
 	delete process.env.PI_COMS_NET_AUTH_TOKEN;
 	delete process.env.PI_COMS_NET_ENVIRONMENT;
+	delete process.env.PI_COMS_NET_ESTATES;
 	delete process.env.PI_COMS_HUBS;
 });
 
@@ -82,6 +83,8 @@ describe("aggregateMitigation pi verification cards", () => {
 		process.env.PI_COMS_NET_AUTH_TOKEN = "tok";
 		// The fixture estates are prd; the single hub must serve that environment.
 		process.env.PI_COMS_NET_ENVIRONMENT = "prd";
+		// SIO-1666: and must CLAIM them -- routing is an explicit binding now.
+		process.env.PI_COMS_NET_ESTATES = "eu-oit-prd,eu-shared-services-prd";
 		const result = await aggregateMitigation(baseState());
 		const tools = (result.pendingActions ?? []).map((a) => a.tool);
 		expect(tools).toEqual(["verify-with-pi", "verify-with-pi"]);
@@ -95,6 +98,8 @@ describe("aggregateMitigation pi verification cards", () => {
 		process.env.PI_COMS_NET_AUTH_TOKEN = "tok";
 		// The fixture estates are prd; the single hub must serve that environment.
 		process.env.PI_COMS_NET_ENVIRONMENT = "prd";
+		// SIO-1666: and must CLAIM them -- routing is an explicit binding now.
+		process.env.PI_COMS_NET_ESTATES = "eu-oit-prd,eu-shared-services-prd";
 		const result = await aggregateMitigation(baseState({ finalAnswer: "short" }));
 		expect(result.pendingActions).toEqual([]);
 	});
