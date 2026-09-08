@@ -1019,7 +1019,7 @@ Reported by the operator from the running app against the prd hub: `monitor-*` r
 
 **CodeRabbit:** nothing, through CI completion. Thirty-fourth consecutive absence (#679 to #714).
 
-**Merge gate:** all five CI jobs green first run. Zero findings to triage. Not merged in the authoring session; awaiting the user's explicit go-ahead.
+**Merge gate:** all five CI jobs green first run. Zero findings to triage. Merged on the user's explicit instruction with the documented gate knowingly overridden, after the docs push re-ran CI green. Squash `10c49a6b`.
 
 **Takeaways:**
 
