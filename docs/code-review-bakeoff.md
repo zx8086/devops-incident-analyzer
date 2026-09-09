@@ -1091,3 +1091,15 @@ One file: the re-rendered eu-oit-prd root's `pi_model` default, so the tracked r
 **Merge gate:** all five CI jobs green. Merged on the user's explicit instruction. Squash `af26bd91`. Applied before the merge with a plan guard: `Plan: 1 to add, 1 to change, 1 to destroy` (instance replaced for userdata, status alarm re-pointed).
 
 **Takeaway:** *the dangerous diff was in a gitignored file no reviewer sees.* A bare `fleet render` wrote a placeholder hub token into `terraform.tfvars`, and the first plan wanted to rewrite the SSM token parameter alongside the instance. Comparing the rendered inputs with the main checkout's, key by key with values hidden, is what caught it; neither CI nor a bot reads that file.
+
+## PR #719 detail (SIO-1676, history arguments and same-cause drift batches)
+
+Eight files under `packages/pi-coms` plus both personas: `history [count] [severity] [family]`, drift findings that appear, change state the same way or disappear together in one cycle collapsing into one `ec2:batch` finding, and persona text so the console reads budget markers and the spoke diagnoses a batch once.
+
+**Greptile:** SKIPPED. Thirty-sixth consecutive skip.
+
+**CodeRabbit:** nothing. Thirty-sixth consecutive absence.
+
+**Merge gate:** all five CI jobs green on both heads. 304 package tests (8 new) and the exporter's 442 pass. Merged on the user's explicit instruction.
+
+**Takeaway:** *the noise and the read path were the same bug seen from two sides.* The digest capped at ten and `history` at twenty because nobody expected eighty-five findings from one event; the drift check produced eighty-five because nobody expected one event to move eighty-five instances. Fixing only the read path would have left the investigation cost; fixing only the batching would have left the next overflow unreadable.
