@@ -35,7 +35,13 @@ const config: PiComsConfig = {
 
 type Call = { method: string; path: string; body: Record<string, unknown> | undefined };
 
-function scriptedHub(opts: { agents?: PiAgentCard[]; reply?: unknown; replyStatus?: string; inbox?: unknown[] }) {
+function scriptedHub(opts: {
+	agents?: PiAgentCard[];
+	reply?: unknown;
+	replyStatus?: string;
+	replyError?: string | null;
+	inbox?: unknown[];
+}) {
 	const calls: Call[] = [];
 	const fetchImpl = async (input: string, init?: RequestInit): Promise<Response> => {
 		const parsed = new URL(input);
@@ -49,10 +55,20 @@ function scriptedHub(opts: { agents?: PiAgentCard[]; reply?: unknown; replyStatu
 		if (path.startsWith("/v1/agents?")) return json({ agents: opts.agents ?? [] });
 		if (path === "/v1/messages") return json({ ok: true, msg_id: "m1", status: "delivered", target_session: "t1" });
 		if (path.startsWith("/v1/messages/m1/await"))
-			return json({ msg_id: "m1", status: opts.replyStatus ?? "complete", response: opts.reply ?? null, error: null });
+			return json({
+				msg_id: "m1",
+				status: opts.replyStatus ?? "complete",
+				response: opts.reply ?? null,
+				error: opts.replyError ?? null,
+			});
 		// The client polls the plain lookup after a non-terminal await slice.
 		if (path.startsWith("/v1/messages/m1"))
-			return json({ msg_id: "m1", status: opts.replyStatus ?? "complete", response: opts.reply ?? null, error: null });
+			return json({
+				msg_id: "m1",
+				status: opts.replyStatus ?? "complete",
+				response: opts.reply ?? null,
+				error: opts.replyError ?? null,
+			});
 		if (path.startsWith("/v1/mailbox")) return json({ ok: true, name: "x", messages: opts.inbox ?? [] });
 		if (path.includes("/heartbeat")) return json({ ok: true });
 		if (method === "DELETE") return json({ ok: true });
@@ -126,6 +142,51 @@ describe("SIO-1655 fleet tools", () => {
 		const out = (await byName.get("fleet_await_reply")?.invoke({ estate: "eu-oit-prd", msgId: "m1" })) as string;
 		expect(out).toContain("not reached");
 		expect(out).not.toContain("<untrusted-spoke-reply");
+	});
+
+	// SIO-1678: eu-oit-prd answered every prompt `complete` + "" for two hours
+	// while its model calls 403'd; the console wrapped the nothing as evidence.
+	test("an empty completed reply is reported as not answered, never wrapped as evidence", async () => {
+		const hub = scriptedHub({ reply: "" });
+		const { byName } = toolsFor(hub);
+		const out = (await byName.get("fleet_await_reply")?.invoke({ estate: "eu-oit-prd", msgId: "m1" })) as string;
+		expect(out).toContain("Empty reply from eu-oit-prd");
+		expect(out).toContain("not answered");
+		expect(out).not.toContain("<untrusted-spoke-reply");
+	});
+
+	test("an error reply carries the hub's reason so the operator learns why", async () => {
+		const hub = scriptedHub({
+			replyStatus: "error",
+			replyError: "agent run error: AccessDeniedException: Model access is denied",
+		});
+		const { byName } = toolsFor(hub);
+		const out = (await byName.get("fleet_await_reply")?.invoke({ estate: "eu-oit-prd", msgId: "m1" })) as string;
+		expect(out).toContain("status: error");
+		expect(out).toContain("not reached");
+		// The reason is spoke-extension-authored text: it crosses the boundary fenced.
+		expect(out).toContain('<untrusted-spoke-reply origin="error:eu-oit-prd">');
+		expect(out).toContain("AccessDeniedException");
+	});
+
+	test("the hub's empty_reply token is rendered in plain words, not as a bare code", async () => {
+		const hub = scriptedHub({ replyStatus: "error", replyError: "empty_reply" });
+		const { byName } = toolsFor(hub);
+		const out = (await byName.get("fleet_await_reply")?.invoke({ estate: "eu-oit-prd", msgId: "m1" })) as string;
+		expect(out).toContain("completed the turn with no text");
+		expect(out).not.toContain("<untrusted-spoke-reply");
+	});
+
+	test("a structured reply that is JSON null is empty, a literal string null is an answer", async () => {
+		const nul = toolsFor(scriptedHub({ reply: null }));
+		const outNull = (await nul.byName
+			.get("fleet_await_reply")
+			?.invoke({ estate: "eu-oit-prd", msgId: "m1" })) as string;
+		expect(outNull).toContain("Empty reply from eu-oit-prd");
+		const str = toolsFor(scriptedHub({ reply: "null" }));
+		const outStr = (await str.byName.get("fleet_await_reply")?.invoke({ estate: "eu-oit-prd", msgId: "m1" })) as string;
+		expect(outStr).toContain("<untrusted-spoke-reply");
+		expect(outStr).toContain("null");
 	});
 
 	test("fleet_inbox wraps message bodies too (spoke and operator prose)", async () => {

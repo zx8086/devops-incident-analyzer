@@ -4,14 +4,18 @@ import type { Finding } from "../report.ts";
 import type { MonitorState } from "../state.ts";
 import type { AwsClient } from "./alarms.ts";
 
+// SIO-1680: the fleet default is an absolute $100 gate with the percentage
+// filter off (pct 0 disables it). The monitor reads env overrides against these.
+export const COST_DEFAULTS = { pct: 0, abs: 100 } as const;
+
 export async function checkCost(
 	client: AwsClient,
 	state: MonitorState,
 	opts: { now?: Date; pct?: number; abs?: number } = {},
 ): Promise<Finding[]> {
 	const now = opts.now ?? new Date();
-	const pct = opts.pct ?? 20;
-	const abs = opts.abs ?? 1;
+	const pct = opts.pct ?? COST_DEFAULTS.pct;
+	const abs = opts.abs ?? COST_DEFAULTS.abs;
 
 	const end = now.toISOString().slice(0, 10); // exclusive
 	const start = new Date(now.getTime() - 15 * 86_400_000).toISOString().slice(0, 10);
@@ -36,8 +40,9 @@ export async function checkCost(
 	if (baseline === null) return [];
 
 	// Alert only when over by BOTH thresholds: pct filters noise on small
-	// accounts, abs filters noise on near-zero baselines.
-	const overPct = latest.usd > baseline * (1 + pct / 100);
+	// accounts, abs filters noise on near-zero baselines. A pct of 0 or less
+	// turns the percentage gate off explicitly, so abs alone decides (SIO-1680).
+	const overPct = pct <= 0 || latest.usd > baseline * (1 + pct / 100);
 	const overAbs = latest.usd > baseline + abs;
 	if (!(overPct && overAbs)) return [];
 
@@ -49,7 +54,8 @@ export async function checkCost(
 			family: "cost",
 			severity: "warn",
 			resource: "account",
-			summary: `Spend ${yesterday} was $${latest.usd.toFixed(2)} vs 14d baseline $${baseline.toFixed(2)} (+${((latest.usd / baseline - 1) * 100).toFixed(0)} pct)`,
+			// A zero baseline (fresh account) has no meaningful percentage.
+			summary: `Spend ${yesterday} was $${latest.usd.toFixed(2)} vs 14d baseline $${baseline.toFixed(2)}${baseline > 0 ? ` (+${((latest.usd / baseline - 1) * 100).toFixed(0)} pct)` : " (no prior spend)"}`,
 			dedup_key: key,
 			evidence: { date: yesterday, usd: latest.usd, baseline },
 			at: now.toISOString(),

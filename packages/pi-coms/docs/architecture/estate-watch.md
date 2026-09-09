@@ -57,7 +57,7 @@ itself is failing. Our mapping:
 | T0 | Can I even see? Self-check before estate-check; a watch that silently loses access reports "all quiet" forever | Identity gate: `sts:GetCallerIdentity` vs `AWS_ACCOUNT_ID`, first in every cycle; critical on mismatch/denial and the cycle's checks are skipped. Capability canary = the bundle version in the daily digest | every cycle, first |
 | T1 | Signal sweep: ride the platform team's alarm thresholds; Health events; core workload heartbeat | Alarms check (transitions only), drift/status checks; log error patterns | 15 min (`*/15`) |
 | T2 | Find the outlier and the silence without enumerating | Ingestion heartbeat: Metrics Insights `IncomingLogEvents` per group vs a same-hour-of-day 7-day median -- a service whose log volume drops to zero has stopped logging or stopped running | hourly (`7 * * * *`) |
-| T3 | Baseline and drift: audit trail alive, security findings, scary writes, spend | Cost anomaly (both +20% and +$1), trail status (`IsLogging`), cert expiry (<30 d warn, <7 d critical), CloudTrail write watchlist (StopLogging, SG ingress, IAM edits...) | daily (`@daily`) |
+| T3 | Baseline and drift: audit trail alive, security findings, scary writes, spend | Cost anomaly (over the 14-day baseline by more than $100, SIO-1680), trail status (`IsLogging`), cert expiry (<30 d warn, <7 d critical), CloudTrail write watchlist (StopLogging, SG ingress, IAM edits...) | daily (`@daily`) |
 | T4 | Deep audit: network-path walks, IAM parity, retention posture | **Deferred** -- earned only once the false-positive rate of T0-T3 settles | -- |
 
 Also deferred: Metrics Insights top-N fleet outliers (T2 doctrine; small

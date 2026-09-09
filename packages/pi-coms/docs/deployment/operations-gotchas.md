@@ -83,6 +83,25 @@ remove an entry when the underlying behavior changes.
   bounces the agent (systemd recovers). Nested attach is refused from
   inside a local Herdr session.
 
+- **A spoke that is `online` and answers every prompt within about 200 ms is a
+  spoke whose model call fails.** Before SIO-1678 the extension posted the
+  failed run's empty text as a `complete` reply, so the hub, `fleet status` and
+  the monitor all looked healthy while schema-free prompts came back blank and
+  investigations read `response not valid JSON`. First check CloudWatch
+  `AWS/Bedrock` `InvocationClientErrors` for the spoke's model id in that
+  account, then the newest Pi session jsonl on the host
+  (`/home/piagent/.pi/agent/sessions/*/*.jsonl`, grep `"stopReason":"error"`)
+  for the provider message. Seen 2026-09-09 on eu-oit-prd:
+  `AccessDeniedException ... aws-marketplace:Subscribe` because account
+  762715229080 had no Bedrock model agreement for Haiku 4.5 (`aws bedrock
+  get-foundation-model-availability --model-id
+  anthropic.claude-haiku-4-5-20251001-v1:0` showed `agreementAvailability
+  NOT_AVAILABLE`); an admin accepted it with `aws bedrock
+  create-foundation-model-agreement`. A model swap needs that agreement in EVERY
+  spoke account, not just the one the analyzer runs in. Since SIO-1678 such a
+  turn is answered `status: error` with the provider message, and a blank reply
+  is stored by the hub as `error: empty_reply`.
+
 ## Monitor
 
 - Quiet cycles log nothing to journalctl. The sqlite journal
