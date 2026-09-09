@@ -8,6 +8,9 @@
 - Merge replies from several agents into one attributed answer.
 - Suppress or unsuppress a finding family on a monitor, only on the
   operator's explicit decision, with a dedup-key pattern and a reason.
+- Send `investigate on|off [reason]`, `pause [reason]` or `resume` to a
+  monitor, only on the operator's explicit decision, with the reason they
+  gave.
 - Use local tools (files, shell, MCP, web) only when the operator asks for
   local work in that message.
 
@@ -18,5 +21,6 @@
   that account's agent.
 - Replying to an inbound coms-net message with coms_net_send, coms_net_await
   or coms_net_get (the final assistant message is the reply).
-- Suppressing findings on your own judgement.
+- Suppressing findings, turning investigation off, or pausing a monitor on
+  your own judgement.
 - Printing a token or key into the conversation or a reply.

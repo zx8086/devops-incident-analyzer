@@ -39,6 +39,7 @@ import {
 	readControls,
 } from "./monitor/controls.ts";
 import { errorMessage } from "./monitor/errors.ts";
+import { formatHistory, parseHistoryArgs } from "./monitor/history.ts";
 import {
 	DIAGNOSIS_RESPONSE_SCHEMA,
 	type Diagnosis,
@@ -545,9 +546,10 @@ function main(): void {
 		}
 		if (cmd === "digest") return buildDigest();
 		if (cmd === "review") return buildSuppressionReview();
-		if (cmd.startsWith("history")) {
-			const rows = state.journalRows(7 * 86_400_000, "finding").slice(-20);
-			return rows.length === 0 ? "no findings in the last 7 days" : rows.map((r) => `${r.ts} ${r.payload}`).join("\n");
+		if (cmd === "history" || cmd.startsWith("history ")) {
+			const query = parseHistoryArgs(raw.slice("history".length));
+			if ("error" in query) return query.error;
+			return formatHistory(state.journalRows(7 * 86_400_000, "finding"), query);
 		}
 		if (cmd === "suppressions") {
 			const rows = state.listSuppressions();
@@ -574,7 +576,7 @@ function main(): void {
 			state.addSuppression(pattern, reason);
 			return `suppressed: ${pattern} (${reason})`;
 		}
-		return "unknown command. available: run-checks, status, digest, review, history, suppressions, suppress <pattern> | <reason>, unsuppress <pattern>, investigate on|off [reason], pause [reason], resume";
+		return "unknown command. available: run-checks, status, digest, review, history, suppressions, suppress <pattern> | <reason>, unsuppress <pattern>, investigate on|off [reason], pause [reason], resume. history takes [count<=200] [info|warn|critical] [family]";
 	};
 
 	void (async () => {

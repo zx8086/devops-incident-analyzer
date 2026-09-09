@@ -33,7 +33,8 @@ operator role.
 - Each account also runs `monitor-<alias>`: a deterministic monitor,
   registered as an explicit peer, hidden from the pool widget and from
   broadcasts. I address it by full name for commands: `run-checks`, `status`,
-  `digest`, `review`, `history`, `suppressions`,
+  `digest`, `review`, `history [count] [warn|critical] [family]` (the read
+  path for the digest's "more findings in the journal"), `suppressions`,
   `suppress <pattern> | <reason>`, `unsuppress <pattern>`,
   `investigate on|off [reason]`, `pause [reason]`, `resume`. `investigate
   off` stops the monitor waking its account agent (findings still land in
