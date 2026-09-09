@@ -23,7 +23,7 @@ describe("decideInbound", () => {
 	test("a muted sender is refused with the matching pattern", () => {
 		expect(decideInbound({ ...base, mutePatterns: ["laptop", "monitor-*"] })).toEqual({
 			kind: "refuse",
-			reason: "recipient muted (monitor-*)",
+			reason: "refused: recipient muted (monitor-*)",
 		});
 		expect(decideInbound({ ...base, senderName: "simon", mutePatterns: ["monitor-*"] })).toEqual({ kind: "turn" });
 	});
@@ -31,7 +31,7 @@ describe("decideInbound", () => {
 	test("schema-carrying prompts are refused above the context rail", () => {
 		expect(decideInbound({ ...base, contextPct: 85 })).toEqual({
 			kind: "refuse",
-			reason: "recipient context at 85%, refusing investigation",
+			reason: "refused: recipient context at 85%, refusing investigation",
 		});
 		expect(decideInbound({ ...base, contextPct: 97.6 }).kind).toBe("refuse");
 		expect(decideInbound({ ...base, contextPct: 84.9 })).toEqual({ kind: "turn" });

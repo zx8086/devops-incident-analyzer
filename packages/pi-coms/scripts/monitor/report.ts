@@ -213,10 +213,15 @@ export function formatDigest(d: DigestInput): string {
 	const total = Object.values(d.findingCounts).reduce((a, b) => a + b, 0);
 	// A green digest produced while checks errored is a lie: degradation is
 	// the headline, not a line item.
-	const header = d.paused
-		? `[warn] aws-${d.accountId} daily digest PAUSED: check cycles skipped since ${d.paused.since}${d.paused.reason ? ` (${d.paused.reason})` : ""}; send "resume" to the monitor`
-		: d.checkErrors > 0
-			? `[warn] aws-${d.accountId} daily digest DEGRADED: ${d.checkErrors} check error(s) (since ${d.since})`
+	// Pause and degradation are independent; both belong in the headline.
+	const pausedNote = d.paused
+		? `PAUSED: check cycles skipped since ${d.paused.since}${d.paused.reason ? ` (${d.paused.reason})` : ""}; send "resume" to the monitor`
+		: "";
+	const degradedNote = d.checkErrors > 0 ? `DEGRADED: ${d.checkErrors} check error(s) (since ${d.since})` : "";
+	const notes = [pausedNote, degradedNote].filter(Boolean);
+	const header =
+		notes.length > 0
+			? `[warn] aws-${d.accountId} daily digest ${notes.join("; ")}`
 			: `[info] aws-${d.accountId} daily digest (since ${d.since})`;
 	const lines: string[] = [header, ""];
 	if (total === 0) {

@@ -26,6 +26,24 @@ describe("investigationUsage", () => {
 		expect(u.attemptsFor("b")).toBe(1);
 		expect(u.attemptsFor("c")).toBe(0);
 	});
+
+	test("refusals do not count: a muted spoke cannot burn the budget", () => {
+		const refused = {
+			payload: JSON.stringify({ resources: ["a"], dedup_keys: [], count: 1, target: "t", outcome: "refused" }),
+		};
+		const timedOut = {
+			payload: JSON.stringify({ resources: ["a"], dedup_keys: [], count: 1, target: "t", outcome: "timeout" }),
+		};
+		const u = investigationUsage([refused, refused, timedOut, rec(["a"])]);
+		expect(u.used).toBe(2);
+		expect(u.attemptsFor("a")).toBe(2);
+	});
+
+	test("legacy rows without an outcome still count", () => {
+		const u = investigationUsage([rec(["a", "b"])]);
+		expect(u.used).toBe(1);
+		expect(u.attemptsFor("a")).toBe(1);
+	});
 });
 
 describe("planInvestigation", () => {

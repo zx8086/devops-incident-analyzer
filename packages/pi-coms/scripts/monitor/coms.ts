@@ -246,6 +246,7 @@ export class MonitorComs {
 			...(opts.ttl_ms ? { ttl_ms: opts.ttl_ms } : {}),
 		});
 		if (opts.expectReply !== false) this.pending.register(resp.msg_id);
+		else this.pending.ignore(resp.msg_id);
 		return { msg_id: resp.msg_id, status: resp.status };
 	}
 

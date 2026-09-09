@@ -5,10 +5,22 @@ import type { Finding } from "./report.ts";
 // A noisy source (one application log group emitting new error signatures
 // every cycle) can otherwise buy an unbounded number of turns a day; the
 // budget bounds the cost per account regardless of what the checks find
-// (SIO-1673). Counts are ATTEMPTS, so a failing agent cannot keep the cap
-// from filling.
+// (SIO-1673). Counts are ATTEMPTS the agent spent a turn on: a failed or
+// timed-out diagnosis still counts, a refusal (the spoke answered without a
+// turn: muted, or its context rail) does not, or a muted spoke would burn the
+// whole daily budget on instant refusals.
 
-export type InvestigationRecord = { resources: string[]; dedup_keys: string[]; count: number; target: string };
+export type InvestigationOutcome = "diagnosed" | "failed" | "timeout" | "refused";
+
+export type InvestigationRecord = {
+	resources: string[];
+	dedup_keys: string[];
+	count: number;
+	target: string;
+	outcome: InvestigationOutcome;
+};
+
+export const REFUSED_PREFIX = "refused:";
 
 export type InvestigationUsage = { used: number; attemptsFor: (resource: string) => number };
 
@@ -22,6 +34,7 @@ export function investigationUsage(rows: { payload: string }[]): InvestigationUs
 		} catch {
 			continue;
 		}
+		if ((rec as { outcome?: unknown }).outcome === "refused") continue;
 		used++;
 		const resources = (rec as { resources?: unknown }).resources;
 		if (!Array.isArray(resources)) continue;

@@ -11,7 +11,14 @@ import { EC2Client } from "@aws-sdk/client-ec2";
 import { LambdaClient } from "@aws-sdk/client-lambda";
 import { RDSClient } from "@aws-sdk/client-rds";
 import { STSClient } from "@aws-sdk/client-sts";
-import { type BudgetLimits, investigationUsage, planInvestigation } from "./monitor/budget.ts";
+import {
+	type BudgetLimits,
+	type InvestigationOutcome as BudgetOutcome,
+	type InvestigationRecord,
+	investigationUsage,
+	planInvestigation,
+	REFUSED_PREFIX,
+} from "./monitor/budget.ts";
 import { checkAlarms } from "./monitor/checks/alarms.ts";
 import { certRegions, checkCerts } from "./monitor/checks/certs.ts";
 import { checkCost } from "./monitor/checks/cost.ts";
@@ -67,9 +74,17 @@ const INVESTIGATE_DEFAULT = envInvestigateDefault(process.env.PI_MONITOR_INVESTI
 // Every investigation is a full model turn on the account agent: cap prompts
 // per rolling day, and per resource, so one noisy source cannot buy unbounded
 // turns (72 warn findings on one log group in a day was observed, SIO-1673).
+// A malformed value must not switch the rail off (NaN compares false) or
+// jam it shut (empty string is 0): anything but a non-negative integer keeps
+// the default.
+export function envCount(value: string | undefined, fallback: number): number {
+	if (value === undefined || value.trim() === "") return fallback;
+	const n = Number(value);
+	return Number.isInteger(n) && n >= 0 ? n : fallback;
+}
 const INVESTIGATE_BUDGET: BudgetLimits = {
-	perDay: Number(process.env.PI_MONITOR_INVESTIGATE_BUDGET_PER_DAY ?? 24),
-	perResourcePerDay: Number(process.env.PI_MONITOR_INVESTIGATE_PER_RESOURCE_PER_DAY ?? 3),
+	perDay: envCount(process.env.PI_MONITOR_INVESTIGATE_BUDGET_PER_DAY, 24),
+	perResourcePerDay: envCount(process.env.PI_MONITOR_INVESTIGATE_PER_RESOURCE_PER_DAY, 3),
 };
 const DAY_MS = 86_400_000;
 
@@ -295,14 +310,19 @@ function main(): void {
 
 	const investigate = async (findings: Finding[], prior: string): Promise<InvestigationOutcome> => {
 		if (!controls.investigate) return { diagnoses: null, failure: investigationDisabledFailure(controls) };
-		// Journaled as an attempt before the send so the budget fills even when
-		// the agent fails or the hub drops the message.
-		state.journal("investigation", {
-			resources: [...new Set(findings.map((f) => f.resource))],
-			dedup_keys: findings.map((f) => f.dedup_key),
-			count: findings.length,
-			target: INVESTIGATE_TARGET,
-		});
+		// Journaled with its outcome once the reply is in: the budget counts
+		// turns the agent spent (failed and timed-out ones included), never a
+		// refusal it answered without a turn.
+		const record = (outcome: BudgetOutcome): void => {
+			const row: InvestigationRecord = {
+				resources: [...new Set(findings.map((f) => f.resource))],
+				dedup_keys: findings.map((f) => f.dedup_key),
+				count: findings.length,
+				target: INVESTIGATE_TARGET,
+				outcome,
+			};
+			state.journal("investigation", row);
+		};
 		const prompt = [
 			`You are the read-only devops agent for AWS account ${ACCOUNT_ID}. The account monitor detected these findings; investigate with your AWS tools and diagnose each one.`,
 			'Reply ONLY with JSON matching the response schema: an object {"diagnoses": [...]} with one entry per dedup_key.',
@@ -316,10 +336,21 @@ function main(): void {
 				response_schema: DIAGNOSIS_RESPONSE_SCHEMA,
 			});
 			const reply = await coms.awaitReply(sent.msg_id, investigateBudgetMs(findings.length));
-			if (reply.error) return { diagnoses: null, failure: `agent reply error: ${reply.error}` };
-			if (reply.response == null) return { diagnoses: null, failure: "agent reply empty" };
+			if (reply.error) {
+				const refused = reply.error.startsWith(REFUSED_PREFIX);
+				record(refused ? "refused" : reply.error === "timeout" ? "timeout" : "failed");
+				return { diagnoses: null, failure: `agent reply error: ${reply.error}` };
+			}
+			if (reply.response == null) {
+				record("failed");
+				return { diagnoses: null, failure: "agent reply empty" };
+			}
 			const diagnoses = parseDiagnoses(reply.response);
-			if (!diagnoses) return { diagnoses: null, failure: "agent reply did not match the diagnosis schema" };
+			if (!diagnoses) {
+				record("failed");
+				return { diagnoses: null, failure: "agent reply did not match the diagnosis schema" };
+			}
+			record("diagnosed");
 			return { diagnoses, failure: null };
 		} catch (e) {
 			return { diagnoses: null, failure: `send to ${INVESTIGATE_TARGET} failed: ${errorMessage(e)}` };

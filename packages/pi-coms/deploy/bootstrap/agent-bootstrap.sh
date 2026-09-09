@@ -360,7 +360,7 @@ Type=simple
 User=$AGENT_USER
 WorkingDirectory=$AGENT_HOME/pi-coms
 Environment=HOME=$AGENT_HOME
-ExecStart=/bin/bash -c 'source \$HOME/.coms-env && { [ -f \$HOME/.coms-env.local ] && source \$HOME/.coms-env.local; }; exec \$HOME/.bun/bin/bun scripts/coms-net-monitor.ts'
+ExecStart=/bin/bash -c 'source \$HOME/.coms-env && { [ ! -f \$HOME/.coms-env.local ] || source \$HOME/.coms-env.local; } && exec \$HOME/.bun/bin/bun scripts/coms-net-monitor.ts'
 Restart=always
 RestartSec=10
 
@@ -450,13 +450,19 @@ fi
 # Workspace env is inherited by every pane, so Pi sees the hub URL, token, and
 # provider keys. Forward every export from .coms-env and the local overrides.
 ENV_ARGS=()
+# The local file is hand-written: a line may lack a trailing newline, sit
+# inside a conditional that did not fire, or name a variable that is not
+# set. Forward only names that are actually set (set -u is on), and read the
+# last line even without its newline.
 for env_file in "$HOME/.coms-env" "$HOME/.coms-env.local"; do
   [ -f "$env_file" ] || continue
-  while IFS= read -r line; do
+  while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       "export "*)
         key="${line#export }"
         key="${key%%=*}"
+        [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        [ -n "${!key+x}" ] || continue
         ENV_ARGS+=(--env "$key=${!key}")
         ;;
     esac

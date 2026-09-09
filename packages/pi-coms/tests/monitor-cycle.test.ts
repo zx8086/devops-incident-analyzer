@@ -1,6 +1,6 @@
 // tests/monitor-cycle.test.ts
 import { describe, expect, test } from "bun:test";
-import { type CycleDeps, investigateBudgetMs, makeGuard, runCycle } from "../scripts/coms-net-monitor.ts";
+import { type CycleDeps, envCount, investigateBudgetMs, makeGuard, runCycle } from "../scripts/coms-net-monitor.ts";
 import type { Finding } from "../scripts/monitor/report.ts";
 import { MonitorState } from "../scripts/monitor/state.ts";
 
@@ -305,5 +305,20 @@ describe("investigation budget (SIO-1673)", () => {
 		}
 		await runCycle(d);
 		expect(count).toBe(1);
+	});
+});
+
+describe("envCount", () => {
+	test("keeps the default for unset, empty, non-numeric, negative and fractional values", () => {
+		expect(envCount(undefined, 24)).toBe(24);
+		expect(envCount("", 24)).toBe(24);
+		expect(envCount("24/day", 24)).toBe(24);
+		expect(envCount("-1", 24)).toBe(24);
+		expect(envCount("2.5", 24)).toBe(24);
+	});
+
+	test("accepts a plain non-negative integer, zero included", () => {
+		expect(envCount("0", 24)).toBe(0);
+		expect(envCount(" 12 ", 24)).toBe(12);
 	});
 });

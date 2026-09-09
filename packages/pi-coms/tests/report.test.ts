@@ -400,4 +400,20 @@ describe("SIO-1673 report markers", () => {
 			'[warn] aws-123 daily digest PAUSED: check cycles skipped since 2026-09-09T10:00:00Z (context storm); send "resume" to the monitor',
 		);
 	});
+
+	test("a paused AND degraded digest keeps both in the headline", () => {
+		const text = formatDigest({
+			accountId: "123",
+			since: "2026-09-08T00:00:00Z",
+			findingCounts: {},
+			checkErrors: 2,
+			activeAlarms: [],
+			yesterdayUsd: null,
+			baselineUsd: null,
+			paused: { reason: "", since: "2026-09-09T10:00:00Z" },
+		});
+		const head = text.split("\n")[0];
+		expect(head).toContain("PAUSED: check cycles skipped since 2026-09-09T10:00:00Z;");
+		expect(head).toContain("DEGRADED: 2 check error(s)");
+	});
 });

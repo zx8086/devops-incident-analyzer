@@ -52,4 +52,25 @@ describe("PendingReplies", () => {
 		// x was evicted as the oldest early reply, so nothing is adopted.
 		expect(p.earlySize()).toBe(2);
 	});
+
+	test("a reply for an ignored id (fire-and-forget) or a finished await is dropped, not parked", async () => {
+		const p = new PendingReplies();
+		p.ignore("report-1");
+		expect(p.resolve("report-1", { response: "ack" })).toBe(false);
+		expect(p.earlySize()).toBe(0);
+		p.register("m5");
+		expect((await p.await("m5", 20)).error).toBe("timeout");
+		expect(p.resolve("m5", { response: "late" })).toBe(false);
+		expect(p.earlySize()).toBe(0);
+	});
+
+	test("await clears its timer so an early reply does not hold the process for the budget", async () => {
+		const p = new PendingReplies();
+		p.register("m6");
+		const started = Date.now();
+		const waiting = p.await("m6", 60_000);
+		p.resolve("m6", { response: "fast" });
+		expect((await waiting).response).toBe("fast");
+		expect(Date.now() - started).toBeLessThan(1_000);
+	});
 });

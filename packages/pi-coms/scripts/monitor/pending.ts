@@ -17,6 +17,10 @@ type Entry = {
 export class PendingReplies {
 	private pending = new Map<string, Entry>();
 	private early = new Map<string, ReplyResult>();
+	// Ids whose reply nobody will consume: fire-and-forget sends and awaits
+	// that already returned. Their frames are dropped instead of parked, so
+	// `early` holds only replies that genuinely beat register().
+	private ignored = new Set<string>();
 	private cap: number;
 
 	constructor(cap = 200) {
@@ -39,7 +43,13 @@ export class PendingReplies {
 		this.evict(this.pending);
 	}
 
-	// true when a registered entry consumed the reply; false when it was parked.
+	ignore(msgId: string): void {
+		this.ignored.add(msgId);
+		this.evictSet(this.ignored);
+	}
+
+	// true when a registered entry consumed the reply; false when it was
+	// parked or dropped.
 	resolve(msgId: string, result: ReplyResult): boolean {
 		const entry = this.pending.get(msgId);
 		if (entry) {
@@ -47,6 +57,7 @@ export class PendingReplies {
 			entry.resolve(result);
 			return true;
 		}
+		if (this.ignored.has(msgId)) return false;
 		this.early.set(msgId, result);
 		this.evict(this.early);
 		return false;
@@ -54,15 +65,25 @@ export class PendingReplies {
 
 	async await(msgId: string, timeoutMs: number): Promise<ReplyResult> {
 		const entry = this.pending.get(msgId);
-		if (entry?.result) {
+		try {
+			if (entry?.result) return entry.result;
+			const local = entry ? entry.promise : new Promise<never>(() => {});
+			// A plain timer, cleared on the way out: a Bun.sleep race would keep
+			// the process alive for the whole budget (up to 30 min) after an
+			// early reply.
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const timeout = new Promise<ReplyResult>((res) => {
+				timer = setTimeout(() => res({ error: "timeout" }), timeoutMs);
+			});
+			try {
+				return await Promise.race([local, timeout]);
+			} finally {
+				if (timer !== undefined) clearTimeout(timer);
+			}
+		} finally {
 			this.pending.delete(msgId);
-			return entry.result;
+			this.ignore(msgId);
 		}
-		const local = entry ? entry.promise : new Promise<never>(() => {});
-		const timeout = Bun.sleep(timeoutMs).then(() => ({ error: "timeout" as const }));
-		const winner = await Promise.race([local, timeout]);
-		this.pending.delete(msgId);
-		return winner;
 	}
 
 	size(): number {
@@ -78,6 +99,14 @@ export class PendingReplies {
 			const oldest = map.keys().next().value;
 			if (oldest === undefined) break;
 			map.delete(oldest);
+		}
+	}
+
+	private evictSet(set: Set<string>): void {
+		while (set.size > this.cap) {
+			const oldest = set.values().next().value;
+			if (oldest === undefined) break;
+			set.delete(oldest);
 		}
 	}
 }
