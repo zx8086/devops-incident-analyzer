@@ -342,6 +342,53 @@ resource "aws_iam_policy" "pi_coms_extensions" {
         ]
         Resource = "*"
       }],
+      // Drift and compliance reads (SIO-1674): the fleet's "drift in the last
+      // 24h" question came back "CloudFormation drift NOT_CHECKED on every
+      // stack" and "Config compliance denied". Detecting stack drift starts an
+      // evaluation and changes no resource: the service authorization
+      // reference classifies DetectStackDrift, DetectStackResourceDrift and
+      // DetectStackSetDrift as non-write. Everything else here is Describe/
+      // Get/List/Select. Upstream candidate alongside the others.
+      [{
+        Sid    = "DriftAndComplianceReads"
+        Effect = "Allow"
+        Action = [
+          "cloudformation:DetectStackDrift",
+          "cloudformation:DetectStackResourceDrift",
+          "cloudformation:DescribeStackDriftDetectionStatus",
+          "cloudformation:GetStackPolicy",
+          "cloudformation:ListStackSets",
+          "cloudformation:DescribeStackSet",
+          "cloudformation:ListStackInstances",
+          "cloudformation:DescribeStackInstance",
+          "cloudformation:ListStackSetOperations",
+          "cloudformation:DescribeStackSetOperation",
+          "cloudformation:DetectStackSetDrift",
+          "config:DescribeConfigurationRecorders",
+          "config:DescribeDeliveryChannels",
+          "config:DescribeDeliveryChannelStatus",
+          "config:DescribeConfigRuleEvaluationStatus",
+          "config:DescribeComplianceByResource",
+          "config:GetComplianceDetailsByConfigRule",
+          "config:GetComplianceDetailsByResource",
+          "config:GetComplianceSummaryByConfigRule",
+          "config:GetComplianceSummaryByResourceType",
+          "config:DescribeConformancePacks",
+          "config:DescribeConformancePackCompliance",
+          "config:GetConformancePackComplianceDetails",
+          "config:GetConformancePackComplianceSummary",
+          "config:DescribeRemediationConfigurations",
+          "config:DescribeRemediationExecutionStatus",
+          "config:ListResourceEvaluations",
+          "config:GetResourceEvaluationSummary",
+          "config:DescribeConfigurationAggregators",
+          "config:DescribeAggregationAuthorizations",
+          "config:DescribeAggregateComplianceByConfigRules",
+          "config:GetAggregateComplianceDetailsByConfigRule",
+          "config:SelectAggregateResourceConfig",
+        ]
+        Resource = "*"
+      }],
       // Amplify build history (SIO-1648): a finding on an Amplify app cannot
       // be concluded without knowing whether builds ran. ListJobs/GetJob is
       // the minimum; ListApps finds the app, and app, branch, and webhook

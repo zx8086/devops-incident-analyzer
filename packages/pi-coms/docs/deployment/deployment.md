@@ -63,6 +63,7 @@ analyzer. Their spokes use `readonly_role: adopt`: the rendered root imports
 the role (`import` block), the module keeps the existing trust statements and
 merges in one `TrustLocalPiAgent` statement for the instance role, and attaches
 only the managed `pi-coms-extensions` policy (Cost Explorer, scheduling reads,
+CloudFormation drift detection and AWS Config compliance reads (SIO-1674),
 Bedrock invoke and the explicit Deny on secret values). The analyzer's own
 policies and trust are never replaced. The first `plan` on a production account
 shows the import and that one trust update; review it before `--yes`.
