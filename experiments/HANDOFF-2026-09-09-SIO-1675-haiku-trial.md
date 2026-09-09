@@ -2,13 +2,13 @@
 
 - **Date:** 2026-09-09
 - **Ticket:** [SIO-1675](https://linear.app/siobytes/issue/SIO-1675) (Done by merge automation; the evaluation is still open work)
-- **Parent work:** [SIO-1673](https://linear.app/siobytes/issue/SIO-1673) mute and budget monitor investigations (PR #717, squash `c3263057`); [SIO-1674](https://linear.app/siobytes/issue/SIO-1674) drift and Config reads (PR #716, squash `05aca3b2`)
-- **Repo state:** `main` at `88cd6642` (`docs: bake-off ledger for PR #718`); trial root merged in PR #718, squash `af26bd91`
+- **Parent work:** [SIO-1673](https://linear.app/siobytes/issue/SIO-1673) mute and budget monitor investigations (PR #717, squash `c3263057`); [SIO-1674](https://linear.app/siobytes/issue/SIO-1674) drift and Config reads (PR #716, squash `05aca3b2`); [SIO-1676](https://linear.app/siobytes/issue/SIO-1676) history arguments and same-cause drift batches (PR #719, squash `ecd7aa38`, shipped in bundle `e75cd657` on 2026-09-09 14:12Z)
+- **Repo state:** `main` at `e75cd657` (`docs: bake-off ledger for PR #719`); trial root merged in PR #718, squash `af26bd91`
 - **Suggested branch for follow-up:** `sio-1675-haiku-trial-decision`
 
 ## TL;DR
 
-eu-oit-prd's Pi spoke has run on `eu.anthropic.claude-haiku-4-5-20251001-v1:0` since 2026-09-09 13:35Z on instance `i-0cfa0e49f544e1288` (bundle `58d4ac28`). The other prd spokes stay on the fleet default `eu.anthropic.claude-sonnet-5`. On or after 2026-09-16, compare a week of Bedrock usage and report quality against the Sonnet baseline below and decide: keep on eu-oit-prd, widen to the fleet, or revert. Success is a clear cost reduction with no rise in unparseable or wrong diagnoses.
+eu-oit-prd's Pi spoke has run on `eu.anthropic.claude-haiku-4-5-20251001-v1:0` since 2026-09-09 13:35Z on instance `i-0cfa0e49f544e1288` (bundle `58d4ac28` at launch, `e75cd657` since 14:12Z; all three prd hosts run `e75cd657`). The other prd spokes stay on the fleet default `eu.anthropic.claude-sonnet-5`. On or after 2026-09-16, compare a week of Bedrock usage and report quality against the Sonnet baseline below and decide: keep on eu-oit-prd, widen to the fleet, or revert. Success is a clear cost reduction with no rise in unparseable or wrong diagnoses.
 
 ## Context: how this ticket came to be
 
@@ -73,6 +73,11 @@ const COMPACT_ABOVE_TOKENS = Number(process.env.PI_COMS_NET_COMPACT_ABOVE_TOKENS
 ```
 
 Note for the comparison: Haiku's 200K window means Pi's own compaction also fires at about 184K tokens, and the extension compacts after investigation turns past 150K, so the Haiku spoke will compact more often than the Sonnet spokes. That is expected and is part of what makes it cheaper.
+
+SIO-1676 changed two things the evaluation touches, both live in `e75cd657` on every prd host since 2026-09-09 14:12Z:
+
+- **Drift findings batch.** Instances that appear, change state the same way, or disappear together in one cycle are ONE finding with `resource: ec2:batch` and dedup key `drift:batch:<new|state:<to>|gone>:<minute>` (`packages/pi-coms/scripts/monitor/checks/drift.ts`, `batchOrSingle`). Finding and investigation counts after 14:12Z are therefore not comparable with the 85-drift-findings day on eu-mendix-platform-prd; a node-pool replacement is now one report line and one investigation, and the batch resource falls under the per-resource cap (3 a day). When counting invalid-JSON or schema-mismatch markers, count per report, not per instance.
+- **`history` takes arguments.** `history [count<=200] [info|warn|critical] [family]` (`packages/pi-coms/scripts/monitor/history.ts`) is the read path for the digest's "+N more warn+ finding(s) in the journal", and the way to pull the Haiku spoke's diagnoses for the spot-check in step 4: send `history 50 warn` to `monitor-eu-oit-prd` and read the `diagnosis` field of each journaled finding. The console persona now knows this (`agents/pi-fleet/RULES.md`, regenerated `packages/pi-coms/AGENTS.md`), and the spoke persona diagnoses a batch once under the batch key (`agents/pi-fleet/agents/aws-spoke/RULES.md`).
 
 ## The evaluation (step by step)
 
@@ -201,6 +206,7 @@ MSG
 |---|---|---|
 | Haiku replies are not bare JSON, reports show `response not valid JSON` | medium | step 2 counts it; revert if sustained |
 | Comparison confounded by the SIO-1673 budget (fewer prompts on every spoke) | high | compare per-invocation cache figures and the two Sonnet spokes over the same week |
+| Finding counts confounded by SIO-1676 drift batching from 14:12Z on | certain | compare per-report markers, not per-finding; treat `ec2:batch` findings as one event each |
 | A `fleet apply` from a stale checkout reverts the model (instance churn) | low after #718 | the root is committed; pull main before any fleet apply |
 | Render writes a placeholder hub token | high if rendered without `tokens ensure` | diff tfvars against the main checkout before planning; plan must not touch `aws_ssm_parameter.coms_token` |
 | Replacement loses monitor state | certain on any replacement | re-send suppressions; fingerprints reset so expect a first-cycle re-alert burst, bounded by the budget |
@@ -208,7 +214,7 @@ MSG
 
 ## Out of scope
 
-- Changing the logs check's per-signature re-alert or per-group caps (`packages/pi-coms/scripts/monitor/checks/logs.ts`); SIO-1673 deliberately left the noise source alone.
+- Changing the logs check's per-signature re-alert or per-group caps (`packages/pi-coms/scripts/monitor/checks/logs.ts`); SIO-1673 deliberately left the noise source alone (the drift check's equivalent WAS done, SIO-1676).
 - Moving the monitor state db to a persistent volume.
 - Any other spoke's model.
 
@@ -216,6 +222,8 @@ MSG
 
 - `packages/pi-coms/scripts/fleet.ts:166-183` `runPublish` (`--hub <key>`), `:248-288` `runRollout` (needs the hub token in the env named by the hub's `token_env`; its poll waits on spokes that go offline mid-run)
 - `packages/pi-coms/scripts/monitor/budget.ts` `investigationUsage` / `planInvestigation` (refused rows do not count)
+- `packages/pi-coms/scripts/monitor/history.ts` `parseHistoryArgs` / `formatHistory` (SIO-1676)
+- `packages/pi-coms/scripts/monitor/checks/drift.ts` `batchOrSingle` and the `drift:batch:*` keys (SIO-1676); suppress a batch family with `drift:batch:gone:%`
 - `packages/pi-coms/scripts/monitor/controls.ts` `investigate on|off`, `pause`, `resume` (persisted in the state db, lost on replacement)
 - `packages/pi-coms/extensions/inboundPolicy.ts` `decideInbound` (refusal reasons start with `refused:`)
 - `packages/pi-coms/docs/architecture/monitoring.md` "Investigation budget and operator controls (SIO-1673)"
