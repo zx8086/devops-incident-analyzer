@@ -1079,3 +1079,15 @@ Twenty-two files under `packages/pi-coms` plus the persona: a monitor client rep
 1. *The local review earned its keep on the bash, not the TypeScript.* Every reproduced defect was in `agent-bootstrap.sh`: indirect expansion, `;` versus `&&`, `read -r` and the missing newline. Typecheck, Biome and 296 passing tests said nothing about any of them. Shell that reads an operator-written file deserves a repro, not a read-through.
 2. *Two rails from one ticket can fight.* The spoke's instant refusal existed to stop the monitor waiting out its deadline; counting the refused attempt against the monitor's budget would have let a muted spoke exhaust that budget in six hours. The cross-file angle is the one that sees interactions like that.
 3. *Verify the diagnosis live when the host is a command away.* The spoke had already compacted itself (98% to 10%, one compaction entry) by the time the relief ran, which confirmed the 98.4% threshold analysis and made the restart a formality rather than the fix.
+
+## PR #718 detail (SIO-1675, Haiku 4.5 trial on the eu-oit-prd spoke)
+
+One file: the re-rendered eu-oit-prd root's `pi_model` default, so the tracked root agrees with the gitignored manifest override and the next fleet apply does not revert the trial.
+
+**Greptile:** SKIPPED. Thirty-fifth consecutive skip.
+
+**CodeRabbit:** nothing. Thirty-fifth consecutive absence.
+
+**Merge gate:** all five CI jobs green. Merged on the user's explicit instruction. Squash `af26bd91`. Applied before the merge with a plan guard: `Plan: 1 to add, 1 to change, 1 to destroy` (instance replaced for userdata, status alarm re-pointed).
+
+**Takeaway:** *the dangerous diff was in a gitignored file no reviewer sees.* A bare `fleet render` wrote a placeholder hub token into `terraform.tfvars`, and the first plan wanted to rewrite the SSM token parameter alongside the instance. Comparing the rendered inputs with the main checkout's, key by key with values hidden, is what caught it; neither CI nor a bot reads that file.
