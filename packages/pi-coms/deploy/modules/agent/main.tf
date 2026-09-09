@@ -349,6 +349,11 @@ resource "aws_iam_policy" "pi_coms_extensions" {
       // reference classifies DetectStackDrift, DetectStackResourceDrift and
       // DetectStackSetDrift as non-write. Everything else here is Describe/
       // Get/List/Select. Upstream candidate alongside the others.
+      // SIO-1677: CloudFormation reads each stack resource with the caller's
+      // permissions, and Control Tower StackSet stacks are mostly IAM roles;
+      // without these reads detection ends UNKNOWN on "iam:GetRole denied".
+      // Role, policy and instance-profile reads only: no users, no
+      // credentials, no access keys.
       [{
         Sid    = "DriftAndComplianceReads"
         Effect = "Allow"
@@ -386,6 +391,16 @@ resource "aws_iam_policy" "pi_coms_extensions" {
           "config:DescribeAggregateComplianceByConfigRules",
           "config:GetAggregateComplianceDetailsByConfigRule",
           "config:SelectAggregateResourceConfig",
+          "iam:GetRole",
+          "iam:GetRolePolicy",
+          "iam:ListRolePolicies",
+          "iam:ListAttachedRolePolicies",
+          "iam:ListRoleTags",
+          "iam:ListInstanceProfilesForRole",
+          "iam:GetInstanceProfile",
+          "iam:GetPolicy",
+          "iam:GetPolicyVersion",
+          "iam:ListPolicyVersions",
         ]
         Resource = "*"
       }],
