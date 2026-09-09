@@ -11,6 +11,27 @@ import type { AwsClient } from "./alarms.ts";
 
 const BAD_STATES = new Set(["stopped", "stopping", "terminated", "shutting-down"]);
 const OK_STATUS = new Set(["ok", "not-applicable", "initializing"]);
+// Ids named in a batch summary; the full list is in the evidence.
+const SUMMARY_IDS = 10;
+
+// One cause moves many instances at once (a Karpenter node replacement took
+// 85 drift findings and 44 investigations on one account in a day, SIO-1676),
+// so same-transition changes in one cycle collapse into a single finding:
+// one report line, one investigation, and one resource for the budget. A
+// lone change keeps the per-instance shape and dedup key.
+type Change = { id: string; was: string; now: string };
+
+function batchOrSingle(changes: Change[], single: (c: Change) => Finding, batch: (cs: Change[]) => Finding): Finding[] {
+	if (changes.length === 0) return [];
+	if (changes.length === 1) return [single(changes[0] as Change)];
+	return [batch(changes)];
+}
+
+function idList(changes: Change[]): string {
+	const ids = changes.map((c) => c.id);
+	const shown = ids.slice(0, SUMMARY_IDS).join(", ");
+	return ids.length > SUMMARY_IDS ? `${shown} (+${ids.length - SUMMARY_IDS} more)` : shown;
+}
 
 export async function checkDrift(client: AwsClient, state: MonitorState): Promise<Finding[]> {
 	const findings: Finding[] = [];
@@ -28,43 +49,95 @@ export async function checkDrift(client: AwsClient, state: MonitorState): Promis
 	// need no fingerprints; the first run only establishes the baseline.
 	const prev = state.getSnapshot("instances");
 	if (prev !== null) {
+		const added: Change[] = [];
+		const transitions = new Map<string, Change[]>();
+		const gone: Change[] = [];
 		for (const [id, st] of Object.entries(current)) {
 			const was = prev[id];
-			if (was === undefined) {
-				findings.push({
-					family: "drift",
-					severity: "info",
-					resource: id,
-					summary: `New instance ${id} (${st})`,
-					dedup_key: `drift:${id}:new`,
-					evidence: { state: st },
-					at: now,
-				});
-			} else if (was !== st) {
-				findings.push({
-					family: "drift",
-					severity: BAD_STATES.has(st) ? "warn" : "info",
-					resource: id,
-					summary: `Instance ${id} changed state ${was} -> ${st}`,
-					dedup_key: `drift:${id}:state:${st}`,
-					evidence: { from: was, to: st },
-					at: now,
-				});
+			if (was === undefined) added.push({ id, was: "", now: st });
+			else if (was !== st) {
+				const key = `${was}->${st}`;
+				transitions.set(key, [...(transitions.get(key) ?? []), { id, was, now: st }]);
 			}
 		}
 		for (const id of Object.keys(prev)) {
-			if (!(id in current)) {
-				findings.push({
+			if (!(id in current)) gone.push({ id, was: prev[id] ?? "unknown", now: "" });
+		}
+		const stamp = now.slice(0, 16); // minute precision keys one cycle's batch
+
+		findings.push(
+			...batchOrSingle(
+				added,
+				(c) => ({
+					family: "drift",
+					severity: "info",
+					resource: c.id,
+					summary: `New instance ${c.id} (${c.now})`,
+					dedup_key: `drift:${c.id}:new`,
+					evidence: { state: c.now },
+					at: now,
+				}),
+				(cs) => ({
+					family: "drift",
+					severity: "info",
+					resource: "ec2:batch",
+					summary: `${cs.length} new instances in one cycle: ${idList(cs)}`,
+					dedup_key: `drift:batch:new:${stamp}`,
+					evidence: { count: cs.length, instances: cs.map((c) => ({ id: c.id, state: c.now })) },
+					at: now,
+				}),
+			),
+		);
+		for (const [key, cs] of transitions) {
+			const to = cs[0]?.now ?? "";
+			const severity = BAD_STATES.has(to) ? "warn" : "info";
+			findings.push(
+				...batchOrSingle(
+					cs,
+					(c) => ({
+						family: "drift",
+						severity,
+						resource: c.id,
+						summary: `Instance ${c.id} changed state ${c.was} -> ${c.now}`,
+						dedup_key: `drift:${c.id}:state:${c.now}`,
+						evidence: { from: c.was, to: c.now },
+						at: now,
+					}),
+					(batch) => ({
+						family: "drift",
+						severity,
+						resource: "ec2:batch",
+						summary: `${batch.length} instances changed state ${key} in one cycle: ${idList(batch)}`,
+						dedup_key: `drift:batch:state:${to}:${stamp}`,
+						evidence: { count: batch.length, from: batch[0]?.was, to, instances: batch.map((c) => c.id) },
+						at: now,
+					}),
+				),
+			);
+		}
+		findings.push(
+			...batchOrSingle(
+				gone,
+				(c) => ({
 					family: "drift",
 					severity: "warn",
-					resource: id,
-					summary: `Instance ${id} disappeared (was ${prev[id]})`,
-					dedup_key: `drift:${id}:gone`,
-					evidence: { was: prev[id] },
+					resource: c.id,
+					summary: `Instance ${c.id} disappeared (was ${c.was})`,
+					dedup_key: `drift:${c.id}:gone`,
+					evidence: { was: c.was },
 					at: now,
-				});
-			}
-		}
+				}),
+				(cs) => ({
+					family: "drift",
+					severity: "warn",
+					resource: "ec2:batch",
+					summary: `${cs.length} instances disappeared in one cycle: ${idList(cs)}`,
+					dedup_key: `drift:batch:gone:${stamp}`,
+					evidence: { count: cs.length, instances: cs.map((c) => ({ id: c.id, was: c.was })) },
+					at: now,
+				}),
+			),
+		);
 	}
 	state.setSnapshot("instances", current);
 

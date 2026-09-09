@@ -72,3 +72,52 @@ describe("checkDrift", () => {
 		expect(badAgain).toHaveLength(1);
 	});
 });
+
+describe("checkDrift batches (SIO-1676)", () => {
+	const many = (n: number, state: string, prefix = "i-") =>
+		Array.from({ length: n }, (_, i) => ({ id: `${prefix}${i}`, state }));
+
+	test("many instances disappearing in one cycle is one warn finding listing them", async () => {
+		const state = new MonitorState(":memory:");
+		await checkDrift(fakeClient(many(12, "running")), state);
+		const out = await checkDrift(fakeClient([]), state);
+		expect(out).toHaveLength(1);
+		expect(out[0].severity).toBe("warn");
+		expect(out[0].resource).toBe("ec2:batch");
+		expect(out[0].dedup_key).toMatch(/^drift:batch:gone:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+		expect(out[0].summary).toContain("12 instances disappeared in one cycle");
+		expect(out[0].summary).toContain("(+2 more)");
+		expect((out[0].evidence as { instances: unknown[] }).instances).toHaveLength(12);
+	});
+
+	test("same transition on many instances collapses; different transitions stay apart", async () => {
+		const state = new MonitorState(":memory:");
+		await checkDrift(fakeClient([...many(3, "running", "a-"), ...many(2, "stopped", "b-")]), state);
+		const out = await checkDrift(fakeClient([...many(3, "terminated", "a-"), ...many(2, "running", "b-")]), state);
+		const bySummary = out.map((f) => `${f.severity}:${f.summary.split(":")[0]}`).sort();
+		expect(bySummary).toEqual([
+			"info:2 instances changed state stopped->running in one cycle",
+			"warn:3 instances changed state running->terminated in one cycle",
+		]);
+	});
+
+	test("a lone change keeps the per-instance shape and dedup key", async () => {
+		const state = new MonitorState(":memory:");
+		await checkDrift(
+			fakeClient([
+				{ id: "i-1", state: "running" },
+				{ id: "i-2", state: "running" },
+			]),
+			state,
+		);
+		const out = await checkDrift(
+			fakeClient([
+				{ id: "i-2", state: "running" },
+				{ id: "i-3", state: "running" },
+			]),
+			state,
+		);
+		const keys = out.map((f) => f.dedup_key).sort();
+		expect(keys).toEqual(["drift:i-1:gone", "drift:i-3:new"]);
+	});
+});

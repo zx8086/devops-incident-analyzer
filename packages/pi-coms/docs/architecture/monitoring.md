@@ -88,7 +88,7 @@ Every cycle starts with a T0 gate: `sts:GetCallerIdentity` compared against `AWS
 | Identity (gate) | every cycle, first | `GetCallerIdentity`; mismatch or denial critical, recovery info | 24 h re-alert while broken; the gate skip continues even while deduped |
 | Alarms | 15 min | `DescribeAlarms`; transitions into ALARM (critical) / INSUFFICIENT_DATA (info -- nightly scale-to-zero flaps these by design), recovery to OK (info) | Alarm name + state: a still-firing alarm alerts once, and only a state change re-arms it |
 | Log errors | 15 min | `FilterLogEvents` since a per-group watermark, pattern `?ERROR ?Exception`, grouped by a normalized message signature (timestamps, UUIDs, hex, digits, and mixed-alphanumeric ids all collapse); capped at 3 signatures/group and 10 warn findings/cycle, overflow journaled as one info finding. A group denied by the name-scoped log IAM is one info scoping finding, and the scan continues | Group + signature hash; re-alerts after 24 h |
-| Drift/health | 15 min | Instance state changes vs the stored snapshot (stop/terminate = warn), failed status checks | Edge-triggered by the snapshot diff; status-check fingerprints clear on recovery |
+| Drift/health | 15 min | Instance state changes vs the stored snapshot (stop/terminate = warn), failed status checks. Instances that appear, change state the same way, or disappear together in one cycle collapse into ONE finding (`resource: ec2:batch`, dedup key `drift:batch:<new|state:<to>|gone>:<minute>`, ids in the evidence, SIO-1676), so a node-pool replacement is one report line and one investigation instead of one per instance; suppress a batch family with `drift:batch:gone:%` | Edge-triggered by the snapshot diff; status-check fingerprints clear on recovery |
 | Resource drift | 15 min | Snapshot diffs beyond instances (SIO-1597): security-group ingress+egress rules (change = warn), route-table routes (change = warn), RDS instance settings (public flip = critical, status = warn, class/version = info), Lambda config from one paginated `ListFunctions` (role = warn, rest info). New/deleted resources are info; a failing sub-scan is one fingerprinted info finding and the other scans still run | Edge-triggered by the snapshot diffs; scan-failure fingerprints clear on recovery |
 | Cost | daily | Yesterday vs the trailing 14-day baseline; alerts only when over by **both** +20% and +$1 | Once per date |
 | Ingestion | hourly | Metrics Insights `IncomingLogEvents` per log group; warn when the last full hour is 0 against a same-hour-of-day 7-day median >= 10 (so the nightly scale-to-zero is silent by construction); recovery info. The inverse of the log-errors check: it finds logging that **stopped** | Per group, alert once until recovery |
@@ -136,7 +136,7 @@ Any peer can prompt the monitor by name; it answers without a model:
 | `status` | Liveness, last run, 24 h finding/suppressed/check-error counts, unsent report count |
 | `digest` | The current digest, on demand |
 | `review` | The suppression review, on demand |
-| `history` | Last 20 journaled findings (7 days) |
+| `history [count] [info\|warn\|critical] [family]` | Journaled findings of the last 7 days, newest `count` (default 20, max 200), optionally at or above a severity and within one family, e.g. `history 50 warn drift`; the reply says how many matches it left out |
 | `suppressions` | The suppression ledger |
 | `suppress <pattern> \| <reason>` | Add a ledger entry (`LIKE` pattern against dedup keys, reason required) |
 | `unsuppress <pattern>` | Remove a ledger entry |
