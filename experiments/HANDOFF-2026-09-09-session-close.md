@@ -6,7 +6,8 @@
 **Suggested branch**: n/a — nothing is half-done. The one open item is a
 scheduled evaluation, not code.
 **Linear**: SIO-1673, SIO-1674, SIO-1675, SIO-1676 (all Done by Linear's
-merge automation, none by hand)
+merge automation, none by hand); SIO-1677 applied to all five spokes, PR #720
+open at close (see "Open, by design")
 **Companion doc**: `experiments/HANDOFF-2026-09-09-SIO-1675-haiku-trial.md`
 carries the trial evaluation recipe; do not duplicate it here.
 
@@ -48,6 +49,7 @@ all four PRs, the SIO-1675 handover, this document.
 | 14:12 | three hosts | bundle `e75cd657` via `pi-coms-update` over SSM | bundle version, services, monitor and agent registration lines on each |
 | 14:24 | dev hub bucket | bundle `259db3f2` (code-identical to `e75cd657`) published, rolled to eu-oit-dev and eu-shared-services-dev over SSM | bundle version, services, monitor and agent registration lines on each |
 | 14:28 | eu-oit-dev, eu-shared-services-dev | `terraform apply` of the SIO-1674 IAM statement, plan-guarded | `Plan: 0 to add, 1 to change, 0 to destroy` on each; only `aws_iam_policy.pi_coms_extensions[0]` |
+| 14:50 | all five spokes | `terraform apply` of the SIO-1677 IAM reads (`iam:GetRole` and nine sibling role/policy/instance-profile reads), plan-guarded | same single-policy plan on each; acceptance probe on eu-mendix-platform-prd as `DevOpsAgentReadOnly`: `detect-stack-drift` on a Control Tower StackSet stack returned `DETECTION_COMPLETE` / `IN_SYNC` where it had been `UNKNOWN` on `iam:GetRole` denied |
 
 ## Root cause, for the record
 
@@ -159,6 +161,12 @@ Both dev monitors report the same budget line. The dev hub's local tunnel port
 by the session; every dev action went over SSM.
 
 ## Open, by design
+
+- **PR #720 (SIO-1677) awaits the merge go-ahead.** The IAM change it
+  describes is already applied everywhere and proven; merging only aligns
+  the module source with what is deployed. Until it merges, a `fleet apply`
+  from main would plan the ten IAM actions as a REMOVAL; merge before any
+  other apply.
 
 - **Trial evaluation on 2026-09-16.** Local scheduled task
   `sio-1675-haiku-trial-evaluation` fires at 09:00 Europe/Amsterdam (runs on
