@@ -6,8 +6,7 @@
 **Suggested branch**: n/a — nothing is half-done. The one open item is a
 scheduled evaluation, not code.
 **Linear**: SIO-1673, SIO-1674, SIO-1675, SIO-1676 (all Done by Linear's
-merge automation, none by hand); SIO-1677 applied to all five spokes, PR #720
-open at close (see "Open, by design")
+merge automation, none by hand); SIO-1677 merged (#720) and applied to all five spokes
 **Companion doc**: `experiments/HANDOFF-2026-09-09-SIO-1675-haiku-trial.md`
 carries the trial evaluation recipe; do not duplicate it here.
 
@@ -162,11 +161,6 @@ by the session; every dev action went over SSM.
 
 ## Open, by design
 
-- **PR #720 (SIO-1677) awaits the merge go-ahead.** The IAM change it
-  describes is already applied everywhere and proven; merging only aligns
-  the module source with what is deployed. Until it merges, a `fleet apply`
-  from main would plan the ten IAM actions as a REMOVAL; merge before any
-  other apply.
 
 - **Trial evaluation on 2026-09-16.** Local scheduled task
   `sio-1675-haiku-trial-evaluation` fires at 09:00 Europe/Amsterdam (runs on
