@@ -13,6 +13,20 @@ remove an entry when the underlying behavior changes.
 - Per-host configuration that must not churn instances belongs in the
   bootstrap, not in terraform or userdata (`PI_MONITOR_REPORT_TO` is set
   by the bootstrap for this reason).
+- Per-host operator overrides go in `/home/piagent/.coms-env.local` (lines
+  of `export KEY=value`, owned by piagent, mode 600). Both units source it
+  after `.coms-env`; the bootstrap never writes it, so it survives bundle
+  updates. To apply a change: `systemctl restart pi-monitor`, then
+  `touch /home/piagent/.pi-agent-reload && systemctl restart pi-agent`.
+  Typical use: `export PI_COMS_NET_MUTE_SENDERS='monitor-*'` to stop the
+  monitor waking one account agent (SIO-1673).
+- The fleet model (`eu.anthropic.claude-sonnet-5`) has a 1,000,000-token
+  window and Pi only auto-compacts above `contextWindow - reserveTokens`
+  (16,384 by default), i.e. at 98.4%. A spoke parked at 97-98% is normal
+  Pi behaviour, not a wedge; the extension's token-based compaction
+  (`PI_COMS_NET_COMPACT_ABOVE_TOKENS`) is what keeps sessions small. The
+  settings-file alternative (`~/.pi/agent/settings.json`,
+  `compaction.reserveTokens`) is not written by the bootstrap.
 - The hub mailbox lives on a dedicated EBS volume (`<prefix>-hub-mailbox`,
   `prevent_destroy`) mounted at `/home/comshub/.pi/coms-net`. Replacing the
   hub instance keeps the inbox: the new host re-attaches and mounts the

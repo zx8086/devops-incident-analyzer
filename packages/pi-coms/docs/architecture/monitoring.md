@@ -110,6 +110,13 @@ The agent module provisions one alarm itself -- `<name_prefix>-agent-status-chec
 
 Findings of severity warn or critical go to the account's Pi agent (`aws-<account_id>`) as **one batched coms prompt per run**, carrying a `response_schema` for structured diagnoses (probable cause, affected resources, suggested action) and prior-incident context from the journal. Timeout 5 minutes, one attempt; on timeout or an unparseable reply the report ships with an "uninvestigated" marker. Detection never depends on the model.
 
+#### Investigation budget and operator controls (SIO-1673)
+
+Every investigation prompt is a full model turn on the account agent, and one noisy source can otherwise buy an unbounded number of them: eu-oit-prd produced 72 warn/logs findings on a single application log group in a day, each with a fresh error signature, and its agent reached 98% context. Two rails bound the cost per account regardless of what the checks find:
+
+- **Budget.** At most `PI_MONITOR_INVESTIGATE_BUDGET_PER_DAY` prompts per rolling 24 h, and at most `PI_MONITOR_INVESTIGATE_PER_RESOURCE_PER_DAY` prompts naming the same resource. Every prompt is journaled as an `investigation` row before it is sent, so the counts are attempts and a failing agent cannot keep the cap from filling. Findings over a cap still ship in the report with their own reason (`uninvestigated: resource over daily investigation cap (3/3 in 24h)`); when the whole batch is over budget no prompt is sent.
+- **Controls.** `investigate off [reason]` keeps detecting and reporting but never calls the agent (reports carry `uninvestigated: investigation disabled by operator: <reason>`); `pause [reason]` skips the scheduled check cycles entirely while the daily digest still ships with a `PAUSED` header, so the dead-man signal survives; an explicit `run-checks` runs even while paused. Both persist in the state db (`snapshots.controls`) across restarts. `PI_MONITOR_INVESTIGATE` is only the default for a state db that has never seen a control; once `investigate on|off` has been sent, the persisted value wins.
+
 ### Reports
 
 Both report kinds go to `PI_MONITOR_REPORT_TO` (code default `laptop`; the bootstrap sets `ops` on deployed hosts) with a long TTL, so they wait in the hub mailbox when the operator is offline:
@@ -133,6 +140,9 @@ Any peer can prompt the monitor by name; it answers without a model:
 | `suppressions` | The suppression ledger |
 | `suppress <pattern> \| <reason>` | Add a ledger entry (`LIKE` pattern against dedup keys, reason required) |
 | `unsuppress <pattern>` | Remove a ledger entry |
+| `investigate on\|off [reason]` | Stop or resume sending findings to the account agent; persisted |
+| `pause [reason]` | Skip the scheduled check cycles; the digest still ships flagged PAUSED; persisted |
+| `resume` | Clear a pause |
 
 ```
 ask monitor-eu-oit-dev to run-checks
@@ -157,6 +167,9 @@ Env-with-defaults; no config files. Set in the systemd unit environment or `~/.c
 | `PI_MONITOR_INVESTIGATE_TIMEOUT_MS` | `300000` (5 min) | Investigation deadline base |
 | `PI_MONITOR_INVESTIGATE_PER_FINDING_MS` | `60000` (1 min) | Added to the deadline per finding in the batch |
 | `PI_MONITOR_INVESTIGATE_MAX_MS` | `1800000` (30 min) | Deadline cap regardless of batch size |
+| `PI_MONITOR_INVESTIGATE` | on (`false`/`0` off) | Boot default for the persisted `investigate` control |
+| `PI_MONITOR_INVESTIGATE_BUDGET_PER_DAY` | `24` | Investigation prompts per rolling 24 h |
+| `PI_MONITOR_INVESTIGATE_PER_RESOURCE_PER_DAY` | `3` | Prompts naming the same resource per rolling 24 h |
 | `PI_MONITOR_LOGS_FILTER` | `?ERROR ?Exception` | CloudWatch filter pattern (WARN deliberately absent) |
 | `PI_MONITOR_LOGS_MAX_GROUPS` | `200` | Log-group scan cap (paginated, alphabetical) |
 | `PI_MONITOR_LOGS_EXCLUDE` | `/aws/events/` (check default) | Comma-separated log-group name prefixes to skip; setting it replaces the default |

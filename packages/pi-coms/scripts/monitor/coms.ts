@@ -2,6 +2,7 @@
 
 import * as crypto from "node:crypto";
 import { errorMessage } from "./errors.ts";
+import { PendingReplies, type ReplyResult } from "./pending.ts";
 
 // Bound on parked reply entries; the hub answers /v1/messages/:id for evicted ids.
 const PENDING_CAP = 200;
@@ -47,12 +48,6 @@ function ulid(): string {
 	return (timeStr + randStr).slice(0, 26);
 }
 
-type PendingReply = {
-	promise: Promise<{ response?: unknown; error?: string | null }>;
-	resolve: (v: { response?: unknown; error?: string | null }) => void;
-	result?: { response?: unknown; error?: string | null };
-};
-
 // Hub reply shapes this client reads (see RegisterResponse / SendResponse in
 // scripts/coms-net-server.ts).
 type RegisterReply = { agent: { name: string }; sse_url: string; heartbeat_interval_ms?: number };
@@ -75,7 +70,7 @@ export class MonitorComs {
 	private sseAbort: AbortController | null = null;
 	private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 	private stopped = false;
-	private pending = new Map<string, PendingReply>();
+	private pending = new PendingReplies(PENDING_CAP);
 
 	constructor(opts: Opts) {
 		this.opts = opts;
@@ -206,11 +201,9 @@ export class MonitorComs {
 			};
 			void this.answer(p);
 		} else if (event === "response") {
-			const pend = this.pending.get(payload.msg_id);
-			if (pend) {
-				pend.result = { response: payload.response, error: payload.error ?? null };
-				pend.resolve(pend.result);
-			}
+			// An early reply (target answered before our send() returned) is
+			// parked inside PendingReplies and adopted by register().
+			this.pending.resolve(payload.msg_id, { response: payload.response, error: payload.error ?? null });
 		}
 	}
 
@@ -252,36 +245,16 @@ export class MonitorComs {
 			hops: 0,
 			...(opts.ttl_ms ? { ttl_ms: opts.ttl_ms } : {}),
 		});
-		if (opts.expectReply !== false) {
-			let resolve!: (v: { response?: unknown; error?: string | null }) => void;
-			const promise = new Promise<{ response?: unknown; error?: string | null }>((res) => {
-				resolve = res;
-			});
-			this.pending.set(resp.msg_id, { promise, resolve });
-			while (this.pending.size > PENDING_CAP) {
-				const oldest = this.pending.keys().next().value;
-				if (oldest === undefined) break;
-				this.pending.delete(oldest);
-			}
-		}
+		if (opts.expectReply !== false) this.pending.register(resp.msg_id);
 		return { msg_id: resp.msg_id, status: resp.status };
 	}
 
 	pendingSize(): number {
-		return this.pending.size;
+		return this.pending.size();
 	}
 
-	async awaitReply(msg_id: string, timeoutMs: number): Promise<{ response?: unknown; error?: string | null }> {
-		const pend = this.pending.get(msg_id);
-		if (pend?.result) {
-			this.pending.delete(msg_id);
-			return pend.result;
-		}
-		const local = pend ? pend.promise : new Promise<never>(() => {});
-		const timeout = Bun.sleep(timeoutMs).then(() => ({ error: "timeout" as const }));
-		const winner = await Promise.race([local, timeout]);
-		this.pending.delete(msg_id);
-		return winner as { response?: unknown; error?: string | null };
+	awaitReply(msg_id: string, timeoutMs: number): Promise<ReplyResult> {
+		return this.pending.await(msg_id, timeoutMs);
 	}
 
 	async stop(): Promise<void> {

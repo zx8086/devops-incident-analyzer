@@ -91,3 +91,15 @@ Both extensions append structured entries to the Pi session log: `coms-log` and 
 - [Monitoring](monitoring.md) -- the mailbox in detail, and the monitor that relies on it
 - [System Overview](overview.md)
 - [Usage](../development/usage.md) -- addressing the fleet in practice
+
+## Refusals and compaction on a spoke (SIO-1673)
+
+Automatic replies have two exceptions, decided by `extensions/inboundPolicy.ts` before any turn runs. A refused prompt gets an immediate error reply (`status: error`), so the sender's await ends now instead of at its deadline, and it never enters the reply queue.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `PI_COMS_NET_MUTE_SENDERS` | empty | Comma-separated name globs (`monitor-*`); every non-mailbox prompt from a matching sender is refused with `recipient muted (<pattern>)` |
+| `PI_COMS_NET_REFUSE_ABOVE_PCT` | `85` | Prompts carrying a `response_schema` (monitor investigations, analyzer verifications) are refused with `recipient context at N%, refusing investigation` once context usage reaches this percentage. Prompts without a schema (people) always run |
+| `PI_COMS_NET_COMPACT_ABOVE_TOKENS` | `150000` | After a turn that answered a schema-carrying prompt, the extension asks Pi to compact once the session is this large (`agent_settled` hook, never `agent_end`). Token-based because the fleet model has a 1,000,000-token window and Pi's own threshold compaction fires only at 98.4% of it |
+
+Mailbox messages are unaffected: they never trigger a turn in the first place. On a deployed spoke these go in the operator-owned `~/.coms-env.local` (see `docs/deployment/operations-gotchas.md`); the monitor side has its own switches (`investigate off`, `pause`) in [Monitoring](monitoring.md#investigation-budget-and-operator-controls-sio-1673).

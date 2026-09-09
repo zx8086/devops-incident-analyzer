@@ -9,6 +9,7 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { buildIdentityNote } from "./identityNote.ts";
+import { decideInbound, parseMutePatterns } from "./inboundPolicy.ts";
 import { formatInbox } from "./inboxFormat.ts";
 import { reconnectDelay } from "./reconnectBackoff.ts";
 import { makeSseParser } from "./sseParser.ts";
@@ -21,6 +22,15 @@ const MESSAGE_TIMEOUT_MS = Number(process.env.PI_COMS_NET_MESSAGE_TTL_MS) || 1_8
 // The shared duty inbox every monitor reports to; coms_net_inbox reads it by
 // default. A personal inbox is never the intended read (SIO-1618).
 const INBOX_NAME = process.env.PI_COMS_NET_INBOX_NAME || "ops";
+// SIO-1673: every inbound prompt is a full read of this session's context.
+// Muted senders and, once the window is nearly full, automated (schema-
+// carrying) senders are refused without a turn; after an automated turn the
+// session is compacted past a token threshold (see inboundPolicy.ts). Token-
+// based on purpose: the fleet model has a 1M window and Pi's own compaction
+// only fires at 98.4% of it.
+const MUTE_SENDERS = parseMutePatterns(process.env.PI_COMS_NET_MUTE_SENDERS);
+const REFUSE_ABOVE_PCT = Number(process.env.PI_COMS_NET_REFUSE_ABOVE_PCT) || 85;
+const COMPACT_ABOVE_TOKENS = Number(process.env.PI_COMS_NET_COMPACT_ABOVE_TOKENS) || 150_000;
 const HTTP_TIMEOUT_MS = 10_000;
 const SHUTDOWN_DELETE_TIMEOUT_MS = 2_000;
 
@@ -743,6 +753,19 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		const decision = decideInbound({
+			senderName,
+			mailbox: false,
+			hasSchema: responseSchema !== null,
+			contextPct: currentCtx?.getContextUsage()?.percent ?? null,
+			mutePatterns: MUTE_SENDERS,
+			refuseAbovePct: REFUSE_ABOVE_PCT,
+		});
+		if (decision.kind === "refuse") {
+			void refuseInbound(msg_id, senderName, senderSession, decision.reason);
+			return;
+		}
+
 		const inbound: InboundContext = {
 			msg_id,
 			hops,
@@ -794,6 +817,43 @@ export default function (pi: ExtensionAPI) {
 			inboundQueue.delete(msg_id);
 			audit("prompt_in_failed", { msg_id, reason: safeError(err) });
 		}
+	}
+
+	// A refused prompt is answered at once with an error so the sender's await
+	// ends now rather than at its deadline; it never enters inboundQueue, so
+	// agent_end has nothing to claim for it.
+	async function refuseInbound(
+		msg_id: string,
+		senderName: string,
+		senderSession: string,
+		reason: string,
+	): Promise<void> {
+		if (!identity) return;
+		const req: ResponseSubmitRequest = {
+			project: identity.project,
+			responder_session: identity.session_id,
+			response: null,
+			error: reason,
+		};
+		try {
+			await httpFetch("POST", `/v1/messages/${encodeURIComponent(msg_id)}/response`, req);
+		} catch (err) {
+			audit("prompt_refuse_failed", { msg_id, reason: safeError(err) });
+		}
+		try {
+			pi.appendEntry("coms-net-log", { event: "prompt_refused", ts: nowIso(), msg_id, sender: senderSession, reason });
+		} catch {}
+		try {
+			pi.sendMessage(
+				{
+					customType: "coms-net-refused",
+					content: `[coms-net] refused prompt from ${senderName} (msg_id ${msg_id}): ${reason}. No turn was run.`,
+					display: true,
+					details: { msg_id, sender_session: senderSession, reason },
+				},
+				{ deliverAs: "followUp", triggerTurn: false },
+			);
+		} catch {}
 	}
 
 	function handleInboundResponse(data: Record<string, unknown>): void {
@@ -1835,8 +1895,28 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	// Set in agent_end, consumed in agent_settled: investigations are stateless
+	// (the monitor injects prior context itself), so the session may shrink
+	// once it passes the token threshold. agent_settled and not agent_end
+	// because the run is still active in agent_end and compact() aborts it.
+	let answeredSchemaPrompt = false;
+	pi.on("agent_settled", async () => {
+		if (!answeredSchemaPrompt) return;
+		answeredSchemaPrompt = false;
+		const ctx = currentCtx;
+		const tokens = ctx?.getContextUsage()?.tokens ?? null;
+		if (!ctx || tokens === null || tokens < COMPACT_ABOVE_TOKENS) return;
+		try {
+			pi.appendEntry("coms-net-log", { event: "compact", ts: nowIso(), tokens, threshold: COMPACT_ABOVE_TOKENS });
+		} catch {}
+		ctx.compact({ onError: (err) => audit("compact_failed", { reason: safeError(err) }) });
+	});
+
 	pi.on("agent_end", async (event) => {
 		if (!identity || inboundQueue.size === 0) return;
+		for (const q of inboundQueue.values()) {
+			if (!q.fulfilled && q.response_schema) answeredSchemaPrompt = true;
+		}
 
 		// Follow-ups drain inside the run, so every stacked inbound prompt is
 		// answered by this run's final assistant text (SIO-1598). Claim the

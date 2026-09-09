@@ -11,6 +11,7 @@ import { EC2Client } from "@aws-sdk/client-ec2";
 import { LambdaClient } from "@aws-sdk/client-lambda";
 import { RDSClient } from "@aws-sdk/client-rds";
 import { STSClient } from "@aws-sdk/client-sts";
+import { type BudgetLimits, investigationUsage, planInvestigation } from "./monitor/budget.ts";
 import { checkAlarms } from "./monitor/checks/alarms.ts";
 import { certRegions, checkCerts } from "./monitor/checks/certs.ts";
 import { checkCost } from "./monitor/checks/cost.ts";
@@ -22,6 +23,14 @@ import { checkResourceDrift } from "./monitor/checks/resource-drift.ts";
 import { checkTrail } from "./monitor/checks/trail.ts";
 import { checkWatchlist } from "./monitor/checks/watchlist.ts";
 import { MonitorComs } from "./monitor/coms.ts";
+import {
+	applyControl,
+	describeControls,
+	envInvestigateDefault,
+	investigationDisabledFailure,
+	parseControlCommand,
+	readControls,
+} from "./monitor/controls.ts";
 import { errorMessage } from "./monitor/errors.ts";
 import {
 	DIAGNOSIS_RESPONSE_SCHEMA,
@@ -53,6 +62,16 @@ const INVESTIGATE_TARGET = process.env.PI_MONITOR_INVESTIGATE_TARGET ?? `aws-${A
 const INVESTIGATE_TIMEOUT_MS = Number(process.env.PI_MONITOR_INVESTIGATE_TIMEOUT_MS ?? 300_000);
 const INVESTIGATE_PER_FINDING_MS = Number(process.env.PI_MONITOR_INVESTIGATE_PER_FINDING_MS ?? 60_000);
 const INVESTIGATE_MAX_MS = Number(process.env.PI_MONITOR_INVESTIGATE_MAX_MS ?? 1_800_000);
+// Boot default only; the persisted `investigate on|off` control wins (SIO-1673).
+const INVESTIGATE_DEFAULT = envInvestigateDefault(process.env.PI_MONITOR_INVESTIGATE);
+// Every investigation is a full model turn on the account agent: cap prompts
+// per rolling day, and per resource, so one noisy source cannot buy unbounded
+// turns (72 warn findings on one log group in a day was observed, SIO-1673).
+const INVESTIGATE_BUDGET: BudgetLimits = {
+	perDay: Number(process.env.PI_MONITOR_INVESTIGATE_BUDGET_PER_DAY ?? 24),
+	perResourcePerDay: Number(process.env.PI_MONITOR_INVESTIGATE_PER_RESOURCE_PER_DAY ?? 3),
+};
+const DAY_MS = 86_400_000;
 
 // A flat await discards an agent's completed work whenever the batch is big
 // enough to outrun it (observed: 19 findings vs the 5-min default). Scale the
@@ -97,6 +116,8 @@ export type CycleDeps = {
 	checks: { name: string; run: () => Promise<Finding[]> }[];
 	state: MonitorState;
 	investigate: ((findings: Finding[], priorContext: string) => Promise<InvestigationOutcome>) | null;
+	// Absent: no caps (unit tests); main() always sets it.
+	budget?: BudgetLimits;
 	report: (text: string) => Promise<void>;
 	log: (line: string) => void;
 };
@@ -145,13 +166,26 @@ export async function runCycle(deps: CycleDeps): Promise<{ findings: Finding[]; 
 		const toInvestigate = findings.filter((f) => f.severity !== "info");
 		let diagnoses: Map<string, Diagnosis> | null = null;
 		let investigationFailure: string | null = null;
-		if (toInvestigate.length > 0 && deps.investigate) {
-			const prior = toInvestigate
+		// Budget pass: findings over the daily or per-resource cap still ship,
+		// each with its own reason, but never reach the agent.
+		const skipped = new Map<string, string>();
+		let batch = toInvestigate;
+		if (deps.budget && toInvestigate.length > 0) {
+			const usage = investigationUsage(deps.state.journalRows(DAY_MS, "investigation"));
+			const plan = planInvestigation(toInvestigate, usage, deps.budget);
+			batch = plan.send;
+			for (const s of plan.skipped) skipped.set(s.finding.dedup_key, s.reason);
+			if (plan.skipped.length > 0) {
+				deps.log(`investigation budget: ${plan.skipped.length} finding(s) held back, ${batch.length} sent`);
+			}
+		}
+		if (batch.length > 0 && deps.investigate) {
+			const prior = batch
 				.flatMap((f) => deps.state.priorIncidents(f.resource, 3))
 				.map((r) => `${r.ts}: ${r.payload}`)
 				.join("\n");
 			try {
-				const outcome = await deps.investigate(toInvestigate, prior);
+				const outcome = await deps.investigate(batch, prior);
 				diagnoses = outcome.diagnoses;
 				investigationFailure = outcome.failure;
 			} catch (e) {
@@ -165,7 +199,11 @@ export async function runCycle(deps: CycleDeps): Promise<{ findings: Finding[]; 
 		}
 		const text = formatIncidentReport(
 			ACCOUNT_ID,
-			findings.map((f) => ({ finding: f, diagnosis: diagnoses?.get(f.dedup_key) ?? null })),
+			findings.map((f) => ({
+				finding: f,
+				diagnosis: diagnoses?.get(f.dedup_key) ?? null,
+				skipped: skipped.get(f.dedup_key),
+			})),
 			investigationFailure,
 			suppressed,
 		);
@@ -252,7 +290,19 @@ function main(): void {
 		onPrompt: async (p) => handleCommand(p.prompt),
 	});
 
+	// Persisted operator controls; the env value only seeds a fresh state db.
+	let controls = readControls(state, { investigate: INVESTIGATE_DEFAULT });
+
 	const investigate = async (findings: Finding[], prior: string): Promise<InvestigationOutcome> => {
+		if (!controls.investigate) return { diagnoses: null, failure: investigationDisabledFailure(controls) };
+		// Journaled as an attempt before the send so the budget fills even when
+		// the agent fails or the hub drops the message.
+		state.journal("investigation", {
+			resources: [...new Set(findings.map((f) => f.resource))],
+			dedup_keys: findings.map((f) => f.dedup_key),
+			count: findings.length,
+			target: INVESTIGATE_TARGET,
+		});
 		const prompt = [
 			`You are the read-only devops agent for AWS account ${ACCOUNT_ID}. The account monitor detected these findings; investigate with your AWS tools and diagnose each one.`,
 			'Reply ONLY with JSON matching the response schema: an object {"diagnoses": [...]} with one entry per dedup_key.',
@@ -300,6 +350,7 @@ function main(): void {
 		],
 		state,
 		investigate,
+		budget: INVESTIGATE_BUDGET,
 		report,
 		log,
 	};
@@ -318,6 +369,7 @@ function main(): void {
 		],
 		state,
 		investigate,
+		budget: INVESTIGATE_BUDGET,
 		report,
 		log,
 	};
@@ -355,6 +407,7 @@ function main(): void {
 			bundleVersion: await bundleVersion(),
 			suppressedCount: state.journalRows(day, "suppressed_finding").length,
 			notables: notablesFromJournal(findingRows),
+			paused: controls.paused ? { reason: controls.pausedReason, since: controls.pausedSince } : null,
 		});
 	};
 
@@ -395,10 +448,12 @@ function main(): void {
 			],
 			state,
 			investigate,
+			budget: INVESTIGATE_BUDGET,
 			report,
 			log,
 		};
-		await runCycle(dailyDeps);
+		if (controls.paused) log("paused: skipping the daily checks");
+		else await runCycle(dailyDeps);
 		const pruned = state.pruneJournal(JOURNAL_RETAIN_MS);
 		if (pruned > 0) log(`journal pruned: ${pruned} row(s) past retention`);
 		// The digest ships even when quiet; a missing digest is the dead-man signal.
@@ -421,14 +476,30 @@ function main(): void {
 	const dailyGuard = makeGuard();
 	const runChecksNow = () => checkGuard(async () => void (await runCycle(fifteenDeps)));
 	const runHourlyNow = () => hourlyGuard(async () => void (await runCycle(hourlyDeps)));
+	// Pause gates the scheduled ticks only; an explicit run-checks command is an
+	// operator action and runs regardless.
+	const unlessPaused = (what: string, run: () => Promise<void>) => (): Promise<void> => {
+		if (controls.paused) {
+			log(`paused: skipping ${what}`);
+			return Promise.resolve();
+		}
+		return run();
+	};
 
 	handleCommand = async (prompt: string): Promise<string> => {
 		const raw = prompt.trim();
 		const cmd = raw.toLowerCase();
+		const control = parseControlCommand(raw);
+		if (control) {
+			controls = applyControl(state, controls, control);
+			log(`control ${control.kind}: ${describeControls(controls)}`);
+			return `ok. ${describeControls(controls)}`;
+		}
 		if (cmd === "run-checks") {
+			const bypass = controls.paused ? " (monitor is paused; explicit run-checks still ran)" : "";
 			await runChecksNow();
 			const last = state.journalRows(60_000, "run").at(-1);
-			return `checks complete: ${last?.payload ?? "no run recorded"}`;
+			return `checks complete: ${last?.payload ?? "no run recorded"}${bypass}`;
 		}
 		if (cmd === "status") {
 			const lastRun = state.journalRows(7 * 86_400_000, "run").at(-1);
@@ -438,7 +509,8 @@ function main(): void {
 			const day24 = state.journalRows(day, "finding").length;
 			const sup24 = state.journalRows(day, "suppressed_finding").length;
 			const err24 = state.journalRows(day, "check_error").length;
-			return `monitor ${MONITOR_NAME} online. last run: ${lastRun ? `${lastRun.ts} ${lastRun.payload}` : "never"}. last 24h: ${day24} finding(s), ${sup24} suppressed, ${err24} check error(s). unsent reports: ${state.unsent().length}`;
+			const usage = investigationUsage(state.journalRows(day, "investigation"));
+			return `monitor ${MONITOR_NAME} online. last run: ${lastRun ? `${lastRun.ts} ${lastRun.payload}` : "never"}. last 24h: ${day24} finding(s), ${sup24} suppressed, ${err24} check error(s), ${usage.used}/${INVESTIGATE_BUDGET.perDay} investigation prompt(s) used. unsent reports: ${state.unsent().length}. ${describeControls(controls)}`;
 		}
 		if (cmd === "digest") return buildDigest();
 		if (cmd === "review") return buildSuppressionReview();
@@ -471,16 +543,16 @@ function main(): void {
 			state.addSuppression(pattern, reason);
 			return `suppressed: ${pattern} (${reason})`;
 		}
-		return "unknown command. available: run-checks, status, digest, review, history, suppressions, suppress <pattern> | <reason>, unsuppress <pattern>";
+		return "unknown command. available: run-checks, status, digest, review, history, suppressions, suppress <pattern> | <reason>, unsuppress <pattern>, investigate on|off [reason], pause [reason], resume";
 	};
 
 	void (async () => {
 		await coms.start();
 		log(
-			`registered as ${coms.name}; checks ${CHECK_CRON}; hourly ${HOURLY_CRON}; daily ${DAILY_CRON}; review ${REVIEW_CRON}; reporting to ${REPORT_TO}`,
+			`registered as ${coms.name}; checks ${CHECK_CRON}; hourly ${HOURLY_CRON}; daily ${DAILY_CRON}; review ${REVIEW_CRON}; reporting to ${REPORT_TO}; budget ${INVESTIGATE_BUDGET.perDay}/day, ${INVESTIGATE_BUDGET.perResourcePerDay}/resource/day; ${describeControls(controls)}`,
 		);
-		Bun.cron(CHECK_CRON, () => runChecksNow());
-		Bun.cron(HOURLY_CRON, () => runHourlyNow());
+		Bun.cron(CHECK_CRON, unlessPaused("15-minute checks", runChecksNow));
+		Bun.cron(HOURLY_CRON, unlessPaused("hourly checks", runHourlyNow));
 		Bun.cron(DAILY_CRON, () => dailyGuard(dailyDigest));
 		// No journal writes and no checks: needs no guard against the others.
 		Bun.cron(REVIEW_CRON, () => void suppressionReview());
