@@ -1103,3 +1103,15 @@ Eight files under `packages/pi-coms` plus both personas: `history [count] [sever
 **Merge gate:** all five CI jobs green on both heads. 304 package tests (8 new) and the exporter's 442 pass. Merged on the user's explicit instruction.
 
 **Takeaway:** *the noise and the read path were the same bug seen from two sides.* The digest capped at ten and `history` at twenty because nobody expected eighty-five findings from one event; the drift check produced eighty-five because nobody expected one event to move eighty-five instances. Fixing only the read path would have left the investigation cost; fixing only the batching would have left the next overflow unreadable.
+
+## PR #720 detail (SIO-1677, IAM reads for drift detection on Control Tower stacks)
+
+Two files: ten IAM read actions on the `DriftAndComplianceReads` statement and the security-model line naming them.
+
+**Greptile:** SKIPPED. Thirty-seventh consecutive skip.
+
+**CodeRabbit:** nothing. Thirty-seventh consecutive absence.
+
+**Merge gate:** all five CI jobs green. Applied to all five spokes before the merge under the single-policy plan guard, and proven with a real `detect-stack-drift` under `DevOpsAgentReadOnly` on eu-mendix-platform-prd (`DETECTION_COMPLETE`, `IN_SYNC`). Merged on the user's explicit instruction.
+
+**Takeaway:** *the first live run after a permission change is the review.* SIO-1674's grant was verified action by action against the service reference and still missed a resource type, because CloudFormation drift detection reads with the caller's permissions and nobody had listed what the stacks contain. The console's next daily report surfaced the exact denied action within hours; reading those reports after every IAM change is cheaper than any static check.
