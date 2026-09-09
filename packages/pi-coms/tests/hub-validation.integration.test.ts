@@ -96,6 +96,23 @@ describe("blank replies", () => {
 		expect(looked.error).toBe("empty_reply");
 	});
 
+	test("a blank error string with a blank body is still empty_reply", async () => {
+		const hub = await startHub();
+		await register(hub, "S1", "asker");
+		await register(hub, "S2", "spoke");
+		const sent = (await (await send(hub, "S1", "spoke", "hi")).json()) as SendResponse;
+		const r = await api(hub, "POST", `/v1/messages/${sent.msg_id}/response`, {
+			project: "default",
+			responder_session: "S2",
+			response: "",
+			error: "",
+		});
+		expect(r.status).toBe(200);
+		const looked = (await (await api(hub, "GET", `/v1/messages/${sent.msg_id}`)).json()) as MessageLookup;
+		expect(looked.status).toBe("error");
+		expect(looked.error).toBe("empty_reply");
+	});
+
 	test("an explicit error keeps its own text", async () => {
 		const hub = await startHub();
 		await register(hub, "S1", "asker");

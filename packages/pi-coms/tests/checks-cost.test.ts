@@ -62,6 +62,14 @@ describe("checkCost", () => {
 		expect(out[0].evidence).toEqual({ date: "2026-08-29", usd: 1101, baseline: 1000 });
 	});
 
+	test("a zero baseline reports the rise without a percentage", async () => {
+		const state = new MonitorState(":memory:");
+		const out = await checkCost(fakeClient(days(0, 150)), state, { now: NOW });
+		expect(out).toHaveLength(1);
+		expect(out[0].summary).toContain("(no prior spend)");
+		expect(out[0].summary).not.toContain("Infinity");
+	});
+
 	test("no baseline yet stays quiet but records costs", async () => {
 		const state = new MonitorState(":memory:");
 		const out = await checkCost(fakeClient([{ date: "2026-08-29", usd: 5 }]), state, { now: NOW });

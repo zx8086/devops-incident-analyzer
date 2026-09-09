@@ -213,10 +213,12 @@ function shortPrompt(text: string): string {
             {#if entry.error}
               <p class="mt-2 text-xs text-red-700">{entry.error}</p>
             {/if}
-            {#if formatReply(entry.response) !== ""}
+            {#if formatReply(entry.response).trim() !== ""}
               <pre class="mt-2 text-xs bg-tommy-offwhite rounded p-2 overflow-x-auto whitespace-pre-wrap break-words">{formatReply(entry.response)}</pre>
-            {:else if !entry.error}
-              <!-- SIO-1678: a completed reply with no text is a failed turn, not a quiet success. -->
+            {:else if entry.status === "complete" && !entry.error}
+              <!-- SIO-1678: a completed reply with no text is a failed turn, not a
+                   quiet success. A current hub stores that as error empty_reply and
+                   the error line above shows it; this covers a hub not yet updated. -->
               <p class="mt-2 text-xs text-amber-700">(empty reply from {entry.target}: the spoke completed the turn with no text; treat as not answered)</p>
             {/if}
           {/if}

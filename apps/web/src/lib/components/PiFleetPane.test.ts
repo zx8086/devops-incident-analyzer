@@ -123,6 +123,19 @@ describe("PiFleetPane", () => {
 		expect(body).toContain("empty reply from alpha-dev");
 		expect(body).toContain("not answered");
 		expect(body).not.toContain("<pre");
+		// A timeout with no body is not an "empty reply": the turn never completed.
+		const timedOut = applySendResult(pending, "e1", {
+			hubKey: "eu-shared-services-dev",
+			environment: "dev",
+			msgId: "m1",
+			status: "timeout",
+			response: null,
+			error: null,
+			target: "alpha-dev",
+			sender: "pi-fleet-abcd1234",
+			sentAt: "x",
+		});
+		expect(renderPane(timedOut)).not.toContain("empty reply from");
 	});
 
 	test("an expired wait reads as a timeout, not a hang", () => {

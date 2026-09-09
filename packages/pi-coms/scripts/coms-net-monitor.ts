@@ -11,6 +11,7 @@ import { EC2Client } from "@aws-sdk/client-ec2";
 import { LambdaClient } from "@aws-sdk/client-lambda";
 import { RDSClient } from "@aws-sdk/client-rds";
 import { STSClient } from "@aws-sdk/client-sts";
+import { isBlankReply } from "../contracts/reply.ts";
 import {
 	type BudgetLimits,
 	type InvestigationOutcome as BudgetOutcome,
@@ -21,7 +22,7 @@ import {
 } from "./monitor/budget.ts";
 import { checkAlarms } from "./monitor/checks/alarms.ts";
 import { certRegions, checkCerts } from "./monitor/checks/certs.ts";
-import { checkCost } from "./monitor/checks/cost.ts";
+import { COST_DEFAULTS, checkCost } from "./monitor/checks/cost.ts";
 import { checkDrift } from "./monitor/checks/drift.ts";
 import { checkIdentity, type GateResult } from "./monitor/checks/identity.ts";
 import { checkIngestion } from "./monitor/checks/ingestion.ts";
@@ -103,8 +104,15 @@ export function investigateBudgetMs(
 // SIO-1680: an absolute gate. A day-over-baseline rise under $100 is noise for
 // this fleet; anything over is one warn finding. PCT 0 disables the percentage
 // filter so a $100 rise on a large baseline is not hidden by a small ratio.
-const COST_PCT = Number(process.env.PI_MONITOR_COST_PCT ?? 0);
-const COST_ABS = Number(process.env.PI_MONITOR_COST_ABS ?? 100);
+// An unparseable override falls back to the default instead of becoming NaN,
+// which would silence the check without a trace.
+function envNumber(value: string | undefined, fallback: number): number {
+	if (value === undefined || value.trim() === "") return fallback;
+	const n = Number(value);
+	return Number.isFinite(n) ? n : fallback;
+}
+const COST_PCT = envNumber(process.env.PI_MONITOR_COST_PCT, COST_DEFAULTS.pct);
+const COST_ABS = envNumber(process.env.PI_MONITOR_COST_ABS, COST_DEFAULTS.abs);
 const LOGS_FILTER = process.env.PI_MONITOR_LOGS_FILTER; // check default applies when unset
 const LOGS_MAX_GROUPS = process.env.PI_MONITOR_LOGS_MAX_GROUPS
 	? Number(process.env.PI_MONITOR_LOGS_MAX_GROUPS)
@@ -345,8 +353,10 @@ function main(): void {
 				record(refused ? "refused" : reply.error === "timeout" ? "timeout" : "failed");
 				return { diagnoses: null, failure: `agent reply error: ${reply.error}` };
 			}
-			// SIO-1678: a blank string is as empty as null (a run with no assistant text).
-			if (reply.response == null || (typeof reply.response === "string" && reply.response.trim() === "")) {
+			// SIO-1678: a blank string is as empty as null (a run with no assistant
+			// text). A current hub already answers such a turn with error empty_reply;
+			// this guard covers a hub that has not been updated yet.
+			if (isBlankReply(reply.response)) {
 				record("failed");
 				return { diagnoses: null, failure: "agent reply empty" };
 			}

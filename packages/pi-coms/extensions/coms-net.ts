@@ -13,7 +13,7 @@ import { decideInbound, parseMutePatterns } from "./inboundPolicy.ts";
 import { formatInbox } from "./inboxFormat.ts";
 import { reconnectDelay } from "./reconnectBackoff.ts";
 import { makeSseParser } from "./sseParser.ts";
-import { claimTurnReplies, lastAssistantText, outboundHops } from "./turnReply.ts";
+import { claimTurnReplies, type FinalAssistant, finalAssistant, outboundHops } from "./turnReply.ts";
 
 const COMS_NET_DIR = path.join(os.homedir(), ".pi", "coms-net");
 const MAX_HOPS = Number(process.env.PI_COMS_NET_MAX_HOPS) || 5;
@@ -1900,29 +1900,35 @@ export default function (pi: ExtensionAPI) {
 	// once it passes the token threshold. agent_settled and not agent_end
 	// because the run is still active in agent_end and compact() aborts it.
 	let answeredSchemaPrompt = false;
-	pi.on("agent_settled", async () => {
-		if (!answeredSchemaPrompt) return;
-		answeredSchemaPrompt = false;
-		const ctx = currentCtx;
-		const tokens = ctx?.getContextUsage()?.tokens ?? null;
-		if (!ctx || tokens === null || tokens < COMPACT_ABOVE_TOKENS) return;
-		try {
-			pi.appendEntry("coms-net-log", { event: "compact", ts: nowIso(), tokens, threshold: COMPACT_ABOVE_TOKENS });
-		} catch {}
-		ctx.compact({ onError: (err) => audit("compact_failed", { reason: safeError(err) }) });
-	});
 
+	// SIO-1678: replies are posted from agent_settled, not agent_end. Pi fires
+	// agent_end BEFORE it decides whether the run will auto-retry a provider
+	// error or compact an overflow and continue; agent_settled fires once none
+	// of that will follow. Posting at agent_end answered the sender with the
+	// FAILED run's (empty) text and left the retry's real answer unclaimed.
+	// agent_end only records the run's final messages and which inbounds were
+	// queued when it ended; a prompt arriving in between belongs to the next run.
+	let settledTurn: { final: FinalAssistant; ids: Set<string> } | null = null;
 	pi.on("agent_end", async (event) => {
 		if (!identity || inboundQueue.size === 0) return;
+		settledTurn = { final: finalAssistant(event.messages), ids: new Set(inboundQueue.keys()) };
+	});
+
+	async function postTurnReplies(): Promise<void> {
+		const turn = settledTurn;
+		settledTurn = null;
+		if (!identity || !turn || inboundQueue.size === 0) return;
 		for (const q of inboundQueue.values()) {
-			if (!q.fulfilled && q.response_schema) answeredSchemaPrompt = true;
+			if (!q.fulfilled && q.response_schema && turn.ids.has(q.msg_id)) answeredSchemaPrompt = true;
 		}
 
 		// Follow-ups drain inside the run, so every stacked inbound prompt is
 		// answered by this run's final assistant text (SIO-1598). Claim the
-		// queue entries before any await so a second agent_end cannot submit
-		// the same replies again, then post them concurrently (SIO-1611).
-		const replies = claimTurnReplies(inboundQueue, lastAssistantText(event.messages));
+		// queue entries before any await so a second settle cannot submit the
+		// same replies again, then post them concurrently (SIO-1611). A run
+		// that errored, aborted or produced no text posts an error, never an
+		// empty completed reply (SIO-1678).
+		const replies = claimTurnReplies(inboundQueue, turn.final, turn.ids);
 		const project = identity.project;
 		const responderSession = identity.session_id;
 		await Promise.all(
@@ -1948,6 +1954,19 @@ export default function (pi: ExtensionAPI) {
 				}
 			}),
 		);
+	}
+
+	pi.on("agent_settled", async () => {
+		await postTurnReplies();
+		if (!answeredSchemaPrompt) return;
+		answeredSchemaPrompt = false;
+		const ctx = currentCtx;
+		const tokens = ctx?.getContextUsage()?.tokens ?? null;
+		if (!ctx || tokens === null || tokens < COMPACT_ABOVE_TOKENS) return;
+		try {
+			pi.appendEntry("coms-net-log", { event: "compact", ts: nowIso(), tokens, threshold: COMPACT_ABOVE_TOKENS });
+		} catch {}
+		ctx.compact({ onError: (err) => audit("compact_failed", { reason: safeError(err) }) });
 	});
 
 	pi.registerCommand("coms-net", {

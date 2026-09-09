@@ -162,8 +162,31 @@ describe("SIO-1655 fleet tools", () => {
 		});
 		const { byName } = toolsFor(hub);
 		const out = (await byName.get("fleet_await_reply")?.invoke({ estate: "eu-oit-prd", msgId: "m1" })) as string;
-		expect(out).toContain("status: error: agent run error: AccessDeniedException");
+		expect(out).toContain("status: error");
 		expect(out).toContain("not reached");
+		// The reason is spoke-extension-authored text: it crosses the boundary fenced.
+		expect(out).toContain('<untrusted-spoke-reply origin="error:eu-oit-prd">');
+		expect(out).toContain("AccessDeniedException");
+	});
+
+	test("the hub's empty_reply token is rendered in plain words, not as a bare code", async () => {
+		const hub = scriptedHub({ replyStatus: "error", replyError: "empty_reply" });
+		const { byName } = toolsFor(hub);
+		const out = (await byName.get("fleet_await_reply")?.invoke({ estate: "eu-oit-prd", msgId: "m1" })) as string;
+		expect(out).toContain("completed the turn with no text");
+		expect(out).not.toContain("<untrusted-spoke-reply");
+	});
+
+	test("a structured reply that is JSON null is empty, a literal string null is an answer", async () => {
+		const nul = toolsFor(scriptedHub({ reply: null }));
+		const outNull = (await nul.byName
+			.get("fleet_await_reply")
+			?.invoke({ estate: "eu-oit-prd", msgId: "m1" })) as string;
+		expect(outNull).toContain("Empty reply from eu-oit-prd");
+		const str = toolsFor(scriptedHub({ reply: "null" }));
+		const outStr = (await str.byName.get("fleet_await_reply")?.invoke({ estate: "eu-oit-prd", msgId: "m1" })) as string;
+		expect(outStr).toContain("<untrusted-spoke-reply");
+		expect(outStr).toContain("null");
 	});
 
 	test("fleet_inbox wraps message bodies too (spoke and operator prose)", async () => {

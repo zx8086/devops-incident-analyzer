@@ -163,17 +163,23 @@ export function buildFleetTools(deps: FleetToolDeps): StructuredToolInterface[] 
 				const client = await clientForEstate(estate, shared);
 				const reply = await client.awaitReply(msgId, shared.config.verifyTimeoutMs);
 				if (reply.status !== "complete") {
-					// The hub's error text is hub/extension-authored (e.g. "empty_reply",
-					// "agent run error: AccessDeniedException ..."), not spoke prose, so it
-					// is safe to show and is exactly what the operator needs to hear.
-					const reason = reply.error ? `: ${reply.error}` : "";
-					return `No answer from ${estate} (status: ${reply.status}${reason}). Report this estate as not reached.`;
+					// SIO-1678: the hub's error text names the cause (a provider error the
+					// spoke extension relayed, or the hub's own `empty_reply`). The spoke
+					// extension posts it, so it crosses the same trust boundary as a reply
+					// body and is fenced the same way; `empty_reply` is a hub token and
+					// gets its plain reading instead.
+					const head = `No answer from ${estate} (status: ${reply.status}). Report this estate as not reached.`;
+					if (!reply.error) return head;
+					if (reply.error === "empty_reply") {
+						return `${head}\nThe spoke completed the turn with no text (hub: empty_reply).`;
+					}
+					return `${head}\n${wrapUntrusted(`error:${estate}`, reply.error)}`;
 				}
-				const text = typeof reply.response === "string" ? reply.response : JSON.stringify(reply.response ?? null);
 				// SIO-1678: an empty completed reply is a failed turn, never evidence.
-				if (text.trim() === "" || text === "null") {
+				if (reply.response == null || (typeof reply.response === "string" && reply.response.trim() === "")) {
 					return `Empty reply from ${estate}: the message completed with no text. Report this estate as not answered, not as clean.`;
 				}
+				const text = typeof reply.response === "string" ? reply.response : JSON.stringify(reply.response);
 				return wrapUntrusted(estate, text);
 			} catch (error) {
 				return `Await failed for ${estate}: ${error instanceof Error ? error.message : String(error)}`;
