@@ -1115,3 +1115,29 @@ Two files: ten IAM read actions on the `DriftAndComplianceReads` statement and t
 **Merge gate:** all five CI jobs green. Applied to all five spokes before the merge under the single-policy plan guard, and proven with a real `detect-stack-drift` under `DevOpsAgentReadOnly` on eu-mendix-platform-prd (`DETECTION_COMPLETE`, `IN_SYNC`). Merged on the user's explicit instruction.
 
 **Takeaway:** *the first live run after a permission change is the review.* SIO-1674's grant was verified action by action against the service reference and still missed a resource type, because CloudFormation drift detection reads with the caller's permissions and nobody had listed what the stacks contain. The console's next daily report surfaced the exact denied action within hours; reading those reports after every IAM change is cheaper than any static check.
+
+## PR #721 detail (SIO-1678, failed or empty spoke turns answered with an error; SIO-1680 cost gate)
+
+Twenty-one files across pi-coms (extension, hub, monitor, contracts), the analyzer's fleet console tool, the web pane and docs. Three commits: the first shipped WITHOUT the extension change because a stray `git stash -q` inside a diagnostic command had parked `turnReply.ts`, its tests and the `coms-net.ts` rewrite; the local review caught that the docs described behaviour the diff did not contain.
+
+**Greptile:** SKIPPED at dispatch (16:06Z). Thirty-eighth consecutive skip.
+
+**CodeRabbit:** nothing. Thirty-eighth consecutive absence.
+
+**Local review (substitute):** eight finder angles plus a second pass on the recovered extension code. Ten findings reported, all fixed before the merge request: the missing extension change itself; hub error text reaching the console model unfenced; a `text === "null"` sentinel that misread a literal `null` answer; `error: ""` stored as an error with no reason; the pane's empty-reply line firing on timeouts; `Number(env ?? default)` turning a typo into NaN and silencing the cost check; `+Infinity pct` on a zero baseline; `pct 0` not being a true off switch with the defaults duplicated in two files; four spellings of "blank reply" (now `contracts/reply.ts` `isBlankReply`); two docs still stating the old +20%/+$1 gate. The second pass confirmed the `agent_settled` design against Pi 0.84.2 source (settled always follows `agent_end`; follow-ups are drained before `agent_end`, so the `only` id snapshot cannot orphan one) and found that awaiting POSTs inside the settled handler ran while Pi had already marked the run inactive; the claim is now synchronous and the handler does not wait on the network.
+
+**Merge gate:** all five CI jobs green on every push; pi-coms 321, agent pi-fleet 24, web 398 tests; root typecheck and svelte-check clean. Awaiting the user's explicit go-ahead.
+
+**Takeaway:** *a review that reads the diff, not the description, is the one that catches a missing commit.* Every angle independently reported "the extension change described in the brief is not in this diff" before finding anything else; a bot that summarised the PR body would have approved a fix that did not exist.
+
+## PR #722 detail (SIO-1679, edge ingress reads for IP-allowlist questions)
+
+Two files: the `EdgeIngressReads` statement (WAFv2 IP sets and rule groups, CloudFront distribution reads, `apigateway:GET`) on the Terraform-managed `pi-coms-extensions` policy, and the spoke persona's read order for an allowlist question.
+
+**Greptile:** SKIPPED at dispatch (16:07Z). Thirty-ninth consecutive skip.
+
+**CodeRabbit:** nothing. Thirty-ninth consecutive absence.
+
+**Merge gate:** all five CI jobs green. Applied to all five spokes before the merge under the single-policy plan guard (each plan exactly `0 to add, 1 to change, 0 to destroy`), and proven by the eu-oit-prd spoke answering the Prana allowlist question with named IP sets, rule groups, the CloudFront association and the security-group facts in 76 s. Awaiting the user's explicit go-ahead.
+
+**Takeaway:** *the question the operator actually asked is the acceptance test for a read grant.* The existing Web ACL reads looked complete on paper; the addresses live one hop further in IP sets, and nobody had asked the spoke where an allowlist lives until today.
