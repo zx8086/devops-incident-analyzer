@@ -1046,3 +1046,36 @@ The largest change in this run: 35 files across four packages, rekeying pi-coms 
 3. *The dangerous errors were the ones that typechecked.* `hubFor(manifest, spoke.env)` still compiles after the key changes meaning -- both are strings -- so it would have resolved the wrong hub silently. Grepping every call site by hand was the only way to find those; the compiler found the other half.
 4. *Verifying "no infrastructure change" is cheap and worth it.* Re-rendering all five spoke roots showed `main.tf`, `terraform.tfvars` and `backend.hcl` byte-identical, with only a generated comment differing -- which is what let the PR claim no terraform re-apply, rather than asserting it from the design doc.
 5. *A mid-change handoff cost nothing here.* The first session stopped at a coherent boundary with the backend green and a partial wire-type edit reverted; the second picked it up from the branch and the handover with no rework. Worth repeating when a change outgrows one context.
+
+## PR #716 detail (SIO-1674, drift detection and Config compliance reads for the spokes)
+
+Four files: one `DriftAndComplianceReads` statement on the Terraform-managed `pi-coms-extensions` policy, the spoke persona rule that drift detection is a permitted read, and two doc touches.
+
+**Greptile:** terminal **SKIPPED** (id 23332813, 161 ms, `strictness: 2`, body null). Thirty-third consecutive skip.
+
+**CodeRabbit:** nothing, through CI completion. Thirty-third consecutive absence.
+
+**Merge gate:** all five CI jobs green. Zero bot findings. Merged on the user's explicit instruction with the documented gate knowingly overridden. Squash `05aca3b2`. Applied to the three live prd spokes before the merge with a plan guard (exactly one in-place policy update each).
+
+**Takeaways:**
+
+1. *The service authorization reference settles "is this a write" in seconds.* `servicereference.us-east-1.amazonaws.com/v1/<svc>/<svc>.json` classifies every action; `cloudformation:Detect*Drift` is `IsWrite: false`, which is the fact the read-only boundary needed and neither bot would have supplied.
+2. *A plan-guarded apply is a review of its own.* Copying the gitignored inputs into the worktree root and refusing to apply unless the plan was exactly the one policy update caught nothing this time, but it is the check that would have caught an accidental instance replacement.
+
+## PR #717 detail (SIO-1673, mute and budget monitor investigations; spoke context rail)
+
+Twenty-two files under `packages/pi-coms` plus the persona: a monitor client reply-race fix, persisted operator controls, an investigation budget, a spoke inbound policy with refusal and compaction, bootstrap overrides, docs.
+
+**Greptile:** terminal **SKIPPED** on both heads (ids 23332975 and the rebased head), `strictness: 2`, body null. Thirty-fourth consecutive skip.
+
+**CodeRabbit:** nothing, through CI completion on both heads. Thirty-fourth consecutive absence.
+
+**Substitute review:** with both bots silent, a local eight-angle review (`/code-review high`: line-by-line, removed behavior, cross-file, reuse, simplification, efficiency, altitude, conventions) produced 10 surviving findings, 7 confirmed and fixed before merge: the launcher's `${!key}` under `set -u` aborting on a hand-written env line (reproduced), the monitor unit's `;` before `exec` losing fail-fast (reproduced), a last env line dropped without a trailing newline, instant refusals burning the daily budget, a malformed budget value turning into `NaN`, the PAUSED header hiding DEGRADED, and a `Bun.sleep` race timer holding the process open. Two altitude and cosmetic findings were declined with reasons.
+
+**Merge gate:** all five CI jobs green on the rebased head. Merged on the user's explicit instruction with the documented gate knowingly overridden. Squash `c3263057`.
+
+**Takeaways:**
+
+1. *The local review earned its keep on the bash, not the TypeScript.* Every reproduced defect was in `agent-bootstrap.sh`: indirect expansion, `;` versus `&&`, `read -r` and the missing newline. Typecheck, Biome and 296 passing tests said nothing about any of them. Shell that reads an operator-written file deserves a repro, not a read-through.
+2. *Two rails from one ticket can fight.* The spoke's instant refusal existed to stop the monitor waiting out its deadline; counting the refused attempt against the monitor's budget would have let a muted spoke exhaust that budget in six hours. The cross-file angle is the one that sees interactions like that.
+3. *Verify the diagnosis live when the host is a command away.* The spoke had already compacted itself (98% to 10%, one compaction entry) by the time the relief ran, which confirmed the 98.4% threshold analysis and made the restart a formality rather than the fix.
