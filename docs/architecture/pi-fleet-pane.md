@@ -85,6 +85,8 @@ LLM call. The verify and investigate cards (SIO-1635) remain the only path
 where a hub reply is validated, and there only against the analyzer's own
 `response_schema`.
 
+A `complete` reply with an empty body is rendered as "(empty reply from <spoke>)" rather than nothing, and since SIO-1678 the hub stores such a submission as `error: empty_reply`, so in practice the pane shows the error line instead.
+
 ## Tests
 
 - `apps/web/src/lib/server/pi-fleet.test.ts`: the real client against a

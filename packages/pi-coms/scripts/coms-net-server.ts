@@ -1492,10 +1492,17 @@ async function handleSubmitResponse(req: Request, msg_id: string, auth: AuthResu
 		return errorJson("already_terminal", 409, { status: msg.status });
 	}
 
-	const isError = body.error !== null && body.error !== undefined;
+	// SIO-1678: a blank reply with no error is a failed turn wearing a success
+	// status (the responder had no assistant text to post). Store it as an error
+	// so every sender sees "not answered" instead of an empty completed body.
+	const blankReply =
+		body.response === undefined ||
+		body.response === null ||
+		(typeof body.response === "string" && body.response.trim() === "");
+	const isError = (body.error !== null && body.error !== undefined) || blankReply;
 	msg.status = isError ? "error" : "complete";
 	msg.response = body.response ?? null;
-	msg.error = isError ? String(body.error) : null;
+	msg.error = body.error !== null && body.error !== undefined ? String(body.error) : isError ? "empty_reply" : null;
 	msg.completed_at = nowIso();
 	mailFor(msg.project).upsert(msg);
 

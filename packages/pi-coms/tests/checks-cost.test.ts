@@ -33,22 +33,33 @@ describe("checkCost", () => {
 	test("over both thresholds alerts once per day", async () => {
 		const state = new MonitorState(":memory:");
 		const client = fakeClient(days(10, 13)); // +30 pct and +3 usd
-		const out = await checkCost(client, state, { now: NOW });
+		const out = await checkCost(client, state, { now: NOW, pct: 20, abs: 1 });
 		expect(out).toHaveLength(1);
 		expect(out[0].dedup_key).toBe("cost:2026-08-29");
-		expect(await checkCost(client, state, { now: NOW })).toHaveLength(0);
+		expect(await checkCost(client, state, { now: NOW, pct: 20, abs: 1 })).toHaveLength(0);
 	});
 
 	test("over pct but under abs stays quiet", async () => {
 		const state = new MonitorState(":memory:");
-		const out = await checkCost(fakeClient(days(1, 1.5)), state, { now: NOW }); // +50 pct, +0.50 usd
+		const out = await checkCost(fakeClient(days(1, 1.5)), state, { now: NOW, pct: 20, abs: 1 }); // +50 pct, +0.50 usd
 		expect(out).toHaveLength(0);
 	});
 
 	test("over abs but under pct stays quiet", async () => {
 		const state = new MonitorState(":memory:");
-		const out = await checkCost(fakeClient(days(100, 110)), state, { now: NOW }); // +10 usd, +10 pct
+		const out = await checkCost(fakeClient(days(100, 110)), state, { now: NOW, pct: 20, abs: 1 }); // +10 usd, +10 pct
 		expect(out).toHaveLength(0);
+	});
+
+	// SIO-1680: fleet default is an absolute $100 gate with the percentage filter off.
+	test("default gate: a $99 rise stays quiet, a $101 rise is one warn finding", async () => {
+		const quiet = new MonitorState(":memory:");
+		expect(await checkCost(fakeClient(days(1000, 1099)), quiet, { now: NOW })).toHaveLength(0);
+		const loud = new MonitorState(":memory:");
+		const out = await checkCost(fakeClient(days(1000, 1101)), loud, { now: NOW }); // +10 pct only
+		expect(out).toHaveLength(1);
+		expect(out[0].severity).toBe("warn");
+		expect(out[0].evidence).toEqual({ date: "2026-08-29", usd: 1101, baseline: 1000 });
 	});
 
 	test("no baseline yet stays quiet but records costs", async () => {

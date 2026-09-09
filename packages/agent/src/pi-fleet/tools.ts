@@ -163,9 +163,17 @@ export function buildFleetTools(deps: FleetToolDeps): StructuredToolInterface[] 
 				const client = await clientForEstate(estate, shared);
 				const reply = await client.awaitReply(msgId, shared.config.verifyTimeoutMs);
 				if (reply.status !== "complete") {
-					return `No answer from ${estate} (status: ${reply.status}). Report this estate as not reached.`;
+					// The hub's error text is hub/extension-authored (e.g. "empty_reply",
+					// "agent run error: AccessDeniedException ..."), not spoke prose, so it
+					// is safe to show and is exactly what the operator needs to hear.
+					const reason = reply.error ? `: ${reply.error}` : "";
+					return `No answer from ${estate} (status: ${reply.status}${reason}). Report this estate as not reached.`;
 				}
-				const text = typeof reply.response === "string" ? reply.response : JSON.stringify(reply.response);
+				const text = typeof reply.response === "string" ? reply.response : JSON.stringify(reply.response ?? null);
+				// SIO-1678: an empty completed reply is a failed turn, never evidence.
+				if (text.trim() === "" || text === "null") {
+					return `Empty reply from ${estate}: the message completed with no text. Report this estate as not answered, not as clean.`;
+				}
 				return wrapUntrusted(estate, text);
 			} catch (error) {
 				return `Await failed for ${estate}: ${error instanceof Error ? error.message : String(error)}`;

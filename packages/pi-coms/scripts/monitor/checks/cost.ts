@@ -10,8 +10,10 @@ export async function checkCost(
 	opts: { now?: Date; pct?: number; abs?: number } = {},
 ): Promise<Finding[]> {
 	const now = opts.now ?? new Date();
-	const pct = opts.pct ?? 20;
-	const abs = opts.abs ?? 1;
+	// Defaults mirror the monitor's fleet defaults (SIO-1680): absolute $100 gate,
+	// percentage filter off.
+	const pct = opts.pct ?? 0;
+	const abs = opts.abs ?? 100;
 
 	const end = now.toISOString().slice(0, 10); // exclusive
 	const start = new Date(now.getTime() - 15 * 86_400_000).toISOString().slice(0, 10);
@@ -36,7 +38,8 @@ export async function checkCost(
 	if (baseline === null) return [];
 
 	// Alert only when over by BOTH thresholds: pct filters noise on small
-	// accounts, abs filters noise on near-zero baselines.
+	// accounts, abs filters noise on near-zero baselines. With pct 0 the
+	// percentage gate is a no-op and abs alone decides (SIO-1680).
 	const overPct = latest.usd > baseline * (1 + pct / 100);
 	const overAbs = latest.usd > baseline + abs;
 	if (!(overPct && overAbs)) return [];

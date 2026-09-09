@@ -2,7 +2,18 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { api, type ErrorResponse, type InboxListing, register, startHub, stopAllHubs, TOKEN } from "./harness.ts";
+import {
+	api,
+	type ErrorResponse,
+	type InboxListing,
+	type MessageLookup,
+	register,
+	type SendResponse,
+	send,
+	startHub,
+	stopAllHubs,
+	TOKEN,
+} from "./harness.ts";
 
 afterEach(async () => {
 	await stopAllHubs();
@@ -58,5 +69,47 @@ describe("hub request validation", () => {
 		const hb = { project: "default", context_used_pct: 1, queue_depth: 0 };
 		expect((await api(hub, "POST", "/v1/agents/S1/heartbeat", hb, TOKEN)).status).toBe(200);
 		expect((await api(hub, "DELETE", "/v1/agents/S2?project=default", undefined, TOKEN)).status).toBe(200);
+	});
+});
+
+// SIO-1678: a responder that posts a blank body with no error was stored as a
+// completed reply; every sender then read "" as an answer.
+describe("blank replies", () => {
+	test("a blank response with no error is stored as error empty_reply, never complete", async () => {
+		const hub = await startHub();
+		await register(hub, "S1", "asker");
+		await register(hub, "S2", "spoke");
+		const sent = (await (await send(hub, "S1", "spoke", "Reply with exactly: ok")).json()) as SendResponse;
+		for (const blank of ["", "   \n", null]) {
+			const r = await api(hub, "POST", `/v1/messages/${sent.msg_id}/response`, {
+				project: "default",
+				responder_session: "S2",
+				response: blank,
+				error: null,
+			});
+			// Only the first submission lands; the message is terminal afterwards.
+			if (blank === "") expect(r.status).toBe(200);
+			else expect(r.status).toBe(409);
+		}
+		const looked = (await (await api(hub, "GET", `/v1/messages/${sent.msg_id}`)).json()) as MessageLookup;
+		expect(looked.status).toBe("error");
+		expect(looked.error).toBe("empty_reply");
+	});
+
+	test("an explicit error keeps its own text", async () => {
+		const hub = await startHub();
+		await register(hub, "S1", "asker");
+		await register(hub, "S2", "spoke");
+		const sent = (await (await send(hub, "S1", "spoke", "hi")).json()) as SendResponse;
+		const r = await api(hub, "POST", `/v1/messages/${sent.msg_id}/response`, {
+			project: "default",
+			responder_session: "S2",
+			response: null,
+			error: "agent run error: AccessDeniedException: Model access is denied",
+		});
+		expect(r.status).toBe(200);
+		const looked = (await (await api(hub, "GET", `/v1/messages/${sent.msg_id}`)).json()) as MessageLookup;
+		expect(looked.status).toBe("error");
+		expect(looked.error).toBe("agent run error: AccessDeniedException: Model access is denied");
 	});
 });

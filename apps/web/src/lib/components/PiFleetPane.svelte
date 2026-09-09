@@ -215,6 +215,9 @@ function shortPrompt(text: string): string {
             {/if}
             {#if formatReply(entry.response) !== ""}
               <pre class="mt-2 text-xs bg-tommy-offwhite rounded p-2 overflow-x-auto whitespace-pre-wrap break-words">{formatReply(entry.response)}</pre>
+            {:else if !entry.error}
+              <!-- SIO-1678: a completed reply with no text is a failed turn, not a quiet success. -->
+              <p class="mt-2 text-xs text-amber-700">(empty reply from {entry.target}: the spoke completed the turn with no text; treat as not answered)</p>
             {/if}
           {/if}
           {#if entry.sender}

@@ -57,6 +57,8 @@ Five, all hub operations, in `packages/agent/src/pi-fleet/tools.ts`:
 - `fleet_inbox` -- recent messages and monitor reports for an estate.
 - `fleet_status` -- which environment hub an estate routes to.
 
+An empty answer is never evidence (SIO-1678). `fleet_await_reply` reports a `complete` reply with no text as "Empty reply from <estate> ... not answered", and a non-`complete` status together with the hub's error text (for example `empty_reply`, or `agent run error: AccessDeniedException ...` from the spoke extension). Only a non-empty body ever enters `wrapUntrusted`.
+
 Each resolves the hub from the estate's name suffix (`-dev`, `-stg`, `-prd`)
 through `selectHubForEstate`. An estate whose environment cannot be determined,
 or whose environment has no configured hub, is refused rather than guessed: no

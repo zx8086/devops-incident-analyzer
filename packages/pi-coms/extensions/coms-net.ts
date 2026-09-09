@@ -821,7 +821,7 @@ export default function (pi: ExtensionAPI) {
 
 	// A refused prompt is answered at once with an error so the sender's await
 	// ends now rather than at its deadline; it never enters inboundQueue, so
-	// agent_end has nothing to claim for it.
+	// the settled-turn claim has nothing to post for it.
 	async function refuseInbound(
 		msg_id: string,
 		senderName: string,
@@ -1895,7 +1895,7 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	// Set in agent_end, consumed in agent_settled: investigations are stateless
+	// Set while posting the settled turn's replies: investigations are stateless
 	// (the monitor injects prior context itself), so the session may shrink
 	// once it passes the token threshold. agent_settled and not agent_end
 	// because the run is still active in agent_end and compact() aborts it.

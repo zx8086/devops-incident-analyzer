@@ -100,8 +100,11 @@ export function investigateBudgetMs(
 ): number {
 	return Math.min(baseMs + perFindingMs * findingCount, maxMs);
 }
-const COST_PCT = Number(process.env.PI_MONITOR_COST_PCT ?? 20);
-const COST_ABS = Number(process.env.PI_MONITOR_COST_ABS ?? 1);
+// SIO-1680: an absolute gate. A day-over-baseline rise under $100 is noise for
+// this fleet; anything over is one warn finding. PCT 0 disables the percentage
+// filter so a $100 rise on a large baseline is not hidden by a small ratio.
+const COST_PCT = Number(process.env.PI_MONITOR_COST_PCT ?? 0);
+const COST_ABS = Number(process.env.PI_MONITOR_COST_ABS ?? 100);
 const LOGS_FILTER = process.env.PI_MONITOR_LOGS_FILTER; // check default applies when unset
 const LOGS_MAX_GROUPS = process.env.PI_MONITOR_LOGS_MAX_GROUPS
 	? Number(process.env.PI_MONITOR_LOGS_MAX_GROUPS)
@@ -342,7 +345,8 @@ function main(): void {
 				record(refused ? "refused" : reply.error === "timeout" ? "timeout" : "failed");
 				return { diagnoses: null, failure: `agent reply error: ${reply.error}` };
 			}
-			if (reply.response == null) {
+			// SIO-1678: a blank string is as empty as null (a run with no assistant text).
+			if (reply.response == null || (typeof reply.response === "string" && reply.response.trim() === "")) {
 				record("failed");
 				return { diagnoses: null, failure: "agent reply empty" };
 			}

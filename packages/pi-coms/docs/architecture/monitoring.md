@@ -177,7 +177,7 @@ Env-with-defaults; no config files. Set in the systemd unit environment or `~/.c
 | `PI_MONITOR_INGEST_MIN_EVENTS` | `10` | Same-hour median floor below which a group never alerts on silence |
 | `PI_MONITOR_WATCHLIST` | see `checks/watchlist.ts` | Comma-separated CloudTrail event names; setting it replaces the default |
 | `PI_MONITOR_CERT_WARN_DAYS` / `PI_MONITOR_CERT_CRIT_DAYS` | `30` / `7` | Certificate expiry thresholds |
-| `PI_MONITOR_COST_PCT` / `PI_MONITOR_COST_ABS` | `20` / `1` | Cost anomaly double threshold |
+| `PI_MONITOR_COST_PCT` / `PI_MONITOR_COST_ABS` | `0` / `100` | Cost anomaly threshold: yesterday must exceed the 14-day baseline by BOTH values; the fleet default is an absolute $100 gate with the percentage filter off (SIO-1680) |
 | `PI_MONITOR_STATE_DB` | `~/.pi/monitor/state.db` | State location |
 
 Hub-side: `PI_COMS_NET_MAX_TTL_MS` (default `1209600000`, 14 days) caps any requested `ttl_ms`.

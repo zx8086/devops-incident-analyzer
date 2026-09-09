@@ -95,6 +95,36 @@ describe("PiFleetPane", () => {
 		expect(body).toContain("on hub eu-shared-services-dev");
 	});
 
+	// SIO-1678: eu-oit-prd answered `complete` + "" for two hours; the pane showed nothing.
+	test("an empty completed reply is named as such, not rendered as nothing", () => {
+		const selected = selectPeer(applyAgents(initialPiFleetState(), listing), {
+			hubKey: "eu-shared-services-dev",
+			name: "alpha-dev",
+		});
+		const pending = startEntry(selected, {
+			id: "e1",
+			hubKey: "eu-shared-services-dev",
+			target: "alpha-dev",
+			prompt: "Reply with exactly: ok",
+			sentAt: 0,
+		});
+		const done = applySendResult(pending, "e1", {
+			hubKey: "eu-shared-services-dev",
+			environment: "dev",
+			msgId: "m1",
+			status: "complete",
+			response: "",
+			error: null,
+			target: "alpha-dev",
+			sender: "pi-fleet-abcd1234",
+			sentAt: "x",
+		});
+		const body = renderPane(done);
+		expect(body).toContain("empty reply from alpha-dev");
+		expect(body).toContain("not answered");
+		expect(body).not.toContain("<pre");
+	});
+
 	test("an expired wait reads as a timeout, not a hang", () => {
 		const selected = selectPeer(applyAgents(initialPiFleetState(), listing), {
 			hubKey: "eu-shared-services-dev",

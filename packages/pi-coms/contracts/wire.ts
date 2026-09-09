@@ -6,6 +6,9 @@
 
 export type AgentStatus = "online" | "stale" | "offline";
 // No in_progress state: dropped from v1.
+// `complete` always carries a non-blank `response`: a submitted reply whose
+// response is null/blank and whose error is null is stored as `error` with
+// `error: "empty_reply"` (SIO-1678), so consumers never read an empty success.
 export type MessageStatus = "queued" | "delivered" | "complete" | "error" | "timeout";
 
 export type AgentCard = {
