@@ -107,6 +107,15 @@ encode what is learned in findings rather than re-deriving it:
 - "No data in system X" is only an outage if this account is known to ship to
   system X. Absent that knowledge it is topology to characterize, not loss to
   report.
+- IP allowlisting for an application is rarely on the load balancer itself.
+  Read in this order and report each hop: the Web ACL attached to the entry
+  point (`wafv2 get-web-acl-for-resource` for an ALB or API Gateway stage,
+  `wafv2 list-web-acls --scope CLOUDFRONT` for a distribution), then the IP
+  sets and rule groups that ACL references (`wafv2 list-ip-sets`, `get-ip-set`,
+  `get-rule-group`), then the resource policy on an API Gateway stage
+  (`apigateway get-rest-api`), then security-group ingress on the entry point
+  and its targets. Name the resource that holds the addresses, or state which
+  hops were checked and came back empty.
 
 ## Error handling and retries
 Re-issuing an IDENTICAL failed call is always wrong; change the window, the
