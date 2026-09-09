@@ -1,6 +1,6 @@
 // tests/monitor-cycle.test.ts
 import { describe, expect, test } from "bun:test";
-import { type CycleDeps, investigateBudgetMs, makeGuard, runCycle } from "../scripts/coms-net-monitor.ts";
+import { type CycleDeps, envCount, investigateBudgetMs, makeGuard, runCycle } from "../scripts/coms-net-monitor.ts";
 import type { Finding } from "../scripts/monitor/report.ts";
 import { MonitorState } from "../scripts/monitor/state.ts";
 
@@ -240,5 +240,85 @@ describe("investigateBudgetMs", () => {
 	test("caps at the max so a huge batch cannot stall cycles", () => {
 		expect(investigateBudgetMs(45, 300_000, 60_000, 1_800_000)).toBe(1_800_000);
 		expect(investigateBudgetMs(1_000, 300_000, 60_000, 1_800_000)).toBe(1_800_000);
+	});
+});
+
+describe("investigation budget (SIO-1673)", () => {
+	const budget = { perDay: 24, perResourcePerDay: 3 };
+
+	test("a resource at its daily cap is held back with its reason, the rest is still investigated", async () => {
+		let sentBatch: Finding[] = [];
+		const d = deps({
+			budget,
+			checks: [
+				{
+					name: "logs",
+					run: async () => [
+						F({ family: "logs", severity: "warn", resource: "/ecs/noisy", dedup_key: "logs:/ecs/noisy:sig9" }),
+						F(),
+					],
+				},
+			],
+			investigate: async (findings) => {
+				sentBatch = findings;
+				return { diagnoses: new Map(), failure: null };
+			},
+		});
+		for (let i = 0; i < 3; i++) {
+			d.state.journal("investigation", { resources: ["/ecs/noisy"], dedup_keys: [`k${i}`], count: 1, target: "t" });
+		}
+		await runCycle(d);
+		expect(sentBatch.map((f) => f.dedup_key)).toEqual(["alarm:cpu:ALARM"]);
+		expect(d.sent[0]).toContain("/ecs/noisy: alarm fired");
+		expect(d.sent[0]).toContain("uninvestigated: resource over daily investigation cap (3/3 in 24h)");
+	});
+
+	test("an exhausted daily budget sends no prompt at all but still reports", async () => {
+		let investigated = false;
+		const d = deps({
+			budget,
+			investigate: async () => {
+				investigated = true;
+				return { diagnoses: new Map(), failure: null };
+			},
+		});
+		for (let i = 0; i < 24; i++) {
+			d.state.journal("investigation", { resources: [`r${i}`], dedup_keys: [], count: 1, target: "t" });
+		}
+		await runCycle(d);
+		expect(investigated).toBe(false);
+		expect(d.sent).toHaveLength(1);
+		expect(d.sent[0]).toContain("uninvestigated: daily investigation budget exhausted (24/24 prompts in 24h)");
+		expect(d.state.journalRows(60_000, "finding")).toHaveLength(1);
+	});
+
+	test("without a budget in deps nothing is held back", async () => {
+		let count = 0;
+		const d = deps({
+			investigate: async (findings) => {
+				count = findings.length;
+				return { diagnoses: new Map(), failure: null };
+			},
+		});
+		for (let i = 0; i < 30; i++) {
+			d.state.journal("investigation", { resources: ["cpu"], dedup_keys: [], count: 1, target: "t" });
+		}
+		await runCycle(d);
+		expect(count).toBe(1);
+	});
+});
+
+describe("envCount", () => {
+	test("keeps the default for unset, empty, non-numeric, negative and fractional values", () => {
+		expect(envCount(undefined, 24)).toBe(24);
+		expect(envCount("", 24)).toBe(24);
+		expect(envCount("24/day", 24)).toBe(24);
+		expect(envCount("-1", 24)).toBe(24);
+		expect(envCount("2.5", 24)).toBe(24);
+	});
+
+	test("accepts a plain non-negative integer, zero included", () => {
+		expect(envCount("0", 24)).toBe(0);
+		expect(envCount(" 12 ", 24)).toBe(12);
 	});
 });

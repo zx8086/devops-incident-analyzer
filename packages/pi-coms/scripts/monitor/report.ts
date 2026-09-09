@@ -75,14 +75,16 @@ const NOTABLE_CAP = 10;
 
 export function formatIncidentReport(
 	accountId: string,
-	items: { finding: Finding; diagnosis: Diagnosis | null }[],
+	// skipped: a per-finding reason it was left out of the investigation batch
+	// (budget caps); it wins over the batch-wide investigationFailure.
+	items: { finding: Finding; diagnosis: Diagnosis | null; skipped?: string }[],
 	investigationFailure?: string | null,
 	suppressedCount = 0,
 ): string {
 	const sorted = [...items].sort((a, b) => SEV_ORDER[a.finding.severity] - SEV_ORDER[b.finding.severity]);
 	const top = sorted[0]?.finding.severity ?? "info";
 	const lines: string[] = [`[${top}] aws-${accountId}: ${sorted.length} finding(s)`, ""];
-	for (const { finding, diagnosis } of sorted) {
+	for (const { finding, diagnosis, skipped } of sorted) {
 		lines.push(`- (${finding.severity}/${finding.family}) ${finding.resource}: ${finding.summary}`);
 		if (diagnosis) {
 			lines.push(`  cause: ${diagnosis.probable_cause}`);
@@ -91,7 +93,7 @@ export function formatIncidentReport(
 			}
 			lines.push(`  action: ${diagnosis.suggested_action}`);
 		} else if (finding.severity !== "info") {
-			lines.push(`  (uninvestigated: ${investigationFailure ?? "agent unavailable or response invalid"})`);
+			lines.push(`  (uninvestigated: ${skipped ?? investigationFailure ?? "agent unavailable or response invalid"})`);
 		}
 		lines.push(`  evidence: ${JSON.stringify(finding.evidence)}`);
 	}
@@ -202,15 +204,24 @@ export type DigestInput = {
 	bundleVersion?: string | null;
 	suppressedCount?: number;
 	notables?: DigestNotable[];
+	// Operator pause (SIO-1673): the digest still ships as the dead-man signal,
+	// but it must say that the check cycles behind it were skipped.
+	paused?: { reason: string; since: string } | null;
 };
 
 export function formatDigest(d: DigestInput): string {
 	const total = Object.values(d.findingCounts).reduce((a, b) => a + b, 0);
 	// A green digest produced while checks errored is a lie: degradation is
 	// the headline, not a line item.
+	// Pause and degradation are independent; both belong in the headline.
+	const pausedNote = d.paused
+		? `PAUSED: check cycles skipped since ${d.paused.since}${d.paused.reason ? ` (${d.paused.reason})` : ""}; send "resume" to the monitor`
+		: "";
+	const degradedNote = d.checkErrors > 0 ? `DEGRADED: ${d.checkErrors} check error(s) (since ${d.since})` : "";
+	const notes = [pausedNote, degradedNote].filter(Boolean);
 	const header =
-		d.checkErrors > 0
-			? `[warn] aws-${d.accountId} daily digest DEGRADED: ${d.checkErrors} check error(s) (since ${d.since})`
+		notes.length > 0
+			? `[warn] aws-${d.accountId} daily digest ${notes.join("; ")}`
 			: `[info] aws-${d.accountId} daily digest (since ${d.since})`;
 	const lines: string[] = [header, ""];
 	if (total === 0) {

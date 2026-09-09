@@ -113,3 +113,40 @@ describe("MonitorComs", () => {
 		await agent.stop();
 	});
 });
+
+// The hub streams the prompt to the target before it answers the sender's
+// POST, so an instant reply can beat send(); it must be adopted, never waited
+// out (SIO-1673). Many rounds because the ordering is a race by nature.
+test("an instant reply that beats send() is adopted instead of timing out", async () => {
+	const hub = await startHub();
+	const monitor = new MonitorComs({
+		serverUrl: hub.url,
+		token: TOKEN,
+		project: "default",
+		name: "monitor-aws-fast",
+		purpose: "test monitor",
+		onPrompt: async () => "unused",
+	});
+	await monitor.start();
+	const spoke = new MonitorComs({
+		serverUrl: hub.url,
+		token: TOKEN,
+		project: "default",
+		name: "aws-fast",
+		purpose: "instant refuser",
+		onPrompt: async () => {
+			throw new Error("recipient muted (monitor-*)");
+		},
+	});
+	await spoke.start();
+	await new Promise((r) => setTimeout(r, 100));
+
+	for (let i = 0; i < 10; i++) {
+		const sent = await sendWithRetry(() => monitor.send("aws-fast", `investigate ${i}`, { response_schema: {} }));
+		const reply = await monitor.awaitReply(sent.msg_id, 3_000);
+		expect(reply.error).toBe("recipient muted (monitor-*)");
+	}
+	expect(monitor.pendingSize()).toBe(0);
+	await spoke.stop();
+	await monitor.stop();
+}, 30_000);

@@ -243,6 +243,15 @@ ENV_FILE="$AGENT_HOME/.coms-env"
 } > "$ENV_FILE"
 chown "$AGENT_USER:$AGENT_USER" "$ENV_FILE"
 chmod 600 "$ENV_FILE"
+# Operator-owned per-host overrides (lines of `export KEY=value`), sourced
+# after .coms-env by both units. Never written by the bootstrap, so a bundle
+# update or re-bootstrap keeps it and no Terraform change is needed to set,
+# for example, PI_COMS_NET_MUTE_SENDERS on one host (SIO-1673).
+LOCAL_ENV_FILE="$AGENT_HOME/.coms-env.local"
+if [ -f "$LOCAL_ENV_FILE" ]; then
+  chown "$AGENT_USER:$AGENT_USER" "$LOCAL_ENV_FILE"
+  chmod 600 "$LOCAL_ENV_FILE"
+fi
 
 # ── DevOpsAgentReadOnly profile ────────────────────────────────────────────
 # The assumed-role session is where all investigation reads (and, in Bedrock
@@ -351,7 +360,7 @@ Type=simple
 User=$AGENT_USER
 WorkingDirectory=$AGENT_HOME/pi-coms
 Environment=HOME=$AGENT_HOME
-ExecStart=/bin/bash -c 'source \$HOME/.coms-env && exec \$HOME/.bun/bin/bun scripts/coms-net-monitor.ts'
+ExecStart=/bin/bash -c 'source \$HOME/.coms-env && { [ ! -f \$HOME/.coms-env.local ] || source \$HOME/.coms-env.local; } && exec \$HOME/.bun/bin/bun scripts/coms-net-monitor.ts'
 Restart=always
 RestartSec=10
 
@@ -364,6 +373,8 @@ cat > "$AGENT_HOME/bin/start-pi-agent.sh" <<'LAUNCH'
 #!/usr/bin/env bash
 set -euo pipefail
 source "$HOME/.coms-env"
+# Per-host operator overrides, if any (see LOCAL_ENV_FILE in the bootstrap).
+if [ -f "$HOME/.coms-env.local" ]; then source "$HOME/.coms-env.local"; fi
 export PATH="$HOME/.bun/bin:$HOME/.local/bin:$PATH"
 
 # systemd starts this as soon as herdr.service is spawned, which can precede the
@@ -437,17 +448,26 @@ if [ "$RELOAD" -eq 1 ]; then
 fi
 
 # Workspace env is inherited by every pane, so Pi sees the hub URL, token, and
-# provider keys. Forward every export from .coms-env.
+# provider keys. Forward every export from .coms-env and the local overrides.
 ENV_ARGS=()
-while IFS= read -r line; do
-  case "$line" in
-    "export "*)
-      key="${line#export }"
-      key="${key%%=*}"
-      ENV_ARGS+=(--env "$key=${!key}")
-      ;;
-  esac
-done < "$HOME/.coms-env"
+# The local file is hand-written: a line may lack a trailing newline, sit
+# inside a conditional that did not fire, or name a variable that is not
+# set. Forward only names that are actually set (set -u is on), and read the
+# last line even without its newline.
+for env_file in "$HOME/.coms-env" "$HOME/.coms-env.local"; do
+  [ -f "$env_file" ] || continue
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      "export "*)
+        key="${line#export }"
+        key="${key%%=*}"
+        [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        [ -n "${!key+x}" ] || continue
+        ENV_ARGS+=(--env "$key=${!key}")
+        ;;
+    esac
+  done < "$env_file"
+done
 
 WS_JSON="$(herdr workspace create \
   --cwd "$HOME/pi-coms" \

@@ -34,7 +34,11 @@ operator role.
   registered as an explicit peer, hidden from the pool widget and from
   broadcasts. I address it by full name for commands: `run-checks`, `status`,
   `digest`, `review`, `history`, `suppressions`,
-  `suppress <pattern> | <reason>`, `unsuppress <pattern>`.
+  `suppress <pattern> | <reason>`, `unsuppress <pattern>`,
+  `investigate on|off [reason]`, `pause [reason]`, `resume`. `investigate
+  off` stops the monitor waking its account agent (findings still land in
+  the inbox, marked uninvestigated); `pause` stops the check cycles; both
+  persist until reversed and are the operator's decision, never mine.
 - Agents are read-only by design. I never instruct one to change
   infrastructure, and never ask one for secret values: their access is
   metadata-only and the request itself is noise in the audit log.

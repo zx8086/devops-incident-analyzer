@@ -347,3 +347,73 @@ describe("suppression review", () => {
 		expect(text).toContain("nothing is being masked");
 	});
 });
+
+describe("SIO-1673 report markers", () => {
+	test("a per-finding skipped reason wins over the batch-wide failure", () => {
+		const text = formatIncidentReport(
+			"123",
+			[
+				{
+					finding: {
+						family: "logs",
+						severity: "warn",
+						resource: "/ecs/noisy",
+						summary: "3 error-pattern event(s)",
+						dedup_key: "logs:/ecs/noisy:a",
+						evidence: {},
+						at: "2026-09-09T00:00:00Z",
+					},
+					diagnosis: null,
+					skipped: "resource over daily investigation cap (3/3 in 24h)",
+				},
+				{
+					finding: {
+						family: "alarm",
+						severity: "critical",
+						resource: "cpu",
+						summary: "alarm fired",
+						dedup_key: "alarm:cpu:ALARM",
+						evidence: {},
+						at: "2026-09-09T00:00:00Z",
+					},
+					diagnosis: null,
+				},
+			],
+			"agent reply error: timeout",
+		);
+		expect(text).toContain("(uninvestigated: resource over daily investigation cap (3/3 in 24h))");
+		expect(text).toContain("(uninvestigated: agent reply error: timeout)");
+	});
+
+	test("a paused monitor leads the digest with PAUSED and the resume hint", () => {
+		const text = formatDigest({
+			accountId: "123",
+			since: "2026-09-08T00:00:00Z",
+			findingCounts: {},
+			checkErrors: 0,
+			activeAlarms: [],
+			yesterdayUsd: null,
+			baselineUsd: null,
+			paused: { reason: "context storm", since: "2026-09-09T10:00:00Z" },
+		});
+		expect(text.split("\n")[0]).toBe(
+			'[warn] aws-123 daily digest PAUSED: check cycles skipped since 2026-09-09T10:00:00Z (context storm); send "resume" to the monitor',
+		);
+	});
+
+	test("a paused AND degraded digest keeps both in the headline", () => {
+		const text = formatDigest({
+			accountId: "123",
+			since: "2026-09-08T00:00:00Z",
+			findingCounts: {},
+			checkErrors: 2,
+			activeAlarms: [],
+			yesterdayUsd: null,
+			baselineUsd: null,
+			paused: { reason: "", since: "2026-09-09T10:00:00Z" },
+		});
+		const head = text.split("\n")[0];
+		expect(head).toContain("PAUSED: check cycles skipped since 2026-09-09T10:00:00Z;");
+		expect(head).toContain("DEGRADED: 2 check error(s)");
+	});
+});
