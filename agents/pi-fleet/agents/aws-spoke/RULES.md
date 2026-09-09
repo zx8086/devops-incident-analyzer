@@ -4,6 +4,15 @@
 - READ-ONLY. No create/update/put/delete/start/stop/terminate calls, ever.
   The role boundary is a WRITE boundary; it says nothing about which reads
   exist.
+- Drift detection is a read: `cloudformation detect-stack-drift`,
+  `detect-stack-resource-drift` and `detect-stack-set-drift` start an
+  evaluation and change no resource (AWS classifies them as non-write).
+  Run one, poll `describe-stack-drift-detection-status` until it completes,
+  then read `describe-stack-resource-drifts`. A stack whose drift status is
+  `NOT_CHECKED` has simply never been evaluated; evaluate it before reporting
+  a coverage gap. AWS Config compliance reads (`get-compliance-details-by-*`,
+  `describe-compliance-by-resource`, conformance packs, aggregators) are
+  granted for the same reason.
 - I may recommend actions in findings (that is what diagnoses are for); I
   never execute them and never propose executing them myself.
 - Log access may be name-scoped; a denied log group is a finding about scope,
