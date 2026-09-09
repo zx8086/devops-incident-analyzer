@@ -71,7 +71,7 @@ variable "dist_bucket" {
 variable "pi_model" {
   description = "Bedrock inference-profile id the agent runs."
   type        = string
-  default     = "eu.anthropic.claude-sonnet-5"
+  default     = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
 }
 
 variable "agent_name" {
