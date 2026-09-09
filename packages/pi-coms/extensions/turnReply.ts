@@ -40,7 +40,17 @@ export function turnFailure(turn: FinalAssistant): string | null {
 	if (turn.stopReason === "error" || turn.stopReason === "aborted") {
 		return `agent run ${turn.stopReason}: ${turn.errorMessage?.trim() || "no details"}`;
 	}
-	if (turn.text.trim() === "") return "empty reply: no assistant text";
+	// A "length" stop is the model cut off at its output limit: whatever text
+	// exists is truncated and cannot be trusted as the answer (Pi itself refuses
+	// to run tool calls from such a message).
+	if (turn.stopReason === "length") return "agent run length: answer truncated at the output token limit";
+	if (turn.text.trim() === "") {
+		// Any other non-terminal stop reason (pending, deferred) with no text is
+		// named, so the sender does not read a still-arriving answer as absent.
+		const reason =
+			turn.stopReason && turn.stopReason !== "stop" && turn.stopReason !== "toolUse" ? turn.stopReason : null;
+		return reason ? `agent run ${reason}: no assistant text` : "empty reply: no assistant text";
+	}
 	return null;
 }
 

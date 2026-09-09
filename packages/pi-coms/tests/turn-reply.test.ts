@@ -232,3 +232,33 @@ test("claimTurnReplies with `only` leaves inbounds that arrived after the run en
 	expect(queue.has("ran")).toBe(false);
 	expect(queue.get("late")?.fulfilled).toBe(false);
 });
+
+// Second-pass review (SIO-1678): the remaining stop reasons and the
+// failure + `only` combination that the incident actually exercised.
+import { turnFailure } from "../extensions/turnReply";
+
+test("turnFailure names every failed or textless outcome", () => {
+	expect(turnFailure({ text: "ok", stopReason: "stop" })).toBeNull();
+	expect(turnFailure({ text: "ok" })).toBeNull();
+	expect(turnFailure({ text: "partial", stopReason: "length" })).toBe(
+		"agent run length: answer truncated at the output token limit",
+	);
+	expect(turnFailure({ text: "", stopReason: "deferred" })).toBe("agent run deferred: no assistant text");
+	expect(turnFailure({ text: "", stopReason: "toolUse" })).toBe("empty reply: no assistant text");
+	expect(turnFailure({ text: "", stopReason: "error", errorMessage: "  " })).toBe("agent run error: no details");
+});
+
+test("a failed turn with `only` answers the run's inbounds and leaves a late one for the next run", () => {
+	const queue = new Map([
+		["ran", { msg_id: "ran", fulfilled: false, hops: 0 }],
+		["late", { msg_id: "late", fulfilled: false, hops: 0 }],
+	]);
+	const replies = claimTurnReplies(
+		queue,
+		{ text: "", stopReason: "error", errorMessage: "AccessDeniedException" },
+		new Set(["ran", "already-gone"]),
+	);
+	expect(replies).toEqual([{ msg_id: "ran", response: null, error: "agent run error: AccessDeniedException" }]);
+	expect(queue.has("ran")).toBe(false);
+	expect(queue.get("late")?.fulfilled).toBe(false);
+});

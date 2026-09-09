@@ -1910,14 +1910,22 @@ export default function (pi: ExtensionAPI) {
 	// queued when it ended; a prompt arriving in between belongs to the next run.
 	let settledTurn: { final: FinalAssistant; ids: Set<string> } | null = null;
 	pi.on("agent_end", async (event) => {
-		if (!identity || inboundQueue.size === 0) return;
+		if (!identity || inboundQueue.size === 0) {
+			settledTurn = null;
+			return;
+		}
 		settledTurn = { final: finalAssistant(event.messages), ids: new Set(inboundQueue.keys()) };
 	});
 
-	async function postTurnReplies(): Promise<void> {
+	// Claims synchronously, then posts. Pi marks the run inactive BEFORE it runs
+	// the agent_settled handlers, so a prompt that arrives while this handler is
+	// awaiting network I/O starts its own run at once; the claim must therefore
+	// be complete before the first await, and the handler must not hold the
+	// settle open on the POSTs (the returned promise is left to run).
+	function postTurnReplies(): Promise<void> {
 		const turn = settledTurn;
 		settledTurn = null;
-		if (!identity || !turn || inboundQueue.size === 0) return;
+		if (!identity || !turn || inboundQueue.size === 0) return Promise.resolve();
 		for (const q of inboundQueue.values()) {
 			if (!q.fulfilled && q.response_schema && turn.ids.has(q.msg_id)) answeredSchemaPrompt = true;
 		}
@@ -1931,7 +1939,7 @@ export default function (pi: ExtensionAPI) {
 		const replies = claimTurnReplies(inboundQueue, turn.final, turn.ids);
 		const project = identity.project;
 		const responderSession = identity.session_id;
-		await Promise.all(
+		return Promise.all(
 			replies.map(async (reply) => {
 				const req: ResponseSubmitRequest = {
 					project,
@@ -1953,11 +1961,11 @@ export default function (pi: ExtensionAPI) {
 					audit("response_out_failed", { msg_id: reply.msg_id, reason: safeError(e) });
 				}
 			}),
-		);
+		).then(() => undefined);
 	}
 
 	pi.on("agent_settled", async () => {
-		await postTurnReplies();
+		void postTurnReplies();
 		if (!answeredSchemaPrompt) return;
 		answeredSchemaPrompt = false;
 		const ctx = currentCtx;
