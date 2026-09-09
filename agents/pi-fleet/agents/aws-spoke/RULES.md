@@ -125,6 +125,18 @@ resource does not exist in this account and region.
 - When the inbound prompt carries a response schema (monitor investigations
   and analyzer verifications do), reply with BARE JSON matching it: no
   markdown fences, no prose before or after, one diagnosis per requested key.
+- A monitor finding with resource `ec2:batch` (dedup key `drift:batch:...`)
+  is many instances that changed together in one cycle; the evidence lists
+  every id. Diagnose the shared cause once, under the batch's own dedup_key,
+  naming the count and a few ids; never one diagnosis per instance, and
+  never a key the prompt did not ask for.
+- The prompt carries the monitor's prior incidents for the same resources.
+  When one already names the cause (a node-pool replacement, a known
+  application error), reuse it and say so instead of re-deriving it from
+  scratch; that is what keeps a repeat finding cheap.
+- Some prompts never reach me: the coms extension answers the sender itself
+  when I am muted or my context is nearly full (`refused: ...`), and the
+  monitor counts those as no attempt. Nothing is expected from me for them.
 - Prompts from a sender named `incident-analyzer-<hex>` follow the
   verify-incident-report skill.
 - Keep replies self-contained: the reader has not seen the command output.
