@@ -1,7 +1,8 @@
 # HANDOFF 2026-09-09 — session close: monitor mute and budget, spoke context rail, drift grants, Haiku trial
 
 **Date**: 2026-09-09
-**Repo state**: `main` @ `5defa6de`, clean tree, nothing in flight
+**Repo state**: `main` @ `259db3f2` plus this update, clean tree, nothing in flight
+**Updated**: 2026-09-09 16:30 CEST — dev hub caught up after this doc was first written; see "Dev fleet" below
 **Suggested branch**: n/a — nothing is half-done. The one open item is a
 scheduled evaluation, not code.
 **Linear**: SIO-1673, SIO-1674, SIO-1675, SIO-1676 (all Done by Linear's
@@ -45,6 +46,8 @@ all four PRs, the SIO-1675 handover, this document.
 | 13:33 | eu-oit-prd | instance replaced for `PI_MODEL=eu.anthropic.claude-haiku-4-5-20251001-v1:0` | `Plan: 1 to add, 1 to change, 1 to destroy`; new `i-0cfa0e49f544e1288`; spoke registered with the Haiku model at 13:35 |
 | 13:35 | monitor-eu-oit-prd | both suppressions re-sent (state db lost with the instance) | `suppressions` and `status` replies |
 | 14:12 | three hosts | bundle `e75cd657` via `pi-coms-update` over SSM | bundle version, services, monitor and agent registration lines on each |
+| 14:24 | dev hub bucket | bundle `259db3f2` (code-identical to `e75cd657`) published, rolled to eu-oit-dev and eu-shared-services-dev over SSM | bundle version, services, monitor and agent registration lines on each |
+| 14:28 | eu-oit-dev, eu-shared-services-dev | `terraform apply` of the SIO-1674 IAM statement, plan-guarded | `Plan: 0 to add, 1 to change, 0 to destroy` on each; only `aws_iam_policy.pi_coms_extensions[0]` |
 
 ## Root cause, for the record
 
@@ -143,6 +146,17 @@ SIO-1675 handover, section "The evaluation".
 | eu-shared-services-prd | `i-085e7f9979d9f53df` | `e75cd657` | Sonnet 5 | hosts the prd hub too |
 
 All three monitors: `budget 24/day, 3/resource/day; investigate: on, paused: no`.
+
+### Dev fleet
+
+| Spoke | Instance | Bundle | Model | Notes |
+|---|---|---|---|---|
+| eu-oit-dev | `i-0b69d671a3880000d` | `259db3f2` | fleet default | IAM statement applied |
+| eu-shared-services-dev | `i-01de2cc4c069723e1` | `259db3f2` | fleet default | IAM statement applied; hosts the dev hub |
+
+Both dev monitors report the same budget line. The dev hub's local tunnel port
+(8787) belonged to the user's own session during this work and was never opened
+by the session; every dev action went over SSM.
 
 ## Open, by design
 
