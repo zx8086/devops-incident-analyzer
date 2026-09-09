@@ -143,7 +143,7 @@ for k in sorted(c): print(k,c[k])
 PY
 ```
 
-Expected: for `monitor-eu-oit-prd`, `invalid_json` and `schema_mismatch` stay at or near zero. Any sustained non-zero count is the Haiku disqualifier (the diagnosis contract is bare JSON, `packages/pi-coms/scripts/monitor/report.ts` `DIAGNOSIS_RESPONSE_SCHEMA`). Then spot-check five diagnoses from the Haiku spoke against the same finding families on a Sonnet spoke.
+Expected: for `monitor-eu-oit-prd`, `invalid_json` and `schema_mismatch` stay at or near zero. Any sustained non-zero count is the Haiku disqualifier (the diagnosis contract is bare JSON, `packages/pi-coms/scripts/monitor/report.ts` `DIAGNOSIS_RESPONSE_SCHEMA`). Then spot-check five diagnoses from the Haiku spoke against the same finding families on a Sonnet spoke. Since SIO-1676 the cheapest source is the monitor itself: send `history 50 warn` to `monitor-eu-oit-prd` and to `monitor-eu-mendix-platform-prd`; each journaled finding carries its `diagnosis` field (null when uninvestigated), and the mailbox reports carry the same text.
 
 Kill the tunnel afterwards and prove it: `lsof -nP -iTCP:8788 -sTCP:LISTEN` returns nothing.
 
