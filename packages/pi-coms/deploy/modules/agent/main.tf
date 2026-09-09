@@ -318,6 +318,27 @@ resource "aws_iam_policy" "pi_coms_extensions" {
         ]
         Resource = "*"
       }],
+      // Edge ingress reads (SIO-1679): "where is the IP allowlist for app X"
+      // cannot be answered from a Web ACL alone -- the addresses live in IP sets
+      // and rule groups, and the ACL's effect depends on what it is attached to
+      // (CloudFront, ALB, API Gateway). apigateway:GET is the only read verb that
+      // service has. Classic waf-regional is retired and deliberately absent.
+      [{
+        Sid    = "EdgeIngressReads"
+        Effect = "Allow"
+        Action = [
+          "wafv2:ListIPSets",
+          "wafv2:GetIPSet",
+          "wafv2:ListRuleGroups",
+          "wafv2:GetRuleGroup",
+          "cloudfront:ListDistributions",
+          "cloudfront:GetDistribution",
+          "cloudfront:GetDistributionConfig",
+          "cloudfront:ListTagsForResource",
+          "apigateway:GET",
+        ]
+        Resource = "*"
+      }],
       // Certificate expiry is a fully predictable outage; the monitor's daily
       // cert check (SIO-1591) makes it a non-event. Read-only metadata.
       [{
