@@ -9,7 +9,7 @@
 
 The eu-oit-prd spoke answered every hub prompt with an EMPTY `complete` reply within 200 ms from 13:45Z to 15:59Z. Root cause, two layers: (1) account 762715229080 had no Bedrock model AGREEMENT for Haiku 4.5 after the SIO-1675 swap, so every model call was a 403 `AccessDeniedException ... aws-marketplace:Subscribe`; (2) the pi-coms extension posted the failed run's empty assistant text as a completed reply, and every consumer read `complete` as answered. Production is recovered (agreement accepted 15:55Z, zero client errors since 16:00Z), the code fix is in PR #721, the IAM reads that the original Prana question needed are applied on all five spokes and in PR #722, and the spoke has answered the question.
 
-**What is left**: merge #721 and #722 on your go-ahead (Greptile SKIPPED both, CodeRabbit silent; a local eight-angle review stands in and all ten findings are fixed), then bundle publish and `pi-coms-update` per host.
+**Update 16:40Z**: #721 merged as `950f61de`, #722 as `9adaf06c`; bundle `9adaf06c` published to both hub buckets and `pi-coms-update` run on all seven hosts (hub-prd, hub-dev, five spokes), all on `9adaf06c` with services active; all ten agents re-registered 16:36 to 16:38Z; probe to eu-oit-prd through the new code answered `ok` in 2 s. **Nothing is left.** CloudTrail check for the operator's question: no network-related write (WAF, IP sets, SG, CloudFront, API Gateway, ELB) happened in eu-oit-prd today; only the IAM policy version and the Bedrock model agreement.
 
 ## What was applied to production (UTC)
 
