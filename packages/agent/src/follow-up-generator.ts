@@ -92,6 +92,15 @@ function recordDailyLog(state: AgentStateType): void {
 		);
 		const services = (state.normalizedIncident.affectedServices ?? []).map((s) => s.name);
 		const toolFailures = isDailyLogToolFailuresEnabled() ? collectToolFailures(state) : [];
+		// SIO-1687: the breadcrumb only reaches the daily log when LIVE_MEMORY_ENABLED
+		// is on, so without this the classes are invisible on every dev/test run and
+		// unqueryable in prod. Categories are a closed enum, safe to log verbatim.
+		if (toolFailures.length > 0) {
+			logger.info(
+				{ event: "dailylog.tool_failures", requestId: state.requestId, toolFailures },
+				"tool failures recorded for this turn",
+			);
+		}
 		appendDailyLog({
 			requestId: state.requestId,
 			services,

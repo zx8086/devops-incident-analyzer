@@ -153,6 +153,16 @@ function logResponse(
 	const status = isError ? `${C_RED}error=${error}${C_RESET}` : dim(`${size}c`);
 	logLine("←", isError ? C_RED : C_GREEN, "response", `${responder} → ${sender} ${dim(tail6(msgId))} ${status}`);
 }
+// SIO-1687: a capped reply is data an operator will never see, so it must not be
+// silent. Sizes only; the body is spoke prose and never reaches the log.
+function logReplyCapped(responder: string, msgId: string, originalBytes: number, keptBytes: number): void {
+	logLine(
+		"✂",
+		C_YELLOW,
+		"reply-capped",
+		`${responder} ${dim(tail6(msgId))} ${dim(`${originalBytes}b -> ${keptBytes}b (cap=${REPLY_CAP_BYTES})`)}`,
+	);
+}
 function logStale(name: string, dtSec: number): void {
 	logLine("⚠", C_YELLOW, "stale", `${name} ${dim(`(${dtSec}s since last heartbeat)`)}`);
 }
@@ -1526,7 +1536,17 @@ async function handleSubmitResponse(req: Request, msg_id: string, auth: AuthResu
 	msg.status = isError ? "error" : "complete";
 	// SIO-1687: cap AFTER the blank check, so capping can never turn a real reply
 	// into a blank one and never rescues a blank one into a complete status.
-	msg.response = body.response == null ? null : capReplyBody(String(body.response));
+	const rawResponse = body.response == null ? null : String(body.response);
+	const cappedResponse = rawResponse === null ? null : capReplyBody(rawResponse);
+	msg.response = cappedResponse;
+	if (rawResponse !== null && cappedResponse !== null && cappedResponse.length !== rawResponse.length) {
+		logReplyCapped(
+			responder?.name ?? "unknown",
+			msg.msg_id,
+			Buffer.byteLength(rawResponse, "utf8"),
+			Buffer.byteLength(cappedResponse, "utf8"),
+		);
+	}
 	msg.error = explicitError ?? (isError ? "empty_reply" : null);
 	msg.completed_at = nowIso();
 	mailFor(msg.project).upsert(msg);

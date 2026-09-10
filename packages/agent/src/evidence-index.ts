@@ -248,7 +248,12 @@ export class EvidenceIndex {
 			// of the run and let the loop proceed on the truncated copy alone.
 			this.#failed = true;
 			logger.warn(
-				{ error: error instanceof Error ? error.message : String(error), toolName },
+				{
+					event: "evidence_index.unavailable",
+					toolName,
+					attemptedRows: rows.length,
+					error: error instanceof Error ? error.message : String(error),
+				},
 				"evidence index unavailable; continuing without it",
 			);
 			return 0;
@@ -260,9 +265,27 @@ export class EvidenceIndex {
 		const match = sanitizeQuery(query);
 		if (match === "") return [];
 		try {
-			return this.#db.search(match, opts.tool, opts.limit ?? 3);
+			const hits = this.#db.search(match, opts.tool, opts.limit ?? 3);
+			// SIO-1688: the one event that answers "does the model actually USE the
+			// recovery path" -- the open question the 2026-09-11 A/B could not settle,
+			// because nothing recorded a search. hitCount and scope only: hit TEXT is
+			// live tool output and must not reach a log line.
+			logger.info(
+				{
+					event: "evidence_index.search",
+					scopedTool: opts.tool ?? null,
+					queryTermCount: match.split(" OR ").length,
+					hitCount: hits.length,
+					indexedRows: this.#rows,
+				},
+				hits.length > 0 ? "Evidence search returned hits" : "Evidence search returned no hits",
+			);
+			return hits;
 		} catch (error) {
-			logger.warn({ error: error instanceof Error ? error.message : String(error) }, "evidence search failed");
+			logger.warn(
+				{ event: "evidence_index.search_failed", error: error instanceof Error ? error.message : String(error) },
+				"evidence search failed",
+			);
 			return [];
 		}
 	}

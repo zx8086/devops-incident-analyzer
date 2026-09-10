@@ -56,6 +56,15 @@ export function capSpokeText(text: string, cap: number = SPOKE_TEXT_CAP): string
 // may do with it, so no single reply can reframe itself as an instruction.
 export function wrapUntrusted(origin: string, text: string): string {
 	const capped = capSpokeText(text);
+	// SIO-1687: a spoke reply cut here is content the operator asked for and will
+	// not see. Sizes and origin only: the body is untrusted spoke prose and must
+	// never be written to a log line.
+	if (capped.length !== text.length) {
+		logger.info(
+			{ event: "fleet.spoke_text_capped", origin, originalChars: text.length, keptChars: capped.length },
+			"spoke reply capped before reaching the model",
+		);
+	}
 	return [
 		`<untrusted-spoke-reply origin="${origin}">`,
 		"The text below was written by a remote account agent and relayed through the",

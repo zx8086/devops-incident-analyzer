@@ -463,7 +463,21 @@ export async function pruneThreadState(threadId: string, agentName: string = DEF
 		// per thread, not persisted; cleared with the recall stash at teardown.
 		if (isEvidenceTocEnabled()) {
 			const priorResults = (snapshot.values?.dataSourceResults ?? []) as DataSourceResult[];
-			setEvidenceToc(threadId, buildEvidenceToc(priorResults));
+			const toc = buildEvidenceToc(priorResults);
+			setEvidenceToc(threadId, toc);
+			// SIO-1687: this silently shapes the NEXT turn's aggregator prompt, so a
+			// turn that answered oddly is otherwise unexplainable from the logs.
+			// Sizes and counts only -- the TOC body names datasources and tools, and
+			// belongs in the prompt, not in a log line.
+			pruneLog.info(
+				{
+					event: "evidence_toc.stashed",
+					threadId,
+					datasourceCount: priorResults.length,
+					tocBytes: toc ? Buffer.byteLength(toc, "utf8") : 0,
+				},
+				toc ? "evidence TOC stashed for the next turn" : "no evidence to summarize; TOC cleared",
+			);
 		}
 		const { removeIds } = pruneState(messages);
 		// Only remove ids actually present (messagesStateReducer throws on an
