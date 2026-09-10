@@ -132,6 +132,18 @@ export interface InstrumentContext {
 	awsAbsenceEarlyExit?: boolean;
 	// SIO-1268: investigation focus service names, for matchesFocus in the ECS ledger.
 	focusServices?: string[];
+	// SIO-1688: when provided, an oversized result is indexed at FULL fidelity before
+	// the LLM-facing copy is truncated, and the truncated copy gains a line naming
+	// search_evidence. Indexing happens HERE rather than at the SIO-1248 persist site
+	// because the loop must be able to search evidence during the run; the persist
+	// site only runs once the loop has already finished.
+	evidenceIndex?: EvidenceIndexSink;
+}
+
+// The subset of EvidenceIndex this module needs. Structural so the instrumentation
+// keeps no dependency on the store's construction or lifetime.
+export interface EvidenceIndexSink {
+	index(toolName: string, text: string): Promise<number>;
 }
 
 // Wraps each tool so we can observe what flows back from MCP into the ReAct loop.
@@ -325,7 +337,37 @@ function instrumentTool(
 							content: extractContent(result),
 							structuredContent: extractStructuredContent(result),
 						});
-						const processed = processResult(result, tool.name, iteration, ctx);
+						// SIO-1688: index the SAME pre-truncation bytes so whatever the cap
+						// below removes stays reachable through search_evidence for the rest
+						// of the run. Only oversized results are indexed: a result the model
+						// receives whole needs no recovery path. Awaited so a search issued on
+						// the next iteration cannot race the write, and soft-failing inside
+						// EvidenceIndex so a broken index never breaks a tool call.
+						let indexedRows = 0;
+						if (ctx.evidenceIndex && ctx.capBytes != null && ctx.capBytes > 0) {
+							const rawText = stringifyContent(extractContent(result));
+							if (Buffer.byteLength(rawText, "utf8") > ctx.capBytes) {
+								try {
+									indexedRows = await ctx.evidenceIndex.index(tool.name, rawText);
+								} catch (error) {
+									// Indexing is a recovery aid, never a precondition for answering.
+									// EvidenceIndex already soft-fails internally; this guards the seam
+									// itself so no sink implementation can turn a good tool result into
+									// a failed tool call. indexedRows stays 0, so no pointer is appended
+									// and the model simply gets the truncated copy as it did before.
+									ctx.log.warn(
+										{
+											event: "subagent.evidence_index_failed",
+											dataSourceId: ctx.dataSourceId,
+											toolName: tool.name,
+											error: error instanceof Error ? error.message : String(error),
+										},
+										"Evidence indexing failed; continuing with the truncated result",
+									);
+								}
+							}
+						}
+						const processed = processResult(result, tool.name, iteration, ctx, indexedRows);
 						// SIO-1159: a successful-but-empty CloudWatch result never errors, so
 						// nothing steers the LLM off a too-narrow window (run 270378e0: a 24h
 						// window silently missed a 2-day-old incident). After consecutive
@@ -408,7 +450,15 @@ function buildStopResult(arg: unknown, toolName: string, state: LoopGuardState, 
 	return new ToolMessage({ content: stopMessageFor(toolName, state, signature), tool_call_id: toolCallId });
 }
 
-function processResult(result: unknown, toolName: string, iteration: number, ctx: InstrumentContext): unknown {
+function processResult(
+	result: unknown,
+	toolName: string,
+	iteration: number,
+	ctx: InstrumentContext,
+	// SIO-1688: rows this result contributed to the evidence index, 0 when the
+	// index is off or the result was small enough to pass through whole.
+	indexedRows = 0,
+): unknown {
 	const content = extractContent(result);
 	const { bytes, shape } = describeToolResult(content);
 	ctx.log.info(
@@ -448,11 +498,21 @@ function processResult(result: unknown, toolName: string, iteration: number, ctx
 			originalBytes: truncated.originalBytes,
 			finalBytes: truncated.finalBytes,
 			strategy: truncated.strategy,
+			indexedRows,
 		},
 		"Tool result truncated",
 	);
 
-	return rebuildResult(result, truncated.content);
+	// SIO-1688: tell the model the rest still exists and how to reach it. Without
+	// this line a truncated result is indistinguishable from a complete one, so
+	// the model treats the kept sample as the whole answer -- the failure mode the
+	// index exists to fix. Appended only when rows were actually indexed, so the
+	// pointer can never name a tool that has nothing to find.
+	const cappedContent =
+		indexedRows > 0
+			? `${truncated.content}\n\n[Truncated for context: ${truncated.originalBytes} bytes cut to ${truncated.finalBytes}. The full result is searchable: call search_evidence with a query and tool="${toolName}" to retrieve any part of it, including what was cut.]`
+			: truncated.content;
+	return rebuildResult(result, cappedContent);
 }
 
 function extractContent(result: unknown): unknown {

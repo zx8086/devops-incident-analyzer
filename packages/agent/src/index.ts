@@ -44,6 +44,8 @@ export { AttachmentError, type ProcessedAttachments, processAttachments } from "
 export { classify } from "./classifier.ts";
 export { checkConfidence } from "./confidence-gate.ts";
 export { extractEntities } from "./entity-extractor.ts";
+// SIO-1688: the per-run evidence index that makes truncated tool output recoverable.
+export { buildSearchEvidenceTool, EvidenceIndex, isEvidenceIndexEnabled } from "./evidence-index.ts";
 // SIO-1687: the evidence table of contents that survives per-turn pruning.
 export { buildEvidenceToc, isEvidenceTocEnabled } from "./evidence-toc.ts";
 export { generateFallbackSuggestions, generateSuggestions } from "./follow-up-generator.ts";
