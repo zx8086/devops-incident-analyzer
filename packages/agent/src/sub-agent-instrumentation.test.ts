@@ -1181,3 +1181,132 @@ describe("SIO-1268 AWS absence early exit (end to end)", () => {
 		expect(entries.filter((e) => e.event === "subagent.aws_service_absent_early_exit")).toHaveLength(0);
 	});
 });
+
+// SIO-1688: the evidence index rides the same tool-result path as truncation.
+// These tests pin the contract between them: index the full bytes, cut the copy
+// the model sees, and tell the model the rest is still reachable.
+describe("SIO-1688 evidence index integration", () => {
+	function recordingIndex() {
+		const calls: Array<{ tool: string; bytes: number }> = [];
+		return {
+			calls,
+			sink: {
+				index: async (toolName: string, text: string) => {
+					calls.push({ tool: toolName, bytes: Buffer.byteLength(text, "utf8") });
+					return 7;
+				},
+			},
+		};
+	}
+
+	test("indexes the FULL pre-truncation bytes, not the capped copy", async () => {
+		const { logger } = makeLog();
+		const payload = bigHitsPayload(200);
+		const { calls, sink } = recordingIndex();
+		const wrapped = wrapOne(payload, {
+			dataSourceId: "elastic",
+			log: logger,
+			capBytes: 4_000,
+			evidenceIndex: sink,
+		});
+
+		await wrapped.invoke({ q: "errors" });
+		expect(calls.length).toBe(1);
+		// The whole payload reached the index even though the model's copy was cut.
+		expect(calls[0]?.bytes).toBe(Buffer.byteLength(payload, "utf8"));
+		expect(calls[0]?.tool).toBe("fake_search");
+	});
+
+	test("appends a pointer naming search_evidence to the truncated copy", async () => {
+		const { logger } = makeLog();
+		const { sink } = recordingIndex();
+		const wrapped = wrapOne(bigHitsPayload(200), {
+			dataSourceId: "elastic",
+			log: logger,
+			capBytes: 4_000,
+			evidenceIndex: sink,
+		});
+
+		const result = (await wrapped.invoke({ q: "errors" })) as ToolMessage | string;
+		const text = typeof result === "string" ? result : String(result.content);
+		expect(text).toContain("search_evidence");
+		expect(text).toContain('tool="fake_search"');
+		expect(text).toContain("Truncated for context");
+	});
+
+	test("a result that fits is neither indexed nor annotated", async () => {
+		const { logger } = makeLog();
+		const { calls, sink } = recordingIndex();
+		const wrapped = wrapOne(bigHitsPayload(1), {
+			dataSourceId: "elastic",
+			log: logger,
+			capBytes: 1_000_000,
+			evidenceIndex: sink,
+		});
+
+		const result = (await wrapped.invoke({ q: "errors" })) as ToolMessage | string;
+		const text = typeof result === "string" ? result : String(result.content);
+		expect(calls.length).toBe(0);
+		expect(text).not.toContain("search_evidence");
+	});
+
+	// The pointer must never name a search that would come back empty.
+	test("no pointer is appended when the index stored no rows", async () => {
+		const { logger } = makeLog();
+		const wrapped = wrapOne(bigHitsPayload(200), {
+			dataSourceId: "elastic",
+			log: logger,
+			capBytes: 4_000,
+			evidenceIndex: { index: async () => 0 },
+		});
+
+		const result = (await wrapped.invoke({ q: "errors" })) as ToolMessage | string;
+		const text = typeof result === "string" ? result : String(result.content);
+		expect(text).not.toContain("search_evidence");
+	});
+
+	test("truncation is unchanged when no index is provided", async () => {
+		const { entries, logger } = makeLog();
+		const payload = bigHitsPayload(200);
+		const withIndex = wrapOne(payload, {
+			dataSourceId: "elastic",
+			log: logger,
+			capBytes: 4_000,
+			evidenceIndex: { index: async () => 0 },
+		});
+		const withoutIndex = wrapOne(payload, { dataSourceId: "elastic", log: logger, capBytes: 4_000 });
+
+		const a = (await withIndex.invoke({ q: "e" })) as ToolMessage | string;
+		const b = (await withoutIndex.invoke({ q: "e" })) as ToolMessage | string;
+		const textA = typeof a === "string" ? a : String(a.content);
+		const textB = typeof b === "string" ? b : String(b.content);
+		// Same cut, same strategy: the index adds a pointer, never a different cut.
+		expect(textA).toBe(textB);
+		const truncations = entries.filter((e) => e.event === "subagent.tool_result_truncated");
+		expect(truncations.length).toBe(2);
+		expect(truncations[0]?.strategy).toBe(truncations[1]?.strategy);
+	});
+
+	// A failing index must degrade to plain truncation, never break the tool call:
+	// evidence recovery is an aid, not a precondition for answering.
+	test("an index that throws does not fail the tool call", async () => {
+		const { logger } = makeLog();
+		const wrapped = wrapOne(bigHitsPayload(200), {
+			dataSourceId: "elastic",
+			log: logger,
+			capBytes: 4_000,
+			evidenceIndex: {
+				index: async () => {
+					throw new Error("sqlite unavailable");
+				},
+			},
+		});
+
+		const result = (await wrapped.invoke({ q: "errors" })) as ToolMessage | string;
+		const text = typeof result === "string" ? result : String(result.content);
+		// The result still arrives, truncated as usual, and carries no pointer to a
+		// search that would fail.
+		expect(text.length).toBeGreaterThan(0);
+		expect(text).not.toContain("search_evidence");
+	});
+});

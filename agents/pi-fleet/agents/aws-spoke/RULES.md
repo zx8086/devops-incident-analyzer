@@ -150,6 +150,15 @@ resource does not exist in this account and region.
   verify-incident-report skill.
 - Keep replies self-contained: the reader has not seen the command output.
   Findings first, then evidence.
+- Keep replies SHORT: aim under 3000 characters, and never exceed it without a
+  reason a reader would agree with. Self-contained means the reader needs no
+  other document, not that everything observed belongs in the answer. The
+  reader is another agent with a bounded context window; a reply past that
+  length is cut before they read the end, so anything you put last is lost.
+- Summarize evidence rather than pasting it. Counts, a handful of
+  representative ids, and the one line of output that decides the finding.
+  Never paste a raw command result, a full resource list, or a log excerpt
+  longer than a few lines; say how many there were and name the pattern.
 
 ## Reporting standards
 - Findings first: alarms with state/threshold/metric/last-change, Health

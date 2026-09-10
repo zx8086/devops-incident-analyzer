@@ -29,6 +29,7 @@ function installPromptContextMock(): void {
 installPromptContextMock();
 
 import {
+	getEvidenceToc,
 	getRecalledMemoryContext,
 	registerGraphWarmer,
 	registerMemoryFlusher,
@@ -38,6 +39,7 @@ import {
 	runBootstrap,
 	runPostTurn,
 	runTeardown,
+	setEvidenceToc,
 } from "./lifecycle.ts";
 
 const BOOT_CTX = { agentName: "incident-analyzer", threadId: "t-1" };
@@ -171,6 +173,48 @@ describe("recalled-context stash (SIO-1446)", () => {
 		registerMemoryRecaller(async () => undefined);
 		await runBootstrap({ agentName: "incident-analyzer", threadId: "t-none" });
 		expect(getRecalledMemoryContext("t-none")).toBeUndefined();
+	});
+
+	// SIO-1687: the evidence TOC shares the recall stash's lifetime and its single
+	// prompt seam, so the aggregator keeps reading one getter.
+	test("the evidence TOC is stashed per thread and joined onto the recall block", () => {
+		setEvidenceToc("t-toc", "## Evidence fetched on the previous turn\n- elastic: 3 tool call(s)");
+		expect(getEvidenceToc("t-toc")).toContain("elastic: 3 tool call(s)");
+		expect(getEvidenceToc("t-other-toc")).toBeUndefined();
+		expect(getEvidenceToc(undefined)).toBeUndefined();
+	});
+
+	test("a thread with only a TOC still returns it through the recall getter", () => {
+		setEvidenceToc("t-toc-only", "TOC-BODY");
+		expect(getRecalledMemoryContext("t-toc-only")).toBe("TOC-BODY");
+	});
+
+	test("recall and TOC are both present when both exist", async () => {
+		registerMemoryRecaller(async () => "RECALL-BODY");
+		await runBootstrap({ agentName: "incident-analyzer", threadId: "t-both" });
+		setEvidenceToc("t-both", "TOC-BODY");
+		const combined = getRecalledMemoryContext("t-both") ?? "";
+		expect(combined).toContain("RECALL-BODY");
+		expect(combined).toContain("TOC-BODY");
+	});
+
+	test("setting an empty TOC clears the entry rather than storing a blank", () => {
+		setEvidenceToc("t-clear", "TOC-BODY");
+		setEvidenceToc("t-clear", undefined);
+		expect(getEvidenceToc("t-clear")).toBeUndefined();
+	});
+
+	test("teardown drops the TOC so it cannot outlive its session", async () => {
+		setEvidenceToc("t-teardown-toc", "TOC-BODY");
+		await runTeardown({ agentName: "incident-analyzer", threadId: "t-teardown-toc" });
+		expect(getEvidenceToc("t-teardown-toc")).toBeUndefined();
+	});
+
+	test("re-bootstrapping a thread clears its stale TOC", async () => {
+		setEvidenceToc("t-rebootstrap-toc", "STALE-TOC");
+		registerMemoryRecaller(async () => undefined);
+		await runBootstrap({ agentName: "incident-analyzer", threadId: "t-rebootstrap-toc" });
+		expect(getEvidenceToc("t-rebootstrap-toc")).toBeUndefined();
 	});
 
 	// CodeRabbit (PR #636): without the up-front delete in runBootstrap, this

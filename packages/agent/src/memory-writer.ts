@@ -39,6 +39,12 @@ export interface DailyLogEntry {
 	confidence?: number;
 	datasources: string[];
 	summary?: string;
+	// SIO-1687: which datasources hit tool failures this turn, and of what kind.
+	// Categories only (the closed ToolErrorCategory enum), never upstream message
+	// text: a breadcrumb answering "has this failed before, and how" across
+	// sessions, without turning the daily log into a log sink. Empty/absent when
+	// the turn was clean.
+	toolFailures?: string[];
 }
 
 export interface KeyDecision {
@@ -125,6 +131,7 @@ export function appendDailyLog(entry: DailyLogEntry, baseDir?: string): void {
 			`datasources=[${entry.datasources.join(", ") || "none"}]`,
 			entry.severity ? `severity=${entry.severity}` : "",
 			typeof entry.confidence === "number" ? `confidence=${entry.confidence.toFixed(2)}` : "",
+			entry.toolFailures && entry.toolFailures.length > 0 ? `tool_failures=[${entry.toolFailures.join(", ")}]` : "",
 			summary ? `-- ${summary}` : "",
 		]
 			.filter((p) => p.length > 0)
@@ -159,6 +166,7 @@ export function appendDailyLog(entry: DailyLogEntry, baseDir?: string): void {
 			severity: entry.severity,
 			confidence: entry.confidence,
 			datasources: entry.datasources,
+			toolFailures: entry.toolFailures && entry.toolFailures.length > 0 ? entry.toolFailures : undefined,
 			summary: entry.summary ? redactPiiContent(entry.summary) : undefined,
 		});
 		sink.write(`${record}\n`);
@@ -171,6 +179,8 @@ export function appendDailyLog(entry: DailyLogEntry, baseDir?: string): void {
 	const parts = [`- ${date}`, `req=${entry.requestId}`, `services=[${services}]`, `datasources=[${datasources}]`];
 	if (entry.severity) parts.push(`severity=${entry.severity}`);
 	if (typeof entry.confidence === "number") parts.push(`confidence=${entry.confidence.toFixed(2)}`);
+	if (entry.toolFailures && entry.toolFailures.length > 0)
+		parts.push(`tool_failures=[${entry.toolFailures.join(", ")}]`);
 	if (entry.summary) parts.push(`-- ${redactPiiContent(entry.summary)}`);
 	appendFileSync(path, `${parts.join(" ")}\n`);
 	logger.info({ requestId: entry.requestId }, "Appended dailylog entry");

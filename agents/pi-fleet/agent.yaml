@@ -1,6 +1,6 @@
 spec_version: "0.1.0"
 name: pi-fleet
-version: 0.1.0
+version: 0.2.0
 description: >
   Operator console persona for the pi-coms fleet: relays questions to the
   read-only account agents, synthesizes their replies and reads monitor

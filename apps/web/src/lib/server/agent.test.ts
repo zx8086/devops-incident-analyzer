@@ -10,7 +10,17 @@ const mockStreamEvents = mock(() => ({
 }));
 
 const mockUpdateState = mock(() => Promise.resolve());
-const mockGetState = mock(() => Promise.resolve({ values: { messages: [{ id: "old1" }, { id: "a" }, { id: "b" }] } }));
+// SIO-1687: records what pruneThreadState stashed as the evidence TOC.
+const mockSetEvidenceToc = mock((_threadId: string, _toc?: string) => undefined);
+const mockGetState = mock(() =>
+	Promise.resolve({
+		values: {
+			messages: [{ id: "old1" }, { id: "a" }, { id: "b" }],
+			// SIO-1687: the evidence this turn fetched, captured before the reset.
+			dataSourceResults: [{ dataSourceId: "elastic" }],
+		},
+	}),
+);
 
 const mockAgentDef = {
 	manifest: {
@@ -102,6 +112,14 @@ mock.module("@devops-agent/agent", () => ({
 	// agent-memory recall/flush seams. Mock must export it or the namespace import throws.
 	installAgentMemory: mock(() => undefined),
 	// SIO-476: state-pruning helpers consumed by pruneThreadState.
+	// SIO-1687: agent.ts captures the evidence TOC before pruning resets
+	// dataSourceResults. Enabled and observable here so the wiring is tested,
+	// not stubbed away.
+	buildEvidenceToc: (results: unknown[]) => (results.length > 0 ? `TOC:${results.length}` : undefined),
+	isEvidenceTocEnabled: () => true,
+	setEvidenceToc: (threadId: string, toc?: string) => {
+		mockSetEvidenceToc(threadId, toc);
+	},
 	needsPruning: (msgs: unknown[]) => msgs.length > 2,
 	pruneState: () => ({ removeIds: ["old1"] }),
 	// SIO-1110: agent.ts threads the graph deadline into configurable under this key.
@@ -352,10 +370,23 @@ describe("pruneThreadState", () => {
 		expect((update as { dataSourceResults: unknown[] }).dataSourceResults).toEqual([]);
 	});
 
+	// SIO-1687: the TOC must be captured BEFORE dataSourceResults is reset,
+	// otherwise the next turn cannot tell pruned evidence from absent evidence.
+	test("stashes an evidence TOC built from the pre-reset dataSourceResults", async () => {
+		mockSetEvidenceToc.mockClear();
+		mockGetState.mockClear();
+		await pruneThreadState("thread-toc", "incident-analyzer");
+		expect(mockSetEvidenceToc).toHaveBeenCalledWith("thread-toc", "TOC:1");
+	});
+
 	test("pruneThreadState is a no-op when under threshold", async () => {
 		mockUpdateState.mockClear();
-		mockGetState.mockResolvedValueOnce({ values: { messages: [{ id: "a" }] } });
+		mockSetEvidenceToc.mockClear();
+		mockGetState.mockResolvedValueOnce({ values: { messages: [{ id: "a" }], dataSourceResults: [] } });
 		await pruneThreadState("thread-2", "incident-analyzer");
 		expect(mockUpdateState).not.toHaveBeenCalled();
+		// SIO-1687: no pruning means no reset, so there is nothing to leave a
+		// pointer to -- the stash must not be touched either.
+		expect(mockSetEvidenceToc).not.toHaveBeenCalled();
 	});
 });

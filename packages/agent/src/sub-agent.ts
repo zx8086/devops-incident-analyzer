@@ -18,6 +18,7 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { fetchAppMapBaseline, isAppMapBaselineEnabled } from "./app-map-baseline.ts";
 import { hasDestinationAggregation } from "./application-topology.ts";
+import { buildSearchEvidenceTool, EvidenceIndex, isEvidenceIndexEnabled } from "./evidence-index.ts";
 import { capSubAgentTimeoutMs, getGraphDeadlineAt } from "./graph-budget.ts";
 import { createLlm, type InvokableLlm } from "./llm.ts";
 import { getToolsForDataSource, withAwsEstate, withElasticDeployment } from "./mcp-bridge.ts";
@@ -1430,6 +1431,9 @@ async function runSubAgent(
 	// SIO-1232: hoisted out of the try so the catch can report the budget that actually fired.
 	// Undefined means we threw before the timer was armed.
 	let effectiveTimeoutMs: number | undefined;
+	// SIO-1688: hoisted for the same reason -- the finally closes it on every exit
+	// path, including a throw before the ReAct loop was ever built.
+	let evidenceIndex: EvidenceIndex | null = null;
 	try {
 		const allTools = getToolsForDataSource(dataSourceId);
 		// SIO-750: wrap the base sub-agent prompt with the investigation focus
@@ -1555,6 +1559,11 @@ ${state.correlationFetchDirective}`
 		// ToolMessages. Populated on every path (normal, loop-guard stop, recursion-limit
 		// salvage) because the instrumented tool instances are shared with agent.stream().
 		const rawOutputs: RawToolOutput[] = [];
+		// SIO-1688: a per-run FTS5 index over the SAME pre-truncation bytes, so the
+		// parts the cap removes stay reachable through search_evidence for the rest
+		// of the run. Only built when the cap is active: with no cap nothing is cut,
+		// so there is nothing to recover. Closed in the finally below.
+		evidenceIndex = isEvidenceIndexEnabled() && capBytes != null && capBytes > 0 ? new EvidenceIndex() : null;
 		const instrumentedTools = instrumentTools(tools, {
 			dataSourceId,
 			deploymentId,
@@ -1562,6 +1571,7 @@ ${state.correlationFetchDirective}`
 			capBytes,
 			config,
 			rawOutputs,
+			evidenceIndex: evidenceIndex ?? undefined,
 			// SIO-1268: AWS-only. Scoped by dataSourceId here rather than inside the guard so the
 			// ledger cannot be built at all for elastic/gitlab/kafka runs.
 			awsAbsenceEarlyExit: dataSourceId === "aws" && isAwsAbsenceEarlyExitEnabled(),
@@ -1596,9 +1606,15 @@ ${state.correlationFetchDirective}`
 		// so applyContextBudget is now applied conditionally INSIDE the hook and the byte-budget path
 		// is byte-identical to before when disabled.
 		let llmTurns = 0;
+		// SIO-1688: search_evidence is bound alongside the datasource tools so the
+		// model can recover truncated content mid-loop. It reads only what this run
+		// already fetched -- it cannot reach the network or another run's evidence.
+		const loopTools = evidenceIndex
+			? [...instrumentedTools, buildSearchEvidenceTool(evidenceIndex)]
+			: instrumentedTools;
 		const agent = createReactAgent({
 			llm,
-			tools: instrumentedTools,
+			tools: loopTools,
 			messageModifier: systemPrompt,
 			preModelHook: (hookState: { messages: BaseMessage[] }) => {
 				llmTurns += 1;
@@ -2099,6 +2115,10 @@ ${state.correlationFetchDirective}`
 			}),
 		};
 	} finally {
+		// SIO-1688: the index is per-run and in-memory; releasing it here covers
+		// every exit path (success, all-tools-failed, thrown error) so a long-lived
+		// web process cannot accumulate one database per sub-agent invocation.
+		evidenceIndex?.close();
 		// Live progress signal: marks this branch done regardless of exit path
 		// (success, all-tools-failed, or thrown error) so the UI's live sub-agent
 		// line flips from "running" to "done" instead of sticking forever.

@@ -60,8 +60,35 @@ export function registerMemoryFlusher(fn: (ctx: { agentName: string; threadId: s
 // long-lived process never leaks one session's recall into another thread.
 const recalledMemoryByThread = new Map<string, string>();
 
+// SIO-1687: per-thread stash for the PRIOR turn's evidence table of contents.
+// pruneThreadState resets dataSourceResults to [] after every turn, so a
+// follow-up turn starts with no evidence and no trace that any was fetched --
+// which reads to the aggregator as "nothing was found". The TOC is a few
+// hundred bytes of provenance (which datasource ran which tools, how much came
+// back, where it was cut), not the evidence itself. Same lifetime rules as the
+// recall stash: overwritten per turn, deleted at teardown.
+const evidenceTocByThread = new Map<string, string>();
+
+export function setEvidenceToc(threadId: string | undefined, toc: string | undefined): void {
+	if (!threadId) return;
+	if (toc) evidenceTocByThread.set(threadId, toc);
+	else evidenceTocByThread.delete(threadId);
+}
+
+export function getEvidenceToc(threadId: string | undefined): string | undefined {
+	return threadId ? evidenceTocByThread.get(threadId) : undefined;
+}
+
+// Both per-session stashes read through one getter so the aggregator keeps a
+// single prompt seam (SIO-1446's recalledMemory parameter). Recall is durable
+// cross-session context; the TOC is last turn's provenance. They are joined
+// rather than nested so either can be absent.
 export function getRecalledMemoryContext(threadId: string | undefined): string | undefined {
-	return threadId ? recalledMemoryByThread.get(threadId) : undefined;
+	if (!threadId) return undefined;
+	const parts = [recalledMemoryByThread.get(threadId), evidenceTocByThread.get(threadId)].filter(
+		(p): p is string => typeof p === "string" && p.length > 0,
+	);
+	return parts.length > 0 ? parts.join("\n\n") : undefined;
 }
 
 // SIO-942: post-turn flush seam. Unlike memoryFlusher (teardown: drain + end +
@@ -171,7 +198,10 @@ export async function runBootstrap(ctx: BootstrapContext): Promise<BootstrapResu
 	// undefined or throws must not read the previous session's recall. Today's web
 	// caller makes that unreachable (teardown clears both the stash and its own
 	// re-bootstrap guard), but the seam must not depend on caller discipline.
+	// SIO-1687: same reasoning for the evidence TOC -- a re-bootstrapped thread
+	// must not read the previous session's provenance.
 	recalledMemoryByThread.delete(ctx.threadId);
+	evidenceTocByThread.delete(ctx.threadId);
 	// SIO-938: resolve hooks for the INVOKED agent (incident-analyzer vs
 	// elastic-iac), not the default — each agent has its own hooks.yaml.
 	const hooks = getAgentByName(ctx.agentName).hooks;
@@ -234,7 +264,11 @@ async function runTeardownStep(step: TeardownStep, ctx: TeardownContext): Promis
 export async function runTeardown(ctx: TeardownContext = {}): Promise<TeardownStep[]> {
 	// SIO-1446: drop the session's recalled-context stash before the hook walk (and
 	// regardless of hook config), so the entry cannot outlive its session.
-	if (ctx.threadId) recalledMemoryByThread.delete(ctx.threadId);
+	// SIO-1687: the evidence TOC stash has the same lifetime and is dropped here too.
+	if (ctx.threadId) {
+		recalledMemoryByThread.delete(ctx.threadId);
+		evidenceTocByThread.delete(ctx.threadId);
+	}
 	// SIO-938: resolve hooks for the invoked agent (defaults to incident-analyzer).
 	const hooks = getAgentByName(ctx.agentName ?? "incident-analyzer").hooks;
 	const steps = hooks?.teardown?.steps ?? [];
