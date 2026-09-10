@@ -205,3 +205,55 @@ the study assumed, because Pi supplies natively what phase 3 proposed to add.
 What remains genuinely open on the fleet is reply SIZE, which phase 1 addressed
 at the three places we do control: the persona rule, the console's line-boundary
 cut, and the hub's reply cap.
+
+## 12. Evidence-index A/B measurement (2026-09-11)
+
+The spec originally said to A/B `EVIDENCE_INDEX_ENABLED` "against the 0.78
+baseline". That instruction was wrong and is withdrawn. The 0.78 figure in
+`sub-agent-context-budget.ts:32-33` is a confidence score from ONE live manual
+run on 2026-07-27 against a specific deployment, recorded to justify a default
+value. It is not a stored experiment, and it cannot be reproduced today because
+the underlying live data has moved. Nothing can be diffed against it.
+
+What was run instead is the tier-2 single-agent probe (`eval:single-agent-probe`),
+which isolates one sub-agent against live MCP and Bedrock with no graph routing.
+Two legs, same scenario ("High error rate on the styles service in the last 24
+hours"), same datasource (elastic), flag off then on. Both legs completed with
+status `success`; neither hit a recursion limit or a loop-guard stop, and no
+salvage path fired.
+
+| Leg | Tool | Original | Kept for the model | Lost | Rows indexed | Recoverable |
+|---|---|---|---|---|---|---|
+| off | elasticsearch_search | 719,000 | 139 | 99.98% | 0 | no |
+| on | elasticsearch_multi_search | 465,563 | 419 | 99.91% | 127 | yes |
+| on | elasticsearch_multi_search | 236,190 | 1,485 | 99.37% | 68 | yes |
+
+The measurement's real finding is the scale of the loss it exposes, which is far
+worse than the study assumed. A 719 KB result reaching the model as 139 bytes is
+not "truncation", it is near-total elision: the JSON-aware truncator preserved
+the shape and three array elements, and everything else was gone with no trace.
+Before this change that was unrecoverable for the rest of the run. The
+`json-largest-array` strategy behaves the same way on the two ON-leg results.
+
+Mechanism verdict: the index fired exactly where intended and nowhere else. Two
+oversized results indexed 195 rows between them, zero `evidence_index_failed`
+events, and no rows were indexed for results that fit. The kill switch works:
+the off leg indexed nothing.
+
+`search_evidence` was NOT called by the model in the ON leg. That is an honest
+null result and worth stating plainly: this probe shows the index is correctly
+POPULATED and the pointer is correctly attached, but it does not demonstrate the
+model choosing to use the recovery path. Whether the pointer's wording actually
+induces a retrieval needs a scenario whose answer depends on an elided record,
+which this "top error signatures" query did not: the model answered from the
+aggregation buckets that survived truncation. That evaluation remains open.
+
+Cost: two Bedrock runs, no LangSmith experiment created (the probe writes to
+stdout, not to a dataset).
+
+Recommendation on the default. The flag stays default ON. The measured downside
+is bounded (195 SQLite row inserts on two calls, no failures, no added latency
+signature), the upside is that 99%+ elisions stop being permanent, and the
+failure path is soft at two levels. The heavier `eval:incident-replay` harness
+is the right instrument before claiming a quality delta, and it is NOT a
+prerequisite for this change, which is additive and reversible by one env var.
