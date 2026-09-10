@@ -108,8 +108,8 @@ Why the store is per process: a thread is sticky to the web app process for its 
 
 ## 8. Open questions
 
-1. Does Pi 0.84.4 (pinned at `packages/pi-coms/deploy/bootstrap/agent-bootstrap.sh:99`) expose `session_before_compact` and a `ToolResultEventResult.content` that can rewrite output? Verified upstream only on `main`. Blocks phase 3.
-2. Does Pi's built-in `bash` already truncate large output? If yes, item 6 shrinks to "add a pointer".
+1. RESOLVED 2026-09-10. Pi 0.84.4 exposes both. Verified against the pinned tarball, not upstream `main`: `session_before_compact` at `dist/core/extensions/types.d.ts:913` and `tool_result` with a rewritable `ToolResultEventResult.content` at `:835,940`. See section 11.
+2. RESOLVED 2026-09-10. Yes, and more than truncate. See section 11: this retires phase 3 item 6.
 3. Is the web app process Bun or Node in AgentCore production? Decides whether the evidence store needs the dual-driver path from `tool-call-metrics.ts:184-267` or `bun:sqlite` only.
 4. Do follow-up turns re-query datasources today, or should the aggregator answer from memory? Decides whether item 3's TOC also goes into sub-agent directives.
 5. May a hub reply cap apply to monitor reports, or must reports stay uncapped while verify replies are capped?
@@ -154,3 +154,54 @@ context-mode: `LICENSE:1`; `package.json:3,107,124`; `src/server.ts:727-733,1979
 This repo: `packages/gitagent-bridge/src/hooks.ts:10,18`; `packages/agent/src/lifecycle.ts:26-79,111-129,210,226,237`; `packages/agent/src/memory-writer.ts:98-110`; `packages/shared/src/agent-memory.ts:311-333`; `packages/shared/src/tool-call-metrics.ts:125,184-267`; `packages/agent/src/sub-agent-instrumentation.ts:286,309,323,433-455`; `packages/agent/src/sub-agent.ts:1601,1746,1760,1906-1958`; `packages/agent/src/sub-agent-truncate-tool-output.ts:5-19`; `packages/agent/src/sub-agent-context-budget.ts:30-40`; `packages/shared/src/pagination.ts:17`; `packages/agent/src/aggregator.ts:82-88`; `packages/agent/src/state-pruning.ts:17-18`; `apps/web/src/lib/server/agent.ts:450-475`; `packages/agent/src/sub-agent-loop-guard.ts:67,299-304`; `packages/agent/src/fleet-inbox.ts:18-25,107,231-249`; `packages/agent/src/pi-fleet/tools.ts:34-40`; `packages/pi-coms/extensions/coms-net.ts:28-33,1031,1912,1967-1977,2118`; `packages/pi-coms/scripts/coms-net-server.ts:33-56`; `packages/pi-coms/scripts/monitor/state.ts:17`; `packages/pi-coms/scripts/monitor/checks/logs.ts:28-59`; `packages/pi-coms/deploy/bootstrap/agent-bootstrap.sh:86-102`; `packages/agent/src/iac/knowledge-selector.ts:36-40`; `packages/checkpointer/src/index.ts:12`; `agents/pi-fleet/agents/aws-spoke/RULES.md:151`.
 
 Docs read: `docs/architecture/sub-agent-context-assembly.md`, `docs/architecture/pi-fleet-third-graph.md`, `docs/architecture/monitoring.md`, `docs/superpowers/specs/2026-06-17-couchbase-agent-memory-backend-design.md`, `docs/superpowers/specs/2026-06-17-state-pruning-design.md`.
+
+## 11. Phase 3 preconditions, resolved (2026-09-10)
+
+Phase 3 (SIO-1689) was gated on three preconditions. All three were checked
+against the pinned Pi 0.84.4 package itself (`npm pack
+@earendil-works/pi-coding-agent@0.84.4`), not the upstream `main` branch the
+original survey read. The answers retire most of the phase.
+
+**Pi's hooks exist.** `session_before_compact` and `tool_result` are both
+declared in the pinned build, and `ToolResultEventResult.content` can indeed
+rewrite a tool result before it enters the conversation
+(`dist/core/extensions/types.d.ts:835,913,940`). The capability question is
+settled: the seams are real.
+
+**Item 6 (tool_result ladder) is retired.** Pi's `bash` tool already implements
+the whole ladder, and better than the proposal. It truncates at 2000 lines or
+50 KB, whichever comes first (`dist/core/tools/truncate.js:10-11`), writes the
+complete output to a temp file, and tells the model the path and what it is
+missing: "Showing lines 1-2000 of 84,213. Full output: /tmp/..."
+(`dist/core/tools/bash.js:314-320`). The spoke's own `read` tool takes
+`offset`/`limit` and its `grep` tool takes a pattern, so any part of the elided
+output is already retrievable, by line range or by search. Building a
+spoke-local FTS5 index would duplicate a working mechanism and add a second
+truncation authority to reason about. The correct action is none.
+
+**Item 5 (compaction snapshot) is retired.** Two findings. First, the current
+call is not blunt: `ctx.compact()` (`packages/pi-coms/extensions/coms-net.ts:1977`)
+invokes Pi's own compaction, which runs an LLM summarization over a transcript
+that preserves user turns, assistant reasoning, tool calls WITH their arguments,
+and tool results (`dist/core/compaction/utils.js:95-141`). That is strictly
+richer than the table-of-contents this item proposed building from
+`coms-net-log` entries. Second, `SessionBeforeCompactResult` accepts only
+`{cancel, compaction}` (`types.d.ts:857-860`), so a handler cannot append to
+Pi's summary: it must replace the whole `CompactionResult`, taking ownership of
+`summary` and `firstKeptEntryId`. Replacing a working LLM summarizer with a
+hand-rolled digest is a downgrade with a correctness risk attached.
+
+The incident that motivated item 5 was also already solved, and not by
+compaction. eu-oit-prd reaching 98 percent context
+(`packages/pi-coms/docs/architecture/monitoring.md:115`) was fixed by SIO-1673's
+investigation budget and operator controls, which bound how many prompts a noisy
+source can buy. Compaction was never the mechanism holding that line.
+
+**Item 8 (hub reply search) stays unbuilt**, as specified: it was conditioned on
+an operator asking for it, and none has.
+
+**Net.** Phase 3 ships no code. The spoke context path is in better shape than
+the study assumed, because Pi supplies natively what phase 3 proposed to add.
+What remains genuinely open on the fleet is reply SIZE, which phase 1 addressed
+at the three places we do control: the persona rule, the console's line-boundary
+cut, and the hub's reply cap.
