@@ -68,6 +68,16 @@ remove an entry when the underlying behavior changes.
   bare unit restart sees "already registered" and leaves the old process
   running.
 - IAM-only changes need `terraform apply`, no bundle.
+- A NEW spoke needs no publish either: its bootstrap pulls whatever bundle is
+  in the hub's bucket. `just fleet rollout <names>` and `status <names>` are
+  enough; publishing re-versions every host in that hub's fleet.
+- `just fleet status` with no names reads every hub and dies on the first
+  missing `token_env`; name the spokes when only one hub token is exported.
+- The gitignored inputs (`deploy/fleet.yaml`, each root's `terraform.tfvars`
+  and `backend.hcl`) exist in ONE checkout. Copy them into a worktree before
+  running the fleet CLI there and back afterwards, and seed the hub-host root
+  with its real tfvars before `tokens ensure` so the token is kept, not
+  re-minted (SIO-1675, SIO-1685).
 - The daily digest carries the running `bundle:` version; a stale host is
   visible from the `ops` inbox without an SSM round-trip.
 

@@ -45,12 +45,12 @@ rendered root by hand: change the manifest or `scripts/fleet/render.ts`.
 | `just fleet preflight [names]` | STS per profile (stops on an expired portal session), hub principal present, TGW route from the subnet, subnet CIDR on the hub allow-list, same AWS Organization as the hub, Bedrock inference profile visible, adopt-mode role readable and trusting the analyzer. Touches nothing. |
 | `just fleet tokens ensure\|rotate [names]` | Mints one `agent` principal per spoke (`<name>`, `monitor-<name>`) in that spoke's OWN environment hub directory and writes the token into the spoke tfvars; Terraform then owns the spoke's `/pi-agent/auth-token`. Never prints a token. |
 | `just fleet render [names]` | Renders the roots (keeps a minted token). |
-| `just fleet backend-init <env>` | Creates the versioned, non-public `pi-coms-tfstate-<hub account>` bucket in that environment's hub account. |
+| `just fleet backend-init <hub>` | Creates the versioned, non-public `pi-coms-tfstate-<hub account>` bucket in that hub's account. |
 | `just fleet plan\|apply [names] [--yes]` | `terraform init -backend-config=backend.hcl` (migrating a local `terraform.tfstate` into the bucket on first use), then plan or apply. Production spokes apply only with `--yes`. |
-| `just fleet publish [--env dev\|prd]` | `deploy/publish-fleet.sh` per hub bucket (persona export included). |
-| `just fleet rollout [names] [--token-changed]` | Run Command `pi-coms-update` per host (it writes the reload sentinel), or the bootstrap re-run after a token change; then polls `GET /v1/agents` through an SSM port-forward to that environment's hub until agent and monitor are online with the persona version. Needs an operator token for the hub in `PI_COMS_NET_AUTH_TOKEN_<ENV>` (or the manifest's `token_env`). |
+| `just fleet publish [--hub <hub>]` | `deploy/publish-fleet.sh` per hub bucket (persona export included); every hub when none is named. Builds from `git archive HEAD` and refuses a dirty tree under `packages/pi-coms`, `agents/` or `packages/gitagent-bridge`. |
+| `just fleet rollout [names] [--token-changed]` | Run Command `pi-coms-update` per host (it writes the reload sentinel), or the bootstrap re-run after a token change; then polls `GET /v1/agents` through an SSM port-forward to that environment's hub until agent and monitor are online with the persona version. Needs an operator token for the hub in the env var named by that hub's `token_env` (SIO-1666). |
 | `just fleet status [names]` | Credentials plus hub registration per spoke. |
-| `just fleet deploy [names] [--yes]` | preflight, tokens ensure, render, apply, publish per environment, rollout, status. |
+| `just fleet deploy [names] [--yes]` | preflight, tokens ensure, render, apply, publish per hub of the selected spokes, rollout, status. A spoke that has never had `tokens ensure` fails the preflight step on `hub principal`, so run `just fleet tokens ensure <name>` once before the first `deploy` (SIO-1685). |
 
 Environments never cross: every spoke declares `env`, a hub exists per
 environment (dev in eu-shared-services-dev, prd in eu-shared-services-prd),
@@ -66,7 +66,29 @@ only the managed `pi-coms-extensions` policy (Cost Explorer, scheduling reads,
 CloudFormation drift detection and AWS Config compliance reads (SIO-1674),
 Bedrock invoke and the explicit Deny on secret values). The analyzer's own
 policies and trust are never replaced. The first `plan` on a production account
-shows the import and that one trust update; review it before `--yes`.
+shows the import and that one trust update; review it before `--yes`. A
+fresh production spoke plans as `1 to import, 13 to add, 1 to change, 0 to
+destroy`; anything destroyed means the wrong mode.
+
+Bedrock model access is per account and per model, and preflight's
+`bedrock model` row only checks that the inference profile is VISIBLE. The
+model AGREEMENT must read `AVAILABLE` too, or the spoke boots, registers and
+answers every turn with an error (SIO-1678). Check and, when missing, create
+it before `deploy`:
+
+```bash
+aws bedrock get-foundation-model-availability --profile <p> --region eu-central-1 \
+  --model-id anthropic.claude-haiku-4-5-20251001-v1:0 --query agreementAvailability.status
+aws bedrock list-foundation-model-agreement-offers --profile <p> --region eu-central-1 --model-id <id>
+aws bedrock create-foundation-model-agreement --profile <p> --region eu-central-1 --model-id <id> --offer-token <token>
+```
+
+An Anthropic model additionally needs the account's one-time use-case form
+(`put-use-case-for-model-access`, `--form-data` is single base64 of the JSON)
+before any agreement can be created there; `AccessDeniedException: You have
+not filled out the request form` is that case. "Requested" in the console does
+not create an agreement (SIO-1685 found all three new accounts at
+`NOT_AVAILABLE` after a request).
 
 Legacy roots: the two hand-written dev roots kept local state on one laptop.
 Copy each `terraform.tfstate` into the rendered root before the first

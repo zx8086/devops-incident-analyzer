@@ -89,6 +89,10 @@ spokes:
   eu-oit-prd:
     env: prd
     hub: eu-shared-services-prd
+    # Optional per-spoke model; defaults.pi_model otherwise. Changing it
+    # replaces the instance (userdata) and needs the model agreement in
+    # THAT account (SIO-1675, SIO-1678).
+    pi_model: eu.anthropic.claude-haiku-4-5-20251001-v1:0
     profile: eu-oit-prd
     subnet_id: subnet-0prd0oit000000000
     vpc_cidr: 10.10.2.0/23
