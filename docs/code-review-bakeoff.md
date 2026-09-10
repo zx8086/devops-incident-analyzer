@@ -1141,3 +1141,17 @@ Two files: the `EdgeIngressReads` statement (WAFv2 IP sets and rule groups, Clou
 **Merge gate:** all five CI jobs green. Applied to all five spokes before the merge under the single-policy plan guard (each plan exactly `0 to add, 1 to change, 0 to destroy`), and proven by the eu-oit-prd spoke answering the Prana allowlist question with named IP sets, rule groups, the CloudFront association and the security-group facts in 76 s. Awaiting the user's explicit go-ahead.
 
 **Takeaway:** *the question the operator actually asked is the acceptance test for a read grant.* The existing Web ACL reads looked complete on paper; the addresses live one hop further in IP sets, and nobody had asked the spoke where an allowlist lives until today.
+
+## PR #723 detail (SIO-1685, Haiku 4.5 fleet spokes for ediservices, b2b-ecom and b2becom-v2 prd)
+
+Seven files: six re-rendered Terraform roots (`pi_model` default to Haiku 4.5 plus the `ComsProject` tag and `coms_project` input the roots had missed since they were last generated) and a one-line `scripts/fleet.ts` fix. The fix is the interesting part: `deploy` still passed each spoke's ENVIRONMENT to `runPublish`, which the SIO-1666 rekey turned into a hub-key lookup, so every `just fleet deploy` since then died with `unknown hub "prd"` immediately after the applies. It surfaced only because this was the first `deploy` of a new spoke after the rekey; `plan`, `apply` and `publish --hub` on their own had all worked.
+
+**Greptile:** SKIPPED at dispatch (15:14Z, 137 ms). Fortieth consecutive skip.
+
+**CodeRabbit:** nothing. Fortieth consecutive absence.
+
+**Local review (substitute):** the diff read against the manifest schema and the other `runPublish` call site (`publish --hub`, already hub-keyed). The rendered roots are checked by `fleet-render.test.ts` (29 fleet tests pass). No finding.
+
+**Merge gate:** all five CI jobs green; root typecheck clean once the worktree had the `@devops-agent/pi-coms` workspace symlink; the ten biome failures are the same ten files as on main. Everything in the PR was already applied and proven live before it was opened: three `1 imported, 13 added, 1 changed, 0 destroyed` applies, six prd spokes online, each new spoke answering a health prompt on Haiku 4.5 in 7 to 9 s with zero Bedrock client errors. Awaiting the user's explicit go-ahead.
+
+**Takeaway:** *a CLI whose happy path shells out to Terraform is only tested by running it.* The publish-per-environment bug sat in `deploy` for three days and two rekey follow-ups because nothing exercises the composite command, and neither bot was there to read the call site. The Bedrock lesson from the same rollout is the other half: "requested in the console" left `agreementAvailability` at `NOT_AVAILABLE` in all three accounts, and only the API probe said so before the spokes went live.
