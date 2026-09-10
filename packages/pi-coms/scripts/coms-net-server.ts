@@ -42,6 +42,29 @@ const STALE_AFTER_MS = Number(process.env.PI_COMS_NET_STALE_AFTER_MS ?? 30_000);
 const OFFLINE_AFTER_MS = Number(process.env.PI_COMS_NET_OFFLINE_AFTER_MS ?? 60_000);
 // Largest accepted request body; Bun answers 413 above it (prompts are KB-scale).
 const MAX_BODY_BYTES = Number(process.env.PI_COMS_NET_MAX_BODY_BYTES ?? 1_048_576);
+// SIO-1687: largest stored reply body. MAX_BODY_BYTES bounds one HTTP request at
+// 1 MiB, which is orders of magnitude above any legitimate reply: a spoke answer
+// is findings-first prose or bare JSON, and the monitor's own report is one line
+// per finding capped at 10 findings a cycle. Truncating here (rather than
+// rejecting) keeps a verbose reply readable instead of losing the answer. 0
+// disables the cap; a reply is stored whole either way when it fits.
+const REPLY_CAP_BYTES = Number(process.env.PI_COMS_NET_REPLY_CAP_BYTES ?? 65_536);
+
+// Truncates on a UTF-8 byte budget without splitting a code point, preferring a
+// line boundary in the last 5% of the budget so a cut reply still ends cleanly.
+export function capReplyBody(text: string, cap: number = REPLY_CAP_BYTES): string {
+	if (cap <= 0) return text;
+	const bytes = Buffer.from(text, "utf8");
+	if (bytes.length <= cap) return text;
+	const marker = "\n[truncated by hub]";
+	const budget = Math.max(0, cap - Buffer.byteLength(marker, "utf8"));
+	// TextDecoder with fatal:false drops a trailing partial code point rather than
+	// emitting a replacement char mid-sequence.
+	let body = new TextDecoder("utf8").decode(bytes.subarray(0, budget)).replace(/�+$/, "");
+	const lastNewline = body.lastIndexOf("\n");
+	if (lastNewline > body.length * 0.95) body = body.slice(0, lastNewline);
+	return `${body.trimEnd()}${marker}`;
+}
 
 // Per-principal token directory (SIO-1577). Either source activates directory
 // mode; neither keeps the legacy single shared token exactly as before.
@@ -1501,7 +1524,9 @@ async function handleSubmitResponse(req: Request, msg_id: string, auth: AuthResu
 		body.error !== null && body.error !== undefined && String(body.error).trim() !== "" ? String(body.error) : null;
 	const isError = explicitError !== null || isBlankReply(body.response);
 	msg.status = isError ? "error" : "complete";
-	msg.response = body.response ?? null;
+	// SIO-1687: cap AFTER the blank check, so capping can never turn a real reply
+	// into a blank one and never rescues a blank one into a complete status.
+	msg.response = body.response == null ? null : capReplyBody(String(body.response));
 	msg.error = explicitError ?? (isError ? "empty_reply" : null);
 	msg.completed_at = nowIso();
 	mailFor(msg.project).upsert(msg);

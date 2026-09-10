@@ -25,6 +25,10 @@ mock.module("@devops-agent/agent", () => ({
 	installAgentMemory: mock(() => undefined),
 	installGraphWarmer: mock(() => undefined),
 	installMemoryPromotion: mock(() => undefined),
+	// SIO-1687: agent.ts imports these for the per-turn evidence TOC.
+	buildEvidenceToc: () => undefined,
+	isEvidenceTocEnabled: () => false,
+	setEvidenceToc: () => undefined,
 	needsPruning: () => false,
 	pruneState: () => ({ removeIds: [] as string[] }),
 	runBootstrap: mock(() => Promise.resolve({ stepsRun: [] })),

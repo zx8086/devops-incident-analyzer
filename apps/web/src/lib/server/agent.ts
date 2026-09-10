@@ -2,6 +2,7 @@
 import {
 	type AgentStateType,
 	appliedSkillsForNames,
+	buildEvidenceToc,
 	buildGraph,
 	buildIacGraph,
 	buildPiFleetGraph,
@@ -18,6 +19,7 @@ import {
 	installGraphWarmer,
 	installMemoryPromotion,
 	installSkillLearner,
+	isEvidenceTocEnabled,
 	needsPruning,
 	type OutcomeTurn,
 	pruneState,
@@ -25,12 +27,13 @@ import {
 	runPostTurn,
 	runTeardown,
 	type SkillLearnerTurn,
+	setEvidenceToc,
 	setSessionOutcome,
 	stopHealthPolling,
 } from "@devops-agent/agent";
 import { complianceToMetadata, getRecursionLimit } from "@devops-agent/gitagent-bridge";
 import { getLogger } from "@devops-agent/observability";
-import type { AttachmentMeta, DataSourceContext } from "@devops-agent/shared";
+import type { AttachmentMeta, DataSourceContext, DataSourceResult } from "@devops-agent/shared";
 import { isKillSwitchActive, KillSwitchError } from "@devops-agent/shared";
 import type { BaseMessage, MessageContentComplex } from "@langchain/core/messages";
 import { DEFAULT_AGENT_ID, describeAgent, graphFor } from "./graph-registry.ts";
@@ -454,6 +457,14 @@ export async function pruneThreadState(threadId: string, agentName: string = DEF
 		const snapshot = await graph.getState(config);
 		const messages = (snapshot.values?.messages ?? []) as BaseMessage[];
 		if (!needsPruning(messages)) return;
+		// SIO-1687: capture what this turn fetched BEFORE the reset below discards
+		// it. Provenance only (datasource, tool names, sizes, error categories), so
+		// the next turn cannot mistake pruned evidence for absent evidence. Stashed
+		// per thread, not persisted; cleared with the recall stash at teardown.
+		if (isEvidenceTocEnabled()) {
+			const priorResults = (snapshot.values?.dataSourceResults ?? []) as DataSourceResult[];
+			setEvidenceToc(threadId, buildEvidenceToc(priorResults));
+		}
 		const { removeIds } = pruneState(messages);
 		// Only remove ids actually present (messagesStateReducer throws on an
 		// unknown id, and updateState is atomic — a stale id would discard the

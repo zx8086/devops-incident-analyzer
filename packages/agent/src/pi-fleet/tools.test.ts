@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import type { PiComsConfig } from "@devops-agent/shared";
 import type { PiAgentCard } from "../action-tools/pi-coms-client.ts";
 import { readPiComsCapability, resolvePiComsConfig } from "../action-tools/pi-verifier.ts";
-import { buildFleetTools, releaseClients, SPOKE_TEXT_CAP, wrapUntrusted } from "./tools.ts";
+import { buildFleetTools, capSpokeText, releaseClients, SPOKE_TEXT_CAP, wrapUntrusted } from "./tools.ts";
 
 const config: PiComsConfig = {
 	hubs: {
@@ -112,6 +112,31 @@ describe("SIO-1655 wrapUntrusted (the injection boundary)", () => {
 		const wrapped = wrapUntrusted("eu-oit-prd", "x".repeat(SPOKE_TEXT_CAP * 3));
 		expect(wrapped).toContain("[truncated]");
 		expect(wrapped.length).toBeLessThan(SPOKE_TEXT_CAP * 2);
+	});
+
+	// SIO-1687: a mid-word cut reads as corrupted evidence and invites the model
+	// to guess at the rest. A spoke reply is line-oriented (findings, then
+	// evidence) or bare JSON, so the last newline is the honest boundary.
+	test("cuts on a line boundary rather than mid-sentence", () => {
+		const line = `${"finding detail ".repeat(6)}\n`;
+		const text = line.repeat(Math.ceil((SPOKE_TEXT_CAP * 2) / line.length));
+		const body = capSpokeText(text);
+		expect(body.endsWith("\n[truncated]")).toBe(true);
+		const lastLine = body.slice(0, -"\n[truncated]".length).split("\n").pop() ?? "";
+		// Every kept line is a whole line: none is a prefix of the repeated unit.
+		expect(lastLine).toBe(line.trimEnd());
+	});
+
+	test("falls back to the hard cut when one unbroken line fills the budget", () => {
+		const body = capSpokeText(`${"x".repeat(SPOKE_TEXT_CAP * 2)}\ntail`);
+		expect(body).toContain("[truncated]");
+		// No newline within reach, so the hard cut stands rather than dropping
+		// almost everything to reach a distant boundary.
+		expect(body.length).toBeGreaterThan(SPOKE_TEXT_CAP - 100);
+	});
+
+	test("leaves a reply under the cap untouched", () => {
+		expect(capSpokeText("short answer\nwith two lines")).toBe("short answer\nwith two lines");
 	});
 });
 

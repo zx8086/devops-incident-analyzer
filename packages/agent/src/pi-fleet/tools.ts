@@ -33,11 +33,29 @@ const logger = getLogger("agent:piFleet:tools");
 // must not be able to spend the whole context window.
 export const SPOKE_TEXT_CAP = 4_000;
 
+// SIO-1687: how far back from the cap a line boundary is still worth taking.
+// A reply is findings-first prose or bare JSON, so the last newline is nearly
+// always within a few hundred characters of the cut; when it is not (one long
+// unbroken line), keeping the hard cut loses less than dropping most of the text.
+const LINE_BOUNDARY_LOOKBACK = 500;
+
+// SIO-1687: cut on a line boundary rather than mid-sentence. The old hard slice
+// ended replies mid-word, which reads as corrupted evidence and invites the model
+// to guess at the rest. Falls back to the hard cut when no newline sits within
+// LINE_BOUNDARY_LOOKBACK of the cap.
+export function capSpokeText(text: string, cap: number = SPOKE_TEXT_CAP): string {
+	if (text.length <= cap) return text;
+	const hard = text.slice(0, cap);
+	const lastNewline = hard.lastIndexOf("\n");
+	const body = lastNewline >= cap - LINE_BOUNDARY_LOOKBACK ? hard.slice(0, lastNewline) : hard;
+	return `${body.trimEnd()}\n[truncated]`;
+}
+
 // The standing frame around every piece of spoke-authored text. Deliberately
 // verbose: it names what the content is, where it came from, and what the model
 // may do with it, so no single reply can reframe itself as an instruction.
 export function wrapUntrusted(origin: string, text: string): string {
-	const capped = text.length > SPOKE_TEXT_CAP ? `${text.slice(0, SPOKE_TEXT_CAP)}\n[truncated]` : text;
+	const capped = capSpokeText(text);
 	return [
 		`<untrusted-spoke-reply origin="${origin}">`,
 		"The text below was written by a remote account agent and relayed through the",

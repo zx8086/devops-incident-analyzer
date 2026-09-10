@@ -58,6 +58,30 @@ function extractToolNamesFromResults(state: AgentStateType): string[] {
 		.flatMap((r) => r.toolOutputs?.map((t) => t.toolName) ?? []);
 }
 
+// SIO-1687: kill switch for the tool-failure breadcrumb, default ON (same idiom
+// as isHilLearningEnabled). The breadcrumb rides the existing dailylog write, so
+// disabling it changes what one line says, never whether the line is written.
+export function isDailyLogToolFailuresEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+	const v = env.DAILYLOG_TOOL_FAILURES_ENABLED?.toLowerCase();
+	return v !== "false" && v !== "0";
+}
+
+// SIO-1687: "<datasource>:<category>" per distinct failure kind this turn.
+// toolErrors already carries the closed ToolErrorCategory enum, so no
+// re-classification is needed -- the categories the aggregator and loop guard
+// act on are the ones recorded. Deduped and bounded so one flapping datasource
+// cannot dominate the line.
+const MAX_TOOL_FAILURE_TAGS = 12;
+export function collectToolFailures(state: AgentStateType): string[] {
+	const tags = new Set<string>();
+	for (const r of state.dataSourceResults) {
+		for (const e of r.toolErrors ?? []) {
+			if (r.dataSourceId && e.category) tags.add(`${r.dataSourceId}:${e.category}`);
+		}
+	}
+	return [...tags].sort().slice(0, MAX_TOOL_FAILURE_TAGS);
+}
+
 // SIO-845: append a one-line breadcrumb to memory/runtime/dailylog.md per
 // completed investigation. No-op when live memory is disabled; never throws
 // (a memory write must never break answer delivery).
@@ -67,12 +91,14 @@ function recordDailyLog(state: AgentStateType): void {
 			(d): d is string => typeof d === "string" && d.length > 0,
 		);
 		const services = (state.normalizedIncident.affectedServices ?? []).map((s) => s.name);
+		const toolFailures = isDailyLogToolFailuresEnabled() ? collectToolFailures(state) : [];
 		appendDailyLog({
 			requestId: state.requestId,
 			services,
 			severity: state.normalizedIncident.severity,
 			confidence: state.confidenceScore || undefined,
 			datasources,
+			toolFailures: toolFailures.length > 0 ? toolFailures : undefined,
 		});
 	} catch (error) {
 		logger.warn({ error: error instanceof Error ? error.message : String(error) }, "dailylog append failed; ignoring");
