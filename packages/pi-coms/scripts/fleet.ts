@@ -352,8 +352,10 @@ export async function main(argv: string[], aws: FleetAws = realFleetAws): Promis
 			const tokenChanged = await runTokens(manifest, "ensure", args.names, aws);
 			renderAll(manifest, args.names);
 			await runTerraform(manifest, args.names, "apply", args.yes);
-			const envs = new Set(spokeNames(manifest, args.names).map((n) => spokeFor(manifest, n).env));
-			for (const env of envs) await runPublish(manifest, env);
+			// SIO-1685: publish per HUB of the selected spokes. This used to pass the
+			// environment, which the SIO-1666 rekey turned into an unknown hub key.
+			const hubs = new Set(spokeNames(manifest, args.names).map((n) => spokeFor(manifest, n).hub));
+			for (const hubKey of hubs) await runPublish(manifest, hubKey);
 			const ok = await runRollout(manifest, args.names, aws, { tokenChanged, localPort: args.localPort });
 			await runStatus(manifest, args.names, aws);
 			return ok ? 0 : 1;
