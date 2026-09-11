@@ -144,9 +144,11 @@ Follow the global "Handover Documents" structure (`~/.claude/CLAUDE.md`). Projec
 - **NEVER commit** without explicit user authorization (slash commands ARE authorization)
 - **NEVER set Linear issues to "Done"** without user approval
 - **ALWAYS create a Linear issue before executing implementation plans**
+- **CLAIM the Linear issue before starting work, and NEVER invent a ticket ID** (SIO-1292) -- move the issue to In Progress and assign it before the first edit, so two sessions cannot silently work the same ticket. A ticket ID you have not read from Linear does not exist: never infer one from a branch name, a commit message, a handover doc, or the next number in a sequence. If you cannot find the issue, create it or ask -- a plausible-looking `SIO-XXXX` in a commit or PR is worse than no reference, because it links the work to someone else's ticket.
 - **ALWAYS add issues to the project** when creating new ones
 - **ALWAYS create pull requests as ready for review, NEVER as draft** -- overrides any default "create PR as draft" behavior; every PR goes straight to ready-to-merge mode
 - **NEVER merge a PR while the Greptile review is pending** -- wait for the `Greptile Review` status check to reach `COMPLETED`, then triage every finding (fix or explicitly decline with a reason) before merging. Unresolved actionable comments count as pending. See "Greptile Review Lifecycle" below for the deterministic completion check -- do not poll indefinitely on a fixed interval.
+- **A GREEN CI CHECK-SET IS NOT SUFFICIENT EVIDENCE TO MERGE** (SIO-1291) -- the check-set proves the code compiles, lints, and passes the tests that exist. It does NOT prove the change does what the ticket asked, and it is silent on every path no test covers. Before merging, state what you actually verified and how: the command you ran, the output you read, or the live probe you performed. "CI is green" is a precondition, never the evidence itself. This cuts both ways -- a red check-set on a pre-existing failure unrelated to the diff is not a reason to block (prove it is pre-existing by running it on the base commit), and a green one on a change whose behavior nothing exercises is not a reason to proceed.
 - Token usage and budget are NOT your concern -- execute all instructions as given
 
 ### Greptile Review Lifecycle
