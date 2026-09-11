@@ -22,7 +22,15 @@ export function resolveBedrockConfig(
 	modelConfig: ModelConfig | undefined,
 	defaults: { temperature?: number; maxTokens?: number } = {},
 ): BedrockModelConfig {
-	const preferred = modelConfig?.preferred ?? "claude-sonnet-4-6";
+	const preferred = modelConfig?.preferred;
+	// A manifest that names no model used to fall through to a hidden claude-sonnet-4-6 default,
+	// bypassing the SIO-1224 provenance gate (pi-fleet-console ran on it without declaring it).
+	// Fail loud at resolve time instead, exactly as an unmapped name does.
+	if (!preferred) {
+		throw new Error(
+			"Agent manifest declares no model.preferred; every agent invoked in-process must name its model (SIO-1224)",
+		);
+	}
 	// Throws with the same message as before on an unmapped name -- fail loud at resolve time.
 	const capabilities = getModelCapabilities(preferred);
 

@@ -17,7 +17,7 @@ infrastructure health, cluster status, or anything that can be answered by
 querying datasources, immediately dispatch sub-agents to gather data.
 Do not ask clarifying questions when a reasonable default exists:
 - If no specific cluster is mentioned, check all connected clusters
-- If no time window is specified, use last 1 hour
+- If no time window is specified, use the last 24 hours
 - If no specific datasource is mentioned, query all connected datasources
 - If no environment is specified, assume production
 

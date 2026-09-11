@@ -117,6 +117,19 @@ default precisely so a
 chronic, low-frequency error is not missed. Once any query returns a hit, the service is
 present -- that is final; do not keep permuting queries after you have your answer.
 
+## Choosing the search tool within the `search` action
+Use `elasticsearch_esql_query` when one pipeline answers the question in a single call
+(filter + aggregate + sort), e.g. `FROM logs-* | WHERE log.level == "error" | STATS c = COUNT(*)
+BY service.name | SORT c DESC | LIMIT 10`. It is read-only, always needs a LIMIT, and returns
+rows keyed by column name. Use `elasticsearch_search` for document retrieval, highlighting, and
+the PHASE 1->3 procedure. If a heavy aggregation over the `now-30d` window times out (common on
+`traces-apm*`), keep the window and submit it via `elasticsearch_async_search_submit`, poll
+`elasticsearch_async_search_get` until `is_running` is false, then
+`elasticsearch_async_search_delete`. A response with `is_running` or `is_partial` true is
+incomplete and never supports an absence claim. To control cost on billion-document streams,
+narrow the index pattern (while still covering the full window) and project only needed fields;
+never narrow the time window, and run heavy aggregations sequentially.
+
 ## Follow the failure chain ONE HOP past the focus service (SIO-1154)
 This cluster is the log store of record: ECS/Fargate application logs are shipped here
 via BindPlane (`logs-*`) in ADDITION to CloudWatch, and traces live in APM here -- if

@@ -108,26 +108,7 @@ tool_mapping:
       - atlassian_getConfluencePage
       - atlassian_getJiraIssue
   action_descriptions:
-    # SIO-1182: pick the reader by the id you HOLD -- an `id` from atlassian_search results is an
-    # ARI (ari:cloud:...) and goes to atlassian_fetch; a bare issue key (ABC-123) goes to
-    # atlassian_getJiraIssue; a numeric pageId goes to atlassian_getConfluencePage. Never feed an
-    # issue key to the Confluence page reader or a URL to atlassian_fetch.
-    incident_correlation: >-
-      Jira tickets for an incident. START with atlassian_search over the incident's domain terms,
-      THEN findLinkedIncidents/getIncidentHistory. The service token misses most. READ every search
-      hit you cite via its `id` (an ARI) with atlassian_fetch. For a bare issue key use
-      atlassian_getJiraIssue; for a numeric Confluence pageId use atlassian_getConfluencePage --
-      key+summary alone is not evidence.
-    runbook_lookup: >-
-      finding Confluence runbooks/ops docs. START with atlassian_search over the failure's domain
-      terms, THEN getRunbookForAlert. A service-token-only search misses domain-named pages. READ
-      the body of anything you cite: search-hit `id` (ARI) -> atlassian_fetch, numeric pageId ->
-      atlassian_getConfluencePage, Jira issue key -> atlassian_getJiraIssue -- a title/snippet is
-      not evidence.
-    jira_query: >-
-      when running an explicit JQL query against Jira (direct, not the smart incident-correlation
-      composer). Read result bodies: ARI -> atlassian_fetch, issue key -> atlassian_getJiraIssue.
-    confluence_query: >-
-      when running an explicit CQL query against Confluence (direct, not the smart runbook-lookup
-      composer). Read result bodies: ARI -> atlassian_fetch, numeric pageId ->
-      atlassian_getConfluencePage, Jira issue key -> atlassian_getJiraIssue.
+    incident_correlation: when looking for Jira tickets linked to the incident, its services, or its domain terms (search plus the linked-incident and history composers, with readers for every hit)
+    runbook_lookup: when looking for Confluence runbooks or ops docs for the failure (search plus the runbook composer, with page readers)
+    jira_query: when running an explicit JQL query against Jira
+    confluence_query: when running an explicit CQL query against Confluence
