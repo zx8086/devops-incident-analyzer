@@ -14,7 +14,7 @@ The SIO-1688 evidence index is merged and default ON. It is PROVEN to index full
 
 The epic stays open until a turn is observed where the model called `search_evidence` and got a hit.
 
-Read the next TWO sections before planning any work. Both obvious moves are blocked. Running an eval cannot see the tool (structural). Reading production logs has no target (there is no production deployment and no off-box log path). Corrected 2026-09-11 after checking; the first version of this doc recommended the log route and was wrong.
+Read the next TWO sections before planning any work. ALL THREE routes are now blocked or attempted. Running an eval cannot see the tool (structural). Reading production logs has no target (no production deployment, no off-box log path). The targeted probe was attempted on 2026-09-11 and abandoned after one void run and four design obstacles. Corrected twice on 2026-09-11: the first version recommended the log route, the second recommended the probe, and both were wrong.
 
 ## The eval question, settled: no existing eval can detect this
 
@@ -42,7 +42,7 @@ const loopTools = evidenceIndex
 
 Consequence: running `eval:incident-replay` or `eval:mcp-tool` to answer this would spend Bedrock and judge budget and return a confident silence that looks like "it never fired" but actually means "the instrument cannot see it". Do not do it for this purpose.
 
-## Three ways forward (A is blocked; B is the live one)
+## Three ways forward (A blocked by infrastructure; B blocked in practice; C is a code change)
 
 ### Option A: read production logs. BLOCKED, do not attempt today
 
@@ -63,7 +63,24 @@ Emitted in `packages/agent/src/evidence-index.ts` (search method). Paired with `
 
 **This option unblocks only when BOTH hold:** `apps/web` is deployed somewhere, and its stdout is shipped to a store someone can query. Neither is true today, and neither is in scope for this follow-up. Until then, use Option B.
 
-### Option B: a targeted probe whose answer REQUIRES an elided record. THE ONLY ROUTE THAT WORKS TODAY
+### Option B: a targeted probe whose answer REQUIRES an elided record. ATTEMPTED 2026-09-11, BLOCKED IN PRACTICE
+
+Attempted and abandoned after one void run. Read this before trying again.
+
+**The probe CLI cannot pin a deployment.** `probeSubAgent(dataSourceId, scenario)` builds state via `buildProbeState`, which sets only `currentDataSource` and the scenario message. `targetDeployments` stays `[]`, so `selectElasticDeployments` returns `[]`, `runSubAgent` takes the non-fan-out path, and the bridge sends no `x-elastic-deployment` header. `ELASTIC_DEFAULT_DEPLOYMENT` is unset, so the server picks its own default, which is not the cluster holding the data. The first run therefore hit `index_not_found_exception` on every query, largest tool result 3,855 bytes, zero truncations. Void, not negative.
+
+The eval datasets show the supported shape: every elastic example carries `uiSelectedElasticDeployments: [LIVE_ANCHORS.elastic.deployment]` (`eu-b2b`) because the UI normally supplies it. A rerun needs a caller that builds the state itself and sets `targetDeployments: ["eu-b2b"]`, then calls `queryDataSource` directly. `buildProbeState`'s own comment sanctions this.
+
+**Four obstacles were hit designing the anchor:**
+
+1. Deployment scope, above. Real, and the one genuinely useful finding.
+2. `elasticsearch_search` takes `query`, NOT `queryBody`. The wrong key is silently dropped by Zod `.passthrough()` and the search runs UNFILTERED while looking perfectly normal. This voided an entire round of "deep term at position 120" and rarity findings. Detect it with an impossible-filter control test: `{"match_phrase": {"message": "zzz-cannot-exist-12345"}}` must return 0.
+3. Depth is not reproducible. `sort: ["_doc"]` is unstable across a data stream's many backing indices, so "outside the surviving 3 hits" cannot be fixed in advance. `@timestamp` sorting times out on the full alias.
+4. `match_phrase` on `message` (type `match_only_text`, no positions stored, 188M docs/index) times out even against one backing index. Cheap alternatives that DO work: a token `match`, or a `range` on `@timestamp`. Note the 2026.09.03 backing index has rolled over and holds nothing recent, so a live anchor needs the current write index.
+
+**The structural problem that outlives all four:** the scenario can invite a broad sweep but cannot compel one. The sub-agent chooses its own tool calls, and the first run went straight to narrow queries. So a null result still cannot distinguish "the model will not use the tool" from "nothing truncated". Until that is solved, this route cannot produce interpretable evidence, which is why it was abandoned rather than retried a fifth time.
+
+Payload sizes ARE confirmed, since they depend only on `size` and not the dropped filter: 150 hits on `eu-b2b` returns 243,113 characters against the 131,072-byte cap, so truncation WOULD fire on a genuine broad sweep.
 
 The 2026-09-11 A/B failed to settle this because the scenario ("top error signatures") was answerable from aggregation buckets that survived truncation. The model was never forced to look further.
 
