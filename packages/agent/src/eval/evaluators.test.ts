@@ -5,9 +5,12 @@
 // These tests pin the cap, the schema's tolerant degradation, and the feedback mapping
 // (including the not_determinable omission) without any OpenAI call.
 import { describe, expect, test } from "bun:test";
+import type { Example, Run } from "langsmith/schemas";
 import {
 	applyRootCauseCap,
 	canonicalizeDatasourceKey,
+	datasourcesCovered,
+	datasourcesPrecision,
 	ExampleOutputsSchema,
 	HOLISTIC_JUDGE_SYSTEM_PROMPT,
 	HolisticGradeSchema,
@@ -535,5 +538,104 @@ describe("truncateForJudge (SIO-1374 follow-up, PR #591)", () => {
 		const long = "x".repeat(150);
 		const result = truncateForJudge(long, 100);
 		expect(result).toContain("50 chars");
+	});
+});
+
+// SIO-1694: datasourcesCovered previously read only `targetDataSources`, the dispatch list
+// entityExtractor writes once. The correlation layer's Sends override `currentDataSource`
+// only, so a reactively-fetched datasource reaches `dataSourceResults` (surfaced here as
+// `firstAttempts`) and never `targetDataSources` -- the metric under-reported evidence the
+// agent actually gathered. These are this evaluator's first tests; it had none.
+describe("datasourcesCovered reads reactive fetches (SIO-1694)", () => {
+	function runWith(output: Record<string, unknown>): Run {
+		return { outputs: { output } } as unknown as Run;
+	}
+	function expecting(expectedDatasources: string[]): Example {
+		return { outputs: { expectedDatasources } } as unknown as Example;
+	}
+
+	test("REGRESSION: a correlation-layer fetch absent from targetDataSources still counts", () => {
+		const run = runWith({
+			targetDataSources: ["kafka"],
+			firstAttempts: [
+				{ dataSourceId: "kafka", firstStatus: "success", firstDurationMs: 10, recovered: false },
+				// enforce-node dispatched this one; it never reached targetDataSources.
+				{ dataSourceId: "elastic", firstStatus: "success", firstDurationMs: 20, recovered: false },
+			],
+		});
+		const result = datasourcesCovered(run, expecting(["kafka", "elastic"]));
+		expect(result.score).toBe(1);
+		expect(result.comment).toContain("All 2");
+	});
+
+	test("a datasource that only ever ERRORED does not count as covered", () => {
+		// sub-agent.ts reports status "error" for "no tools available, MCP server may not be
+		// connected" -- a dispatch that obtained nothing. Counting it would over-report.
+		const run = runWith({
+			targetDataSources: [],
+			firstAttempts: [{ dataSourceId: "elastic", firstStatus: "error", firstDurationMs: 5, recovered: false }],
+		});
+		const result = datasourcesCovered(run, expecting(["elastic"]));
+		expect(result.score).toBe(0);
+		expect(result.comment).toContain("Missing: elastic");
+	});
+
+	test("a first attempt that failed but later recovered DOES count", () => {
+		const run = runWith({
+			targetDataSources: [],
+			firstAttempts: [{ dataSourceId: "elastic", firstStatus: "error", firstDurationMs: 5, recovered: true }],
+		});
+		expect(datasourcesCovered(run, expecting(["elastic"])).score).toBe(1);
+	});
+
+	test("still scores from targetDataSources alone when firstAttempts is absent", () => {
+		// Pre-SIO-1398 fixtures and any output without the field must keep working.
+		const run = runWith({ targetDataSources: ["kafka", "elastic"] });
+		expect(datasourcesCovered(run, expecting(["kafka", "elastic"])).score).toBe(1);
+	});
+
+	test("tolerates a malformed firstAttempts entry without throwing", () => {
+		const run = runWith({
+			targetDataSources: ["kafka"],
+			firstAttempts: [null, "nonsense", { firstStatus: "success" }, { dataSourceId: 42 }],
+		});
+		expect(datasourcesCovered(run, expecting(["kafka"])).score).toBe(1);
+	});
+});
+
+// SIO-1694: the recall metric never penalised extras, so a run querying all seven datasources
+// scored 1 on every example. Precision is a separate key rather than a change to that score,
+// to keep historical comparability.
+describe("datasourcesPrecision (SIO-1694)", () => {
+	function runWith(output: Record<string, unknown>): Run {
+		return { outputs: { output } } as unknown as Run;
+	}
+	function expecting(expectedDatasources: unknown): Example {
+		return { outputs: { expectedDatasources } } as unknown as Example;
+	}
+
+	test("scores 1 when nothing beyond the expected set was queried", () => {
+		const run = runWith({ targetDataSources: ["kafka", "elastic"] });
+		const [fb] = datasourcesPrecision(run, expecting(["kafka", "elastic"]));
+		expect(fb?.score).toBe(1);
+		expect(fb?.comment).toContain("No datasources beyond");
+	});
+
+	test("penalises over-fan-out and names the extras", () => {
+		const run = runWith({ targetDataSources: ["kafka", "elastic", "gitlab", "atlassian"] });
+		const [fb] = datasourcesPrecision(run, expecting(["kafka", "elastic"]));
+		expect(fb?.score).toBe(0.5);
+		expect(fb?.comment).toContain("gitlab");
+		expect(fb?.comment).toContain("atlassian");
+	});
+
+	test("emits nothing when the example declares no expectation", () => {
+		// An example with no expectedDatasources has no opinion about what is extra; scoring
+		// it 1.0 would dilute the metric across the dataset.
+		expect(datasourcesPrecision(runWith({ targetDataSources: ["kafka"] }), expecting(undefined))).toEqual([]);
+	});
+
+	test("emits nothing when the run queried nothing", () => {
+		expect(datasourcesPrecision(runWith({ targetDataSources: [] }), expecting(["kafka"]))).toEqual([]);
 	});
 });
