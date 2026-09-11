@@ -252,8 +252,16 @@ export function buildVerifyPrompt(input: { params: PiVerifyParams; report: strin
 	const sidecar: string[] = [`AWS estate under review: ${params.estate}`];
 	if (params.severity) sidecar.push(`Reported severity: ${params.severity}`);
 	if (params.confidence !== undefined) sidecar.push(`Reported confidence: ${params.confidence}`);
-	if (params.rootCauseDataSources && params.rootCauseDataSources.length > 0) {
-		sidecar.push(`Root cause attributed to datasources: ${params.rootCauseDataSources.join(", ")}`);
+	// SIO-1696: the datasource attribution is context for judging what the report
+	// asserts, NOT a list to go and check -- the spoke reaches only AWS, in one
+	// account. Naming these as a bare fact invited replies that enumerated every
+	// system the agent could not reach, so the line says outright not to report on
+	// them. An AWS-only attribution is dropped: it names nothing out of scope.
+	const foreignDataSources = (params.rootCauseDataSources ?? []).filter((d) => d.toLowerCase() !== "aws");
+	if (foreignDataSources.length > 0) {
+		sidecar.push(
+			`Context only -- the report attributes root cause to: ${foreignDataSources.join(", ")}. These are outside this account; do not check them and do not mention them in your reply.`,
+		);
 	}
 	if (params.caveats && params.caveats.length > 0) {
 		sidecar.push("Caveats already attached to the report:");
@@ -262,12 +270,19 @@ export function buildVerifyPrompt(input: { params: PiVerifyParams; report: strin
 	return [
 		"You are verifying an incident report produced by an automated DevOps incident analyzer.",
 		"Check each concrete claim about this AWS account (resources, alarms, log evidence, timings, root cause) against live account state using read-only calls only. Never create, update, or delete anything.",
-		"For every claim, decide: confirmed (you observed evidence agreeing with it), contradicted (you observed evidence disagreeing with it), or unverifiable (you could not observe it with the access you have). Cite the specific resource, metric, log group, or API result you checked as evidence.",
-		"Also list anything notable you observed that the report missed.",
+		// SIO-1696: the report spans datasources this spoke cannot reach (Elasticsearch,
+		// Kafka, Couchbase, GitLab, Atlassian) and other AWS accounts. Reporting those as
+		// `unverifiable` produced replies that were mostly a list of systems the agent had
+		// no access to, and -- because buildInvestigateFollowUp keys off non-confirmed
+		// claims -- spawned investigate cards ordering it to chase them. They are omitted
+		// instead, and `unverifiable` narrows to an in-account read that genuinely failed.
+		"Report ONLY on this AWS account. Silently skip every claim about another AWS account or about a non-AWS system: leave it out of claims[] entirely, and do not name those accounts or systems anywhere in your reply. Do not mark them unverifiable -- they are out of scope, not unresolved.",
+		"For each remaining claim, decide: confirmed (you observed evidence agreeing with it), contradicted (you observed evidence disagreeing with it), or unverifiable (the read is available in this account but you could not complete it -- quote the permission error or the retention limit). Cite the specific resource, metric, log group, or API result you checked as evidence.",
+		"Also list anything notable you observed in this account that the report missed.",
 		"",
 		...sidecar,
 		"",
-		"Reply with JSON only, matching the response schema you were given: { verdict, summary, claims: [{ claim, status, evidence }], additional_observations, recommended_investigation }. Set verdict to confirmed only when every claim is confirmed; use partially_confirmed when at least one claim is confirmed and at least one is not; contradicted when the root cause claim is contradicted; unverifiable when nothing could be checked. Set recommended_investigation to a one-sentence next step when any claim is contradicted or unverifiable, otherwise null.",
+		"Reply with JSON only, matching the response schema you were given: { verdict, summary, claims: [{ claim, status, evidence }], additional_observations, recommended_investigation }. The verdict covers the in-scope claims only: confirmed when every one of them is confirmed; partially_confirmed when at least one is confirmed and at least one is not; contradicted when the root cause claim is contradicted; unverifiable when no in-scope claim could be checked. The summary describes what you found in this account -- it does not enumerate what was out of scope. Set recommended_investigation to a one-sentence next step ONLY when it is an action performable in this account; otherwise null. Never recommend querying another account or another system.",
 		"",
 		"--- INCIDENT REPORT ---",
 		truncateReport(report),
@@ -285,7 +300,12 @@ export function buildInvestigatePrompt(input: { params: PiInvestigateParams; rep
 		"Open questions from the verification pass (investigate each):",
 		...params.focus.map((f) => `- ${f}`),
 		"",
+		// SIO-1696: the focus list is derived from the verdict's non-confirmed claims,
+		// which the verify prompt now keeps in-account. A card issued before that change
+		// can still carry an out-of-scope entry, so skipping is stated here too.
+		"Skip any open question that is about another AWS account or a non-AWS system, and do not mention it in your reply. Report only what you can observe in this account.",
 		"Use read-only calls only: describe, list, get, query, and CloudWatch Logs Insights are fine; never create, update, or delete anything. Paginate before concluding something is absent. Prefer evidence with timestamps and resource identifiers.",
+		"Every suggested action must be performable in this account or by a named owner of this account's resources; never suggest querying another account or another system.",
 		"",
 		"Reply with JSON only, matching the response schema you were given: { summary, root_cause_hypothesis, evidence: [{ resource, observation }], suggested_actions, confidence } where confidence is 0 to 1 and reflects how well the evidence supports the hypothesis.",
 		"",

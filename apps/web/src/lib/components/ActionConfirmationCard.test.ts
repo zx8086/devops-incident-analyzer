@@ -73,6 +73,10 @@ describe("ActionConfirmationCard pi-coms", () => {
 		expect(body).toContain("ECS deploy at 10:00");
 		expect(body).toContain("Check ECS service events.");
 		expect(body).not.toContain("Approve");
+		// SIO-1696: the card is collapsible but arrives expanded -- the body above
+		// is present on first render, and the header carries the toggle.
+		expect(body).toContain('aria-expanded="true"');
+		expect(body).toContain("transition-transform rotate-180");
 	});
 
 	test("investigation result renders hypothesis, evidence and actions", () => {
@@ -105,6 +109,8 @@ describe("ActionConfirmationCard pi-coms", () => {
 		expect(body).toContain("minimumHealthyPercent 0");
 		expect(body).toContain("ecs:service/checkout");
 		expect(body).toContain("Set minimumHealthyPercent to 100");
+		expect(body).toContain('aria-expanded="true"');
+		expect(body).toContain("transition-transform rotate-180");
 	});
 
 	test("queued result explains the mailbox fallback", () => {

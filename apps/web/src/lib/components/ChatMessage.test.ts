@@ -79,6 +79,35 @@ describe("ChatMessage placement", () => {
 		expect(cardIdx).toBeLessThan(completedIdx);
 	});
 
+	// SIO-1696: the feedback bar reads as a message terminator, so a pi verdict
+	// card rendered below it looked orphaned. Action cards belong with the answer.
+	test("pi action cards appear BEFORE the feedback bar", () => {
+		const { body } = render(ChatMessage, {
+			props: {
+				message: baseAssistant,
+				index: 0,
+				isLast: true,
+				pendingActions: [
+					{
+						id: "a1",
+						tool: "verify-with-pi",
+						params: { estate: "estate-1", target: "estate-1-agent" },
+						reason: "Verify the report's AWS claims for estate estate-1.",
+					},
+				],
+				onActionApprove: () => undefined,
+				onActionDismiss: () => undefined,
+				onFeedback: () => undefined,
+			},
+		});
+		const cardIdx = body.indexOf("Verify with pi agent");
+		// The feedback bar's own label; CompletedProgress carries no "Helpful?".
+		const feedbackIdx = body.indexOf("Helpful?");
+		expect(cardIdx).toBeGreaterThan(-1);
+		expect(feedbackIdx).toBeGreaterThan(-1);
+		expect(cardIdx).toBeLessThan(feedbackIdx);
+	});
+
 	test("renders CouchbaseFindingsCard when message has couchbase findings", () => {
 		const message: ChatMessageType = {
 			...baseAssistant,

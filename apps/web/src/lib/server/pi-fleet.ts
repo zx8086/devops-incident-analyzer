@@ -174,38 +174,46 @@ export async function listFleetAgents(deps: PiFleetDeps = {}): Promise<PiFleetAg
 	}
 	// Listing needs only the bearer token, so no registration here. A failing hub
 	// keeps its row with the reason; the other hubs still list.
+	//
+	// SIO-1696: this pane is production incident triage, so only prd hubs are
+	// listed. `environment` is the hub attribute SIO-1666 introduced for exactly
+	// this question -- do not infer it from an estate name. UI surface only: the
+	// send and mailbox paths below still resolve every configured hub, so an
+	// operator addressing a dev spoke through the hub CLI is unaffected.
 	const hubs: PiFleetHub[] = await Promise.all(
-		pane.hubs.map(async (paneHub) => {
-			const base = {
-				hubKey: paneHub.hubKey,
-				environment: paneHub.environment,
-				project: paneHub.hub.project,
-				fallbackTarget: paneHub.hub.fallbackTarget,
-			};
-			try {
-				// SIO-1665: the client lists explicit registrations too (a spoke may be
-				// explicit), which also returns every `monitor-*`. Monitors cannot answer a
-				// prompt, so they are dropped by name here; their reports still reach the
-				// pane through the hub's inbox (`Inbox ops`).
-				const agents = spokesOnly(await clientFor(paneHub, pane, deps).listAgents());
-				const peers = agents
-					.map((a) => ({ name: a.name, status: a.status, purpose: a.purpose ?? null, sessionId: a.session_id }))
-					.sort((a, b) => a.name.localeCompare(b.name));
-				log.info(
-					{ hubKey: paneHub.hubKey, project: paneHub.hub.project, peers: peers.length },
-					"pi.fleet.agents.listed",
-				);
-				return { ...base, peers, error: null };
-			} catch (error) {
-				// This error was previously visible ONLY as a string in the pane
-				// ("fetch failed"), with nothing server-side to say which hub or why.
-				log.warn(
-					{ hubKey: paneHub.hubKey, project: paneHub.hub.project, error: describeError(error) },
-					"pi.fleet.agents.failed",
-				);
-				return { ...base, peers: [], error: describeError(error) };
-			}
-		}),
+		pane.hubs
+			.filter((paneHub) => paneHub.environment === "prd")
+			.map(async (paneHub) => {
+				const base = {
+					hubKey: paneHub.hubKey,
+					environment: paneHub.environment,
+					project: paneHub.hub.project,
+					fallbackTarget: paneHub.hub.fallbackTarget,
+				};
+				try {
+					// SIO-1665: the client lists explicit registrations too (a spoke may be
+					// explicit), which also returns every `monitor-*`. Monitors cannot answer a
+					// prompt, so they are dropped by name here; their reports still reach the
+					// pane through the hub's inbox (`Inbox ops`).
+					const agents = spokesOnly(await clientFor(paneHub, pane, deps).listAgents());
+					const peers = agents
+						.map((a) => ({ name: a.name, status: a.status, purpose: a.purpose ?? null, sessionId: a.session_id }))
+						.sort((a, b) => a.name.localeCompare(b.name));
+					log.info(
+						{ hubKey: paneHub.hubKey, project: paneHub.hub.project, peers: peers.length },
+						"pi.fleet.agents.listed",
+					);
+					return { ...base, peers, error: null };
+				} catch (error) {
+					// This error was previously visible ONLY as a string in the pane
+					// ("fetch failed"), with nothing server-side to say which hub or why.
+					log.warn(
+						{ hubKey: paneHub.hubKey, project: paneHub.hub.project, error: describeError(error) },
+						"pi.fleet.agents.failed",
+					);
+					return { ...base, peers: [], error: describeError(error) };
+				}
+			}),
 	);
 	return {
 		configured: true,

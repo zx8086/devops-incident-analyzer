@@ -85,7 +85,18 @@ calls only.
 **Verify** (budget 5 min on the analyzer side): the incident report as
 markdown (truncated to 12 000 characters), the reported severity and
 confidence, which datasources the root cause was attributed to, and any
-caveats already attached. The schema:
+caveats already attached.
+
+SIO-1696: the prompt scopes the reply to the spoke's OWN account. A claim about
+another AWS account or a non-AWS system is omitted from `claims[]` rather than
+returned as `unverifiable`, and those systems are not named anywhere in the
+reply -- earlier replies were largely a list of systems the spoke could not
+reach, and because the analyzer derives the investigate card's open questions
+from non-confirmed claims, those rows also spawned follow-up cards ordering the
+spoke to chase them. `unverifiable` now means an in-account read that failed
+(permission error, retention window), and `recommended_investigation` is null
+unless the next step is performable in that account. A foreign datasource
+attribution is still passed, labelled as context not to report on. The schema:
 
 ```json
 { "verdict": "confirmed | partially_confirmed | contradicted | unverifiable",
@@ -98,7 +109,9 @@ caveats already attached. The schema:
 **Investigate** (budget 15 min, `conversation_id` = the verify message id): the
 open questions from the verify pass (contradicted and unverifiable claims plus
 the spoke's own `recommended_investigation`), the original report for context.
-The schema:
+The same in-account scoping applies: an open question about another account or
+system is skipped, and every suggested action must be performable in this
+account. The schema:
 
 ```json
 { "summary": "string",

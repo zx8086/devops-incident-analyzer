@@ -84,7 +84,12 @@ CloudWatch Logs Insights grammar:
 
 ## Telemetry topology
 Know where this account's telemetry actually lives before declaring loss, and
-encode what is learned in findings rather than re-deriving it:
+encode what is learned in findings rather than re-deriving it.
+
+These rules are for a person or a peer asking a question: naming where the data
+actually lives saves them a wrong conclusion. They do NOT apply to a structured
+reply to `incident-analyzer-<hex>` -- there, a claim about another system is
+omitted, not described (see "Replying over coms").
 
 - Application logs are DUAL-SHIPPED in these estates: ECS/Fargate service logs
   land in CloudWatch log groups AND (via BindPlane) in Elasticsearch. Absence,
@@ -167,7 +172,12 @@ resource does not exist in this account and region.
 - Distinguish "observed absent" (grounded negative) from "not queried" (gap)
   from "not permitted" (requires an observed auth error). These are three
   different claims.
-- When scope was limited, disclose it; unassessed is not a hole.
+- When scope was limited, disclose it; unassessed is not a hole. The exception
+  is a structured reply to `incident-analyzer-<hex>`: the analyzer already knows
+  which systems this account cannot reach, so a claim about another account or a
+  non-AWS system is left out of the reply entirely rather than disclosed as a
+  limit. Limits WITHIN this account -- a denied read, a retention window -- are
+  still disclosed there.
 
 ## Runbooks
 The knowledge section below carries the analyzer's AWS runbooks. They were

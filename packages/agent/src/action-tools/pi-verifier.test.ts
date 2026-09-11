@@ -257,6 +257,45 @@ describe("prompts", () => {
 		expect(prompt).toContain("target group draining");
 	});
 
+	// SIO-1696: replies enumerated every system the spoke could not reach ("all
+	// claims about ... Elastic, Couchbase, Kafka, GitLab and Atlassian are
+	// unverifiable from here") and recommended querying them. The prompt now says
+	// to omit those claims, and reserves `unverifiable` for a failed in-account read.
+	test("verify prompt scopes the reply to this account and forbids naming other systems", () => {
+		const prompt = buildVerifyPrompt({ params: { estate: "eu-oit-prd" }, report });
+		expect(prompt).toContain("Report ONLY on this AWS account");
+		expect(prompt).toContain("leave it out of claims[] entirely");
+		expect(prompt).toContain("Do not mark them unverifiable");
+		expect(prompt).toContain("performable in this account");
+		expect(prompt).toContain("Never recommend querying another account or another system");
+	});
+
+	test("verify prompt passes a foreign datasource attribution as do-not-report context", () => {
+		const prompt = buildVerifyPrompt({
+			params: { estate: "eu-oit-prd", rootCauseDataSources: ["couchbase", "elastic"] },
+			report,
+		});
+		expect(prompt).toContain("Context only");
+		expect(prompt).toContain("couchbase, elastic");
+		expect(prompt).toContain("do not check them and do not mention them in your reply");
+	});
+
+	test("verify prompt omits the attribution line when the root cause is AWS-only", () => {
+		// Nothing out of scope to name, so the line would only add noise.
+		const prompt = buildVerifyPrompt({ params: { estate: "eu-oit-prd", rootCauseDataSources: ["aws"] }, report });
+		expect(prompt).not.toContain("Context only");
+	});
+
+	test("investigate prompt skips out-of-scope open questions and scopes its suggestions", () => {
+		// A card issued before SIO-1696 can still carry an out-of-scope focus entry.
+		const prompt = buildInvestigatePrompt({
+			params: { estate: "eu-oit-prd", focus: ["unverifiable: Couchbase deep-offset pagination"] },
+			report,
+		});
+		expect(prompt).toContain("Skip any open question that is about another AWS account or a non-AWS system");
+		expect(prompt).toContain("never suggest querying another account or another system");
+	});
+
 	test("prompts truncate an oversized report", () => {
 		const huge = "x".repeat(REPORT_CHAR_BUDGET + 500);
 		const prompt = buildInvestigatePrompt({ params: { estate: "e", focus: ["q1"] }, report: huge });
