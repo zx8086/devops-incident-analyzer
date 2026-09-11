@@ -95,7 +95,10 @@ describe("MonitorComs", () => {
 
 		await agent.stop();
 		await peer.stop();
-	});
+		// SIO-1693: 210 sequential round trips plus sendWithRetry's backoff do not fit
+		// Bun's 5000ms default on a loaded runner -- observed failing at 5043ms. Same
+		// explicit budget as the response_schema test below.
+	}, 30_000);
 
 	test("long-ttl send to an offline name queues", async () => {
 		const hub = await startHub();
