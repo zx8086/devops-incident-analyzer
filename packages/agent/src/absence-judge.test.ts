@@ -76,6 +76,42 @@ describe("buildAbsenceEvidenceDigest (SIO-1158)", () => {
 		expect(digest).toContain("elasticsearch_search: Total results: 91");
 	});
 
+	// SIO-1283: the acceptance criterion. A claim like "no telemetry exists for order-service" is
+	// refuted by a bucket proving the service has documents -- but at the old 2_048 cap that
+	// bucket was visible only if it landed in the first ~1 KB, so a service at index ~64 of 129
+	// was invisible and the judge upheld the false claim.
+	test("digest shows a service from deep in a 129-bucket discovery aggregation", () => {
+		const services = Array.from({ length: 129 }, (_, i) => `prana-service-${String(i).padStart(3, "0")}`);
+		const digest = buildAbsenceEvidenceDigest(
+			[
+				result({
+					toolOutputs: [
+						{
+							toolName: "elasticsearch_multi_search",
+							rawJson: {
+								aggregations: {
+									by_service: {
+										buckets: services.map((key, i) => ({
+											key,
+											doc_count: 1_000 + i,
+											idx: { buckets: [{ key: `logs-${key}-000001`, doc_count: 7 }] },
+											env: { buckets: [{ key: "prd", doc_count: 2 }] },
+										})),
+									},
+								},
+							},
+						},
+					],
+				}),
+			],
+			"elastic",
+		);
+
+		expect(digest).toContain("prana-service-000");
+		expect(digest).toContain("prana-service-064");
+		expect(digest).toContain("prana-service-128");
+	});
+
 	test("stringifies object rawJson and labels deployments", () => {
 		const digest = buildAbsenceEvidenceDigest(
 			[

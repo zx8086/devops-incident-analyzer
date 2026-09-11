@@ -139,6 +139,7 @@ ${normalized.extractedMetrics?.length ? `- Metrics mentioned: ${normalized.extra
 Return JSON with: dataSources (array of {id, mentionedAs}), timeFrom, timeTo (ISO 8601), services (array), severity.
 Map mentions like "logs" or "elasticsearch" to "elastic", "kafka" or "events" to "kafka", "couchbase" or "database" to "couchbase", "kong" or "api gateway" to "konnect", "gitlab" or "pipeline" or "merge request" or "CI/CD" or "commit" or "deploy" or "code change" to "gitlab", "jira" or "confluence" or "ticket" or "runbook" or "incident page" or "wiki" to "atlassian".
 Always include "gitlab" alongside other datasources for complex incidents -- GitLab provides supplementary code and deployment correlation context.
+SIO-1369: also always include "elastic" when the query describes a SYMPTOM that application logs or APM could corroborate -- a timeout, lag, latency, error rate, 5xx/4xx, crash, or stall -- even when the query never says "logs", "elasticsearch", or "APM". The datasource the symptom is reported against (kafka, couchbase, konnect) shows its own side; Elasticsearch shows what the APPLICATION saw, which is what distinguishes a broken dependency from a broken caller. Omit elastic only when the query is purely about cost, billing, configuration, or inventory, where no runtime symptom exists to correlate.
 If no specific datasource is mentioned, include all: ${DATA_SOURCE_IDS.join(", ")}.${attachmentContext ? `\n\n${attachmentContext}` : ""}${buildActionCatalog()}${normalizationHint}${focusHint}`;
 
 	const response = await withRetry(

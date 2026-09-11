@@ -97,12 +97,34 @@ Return ONLY JSON, no prose, with exactly one verdict per sentence index. Keep ea
 // datasource, reusing the JSON-aware truncator so structured payloads shrink sanely.
 const DIGEST_PER_ENTRY_CAP_BYTES = 2_048;
 const DIGEST_PER_DATASOURCE_CAP_BYTES = 8_192;
+// SIO-1283: shape-scoped cap for aggregation payloads only. At 2_048 even a bare key list fits
+// just ~64 of a 129-bucket discovery aggregation, so the judge still ruled on a partial service
+// list. 4_096 fits ~140 keys, covering the observed 129 with headroom.
+//
+// This does NOT raise total judge input, which is what SIO-1270's 8s / maxTokens:1024 deadline
+// actually bounds: DIGEST_PER_DATASOURCE_CAP_BYTES (8_192) is unchanged and still caps the
+// datasource as a whole, so the raise only changes how ONE entry spends that shared budget --
+// service names instead of nested per-bucket metadata. Worst-case input is flat.
+//
+// Known limit: at 3+ deployments the per-group split (8_192/3 = 2_730) re-truncates a 4_096 B
+// entry, so full survival holds for 1-2 deployments and degrades above that.
+const DIGEST_AGG_ENTRY_CAP_BYTES = 4_096;
 // SIO-1266: share of a deployment's budget reserved for the ERROR block, carved OUT of the payload
 // budget rather than added on top, so DIGEST_PER_DATASOURCE_CAP_BYTES still binds. Applied only to
 // labels that actually have errors, so a digest with no toolErrors renders byte-identically to
 // pre-SIO-1266 output.
 const DIGEST_ERROR_BUDGET_FRACTION = 0.25;
 const DIGEST_ERROR_MESSAGE_CAP_BYTES = 256;
+
+// SIO-1283: does this payload carry aggregation buckets, and so qualify for the wider
+// DIGEST_AGG_ENTRY_CAP_BYTES? A substring probe rather than a parse: this runs on every tool
+// output in the digest, `rendered` can be tens of KB, and the truncator parses it moments later
+// anyway. Both markers are required, so a payload merely mentioning "aggregations" in prose
+// does not qualify. A false positive costs at most 2 KB on one entry (the datasource cap still
+// binds); a false negative just leaves today's behaviour in place.
+function looksAggregationShaped(rendered: string): boolean {
+	return rendered.includes('"aggregations"') && rendered.includes('"buckets"');
+}
 
 // Renders what one datasource's sub-agent returned this turn: the same structures
 // dataSourceReturnedData (aggregator.ts) inspects, so the judge sees exactly the
@@ -128,7 +150,10 @@ export function buildAbsenceEvidenceDigest(results: DataSourceResult[], dataSour
 		for (const out of r.toolOutputs ?? []) {
 			const rendered = typeof out.rawJson === "string" ? out.rawJson : JSON.stringify(out.rawJson);
 			if (rendered == null || rendered === "") continue;
-			parts.push(`- [${label}] ${out.toolName}: ${truncateToolOutput(rendered, DIGEST_PER_ENTRY_CAP_BYTES).content}`);
+			// SIO-1283: aggregation payloads get the wider shape-scoped cap so every bucket key
+			// survives; everything else keeps the 2_048 cap unchanged.
+			const entryCap = looksAggregationShaped(rendered) ? DIGEST_AGG_ENTRY_CAP_BYTES : DIGEST_PER_ENTRY_CAP_BYTES;
+			parts.push(`- [${label}] ${out.toolName}: ${truncateToolOutput(rendered, entryCap).content}`);
 		}
 		const findings: Array<[string, unknown]> = [
 			["elasticFindings", r.elasticFindings],
