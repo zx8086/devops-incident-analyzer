@@ -1,10 +1,12 @@
 /* src/tools/search/scroll_search.ts */
 /* FIXED: Uses Zod Schema instead of JSON Schema for MCP compatibility */
 
+import { buildToolErrorEnvelope } from "@devops-agent/shared";
 import type { Client, estypes } from "@elastic/elasticsearch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { classifyElasticError, esStatusCode } from "../../lib/classifyElasticError.js";
 import { logger } from "../../utils/logger.js";
 import type { ProgressTracker } from "../../utils/notifications.js";
 import { createProgressTracker, notificationManager } from "../../utils/notifications.js";
@@ -124,11 +126,20 @@ export const registerScrollSearchTool: ToolRegistrationFunction = (server: McpSe
 
 			await tracker.updateProgress(10, "Initializing scroll search");
 
-			const scrollSearch = esClient.helpers.scrollSearch({
-				index: params.index,
-				query: params.query as unknown as estypes.QueryDslQueryContainer,
-				scroll: params.scroll,
-			});
+			// SIO-1690: `restTotalHitsAsInt` was validated by the schema but never forwarded, so it was
+			// silently dropped; the helper passes rest_total_hits_as_int on to every scroll iteration.
+			// opaqueId matches every sibling call (including this tool's own scrollId branch above).
+			const scrollSearch = esClient.helpers.scrollSearch(
+				{
+					index: params.index,
+					query: params.query as unknown as estypes.QueryDslQueryContainer,
+					scroll: params.scroll,
+					...(params.restTotalHitsAsInt !== undefined && {
+						rest_total_hits_as_int: params.restTotalHitsAsInt,
+					}),
+				},
+				{ opaqueId: "elasticsearch_scroll_search" },
+			);
 
 			// Memory usage warnings
 			if (params.maxDocuments && params.maxDocuments > 50000) {
@@ -264,7 +275,30 @@ export const registerScrollSearchTool: ToolRegistrationFunction = (server: McpSe
 				});
 			}
 
-			throw createScrollSearchMcpError(error instanceof Error ? error.message : String(error), {
+			// SIO-1690: classify structurally and emit the shared { _error } envelope, exactly as
+			// elasticsearch_search does. Without this the tool threw a bare -32603 whose only
+			// classification came from the downstream MESSAGE-TEXT fallback
+			// (classifyElasticErrorFromMessage), which works only because the SDK happens to copy the
+			// ES type into the message. A malformed query DSL -- the observed live failure,
+			// `parsing_exception: unknown query [query]` -- therefore reached the sub-agent with no
+			// actionable remediation, and it burned iterations before falling back to plain search.
+			const errorMessage = error instanceof Error ? error.message : String(error);
+			const kind = classifyElasticError(error);
+			if (kind !== "unknown") {
+				const envelope = buildToolErrorEnvelope({
+					kind,
+					message: `[elasticsearch_scroll_search] ${errorMessage}`,
+					statusCode: esStatusCode(error),
+					...(kind === "bad-query" && {
+						advice:
+							"Elasticsearch rejected the query DSL. `query` takes a BARE clause (e.g. {range: {...}} or {bool: {must: [...]}}) -- do not nest a `query` key inside it, and do not wrap it again. Fix the clause and retry.",
+					}),
+				});
+				throw new McpError(ErrorCode.InvalidParams, JSON.stringify(envelope), { args });
+			}
+
+			// Unclassified: never stamp a degrading category on an error we could not identify.
+			throw createScrollSearchMcpError(errorMessage, {
 				type: "execution",
 				details: {
 					duration: performance.now() - perfStart,
