@@ -52,6 +52,7 @@
 		"biome:check": "bunx biome check .",
 		"biome:check:write": "bunx biome check --write .",
 		"yaml:check": "yamllint -c .yamllint.yml agents/",
+		"docker:verify-manifests": "bun run scripts/verify-agentcore-manifests.ts",
 		"wiki:lint": "bun run packages/agent/src/wiki/lint-cli.ts",
 		"tools:verify": "bun run --filter @devops-agent/tools-verify verify && bun run --filter @devops-agent/tools-verify verify:no-sugar",
 		"tools:verify:drift": "bun run --filter @devops-agent/tools-verify verify:drift",
