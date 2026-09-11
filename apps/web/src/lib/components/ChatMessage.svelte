@@ -180,6 +180,17 @@ const commentMode = $derived(canCommentOnThreadTicket && threadTicket !== null);
           />
         {/if}
 
+        {#if !isStreaming && isLast && pendingActions.length > 0 && onActionApprove && onActionDismiss}
+          {#each pendingActions as action (action.id)}
+            <ActionConfirmationCard
+              {action}
+              onApprove={onActionApprove}
+              onDismiss={onActionDismiss}
+              result={actionResults.find((r) => r.actionId === action.id)}
+            />
+          {/each}
+        {/if}
+
         {#if !isStreaming && onFeedback}
           <FeedbackBar
             content={message.content}
@@ -217,17 +228,6 @@ const commentMode = $derived(canCommentOnThreadTicket && threadTicket !== null);
             onPosted={() => (commentPosted = true)}
             onClose={() => (showCommentCard = false)}
           />
-        {/if}
-
-        {#if !isStreaming && isLast && pendingActions.length > 0 && onActionApprove && onActionDismiss}
-          {#each pendingActions as action (action.id)}
-            <ActionConfirmationCard
-              {action}
-              onApprove={onActionApprove}
-              onDismiss={onActionDismiss}
-              result={actionResults.find((r) => r.actionId === action.id)}
-            />
-          {/each}
         {/if}
 
         {#if !isStreaming && message.suggestions && message.suggestions.length > 0 && onSuggestionClick}

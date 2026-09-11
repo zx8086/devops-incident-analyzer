@@ -12,6 +12,18 @@ interface EstateInfo {
 	region: string;
 }
 
+// SIO-1696: this UI is production incident triage, so a non-prd estate never
+// reaches the selector -- a dev chip beside the prd ones is an invitation to
+// mis-scope a query. UI surface only: packages/agent/src/aws-estate-router.ts
+// reads AWS_ESTATES independently and is deliberately NOT filtered, so an
+// explicitly dev-targeted investigation still routes, and operators keep full
+// dev access through the hub CLI (`just coms`, `just hub-tunnel`).
+const PROD_ESTATE_SUFFIX = "-prd";
+
+function isProdEstate(id: string): boolean {
+	return id.endsWith(PROD_ESTATE_SUFFIX);
+}
+
 function listEstates(): EstateInfo[] {
 	const raw = process.env.AWS_ESTATES;
 	if (!raw) return [];
@@ -25,13 +37,15 @@ function listEstates(): EstateInfo[] {
 		return [];
 	}
 	const fallbackRegion = process.env.AWS_REGION ?? "";
-	return Object.entries(parsed as Record<string, unknown>).map(([id, value]) => {
-		const region =
-			typeof value === "object" && value !== null && typeof (value as { region?: unknown }).region === "string"
-				? (value as { region: string }).region
-				: fallbackRegion;
-		return { id, region };
-	});
+	return Object.entries(parsed as Record<string, unknown>)
+		.filter(([id]) => isProdEstate(id))
+		.map(([id, value]) => {
+			const region =
+				typeof value === "object" && value !== null && typeof (value as { region?: unknown }).region === "string"
+					? (value as { region: string }).region
+					: fallbackRegion;
+			return { id, region };
+		});
 }
 
 export const GET: RequestHandler = async () => {

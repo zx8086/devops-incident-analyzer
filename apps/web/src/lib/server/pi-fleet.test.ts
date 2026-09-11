@@ -55,17 +55,27 @@ const env: NodeJS.ProcessEnv = {
 			environment: "prd",
 			estates: ["eu-oit-prd"],
 		},
+		// SIO-1666: two hubs may share an environment, so the listing needs a
+		// second prd row to prove per-hub isolation after SIO-1696 drops dev.
+		"eu-ediservices-prd": {
+			serverUrl: "http://prd2.hub.test",
+			authToken: "prd2-tok",
+			environment: "prd",
+			estates: ["eu-ediservices-prd"],
+		},
 	}),
 	PI_COMS_PANE_TOKENS: JSON.stringify({ "eu-shared-services-prd": "pane-prd-tok" }),
 };
 
-const devAgents = [
-	{ session_id: "s2", name: "zeta-dev", status: "stale", purpose: "spoke" },
-	{ session_id: "s1", name: "alpha-dev", status: "online" },
+const prdAgents = [
+	{ session_id: "s2", name: "zeta-prd", status: "stale", purpose: "spoke" },
+	{ session_id: "s1", name: "alpha-prd", status: "online" },
 	// SIO-1665: the hub lists the monitor pair too (include_explicit); the pane
 	// must not offer it as a spoke.
-	{ session_id: "s3", name: "monitor-alpha-dev", status: "online", purpose: "Deterministic AWS monitor" },
+	{ session_id: "s3", name: "monitor-alpha-prd", status: "online", purpose: "Deterministic AWS monitor" },
 ];
+
+const devAgents = [{ session_id: "s4", name: "alpha-dev", status: "online" }];
 
 describe("resolvePaneConfig", () => {
 	test("is undefined without any hub configuration", () => {
@@ -80,6 +90,7 @@ describe("resolvePaneConfig", () => {
 		expect(pane?.hubs.map((h) => [h.environment, h.hub.authToken])).toEqual([
 			["dev", "dev-tok"],
 			["prd", "pane-prd-tok"],
+			["prd", "prd2-tok"],
 		]);
 	});
 
@@ -112,33 +123,48 @@ describe("listFleetAgents", () => {
 		expect(calls).toEqual([]);
 	});
 
-	test("lists every hub with its own token, sorts peers, drops monitors, and isolates a failing hub", async () => {
+	test("lists every prd hub with its own token, sorts peers, drops monitors, and isolates a failing hub", async () => {
 		const { calls, fetchImpl } = hubFake((call) => {
-			if (call.url.startsWith("http://dev.hub.test/v1/agents")) return { body: { agents: devAgents } };
+			if (call.url.startsWith("http://prd2.hub.test/v1/agents")) return { body: { agents: prdAgents } };
 			if (call.url.startsWith("http://prd.hub.test/v1/agents")) return { status: 500, body: { error: "boom" } };
 			return undefined;
 		});
 		const out = await listFleetAgents({ env, fetchImpl });
 		expect(out.configured).toBe(true);
 		expect(out.awaitMs).toBe(25_000);
-		expect(out.hubs.map((h) => h.environment)).toEqual(["dev", "prd"]);
-		expect(out.hubs[0]).toMatchObject({
+		expect(out.hubs.map((h) => h.hubKey)).toEqual(["eu-shared-services-prd", "eu-ediservices-prd"]);
+		expect(out.hubs[1]).toMatchObject({
 			project: "default",
 			fallbackTarget: "ops",
 			error: null,
 			peers: [
-				{ name: "alpha-dev", status: "online", purpose: null, sessionId: "s1" },
-				{ name: "zeta-dev", status: "stale", purpose: "spoke", sessionId: "s2" },
+				{ name: "alpha-prd", status: "online", purpose: null, sessionId: "s1" },
+				{ name: "zeta-prd", status: "stale", purpose: "spoke", sessionId: "s2" },
 			],
 		});
-		expect(out.hubs[0]?.peers).toHaveLength(2);
-		expect(out.hubs[0]?.peers.map((p) => p.name)).not.toContain("monitor-alpha-dev");
-		expect(out.hubs[1]).toMatchObject({ fallbackTarget: "ops-prd", peers: [] });
-		expect(out.hubs[1]?.error).toContain("500");
+		expect(out.hubs[1]?.peers).toHaveLength(2);
+		expect(out.hubs[1]?.peers.map((p) => p.name)).not.toContain("monitor-alpha-prd");
+		expect(out.hubs[0]).toMatchObject({ fallbackTarget: "ops-prd", peers: [] });
+		expect(out.hubs[0]?.error).toContain("500");
 		expect(calls.map((c) => [c.path, c.auth])).toEqual([
-			["/v1/agents?project=default&include_explicit=true", "Bearer dev-tok"],
 			["/v1/agents?project=default&include_explicit=true", "Bearer pane-prd-tok"],
+			["/v1/agents?project=default&include_explicit=true", "Bearer prd2-tok"],
 		]);
+	});
+
+	// SIO-1696: the pane is production incident triage. A dev hub is never listed
+	// and is never even contacted -- but resolvePaneConfig still carries it, so
+	// the send and mailbox paths (and the hub CLI) still reach dev spokes.
+	test("omits non-prd hubs from the listing without contacting them", async () => {
+		const { calls, fetchImpl } = hubFake((call) => {
+			if (call.url.startsWith("http://dev.hub.test/v1/agents")) return { body: { agents: devAgents } };
+			return { body: { agents: [] } };
+		});
+		const out = await listFleetAgents({ env, fetchImpl });
+		expect(out.hubs.map((h) => h.environment)).toEqual(["prd", "prd"]);
+		expect(out.hubs.map((h) => h.hubKey)).not.toContain("eu-shared-services-dev");
+		expect(calls.map((c) => c.auth)).not.toContain("Bearer dev-tok");
+		expect(resolvePaneConfig(env)?.hubs.map((h) => h.hubKey)).toContain("eu-shared-services-dev");
 	});
 });
 

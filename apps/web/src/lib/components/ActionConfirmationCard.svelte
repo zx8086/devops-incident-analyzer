@@ -17,6 +17,12 @@ let {
 
 let isExecuting = $state(false);
 
+// SIO-1696: a verdict card carries every claim with its evidence line, and an
+// investigation card every evidence block -- enough to swamp the chat column.
+// Expanded on arrival (the verdict IS the deliverable), collapsible to a header
+// that still shows the verdict/confidence badge and the estate.
+let expanded = $state(true);
+
 const toolLabels: Record<string, string> = {
 	"notify-slack": "Send Slack Notification",
 	"create-ticket": "Create Incident Ticket",
@@ -108,14 +114,25 @@ async function handleApprove() {
 		</div>
 	{:else if result.status === "success" && pi?.kind === "verdict"}
 		<div class="rounded-lg border border-gray-200 bg-white px-3 py-3 mt-2 shadow-sm">
-			<div class="flex items-center gap-2 mb-2">
+			<button
+				type="button"
+				onclick={() => (expanded = !expanded)}
+				aria-expanded={expanded}
+				class="w-full flex items-center gap-2 text-left {expanded ? 'mb-2' : ''}"
+			>
 				<Icon name="bot" class="w-4 h-4 text-tommy-navy" />
 				<span class="text-sm font-semibold text-tommy-navy">{toolLabels[action.tool] ?? action.tool}</span>
 				<span class="text-xs px-2 py-0.5 rounded-full border {verdictColors[pi.verdict.verdict] ?? verdictColors.unverifiable}">
 					{humanize(pi.verdict.verdict)}
 				</span>
 				<span class="text-xs text-gray-500 ml-auto">{pi.target} / {pi.estate}</span>
-			</div>
+				<Icon
+					name="chevron-down"
+					class="w-3 h-3 text-gray-400 shrink-0 transition-transform {expanded ? 'rotate-180' : ''}"
+				/>
+			</button>
+			{#if expanded}
+			<div class="animate-slide-up-fade">
 			<p class="text-sm text-gray-800 mb-2">{pi.verdict.summary}</p>
 			{#if pi.verdict.claims.length > 0}
 				<ul class="space-y-1 mb-2">
@@ -143,17 +160,30 @@ async function handleApprove() {
 			{#if pi.verdict.recommended_investigation}
 				<p class="text-xs text-gray-700"><span class="font-medium">Recommended next step:</span> {pi.verdict.recommended_investigation}</p>
 			{/if}
+			</div>
+			{/if}
 		</div>
 	{:else if result.status === "success" && pi?.kind === "investigation"}
 		<div class="rounded-lg border border-gray-200 bg-white px-3 py-3 mt-2 shadow-sm">
-			<div class="flex items-center gap-2 mb-2">
+			<button
+				type="button"
+				onclick={() => (expanded = !expanded)}
+				aria-expanded={expanded}
+				class="w-full flex items-center gap-2 text-left {expanded ? 'mb-2' : ''}"
+			>
 				<Icon name="zoom-in" class="w-4 h-4 text-tommy-navy" />
 				<span class="text-sm font-semibold text-tommy-navy">{toolLabels[action.tool] ?? action.tool}</span>
 				<span class="text-xs px-2 py-0.5 rounded-full border bg-gray-100 text-gray-600 border-gray-200">
 					confidence {Math.round(pi.investigation.confidence * 100)}%
 				</span>
 				<span class="text-xs text-gray-500 ml-auto">{pi.target} / {pi.estate}</span>
-			</div>
+				<Icon
+					name="chevron-down"
+					class="w-3 h-3 text-gray-400 shrink-0 transition-transform {expanded ? 'rotate-180' : ''}"
+				/>
+			</button>
+			{#if expanded}
+			<div class="animate-slide-up-fade">
 			<p class="text-sm text-gray-800 mb-2">{pi.investigation.summary}</p>
 			<p class="text-xs text-gray-700 mb-2"><span class="font-medium">Root cause hypothesis:</span> {pi.investigation.root_cause_hypothesis}</p>
 			{#if pi.investigation.evidence.length > 0}
@@ -175,6 +205,8 @@ async function handleApprove() {
 						{/each}
 					</ul>
 				</div>
+			{/if}
+			</div>
 			{/if}
 		</div>
 	{:else}
