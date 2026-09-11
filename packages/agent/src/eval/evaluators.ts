@@ -186,12 +186,42 @@ export function judgeFeedback(
 	return feedback;
 }
 
+// SIO-1694: datasources that actually produced evidence this run, which is NOT the same as
+// the dispatch list. `targetDataSources` is written once by entityExtractor; the correlation
+// layer (enforce-node.ts) dispatches Sends that spread `...state` and override only
+// `currentDataSource`, so a reactively-fetched datasource lands in `dataSourceResults` and
+// never in `targetDataSources`. 15+ rules declare `requiredAgent: "elastic-agent"`, so scoring
+// the dispatch list alone under-reported evidence the agent genuinely gathered.
+//
+// `firstAttempts` is the reachable projection of `dataSourceResults` (run-function.ts) --
+// the raw array is deliberately never returned, because `data`/`toolOutputs[].rawJson` would
+// ship full tool payloads to LangSmith and break the privacy invariant documented there.
+//
+// Only a SUCCESSFUL fetch counts. `firstStatus: "error"` includes the "no tools available,
+// MCP server may not be connected" case (sub-agent.ts), which is a dispatch that obtained
+// nothing -- counting it would replace an under-report with an over-report. `recovered` marks
+// a first attempt that failed and a later retry that succeeded: evidence exists, so it counts.
+// Mirrors the precedent in toolDataUtilization below.
+function coveredDatasources(run: Run): Set<string> {
+	const output = (run.outputs as { output?: { targetDataSources?: unknown; firstAttempts?: unknown } } | undefined)
+		?.output;
+	const dispatched = output?.targetDataSources;
+	const covered = new Set<string>(Array.isArray(dispatched) ? (dispatched as string[]) : []);
+	if (Array.isArray(output?.firstAttempts)) {
+		for (const raw of output.firstAttempts) {
+			if (!raw || typeof raw !== "object") continue;
+			const a = raw as { dataSourceId?: unknown; firstStatus?: unknown; recovered?: unknown };
+			if (typeof a.dataSourceId !== "string") continue;
+			if (a.firstStatus === "success" || a.recovered === true) covered.add(a.dataSourceId);
+		}
+	}
+	return covered;
+}
+
 export function datasourcesCovered(run: Run, example?: Example) {
 	const expectedRaw = (example?.outputs?.expectedDatasources ?? []) as unknown;
-	const actualRaw =
-		(run.outputs as { output?: { targetDataSources?: unknown } } | undefined)?.output?.targetDataSources ?? [];
 	const expected = new Set<string>(Array.isArray(expectedRaw) ? (expectedRaw as string[]) : []);
-	const actual = new Set<string>(Array.isArray(actualRaw) ? (actualRaw as string[]) : []);
+	const actual = coveredDatasources(run);
 	const missing = [...expected].filter((d) => !actual.has(d));
 	return {
 		key: "datasources_covered",
@@ -199,6 +229,38 @@ export function datasourcesCovered(run: Run, example?: Example) {
 		comment:
 			missing.length === 0 ? `All ${expected.size} expected datasources covered` : `Missing: ${missing.join(", ")}`,
 	};
+}
+
+// SIO-1694: the companion precision metric. `datasources_covered` is binary RECALL -- it
+// computes only `expected \ actual`, so extra datasources have always been free and
+// over-fan-out was invisible in both the score and the comment. That matters because an
+// unnecessary dispatch is not cheap: an elastic sub-agent runs a full ReAct loop at
+// ELASTIC_RECURSION_LIMIT_DEFAULT = 60 super-steps under a 360s timeout.
+//
+// Kept as a SEPARATE key rather than folded into the existing score: they answer different
+// questions (did we get the evidence / did we pay too much for it), and silently turning a
+// recall metric into an F-score would break comparability with every historical run.
+//
+// Scored only when the example declares expectations -- an example with no
+// expectedDatasources has no opinion about what is extra, and emitting 1.0 there would
+// dilute the metric across the dataset.
+export function datasourcesPrecision(run: Run, example?: Example) {
+	const expectedRaw = (example?.outputs?.expectedDatasources ?? []) as unknown;
+	const expected = new Set<string>(Array.isArray(expectedRaw) ? (expectedRaw as string[]) : []);
+	if (expected.size === 0) return [];
+	const actual = coveredDatasources(run);
+	if (actual.size === 0) return [];
+	const extra = [...actual].filter((d) => !expected.has(d));
+	return [
+		{
+			key: "datasources_precision",
+			score: (actual.size - extra.length) / actual.size,
+			comment:
+				extra.length === 0
+					? `No datasources beyond the ${expected.size} expected`
+					: `Extra: ${extra.join(", ")} (${extra.length} of ${actual.size} queried not expected)`,
+		},
+	];
 }
 
 export function confidenceThreshold(run: Run, example?: Example) {

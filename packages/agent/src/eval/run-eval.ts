@@ -1,7 +1,7 @@
 // packages/agent/src/eval/run-eval.ts
 import { spawnSync } from "node:child_process";
 import { evaluate } from "langsmith/evaluation";
-import { confidenceThreshold, datasourcesCovered, responseQualityJudge } from "./evaluators.ts";
+import { confidenceThreshold, datasourcesCovered, datasourcesPrecision, responseQualityJudge } from "./evaluators.ts";
 import { runAgent } from "./run-function.ts";
 
 console.log("WARNING: this hits the systems your .env points at (Bedrock, OpenAI, all 6 MCP servers).");
@@ -21,7 +21,9 @@ console.log(`Starting evaluation, experiment prefix: ${experimentPrefix}`);
 
 const opts = {
 	data: "devops-incident-eval",
-	evaluators: [datasourcesCovered, confidenceThreshold, responseQualityJudge],
+	// SIO-1694: datasourcesPrecision rides alongside datasourcesCovered -- recall and
+	// precision as separate keys, since over-fan-out is invisible to the recall metric.
+	evaluators: [datasourcesCovered, datasourcesPrecision, confidenceThreshold, responseQualityJudge],
 	experimentPrefix,
 	// biome-ignore lint/suspicious/noExplicitAny: SIO-680 - langsmith evaluate overload resolution
 } as any;
