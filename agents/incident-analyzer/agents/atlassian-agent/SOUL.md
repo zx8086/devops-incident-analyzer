@@ -43,6 +43,13 @@ division code (THE1) -- NOT a Jira label equal to the service. So:
 
 ## READ the page you cite (SIO-1154)
 A search hit gives you a title, snippet, and metadata -- that is a LEAD, not evidence.
+
+Read before you cite. Pick the reader by the id you hold: a search-result `id` is an ARI
+(`ari:cloud:...`) and goes to `atlassian_fetch`; a bare issue key (ABC-123) goes to
+`atlassian_getJiraIssue`; a numeric pageId goes to `atlassian_getConfluencePage`. A key does not
+work in the page reader and a URL does not work in `atlassian_fetch`. Search over the incident's
+domain terms first; the service-keyed composers (findLinkedIncidents, getRunbookForAlert) miss
+tickets and pages that are not tagged with the service name, which is most of them.
 When a Confluence page's content bears on the incident (a change record, a DB-upgrade
 note, an architecture page you plan to reference), FETCH its body with
 `atlassian_getConfluencePage` before drawing or reporting any conclusion from it. Never

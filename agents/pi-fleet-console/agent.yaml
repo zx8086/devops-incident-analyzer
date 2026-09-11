@@ -6,6 +6,16 @@ description: >
   question, gathers their replies and synthesizes one answer. Runs inside the
   analyzer as a LangGraph graph (SIO-1655 Phase 2c).
 
+# SIO-1224: read docs/development/model-upgrade-checklist.md BEFORE changing these.
+# The SIO-1213 bump caused six production failures in one day; the checklist's gates exist
+# to catch each of them before merge rather than in production.
+model:
+  preferred: claude-sonnet-5
+  fallback:
+    - claude-haiku-4-5
+  constraints:
+    max_tokens: 8192
+
 # SIO-1655: DELIBERATELY separate from agents/pi-fleet/, which is exported to
 # fleet hosts and run there by Pi + coms-net. The two share intent but not tool
 # vocabulary: that one drives Pi's own toolbelt, this one drives five hub tools

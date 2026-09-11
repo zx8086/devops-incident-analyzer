@@ -210,54 +210,9 @@ tool_mapping:
       - elasticsearch_ml_get_anomaly_records
   action_descriptions:
     search: >-
-      when querying logs by service, time window, and search terms (the primary log-search
-      path; covers structured queries, aggregations, and free-text). IMPORTANT -- a service may
-      ship to `logs-*` AND/OR to the OpenTelemetry APM streams `logs-apm.app.*` (app logs) and
-      `logs-apm.error-*` (errors/exceptions); it can be in either or both. Do NOT treat any one
-      family as authoritative and do NOT assume `logs-*` is empty just because APM has data (or
-      vice versa) -- search across `logs-*,logs-apm.*`. An incident's short service name is often
-      NOT the Elasticsearch `service.name`: the APM `service.name` may carry a prefix/suffix (e.g.
-      the incident name `styles-v3` is `pvh-services-styles-v3` in APM; the backing index
-      sanitizes it to `.ds-logs-apm.app.pvh_services_styles_v3-default-*`), and other datasources
-      may anchor on either form. Do NOT conclude a service is absent from a single index-pattern +
-      literal-`service.name` query. When a named service returns zero, FIRST run one discovery
-      aggregation -- a `service.name` terms agg (search-body `size: 0` to suppress hits; the terms
-      agg needs a non-zero `size`, e.g. 20+, to return buckets) over BOTH families
-      (`logs-*,logs-apm.*`) -- and match the anchor against the returned names under BOTH forms
-      (bare `styles-v3` and prefixed `pvh-services-styles-v3`, in either direction), then search
-      wherever it resolved. On these OTel/APM streams aggregate on `service.name` directly -- it is
-      keyword-typed with NO `.keyword` sub-field, so `service.name.keyword` returns zero buckets.
-      Distinguish "service not present" from "service present but the cited error string is not
-      observed" -- and before claiming an error is unobserved, check the APM ERROR stream
-      (`logs-apm.error-*`): SDK/DB connection errors (e.g. `finishConnect(..) failed: Connection
-      refused`) surface there, not in the app-log INFO stream. For billion-doc indices
-      (traces-apm*, logs-apm*), narrowing helps on cost but must still cover the FULL `now-30d`
-      window -- a date-suffixed pattern or wildcard spanning all 30 days (e.g.
-      `logs-apm.error-*-2026.07.*,logs-apm.error-*-2026.06.*` for a window crossing a month
-      boundary) beats `traces-apm*`, but a SINGLE day's backing index or a narrower stream is
-      NOT an equivalent substitute -- it can omit valid documents from another day or another
-      family (`logs-*` vs `logs-apm.*`) and reproduce the exact false-absence pattern this
-      narrowing guidance exists to avoid causing in the first place. Only narrow to a single
-      concrete index once PHASE 1 discovery has already proven that index holds the complete
-      applicable scope. Project only needed fields via `_source` or `fields`, and avoid fanning
-      out multiple heavy aggregations in parallel -- run them sequentially so each gets the full
-      per-call timeout budget. This performance guidance does NOT override the fixed `now-30d`
-      window SOUL.md mandates for the PHASE 1->2->3 discovery/absence procedure or any other
-      log/document search or aggregation -- narrow the INDEX PATTERN (while still covering the
-      full window) and FIELD PROJECTION to control cost on large streams, never the time window
-      itself, and never substitute `now-24h` for `now-30d` (SIO-1327: a self-narrowed window is
-      exactly the false-absence pattern SOUL.md warns against). SIO-1391 -- this action also
-      carries `elasticsearch_esql_query` and the async-search trio. Use `elasticsearch_esql_query`
-      when one pipeline answers the question in a single call (filter + aggregate + sort), e.g.
-      `FROM logs-* | WHERE log.level == "error" | STATS c = COUNT(*) BY service.name | SORT c DESC
-      | LIMIT 10`; it is read-only, always needs a LIMIT, and returns rows keyed by column name.
-      Keep using `elasticsearch_search` for document retrieval, highlighting, and the PHASE 1->3
-      discovery procedure. If a heavy aggregation over the mandated window TIMES OUT (commonly on
-      `traces-apm*`), do NOT shrink the window to make it fit -- submit it via
-      `elasticsearch_async_search_submit`, poll `elasticsearch_async_search_get` until
-      `is_running` is false, then `elasticsearch_async_search_delete`. A response with
-      `is_running` or `is_partial` true is INCOMPLETE and is never a valid basis for concluding
-      absence.
+      when querying log or APM documents by service, time window, or search terms -- structured
+      queries, aggregations, free text, ES|QL pipelines, and async search for heavy aggregations
+      (the primary log-search path; the discovery and absence procedure is in the elastic-agent SOUL)
     cluster_health: when checking cluster status, node count, shard allocation, or pending tasks at the cluster level
     node_info: when inspecting a specific node's hardware, JVM, thread pools, or per-node disk/memory usage
     index_management: when listing indices, checking index settings, mappings, stats, or rolling over an index pattern

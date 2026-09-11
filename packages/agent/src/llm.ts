@@ -264,13 +264,28 @@ export class DeadlineExceededError extends Error {
 //
 // Reads usage from the two places LangChain has put it, and stays silent rather than throwing
 // if a future version moves it again -- telemetry must never break an answer.
+//
+// Cache counters: @langchain/aws builds usage_metadata from inputTokens/outputTokens only, but
+// attaches the raw Converse response (minus `output`) as response_metadata, whose `usage` carries
+// Bedrock's cacheReadInputTokens / cacheWriteInputTokens whenever the request had a cachePoint
+// (prompt-cache.ts). Without these two fields the SIO-1040 cache is invisible: a zero read count
+// across consecutive calls is the only signal that a silent invalidator sits in the stable half.
 function logTokenUsage(role: LlmRole, model: string, output: unknown): void {
 	const result = output as {
 		llmOutput?: { usage?: Record<string, unknown> };
-		generations?: Array<Array<{ message?: { usage_metadata?: Record<string, unknown> } }>>;
+		generations?: Array<
+			Array<{
+				message?: {
+					usage_metadata?: Record<string, unknown>;
+					response_metadata?: { usage?: Record<string, unknown> };
+				};
+			}>
+		>;
 	};
-	const usage = result.generations?.[0]?.[0]?.message?.usage_metadata ?? result.llmOutput?.usage;
+	const message = result.generations?.[0]?.[0]?.message;
+	const usage = message?.usage_metadata ?? result.llmOutput?.usage;
 	if (!usage) return;
+	const raw = message?.response_metadata?.usage ?? {};
 	const num = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
 	logger.info(
 		{
@@ -279,6 +294,8 @@ function logTokenUsage(role: LlmRole, model: string, output: unknown): void {
 			inputTokens: num(usage.input_tokens) ?? num(usage.inputTokens),
 			outputTokens: num(usage.output_tokens) ?? num(usage.outputTokens),
 			totalTokens: num(usage.total_tokens) ?? num(usage.totalTokens),
+			cacheReadTokens: num(raw.cacheReadInputTokens),
+			cacheWriteTokens: num(raw.cacheWriteInputTokens),
 		},
 		"LLM token usage",
 	);
