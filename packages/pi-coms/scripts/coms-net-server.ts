@@ -66,6 +66,21 @@ export function capReplyBody(text: string, cap: number = REPLY_CAP_BYTES): strin
 	return `${body.trimEnd()}${marker}`;
 }
 
+// SIO-1698: rows written before the response-serialization fix hold a bare
+// `[object Object]` (String() on a parsed reply), which is not JSON. Those
+// bodies were never stored and are unrecoverable, but a listing that spans one
+// must not throw -- a single poisoned row would take out a whole mailbox or
+// inbox page. Undecodable text is surfaced as-is rather than dropped, so the
+// row stays visible and obviously broken instead of silently vanishing.
+export function decodeStoredResponse(raw: string | null): unknown {
+	if (raw == null) return null;
+	try {
+		return JSON.parse(raw);
+	} catch {
+		return raw;
+	}
+}
+
 // Per-principal token directory (SIO-1577). Either source activates directory
 // mode; neither keeps the legacy single shared token exactly as before.
 const AUTH_FILE = process.env.PI_COMS_NET_AUTH_FILE;
@@ -599,7 +614,7 @@ export class MailStore {
 			hops: r.hops,
 			status: r.status as MessageStatus,
 			mailbox: r.mailbox === 1,
-			response: r.response == null ? null : JSON.parse(r.response),
+			response: decodeStoredResponse(r.response),
 			error: r.error,
 			created_at: r.created_at,
 			...(r.delivered_at ? { delivered_at: r.delivered_at } : {}),
@@ -627,7 +642,7 @@ export class MailStore {
 					.all(targetName, limit);
 		return (rows as InboxRow[]).map((r) => ({
 			...r,
-			response: r.response == null ? null : JSON.parse(r.response),
+			response: decodeStoredResponse(r.response),
 		}));
 	}
 
@@ -1536,17 +1551,44 @@ async function handleSubmitResponse(req: Request, msg_id: string, auth: AuthResu
 	msg.status = isError ? "error" : "complete";
 	// SIO-1687: cap AFTER the blank check, so capping can never turn a real reply
 	// into a blank one and never rescues a blank one into a complete status.
-	const rawResponse = body.response == null ? null : String(body.response);
-	const cappedResponse = rawResponse === null ? null : capReplyBody(rawResponse);
-	msg.response = cappedResponse;
-	if (rawResponse !== null && cappedResponse !== null && cappedResponse.length !== rawResponse.length) {
-		logReplyCapped(
-			responder?.name ?? "unknown",
-			msg.msg_id,
-			Buffer.byteLength(rawResponse, "utf8"),
-			Buffer.byteLength(cappedResponse, "utf8"),
-		);
+	//
+	// SIO-1698: `response` is `unknown` on the wire and a schema-constrained reply
+	// arrives as a PARSED OBJECT (extensions/turnReply.ts posts the extracted JSON,
+	// not its text). `String(obj)` yielded the literal "[object Object]", so every
+	// verify-with-pi / investigate-with-pi verdict was destroyed here before it
+	// reached storage -- the sender saw a schema mismatch and blamed the model.
+	// Only a string is capped: capReplyBody appends a truncation marker, which
+	// would make serialized JSON unparseable, and the row is JSON.stringify'd on
+	// the way into sqlite (see upsert) and JSON.parse'd on the way out, so a
+	// structured reply must stay structured. An oversized object is rejected
+	// rather than silently mangled -- a half-object is worse than a clear error.
+	let cappedResponse: unknown = null;
+	if (body.response != null) {
+		if (typeof body.response === "string") {
+			const capped = capReplyBody(body.response);
+			if (capped.length !== body.response.length) {
+				logReplyCapped(
+					responder?.name ?? "unknown",
+					msg.msg_id,
+					Buffer.byteLength(body.response, "utf8"),
+					Buffer.byteLength(capped, "utf8"),
+				);
+			}
+			cappedResponse = capped;
+		} else {
+			const serialized = JSON.stringify(body.response);
+			if (serialized !== undefined && Buffer.byteLength(serialized, "utf8") > REPLY_CAP_BYTES) {
+				msg.status = "error";
+				msg.error = "reply_too_large";
+				msg.completed_at = nowIso();
+				mailFor(msg.project).upsert(msg);
+				releaseAwaiters(project, msg_id);
+				return errorJson("reply_too_large", 413, { bytes: Buffer.byteLength(serialized, "utf8") });
+			}
+			cappedResponse = body.response;
+		}
 	}
+	msg.response = cappedResponse;
 	msg.error = explicitError ?? (isError ? "empty_reply" : null);
 	msg.completed_at = nowIso();
 	mailFor(msg.project).upsert(msg);
