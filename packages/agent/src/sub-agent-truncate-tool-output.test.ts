@@ -463,4 +463,75 @@ describe("truncateToolOutput", () => {
 		expect(parsed.aggregations.error_rate_over_time.buckets.length).toBe(24);
 		expect(parsed.aggregations.error_rate_over_time.buckets[0]?.doc_count).toBe(10);
 	});
+
+	// SIO-1283: the PHASE 1 discovery shape (`by_service`, nested idx/agent/env per bucket)
+	// matched no structured branch and fell through to the blind text cut -- 4 of 129 service
+	// names surviving, chosen by bucket ordering rather than relevance. The absence judge then
+	// upheld "no telemetry for X" whenever X's refuting bucket sat past the first ~1 KB.
+	test("json-agg-keys keeps every bucket key for a large discovery aggregation", () => {
+		const services = Array.from({ length: 129 }, (_, i) => `prana-service-${String(i).padStart(3, "0")}`);
+		const content = JSON.stringify({
+			aggregations: {
+				by_service: {
+					buckets: services.map((key, i) => ({
+						key,
+						doc_count: 1_000 + i,
+						idx: { buckets: [{ key: `logs-${key}-000001`, doc_count: 7 }] },
+						agent: { buckets: [{ key: "filebeat", doc_count: 3 }] },
+						env: { buckets: [{ key: "prd", doc_count: 2 }] },
+					})),
+				},
+			},
+		});
+		// The digest's shape-scoped cap for aggregation payloads (absence-judge.ts).
+		const result = truncateToolOutput(content, 4_096);
+
+		expect(result.strategy).toBe("json-agg-keys");
+		expect(result.finalBytes).toBeLessThanOrEqual(4_096);
+
+		const parsed = JSON.parse(result.content) as {
+			aggregations: { by_service: { _keys: string[]; _bucketCount: number } };
+		};
+		expect(parsed.aggregations.by_service._bucketCount).toBe(129);
+		expect(parsed.aggregations.by_service._keys).toHaveLength(129);
+		// The point of the fix: a name deep in the bucket list survives, not just the first few.
+		expect(parsed.aggregations.by_service._keys).toContain("prana-service-064");
+		expect(parsed.aggregations.by_service._keys).toContain("prana-service-128");
+		// Per-bucket metadata is dropped -- keys refute an absence claim, doc_count does not.
+		expect(result.content).not.toContain("filebeat");
+	});
+
+	// SIO-1283: date histograms identify buckets by key_as_string, not key.
+	test("json-agg-keys prefers key_as_string when present", () => {
+		const content = JSON.stringify({
+			aggregations: {
+				over_time: {
+					buckets: Array.from({ length: 400 }, (_, i) => ({
+						key_as_string: `2026-09-${String((i % 28) + 1).padStart(2, "0")}T${String(i % 24).padStart(2, "0")}:00:00Z`,
+						key: 1_757_000_000_000 + i,
+						doc_count: i,
+						nested: { buckets: [{ key: "filler", doc_count: "w".repeat(64) }] },
+					})),
+				},
+			},
+		});
+		const result = truncateToolOutput(content, 4_096);
+
+		expect(result.strategy).toBe("json-agg-keys");
+		expect(result.finalBytes).toBeLessThanOrEqual(4_096);
+		expect(result.content).toContain("2026-09-01T00:00:00Z");
+		expect(result.content).not.toContain("filler");
+	});
+
+	// SIO-1283: an aggregation payload already under cap must be left exactly as-is, so the
+	// helper cannot quietly strip metadata from small responses that had room for it.
+	test("json-agg-keys leaves an under-cap aggregation untouched", () => {
+		const content = JSON.stringify({
+			aggregations: { by_service: { buckets: [{ key: "prana-order-service", doc_count: 3_400_000 }] } },
+		});
+		const result = truncateToolOutput(content, CAP);
+
+		expect(result.strategy).toBe("none");
+		expect(JSON.parse(result.content)).toEqual(JSON.parse(content));
+	});
 });

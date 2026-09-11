@@ -19,6 +19,7 @@ export type TruncationStrategy =
 	| "json-nodes"
 	| "json-array"
 	| "json-rows"
+	| "json-agg-keys"
 	| "markdown-json"
 	| "json-largest-array"
 	| "text"
@@ -168,6 +169,19 @@ function reduceJson(value: unknown, capBytes: number): ReducedJson {
 		}
 	}
 
+	// SIO-1283: a terms aggregation (`by_service` with nested idx/agent/env per bucket) matches
+	// none of the branches above, so it used to fall through to the blind text cut -- 4 of 129
+	// service names surviving, and WHICH four was an artefact of bucket ordering. The absence
+	// judge then upheld "no telemetry for order-service" because the refuting bucket sat at
+	// index 40. Bucket KEYS are what refute an absence claim; per-bucket metadata is not, so
+	// drop the metadata and keep every key. Placed after `rows` and before the largest-array
+	// fallback: that fallback would otherwise trim the buckets array blindly, which is the
+	// current broken behaviour by another route.
+	const aggSlim = slimAggregationBuckets(obj, capBytes);
+	if (aggSlim) {
+		return { value: aggSlim, changed: true, strategy: "json-agg-keys" };
+	}
+
 	// Fallback: find the largest array field and trim it. Catches unknown shapes that
 	// happen to have one bloat-causing array (e.g. `results`, `items`, `data`, etc.)
 	// SIO-688: also reduce when bytes exceed budget even if length <= threshold
@@ -184,6 +198,78 @@ function reduceJson(value: unknown, capBytes: number): ReducedJson {
 	}
 
 	return { value, changed: false, strategy: "none" };
+}
+
+// SIO-1283: replace each `aggregations.<name>.buckets` array with a bare key list, dropping
+// doc_count and nested sub-aggregations. Returns null when there is nothing to gain -- no
+// aggregation buckets, or the payload already fits -- so the caller falls through to the
+// existing branches untouched.
+//
+// The fits-already guard is load-bearing: SIO-1043 pins that a payload with 200 hits AND a
+// 24-bucket aggregation reduces via `json-hits` with all 24 buckets INTACT. That shape reaches
+// this helper only when the hits branch left it under cap, and returning null there preserves
+// the pinned behaviour. Triggering on the mere presence of `aggregations` would break it.
+function slimAggregationBuckets(obj: Record<string, unknown>, capBytes: number): Record<string, unknown> | null {
+	if (serializedBytes(obj) <= capBytes) return null;
+
+	const aggregations = obj.aggregations;
+	if (!aggregations || typeof aggregations !== "object" || Array.isArray(aggregations)) return null;
+
+	let changed = false;
+	const slimmed: Record<string, unknown> = {};
+	for (const [name, agg] of Object.entries(aggregations as Record<string, unknown>)) {
+		if (!agg || typeof agg !== "object" || Array.isArray(agg)) {
+			slimmed[name] = agg;
+			continue;
+		}
+		const buckets = (agg as { buckets?: unknown }).buckets;
+		if (!Array.isArray(buckets) || buckets.length === 0) {
+			slimmed[name] = agg;
+			continue;
+		}
+		// Elasticsearch emits `key_as_string` for date histograms and `key` otherwise; keep
+		// whichever identifies the bucket and discard the rest of it.
+		const keys = buckets.map((b) => {
+			if (!b || typeof b !== "object") return b;
+			const bucket = b as { key?: unknown; key_as_string?: unknown };
+			return bucket.key_as_string ?? bucket.key;
+		});
+		slimmed[name] = { _keys: keys, _bucketCount: buckets.length };
+		changed = true;
+	}
+	if (!changed) return null;
+
+	const candidate = { ...obj, aggregations: slimmed, _truncated: true };
+	if (serializedBytes(candidate) <= capBytes) return candidate;
+
+	// Even bare keys bust the cap (roughly 140+ service names at the 4096 B digest cap). Trim
+	// the largest key list to what fits rather than handing the whole payload to the blind text
+	// path, which would surface far fewer names.
+	return trimKeyListsToFit(candidate, capBytes);
+}
+
+// SIO-1283: last-resort trim when bare keys still exceed the cap. Shrinks the biggest `_keys`
+// list via the same binary search the other reducers use, and records how many were kept so the
+// judge can tell a partial list from a complete one.
+function trimKeyListsToFit(candidate: Record<string, unknown>, capBytes: number): Record<string, unknown> {
+	const aggregations = candidate.aggregations as Record<string, unknown>;
+	const entries = Object.entries(aggregations)
+		.filter(([, agg]) => Array.isArray((agg as { _keys?: unknown })._keys))
+		.sort(
+			(a, b) =>
+				serializedBytes((b[1] as { _keys: unknown[] })._keys) - serializedBytes((a[1] as { _keys: unknown[] })._keys),
+		);
+
+	const next = { ...aggregations };
+	for (const [name, agg] of entries) {
+		const slim = agg as { _keys: unknown[]; _bucketCount: number };
+		const others = serializedBytes({ ...candidate, aggregations: { ...next, [name]: { ...slim, _keys: [] } } });
+		const keep = fitCount(slim._keys, capBytes - others - MARKER_BYTE_RESERVE);
+		next[name] = { _keys: slim._keys.slice(0, keep), _bucketCount: slim._bucketCount, _keptKeys: keep };
+		const attempt = { ...candidate, aggregations: next };
+		if (serializedBytes(attempt) <= capBytes) return attempt;
+	}
+	return { ...candidate, aggregations: next };
 }
 
 // SIO-688: short arrays of huge items (e.g. elasticsearch_search 6 hits at 95KB)
