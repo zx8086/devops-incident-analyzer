@@ -12,9 +12,9 @@
 
 The SIO-1688 evidence index is merged and default ON. It is PROVEN to index full tool output before truncation and to return elided records on demand. What is NOT proven is whether the model ever chooses to call `search_evidence`. In the one live A/B it never did, because that scenario was answerable from data that survived truncation.
 
-The epic stays open until a turn is observed where the model called `search_evidence` and got a hit.
+**RESOLVED 2026-09-11 on the third probe attempt. The model DOES call `search_evidence`, unprompted, three times in one run.** See "Resolution" at the bottom. The rest of this doc is kept because its dead ends are load-bearing: two earlier attempts were void, and the reasons are what the third one had to fix.
 
-Read the next TWO sections before planning any work. ALL THREE routes are now blocked or attempted. Running an eval cannot see the tool (structural). Reading production logs has no target (no production deployment, no off-box log path). The targeted probe was attempted on 2026-09-11 and abandoned after one void run and four design obstacles. Corrected twice on 2026-09-11: the first version recommended the log route, the second recommended the probe, and both were wrong.
+Running an eval cannot see the tool (structural, section below). Reading production logs has no target (no deployment, no off-box log path). The targeted probe DID work, once the deployment was pinned and the scenario was reshaped.
 
 ## The eval question, settled: no existing eval can detect this
 
@@ -182,3 +182,38 @@ Expected: agent shows ~24 pre-existing failures confined to `src/iac/*` from cro
 - `reference_sio1248_inflight_vs_persist_cap_decoupling`: why truncation must not be tightened
 - `reference_eval_scripts_env_file_breaks_in_worktree`: the `--env-file` worktree trap
 - `feedback_lint_changed_files_and_baseline_diff`: proving "pre-existing" properly
+
+
+## Resolution, 2026-09-11 (third probe attempt)
+
+The model calls `search_evidence` unprompted. Measured, not inferred.
+
+```
+subagent.tool_result_truncated  toolName=elasticsearch_search originalBytes=43676
+                                finalBytes=39589 strategy=json-array indexedRows=201
+evidence_index.search  scopedTool=elasticsearch_search queryTermCount=6  hitCount=3 indexedRows=201
+evidence_index.search  scopedTool=elasticsearch_search queryTermCount=11 hitCount=3 indexedRows=201
+evidence_index.search  scopedTool=null                 queryTermCount=20 hitCount=0 indexedRows=201
+```
+
+Three calls, 201 indexed rows, zero index failures, run status `success` on `elastic/eu-b2b`. Two scoped searches found hits; a third broader unscoped one did not, which is the model widening its own query and getting an honest miss.
+
+### What is proven, and what is not
+
+PROVEN: **given truncation, the model reaches for recovery.**
+
+NOT proven: how often truncation occurs at the production cap. The run used `SUBAGENT_TOOL_RESULT_CAP_BYTES=40000` because the result was 43,676 bytes, under the 131,072 default, so nothing would have truncated otherwise. That is a legitimate probe parameter to create the condition, and emphatically NOT a production setting: `sub-agent-context-budget.ts:36-40` records a 0.15 regression from tightening caps live.
+
+### The three things that made attempt 3 work
+
+1. **Pin the deployment.** The CLI cannot (see Option B above). A caller must build state itself and set `targetDeployments: ["eu-b2b"]`, then call `queryDataSource` directly.
+2. **Aggregate-over-retrieved-evidence, never find-one-needle.** A named needle invites a narrow re-query: small result, no truncation, nothing to recover. That is what made attempt 1 uninterpretable. "List every distinct id across the 150+ records you retrieved" makes every record matter and makes re-querying pointless, so recovery becomes the rational move rather than a detour.
+3. **Force the truncation condition via the cap.** Scenario prose cannot dictate `size`; attempt 2 asked for a broad sweep and the sub-agent chose a 109,076-byte fetch, 22 KB under the cap, so nothing truncated.
+
+### Bonus finding, attempt 2
+
+With nothing indexed, the model reported "The search_evidence tool doesn't have the full result indexed" and worked from raw output instead. The deliberate "absence from the index, not absence in the world" wording in the miss message behaved exactly as designed.
+
+### Unrelated defect found along the way
+
+`elasticsearch_scroll_search` failed twice per run with `parsing_exception: unknown query [query]` at `[1:19]`, plus one timeout. Its schema declares `query: z.object({}).passthrough()` (`packages/mcp-server-elastic/src/tools/search/scroll_search.ts:20`) and forwards it at `:129`, so the shape the model sends is being passed through unwrapped into a position Elasticsearch does not accept. Reproduced across two independent runs. Filed separately; not a SIO-1686 concern.
