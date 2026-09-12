@@ -83,10 +83,6 @@ function onKeydown(event: KeyboardEvent) {
 		submit();
 	}
 }
-
-function shortPrompt(text: string): string {
-	return text.length > 140 ? `${text.slice(0, 140)}...` : text;
-}
 </script>
 
 <div class="h-full flex flex-col">
@@ -102,7 +98,7 @@ function shortPrompt(text: string): string {
         <button
           type="button"
           onclick={onAskAll}
-          class="mt-1 text-xs font-medium text-tommy-accent-blue hover:underline disabled:opacity-50 disabled:no-underline"
+          class="mt-2 inline-flex items-center gap-1 rounded-lg border border-tommy-accent-blue px-2.5 py-1 text-xs font-medium text-tommy-accent-blue transition-colors hover:bg-tommy-accent-blue hover:text-white disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-tommy-accent-blue"
           disabled={busy}
         >
           Ask all spokes at once &rarr;
@@ -140,7 +136,7 @@ function shortPrompt(text: string): string {
               type="button"
               onclick={() => onLoadMailbox(hub.hubKey)}
               disabled={mailboxBusy === hub.hubKey}
-              class="ml-auto text-xs text-tommy-accent-blue hover:underline disabled:opacity-50"
+              class="ml-auto shrink-0 rounded-lg border border-gray-300 px-2 py-0.5 text-xs font-medium text-tommy-accent-blue transition-colors hover:border-tommy-accent-blue hover:bg-tommy-accent-blue hover:text-white disabled:opacity-50 disabled:hover:border-gray-300 disabled:hover:bg-transparent disabled:hover:text-tommy-accent-blue"
             >
               Inbox {hub.fallbackTarget}
             </button>
@@ -159,12 +155,13 @@ function shortPrompt(text: string): string {
                   aria-pressed={isSelected(hub.hubKey, peer.name)}
                   class="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-lg border transition-colors {isSelected(hub.hubKey, peer.name) ? 'border-tommy-accent-blue bg-white' : 'border-transparent hover:bg-white/60'}"
                 >
+                  <!-- The row is a target picker: the spoke name and whether it can
+                       answer. `purpose` is agent-authored prose of unbounded length, and
+                       rendering it squeezed the name column until account-shaped names
+                       wrapped across three lines. It stays on the wire, unrendered. -->
                   <span class="w-2 h-2 rounded-full shrink-0 {statusDot[peer.status] ?? 'bg-gray-300'}"></span>
-                  <span class="text-sm text-tommy-navy font-medium">{peer.name}</span>
-                  <span class="text-xs text-gray-500">{peer.status}</span>
-                  {#if peer.purpose}
-                    <span class="text-xs text-gray-400 truncate ml-auto">{peer.purpose}</span>
-                  {/if}
+                  <span class="text-sm text-tommy-navy font-medium truncate">{peer.name}</span>
+                  <span class="text-xs text-gray-500 shrink-0 ml-auto">{peer.status}</span>
                 </button>
               </li>
             {/each}
@@ -178,10 +175,15 @@ function shortPrompt(text: string): string {
               {:else}
                 <ul class="space-y-1">
                   {#each mailbox.messages as message (message.msgId)}
+                    <!-- The monitor's report IS the content here, not a preview of
+                         something openable: there is no detail view to click into, so a
+                         140-char slice just lost the findings. Wrapped in full, and
+                         `break-words` keeps an unbroken log-group or ARN from forcing a
+                         horizontal scrollbar. Still rendered as data, never executed. -->
                     <li class="text-xs text-gray-700">
                       <span class="font-medium">{message.senderName}</span>
                       <span class="text-gray-400">{message.status}</span>
-                      <span class="block text-gray-500">{shortPrompt(message.prompt)}</span>
+                      <span class="block whitespace-pre-wrap break-words text-gray-500">{message.prompt}</span>
                     </li>
                   {/each}
                 </ul>

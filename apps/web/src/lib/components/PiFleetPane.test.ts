@@ -6,6 +6,7 @@ import { render } from "svelte/server";
 import type { PiFleetAgentsResponse } from "../pi-fleet-types.ts";
 import {
 	applyAgents,
+	applyMailbox,
 	applySendResult,
 	expireEntry,
 	initialPiFleetState,
@@ -48,13 +49,55 @@ function renderPane(state: PiFleetState, busy = false): string {
 }
 
 describe("PiFleetPane", () => {
-	test("lists peers under their environment with status and purpose, and shows a hub error inline", () => {
+	test("lists peers under their environment with status, and shows a hub error inline", () => {
 		const body = renderPane(applyAgents(initialPiFleetState(), listing));
 		expect(body).toContain("alpha-dev");
-		expect(body).toContain("aws spoke");
 		expect(body).toContain("online");
 		expect(body).toContain("dev");
 		expect(body).toContain("hub GET failed: 500");
+	});
+
+	// The row is a target picker. `purpose` is agent-authored prose of unbounded
+	// length; rendering it squeezed the name column until account-shaped names
+	// wrapped across three lines. The fixture still carries one, so this fails if
+	// it is ever rendered again.
+	test("does not render the agent-authored purpose", () => {
+		const body = renderPane(applyAgents(initialPiFleetState(), listing));
+		expect(body).not.toContain("aws spoke");
+	});
+
+	// The monitor's report IS the content: there is no detail view to click into,
+	// so a 140-char slice lost the findings the digest exists to deliver.
+	test("renders a monitor report in full, not a 140-char preview", () => {
+		const report =
+			"[info] aws-762715229080 daily digest (since 2026-09-11T00:00:19.265Z) - findings: 61 " +
+			"(alarm=49 logs=10 trail=2) - notable warn+ findings (last 24h): " +
+			"alarm-eu-oit-prd-DatabaseServerCPUUtilization-eu-oit-prd-psql-db-0 entered ALARM, " +
+			"/ecs/fargate/catalog-prd-log-group saw 3 error-pattern events";
+		expect(report.length).toBeGreaterThan(140);
+		const state = applyMailbox(applyAgents(initialPiFleetState(), listing), {
+			hubKey: "eu-shared-services-dev",
+			environment: "dev",
+			name: "ops",
+			messages: [
+				{
+					msgId: "m1",
+					senderName: "monitor-eu-oit-prd",
+					targetName: "ops",
+					prompt: report,
+					status: "queued",
+					error: null,
+					response: null,
+					createdAt: "2026-09-11T00:00:19.265Z",
+					completedAt: null,
+				},
+			],
+		});
+		const body = renderPane(state);
+		expect(body).toContain("monitor-eu-oit-prd");
+		// The tail of the report, which the old slice cut off.
+		expect(body).toContain("saw 3 error-pattern events");
+		expect(body).not.toContain(`${report.slice(0, 140)}...`);
 	});
 
 	test("shows the empty-state copy before any peer is selected", () => {
