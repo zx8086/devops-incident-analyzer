@@ -132,8 +132,11 @@ describe("PiFleetPane", () => {
 	// SIO-1712: the ops inbox card used to render INSIDE the spoke picker, whose
 	// region is height-capped, so a whole daily digest came through a letterbox
 	// while the replies region sat empty below it. The card belongs in the main
-	// scroll region, beside the replies it relates to.
-	test("renders the ops inbox digest in the replies region, not inside the capped picker", () => {
+	// SIO-1712: the digest belongs AFTER the spoke picker, not nested inside it.
+	// SIO-1721: both now live in ONE scroll container -- the picker is sticky and
+	// the digest flows after it -- so the ordering is what this asserts, not which
+	// capped region each sits in.
+	test("renders the ops inbox digest after the picker, in the same scroll container", () => {
 		const state = applyMailbox(applyAgents(initialPiFleetState(), listing), {
 			hubKey: "eu-shared-services-dev",
 			environment: "dev",
@@ -143,15 +146,33 @@ describe("PiFleetPane", () => {
 			messages: [inboxMessage("m1", "monitor-eu-oit-prd", "[info] daily digest")],
 		});
 		const body = renderPane(state);
-		const picker = body.indexOf("max-h-[20rem]");
-		const replies = body.indexOf("flex-1 min-h-[6rem]");
+		const scroller = body.indexOf("flex-1 min-h-0 overflow-y-auto");
+		const picker = body.indexOf("sticky top-0 z-20");
 		const card = body.indexOf("<details");
-		expect(picker).toBeGreaterThan(-1);
-		expect(replies).toBeGreaterThan(-1);
-		// The card opens after the replies region does, so it is no longer nested
-		// in the capped picker above it.
-		expect(card).toBeGreaterThan(replies);
+		expect(scroller).toBeGreaterThan(-1);
+		expect(picker).toBeGreaterThan(scroller);
 		expect(card).toBeGreaterThan(picker);
+	});
+
+	// SIO-1721: the picker is pinned inside the one scroll container. Without this
+	// a long digest (22,748px measured live) scrolls the spoke list out of view --
+	// the regression SIO-1703 existed to prevent.
+	test("the spoke picker is sticky, so a long digest cannot scroll it away", () => {
+		const body = renderPane(applyAgents(initialPiFleetState(), listing));
+		expect(body).toContain("sticky top-0 z-20");
+		// Opaque, or the digest shows through it while scrolling.
+		expect(body).toContain("bg-tommy-cream border-b");
+	});
+
+	// SIO-1721: the cap/floor/shrink machinery is GONE. Each of these was a fix for
+	// the previous one's side effect; a capped region cannot know how much content
+	// it has. If one reappears, the accumulation has restarted.
+	test("no height cap, floor or shrink juggling remains on the pane regions", () => {
+		const body = renderPane(applyAgents(initialPiFleetState(), listing));
+		expect(body).not.toMatch(/max-h-\[\d+rem\]/);
+		expect(body).not.toMatch(/max-h-\[\d+%\]/);
+		expect(body).not.toContain("min-h-[6rem]");
+		expect(body).not.toContain("min-h-0 shrink max-h");
 	});
 
 	// SIO-1712: several loaded mailboxes plus a running reply have to coexist in
@@ -303,27 +324,11 @@ describe("PiFleetPane", () => {
 	// pane is usable, so a percentage gave the target list MORE room than the
 	// report on a short viewport. Measured with six spokes: 35% took 195px against
 	// the digest's 163px at a 560px pane; a rem ceiling puts the digest ahead at every
-	// height (182px at 560px, 502px at 880px vs 399px before).
-	test("caps the picker in rem so the digest wins on a short pane", () => {
-		const body = renderPane(applyAgents(initialPiFleetState(), listing));
-		expect(body).toContain("max-h-[20rem]");
-		// A percentage cap is the regression this guards against.
-		expect(body).not.toMatch(/max-h-\[\d+%\]/);
-	});
 
 	// SIO-1717: SIO-1715's 11rem ceiling was tuned to beat the digest at every
 	// pane height and ignored how many spokes there actually are. The real prd
 	// fleet is SIX, which needs ~278px of rows, so 176px left two spokes
 	// unreachable while the region below sat empty. The ceiling must clear a
-	// six-spoke fleet; it exists for the outlier, not the normal case.
-	test("the picker ceiling clears a real six-spoke fleet without clipping", () => {
-		const body = renderPane(applyAgents(initialPiFleetState(), listing));
-		const m = body.match(/max-h-\[(\d+(?:\.\d+)?)rem\]/);
-		expect(m).not.toBeNull();
-		const px = Number(m?.[1]) * 16;
-		// header 30 + top pad 8 + 6 rows of 34 + 5 gaps of 4 + bottom pad 12.
-		expect(px).toBeGreaterThanOrEqual(8 + 30 + 4 + 6 * 34 + 5 * 4 + 12);
-	});
 
 	// SIO-1717: navy is the card title and the hubKey, so a navy chip merged with
 	// the header instead of marking the anchor row.
@@ -346,42 +351,8 @@ describe("PiFleetPane", () => {
 	// `shrink-0`, so on a short pane it kept its full height, squeezed the digest
 	// region to 0px and pushed the composer past the wrapper's `overflow-hidden`
 	// edge -- the spoke list looked truncated and the send box was gone entirely.
-	// Measured live at a 465px pane: children summed to 495px.
-	test("the picker yields, the digest keeps a floor, and the composer never shrinks", () => {
-		const body = renderPane(applyAgents(initialPiFleetState(), listing));
-		// The picker gives way rather than holding its height.
-		expect(body).toContain("min-h-0 shrink max-h-[20rem]");
-		expect(body).not.toContain("shrink-0 max-h-[20rem]");
-		// SIO-1719: the floor is CONDITIONAL. This fixture has no inbox and no
-		// replies, so the empty region takes only what it needs -- reserving
-		// a floor here is what starved the spoke list. Its presence when
-		// content exists has its own test below.
-		expect(body).toContain("shrink min-h-0");
-		// The send box is the pane's primary control; it is never the thing squeezed out.
-		expect(body).toContain("shrink-0 border-t border-gray-200");
-	});
 
 	// SIO-1719: an EMPTY lower region must not reserve flex-1 plus its floor.
-	// It held 250px on a tall pane while the spoke list above was capped and
-	// scrolling -- the "I cannot see all my agents" report.
-	test("an empty lower region does not reserve space from the spoke list", () => {
-		const body = renderPane(applyAgents(initialPiFleetState(), listing));
-		expect(body).toContain("shrink min-h-0");
-		expect(body).not.toContain("flex-1 min-h-[6rem]");
-	});
-
-	test("a loaded inbox gives the lower region its floor back", () => {
-		const state = applyMailbox(applyAgents(initialPiFleetState(), listing), {
-			hubKey: "eu-shared-services-dev",
-			environment: "dev",
-			name: "ops",
-			missingDigest: [],
-			windowTruncated: false,
-			messages: [inboxMessage("m1", "monitor-eu-oit-prd", "[info] daily digest", true)],
-		});
-		const body = renderPane(state);
-		expect(body).toContain("flex-1 min-h-[6rem]");
-	});
 
 	// SIO-1719: cream pane, white card and offwhite body are all warm and nearly
 	// the same value, so the digest -- the most important thing here -- had the
@@ -407,18 +378,6 @@ describe("PiFleetPane", () => {
 	// At a 545px pane there is 329px for the picker and digest together (header 77
 	// + composer 139 take the rest). A 34px row needed 278px, leaving no room for
 	// the digest floor, so the list scrolled whenever a digest was open. A 26px
-	// row needs 230px, which clears a 6rem (96px) floor at 326px.
-	test("a spoke row is compact enough that six fit beside an open digest", () => {
-		const body = renderPane(applyAgents(initialPiFleetState(), listing));
-		// py-1 + text-xs = 26px, not py-1.5 + text-sm = 34px.
-		expect(body).toContain("px-2 py-1 rounded-lg border");
-		expect(body).not.toContain("px-2 py-1.5 rounded-lg border");
-		expect(body).toContain('class="text-xs text-tommy-navy font-medium truncate"');
-		// header 30 + pad 8 + 6 rows of 26 + 5 gaps of 4 + pad 12 = 226, plus a
-		// 96px floor = 322 <= the 329px a 545px pane affords.
-		const rows = 8 + 30 + 4 + 6 * 26 + 5 * 4 + 12;
-		expect(rows + 96).toBeLessThanOrEqual(329);
-	});
 
 	// SIO-1706: the pane no longer offers to "open the fleet console". The header pi
 	// icon toggles THIS pane and the box below addresses the spokes, so the button
@@ -600,19 +559,6 @@ describe("PiFleetPane", () => {
 	// SIO-1717: the ceiling is 20rem (SIO-1715 set 11rem, which clipped a real
 	// six-spoke fleet at 278px). The ops inbox card used to render
 	// inside this region, so a whole daily digest came through a letterbox. The
-	// card moved to the replies region below; what is left here is rows.
-	test("pins the spoke picker in its own scroll region, separate from the replies", () => {
-		const body = renderPane(applyAgents(initialPiFleetState(), listing));
-		// SIO-1715: a REM cap, not a percentage. A percentage split a short pane
-		// badly -- at 560px the picker took 195px against the digest's 163px, so
-		// the target list outweighed the report. Measured: a rem ceiling puts the digest
-		// ahead at every pane height.
-		expect(body).toContain("max-h-[20rem]");
-		expect(body).not.toContain("max-h-[35%]");
-		// The replies keep their own region below it. SIO-1719: empty here, so it
-		// is the shrink variant -- the flex-1 floor appears once content lands.
-		expect(body).toContain("shrink min-h-0");
-	});
 
 	// SIO-1703: `project` is a hub-side namespace derived per ENVIRONMENT, so two
 	// prd hubs in different accounts both render "pi-coms-prd". Showing it beside
