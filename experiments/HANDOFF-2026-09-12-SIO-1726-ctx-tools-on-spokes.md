@@ -1,15 +1,50 @@
 # HANDOFF 2026-09-12 — SIO-1726: ctx_* tools do not reach a spoke turn
 
-- **Date**: 2026-09-12
-- **Tickets**:
-  - [SIO-1726](https://linear.app/siobytes/issue/SIO-1726) — ship context-mode to the fleet spokes behind a kill-switch (**In Review, BLOCKED**)
-  - [SIO-1725](https://linear.app/siobytes/issue/SIO-1725) — three aws-spoke investigation skills (**In Review, DONE and verified — mergeable now**)
-  - Parent epic: [SIO-1686](https://linear.app/siobytes/issue/SIO-1686) — context-mode concepts feasibility
-  - Closed as duplicate: [SIO-1731](https://linear.app/siobytes/issue/SIO-1731) → already fixed by [SIO-1728](https://linear.app/siobytes/issue/SIO-1728)
-- **PR**: [#759](https://github.com/zx8086/devops-incident-analyzer/pull/759)
-- **Repo state**: branch `claude/context-mode-spokes-extension-a8ac32` @ `6ee0e37a`, clean tree, pushed. `main` is `0e1b0c75` (branch is 3 behind: two are the `just coms` fixed-extension-set commits, one a theme chore).
-- **Upstream checkout**: `~/WebstormProjects/context-mode` @ `571ba5f` on branch `fix/pi-bridge-bootstrap-on-context` (a real git clone of `mksglu/context-mode` at 1.0.169 WITH TypeScript source — not pushed)
-- **Suggested branch for continuation**: reuse `claude/context-mode-spokes-extension-a8ac32`
+> **RESOLVED 2026-09-12 18:50 UTC. Nothing is left on this ticket.** Kept as the record of
+> how it was found; the sections below the resolution are the original investigation,
+> corrected where it was wrong.
+
+- **Date**: 2026-09-12 (resolved the same day)
+- **Tickets**: [SIO-1726](https://linear.app/siobytes/issue/SIO-1726) Done; [SIO-1725](https://linear.app/siobytes/issue/SIO-1725) Done (#764); [SIO-1733](https://linear.app/siobytes/issue/SIO-1733) Done (#765). Parent [SIO-1686](https://linear.app/siobytes/issue/SIO-1686).
+- **PRs**: [#759](https://github.com/zx8086/devops-incident-analyzer/pull/759) merged as `1e85ef6c` (title still says BLOCKED; it is not), [#765](https://github.com/zx8086/devops-incident-analyzer/pull/765) merged as `ba976288`.
+- **Fleet**: dev on `4d3a3e9e`, prd on `1e85ef6c` (= `main`). ctx gate passed on eu-oit-dev, eu-shared-services-dev, eu-shared-services-prd (Sonnet) and eu-oit-prd (Haiku), each on the FIRST inbound message after restart: `ctx_batch_execute` -> `l2-probe-1-ok` / `aarch64`.
+- **Upstream checkout**: `~/WebstormProjects/context-mode` branch `fix/pi-bridge-bootstrap-on-context` @ `1447087` (two patches, 72/72 tests, not pushed). Vendored build in `packages/pi-coms/vendor/context-mode-patch/`.
+
+## Resolution — what was actually wrong (three things)
+
+1. **Pi never emits `before_agent_start` for a spoke turn, idle or busy.** Pi 0.84.4 emits it only from `prompt()` (`dist/core/agent-session.js:915`). `pi.sendMessage()` goes `sendCustomMessage -> _runAgentPrompt -> agent.prompt()` (`:1109-1121`, `:772`) with no hook. The original "busy -> followUp" theory below was wrong in mechanism, right in effect: coms-net's every turn is a `sendMessage`.
+2. **The `context`-hook backstop is one model call late.** `agent.prompt()` snapshots `tools` (`pi-agent-core/dist/agent.js:284 createContextSnapshot`) before `transformContext` runs (`agent-loop.js:179-188`). Live: message 1 answered `no ctx tools`. Message 2 on the same TUI session also lacked them, which was not explained; the eager path makes it moot.
+3. **Env does not reach Pi through `export`.** Pi is spawned by the herdr server daemon; only `herdr workspace create --env` reaches it. `/proc/<pid>/environ` on the spoke had no `CONTEXT_MODE_*` after the first eager rollout. Print mode on the spoke with the variable set listed all eleven `ctx_*` tools, which isolated this.
+
+Fix: context-mode `1447087` adds opt-in `CONTEXT_MODE_BRIDGE_EAGER=1` -> `ensureMCPBridge()` from `session_start` (only a live AgentSession emits it, so #534/#809 stay preserved); the launcher appends `--env CONTEXT_MODE_BRIDGE_EAGER=1` to `ENV_ARGS` under the same `CTX_MODE_ENABLED` + extension-present gate (`4d3a3e9e`).
+
+**The unrelated outage found on the way (SIO-1733):** `0e1b0c75` added `packages/pi-coms/.pi/settings.json` (laptop theme); `publish-fleet.sh` is `git archive HEAD:packages/pi-coms`, so from `5ce6aa42` every bundle shipped a project `.pi/` dir and Pi on every spoke blocked on `Trust project folder?` in the herdr pane. No session, no `/v1/agents/register`, launcher poll fails, systemd relaunches every 2 min, all six prod spokes down. NOT a 60s-window problem. Fixed by `packages/pi-coms/.gitattributes` `.pi export-ignore` (`bf1f7c7f`, #765). Check with `git archive HEAD:packages/pi-coms | tar t | grep '^\.pi'`.
+
+### How it was verified
+
+```bash
+# upstream
+cd ~/WebstormProjects/context-mode && npx tsc && npx vitest run tests/pi-extension.test.ts   # 72 pass
+# on a spoke, the real registry, no hub needed (pi.logger does not exist in 0.84.4; bridge WARNINGs go nowhere)
+CONTEXT_MODE_BRIDGE_EAGER=1 pi -e ~/.pi-ctx/node_modules/context-mode/build/adapters/pi/extension.js \
+  --model eu.anthropic.claude-sonnet-5 --provider amazon-bedrock --no-session -p "list your tools"
+# what Pi is actually showing in the herdr pane (pane ids contain letters, e.g. w1C:p1)
+herdr agent list; herdr pane read <pane> --source visible
+# env as Pi sees it
+tr '\0' '\n' < /proc/$(pgrep -f pi-coding-agent/dist/cli.js | head -1)/environ | grep CONTEXT_MODE
+```
+
+Hub-probe gotchas: message status is `complete` (not `completed`); reuse ONE sender session_id across probes or the hub answers `name_taken` / `sender_not_registered`; the context-mode Bash hook blocks inline `curl`, so keep the probe in a script file.
+
+### Still unobserved
+
+- A long-lived spoke session hours later (reaper is off for foreground sessions; expected fine).
+- Any `ctx_*` tool other than `ctx_batch_execute` used by a spoke in anger.
+- Why the `context`-hook registration did not appear on the second turn of the same TUI session. Upstream should be told the `context` backstop is insufficient on its own.
+
+---
+
+# Original investigation (historical; corrected inline)
 
 ## TL;DR
 
@@ -27,7 +62,7 @@ The operator explicitly overrode both prohibitions on new evidence (context-mode
 
 Originating spec: `docs/superpowers/specs/2026-09-10-context-mode-concepts-feasibility.md`.
 
-## The core finding — why it works everywhere except a spoke
+## The core finding — why it works everywhere except a spoke (PARTLY WRONG, see Resolution: the hook is skipped for every sendMessage turn, not only busy ones)
 
 This is the one thing to carry forward. The operator's question was: *why does this work in Claude Desktop, the console and the IDE, but not on the spoke?*
 
@@ -154,7 +189,7 @@ So everything below the model layer is correct and the gate still fails.
 - **RAM is a non-issue.** ~1.12GB available on `t4g.small` with the bridge running.
 - **The full upstream suite passes with the patch**: 210 files, 4719 tests, 0 failures; `tsc --noEmit` clean.
 
-## The open question -- ANSWERED, fix committed, not yet spoke-verified
+## The open question -- ANSWERED and spoke-verified (see Resolution above)
 
 **Root cause of the second failure, confirmed in Pi's agent-core source.**
 `createContextSnapshot()` is evaluated as an ARGUMENT to `runAgentLoop`
