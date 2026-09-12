@@ -176,7 +176,7 @@ function onKeydown(event: KeyboardEvent) {
        replies region sat empty below it. The card moved to the scroll region
        below; what is left here is rows, which need less. -->
   <div class="shrink-0 max-h-[35%] overflow-y-auto border-b border-gray-200">
-    <section class="px-4 py-3">
+    <section class="px-4 pt-2 pb-3">
       {#if pane.hubs.length === 0}
         <p class="text-xs text-gray-500">No spokes are registered on any configured hub.</p>
       {/if}
@@ -191,7 +191,14 @@ function onKeydown(event: KeyboardEvent) {
       {/if}
       {#each scoped as hub (hub.hubKey)}
         <div class="mb-3 last:mb-0">
-          <div class="flex items-center gap-2 mb-1">
+          <!-- SIO-1714: STICKY. SIO-1703 pinned the picker as a capped scroll
+               region, which is not the same as pinning what is in it: with six
+               spokes the rows overflow the cap, and scrolling to reach the last
+               one carried the hub header off the top -- so the operator lost
+               both which hub they were looking at and the Inbox button, the two
+               things that must never scroll away. The rows still scroll; their
+               header does not. Opaque background, or rows show through it. -->
+          <div class="sticky top-0 z-10 -mx-4 mb-1 flex items-center gap-2 bg-tommy-cream px-4 py-1">
             <!-- SIO-1666: the ACCOUNT identifies the hub; the environment is a
                  badge beside it. A bare DEV/PRD badge cannot tell two prd hubs
                  in different domains apart.
@@ -297,6 +304,16 @@ function onKeydown(event: KeyboardEvent) {
                   The hub returned a full window, so an older digest may sit beyond it.
                 </p>
               {/if}
+              <!-- SIO-1714: the daily digest is the report of record the whole
+                   range hangs off -- every other row is something that happened
+                   SINCE it. Rendering them identically left the eye nothing to
+                   land on. The digest keeps the full-weight treatment and says
+                   what it is; the follow-ups are indented under a rule, so the
+                   ordering reads as "this digest, then what came after".
+                   `isDigest` is set server-side by anchorOnDigest (the same pass
+                   that slices the range), never re-derived here: an estate with
+                   no digest in the window starts mid-range and marks nothing,
+                   which position alone could not express. -->
               <ul class="mt-2 space-y-2">
                 {#each mailbox.messages as message (message.msgId)}
                   <!-- The monitor's report IS the content here, not a preview of
@@ -304,10 +321,18 @@ function onKeydown(event: KeyboardEvent) {
                        140-char slice just lost the findings. Wrapped in full, and
                        `break-words` keeps an unbroken log-group or ARN from forcing a
                        horizontal scrollbar. Still rendered as data, never executed. -->
-                  <li>
-                    <div class="flex items-center gap-2 text-[10px] text-gray-500">
-                      <span class="font-medium truncate">{message.senderName}</span>
-                      <span class="shrink-0">{message.status}</span>
+                  <li class={message.isDigest ? "" : "ml-3 border-l border-gray-200 pl-3"}>
+                    <div class="flex items-center gap-2 text-[10px]">
+                      {#if message.isDigest}
+                        <!-- Named, not inferred from the [info]/[warn] prefix: a
+                             degraded digest is written [warn] and is the one most
+                             worth spotting. -->
+                        <span class="shrink-0 rounded border border-tommy-navy/20 bg-tommy-navy/5 px-1.5 py-0.5 font-semibold uppercase tracking-wide text-tommy-navy">
+                          Daily digest
+                        </span>
+                      {/if}
+                      <span class="truncate {message.isDigest ? 'font-medium text-gray-600' : 'text-gray-500'}">{message.senderName}</span>
+                      <span class="shrink-0 text-gray-500">{message.status}</span>
                     </div>
                     <!-- SIO-1709: the monitor writes these as markdown (bold findings,
                          numbered lists), so a literal render showed the asterisks.
@@ -315,8 +340,11 @@ function onKeydown(event: KeyboardEvent) {
                          output; it is a <div>. Same offwhite surface as a spoke reply
                          body, so a digest and a reply read as one kind of thing --
                          and gray-700 because gray-500 on offwhite is 4.02:1, under
-                         the 4.5:1 floor. -->
-                    <div class="mt-1 text-gray-700 bg-tommy-offwhite rounded p-2 overflow-x-auto break-words">
+                         the 4.5:1 floor.
+                         SIO-1714: the follow-up keeps that same legible gray-700; it
+                         is subordinate by POSITION and surface, not by being harder
+                         to read. Dimming live findings is the SIO-1704 mistake. -->
+                    <div class="mt-1 text-gray-700 overflow-x-auto break-words {message.isDigest ? 'bg-tommy-offwhite rounded p-2' : 'px-0.5'}">
                       <MarkdownRenderer content={message.prompt} />
                     </div>
                   </li>
@@ -376,7 +404,11 @@ function onKeydown(event: KeyboardEvent) {
     </section>
   </div>
 
-  <div class="border-t border-gray-200 p-3 bg-white">
+  <!-- SIO-1714: the composer is a FIXED block, so every pixel it takes comes out
+       of the digest. Measured on a 560px pane it held 169px against the digest's
+       133px -- the box to ask a question was bigger than the report being read.
+       Two rows and tighter padding; the textarea still grows as you type. -->
+  <div class="border-t border-gray-200 px-3 py-2 bg-white">
     <p class="text-xs text-gray-500 mb-1">
       {#if pane.selected}
         To <span class="font-medium text-tommy-navy">{pane.selected.name}</span> ({pane.selected.hubKey})
@@ -392,12 +424,12 @@ function onKeydown(event: KeyboardEvent) {
     <textarea
       bind:value={prompt}
       onkeydown={onKeydown}
-      rows="3"
+      rows="2"
       placeholder={pane.selected ? "Ask the spoke (Cmd+Enter to send)" : "Ask every spoke in scope (Cmd+Enter to send)"}
       disabled={busy || (pane.selected === null && visibleTargets.length === 0)}
       class="w-full text-sm border border-gray-300 rounded-lg p-2 focus:outline-none focus:border-tommy-accent-blue disabled:bg-gray-50"
     ></textarea>
-    <div class="flex justify-end mt-2">
+    <div class="flex justify-end mt-1.5">
       <button
         type="button"
         onclick={submit}

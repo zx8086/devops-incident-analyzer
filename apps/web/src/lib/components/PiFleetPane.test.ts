@@ -50,7 +50,10 @@ const listing: PiFleetAgentsResponse = {
 // has its own test below.
 const ALL_FIXTURE_ESTATES = ["alpha-dev", "eu-oit-prd", "eu-shared-services-prd", "eu-retail-shop-prd"];
 
-function inboxMessage(msgId: string, senderName: string, prompt: string) {
+// SIO-1714: isDigest defaults false -- most fixture rows are follow-ups. The
+// digest cases pass true explicitly, so a test that means "this is the report of
+// record" says so rather than relying on its position in the array.
+function inboxMessage(msgId: string, senderName: string, prompt: string, isDigest = false) {
 	return {
 		msgId,
 		senderName,
@@ -61,6 +64,7 @@ function inboxMessage(msgId: string, senderName: string, prompt: string) {
 		response: null,
 		createdAt: "2026-09-11T00:00:00.000Z",
 		completedAt: null,
+		isDigest,
 	};
 }
 
@@ -114,6 +118,7 @@ describe("PiFleetPane", () => {
 					response: null,
 					createdAt: "2026-09-11T00:00:19.265Z",
 					completedAt: null,
+					isDigest: true,
 				},
 			],
 		});
@@ -179,10 +184,12 @@ describe("PiFleetPane", () => {
 			name: "ops",
 			missingDigest: [],
 			windowTruncated: false,
-			messages: [inboxMessage("m1", "monitor-eu-oit-prd", "[info] daily digest")],
+			// SIO-1714: the digest row is the one carrying the surfaced treatment.
+			messages: [inboxMessage("m1", "monitor-eu-oit-prd", "[info] daily digest", true)],
 		});
 		const body = renderPane(state);
-		expect(body).toContain("text-gray-700 bg-tommy-offwhite");
+		expect(body).toContain("text-gray-700");
+		expect(body).toContain("bg-tommy-offwhite");
 		expect(body).not.toContain("text-gray-400");
 	});
 
@@ -198,6 +205,95 @@ describe("PiFleetPane", () => {
 		expect(/\sdisabled(=|\s|>)/.test(tag)).toBe(true);
 		// Spinning is gated so it stops for prefers-reduced-motion.
 		expect(busy).toContain("animate-spin motion-reduce:animate-none");
+	});
+
+	// SIO-1714: the digest is the report of record; everything after it happened
+	// SINCE it. Rendered identically, the eye had nothing to land on.
+	test("labels the daily digest and subordinates the messages after it", () => {
+		const state = applyMailbox(applyAgents(initialPiFleetState(), listing), {
+			hubKey: "eu-shared-services-dev",
+			environment: "dev",
+			name: "ops",
+			missingDigest: [],
+			windowTruncated: false,
+			messages: [
+				inboxMessage("m1", "monitor-eu-oit-prd", "[info] aws-1 daily digest (since x)", true),
+				inboxMessage("m2", "monitor-eu-oit-prd", "a follow-up finding"),
+			],
+		});
+		const body = renderPane(state);
+		expect(body).toContain("Daily digest");
+		// The follow-up is indented under a rule; the digest is not.
+		expect(body).toContain("ml-3 border-l border-gray-200 pl-3");
+		// The digest keeps the surfaced treatment.
+		expect(body).toContain("bg-tommy-offwhite rounded p-2");
+		// Both bodies stay legible: subordination is position, never dimming.
+		expect(body).not.toContain("text-gray-400");
+	});
+
+	// An estate with no digest in the window marks nothing, so the pane must not
+	// label anything as the report of record.
+	test("labels nothing when no row is the digest", () => {
+		const state = applyMailbox(applyAgents(initialPiFleetState(), listing), {
+			hubKey: "eu-shared-services-dev",
+			environment: "dev",
+			name: "ops",
+			missingDigest: ["eu-oit-prd"],
+			windowTruncated: false,
+			messages: [inboxMessage("m1", "monitor-eu-oit-prd", "[critical] alarm, no digest today")],
+		});
+		const body = renderPane(state);
+		expect(body).not.toContain("Daily digest");
+		// The findings are still shown in full -- hiding them is the worse error.
+		expect(body).toContain("alarm, no digest today");
+	});
+
+	// SIO-1714: SIO-1703 pinned the picker as a capped SCROLL region, which is not
+	// the same as pinning what is inside it. With a real fleet (six spokes on one
+	// hub, as observed live) the rows overflow the cap, and scrolling to reach the
+	// last one carried the hub header off the top -- losing both which hub is being
+	// addressed and the Inbox button.
+	test("keeps the hub header visible when the spoke rows overflow the picker", () => {
+		const sixSpokes: PiFleetAgentsResponse = {
+			...listing,
+			hubs: [
+				{
+					hubKey: "eu-shared-services-prd",
+					environment: "prd",
+					project: "default",
+					fallbackTarget: "ops",
+					error: null,
+					peers: [
+						"eu-b2b-ecom-prd",
+						"eu-b2becom-v2-prd",
+						"eu-ediservices-prd",
+						"eu-mendix-platform-prd",
+						"eu-oit-prd",
+						"eu-shared-services-prd",
+					].map((name, i) => ({
+						name,
+						status: "online" as const,
+						purpose: null,
+						sessionId: `s${i}`,
+					})),
+				},
+			],
+		};
+		const body = renderPane(applyAgents(initialPiFleetState(), sixSpokes), false, [
+			"eu-b2b-ecom-prd",
+			"eu-b2becom-v2-prd",
+			"eu-ediservices-prd",
+			"eu-mendix-platform-prd",
+			"eu-oit-prd",
+			"eu-shared-services-prd",
+		]);
+		// The header row pins to the top of the scrolling picker.
+		expect(body).toContain("sticky top-0");
+		// Opaque, or the rows scroll visibly underneath it.
+		expect(body).toContain("bg-tommy-cream");
+		// All six are still rendered -- the fix is what stays put, not what is shown.
+		expect(body).toContain("eu-b2b-ecom-prd");
+		expect(body).toContain("eu-shared-services-prd");
 	});
 
 	// SIO-1706: the pane no longer offers to "open the fleet console". The header pi

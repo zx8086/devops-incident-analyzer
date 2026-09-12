@@ -79,6 +79,11 @@ export const PiFleetInboxMessageSchema = z.object({
 	response: z.unknown(),
 	createdAt: z.string(),
 	completedAt: z.string().nullable(),
+	// SIO-1714: this row is the estate's daily digest -- the report of record the
+	// rest of the range hangs off. Set by `anchorOnDigest` as it slices, so the
+	// pane never re-derives it: an estate in `missingDigest` starts mid-range and
+	// marks nothing, which position alone could not express.
+	isDigest: z.boolean(),
 });
 export type PiFleetInboxMessage = z.infer<typeof PiFleetInboxMessageSchema>;
 

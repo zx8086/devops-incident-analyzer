@@ -455,6 +455,9 @@ describe("readFleetMailbox", () => {
 					response: null,
 					createdAt: "2026-09-06T10:00:00.000Z",
 					completedAt: null,
+					// SIO-1714: unanchored read (no estate scope), so nothing was
+					// anchored and no row is the report of record -- false, not absent.
+					isDigest: false,
 				},
 			],
 		});
@@ -493,8 +496,8 @@ describe("anchorOnDigest", () => {
 		// The fleet-wide alternative would cut at DIGEST_B and lose DIGEST_A entirely.
 		const messages = [DIGEST_A, row("monitor-eu-oit-prd", "oit follow-up"), DIGEST_B];
 		const { messages: out } = anchorOnDigest(messages, ["eu-oit-prd", "eu-mendix-platform-prd"]);
-		expect(out).toContain(DIGEST_A);
-		expect(out).toContain(DIGEST_B);
+		expect(out.map((m) => m.prompt)).toContain(DIGEST_A.prompt);
+		expect(out.map((m) => m.prompt)).toContain(DIGEST_B.prompt);
 		expect(out.map((m) => m.prompt)).toContain("oit follow-up");
 	});
 
@@ -510,7 +513,7 @@ describe("anchorOnDigest", () => {
 
 	test("drops estates outside the scope", () => {
 		const { messages: out } = anchorOnDigest([DIGEST_A, DIGEST_B], ["eu-oit-prd"]);
-		expect(out).toEqual([DIGEST_A]);
+		expect(out.map((m) => m.prompt)).toEqual([DIGEST_A.prompt]);
 	});
 
 	// A monitor that missed its digest must not make its estate look empty: the
@@ -522,11 +525,49 @@ describe("anchorOnDigest", () => {
 		expect(missingDigest).toEqual(["eu-oit-prd"]);
 	});
 
+	// SIO-1714: the anchor index was computed here and discarded, so the pane could
+	// not tell the report of record from what came after it.
+	test("marks the anchor row as the digest, and only that row", () => {
+		const { messages: out } = anchorOnDigest(
+			[DIGEST_A, row("monitor-eu-oit-prd", "after 1"), row("monitor-eu-oit-prd", "after 2")],
+			["eu-oit-prd"],
+		);
+		expect(out.map((m) => m.isDigest)).toEqual([true, false, false]);
+	});
+
+	// The degraded digest is written [warn], not [info], and is the one most worth
+	// spotting -- so detection keys on the marker, never on the severity prefix.
+	test("marks a [warn] digest exactly like an [info] one", () => {
+		const warnDigest = row("monitor-eu-oit-prd", "[warn] aws-762715229080 daily digest paused=1");
+		const { messages: out } = anchorOnDigest([warnDigest, row("monitor-eu-oit-prd", "after")], ["eu-oit-prd"]);
+		expect(out.map((m) => m.isDigest)).toEqual([true, false]);
+	});
+
+	// An estate whose digest fell outside the window starts MID-RANGE. Marking its
+	// first row would claim a report of record that was never fetched.
+	test("marks nothing for an estate with no digest in the window", () => {
+		const { messages: out, missingDigest } = anchorOnDigest(
+			[row("monitor-eu-oit-prd", "[critical] alarm, no digest today"), row("monitor-eu-oit-prd", "another")],
+			["eu-oit-prd"],
+		);
+		expect(missingDigest).toEqual(["eu-oit-prd"]);
+		expect(out.every((m) => m.isDigest === false)).toBe(true);
+	});
+
+	// Two estates, two anchors: the per-estate rule applies to marking too.
+	test("marks one digest per estate", () => {
+		const { messages: out } = anchorOnDigest(
+			[DIGEST_A, row("monitor-eu-oit-prd", "oit after"), DIGEST_B],
+			["eu-oit-prd", "eu-mendix-platform-prd"],
+		);
+		expect(out.filter((m) => m.isDigest).length).toBe(2);
+	});
+
 	// SIO-1704's rule survives: a sender with no estate has no digest to anchor on.
 	test("keeps a sender that is not estate-shaped", () => {
 		const note = row("simon", "handover note");
 		const { messages: out, missingDigest } = anchorOnDigest([note, DIGEST_A], ["eu-oit-prd"]);
-		expect(out).toContain(note);
+		expect(out.map((m) => m.prompt)).toContain(note.prompt);
 		expect(missingDigest).toEqual([]);
 	});
 
@@ -535,6 +576,6 @@ describe("anchorOnDigest", () => {
 	test("an empty scope returns no estate rows, but keeps non-estate senders", () => {
 		const note = row("simon", "handover note");
 		const { messages: out } = anchorOnDigest([note, DIGEST_A, DIGEST_B], []);
-		expect(out).toEqual([note]);
+		expect(out.map((m) => m.prompt)).toEqual([note.prompt]);
 	});
 });

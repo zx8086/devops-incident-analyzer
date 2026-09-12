@@ -66,21 +66,28 @@ export type AnchoredMailbox<T> = { messages: T[]; missingDigest: string[] };
 // anchor, and showing them silently would misreport the range as complete.
 // A sender that is not estate-shaped (a spoke replying, an operator note) has no
 // digest to anchor on and is kept unfiltered -- same rule as SIO-1704.
+// SIO-1714: the anchor row is MARKED as it is sliced. The index was already
+// computed here and then thrown away, so the pane could not tell the report of
+// record from the messages that came after it. Marking it server-side keeps one
+// source of truth: position alone is not safe (a `missingDigest` estate starts
+// mid-range, so its first row is NOT a digest), and re-matching the text in the
+// browser would duplicate DIGEST_MARKER in a second place that drifts.
 export function anchorOnDigest<T extends { senderName: string; prompt: string }>(
 	messages: T[],
 	estates: string[],
-): AnchoredMailbox<T> {
+): AnchoredMailbox<T & { isDigest: boolean }> {
 	// SIO-1704 rule, kept here: an empty scope means NO account is in scope, so no
 	// estate's reports are returned. (The pane never reaches this -- it hides the
 	// hub block entirely when nothing is selected -- but the endpoint must not
 	// contradict the selector's meaning for any other caller.)
 	const inScope = new Set(estates);
 	const byEstate = new Map<string, T[]>();
-	const kept: T[] = [];
+	const kept: (T & { isDigest: boolean })[] = [];
 	for (const m of messages) {
 		const estate = estateOfSender(m.senderName);
 		if (estate === null) {
-			kept.push(m);
+			// Not an estate report (no sender prefix to key on), so it anchors nothing.
+			kept.push({ ...m, isDigest: false });
 			continue;
 		}
 		if (!inScope.has(estate)) continue;
@@ -93,7 +100,10 @@ export function anchorOnDigest<T extends { senderName: string; prompt: string }>
 		// Hub order is oldest-first, so the LAST match is the newest digest.
 		const anchor = rows.findLastIndex((m) => m.prompt.includes(DIGEST_MARKER));
 		if (anchor === -1) missingDigest.push(estate);
-		kept.push(...(anchor === -1 ? rows : rows.slice(anchor)));
+		// An estate with no digest keeps all its rows and marks none: its block
+		// starts mid-range, so calling its first row the digest would be a lie.
+		const block = anchor === -1 ? rows : rows.slice(anchor);
+		kept.push(...block.map((m, i) => ({ ...m, isDigest: anchor !== -1 && i === 0 })));
 	}
 	return { messages: kept, missingDigest: missingDigest.sort() };
 }
@@ -415,7 +425,18 @@ export async function readFleetMailbox(
 				fetched.map((m) => ({ ...m, senderName: m.sender_name, prompt: m.prompt })),
 				input.estates ?? [],
 			)
-		: { messages: fetched.map((m) => ({ ...m, senderName: m.sender_name, prompt: m.prompt })), missingDigest: [] };
+		: {
+				// Unanchored (no estate scope): nothing was anchored, so no row is the
+				// report of record. Explicitly false rather than absent, so the wire
+				// shape is the same on both branches.
+				messages: fetched.map((m) => ({
+					...m,
+					senderName: m.sender_name,
+					prompt: m.prompt,
+					isDigest: false,
+				})),
+				missingDigest: [],
+			};
 	// A full window means the oldest row may not be the true start: the digest for
 	// some estate could sit further back than we looked. Report it rather than
 	// present a truncated range as complete.
@@ -450,6 +471,9 @@ export async function readFleetMailbox(
 			response: m.response,
 			createdAt: m.created_at,
 			completedAt: m.completed_at,
+			// SIO-1714: carried through from anchorOnDigest. This mapping is field by
+			// field, so the flag has to be named here or it is silently dropped.
+			isDigest: m.isDigest,
 		})),
 	};
 }
