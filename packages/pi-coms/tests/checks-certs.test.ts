@@ -14,7 +14,7 @@ const DAY = 86_400_000;
 
 type CertEvidence = { arn: string; region: string; supersededBy?: { arn: string } };
 
-function fakeClient(certs: { arn: string; domain: string; daysLeft: number; sans?: string[] }[]) {
+function fakeClient(certs: { arn: string; domain: string; daysLeft: number; sans?: string[]; inUseBy?: string[] }[]) {
 	return {
 		send: async (cmd: ListCertificatesCommand | DescribeCertificateCommand) => {
 			if (cmd instanceof ListCertificatesCommand) {
@@ -27,6 +27,9 @@ function fakeClient(certs: { arn: string; domain: string; daysLeft: number; sans
 					DomainName: c?.domain,
 					SubjectAlternativeNames: c?.sans,
 					NotAfter: new Date(NOW + (c?.daysLeft ?? 0) * DAY),
+					// Attached unless a test says otherwise: severity tests are about
+					// time remaining, not about attachment (SIO-1724).
+					InUseBy: c?.inUseBy ?? ["arn:aws:elasticloadbalancing:eu-central-1:1:loadbalancer/app/x/y"],
 				},
 			};
 		},
@@ -321,5 +324,53 @@ describe("checkListenerCerts", () => {
 		expect(out).toHaveLength(1);
 		expect(out[0]?.summary).toContain("not inspected");
 		expect(out[0]?.summary).toContain("AccessDenied");
+	});
+});
+
+describe("checkCerts in-use gating (SIO-1724)", () => {
+	// The real eu-oit-dev fossil: prana-dev.pvhcorp.com, expired 2023-12-28,
+	// attached to nothing. Before this gate it scored daysLeft -989 and paged
+	// critical on every daily run.
+	test("an expired certificate attached to nothing is info, not critical", async () => {
+		const out = await checkCerts(
+			eu([{ arn: "arn:cert/prana", domain: "prana-dev.pvhcorp.com", daysLeft: -989, inUseBy: [] }]),
+			new MonitorState(":memory:"),
+			{ now: NOW },
+		);
+		expect(out).toHaveLength(1);
+		expect(out[0]?.severity).toBe("info");
+		expect(out[0]?.summary).toContain("expired 989 day(s) ago");
+		expect(out[0]?.summary).toContain("not in use by any resource");
+	});
+
+	test("an expiring certificate attached to nothing is info, not warn", async () => {
+		const out = await checkCerts(
+			eu([{ arn: "arn:cert/unused", domain: "unused.example.com", daysLeft: 20, inUseBy: [] }]),
+			new MonitorState(":memory:"),
+			{ now: NOW },
+		);
+		expect(out[0]?.severity).toBe("info");
+	});
+
+	// The other half of the gate: attachment must not soften a real outage.
+	test("an expired certificate that IS attached stays critical", async () => {
+		const out = await checkCerts(
+			eu([{ arn: "arn:cert/live", domain: "live.example.com", daysLeft: -3, inUseBy: ["arn:lb/live"] }]),
+			new MonitorState(":memory:"),
+			{ now: NOW },
+		);
+		expect(out[0]?.severity).toBe("critical");
+		expect(out[0]?.summary).toContain("expired 3 day(s) ago");
+		expect(out[0]?.summary).not.toContain("not in use");
+	});
+
+	test("an attached certificate inside the warn window still warns", async () => {
+		const out = await checkCerts(
+			eu([{ arn: "arn:cert/soon", domain: "soon.example.com", daysLeft: 20, inUseBy: ["arn:lb/soon"] }]),
+			new MonitorState(":memory:"),
+			{ now: NOW },
+		);
+		expect(out[0]?.severity).toBe("warn");
+		expect(out[0]?.summary).toContain("expires in 20 day(s)");
 	});
 });
