@@ -110,7 +110,7 @@ below), and hosts converge from inside the network:
 
 | Stage | Mechanism |
 |-------|-----------|
-| Publish | `./deploy/publish-fleet.sh pi-coms-dist-<account> <profile>` uploads the archive + vendored deps next to a `version` file |
+| Publish | `./deploy/publish-fleet.sh pi-coms-dist-<account> <profile>` uploads the archive + vendored deps next to a `version` file. The archive is `git archive HEAD:packages/pi-coms`, so `packages/pi-coms/.gitattributes` decides what ships: `.pi` is `export-ignore` (SIO-1733) because a project `.pi/` dir makes Pi on every spoke stop at "Trust project folder?" with nobody to answer. Check with `git archive HEAD:packages/pi-coms \| tar t \| grep '^\.pi'` (must print nothing). |
 | Authorize | Bucket policy scoped with `aws:PrincipalOrgID`; hosts read via an S3 gateway endpoint (no internet path for code) |
 | Converge | A State Manager association runs `pi-coms-update` every 30 min, comparing the S3 `version` to the local `.bundle-version` and swapping + restarting services on change |
 | Immediate rollout | `aws ssm send-command ... --parameters 'commands=["/usr/local/bin/pi-coms-update"]'` per host |
@@ -154,9 +154,27 @@ exist anywhere in the system. Details: [Security Model](../security/security-mod
 4. Copy `vendor/pi-fleet/aws-spoke/AGENTS.override.md` (the persona the bridge exported at publish time, SIO-1649) into the checkout as `AGENTS.override.md`, install `vendor/pi-fleet/skills/` under `~/.pi/agent/skills/pi-fleet/`, and append `persona=pi-fleet-vX.Y.Z` to the register purpose
    (agent hosts only) so spokes load the investigation discipline instead of
    the repo's development instructions.
-5. Install `herdr.service`, `pi-agent.service`, `pi-monitor.service`. The
+5. Install the `ctx_*` tool path (SIO-1726, SIO-1734), unless
+   `CTX_MODE_ENABLED` is `false` or `0`: `context-mode@1.0.169` into
+   `~/.pi-ctx` and `pi-mcp-adapter@2.33.0` into `~/.pi/agent/npm`, both
+   `bun add --ignore-scripts` (better-sqlite3's postinstall needs node-gyp,
+   absent on the host; the server uses `bun:sqlite`), both pinned, both
+   non-fatal, and `npm:pi-mcp-adapter` merged into `~/.pi/agent/settings.json`
+   `packages`. Installed outside `~/pi-coms` because that directory is
+   replaced whole on every convergence. Only `server.bundle.mjs` is used;
+   context-mode's own Pi extension is NOT loaded on spokes (it bootstraps
+   from `before_agent_start`, which Pi never emits for the
+   `pi.sendMessage()` turns a spoke lives on).
+6. Install `herdr.service`, `pi-agent.service`, `pi-monitor.service`. The
    monitor is deliberately independent of the agent: a wedged agent never
    stops detection.
+
+On every relaunch the launcher (not the bootstrap, because only the launcher
+sources `~/.coms-env.local`) writes `~/.pi/agent/mcp.json` with one
+`keep-alive` entry for the ctx server (`directTools`, `toolPrefix: none`, so
+the names stay `ctx_*`), or removes the file when `CTX_MODE_ENABLED` is off.
+Pi core has no MCP support; the adapter connects at session start, before the
+first turn, which is why the first inbound message already sees the tools.
 
 Re-run the whole bootstrap idempotently on a live host via SSM:
 
@@ -185,6 +203,21 @@ merged to `main` and published before a boot or re-run picks them up.
    provisioned by the bootstrap.
 5. **Name collisions produce `name2`.** In directory-auth mode names are
    bound to principals and squatting is rejected instead.
+6. **A project `.pi/` dir in the bundle takes the whole fleet down.** Pi
+   stops at "Trust project folder?" in the herdr pane, never registers, the
+   launcher's 60 s registration poll fails and systemd relaunches it about
+   every 2 min (`RestartSec=60`)
+   (SIO-1733, all six prd spokes on 2026-09-12). `.gitattributes` keeps it
+   out; verify with the `git archive ... | grep '^\.pi'` check above before
+   publishing anything that adds files under `packages/pi-coms`.
+7. **Bootstrap-gated settings land at the NEXT convergence.**
+   `pi-coms-update` exits early when the S3 `version` equals the local
+   `.bundle-version`, so a change to `~/.coms-env.local` (for example
+   `CTX_MODE_ENABLED=false`) does nothing until the next bundle, or until you
+   re-run `bash /var/lib/cloud/instance/user-data.txt` on the host.
+8. **`systemctl restart pi-agent` does not relaunch Pi.** The registry guard
+   keeps the herdr agent; `touch /home/piagent/.pi-agent-reload` first (the
+   sentinel `pi-coms-update` writes), then restart.
 
 ## Verifying a deployment
 
@@ -195,6 +228,12 @@ The hub is private; verification runs over SSM.
 aws ssm send-command --instance-ids <id> --profile <profile> --region eu-central-1 \
   --document-name AWS-RunShellScript \
   --parameters 'commands=["cat /home/piagent/pi-coms/.bundle-version && systemctl is-active pi-agent pi-monitor herdr"]'
+
+# Per host: ctx_* path (SIO-1734) -- mcp.json present, the ctx server a child of Pi,
+# and no context-mode extension in Pi's argv (base64 a script for anything longer)
+grep -c '"ctx"' /home/piagent/.pi/agent/mcp.json
+P=$(pgrep -u piagent -f pi-coding-agent/dist/cli.js | head -1); pgrep -P "$P" -f context-mode/server.bundle.mjs
+tr '\0' ' ' < /proc/$P/cmdline | grep -c adapters/pi/extension.js   # expect 0
 
 # Monitor registered with its cadences (first log line)
 journalctl -u pi-monitor -n 40   # via an SSM shell on the host
