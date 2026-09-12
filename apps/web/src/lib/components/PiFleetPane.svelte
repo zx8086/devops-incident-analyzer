@@ -171,11 +171,23 @@ function onKeydown(event: KeyboardEvent) {
        next spoke meant scrolling back to the top. Two regions now: the picker is
        pinned (capped so it can never crowd out the replies, and scrolling
        internally when the fleet is large), the replies take the rest.
-       SIO-1712: the cap is 35%, not 40% -- the ops inbox card used to be nested
-       HERE, so a whole daily digest rendered through a letterbox while the
-       replies region sat empty below it. The card moved to the scroll region
-       below; what is left here is rows, which need less. -->
-  <div class="shrink-0 max-h-[35%] overflow-y-auto border-b border-gray-200">
+       SIO-1712: the ops inbox card used to be nested HERE, so a whole daily
+       digest rendered through a letterbox while the replies region sat empty
+       below it. The card moved to the scroll region below; what is left here is
+       rows, which need less.
+       SIO-1715: the cap is a REM, not a percentage. A percentage splits a short
+       pane badly -- this pane is viewport-bound (see +page.svelte) minus the
+       page chrome, and that chrome is
+       tallest exactly when this pane is usable (SIO-1704 means an AWS estate is
+       always selected, so its selector row is always rendered). Measured with
+       six spokes: at a 560px pane the 35% cap took 195px against the digest's
+       163px, so the target picker outweighed the report being read. A fixed
+       11rem gives the digest more room at EVERY height (182px at 560px, 502px
+       at 880px against 399px before) and every extra pixel of viewport now goes
+       to the digest instead of growing a list that does not need it.
+       11rem shows three rows plus a clipped fourth: the slice is the scroll
+       affordance, so a longer fleet reads as "more below" rather than ending. -->
+  <div class="shrink-0 max-h-[11rem] overflow-y-auto border-b border-gray-200">
     <section class="px-4 pt-2 pb-3">
       {#if pane.hubs.length === 0}
         <p class="text-xs text-gray-500">No spokes are registered on any configured hub.</p>
