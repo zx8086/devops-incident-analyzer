@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import type { FleetAws } from "../scripts/fleet/aws.ts";
-import { missingOnHub } from "../scripts/fleet/hub.ts";
+import { missingOnHub, personaAtLeast } from "../scripts/fleet/hub.ts";
 import { parseManifest } from "../scripts/fleet/manifest.ts";
 import { formatPreflight, preflight, preflightPassed } from "../scripts/fleet/preflight.ts";
 import { rolloutCommands } from "../scripts/fleet/rollout.ts";
@@ -236,19 +236,49 @@ describe("hub expectations and rollout commands", () => {
 		status,
 	});
 
-	test("missingOnHub wants agent and monitor online and the persona in the purpose", () => {
+	test("missingOnHub wants agent and monitor online and the persona at or above the pin", () => {
 		const agents = [
 			card("eu-oit-dev", "online", "Read-only agent persona=pi-fleet-v0.1.0"),
 			card("monitor-eu-oit-dev", "online"),
 		];
 		expect(missingOnHub(agents, "eu-oit-dev", { persona: "0.1.0" })).toEqual([]);
+		// Genuinely too old: the pin is a floor the spoke sits below.
 		expect(missingOnHub(agents, "eu-oit-dev", { persona: "0.2.0" })).toEqual([
-			"eu-oit-dev purpose lacks persona=pi-fleet-v0.2.0 (Read-only agent persona=pi-fleet-v0.1.0)",
+			"eu-oit-dev persona is below pi-fleet-v0.2.0 (Read-only agent persona=pi-fleet-v0.1.0)",
 		]);
 		expect(missingOnHub([card("eu-oit-dev", "stale")], "eu-oit-dev", {})).toEqual([
 			"eu-oit-dev is stale",
 			"monitor-eu-oit-dev not registered",
 		]);
+	});
+
+	// The live failure: prd spokes ran v0.2.0 against a v0.1.0 floor and the
+	// rollout waited out its whole deadline on a healthy fleet.
+	test("a persona ABOVE the pinned floor satisfies the rollout", () => {
+		const agents = [
+			card("eu-oit-prd", "online", "Read-only AWS devops agent for account 762715229080 persona=pi-fleet-v0.2.0"),
+			card("monitor-eu-oit-prd", "online"),
+		];
+		expect(missingOnHub(agents, "eu-oit-prd", { persona: "0.1.0" })).toEqual([]);
+	});
+
+	test("personaAtLeast compares semver, not substrings", () => {
+		const at = (v: string) => `agent persona=pi-fleet-v${v}`;
+		expect(personaAtLeast(at("0.2.0"), "0.1.0")).toBe(true);
+		expect(personaAtLeast(at("0.1.0"), "0.1.0")).toBe(true);
+		expect(personaAtLeast(at("0.1.0"), "0.2.0")).toBe(false);
+		// Numeric, not lexicographic: "10" > "9" only when compared as numbers.
+		expect(personaAtLeast(at("0.10.0"), "0.9.0")).toBe(true);
+		expect(personaAtLeast(at("1.0.0"), "0.99.99")).toBe(true);
+		expect(personaAtLeast(at("0.1.10"), "0.1.9")).toBe(true);
+	});
+
+	// Unreadable input must never be read as satisfied -- a rollout would
+	// otherwise declare success for a spoke whose persona it cannot see.
+	test("personaAtLeast fails closed on a missing or malformed version", () => {
+		expect(personaAtLeast("agent with no persona marker", "0.1.0")).toBe(false);
+		expect(personaAtLeast("agent persona=pi-fleet-vnot.a.version", "0.1.0")).toBe(false);
+		expect(personaAtLeast("agent persona=pi-fleet-v0.2.0", "garbage")).toBe(false);
 	});
 
 	test("a normal rollout uses pi-coms-update (it writes the reload sentinel); a token change re-runs the bootstrap with the sentinel touched", () => {
