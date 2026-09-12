@@ -152,6 +152,69 @@ describe("listFleetAgents", () => {
 		]);
 	});
 
+	// SIO-1701: a down SSM tunnel surfaced as a bare "fetch failed" -- the
+	// browser's own TypeError text, naming neither the hub nor the cause. These
+	// hubs sit behind a localhost port a tunnel forwards, so that is the fix to
+	// name, following the SIO-1661 precedent of adding the command that helps.
+	test("explains an unreachable localhost hub as a down tunnel, with the command", async () => {
+		const fetchImpl: FetchLike = async () => {
+			// How undici surfaces a refused connection: bare message, real reason in `cause`.
+			const err = new Error("fetch failed");
+			(err as Error & { cause?: unknown }).cause = new Error("connect ECONNREFUSED 127.0.0.1:8788");
+			throw err;
+		};
+		// The shared `env` fixture points at http://prd.hub.test; a tunnelled hub is
+		// a localhost port, which is what production uses and what the advice keys on.
+		const tunnelledEnv: NodeJS.ProcessEnv = {
+			PI_COMS_HUBS: JSON.stringify({
+				"eu-shared-services-prd": {
+					serverUrl: "http://127.0.0.1:8788",
+					authToken: "t",
+					environment: "prd",
+					estates: ["eu-oit-prd"],
+				},
+			}),
+		};
+		const out = await listFleetAgents({ env: tunnelledEnv, fetchImpl });
+		const hub = out.hubs.find((h) => h.hubKey === "eu-shared-services-prd");
+		expect(hub?.error).toContain("cannot reach hub");
+		expect(hub?.error).toContain("eu-shared-services-prd");
+		expect(hub?.error).toContain("ECONNREFUSED");
+		expect(hub?.error).toContain("just hub-tunnel eu-shared-services-prd");
+		// The bare browser text must not be what the operator reads.
+		expect(hub?.error).not.toBe("fetch failed");
+	});
+
+	test("does not advise a tunnel for a hub reached over a remote URL", async () => {
+		// The advice would be wrong: nothing is tunnelled to a remote host.
+		const remoteEnv: NodeJS.ProcessEnv = {
+			PI_COMS_HUBS: JSON.stringify({
+				"remote-prd": {
+					serverUrl: "https://hub.example.internal",
+					authToken: "t",
+					environment: "prd",
+					estates: ["eu-oit-prd"],
+				},
+			}),
+		};
+		const fetchImpl: FetchLike = async () => {
+			throw new Error("fetch failed");
+		};
+		const out = await listFleetAgents({ env: remoteEnv, fetchImpl });
+		expect(out.hubs[0]?.error).toContain("cannot reach hub");
+		expect(out.hubs[0]?.error).toContain("hub.example.internal");
+		expect(out.hubs[0]?.error).not.toContain("hub-tunnel");
+	});
+
+	test("leaves a real hub error untouched", async () => {
+		// A 500 from the hub is not a reachability problem; SIO-1661 already
+		// frames those, and re-framing here would bury the upstream status.
+		const { fetchImpl } = hubFake(() => ({ status: 500, body: { error: "boom" } }));
+		const out = await listFleetAgents({ env, fetchImpl });
+		expect(out.hubs[0]?.error).toContain("500");
+		expect(out.hubs[0]?.error).not.toContain("hub-tunnel");
+	});
+
 	// SIO-1696: the pane is production incident triage. A dev hub is never listed
 	// and is never even contacted -- but resolvePaneConfig still carries it, so
 	// the send and mailbox paths (and the hub CLI) still reach dev spokes.

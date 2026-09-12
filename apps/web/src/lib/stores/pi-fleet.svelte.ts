@@ -39,6 +39,17 @@ async function readJson(res: Response): Promise<unknown> {
 	return body;
 }
 
+// SIO-1701: when the request never leaves the browser, fetch rejects with a bare
+// "fetch failed" (or "Load failed" in Safari) -- no status, no URL, nothing
+// naming which call broke. The banner then read as an unattributed error. A
+// server-side failure already arrives explained (readJson lifts the route's
+// `error` body, SIO-1661), so only the transport case needs framing here.
+function describeLoadFailure(error: unknown, what: string): string {
+	const message = error instanceof Error ? error.message : String(error);
+	const transport = error instanceof TypeError || message === "fetch failed" || message === "Load failed";
+	return transport ? `could not reach the app server to ${what} (${message})` : message;
+}
+
 function createPiFleetStore() {
 	let fleet = $state<PiFleetState>(initialPiFleetState());
 	let open = $state(false);
@@ -52,7 +63,7 @@ function createPiFleetStore() {
 			if (!parsed.success) throw new Error("unexpected /api/pi/agents response shape");
 			fleet = applyAgents(fleet, parsed.data);
 		} catch (error) {
-			fleet = applyLoadError(fleet, error instanceof Error ? error.message : String(error));
+			fleet = applyLoadError(fleet, describeLoadFailure(error, "list the fleet spokes"));
 		}
 	}
 
@@ -112,7 +123,7 @@ function createPiFleetStore() {
 			if (!parsed.success) throw new Error("unexpected /api/pi/mailbox response shape");
 			fleet = applyMailbox(fleet, parsed.data);
 		} catch (error) {
-			fleet = applyLoadError(fleet, error instanceof Error ? error.message : String(error));
+			fleet = applyLoadError(fleet, describeLoadFailure(error, `read the ${hubKey} inbox`));
 		} finally {
 			mailboxBusy = null;
 		}
