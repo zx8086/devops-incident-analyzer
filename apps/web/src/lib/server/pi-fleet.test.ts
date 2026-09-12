@@ -5,6 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import { type FetchLike, PiComsHttpError } from "@devops-agent/agent";
 import {
+	anchorOnDigest,
 	awaitFleetMessage,
 	listFleetAgents,
 	PiFleetRequestError,
@@ -441,6 +442,8 @@ describe("readFleetMailbox", () => {
 			hubKey: "eu-shared-services-prd",
 			environment: "prd",
 			name: "ops-prd",
+			missingDigest: [],
+			windowTruncated: false,
 			messages: [
 				{
 					msgId: "01H",
@@ -461,5 +464,77 @@ describe("readFleetMailbox", () => {
 		const { calls, fetchImpl } = hubFake(() => ({ body: { ok: true, name: "eu-oit-dev", messages: [] } }));
 		await readFleetMailbox({ hubKey: "eu-shared-services-dev", name: "eu-oit-dev", limit: 5 }, { env, fetchImpl });
 		expect(calls[0]?.path).toBe("/v1/mailbox?project=default&name=eu-oit-dev&limit=5");
+	});
+});
+
+// SIO-1705: the ops inbox shows, per estate, that estate's newest daily digest
+// and everything after it. Per-estate rather than one fleet-wide cutoff: the six
+// monitors write their digests seconds apart, so a shared cutoff would drop the
+// earlier accounts' digests from view.
+describe("anchorOnDigest", () => {
+	const row = (senderName: string, prompt: string) => ({ senderName, prompt });
+	// Hub order is oldest-first.
+	const DIGEST_A = row("monitor-eu-oit-prd", "[info] aws-762715229080 daily digest (since ...)");
+	const DIGEST_B = row("monitor-eu-mendix-platform-prd", "[warn] aws-654654584630 daily digest DEGRADED");
+
+	test("returns each estate's newest digest and everything after it", () => {
+		const messages = [
+			row("monitor-eu-oit-prd", "[warn] yesterday, before the digest"),
+			DIGEST_A,
+			row("monitor-eu-oit-prd", "[warn] after the digest"),
+			row("monitor-eu-oit-prd", "[critical] also after"),
+		];
+		const { messages: out, missingDigest } = anchorOnDigest(messages, ["eu-oit-prd"]);
+		expect(out.map((m) => m.prompt)).toEqual([DIGEST_A.prompt, "[warn] after the digest", "[critical] also after"]);
+		expect(missingDigest).toEqual([]);
+	});
+
+	test("anchors per estate, so an earlier estate keeps its own digest", () => {
+		// The fleet-wide alternative would cut at DIGEST_B and lose DIGEST_A entirely.
+		const messages = [DIGEST_A, row("monitor-eu-oit-prd", "oit follow-up"), DIGEST_B];
+		const { messages: out } = anchorOnDigest(messages, ["eu-oit-prd", "eu-mendix-platform-prd"]);
+		expect(out).toContain(DIGEST_A);
+		expect(out).toContain(DIGEST_B);
+		expect(out.map((m) => m.prompt)).toContain("oit follow-up");
+	});
+
+	test("uses the NEWEST digest when a window spans two days", () => {
+		const older = row("monitor-eu-oit-prd", "[info] aws-762715229080 daily digest (since day1)");
+		const newer = row("monitor-eu-oit-prd", "[info] aws-762715229080 daily digest (since day2)");
+		const { messages: out } = anchorOnDigest(
+			[older, row("monitor-eu-oit-prd", "mid-day-1"), newer, row("monitor-eu-oit-prd", "mid-day-2")],
+			["eu-oit-prd"],
+		);
+		expect(out.map((m) => m.prompt)).toEqual([newer.prompt, "mid-day-2"]);
+	});
+
+	test("drops estates outside the scope", () => {
+		const { messages: out } = anchorOnDigest([DIGEST_A, DIGEST_B], ["eu-oit-prd"]);
+		expect(out).toEqual([DIGEST_A]);
+	});
+
+	// A monitor that missed its digest must not make its estate look empty: the
+	// findings are live, and hiding them behind a missing anchor is the worse error.
+	test("keeps every row for an estate with no digest, and names it", () => {
+		const messages = [row("monitor-eu-oit-prd", "[critical] alarm, no digest today"), DIGEST_B];
+		const { messages: out, missingDigest } = anchorOnDigest(messages, ["eu-oit-prd", "eu-mendix-platform-prd"]);
+		expect(out.map((m) => m.prompt)).toContain("[critical] alarm, no digest today");
+		expect(missingDigest).toEqual(["eu-oit-prd"]);
+	});
+
+	// SIO-1704's rule survives: a sender with no estate has no digest to anchor on.
+	test("keeps a sender that is not estate-shaped", () => {
+		const note = row("simon", "handover note");
+		const { messages: out, missingDigest } = anchorOnDigest([note, DIGEST_A], ["eu-oit-prd"]);
+		expect(out).toContain(note);
+		expect(missingDigest).toEqual([]);
+	});
+
+	// SIO-1704: no estate selected means no account is in scope. An empty scope
+	// must not fall back to "everything" -- that is the inversion SIO-1704 fixed.
+	test("an empty scope returns no estate rows, but keeps non-estate senders", () => {
+		const note = row("simon", "handover note");
+		const { messages: out } = anchorOnDigest([note, DIGEST_A, DIGEST_B], []);
+		expect(out).toEqual([note]);
 	});
 });

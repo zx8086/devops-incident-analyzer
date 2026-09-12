@@ -26,7 +26,8 @@ type IconName =
 	| "fit-view"
 	| "expand"
 	| "collapse"
-	| "graph";
+	| "graph"
+	| "pi";
 
 let { name, class: className = "" }: { name: IconName; class?: string } = $props();
 </script>
@@ -41,7 +42,21 @@ let { name, class: className = "" }: { name: IconName; class?: string } = $props
   stroke-linejoin="round"
   aria-hidden="true"
 >
-  {#if name === "bot"}
+  <!-- SIO-1706: the Pi Coding Agent mark, taken verbatim from pi.dev's own
+       favicon.svg (two paths on an 800 grid, scaled by 24/800). Unlike every
+       other icon here it is FILLED, not stroked, so it sets fill/stroke itself
+       rather than inheriting the root's stroke defaults. The brand's dark
+       rounded-square backdrop is deliberately dropped: currentColor lets the
+       glyph sit on the navy header like the rest of the set. -->
+  {#if name === "pi"}
+    <path
+      fill="currentColor"
+      stroke="none"
+      fill-rule="evenodd"
+      d="M4.96 4.96H15.52V12H12V15.52H8.48V19.04H4.96ZM8.48 8.48V12H12V8.48Z"
+    />
+    <path fill="currentColor" stroke="none" d="M15.52 12H19.04V19.04H15.52Z" />
+  {:else if name === "bot"}
     <rect x="3" y="11" width="18" height="10" rx="2" />
     <circle cx="12" cy="5" r="2" />
     <path d="M12 7v4" />

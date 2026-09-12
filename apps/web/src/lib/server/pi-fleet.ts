@@ -7,6 +7,7 @@
 import {
 	type FetchLike,
 	isPiComsConfigured,
+	MONITOR_NAME_PREFIX,
 	PI_COMS_AWAIT_SLICE_MS,
 	PiComsClient,
 	PiComsHttpError,
@@ -40,6 +41,62 @@ const DEFAULT_AWAIT_MS = PI_COMS_AWAIT_SLICE_MS;
 const MAX_AWAIT_MS = 60_000;
 const DEFAULT_TOTAL_BUDGET_MS = 300_000;
 const MAILBOX_DEFAULT_LIMIT = 20;
+// SIO-1705: the anchor lookup must reach back to the last 00:00 digest burst, so
+// it reads a wider window than it returns. A fixed row count is the wrong shape
+// for the answer (one estate had 47 rows in a 100-row window but only 3 since its
+// digest) -- it is only the search space, and a shortfall is reported, never hidden.
+const MAILBOX_ANCHOR_WINDOW = 200;
+// Both digest headers built in scripts/monitor/report.ts carry this literal:
+// "[warn] aws-<id> daily digest ..." and "[info] aws-<id> daily digest (since ...)".
+const DIGEST_MARKER = "daily digest";
+
+function estateOfSender(senderName: string): string | null {
+	return senderName.startsWith(MONITOR_NAME_PREFIX) ? senderName.slice(MONITOR_NAME_PREFIX.length) : null;
+}
+
+export type AnchoredMailbox<T> = { messages: T[]; missingDigest: string[] };
+
+// SIO-1705: per estate, return its newest daily digest and everything after it.
+// Per-estate rather than one fleet-wide cutoff: the digest is that account's
+// report of record, and the digests are written seconds apart, so a shared cutoff
+// would drop the earlier accounts' digests from view.
+//
+// An estate with no digest in the window keeps ALL its rows and is named in
+// `missingDigest`. Showing nothing would hide live findings behind a missing
+// anchor, and showing them silently would misreport the range as complete.
+// A sender that is not estate-shaped (a spoke replying, an operator note) has no
+// digest to anchor on and is kept unfiltered -- same rule as SIO-1704.
+export function anchorOnDigest<T extends { senderName: string; prompt: string }>(
+	messages: T[],
+	estates: string[],
+): AnchoredMailbox<T> {
+	// SIO-1704 rule, kept here: an empty scope means NO account is in scope, so no
+	// estate's reports are returned. (The pane never reaches this -- it hides the
+	// hub block entirely when nothing is selected -- but the endpoint must not
+	// contradict the selector's meaning for any other caller.)
+	const inScope = new Set(estates);
+	const byEstate = new Map<string, T[]>();
+	const kept: T[] = [];
+	for (const m of messages) {
+		const estate = estateOfSender(m.senderName);
+		if (estate === null) {
+			kept.push(m);
+			continue;
+		}
+		if (!inScope.has(estate)) continue;
+		const bucket = byEstate.get(estate);
+		if (bucket) bucket.push(m);
+		else byEstate.set(estate, [m]);
+	}
+	const missingDigest: string[] = [];
+	for (const [estate, rows] of byEstate) {
+		// Hub order is oldest-first, so the LAST match is the newest digest.
+		const anchor = rows.findLastIndex((m) => m.prompt.includes(DIGEST_MARKER));
+		if (anchor === -1) missingDigest.push(estate);
+		kept.push(...(anchor === -1 ? rows : rows.slice(anchor)));
+	}
+	return { messages: kept, missingDigest: missingDigest.sort() };
+}
 
 // SIO-1666: keyed by HUB, not environment -- two hubs sharing an environment need
 // two different pane tokens, and one env key could only hold one.
@@ -339,21 +396,50 @@ export async function awaitFleetMessage(
 }
 
 export async function readFleetMailbox(
-	input: { hubKey: string; name?: string; limit?: number },
+	input: { hubKey: string; name?: string; limit?: number; estates?: string[] },
 	deps: PiFleetDeps = {},
 ): Promise<PiFleetMailboxResponse> {
 	const pane = requirePane(deps);
 	const paneHub = requireHub(pane, input.hubKey);
 	const name = input.name ?? paneHub.hub.fallbackTarget;
-	const messages = await clientFor(paneHub, pane, deps).mailbox(name, { limit: input.limit ?? MAILBOX_DEFAULT_LIMIT });
+	// SIO-1705: the estate scope decides WHICH rows to fetch, so it has to be
+	// applied here and not in the component. Filtering after a fixed cap let the
+	// hub choose 20 rows without knowing the scope, so another account's traffic
+	// could push an estate's digest out of the window and the pane would report
+	// "no reports" for an estate that had them.
+	const anchored = input.estates !== undefined;
+	const requested = input.limit ?? (anchored ? MAILBOX_ANCHOR_WINDOW : MAILBOX_DEFAULT_LIMIT);
+	const fetched = await clientFor(paneHub, pane, deps).mailbox(name, { limit: requested });
+	const { messages, missingDigest } = anchored
+		? anchorOnDigest(
+				fetched.map((m) => ({ ...m, senderName: m.sender_name, prompt: m.prompt })),
+				input.estates ?? [],
+			)
+		: { messages: fetched.map((m) => ({ ...m, senderName: m.sender_name, prompt: m.prompt })), missingDigest: [] };
+	// A full window means the oldest row may not be the true start: the digest for
+	// some estate could sit further back than we looked. Report it rather than
+	// present a truncated range as complete.
+	const windowTruncated = anchored && fetched.length >= requested;
 	// SIO-1660: count only. Mailbox entries carry monitor-authored prompts and
 	// spoke replies, which must never reach the log.
 	// awaitFleetMessage needs nothing here: pi.hub.await.done already reports it.
-	log.info({ hubKey: paneHub.hubKey, name, messages: messages.length }, "pi.fleet.mailbox.read");
+	log.info(
+		{
+			hubKey: paneHub.hubKey,
+			name,
+			fetched: fetched.length,
+			messages: messages.length,
+			missingDigest,
+			windowTruncated,
+		},
+		"pi.fleet.mailbox.read",
+	);
 	return {
 		hubKey: paneHub.hubKey,
 		environment: paneHub.environment,
 		name,
+		missingDigest,
+		windowTruncated,
 		messages: messages.map((m) => ({
 			msgId: m.msg_id,
 			senderName: m.sender_name,

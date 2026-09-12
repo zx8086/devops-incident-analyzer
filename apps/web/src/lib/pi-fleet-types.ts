@@ -86,6 +86,12 @@ export const PiFleetMailboxResponseSchema = z.object({
 	hubKey: z.string().min(1),
 	environment: PiFleetEnvironmentSchema,
 	name: z.string(),
+	// SIO-1705: estates whose daily digest was not inside the fetched window, so
+	// their rows start mid-range. Named so the pane can say the range is partial
+	// instead of presenting it as a complete since-digest view.
+	missingDigest: z.array(z.string()),
+	// The hub returned a full window, so an older digest may exist beyond it.
+	windowTruncated: z.boolean(),
 	messages: z.array(PiFleetInboxMessageSchema),
 });
 export type PiFleetMailboxResponse = z.infer<typeof PiFleetMailboxResponseSchema>;

@@ -115,10 +115,13 @@ function createPiFleetStore() {
 		}
 	}
 
-	async function loadMailbox(hubKey: string) {
+	async function loadMailbox(hubKey: string, estates: string[]) {
 		mailboxBusy = hubKey;
 		try {
-			const body = await readJson(await fetch(`/api/pi/mailbox?hubKey=${encodeURIComponent(hubKey)}`));
+			// SIO-1705: the scope travels with the request so the hub-side read is anchored
+			// per estate; filtering client-side after a cap dropped rows that were never fetched.
+			const scope = estates.length > 0 ? `&estates=${encodeURIComponent(estates.join(","))}` : "&estates=";
+			const body = await readJson(await fetch(`/api/pi/mailbox?hubKey=${encodeURIComponent(hubKey)}${scope}`));
 			const parsed = PiFleetMailboxResponseSchema.safeParse(body);
 			if (!parsed.success) throw new Error("unexpected /api/pi/mailbox response shape");
 			fleet = applyMailbox(fleet, parsed.data);

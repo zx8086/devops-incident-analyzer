@@ -15,7 +15,6 @@ let {
 	onRefresh,
 	onSelect,
 	onLoadMailbox,
-	onAskAll,
 	scopeEstates = [],
 }: {
 	pane: PiFleetState;
@@ -25,12 +24,7 @@ let {
 	onSend: (prompt: string) => void;
 	onRefresh: () => void;
 	onSelect: (selection: PiFleetSelection | null) => void;
-	onLoadMailbox: (hubKey: string) => void;
-	// SIO-1662: switch to the fleet-console AGENT. Distinct from onSend, which
-	// addresses ONE spoke and renders its raw reply here: the console asks several
-	// spokes and synthesizes one attributed answer in the chat. Optional, so the
-	// pane still renders where the console is not available (no hub, flag off).
-	onAskAll?: () => void;
+	onLoadMailbox: (hubKey: string, estates: string[]) => void;
 	// SIO-1703: the AWS estates the operator selected for this investigation. A
 	// spoke is named for the estate it serves, so this scopes the list to the
 	// accounts under investigation. Empty means no scoping (nothing selected, or
@@ -59,22 +53,13 @@ const hiddenByScope = $derived(totalSpokes - scoped.reduce((n, hub) => n + hub.p
 // a prompt to choose an estate, the second means the choice matched no spoke.
 const noEstateSelected = $derived(scopeEstates.length === 0);
 
-// SIO-1704: the ops inbox carries one report per estate, sent by `monitor-<estate>`
-// (MONITOR_NAME_PREFIX, SIO-1665). Scoping the spokes without scoping the inbox
-// left the operator reading findings for accounts they had excluded. A sender that
-// is not estate-shaped -- a spoke replying, an operator -- has no estate to match
-// and is kept: an estate filter must not silently drop what it cannot classify.
-function estateOfSender(senderName: string): string | null {
-	return senderName.startsWith("monitor-") ? senderName.slice("monitor-".length) : null;
-}
+// SIO-1705: the inbox scope moved to the server (readFleetMailbox), which needs it
+// to choose WHICH rows to fetch. The SIO-1704 client-side filter is gone with it --
+// hiding rows after the hub had already capped the window was the bug.
 // How many spokes the hub really has, so an emptied list is not reported as an
 // unregistered fleet.
 function scopedOut(hubKey: string): number {
 	return pane.hubs.find((h) => h.hubKey === hubKey)?.peers.length ?? 0;
-}
-function inScope(senderName: string): boolean {
-	const estate = estateOfSender(senderName);
-	return estate === null || scopeEstates.includes(estate);
 }
 // Reachability follows what is SHOWN: a console that cannot address any spoke in
 // scope is no more useful than one with no spokes at all.
@@ -137,31 +122,12 @@ function onKeydown(event: KeyboardEvent) {
     <div>
       <h2 class="text-sm font-semibold text-tommy-navy">Fleet spokes</h2>
       <p class="text-xs text-gray-500">Live pi agents on the pi-coms hubs. Replies are shown as data.</p>
-      <!-- SIO-1662: the fleet console lives here rather than as a second header
-           icon. Below the description because it LEAVES this pane: it switches
-           agent, where one question reaches several spokes and comes back as one
-           attributed answer, instead of the raw single-spoke reply shown here.
-           SIO-1702: the label names that destination and the hint says the question
-           is asked in the chat, not in this pane's box -- an arrow alone read as
-           "this enables the input below", which it never did. -->
-      {#if onAskAll}
-        <button
-          type="button"
-          onclick={onAskAll}
-          class="mt-2 inline-flex items-center gap-1 rounded-lg border border-tommy-accent-blue px-2.5 py-1 text-xs font-medium text-tommy-accent-blue transition-colors hover:bg-tommy-accent-blue hover:text-white disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-tommy-accent-blue"
-          disabled={busy || !canAskAll}
-          title={canAskAll ? undefined : "No spoke is reachable on any hub"}
-        >
-          Open the fleet console &rarr;
-        </button>
-        <p class="mt-1 text-xs text-gray-400">
-          {#if canAskAll}
-            Switches agent: ask one question in the chat and every spoke answers.
-          {:else}
-            Unavailable while no spoke is reachable.
-          {/if}
-        </p>
-      {/if}
+      <!-- SIO-1706: no "open the fleet console" button. The header pi icon toggles
+           THIS pane and the box below addresses the spokes -- this pane is the
+           console, so a button offering to open one advertised a door that does
+           not exist. SIO-1702 made that label more explicit instead of asking
+           whether the destination was real. The pi-fleet-console AGENT is still
+           reachable from the header agent control, where switching agents lives. -->
     </div>
     <button
       type="button"
@@ -211,7 +177,7 @@ function onKeydown(event: KeyboardEvent) {
             <span class="text-xs font-medium text-tommy-navy truncate">{hub.hubKey}</span>
             <button
               type="button"
-              onclick={() => onLoadMailbox(hub.hubKey)}
+              onclick={() => onLoadMailbox(hub.hubKey, scopeEstates)}
               disabled={mailboxBusy === hub.hubKey}
               class="ml-auto shrink-0 rounded-lg border border-gray-300 px-2 py-0.5 text-xs font-medium text-tommy-accent-blue transition-colors hover:border-tommy-accent-blue hover:bg-tommy-accent-blue hover:text-white disabled:opacity-50 disabled:hover:border-gray-300 disabled:hover:bg-transparent disabled:hover:text-tommy-accent-blue"
             >
@@ -252,15 +218,26 @@ function onKeydown(event: KeyboardEvent) {
             {@const mailbox = pane.mailboxes[hub.hubKey]}
             <div class="mt-2 rounded-lg border border-gray-200 bg-white p-2">
               <p class="text-xs font-medium text-tommy-navy mb-1">Inbox {mailbox?.name}</p>
+              <!-- SIO-1705: the server now returns exactly the anchored range (each
+                   estate's newest daily digest onward), so there is no client-side
+                   filter here. The SIO-1704 filter hid rows AFTER a fixed cap had
+                   already decided which rows were fetched, which is the bug. -->
               {#if !mailbox || mailbox.messages.length === 0}
-                <p class="text-xs text-gray-400">Empty.</p>
+                <p class="text-xs text-gray-400">No reports from the selected estates.</p>
               {:else}
-                {@const visible = mailbox.messages.filter((m) => inScope(m.senderName))}
-                {#if visible.length === 0}
-                  <p class="text-xs text-gray-400">No reports from the selected estates.</p>
+                {#if mailbox.missingDigest.length > 0}
+                  <p class="text-xs text-amber-700 mb-1">
+                    No daily digest found for {mailbox.missingDigest.join(", ")} &mdash; showing all
+                    messages held for {mailbox.missingDigest.length === 1 ? "it" : "them"}.
+                  </p>
+                {/if}
+                {#if mailbox.windowTruncated}
+                  <p class="text-xs text-amber-700 mb-1">
+                    The hub returned a full window, so an older digest may sit beyond it.
+                  </p>
                 {/if}
                 <ul class="space-y-1">
-                  {#each visible as message (message.msgId)}
+                  {#each mailbox.messages as message (message.msgId)}
                     <!-- The monitor's report IS the content here, not a preview of
                          something openable: there is no detail view to click into, so a
                          140-char slice just lost the findings. Wrapped in full, and
@@ -327,9 +304,9 @@ function onKeydown(event: KeyboardEvent) {
       {#if pane.selected}
         To <span class="font-medium text-tommy-navy">{pane.selected.name}</span> ({pane.selected.hubKey})
       {:else if canAskAll}
-        <!-- SIO-1702: the box was disabled with no reason given, directly under a
-             button that does not feed it. Name both paths so neither is a guess. -->
-        Select a spoke above &mdash; or open the fleet console to ask them all at once.
+        <!-- SIO-1706: named the removed console button. The box itself is the only
+             path now, so say what it needs: a spoke. -->
+        Select a spoke above to send it a prompt.
       {:else}
         No spoke is reachable. Fix the hub above, then select a spoke.
       {/if}

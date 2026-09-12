@@ -10,7 +10,12 @@ const MailboxQuerySchema = z.object({
 	// SIO-1666: addressed by hub key, not environment.
 	hubKey: z.string().min(1),
 	name: z.string().min(1).optional(),
-	limit: z.coerce.number().int().positive().max(100).optional(),
+	limit: z.coerce.number().int().positive().max(500).optional(),
+	// SIO-1705: the selected AWS estates. Present (even empty) switches the read
+	// to digest-anchored: each estate returns its newest daily digest and every
+	// message after it. Absent keeps the old newest-N behaviour for callers that
+	// have no estate scope.
+	estates: z.array(z.string().min(1)).optional(),
 });
 
 export const GET: RequestHandler = async ({ url }) => {
@@ -19,6 +24,9 @@ export const GET: RequestHandler = async ({ url }) => {
 			hubKey: url.searchParams.get("hubKey") ?? undefined,
 			name: url.searchParams.get("name") ?? undefined,
 			limit: url.searchParams.get("limit") ?? undefined,
+			estates: url.searchParams.has("estates")
+				? (url.searchParams.get("estates") ?? "").split(",").filter(Boolean)
+				: undefined,
 		});
 		return json(await readFleetMailbox(query));
 	} catch (err) {
