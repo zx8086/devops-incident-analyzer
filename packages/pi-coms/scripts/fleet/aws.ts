@@ -47,6 +47,10 @@ export type TrustSummary = {
 export interface FleetAws {
 	callerIdentity(profile: string, region: string): Promise<Identity>;
 	parameterExists(profile: string, region: string, name: string): Promise<boolean>;
+	// SIO-1716: decrypted read for the operator token the rollout presents to a
+	// hub. Returns undefined for a missing parameter so a caller can fall through
+	// to its own error; every other failure (AccessDenied, KMS) still throws.
+	secureParameter(profile: string, region: string, name: string): Promise<string | undefined>;
 	listParameterNames(profile: string, region: string, path: string): Promise<string[]>;
 	putSecureParameter(profile: string, region: string, name: string, value: string): Promise<void>;
 	subnetRoutes(profile: string, region: string, subnetId: string): Promise<RouteSummary>;
@@ -81,6 +85,17 @@ export const realFleetAws: FleetAws = {
 			return true;
 		} catch (error) {
 			if (error instanceof Error && error.name === "ParameterNotFound") return false;
+			throw error;
+		}
+	},
+	async secureParameter(profile, region, name) {
+		try {
+			const out = await new SSMClient({ region, credentials: creds(profile) }).send(
+				new GetParameterCommand({ Name: name, WithDecryption: true }),
+			);
+			return out.Parameter?.Value;
+		} catch (error) {
+			if (error instanceof Error && error.name === "ParameterNotFound") return undefined;
 			throw error;
 		}
 	},

@@ -17,6 +17,7 @@ function fake(state: { onHub: Set<string>; puts: Array<{ profile: string; name: 
 	return {
 		callerIdentity: unused,
 		parameterExists: async (_p, _r, name) => state.onHub.has(name),
+		secureParameter: unused,
 		listParameterNames: unused,
 		putSecureParameter: async (profile, _r, name, value) => {
 			state.puts.push({ profile, name, value });

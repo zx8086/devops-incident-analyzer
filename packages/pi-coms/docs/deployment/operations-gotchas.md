@@ -71,8 +71,16 @@ remove an entry when the underlying behavior changes.
 - A NEW spoke needs no publish either: its bootstrap pulls whatever bundle is
   in the hub's bucket. `just fleet rollout <names>` and `status <names>` are
   enough; publishing re-versions every host in that hub's fleet.
-- `just fleet status` with no names reads every hub and dies on the first
-  missing `token_env`; name the spokes when only one hub token is exported.
+- `just fleet status` with no names reads every hub, so it needs a token for
+  each. Either name the spokes to scope it to one hub, or pass `--operator
+  <principal>` (SIO-1716) so each hub's token is read from
+  `/pi-coms/auth/<principal>` in that hub's account instead of the env var.
+- `rollout` resolves every target hub's token BEFORE dispatching any
+  `pi-coms-update` (SIO-1716). A missing token therefore sends nothing -- if you
+  see the old behaviour (a `fleet failed:` token error AFTER `rollout <name>:
+  instance ... command ...` lines), the updates ARE already in flight: read the
+  printed command ids with `aws ssm get-command-invocation` using each spoke's
+  OWN profile rather than re-running, which would double-dispatch.
 - The gitignored inputs (`deploy/fleet.yaml`, each root's `terraform.tfvars`
   and `backend.hcl`) exist in ONE checkout. Copy them into a worktree before
   running the fleet CLI there and back afterwards, and seed the hub-host root

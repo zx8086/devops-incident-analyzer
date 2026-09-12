@@ -175,5 +175,8 @@ sync-persona:
     echo "AGENTS.md regenerated from agents/pi-fleet"
 
 # Manifest-driven fleet deploy (SIO-1653): just fleet <preflight|tokens ensure|rotate|render|backend-init <env>|plan|apply [--yes]|publish|rollout|status|deploy> [names]
+# SIO-1716: rollout/status need an operator token for the hub registry. Either
+# export the hub's token_env, or name your principal with --operator <name>
+# (or PI_COMS_OPERATOR) and it is read from /pi-coms/auth/<name> in the hub account.
 fleet *args:
     bun scripts/fleet.ts {{args}}

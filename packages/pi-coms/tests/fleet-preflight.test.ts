@@ -21,6 +21,7 @@ function fakeAws(overrides: Overrides = {}): FleetAws {
 			arn: `arn:aws:sts::x:assumed-role/${profile}`,
 		}),
 		parameterExists: async () => true,
+		secureParameter: async () => undefined,
 		listParameterNames: async () => [],
 		putSecureParameter: async () => {},
 		subnetRoutes: async (_p, _r, subnetId) => ({

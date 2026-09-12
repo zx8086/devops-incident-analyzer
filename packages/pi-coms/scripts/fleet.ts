@@ -10,8 +10,8 @@
 //   just fleet plan [names]
 //   just fleet apply [names] [--yes]
 //   just fleet publish [--env dev|prd]
-//   just fleet rollout [names] [--token-changed]
-//   just fleet status [names]
+//   just fleet rollout [names] [--token-changed] [--operator <principal>]
+//   just fleet status [names] [--operator <principal>]
 //   just fleet deploy [names] [--yes]
 //
 // Manifest: deploy/fleet.yaml (--manifest to override). Every step is idempotent
@@ -22,7 +22,15 @@ import * as path from "node:path";
 import { parseArgs } from "node:util";
 import { type FleetAws, realFleetAws } from "./fleet/aws.ts";
 import { listAgents, missingOnHub } from "./fleet/hub.ts";
-import { DEFAULT_HUB_PORT, type FleetManifest, hubFor, loadManifest, spokeFor, spokeNames } from "./fleet/manifest.ts";
+import {
+	DEFAULT_AUTH_PATH,
+	DEFAULT_HUB_PORT,
+	type FleetManifest,
+	hubFor,
+	loadManifest,
+	spokeFor,
+	spokeNames,
+} from "./fleet/manifest.ts";
 import { formatPreflight, preflight, preflightPassed } from "./fleet/preflight.ts";
 import { renderRoot, stateBucketName } from "./fleet/render.ts";
 import { HUB_INSTANCE_TAG, triggerRollout } from "./fleet/rollout.ts";
@@ -43,6 +51,11 @@ export type FleetArgs = {
 	// aliased: silently accepting it would pick an arbitrary hub of that
 	// environment once a second one exists.
 	hub?: string;
+	// SIO-1716: the hub principal whose operator token the rollout presents. The
+	// hub authenticates by token hash and reports that principal, so each operator
+	// must use their OWN token: a shared or hardcoded one would attribute every
+	// rollout to one identity and make revocation all-or-nothing.
+	operator?: string;
 	tokenChanged: boolean;
 	localPort: number;
 };
@@ -54,11 +67,13 @@ export function parseFleetArgs(argv: string[]): FleetArgs {
 			manifest: { type: "string", default: path.join(PKG_ROOT, "deploy", "fleet.yaml") },
 			yes: { type: "boolean", default: false },
 			hub: { type: "string" },
+			operator: { type: "string" },
 			"token-changed": { type: "boolean", default: false },
 			"local-port": { type: "string", default: "8788" },
 		},
 		allowPositionals: true,
 	});
+	const operator = (values.operator as string | undefined) ?? process.env.PI_COMS_OPERATOR;
 	const [command, ...rest] = positionals;
 	if (!command)
 		throw new Error(
@@ -73,6 +88,7 @@ export function parseFleetArgs(argv: string[]): FleetArgs {
 		manifest: values.manifest ?? "",
 		yes: values.yes ?? false,
 		...(hub ? { hub } : {}),
+		...(operator ? { operator } : {}),
 		tokenChanged: values["token-changed"] ?? false,
 		localPort: Number(values["local-port"] ?? 8788),
 	};
@@ -235,29 +251,45 @@ async function withHubTunnel<T>(
 // PI_COMS_NET_AUTH_TOKEN_<ENV> default collided the moment two hubs shared an
 // environment -- both would read one variable, and the second would authenticate
 // against the wrong hub's token.
-function hubToken(manifest: FleetManifest, hubKey: string): string {
+// SIO-1716: two sources, env first. The operator token also lives in the hub
+// account's Parameter Store, written there by `tokens ensure`, so an operator who
+// has not exported the variable is not stuck -- the `coms` recipe already reads
+// /pi-coms/auth/<principal> the same way. The principal is named by the CALLER
+// (--operator / PI_COMS_OPERATOR) and never hardcoded: the hub authenticates by
+// token hash and logs that principal, so a shared name would attribute every
+// rollout to one identity and make revocation all-or-nothing. No SSO-name
+// derivation -- a login is not guaranteed to match a principal name.
+async function hubToken(manifest: FleetManifest, hubKey: string, aws: FleetAws, operator?: string): Promise<string> {
 	const hub = hubFor(manifest, hubKey);
-	const token = process.env[hub.token_env];
-	if (!token)
+	const fromEnv = process.env[hub.token_env];
+	if (fromEnv) return fromEnv;
+	const authPath = hub.auth_path ?? DEFAULT_AUTH_PATH;
+	if (operator) {
+		const name = `${authPath}/${operator}`;
+		const raw = await aws.secureParameter(hub.profile, hub.region, name);
+		// A principal record is {token, kind, names}; anything else is a
+		// misprovisioned parameter, not a usable credential.
+		const token = raw ? (JSON.parse(raw) as { token?: unknown }).token : undefined;
+		if (typeof token === "string" && token.length > 0) return token;
 		throw new Error(
-			`${hub.token_env} is not set (an operator token for hub "${hubKey}" is needed to read its registry)`,
+			`no usable operator token for hub "${hubKey}": ${hub.token_env} is not set and ${name} is missing or carries no token. ` +
+				`Mint one: just token-create ${operator} "${operator},ops" operator ${hub.profile}`,
 		);
-	return token;
+	}
+	throw new Error(
+		`no operator token for hub "${hubKey}": ${hub.token_env} is not set and no principal was named. ` +
+			`Pass --operator <principal> (or set PI_COMS_OPERATOR) to read ${authPath}/<principal> from ${hub.profile}.`,
+	);
 }
 
 async function runRollout(
 	manifest: FleetManifest,
 	names: string[],
 	aws: FleetAws,
-	opts: { tokenChanged: boolean; localPort: number },
+	opts: { tokenChanged: boolean; localPort: number; operator?: string },
 ): Promise<boolean> {
 	const targets = spokeNames(manifest, names);
-	for (const name of targets) {
-		const { instanceId, commandId } = await triggerRollout(manifest, name, aws, { tokenChanged: opts.tokenChanged });
-		console.log(`rollout ${name}: instance ${instanceId}, command ${commandId}`);
-	}
 	const persona = manifest.persona?.min_version;
-	let allOk = true;
 	// SIO-1666: group by HUB. Two hubs may share an environment, so grouping by
 	// env would open one tunnel and poll the wrong registry for half the spokes.
 	const byHub = new Map<string, string[]>();
@@ -265,8 +297,25 @@ async function runRollout(
 		const key = spokeFor(manifest, name).hub;
 		byHub.set(key, [...(byHub.get(key) ?? []), name]);
 	}
+	// SIO-1716: resolve EVERY hub's token before dispatching anything. This used
+	// to run after the loop below, so a missing token reported failure with the
+	// updates already sent -- and re-running then double-dispatched to production
+	// hosts. Resolving all hubs up front (not just hoisting one check) also covers
+	// the multi-hub case where the first hub's token is present and the second's
+	// is not.
+	const tokens = new Map<string, string>();
+	for (const hubKey of byHub.keys()) {
+		tokens.set(hubKey, await hubToken(manifest, hubKey, aws, opts.operator));
+	}
+
+	for (const name of targets) {
+		const { instanceId, commandId } = await triggerRollout(manifest, name, aws, { tokenChanged: opts.tokenChanged });
+		console.log(`rollout ${name}: instance ${instanceId}, command ${commandId}`);
+	}
+	let allOk = true;
 	for (const [hubKey, envNames] of byHub) {
-		const token = hubToken(manifest, hubKey);
+		// Non-null: every hub key in byHub got a token above or we never got here.
+		const token = tokens.get(hubKey) as string;
 		const ok = await withHubTunnel(manifest, hubKey, aws, async (baseUrl) => {
 			const deadline = Date.now() + 10 * 60_000;
 			let pending = envNames;
@@ -288,7 +337,7 @@ async function runRollout(
 	return allOk;
 }
 
-async function runStatus(manifest: FleetManifest, names: string[], aws: FleetAws): Promise<void> {
+async function runStatus(manifest: FleetManifest, names: string[], aws: FleetAws, operator?: string): Promise<void> {
 	const rows = await preflight(manifest, names, aws);
 	const credentialRows = rows.filter((r) => r.check === "credentials");
 	console.log(formatPreflight(credentialRows));
@@ -299,7 +348,7 @@ async function runStatus(manifest: FleetManifest, names: string[], aws: FleetAws
 		byHub.set(key, [...(byHub.get(key) ?? []), name]);
 	}
 	for (const [hubKey, envNames] of byHub) {
-		const token = hubToken(manifest, hubKey);
+		const token = await hubToken(manifest, hubKey, aws, operator);
 		await withHubTunnel(manifest, hubKey, aws, async (baseUrl) => {
 			const agents = await listAgents(baseUrl, token, hubFor(manifest, hubKey).project);
 			for (const name of envNames) {
@@ -341,11 +390,12 @@ export async function main(argv: string[], aws: FleetAws = realFleetAws): Promis
 			return (await runRollout(manifest, args.names, aws, {
 				tokenChanged: args.tokenChanged,
 				localPort: args.localPort,
+				...(args.operator ? { operator: args.operator } : {}),
 			}))
 				? 0
 				: 1;
 		case "status":
-			await runStatus(manifest, args.names, aws);
+			await runStatus(manifest, args.names, aws, args.operator);
 			return 0;
 		case "deploy": {
 			if (!(await runPreflight(manifest, args.names, aws))) return 1;
@@ -356,8 +406,12 @@ export async function main(argv: string[], aws: FleetAws = realFleetAws): Promis
 			// environment, which the SIO-1666 rekey turned into an unknown hub key.
 			const hubs = new Set(spokeNames(manifest, args.names).map((n) => spokeFor(manifest, n).hub));
 			for (const hubKey of hubs) await runPublish(manifest, hubKey);
-			const ok = await runRollout(manifest, args.names, aws, { tokenChanged, localPort: args.localPort });
-			await runStatus(manifest, args.names, aws);
+			const ok = await runRollout(manifest, args.names, aws, {
+				tokenChanged,
+				localPort: args.localPort,
+				...(args.operator ? { operator: args.operator } : {}),
+			});
+			await runStatus(manifest, args.names, aws, args.operator);
 			return ok ? 0 : 1;
 		}
 		default:
