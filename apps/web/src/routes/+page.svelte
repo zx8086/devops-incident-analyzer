@@ -162,10 +162,6 @@ const fleetLogIndex = $derived.by(() => {
 // SIO-1657: the modes the header control cycles. The fallback is the two
 // always-available agents; the fleet console is contextual, never a mode.
 let modeIds = $state<AgentId[]>(AGENT_CHOICES.filter((c) => c.id !== "pi-fleet-console").map((c) => c.id));
-// SIO-1657: whether this deployment can run the fleet console at all (its flag
-// AND a configured hub, both server-side). Availability only -- SIO-1662 decides
-// where it is offered: inside the fleet pane, as onAskAll.
-let consoleAvailable = $state(false);
 // SIO-1665: the agents that offer the live graph triage pane, from the registry's
 // hasTriageGraph flag. The fallback is the two always-available modes, so an
 // unreachable /api/agents changes nothing (the console is unreachable then too).
@@ -181,7 +177,6 @@ async function loadSelectableAgents() {
 		const agents = (body.agents ?? []).filter((a) => isAgentId(a.id));
 		const ids = agents.filter((a) => a.surface === "mode").map((a) => a.id as AgentId);
 		if (ids.length > 0) modeIds = ids;
-		consoleAvailable = agents.some((a) => a.id === "pi-fleet-console");
 		// A row without the flag (older server) keeps the pane offered.
 		triageIds = agents.filter((a) => a.hasTriageGraph !== false).map((a) => a.id as AgentId);
 	} catch {
@@ -364,7 +359,10 @@ function handleSuggestionClick(suggestion: string) {
           aria-pressed={piFleetStore.open}
           class="min-w-[44px] min-h-[44px] p-2 rounded-lg transition-all border-2 border-transparent {piFleetStore.open ? 'bg-tommy-accent-blue text-white' : 'text-white/70 hover:text-white hover:bg-white/10'}"
         >
-          <Icon name="message-square" class="w-5 h-5" />
+          <!-- SIO-1706: these are pi agents, so the toggle carries the Pi mark
+               rather than a generic chat bubble. This button IS the fleet console:
+               it opens the pane whose own box addresses the spokes. -->
+          <Icon name="pi" class="w-5 h-5" />
         </button>
       {/if}
       <button
@@ -749,7 +747,6 @@ function handleSuggestionClick(suggestion: string) {
         onRefresh={() => piFleetStore.load()}
         onSelect={(selection) => piFleetStore.select(selection)}
         onLoadMailbox={(hubKey, estates) => piFleetStore.loadMailbox(hubKey, estates)}
-        onAskAll={consoleAvailable ? () => agentStore.switchAgent("pi-fleet-console") : undefined}
         scopeEstates={agentStore.selectedAwsEstates}
       />
     </div>

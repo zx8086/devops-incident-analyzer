@@ -15,7 +15,6 @@ let {
 	onRefresh,
 	onSelect,
 	onLoadMailbox,
-	onAskAll,
 	scopeEstates = [],
 }: {
 	pane: PiFleetState;
@@ -26,11 +25,6 @@ let {
 	onRefresh: () => void;
 	onSelect: (selection: PiFleetSelection | null) => void;
 	onLoadMailbox: (hubKey: string, estates: string[]) => void;
-	// SIO-1662: switch to the fleet-console AGENT. Distinct from onSend, which
-	// addresses ONE spoke and renders its raw reply here: the console asks several
-	// spokes and synthesizes one attributed answer in the chat. Optional, so the
-	// pane still renders where the console is not available (no hub, flag off).
-	onAskAll?: () => void;
 	// SIO-1703: the AWS estates the operator selected for this investigation. A
 	// spoke is named for the estate it serves, so this scopes the list to the
 	// accounts under investigation. Empty means no scoping (nothing selected, or
@@ -128,31 +122,12 @@ function onKeydown(event: KeyboardEvent) {
     <div>
       <h2 class="text-sm font-semibold text-tommy-navy">Fleet spokes</h2>
       <p class="text-xs text-gray-500">Live pi agents on the pi-coms hubs. Replies are shown as data.</p>
-      <!-- SIO-1662: the fleet console lives here rather than as a second header
-           icon. Below the description because it LEAVES this pane: it switches
-           agent, where one question reaches several spokes and comes back as one
-           attributed answer, instead of the raw single-spoke reply shown here.
-           SIO-1702: the label names that destination and the hint says the question
-           is asked in the chat, not in this pane's box -- an arrow alone read as
-           "this enables the input below", which it never did. -->
-      {#if onAskAll}
-        <button
-          type="button"
-          onclick={onAskAll}
-          class="mt-2 inline-flex items-center gap-1 rounded-lg border border-tommy-accent-blue px-2.5 py-1 text-xs font-medium text-tommy-accent-blue transition-colors hover:bg-tommy-accent-blue hover:text-white disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-tommy-accent-blue"
-          disabled={busy || !canAskAll}
-          title={canAskAll ? undefined : "No spoke is reachable on any hub"}
-        >
-          Open the fleet console &rarr;
-        </button>
-        <p class="mt-1 text-xs text-gray-400">
-          {#if canAskAll}
-            Switches agent: ask one question in the chat and every spoke answers.
-          {:else}
-            Unavailable while no spoke is reachable.
-          {/if}
-        </p>
-      {/if}
+      <!-- SIO-1706: no "open the fleet console" button. The header pi icon toggles
+           THIS pane and the box below addresses the spokes -- this pane is the
+           console, so a button offering to open one advertised a door that does
+           not exist. SIO-1702 made that label more explicit instead of asking
+           whether the destination was real. The pi-fleet-console AGENT is still
+           reachable from the header agent control, where switching agents lives. -->
     </div>
     <button
       type="button"
@@ -329,9 +304,9 @@ function onKeydown(event: KeyboardEvent) {
       {#if pane.selected}
         To <span class="font-medium text-tommy-navy">{pane.selected.name}</span> ({pane.selected.hubKey})
       {:else if canAskAll}
-        <!-- SIO-1702: the box was disabled with no reason given, directly under a
-             button that does not feed it. Name both paths so neither is a guess. -->
-        Select a spoke above &mdash; or open the fleet console to ask them all at once.
+        <!-- SIO-1706: named the removed console button. The box itself is the only
+             path now, so say what it needs: a spoke. -->
+        Select a spoke above to send it a prompt.
       {:else}
         No spoke is reachable. Fix the hub above, then select a spoke.
       {/if}

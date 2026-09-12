@@ -44,8 +44,6 @@ const listing: PiFleetAgentsResponse = {
 	],
 };
 
-// SIO-1702: the console button is `{#if onAskAll}`, so it renders only where the
-// deployment offers it. Opt-in here, keeping the not-offered case testable.
 // SIO-1704: no estate selected means no account is in scope, so the default here
 // selects the fixture's spokes -- these tests are about everything EXCEPT scoping,
 // and an unscoped render would now correctly show nothing. The empty-scope case
@@ -66,14 +64,9 @@ function inboxMessage(msgId: string, senderName: string, prompt: string) {
 	};
 }
 
-function renderPane(
-	state: PiFleetState,
-	busy = false,
-	onAskAll?: () => void,
-	scopeEstates: string[] = ALL_FIXTURE_ESTATES,
-): string {
+function renderPane(state: PiFleetState, busy = false, scopeEstates: string[] = ALL_FIXTURE_ESTATES): string {
 	return render(PiFleetPane, {
-		props: { pane: state, busy, mailboxBusy: null, ...handlers, scopeEstates, ...(onAskAll ? { onAskAll } : {}) },
+		props: { pane: state, busy, mailboxBusy: null, ...handlers, scopeEstates },
 	}).body;
 }
 
@@ -131,25 +124,27 @@ describe("PiFleetPane", () => {
 		expect(body).not.toContain(`${report.slice(0, 140)}...`);
 	});
 
-	// SIO-1702: the button LEAVES this pane (it switches agent); it never fed the
-	// input box below it, which an arrow alone did not convey. And the console can
-	// only ask spokes it can reach, so a down hub must gate it -- `consoleAvailable`
-	// upstream is a deployment fact, not a liveness one.
-	test("names the destination and explains that the question is asked in the chat", () => {
-		const body = renderPane(applyAgents(initialPiFleetState(), listing), false, noop);
-		expect(body).toContain("Open the fleet console");
-		expect(body).toContain("Switches agent: ask one question in the chat");
-		// The old label read as if it acted on this pane.
+	// SIO-1706: the pane no longer offers to "open the fleet console". The header pi
+	// icon toggles THIS pane and the box below addresses the spokes, so the button
+	// advertised a destination that does not exist. SIO-1702 rewrote its label
+	// instead of asking whether the door was real; these assertions replace that
+	// test so the copy cannot come back.
+	test("never offers to open a fleet console", () => {
+		const body = renderPane(applyAgents(initialPiFleetState(), listing), false);
+		expect(body).not.toContain("Open the fleet console");
+		expect(body).not.toContain("Switches agent");
 		expect(body).not.toContain("Ask all spokes at once");
 	});
 
-	test("points the disabled input at both paths when spokes are reachable", () => {
-		const body = renderPane(applyAgents(initialPiFleetState(), listing), false, noop);
-		expect(body).toContain("Select a spoke above");
-		expect(body).toContain("or open the fleet console to ask them all at once");
+	test("points the input box at the only path there is", () => {
+		const body = renderPane(applyAgents(initialPiFleetState(), listing), false);
+		expect(body).toContain("Select a spoke above to send it a prompt");
+		expect(body).not.toContain("ask them all at once");
 	});
 
-	test("disables the console button and says why when no spoke is reachable", () => {
+	// The reachability copy outlived the button it used to gate: an operator facing
+	// a down hub still needs to be told why nothing can be sent.
+	test("says why nothing can be sent when no spoke is reachable", () => {
 		const unreachable: PiFleetAgentsResponse = {
 			...listing,
 			hubs: [
@@ -163,23 +158,8 @@ describe("PiFleetPane", () => {
 				},
 			],
 		};
-		const body = renderPane(applyAgents(initialPiFleetState(), unreachable), false, noop);
-		const tag = body.match(/<button[^>]*>\s*Open the fleet console/)?.[0] ?? "";
-		// The ATTRIBUTE, not the Tailwind `disabled:` variants in the class list.
-		expect(/\sdisabled(=|\s|>)/.test(tag.replace(/class="[^"]*"/, ""))).toBe(true);
-		expect(body).toContain("Unavailable while no spoke is reachable");
+		const body = renderPane(applyAgents(initialPiFleetState(), unreachable), false);
 		expect(body).toContain("No spoke is reachable. Fix the hub above");
-	});
-
-	test("leaves the console button enabled while a spoke is reachable", () => {
-		const body = renderPane(applyAgents(initialPiFleetState(), listing), false, noop);
-		const tag = body.match(/<button[^>]*>\s*Open the fleet console/)?.[0] ?? "";
-		expect(/\sdisabled(=|\s|>)/.test(tag.replace(/class="[^"]*"/, ""))).toBe(false);
-	});
-
-	test("omits the console button entirely where the deployment does not offer it", () => {
-		const body = renderPane(applyAgents(initialPiFleetState(), listing));
-		expect(body).not.toContain("Open the fleet console");
 	});
 
 	// SIO-1703: scoping an investigation to one estate scopes the spokes too.
@@ -233,7 +213,7 @@ describe("PiFleetPane", () => {
 	// narrowing" let an operator who had deselected every estate still address any
 	// account -- the mistake the scoping exists to prevent.
 	test("an empty selection puts no account in scope, so no spoke is addressable", () => {
-		const body = renderPane(applyAgents(initialPiFleetState(), listing), false, undefined, []);
+		const body = renderPane(applyAgents(initialPiFleetState(), listing), false, []);
 		expect(body).not.toContain("alpha-dev");
 		expect(body).toContain("No AWS estate selected");
 	});
@@ -241,25 +221,14 @@ describe("PiFleetPane", () => {
 	test("an emptied hub says the scope excluded it, not that the fleet is unregistered", () => {
 		// The spokes ARE registered; claiming otherwise sends the operator chasing
 		// a fleet problem that does not exist.
-		const body = renderPane(applyAgents(initialPiFleetState(), listing), false, undefined, []);
+		const body = renderPane(applyAgents(initialPiFleetState(), listing), false, []);
 		expect(body).toContain("No spoke here is in the selected scope");
 		expect(body).not.toContain("No spokes are registered on this hub");
 	});
 
-	test("a selection matching no spoke empties the list and gates the console", () => {
-		const body = render(PiFleetPane, {
-			props: {
-				pane: applyAgents(initialPiFleetState(), listing),
-				busy: false,
-				mailboxBusy: null,
-				...handlers,
-				onAskAll: noop,
-				scopeEstates: ["eu-oit-prd"],
-			},
-		}).body;
+	test("a selection matching no spoke on a hub empties that hub's list", () => {
+		const body = renderPane(applyAgents(initialPiFleetState(), listing), false, ["eu-oit-prd"]);
 		expect(body).not.toContain("alpha-dev");
-		const tag = body.match(/<button[^>]*>\s*Open the fleet console/)?.[0] ?? "";
-		expect(/\sdisabled(=|\s|>)/.test(tag.replace(/class="[^"]*"/, ""))).toBe(true);
 	});
 
 	// SIO-1703: the picker and the replies were in ONE scroll container, so a long
@@ -324,7 +293,7 @@ describe("PiFleetPane", () => {
 				inboxMessage("m2", "monitor-eu-oit-prd", "[critical] aws-762715229080 CloudTrail NOT logging"),
 			],
 		});
-		const body = renderPane(state, false, undefined, ["eu-oit-prd"]);
+		const body = renderPane(state, false, ["eu-oit-prd"]);
 		expect(body).toContain("aws-762715229080 daily digest");
 		expect(body).toContain("CloudTrail NOT logging");
 	});
@@ -338,7 +307,7 @@ describe("PiFleetPane", () => {
 			windowTruncated: true,
 			messages: [inboxMessage("m1", "monitor-eu-oit-prd", "[warn] aws-762715229080 alarm")],
 		});
-		const body = renderPane(state, false, undefined, ["eu-oit-prd"]);
+		const body = renderPane(state, false, ["eu-oit-prd"]);
 		// A partial range must say so: the rows shown start mid-day, not at the digest.
 		expect(body).toContain("No daily digest found for eu-oit-prd");
 		expect(body).toContain("older digest may sit beyond it");
@@ -355,7 +324,7 @@ describe("PiFleetPane", () => {
 			windowTruncated: false,
 			messages: [inboxMessage("m3", "simon", "handover note for the next shift")],
 		});
-		const body = renderPane(state, false, undefined, ["eu-oit-prd"]);
+		const body = renderPane(state, false, ["eu-oit-prd"]);
 		expect(body).toContain("handover note for the next shift");
 	});
 
@@ -368,7 +337,7 @@ describe("PiFleetPane", () => {
 			windowTruncated: false,
 			messages: [],
 		});
-		const body = renderPane(state, false, undefined, ["eu-oit-prd"]);
+		const body = renderPane(state, false, ["eu-oit-prd"]);
 		expect(body).toContain("No reports from the selected estates");
 	});
 
