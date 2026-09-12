@@ -7,7 +7,7 @@
 			"!migrate",
 			"!.worktrees",
 			"!current",
-			"!.claude/worktrees",
+			"!.claude",
 			"!guides",
 			"!docs/reference/agent-memory-openapi.json",
 			"!.fallow",

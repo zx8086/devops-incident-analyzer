@@ -4,7 +4,6 @@ import {
 	classifyPortOccupant,
 	isPortInUse,
 	ownGraphPath,
-	type PortOccupantVerdict,
 	probeKnowledgeGraphIdentity,
 	startKnowledgeGraphServer,
 } from "@devops-agent/mcp-server-knowledge-graph";
