@@ -174,6 +174,14 @@ function onKeydown(event: KeyboardEvent) {
                  SIO-1666 removed from routing. hubKey is the identity; project
                  stays on the wire for logs and the mailbox call. -->
             <span class="text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded border {envBadge[hub.environment]}">{hub.environment}</span>
+            <!-- SIO-1707: the hub account runs a read-only spoke like every other
+                 account, so its name is BOTH this hub and one of the spokes below
+                 it -- eu-shared-services-prd appears twice, meaning two different
+                 things. Both are correct, so neither is renamed; the row is
+                 labelled by ROLE instead. Without it the header differs from a
+                 spoke row only by a badge and a missing status dot, which reads
+                 as styling rather than as a different kind of thing. -->
+            <span class="text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded border border-gray-300 bg-gray-100 text-gray-600">hub</span>
             <span class="text-xs font-medium text-tommy-navy truncate">{hub.hubKey}</span>
             <button
               type="button"
