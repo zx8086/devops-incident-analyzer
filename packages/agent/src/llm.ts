@@ -265,18 +265,22 @@ export class DeadlineExceededError extends Error {
 // Reads usage from the two places LangChain has put it, and stays silent rather than throwing
 // if a future version moves it again -- telemetry must never break an answer.
 //
-// Cache counters: @langchain/aws builds usage_metadata from inputTokens/outputTokens only, but
-// attaches the raw Converse response (minus `output`) as response_metadata, whose `usage` carries
-// Bedrock's cacheReadInputTokens / cacheWriteInputTokens whenever the request had a cachePoint
-// (prompt-cache.ts). Without these two fields the SIO-1040 cache is invisible: a zero read count
-// across consecutive calls is the only signal that a silent invalidator sits in the stable half.
+// Cache counters (SIO-1697): @langchain/aws 1.4.x folds Bedrock's cacheReadInputTokens /
+// cacheWriteInputTokens into the standard LangChain shape usage_metadata.input_token_details
+// { cache_read, cache_creation } on BOTH the streaming path (utils/stream_events.js) and the
+// non-streaming path (utils/message_outputs.js); usage_metadata.input_tokens already INCLUDES
+// the cached tokens. The raw Converse `usage` under response_metadata is only present on the
+// non-streaming path, so it is a fallback, not the primary read. The SIO-1695 version read only
+// the raw field and logged nothing for the aggregator, which streams. Without these two fields
+// the SIO-1040 cache is invisible: a zero read count across consecutive calls is the only signal
+// that a silent invalidator sits in the stable half.
 function logTokenUsage(role: LlmRole, model: string, output: unknown): void {
 	const result = output as {
 		llmOutput?: { usage?: Record<string, unknown> };
 		generations?: Array<
 			Array<{
 				message?: {
-					usage_metadata?: Record<string, unknown>;
+					usage_metadata?: Record<string, unknown> & { input_token_details?: Record<string, unknown> };
 					response_metadata?: { usage?: Record<string, unknown> };
 				};
 			}>
@@ -285,6 +289,7 @@ function logTokenUsage(role: LlmRole, model: string, output: unknown): void {
 	const message = result.generations?.[0]?.[0]?.message;
 	const usage = message?.usage_metadata ?? result.llmOutput?.usage;
 	if (!usage) return;
+	const details = (usage as { input_token_details?: Record<string, unknown> }).input_token_details ?? {};
 	const raw = message?.response_metadata?.usage ?? {};
 	const num = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
 	logger.info(
@@ -294,8 +299,8 @@ function logTokenUsage(role: LlmRole, model: string, output: unknown): void {
 			inputTokens: num(usage.input_tokens) ?? num(usage.inputTokens),
 			outputTokens: num(usage.output_tokens) ?? num(usage.outputTokens),
 			totalTokens: num(usage.total_tokens) ?? num(usage.totalTokens),
-			cacheReadTokens: num(raw.cacheReadInputTokens),
-			cacheWriteTokens: num(raw.cacheWriteInputTokens),
+			cacheReadTokens: num(details.cache_read) ?? num(raw.cacheReadInputTokens),
+			cacheWriteTokens: num(details.cache_creation) ?? num(raw.cacheWriteInputTokens),
 		},
 		"LLM token usage",
 	);
