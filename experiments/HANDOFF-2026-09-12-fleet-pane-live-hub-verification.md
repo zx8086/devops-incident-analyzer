@@ -7,16 +7,25 @@
 | **PRs** | [#745](https://github.com/zx8086/devops-incident-analyzer/pull/745) `fe59e39d` · [#748](https://github.com/zx8086/devops-incident-analyzer/pull/748) `54b876ed` · [#749](https://github.com/zx8086/devops-incident-analyzer/pull/749) `2ccc96e3` |
 | **Repo state** | all three merged to `main`; `origin/main` tip `2ccc96e3` |
 | **Suggested branch** | none — this is a **verification** task. Only branch if it finds a bug (then a new ticket, not a reopen). |
+| **Status** | **Live run completed 2026-09-12 against the prd hub — PASSED.** Checks 1, 2, 5, 7, 8, 9 verified; 3 and 4 not reachable that day; **check 6 (two hubs) still untested**. The setup recipe below is CORRECTED from the run. |
 
 ## TL;DR
 
-Three merged PRs reworked the pi-fleet pane's ops-inbox rendering: the digest moved to the main scroll region and is now labelled as the anchor, the hub header is sticky, and the picker is capped in `rem`. **Every claim rests on SSR renders measured in a headless browser — none of it has been exercised against a live pi-coms hub**, because the worktree it was built in has no `.env` and the pane never mounts without one. Success here means opening the pane against a real tunnelled prd hub and confirming the digest, the sticky header and the multi-hub case behave as the fixtures predicted. The highest-risk gap is **two or more hubs with mailboxes loaded at once** — that path has only ever seen a single-hub fixture.
+Three merged PRs reworked the pi-fleet pane's ops-inbox rendering: the digest moved to the main scroll region and is now labelled as the anchor, the hub header is sticky, and the picker is capped in `rem`. They were built with no live hub available, so this doc was written to specify the live pass.
+
+**That pass ran on 2026-09-12 against the prd hub and PASSED.** Against 36 real ops messages from 6 estates: exactly 6 rows marked `isDigest`, one per estate, none mis-marked (the follow-ups include `[critical]` and `[warn]` rows, which is where naive prefix-matching would have failed). Picker 176px vs digest 565px at a 720px window; sticky header held at offset 0 with the picker scrolled 103px; no horizontal scroll despite real ARNs and log-group names.
+
+**Two things remain.** Check 6 (two hubs with mailboxes loaded at once) is still untested and is still the least-proven path — only prd is tunnelled, and the dev hub is a different account, so loading both would breach the no-cross-environment rule. Checks 3 and 4 could not be exercised because every estate had an `[info]` digest that day; they stay covered by unit tests only.
+
+**The setup section below has been corrected from the run.** The original recipe was wrong in three ways that each produce a working-looking but empty pane.
 
 ## Context — how this came to be
 
 The operator reported (with screenshots) that the Inbox ops response was unreadable: clipped mid-sentence, with the spoke list scrolled away above it. SIO-1712 moved the digest card out of the height-capped picker; SIO-1714 marked the digest server-side and pinned the hub header; SIO-1715 replaced the picker's percentage cap with a `rem` cap after measuring that a percentage gave the target list more room than the report on a laptop-sized window.
 
-All three were verified by rendering `PiFleetPane` via `svelte/server` and measuring the result with `getBoundingClientRect()` in the in-app browser. That proves layout and markup. It does **not** prove the wiring: hub listing, mailbox fetch, anchoring against real monitor output, or the pane's behaviour with more than one hub.
+All three were built and verified by rendering `PiFleetPane` via `svelte/server` and measuring the result with `getBoundingClientRect()`. That proved layout and markup but not the wiring — hub listing, mailbox fetch, anchoring against real monitor output, or the multi-hub case. This doc was written to specify that missing pass.
+
+The pass then ran on 2026-09-12 and is recorded below: the wiring holds against live prd data, the setup recipe needed three corrections, and the multi-hub case is still outstanding.
 
 ## Where the bodies are buried
 
@@ -65,23 +74,35 @@ just hub-tunnel eu-shared-services-prd 8788
 
 Leave it running. `just hub-tunnel` is defined at `justfile:37`; it resolves the target from the gitignored fleet manifest.
 
-### 2. Create a worktree `.env` with the two hub variables
+### 2. Create a worktree `.env` — THREE corrections from the live run
 
-`PI_COMS_HUBS` alone is **not** always enough. On a directory-mode hub the pane registers short-lived senders as `pi-fleet-<8 hex>`, which needs its own principal and token per hub (`.env.example:464-470`):
+The first draft of this section was wrong in three ways. Each produces a pane that looks correctly wired and shows nothing, so they cost real time to diagnose.
 
-```bash
-# only if the hub is directory-mode
-just token-create pi-fleet "pi-fleet-*" service eu-shared-services-prd
-```
-
-Then in the worktree `.env`:
+**Get the token** (there is no `pi-fleet` principal on the prd hub — see correction 2):
 
 ```bash
-PI_COMS_HUBS='{"eu-shared-services-prd":{"serverUrl":"http://127.0.0.1:8788","authToken":"<prd token>","environment":"prd","estates":["eu-oit-prd","eu-mendix-platform-prd"]}}'
-PI_COMS_PANE_TOKENS='{"prd":"<pi-fleet token on the prd hub>"}'
+aws ssm get-parameter --profile eu-shared-services-prd --region eu-central-1 --name /pi-coms/auth/incident-analyzer --with-decryption --query Parameter.Value --output text | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])'
 ```
 
-Unset `PI_COMS_PANE_TOKENS` only if the hub is token-mode — otherwise sends fail `403 name_not_allowed` (see `reference_pi_coms_send_403_name_not_allowed`).
+Then the worktree `.env` (gitignored — verify with `git check-ignore -v .env`; it holds a real prd credential and this repo is public):
+
+```bash
+PI_COMS_HUBS='{"eu-shared-services-prd":{"serverUrl":"http://127.0.0.1:8788","authToken":"<token>","environment":"prd","project":"pi-coms-prd","estates":["eu-b2b-ecom-prd","eu-b2becom-v2-prd","eu-ediservices-prd","eu-mendix-platform-prd","eu-oit-prd","eu-shared-services-prd"]}}'
+PI_COMS_PANE_SENDER_PREFIX=incident-analyzer
+AWS_ESTATES='{"eu-oit-prd":{"assumedRoleArn":"arn:aws:iam::762715229080:role/DevOpsAgentReadOnly","region":"eu-central-1"}}'
+```
+
+**Correction 1 — `project` is REQUIRED.** The prd hub registers its agents under **`pi-coms-prd`**. The field defaults to `"default"`, which the hub answers with **0 agents and no error**: `/api/pi/agents` returns `configured: true`, the hub row renders with `error: null`, and the spoke list is empty — indistinguishable from an empty fleet. Tell them apart by asking the hub directly:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8788/v1/agents?project=pi-coms-prd&include_explicit=true" | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("agents",[])))'
+```
+
+Observed 2026-09-12: `pi-coms-prd` -> **13 agents**, `default` -> **0**, `prd` -> **0**.
+
+**Correction 2 — do NOT mint a `pi-fleet` principal in prd.** The earlier advice to run `just token-create pi-fleet ...` against prd was wrong. SSM `/pi-coms/auth/` holds one principal per spoke plus `incident-analyzer` and `simon`, and `incident-analyzer` is `{"kind":"service","names":["incident-analyzer-*"]}`. Setting `PI_COMS_PANE_SENDER_PREFIX=incident-analyzer` reuses it, so the pane registers as `incident-analyzer-<hex>` and is allowed; `PI_COMS_PANE_TOKENS` is then unnecessary. (Without the prefix the default `pi-fleet-<hex>` sender fails `403 name_not_allowed` — see `reference_pi_coms_send_403_name_not_allowed`.)
+
+**Correction 3 — `AWS_ESTATES` is mandatory, not optional.** Per SIO-1704 no estate selected means nothing in scope, and `selectedAwsEstates` is auto-populated from `/api/aws/estates` (`agent.svelte.ts:545-549`). With no MCP servers running the datasource selector never renders, so without `AWS_ESTATES` the pane mounts and says *"No AWS estate selected"* forever. One entry per estate you want in scope; the entries only need to exist for the pane — no role is assumed.
 
 ### 3. Start a web server FROM THE WORKTREE, on a non-default port
 
@@ -97,23 +118,29 @@ bun run --filter @devops-agent/web dev -- --port 5174
 
 Track the PID at spawn and kill it by that PID when done; prove the port is free with `lsof -nP -iTCP:5174 -sTCP:LISTEN`. See `reference_worktree_web_server_replay_env` for the env gaps that silently make a worktree replay useless (they bite the agent path, not the pane, but the same server is in play).
 
+**The dev server binds IPv6 `[::1]` only.** `curl http://127.0.0.1:5174/...` is refused with exit 7; use `http://localhost:5174`. Cost ten minutes on the live run.
+
+**Restart the server after every `.env` edit — kill the PID and start a fresh one.** Vite's in-place restart keeps stale env (`reference_vite_inplace_restart_env_precedence_and_kg_slots`).
+
 ### 4. What to actually check
 
 Select an AWS estate first — per SIO-1704 the pane shows nothing without one, and its selector row is part of why the pane is short.
 
-| # | Check | Expected |
-|---|---|---|
-| 1 | Click `Inbox ops` | Digest renders full-width in the lower region, **not** clipped at a boundary |
-| 2 | The anchor row | Carries a `DAILY DIGEST` chip; rows after it are indented under a left rule |
-| 3 | A `[warn]` digest (paused/degraded account) | Still marked as the digest — the chip is not `[info]`-only |
-| 4 | An estate with no digest in the window | **Nothing** is labelled digest; the amber `missingDigest` note appears; findings still shown in full |
-| 5 | Scroll the spoke list with 6 spokes | `PRD / HUB / account / Inbox ops` stays pinned; the last spoke is still selectable |
-| 6 | **Two hubs, both mailboxes loaded** | Two separate `<details>` cards, each labelled with its own hubKey; collapsing one does not affect the other |
-| 7 | Collapse/expand a card by keyboard | `<details>` toggles on Enter/Space; the summary keeps its `N reports` count |
-| 8 | Click Refresh | Icon spins, button disables, re-enables on completion |
-| 9 | Shrink the browser to ~900px tall | Digest region still taller than the picker (picker pinned at 176px) |
+| # | Check | Expected | **Result 2026-09-12** |
+|---|---|---|---|
+| 1 | Click `Inbox ops` | Digest renders full-width, **not** clipped at a boundary | **PASS** |
+| 2 | The anchor row | `DAILY DIGEST` chip; rows after it indented under a left rule | **PASS** — 6 chips, 30 indented follow-ups, 36 rows total |
+| 3 | A `[warn]` digest | Still marked as the digest — not `[info]`-only | **not reachable** — all 6 digests were `[info]` that day; unit-tested only |
+| 4 | An estate with no digest in the window | Nothing labelled digest; amber `missingDigest` note; findings still in full | **not reachable** — `missingDigest: []`, every estate had one; unit-tested only |
+| 5 | Scroll the spoke list with 6 spokes | Hub row stays pinned; last spoke still selectable | **PASS** — scrolled 103px, header offset 0, Inbox reachable |
+| 6 | **Two hubs, both mailboxes loaded** | Two `<details>` cards, each with its own hubKey; independent collapse | **NOT TESTED** — see below |
+| 7 | Collapse/expand by keyboard | `<details>` toggles; summary keeps its `N reports` | **PASS** — 42px collapsed, `36 reports` survives, reopens |
+| 8 | Click Refresh | Icon spins, button disables, re-enables | **PASS** |
+| 9 | Digest region taller than the picker | Picker pinned at 176px | **PASS** — picker 176px, digest 565px at a 720px window |
 
-**Check 6 is the priority.** Every fixture used a single hub; the multi-card path is the least-proven code in the three PRs.
+**Check 6 remains the priority and is still untested.** Only the prd hub is tunnelled; the dev hub (`local_port` 8787) is a different account, and loading both at once would breach the no-cross-environment rule (`feedback_no_cross_environment_access`). It needs a deliberate dev-hub session, or an explicit decision that a prd+dev pane is acceptable for one test.
+
+**What the live data proved that fixtures could not.** The ops mailbox returned **36 messages across 6 estates**, of which **exactly 6 were marked `isDigest` — one per estate, each first in its block, none mis-marked**. The follow-ups include `[critical]` and `[warn]` rows; a naive prefix match would have mislabelled them. `missingDigest: []`, `windowTruncated: false` (the 200-row window sufficed). The hub returned **13** agents and the pane rendered **6**, confirming the SIO-1665 `monitor-*` filter live. No horizontal scroll despite real ARNs and log-group names.
 
 ### 5. Measure, don't eyeball (check 9)
 
@@ -131,14 +158,17 @@ Expected: `picker` ≈ 176, `digestWins: true` at every window height. Reference
 
 ## Risks and edge cases
 
-| Risk | Likelihood | Mitigation |
+| Risk | Status after the live run | Mitigation |
 |---|---|---|
-| Two hubs render one card, or cards collide | **Medium** — untested path | Check 6. If broken, new ticket; the `{#each scoped}` at `PiFleetPane.svelte:289` is the suspect |
-| Real digest markdown breaks the layout (wide ARN, long log group) | Medium | Body has `overflow-x-auto break-words`; confirm no horizontal scrollbar on the pane itself |
-| `[warn]` digest not marked | Low — covered by a unit test | Check 3 |
-| Sticky header transparent against rows | Low | `bg-tommy-cream` must match the pane wrapper (`+page.svelte:738`); check while scrolling |
-| Monitor changes its digest wording | Low, high impact | `DIGEST_MARKER` is a substring match; a reworded header silently disables anchoring — everything would land in `missingDigest` |
-| Tunnel drops mid-check | Medium | Hub errors render inline per row; re-run `just hub-tunnel` |
+| Two hubs render one card, or cards collide | **STILL OPEN** — untested | Check 6. If broken, new ticket; the `{#each scoped}` at `PiFleetPane.svelte:289` is the suspect |
+| Monitor changes its digest wording | **Open**, low likelihood / high impact | `DIGEST_MARKER` is a substring match; a reworded header silently disables anchoring and everything lands in `missingDigest`. Nothing alerts on this |
+| `[warn]` digest not marked | **Open but unit-tested** | Not reachable live (all digests were `[info]`). Re-check on a day an account is paused or degraded |
+| Estate with no digest in window | **Open but unit-tested** | Not reachable live (`missingDigest: []`) |
+| Real digest markdown breaks the layout | **CLOSED** — verified live | `noHorizontalScroll: true` with real ARNs and log-group names |
+| Sticky header transparent against rows | **CLOSED** — verified live | Held at offset 0 with the picker scrolled 103px; `bg-tommy-cream` opaque |
+| Picker outgrows the digest | **CLOSED** — verified live | 176px vs 565px at a 720px window |
+| Tunnel drops mid-check | Operational | Hub errors render inline per row; re-run `just hub-tunnel` |
+| A real prd token left in a worktree `.env` | **Operational, important** | The repo is public. `git check-ignore -v .env` before starting; delete `.env` and any cached token file at teardown |
 
 ## Out of scope
 
@@ -158,6 +188,7 @@ Expected: `picker` ≈ 176, `digestWins: true` at every window height. Reference
 
 ## Memory references
 
+- `reference_fleet_pane_live_verification_config` — **the corrected setup facts from the live run** (project=pi-coms-prd, the sender-prefix reuse, AWS_ESTATES, IPv6-only bind)
 - `reference_fleet_pane_pinning_is_region_not_content` — "pinned" meant a capped scroll region, not pinned content; why a tall-viewport probe proves nothing
 - `reference_sio1712_digest_anchor_and_contrast` — `isDigest` is server-side; the cream/offwhite contrast table
 - `reference_worktree_web_server_replay_env` — env gaps when running a web server from a worktree
