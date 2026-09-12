@@ -341,12 +341,21 @@ resource "aws_iam_policy" "pi_coms_extensions" {
       }],
       // Certificate expiry is a fully predictable outage; the monitor's daily
       // cert check (SIO-1591) makes it a non-event. Read-only metadata.
+      // The ELBv2 reads answer a question ACM alone cannot: a listener can carry
+      // extra SNI certificates beyond its default, so without
+      // DescribeListenerCertificates an AccessDenied is indistinguishable from
+      // "this domain has no certificate" -- the monitor would report a coverage
+      // gap for names that are in fact served. Describe-only; no listener or
+      // rule mutation.
       [{
         Sid    = "CertificateReads"
         Effect = "Allow"
         Action = [
           "acm:ListCertificates",
           "acm:DescribeCertificate",
+          "elasticloadbalancing:DescribeLoadBalancers",
+          "elasticloadbalancing:DescribeListeners",
+          "elasticloadbalancing:DescribeListenerCertificates",
         ]
         Resource = "*"
       }],

@@ -72,7 +72,7 @@ The hub used to store nothing durable. It now persists **prompt and response bod
 | Property | Value |
 |----------|-------|
 | Peer name | Code default `monitor-aws-<account_id>`; the bootstrap sets `monitor-<alias>` (e.g. `monitor-eu-oit-dev`) on deployed hosts. Registered `--explicit` (hidden from lists and broadcasts unless named) |
-| Scheduling | In-process `Bun.cron()` (requires Bun >= 1.4): `*/15 * * * *` for alarms/logs/drift, `7 * * * *` for the ingestion heartbeat (minute 7 keeps its guard off the */15 boundary), `@daily` for cost/trail/certs/watchlist + digest |
+| Scheduling | In-process `Bun.cron()` (requires Bun >= 1.4): `*/15 * * * *` for alarms/logs/drift, `7 * * * *` for the ingestion heartbeat (minute 7 keeps its guard off the */15 boundary), `@daily` for cost/trail/certs/listener-certs/watchlist + digest |
 | State | `bun:sqlite` at `~/.pi/monitor/state.db`: watermarks, alert fingerprints, resource snapshots (instances, security groups, route tables, RDS, Lambda), cost history, journal, unsent-report queue |
 | Model usage | None inside the monitor. Zero token spend when no findings |
 | Modules | `scripts/monitor/checks/{alarms,logs,drift,resource-drift,cost}.ts`, `state.ts`, `report.ts`, `coms.ts` (headless coms-net client) |
@@ -94,6 +94,7 @@ Every cycle starts with a T0 gate: `sts:GetCallerIdentity` compared against `AWS
 | Ingestion | hourly | Metrics Insights `IncomingLogEvents` per log group; warn when the last 3 full hours are all 0 (`PI_MONITOR_INGEST_ZERO_HOURS`) against a same-hour-of-day 7-day median >= 10 (so the nightly scale-to-zero is silent by construction, and an event-driven function's isolated quiet hour no longer fires -- SIO-1711); recovery info. The inverse of the log-errors check: it finds logging that **stopped** | Per group, alert once until recovery |
 | Trail | daily | `GetTrailStatus` per trail: `IsLogging=false` is critical only when **no** readable trail is logging (the account is dark), otherwise warn -- `DescribeTrails` in a member account also returns the org's trails, owned by the management account, where a stopped one is unactionable locally and routinely a deliberate consolidation (SIO-1713). Delivery error warn, zero trails info; recovery info. Shadow org trails that deny status reads are tolerated and cannot establish coverage | Per trail + condition, 24 h re-alert |
 | Certs | daily | ACM `NotAfter` across the host region and `us-east-1` (CloudFront certs live there; list configurable): < 30 d warn, < 7 d critical (managed renewal happens ~60 d out, so < 30 d means renewal is failing). A cert whose domain is covered by another valid cert in the same region (exact or single-label wildcard, DomainName or SANs) reports `info` as superseded -- a rotated-out cert is cleanup noise, not risk. An unreadable region is one info scoping finding; the other regions still scan | Per cert + severity, 7 d re-alert |
+| Listener certs | daily | ELBv2 `DescribeListenerCertificates` per TLS listener across the same regions as the cert check. ACM alone cannot answer "is this domain covered?": a listener carries extra SNI certificates beyond its default, so a name absent from ACM may still be served. Reports the extra SNI certificates as one `info` inventory finding per listener. A denied or unreachable read is one `info` scoping finding per region saying SNI certificates are **not inspected** -- never silence, because silence would read as "no certificate" | Per listener, 7 d re-alert |
 | Watchlist | daily | `cloudtrail:LookupEvents` for scary write events (StopLogging, SG ingress/egress and revocations, route changes, S3 exposure, IAM edits, ...); one call per event name, watermarked. `ModifyDBInstance` is deliberately absent: resource drift catches RDS changes within 15 minutes while this list runs daily. The monitor is read-only, so its own CloudTrail echo can never match | Per event id |
 
 Watermarks, fingerprints, and snapshots all persist in `state.db`, so a monitor restart produces neither duplicate nor missed alerts.
@@ -159,7 +160,7 @@ Env-with-defaults; no config files. Set in the systemd unit environment or `~/.c
 | `PI_MONITOR_REPORT_TTL_MS` | `1209600000` (14 d) | Mailbox TTL on reports |
 | `PI_MONITOR_CHECK_CRON` | `*/15 * * * *` | Alarm/log/drift cadence |
 | `PI_MONITOR_HOURLY_CRON` | `7 * * * *` | Ingestion heartbeat (minute 7: never a */15 boundary) |
-| `PI_MONITOR_DAILY_CRON` | `@daily` | Cost/trail/certs/watchlist + digest (midnight UTC) |
+| `PI_MONITOR_DAILY_CRON` | `@daily` | Cost/trail/certs/listener-certs/watchlist + digest (midnight UTC) |
 | `PI_MONITOR_CERT_REGIONS` | host region + `us-east-1` | Comma-separated ACM regions the cert check scans |
 | `PI_MONITOR_REVIEW_CRON` | `@weekly` | Suppression review mail (monthly: `0 0 1 * *` + window 31) |
 | `PI_MONITOR_REVIEW_WINDOW_DAYS` | `7` | Match window the review counts over |
@@ -185,7 +186,7 @@ Hub-side: `PI_COMS_NET_MAX_TTL_MS` (default `1209600000`, 14 days) caps any requ
 
 ### IAM
 
-Everything fits the existing role except two named additions in `deploy/modules/agent/main.tf`: `ce:GetCostAndUsage` (inline `cost-explorer-read`; Cost Explorer is always called against `us-east-1`) and `acm:ListCertificates`/`acm:DescribeCertificate` (`CertificateReads` in the dev-extensions policy) for the cert check. `sts:GetCallerIdentity` needs no grant; `cloudwatch:GetMetricData`, `cloudtrail:GetTrailStatus`, and `cloudtrail:LookupEvents` are already on the DevOpsAgentReadOnly policies.
+Everything fits the existing role except two named additions in `deploy/modules/agent/main.tf`: `ce:GetCostAndUsage` (inline `cost-explorer-read`; Cost Explorer is always called against `us-east-1`) and `acm:ListCertificates`/`acm:DescribeCertificate` plus `elasticloadbalancing:DescribeLoadBalancers`/`DescribeListeners`/`DescribeListenerCertificates` (`CertificateReads` in the dev-extensions policy) for the cert and listener-cert checks. `sts:GetCallerIdentity` needs no grant; `cloudwatch:GetMetricData`, `cloudtrail:GetTrailStatus`, and `cloudtrail:LookupEvents` are already on the DevOpsAgentReadOnly policies.
 
 ---
 

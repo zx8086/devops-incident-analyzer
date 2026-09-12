@@ -7,9 +7,23 @@ import {
 	type ListCertificatesCommandOutput,
 } from "@aws-sdk/client-acm";
 
+import {
+	DescribeListenerCertificatesCommand,
+	type DescribeListenerCertificatesCommandOutput,
+	DescribeListenersCommand,
+	type DescribeListenersCommandOutput,
+	DescribeLoadBalancersCommand,
+	type DescribeLoadBalancersCommandOutput,
+} from "@aws-sdk/client-elastic-load-balancing-v2";
+
 // Re-exported so tests need no direct dependency on the SDK (it lives in scripts/package.json).
 export type { DescribeCertificateCommand };
-export { ListCertificatesCommand };
+export {
+	DescribeListenerCertificatesCommand,
+	DescribeListenersCommand,
+	DescribeLoadBalancersCommand,
+	ListCertificatesCommand,
+};
 
 import { errorMessage } from "../errors.ts";
 import type { Finding } from "../report.ts";
@@ -147,6 +161,104 @@ export async function checkCerts(
 			},
 			at,
 		});
+	}
+	return findings;
+}
+
+// An ACM scan alone cannot answer "is this domain covered?": an ALB listener
+// can carry extra SNI certificates beyond its default, and a name may terminate
+// somewhere ACM never sees (CloudFront, another account, or a non-ACM
+// gateway). DescribeListenerCertificates is the only read that distinguishes
+// "no cert" from "a cert we are not allowed to enumerate", so an AccessDenied
+// here is reported as a scoping fact, never as coverage.
+export async function checkListenerCerts(
+	clients: RegionalAcm[],
+	state: MonitorState,
+	opts: { now?: number } = {},
+): Promise<Finding[]> {
+	const now = opts.now ?? Date.now();
+	const at = new Date(now).toISOString();
+	const findings: Finding[] = [];
+
+	for (const { region, client } of clients) {
+		const scopeKey = `cert:sni:scope:${region}:`;
+		try {
+			const lbArns: string[] = [];
+			let marker: string | undefined;
+			do {
+				const resp = (await client.send(
+					new DescribeLoadBalancersCommand({ Marker: marker }),
+				)) as DescribeLoadBalancersCommandOutput;
+				for (const lb of resp.LoadBalancers ?? []) if (lb.LoadBalancerArn) lbArns.push(lb.LoadBalancerArn);
+				marker = resp.NextMarker;
+			} while (marker);
+
+			for (const lbArn of lbArns) {
+				const listeners: { arn: string; defaultArn: string | null }[] = [];
+				let lMarker: string | undefined;
+				do {
+					const resp = (await client.send(
+						new DescribeListenersCommand({ LoadBalancerArn: lbArn, Marker: lMarker }),
+					)) as DescribeListenersCommandOutput;
+					for (const l of resp.Listeners ?? []) {
+						// Only TLS-terminating listeners carry certificates.
+						if (!l.ListenerArn || (l.Certificates ?? []).length === 0) continue;
+						listeners.push({ arn: l.ListenerArn, defaultArn: l.Certificates?.[0]?.CertificateArn ?? null });
+					}
+					lMarker = resp.NextMarker;
+				} while (lMarker);
+
+				for (const listener of listeners) {
+					// DescribeListeners returns only the default cert; the extra SNI
+					// certs are a separate read, and that read is what used to be denied.
+					const sniArns: string[] = [];
+					let cMarker: string | undefined;
+					do {
+						const resp = (await client.send(
+							new DescribeListenerCertificatesCommand({ ListenerArn: listener.arn, Marker: cMarker }),
+						)) as DescribeListenerCertificatesCommandOutput;
+						for (const c of resp.Certificates ?? []) {
+							if (c.CertificateArn && !c.IsDefault) sniArns.push(c.CertificateArn);
+						}
+						cMarker = resp.NextMarker;
+					} while (cMarker);
+
+					if (sniArns.length === 0) continue;
+					const key = `cert:sni:${listener.arn}`;
+					if (!state.shouldAlert(key, REALERT_MS)) continue;
+					state.markAlerted(key, "cert");
+					findings.push({
+						family: "cert",
+						severity: "info",
+						resource: listener.arn,
+						summary: `Listener ${listener.arn} (${region}) carries ${sniArns.length} extra SNI certificate(s) beyond its default`,
+						dedup_key: key,
+						evidence: {
+							region,
+							loadBalancerArn: lbArn,
+							listenerArn: listener.arn,
+							defaultCertificateArn: listener.defaultArn,
+							sniCertificateArns: sniArns,
+						},
+						at,
+					});
+				}
+			}
+		} catch (e) {
+			// The whole point of this check: a denied or unreachable read must say
+			// "not inspected", so absence of a finding is never read as coverage.
+			if (!state.shouldAlert(scopeKey)) continue;
+			state.markAlerted(scopeKey, "cert");
+			findings.push({
+				family: "cert",
+				severity: "info",
+				resource: region,
+				summary: `Listener certificates in ${region} are unreadable (not inspected -- SNI certificates beyond each listener default are unknown): ${errorMessage(e)}`,
+				dedup_key: scopeKey,
+				evidence: { region, error: errorMessage(e) },
+				at,
+			});
+		}
 	}
 	return findings;
 }

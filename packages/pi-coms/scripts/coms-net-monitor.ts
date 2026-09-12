@@ -8,6 +8,7 @@ import { CloudWatchClient, DescribeAlarmsCommand } from "@aws-sdk/client-cloudwa
 import { CloudWatchLogsClient } from "@aws-sdk/client-cloudwatch-logs";
 import { CostExplorerClient } from "@aws-sdk/client-cost-explorer";
 import { EC2Client } from "@aws-sdk/client-ec2";
+import { ElasticLoadBalancingV2Client } from "@aws-sdk/client-elastic-load-balancing-v2";
 import { LambdaClient } from "@aws-sdk/client-lambda";
 import { RDSClient } from "@aws-sdk/client-rds";
 import { STSClient } from "@aws-sdk/client-sts";
@@ -21,7 +22,7 @@ import {
 	REFUSED_PREFIX,
 } from "./monitor/budget.ts";
 import { checkAlarms } from "./monitor/checks/alarms.ts";
-import { certRegions, checkCerts } from "./monitor/checks/certs.ts";
+import { certRegions, checkCerts, checkListenerCerts } from "./monitor/checks/certs.ts";
 import { COST_DEFAULTS, checkCost } from "./monitor/checks/cost.ts";
 import { checkDrift } from "./monitor/checks/drift.ts";
 import { checkIdentity, type GateResult } from "./monitor/checks/identity.ts";
@@ -285,9 +286,16 @@ function main(): void {
 	const ce = new CostExplorerClient({ region: "us-east-1" }); // Cost Explorer is us-east-1 only
 	const sts = new STSClient({ region });
 	const cloudtrail = new CloudTrailClient({ region });
-	const acmClients = certRegions(region, process.env.PI_MONITOR_CERT_REGIONS).map((r) => ({
+	const certScanRegions = certRegions(region, process.env.PI_MONITOR_CERT_REGIONS);
+	const acmClients = certScanRegions.map((r) => ({
 		region: r,
 		client: new ACMClient({ region: r }),
+	}));
+	// Same regions, different service: SNI certificates hang off ELBv2 listeners,
+	// which ACM never reports.
+	const elbClients = certScanRegions.map((r) => ({
+		region: r,
+		client: new ElasticLoadBalancingV2Client({ region: r }),
 	}));
 	const rds = new RDSClient({ region });
 	const lambda = new LambdaClient({ region });
@@ -497,6 +505,7 @@ function main(): void {
 					name: "certs",
 					run: () => checkCerts(acmClients, state, { warnDays: CERT_WARN_DAYS, critDays: CERT_CRIT_DAYS }),
 				},
+				{ name: "listener-certs", run: () => checkListenerCerts(elbClients, state) },
 				{
 					name: "watchlist",
 					run: () => checkWatchlist(cloudtrail, state, WATCHLIST.length > 0 ? { events: WATCHLIST } : {}),
