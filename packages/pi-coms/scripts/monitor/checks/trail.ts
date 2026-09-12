@@ -43,26 +43,47 @@ export async function checkTrail(client: AwsClient, state: MonitorState): Promis
 	state.clearAlerts("trail:none:");
 
 	const errors: string[] = [];
+	// SIO-1713: read every status first, because one trail's severity depends on
+	// whether ANY other trail still covers the account. DescribeTrails in a member
+	// account also returns the organization's trails, owned by the management
+	// account: a stopped one there is not actionable here, and is routinely a
+	// deliberate consolidation (only the first copy of management events per
+	// account is free, so overlapping org trails are billed per event). Coverage
+	// is the aggregate -- "no trail is logging" -- never one trail's own flag.
+	const statuses: { name: string; status: GetTrailStatusCommandOutput }[] = [];
 	for (const t of trails) {
 		const name: string = t.Name ?? t.TrailARN ?? "unknown";
-		let status: GetTrailStatusCommandOutput;
 		try {
-			status = (await client.send(
-				new GetTrailStatusCommand({ Name: t.TrailARN ?? name }),
-			)) as GetTrailStatusCommandOutput;
+			statuses.push({
+				name,
+				status: (await client.send(
+					new GetTrailStatusCommand({ Name: t.TrailARN ?? name }),
+				)) as GetTrailStatusCommandOutput,
+			});
 		} catch (e) {
 			// Shadow org trails from the management account can deny status reads
 			// to a member account; only an all-trails failure is a check error.
 			errors.push(`${name}: ${errorMessage(e)}`);
-			continue;
 		}
+	}
+	// Readable trails only: a denied shadow trail says nothing either way, so it
+	// can neither establish nor refute coverage.
+	const anyLogging = statuses.some((s) => s.status.IsLogging !== false);
+
+	for (const { name, status } of statuses) {
 		const conditions: { key: string; severity: "critical" | "warn"; summary: string; evidence: unknown }[] = [];
 		if (status.IsLogging === false) {
 			conditions.push({
 				key: `trail:${name}:logging`,
-				severity: "critical",
-				summary: `CloudTrail ${name} is NOT logging`,
-				evidence: { isLogging: false, stopLoggingTime: status.StopLoggingTime ?? null },
+				severity: anyLogging ? "warn" : "critical",
+				summary: anyLogging
+					? `CloudTrail ${name} is not logging (another trail still covers this account)`
+					: `CloudTrail ${name} is NOT logging`,
+				evidence: {
+					isLogging: false,
+					stopLoggingTime: status.StopLoggingTime ?? null,
+					otherTrailLogging: anyLogging,
+				},
 			});
 		}
 		if (status.LatestDeliveryError) {
