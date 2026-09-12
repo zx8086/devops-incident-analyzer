@@ -154,18 +154,51 @@ So everything below the model layer is correct and the gate still fails.
 - **RAM is a non-issue.** ~1.12GB available on `t4g.small` with the bridge running.
 - **The full upstream suite passes with the patch**: 210 files, 4719 tests, 0 failures; `tsc --noEmit` clean.
 
-## The open question
+## The open question -- ANSWERED, fix committed, not yet spoke-verified
 
-Why do the tools still not reach the model when the patched extension is loaded?
+**Root cause of the second failure, confirmed in Pi's agent-core source.**
+`createContextSnapshot()` is evaluated as an ARGUMENT to `runAgentLoop`
+(`@earendil-works/pi-agent-core/dist/agent.js:272`), so the tool list for a
+model call is frozen BEFORE the loop body reaches `transformContext`
+(`dist/agent-loop.js:181-182`). A bridge bootstrapped from the `context` hook
+therefore registers its `ctx_*` tools AFTER that call's snapshot was taken, and
+the turn still sees none. Candidate 2 below was right.
 
-Candidates, none yet tested:
+Interactive hosts never notice: the human's first prompt goes through
+`_runAgentPrompt`, `before_agent_start` fires, the bridge is up before any
+snapshot. A spoke whose every turn arrives via `pi.sendMessage()` -- with
+pi-monitor keeping it streaming so `isStreaming` routes to `agent.followUp()` --
+never fires that hook at all and hits the race on every turn.
 
-1. **Does `context` actually fire on the `followUp` path?** This is the load-bearing assumption of the patch and it was reasoned from source, never observed on a spoke. Verify by adding a temporary `pi.logger.warn` at the top of the `context` handler, rebuilding, deploying, and grepping the session JSONL after an inbound message.
-2. **Tool-registry snapshot timing.** Pi may snapshot the tool set for a model call *before* `transformContext` runs, in which case registering during `context` is too late for that same call — tools would appear only from the *next* turn onward. Test: send two inbound messages and see whether the second one has them.
-3. **The idle reaper.** `CONTEXT_MODE_BRIDGE_IDLE_MS` is armed for non-foreground sessions (`isForegroundSession` is `ctx?.hasUI !== false`, and a herdr-hosted spoke has no UI). A reaped child may leave registrations pointing at a dead bridge. Test: set `CONTEXT_MODE_BRIDGE_IDLE_MS=0` in `~/.coms-env.local` and retry.
-4. **`refreshTools`.** Pi exposes `refreshTools` / `getActiveTools` / `getAllTools` on the runtime (`dist/core/extensions/runner.js:160-168`). If registration lands after a snapshot, calling `refreshTools` after bootstrap may be the missing step — and would be a better upstream fix than the `context` hook alone.
+**Fix committed** at `~/WebstormProjects/context-mode`, branch
+`fix/pi-bridge-bootstrap-on-context`, commit `1447087`: an opt-in eager
+bootstrap from `session_start`, which only a live AgentSession emits (never the
+CLI-only paths the #534/#809 lazy guard exists for). Default stays lazy; a
+headless host sets `CONTEXT_MODE_BRIDGE_EAGER=1`. Verified `tsc --noEmit` clean
+and `tests/pi-extension.test.ts` 72/72.
 
-Candidate 2 is the most likely and the cheapest to falsify. Start there.
+**NOT yet verified on a spoke.** The two commits together (`571ba5f` context
+backstop + `1447087` eager flag) are the candidate fix; nobody has run the L2
+gate against them. To finish:
+
+1. Rebuild: `cd ~/WebstormProjects/context-mode && bun install --ignore-scripts && npx tsc`
+2. Re-vendor `build/adapters/pi/extension.js` into
+   `packages/pi-coms/vendor/context-mode-patch/extension.js`
+3. Add `export CONTEXT_MODE_BRIDGE_EAGER=1` to the spoke env -- `~/.coms-env.local`
+   for a one-host test, or the bootstrap's env file for the fleet
+4. Publish, converge one dev spoke, run the L2 gate below
+
+If it passes, the eager flag is the real upstream fix and the `context` backstop
+becomes a belt-and-braces addition; report both upstream together.
+
+### The other candidates, now lower priority
+
+3. The idle reaper (`CONTEXT_MODE_BRIDGE_IDLE_MS`, armed for non-foreground
+   sessions) could still reap the child of a long-lived spoke between turns.
+   Test with `CONTEXT_MODE_BRIDGE_IDLE_MS=0` if the eager flag alone is flaky.
+4. `refreshTools` on Pi's runtime (`runner.js:160-168`) would let a late
+   registration invalidate an existing snapshot -- a cleaner upstream fix than an
+   env flag, if Pi's maintainers prefer it.
 
 ## Verification commands
 
