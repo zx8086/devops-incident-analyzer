@@ -129,18 +129,29 @@ export async function checkCerts(
 		const successor = certs.find(
 			(s) => s.arn !== arn && s.region === region && s.daysLeft > warnDays && s.names.some((n) => covers(n, domain)),
 		);
-		const severity = successor ? "info" : daysLeft <= critDays ? "critical" : "warn";
+		// An expiry only breaks TLS when something actually serves the
+		// certificate, so InUseBy decides severity rather than merely decorating
+		// the evidence: an unattached certificate is cleanup, reported as info so
+		// it stays discoverable without paging. Without this an expired-and-
+		// detached certificate scores a negative daysLeft, satisfies
+		// `daysLeft <= critDays` and pages critical forever (SIO-1724).
+		const inUseBy = cert.InUseBy ?? [];
+		const inUse = inUseBy.length > 0;
+		const severity = successor || !inUse ? "info" : daysLeft <= critDays ? "critical" : "warn";
 		const key = `cert:${arn}:${severity}`;
 		if (!state.shouldAlert(key, REALERT_MS)) continue;
 		state.markAlerted(key, "cert");
 		const supersededNote = successor
 			? `; superseded by a valid certificate for ${successor.cert.DomainName ?? successor.arn} (expires ${new Date(successor.cert.NotAfter).toISOString()})`
 			: "";
+		// A past expiry reads as "expired N day(s) ago", never "expires in -N days".
+		const expiredNote = daysLeft < 0 ? `expired ${-daysLeft} day(s) ago` : `expires in ${daysLeft} day(s)`;
+		const unusedNote = inUse ? "" : "; not in use by any resource";
 		findings.push({
 			family: "cert",
 			severity,
 			resource: domain,
-			summary: `Certificate ${domain} (${region}) expires in ${daysLeft} day(s)${supersededNote}`,
+			summary: `Certificate ${domain} (${region}) ${expiredNote}${unusedNote}${supersededNote}`,
 			dedup_key: key,
 			evidence: {
 				arn,
@@ -148,7 +159,7 @@ export async function checkCerts(
 				notAfter: new Date(cert.NotAfter).toISOString(),
 				daysLeft,
 				renewalEligibility: cert.RenewalEligibility ?? null,
-				inUseBy: cert.InUseBy ?? [],
+				inUseBy,
 				...(successor
 					? {
 							supersededBy: {
