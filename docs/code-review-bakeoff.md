@@ -63,6 +63,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#711](https://github.com/zx8086/devops-incident-analyzer/pull/711) | 2026-09-07 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1662, dropping the duplicate fleet-console header button and moving the entry into the pane (2 files); SKIPPED once in 139 ms; CodeRabbit silent (31st straight); all five CI jobs green first run; merged on user authorization with the gate overridden; detail below |
 | [#715](https://github.com/zx8086/devops-incident-analyzer/pull/715) | 2026-09-08 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1666, rekeying pi-coms hubs by AWS account across four packages (35 files); three SKIPPED records, one per push, 110-135 ms each; CodeRabbit silent (32nd straight); CI caught two real gaps a per-package local run missed; merged on user authorization with the gate overridden; detail below |
 | [#730](https://github.com/zx8086/devops-incident-analyzer/pull/730) | 2026-09-11 | 0 | n/a (SKIPPED x2, code PR) | n/a (no review) | SIO-1695, prompt-audit High findings; forty-seventh consecutive Greptile skip (#716-#729 unlogged in this table); detail below |
+| [#732](https://github.com/zx8086/devops-incident-analyzer/pull/732) | 2026-09-12 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1697, cache counters read from usage_metadata.input_token_details; forty-eighth consecutive Greptile skip; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -1170,3 +1171,17 @@ Eight files: three persona prompts, two tool YAMLs, one manifest, `llm.ts` and `
 **Merge gate:** all six CI jobs green. Locally: root typecheck clean in every package; biome clean on the two TypeScript files; gitagent-bridge 442/442; agent 4488 pass with 24 failures under `src/iac/*` that reproduce identically on `main` in a clean worktree. A `bun -e` probe confirmed pi-fleet-console resolves `eu.anthropic.claude-sonnet-5` at 8192 tokens with the Haiku fallback and that a manifest without `model.preferred` throws. Merged on the user's explicit go-ahead.
 
 **Takeaway:** *a prompt is only as good as the model that reads it.* Four tickets of Atlassian steering (SIO-1096 through SIO-1182) were written into a field the executing sub-agent never receives; no reviewer, human or bot, had traced the field to its one consumer. The fix was less text in the wrong place and a paragraph in the right one.
+
+## PR #732 detail (SIO-1697, cache counters read from usage_metadata.input_token_details)
+
+One file, `packages/agent/src/llm.ts`, logging only. The live check SIO-1695 asked for showed that the C-2 change merged in #730 never logged a cache field: `@langchain/aws` 1.4.3 folds Bedrock's `cacheReadInputTokens` / `cacheWriteInputTokens` into `usage_metadata.input_token_details` (`cache_read`, `cache_creation`) on both paths and only the non-streaming path also carries the raw Converse `usage`, so the aggregator, which streams, produced nothing. The fix reads the standard field first and keeps the raw read as a fallback.
+
+**Greptile:** SKIPPED at dispatch (23:29Z, 198 ms). Forty-eighth consecutive skip.
+
+**CodeRabbit:** nothing in the hour the PR was open. Forty-eighth consecutive absence.
+
+**Local review (substitute):** the library's own source was the review: `dist/utils/stream_events.js:105-116` and `dist/utils/message_outputs.js:11-24` read before the edit, and the edit verified by the measurement it enables rather than by inspection.
+
+**Merge gate:** all six CI jobs green; agent typecheck and biome clean. Live, on a port-5174 dev server running the branch, two identical elastic-only turns 150 s apart: elastic sub-agent cacheWrite 13654 then cacheRead 13654 on every later ReAct call and on the next turn; aggregator cacheRead 8546 on both turns. Merged on the user's explicit go-ahead.
+
+**Takeaway:** *a logging change is verified by the number it prints, not by the diff.* #730 shipped a cache-counter read that was correct against the library's documentation comments and wrong against its code; the two-turn probe that #730's own ticket prescribed found it in one run, and neither bot was there to read the library.
