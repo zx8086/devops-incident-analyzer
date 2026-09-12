@@ -164,6 +164,7 @@ const notable = (over: Partial<DigestNotable> = {}): DigestNotable => ({
 	resource: "i-059a799316e6d8f5d",
 	summary: "instance changed state running -> terminated",
 	uninvestigated: false,
+	occurrences: 1,
 	...over,
 });
 
@@ -186,6 +187,17 @@ describe("digest notables", () => {
 			"(critical/cert) cert-example.example.test: Certificate cert-example.example.test expires in -979 day(s)",
 		);
 		expect(text).toContain("(warn/drift) i-059a799316e6d8f5d: instance changed state running -> terminated");
+	});
+
+	test("shows a repeat count only when a finding recurred", () => {
+		const text = formatDigest({
+			...quietDigest,
+			findingCounts: { alarm: 11 },
+			notables: [notable({ resource: "flapper", occurrences: 10 }), notable({ resource: "once" })],
+		});
+		expect(text.split("\n").find((l) => l.includes("flapper"))).toContain("(x10)");
+		// A single occurrence keeps the original, uncluttered line.
+		expect(text.split("\n").find((l) => l.includes("once"))).not.toContain("(x");
 	});
 
 	test("sorts critical before warn regardless of input order", () => {
@@ -329,13 +341,16 @@ describe("notablesFromJournal", () => {
 	test("keeps warn+ rows, drops info, and maps null diagnosis to uninvestigated", () => {
 		const rows = [
 			row({ ...finding, diagnosis: null }),
+			// Distinct resources carry distinct dedup_keys in real findings (the
+			// checks derive the key from the resource), so they must not collapse.
 			row({
 				...finding,
 				severity: "warn",
 				resource: "warned",
+				dedup_key: "alarm:warned:ALARM",
 				diagnosis: { probable_cause: "x", affected_resources: [], suggested_action: "y" },
 			}),
-			row({ ...finding, severity: "info", resource: "noise", diagnosis: null }),
+			row({ ...finding, severity: "info", resource: "noise", dedup_key: "alarm:noise:ALARM", diagnosis: null }),
 		];
 		const notables = notablesFromJournal(rows);
 		expect(notables).toHaveLength(2);
@@ -346,6 +361,41 @@ describe("notablesFromJournal", () => {
 	test("skips unparseable rows instead of throwing", () => {
 		const notables = notablesFromJournal([{ payload: "not json" }, row({ ...finding, diagnosis: null })]);
 		expect(notables).toHaveLength(1);
+	});
+
+	// Taken from a live eu-oit-prd digest: a flapping alarm journalled 10
+	// identical rows, filling NOTABLE_CAP and pushing 24 other findings out.
+	test("collapses repeated rows sharing a dedup_key into one counted entry", () => {
+		const repeat = row({ ...finding, diagnosis: null });
+		const notables = notablesFromJournal([repeat, repeat, repeat]);
+		expect(notables).toHaveLength(1);
+		expect(notables[0]).toMatchObject({ resource: "cpu-high", occurrences: 3, uninvestigated: true });
+	});
+
+	test("keeps distinct dedup_keys apart", () => {
+		const notables = notablesFromJournal([
+			row({ ...finding, dedup_key: "alarm:a:ALARM", diagnosis: null }),
+			row({ ...finding, dedup_key: "alarm:b:ALARM", diagnosis: null }),
+			row({ ...finding, dedup_key: "alarm:a:ALARM", diagnosis: null }),
+		]);
+		expect(notables).toHaveLength(2);
+		expect(notables.map((n) => n.occurrences)).toEqual([2, 1]);
+	});
+
+	// An investigated occurrence must not mask one nobody has looked at.
+	test("a single uninvestigated occurrence marks the collapsed entry", () => {
+		const diagnosed = { probable_cause: "x", affected_resources: [], suggested_action: "y" };
+		const notables = notablesFromJournal([
+			row({ ...finding, diagnosis: diagnosed }),
+			row({ ...finding, diagnosis: null }),
+		]);
+		expect(notables).toHaveLength(1);
+		expect(notables[0]?.uninvestigated).toBe(true);
+	});
+
+	test("a single occurrence still reports occurrences: 1", () => {
+		const notables = notablesFromJournal([row({ ...finding, diagnosis: null })]);
+		expect(notables[0]?.occurrences).toBe(1);
 	});
 });
 
