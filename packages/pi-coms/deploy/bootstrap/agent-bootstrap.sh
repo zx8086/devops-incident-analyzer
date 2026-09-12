@@ -144,11 +144,20 @@ if [ "${CTX_MODE_ENABLED:-}" != "false" ] && [ "${CTX_MODE_ENABLED:-}" != "0" ];
      || [ "$(cat "$CTX_DIR/.ctx-version" 2>/dev/null || echo none)" != "$CTX_VERSION" ]; then
     mkdir -p "$CTX_DIR"
     echo '{"name":"pi-ctx","private":true}' > "$CTX_DIR/package.json"
+    # --ignore-scripts is REQUIRED, not a precaution: better-sqlite3 is a declared
+    # dependency whose postinstall shells out to node-gyp, which does not exist on
+    # this Bun-only host, so the install script exits 127 and fails the whole
+    # `bun add` (observed on eu-oit-dev, 2026-09-12). It is skipped safely because
+    # nothing here ever opens better-sqlite3: server.bundle.mjs branches on
+    # globalThis.Bun and requires bun:sqlite instead. A macOS dev box hides this,
+    # because there Bun leaves the same postinstall BLOCKED (untrusted) and the
+    # install succeeds by accident.
+    #
     # Pinned for the same reason as pi itself (SIO-1631): an unpinned install
     # would drift the ctx_* tool surface under a running fleet. Never fatal --
     # this block runs under `bash -euo pipefail`, so the guard keeps a registry
     # outage from aborting the whole bootstrap.
-    if (cd "$CTX_DIR" && bun add "context-mode@$CTX_VERSION"); then
+    if (cd "$CTX_DIR" && bun add --ignore-scripts "context-mode@$CTX_VERSION"); then
       echo "$CTX_VERSION" > "$CTX_DIR/.ctx-version"
     else
       echo "context-mode install failed; spoke starts without ctx_* tools" >&2
