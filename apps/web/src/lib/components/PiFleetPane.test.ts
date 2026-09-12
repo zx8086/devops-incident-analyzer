@@ -44,8 +44,12 @@ const listing: PiFleetAgentsResponse = {
 	],
 };
 
-function renderPane(state: PiFleetState, busy = false): string {
-	return render(PiFleetPane, { props: { pane: state, busy, mailboxBusy: null, ...handlers } }).body;
+// SIO-1702: the console button is `{#if onAskAll}`, so it renders only where the
+// deployment offers it. Opt-in here, keeping the not-offered case testable.
+function renderPane(state: PiFleetState, busy = false, onAskAll?: () => void): string {
+	return render(PiFleetPane, {
+		props: { pane: state, busy, mailboxBusy: null, ...handlers, ...(onAskAll ? { onAskAll } : {}) },
+	}).body;
 }
 
 describe("PiFleetPane", () => {
@@ -98,6 +102,57 @@ describe("PiFleetPane", () => {
 		// The tail of the report, which the old slice cut off.
 		expect(body).toContain("saw 3 error-pattern events");
 		expect(body).not.toContain(`${report.slice(0, 140)}...`);
+	});
+
+	// SIO-1702: the button LEAVES this pane (it switches agent); it never fed the
+	// input box below it, which an arrow alone did not convey. And the console can
+	// only ask spokes it can reach, so a down hub must gate it -- `consoleAvailable`
+	// upstream is a deployment fact, not a liveness one.
+	test("names the destination and explains that the question is asked in the chat", () => {
+		const body = renderPane(applyAgents(initialPiFleetState(), listing), false, noop);
+		expect(body).toContain("Open the fleet console");
+		expect(body).toContain("Switches agent: ask one question in the chat");
+		// The old label read as if it acted on this pane.
+		expect(body).not.toContain("Ask all spokes at once");
+	});
+
+	test("points the disabled input at both paths when spokes are reachable", () => {
+		const body = renderPane(applyAgents(initialPiFleetState(), listing), false, noop);
+		expect(body).toContain("Select a spoke above");
+		expect(body).toContain("or open the fleet console to ask them all at once");
+	});
+
+	test("disables the console button and says why when no spoke is reachable", () => {
+		const unreachable: PiFleetAgentsResponse = {
+			...listing,
+			hubs: [
+				{
+					hubKey: "eu-shared-services-prd",
+					environment: "prd",
+					project: "default",
+					fallbackTarget: "ops",
+					peers: [],
+					error: 'cannot reach hub "eu-shared-services-prd" -- the SSM tunnel is probably down',
+				},
+			],
+		};
+		const body = renderPane(applyAgents(initialPiFleetState(), unreachable), false, noop);
+		const tag = body.match(/<button[^>]*>\s*Open the fleet console/)?.[0] ?? "";
+		// The ATTRIBUTE, not the Tailwind `disabled:` variants in the class list.
+		expect(/\sdisabled(=|\s|>)/.test(tag.replace(/class="[^"]*"/, ""))).toBe(true);
+		expect(body).toContain("Unavailable while no spoke is reachable");
+		expect(body).toContain("No spoke is reachable. Fix the hub above");
+	});
+
+	test("leaves the console button enabled while a spoke is reachable", () => {
+		const body = renderPane(applyAgents(initialPiFleetState(), listing), false, noop);
+		const tag = body.match(/<button[^>]*>\s*Open the fleet console/)?.[0] ?? "";
+		expect(/\sdisabled(=|\s|>)/.test(tag.replace(/class="[^"]*"/, ""))).toBe(false);
+	});
+
+	test("omits the console button entirely where the deployment does not offer it", () => {
+		const body = renderPane(applyAgents(initialPiFleetState(), listing));
+		expect(body).not.toContain("Open the fleet console");
 	});
 
 	test("shows the empty-state copy before any peer is selected", () => {
