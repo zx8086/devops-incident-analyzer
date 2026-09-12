@@ -28,15 +28,26 @@ answers "no ctx tools"; with it the spoke calls `ctx_batch_execute` and returns
 its sandboxed output, and the bridge child becomes a live child of the Pi
 process.
 
+## Second patch: eager bootstrap at session_start (SIO-1726, follow-up)
+
+The `context` backstop alone is one turn late. Pi emits `before_agent_start`
+only from the user-text `prompt()` path; `pi.sendMessage()` (every spoke turn)
+goes straight to `agent.prompt()`, which snapshots the tool list BEFORE
+`transformContext` runs. So the first inbound message after a Pi start still
+answered `no ctx tools`; the second had the tools. The patched build honours
+`CONTEXT_MODE_BRIDGE_EAGER=1` to start the bridge from `session_start`, which
+only a live AgentSession emits (never `pi list`/help/version). The launcher
+exports it next to the `-e` flag, under the same `CTX_MODE_ENABLED` guard.
+
 ## Provenance
 
 - Upstream: https://github.com/mksglu/context-mode
 - Upstream version: 1.0.169
-- Built from: local checkout at commit `571ba5f` on branch
-  `fix/pi-bridge-bootstrap-on-context` (patch + regression test; upstream suite
+- Built from: local checkout at commit `1447087` on branch
+  `fix/pi-bridge-bootstrap-on-context` (two patches + regression tests; upstream suite
   210 files / 4719 tests passing)
 - License: Elastic License 2.0 -- retained; see the upstream LICENSE. This file
-  is an unmodified build of upstream source plus that one patch.
+  is an unmodified build of upstream source plus those two patches.
 
 ## Remove this when
 

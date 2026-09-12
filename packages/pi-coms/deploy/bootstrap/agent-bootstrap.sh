@@ -567,6 +567,11 @@ CTX_EXT_PATH="$HOME/.pi-ctx/node_modules/context-mode/build/adapters/pi/extensio
 if [ "${CTX_MODE_ENABLED:-}" != "false" ] && [ "${CTX_MODE_ENABLED:-}" != "0" ] \
    && [ -f "$CTX_EXT_PATH" ]; then
   EXT_ARGS+=(-e "$CTX_EXT_PATH")
+  # Pi emits before_agent_start only from the user-text prompt() path; every spoke
+  # turn arrives via pi.sendMessage(), which never fires it, and the context-hook
+  # backstop registers one model call too late for the first turn. The vendored
+  # context-mode build honours this opt-in to start the bridge at session_start.
+  export CONTEXT_MODE_BRIDGE_EAGER=1
 fi
 
 herdr agent start "AGENT_NAME_PLACEHOLDER" --kind pi --pane "$PANE_ID" --timeout 15000 -- \

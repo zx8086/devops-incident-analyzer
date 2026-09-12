@@ -419,6 +419,19 @@ export default function piExtension(pi) {
                 _sessionId = `pi-${Date.now()}`;
             }
         }
+        // Opt-in eager bootstrap. Pi emits `before_agent_start` only from the
+        // user-text `prompt()` path; a turn created by `pi.sendMessage()` never
+        // fires it, and the `context` backstop below registers tools AFTER the
+        // agent has already snapshotted the tool list for that first model call
+        // (agent-core createContextSnapshot), so the first such turn still sees no
+        // ctx_* tools. Headless hosts whose every turn arrives via sendMessage
+        // (e.g. a coms-net spoke) set CONTEXT_MODE_BRIDGE_EAGER=1 so the bridge is
+        // up before the first turn. `session_start` is emitted only by a live
+        // AgentSession, never by CLI-only paths, so #534/#809 stay preserved; the
+        // default remains lazy.
+        if (process.env.CONTEXT_MODE_BRIDGE_EAGER === "1") {
+            void ensureMCPBridge(isForegroundSession(ctx));
+        }
     });
     // ── 2. tool_call — PreToolUse routing enforcement ──────
     // Block bash commands that contain curl/wget/fetch/requests patterns.
