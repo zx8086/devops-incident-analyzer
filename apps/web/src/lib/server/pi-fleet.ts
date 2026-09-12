@@ -141,6 +141,34 @@ function describeError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+// SIO-1701: an unreachable hub surfaces in the pane as a bare "fetch failed" --
+// the browser's own TypeError text, which names neither the hub nor the cause.
+// For these hubs the cause is nearly always the SSM tunnel being down, since the
+// serverUrl is a localhost port a tunnel forwards. Following the SIO-1661
+// precedent: add the context only this layer knows (which hub, which URL) and
+// the exact command that fixes it. A hub reached over a non-local URL gets the
+// same framing minus the tunnel advice, which would be wrong there.
+function explainUnreachableHub(error: unknown, hubKey: string, serverUrl: string): string {
+	const message = error instanceof Error ? error.message : String(error);
+	// Node/undici surface a connection refusal as exactly "fetch failed"; the
+	// cause chain carries the real reason (ECONNREFUSED and friends).
+	const cause = error instanceof Error && error.cause instanceof Error ? error.cause.message : "";
+	const unreachable = message === "fetch failed" || /ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ETIMEDOUT/.test(cause);
+	if (!unreachable) return message;
+	let host = "";
+	try {
+		host = new URL(serverUrl).hostname;
+	} catch {
+		// A malformed serverUrl is a config error, not a tunnel one: fall through
+		// to the generic line rather than advising a tunnel that cannot help.
+	}
+	const local = host === "127.0.0.1" || host === "localhost" || host === "::1";
+	const detail = cause ? ` (${cause})` : "";
+	return local
+		? `cannot reach hub "${hubKey}" at ${serverUrl}${detail} -- the SSM tunnel is probably down: just hub-tunnel ${hubKey}`
+		: `cannot reach hub "${hubKey}" at ${serverUrl}${detail}`;
+}
+
 // SIO-1661: a registration rejection is nearly always the prefix/principal
 // mismatch documented at the top of this file, and the operator sees only the
 // route's 502 body. The client has already named the sender; this frame adds the
@@ -208,10 +236,14 @@ export async function listFleetAgents(deps: PiFleetDeps = {}): Promise<PiFleetAg
 					// This error was previously visible ONLY as a string in the pane
 					// ("fetch failed"), with nothing server-side to say which hub or why.
 					log.warn(
-						{ hubKey: paneHub.hubKey, project: paneHub.hub.project, error: describeError(error) },
+						{
+							hubKey: paneHub.hubKey,
+							project: paneHub.hub.project,
+							error: explainUnreachableHub(error, paneHub.hubKey, paneHub.hub.serverUrl),
+						},
 						"pi.fleet.agents.failed",
 					);
-					return { ...base, peers: [], error: describeError(error) };
+					return { ...base, peers: [], error: explainUnreachableHub(error, paneHub.hubKey, paneHub.hub.serverUrl) };
 				}
 			}),
 	);
