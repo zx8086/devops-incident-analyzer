@@ -124,6 +124,82 @@ describe("PiFleetPane", () => {
 		expect(body).not.toContain(`${report.slice(0, 140)}...`);
 	});
 
+	// SIO-1712: the ops inbox card used to render INSIDE the spoke picker, whose
+	// region is height-capped, so a whole daily digest came through a letterbox
+	// while the replies region sat empty below it. The card belongs in the main
+	// scroll region, beside the replies it relates to.
+	test("renders the ops inbox digest in the replies region, not inside the capped picker", () => {
+		const state = applyMailbox(applyAgents(initialPiFleetState(), listing), {
+			hubKey: "eu-shared-services-dev",
+			environment: "dev",
+			name: "ops",
+			missingDigest: [],
+			windowTruncated: false,
+			messages: [inboxMessage("m1", "monitor-eu-oit-prd", "[info] daily digest")],
+		});
+		const body = renderPane(state);
+		const picker = body.indexOf("max-h-[35%]");
+		const replies = body.indexOf("flex-1 overflow-y-auto min-h-0");
+		const card = body.indexOf("<details");
+		expect(picker).toBeGreaterThan(-1);
+		expect(replies).toBeGreaterThan(-1);
+		// The card opens after the replies region does, so it is no longer nested
+		// in the capped picker above it.
+		expect(card).toBeGreaterThan(replies);
+		expect(card).toBeGreaterThan(picker);
+	});
+
+	// SIO-1712: several loaded mailboxes plus a running reply have to coexist in
+	// one scroll region, so the card collapses. Native <details>, so it is
+	// keyboard-operable without any component state.
+	test("the ops inbox card is collapsible and open by default", () => {
+		const state = applyMailbox(applyAgents(initialPiFleetState(), listing), {
+			hubKey: "eu-shared-services-dev",
+			environment: "dev",
+			name: "ops",
+			missingDigest: [],
+			windowTruncated: false,
+			messages: [inboxMessage("m1", "monitor-eu-oit-prd", "[info] daily digest")],
+		});
+		const body = renderPane(state);
+		expect(body).toMatch(/<details[^>]*\sopen/);
+		expect(body).toContain("<summary");
+		// The count is on the summary, so a collapsed card still says how much it holds.
+		expect(body).toContain("1 report");
+	});
+
+	// SIO-1712: gray-500 on tommy-offwhite is 4.02:1 and gray-400 on white is
+	// 2.54:1 -- both under the 4.5:1 floor. The digest body is the thing the
+	// operator actually reads, so it carries full-contrast text on the same
+	// surface a spoke reply uses; gray-600 clears both cream and white.
+	test("renders the digest body at a legible contrast, with no gray-400 anywhere", () => {
+		const state = applyMailbox(applyAgents(initialPiFleetState(), listing), {
+			hubKey: "eu-shared-services-dev",
+			environment: "dev",
+			name: "ops",
+			missingDigest: [],
+			windowTruncated: false,
+			messages: [inboxMessage("m1", "monitor-eu-oit-prd", "[info] daily digest")],
+		});
+		const body = renderPane(state);
+		expect(body).toContain("text-gray-700 bg-tommy-offwhite");
+		expect(body).not.toContain("text-gray-400");
+	});
+
+	// SIO-1712: Refresh was a bare text link that ignored the `busy` prop it was
+	// already given, so it neither read as a control nor showed it was working.
+	test("Refresh is a labelled button that disables and spins while busy", () => {
+		const idle = renderPane(applyAgents(initialPiFleetState(), listing), false);
+		expect(idle).toContain('aria-label="Refresh the fleet spoke list"');
+		expect(idle).toContain("Refresh");
+
+		const busy = renderPane(applyAgents(initialPiFleetState(), listing), true);
+		const tag = busy.match(/<button[^>]*aria-label="Refresh the fleet spoke list"[^>]*>/)?.[0] ?? "";
+		expect(/\sdisabled(=|\s|>)/.test(tag)).toBe(true);
+		// Spinning is gated so it stops for prefers-reduced-motion.
+		expect(busy).toContain("animate-spin motion-reduce:animate-none");
+	});
+
 	// SIO-1706: the pane no longer offers to "open the fleet console". The header pi
 	// icon toggles THIS pane and the box below addresses the spokes, so the button
 	// advertised a destination that does not exist. SIO-1702 rewrote its label
@@ -301,9 +377,12 @@ describe("PiFleetPane", () => {
 
 	// SIO-1703: the picker and the replies were in ONE scroll container, so a long
 	// reply scrolled the picker out of view.
+	// SIO-1712: the cap is 35%, not 40% -- the ops inbox card used to render
+	// inside this region, so a whole daily digest came through a letterbox. The
+	// card moved to the replies region below; what is left here is rows.
 	test("pins the spoke picker in its own scroll region, separate from the replies", () => {
 		const body = renderPane(applyAgents(initialPiFleetState(), listing));
-		expect(body).toContain("max-h-[40%]");
+		expect(body).toContain("max-h-[35%]");
 		// The replies keep their own flex-1 region below it.
 		expect(body).toContain("flex-1 overflow-y-auto min-h-0");
 	});

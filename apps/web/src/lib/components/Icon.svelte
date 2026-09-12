@@ -7,6 +7,7 @@ type IconName =
 	| "check"
 	| "error"
 	| "spinner"
+	| "refresh"
 	| "copy"
 	| "chevron-down"
 	| "clear"
@@ -75,6 +76,13 @@ let { name, class: className = "" }: { name: IconName; class?: string } = $props
     <line x1="9" y1="9" x2="15" y2="15" />
   {:else if name === "spinner"}
     <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+  {:else if name === "refresh"}
+    <!-- Feather refresh-cw: two arcs with their own arrowheads, so the glyph
+         reads as "re-run" whether or not it is spinning. -->
+    <path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 6.36 2.64L21 8" />
+    <path d="M21 3v5h-5" />
+    <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-6.36-2.64L3 16" />
+    <path d="M3 21v-5h5" />
   {:else if name === "copy"}
     <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
