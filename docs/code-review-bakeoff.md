@@ -64,6 +64,7 @@ Both review bots run on every PR of this repo **deliberately** (since 2026-08-14
 | [#715](https://github.com/zx8086/devops-incident-analyzer/pull/715) | 2026-09-08 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1666, rekeying pi-coms hubs by AWS account across four packages (35 files); three SKIPPED records, one per push, 110-135 ms each; CodeRabbit silent (32nd straight); CI caught two real gaps a per-package local run missed; merged on user authorization with the gate overridden; detail below |
 | [#730](https://github.com/zx8086/devops-incident-analyzer/pull/730) | 2026-09-11 | 0 | n/a (SKIPPED x2, code PR) | n/a (no review) | SIO-1695, prompt-audit High findings; forty-seventh consecutive Greptile skip (#716-#729 unlogged in this table); detail below |
 | [#732](https://github.com/zx8086/devops-incident-analyzer/pull/732) | 2026-09-12 | 0 | n/a (SKIPPED, code PR) | n/a (no review) | SIO-1697, cache counters read from usage_metadata.input_token_details; forty-eighth consecutive Greptile skip; detail below |
+| [#735](https://github.com/zx8086/devops-incident-analyzer/pull/735) | 2026-09-12 | 0 | n/a (SKIPPED x2, code PR) | n/a (no review) | SIO-1699, 32 Medium prompt-audit findings; forty-ninth consecutive Greptile skip; CI caught three wording tests the local run skipped; detail below |
 
 ## PR #658 detail (SIO-1466, ELASTIC_DEPLOYMENTS fallback)
 
@@ -1185,3 +1186,17 @@ One file, `packages/agent/src/llm.ts`, logging only. The live check SIO-1695 ask
 **Merge gate:** all six CI jobs green; agent typecheck and biome clean. Live, on a port-5174 dev server running the branch, two identical elastic-only turns 150 s apart: elastic sub-agent cacheWrite 13654 then cacheRead 13654 on every later ReAct call and on the next turn; aggregator cacheRead 8546 on both turns. Merged on the user's explicit go-ahead.
 
 **Takeaway:** *a logging change is verified by the number it prints, not by the diff.* #730 shipped a cache-counter read that was correct against the library's documentation comments and wrong against its code; the two-turn probe that #730's own ticket prescribed found it in one run, and neither bot was there to read the library.
+
+## PR #735 detail (SIO-1699, the 32 Medium prompt-audit findings)
+
+Thirty-four files: root and sub-agent personas, three tool YAMLs (49 write tools dropped from read-labelled actions), nine skill and hook files, the elastic-iac and fleet personas, the regenerated `packages/pi-coms/AGENTS.md`, and eight TypeScript prompt files including the normalizer's move to a Bedrock forced-tool structured output (`createStructuredLlm`) and a deterministic estate pre-pass in the AWS estate router. Two commits: the change set, then three test assertions repinned to the rewritten wording.
+
+**Greptile:** SKIPPED at dispatch on both commits (00:41Z, 115 ms; 00:45Z, 121 ms). Forty-ninth consecutive skip.
+
+**CodeRabbit:** nothing in the fifteen minutes the PR was open. Forty-ninth consecutive absence.
+
+**Local review (substitute):** the audit's four reviewers with per-finding provenance, then a full local pass: typecheck, biome, gitagent-bridge 442/442, agent diffed against a main baseline, web 406/406, the SIO-1400 counters read for the 49 dropped tools (zero calls across 15,032), and one live `normalizeIncident` call proving the forced-tool path on Sonnet 5 (schema-valid incident in 8.6 s).
+
+**Merge gate:** the first CI run FAILED on Test: three aggregator prompt tests (SIO-711, SIO-750) assert the exact wording C-5/C-6/C-8 rewrote and sit behind `describe.skipIf(!hasRunbooks)`, which was false in the local worktree, so the local suite reported no new failures while CI ran them. Repinned to the channel rule, the plain continuation sentence and the no-focus fallback; second run all six jobs green. Merged on the user's explicit go-ahead.
+
+**Takeaway:** *a skipped test is a silent test, and worktrees skip differently from CI.* The local "no new failures against baseline" check was true and useless for those three: the guard hid them on both sides of the diff. When a change rewrites prompt text, grep the test tree for the old wording instead of trusting the suite's count.
