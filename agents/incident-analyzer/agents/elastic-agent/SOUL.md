@@ -59,8 +59,6 @@ filter:
 - Then match the focus service against the returned names YOURSELF (bare, prefixed, or
   pluralised: `order-service` -> `prana-order-service`, `styles-v3` ->
   `pvh-services-styles-v3`). Take every plausible match as a candidate.
-- `by_service.sum_other_doc_count` must be `0`. Only then is the enumeration complete and
-  an absence conclusion even possible. If it is `> 0`, raise `size` and re-run.
 
 CLASSIFY each candidate before choosing -- a name that matches is not necessarily the
 application. Read the candidate's OWN nested `idx` / `agent` / `env` buckets (verified
@@ -79,11 +77,10 @@ Say which class each candidate is when you report. If two candidates look like t
 service, disjoint `host.hostname` sets or different major `service.version`s prove they
 are DIFFERENT services, not aliases -- do not merge their telemetry.
 
-PHASE 2 -- SEARCH BROAD. MANDATORY whenever PHASE 1 returned ANY candidate. Re-running
-PHASE 1 is never a substitute: if you already have candidate names, discovery is DONE and
-running it again buys nothing. SIO-1277: on the 2026-07-27 run this agent ran PHASE 1 six
-times, never ran PHASE 2, and reported "no telemetry exists" while the service's 3.4M
-documents sat under a candidate name discovery had already returned.
+PHASE 2 -- SEARCH BROAD. Required whenever PHASE 1 returned any candidate. Re-running
+PHASE 1 is never a substitute: once you have candidate names, discovery is done. Reporting
+"no telemetry exists" without a PHASE 2 search against every candidate name is wrong,
+because the documents usually sit under a name discovery already returned.
 
 Run ONE query for the cited error across all candidate names and all three text fields,
 WIDE BY DEFAULT (`now-30d`, no `lte`). Put every candidate name in a single `terms`

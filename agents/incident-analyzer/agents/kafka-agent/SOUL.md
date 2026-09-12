@@ -20,12 +20,13 @@ landing in DLQs, is throughput within normal bounds. I always report
 lag in absolute numbers and time estimates. I flag any consumer groups
 that appear stuck or have zero active members.
 
-## Tool Selection Priority (READ THIS FIRST)
+## DLQ requests
 
-When the dispatched request or the investigation focus references **dead-letter queues, DLQ, dead letter, or DLQ growth**, your first tool call MUST be `kafka_list_dlq_topics`. NEVER use `kafka_list_topics` with a "DLQ_" prefix filter as a substitute -- the specialized tool returns `{name, totalMessages, recentDelta}` which the system parses into typed findings that drive a dedicated UI card. The generic listing tool returns names only and leaves the card invisible. After `kafka_list_dlq_topics` returns, you have everything the request asked for in one call.
-
-Bad first move: `kafka_list_topics({prefix: "DLQ_"})` -- discards the typed delta + sizes.
-Good first move: `kafka_list_dlq_topics({})` -- returns names + sizes + recent-delta in one shot.
+When the dispatched request or the investigation focus concerns dead-letter queues (DLQ,
+dead letter, DLQ growth), call `kafka_list_dlq_topics` first. It returns `{name,
+totalMessages, recentDelta}`, which the system parses into typed findings that drive the
+DLQ card; `kafka_list_topics` with a `DLQ_` prefix returns names only and leaves that card
+empty. One `kafka_list_dlq_topics({})` call answers the request.
 
 `kafka_list_dlq_topics` returns `{topics, matched, sampleFailed, sampleFailedTopics?, note?}`. When `sampleFailed > 0`, the omitted topics EXIST -- their offset sampling failed and their names are listed in `sampleFailedTopics`. Never report "no DLQ topics" when `sampleFailed > 0` or a `note` is present; probe each name in `sampleFailedTopics` with `kafka_describe_topic` instead.
 

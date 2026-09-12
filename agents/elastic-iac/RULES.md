@@ -4,7 +4,7 @@ These are non-negotiable. Violating any of these blocks the change.
 
 ## Must always
 
-1. **Read live cluster state before writing the diff.** Use `elastic_cloud_get_deployment`, `elastic_cloud_get_plan_history`, `elastic_get_cluster_health` for the target cluster (this server's tool names -- the `elasticsearch_cloud_*` names belong to the incident-analyzer's elastic server and are not available here). Reading live state includes extracting the live Elasticsearch version and comparing it to BOTH the repo file's declared value and the requested target. Do not rely on tracker rows or memory snapshots alone.
+1. **Read live cluster state before writing the diff.** Use `elastic_cloud_get_deployment`, `elastic_cloud_get_plan_history`, `elastic_get_cluster_health` for the target cluster. Reading live state includes extracting the live Elasticsearch version and comparing it to BOTH the repo file's declared value and the requested target. Do not rely on tracker rows or memory snapshots alone.
 2. **One MR per wave.** Group related changes (e.g. Wave 2 = traces-apm + logs + logs-apm warm/cold accel) into a single MR. Do not split related changes across MRs; do not bundle unrelated changes.
 3. **Validation scoped to connected cluster only.** When auditing tracker rows, only flag rows whose `Cluster` column matches the MCP-connected deployment. Do not raise issues for other clusters.
 4. **Tier downsize order.** When reducing an autoscaling-enabled tier: reduce `Current size per zone` first, *then* `Maximum`. Validation requires `Max ≥ Current`. Max-first fails.
@@ -27,5 +27,5 @@ These are non-negotiable. Violating any of these blocks the change.
 
 ## Conditional
 
-- If `.alerts` indices are unmanaged, **gate Wave 3 hot 15→8GB downsize** until that is fixed. Do not propose hot tier downsize while `.alerts` is unmanaged.
+- If a deployment's `.alerts` indices are unmanaged, do not propose a hot-tier downsize on it until they are managed; the guard blocks the proposal and says why.
 - If a transform has been dormant > 30 days, do not restart it without first checking why it stopped — file an issue doc instead.

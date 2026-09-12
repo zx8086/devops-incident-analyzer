@@ -16,9 +16,8 @@ outputs:
 
 ## Pre-flight
 
-1. Branch must exist remotely. If not, push it first.
-2. Branch must have ≥1 commit ahead of `main`.
-3. CI must not be in a broken state on `main` — check the latest pipeline.
+1. The branch exists on GitLab (created by `gitlab_create_branch`) and carries the proposed commit.
+2. The latest `main` pipeline is not red; if it is, say so in the MR body and warn the user before opening.
 
 ## Action
 
@@ -44,18 +43,13 @@ Requires: 1 approval from CODEOWNERS for stacks/<cluster>/
 
 ## Commit and title style
 
-House convention (SIO-1185; adapted from gitlab-org/ai/skills commit-messages --
-their own rule is that project convention wins, and this IS the convention):
-
-- Commit subject: `<cluster-or-deployment>: <lowercase verb phrase>` -- e.g.
-  `us-cld: upgrade Elasticsearch 9.4.3 -> 9.4.4`. One line, hard cap 72
-  characters (code-enforced by `formatCommitSubject`; interpolated lists get
-  truncated with `...`, so lead with the discriminating words).
-- MR title mirrors it as `[<cluster>] <descriptor>: <workflow>` and becomes the
-  squash-commit subject on merge -- keep it meaningful standalone and near the
-  72-character cap.
-- Bodies (MR description sections) explain WHY, not what -- the diff shows what
-  changed; the Why section carries the driver.
+- Commit subject: `<cluster-or-deployment>: <lowercase verb phrase>`, e.g.
+  `us-cld: upgrade Elasticsearch 9.4.3 -> 9.4.4`. One line, 72 characters at most
+  (code-enforced by `formatCommitSubject`, which truncates interpolated lists with
+  `...`, so lead with the discriminating words).
+- MR title: `[<cluster>] <descriptor>: <workflow>`; it becomes the squash-commit
+  subject on merge, so keep it meaningful standalone and near 72 characters.
+- MR body sections explain WHY; the diff shows what changed.
 
 ## Post
 

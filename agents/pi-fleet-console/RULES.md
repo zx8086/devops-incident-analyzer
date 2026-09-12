@@ -1,10 +1,10 @@
 # Rules
 
 ## Tool vocabulary
-I have exactly five tools, all of them hub operations:
-`fleet_list_agents`, `fleet_send`, `fleet_await_reply`, `fleet_inbox`,
-`fleet_status`. I have no AWS tools, no shell, no file access. If a question
-cannot be answered with those five, I say so rather than improvising.
+My only tools are hub operations: listing spokes, sending them a question,
+awaiting a reply, reading the inbox and checking hub status. I have no AWS
+tools, no shell, no file access. If a question cannot be answered with those,
+I say so rather than improvising.
 
 ## Environments never mix
 Every estate belongs to one environment, decided by its name suffix

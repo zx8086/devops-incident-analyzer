@@ -247,7 +247,7 @@ export function buildAggregatorMessages(
 	const queriedSources = state.targetDataSources;
 	const scopeNote =
 		queriedSources.length > 0
-			? `\n\nIMPORTANT: Only the following datasources were queried for this report: ${queriedSources.join(", ")}. Do NOT mention, list, or create sections for datasources that were not queried. The user explicitly selected these datasources -- omitting others is intentional, not a gap.`
+			? `\n\nOnly these datasources were queried for this report: ${queriedSources.join(", ")}. The user selected them, so omitting the others is intentional, not a gap: do not mention or add sections for datasources that were not queried.`
 			: "";
 
 	// SIO-626: Surface unavailable datasources so the report explicitly mentions gaps
@@ -346,7 +346,7 @@ export function buildAggregatorMessages(
 	// with the Gaps cap from SIO-709 AC #2). Also pin the Gaps heading to a plain
 	// "## Gaps" so the deterministic SIO-709 parser reliably matches the LLM's
 	// output rather than silently missing bold/compound headings.
-	const defensiveProseRule = `\n\nDEFENSIVE PROSE FORBIDDEN: Do not editorialise about whether your output is fabricated, hallucinated, or trustworthy. Phrases like "not fabricated", "I am not hallucinating", "this is reliable", or "based on real data" are banned. If a value or finding is uncertain, do one of: (a) emit a "[partial: <field-name>]" marker inline where the value would go, (b) list the missing data in the Gaps section, or (c) lower your confidence score. Never reassure the reader in prose -- structured markers and the Gaps section are the only acceptable channels for uncertainty. When listing gaps, use exactly the heading "## Gaps" (no bold, no extra words, no colon) so downstream tooling can parse the section reliably.`;
+	const defensiveProseRule = `\n\nUNCERTAINTY CHANNELS: Express uncertainty only through structure, never through reassurance about the report itself. If a value or finding is uncertain: (a) emit a "[partial: <field-name>]" marker inline where the value would go, (b) list the missing data in the Gaps section, or (c) lower the confidence score. Use exactly the heading "## Gaps" (no bold, no extra words, no colon) so downstream tooling can parse the section.`;
 
 	// SIO-1031: the LLM fabricated a "logs:DescribeLogGroups IAM gap persists" blocker with no tool
 	// having returned AccessDenied. A permission/IAM claim MUST be grounded in an observed auth tool
@@ -396,9 +396,9 @@ export function buildAggregatorMessages(
 	const focus = state.investigationFocus;
 	const continuationGuidance =
 		priorAnswer && focus
-			? `\n\nIMPORTANT: We are CONTINUING the "${focus.summary}" investigation. The anchored services are ${focus.services.join(", ") || "(none specified)"} and the anchored time window is ${focus.timeWindow ? `${focus.timeWindow.from} to ${focus.timeWindow.to}` : "(none specified)"}. Update the prior report's relevant sections with new findings; do NOT start a fresh report or claim it "supersedes" the prior one. If the user's current message is a focused question (e.g. "is X still failing?"), answer it directly with reference to the anchored entities rather than introducing new ones.`
+			? `\n\nThis turn continues the "${focus.summary}" investigation. Anchored services: ${focus.services.join(", ") || "(none specified)"}; anchored time window: ${focus.timeWindow ? `${focus.timeWindow.from} to ${focus.timeWindow.to}` : "(none specified)"}. Update the relevant sections of the prior report with the new findings rather than writing a fresh report. If the current message is a focused question (e.g. "is X still failing?"), answer it directly against the anchored entities rather than introducing new ones.`
 			: priorAnswer
-				? `\n\nIMPORTANT: Focus on answering the current query. Reference prior findings where relevant but do not repeat the full prior report.`
+				? `\n\nAnswer the current query; reference prior findings where relevant without repeating the full prior report.`
 				: "";
 
 	messages.push(

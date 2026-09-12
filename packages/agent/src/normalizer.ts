@@ -5,10 +5,9 @@ import type { InvestigationFocus, NormalizedIncident } from "@devops-agent/share
 import { DATA_SOURCE_IDS } from "@devops-agent/shared";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
-import { createLlm } from "./llm.ts";
+import { createStructuredLlm } from "./llm.ts";
 import { withKeyAliases } from "./llm-json.ts";
-import { parseLlmJsonWithCorrection } from "./llm-json-retry.ts";
-import { contentBlockTypes, extractTextFromContent } from "./message-utils.ts";
+import { extractTextFromContent } from "./message-utils.ts";
 import type { AgentStateType } from "./state.ts";
 
 const logger = getLogger("agent:normalizer");
@@ -20,13 +19,21 @@ const coerceNullableString = z
 	.transform((v) => (v === null || v === undefined ? undefined : String(v)))
 	.optional();
 
+// The field descriptions travel into the structured-output tool schema (createStructuredLlm),
+// which is how the model learns each field's contract; the prompt no longer restates them.
 const NormalizationObject = z.object({
 	severity: z
 		.enum(["critical", "high", "medium", "low"])
+		.describe(
+			'"critical" for an outage ("down", "outage"); "high" for degradation ("slow", "degraded"); "medium" for an anomaly or a check ("check", "how"); "low" for informational',
+		)
 		.nullish()
 		.transform((v) => v ?? undefined),
 	timeWindow: z
 		.object({ from: z.string(), to: z.string() })
+		.describe(
+			'ISO 8601 window parsed from expressions like "last 30 min" or "past hour"; use the default window from the system prompt when no time is mentioned',
+		)
 		.nullish()
 		.transform((v) => v ?? undefined),
 	affectedServices: z
@@ -37,6 +44,7 @@ const NormalizationObject = z.object({
 				deployment: coerceNullableString,
 			}),
 		)
+		.describe("service names, namespaces, or deployment identifiers mentioned in the query")
 		.nullish()
 		.transform((v) => v ?? undefined),
 	extractedMetrics: z
@@ -46,6 +54,9 @@ const NormalizationObject = z.object({
 				value: coerceNullableString,
 				threshold: coerceNullableString,
 			}),
+		)
+		.describe(
+			'metrics mentioned with their values or thresholds, e.g. "error rate 15%", "latency > 500ms", "lag 10000"',
 		)
 		.nullish()
 		.transform((v) => v ?? undefined),
@@ -67,8 +78,6 @@ export const NormalizationSchema = withKeyAliases(NormalizationObject, {
 	extracted_metrics: "extractedMetrics",
 	time_window: "timeWindow",
 });
-
-const NORMALIZATION_KEYS = ["severity", "timeWindow", "affectedServices", "extractedMetrics"] as const;
 
 // SIO-1221: moved to llm-json.ts so all thirteen LLM-JSON parse sites share it, not just
 // this one. Re-exported here because normalizer-sanitize.test.ts and prior callers import
@@ -147,13 +156,7 @@ const NORMALIZER_PROMPT = `Normalize the user's incident query into structured d
 
 Available datasources: ${DATA_SOURCE_IDS.join(", ")}
 
-Extract and return JSON with:
-- severity: "critical" (outage), "high" (degraded), "medium" (anomaly), "low" (informational). Infer from keywords like "down", "outage" = critical; "slow", "degraded" = high; "check", "how" = medium.
-- timeWindow: { from, to } as ISO 8601. Parse "last 30 min", "past hour", etc. If no time is mentioned, default to { from: 24 hours ago, to: now }.
-- affectedServices: array of { name, namespace?, deployment? }. Extract service names, namespaces, or deployment identifiers mentioned.
-- extractedMetrics: array of { name, value?, threshold? }. Extract metrics like "error rate 15%", "latency > 500ms", "lag 10000".
-
-Return ONLY valid JSON, no explanation.`;
+Fill each field of the normalized_incident tool from what the query states or clearly implies; leave a field null when the query gives no basis for it.`;
 
 // SIO-750: Build the investigation focus anchor from the current normalized
 // incident + query. Deterministic (no LLM call). Called on the first complex
@@ -227,9 +230,12 @@ export async function normalizeIncident(
 	const dayAgo = new Date(now.getTime() - 24 * 3600_000);
 	const timeContext = `\nCurrent time: ${now.toISOString()}. Default time window: { "from": "${dayAgo.toISOString()}", "to": "${now.toISOString()}" }`;
 
-	const llm = createLlm("normalizer");
+	const llm = createStructuredLlm("normalizer", NormalizationObject, "normalized_incident");
 	try {
-		const response = await llm.invoke(
+		// SIO-1233's key-alias tolerance and corrective re-ask are not needed on this path: the
+		// tool schema pins the key names, and a response that fails validation rejects into the
+		// catch below, which keeps the pre-existing degrade (continue without a normalized incident).
+		const parsed = await llm.invoke(
 			[
 				{ role: "system", content: `${NORMALIZER_PROMPT}${timeContext}${followUpHint}` },
 				{ role: "human", content: query },
@@ -237,89 +243,53 @@ export async function normalizeIncident(
 			config,
 		);
 
-		const text = extractTextFromContent(response.content);
-		// SIO-1233: see entity-extractor.ts -- a reasoning-only turn yields "" and must not be
-		// read as "the model found nothing in the query".
-		if (text.trim() === "") {
-			logger.warn(
-				{ blockTypes: contentBlockTypes(response.content) },
-				"Normalization got no text from the model; re-asking",
-			);
-		}
-		const result = await parseLlmJsonWithCorrection(text, NormalizationSchema, {
-			expectedKeys: NORMALIZATION_KEYS,
-			reinvoke: async (correction) => {
-				const retried = await llm.invoke(
-					[
-						{ role: "system", content: `${NORMALIZER_PROMPT}${timeContext}${followUpHint}` },
-						{ role: "human", content: `${query}\n\n${correction}` },
-					],
-					config,
-				);
-				return extractTextFromContent(retried.content);
-			},
-			onRetry: (first) =>
-				logger.warn(
-					{ reason: first.reason, detail: first.message, observedKeys: first.observedKeys },
-					"Normalization schema drift; re-asking once",
-				),
-		});
-		if (result.ok) {
-			const incident: NormalizedIncident = { ...result.data };
+		const incident: NormalizedIncident = { ...parsed };
 
-			// SIO-1233: the silent-failure catch. A drift that this all-nullish schema accepts
-			// produces a perfectly valid incident with no services, which then makes
-			// resolveIdentifiers a no-op (resolve-identifiers.ts:243) and forces every findings
-			// card to filterMode "show-all". Detect "parsed fine, but the query names something
-			// service-shaped and we extracted nothing" and say so.
-			//
-			// Note this deliberately does NOT make affectedServices required: it is legitimately
-			// empty for "is anything degraded right now", and forcing the field makes the model
-			// invent a name -- a WRONG focus yields droppedAll empty cards, strictly worse than
-			// show-all.
-			let serviceProvenance: "llm" | "query-recovery" = "llm";
-			if ((incident.affectedServices?.length ?? 0) === 0) {
-				const candidates = extractServiceCandidates(query);
-				if (candidates.length > 0) {
-					const recover = isServiceRecoveryEnabled();
-					logger.warn(
-						{ candidates, recovered: recover },
-						"Normalization extracted no services from a query containing service-shaped tokens",
-					);
-					if (recover) {
-						incident.affectedServices = candidates.map((name) => ({ name }));
-						serviceProvenance = "query-recovery";
-					}
+		// SIO-1233: the silent-failure catch. A drift that this all-nullish schema accepts
+		// produces a perfectly valid incident with no services, which then makes
+		// resolveIdentifiers a no-op (resolve-identifiers.ts:243) and forces every findings
+		// card to filterMode "show-all". Detect "parsed fine, but the query names something
+		// service-shaped and we extracted nothing" and say so.
+		//
+		// Note this deliberately does NOT make affectedServices required: it is legitimately
+		// empty for "is anything degraded right now", and forcing the field makes the model
+		// invent a name -- a WRONG focus yields droppedAll empty cards, strictly worse than
+		// show-all.
+		let serviceProvenance: "llm" | "query-recovery" = "llm";
+		if ((incident.affectedServices?.length ?? 0) === 0) {
+			const candidates = extractServiceCandidates(query);
+			if (candidates.length > 0) {
+				const recover = isServiceRecoveryEnabled();
+				logger.warn(
+					{ candidates, recovered: recover },
+					"Normalization extracted no services from a query containing service-shaped tokens",
+				);
+				if (recover) {
+					incident.affectedServices = candidates.map((name) => ({ name }));
+					serviceProvenance = "query-recovery";
 				}
 			}
-			// SIO-750: establish the investigation focus on the first complex
-			// turn. The sticky reducer in state.ts preserves the existing focus
-			// across later turns; we only build a fresh one here when none is
-			// persisted yet.
-			const investigationFocus = state.investigationFocus ?? buildInvestigationFocus(state, incident, query);
-			logger.info(
-				{
-					severity: incident.severity,
-					serviceCount: incident.affectedServices?.length ?? 0,
-					metricCount: incident.extractedMetrics?.length ?? 0,
-					hasTimeWindow: !!incident.timeWindow,
-					focusEstablishedAtTurn: investigationFocus.establishedAtTurn,
-					focusServices: investigationFocus.services,
-					// SIO-1233: distinguishes an LLM-extracted focus from a recovered one, so
-					// "focusServices is non-empty" in a log is not mistaken for "the model worked".
-					serviceProvenance,
-					attempts: result.attempts,
-				},
-				"Normalization complete",
-			);
-			return { normalizedIncident: incident, investigationFocus };
 		}
-		// SIO-1221: parseLlmJson never throws, so log the reason here rather than
-		// relying on the catch below (which now only sees invoke-level failures).
-		logger.warn(
-			{ reason: result.reason, detail: result.message, observedKeys: result.observedKeys, attempts: result.attempts },
-			"Normalization failed, continuing without",
+		// SIO-750: establish the investigation focus on the first complex
+		// turn. The sticky reducer in state.ts preserves the existing focus
+		// across later turns; we only build a fresh one here when none is
+		// persisted yet.
+		const investigationFocus = state.investigationFocus ?? buildInvestigationFocus(state, incident, query);
+		logger.info(
+			{
+				severity: incident.severity,
+				serviceCount: incident.affectedServices?.length ?? 0,
+				metricCount: incident.extractedMetrics?.length ?? 0,
+				hasTimeWindow: !!incident.timeWindow,
+				focusEstablishedAtTurn: investigationFocus.establishedAtTurn,
+				focusServices: investigationFocus.services,
+				// SIO-1233: distinguishes an LLM-extracted focus from a recovered one, so
+				// "focusServices is non-empty" in a log is not mistaken for "the model worked".
+				serviceProvenance,
+			},
+			"Normalization complete",
 		);
+		return { normalizedIncident: incident, investigationFocus };
 	} catch (error) {
 		logger.warn(
 			{ error: error instanceof Error ? error.message : String(error) },

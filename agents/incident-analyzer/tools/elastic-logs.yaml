@@ -109,6 +109,7 @@ tool_mapping:
       - elasticsearch_get_nodes_info
       - elasticsearch_get_nodes_stats
     index_management:
+      # prompt-audit 2026-09-11: write tools omitted, this agent is read-only (compliance/allowed-actions.yaml)
       - elasticsearch_list_indices
       - elasticsearch_indices_summary
       - elasticsearch_get_index
@@ -116,54 +117,39 @@ tool_mapping:
       - elasticsearch_get_mappings
       - elasticsearch_get_index_settings
       - elasticsearch_get_index_settings_advanced
-      - elasticsearch_create_index
-      - elasticsearch_delete_index
       - elasticsearch_index_exists
-      - elasticsearch_update_index_settings
-      - elasticsearch_put_mapping
       - elasticsearch_refresh_index
       - elasticsearch_flush_index
-      - elasticsearch_rollover
       - elasticsearch_field_usage_stats
       - elasticsearch_disk_usage
     shard_analysis:
       - elasticsearch_get_shards
     ingest_pipeline:
+      # prompt-audit 2026-09-11: write tools omitted, this agent is read-only (compliance/allowed-actions.yaml)
       - elasticsearch_get_ingest_pipeline
-      - elasticsearch_put_ingest_pipeline
-      - elasticsearch_delete_ingest_pipeline
       - elasticsearch_simulate_ingest_pipeline
       - elasticsearch_processor_grok
     template_management:
+      # prompt-audit 2026-09-11: write tools omitted, this agent is read-only (compliance/allowed-actions.yaml)
       - elasticsearch_get_index_template
-      - elasticsearch_put_index_template
-      - elasticsearch_delete_index_template
       - elasticsearch_exists_index_template
       - elasticsearch_exists_template
     alias_management:
+      # prompt-audit 2026-09-11: write tools omitted, this agent is read-only (compliance/allowed-actions.yaml)
       - elasticsearch_get_aliases
-      - elasticsearch_put_alias
-      - elasticsearch_delete_alias
-      - elasticsearch_update_aliases
       - elasticsearch_exists_alias
     document_ops:
+      # prompt-audit 2026-09-11: write tools omitted, this agent is read-only (compliance/allowed-actions.yaml)
       - elasticsearch_get_document
-      - elasticsearch_index_document
-      - elasticsearch_update_document
-      - elasticsearch_delete_document
       - elasticsearch_document_exists
-      - elasticsearch_bulk_operations
       - elasticsearch_multi_get
-      - elasticsearch_reindex_documents
-      - elasticsearch_delete_by_query
-      - elasticsearch_update_by_query
     data_lifecycle:
+      # prompt-audit 2026-09-11: write tools omitted, this agent is read-only (compliance/allowed-actions.yaml)
       - elasticsearch_get_data_lifecycle_stats
       - elasticsearch_explain_data_lifecycle
       - elasticsearch_ilm_get_lifecycle
       - elasticsearch_ilm_explain_lifecycle
       - elasticsearch_ilm_get_status
-      - elasticsearch_delete_data_stream
     diagnostics:
       - elasticsearch_diagnostics
       - elasticsearch_get_cluster_health
@@ -223,9 +209,8 @@ tool_mapping:
     document_ops: when reading specific documents by ID, counting matches, or running aggregations against a known index (read-only)
     data_lifecycle: >-
       when checking ILM policy definitions, ILM status, why an index is stuck in a lifecycle
-      step, or data-stream lifecycle and retention stats. SIO-1388 -- this server has NO
-      snapshot or restore tools. If the question is about snapshot repositories, backups, or
-      restore status, say that capability is unavailable rather than substituting lifecycle data.
+      step, or data-stream lifecycle and retention stats. Not for snapshots, backups, or
+      restore status: this server has no snapshot or restore tools.
     diagnostics: when running cluster-wide diagnostic commands (allocation explain, hot threads, pending tasks) for deep troubleshooting
     cloud_deployment: when listing or describing Elastic Cloud deployments via the v1 cloud API (metadata only -- region, plan, version, capacity; for cost or spend data use `billing` instead)
     billing: when checking Elastic Cloud organization or deployment billing/cost data via the v2 billing API (read-only cost reporting)
@@ -244,13 +229,8 @@ tool_mapping:
       For "what's actually anomalous" (specific unusual records, not job health), use
       ml_anomaly_records instead.
     ml_anomaly_records: >-
-      when the user asks what's anomalous, whether anything unusual is happening, why a service is
-      slow/spiking, or about memory/CPU/restart/latency/error-rate drift from typical behavior --
-      "ML anomalies", "Elastic ML", "what does ML think" all trigger this. Returns anomaly-detection
-      RECORDS (recordScore, jobId, fieldName, functionName, entity, deviationPercent, actual vs
-      typical), sorted by recordScore, plus a per-job count summary in one call. READ-ONLY. Omit the
-      minScore-equivalent filter for an open-ended question -- do not silently narrow to
-      critical-only; an empty result at the requested parameters is itself the answer, report it and
-      offer to broaden rather than auto-retrying. Pass entity as a single plain value (e.g.
-      "checkout-service"), never a composite `field=value; field=value` expression. For job/datafeed
-      HEALTH instead of anomaly records, use ml_monitoring.
+      when the user asks what is anomalous, whether anything unusual is happening, why a service is
+      slow or spiking, or about memory/CPU/restart/latency/error-rate drift from typical behavior
+      ("ML anomalies", "Elastic ML", "what does ML think"). Returns anomaly-detection RECORDS
+      (score, job, field, entity, actual vs typical) plus a per-job count summary; read-only. For
+      job or datafeed HEALTH use ml_monitoring.

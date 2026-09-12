@@ -159,10 +159,13 @@ describe("Defect A -- absence requires PHASE 2 to have run (SIO-1277)", () => {
 	test("PHASE 2 is mandatory once PHASE 1 returns a candidate", async () => {
 		const text = await soul();
 		const phase2 = phase(text, 2);
-		expect(phase2).toContain("MANDATORY");
 		// Re-running discovery instead of advancing is the observed failure mode. Collapse
-		// whitespace first: the prose is hard-wrapped, so the phrase spans a newline.
+		// whitespace first: the prose is hard-wrapped, so the phrases span newlines.
+		// SIO-1699: the rule is stated at normal volume ("Required whenever ...") instead of the
+		// SIO-1277 incident narrative; the contract (PHASE 2 follows any PHASE 1 candidate,
+		// re-running PHASE 1 is never a substitute) is unchanged.
 		const flat = phase2.toLowerCase().replace(/\s+/g, " ");
+		expect(flat).toContain("required whenever phase 1 returned any candidate");
 		expect(flat).toContain("re-running phase 1 is never a substitute");
 	});
 

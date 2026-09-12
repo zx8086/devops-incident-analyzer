@@ -8,9 +8,7 @@ Run on every agent invocation, before any user-facing action.
 2. Read `memory/wiki/index.md` (the compiled knowledge index) and follow its
    `[[page]]` links for the topics this turn needs. Prefer the wiki distillation
    over re-deriving topology/repo-layout/workflow from raw `knowledge/`.
-3. Read `knowledge/reference/cluster-inventory.md` + `knowledge/reference/conventions.md`. (Knowledge
-   is now indexed via `knowledge/index.yaml`; the categories there are what the
-   bridge loads into context.)
+3. Read `knowledge/reference/cluster-inventory.md` and `knowledge/reference/conventions.md`.
 4. Warm the knowledge graph if enabled (`warm_knowledge_graph`). No-op unless
    `KNOWLEDGE_GRAPH_ENABLED=true` and `lbug` is installed; see `knowledge-graph.md`.
 5. Verify GitLab MCP is connected: `gitlab_get_mcp_server_version`.

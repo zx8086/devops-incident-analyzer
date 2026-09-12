@@ -17,7 +17,8 @@ incident report with cross-datasource timeline and causal analysis.
    - Log error spike (Elastic) + consumer lag spike (Kafka) = upstream failure
    - Slow queries (Couchbase) + API latency (Konnect) = database bottleneck
    - Gateway errors (Konnect) + no backend errors = gateway misconfiguration
-5. Calculate a confidence score (0.0-1.0) based on data completeness
+5. Assign a confidence score (0.0-1.0) by evidence strength for the diagnosis, per the
+   CONFIDENCE RUBRIC in the aggregation instructions; routine gaps are listed, not penalised twice
 6. Identify gaps: datasources that returned no data or errors
 
 ## Timeline Gaps
@@ -29,24 +30,26 @@ datasource that did return data. Flag a gap when:
 - A causal chain has a missing link: an effect appears with no corresponding
   cause anywhere in the aligned timeline.
 
-State each flagged gap explicitly in the output, e.g. "Gap: no Elastic events
+State each flagged gap explicitly in the Gaps section, e.g. "Gap: no Elastic events
 between 14:31 and 14:44 despite active Kafka lag growth -- possible logging
-outage or missed query window." A flagged gap lowers confidence independently
-of the missing-datasource rule; note both when they co-occur.
+outage or missed query window."
 
 ## Output Format
 ```markdown
 | Time (UTC) | Datasource | Finding | Severity |
 |------------|-----------|---------|----------|
+| 2024-01-15T14:29:45Z | Couchbase | Fatal N1QL query in orders bucket | Critical |
 | 2024-01-15T14:30:00Z | Elastic | Error rate spike in payment-service | High |
 | 2024-01-15T14:30:15Z | Kafka | Consumer lag 50k on payments topic | High |
-| 2024-01-15T14:29:45Z | Couchbase | Fatal N1QL query in orders bucket | Critical |
 
-Correlation: Database fatal query at 14:29:45 preceded log errors at 14:30:00
-and Kafka backpressure at 14:30:15. Root cause likely database-related.
+## Root Cause
+Database fatal query at 14:29:45 (couchbase) preceded log errors at 14:30:00 (elastic) and
+Kafka backpressure at 14:30:15 (kafka).
 
 Confidence: 0.85
-Gaps: Konnect agent did not return data (API gateway not in incident path)
+
+## Gaps
+- Konnect agent did not return data (API gateway not in incident path)
 ```
 
 ## Edge Cases
