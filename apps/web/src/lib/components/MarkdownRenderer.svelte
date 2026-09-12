@@ -137,8 +137,15 @@ function handleClick(e: MouseEvent) {
   .markdown-content :global(ol > li) {
     margin-bottom: 0.25rem;
   }
+  /* SIO-1717: consecutive items sat flush, so a long bulleted report (a fleet
+     daily digest runs to a dozen findings) read as a wall of text. Spacing
+     BETWEEN items only -- a margin on every li would also pad the first and
+     last, growing every single-item list for nothing. */
   .markdown-content :global(li) {
     line-height: 1.6;
+  }
+  .markdown-content :global(li + li) {
+    margin-top: 0.3rem;
   }
   .markdown-content :global(li > ul),
   .markdown-content :global(li > ol) {

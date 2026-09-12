@@ -143,7 +143,7 @@ describe("PiFleetPane", () => {
 			messages: [inboxMessage("m1", "monitor-eu-oit-prd", "[info] daily digest")],
 		});
 		const body = renderPane(state);
-		const picker = body.indexOf("max-h-[11rem]");
+		const picker = body.indexOf("max-h-[20rem]");
 		const replies = body.indexOf("flex-1 overflow-y-auto min-h-0");
 		const card = body.indexOf("<details");
 		expect(picker).toBeGreaterThan(-1);
@@ -300,13 +300,44 @@ describe("PiFleetPane", () => {
 	// pane is `h-screen` minus chrome, and that chrome is tallest exactly when this
 	// pane is usable, so a percentage gave the target list MORE room than the
 	// report on a short viewport. Measured with six spokes: 35% took 195px against
-	// the digest's 163px at a 560px pane; 11rem puts the digest ahead at every
+	// the digest's 163px at a 560px pane; a rem ceiling puts the digest ahead at every
 	// height (182px at 560px, 502px at 880px vs 399px before).
 	test("caps the picker in rem so the digest wins on a short pane", () => {
 		const body = renderPane(applyAgents(initialPiFleetState(), listing));
-		expect(body).toContain("max-h-[11rem]");
+		expect(body).toContain("max-h-[20rem]");
 		// A percentage cap is the regression this guards against.
 		expect(body).not.toMatch(/max-h-\[\d+%\]/);
+	});
+
+	// SIO-1717: SIO-1715's 11rem ceiling was tuned to beat the digest at every
+	// pane height and ignored how many spokes there actually are. The real prd
+	// fleet is SIX, which needs ~278px of rows, so 176px left two spokes
+	// unreachable while the region below sat empty. The ceiling must clear a
+	// six-spoke fleet; it exists for the outlier, not the normal case.
+	test("the picker ceiling clears a real six-spoke fleet without clipping", () => {
+		const body = renderPane(applyAgents(initialPiFleetState(), listing));
+		const m = body.match(/max-h-\[(\d+(?:\.\d+)?)rem\]/);
+		expect(m).not.toBeNull();
+		const px = Number(m?.[1]) * 16;
+		// header 30 + top pad 8 + 6 rows of 34 + 5 gaps of 4 + bottom pad 12.
+		expect(px).toBeGreaterThanOrEqual(8 + 30 + 4 + 6 * 34 + 5 * 4 + 12);
+	});
+
+	// SIO-1717: navy is the card title and the hubKey, so a navy chip merged with
+	// the header instead of marking the anchor row.
+	test("the digest chip is solid accent blue, not a navy tint", () => {
+		const state = applyMailbox(applyAgents(initialPiFleetState(), listing), {
+			hubKey: "eu-shared-services-dev",
+			environment: "dev",
+			name: "ops",
+			missingDigest: [],
+			windowTruncated: false,
+			messages: [inboxMessage("m1", "monitor-eu-oit-prd", "[info] daily digest", true)],
+		});
+		const body = renderPane(state);
+		expect(body).toContain("bg-tommy-accent-blue");
+		expect(body).toContain("Daily digest");
+		expect(body).not.toContain("bg-tommy-navy/5");
 	});
 
 	// SIO-1706: the pane no longer offers to "open the fleet console". The header pi
@@ -486,16 +517,17 @@ describe("PiFleetPane", () => {
 
 	// SIO-1703: the picker and the replies were in ONE scroll container, so a long
 	// reply scrolled the picker out of view.
-	// SIO-1715: the cap is 11rem (was 35%) -- the ops inbox card used to render
+	// SIO-1717: the ceiling is 20rem (SIO-1715 set 11rem, which clipped a real
+	// six-spoke fleet at 278px). The ops inbox card used to render
 	// inside this region, so a whole daily digest came through a letterbox. The
 	// card moved to the replies region below; what is left here is rows.
 	test("pins the spoke picker in its own scroll region, separate from the replies", () => {
 		const body = renderPane(applyAgents(initialPiFleetState(), listing));
 		// SIO-1715: a REM cap, not a percentage. A percentage split a short pane
 		// badly -- at 560px the picker took 195px against the digest's 163px, so
-		// the target list outweighed the report. Measured: 11rem puts the digest
+		// the target list outweighed the report. Measured: a rem ceiling puts the digest
 		// ahead at every pane height.
-		expect(body).toContain("max-h-[11rem]");
+		expect(body).toContain("max-h-[20rem]");
 		expect(body).not.toContain("max-h-[35%]");
 		// The replies keep their own flex-1 region below it.
 		expect(body).toContain("flex-1 overflow-y-auto min-h-0");
