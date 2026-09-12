@@ -46,9 +46,34 @@ const listing: PiFleetAgentsResponse = {
 
 // SIO-1702: the console button is `{#if onAskAll}`, so it renders only where the
 // deployment offers it. Opt-in here, keeping the not-offered case testable.
-function renderPane(state: PiFleetState, busy = false, onAskAll?: () => void): string {
+// SIO-1704: no estate selected means no account is in scope, so the default here
+// selects the fixture's spokes -- these tests are about everything EXCEPT scoping,
+// and an unscoped render would now correctly show nothing. The empty-scope case
+// has its own test below.
+const ALL_FIXTURE_ESTATES = ["alpha-dev", "eu-oit-prd", "eu-shared-services-prd", "eu-retail-shop-prd"];
+
+function inboxMessage(msgId: string, senderName: string, prompt: string) {
+	return {
+		msgId,
+		senderName,
+		targetName: "ops",
+		prompt,
+		status: "queued",
+		error: null,
+		response: null,
+		createdAt: "2026-09-11T00:00:00.000Z",
+		completedAt: null,
+	};
+}
+
+function renderPane(
+	state: PiFleetState,
+	busy = false,
+	onAskAll?: () => void,
+	scopeEstates: string[] = ALL_FIXTURE_ESTATES,
+): string {
 	return render(PiFleetPane, {
-		props: { pane: state, busy, mailboxBusy: null, ...handlers, ...(onAskAll ? { onAskAll } : {}) },
+		props: { pane: state, busy, mailboxBusy: null, ...handlers, scopeEstates, ...(onAskAll ? { onAskAll } : {}) },
 	}).body;
 }
 
@@ -202,12 +227,21 @@ describe("PiFleetPane", () => {
 		expect(body).toContain("1 other spoke hidden");
 	});
 
-	test("an empty selection scopes nothing rather than hiding every spoke", () => {
-		// No selection is not a request for a narrower fleet; hiding everything
-		// would read as an outage.
-		const body = renderPane(applyAgents(initialPiFleetState(), listing));
-		expect(body).toContain("alpha-dev");
-		expect(body).not.toContain("Scoped to the selected AWS estates");
+	// SIO-1704 replaces the SIO-1703 rule. Treating an empty selection as "no
+	// narrowing" let an operator who had deselected every estate still address any
+	// account -- the mistake the scoping exists to prevent.
+	test("an empty selection puts no account in scope, so no spoke is addressable", () => {
+		const body = renderPane(applyAgents(initialPiFleetState(), listing), false, undefined, []);
+		expect(body).not.toContain("alpha-dev");
+		expect(body).toContain("No AWS estate selected");
+	});
+
+	test("an emptied hub says the scope excluded it, not that the fleet is unregistered", () => {
+		// The spokes ARE registered; claiming otherwise sends the operator chasing
+		// a fleet problem that does not exist.
+		const body = renderPane(applyAgents(initialPiFleetState(), listing), false, undefined, []);
+		expect(body).toContain("No spoke here is in the selected scope");
+		expect(body).not.toContain("No spokes are registered on this hub");
 	});
 
 	test("a selection matching no spoke empties the list and gates the console", () => {
@@ -235,7 +269,7 @@ describe("PiFleetPane", () => {
 		expect(body).toContain("flex-1 overflow-y-auto min-h-0");
 	});
 
-	// SIO-1704: `project` is a hub-side namespace derived per ENVIRONMENT, so two
+	// SIO-1703: `project` is a hub-side namespace derived per ENVIRONMENT, so two
 	// prd hubs in different accounts both render "pi-coms-prd". Showing it beside
 	// the hubKey gives the operator a value that looks identifying and is not --
 	// the collision SIO-1666 removed from routing. hubKey is the identity.
@@ -270,6 +304,51 @@ describe("PiFleetPane", () => {
 		expect(visible).toContain("eu-retail-prd");
 		// The ambiguous namespace is not what the operator reads.
 		expect(visible).not.toContain("pi-coms-prd");
+	});
+
+	// SIO-1704: the ops inbox carries one report per estate from `monitor-<estate>`.
+	// Scoping the spokes without scoping the inbox left the operator reading
+	// findings for accounts they had excluded from the investigation.
+	test("filters the ops inbox to the selected estates", () => {
+		const state = applyMailbox(applyAgents(initialPiFleetState(), listing), {
+			hubKey: "eu-shared-services-dev",
+			environment: "dev",
+			name: "ops",
+			messages: [
+				inboxMessage("m1", "monitor-eu-oit-prd", "[info] aws-762715229080 daily digest"),
+				inboxMessage("m2", "monitor-eu-mendix-platform-prd", "[critical] aws-654654584630 CloudTrail NOT logging"),
+			],
+		});
+		const body = renderPane(state, false, undefined, ["eu-oit-prd"]);
+		expect(body).toContain("monitor-eu-oit-prd");
+		expect(body).toContain("aws-762715229080");
+		// The excluded estate's findings are not shown.
+		expect(body).not.toContain("monitor-eu-mendix-platform-prd");
+		expect(body).not.toContain("aws-654654584630");
+	});
+
+	test("keeps an inbox entry whose sender is not estate-shaped", () => {
+		// A spoke replying, or an operator: no estate to match. An estate filter
+		// must not silently drop what it cannot classify.
+		const state = applyMailbox(applyAgents(initialPiFleetState(), listing), {
+			hubKey: "eu-shared-services-dev",
+			environment: "dev",
+			name: "ops",
+			messages: [inboxMessage("m3", "simon", "handover note for the next shift")],
+		});
+		const body = renderPane(state, false, undefined, ["eu-oit-prd"]);
+		expect(body).toContain("handover note for the next shift");
+	});
+
+	test("says so when the scope excludes every inbox entry", () => {
+		const state = applyMailbox(applyAgents(initialPiFleetState(), listing), {
+			hubKey: "eu-shared-services-dev",
+			environment: "dev",
+			name: "ops",
+			messages: [inboxMessage("m4", "monitor-eu-mendix-platform-prd", "[info] digest")],
+		});
+		const body = renderPane(state, false, undefined, ["eu-oit-prd"]);
+		expect(body).toContain("No reports from the selected estates");
 	});
 
 	test("shows the empty-state copy before any peer is selected", () => {

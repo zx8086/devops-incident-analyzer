@@ -453,7 +453,7 @@ export default function (pi: ExtensionAPI) {
 		type: "string",
 		default: "default",
 	});
-	// SIO-1704: which HUB this console is attached to, by its selector (the AWS
+	// SIO-1703: which HUB this console is attached to, by its selector (the AWS
 	// account hosting it). The extension otherwise knows only a tunnelled
 	// 127.0.0.1 serverUrl, which names nothing, and `project` is a per-ENVIRONMENT
 	// namespace that two prd hubs in different accounts both share. `just coms`
@@ -1154,7 +1154,7 @@ export default function (pi: ExtensionAPI) {
 		// Success is the default: only failures notify (status line + widget
 		// already convey the connected state).
 		try {
-			// SIO-1704: the hub is the account, not the project. `pi-coms-prd` is a
+			// SIO-1703: the hub is the account, not the project. `pi-coms-prd` is a
 			// per-environment namespace, so two prd hubs in different accounts both
 			// showed it -- the operator read a value that looked identifying and was
 			// not. Falls back to the project only where no hub was passed.
