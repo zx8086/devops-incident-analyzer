@@ -89,19 +89,18 @@ function createPiFleetStore() {
 		}
 	}
 
-	async function send(prompt: string) {
-		const selection = fleet.selected;
-		const text = prompt.trim();
-		if (!selection || text === "" || busy) return;
+	// One spoke, one entry. Each target gets its own card so a fan-out reads as
+	// several attributed replies rather than one merged blob, and one spoke
+	// failing leaves the others' cards intact.
+	async function sendOne(target: PiFleetSelection, text: string) {
 		const id = crypto.randomUUID();
-		fleet = startEntry(fleet, { id, ...selection, target: selection.name, prompt: text, sentAt: Date.now() });
-		busy = true;
+		fleet = startEntry(fleet, { id, ...target, target: target.name, prompt: text, sentAt: Date.now() });
 		try {
 			const body = await readJson(
 				await fetch("/api/pi/messages", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ hubKey: selection.hubKey, target: selection.name, prompt: text }),
+					body: JSON.stringify({ hubKey: target.hubKey, target: target.name, prompt: text }),
 				}),
 			);
 			const parsed = PiFleetMessageResponseSchema.safeParse(body);
@@ -110,6 +109,24 @@ function createPiFleetStore() {
 			await pollUntilTerminal(id);
 		} catch (error) {
 			fleet = failEntry(fleet, id, error instanceof Error ? error.message : String(error));
+		}
+	}
+
+	// SIO-1708: with a spoke selected the prompt goes to it; with none selected it
+	// goes to every spoke the pane is SHOWING. `visible` is the estate-scoped list
+	// the component renders, passed in rather than recomputed here -- scoping lives
+	// in one place (the same reason SIO-1705 passes the estate scope to the
+	// mailbox read).
+	async function send(prompt: string, visible: PiFleetSelection[] = []) {
+		const text = prompt.trim();
+		if (text === "" || busy) return;
+		const targets = fleet.selected ? [fleet.selected] : visible;
+		if (targets.length === 0) return;
+		busy = true;
+		try {
+			// allSettled, not all: one spoke erroring must not abandon the others'
+			// polling. sendOne already records its own failure on its own card.
+			await Promise.allSettled(targets.map((t) => sendOne(t, text)));
 		} finally {
 			busy = false;
 		}

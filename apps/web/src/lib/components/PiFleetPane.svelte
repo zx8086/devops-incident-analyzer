@@ -21,7 +21,9 @@ let {
 	busy: boolean;
 	// SIO-1666: which HUB's inbox is loading, by key.
 	mailboxBusy: string | null;
-	onSend: (prompt: string) => void;
+	// SIO-1708: the visible (estate-scoped) spokes travel with the prompt so a
+	// no-selection send reaches exactly what the pane is showing.
+	onSend: (prompt: string, visible: { hubKey: string; name: string }[]) => void;
 	onRefresh: () => void;
 	onSelect: (selection: PiFleetSelection | null) => void;
 	onLoadMailbox: (hubKey: string, estates: string[]) => void;
@@ -91,7 +93,16 @@ const entryChip: Record<string, string> = {
 };
 
 const budgetSeconds = $derived(Math.round(pane.totalBudgetMs / 1000));
-const canSend = $derived(pane.selected !== null && !busy && prompt.trim() !== "");
+// SIO-1708: every spoke the pane is currently SHOWING, in render order. With no
+// selection this is the send target set, so "all" always means "all in scope" --
+// scoping to eu-oit-prd makes that one spoke the whole fleet, never a back door
+// to the accounts the operator excluded.
+const visibleTargets = $derived(
+	scoped.flatMap((hub) => hub.peers.map((peer) => ({ hubKey: hub.hubKey, name: peer.name }))),
+);
+// A prompt needs a target: the selected spoke, or -- with none selected -- the
+// visible ones. Nothing reachable still means nothing to send to.
+const canSend = $derived(!busy && prompt.trim() !== "" && (pane.selected !== null || visibleTargets.length > 0));
 
 // SIO-1666: selection keys off the HUB -- a peer name is only unique within its
 // hub, and two hubs may share an environment.
@@ -105,7 +116,7 @@ function toggleSelect(hubKey: string, name: string) {
 
 function submit() {
 	if (!canSend) return;
-	onSend(prompt.trim());
+	onSend(prompt.trim(), visibleTargets);
 	prompt = "";
 }
 
@@ -312,9 +323,10 @@ function onKeydown(event: KeyboardEvent) {
       {#if pane.selected}
         To <span class="font-medium text-tommy-navy">{pane.selected.name}</span> ({pane.selected.hubKey})
       {:else if canAskAll}
-        <!-- SIO-1706: named the removed console button. The box itself is the only
-             path now, so say what it needs: a spoke. -->
-        Select a spoke above to send it a prompt.
+        <!-- SIO-1708: no selection is not an error state -- it means ask everyone in
+             scope. Name the count so a scoped fan-out is never mistaken for the
+             whole fleet. -->
+        To all {visibleTargets.length} spoke{visibleTargets.length === 1 ? "" : "s"} in scope &mdash; or select one above.
       {:else}
         No spoke is reachable. Fix the hub above, then select a spoke.
       {/if}
@@ -323,8 +335,8 @@ function onKeydown(event: KeyboardEvent) {
       bind:value={prompt}
       onkeydown={onKeydown}
       rows="3"
-      placeholder="Ask the spoke (Cmd+Enter to send)"
-      disabled={pane.selected === null || busy}
+      placeholder={pane.selected ? "Ask the spoke (Cmd+Enter to send)" : "Ask every spoke in scope (Cmd+Enter to send)"}
+      disabled={busy || (pane.selected === null && visibleTargets.length === 0)}
       class="w-full text-sm border border-gray-300 rounded-lg p-2 focus:outline-none focus:border-tommy-accent-blue disabled:bg-gray-50"
     ></textarea>
     <div class="flex justify-end mt-2">

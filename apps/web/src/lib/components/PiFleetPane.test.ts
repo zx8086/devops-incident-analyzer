@@ -169,10 +169,45 @@ describe("PiFleetPane", () => {
 		expect(body).not.toContain("Ask all spokes at once");
 	});
 
-	test("points the input box at the only path there is", () => {
+	// SIO-1708: no selection is not an error state -- it means ask everyone in
+	// scope, from the same box and the same Send button. No extra control.
+	test("with no spoke selected the box is live and addresses every spoke in scope", () => {
 		const body = renderPane(applyAgents(initialPiFleetState(), listing), false);
-		expect(body).toContain("Select a spoke above to send it a prompt");
-		expect(body).not.toContain("ask them all at once");
+		const tag = body.match(/<textarea[^>]*/)?.[0] ?? "";
+		expect(/\sdisabled(=|\s|>)/.test(tag.replace(/class="[^"]*"/, ""))).toBe(false);
+		expect(body).toContain("Ask every spoke in scope");
+		// The count names the scope, so a scoped fan-out is not mistaken for the fleet.
+		expect(body).toContain("To all 1 spoke in scope");
+	});
+
+	test("the fan-out counts only spokes the scope is showing", () => {
+		const twoHubs: PiFleetAgentsResponse = {
+			...listing,
+			hubs: [
+				{
+					hubKey: "eu-shared-services-prd",
+					environment: "prd",
+					project: "default",
+					fallbackTarget: "ops",
+					peers: [
+						{ name: "eu-oit-prd", status: "online", purpose: null, sessionId: "a" },
+						{ name: "eu-ediservices-prd", status: "online", purpose: null, sessionId: "b" },
+					],
+					error: null,
+				},
+			],
+		};
+		const all = renderPane(applyAgents(initialPiFleetState(), twoHubs), false, ["eu-oit-prd", "eu-ediservices-prd"]);
+		expect(all).toContain("To all 2 spokes in scope");
+		// Scoping to one account makes that account the whole fan-out.
+		const scoped = renderPane(applyAgents(initialPiFleetState(), twoHubs), false, ["eu-oit-prd"]);
+		expect(scoped).toContain("To all 1 spoke in scope");
+	});
+
+	test("the box stays disabled when the scope leaves no spoke to ask", () => {
+		const body = renderPane(applyAgents(initialPiFleetState(), listing), false, []);
+		const tag = body.match(/<textarea[^>]*/)?.[0] ?? "";
+		expect(/\sdisabled(=|\s|>)/.test(tag.replace(/class="[^"]*"/, ""))).toBe(true);
 	});
 
 	// The reachability copy outlived the button it used to gate: an operator facing
