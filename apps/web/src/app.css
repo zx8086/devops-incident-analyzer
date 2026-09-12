@@ -10,6 +10,11 @@
   --color-tommy-offwhite: #EDEAE1;
   --color-tommy-accent-blue: #166C96;
   --color-tommy-cream: #F5F3EC;
+  /* SIO-1719: a COOL surface. The brand neutrals (cream, offwhite, white) are
+     all warm and near-identical in value, so a card stacked on the pane gave
+     the eye nothing to separate. This is for content that must stand apart
+     from that stack -- the ops daily digest -- not a general background. */
+  --color-tommy-mist: #EEF4F8;
   --color-tommy-slate: #1B2651;
 
   /* Gray scale */

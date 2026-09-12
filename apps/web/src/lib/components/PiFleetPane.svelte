@@ -11,6 +11,7 @@
 // leave untrusted input on an unsanitized path.
 import type { PiFleetEnvironment } from "$lib/pi-fleet-types";
 import { formatReply, isTerminal, type PiFleetSelection, type PiFleetState } from "$lib/stores/pi-fleet-reducer";
+import { emphasiseDigest } from "../digest-emphasis.ts";
 import Icon from "./Icon.svelte";
 import MarkdownRenderer from "./MarkdownRenderer.svelte";
 
@@ -73,6 +74,13 @@ function scopedOut(hubKey: string): number {
 // Reachability follows what is SHOWN: a console that cannot address any spoke in
 // scope is no more useful than one with no spokes at all.
 const reachableSpokes = $derived(scoped.reduce((n, hub) => n + hub.peers.length, 0));
+// SIO-1719: does the lower region have anything in it? When it does not, it must
+// not reserve `flex-1` plus a floor -- an empty region held 250px on a tall pane
+// while the spoke list above it was capped and scrolling, which is the
+// "I cannot see all my agents" report. Empty, it takes only what it needs.
+const hasLowerContent = $derived(
+	pane.entries.length > 0 || scoped.some((hub) => pane.mailboxes[hub.hubKey] !== undefined),
+);
 const canAskAll = $derived(reachableSpokes > 0);
 
 const statusDot: Record<string, string> = {
@@ -188,7 +196,12 @@ function onKeydown(event: KeyboardEvent) {
        it takes only what its rows need -- 6 spokes fit inside 20rem with 287px
        still left for the digest on a 565px pane, and only a fleet beyond ~7
        spokes scrolls internally. Sized to the content, capped for the outlier. -->
-  <div class="shrink-0 max-h-[20rem] overflow-y-auto border-b border-gray-200">
+  <!-- SIO-1718: the picker may SHRINK. It was `shrink-0`, so on a short pane it
+       held its full height, starved the digest region to 0px and pushed the
+       composer past the pane's `overflow-hidden` edge -- the spokes looked
+       truncated and the reply box was gone. Now it yields into whatever the
+       digest does not need, scrolling internally instead of clipping. -->
+  <div class="min-h-0 shrink max-h-[20rem] overflow-y-auto border-b border-gray-200">
     <section class="px-4 pt-2 pb-3">
       {#if pane.hubs.length === 0}
         <p class="text-xs text-gray-500">No spokes are registered on any configured hub.</p>
@@ -275,7 +288,11 @@ function onKeydown(event: KeyboardEvent) {
     </section>
   </div>
 
-  <div class="flex-1 overflow-y-auto min-h-0">
+  <!-- SIO-1718: a floor, so the digest can never be squeezed to nothing by a
+       long spoke list on a short pane. min-h-0 alone let flex collapse it.
+       SIO-1719: the floor applies only when there IS something here. Reserving
+       it while empty stole 250px from the spoke list on a tall pane. -->
+  <div class="overflow-y-auto {hasLowerContent ? 'flex-1 min-h-[8rem]' : 'shrink min-h-0'}">
     <section class="px-4 py-3 space-y-3">
       <!-- SIO-1712: the ops inbox card lives HERE now, not nested under the spoke
            picker. A daily digest is the longest thing this pane ever shows, and
@@ -362,8 +379,20 @@ function onKeydown(event: KeyboardEvent) {
                          SIO-1714: the follow-up keeps that same legible gray-700; it
                          is subordinate by POSITION and surface, not by being harder
                          to read. Dimming live findings is the SIO-1704 mistake. -->
-                    <div class="mt-1 text-gray-700 overflow-x-auto break-words {message.isDigest ? 'bg-tommy-offwhite rounded p-2' : 'px-0.5'}">
-                      <MarkdownRenderer content={message.prompt} />
+                    <!-- SIO-1719: the digest body is COOL (tommy-mist), not the warm
+                         offwhite a spoke reply uses. The brand neutrals -- cream pane,
+                         white card, offwhite body -- are all warm and near-identical in
+                         value, so the most important thing in the pane had the weakest
+                         separation. The accent-blue left border ties the body to the
+                         DAILY DIGEST chip, so the anchor reads as one unit. -->
+                    <div class="mt-1 text-gray-700 overflow-x-auto break-words {message.isDigest ? 'rounded border-l-2 border-tommy-accent-blue bg-tommy-mist p-2' : 'px-0.5'}">
+                      <!-- SIO-1720: the family tag and the summary labels are bolded so
+                           the eye can find the class and the heading in a wall of
+                           same-weight lines. Only `**` markers are inserted; the text
+                           stays monitor-authored and still goes through the sanitized
+                           markdown path. Spoke replies below are NOT transformed --
+                           they are prose, not a structured report. -->
+                      <MarkdownRenderer content={emphasiseDigest(message.prompt)} />
                     </div>
                   </li>
                 {/each}
@@ -426,7 +455,9 @@ function onKeydown(event: KeyboardEvent) {
        of the digest. Measured on a 560px pane it held 169px against the digest's
        133px -- the box to ask a question was bigger than the report being read.
        Two rows and tighter padding; the textarea still grows as you type. -->
-  <div class="border-t border-gray-200 px-3 py-2 bg-white">
+  <!-- SIO-1718: shrink-0 -- the send box is the pane's primary control and must
+       never be the thing that gets squeezed out. -->
+  <div class="shrink-0 border-t border-gray-200 px-3 py-2 bg-white">
     <p class="text-xs text-gray-500 mb-1">
       {#if pane.selected}
         To <span class="font-medium text-tommy-navy">{pane.selected.name}</span> ({pane.selected.hubKey})
