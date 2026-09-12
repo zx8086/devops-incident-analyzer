@@ -30,13 +30,17 @@ describe("kafka-introspect.yaml SIO-680/682 coverage", () => {
 		]);
 	});
 
-	test("covers all 61 unique MCP tool names across the action map (SIO-742 +5 health-check, SIO-770 +kafka_list_dlq_topics)", () => {
+	// SIO-1699: 61 -> 58. The three Schema Registry write tools (kafka_register_schema,
+	// kafka_set_schema_config, kafka_delete_schema_subject) were dropped from the read-labelled
+	// schema_registry action: the analyzer is read-only (compliance/allowed-actions.yaml) and the
+	// SIO-1400 counters show zero calls to any of them.
+	test("covers all 58 unique MCP tool names across the action map (SIO-742 +5 health-check, SIO-770 +kafka_list_dlq_topics, SIO-1699 -3 SR writes)", () => {
 		const agent = loadAgent(AGENTS_DIR);
 		const kafka = agent.tools.find((t) => t.name === "kafka-introspect");
 		expect(kafka).toBeDefined();
 		if (!kafka) return;
 		const tools = getAllActionToolNames(kafka);
-		expect(tools.length).toBe(61);
+		expect(tools.length).toBe(58);
 	});
 
 	test("includes the SIO-680 Connect read tools under connect_status (SIO-742 prepends connect_health_check)", () => {

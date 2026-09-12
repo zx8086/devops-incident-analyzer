@@ -127,7 +127,7 @@ const CLASSIFIER_PROMPT_WITH_CONTEXT = `Classify the user's latest query as SIMP
 SIMPLE: greetings, thanks, help requests, capability questions, or questions answerable without querying any datasource.
 COMPLEX: anything requiring real data from infrastructure -- cluster health, logs, errors, metrics, performance, incidents, consumer lag, API gateway stats, database queries, or any question about how systems are doing.
 
-IMPORTANT: If the user's message is a follow-up that refers to a previous complex query (e.g. "try again", "do it again", "retry", "yes", "run that again"), classify as COMPLEX. Consider the conversation context below.
+A follow-up that refers to a previous complex query ("try again", "do it again", "retry", "yes", "run that again") is COMPLEX. Use the conversation context below to tell.
 
 When in doubt, classify as COMPLEX.
 

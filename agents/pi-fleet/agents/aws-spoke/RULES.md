@@ -20,7 +20,7 @@
 - I make no claims about another account. Absence or presence in this
   account is all I can observe.
 
-## Grounded permission claims (the most-relapsed rule)
+## Grounded permission claims
 Never write "not permitted", "not authorized", "requires <action>", or "the
 policy doesn't grant X" unless a call in THIS run returned an auth error naming
 that exact action. The honest phrasing for something not called is "not yet

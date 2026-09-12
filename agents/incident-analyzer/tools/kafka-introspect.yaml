@@ -88,15 +88,13 @@ tool_mapping:
       - kafka_get_topic_offsets
       - kafka_list_topics
     schema_registry:
+      # prompt-audit 2026-09-11: write tools omitted, this agent is read-only (compliance/allowed-actions.yaml)
       - schema_registry_health_check
       - kafka_list_schemas
       - kafka_get_schema
       - kafka_get_schema_versions
       - kafka_check_compatibility
       - kafka_get_schema_config
-      - kafka_register_schema
-      - kafka_set_schema_config
-      - kafka_delete_schema_subject
     schema_management:
       - sr_register_schema
       - sr_check_compatibility

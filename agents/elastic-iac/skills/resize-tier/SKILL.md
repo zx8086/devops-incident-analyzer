@@ -21,8 +21,8 @@ Source of truth: `knowledge/playbook/7-infrastructure-and-cost.md` §7.1–§7.3
 1. Call `validate-cluster-state` skill with `change_type: "resize"`. If `gate_passed: false`, abort and return failures to the user — do not draft a diff.
 2. **§7.1.1 — Warm-disk-full check.** Cloud refuses ANY plan change while any warm node is above the watermark. Inspect `nodes/stats.fs` for warm tier. If any node > 85% disk:
    - Abort with the message "warm-disk-full blocks plan changes — free warm tier first (drop replica count on a warm-heavy policy, or accelerate the cold migration on the oldest indices)".
-3. **§7.1.2 — ML jobs.** If the deployment has ML nodes, instruct the user to close ML jobs (`POST _ml/anomaly_detectors/*/_close`) before the apply. ES 9.2.x has a known shutdown-API bug. Note this in the MR body. Re-open after.
-4. **Hot-tier downsize specifically:** confirm `.alerts` indices are managed by an ILM policy. If unmanaged, abort: "hot downsize gated on `.alerts` unmanaged fix (Wave 3 pre-req)".
+3. **7.1.2 -- ML jobs.** If the deployment has ML nodes, instruct the user to close ML jobs (`POST _ml/anomaly_detectors/*/_close`) before the apply and re-open after; cite `knowledge/playbook/7-infrastructure-and-cost.md` 7.1.2 in the MR body for the shutdown-API caveat and the stack versions it applies to.
+4. **Hot-tier downsize specifically:** confirm `.alerts` indices are managed by an ILM policy. If unmanaged, abort with "hot downsize blocked: `.alerts` indices are unmanaged; fix that first".
 5. **§7.3 — Hot-tier downsize after over-migration:** check 7-day peak disk used_percent < 70% AND peak heap < 65% on the hot tier. If either is higher, the tier is NOT a downsize candidate; ask the user to confirm intent.
 6. **§7.1.3 — Resize vs remove.** To remove a node, reduce tier to `current_size - 1`; never attempt direct node-ID removal. To change instance type, do it as a SEPARATE plan from any size change.
 

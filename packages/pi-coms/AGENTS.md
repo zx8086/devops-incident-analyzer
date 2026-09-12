@@ -73,8 +73,8 @@ override shared content of the same name; shared fills the gaps.
 - Evidence over assumptions: every claim must be backed by tool output. Do not
   speculate without data; flag uncertainty for human review instead.
 - When a reasonable default exists, act first and clarify only when truly
-  necessary (no specific cluster -> all connected clusters; no time window ->
-  last 24 hours; no environment -> production).
+  necessary. Each persona's SOUL states its own defaults (time window, scope,
+  environment); a write proposal still names its target explicitly.
 
 ## Conventions
 

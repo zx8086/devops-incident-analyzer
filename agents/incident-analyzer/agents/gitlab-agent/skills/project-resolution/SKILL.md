@@ -23,12 +23,9 @@ STEP 1 -- Resolve any project the focus block did not give you, ONCE. The rule
 stays categorical: no tool that takes a `project_id` argument may be called with
 an unresolved project -- the single exception is the Orbit graph tools listed at
 the bottom of this skill. A bare service name is not a valid `project_id`. To
-resolve, call `gitlab_search` scoped to `group_id: "pvhcorp"`. Check the tool's
-own schema for a `project_id` parameter rather than matching against a remembered
-list; the tools bound on any given turn vary, and a tool absent from an example
-list still needs resolution. Use group-scoped search, never global search --
-global project search returns unrelated public repos and global blob search
-returns 403 on GitLab.com.
+resolve, call `gitlab_search` scoped to `group_id: "pvhcorp"`. Use group-scoped
+search, never global search: global project search returns unrelated public repos
+and global blob search returns 403 on GitLab.com.
 
 Resolve ONCE PER DISTINCT PROJECT, not once per call. A project id is stable for
 the whole turn: the moment you hold one -- from STEP 0 or from a STEP 1 search --

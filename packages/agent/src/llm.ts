@@ -8,9 +8,11 @@ import {
 } from "@devops-agent/gitagent-bridge";
 import { getLogger } from "@devops-agent/observability";
 import { ChatBedrockConverse } from "@langchain/aws";
+import type { BaseLanguageModelInput } from "@langchain/core/language_models/base";
 import type { BaseMessage } from "@langchain/core/messages";
 import type { Runnable } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
+import type { z } from "zod";
 import { getAgentsDir } from "./paths.ts";
 
 const logger = getLogger("agent:llm");
@@ -602,6 +604,39 @@ export function createLlmWithTools(
 	const fallback = buildChatModel(role, fallbackConfig, overrides).bindTools(tools);
 	logger.info({ role, model: bedrockConfig.model, fallback: fallbackConfig.model }, "LLM model selected");
 	return primary.withFallbacks({ fallbacks: [fallback] }) as unknown as Runnable<BaseMessage[], BaseMessage>;
+}
+
+// Structured-output variant of createLlm for the JSON-envelope roles. ChatBedrockConverse's
+// withStructuredOutput builds one tool from the zod schema and forces it via tool_choice, so the
+// model fills a typed tool call instead of prose JSON that a parser then has to fence-strip and
+// key-alias (llm-json.ts). Bound on BOTH the primary and the manifest fallback before wrapping,
+// for the same reason as createLlmWithTools: RunnableWithFallbacks has no withStructuredOutput.
+// Role resolution goes through resolveRoleModelConfig so light-tier roles keep their model.
+export function createStructuredLlm<S extends z.ZodTypeAny>(
+	role: LlmRole,
+	schema: S,
+	name: string,
+	agentName = "incident-analyzer",
+): Runnable<BaseLanguageModelInput, z.infer<S>> {
+	const agent = getAgentForLlm(agentName);
+	const { modelConfig, source } = resolveRoleModelConfig(role, agent);
+	const overrides = ROLE_OVERRIDES[role];
+
+	const bedrockConfig = resolveBedrockConfig(modelConfig);
+	const primary = buildChatModel(role, bedrockConfig, overrides).withStructuredOutput(schema, {
+		name,
+	}) as unknown as Runnable<BaseLanguageModelInput, z.infer<S>>;
+	const fallbackConfig = resolveFallbackConfig(modelConfig);
+	if (!fallbackConfig) {
+		logger.info({ role, model: bedrockConfig.model, source }, "LLM model selected");
+		return primary;
+	}
+
+	const fallback = buildChatModel(role, fallbackConfig, overrides).withStructuredOutput(schema, {
+		name,
+	}) as unknown as Runnable<BaseLanguageModelInput, z.infer<S>>;
+	logger.info({ role, model: bedrockConfig.model, fallback: fallbackConfig.model, source }, "LLM model selected");
+	return primary.withFallbacks({ fallbacks: [fallback] });
 }
 
 // SIO-739: Wrap llm.invoke with a per-role wall-clock deadline merged into

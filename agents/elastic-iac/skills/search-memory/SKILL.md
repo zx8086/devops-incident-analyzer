@@ -19,7 +19,7 @@ Call `search_memory` when the question needs prior context that isn't derivable 
 |---|---|
 | Outcome of a past change | "What was the outcome of the eu-b2b 9.4.2 upgrade?" |
 | A prior decision and its reasoning | "Why did we downsize the us-cld warm tier last time?" |
-| Status of an in-flight operation | "How's the ap-cld fleet upgrade going?" (also proactively recalled at session bootstrap, R5 in `docs/architecture/agent-memory.md`) |
+| Status of an in-flight operation | "How's the ap-cld fleet upgrade going?" (also recalled automatically at session start; this is the manual fallback) |
 | Whether something was already tried | "Did we already attempt to fix the .alerts unmanaged-index issue?" |
 
 Do **not** call it for:
@@ -32,7 +32,7 @@ Do **not** call it for:
 `search_memory` takes a free-text `query` plus optional `deployment` / `stack` / `kind` filters. Two things matter for getting a useful result:
 
 1. **Always pass a specific `query`.** This tool is semantic-mode by design (unlike the knowledge graph's `kg_run_cypher`, which prefers deterministic filters) — the query text is what ranks the right memories to the top. A vague query ("upgrades") competes with everything the agent has ever recorded; a specific one ("eu-b2b 9.4.2 upgrade outcome") ranks the right block near the top.
-2. **Pair the query with a filter when you know the deployment/stack.** The service applies the `deployment`/`stack`/`kind` filter *after* ranking the top candidates by relevance to `query` (SIO-998 — see `docs/architecture/agent-memory.md` "Retrieval: TWO modes"). The tool already widens its candidate window to 25 hits specifically to give a filter room to work, but a filter still can't rescue a result if the `query` text itself doesn't rank the right memory into that window. Make the query as specific as the filter, don't rely on the filter alone to narrow a vague query.
+2. **Pair the query with a filter when you know the deployment/stack.** The service applies the `deployment`/`stack`/`kind` filter *after* ranking the top candidates by relevance to `query`. The tool already widens its candidate window to 25 hits specifically to give a filter room to work, but a filter still can't rescue a result if the `query` text itself doesn't rank the right memory into that window. Make the query as specific as the filter, don't rely on the filter alone to narrow a vague query.
 
 `kind` values seen in practice: `iac-change` (a proposed or reconciled config change), `fleet-upgrade-dispatched` / `fleet-upgrade-terminal` (version rollouts), `key-decision` (a recorded reasoning step), `skill` (a proposed-but-unpromoted learned skill).
 
@@ -48,7 +48,7 @@ Recall why a decision was made, no deployment known yet:
 search_memory({ query: "why downsize warm tier to 8GB" })
 ```
 
-Check an in-flight fleet upgrade (also see the proactive R5 bootstrap recall — this is the manual fallback if that didn't surface it):
+Check an in-flight fleet upgrade (also see the automatic session-start recall -- this is the manual fallback if that didn't surface it):
 ```
 search_memory({ query: "us-cld fleet upgrade status", kind: "fleet-upgrade-dispatched" })
 ```
@@ -57,4 +57,3 @@ search_memory({ query: "us-cld fleet upgrade status", kind: "fleet-upgrade-dispa
 
 - Returns "No matching memory found (or durable memory is not enabled for this agent)" on zero hits or when the agent-memory backend isn't active — treat an empty result as "nothing recorded" or "memory unavailable," not as proof something never happened, the same caution `query-knowledge-graph` gives for an empty graph result.
 - This skill is read-only. It never writes, promotes, or deletes a memory.
-- See `docs/architecture/agent-memory.md` (Reads table, row R7) for the full mechanism and how this differs from the agent's own automatic (code-driven) recalls.

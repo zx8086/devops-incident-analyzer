@@ -176,9 +176,7 @@ Return strict JSON in one of these two shapes:
 
 Rules:
 - Be conservative: only return "ambiguous" when the prompt truly does not specify an estate.
-- "production", "prod", "live" -> "prod" (if present in available estates)
-- "staging", "stage", "preprod", "uat" -> "staging" (if present)
-- "dev", "development", "test environment" -> "dev" (if present)
+- An environment word alone ("production", "prod", "live"; "staging", "stage", "preprod", "uat"; "dev", "development", "test environment") selects every available estate whose id ends in the matching suffix (-prd, -stg, -dev); if no estate id carries that suffix, return "ambiguous"
 - "all environments", "all estates", "every estate" -> "ambiguous"
 - The estate IDs returned MUST come from the available list. Never invent IDs.
 - Respond with JSON only, no prose.`;
@@ -263,6 +261,15 @@ export async function awsEstateRouter(
 	if (!prompt) {
 		logger.info({ targets: available }, "No prompt content; routing to all estates");
 		return { awsTargetEstates: available };
+	}
+
+	// An estate id named verbatim in the prompt fully determines the routing, so it needs no
+	// model call; only the remainder (environment words alone, or no estate at all) is judgment.
+	const promptLower = prompt.toLowerCase();
+	const namedEstates = available.filter((id) => promptLower.includes(id.toLowerCase()));
+	if (namedEstates.length > 0) {
+		logger.info({ awsTargetEstates: namedEstates, available }, "awsEstateRouter matched estate ids in prompt");
+		return { awsTargetEstates: namedEstates };
 	}
 
 	const decision = await classify(prompt, available, config);

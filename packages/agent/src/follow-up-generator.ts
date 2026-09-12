@@ -1,5 +1,6 @@
 // agent/src/follow-up-generator.ts
 import { getLogger } from "@devops-agent/observability";
+import { DATA_SOURCE_IDS } from "@devops-agent/shared";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
@@ -14,7 +15,7 @@ const logger = getLogger("agent:follow-up-generator");
 const MIN_SUGGESTION_LENGTH = 10;
 const MAX_SUGGESTION_LENGTH = 100;
 
-const FOLLOW_UP_PROMPT = `Given the DevOps incident analysis assistant's response below, suggest 3 relevant follow-up questions the user might want to ask next. The assistant analyzes Elasticsearch, Kafka, Couchbase Capella, and Kong Konnect data.
+const FOLLOW_UP_PROMPT = `Given the DevOps incident analysis assistant's response below, suggest 3 relevant follow-up questions the user might want to ask next. The assistant analyzes data from these datasources: ${DATA_SOURCE_IDS.join(", ")}.
 
 Each suggestion should be a short, actionable question (under 100 chars).
 

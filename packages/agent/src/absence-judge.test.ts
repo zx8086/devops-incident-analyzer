@@ -525,7 +525,9 @@ describe("judge prompt: errors and windows (SIO-1266)", () => {
 		_setAbsenceJudgeLlmForTesting(llm);
 		await judgeContradictedAbsenceClaims(CLAIMS, RESULTS);
 		const sent = JSON.stringify(calls[0]);
-		expect(sent).toContain("under 15 words");
+		// SIO-1699: qualitative length guidance replaces the "under 15 words" numeric cap (prompt
+		// audit 1f); the drop-reason-before-verdicts instruction is unchanged.
+		expect(sent).toContain("short phrase");
 		expect(sent).toContain("omit");
 	});
 });

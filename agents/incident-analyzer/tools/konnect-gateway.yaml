@@ -51,6 +51,7 @@ tool_mapping:
   mcp_patterns:
     - "konnect_*"
   action_tool_map:
+    # prompt-audit 2026-09-11: write tools omitted, this agent is read-only (compliance/allowed-actions.yaml)
     api_requests:
       - konnect_query_api_requests
       - konnect_get_consumer_requests
@@ -58,59 +59,33 @@ tool_mapping:
     service_config:
       - konnect_list_services
       - konnect_get_service
-      - konnect_create_service
-      - konnect_update_service
-      - konnect_delete_service
     route_config:
       - konnect_list_routes
       - konnect_get_route
-      - konnect_create_route
-      - konnect_update_route
-      - konnect_delete_route
     plugin_chain:
       - konnect_list_plugins
       - konnect_get_plugin
-      - konnect_create_plugin
-      - konnect_update_plugin
-      - konnect_delete_plugin
       - konnect_list_plugin_schemas
     data_plane_health:
       - konnect_list_data_plane_nodes
       - konnect_get_data_plane_node
       - konnect_list_data_plane_tokens
-      - konnect_create_data_plane_token
-      - konnect_revoke_data_plane_token
     certificate_status:
       - konnect_list_certificates
       - konnect_get_certificate
-      - konnect_create_certificate
-      - konnect_update_certificate
-      - konnect_delete_certificate
     control_plane_management:
       - konnect_list_control_planes
       - konnect_get_control_plane
-      - konnect_create_control_plane
-      - konnect_update_control_plane
-      - konnect_delete_control_plane
       - konnect_list_control_plane_group_memberships
       - konnect_check_control_plane_group_membership
       - konnect_get_control_plane_config
-      - konnect_update_control_plane_config
     consumer_management:
       - konnect_list_consumers
       - konnect_get_consumer
-      - konnect_create_consumer
-      - konnect_update_consumer
-      - konnect_delete_consumer
     portal_management:
       - konnect_list_portals
       - konnect_get_portal
-      - konnect_create_portal
-      - konnect_update_portal
-      - konnect_delete_portal
       - konnect_list_portal_products
-      - konnect_publish_portal_product
-      - konnect_unpublish_portal_product
       - konnect_list_portal_apis
       - konnect_fetch_portal_api
       - konnect_list_portal_applications

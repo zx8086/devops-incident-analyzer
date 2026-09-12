@@ -33,7 +33,7 @@ Only reach for `kg_run_cypher` when the question needs a shape the curated tools
 
 `kg_run_cypher` is READ-ONLY. Write/DDL keywords (CREATE/MERGE/SET/DELETE/DETACH/REMOVE/DROP/ALTER/COPY/CALL) and multi-statement payloads are rejected by a guard. Always pass values as bound `$params`, never string-interpolated.
 
-### IaC subgraph schema (authoritative: `packages/knowledge-graph/src/schema.ts`)
+### IaC subgraph schema
 
 Nodes:
 - `ElasticDeployment(name, ecId, region)` — a cluster, e.g. `eu-b2b`. PK `name`.
