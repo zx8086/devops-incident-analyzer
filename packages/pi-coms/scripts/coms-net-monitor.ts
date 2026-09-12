@@ -124,7 +124,10 @@ const LOGS_EXCLUDE = (process.env.PI_MONITOR_LOGS_EXCLUDE ?? "")
 	.map((s) => s.trim())
 	.filter(Boolean);
 const JOURNAL_RETAIN_MS = Number(process.env.PI_MONITOR_JOURNAL_RETAIN_DAYS ?? 90) * 86_400_000;
-const INGEST_MIN_EVENTS = Number(process.env.PI_MONITOR_INGEST_MIN_EVENTS ?? 10);
+// envNumber, not Number(): a bare Number("") is 0 and Number("ten") is NaN, and
+// `baseline >= NaN` is always false, which would silence the check with no trace.
+const INGEST_MIN_EVENTS = envNumber(process.env.PI_MONITOR_INGEST_MIN_EVENTS, 10);
+const INGEST_ZERO_HOURS = envNumber(process.env.PI_MONITOR_INGEST_ZERO_HOURS, 3);
 const WATCHLIST = (process.env.PI_MONITOR_WATCHLIST ?? "")
 	.split(",")
 	.map((s) => s.trim())
@@ -411,6 +414,7 @@ function main(): void {
 				run: () =>
 					checkIngestion(cw, state, {
 						minEvents: INGEST_MIN_EVENTS,
+						zeroHours: INGEST_ZERO_HOURS,
 						excludePrefixes: LOGS_EXCLUDE.length > 0 ? LOGS_EXCLUDE : undefined,
 					}),
 			},
