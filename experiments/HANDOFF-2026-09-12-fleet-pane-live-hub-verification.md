@@ -7,7 +7,7 @@
 | **PRs** | [#745](https://github.com/zx8086/devops-incident-analyzer/pull/745) `fe59e39d` · [#748](https://github.com/zx8086/devops-incident-analyzer/pull/748) `54b876ed` · [#749](https://github.com/zx8086/devops-incident-analyzer/pull/749) `2ccc96e3` |
 | **Repo state** | all three merged to `main`; `origin/main` tip `2ccc96e3` |
 | **Suggested branch** | none — this is a **verification** task. Only branch if it finds a bug (then a new ticket, not a reopen). |
-| **Status** | **Live run completed 2026-09-12 against the prd hub — PASSED.** Checks 1, 2, 5, 7, 8, 9 verified; 3 and 4 not reachable that day; **check 6 (two hubs) still untested**. The setup recipe below is CORRECTED from the run. |
+| **Status** | **COMPLETE — live run 2026-09-12 against the prd hub PASSED.** Checks 1, 2, 5, 7, 8, 9 verified live; 3 and 4 not reachable that day (unit-tested); **check 6 resolved — a two-hub pane is UNREACHABLE BY DESIGN (SIO-1696), and the multi-card render path is verified separately.** Setup recipe below is CORRECTED from the run. |
 
 ## TL;DR
 
@@ -133,12 +133,18 @@ Select an AWS estate first — per SIO-1704 the pane shows nothing without one, 
 | 3 | A `[warn]` digest | Still marked as the digest — not `[info]`-only | **not reachable** — all 6 digests were `[info]` that day; unit-tested only |
 | 4 | An estate with no digest in the window | Nothing labelled digest; amber `missingDigest` note; findings still in full | **not reachable** — `missingDigest: []`, every estate had one; unit-tested only |
 | 5 | Scroll the spoke list with 6 spokes | Hub row stays pinned; last spoke still selectable | **PASS** — scrolled 103px, header offset 0, Inbox reachable |
-| 6 | **Two hubs, both mailboxes loaded** | Two `<details>` cards, each with its own hubKey; independent collapse | **NOT TESTED** — see below |
+| 6 | **Two hubs, both mailboxes loaded** | Two `<details>` cards, each with its own hubKey; independent collapse | **PASS (not via dev)** — see below |
 | 7 | Collapse/expand by keyboard | `<details>` toggles; summary keeps its `N reports` | **PASS** — 42px collapsed, `36 reports` survives, reopens |
 | 8 | Click Refresh | Icon spins, button disables, re-enables | **PASS** |
 | 9 | Digest region taller than the picker | Picker pinned at 176px | **PASS** — picker 176px, digest 565px at a 720px window |
 
-**Check 6 remains the priority and is still untested.** Only the prd hub is tunnelled; the dev hub (`local_port` 8787) is a different account, and loading both at once would breach the no-cross-environment rule (`feedback_no_cross_environment_access`). It needs a deliberate dev-hub session, or an explicit decision that a prd+dev pane is acceptable for one test.
+**Check 6 — resolved, and the original framing was wrong.** A prd+dev pane is not a gap to close: it is **unreachable by design**. `listFleetAgents` filters `pane.hubs` to `environment === "prd"` (`pi-fleet.ts:280`), which is an explicit SIO-1696 acceptance criterion — *"`GET /api/pi/agents` returns only `prd` hubs"* — because this pane is production incident triage. Dev access is preserved through the hub CLI (`just coms`, `just hub-tunnel`), UI-only filtering.
+
+Confirmed empirically on 2026-09-12: with BOTH hubs in `PI_COMS_HUBS` and both tunnels up (dev on 8787, prd on 8788), `resolvePaneConfig` returned both (`eu-shared-services-prd/prd`, `eu-shared-services-dev/dev`) but `/api/pi/agents` returned **1 hub**, and the server log shows only one `pi.hub.call` — the dev hub was filtered before any request, exactly as specified. Do not "fix" this.
+
+The real question behind check 6 — *does the multi-card path collide?* — was then verified with **two prd-environment hubs**, which is the code path that actually ships: **2 `<details>` cards, each labelled with its own hubKey, independent counts (`2 report` / `1 report`), one `Daily digest` chip per card.** No collision.
+
+The only case still unexercised is two prd hubs with *live* mailboxes, which needs a second prd hub to exist. There is currently one.
 
 **What the live data proved that fixtures could not.** The ops mailbox returned **36 messages across 6 estates**, of which **exactly 6 were marked `isDigest` — one per estate, each first in its block, none mis-marked**. The follow-ups include `[critical]` and `[warn]` rows; a naive prefix match would have mislabelled them. `missingDigest: []`, `windowTruncated: false` (the 200-row window sufficed). The hub returned **13** agents and the pane rendered **6**, confirming the SIO-1665 `monitor-*` filter live. No horizontal scroll despite real ARNs and log-group names.
 
@@ -160,7 +166,7 @@ Expected: `picker` ≈ 176, `digestWins: true` at every window height. Reference
 
 | Risk | Status after the live run | Mitigation |
 |---|---|---|
-| Two hubs render one card, or cards collide | **STILL OPEN** — untested | Check 6. If broken, new ticket; the `{#each scoped}` at `PiFleetPane.svelte:289` is the suspect |
+| Two hubs render one card, or cards collide | **CLOSED** — verified with two prd hubs | 2 cards, own hubKeys, independent counts. A prd+dev pane is filtered out by SIO-1696 and is not a case to support |
 | Monitor changes its digest wording | **Open**, low likelihood / high impact | `DIGEST_MARKER` is a substring match; a reworded header silently disables anchoring and everything lands in `missingDigest`. Nothing alerts on this |
 | `[warn]` digest not marked | **Open but unit-tested** | Not reachable live (all digests were `[info]`). Re-check on a day an account is paused or degraded |
 | Estate with no digest in window | **Open but unit-tested** | Not reachable live (`missingDigest: []`) |
