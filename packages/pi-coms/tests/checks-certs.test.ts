@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	certRegions,
 	checkCerts,
+	checkListenerCerts,
 	type DescribeCertificateCommand,
 	ListCertificatesCommand,
 } from "../scripts/monitor/checks/certs.ts";
@@ -246,5 +247,79 @@ describe("certRegions", () => {
 
 	test("an unset host region still yields us-east-1", () => {
 		expect(certRegions(undefined, undefined)).toEqual(["us-east-1"]);
+	});
+});
+
+function fakeElb(
+	listeners: { lb: string; listener: string; defaultArn: string; sni: string[] }[],
+	opts: { denyListenerCerts?: boolean } = {},
+) {
+	return {
+		send: async (cmd: { constructor: { name: string }; input: { ListenerArn?: string; LoadBalancerArn?: string } }) => {
+			const name = cmd.constructor.name;
+			if (name === "DescribeLoadBalancersCommand") {
+				return { LoadBalancers: [...new Set(listeners.map((l) => l.lb))].map((a) => ({ LoadBalancerArn: a })) };
+			}
+			if (name === "DescribeListenersCommand") {
+				return {
+					Listeners: listeners
+						.filter((l) => l.lb === cmd.input.LoadBalancerArn)
+						.map((l) => ({ ListenerArn: l.listener, Certificates: [{ CertificateArn: l.defaultArn }] })),
+				};
+			}
+			// This is the read the live agent was denied.
+			if (opts.denyListenerCerts) throw new Error("AccessDenied: elasticloadbalancing:DescribeListenerCertificates");
+			const l = listeners.find((x) => x.listener === cmd.input.ListenerArn);
+			return {
+				Certificates: [
+					{ CertificateArn: l?.defaultArn, IsDefault: true },
+					...(l?.sni ?? []).map((a) => ({ CertificateArn: a, IsDefault: false })),
+				],
+			};
+		},
+	};
+}
+
+describe("checkListenerCerts", () => {
+	const listener = {
+		lb: "arn:lb/one",
+		listener: "arn:listener/443",
+		defaultArn: "arn:cert/default",
+		sni: ["arn:cert/extra"],
+	};
+
+	test("extra SNI certificates beyond the listener default are reported", async () => {
+		const out = await checkListenerCerts(
+			[{ region: "eu-central-1", client: fakeElb([listener]) }],
+			new MonitorState(":memory:"),
+			{ now: NOW },
+		);
+		expect(out).toHaveLength(1);
+		expect(out[0]?.severity).toBe("info");
+		expect((out[0]?.evidence as { sniCertificateArns?: string[] } | undefined)?.sniCertificateArns).toEqual([
+			"arn:cert/extra",
+		]);
+	});
+
+	test("a listener carrying only its default cert produces no finding", async () => {
+		const out = await checkListenerCerts(
+			[{ region: "eu-central-1", client: fakeElb([{ ...listener, sni: [] }]) }],
+			new MonitorState(":memory:"),
+			{ now: NOW },
+		);
+		expect(out).toHaveLength(0);
+	});
+
+	// The regression this check exists for: a denied read must say "not inspected"
+	// rather than silently look like "no extra certificates".
+	test("AccessDenied on DescribeListenerCertificates reports a scoping finding", async () => {
+		const out = await checkListenerCerts(
+			[{ region: "eu-central-1", client: fakeElb([listener], { denyListenerCerts: true }) }],
+			new MonitorState(":memory:"),
+			{ now: NOW },
+		);
+		expect(out).toHaveLength(1);
+		expect(out[0]?.summary).toContain("not inspected");
+		expect(out[0]?.summary).toContain("AccessDenied");
 	});
 });
