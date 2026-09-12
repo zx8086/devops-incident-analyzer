@@ -12,6 +12,7 @@
 import type { PiFleetEnvironment } from "$lib/pi-fleet-types";
 import { formatReply, isTerminal, type PiFleetSelection, type PiFleetState } from "$lib/stores/pi-fleet-reducer";
 import { emphasiseDigest } from "../digest-emphasis.ts";
+import { isNotableStatus, messageAge } from "../message-age.ts";
 import Icon from "./Icon.svelte";
 import MarkdownRenderer from "./MarkdownRenderer.svelte";
 
@@ -343,7 +344,15 @@ function onKeydown(event: KeyboardEvent) {
                         </span>
                       {/if}
                       <span class="truncate {message.isDigest ? 'font-medium text-gray-600' : 'text-gray-500'}">{message.senderName}</span>
-                      <span class="shrink-0 text-gray-500">{message.status}</span>
+                      <!-- SIO-1729: age, not `status`. A monitor report is one-way,
+                           so nothing ever claims it and the status read "queued" on
+                           every row forever (11 of 11 live, the newest digest 15h
+                           old). Age is the fact an operator needs; the status is
+                           kept only when it is exceptional. -->
+                      <span class="shrink-0 text-gray-500">{messageAge(message.createdAt)}</span>
+                      {#if isNotableStatus(message.status)}
+                        <span class="shrink-0 font-medium text-amber-700">{message.status}</span>
+                      {/if}
                     </div>
                     <!-- SIO-1709: the monitor writes these as markdown (bold findings,
                          numbered lists), so a literal render showed the asterisks.
