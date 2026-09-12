@@ -315,52 +315,6 @@ function nowIso(): string {
 	return new Date().toISOString();
 }
 
-// SIO-1726: give context-mode a turn on the prompt path, so its ctx_* tools are
-// registered before the first inbound coms message.
-//
-// context-mode registers those tools lazily from Pi's `before_agent_start` hook
-// (its own #534/#809 guard: CLI-only paths such as `pi list` load the extension
-// but must never spawn its MCP server). Pi emits that hook from exactly ONE
-// place, the `_runAgentPrompt` path. An inbound message is delivered with
-// `{ deliverAs: "followUp", triggerTurn: true }`, and when the agent is ALREADY
-// streaming Pi takes `agent.followUp()` instead, which never emits it. A spoke
-// runs pi-monitor alongside, so real inbound turns were reaching the model with
-// ZERO ctx_* tools while an idle interactive console got all eleven.
-//
-// Sending one throwaway prompt here, while the session is still idle, takes the
-// `_runAgentPrompt` branch and gets the tools registered for the rest of the
-// session. Verified on eu-oit-dev: 0 tools at extension load, 11 (including
-// ctx_batch_execute) once that hook has run.
-//
-// Deliberately NOT changing the inbound `followUp` delivery: queueing behind a
-// busy turn is what keeps concurrent inbound work from interleaving.
-//
-// WORKAROUND, not a design. Remove it once context-mode registers on a signal
-// that does not depend on which turn path Pi took; reported upstream against
-// context-mode 1.0.169 (see SIO-1726).
-function warmContextModeTools(pi: ExtensionAPI, ctx: ExtensionContext): void {
-	if (process.env.CTX_MODE_ENABLED === "false" || process.env.CTX_MODE_ENABLED === "0") return;
-	// Only meaningful while idle: a streaming session would queue this as a
-	// followUp, which is the very branch that skips the hook.
-	if (typeof ctx.isIdle === "function" && !ctx.isIdle()) return;
-	try {
-		pi.sendMessage(
-			{
-				customType: "coms-net-ctx-warmup",
-				content:
-					"[context-mode tool warm-up: reply with OK and nothing else. " +
-					"Do not call any tool and do not investigate anything.]",
-				display: false,
-				details: { reason: "register ctx_* tools before the first inbound turn" },
-			},
-			{ triggerTurn: true },
-		);
-	} catch {
-		// Best-effort: context-mode may not be installed (kill-switch off, or a
-		// failed install). The spoke then runs exactly as it did before.
-	}
-}
-
 function abbreviateModel(model: string): string {
 	let m = model || "";
 	if (m.startsWith("claude-")) m = m.slice("claude-".length);
@@ -1207,10 +1161,6 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.setStatus("coms-net", `coms-net ${identity.name}@${identity.hub ?? identity.project}`);
 			installPoolWidget(ctx);
 		} catch {}
-
-		// Before SSE opens, so it runs while the session is still idle and no
-		// inbound message has arrived to make it stream (SIO-1726).
-		warmContextModeTools(pi, ctx);
 
 		void openSse();
 
