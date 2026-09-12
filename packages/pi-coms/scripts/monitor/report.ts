@@ -113,6 +113,57 @@ export type DigestNotable = {
 
 // A journaled finding row carries the finding plus the diagnosis it was (or
 // wasn't) investigated with; a null diagnosis at warn+ is itself a signal.
+// SIO-1698 follow-up: the digest's two counters, extracted from the monitor's
+// buildDigest closure so they are testable and so they skip an unreadable row
+// instead of throwing. The digest is the daily report of record -- one malformed
+// journal row must not take the whole thing down. `skipped` is returned rather
+// than swallowed: a partial digest that looks complete is the failure mode this
+// guards against. Validating with FindingSchema rather than casting also keeps
+// an absent `family` from becoming a count bucket keyed `undefined`.
+export type JournalCounts = { counts: Record<string, number>; skipped: number };
+
+export function findingCountsFromJournal(rows: { payload: string }[]): JournalCounts {
+	const counts: Record<string, number> = {};
+	let skipped = 0;
+	for (const r of rows) {
+		let payload: unknown;
+		try {
+			payload = JSON.parse(r.payload);
+		} catch {
+			skipped++;
+			continue;
+		}
+		const parsed = FindingSchema.safeParse(payload);
+		if (!parsed.success) {
+			skipped++;
+			continue;
+		}
+		counts[parsed.data.family] = (counts[parsed.data.family] ?? 0) + 1;
+	}
+	return { counts, skipped };
+}
+
+// check_error rows carry no schema of their own; an unnamed check is bucketed
+// under "unknown" exactly as before, but a non-string `check` no longer
+// stringifies into a bucket name like "[object Object]".
+export function checkErrorCountsFromJournal(rows: { payload: string }[]): JournalCounts {
+	const counts: Record<string, number> = {};
+	let skipped = 0;
+	for (const r of rows) {
+		let payload: unknown;
+		try {
+			payload = JSON.parse(r.payload);
+		} catch {
+			skipped++;
+			continue;
+		}
+		const raw = (payload as { check?: unknown }).check;
+		const check = typeof raw === "string" && raw !== "" ? raw : "unknown";
+		counts[check] = (counts[check] ?? 0) + 1;
+	}
+	return { counts, skipped };
+}
+
 export function notablesFromJournal(rows: { payload: string }[]): DigestNotable[] {
 	const notables: DigestNotable[] = [];
 	for (const r of rows) {
