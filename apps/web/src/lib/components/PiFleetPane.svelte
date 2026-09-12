@@ -1,11 +1,18 @@
 <script lang="ts">
 // apps/web/src/lib/components/PiFleetPane.svelte
 // SIO-1650: live pi-coms spokes next to the incident chat. One prompt goes to
-// one spoke on the hub it was listed from. Replies are data: rendered verbatim,
-// never executed, never fed to an LLM.
+// one spoke on the hub it was listed from. Replies are data: never executed,
+// never fed to an LLM.
+// SIO-1709: "data" means never MODEL INPUT, not never formatted. The reports are
+// markdown, so they render as markdown for the reader; PR #682 is untouched
+// because nothing here becomes model input. The html is sanitized in both the
+// browser and SSR (isomorphic-dompurify, markdown.ts) -- this pane server-renders
+// agent-authored text about production accounts, so a browser-only guard would
+// leave untrusted input on an unsanitized path.
 import type { PiFleetEnvironment } from "$lib/pi-fleet-types";
 import { formatReply, isTerminal, type PiFleetSelection, type PiFleetState } from "$lib/stores/pi-fleet-reducer";
 import Icon from "./Icon.svelte";
+import MarkdownRenderer from "./MarkdownRenderer.svelte";
 
 let {
 	pane,
@@ -265,7 +272,11 @@ function onKeydown(event: KeyboardEvent) {
                     <li class="text-xs text-gray-700">
                       <span class="font-medium">{message.senderName}</span>
                       <span class="text-gray-400">{message.status}</span>
-                      <span class="block whitespace-pre-wrap break-words text-gray-500">{message.prompt}</span>
+                      <!-- SIO-1709: the monitor writes these as markdown (bold findings,
+                           numbered lists), so a literal render showed the asterisks. -->
+                      <span class="block break-words text-gray-500">
+                        <MarkdownRenderer content={message.prompt} />
+                      </span>
                     </li>
                   {/each}
                 </ul>
@@ -300,7 +311,18 @@ function onKeydown(event: KeyboardEvent) {
               <p class="mt-2 text-xs text-red-700">{entry.error}</p>
             {/if}
             {#if formatReply(entry.response).trim() !== ""}
-              <pre class="mt-2 text-xs bg-tommy-offwhite rounded p-2 overflow-x-auto whitespace-pre-wrap break-words">{formatReply(entry.response)}</pre>
+              <!-- SIO-1709: a STRING reply is the agent's prose and is markdown; an
+                   OBJECT reply is a schema-constrained payload that formatReply
+                   JSON-stringifies, and markdown would eat its braces and
+                   indentation. The reply type decides, so neither is mangled to
+                   suit the other. -->
+              {#if typeof entry.response === "string"}
+                <div class="mt-2 text-xs bg-tommy-offwhite rounded p-2 overflow-x-auto break-words">
+                  <MarkdownRenderer content={entry.response} />
+                </div>
+              {:else}
+                <pre class="mt-2 text-xs bg-tommy-offwhite rounded p-2 overflow-x-auto whitespace-pre-wrap break-words">{formatReply(entry.response)}</pre>
+              {/if}
             {:else if entry.status === "complete" && !entry.error}
               <!-- SIO-1678: a completed reply with no text is a failed turn, not a
                    quiet success. A current hub stores that as error empty_reply and

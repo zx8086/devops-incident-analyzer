@@ -1,10 +1,11 @@
 // apps/web/src/lib/markdown.ts
-import DOMPurify from "dompurify";
+
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
 import javascript from "highlight.js/lib/languages/javascript";
 import json from "highlight.js/lib/languages/json";
 import yaml from "highlight.js/lib/languages/yaml";
+import DOMPurify from "isomorphic-dompurify";
 import { Marked, Renderer } from "marked";
 
 hljs.registerLanguage("json", json);
@@ -74,14 +75,14 @@ renderer.table = ({
 
 const marked = new Marked({ renderer, breaks: true });
 
-// SIO-1042: markdown is always client-born from SSE state ($state([]) start), so sanitization
-// only needs to run in the browser. Plain `dompurify` (not isomorphic-dompurify) has no `window`
-// in SSR/tests -- DOMPurify.isSupported is false there and `sanitize` is literally undefined
-// (NOT a graceful pass-through), so guard explicitly rather than call it unconditionally. This is
-// safe because MarkdownRenderer's {@html html} only ever reaches a real DOM in the browser; SSR
-// output for this content is not what ships to users. Upgrade to isomorphic-dompurify only if
-// server-rendered markdown ever needs to be sanitized before reaching a client.
+// SIO-1042 assumed markdown was always client-born from SSE state, so plain `dompurify` with a
+// browser-only guard was enough -- outside a browser `sanitize` is undefined and the guard fell
+// through to RAW html. SIO-1709 met the upgrade condition that comment named: the fleet pane
+// server-renders spoke replies, which are agent-authored text about production AWS accounts, so
+// an unsanitized SSR path is now reachable by untrusted input (an agent echoing a hostile log
+// line or resource tag). isomorphic-dompurify sanitizes in BOTH environments, so there is no
+// environment-dependent branch left to get wrong.
 export function renderMarkdown(content: string): string {
 	const raw = marked.parse(content) as string;
-	return DOMPurify.isSupported ? DOMPurify.sanitize(raw, { ADD_ATTR: ["target"] }) : raw;
+	return DOMPurify.sanitize(raw, { ADD_ATTR: ["target"] });
 }

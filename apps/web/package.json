@@ -24,6 +24,7 @@
 		"dompurify": "^3.2.0",
 		"echarts": "^6.0.0",
 		"highlight.js": "^11.11.1",
+		"isomorphic-dompurify": "^4.2.0",
 		"marked": "catalog:",
 		"pino": "^10.3.1",
 		"yaml": "^2.9.0",
