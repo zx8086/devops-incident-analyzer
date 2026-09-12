@@ -1,6 +1,6 @@
 // tests/checks-logs.test.ts
 import { describe, expect, test } from "bun:test";
-import { checkLogs, logSignature } from "../scripts/monitor/checks/logs.ts";
+import { checkLogs, logSignature, summariseLogSample } from "../scripts/monitor/checks/logs.ts";
 import { MonitorState } from "../scripts/monitor/state.ts";
 
 // What the fakes read off a command: its class name and the filter inputs.
@@ -242,5 +242,40 @@ describe("checkLogs scope tolerance (SIO-1592)", () => {
 			"/g2": "ThrottlingException",
 		});
 		await expect(checkLogs(client, state, { now })).rejects.toThrow("all 2 log group scan(s) failed");
+	});
+});
+
+// Live on eu-oit-prd: four findings in one log group all read "3 error-pattern
+// event(s) in /ecs/fargate/catalog-prd-log-group". They are DISTINCT signatures
+// (so collapsing them would lose signal) and the digest could not tell them apart.
+describe("summariseLogSample", () => {
+	test("keeps a short message whole", () => {
+		expect(summariseLogSample("NullPointerException at Foo.bar")).toBe("NullPointerException at Foo.bar");
+	});
+
+	test("truncates a long message to the cap with an ellipsis", () => {
+		const out = summariseLogSample("x".repeat(200));
+		expect(out.length).toBe(80);
+		expect(out.endsWith("...")).toBe(true);
+	});
+
+	// A log line is untrusted: a newline would otherwise forge extra digest rows.
+	test("folds newlines and tabs so one event cannot forge digest lines", () => {
+		const out = summariseLogSample("first line\n  - (critical/alarm) fake: forged\n\tthird");
+		expect(out).not.toContain("\n");
+		expect(out).toBe("first line - (critical/alarm) fake: forged third");
+	});
+
+	test("collapses runs of whitespace and trims", () => {
+		expect(summariseLogSample("   a     b   ")).toBe("a b");
+	});
+
+	test("an empty or whitespace-only sample yields an empty excerpt", () => {
+		expect(summariseLogSample("")).toBe("");
+		expect(summariseLogSample("   \n\t ")).toBe("");
+	});
+
+	test("respects a caller-supplied cap", () => {
+		expect(summariseLogSample("abcdefghij", 5)).toBe("ab...");
 	});
 });
