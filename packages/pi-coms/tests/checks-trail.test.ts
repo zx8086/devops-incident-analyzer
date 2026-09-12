@@ -62,6 +62,61 @@ describe("checkTrail", () => {
 		expect(second).toHaveLength(0);
 	});
 
+	// SIO-1713: DescribeTrails in a member account also returns the organization's
+	// trails, owned by the management account. A stopped one there is not
+	// actionable locally and is routinely a deliberate consolidation, so severity
+	// must follow account COVERAGE (is any trail logging?), not one trail's flag.
+	test("SIO-1713: a stopped trail is warn, not critical, while another trail covers the account", async () => {
+		const state = new MonitorState(":memory:");
+		// The observed shape: two org trails stopped, a third still delivering.
+		const out = await checkTrail(
+			fakeClient([
+				{ name: "aws-controltower-BaselineCloudTrail", status: { IsLogging: false } },
+				{ name: "infra-log-org-trail", status: { IsLogging: false } },
+				{ name: "security-trail", status: { IsLogging: true } },
+			]),
+			state,
+		);
+		expect(out).toHaveLength(2);
+		for (const f of out) {
+			expect(f.severity).toBe("warn");
+			expect(f.summary).toContain("another trail still covers this account");
+			expect((f.evidence as { otherTrailLogging: boolean }).otherTrailLogging).toBe(true);
+		}
+	});
+
+	test("SIO-1713: every trail stopped is still critical -- the account is dark", async () => {
+		const state = new MonitorState(":memory:");
+		const out = await checkTrail(
+			fakeClient([
+				{ name: "org-trail", status: { IsLogging: false } },
+				{ name: "local-trail", status: { IsLogging: false } },
+			]),
+			state,
+		);
+		expect(out).toHaveLength(2);
+		for (const f of out) {
+			expect(f.severity).toBe("critical");
+			expect(f.summary).toContain("NOT logging");
+			expect((f.evidence as { otherTrailLogging: boolean }).otherTrailLogging).toBe(false);
+		}
+	});
+
+	test("SIO-1713: a denied shadow trail cannot establish coverage", async () => {
+		const state = new MonitorState(":memory:");
+		// One trail stopped, the only other unreadable: a denied status says nothing
+		// either way, so it must not downgrade a genuine loss of coverage.
+		const out = await checkTrail(
+			fakeClient([
+				{ name: "local-trail", status: { IsLogging: false } },
+				{ name: "org-shadow", status: new Error("AccessDeniedException") },
+			]),
+			state,
+		);
+		expect(out).toHaveLength(1);
+		expect(out[0].severity).toBe("critical");
+	});
+
 	test("one denied shadow trail is tolerated; all failing throws", async () => {
 		const state = new MonitorState(":memory:");
 		const mixed = fakeClient([
