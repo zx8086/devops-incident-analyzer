@@ -61,12 +61,17 @@ const env: NodeJS.ProcessEnv = {
 			serverUrl: "http://prd2.hub.test",
 			authToken: "prd2-tok",
 			environment: "prd",
-			estates: ["eu-ediservices-prd"],
+			// SIO-1703: a spoke is named for the estate it serves, so the fixture's
+			// peers must appear here or the pane correctly refuses to list them.
+			estates: ["alpha-prd", "zeta-prd"],
 		},
 	}),
 	PI_COMS_PANE_TOKENS: JSON.stringify({ "eu-shared-services-prd": "pane-prd-tok" }),
 };
 
+// SIO-1703: the hub lists an operator console too (`just coms <hub> <name>`,
+// registered --explicit). It is not an account agent and must not be offered as
+// a target; the hub's `estates` config is what says which names are spokes.
 const prdAgents = [
 	{ session_id: "s2", name: "zeta-prd", status: "stale", purpose: "spoke" },
 	{ session_id: "s1", name: "alpha-prd", status: "online" },
@@ -213,6 +218,29 @@ describe("listFleetAgents", () => {
 		const out = await listFleetAgents({ env, fetchImpl });
 		expect(out.hubs[0]?.error).toContain("500");
 		expect(out.hubs[0]?.error).not.toContain("hub-tunnel");
+	});
+
+	test("lists only the hub's configured estates, dropping an operator console", async () => {
+		const { fetchImpl } = hubFake((call) => {
+			if (call.url.startsWith("http://prd.hub.test/v1/agents")) {
+				return {
+					body: {
+						agents: [
+							{ session_id: "s1", name: "eu-oit-prd", status: "online" },
+							// An operator console: explicit, no purpose, not an estate.
+							{ session_id: "s2", name: "simon", status: "online", explicit: true },
+							// A spoke on a DIFFERENT hub: not in this hub's estates list.
+							{ session_id: "s3", name: "eu-b2b-ecom-prd", status: "online" },
+						],
+					},
+				};
+			}
+			return { body: { agents: [] } };
+		});
+		const out = await listFleetAgents({ env, fetchImpl });
+		const hub = out.hubs.find((h) => h.hubKey === "eu-shared-services-prd");
+		expect(hub?.peers.map((p) => p.name)).toEqual(["eu-oit-prd"]);
+		expect(hub?.peers.map((p) => p.name)).not.toContain("simon");
 	});
 
 	// SIO-1696: the pane is production incident triage. A dev hub is never listed

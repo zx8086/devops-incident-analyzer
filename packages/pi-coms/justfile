@@ -59,10 +59,15 @@ coms first *rest:
       echo "no principal \"$CNAME\" on the $ENV_KEY hub; mint one: just token-create $CNAME \"$CNAME,ops\" operator $PROFILE" >&2
       exit 1
     fi
-    echo "coms-net: $ENV_KEY hub via localhost:$LOCAL_PORT (project $PROJECT) as $CNAME"
+    echo "coms-net: $SEL hub via localhost:$LOCAL_PORT (project $PROJECT) as $CNAME"
+    # SIO-1704: --hub carries the SELECTOR (the AWS account hosting the hub) so the
+    # console's status line can name it. Without it the extension sees only a
+    # tunnelled 127.0.0.1 URL and the per-environment project namespace, which two
+    # prd hubs in different accounts both share.
     exec pi -e extensions/coms-net.ts \
       --name "$CNAME $(date +%Y-%m-%dT%H:%M)" --cname "$CNAME" --explicit \
-      --server-url "http://127.0.0.1:$LOCAL_PORT" --auth-token "$TOKEN" --project "$PROJECT" "${ARGS[@]}"
+      --server-url "http://127.0.0.1:$LOCAL_PORT" --auth-token "$TOKEN" --project "$PROJECT" \
+      --hub "$SEL" "${ARGS[@]}"
 # Fleet auth principals (SSM-backed; IAM on /pi-coms/auth decides who may run these)
 
 # Mint a principal token: just token-create <principal> ["name1,name2"] [kind] [profile]
