@@ -411,6 +411,7 @@ interface CliFlags {
 	explicit?: boolean;
 	serverUrl?: string;
 	authToken?: string;
+	hub?: string;
 }
 
 function readCliFlags(pi: ExtensionAPI): CliFlags {
@@ -421,6 +422,7 @@ function readCliFlags(pi: ExtensionAPI): CliFlags {
 	const explicit = pi.getFlag("explicit") as boolean | undefined;
 	const serverUrl = pi.getFlag("server-url") as string | undefined;
 	const authToken = pi.getFlag("auth-token") as string | undefined;
+	const hub = pi.getFlag("hub") as string | undefined;
 	return {
 		name: name && name.length > 0 ? name : undefined,
 		purpose: purpose && purpose.length > 0 ? purpose : undefined,
@@ -429,6 +431,7 @@ function readCliFlags(pi: ExtensionAPI): CliFlags {
 		explicit: explicit === true,
 		serverUrl: serverUrl && serverUrl.length > 0 ? serverUrl : undefined,
 		authToken: authToken && authToken.length > 0 ? authToken : undefined,
+		hub: hub && hub.length > 0 ? hub : undefined,
 	};
 }
 
@@ -449,6 +452,16 @@ export default function (pi: ExtensionAPI) {
 		description: "Project namespace for the coms-net hub",
 		type: "string",
 		default: "default",
+	});
+	// SIO-1704: which HUB this console is attached to, by its selector (the AWS
+	// account hosting it). The extension otherwise knows only a tunnelled
+	// 127.0.0.1 serverUrl, which names nothing, and `project` is a per-ENVIRONMENT
+	// namespace that two prd hubs in different accounts both share. `just coms`
+	// passes it; a bare `pi -e coms-net.ts` has no hub to name and falls back.
+	pi.registerFlag("hub", {
+		description: "Hub selector this console is attached to (the AWS account hosting it)",
+		type: "string",
+		default: undefined,
 	});
 	pi.registerFlag("color", {
 		description: "Hex color #RRGGBB (otherwise from frontmatter or palette fallback)",
@@ -477,6 +490,7 @@ export default function (pi: ExtensionAPI) {
 		purpose: string;
 		color: string;
 		project: string;
+		hub: string | null;
 		explicit: boolean;
 		cwd: string;
 		model: string;
@@ -1058,6 +1072,7 @@ export default function (pi: ExtensionAPI) {
 			purpose,
 			color,
 			project,
+			hub: flags.hub ?? null,
 			explicit,
 			cwd,
 			model,
@@ -1139,7 +1154,11 @@ export default function (pi: ExtensionAPI) {
 		// Success is the default: only failures notify (status line + widget
 		// already convey the connected state).
 		try {
-			ctx.ui.setStatus("coms-net", `coms-net ${identity.name}@${identity.project}`);
+			// SIO-1704: the hub is the account, not the project. `pi-coms-prd` is a
+			// per-environment namespace, so two prd hubs in different accounts both
+			// showed it -- the operator read a value that looked identifying and was
+			// not. Falls back to the project only where no hub was passed.
+			ctx.ui.setStatus("coms-net", `coms-net ${identity.name}@${identity.hub ?? identity.project}`);
 			installPoolWidget(ctx);
 		} catch {}
 
