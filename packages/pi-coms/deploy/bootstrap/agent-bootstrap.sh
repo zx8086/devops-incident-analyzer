@@ -125,6 +125,36 @@ grep -q 'BUN_INSTALL' "$HOME/.bashrc" || cat >> "$HOME/.bashrc" <<'PROFILE'
 export BUN_INSTALL="$HOME/.bun"
 export PATH="$HOME/.bun/bin:$HOME/.local/bin:$PATH"
 PROFILE
+
+# Context-mode (SIO-1726): sandboxed execute plus an FTS5 index over command
+# output, so an investigation derives its answer from a large output instead of
+# reading the whole thing into the model context. Bun-native despite declaring
+# better-sqlite3: server.bundle.mjs branches on globalThis.Bun and requires
+# bun:sqlite (the specifier is an array join, so it does not grep), and the
+# probes pass with better-sqlite3 deleted outright. Its postinstall is blocked
+# and no node/npm is needed on this host.
+#
+# Installed OUTSIDE $HOME/pi-coms: the bundle directory is replaced whole on
+# every convergence, and `-e npm:context-mode` would install to a temp dir per
+# run, re-downloading ~58MB on every launch.
+if [ "${CTX_MODE_ENABLED:-}" != "false" ] && [ "${CTX_MODE_ENABLED:-}" != "0" ]; then
+  CTX_DIR="$HOME/.pi-ctx"
+  CTX_VERSION="1.0.169"
+  if [ ! -f "$CTX_DIR/node_modules/context-mode/server.bundle.mjs" ] \
+     || [ "$(cat "$CTX_DIR/.ctx-version" 2>/dev/null || echo none)" != "$CTX_VERSION" ]; then
+    mkdir -p "$CTX_DIR"
+    echo '{"name":"pi-ctx","private":true}' > "$CTX_DIR/package.json"
+    # Pinned for the same reason as pi itself (SIO-1631): an unpinned install
+    # would drift the ctx_* tool surface under a running fleet. Never fatal --
+    # this block runs under `bash -euo pipefail`, so the guard keeps a registry
+    # outage from aborting the whole bootstrap.
+    if (cd "$CTX_DIR" && bun add "context-mode@$CTX_VERSION"); then
+      echo "$CTX_VERSION" > "$CTX_DIR/.ctx-version"
+    else
+      echo "context-mode install failed; spoke starts without ctx_* tools" >&2
+    fi
+  fi
+fi
 BOOTSTRAP
 
 # ── AWS credentials wait ───────────────────────────────────────────────────
@@ -490,8 +520,20 @@ if [ -n "PI_PROVIDER_PLACEHOLDER" ]; then
   PROVIDER_ARGS=(--provider "PI_PROVIDER_PLACEHOLDER")
 fi
 
+# Extensions are repeatable (-e/--extension). coms-net is mandatory; context-mode
+# (SIO-1726) is appended only when the install actually produced an extension.js,
+# because a missing -e target is a hard Pi startup error and a spoke that cannot
+# start is worse than one without ctx_* tools. Resolved HERE rather than at
+# bootstrap time so a reload after a failed install re-checks the real state.
+EXT_ARGS=(-e extensions/coms-net.ts)
+CTX_EXT_PATH="$HOME/.pi-ctx/node_modules/context-mode/build/adapters/pi/extension.js"
+if [ "${CTX_MODE_ENABLED:-}" != "false" ] && [ "${CTX_MODE_ENABLED:-}" != "0" ] \
+   && [ -f "$CTX_EXT_PATH" ]; then
+  EXT_ARGS+=(-e "$CTX_EXT_PATH")
+fi
+
 herdr agent start "AGENT_NAME_PLACEHOLDER" --kind pi --pane "$PANE_ID" --timeout 15000 -- \
-  -e extensions/coms-net.ts \
+  "${EXT_ARGS[@]}" \
   --model "PI_MODEL_PLACEHOLDER" \
   "${PROVIDER_ARGS[@]}" \
   --cname "AGENT_NAME_PLACEHOLDER" \
