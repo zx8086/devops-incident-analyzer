@@ -177,10 +177,15 @@ function onKeydown(event: KeyboardEvent) {
           <div class="flex items-center gap-2 mb-1">
             <!-- SIO-1666: the ACCOUNT identifies the hub; the environment is a
                  badge beside it. A bare DEV/PRD badge cannot tell two prd hubs
-                 in different domains apart. -->
+                 in different domains apart.
+                 SIO-1704: `project` is NOT shown. It is a hub-side namespace
+                 derived per ENVIRONMENT (pi-coms-prd), so two prd hubs in
+                 different accounts both render it -- the operator reads a value
+                 that looks identifying and is not, which is the collision
+                 SIO-1666 removed from routing. hubKey is the identity; project
+                 stays on the wire for logs and the mailbox call. -->
             <span class="text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded border {envBadge[hub.environment]}">{hub.environment}</span>
             <span class="text-xs font-medium text-tommy-navy truncate">{hub.hubKey}</span>
-            <span class="text-xs text-gray-400 truncate">{hub.project}</span>
             <button
               type="button"
               onclick={() => onLoadMailbox(hub.hubKey)}

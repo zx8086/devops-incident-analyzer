@@ -235,6 +235,43 @@ describe("PiFleetPane", () => {
 		expect(body).toContain("flex-1 overflow-y-auto min-h-0");
 	});
 
+	// SIO-1704: `project` is a hub-side namespace derived per ENVIRONMENT, so two
+	// prd hubs in different accounts both render "pi-coms-prd". Showing it beside
+	// the hubKey gives the operator a value that looks identifying and is not --
+	// the collision SIO-1666 removed from routing. hubKey is the identity.
+	test("identifies a hub by its key, never by the shared project namespace", () => {
+		const twoPrdHubs: PiFleetAgentsResponse = {
+			...listing,
+			hubs: [
+				{
+					hubKey: "eu-shared-services-prd",
+					environment: "prd",
+					project: "pi-coms-prd",
+					fallbackTarget: "ops",
+					error: null,
+					peers: [{ name: "eu-oit-prd", status: "online", purpose: null, sessionId: "p1" }],
+				},
+				{
+					// A second prd hub in a different account: same project string.
+					hubKey: "eu-retail-prd",
+					environment: "prd",
+					project: "pi-coms-prd",
+					fallbackTarget: "ops",
+					error: null,
+					peers: [{ name: "eu-retail-shop-prd", status: "online", purpose: null, sessionId: "p2" }],
+				},
+			],
+		};
+		const body = renderPane(applyAgents(initialPiFleetState(), twoPrdHubs));
+		// Strip HTML comments: SSR emits them, and this file's own rationale
+		// comments name the very string under test.
+		const visible = body.replace(/<!--[\s\S]*?-->/g, "");
+		expect(visible).toContain("eu-shared-services-prd");
+		expect(visible).toContain("eu-retail-prd");
+		// The ambiguous namespace is not what the operator reads.
+		expect(visible).not.toContain("pi-coms-prd");
+	});
+
 	test("shows the empty-state copy before any peer is selected", () => {
 		const body = renderPane(applyAgents(initialPiFleetState(), { ...listing, hubs: [] }));
 		expect(body).toContain("No spokes are registered");
