@@ -45,18 +45,37 @@ let prompt = $state("");
 // says nothing about whether a hub is answering right now. Without this, a down
 // tunnel still let the operator switch agents into a console with nothing to ask.
 // Derived here rather than passed in: the pane already holds the listing.
-// SIO-1703: an empty selection scopes nothing. The operator who selected no
-// estate has not asked for a narrower fleet, and hiding every spoke would read
-// as an outage. A selection that matches no spoke on a hub empties that hub's
-// list, which is correct: those accounts are out of scope for this investigation.
+// SIO-1704: the estate selector is the scope, and NO estate selected means no
+// account is in scope -- so no spoke is addressable. (SIO-1703 treated an empty
+// selection as "no narrowing" and showed the whole fleet; that let an operator
+// who had deselected everything still address any account, which is the mistake
+// the scoping exists to prevent. Empty now shows nothing, with the reason.)
 const scoped = $derived(
-	scopeEstates.length === 0
-		? pane.hubs
-		: pane.hubs.map((hub) => ({ ...hub, peers: hub.peers.filter((p) => scopeEstates.includes(p.name)) })),
+	pane.hubs.map((hub) => ({ ...hub, peers: hub.peers.filter((p) => scopeEstates.includes(p.name)) })),
 );
-const hiddenByScope = $derived(
-	pane.hubs.reduce((n, hub) => n + hub.peers.length, 0) - scoped.reduce((n, hub) => n + hub.peers.length, 0),
-);
+const totalSpokes = $derived(pane.hubs.reduce((n, hub) => n + hub.peers.length, 0));
+const hiddenByScope = $derived(totalSpokes - scoped.reduce((n, hub) => n + hub.peers.length, 0));
+// Distinguishes "nothing selected" from "selection hid everything": the first is
+// a prompt to choose an estate, the second means the choice matched no spoke.
+const noEstateSelected = $derived(scopeEstates.length === 0);
+
+// SIO-1704: the ops inbox carries one report per estate, sent by `monitor-<estate>`
+// (MONITOR_NAME_PREFIX, SIO-1665). Scoping the spokes without scoping the inbox
+// left the operator reading findings for accounts they had excluded. A sender that
+// is not estate-shaped -- a spoke replying, an operator -- has no estate to match
+// and is kept: an estate filter must not silently drop what it cannot classify.
+function estateOfSender(senderName: string): string | null {
+	return senderName.startsWith("monitor-") ? senderName.slice("monitor-".length) : null;
+}
+// How many spokes the hub really has, so an emptied list is not reported as an
+// unregistered fleet.
+function scopedOut(hubKey: string): number {
+	return pane.hubs.find((h) => h.hubKey === hubKey)?.peers.length ?? 0;
+}
+function inScope(senderName: string): boolean {
+	const estate = estateOfSender(senderName);
+	return estate === null || scopeEstates.includes(estate);
+}
 // Reachability follows what is SHOWN: a console that cannot address any spoke in
 // scope is no more useful than one with no spokes at all.
 const reachableSpokes = $derived(scoped.reduce((n, hub) => n + hub.peers.length, 0));
@@ -167,7 +186,11 @@ function onKeydown(event: KeyboardEvent) {
       {#if pane.hubs.length === 0}
         <p class="text-xs text-gray-500">No spokes are registered on any configured hub.</p>
       {/if}
-      {#if hiddenByScope > 0}
+      {#if noEstateSelected && totalSpokes > 0}
+        <p class="text-xs text-gray-500 mb-2">
+          No AWS estate selected. Choose one above to address its spoke.
+        </p>
+      {:else if hiddenByScope > 0}
         <p class="text-xs text-gray-400 mb-2">
           Scoped to the selected AWS estates &mdash; {hiddenByScope} other spoke{hiddenByScope === 1 ? "" : "s"} hidden.
         </p>
@@ -178,7 +201,7 @@ function onKeydown(event: KeyboardEvent) {
             <!-- SIO-1666: the ACCOUNT identifies the hub; the environment is a
                  badge beside it. A bare DEV/PRD badge cannot tell two prd hubs
                  in different domains apart.
-                 SIO-1704: `project` is NOT shown. It is a hub-side namespace
+                 SIO-1703: `project` is NOT shown. It is a hub-side namespace
                  derived per ENVIRONMENT (pi-coms-prd), so two prd hubs in
                  different accounts both render it -- the operator reads a value
                  that looks identifying and is not, which is the collision
@@ -197,6 +220,11 @@ function onKeydown(event: KeyboardEvent) {
           </div>
           {#if hub.error}
             <p class="text-xs text-red-700">{hub.error}</p>
+          {:else if hub.peers.length === 0 && scopedOut(hub.hubKey) > 0}
+            <!-- SIO-1704: the scope emptied this hub's list; the spokes ARE
+                 registered, so saying otherwise would send the operator chasing a
+                 fleet problem that does not exist. -->
+            <p class="text-xs text-gray-400">No spoke here is in the selected scope.</p>
           {:else if hub.peers.length === 0}
             <p class="text-xs text-gray-400">No spokes are registered on this hub.</p>
           {/if}
@@ -227,8 +255,12 @@ function onKeydown(event: KeyboardEvent) {
               {#if !mailbox || mailbox.messages.length === 0}
                 <p class="text-xs text-gray-400">Empty.</p>
               {:else}
+                {@const visible = mailbox.messages.filter((m) => inScope(m.senderName))}
+                {#if visible.length === 0}
+                  <p class="text-xs text-gray-400">No reports from the selected estates.</p>
+                {/if}
                 <ul class="space-y-1">
-                  {#each mailbox.messages as message (message.msgId)}
+                  {#each visible as message (message.msgId)}
                     <!-- The monitor's report IS the content here, not a preview of
                          something openable: there is no detail view to click into, so a
                          140-char slice just lost the findings. Wrapped in full, and
