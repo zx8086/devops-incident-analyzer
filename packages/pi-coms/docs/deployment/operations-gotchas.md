@@ -88,6 +88,19 @@ remove an entry when the underlying behavior changes.
   re-minted (SIO-1675, SIO-1685).
 - The daily digest carries the running `bundle:` version; a stale host is
   visible from the `ops` inbox without an SSM round-trip.
+- Before publishing, `git archive HEAD:packages/pi-coms | tar t | grep '^\.pi'`
+  must print nothing. A project `.pi/` dir in the bundle parks Pi at "Trust
+  project folder?" on every spoke and the fleet registers nothing (SIO-1733).
+  `packages/pi-coms/.gitattributes` holds the `export-ignore`.
+- `CTX_MODE_ENABLED=false` (or any other `~/.coms-env.local` change) lands at
+  the NEXT convergence: `pi-coms-update` returns early when the S3 `version`
+  matches `.bundle-version`. Force it with
+  `bash /var/lib/cloud/instance/user-data.txt` over SSM.
+- To relaunch Pi by hand: `touch /home/piagent/.pi-agent-reload` first, then
+  `systemctl restart pi-agent`. Without the sentinel the registry guard keeps
+  the running herdr agent and the restart is a no-op.
+- SSM `commands` arrays flatten embedded newlines; base64 a script file and
+  `base64 -d` it on the host (see the deployment gotchas).
 
 ## Hub and peers
 
