@@ -8,6 +8,13 @@ import type { AwsClient } from "./alarms.ts";
 // stopped. A service that dies quietly produces zero findings there.
 const EXCLUDE_PREFIXES = ["/aws/events/"];
 const MIN_EVENTS = 10;
+// SIO-1711: one quiet hour is not an outage. An event-driven function can have a
+// same-hour 7d median of 27 and still legitimately see 0 in any single hour, so
+// the old single-hour test fired constantly (warn -> info resumed -> warn, six
+// investigations on one Lambda log group). Require this many CONSECUTIVE zero
+// hours ending at the observed hour; the hourly series is already fetched below,
+// so the gate costs no extra API call and no state.
+const ZERO_HOURS = 3;
 const BASELINE_DAYS = 7;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
@@ -20,6 +27,7 @@ const EXPRESSION =
 export type CheckIngestionOpts = {
 	now?: number;
 	minEvents?: number;
+	zeroHours?: number;
 	excludePrefixes?: string[];
 };
 
@@ -30,6 +38,7 @@ export async function checkIngestion(
 ): Promise<Finding[]> {
 	const now = opts.now ?? Date.now();
 	const minEvents = opts.minEvents ?? MIN_EVENTS;
+	const zeroHours = Math.max(1, Math.floor(opts.zeroHours ?? ZERO_HOURS));
 	const excludePrefixes = opts.excludePrefixes ?? EXCLUDE_PREFIXES;
 	// Whole-hour boundaries: the last complete hour is the observation, the
 	// same hour on the prior 7 days is the baseline. Same-hour comparison makes
@@ -64,6 +73,12 @@ export async function checkIngestion(
 	const findings: Finding[] = [];
 	for (const [group, points] of series) {
 		const observed = points.get(lastHourMs) ?? 0;
+		// CloudWatch omits zero-count hours, so an absent point IS a zero hour.
+		// A group with no points at all therefore reads as a full zero run; the
+		// baseline floor below, not this gate, is what keeps a brand-new group
+		// quiet (its history is absent too, so the median is 0).
+		let zeroRun = 0;
+		while (zeroRun < zeroHours && (points.get(lastHourMs - zeroRun * HOUR_MS) ?? 0) === 0) zeroRun++;
 		const history: number[] = [];
 		for (let d = 1; d <= BASELINE_DAYS; d++) history.push(points.get(lastHourMs - d * DAY_MS) ?? 0);
 		history.sort((a, b) => a - b);
@@ -74,16 +89,21 @@ export async function checkIngestion(
 		const key = `ingest:${group}:`;
 		const at = new Date(now).toISOString();
 
-		if (observed === 0 && baseline >= minEvents) {
+		if (zeroRun >= zeroHours && baseline >= minEvents) {
 			if (!state.shouldAlert(key)) continue;
 			state.markAlerted(key, "ingestion");
 			findings.push({
 				family: "ingestion",
 				severity: "warn",
 				resource: group,
-				summary: `Log ingestion stopped in ${group}: 0 events last hour vs same-hour 7d median ${baseline}`,
+				summary: `Log ingestion stopped in ${group}: 0 events for ${zeroHours}h vs same-hour 7d median ${baseline}`,
 				dedup_key: key,
-				evidence: { observed, baselineMedian: baseline, hourUtc: new Date(lastHourMs).toISOString() },
+				evidence: {
+					observed,
+					zeroHours,
+					baselineMedian: baseline,
+					hourUtc: new Date(lastHourMs).toISOString(),
+				},
 				at,
 			});
 		} else if (observed > 0 && !state.shouldAlert(key)) {
