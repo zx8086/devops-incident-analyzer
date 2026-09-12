@@ -743,7 +743,7 @@ function handleSuggestionClick(suggestion: string) {
         pane={piFleetStore.state}
         busy={piFleetStore.busy}
         mailboxBusy={piFleetStore.mailboxBusy}
-        onSend={(prompt) => piFleetStore.send(prompt)}
+        onSend={(prompt, visible) => piFleetStore.send(prompt, visible)}
         onRefresh={() => piFleetStore.load()}
         onSelect={(selection) => piFleetStore.select(selection)}
         onLoadMailbox={(hubKey, estates) => piFleetStore.loadMailbox(hubKey, estates)}
