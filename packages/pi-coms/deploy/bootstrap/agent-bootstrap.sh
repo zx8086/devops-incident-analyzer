@@ -232,6 +232,34 @@ if [ -n "$PERSONA_VERSION" ]; then
   AGENT_PURPOSE="$AGENT_PURPOSE persona=pi-fleet-v$PERSONA_VERSION"
 fi
 
+# Patched context-mode extension (SIO-1726). Overlaid AFTER the bundle unpack,
+# because the patch ships in the bundle (vendor/context-mode-patch/) while the
+# npm install runs earlier in the agent-user block.
+#
+# Upstream registers its ctx_* tools only from Pi's `before_agent_start`, which
+# Pi emits only on the `_runAgentPrompt` path. coms-net delivers inbound with
+# `{ deliverAs: "followUp", triggerTurn: true }`, and Pi tests `isStreaming`
+# BEFORE `triggerTurn`, so a spoke already mid-turn (pi-monitor keeps it busy)
+# takes `agent.followUp()` and the hook never fires -- the turn reaches the model
+# with no ctx_* tools, silently. The patch adds the `context` hook as a
+# bootstrap backstop; see vendor/context-mode-patch/README.md.
+#
+# Version-keyed on purpose: the patch was built against 1.0.169, so bumping
+# CTX_VERSION must NOT silently overlay it onto a different release. Remove this
+# whole block once the fix is in an upstream release.
+CTX_PATCH_FOR_VERSION="1.0.169"
+CTX_EXT_INSTALLED="$AGENT_HOME/.pi-ctx/node_modules/context-mode/build/adapters/pi/extension.js"
+CTX_PATCH_SRC="$AGENT_HOME/pi-coms/vendor/context-mode-patch/extension.js"
+if [ "${CTX_MODE_ENABLED:-}" != "false" ] && [ "${CTX_MODE_ENABLED:-}" != "0" ] \
+   && [ -f "$CTX_PATCH_SRC" ] && [ -f "$CTX_EXT_INSTALLED" ] \
+   && [ "$(cat "$AGENT_HOME/.pi-ctx/.ctx-version" 2>/dev/null || echo none)" = "$CTX_PATCH_FOR_VERSION" ]; then
+  if ! cmp -s "$CTX_PATCH_SRC" "$CTX_EXT_INSTALLED"; then
+    cp "$CTX_PATCH_SRC" "$CTX_EXT_INSTALLED"
+    chown "$AGENT_USER:$AGENT_USER" "$CTX_EXT_INSTALLED"
+    echo "applied the patched context-mode extension (SIO-1726, for $CTX_PATCH_FOR_VERSION)"
+  fi
+fi
+
 # ── Secrets ────────────────────────────────────────────────────────────────
 # Resolved into a 0600 env file the agent sources. Values are never echoed.
 
