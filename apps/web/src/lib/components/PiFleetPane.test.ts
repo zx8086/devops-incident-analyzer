@@ -143,7 +143,7 @@ describe("PiFleetPane", () => {
 			messages: [inboxMessage("m1", "monitor-eu-oit-prd", "[info] daily digest")],
 		});
 		const body = renderPane(state);
-		const picker = body.indexOf("max-h-[35%]");
+		const picker = body.indexOf("max-h-[11rem]");
 		const replies = body.indexOf("flex-1 overflow-y-auto min-h-0");
 		const card = body.indexOf("<details");
 		expect(picker).toBeGreaterThan(-1);
@@ -294,6 +294,19 @@ describe("PiFleetPane", () => {
 		// All six are still rendered -- the fix is what stays put, not what is shown.
 		expect(body).toContain("eu-b2b-ecom-prd");
 		expect(body).toContain("eu-shared-services-prd");
+	});
+
+	// SIO-1715: the picker cap is a fixed REM, never a percentage of the pane. The
+	// pane is `h-screen` minus chrome, and that chrome is tallest exactly when this
+	// pane is usable, so a percentage gave the target list MORE room than the
+	// report on a short viewport. Measured with six spokes: 35% took 195px against
+	// the digest's 163px at a 560px pane; 11rem puts the digest ahead at every
+	// height (182px at 560px, 502px at 880px vs 399px before).
+	test("caps the picker in rem so the digest wins on a short pane", () => {
+		const body = renderPane(applyAgents(initialPiFleetState(), listing));
+		expect(body).toContain("max-h-[11rem]");
+		// A percentage cap is the regression this guards against.
+		expect(body).not.toMatch(/max-h-\[\d+%\]/);
 	});
 
 	// SIO-1706: the pane no longer offers to "open the fleet console". The header pi
@@ -473,12 +486,17 @@ describe("PiFleetPane", () => {
 
 	// SIO-1703: the picker and the replies were in ONE scroll container, so a long
 	// reply scrolled the picker out of view.
-	// SIO-1712: the cap is 35%, not 40% -- the ops inbox card used to render
+	// SIO-1715: the cap is 11rem (was 35%) -- the ops inbox card used to render
 	// inside this region, so a whole daily digest came through a letterbox. The
 	// card moved to the replies region below; what is left here is rows.
 	test("pins the spoke picker in its own scroll region, separate from the replies", () => {
 		const body = renderPane(applyAgents(initialPiFleetState(), listing));
-		expect(body).toContain("max-h-[35%]");
+		// SIO-1715: a REM cap, not a percentage. A percentage split a short pane
+		// badly -- at 560px the picker took 195px against the digest's 163px, so
+		// the target list outweighed the report. Measured: 11rem puts the digest
+		// ahead at every pane height.
+		expect(body).toContain("max-h-[11rem]");
+		expect(body).not.toContain("max-h-[35%]");
 		// The replies keep their own flex-1 region below it.
 		expect(body).toContain("flex-1 overflow-y-auto min-h-0");
 	});
