@@ -73,6 +73,13 @@ function scopedOut(hubKey: string): number {
 // Reachability follows what is SHOWN: a console that cannot address any spoke in
 // scope is no more useful than one with no spokes at all.
 const reachableSpokes = $derived(scoped.reduce((n, hub) => n + hub.peers.length, 0));
+// SIO-1719: does the lower region have anything in it? When it does not, it must
+// not reserve `flex-1` plus a floor -- an empty region held 250px on a tall pane
+// while the spoke list above it was capped and scrolling, which is the
+// "I cannot see all my agents" report. Empty, it takes only what it needs.
+const hasLowerContent = $derived(
+	pane.entries.length > 0 || scoped.some((hub) => pane.mailboxes[hub.hubKey] !== undefined),
+);
 const canAskAll = $derived(reachableSpokes > 0);
 
 const statusDot: Record<string, string> = {
@@ -281,8 +288,10 @@ function onKeydown(event: KeyboardEvent) {
   </div>
 
   <!-- SIO-1718: a floor, so the digest can never be squeezed to nothing by a
-       long spoke list on a short pane. min-h-0 alone let flex collapse it. -->
-  <div class="flex-1 overflow-y-auto min-h-[8rem]">
+       long spoke list on a short pane. min-h-0 alone let flex collapse it.
+       SIO-1719: the floor applies only when there IS something here. Reserving
+       it while empty stole 250px from the spoke list on a tall pane. -->
+  <div class="overflow-y-auto {hasLowerContent ? 'flex-1 min-h-[8rem]' : 'shrink min-h-0'}">
     <section class="px-4 py-3 space-y-3">
       <!-- SIO-1712: the ops inbox card lives HERE now, not nested under the spoke
            picker. A daily digest is the longest thing this pane ever shows, and
@@ -369,7 +378,13 @@ function onKeydown(event: KeyboardEvent) {
                          SIO-1714: the follow-up keeps that same legible gray-700; it
                          is subordinate by POSITION and surface, not by being harder
                          to read. Dimming live findings is the SIO-1704 mistake. -->
-                    <div class="mt-1 text-gray-700 overflow-x-auto break-words {message.isDigest ? 'bg-tommy-offwhite rounded p-2' : 'px-0.5'}">
+                    <!-- SIO-1719: the digest body is COOL (tommy-mist), not the warm
+                         offwhite a spoke reply uses. The brand neutrals -- cream pane,
+                         white card, offwhite body -- are all warm and near-identical in
+                         value, so the most important thing in the pane had the weakest
+                         separation. The accent-blue left border ties the body to the
+                         DAILY DIGEST chip, so the anchor reads as one unit. -->
+                    <div class="mt-1 text-gray-700 overflow-x-auto break-words {message.isDigest ? 'rounded border-l-2 border-tommy-accent-blue bg-tommy-mist p-2' : 'px-0.5'}">
                       <MarkdownRenderer content={message.prompt} />
                     </div>
                   </li>

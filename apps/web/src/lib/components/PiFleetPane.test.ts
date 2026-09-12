@@ -144,7 +144,7 @@ describe("PiFleetPane", () => {
 		});
 		const body = renderPane(state);
 		const picker = body.indexOf("max-h-[20rem]");
-		const replies = body.indexOf("flex-1 overflow-y-auto min-h-[8rem]");
+		const replies = body.indexOf("flex-1 min-h-[8rem]");
 		const card = body.indexOf("<details");
 		expect(picker).toBeGreaterThan(-1);
 		expect(replies).toBeGreaterThan(-1);
@@ -189,7 +189,8 @@ describe("PiFleetPane", () => {
 		});
 		const body = renderPane(state);
 		expect(body).toContain("text-gray-700");
-		expect(body).toContain("bg-tommy-offwhite");
+		// SIO-1719: the DIGEST body is cool mist now; offwhite stays for spoke replies.
+		expect(body).toContain("bg-tommy-mist");
 		expect(body).not.toContain("text-gray-400");
 	});
 
@@ -226,7 +227,8 @@ describe("PiFleetPane", () => {
 		// The follow-up is indented under a rule; the digest is not.
 		expect(body).toContain("ml-3 border-l border-gray-200 pl-3");
 		// The digest keeps the surfaced treatment.
-		expect(body).toContain("bg-tommy-offwhite rounded p-2");
+		// SIO-1719: the digest body is cool mist; offwhite remains for spoke replies.
+		expect(body).toContain("bg-tommy-mist p-2");
 		// Both bodies stay legible: subordination is position, never dimming.
 		expect(body).not.toContain("text-gray-400");
 	});
@@ -350,10 +352,55 @@ describe("PiFleetPane", () => {
 		// The picker gives way rather than holding its height.
 		expect(body).toContain("min-h-0 shrink max-h-[20rem]");
 		expect(body).not.toContain("shrink-0 max-h-[20rem]");
-		// The digest cannot be collapsed to nothing by a long spoke list.
-		expect(body).toContain("min-h-[8rem]");
+		// SIO-1719: the floor is CONDITIONAL. This fixture has no inbox and no
+		// replies, so the empty region takes only what it needs -- reserving
+		// 8rem here is what starved the spoke list. The floor's presence when
+		// content exists has its own test below.
+		expect(body).toContain("shrink min-h-0");
 		// The send box is the pane's primary control; it is never the thing squeezed out.
 		expect(body).toContain("shrink-0 border-t border-gray-200");
+	});
+
+	// SIO-1719: an EMPTY lower region must not reserve flex-1 plus an 8rem floor.
+	// It held 250px on a tall pane while the spoke list above was capped and
+	// scrolling -- the "I cannot see all my agents" report.
+	test("an empty lower region does not reserve space from the spoke list", () => {
+		const body = renderPane(applyAgents(initialPiFleetState(), listing));
+		expect(body).toContain("shrink min-h-0");
+		expect(body).not.toContain("flex-1 min-h-[8rem]");
+	});
+
+	test("a loaded inbox gives the lower region its floor back", () => {
+		const state = applyMailbox(applyAgents(initialPiFleetState(), listing), {
+			hubKey: "eu-shared-services-dev",
+			environment: "dev",
+			name: "ops",
+			missingDigest: [],
+			windowTruncated: false,
+			messages: [inboxMessage("m1", "monitor-eu-oit-prd", "[info] daily digest", true)],
+		});
+		const body = renderPane(state);
+		expect(body).toContain("flex-1 min-h-[8rem]");
+	});
+
+	// SIO-1719: cream pane, white card and offwhite body are all warm and nearly
+	// the same value, so the digest -- the most important thing here -- had the
+	// weakest separation. A cool surface plus an accent rule ties it to its chip.
+	test("the digest body uses the cool mist surface, not the warm reply offwhite", () => {
+		const state = applyMailbox(applyAgents(initialPiFleetState(), listing), {
+			hubKey: "eu-shared-services-dev",
+			environment: "dev",
+			name: "ops",
+			missingDigest: [],
+			windowTruncated: false,
+			messages: [
+				inboxMessage("m1", "monitor-eu-oit-prd", "[info] daily digest", true),
+				inboxMessage("m2", "monitor-eu-oit-prd", "a follow-up", false),
+			],
+		});
+		const body = renderPane(state);
+		expect(body).toContain("bg-tommy-mist");
+		expect(body).toContain("border-l-2 border-tommy-accent-blue");
 	});
 
 	// SIO-1706: the pane no longer offers to "open the fleet console". The header pi
@@ -545,8 +592,9 @@ describe("PiFleetPane", () => {
 		// ahead at every pane height.
 		expect(body).toContain("max-h-[20rem]");
 		expect(body).not.toContain("max-h-[35%]");
-		// The replies keep their own flex-1 region below it.
-		expect(body).toContain("flex-1 overflow-y-auto min-h-[8rem]");
+		// The replies keep their own region below it. SIO-1719: empty here, so it
+		// is the shrink variant -- the flex-1 floor appears once content lands.
+		expect(body).toContain("shrink min-h-0");
 	});
 
 	// SIO-1703: `project` is a hub-side namespace derived per ENVIRONMENT, so two
