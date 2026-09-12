@@ -194,16 +194,6 @@ if "npm:pi-mcp-adapter" not in pk:
     pk.append("npm:pi-mcp-adapter")
     json.dump(d, open(p, "w"), indent=2)
 PY
-  # keep-alive: the adapter connects at session_start, before the first turn.
-  # directTools + toolPrefix none: the model sees plain ctx_* names, as the
-  # aws-spoke RULES.md documents. Rewritten every convergence so a CTX_VERSION
-  # or path change lands without a hand edit.
-  cat > "$HOME/.pi/agent/mcp.json" <<MCP
-{"mcpServers":{"ctx":{"command":"$HOME/.bun/bin/bun","args":["$CTX_DIR/node_modules/context-mode/server.bundle.mjs"],"lifecycle":"keep-alive","directTools":true,"toolPrefix":"none"}}}
-MCP
-else
-  # Kill-switch: no server entry means the adapter registers no ctx_* tools.
-  rm -f "$HOME/.pi/agent/mcp.json"
 fi
 BOOTSTRAP
 
@@ -573,6 +563,21 @@ fi
 # Extensions are repeatable (-e/--extension). coms-net is the only one loaded
 # by flag; ctx_* comes from pi-mcp-adapter via settings.json packages (SIO-1734).
 EXT_ARGS=(-e extensions/coms-net.ts)
+
+# The ctx_* tools are one mcp.json entry served by pi-mcp-adapter. Written HERE,
+# not in the bootstrap: this script sources ~/.coms-env.local, so the kill-switch
+# takes effect on the next relaunch, the same way it used to gate the -e flag.
+# keep-alive connects at session_start, before the first turn; directTools +
+# toolPrefix none keep the plain ctx_* names the aws-spoke RULES.md documents.
+CTX_SERVER="$HOME/.pi-ctx/node_modules/context-mode/server.bundle.mjs"
+if [ "${CTX_MODE_ENABLED:-}" != "false" ] && [ "${CTX_MODE_ENABLED:-}" != "0" ] \
+   && [ -f "$CTX_SERVER" ]; then
+  printf '%s\n' "{\"mcpServers\":{\"ctx\":{\"command\":\"$HOME/.bun/bin/bun\",\"args\":[\"$CTX_SERVER\"],\"lifecycle\":\"keep-alive\",\"directTools\":true,\"toolPrefix\":\"none\"}}}" \
+    > "$HOME/.pi/agent/mcp.json"
+else
+  # No server entry: the adapter loads but registers no ctx_* tools.
+  rm -f "$HOME/.pi/agent/mcp.json"
+fi
 
 herdr agent start "AGENT_NAME_PLACEHOLDER" --kind pi --pane "$PANE_ID" --timeout 15000 -- \
   "${EXT_ARGS[@]}" \
