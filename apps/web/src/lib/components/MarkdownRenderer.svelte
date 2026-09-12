@@ -147,6 +147,40 @@ function handleClick(e: MouseEvent) {
   .markdown-content :global(li + li) {
     margin-top: 0.3rem;
   }
+  /* SIO-1722: inside a digest body the findings are a LIST OF SEPARATE EVENTS,
+     not prose bullets -- each one is a distinct resource with its own severity.
+     A hairline between siblings gives the eye a row boundary to land on, which
+     the severity badge then colours. Scoped to .digest-body (set by PiFleetPane
+     on the anchor row only) so ordinary markdown lists are untouched. */
+  :global(.digest-body) .markdown-content :global(li + li) {
+    margin-top: 0.4rem;
+    padding-top: 0.4rem;
+    border-top: 1px solid rgb(0 0 0 / 0.06);
+  }
+  :global(.digest-body) .markdown-content :global(li > ul > li + li),
+  :global(.digest-body) .markdown-content :global(li > ol > li + li) {
+    border-top-color: rgb(0 0 0 / 0.04);
+  }
+  /* A finding row carries a severity badge, which already reads as the row
+     marker -- the disc next to it was a second bullet saying the same thing.
+     Dropped, and the freed indent becomes a HANGING indent: a wrapped finding
+     (resource names run 50+ chars, so most wrap) used to start back under the
+     badge, which made one finding look like two. */
+  :global(.digest-body) .markdown-content :global(li > ul),
+  :global(.digest-body) .markdown-content :global(li > ol) {
+    list-style: none;
+    margin-left: 0.25rem;
+  }
+  /* Left flush, and deliberately NO hanging indent. Two techniques were tried
+     and both made it worse: a negative `text-indent` shifts the badge itself
+     (an inline-block) off the left edge and clips it, and `display:flex` makes
+     the prose its own flex item, so every finding broke onto a second line
+     under an otherwise empty badge row. The hairline above already marks where
+     a row starts, so a wrapped line needs no second cue. */
+  :global(.digest-body) .markdown-content :global(li > ul > li),
+  :global(.digest-body) .markdown-content :global(li > ol > li) {
+    padding-left: 0;
+  }
   .markdown-content :global(li > ul),
   .markdown-content :global(li > ol) {
     margin-top: 0.25rem;

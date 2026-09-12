@@ -361,7 +361,7 @@ function onKeydown(event: KeyboardEvent) {
                          value, so the most important thing in the pane had the weakest
                          separation. The accent-blue left border ties the body to the
                          DAILY DIGEST chip, so the anchor reads as one unit. -->
-                    <div class="mt-1 text-gray-700 overflow-x-auto break-words {message.isDigest ? 'rounded border-l-2 border-tommy-accent-blue bg-tommy-mist p-2' : 'px-0.5'}">
+                    <div class="mt-1 text-gray-700 overflow-x-auto break-words {message.isDigest ? 'digest-body rounded border-l-2 border-tommy-accent-blue bg-tommy-mist p-2' : 'px-0.5'}">
                       <!-- SIO-1720: the family tag and the summary labels are bolded so
                            the eye can find the class and the heading in a wall of
                            same-weight lines. Only `**` markers are inserted; the text

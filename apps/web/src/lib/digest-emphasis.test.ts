@@ -4,14 +4,16 @@ import { describe, expect, test } from "bun:test";
 import { emphasiseDigest } from "./digest-emphasis.ts";
 
 describe("emphasiseDigest", () => {
-	test("bolds the check family, not the resource name after it", () => {
+	test("badges the severity and labels the family, not the resource name after it", () => {
 		const line =
 			"  - (critical/alarm) corrected-delivery-dates-CPU-Utilization-Low-20: Alarm corrected-delivery-dates-CPU-Utilization-Low-20 entered ALARM";
 		const out = emphasiseDigest(line);
-		expect(out).toContain("**(critical/alarm)**");
+		expect(out).toContain("bg-tommy-red-ui");
+		expect(out).toContain(">critical</span>");
+		expect(out).toContain(">alarm</span>");
 		// The point of the ticket: the 50-char resource name stays unemphasised.
-		expect(out).not.toContain("**(critical/alarm) corrected-delivery-dates");
 		expect(out).toContain("corrected-delivery-dates-CPU-Utilization-Low-20: Alarm");
+		expect(out).not.toContain("corrected-delivery-dates-CPU-Utilization-Low-20</span>");
 	});
 
 	test("bolds a summary label and keeps its value plain", () => {
@@ -22,19 +24,37 @@ describe("emphasiseDigest", () => {
 	});
 
 	test("covers every family seen live", () => {
-		for (const fam of [
-			"critical/alarm",
-			"critical/trail",
-			"critical/cert",
-			"warn/logs",
-			"warn/ingestion",
-			"warn/watchlist",
-			"info/ingestion",
-			"info/alarm",
-			"info/logs",
+		for (const [severity, family] of [
+			["critical", "alarm"],
+			["critical", "trail"],
+			["critical", "cert"],
+			["warn", "logs"],
+			["warn", "ingestion"],
+			["warn", "watchlist"],
+			["info", "ingestion"],
+			["info", "alarm"],
+			["info", "logs"],
 		]) {
-			expect(emphasiseDigest(`- (${fam}) thing: detail`)).toContain(`**(${fam})**`);
+			const out = emphasiseDigest(`- (${severity}/${family}) thing: detail`);
+			expect(out).toContain(`>${severity}</span>`);
+			expect(out).toContain(`>${family}</span>`);
+			expect(out).toContain("thing: detail");
 		}
+	});
+
+	// An unrecognised severity must not render an uncoloured badge: it falls back
+	// to the old bold text so a new monitor severity is visible as unstyled.
+	test("falls back to bold text for an unknown severity", () => {
+		expect(emphasiseDigest("- (notice/logs) thing: detail")).toBe("- **(notice/logs)** thing: detail");
+	});
+
+	// The badge markup is built from the allowlist, so hostile monitor text stays
+	// in the line as text and is sanitized downstream -- it never becomes markup.
+	test("keeps monitor-authored markup out of the badge", () => {
+		const out = emphasiseDigest("- (critical/alarm) <img src=x onerror=alert(1)>: boom");
+		expect(out).toContain(">critical</span>");
+		// The hostile span is still plain text on the line, after the badge markup.
+		expect(out.slice(out.lastIndexOf("</span>"))).toContain("<img src=x");
 	});
 
 	test("leaves a resource name that contains a colon alone", () => {
@@ -54,8 +74,8 @@ describe("emphasiseDigest", () => {
 	});
 
 	test("preserves list markers and indentation", () => {
-		expect(emphasiseDigest("    - (warn/logs) x: y")).toBe("    - **(warn/logs)** x: y");
-		expect(emphasiseDigest("2. (info/alarm) x: y")).toBe("2. **(info/alarm)** x: y");
+		expect(emphasiseDigest("    - (warn/logs) x: y")).toStartWith("    - <span");
+		expect(emphasiseDigest("2. (info/alarm) x: y")).toStartWith("2. <span");
 	});
 
 	test("ignores a parenthetical that is not at the head of the line", () => {
@@ -79,7 +99,8 @@ describe("emphasiseDigest", () => {
 		].join("\n");
 		const out = emphasiseDigest(digest).split("\n");
 		expect(out[2]).toBe("- **findings:** 26 (trail=3 alarm=19)");
-		expect(out[4]).toContain("**(critical/trail)**");
+		expect(out[4]).toContain(">critical</span>");
+		expect(out[4]).toContain(">trail</span>");
 		expect(out[5]).toBe("- **alarms:** none in ALARM");
 		// The bracketed severity header is not a label and is left as written.
 		expect(out[0]).toBe("[info] aws-399987695868 daily digest (since 2026-09-11T00:00:21.088Z)");
