@@ -1,0 +1,4 @@
+# Laptop-only Pi project config (theme). Shipping .pi/ in the fleet bundle makes Pi
+# on every spoke stop at "Trust project folder?" with nobody to answer (SIO-1733).
+.pi export-ignore
+.gitattributes export-ignore
