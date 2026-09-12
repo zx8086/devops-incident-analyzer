@@ -108,6 +108,8 @@ describe("PiFleetPane", () => {
 			hubKey: "eu-shared-services-dev",
 			environment: "dev",
 			name: "ops",
+			missingDigest: [],
+			windowTruncated: false,
 			messages: [
 				{
 					msgId: "m1",
@@ -306,25 +308,40 @@ describe("PiFleetPane", () => {
 		expect(visible).not.toContain("pi-coms-prd");
 	});
 
-	// SIO-1704: the ops inbox carries one report per estate from `monitor-<estate>`.
-	// Scoping the spokes without scoping the inbox left the operator reading
-	// findings for accounts they had excluded from the investigation.
-	test("filters the ops inbox to the selected estates", () => {
+	// SIO-1705: the scope filter moved to the server, which needs it to decide
+	// WHICH rows to fetch (see anchorOnDigest in pi-fleet.test.ts). The pane now
+	// renders exactly the anchored range it was handed -- asserting a second,
+	// client-side filter here would re-pin the bug SIO-1705 removed.
+	test("renders every inbox row the server returned, unfiltered", () => {
 		const state = applyMailbox(applyAgents(initialPiFleetState(), listing), {
 			hubKey: "eu-shared-services-dev",
 			environment: "dev",
 			name: "ops",
+			missingDigest: [],
+			windowTruncated: false,
 			messages: [
 				inboxMessage("m1", "monitor-eu-oit-prd", "[info] aws-762715229080 daily digest"),
-				inboxMessage("m2", "monitor-eu-mendix-platform-prd", "[critical] aws-654654584630 CloudTrail NOT logging"),
+				inboxMessage("m2", "monitor-eu-oit-prd", "[critical] aws-762715229080 CloudTrail NOT logging"),
 			],
 		});
 		const body = renderPane(state, false, undefined, ["eu-oit-prd"]);
-		expect(body).toContain("monitor-eu-oit-prd");
-		expect(body).toContain("aws-762715229080");
-		// The excluded estate's findings are not shown.
-		expect(body).not.toContain("monitor-eu-mendix-platform-prd");
-		expect(body).not.toContain("aws-654654584630");
+		expect(body).toContain("aws-762715229080 daily digest");
+		expect(body).toContain("CloudTrail NOT logging");
+	});
+
+	test("names the estates whose digest fell outside the fetched window", () => {
+		const state = applyMailbox(applyAgents(initialPiFleetState(), listing), {
+			hubKey: "eu-shared-services-dev",
+			environment: "dev",
+			name: "ops",
+			missingDigest: ["eu-oit-prd"],
+			windowTruncated: true,
+			messages: [inboxMessage("m1", "monitor-eu-oit-prd", "[warn] aws-762715229080 alarm")],
+		});
+		const body = renderPane(state, false, undefined, ["eu-oit-prd"]);
+		// A partial range must say so: the rows shown start mid-day, not at the digest.
+		expect(body).toContain("No daily digest found for eu-oit-prd");
+		expect(body).toContain("older digest may sit beyond it");
 	});
 
 	test("keeps an inbox entry whose sender is not estate-shaped", () => {
@@ -334,18 +351,22 @@ describe("PiFleetPane", () => {
 			hubKey: "eu-shared-services-dev",
 			environment: "dev",
 			name: "ops",
+			missingDigest: [],
+			windowTruncated: false,
 			messages: [inboxMessage("m3", "simon", "handover note for the next shift")],
 		});
 		const body = renderPane(state, false, undefined, ["eu-oit-prd"]);
 		expect(body).toContain("handover note for the next shift");
 	});
 
-	test("says so when the scope excludes every inbox entry", () => {
+	test("says so when the anchored read returned nothing for the scope", () => {
 		const state = applyMailbox(applyAgents(initialPiFleetState(), listing), {
 			hubKey: "eu-shared-services-dev",
 			environment: "dev",
 			name: "ops",
-			messages: [inboxMessage("m4", "monitor-eu-mendix-platform-prd", "[info] digest")],
+			missingDigest: [],
+			windowTruncated: false,
+			messages: [],
 		});
 		const body = renderPane(state, false, undefined, ["eu-oit-prd"]);
 		expect(body).toContain("No reports from the selected estates");

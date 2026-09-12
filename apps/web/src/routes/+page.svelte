@@ -748,7 +748,7 @@ function handleSuggestionClick(suggestion: string) {
         onSend={(prompt) => piFleetStore.send(prompt)}
         onRefresh={() => piFleetStore.load()}
         onSelect={(selection) => piFleetStore.select(selection)}
-        onLoadMailbox={(hubKey) => piFleetStore.loadMailbox(hubKey)}
+        onLoadMailbox={(hubKey, estates) => piFleetStore.loadMailbox(hubKey, estates)}
         onAskAll={consoleAvailable ? () => agentStore.switchAgent("pi-fleet-console") : undefined}
         scopeEstates={agentStore.selectedAwsEstates}
       />
