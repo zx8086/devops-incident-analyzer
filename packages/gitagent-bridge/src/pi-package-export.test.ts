@@ -200,10 +200,16 @@ describe("buildPiPackage", () => {
 		}
 	});
 
-	test("the real pi-fleet definition exports the console, the spoke and both skills", () => {
+	test("the real pi-fleet definition exports the console, the spoke and every skill", () => {
 		const agent = loadAgent(PI_FLEET_DIR);
 		const pkg = buildPiPackage({ root: agent, name: "pi-fleet", version: agent.manifest.version });
-		expect(pkg.skills.sort()).toEqual(["cite-sources", "verify-incident-report"]);
+		expect(pkg.skills.sort()).toEqual([
+			"cite-sources",
+			"paginate-before-concluding",
+			"scope-cloudwatch-logs",
+			"trace-network-path",
+			"verify-incident-report",
+		]);
 		const override = pkg.files.find((f) => f.path === "aws-spoke/AGENTS.override.md")?.content ?? "";
 		expect(override).toContain("## Grounded permission claims");
 		expect(override).toContain("## Knowledge Base");

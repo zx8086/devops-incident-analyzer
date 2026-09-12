@@ -1,6 +1,6 @@
 spec_version: "0.1.0"
 name: aws-spoke
-version: 0.2.0
+version: 0.3.0
 description: >
   Account-agnostic read-only AWS infrastructure analysis persona for a
   pi-coms spoke (a Pi Coding Agent process on the account's EC2 host with the
@@ -9,6 +9,9 @@ description: >
 
 skills:
   - verify-incident-report
+  - paginate-before-concluding
+  - trace-network-path
+  - scope-cloudwatch-logs
 
 # The analyzer's AWS runbooks, shared by reference (manifest knowledge mode,
 # relative to this directory). They cite analyzer MCP tool names; the RULES
