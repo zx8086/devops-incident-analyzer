@@ -25,6 +25,27 @@ const MAX_FINDINGS_PER_CYCLE = 10;
 
 // Stable signature for grouping: recurring errors differ only in ids,
 // timestamps, and counters.
+// A digest line names the RESOURCE, so repeating the group in the summary spent
+// 40 characters saying nothing -- and several signatures in one group then
+// produced several byte-identical summaries ("3 error-pattern event(s) in
+// /ecs/fargate/catalog-prd-log-group" four times over, live on eu-oit-prd).
+// They are genuinely distinct findings (dedup_key is logs:<group>:<signature>),
+// so they must not be collapsed; they need to be TOLD APART. A short excerpt of
+// the sample message does that, where the 12-char signature hash could not.
+//
+// The excerpt is untrusted log text: newlines are folded so one event cannot
+// forge extra digest lines, and it is hard-capped well inside the summary's own
+// budget.
+const SAMPLE_EXCERPT = 80;
+
+export function summariseLogSample(sample: string, max = SAMPLE_EXCERPT): string {
+	const oneLine = sample.replace(/\s+/g, " ").trim();
+	if (oneLine.length <= max) return oneLine;
+	// `max` bounds the WHOLE excerpt, ellipsis included, so a caller's cap is
+	// the real budget rather than max + 3.
+	return `${oneLine.slice(0, max - 3).trimEnd()}...`;
+}
+
 export function logSignature(message: string): string {
 	const normalized = message
 		.replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z?/g, "<ts>")
@@ -157,11 +178,12 @@ export async function checkLogs(client: AwsClient, state: MonitorState, opts: Ch
 			}
 			state.markAlerted(key, "logs");
 			emitted++;
+			const excerpt = summariseLogSample(agg.sample);
 			findings.push({
 				family: "logs",
 				severity: "warn",
 				resource: group,
-				summary: `${agg.count} error-pattern event(s) in ${group}`,
+				summary: excerpt ? `${agg.count} error-pattern event(s): ${excerpt}` : `${agg.count} error-pattern event(s)`,
 				dedup_key: key,
 				evidence: { count: agg.count, sample: agg.sample, signature: sig },
 				at: new Date(now).toISOString(),
