@@ -177,17 +177,18 @@ function onKeydown(event: KeyboardEvent) {
        rows, which need less.
        SIO-1715: the cap is a REM, not a percentage. A percentage splits a short
        pane badly -- this pane is viewport-bound (see +page.svelte) minus the
-       page chrome, and that chrome is
-       tallest exactly when this pane is usable (SIO-1704 means an AWS estate is
-       always selected, so its selector row is always rendered). Measured with
-       six spokes: at a 560px pane the 35% cap took 195px against the digest's
-       163px, so the target picker outweighed the report being read. A fixed
-       11rem gives the digest more room at EVERY height (182px at 560px, 502px
-       at 880px against 399px before) and every extra pixel of viewport now goes
-       to the digest instead of growing a list that does not need it.
-       11rem shows three rows plus a clipped fourth: the slice is the scroll
-       affordance, so a longer fleet reads as "more below" rather than ending. -->
-  <div class="shrink-0 max-h-[11rem] overflow-y-auto border-b border-gray-200">
+       page chrome, and that chrome is tallest exactly when this pane is usable
+       (SIO-1704 means an AWS estate is always selected, so its selector row is
+       always rendered), so 35% of a small total gave the target list more room
+       than the report being read.
+       SIO-1717: the ceiling is 20rem, not 11rem. 11rem (176px) was tuned to
+       beat the digest at every height and ignored how many spokes there are:
+       the real prd fleet is SIX, which needs 278px, so two rows were unreachable
+       while the region below sat empty. The picker is `shrink-0` with a max, so
+       it takes only what its rows need -- 6 spokes fit inside 20rem with 287px
+       still left for the digest on a 565px pane, and only a fleet beyond ~7
+       spokes scrolls internally. Sized to the content, capped for the outlier. -->
+  <div class="shrink-0 max-h-[20rem] overflow-y-auto border-b border-gray-200">
     <section class="px-4 pt-2 pb-3">
       {#if pane.hubs.length === 0}
         <p class="text-xs text-gray-500">No spokes are registered on any configured hub.</p>
@@ -339,7 +340,12 @@ function onKeydown(event: KeyboardEvent) {
                         <!-- Named, not inferred from the [info]/[warn] prefix: a
                              degraded digest is written [warn] and is the one most
                              worth spotting. -->
-                        <span class="shrink-0 rounded border border-tommy-navy/20 bg-tommy-navy/5 px-1.5 py-0.5 font-semibold uppercase tracking-wide text-tommy-navy">
+                        <!-- SIO-1717: solid accent blue (white on #166C96, 5.80:1),
+                             not the previous navy tint. Navy is the card title and
+                             the hubKey, so a navy chip merged with the header instead
+                             of marking the anchor row; accent blue is also distinct
+                             from the red PRD environment pill above. -->
+                        <span class="shrink-0 rounded bg-tommy-accent-blue px-1.5 py-0.5 font-semibold uppercase tracking-wide text-white">
                           Daily digest
                         </span>
                       {/if}
