@@ -36,6 +36,12 @@ function parseTriple(v: string): [number, number, number] | undefined {
 	return m?.[1] && m[2] && m[3] ? [Number(m[1]), Number(m[2]), Number(m[3])] : undefined;
 }
 
+/** The persona version an agent advertises, or undefined when it carries none. */
+export function personaVersion(purpose: string): string | undefined {
+	const found = PERSONA_RE.exec(purpose);
+	return found?.[1] && found[2] && found[3] ? `${found[1]}.${found[2]}.${found[3]}` : undefined;
+}
+
 /**
  * True when the agent's advertised persona is at least `min`.
  *
@@ -45,9 +51,9 @@ function parseTriple(v: string): [number, number, number] | undefined {
  */
 export function personaAtLeast(purpose: string, min: string): boolean {
 	const floor = parseTriple(min);
-	const found = PERSONA_RE.exec(purpose);
-	if (!floor || !found?.[1] || !found[2] || !found[3]) return false;
-	const actual: [number, number, number] = [Number(found[1]), Number(found[2]), Number(found[3])];
+	const advertised = personaVersion(purpose);
+	const actual = advertised ? parseTriple(advertised) : undefined;
+	if (!floor || !actual) return false;
 	for (let i = 0; i < 3; i++) {
 		const a = actual[i] as number;
 		const f = floor[i] as number;

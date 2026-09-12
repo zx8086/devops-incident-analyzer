@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import type { FleetAws } from "../scripts/fleet/aws.ts";
-import { missingOnHub, personaAtLeast } from "../scripts/fleet/hub.ts";
+import { missingOnHub, personaAtLeast, personaVersion } from "../scripts/fleet/hub.ts";
 import { parseManifest } from "../scripts/fleet/manifest.ts";
 import { formatPreflight, preflight, preflightPassed } from "../scripts/fleet/preflight.ts";
 import { rolloutCommands } from "../scripts/fleet/rollout.ts";
@@ -279,6 +279,16 @@ describe("hub expectations and rollout commands", () => {
 		expect(personaAtLeast("agent with no persona marker", "0.1.0")).toBe(false);
 		expect(personaAtLeast("agent persona=pi-fleet-vnot.a.version", "0.1.0")).toBe(false);
 		expect(personaAtLeast("agent persona=pi-fleet-v0.2.0", "garbage")).toBe(false);
+	});
+
+	// SIO-1732: the rollout's success line prints this, not the manifest floor.
+	// Live on prd: the floor was 0.1.0 while all six spokes ran 0.2.0, so the
+	// success line named a version no spoke was running.
+	test("personaVersion reports the advertised version, and nothing when it cannot be read", () => {
+		expect(personaVersion("Read-only AWS devops agent for account 762715229080 persona=pi-fleet-v0.2.0")).toBe("0.2.0");
+		expect(personaVersion("agent persona=pi-fleet-v0.10.3")).toBe("0.10.3");
+		expect(personaVersion("agent with no persona marker")).toBeUndefined();
+		expect(personaVersion("agent persona=pi-fleet-vnot.a.version")).toBeUndefined();
 	});
 
 	test("a normal rollout uses pi-coms-update (it writes the reload sentinel); a token change re-runs the bootstrap with the sentinel touched", () => {

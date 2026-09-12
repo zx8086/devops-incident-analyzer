@@ -21,7 +21,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { parseArgs } from "node:util";
 import { type FleetAws, realFleetAws } from "./fleet/aws.ts";
-import { listAgents, missingOnHub } from "./fleet/hub.ts";
+import { listAgents, missingOnHub, personaVersion } from "./fleet/hub.ts";
 import {
 	DEFAULT_AUTH_PATH,
 	DEFAULT_HUB_PORT,
@@ -323,9 +323,15 @@ async function runRollout(
 				const agents = await listAgents(baseUrl, token, hubFor(manifest, hubKey).project);
 				pending = pending.filter((name) => {
 					const problems = missingOnHub(agents, name, persona ? { persona } : {});
-					if (problems.length === 0)
-						console.log(`${name}: online with monitor${persona ? ` and persona v${persona}` : ""}`);
-					else console.log(`${name}: waiting (${problems.join("; ")})`);
+					if (problems.length === 0) {
+						// SIO-1732: name the version the spoke ADVERTISES, not the manifest
+						// floor -- the floor is what we checked against, not what is running,
+						// and printing it announced v0.1.0 on a fleet running v0.2.0. Falls
+						// back to naming no version at all, matching personaAtLeast's
+						// fail-closed stance, rather than inventing one.
+						const running = personaVersion(agents.find((a) => a.name === name)?.purpose ?? "");
+						console.log(`${name}: online with monitor${running ? ` and persona v${running}` : ""}`);
+					} else console.log(`${name}: waiting (${problems.join("; ")})`);
 					return problems.length > 0;
 				});
 				if (pending.length > 0) await Bun.sleep(15_000);
