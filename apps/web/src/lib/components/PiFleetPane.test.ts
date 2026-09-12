@@ -129,6 +129,39 @@ describe("PiFleetPane", () => {
 	// advertised a destination that does not exist. SIO-1702 rewrote its label
 	// instead of asking whether the door was real; these assertions replace that
 	// test so the copy cannot come back.
+	// SIO-1707: the hub account runs a spoke too, so its name is both the hub and
+	// one of its own peers. Confirmed live: hubKey eu-shared-services-prd, peers
+	// including eu-shared-services-prd. Both readings are correct, so the row is
+	// labelled by role rather than renamed.
+	test("labels the hub row as the hub, and still lists a spoke of the same name", () => {
+		const collision: PiFleetAgentsResponse = {
+			...listing,
+			hubs: [
+				{
+					hubKey: "eu-shared-services-prd",
+					environment: "prd",
+					project: "default",
+					fallbackTarget: "ops",
+					peers: [
+						{ name: "eu-oit-prd", status: "online", purpose: null, sessionId: "s1" },
+						{ name: "eu-shared-services-prd", status: "online", purpose: null, sessionId: "s2" },
+					],
+					error: null,
+				},
+			],
+		};
+		const body = renderPane(applyAgents(initialPiFleetState(), collision), false, [
+			"eu-oit-prd",
+			"eu-shared-services-prd",
+		]);
+		const text = body.replace(/<!--[\s\S]*?-->/g, "");
+		// The header says what it IS, so the repeated name is not read as two spokes.
+		expect(text).toContain(">hub<");
+		// The hub's own spoke is a real target and must stay addressable.
+		expect(text).toContain("eu-shared-services-prd");
+		expect((text.match(/eu-shared-services-prd/g) ?? []).length).toBeGreaterThan(1);
+	});
+
 	test("never offers to open a fleet console", () => {
 		const body = renderPane(applyAgents(initialPiFleetState(), listing), false);
 		expect(body).not.toContain("Open the fleet console");
