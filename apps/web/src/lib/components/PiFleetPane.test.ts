@@ -447,6 +447,69 @@ describe("PiFleetPane", () => {
 		expect(body).toContain("on hub eu-shared-services-dev");
 	});
 
+	// SIO-1709: the monitor writes markdown, so a literal render showed the asterisks.
+	test("renders a string reply as markdown, not as literal asterisks", () => {
+		const selected = selectPeer(applyAgents(initialPiFleetState(), listing), {
+			hubKey: "eu-shared-services-dev",
+			name: "alpha-dev",
+		});
+		const pending = startEntry(selected, {
+			id: "e1",
+			hubKey: "eu-shared-services-dev",
+			target: "alpha-dev",
+			prompt: "digest",
+			sentAt: 0,
+		});
+		const done = applySendResult(pending, "e1", {
+			hubKey: "eu-shared-services-dev",
+			environment: "dev",
+			msgId: "m1",
+			status: "complete",
+			response: "**HCL Commerce ts-app (warn)** -- 18 SRVE0255E errors",
+			error: null,
+			target: "alpha-dev",
+			sender: "pi-fleet-abcd1234",
+			sentAt: "x",
+		});
+		const body = renderPane(done);
+		expect(body).toContain("<strong>HCL Commerce ts-app (warn)</strong>");
+		expect(body).not.toContain("**HCL Commerce");
+	});
+
+	// The reply is untrusted: agent-authored text about production accounts, rendered
+	// through {@html}. This pane SERVER-renders, so the sanitizer must hold outside a
+	// browser -- the browser-only guard SIO-1042 shipped would pass this straight through.
+	test("strips hostile html from a reply, in SSR", () => {
+		const selected = selectPeer(applyAgents(initialPiFleetState(), listing), {
+			hubKey: "eu-shared-services-dev",
+			name: "alpha-dev",
+		});
+		const pending = startEntry(selected, {
+			id: "e1",
+			hubKey: "eu-shared-services-dev",
+			target: "alpha-dev",
+			prompt: "digest",
+			sentAt: 0,
+		});
+		const done = applySendResult(pending, "e1", {
+			hubKey: "eu-shared-services-dev",
+			environment: "dev",
+			msgId: "m1",
+			status: "complete",
+			response: "before <img src=x onerror=alert(1)> <script>alert(2)</script> after",
+			error: null,
+			target: "alpha-dev",
+			sender: "pi-fleet-abcd1234",
+			sentAt: "x",
+		});
+		const body = renderPane(done);
+		expect(body).not.toContain("onerror");
+		expect(body).not.toContain("alert(2)");
+		// The surrounding prose still reaches the reader.
+		expect(body).toContain("before");
+		expect(body).toContain("after");
+	});
+
 	// SIO-1678: eu-oit-prd answered `complete` + "" for two hours; the pane showed nothing.
 	test("an empty completed reply is named as such, not rendered as nothing", () => {
 		const selected = selectPeer(applyAgents(initialPiFleetState(), listing), {
