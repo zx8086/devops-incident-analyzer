@@ -159,12 +159,13 @@ function shortPrompt(text: string): string {
                   aria-pressed={isSelected(hub.hubKey, peer.name)}
                   class="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-lg border transition-colors {isSelected(hub.hubKey, peer.name) ? 'border-tommy-accent-blue bg-white' : 'border-transparent hover:bg-white/60'}"
                 >
+                  <!-- The row is a target picker: the spoke name and whether it can
+                       answer. `purpose` is agent-authored prose of unbounded length, and
+                       rendering it squeezed the name column until account-shaped names
+                       wrapped across three lines. It stays on the wire, unrendered. -->
                   <span class="w-2 h-2 rounded-full shrink-0 {statusDot[peer.status] ?? 'bg-gray-300'}"></span>
-                  <span class="text-sm text-tommy-navy font-medium">{peer.name}</span>
-                  <span class="text-xs text-gray-500">{peer.status}</span>
-                  {#if peer.purpose}
-                    <span class="text-xs text-gray-400 truncate ml-auto">{peer.purpose}</span>
-                  {/if}
+                  <span class="text-sm text-tommy-navy font-medium truncate">{peer.name}</span>
+                  <span class="text-xs text-gray-500 shrink-0 ml-auto">{peer.status}</span>
                 </button>
               </li>
             {/each}

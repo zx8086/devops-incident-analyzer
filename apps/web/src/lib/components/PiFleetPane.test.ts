@@ -48,13 +48,21 @@ function renderPane(state: PiFleetState, busy = false): string {
 }
 
 describe("PiFleetPane", () => {
-	test("lists peers under their environment with status and purpose, and shows a hub error inline", () => {
+	test("lists peers under their environment with status, and shows a hub error inline", () => {
 		const body = renderPane(applyAgents(initialPiFleetState(), listing));
 		expect(body).toContain("alpha-dev");
-		expect(body).toContain("aws spoke");
 		expect(body).toContain("online");
 		expect(body).toContain("dev");
 		expect(body).toContain("hub GET failed: 500");
+	});
+
+	// The row is a target picker. `purpose` is agent-authored prose of unbounded
+	// length; rendering it squeezed the name column until account-shaped names
+	// wrapped across three lines. The fixture still carries one, so this fails if
+	// it is ever rendered again.
+	test("does not render the agent-authored purpose", () => {
+		const body = renderPane(applyAgents(initialPiFleetState(), listing));
+		expect(body).not.toContain("aws spoke");
 	});
 
 	test("shows the empty-state copy before any peer is selected", () => {
