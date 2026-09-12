@@ -109,6 +109,8 @@ export type DigestNotable = {
 	resource: string;
 	summary: string;
 	uninvestigated: boolean;
+	// How many journal rows collapsed into this entry (1 = a single occurrence).
+	occurrences: number;
 };
 
 // A journaled finding row carries the finding plus the diagnosis it was (or
@@ -164,8 +166,19 @@ export function checkErrorCountsFromJournal(rows: { payload: string }[]): Journa
 	return { counts, skipped };
 }
 
+// A flapping alarm journals one row per transition, so the same alarm can fill
+// the whole notables section (observed live: 10 identical
+// DatabaseServerCPUUtilization rows consumed all of NOTABLE_CAP and pushed 24
+// other findings into "+N more in the journal"). Rows are collapsed on
+// `dedup_key` -- the identity the checks already assign (`alarm:<name>:<state>`)
+// -- so a recurring alarm reads as ONE finding with a count, and the cap is
+// spent on distinct problems instead of repeats.
+//
+// The occurrence count is kept, not discarded: "entered ALARM (x10)" is a
+// materially different signal from a single transition, and dropping it would
+// hide a flap. Insertion order is preserved so the caller's sort still governs.
 export function notablesFromJournal(rows: { payload: string }[]): DigestNotable[] {
-	const notables: DigestNotable[] = [];
+	const byKey = new Map<string, DigestNotable>();
 	for (const r of rows) {
 		let payload: unknown;
 		try {
@@ -175,15 +188,25 @@ export function notablesFromJournal(rows: { payload: string }[]): DigestNotable[
 		}
 		const parsed = FindingSchema.safeParse(payload);
 		if (!parsed.success || parsed.data.severity === "info") continue;
-		notables.push({
+		const uninvestigated = (payload as { diagnosis?: unknown }).diagnosis == null;
+		const existing = byKey.get(parsed.data.dedup_key);
+		if (existing) {
+			existing.occurrences++;
+			// An uninvestigated occurrence outranks an investigated one: it is the
+			// state that still needs somebody to look at it.
+			if (uninvestigated) existing.uninvestigated = true;
+			continue;
+		}
+		byKey.set(parsed.data.dedup_key, {
 			severity: parsed.data.severity,
 			family: parsed.data.family,
 			resource: parsed.data.resource,
 			summary: parsed.data.summary,
-			uninvestigated: (payload as { diagnosis?: unknown }).diagnosis == null,
+			uninvestigated,
+			occurrences: 1,
 		});
 	}
-	return notables;
+	return [...byKey.values()];
 }
 
 export type SuppressionLedgerEntry = { pattern: string; reason: string; created_at: string };
@@ -297,7 +320,10 @@ export function formatDigest(d: DigestInput): string {
 		lines.push("- notable warn+ findings (last 24h):");
 		for (const n of notables.slice(0, NOTABLE_CAP)) {
 			const marker = n.uninvestigated ? " [uninvestigated]" : "";
-			lines.push(`  - (${n.severity}/${n.family}) ${n.resource}: ${n.summary}${marker}`);
+			// A repeat count only when there IS a repeat, so the common
+			// single-occurrence line is unchanged.
+			const repeat = n.occurrences > 1 ? ` (x${n.occurrences})` : "";
+			lines.push(`  - (${n.severity}/${n.family}) ${n.resource}: ${n.summary}${repeat}${marker}`);
 		}
 		if (notables.length > NOTABLE_CAP) {
 			lines.push(`  - +${notables.length - NOTABLE_CAP} more warn+ finding(s) in the journal`);
