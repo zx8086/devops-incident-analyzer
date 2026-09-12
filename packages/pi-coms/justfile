@@ -28,6 +28,31 @@ coms first *rest:
     MANIFEST="{{justfile_directory()}}/deploy/fleet.yaml"
     ENV_KEY=""; PROFILE=""; REGION=""; PORT=""; LOCAL_PORT=""; PROJECT=""
     SEL=""; CNAME="{{first}}"; ARGS=({{rest}})
+    for arg in "${ARGS[@]}"; do
+      case "$arg" in
+        --skill|--skill=*|--no-skills|--prompt-template|--prompt-template=*|--no-prompt-templates)
+          echo "just coms runs with fixed extensions and no prompts/skills" >&2
+          exit 1
+          ;;
+      esac
+    done
+    PI_RESOURCE_FLAGS=(
+      --no-extensions
+      --no-skills
+      --no-prompt-templates
+      -e "$HOME/.pi/agent/extensions/atuin.ts"
+      -e "{{justfile_directory()}}/extensions/coms-net.ts"
+      -e "$HOME/.pi/agent/npm/node_modules/context-mode/build/adapters/pi/extension.js"
+      -e "$HOME/.pi/agent/extensions/git-info"
+      -e "$HOME/.pi/agent/extensions/herdr-agent-state.ts"
+      -e "$HOME/.pi/agent/extensions/model-info"
+      -e "$HOME/.pi/agent/extensions/optional-extension-manager"
+      -e "$HOME/.pi/agent/npm/node_modules/pi-hunk/dist/pi.js"
+      -e "$HOME/.pi/agent/npm/node_modules/pi-mcp-adapter/index.ts"
+      -e "$HOME/.pi/agent/npm/node_modules/pi-web-access/index.ts"
+      -e "$HOME/.pi/agent/extensions/summaries"
+      -e "$HOME/.pi/agent/extensions/ui-customization"
+    )
     # `just coms <selector> <cname>` targets a DEPLOYED hub; `just coms <cname>`
     # keeps its local-hub meaning. The first word is a selector only when the
     # manifest actually has a hub by that name/profile/account (resolver exit 3
@@ -42,7 +67,7 @@ coms first *rest:
       fi
     fi
     if [ -z "$SEL" ]; then
-      exec pi -e extensions/coms-net.ts --name "$CNAME $(date +%Y-%m-%dT%H:%M)" --cname "$CNAME" --explicit "${ARGS[@]}"
+      exec pi --use-theme github-dark-default --name "$CNAME $(date +%Y-%m-%dT%H:%M)" --cname "$CNAME" --explicit "${PI_RESOURCE_FLAGS[@]}" "${ARGS[@]}"
     fi
     if [ -z "$PROJECT" ]; then echo "hub \"$SEL\" has no project in the manifest" >&2; exit 1; fi
     if ! lsof -nP -iTCP:"$LOCAL_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
@@ -64,10 +89,10 @@ coms first *rest:
     # console's status line can name it. Without it the extension sees only a
     # tunnelled 127.0.0.1 URL and the per-environment project namespace, which two
     # prd hubs in different accounts both share.
-    exec pi -e extensions/coms-net.ts \
+    exec pi --use-theme github-dark-default \
       --name "$CNAME $(date +%Y-%m-%dT%H:%M)" --cname "$CNAME" --explicit \
       --server-url "http://127.0.0.1:$LOCAL_PORT" --auth-token "$TOKEN" --project "$PROJECT" \
-      --hub "$SEL" "${ARGS[@]}"
+      --hub "$SEL" "${PI_RESOURCE_FLAGS[@]}" "${ARGS[@]}"
 # Fleet auth principals (SSM-backed; IAM on /pi-coms/auth decides who may run these)
 
 # Mint a principal token: just token-create <principal> ["name1,name2"] [kind] [profile]
