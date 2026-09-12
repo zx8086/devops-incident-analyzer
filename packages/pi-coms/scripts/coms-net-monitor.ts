@@ -42,9 +42,11 @@ import {
 import { errorMessage } from "./monitor/errors.ts";
 import { formatHistory, parseHistoryArgs } from "./monitor/history.ts";
 import {
+	checkErrorCountsFromJournal,
 	DIAGNOSIS_RESPONSE_SCHEMA,
 	type Diagnosis,
 	type Finding,
+	findingCountsFromJournal,
 	formatDigest,
 	formatIncidentReport,
 	formatSuppressionReview,
@@ -422,17 +424,21 @@ function main(): void {
 
 	const buildDigest = async (): Promise<string> => {
 		const day = 86_400_000;
+		// SIO-1698 follow-up: a journal row that does not parse -- or parses but is
+		// not a Finding -- is skipped, never thrown. The digest is the daily report
+		// of record: one malformed row must not take the whole thing down, the same
+		// way the alarm fetch below is allowed to fail and still ship. The counting
+		// lives in report.ts beside notablesFromJournal, which already reads these
+		// same rows this way.
 		const findingRows = state.journalRows(day, "finding");
-		const counts: Record<string, number> = {};
-		for (const r of findingRows) {
-			const fam = (JSON.parse(r.payload) as Finding).family;
-			counts[fam] = (counts[fam] ?? 0) + 1;
-		}
-		const errsByCheck: Record<string, number> = {};
-		for (const r of state.journalRows(day, "check_error")) {
-			const check = String((JSON.parse(r.payload) as { check?: unknown }).check ?? "unknown");
-			errsByCheck[check] = (errsByCheck[check] ?? 0) + 1;
-		}
+		const errorRows = state.journalRows(day, "check_error");
+		const findings = findingCountsFromJournal(findingRows);
+		const checkErrors = checkErrorCountsFromJournal(errorRows);
+		const counts = findings.counts;
+		const errsByCheck = checkErrors.counts;
+		// Silence would make a partial digest look complete.
+		const skippedRows = findings.skipped + checkErrors.skipped;
+		if (skippedRows > 0) log(`digest: skipped ${skippedRows} unreadable journal row(s)`);
 		let activeAlarms: string[] = [];
 		try {
 			const resp = await cw.send(new DescribeAlarmsCommand({ StateValue: "ALARM" }));
@@ -445,7 +451,7 @@ function main(): void {
 			accountId: ACCOUNT_ID,
 			since: new Date(Date.now() - day).toISOString(),
 			findingCounts: counts,
-			checkErrors: state.journalRows(day, "check_error").length,
+			checkErrors: errorRows.length,
 			checkErrorsByCheck: errsByCheck,
 			activeAlarms,
 			yesterdayUsd: latest?.usd ?? null,

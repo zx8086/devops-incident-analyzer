@@ -1,9 +1,11 @@
 // tests/report.test.ts
 import { describe, expect, test } from "bun:test";
 import {
+	checkErrorCountsFromJournal,
 	DiagnosisSchema,
 	type DigestNotable,
 	FindingSchema,
+	findingCountsFromJournal,
 	formatDigest,
 	formatIncidentReport,
 	formatSuppressionReview,
@@ -258,6 +260,66 @@ describe("digest notables", () => {
 			notables: [notable({ severity: "info" as never, resource: "i-info" }), notable()],
 		});
 		expect(text).not.toContain("i-info");
+	});
+});
+
+// SIO-1698 follow-up: these two counters used to JSON.parse inline in the
+// monitor's buildDigest closure with no try/catch, so one malformed journal row
+// threw and took down the whole daily digest.
+describe("findingCountsFromJournal", () => {
+	const row = (payload: unknown) => ({ payload: JSON.stringify(payload) });
+
+	test("counts by family", () => {
+		const got = findingCountsFromJournal([
+			row(finding),
+			row({ ...finding, dedup_key: "b" }),
+			row({ ...finding, family: "cost", dedup_key: "c" }),
+		]);
+		expect(got.counts).toEqual({ alarm: 2, cost: 1 });
+		expect(got.skipped).toBe(0);
+	});
+
+	test("skips an unparseable row and keeps counting the rest", () => {
+		const got = findingCountsFromJournal([row(finding), { payload: "{not json" }, row(finding)]);
+		expect(got.counts).toEqual({ alarm: 2 });
+		expect(got.skipped).toBe(1);
+	});
+
+	test("skips a row that parses but is not a Finding, rather than counting undefined", () => {
+		// The old cast produced counts[undefined]; the schema check drops it.
+		const got = findingCountsFromJournal([row({ severity: "critical" }), row(finding)]);
+		expect(got.counts).toEqual({ alarm: 1 });
+		expect(Object.keys(got.counts)).not.toContain("undefined");
+		expect(got.skipped).toBe(1);
+	});
+
+	test("an all-bad batch yields empty counts, not a throw", () => {
+		const got = findingCountsFromJournal([{ payload: "[object Object]" }, { payload: "" }]);
+		expect(got.counts).toEqual({});
+		expect(got.skipped).toBe(2);
+	});
+});
+
+describe("checkErrorCountsFromJournal", () => {
+	const row = (payload: unknown) => ({ payload: JSON.stringify(payload) });
+
+	test("counts by check name and buckets a missing name under unknown", () => {
+		const got = checkErrorCountsFromJournal([row({ check: "alarms" }), row({ check: "alarms" }), row({})]);
+		expect(got.counts).toEqual({ alarms: 2, unknown: 1 });
+		expect(got.skipped).toBe(0);
+	});
+
+	test("a non-string check does not become a bucket name", () => {
+		// String({...}) previously produced an "[object Object]" bucket.
+		const got = checkErrorCountsFromJournal([row({ check: { nested: true } }), row({ check: 42 })]);
+		expect(got.counts).toEqual({ unknown: 2 });
+		expect(Object.keys(got.counts)).not.toContain("[object Object]");
+	});
+
+	test("skips an unparseable row", () => {
+		const got = checkErrorCountsFromJournal([row({ check: "cost" }), { payload: "nope" }]);
+		expect(got.counts).toEqual({ cost: 1 });
+		expect(got.skipped).toBe(1);
 	});
 });
 
