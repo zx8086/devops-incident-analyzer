@@ -224,7 +224,16 @@ export async function listFleetAgents(deps: PiFleetDeps = {}): Promise<PiFleetAg
 					// prompt, so they are dropped by name here; their reports still reach the
 					// pane through the hub's inbox (`Inbox ops`).
 					const agents = spokesOnly(await clientFor(paneHub, pane, deps).listAgents());
+					// SIO-1703: the pane addresses ACCOUNT SPOKES. `spokesOnly` drops the
+					// monitors by name (SIO-1665), but an operator console (`just coms
+					// <hub> <name>`, registered --explicit) is also on the card list and is
+					// not an account agent -- it answers as a person, not as an estate.
+					// The hub's own `estates` config is the discriminator: a spoke is named
+					// for the estate it serves, so anything not in that list is not one.
+					// Stronger than a name pattern, and it needs no new wire field.
+					const servedEstates = new Set(paneHub.hub.estates);
 					const peers = agents
+						.filter((a) => servedEstates.has(a.name))
 						.map((a) => ({ name: a.name, status: a.status, purpose: a.purpose ?? null, sessionId: a.session_id }))
 						.sort((a, b) => a.name.localeCompare(b.name));
 					log.info(

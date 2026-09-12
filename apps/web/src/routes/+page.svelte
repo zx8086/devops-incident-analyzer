@@ -738,6 +738,9 @@ function handleSuggestionClick(suggestion: string) {
        screen with no control to close it. -->
   {#if fleetOffered && piFleetStore.open}
     <div class="w-2/5 max-w-xl shrink-0 border-l border-gray-200 bg-tommy-cream overflow-hidden">
+      <!-- SIO-1703: scoping an investigation to one estate scopes the spokes too.
+           Addressing an account outside the investigation is almost always a
+           mistake, and the estate selector is the operator's statement of scope. -->
       <PiFleetPane
         pane={piFleetStore.state}
         busy={piFleetStore.busy}
@@ -747,6 +750,7 @@ function handleSuggestionClick(suggestion: string) {
         onSelect={(selection) => piFleetStore.select(selection)}
         onLoadMailbox={(hubKey) => piFleetStore.loadMailbox(hubKey)}
         onAskAll={consoleAvailable ? () => agentStore.switchAgent("pi-fleet-console") : undefined}
+        scopeEstates={agentStore.selectedAwsEstates}
       />
     </div>
   {/if}

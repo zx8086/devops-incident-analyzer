@@ -155,6 +155,86 @@ describe("PiFleetPane", () => {
 		expect(body).not.toContain("Open the fleet console");
 	});
 
+	// SIO-1703: scoping an investigation to one estate scopes the spokes too.
+	test("scopes the spoke list to the selected AWS estates", () => {
+		const scoped = render(PiFleetPane, {
+			props: {
+				pane: applyAgents(initialPiFleetState(), listing),
+				busy: false,
+				mailboxBusy: null,
+				...handlers,
+				scopeEstates: ["alpha-dev"],
+			},
+		}).body;
+		expect(scoped).toContain("alpha-dev");
+		// alpha-dev is the only spoke in the fixture, so nothing is hidden and the
+		// note correctly stays away -- the count is asserted in the next test.
+		expect(scoped).not.toContain("Scoped to the selected AWS estates");
+	});
+
+	test("reports how many spokes the scope hid", () => {
+		const twoSpokes: PiFleetAgentsResponse = {
+			...listing,
+			hubs: [
+				{
+					hubKey: "eu-shared-services-prd",
+					environment: "prd",
+					project: "default",
+					fallbackTarget: "ops",
+					error: null,
+					peers: [
+						{ name: "eu-oit-prd", status: "online", purpose: null, sessionId: "p1" },
+						{ name: "eu-shared-services-prd", status: "online", purpose: null, sessionId: "p2" },
+					],
+				},
+			],
+		};
+		const body = render(PiFleetPane, {
+			props: {
+				pane: applyAgents(initialPiFleetState(), twoSpokes),
+				busy: false,
+				mailboxBusy: null,
+				...handlers,
+				scopeEstates: ["eu-oit-prd"],
+			},
+		}).body;
+		expect(body).toContain("eu-oit-prd");
+		expect(body).toContain("1 other spoke hidden");
+	});
+
+	test("an empty selection scopes nothing rather than hiding every spoke", () => {
+		// No selection is not a request for a narrower fleet; hiding everything
+		// would read as an outage.
+		const body = renderPane(applyAgents(initialPiFleetState(), listing));
+		expect(body).toContain("alpha-dev");
+		expect(body).not.toContain("Scoped to the selected AWS estates");
+	});
+
+	test("a selection matching no spoke empties the list and gates the console", () => {
+		const body = render(PiFleetPane, {
+			props: {
+				pane: applyAgents(initialPiFleetState(), listing),
+				busy: false,
+				mailboxBusy: null,
+				...handlers,
+				onAskAll: noop,
+				scopeEstates: ["eu-oit-prd"],
+			},
+		}).body;
+		expect(body).not.toContain("alpha-dev");
+		const tag = body.match(/<button[^>]*>\s*Open the fleet console/)?.[0] ?? "";
+		expect(/\sdisabled(=|\s|>)/.test(tag.replace(/class="[^"]*"/, ""))).toBe(true);
+	});
+
+	// SIO-1703: the picker and the replies were in ONE scroll container, so a long
+	// reply scrolled the picker out of view.
+	test("pins the spoke picker in its own scroll region, separate from the replies", () => {
+		const body = renderPane(applyAgents(initialPiFleetState(), listing));
+		expect(body).toContain("max-h-[40%]");
+		// The replies keep their own flex-1 region below it.
+		expect(body).toContain("flex-1 overflow-y-auto min-h-0");
+	});
+
 	test("shows the empty-state copy before any peer is selected", () => {
 		const body = renderPane(applyAgents(initialPiFleetState(), { ...listing, hubs: [] }));
 		expect(body).toContain("No spokes are registered");

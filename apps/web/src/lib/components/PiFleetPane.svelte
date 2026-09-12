@@ -16,6 +16,7 @@ let {
 	onSelect,
 	onLoadMailbox,
 	onAskAll,
+	scopeEstates = [],
 }: {
 	pane: PiFleetState;
 	busy: boolean;
@@ -30,6 +31,11 @@ let {
 	// spokes and synthesizes one attributed answer in the chat. Optional, so the
 	// pane still renders where the console is not available (no hub, flag off).
 	onAskAll?: () => void;
+	// SIO-1703: the AWS estates the operator selected for this investigation. A
+	// spoke is named for the estate it serves, so this scopes the list to the
+	// accounts under investigation. Empty means no scoping (nothing selected, or
+	// a deployment with no estate selector) -- never "hide everything".
+	scopeEstates?: string[];
 } = $props();
 
 let prompt = $state("");
@@ -39,7 +45,21 @@ let prompt = $state("");
 // says nothing about whether a hub is answering right now. Without this, a down
 // tunnel still let the operator switch agents into a console with nothing to ask.
 // Derived here rather than passed in: the pane already holds the listing.
-const reachableSpokes = $derived(pane.hubs.reduce((n, hub) => n + hub.peers.length, 0));
+// SIO-1703: an empty selection scopes nothing. The operator who selected no
+// estate has not asked for a narrower fleet, and hiding every spoke would read
+// as an outage. A selection that matches no spoke on a hub empties that hub's
+// list, which is correct: those accounts are out of scope for this investigation.
+const scoped = $derived(
+	scopeEstates.length === 0
+		? pane.hubs
+		: pane.hubs.map((hub) => ({ ...hub, peers: hub.peers.filter((p) => scopeEstates.includes(p.name)) })),
+);
+const hiddenByScope = $derived(
+	pane.hubs.reduce((n, hub) => n + hub.peers.length, 0) - scoped.reduce((n, hub) => n + hub.peers.length, 0),
+);
+// Reachability follows what is SHOWN: a console that cannot address any spoke in
+// scope is no more useful than one with no spokes at all.
+const reachableSpokes = $derived(scoped.reduce((n, hub) => n + hub.peers.length, 0));
 const canAskAll = $derived(reachableSpokes > 0);
 
 const statusDot: Record<string, string> = {
@@ -137,12 +157,22 @@ function onKeydown(event: KeyboardEvent) {
     <div class="px-4 py-2 text-xs text-red-700 bg-red-50 border-b border-red-200">{pane.loadError}</div>
   {/if}
 
-  <div class="flex-1 overflow-y-auto min-h-0">
-    <section class="px-4 py-3 border-b border-gray-200">
+  <!-- SIO-1703: the spoke list and the replies were inside ONE scroll container,
+       so reading a long reply scrolled the picker out of view and selecting the
+       next spoke meant scrolling back to the top. Two regions now: the picker is
+       pinned (capped at 40% so it can never crowd out the replies, and scrolling
+       internally when the fleet is large), the replies take the rest. -->
+  <div class="shrink-0 max-h-[40%] overflow-y-auto border-b border-gray-200">
+    <section class="px-4 py-3">
       {#if pane.hubs.length === 0}
         <p class="text-xs text-gray-500">No spokes are registered on any configured hub.</p>
       {/if}
-      {#each pane.hubs as hub (hub.hubKey)}
+      {#if hiddenByScope > 0}
+        <p class="text-xs text-gray-400 mb-2">
+          Scoped to the selected AWS estates &mdash; {hiddenByScope} other spoke{hiddenByScope === 1 ? "" : "s"} hidden.
+        </p>
+      {/if}
+      {#each scoped as hub (hub.hubKey)}
         <div class="mb-3 last:mb-0">
           <div class="flex items-center gap-2 mb-1">
             <!-- SIO-1666: the ACCOUNT identifies the hub; the environment is a
@@ -212,7 +242,9 @@ function onKeydown(event: KeyboardEvent) {
         </div>
       {/each}
     </section>
+  </div>
 
+  <div class="flex-1 overflow-y-auto min-h-0">
     <section class="px-4 py-3 space-y-3">
       {#if pane.entries.length === 0}
         <p class="text-xs text-gray-500">Select a spoke and send it a prompt. The reply appears here, next to the incident analysis.</p>
