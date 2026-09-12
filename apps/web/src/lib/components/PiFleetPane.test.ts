@@ -144,7 +144,7 @@ describe("PiFleetPane", () => {
 		});
 		const body = renderPane(state);
 		const picker = body.indexOf("max-h-[20rem]");
-		const replies = body.indexOf("flex-1 overflow-y-auto min-h-0");
+		const replies = body.indexOf("flex-1 overflow-y-auto min-h-[8rem]");
 		const card = body.indexOf("<details");
 		expect(picker).toBeGreaterThan(-1);
 		expect(replies).toBeGreaterThan(-1);
@@ -340,6 +340,22 @@ describe("PiFleetPane", () => {
 		expect(body).not.toContain("bg-tommy-navy/5");
 	});
 
+	// SIO-1718: the three regions must fit INSIDE the pane. The picker was
+	// `shrink-0`, so on a short pane it kept its full height, squeezed the digest
+	// region to 0px and pushed the composer past the wrapper's `overflow-hidden`
+	// edge -- the spoke list looked truncated and the send box was gone entirely.
+	// Measured live at a 465px pane: children summed to 495px.
+	test("the picker yields, the digest keeps a floor, and the composer never shrinks", () => {
+		const body = renderPane(applyAgents(initialPiFleetState(), listing));
+		// The picker gives way rather than holding its height.
+		expect(body).toContain("min-h-0 shrink max-h-[20rem]");
+		expect(body).not.toContain("shrink-0 max-h-[20rem]");
+		// The digest cannot be collapsed to nothing by a long spoke list.
+		expect(body).toContain("min-h-[8rem]");
+		// The send box is the pane's primary control; it is never the thing squeezed out.
+		expect(body).toContain("shrink-0 border-t border-gray-200");
+	});
+
 	// SIO-1706: the pane no longer offers to "open the fleet console". The header pi
 	// icon toggles THIS pane and the box below addresses the spokes, so the button
 	// advertised a destination that does not exist. SIO-1702 rewrote its label
@@ -530,7 +546,7 @@ describe("PiFleetPane", () => {
 		expect(body).toContain("max-h-[20rem]");
 		expect(body).not.toContain("max-h-[35%]");
 		// The replies keep their own flex-1 region below it.
-		expect(body).toContain("flex-1 overflow-y-auto min-h-0");
+		expect(body).toContain("flex-1 overflow-y-auto min-h-[8rem]");
 	});
 
 	// SIO-1703: `project` is a hub-side namespace derived per ENVIRONMENT, so two

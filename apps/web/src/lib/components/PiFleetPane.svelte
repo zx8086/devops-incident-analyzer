@@ -188,7 +188,12 @@ function onKeydown(event: KeyboardEvent) {
        it takes only what its rows need -- 6 spokes fit inside 20rem with 287px
        still left for the digest on a 565px pane, and only a fleet beyond ~7
        spokes scrolls internally. Sized to the content, capped for the outlier. -->
-  <div class="shrink-0 max-h-[20rem] overflow-y-auto border-b border-gray-200">
+  <!-- SIO-1718: the picker may SHRINK. It was `shrink-0`, so on a short pane it
+       held its full height, starved the digest region to 0px and pushed the
+       composer past the pane's `overflow-hidden` edge -- the spokes looked
+       truncated and the reply box was gone. Now it yields into whatever the
+       digest does not need, scrolling internally instead of clipping. -->
+  <div class="min-h-0 shrink max-h-[20rem] overflow-y-auto border-b border-gray-200">
     <section class="px-4 pt-2 pb-3">
       {#if pane.hubs.length === 0}
         <p class="text-xs text-gray-500">No spokes are registered on any configured hub.</p>
@@ -275,7 +280,9 @@ function onKeydown(event: KeyboardEvent) {
     </section>
   </div>
 
-  <div class="flex-1 overflow-y-auto min-h-0">
+  <!-- SIO-1718: a floor, so the digest can never be squeezed to nothing by a
+       long spoke list on a short pane. min-h-0 alone let flex collapse it. -->
+  <div class="flex-1 overflow-y-auto min-h-[8rem]">
     <section class="px-4 py-3 space-y-3">
       <!-- SIO-1712: the ops inbox card lives HERE now, not nested under the spoke
            picker. A daily digest is the longest thing this pane ever shows, and
@@ -426,7 +433,9 @@ function onKeydown(event: KeyboardEvent) {
        of the digest. Measured on a 560px pane it held 169px against the digest's
        133px -- the box to ask a question was bigger than the report being read.
        Two rows and tighter padding; the textarea still grows as you type. -->
-  <div class="border-t border-gray-200 px-3 py-2 bg-white">
+  <!-- SIO-1718: shrink-0 -- the send box is the pane's primary control and must
+       never be the thing that gets squeezed out. -->
+  <div class="shrink-0 border-t border-gray-200 px-3 py-2 bg-white">
     <p class="text-xs text-gray-500 mb-1">
       {#if pane.selected}
         To <span class="font-medium text-tommy-navy">{pane.selected.name}</span> ({pane.selected.hubKey})
