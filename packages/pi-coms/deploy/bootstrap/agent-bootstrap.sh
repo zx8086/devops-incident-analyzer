@@ -163,6 +163,47 @@ if [ "${CTX_MODE_ENABLED:-}" != "false" ] && [ "${CTX_MODE_ENABLED:-}" != "0" ];
       echo "context-mode install failed; spoke starts without ctx_* tools" >&2
     fi
   fi
+
+  # The ctx_* tools reach the model through pi-mcp-adapter (SIO-1734): the same
+  # package `just coms` loads on the laptop, and what context-mode's own Pi docs
+  # prescribe (an mcp.json entry). Pi core has no MCP support, and context-mode's
+  # bundled Pi extension starts its bridge only from before_agent_start, which Pi
+  # emits only for typed prompts -- never for the pi.sendMessage() turns a spoke
+  # lives on (SIO-1726). Only server.bundle.mjs from the install above is used.
+  #
+  # `pi install npm:` shells out to npm, absent on this host, so bun add into
+  # Pi's own package root and register the package in settings.json directly.
+  PI_NPM_DIR="$HOME/.pi/agent/npm"
+  MCP_ADAPTER_VERSION="2.33.0"
+  if [ ! -f "$PI_NPM_DIR/node_modules/pi-mcp-adapter/index.ts" ] \
+     || [ "$(cat "$PI_NPM_DIR/.mcp-adapter-version" 2>/dev/null || echo none)" != "$MCP_ADAPTER_VERSION" ]; then
+    mkdir -p "$PI_NPM_DIR"
+    [ -f "$PI_NPM_DIR/package.json" ] || echo '{"name":"pi-packages","private":true}' > "$PI_NPM_DIR/package.json"
+    if (cd "$PI_NPM_DIR" && bun add --ignore-scripts "pi-mcp-adapter@$MCP_ADAPTER_VERSION"); then
+      echo "$MCP_ADAPTER_VERSION" > "$PI_NPM_DIR/.mcp-adapter-version"
+    else
+      echo "pi-mcp-adapter install failed; spoke starts without ctx_* tools" >&2
+    fi
+  fi
+  python3 - <<'PY'
+import json, os
+p = os.path.expanduser("~/.pi/agent/settings.json")
+d = json.load(open(p)) if os.path.exists(p) else {}
+pk = d.setdefault("packages", [])
+if "npm:pi-mcp-adapter" not in pk:
+    pk.append("npm:pi-mcp-adapter")
+    json.dump(d, open(p, "w"), indent=2)
+PY
+  # keep-alive: the adapter connects at session_start, before the first turn.
+  # directTools + toolPrefix none: the model sees plain ctx_* names, as the
+  # aws-spoke RULES.md documents. Rewritten every convergence so a CTX_VERSION
+  # or path change lands without a hand edit.
+  cat > "$HOME/.pi/agent/mcp.json" <<MCP
+{"mcpServers":{"ctx":{"command":"$HOME/.bun/bin/bun","args":["$CTX_DIR/node_modules/context-mode/server.bundle.mjs"],"lifecycle":"keep-alive","directTools":true,"toolPrefix":"none"}}}
+MCP
+else
+  # Kill-switch: no server entry means the adapter registers no ctx_* tools.
+  rm -f "$HOME/.pi/agent/mcp.json"
 fi
 BOOTSTRAP
 
@@ -230,34 +271,6 @@ chown -R "$AGENT_USER:$AGENT_USER" "$AGENT_HOME/.pi"
 PERSONA_VERSION="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$PERSONA_DIR/package.json" | head -1)"
 if [ -n "$PERSONA_VERSION" ]; then
   AGENT_PURPOSE="$AGENT_PURPOSE persona=pi-fleet-v$PERSONA_VERSION"
-fi
-
-# Patched context-mode extension (SIO-1726). Overlaid AFTER the bundle unpack,
-# because the patch ships in the bundle (vendor/context-mode-patch/) while the
-# npm install runs earlier in the agent-user block.
-#
-# Upstream registers its ctx_* tools only from Pi's `before_agent_start`, which
-# Pi emits only on the `_runAgentPrompt` path. coms-net delivers inbound with
-# `{ deliverAs: "followUp", triggerTurn: true }`, and Pi tests `isStreaming`
-# BEFORE `triggerTurn`, so a spoke already mid-turn (pi-monitor keeps it busy)
-# takes `agent.followUp()` and the hook never fires -- the turn reaches the model
-# with no ctx_* tools, silently. The patch adds the `context` hook as a
-# bootstrap backstop; see vendor/context-mode-patch/README.md.
-#
-# Version-keyed on purpose: the patch was built against 1.0.169, so bumping
-# CTX_VERSION must NOT silently overlay it onto a different release. Remove this
-# whole block once the fix is in an upstream release.
-CTX_PATCH_FOR_VERSION="1.0.169"
-CTX_EXT_INSTALLED="$AGENT_HOME/.pi-ctx/node_modules/context-mode/build/adapters/pi/extension.js"
-CTX_PATCH_SRC="$AGENT_HOME/pi-coms/vendor/context-mode-patch/extension.js"
-if [ "${CTX_MODE_ENABLED:-}" != "false" ] && [ "${CTX_MODE_ENABLED:-}" != "0" ] \
-   && [ -f "$CTX_PATCH_SRC" ] && [ -f "$CTX_EXT_INSTALLED" ] \
-   && [ "$(cat "$AGENT_HOME/.pi-ctx/.ctx-version" 2>/dev/null || echo none)" = "$CTX_PATCH_FOR_VERSION" ]; then
-  if ! cmp -s "$CTX_PATCH_SRC" "$CTX_EXT_INSTALLED"; then
-    cp "$CTX_PATCH_SRC" "$CTX_EXT_INSTALLED"
-    chown "$AGENT_USER:$AGENT_USER" "$CTX_EXT_INSTALLED"
-    echo "applied the patched context-mode extension (SIO-1726, for $CTX_PATCH_FOR_VERSION)"
-  fi
 fi
 
 # ── Secrets ────────────────────────────────────────────────────────────────
@@ -536,18 +549,6 @@ for env_file in "$HOME/.coms-env" "$HOME/.coms-env.local"; do
   done < "$env_file"
 done
 
-# Pi emits before_agent_start only from the user-text prompt() path; every spoke
-# turn arrives via pi.sendMessage(), which never fires it, and the context-hook
-# backstop registers one model call too late for the first turn. The vendored
-# context-mode build honours this opt-in to start the bridge at session_start.
-# It must travel as --env: Pi is spawned by the herdr server daemon, not by this
-# script, so an exported variable never reaches it. Same gate as EXT_ARGS below.
-CTX_EXT_PATH="$HOME/.pi-ctx/node_modules/context-mode/build/adapters/pi/extension.js"
-if [ "${CTX_MODE_ENABLED:-}" != "false" ] && [ "${CTX_MODE_ENABLED:-}" != "0" ] \
-   && [ -f "$CTX_EXT_PATH" ]; then
-  ENV_ARGS+=(--env "CONTEXT_MODE_BRIDGE_EAGER=1")
-fi
-
 WS_JSON="$(herdr workspace create \
   --cwd "$HOME/pi-coms" \
   --label "coms-net" \
@@ -569,17 +570,9 @@ if [ -n "PI_PROVIDER_PLACEHOLDER" ]; then
   PROVIDER_ARGS=(--provider "PI_PROVIDER_PLACEHOLDER")
 fi
 
-# Extensions are repeatable (-e/--extension). coms-net is mandatory; context-mode
-# (SIO-1726) is appended only when the install actually produced an extension.js,
-# because a missing -e target is a hard Pi startup error and a spoke that cannot
-# start is worse than one without ctx_* tools. Resolved HERE rather than at
-# bootstrap time so a reload after a failed install re-checks the real state.
+# Extensions are repeatable (-e/--extension). coms-net is the only one loaded
+# by flag; ctx_* comes from pi-mcp-adapter via settings.json packages (SIO-1734).
 EXT_ARGS=(-e extensions/coms-net.ts)
-CTX_EXT_PATH="$HOME/.pi-ctx/node_modules/context-mode/build/adapters/pi/extension.js"
-if [ "${CTX_MODE_ENABLED:-}" != "false" ] && [ "${CTX_MODE_ENABLED:-}" != "0" ] \
-   && [ -f "$CTX_EXT_PATH" ]; then
-  EXT_ARGS+=(-e "$CTX_EXT_PATH")
-fi
 
 herdr agent start "AGENT_NAME_PLACEHOLDER" --kind pi --pane "$PANE_ID" --timeout 15000 -- \
   "${EXT_ARGS[@]}" \
