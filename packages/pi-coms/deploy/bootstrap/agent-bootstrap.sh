@@ -536,6 +536,18 @@ for env_file in "$HOME/.coms-env" "$HOME/.coms-env.local"; do
   done < "$env_file"
 done
 
+# Pi emits before_agent_start only from the user-text prompt() path; every spoke
+# turn arrives via pi.sendMessage(), which never fires it, and the context-hook
+# backstop registers one model call too late for the first turn. The vendored
+# context-mode build honours this opt-in to start the bridge at session_start.
+# It must travel as --env: Pi is spawned by the herdr server daemon, not by this
+# script, so an exported variable never reaches it. Same gate as EXT_ARGS below.
+CTX_EXT_PATH="$HOME/.pi-ctx/node_modules/context-mode/build/adapters/pi/extension.js"
+if [ "${CTX_MODE_ENABLED:-}" != "false" ] && [ "${CTX_MODE_ENABLED:-}" != "0" ] \
+   && [ -f "$CTX_EXT_PATH" ]; then
+  ENV_ARGS+=(--env "CONTEXT_MODE_BRIDGE_EAGER=1")
+fi
+
 WS_JSON="$(herdr workspace create \
   --cwd "$HOME/pi-coms" \
   --label "coms-net" \
@@ -567,11 +579,6 @@ CTX_EXT_PATH="$HOME/.pi-ctx/node_modules/context-mode/build/adapters/pi/extensio
 if [ "${CTX_MODE_ENABLED:-}" != "false" ] && [ "${CTX_MODE_ENABLED:-}" != "0" ] \
    && [ -f "$CTX_EXT_PATH" ]; then
   EXT_ARGS+=(-e "$CTX_EXT_PATH")
-  # Pi emits before_agent_start only from the user-text prompt() path; every spoke
-  # turn arrives via pi.sendMessage(), which never fires it, and the context-hook
-  # backstop registers one model call too late for the first turn. The vendored
-  # context-mode build honours this opt-in to start the bridge at session_start.
-  export CONTEXT_MODE_BRIDGE_EAGER=1
 fi
 
 herdr agent start "AGENT_NAME_PLACEHOLDER" --kind pi --pane "$PANE_ID" --timeout 15000 -- \
