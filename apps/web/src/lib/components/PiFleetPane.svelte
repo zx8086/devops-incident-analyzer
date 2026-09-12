@@ -147,12 +147,18 @@ function onKeydown(event: KeyboardEvent) {
            whether the destination was real. The pi-fleet-console AGENT is still
            reachable from the header agent control, where switching agents lives. -->
     </div>
+    <!-- SIO-1712: a bare text link did not read as a control and gave no sign it
+         was working. Same bordered small-action style as the Inbox button below,
+         and it finally honours the `busy` prop it had been ignoring. -->
     <button
       type="button"
       onclick={onRefresh}
-      class="text-xs text-tommy-accent-blue hover:underline shrink-0"
+      disabled={busy}
+      aria-label="Refresh the fleet spoke list"
+      class="shrink-0 flex items-center gap-1 rounded-lg border border-gray-300 px-2 py-1 text-xs font-medium text-tommy-accent-blue transition-colors hover:border-tommy-accent-blue hover:bg-tommy-accent-blue hover:text-white disabled:opacity-50 disabled:hover:border-gray-300 disabled:hover:bg-transparent disabled:hover:text-tommy-accent-blue"
     >
-      Refresh
+      <Icon name="refresh" class="w-3 h-3 {busy ? 'animate-spin motion-reduce:animate-none' : ''}" />
+      {busy ? "Refreshing…" : "Refresh"}
     </button>
   </div>
 
@@ -163,9 +169,13 @@ function onKeydown(event: KeyboardEvent) {
   <!-- SIO-1703: the spoke list and the replies were inside ONE scroll container,
        so reading a long reply scrolled the picker out of view and selecting the
        next spoke meant scrolling back to the top. Two regions now: the picker is
-       pinned (capped at 40% so it can never crowd out the replies, and scrolling
-       internally when the fleet is large), the replies take the rest. -->
-  <div class="shrink-0 max-h-[40%] overflow-y-auto border-b border-gray-200">
+       pinned (capped so it can never crowd out the replies, and scrolling
+       internally when the fleet is large), the replies take the rest.
+       SIO-1712: the cap is 35%, not 40% -- the ops inbox card used to be nested
+       HERE, so a whole daily digest rendered through a letterbox while the
+       replies region sat empty below it. The card moved to the scroll region
+       below; what is left here is rows, which need less. -->
+  <div class="shrink-0 max-h-[35%] overflow-y-auto border-b border-gray-200">
     <section class="px-4 py-3">
       {#if pane.hubs.length === 0}
         <p class="text-xs text-gray-500">No spokes are registered on any configured hub.</p>
@@ -175,7 +185,7 @@ function onKeydown(event: KeyboardEvent) {
           No AWS estate selected. Choose one above to address its spoke.
         </p>
       {:else if hiddenByScope > 0}
-        <p class="text-xs text-gray-400 mb-2">
+        <p class="text-xs text-gray-600 mb-2">
           Scoped to the selected AWS estates &mdash; {hiddenByScope} other spoke{hiddenByScope === 1 ? "" : "s"} hidden.
         </p>
       {/if}
@@ -216,9 +226,9 @@ function onKeydown(event: KeyboardEvent) {
             <!-- SIO-1704: the scope emptied this hub's list; the spokes ARE
                  registered, so saying otherwise would send the operator chasing a
                  fleet problem that does not exist. -->
-            <p class="text-xs text-gray-400">No spoke here is in the selected scope.</p>
+            <p class="text-xs text-gray-600">No spoke here is in the selected scope.</p>
           {:else if hub.peers.length === 0}
-            <p class="text-xs text-gray-400">No spokes are registered on this hub.</p>
+            <p class="text-xs text-gray-600">No spokes are registered on this hub.</p>
           {/if}
           <ul class="space-y-1">
             {#each hub.peers as peer (peer.sessionId)}
@@ -240,49 +250,6 @@ function onKeydown(event: KeyboardEvent) {
               </li>
             {/each}
           </ul>
-          {#if pane.mailboxes[hub.hubKey]}
-            {@const mailbox = pane.mailboxes[hub.hubKey]}
-            <div class="mt-2 rounded-lg border border-gray-200 bg-white p-2">
-              <p class="text-xs font-medium text-tommy-navy mb-1">Inbox {mailbox?.name}</p>
-              <!-- SIO-1705: the server now returns exactly the anchored range (each
-                   estate's newest daily digest onward), so there is no client-side
-                   filter here. The SIO-1704 filter hid rows AFTER a fixed cap had
-                   already decided which rows were fetched, which is the bug. -->
-              {#if !mailbox || mailbox.messages.length === 0}
-                <p class="text-xs text-gray-400">No reports from the selected estates.</p>
-              {:else}
-                {#if mailbox.missingDigest.length > 0}
-                  <p class="text-xs text-amber-700 mb-1">
-                    No daily digest found for {mailbox.missingDigest.join(", ")} &mdash; showing all
-                    messages held for {mailbox.missingDigest.length === 1 ? "it" : "them"}.
-                  </p>
-                {/if}
-                {#if mailbox.windowTruncated}
-                  <p class="text-xs text-amber-700 mb-1">
-                    The hub returned a full window, so an older digest may sit beyond it.
-                  </p>
-                {/if}
-                <ul class="space-y-1">
-                  {#each mailbox.messages as message (message.msgId)}
-                    <!-- The monitor's report IS the content here, not a preview of
-                         something openable: there is no detail view to click into, so a
-                         140-char slice just lost the findings. Wrapped in full, and
-                         `break-words` keeps an unbroken log-group or ARN from forcing a
-                         horizontal scrollbar. Still rendered as data, never executed. -->
-                    <li class="text-xs text-gray-700">
-                      <span class="font-medium">{message.senderName}</span>
-                      <span class="text-gray-400">{message.status}</span>
-                      <!-- SIO-1709: the monitor writes these as markdown (bold findings,
-                           numbered lists), so a literal render showed the asterisks. -->
-                      <span class="block break-words text-gray-500">
-                        <MarkdownRenderer content={message.prompt} />
-                      </span>
-                    </li>
-                  {/each}
-                </ul>
-              {/if}
-            </div>
-          {/if}
         </div>
       {/each}
     </section>
@@ -290,6 +257,75 @@ function onKeydown(event: KeyboardEvent) {
 
   <div class="flex-1 overflow-y-auto min-h-0">
     <section class="px-4 py-3 space-y-3">
+      <!-- SIO-1712: the ops inbox card lives HERE now, not nested under the spoke
+           picker. A daily digest is the longest thing this pane ever shows, and
+           under the picker's cap it rendered through a letterbox while this
+           region sat empty. It shares the scroll budget with the replies it
+           belongs beside, and collapses so several loaded mailboxes and a
+           running reply can coexist.
+           Severity is NOT parsed out of the text: the digest arrives as one
+           opaque markdown string (no severity field on the wire), so ranking is
+           typographic -- muted metadata, full-contrast body -- and the monitor's
+           own markdown carries the emphasis. Still data, never executed. -->
+      {#each scoped as hub (hub.hubKey)}
+        {#if pane.mailboxes[hub.hubKey]}
+          {@const mailbox = pane.mailboxes[hub.hubKey]}
+          <details open class="group rounded-lg border border-gray-200 bg-white p-3">
+            <summary class="flex items-center gap-2 text-xs cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+              <span class="text-[10px] text-gray-500 truncate">{hub.hubKey}</span>
+              <span class="font-medium text-tommy-navy">Inbox {mailbox?.name}</span>
+              <span class="ml-auto shrink-0 text-[10px] text-gray-500">
+                {mailbox?.messages.length ?? 0} report{(mailbox?.messages.length ?? 0) === 1 ? "" : "s"}
+              </span>
+              <Icon name="chevron-down" class="w-3 h-3 text-gray-500 shrink-0 transition-transform group-open:rotate-180" />
+            </summary>
+            <!-- SIO-1705: the server returns exactly the anchored range (each
+                 estate's newest daily digest onward), so there is no client-side
+                 filter here. The SIO-1704 filter hid rows AFTER a fixed cap had
+                 already decided which rows were fetched, which is the bug. -->
+            {#if !mailbox || mailbox.messages.length === 0}
+              <p class="mt-2 text-xs text-gray-500">No reports from the selected estates.</p>
+            {:else}
+              {#if mailbox.missingDigest.length > 0}
+                <p class="mt-2 text-xs text-amber-700">
+                  No daily digest found for {mailbox.missingDigest.join(", ")} &mdash; showing all
+                  messages held for {mailbox.missingDigest.length === 1 ? "it" : "them"}.
+                </p>
+              {/if}
+              {#if mailbox.windowTruncated}
+                <p class="mt-2 text-xs text-amber-700">
+                  The hub returned a full window, so an older digest may sit beyond it.
+                </p>
+              {/if}
+              <ul class="mt-2 space-y-2">
+                {#each mailbox.messages as message (message.msgId)}
+                  <!-- The monitor's report IS the content here, not a preview of
+                       something openable: there is no detail view to click into, so a
+                       140-char slice just lost the findings. Wrapped in full, and
+                       `break-words` keeps an unbroken log-group or ARN from forcing a
+                       horizontal scrollbar. Still rendered as data, never executed. -->
+                  <li>
+                    <div class="flex items-center gap-2 text-[10px] text-gray-500">
+                      <span class="font-medium truncate">{message.senderName}</span>
+                      <span class="shrink-0">{message.status}</span>
+                    </div>
+                    <!-- SIO-1709: the monitor writes these as markdown (bold findings,
+                         numbered lists), so a literal render showed the asterisks.
+                         SIO-1712: a <span class="block"> wrapped block-level markdown
+                         output; it is a <div>. Same offwhite surface as a spoke reply
+                         body, so a digest and a reply read as one kind of thing --
+                         and gray-700 because gray-500 on offwhite is 4.02:1, under
+                         the 4.5:1 floor. -->
+                    <div class="mt-1 text-gray-700 bg-tommy-offwhite rounded p-2 overflow-x-auto break-words">
+                      <MarkdownRenderer content={message.prompt} />
+                    </div>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+          </details>
+        {/if}
+      {/each}
       {#if pane.entries.length === 0}
         <p class="text-xs text-gray-500">Select a spoke and send it a prompt. The reply appears here, next to the incident analysis.</p>
       {/if}
@@ -303,7 +339,7 @@ function onKeydown(event: KeyboardEvent) {
           <p class="mt-2 text-sm text-gray-700 whitespace-pre-wrap">{entry.prompt}</p>
           {#if !isTerminal(entry.status)}
             <p class="mt-2 text-xs text-gray-500 flex items-center gap-1">
-              <Icon name="spinner" class="w-3 h-3" />
+              <Icon name="spinner" class="w-3 h-3 animate-spin motion-reduce:animate-none" />
               Waiting for {entry.target} (up to {budgetSeconds} s)
             </p>
           {:else}
@@ -331,7 +367,7 @@ function onKeydown(event: KeyboardEvent) {
             {/if}
           {/if}
           {#if entry.sender}
-            <p class="mt-2 text-[11px] text-gray-400">
+            <p class="mt-2 text-[11px] text-gray-600">
               Reply from {entry.target} via {entry.sender} on hub {entry.hubKey}{entry.msgId ? `, message ${entry.msgId}` : ""}
             </p>
           {/if}
