@@ -1356,8 +1356,12 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-1133 Request-Id footer", () => {
 
 // SIO-711: aggregator must not emit defensive phrases like "not fabricated"
 // or "I am not hallucinating". The styles-v3 transcript volunteered this kind
-// of reassurance; the prompt now forbids it explicitly and requires structured
-// "[partial: <field>]" markers instead.
+// of reassurance; the prompt routes uncertainty into structured
+// "[partial: <field>]" markers, the Gaps section, or the score instead.
+// SIO-1699 (prompt audit C-8): the four-phrase banned list was removed on purpose --
+// naming the phrases primes them on the current model -- so the test pins the channel
+// rule and the parser heading, not the tic list. If reassurance prose reappears on the
+// replay eval, re-add one plain sentence, not the list.
 describe.skipIf(!hasRunbooks)("aggregate SIO-711 self-defensive prose forbidden", () => {
 	beforeEach(() => {
 		_setAggregatorLoggerForTesting(makeAggregatorCaptureLogger([]));
@@ -1369,18 +1373,15 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-711 self-defensive prose forbidden"
 		mockLlmContent = "Mock aggregator output. Confidence: 0.5";
 	});
 
-	test("aggregator user prompt contains the DEFENSIVE PROSE FORBIDDEN rule with all banned phrases", async () => {
+	test("aggregator user prompt carries the UNCERTAINTY CHANNELS rule with the structured markers", async () => {
 		await aggregate(makeState({}));
 		const prompt = getUserPromptText();
-		expect(prompt).toContain("DEFENSIVE PROSE FORBIDDEN");
+		expect(prompt).toContain("UNCERTAINTY CHANNELS");
+		expect(prompt).toContain("never through reassurance about the report itself");
 		expect(prompt).toContain("[partial:");
-		// SIO-711: lock in the four phrases the styles-v3 regression motivated.
-		// The original aggregator volunteered "not fabricated" -- a future prompt
-		// edit that drops this phrase from the forbidden list would re-open the bug.
-		expect(prompt).toContain('"not fabricated"');
-		expect(prompt).toContain('"I am not hallucinating"');
-		expect(prompt).toContain('"this is reliable"');
-		expect(prompt).toContain('"based on real data"');
+		expect(prompt).toContain("lower the confidence score");
+		// The banned-phrase list must stay gone (see the describe comment).
+		expect(prompt).not.toContain('"not fabricated"');
 	});
 
 	test("aggregator user prompt instructs the LLM to use a plain '## Gaps' heading", async () => {
@@ -1425,13 +1426,15 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-750 continuation-aware prompt", () 
 			}),
 		);
 		const prompt = getUserPromptText();
-		expect(prompt).toContain("CONTINUING");
+		// SIO-1699 (prompt audit C-6): continuation is stated plainly; the quoted "supersedes"
+		// anti-phrase was dropped so the model is not anchored on the word.
+		expect(prompt).toContain("This turn continues the");
 		expect(prompt).toContain("pvh-services-styles-v3");
 		expect(prompt).toContain("styles-v3 over-fetch");
-		expect(prompt).toContain('do NOT start a fresh report or claim it "supersedes" the prior one');
+		expect(prompt).toContain("rather than writing a fresh report");
 		expect(prompt).toContain("focused question");
 		// The older free-wander phrasing must not appear when a focus is set.
-		expect(prompt).not.toContain("do not repeat the full prior report");
+		expect(prompt).not.toContain("without repeating the full prior report");
 	});
 
 	test("with priorAnswer but no investigationFocus, falls back to legacy guidance", async () => {
@@ -1446,15 +1449,15 @@ describe.skipIf(!hasRunbooks)("aggregate SIO-750 continuation-aware prompt", () 
 		// Legacy phrasing stays as a safety net for the (rare) cold-restart case
 		// where the checkpointer lost the focus but the message history still
 		// carries the prior answer.
-		expect(prompt).toContain("do not repeat the full prior report");
-		expect(prompt).not.toContain("CONTINUING");
+		expect(prompt).toContain("without repeating the full prior report");
+		expect(prompt).not.toContain("This turn continues");
 	});
 
 	test("with no priorAnswer, neither variant appears (clean first-turn prompt)", async () => {
 		await aggregate(makeState({ isFollowUp: false, finalAnswer: "" }));
 		const prompt = getUserPromptText();
-		expect(prompt).not.toContain("CONTINUING");
-		expect(prompt).not.toContain("do not repeat the full prior report");
+		expect(prompt).not.toContain("This turn continues");
+		expect(prompt).not.toContain("without repeating the full prior report");
 	});
 });
 
