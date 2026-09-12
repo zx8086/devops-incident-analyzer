@@ -270,14 +270,17 @@ function onKeydown(event: KeyboardEvent) {
                   type="button"
                   onclick={() => toggleSelect(hub.hubKey, peer.name)}
                   aria-pressed={isSelected(hub.hubKey, peer.name)}
-                  class="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-lg border transition-colors {isSelected(hub.hubKey, peer.name) ? 'border-tommy-accent-blue bg-white' : 'border-transparent hover:bg-white/60'}"
+                  class="w-full text-left flex items-center gap-2 px-2 py-1 rounded-lg border transition-colors {isSelected(hub.hubKey, peer.name) ? 'border-tommy-accent-blue bg-white' : 'border-transparent hover:bg-white/60'}"
                 >
                   <!-- The row is a target picker: the spoke name and whether it can
                        answer. `purpose` is agent-authored prose of unbounded length, and
                        rendering it squeezed the name column until account-shaped names
                        wrapped across three lines. It stays on the wire, unrendered. -->
                   <span class="w-2 h-2 rounded-full shrink-0 {statusDot[peer.status] ?? 'bg-gray-300'}"></span>
-                  <span class="text-sm text-tommy-navy font-medium truncate">{peer.name}</span>
+                  <!-- SIO-1720: text-xs + py-1 gives a 26px row (was 34px). Six spokes
+                       then fit BESIDE an open digest on a normal window; at 34px they
+                       did not, and the list scrolled while the digest was open. -->
+                  <span class="text-xs text-tommy-navy font-medium truncate">{peer.name}</span>
                   <span class="text-xs text-gray-500 shrink-0 ml-auto">{peer.status}</span>
                 </button>
               </li>
@@ -292,7 +295,7 @@ function onKeydown(event: KeyboardEvent) {
        long spoke list on a short pane. min-h-0 alone let flex collapse it.
        SIO-1719: the floor applies only when there IS something here. Reserving
        it while empty stole 250px from the spoke list on a tall pane. -->
-  <div class="overflow-y-auto {hasLowerContent ? 'flex-1 min-h-[8rem]' : 'shrink min-h-0'}">
+  <div class="overflow-y-auto {hasLowerContent ? 'flex-1 min-h-[6rem]' : 'shrink min-h-0'}">
     <section class="px-4 py-3 space-y-3">
       <!-- SIO-1712: the ops inbox card lives HERE now, not nested under the spoke
            picker. A daily digest is the longest thing this pane ever shows, and

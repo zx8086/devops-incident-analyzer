@@ -144,7 +144,7 @@ describe("PiFleetPane", () => {
 		});
 		const body = renderPane(state);
 		const picker = body.indexOf("max-h-[20rem]");
-		const replies = body.indexOf("flex-1 min-h-[8rem]");
+		const replies = body.indexOf("flex-1 min-h-[6rem]");
 		const card = body.indexOf("<details");
 		expect(picker).toBeGreaterThan(-1);
 		expect(replies).toBeGreaterThan(-1);
@@ -354,20 +354,20 @@ describe("PiFleetPane", () => {
 		expect(body).not.toContain("shrink-0 max-h-[20rem]");
 		// SIO-1719: the floor is CONDITIONAL. This fixture has no inbox and no
 		// replies, so the empty region takes only what it needs -- reserving
-		// 8rem here is what starved the spoke list. The floor's presence when
+		// a floor here is what starved the spoke list. Its presence when
 		// content exists has its own test below.
 		expect(body).toContain("shrink min-h-0");
 		// The send box is the pane's primary control; it is never the thing squeezed out.
 		expect(body).toContain("shrink-0 border-t border-gray-200");
 	});
 
-	// SIO-1719: an EMPTY lower region must not reserve flex-1 plus an 8rem floor.
+	// SIO-1719: an EMPTY lower region must not reserve flex-1 plus its floor.
 	// It held 250px on a tall pane while the spoke list above was capped and
 	// scrolling -- the "I cannot see all my agents" report.
 	test("an empty lower region does not reserve space from the spoke list", () => {
 		const body = renderPane(applyAgents(initialPiFleetState(), listing));
 		expect(body).toContain("shrink min-h-0");
-		expect(body).not.toContain("flex-1 min-h-[8rem]");
+		expect(body).not.toContain("flex-1 min-h-[6rem]");
 	});
 
 	test("a loaded inbox gives the lower region its floor back", () => {
@@ -380,7 +380,7 @@ describe("PiFleetPane", () => {
 			messages: [inboxMessage("m1", "monitor-eu-oit-prd", "[info] daily digest", true)],
 		});
 		const body = renderPane(state);
-		expect(body).toContain("flex-1 min-h-[8rem]");
+		expect(body).toContain("flex-1 min-h-[6rem]");
 	});
 
 	// SIO-1719: cream pane, white card and offwhite body are all warm and nearly
@@ -401,6 +401,23 @@ describe("PiFleetPane", () => {
 		const body = renderPane(state);
 		expect(body).toContain("bg-tommy-mist");
 		expect(body).toContain("border-l-2 border-tommy-accent-blue");
+	});
+
+	// SIO-1720: six spokes must fit BESIDE an open digest on a normal window.
+	// At a 545px pane there is 329px for the picker and digest together (header 77
+	// + composer 139 take the rest). A 34px row needed 278px, leaving no room for
+	// the digest floor, so the list scrolled whenever a digest was open. A 26px
+	// row needs 230px, which clears a 6rem (96px) floor at 326px.
+	test("a spoke row is compact enough that six fit beside an open digest", () => {
+		const body = renderPane(applyAgents(initialPiFleetState(), listing));
+		// py-1 + text-xs = 26px, not py-1.5 + text-sm = 34px.
+		expect(body).toContain("px-2 py-1 rounded-lg border");
+		expect(body).not.toContain("px-2 py-1.5 rounded-lg border");
+		expect(body).toContain('class="text-xs text-tommy-navy font-medium truncate"');
+		// header 30 + pad 8 + 6 rows of 26 + 5 gaps of 4 + pad 12 = 226, plus a
+		// 96px floor = 322 <= the 329px a 545px pane affords.
+		const rows = 8 + 30 + 4 + 6 * 26 + 5 * 4 + 12;
+		expect(rows + 96).toBeLessThanOrEqual(329);
 	});
 
 	// SIO-1706: the pane no longer offers to "open the fleet console". The header pi
