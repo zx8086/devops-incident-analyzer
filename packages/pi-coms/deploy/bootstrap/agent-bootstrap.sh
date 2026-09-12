@@ -125,6 +125,45 @@ grep -q 'BUN_INSTALL' "$HOME/.bashrc" || cat >> "$HOME/.bashrc" <<'PROFILE'
 export BUN_INSTALL="$HOME/.bun"
 export PATH="$HOME/.bun/bin:$HOME/.local/bin:$PATH"
 PROFILE
+
+# Context-mode (SIO-1726): sandboxed execute plus an FTS5 index over command
+# output, so an investigation derives its answer from a large output instead of
+# reading the whole thing into the model context. Bun-native despite declaring
+# better-sqlite3: server.bundle.mjs branches on globalThis.Bun and requires
+# bun:sqlite (the specifier is an array join, so it does not grep), and the
+# probes pass with better-sqlite3 deleted outright. Its postinstall is blocked
+# and no node/npm is needed on this host.
+#
+# Installed OUTSIDE $HOME/pi-coms: the bundle directory is replaced whole on
+# every convergence, and `-e npm:context-mode` would install to a temp dir per
+# run, re-downloading ~58MB on every launch.
+if [ "${CTX_MODE_ENABLED:-}" != "false" ] && [ "${CTX_MODE_ENABLED:-}" != "0" ]; then
+  CTX_DIR="$HOME/.pi-ctx"
+  CTX_VERSION="1.0.169"
+  if [ ! -f "$CTX_DIR/node_modules/context-mode/server.bundle.mjs" ] \
+     || [ "$(cat "$CTX_DIR/.ctx-version" 2>/dev/null || echo none)" != "$CTX_VERSION" ]; then
+    mkdir -p "$CTX_DIR"
+    echo '{"name":"pi-ctx","private":true}' > "$CTX_DIR/package.json"
+    # --ignore-scripts is REQUIRED, not a precaution: better-sqlite3 is a declared
+    # dependency whose postinstall shells out to node-gyp, which does not exist on
+    # this Bun-only host, so the install script exits 127 and fails the whole
+    # `bun add` (observed on eu-oit-dev, 2026-09-12). It is skipped safely because
+    # nothing here ever opens better-sqlite3: server.bundle.mjs branches on
+    # globalThis.Bun and requires bun:sqlite instead. A macOS dev box hides this,
+    # because there Bun leaves the same postinstall BLOCKED (untrusted) and the
+    # install succeeds by accident.
+    #
+    # Pinned for the same reason as pi itself (SIO-1631): an unpinned install
+    # would drift the ctx_* tool surface under a running fleet. Never fatal --
+    # this block runs under `bash -euo pipefail`, so the guard keeps a registry
+    # outage from aborting the whole bootstrap.
+    if (cd "$CTX_DIR" && bun add --ignore-scripts "context-mode@$CTX_VERSION"); then
+      echo "$CTX_VERSION" > "$CTX_DIR/.ctx-version"
+    else
+      echo "context-mode install failed; spoke starts without ctx_* tools" >&2
+    fi
+  fi
+fi
 BOOTSTRAP
 
 # ── AWS credentials wait ───────────────────────────────────────────────────
@@ -191,6 +230,34 @@ chown -R "$AGENT_USER:$AGENT_USER" "$AGENT_HOME/.pi"
 PERSONA_VERSION="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$PERSONA_DIR/package.json" | head -1)"
 if [ -n "$PERSONA_VERSION" ]; then
   AGENT_PURPOSE="$AGENT_PURPOSE persona=pi-fleet-v$PERSONA_VERSION"
+fi
+
+# Patched context-mode extension (SIO-1726). Overlaid AFTER the bundle unpack,
+# because the patch ships in the bundle (vendor/context-mode-patch/) while the
+# npm install runs earlier in the agent-user block.
+#
+# Upstream registers its ctx_* tools only from Pi's `before_agent_start`, which
+# Pi emits only on the `_runAgentPrompt` path. coms-net delivers inbound with
+# `{ deliverAs: "followUp", triggerTurn: true }`, and Pi tests `isStreaming`
+# BEFORE `triggerTurn`, so a spoke already mid-turn (pi-monitor keeps it busy)
+# takes `agent.followUp()` and the hook never fires -- the turn reaches the model
+# with no ctx_* tools, silently. The patch adds the `context` hook as a
+# bootstrap backstop; see vendor/context-mode-patch/README.md.
+#
+# Version-keyed on purpose: the patch was built against 1.0.169, so bumping
+# CTX_VERSION must NOT silently overlay it onto a different release. Remove this
+# whole block once the fix is in an upstream release.
+CTX_PATCH_FOR_VERSION="1.0.169"
+CTX_EXT_INSTALLED="$AGENT_HOME/.pi-ctx/node_modules/context-mode/build/adapters/pi/extension.js"
+CTX_PATCH_SRC="$AGENT_HOME/pi-coms/vendor/context-mode-patch/extension.js"
+if [ "${CTX_MODE_ENABLED:-}" != "false" ] && [ "${CTX_MODE_ENABLED:-}" != "0" ] \
+   && [ -f "$CTX_PATCH_SRC" ] && [ -f "$CTX_EXT_INSTALLED" ] \
+   && [ "$(cat "$AGENT_HOME/.pi-ctx/.ctx-version" 2>/dev/null || echo none)" = "$CTX_PATCH_FOR_VERSION" ]; then
+  if ! cmp -s "$CTX_PATCH_SRC" "$CTX_EXT_INSTALLED"; then
+    cp "$CTX_PATCH_SRC" "$CTX_EXT_INSTALLED"
+    chown "$AGENT_USER:$AGENT_USER" "$CTX_EXT_INSTALLED"
+    echo "applied the patched context-mode extension (SIO-1726, for $CTX_PATCH_FOR_VERSION)"
+  fi
 fi
 
 # ── Secrets ────────────────────────────────────────────────────────────────
@@ -469,6 +536,18 @@ for env_file in "$HOME/.coms-env" "$HOME/.coms-env.local"; do
   done < "$env_file"
 done
 
+# Pi emits before_agent_start only from the user-text prompt() path; every spoke
+# turn arrives via pi.sendMessage(), which never fires it, and the context-hook
+# backstop registers one model call too late for the first turn. The vendored
+# context-mode build honours this opt-in to start the bridge at session_start.
+# It must travel as --env: Pi is spawned by the herdr server daemon, not by this
+# script, so an exported variable never reaches it. Same gate as EXT_ARGS below.
+CTX_EXT_PATH="$HOME/.pi-ctx/node_modules/context-mode/build/adapters/pi/extension.js"
+if [ "${CTX_MODE_ENABLED:-}" != "false" ] && [ "${CTX_MODE_ENABLED:-}" != "0" ] \
+   && [ -f "$CTX_EXT_PATH" ]; then
+  ENV_ARGS+=(--env "CONTEXT_MODE_BRIDGE_EAGER=1")
+fi
+
 WS_JSON="$(herdr workspace create \
   --cwd "$HOME/pi-coms" \
   --label "coms-net" \
@@ -490,8 +569,20 @@ if [ -n "PI_PROVIDER_PLACEHOLDER" ]; then
   PROVIDER_ARGS=(--provider "PI_PROVIDER_PLACEHOLDER")
 fi
 
+# Extensions are repeatable (-e/--extension). coms-net is mandatory; context-mode
+# (SIO-1726) is appended only when the install actually produced an extension.js,
+# because a missing -e target is a hard Pi startup error and a spoke that cannot
+# start is worse than one without ctx_* tools. Resolved HERE rather than at
+# bootstrap time so a reload after a failed install re-checks the real state.
+EXT_ARGS=(-e extensions/coms-net.ts)
+CTX_EXT_PATH="$HOME/.pi-ctx/node_modules/context-mode/build/adapters/pi/extension.js"
+if [ "${CTX_MODE_ENABLED:-}" != "false" ] && [ "${CTX_MODE_ENABLED:-}" != "0" ] \
+   && [ -f "$CTX_EXT_PATH" ]; then
+  EXT_ARGS+=(-e "$CTX_EXT_PATH")
+fi
+
 herdr agent start "AGENT_NAME_PLACEHOLDER" --kind pi --pane "$PANE_ID" --timeout 15000 -- \
-  -e extensions/coms-net.ts \
+  "${EXT_ARGS[@]}" \
   --model "PI_MODEL_PLACEHOLDER" \
   "${PROVIDER_ARGS[@]}" \
   --cname "AGENT_NAME_PLACEHOLDER" \
