@@ -74,13 +74,7 @@ function scopedOut(hubKey: string): number {
 // Reachability follows what is SHOWN: a console that cannot address any spoke in
 // scope is no more useful than one with no spokes at all.
 const reachableSpokes = $derived(scoped.reduce((n, hub) => n + hub.peers.length, 0));
-// SIO-1719: does the lower region have anything in it? When it does not, it must
-// not reserve `flex-1` plus a floor -- an empty region held 250px on a tall pane
-// while the spoke list above it was capped and scrolling, which is the
-// "I cannot see all my agents" report. Empty, it takes only what it needs.
-const hasLowerContent = $derived(
-	pane.entries.length > 0 || scoped.some((hub) => pane.mailboxes[hub.hubKey] !== undefined),
-);
+
 const canAskAll = $derived(reachableSpokes > 0);
 
 const statusDot: Record<string, string> = {
@@ -174,34 +168,19 @@ function onKeydown(event: KeyboardEvent) {
     <div class="px-4 py-2 text-xs text-red-700 bg-red-50 border-b border-red-200">{pane.loadError}</div>
   {/if}
 
-  <!-- SIO-1703: the spoke list and the replies were inside ONE scroll container,
-       so reading a long reply scrolled the picker out of view and selecting the
-       next spoke meant scrolling back to the top. Two regions now: the picker is
-       pinned (capped so it can never crowd out the replies, and scrolling
-       internally when the fleet is large), the replies take the rest.
-       SIO-1712: the ops inbox card used to be nested HERE, so a whole daily
-       digest rendered through a letterbox while the replies region sat empty
-       below it. The card moved to the scroll region below; what is left here is
-       rows, which need less.
-       SIO-1715: the cap is a REM, not a percentage. A percentage splits a short
-       pane badly -- this pane is viewport-bound (see +page.svelte) minus the
-       page chrome, and that chrome is tallest exactly when this pane is usable
-       (SIO-1704 means an AWS estate is always selected, so its selector row is
-       always rendered), so 35% of a small total gave the target list more room
-       than the report being read.
-       SIO-1717: the ceiling is 20rem, not 11rem. 11rem (176px) was tuned to
-       beat the digest at every height and ignored how many spokes there are:
-       the real prd fleet is SIX, which needs 278px, so two rows were unreachable
-       while the region below sat empty. The picker is `shrink-0` with a max, so
-       it takes only what its rows need -- 6 spokes fit inside 20rem with 287px
-       still left for the digest on a 565px pane, and only a fleet beyond ~7
-       spokes scrolls internally. Sized to the content, capped for the outlier. -->
-  <!-- SIO-1718: the picker may SHRINK. It was `shrink-0`, so on a short pane it
-       held its full height, starved the digest region to 0px and pushed the
-       composer past the pane's `overflow-hidden` edge -- the spokes looked
-       truncated and the reply box was gone. Now it yields into whatever the
-       digest does not need, scrolling internally instead of clipping. -->
-  <div class="min-h-0 shrink max-h-[20rem] overflow-y-auto border-b border-gray-200">
+  <!-- SIO-1721: ONE scroll container. The picker sizes to its content and the
+       digest flows after it, so there is no cap to tune, no floor to reserve and
+       no shrink rules to balance -- the machinery SIO-1703/1712/1715/1717/1718/
+       1719/1720 accumulated was all the same bug, a capped region that cannot
+       know how much content it has.
+       It is STICKY, not merely first: with a plain flow a long digest (22,748px
+       measured live) scrolls the picker completely out of view, which is the
+       regression SIO-1703 existed to prevent. Pinned, the spoke list and the
+       Inbox button stay reachable however far the report is scrolled.
+       Deliberately uncapped (operator decision): on a short pane the picker can
+       take most of the scroll area while pinned. -->
+  <div class="flex-1 min-h-0 overflow-y-auto">
+    <div class="sticky top-0 z-20 bg-tommy-cream border-b border-gray-200">
     <section class="px-4 pt-2 pb-3">
       {#if pane.hubs.length === 0}
         <p class="text-xs text-gray-500">No spokes are registered on any configured hub.</p>
@@ -217,14 +196,11 @@ function onKeydown(event: KeyboardEvent) {
       {/if}
       {#each scoped as hub (hub.hubKey)}
         <div class="mb-3 last:mb-0">
-          <!-- SIO-1714: STICKY. SIO-1703 pinned the picker as a capped scroll
-               region, which is not the same as pinning what is in it: with six
-               spokes the rows overflow the cap, and scrolling to reach the last
-               one carried the hub header off the top -- so the operator lost
-               both which hub they were looking at and the Inbox button, the two
-               things that must never scroll away. The rows still scroll; their
-               header does not. Opaque background, or rows show through it. -->
-          <div class="sticky top-0 z-10 -mx-4 mb-1 flex items-center gap-2 bg-tommy-cream px-4 py-1">
+          <!-- SIO-1721: no longer sticky itself. SIO-1714 pinned this row because
+               the rows scrolled inside a capped picker and carried it away; the
+               whole picker is pinned now, so a second sticky layer would only
+               fight the first. -->
+          <div class="mb-1 flex items-center gap-2">
             <!-- SIO-1666: the ACCOUNT identifies the hub; the environment is a
                  badge beside it. A bare DEV/PRD badge cannot tell two prd hubs
                  in different domains apart.
@@ -289,13 +265,10 @@ function onKeydown(event: KeyboardEvent) {
         </div>
       {/each}
     </section>
-  </div>
+    </div>
 
-  <!-- SIO-1718: a floor, so the digest can never be squeezed to nothing by a
-       long spoke list on a short pane. min-h-0 alone let flex collapse it.
-       SIO-1719: the floor applies only when there IS something here. Reserving
-       it while empty stole 250px from the spoke list on a tall pane. -->
-  <div class="overflow-y-auto {hasLowerContent ? 'flex-1 min-h-[6rem]' : 'shrink min-h-0'}">
+    <!-- Flows directly after the picker inside the same scroll container. -->
+    <div>
     <section class="px-4 py-3 space-y-3">
       <!-- SIO-1712: the ops inbox card lives HERE now, not nested under the spoke
            picker. A daily digest is the longest thing this pane ever shows, and
@@ -452,6 +425,7 @@ function onKeydown(event: KeyboardEvent) {
         </article>
       {/each}
     </section>
+    </div>
   </div>
 
   <!-- SIO-1714: the composer is a FIXED block, so every pixel it takes comes out
