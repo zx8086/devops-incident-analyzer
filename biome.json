@@ -12,7 +12,8 @@
 			"!docs/reference/agent-memory-openapi.json",
 			"!.fallow",
 			"!packages/pi-coms/deploy",
-			"!packages/pi-coms/scripts/node_modules"
+			"!packages/pi-coms/scripts/node_modules",
+			"!packages/pi-coms/vendor"
 		]
 	},
 	"assist": { "actions": { "source": { "organizeImports": "on" } } },
