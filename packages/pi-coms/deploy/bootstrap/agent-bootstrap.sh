@@ -26,6 +26,11 @@
 #     COMS_PROJECT    (default "default")
 #     MONITOR_REPORT_TO peer receiving monitor reports and the daily digest
 #                     (default ops)
+#     MONITOR_TZ      IANA zone the monitor's crons are read in (default: the
+#                     host zone, which is UTC here). Pins a wall-clock time
+#                     across DST.
+#     MONITOR_DAILY_CRON  cron for the daily checks + digest, read in MONITOR_TZ
+#                     (default: the monitor's own @daily)
 #     REPO_URL        clone URL of this repo (required)
 #     AWS_ACCOUNT_ID  exported to the agent env when set
 #     SSH_PUBLIC_KEY  authorizes one key for AGENT_USER (herdr --remote)
@@ -305,6 +310,14 @@ ENV_FILE="$AGENT_HOME/.coms-env"
   # Reports and the daily digest need an owner that is not the operator's
   # laptop (only online when the operator is); ops is the named owner (O10).
   echo "export PI_MONITOR_REPORT_TO='${MONITOR_REPORT_TO:-ops}'"
+  # SIO-1736: the monitor reads its crons in the host zone, and nothing here
+  # sets TZ, so a wall-clock digest time needs an explicit zone or it drifts an
+  # hour at each DST boundary. Single-quoted because the cron value contains
+  # globs: unquoted, `15 8 * * *` expands against the cwd and the unit dies on
+  # "not a valid identifier". Empty stays unset -- the monitor then keeps the
+  # host zone and its own @daily default, so the deployed behaviour is unchanged.
+  if [ -n "${MONITOR_TZ:-}" ]; then echo "export PI_MONITOR_TZ='$MONITOR_TZ'"; fi
+  if [ -n "${MONITOR_DAILY_CRON:-}" ]; then echo "export PI_MONITOR_DAILY_CRON='$MONITOR_DAILY_CRON'"; fi
   # Route the whole piagent workload (agent, monitor, aws CLI) through the
   # account's DevOpsAgentReadOnly when configured; the ini profile below
   # chains from the instance role with auto-refresh.

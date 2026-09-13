@@ -41,6 +41,18 @@ variable "agent_purpose" {
   default     = ""
 }
 
+variable "monitor_tz" {
+  description = "IANA timezone the monitor's cron schedules are read in (SIO-1736). Empty keeps the host zone, which is UTC: nothing sets TZ on these hosts. Set it to hold a wall-clock time across DST."
+  type        = string
+  default     = ""
+}
+
+variable "monitor_daily_cron" {
+  description = "Cron for the daily checks and digest, read in monitor_tz. Empty keeps the monitor's own @daily default."
+  type        = string
+  default     = ""
+}
+
 variable "coms_project" {
   description = "coms-net project namespace. Keep all accounts in one project so the laptop sees every agent; names distinguish accounts."
   type        = string

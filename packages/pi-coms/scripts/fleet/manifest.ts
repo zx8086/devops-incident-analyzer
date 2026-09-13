@@ -112,6 +112,10 @@ export const FleetManifestSchema = z.object({
 		instance_type: z.string().min(1),
 		pi_model: z.string().min(1),
 		external_id: z.partialRecord(FleetEnvironmentSchema, z.string().min(1)),
+		// SIO-1736: fleet-wide, because a digest time that differs per account is
+		// a reporting bug, not a feature. Absent keeps the host zone (UTC here).
+		monitor_tz: z.string().min(1).optional(),
+		monitor_daily_cron: z.string().min(1).optional(),
 	}),
 	spokes: z.record(z.string().regex(/^[a-z0-9-]+$/), SpokeSchema),
 });

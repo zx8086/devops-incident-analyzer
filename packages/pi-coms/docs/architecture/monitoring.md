@@ -164,7 +164,7 @@ Env-with-defaults; no config files. Set in the systemd unit environment or `~/.c
 | `PI_MONITOR_CERT_REGIONS` | host region + `us-east-1` | Comma-separated ACM regions the cert check scans |
 | `PI_MONITOR_REVIEW_CRON` | `@weekly` | Suppression review mail (monthly: `0 0 1 * *` + window 31) |
 | `PI_MONITOR_REVIEW_WINDOW_DAYS` | `7` | Match window the review counts over |
-| `PI_MONITOR_TZ` | unset (host zone) | IANA zone all four schedules are read in. Spokes set no `TZ`, so unset means UTC; set it to keep a wall-clock time across DST. An unknown zone throws at startup |
+| `PI_MONITOR_TZ` | unset (host zone) | IANA zone all four schedules are read in. Spokes set no `TZ`, so unset means UTC; set it to keep a wall-clock time across DST. An unknown zone throws at startup. Set fleet-wide via `defaults.monitor_tz` in `fleet.yaml` (the bootstrap writes it into `.coms-env`), not by hand on the host -- `~/.coms-env.local` does not survive an instance replacement |
 | `PI_MONITOR_INVESTIGATE_TARGET` | `aws-<account_id>` | Peer that investigates findings |
 | `PI_MONITOR_INVESTIGATE_TIMEOUT_MS` | `300000` (5 min) | Investigation deadline base |
 | `PI_MONITOR_INVESTIGATE_PER_FINDING_MS` | `60000` (1 min) | Added to the deadline per finding in the batch |
