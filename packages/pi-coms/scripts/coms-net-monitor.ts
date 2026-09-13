@@ -69,6 +69,21 @@ const DAILY_CRON = process.env.PI_MONITOR_DAILY_CRON ?? "@daily";
 // Anti-masking cadence: the ledger hides findings by design, so what it ate
 // gets re-surfaced on a schedule. Monthly cadence: cron "0 0 1 * *", window 31.
 const REVIEW_CRON = process.env.PI_MONITOR_REVIEW_CRON ?? "@weekly";
+// Bun.cron reads a schedule in the HOST's zone, and nothing in the bootstrap or
+// the agent module ever sets TZ -- so a spoke interprets every cron above in UTC.
+// An operator wanting a wall-clock local digest had to hand-convert, and the
+// result drifted by an hour at each DST boundary. Naming a zone here pins the
+// schedules to wall-clock time instead; unset keeps the host zone, so deployed
+// behaviour is unchanged until someone sets it. The option key is `tz`: Bun
+// accepts and silently IGNORES an unknown key, so a typo would read as a working
+// config while the schedule quietly stayed on host time.
+const MONITOR_TZ = process.env.PI_MONITOR_TZ;
+const cronOpts = MONITOR_TZ ? { tz: MONITOR_TZ } : undefined;
+// bun-types 1.3.12 declares only the 2-arg callback overload; the `tz` option is
+// a 1.4 runtime feature (hosts run 1.4.2, verified 3-arg accepted). Typed narrowly
+// here rather than cast at each call site, so the shim disappears by deleting this
+// one line once @types/bun catches up.
+const cronTz = Bun.cron as unknown as (schedule: string, handler: () => unknown, options?: { tz: string }) => unknown;
 const REVIEW_WINDOW_DAYS = Number(process.env.PI_MONITOR_REVIEW_WINDOW_DAYS ?? 7);
 const INVESTIGATE_TARGET = process.env.PI_MONITOR_INVESTIGATE_TARGET ?? `aws-${ACCOUNT_ID}`;
 const INVESTIGATE_TIMEOUT_MS = Number(process.env.PI_MONITOR_INVESTIGATE_TIMEOUT_MS ?? 300_000);
@@ -615,13 +630,13 @@ function main(): void {
 	void (async () => {
 		await coms.start();
 		log(
-			`registered as ${coms.name}; checks ${CHECK_CRON}; hourly ${HOURLY_CRON}; daily ${DAILY_CRON}; review ${REVIEW_CRON}; reporting to ${REPORT_TO}; budget ${INVESTIGATE_BUDGET.perDay}/day, ${INVESTIGATE_BUDGET.perResourcePerDay}/resource/day; ${describeControls(controls)}`,
+			`registered as ${coms.name}; checks ${CHECK_CRON}; hourly ${HOURLY_CRON}; daily ${DAILY_CRON}; review ${REVIEW_CRON}; tz ${MONITOR_TZ ?? "host"}; reporting to ${REPORT_TO}; budget ${INVESTIGATE_BUDGET.perDay}/day, ${INVESTIGATE_BUDGET.perResourcePerDay}/resource/day; ${describeControls(controls)}`,
 		);
-		Bun.cron(CHECK_CRON, unlessPaused("15-minute checks", runChecksNow));
-		Bun.cron(HOURLY_CRON, unlessPaused("hourly checks", runHourlyNow));
-		Bun.cron(DAILY_CRON, () => dailyGuard(dailyDigest));
+		cronTz(CHECK_CRON, unlessPaused("15-minute checks", runChecksNow), cronOpts);
+		cronTz(HOURLY_CRON, unlessPaused("hourly checks", runHourlyNow), cronOpts);
+		cronTz(DAILY_CRON, () => dailyGuard(dailyDigest), cronOpts);
 		// No journal writes and no checks: needs no guard against the others.
-		Bun.cron(REVIEW_CRON, () => void suppressionReview());
+		cronTz(REVIEW_CRON, () => void suppressionReview(), cronOpts);
 	})();
 
 	const shutdown = () => {
