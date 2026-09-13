@@ -61,6 +61,12 @@ defaults:
   external_id:
     dev: devops-agent-dev-access
     prd: devops-agent-prod-access   # the analyzer's ExternalId on DevOpsAgentReadOnly
+  # SIO-1736/SIO-1737: the monitor reads its cron schedules in the HOST zone, and
+  # nothing sets TZ on these hosts, so both default to UTC. Naming a zone pins the
+  # daily digest to a wall-clock time across DST; omit both to keep UTC and the
+  # monitor's own @daily. Quote the cron -- it contains globs.
+  # monitor_tz: Europe/Amsterdam
+  # monitor_daily_cron: "15 8 * * *"
 
 spokes:
   eu-shared-services-dev:
