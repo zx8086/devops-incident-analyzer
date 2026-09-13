@@ -72,7 +72,7 @@ The hub used to store nothing durable. It now persists **prompt and response bod
 | Property | Value |
 |----------|-------|
 | Peer name | Code default `monitor-aws-<account_id>`; the bootstrap sets `monitor-<alias>` (e.g. `monitor-eu-oit-dev`) on deployed hosts. Registered `--explicit` (hidden from lists and broadcasts unless named) |
-| Scheduling | In-process `Bun.cron()` (requires Bun >= 1.4): `*/15 * * * *` for alarms/logs/drift, `7 * * * *` for the ingestion heartbeat (minute 7 keeps its guard off the */15 boundary), `@daily` for cost/trail/certs/listener-certs/watchlist + digest |
+| Scheduling | In-process `Bun.cron()` (requires Bun >= 1.4): `*/15 * * * *` for alarms/logs/drift, `7 * * * *` for the ingestion heartbeat (minute 7 keeps its guard off the */15 boundary), `@daily` for cost/trail/certs/listener-certs/watchlist + digest. Schedules are read in `PI_MONITOR_TZ` when set, otherwise the host zone -- UTC on deployed spokes, since nothing sets `TZ` |
 | State | `bun:sqlite` at `~/.pi/monitor/state.db`: watermarks, alert fingerprints, resource snapshots (instances, security groups, route tables, RDS, Lambda), cost history, journal, unsent-report queue |
 | Model usage | None inside the monitor. Zero token spend when no findings |
 | Modules | `scripts/monitor/checks/{alarms,logs,drift,resource-drift,cost}.ts`, `state.ts`, `report.ts`, `coms.ts` (headless coms-net client) |
@@ -160,10 +160,11 @@ Env-with-defaults; no config files. Set in the systemd unit environment or `~/.c
 | `PI_MONITOR_REPORT_TTL_MS` | `1209600000` (14 d) | Mailbox TTL on reports |
 | `PI_MONITOR_CHECK_CRON` | `*/15 * * * *` | Alarm/log/drift cadence |
 | `PI_MONITOR_HOURLY_CRON` | `7 * * * *` | Ingestion heartbeat (minute 7: never a */15 boundary) |
-| `PI_MONITOR_DAILY_CRON` | `@daily` | Cost/trail/certs/listener-certs/watchlist + digest (midnight UTC) |
+| `PI_MONITOR_DAILY_CRON` | `@daily` | Cost/trail/certs/listener-certs/watchlist + digest (midnight in `PI_MONITOR_TZ`, else host zone = UTC on deployed spokes) |
 | `PI_MONITOR_CERT_REGIONS` | host region + `us-east-1` | Comma-separated ACM regions the cert check scans |
 | `PI_MONITOR_REVIEW_CRON` | `@weekly` | Suppression review mail (monthly: `0 0 1 * *` + window 31) |
 | `PI_MONITOR_REVIEW_WINDOW_DAYS` | `7` | Match window the review counts over |
+| `PI_MONITOR_TZ` | unset (host zone) | IANA zone all four schedules are read in. Spokes set no `TZ`, so unset means UTC; set it to keep a wall-clock time across DST. An unknown zone throws at startup |
 | `PI_MONITOR_INVESTIGATE_TARGET` | `aws-<account_id>` | Peer that investigates findings |
 | `PI_MONITOR_INVESTIGATE_TIMEOUT_MS` | `300000` (5 min) | Investigation deadline base |
 | `PI_MONITOR_INVESTIGATE_PER_FINDING_MS` | `60000` (1 min) | Added to the deadline per finding in the batch |
