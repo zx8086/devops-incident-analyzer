@@ -10,6 +10,21 @@ const manifest = parseManifest(EXAMPLE);
 const IDENTIFIER = /subnet-|10\.\d+\.\d+\.\d+|\b\d{12}\b|<set by/;
 
 describe("fleet root renderer (SIO-1653)", () => {
+	// SIO-1736: the monitor reads its crons in the host zone (UTC on these
+	// hosts), so a wall-clock digest time has to be rendered in, not hand-set on
+	// the host -- an instance replacement wipes ~/.coms-env.local.
+	test("monitor_tz and monitor_daily_cron render only when the manifest sets them", () => {
+		expect(renderRoot(manifest, "eu-oit-dev")["main.tf"]).not.toContain("monitor_tz");
+		const tuned = parseManifest(
+			EXAMPLE.replace(/^(defaults:\n)/m, '$1  monitor_tz: Europe/Amsterdam\n  monitor_daily_cron: "15 8 * * *"\n'),
+		);
+		const main = renderRoot(tuned, "eu-oit-dev")["main.tf"] ?? "";
+		expect(main).toContain('monitor_tz           = "Europe/Amsterdam"');
+		// Quoted in HCL: the value carries globs, and an unquoted one broke a
+		// production monitor when set by hand ("not a valid identifier").
+		expect(main).toContain('monitor_daily_cron   = "15 8 * * *"');
+	});
+
 	test("a dev spoke root uses create mode and takes every identifier from tfvars", () => {
 		const root = renderRoot(manifest, "eu-oit-dev");
 		expect(root["main.tf"]).toContain('readonly_role_mode   = "create"');

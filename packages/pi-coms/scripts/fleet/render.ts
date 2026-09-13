@@ -234,7 +234,7 @@ module "agent" {
   repo_url             = var.repo_url
   agent_name           = var.agent_name
   coms_project         = ${hcl(hub.project ?? "default")}
-  subnet_id            = var.agent_subnet_id
+${manifest.defaults.monitor_tz ? `  monitor_tz           = ${hcl(manifest.defaults.monitor_tz)}\n` : ""}${manifest.defaults.monitor_daily_cron ? `  monitor_daily_cron   = ${hcl(manifest.defaults.monitor_daily_cron)}\n` : ""}  subnet_id            = var.agent_subnet_id
   associate_public_ip  = false
   instance_type        = ${hcl(spoke.instance_type ?? manifest.defaults.instance_type)}
   pi_model             = var.pi_model

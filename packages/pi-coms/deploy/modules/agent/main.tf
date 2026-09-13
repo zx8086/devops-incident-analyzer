@@ -601,6 +601,8 @@ resource "aws_instance" "agent" {
     agent_name           = local.agent_name
     agent_purpose        = local.agent_purpose
     coms_project         = var.coms_project
+    monitor_tz           = var.monitor_tz
+    monitor_daily_cron   = var.monitor_daily_cron
     pi_model             = var.pi_model
     pi_provider          = var.pi_provider
     ssh_public_key       = var.ssh_public_key
