@@ -88,7 +88,7 @@ describe("checkCompliance (SIO-1740)", () => {
 		const overflow = out.find((f) => f.dedup_key.startsWith("compliance:overflow:"));
 		expect(overflow?.summary).toContain("5 more resource(s)");
 		// The cap hides them from the report, never from the journal.
-		const omitted = (overflow?.evidence as { omitted: { resourceId: string }[] }).omitted;
+		const omitted = ((overflow?.evidence ?? {}) as { omitted?: { resourceId: string }[] }).omitted ?? [];
 		expect(omitted.map((o) => o.resourceId)).toEqual(["sg-20", "sg-21", "sg-22", "sg-23", "sg-24"]);
 	});
 
