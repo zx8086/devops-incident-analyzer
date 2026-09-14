@@ -37,7 +37,7 @@ export const DiagnosisSchema = z.object({
 	probable_cause: z.string(),
 	affected_resources: z.array(z.string()),
 	suggested_action: z.string(),
-	evidence: z.array(z.object({ command: z.string(), observation: z.string() })).min(1),
+	evidence: z.array(z.object({ command: z.string().trim().min(1), observation: z.string().trim().min(1) })).min(1),
 	confidence: z.number().min(0).max(1),
 });
 export type Diagnosis = z.infer<typeof DiagnosisSchema>;
@@ -65,7 +65,10 @@ export const DIAGNOSIS_RESPONSE_SCHEMA = {
 						items: {
 							type: "object",
 							required: ["command", "observation"],
-							properties: { command: { type: "string" }, observation: { type: "string" } },
+							properties: {
+								command: { type: "string", minLength: 1 },
+								observation: { type: "string", minLength: 1 },
+							},
 						},
 					},
 					confidence: {

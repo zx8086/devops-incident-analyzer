@@ -549,6 +549,10 @@ describe("diagnosis evidence contract (SIO-1741)", () => {
 	test("a diagnosis without evidence or with an empty evidence list is rejected", () => {
 		expect(parseDiagnoses({ diagnoses: [{ ...base, confidence: 0.5 }] })).toBeNull();
 		expect(parseDiagnoses({ diagnoses: [{ ...base, confidence: 0.5, evidence: [] }] })).toBeNull();
+		// A blank citation is no citation.
+		expect(
+			parseDiagnoses({ diagnoses: [{ ...base, confidence: 0.5, evidence: [{ command: " ", observation: "" }] }] }),
+		).toBeNull();
 		expect(parseDiagnoses({ diagnoses: [{ ...base, evidence: [{ command: "aws x", observation: "y" }] }] })).toBeNull();
 		expect(
 			parseDiagnoses({ diagnoses: [{ ...base, confidence: 1.5, evidence: [{ command: "aws x", observation: "y" }] }] }),
