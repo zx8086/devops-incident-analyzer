@@ -114,4 +114,20 @@ describe("checkCompliance (SIO-1740)", () => {
 		);
 		expect(next.map((f) => f.dedup_key)).toEqual(["compliance:restricted-rdp:sg-3"]);
 	});
+
+	// Second review round on #774: initialization must outlive the pairs.
+	test("an initialized rule whose violations cleared still reports a new one after a transient read failure", async () => {
+		const state = new MonitorState(":memory:");
+		await checkCompliance(fakeClient({ "restricted-rdp": ["sg-1"], other: ["x1"] }), state, { now: NOW });
+		// Cleared: the rule is no longer NON_COMPLIANT at all.
+		expect((await checkCompliance(fakeClient({ other: ["x1"] }), state, { now: NOW })).map((f) => f.severity)).toEqual([
+			"info",
+		]);
+		// A new violation appears but the detail read fails this run.
+		const denied = await checkCompliance(fakeClient({ "restricted-rdp": "deny", other: ["x1"] }), state, { now: NOW });
+		expect(denied.map((f) => f.dedup_key)).toEqual(["compliance:error:restricted-rdp"]);
+		// The retry must report it: this rule was initialized long ago.
+		const out = await checkCompliance(fakeClient({ "restricted-rdp": ["sg-2"], other: ["x1"] }), state, { now: NOW });
+		expect(out.map((f) => f.dedup_key)).toEqual(["compliance:restricted-rdp:sg-2"]);
+	});
 });

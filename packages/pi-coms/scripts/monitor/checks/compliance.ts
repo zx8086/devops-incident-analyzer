@@ -22,8 +22,14 @@ const ERROR_REALERT_MS = 86_400_000;
 const SEP = "|";
 // A rule whose details could never be read has no baseline yet. The sentinel
 // keeps that fact in the snapshot so the first successful read establishes the
-// baseline silently instead of reporting every standing violation as new.
+// baseline silently instead of reporting every standing violation as new. The
+// SEEN marker records that a rule HAS been read completely once, separately
+// from its current pairs: a rule whose violations all cleared has no pairs
+// but is still initialized, so a later transient read failure must not
+// re-arm the silent baseline and swallow the next violation.
 const UNREAD = "__unread__";
+const SEEN = "__seen__";
+const isMarker = (k: string): boolean => k.endsWith(`${SEP}${UNREAD}`) || k.endsWith(`${SEP}${SEEN}`);
 
 export type CheckComplianceOpts = { now?: number; warnCap?: number };
 
@@ -58,13 +64,16 @@ export async function checkCompliance(
 
 	const prev = state.getSnapshot(SNAPSHOT) ?? {};
 	const current: Record<string, string> = {};
+	// Initialization outlives the pairs: carry every SEEN marker forward.
+	for (const [k, v] of Object.entries(prev)) if (k.endsWith(`${SEP}${SEEN}`)) current[k] = v;
 	// Rules read completely for the first time this run: their pairs are the
 	// baseline, not findings.
 	const baselineOnly = new Set<string>();
 	for (const rule of rules) {
 		const prefix = `${rule}${SEP}`;
 		const unreadKey = `${prefix}${UNREAD}`;
-		const hadBaseline = Object.keys(prev).some((k) => k.startsWith(prefix) && k !== unreadKey);
+		const seenKey = `${prefix}${SEEN}`;
+		const initialized = prev[seenKey] !== undefined;
 		const read: Record<string, string> = {};
 		try {
 			let token: string | undefined;
@@ -88,13 +97,14 @@ export async function checkCompliance(
 				token = resp.NextToken;
 			} while (token);
 			Object.assign(current, read);
-			if (prev[unreadKey] !== undefined) baselineOnly.add(rule);
+			current[seenKey] = "seen";
+			if (!initialized) baselineOnly.add(rule);
 		} catch (e) {
 			// One unreadable rule keeps its previous pairs (so they do not read as
-			// resolved), or the sentinel when it never had any, and says so once a
-			// day; the other rules still diff. A partial page never persists.
-			if (hadBaseline) {
-				for (const [k, v] of Object.entries(prev)) if (k.startsWith(prefix) && k !== unreadKey) current[k] = v;
+			// resolved), or the sentinel when it was never initialized, and says so
+			// once a day; the other rules still diff. A partial page never persists.
+			if (initialized) {
+				for (const [k, v] of Object.entries(prev)) if (k.startsWith(prefix) && !isMarker(k)) current[k] = v;
 			} else {
 				current[unreadKey] = "unread";
 			}
@@ -117,7 +127,7 @@ export async function checkCompliance(
 	const diffed = diffSnapshot(state, current, {
 		snapshot: SNAPSHOT,
 		added: (k) => {
-			if (k.endsWith(`${SEP}${UNREAD}`)) return null;
+			if (isMarker(k)) return null;
 			const { rule, type, id } = split(k);
 			if (baselineOnly.has(rule)) return null;
 			return {
@@ -134,7 +144,7 @@ export async function checkCompliance(
 		// no longer REPORTED non-compliant: the resource may be fixed, the rule
 		// changed, or the rule deleted. The wording claims exactly that.
 		removed: (k) => {
-			if (k.endsWith(`${SEP}${UNREAD}`)) return null;
+			if (isMarker(k)) return null;
 			const { rule, type, id } = split(k);
 			return {
 				family: "compliance",
