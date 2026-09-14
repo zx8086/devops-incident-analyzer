@@ -22,25 +22,26 @@ function fakeClient(groups: Record<string, Record<number, number>>) {
 	};
 }
 
-// A group chatty at this hour on each of the prior 7 days.
-const activeBaseline = (lastHourValue: number): Record<number, number> => {
-	const p: Record<number, number> = { 0: lastHourValue };
-	for (let d = 1; d <= 7; d++) p[d * 24] = 100;
-	return p;
-};
-
 // SIO-1711: the recent hours spelled out, index 0 being the observed hour.
-// activeBaseline cannot express "only ONE zero hour" -- it leaves hours 1 and 2
-// absent, and CloudWatch omits zero-count hours, so absent reads as zero and the
-// fixture would already be a full zero run.
-const withRecentHours = (recent: number[], daily = 100): Record<number, number> => {
+// CloudWatch omits zero-count hours, so an absent hour reads as zero: a fixture
+// that only sets the daily same-hour points would already express a full zero
+// run in front AND a 23-hour quiet run every day behind it. SIO-1739 gates on
+// the group's own longest quiet run, so an active group must be spelled out as
+// active for every hour of the 7-day window (`holes` punches quiet hours into
+// that history).
+const WINDOW = 7 * 24;
+const withRecentHours = (recent: number[], daily = 100, holes: number[] = []): Record<number, number> => {
 	const p: Record<number, number> = {};
+	for (let h = 0; h <= WINDOW; h++) p[h] = daily;
 	recent.forEach((v, h) => {
 		p[h] = v;
 	});
-	for (let d = 1; d <= 7; d++) p[d * 24] = daily;
+	for (const h of holes) p[h] = 0;
 	return p;
 };
+
+// A group chatty every hour of the prior 7 days.
+const activeBaseline = (lastHourValue: number): Record<number, number> => withRecentHours([lastHourValue]);
 
 describe("checkIngestion", () => {
 	test("a normally-active group at zero warns once", async () => {
@@ -125,7 +126,44 @@ describe("checkIngestion", () => {
 		expect(out).toHaveLength(1);
 		expect(out[0].severity).toBe("warn");
 		expect(out[0].summary).toContain("0 events for 3h");
-		expect((out[0].evidence as { zeroHours: number }).zeroHours).toBe(3);
+		expect((out[0].evidence as { zeroRun: number }).zeroRun).toBe(3);
+	});
+
+	// SIO-1739: the forwarder that kept warning after SIO-1711 had 49 of 72 hours
+	// at zero; three quiet hours was its normal week, not a stop. The gate is the
+	// group's own longest quiet run in the window plus one.
+	test("SIO-1739: a quiet run no longer than the group's own history does not warn", async () => {
+		const state = new MonitorState(":memory:");
+		// Five-hour hole a day and a bit ago; three zero hours now.
+		const out = await checkIngestion(
+			fakeClient({ "/aws/lambda/fwd": withRecentHours([0, 0, 0], 27, [30, 31, 32, 33, 34]) }),
+			state,
+			{ now: NOW },
+		);
+		expect(out).toHaveLength(0);
+	});
+
+	test("SIO-1739: the same group warns once its quiet run outlasts its history", async () => {
+		const state = new MonitorState(":memory:");
+		const out = await checkIngestion(
+			fakeClient({ "/aws/lambda/fwd": withRecentHours([0, 0, 0, 0, 0, 0], 27, [30, 31, 32, 33, 34]) }),
+			state,
+			{ now: NOW },
+		);
+		expect(out).toHaveLength(1);
+		expect(out[0].summary).toContain("0 events for 6h (longest quiet run in the prior 7d: 5h)");
+		const ev = out[0].evidence as { zeroRun: number; gateHours: number; histMaxZeroRun: number };
+		expect(ev).toMatchObject({ zeroRun: 6, gateHours: 6, histMaxZeroRun: 5 });
+	});
+
+	test("SIO-1739: the finding carries the series the spoke needs, so it never re-derives a baseline", async () => {
+		const state = new MonitorState(":memory:");
+		const out = await checkIngestion(fakeClient({ "/ecs/api": withRecentHours([0, 0, 0], 40) }), state, { now: NOW });
+		const ev = out[0].evidence as { last24h: number[]; sameHour7d: number[]; baselineMedian: number };
+		expect(ev.last24h).toHaveLength(24);
+		expect(ev.last24h.slice(-3)).toEqual([0, 0, 0]);
+		expect(ev.sameHour7d).toEqual([40, 40, 40, 40, 40, 40, 40]);
+		expect(ev.baselineMedian).toBe(40);
 	});
 
 	test("SIO-1711: an alternating 0,5,0 group never warns", async () => {
