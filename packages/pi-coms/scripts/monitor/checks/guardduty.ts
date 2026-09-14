@@ -62,6 +62,11 @@ export async function checkGuardDuty(
 			nextToken = resp.NextToken;
 		} while (nextToken);
 
+		// Nothing is marked or advanced until every batch is in hand: a later
+		// batch that throws must not leave the earlier ones fingerprinted but
+		// undelivered (they would then be silent for a day on the retry).
+		const collected: Finding[] = [];
+		const toMark: string[] = [];
 		let newest = since;
 		for (let i = 0; i < ids.length; i += PAGE) {
 			const resp = (await client.send(
@@ -75,9 +80,9 @@ export async function checkGuardDuty(
 				// UpdatedAt on every recurrence, which would otherwise page per event.
 				const key = `guardduty:${id}:`;
 				if (!state.shouldAlert(key, REALERT_MS)) continue;
-				state.markAlerted(key, "guardduty");
+				toMark.push(key);
 				const resourceType = f.Resource?.ResourceType ?? "unknown";
-				findings.push({
+				collected.push({
 					family: "guardduty",
 					severity: severityFor(f.Severity),
 					resource: `${resourceType}/${id}`,
@@ -98,9 +103,13 @@ export async function checkGuardDuty(
 				});
 			}
 		}
-		// The watermark moves only after a fully successful pass; a throw above
-		// leaves it in place so nothing is skipped on the next run.
-		state.setWatermark(wmKey, newest);
+		for (const key of toMark) state.markAlerted(key, "guardduty");
+		findings.push(...collected);
+		// The watermark is bounded by this scan's start: a detail read can carry
+		// an UpdatedAt from after the listing, and moving past it would skip a
+		// finding that appeared in between. Findings updated during the scan are
+		// listed again next time and fall to the fingerprint.
+		state.setWatermark(wmKey, Math.min(newest, now));
 	}
 	return findings;
 }

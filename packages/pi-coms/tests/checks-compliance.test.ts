@@ -52,7 +52,7 @@ describe("checkCompliance (SIO-1740)", () => {
 		expect(out[0].summary).toContain("restricted-rdp NON_COMPLIANT");
 	});
 
-	test("a resource back in compliance is info; a rule that disappears resolves all its resources", async () => {
+	test("a pair that vanishes is info worded as no-longer-reported, never as verified compliance", async () => {
 		const state = new MonitorState(":memory:");
 		await checkCompliance(fakeClient({ "restricted-rdp": ["sg-1"], "access-keys-rotated": ["u1"] }), state, {
 			now: NOW,
@@ -61,6 +61,11 @@ describe("checkCompliance (SIO-1740)", () => {
 		expect(out).toHaveLength(2);
 		expect(out.every((f) => f.severity === "info")).toBe(true);
 		expect(out.map((f) => f.resource).sort()).toEqual(["AWS::EC2::SecurityGroup/sg-1", "AWS::EC2::SecurityGroup/u1"]);
+		for (const f of out) {
+			expect(f.summary).toContain("no longer reports");
+			expect(f.summary).not.toContain("back in compliance");
+			expect(f.evidence).toMatchObject({ verified: false });
+		}
 	});
 
 	test("a rule whose details cannot be read keeps its pairs and says so once a day", async () => {
@@ -82,5 +87,31 @@ describe("checkCompliance (SIO-1740)", () => {
 		expect(out.filter((f) => f.severity === "warn")).toHaveLength(20);
 		const overflow = out.find((f) => f.dedup_key.startsWith("compliance:overflow:"));
 		expect(overflow?.summary).toContain("5 more resource(s)");
+		// The cap hides them from the report, never from the journal.
+		const omitted = (overflow?.evidence as { omitted: { resourceId: string }[] }).omitted;
+		expect(omitted.map((o) => o.resourceId)).toEqual(["sg-20", "sg-21", "sg-22", "sg-23", "sg-24"]);
+	});
+
+	// Review finding on #774: a rule whose first read fails must not persist an
+	// empty baseline, or its standing violations all read as new once it reads.
+	test("a rule unreadable on its first appearance establishes its baseline silently when it becomes readable", async () => {
+		const state = new MonitorState(":memory:");
+		await checkCompliance(fakeClient({ other: ["x1"] }), state, { now: NOW });
+		const denied = await checkCompliance(fakeClient({ other: ["x1"], "restricted-rdp": "deny" }), state, { now: NOW });
+		expect(denied.map((f) => f.dedup_key)).toEqual(["compliance:error:restricted-rdp"]);
+		// First complete read: the two standing violations are the baseline.
+		const first = await checkCompliance(fakeClient({ other: ["x1"], "restricted-rdp": ["sg-1", "sg-2"] }), state, {
+			now: NOW,
+		});
+		expect(first).toHaveLength(0);
+		// From here on a genuinely new pair is a finding again.
+		const next = await checkCompliance(
+			fakeClient({ other: ["x1"], "restricted-rdp": ["sg-1", "sg-2", "sg-3"] }),
+			state,
+			{
+				now: NOW,
+			},
+		);
+		expect(next.map((f) => f.dedup_key)).toEqual(["compliance:restricted-rdp:sg-3"]);
 	});
 });

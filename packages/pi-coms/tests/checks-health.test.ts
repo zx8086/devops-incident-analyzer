@@ -42,7 +42,7 @@ describe("checkHealth (SIO-1740)", () => {
 		expect(out[0].severity).toBe("warn");
 		expect(out[0].family).toBe("health");
 		expect(out[0].resource).toBe("EC2/eu-central-1");
-		expect(out[0].dedup_key).toBe(`health:${issue.arn}:`);
+		expect(out[0].dedup_key).toBe(`health:${issue.arn}:warn`);
 		expect(out[0].evidence).toMatchObject({ category: "issue", status: "open", eventTypeCode: issue.eventTypeCode });
 		expect(await checkHealth(fakeClient([issue]), state, { now: NOW })).toHaveLength(0);
 	});
@@ -89,5 +89,22 @@ describe("checkHealth (SIO-1740)", () => {
 		await expect(
 			checkHealth(fakeClient(new Error("Throttling")), new MonitorState(":memory:"), { now: NOW }),
 		).rejects.toThrow("Throttling");
+	});
+
+	// Review finding on #774: an ARN-only key kept a scheduled change at info for
+	// a day after it crossed into the 48h window.
+	test("a scheduled change crossing into the 48h window is warned at once, not after the info re-alert", async () => {
+		const state = new MonitorState(":memory:");
+		const change: Ev = {
+			...issue,
+			arn: "arn:change",
+			eventTypeCategory: "scheduledChange",
+			startTime: new Date(NOW + 49 * HOUR),
+		};
+		const first = await checkHealth(fakeClient([change]), state, { now: NOW });
+		expect(first.map((f) => f.severity)).toEqual(["info"]);
+		const later = await checkHealth(fakeClient([change]), state, { now: NOW + 2 * HOUR });
+		expect(later.map((f) => f.severity)).toEqual(["warn"]);
+		expect(await checkHealth(fakeClient([change]), state, { now: NOW + 3 * HOUR })).toHaveLength(0);
 	});
 });

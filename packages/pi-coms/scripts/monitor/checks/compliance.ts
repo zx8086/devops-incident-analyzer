@@ -20,8 +20,19 @@ const SNAPSHOT = "config-compliance";
 const WARN_CAP = 20;
 const ERROR_REALERT_MS = 86_400_000;
 const SEP = "|";
+// A rule whose details could never be read has no baseline yet. The sentinel
+// keeps that fact in the snapshot so the first successful read establishes the
+// baseline silently instead of reporting every standing violation as new.
+const UNREAD = "__unread__";
 
 export type CheckComplianceOpts = { now?: number; warnCap?: number };
+
+type Pair = { rule: string; type: string; id: string };
+
+function split(k: string): Pair {
+	const [rule, type, ...rest] = k.split(SEP);
+	return { rule: rule ?? "", type: type ?? "", id: rest.join(SEP) };
+}
 
 export async function checkCompliance(
 	client: AwsClient,
@@ -47,7 +58,14 @@ export async function checkCompliance(
 
 	const prev = state.getSnapshot(SNAPSHOT) ?? {};
 	const current: Record<string, string> = {};
+	// Rules read completely for the first time this run: their pairs are the
+	// baseline, not findings.
+	const baselineOnly = new Set<string>();
 	for (const rule of rules) {
+		const prefix = `${rule}${SEP}`;
+		const unreadKey = `${prefix}${UNREAD}`;
+		const hadBaseline = Object.keys(prev).some((k) => k.startsWith(prefix) && k !== unreadKey);
+		const read: Record<string, string> = {};
 		try {
 			let token: string | undefined;
 			do {
@@ -65,14 +83,21 @@ export async function checkCompliance(
 					if (!id) continue;
 					// The value is constant per pair on purpose: re-evaluations
 					// change the recorded time, and that must not read as drift.
-					current[[rule, q?.ResourceType ?? "unknown", id].join(SEP)] = "non_compliant";
+					read[[rule, q?.ResourceType ?? "unknown", id].join(SEP)] = "non_compliant";
 				}
 				token = resp.NextToken;
 			} while (token);
+			Object.assign(current, read);
+			if (prev[unreadKey] !== undefined) baselineOnly.add(rule);
 		} catch (e) {
 			// One unreadable rule keeps its previous pairs (so they do not read as
-			// resolved) and says so once a day; the other rules still diff.
-			for (const [k, v] of Object.entries(prev)) if (k.startsWith(`${rule}${SEP}`)) current[k] = v;
+			// resolved), or the sentinel when it never had any, and says so once a
+			// day; the other rules still diff. A partial page never persists.
+			if (hadBaseline) {
+				for (const [k, v] of Object.entries(prev)) if (k.startsWith(prefix) && k !== unreadKey) current[k] = v;
+			} else {
+				current[unreadKey] = "unread";
+			}
 			const key = `compliance:error:${rule}`;
 			if (state.shouldAlert(key, ERROR_REALERT_MS)) {
 				state.markAlerted(key, "compliance");
@@ -89,14 +114,12 @@ export async function checkCompliance(
 		}
 	}
 
-	const split = (k: string): { rule: string; type: string; id: string } => {
-		const [rule, type, ...rest] = k.split(SEP);
-		return { rule: rule ?? "", type: type ?? "", id: rest.join(SEP) };
-	};
 	const diffed = diffSnapshot(state, current, {
 		snapshot: SNAPSHOT,
 		added: (k) => {
+			if (k.endsWith(`${SEP}${UNREAD}`)) return null;
 			const { rule, type, id } = split(k);
+			if (baselineOnly.has(rule)) return null;
 			return {
 				family: "compliance",
 				severity: "warn",
@@ -107,15 +130,19 @@ export async function checkCompliance(
 				at,
 			};
 		},
+		// Only NON_COMPLIANT results are ever read, so a pair that disappears is
+		// no longer REPORTED non-compliant: the resource may be fixed, the rule
+		// changed, or the rule deleted. The wording claims exactly that.
 		removed: (k) => {
+			if (k.endsWith(`${SEP}${UNREAD}`)) return null;
 			const { rule, type, id } = split(k);
 			return {
 				family: "compliance",
 				severity: "info",
 				resource: `${type}/${id}`,
-				summary: `Config rule ${rule} back in compliance for ${type} ${id}`,
-				dedup_key: `compliance:${rule}:${id}:resolved:${at}`,
-				evidence: { rule, resourceType: type, resourceId: id },
+				summary: `Config rule ${rule} no longer reports ${type} ${id} NON_COMPLIANT (resource fixed, rule changed, or rule removed)`,
+				dedup_key: `compliance:${rule}:${id}:cleared:${at}`,
+				evidence: { rule, resourceType: type, resourceId: id, verified: false },
 				at,
 			};
 		},
@@ -134,8 +161,8 @@ export async function checkCompliance(
 		},
 	});
 	// A rule rolled out across an estate flips hundreds of resources at once;
-	// the report names the first few and counts the rest, the journal keeps the
-	// snapshot so nothing is lost.
+	// the report names the first few and the overflow finding carries every
+	// omitted pair, so the journal keeps the identities the cap hides.
 	const warns = diffed.filter((f) => f.severity === "warn");
 	const rest = diffed.filter((f) => f.severity !== "warn");
 	findings.push(...warns.slice(0, warnCap), ...rest);
@@ -146,7 +173,7 @@ export async function checkCompliance(
 			resource: "config",
 			summary: `${warns.length - warnCap} more resource(s) newly NON_COMPLIANT this run (cap ${warnCap})`,
 			dedup_key: `compliance:overflow:${at}`,
-			evidence: { total: warns.length, shown: warnCap },
+			evidence: { total: warns.length, shown: warnCap, omitted: warns.slice(warnCap).map((f) => f.evidence) },
 			at,
 		});
 	}

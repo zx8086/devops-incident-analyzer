@@ -8,7 +8,9 @@ const HOUR = 3_600_000;
 
 type GdFinding = { Id: string; Severity: number; Type: string; Title: string; UpdatedAt: string };
 
-function fakeClient(detectors: string[], findings: GdFinding[]) {
+// failOnId: GetFindings throws when the requested batch contains this id, as a
+// throttled or failed later page would.
+function fakeClient(detectors: string[], findings: GdFinding[], failOnId?: string) {
 	const seen: { since?: number }[] = [];
 	return {
 		seen,
@@ -28,6 +30,7 @@ function fakeClient(detectors: string[], findings: GdFinding[]) {
 				}
 				case "GetFindingsCommand": {
 					const ids = cmd.input.FindingIds as string[];
+					if (failOnId && ids.includes(failOnId)) throw new Error("ThrottlingException");
 					return {
 						Findings: findings
 							.filter((f) => ids.includes(f.Id))
@@ -81,5 +84,28 @@ describe("checkGuardDuty (SIO-1740)", () => {
 		// older medium finding was never listed.
 		expect(client.seen[0].since).toBe(Date.parse(high.UpdatedAt));
 		expect(state.getWatermark("guardduty:d1")).toBe(Date.parse(later.UpdatedAt));
+	});
+
+	// Review findings on #774.
+	test("a later GetFindings batch that throws leaves nothing marked and the watermark untouched", async () => {
+		const state = new MonitorState(":memory:");
+		const many: GdFinding[] = Array.from({ length: 51 }, (_, i) => ({
+			...high,
+			Id: `f-${i}`,
+			UpdatedAt: new Date(NOW - HOUR + i * 1000).toISOString(),
+		}));
+		await expect(checkGuardDuty(fakeClient(["d1"], many, "f-50"), state, { now: NOW })).rejects.toThrow("Throttling");
+		expect(state.alertKeys("guardduty:")).toHaveLength(0);
+		expect(state.getWatermark("guardduty:d1")).toBeNull();
+		// The retry delivers all 51, none suppressed by the failed pass.
+		const out = await checkGuardDuty(fakeClient(["d1"], many), state, { now: NOW });
+		expect(out).toHaveLength(51);
+	});
+
+	test("the watermark never moves past the scan's own start", async () => {
+		const state = new MonitorState(":memory:");
+		const recurring = { ...high, UpdatedAt: new Date(NOW + 2 * HOUR).toISOString() };
+		await checkGuardDuty(fakeClient(["d1"], [recurring]), state, { now: NOW });
+		expect(state.getWatermark("guardduty:d1")).toBe(NOW);
 	});
 });

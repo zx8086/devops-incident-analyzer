@@ -10,6 +10,7 @@ import type { AwsClient } from "./alarms.ts";
 const REALERT_MS = 86_400_000;
 // A scheduled change further out than this is planning, not an incident.
 const UPCOMING_WARN_MS = 48 * 3_600_000;
+const UNSUPPORTED_KEY = "health:unsupported:";
 const UNSUPPORTED_REALERT_MS = 7 * 86_400_000;
 
 export type CheckHealthOpts = { now?: number; regions?: string[] };
@@ -54,15 +55,14 @@ export async function checkHealth(
 		// call. That is a fact about the account, not a broken check: say it
 		// once a week instead of degrading the digest every cycle.
 		if ((e as { name?: string }).name === "SubscriptionRequiredException") {
-			const key = "health:unsupported:";
-			if (state.shouldAlert(key, UNSUPPORTED_REALERT_MS)) {
-				state.markAlerted(key, "health");
+			if (state.shouldAlert(UNSUPPORTED_KEY, UNSUPPORTED_REALERT_MS)) {
+				state.markAlerted(UNSUPPORTED_KEY, "health");
 				findings.push({
 					family: "health",
 					severity: "info",
 					resource: "aws-health",
 					summary: "AWS Health API not available in this account (needs a Business or Enterprise support plan)",
-					dedup_key: key,
+					dedup_key: UNSUPPORTED_KEY,
 					evidence: { error: errorMessage(e) },
 					at,
 				});
@@ -72,22 +72,29 @@ export async function checkHealth(
 		throw e;
 	}
 
-	// An event that is no longer open re-alerts if it ever reopens.
+	// The key carries the severity, so a scheduled change that crosses into
+	// the 48h window moves from info to warn at once instead of waiting out
+	// the info key's re-alert interval. An event that is no longer open loses
+	// its keys and re-alerts if it ever reopens.
 	const live = new Set(events.map((e) => `health:${e.arn ?? "unknown"}:`));
 	for (const key of state.alertKeys("health:")) {
-		if (key !== "health:unsupported:" && !live.has(key)) state.clearAlerts(key);
+		if (key === UNSUPPORTED_KEY) continue;
+		// The ARN carries colons of its own; the severity is the last segment.
+		const prefix = key.slice(0, key.lastIndexOf(":") + 1);
+		if (!live.has(prefix)) state.clearAlerts(key);
 	}
 
 	for (const e of events) {
 		const arn = e.arn ?? "unknown";
-		const key = `health:${arn}:`;
+		const severity = severityFor(e, now);
+		const key = `health:${arn}:${severity}`;
 		if (!state.shouldAlert(key, REALERT_MS)) continue;
 		state.markAlerted(key, "health");
 		const region = e.region ?? "global";
 		const service = e.service ?? "unknown";
 		findings.push({
 			family: "health",
-			severity: severityFor(e, now),
+			severity,
 			resource: `${service}/${region}`,
 			summary: `AWS Health ${e.eventTypeCategory ?? "event"} ${e.eventTypeCode ?? ""} (${e.statusCode ?? "unknown"}) for ${service} in ${region}`,
 			dedup_key: key,
