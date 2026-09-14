@@ -13,6 +13,9 @@ export const FamilySchema = z.enum([
 	"trail",
 	"cert",
 	"watchlist",
+	"health",
+	"compliance",
+	"guardduty",
 ]);
 export type Family = z.infer<typeof FamilySchema>;
 
