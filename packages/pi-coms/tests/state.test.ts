@@ -36,12 +36,30 @@ describe("MonitorState", () => {
 		expect(s.getSnapshot("instances")).toEqual({ "i-1": "running" });
 	});
 
-	test("cost baseline is the mean of prior days, excluding the target day", () => {
+	test("cost baseline is the median of prior days, excluding the target day (SIO-1739)", () => {
 		const s = new MonitorState(":memory:");
 		expect(s.costBaseline("2026-08-30", 14)).toBeNull();
 		for (let d = 1; d <= 14; d++) s.recordCost(`2026-08-${String(d).padStart(2, "0")}`, 1.0);
 		s.recordCost("2026-08-30", 99);
 		expect(s.costBaseline("2026-08-30", 14)).toBeCloseTo(1.0);
+		// One spike day leaves the median where it was; the mean would read 8.1.
+		s.recordCost("2026-08-07", 100);
+		expect(s.costBaseline("2026-08-30", 14)).toBeCloseTo(1.0);
+	});
+
+	test("priorDiagnosis: newest agent-made diagnosis for the exact key inside the window (SIO-1739)", () => {
+		const s = new MonitorState(":memory:");
+		const diag = { probable_cause: "idle", affected_resources: [], suggested_action: "none" };
+		s.journal("finding", { dedup_key: "alarm:cpu:ALARM", diagnosis: { ...diag, probable_cause: "old" } });
+		s.journal("finding", { dedup_key: "alarm:cpu:ALARM", diagnosis: diag });
+		// A reused row and a null-diagnosis row never stand in for a fresh one.
+		s.journal("finding", { dedup_key: "alarm:cpu:ALARM", diagnosis: diag, reused_from: "x" });
+		s.journal("finding", { dedup_key: "alarm:cpu:ALARM", diagnosis: null });
+		// A different key that merely contains the string.
+		s.journal("finding", { dedup_key: "alarm:cpu:ALARM:extra", diagnosis: { ...diag, probable_cause: "other" } });
+		const got = s.priorDiagnosis("alarm:cpu:ALARM", 60_000);
+		expect(got?.diagnosis).toEqual(diag);
+		expect(s.priorDiagnosis("alarm:mem:ALARM", 60_000)).toBeNull();
 	});
 
 	test("journal and prior incidents", () => {

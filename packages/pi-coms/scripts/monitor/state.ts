@@ -85,7 +85,10 @@ export class MonitorState {
 			.query("SELECT usd FROM costs WHERE date < ? ORDER BY date DESC LIMIT ?")
 			.all(excludeDate, days) as { usd: number }[];
 		if (rows.length === 0) return null;
-		return rows.reduce((a, r) => a + Number(r.usd), 0) / rows.length;
+		// Median, not mean (SIO-1739): one spike day inflated the mean for the
+		// next two weeks and hid every rise under it.
+		const sorted = rows.map((r) => Number(r.usd)).sort((a, b) => a - b);
+		return sorted[Math.floor(sorted.length / 2)];
 	}
 	latestCost(): { date: string; usd: number } | null {
 		const r = this.db.query("SELECT date, usd FROM costs ORDER BY date DESC LIMIT 1").get() as {
@@ -122,6 +125,27 @@ export class MonitorState {
 				"SELECT ts, payload FROM journal WHERE kind = 'finding' AND payload LIKE '%' || ? || '%' ORDER BY id DESC LIMIT ?",
 			)
 			.all(resource, limit) as { ts: string; payload: string }[];
+	}
+	// The newest finding row for this exact dedup_key that carries a diagnosis
+	// the agent actually produced (a reused one is excluded, or a flapping alarm
+	// could ride one diagnosis forever) inside the window (SIO-1739).
+	priorDiagnosis(dedupKey: string, sinceMs: number): { ts: string; diagnosis: unknown } | null {
+		const r = this.db
+			.query(
+				`SELECT ts, json_extract(payload, '$.diagnosis') AS diagnosis FROM journal
+				WHERE kind = 'finding' AND ts_ms >= ?
+				AND json_extract(payload, '$.dedup_key') = ?
+				AND json_extract(payload, '$.diagnosis') IS NOT NULL
+				AND json_extract(payload, '$.reused_from') IS NULL
+				ORDER BY id DESC LIMIT 1`,
+			)
+			.get(Date.now() - sinceMs, dedupKey) as { ts: string; diagnosis: string } | null;
+		if (!r) return null;
+		try {
+			return { ts: r.ts, diagnosis: JSON.parse(r.diagnosis) };
+		} catch {
+			return null;
+		}
 	}
 
 	// The known-gap ledger: operator-accepted imperfections stop re-raising as
