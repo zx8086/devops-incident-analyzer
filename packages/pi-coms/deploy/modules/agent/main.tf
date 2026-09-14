@@ -302,7 +302,10 @@ resource "aws_iam_policy" "pi_coms_extensions" {
       // verify it: the instance role carries AmazonSSMManagedInstanceCore for
       // the host's OWN registration, but the workload role could not list
       // managed instances. Cost Anomaly Detection is the signal the 14-day
-      // baseline approximates. All non-write; parameter VALUES stay behind the
+      // baseline approximates. Deliberately NOT granted: ssm:GetCommandInvocation
+      // and ssm:ListCommandInvocations, which return Run Command stdout/stderr
+      // (anything an ad-hoc command ever printed), a data-plane read in all but
+      // name. Metadata only; parameter VALUES stay behind the
       // SecretAndDataPlaneDeny below.
       [{
         Sid    = "FleetOperationsReads"
@@ -310,8 +313,6 @@ resource "aws_iam_policy" "pi_coms_extensions" {
         Action = [
           "ssm:DescribeInstanceInformation",
           "ssm:DescribeInstancePatchStates",
-          "ssm:ListCommandInvocations",
-          "ssm:GetCommandInvocation",
           "ce:GetAnomalies",
           "ce:GetAnomalyMonitors",
         ]

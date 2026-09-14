@@ -416,7 +416,7 @@ when the AgentCore policies are next revised. The most recent addition:
 
 | Sid | Actions | Why (ticket) |
 |---|---|---|
-| `FleetOperationsReads` | `ssm:DescribeInstanceInformation`, `ssm:DescribeInstancePatchStates`, `ssm:ListCommandInvocations`, `ssm:GetCommandInvocation`, `ce:GetAnomalies`, `ce:GetAnomalyMonitors` | A monitor escalated "worker instances not SSM-managed" for four days and the account's own spoke could not verify it; the instance role's `AmazonSSMManagedInstanceCore` covers the host's own registration, not listing managed instances. Cost Anomaly Detection is the signal the monitor's 14-day baseline approximates (SIO-1742) |
+| `FleetOperationsReads` | `ssm:DescribeInstanceInformation`, `ssm:DescribeInstancePatchStates`, `ce:GetAnomalies`, `ce:GetAnomalyMonitors` (Run Command invocation reads are deliberately absent: they return command stdout/stderr) | A monitor escalated "worker instances not SSM-managed" for four days and the account's own spoke could not verify it; the instance role's `AmazonSSMManagedInstanceCore` covers the host's own registration, not listing managed instances. Cost Anomaly Detection is the signal the monitor's 14-day baseline approximates (SIO-1742) |
 
 Parameter values stay denied: the policy's `SecretAndDataPlaneDeny` keeps
 `ssm:GetParameter*` explicitly denied whatever the Allows above say.
