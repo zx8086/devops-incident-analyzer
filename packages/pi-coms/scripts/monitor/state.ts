@@ -88,7 +88,10 @@ export class MonitorState {
 		// Median, not mean (SIO-1739): one spike day inflated the mean for the
 		// next two weeks and hid every rise under it.
 		const sorted = rows.map((r) => Number(r.usd)).sort((a, b) => a - b);
-		return sorted[Math.floor(sorted.length / 2)];
+		const mid = Math.floor(sorted.length / 2);
+		// 14 days is even: the mean of the two middle days, or the baseline
+		// would sit on the upper one and hide a rise near the threshold.
+		return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 	}
 	latestCost(): { date: string; usd: number } | null {
 		const r = this.db.query("SELECT date, usd FROM costs ORDER BY date DESC LIMIT 1").get() as {

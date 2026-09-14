@@ -132,6 +132,32 @@ describe("checkAlarms", () => {
 		expect(out[0].evidence).toMatchObject({ flapping: 3 });
 	});
 
+	test("SIO-1739: alarm history is walked past the first page before deciding it is not flapping", async () => {
+		const state = new MonitorState(":memory:");
+		const pages = [
+			{
+				AlarmHistoryItems: [
+					{ HistorySummary: "Alarm updated from OK to ALARM" },
+					{ HistorySummary: "Alarm updated from ALARM to OK" },
+				],
+				NextToken: "p2",
+			},
+			{ AlarmHistoryItems: [{ HistorySummary: "Alarm updated from OK to ALARM" }], NextToken: "p3" },
+			{ AlarmHistoryItems: [{ HistorySummary: "Alarm updated from OK to ALARM" }] },
+		];
+		const client = {
+			send: async (cmd: { constructor: { name: string }; input: { NextToken?: string } }) => {
+				if (cmd.constructor.name !== "DescribeAlarmHistoryCommand") {
+					return { MetricAlarms: [{ AlarmName: "pager", StateValue: "ALARM" }], CompositeAlarms: [] };
+				}
+				return pages[cmd.input.NextToken === "p2" ? 1 : cmd.input.NextToken === "p3" ? 2 : 0];
+			},
+		};
+		const out = await checkAlarms(client, state);
+		expect(out[0].severity).toBe("warn");
+		expect(out[0].evidence).toMatchObject({ flapping: 3 });
+	});
+
 	test("SIO-1739: two transitions is not flapping; a denied history read leaves severity alone", async () => {
 		const two = await checkAlarms(
 			fakeClient([{ AlarmName: "a", StateValue: "ALARM" }], 2),

@@ -42,18 +42,25 @@ function isLowSideIdle(a: MetricAlarm): boolean {
 // whole alarm check down, so a failed read counts as no flap information.
 async function alarmTransitions(client: AwsClient, name: string, now: number): Promise<number | null> {
 	try {
-		const resp = (await client.send(
-			new DescribeAlarmHistoryCommand({
-				AlarmName: name,
-				HistoryItemType: "StateUpdate",
-				StartDate: new Date(now - HISTORY_WINDOW_MS),
-				EndDate: new Date(now),
-				MaxRecords: 100,
-			}),
-		)) as DescribeAlarmHistoryCommandOutput;
-		const items = resp.AlarmHistoryItems;
-		if (!Array.isArray(items)) return null;
-		return items.filter((i) => /to ALARM$/.test(i.HistorySummary ?? "")).length;
+		let count = 0;
+		let nextToken: string | undefined;
+		do {
+			const resp = (await client.send(
+				new DescribeAlarmHistoryCommand({
+					AlarmName: name,
+					HistoryItemType: "StateUpdate",
+					StartDate: new Date(now - HISTORY_WINDOW_MS),
+					EndDate: new Date(now),
+					MaxRecords: 100,
+					NextToken: nextToken,
+				}),
+			)) as DescribeAlarmHistoryCommandOutput;
+			const items = resp.AlarmHistoryItems;
+			if (!Array.isArray(items)) return null;
+			count += items.filter((i) => /to ALARM$/.test(i.HistorySummary ?? "")).length;
+			nextToken = resp.NextToken;
+		} while (nextToken);
+		return count;
 	} catch {
 		return null;
 	}

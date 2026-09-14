@@ -47,6 +47,14 @@ describe("MonitorState", () => {
 		expect(s.costBaseline("2026-08-30", 14)).toBeCloseTo(1.0);
 	});
 
+	test("an even-length cost history takes the mean of its two middle days", () => {
+		const s = new MonitorState(":memory:");
+		for (let d = 1; d <= 7; d++) s.recordCost(`2026-08-${String(d).padStart(2, "0")}`, 1.0);
+		for (let d = 8; d <= 14; d++) s.recordCost(`2026-08-${String(d).padStart(2, "0")}`, 3.0);
+		// Upper-middle would read 3.0 and hide a rise that clears 2.0.
+		expect(s.costBaseline("2026-08-30", 14)).toBeCloseTo(2.0);
+	});
+
 	test("priorDiagnosis: newest agent-made diagnosis for the exact key inside the window (SIO-1739)", () => {
 		const s = new MonitorState(":memory:");
 		const diag = { probable_cause: "idle", affected_resources: [], suggested_action: "none" };
