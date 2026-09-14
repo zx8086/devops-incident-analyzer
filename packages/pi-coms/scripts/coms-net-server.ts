@@ -560,6 +560,11 @@ export class MailStore {
 		if (!cols.some((c) => c.name === "mailbox")) {
 			this.db.exec("ALTER TABLE messages ADD COLUMN mailbox INTEGER NOT NULL DEFAULT 0");
 		}
+		// SIO-1738: one-way mail written before `stored` existed carries `queued`
+		// (or `delivered`, if a session under the target name was open when it
+		// landed). Both are non-terminal, so the row was never purgeable and read
+		// as in-flight. Idempotent: after the first run there is nothing to match.
+		this.db.exec("UPDATE messages SET status = 'stored' WHERE mailbox = 1 AND status IN ('queued','delivered')");
 	}
 	upsert(m: ComsMessage): void {
 		this.db
@@ -598,7 +603,7 @@ export class MailStore {
 	}
 	loadNonTerminal(): ComsMessage[] {
 		const rows = this.db
-			.query("SELECT * FROM messages WHERE status IN ('queued','delivered') ORDER BY created_at ASC")
+			.query("SELECT * FROM messages WHERE status IN ('queued','delivered','stored') ORDER BY created_at ASC")
 			.all() as MessageRow[];
 		return rows.map((r) => ({
 			msg_id: r.msg_id,
@@ -646,14 +651,19 @@ export class MailStore {
 		}));
 	}
 
-	// Retention: terminal mailbox rows live until their expiry; completed
-	// conversations live retainMs past completion. Non-terminal rows belong to
-	// the live sweep, which marks them expired in memory first.
+	// Retention: mailbox rows live until their expiry; completed conversations
+	// live retainMs past completion. Non-terminal rows belong to the live sweep,
+	// which marks them expired in memory first.
+	//
+	// SIO-1738: the mailbox delete used to also require status IN
+	// ('complete','error','timeout'). A one-way report never reaches any of
+	// those -- it is `stored` on write (and was `queued` before) -- so the
+	// predicate matched ZERO rows and reports accumulated forever: 616 rows on
+	// the prd hub, none of them ever deletable. Expiry alone is the rule for
+	// mailbox mail; `expires_at` was always populated correctly.
 	purgeExpired(retainMs = 1_209_600_000): void {
 		const now = Date.now();
-		this.db
-			.query("DELETE FROM messages WHERE mailbox = 1 AND status IN ('complete','error','timeout') AND expires_at < ?")
-			.run(new Date(now).toISOString());
+		this.db.query("DELETE FROM messages WHERE mailbox = 1 AND expires_at < ?").run(new Date(now).toISOString());
 		this.db
 			.query("DELETE FROM messages WHERE mailbox = 0 AND status IN ('complete','error','timeout') AND completed_at < ?")
 			.run(new Date(now - retainMs).toISOString());
@@ -775,13 +785,16 @@ function flushQueuedMail(p: ProjectState, projectName: string, sessionId: string
 	if (!entry) return;
 	const mail = mailFor(projectName);
 	for (const m of p.messages.values()) {
-		if (m.status === "queued" && m.target_session === null && m.target_name === entry.name) {
+		// SIO-1738: `stored` (one-way mail) is claimed too -- the flush below is
+		// what raises the recipient's passive arrival notice. It is terminal, so
+		// unlike `queued` it is never flipped to `delivered` afterwards.
+		if ((m.status === "queued" || m.status === "stored") && m.target_session === null && m.target_name === entry.name) {
 			m.target_session = sessionId;
 			mail.upsert(m);
 		}
 	}
 	const pendingList = [...p.messages.values()]
-		.filter((m) => m.status === "queued" && m.target_session === sessionId)
+		.filter((m) => (m.status === "queued" || m.status === "stored") && m.target_session === sessionId)
 		.sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0));
 	for (const m of pendingList) {
 		sendToStream(p, sessionId, "prompt", {
@@ -794,12 +807,14 @@ function flushQueuedMail(p: ProjectState, projectName: string, sessionId: string
 			hops: m.hops,
 			mailbox: m.mailbox,
 		});
-		m.status = "delivered";
-		m.delivered_at = nowIso();
-		mail.upsert(m);
+		if (!m.mailbox) {
+			m.status = "delivered";
+			m.delivered_at = nowIso();
+			mail.upsert(m);
+		}
 		sendToStream(p, m.sender_session, "message_status", {
 			msg_id: m.msg_id,
-			status: "delivered",
+			status: m.status,
 		});
 		logMessageSend(m.sender_name, entry.name, m.msg_id, m.prompt, m.hops, true);
 	}
@@ -820,7 +835,7 @@ function recoverMail(): void {
 		for (const m of mailFor(name).loadNonTerminal()) {
 			// Sessions do not survive a restart; delivered-but-unanswered mail is
 			// re-queued (at-least-once) so the next session under the name gets it.
-			if (m.status === "delivered" || m.target_session !== null) {
+			if (!m.mailbox && (m.status === "delivered" || m.target_session !== null)) {
 				m.status = "queued";
 				m.target_session = null;
 				delete m.delivered_at;
@@ -1247,7 +1262,9 @@ async function handleSendMessage(req: Request, auth: AuthResult): Promise<Respon
 						response_schema:
 							body.response_schema && typeof body.response_schema === "object" ? body.response_schema : null,
 						hops,
-						status: "queued",
+						// SIO-1738: a one-way report is terminal on write; only a
+						// request-reply message enters the queued lifecycle.
+						status: isMailbox ? "stored" : "queued",
 						mailbox: isMailbox,
 						response: null,
 						error: null,
@@ -1258,13 +1275,13 @@ async function handleSendMessage(req: Request, auth: AuthResult): Promise<Respon
 					mailFor(projectName).upsert(msg);
 					sendToStream(p, body.sender_session, "message_status", {
 						msg_id: msg.msg_id,
-						status: "queued",
+						status: msg.status,
 					});
 					logMessageSend(sender.name, `${desired}(offline)`, msg.msg_id, msg.prompt, hops, false);
 					const resp: SendResponse = {
 						ok: true,
 						msg_id: msg.msg_id,
-						status: "queued",
+						status: msg.status,
 						target_session: null,
 					};
 					return json(resp);
@@ -1305,7 +1322,7 @@ async function handleSendMessage(req: Request, auth: AuthResult): Promise<Respon
 		conversation_id: body.conversation_id && typeof body.conversation_id === "string" ? body.conversation_id : null,
 		response_schema: body.response_schema && typeof body.response_schema === "object" ? body.response_schema : null,
 		hops,
-		status: "queued",
+		status: isMailbox ? "stored" : "queued",
 		mailbox: isMailbox,
 		response: null,
 		error: null,
@@ -1317,7 +1334,7 @@ async function handleSendMessage(req: Request, auth: AuthResult): Promise<Respon
 
 	sendToStream(p, body.sender_session, "message_status", {
 		msg_id: msg.msg_id,
-		status: "queued",
+		status: msg.status,
 	});
 
 	const targetWriter = p.streams.get(target.session_id);
@@ -1336,12 +1353,20 @@ async function handleSendMessage(req: Request, auth: AuthResult): Promise<Respon
 			hops: msg.hops,
 			mailbox: msg.mailbox,
 		});
-		msg.status = "delivered";
-		msg.delivered_at = nowIso();
-		mailFor(projectName).upsert(msg);
+		// SIO-1738: the push still happens for one-way mail -- it is what drives
+		// the recipient's passive arrival notice (extensions/coms-net.ts, a
+		// followUp with triggerTurn:false). But a report is TERMINAL on write, so
+		// it keeps `stored`: flipping it to `delivered` is what made the same
+		// report read differently depending on whether a session happened to be
+		// open, and left it outside the retention sweep either way.
+		if (!msg.mailbox) {
+			msg.status = "delivered";
+			msg.delivered_at = nowIso();
+			mailFor(projectName).upsert(msg);
+		}
 		sendToStream(p, body.sender_session, "message_status", {
 			msg_id: msg.msg_id,
-			status: "delivered",
+			status: msg.status,
 		});
 	}
 

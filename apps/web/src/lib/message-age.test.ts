@@ -42,6 +42,8 @@ describe("isNotableStatus", () => {
 	test("the delivery lifecycle of a one-way report is not worth showing", () => {
 		expect(isNotableStatus("queued")).toBe(false);
 		expect(isNotableStatus("delivered")).toBe(false);
+		// SIO-1738: the terminal state of a one-way report, not an anomaly.
+		expect(isNotableStatus("stored")).toBe(false);
 		expect(isNotableStatus("complete")).toBe(false);
 	});
 

@@ -93,6 +93,8 @@ const envBadge: Record<PiFleetEnvironment, string> = {
 const entryChip: Record<string, string> = {
 	sending: "bg-yellow-100 text-yellow-800 border-yellow-200",
 	queued: "bg-yellow-100 text-yellow-800 border-yellow-200",
+	// SIO-1738: one-way mail is terminal on write; neutral, not "in flight".
+	stored: "bg-gray-100 text-gray-700 border-gray-200",
 	delivered: "bg-yellow-100 text-yellow-800 border-yellow-200",
 	budget_exhausted: "bg-yellow-100 text-yellow-800 border-yellow-200",
 	complete: "bg-green-100 text-green-800 border-green-200",

@@ -26,7 +26,8 @@ describe("mailbox send", () => {
 		const r = await send(hub, "SENDER", "laptop", "report 1", 86_400_000);
 		expect(r.status).toBe(200);
 		const body = (await r.json()) as SendResponse;
-		expect(body.status).toBe("queued");
+		// SIO-1738: long-TTL (mailbox) mail is stored, not queued.
+		expect(body.status).toBe("stored");
 		expect(body.target_session).toBeNull();
 	});
 
@@ -66,7 +67,12 @@ describe("mailbox send", () => {
 		await Bun.sleep(100);
 		const r = await send(hub, "SENDER", "laptop", "hello there", 86_400_000);
 		const body = (await r.json()) as SendResponse;
-		expect(body.status).toBe("delivered");
+		// SIO-1738: one-way mail is TERMINAL on write. It is still pushed to an
+		// online target (that is what raises the recipient's passive arrival
+		// notice), but the push no longer rewrites the status -- which is what made
+		// the same report read `delivered` or `queued` purely by whether a session
+		// happened to be open, and kept it outside the retention sweep either way.
+		expect(body.status).toBe("stored");
 		expect(body.target_session).toBe("TGT");
 		await resp.body?.cancel();
 	});

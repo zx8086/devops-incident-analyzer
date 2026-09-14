@@ -9,7 +9,14 @@ export type AgentStatus = "online" | "stale" | "offline";
 // `complete` always carries a non-blank `response`: a submitted reply whose
 // response is null/blank and whose error is null is stored as `error` with
 // `error: "empty_reply"` (SIO-1678), so consumers never read an empty success.
-export type MessageStatus = "queued" | "delivered" | "complete" | "error" | "timeout";
+// SIO-1738: `stored` is the TERMINAL status of a one-way mailbox message (a
+// monitor report). It is at its destination the moment the hub writes it --
+// nothing claims it, nothing replies to it -- so it never enters the
+// queued -> delivered -> complete lifecycle the request-reply classes use.
+// Reports previously carried `queued` forever (or `delivered`, if a session
+// under the target name happened to be open), which read as "in flight" and
+// kept retention from ever deleting them.
+export type MessageStatus = "queued" | "delivered" | "stored" | "complete" | "error" | "timeout";
 
 export type AgentCard = {
 	session_id: string;

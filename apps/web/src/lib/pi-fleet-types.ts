@@ -40,9 +40,13 @@ export const PiFleetAgentsResponseSchema = z.object({
 });
 export type PiFleetAgentsResponse = z.infer<typeof PiFleetAgentsResponseSchema>;
 
+// Mirrors MessageStatus in packages/pi-coms/contracts/wire.ts, plus the
+// client-side "budget_exhausted". SIO-1738 added "stored": the terminal state of
+// one-way mail (a monitor report), which every inbox row now carries.
 export const PiFleetMessageStatusSchema = z.enum([
 	"queued",
 	"delivered",
+	"stored",
 	"complete",
 	"error",
 	"timeout",

@@ -45,7 +45,9 @@ test("queued mail flushed on connect is marked mailbox and stays inbox-readable"
 	await register(hub, "sess-a", "alice");
 
 	const r = await send(hub, "sess-a", "ghost", "for later", 3_600_000);
-	expect(((await r.json()) as SendResponse).status).toBe("queued");
+	// SIO-1738: one-way mail is terminal on write. It is still claimed and
+	// flushed on connect below -- that is the recipient's arrival notice.
+	expect(((await r.json()) as SendResponse).status).toBe("stored");
 
 	const sseG = await openSse(hub, await register(hub, "sess-g", "ghost"));
 	const prompts = await readSseEvents(sseG, "prompt", 1);
