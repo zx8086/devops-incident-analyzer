@@ -297,6 +297,26 @@ resource "aws_iam_policy" "pi_coms_extensions" {
         ]
         Resource = "*"
       }],
+      // Fleet operations reads (SIO-1742). A monitor escalated "worker instances
+      // not SSM-managed" for four days and the account's own spoke could not
+      // verify it: the instance role carries AmazonSSMManagedInstanceCore for
+      // the host's OWN registration, but the workload role could not list
+      // managed instances. Cost Anomaly Detection is the signal the 14-day
+      // baseline approximates. All non-write; parameter VALUES stay behind the
+      // SecretAndDataPlaneDeny below.
+      [{
+        Sid    = "FleetOperationsReads"
+        Effect = "Allow"
+        Action = [
+          "ssm:DescribeInstanceInformation",
+          "ssm:DescribeInstancePatchStates",
+          "ssm:ListCommandInvocations",
+          "ssm:GetCommandInvocation",
+          "ce:GetAnomalies",
+          "ce:GetAnomalyMonitors",
+        ]
+        Resource = "*"
+      }],
       // WAF and delivery-pipeline reads (SIO-1592): an ingestion finding on a
       // WAF log group cannot be concluded without them -- "traffic dropped to
       // zero" and "log delivery broke" are indistinguishable. GetSampledRequests

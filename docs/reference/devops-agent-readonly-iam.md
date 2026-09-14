@@ -405,6 +405,22 @@ Network-path drill-down and change/access diagnosis: VPC endpoints and gateways,
 }
 ```
 
+## 4. Fleet extensions carried by pi-coms (upstream candidates)
+
+The fleet spokes attach one more policy, `pi-coms-extensions`
+(`packages/pi-coms/deploy/modules/agent/main.tf`), to this same role in every
+prod account. Its Sids are read-only additions the vendored documents above
+lack, each tied to a monitor check or a spoke investigation that could not be
+concluded without it; they are candidates for folding into sections 2 and 3
+when the AgentCore policies are next revised. The most recent addition:
+
+| Sid | Actions | Why (ticket) |
+|---|---|---|
+| `FleetOperationsReads` | `ssm:DescribeInstanceInformation`, `ssm:DescribeInstancePatchStates`, `ssm:ListCommandInvocations`, `ssm:GetCommandInvocation`, `ce:GetAnomalies`, `ce:GetAnomalyMonitors` | A monitor escalated "worker instances not SSM-managed" for four days and the account's own spoke could not verify it; the instance role's `AmazonSSMManagedInstanceCore` covers the host's own registration, not listing managed instances. Cost Anomaly Detection is the signal the monitor's 14-day baseline approximates (SIO-1742) |
+
+Parameter values stay denied: the policy's `SecretAndDataPlaneDeny` keeps
+`ssm:GetParameter*` explicitly denied whatever the Allows above say.
+
 ## Verification
 
 ```bash
