@@ -27,10 +27,18 @@ export const FindingSchema = z.object({
 });
 export type Finding = z.infer<typeof FindingSchema>;
 
+// SIO-1741: a diagnosis must cite at least one command it ran and what that
+// command showed, and score its own confidence. A spoke once answered with a
+// baseline ("5-46 events/hour, no zero hours") that CloudWatch contradicted;
+// nothing in the contract had asked it to show its working. A reply without
+// evidence fails validation and the finding ships uninvestigated, which is
+// the honest state.
 export const DiagnosisSchema = z.object({
 	probable_cause: z.string(),
 	affected_resources: z.array(z.string()),
 	suggested_action: z.string(),
+	evidence: z.array(z.object({ command: z.string().trim().min(1), observation: z.string().trim().min(1) })).min(1),
+	confidence: z.number().min(0).max(1),
 });
 export type Diagnosis = z.infer<typeof DiagnosisSchema>;
 
@@ -43,12 +51,32 @@ export const DIAGNOSIS_RESPONSE_SCHEMA = {
 			type: "array",
 			items: {
 				type: "object",
-				required: ["dedup_key", "probable_cause", "affected_resources", "suggested_action"],
+				required: ["dedup_key", "probable_cause", "affected_resources", "suggested_action", "evidence", "confidence"],
 				properties: {
 					dedup_key: { type: "string" },
 					probable_cause: { type: "string" },
 					affected_resources: { type: "array", items: { type: "string" } },
 					suggested_action: { type: "string" },
+					evidence: {
+						type: "array",
+						minItems: 1,
+						description:
+							"The commands actually run for this diagnosis and the one line of output that decides it; never a number the prompt did not carry or a command did not print",
+						items: {
+							type: "object",
+							required: ["command", "observation"],
+							properties: {
+								command: { type: "string", minLength: 1 },
+								observation: { type: "string", minLength: 1 },
+							},
+						},
+					},
+					confidence: {
+						type: "number",
+						minimum: 0,
+						maximum: 1,
+						description: "How well the cited evidence supports the probable cause",
+					},
 				},
 			},
 		},
@@ -94,6 +122,10 @@ export function formatIncidentReport(
 				lines.push(`  affected: ${diagnosis.affected_resources.join(", ")}`);
 			}
 			lines.push(`  action: ${diagnosis.suggested_action}`);
+			// The first citation is what lets a reader check the cause without
+			// re-running the investigation; the rest stay in the journal.
+			const cited = diagnosis.evidence[0];
+			lines.push(`  cited: ${cited.command} => ${cited.observation} (confidence ${diagnosis.confidence.toFixed(2)})`);
 			if (reusedFrom) lines.push(`  (diagnosis reused from ${reusedFrom}${skipped ? `; ${skipped}` : ""})`);
 		} else if (finding.severity !== "info") {
 			lines.push(`  (uninvestigated: ${skipped ?? investigationFailure ?? "agent unavailable or response invalid"})`);
