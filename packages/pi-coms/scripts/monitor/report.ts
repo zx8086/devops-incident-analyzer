@@ -104,15 +104,17 @@ const NOTABLE_CAP = 10;
 export function formatIncidentReport(
 	accountId: string,
 	// skipped: a per-finding reason it was left out of the investigation batch
-	// (budget caps); it wins over the batch-wide investigationFailure.
-	items: { finding: Finding; diagnosis: Diagnosis | null; skipped?: string }[],
+	// (budget caps, cooldown); it wins over the batch-wide investigationFailure.
+	// reusedFrom: the diagnosis is an earlier turn's answer for the same
+	// dedup_key, not a fresh one (SIO-1739); the reader sees when it was made.
+	items: { finding: Finding; diagnosis: Diagnosis | null; skipped?: string; reusedFrom?: string }[],
 	investigationFailure?: string | null,
 	suppressedCount = 0,
 ): string {
 	const sorted = [...items].sort((a, b) => SEV_ORDER[a.finding.severity] - SEV_ORDER[b.finding.severity]);
 	const top = sorted[0]?.finding.severity ?? "info";
 	const lines: string[] = [`[${top}] aws-${accountId}: ${sorted.length} finding(s)`, ""];
-	for (const { finding, diagnosis, skipped } of sorted) {
+	for (const { finding, diagnosis, skipped, reusedFrom } of sorted) {
 		lines.push(`- (${finding.severity}/${finding.family}) ${finding.resource}: ${finding.summary}`);
 		if (diagnosis) {
 			lines.push(`  cause: ${diagnosis.probable_cause}`);
@@ -124,6 +126,7 @@ export function formatIncidentReport(
 			// re-running the investigation; the rest stay in the journal.
 			const cited = diagnosis.evidence[0];
 			lines.push(`  cited: ${cited.command} => ${cited.observation} (confidence ${diagnosis.confidence.toFixed(2)})`);
+			if (reusedFrom) lines.push(`  (diagnosis reused from ${reusedFrom}${skipped ? `; ${skipped}` : ""})`);
 		} else if (finding.severity !== "info") {
 			lines.push(`  (uninvestigated: ${skipped ?? investigationFailure ?? "agent unavailable or response invalid"})`);
 		}

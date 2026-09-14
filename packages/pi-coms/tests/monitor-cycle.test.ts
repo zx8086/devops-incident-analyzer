@@ -317,6 +317,80 @@ describe("investigation budget (SIO-1673)", () => {
 	});
 });
 
+// SIO-1739: a flapping alarm re-entered ALARM three times in a day, spent a turn
+// each time and then shipped "uninvestigated" at the cap, with its diagnosis
+// already in the journal.
+describe("diagnosis reuse (SIO-1739)", () => {
+	const reuse = { cooldownMs: 6 * 3_600_000, windowMs: 86_400_000 };
+	const diag = { probable_cause: "idle service", affected_resources: [], suggested_action: "none" };
+
+	test("a key diagnosed within the cooldown is not sent again and reuses the diagnosis", async () => {
+		let sentBatch: Finding[] | null = null;
+		const d = deps({
+			reuse,
+			investigate: async (findings) => {
+				sentBatch = findings;
+				return { diagnoses: new Map(), failure: null };
+			},
+		});
+		d.state.journal("finding", { ...F(), diagnosis: diag });
+		await runCycle(d);
+		expect(sentBatch).toBeNull();
+		expect(d.sent[0]).toContain("cause: idle service");
+		expect(d.sent[0]).toMatch(/diagnosis reused from .*; diagnosed 0 min ago, within cooldown/);
+		expect(d.sent[0]).not.toContain("uninvestigated");
+		// Journaled as reused, so it cannot itself feed the next reuse.
+		const rows = d.state.journalRows(60_000, "finding");
+		expect(JSON.parse(rows[1].payload)).toMatchObject({ reused_from: expect.any(String), diagnosis: diag });
+	});
+
+	test("a key held back by the budget reuses a diagnosis older than the cooldown", async () => {
+		const d = deps({
+			reuse: { ...reuse, cooldownMs: 0 },
+			budget: { perDay: 24, perResourcePerDay: 3 },
+			investigate: async () => ({ diagnoses: new Map(), failure: null }),
+		});
+		d.state.journal("finding", { ...F(), diagnosis: diag });
+		for (let i = 0; i < 3; i++) {
+			d.state.journal("investigation", { resources: ["cpu"], dedup_keys: ["alarm:cpu:ALARM"], count: 1, target: "t" });
+		}
+		await runCycle(d);
+		expect(d.sent[0]).toContain("cause: idle service");
+		expect(d.sent[0]).toContain("resource over daily investigation cap (3/3 in 24h)");
+		expect(d.sent[0]).not.toContain("uninvestigated");
+	});
+
+	test("outside the cooldown with budget to spare, the key is investigated afresh", async () => {
+		let count = 0;
+		const d = deps({
+			reuse: { ...reuse, cooldownMs: 0 },
+			investigate: async (findings) => {
+				count = findings.length;
+				return { diagnoses: new Map([["alarm:cpu:ALARM", { ...diag, probable_cause: "fresh" }]]), failure: null };
+			},
+		});
+		d.state.journal("finding", { ...F(), diagnosis: diag });
+		await runCycle(d);
+		expect(count).toBe(1);
+		expect(d.sent[0]).toContain("cause: fresh");
+		expect(d.sent[0]).not.toContain("reused");
+	});
+
+	test("a key never diagnosed before is unaffected by reuse", async () => {
+		let count = 0;
+		const d = deps({
+			reuse,
+			investigate: async (findings) => {
+				count = findings.length;
+				return { diagnoses: new Map(), failure: null };
+			},
+		});
+		d.state.journal("finding", { ...F(), diagnosis: null });
+		await runCycle(d);
+		expect(count).toBe(1);
+	});
+});
+
 describe("envCount", () => {
 	test("keeps the default for unset, empty, non-numeric, negative and fractional values", () => {
 		expect(envCount(undefined, 24)).toBe(24);
