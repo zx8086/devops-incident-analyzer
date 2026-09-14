@@ -130,4 +130,11 @@ describe("checkCompliance (SIO-1740)", () => {
 		const out = await checkCompliance(fakeClient({ "restricted-rdp": ["sg-2"], other: ["x1"] }), state, { now: NOW });
 		expect(out.map((f) => f.dedup_key)).toEqual(["compliance:restricted-rdp:sg-2"]);
 	});
+
+	test("a rule seen NON_COMPLIANT for the first time after the first run reports its pairs", async () => {
+		const state = new MonitorState(":memory:");
+		await checkCompliance(fakeClient({ other: ["x1"] }), state, { now: NOW });
+		const out = await checkCompliance(fakeClient({ other: ["x1"], "restricted-rdp": ["sg-1"] }), state, { now: NOW });
+		expect(out.map((f) => f.dedup_key)).toEqual(["compliance:restricted-rdp:sg-1"]);
+	});
 });

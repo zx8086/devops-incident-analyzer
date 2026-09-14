@@ -98,7 +98,10 @@ export async function checkCompliance(
 			} while (token);
 			Object.assign(current, read);
 			current[seenKey] = "seen";
-			if (!initialized) baselineOnly.add(rule);
+			// Silent only after a sentinel: a rule seen NON_COMPLIANT for the first
+			// time because a resource just broke is the finding this check exists
+			// for (the restricted-rdp flip), not a baseline.
+			if (prev[unreadKey] !== undefined) baselineOnly.add(rule);
 		} catch (e) {
 			// One unreadable rule keeps its previous pairs (so they do not read as
 			// resolved), or the sentinel when it was never initialized, and says so
