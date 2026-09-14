@@ -24,7 +24,7 @@ import type { AwsClient } from "./alarms.ts";
 // findings. A failing sub-scan degrades to one info finding (fingerprinted
 // so it does not repeat every cycle) and the remaining scans still run.
 
-type Differ = {
+export type Differ = {
 	snapshot: string;
 	added?: (id: string) => Finding | null;
 	removed?: (id: string) => Finding | null;
@@ -43,7 +43,7 @@ function canonical(v: unknown): string {
 	return JSON.stringify(v);
 }
 
-function diffSnapshot(state: MonitorState, current: Record<string, string>, d: Differ): Finding[] {
+export function diffSnapshot(state: MonitorState, current: Record<string, string>, d: Differ): Finding[] {
 	const findings: Finding[] = [];
 	const prev = state.getSnapshot(d.snapshot);
 	if (prev !== null) {

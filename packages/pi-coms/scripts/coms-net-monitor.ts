@@ -6,9 +6,12 @@ import { ACMClient } from "@aws-sdk/client-acm";
 import { CloudTrailClient } from "@aws-sdk/client-cloudtrail";
 import { CloudWatchClient, DescribeAlarmsCommand } from "@aws-sdk/client-cloudwatch";
 import { CloudWatchLogsClient } from "@aws-sdk/client-cloudwatch-logs";
+import { ConfigServiceClient } from "@aws-sdk/client-config-service";
 import { CostExplorerClient } from "@aws-sdk/client-cost-explorer";
 import { EC2Client } from "@aws-sdk/client-ec2";
 import { ElasticLoadBalancingV2Client } from "@aws-sdk/client-elastic-load-balancing-v2";
+import { GuardDutyClient } from "@aws-sdk/client-guardduty";
+import { HealthClient } from "@aws-sdk/client-health";
 import { LambdaClient } from "@aws-sdk/client-lambda";
 import { RDSClient } from "@aws-sdk/client-rds";
 import { STSClient } from "@aws-sdk/client-sts";
@@ -23,8 +26,11 @@ import {
 } from "./monitor/budget.ts";
 import { checkAlarms } from "./monitor/checks/alarms.ts";
 import { certRegions, checkCerts, checkListenerCerts } from "./monitor/checks/certs.ts";
+import { checkCompliance } from "./monitor/checks/compliance.ts";
 import { COST_DEFAULTS, checkCost } from "./monitor/checks/cost.ts";
 import { checkDrift } from "./monitor/checks/drift.ts";
+import { checkGuardDuty } from "./monitor/checks/guardduty.ts";
+import { checkHealth } from "./monitor/checks/health.ts";
 import { checkIdentity, type GateResult } from "./monitor/checks/identity.ts";
 import { checkIngestion } from "./monitor/checks/ingestion.ts";
 import { checkLogs } from "./monitor/checks/logs.ts";
@@ -314,6 +320,10 @@ function main(): void {
 	}));
 	const rds = new RDSClient({ region });
 	const lambda = new LambdaClient({ region });
+	// SIO-1740: the Health API is a global endpoint served from us-east-1.
+	const health = new HealthClient({ region: "us-east-1" });
+	const config = new ConfigServiceClient({ region });
+	const guardduty = new GuardDutyClient({ region });
 	const log = (line: string) => console.log(`${new Date().toISOString()} ${line}`);
 
 	const gate = {
@@ -421,6 +431,7 @@ function main(): void {
 			},
 			{ name: "drift", run: () => checkDrift(ec2, state) },
 			{ name: "resource-drift", run: () => checkResourceDrift(ec2, rds, lambda, state) },
+			{ name: "health", run: () => checkHealth(health, state, { regions: region ? [region, "global"] : undefined }) },
 		],
 		state,
 		investigate,
@@ -441,6 +452,8 @@ function main(): void {
 						excludePrefixes: LOGS_EXCLUDE.length > 0 ? LOGS_EXCLUDE : undefined,
 					}),
 			},
+			{ name: "compliance", run: () => checkCompliance(config, state) },
+			{ name: "guardduty", run: () => checkGuardDuty(guardduty, state) },
 		],
 		state,
 		investigate,
