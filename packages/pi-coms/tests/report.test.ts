@@ -2,6 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	checkErrorCountsFromJournal,
+	DIAGNOSIS_RESPONSE_SCHEMA,
 	DiagnosisSchema,
 	type DigestNotable,
 	FindingSchema,
@@ -38,6 +39,8 @@ describe("report", () => {
 					probable_cause: "load spike",
 					affected_resources: ["i-123"],
 					suggested_action: "check autoscaling",
+					evidence: [{ command: "aws cloudwatch get-metric-data", observation: "cpu 91% for 10 min" }],
+					confidence: 0.9,
 				},
 			],
 		};
@@ -52,6 +55,8 @@ describe("report", () => {
 			probable_cause: "load spike",
 			affected_resources: ["i-123"],
 			suggested_action: "check autoscaling",
+			evidence: [{ command: "aws cloudwatch get-metric-data", observation: "cpu 91% for 10 min" }],
+			confidence: 0.9,
 		});
 		const text = formatIncidentReport("111122223333", [{ finding, diagnosis: diag }]);
 		expect(text.startsWith("[critical]")).toBe(true);
@@ -527,5 +532,54 @@ describe("SIO-1673 report markers", () => {
 		const head = text.split("\n")[0];
 		expect(head).toContain("PAUSED: check cycles skipped since 2026-09-09T10:00:00Z;");
 		expect(head).toContain("DEGRADED: 2 check error(s)");
+	});
+});
+
+// SIO-1741: a diagnosis must show its working. A spoke once answered with a
+// baseline CloudWatch contradicted; nothing in the contract had asked for the
+// command behind the number.
+describe("diagnosis evidence contract (SIO-1741)", () => {
+	const base = {
+		dedup_key: "alarm:cpu-high:ALARM",
+		probable_cause: "load spike",
+		affected_resources: [],
+		suggested_action: "check autoscaling",
+	};
+
+	test("a diagnosis without evidence or with an empty evidence list is rejected", () => {
+		expect(parseDiagnoses({ diagnoses: [{ ...base, confidence: 0.5 }] })).toBeNull();
+		expect(parseDiagnoses({ diagnoses: [{ ...base, confidence: 0.5, evidence: [] }] })).toBeNull();
+		expect(parseDiagnoses({ diagnoses: [{ ...base, evidence: [{ command: "aws x", observation: "y" }] }] })).toBeNull();
+		expect(
+			parseDiagnoses({ diagnoses: [{ ...base, confidence: 1.5, evidence: [{ command: "aws x", observation: "y" }] }] }),
+		).toBeNull();
+	});
+
+	test("the report cites the first command and its observation with the confidence", () => {
+		const diagnosis = DiagnosisSchema.parse({
+			probable_cause: "load spike",
+			affected_resources: [],
+			suggested_action: "check autoscaling",
+			evidence: [
+				{
+					command: "aws cloudwatch get-metric-data --metric-data-queries ...",
+					observation: "CPUUtilization 91% for 10 min",
+				},
+				{ command: "aws ecs describe-services ...", observation: "desiredCount 2, runningCount 2" },
+			],
+			confidence: 0.85,
+		});
+		const text = formatIncidentReport("111122223333", [{ finding, diagnosis }]);
+		expect(text).toContain(
+			"cited: aws cloudwatch get-metric-data --metric-data-queries ... => CPUUtilization 91% for 10 min (confidence 0.85)",
+		);
+		expect(text).not.toContain("describe-services");
+	});
+
+	test("the response schema handed to the spoke requires evidence and confidence", () => {
+		const item = DIAGNOSIS_RESPONSE_SCHEMA.properties.diagnoses.items;
+		expect(item.required).toContain("evidence");
+		expect(item.required).toContain("confidence");
+		expect(item.properties.evidence.minItems).toBe(1);
 	});
 });

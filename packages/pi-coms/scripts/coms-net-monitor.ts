@@ -365,7 +365,7 @@ function main(): void {
 		};
 		const prompt = [
 			`You are the read-only devops agent for AWS account ${ACCOUNT_ID}. The account monitor detected these findings; investigate with your AWS tools and diagnose each one.`,
-			'Reply ONLY with JSON matching the response schema: an object {"diagnoses": [...]} with one entry per dedup_key.',
+			'Reply ONLY with JSON matching the response schema: an object {"diagnoses": [...]} with one entry per dedup_key. Each diagnosis cites at least one command you actually ran and the line of its output that decides the cause (evidence), and scores its own confidence 0-1. Diagnose from the numbers the finding evidence carries; never state a baseline or a count the prompt did not give you without citing the command that produced it.',
 			"",
 			"Findings:",
 			JSON.stringify(findings, null, 2),

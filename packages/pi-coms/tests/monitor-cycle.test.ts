@@ -23,7 +23,16 @@ function deps(over: Partial<CycleDeps> = {}): CycleDeps & { sent: string[] } {
 		state: new MonitorState(":memory:"),
 		investigate: async () => ({
 			diagnoses: new Map([
-				["alarm:cpu:ALARM", { probable_cause: "load", affected_resources: [], suggested_action: "scale" }],
+				[
+					"alarm:cpu:ALARM",
+					{
+						probable_cause: "load",
+						affected_resources: [],
+						suggested_action: "scale",
+						evidence: [{ command: "aws cloudwatch get-metric-data", observation: "cpu 91%" }],
+						confidence: 0.8,
+					},
+				],
 			]),
 			failure: null,
 		}),
