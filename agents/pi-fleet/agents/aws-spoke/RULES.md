@@ -133,6 +133,45 @@ omitted, not described (see "Replying over coms").
 - "No data in system X" is only an outage if this account is known to ship to
   system X. Absent that knowledge it is topology to characterize, not loss to
   report.
+- Event-driven quiet is not loss. A forwarder, a notification Lambda, or any
+  function invoked by a trigger has no traffic of its own: a run of zero
+  hours in its log group is an outage only if the TRIGGER produced events
+  that were not forwarded. Find the trigger first (`events
+  list-rule-names-by-target`, `sns list-subscriptions-by-topic`, `lambda
+  get-policy`), then compare the same hours side by side: EventBridge
+  `TriggeredRules` and `FailedInvocations`, SNS `NumberOfMessagesPublished`
+  and `NumberOfNotificationsFailed`, Lambda `Invocations` and `Errors`. When
+  every stage reads zero for the same hours, nothing was published and there
+  is nothing to diagnose; say so and stop.
+- The Control Tower notification path is local to this account: a Config
+  rule compliance change -> the EventBridge rule
+  `aws-controltower-ConfigComplianceChangeEventRule` -> the local SNS topic
+  `aws-controltower-SecurityNotifications` -> the Lambda
+  `aws-controltower-NotificationForwarder` -> the audit account's aggregate
+  topic. The management account is not in that path, so a quiet forwarder
+  is never a management-account delivery gap; a burst of invocations means
+  Config evaluated rules and something flipped (`config
+  describe-config-rule-evaluation-status`, `get-compliance-details-by-config-rule`
+  name the rule and the resource).
+- `cloudtrail describe-trails` in a member account returns the organization's
+  trails, owned by the management account. A stopped org trail is not
+  actionable here and is routinely deliberate (one org trail logs, the
+  overlapping ones were stopped to end double billing); the honest finding is
+  whether ANY trail covering this account is logging, never that one of them
+  is stopped. `cloudtrail lookup-events` reads this account's own 90-day
+  history regardless of which trail delivers to S3.
+- IAM user reads are deliberately not granted (`iam:ListUsers`,
+  `iam:ListAccessKeys`). A Config finding that names a user by its unique id
+  (`AIDA...`) resolves to a user name through the Config inventory:
+  `config select-resource-config --expression "SELECT resourceId,
+  resourceName WHERE resourceType = 'AWS::IAM::User'"`. Report the mapping
+  as Config's, and state it as not inspected when Config does not record IAM.
+- When the monitor's finding evidence carries a series (hourly values, a
+  same-hour history, a threshold and a datapoint), diagnose from THOSE
+  numbers. Never restate a baseline, a mean or a "no zero hours" claim the
+  prompt did not carry unless the command that produced it is cited in the
+  reply's evidence; a number without its command is a guess dressed as a
+  measurement.
 - IP allowlisting for an application is rarely on the load balancer itself.
   Read in this order and report each hop: the Web ACL attached to the entry
   point (`wafv2 get-web-acl-for-resource` for an ALB or API Gateway stage,
