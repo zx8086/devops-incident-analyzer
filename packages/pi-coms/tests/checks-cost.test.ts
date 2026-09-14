@@ -62,6 +62,16 @@ describe("checkCost", () => {
 		expect(out[0].evidence).toEqual({ date: "2026-08-29", usd: 1101, baseline: 1000 });
 	});
 
+	// SIO-1739: the baseline was a mean, so one spike day hid every rise under it
+	// for the next two weeks.
+	test("SIO-1739: one spike day in the baseline does not hide the next real rise", async () => {
+		const state = new MonitorState(":memory:");
+		const spiked = days(1000, 1101).map((d) => (d.date === "2026-08-20" ? { ...d, usd: 5000 } : d));
+		const out = await checkCost(fakeClient(spiked), state, { now: NOW });
+		expect(out).toHaveLength(1);
+		expect(out[0].evidence).toEqual({ date: "2026-08-29", usd: 1101, baseline: 1000 });
+	});
+
 	test("a zero baseline reports the rise without a percentage", async () => {
 		const state = new MonitorState(":memory:");
 		const out = await checkCost(fakeClient(days(0, 150)), state, { now: NOW });

@@ -14,10 +14,16 @@ const MIN_EVENTS = 10;
 // investigations on one Lambda log group). Require this many CONSECUTIVE zero
 // hours ending at the observed hour; the hourly series is already fetched below,
 // so the gate costs no extra API call and no state.
+// SIO-1739: three hours was still not enough for a forwarder whose own week held
+// three-hour gaps every day (49 of 72 hours zero, six warns in 48h). The gate is
+// now the LONGER of ZERO_HOURS and the group's own longest quiet run in the
+// baseline window plus one: a stop is only a stop once it outlasts what the
+// group has done before. Same series, still no extra call.
 const ZERO_HOURS = 3;
 const BASELINE_DAYS = 7;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
+const WINDOW_HOURS = BASELINE_DAYS * 24;
 
 // Metrics Insights grammar is unforgiving; keep the expression verbatim and
 // substitute nothing.
@@ -72,39 +78,60 @@ export async function checkIngestion(
 
 	const findings: Finding[] = [];
 	for (const [group, points] of series) {
-		const observed = points.get(lastHourMs) ?? 0;
-		// CloudWatch omits zero-count hours, so an absent point IS a zero hour.
-		// A group with no points at all therefore reads as a full zero run; the
-		// baseline floor below, not this gate, is what keeps a brand-new group
-		// quiet (its history is absent too, so the median is 0).
+		// Hours back from the observed hour; CloudWatch omits zero-count hours,
+		// so an absent point IS a zero hour. A group with no points at all
+		// therefore reads as a full zero run; the baseline floor below, not the
+		// zero-run gate, is what keeps a brand-new group quiet (its history is
+		// absent too, so the median is 0).
+		const at = (h: number): number => points.get(lastHourMs - h * HOUR_MS) ?? 0;
+		const observed = at(0);
 		let zeroRun = 0;
-		while (zeroRun < zeroHours && (points.get(lastHourMs - zeroRun * HOUR_MS) ?? 0) === 0) zeroRun++;
-		const history: number[] = [];
-		for (let d = 1; d <= BASELINE_DAYS; d++) history.push(points.get(lastHourMs - d * DAY_MS) ?? 0);
-		history.sort((a, b) => a - b);
+		while (zeroRun <= WINDOW_HOURS && at(zeroRun) === 0) zeroRun++;
+		// The group's own longest quiet run before the current one. A group
+		// younger than the window reads its missing past as one long zero run
+		// and cannot alert until it has lived through it -- the same window the
+		// median floor already demands.
+		let histMaxZeroRun = 0;
+		let run = 0;
+		for (let h = zeroRun; h <= WINDOW_HOURS; h++) {
+			run = at(h) === 0 ? run + 1 : 0;
+			if (run > histMaxZeroRun) histMaxZeroRun = run;
+		}
+		const gateHours = Math.max(zeroHours, histMaxZeroRun + 1);
+		const sameHour7d: number[] = [];
+		for (let d = 1; d <= BASELINE_DAYS; d++) sameHour7d.push(at(d * 24));
+		const history = [...sameHour7d].sort((a, b) => a - b);
 		const baseline = history[Math.floor(history.length / 2)];
 		// Trailing colon terminates the key: group names nest (/ecs/a prefixes
 		// /ecs/a-b) but cannot contain ":", so prefix-based fingerprint clears
 		// stay exact.
 		const key = `ingest:${group}:`;
-		const at = new Date(now).toISOString();
+		const atIso = new Date(now).toISOString();
 
-		if (zeroRun >= zeroHours && baseline >= minEvents) {
+		if (zeroRun >= gateHours && baseline >= minEvents) {
 			if (!state.shouldAlert(key)) continue;
 			state.markAlerted(key, "ingestion");
+			// The spoke gets the series the gate was decided on, so it diagnoses
+			// from the monitor's numbers instead of re-deriving a baseline (SIO-1739).
+			const last24h: number[] = [];
+			for (let h = 23; h >= 0; h--) last24h.push(at(h));
 			findings.push({
 				family: "ingestion",
 				severity: "warn",
 				resource: group,
-				summary: `Log ingestion stopped in ${group}: 0 events for ${zeroHours}h vs same-hour 7d median ${baseline}`,
+				summary: `Log ingestion stopped in ${group}: 0 events for ${zeroRun}h (longest quiet run in the prior 7d: ${histMaxZeroRun}h) vs same-hour 7d median ${baseline}`,
 				dedup_key: key,
 				evidence: {
 					observed,
-					zeroHours,
+					zeroRun,
+					gateHours,
+					histMaxZeroRun,
 					baselineMedian: baseline,
+					sameHour7d,
+					last24h,
 					hourUtc: new Date(lastHourMs).toISOString(),
 				},
-				at,
+				at: atIso,
 			});
 		} else if (observed > 0 && !state.shouldAlert(key)) {
 			state.clearAlerts(key);
@@ -115,7 +142,7 @@ export async function checkIngestion(
 				summary: `Log ingestion resumed in ${group}: ${observed} event(s) last hour`,
 				dedup_key: `${key}:recovered:${new Date(lastHourMs).toISOString()}`,
 				evidence: { observed, hourUtc: new Date(lastHourMs).toISOString() },
-				at,
+				at: atIso,
 			});
 		}
 	}

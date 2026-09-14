@@ -139,6 +139,23 @@ test("incident report footnotes the suppressed count", () => {
 	expect(text).toContain("suppressed: 2 finding(s) matching the ledger");
 });
 
+test("a reused diagnosis names when it was made and why no fresh one was asked for (SIO-1739)", () => {
+	const diagnosis = { probable_cause: "idle service", affected_resources: [], suggested_action: "none" };
+	const text = formatIncidentReport("111122223333", [
+		{
+			finding,
+			diagnosis,
+			skipped: "resource over daily investigation cap (3/3 in 24h)",
+			reusedFrom: "2026-08-30T01:00:00Z",
+		},
+	]);
+	expect(text).toContain("cause: idle service");
+	expect(text).toContain(
+		"(diagnosis reused from 2026-08-30T01:00:00Z; resource over daily investigation cap (3/3 in 24h))",
+	);
+	expect(text).not.toContain("uninvestigated");
+});
+
 test("uninvestigated marker carries the concrete failure reason when known", () => {
 	const text = formatIncidentReport(
 		"111122223333",

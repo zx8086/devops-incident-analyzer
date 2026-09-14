@@ -46,6 +46,7 @@ import {
 	checkErrorCountsFromJournal,
 	DIAGNOSIS_RESPONSE_SCHEMA,
 	type Diagnosis,
+	DiagnosisSchema,
 	type Finding,
 	findingCountsFromJournal,
 	formatDigest,
@@ -107,6 +108,14 @@ const INVESTIGATE_BUDGET: BudgetLimits = {
 	perResourcePerDay: envCount(process.env.PI_MONITOR_INVESTIGATE_PER_RESOURCE_PER_DAY, 3),
 };
 const DAY_MS = 86_400_000;
+// SIO-1739: a dedup_key diagnosed inside the cooldown reuses that diagnosis
+// instead of spending a turn; one the budget holds back reuses a diagnosis up
+// to a day old. Cooldown 0 turns the hold-back off (reuse then only fills in
+// for budget-skipped findings).
+const INVESTIGATE_REUSE = {
+	cooldownMs: envCount(process.env.PI_MONITOR_INVESTIGATE_COOLDOWN_MINUTES, 360) * 60_000,
+	windowMs: DAY_MS,
+};
 
 // A flat await discards an agent's completed work whenever the batch is big
 // enough to outrun it (observed: 19 findings vs the 5-min default). Scale the
@@ -166,6 +175,10 @@ export type CycleDeps = {
 	investigate: ((findings: Finding[], priorContext: string) => Promise<InvestigationOutcome>) | null;
 	// Absent: no caps (unit tests); main() always sets it.
 	budget?: BudgetLimits;
+	// SIO-1739: a dedup_key the agent diagnosed within cooldownMs is not sent
+	// again, it reuses that diagnosis; one held back by the budget reuses a
+	// diagnosis up to windowMs old. Absent: every warn+ finding is sent.
+	reuse?: { cooldownMs: number; windowMs: number };
 	report: (text: string) => Promise<void>;
 	log: (line: string) => void;
 };
@@ -214,19 +227,42 @@ export async function runCycle(deps: CycleDeps): Promise<{ findings: Finding[]; 
 		const toInvestigate = findings.filter((f) => f.severity !== "info");
 		let diagnoses: Map<string, Diagnosis> | null = null;
 		let investigationFailure: string | null = null;
+		// Reuse pass (SIO-1739): the same dedup_key diagnosed within the cooldown
+		// is the same incident still flapping; re-asking spent a turn per flap
+		// and burned the per-resource cap, after which the finding shipped
+		// "uninvestigated" while its diagnosis sat in the journal.
+		const skipped = new Map<string, string>();
+		const reused = new Map<string, { ts: string; diagnosis: Diagnosis }>();
+		let batch = toInvestigate;
+		if (deps.reuse) {
+			const { cooldownMs, windowMs } = deps.reuse;
+			batch = [];
+			for (const f of toInvestigate) {
+				const prior = deps.state.priorDiagnosis(f.dedup_key, Math.max(cooldownMs, windowMs));
+				const parsed = prior ? DiagnosisSchema.safeParse(prior.diagnosis) : null;
+				const ageMs = prior ? Date.now() - Date.parse(prior.ts) : Number.POSITIVE_INFINITY;
+				if (prior && parsed?.success) reused.set(f.dedup_key, { ts: prior.ts, diagnosis: parsed.data });
+				if (prior && parsed?.success && cooldownMs > 0 && ageMs <= cooldownMs) {
+					skipped.set(f.dedup_key, `diagnosed ${Math.round(ageMs / 60_000)} min ago, within cooldown`);
+				} else {
+					batch.push(f);
+				}
+			}
+		}
 		// Budget pass: findings over the daily or per-resource cap still ship,
 		// each with its own reason, but never reach the agent.
-		const skipped = new Map<string, string>();
-		let batch = toInvestigate;
-		if (deps.budget && toInvestigate.length > 0) {
+		if (deps.budget && batch.length > 0) {
 			const usage = investigationUsage(deps.state.journalRows(DAY_MS, "investigation"));
-			const plan = planInvestigation(toInvestigate, usage, deps.budget);
+			const plan = planInvestigation(batch, usage, deps.budget);
 			batch = plan.send;
 			for (const s of plan.skipped) skipped.set(s.finding.dedup_key, s.reason);
 			if (plan.skipped.length > 0) {
 				deps.log(`investigation budget: ${plan.skipped.length} finding(s) held back, ${batch.length} sent`);
 			}
 		}
+		// A reused diagnosis only stands in for a finding that was not sent;
+		// a fresh answer always wins.
+		for (const key of reused.keys()) if (!skipped.has(key)) reused.delete(key);
 		if (batch.length > 0 && deps.investigate) {
 			const prior = batch
 				.flatMap((f) => deps.state.priorIncidents(f.resource, 3))
@@ -243,14 +279,20 @@ export async function runCycle(deps: CycleDeps): Promise<{ findings: Finding[]; 
 			if (investigationFailure) deps.log(`investigation failed: ${investigationFailure}`);
 		}
 		for (const f of findings) {
-			deps.state.journal("finding", { ...f, diagnosis: diagnoses?.get(f.dedup_key) ?? null });
+			const r = reused.get(f.dedup_key);
+			deps.state.journal("finding", {
+				...f,
+				diagnosis: diagnoses?.get(f.dedup_key) ?? r?.diagnosis ?? null,
+				...(r ? { reused_from: r.ts } : {}),
+			});
 		}
 		const text = formatIncidentReport(
 			ACCOUNT_ID,
 			findings.map((f) => ({
 				finding: f,
-				diagnosis: diagnoses?.get(f.dedup_key) ?? null,
+				diagnosis: diagnoses?.get(f.dedup_key) ?? reused.get(f.dedup_key)?.diagnosis ?? null,
 				skipped: skipped.get(f.dedup_key),
+				reusedFrom: reused.get(f.dedup_key)?.ts,
 			})),
 			investigationFailure,
 			suppressed,
@@ -425,6 +467,7 @@ function main(): void {
 		state,
 		investigate,
 		budget: INVESTIGATE_BUDGET,
+		reuse: INVESTIGATE_REUSE,
 		report,
 		log,
 	};
@@ -445,6 +488,7 @@ function main(): void {
 		state,
 		investigate,
 		budget: INVESTIGATE_BUDGET,
+		reuse: INVESTIGATE_REUSE,
 		report,
 		log,
 	};
@@ -529,6 +573,7 @@ function main(): void {
 			state,
 			investigate,
 			budget: INVESTIGATE_BUDGET,
+			reuse: INVESTIGATE_REUSE,
 			report,
 			log,
 		};
