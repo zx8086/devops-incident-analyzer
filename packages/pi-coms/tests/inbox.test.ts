@@ -148,19 +148,37 @@ describe("MailStore inbox", () => {
 		store.close();
 	});
 
-	test("purgeExpired leaves non-terminal rows to the live sweep", () => {
+	// SIO-1738: this used to assert the opposite -- that expired one-way mail
+	// SURVIVED the purge, because the delete required a terminal status a report
+	// never reaches. That is the bug: the predicate matched zero rows and reports
+	// accumulated forever (616 on the prd hub). Expiry alone now governs mailbox
+	// mail; request-reply still belongs to the live sweep (asserted below).
+	test("purgeExpired deletes expired one-way mail regardless of status", () => {
+		const store = new MailStore(tmpDb());
+		store.upsert(
+			msg({
+				prompt: "report-past-expiry",
+				status: "stored",
+				expires_at: new Date(Date.now() - 1_000).toISOString(),
+			}),
+		);
+		store.purgeExpired();
+		expect(store.inbox("ops", 10)).toHaveLength(0);
+		store.close();
+	});
+
+	test("purgeExpired leaves non-terminal request-reply rows to the live sweep", () => {
 		const store = new MailStore(tmpDb());
 		store.upsert(
 			msg({
 				prompt: "queued-past-expiry",
 				status: "queued",
+				mailbox: false,
 				expires_at: new Date(Date.now() - 1_000).toISOString(),
 			}),
 		);
 		store.purgeExpired();
-		// still present: expiring queued mail is the server sweep's job (it marks
-		// the in-memory message expired first)
-		expect(store.inbox("ops", 10)).toHaveLength(1);
+		expect(store.loadNonTerminal()).toHaveLength(1);
 		store.close();
 	});
 

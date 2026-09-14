@@ -112,7 +112,8 @@ describe("MonitorComs", () => {
 		});
 		await agent.start();
 		const sent = await agent.send("nobody-home", "report", { ttl_ms: 86_400_000 });
-		expect(sent.status).toBe("queued");
+		// SIO-1738: a monitor report is one-way; terminal on write.
+		expect(sent.status).toBe("stored");
 		await agent.stop();
 	});
 });

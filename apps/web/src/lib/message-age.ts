@@ -11,7 +11,10 @@
 
 // Delivery states that say nothing useful for a one-way report: nothing ever
 // claims it, so it sits in these forever.
-const UNINFORMATIVE = new Set(["queued", "delivered", "complete"]);
+// SIO-1738: `stored` is what a one-way report now carries from the moment the
+// hub writes it -- its terminal, expected state. It must be listed here or the
+// allowlist inverts and every report row renders an amber "exceptional" badge.
+const UNINFORMATIVE = new Set(["queued", "delivered", "stored", "complete"]);
 
 export function isNotableStatus(status: string): boolean {
 	return !UNINFORMATIVE.has(status);

@@ -116,7 +116,10 @@ test("queued (undelivered) mailbox mail is untouched by another agent's death", 
 	const r = await send(hub, "sess-a", "ghost", "for later", 3_600_000);
 	expect(r.status).toBe(200);
 	const { msg_id, status } = (await r.json()) as SendResponse;
-	expect(status).toBe("queued");
+	// SIO-1738: one-way mail is terminal on write (`stored`), not `queued`. It is
+	// still claimed and flushed on connect -- that is what raises the recipient's
+	// passive arrival notice -- but it never enters the delivery lifecycle.
+	expect(status).toBe("stored");
 
 	// An unrelated agent dying must not fail queued mail, and with no delivered
 	// mail pending there is no response event at all.
@@ -125,7 +128,7 @@ test("queued (undelivered) mailbox mail is untouched by another agent's death", 
 	expect(spurious.length).toBe(0);
 
 	const g = await api(hub, "GET", `/v1/messages/${msg_id}`);
-	expect(((await g.json()) as MessageLookup).status).toBe("queued");
+	expect(((await g.json()) as MessageLookup).status).toBe("stored");
 
 	// The queued message still flushes when the name finally connects.
 	const sseG = await openSse(hub, await register(hub, "sess-g", "ghost"));
