@@ -145,7 +145,13 @@ test("incident report footnotes the suppressed count", () => {
 });
 
 test("a reused diagnosis names when it was made and why no fresh one was asked for (SIO-1739)", () => {
-	const diagnosis = { probable_cause: "idle service", affected_resources: [], suggested_action: "none" };
+	const diagnosis = {
+		probable_cause: "idle service",
+		affected_resources: [],
+		suggested_action: "none",
+		evidence: [{ command: "aws cloudwatch get-metric-data", observation: "cpu 12%" }],
+		confidence: 0.7,
+	};
 	const text = formatIncidentReport("111122223333", [
 		{
 			finding,
