@@ -25,6 +25,45 @@ describe("fleet root renderer (SIO-1653)", () => {
 		expect(main).toContain('monitor_daily_cron   = "15 8 * * *"');
 	});
 
+	// SIO-1746: the checkpoint bucket policy was hand-added to the generated
+	// roots by SIO-1745, so `just fleet render` silently deleted it -- a render
+	// by anyone reopened the cross-spoke read hole. It is emitted by the
+	// generator now; these assertions stop it regressing to a hand-edit.
+	test("a hub-hosting root emits the SIO-1745 checkpoint policy and lifecycle", () => {
+		const main = renderRoot(manifest, "eu-shared-services-dev")["main.tf"] ?? "";
+
+		// Cross-account writes need a resource-based Allow, not just the
+		// spoke's identity grant.
+		expect(main).toContain('Sid       = "OrgWriteCheckpointState"');
+		// The Deny that stops one spoke reading another's journal/suppressions.
+		expect(main).toContain('Sid       = "DenyCrossSpokeStateRead"');
+		// Superseded bodies expire; manifests never do.
+		expect(main).toContain('id     = "expire-superseded-checkpoint-dbs"');
+		expect(main).toContain('prefix = "checkpoint-db/"');
+		expect(main).not.toContain('prefix = "state/"');
+
+		// aws:PrincipalArn is the ROLE arn, never the sts session arn, and is
+		// single-valued -- ForAllValues on it is vacuously true when absent,
+		// which as a Deny's only exception denies nothing at all.
+		expect(main).toContain('ArnLike      = { "aws:PrincipalArn" = "arn:aws:iam::*:role/*-agent" }');
+		expect(main).toContain('"aws:PrincipalArn" = "arn:aws:iam::*:role/*-agent"');
+		// Strip comments before the negative assertions: the rendered file
+		// explains WHY sts:: and ForAllValues are wrong, so a naive substring
+		// check matches the warning rather than a real condition.
+		const code = main
+			.split("\n")
+			.filter((l) => !l.trim().startsWith("//"))
+			.join("\n");
+		expect(code).not.toContain("arn:aws:sts::");
+		expect(code).not.toContain("ForAllValues");
+	});
+
+	test("a non-hub spoke root carries no bucket policy at all", () => {
+		const main = renderRoot(manifest, "eu-oit-dev")["main.tf"] ?? "";
+		expect(main).not.toContain("DenyCrossSpokeStateRead");
+		expect(main).not.toContain("aws_s3_bucket_lifecycle_configuration");
+	});
+
 	test("a dev spoke root uses create mode and takes every identifier from tfvars", () => {
 		const root = renderRoot(manifest, "eu-oit-dev");
 		expect(root["main.tf"]).toContain('readonly_role_mode   = "create"');

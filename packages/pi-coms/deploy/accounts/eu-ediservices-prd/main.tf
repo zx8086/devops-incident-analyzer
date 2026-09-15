@@ -109,6 +109,8 @@ module "agent" {
   repo_url             = var.repo_url
   agent_name           = var.agent_name
   coms_project         = "pi-coms-prd"
+  monitor_tz           = "Europe/Amsterdam"
+  monitor_daily_cron   = "15 8 * * *"
   subnet_id            = var.agent_subnet_id
   associate_public_ip  = false
   instance_type        = "t4g.small"

@@ -175,18 +175,99 @@ resource "aws_s3_bucket_public_access_block" "dist" {
   restrict_public_buckets = true
 }
 
+// SIO-1745: superseded checkpoint bodies. Each changed checkpoint writes a new
+// content-addressed object and the manifest names only the latest, so the old
+// bodies are unreachable and would otherwise accumulate forever.
+//
+// Scoped to the checkpoint-db/ prefix, never a bare "state/": S3 lifecycle
+// filters are literal prefixes with no wildcards, so a rule covering the
+// bodies cannot be written as state/*/*/db/ -- and a bare state/ prefix would
+// expire manifest.json too, leaving a spoke quiet for 30 days with a deleted
+// pointer and unreachable bodies. The manifest is tiny and never expired.
+resource "aws_s3_bucket_lifecycle_configuration" "dist_state" {
+  bucket = aws_s3_bucket.dist.id
+  rule {
+    id     = "expire-superseded-checkpoint-dbs"
+    status = "Enabled"
+    filter {
+      prefix = "checkpoint-db/"
+    }
+    expiration {
+      days = 30
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 7
+    }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
 resource "aws_s3_bucket_policy" "dist_org_read" {
   bucket = aws_s3_bucket.dist.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Sid       = "OrgRead"
-      Effect    = "Allow"
-      Principal = "*"
-      Action    = ["s3:GetObject", "s3:ListBucket"]
-      Resource  = [aws_s3_bucket.dist.arn, "\${aws_s3_bucket.dist.arn}/*"]
-      Condition = { StringEquals = { "aws:PrincipalOrgID" = var.org_id } }
-    }]
+    Statement = [
+      {
+        Sid       = "OrgRead"
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = ["s3:GetObject", "s3:ListBucket"]
+        Resource  = [aws_s3_bucket.dist.arn, "\${aws_s3_bucket.dist.arn}/*"]
+        Condition = { StringEquals = { "aws:PrincipalOrgID" = var.org_id } }
+      },
+      // SIO-1745: a spoke writes its monitor-state checkpoint CROSS-ACCOUNT
+      // (spoke account -> this shared-services bucket), and cross-account
+      // access needs BOTH the caller's IAM grant and a resource-based Allow
+      // here. Without this the write fails with "no resource-based policy
+      // allows the s3:PutObject action" even though the instance role permits
+      // it. The Deny below still confines each spoke to its own prefix.
+      {
+        Sid       = "OrgWriteCheckpointState"
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = ["s3:PutObject"]
+        Resource = [
+          "\${aws_s3_bucket.dist.arn}/state/*",
+          "\${aws_s3_bucket.dist.arn}/checkpoint-db/*",
+        ]
+        // aws:PrincipalArn evaluates to the ROLE arn for an assumed-role
+        // session, never the sts::assumed-role session arn -- AWS docs: "For
+        // IAM roles, the request context returns the ARN of the role" and "Do
+        // not specify the assumed role session ARN as a value for this
+        // condition key." ArnLike is the operator AWS recommends for ARNs.
+        Condition = {
+          StringEquals = { "aws:PrincipalOrgID" = var.org_id }
+          ArnLike      = { "aws:PrincipalArn" = "arn:aws:iam::*:role/*-agent" }
+        }
+      },
+      // SIO-1745: the bundle is meant to be org-readable; a spoke's monitor
+      // state is NOT. OrgRead above and the spokes' own bucket-wide GetObject
+      // grant would otherwise let any spoke (or any org principal) read every
+      // other account's journal, unsent messages and suppression ledger.
+      // An explicit Deny beats both Allows; each agent role is excepted for
+      // its own prefix only, so it can still read its own checkpoint back.
+      {
+        Sid       = "DenyCrossSpokeStateRead"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = ["s3:GetObject"]
+        Resource = [
+          "\${aws_s3_bucket.dist.arn}/state/*",
+          "\${aws_s3_bucket.dist.arn}/checkpoint-db/*",
+        ]
+        // ArnNotLike, and no set operator: aws:PrincipalArn is single-valued,
+        // and ForAllValues on a single-valued key is vacuously TRUE when the
+        // key is absent -- as the only exception to a Deny that would have
+        // denied every spoke its OWN checkpoint reads.
+        Condition = {
+          ArnNotLike = {
+            "aws:PrincipalArn" = "arn:aws:iam::*:role/*-agent"
+          }
+        }
+      }
+    ]
   })
 }
 
