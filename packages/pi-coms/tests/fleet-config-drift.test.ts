@@ -9,6 +9,7 @@ import {
 	loadBootstrapKeys,
 	parseEnvKeys,
 	parseRemoteRead,
+	READ_LOCAL_ENV_COMMAND,
 } from "../scripts/fleet/config-drift.ts";
 
 // The keys the real bootstrap writes, read from the real file: the whole point
@@ -35,12 +36,34 @@ describe("bootstrapWrittenKeys (SIO-1747)", () => {
 		expect(REAL_KEYS).not.toContain("PI_COMS_NET_REFUSE_ABOVE_PCT");
 	});
 
+	// Greptile P2 on PR #780: an unanchored search also matched commented-out
+	// and unrelated echoes, so a `# echo "export CTX_MODE_ENABLED=..."` would
+	// make that key authoritative and report every host legitimately using it
+	// as DRIFT -- inviting deletion of a load-bearing override file.
+	test("ignores commented-out and out-of-block echoes", () => {
+		const src = [
+			'  echo "export DECOY_BEFORE=1"',
+			"{",
+			"  echo \"export PI_MONITOR_TZ='$MONITOR_TZ'\"",
+			'  # echo "export CTX_MODE_ENABLED=false"',
+			'} > "$ENV_FILE"',
+			'  echo "export DECOY_AFTER=1"',
+		].join("\n");
+		expect(bootstrapWrittenKeys(src)).toEqual(["PI_MONITOR_TZ"]);
+	});
+
+	test("throws rather than guessing when the writer block is missing", () => {
+		expect(() => bootstrapWrittenKeys('echo "export PI_MONITOR_TZ=x"')).toThrow(/ENV_FILE/);
+	});
+
 	test("reads only the env-file writer shape", () => {
 		const src = [
+			"{",
 			"  echo \"export PI_MONITOR_TZ='$MONITOR_TZ'\"",
 			'  if [ -n "${X:-}" ]; then echo "export BUNDLE_S3_URI=\'$X\'"; fi',
 			"  export NOT_THIS=1", // a plain shell export, not a written key
 			"  # echo comment",
+			'} > "$ENV_FILE"',
 		].join("\n");
 		expect(bootstrapWrittenKeys(src)).toEqual(["BUNDLE_S3_URI", "PI_MONITOR_TZ"]);
 	});
@@ -141,4 +164,27 @@ test("end to end: the shape SIO-1746 found on five prd spokes is flagged", () =>
 	const line = formatVerdict("eu-shared-services-prd", classify(asFoundOnProd, REAL_KEYS));
 	expect(line).toMatch(/DRIFT 2 key\(s\) shadowed/);
 	expect(line).toContain("PI_MONITOR_TZ, PI_MONITOR_DAILY_CRON");
+});
+
+// Greptile P1 on PR #780: `cat`-ing the 0600 override file put its VALUES into
+// SSM's StandardOutputContent, which anyone with ssm:GetCommandInvocation can
+// read back later -- proven against a live host with a canary value. The host
+// now emits key names only.
+describe("READ_LOCAL_ENV_COMMAND (SIO-1747 P1)", () => {
+	test("never cats the file; emits KEY= names only", () => {
+		const script = READ_LOCAL_ENV_COMMAND.join(" ; ");
+		expect(script).not.toMatch(/\bcat\b/);
+		expect(script).toContain("sed");
+		// The sed replacement keeps `\2=` -- the key with an empty value.
+		expect(script).toContain("\\2=");
+	});
+
+	test("still distinguishes an absent file", () => {
+		expect(READ_LOCAL_ENV_COMMAND.join(" ; ")).toContain("__NO_LOCAL_ENV__");
+	});
+
+	test("parseEnvKeys reads the value-stripped shape the host emits", () => {
+		// What the sed produces for `export PI_MONITOR_TZ=Europe/Amsterdam`.
+		expect(parseEnvKeys("PI_MONITOR_TZ=\nCTX_MODE_ENABLED=\n")).toEqual(["PI_MONITOR_TZ", "CTX_MODE_ENABLED"]);
+	});
 });

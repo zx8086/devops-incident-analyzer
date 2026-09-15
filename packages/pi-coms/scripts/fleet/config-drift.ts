@@ -13,10 +13,21 @@ import * as path from "node:path";
 // drift from the original exactly as the hosts did. Matches the `echo "export
 // KEY='...'"` lines of the block that writes $ENV_FILE.
 export function bootstrapWrittenKeys(bootstrapSource: string): string[] {
+	const lines = bootstrapSource.split("\n");
+	// Scoped to the `{ ... } > "$ENV_FILE"` block, not the whole file. An
+	// unanchored search also matched commented-out lines and unrelated echoes,
+	// so a `# echo "export CTX_MODE_ENABLED=..."` anywhere in the bootstrap
+	// would make that key "authoritative" and report every host legitimately
+	// using it as DRIFT -- the exact false positive that would invite deleting
+	// a load-bearing override file.
+	const start = lines.findIndex((l) => /^\s*\{\s*$/.test(l));
+	const end = lines.findIndex((l, i) => i > start && /\}\s*>\s*"\$ENV_FILE"/.test(l));
+	if (start === -1 || end === -1) {
+		throw new Error('could not locate the { ... } > "$ENV_FILE" block in the bootstrap');
+	}
 	const keys = new Set<string>();
-	for (const line of bootstrapSource.split("\n")) {
-		// Only the .coms-env writer block uses this shape; the .local file is
-		// never written by the bootstrap, so nothing else can match.
+	for (const line of lines.slice(start + 1, end)) {
+		if (/^\s*#/.test(line)) continue; // a commented-out echo is not a written key
 		const m = /echo\s+"export\s+([A-Z][A-Z0-9_]*)=/.exec(line);
 		if (m) keys.add(m[1]);
 	}
@@ -32,8 +43,10 @@ export function loadBootstrapKeys(file: string = bootstrapPath()): string[] {
 }
 
 // `export KEY=value` / `KEY=value`, skipping blanks and comments. Values are
-// deliberately discarded: this reports WHICH keys shadow, never their contents,
-// because the file is 0600 and may hold per-host secrets.
+// discarded, but note the split of responsibility: the HOST already stripped
+// them (see READ_LOCAL_ENV_COMMAND) so a value never reaches SSM's command
+// output. This function only re-parses the key list, and is the unit under
+// test for the shapes the host-side sed has to handle.
 export function parseEnvKeys(contents: string): string[] {
 	const keys: string[] = [];
 	for (const raw of contents.split("\n")) {
@@ -72,7 +85,15 @@ export function formatVerdict(spoke: string, verdict: DriftVerdict): string {
 	return `config ${label} DRIFT ${verdict.shadowed.length} key(s) shadowed by .coms-env.local: ${verdict.shadowed.join(", ")}`;
 }
 
-export const READ_LOCAL_ENV_COMMAND = ["cat /home/piagent/.coms-env.local 2>/dev/null || echo __NO_LOCAL_ENV__"];
+// Emits KEY NAMES ONLY. The values never leave the host, because SSM keeps
+// StandardOutputContent in the command invocation and anyone with
+// ssm:GetCommandInvocation can read it back afterwards -- `cat`-ing a 0600
+// operator file would copy per-host secrets into a queryable AWS log. The sed
+// keeps the `KEY=` shape parseEnvKeys expects, with an empty value.
+export const READ_LOCAL_ENV_COMMAND = [
+	"sed -nE 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*/\\2=/p' /home/piagent/.coms-env.local 2>/dev/null || true",
+	"[ -f /home/piagent/.coms-env.local ] || echo __NO_LOCAL_ENV__",
+];
 
 // The sentinel keeps "file absent" distinct from "file empty": an empty
 // override is clean, but so is a missing one, and conflating them would hide a
