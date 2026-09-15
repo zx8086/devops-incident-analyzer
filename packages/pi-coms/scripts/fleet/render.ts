@@ -241,31 +241,6 @@ resource "aws_s3_bucket_policy" "dist_org_read" {
           StringEquals = { "aws:PrincipalOrgID" = var.org_id }
           ArnLike      = { "aws:PrincipalArn" = "arn:aws:iam::*:role/*-agent" }
         }
-      },
-      // SIO-1745: the bundle is meant to be org-readable; a spoke's monitor
-      // state is NOT. OrgRead above and the spokes' own bucket-wide GetObject
-      // grant would otherwise let any spoke (or any org principal) read every
-      // other account's journal, unsent messages and suppression ledger.
-      // An explicit Deny beats both Allows; each agent role is excepted for
-      // its own prefix only, so it can still read its own checkpoint back.
-      {
-        Sid       = "DenyCrossSpokeStateRead"
-        Effect    = "Deny"
-        Principal = "*"
-        Action    = ["s3:GetObject"]
-        Resource = [
-          "\${aws_s3_bucket.dist.arn}/state/*",
-          "\${aws_s3_bucket.dist.arn}/checkpoint-db/*",
-        ]
-        // ArnNotLike, and no set operator: aws:PrincipalArn is single-valued,
-        // and ForAllValues on a single-valued key is vacuously TRUE when the
-        // key is absent -- as the only exception to a Deny that would have
-        // denied every spoke its OWN checkpoint reads.
-        Condition = {
-          ArnNotLike = {
-            "aws:PrincipalArn" = "arn:aws:iam::*:role/*-agent"
-          }
-        }
       }
     ]
   })
