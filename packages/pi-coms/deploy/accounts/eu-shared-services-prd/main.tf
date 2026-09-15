@@ -181,6 +181,31 @@ resource "aws_s3_bucket_policy" "dist_org_read" {
         Resource  = [aws_s3_bucket.dist.arn, "${aws_s3_bucket.dist.arn}/*"]
         Condition = { StringEquals = { "aws:PrincipalOrgID" = var.org_id } }
       },
+      // SIO-1745: a spoke writes its checkpoint CROSS-ACCOUNT (spoke account ->
+      // this shared-services bucket), and cross-account access needs BOTH the
+      // caller's IAM grant and a resource-based Allow here. Without this the
+      // write fails with "no resource-based policy allows the s3:PutObject
+      // action" even though the instance role permits it. Scoped to the agent
+      // roles, and the Deny below still confines each spoke to its own prefix.
+      {
+        Sid       = "OrgWriteCheckpointState"
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = ["s3:PutObject"]
+        Resource = [
+          "${aws_s3_bucket.dist.arn}/state/*",
+          "${aws_s3_bucket.dist.arn}/checkpoint-db/*",
+        ]
+        // aws:PrincipalArn evaluates to the ROLE arn for an assumed-role
+        // session, never the sts::assumed-role session arn -- AWS docs:
+        // "For IAM roles, the request context returns the ARN of the role" and
+        // "Do not specify the assumed role session ARN as a value for this
+        // condition key." ArnLike is the operator AWS recommends for ARNs.
+        Condition = {
+          StringEquals = { "aws:PrincipalOrgID" = var.org_id }
+          ArnLike      = { "aws:PrincipalArn" = "arn:aws:iam::*:role/*-agent" }
+        }
+      },
       // SIO-1745: the bundle is meant to be org-readable; a spoke's monitor
       // state is NOT. OrgRead above and the spokes' own bucket-wide GetObject
       // grant would otherwise let any spoke (or any org principal) read every
@@ -198,15 +223,17 @@ resource "aws_s3_bucket_policy" "dist_org_read" {
           "${aws_s3_bucket.dist.arn}/state/*",
           "${aws_s3_bucket.dist.arn}/checkpoint-db/*",
         ]
-        // StringNotLike WITHOUT a set operator: aws:PrincipalArn is
-        // single-valued, and ForAllValues on a single-valued key is vacuously
-        // TRUE when the key is absent -- which would have denied nothing at
-        // all for any principal that does not present it. StringNotLike with a
-        // multi-value list is an implicit OR, so a principal matching EITHER
-        // pattern escapes the Deny.
+        // aws:PrincipalArn is single-valued and, for an assumed-role session,
+        // resolves to the ROLE arn (AWS docs: "the request context returns the
+        // ARN of the role"; "Do not specify the assumed role session ARN").
+        // A pattern matching arn:aws:sts::*:assumed-role/... therefore never
+        // matches, and as the only exception to a Deny it would have denied
+        // every spoke its OWN checkpoint reads. ArnNotLike is the ARN-aware
+        // operator AWS recommends; no set operator, because ForAllValues on a
+        // single-valued key is vacuously true when the key is absent.
         Condition = {
-          StringNotLike = {
-            "aws:PrincipalArn" = ["arn:aws:sts::*:assumed-role/*-agent/*", "arn:aws:iam::*:role/*-agent"]
+          ArnNotLike = {
+            "aws:PrincipalArn" = "arn:aws:iam::*:role/*-agent"
           }
         }
       }
