@@ -144,8 +144,6 @@ export function defaultStageDir(): string {
 	return path.join(os.tmpdir(), "pi-monitor-checkpoint");
 }
 
-// ── S3 transport ───────────────────────────────────────────────────────────
-
 export interface ObjectStore {
 	put(key: string, body: Uint8Array, contentType: string): Promise<void>;
 	get(key: string): Promise<Uint8Array | null>;
@@ -156,8 +154,6 @@ export function parseS3Uri(uri: string): { bucket: string; key: string } {
 	if (!m) throw new Error(`not an s3 uri: ${uri}`);
 	return { bucket: m[1], key: m[2] };
 }
-
-// ── Save / restore ─────────────────────────────────────────────────────────
 
 export type SaveResult = { ok: true; rows: Record<string, number>; bytes: number } | { ok: false; reason: string };
 
