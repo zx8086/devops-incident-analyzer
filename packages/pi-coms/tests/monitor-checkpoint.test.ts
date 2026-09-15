@@ -6,7 +6,6 @@ import * as path from "node:path";
 import {
 	buildManifest,
 	countRows,
-	dbKey,
 	manifestKey,
 	type ObjectStore,
 	parseManifest,
@@ -103,13 +102,15 @@ describe("saveCheckpoint", () => {
 		expect(res.rows.suppressions).toBe(1);
 		expect(res.rows.journal).toBe(1);
 		// db before manifest: the manifest is the commit point.
-		expect(store.putCalls).toEqual([dbKey("s3://b/state/1/a"), manifestKey("s3://b/state/1/a")]);
+		expect(store.putCalls).toHaveLength(2);
+		expect(store.putCalls[0]).toMatch(/^s3:\/\/b\/state\/1\/a\/db\/[0-9a-f]{64}\.db$/);
+		expect(store.putCalls[1]).toBe(manifestKey("s3://b/state/1/a"));
 	});
 
 	test("a put failure is reported, never thrown", async () => {
 		const s = seeded(path.join(dir, "live.db"));
 		const store = new FakeStore();
-		store.failOn = dbKey("s3://b/p");
+		store.failOn = manifestKey("s3://b/p");
 		const res = await s.withDb((db) => saveCheckpoint(db, store, "s3://b/p", { ...META, stageDir: dir }));
 		s.close();
 		expect(res.ok).toBe(false);
@@ -122,7 +123,7 @@ describe("saveCheckpoint", () => {
 		const store = new FakeStore();
 		await s.withDb((db) => saveCheckpoint(db, store, "s3://b/p", { ...META, stageDir: dir }));
 		s.close();
-		expect(fs.existsSync(path.join(dir, "state.db"))).toBe(false);
+		expect(fs.readdirSync(dir).filter((f) => f.startsWith("state-"))).toHaveLength(0);
 	});
 });
 
@@ -185,7 +186,8 @@ describe("restoreCheckpoint", () => {
 
 	test("a checksum mismatch blocks and leaves no partial file", async () => {
 		const store = await storeWithCheckpoint();
-		store.objects.set(dbKey(PREFIX), Buffer.from("corrupted bytes"));
+		const key = [...store.objects.keys()].find((k) => k.includes("/db/")) as string;
+		store.objects.set(key, Buffer.from("corrupted bytes"));
 		const target = path.join(dir, "fresh.db");
 
 		const res = await restoreCheckpoint(store, PREFIX, target);
@@ -198,7 +200,7 @@ describe("restoreCheckpoint", () => {
 
 	test("a manifest with no db blocks", async () => {
 		const store = await storeWithCheckpoint();
-		store.objects.delete(dbKey(PREFIX));
+		store.objects.delete([...store.objects.keys()].find((k) => k.includes("/db/")) as string);
 		const res = await restoreCheckpoint(store, PREFIX, path.join(dir, "fresh.db"));
 		expect(res.restored).toBe(false);
 		if (res.restored) return;
@@ -226,7 +228,7 @@ test("countRows and buildManifest agree on the tracked tables", () => {
 	const snap = path.join(dir, "m-snap.db");
 	s.withDb((db) => snapshotTo(db, snap));
 	const rows = s.withDb((db) => countRows(db));
-	const m = buildManifest(snap, rows, META);
+	const m = buildManifest(snap, rows, { ...META, prefix: "s3://b/state/1/a" });
 	s.close();
 
 	expect(Object.keys(m.rows).sort()).toEqual(
@@ -235,4 +237,59 @@ test("countRows and buildManifest agree on the tracked tables", () => {
 	expect(m.schema).toBe(1);
 	expect(m.bytes).toBeGreaterThan(0);
 	expect(m.sha256).toMatch(/^[0-9a-f]{64}$/);
+});
+
+// Greptile P1 regressions (PR #778 review).
+describe("review findings", () => {
+	const PREFIX = "s3://b/state/1/a";
+
+	// Finding 1: a failed manifest upload must leave the PREVIOUS pair restorable.
+	test("a failed manifest upload does not strand the previous checkpoint", async () => {
+		const s = seeded(path.join(dir, "live.db"));
+		const store = new FakeStore();
+
+		// First checkpoint succeeds.
+		await s.withDb((db) => saveCheckpoint(db, store, PREFIX, { ...META, stageDir: dir }));
+		const firstManifest = Buffer.from(store.objects.get(manifestKey(PREFIX)) as Uint8Array).toString();
+		const firstKey = JSON.parse(firstManifest).db_key;
+
+		// Second checkpoint: db lands, manifest upload fails.
+		s.addSuppression("alarm:new%", "added after first checkpoint");
+		store.failOn = manifestKey(PREFIX);
+		const res = await s.withDb((db) => saveCheckpoint(db, store, PREFIX, { ...META, stageDir: dir }));
+		s.close();
+		expect(res.ok).toBe(false);
+
+		// The old manifest still names an object that is still present and valid.
+		expect(Buffer.from(store.objects.get(manifestKey(PREFIX)) as Uint8Array).toString()).toBe(firstManifest);
+		expect(store.objects.has(firstKey)).toBe(true);
+
+		store.failOn = null;
+		const restored = await restoreCheckpoint(store, PREFIX, path.join(dir, "r.db"));
+		expect(restored.restored).toBe(true);
+	});
+
+	// Finding 4: overlapping triggers must not share a staging file.
+	test("concurrent checkpoints do not clobber each other's staging file", async () => {
+		const s = seeded(path.join(dir, "live.db"));
+		const store = new FakeStore();
+		const results = await Promise.all([
+			s.withDb((db) => saveCheckpoint(db, store, PREFIX, { ...META, stageDir: dir })),
+			s.withDb((db) => saveCheckpoint(db, store, PREFIX, { ...META, stageDir: dir })),
+			s.withDb((db) => saveCheckpoint(db, store, PREFIX, { ...META, stageDir: dir })),
+		]);
+		s.close();
+		expect(results.every((r) => r.ok)).toBe(true);
+		expect(fs.readdirSync(dir).filter((f) => f.startsWith("state-"))).toHaveLength(0);
+
+		const restored = await restoreCheckpoint(store, PREFIX, path.join(dir, "r.db"));
+		expect(restored.restored).toBe(true);
+	});
+
+	test("a manifest without db_key is rejected", () => {
+		const r = parseManifest(JSON.stringify({ schema: 1, sha256: "a".repeat(64), bytes: 1, rows: {} }));
+		expect(r.ok).toBe(false);
+		if (r.ok) return;
+		expect(r.reason).toContain("db_key");
+	});
 });

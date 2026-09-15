@@ -138,14 +138,42 @@ resource "aws_s3_bucket_policy" "dist_org_read" {
   bucket = aws_s3_bucket.dist.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Sid       = "OrgRead"
-      Effect    = "Allow"
-      Principal = "*"
-      Action    = ["s3:GetObject", "s3:ListBucket"]
-      Resource  = [aws_s3_bucket.dist.arn, "${aws_s3_bucket.dist.arn}/*"]
-      Condition = { StringEquals = { "aws:PrincipalOrgID" = var.org_id } }
-    }]
+    Statement = [
+      {
+        Sid       = "OrgRead"
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = ["s3:GetObject", "s3:ListBucket"]
+        Resource  = [aws_s3_bucket.dist.arn, "${aws_s3_bucket.dist.arn}/*"]
+        Condition = { StringEquals = { "aws:PrincipalOrgID" = var.org_id } }
+      },
+      // SIO-1745: the bundle is meant to be org-readable; a spoke's monitor
+      // state is NOT. OrgRead above and the spokes' own bucket-wide GetObject
+      // grant would otherwise let any spoke (or any org principal) read every
+      // other account's journal, unsent messages and suppression ledger.
+      // An explicit Deny beats both Allows; each spoke's instance role is
+      // excepted for its own prefix only, so it can still read its own
+      // checkpoint back. aws:PrincipalArn with a wildcard matches the role's
+      // assumed-role sessions as well as the role itself.
+      {
+        Sid       = "DenyCrossSpokeStateRead"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = ["s3:GetObject"]
+        Resource  = ["${aws_s3_bucket.dist.arn}/state/*"]
+        // StringNotLike WITHOUT a set operator: aws:PrincipalArn is
+        // single-valued, and ForAllValues on a single-valued key is vacuously
+        // TRUE when the key is absent -- which would have denied nothing at
+        // all for any principal that does not present it. StringNotLike with a
+        // multi-value list is an implicit OR, so a principal matching EITHER
+        // pattern escapes the Deny.
+        Condition = {
+          StringNotLike = {
+            "aws:PrincipalArn" = ["arn:aws:sts::*:assumed-role/*-agent/*", "arn:aws:iam::*:role/*-agent"]
+          }
+        }
+      }
+    ]
   })
 }
 

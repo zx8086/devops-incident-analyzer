@@ -1,7 +1,7 @@
 // scripts/monitor/checkpoint.ts
 
 import type { Database } from "bun:sqlite";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -28,13 +28,20 @@ export interface CheckpointManifest {
 	sha256: string;
 	bytes: number;
 	rows: Record<string, number>;
+	// The db object this manifest describes. Content-addressed, so a manifest
+	// and its db can never disagree: a failed manifest upload leaves the OLD
+	// manifest still pointing at its own (untouched) db, instead of at bytes
+	// that have since been overwritten.
+	db_key: string;
 }
 
 export function manifestKey(prefix: string): string {
 	return `${prefix}/manifest.json`;
 }
-export function dbKey(prefix: string): string {
-	return `${prefix}/state.db`;
+// Content-addressed: the sha is in the key, so each checkpoint writes a new
+// object rather than overwriting the one the current manifest points at.
+export function dbKey(prefix: string, sha256: string): string {
+	return `${prefix}/db/${sha256}.db`;
 }
 
 // s3://bucket/fleet -> s3://bucket/state/<account>/<agent>. Derived from the
@@ -73,16 +80,18 @@ export function snapshotTo(db: Database, dest: string): void {
 export function buildManifest(
 	dbFile: string,
 	rows: Record<string, number>,
-	meta: { accountId: string; agent: string; now?: Date },
+	meta: { accountId: string; agent: string; prefix: string; now?: Date },
 ): CheckpointManifest {
+	const sha256 = sha256File(dbFile);
 	return {
 		schema: 1,
 		written_at: (meta.now ?? new Date()).toISOString(),
 		account_id: meta.accountId,
 		agent: meta.agent,
-		sha256: sha256File(dbFile),
+		sha256,
 		bytes: fs.statSync(dbFile).size,
 		rows,
+		db_key: dbKey(meta.prefix, sha256),
 	};
 }
 
@@ -106,6 +115,7 @@ export function parseManifest(text: string): ManifestCheck {
 	}
 	if (typeof m.bytes !== "number" || m.bytes <= 0) return { ok: false, reason: "manifest bytes missing or zero" };
 	if (typeof m.rows !== "object" || m.rows === null) return { ok: false, reason: "manifest rows missing" };
+	if (typeof m.db_key !== "string" || !m.db_key) return { ok: false, reason: "manifest db_key missing" };
 	return { ok: true, manifest: m as CheckpointManifest };
 }
 
@@ -152,15 +162,19 @@ export async function saveCheckpoint(
 	prefix: string,
 	meta: { accountId: string; agent: string; stageDir?: string; now?: Date },
 ): Promise<SaveResult> {
-	const stage = path.join(meta.stageDir ?? defaultStageDir(), "state.db");
+	// Per-invocation staging file: the scheduled, manual and shutdown triggers
+	// are not serialized, and a shared path let one invocation rmSync the file
+	// another was still hashing -- worst at shutdown, exactly when the terminal
+	// checkpoint matters most.
+	const stage = path.join(meta.stageDir ?? defaultStageDir(), `state-${process.pid}-${randomUUID()}.db`);
 	try {
 		snapshotTo(db, stage);
 		const rows = countRows(db);
-		const manifest = buildManifest(stage, rows, meta);
+		const manifest = buildManifest(stage, rows, { ...meta, prefix });
 		// db first, manifest second: the manifest is the commit point, so a
 		// crash between the two leaves the previous (valid) pair addressable
 		// rather than a manifest pointing at a half-written db.
-		await store.put(dbKey(prefix), fs.readFileSync(stage), "application/x-sqlite3");
+		await store.put(manifest.db_key, fs.readFileSync(stage), "application/x-sqlite3");
 		await store.put(manifestKey(prefix), Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`), "application/json");
 		return { ok: true, rows, bytes: manifest.bytes };
 	} catch (e) {
@@ -198,7 +212,7 @@ export async function restoreCheckpoint(store: ObjectStore, prefix: string, dbPa
 
 	let body: Uint8Array | null;
 	try {
-		body = await store.get(dbKey(prefix));
+		body = await store.get(parsed.manifest.db_key);
 	} catch (e) {
 		return {
 			restored: false,
