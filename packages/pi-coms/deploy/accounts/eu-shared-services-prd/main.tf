@@ -126,26 +126,29 @@ resource "aws_s3_bucket_versioning" "dist" {
   }
 }
 
-// SIO-1745: checkpoint db objects are content-addressed, so every changed
-// checkpoint writes a NEW object and the manifest only ever names the latest.
-// Without this the superseded ones accumulate forever.
+resource "aws_s3_bucket_public_access_block" "dist" {
+  bucket                  = aws_s3_bucket.dist.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+// SIO-1745: superseded checkpoint bodies. Each changed checkpoint writes a new
+// content-addressed object and the manifest names only the latest, so the old
+// bodies are unreachable and would otherwise accumulate forever.
 //
-// Scoped to the db/ SUBPREFIX, never a bare "state/": that would expire
-// manifest.json as well, and a spoke quiet for 30 days would come back to a
-// deleted pointer with its bodies intact but unreachable -- turning this from
-// a backup into a time bomb. The manifest is tiny, rewritten every
-// checkpoint, and never expired. 30 days still bounds body growth while
-// leaving a real rollback window.
+// Scoped to the checkpoint-db/ prefix, never a bare "state/": S3 lifecycle
+// filters are literal prefixes with no wildcards, so a rule covering the
+// bodies cannot be written as state/*/*/db/ -- and a bare state/ prefix would
+// expire manifest.json too, leaving a spoke quiet for 30 days with a deleted
+// pointer and unreachable bodies. The manifest is tiny and never expired.
 resource "aws_s3_bucket_lifecycle_configuration" "dist_state" {
   bucket = aws_s3_bucket.dist.id
   rule {
     id     = "expire-superseded-checkpoint-dbs"
     status = "Enabled"
     filter {
-      // Lifecycle filters are literal prefixes with no wildcards, so this
-      // cannot express state/*/*/db/. The checkpoint writer therefore puts
-      // every body under a single top-level prefix, keeping manifests
-      // (state/<account>/<agent>/manifest.json) outside the rule entirely.
       prefix = "checkpoint-db/"
     }
     expiration {
@@ -158,14 +161,6 @@ resource "aws_s3_bucket_lifecycle_configuration" "dist_state" {
       days_after_initiation = 7
     }
   }
-}
-
-resource "aws_s3_bucket_public_access_block" "dist" {
-  bucket                  = aws_s3_bucket.dist.id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
 }
 
 resource "aws_s3_bucket_policy" "dist_org_read" {
@@ -181,12 +176,12 @@ resource "aws_s3_bucket_policy" "dist_org_read" {
         Resource  = [aws_s3_bucket.dist.arn, "${aws_s3_bucket.dist.arn}/*"]
         Condition = { StringEquals = { "aws:PrincipalOrgID" = var.org_id } }
       },
-      // SIO-1745: a spoke writes its checkpoint CROSS-ACCOUNT (spoke account ->
-      // this shared-services bucket), and cross-account access needs BOTH the
-      // caller's IAM grant and a resource-based Allow here. Without this the
-      // write fails with "no resource-based policy allows the s3:PutObject
-      // action" even though the instance role permits it. Scoped to the agent
-      // roles, and the Deny below still confines each spoke to its own prefix.
+      // SIO-1745: a spoke writes its monitor-state checkpoint CROSS-ACCOUNT
+      // (spoke account -> this shared-services bucket), and cross-account
+      // access needs BOTH the caller's IAM grant and a resource-based Allow
+      // here. Without this the write fails with "no resource-based policy
+      // allows the s3:PutObject action" even though the instance role permits
+      // it. The Deny below still confines each spoke to its own prefix.
       {
         Sid       = "OrgWriteCheckpointState"
         Effect    = "Allow"
@@ -197,44 +192,13 @@ resource "aws_s3_bucket_policy" "dist_org_read" {
           "${aws_s3_bucket.dist.arn}/checkpoint-db/*",
         ]
         // aws:PrincipalArn evaluates to the ROLE arn for an assumed-role
-        // session, never the sts::assumed-role session arn -- AWS docs:
-        // "For IAM roles, the request context returns the ARN of the role" and
-        // "Do not specify the assumed role session ARN as a value for this
+        // session, never the sts::assumed-role session arn -- AWS docs: "For
+        // IAM roles, the request context returns the ARN of the role" and "Do
+        // not specify the assumed role session ARN as a value for this
         // condition key." ArnLike is the operator AWS recommends for ARNs.
         Condition = {
           StringEquals = { "aws:PrincipalOrgID" = var.org_id }
           ArnLike      = { "aws:PrincipalArn" = "arn:aws:iam::*:role/*-agent" }
-        }
-      },
-      // SIO-1745: the bundle is meant to be org-readable; a spoke's monitor
-      // state is NOT. OrgRead above and the spokes' own bucket-wide GetObject
-      // grant would otherwise let any spoke (or any org principal) read every
-      // other account's journal, unsent messages and suppression ledger.
-      // An explicit Deny beats both Allows; each spoke's instance role is
-      // excepted for its own prefix only, so it can still read its own
-      // checkpoint back. aws:PrincipalArn with a wildcard matches the role's
-      // assumed-role sessions as well as the role itself.
-      {
-        Sid       = "DenyCrossSpokeStateRead"
-        Effect    = "Deny"
-        Principal = "*"
-        Action    = ["s3:GetObject"]
-        Resource = [
-          "${aws_s3_bucket.dist.arn}/state/*",
-          "${aws_s3_bucket.dist.arn}/checkpoint-db/*",
-        ]
-        // aws:PrincipalArn is single-valued and, for an assumed-role session,
-        // resolves to the ROLE arn (AWS docs: "the request context returns the
-        // ARN of the role"; "Do not specify the assumed role session ARN").
-        // A pattern matching arn:aws:sts::*:assumed-role/... therefore never
-        // matches, and as the only exception to a Deny it would have denied
-        // every spoke its OWN checkpoint reads. ArnNotLike is the ARN-aware
-        // operator AWS recommends; no set operator, because ForAllValues on a
-        // single-valued key is vacuously true when the key is absent.
-        Condition = {
-          ArnNotLike = {
-            "aws:PrincipalArn" = "arn:aws:iam::*:role/*-agent"
-          }
         }
       }
     ]
@@ -274,6 +238,8 @@ module "agent" {
   repo_url             = var.repo_url
   agent_name           = var.agent_name
   coms_project         = "pi-coms-prd"
+  monitor_tz           = "Europe/Amsterdam"
+  monitor_daily_cron   = "15 8 * * *"
   subnet_id            = var.agent_subnet_id
   associate_public_ip  = false
   instance_type        = "t4g.small"

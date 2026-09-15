@@ -25,6 +25,54 @@ describe("fleet root renderer (SIO-1653)", () => {
 		expect(main).toContain('monitor_daily_cron   = "15 8 * * *"');
 	});
 
+	// SIO-1746: the checkpoint bucket policy was hand-added to the generated
+	// roots by SIO-1745, so `just fleet render` silently deleted it. It is
+	// emitted by the generator now; these assertions stop it regressing to a
+	// hand-edit.
+	test("a hub-hosting root emits the checkpoint write grant and lifecycle", () => {
+		const main = renderRoot(manifest, "eu-shared-services-dev")["main.tf"] ?? "";
+
+		// A spoke writes its checkpoint CROSS-ACCOUNT, which needs a
+		// resource-based Allow as well as the spoke's identity grant.
+		expect(main).toContain('Sid       = "OrgWriteCheckpointState"');
+		// Superseded bodies expire; manifests never do.
+		expect(main).toContain('id     = "expire-superseded-checkpoint-dbs"');
+		expect(main).toContain('prefix = "checkpoint-db/"');
+		expect(main).not.toContain('prefix = "state/"');
+
+		// aws:PrincipalArn is the ROLE arn, never the sts session arn, and is
+		// single-valued: ForAllValues on it is vacuously true when the key is
+		// absent, which silently matches everything.
+		expect(main).toContain('ArnLike      = { "aws:PrincipalArn" = "arn:aws:iam::*:role/*-agent" }');
+		// Strip comments before the negative assertions: the rendered file
+		// explains WHY sts:: and ForAllValues are wrong, so a naive substring
+		// check matches the warning rather than a real condition.
+		const code = main
+			.split("\n")
+			.filter((l) => !l.trim().startsWith("//"))
+			.join("\n");
+		expect(code).not.toContain("arn:aws:sts::");
+		expect(code).not.toContain("ForAllValues");
+	});
+
+	// The fleet is a star: operators talk to the hub, the hub talks to the
+	// spokes, and spokes never talk to each other. There is no tenancy boundary
+	// between spokes, so no cross-spoke read Deny -- an earlier attempt at one
+	// was vacuous (it exempted the whole *-agent role class) and the NotResource
+	// form that fixed that also denied fleet/, breaking bundle convergence on
+	// prd. Writes stay scoped by the spoke's own identity policy.
+	test("no cross-spoke read Deny: spokes are one fleet, not tenants", () => {
+		const main = renderRoot(manifest, "eu-shared-services-dev")["main.tf"] ?? "";
+		expect(main).not.toContain("DenyCrossSpokeStateRead");
+		expect(main).not.toContain("NotResource");
+	});
+
+	test("a non-hub spoke root carries no bucket policy at all", () => {
+		const main = renderRoot(manifest, "eu-oit-dev")["main.tf"] ?? "";
+		expect(main).not.toContain("OrgWriteCheckpointState");
+		expect(main).not.toContain("aws_s3_bucket_lifecycle_configuration");
+	});
+
 	test("a dev spoke root uses create mode and takes every identifier from tfvars", () => {
 		const root = renderRoot(manifest, "eu-oit-dev");
 		expect(root["main.tf"]).toContain('readonly_role_mode   = "create"');
