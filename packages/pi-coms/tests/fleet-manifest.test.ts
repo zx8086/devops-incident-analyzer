@@ -11,7 +11,10 @@ describe("fleet manifest (SIO-1653)", () => {
 		const m = parseManifest(EXAMPLE);
 		// SIO-1666: hubs are keyed by selector (AWS profile), not environment.
 		expect(Object.keys(m.hubs).sort()).toEqual(["eu-shared-services-dev", "eu-shared-services-prd"]);
-		expect(spokeNames(m, [])).toHaveLength(9);
+		// SIO-1743: 8, not 9 -- eu-b2bonboarding-prd was removed from the example.
+		// It is a governance account with no VPC and no subnets, so a spoke there
+		// renders a root that can never be applied and then drifts (SIO-1685).
+		expect(spokeNames(m, [])).toHaveLength(8);
 		expect(spokeNames(m, []).slice(0, 4)).toEqual([
 			"eu-shared-services-dev",
 			"eu-oit-dev",
