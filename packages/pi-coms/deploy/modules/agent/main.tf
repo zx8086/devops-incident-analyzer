@@ -585,9 +585,9 @@ resource "aws_iam_role_policy" "agent_secrets" {
       // role cannot do this: SecretAndDataPlaneDeny denies s3:GetObject, so the
       // checkpoint client pins itself to the instance role.
       var.dist_bucket_arn == "" ? [] : [{
-        Sid      = "MonitorStateCheckpoint"
-        Effect   = "Allow"
-        Action   = ["s3:PutObject", "s3:GetObject"]
+        Sid    = "MonitorStateCheckpoint"
+        Effect = "Allow"
+        Action = ["s3:PutObject", "s3:GetObject"]
         Resource = [
           "${var.dist_bucket_arn}/state/${local.account_id}/monitor-${local.agent_name}/*",
           "${var.dist_bucket_arn}/checkpoint-db/${local.account_id}/monitor-${local.agent_name}/*",
