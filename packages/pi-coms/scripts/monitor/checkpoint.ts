@@ -40,8 +40,16 @@ export function manifestKey(prefix: string): string {
 }
 // Content-addressed: the sha is in the key, so each checkpoint writes a new
 // object rather than overwriting the one the current manifest points at.
+//
+// Bodies live under a single top-level `checkpoint-db/` prefix rather than
+// beside the manifest. S3 lifecycle filters are literal prefixes with no
+// wildcards, so they cannot express `state/*/*/db/`; keeping bodies in their
+// own top-level prefix lets the expiry rule reach every spoke's superseded
+// bodies while never touching a live manifest.json.
 export function dbKey(prefix: string, sha256: string): string {
-	return `${prefix}/db/${sha256}.db`;
+	const { bucket, key } = parseS3Uri(`${prefix}/x`);
+	const scope = key.replace(/\/x$/, "");
+	return `s3://${bucket}/checkpoint-db/${scope.replace(/^state\//, "")}/${sha256}.db`;
 }
 
 // s3://bucket/fleet -> s3://bucket/state/<account>/<agent>. Derived from the

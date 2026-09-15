@@ -103,7 +103,9 @@ describe("saveCheckpoint", () => {
 		expect(res.rows.journal).toBe(1);
 		// db before manifest: the manifest is the commit point.
 		expect(store.putCalls).toHaveLength(2);
-		expect(store.putCalls[0]).toMatch(/^s3:\/\/b\/state\/1\/a\/db\/[0-9a-f]{64}\.db$/);
+		// Bodies live under checkpoint-db/ so one lifecycle rule can expire every
+		// spoke's superseded bodies without ever touching a live manifest.
+		expect(store.putCalls[0]).toMatch(/^s3:\/\/b\/checkpoint-db\/1\/a\/[0-9a-f]{64}\.db$/);
 		expect(store.putCalls[1]).toBe(manifestKey("s3://b/state/1/a"));
 	});
 
@@ -186,7 +188,7 @@ describe("restoreCheckpoint", () => {
 
 	test("a checksum mismatch blocks and leaves no partial file", async () => {
 		const store = await storeWithCheckpoint();
-		const key = [...store.objects.keys()].find((k) => k.includes("/db/")) as string;
+		const key = [...store.objects.keys()].find((k) => k.includes("/checkpoint-db/")) as string;
 		store.objects.set(key, Buffer.from("corrupted bytes"));
 		const target = path.join(dir, "fresh.db");
 
@@ -200,7 +202,7 @@ describe("restoreCheckpoint", () => {
 
 	test("a manifest with no db blocks", async () => {
 		const store = await storeWithCheckpoint();
-		store.objects.delete([...store.objects.keys()].find((k) => k.includes("/db/")) as string);
+		store.objects.delete([...store.objects.keys()].find((k) => k.includes("/checkpoint-db/")) as string);
 		const res = await restoreCheckpoint(store, PREFIX, path.join(dir, "fresh.db"));
 		expect(res.restored).toBe(false);
 		if (res.restored) return;

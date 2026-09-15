@@ -126,6 +126,40 @@ resource "aws_s3_bucket_versioning" "dist" {
   }
 }
 
+// SIO-1745: checkpoint db objects are content-addressed, so every changed
+// checkpoint writes a NEW object and the manifest only ever names the latest.
+// Without this the superseded ones accumulate forever.
+//
+// Scoped to the db/ SUBPREFIX, never a bare "state/": that would expire
+// manifest.json as well, and a spoke quiet for 30 days would come back to a
+// deleted pointer with its bodies intact but unreachable -- turning this from
+// a backup into a time bomb. The manifest is tiny, rewritten every
+// checkpoint, and never expired. 30 days still bounds body growth while
+// leaving a real rollback window.
+resource "aws_s3_bucket_lifecycle_configuration" "dist_state" {
+  bucket = aws_s3_bucket.dist.id
+  rule {
+    id     = "expire-superseded-checkpoint-dbs"
+    status = "Enabled"
+    filter {
+      // Lifecycle filters are literal prefixes with no wildcards, so this
+      // cannot express state/*/*/db/. The checkpoint writer therefore puts
+      // every body under a single top-level prefix, keeping manifests
+      // (state/<account>/<agent>/manifest.json) outside the rule entirely.
+      prefix = "checkpoint-db/"
+    }
+    expiration {
+      days = 30
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 7
+    }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
 resource "aws_s3_bucket_public_access_block" "dist" {
   bucket                  = aws_s3_bucket.dist.id
   block_public_acls       = true
@@ -160,7 +194,10 @@ resource "aws_s3_bucket_policy" "dist_org_read" {
         Effect    = "Deny"
         Principal = "*"
         Action    = ["s3:GetObject"]
-        Resource  = ["${aws_s3_bucket.dist.arn}/state/*"]
+        Resource = [
+          "${aws_s3_bucket.dist.arn}/state/*",
+          "${aws_s3_bucket.dist.arn}/checkpoint-db/*",
+        ]
         // StringNotLike WITHOUT a set operator: aws:PrincipalArn is
         // single-valued, and ForAllValues on a single-valued key is vacuously
         // TRUE when the key is absent -- which would have denied nothing at

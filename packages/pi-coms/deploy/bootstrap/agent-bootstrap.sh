@@ -452,7 +452,20 @@ if [ -n "$BUNDLE_S3_URI" ] && [ -n "${AWS_ACCOUNT_ID:-}" ]; then
     STATE_BUCKET="$(echo "$BUNDLE_S3_URI" | sed -E 's#^s3://([^/]+).*#\1#')"
     STATE_PREFIX="s3://$STATE_BUCKET/state/$AWS_ACCOUNT_ID/monitor-$AGENT_NAME"
     TMP_STATE="$(mktemp -d)"
-    if aws s3 cp "$STATE_PREFIX/manifest.json" "$TMP_STATE/manifest.json" --region "$AWS_REGION" 2>/dev/null; then
+    # Only a genuine "object does not exist" is a fresh start. AccessDenied,
+    # throttling and network errors must BLOCK: swallowing them would discard a
+    # perfectly good checkpoint and come up blank, which is indistinguishable
+    # from a first boot -- the exact failure this mechanism exists to prevent.
+    # `aws s3 cp` exits 1 for both, so the stderr text is the only signal.
+    # `|| MANIFEST_RC=$?` is required: under `set -e` a failing command
+    # substitution in an assignment aborts the script outright, so the rc could
+    # never be inspected.
+    MANIFEST_RC=0
+    MANIFEST_ERR="$(aws s3 cp "$STATE_PREFIX/manifest.json" "$TMP_STATE/manifest.json" --region "$AWS_REGION" 2>&1 >/dev/null)" || MANIFEST_RC=$?
+    if [ "$MANIFEST_RC" -ne 0 ] && ! echo "$MANIFEST_ERR" | grep -qiE "404|Not Found|does not exist|NoSuchKey"; then
+      echo "monitor state restore BLOCKED: manifest fetch failed (not a missing object): $MANIFEST_ERR" >&2
+      RESTORE_BLOCKED=1
+    elif [ "$MANIFEST_RC" -eq 0 ]; then
       # The db object is content-addressed and named by the manifest, so the
       # pair can never disagree: a checkpoint whose manifest upload failed
       # leaves the previous manifest pointing at its own, still-present db.

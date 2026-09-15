@@ -588,7 +588,10 @@ resource "aws_iam_role_policy" "agent_secrets" {
         Sid      = "MonitorStateCheckpoint"
         Effect   = "Allow"
         Action   = ["s3:PutObject", "s3:GetObject"]
-        Resource = ["${var.dist_bucket_arn}/state/${local.account_id}/monitor-${local.agent_name}/*"]
+        Resource = [
+          "${var.dist_bucket_arn}/state/${local.account_id}/monitor-${local.agent_name}/*",
+          "${var.dist_bucket_arn}/checkpoint-db/${local.account_id}/monitor-${local.agent_name}/*",
+        ]
       }]
     )
   })
