@@ -48,7 +48,6 @@ hubs:
       - 10.10.6.0/23       # prd mendix-platform VPC
       - 10.10.8.0/23       # prd b2b-ecom VPC
       - 10.10.10.0/23      # prd b2becom-v2 VPC
-      - 10.10.12.0/23      # prd b2bonboarding VPC
     token_env: PI_COMS_NET_AUTH_TOKEN_PRD
 
 persona:
@@ -131,10 +130,10 @@ spokes:
     subnet_id: subnet-0prd0b2becomv20000
     vpc_cidr: 10.10.10.0/23
     readonly_role: adopt
-  eu-b2bonboarding-prd:
-    env: prd
-    hub: eu-shared-services-prd
-    profile: eu-b2bonboarding-prd
-    subnet_id: subnet-0prd0onboarding000
-    vpc_cidr: 10.10.12.0/23
-    readonly_role: adopt
+  # SIO-1743: eu-b2bonboarding-prd is intentionally NOT a spoke. It is a
+  # governance account with no VPC, no subnets and no transit gateway
+  # attachment (SIO-1685), so an agent cannot run there -- declaring it renders
+  # a root that can never be applied and then drifts silently. It stays a
+  # MONITORED estate the analyzer reads via DevOpsAgentReadOnly; that needs no
+  # spoke entry. A spoke belongs here only if the account has a routable
+  # private subnet.
