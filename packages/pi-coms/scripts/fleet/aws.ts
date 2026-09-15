@@ -24,6 +24,7 @@ import {
 	S3Client,
 } from "@aws-sdk/client-s3";
 import {
+	GetCommandInvocationCommand,
 	GetParameterCommand,
 	GetParametersByPathCommand,
 	PutParameterCommand,
@@ -61,6 +62,10 @@ export interface FleetAws {
 	createStateBucket(profile: string, region: string, bucket: string): Promise<void>;
 	instanceIdByName(profile: string, region: string, nameTag: string): Promise<string | undefined>;
 	runShell(profile: string, region: string, instanceId: string, commands: string[]): Promise<string>;
+	// SIO-1747: runShell is fire-and-forget and returns the COMMAND ID, which is
+	// what the rollout wants. Reading a host's config needs the output, so this
+	// polls the invocation to completion and returns stdout.
+	runShellOutput(profile: string, region: string, instanceId: string, commands: string[]): Promise<string>;
 }
 
 function creds(profile: string) {
@@ -258,5 +263,38 @@ export const realFleetAws: FleetAws = {
 			}),
 		);
 		return out.Command?.CommandId ?? "";
+	},
+	async runShellOutput(profile, region, instanceId, commands) {
+		const client = new SSMClient({ region, credentials: creds(profile) });
+		const sent = await client.send(
+			new SendCommandCommand({
+				InstanceIds: [instanceId],
+				DocumentName: "AWS-RunShellScript",
+				Parameters: { commands },
+			}),
+		);
+		const commandId = sent.Command?.CommandId;
+		if (!commandId) throw new Error("ssm send-command returned no command id");
+		// The invocation is not queryable the instant the command is sent, and a
+		// Pending/InProgress read returns empty output rather than an error --
+		// which would look exactly like an absent file.
+		for (let attempt = 0; attempt < 20; attempt++) {
+			await new Promise((r) => setTimeout(r, 1_500));
+			try {
+				const inv = await client.send(
+					new GetCommandInvocationCommand({ CommandId: commandId, InstanceId: instanceId }),
+				);
+				if (inv.Status === "Pending" || inv.Status === "InProgress") continue;
+				if (inv.Status !== "Success") {
+					throw new Error(`ssm command ${inv.Status}: ${inv.StandardErrorContent?.trim() || "no stderr"}`);
+				}
+				return inv.StandardOutputContent ?? "";
+			} catch (error) {
+				// InvocationDoesNotExist just means the invocation has not
+				// registered yet; anything else is a real failure.
+				if ((error as { name?: string }).name !== "InvocationDoesNotExist") throw error;
+			}
+		}
+		throw new Error("ssm command did not complete within 30s");
 	},
 };

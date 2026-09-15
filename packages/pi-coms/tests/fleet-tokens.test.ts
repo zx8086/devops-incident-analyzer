@@ -31,6 +31,7 @@ function fake(state: { onHub: Set<string>; puts: Array<{ profile: string; name: 
 		createStateBucket: unused,
 		instanceIdByName: unused,
 		runShell: unused,
+		runShellOutput: async () => "",
 	};
 }
 

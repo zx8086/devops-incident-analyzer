@@ -21,6 +21,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { parseArgs } from "node:util";
 import { type FleetAws, realFleetAws } from "./fleet/aws.ts";
+import {
+	classify,
+	formatVerdict,
+	loadBootstrapKeys,
+	parseRemoteRead,
+	READ_LOCAL_ENV_COMMAND,
+} from "./fleet/config-drift.ts";
 import { listAgents, missingOnHub, personaVersion } from "./fleet/hub.ts";
 import {
 	DEFAULT_AUTH_PATH,
@@ -365,6 +372,37 @@ async function runStatus(manifest: FleetManifest, names: string[], aws: FleetAws
 				);
 			}
 		});
+	}
+	await reportConfigDrift(manifest, targets, aws);
+}
+
+// SIO-1747: a key hand-set in ~/.coms-env.local silently outranks the
+// terraform-rendered .coms-env, and nothing surfaced it -- five prd spokes
+// drifted for a week and were found only by reading files on the hosts. Report
+// only; deleting the file is what would have reverted five digests to UTC
+// @daily (SIO-1746), so the decision stays with the operator.
+async function reportConfigDrift(manifest: FleetManifest, targets: string[], aws: FleetAws): Promise<void> {
+	let bootstrapKeys: string[];
+	try {
+		bootstrapKeys = loadBootstrapKeys();
+	} catch (error) {
+		console.log(`config (skipped: ${error instanceof Error ? error.message : String(error)})`);
+		return;
+	}
+	for (const name of targets) {
+		const spoke = spokeFor(manifest, name);
+		try {
+			const instanceId = await aws.instanceIdByName(spoke.profile, manifest.defaults.region, "pi-agent-agent");
+			if (!instanceId) {
+				console.log(`config ${name.padEnd(28)} (no running agent host)`);
+				continue;
+			}
+			const out = await aws.runShellOutput(spoke.profile, manifest.defaults.region, instanceId, READ_LOCAL_ENV_COMMAND);
+			console.log(formatVerdict(name, classify(parseRemoteRead(out), bootstrapKeys)));
+		} catch (error) {
+			// Never fail the whole status on one unreachable host.
+			console.log(`config ${name.padEnd(28)} (unreadable: ${error instanceof Error ? error.message : String(error)})`);
+		}
 	}
 }
 
