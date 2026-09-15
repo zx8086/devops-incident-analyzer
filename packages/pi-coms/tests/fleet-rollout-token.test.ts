@@ -61,6 +61,7 @@ function fakeAws(rec: Recorder, params: Record<string, string> = {}): FleetAws {
 			rec.shells.push(instanceId);
 			throw new Error("STOP_AFTER_DISPATCH");
 		},
+		runShellOutput: async () => "",
 	};
 }
 

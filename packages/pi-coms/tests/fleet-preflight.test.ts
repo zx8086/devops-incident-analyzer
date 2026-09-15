@@ -49,6 +49,7 @@ function fakeAws(overrides: Overrides = {}): FleetAws {
 		createStateBucket: async () => {},
 		instanceIdByName: async () => "i-0123",
 		runShell: async () => "cmd-1",
+		runShellOutput: async () => "",
 	};
 	return { ...base, ...overrides };
 }
