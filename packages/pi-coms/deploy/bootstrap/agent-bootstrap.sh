@@ -316,6 +316,10 @@ ENV_FILE="$AGENT_HOME/.coms-env"
   # globs: unquoted, `15 8 * * *` expands against the cwd and the unit dies on
   # "not a valid identifier". Empty stays unset -- the monitor then keeps the
   # host zone and its own @daily default, so the deployed behaviour is unchanged.
+  # SIO-1745: the monitor derives its checkpoint prefix from the bundle bucket,
+  # so the state backup needs no userdata variable of its own -- adding one
+  # would replace every spoke, the exact event the checkpoint exists to survive.
+  if [ -n "${BUNDLE_S3_URI:-}" ]; then echo "export BUNDLE_S3_URI='$BUNDLE_S3_URI'"; fi
   if [ -n "${MONITOR_TZ:-}" ]; then echo "export PI_MONITOR_TZ='$MONITOR_TZ'"; fi
   if [ -n "${MONITOR_DAILY_CRON:-}" ]; then echo "export PI_MONITOR_DAILY_CRON='$MONITOR_DAILY_CRON'"; fi
   # Route the whole piagent workload (agent, monitor, aws CLI) through the
@@ -432,6 +436,88 @@ UNIT
 # The account monitor: deterministic scheduled checks, reports via the hub
 # mailbox. Independent of pi-agent.service by design -- a wedged agent never
 # stops detection.
+# ── Monitor state restore (SIO-1745) ───────────────────────────────────────
+# The root volume dies with the instance and a userdata-affecting change
+# (pi_model among them) replaces it, taking the suppression ledger, the reused
+# diagnoses and the operator's mute/pause with it. Restore before the unit
+# starts, never over an existing db, and never silently blank: a checkpoint
+# that exists but cannot be verified is an alarm, because a blank start looks
+# exactly like a healthy first boot.
+RESTORE_BLOCKED=0
+if [ -n "$BUNDLE_S3_URI" ] && [ -n "${AWS_ACCOUNT_ID:-}" ]; then
+  STATE_DB="$AGENT_HOME/.pi/monitor/state.db"
+  if [ -f "$STATE_DB" ]; then
+    echo "monitor state present; not restoring over live data"
+  else
+    STATE_BUCKET="$(echo "$BUNDLE_S3_URI" | sed -E 's#^s3://([^/]+).*#\1#')"
+    STATE_PREFIX="s3://$STATE_BUCKET/state/$AWS_ACCOUNT_ID/monitor-$AGENT_NAME"
+    TMP_STATE="$(mktemp -d)"
+    # Only a genuine "object does not exist" is a fresh start. AccessDenied,
+    # throttling and network errors must BLOCK: swallowing them would discard a
+    # perfectly good checkpoint and come up blank, which is indistinguishable
+    # from a first boot -- the exact failure this mechanism exists to prevent.
+    # `aws s3 cp` exits 1 for both, so the stderr text is the only signal.
+    # `|| MANIFEST_RC=$?` is required: under `set -e` a failing command
+    # substitution in an assignment aborts the script outright, so the rc could
+    # never be inspected.
+    MANIFEST_RC=0
+    MANIFEST_ERR="$(aws s3 cp "$STATE_PREFIX/manifest.json" "$TMP_STATE/manifest.json" --region "$AWS_REGION" 2>&1 >/dev/null)" || MANIFEST_RC=$?
+    if [ "$MANIFEST_RC" -ne 0 ] && ! echo "$MANIFEST_ERR" | grep -qiE "404|Not Found|does not exist|NoSuchKey"; then
+      echo "monitor state restore BLOCKED: manifest fetch failed (not a missing object): $MANIFEST_ERR" >&2
+      RESTORE_BLOCKED=1
+    elif [ "$MANIFEST_RC" -eq 0 ]; then
+      # The db object is content-addressed and named by the manifest, so the
+      # pair can never disagree: a checkpoint whose manifest upload failed
+      # leaves the previous manifest pointing at its own, still-present db.
+      WANT_SHA="$(sed -n 's/.*"sha256"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{64\}\)".*/\1/p' "$TMP_STATE/manifest.json")"
+      DB_KEY="$(sed -n 's/.*"db_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP_STATE/manifest.json")"
+      if [ -n "$DB_KEY" ] && aws s3 cp "$DB_KEY" "$TMP_STATE/state.db" --region "$AWS_REGION" 2>/dev/null; then
+        GOT_SHA="$(sha256sum "$TMP_STATE/state.db" | cut -d' ' -f1)"
+        if [ -n "$WANT_SHA" ] && [ "$WANT_SHA" = "$GOT_SHA" ]; then
+          sudo -u "$AGENT_USER" -H mkdir -p "$AGENT_HOME/.pi/monitor"
+          install -o "$AGENT_USER" -g "$AGENT_USER" -m 600 "$TMP_STATE/state.db" "$STATE_DB"
+          echo "monitor state RESTORED from $STATE_PREFIX (sha256 $GOT_SHA)"
+        else
+          echo "monitor state restore BLOCKED: sha256 mismatch (manifest '$WANT_SHA', downloaded '$GOT_SHA')" >&2
+          RESTORE_BLOCKED=1
+        fi
+      else
+        echo "monitor state restore BLOCKED: manifest present but state.db unreadable" >&2
+        RESTORE_BLOCKED=1
+      fi
+    else
+      echo "no monitor state checkpoint at $STATE_PREFIX; starting fresh"
+    fi
+    rm -rf "$TMP_STATE"
+  fi
+fi
+
+# A blocked restore must NOT fall through to a blank start. MonitorState creates
+# an empty db on first open, so starting the monitor here would manufacture
+# exactly the silent blank state this whole mechanism exists to prevent -- and
+# it would look identical to a healthy first boot. Leave the unit installed but
+# stopped, and leave a breadcrumb saying why. The operator resolves it (restore
+# by hand, or `rm` the marker to accept a genuine fresh start) and starts the
+# unit; every other service on this host is unaffected.
+if [ "${RESTORE_BLOCKED:-0}" = "1" ]; then
+  install -o "$AGENT_USER" -g "$AGENT_USER" -m 644 /dev/stdin "$AGENT_HOME/.pi/monitor/RESTORE-BLOCKED" <<MARKER
+Monitor state restore was BLOCKED at $(date -Is).
+
+A checkpoint exists for this spoke but could not be verified (see the bootstrap
+log above for the reason: unreadable manifest, missing db, or sha256 mismatch).
+
+pi-monitor.service has deliberately NOT been started. Starting it would create
+an empty state.db and silently lose the suppression ledger, the reused
+diagnoses and the persisted investigate/pause controls (SIO-1745).
+
+To resolve:
+  - investigate the checkpoint under s3://<dist-bucket>/state/$AWS_ACCOUNT_ID/monitor-$AGENT_NAME/
+  - restore a known-good state.db to $AGENT_HOME/.pi/monitor/state.db, OR
+  - accept a fresh start: rm this file
+Then: systemctl start pi-monitor.service
+MARKER
+fi
+
 cat > /etc/systemd/system/pi-monitor.service <<UNIT
 [Unit]
 Description=Pi AWS account monitor
@@ -665,6 +751,14 @@ systemctl enable --now herdr.service
 systemctl enable pi-agent.service
 systemctl restart pi-agent.service
 systemctl enable pi-monitor.service
-systemctl restart pi-monitor.service
+# Enabled but NOT started when a restore was blocked: an empty state.db here is
+# indistinguishable from a healthy first boot, which is the failure mode this
+# guards (SIO-1745). See ~/.pi/monitor/RESTORE-BLOCKED for the resolution steps.
+# The agent and herdr above are untouched -- only the monitor holds the state.
+if [ "${RESTORE_BLOCKED:-0}" = "1" ]; then
+  echo "pi-monitor.service NOT started: state restore was blocked (see $AGENT_HOME/.pi/monitor/RESTORE-BLOCKED)" >&2
+else
+  systemctl restart pi-monitor.service
+fi
 
 echo "=== bootstrap complete $(date -Is) ==="

@@ -25,6 +25,12 @@ export class MonitorState {
 		} catch {}
 	}
 
+	// Checkpoint seam (SIO-1745): the db handle stays private, so the backup
+	// path borrows it here rather than reaching through the class.
+	withDb<T>(fn: (db: Database) => T): T {
+		return fn(this.db);
+	}
+
 	getWatermark(key: string): number | null {
 		const r = this.db.query("SELECT ts FROM watermarks WHERE key = ?").get(key) as { ts: number } | null;
 		return r ? Number(r.ts) : null;

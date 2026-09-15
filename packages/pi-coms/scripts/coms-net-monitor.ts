@@ -14,7 +14,9 @@ import { GuardDutyClient } from "@aws-sdk/client-guardduty";
 import { HealthClient } from "@aws-sdk/client-health";
 import { LambdaClient } from "@aws-sdk/client-lambda";
 import { RDSClient } from "@aws-sdk/client-rds";
+import { S3Client } from "@aws-sdk/client-s3";
 import { STSClient } from "@aws-sdk/client-sts";
+import { fromInstanceMetadata } from "@aws-sdk/credential-providers";
 import { isBlankReply } from "../contracts/reply.ts";
 import {
 	type BudgetLimits,
@@ -24,6 +26,7 @@ import {
 	planInvestigation,
 	REFUSED_PREFIX,
 } from "./monitor/budget.ts";
+import { s3Store, saveCheckpoint, statePrefix } from "./monitor/checkpoint.ts";
 import { checkAlarms } from "./monitor/checks/alarms.ts";
 import { certRegions, checkCerts, checkListenerCerts } from "./monitor/checks/certs.ts";
 import { checkCompliance } from "./monitor/checks/compliance.ts";
@@ -166,6 +169,13 @@ const WATCHLIST = (process.env.PI_MONITOR_WATCHLIST ?? "")
 const CERT_WARN_DAYS = Number(process.env.PI_MONITOR_CERT_WARN_DAYS ?? 30);
 const CERT_CRIT_DAYS = Number(process.env.PI_MONITOR_CERT_CRIT_DAYS ?? 7);
 const STATE_DB = process.env.PI_MONITOR_STATE_DB ?? path.join(os.homedir(), ".pi", "monitor", "state.db");
+// SIO-1745: the root volume dies with the instance, and a userdata-affecting
+// change (pi_model among them) replaces it. Derived from the bundle uri the
+// host already has, so enabling this adds no userdata variable -- which would
+// itself replace every spoke.
+const BUNDLE_S3_URI = process.env.BUNDLE_S3_URI ?? "";
+const CHECKPOINT_ENABLED = process.env.PI_MONITOR_CHECKPOINT_ENABLED !== "false" && BUNDLE_S3_URI !== "";
+const CHECKPOINT_CRON = process.env.PI_MONITOR_CHECKPOINT_CRON ?? "23 */6 * * *";
 
 export type InvestigationOutcome = {
 	diagnoses: Map<string, Diagnosis> | null;
@@ -367,6 +377,32 @@ function main(): void {
 	const config = new ConfigServiceClient({ region });
 	const guardduty = new GuardDutyClient({ region });
 	const log = (line: string) => console.log(`${new Date().toISOString()} ${line}`);
+
+	// Best-effort by design: a checkpoint failure is logged and the monitor
+	// carries on. Losing a backup must never cost us the monitor itself.
+	const checkpoint = async (trigger: string): Promise<void> => {
+		if (!CHECKPOINT_ENABLED) return;
+		try {
+			const prefix = statePrefix(BUNDLE_S3_URI, ACCOUNT_ID, MONITOR_NAME);
+			// Instance role, NOT the ambient AWS_PROFILE=devops-readonly: the
+			// workload role carries an explicit Deny on s3:GetObject (Sid
+			// SecretAndDataPlaneDeny), so a default client would fail the restore
+			// and, worse, pass the write while never being able to read it back.
+			const store = s3Store(new S3Client({ region, credentials: fromInstanceMetadata() }));
+			const res = await state.withDb((db) =>
+				saveCheckpoint(db, store, prefix, { accountId: ACCOUNT_ID, agent: MONITOR_NAME }),
+			);
+			if (res.ok) {
+				log(
+					`checkpoint (${trigger}): ${res.bytes} bytes, ${res.rows.suppressions} suppressions, ${res.rows.journal} journal rows`,
+				);
+			} else {
+				log(`checkpoint (${trigger}) FAILED: ${res.reason}`);
+			}
+		} catch (e) {
+			log(`checkpoint (${trigger}) FAILED: ${errorMessage(e)}`);
+		}
+	};
 
 	const gate = {
 		name: "identity",
@@ -682,7 +718,12 @@ function main(): void {
 			state.addSuppression(pattern, reason);
 			return `suppressed: ${pattern} (${reason})`;
 		}
-		return "unknown command. available: run-checks, status, digest, review, history, suppressions, suppress <pattern> | <reason>, unsuppress <pattern>, investigate on|off [reason], pause [reason], resume. history takes [count<=200] [info|warn|critical] [family]";
+		if (cmd === "checkpoint") {
+			if (!CHECKPOINT_ENABLED) return "checkpoint disabled (no BUNDLE_S3_URI, or PI_MONITOR_CHECKPOINT_ENABLED=false)";
+			await checkpoint("manual");
+			return "checkpoint attempted; see monitor log for the outcome";
+		}
+		return "unknown command. available: run-checks, status, digest, review, history, suppressions, suppress <pattern> | <reason>, unsuppress <pattern>, investigate on|off [reason], pause [reason], resume, checkpoint. history takes [count<=200] [info|warn|critical] [family]";
 	};
 
 	void (async () => {
@@ -695,10 +736,17 @@ function main(): void {
 		cronTz(DAILY_CRON, () => dailyGuard(dailyDigest), cronOpts);
 		// No journal writes and no checks: needs no guard against the others.
 		cronTz(REVIEW_CRON, () => void suppressionReview(), cronOpts);
+		// Runs regardless of pause: a paused monitor still holds the suppressions
+		// and controls that a replacement would otherwise lose.
+		if (CHECKPOINT_ENABLED) cronTz(CHECKPOINT_CRON, () => void checkpoint("scheduled"), cronOpts);
 	})();
 
+	// Terminal checkpoint: systemd stops the unit before the instance goes, so
+	// this is the last chance to capture the final minutes of state. Bounded --
+	// a hung S3 call must not stop the host from shutting down.
 	const shutdown = () => {
-		void coms.stop().finally(() => process.exit(0));
+		const bounded = Promise.race([checkpoint("shutdown"), new Promise<void>((r) => setTimeout(r, 10_000))]);
+		void bounded.finally(() => void coms.stop().finally(() => process.exit(0)));
 	};
 	process.on("SIGINT", shutdown);
 	process.on("SIGTERM", shutdown);
