@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
-import type { FleetAws } from "../scripts/fleet/aws.ts";
+import { type FleetAws, isInferenceProfileId } from "../scripts/fleet/aws.ts";
 import { missingOnHub, personaAtLeast, personaVersion } from "../scripts/fleet/hub.ts";
 import { parseManifest } from "../scripts/fleet/manifest.ts";
 import { formatPreflight, preflight, preflightPassed } from "../scripts/fleet/preflight.ts";
@@ -289,6 +289,21 @@ describe("hub expectations and rollout commands", () => {
 		expect(personaVersion("agent persona=pi-fleet-v0.10.3")).toBe("0.10.3");
 		expect(personaVersion("agent with no persona marker")).toBeUndefined();
 		expect(personaVersion("agent persona=pi-fleet-vnot.a.version")).toBeUndefined();
+	});
+
+	// SIO-1743: a profile-id list hit used to short-circuit before the agreement
+	// check, so an account that could SEE eu.anthropic.claude-haiku-4-5 but had
+	// never accepted it passed the "bedrock model" row. Applying then replaced the
+	// instance and the spoke posted empty replies (SIO-1675/SIO-1678). Live probe:
+	// eu-oit-dev returned NOT_AVAILABLE for both the profile-prefixed and the bare
+	// id while the profile itself was listed.
+	test("isInferenceProfileId separates a region-prefixed profile id from a bare foundation model id", () => {
+		expect(isInferenceProfileId("eu.anthropic.claude-sonnet-5")).toBe(true);
+		expect(isInferenceProfileId("eu.anthropic.claude-haiku-4-5-20251001-v1:0")).toBe(true);
+		expect(isInferenceProfileId("us.anthropic.claude-sonnet-5")).toBe(true);
+		expect(isInferenceProfileId("apac.anthropic.claude-sonnet-5")).toBe(true);
+		expect(isInferenceProfileId("anthropic.claude-haiku-4-5-20251001-v1:0")).toBe(false);
+		expect(isInferenceProfileId("amazon.titan-text-express-v1")).toBe(false);
 	});
 
 	test("a normal rollout uses pi-coms-update (it writes the reload sentinel); a token change re-runs the bootstrap with the sentinel touched", () => {

@@ -67,6 +67,14 @@ function creds(profile: string) {
 	return fromIni({ profile });
 }
 
+// A cross-region inference profile id carries a region prefix ahead of the
+// vendor ("eu.anthropic.claude-sonnet-5"); a bare foundation model id does not
+// ("anthropic.claude-haiku-4-5-20251001-v1:0"). Only the former is listed by
+// ListInferenceProfiles, so the distinction decides whether absence is a fault.
+export function isInferenceProfileId(id: string): boolean {
+	return /^(eu|us|apac|us-gov)\./.test(id);
+}
+
 export function isExpiredCredential(error: unknown): boolean {
 	const text = error instanceof Error ? `${error.name} ${error.message}` : String(error);
 	return /ExpiredToken|expired|InvalidClientTokenId|UnrecognizedClientException|could not be found|Token is invalid/i.test(
@@ -154,11 +162,21 @@ export const realFleetAws: FleetAws = {
 	async inferenceProfileVisible(profile, region, id) {
 		const bedrock = new BedrockClient({ region, credentials: creds(profile) });
 		try {
-			const out = await bedrock.send(new ListInferenceProfilesCommand({}));
-			if ((out.inferenceProfileSummaries ?? []).some((p) => p.inferenceProfileId === id)) return true;
-			// A bare foundation model id: ask for its availability instead.
+			// SIO-1743: the agreement decides whether the model can be INVOKED, so it is
+			// checked for every id shape. Returning early on a profile-id list hit passed
+			// accounts that merely see the profile but have not accepted the agreement --
+			// the spoke then boots on userdata and posts empty replies (SIO-1675/SIO-1678).
+			// The API resolves the profile-prefixed form (eu.anthropic.*) as well as a bare
+			// model id, versionless ids included, so one call covers both.
 			const avail = await bedrock.send(new GetFoundationModelAvailabilityCommand({ modelId: id }));
-			return avail.agreementAvailability?.status === "AVAILABLE";
+			if (avail.agreementAvailability?.status !== "AVAILABLE") return false;
+			const out = await bedrock.send(new ListInferenceProfilesCommand({}));
+			const summaries = out.inferenceProfileSummaries ?? [];
+			// An agreed id still has to be reachable: a profile id must be listed in this
+			// region. A bare foundation model id never appears in that list, so it passes
+			// on the agreement alone.
+			if (summaries.some((p) => p.inferenceProfileId === id)) return true;
+			return !isInferenceProfileId(id);
 		} catch {
 			return false;
 		}
