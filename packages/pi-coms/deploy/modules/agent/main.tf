@@ -578,6 +578,17 @@ resource "aws_iam_role_policy" "agent_secrets" {
         Effect   = "Allow"
         Action   = ["s3:GetObject", "s3:ListBucket"]
         Resource = [var.dist_bucket_arn, "${var.dist_bucket_arn}/*"]
+      }],
+      // SIO-1745: the monitor's state checkpoint. Scoped to this host's own
+      // prefix -- one spoke can neither read nor overwrite another's state,
+      // which the shared read grant above would otherwise allow. The workload
+      // role cannot do this: SecretAndDataPlaneDeny denies s3:GetObject, so the
+      // checkpoint client pins itself to the instance role.
+      var.dist_bucket_arn == "" ? [] : [{
+        Sid      = "MonitorStateCheckpoint"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:GetObject"]
+        Resource = ["${var.dist_bucket_arn}/state/${local.account_id}/monitor-${local.agent_name}/*"]
       }]
     )
   })

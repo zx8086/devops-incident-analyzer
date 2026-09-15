@@ -316,6 +316,10 @@ ENV_FILE="$AGENT_HOME/.coms-env"
   # globs: unquoted, `15 8 * * *` expands against the cwd and the unit dies on
   # "not a valid identifier". Empty stays unset -- the monitor then keeps the
   # host zone and its own @daily default, so the deployed behaviour is unchanged.
+  # SIO-1745: the monitor derives its checkpoint prefix from the bundle bucket,
+  # so the state backup needs no userdata variable of its own -- adding one
+  # would replace every spoke, the exact event the checkpoint exists to survive.
+  if [ -n "${BUNDLE_S3_URI:-}" ]; then echo "export BUNDLE_S3_URI='$BUNDLE_S3_URI'"; fi
   if [ -n "${MONITOR_TZ:-}" ]; then echo "export PI_MONITOR_TZ='$MONITOR_TZ'"; fi
   if [ -n "${MONITOR_DAILY_CRON:-}" ]; then echo "export PI_MONITOR_DAILY_CRON='$MONITOR_DAILY_CRON'"; fi
   # Route the whole piagent workload (agent, monitor, aws CLI) through the
@@ -432,6 +436,42 @@ UNIT
 # The account monitor: deterministic scheduled checks, reports via the hub
 # mailbox. Independent of pi-agent.service by design -- a wedged agent never
 # stops detection.
+# ── Monitor state restore (SIO-1745) ───────────────────────────────────────
+# The root volume dies with the instance and a userdata-affecting change
+# (pi_model among them) replaces it, taking the suppression ledger, the reused
+# diagnoses and the operator's mute/pause with it. Restore before the unit
+# starts, never over an existing db, and never silently blank: a checkpoint
+# that exists but cannot be verified is an alarm, because a blank start looks
+# exactly like a healthy first boot.
+if [ -n "$BUNDLE_S3_URI" ] && [ -n "${AWS_ACCOUNT_ID:-}" ]; then
+  STATE_DB="$AGENT_HOME/.pi/monitor/state.db"
+  if [ -f "$STATE_DB" ]; then
+    echo "monitor state present; not restoring over live data"
+  else
+    STATE_BUCKET="$(echo "$BUNDLE_S3_URI" | sed -E 's#^s3://([^/]+).*#\1#')"
+    STATE_PREFIX="s3://$STATE_BUCKET/state/$AWS_ACCOUNT_ID/monitor-$AGENT_NAME"
+    TMP_STATE="$(mktemp -d)"
+    if aws s3 cp "$STATE_PREFIX/manifest.json" "$TMP_STATE/manifest.json" --region "$AWS_REGION" 2>/dev/null; then
+      if aws s3 cp "$STATE_PREFIX/state.db" "$TMP_STATE/state.db" --region "$AWS_REGION" 2>/dev/null; then
+        WANT_SHA="$(sed -n 's/.*"sha256"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{64\}\)".*/\1/p' "$TMP_STATE/manifest.json")"
+        GOT_SHA="$(sha256sum "$TMP_STATE/state.db" | cut -d' ' -f1)"
+        if [ -n "$WANT_SHA" ] && [ "$WANT_SHA" = "$GOT_SHA" ]; then
+          sudo -u "$AGENT_USER" -H mkdir -p "$AGENT_HOME/.pi/monitor"
+          install -o "$AGENT_USER" -g "$AGENT_USER" -m 600 "$TMP_STATE/state.db" "$STATE_DB"
+          echo "monitor state RESTORED from $STATE_PREFIX (sha256 $GOT_SHA)"
+        else
+          echo "monitor state restore BLOCKED: sha256 mismatch (manifest '$WANT_SHA', downloaded '$GOT_SHA')" >&2
+        fi
+      else
+        echo "monitor state restore BLOCKED: manifest present but state.db unreadable" >&2
+      fi
+    else
+      echo "no monitor state checkpoint at $STATE_PREFIX; starting fresh"
+    fi
+    rm -rf "$TMP_STATE"
+  fi
+fi
+
 cat > /etc/systemd/system/pi-monitor.service <<UNIT
 [Unit]
 Description=Pi AWS account monitor
