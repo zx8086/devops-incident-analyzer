@@ -84,8 +84,21 @@ and the urgency. For how long it has been this way, read `HealthyHostCount`
 for the target group with `aws_cloudwatch_get_metric_data`, which also
 separates a sudden drop from a slow bleed:
 
-- **Zero healthy** is an outage: the group is serving nothing and the listener
-  returns 503 to every request. Say so plainly in the diagnosis.
+- **Zero healthy is NOT automatically an outage.** When every registered
+  target is unhealthy the load balancer **fails open**: it routes requests to
+  all of them regardless of health. Whether users are affected depends
+  entirely on whether those targets can actually serve, and the reason code
+  answers that:
+  - every unhealthy target reports `Target.ResponseCodeMismatch` -- the
+    targets are answering, just not with the matcher's status code. Traffic is
+    being served. This is a **health check misconfiguration**, not an outage;
+    the risk is that there is no failover margin, because the balancer cannot
+    tell a healthy target from a dead one.
+  - any target reports `Target.Timeout`, `Target.FailedHealthChecks`, or no
+    reason -- fail-open is sending traffic to targets that cannot answer, and
+    clients get **502**s. That is the outage. Confirm with
+    `aws_cloudwatch_get_metric_data` on `HTTPCode_ELB_502_Count` before saying
+    so.
 - **Some healthy** is degraded capacity. Establish whether the remaining
   targets can carry the load before calling it an incident.
 
@@ -118,8 +131,10 @@ the first unhealthy timestamp in the finding, not a fixed recent window.
 If the symptom reported by users is a 503 rather than an unhealthy target,
 confirm the listener actually routes to this group: `aws_elbv2_describe_listeners`
 for the rules, and `aws_elbv2_describe_load_balancers` for the balancer's own
-state and scheme. A group with no healthy targets behind a listener rule is
-exactly what returns 503.
+state and scheme. A 503 means the balancer had **no registered target to route
+to at all** -- an empty target group or a rule forwarding nowhere. It does not
+come from unhealthy targets, which fail open and produce 502s if they cannot
+answer.
 
 ### 5. If the target is healthy in isolation but unhealthy to the balancer
 
@@ -138,6 +153,13 @@ the finding and is not a diagnosis.
 
 Never claim recovery from a single passing check; the balancer requires
 `healthyThreshold` consecutive successes.
+
+Never call zero healthy targets an outage on the count alone. A group that has
+failed open with every target answering `ResponseCodeMismatch` is serving
+traffic; report it as a misconfigured health check and name the status code
+the check received. This was verified in production: five target groups sat in
+exactly that state for two weeks, fully serving, while the health check asked
+`/` of apps that redirect or 404 it.
 
 ## All Tools Used Are Read-Only
 aws_elbv2_describe_target_groups, aws_elbv2_describe_target_health, aws_elbv2_describe_load_balancers, aws_elbv2_describe_listeners, aws_ecs_describe_services, aws_cloudwatch_get_metric_data, aws_logs_start_query, aws_logs_get_query_results
