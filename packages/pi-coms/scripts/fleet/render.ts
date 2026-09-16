@@ -9,6 +9,7 @@ import {
 	externalIdFor,
 	type FleetManifest,
 	hubFor,
+	orgTagsFor,
 	spokeFor,
 } from "./manifest.ts";
 
@@ -57,7 +58,12 @@ provider "aws" {
   profile = var.aws_profile
 
   default_tags {
-    tags = {
+    // SIO-1759: the organization's required tags (values in terraform.tfvars),
+    // merged UNDER the pi-coms stack markers so a marker always wins. The
+    // provider carries them to the instance and every other taggable resource
+    // here; the agent module copies them onto the root volume and primary ENI,
+    // which default_tags does not keep current.
+    tags = merge(var.org_tags, {
       Project     = "pi-coms-net"
       ManagedBy   = "terraform"
       Stack       = ${hcl(stack)}
@@ -69,7 +75,7 @@ provider "aws" {
       // cross-referencing the manifest. NOT the same thing as the Project tag
       // above, which is the Terraform stack marker.
       ComsProject = ${hcl(hub.project ?? "default")}
-    }
+    })
   }
 }
 
@@ -104,6 +110,12 @@ variable "agent_subnet_id" {
 variable "dist_bucket" {
   description = "Fleet distribution bucket of the ${spoke.env} hub account (terraform.tfvars)."
   type        = string
+}
+
+variable "org_tags" {
+  description = "Organization-required tags applied to every resource (terraform.tfvars)."
+  type        = map(string)
+  default     = {}
 }
 
 variable "pi_model" {
@@ -414,6 +426,10 @@ export function renderTfvars(manifest: FleetManifest, name: string, existing?: s
 		`agent_subnet_id = ${hcl(spoke.subnet_id)}`,
 		`dist_bucket     = ${hcl(hub.dist_bucket ?? `pi-coms-dist-${hub.account_id ?? "<hub-account-id>"}`)}`,
 	];
+	const orgTags = Object.entries(orgTagsFor(manifest, name));
+	if (orgTags.length > 0) {
+		lines.push(`org_tags = {`, ...orgTags.map(([k, v]) => `  ${hcl(k)} = ${hcl(v)}`), `}`);
+	}
 	if (spoke.hosts_hub) {
 		lines.push(
 			`hub_subnet_id   = ${hcl(hub.subnet_id)}`,

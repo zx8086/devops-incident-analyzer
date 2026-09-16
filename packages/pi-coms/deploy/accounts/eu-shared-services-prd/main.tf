@@ -19,7 +19,12 @@ provider "aws" {
   profile = var.aws_profile
 
   default_tags {
-    tags = {
+    // SIO-1759: the organization's required tags (values in terraform.tfvars),
+    // merged UNDER the pi-coms stack markers so a marker always wins. The
+    // provider carries them to the instance and every other taggable resource
+    // here; the agent module copies them onto the root volume and primary ENI,
+    // which default_tags does not keep current.
+    tags = merge(var.org_tags, {
       Project     = "pi-coms-net"
       ManagedBy   = "terraform"
       Stack       = "shared-services-prd"
@@ -31,7 +36,7 @@ provider "aws" {
       // cross-referencing the manifest. NOT the same thing as the Project tag
       // above, which is the Terraform stack marker.
       ComsProject = "pi-coms-prd"
-    }
+    })
   }
 }
 
@@ -66,6 +71,12 @@ variable "agent_subnet_id" {
 variable "dist_bucket" {
   description = "Fleet distribution bucket of the prd hub account (terraform.tfvars)."
   type        = string
+}
+
+variable "org_tags" {
+  description = "Organization-required tags applied to every resource (terraform.tfvars)."
+  type        = map(string)
+  default     = {}
 }
 
 variable "pi_model" {

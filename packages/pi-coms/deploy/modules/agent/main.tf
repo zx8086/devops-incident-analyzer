@@ -708,6 +708,28 @@ resource "aws_instance" "agent" {
   depends_on = [aws_ssm_parameter.coms_token]
 }
 
+// SIO-1759: the organization's required-tags Config rule checks the instance,
+// its root volume and its primary ENI. Provider default_tags reach the instance
+// on every change, but the primary ENI (created implicitly by EC2) never, and
+// the root volume only at creation: provider 5.100 computes
+// root_block_device.tags_all once, so a later default_tags change never reaches
+// an existing volume. Both get the root's effective default tags explicitly.
+data "aws_default_tags" "current" {}
+
+resource "aws_ec2_tag" "agent_eni" {
+  for_each    = data.aws_default_tags.current.tags
+  resource_id = aws_instance.agent.primary_network_interface_id
+  key         = each.key
+  value       = each.value
+}
+
+resource "aws_ec2_tag" "agent_root_volume" {
+  for_each    = data.aws_default_tags.current.tags
+  resource_id = aws_instance.agent.root_block_device[0].volume_id
+  key         = each.key
+  value       = each.value
+}
+
 // Status-check alarm on the agent host itself: gives the monitor's alarm
 // family a real signal for the one instance that must stay healthy. No alarm
 // actions -- the monitor's DescribeAlarms sweep picks up the transition and

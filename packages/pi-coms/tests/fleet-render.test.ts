@@ -120,6 +120,33 @@ describe("fleet root renderer (SIO-1653)", () => {
 		expect(again.split("\n").filter((l) => l.startsWith("coms_auth_token"))).toHaveLength(1);
 	});
 
+	// SIO-1759: the org's required tags are values an operator supplies; they go to
+	// the gitignored tfvars and reach resources through the provider default_tags.
+	test("org_tags render into tfvars only, merged under the pi-coms markers", () => {
+		const bare = renderRoot(manifest, "eu-oit-prd");
+		expect(bare["main.tf"]).toContain("tags = merge(var.org_tags, {");
+		expect(bare["main.tf"]).toContain('variable "org_tags" {');
+		expect(bare["terraform.tfvars"]).not.toContain("org_tags");
+
+		const tagged = parseManifest(
+			EXAMPLE.replace(
+				/^(defaults:\n)/m,
+				"$1  org_tags:\n    CostCenter: CC-DEFAULT\n    Owner: team-default\n",
+			).replace(/^( {2}eu-oit-prd:\n)/m, "$1    org_tags:\n      Owner: team-oit\n"),
+		);
+		const oit = renderRoot(tagged, "eu-oit-prd");
+		expect(oit["terraform.tfvars"]).toContain('org_tags = {\n  "CostCenter" = "CC-DEFAULT"\n  "Owner" = "team-oit"\n}');
+		expect(renderRoot(tagged, "eu-oit-dev")["terraform.tfvars"]).toContain('"Owner" = "team-default"');
+		// Values never reach the committed root.
+		expect(oit["main.tf"]).not.toContain("CC-DEFAULT");
+		expect(oit["main.tf"]).not.toContain("team-oit");
+	});
+
+	test("org_tags may not override a pi-coms tag", () => {
+		const text = EXAMPLE.replace(/^(defaults:\n)/m, "$1  org_tags:\n    Project: hijacked\n");
+		expect(() => parseManifest(text)).toThrow("org_tags must not set a pi-coms tag");
+	});
+
 	test("every manifest spoke renders a root whose committed files carry no identifiers", () => {
 		for (const name of Object.keys(manifest.spokes)) {
 			const root = renderRoot(manifest, name);
