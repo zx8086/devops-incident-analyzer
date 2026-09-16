@@ -54,6 +54,34 @@ function healthCheckOf(g: TargetGroup): Record<string, unknown> {
 	};
 }
 
+// The state partition, which is where the discriminator lives. Exported so the
+// real-corpus test drives it with production TargetHealthDescriptions rather
+// than a fake ELBv2 client.
+export function partitionTargets(
+	descriptions: {
+		Target?: { Id?: string; Port?: number };
+		TargetHealth?: { State?: string; Reason?: string; Description?: string };
+	}[],
+): { settled: number; healthy: number; unhealthy: UnhealthyTarget[] } {
+	const unhealthy: UnhealthyTarget[] = [];
+	let healthy = 0;
+	let settled = 0;
+	for (const d of descriptions) {
+		const st = d.TargetHealth?.State ?? "unknown";
+		if (TRANSIENT_STATES.has(st)) continue;
+		settled++;
+		if (st === "healthy") healthy++;
+		if (st !== FAILING_STATE) continue;
+		unhealthy.push({
+			id: d.Target?.Id ?? "unknown",
+			port: d.Target?.Port ?? null,
+			reason: d.TargetHealth?.Reason ?? null,
+			description: d.TargetHealth?.Description ?? null,
+		});
+	}
+	return { settled, healthy, unhealthy };
+}
+
 export async function checkTargets(
 	client: AwsClient,
 	state: MonitorState,
@@ -87,22 +115,7 @@ export async function checkTargets(
 		)) as DescribeTargetHealthCommandOutput;
 		const descriptions = health.TargetHealthDescriptions ?? [];
 
-		const unhealthy: UnhealthyTarget[] = [];
-		let healthy = 0;
-		let settled = 0;
-		for (const d of descriptions) {
-			const st = d.TargetHealth?.State ?? "unknown";
-			if (TRANSIENT_STATES.has(st)) continue;
-			settled++;
-			if (st === "healthy") healthy++;
-			if (st !== FAILING_STATE) continue;
-			unhealthy.push({
-				id: d.Target?.Id ?? "unknown",
-				port: d.Target?.Port ?? null,
-				reason: d.TargetHealth?.Reason ?? null,
-				description: d.TargetHealth?.Description ?? null,
-			});
-		}
+		const { settled, healthy, unhealthy } = partitionTargets(descriptions);
 
 		const keys = unhealthy.map((t) => targetKey(t.id, t.port)).sort();
 		current[arn] = keys.join(",");

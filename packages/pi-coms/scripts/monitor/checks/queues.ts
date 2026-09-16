@@ -52,7 +52,7 @@ function nameOf(url: string): string {
 	return url.split("/").pop() ?? url;
 }
 
-function parseRedrive(raw: string | undefined): { arn: string | null; maxReceiveCount: number | null } {
+export function parseRedrive(raw: string | undefined): { arn: string | null; maxReceiveCount: number | null } {
 	if (!raw) return { arn: null, maxReceiveCount: null };
 	try {
 		const p = JSON.parse(raw) as { deadLetterTargetArn?: string; maxReceiveCount?: number | string };
@@ -66,6 +66,23 @@ function parseRedrive(raw: string | undefined): { arn: string | null; maxReceive
 		// malformed policy would report on a queue that may be nothing of the sort.
 		return { arn: null, maxReceiveCount: null };
 	}
+}
+
+// Which queues are dead-letter queues, derived from what points AT them.
+// Exported so the real-corpus test can drive it with production RedrivePolicy
+// strings instead of a fake SQS client.
+export function dlqSourcesByArn(
+	queues: { url: string; redriveTo: string | null; maxReceiveCount: number | null }[],
+): Map<string, { name: string; maxReceiveCount: number | null }[]> {
+	const sourcesOf = new Map<string, { name: string; maxReceiveCount: number | null }[]>();
+	for (const q of queues) {
+		if (!q.redriveTo) continue;
+		sourcesOf.set(q.redriveTo, [
+			...(sourcesOf.get(q.redriveTo) ?? []),
+			{ name: nameOf(q.url), maxReceiveCount: q.maxReceiveCount },
+		]);
+	}
+	return sourcesOf;
 }
 
 export async function checkQueues(
@@ -108,14 +125,7 @@ export async function checkQueues(
 	// queue's redrive policy rather than from a name convention -- a queue called
 	// "-dlq" that nothing redrives into is not a DLQ, and one called anything at
 	// all that something redrives into is.
-	const sourcesOf = new Map<string, { name: string; maxReceiveCount: number | null }[]>();
-	for (const q of queues) {
-		if (!q.redriveTo) continue;
-		sourcesOf.set(q.redriveTo, [
-			...(sourcesOf.get(q.redriveTo) ?? []),
-			{ name: nameOf(q.url), maxReceiveCount: q.maxReceiveCount },
-		]);
-	}
+	const sourcesOf = dlqSourcesByArn(queues);
 
 	const stillFailing = new Set<string>();
 	for (const q of queues) {

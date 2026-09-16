@@ -1,0 +1,192 @@
+// tests/aws-samples.ts
+//
+// Real AWS API output, captured from production accounts on 2026-09-16 and used
+// verbatim by the workload-state check tests. Account ids and cluster-specific
+// names are redacted; nothing else is edited, because the point of this file is
+// that the strings are NOT invented.
+//
+// SIO-1748 exists because the first version of these checks was tested against
+// a hand-written fake client. The fake agreed with the code by construction, so
+// all five ECS event patterns matched nothing in reality and the tests passed
+// anyway. Capture real output; do not describe it from memory.
+//
+// Provenance: ECS from a production account's 7 clusters / 22 services (2190
+// events, 20 distinct shapes after normalizing ids); ELBv2 from 47 target
+// groups across two accounts; SQS from 17 queues; Auto Scaling from 8
+// activities.
+
+// Every distinct ECS service-event shape observed, with its occurrence count.
+// The counts are the argument for what is routine: "reached a steady state"
+// outnumbers every failure-shaped event by two orders of magnitude.
+export const ECS_EVENTS_OBSERVED: { count: number; message: string }[] = [
+	{ count: 1602, message: "(service api-service) has reached a steady state." },
+	{
+		count: 136,
+		message:
+			"(service api-service) deregistered 2 targets in (target-group arn:aws:elasticloadbalancing:eu-central-1:000000000000:targetgroup/api-service-alb-http/4d2246e3635cc45b)",
+	},
+	{
+		count: 111,
+		message:
+			"(service api-service) registered 2 targets in (target-group arn:aws:elasticloadbalancing:eu-central-1:000000000000:targetgroup/api-service-alb-http/4d2246e3635cc45b)",
+	},
+	{ count: 103, message: "(service api-service) has begun draining connections on 2 tasks." },
+	{ count: 97, message: "(service api-service) has stopped 2 running tasks: (task 9d85800c30b349039d104d52b506b930)." },
+	{ count: 63, message: "(service api-service) has started 2 tasks: (task 8378fd0fc0d744109128c8d6a0b71524)." },
+	// Failure-SHAPED but routine: ECS replaced the tasks itself and the service
+	// was back at steady state. The targets check owns persistent unhealthy
+	// targets, behind a two-cycle gate; duplicating it here would report a
+	// self-healing event 27 times over.
+	{
+		count: 22,
+		message:
+			"(service api-service) (task 9d85800c30b349039d104d52b506b930) (port 8080) is unhealthy in (target-group arn:aws:elasticloadbalancing:eu-central-1:000000000000:targetgroup/api-service-alb-http/4d2246e3635cc45b) due to (reason Health checks failed with these codes: [503]).",
+	},
+	{
+		count: 22,
+		message:
+			"(service api-service) has started 2 tasks: (task 8378fd0fc0d744109128c8d6a0b71524). Amazon ECS replaced 2 tasks due to an unhealthy status.",
+	},
+	{ count: 10, message: "(service api-service) (deployment ecs-svc/8230932836318884457) deployment completed." },
+	{
+		count: 5,
+		message:
+			"(service api-service) (task a25c6c790e254b4791ba6806c0541c63) (port 8080) is unhealthy in (target-group arn:aws:elasticloadbalancing:eu-central-1:000000000000:targetgroup/api-service-alb-http/4d2246e3635cc45b) due to (reason Request timed out).",
+	},
+	// The three genuine failure signals observed in production.
+	{
+		count: 5,
+		message:
+			"(service api-service) was unable to reach steady state because (taskSet ecs-svc/8230932836318884457) was unable to scale in due to (reason 2 tasks under protection)",
+	},
+	{
+		count: 2,
+		message: "(service api-service) (deployment ecs-svc/8230932836318884457) deployment failed: tasks failed to start.",
+	},
+	{ count: 1, message: "(service api-service) rolling back to deployment ecs-svc/8230932836318884457." },
+	{ count: 1, message: "(service api-service) stopped 2 pending tasks." },
+	{
+		count: 1,
+		message:
+			"(service api-service) is AZ balanced with 2 tasks in eu-central-1a, 2 tasks in eu-central-1c, 1 tasks in eu-central-1b.",
+	},
+	{
+		count: 1,
+		message:
+			"(service api-service) is not AZ balanced with 3 tasks in eu-central-1a, 1 tasks in eu-central-1c, 1 tasks in eu-central-1b. AZ Rebalancing in progress.",
+	},
+	{
+		count: 1,
+		message:
+			"(service api-service) has started 1 tasks in eu-central-1a to AZ Rebalance: (task 8378fd0fc0d744109128c8d6a0b71524).",
+	},
+];
+
+// Observed rolloutState values across both accounts: the FAILED detector is
+// real, it does occur, and it is the one signal AWS states outright.
+export const ECS_ROLLOUT_STATES_OBSERVED = ["COMPLETED", "FAILED"];
+
+// Exactly the keys a real TargetHealth carries for a HEALTHY target: State and
+// nothing else. Reason and Description appear only when a target is not
+// healthy, so any code reading them must tolerate their absence.
+export const ELBV2_TARGET_HEALTH_HEALTHY = {
+	Target: { Id: "10.0.1.23", Port: 8080, AvailabilityZone: "eu-central-1a" },
+	HealthCheckPort: "8080",
+	TargetHealth: { State: "healthy" },
+};
+
+// Real target-group fields. Note HealthCheckPort is the literal string
+// "traffic-port", not a number, and Matcher carries HttpCode as a string.
+export const ELBV2_TARGET_GROUP = {
+	TargetGroupArn: "arn:aws:elasticloadbalancing:eu-central-1:000000000000:targetgroup/api-service/b2ea699b9ec36d86",
+	TargetGroupName: "api-service",
+	Protocol: "HTTP",
+	Port: 8000,
+	VpcId: "vpc-0fd19bbcde568fcf0",
+	HealthCheckProtocol: "HTTP",
+	HealthCheckPort: "traffic-port",
+	HealthCheckEnabled: true,
+	HealthCheckIntervalSeconds: 30,
+	HealthCheckTimeoutSeconds: 5,
+	HealthyThresholdCount: 2,
+	UnhealthyThresholdCount: 2,
+	HealthCheckPath: "/health",
+	Matcher: { HttpCode: "200" },
+	TargetType: "ip",
+	ProtocolVersion: "HTTP1",
+	IpAddressType: "ipv4",
+};
+
+// Every attribute name a real GetQueueAttributes(All) returned. The list is the
+// evidence for the bug this file exists to prevent: the first version of the
+// queues check read ApproximateAgeOfOldestMessage as a queue attribute. It is
+// not one -- the real API answers "InvalidAttributeName: Unknown Attribute
+// ApproximateAgeOfOldestMessage" -- it is a CloudWatch metric.
+export const SQS_ATTRIBUTE_NAMES_OBSERVED = [
+	"ApproximateNumberOfMessages",
+	"ApproximateNumberOfMessagesDelayed",
+	"ApproximateNumberOfMessagesNotVisible",
+	"CreatedTimestamp",
+	"DelaySeconds",
+	"LastModifiedTimestamp",
+	"MaximumMessageSize",
+	"MessageRetentionPeriod",
+	"Policy",
+	"QueueArn",
+	"ReceiveMessageWaitTimeSeconds",
+	"RedrivePolicy",
+	"SqsManagedSseEnabled",
+	"VisibilityTimeout",
+];
+
+// Real RedrivePolicy values, verbatim. maxReceiveCount arrives as a NUMBER in
+// the JSON, not a string.
+export const SQS_REDRIVE_POLICIES_OBSERVED = [
+	'{"deadLetterTargetArn":"arn:aws:sqs:eu-central-1:000000000000:connectors-customer-notifications-dlq","maxReceiveCount":3}',
+	'{"deadLetterTargetArn":"arn:aws:sqs:eu-central-1:000000000000:connectors-image-notifications-dlq","maxReceiveCount":3}',
+	'{"deadLetterTargetArn":"arn:aws:sqs:eu-central-1:000000000000:connectors-notifications-dlq","maxReceiveCount":3}',
+];
+
+// Real Auto Scaling activity fields. StatusMessage is ABSENT on a successful
+// activity, so anything reading it must fall back rather than assume it.
+export const ASG_ACTIVITY_FIELDS_OBSERVED = [
+	"ActivityId",
+	"AutoScalingGroupARN",
+	"AutoScalingGroupName",
+	"Cause",
+	"Description",
+	"Details",
+	"EndTime",
+	"Progress",
+	"StartTime",
+	"StatusCode",
+];
+
+// Real Cause and Description text, used to check that the collapse signature
+// strips what varies between two instances of one cause.
+export const ASG_ACTIVITIES_OBSERVED = [
+	{
+		ActivityId: "8f1c0f5e-0000-4000-8000-000000000001",
+		AutoScalingGroupName: "platform-nodes",
+		StatusCode: "Successful",
+		Description: "Terminating EC2 instance: i-036c981459069eab4",
+		Cause:
+			"At 2026-08-12T10:14:19Z a user request update of AutoScalingGroup constraints to min: 2, max: 5, desired: 2 changing the desired capacity from 3 to 2.",
+	},
+	{
+		ActivityId: "8f1c0f5e-0000-4000-8000-000000000002",
+		AutoScalingGroupName: "platform-nodes",
+		StatusCode: "Successful",
+		Description: "Terminating EC2 instance: i-086c07fd0d237bf69",
+		Cause:
+			"At 2026-08-12T10:10:16Z a user request update of AutoScalingGroup constraints to min: 2, max: 6, desired: 3 changing the desired capacity from 4 to 3.",
+	},
+	{
+		ActivityId: "8f1c0f5e-0000-4000-8000-000000000003",
+		AutoScalingGroupName: "platform-nodes",
+		StatusCode: "Successful",
+		Description: "Terminating EC2 instance: i-0f1fae2e5b8bbaf56",
+		Cause:
+			"At 2026-08-12T10:07:14Z instance i-0f1fae2e5b8bbaf56 was taken out of service in response to a user request, shrinking the capacity from 5 to 4.",
+	},
+];

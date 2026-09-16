@@ -39,7 +39,7 @@ export type CheckScalingOpts = { now?: number };
 // one finding, the way checks/drift.ts collapses a node-pool replacement.
 // Instance ids, request ids, timestamps and counts are what differ between
 // otherwise identical failures, so they are stripped before grouping.
-function signature(message: string): string {
+export function signature(message: string): string {
 	return message
 		.replace(/i-[0-9a-f]{8,}/g, "<instance>")
 		.replace(/sir-[0-9a-z]{8,}/g, "<spot-request>")

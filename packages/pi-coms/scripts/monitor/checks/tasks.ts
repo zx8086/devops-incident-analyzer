@@ -39,26 +39,47 @@ const REALERT_MS = 86_400_000;
 const MAX_FINDINGS = 10;
 const EVENT_WINDOW_MS = 3_600_000;
 
-// Phrases ECS emits on its own service event stream when something is wrong.
-// Everything else it emits ("has started 1 tasks", "has begun draining") is
-// routine and must never match.
+// Event classification, derived from a real corpus rather than from memory.
+//
+// The first version of this list was written from what ECS event text was
+// assumed to look like, and tested against a fake client that echoed those
+// assumptions back. Against 2190 real service events from 22 production
+// services, all five patterns matched NOTHING: the real wording for a failing
+// health check is "is unhealthy in (target-group ...) due to (reason Health
+// checks failed with these codes: [503])", not "failed container health
+// checks". The whole signal was dead code that tested green.
+//
+// So this list contains only shapes observed in production (see
+// tests/aws-samples.ts for the corpus and counts). Extend it from real
+// observations, never from recollection of the AWS docs.
+//
+// Deliberately NOT classified, though it is the most common failure-SHAPED
+// event at 27 occurrences: "(task ...) (port ...) is unhealthy in
+// (target-group ...)". ECS replaces those tasks itself and the service returns
+// to steady state; the corpus shows exactly that. Persistent unhealthy targets
+// belong to checks/targets.ts, which gates them on two consecutive cycles.
 const EVENT_FAILURES: { pattern: RegExp; severity: Severity; label: string }[] = [
-	{ pattern: /unable to consistently start tasks successfully/i, severity: "critical", label: "crash loop" },
+	// ECS states the failure outright; the deployment did not come up.
 	{
-		pattern: /was unable to place a task because no container instance met all of its requirements/i,
-		severity: "warn",
-		label: "no capacity",
+		pattern: /deployment failed: tasks failed to start/i,
+		severity: "critical",
+		label: "deployment failed to start tasks",
 	},
-	{ pattern: /failed container health checks/i, severity: "warn", label: "failing health checks" },
-	{
-		pattern: /unable to (?:pull|retrieve) (?:secrets|container image|registry auth)/i,
-		severity: "warn",
-		label: "image or secret pull failure",
-	},
-	{ pattern: /ResourceInitializationError/i, severity: "warn", label: "resource initialization failure" },
+	// The circuit breaker acting: a rollback is never routine.
+	{ pattern: /rolling back to deployment/i, severity: "warn", label: "deployment rolled back" },
+	// A deployment that cannot converge. Observed as scale-in blocked by task
+	// protection, but the prefix covers every reason ECS gives for it.
+	{ pattern: /was unable to reach steady state because/i, severity: "warn", label: "cannot reach steady state" },
 ];
 
 export type CheckTasksOpts = { now?: number };
+
+// Exported so the real-corpus test can exercise it directly: a check whose
+// only test path is a hand-written AWS client tests the fake, not the code.
+export function classifyServiceEvent(message: string): { severity: Severity; label: string } | null {
+	const match = EVENT_FAILURES.find((f) => f.pattern.test(message));
+	return match ? { severity: match.severity, label: match.label } : null;
+}
 
 function serviceName(s: Service): string {
 	return s.serviceName ?? s.serviceArn?.split("/").pop() ?? "unknown";
@@ -158,7 +179,7 @@ export async function checkTasks(
 					if (ts <= eventSince) continue;
 					if (ts > newestEvent) newestEvent = ts;
 					const message = ev.message ?? "";
-					const match = EVENT_FAILURES.find((f) => f.pattern.test(message));
+					const match = classifyServiceEvent(message);
 					if (!match) continue;
 					const key = `tasks:${resource}:event:${match.label}`;
 					stillFailing.add(key);
