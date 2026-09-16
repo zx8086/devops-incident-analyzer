@@ -282,9 +282,18 @@ added is read-only metadata.
 
 | Action | Unlocks |
 |--------|---------|
-| `eks:ListNodegroups`, `eks:DescribeNodegroup`, `eks:ListFargateProfiles` | the `nodegroups` check |
-| `ec2:DescribeVolumes`, `ec2:DescribeVolumeStatus` | impaired and retiring volumes, folded into the `drift` family |
+| `eks:ListNodegroups`, `eks:DescribeNodegroup` | the `nodegroups` check |
+| `ec2:DescribeVolumeStatus` | impaired and retiring volumes, folded into the `drift` family |
 | `support:DescribeTrustedAdvisorChecks`, `support:DescribeTrustedAdvisorCheckSummaries` | the `quotas` check |
+
+Five actions, every one of which a detector actually calls. `eks:ListFargateProfiles`
+and `ec2:DescribeVolumes` were in the first draft and removed: no check invokes
+either, and the test that excluded whole services applies equally to actions
+inside a statement. Note `DescribeVolumeStatus` has no `IncludeAllVolumes`
+parameter -- its accepted inputs are `MaxResults`, `NextToken`, `VolumeIds`,
+`IncludeManagedResources`, `DryRun` and `Filters` -- and its default response
+already carries healthy volumes, which is what makes the pending-action signal
+reachable at all.
 
 Each was verified to return usable output in a real account before being
 requested. Two items from the estate-watch wishlist were deliberately NOT
