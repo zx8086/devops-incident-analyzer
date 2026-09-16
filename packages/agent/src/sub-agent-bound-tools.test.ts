@@ -1,8 +1,9 @@
 // agent/src/sub-agent-bound-tools.test.ts
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { getLogger } from "@devops-agent/observability";
 import type { StructuredToolInterface } from "@langchain/core/tools";
-import { buildBoundToolsBlock, composeBoundTools } from "./sub-agent.ts";
+import { buildBoundToolsBlock, composeBoundTools, describeTruncation } from "./sub-agent.ts";
 
 // Only `name` is read by the composition, so a minimal stub keeps these tests focused on the
 // budgeting arithmetic rather than on LangChain tool construction.
@@ -129,5 +130,165 @@ describe("buildBoundToolsBlock (SIO-1234)", () => {
 		expect(block).toContain("kafka_list_topics");
 		expect(block).toContain("make at least one call from this list");
 		expect(block).not.toContain("No tools are bound");
+	});
+});
+
+// SIO-1767: the cap truncated positionally and SILENTLY -- nothing recorded that a tool was
+// dropped, let alone which one, so nobody could say how often 25 actually bites (SIO-1240
+// criteria 3/4). describeTruncation is the log payload, extracted as a pure function because
+// this repo does not assert on pino output in unit tests (extract-findings.test.ts:356-365);
+// testing it directly covers the arithmetic that decides whether to log and what it names.
+describe("describeTruncation (SIO-1767)", () => {
+	test("returns undefined when nothing was cut -- a composition that fits stays silent", () => {
+		const head = tools("a", "b", "c");
+		const tail = tools("d", "e");
+		expect(describeTruncation(head, tail, head.length, tail.length, 25, 8)).toBeUndefined();
+	});
+
+	test("names the dropped tools, head-first, when the head is cut", () => {
+		// The real aws-agent shape: head far over budget, tail reserved to minAction.
+		const head = tools(...Array.from({ length: 20 }, (_, i) => `head_${i}`));
+		const tail = tools(...Array.from({ length: 10 }, (_, i) => `sel_${i}`));
+		const out = describeTruncation(head, tail, 17, 8, 25, 8);
+		expect(out).toBeDefined();
+		expect(out?.droppedHead).toBe(3);
+		expect(out?.droppedTail).toBe(2);
+		expect(out?.requested).toBe(30);
+		expect(out?.bound).toBe(25);
+		// Head drops first, in order, then tail -- mirrors the slice order.
+		expect(out?.droppedNames).toEqual(["head_17", "head_18", "head_19", "sel_8", "sel_9"]);
+	});
+
+	test("reports a tail-only cut without claiming the head lost anything", () => {
+		const head = tools("a", "b");
+		const tail = tools(...Array.from({ length: 30 }, (_, i) => `sel_${i}`));
+		const out = describeTruncation(head, tail, 2, 23, 25, 8);
+		expect(out?.droppedHead).toBe(0);
+		expect(out?.droppedTail).toBe(7);
+		expect(out?.droppedNames).toEqual(["sel_23", "sel_24", "sel_25", "sel_26", "sel_27", "sel_28", "sel_29"]);
+	});
+
+	test("an empty selection with a fitting head is silent", () => {
+		const head = tools("a", "b");
+		expect(describeTruncation(head, [], 2, 0, 25, 8)).toBeUndefined();
+	});
+
+	test("caps a huge dropped list but keeps the COUNTS exact and flags the cap", () => {
+		// aws-agent's real head is 62 (skill-tool-coverage.test.ts:38), which would otherwise put
+		// ~77 names in one log line.
+		const head = tools(...Array.from({ length: 62 }, (_, i) => `head_${i}`));
+		const tail = tools(...Array.from({ length: 40 }, (_, i) => `sel_${i}`));
+		const out = describeTruncation(head, tail, 17, 8, 25, 8);
+		expect(out?.droppedNames).toHaveLength(30);
+		expect(out?.droppedNamesTruncated).toBe(true);
+		// The counts must NOT be capped -- they are what says how much was really cut.
+		expect(out?.droppedHead).toBe(45);
+		expect(out?.droppedTail).toBe(32);
+		expect(out?.requested).toBe(102);
+		expect(out?.bound).toBe(25);
+	});
+
+	test("a dropped list at or under the cap is not flagged as truncated", () => {
+		const head = tools(...Array.from({ length: 30 }, (_, i) => `h${i}`));
+		const out = describeTruncation(head, [], 25, 0, 25, 8);
+		expect(out?.droppedNames).toHaveLength(5);
+		expect(out?.droppedNamesTruncated).toBeUndefined();
+	});
+
+	test("carries max and minAction so a trace is interpretable without reading the source", () => {
+		const head = tools(...Array.from({ length: 30 }, (_, i) => `h${i}`));
+		const out = describeTruncation(head, [], 25, 0, 25, 8);
+		expect(out?.max).toBe(25);
+		expect(out?.minAction).toBe(8);
+	});
+});
+
+// The end-to-end contract: the real composeBoundTools path must produce a cut in exactly the
+// cases describeTruncation reports one, so the log cannot drift from the behaviour it describes.
+describe("composeBoundTools truncation is observable (SIO-1767)", () => {
+	test("the oversubscribed aws-agent shape drops tools, and the return reflects it", () => {
+		const head = tools(...Array.from({ length: 62 }, (_, i) => `head_${i}`));
+		const selected = tools(...Array.from({ length: 40 }, (_, i) => `sel_${i}`));
+		const out = composeBoundTools(head, selected);
+		expect(out).toHaveLength(25);
+		// 62 + 40 requested, 25 bound -> 77 dropped. The log exists to make that visible.
+		expect(head.length + selected.length - out.length).toBe(77);
+	});
+
+	test("an under-budget composition binds everything, so there is nothing to report", () => {
+		const head = tools("a", "b", "c");
+		const selected = tools("d", "e");
+		expect(namesOf(composeBoundTools(head, selected))).toEqual(["a", "b", "c", "d", "e"]);
+	});
+});
+
+// SIO-1767 (Greptile on PR #798): the tests above cover the RETURN value and the pure payload
+// helper, but not the logging contract itself -- deleting the logger.info call, or dropping its
+// dataSourceId, would leave them all green while defeating the point of the feature. Assert the
+// log directly using the SIO-1340 prototype-spy idiom from memory-backend.test.ts:136-153: every
+// getLogger() call returns a pino child sharing one prototype, so spying there captures calls
+// from the module-scoped `logger` inside sub-agent.ts, which this file cannot import.
+function spyOnLoggerInfo(): { calls: unknown[][]; restore: () => void } {
+	const proto = Object.getPrototypeOf(getLogger("spy-probe"));
+	const calls: unknown[][] = [];
+	const orig = proto.info;
+	proto.info = function (this: unknown, ...args: unknown[]) {
+		calls.push(args);
+		return orig.apply(this, args);
+	};
+	return {
+		calls,
+		restore: () => {
+			proto.info = orig;
+		},
+	};
+}
+
+describe("composeBoundTools truncation logging (SIO-1767)", () => {
+	let spy: { calls: unknown[][]; restore: () => void } | undefined;
+	afterEach(() => {
+		spy?.restore();
+		spy = undefined;
+	});
+
+	function truncationLogs(calls: unknown[][]): Array<Record<string, unknown>> {
+		return calls
+			.filter((c) => c[1] === "tool budget truncated the bound set")
+			.map((c) => c[0] as Record<string, unknown>);
+	}
+
+	test("logs once, with dataSourceId attribution, when the cap cuts", () => {
+		spy = spyOnLoggerInfo();
+		composeBoundTools(
+			tools(...Array.from({ length: 62 }, (_, i) => `head_${i}`)),
+			tools(...Array.from({ length: 40 }, (_, i) => `sel_${i}`)),
+			25,
+			8,
+			"aws",
+		);
+		const logs = truncationLogs(spy.calls);
+		expect(logs).toHaveLength(1);
+		expect(logs[0]?.dataSourceId).toBe("aws");
+		expect(logs[0]?.requested).toBe(102);
+		expect(logs[0]?.bound).toBe(25);
+		expect(logs[0]?.droppedHead).toBe(45);
+		expect(logs[0]?.droppedTail).toBe(32);
+		expect(logs[0]?.droppedNamesTruncated).toBe(true);
+	});
+
+	// The property most worth pinning: a line that fired on every turn would be noise, and the
+	// measurement it exists for would be unreadable.
+	test("stays SILENT when the composition fits under the budget", () => {
+		spy = spyOnLoggerInfo();
+		composeBoundTools(tools("a", "b", "c"), tools("d", "e"), 25, 8, "kafka");
+		expect(truncationLogs(spy.calls)).toHaveLength(0);
+	});
+
+	test("omits dataSourceId entirely rather than logging undefined when it is not supplied", () => {
+		spy = spyOnLoggerInfo();
+		composeBoundTools(tools(...Array.from({ length: 30 }, (_, i) => `h${i}`)), tools("x"), 25, 8);
+		const logs = truncationLogs(spy.calls);
+		expect(logs).toHaveLength(1);
+		expect("dataSourceId" in (logs[0] ?? {})).toBe(false);
 	});
 });
