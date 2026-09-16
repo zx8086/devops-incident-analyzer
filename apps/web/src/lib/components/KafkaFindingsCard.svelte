@@ -131,7 +131,16 @@ const ksqlStateCounts = $derived.by(() => {
   <div class="mt-2 rounded-lg border border-blue-100 bg-blue-50/50 px-3 py-2.5">
     <div class="flex items-center gap-1.5 mb-2">
       <span class="text-[0.5625rem] font-medium text-blue-700 uppercase tracking-wider">Kafka findings</span>
+      {#if findings.unscoped}
+        <!-- SIO-1644: the SIO-1159 backend flag once shipped without a UI half (fixed by
+             SIO-1245), so fallback rows rendered exactly like focus-scoped evidence. Ship
+             both halves together. Mirrors AWSFindingsCard / CouchbaseFindingsCard. -->
+        <span class="text-[0.5625rem] font-medium text-blue-700 bg-blue-100 uppercase tracking-wider rounded px-1">Unscoped</span>
+      {/if}
     </div>
+    {#if findings.unscoped}
+      <p class="-mt-1 mb-2 text-[0.625rem] text-gray-500">No consumer group or DLQ topic referenced the focus services -- showing top cluster-wide rows.</p>
+    {/if}
 
     {#if cluster}
       <div class="mb-2.5 flex items-center gap-3 text-[0.6875rem] text-gray-700">

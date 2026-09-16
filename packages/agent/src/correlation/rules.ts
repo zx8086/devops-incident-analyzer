@@ -51,6 +51,11 @@ function getKafkaData(state: AgentStateType): {
 } {
 	const result = selectResultWithFindings(state.dataSourceResults, "kafka", "kafkaFindings");
 	if (result?.status !== "success") return {};
+	// SIO-1644: unscoped-fallback rows are display-only (mirrors SIO-1138 couchbase /
+	// SIO-1159 aws / SIO-1643 elastic). A cluster-wide consumer group is NOT evidence
+	// about the focus service -- without this, kafka-significant-lag would fire on an
+	// unrelated chronically-lagging batch consumer and manufacture a false correlation.
+	if (result.kafkaFindings?.unscoped) return {};
 	// SIO-764: read the structured sibling populated by extractFindings; result.data
 	// stays as the prose summary for aggregator/UI.
 	return result.kafkaFindings ?? {};
@@ -624,6 +629,12 @@ function shareDistinctiveToken(a: string, b: string): boolean {
 function getGitLabMergedRequests(state: AgentStateType): GitLabMergedRequest[] {
 	const result = selectResultWithFindings(state.dataSourceResults, "gitlab", "gitlabFindings");
 	if (result?.status !== "success") return [];
+	// SIO-1644: unscoped-fallback rows are display-only (mirrors SIO-1138 couchbase /
+	// SIO-1159 aws / SIO-1643 elastic). gitlab-deploy-vs-datastore-runtime pairs MRs
+	// against slow queries by shared token, so an unscoped MR list would widen the
+	// match surface and let the rule emit a "deployed fix contradicted at runtime"
+	// contradiction about an unrelated team's MR.
+	if (result.gitlabFindings?.unscoped) return [];
 	return result.gitlabFindings?.mergedRequests ?? [];
 }
 

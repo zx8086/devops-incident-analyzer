@@ -363,7 +363,10 @@ describe("extractKafkaFindings", () => {
 			const outputs: ToolOutput[] = [baseGroups([{ id: "unrelated-prod", state: "STABLE" }])];
 			const findings = extractKafkaFindings(outputs, ["notification-prod"]);
 			// "prod" has length 4 but is in SUFFIX_PATTERN — gets stripped before tokenization.
-			expect(findings.consumerGroups).toBeUndefined();
+			// SIO-1644: the row is still not a MATCH -- it now comes back as flagged unscoped
+			// fallback context rather than a blank card. `unscoped: true` is what keeps it out
+			// of the correlation rules (rules.ts getKafkaData), so assert it, not just absence.
+			expect(findings.unscoped).toBe(true);
 		});
 
 		test("non-Stable state always passes through regardless of name match", () => {
@@ -394,7 +397,9 @@ describe("extractKafkaFindings", () => {
 				baseLag("unrelated-group", "0"),
 			];
 			const findings = extractKafkaFindings(outputs, ["notification-service"]);
-			expect(findings.consumerGroups).toBeUndefined();
+			// SIO-1644: dropped from SCOPED evidence, then returned as flagged fallback so the
+			// card is not blank. The flag is the contract the rule engine reads.
+			expect(findings.unscoped).toBe(true);
 		});
 
 		test("DLQ with recentDelta > 0 always passes through regardless of name match", () => {
@@ -419,7 +424,9 @@ describe("extractKafkaFindings", () => {
 				},
 			];
 			const findings = extractKafkaFindings(outputs, ["notification-service"]);
-			expect(findings.dlqTopics).toBeUndefined();
+			// SIO-1644: dropped from SCOPED evidence, then returned as flagged fallback so the
+			// card is not blank. The flag is the contract the rule engine reads.
+			expect(findings.unscoped).toBe(true);
 		});
 
 		// SIO-1189: standing backlog is an operational signal regardless of name match.
@@ -609,5 +616,72 @@ describe("derived DLQ fallback (SIO-1149)", () => {
 		expect(extractKafkaFindings(boundary, [])).toEqual({
 			dlqTopics: [{ name: DLQ_NAME, totalMessages: 9007199254740991, recentDelta: null }],
 		});
+	});
+});
+
+// SIO-1644: a WRONG focus dropped every row and shipped a blank card, strictly worse
+// than show-all. Kafka's trigger is narrower than aws/elastic/couchbase: isRelevantById
+// and isRelevantDlq already pass anything NOTABLE regardless of name match, so reaching
+// the fallback means only idle/healthy rows remain -- context, never evidence.
+describe("extractKafkaFindings unscoped fallback (SIO-1644)", () => {
+	const groups = (rows: Array<{ id: string; state: string }>): ToolOutput => ({
+		toolName: "kafka_list_consumer_groups",
+		rawJson: rows,
+	});
+	const lag = (groupId: string, totalLag: string): ToolOutput => ({
+		toolName: "kafka_get_consumer_group_lag",
+		rawJson: { groupId, totalLag, topics: [] },
+	});
+	const FOCUS = ["cni-plugin"];
+
+	test("droppedAll with focus returns top-5 flagged unscoped, highest lag first", () => {
+		const rows = Array.from({ length: 7 }, (_, i) => ({ id: `idle-${i}`, state: "STABLE" }));
+		// All zero-lag STABLE: nothing is notable, so scoping drops everything.
+		const lags = rows.map((r) => lag(r.id, "0"));
+		const out = extractKafkaFindings([groups(rows), ...lags], FOCUS);
+		expect(out.unscoped).toBe(true);
+		expect(out.consumerGroups).toHaveLength(5);
+	});
+
+	test("a scoped hit suppresses the fallback and carries no unscoped flag", () => {
+		const out = extractKafkaFindings(
+			[groups([{ id: "cni-plugin-consumer", state: "STABLE" }, { id: "idle-other", state: "STABLE" }]),
+			 lag("cni-plugin-consumer", "0"), lag("idle-other", "0")],
+			FOCUS,
+		);
+		expect(out.unscoped).toBeUndefined();
+		expect(out.consumerGroups?.map((g) => g.id)).toEqual(["cni-plugin-consumer"]);
+	});
+
+	test("empty focus never engages the fallback (show-all has no unscoped flag)", () => {
+		const out = extractKafkaFindings([groups([{ id: "anything", state: "STABLE" }]), lag("anything", "0")], []);
+		expect(out.unscoped).toBeUndefined();
+		expect(out.consumerGroups).toHaveLength(1);
+	});
+
+	test("a notable row (non-STABLE) is real evidence, so the fallback never engages", () => {
+		const out = extractKafkaFindings([groups([{ id: "unrelated", state: "DEAD" }])], FOCUS);
+		expect(out.unscoped).toBeUndefined();
+		expect(out.consumerGroups?.map((g) => g.id)).toEqual(["unrelated"]);
+	});
+
+	test("nothing to fall back to stays empty rather than flagging an empty fallback", () => {
+		const out = extractKafkaFindings([groups([])], FOCUS);
+		expect(out.unscoped).toBeUndefined();
+		expect(out.consumerGroups).toBeUndefined();
+	});
+
+	test("cluster/connectors are not focus-filtered, so they must not gate the fallback", () => {
+		const out = extractKafkaFindings(
+			[
+				groups([{ id: "idle", state: "STABLE" }]),
+				lag("idle", "0"),
+				{ toolName: "kafka_describe_cluster", rawJson: { provider: "msk", brokerCount: 3, topicCount: 10 } },
+			],
+			FOCUS,
+		);
+		// The cluster block is present AND the fallback still engaged.
+		expect(out.cluster).toBeDefined();
+		expect(out.unscoped).toBe(true);
 	});
 });

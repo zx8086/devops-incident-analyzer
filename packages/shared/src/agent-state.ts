@@ -201,6 +201,12 @@ export const KafkaFindingsSchema = z.object({
 			}),
 		)
 		.optional(),
+	unscoped: z
+		.boolean()
+		.optional()
+		.describe(
+			"SIO-1644: true when no consumer group or DLQ topic matched the focus services and those arrays are a top-N cluster-wide fallback (mirrors SIO-1138 couchbase / SIO-1159 aws / SIO-1643 elastic); rule-engine consumers must skip unscoped rows",
+		),
 });
 export type KafkaFindings = z.infer<typeof KafkaFindingsSchema>;
 
@@ -219,6 +225,12 @@ export type GitLabMergedRequest = z.infer<typeof GitLabMergedRequestSchema>;
 
 export const GitLabFindingsSchema = z.object({
 	mergedRequests: z.array(GitLabMergedRequestSchema).optional(),
+	unscoped: z
+		.boolean()
+		.optional()
+		.describe(
+			"SIO-1644: true when no merged request referenced the focus services and mergedRequests is a top-N recent fallback (mirrors SIO-1138 couchbase / SIO-1159 aws / SIO-1643 elastic); rule-engine consumers must skip unscoped rows",
+		),
 });
 export type GitLabFindings = z.infer<typeof GitLabFindingsSchema>;
 

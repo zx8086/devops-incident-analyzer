@@ -493,3 +493,83 @@ Confidence: 0.87`;
 		expect(directive).toContain("do NOT re-investigate the focus service");
 	});
 });
+
+// SIO-1644: kafka and gitlab gained the unscoped fallback the other datasources already
+// had. The schema field alone changes nothing in the rule engine -- the guard is four
+// hand-written per-datasource checks, so these tests pin the two new ones. Without them,
+// kafka-significant-lag fires on an unrelated chronically-lagging batch consumer and
+// gitlab-deploy-vs-datastore-runtime claims a deployed fix was contradicted at runtime
+// using an unrelated team's MR.
+describe("kafka rules skip unscoped-fallback rows (SIO-1644)", () => {
+	function kafkaState(unscoped: boolean): AgentStateType {
+		const partial: Partial<AgentStateType> = {
+			dataSourceResults: [
+				{
+					dataSourceId: "kafka",
+					status: "success",
+					data: "",
+					kafkaFindings: {
+						consumerGroups: [
+							{ id: "unrelated-batch-consumer", state: "STABLE", totalLag: 250_000 },
+							{ id: "decommissioned-group", state: "EMPTY" },
+						],
+						dlqTopics: [{ name: "unrelated-dlq", totalMessages: 500, recentDelta: 25 }],
+						...(unscoped ? { unscoped: true } : {}),
+					},
+				},
+			],
+		};
+		return partial as unknown as AgentStateType;
+	}
+
+	for (const name of ["kafka-significant-lag", "kafka-empty-or-dead-groups", "kafka-dlq-growth"]) {
+		test(`${name} fires on scoped rows`, () => {
+			expect(findRule(name).trigger(kafkaState(false))).not.toBeNull();
+		});
+
+		test(`${name} does not fire when kafka findings are the unscoped fallback`, () => {
+			expect(findRule(name).trigger(kafkaState(true))).toBeNull();
+		});
+	}
+});
+
+describe("gitlab-deploy-vs-datastore-runtime skips unscoped MRs (SIO-1644)", () => {
+	const rule = findRule("gitlab-deploy-vs-datastore-runtime");
+	const mergedAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+	const observedAt = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+
+	function makeState(gitlabUnscoped: boolean): AgentStateType {
+		const partial: Partial<AgentStateType> = {
+			dataSourceResults: [
+				{
+					dataSourceId: "gitlab",
+					status: "success",
+					data: "",
+					gitlabFindings: {
+						mergedRequests: [{ id: 42, title: "fix pricelist paging", merged_at: mergedAt }],
+						...(gitlabUnscoped ? { unscoped: true } : {}),
+					},
+				},
+				{
+					dataSourceId: "couchbase",
+					status: "success",
+					data: "",
+					couchbaseFindings: {
+						slowQueries: [
+							{ statement: "SELECT * FROM pricelist WHERE k = $1 OFFSET 100000", lastExecutionTime: observedAt },
+						],
+					},
+				},
+			],
+		};
+		return partial as unknown as AgentStateType;
+	}
+
+	test("fires when the MR list is focus-scoped", () => {
+		expect(rule.trigger(makeState(false))).not.toBeNull();
+	});
+
+	test("does not fire when the MR list is the unscoped fallback", () => {
+		expect(rule.trigger(makeState(true))).toBeNull();
+	});
+});

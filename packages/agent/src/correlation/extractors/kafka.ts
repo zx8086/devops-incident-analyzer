@@ -17,6 +17,10 @@ import { matchesFocus } from "../focus-match.ts";
 // uppercase ("STABLE", "EMPTY", "DEAD", "PREPARING_REBALANCE", ...). Normalize
 // at parse so downstream comparisons (extractor pass-through, correlation rules,
 // UI dot colour) all see one canonical shape.
+// SIO-1644: mirrors aws SIO-1159 / couchbase SIO-1138 / elastic SIO-1643 --
+// top-N when focus scoping drops everything, so the card is not silently blank.
+const UNSCOPED_FALLBACK_LIMIT = 5;
+
 const ListConsumerGroupsRowSchema = z.object({
 	id: z.string(),
 	state: z.string().transform((s) => s.toUpperCase()),
@@ -306,5 +310,38 @@ export function extractKafkaFindings(outputs: ToolOutput[], focusServices: strin
 	if (cluster) findings.cluster = cluster;
 	if (connectorsByName.size > 0) findings.connectors = Array.from(connectorsByName.values());
 	if (ksqlQueries.length > 0) findings.ksqlQueries = ksqlQueries;
+
+	// SIO-1644: a WRONG focus (the LLM naming infrastructure components rather than
+	// services -- run a54d89c4) drops every row and ships a blank card, strictly worse
+	// than show-all. Fall back to a cluster-wide top-N flagged `unscoped: true`, mirroring
+	// aws SIO-1159 / couchbase SIO-1138 / elastic SIO-1643.
+	//
+	// Kafka needs a narrower trigger than those three. isRelevantById/isRelevantDlq already
+	// pass anything NOTABLE regardless of name match (non-STABLE state, any lag, DLQ growth
+	// or standing backlog), so reaching here means nothing notable survived and the fallback
+	// can only be showing idle/healthy rows -- context, never evidence. Two guards follow
+	// from that:
+	//   - derivedRows (:294-300) bypass scoping because the sub-agent targeted those topics
+	//     BY NAME, which is itself the relevance signal. If any exist the focus produced real
+	//     evidence, so allDlqs is non-empty and we never reach here.
+	//   - cluster/connectors/ksqlQueries are never focus-filtered, so they must not gate the
+	//     fallback (checking them would suppress it whenever a cluster block was parsed) and
+	//     they stay on the object -- `unscoped` describes the two scoped arrays only.
+	const droppedAll = filteredGroups.length === 0 && allDlqs.length === 0;
+	if (!droppedAll || focusServices.length === 0) return findings;
+	const allGroups = Array.from(byId.values());
+	if (allGroups.length === 0 && dlqTopics.length === 0) return findings;
+	// Highest lag first: the most plausible triage lead among otherwise-idle groups.
+	if (allGroups.length > 0) {
+		findings.consumerGroups = [...allGroups]
+			.sort((a, b) => (b.totalLag ?? 0) - (a.totalLag ?? 0))
+			.slice(0, UNSCOPED_FALLBACK_LIMIT);
+	}
+	if (dlqTopics.length > 0) {
+		findings.dlqTopics = [...dlqTopics]
+			.sort((a, b) => b.totalMessages - a.totalMessages)
+			.slice(0, UNSCOPED_FALLBACK_LIMIT);
+	}
+	findings.unscoped = true;
 	return findings;
 }

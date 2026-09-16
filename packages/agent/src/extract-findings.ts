@@ -132,16 +132,48 @@ export async function extractFindings(state: AgentStateType): Promise<Partial<Ag
 			// behaviour is visible in dev-server logs without DevTools spelunking.
 			// Grep: `KafkaFindingsCard` in pino output, or filter by `agent:extract-findings`.
 			const raw = countRawConsumerGroups(outs);
-			logCard("KafkaFindingsCard", focusServices, raw.count, kafkaFindings.consumerGroups?.length ?? 0, {
-				dlqTopics: kafkaFindings.dlqTopics?.length ?? 0,
-				sampleRawIds: raw.sampleIds,
-			});
+			if (kafkaFindings.unscoped) {
+				// SIO-1644: fallback engaged -- the card is populated but the rows are
+				// not focus-linked. Distinct info line instead of the droppedAll warn
+				// (mirrors the SIO-1138 couchbase / SIO-1159 aws / SIO-1643 elastic branches).
+				logger.info(
+					{
+						tag: "KafkaFindingsCard",
+						focusServices,
+						rawCount: raw.count,
+						fallbackCount: kafkaFindings.consumerGroups?.length ?? 0,
+						fallbackDlqTopics: kafkaFindings.dlqTopics?.length ?? 0,
+						filterMode: "unscoped-fallback",
+					},
+					"findings card fell back to unscoped top-N",
+				);
+			} else {
+				logCard("KafkaFindingsCard", focusServices, raw.count, kafkaFindings.consumerGroups?.length ?? 0, {
+					dlqTopics: kafkaFindings.dlqTopics?.length ?? 0,
+					sampleRawIds: raw.sampleIds,
+				});
+			}
 			return { kafkaFindings };
 		},
 		gitlab: (outs) => {
 			const gitlabFindings = extractGitLabFindings(outs, focusServices);
 			const rawCount = extractGitLabFindings(outs).mergedRequests?.length ?? 0;
-			logCard("GitLabFindingsCard", focusServices, rawCount, gitlabFindings.mergedRequests?.length ?? 0);
+			if (gitlabFindings.unscoped) {
+				// SIO-1644: fallback engaged -- the card is populated but the rows are
+				// not focus-linked. Distinct info line instead of the droppedAll warn.
+				logger.info(
+					{
+						tag: "GitLabFindingsCard",
+						focusServices,
+						rawCount,
+						fallbackCount: gitlabFindings.mergedRequests?.length ?? 0,
+						filterMode: "unscoped-fallback",
+					},
+					"findings card fell back to unscoped top-N",
+				);
+			} else {
+				logCard("GitLabFindingsCard", focusServices, rawCount, gitlabFindings.mergedRequests?.length ?? 0);
+			}
 			// SIO-1076: Orbit cross-project findings ride the same gitlab result.
 			// Pure and free -- parses outputs a sub-agent turn already produced.
 			const orbitFindings = extractOrbitFindings(outs, focusServices);
