@@ -54,6 +54,62 @@ describe("runCycle", () => {
 		expect(d.state.journalRows(60_000, "finding")).toHaveLength(1);
 	});
 
+	// SIO-1681: every other family asks the account's agent to diagnose something
+	// it observes. Here the agent IS the subject, and the finding exists because
+	// its model calls are failing -- so investigating it spends a slot on a
+	// prompt that cannot be answered. It must still reach the report.
+	test("a spoke-health finding is reported but never sent for investigation", async () => {
+		const investigated: Finding[][] = [];
+		const d = deps({
+			checks: [
+				{
+					name: "spoke-health",
+					run: async () => [
+						F({
+							family: "spoke-health",
+							severity: "warn",
+							resource: "aws-762715229080",
+							summary: "Spoke aws-762715229080 reports online but its last 9 consecutive model calls all failed",
+							dedup_key: "spoke-health:aws-762715229080:model-errors",
+						}),
+					],
+				},
+			],
+			investigate: async (batch) => {
+				investigated.push(batch);
+				return { diagnoses: null, failure: null };
+			},
+		});
+		const out = await runCycle(d);
+		expect(out.findings).toHaveLength(1);
+		// Never handed to the agent...
+		expect(investigated).toEqual([]);
+		// ...but still mailed out and journaled.
+		expect(d.sent).toHaveLength(1);
+		expect(d.sent[0]).toContain("aws-762715229080");
+		expect(d.state.journalRows(60_000, "finding")).toHaveLength(1);
+	});
+
+	test("a spoke-health finding does not suppress investigation of the others", async () => {
+		const investigated: Finding[][] = [];
+		const d = deps({
+			checks: [
+				{ name: "alarms", run: async () => [F()] },
+				{
+					name: "spoke-health",
+					run: async () => [F({ family: "spoke-health", severity: "warn", dedup_key: "spoke-health:s:model-errors" })],
+				},
+			],
+			investigate: async (batch) => {
+				investigated.push(batch);
+				return { diagnoses: null, failure: null };
+			},
+		});
+		await runCycle(d);
+		expect(investigated).toHaveLength(1);
+		expect(investigated[0]?.map((f) => f.family)).toEqual(["alarm"]);
+	});
+
 	test("investigation failure still ships the raw finding", async () => {
 		const d = deps({ investigate: async () => ({ diagnoses: null, failure: null }) });
 		await runCycle(d);

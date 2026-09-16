@@ -49,6 +49,7 @@ import { checkQueues } from "./monitor/checks/queues.ts";
 import { checkQuotas } from "./monitor/checks/quotas.ts";
 import { checkResourceDrift } from "./monitor/checks/resource-drift.ts";
 import { checkScaling } from "./monitor/checks/scaling.ts";
+import { checkSpokeHealth } from "./monitor/checks/spoke-health.ts";
 import { checkStacks } from "./monitor/checks/stacks.ts";
 import { checkTargets } from "./monitor/checks/targets.ts";
 import { checkTasks } from "./monitor/checks/tasks.ts";
@@ -260,7 +261,13 @@ export async function runCycle(deps: CycleDeps): Promise<{ findings: Finding[]; 
 	}
 
 	if (findings.length > 0) {
-		const toInvestigate = findings.filter((f) => f.severity !== "info");
+		// SIO-1681: spoke-health is never investigated. Every other family asks
+		// the account's agent to diagnose something it observes; here the agent
+		// IS the subject, and the finding exists precisely because its model
+		// calls are failing. Sending it would spend an investigation slot on a
+		// prompt that cannot be answered, and time out against the budget. The
+		// finding ships to the report on its own.
+		const toInvestigate = findings.filter((f) => f.severity !== "info" && f.family !== "spoke-health");
 		let diagnoses: Map<string, Diagnosis> | null = null;
 		let investigationFailure: string | null = null;
 		// Reuse pass (SIO-1739): the same dedup_key diagnosed within the cooldown
@@ -551,6 +558,10 @@ function main(): void {
 			{ name: "tasks", run: () => checkTasks(ecs, state) },
 			{ name: "queues", run: () => checkQueues(sqs, state) },
 			{ name: "scaling", run: () => checkScaling(autoscaling, state) },
+			// SIO-1681: reads the hub, not AWS. On the 15-minute cadence a spoke
+			// whose model starts failing is reported within two cycles without
+			// anyone prompting it.
+			{ name: "spoke-health", run: () => checkSpokeHealth(coms, state, { spoke: INVESTIGATE_TARGET }) },
 		],
 		state,
 		investigate,
