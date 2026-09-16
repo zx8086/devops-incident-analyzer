@@ -105,6 +105,8 @@ Every cycle starts with a T0 gate: `sts:GetCallerIdentity` compared against `AWS
 | Scaling | 15 min | `autoscaling:DescribeScalingActivities`, `StatusCode` in {Failed, Cancelled} since a watermark (SIO-1748). No invented threshold: Auto Scaling labels the failure itself. Catches InsufficientInstanceCapacity, quota exhaustion, a launch template referencing a deleted AMI or security group, and `iam:PassRole` denials -- none of which produce an alarm unless somebody wrote one. Activities sharing a normalized cause collapse into one finding, so one AZ running dry is one report line rather than one per group. Application Auto Scaling is not read: it needs a call per ServiceNamespace and its ECS failures already surface through the tasks check | Normalized cause + group, 24 h re-alert; watermark bounded by the scan start |
 | Db-events | hourly | `rds:DescribeEvents` filtered SERVER-side on `EventCategories` to failure / failover / low storage / availability (SIO-1749). The cleanest discriminator in the set, because the API does it: an account with 90 events over 14 days returns 0 once filtered, since all 90 were automated snapshot activity. `failure` and `low storage` are critical, the rest warn. ElastiCache is deliberately not read -- its events carry NO EventCategories field at all, so there is no categorical discriminator and every message observed in production was benign or self-healing | Source + category set, 24 h re-alert |
 | Stacks | daily | CloudFormation `DescribeStacks`, snapshot-diffed (SIO-1749). CloudFormation states its own verdict, so the discriminator is a suffix of the status enum: `*_FAILED` is critical, a completed rollback is warn (the stack survived, the deployment did not), everything else silent. Edge-triggered, because a stack that has sat in `UPDATE_ROLLBACK_COMPLETE` for a year is not news every day. A failed stack costs one extra `DescribeStackEvents` for the failing resource and reason, and a denied read loses only the evidence, never the finding | Edge-triggered by the snapshot diff; first run establishes the baseline silently |
+| Nodegroups | hourly | EKS `ListNodegroups` + `DescribeNodegroup` (SIO-1750). `ListClusters`/`DescribeCluster` were already granted but carry no node health -- `DescribeCluster` returns no `health` field at all -- so a nodegroup whose nodes cannot join was invisible. The discriminator is AWS's own twice over: `health.issues` is a list EKS populates when it has diagnosed the problem itself (code, message, affected resource ids), and `status` is a closed enum where DEGRADED and *_FAILED mean what they say. Failed status is critical; issues without a failed status are warn, because the group still serves but something will bite later | Nodegroup + status, 24 h re-alert, clears on recovery when the scan was complete |
+| Quotas | daily | Trusted Advisor `DescribeTrustedAdvisorCheckSummaries` over the `service_limits` category (SIO-1750). **This replaces the Service Quotas design entirely**: rather than walking every quota and correlating each against `AWS/Usage` metrics to derive a utilisation percentage, ONE call answers all 52 service-limit checks, each carrying AWS's own `ok`/`warning`/`error` verdict -- so there is no threshold to invent. `error` (limit reached) is critical, `warning` (approaching) is warn. us-east-1 only; an account without a Business or Enterprise support plan answers `SubscriptionRequiredException`, reported once a week as info exactly as the health check treats it | Check id + status, 24 h re-alert, clears when no longer flagged |
 
 ### Shadow families (SIO-1748)
 
@@ -225,7 +227,7 @@ Env-with-defaults; no config files. Set in the systemd unit environment or `~/.c
 | `PI_MONITOR_WATCHLIST` | see `checks/watchlist.ts` | Comma-separated CloudTrail event names; setting it replaces the default |
 | `PI_MONITOR_CERT_WARN_DAYS` / `PI_MONITOR_CERT_CRIT_DAYS` | `30` / `7` | Certificate expiry thresholds |
 | `PI_MONITOR_COST_PCT` / `PI_MONITOR_COST_ABS` | `0` / `100` | Cost anomaly threshold: yesterday must exceed the 14-day baseline by BOTH values; the fleet default is an absolute $100 gate with the percentage filter off (SIO-1680) |
-| `PI_MONITOR_SHADOW_FAMILIES` | `targets,tasks,queues,scaling,db-events,stacks` | Comma-separated families detected and journalled as `shadow_finding` but never reported or investigated (SIO-1748). Setting it REPLACES the default; empty graduates all. Read them with `history ... shadow` |
+| `PI_MONITOR_SHADOW_FAMILIES` | `targets,tasks,queues,scaling,db-events,stacks,nodegroups,quotas` | Comma-separated families detected and journalled as `shadow_finding` but never reported or investigated (SIO-1748). Setting it REPLACES the default; empty graduates all. Read them with `history ... shadow` |
 | `PI_MONITOR_STATE_DB` | `~/.pi/monitor/state.db` | State location |
 
 Hub-side: `PI_COMS_NET_MAX_TTL_MS` (default `1209600000`, 14 days) caps any requested `ttl_ms`.
@@ -254,7 +256,7 @@ before any code was written. Recording why, so they are not re-proposed:
   Trusted Advisor's `service_limits` category (SIO-1750), which answers all 52
   limit checks in a single call with AWS's own ok/warning/error verdict.
 
-The SIO-1748 workload-state checks add **no IAM at all**. `elasticloadbalancing:DescribeTargetGroups`/`DescribeTargetHealth`, the `ecs:List*`/`Describe*` set, `sqs:ListQueues`/`GetQueueAttributes` and `autoscaling:DescribeScalingActivities` were already granted and simply had no detector reading them.
+The SIO-1748 and SIO-1749 checks add **no IAM at all**. `elasticloadbalancing:DescribeTargetGroups`/`DescribeTargetHealth`, the `ecs:List*`/`Describe*` set, `sqs:ListQueues`/`GetQueueAttributes` and `autoscaling:DescribeScalingActivities` were already granted and simply had no detector reading them.
 
 ---
 
@@ -270,3 +272,34 @@ The manual end-to-end drill after a monitor change: force one finding per family
 - [Networking](networking.md) -- endpoints and SSE events
 - [Security Model](../security/security-model.md) -- what durable messages change
 - [Deployment](../deployment/deployment.md) -- installing `pi-monitor.service`
+
+### IAM added by SIO-1750
+
+One statement, `WorkloadStateReads`, in the inline `pi-coms-extensions` policy
+(`deploy/modules/agent/main.tf`) -- the one policy pi-coms manages in both
+create and adopt mode. `SecretAndDataPlaneDeny` is untouched and everything
+added is read-only metadata.
+
+| Action | Unlocks |
+|--------|---------|
+| `eks:ListNodegroups`, `eks:DescribeNodegroup` | the `nodegroups` check |
+| `ec2:DescribeVolumeStatus` | impaired and retiring volumes, folded into the `drift` family |
+| `support:DescribeTrustedAdvisorChecks`, `support:DescribeTrustedAdvisorCheckSummaries` | the `quotas` check |
+
+Five actions, every one of which a detector actually calls. `eks:ListFargateProfiles`
+and `ec2:DescribeVolumes` were in the first draft and removed: no check invokes
+either, and the test that excluded whole services applies equally to actions
+inside a statement. Note `DescribeVolumeStatus` has no `IncludeAllVolumes`
+parameter -- its accepted inputs are `MaxResults`, `NextToken`, `VolumeIds`,
+`IncludeManagedResources`, `DryRun` and `Filters` -- and its default response
+already carries healthy volumes, which is what makes the pending-action signal
+reachable at all.
+
+Each was verified to return usable output in a real account before being
+requested. Two items from the estate-watch wishlist were deliberately NOT
+taken: `backup:ListBackupJobs` (zero backup jobs across three production
+accounts) and `synthetics:DescribeCanaries` (zero canaries). Asking for
+permissions nothing uses widens the role for no signal.
+
+Adding statements here does not touch userdata, so it does not trigger
+`user_data_replace_on_change` and does not replace instances.

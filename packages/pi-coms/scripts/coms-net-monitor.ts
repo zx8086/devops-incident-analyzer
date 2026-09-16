@@ -12,6 +12,7 @@ import { ConfigServiceClient } from "@aws-sdk/client-config-service";
 import { CostExplorerClient } from "@aws-sdk/client-cost-explorer";
 import { EC2Client } from "@aws-sdk/client-ec2";
 import { ECSClient } from "@aws-sdk/client-ecs";
+import { EKSClient } from "@aws-sdk/client-eks";
 import { ElasticLoadBalancingV2Client } from "@aws-sdk/client-elastic-load-balancing-v2";
 import { GuardDutyClient } from "@aws-sdk/client-guardduty";
 import { HealthClient } from "@aws-sdk/client-health";
@@ -20,6 +21,7 @@ import { RDSClient } from "@aws-sdk/client-rds";
 import { S3Client } from "@aws-sdk/client-s3";
 import { SQSClient } from "@aws-sdk/client-sqs";
 import { STSClient } from "@aws-sdk/client-sts";
+import { SupportClient } from "@aws-sdk/client-support";
 import { fromInstanceMetadata } from "@aws-sdk/credential-providers";
 import { isBlankReply } from "../contracts/reply.ts";
 import {
@@ -42,7 +44,9 @@ import { checkHealth } from "./monitor/checks/health.ts";
 import { checkIdentity, type GateResult } from "./monitor/checks/identity.ts";
 import { checkIngestion } from "./monitor/checks/ingestion.ts";
 import { checkLogs } from "./monitor/checks/logs.ts";
+import { checkNodegroups } from "./monitor/checks/nodegroups.ts";
 import { checkQueues } from "./monitor/checks/queues.ts";
+import { checkQuotas } from "./monitor/checks/quotas.ts";
 import { checkResourceDrift } from "./monitor/checks/resource-drift.ts";
 import { checkScaling } from "./monitor/checks/scaling.ts";
 import { checkStacks } from "./monitor/checks/stacks.ts";
@@ -179,7 +183,7 @@ const LOGS_EXCLUDE = (process.env.PI_MONITOR_LOGS_EXCLUDE ?? "")
 // outcome the design set out to avoid. Graduating is per account and needs no
 // code change: set the variable to the families that should STAY in shadow
 // (empty graduates all of them).
-export const SHADOW_DEFAULT = "targets,tasks,queues,scaling,db-events,stacks";
+export const SHADOW_DEFAULT = "targets,tasks,queues,scaling,db-events,stacks,nodegroups,quotas";
 const SHADOW_FAMILIES = new Set(
 	(process.env.PI_MONITOR_SHADOW_FAMILIES ?? SHADOW_DEFAULT)
 		.split(",")
@@ -430,6 +434,10 @@ function main(): void {
 	const sqs = new SQSClient({ region });
 	const autoscaling = new AutoScalingClient({ region });
 	const cloudformation = new CloudFormationClient({ region });
+	const eks = new EKSClient({ region });
+	// Trusted Advisor is a us-east-1-only API regardless of where the account
+	// operates, the same way Cost Explorer is.
+	const support = new SupportClient({ region: "us-east-1" });
 	const log = (line: string) => console.log(`${new Date().toISOString()} ${line}`);
 
 	// Best-effort by design: a checkpoint failure is logged and the monitor
@@ -594,6 +602,7 @@ function main(): void {
 			{ name: "compliance", run: () => checkCompliance(config, state) },
 			{ name: "guardduty", run: () => checkGuardDuty(guardduty, state) },
 			{ name: "db-events", run: () => checkDbEvents(rds, state) },
+			{ name: "nodegroups", run: () => checkNodegroups(eks, state) },
 		],
 		state,
 		investigate,
@@ -682,6 +691,7 @@ function main(): void {
 					run: () => checkWatchlist(cloudtrail, state, WATCHLIST.length > 0 ? { events: WATCHLIST } : {}),
 				},
 				{ name: "stacks", run: () => checkStacks(cloudformation, state) },
+				{ name: "quotas", run: () => checkQuotas(support, state) },
 			],
 			state,
 			investigate,

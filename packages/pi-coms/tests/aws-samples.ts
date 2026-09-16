@@ -330,3 +330,71 @@ export const SECURITYHUB_SAMPLE_TITLES = [
 	"VPC default security groups should not allow inbound or outbound traffic",
 	"RDS automatic minor version upgrades should be enabled",
 ];
+
+// SIO-1750 captures. Every read below was verified to return something usable
+// in a real account BEFORE the IAM for it was requested.
+
+// The fleet's one real EKS nodegroup, healthy. health.issues is an empty array
+// rather than absent, which is what makes it a usable discriminator.
+export const EKS_NODEGROUP_HEALTHY = {
+	status: "ACTIVE",
+	health: { issues: [] },
+	scalingConfig: { minSize: 2, maxSize: 3, desiredSize: 2 },
+};
+export const EKS_NODEGROUP_FIELDS_OBSERVED = [
+	"amiType",
+	"capacityType",
+	"clusterName",
+	"createdAt",
+	"health",
+	"instanceTypes",
+	"labels",
+	"launchTemplate",
+	"modifiedAt",
+	"nodeRole",
+	"nodegroupArn",
+	"nodegroupName",
+	"releaseVersion",
+	"resources",
+	"scalingConfig",
+	"status",
+	"subnets",
+	"tags",
+	"taints",
+	"updateConfig",
+	"version",
+];
+// DescribeCluster carries no health field at all, which is why this check
+// reads the nodegroup rather than the cluster.
+export const EKS_CLUSTER_HAS_HEALTH_FIELD = false;
+
+// Trusted Advisor, the replacement for the unreachable Service Quotas design:
+// 52 service-limit checks answered in ONE call, each with AWS's own verdict.
+export const TRUSTED_ADVISOR_SERVICE_LIMIT_CHECKS = 52;
+export const TRUSTED_ADVISOR_STATUSES_OBSERVED = ["ok"];
+export const TRUSTED_ADVISOR_SUMMARY_FIELDS_OBSERVED = [
+	"categorySpecificSummary",
+	"checkId",
+	"hasFlaggedResources",
+	"resourcesSummary",
+	"status",
+	"timestamp",
+];
+
+// EBS volume status across two accounts: 133 volumes, every one ok, and no
+// pending actions. The healthy shape is what the check must stay silent on.
+export const EBS_VOLUME_STATUS_FIELDS_OBSERVED = [
+	"Actions",
+	"AvailabilityZone",
+	"AvailabilityZoneId",
+	"Events",
+	"InitializationStatusDetails",
+	"Operator",
+	"VolumeId",
+	"VolumeStatus",
+];
+export const EBS_VOLUME_STATUSES_OBSERVED = ["ok"];
+
+// Not taken from the estate-watch wishlist, and why.
+export const BACKUP_JOBS_OBSERVED = 0;
+export const SYNTHETICS_CANARIES_OBSERVED = 0;
