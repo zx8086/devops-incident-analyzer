@@ -326,11 +326,16 @@ resource "aws_iam_policy" "pi_coms_extensions" {
       //                     but nodegroup health lives on the NODEGROUP, and
       //                     health.issues is AWS asserting the degradation
       //                     itself. One cluster in the fleet runs on these.
-      //   ec2:DescribeVolume*
+      //   ec2:DescribeVolumeStatus
       //                  -- DescribeInstances and InstanceStatus were granted
       //                     but not the volumes under them, so an impaired or
       //                     retiring volume was invisible. 131 volumes in one
-      //                     account alone.
+      //                     account alone. DescribeVolumes itself is NOT asked
+      //                     for: the status call carries everything the check
+      //                     reads, and ListFargateProfiles is likewise omitted
+      //                     because no detector calls it. The same test that
+      //                     excluded Backup and Synthetics applies to actions
+      //                     inside a statement, not just to whole services.
       //   support:*      -- Trusted Advisor, which answers all 52 service-limit
       //                     checks in ONE call with its own ok/warning/error
       //                     verdict. This replaces the Service Quotas approach
@@ -352,8 +357,6 @@ resource "aws_iam_policy" "pi_coms_extensions" {
         Action = [
           "eks:ListNodegroups",
           "eks:DescribeNodegroup",
-          "eks:ListFargateProfiles",
-          "ec2:DescribeVolumes",
           "ec2:DescribeVolumeStatus",
           "support:DescribeTrustedAdvisorChecks",
           "support:DescribeTrustedAdvisorCheckSummaries",

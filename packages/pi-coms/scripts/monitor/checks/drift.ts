@@ -190,9 +190,32 @@ export async function checkDrift(client: AwsClient, state: MonitorState): Promis
 		if (m && !failedNow.has(m[1])) state.clearAlerts(key);
 	}
 
-	const vs = (await client.send(new DescribeVolumeStatusCommand({}))) as DescribeVolumeStatusCommandOutput;
+	// Paginated, and the completeness of the walk is tracked, because the
+	// recovery sweep below can only judge a volume recovered if it was actually
+	// looked at. Note there is no IncludeAllVolumes parameter on this API --
+	// the accepted inputs are MaxResults, NextToken, VolumeIds,
+	// IncludeManagedResources, DryRun and Filters -- and the default response
+	// already carries healthy volumes, which is what makes the pending-action
+	// signal reachable at all.
+	const volumeStatuses: NonNullable<DescribeVolumeStatusCommandOutput["VolumeStatuses"]> = [];
+	let volumeToken: string | undefined;
+	let volumeScanComplete = true;
+	try {
+		do {
+			const vs = (await client.send(
+				new DescribeVolumeStatusCommand({ NextToken: volumeToken }),
+			)) as DescribeVolumeStatusCommandOutput;
+			volumeStatuses.push(...(vs.VolumeStatuses ?? []));
+			volumeToken = vs.NextToken;
+		} while (volumeToken);
+	} catch {
+		// A denied or throttled page must not let the sweep below mistake the
+		// volumes it never saw for recovered ones.
+		volumeScanComplete = false;
+	}
+
 	const volumeFailing = new Set<string>();
-	for (const v of vs.VolumeStatuses ?? []) {
+	for (const v of volumeStatuses) {
 		const id = v.VolumeId ?? "unknown";
 		const status = v.VolumeStatus?.Status ?? VOLUME_OK;
 		const actions = v.Actions ?? [];
@@ -227,9 +250,11 @@ export async function checkDrift(client: AwsClient, state: MonitorState): Promis
 			at: now,
 		});
 	}
-	for (const key of state.alertKeys("drift:")) {
-		const m = key.match(/^drift:(.+):volume$/);
-		if (m && !volumeFailing.has(key)) state.clearAlerts(key);
+	if (volumeScanComplete) {
+		for (const key of state.alertKeys("drift:")) {
+			const m = key.match(/^drift:(.+):volume$/);
+			if (m && !volumeFailing.has(key)) state.clearAlerts(key);
+		}
 	}
 	return findings;
 }
