@@ -27,6 +27,9 @@ function fakeClient(
 					})),
 				};
 			}
+			// SIO-1750 folded volume health into this family; these fixtures predate
+			// it and assert instance behaviour, so the volume read answers empty.
+			if (cmd.constructor.name === "DescribeVolumeStatusCommand") return { VolumeStatuses: [] };
 			throw new Error(`unexpected ${cmd.constructor.name}`);
 		},
 	};

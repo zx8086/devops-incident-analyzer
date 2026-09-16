@@ -318,6 +318,48 @@ resource "aws_iam_policy" "pi_coms_extensions" {
         ]
         Resource = "*"
       }],
+      // Workload-state reads for the SIO-1750 checks. Each one was verified to
+      // return something useful in a real account before being asked for, and
+      // each unlocks exactly one detector:
+      //
+      //   eks:*          -- ListClusters/DescribeCluster were already granted,
+      //                     but nodegroup health lives on the NODEGROUP, and
+      //                     health.issues is AWS asserting the degradation
+      //                     itself. One cluster in the fleet runs on these.
+      //   ec2:DescribeVolume*
+      //                  -- DescribeInstances and InstanceStatus were granted
+      //                     but not the volumes under them, so an impaired or
+      //                     retiring volume was invisible. 131 volumes in one
+      //                     account alone.
+      //   support:*      -- Trusted Advisor, which answers all 52 service-limit
+      //                     checks in ONE call with its own ok/warning/error
+      //                     verdict. This replaces the Service Quotas approach
+      //                     entirely: no per-quota walk, no usage-metric
+      //                     correlation, and the threshold is AWS's own. The
+      //                     API is us-east-1 only and needs a Business or
+      //                     Enterprise support plan; an account without one
+      //                     answers SubscriptionRequiredException, which the
+      //                     check reports as one info finding, never an error.
+      //
+      // All read-only, all metadata. Deliberately NOT taken from the
+      // estate-watch wishlist: backup:ListBackupJobs and
+      // synthetics:DescribeCanaries, because AWS Backup reported zero jobs and
+      // Synthetics zero canaries across three production accounts. Asking for
+      // permissions nothing uses widens the role for no signal.
+      [{
+        Sid    = "WorkloadStateReads"
+        Effect = "Allow"
+        Action = [
+          "eks:ListNodegroups",
+          "eks:DescribeNodegroup",
+          "eks:ListFargateProfiles",
+          "ec2:DescribeVolumes",
+          "ec2:DescribeVolumeStatus",
+          "support:DescribeTrustedAdvisorChecks",
+          "support:DescribeTrustedAdvisorCheckSummaries",
+        ]
+        Resource = "*"
+      }],
       // WAF and delivery-pipeline reads (SIO-1592): an ingestion finding on a
       // WAF log group cannot be concluded without them -- "traffic dropped to
       // zero" and "log delivery broke" are indistinguishable. GetSampledRequests

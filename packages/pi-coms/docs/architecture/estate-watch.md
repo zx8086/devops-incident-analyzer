@@ -118,9 +118,18 @@ encoded in the spoke instructions the account agents load:
 ## If we ask for more IAM
 
 Already granted relative to the doctrine's wishlist: `ce:GetCostAndUsage`
-(cost anomalies), `acm:List/DescribeCertificate` (cert expiry). Worth
-considering later, all read-only: `support:DescribeTrustedAdvisorChecks`,
-`backup:ListBackupJobs`/`ListRecoveryPoints`, `synthetics:DescribeCanaries`.
+(cost anomalies), `acm:List/DescribeCertificate` (cert expiry).
+
+SIO-1750 took `support:DescribeTrustedAdvisorChecks` and
+`DescribeTrustedAdvisorCheckSummaries`, which turned out to answer the
+service-limit question better than the Service Quotas API would have: one call
+covers all 52 limit checks and AWS supplies the verdict.
+
+It deliberately did NOT take `backup:ListBackupJobs`/`ListRecoveryPoints` or
+`synthetics:DescribeCanaries`. Both were measured first, and both returned
+nothing across three production accounts -- zero backup jobs, zero canaries.
+The wishlist entry stands only if something starts using them; a permission
+granted for a service nobody runs widens the role and buys no signal.
 What not to ask for: writes. Self-healing destroys the trust model; when a
 state change is evidence-supported, the correct move is a proposal.
 

@@ -4,13 +4,23 @@ import {
 	type DescribeInstanceStatusCommandOutput,
 	DescribeInstancesCommand,
 	type DescribeInstancesCommandOutput,
+	DescribeVolumeStatusCommand,
+	type DescribeVolumeStatusCommandOutput,
 } from "@aws-sdk/client-ec2";
-import type { Finding } from "../report.ts";
+import type { Finding, Severity } from "../report.ts";
 import type { MonitorState } from "../state.ts";
 import type { AwsClient } from "./alarms.ts";
 
 const BAD_STATES = new Set(["stopped", "stopping", "terminated", "shutting-down"]);
 const OK_STATUS = new Set(["ok", "not-applicable", "initializing"]);
+// SIO-1750: volume health belongs to the instances this check already tracks,
+// so it goes in this family rather than a new one -- an impaired volume and a
+// failing status check are the same conversation about the same host.
+// DescribeVolumeStatus reports "ok" for a healthy volume; anything else is EC2
+// asserting degradation. Its Actions list is the more interesting half: a
+// pending action is AWS telling you it intends to retire or replace the
+// underlying hardware, which is advance warning rather than an outage.
+const VOLUME_OK = "ok";
 // Ids named in a batch summary; the full list is in the evidence.
 const SUMMARY_IDS = 10;
 
@@ -31,6 +41,15 @@ function idList(changes: Change[]): string {
 	const ids = changes.map((c) => c.id);
 	const shown = ids.slice(0, SUMMARY_IDS).join(", ");
 	return ids.length > SUMMARY_IDS ? `${shown} (+${ids.length - SUMMARY_IDS} more)` : shown;
+}
+
+// Exported so the real captured volume shape can be asserted directly. An
+// impaired volume is a fault; a pending AWS action is advance warning that the
+// underlying hardware is going to be retired or replaced, which is information
+// rather than an incident.
+export function classifyVolume(status: string, actionCount: number): Severity | null {
+	if (status !== VOLUME_OK) return "warn";
+	return actionCount > 0 ? "info" : null;
 }
 
 export async function checkDrift(client: AwsClient, state: MonitorState): Promise<Finding[]> {
@@ -169,6 +188,48 @@ export async function checkDrift(client: AwsClient, state: MonitorState): Promis
 	for (const key of state.alertKeys("drift:")) {
 		const m = key.match(/^drift:(.+):statuscheck$/);
 		if (m && !failedNow.has(m[1])) state.clearAlerts(key);
+	}
+
+	const vs = (await client.send(new DescribeVolumeStatusCommand({}))) as DescribeVolumeStatusCommandOutput;
+	const volumeFailing = new Set<string>();
+	for (const v of vs.VolumeStatuses ?? []) {
+		const id = v.VolumeId ?? "unknown";
+		const status = v.VolumeStatus?.Status ?? VOLUME_OK;
+		const actions = v.Actions ?? [];
+		const severity = classifyVolume(status, actions.length);
+		if (severity === null) continue;
+		const impaired = status !== VOLUME_OK;
+		const key = `drift:${id}:volume`;
+		volumeFailing.add(key);
+		if (!state.shouldAlert(key)) continue;
+		state.markAlerted(key, "drift");
+		findings.push({
+			family: "drift",
+			severity,
+			resource: id,
+			summary: impaired
+				? `Volume ${id} status ${status}`
+				: `Volume ${id} has ${actions.length} pending AWS action(s): ${actions.map((a) => a.Code ?? "action").join(", ")}`,
+			evidence: {
+				volumeId: id,
+				status,
+				availabilityZone: v.AvailabilityZone ?? null,
+				// The events carry AWS's own description of what is wrong or what
+				// is scheduled, so the diagnosis starts from their words.
+				events: (v.Events ?? []).map((e) => ({
+					type: e.EventType ?? null,
+					description: e.Description ?? null,
+					notBefore: e.NotBefore ?? null,
+				})),
+				actions: actions.map((a) => ({ code: a.Code ?? null, description: a.Description ?? null })),
+			},
+			dedup_key: key,
+			at: now,
+		});
+	}
+	for (const key of state.alertKeys("drift:")) {
+		const m = key.match(/^drift:(.+):volume$/);
+		if (m && !volumeFailing.has(key)) state.clearAlerts(key);
 	}
 	return findings;
 }
