@@ -7,14 +7,18 @@ import { type Family, FamilySchema, FindingSchema, type Severity, SeveritySchema
 
 export const HISTORY_DEFAULT = 20;
 export const HISTORY_MAX = 200;
-export const HISTORY_USAGE = `usage: history [count<=${HISTORY_MAX}] [info|warn|critical] [${FamilySchema.options.join("|")}]`;
+export const HISTORY_USAGE = `usage: history [count<=${HISTORY_MAX}] [info|warn|critical] [${FamilySchema.options.join("|")}] [shadow]`;
 
-export type HistoryQuery = { count: number; minSeverity: Severity | null; family: Family | null };
+// SIO-1748: `shadow` reads the shadow journal instead of the findings one.
+// A shadow family is detected and journalled but never reported, so this is
+// the only way to see what it would have raised -- and therefore the whole
+// point of running one: the graduation decision is made from these rows.
+export type HistoryQuery = { count: number; minSeverity: Severity | null; family: Family | null; shadow: boolean };
 
 const SEV_RANK: Record<Severity, number> = { info: 0, warn: 1, critical: 2 };
 
 export function parseHistoryArgs(rest: string): HistoryQuery | { error: string } {
-	const q: HistoryQuery = { count: HISTORY_DEFAULT, minSeverity: null, family: null };
+	const q: HistoryQuery = { count: HISTORY_DEFAULT, minSeverity: null, family: null, shadow: false };
 	for (const tok of rest.trim().split(/\s+/).filter(Boolean)) {
 		const lower = tok.toLowerCase();
 		if (/^\d+$/.test(lower)) {
@@ -23,6 +27,8 @@ export function parseHistoryArgs(rest: string): HistoryQuery | { error: string }
 			q.count = n;
 		} else if (SeveritySchema.safeParse(lower).success) {
 			q.minSeverity = lower as Severity;
+		} else if (lower === "shadow") {
+			q.shadow = true;
 		} else if (FamilySchema.safeParse(lower).success) {
 			q.family = lower as Family;
 		} else {
@@ -54,12 +60,13 @@ export function formatHistory(rows: { ts: string; payload: string }[], q: Histor
 		matching.push(r);
 	}
 	const filter = [q.minSeverity ? `${q.minSeverity}+` : "", q.family ?? ""].filter(Boolean).join(" ");
-	if (matching.length === 0) return `no ${filter ? `${filter} ` : ""}findings in the last 7 days`;
+	const kind = q.shadow ? "shadow finding" : "finding";
+	if (matching.length === 0) return `no ${filter ? `${filter} ` : ""}${kind}s in the last 7 days`;
 	const shown = matching.slice(-q.count);
 	const lines = shown.map((r) => `${r.ts} ${r.payload}`);
 	if (matching.length > shown.length) {
 		lines.push(
-			`(showing the newest ${shown.length} of ${matching.length} matching finding(s); history <count> up to ${HISTORY_MAX})`,
+			`(showing the newest ${shown.length} of ${matching.length} matching ${kind}(s); history <count> up to ${HISTORY_MAX})`,
 		);
 	}
 	return lines.join("\n");

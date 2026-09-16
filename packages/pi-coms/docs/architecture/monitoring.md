@@ -99,6 +99,42 @@ Every cycle starts with a T0 gate: `sts:GetCallerIdentity` compared against `AWS
 | Certs | daily | ACM `NotAfter` across the host region and `us-east-1` (CloudFront certs live there; list configurable): < 30 d warn, < 7 d critical (managed renewal happens ~60 d out, so < 30 d means renewal is failing). A cert whose domain is covered by another valid cert in the same region (exact or single-label wildcard, DomainName or SANs) reports `info` as superseded -- a rotated-out cert is cleanup noise, not risk. A cert with an empty `InUseBy` reports `info` whatever its expiry (SIO-1724): an expiry only breaks TLS when something serves the cert, so an unattached one is cleanup, not an outage -- and an already-expired cert reads as "expired N day(s) ago", never "expires in -N days". An unreadable region is one info scoping finding; the other regions still scan | Per cert + severity, 7 d re-alert |
 | Listener certs | daily | ELBv2 `DescribeListenerCertificates` per TLS listener across the same regions as the cert check. ACM alone cannot answer "is this domain covered?": a listener carries extra SNI certificates beyond its default, so a name absent from ACM may still be served. Reports the extra SNI certificates as one `info` inventory finding per listener. A denied or unreachable read is one `info` scoping finding per region saying SNI certificates are **not inspected** -- never silence, because silence would read as "no certificate" | Per listener, 7 d re-alert |
 | Watchlist | daily | `cloudtrail:LookupEvents` for scary write events (StopLogging, SG ingress/egress and revocations, route changes, S3 exposure, IAM edits, ...); one call per event name, watermarked. `ModifyDBInstance` is deliberately absent: resource drift catches RDS changes within 15 minutes while this list runs daily. The monitor is read-only, so its own CloudTrail echo can never match | Per event id |
+| Targets | 15 min | `DescribeTargetGroups` + `DescribeTargetHealth` (SIO-1748). The first family that reads continuous operational state, so the raw state is not the signal: `initial` and `draining` are excluded outright (they are what a rolling deployment looks like) and a target must be `unhealthy` across TWO CONSECUTIVE CYCLES before it is a finding. Zero healthy in a group is critical, some healthy is warn. Evidence carries the reason code (`Target.FailedHealthChecks`, `Target.Timeout`, `Target.ResponseCodeMismatch`) and the whole health-check config, so the spoke decides target-vs-check without a round trip | Snapshot of the per-group unhealthy set supplies the duration gate; group fingerprint, 24 h re-alert, clears on recovery |
+| Tasks | 15 min | Three things ECS asserts about a service (SIO-1748), never the stopped tasks themselves -- every deployment and scale-in stops tasks. (1) `deployments[].rolloutState == FAILED`: the circuit breaker already ruled, critical. (2) A service event matching a failure phrase, free with `DescribeServices`: `is unable to consistently start tasks successfully` is ECS reporting a crash loop, which counts cannot see because tasks die and are replaced fast enough that `runningCount` never drops; also no-capacity placement, failing health checks, image/secret pull, `ResourceInitializationError`. (3) `runningCount < desiredCount` sustained across two cycles. Stopped-task reasons are left to the investigation, which has the CLI and the ecs-task-failures runbook | Snapshot for the shortfall gate, watermark on service events, per-signal fingerprint, 24 h re-alert, clears on recovery |
+| Queues | 15 min | `ListQueues` + `GetQueueAttributes` (SIO-1748). Depth on a source queue is never reported -- a queue holding messages is a queue working. A DLQ is identified semantically, by being the `deadLetterTargetArn` of some other queue's redrive policy rather than by name, so a `-dlq` scratch queue nothing redrives into stays silent; any depth on a real one means messages already failed `maxReceiveCount` times. Evidence names the source queues, which is where the fault is. Source-queue backlog is deliberately absent: it needs a self-baseline over the CloudWatch `ApproximateAgeOfOldestMessage` history (not a queue attribute), sized on shadow data | Per queue fingerprint, 24 h re-alert, clears when drained |
+| Scaling | 15 min | `autoscaling:DescribeScalingActivities`, `StatusCode` in {Failed, Cancelled} since a watermark (SIO-1748). No invented threshold: Auto Scaling labels the failure itself. Catches InsufficientInstanceCapacity, quota exhaustion, a launch template referencing a deleted AMI or security group, and `iam:PassRole` denials -- none of which produce an alarm unless somebody wrote one. Activities sharing a normalized cause collapse into one finding, so one AZ running dry is one report line rather than one per group. Application Auto Scaling is not read: it needs a call per ServiceNamespace and its ECS failures already surface through the tasks check | Normalized cause + group, 24 h re-alert; watermark bounded by the scan start |
+
+### Shadow families (SIO-1748)
+
+A new check family cannot be sized in advance. No reasoning says how many
+findings `targets` raises a day in a busy account, and the dev spokes are too
+quiet to measure it -- which is exactly why they are safe to deploy to and
+useless for this.
+
+`PI_MONITOR_SHADOW_FAMILIES` lists families that are detected and journalled as
+`shadow_finding` but never reported, never investigated, and never matched
+against the suppression ledger. The rate is then read off the journal in real
+production traffic at no token cost and with no impact on the `ops` inbox:
+
+```
+monitor-eu-oit-prd history 200 warn targets shadow
+monitor-eu-oit-prd status          # names the 24 h shadow count
+```
+
+**The four SIO-1748 families default to shadow** (`SHADOW_DEFAULT` in
+`coms-net-monitor.ts`), so a deploy that sets nothing cannot put four unmeasured
+families into the `ops` inbox on its first cycle. Setting the variable REPLACES
+the default, so it names the families that should stay in shadow; an empty
+string graduates all of them. The daily digest names whatever is still in
+shadow with its 24 h count, because `status` is a pull and a family left in
+shadow and forgotten is a check that silently never fires.
+
+A family graduates by being removed from the list. One whose rate cannot be
+made defensible is reconsidered rather than shipped. Shadow rows are kept out
+of the ledger deliberately: a suppression entry records a finding an operator
+has accepted, while a shadow row records one the fleet has not yet agreed is
+worth reporting at all, and conflating them would make the weekly suppression
+review report a shadow family as something the ledger is masking.
 
 Watermarks, fingerprints, and snapshots all persist in `state.db`, so a monitor restart produces neither duplicate nor missed alerts.
 
@@ -187,6 +223,7 @@ Env-with-defaults; no config files. Set in the systemd unit environment or `~/.c
 | `PI_MONITOR_WATCHLIST` | see `checks/watchlist.ts` | Comma-separated CloudTrail event names; setting it replaces the default |
 | `PI_MONITOR_CERT_WARN_DAYS` / `PI_MONITOR_CERT_CRIT_DAYS` | `30` / `7` | Certificate expiry thresholds |
 | `PI_MONITOR_COST_PCT` / `PI_MONITOR_COST_ABS` | `0` / `100` | Cost anomaly threshold: yesterday must exceed the 14-day baseline by BOTH values; the fleet default is an absolute $100 gate with the percentage filter off (SIO-1680) |
+| `PI_MONITOR_SHADOW_FAMILIES` | `targets,tasks,queues,scaling` | Comma-separated families detected and journalled as `shadow_finding` but never reported or investigated (SIO-1748). Setting it REPLACES the default; empty graduates all. Read them with `history ... shadow` |
 | `PI_MONITOR_STATE_DB` | `~/.pi/monitor/state.db` | State location |
 
 Hub-side: `PI_COMS_NET_MAX_TTL_MS` (default `1209600000`, 14 days) caps any requested `ttl_ms`.
@@ -194,6 +231,8 @@ Hub-side: `PI_COMS_NET_MAX_TTL_MS` (default `1209600000`, 14 days) caps any requ
 ### IAM
 
 Everything fits the existing role except two named additions in `deploy/modules/agent/main.tf`: `ce:GetCostAndUsage` (inline `cost-explorer-read`; Cost Explorer is always called against `us-east-1`) and `acm:ListCertificates`/`acm:DescribeCertificate` plus `elasticloadbalancing:DescribeLoadBalancers`/`DescribeListeners`/`DescribeListenerCertificates` (`CertificateReads` in the dev-extensions policy) for the cert and listener-cert checks. `sts:GetCallerIdentity` needs no grant; `cloudwatch:GetMetricData`, `cloudtrail:GetTrailStatus`, and `cloudtrail:LookupEvents` are already on the DevOpsAgentReadOnly policies.
+
+The SIO-1748 workload-state checks add **no IAM at all**. `elasticloadbalancing:DescribeTargetGroups`/`DescribeTargetHealth`, the `ecs:List*`/`Describe*` set, `sqs:ListQueues`/`GetQueueAttributes` and `autoscaling:DescribeScalingActivities` were already granted and simply had no detector reading them.
 
 ---
 

@@ -16,6 +16,13 @@ export const FamilySchema = z.enum([
 	"health",
 	"compliance",
 	"guardduty",
+	// SIO-1748: workload-state families. Unlike the families above, these read
+	// continuous operational state rather than a config change or somebody
+	// else's assertion of badness, so each carries its own discriminator.
+	"targets",
+	"tasks",
+	"queues",
+	"scaling",
 ]);
 export type Family = z.infer<typeof FamilySchema>;
 
@@ -315,6 +322,10 @@ export type DigestInput = {
 	baselineUsd: number | null;
 	bundleVersion?: string | null;
 	suppressedCount?: number;
+	// SIO-1748: families being measured, not reported. The digest names them
+	// because `status` alone is a pull: a family left in shadow and forgotten
+	// is a check that silently never fires, which is worse than not having it.
+	shadow?: { families: string[]; count: number };
 	notables?: DigestNotable[];
 	// Operator pause (SIO-1673): the digest still ships as the dead-man signal,
 	// but it must say that the check cycles behind it were skipped.
@@ -387,6 +398,11 @@ export function formatDigest(d: DigestInput): string {
 		lines.push("- spend: no cost data yet");
 	}
 	if ((d.suppressedCount ?? 0) > 0) lines.push(`- suppressed by ledger: ${d.suppressedCount}`);
+	if (d.shadow && d.shadow.families.length > 0) {
+		lines.push(
+			`- in shadow (detected, NOT reported or investigated): ${d.shadow.families.join(", ")} -- ${d.shadow.count} finding(s) in 24h, read with \`history <n> <sev> <family> shadow\``,
+		);
+	}
 	// Deploy canary: a stale bundle silently drops capabilities; the digest is
 	// where the operator sees the version without an SSM round-trip.
 	lines.push(`- bundle: ${d.bundleVersion ?? "unknown"}`);
