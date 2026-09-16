@@ -1172,6 +1172,9 @@ export function composeBoundTools(
 	selected: StructuredToolInterface[],
 	max: number = MAX_TOOLS_PER_AGENT,
 	minAction: number = MIN_ACTION_TOOLS,
+	// SIO-1767: optional so every existing caller (and every test) is unchanged. The production
+	// path threads it from bindTools, which already has it.
+	dataSourceId?: string,
 ): StructuredToolInterface[] {
 	// Dedup BEFORE budgeting, not after. requiredHeadTools now promotes required tools that were
 	// also action-selected, so the two lists genuinely overlap; counting a duplicate against the
@@ -1189,7 +1192,80 @@ export function composeBoundTools(
 	// never fewer than the head leaves spare (so an under-budget composition is unchanged).
 	const actionQuota = Math.min(tail.length, Math.max(minAction, max - head.length));
 	const headQuota = Math.min(head.length, max - actionQuota);
+
+	// SIO-1767: the cap truncates POSITIONALLY and, before this, silently -- nothing recorded that
+	// a tool was dropped, let alone which one. The `filtered` flag at the createReactAgent log site
+	// cannot substitute: it is true on every path where allTools > max (four return sites), so it
+	// conflates "the cap cut something" with "the action filter legitimately selected few tools".
+	//
+	// Fires ONLY when a quota actually cuts, so a composition that fits stays silent and the line
+	// means something when it appears. droppedNames is the load-bearing field, not the count:
+	// SIO-1234's harm was WHICH tools fell off (aws_logs_start_query at slot 25 and
+	// aws_logs_get_query_results at 26, splitting an async chain on the boundary alone).
+	//
+	// This is the measurement SIO-1240 criteria 3/4 need. Sizing the cap from production traces is
+	// cheaper and more faithful than a synthetic replay set, and answers the prior question the
+	// eval assumes: whether the cap bites at all, and for which datasources.
+	const truncation = describeTruncation(head, tail, headQuota, actionQuota, max, minAction);
+	if (truncation) {
+		logger.info(
+			{ ...(dataSourceId === undefined ? {} : { dataSourceId }), ...truncation },
+			"tool budget truncated the bound set",
+		);
+	}
+
 	return [...head.slice(0, headQuota), ...tail.slice(0, actionQuota)];
+}
+
+// SIO-1767: the log payload, split out as a pure function so it is directly testable. The repo
+// deliberately does not assert on pino output in unit tests (see the note in
+// extract-findings.test.ts:356-365), so the alternative would be leaving the arithmetic that
+// decides WHETHER to log, and WHAT it names, uncovered -- which is the part worth getting right.
+//
+// Returns undefined when nothing was cut, which is also the "do not log" signal: a composition
+// that fits must stay silent, or the line stops meaning anything.
+export function describeTruncation(
+	head: StructuredToolInterface[],
+	tail: StructuredToolInterface[],
+	headQuota: number,
+	actionQuota: number,
+	max: number,
+	minAction: number,
+):
+	| {
+			max: number;
+			minAction: number;
+			requested: number;
+			bound: number;
+			droppedHead: number;
+			droppedTail: number;
+			droppedNames: string[];
+			droppedNamesTruncated?: true;
+	  }
+	| undefined {
+	const droppedHead = head.length - headQuota;
+	const droppedTail = tail.length - actionQuota;
+	if (droppedHead <= 0 && droppedTail <= 0) return undefined;
+	// Head drops first, then tail -- same order as the slice in composeBoundTools, so the names
+	// read in the order the budget discarded them.
+	const allDropped = [...head.slice(headQuota), ...tail.slice(actionQuota)].map((t) => t.name);
+	// aws-agent's head alone is 62 (skill-tool-coverage.test.ts:38), so an uncapped list would put
+	// ~77 names in one line. Cap it, but keep droppedHead/droppedTail EXACT so the counts never
+	// lie about how much was cut -- and flag the cap rather than letting a reader assume the list
+	// is complete. The repo's sampling convention elsewhere (extract-findings.ts:105) is a bare
+	// slice(0, 3); this keeps far more because WHICH names dropped is the whole point (SIO-1234's
+	// split async chain), just not an unbounded amount.
+	const CAP = 30;
+	return {
+		max,
+		minAction,
+		requested: head.length + tail.length,
+		bound: headQuota + actionQuota,
+		droppedHead,
+		droppedTail,
+		droppedNames: allDropped.slice(0, CAP),
+		...(allDropped.length > CAP ? { droppedNamesTruncated: true as const } : {}),
+	};
 }
 
 // SIO-1234: the head is EVERY resolution tool, then every skill-promised tool -- not just the
@@ -1272,7 +1348,15 @@ function bindTools(
 	dataSourceId: string,
 	skillToolNames: string[] | undefined,
 ): StructuredToolInterface[] {
-	return composeBoundTools(requiredHeadTools(allTools, dataSourceId, skillToolNames), selected);
+	// SIO-1767: pass max/minAction explicitly as their own defaults so dataSourceId can reach the
+	// truncation log -- it is what makes a trace attributable to an agent.
+	return composeBoundTools(
+		requiredHeadTools(allTools, dataSourceId, skillToolNames),
+		selected,
+		MAX_TOOLS_PER_AGENT,
+		MIN_ACTION_TOOLS,
+		dataSourceId,
+	);
 }
 
 // SIO-738: Shared merge step so the augmentation test exercises the same

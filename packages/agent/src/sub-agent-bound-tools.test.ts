@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { StructuredToolInterface } from "@langchain/core/tools";
-import { buildBoundToolsBlock, composeBoundTools } from "./sub-agent.ts";
+import { buildBoundToolsBlock, composeBoundTools, describeTruncation } from "./sub-agent.ts";
 
 // Only `name` is read by the composition, so a minimal stub keeps these tests focused on the
 // budgeting arithmetic rather than on LangChain tool construction.
@@ -129,5 +129,94 @@ describe("buildBoundToolsBlock (SIO-1234)", () => {
 		expect(block).toContain("kafka_list_topics");
 		expect(block).toContain("make at least one call from this list");
 		expect(block).not.toContain("No tools are bound");
+	});
+});
+
+// SIO-1767: the cap truncated positionally and SILENTLY -- nothing recorded that a tool was
+// dropped, let alone which one, so nobody could say how often 25 actually bites (SIO-1240
+// criteria 3/4). describeTruncation is the log payload, extracted as a pure function because
+// this repo does not assert on pino output in unit tests (extract-findings.test.ts:356-365);
+// testing it directly covers the arithmetic that decides whether to log and what it names.
+describe("describeTruncation (SIO-1767)", () => {
+	test("returns undefined when nothing was cut -- a composition that fits stays silent", () => {
+		const head = tools("a", "b", "c");
+		const tail = tools("d", "e");
+		expect(describeTruncation(head, tail, head.length, tail.length, 25, 8)).toBeUndefined();
+	});
+
+	test("names the dropped tools, head-first, when the head is cut", () => {
+		// The real aws-agent shape: head far over budget, tail reserved to minAction.
+		const head = tools(...Array.from({ length: 20 }, (_, i) => `head_${i}`));
+		const tail = tools(...Array.from({ length: 10 }, (_, i) => `sel_${i}`));
+		const out = describeTruncation(head, tail, 17, 8, 25, 8);
+		expect(out).toBeDefined();
+		expect(out?.droppedHead).toBe(3);
+		expect(out?.droppedTail).toBe(2);
+		expect(out?.requested).toBe(30);
+		expect(out?.bound).toBe(25);
+		// Head drops first, in order, then tail -- mirrors the slice order.
+		expect(out?.droppedNames).toEqual(["head_17", "head_18", "head_19", "sel_8", "sel_9"]);
+	});
+
+	test("reports a tail-only cut without claiming the head lost anything", () => {
+		const head = tools("a", "b");
+		const tail = tools(...Array.from({ length: 30 }, (_, i) => `sel_${i}`));
+		const out = describeTruncation(head, tail, 2, 23, 25, 8);
+		expect(out?.droppedHead).toBe(0);
+		expect(out?.droppedTail).toBe(7);
+		expect(out?.droppedNames).toEqual(["sel_23", "sel_24", "sel_25", "sel_26", "sel_27", "sel_28", "sel_29"]);
+	});
+
+	test("an empty selection with a fitting head is silent", () => {
+		const head = tools("a", "b");
+		expect(describeTruncation(head, [], 2, 0, 25, 8)).toBeUndefined();
+	});
+
+	test("caps a huge dropped list but keeps the COUNTS exact and flags the cap", () => {
+		// aws-agent's real head is 62 (skill-tool-coverage.test.ts:38), which would otherwise put
+		// ~77 names in one log line.
+		const head = tools(...Array.from({ length: 62 }, (_, i) => `head_${i}`));
+		const tail = tools(...Array.from({ length: 40 }, (_, i) => `sel_${i}`));
+		const out = describeTruncation(head, tail, 17, 8, 25, 8);
+		expect(out?.droppedNames).toHaveLength(30);
+		expect(out?.droppedNamesTruncated).toBe(true);
+		// The counts must NOT be capped -- they are what says how much was really cut.
+		expect(out?.droppedHead).toBe(45);
+		expect(out?.droppedTail).toBe(32);
+		expect(out?.requested).toBe(102);
+		expect(out?.bound).toBe(25);
+	});
+
+	test("a dropped list at or under the cap is not flagged as truncated", () => {
+		const head = tools(...Array.from({ length: 30 }, (_, i) => `h${i}`));
+		const out = describeTruncation(head, [], 25, 0, 25, 8);
+		expect(out?.droppedNames).toHaveLength(5);
+		expect(out?.droppedNamesTruncated).toBeUndefined();
+	});
+
+	test("carries max and minAction so a trace is interpretable without reading the source", () => {
+		const head = tools(...Array.from({ length: 30 }, (_, i) => `h${i}`));
+		const out = describeTruncation(head, [], 25, 0, 25, 8);
+		expect(out?.max).toBe(25);
+		expect(out?.minAction).toBe(8);
+	});
+});
+
+// The end-to-end contract: the real composeBoundTools path must produce a cut in exactly the
+// cases describeTruncation reports one, so the log cannot drift from the behaviour it describes.
+describe("composeBoundTools truncation is observable (SIO-1767)", () => {
+	test("the oversubscribed aws-agent shape drops tools, and the return reflects it", () => {
+		const head = tools(...Array.from({ length: 62 }, (_, i) => `head_${i}`));
+		const selected = tools(...Array.from({ length: 40 }, (_, i) => `sel_${i}`));
+		const out = composeBoundTools(head, selected);
+		expect(out).toHaveLength(25);
+		// 62 + 40 requested, 25 bound -> 77 dropped. The log exists to make that visible.
+		expect(head.length + selected.length - out.length).toBe(77);
+	});
+
+	test("an under-budget composition binds everything, so there is nothing to report", () => {
+		const head = tools("a", "b", "c");
+		const selected = tools("d", "e");
+		expect(namesOf(composeBoundTools(head, selected))).toEqual(["a", "b", "c", "d", "e"]);
 	});
 });
