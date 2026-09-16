@@ -89,14 +89,20 @@ separates a sudden drop from a slow bleed:
   all of them regardless of health. Whether users are affected depends
   entirely on whether those targets can actually serve, and the reason code
   answers that:
-  - every unhealthy target reports `Target.ResponseCodeMismatch` -- the
-    targets are answering, just not with the matcher's status code. Traffic is
+  - every unhealthy target reports `Target.ResponseCodeMismatch` with a
+    **3xx or 4xx** code (the description names it: `codes: [302]`) -- the app
+    is up and the health check is asking the wrong question, such as `/` on an
+    app that redirects it to a login page or does not serve it. Traffic is
     being served. This is a **health check misconfiguration**, not an outage;
     the risk is that there is no failover margin, because the balancer cannot
     tell a healthy target from a dead one.
-  - any target reports `Target.Timeout`, `Target.FailedHealthChecks`, or no
-    reason -- fail-open is sending traffic to targets that cannot answer, and
-    clients get **502**s. That is the outage. Confirm with
+  - a `ResponseCodeMismatch` with a **5xx** code is NOT a misconfiguration.
+    Answering is not working: the app responded, and what it responded with
+    was an error, so fail-open is sending users to targets that return errors.
+    Treat it exactly like the next case.
+  - any target reports `Target.Timeout`, `Target.FailedHealthChecks`, a 5xx
+    mismatch, or no reason -- fail-open is sending traffic to targets that
+    cannot serve it, and clients get **5xx**s. That is the outage. Confirm with
     `aws_cloudwatch_get_metric_data` on `HTTPCode_ELB_502_Count` before saying
     so.
 - **Some healthy** is degraded capacity. Establish whether the remaining
@@ -155,8 +161,8 @@ Never claim recovery from a single passing check; the balancer requires
 `healthyThreshold` consecutive successes.
 
 Never call zero healthy targets an outage on the count alone. A group that has
-failed open with every target answering `ResponseCodeMismatch` is serving
-traffic; report it as a misconfigured health check and name the status code
+failed open with every target answering `ResponseCodeMismatch` on a 3xx or 4xx
+is serving traffic; report it as a misconfigured health check and name the status code
 the check received. This was verified in production: five target groups sat in
 exactly that state for two weeks, fully serving, while the health check asked
 `/` of apps that redirect or 404 it.
