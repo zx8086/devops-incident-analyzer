@@ -31,7 +31,83 @@ const UNREAD = "__unread__";
 const SEEN = "__seen__";
 const isMarker = (k: string): boolean => k.endsWith(`${SEP}${UNREAD}`) || k.endsWith(`${SEP}${SEEN}`);
 
-export type CheckComplianceOpts = { now?: number; warnCap?: number };
+// SIO-1758: the pair diff cannot absorb churn. A Karpenter consolidation in
+// eu-mendix-platform-prd (2026-09-16 09:07) launched nodes whose instances,
+// ENIs and volumes were 84 NEW pairs under two rules and retired 30 old ones:
+// one report of 51 findings for one event. A rule moving this many resources
+// in one run is one cause, reported once (the drift check's ec2:batch idea); a
+// lone flip (the restricted-rdp case this check exists for) keeps its own line.
+const COLLAPSE_AT = 4;
+const SUMMARY_TYPES = 4;
+// A collapsed finding is investigated, and the prompt embeds its evidence: 281
+// identities (the live mendix required-tags set) is ~30 KB per turn. A sample
+// plus the per-type counts is enough to diagnose a rule; the snapshot keeps
+// every pair.
+const SAMPLE_RESOURCES = 25;
+
+export type CheckComplianceOpts = { now?: number; warnCap?: number; collapseAt?: number };
+
+type PairEvidence = { rule: string; resourceType: string; resourceId: string };
+
+function typeBreakdown(pairs: PairEvidence[]): { byType: Record<string, number>; text: string } {
+	const counts = new Map<string, number>();
+	for (const p of pairs) counts.set(p.resourceType, (counts.get(p.resourceType) ?? 0) + 1);
+	const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+	const shown = ranked.slice(0, SUMMARY_TYPES).map(([t, n]) => `${n} ${t}`);
+	if (ranked.length > SUMMARY_TYPES) shown.push(`${ranked.length - SUMMARY_TYPES} more type(s)`);
+	return { byType: Object.fromEntries(ranked), text: shown.join(", ") };
+}
+
+// Per-pair findings in, the same findings out except that a rule with
+// collapseAt or more new (warn) or cleared (info) pairs becomes one finding for
+// that rule, with per-type counts and a sample of identities. The new-pairs key is stable per
+// rule on purpose: the next churn on the same rule inside the diagnosis
+// cooldown reuses the last diagnosis instead of buying another turn, and a
+// ledger pattern like `compliance:<rule>:%` still matches it.
+export function collapseByRule(findings: Finding[], at: string, collapseAt = COLLAPSE_AT): Finding[] {
+	const out: Finding[] = [];
+	const groups = new Map<string, Finding[]>();
+	for (const f of findings) {
+		const rule = (f.evidence as Partial<PairEvidence>).rule;
+		if (!rule || (f.severity !== "warn" && f.severity !== "info")) {
+			out.push(f);
+			continue;
+		}
+		const k = `${f.severity}${SEP}${rule}`;
+		const group = groups.get(k) ?? [];
+		group.push(f);
+		groups.set(k, group);
+	}
+	for (const group of groups.values()) {
+		const first = group[0] as Finding;
+		if (group.length < collapseAt) {
+			out.push(...group);
+			continue;
+		}
+		const pairs = group.map((f) => f.evidence as PairEvidence);
+		const rule = (first.evidence as PairEvidence).rule;
+		const { byType, text } = typeBreakdown(pairs);
+		const resources = pairs
+			.slice(0, SAMPLE_RESOURCES)
+			.map((p) => ({ resourceType: p.resourceType, resourceId: p.resourceId }));
+		const omitted = Math.max(0, pairs.length - SAMPLE_RESOURCES);
+		const added = first.severity === "warn";
+		out.push({
+			family: "compliance",
+			severity: first.severity,
+			resource: `config-rule/${rule}`,
+			summary: added
+				? `Config rule ${rule} NON_COMPLIANT for ${pairs.length} newly reported resource(s): ${text}`
+				: `Config rule ${rule} no longer reports ${pairs.length} resource(s) NON_COMPLIANT (${text}; resources fixed or deleted, or rule changed)`,
+			dedup_key: added ? `compliance:${rule}:batch` : `compliance:${rule}:cleared-batch:${at}`,
+			evidence: added
+				? { rule, count: pairs.length, byType, resources, omitted }
+				: { rule, count: pairs.length, byType, resources, omitted, verified: false },
+			at,
+		});
+	}
+	return out;
+}
 
 type Pair = { rule: string; type: string; id: string };
 
@@ -176,8 +252,9 @@ export async function checkCompliance(
 	// A rule rolled out across an estate flips hundreds of resources at once;
 	// the report names the first few and the overflow finding carries every
 	// omitted pair, so the journal keeps the identities the cap hides.
-	const warns = diffed.filter((f) => f.severity === "warn");
-	const rest = diffed.filter((f) => f.severity !== "warn");
+	const collapsed = collapseByRule(diffed, at, opts.collapseAt ?? COLLAPSE_AT);
+	const warns = collapsed.filter((f) => f.severity === "warn");
+	const rest = collapsed.filter((f) => f.severity !== "warn");
 	findings.push(...warns.slice(0, warnCap), ...rest);
 	if (warns.length > warnCap) {
 		findings.push({
