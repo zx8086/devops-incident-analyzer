@@ -362,6 +362,8 @@ export type DigestInput = {
 	checkErrors: number;
 	checkErrorsByCheck?: Record<string, number>;
 	activeAlarms: string[];
+	// SIO-1754: scaling-trigger alarms in ALARM, counted but not listed.
+	scalingTriggersInAlarm?: number;
 	yesterdayUsd: number | null;
 	baselineUsd: number | null;
 	bundleVersion?: string | null;
@@ -428,8 +430,12 @@ export function formatDigest(d: DigestInput): string {
 			? `- check errors: ${d.checkErrors} (${byCheck.map(([k, v]) => `${k}=${v}`).join(" ")})`
 			: `- check errors: ${d.checkErrors}`,
 	);
+	const scaling = d.scalingTriggersInAlarm ?? 0;
+	const scalingNote = scaling > 0 ? ` (${scaling} autoscaling trigger(s) in ALARM not listed)` : "";
 	lines.push(
-		d.activeAlarms.length === 0 ? "- alarms: none in ALARM" : `- alarms in ALARM: ${d.activeAlarms.join(", ")}`,
+		d.activeAlarms.length === 0
+			? `- alarms: none in ALARM${scalingNote}`
+			: `- alarms in ALARM: ${d.activeAlarms.join(", ")}${scalingNote}`,
 	);
 	if (d.yesterdayUsd != null) {
 		const base = d.baselineUsd != null ? ` vs 14d baseline $${d.baselineUsd.toFixed(2)}` : "";

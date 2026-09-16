@@ -33,6 +33,31 @@ function firstDatapoint(reason: string | undefined): number | null {
 	return m ? Number(m[1]) : null;
 }
 
+// SIO-1754: an alarm whose every action is a scaling policy exists to drive
+// Application/EC2 Auto Scaling; its ALARM state is the mechanism working, not
+// an assertion that something is wrong. On 2026-09-16 every alarm in ALARM in
+// eu-oit-prd (26/26) and 38 of 39 in eu-shared-services-prd were these, and
+// no alarm in any prd account mixed a scaling action with a notification. An
+// alarm that also notifies someone stays a finding: a person asked to be told.
+export function isScalingTrigger(a: { AlarmActions?: string[] }): boolean {
+	const actions = a.AlarmActions ?? [];
+	return actions.length > 0 && actions.every((arn) => arn.includes(":scalingPolicy:"));
+}
+
+// Composite alarms carry the same name/state/actions fields the check reads.
+export async function describeAllAlarms(client: AwsClient, input: { StateValue?: "ALARM" }): Promise<MetricAlarm[]> {
+	const out: MetricAlarm[] = [];
+	let nextToken: string | undefined;
+	do {
+		const resp = (await client.send(
+			new DescribeAlarmsCommand({ ...input, NextToken: nextToken }),
+		)) as DescribeAlarmsCommandOutput;
+		out.push(...(resp.MetricAlarms ?? []), ...((resp.CompositeAlarms ?? []) as MetricAlarm[]));
+		nextToken = resp.NextToken;
+	} while (nextToken);
+	return out;
+}
+
 function isLowSideIdle(a: MetricAlarm): boolean {
 	return (a.ComparisonOperator ?? "").startsWith("LessThan") && LOW_SIDE_IDLE_METRIC.test(a.MetricName ?? "");
 }
@@ -74,13 +99,20 @@ export async function checkAlarms(
 	const now = opts.now ?? Date.now();
 	const flapAt = opts.flapTransitions ?? FLAP_TRANSITIONS;
 	const findings: Finding[] = [];
-	const resp = (await client.send(new DescribeAlarmsCommand({}))) as DescribeAlarmsCommandOutput;
-	const alarms: MetricAlarm[] = [...(resp.MetricAlarms ?? []), ...(resp.CompositeAlarms ?? [])];
+	// SIO-1754: DescribeAlarms returns 50 per page; one page left 48 of 98
+	// eu-shared-services-prd alarms (everything after the 50th by name) unread.
+	const alarms: MetricAlarm[] = await describeAllAlarms(client, {});
 	for (const a of alarms) {
 		const name: string = a.AlarmName ?? "unknown";
 		const sv: string = a.StateValue ?? "OK";
 		const key = `alarm:${name}:${sv}`;
 		const prefix = `alarm:${name}:`;
+		if (isScalingTrigger(a)) {
+			// Alerted before this rule existed: drop the key so a later recovery
+			// cannot surface as a finding for an alarm that is never reported.
+			state.clearAlerts(prefix);
+			continue;
+		}
 		if (sv === "OK") {
 			// Recovery is a finding only when a non-OK state was alerted before.
 			const prior = state.alertKeys(prefix).filter((k) => k !== key);

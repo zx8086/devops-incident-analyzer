@@ -427,3 +427,15 @@ export const ELBV2_FAIL_OPEN_MISCONFIGURED = [
 		targets: [{ reason: "Target.ResponseCodeMismatch", description: "Health checks failed with these codes: [403]" }],
 	},
 ];
+
+// SIO-1754: AlarmActions ARNs from DescribeAlarms in production accounts on
+// 2026-09-16 (account ids, cluster and service names redacted; structure
+// verbatim). In all six prd accounts no alarm mixed a scaling-policy action
+// with a notification action.
+export const ALARM_ACTIONS_OBSERVED = {
+	ecsServiceScaleUp:
+		"arn:aws:autoscaling:eu-central-1:000000000000:scalingPolicy:d2535f51-75d2-4337-b43e-af96d8e14af4:resource/ecs/service/example-cluster/example-service:policyName/example-service-cpu-scale-up",
+	mskBrokerScaling:
+		"arn:aws:autoscaling:eu-central-1:000000000000:scalingPolicy:c8820426-f0b6-46be-bf5b-1d6ce086aa9c:resource/kafka/arn:aws:kafka:eu-central-1:000000000000:cluster/example-msk/c78d2fa1-b4c9-4fc2-a063-421baf82b2b9-4:policyName/msk-broker-scaling:createdBy/307bdbe6-7531-49b5-8bf9-bb9257dff12a",
+	snsTopic: "arn:aws:sns:eu-central-1:000000000000:example-alerts-topic",
+};

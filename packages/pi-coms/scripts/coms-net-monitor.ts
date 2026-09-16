@@ -6,7 +6,7 @@ import { ACMClient } from "@aws-sdk/client-acm";
 import { AutoScalingClient } from "@aws-sdk/client-auto-scaling";
 import { CloudFormationClient } from "@aws-sdk/client-cloudformation";
 import { CloudTrailClient } from "@aws-sdk/client-cloudtrail";
-import { CloudWatchClient, DescribeAlarmsCommand } from "@aws-sdk/client-cloudwatch";
+import { CloudWatchClient } from "@aws-sdk/client-cloudwatch";
 import { CloudWatchLogsClient } from "@aws-sdk/client-cloudwatch-logs";
 import { ConfigServiceClient } from "@aws-sdk/client-config-service";
 import { CostExplorerClient } from "@aws-sdk/client-cost-explorer";
@@ -33,7 +33,7 @@ import {
 	REFUSED_PREFIX,
 } from "./monitor/budget.ts";
 import { s3Store, saveCheckpoint, statePrefix } from "./monitor/checkpoint.ts";
-import { checkAlarms } from "./monitor/checks/alarms.ts";
+import { checkAlarms, describeAllAlarms, isScalingTrigger } from "./monitor/checks/alarms.ts";
 import { certRegions, checkCerts, checkListenerCerts } from "./monitor/checks/certs.ts";
 import { checkCompliance } from "./monitor/checks/compliance.ts";
 import { COST_DEFAULTS, checkCost } from "./monitor/checks/cost.ts";
@@ -598,9 +598,11 @@ function main(): void {
 		const skippedRows = findings.skipped + checkErrors.skipped;
 		if (skippedRows > 0) log(`digest: skipped ${skippedRows} unreadable journal row(s)`);
 		let activeAlarms: string[] = [];
+		let scalingTriggersInAlarm = 0;
 		try {
-			const resp = await cw.send(new DescribeAlarmsCommand({ StateValue: "ALARM" }));
-			activeAlarms = (resp.MetricAlarms ?? []).map((a) => a.AlarmName ?? "");
+			const firing = await describeAllAlarms(cw, { StateValue: "ALARM" });
+			activeAlarms = firing.filter((a) => !isScalingTrigger(a)).map((a) => a.AlarmName ?? "");
+			scalingTriggersInAlarm = firing.length - activeAlarms.length;
 		} catch {
 			// digest still ships
 		}
@@ -612,6 +614,7 @@ function main(): void {
 			checkErrors: errorRows.length,
 			checkErrorsByCheck: errsByCheck,
 			activeAlarms,
+			scalingTriggersInAlarm,
 			yesterdayUsd: latest?.usd ?? null,
 			baselineUsd: latest ? state.costBaseline(latest.date, 14) : null,
 			bundleVersion: await bundleVersion(),

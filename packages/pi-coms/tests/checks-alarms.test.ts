@@ -1,7 +1,8 @@
 // tests/checks-alarms.test.ts
 import { describe, expect, test } from "bun:test";
-import { checkAlarms } from "../scripts/monitor/checks/alarms.ts";
+import { checkAlarms, isScalingTrigger } from "../scripts/monitor/checks/alarms.ts";
 import { MonitorState } from "../scripts/monitor/state.ts";
+import { ALARM_ACTIONS_OBSERVED as ARN } from "./aws-samples.ts";
 
 type Alarm = {
 	AlarmName: string;
@@ -170,5 +171,22 @@ describe("checkAlarms", () => {
 		);
 		expect(denied).toHaveLength(1);
 		expect(denied[0].severity).toBe("critical");
+	});
+});
+
+describe("SIO-1754 scaling triggers", () => {
+	test("an alarm whose only actions are scaling policies is a scaling trigger", () => {
+		expect(isScalingTrigger({ AlarmActions: [ARN.ecsServiceScaleUp] })).toBe(true);
+		expect(isScalingTrigger({ AlarmActions: [ARN.mskBrokerScaling] })).toBe(true);
+	});
+
+	test("an alarm that also notifies someone stays a finding", () => {
+		expect(isScalingTrigger({ AlarmActions: [ARN.ecsServiceScaleUp, ARN.snsTopic] })).toBe(false);
+		expect(isScalingTrigger({ AlarmActions: [ARN.snsTopic] })).toBe(false);
+	});
+
+	test("an alarm with no actions is not a scaling trigger", () => {
+		expect(isScalingTrigger({ AlarmActions: [] })).toBe(false);
+		expect(isScalingTrigger({})).toBe(false);
 	});
 });

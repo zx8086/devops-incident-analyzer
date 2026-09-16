@@ -610,3 +610,25 @@ describe("diagnosis evidence contract (SIO-1741)", () => {
 		expect(item.properties.evidence.minItems).toBe(1);
 	});
 });
+
+test("SIO-1754: scaling triggers in ALARM are counted, not listed", () => {
+	const base = {
+		accountId: "111122223333",
+		since: "2026-09-16T00:00:00Z",
+		findingCounts: {},
+		checkErrors: 0,
+		yesterdayUsd: null,
+		baselineUsd: null,
+	};
+	const some = formatDigest({
+		...base,
+		activeAlarms: ["bindplane-license-days-remaining"],
+		scalingTriggersInAlarm: 37,
+	});
+	expect(some).toContain(
+		"- alarms in ALARM: bindplane-license-days-remaining (37 autoscaling trigger(s) in ALARM not listed)",
+	);
+	const onlyScaling = formatDigest({ ...base, activeAlarms: [], scalingTriggersInAlarm: 26 });
+	expect(onlyScaling).toContain("- alarms: none in ALARM (26 autoscaling trigger(s) in ALARM not listed)");
+	expect(formatDigest({ ...base, activeAlarms: [] })).toContain("- alarms: none in ALARM\n");
+});
