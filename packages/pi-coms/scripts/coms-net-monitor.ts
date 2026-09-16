@@ -3,18 +3,21 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import { ACMClient } from "@aws-sdk/client-acm";
+import { AutoScalingClient } from "@aws-sdk/client-auto-scaling";
 import { CloudTrailClient } from "@aws-sdk/client-cloudtrail";
 import { CloudWatchClient, DescribeAlarmsCommand } from "@aws-sdk/client-cloudwatch";
 import { CloudWatchLogsClient } from "@aws-sdk/client-cloudwatch-logs";
 import { ConfigServiceClient } from "@aws-sdk/client-config-service";
 import { CostExplorerClient } from "@aws-sdk/client-cost-explorer";
 import { EC2Client } from "@aws-sdk/client-ec2";
+import { ECSClient } from "@aws-sdk/client-ecs";
 import { ElasticLoadBalancingV2Client } from "@aws-sdk/client-elastic-load-balancing-v2";
 import { GuardDutyClient } from "@aws-sdk/client-guardduty";
 import { HealthClient } from "@aws-sdk/client-health";
 import { LambdaClient } from "@aws-sdk/client-lambda";
 import { RDSClient } from "@aws-sdk/client-rds";
 import { S3Client } from "@aws-sdk/client-s3";
+import { SQSClient } from "@aws-sdk/client-sqs";
 import { STSClient } from "@aws-sdk/client-sts";
 import { fromInstanceMetadata } from "@aws-sdk/credential-providers";
 import { isBlankReply } from "../contracts/reply.ts";
@@ -37,7 +40,11 @@ import { checkHealth } from "./monitor/checks/health.ts";
 import { checkIdentity, type GateResult } from "./monitor/checks/identity.ts";
 import { checkIngestion } from "./monitor/checks/ingestion.ts";
 import { checkLogs } from "./monitor/checks/logs.ts";
+import { checkQueues } from "./monitor/checks/queues.ts";
 import { checkResourceDrift } from "./monitor/checks/resource-drift.ts";
+import { checkScaling } from "./monitor/checks/scaling.ts";
+import { checkTargets } from "./monitor/checks/targets.ts";
+import { checkTasks } from "./monitor/checks/tasks.ts";
 import { checkTrail } from "./monitor/checks/trail.ts";
 import { checkWatchlist } from "./monitor/checks/watchlist.ts";
 import { MonitorComs } from "./monitor/coms.ts";
@@ -157,6 +164,25 @@ const LOGS_EXCLUDE = (process.env.PI_MONITOR_LOGS_EXCLUDE ?? "")
 	.split(",")
 	.map((s) => s.trim())
 	.filter(Boolean);
+// SIO-1748: a new check family cannot be sized in advance -- no reasoning
+// says how many findings `targets` produces a day in a busy account, and the
+// dev spokes are too quiet to measure it. A shadow family is detected and
+// journalled but never reported and never investigated, so its real rate can
+// be read off the journal in production at no token cost and with no inbox
+// impact. It graduates by being removed from this list.
+// The four SIO-1748 workload-state families start here. They are the first
+// checks to read continuous operational state, so their production rate is
+// genuinely unknown, and shipping them straight into the ops inbox is the one
+// outcome the design set out to avoid. Graduating is per account and needs no
+// code change: set the variable to the families that should STAY in shadow
+// (empty graduates all of them).
+export const SHADOW_DEFAULT = "targets,tasks,queues,scaling";
+const SHADOW_FAMILIES = new Set(
+	(process.env.PI_MONITOR_SHADOW_FAMILIES ?? SHADOW_DEFAULT)
+		.split(",")
+		.map((s) => s.trim())
+		.filter(Boolean),
+);
 const JOURNAL_RETAIN_MS = Number(process.env.PI_MONITOR_JOURNAL_RETAIN_DAYS ?? 90) * 86_400_000;
 // envNumber, not Number(): a bare Number("") is 0 and Number("ten") is NaN, and
 // `baseline >= NaN` is always false, which would silence the check with no trace.
@@ -188,6 +214,10 @@ export type CycleDeps = {
 	gate?: { name: string; run: () => Promise<{ findings: Finding[]; healthy: boolean }> };
 	checks: { name: string; run: () => Promise<Finding[]> }[];
 	state: MonitorState;
+	// Families detected and journalled but never reported or investigated
+	// (SIO-1748). Injected rather than read from the module so a cycle test can
+	// set it, like every other rail here.
+	shadow?: ReadonlySet<string>;
 	investigate: ((findings: Finding[], priorContext: string) => Promise<InvestigationOutcome>) | null;
 	// Absent: no caps (unit tests); main() always sets it.
 	budget?: BudgetLimits;
@@ -199,7 +229,9 @@ export type CycleDeps = {
 	log: (line: string) => void;
 };
 
-export async function runCycle(deps: CycleDeps): Promise<{ findings: Finding[]; suppressed: number }> {
+export async function runCycle(
+	deps: CycleDeps,
+): Promise<{ findings: Finding[]; suppressed: number; shadowed: number }> {
 	const collected: Finding[] = [];
 	let gated = false;
 	if (deps.gate) {
@@ -227,9 +259,20 @@ export async function runCycle(deps: CycleDeps): Promise<{ findings: Finding[]; 
 	}
 
 	// Ledger pass: operator-accepted findings are history, not alerts.
+	// Shadow families are filtered first and for a different reason: the ledger
+	// records a finding an operator has accepted, while a shadow row records one
+	// the fleet has not yet agreed is worth reporting at all. Keeping them apart
+	// keeps the suppression review honest -- a shadow family must not show up
+	// there as something the ledger is masking.
 	const findings: Finding[] = [];
 	let suppressed = 0;
+	let shadowed = 0;
 	for (const f of collected) {
+		if (deps.shadow?.has(f.family)) {
+			shadowed++;
+			deps.state.journal("shadow_finding", f);
+			continue;
+		}
 		const m = deps.state.matchSuppression(f.dedup_key);
 		if (m) {
 			suppressed++;
@@ -330,8 +373,8 @@ export async function runCycle(deps: CycleDeps): Promise<{ findings: Finding[]; 
 		}
 	}
 
-	deps.state.journal("run", { findings: findings.length, suppressed });
-	return { findings, suppressed };
+	deps.state.journal("run", { findings: findings.length, suppressed, shadowed });
+	return { findings, suppressed, shadowed };
 }
 
 // Serializes runs across trigger sources (cron tick, run-checks command).
@@ -376,6 +419,13 @@ function main(): void {
 	const health = new HealthClient({ region: "us-east-1" });
 	const config = new ConfigServiceClient({ region });
 	const guardduty = new GuardDutyClient({ region });
+	// SIO-1748 workload-state clients. The ELBv2 client above is region-keyed
+	// for the cert scan; the targets check wants the host region only, since a
+	// target group is reachable from the account it lives in.
+	const elbv2 = new ElasticLoadBalancingV2Client({ region });
+	const ecs = new ECSClient({ region });
+	const sqs = new SQSClient({ region });
+	const autoscaling = new AutoScalingClient({ region });
 	const log = (line: string) => console.log(`${new Date().toISOString()} ${line}`);
 
 	// Best-effort by design: a checkpoint failure is logged and the monitor
@@ -494,6 +544,7 @@ function main(): void {
 
 	const fifteenDeps: CycleDeps = {
 		gate,
+		shadow: SHADOW_FAMILIES,
 		checks: [
 			{ name: "alarms", run: () => checkAlarms(cw, state) },
 			{
@@ -510,6 +561,10 @@ function main(): void {
 			{ name: "drift", run: () => checkDrift(ec2, state) },
 			{ name: "resource-drift", run: () => checkResourceDrift(ec2, rds, lambda, state) },
 			{ name: "health", run: () => checkHealth(health, state, { regions: region ? [region, "global"] : undefined }) },
+			{ name: "targets", run: () => checkTargets(elbv2, state) },
+			{ name: "tasks", run: () => checkTasks(ecs, state) },
+			{ name: "queues", run: () => checkQueues(sqs, state) },
+			{ name: "scaling", run: () => checkScaling(autoscaling, state) },
 		],
 		state,
 		investigate,
@@ -521,6 +576,7 @@ function main(): void {
 
 	const hourlyDeps: CycleDeps = {
 		gate,
+		shadow: SHADOW_FAMILIES,
 		checks: [
 			{
 				name: "ingestion",
@@ -578,6 +634,7 @@ function main(): void {
 			baselineUsd: latest ? state.costBaseline(latest.date, 14) : null,
 			bundleVersion: await bundleVersion(),
 			suppressedCount: state.journalRows(day, "suppressed_finding").length,
+			shadow: { families: [...SHADOW_FAMILIES], count: state.journalRows(day, "shadow_finding").length },
 			notables: notablesFromJournal(findingRows),
 			paused: controls.paused ? { reason: controls.pausedReason, since: controls.pausedSince } : null,
 		});
@@ -606,6 +663,7 @@ function main(): void {
 	const dailyDigest = async (): Promise<void> => {
 		const dailyDeps: CycleDeps = {
 			gate,
+			shadow: SHADOW_FAMILIES,
 			checks: [
 				{ name: "cost", run: () => checkCost(ce, state, { pct: COST_PCT, abs: COST_ABS }) },
 				{ name: "trail", run: () => checkTrail(cloudtrail, state) },
@@ -682,16 +740,17 @@ function main(): void {
 			const day = 86_400_000;
 			const day24 = state.journalRows(day, "finding").length;
 			const sup24 = state.journalRows(day, "suppressed_finding").length;
+			const shadow24 = state.journalRows(day, "shadow_finding").length;
 			const err24 = state.journalRows(day, "check_error").length;
 			const usage = investigationUsage(state.journalRows(day, "investigation"));
-			return `monitor ${MONITOR_NAME} online. last run: ${lastRun ? `${lastRun.ts} ${lastRun.payload}` : "never"}. last 24h: ${day24} finding(s), ${sup24} suppressed, ${err24} check error(s), ${usage.used}/${INVESTIGATE_BUDGET.perDay} investigation prompt(s) used. unsent reports: ${state.unsent().length}. ${describeControls(controls)}`;
+			return `monitor ${MONITOR_NAME} online. last run: ${lastRun ? `${lastRun.ts} ${lastRun.payload}` : "never"}. last 24h: ${day24} finding(s), ${sup24} suppressed, ${shadow24} shadowed, ${err24} check error(s), ${usage.used}/${INVESTIGATE_BUDGET.perDay} investigation prompt(s) used. unsent reports: ${state.unsent().length}. ${describeControls(controls)}`;
 		}
 		if (cmd === "digest") return buildDigest();
 		if (cmd === "review") return buildSuppressionReview();
 		if (cmd === "history" || cmd.startsWith("history ")) {
 			const query = parseHistoryArgs(raw.slice("history".length));
 			if ("error" in query) return query.error;
-			return formatHistory(state.journalRows(7 * 86_400_000, "finding"), query);
+			return formatHistory(state.journalRows(7 * 86_400_000, query.shadow ? "shadow_finding" : "finding"), query);
 		}
 		if (cmd === "suppressions") {
 			const rows = state.listSuppressions();

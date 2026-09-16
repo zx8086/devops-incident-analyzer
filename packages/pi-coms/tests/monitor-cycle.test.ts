@@ -1,6 +1,13 @@
 // tests/monitor-cycle.test.ts
 import { describe, expect, test } from "bun:test";
-import { type CycleDeps, envCount, investigateBudgetMs, makeGuard, runCycle } from "../scripts/coms-net-monitor.ts";
+import {
+	type CycleDeps,
+	envCount,
+	investigateBudgetMs,
+	makeGuard,
+	runCycle,
+	SHADOW_DEFAULT,
+} from "../scripts/coms-net-monitor.ts";
 import type { Finding } from "../scripts/monitor/report.ts";
 import { MonitorState } from "../scripts/monitor/state.ts";
 
@@ -52,6 +59,87 @@ describe("runCycle", () => {
 		expect(d.sent).toHaveLength(1);
 		expect(d.sent[0]).toContain("load");
 		expect(d.state.journalRows(60_000, "finding")).toHaveLength(1);
+	});
+
+	// SIO-1748: a shadow family is detected and journalled, but must not reach
+	// the report, the investigation, or the suppression ledger. The whole point
+	// is to measure a new check's real rate in production without spending a
+	// token or touching the ops inbox.
+	describe("shadow families", () => {
+		test("a shadowed finding is journalled but never reported or investigated", async () => {
+			let investigated = 0;
+			const d = deps({
+				checks: [
+					{ name: "targets", run: async () => [F({ family: "targets", dedup_key: "targets:orders:unhealthy" })] },
+				],
+				shadow: new Set(["targets"]),
+				investigate: async () => {
+					investigated++;
+					return { diagnoses: null, failure: null };
+				},
+			});
+			const out = await runCycle(d);
+			expect(out.findings).toHaveLength(0);
+			expect(out.shadowed).toBe(1);
+			expect(investigated).toBe(0);
+			expect(d.sent).toHaveLength(0);
+			expect(d.state.journalRows(60_000, "shadow_finding")).toHaveLength(1);
+			// It is NOT a normal finding: the digest and history must not see it.
+			expect(d.state.journalRows(60_000, "finding")).toHaveLength(0);
+		});
+
+		test("a shadowed finding never reaches the suppression ledger", async () => {
+			const d = deps({
+				checks: [
+					{ name: "targets", run: async () => [F({ family: "targets", dedup_key: "targets:orders:unhealthy" })] },
+				],
+				shadow: new Set(["targets"]),
+			});
+			d.state.addSuppression("targets:%", "known noisy while in shadow");
+			const out = await runCycle(d);
+			expect(out.shadowed).toBe(1);
+			// Counting it as suppressed would make the weekly review report it as
+			// something the ledger is masking, which it is not.
+			expect(out.suppressed).toBe(0);
+			expect(d.state.journalRows(60_000, "suppressed_finding")).toHaveLength(0);
+		});
+
+		test("families outside the shadow set are unaffected", async () => {
+			const d = deps({
+				checks: [
+					{
+						name: "mixed",
+						run: async () => [F(), F({ family: "targets", dedup_key: "targets:orders:unhealthy" })],
+					},
+				],
+				shadow: new Set(["targets"]),
+			});
+			const out = await runCycle(d);
+			expect(out.findings).toHaveLength(1);
+			expect(out.findings[0]?.family).toBe("alarm");
+			expect(out.shadowed).toBe(1);
+			expect(d.sent).toHaveLength(1);
+		});
+
+		test("the four SIO-1748 families default to shadow, so they cannot ship live by accident", () => {
+			// The default is the whole safety property: an operator who deploys
+			// without setting the variable must not get four unmeasured families
+			// reporting into the ops inbox on the first cycle.
+			for (const family of ["targets", "tasks", "queues", "scaling"]) {
+				expect(SHADOW_DEFAULT.split(",")).toContain(family);
+			}
+		});
+
+		test("with no shadow set configured nothing is shadowed", async () => {
+			const d = deps({
+				checks: [
+					{ name: "targets", run: async () => [F({ family: "targets", dedup_key: "targets:orders:unhealthy" })] },
+				],
+			});
+			const out = await runCycle(d);
+			expect(out.shadowed).toBe(0);
+			expect(out.findings).toHaveLength(1);
+		});
 	});
 
 	test("investigation failure still ships the raw finding", async () => {
