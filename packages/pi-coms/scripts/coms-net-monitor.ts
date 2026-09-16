@@ -183,7 +183,11 @@ const LOGS_EXCLUDE = (process.env.PI_MONITOR_LOGS_EXCLUDE ?? "")
 // outcome the design set out to avoid. Graduating is per account and needs no
 // code change: set the variable to the families that should STAY in shadow
 // (empty graduates all of them).
-export const SHADOW_DEFAULT = "targets,tasks,queues,scaling,db-events,stacks,nodegroups,quotas";
+// SIO-1751: queues graduated. Of the families here it is the one whose
+// discriminator leaves nothing to measure -- a queue is only a DLQ because
+// another queue redrives into it, and depth on it means messages already failed
+// maxReceiveCount times. Its first production cycle found 563 such messages.
+export const SHADOW_DEFAULT = "targets,tasks,scaling,db-events,stacks,nodegroups,quotas";
 const SHADOW_FAMILIES = new Set(
 	(process.env.PI_MONITOR_SHADOW_FAMILIES ?? SHADOW_DEFAULT)
 		.split(",")
@@ -648,7 +652,10 @@ function main(): void {
 			baselineUsd: latest ? state.costBaseline(latest.date, 14) : null,
 			bundleVersion: await bundleVersion(),
 			suppressedCount: state.journalRows(day, "suppressed_finding").length,
-			shadow: { families: [...SHADOW_FAMILIES], count: state.journalRows(day, "shadow_finding").length },
+			shadow: (() => {
+				const shadowRows = state.journalRows(day, "shadow_finding");
+				return { families: [...SHADOW_FAMILIES], count: shadowRows.length, notables: notablesFromJournal(shadowRows) };
+			})(),
 			notables: notablesFromJournal(findingRows),
 			paused: controls.paused ? { reason: controls.pausedReason, since: controls.pausedSince } : null,
 		});

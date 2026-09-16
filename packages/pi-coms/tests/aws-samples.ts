@@ -398,3 +398,32 @@ export const EBS_VOLUME_STATUSES_OBSERVED = ["ok"];
 // Not taken from the estate-watch wishlist, and why.
 export const BACKUP_JOBS_OBSERVED = 0;
 export const SYNTHETICS_CANARIES_OBSERVED = 0;
+
+// SIO-1751: the first findings the queues family ever produced in production,
+// verbatim from the eu-oit-dev monitor journal minutes after rollout. Real
+// messages, not invented; account ids never appeared in them.
+export const QUEUES_FIRST_PRODUCTION_FINDINGS = [
+	{
+		family: "queues",
+		severity: "warn",
+		resource: "connectors-notifications-dlq",
+		summary: "Dead-letter queue connectors-notifications-dlq holds 437 messages redriven from connectors-notifications",
+		dedup_key: "queues:connectors-notifications-dlq:dlq-depth",
+	},
+	{
+		family: "queues",
+		severity: "warn",
+		resource: "connectors-price-notifications-dlq",
+		summary:
+			"Dead-letter queue connectors-price-notifications-dlq holds 109 messages redriven from connectors-price-notifications",
+		dedup_key: "queues:connectors-price-notifications-dlq:dlq-depth",
+	},
+	{
+		family: "queues",
+		severity: "warn",
+		resource: "connectors-image-notifications-dlq",
+		summary:
+			"Dead-letter queue connectors-image-notifications-dlq holds 17 messages redriven from connectors-image-notifications",
+		dedup_key: "queues:connectors-image-notifications-dlq:dlq-depth",
+	},
+];
