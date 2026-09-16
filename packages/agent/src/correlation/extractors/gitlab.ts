@@ -18,7 +18,13 @@ const UNSCOPED_FALLBACK_LIMIT = 5;
 // as recent-deploy context with an explicit caveat.
 export function extractGitLabFindings(outputs: ToolOutput[], focusServices: string[] = []): GitLabFindings {
 	const mergedRequests: GitLabMergedRequest[] = [];
-	const all: GitLabMergedRequest[] = [];
+	// Greptile on PR #796: keyed, not an array. The sub-agent can issue several
+	// gitlab_list_merge_requests calls with overlapping filters, and extractors receive the
+	// MERGED outputs for a dataSourceId (SIO-1245), so the same MR arrives more than once.
+	// An array here lets one MR occupy several of the five fallback slots and crowd out
+	// distinct recent deploys. Key on project_id + id: `id` alone collides across projects
+	// (GitLab MR ids are per-project), and web_url is optional.
+	const all = new Map<string, GitLabMergedRequest>();
 
 	for (const o of outputs) {
 		if (o.toolName !== "gitlab_list_merge_requests") continue;
@@ -26,7 +32,7 @@ export function extractGitLabFindings(outputs: ToolOutput[], focusServices: stri
 		for (const mr of o.rawJson) {
 			const parsed = GitLabMergedRequestSchema.safeParse(mr);
 			if (!parsed.success) continue;
-			all.push(parsed.data);
+			all.set(`${parsed.data.project_id ?? ""}#${parsed.data.id}`, parsed.data);
 			const haystack = `${parsed.data.title ?? ""} ${parsed.data.description ?? ""}`;
 			if (!matchesFocus(haystack, focusServices)) continue;
 			mergedRequests.push(parsed.data);
@@ -34,10 +40,10 @@ export function extractGitLabFindings(outputs: ToolOutput[], focusServices: stri
 	}
 
 	if (mergedRequests.length > 0) return { mergedRequests };
-	if (focusServices.length === 0 || all.length === 0) return {};
+	if (focusServices.length === 0 || all.size === 0) return {};
 	// Most recently merged first: a recent deploy is the better triage signal when
 	// nothing is focus-linked. Undated MRs sort last rather than winning by accident.
-	const fallback = [...all]
+	const fallback = [...all.values()]
 		.sort((a, b) => (b.merged_at ?? "").localeCompare(a.merged_at ?? ""))
 		.slice(0, UNSCOPED_FALLBACK_LIMIT);
 	return { mergedRequests: fallback, unscoped: true };

@@ -131,6 +131,37 @@ describe("extractGitLabFindings unscoped fallback (SIO-1644)", () => {
 		expect(out).toEqual({});
 	});
 
+	// Greptile on PR #796: the sub-agent can issue several gitlab_list_merge_requests calls
+	// with overlapping filters, and extractors see the MERGED outputs per dataSourceId
+	// (SIO-1245). Without keying, one MR occupies several of the five slots and crowds out
+	// distinct recent deploys.
+	test("an MR repeated across overlapping tool calls occupies ONE fallback slot", () => {
+		const mr = (id: number) => ({
+			id,
+			project_id: 42,
+			title: `unrelated ${id}`,
+			merged_at: `2026-09-0${id}T00:00:00Z`,
+		});
+		const out = extractGitLabFindings([mrs([mr(1), mr(2)]), mrs([mr(1), mr(3)])], FOCUS);
+		expect(out.unscoped).toBe(true);
+		const ids = out.mergedRequests?.map((m) => m.id) ?? [];
+		expect(ids).toEqual([3, 2, 1]);
+		expect(ids.length).toBe(new Set(ids).size);
+	});
+
+	test("the same MR id in DIFFERENT projects is not collapsed (ids are per-project)", () => {
+		const out = extractGitLabFindings(
+			[
+				mrs([
+					{ id: 7, project_id: 1, title: "alpha", merged_at: "2026-09-01T00:00:00Z" },
+					{ id: 7, project_id: 2, title: "beta", merged_at: "2026-09-02T00:00:00Z" },
+				]),
+			],
+			FOCUS,
+		);
+		expect(out.mergedRequests).toHaveLength(2);
+	});
+
 	test("undated MRs sort last rather than winning the fallback by accident", () => {
 		const out = extractGitLabFindings(
 			[
