@@ -1,6 +1,6 @@
 // tests/checks-logs.test.ts
 import { describe, expect, test } from "bun:test";
-import { checkLogs, logSignature, summariseLogSample } from "../scripts/monitor/checks/logs.ts";
+import { checkLogs, logSignature, logsWindow, summariseLogSample } from "../scripts/monitor/checks/logs.ts";
 import { MonitorState } from "../scripts/monitor/state.ts";
 
 // What the fakes read off a command: its class name and the filter inputs.
@@ -45,23 +45,24 @@ describe("checkLogs", () => {
 				{ timestamp: now - 30_000, message: "ERROR db connect failed 2" },
 			],
 		});
-		const out = await checkLogs(client, state, { now });
+		const out = await checkLogs(client, state, { now, slackMs: 0 });
 		expect(out).toHaveLength(1);
 		expect(out[0].severity).toBe("warn");
 		expect((out[0].evidence as LogsEvidence).count).toBe(2);
-		expect(state.getWatermark("logs:/aws/app")).toBe(now - 30_000 + 1);
+		// SIO-1753: the window closes at its end, not at the last event.
+		expect(state.getWatermark("logs:/aws/app")).toBe(now + 1);
 	});
 
 	test("second run with no new events is quiet; same signature within window is deduped", async () => {
 		const state = new MonitorState(":memory:");
 		const now = 1_000_000_000_000;
 		const events = [{ timestamp: now - 60_000, message: "ERROR x failed" }];
-		await checkLogs(fakeClient(["/g"], { "/g": events }), state, { now });
+		await checkLogs(fakeClient(["/g"], { "/g": events }), state, { now, slackMs: 0 });
 		// new event, same signature, later timestamp
 		const later = [{ timestamp: now + 10_000, message: "ERROR x failed" }];
-		const out = await checkLogs(fakeClient(["/g"], { "/g": later }), state, { now: now + 20_000 });
+		const out = await checkLogs(fakeClient(["/g"], { "/g": later }), state, { now: now + 20_000, slackMs: 0 });
 		expect(out).toHaveLength(0); // fingerprinted
-		expect(state.getWatermark("logs:/g")).toBe(now + 10_000 + 1);
+		expect(state.getWatermark("logs:/g")).toBe(now + 20_000 + 1);
 	});
 
 	test("first run only looks back lookbackMs", async () => {
@@ -277,5 +278,47 @@ describe("summariseLogSample", () => {
 
 	test("respects a caller-supplied cap", () => {
 		expect(summariseLogSample("abcdefghij", 5)).toBe("ab...");
+	});
+});
+
+// SIO-1753: the timestamps are the real ones from eu-oit-prd on 2026-09-16. The
+// catalog-prd-log-group watermark sat at 2026-09-09T15:39:32.107Z inside an
+// error storm; one ~1 MB page per cycle advanced it ~10 s per 15 min. Pagination
+// itself was verified live against that group (a fake client cannot model the
+// service's page boundaries, which is how the one-page bug passed these tests).
+describe("logsWindow", () => {
+	const opts = { lookbackMs: 900_000, maxLagMs: 3_600_000, slackMs: 60_000 };
+	const stuck = Date.parse("2026-09-09T15:39:32.107Z");
+	const now = Date.parse("2026-09-16T11:34:30.344Z");
+
+	test("a position a week behind skips to the lag bound and says where it was", () => {
+		const w = logsWindow(stuck, now, opts);
+		expect(new Date(w.end).toISOString()).toBe("2026-09-16T11:33:30.344Z");
+		expect(new Date(w.start).toISOString()).toBe("2026-09-16T10:33:30.344Z");
+		expect(w.skippedFrom).toBe(stuck);
+	});
+
+	test("a current position resumes exactly where the last window closed", () => {
+		const closed = Date.parse("2026-09-16T11:18:30.345Z");
+		const w = logsWindow(closed, now, opts);
+		expect(w.start).toBe(closed);
+		expect(w.skippedFrom).toBeNull();
+	});
+
+	test("a position exactly at the lag bound is not a skip", () => {
+		const bound = now - opts.slackMs - opts.maxLagMs;
+		expect(logsWindow(bound, now, opts).skippedFrom).toBeNull();
+		expect(logsWindow(bound - 1, now, opts).skippedFrom).toBe(bound - 1);
+	});
+
+	test("no position yet looks back lookbackMs from the slack-adjusted end", () => {
+		const w = logsWindow(null, now, opts);
+		expect(w.end - w.start).toBe(opts.lookbackMs);
+		expect(now - w.end).toBe(opts.slackMs);
+	});
+
+	test("a position ahead of the window end never produces an inverted window", () => {
+		const w = logsWindow(now, now, opts);
+		expect(w.start).toBe(w.end);
 	});
 });

@@ -6,7 +6,7 @@ import { ACMClient } from "@aws-sdk/client-acm";
 import { AutoScalingClient } from "@aws-sdk/client-auto-scaling";
 import { CloudFormationClient } from "@aws-sdk/client-cloudformation";
 import { CloudTrailClient } from "@aws-sdk/client-cloudtrail";
-import { CloudWatchClient, DescribeAlarmsCommand } from "@aws-sdk/client-cloudwatch";
+import { CloudWatchClient } from "@aws-sdk/client-cloudwatch";
 import { CloudWatchLogsClient } from "@aws-sdk/client-cloudwatch-logs";
 import { ConfigServiceClient } from "@aws-sdk/client-config-service";
 import { CostExplorerClient } from "@aws-sdk/client-cost-explorer";
@@ -33,7 +33,7 @@ import {
 	REFUSED_PREFIX,
 } from "./monitor/budget.ts";
 import { s3Store, saveCheckpoint, statePrefix } from "./monitor/checkpoint.ts";
-import { checkAlarms } from "./monitor/checks/alarms.ts";
+import { checkAlarms, describeAllAlarms, isScalingTrigger } from "./monitor/checks/alarms.ts";
 import { certRegions, checkCerts, checkListenerCerts } from "./monitor/checks/certs.ts";
 import { checkCompliance } from "./monitor/checks/compliance.ts";
 import { COST_DEFAULTS, checkCost } from "./monitor/checks/cost.ts";
@@ -394,7 +394,12 @@ function main(): void {
 	const lambda = new LambdaClient({ region });
 	// SIO-1740: the Health API is a global endpoint served from us-east-1.
 	const health = new HealthClient({ region: "us-east-1" });
-	const config = new ConfigServiceClient({ region });
+	// SIO-1755: checkCompliance pages the rule list and then every rule's details
+	// back to back, in a Config API bucket other callers share. With three
+	// standard attempts the listing threw "Rate exceeded" about 2 s into 6-9 of
+	// the 24 hourly runs in every prd account (whole check lost, digest DEGRADED).
+	// Adaptive mode slows the client down after a throttle instead of failing.
+	const config = new ConfigServiceClient({ region, retryMode: "adaptive", maxAttempts: 10 });
 	const guardduty = new GuardDutyClient({ region });
 	// SIO-1748 workload-state clients. The ELBv2 client above is region-keyed
 	// for the cert scan; the targets check wants the host region only, since a
@@ -598,9 +603,11 @@ function main(): void {
 		const skippedRows = findings.skipped + checkErrors.skipped;
 		if (skippedRows > 0) log(`digest: skipped ${skippedRows} unreadable journal row(s)`);
 		let activeAlarms: string[] = [];
+		let scalingTriggersInAlarm = 0;
 		try {
-			const resp = await cw.send(new DescribeAlarmsCommand({ StateValue: "ALARM" }));
-			activeAlarms = (resp.MetricAlarms ?? []).map((a) => a.AlarmName ?? "");
+			const firing = await describeAllAlarms(cw, { StateValue: "ALARM" });
+			activeAlarms = firing.filter((a) => !isScalingTrigger(a)).map((a) => a.AlarmName ?? "");
+			scalingTriggersInAlarm = firing.length - activeAlarms.length;
 		} catch {
 			// digest still ships
 		}
@@ -612,6 +619,7 @@ function main(): void {
 			checkErrors: errorRows.length,
 			checkErrorsByCheck: errsByCheck,
 			activeAlarms,
+			scalingTriggersInAlarm,
 			yesterdayUsd: latest?.usd ?? null,
 			baselineUsd: latest ? state.costBaseline(latest.date, 14) : null,
 			bundleVersion: await bundleVersion(),

@@ -1,7 +1,8 @@
 // tests/checks-alarms.test.ts
 import { describe, expect, test } from "bun:test";
-import { checkAlarms } from "../scripts/monitor/checks/alarms.ts";
+import { checkAlarms, isScalingTrigger } from "../scripts/monitor/checks/alarms.ts";
 import { MonitorState } from "../scripts/monitor/state.ts";
+import { ALARM_ACTIONS_OBSERVED as ARN } from "./aws-samples.ts";
 
 type Alarm = {
 	AlarmName: string;
@@ -12,6 +13,7 @@ type Alarm = {
 	Threshold?: number;
 	StateReason?: string;
 	Dimensions?: { Name: string; Value: string }[];
+	AlarmActions?: string[];
 };
 
 // history: transitions into ALARM the fake reports for DescribeAlarmHistory;
@@ -171,4 +173,49 @@ describe("checkAlarms", () => {
 		expect(denied).toHaveLength(1);
 		expect(denied[0].severity).toBe("critical");
 	});
+});
+
+describe("SIO-1754 scaling triggers", () => {
+	test("an alarm whose only actions are scaling policies is a scaling trigger", () => {
+		expect(isScalingTrigger({ AlarmActions: [ARN.ecsServiceScaleUp] })).toBe(true);
+		expect(isScalingTrigger({ AlarmActions: [ARN.mskBrokerScaling] })).toBe(true);
+	});
+
+	test("an alarm that also notifies someone stays a finding", () => {
+		expect(isScalingTrigger({ AlarmActions: [ARN.ecsServiceScaleUp, ARN.snsTopic] })).toBe(false);
+		expect(isScalingTrigger({ AlarmActions: [ARN.snsTopic] })).toBe(false);
+	});
+
+	test("an alarm with no actions is not a scaling trigger", () => {
+		expect(isScalingTrigger({ AlarmActions: [] })).toBe(false);
+		expect(isScalingTrigger({})).toBe(false);
+	});
+});
+
+// Greptile on #786: the page walk needs its own regression guard. The shape is the
+// captured one: `describe-alarms --no-paginate` on eu-shared-services-prd returned
+// 50 alarms plus a NextToken, of 98; one page left the other 48 unread.
+test("SIO-1754: alarms and composite alarms on later DescribeAlarms pages are evaluated", async () => {
+	const ok = (i: number): Alarm => ({ AlarmName: `a-${String(i).padStart(3, "0")}`, StateValue: "OK" });
+	const page1 = Array.from({ length: 50 }, (_, i) => ok(i));
+	const scaling = {
+		AlarmName: "z-service-CPU-Utilization-Low-20",
+		StateValue: "ALARM",
+		AlarmActions: [ARN.ecsServiceScaleUp],
+	};
+	const notifying = { AlarmName: "z-license-days-remaining", StateValue: "ALARM", AlarmActions: [ARN.snsTopic] };
+	const composite = { AlarmName: "z-composite-outage", StateValue: "ALARM", AlarmActions: [ARN.snsTopic] };
+	const tokens: (string | undefined)[] = [];
+	const client = {
+		send: async (cmd: { constructor: { name: string }; input: { NextToken?: string } }) => {
+			if (cmd.constructor.name === "DescribeAlarmHistoryCommand") return { AlarmHistoryItems: [] };
+			tokens.push(cmd.input.NextToken);
+			return cmd.input.NextToken === undefined
+				? { MetricAlarms: page1, CompositeAlarms: [], NextToken: "page-2" }
+				: { MetricAlarms: [scaling, notifying], CompositeAlarms: [composite] };
+		},
+	};
+	const out = await checkAlarms(client, new MonitorState(":memory:"));
+	expect(tokens).toEqual([undefined, "page-2"]);
+	expect(out.map((f) => f.resource).sort()).toEqual(["z-composite-outage", "z-license-days-remaining"]);
 });
