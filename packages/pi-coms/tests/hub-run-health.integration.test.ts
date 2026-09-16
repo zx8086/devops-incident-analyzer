@@ -62,3 +62,20 @@ test("a heartbeat that omits the count leaves the last reading standing", async 
 	expect(after?.consecutive_run_errors).toBe(4);
 	expect(after?.last_run_error).toBe("403");
 });
+
+// Greptile P1 on PR #800, verified: a session re-registers on every SSE
+// reconnect, and registration rebuilds the card from `existing` field by field.
+// Without carrying these over, a failing spoke reads healthy until its next
+// heartbeat -- the same "silence is not recovery" rule as the heartbeat path.
+test("re-registering the same session keeps the failure count", async () => {
+	const hub = await startHub();
+	await register(hub, "S1", "eu-oit-prd");
+	await heartbeat(hub, { context_used_pct: 8, queue_depth: 0, consecutive_run_errors: 6, last_run_error: "403" });
+	expect((await card(hub))?.consecutive_run_errors).toBe(6);
+
+	// Exactly what a reconnect does: same session_id, same name.
+	await register(hub, "S1", "eu-oit-prd");
+	const after = await card(hub);
+	expect(after?.consecutive_run_errors).toBe(6);
+	expect(after?.last_run_error).toBe("403");
+});

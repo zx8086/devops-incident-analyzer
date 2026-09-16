@@ -983,6 +983,12 @@ async function handleRegister(req: Request, auth: AuthResult | null): Promise<Re
 		context_used_pct: existing?.context_used_pct ?? 0,
 		queue_depth: existing?.queue_depth ?? 0,
 		status: "online",
+		// SIO-1681: carried over like the other live readings above. A session
+		// re-registers on every SSE reconnect, and rebuilding the card without
+		// these would show a failing spoke as healthy until its next heartbeat --
+		// the same "silence is not recovery" rule the heartbeat handler follows.
+		consecutive_run_errors: existing?.consecutive_run_errors,
+		last_run_error: existing?.last_run_error,
 	};
 	const entry: RegistryEntry = {
 		...card,

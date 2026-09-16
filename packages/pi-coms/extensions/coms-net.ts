@@ -1951,13 +1951,15 @@ export default function (pi: ExtensionAPI) {
 	// agent_end only records the run's final messages and which inbounds were
 	// queued when it ended; a prompt arriving in between belongs to the next run.
 	let settledTurn: { final: FinalAssistant; ids: Set<string> } | null = null;
+	// SIO-1681: the last run's outcome, kept SEPARATELY from settledTurn because
+	// health is tracked for every run while settledTurn is nulled whenever no
+	// inbound is waiting. The failure this reports is a spoke nobody is
+	// prompting, so the runs that reveal it are exactly the ones with an empty
+	// queue -- counting only hub-prompted runs would miss the case it exists for.
+	let lastRunFinal: FinalAssistant | null = null;
 	pi.on("agent_end", async (event) => {
 		const final = finalAssistant(event.messages);
-		// SIO-1681: health is tracked for EVERY run, before the inbound-queue
-		// guard below. The failure this reports is a spoke nobody is prompting,
-		// so the runs that reveal it are exactly the ones with an empty queue --
-		// counting only hub-prompted runs would miss the case it exists for.
-		runHealth = nextRunHealth(runHealth, final);
+		lastRunFinal = final;
 		if (!identity || inboundQueue.size === 0) {
 			settledTurn = null;
 			return;
@@ -2013,6 +2015,15 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	pi.on("agent_settled", async () => {
+		// SIO-1681: health is settled here, not at agent_end. Pi emits agent_end
+		// before it decides whether to retry a provider error or compact and
+		// continue, so a failed intermediate attempt counted there would leave a
+		// phantom failure on a run that went on to succeed -- the same reason
+		// SIO-1678 moved replies to this event.
+		if (lastRunFinal) {
+			runHealth = nextRunHealth(runHealth, lastRunFinal);
+			lastRunFinal = null;
+		}
 		void postTurnReplies();
 		if (!answeredSchemaPrompt) return;
 		answeredSchemaPrompt = false;
