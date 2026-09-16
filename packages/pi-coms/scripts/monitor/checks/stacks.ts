@@ -6,7 +6,7 @@ import {
 	type DescribeStacksCommandOutput,
 	type Stack,
 } from "@aws-sdk/client-cloudformation";
-import { type Finding, overflowFinding, type Severity } from "../report.ts";
+import { type Finding, overflowFinding, type Severity, snapshotAfterScan } from "../report.ts";
 import type { MonitorState } from "../state.ts";
 import type { AwsClient } from "./alarms.ts";
 
@@ -60,6 +60,13 @@ export async function checkStacks(
 	// the next scan, and that transition would be lost for good.
 	const current: Record<string, string> = {};
 	const findings: Finding[] = [];
+	// Two separate questions, and conflating them is a bug: whether the scan
+	// stopped early decides whether unevaluated stacks keep their previous
+	// status, while whether anything reportable was left decides whether an
+	// overflow row is worth showing. A capped scan whose remainder happens to
+	// be all healthy still must not drop those stacks from the snapshot --
+	// they would look like new transitions next cycle and report falsely.
+	let truncated = false;
 	let omitted = 0;
 
 	for (const [i, s] of stacks.entries()) {
@@ -116,6 +123,7 @@ export async function checkStacks(
 		});
 
 		if (findings.length >= MAX_FINDINGS) {
+			truncated = true;
 			// Only stacks that would themselves have been reported. Most of the
 			// remainder is unchanged and healthy, and counting those would
 			// overstate what was withheld.
@@ -129,13 +137,10 @@ export async function checkStacks(
 		}
 	}
 
-	if (omitted > 0) {
-		findings.push(overflowFinding("stacks", omitted, MAX_FINDINGS, at));
-		// Merge, so the stacks never evaluated keep their previous status and
-		// their transition is still pending rather than silently absorbed.
-		state.setSnapshot("cfn-stacks", { ...(prev ?? {}), ...current });
-	} else {
-		state.setSnapshot("cfn-stacks", current);
-	}
+	if (omitted > 0) findings.push(overflowFinding("stacks", omitted, MAX_FINDINGS, at));
+	// Merge whenever the scan stopped early, regardless of whether anything
+	// reportable was left: a stack that was never looked at must keep the status
+	// it had, or its next appearance reads as a fresh transition.
+	state.setSnapshot("cfn-stacks", snapshotAfterScan(prev, current, truncated));
 	return findings;
 }

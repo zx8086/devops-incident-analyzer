@@ -52,6 +52,20 @@ export type Finding = z.infer<typeof FindingSchema>;
 // The overflow row is info, so it never costs an investigation, and its dedup
 // key carries the cycle minute so successive overflows do not collapse into
 // one.
+// The other half of the capped-scan rule, and the half that is easy to get
+// subtly wrong: what the snapshot should contain afterwards. Dropping a
+// resource the scan never reached makes it look NEW next cycle, so a stack
+// that has been sitting in a failed state for a month reports as a fresh
+// transition. Keyed on whether the scan stopped early -- NOT on whether
+// anything reportable was left, which is a different question entirely.
+export function snapshotAfterScan(
+	prev: Record<string, string> | null,
+	evaluated: Record<string, string>,
+	truncated: boolean,
+): Record<string, string> {
+	return truncated ? { ...(prev ?? {}), ...evaluated } : evaluated;
+}
+
 export function overflowFinding(family: Family, omitted: number, cap: number, at: string): Finding {
 	return {
 		family,

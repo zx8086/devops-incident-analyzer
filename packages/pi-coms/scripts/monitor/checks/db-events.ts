@@ -53,6 +53,7 @@ export async function checkDbEvents(
 		: FIRST_LOOKBACK_MINUTES;
 
 	const findings: Finding[] = [];
+	let truncated = false;
 	let omitted = 0;
 	let newest = since ?? now - minutes * 60_000;
 	let nextMarker: string | undefined;
@@ -95,6 +96,7 @@ export async function checkDbEvents(
 			at,
 		});
 		if (findings.length >= MAX_FINDINGS) {
+			truncated = true;
 			// Count only what would actually have been reported. The rest of the
 			// page is mostly events behind the watermark or inside the re-alert
 			// window, and counting those would tell the operator a number of
@@ -111,9 +113,11 @@ export async function checkDbEvents(
 		}
 	}
 
-	if (omitted > 0) {
-		findings.push(overflowFinding("db-events", omitted, MAX_FINDINGS, at));
-	} else {
+	if (omitted > 0) findings.push(overflowFinding("db-events", omitted, MAX_FINDINGS, at));
+	// Held on truncation rather than on the omitted count, for the same reason:
+	// the events past the cap were never examined, so the watermark has no
+	// business claiming they were.
+	if (!truncated) {
 		// Bounded by the scan start, as elsewhere: an event written during the
 		// scan must be seen next cycle rather than skipped.
 		state.setWatermark("db-events:rds", Math.min(newest, now));

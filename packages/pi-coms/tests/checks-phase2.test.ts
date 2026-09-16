@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import { severityForCategories } from "../scripts/monitor/checks/db-events.ts";
 import { classifyStackStatus } from "../scripts/monitor/checks/stacks.ts";
-import { overflowFinding } from "../scripts/monitor/report.ts";
+import { overflowFinding, snapshotAfterScan } from "../scripts/monitor/report.ts";
 import {
 	CFN_STACK_STATUSES_OBSERVED,
 	ELASTICACHE_EVENT_FIELDS_OBSERVED,
@@ -103,5 +103,34 @@ describe("overflow findings", () => {
 		const a = overflowFinding("stacks", 1, 10, "2026-09-16T12:34:56.000Z");
 		const b = overflowFinding("scaling", 1, 10, "2026-09-16T12:34:56.000Z");
 		expect(a.dedup_key).not.toBe(b.dedup_key);
+	});
+});
+
+// The half of the capped-scan rule that bit hardest: keying snapshot
+// preservation on the omitted COUNT rather than on truncation. A capped scan
+// whose remainder happens to be healthy has nothing to report and still must
+// not forget the resources it never looked at.
+describe("snapshotAfterScan", () => {
+	test("a complete scan replaces the snapshot, so deleted resources disappear", () => {
+		expect(snapshotAfterScan({ a: "OLD", gone: "X" }, { a: "NEW" }, false)).toEqual({ a: "NEW" });
+	});
+
+	test("a truncated scan keeps resources it never evaluated", () => {
+		expect(snapshotAfterScan({ a: "OLD", unseen: "ROLLBACK_COMPLETE" }, { a: "NEW" }, true)).toEqual({
+			a: "NEW",
+			unseen: "ROLLBACK_COMPLETE",
+		});
+	});
+
+	// The exact false-incident path: an unevaluated stack already in a failure
+	// state must not reappear as an unseen resource next cycle.
+	test("a truncated scan with nothing reportable left still preserves state", () => {
+		const prev = { evaluated: "CREATE_COMPLETE", untouched: "UPDATE_ROLLBACK_COMPLETE" };
+		const after = snapshotAfterScan(prev, { evaluated: "CREATE_COMPLETE" }, true);
+		expect(after.untouched).toBe("UPDATE_ROLLBACK_COMPLETE");
+	});
+
+	test("a first run with no previous snapshot is unaffected by truncation", () => {
+		expect(snapshotAfterScan(null, { a: "X" }, true)).toEqual({ a: "X" });
 	});
 });
