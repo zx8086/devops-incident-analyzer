@@ -95,9 +95,18 @@ export async function checkDbEvents(
 			at,
 		});
 		if (findings.length >= MAX_FINDINGS) {
-			// Count what is left rather than deriving it: events already inside
-			// the re-alert window were processed, not omitted.
-			omitted = events.length - (events.indexOf(e) + 1);
+			// Count only what would actually have been reported. The rest of the
+			// page is mostly events behind the watermark or inside the re-alert
+			// window, and counting those would tell the operator a number of
+			// findings were withheld that never existed.
+			omitted = events.slice(events.indexOf(e) + 1).filter((rest) => {
+				const rts = rest.Date ? new Date(rest.Date).getTime() : now;
+				if (since !== null && rts <= since) return false;
+				const rkey = `db-events:${rest.SourceIdentifier ?? "unknown"}:${
+					(rest.EventCategories ?? []).slice().sort().join("+") || "uncategorized"
+				}`;
+				return state.shouldAlert(rkey, REALERT_MS);
+			}).length;
 			break;
 		}
 	}

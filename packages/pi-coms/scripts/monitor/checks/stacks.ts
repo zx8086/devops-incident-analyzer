@@ -116,7 +116,15 @@ export async function checkStacks(
 		});
 
 		if (findings.length >= MAX_FINDINGS) {
-			omitted = stacks.length - (i + 1);
+			// Only stacks that would themselves have been reported. Most of the
+			// remainder is unchanged and healthy, and counting those would
+			// overstate what was withheld.
+			omitted = stacks.slice(i + 1).filter((rest) => {
+				const rn = rest.StackName;
+				if (!rn) return false;
+				const rs = rest.StackStatus ?? "unknown";
+				return prev[rn] !== rs && classifyStackStatus(rs) !== null;
+			}).length;
 			break;
 		}
 	}
