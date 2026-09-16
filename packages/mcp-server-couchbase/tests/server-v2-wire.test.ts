@@ -1091,3 +1091,91 @@ describe("SIO-1443 Critical fix: documentation resources (resources/read) genuin
 		);
 	});
 });
+
+// SIO-1109 (Greptile on PR #795): the v2 upsert/delete closures are separate, non-exported
+// implementations, so the v1 gate tests in upsert/deleteDocumentById.test.ts prove nothing
+// about them -- a wiring or ordering regression in the maintained pilot could reintroduce the
+// write bypass without failing the suite. Exercise the guards through the SAME wire surface a
+// real client hits.
+//
+// These need no live Couchbase: the guard returns BEFORE connectionManager.getConnection(),
+// which is the ordering being asserted. Without the guard the handler would instead attempt a
+// connection and fail differently -- so "refused with the policy envelope" is itself the proof
+// that the refusal preceded connection acquisition.
+describe("SIO-1109: v2 KV write tools are gated by readOnlyQueryMode", () => {
+	const priorReadOnlyQueryMode = config.server.readOnlyQueryMode;
+	afterEach(() => {
+		config.server.readOnlyQueryMode = priorReadOnlyQueryMode;
+	});
+
+	async function callTool(name: string, args: Record<string, unknown>) {
+		const handler = buildHandler();
+		const response = await handler.fetch(
+			new Request("http://localhost/mcp", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Accept: "application/json, text/event-stream",
+					"Mcp-Method": "tools/call",
+					"Mcp-Name": name,
+				},
+				body: JSON.stringify({
+					jsonrpc: "2.0",
+					id: 99,
+					method: "tools/call",
+					params: {
+						name,
+						arguments: args,
+						_meta: {
+							"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+							"io.modelcontextprotocol/clientCapabilities": {},
+							"io.modelcontextprotocol/clientInfo": { name: "probe", version: "0" },
+						},
+					},
+				}),
+			}),
+		);
+		await handler.close();
+		return (await parseJsonRpcBody(response)) as {
+			result?: { content?: Array<{ text: string }>; isError?: boolean };
+		};
+	}
+
+	const UPSERT_ARGS = {
+		scope_name: "_default",
+		collection_name: "_default",
+		document_id: "v2-gate-probe",
+		document_content: JSON.stringify({ mutated: true }),
+	};
+	const DELETE_ARGS = { scope_name: "_default", collection_name: "_default", document_id: "v2-gate-probe" };
+
+	for (const [tool, args, verb] of [
+		["capella_upsert_document_by_id", UPSERT_ARGS, "upsert"],
+		["capella_delete_document_by_id", DELETE_ARGS, "delete"],
+	] as const) {
+		test(`${tool} refuses in read-only mode with the policy envelope`, async () => {
+			config.server.readOnlyQueryMode = true;
+			const body = await callTool(tool, args);
+			expect(body.result?.isError).toBe(true);
+			const envelope = JSON.parse(body.result?.content?.[0]?.text ?? "{}") as {
+				_error?: { kind?: string; category?: string; message?: string };
+			};
+			// bad-input -> bad-query is NON-degrading: a policy refusal must not cap subagent
+			// confidence the way an "auth" category would (shared/src/agent-state.ts:107-111).
+			expect(envelope._error?.kind).toBe("bad-input");
+			expect(envelope._error?.category).toBe("bad-query");
+			expect(envelope._error?.message).toContain("READ_ONLY_QUERY_MODE=false");
+			expect(envelope._error?.message?.toLowerCase()).toContain(verb);
+		});
+
+		test(`${tool} is NOT refused by the gate when read-only mode is disabled`, async () => {
+			config.server.readOnlyQueryMode = false;
+			const body = await callTool(tool, args);
+			// No live cluster here, so the call still fails -- but it must fail as a CONNECTION
+			// problem, never as the policy refusal. That difference is what proves the guard is
+			// keyed on the flag rather than refusing unconditionally.
+			const text = body.result?.content?.[0]?.text ?? "";
+			expect(text).not.toContain("READ_ONLY_QUERY_MODE=false");
+		});
+	}
+});

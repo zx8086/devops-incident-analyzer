@@ -1,4 +1,4 @@
-/* src/lib/readOnlyGuard.ts */
+// src/lib/readOnlyGuard.ts
 
 import { buildToolErrorEnvelope } from "@devops-agent/shared";
 import { config } from "../config";

@@ -38,15 +38,26 @@ export interface ToolErrorEnvelope {
 // buildToolErrorEnvelope: producing the envelope is already type-safe, so validating our own
 // output on every tool error would cost a parse per call for no signal.
 export const ToolErrorEnvelopeSchema = z.object({
-	_error: z.object({
-		kind: ToolErrorKindSchema,
-		category: ToolErrorCategorySchema,
-		message: z.string(),
-		advice: z.string().optional(),
-		statusCode: z.number().optional(),
-		hostname: z.string().optional(),
-		upstreamContentType: z.string().optional(),
-	}),
+	_error: z
+		.object({
+			kind: ToolErrorKindSchema,
+			category: ToolErrorCategorySchema,
+			message: z.string(),
+			advice: z.string().optional(),
+			statusCode: z.number().optional(),
+			hostname: z.string().optional(),
+			upstreamContentType: z.string().optional(),
+		})
+		// Greptile on PR #795: validating kind and category INDEPENDENTLY accepts pairs the
+		// producer can never emit -- buildToolErrorEnvelope always derives category from kind
+		// via TOOL_ERROR_KIND_TO_CATEGORY, so e.g. { kind: "not-found", category: "auth" } is
+		// impossible yet well-typed. That pair is not cosmetic: category decides degrading vs
+		// non-degrading (agent-state.ts:107-111), so a consumer trusting a mismatched envelope
+		// would mis-score datasource health. Reject the mismatch rather than silently honoring it.
+		.refine((e) => e.category === TOOL_ERROR_KIND_TO_CATEGORY[e.kind], {
+			message: "category must be the one derived from kind (see TOOL_ERROR_KIND_TO_CATEGORY)",
+			path: ["category"],
+		}),
 });
 
 export function buildToolErrorEnvelope(err: StructuredToolError): ToolErrorEnvelope {
