@@ -971,6 +971,43 @@ function markRecoveredToolErrors(
 	});
 }
 
+// SIO-1240: the ceiling on tools bound to one sub-agent turn. Documented here because the
+// value was a bare constant for five months while the whole budget system (MIN_ACTION_TOOLS,
+// composeBoundTools, requiredHeadTools, the SIO-1238 prompt-name ratchet) grew up around it.
+//
+// WHY 25 ORIGINALLY: an empirical workaround. Introduced 2026-04-08 in cc914c31 (SIO-626),
+// whose message reads "Three-tier tool filtering replaces the health-only keyword gate that
+// caused 'Input is too long for requested model' on follow-up queries with 71+ tools ... Tier 3
+// enforces a hard cap of 25 tools per agent." So it was a context-overflow guard, sized against
+// Opus 4.6, and never revisited.
+//
+// WHY 25 TODAY -- a DIFFERENT reason, which is the point of documenting it: the overflow
+// rationale is effectively dead (SIO-1213 moved the fleet to Sonnet 5 / Opus 4.8; the largest
+// sub-agent RULES.md, aws-agent, is 37,333 bytes / ~10k tokens as of 2026-09-16, nowhere near
+// a modern window). What the cap actually buys now is TOOL-SELECTION QUALITY: a small, relevant belt so
+// the model picks well. SIO-1228 and SIO-1234 both reason about it that way, and MIN_ACTION_TOOLS
+// below exists to protect query-relevant tools inside this ceiling. That purpose has never been
+// measured at any value.
+//
+// DO NOT raise it on context-window grounds alone -- that swaps one unmeasured number for
+// another and weakens a constraint current code depends on for a purpose cc914c31 never
+// intended. Sizing it needs evidence about selection quality, not headroom.
+//
+// The budget is tight: with MIN_ACTION_TOOLS reserving 8, the prompt-name budget is 17, and
+// SIO-1238 reported kafka-agent and capella-agent both sitting at 16 (not re-measured here --
+// the count spans RULES.md plus the loaded SKILL.md bodies, so a grep of RULES.md alone
+// understates it; treat the figure as that ticket's, and re-derive before acting on it).
+//
+// NOT YET MEASURED (SIO-1240 acceptance criteria 2-4, deliberately left open):
+//   - No telemetry says how often the cap actually bites. composeBoundTools truncates SILENTLY:
+//     nothing logs which tools were dropped, and the `filtered` flag at the createReactAgent
+//     call site is true whenever allTools > 25, so it cannot distinguish "the cap cut something"
+//     from "the action filter legitimately selected few tools".
+//   - MODEL_REGISTRY has no contextWindow to check a budget against, and cannot honestly get
+//     one: verified 2026-09-16 against the live Bedrock API that ListFoundationModels returns
+//     no token/context/limit field for any of the 12 Anthropic models, so the registry's
+//     "every field must be backed by an actual probe run" rule (model-registry.ts:10-12)
+//     cannot be met for it. See the SIO-1240 thread.
 const MAX_TOOLS_PER_AGENT = 25;
 // SIO-785 follow-up (2026-05-18): floor lowered from 5 to 1 so a narrow action
 // (e.g. dlq_messages -> 3 tools: consume / get_message / list_dlq_topics) is
