@@ -100,8 +100,11 @@ export PATH="$BUN_INSTALL/bin:$PATH"
 rm -rf "$HOME/.bun/install/global/node_modules/@mariozechner/pi-coding-agent"
 # Pinned: an unpinned install picked up 0.85.0 mid-rollout, which fails on Bun
 # (undeclared @earendil-works/pi-server import, SIO-1631). Bump deliberately
-# together with a bundle publish.
-bun install -g @earendil-works/pi-coding-agent@0.84.4
+# together with a bundle publish, and keep the devDependency pins in
+# package.json on the same version so typecheck sees the runtime's types.
+# 0.85.1 (SIO-1763): dist no longer references pi-server; verified on Bun 1.4.2
+# on eu-shared-services-dev with coms-net.ts and a Bedrock turn.
+bun install -g @earendil-works/pi-coding-agent@0.85.1
 
 # `bun install -g` leaves a `#!/usr/bin/env node` shebang on the pi symlink, and
 # these hosts have no (or too old a) Node -- pi-tui needs the regex `v` flag.
