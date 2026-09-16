@@ -133,7 +133,29 @@ string graduates all of them. The daily digest names whatever is still in
 shadow with its 24 h count, because `status` is a pull and a family left in
 shadow and forgotten is a check that silently never fires.
 
-A family graduates by being removed from the list. One whose rate cannot be
+A family graduates by being removed from the list.
+
+**Graduation does not replay what shadow already saw (SIO-1751).** A shadow run
+still marks its fingerprints and writes its snapshots -- checks do that inside
+themselves, before `runCycle` partitions shadow rows away. So a freshly
+graduated fingerprint family (`queues`) stays silent on everything shadow
+already found until its 24 h re-alert window expires, and a snapshot-diff
+family (`stacks`, `targets`, the `tasks` shortfall) never re-reports a
+standing condition at all -- only new transitions. Replay is deliberately not
+built. Instead the digest **names** shadow findings, not just their count, in a
+section marked UNMEASURED that stays visible for 24 h after a family graduates.
+That is where a condition shadow found before graduation remains readable.
+
+The digest's shadow section is kept apart from the real notables and carries
+no `[uninvestigated]` marker: shadow never investigates by design, so the
+marker would read as a failed investigation, and none of it feeds the real
+uninvestigated count.
+
+**`queues` graduated in SIO-1751**, the first family to leave shadow. Its
+discriminator leaves nothing to measure -- a queue is only a DLQ because
+another queue redrives into it, so depth on it means messages already failed
+`maxReceiveCount` times -- and its first production cycle found 563 such
+messages across three dead-letter queues that nothing had been reporting. One whose rate cannot be
 made defensible is reconsidered rather than shipped. Shadow rows are kept out
 of the ledger deliberately: a suppression entry records a finding an operator
 has accepted, while a shadow row records one the fleet has not yet agreed is
@@ -227,7 +249,7 @@ Env-with-defaults; no config files. Set in the systemd unit environment or `~/.c
 | `PI_MONITOR_WATCHLIST` | see `checks/watchlist.ts` | Comma-separated CloudTrail event names; setting it replaces the default |
 | `PI_MONITOR_CERT_WARN_DAYS` / `PI_MONITOR_CERT_CRIT_DAYS` | `30` / `7` | Certificate expiry thresholds |
 | `PI_MONITOR_COST_PCT` / `PI_MONITOR_COST_ABS` | `0` / `100` | Cost anomaly threshold: yesterday must exceed the 14-day baseline by BOTH values; the fleet default is an absolute $100 gate with the percentage filter off (SIO-1680) |
-| `PI_MONITOR_SHADOW_FAMILIES` | `targets,tasks,queues,scaling,db-events,stacks,nodegroups,quotas` | Comma-separated families detected and journalled as `shadow_finding` but never reported or investigated (SIO-1748). Setting it REPLACES the default; empty graduates all. Read them with `history ... shadow` |
+| `PI_MONITOR_SHADOW_FAMILIES` | `targets,tasks,scaling,db-events,stacks,nodegroups,quotas` | Comma-separated families detected and journalled as `shadow_finding` but never reported or investigated (SIO-1748). Setting it REPLACES the default; empty graduates all. Read them with `history ... shadow` |
 | `PI_MONITOR_STATE_DB` | `~/.pi/monitor/state.db` | State location |
 
 Hub-side: `PI_COMS_NET_MAX_TTL_MS` (default `1209600000`, 14 days) caps any requested `ttl_ms`.

@@ -121,13 +121,20 @@ describe("runCycle", () => {
 			expect(d.sent).toHaveLength(1);
 		});
 
-		test("the four SIO-1748 families default to shadow, so they cannot ship live by accident", () => {
+		test("unmeasured families default to shadow, so they cannot ship live by accident", () => {
 			// The default is the whole safety property: an operator who deploys
-			// without setting the variable must not get four unmeasured families
+			// without setting the variable must not get unmeasured families
 			// reporting into the ops inbox on the first cycle.
-			for (const family of ["targets", "tasks", "queues", "scaling"]) {
+			for (const family of ["targets", "tasks", "scaling", "db-events", "stacks", "nodegroups", "quotas"]) {
 				expect(SHADOW_DEFAULT.split(",")).toContain(family);
 			}
+		});
+
+		// SIO-1751: graduated deliberately, after its first production cycle found
+		// 563 messages across three dead-letter queues. Pinned so it is not quietly
+		// put back.
+		test("queues has graduated out of shadow", () => {
+			expect(SHADOW_DEFAULT.split(",")).not.toContain("queues");
 		});
 
 		test("with no shadow set configured nothing is shadowed", async () => {

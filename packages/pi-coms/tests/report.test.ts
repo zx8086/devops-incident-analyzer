@@ -14,6 +14,7 @@ import {
 	parseDiagnoses,
 	suppressionReviewFromJournal,
 } from "../scripts/monitor/report.ts";
+import { QUEUES_FIRST_PRODUCTION_FINDINGS } from "./aws-samples.ts";
 
 const finding = {
 	family: "alarm" as const,
@@ -608,5 +609,69 @@ describe("diagnosis evidence contract (SIO-1741)", () => {
 		expect(item.required).toContain("evidence");
 		expect(item.required).toContain("confidence");
 		expect(item.properties.evidence.minItems).toBe(1);
+	});
+});
+
+// SIO-1751. Driven by the first real findings the queues family produced, which
+// the digest showed only as the number 3 before this change.
+describe("shadow findings in the digest", () => {
+	const base = {
+		accountId: "111122223333",
+		since: "2026-09-16T00:00:00Z",
+		findingCounts: {},
+		checkErrors: 0,
+		activeAlarms: [],
+		yesterdayUsd: null,
+		baselineUsd: null,
+	};
+	const rows = QUEUES_FIRST_PRODUCTION_FINDINGS.map((f) => ({
+		payload: JSON.stringify({ ...f, evidence: {}, at: "2026-09-16T04:00:16.364Z" }),
+	}));
+
+	test("names each shadow finding rather than only counting them", () => {
+		const text = formatDigest({
+			...base,
+			shadow: { families: ["targets", "tasks"], count: 3, notables: notablesFromJournal(rows) },
+		});
+		expect(text).toContain("connectors-notifications-dlq holds 437 messages");
+		expect(text).toContain("connectors-price-notifications-dlq holds 109 messages");
+		expect(text).toContain("connectors-image-notifications-dlq holds 17 messages");
+	});
+
+	test("labels them unmeasured, and apart from the real notables", () => {
+		const text = formatDigest({
+			...base,
+			shadow: { families: ["targets"], count: 3, notables: notablesFromJournal(rows) },
+		});
+		expect(text).toContain("shadow warn+ findings (UNMEASURED");
+		expect(text).not.toContain("notable warn+ findings (last 24h)");
+	});
+
+	// "[uninvestigated]" would read as a failed investigation; shadow never
+	// investigates by design, and must not inflate the real uninvestigated count.
+	test("carries no uninvestigated marker and no uninvestigated count", () => {
+		const text = formatDigest({
+			...base,
+			shadow: { families: ["targets"], count: 3, notables: notablesFromJournal(rows) },
+		});
+		expect(text).not.toContain("[uninvestigated]");
+		expect(text).not.toMatch(/- uninvestigated: \d/);
+	});
+
+	// The graduation case: queues left shadow inside the window, so the families
+	// list no longer names it -- but its rows are still there, and because the
+	// shadow run consumed the fingerprints, this is the only place they show.
+	test("still shows findings from a family graduated inside the window", () => {
+		const text = formatDigest({
+			...base,
+			shadow: { families: [], count: 3, notables: notablesFromJournal(rows) },
+		});
+		expect(text).toContain("none (graduated this window)");
+		expect(text).toContain("connectors-notifications-dlq holds 437 messages");
+	});
+
+	test("nothing in shadow and no rows means no shadow section at all", () => {
+		const text = formatDigest({ ...base, shadow: { families: [], count: 0, notables: [] } });
+		expect(text).not.toContain("in shadow");
 	});
 });
