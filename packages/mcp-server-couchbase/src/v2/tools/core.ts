@@ -27,6 +27,7 @@ import { classifyCouchbaseError, isNoIndexError } from "../../lib/classifyCouchb
 import { connectionManager } from "../../lib/connectionManager";
 import { AppError } from "../../lib/errors";
 import { evaluateQueryPlan, formatPlanFindings } from "../../lib/queryPlan";
+import { readOnlyRefusal } from "../../lib/readOnlyGuard";
 import { resolveBucket } from "../../lib/resolveBucket";
 import { runSqlPlusPlusQuery } from "../../lib/runSqlPlusPlusQuery";
 import { sqlppParser } from "../../lib/sqlppParser";
@@ -327,6 +328,9 @@ export function registerCoreToolsV2(server: McpServer, tools: Map<string, Regist
 			annotations: WRITE_ANNOTATIONS,
 		},
 		async (params) => {
+			// SIO-1109: before getConnection() -- a refusal should not open a connection.
+			const refused = readOnlyRefusal("Document upsert");
+			if (refused) return refused;
 			const bucket = await connectionManager.getConnection();
 			const { scope_name, collection_name, document_id, document_content } = params;
 			try {
@@ -371,6 +375,9 @@ export function registerCoreToolsV2(server: McpServer, tools: Map<string, Regist
 			annotations: DESTRUCTIVE_ANNOTATIONS,
 		},
 		async (params) => {
+			// SIO-1109: before getConnection() -- a refusal should not open a connection.
+			const refused = readOnlyRefusal("Document delete");
+			if (refused) return refused;
 			const bucket = await connectionManager.getConnection();
 			const { scope_name, collection_name, document_id } = params;
 			try {

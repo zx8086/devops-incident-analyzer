@@ -369,6 +369,7 @@ export {
 	mapHttpStatusToKind,
 	type StructuredToolError,
 	type ToolErrorEnvelope,
+	ToolErrorEnvelopeSchema,
 } from "./tool-error.ts";
 export {
 	type ConnectionContext,

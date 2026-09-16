@@ -8,6 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import { type Bucket, DocumentNotFoundError } from "couchbase";
 import { getDocument } from "../src/tools/getDocumentById";
+import { parseErrorEnvelope } from "./test.utils";
 
 function makeBucket(getImpl: (id: string) => Promise<unknown>): Bucket {
 	return {
@@ -29,9 +30,9 @@ describe("getDocumentById error surfacing (SIO-1117)", () => {
 		);
 
 		expect(result.isError).toBe(true);
-		const parsed = JSON.parse((result.content[0] as { text: string }).text);
-		expect(parsed._error.kind).toBe("not-found");
-		expect(parsed._error.category).toBe("not-found");
+		const { _error } = parseErrorEnvelope(result);
+		expect(_error.kind).toBe("not-found");
+		expect(_error.category).toBe("not-found");
 	});
 
 	test("returns the document content on a successful get", async () => {
@@ -61,8 +62,8 @@ describe("getDocumentById error surfacing (SIO-1117)", () => {
 		);
 
 		expect(result.isError).toBe(true);
-		const parsed = JSON.parse((result.content[0] as { text: string }).text);
-		expect(parsed._error.kind).toBe("unknown");
-		expect(parsed._error.message).toContain("some unexpected failure");
+		const { _error } = parseErrorEnvelope(result);
+		expect(_error.kind).toBe("unknown");
+		expect(_error.message).toContain("some unexpected failure");
 	});
 });

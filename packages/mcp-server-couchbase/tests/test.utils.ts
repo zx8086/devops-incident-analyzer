@@ -1,8 +1,32 @@
 /* tests/test.utils.ts */
 
+import { type ToolErrorEnvelope, ToolErrorEnvelopeSchema } from "@devops-agent/shared";
 import type { Bucket, Cluster } from "couchbase";
 
 type ToolHandler = (input: Record<string, unknown>) => Promise<unknown>;
+
+// SIO-1119: the suite hand-rolls `JSON.parse(result.content[0].text) as { _error: ... }` in ~28
+// places, and the inline casts drifted into three different member lists for one envelope. An
+// unvalidated cast turns a malformed envelope into `undefined`, so the assertion then fails as
+// `expected undefined to be "timeout"` instead of saying the shape is wrong. Validate against the
+// shared schema so a broken envelope fails AS a broken envelope, at the parse.
+export function parseErrorEnvelope(result: unknown): ToolErrorEnvelope {
+	const text = (result as { content?: [{ text?: unknown }] })?.content?.[0]?.text;
+	if (typeof text !== "string") {
+		throw new Error(`expected a text content block, got: ${JSON.stringify(result)}`);
+	}
+	let raw: unknown;
+	try {
+		raw = JSON.parse(text);
+	} catch {
+		throw new Error(`tool result text is not JSON: ${text}`);
+	}
+	const parsed = ToolErrorEnvelopeSchema.safeParse(raw);
+	if (!parsed.success) {
+		throw new Error(`not a tool-error envelope: ${JSON.stringify(raw)} -- ${parsed.error.message}`);
+	}
+	return parsed.data;
+}
 
 export interface RecordedQuery {
 	statement: string;

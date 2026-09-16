@@ -5,6 +5,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
 import { z } from "zod";
 import { classifyCouchbaseError } from "../lib/classifyCouchbaseError";
+import { readOnlyRefusal } from "../lib/readOnlyGuard";
 import { logger } from "../utils/logger";
 import { couchbaseToolAnnotations } from "./tool-classification";
 
@@ -18,6 +19,10 @@ export const upsertDocument = async (
 	bucket: Bucket,
 ) => {
 	const { scope_name, collection_name, document_id, document_content } = params;
+	// SIO-1109: outside the try -- a policy refusal must not pass through
+	// classifyCouchbaseError, which would re-map it to an SDK-shaped kind.
+	const refused = readOnlyRefusal("Document upsert");
+	if (refused) return refused;
 	try {
 		let content: unknown;
 		try {
