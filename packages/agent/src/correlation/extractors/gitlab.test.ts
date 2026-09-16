@@ -133,7 +133,12 @@ describe("extractGitLabFindings unscoped fallback (SIO-1644)", () => {
 
 	test("undated MRs sort last rather than winning the fallback by accident", () => {
 		const out = extractGitLabFindings(
-			[mrs([{ id: 1, title: "no date" }, { id: 2, title: "dated", merged_at: "2026-09-01T00:00:00Z" }])],
+			[
+				mrs([
+					{ id: 1, title: "no date" },
+					{ id: 2, title: "dated", merged_at: "2026-09-01T00:00:00Z" },
+				]),
+			],
 			FOCUS,
 		);
 		expect(out.unscoped).toBe(true);

@@ -645,8 +645,14 @@ describe("extractKafkaFindings unscoped fallback (SIO-1644)", () => {
 
 	test("a scoped hit suppresses the fallback and carries no unscoped flag", () => {
 		const out = extractKafkaFindings(
-			[groups([{ id: "cni-plugin-consumer", state: "STABLE" }, { id: "idle-other", state: "STABLE" }]),
-			 lag("cni-plugin-consumer", "0"), lag("idle-other", "0")],
+			[
+				groups([
+					{ id: "cni-plugin-consumer", state: "STABLE" },
+					{ id: "idle-other", state: "STABLE" },
+				]),
+				lag("cni-plugin-consumer", "0"),
+				lag("idle-other", "0"),
+			],
 			FOCUS,
 		);
 		expect(out.unscoped).toBeUndefined();
