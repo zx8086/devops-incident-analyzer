@@ -33,9 +33,14 @@ const MAX_PAGES_PER_GROUP = 10;
 // A stored position older than this is skipped forward (and said so), so
 // downtime or a storm can never make the check report history as news.
 const MAX_LAG_MS = 3_600_000;
-// Events land in CloudWatch a few seconds after their timestamp; the window
-// stops short of now so a late event is read next cycle instead of skipped.
-const INGEST_SLACK_MS = 60_000;
+// The window stops short of now so an event ingested after its timestamp is
+// read next cycle instead of skipped. Measured 2026-09-16 (ingestionTime minus
+// timestamp, 16 groups in three prd accounts): ECS awslogs, Lambda, Container
+// Insights and the CloudWatch agent all under 10 s, but /aws/msk/brokers
+// delivers in ~60 s batches (p50 45 s, max 60.6 s, 5.6% over 60 s). Five
+// minutes is ~5x the worst observed delay; it costs 5 minutes of detection
+// latency on a 15-minute cycle.
+const INGEST_SLACK_MS = 300_000;
 
 export type LogsWindow = { start: number; end: number; skippedFrom: number | null };
 
