@@ -206,10 +206,19 @@ the ticket (`2e6c8349`), so it may have been filed against stale behaviour.
 
 ## 6. Things this session learned that outlive it
 
-**Greptile is active again.** `CLAUDE.md` still carries a large "Greptile Review Lifecycle
-(SUSPENDED)" section asserting the bot posts nothing. That is stale: it reviewed all five PRs this
-session and found four real issues. **That section should be un-suspended.** The merge gate is the
-`Greptile Review` status check, and its findings are worth triaging but are not themselves a gate.
+**Greptile is active again. [RESOLVED -- `CLAUDE.md` un-suspended in `a593a7f9`.]** The section
+asserting the bot posts nothing was stale: it reviewed all five PRs this session and found four
+real issues. The merge gate is the `Greptile Review` status check, and its findings are worth
+triaging but are not themselves a gate.
+
+**Two follow-on corrections**, from re-checking the reviews endpoint on #795-#799 after that
+commit landed:
+
+- Greptile does **not** reliably post an `APPROVED` review object. All five reached
+  `COMPLETED SUCCESS`; only #797 produced one, so the older #653/#652 pairing does not generalise.
+- Therefore `reviewDecision` is **not** a corroborating signal -- empty on the other four
+  finished reviews. `CLAUDE.md` recommended it through `a593a7f9`; that is now reversed. Gate on
+  the status check alone.
 
 **Verify Greptile's reasoning, not just its conclusion.** On PR #795 it claimed a mismatched error
 envelope passed validation, giving `{kind: "not-found", category: "throttled"}` as the example.
