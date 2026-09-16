@@ -31,11 +31,27 @@ const PROMPT_TOOL_BUDGET = MAX_TOOLS_PER_AGENT - MIN_ACTION_TOOLS;
 // DECREASE -- lower one when prose is trimmed, and delete the entry once it reaches
 // PROMPT_TOOL_BUDGET. Do NOT raise one to make a build green; that is the regression.
 //
-// aws-agent: RULES.md is 32.7KB and prescribes per-service protocol chains by name. Trimming it
-// to conditional phrasing is tracked as the SIO-1234 follow-up; until then composeBoundTools'
-// reserved action quota is what keeps the binding safe.
+// aws-agent: RULES.md prescribes per-service protocol chains by name. SIO-1239 lowered this from
+// 62 to 35 by converting the FLAT ENUMERATIONS to categorical phrasing -- the bullets that merely
+// listed a service's tools ("DynamoDB: list -> describe", the pagination token table, S3,
+// messaging, Lambda, CloudFormation, CloudTrail, Security Hub) now state the rule by property, the
+// way gitlab-agent's project-resolution skill already does ("no tool that takes a project_id
+// argument may be called with an unresolved project").
+//
+// The remaining 35 are NOT trimmable by the same move, and the gap to PROMPT_TOOL_BUDGET (17) is
+// deliberate rather than unfinished. Every one sits in an ORDERED chain where the name IS the
+// instruction and dropping it would license the model to guess call order: ECS
+// (list_services -> describe_services, which "REQUIRES service names ... never guess"), the
+// CloudWatch Insights poll chain, GuardDuty (get_findings REQUIRES ids from list_findings), the
+// ELB ingress chain (listeners -> target_groups -> target_health), the EC2 egress trace, and the
+// iteration-1 probe set. SIO-1234's split-async-chain incident is what happens when such a chain
+// is broken; SIO-1239's own text protects them explicitly.
+//
+// Closing the last 18 needs the tool budget itself to be re-examined (SIO-1240), not more prose
+// surgery -- 35 order-bearing names against a 17-name budget is evidence the budget may be the
+// mis-specified half. Until then composeBoundTools' reserved action quota keeps the binding safe.
 const KNOWN_OVERSUBSCRIBED: Readonly<Record<string, number>> = {
-	"aws-agent": 62,
+	"aws-agent": 35,
 	// SIO-1238 removed the gitlab-agent entry (was 18, now 16). project-resolution's STEP 1 had
 	// named five project-scoped tools as EXAMPLES of a universal rule, which cost budget and was
 	// also a latent correctness bug: a partial list invites the model to read it as exhaustive
