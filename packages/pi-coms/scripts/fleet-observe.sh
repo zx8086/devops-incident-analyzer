@@ -35,7 +35,15 @@ spokes() { bun "$HERE/fleet-spokes.ts" "$MANIFEST" "$@"; }
 watch() {
   local name=$1 profile region cols rows iid f
   read -r _ profile region < <(spokes --spoke "$name")
-  cols=$(tput cols 2>/dev/null || echo 120); rows=$(tput lines 2>/dev/null || echo 40)
+  # A pty spawned by `pane split` reports the 80x24 default until Herdr's layout
+  # engine sizes it a moment later; reading it at once streamed 80 columns into
+  # 117-column panes. Wait up to 5 s while the width still reads 80 (a genuine
+  # 80-column pane just pays that wait), then trust tput.
+  for _ in $(seq 1 20); do
+    cols=$(tput cols 2>/dev/null || echo 120); rows=$(tput lines 2>/dev/null || echo 40)
+    [ "$cols" = 80 ] || break
+    sleep 0.25
+  done
   unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
   iid=$(aws ec2 describe-instances --profile "$profile" --region "$region" \
     --filters Name=tag:Name,Values=pi-agent-agent Name=instance-state-name,Values=running \
