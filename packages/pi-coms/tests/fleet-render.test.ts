@@ -142,6 +142,11 @@ describe("fleet root renderer (SIO-1653)", () => {
 		expect(oit["main.tf"]).not.toContain("team-oit");
 	});
 
+	test("an org tag may be empty (the rule checks keys, not values)", () => {
+		const text = EXAMPLE.replace(/^(defaults:\n)/m, '$1  org_tags:\n    BlueprintID: ""\n');
+		expect(renderRoot(parseManifest(text), "eu-oit-prd")["terraform.tfvars"]).toContain('"BlueprintID" = ""');
+	});
+
 	test("org_tags may not override a pi-coms tag", () => {
 		const text = EXAMPLE.replace(/^(defaults:\n)/m, "$1  org_tags:\n    Project: hijacked\n");
 		expect(() => parseManifest(text)).toThrow("org_tags must not set a pi-coms tag");

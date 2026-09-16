@@ -75,7 +75,9 @@ export type Hub = z.infer<typeof HubSchema>;
 // silent override would detach every host from it.
 export const RESERVED_TAG_KEYS = ["Project", "ManagedBy", "Stack", "Environment", "ComsProject", "Name"];
 const OrgTagsSchema = z
-	.record(z.string().min(1).max(128), z.string().min(1).max(256))
+	// Values may be empty: the rule's InputParameters name keys only, and
+	// eu-ediservices-prd tags 68 resources with an empty BlueprintID.
+	.record(z.string().min(1).max(128), z.string().max(256))
 	.refine((tags) => !Object.keys(tags).some((k) => RESERVED_TAG_KEYS.includes(k)), {
 		message: `org_tags must not set a pi-coms tag (${RESERVED_TAG_KEYS.join(", ")})`,
 	});
