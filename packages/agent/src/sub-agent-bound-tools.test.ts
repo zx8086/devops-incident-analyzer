@@ -1,6 +1,7 @@
 // agent/src/sub-agent-bound-tools.test.ts
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { getLogger } from "@devops-agent/observability";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { buildBoundToolsBlock, composeBoundTools, describeTruncation } from "./sub-agent.ts";
 
@@ -218,5 +219,76 @@ describe("composeBoundTools truncation is observable (SIO-1767)", () => {
 		const head = tools("a", "b", "c");
 		const selected = tools("d", "e");
 		expect(namesOf(composeBoundTools(head, selected))).toEqual(["a", "b", "c", "d", "e"]);
+	});
+});
+
+// SIO-1767 (Greptile on PR #798): the tests above cover the RETURN value and the pure payload
+// helper, but not the logging contract itself -- deleting the logger.info call, or dropping its
+// dataSourceId, would leave them all green while defeating the point of the feature. Assert the
+// log directly using the SIO-1340 prototype-spy idiom from memory-backend.test.ts:136-153: every
+// getLogger() call returns a pino child sharing one prototype, so spying there captures calls
+// from the module-scoped `logger` inside sub-agent.ts, which this file cannot import.
+function spyOnLoggerInfo(): { calls: unknown[][]; restore: () => void } {
+	const proto = Object.getPrototypeOf(getLogger("spy-probe"));
+	const calls: unknown[][] = [];
+	const orig = proto.info;
+	proto.info = function (this: unknown, ...args: unknown[]) {
+		calls.push(args);
+		return orig.apply(this, args);
+	};
+	return {
+		calls,
+		restore: () => {
+			proto.info = orig;
+		},
+	};
+}
+
+describe("composeBoundTools truncation logging (SIO-1767)", () => {
+	let spy: { calls: unknown[][]; restore: () => void } | undefined;
+	afterEach(() => {
+		spy?.restore();
+		spy = undefined;
+	});
+
+	function truncationLogs(calls: unknown[][]): Array<Record<string, unknown>> {
+		return calls
+			.filter((c) => c[1] === "tool budget truncated the bound set")
+			.map((c) => c[0] as Record<string, unknown>);
+	}
+
+	test("logs once, with dataSourceId attribution, when the cap cuts", () => {
+		spy = spyOnLoggerInfo();
+		composeBoundTools(
+			tools(...Array.from({ length: 62 }, (_, i) => `head_${i}`)),
+			tools(...Array.from({ length: 40 }, (_, i) => `sel_${i}`)),
+			25,
+			8,
+			"aws",
+		);
+		const logs = truncationLogs(spy.calls);
+		expect(logs).toHaveLength(1);
+		expect(logs[0]?.dataSourceId).toBe("aws");
+		expect(logs[0]?.requested).toBe(102);
+		expect(logs[0]?.bound).toBe(25);
+		expect(logs[0]?.droppedHead).toBe(45);
+		expect(logs[0]?.droppedTail).toBe(32);
+		expect(logs[0]?.droppedNamesTruncated).toBe(true);
+	});
+
+	// The property most worth pinning: a line that fired on every turn would be noise, and the
+	// measurement it exists for would be unreadable.
+	test("stays SILENT when the composition fits under the budget", () => {
+		spy = spyOnLoggerInfo();
+		composeBoundTools(tools("a", "b", "c"), tools("d", "e"), 25, 8, "kafka");
+		expect(truncationLogs(spy.calls)).toHaveLength(0);
+	});
+
+	test("omits dataSourceId entirely rather than logging undefined when it is not supplied", () => {
+		spy = spyOnLoggerInfo();
+		composeBoundTools(tools(...Array.from({ length: 30 }, (_, i) => `h${i}`)), tools("x"), 25, 8);
+		const logs = truncationLogs(spy.calls);
+		expect(logs).toHaveLength(1);
+		expect("dataSourceId" in (logs[0] ?? {})).toBe(false);
 	});
 });
