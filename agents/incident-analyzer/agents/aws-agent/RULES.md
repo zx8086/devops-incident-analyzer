@@ -70,12 +70,16 @@ When the counts show non-zero baseline resources AND the query asks about that
 baseline (audit logging, security posture, threat detection), drill into the real
 tools instead of stopping at counts:
 
-- `AWS::CloudTrail::Trail > 0` and the query is about audit logging -> `aws_cloudtrail_describe_trails` then `aws_cloudtrail_get_trail_status` (is it actually logging?).
-- `AWS::SecurityHub::Hub` present and the query is about security posture -> `aws_securityhub_describe_hub` -> `aws_securityhub_get_enabled_standards` -> `aws_securityhub_get_findings` (severity-filtered).
-- `AWS::GuardDuty::Detector` present and the query is about threats -> `aws_guardduty_list_detectors` -> `aws_guardduty_get_detector` -> `aws_guardduty_list_findings` -> `aws_guardduty_get_findings`.
+- `AWS::CloudTrail::Trail > 0` and the query is about audit logging -> run the CloudTrail
+  drill-down below.
+- `AWS::SecurityHub::Hub` present and the query is about security posture -> run the Security Hub
+  drill-down below.
+- `AWS::GuardDuty::Detector` present and the query is about threats -> run the GuardDuty
+  drill-down below.
 
-Counts characterize the account; these tools answer the actual question. Don't report
-counts-only when the query demands trail status, finding severities, or detector state.
+Each protocol is defined once, under Service-Specific Drill-Downs; follow it there rather than
+stopping at counts. Counts characterize the account; the drill-downs answer the actual question.
+Don't report counts-only when the query demands trail status, finding severities, or detector state.
 
 ## Cross-Estate Absence Is a Finding (SIO-1149)
 
@@ -135,14 +139,16 @@ that value IS the continuation token (equivalently, the response has a top-level
 `NextToken`, `nextToken`, `Marker`, `NextMarker`, or `PaginationToken`). Re-invoke the SAME
 tool with the SAME args plus that token value, passed in the tool's pagination input argument:
 
-- `nextToken`: `aws_ec2_*`, `aws_ecs_list_*`, `aws_config_list_discovered_resources`,
-  `aws_stepfunctions_list_state_machines`, `aws_logs_describe_log_groups`,
-  `aws_health_describe_events`
-- `NextToken`: `aws_cloudwatch_describe_alarms`, `aws_cloudformation_*`,
-  `aws_config_describe_config_rules`, `aws_sns_list_topics`
-- `Marker`: `aws_rds_describe_db_*`, `aws_elasticache_describe_*`,
-  `aws_lambda_list_functions` (Lambda's response names the token `NextMarker`; pass it back as `Marker`)
-- `PaginationToken`: `aws_resourcegroupstagging_get_resources`
+Which argument carries it is a per-service convention, not something to memorise as a list.
+Read the tool's own input schema: the pagination argument is the one named for a continuation
+token, and it is exactly one of these four spellings.
+
+- `nextToken` -- EC2, ECS list calls, Config resource listing, Step Functions, CloudWatch Logs
+  group discovery, AWS Health.
+- `NextToken` -- CloudWatch alarms, CloudFormation, Config rules, SNS.
+- `Marker` -- RDS describe-db calls, ElastiCache, Lambda function listing (Lambda's response
+  names the token `NextMarker`; pass it back as `Marker`).
+- `PaginationToken` -- Resource Groups Tagging.
 
 The response field and the input argument can differ in case OR name (e.g. EC2 returns
 `NextToken` but the input arg is `nextToken`; Lambda returns `NextMarker` but the input arg
@@ -187,11 +193,12 @@ and quote `_truncated.shown` and `_truncated.total`.
 
 When the dispatched request or the investigation focus names a specific service or resource:
 
-- EC2/VPC: `aws_ec2_describe_instances` (filter by tag or by instanceIds) -> `aws_ec2_describe_vpcs` if network context is needed
+- EC2/VPC: the instance describe call (filter by tag or by instanceIds), then the VPC describe call
+  if network context is needed.
 - **Network path (connectivity / "service can't reach X" / NAT / PrivateLink / broker-unreachable incidents).** When a service in a private subnet cannot reach a dependency (MSK/Confluent bootstrap, a third-party API, another VPC), trace the egress path deterministically — do NOT stop at the security group:
     1. `aws_ec2_describe_network_interfaces` (filter by the task's private IP or the ECS ENI) -> get the `SubnetId` and `VpcId` the workload actually runs in.
     2. `aws_ec2_describe_route_tables` with `filters: [{ Name: "association.subnet-id", Values: ["<subnet>"] }]` -> read `Routes[]`. **If this returns nothing, the subnet is IMPLICITLY associated with the VPC main route table** (EC2 omits implicitly-associated subnets from the explicit association list, so a subnet-id filter finds no table). Re-query with `filters: [{ Name: "vpc-id", Values: ["<vpc>"] }, { Name: "association.main", Values: ["true"] }]` and read that table — do NOT conclude "no route table" from an empty subnet-filter result. The `0.0.0.0/0` (or the dependency's CIDR) route names the egress target: `NatGatewayId` (internet via NAT), `TransitGatewayId` (hub/peer VPC), `GatewayId` starting `vpce-` (a gateway VPC endpoint) or `igw-` (internet gateway), or `VpcPeeringConnectionId`.
-    3. Confirm that target is healthy: `aws_ec2_describe_nat_gateways` (State=available), `aws_ec2_describe_vpc_endpoints` (State=available, and its backing ENIs), `aws_ec2_describe_transit_gateways`, or `aws_ec2_describe_vpc_peering_connections` (Status.Code=active) — whichever the route named.
+    3. Confirm that target is healthy, using whichever EC2 describe call matches the target the route named -- NAT gateway (State=available), VPC endpoint (State=available, and its backing ENIs), transit gateway, or VPC peering connection (Status.Code=active). One call, for the named target only; do not sweep all four.
     4. Confirm the packet is allowed both ways: `aws_ec2_describe_security_groups` (egress rules) AND `aws_ec2_describe_network_acls` for the subnet (a NACL deny on the ephemeral return-port range is a common SG-invisible failure).
     5. Before concluding "no packet-level evidence," call `aws_ec2_describe_flow_logs` (filter by `resource-id` = the vpc/subnet/eni) to check flow logging is even enabled. Read each flow log's `LogDestinationType`: only when it is `cloud-watch-logs` is the content in a CloudWatch log group (`LogDestination` names the ARN; read it via `aws_logs_*`, commonly `/vpc/flow-logs/*`). If `LogDestinationType` is `s3` or `kinesis-data-firehose`, the content is NOT reachable from this read surface — report the configured `LogDestination` (bucket / Firehose stream) as the location and note it is unavailable to the agent, rather than assuming a CloudWatch group.
   Report the actual route target and each hop's state. "The subnet routes 0.0.0.0/0 to nat-abc which is available" is a grounded finding; "probably a NAT timeout" without describing the route table is not.
@@ -214,7 +221,8 @@ When the dispatched request or the investigation focus names a specific service 
     4. The resolved chain (record -> LB -> listener -> target group -> healthy/unhealthy targets) feeds BOTH the diagnosis (an unhealthy target or a record pointing at a stale LB is a grounded finding) AND the incident network map — report each hop with its state, not just the conclusion.
 - **Placement baseline (SIO-1208).** On ANY service incident — even when the error looks purely application-level — also capture the focus service's placement layer: `aws_ecs_list_tasks` + `aws_ecs_describe_tasks` for the focus service (task ENIs carry the private IPs and subnet ids), then `aws_ec2_describe_subnets` for those subnet ids. This feeds the incident network map and the knowledge graph's IP bindings; the supervisor deterministically backfills it if you skip it, but fetching it yourself lets you cite placement (which node/subnet the failing tasks run in) as evidence. Additionally run the `ingress_state` chain whenever an upstream gateway URL or hostname appears in task-definition environment, configs, or the error text — the entry path is part of the incident even if the failure is downstream.
 - ECS: `aws_ecs_list_clusters` -> `aws_ecs_list_services` (per cluster) -> `aws_ecs_describe_services` -> `aws_ecs_list_tasks` -> `aws_ecs_describe_tasks` (in that order; `aws_ecs_describe_services` REQUIRES service names from `aws_ecs_list_services` — never guess). When correlating a service incident to a backend datastore (e.g. a service timing out while an RDS instance is hot), call `aws_ecs_describe_task_definition` with the `taskDefinition` from `aws_ecs_describe_services` and read its `containerDefinitions[].environment` / `.secrets` to CONFIRM which DB endpoint the service uses — do not assert the link from temporal overlap alone.
-- Lambda: `aws_lambda_list_functions` (paginated) for inventory; `aws_lambda_get_function_configuration` for a single function's runtime/env/timeout
+- Lambda: the function-listing call gives inventory (paginated); the single-function configuration
+  call gives one function's runtime, env and timeout.
 - RDS: `aws_rds_describe_db_instances` (instances) or `aws_rds_describe_db_clusters` (Aurora clusters). When an RDS CPU alarm is firing (or CPU is sustained-high), follow up with `aws_cloudwatch_get_metric_data` for namespace `AWS/RDS` dimension `DBInstanceIdentifier`, metrics `DatabaseConnections`, `ReadLatency`, and `WriteLatency` over the same window — this distinguishes connection-count pressure from query-load pressure and is required before recommending pool-size vs query-optimization remediation.
 - **Fleet-wide top-N triage (Metrics Insights).** Two sibling metric tools; pick by whether the resource is known:
     - Resource KNOWN (an alarm dimension, a named service) -> `aws_cloudwatch_get_metric_data` with a MetricStat query on its exact namespace + dimensions.
@@ -230,9 +238,10 @@ When the dispatched request or the investigation focus names a specific service 
         8. Top-10 MSK brokers by CPU: `SELECT AVG(CpuUser) FROM SCHEMA("AWS/Kafka", "Cluster Name", "Broker ID") GROUP BY "Broker ID" ORDER BY AVG() DESC LIMIT 10`
     - **AWS/Kafka statistic rules.** Read the offset-lag family (`SumOffsetLag`, `MaxOffsetLag`, `EstimatedMaxTimeLag`) with `Maximum`; `Average` hides a single hot partition. Controller-emitted cluster metrics (`ActiveControllerCount`, `OfflinePartitionsCount`, `GlobalPartitionCount`) are reported by every broker but only the controller reports the real value and the rest report 0, so read them with `Maximum`, never `Average` (Average returns about 1/N of the truth on an N-broker cluster). Metric names such as ConsumerLag, RecordLag, or EstimatedMaximumLag do not exist; do not query them.
     - On a `bad-input` error, copy a library query verbatim and substitute — never invent grammar. The `_error.advice` restates the grammar; follow it.
-- DynamoDB: `aws_dynamodb_list_tables` -> `aws_dynamodb_describe_table` for a specific table
-- S3: `aws_s3_list_buckets` -> `aws_s3_get_bucket_location` (region check) -> `aws_s3_get_bucket_policy_status` (public-access check)
-- Messaging: `aws_sns_list_topics`, `aws_sqs_list_queues`, `aws_eventbridge_list_rules`, `aws_stepfunctions_list_state_machines`
+- DynamoDB, S3, and the messaging services (SNS, SQS, EventBridge, Step Functions): the shape is
+  the same everywhere -- the service's `list` call enumerates, the matching `describe`/`get` call
+  details one named resource. Enumerate first and pass a real name; never guess one. For S3 the
+  detail calls worth making are the bucket's location (region check) and its public-access status.
 - Tracing: NOT via X-Ray in these estates -- see "Estate Observability Topology" above (OTel -> Elastic APM). Defer trace-chain questions to the elastic datasource; do not call `aws_xray_*` for trace retrieval.
 - Logs: `aws_logs_describe_log_groups` (find the group) -> `aws_logs_start_query` -> `aws_logs_get_query_results` (Insights polling pattern).
     - **`aws_logs_get_query_results` "invalid queryId".** A queryId is estate/region-scoped and short-lived: poll it with the SAME `estate` you passed to `aws_logs_start_query`, and it expires. If `get_query_results` rejects the queryId as invalid, do NOT re-poll it — re-issue `aws_logs_start_query` for the SAME estate and log group, then poll the NEW queryId it returns. A `status` of `Running`/`Scheduled` is not an error — keep polling that same id; only re-issue on an invalid-id error or `Failed`/`Timeout` status.
@@ -262,10 +271,17 @@ When the dispatched request or the investigation focus names a specific service 
         1. If your last `start_query` used an absolute `startTime`/`endTime`, RE-ISSUE with `startRelative: "now-30d"` (drift-proof) — a mis-dated or wrong-unit (ms-vs-seconds) absolute epoch lands ~50,000 years out and reads as "outside retention". A different window is a legitimate retry; the loop guard allows a distinct window.
         2. If a relative-window retry STILL fails, the query string itself is likely the problem — simplify to `fields @timestamp, @message | limit 20` and filter client-side.
         3. Only if BOTH a recent relative window AND a minimal query fail do you report the gap — and phrase it as "the log query could not be constructed for this estate", never "logs expired/absent" (you never observed absence). Re-issuing the IDENTICAL failed query is always wrong; change the window or the query each attempt.
-- Deployment context: `aws_cloudformation_list_stacks` -> `aws_cloudformation_describe_stacks` (status, outputs) -> `aws_cloudformation_describe_stack_events` (failure diagnosis)
-- Tag discovery: `aws_resourcegroupstagging_get_resources` to find all resources matching a team/env tag across services
-- CloudTrail: `aws_cloudtrail_describe_trails` (trail config: multi-region, S3 target, KMS) or `aws_cloudtrail_list_trails` (cross-region enumeration) -> `aws_cloudtrail_get_trail_status` (is the trail actually logging? `IsLogging`, `LatestDeliveryError`). Use for "was CloudTrail disabled / is audit logging broken" questions.
-- Security Hub: `aws_securityhub_describe_hub` (is Security Hub enabled?) -> `aws_securityhub_get_enabled_standards` (CIS / AWS Foundational / PCI) -> `aws_securityhub_get_findings` (filter by `severityLabels`, e.g. CRITICAL/HIGH)
+- Deployment context (CloudFormation): list stacks, then describe a named stack for status and
+  outputs, then read its stack EVENTS -- the events are where a failure reason actually lives, so
+  do not stop at the stack's status.
+- Tag discovery: the Resource Groups Tagging read finds all resources matching a team/env tag
+  across services in one call.
+- CloudTrail: read the trail configuration (multi-region, S3 target, KMS), then its STATUS --
+  configuration alone does not answer "is audit logging broken". The status fields that matter are
+  `IsLogging` and `LatestDeliveryError`. Use for "was CloudTrail disabled" questions.
+- Security Hub: check the hub is enabled, then which standards are on (CIS / AWS Foundational /
+  PCI), then the findings, filtered by `severityLabels` (e.g. CRITICAL/HIGH). Reporting findings
+  without saying which standards are enabled makes the count uninterpretable.
 - GuardDuty: `aws_guardduty_list_detectors` -> `aws_guardduty_get_detector` (enabled? data sources) -> `aws_guardduty_list_findings` (filter by `minSeverity`) -> `aws_guardduty_get_findings` (in that order; `aws_guardduty_get_findings` REQUIRES the IDs from `aws_guardduty_list_findings` — never guess them)
 
 ## Error Handling
