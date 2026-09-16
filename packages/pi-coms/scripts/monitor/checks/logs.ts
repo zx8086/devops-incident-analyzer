@@ -22,6 +22,36 @@ const MAX_GROUPS = 200;
 const EXCLUDE_PREFIXES = ["/aws/events/"];
 const MAX_SIGS_PER_GROUP = 3;
 const MAX_FINDINGS_PER_CYCLE = 10;
+// SIO-1753: FilterLogEvents returns about 1 MB per page, oldest first, and a
+// nextToken even on a partial page. Reading one page per cycle pinned
+// catalog-prd-log-group inside a 2026-09-09 error storm (4832 matches per ~10 s,
+// one page per 15 min) for a week, so every "current" finding was a week old.
+// Pages are followed up to a budget; past it the counts are a lower bound and
+// the window is still closed, because a current capped count beats a complete
+// stale one.
+const MAX_PAGES_PER_GROUP = 10;
+// A stored position older than this is skipped forward (and said so), so
+// downtime or a storm can never make the check report history as news.
+const MAX_LAG_MS = 3_600_000;
+// Events land in CloudWatch a few seconds after their timestamp; the window
+// stops short of now so a late event is read next cycle instead of skipped.
+const INGEST_SLACK_MS = 60_000;
+
+export type LogsWindow = { start: number; end: number; skippedFrom: number | null };
+
+// The window is [start, end], both inclusive in FilterLogEvents, so the next
+// cycle's watermark is end + 1.
+export function logsWindow(
+	watermark: number | null,
+	now: number,
+	o: { lookbackMs: number; maxLagMs: number; slackMs: number },
+): LogsWindow {
+	const end = now - o.slackMs;
+	if (watermark === null) return { start: end - o.lookbackMs, end, skippedFrom: null };
+	const floor = end - o.maxLagMs;
+	if (watermark < floor) return { start: floor, end, skippedFrom: watermark };
+	return { start: Math.min(watermark, end), end, skippedFrom: null };
+}
 
 // Stable signature for grouping: recurring errors differ only in ids,
 // timestamps, and counters.
@@ -73,6 +103,9 @@ export type CheckLogsOpts = {
 	excludePrefixes?: string[];
 	maxSigsPerGroup?: number;
 	maxFindingsPerCycle?: number;
+	maxPagesPerGroup?: number;
+	maxLagMs?: number;
+	slackMs?: number;
 };
 
 export async function checkLogs(client: AwsClient, state: MonitorState, opts: CheckLogsOpts = {}): Promise<Finding[]> {
@@ -84,10 +117,17 @@ export async function checkLogs(client: AwsClient, state: MonitorState, opts: Ch
 	const excludePrefixes = opts.excludePrefixes ?? EXCLUDE_PREFIXES;
 	const maxSigsPerGroup = opts.maxSigsPerGroup ?? MAX_SIGS_PER_GROUP;
 	const maxFindingsPerCycle = opts.maxFindingsPerCycle ?? MAX_FINDINGS_PER_CYCLE;
+	const maxPages = opts.maxPagesPerGroup ?? MAX_PAGES_PER_GROUP;
+	const windowOpts = { lookbackMs, maxLagMs: opts.maxLagMs ?? MAX_LAG_MS, slackMs: opts.slackMs ?? INGEST_SLACK_MS };
 	const findings: Finding[] = [];
+	// The cap bounds investigations, so only warn findings spend it.
+	let warned = 0;
 	// (group, signature, count) that hit a cap this cycle: journaled as one
 	// info finding so history survives without an investigation storm.
 	const overflow: { group: string; signature: string; count: number }[] = [];
+	// Groups whose stored position was past the lag bound. One notice per cycle,
+	// not per group: after downtime every group is behind at once.
+	const skipped: { group: string; from: string; resumedAt: string }[] = [];
 
 	// Paginate: DescribeLogGroups caps pages at 50 and sorts alphabetically,
 	// so a single page permanently hides every group after the 50th.
@@ -113,17 +153,34 @@ export async function checkLogs(client: AwsClient, state: MonitorState, opts: Ch
 	const groupErrors: string[] = [];
 	for (const group of groups) {
 		const wmKey = `logs:${group}`;
-		const since = state.getWatermark(wmKey) ?? now - lookbackMs;
-		let resp: FilterLogEventsCommandOutput;
+		const win = logsWindow(state.getWatermark(wmKey), now, windowOpts);
+		const bySig = new Map<string, { count: number; sample: string; lastTs: number }>();
+		let truncated = false;
 		try {
-			resp = (await client.send(
-				new FilterLogEventsCommand({
-					logGroupName: group,
-					startTime: since,
-					endTime: now,
-					filterPattern,
-				}),
-			)) as FilterLogEventsCommandOutput;
+			let token: string | undefined;
+			let pages = 0;
+			do {
+				const resp = (await client.send(
+					new FilterLogEventsCommand({
+						logGroupName: group,
+						startTime: win.start,
+						endTime: win.end,
+						filterPattern,
+						nextToken: token,
+					}),
+				)) as FilterLogEventsCommandOutput;
+				pages++;
+				// FilteredLogEvent marks both fields optional; every real event carries them.
+				for (const e of (resp.events ?? []) as { timestamp: number; message: string }[]) {
+					const sig = logSignature(e.message ?? "");
+					const cur = bySig.get(sig) ?? { count: 0, sample: (e.message ?? "").slice(0, 300), lastTs: e.timestamp };
+					cur.count++;
+					cur.lastTs = Math.max(cur.lastTs, e.timestamp);
+					bySig.set(sig, cur);
+				}
+				token = resp.nextToken;
+			} while (token && pages < maxPages);
+			truncated = token !== undefined;
 		} catch (e) {
 			const msg = errorMessage(e);
 			if (/not authorized|AccessDenied|UnauthorizedOperation/i.test(msg)) {
@@ -143,27 +200,17 @@ export async function checkLogs(client: AwsClient, state: MonitorState, opts: Ch
 			} else {
 				groupErrors.push(`${group}: ${msg}`);
 			}
+			// A failed scan keeps the old position: nothing in the window was read.
 			continue;
 		}
-		// FilteredLogEvent marks both fields optional; every real event carries them.
-		const events = (resp.events ?? []) as { timestamp: number; message: string }[];
-		if (events.length === 0) continue;
+		// Closed even when truncated or empty: an empty window that never closed
+		// is how a quiet group's scan used to grow without bound.
+		state.setWatermark(wmKey, win.end + 1);
+		const windowEvidence = { from: new Date(win.start).toISOString(), to: new Date(win.end).toISOString() };
 
-		let maxTs = since;
-		const bySig = new Map<string, { count: number; sample: string; lastTs: number }>();
-		for (const e of events) {
-			if (e.timestamp > maxTs) maxTs = e.timestamp;
-			const sig = logSignature(e.message ?? "");
-			const cur = bySig.get(sig) ?? {
-				count: 0,
-				sample: (e.message ?? "").slice(0, 300),
-				lastTs: e.timestamp,
-			};
-			cur.count++;
-			cur.lastTs = Math.max(cur.lastTs, e.timestamp);
-			bySig.set(sig, cur);
+		if (win.skippedFrom !== null) {
+			skipped.push({ group, from: new Date(win.skippedFrom).toISOString(), resumedAt: windowEvidence.from });
 		}
-		state.setWatermark(wmKey, maxTs + 1);
 
 		// Loudest signatures first; everything past the caps is history, not
 		// an alert.
@@ -172,25 +219,46 @@ export async function checkLogs(client: AwsClient, state: MonitorState, opts: Ch
 		for (const [sig, agg] of ranked) {
 			const key = `logs:${group}:${sig}`;
 			if (!state.shouldAlert(key, reAlertMs)) continue;
-			if (emitted >= maxSigsPerGroup || findings.length >= maxFindingsPerCycle) {
+			if (emitted >= maxSigsPerGroup || warned >= maxFindingsPerCycle) {
 				overflow.push({ group, signature: sig, count: agg.count });
 				continue;
 			}
 			state.markAlerted(key, "logs");
 			emitted++;
+			warned++;
 			const excerpt = summariseLogSample(agg.sample);
+			const count = truncated ? `at least ${agg.count}` : `${agg.count}`;
 			findings.push({
 				family: "logs",
 				severity: "warn",
 				resource: group,
-				summary: excerpt ? `${agg.count} error-pattern event(s): ${excerpt}` : `${agg.count} error-pattern event(s)`,
+				summary: excerpt ? `${count} error-pattern event(s): ${excerpt}` : `${count} error-pattern event(s)`,
 				dedup_key: key,
-				evidence: { count: agg.count, sample: agg.sample, signature: sig },
+				// The window travels with the finding so the investigating agent
+				// queries the same time range instead of guessing one.
+				evidence: {
+					count: agg.count,
+					sample: agg.sample,
+					signature: sig,
+					window: windowEvidence,
+					...(truncated ? { truncated: true } : {}),
+				},
 				at: new Date(now).toISOString(),
 			});
 		}
 	}
 
+	if (skipped.length > 0) {
+		findings.push({
+			family: "logs",
+			severity: "info",
+			resource: "logs-skipped",
+			summary: `${skipped.length} log group(s) were more than ${windowOpts.maxLagMs / 3_600_000}h behind and skipped forward (errors in the gap are not reported)`,
+			dedup_key: `logs:skipped:${new Date(now).toISOString()}`,
+			evidence: { skipped },
+			at: new Date(now).toISOString(),
+		});
+	}
 	if (overflow.length > 0) {
 		findings.push({
 			family: "logs",
