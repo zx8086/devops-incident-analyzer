@@ -981,22 +981,32 @@ function markRecoveredToolErrors(
 // enforces a hard cap of 25 tools per agent." So it was a context-overflow guard, sized against
 // Opus 4.6, and never revisited.
 //
-// WHY 25 TODAY -- a DIFFERENT reason, which is the point of documenting it: the overflow
-// rationale is effectively dead (SIO-1213 moved the fleet to Sonnet 5 / Opus 4.8; the largest
-// sub-agent RULES.md, aws-agent, is 37,333 bytes / ~10k tokens as of 2026-09-16, nowhere near
-// a modern window). What the cap actually buys now is TOOL-SELECTION QUALITY: a small, relevant belt so
-// the model picks well. SIO-1228 and SIO-1234 both reason about it that way, and MIN_ACTION_TOOLS
-// below exists to protect query-relevant tools inside this ceiling. That purpose has never been
-// measured at any value.
+// WHY 25 TODAY -- a DIFFERENT reason, which is the point of documenting it. What the cap
+// actually buys now is TOOL-SELECTION QUALITY: a small, relevant belt so the model picks well.
+// SIO-1228 and SIO-1234 both reason about it that way, and MIN_ACTION_TOOLS below exists to
+// protect query-relevant tools inside this ceiling. That purpose has never been measured at
+// any value.
 //
 // DO NOT raise it on context-window grounds alone -- that swaps one unmeasured number for
 // another and weakens a constraint current code depends on for a purpose cc914c31 never
 // intended. Sizing it needs evidence about selection quality, not headroom.
 //
-// The budget is tight: with MIN_ACTION_TOOLS reserving 8, the prompt-name budget is 17, and
-// SIO-1238 reported kafka-agent and capella-agent both sitting at 16 (not re-measured here --
-// the count spans RULES.md plus the loaded SKILL.md bodies, so a grep of RULES.md alone
-// understates it; treat the figure as that ticket's, and re-derive before acting on it).
+// And do not assume the headroom is there. Greptile on PR #797 corrected an earlier draft of
+// this comment that claimed the overflow rationale was dead because "the fleet moved to
+// Sonnet 5 / Opus 4.8". That conflates two things: SIO-1213 moved the ROOT ORCHESTRATOR roles,
+// but every sub-agent manifest still declares claude-sonnet-4-6 (14 occurrences across the
+// seven agents/incident-analyzer/agents/*/agent.yaml, zero Sonnet 5) -- and the sub-agents are
+// what this cap governs. Nor is RULES.md the whole input: the bound model also receives the
+// loaded SKILL.md bodies, focus context, and every bound tool's name, description and JSON
+// schema. So the true per-turn input is materially larger than any RULES.md byte count, and
+// nobody has measured it. Treat "there is plenty of room" as UNVERIFIED, not as established.
+//
+// The derived prompt-name budget is MAX_TOOLS_PER_AGENT - MIN_ACTION_TOOLS = 17, enforced as
+// PROMPT_TOOL_BUDGET in gitagent-bridge/src/skill-tool-coverage.test.ts:28. That test is the
+// authority on who is over it -- read KNOWN_OVERSUBSCRIBED there rather than any figure quoted
+// in a ticket. As of 2026-09-16 the only entry is aws-agent at 62; SIO-1238 removed gitlab-agent
+// (18 -> 16). Note that test hardcodes its own copy of this constant (`:21`, "keep in sync"),
+// so changing the value here silently desynchronizes the budget it enforces until both move.
 //
 // NOT YET MEASURED (SIO-1240 acceptance criteria 2-4, deliberately left open):
 //   - No telemetry says how often the cap actually bites. composeBoundTools truncates SILENTLY:
