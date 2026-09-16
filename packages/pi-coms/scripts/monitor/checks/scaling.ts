@@ -91,8 +91,12 @@ export async function checkScaling(
 	}
 
 	const findings: Finding[] = [];
-	let truncated = false;
-	for (const [sig, group] of groups) {
+	// Indexed, so hitting the cap on the LAST cause is not mistaken for an
+	// overflow: what matters is whether anything is left unprocessed, not
+	// whether the cap was reached.
+	const ordered = [...groups.entries()];
+	let omitted = 0;
+	for (const [i, [sig, group]] of ordered.entries()) {
 		const names = [...new Set(group.map((a) => a.AutoScalingGroupName ?? "unknown"))];
 		const resource = names.length === 1 ? (names[0] as string) : "asg:batch";
 		const key = `scaling:${resource}:${sig.slice(0, 80)}`;
@@ -129,7 +133,10 @@ export async function checkScaling(
 			at,
 		});
 		if (findings.length >= MAX_FINDINGS) {
-			truncated = true;
+			// Count what is genuinely left, rather than deriving it from
+			// findings.length: a cause the fingerprint already suppressed was
+			// processed, not omitted, and subtracting would inflate the number.
+			omitted = ordered.length - (i + 1);
 			break;
 		}
 	}
@@ -139,15 +146,14 @@ export async function checkScaling(
 	// that had advanced past it. So the omitted groups are named, and the
 	// watermark is held back so they are re-collected next cycle (their
 	// fingerprints stop the emitted ones repeating).
-	if (truncated) {
-		const omitted = groups.size - findings.length;
+	if (omitted > 0) {
 		findings.push({
 			family: "scaling",
 			severity: "info",
 			resource: "asg:overflow",
 			summary: `${omitted} further scaling-failure cause(s) not reported this cycle (cap ${MAX_FINDINGS}); re-read next cycle`,
 			dedup_key: `scaling:overflow:${at.slice(0, 16)}`,
-			evidence: { omitted, cap: MAX_FINDINGS, totalCauses: groups.size },
+			evidence: { omitted, cap: MAX_FINDINGS, totalCauses: ordered.length },
 			at,
 		});
 	} else {
