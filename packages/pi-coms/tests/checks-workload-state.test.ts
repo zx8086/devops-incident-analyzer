@@ -16,6 +16,8 @@ import { classifyServiceEvent } from "../scripts/monitor/checks/tasks.ts";
 import {
 	ASG_ACTIVITIES_OBSERVED,
 	ASG_ACTIVITY_FIELDS_OBSERVED,
+	ECS_DOCUMENTED_FAILURE_EVENTS,
+	ECS_DOCUMENTED_SELF_HEALING,
 	ECS_EVENTS_OBSERVED,
 	ELBV2_TARGET_HEALTH_HEALTHY,
 	SQS_ATTRIBUTE_NAMES_OBSERVED,
@@ -68,6 +70,34 @@ describe("ECS event classification, against the real event corpus", () => {
 		const unhealthy = ECS_EVENTS_OBSERVED.filter((e) => e.message.includes("is unhealthy in (target-group"));
 		expect(unhealthy.length).toBeGreaterThan(0);
 		for (const e of unhealthy) expect(classifyServiceEvent(e.message)).toBeNull();
+	});
+
+	// Every documented failure event must classify. The corpus cannot supply
+	// these, so AWS's own message list is the source.
+	test("every documented ECS failure event classifies, with the expected label", () => {
+		for (const { message, label } of ECS_DOCUMENTED_FAILURE_EVENTS) {
+			const got = classifyServiceEvent(message);
+			expect({ message, label: got?.label ?? null }).toEqual({ message, label });
+		}
+	});
+
+	// The pattern list went from 3 to 13 when it was rebuilt from the docs.
+	// Broader patterns are the obvious way to reintroduce noise, so the corpus
+	// regression has to be re-run against the wider list, not just the old one.
+	test("widening the list to the documented failures still classifies all routine corpus events as nothing", () => {
+		const FAILURES = [
+			"deployment failed: tasks failed to start",
+			"rolling back to deployment",
+			"was unable to reach steady state",
+		];
+		const misfires = ECS_EVENTS_OBSERVED.filter(
+			(e) => !FAILURES.some((f) => e.message.includes(f)) && classifyServiceEvent(e.message) !== null,
+		);
+		expect(misfires).toEqual([]);
+	});
+
+	test("the documented ELB-shaped unhealthy event is excluded too", () => {
+		expect(classifyServiceEvent(ECS_DOCUMENTED_SELF_HEALING)).toBeNull();
 	});
 
 	test("routine lifecycle chatter stays silent", () => {

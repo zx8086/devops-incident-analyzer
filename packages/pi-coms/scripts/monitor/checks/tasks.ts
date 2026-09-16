@@ -39,38 +39,74 @@ const REALERT_MS = 86_400_000;
 const MAX_FINDINGS = 10;
 const EVENT_WINDOW_MS = 3_600_000;
 
-// Event classification, derived from a real corpus rather than from memory.
+// Event classification. Two sources, each answering a different question.
 //
-// The first version of this list was written from what ECS event text was
-// assumed to look like, and tested against a fake client that echoed those
-// assumptions back. Against 2190 real service events from 22 production
-// services, all five patterns matched NOTHING: the real wording for a failing
-// health check is "is unhealthy in (target-group ...) due to (reason Health
-// checks failed with these codes: [503])", not "failed container health
-// checks". The whole signal was dead code that tested green.
+// WHICH FAILURE EVENTS EXIST comes from AWS's own service event message list
+// (docs.aws.amazon.com/AmazonECS/latest/developerguide/service-event-messages-list.html),
+// because a failure is rare by construction: a sample of mostly-healthy
+// services cannot enumerate them. An earlier revision deleted the crash-loop
+// pattern precisely because it was absent from a healthy corpus, which was the
+// wrong inference -- absence of a failure in a healthy sample is not evidence
+// the failure does not exist.
 //
-// So this list contains only shapes observed in production (see
-// tests/aws-samples.ts for the corpus and counts). Extend it from real
-// observations, never from recollection of the AWS docs.
+// WHICH EVENTS ARE ROUTINE comes from the real corpus (tests/aws-samples.ts:
+// 2190 events, 22 production services). That is what a corpus is good for, and
+// it is decisive: "has reached a steady state" alone occurs 1602 times.
 //
-// Deliberately NOT classified, though it is the most common failure-SHAPED
-// event at 27 occurrences: "(task ...) (port ...) is unhealthy in
-// (target-group ...)". ECS replaces those tasks itself and the service returns
-// to steady state; the corpus shows exactly that. Persistent unhealthy targets
-// belong to checks/targets.ts, which gates them on two consecutive cycles.
+// The original mistake this guards against was neither of those -- it was
+// inventing the wording. "failed container health checks" is not a string ECS
+// ever emits, and it was tested against a fake client that echoed it back.
 const EVENT_FAILURES: { pattern: RegExp; severity: Severity; label: string }[] = [
-	// ECS states the failure outright; the deployment did not come up.
+	// The scheduler has given up retrying at normal speed. This is the crash
+	// loop that counts cannot see: tasks die and are replaced fast enough that
+	// runningCount never drops below desiredCount.
+	{ pattern: /is unable to consistently start tasks successfully/i, severity: "critical", label: "crash loop" },
+	// The circuit breaker: the deployment did not come up. Observed in the corpus.
 	{
 		pattern: /deployment failed: tasks failed to start/i,
 		severity: "critical",
 		label: "deployment failed to start tasks",
 	},
-	// The circuit breaker acting: a rollback is never routine.
+	// ECS can no longer maintain the service at all.
+	{
+		pattern: /IAM (?:permissions policies|trust relationship) (?:have|has) been misconfigured/i,
+		severity: "critical",
+		label: "IAM misconfigured",
+	},
+	// Observed in the corpus: the circuit breaker reverting a deployment.
 	{ pattern: /rolling back to deployment/i, severity: "warn", label: "deployment rolled back" },
-	// A deployment that cannot converge. Observed as scale-in blocked by task
-	// protection, but the prefix covers every reason ECS gives for it.
-	{ pattern: /was unable to reach steady state because/i, severity: "warn", label: "cannot reach steady state" },
+	// Capacity. Covers the bare form and every "Reason:" variant the docs list
+	// (concurrent task limit, vCPU limit, CPU/MEMORY above limit, capacity
+	// unavailable, internal error).
+	{ pattern: /was unable to place a task/i, severity: "warn", label: "cannot place task" },
+	{
+		pattern: /tasks provisioning capacity limit was exceeded/i,
+		severity: "warn",
+		label: "provisioning capacity limit",
+	},
+	// Deployment cannot converge. Observed in the corpus as a scale-in blocked
+	// by task protection; the docs also list a capacity-provider variant.
+	{ pattern: /was unable to reach steady state/i, severity: "warn", label: "cannot reach steady state" },
+	{ pattern: /could not launch \d+ tasks? for deployment/i, severity: "warn", label: "could not launch tasks" },
+	{
+		pattern: /was unable to stop or start tasks during a deployment/i,
+		severity: "warn",
+		label: "deployment configuration blocks replacement",
+	},
+	{ pattern: /operations are being throttled/i, severity: "warn", label: "scheduler throttled" },
+	{ pattern: /Timed out waiting for Amazon ECS Agent to start/i, severity: "warn", label: "ECS agent did not start" },
+	// A misconfigured target group, which unlike an unhealthy target does not
+	// heal on its own.
+	{ pattern: /TARGET (?:GROUP )?IS NOT FOUND/i, severity: "warn", label: "target group missing" },
 ];
+
+// Deliberately NOT classified: "(task ...) is unhealthy in (target-group ...)"
+// and its "(elb ...)" variant. 27 occurrences in the corpus, every one
+// self-healed -- ECS replaced the tasks and the service returned to steady
+// state. checks/targets.ts owns persistent unhealthy targets behind a
+// two-cycle gate; classifying them here would report a deployment as an
+// incident. This exclusion is evidence-backed, which is the one thing the
+// corpus can settle that the docs cannot.
 
 export type CheckTasksOpts = { now?: number };
 
@@ -120,6 +156,12 @@ export async function checkTasks(
 	const prev = state.getSnapshot("ecs-services") ?? {};
 	const current: Record<string, string> = {};
 	const stillFailing = new Set<string>();
+	// A capped scan must not write state as though it had seen everything: the
+	// services it never reached would lose their shortfall history and have
+	// their fingerprints cleared, so the next cycle re-alerts and the two-cycle
+	// gate restarts from zero.
+	const scanned = new Set<string>();
+	let truncated = false;
 	const eventSince = state.getWatermark("tasks:events") ?? now - EVENT_WINDOW_MS;
 	let newestEvent = eventSince;
 
@@ -139,6 +181,7 @@ export async function checkTasks(
 				const running = svc.runningCount ?? 0;
 				const short = desired > 0 && running < desired;
 				current[resource] = short ? `short:${running}/${desired}` : "ok";
+				scanned.add(resource);
 
 				// 1. The circuit breaker has already ruled.
 				const failed = (svc.deployments ?? []).filter((d) => d.rolloutState === "FAILED");
@@ -232,19 +275,39 @@ export async function checkTasks(
 						});
 					}
 				}
-				if (findings.length >= MAX_FINDINGS) break;
+				if (findings.length >= MAX_FINDINGS) {
+					truncated = true;
+					break;
+				}
 			}
-			if (findings.length >= MAX_FINDINGS) break;
+			if (truncated) break;
 		}
-		if (findings.length >= MAX_FINDINGS) break;
+		if (truncated) break;
 	}
 
-	state.setSnapshot("ecs-services", current);
-	// Bounded by this scan's start for the same reason the guardduty watermark
-	// is: an event created during the scan must be seen again next cycle, not
-	// skipped past.
-	state.setWatermark("tasks:events", Math.min(newestEvent, now));
+	// Merge rather than replace when the scan was capped, so a service this
+	// cycle never reached keeps the previous-cycle state its duration gate
+	// depends on.
+	state.setSnapshot("ecs-services", truncated ? { ...prev, ...current } : current);
+	// A capped scan must not advance the watermark either: events belonging to
+	// the services it never read would be skipped permanently. Re-reading them
+	// next cycle costs nothing, because the fingerprints dedup them.
+	if (!truncated) {
+		// Bounded by this scan's start for the same reason the guardduty
+		// watermark is: an event created during the scan must be seen again next
+		// cycle, not skipped past.
+		state.setWatermark("tasks:events", Math.min(newestEvent, now));
+	}
+	// Recovery sweep, restricted two ways. Only services actually scanned can
+	// be judged recovered. And only the two state-derived signals are swept at
+	// all: an event-derived fingerprint cannot be cleared by the absence of a
+	// new event, because events are a stream rather than a state -- doing so
+	// re-armed the alert on the first quiet cycle and defeated the 24 h window.
+	// Those expire through REALERT_MS instead.
 	for (const key of state.alertKeys("tasks:")) {
+		const m = key.match(/^tasks:(.+):(rollout-failed|below-desired)$/);
+		if (!m) continue;
+		if (!scanned.has(m[1] as string)) continue;
 		if (!stillFailing.has(key)) state.clearAlerts(key);
 	}
 	return findings;

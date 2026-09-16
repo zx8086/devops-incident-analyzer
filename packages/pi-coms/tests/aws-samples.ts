@@ -47,7 +47,7 @@ export const ECS_EVENTS_OBSERVED: { count: number; message: string }[] = [
 		message:
 			"(service api-service) has started 2 tasks: (task 8378fd0fc0d744109128c8d6a0b71524). Amazon ECS replaced 2 tasks due to an unhealthy status.",
 	},
-	{ count: 10, message: "(service api-service) (deployment ecs-svc/8230932836318884457) deployment completed." },
+	{ count: 10, message: "(service api-service) (deployment ecs-svc/1111111111111111111) deployment completed." },
 	{
 		count: 5,
 		message:
@@ -57,13 +57,13 @@ export const ECS_EVENTS_OBSERVED: { count: number; message: string }[] = [
 	{
 		count: 5,
 		message:
-			"(service api-service) was unable to reach steady state because (taskSet ecs-svc/8230932836318884457) was unable to scale in due to (reason 2 tasks under protection)",
+			"(service api-service) was unable to reach steady state because (taskSet ecs-svc/1111111111111111111) was unable to scale in due to (reason 2 tasks under protection)",
 	},
 	{
 		count: 2,
-		message: "(service api-service) (deployment ecs-svc/8230932836318884457) deployment failed: tasks failed to start.",
+		message: "(service api-service) (deployment ecs-svc/1111111111111111111) deployment failed: tasks failed to start.",
 	},
-	{ count: 1, message: "(service api-service) rolling back to deployment ecs-svc/8230932836318884457." },
+	{ count: 1, message: "(service api-service) rolling back to deployment ecs-svc/1111111111111111111." },
 	{ count: 1, message: "(service api-service) stopped 2 pending tasks." },
 	{
 		count: 1,
@@ -190,3 +190,78 @@ export const ASG_ACTIVITIES_OBSERVED = [
 			"At 2026-08-12T10:07:14Z instance i-0f1fae2e5b8bbaf56 was taken out of service in response to a user request, shrinking the capacity from 5 to 4.",
 	},
 ];
+
+// Failure events taken verbatim from AWS's own service event message list
+// (docs.aws.amazon.com/AmazonECS/latest/developerguide/service-event-messages-list.html),
+// with the documented placeholders filled in. The corpus cannot supply these:
+// a sample of healthy services contains no failures, which is exactly the
+// inference an earlier revision got wrong when it deleted the crash-loop
+// pattern for being absent.
+export const ECS_DOCUMENTED_FAILURE_EVENTS: { message: string; label: string }[] = [
+	{ message: "service (api-service) is unable to consistently start tasks successfully.", label: "crash loop" },
+	{
+		message: "service (api-service) deployment failed: tasks failed to start.",
+		label: "deployment failed to start tasks",
+	},
+	{
+		message:
+			"service (api-service) was unable to place a task because no container instance met all of its requirements.",
+		label: "cannot place task",
+	},
+	{
+		message:
+			"service (api-service) was unable to place a task. Reason: You've reached the limit on the number of tasks you can run concurrently",
+		label: "cannot place task",
+	},
+	{
+		message:
+			"service (api-service) was unable to place a task. Reason: Capacity is unavailable at this time. Please try again later or in a different availability zone.",
+		label: "cannot place task",
+	},
+	{
+		message:
+			"service (api-service) was unable to reach steady state. Reason: No Container Instances were found in your capacity provider.",
+		label: "cannot reach steady state",
+	},
+	{
+		message: "service (api-service) operations are being throttled. Will try again later.",
+		label: "scheduler throttled",
+	},
+	{
+		message:
+			"service (api-service) was unable to stop or start tasks during a deployment because of the service deployment configuration. Update the minimumHealthyPercent or maximumPercent value and try again.",
+		label: "deployment configuration blocks replacement",
+	},
+	{
+		message: "IAM permissions policies have been misconfigured or changed, and ECS can no longer maintain your service",
+		label: "IAM misconfigured",
+	},
+	{
+		message: "IAM trust relationship has been misconfigured or changed, and ECS can no longer maintain your service",
+		label: "IAM misconfigured",
+	},
+	{
+		message: "service (api-service) could not launch 3 tasks for deployment ecs-svc/1111111111111111111.",
+		label: "could not launch tasks",
+	},
+	{
+		message:
+			"service (api-service) was unable to place tasks in your cluster because the tasks provisioning capacity limit was exceeded.",
+		label: "provisioning capacity limit",
+	},
+	{
+		message:
+			'service (api-service) Timed out waiting for Amazon ECS Agent to start. Please check logs at /var/log/ecs/ecs-agent.log".',
+		label: "ECS agent did not start",
+	},
+	{
+		message:
+			"service (api-service) task set (ecs-svc/823) (task 9d85800c) is not healthy in target-group (arn:aws:elasticloadbalancing:eu-central-1:000000000000:targetgroup/api/abc) due to TARGET GROUP IS NOT FOUND.",
+		label: "target group missing",
+	},
+];
+
+// The ELB-shaped variant of the unhealthy-target event, from the same doc page.
+// It must stay unclassified for the same reason the target-group variant does.
+export const ECS_DOCUMENTED_SELF_HEALING =
+	"service (api-service) (task 9d85800c) (instance i-0abc) is unhealthy in (elb api-service-elb) due to (reason Instance has failed at least the UnhealthyThreshold number of health checks consecutively.)";

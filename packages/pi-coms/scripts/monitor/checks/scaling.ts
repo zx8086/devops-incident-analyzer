@@ -25,7 +25,14 @@ import type { AwsClient } from "./alarms.ts";
 // call per namespace, and its ECS failures already surface through the service
 // event stream that checks/tasks.ts reads. Worth adding only if the shadow run
 // shows the tasks check missing them.
-const FAILED_CODES = new Set(["Failed", "Cancelled"]);
+// Failed only. "Cancelled" usually means a later scaling decision superseded
+// this one, which is normal during a scale in/out oscillation, and deciding
+// otherwise needs a correlation this check cannot do reliably: the successful
+// activity that superseded it may sit outside the watermark window. Reporting
+// it as a failure -- in a summary that literally says "failed" -- would be a
+// false positive by construction, and the asg-scaling-failure runbook already
+// says a cancelled activity has to be correlated before it means anything.
+const FAILED_CODES = new Set(["Failed"]);
 const FIRST_LOOKBACK_MS = 3_600_000;
 const REALERT_MS = 86_400_000;
 const PAGE = 100;
@@ -84,6 +91,7 @@ export async function checkScaling(
 	}
 
 	const findings: Finding[] = [];
+	let truncated = false;
 	for (const [sig, group] of groups) {
 		const names = [...new Set(group.map((a) => a.AutoScalingGroupName ?? "unknown"))];
 		const resource = names.length === 1 ? (names[0] as string) : "asg:batch";
@@ -120,11 +128,32 @@ export async function checkScaling(
 			},
 			at,
 		});
-		if (findings.length >= MAX_FINDINGS) break;
+		if (findings.length >= MAX_FINDINGS) {
+			truncated = true;
+			break;
+		}
 	}
 
-	// Bounded by the scan start, as elsewhere: an activity that starts mid-scan
-	// must be seen next cycle rather than skipped.
-	state.setWatermark("scaling:activities", Math.min(newest, now));
+	// An overflow that just fell off the end would be lost twice over: absent
+	// from the report, and then excluded from every later scan by a watermark
+	// that had advanced past it. So the omitted groups are named, and the
+	// watermark is held back so they are re-collected next cycle (their
+	// fingerprints stop the emitted ones repeating).
+	if (truncated) {
+		const omitted = groups.size - findings.length;
+		findings.push({
+			family: "scaling",
+			severity: "info",
+			resource: "asg:overflow",
+			summary: `${omitted} further scaling-failure cause(s) not reported this cycle (cap ${MAX_FINDINGS}); re-read next cycle`,
+			dedup_key: `scaling:overflow:${at.slice(0, 16)}`,
+			evidence: { omitted, cap: MAX_FINDINGS, totalCauses: groups.size },
+			at,
+		});
+	} else {
+		// Bounded by the scan start, as elsewhere: an activity that starts
+		// mid-scan must be seen next cycle rather than skipped.
+		state.setWatermark("scaling:activities", Math.min(newest, now));
+	}
 	return findings;
 }

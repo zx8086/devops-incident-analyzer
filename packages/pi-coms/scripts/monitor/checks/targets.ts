@@ -104,6 +104,10 @@ export async function checkTargets(
 	const prev = state.getSnapshot("target-health") ?? {};
 	const current: Record<string, string> = {};
 	const stillFailing = new Set<string>();
+	// Same hazard as checks/tasks.ts: a capped scan that replaced the snapshot
+	// would reset the two-cycle gate for every group it never reached.
+	const scanned = new Set<string>();
+	let truncated = false;
 
 	for (const g of groups) {
 		const arn = g.TargetGroupArn;
@@ -119,6 +123,7 @@ export async function checkTargets(
 
 		const keys = unhealthy.map((t) => targetKey(t.id, t.port)).sort();
 		current[arn] = keys.join(",");
+		scanned.add(name);
 		// A group with no settled targets is mid-deployment or empty by design,
 		// never an outage: there is nothing registered that could be failing.
 		if (settled === 0 || unhealthy.length === 0) continue;
@@ -171,13 +176,19 @@ export async function checkTargets(
 			},
 			at,
 		});
-		if (findings.length >= MAX_FINDINGS) break;
+		if (findings.length >= MAX_FINDINGS) {
+			truncated = true;
+			break;
+		}
 	}
 
-	state.setSnapshot("target-health", current);
+	state.setSnapshot("target-health", truncated ? { ...prev, ...current } : current);
 	// Recovery: a group that is no longer failing re-arms, so the next genuine
 	// outage alerts immediately instead of waiting out the re-alert window.
+	// Only groups actually scanned this cycle can be judged recovered.
 	for (const key of state.alertKeys("targets:")) {
+		const m = key.match(/^targets:(.+):unhealthy$/);
+		if (!m || !scanned.has(m[1] as string)) continue;
 		if (!stillFailing.has(key)) state.clearAlerts(key);
 	}
 	return findings;
