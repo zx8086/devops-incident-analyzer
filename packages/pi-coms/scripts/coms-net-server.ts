@@ -739,6 +739,8 @@ function entryToCard(e: RegistryEntry): AgentCard {
 		context_used_pct,
 		queue_depth,
 		status,
+		consecutive_run_errors,
+		last_run_error,
 	} = e;
 	return {
 		session_id,
@@ -754,6 +756,8 @@ function entryToCard(e: RegistryEntry): AgentCard {
 		context_used_pct,
 		queue_depth,
 		status,
+		consecutive_run_errors,
+		last_run_error,
 	};
 }
 
@@ -1146,6 +1150,7 @@ async function handleHeartbeat(req: Request, sessionId: string, auth: AuthResult
 		queue_depth: entry.queue_depth,
 		model: entry.model,
 		status: entry.status,
+		consecutive_run_errors: entry.consecutive_run_errors,
 	};
 	if (typeof body.context_used_pct === "number") entry.context_used_pct = body.context_used_pct;
 	if (typeof body.queue_depth === "number") entry.queue_depth = body.queue_depth;
@@ -1155,6 +1160,14 @@ async function handleHeartbeat(req: Request, sessionId: string, auth: AuthResult
 	} else {
 		entry.status = "online";
 	}
+	// SIO-1681: model health, recorded beside liveness rather than folded into
+	// it. A spoke that has not been rebuilt yet omits these, so an absent value
+	// leaves the previous reading alone instead of resetting it to healthy --
+	// silence is not evidence of recovery.
+	if (typeof body.consecutive_run_errors === "number" && Number.isFinite(body.consecutive_run_errors)) {
+		entry.consecutive_run_errors = Math.max(0, Math.floor(body.consecutive_run_errors));
+		entry.last_run_error = typeof body.last_run_error === "string" ? body.last_run_error : undefined;
+	}
 	entry.last_seen_at = nowIso();
 
 	logHeartbeat(entry.name, entry.context_used_pct, entry.queue_depth);
@@ -1163,7 +1176,8 @@ async function handleHeartbeat(req: Request, sessionId: string, auth: AuthResult
 		before.context_used_pct !== entry.context_used_pct ||
 		before.queue_depth !== entry.queue_depth ||
 		before.model !== entry.model ||
-		before.status !== entry.status;
+		before.status !== entry.status ||
+		before.consecutive_run_errors !== entry.consecutive_run_errors;
 	if (changed) {
 		broadcast(
 			p,

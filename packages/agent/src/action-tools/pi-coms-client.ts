@@ -176,7 +176,8 @@ export function resolvePiComsConfig(env: NodeJS.ProcessEnv = process.env): PiCom
 export type PiMessageStatus = MessageStatus;
 export type PiInboxMessage = InboxMessage;
 // The subset of the hub's agent card the verifier routes on.
-export type PiAgentCard = Pick<AgentCard, "session_id" | "name" | "status"> & Partial<Pick<AgentCard, "purpose">>;
+export type PiAgentCard = Pick<AgentCard, "session_id" | "name" | "status"> &
+	Partial<Pick<AgentCard, "purpose" | "consecutive_run_errors">>;
 export type PiSendResult = Pick<SendResponse, "msg_id" | "status" | "target_session">;
 
 export type PiReply = {

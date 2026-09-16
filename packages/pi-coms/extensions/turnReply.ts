@@ -54,6 +54,34 @@ export function turnFailure(turn: FinalAssistant): string | null {
 	return null;
 }
 
+// SIO-1681: the spoke's own view of its model health, carried on the heartbeat.
+// `turnFailure` above makes a failed REPLY loud, but that only reaches an
+// operator who sent a prompt and read the answer; a spoke nobody prompts stays
+// green (eu-oit-prd 2026-09-09: every Bedrock call 403'd for two hours while the
+// hub, `fleet status` and the monitor all showed it healthy).
+export interface RunHealth {
+	consecutive_run_errors: number;
+	last_run_error?: string;
+}
+
+// Only a PROVIDER failure counts. The other failure modes `turnFailure` reports
+// are not model health and must not page anyone:
+//   - "aborted" is a local cancellation (an operator pressing Esc),
+//   - "length" means the model answered and the answer was truncated,
+//   - an empty-but-clean stop is a reply-level problem SIO-1678 already answers.
+// Counting those would make the signal fire on healthy spokes, and a health
+// signal that cries wolf is worse than none.
+export function nextRunHealth(prev: RunHealth, turn: FinalAssistant): RunHealth {
+	if (turn.stopReason === "error") {
+		return {
+			consecutive_run_errors: prev.consecutive_run_errors + 1,
+			last_run_error: turn.errorMessage?.trim() || "no details",
+		};
+	}
+	if (turn.stopReason === "aborted") return prev;
+	return { consecutive_run_errors: 0 };
+}
+
 // One turn can cover several stacked inbound prompts (followUps merge into the
 // running turn), so every unfulfilled inbound gets the turn's final assistant
 // text as its reply -- oldest first, each under its own response_schema rule.

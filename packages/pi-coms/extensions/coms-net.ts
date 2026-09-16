@@ -13,7 +13,14 @@ import { decideInbound, parseMutePatterns } from "./inboundPolicy.ts";
 import { formatInbox } from "./inboxFormat.ts";
 import { reconnectDelay } from "./reconnectBackoff.ts";
 import { makeSseParser } from "./sseParser.ts";
-import { claimTurnReplies, type FinalAssistant, finalAssistant, outboundHops } from "./turnReply.ts";
+import {
+	claimTurnReplies,
+	type FinalAssistant,
+	finalAssistant,
+	nextRunHealth,
+	outboundHops,
+	type RunHealth,
+} from "./turnReply.ts";
 
 const COMS_NET_DIR = path.join(os.homedir(), ".pi", "coms-net");
 const MAX_HOPS = Number(process.env.PI_COMS_NET_MAX_HOPS) || 5;
@@ -78,12 +85,18 @@ interface RegisterResponse {
 	sse_url: string;
 }
 
+// Mirrors HeartbeatRequest in contracts/wire.ts. Declared locally on purpose:
+// this extension must not import across the package boundary, or the Pi package
+// manifest grows a runtime dependency. Keep the two in sync.
 interface HeartbeatRequest {
 	project: string;
 	context_used_pct: number;
 	queue_depth: number;
 	model?: string;
 	status?: AgentStatus;
+	// SIO-1681: model health, separate from the `status` liveness axis.
+	consecutive_run_errors?: number;
+	last_run_error?: string;
 }
 
 interface SendRequest {
@@ -520,6 +533,8 @@ export default function (pi: ExtensionAPI) {
 	let reconnectAttempts = 0;
 	let notifiedReconnectCap = false;
 	let currentCtx: ExtensionContext | null = null;
+	// SIO-1681: consecutive provider failures, reported on every heartbeat.
+	let runHealth: RunHealth = { consecutive_run_errors: 0 };
 	let includeExplicit = false;
 	let displayProject: string | null = null;
 	let lastWidgetSnapshot = "";
@@ -1173,7 +1188,15 @@ export default function (pi: ExtensionAPI) {
 				context_used_pct: pct,
 				queue_depth: inboundQueue.size,
 				model: ctxNow?.model?.id ?? identity.model,
+				// The spoke is reachable and heartbeating, so it IS online:
+				// `status` is a liveness axis the hub also derives from heartbeat
+				// age (STALE_AFTER_MS), and reporting "stale" here to mean "my
+				// model is failing" would both lie about liveness and suppress
+				// the hub's real staleness transition (SIO-1681). Model health
+				// travels beside it instead.
 				status: "online",
+				consecutive_run_errors: runHealth.consecutive_run_errors,
+				last_run_error: runHealth.last_run_error,
 			};
 			httpFetch("POST", `/v1/agents/${encodeURIComponent(identity.session_id)}/heartbeat`, hbReq, {
 				timeoutMs: 5_000,
@@ -1929,11 +1952,17 @@ export default function (pi: ExtensionAPI) {
 	// queued when it ended; a prompt arriving in between belongs to the next run.
 	let settledTurn: { final: FinalAssistant; ids: Set<string> } | null = null;
 	pi.on("agent_end", async (event) => {
+		const final = finalAssistant(event.messages);
+		// SIO-1681: health is tracked for EVERY run, before the inbound-queue
+		// guard below. The failure this reports is a spoke nobody is prompting,
+		// so the runs that reveal it are exactly the ones with an empty queue --
+		// counting only hub-prompted runs would miss the case it exists for.
+		runHealth = nextRunHealth(runHealth, final);
 		if (!identity || inboundQueue.size === 0) {
 			settledTurn = null;
 			return;
 		}
-		settledTurn = { final: finalAssistant(event.messages), ids: new Set(inboundQueue.keys()) };
+		settledTurn = { final, ids: new Set(inboundQueue.keys()) };
 	});
 
 	// Claims synchronously, then posts. Pi marks the run inactive BEFORE it runs

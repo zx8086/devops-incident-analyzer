@@ -1,6 +1,6 @@
 // tests/turn-reply.test.ts
 import { expect, test } from "bun:test";
-import { buildTurnReplies, outboundHops } from "../extensions/turnReply";
+import { buildTurnReplies, nextRunHealth, outboundHops, type RunHealth } from "../extensions/turnReply";
 
 const text = "Investigation complete: no observed WAF changes in the last 72h.";
 
@@ -261,4 +261,40 @@ test("a failed turn with `only` answers the run's inbounds and leaves a late one
 	expect(replies).toEqual([{ msg_id: "ran", response: null, error: "agent run error: AccessDeniedException" }]);
 	expect(queue.has("ran")).toBe(false);
 	expect(queue.get("late")?.fulfilled).toBe(false);
+});
+
+// SIO-1681: the heartbeat's health signal. A spoke whose every model call 403s
+// answered each prompt in 200 ms and still reported "online" for two hours
+// (eu-oit-prd 2026-09-09), so discovery depended on someone prompting it.
+test("runHealth counts only provider failures, not a clean turn with no text", () => {
+	const zero = { consecutive_run_errors: 0 };
+	// A model/provider failure is the only thing that counts.
+	const one = nextRunHealth(zero, { text: "", stopReason: "error", errorMessage: "AccessDeniedException: 403" });
+	expect(one.consecutive_run_errors).toBe(1);
+	expect(one.last_run_error).toBe("AccessDeniedException: 403");
+
+	// An aborted run is a local cancellation, not a sick model: it must not
+	// accumulate, or every Esc keypress would look like an outage.
+	expect(nextRunHealth(one, { text: "", stopReason: "aborted" }).consecutive_run_errors).toBe(1);
+
+	// A clean stop that simply produced no text is a reply-level problem
+	// (SIO-1678 answers it with an error), not a model-health problem.
+	expect(nextRunHealth(one, { text: "", stopReason: "stop" }).consecutive_run_errors).toBe(0);
+});
+
+test("runHealth accumulates across failures and resets on one good turn", () => {
+	let h: RunHealth = { consecutive_run_errors: 0 };
+	for (let i = 0; i < 9; i++) h = nextRunHealth(h, { text: "", stopReason: "error", errorMessage: "403" });
+	expect(h.consecutive_run_errors).toBe(9);
+
+	h = nextRunHealth(h, { text: "ok", stopReason: "stop" });
+	expect(h.consecutive_run_errors).toBe(0);
+	expect(h.last_run_error).toBeUndefined();
+});
+
+// A truncated answer means the model ANSWERED; the spoke is healthy and the
+// operator should not be paged for an output-limit stop.
+test("runHealth treats a length stop as healthy", () => {
+	const h = nextRunHealth({ consecutive_run_errors: 2 }, { text: "partial", stopReason: "length" });
+	expect(h.consecutive_run_errors).toBe(0);
 });

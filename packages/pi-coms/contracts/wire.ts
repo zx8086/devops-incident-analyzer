@@ -32,6 +32,14 @@ export type AgentCard = {
 	context_used_pct: number;
 	queue_depth: number;
 	status: AgentStatus;
+	// SIO-1681: model health, a SEPARATE axis from `status`. `status` is
+	// liveness (is the spoke heartbeating), and the hub derives it from
+	// heartbeat age as well; a spoke whose every model call 403s is perfectly
+	// alive and answers in 200 ms, so it reports "online" and carries its
+	// failure count here. Absent on an agent that has not heartbeated since the
+	// hub learned the field.
+	consecutive_run_errors?: number;
+	last_run_error?: string;
 };
 
 export type ComsMessage = {
@@ -81,6 +89,10 @@ export type HeartbeatRequest = {
 	queue_depth: number;
 	model?: string;
 	status?: AgentStatus;
+	// SIO-1681: see AgentCard. Optional so an older spoke build heartbeats
+	// unchanged against a newer hub.
+	consecutive_run_errors?: number;
+	last_run_error?: string;
 };
 
 export type SendRequest = {
