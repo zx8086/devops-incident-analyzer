@@ -394,7 +394,12 @@ function main(): void {
 	const lambda = new LambdaClient({ region });
 	// SIO-1740: the Health API is a global endpoint served from us-east-1.
 	const health = new HealthClient({ region: "us-east-1" });
-	const config = new ConfigServiceClient({ region });
+	// SIO-1755: checkCompliance pages the rule list and then every rule's details
+	// back to back, in a Config API bucket other callers share. With three
+	// standard attempts the listing threw "Rate exceeded" about 2 s into 6-9 of
+	// the 24 hourly runs in every prd account (whole check lost, digest DEGRADED).
+	// Adaptive mode slows the client down after a throttle instead of failing.
+	const config = new ConfigServiceClient({ region, retryMode: "adaptive", maxAttempts: 10 });
 	const guardduty = new GuardDutyClient({ region });
 	// SIO-1748 workload-state clients. The ELBv2 client above is region-keyed
 	// for the cert scan; the targets check wants the host region only, since a
