@@ -53,7 +53,16 @@ const hasContent = $derived(mergedRequests.length > 0);
   <div class="mt-2 rounded-lg border border-orange-100 bg-orange-50/40 px-3 py-2.5">
     <div class="flex items-center gap-1.5 mb-2">
       <span class="text-[0.5625rem] font-medium text-orange-700 uppercase tracking-wider">GitLab findings</span>
+      {#if findings.unscoped}
+        <!-- SIO-1644: the SIO-1159 backend flag once shipped without a UI half (fixed by
+             SIO-1245), so fallback rows rendered exactly like focus-scoped evidence. Ship
+             both halves together. Mirrors AWSFindingsCard / CouchbaseFindingsCard. -->
+        <span class="text-[0.5625rem] font-medium text-orange-700 bg-orange-100 uppercase tracking-wider rounded px-1">Unscoped</span>
+      {/if}
     </div>
+    {#if findings.unscoped}
+      <p class="-mt-1 mb-2 text-[0.625rem] text-gray-500">No merged request referenced the focus services -- showing the most recent deploys.</p>
+    {/if}
 
     <div>
       <span class="text-[0.5625rem] font-medium text-gray-500 uppercase tracking-wider">Recent deploys</span>
