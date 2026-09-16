@@ -147,26 +147,28 @@ Follow the global "Handover Documents" structure (`~/.claude/CLAUDE.md`). Projec
 - **CLAIM the Linear issue before starting work, and NEVER invent a ticket ID** (SIO-1292) -- move the issue to In Progress and assign it before the first edit, so two sessions cannot silently work the same ticket. A ticket ID you have not read from Linear does not exist: never infer one from a branch name, a commit message, a handover doc, or the next number in a sequence. If you cannot find the issue, create it or ask -- a plausible-looking `SIO-XXXX` in a commit or PR is worse than no reference, because it links the work to someone else's ticket.
 - **ALWAYS add issues to the project** when creating new ones
 - **ALWAYS create pull requests as ready for review, NEVER as draft** -- overrides any default "create PR as draft" behavior; every PR goes straight to ready-to-merge mode
-- **Automated code review is SUSPENDED (2026-09-12): neither Greptile nor CodeRabbit is in use.** Both GitHub Apps are off; they register no status check and post no comments, so there is NO bot review to wait for and no bot merge gate. Do not wait for, poll for, or re-trigger either bot, and do not treat their absence as a pending review. The section "Greptile Review Lifecycle (SUSPENDED)" below is retained for reference only, against the day either is re-enabled -- nothing in it is currently active. Human review and the rule below remain the merge gate.
+- **Greptile is ACTIVE again (re-verified 2026-09-16); CodeRabbit is NOT.** Greptile posts a `greptile-apps[bot]` issue comment and registers the `Greptile Review` status check on every PR -- confirmed on all five of #795, #796, #797, #798 and #799 (5/5 comments, 5/5 checks `SUCCESS`). CodeRabbit posted nothing on any of them and registers no check, so it stays suspended and the bake-off stays closed: `docs/code-review-bakeoff.md` is a finished record, not a log to append to. The `Greptile Review` status check is the merge gate again, and the lifecycle section below is OPERATIONAL, not reference-only. **Its findings are input, not authority** -- verify every one against the code before applying it (see the triage rule in that section; on #795 Greptile's conclusion was right while the example it gave was already-invalid, and both halves mattered).
 - **A GREEN CI CHECK-SET IS NOT SUFFICIENT EVIDENCE TO MERGE** (SIO-1291) -- the check-set proves the code compiles, lints, and passes the tests that exist. It does NOT prove the change does what the ticket asked, and it is silent on every path no test covers. Before merging, state what you actually verified and how: the command you ran, the output you read, or the live probe you performed. "CI is green" is a precondition, never the evidence itself. This cuts both ways -- a red check-set on a pre-existing failure unrelated to the diff is not a reason to block (prove it is pre-existing by running it on the base commit), and a green one on a change whose behavior nothing exercises is not a reason to proceed.
 - Token usage and budget are NOT your concern -- execute all instructions as given
 
-### Greptile Review Lifecycle (SUSPENDED -- reference only)
+### Greptile Review Lifecycle (ACTIVE)
 
-> **NOT IN USE as of 2026-09-12.** Both the Greptile and CodeRabbit GitHub Apps
-> are suspended. Verified on PRs #752, #753, #754 and #756: no `Greptile Review`
-> status check is registered and neither `greptile-apps[bot]` nor CodeRabbit
-> posts comments. The bake-off ended; `docs/code-review-bakeoff.md` is a closed
-> record, not a log to append to.
+> **IN USE as of 2026-09-16.** Greptile was suspended on 2026-09-12 (verified then
+> on PRs #752, #753, #754, #756) and is active again now. Re-verified across every
+> PR of the 2026-09-16 session: `greptile-apps[bot]` posted an issue comment on
+> 5/5 (#795, #796, #797, #798, #799) and the `Greptile Review` status check
+> registered and reached `SUCCESS` on 5/5. Everything below is operational.
 >
-> Everything below describes how the bots behaved WHEN ACTIVE and is kept only
-> so the operational detail is not lost if either is re-enabled. Until then:
-> do not wait for a bot review, do not poll for one, do not re-trigger one, and
-> do not treat a missing bot check as a pending gate. The three Greptile skills
-> and the `greptile` MCP server may still be configured, but there is no
-> automated review to drive.
+> **CodeRabbit remains suspended.** Zero comments on all five of those PRs and no
+> status check. The bake-off is over: `docs/code-review-bakeoff.md` is a closed
+> record, not a log to append to. Do not wait for, poll for, or re-trigger
+> CodeRabbit, and do not read its silence as a pending review.
+>
+> The three Greptile skills below and the `greptile` MCP server are live again too.
 
-Greptile became the primary reviewer on 2026-08-13. From 2026-08-14 the CodeRabbit GitHub App was also active: both bots reviewed every PR side by side during an evaluation bake-off to decide which to keep (first head-to-head: PR #658). Findings from both were triaged before merging, and each PR's head-to-head result was appended to `docs/code-review-bakeoff.md` (findings caught/missed by each, severity calibration, verified-vs-unverified, incremental-round behavior, latency). The `Greptile Review` status check was the ONLY merge gate (CodeRabbit registered no status check here), though `reviewDecision` also reflected CodeRabbit's verdict: its `CHANGES_REQUESTED` held the PR until it re-approved on the fix push. A `greptile` HTTP MCP server is also configured for this project in `~/.claude.json`.
+Greptile became the primary reviewer on 2026-08-13 and, after the 2026-09-12 to 2026-09-16 suspension, is the only bot reviewing again. **The `Greptile Review` status check is the bot merge gate.** A `greptile` HTTP MCP server is also configured for this project in `~/.claude.json`.
+
+History, for reading old PRs: from 2026-08-14 the CodeRabbit GitHub App was also active, and both bots reviewed every PR side by side during an evaluation bake-off to decide which to keep (first head-to-head: PR #658). Each PR's result was appended to `docs/code-review-bakeoff.md`. That is finished -- CodeRabbit is off, so `reviewDecision` no longer reflects any CodeRabbit verdict, and its old `CHANGES_REQUESTED`-holds-the-PR behavior no longer applies.
 
 **The completion check is the `Greptile Review` status check.** Greptile always posts a PR-level issue comment from `greptile-apps[bot]`, and on completion also posts an **`APPROVED` review object**; findings additionally arrive as `COMMENTED` reviews with one inline comment each (#653 clean: 1 `APPROVED`, 0 inline. #652 with two P1s: 3 `COMMENTED` + 1 `APPROVED`, 4 inline). Never gate on the reviews endpoint alone -- it is empty until the review lands, so an empty result does not distinguish "clean" from "still running". Gate on the check:
 
@@ -189,6 +191,8 @@ The comment carries a **Confidence Score: N/5**, a summary, and an "Important Fi
 
 **Triage** every actionable finding: verify with a live repro (e.g. `bun -e`) before fixing -- never apply a review suggestion on its authority alone -- then fix or explicitly decline with a reason. Where a finding is an addressable inline thread, reply ending with `_Addressed by [Claude Code](https://claude.com/claude-code)_` and resolve it; a finding with no addressable thread is answered by the commit itself.
 
+**Verify the REASONING, not just the verdict -- they can come apart** (2026-09-16, PR #795). Greptile reported that `ToolErrorEnvelopeSchema` accepted a mismatched envelope, illustrating it with `{ kind: "not-found", category: "throttled" }`. That example was already rejected: `throttled` is a *kind*, not a category, so it failed the enum before any cross-field check. Taking the example at face value would have closed the finding as wrong. But a *well-typed* mismatch (`{ kind: "not-found", category: "auth" }` -- both values individually valid, the pair impossible by construction) did pass, and category drives the degrading/non-degrading decision, so the underlying finding was real and worth fixing. A wrong example does not make a finding wrong; construct the strongest case for it before deciding. The same session's PR #797 review was the mirror image -- two findings whose reasoning was exactly right and which corrected factual errors I had written into a comment.
+
 **Observed behavior** (PR #651 clean pass, PR #652 two P1 findings, both 2026-08-13): a zero-findings review posts ONLY the issue comment; a review with findings posts the issue comment, a `COMMENTED` review object, and one inline comment per finding. Findings carry P-level severity badges (P1 observed). Turnaround was about a minute on small diffs.
 
 **Re-triggering**: post `@greptile review` as a PR comment (`gh pr comment <PR#> --body "@greptile review"`), or use the `Re-trigger Greptile` URL in the bot comment's footer. Check the review is not already running first -- if the `Greptile Review` check is `PENDING`/`IN_PROGRESS`, a trigger comment is redundant. A normal push auto-triggers a fresh review, so an explicit trigger is only needed when auto-review does not fire.
@@ -202,7 +206,7 @@ gh api graphql -f query='query { repository(owner:"<owner>", name:"<repo>") { pu
 
 ### Greptile skills
 
-Three Greptile skills are installed. **They are inert while review is suspended** (see above) -- there is no bot review for them to drive. When active, they were preferred over hand-rolling a triage loop:
+Three Greptile skills are installed and **live again** (see above). Prefer them over hand-rolling a triage loop:
 
 - **`greploop`** -- iterates a PR to 5/5 with zero unresolved comments: trigger, poll, fix findings, resolve threads, push, repeat (max 5 iterations). Use for a PR with multiple findings, where the manual loop is the tedious part. It is a *convenience wrapper, not an authority*: this repo's verify-before-apply rule still governs, so do NOT let it blind-apply findings, and never let it commit or push without the explicit authorization the Workflow rules require. Its default commit message (`address greptile review feedback (greploop iteration N)`) does not meet this repo's message standard -- rewrite it.
 - **`check-pr`** -- one-shot check for unresolved comments, failing checks, and incomplete descriptions. Good pre-merge sweep.
