@@ -131,7 +131,11 @@ remove an entry when the underlying behavior changes.
   ```
 
   A non-zero `consecutive_run_errors` on an `online` spoke IS this failure, and
-  `last_run_error` carries the provider message without a host login. The
+  `last_run_error` carries the provider message without a host login. **The hub
+  is where you read that message**: the monitor finding deliberately carries only
+  its class (`access-denied`, `throttled`, `timeout`, ...), because a monitor
+  finding can end up inside an investigation prompt and provider text must not.
+  The
   console shows the same thing (`fleet_list_agents` renders
   `online (9 consecutive model errors)`), and the monitor raises a
   `spoke-health` warn at three, within two cycles, with no operator prompt.

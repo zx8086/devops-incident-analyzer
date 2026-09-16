@@ -23,6 +23,41 @@ const REALERT_MS = 86_400_000;
 // Only what this check needs, so the test can drive it without a MonitorComs.
 export type AgentLister = { listAgents: () => Promise<AgentCard[]> };
 
+// The provider's error text is spoke-borne and must NEVER enter the finding.
+// Excluding this family from its own investigation is not enough: the finding
+// is journaled whole, and `priorIncidents` (state.ts) matches journal rows with
+// a bare `payload LIKE '%resource%'` across EVERY family, so a later finding on
+// the same spoke would carry this row -- and any instructions hidden in it --
+// straight into an investigation prompt.
+//
+// Classifying rather than sanitising is deliberate: an allowlisted class cannot
+// smuggle anything, whereas an escaping rule is one missed case from failing.
+// The class is also the part with diagnostic value; the operator reads the full
+// message from the hub (`/v1/agents`) or the host, which the gotchas entry says.
+export type RunErrorClass = "access-denied" | "throttled" | "timeout" | "other" | "unknown";
+
+// `model` is spoke-reported too and the hub stores any string it is sent
+// (`typeof body.model === "string"` is the only gate), so it rides the same
+// journal-to-prompt path as the error text. A model id is a bounded token
+// vocabulary, so it is kept -- it is the single most useful field for
+// diagnosing this failure -- but restricted to that shape and length rather
+// than passed through. Anything else becomes "unreported".
+const MODEL_ID = /^[A-Za-z0-9._:/-]{1,128}$/;
+
+export function safeModelId(model: string | undefined): string {
+	const m = (model ?? "").trim();
+	return MODEL_ID.test(m) ? m : "unreported";
+}
+
+export function classifyRunError(message: string | undefined): RunErrorClass {
+	const m = (message ?? "").toLowerCase();
+	if (m.trim() === "") return "unknown";
+	if (m.includes("accessdenied") || m.includes("not authorized") || m.includes("403")) return "access-denied";
+	if (m.includes("throttl") || m.includes("too many requests") || m.includes("429")) return "throttled";
+	if (m.includes("timed out") || m.includes("timeout")) return "timeout";
+	return "other";
+}
+
 export type CheckSpokeHealthOpts = {
 	// The agent this monitor is paired with (the monitor's INVESTIGATE_TARGET).
 	// Scoped deliberately: every monitor can see every agent on the hub, so
@@ -83,11 +118,12 @@ export async function checkSpokeHealth(
 			evidence: {
 				spoke: opts.spoke,
 				status: agent.status,
-				model: agent.model,
+				model: safeModelId(agent.model),
 				consecutiveRunErrors: errors,
-				// Provider text, carried for the operator and the investigating
-				// agent but kept out of the summary line.
-				lastRunError: agent.last_run_error ?? null,
+				// The CLASS only -- never the provider's text. See classifyRunError:
+				// this row can reach an investigation prompt through priorIncidents,
+				// so the raw message does not enter the finding at all.
+				lastRunErrorClass: classifyRunError(agent.last_run_error),
 				contextUsedPct: agent.context_used_pct,
 				queueDepth: agent.queue_depth,
 			},
