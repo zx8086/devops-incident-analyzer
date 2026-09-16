@@ -13,6 +13,7 @@ type Alarm = {
 	Threshold?: number;
 	StateReason?: string;
 	Dimensions?: { Name: string; Value: string }[];
+	AlarmActions?: string[];
 };
 
 // history: transitions into ALARM the fake reports for DescribeAlarmHistory;
@@ -189,4 +190,32 @@ describe("SIO-1754 scaling triggers", () => {
 		expect(isScalingTrigger({ AlarmActions: [] })).toBe(false);
 		expect(isScalingTrigger({})).toBe(false);
 	});
+});
+
+// Greptile on #786: the page walk needs its own regression guard. The shape is the
+// captured one: `describe-alarms --no-paginate` on eu-shared-services-prd returned
+// 50 alarms plus a NextToken, of 98; one page left the other 48 unread.
+test("SIO-1754: alarms and composite alarms on later DescribeAlarms pages are evaluated", async () => {
+	const ok = (i: number): Alarm => ({ AlarmName: `a-${String(i).padStart(3, "0")}`, StateValue: "OK" });
+	const page1 = Array.from({ length: 50 }, (_, i) => ok(i));
+	const scaling = {
+		AlarmName: "z-service-CPU-Utilization-Low-20",
+		StateValue: "ALARM",
+		AlarmActions: [ARN.ecsServiceScaleUp],
+	};
+	const notifying = { AlarmName: "z-license-days-remaining", StateValue: "ALARM", AlarmActions: [ARN.snsTopic] };
+	const composite = { AlarmName: "z-composite-outage", StateValue: "ALARM", AlarmActions: [ARN.snsTopic] };
+	const tokens: (string | undefined)[] = [];
+	const client = {
+		send: async (cmd: { constructor: { name: string }; input: { NextToken?: string } }) => {
+			if (cmd.constructor.name === "DescribeAlarmHistoryCommand") return { AlarmHistoryItems: [] };
+			tokens.push(cmd.input.NextToken);
+			return cmd.input.NextToken === undefined
+				? { MetricAlarms: page1, CompositeAlarms: [], NextToken: "page-2" }
+				: { MetricAlarms: [scaling, notifying], CompositeAlarms: [composite] };
+		},
+	};
+	const out = await checkAlarms(client, new MonitorState(":memory:"));
+	expect(tokens).toEqual([undefined, "page-2"]);
+	expect(out.map((f) => f.resource).sort()).toEqual(["z-composite-outage", "z-license-days-remaining"]);
 });
