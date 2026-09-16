@@ -99,68 +99,47 @@ Every cycle starts with a T0 gate: `sts:GetCallerIdentity` compared against `AWS
 | Certs | daily | ACM `NotAfter` across the host region and `us-east-1` (CloudFront certs live there; list configurable): < 30 d warn, < 7 d critical (managed renewal happens ~60 d out, so < 30 d means renewal is failing). A cert whose domain is covered by another valid cert in the same region (exact or single-label wildcard, DomainName or SANs) reports `info` as superseded -- a rotated-out cert is cleanup noise, not risk. A cert with an empty `InUseBy` reports `info` whatever its expiry (SIO-1724): an expiry only breaks TLS when something serves the cert, so an unattached one is cleanup, not an outage -- and an already-expired cert reads as "expired N day(s) ago", never "expires in -N days". An unreadable region is one info scoping finding; the other regions still scan | Per cert + severity, 7 d re-alert |
 | Listener certs | daily | ELBv2 `DescribeListenerCertificates` per TLS listener across the same regions as the cert check. ACM alone cannot answer "is this domain covered?": a listener carries extra SNI certificates beyond its default, so a name absent from ACM may still be served. Reports the extra SNI certificates as one `info` inventory finding per listener. A denied or unreachable read is one `info` scoping finding per region saying SNI certificates are **not inspected** -- never silence, because silence would read as "no certificate" | Per listener, 7 d re-alert |
 | Watchlist | daily | `cloudtrail:LookupEvents` for scary write events (StopLogging, SG ingress/egress and revocations, route changes, S3 exposure, IAM edits, ...); one call per event name, watermarked. `ModifyDBInstance` is deliberately absent: resource drift catches RDS changes within 15 minutes while this list runs daily. The monitor is read-only, so its own CloudTrail echo can never match | Per event id |
-| Targets | 15 min | `DescribeTargetGroups` + `DescribeTargetHealth` (SIO-1748). The first family that reads continuous operational state, so the raw state is not the signal: `initial` and `draining` are excluded outright (they are what a rolling deployment looks like) and a target must be `unhealthy` across TWO CONSECUTIVE CYCLES before it is a finding. Zero healthy in a group is critical, some healthy is warn. Evidence carries the reason code (`Target.FailedHealthChecks`, `Target.Timeout`, `Target.ResponseCodeMismatch`) and the whole health-check config, so the spoke decides target-vs-check without a round trip | Snapshot of the per-group unhealthy set supplies the duration gate; group fingerprint, 24 h re-alert, clears on recovery |
+| Targets | 15 min | `DescribeTargetGroups` + `DescribeTargetHealth` (SIO-1748). The first family that reads continuous operational state, so the raw state is not the signal: `initial` and `draining` are excluded outright (they are what a rolling deployment looks like) and a target must be `unhealthy` across TWO CONSECUTIVE CYCLES before it is a finding. Severity follows the reason code, because the load balancer **fails open** -- with every target unhealthy it routes to all of them anyway (SIO-1752). When every unhealthy target reports `Target.ResponseCodeMismatch` on a **3xx or 4xx** code the app is up and the check asks the wrong question, so it is warn as a misconfigured health check naming the status received. Answering is not working, though: a **5xx** mismatch means the app answered with an error, so it rates like a non-answer. Zero healthy is critical when any target is not working (`Timeout`, `FailedHealthChecks`, a 5xx mismatch, no reason, or codes that cannot be read), since fail-open then routes users to targets that return errors; nothing is downgraded without evidence. The summary only names fail-open when there is no healthy target -- with any healthy target left the balancer routes to those, and the mismatched ones are simply out of rotation. Some healthy is warn either way. Evidence carries the reason code (`Target.FailedHealthChecks`, `Target.Timeout`, `Target.ResponseCodeMismatch`) and the whole health-check config, so the spoke decides target-vs-check without a round trip | Snapshot of the per-group unhealthy set supplies the duration gate; group fingerprint, 24 h re-alert, clears on recovery |
 | Tasks | 15 min | Three things ECS asserts about a service (SIO-1748), never the stopped tasks themselves -- every deployment and scale-in stops tasks. (1) `deployments[].rolloutState == FAILED`: the circuit breaker already ruled, critical. (2) A service event matching a failure phrase, free with `DescribeServices`: `is unable to consistently start tasks successfully` is ECS reporting a crash loop, which counts cannot see because tasks die and are replaced fast enough that `runningCount` never drops; also no-capacity placement, failing health checks, image/secret pull, `ResourceInitializationError`. (3) `runningCount < desiredCount` sustained across two cycles. Stopped-task reasons are left to the investigation, which has the CLI and the ecs-task-failures runbook | Snapshot for the shortfall gate, watermark on service events, per-signal fingerprint, 24 h re-alert, clears on recovery |
-| Queues | 15 min | `ListQueues` + `GetQueueAttributes` (SIO-1748). Depth on a source queue is never reported -- a queue holding messages is a queue working. A DLQ is identified semantically, by being the `deadLetterTargetArn` of some other queue's redrive policy rather than by name, so a `-dlq` scratch queue nothing redrives into stays silent; any depth on a real one means messages already failed `maxReceiveCount` times. Evidence names the source queues, which is where the fault is. Source-queue backlog is deliberately absent: it needs a self-baseline over the CloudWatch `ApproximateAgeOfOldestMessage` history (not a queue attribute), sized on shadow data | Per queue fingerprint, 24 h re-alert, clears when drained |
+| Queues | 15 min | `ListQueues` + `GetQueueAttributes` (SIO-1748). Depth on a source queue is never reported -- a queue holding messages is a queue working. A DLQ is identified semantically, by being the `deadLetterTargetArn` of some other queue's redrive policy rather than by name, so a `-dlq` scratch queue nothing redrives into stays silent; any depth on a real one means messages already failed `maxReceiveCount` times. Evidence names the source queues, which is where the fault is. Source-queue backlog is deliberately absent: it needs a self-baseline over the CloudWatch `ApproximateAgeOfOldestMessage` history (not a queue attribute), sized by replaying that history before it ships | Per queue fingerprint, 24 h re-alert, clears when drained |
 | Scaling | 15 min | `autoscaling:DescribeScalingActivities`, `StatusCode` in {Failed, Cancelled} since a watermark (SIO-1748). No invented threshold: Auto Scaling labels the failure itself. Catches InsufficientInstanceCapacity, quota exhaustion, a launch template referencing a deleted AMI or security group, and `iam:PassRole` denials -- none of which produce an alarm unless somebody wrote one. Activities sharing a normalized cause collapse into one finding, so one AZ running dry is one report line rather than one per group. Application Auto Scaling is not read: it needs a call per ServiceNamespace and its ECS failures already surface through the tasks check | Normalized cause + group, 24 h re-alert; watermark bounded by the scan start |
 | Db-events | hourly | `rds:DescribeEvents` filtered SERVER-side on `EventCategories` to failure / failover / low storage / availability (SIO-1749). The cleanest discriminator in the set, because the API does it: an account with 90 events over 14 days returns 0 once filtered, since all 90 were automated snapshot activity. `failure` and `low storage` are critical, the rest warn. ElastiCache is deliberately not read -- its events carry NO EventCategories field at all, so there is no categorical discriminator and every message observed in production was benign or self-healing | Source + category set, 24 h re-alert |
 | Stacks | daily | CloudFormation `DescribeStacks`, snapshot-diffed (SIO-1749). CloudFormation states its own verdict, so the discriminator is a suffix of the status enum: `*_FAILED` is critical, a completed rollback is warn (the stack survived, the deployment did not), everything else silent. Edge-triggered, because a stack that has sat in `UPDATE_ROLLBACK_COMPLETE` for a year is not news every day. A failed stack costs one extra `DescribeStackEvents` for the failing resource and reason, and a denied read loses only the evidence, never the finding | Edge-triggered by the snapshot diff; first run establishes the baseline silently |
 | Nodegroups | hourly | EKS `ListNodegroups` + `DescribeNodegroup` (SIO-1750). `ListClusters`/`DescribeCluster` were already granted but carry no node health -- `DescribeCluster` returns no `health` field at all -- so a nodegroup whose nodes cannot join was invisible. The discriminator is AWS's own twice over: `health.issues` is a list EKS populates when it has diagnosed the problem itself (code, message, affected resource ids), and `status` is a closed enum where DEGRADED and *_FAILED mean what they say. Failed status is critical; issues without a failed status are warn, because the group still serves but something will bite later | Nodegroup + status, 24 h re-alert, clears on recovery when the scan was complete |
 | Quotas | daily | Trusted Advisor `DescribeTrustedAdvisorCheckSummaries` over the `service_limits` category (SIO-1750). **This replaces the Service Quotas design entirely**: rather than walking every quota and correlating each against `AWS/Usage` metrics to derive a utilisation percentage, ONE call answers all 52 service-limit checks, each carrying AWS's own `ok`/`warning`/`error` verdict -- so there is no threshold to invent. `error` (limit reached) is critical, `warning` (approaching) is warn. us-east-1 only; an account without a Business or Enterprise support plan answers `SubscriptionRequiredException`, reported once a week as info exactly as the health check treats it | Check id + status, 24 h re-alert, clears when no longer flagged |
 
-### Shadow families (SIO-1748)
+### Measuring a new family before it ships (SIO-1752)
 
-A new check family cannot be sized in advance. No reasoning says how many
-findings `targets` raises a day in a busy account, and the dev spokes are too
-quiet to measure it -- which is exactly why they are safe to deploy to and
-useless for this.
+A new check family's noise rate is measured **before** it is added, from AWS's
+own history -- not by shipping it silent and waiting.
 
-`PI_MONITOR_SHADOW_FAMILIES` lists families that are detected and journalled as
-`shadow_finding` but never reported, never investigated, and never matched
-against the suppression ledger. The rate is then read off the journal in real
-production traffic at no token cost and with no impact on the `ops` inbox:
+This replaced a default-on "shadow" mechanism (SIO-1748 to SIO-1751) that
+detected and journalled new families without reporting them. Measured against
+production it was net-negative: it held real incidents out of the inbox (seven
+dead-letter queues and a failed ECS deployment) while catching exactly one real
+noise source, and that source was a severity bug rather than an inherent rate.
+It also consumed fingerprints, so graduating a family never re-reported what it
+had already seen.
 
-```
-monitor-eu-oit-prd history 200 warn targets shadow
-monitor-eu-oit-prd status          # names the 24 h shadow count
-```
+What to do instead, for any new family:
 
-**The four SIO-1748 families default to shadow** (`SHADOW_DEFAULT` in
-`coms-net-monitor.ts`), so a deploy that sets nothing cannot put four unmeasured
-families into the `ops` inbox on its first cycle. Setting the variable REPLACES
-the default, so it names the families that should stay in shadow; an empty
-string graduates all of them. The daily digest names whatever is still in
-shadow with its 24 h count, because `status` is a pull and a family left in
-shadow and forgotten is a check that silently never fires.
+1. **Replay the family's discriminator against AWS history** across every
+   production account. Most sources keep enough: scaling activities about six
+   weeks, RDS events 14 days, ELB target health metrics 14 days at 15-minute
+   resolution, each ECS service's last 100 events. The SIO-1752 pass took about
+   twenty minutes across six accounts.
+2. **Count standing conditions per day, not per episode.** A problem that never
+   clears re-alerts every 24 h, so one unbroken 14-day episode is fourteen
+   findings, not one.
+3. **Read what it would flag, not only how many.** The measurement for SIO-1752
+   showed ~14 findings a day fleet-wide -- and that ~5 of them were one wrong
+   severity rule, which a count alone would not have revealed.
+4. Where history cannot answer (`nodegroups` health and Trusted Advisor are
+   current-state only), measure current state across the fleet.
 
-A family graduates by being removed from the list.
-
-**Graduation does not replay what shadow already saw (SIO-1751).** A shadow run
-still marks its fingerprints and writes its snapshots -- checks do that inside
-themselves, before `runCycle` partitions shadow rows away. So a freshly
-graduated fingerprint family (`queues`) stays silent on everything shadow
-already found until its 24 h re-alert window expires, and a snapshot-diff
-family (`stacks`, `targets`, the `tasks` shortfall) never re-reports a
-standing condition at all -- only new transitions. Replay is deliberately not
-built. Instead the digest **names** shadow findings, not just their count, in a
-section marked UNMEASURED that stays visible for 24 h after a family graduates.
-That is where a condition shadow found before graduation remains readable.
-
-The digest's shadow section is kept apart from the real notables and carries
-no `[uninvestigated]` marker: shadow never investigates by design, so the
-marker would read as a failed investigation, and none of it feeds the real
-uninvestigated count.
-
-**`queues` graduated in SIO-1751**, the first family to leave shadow. Its
-discriminator leaves nothing to measure -- a queue is only a DLQ because
-another queue redrives into it, so depth on it means messages already failed
-`maxReceiveCount` times -- and its first production cycle found 563 such
-messages across three dead-letter queues that nothing had been reporting. One whose rate cannot be
-made defensible is reconsidered rather than shipped. Shadow rows are kept out
-of the ledger deliberately: a suppression entry records a finding an operator
-has accepted, while a shadow row records one the fleet has not yet agreed is
-worth reporting at all, and conflating them would make the weekly suppression
-review report a shadow family as something the ledger is masking.
+Noise that turns up in production is handled by the suppression ledger:
+`suppress <family>:% | <reason>` holds a whole family back on one account,
+immediately and reversibly, with a mandatory reason and a weekly review.
 
 Watermarks, fingerprints, and snapshots all persist in `state.db`, so a monitor restart produces neither duplicate nor missed alerts.
 
@@ -249,7 +228,6 @@ Env-with-defaults; no config files. Set in the systemd unit environment or `~/.c
 | `PI_MONITOR_WATCHLIST` | see `checks/watchlist.ts` | Comma-separated CloudTrail event names; setting it replaces the default |
 | `PI_MONITOR_CERT_WARN_DAYS` / `PI_MONITOR_CERT_CRIT_DAYS` | `30` / `7` | Certificate expiry thresholds |
 | `PI_MONITOR_COST_PCT` / `PI_MONITOR_COST_ABS` | `0` / `100` | Cost anomaly threshold: yesterday must exceed the 14-day baseline by BOTH values; the fleet default is an absolute $100 gate with the percentage filter off (SIO-1680) |
-| `PI_MONITOR_SHADOW_FAMILIES` | `targets,tasks,scaling,db-events,stacks,nodegroups,quotas` | Comma-separated families detected and journalled as `shadow_finding` but never reported or investigated (SIO-1748). Setting it REPLACES the default; empty graduates all. Read them with `history ... shadow` |
 | `PI_MONITOR_STATE_DB` | `~/.pi/monitor/state.db` | State location |
 
 Hub-side: `PI_COMS_NET_MAX_TTL_MS` (default `1209600000`, 14 days) caps any requested `ttl_ms`.

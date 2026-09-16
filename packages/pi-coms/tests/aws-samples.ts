@@ -399,31 +399,31 @@ export const EBS_VOLUME_STATUSES_OBSERVED = ["ok"];
 export const BACKUP_JOBS_OBSERVED = 0;
 export const SYNTHETICS_CANARIES_OBSERVED = 0;
 
-// SIO-1751: the first findings the queues family ever produced in production,
-// verbatim from the eu-oit-dev monitor journal minutes after rollout. Real
-// messages, not invented; account ids never appeared in them.
-export const QUEUES_FIRST_PRODUCTION_FINDINGS = [
+// SIO-1752: the target groups that exposed the fail-open bug. Captured from
+// eu-b2b-ecom-prd; private addresses redacted, reasons and descriptions verbatim.
+// Every target answers the health check, just not with a 200, so the load
+// balancer fails open and traffic is served. All five had been in this state
+// for the entire 14-day history window.
+export const ELBV2_FAIL_OPEN_MISCONFIGURED = [
 	{
-		family: "queues",
-		severity: "warn",
-		resource: "connectors-notifications-dlq",
-		summary: "Dead-letter queue connectors-notifications-dlq holds 437 messages redriven from connectors-notifications",
-		dedup_key: "queues:connectors-notifications-dlq:dlq-depth",
+		group: "k8s-monitori-promethe-f053e498da",
+		service: "monitoring/prometheus-ingress-prometheus-grafana:80",
+		healthCheck: "HTTP / port=traffic-port",
+		targets: [{ reason: "Target.ResponseCodeMismatch", description: "Health checks failed with these codes: [302]" }],
 	},
 	{
-		family: "queues",
-		severity: "warn",
-		resource: "connectors-price-notifications-dlq",
-		summary:
-			"Dead-letter queue connectors-price-notifications-dlq holds 109 messages redriven from connectors-price-notifications",
-		dedup_key: "queues:connectors-price-notifications-dlq:dlq-depth",
+		group: "k8s-commerce-prdenvli-412a380e5a",
+		service: "commerce/prdenvauth-ingress-prdenvlivets-app:5443",
+		healthCheck: "HTTPS / port=traffic-port",
+		targets: Array.from({ length: 8 }, () => ({
+			reason: "Target.ResponseCodeMismatch",
+			description: "Health checks failed with these codes: [404]",
+		})),
 	},
 	{
-		family: "queues",
-		severity: "warn",
-		resource: "connectors-image-notifications-dlq",
-		summary:
-			"Dead-letter queue connectors-image-notifications-dlq holds 17 messages redriven from connectors-image-notifications",
-		dedup_key: "queues:connectors-image-notifications-dlq:dlq-depth",
+		group: "k8s-commerce-prdenvto-fb1169b50f",
+		service: "commerce/prdenvauth-ingress-prdenvtooling-web:7443",
+		healthCheck: "HTTPS / port=traffic-port",
+		targets: [{ reason: "Target.ResponseCodeMismatch", description: "Health checks failed with these codes: [403]" }],
 	},
 ];

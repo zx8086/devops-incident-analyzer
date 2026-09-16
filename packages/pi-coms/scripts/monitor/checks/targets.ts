@@ -82,6 +82,72 @@ export function partitionTargets(
 	return { settled, healthy, unhealthy };
 }
 
+// SIO-1752: severity follows the reason code, not the healthy count alone.
+//
+// The first version rated zero healthy targets critical on the premise that the
+// group was serving nothing. AWS documents the opposite: "If a target group
+// contains only unhealthy registered targets, the load balancer routes requests
+// to all those targets, regardless of their health status ... the load balancer
+// fails open." So zero healthy does NOT by itself mean an outage.
+//
+// What decides it is whether the targets are WORKING, and answering is not the
+// same thing. Target.ResponseCodeMismatch means the target responded with a
+// status the matcher did not expect, and the status itself says which case:
+//
+//   3xx / 4xx -- grafana redirecting / to its login page with a 302, an app that
+//                serves no root path and says 404. The app is up; the health
+//                check is asking the wrong question. Under fail-open those
+//                requests are served normally.
+//   5xx       -- the app answered, and what it answered was an error. Under
+//                fail-open users are sent to targets returning errors. That is
+//                an outage, and production has it: the ECS corpus carries 22
+//                health-check failures on "[503]" for one service. That is a real misconfiguration
+// (there is no failover margin if a target genuinely dies) and worth a warn, but
+// it is not an outage. Verified against production: five eu-b2b-ecom-prd target
+// groups sat in exactly this state for the whole 14-day history window, fully
+// serving traffic, and the old rule would have paged five criticals a day.
+//
+// Targets that are NOT answering -- Timeout, FailedHealthChecks, anything else,
+// or no reason at all -- still make zero healthy critical, because fail-open then
+// routes traffic to targets that cannot serve it and clients get 502s. An absent
+// or unrecognised reason is deliberately treated as not answering: the rating is
+// never downgraded without evidence that the target responded.
+export const MISMATCH_REASON = "Target.ResponseCodeMismatch";
+
+// A mismatch is only evidence of a misconfigured check when the codes it
+// returned are known AND none of them is a server error. Unparseable codes prove
+// nothing, so they are treated like any other non-answer.
+function isCheckMisconfiguration(t: { reason: string | null; description: string | null }): boolean {
+	if (t.reason !== MISMATCH_REASON) return false;
+	const codes = mismatchCodes([t]);
+	return codes.length > 0 && codes.every((c) => Number(c) < 500);
+}
+
+export function assessTargetGroup(
+	healthy: number,
+	unhealthy: { reason: string | null; description: string | null }[],
+): { severity: Severity; misconfigured: boolean } {
+	const misconfigured = unhealthy.length > 0 && unhealthy.every(isCheckMisconfiguration);
+	if (misconfigured) return { severity: "warn", misconfigured: true };
+	return { severity: healthy === 0 ? "critical" : "warn", misconfigured: false };
+}
+
+// The status codes a mismatch actually returned, read from the description
+// ("Health checks failed with these codes: [302]"), so the finding names what
+// the check got rather than only that it was wrong.
+export function mismatchCodes(unhealthy: { description: string | null }[]): string[] {
+	const codes = new Set<string>();
+	for (const t of unhealthy) {
+		const m = (t.description ?? "").match(/codes:\s*\[([^\]]*)\]/);
+		for (const c of (m?.[1] ?? "")
+			.split(",")
+			.map((x) => x.trim())
+			.filter(Boolean))
+			codes.add(c);
+	}
+	return [...codes].sort();
+}
+
 export async function checkTargets(
 	client: AwsClient,
 	state: MonitorState,
@@ -135,12 +201,13 @@ export async function checkTargets(
 		const persistent = unhealthy.filter((t) => previous.has(targetKey(t.id, t.port)));
 		if (persistent.length === 0) continue;
 
-		// Zero healthy targets is the one reading with no benign explanation:
-		// the group is serving nothing. It does not wait for a second cycle
-		// elsewhere, but it does here -- the first cycle of a full redeploy
-		// looks identical, and 15 minutes of patience costs less than paging
-		// on every deployment.
-		const severity: Severity = healthy === 0 ? "critical" : "warn";
+		// Rated from every currently unhealthy target, not only the persistent
+		// ones: fail-open routes traffic to all of them, so whether any of them
+		// cannot answer is what decides between a misconfiguration and 502s.
+		// The two-cycle gate still decides WHETHER to report; this decides how
+		// severely.
+		const { severity, misconfigured } = assessTargetGroup(healthy, unhealthy);
+		const codes = misconfigured ? mismatchCodes(unhealthy) : [];
 		const key = `targets:${name}:unhealthy`;
 		stillFailing.add(key);
 		if (!state.shouldAlert(key, REALERT_MS)) continue;
@@ -155,9 +222,20 @@ export async function checkTargets(
 			family: "targets",
 			severity,
 			resource: name,
-			summary:
-				healthy === 0
-					? `Target group ${name} has no healthy targets (${persistent.length}/${settled} unhealthy for 2 cycles): ${shown}${more}`
+			// Fail-open is only named when it is actually happening. With any healthy
+			// target left, the balancer routes to those and the mismatched ones are
+			// simply out of rotation; saying "fails open" there would hand the
+			// investigation a false routing diagnosis.
+			summary: misconfigured
+				? `Target group ${name} health check misconfigured: ${persistent.length}/${settled} targets answer with ${
+						codes.length > 0 ? `status ${codes.join("/")}` : "an unexpected status"
+					} for 2 cycles ${
+						healthy === 0
+							? "(traffic still served: with no healthy target the load balancer fails open)"
+							: `and are out of rotation (${healthy} healthy target(s) carrying traffic)`
+					}: ${shown}${more}`
+				: healthy === 0
+					? `Target group ${name} has no healthy targets and they are not serving (${persistent.length}/${settled} unhealthy for 2 cycles; fail-open is routing users to them): ${shown}${more}`
 					: `Target group ${name} has ${persistent.length}/${settled} targets unhealthy for 2 cycles: ${shown}${more}`,
 			dedup_key: key,
 			evidence: {

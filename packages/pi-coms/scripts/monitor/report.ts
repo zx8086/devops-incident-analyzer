@@ -366,17 +366,6 @@ export type DigestInput = {
 	baselineUsd: number | null;
 	bundleVersion?: string | null;
 	suppressedCount?: number;
-	// SIO-1748: families being measured, not reported. The digest names them
-	// because `status` alone is a pull: a family left in shadow and forgotten
-	// is a check that silently never fires, which is worse than not having it.
-	shadow?: {
-		families: string[];
-		count: number;
-		// SIO-1751: the findings themselves, not only how many. A count alone hid a
-		// real incident -- 563 messages across three dead-letter queues showed up
-		// in the digest as the number 3.
-		notables?: DigestNotable[];
-	};
 	notables?: DigestNotable[];
 	// Operator pause (SIO-1673): the digest still ships as the dead-man signal,
 	// but it must say that the check cycles behind it were skipped.
@@ -449,36 +438,6 @@ export function formatDigest(d: DigestInput): string {
 		lines.push("- spend: no cost data yet");
 	}
 	if ((d.suppressedCount ?? 0) > 0) lines.push(`- suppressed by ledger: ${d.suppressedCount}`);
-	// Shown when families are in shadow OR when shadow rows remain from a family
-	// graduated inside the 24 h window. The second case matters more than it
-	// looks: a shadow run consumes the fingerprint (checks mark alerts before the
-	// shadow partition in runCycle), so a freshly graduated family stays silent
-	// on everything shadow already saw until its re-alert window expires, and a
-	// snapshot-diff family never re-reports a standing condition at all. This
-	// section is the only place those findings stay visible.
-	const shadowNotables = (d.shadow?.notables ?? [])
-		.filter((n) => n.severity !== "info")
-		.sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity]);
-	if (d.shadow && (d.shadow.families.length > 0 || shadowNotables.length > 0)) {
-		const families = d.shadow.families.length > 0 ? d.shadow.families.join(", ") : "none (graduated this window)";
-		lines.push(
-			`- in shadow (detected, NOT reported or investigated): ${families} -- ${d.shadow.count} finding(s) in 24h, read with \`history <n> <sev> <family> shadow\``,
-		);
-		if (shadowNotables.length > 0) {
-			// Named, but kept apart from the real notables above and deliberately
-			// unmarked: "[uninvestigated]" would read as a failed investigation,
-			// when shadow never investigates by design. None of this feeds the
-			// uninvestigated count.
-			lines.push("- shadow warn+ findings (UNMEASURED -- rate not yet trusted):");
-			for (const n of shadowNotables.slice(0, NOTABLE_CAP)) {
-				const repeat = n.occurrences > 1 ? ` (x${n.occurrences})` : "";
-				lines.push(`  - (${n.severity}/${n.family}) ${n.resource}: ${n.summary}${repeat}`);
-			}
-			if (shadowNotables.length > NOTABLE_CAP) {
-				lines.push(`  - +${shadowNotables.length - NOTABLE_CAP} more shadow finding(s) in the journal`);
-			}
-		}
-	}
 	// Deploy canary: a stale bundle silently drops capabilities; the digest is
 	// where the operator sees the version without an SSM round-trip.
 	lines.push(`- bundle: ${d.bundleVersion ?? "unknown"}`);

@@ -171,29 +171,6 @@ const LOGS_EXCLUDE = (process.env.PI_MONITOR_LOGS_EXCLUDE ?? "")
 	.split(",")
 	.map((s) => s.trim())
 	.filter(Boolean);
-// SIO-1748: a new check family cannot be sized in advance -- no reasoning
-// says how many findings `targets` produces a day in a busy account, and the
-// dev spokes are too quiet to measure it. A shadow family is detected and
-// journalled but never reported and never investigated, so its real rate can
-// be read off the journal in production at no token cost and with no inbox
-// impact. It graduates by being removed from this list.
-// The four SIO-1748 workload-state families start here. They are the first
-// checks to read continuous operational state, so their production rate is
-// genuinely unknown, and shipping them straight into the ops inbox is the one
-// outcome the design set out to avoid. Graduating is per account and needs no
-// code change: set the variable to the families that should STAY in shadow
-// (empty graduates all of them).
-// SIO-1751: queues graduated. Of the families here it is the one whose
-// discriminator leaves nothing to measure -- a queue is only a DLQ because
-// another queue redrives into it, and depth on it means messages already failed
-// maxReceiveCount times. Its first production cycle found 563 such messages.
-export const SHADOW_DEFAULT = "targets,tasks,scaling,db-events,stacks,nodegroups,quotas";
-const SHADOW_FAMILIES = new Set(
-	(process.env.PI_MONITOR_SHADOW_FAMILIES ?? SHADOW_DEFAULT)
-		.split(",")
-		.map((s) => s.trim())
-		.filter(Boolean),
-);
 const JOURNAL_RETAIN_MS = Number(process.env.PI_MONITOR_JOURNAL_RETAIN_DAYS ?? 90) * 86_400_000;
 // envNumber, not Number(): a bare Number("") is 0 and Number("ten") is NaN, and
 // `baseline >= NaN` is always false, which would silence the check with no trace.
@@ -225,10 +202,6 @@ export type CycleDeps = {
 	gate?: { name: string; run: () => Promise<{ findings: Finding[]; healthy: boolean }> };
 	checks: { name: string; run: () => Promise<Finding[]> }[];
 	state: MonitorState;
-	// Families detected and journalled but never reported or investigated
-	// (SIO-1748). Injected rather than read from the module so a cycle test can
-	// set it, like every other rail here.
-	shadow?: ReadonlySet<string>;
 	investigate: ((findings: Finding[], priorContext: string) => Promise<InvestigationOutcome>) | null;
 	// Absent: no caps (unit tests); main() always sets it.
 	budget?: BudgetLimits;
@@ -240,9 +213,7 @@ export type CycleDeps = {
 	log: (line: string) => void;
 };
 
-export async function runCycle(
-	deps: CycleDeps,
-): Promise<{ findings: Finding[]; suppressed: number; shadowed: number }> {
+export async function runCycle(deps: CycleDeps): Promise<{ findings: Finding[]; suppressed: number }> {
 	const collected: Finding[] = [];
 	let gated = false;
 	if (deps.gate) {
@@ -269,21 +240,16 @@ export async function runCycle(
 		}
 	}
 
-	// Ledger pass: operator-accepted findings are history, not alerts.
-	// Shadow families are filtered first and for a different reason: the ledger
-	// records a finding an operator has accepted, while a shadow row records one
-	// the fleet has not yet agreed is worth reporting at all. Keeping them apart
-	// keeps the suppression review honest -- a shadow family must not show up
-	// there as something the ledger is masking.
+	// Ledger pass: operator-accepted findings are history, not alerts. This is
+	// also the noise control for a new or noisy check family: `suppress
+	// <family>:% | reason` holds a whole family back per account, reversibly,
+	// with a mandatory reason and a weekly review. SIO-1752 removed the separate
+	// default-on shadow mechanism in its favour -- measured against production,
+	// shadow delayed real incidents and caught one noise source, which was a
+	// severity bug rather than an inherent rate.
 	const findings: Finding[] = [];
 	let suppressed = 0;
-	let shadowed = 0;
 	for (const f of collected) {
-		if (deps.shadow?.has(f.family)) {
-			shadowed++;
-			deps.state.journal("shadow_finding", f);
-			continue;
-		}
 		const m = deps.state.matchSuppression(f.dedup_key);
 		if (m) {
 			suppressed++;
@@ -384,8 +350,8 @@ export async function runCycle(
 		}
 	}
 
-	deps.state.journal("run", { findings: findings.length, suppressed, shadowed });
-	return { findings, suppressed, shadowed };
+	deps.state.journal("run", { findings: findings.length, suppressed });
+	return { findings, suppressed };
 }
 
 // Serializes runs across trigger sources (cron tick, run-checks command).
@@ -560,7 +526,6 @@ function main(): void {
 
 	const fifteenDeps: CycleDeps = {
 		gate,
-		shadow: SHADOW_FAMILIES,
 		checks: [
 			{ name: "alarms", run: () => checkAlarms(cw, state) },
 			{
@@ -592,7 +557,6 @@ function main(): void {
 
 	const hourlyDeps: CycleDeps = {
 		gate,
-		shadow: SHADOW_FAMILIES,
 		checks: [
 			{
 				name: "ingestion",
@@ -652,10 +616,6 @@ function main(): void {
 			baselineUsd: latest ? state.costBaseline(latest.date, 14) : null,
 			bundleVersion: await bundleVersion(),
 			suppressedCount: state.journalRows(day, "suppressed_finding").length,
-			shadow: (() => {
-				const shadowRows = state.journalRows(day, "shadow_finding");
-				return { families: [...SHADOW_FAMILIES], count: shadowRows.length, notables: notablesFromJournal(shadowRows) };
-			})(),
 			notables: notablesFromJournal(findingRows),
 			paused: controls.paused ? { reason: controls.pausedReason, since: controls.pausedSince } : null,
 		});
@@ -684,7 +644,6 @@ function main(): void {
 	const dailyDigest = async (): Promise<void> => {
 		const dailyDeps: CycleDeps = {
 			gate,
-			shadow: SHADOW_FAMILIES,
 			checks: [
 				{ name: "cost", run: () => checkCost(ce, state, { pct: COST_PCT, abs: COST_ABS }) },
 				{ name: "trail", run: () => checkTrail(cloudtrail, state) },
@@ -763,17 +722,16 @@ function main(): void {
 			const day = 86_400_000;
 			const day24 = state.journalRows(day, "finding").length;
 			const sup24 = state.journalRows(day, "suppressed_finding").length;
-			const shadow24 = state.journalRows(day, "shadow_finding").length;
 			const err24 = state.journalRows(day, "check_error").length;
 			const usage = investigationUsage(state.journalRows(day, "investigation"));
-			return `monitor ${MONITOR_NAME} online. last run: ${lastRun ? `${lastRun.ts} ${lastRun.payload}` : "never"}. last 24h: ${day24} finding(s), ${sup24} suppressed, ${shadow24} shadowed, ${err24} check error(s), ${usage.used}/${INVESTIGATE_BUDGET.perDay} investigation prompt(s) used. unsent reports: ${state.unsent().length}. ${describeControls(controls)}`;
+			return `monitor ${MONITOR_NAME} online. last run: ${lastRun ? `${lastRun.ts} ${lastRun.payload}` : "never"}. last 24h: ${day24} finding(s), ${sup24} suppressed, ${err24} check error(s), ${usage.used}/${INVESTIGATE_BUDGET.perDay} investigation prompt(s) used. unsent reports: ${state.unsent().length}. ${describeControls(controls)}`;
 		}
 		if (cmd === "digest") return buildDigest();
 		if (cmd === "review") return buildSuppressionReview();
 		if (cmd === "history" || cmd.startsWith("history ")) {
 			const query = parseHistoryArgs(raw.slice("history".length));
 			if ("error" in query) return query.error;
-			return formatHistory(state.journalRows(7 * 86_400_000, query.shadow ? "shadow_finding" : "finding"), query);
+			return formatHistory(state.journalRows(7 * 86_400_000, "finding"), query);
 		}
 		if (cmd === "suppressions") {
 			const rows = state.listSuppressions();
