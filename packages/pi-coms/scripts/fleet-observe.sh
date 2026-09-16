@@ -10,6 +10,7 @@
 #   fleet-observe.sh layout <hub-selector>   split the calling Herdr pane right and
 #                                            stack one observer per spoke of that hub
 #   fleet-observe.sh watch <spoke>           what each pane runs: stream one spoke here
+#   fleet-observe.sh close <hub-selector>    close that hub's observer panes in this workspace
 #
 # Manifest: deploy/fleet.yaml next to this package, or $PI_COMS_MANIFEST.
 # Needs a fresh SSO login for the spoke profiles.
@@ -60,12 +61,30 @@ watch() {
     | python3 "$DECODER"
 }
 
+in_herdr() { [ "${HERDR_ENV:-}" = 1 ] && [ -n "${HERDR_PANE_ID:-}" ] || { echo "$1 needs to run inside a Herdr pane" >&2; exit 1; }; }
+
+# Observer panes outlive the console and a spoke relaunch ends their stream,
+# leaving a column of dead shells; a second launch would add six more beside
+# them. Close every pane in this workspace labelled with one of the hub's
+# spoke names, except the calling pane.
+close_observers() {
+  local sel=$1 names pane
+  mapfile -t names < <(spokes "$sel" | cut -d' ' -f1)
+  [ "${#names[@]}" -gt 0 ] || return 0
+  while read -r pane; do
+    [ -n "$pane" ] && [ "$pane" != "$HERDR_PANE_ID" ] && herdr pane close "$pane" >/dev/null
+  done < <(herdr pane list --workspace "$HERDR_WORKSPACE_ID" \
+    | jq -r --argjson names "$(printf '%s\n' "${names[@]}" | jq -R . | jq -s .)" \
+      '.result.panes[] | select((.label // "") as $l | $names | index($l)) | .pane_id')
+}
+
 layout() {
   local sel=$1 base cur k n i names
-  [ "${HERDR_ENV:-}" = 1 ] && [ -n "${HERDR_PANE_ID:-}" ] || { echo "layout needs to run inside a Herdr pane" >&2; exit 1; }
+  in_herdr layout
   mapfile -t names < <(spokes "$sel" | cut -d' ' -f1)
   n=${#names[@]}
   [ "$n" -gt 0 ] || { echo "no spokes bound to hub $sel in $MANIFEST" >&2; exit 1; }
+  close_observers "$sel"
   base=$HERDR_PANE_ID
   cur=$(herdr pane split "$base" --direction right --ratio 0.5 --no-focus | jq -r '.result.pane.pane_id')
   for ((i = 0; i < n; i++)); do
@@ -83,5 +102,6 @@ layout() {
 case "${1:-}" in
   layout) layout "${2:?hub selector}" ;;
   watch) watch "${2:?spoke name}" ;;
-  *) echo "usage: $0 layout <hub-selector> | watch <spoke>" >&2; exit 2 ;;
+  close) in_herdr close; close_observers "${2:?hub selector}" ;;
+  *) echo "usage: $0 layout <hub-selector> | watch <spoke> | close <hub-selector>" >&2; exit 2 ;;
 esac

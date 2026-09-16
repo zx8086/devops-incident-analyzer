@@ -101,10 +101,18 @@ coms first *rest:
     # console's status line can name it. Without it the extension sees only a
     # tunnelled 127.0.0.1 URL and the per-environment project namespace, which two
     # prd hubs in different accounts both share.
-    exec pi --use-theme github-dark-default \
+    PI_CMD=(pi --use-theme github-dark-default \
       --name "$CNAME $(date +%Y-%m-%dT%H:%M)" --cname "$CNAME" --explicit \
       --server-url "http://127.0.0.1:$LOCAL_PORT" --auth-token "$TOKEN" --project "$PROJECT" \
-      --hub "$SEL" "${PI_RESOURCE_FLAGS[@]}" "${ARGS[@]}"
+      --hub "$SEL" "${PI_RESOURCE_FLAGS[@]}" "${ARGS[@]}")
+    if [ "$OBSERVE" = 1 ]; then
+      # Stay in the foreground so the observers can be closed when Pi exits
+      # (SIO-1766); Pi's own exit code is preserved.
+      rc=0; "${PI_CMD[@]}" || rc=$?
+      bash "{{justfile_directory()}}/scripts/fleet-observe.sh" close "$SEL" >/dev/null 2>&1 || true
+      exit "$rc"
+    fi
+    exec "${PI_CMD[@]}"
 # Fleet auth principals (SSM-backed; IAM on /pi-coms/auth decides who may run these)
 
 # Mint a principal token: just token-create <principal> ["name1,name2"] [kind] [profile]
