@@ -971,6 +971,53 @@ function markRecoveredToolErrors(
 	});
 }
 
+// SIO-1240: the ceiling on tools bound to one sub-agent turn. Documented here because the
+// value was a bare constant for five months while the whole budget system (MIN_ACTION_TOOLS,
+// composeBoundTools, requiredHeadTools, the SIO-1238 prompt-name ratchet) grew up around it.
+//
+// WHY 25 ORIGINALLY: an empirical workaround. Introduced 2026-04-08 in cc914c31 (SIO-626),
+// whose message reads "Three-tier tool filtering replaces the health-only keyword gate that
+// caused 'Input is too long for requested model' on follow-up queries with 71+ tools ... Tier 3
+// enforces a hard cap of 25 tools per agent." So it was a context-overflow guard, sized against
+// Opus 4.6, and never revisited.
+//
+// WHY 25 TODAY -- a DIFFERENT reason, which is the point of documenting it. What the cap
+// actually buys now is TOOL-SELECTION QUALITY: a small, relevant belt so the model picks well.
+// SIO-1228 and SIO-1234 both reason about it that way, and MIN_ACTION_TOOLS below exists to
+// protect query-relevant tools inside this ceiling. That purpose has never been measured at
+// any value.
+//
+// DO NOT raise it on context-window grounds alone -- that swaps one unmeasured number for
+// another and weakens a constraint current code depends on for a purpose cc914c31 never
+// intended. Sizing it needs evidence about selection quality, not headroom.
+//
+// And do not assume the headroom is there. Greptile on PR #797 corrected an earlier draft of
+// this comment that claimed the overflow rationale was dead because "the fleet moved to
+// Sonnet 5 / Opus 4.8". That conflates two things: SIO-1213 moved the ROOT ORCHESTRATOR roles,
+// but every sub-agent manifest still declares claude-sonnet-4-6 (14 occurrences across the
+// seven agents/incident-analyzer/agents/*/agent.yaml, zero Sonnet 5) -- and the sub-agents are
+// what this cap governs. Nor is RULES.md the whole input: the bound model also receives the
+// loaded SKILL.md bodies, focus context, and every bound tool's name, description and JSON
+// schema. So the true per-turn input is materially larger than any RULES.md byte count, and
+// nobody has measured it. Treat "there is plenty of room" as UNVERIFIED, not as established.
+//
+// The derived prompt-name budget is MAX_TOOLS_PER_AGENT - MIN_ACTION_TOOLS = 17, enforced as
+// PROMPT_TOOL_BUDGET in gitagent-bridge/src/skill-tool-coverage.test.ts:28. That test is the
+// authority on who is over it -- read KNOWN_OVERSUBSCRIBED there rather than any figure quoted
+// in a ticket. As of 2026-09-16 the only entry is aws-agent at 62; SIO-1238 removed gitlab-agent
+// (18 -> 16). Note that test hardcodes its own copy of this constant (`:21`, "keep in sync"),
+// so changing the value here silently desynchronizes the budget it enforces until both move.
+//
+// NOT YET MEASURED (SIO-1240 acceptance criteria 2-4, deliberately left open):
+//   - No telemetry says how often the cap actually bites. composeBoundTools truncates SILENTLY:
+//     nothing logs which tools were dropped, and the `filtered` flag at the createReactAgent
+//     call site is true whenever allTools > 25, so it cannot distinguish "the cap cut something"
+//     from "the action filter legitimately selected few tools".
+//   - MODEL_REGISTRY has no contextWindow to check a budget against, and cannot honestly get
+//     one: verified 2026-09-16 against the live Bedrock API that ListFoundationModels returns
+//     no token/context/limit field for any of the 12 Anthropic models, so the registry's
+//     "every field must be backed by an actual probe run" rule (model-registry.ts:10-12)
+//     cannot be met for it. See the SIO-1240 thread.
 const MAX_TOOLS_PER_AGENT = 25;
 // SIO-785 follow-up (2026-05-18): floor lowered from 5 to 1 so a narrow action
 // (e.g. dlq_messages -> 3 tools: consume / get_message / list_dlq_topics) is
