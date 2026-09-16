@@ -66,6 +66,14 @@ defaults:
   # monitor's own @daily. Quote the cron -- it contains globs.
   # monitor_tz: Europe/Amsterdam
   # monitor_daily_cron: "15 8 * * *"
+  # SIO-1759: tags the organization's required-tags Config rule checks, stamped
+  # on every resource a root creates (and the agent's primary ENI). Values are
+  # org-specific and stay in this gitignored file; a spoke's own org_tags
+  # overrides these key by key. pi-coms tag keys (Project, ManagedBy, Stack,
+  # Environment, ComsProject, Name) are refused.
+  # org_tags:
+  #   CostCenter: <cost center>
+  #   Owner: <owning team address>
 
 spokes:
   eu-shared-services-dev:

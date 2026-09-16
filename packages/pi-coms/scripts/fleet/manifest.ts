@@ -68,6 +68,20 @@ export const HubSchema = z.object({
 });
 export type Hub = z.infer<typeof HubSchema>;
 
+// SIO-1759: tags the organization's Config rule (OrgConfigRule-required-tags)
+// requires on every taggable resource. Values are org-specific and live only in
+// the gitignored manifest and tfvars. The stack markers render.ts stamps are
+// refused as keys: Project targets the fleet-update SSM association, and a
+// silent override would detach every host from it.
+export const RESERVED_TAG_KEYS = ["Project", "ManagedBy", "Stack", "Environment", "ComsProject", "Name"];
+const OrgTagsSchema = z
+	// Values may be empty: the rule's InputParameters name keys only, and
+	// eu-ediservices-prd tags 68 resources with an empty BlueprintID.
+	.record(z.string().min(1).max(128), z.string().max(256))
+	.refine((tags) => !Object.keys(tags).some((k) => RESERVED_TAG_KEYS.includes(k)), {
+		message: `org_tags must not set a pi-coms tag (${RESERVED_TAG_KEYS.join(", ")})`,
+	});
+
 export const SpokeSchema = z.object({
 	env: FleetEnvironmentSchema,
 	// SIO-1666: which hub this spoke registers with, by hub key. EXPLICIT -- it
@@ -87,6 +101,8 @@ export const SpokeSchema = z.object({
 	agent_name: z.string().min(1).optional(),
 	instance_type: z.string().min(1).optional(),
 	pi_model: z.string().min(1).optional(),
+	// Per-spoke keys override defaults.org_tags key by key.
+	org_tags: OrgTagsSchema.optional(),
 });
 export type Spoke = z.infer<typeof SpokeSchema>;
 
@@ -116,6 +132,7 @@ export const FleetManifestSchema = z.object({
 		// a reporting bug, not a feature. Absent keeps the host zone (UTC here).
 		monitor_tz: z.string().min(1).optional(),
 		monitor_daily_cron: z.string().min(1).optional(),
+		org_tags: OrgTagsSchema.optional(),
 	}),
 	spokes: z.record(z.string().regex(/^[a-z0-9-]+$/), SpokeSchema),
 });
@@ -150,6 +167,10 @@ export function externalIdFor(manifest: FleetManifest, name: string): string {
 	const id = spoke.external_id ?? manifest.defaults.external_id[spoke.env];
 	if (!id) throw new Error(`spoke "${name}": no external_id for environment "${spoke.env}"`);
 	return id;
+}
+
+export function orgTagsFor(manifest: FleetManifest, name: string): Record<string, string> {
+	return { ...manifest.defaults.org_tags, ...spokeFor(manifest, name).org_tags };
 }
 
 export function spokeFor(manifest: FleetManifest, name: string): Spoke {
