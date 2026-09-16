@@ -1,6 +1,6 @@
 // scripts/monitor/checks/db-events.ts
 import { DescribeEventsCommand, type DescribeEventsCommandOutput, type Event as RdsEvent } from "@aws-sdk/client-rds";
-import type { Finding, Severity } from "../report.ts";
+import { type Finding, overflowFinding, type Severity } from "../report.ts";
 import type { MonitorState } from "../state.ts";
 import type { AwsClient } from "./alarms.ts";
 
@@ -53,6 +53,7 @@ export async function checkDbEvents(
 		: FIRST_LOOKBACK_MINUTES;
 
 	const findings: Finding[] = [];
+	let omitted = 0;
 	let newest = since ?? now - minutes * 60_000;
 	let nextMarker: string | undefined;
 	const events: RdsEvent[] = [];
@@ -93,11 +94,20 @@ export async function checkDbEvents(
 			},
 			at,
 		});
-		if (findings.length >= MAX_FINDINGS) break;
+		if (findings.length >= MAX_FINDINGS) {
+			// Count what is left rather than deriving it: events already inside
+			// the re-alert window were processed, not omitted.
+			omitted = events.length - (events.indexOf(e) + 1);
+			break;
+		}
 	}
 
-	// Bounded by the scan start, as elsewhere: an event written during the scan
-	// must be seen next cycle rather than skipped.
-	state.setWatermark("db-events:rds", Math.min(newest, now));
+	if (omitted > 0) {
+		findings.push(overflowFinding("db-events", omitted, MAX_FINDINGS, at));
+	} else {
+		// Bounded by the scan start, as elsewhere: an event written during the
+		// scan must be seen next cycle rather than skipped.
+		state.setWatermark("db-events:rds", Math.min(newest, now));
+	}
 	return findings;
 }

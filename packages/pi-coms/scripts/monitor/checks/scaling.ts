@@ -4,7 +4,7 @@ import {
 	DescribeScalingActivitiesCommand,
 	type DescribeScalingActivitiesCommandOutput,
 } from "@aws-sdk/client-auto-scaling";
-import type { Finding } from "../report.ts";
+import { type Finding, overflowFinding } from "../report.ts";
 import type { MonitorState } from "../state.ts";
 import type { AwsClient } from "./alarms.ts";
 
@@ -147,15 +147,7 @@ export async function checkScaling(
 	// watermark is held back so they are re-collected next cycle (their
 	// fingerprints stop the emitted ones repeating).
 	if (omitted > 0) {
-		findings.push({
-			family: "scaling",
-			severity: "info",
-			resource: "asg:overflow",
-			summary: `${omitted} further scaling-failure cause(s) not reported this cycle (cap ${MAX_FINDINGS}); re-read next cycle`,
-			dedup_key: `scaling:overflow:${at.slice(0, 16)}`,
-			evidence: { omitted, cap: MAX_FINDINGS, totalCauses: ordered.length },
-			at,
-		});
+		findings.push(overflowFinding("scaling", omitted, MAX_FINDINGS, at));
 	} else {
 		// Bounded by the scan start, as elsewhere: an activity that starts
 		// mid-scan must be seen next cycle rather than skipped.

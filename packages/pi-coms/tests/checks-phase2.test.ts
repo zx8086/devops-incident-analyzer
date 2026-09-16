@@ -6,6 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import { severityForCategories } from "../scripts/monitor/checks/db-events.ts";
 import { classifyStackStatus } from "../scripts/monitor/checks/stacks.ts";
+import { overflowFinding } from "../scripts/monitor/report.ts";
 import {
 	CFN_STACK_STATUSES_OBSERVED,
 	ELASTICACHE_EVENT_FIELDS_OBSERVED,
@@ -78,5 +79,29 @@ describe("stack status classification, against real CloudFormation output", () =
 		]) {
 			expect({ status, severity: classifyStackStatus(status) }).toEqual({ status, severity: null });
 		}
+	});
+});
+
+// The capped-scan rule was got wrong independently in three checks, so it now
+// lives in one helper and is asserted once.
+describe("overflow findings", () => {
+	test("an overflow is info, so it never buys an investigation", () => {
+		const f = overflowFinding("stacks", 4, 10, "2026-09-16T12:34:56.000Z");
+		expect(f.severity).toBe("info");
+		expect(f.family).toBe("stacks");
+		expect(f.summary).toContain("4 further");
+		expect(f.evidence).toEqual({ omitted: 4, cap: 10 });
+	});
+
+	test("successive overflows do not collapse into one finding", () => {
+		const a = overflowFinding("db-events", 2, 10, "2026-09-16T12:34:56.000Z");
+		const b = overflowFinding("db-events", 2, 10, "2026-09-16T12:49:56.000Z");
+		expect(a.dedup_key).not.toBe(b.dedup_key);
+	});
+
+	test("two families overflowing in one cycle stay distinct", () => {
+		const a = overflowFinding("stacks", 1, 10, "2026-09-16T12:34:56.000Z");
+		const b = overflowFinding("scaling", 1, 10, "2026-09-16T12:34:56.000Z");
+		expect(a.dedup_key).not.toBe(b.dedup_key);
 	});
 });

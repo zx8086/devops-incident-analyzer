@@ -266,8 +266,7 @@ export const ECS_DOCUMENTED_FAILURE_EVENTS: { message: string; label: string }[]
 export const ECS_DOCUMENTED_SELF_HEALING =
 	"service (api-service) (task 9d85800c) (instance i-0abc) is unhealthy in (elb api-service-elb) due to (reason Instance has failed at least the UnhealthyThreshold number of health checks consecutively.)";
 
-// ---------------------------------------------------------------------------
-// SIO-1749 captures, same accounts, same day.
+// SIO-1749 captures, from the same accounts on the same day.
 
 // RDS event categories actually seen over 14 days in a busy production
 // account: 90 events, every one automated snapshot activity. This is the

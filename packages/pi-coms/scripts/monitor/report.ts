@@ -40,6 +40,30 @@ export const FindingSchema = z.object({
 });
 export type Finding = z.infer<typeof FindingSchema>;
 
+// A capped scan has to answer for what it did not report. Getting this wrong
+// loses findings TWICE over: they are absent from the report, and then the
+// progress marker (watermark or snapshot) advances past them so no later scan
+// sees them either. It was got wrong independently in scaling, db-events and
+// stacks, so the rule lives here rather than in each check:
+//
+//   if (omitted > 0) { findings.push(overflowFinding(...)); }   // hold progress
+//   else             { advance the watermark / write the snapshot }
+//
+// The overflow row is info, so it never costs an investigation, and its dedup
+// key carries the cycle minute so successive overflows do not collapse into
+// one.
+export function overflowFinding(family: Family, omitted: number, cap: number, at: string): Finding {
+	return {
+		family,
+		severity: "info",
+		resource: `${family}:overflow`,
+		summary: `${omitted} further ${family} finding(s) not reported this cycle (cap ${cap}); progress held so they are re-read next cycle`,
+		dedup_key: `${family}:overflow:${at.slice(0, 16)}`,
+		evidence: { omitted, cap },
+		at,
+	};
+}
+
 // SIO-1741: a diagnosis must cite at least one command it ran and what that
 // command showed, and score its own confidence. A spoke once answered with a
 // baseline ("5-46 events/hour, no zero hours") that CloudWatch contradicted;

@@ -6,7 +6,7 @@ import {
 	type DescribeStacksCommandOutput,
 	type Stack,
 } from "@aws-sdk/client-cloudformation";
-import type { Finding, Severity } from "../report.ts";
+import { type Finding, overflowFinding, type Severity } from "../report.ts";
 import type { MonitorState } from "../state.ts";
 import type { AwsClient } from "./alarms.ts";
 
@@ -55,66 +55,79 @@ export async function checkStacks(
 	} while (nextToken);
 
 	const prev = state.getSnapshot("cfn-stacks");
+	// Built as each stack is EVALUATED, not upfront: recording the status of a
+	// stack whose transition was never reported would make it look unchanged on
+	// the next scan, and that transition would be lost for good.
 	const current: Record<string, string> = {};
-	for (const s of stacks) {
-		if (s.StackName) current[s.StackName] = s.StackStatus ?? "unknown";
-	}
-
 	const findings: Finding[] = [];
-	// First run establishes the baseline silently, the way the compliance check
-	// does: a pre-existing failed stack is a known state, not today's news.
-	if (prev !== null) {
-		for (const s of stacks) {
-			const name = s.StackName;
-			const status = s.StackStatus ?? "unknown";
-			if (!name) continue;
-			if (prev[name] === status) continue;
-			const severity = classifyStackStatus(status);
-			if (severity === null) continue;
+	let omitted = 0;
 
-			// The failing resource is what makes this diagnosable, and it is one
-			// extra call only for a stack that has actually failed.
-			let failedResources: { logicalId: string | null; status: string | null; reason: string | null }[] = [];
-			try {
-				const ev = (await client.send(
-					new DescribeStackEventsCommand({ StackName: name }),
-				)) as DescribeStackEventsCommandOutput;
-				failedResources = (ev.StackEvents ?? [])
-					.filter((e) => FAILED_SUFFIX.test(e.ResourceStatus ?? ""))
-					.slice(0, EVENT_SAMPLE)
-					.map((e) => ({
-						logicalId: e.LogicalResourceId ?? null,
-						status: e.ResourceStatus ?? null,
-						reason: e.ResourceStatusReason ?? null,
-					}));
-			} catch {
-				// A denied or throttled event read must not lose the finding: the
-				// status transition is the signal, the events are only evidence.
-			}
+	for (const [i, s] of stacks.entries()) {
+		const name = s.StackName;
+		if (!name) continue;
+		const status = s.StackStatus ?? "unknown";
+		current[name] = status;
 
-			findings.push({
-				family: "stacks",
-				severity,
-				resource: name,
-				summary: `CloudFormation stack ${name} is ${status}${
-					failedResources[0]?.reason ? `: ${failedResources[0].reason}` : ""
-				}`,
-				dedup_key: `stacks:${name}:${status}`,
-				evidence: {
-					stackName: name,
-					status,
-					previousStatus: prev[name] ?? null,
-					statusReason: s.StackStatusReason ?? null,
-					driftStatus: s.DriftInformation?.StackDriftStatus ?? null,
-					lastUpdated: s.LastUpdatedTime ?? null,
-					failedResources,
-				},
-				at,
-			});
-			if (findings.length >= MAX_FINDINGS) break;
+		// First run establishes the baseline silently, the way the compliance
+		// check does: a pre-existing failed stack is a known state, not news.
+		if (prev === null) continue;
+		if (prev[name] === status) continue;
+		const severity = classifyStackStatus(status);
+		if (severity === null) continue;
+
+		// The failing resource is what makes this diagnosable, and it costs one
+		// extra call only for a stack that has actually failed.
+		let failedResources: { logicalId: string | null; status: string | null; reason: string | null }[] = [];
+		try {
+			const ev = (await client.send(
+				new DescribeStackEventsCommand({ StackName: name }),
+			)) as DescribeStackEventsCommandOutput;
+			failedResources = (ev.StackEvents ?? [])
+				.filter((e) => FAILED_SUFFIX.test(e.ResourceStatus ?? ""))
+				.slice(0, EVENT_SAMPLE)
+				.map((e) => ({
+					logicalId: e.LogicalResourceId ?? null,
+					status: e.ResourceStatus ?? null,
+					reason: e.ResourceStatusReason ?? null,
+				}));
+		} catch {
+			// A denied or throttled event read must not lose the finding: the
+			// status transition is the signal, the events are only evidence.
+		}
+
+		findings.push({
+			family: "stacks",
+			severity,
+			resource: name,
+			summary: `CloudFormation stack ${name} is ${status}${
+				failedResources[0]?.reason ? `: ${failedResources[0].reason}` : ""
+			}`,
+			dedup_key: `stacks:${name}:${status}`,
+			evidence: {
+				stackName: name,
+				status,
+				previousStatus: prev[name] ?? null,
+				statusReason: s.StackStatusReason ?? null,
+				driftStatus: s.DriftInformation?.StackDriftStatus ?? null,
+				lastUpdated: s.LastUpdatedTime ?? null,
+				failedResources,
+			},
+			at,
+		});
+
+		if (findings.length >= MAX_FINDINGS) {
+			omitted = stacks.length - (i + 1);
+			break;
 		}
 	}
 
-	state.setSnapshot("cfn-stacks", current);
+	if (omitted > 0) {
+		findings.push(overflowFinding("stacks", omitted, MAX_FINDINGS, at));
+		// Merge, so the stacks never evaluated keep their previous status and
+		// their transition is still pending rather than silently absorbed.
+		state.setSnapshot("cfn-stacks", { ...(prev ?? {}), ...current });
+	} else {
+		state.setSnapshot("cfn-stacks", current);
+	}
 	return findings;
 }
