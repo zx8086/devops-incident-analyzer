@@ -378,6 +378,7 @@ fi
 # normal state. resume_agents_on_restore brings Pi back after a server restart.
 sudo -u "$AGENT_USER" -H mkdir -p "$AGENT_HOME/.config/herdr"
 cat > "$AGENT_HOME/.config/herdr/config.toml" <<'HERDRCONF'
+[server]
 headless_cols = 200
 headless_rows = 50
 
