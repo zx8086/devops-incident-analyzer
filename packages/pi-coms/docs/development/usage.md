@@ -62,6 +62,20 @@ just coms eu-shared-services-prd simon
 
 `just coms <cname>` with no selector still targets a local hub.
 
+Add `--observe` when the console runs inside a Herdr pane to watch the hub's
+spokes while you work:
+
+```bash
+just coms eu-shared-services-prd simon --observe
+```
+
+The console keeps the calling pane; the right half becomes one pane per spoke
+bound to that hub in `deploy/fleet.yaml`, equal in height, labelled by spoke,
+each streaming that agent's live Pi screen. The stream is
+`herdr terminal session observe` on the host over SSM, so nothing typed in
+those panes reaches an agent, and the observers do not resize the agent's
+terminal. Ctrl-C in a pane ends only that observer.
+
 Operator sessions load `AGENTS.md` from `packages/pi-coms/` (run Pi with that directory as cwd, which `just coms` does). That file is GENERATED from `agents/pi-fleet/` by the gitagent bridge (SIO-1649): edit the definition, then run `just sync-persona`; a bridge test pins the committed copy to the export. It carries the console scope
 and synthesis rules. Personal tokens come from the directory
 (`just token-create <principal> <names-csv>` for an admin; each operator
