@@ -4,7 +4,14 @@
 // buildToolErrorEnvelope(). The agent reads that envelope structurally (kind/category) instead of
 // regexing the human message. This replaces the per-server flatten-to-string + agent-side message
 // regex with a single vocabulary defined in agent-state.ts.
-import { TOOL_ERROR_KIND_TO_CATEGORY, type ToolErrorCategory, type ToolErrorKind } from "./agent-state.ts";
+import { z } from "zod";
+import {
+	TOOL_ERROR_KIND_TO_CATEGORY,
+	type ToolErrorCategory,
+	ToolErrorCategorySchema,
+	type ToolErrorKind,
+	ToolErrorKindSchema,
+} from "./agent-state.ts";
 
 // The structured payload a server attaches on a tool error. `kind` is the fine-grained, SDK-mapped
 // discriminator; the agent derives the coarse category from it via TOOL_ERROR_KIND_TO_CATEGORY.
@@ -24,6 +31,23 @@ export interface StructuredToolError {
 export interface ToolErrorEnvelope {
 	_error: StructuredToolError & { category: ToolErrorCategory };
 }
+
+// SIO-1119: runtime validation of the wire shape above, for callers that RECEIVE an envelope
+// (tests, and any consumer parsing a CallToolResult text block). Kept in lockstep with the
+// interface by construction -- both read the same kind/category enums. Deliberately NOT used by
+// buildToolErrorEnvelope: producing the envelope is already type-safe, so validating our own
+// output on every tool error would cost a parse per call for no signal.
+export const ToolErrorEnvelopeSchema = z.object({
+	_error: z.object({
+		kind: ToolErrorKindSchema,
+		category: ToolErrorCategorySchema,
+		message: z.string(),
+		advice: z.string().optional(),
+		statusCode: z.number().optional(),
+		hostname: z.string().optional(),
+		upstreamContentType: z.string().optional(),
+	}),
+});
 
 export function buildToolErrorEnvelope(err: StructuredToolError): ToolErrorEnvelope {
 	return {

@@ -2,20 +2,28 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { config } from "../src/config";
 import toolRegistry from "../src/tools";
 import { logger } from "../src/utils/logger";
-import { mockConnection, mockServer } from "./test.utils";
+import { mockConnection, mockServer, parseErrorEnvelope } from "./test.utils";
+
+// SIO-1109: this suite exercises the KV write tools, now gated on readOnlyQueryMode (default
+// true). Disable the gate for the suite; the gate itself is covered in
+// upsert/deleteDocumentById.test.ts.
+const priorReadOnlyQueryMode = config.server.readOnlyQueryMode;
 
 describe("Edge Cases and Error Scenarios", () => {
 	const TEST_DOC_ID = "edge_case_test_doc";
 
 	beforeAll(async () => {
+		config.server.readOnlyQueryMode = false;
 		Object.values(toolRegistry).forEach((registerTool) => {
 			registerTool(mockServer as unknown as McpServer, mockConnection.defaultBucket);
 		});
 	});
 
 	afterAll(async () => {
+		config.server.readOnlyQueryMode = priorReadOnlyQueryMode;
 		if (mockConnection.defaultBucket) {
 			const collection = mockConnection.defaultBucket.scope("_default").collection("_default");
 			try {
@@ -121,7 +129,7 @@ describe("Edge Cases and Error Scenarios", () => {
 				document_content: malformedJson,
 			});
 			expect(result.isError).toBe(true);
-			expect(JSON.parse(result.content[0].text)._error.category).toBe("unknown");
+			expect(parseErrorEnvelope(result)._error.category).toBe("unknown");
 		});
 
 		test("should handle empty document content", async () => {
@@ -136,7 +144,7 @@ describe("Edge Cases and Error Scenarios", () => {
 				document_content: "",
 			});
 			expect(result.isError).toBe(true);
-			expect(JSON.parse(result.content[0].text)._error.category).toBe("unknown");
+			expect(parseErrorEnvelope(result)._error.category).toBe("unknown");
 		});
 	});
 

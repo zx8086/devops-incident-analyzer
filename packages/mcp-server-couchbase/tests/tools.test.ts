@@ -2,11 +2,18 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { config } from "../src/config";
 import toolRegistry from "../src/tools";
 import { withLatencyMs } from "../src/tools/getClusterHealth";
 import { logger } from "../src/utils/logger";
 import { testConfig } from "./test.config";
-import { type MockBucket, type MockCluster, mockConnection, mockServer } from "./test.utils";
+import { type MockBucket, type MockCluster, mockConnection, mockServer, parseErrorEnvelope } from "./test.utils";
+
+// SIO-1109: this suite exercises the KV write tools (upsert/delete), now gated on
+// readOnlyQueryMode (default true). Disable the gate for the suite so it keeps testing what it
+// was written to test; the gate itself is covered in upsert/deleteDocumentById.test.ts. Direct
+// config mutation with save/restore per src/__tests__/tools-list-snapshot.test.ts:61-62,98.
+const priorReadOnlyQueryMode = config.server.readOnlyQueryMode;
 
 describe("Couchbase MCP Server Tool Tests", () => {
 	let _testCtx: { lifespanContext: { bucket: unknown; readOnlyQueryMode: boolean } } | undefined;
@@ -16,6 +23,7 @@ describe("Couchbase MCP Server Tool Tests", () => {
 	beforeAll(async () => {
 		try {
 			logger.info("Setting up test environment...");
+			config.server.readOnlyQueryMode = false;
 
 			// Create test context
 			_testCtx = {
@@ -40,6 +48,7 @@ describe("Couchbase MCP Server Tool Tests", () => {
 	// Cleanup - runs after all tests
 	afterAll(async () => {
 		try {
+			config.server.readOnlyQueryMode = priorReadOnlyQueryMode;
 			logger.info("Test environment cleanup complete");
 		} catch (error) {
 			logger.error(`Test cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -132,7 +141,7 @@ describe("Couchbase MCP Server Tool Tests", () => {
 				document_id: "no_such_document_id",
 			});
 			expect(getResult.isError).toBe(true);
-			const getError = JSON.parse(getResult.content[0].text)._error;
+			const { _error: getError } = parseErrorEnvelope(getResult);
 			expect(getError.kind).toBe("unknown");
 			expect(getError.category).toBe("unknown");
 			expect(getError.message).toContain("Failed to get document by id");
@@ -142,7 +151,7 @@ describe("Couchbase MCP Server Tool Tests", () => {
 			// Empty params make JSON.parse(undefined) throw, which classifies to kind/category "unknown".
 			const upsertResult = await upsertHandler({});
 			expect(upsertResult.isError).toBe(true);
-			const upsertError = JSON.parse(upsertResult.content[0].text)._error;
+			const { _error: upsertError } = parseErrorEnvelope(upsertResult);
 			expect(upsertError.kind).toBe("unknown");
 			expect(upsertError.category).toBe("unknown");
 			expect(upsertError.message).toContain("Failed to upsert document by id");
@@ -152,7 +161,7 @@ describe("Couchbase MCP Server Tool Tests", () => {
 			// params make the mock throw a plain Error, which classifies to kind/category "unknown".
 			const deleteResult = await deleteHandler({});
 			expect(deleteResult.isError).toBe(true);
-			const deleteError = JSON.parse(deleteResult.content[0].text)._error;
+			const { _error: deleteError } = parseErrorEnvelope(deleteResult);
 			expect(deleteError.kind).toBe("unknown");
 			expect(deleteError.category).toBe("unknown");
 			expect(deleteError.message).toContain("Failed to delete document by id");
