@@ -18,14 +18,15 @@ describe("AWS SDK major-version parity (SIO-1654)", () => {
 	const monitorDeps = monitor.dependencies as Record<string, string>;
 	const analyzerDeps = mcpAws.dependencies as Record<string, string>;
 
-	test("the monitor and fleet CLI declare their twenty-one AWS SDK clients", () => {
+	test("the monitor and fleet CLI declare their twenty-two AWS SDK clients", () => {
 		// Nine monitor clients plus the five the fleet CLI added (SIO-1653): bedrock,
 		// iam, organizations, s3, ssm; plus elastic-load-balancing-v2 for the
 		// listener-certificate check; plus health, config-service and guardduty for
 		// the SIO-1740 checks; plus auto-scaling, ecs and sqs for the SIO-1748
-		// workload-state checks. A ratchet: bump it when a client is added.
+		// workload-state checks; plus cloudformation for the SIO-1749 stacks check.
+		// A ratchet: bump it when a client is added.
 		const clients = Object.keys(monitorDeps).filter((n) => n.startsWith("@aws-sdk/client-"));
-		expect(clients.length).toBe(21);
+		expect(clients.length).toBe(22);
 	});
 
 	test("every monitor client shares the analyzer's AWS SDK major", () => {

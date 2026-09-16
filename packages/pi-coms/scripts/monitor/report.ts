@@ -23,6 +23,9 @@ export const FamilySchema = z.enum([
 	"tasks",
 	"queues",
 	"scaling",
+	// SIO-1749: further failure assertions on reads already granted.
+	"db-events",
+	"stacks",
 ]);
 export type Family = z.infer<typeof FamilySchema>;
 

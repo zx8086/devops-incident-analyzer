@@ -103,6 +103,8 @@ Every cycle starts with a T0 gate: `sts:GetCallerIdentity` compared against `AWS
 | Tasks | 15 min | Three things ECS asserts about a service (SIO-1748), never the stopped tasks themselves -- every deployment and scale-in stops tasks. (1) `deployments[].rolloutState == FAILED`: the circuit breaker already ruled, critical. (2) A service event matching a failure phrase, free with `DescribeServices`: `is unable to consistently start tasks successfully` is ECS reporting a crash loop, which counts cannot see because tasks die and are replaced fast enough that `runningCount` never drops; also no-capacity placement, failing health checks, image/secret pull, `ResourceInitializationError`. (3) `runningCount < desiredCount` sustained across two cycles. Stopped-task reasons are left to the investigation, which has the CLI and the ecs-task-failures runbook | Snapshot for the shortfall gate, watermark on service events, per-signal fingerprint, 24 h re-alert, clears on recovery |
 | Queues | 15 min | `ListQueues` + `GetQueueAttributes` (SIO-1748). Depth on a source queue is never reported -- a queue holding messages is a queue working. A DLQ is identified semantically, by being the `deadLetterTargetArn` of some other queue's redrive policy rather than by name, so a `-dlq` scratch queue nothing redrives into stays silent; any depth on a real one means messages already failed `maxReceiveCount` times. Evidence names the source queues, which is where the fault is. Source-queue backlog is deliberately absent: it needs a self-baseline over the CloudWatch `ApproximateAgeOfOldestMessage` history (not a queue attribute), sized on shadow data | Per queue fingerprint, 24 h re-alert, clears when drained |
 | Scaling | 15 min | `autoscaling:DescribeScalingActivities`, `StatusCode` in {Failed, Cancelled} since a watermark (SIO-1748). No invented threshold: Auto Scaling labels the failure itself. Catches InsufficientInstanceCapacity, quota exhaustion, a launch template referencing a deleted AMI or security group, and `iam:PassRole` denials -- none of which produce an alarm unless somebody wrote one. Activities sharing a normalized cause collapse into one finding, so one AZ running dry is one report line rather than one per group. Application Auto Scaling is not read: it needs a call per ServiceNamespace and its ECS failures already surface through the tasks check | Normalized cause + group, 24 h re-alert; watermark bounded by the scan start |
+| Db-events | hourly | `rds:DescribeEvents` filtered SERVER-side on `EventCategories` to failure / failover / low storage / availability (SIO-1749). The cleanest discriminator in the set, because the API does it: an account with 90 events over 14 days returns 0 once filtered, since all 90 were automated snapshot activity. `failure` and `low storage` are critical, the rest warn. ElastiCache is deliberately not read -- its events carry NO EventCategories field at all, so there is no categorical discriminator and every message observed in production was benign or self-healing | Source + category set, 24 h re-alert |
+| Stacks | daily | CloudFormation `DescribeStacks`, snapshot-diffed (SIO-1749). CloudFormation states its own verdict, so the discriminator is a suffix of the status enum: `*_FAILED` is critical, a completed rollback is warn (the stack survived, the deployment did not), everything else silent. Edge-triggered, because a stack that has sat in `UPDATE_ROLLBACK_COMPLETE` for a year is not news every day. A failed stack costs one extra `DescribeStackEvents` for the failing resource and reason, and a denied read loses only the evidence, never the finding | Edge-triggered by the snapshot diff; first run establishes the baseline silently |
 
 ### Shadow families (SIO-1748)
 
@@ -223,7 +225,7 @@ Env-with-defaults; no config files. Set in the systemd unit environment or `~/.c
 | `PI_MONITOR_WATCHLIST` | see `checks/watchlist.ts` | Comma-separated CloudTrail event names; setting it replaces the default |
 | `PI_MONITOR_CERT_WARN_DAYS` / `PI_MONITOR_CERT_CRIT_DAYS` | `30` / `7` | Certificate expiry thresholds |
 | `PI_MONITOR_COST_PCT` / `PI_MONITOR_COST_ABS` | `0` / `100` | Cost anomaly threshold: yesterday must exceed the 14-day baseline by BOTH values; the fleet default is an absolute $100 gate with the percentage filter off (SIO-1680) |
-| `PI_MONITOR_SHADOW_FAMILIES` | `targets,tasks,queues,scaling` | Comma-separated families detected and journalled as `shadow_finding` but never reported or investigated (SIO-1748). Setting it REPLACES the default; empty graduates all. Read them with `history ... shadow` |
+| `PI_MONITOR_SHADOW_FAMILIES` | `targets,tasks,queues,scaling,db-events,stacks` | Comma-separated families detected and journalled as `shadow_finding` but never reported or investigated (SIO-1748). Setting it REPLACES the default; empty graduates all. Read them with `history ... shadow` |
 | `PI_MONITOR_STATE_DB` | `~/.pi/monitor/state.db` | State location |
 
 Hub-side: `PI_COMS_NET_MAX_TTL_MS` (default `1209600000`, 14 days) caps any requested `ttl_ms`.
@@ -231,6 +233,26 @@ Hub-side: `PI_COMS_NET_MAX_TTL_MS` (default `1209600000`, 14 days) caps any requ
 ### IAM
 
 Everything fits the existing role except two named additions in `deploy/modules/agent/main.tf`: `ce:GetCostAndUsage` (inline `cost-explorer-read`; Cost Explorer is always called against `us-east-1`) and `acm:ListCertificates`/`acm:DescribeCertificate` plus `elasticloadbalancing:DescribeLoadBalancers`/`DescribeListeners`/`DescribeListenerCertificates` (`CertificateReads` in the dev-extensions policy) for the cert and listener-cert checks. `sts:GetCallerIdentity` needs no grant; `cloudwatch:GetMetricData`, `cloudtrail:GetTrailStatus`, and `cloudtrail:LookupEvents` are already on the DevOpsAgentReadOnly policies.
+
+### Families considered and not built (SIO-1749)
+
+Three of the five families originally scoped were cut on production evidence,
+before any code was written. Recording why, so they are not re-proposed:
+
+- **`securityhub`** -- one account holds **58 standing ACTIVE+NEW findings at
+  CRITICAL or HIGH**, and Security Hub re-stamps `UpdatedAt` as its controls
+  re-evaluate, so a watermark would re-report all 58 every cycle. The content is
+  AWS Foundational Security Best Practices controls ("GuardDuty should be
+  enabled", "RDS automatic minor version upgrades should be enabled"), which is
+  the same class the `compliance` family already covers by snapshot diff. It
+  would have been alert fatigue for no new information.
+- **`executions`** -- Step Functions `ListStateMachines` returns **zero in four
+  production accounts**. Nothing to detect, and nothing to verify a
+  response shape against.
+- **`quotas`** -- the Service Quotas API is not reachable through the tooling
+  available, so the shapes could not be verified. The need is met instead by
+  Trusted Advisor's `service_limits` category (SIO-1750), which answers all 52
+  limit checks in a single call with AWS's own ok/warning/error verdict.
 
 The SIO-1748 workload-state checks add **no IAM at all**. `elasticloadbalancing:DescribeTargetGroups`/`DescribeTargetHealth`, the `ecs:List*`/`Describe*` set, `sqs:ListQueues`/`GetQueueAttributes` and `autoscaling:DescribeScalingActivities` were already granted and simply had no detector reading them.
 

@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ACMClient } from "@aws-sdk/client-acm";
 import { AutoScalingClient } from "@aws-sdk/client-auto-scaling";
+import { CloudFormationClient } from "@aws-sdk/client-cloudformation";
 import { CloudTrailClient } from "@aws-sdk/client-cloudtrail";
 import { CloudWatchClient, DescribeAlarmsCommand } from "@aws-sdk/client-cloudwatch";
 import { CloudWatchLogsClient } from "@aws-sdk/client-cloudwatch-logs";
@@ -34,6 +35,7 @@ import { checkAlarms } from "./monitor/checks/alarms.ts";
 import { certRegions, checkCerts, checkListenerCerts } from "./monitor/checks/certs.ts";
 import { checkCompliance } from "./monitor/checks/compliance.ts";
 import { COST_DEFAULTS, checkCost } from "./monitor/checks/cost.ts";
+import { checkDbEvents } from "./monitor/checks/db-events.ts";
 import { checkDrift } from "./monitor/checks/drift.ts";
 import { checkGuardDuty } from "./monitor/checks/guardduty.ts";
 import { checkHealth } from "./monitor/checks/health.ts";
@@ -43,6 +45,7 @@ import { checkLogs } from "./monitor/checks/logs.ts";
 import { checkQueues } from "./monitor/checks/queues.ts";
 import { checkResourceDrift } from "./monitor/checks/resource-drift.ts";
 import { checkScaling } from "./monitor/checks/scaling.ts";
+import { checkStacks } from "./monitor/checks/stacks.ts";
 import { checkTargets } from "./monitor/checks/targets.ts";
 import { checkTasks } from "./monitor/checks/tasks.ts";
 import { checkTrail } from "./monitor/checks/trail.ts";
@@ -176,7 +179,7 @@ const LOGS_EXCLUDE = (process.env.PI_MONITOR_LOGS_EXCLUDE ?? "")
 // outcome the design set out to avoid. Graduating is per account and needs no
 // code change: set the variable to the families that should STAY in shadow
 // (empty graduates all of them).
-export const SHADOW_DEFAULT = "targets,tasks,queues,scaling";
+export const SHADOW_DEFAULT = "targets,tasks,queues,scaling,db-events,stacks";
 const SHADOW_FAMILIES = new Set(
 	(process.env.PI_MONITOR_SHADOW_FAMILIES ?? SHADOW_DEFAULT)
 		.split(",")
@@ -426,6 +429,7 @@ function main(): void {
 	const ecs = new ECSClient({ region });
 	const sqs = new SQSClient({ region });
 	const autoscaling = new AutoScalingClient({ region });
+	const cloudformation = new CloudFormationClient({ region });
 	const log = (line: string) => console.log(`${new Date().toISOString()} ${line}`);
 
 	// Best-effort by design: a checkpoint failure is logged and the monitor
@@ -589,6 +593,7 @@ function main(): void {
 			},
 			{ name: "compliance", run: () => checkCompliance(config, state) },
 			{ name: "guardduty", run: () => checkGuardDuty(guardduty, state) },
+			{ name: "db-events", run: () => checkDbEvents(rds, state) },
 		],
 		state,
 		investigate,
@@ -676,6 +681,7 @@ function main(): void {
 					name: "watchlist",
 					run: () => checkWatchlist(cloudtrail, state, WATCHLIST.length > 0 ? { events: WATCHLIST } : {}),
 				},
+				{ name: "stacks", run: () => checkStacks(cloudformation, state) },
 			],
 			state,
 			investigate,

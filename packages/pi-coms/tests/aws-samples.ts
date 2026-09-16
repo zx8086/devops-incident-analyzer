@@ -265,3 +265,69 @@ export const ECS_DOCUMENTED_FAILURE_EVENTS: { message: string; label: string }[]
 // It must stay unclassified for the same reason the target-group variant does.
 export const ECS_DOCUMENTED_SELF_HEALING =
 	"service (api-service) (task 9d85800c) (instance i-0abc) is unhealthy in (elb api-service-elb) due to (reason Instance has failed at least the UnhealthyThreshold number of health checks consecutively.)";
+
+// ---------------------------------------------------------------------------
+// SIO-1749 captures, same accounts, same day.
+
+// RDS event categories actually seen over 14 days in a busy production
+// account: 90 events, every one automated snapshot activity. This is the
+// argument for filtering server-side -- the noise is the whole stream.
+export const RDS_EVENT_CATEGORIES_OBSERVED = ["backup", "deletion"];
+export const RDS_EVENT_SAMPLES_OBSERVED = [
+	{
+		source: "rds:catalog-service-psql-db-2026-09-02-05-04",
+		type: "db-cluster-snapshot",
+		categories: ["backup"],
+		message: "Creating automated cluster snapshot",
+	},
+	{
+		source: "rds:catalog-service-psql-db-2026-09-02-05-04",
+		type: "db-cluster-snapshot",
+		categories: ["backup"],
+		message: "Automated cluster snapshot created",
+	},
+];
+// Asking the API for the failure categories returned 0 of those 90 events.
+export const RDS_FILTERED_COUNT_OBSERVED = 0;
+export const RDS_UNFILTERED_COUNT_OBSERVED = 90;
+
+// ElastiCache events carry no EventCategories at all, which is why that half
+// of the family was not built.
+export const ELASTICACHE_EVENT_FIELDS_OBSERVED = ["Date", "Message", "SourceIdentifier", "SourceType"];
+
+// Every CloudFormation stack status seen across three accounts, 34 stacks.
+export const CFN_STACK_STATUSES_OBSERVED = ["CREATE_COMPLETE", "UPDATE_COMPLETE"];
+export const CFN_STACK_FIELDS_OBSERVED = [
+	"Capabilities",
+	"ChangeSetId",
+	"CreationTime",
+	"DeploymentConfig",
+	"Description",
+	"DisableRollback",
+	"DriftInformation",
+	"EnableTerminationProtection",
+	"LastOperations",
+	"LastUpdatedTime",
+	"NotificationARNs",
+	"Outputs",
+	"Parameters",
+	"ParentId",
+	"RollbackConfiguration",
+	"RootId",
+	"StackId",
+	"StackName",
+	"StackStatus",
+	"Tags",
+];
+
+// Security Hub, measured rather than assumed: 58 ACTIVE+NEW findings at
+// CRITICAL or HIGH standing in one account, and UpdatedAt is re-stamped as the
+// controls re-evaluate. A watermark on UpdatedAt would re-report all of them
+// every cycle, and the content duplicates the existing compliance family.
+export const SECURITYHUB_STANDING_CRITICAL_HIGH = 58;
+export const SECURITYHUB_SAMPLE_TITLES = [
+	"SSM.7 SSM documents should have the block public sharing setting enabled",
+	"GuardDuty.1 GuardDuty should be enabled",
+	"VPC default security groups should not allow inbound or outbound traffic",
+	"RDS automatic minor version upgrades should be enabled",
+];
