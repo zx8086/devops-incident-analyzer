@@ -163,6 +163,28 @@ resource "aws_instance" "hub" {
   depends_on = [aws_ssm_parameter.coms_token]
 }
 
+// SIO-1765: same gap as the agent module (SIO-1759). The organization's
+// required-tags Config rule checks the hub's root volume and primary ENI too,
+// and neither keeps up with the root's default_tags: provider 5.100 computes
+// root_block_device.tags_all only at creation, and the ENI EC2 creates for the
+// pinned private_ip never receives default_tags. Both get them explicitly.
+// The mailbox volume is its own aws_ebs_volume, so default_tags already reach it.
+data "aws_default_tags" "current" {}
+
+resource "aws_ec2_tag" "hub_eni" {
+  for_each    = data.aws_default_tags.current.tags
+  resource_id = aws_instance.hub.primary_network_interface_id
+  key         = each.key
+  value       = each.value
+}
+
+resource "aws_ec2_tag" "hub_root_volume" {
+  for_each    = data.aws_default_tags.current.tags
+  resource_id = aws_instance.hub.root_block_device[0].volume_id
+  key         = each.key
+  value       = each.value
+}
+
 // ── Mailbox volume ─────────────────────────────────────────────────────────
 // The shared inbox (sqlite under ~/.pi/coms-net) lives on its own volume so
 // it outlives the instance: user_data_replace_on_change and AMI replaces
