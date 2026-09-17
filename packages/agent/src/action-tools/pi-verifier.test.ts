@@ -203,6 +203,23 @@ describe("estatesFromState", () => {
 		];
 		expect(estatesFromState({ awsTargetEstates: [], dataSourceResults })).toEqual(["eu-oit-prd"]);
 	});
+
+	// SIO-1777: an estate the run proved irrelevant is dropped on BOTH branches.
+	test("drops estates whose aws result proved the focus service absent", () => {
+		const dataSourceResults = [
+			{ dataSourceId: "aws", deploymentId: "estate:eu-oit-prd", data: null, status: "success" as const },
+			{
+				dataSourceId: "aws",
+				deploymentId: "estate:eu-shared-services-prd",
+				data: null,
+				status: "success" as const,
+				serviceAbsent: true,
+			},
+		];
+		const router = ["eu-oit-prd", "eu-shared-services-prd"];
+		expect(estatesFromState({ awsTargetEstates: router, dataSourceResults })).toEqual(["eu-oit-prd"]);
+		expect(estatesFromState({ awsTargetEstates: [], dataSourceResults })).toEqual(["eu-oit-prd"]);
+	});
 });
 
 describe("proposePiVerification", () => {

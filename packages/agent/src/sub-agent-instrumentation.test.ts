@@ -1095,6 +1095,23 @@ describe("SIO-1268 AWS absence early exit (end to end)", () => {
 		expect(entries.find((e) => e.event === "subagent.loop_guard_stop")?.reason).toBe("aws_service_absent");
 	});
 
+	// SIO-1777: the proof must escape the closure WITHOUT needing a further blocked call --
+	// a model that writes its answer straight after the last ECS page never trips the guard.
+	test("sets runSignals.serviceAbsent as soon as the enumeration completes with no match", async () => {
+		const runSignals = { serviceAbsent: false };
+		const { byName } = harness({ runSignals });
+		await walk(byName);
+		// No blocked call has happened yet: the signal does not depend on one.
+		expect(runSignals.serviceAbsent).toBe(true);
+	});
+
+	test("leaves runSignals.serviceAbsent false when the focus service is found", async () => {
+		const runSignals = { serviceAbsent: false };
+		const { byName } = harness({ runSignals, focusServices: ["billing-api"] });
+		await walk(byName);
+		expect(runSignals.serviceAbsent).toBe(false);
+	});
+
 	test("emits the decision log only once across repeated blocked calls", async () => {
 		const { entries, byName } = harness();
 		await walk(byName);

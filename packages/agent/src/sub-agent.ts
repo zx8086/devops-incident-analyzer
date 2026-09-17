@@ -1690,6 +1690,8 @@ ${state.correlationFetchDirective}`
 		// ToolMessages. Populated on every path (normal, loop-guard stop, recursion-limit
 		// salvage) because the instrumented tool instances are shared with agent.stream().
 		const rawOutputs: RawToolOutput[] = [];
+		// SIO-1777: set by the instrumentation when a complete ECS sweep matches no focus service.
+		const runSignals = { serviceAbsent: false };
 		// SIO-1688: a per-run FTS5 index over the SAME pre-truncation bytes, so the
 		// parts the cap removes stay reachable through search_evidence for the rest
 		// of the run. Only built when the cap is active: with no cap nothing is cut,
@@ -1706,6 +1708,7 @@ ${state.correlationFetchDirective}`
 			// SIO-1268: AWS-only. Scoped by dataSourceId here rather than inside the guard so the
 			// ledger cannot be built at all for elastic/gitlab/kafka runs.
 			awsAbsenceEarlyExit: dataSourceId === "aws" && isAwsAbsenceEarlyExitEnabled(),
+			runSignals,
 			focusServices: focus?.services ?? [],
 		});
 
@@ -2199,6 +2202,7 @@ ${state.correlationFetchDirective}`
 			isAlignmentRetry: isRetry,
 			messageCount: response.messages.length,
 			...(deploymentId && { deploymentId }),
+			...(runSignals.serviceAbsent && { serviceAbsent: true }),
 			...(toolErrors.length > 0 && { toolErrors }),
 			...(outcome.error !== undefined && { error: outcome.error }),
 		};

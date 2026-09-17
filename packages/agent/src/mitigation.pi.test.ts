@@ -93,6 +93,30 @@ describe("aggregateMitigation pi verification cards", () => {
 		expect(result.partialFailures).toEqual([]);
 	});
 
+	// SIO-1777: run f77ce7dd proposed a card for eu-shared-services-prd although the report
+	// itself said the service is not deployed there.
+	test("no verify card for an estate where the focus service was proven absent", async () => {
+		process.env.PI_COMS_NET_SERVER_URL = "http://hub.test";
+		process.env.PI_COMS_NET_AUTH_TOKEN = "tok";
+		process.env.PI_COMS_NET_ENVIRONMENT = "prd";
+		process.env.PI_COMS_NET_ESTATES = "eu-oit-prd,eu-shared-services-prd";
+		const result = await aggregateMitigation(
+			baseState({
+				dataSourceResults: [
+					{ dataSourceId: "aws", deploymentId: "estate:eu-oit-prd", data: null, status: "success" },
+					{
+						dataSourceId: "aws",
+						deploymentId: "estate:eu-shared-services-prd",
+						data: null,
+						status: "success",
+						serviceAbsent: true,
+					},
+				],
+			}),
+		);
+		expect((result.pendingActions ?? []).map((a) => a.params.estate)).toEqual(["eu-oit-prd"]);
+	});
+
 	test("no cards when the report is too short", async () => {
 		process.env.PI_COMS_NET_SERVER_URL = "http://hub.test";
 		process.env.PI_COMS_NET_AUTH_TOKEN = "tok";
