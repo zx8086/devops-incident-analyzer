@@ -672,10 +672,17 @@ EXT_ARGS=(-e extensions/coms-net.ts)
 # takes effect on the next relaunch, the same way it used to gate the -e flag.
 # keep-alive connects at session_start, before the first turn; directTools +
 # toolPrefix none keep the plain ctx_* names the aws-spoke RULES.md documents.
+#
+# excludeTools (SIO-1788): directTools would otherwise hand the model all eleven
+# tools the server offers. Four are maintenance commands for a person, not for an
+# unattended agent: ctx_upgrade would move context-mode off the CTX_VERSION pin
+# under a running fleet, ctx_purge deletes the index an investigation just built,
+# ctx_doctor and ctx_insight are operator diagnostics. The adapter matches the
+# server's own tool names, which already carry the ctx_ prefix.
 CTX_SERVER="$HOME/.pi-ctx/node_modules/context-mode/server.bundle.mjs"
 if [ "${CTX_MODE_ENABLED:-}" != "false" ] && [ "${CTX_MODE_ENABLED:-}" != "0" ] \
    && [ -f "$CTX_SERVER" ]; then
-  printf '%s\n' "{\"mcpServers\":{\"ctx\":{\"command\":\"$HOME/.bun/bin/bun\",\"args\":[\"$CTX_SERVER\"],\"lifecycle\":\"keep-alive\",\"directTools\":true,\"toolPrefix\":\"none\"}}}" \
+  printf '%s\n' "{\"mcpServers\":{\"ctx\":{\"command\":\"$HOME/.bun/bin/bun\",\"args\":[\"$CTX_SERVER\"],\"lifecycle\":\"keep-alive\",\"directTools\":true,\"toolPrefix\":\"none\",\"excludeTools\":[\"ctx_upgrade\",\"ctx_purge\",\"ctx_doctor\",\"ctx_insight\"]}}}" \
     > "$HOME/.pi/agent/mcp.json"
 else
   # No server entry: the adapter loads but registers no ctx_* tools.

@@ -176,6 +176,20 @@ the names stay `ctx_*`), or removes the file when `CTX_MODE_ENABLED` is off.
 Pi core has no MCP support; the adapter connects at session start, before the
 first turn, which is why the first inbound message already sees the tools.
 
+The entry also carries `excludeTools` (SIO-1788), so the model gets seven of the
+server's eleven tools. Hidden: `ctx_upgrade` (it would move context-mode off its
+pin under a running fleet), `ctx_purge` (it deletes the index an investigation
+just built), and the operator diagnostics `ctx_doctor` and `ctx_insight`. The
+adapter matches the server's own tool names, which already start with `ctx_`;
+`pi-mcp-adapter@2.33.0` supports the key (checked on a dev spoke, 2026-09-17).
+
+Do not mistake the sandbox for a security boundary. context-mode can enforce
+deny rules inside `ctx_execute`, but per its README it reads them from Claude
+Code's `settings.json` permission format, and a spoke has no such file, so
+nothing is denied there. Code in the sandbox runs as `piagent` with the same
+credentials as a bare command. The boundary is IAM (`DevOpsAgentReadOnly` plus
+the explicit Deny on secret values) and the persona rules.
+
 Re-run the whole bootstrap idempotently on a live host via SSM:
 
 ```bash
@@ -232,6 +246,7 @@ aws ssm send-command --instance-ids <id> --profile <profile> --region eu-central
 # Per host: ctx_* path (SIO-1734) -- mcp.json present, the ctx server a child of Pi,
 # and no context-mode extension in Pi's argv (base64 a script for anything longer)
 grep -c '"ctx"' /home/piagent/.pi/agent/mcp.json
+grep -o '"excludeTools":\[[^]]*\]' /home/piagent/.pi/agent/mcp.json   # the four maintenance tools (SIO-1788)
 P=$(pgrep -u piagent -f pi-coding-agent/dist/cli.js | head -1); pgrep -P "$P" -f context-mode/server.bundle.mjs
 tr '\0' ' ' < /proc/$P/cmdline | grep -c adapters/pi/extension.js   # expect 0
 
