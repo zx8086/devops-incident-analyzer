@@ -6,6 +6,14 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 import {
+	describeRun,
+	dropDuplicateStructuredContent,
+	evidenceText,
+	type SandboxRunner,
+	splitTransform,
+	withTransformParam,
+} from "./evidence-exec.ts";
+import {
 	awsEcsAbsenceProven,
 	consumeAbsenceExitLog,
 	consumeEmptyAwsResultsAdvice,
@@ -143,6 +151,10 @@ export interface InstrumentContext {
 	// because the loop must be able to search evidence during the run; the persist
 	// site only runs once the loop has already finished.
 	evidenceIndex?: EvidenceIndexSink;
+	// SIO-1776: when provided, every tool's model-facing schema gains an optional
+	// `_transform` and a call that carries one returns only the sandbox's derived output.
+	// Absent (the default, EVIDENCE_EXEC_ENABLED off) nothing in this module changes.
+	sandbox?: SandboxRunner;
 }
 
 // The subset of EvidenceIndex this module needs. Structural so the instrumentation
@@ -221,8 +233,13 @@ function instrumentTool(
 
 	const handler: ProxyHandler<StructuredToolInterface> = {
 		get(target, prop, receiver) {
+			// SIO-1776: only the MODEL-FACING schema changes. The target keeps its own, and
+			// never sees the parameter -- it is stripped below before anything else looks at
+			// the argument, so the loop-guard signature and the real call are untouched.
+			if (prop === "schema" && ctx.sandbox) return withTransformParam(target.schema);
 			if (prop === "invoke") {
-				return async (arg: unknown, configArg?: unknown) => {
+				return async (rawArg: unknown, configArg?: unknown) => {
+					const { arg, transform } = ctx.sandbox ? splitTransform(rawArg) : { arg: rawArg, transform: undefined };
 					runState.iteration += 1;
 					const iteration = runState.iteration;
 					// Recorded before the guard check so a short-circuited call still counts
@@ -346,6 +363,11 @@ function instrumentTool(
 							content: extractContent(result),
 							structuredContent: extractStructuredContent(result),
 						});
+						// SIO-1776: taken HERE, synchronously with the push. Tool calls from one
+						// AIMessage run concurrently and the evidence indexing below awaits, so reading
+						// rawOutputs.length any later can name ANOTHER call's entry (Greptile, PR #812)
+						// -- and run_js_on_evidence would then fetch the wrong result by that id.
+						const evidenceId = `e${ctx.rawOutputs?.length ?? 1}`;
 						// SIO-1688: index the SAME pre-truncation bytes so whatever the cap
 						// below removes stays reachable through search_evidence for the rest
 						// of the run. Only oversized results are indexed: a result the model
@@ -376,7 +398,47 @@ function instrumentTool(
 								}
 							}
 						}
-						const processed = processResult(result, tool.name, iteration, ctx, indexedRows);
+						// SIO-1776: the full result is already captured above. With a transform the
+						// model gets only what its code derived; on any failure it gets exactly what it
+						// would have got without one, plus the reason, so a bad transform never
+						// costs the call.
+						// It does NOT return early: a transformed result still has to pass through the
+						// CloudWatch and GitLab recovery advice below. That advice is driven by the
+						// loop guard's view of the RAW result, so a transform that reduced an empty or
+						// failed query to "0" would otherwise reach the model looking conclusive
+						// (Greptile, PR #812).
+						let transformNote = "";
+						let transformed: unknown = null;
+						if (transform !== undefined && ctx.sandbox) {
+							const rawText = evidenceText(extractContent(result));
+							const run = await ctx.sandbox(
+								`const result = evidence.get(${JSON.stringify(evidenceId)});\n${transform}`,
+								[{ id: evidenceId, tool: tool.name, json: rawText }],
+							);
+							const originalBytes = Buffer.byteLength(rawText, "utf8");
+							ctx.log.info(
+								{
+									...describeRun(tool.name, transform, originalBytes, run),
+									dataSourceId: ctx.dataSourceId,
+									deploymentId: ctx.deploymentId,
+									iteration,
+								},
+								"Tool result transformed in the sandbox",
+							);
+							if (run.error === undefined && run.stdout !== "") {
+								transformed = rebuildResult(
+									result,
+									`${run.stdout}\n\n[transformed from ${originalBytes} bytes by your _transform; the full result is evidence id ${evidenceId}]`,
+								);
+							} else {
+								transformNote = `\n\n[_transform was not applied: ${run.error ?? "it returned nothing"}. The result above is the tool's normal output.]`;
+							}
+						}
+						const processedRaw = transformed ?? processResult(result, tool.name, iteration, ctx, indexedRows);
+						const processed =
+							transformNote === ""
+								? processedRaw
+								: rebuildResult(processedRaw, `${stringifyContent(extractContent(processedRaw))}${transformNote}`);
 						// SIO-1159: a successful-but-empty CloudWatch result never errors, so
 						// nothing steers the LLM off a too-narrow window (run 270378e0: a 24h
 						// window silently missed a 2-day-old incident). After consecutive
@@ -539,27 +601,10 @@ function processResult(
 	return rebuildResult(result, cappedContent);
 }
 
-// Returns the text when `content` is exactly the adapter's text+structuredContent wrapper
-// (as an object, or as the JSON string a ToolMessage carries it in); null for anything else,
-// including a tool whose own payload merely happens to have a `text` key.
-const STRUCTURED_WRAPPER_KEYS = new Set(["type", "text", "structuredContent", "meta"]);
-export function dropDuplicateStructuredContent(content: unknown): string | null {
-	let candidate: unknown = content;
-	if (typeof content === "string") {
-		// Cheap reject before parsing what may be hundreds of KB.
-		if (!content.startsWith("{") || !content.includes('"structuredContent"')) return null;
-		try {
-			candidate = JSON.parse(content);
-		} catch {
-			return null;
-		}
-	}
-	if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
-	const wrapper = candidate as Record<string, unknown>;
-	if (wrapper.type !== "text" || typeof wrapper.text !== "string" || !("structuredContent" in wrapper)) return null;
-	if (!Object.keys(wrapper).every((k) => STRUCTURED_WRAPPER_KEYS.has(k))) return null;
-	return wrapper.text;
-}
+// SIO-1776: lives in evidence-exec.ts so evidenceText can unwrap the same shape for the
+// sandbox without an import cycle (this module imports that one). Re-exported because it is
+// part of this module's tested surface.
+export { dropDuplicateStructuredContent };
 
 function extractContent(result: unknown): unknown {
 	if (result && typeof result === "object" && "content" in result) {

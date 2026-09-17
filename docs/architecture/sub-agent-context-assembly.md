@@ -40,6 +40,19 @@ These are decisions, not gaps. Each has a ticket; do not re-file them as defects
 
 Skill-count asymmetry across sub-agents is content placement, not missing capability: aws-agent keeps its procedures in a 281-line RULES.md (33-line SOUL, 0 skills), kafka in RULES too, while capella/gitlab/elastic factor theirs into skills (SIO-1180 pattern). All of it reaches the prompt either way, and all of it is scanned by the same tool-promise gate (next section).
 
+## Tools bound outside the 25-tool belt
+
+Two tools are added to a sub-agent's loop after action selection, so they never compete for a belt slot and never appear in an action map. Both read only what THIS run already fetched; neither can reach the network or another run's evidence.
+
+| Tool | Bound when | What it does |
+|---|---|---|
+| `search_evidence` (SIO-1688) | `EVIDENCE_INDEX_ENABLED` is not `false`/`0` (default ON) | Full-text search over the pre-truncation tool results of this run. |
+| `run_js_on_evidence` (SIO-1776) | `EVIDENCE_EXEC_ENABLED` is `true`/`1` (**opt-in**, default OFF) | Runs a model-authored JavaScript function body in a sandbox over the full captured results: counts, group-bys, filters, joins across results. |
+
+With `EVIDENCE_EXEC_ENABLED` on, every bound tool's **model-facing** schema also gains an optional `_transform` string. A call that carries one runs the real tool unchanged (the parameter is stripped first, so the loop-guard signature and the MCP call are identical to a call without it), captures the full result exactly as before, and returns to the model only what the transform derived, suffixed with the evidence id. A transform that throws, times out or returns nothing costs nothing: the model gets the tool's normal output plus the reason. The typed-finding extractors, the persisted state and `search_evidence` always see the full result, which is why this sits at the agent's instrumentation boundary (`sub-agent-instrumentation.ts`) rather than inside the MCP servers.
+
+The sandbox is QuickJS in WebAssembly (`packages/shared/src/sandbox-exec.ts`): no `process`, `require`, `fetch`, filesystem, environment, timers or imports exist in the guest. Its constraints, and why this reverses an earlier decision, are in section 13 of `docs/superpowers/specs/2026-09-10-context-mode-concepts-feasibility.md`. The flag is opt-in because the feature awaits live verification; whether it ever defaults ON is decided by the SIO-1775 A/B.
+
 ## Build-time gates over this assembly
 
 | Gate | Where | Guards |
