@@ -165,7 +165,7 @@ export function sanitizeQuery(query: string): string {
 	return terms.join(" OR ");
 }
 
-interface EvidenceDb {
+export interface EvidenceDb {
 	run(sql: string): void;
 	insert(rows: Array<{ title: string; content: string; tool: string }>): void;
 	search(match: string, tool: string | undefined, limit: number): EvidenceHit[];
@@ -230,8 +230,20 @@ export class EvidenceIndex {
 	#db: EvidenceDb | null = null;
 	#rows = 0;
 	#failed = false;
+	// Counted before anything can fail. index() is only called for a result that was
+	// oversized (truncated), so attempts > 0 with zero rows means "something WAS cut and is
+	// not searchable", which is the opposite of "nothing was cut".
+	#attempts = 0;
+	readonly #open: () => Promise<EvidenceDb>;
+
+	// The opener is injectable only so a test can make a LATER insert fail; production
+	// always uses the real SQLite-backed one.
+	constructor(open: () => Promise<EvidenceDb> = openDb) {
+		this.#open = open;
+	}
 
 	async index(toolName: string, text: string): Promise<number> {
+		this.#attempts += 1;
 		if (this.#failed) return 0;
 		if (Buffer.byteLength(text, "utf8") > MAX_INDEXED_BYTES_PER_CALL) {
 			text = text.slice(0, MAX_INDEXED_BYTES_PER_CALL);
@@ -239,7 +251,7 @@ export class EvidenceIndex {
 		const rows = chunkToolOutput(text);
 		if (rows.length === 0) return 0;
 		try {
-			if (!this.#db) this.#db = await openDb();
+			if (!this.#db) this.#db = await this.#open();
 			this.#db.insert(rows.map((r) => ({ ...r, tool: toolName })));
 			this.#rows += rows.length;
 			return rows.length;
@@ -294,6 +306,16 @@ export class EvidenceIndex {
 		return this.#rows;
 	}
 
+	get attempts(): number {
+		return this.#attempts;
+	}
+
+	// True once an insert has failed: search() answers [] from then on, whatever was
+	// indexed before, so "no hits" stops meaning "not in the evidence".
+	get unavailable(): boolean {
+		return this.#failed;
+	}
+
 	close(): void {
 		try {
 			this.#db?.close();
@@ -312,15 +334,45 @@ const DEFAULT_HIT_LIMIT = 3;
 
 // The sub-agent's recovery tool. Bound only when an index exists for the run, so
 // the model is never offered a search over nothing.
+//
+// SIO-1780: it is NOT instrumented, so nothing else bounds it. On run f77ce7dd the gitlab
+// sub-agent had nothing truncated (an empty index), was refused its real tools by the loop
+// guard, and spent 11 turns searching an index with zero rows -- each answer ending "re-run
+// with a different query". An empty index and a run of misses now say plainly to stop.
+const EVIDENCE_UNAVAILABLE_MESSAGE =
+	"A tool result in this run WAS truncated, but the evidence index is unavailable, so the part that was cut cannot be searched. Do not call search_evidence again. What you were shown is incomplete: if you need the part that was cut, re-run the original tool with a narrower query (a tighter time window, fewer fields, or a filter), and otherwise report it as a gap.";
+
+export const SEARCH_EVIDENCE_TOOL_NAME = "search_evidence";
+const MAX_CONSECUTIVE_MISSES = 3;
+
 export function buildSearchEvidenceTool(index: EvidenceIndex): StructuredToolInterface {
+	let consecutiveMisses = 0;
 	return createTool(
 		({ query, tool }: { query: string; tool?: string }) => {
+			// Checked BEFORE rowCount (Greptile, PR #810): an index that stored one result and
+			// then failed on a later one keeps rowCount > 0 while search() returns nothing, so
+			// without this the model would read an unsearchable, truncated result as "absent".
+			if (index.unavailable) return EVIDENCE_UNAVAILABLE_MESSAGE;
+			if (index.rowCount === 0) {
+				// Two very different reasons for an empty index, and conflating them is dangerous
+				// (Greptile, PR #810): run f77ce7dd had results truncated AND a dead index. Telling
+				// that model "you have everything in full" would present incomplete evidence as
+				// complete.
+				return index.attempts === 0
+					? "Nothing is indexed in this run: no tool result was truncated, so every result you received is already in your context in full. search_evidence cannot return anything you do not already have. Do not call it again; write your findings from the results above."
+					: EVIDENCE_UNAVAILABLE_MESSAGE;
+			}
 			const hits = index.search(query, { tool, limit: DEFAULT_HIT_LIMIT });
 			if (hits.length === 0) {
+				consecutiveMisses += 1;
+				if (consecutiveMisses >= MAX_CONSECUTIVE_MISSES) {
+					return `No indexed evidence matches "${query}", and neither did your previous ${consecutiveMisses - 1} searches. The stored tool output does not contain what you are looking for; more searches will not change that. Do not call search_evidence again; write your findings and report this as something the evidence did not show.`;
+				}
 				// Absence here is about the INDEX, not about the world. Saying so keeps
 				// the model from reporting "no such errors exist" on a failed search.
 				return `No indexed evidence matches "${query}"${tool ? ` for tool ${tool}` : ""}. This means the stored tool output does not contain those terms; it is not evidence that the underlying system lacks them. Re-run the tool with a different query if you need to widen the search.`;
 			}
+			consecutiveMisses = 0;
 			return hits
 				.map((h) => {
 					const snippet = h.snippet.length > SNIPPET_MAX ? `${h.snippet.slice(0, SNIPPET_MAX)}...` : h.snippet;
@@ -329,7 +381,7 @@ export function buildSearchEvidenceTool(index: EvidenceIndex): StructuredToolInt
 				.join("\n\n");
 		},
 		{
-			name: "search_evidence",
+			name: SEARCH_EVIDENCE_TOOL_NAME,
 			description:
 				"Search the FULL text of tool results already returned in this run, including the parts that were truncated out of the conversation. Use this when a result says it was truncated and you need a part that was cut, or to check whether a term appears anywhere in what a tool already returned, instead of re-running the tool. Returns the best-matching sections with the tool and key path each came from.",
 			schema: z.object({

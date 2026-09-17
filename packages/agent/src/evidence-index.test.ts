@@ -1,6 +1,13 @@
 // agent/src/evidence-index.test.ts
 import { describe, expect, test } from "bun:test";
-import { chunkToolOutput, EvidenceIndex, isEvidenceIndexEnabled, sanitizeQuery } from "./evidence-index.ts";
+import {
+	buildSearchEvidenceTool,
+	chunkToolOutput,
+	type EvidenceDb,
+	EvidenceIndex,
+	isEvidenceIndexEnabled,
+	sanitizeQuery,
+} from "./evidence-index.ts";
 
 describe("isEvidenceIndexEnabled", () => {
 	test("defaults ON and is disabled only by an explicit kill-switch value", () => {
@@ -165,5 +172,81 @@ describe("EvidenceIndex", () => {
 		await index.index("t", JSON.stringify({ a: "alpha" }));
 		index.close();
 		expect(index.search("alpha")).toEqual([]);
+	});
+});
+
+// SIO-1780: search_evidence is not instrumented, so nothing else bounds it. On run f77ce7dd
+// the gitlab sub-agent searched an index with ZERO rows 11 times, each answer ending
+// "re-run with a different query".
+describe("search_evidence tool stops a fruitless search", () => {
+	const ask = async (t: ReturnType<typeof buildSearchEvidenceTool>, query: string) => String(await t.invoke({ query }));
+
+	test("an empty index says nothing was truncated and not to call again", async () => {
+		const index = new EvidenceIndex();
+		const answer = await ask(buildSearchEvidenceTool(index), "PdfExportService");
+		expect(answer).toContain("Nothing is indexed in this run");
+		expect(answer).toContain("Do not call it again");
+		expect(answer).not.toContain("Re-run");
+		index.close();
+	});
+
+	// Greptile, PR #810. index() is only called for an oversized (truncated) result, so an
+	// attempt that yields no rows means evidence WAS cut and cannot be searched.
+	test("an index that was asked to store something but holds nothing must NOT claim completeness", async () => {
+		const index = new EvidenceIndex();
+		// Whitespace chunks to zero rows: an attempt, nothing searchable.
+		expect(await index.index("elasticsearch_search", "   ")).toBe(0);
+		expect(index.attempts).toBe(1);
+		const answer = await ask(buildSearchEvidenceTool(index), "PdfExportService");
+		expect(answer).toContain("WAS truncated");
+		expect(answer).toContain("incomplete");
+		expect(answer).not.toContain("already in your context in full");
+		index.close();
+	});
+
+	// Greptile, PR #810. One result indexed fine, a later one failed: rowCount stays positive
+	// while search() answers [] forever after, so a plain "no match" would be a lie.
+	test("an index that failed AFTER storing rows reports itself unavailable, not a miss", async () => {
+		let inserts = 0;
+		const rows: Array<{ title: string; content: string; tool: string }> = [];
+		const flaky: EvidenceDb = {
+			run() {},
+			insert(batch) {
+				inserts += 1;
+				if (inserts > 1) throw new Error("disk full");
+				rows.push(...batch);
+			},
+			search: () => [],
+			close() {},
+			count: () => rows.length,
+		};
+		const index = new EvidenceIndex(async () => flaky);
+		expect(
+			await index.index("elasticsearch_search", JSON.stringify({ hits: [{ message: "first result" }] })),
+		).toBeGreaterThan(0);
+		expect(await index.index("elasticsearch_search", JSON.stringify({ hits: [{ message: "second result" }] }))).toBe(0);
+		expect(index.rowCount).toBeGreaterThan(0);
+		expect(index.unavailable).toBe(true);
+
+		const answer = await ask(buildSearchEvidenceTool(index), "second");
+		expect(answer).toContain("WAS truncated");
+		expect(answer).toContain("incomplete");
+		expect(answer).not.toContain("No indexed evidence matches");
+	});
+
+	test("the third consecutive miss tells the model to stop; a hit resets the count", async () => {
+		const index = new EvidenceIndex();
+		await index.index(
+			"elasticsearch_search",
+			JSON.stringify({ hits: [{ message: "FOP ValidationException overflow" }] }),
+		);
+		const t = buildSearchEvidenceTool(index);
+		expect(await ask(t, "kubernetes")).toContain("Re-run the tool");
+		expect(await ask(t, "terraform")).toContain("Re-run the tool");
+		expect(await ask(t, "ansible")).toContain("Do not call search_evidence again");
+		// A hit resets it, so a productive search is never penalised for earlier misses.
+		expect(await ask(t, "ValidationException")).toContain("FOP");
+		expect(await ask(t, "kubernetes")).toContain("Re-run the tool");
+		index.close();
 	});
 });
