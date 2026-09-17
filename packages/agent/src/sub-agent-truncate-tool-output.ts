@@ -177,7 +177,7 @@ function reduceJson(value: unknown, capBytes: number): ReducedJson {
 	// drop the metadata and keep every key. Placed after `rows` and before the largest-array
 	// fallback: that fallback would otherwise trim the buckets array blindly, which is the
 	// current broken behaviour by another route.
-	const aggSlim = slimAggregationBuckets(obj, capBytes);
+	const aggSlim = slimAggregationBuckets(obj, capBytes) ?? slimBareAggregations(obj, capBytes);
 	if (aggSlim) {
 		return { value: aggSlim, changed: true, strategy: "json-agg-keys" };
 	}
@@ -234,7 +234,13 @@ function slimAggregationBuckets(obj: Record<string, unknown>, capBytes: number):
 			const bucket = b as { key?: unknown; key_as_string?: unknown };
 			return bucket.key_as_string ?? bucket.key;
 		});
-		slimmed[name] = { _keys: keys, _bucketCount: buckets.length };
+		// SIO-1782: keep the scalar siblings of `buckets`. `sum_other_doc_count` is how the model
+		// tells a complete enumeration from a capped one; dropping it with the bucket metadata
+		// made every slimmed list look exhaustive.
+		const scalars = Object.fromEntries(
+			Object.entries(agg as Record<string, unknown>).filter(([, v]) => v === null || typeof v !== "object"),
+		);
+		slimmed[name] = { ...scalars, _keys: keys, _bucketCount: buckets.length };
 		changed = true;
 	}
 	if (!changed) return null;
@@ -246,6 +252,17 @@ function slimAggregationBuckets(obj: Record<string, unknown>, capBytes: number):
 	// the largest key list to what fits rather than handing the whole payload to the blind text
 	// path, which would surface far fewer names.
 	return trimKeyListsToFit(candidate, capBytes);
+}
+
+// SIO-1782: elasticsearch_search returns an aggregation-only response as the BARE aggregation
+// map (`JSON.stringify(result.aggregations)`, mcp-server-elastic search.ts), with no
+// `aggregations` wrapper, so the reducer above never matched the very payload it was written
+// for. Same reduction, run through the same code, unwrapped again afterwards.
+function slimBareAggregations(obj: Record<string, unknown>, capBytes: number): Record<string, unknown> | null {
+	if ("aggregations" in obj) return null;
+	const slimmed = slimAggregationBuckets({ aggregations: obj }, capBytes - MARKER_BYTE_RESERVE);
+	if (!slimmed) return null;
+	return { ...(slimmed.aggregations as Record<string, unknown>), _truncated: true };
 }
 
 // SIO-1283: last-resort trim when bare keys still exceed the cap. Shrinks the biggest `_keys`
