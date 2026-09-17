@@ -1182,6 +1182,17 @@ describe("SIO-1268 AWS absence early exit (end to end)", () => {
 		expect(runSignals.serviceAbsent).toBe(true);
 	});
 
+	// Greptile, PR #817: a run that never gets a successful tool result still has to say why.
+	test("the blocker is known before any tool result, and absent when the ledger is off", () => {
+		const on: { serviceAbsent: boolean; absenceBlockedBy?: string | null } = { serviceAbsent: false };
+		harness({ runSignals: on });
+		expect(on.absenceBlockedBy).toBe("cluster-pages-incomplete");
+
+		const off: { serviceAbsent: boolean; absenceBlockedBy?: string | null } = { serviceAbsent: false };
+		harness({ runSignals: off, focusServices: [] });
+		expect(off.absenceBlockedBy).toBeNull();
+	});
+
 	test("the blocker is 'matched' when the focus service is present", async () => {
 		const runSignals: { serviceAbsent: boolean; absenceBlockedBy?: string | null } = { serviceAbsent: false };
 		const { byName } = harness({ runSignals, focusServices: ["billing-api"] });

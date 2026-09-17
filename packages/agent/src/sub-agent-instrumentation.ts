@@ -179,6 +179,10 @@ export function instrumentTools(tools: StructuredToolInterface[], ctx: Instrumen
 			focusServices: ctx.focusServices,
 		}),
 	};
+	// SIO-1783 (Greptile, PR #817): seed the blocker from the fresh ledger. It was only written
+	// after an observed result, so an AWS run with no successful tool call (or one salvaged before
+	// any) had an enabled ledger, no proof, and no subagent.aws_absence_not_proven event.
+	if (ctx.runSignals) ctx.runSignals.absenceBlockedBy = awsEcsAbsenceBlocker(runState.loopGuard);
 	return tools.map((tool) => instrumentTool(tool, ctx, runState));
 }
 
