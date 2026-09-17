@@ -271,6 +271,21 @@ describe("structured-output tools reach the sandbox as their payload, not the ad
 		expect(String(out instanceof ToolMessage ? out.content : out).split("\n")[0]).toBe('["a-cpu","b-mem"]');
 	}, 15_000);
 
+	// The two copies can differ in shape. The sandbox gets the one the MODEL reads.
+	test("when text and structuredContent differ in shape, result is the text the model sees", async () => {
+		const groups = [{ groupId: "orders" }, { groupId: "billing" }];
+		// kafka_list_consumer_groups: bare array as text, { groups } as structuredContent.
+		const kafkaWrapper = JSON.stringify({ type: "text", text: JSON.stringify(groups), structuredContent: { groups } });
+		const t = buildRunJsOnEvidenceTool(
+			() => [{ toolName: "kafka_list_consumer_groups", content: kafkaWrapper }],
+			runInSandbox,
+			silent,
+		);
+		expect(String(await t.invoke({ code: 'const r = evidence.get("e1"); return [Array.isArray(r), r.length];' }))).toBe(
+			"[true,2]",
+		);
+	}, 15_000);
+
 	test("run_js_on_evidence sees it too", async () => {
 		const t = buildRunJsOnEvidenceTool(
 			() => [{ toolName: "aws_cloudwatch_describe_alarms", content: wrapper }],

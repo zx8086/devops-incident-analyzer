@@ -44,7 +44,7 @@ export const TRANSFORM_PARAM = "_transform";
 export const RUN_JS_TOOL_NAME = "run_js_on_evidence";
 
 const TRANSFORM_DESCRIPTION =
-	"Optional. JavaScript function body run over THIS call's full result in a sandbox; it receives `result` and you see only what it returns, e.g. `return result.hits.hits.length`. Use it when you need a count, a filter or a few fields rather than the whole payload.";
+	"Optional. JavaScript function body run over THIS call's full result in a sandbox; it receives `result`, parsed from the same JSON this tool would otherwise show you, and you see only what it returns, e.g. `return result.hits.hits.length`. Use it when you need a count, a filter or a few fields rather than the whole payload.";
 
 // The model-facing schema gains the parameter; the underlying tool never sees it (it is
 // stripped before invoke), so an MCP tool's own `additionalProperties: false` is unaffected.
@@ -102,7 +102,17 @@ export function dropDuplicateStructuredContent(content: unknown): string | null 
 	return wrapper.text;
 }
 
-// What the sandbox is given as a result. Unwraps the adapter's duplicated wrapper FIRST: for a
+// What the sandbox is given as a result: the SAME shape the model reads.
+//
+// For a tool with an outputSchema the two copies can differ in shape -- kafka_list_consumer_groups
+// returns a bare array as text and { groups: [...] } as structuredContent, because the MCP wire
+// format requires structuredContent to be an object. The text is used on purpose (Greptile,
+// PR #812, argued for the structured copy): the model never sees a tool's OUTPUT schema -- only
+// its name, description and input schema are bound -- so the only shape it knows is the text it
+// has read. A transform is written from that observation (`result.length`), and handing the
+// sandbox a differently-shaped object would break exactly the code the model is able to write.
+//
+// Unwraps the adapter's duplicated wrapper FIRST: for a
 // tool with an outputSchema the raw content is { type, text, structuredContent }, and a
 // transform written against the tool's real payload (`result.MetricAlarms.length`) would
 // otherwise see only those three keys. Found by test-merging SIO-1774 with this branch.
