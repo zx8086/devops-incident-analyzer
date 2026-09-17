@@ -74,17 +74,22 @@ function contentBytes(content: unknown): number {
 
 // SIO-1775: `recovery` names the tools that can still reach the elided bytes (search_evidence,
 // run_js_on_evidence) when the run has them. Without it the only advice was "re-query", which
-// costs a datasource round trip and a second copy of the same fat result.
-function elisionMarker(toolName: string | undefined, bytes: number, recovery?: string): string {
+// costs a datasource round trip and a second copy of the same fat result. It is asked PER
+// RESULT, by size: search_evidence only holds results that were large enough to index, and a
+// marker that says "do not re-query" about a result no tool can reach loses it for good
+// (Greptile, PR #816).
+export type ElisionRecovery = (bytes: number) => string | undefined;
+
+function elisionMarker(toolName: string | undefined, bytes: number, recovery?: ElisionRecovery): string {
 	const who = toolName ?? "tool";
-	const how = recovery ?? "re-query only if you still need these specifics.";
+	const how = recovery?.(bytes) ?? "re-query only if you still need these specifics.";
 	return `[elided: ${bytes} bytes from an earlier ${who} result, dropped to stay within the sub-agent context budget. The full result was captured for analysis; ${how}]`;
 }
 
 export function applyContextBudget(
 	messages: BaseMessage[],
 	budgetBytes: number,
-	recovery?: string,
+	recovery?: ElisionRecovery,
 ): ContextBudgetResult {
 	const toolIndexes: number[] = [];
 	let totalBytes = 0;

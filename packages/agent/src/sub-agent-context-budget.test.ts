@@ -179,9 +179,24 @@ describe("SIO-1775: the elision marker names the recovery tools the run has", ()
 
 	test("with a recovery hint the marker replaces the re-query advice", () => {
 		const hint = "do not re-query for it: call search_evidence or run_js_on_evidence to read any part of it.";
-		const out = applyContextBudget(loop(), 100_000, hint);
+		const out = applyContextBudget(loop(), 100_000, () => hint);
 		const marker = String(out.messages.find((m) => String(m.content).startsWith("[elided:"))?.content);
 		expect(marker).toContain(hint);
 		expect(marker).not.toContain("re-query only if");
+	});
+
+	// Greptile, PR #816: a small result is never indexed, so a marker that says "do not re-query,
+	// call search_evidence" about it would lose the result for good. The hint is asked per result.
+	test("the hint is asked per result, so an unreachable result keeps the re-query advice", () => {
+		const sizes: number[] = [];
+		const recovery = (bytes: number) => {
+			sizes.push(bytes);
+			return bytes > 8192 ? "do not re-query for it: call search_evidence." : undefined;
+		};
+		const out = applyContextBudget(buildLoop([4_000, 60_000, 60_000, 60_000]), 100_000, recovery);
+		const markers = out.messages.map((m) => String(m.content)).filter((c) => c.startsWith("[elided:"));
+		expect(sizes).toContain(4_000);
+		expect(markers.find((m) => m.includes("4000 bytes"))).toContain("re-query only if");
+		expect(markers.find((m) => m.includes("60000 bytes"))).toContain("call search_evidence");
 	});
 });

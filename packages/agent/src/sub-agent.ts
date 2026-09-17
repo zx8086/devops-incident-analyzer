@@ -38,9 +38,14 @@ import { fetchNetworkBaseline, isNetworkBaselineEnabled } from "./network-baseli
 import { buildCachedSystemMessage, withRollingCachePoints } from "./prompt-cache.ts";
 import { buildSubAgentPrompt, getSkillToolNames, getToolDefinitionForDataSource } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
-import { applyContextBudget, getSubAgentContextBudgetBytes } from "./sub-agent-context-budget.ts";
+import { applyContextBudget, type ElisionRecovery, getSubAgentContextBudgetBytes } from "./sub-agent-context-budget.ts";
 import { buildFocusBlock } from "./sub-agent-focus-block.ts";
-import { instrumentTools, type RawToolOutput, TYPED_FINDING_TOOLS } from "./sub-agent-instrumentation.ts";
+import {
+	EVIDENCE_INDEX_MIN_BYTES,
+	instrumentTools,
+	type RawToolOutput,
+	TYPED_FINDING_TOOLS,
+} from "./sub-agent-instrumentation.ts";
 import { LOOP_GUARD_STOP_MARKER } from "./sub-agent-loop-guard.ts";
 import {
 	getSubAgentStateOutputCapBytes,
@@ -1784,11 +1789,18 @@ ${state.correlationFetchDirective}`
 			? (await import("@devops-agent/shared/src/sandbox-exec.ts")).runInSandbox
 			: undefined;
 		// SIO-1775: what an elided result can still be reached with, named in the elision marker.
-		const recoveryTools = [evidenceIndex && SEARCH_EVIDENCE_TOOL_NAME, sandbox && RUN_JS_TOOL_NAME].filter(Boolean);
-		const elisionRecovery =
-			recoveryTools.length > 0
-				? `do not re-query for it: call ${recoveryTools.join(" or ")} to read any part of it.`
+		// Per result: run_js_on_evidence reads every captured result, but search_evidence only
+		// holds what was large enough to index. The elided copy is never larger than the raw
+		// result, so testing its size can only under-claim, which keeps the re-query advice.
+		const elisionRecovery: ElisionRecovery = (bytes) => {
+			const names = [
+				evidenceIndex && bytes > EVIDENCE_INDEX_MIN_BYTES && SEARCH_EVIDENCE_TOOL_NAME,
+				sandbox && RUN_JS_TOOL_NAME,
+			].filter(Boolean);
+			return names.length > 0
+				? `do not re-query for it: call ${names.join(" or ")} to read any part of it.`
 				: undefined;
+		};
 		const instrumentedTools = instrumentTools(tools, {
 			dataSourceId,
 			deploymentId,
