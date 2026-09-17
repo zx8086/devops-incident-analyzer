@@ -32,7 +32,7 @@ import {
 	toolCallSignature,
 } from "./sub-agent-loop-guard.ts";
 import { describeToolResult } from "./sub-agent-tool-result-shape.ts";
-import { truncateToolOutput } from "./sub-agent-truncate-tool-output.ts";
+import { type TruncationResult, truncateToolOutput } from "./sub-agent-truncate-tool-output.ts";
 
 // SIO-785 follow-up (2026-05-18): tools whose output is consumed by typed-finding
 // extractors must NOT be truncated. The byte-boundary truncator breaks JSON, so
@@ -571,7 +571,7 @@ function processResult(
 	// instrumentTool(), which feeds buildPersistedToolOutput's own exemption. Exempting
 	// the in-flight copy is what let 233KB elasticsearch_search results into the ReAct
 	// context and overflowed the 200k window.
-	const truncated = truncateToolOutput(text, ctx.capBytes);
+	const truncated = truncateTextBlocks(content, ctx.capBytes) ?? truncateToolOutput(text, ctx.capBytes);
 	if (truncated.strategy === "none") return result;
 
 	ctx.log.info(
@@ -630,6 +630,41 @@ function extractStructuredContent(result: unknown): unknown | undefined {
 		if (parsed.success) return parsed.data.data;
 	}
 	return undefined;
+}
+
+// SIO-1782: an MCP result made of several text blocks (elasticsearch_search returns a header
+// block plus the payload block) must be truncated by its TEXTS. Serialized as a block array the
+// truncator sees a 2-element array, keeps the header, and drops the payload whole: a 760 KB
+// discovery aggregation reached the model as 139 bytes, and the JSON-aware reducers built for
+// that payload never ran. The largest block is reduced into whatever the others leave of the
+// budget. Returns null for anything that is not all text blocks, or that does not fit this way,
+// so the caller falls back to the serialized path.
+export function truncateTextBlocks(content: unknown, capBytes: number): TruncationResult | null {
+	if (!Array.isArray(content) || content.length === 0) return null;
+	const texts: string[] = [];
+	for (const block of content) {
+		if (!block || typeof block !== "object") return null;
+		const { type, text } = block as { type?: unknown; text?: unknown };
+		if (type !== "text" || typeof text !== "string") return null;
+		texts.push(text);
+	}
+	const sizes = texts.map((t) => Buffer.byteLength(t, "utf8"));
+	const largest = sizes.indexOf(Math.max(...sizes));
+	const separators = texts.length - 1;
+	const others = sizes.reduce((sum, n, i) => (i === largest ? sum : sum + n), 0) + separators;
+	if (others >= capBytes) return null;
+
+	const inner = truncateToolOutput(texts[largest] ?? "", capBytes - others);
+	if (inner.strategy === "none") return null;
+	const joined = texts.map((t, i) => (i === largest ? inner.content : t)).join("\n");
+	const finalBytes = Buffer.byteLength(joined, "utf8");
+	if (finalBytes > capBytes) return null;
+	return {
+		content: joined,
+		originalBytes: sizes.reduce((sum, n) => sum + n, 0) + separators,
+		finalBytes,
+		strategy: inner.strategy,
+	};
 }
 
 function stringifyContent(content: unknown): string {
