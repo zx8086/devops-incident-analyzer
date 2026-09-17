@@ -119,7 +119,8 @@ export function startEntry(
 		response: null,
 		error: null,
 	};
-	return { ...state, entries: [entry, ...state.entries] };
+	// SIO-1794: send order, oldest first. PiFleetPane scrolls the new entry into view.
+	return { ...state, entries: [...state.entries, entry] };
 }
 
 export function patchEntry(state: PiFleetState, id: string, patch: Partial<PiFleetEntry>): PiFleetState {

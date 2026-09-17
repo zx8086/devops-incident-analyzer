@@ -52,6 +52,19 @@ let {
 
 let prompt = $state("");
 
+// SIO-1794: entries run oldest first, so a new one lands under whatever is already there,
+// which can be a long verdict. Bring it into view when the COUNT grows, and only then: a
+// status patch or an arriving result must not move the reader. The entries are the last
+// children of this section, so its last element is the newest entry. No smooth behaviour:
+// an instant jump needs no reduced-motion branch.
+let entriesSection = $state<HTMLElement | null>(null);
+let seenEntries = 0;
+$effect(() => {
+	const count = pane.entries.length;
+	if (count > seenEntries) entriesSection?.lastElementChild?.scrollIntoView({ block: "nearest" });
+	seenEntries = count;
+});
+
 // SIO-1789: a verify / investigate card's reply is a schema-constrained object. When it
 // parses as one of the two known shapes the pane renders it; anything else stays raw JSON.
 // Verdict first: the two schemas share only `summary`, so the order cannot misfile a reply.
@@ -289,7 +302,7 @@ function onKeydown(event: KeyboardEvent) {
 
     <!-- Flows directly after the picker inside the same scroll container. -->
     <div>
-    <section class="px-4 py-3 space-y-3">
+    <section bind:this={entriesSection} class="px-4 py-3 space-y-3">
       <!-- SIO-1712: the ops inbox card lives HERE now, not nested under the spoke
            picker. A daily digest is the longest thing this pane ever shows, and
            under the picker's cap it rendered through a letterbox while this
@@ -446,8 +459,9 @@ function onKeydown(event: KeyboardEvent) {
                    OBJECT reply is a schema-constrained payload, and markdown would
                    eat its braces and indentation. The reply type decides.
                    SIO-1789: an object that IS a pi verdict or investigation renders
-                   as one (this pane owns that view now, not the chat card), with the
-                   JSON one click away. Any other object stays raw JSON. -->
+                   as one (this pane owns that view now, not the chat card). SIO-1794:
+                   no raw JSON beside it -- the rendered view shows every field of both
+                   schemas. Any other object stays raw JSON. -->
               {@const structured = typeof entry.response === "string" ? null : structuredReply(entry.response)}
               {#if typeof entry.response === "string"}
                 <div class="mt-2 text-xs bg-tommy-offwhite rounded p-2 overflow-x-auto break-words">
@@ -457,10 +471,6 @@ function onKeydown(event: KeyboardEvent) {
                 <div class="mt-2 bg-tommy-offwhite rounded p-2 break-words">
                   <PiReplyBody verdict={structured.verdict} investigation={structured.investigation} />
                 </div>
-                <details class="mt-1 text-xs text-gray-600">
-                  <summary class="cursor-pointer select-none">Raw reply</summary>
-                  <pre class="mt-1 bg-tommy-offwhite rounded p-2 overflow-x-auto whitespace-pre-wrap break-words">{formatReply(entry.response)}</pre>
-                </details>
               {:else}
                 <pre class="mt-2 text-xs bg-tommy-offwhite rounded p-2 overflow-x-auto whitespace-pre-wrap break-words">{formatReply(entry.response)}</pre>
               {/if}
