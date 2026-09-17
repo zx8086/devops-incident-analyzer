@@ -12,7 +12,7 @@ import {
 	ToolErrorKindSchema,
 } from "@devops-agent/shared";
 import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch";
-import { type BaseMessage, HumanMessage } from "@langchain/core/messages";
+import { AIMessage, type BaseMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
@@ -30,6 +30,7 @@ import type { AgentStateType } from "./state.ts";
 import { applyContextBudget, getSubAgentContextBudgetBytes } from "./sub-agent-context-budget.ts";
 import { buildFocusBlock } from "./sub-agent-focus-block.ts";
 import { instrumentTools, type RawToolOutput, TYPED_FINDING_TOOLS } from "./sub-agent-instrumentation.ts";
+import { LOOP_GUARD_STOP_MARKER } from "./sub-agent-loop-guard.ts";
 import {
 	getSubAgentStateOutputCapBytes,
 	getSubAgentToolCapBytes,
@@ -130,6 +131,48 @@ const CYCLE_SUPER_STEPS = 3;
 export function shouldReserveFinalTurn(llmTurns: number, recursionLimit: number): boolean {
 	const stepsConsumed = CYCLE_SUPER_STEPS * llmTurns - (CYCLE_SUPER_STEPS - 1);
 	return recursionLimit - stepsConsumed <= FINAL_TURN_RESERVE_STEPS;
+}
+
+// SIO-1779: a second trigger for FINAL_TURN_DIRECTIVE. The loop guard refuses calls one at a
+// time and its stop text already says "synthesize now", but nothing counted the refusals: on
+// run f77ce7dd the gitlab sub-agent kept issuing blocked calls for ~17 LLM turns (12:04:52 to
+// 12:05:23) until the recursion-limit reservation above finally fired. Once every tool result
+// of the last BLOCKED_ROUNDS_BEFORE_FORCE rounds is a refusal, no further call can add
+// evidence, so the write-up is forced instead of waited for.
+//
+// A refusal is a loop-guard stop (marked, see LOOP_GUARD_STOP_MARKER) or LangGraph's
+// `Tool "X" not found` -- the unbound-tool error never reaches the instrumentation, which is
+// why this reads the messages rather than the guard's own ledger. One real result anywhere in
+// the window resets it, so a sparse-but-productive datasource is never cut short.
+const BLOCKED_ROUNDS_BEFORE_FORCE = 3;
+const UNBOUND_TOOL_ERROR = /Tool "[^"]*" not found/;
+
+function isRefusal(m: ToolMessage): boolean {
+	if (m.additional_kwargs?.[LOOP_GUARD_STOP_MARKER] === true) return true;
+	return typeof m.content === "string" && UNBOUND_TOOL_ERROR.test(m.content);
+}
+
+export function shouldForceFinalTurn(messages: BaseMessage[]): boolean {
+	let rounds = 0;
+	let sawToolMessage = false;
+	for (let i = messages.length - 1; i >= 0; i -= 1) {
+		const m = messages[i];
+		if (m instanceof ToolMessage) {
+			if (!isRefusal(m)) return false;
+			sawToolMessage = true;
+			continue;
+		}
+		if (m instanceof AIMessage) {
+			// An AIMessage with no tool results after it is not a tool round.
+			if (!sawToolMessage) return false;
+			rounds += 1;
+			if (rounds >= BLOCKED_ROUNDS_BEFORE_FORCE) return true;
+			sawToolMessage = false;
+			continue;
+		}
+		return false;
+	}
+	return false;
 }
 
 // SIO-1279: which elastic deployments this turn fans out across, in precedence order.
@@ -1770,6 +1813,24 @@ ${state.correlationFetchDirective}`
 				}
 
 				const stepsLeft = recursionLimit - (CYCLE_SUPER_STEPS * llmTurns - (CYCLE_SUPER_STEPS - 1));
+				// SIO-1779: evaluated on canonical messages -- elision swaps content but keeps
+				// additional_kwargs only on the originals.
+				const forced = !shouldReserveFinalTurn(llmTurns, recursionLimit) && shouldForceFinalTurn(hookState.messages);
+				if (forced) {
+					log.info(
+						{
+							event: "subagent.final_turn_forced",
+							deploymentId,
+							dataSourceId,
+							llmTurns,
+							stepsLeft,
+							reason: "blocked-rounds",
+							blockedRounds: BLOCKED_ROUNDS_BEFORE_FORCE,
+						},
+						"Every tool result in the last rounds was a refusal; directing the sub-agent to write findings now",
+					);
+					outgoing = [...outgoing, new HumanMessage(FINAL_TURN_DIRECTIVE)];
+				}
 				if (shouldReserveFinalTurn(llmTurns, recursionLimit)) {
 					log.info(
 						{ event: "subagent.final_turn_reserved", deploymentId, dataSourceId, llmTurns, stepsLeft, recursionLimit },

@@ -14,6 +14,7 @@ import {
 	consumeInvalidQueryIdAdvice,
 	createLoopGuardState,
 	isObservedTool,
+	LOOP_GUARD_STOP_MARKER,
 	type LoopGuardState,
 	recordResult,
 	reserveSignature,
@@ -447,7 +448,11 @@ function buildStopResult(arg: unknown, toolName: string, state: LoopGuardState, 
 		arg && typeof arg === "object" && "id" in arg && typeof (arg as { id: unknown }).id === "string"
 			? (arg as { id: string }).id
 			: "loop-guard-stop";
-	return new ToolMessage({ content: stopMessageFor(toolName, state, signature), tool_call_id: toolCallId });
+	return new ToolMessage({
+		content: stopMessageFor(toolName, state, signature),
+		tool_call_id: toolCallId,
+		additional_kwargs: { [LOOP_GUARD_STOP_MARKER]: true },
+	});
 }
 
 function processResult(
