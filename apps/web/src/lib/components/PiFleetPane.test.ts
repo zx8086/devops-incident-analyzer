@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { render } from "svelte/server";
 import type { PiFleetAgentsResponse } from "../pi-fleet-types.ts";
 import {
+	applyActionResult,
 	applyAgents,
 	applyMailbox,
 	applySendResult,
@@ -820,5 +821,79 @@ describe("PiFleetPane", () => {
 		const body = renderPane(expireEntry(pending, "e1", 300_000));
 		expect(body).toContain("no reply from alpha-dev within 300 s");
 		expect(body).toContain("expired");
+	});
+
+	// SIO-1789: the pane owns the rendered pi result; the chat card only sends it here.
+	function cardEntry(label: "verify" | "investigate"): PiFleetState {
+		return startEntry(applyAgents(initialPiFleetState(), listing), {
+			id: "c1",
+			hubKey: "eu-shared-services-prd",
+			target: "estate-1",
+			prompt: "report",
+			sentAt: 0,
+			label,
+		});
+	}
+
+	test("a verify card's verdict renders as a verdict, with the JSON one click away", () => {
+		const done = applyActionResult(cardEntry("verify"), "c1", {
+			status: "success",
+			result: {
+				kind: "verdict",
+				target: "estate-1",
+				estate: "estate-1",
+				msg_id: "m1",
+				verdict: {
+					verdict: "partially_confirmed",
+					summary: "Spike confirmed, cause not observed.",
+					claims: [
+						{ claim: "target group draining caused it", status: "contradicted", evidence: "no deregistrations" },
+					],
+					additional_observations: ["ECS deploy at 10:00"],
+					recommended_investigation: "Check ECS service events.",
+				},
+			},
+		});
+		const body = renderPane(done);
+		expect(body).toContain("partially confirmed");
+		expect(body).toContain("Spike confirmed, cause not observed.");
+		expect(body).toContain("target group draining caused it");
+		expect(body).toContain("Evidence: no deregistrations");
+		expect(body).toContain("ECS deploy at 10:00");
+		expect(body).toContain("Check ECS service events.");
+		// The raw payload survives, but only inside the collapsed details.
+		const details = body.slice(body.indexOf("Raw reply"));
+		expect(details).toContain('"verdict": "partially_confirmed"');
+		expect(body.slice(0, body.indexOf("Raw reply"))).not.toContain("<pre");
+	});
+
+	test("an investigate card's result renders hypothesis, evidence and actions", () => {
+		const done = applyActionResult(cardEntry("investigate"), "c1", {
+			status: "success",
+			result: {
+				kind: "investigation",
+				target: "estate-1",
+				estate: "estate-1",
+				msg_id: "m2",
+				investigation: {
+					summary: "All tasks replaced at once.",
+					root_cause_hypothesis: "minimumHealthyPercent 0",
+					evidence: [{ resource: "ecs:service/checkout", observation: "deployment config minimumHealthyPercent=0" }],
+					suggested_actions: ["Set minimumHealthyPercent to 100"],
+					confidence: 0.8,
+				},
+			},
+		});
+		const body = renderPane(done);
+		expect(body).toContain("confidence 80%");
+		expect(body).toContain("Root cause hypothesis:");
+		expect(body).toContain("ecs:service/checkout");
+		expect(body).toContain("Set minimumHealthyPercent to 100");
+	});
+
+	test("a card entry still waiting says the result appears in the pane", () => {
+		const body = renderPane(cardEntry("verify"));
+		expect(body).toContain("The result appears here.");
+		expect(body).not.toContain("lands on the card");
 	});
 });

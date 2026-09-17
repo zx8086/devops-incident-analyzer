@@ -142,9 +142,10 @@ function createPiFleetStore() {
 	}
 
 	// SIO-1778: a verify/investigate card's Approve. The send and the wait happen here,
-	// visibly, in short requests; the card gets the validated result back and renders
-	// it exactly as before. Works without pane tokens: the action route sends as the
-	// analyzer principal, so an unconfigured pane only means the entry is not shown.
+	// visibly, in short requests. SIO-1789: the pane entry renders the validated result;
+	// the card gets it back only to show a status line and raise follow-up cards. Works
+	// without pane tokens: the action route sends as the analyzer principal, so an
+	// unconfigured pane means the entry is not shown and the card renders the result itself.
 	async function runAction(action: PendingAction, reportContent: string): Promise<ActionResult> {
 		const id = crypto.randomUUID();
 		const label = action.tool === "investigate-with-pi" ? "investigate" : "verify";
@@ -152,7 +153,14 @@ function createPiFleetStore() {
 			fleet = failEntry(fleet, id, message);
 			return { actionId: action.id, tool: action.tool, status: "error", error: message };
 		};
-		if (fleet.configured && !open) toggle();
+		// The listing can land mid-action (configured false -> true). The card hides its
+		// result as soon as a pane exists, so a pane that could not be opened at the start
+		// is opened when the result arrives. One that WAS opened stays as the user left it.
+		const reveal = () => {
+			if (fleet.configured && !open) toggle();
+		};
+		const revealedAtStart = fleet.configured;
+		reveal();
 		const estate = typeof action.params.estate === "string" ? action.params.estate : "pi agent";
 		fleet = startEntry(fleet, { id, hubKey: "", target: estate, prompt: "", sentAt: Date.now(), label });
 		try {
@@ -171,6 +179,7 @@ function createPiFleetStore() {
 				fleet = patchEntry(fleet, id, { hubKey: start.hubKey, target: start.target, prompt: start.prompt });
 			}
 			if (!start.started) {
+				if (!revealedAtStart) reveal();
 				fleet = applyActionResult(fleet, id, start.result);
 				return start.result;
 			}
@@ -202,6 +211,7 @@ function createPiFleetStore() {
 					lastError = NO_REPLY;
 					continue;
 				}
+				if (!revealedAtStart) reveal();
 				fleet = applyActionResult(fleet, id, polled.data.result);
 				return polled.data.result;
 			}
