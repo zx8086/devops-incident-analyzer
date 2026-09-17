@@ -1105,6 +1105,101 @@ describe("SIO-1268 AWS absence early exit (end to end)", () => {
 		expect(runSignals.serviceAbsent).toBe(true);
 	});
 
+	// SIO-1783: live replay, estate eu-shared-services-prd. The enumeration completed with no match,
+	// the model then re-listed (blocked by the absence block) and went on to SQS. The blocked
+	// re-list latched awsEcs.failed BEFORE the proof was consulted, destroying it after the fact:
+	// no exit log, and the next observed result re-evaluated serviceAbsent back to false, so a
+	// verify card was still proposed for an estate the report called a confirmed negative.
+	test("a re-list blocked BY the absence proof does not destroy the proof", async () => {
+		const runSignals = { serviceAbsent: false };
+		const { entries, byName, clusters } = harness({ runSignals });
+		await walk(byName);
+		expect(runSignals.serviceAbsent).toBe(true);
+
+		const again = await byName
+			.get("aws_ecs_list_clusters")
+			?.invoke({ id: "c2", name: "aws_ecs_list_clusters", args: { maxResults: 100 }, type: "tool_call" });
+		expect(clusters.getCalls()).toBe(1);
+		expect(String(again instanceof ToolMessage ? again.content : again)).toContain("definitive negative finding");
+		expect(entries.filter((e) => e.event === "subagent.aws_service_absent_early_exit")).toHaveLength(1);
+		expect(entries.find((e) => e.event === "subagent.loop_guard_stop")?.reason).toBe("aws_service_absent");
+		expect(runSignals.serviceAbsent).toBe(true);
+	});
+
+	// The live cause. The model emitted aws_ecs_list_clusters several times in ONE turn. The first
+	// ran; the identical siblings were stopped as duplicates, and each stop latched `failed`,
+	// destroying a proof the first call had fully earned. A duplicate stop loses no page.
+	test("identical parallel list_clusters calls in one turn do not make absence unprovable", async () => {
+		const runSignals: { serviceAbsent: boolean; absenceBlockedBy?: string | null } = { serviceAbsent: false };
+		const { entries, byName, clusters } = harness({ runSignals });
+		const list = (id: string) =>
+			byName.get("aws_ecs_list_clusters")?.invoke({ id, name: "aws_ecs_list_clusters", args: {}, type: "tool_call" });
+		await Promise.all([list("c1"), list("c2"), list("c3"), list("c4"), list("c5")]);
+		expect(clusters.getCalls()).toBe(1);
+		expect(entries.filter((e) => e.event === "subagent.loop_guard_stop" && e.reason === "duplicate-call")).toHaveLength(
+			4,
+		);
+
+		for (const c of ["shared-a", "shared-b"]) {
+			await byName
+				.get("aws_ecs_list_services")
+				?.invoke({ id: `s-${c}`, name: "aws_ecs_list_services", args: { cluster: c }, type: "tool_call" });
+		}
+		expect(runSignals.absenceBlockedBy).toBeNull();
+		expect(runSignals.serviceAbsent).toBe(true);
+	});
+
+	// Removing the latch must not let an UNWALKED page count: a cluster whose services were never
+	// listed keeps the proof from holding, with or without a stop.
+	test("a cluster whose services were never listed still blocks the proof", async () => {
+		const runSignals: { serviceAbsent: boolean; absenceBlockedBy?: string | null } = { serviceAbsent: false };
+		const { byName } = harness({ runSignals });
+		await byName
+			.get("aws_ecs_list_clusters")
+			?.invoke({ id: "c", name: "aws_ecs_list_clusters", args: {}, type: "tool_call" });
+		await byName
+			.get("aws_ecs_list_services")
+			?.invoke({ id: "s", name: "aws_ecs_list_services", args: { cluster: "shared-a" }, type: "tool_call" });
+		expect(runSignals.serviceAbsent).toBe(false);
+		expect(runSignals.absenceBlockedBy).toBe("services-incomplete:shared-b");
+	});
+
+	test("names the clause that blocks the proof, and clears it once the proof holds", async () => {
+		const runSignals: { serviceAbsent: boolean; absenceBlockedBy?: string | null } = { serviceAbsent: false };
+		const { byName } = harness({ runSignals });
+		await byName
+			.get("aws_ecs_list_clusters")
+			?.invoke({ id: "c", name: "aws_ecs_list_clusters", args: {}, type: "tool_call" });
+		expect(runSignals.absenceBlockedBy).toBe("services-incomplete:shared-a,shared-b");
+		await byName
+			.get("aws_ecs_list_services")
+			?.invoke({ id: "s1", name: "aws_ecs_list_services", args: { cluster: "shared-a" }, type: "tool_call" });
+		expect(runSignals.absenceBlockedBy).toBe("services-incomplete:shared-b");
+		await byName
+			.get("aws_ecs_list_services")
+			?.invoke({ id: "s2", name: "aws_ecs_list_services", args: { cluster: "shared-b" }, type: "tool_call" });
+		expect(runSignals.absenceBlockedBy).toBeNull();
+		expect(runSignals.serviceAbsent).toBe(true);
+	});
+
+	// Greptile, PR #817: a run that never gets a successful tool result still has to say why.
+	test("the blocker is known before any tool result, and absent when the ledger is off", () => {
+		const on: { serviceAbsent: boolean; absenceBlockedBy?: string | null } = { serviceAbsent: false };
+		harness({ runSignals: on });
+		expect(on.absenceBlockedBy).toBe("cluster-pages-incomplete");
+
+		const off: { serviceAbsent: boolean; absenceBlockedBy?: string | null } = { serviceAbsent: false };
+		harness({ runSignals: off, focusServices: [] });
+		expect(off.absenceBlockedBy).toBeNull();
+	});
+
+	test("the blocker is 'matched' when the focus service is present", async () => {
+		const runSignals: { serviceAbsent: boolean; absenceBlockedBy?: string | null } = { serviceAbsent: false };
+		const { byName } = harness({ runSignals, focusServices: ["billing-api"] });
+		await walk(byName);
+		expect(runSignals.absenceBlockedBy).toBe("matched");
+	});
+
 	test("leaves runSignals.serviceAbsent false when the focus service is found", async () => {
 		const runSignals = { serviceAbsent: false };
 		const { byName } = harness({ runSignals, focusServices: ["billing-api"] });
