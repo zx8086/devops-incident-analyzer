@@ -230,8 +230,13 @@ export class EvidenceIndex {
 	#db: EvidenceDb | null = null;
 	#rows = 0;
 	#failed = false;
+	// Counted before anything can fail. index() is only called for a result that was
+	// oversized (truncated), so attempts > 0 with zero rows means "something WAS cut and is
+	// not searchable", which is the opposite of "nothing was cut".
+	#attempts = 0;
 
 	async index(toolName: string, text: string): Promise<number> {
+		this.#attempts += 1;
 		if (this.#failed) return 0;
 		if (Buffer.byteLength(text, "utf8") > MAX_INDEXED_BYTES_PER_CALL) {
 			text = text.slice(0, MAX_INDEXED_BYTES_PER_CALL);
@@ -294,6 +299,10 @@ export class EvidenceIndex {
 		return this.#rows;
 	}
 
+	get attempts(): number {
+		return this.#attempts;
+	}
+
 	close(): void {
 		try {
 			this.#db?.close();
@@ -325,7 +334,13 @@ export function buildSearchEvidenceTool(index: EvidenceIndex): StructuredToolInt
 	return createTool(
 		({ query, tool }: { query: string; tool?: string }) => {
 			if (index.rowCount === 0) {
-				return "Nothing is indexed in this run: no tool result was truncated, so every result you received is already in your context in full. search_evidence cannot return anything you do not already have. Do not call it again; write your findings from the results above.";
+				// Two very different reasons for an empty index, and conflating them is dangerous
+				// (Greptile, PR #810): run f77ce7dd had results truncated AND a dead index. Telling
+				// that model "you have everything in full" would present incomplete evidence as
+				// complete.
+				return index.attempts === 0
+					? "Nothing is indexed in this run: no tool result was truncated, so every result you received is already in your context in full. search_evidence cannot return anything you do not already have. Do not call it again; write your findings from the results above."
+					: "A tool result in this run WAS truncated, but the evidence index is unavailable, so the part that was cut cannot be searched. Do not call search_evidence again. What you were shown is incomplete: if you need the part that was cut, re-run the original tool with a narrower query (a tighter time window, fewer fields, or a filter), and otherwise report it as a gap.";
 			}
 			const hits = index.search(query, { tool, limit: DEFAULT_HIT_LIMIT });
 			if (hits.length === 0) {

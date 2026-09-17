@@ -189,6 +189,20 @@ describe("search_evidence tool stops a fruitless search", () => {
 		index.close();
 	});
 
+	// Greptile, PR #810. index() is only called for an oversized (truncated) result, so an
+	// attempt that yields no rows means evidence WAS cut and cannot be searched.
+	test("an index that was asked to store something but holds nothing must NOT claim completeness", async () => {
+		const index = new EvidenceIndex();
+		// Whitespace chunks to zero rows: an attempt, nothing searchable.
+		expect(await index.index("elasticsearch_search", "   ")).toBe(0);
+		expect(index.attempts).toBe(1);
+		const answer = await ask(buildSearchEvidenceTool(index), "PdfExportService");
+		expect(answer).toContain("WAS truncated");
+		expect(answer).toContain("incomplete");
+		expect(answer).not.toContain("already in your context in full");
+		index.close();
+	});
+
 	test("the third consecutive miss tells the model to stop; a hit resets the count", async () => {
 		const index = new EvidenceIndex();
 		await index.index(
