@@ -2,13 +2,18 @@
 // SIO-1650: runes wrapper around the pure pi-fleet reducer. Fetches the peer
 // listing, sends one prompt to the selected spoke and re-polls the message by id
 // until the reply is terminal or the pane budget is spent. Replies stay data.
+import type { ActionResult, PendingAction } from "@devops-agent/shared";
 import {
+	PiActionPollResponseSchema,
+	PiActionStartResponseSchema,
 	PiFleetAgentsResponseSchema,
 	PiFleetMailboxResponseSchema,
 	PiFleetMessageResponseSchema,
 	PiFleetMessageStatusResponseSchema,
 } from "../pi-fleet-types.ts";
 import {
+	applyActionResult,
+	applyActionStart,
 	applyAgents,
 	applyLoadError,
 	applyMailbox,
@@ -20,12 +25,16 @@ import {
 	isTerminal,
 	type PiFleetSelection,
 	type PiFleetState,
+	patchEntry,
 	selectPeer,
 	shouldKeepPolling,
 	startEntry,
 } from "./pi-fleet-reducer.ts";
 
 const PANE_OPEN_STORAGE_KEY = "pi-fleet-pane-open";
+// SIO-1778: pause between retries of a FAILED action poll (a successful poll already
+// blocks for one hub await slice, so it needs none).
+const POLL_RETRY_DELAY_MS = 3_000;
 
 async function readJson(res: Response): Promise<unknown> {
 	const body: unknown = await res.json().catch(() => null);
@@ -132,6 +141,77 @@ function createPiFleetStore() {
 		}
 	}
 
+	// SIO-1778: a verify/investigate card's Approve. The send and the wait happen here,
+	// visibly, in short requests; the card gets the validated result back and renders
+	// it exactly as before. Works without pane tokens: the action route sends as the
+	// analyzer principal, so an unconfigured pane only means the entry is not shown.
+	async function runAction(action: PendingAction, reportContent: string): Promise<ActionResult> {
+		const id = crypto.randomUUID();
+		const label = action.tool === "investigate-with-pi" ? "investigate" : "verify";
+		const failed = (message: string): ActionResult => {
+			fleet = failEntry(fleet, id, message);
+			return { actionId: action.id, tool: action.tool, status: "error", error: message };
+		};
+		if (fleet.configured && !open) toggle();
+		const estate = typeof action.params.estate === "string" ? action.params.estate : "pi agent";
+		fleet = startEntry(fleet, { id, hubKey: "", target: estate, prompt: "", sentAt: Date.now(), label });
+		try {
+			const started = PiActionStartResponseSchema.safeParse(
+				await readJson(
+					await fetch("/api/pi/actions", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ action, reportContent }),
+					}),
+				),
+			);
+			if (!started.success) return failed("unexpected /api/pi/actions response shape");
+			const start = started.data;
+			if (start.hubKey !== undefined) {
+				fleet = patchEntry(fleet, id, { hubKey: start.hubKey, target: start.target, prompt: start.prompt });
+			}
+			if (!start.started) {
+				fleet = applyActionResult(fleet, id, start.result);
+				return start.result;
+			}
+			fleet = applyActionStart(fleet, id, start.msgId);
+			const deadline = Date.now() + start.budgetMs;
+			// The route waits one hub slice per request, so no client-side sleep on the
+			// happy path. A failed poll is NOT terminal: the server keeps the started
+			// action until it finalizes, so a tunnel blip or one 502 from the hub must not
+			// throw away a 15-minute investigation that is still running (Greptile, PR #807).
+			// Only a 404 ends it -- the server no longer knows this message.
+			const NO_REPLY = "no reply within the action budget";
+			let lastError = NO_REPLY;
+			while (Date.now() < deadline) {
+				let polled: ReturnType<typeof PiActionPollResponseSchema.safeParse>;
+				try {
+					const res = await fetch(`/api/pi/actions?msgId=${encodeURIComponent(start.msgId)}`);
+					if (res.status === 404) return failed("the server no longer tracks this action (it may have restarted)");
+					polled = PiActionPollResponseSchema.safeParse(await readJson(res));
+				} catch (error) {
+					lastError = error instanceof Error ? error.message : String(error);
+					await new Promise((resolve) => setTimeout(resolve, POLL_RETRY_DELAY_MS));
+					continue;
+				}
+				if (!polled.success) return failed("unexpected /api/pi/actions poll response shape");
+				if (polled.data.pending) {
+					// A poll that got through supersedes an earlier transport error: if the
+					// deadline passes now, the reason is "no reply", not a blip that recovered
+					// (Greptile, PR #807 -- the card and the pane would otherwise disagree).
+					lastError = NO_REPLY;
+					continue;
+				}
+				fleet = applyActionResult(fleet, id, polled.data.result);
+				return polled.data.result;
+			}
+			fleet = expireEntry(fleet, id, start.budgetMs);
+			return { actionId: action.id, tool: action.tool, status: "error", error: lastError };
+		} catch (error) {
+			return failed(error instanceof Error ? error.message : String(error));
+		}
+	}
+
 	async function loadMailbox(hubKey: string, estates: string[]) {
 		mailboxBusy = hubKey;
 		try {
@@ -186,6 +266,7 @@ function createPiFleetStore() {
 		load,
 		select,
 		send,
+		runAction,
 		loadMailbox,
 		toggle,
 		restoreOpen,

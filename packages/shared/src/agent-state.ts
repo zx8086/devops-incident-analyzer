@@ -509,6 +509,10 @@ export const DataSourceResultSchema = z.object({
 	// to compute a tool-error rate (toolErrors.length / messageCount) and cap confidence when
 	// the run completed but had a high per-iteration failure ratio.
 	messageCount: z.number().optional(),
+	// SIO-1777: a complete ECS enumeration of this estate matched no focus service. Lives on
+	// the row, not AwsFindings, because extractFindings merges every estate's findings into
+	// one object; only deploymentId ("estate:<name>") keeps per-estate identity.
+	serviceAbsent: z.boolean().optional(),
 });
 export type DataSourceResult = z.infer<typeof DataSourceResultSchema>;
 
