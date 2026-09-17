@@ -23,8 +23,8 @@ import type { SandboxGuestResult, SandboxLimits } from "./sandbox-core.mjs";
 export interface SandboxEvidence {
 	id: string;
 	tool: string;
-	// The captured tool result, as JSON text. Parsed inside the guest, never on the host side
-	// of the boundary as an object the guest could reach.
+	// The captured tool result as text: JSON where the tool returned JSON (parsed inside the
+	// guest, never handed over as a host object), otherwise the raw string.
 	json: string;
 }
 

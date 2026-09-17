@@ -13,14 +13,16 @@ import { newQuickJSWASMModuleFromVariant, shouldInterruptAfterDeadline } from "q
 
 const TRUNCATION_MARKER = "\n[output truncated]";
 
-// Built in the guest so evidence values are guest objects. JSON.parse per get(): a transform
+// Built in the guest so evidence values are guest objects. Parsed per get(): a transform
 // that mutates what it was given cannot affect a later get() in the same call.
 const PRELUDE = `
 const __items = JSON.parse(__evidenceJson);
 delete globalThis.__evidenceJson;
 globalThis.evidence = Object.freeze({
 	list: () => __items.map((x) => ({ id: x.id, tool: x.tool, bytes: x.json.length })),
-	get: (id) => { const x = __items.find((y) => y.id === id); return x ? JSON.parse(x.json) : undefined; },
+	// Not every tool returns JSON (capella returns markdown, some return plain text): a
+	// result that does not parse is handed over as the string it is.
+	get: (id) => { const x = __items.find((y) => y.id === id); if (!x) return undefined; try { return JSON.parse(x.json); } catch { return x.json; } },
 });
 `;
 

@@ -176,6 +176,14 @@ for (const { name, options } of MODES) {
 			expect(r.hostFailure).toBeUndefined();
 		});
 
+		test("a result that is not JSON is handed over as the string it is", async () => {
+			const markdown = [
+				{ id: "e1", tool: "capella_get_fatal_requests", json: "## Fatal requests\n\nNone in the window." },
+			];
+			const r = await run(`const t = evidence.get("e1"); return [typeof t, t.split("\\n")[0]];`, markdown);
+			expect(JSON.parse(r.stdout)).toEqual(["string", "## Fatal requests"]);
+		});
+
 		test("oversized code is refused before anything runs", async () => {
 			const r = await run(`return 1; //${"x".repeat(SANDBOX_MAX_CODE_BYTES)}`);
 			expect(r.error).toContain("exceeds");
