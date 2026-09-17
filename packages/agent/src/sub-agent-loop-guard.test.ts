@@ -381,6 +381,51 @@ describe("SIO-1232: generic loop guard for non-bespoke tools", () => {
 			expect(stopMessageFor("gitlab_search", state, sig)).toBe(GENERIC_LOOP_GUARD_STOP_MESSAGE);
 		});
 
+		// SIO-1791: "unproductive-streak" used to label BOTH generic caps. The run-wide backstop is
+		// not a streak of this tool at all, so a replay could not tell which one had fired.
+		test("the run-wide backstop is named as such, and keeps the generic message", () => {
+			const state = createLoopGuardState();
+			// 8 empty results spread over 4 tools, 2 each: under the per-tool cap of 3 everywhere,
+			// exactly at the run-wide cap of 8.
+			for (const name of [
+				"gitlab_list_commits",
+				"gitlab_list_merge_requests",
+				"kafka_list_topics",
+				"gitlab_list_tags",
+			]) {
+				for (let i = 0; i < 2; i++) recordResult(state, name, toolCallSignature(name, { i }), "[]");
+			}
+			// A tool that has never come back empty itself is still stopped.
+			expect(shouldShortCircuit(state, "gitlab_search", sig)).toBe(true);
+			expect(stopReasonFor(state, sig, "gitlab_search")).toBe("run-backstop");
+			// The model-facing text is unchanged: only the duplicate branch has its own message.
+			expect(stopMessageFor("gitlab_search", state, sig)).toBe(GENERIC_LOOP_GUARD_STOP_MESSAGE);
+		});
+
+		test("the per-tool cap wins over the run-wide one, mirroring shouldShortCircuit", () => {
+			const state = createLoopGuardState();
+			for (const name of ["gitlab_list_commits", "gitlab_list_merge_requests", "kafka_list_topics"]) {
+				for (let i = 0; i < 2; i++) recordResult(state, name, toolCallSignature(name, { i }), "[]");
+			}
+			for (let i = 0; i < 3; i++) recordResult(state, "gitlab_search", toolCallSignature("gitlab_search", { i }), "[]");
+			// Both caps are met (3 for the tool, 9 for the run); the tool's own streak is the reason.
+			expect(stopReasonFor(state, sig, "gitlab_search")).toBe("unproductive-streak");
+		});
+
+		test("a bespoke tool is never labelled with the generic run-wide backstop", () => {
+			const state = createLoopGuardState();
+			for (const name of [
+				"gitlab_list_commits",
+				"gitlab_list_merge_requests",
+				"kafka_list_topics",
+				"gitlab_list_tags",
+			]) {
+				for (let i = 0; i < 2; i++) recordResult(state, name, toolCallSignature(name, { i }), "[]");
+			}
+			// elasticsearch_search has its own cap; the generic counters say nothing about its stop.
+			expect(stopReasonFor(state, "fresh", "elasticsearch_search")).toBe("unproductive-streak");
+		});
+
 		test("the duplicate message does NOT claim the tool returned nothing", () => {
 			// This is the whole defect: SKILL.md STEP 3 matches on that phrase and converts it into
 			// "resolution was not attempted ... after repeated empty results".

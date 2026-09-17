@@ -310,7 +310,12 @@ function instrumentTool(
 									deploymentId: ctx.deploymentId,
 									toolName: tool.name,
 									iteration,
+									// SIO-1791: this is the elasticsearch_search counter. Every other tool is
+									// counted in the two fields below, so a generic stop used to log a
+									// streak of 0 next to reason "unproductive-streak" (run b6c66945).
 									unproductiveSearches: runState.loopGuard.unproductiveSearches,
+									unproductiveForTool: runState.loopGuard.unproductiveByTool.get(tool.name) ?? 0,
+									totalUnproductive: runState.loopGuard.totalUnproductive,
 									// SIO-1267: on run 2445908e all 8 gitlab_search stops logged
 									// `unproductiveSearches: 0`, so telling a duplicate stop from a streak
 									// stop meant inferring it from that zero. State it instead.
@@ -319,7 +324,7 @@ function instrumentTool(
 									// subsequent blocked call in this estate is tagged the same way.
 									reason: runState.loopGuard.awsEcs.exitLogged
 										? "aws_service_absent"
-										: stopReasonFor(runState.loopGuard, signature),
+										: stopReasonFor(runState.loopGuard, signature, tool.name),
 								},
 								"Loop guard short-circuited repeated/unproductive tool call",
 							);
