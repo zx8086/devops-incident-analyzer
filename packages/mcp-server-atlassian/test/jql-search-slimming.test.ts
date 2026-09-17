@@ -52,6 +52,18 @@ describe("slimJqlSearchText", () => {
 		expect(out.issues[0].fields.status).toEqual({ name: "Backlog", statusCategory: { name: "To Do" } });
 	});
 
+	// Greptile, PR #813: the cap measured bytes but sliced characters, so it held only for ASCII.
+	test("the description cap is a BYTE cap for multi-byte text, and never splits a character", () => {
+		for (const ch of ["漢", "😀", "é"]) {
+			const text = JSON.stringify({ issues: [issue("X-9", ch.repeat(20_000))] });
+			const out = JSON.parse(slimJqlSearchText("searchJiraIssuesUsingJql", text));
+			const description = out.issues[0].fields.description as string;
+			expect(Buffer.byteLength(description, "utf8")).toBeLessThanOrEqual(DESCRIPTION_TRUNCATE_BYTES);
+			expect(description).not.toContain("\uFFFD");
+			expect(description.startsWith(ch)).toBe(true);
+		}
+	});
+
 	test("a result with nothing to cut is returned byte-identical, with no sentinel", () => {
 		const text = JSON.stringify({
 			issues: [{ key: "DEVOPS-745", fields: { summary: "s", description: "short" } }],

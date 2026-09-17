@@ -115,10 +115,46 @@ describe("SIO-1422: aws_cloudwatch_describe_alarms structuredContent round-trip"
 			Dimensions: [{ Name: "ServiceName", Value: "import-export-service" }],
 		});
 		expect(String(alarm.StateReason)).toContain("Threshold Crossed");
+		// Greptile, PR #813: small, and they answer "did it transition before the config change?"
+		expect("StateTransitionedTimestamp" in alarm).toBe(true);
+		expect("AlarmConfigurationUpdatedTimestamp" in alarm).toBe(true);
 		// The text copy is the same projection, so the two never disagree.
 		const text = (result.content as Array<{ text: string }>)[0]?.text ?? "";
 		expect(text).not.toContain("StateReasonData");
 		expect(text).not.toContain("arn:aws:sns");
+	});
+
+	// Greptile, PR #813: "why did this alarm not page?" needs the notification wiring, so it is
+	// opt-in rather than gone.
+	test("includeNotificationConfig returns the alarm in full", async () => {
+		const cwMock = mockClient(CloudWatchClient);
+		cwMock.on(DescribeAlarmsCommand).resolves({
+			MetricAlarms: [
+				{
+					AlarmName: "svc-cpu-high",
+					AlarmArn: "arn:aws:cloudwatch:eu-central-1:111111111111:alarm:svc-cpu-high",
+					ActionsEnabled: false,
+					AlarmActions: ["arn:aws:sns:eu-central-1:111111111111:pager"],
+					StateValue: "ALARM" as const,
+					StateReasonData: '{"version":"1.0"}',
+				},
+			],
+		});
+		const client = await buildClient();
+		const result = await client.callTool({
+			name: "aws_cloudwatch_describe_alarms",
+			arguments: { estate: "prod", AlarmNames: ["svc-cpu-high"], includeNotificationConfig: true },
+		});
+		await client.close();
+
+		expect(result.isError).toBeFalsy();
+		const alarm = (result.structuredContent as { MetricAlarms: Array<Record<string, unknown>> }).MetricAlarms[0] ?? {};
+		expect(alarm).toMatchObject({
+			ActionsEnabled: false,
+			AlarmActions: ["arn:aws:sns:eu-central-1:111111111111:pager"],
+			AlarmArn: "arn:aws:cloudwatch:eu-central-1:111111111111:alarm:svc-cpu-high",
+		});
+		expect("StateReasonData" in alarm).toBe(true);
 	});
 
 	test("content[0].text is byte-identical to JSON.stringify(result) (toMcp's own serialization)", async () => {
