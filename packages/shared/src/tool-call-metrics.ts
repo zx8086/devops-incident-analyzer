@@ -18,6 +18,7 @@ import {
 	type ToolErrorKind,
 	ToolErrorKindSchema,
 } from "./agent-state.ts";
+import { openSqlite, type SqliteDb, shouldSuppressNodeWarning } from "./sqlite-open.ts";
 
 export interface ToolCallMetricsLogger {
 	warn(message: string, meta?: Record<string, unknown>): void;
@@ -181,115 +182,15 @@ ON CONFLICT (server, tool) DO UPDATE SET
 	unknown_tool_failures = unknown_tool_failures + excluded.unknown_tool_failures,
 	last_called_at = excluded.last_called_at`;
 
-// Minimal common surface over the two SQLite drivers. bun:sqlite stays the
-// default; node:sqlite (Node >= 22.5) is the fallback for the one consumer that
-// does not run under Bun: the in-process knowledge-graph MCP server, whose host
-// process is `vite dev` running under Node, where the "bun:" scheme fails with
-// "Received protocol 'bun:'". Bun 1.3 does NOT implement node:sqlite ("No such
-// built-in module"), so detection must prefer bun:sqlite under Bun -- the
-// reverse fallback direction is impossible. Both drivers are sqlite3 on disk,
-// so mixed Bun/Node processes share the same WAL DB safely.
-interface MetricsSqliteStatement {
-	run(params: Record<string, string | number>): void;
-}
+// SIO-1772: the dual bun:sqlite / node:sqlite opener moved to sqlite-open.ts so the
+// evidence index shares it. Re-exported because its test imports it from here.
+export { shouldSuppressNodeWarning };
 
-interface MetricsSqliteDb {
-	exec(sql: string): void;
-	prepare(sql: string): MetricsSqliteStatement;
-	tableColumnNames(table: string): string[];
-	close(): void;
-}
-
-async function openBunSqliteDb(dbPath: string): Promise<MetricsSqliteDb> {
-	// bun:sqlite is imported lazily: the shared package is bundled as source into
-	// the web app's Vite SSR build (ssr.noExternal), where a top-level "bun:"
-	// specifier is unresolvable. @vite-ignore keeps Vite from touching it.
-	const { Database } = await import(/* @vite-ignore */ "bun:sqlite");
-	const db = new Database(dbPath, { create: true, strict: true });
-	return {
-		exec(sql) {
-			db.run(sql);
-		},
-		prepare(sql) {
-			const stmt = db.query(sql);
-			return {
-				run(params) {
-					stmt.run(params);
-				},
-			};
-		},
-		tableColumnNames(table) {
-			return db
-				.query<{ name: string }, []>(`PRAGMA table_info(${table})`)
-				.all()
-				.map((c) => c.name);
-		},
-		close() {
-			db.close(false);
-		},
-	};
-}
-
-// SIO-1643: Node prints "ExperimentalWarning: SQLite is an experimental feature" the
-// first time node:sqlite loads -- per-process noise on every `vite dev` boot of the
-// in-process knowledge-graph server, which is the one deliberate node:sqlite consumer
-// (see the driver note above). The predicate matches ONLY that warning so the scoped
-// emitWarning swap in openNodeSqliteDb forwards everything else untouched. When Node
-// passes an Error, its `name` carries the type (Node ignores the type argument then).
-export function shouldSuppressNodeWarning(
-	warning: string | Error,
-	typeOrOptions?: string | { type?: string },
-): boolean {
-	const type =
-		warning instanceof Error ? warning.name : typeof typeOrOptions === "string" ? typeOrOptions : typeOrOptions?.type;
-	const message = typeof warning === "string" ? warning : warning.message;
-	return type === "ExperimentalWarning" && message.includes("SQLite");
-}
-
-type EmitWarning = typeof process.emitWarning;
-
-async function openNodeSqliteDb(dbPath: string): Promise<MetricsSqliteDb> {
-	// Node calls emitWarning synchronously while loading the builtin, so swapping it
-	// for the duration of the import covers the whole window; `finally` restores it
-	// even if the import throws (e.g. Node < 22.5 without node:sqlite).
-	const originalEmitWarning: EmitWarning = process.emitWarning;
-	const filtered = (warning: string | Error, typeOrOptions?: string | { type?: string }, ...rest: unknown[]): void => {
-		if (shouldSuppressNodeWarning(warning, typeOrOptions)) return;
-		Reflect.apply(originalEmitWarning, process, [warning, typeOrOptions, ...rest]);
-	};
-	process.emitWarning = filtered as unknown as EmitWarning;
-	let DatabaseSync: typeof import("node:sqlite")["DatabaseSync"];
-	try {
-		({ DatabaseSync } = await import(/* @vite-ignore */ "node:sqlite"));
-	} finally {
-		process.emitWarning = originalEmitWarning;
-	}
-	const db = new DatabaseSync(dbPath);
-	return {
-		exec(sql) {
-			db.exec(sql);
-		},
-		prepare(sql) {
-			const stmt = db.prepare(sql);
-			// bun:sqlite strict mode binds bare object keys to $-parameters;
-			// node:sqlite requires this opt-in for the same params shape to bind.
-			stmt.setAllowBareNamedParameters(true);
-			return {
-				run(params) {
-					stmt.run(params);
-				},
-			};
-		},
-		tableColumnNames(table) {
-			return db
-				.prepare(`PRAGMA table_info(${table})`)
-				.all()
-				.map((c) => String(c.name));
-		},
-		close() {
-			db.close();
-		},
-	};
+function tableColumnNames(db: SqliteDb, table: string): string[] {
+	return db
+		.prepare(`PRAGMA table_info(${table})`)
+		.all<{ name: unknown }>()
+		.map((c) => String(c.name));
 }
 
 export async function createToolCallMetricsRecorder(options: {
@@ -302,7 +203,8 @@ export async function createToolCallMetricsRecorder(options: {
 	const nowIso = options.nowIso ?? (() => new Date().toISOString());
 	try {
 		mkdirSync(dirname(dbPath), { recursive: true });
-		const db = typeof Bun === "undefined" ? await openNodeSqliteDb(dbPath) : await openBunSqliteDb(dbPath);
+		// bareNamedParameters: UPSERT_SQL binds bare keys (the former bun `strict: true`).
+		const db = await openSqlite(dbPath, { bareNamedParameters: true });
 		// busy_timeout BEFORE journal_mode: switching to WAL takes a lock, and with
 		// no busy handler a concurrent opener (8+ servers cold-starting on one DB)
 		// fails instantly with "database is locked" -- measured 11/40 in a race
@@ -317,7 +219,7 @@ export async function createToolCallMetricsRecorder(options: {
 		// re-checks after the winner commits and finds nothing left to add.
 		db.exec("BEGIN IMMEDIATE");
 		try {
-			const existing = new Set(db.tableColumnNames("mcp_tool_call_counts"));
+			const existing = new Set(tableColumnNames(db, "mcp_tool_call_counts"));
 			for (const column of MIGRATED_COLUMNS) {
 				if (!existing.has(column)) {
 					db.exec(`ALTER TABLE mcp_tool_call_counts ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);

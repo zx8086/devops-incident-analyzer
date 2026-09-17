@@ -3,8 +3,13 @@
 The incident analyzer's web app carries a second, thin inspector next to the
 incident chat: a pane that lists the live pi-coms spokes on every configured
 hub and lets the operator send one prompt to one spoke. The chat stays the
-historical analysis; the pane is the live question. Nothing crosses between
-them: a spoke's reply is rendered as data and never enters an LLM call.
+historical analysis; the pane is the live question. A spoke's reply is rendered
+as data and never enters an LLM call.
+
+One thing does cross, in one direction (SIO-1778): approving a verify or
+investigate card sends through the pane's store, so the send, the wait and the
+reply show up here as a labelled entry while the card keeps the structured
+result. Nothing flows from the pane back into the analysis.
 
 Decision (2026-09-06, `pi-fleet-gitagent-feasibility.md` Phase 2a): the thin
 pane first; a third LangGraph graph stays a later option; the fleet inbox
@@ -33,8 +38,10 @@ types reach it through the agent package.
 |---|---|---|
 | `GET /api/pi/agents` | `GET /v1/agents?include_explicit=true` per hub, bearer only, no registration | `configured`, `senderPrefix`, `awaitMs`, `totalBudgetMs`, one row per hub with its peers (`online`, `stale`, `offline`), or the hub's error inline. SIO-1665: `monitor-*` registrations are dropped by name (`spokesOnly`); a monitor has no model and cannot answer a prompt, and its reports reach the pane only through the inbox |
 | `POST /api/pi/messages` | register `<prefix>-<8 hex>` on the peer's hub, `POST /v1/messages` (no `response_schema`), one `GET /v1/messages/:id/await` slice, deregister | `msgId`, `sender`, `status`, `response`, `error`, `sentAt` |
-| `GET /api/pi/messages?environment=&msgId=` | one more await slice from an unregistered client | `status`, `response`, `error` |
-| `GET /api/pi/mailbox?environment=&name=&limit=` | `GET /v1/mailbox` | the durable inbox (the hub's fallback target by default) |
+| `GET /api/pi/messages?hubKey=&msgId=` | one more await slice from an unregistered client | `status`, `response`, `error` |
+| `GET /api/pi/mailbox?hubKey=&name=&limit=` | `GET /v1/mailbox` | the durable inbox (the hub's fallback target by default) |
+| `POST /api/pi/actions` (SIO-1778) | as the ANALYZER principal (`incident-analyzer-<8 hex>`, not the pane's): register, list, `POST /v1/messages` WITH the card's `response_schema`, deregister | `started`, `hubKey`, `target`, `msgId`, `prompt`, `budgetMs`; or the `ActionResult` at once for a mailbox send or a refusal |
+| `GET /api/pi/actions?msgId=` (SIO-1778) | one await slice from an unregistered client | `pending`, or the `ActionResult` built from a reply validated against the analyzer's schema |
 
 The pane is hidden unless `GET /api/pi/agents` reports `configured: true`. A
 configuration error (malformed `PI_COMS_HUBS`, `PI_COMS_PANE_TOKENS` or a
@@ -84,6 +91,15 @@ a schema, not executed, and never handed to the analyzer graph or any other
 LLM call. The verify and investigate cards (SIO-1635) remain the only path
 where a hub reply is validated, and there only against the analyzer's own
 `response_schema`.
+
+That still holds with SIO-1778. A card-originated entry is displayed in the pane,
+but it is sent and validated by `/api/pi/actions` in `pi-verifier.ts`, not by the
+free-form `/api/pi/messages` path, which carries no `response_schema` and parses
+nothing, exactly as before. What the pane shows for such an entry is the payload
+that already passed `PiVerdictSchema` / `PiInvestigationSchema`. The card prompt
+embeds the report (up to 12k characters), so it is collapsed by default. These
+entries do not need `PI_COMS_PANE_TOKENS`: without a configured pane the action
+runs the same way and only the card shows it.
 
 A `complete` reply with an empty body is rendered as "(empty reply from <spoke>)" rather than nothing, and since SIO-1678 the hub stores such a submission as `error: empty_reply`, so in practice the pane shows the error line instead.
 

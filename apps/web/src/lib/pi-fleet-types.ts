@@ -1,6 +1,8 @@
 // apps/web/src/lib/pi-fleet-types.ts
 // SIO-1650: response contracts of the /api/pi/* routes. Browser-safe (zod only):
 // the pane store parses these, the server module produces them.
+// Deep import, NOT the barrel: this file ships to the browser (see agent.svelte.ts).
+import { ActionResultSchema } from "@devops-agent/shared/src/action-types.ts";
 import { z } from "zod";
 
 export const PiFleetEnvironmentSchema = z.enum(["dev", "stg", "prd"]);
@@ -104,3 +106,19 @@ export const PiFleetMailboxResponseSchema = z.object({
 	messages: z.array(PiFleetInboxMessageSchema),
 });
 export type PiFleetMailboxResponse = z.infer<typeof PiFleetMailboxResponseSchema>;
+
+// SIO-1778: /api/pi/actions. A verify/investigate card executes as a start plus short
+// polls. `result` is an ActionResult the route built from a reply it already validated
+// against the analyzer's own schema.
+const PiActionEntrySchema = z.object({ hubKey: z.string(), target: z.string(), msgId: z.string(), prompt: z.string() });
+
+export const PiActionStartResponseSchema = z.union([
+	PiActionEntrySchema.extend({ started: z.literal(true), budgetMs: z.number().positive() }),
+	// Resolved at start: a mailbox send (entry fields present) or a refusal (absent).
+	PiActionEntrySchema.partial().extend({ started: z.literal(false), result: ActionResultSchema }),
+]);
+
+export const PiActionPollResponseSchema = z.union([
+	z.object({ pending: z.literal(true), status: z.string() }),
+	z.object({ pending: z.literal(false), result: ActionResultSchema }),
+]);

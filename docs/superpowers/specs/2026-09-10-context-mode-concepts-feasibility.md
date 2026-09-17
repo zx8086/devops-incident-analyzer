@@ -258,6 +258,62 @@ failure path is soft at two levels. The heavier `eval:incident-replay` harness
 is the right instrument before claiming a quality delta, and it is NOT a
 prerequisite for this change, which is additive and reversible by one env var.
 
+## 13. Addendum 2026-09-17: section 7's sandbox rejection is reversed (SIO-1776)
+
+Section 7 says "Do not build `ctx_execute`-style sandboxing in the analyzer. New
+attack surface, no consumer." Both halves changed.
+
+The consumer appeared. On run `f77ce7dd` tool results dominated sub-agent cost:
+roughly 3M input tokens in one run, with single results of 745 KB, 327 KB and
+118 KB (parent issue SIO-1771). The user decided on 2026-09-17 to build
+sandboxed execution so a sub-agent can reduce a fat result to a derived answer
+instead of reading it.
+
+The attack-surface objection was about context-mode's actual executor: a
+subprocess in a temp dir with the network on and the host environment inherited
+(`src/executor.ts:229-233`). That design is still rejected. What was built is a
+different thing: QuickJS compiled to WebAssembly
+(`packages/shared/src/sandbox-exec.ts`, `sandbox-core.mjs`). The guest has no
+`process`, `require`, `fetch`, filesystem, environment, timers or module loader
+by construction. The only host surface is `print` and an `evidence` object built
+inside the guest from a JSON string; no host object handle crosses the boundary.
+Model-authored code still runs over injectable tool output, but it can reach
+nothing beyond that output.
+
+Three constraints came out of the spike and are load-bearing:
+
+1. **Guest stack 64 KB.** A guest stack limit above what the host engine's
+   native stack can absorb makes the HOST overflow first, mid-execution, and
+   freeing the runtime then aborts the WASM module
+   (`list_empty(&rt->gc_obj_list)`). Node failed at 512 KB from a shallow stack,
+   at 256 KB from 1000 host frames deep and at 128 KB from 6000. 64 KB was clean
+   at every depth on Node v22.19.0 and Bun 1.4.2, and still runs recursion depth
+   300 and 200-deep nested JSON.
+2. **A fresh WASM module per call.** An abort poisons the module it happens in.
+   Per-call modules cost 4 to 18 ms.
+3. **Worker thread, with the in-guest limits kept inside it.** In-thread a guest
+   stalls the event loop for up to its deadline, and one giant native operation
+   never polls the interrupt handler (a memory bomb ran 2.3 to 3.0 s). In a
+   worker, main-loop lag stayed at 1 to 2 ms. `worker.terminate()` is not a
+   portable kill: under Bun 1.4.2 it never returns while the worker is stuck in
+   synchronous WASM, so the guest deadline and memory limit are what stop a
+   runaway and `terminate()` is a backstop only. When the worker file cannot be
+   resolved (a `vite build` with `ssr.noExternal` does not emit it) the engine
+   runs in-thread with tighter limits (1 s, 16 MB) and reports the fallback once.
+   Verified: under `vite dev` on Node, through the web app's own Vite config,
+   the worker resolves and runs.
+
+`packages/shared/src/__tests__/sandbox-exec.test.ts` is the acceptance suite for
+the boundary and runs every case on both engine modes. The dependencies are
+pinned exactly (`quickjs-emscripten-core` and
+`@jitl/quickjs-singlefile-cjs-release-sync` at 0.32.0): an upgrade is a security
+change and re-runs that suite.
+
+Not yet built: the two sub-agent entry points (an in-call `_transform` parameter
+applied at the instrumentation boundary, and a `run_js_on_evidence` tool), both
+behind the opt-in `EVIDENCE_EXEC_ENABLED`. Whether that flag ever defaults ON is
+decided by the SIO-1775 A/B, not assumed.
+
 ## 14. Addendum 2026-09-17: where the fat tool results really came from (SIO-1774)
 
 Run `f77ce7dd` (LangSmith root run `01a0aed1-e2c4-736a-80e8-9216afe54d48`) had four results

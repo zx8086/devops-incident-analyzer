@@ -24,6 +24,7 @@ import type { AgentStateType } from "../state.ts";
 import {
 	type FetchLike,
 	isPiComsConfigured,
+	PI_COMS_AWAIT_SLICE_MS,
 	type PiAgentCard,
 	PiComsClient,
 	resolvePiComsConfig,
@@ -164,15 +165,22 @@ export function resolvePiTarget(
 
 // Estates the report actually assessed: the router's list, or the per-estate
 // deploymentId tags the AWS sub-agent stamps on its results.
+//
+// SIO-1777: minus estates where a complete ECS enumeration proved the focus service is
+// not deployed. The router's list is intent, set before any tool ran; a card (or an
+// inbox fetch) for an estate the report itself ruled out is noise.
 export function estatesFromState(state: Pick<AgentStateType, "awsTargetEstates" | "dataSourceResults">): string[] {
-	if (state.awsTargetEstates.length > 0) return [...new Set(state.awsTargetEstates)];
-	const seen = new Set<string>();
+	const assessed = new Set<string>();
+	const absent = new Set<string>();
 	for (const r of state.dataSourceResults) {
 		if (r.dataSourceId !== "aws" || !r.deploymentId?.startsWith(ESTATE_DEPLOYMENT_PREFIX)) continue;
 		const estate = r.deploymentId.slice(ESTATE_DEPLOYMENT_PREFIX.length);
-		if (estate) seen.add(estate);
+		if (!estate) continue;
+		assessed.add(estate);
+		if (r.serviceAbsent) absent.add(estate);
 	}
-	return [...seen];
+	const estates = state.awsTargetEstates.length > 0 ? new Set(state.awsTargetEstates) : assessed;
+	return [...estates].filter((e) => !absent.has(e));
 }
 
 function firstParagraph(report: string): string {
@@ -351,43 +359,55 @@ export type HubOutcome =
 	| { kind: "reply"; target: string; msg_id: string; response: unknown }
 	| { kind: "failed"; error: string };
 
-// SIO-1651: exported so the pi-handoff workflow's `agent` step reuses this exact
-// hub path (register, resolve target, send, await, deregister) instead of a
-// second implementation that could drift from the card path.
-export async function runHubTask(input: {
+type HubTaskInput = {
 	estate: string;
 	explicitTarget?: string;
 	prompt: string;
 	responseSchema: object;
-	budgetMs: number;
 	conversationId?: string;
 	config: PiComsConfig;
 	deps: PiVerifierDeps;
-}): Promise<HubOutcome> {
-	const selection = selectHubForEstate(input.estate, input.config);
-	if (!selection.ok) return { kind: "failed", error: selection.error };
-	const routing = { estateAgentMap: input.config.estateAgentMap, fallbackTarget: selection.hub.fallbackTarget };
-	const client = new PiComsClient(selection.hub, { fetchImpl: input.deps.fetchImpl, now: input.deps.now });
-	try {
-		await client.register();
-		const agents = await client.listAgents();
-		const resolved = resolvePiTarget(input.estate, agents, routing, input.explicitTarget);
-		if (!resolved.online) {
-			logger.info(
-				{ estate: input.estate, preferred: resolved.preferred, fallback: resolved.target },
-				"Estate agent offline; queueing to the fallback mailbox",
-			);
-			const queued = await client.send(resolved.target, input.prompt, {
-				responseSchema: input.responseSchema,
-				ttlMs: PI_MAILBOX_TTL_MS,
-				conversationId: input.conversationId,
-			});
-			return { kind: "queued", target: resolved.target, msg_id: queued.msg_id };
-		}
-		const sent = await client.send(resolved.target, input.prompt, {
+};
+
+type HubSend = { kind: "queued" | "sent"; hubKey: string; target: string; msg_id: string };
+
+// Register, resolve the target, send. Shared by runHubTask (which then awaits on the
+// SAME registered client) and startHubTask (which deregisters straight away), so the
+// routing and mailbox-fallback rules cannot drift between the two shapes.
+async function sendViaHub(client: PiComsClient, hubKey: string, input: HubTaskInput, fallbackTarget: string) {
+	await client.register();
+	const agents = await client.listAgents();
+	const routing = { estateAgentMap: input.config.estateAgentMap, fallbackTarget };
+	const resolved = resolvePiTarget(input.estate, agents, routing, input.explicitTarget);
+	if (!resolved.online) {
+		logger.info(
+			{ estate: input.estate, preferred: resolved.preferred, fallback: resolved.target },
+			"Estate agent offline; queueing to the fallback mailbox",
+		);
+		const queued = await client.send(resolved.target, input.prompt, {
 			responseSchema: input.responseSchema,
+			ttlMs: PI_MAILBOX_TTL_MS,
 			conversationId: input.conversationId,
 		});
+		return { kind: "queued", hubKey, target: resolved.target, msg_id: queued.msg_id } satisfies HubSend;
+	}
+	const sent = await client.send(resolved.target, input.prompt, {
+		responseSchema: input.responseSchema,
+		conversationId: input.conversationId,
+	});
+	return { kind: "sent", hubKey, target: resolved.target, msg_id: sent.msg_id } satisfies HubSend;
+}
+
+// SIO-1651: exported so the pi-handoff workflow's `agent` step reuses this exact
+// hub path (register, resolve target, send, await, deregister) instead of a
+// second implementation that could drift from the card path.
+export async function runHubTask(input: HubTaskInput & { budgetMs: number }): Promise<HubOutcome> {
+	const selection = selectHubForEstate(input.estate, input.config);
+	if (!selection.ok) return { kind: "failed", error: selection.error };
+	const client = new PiComsClient(selection.hub, { fetchImpl: input.deps.fetchImpl, now: input.deps.now });
+	try {
+		const sent = await sendViaHub(client, selection.hubKey, input, selection.hub.fallbackTarget);
+		if (sent.kind === "queued") return { kind: "queued", target: sent.target, msg_id: sent.msg_id };
 		// A "queued" status here means the agent's SSE stream is down although its
 		// card is still online; the hub flushes the queue on reconnect, so wait for
 		// it within the budget rather than mislabel it as a mailbox send.
@@ -395,10 +415,10 @@ export async function runHubTask(input: {
 		if (reply.status !== "complete") {
 			return {
 				kind: "failed",
-				error: `pi agent ${resolved.target} did not complete (${reply.status}): ${reply.error ?? "no detail"}`,
+				error: `pi agent ${sent.target} did not complete (${reply.status}): ${reply.error ?? "no detail"}`,
 			};
 		}
-		return { kind: "reply", target: resolved.target, msg_id: sent.msg_id, response: reply.response };
+		return { kind: "reply", target: sent.target, msg_id: sent.msg_id, response: reply.response };
 	} catch (error) {
 		return { kind: "failed", error: error instanceof Error ? error.message : String(error) };
 	} finally {
@@ -406,109 +426,261 @@ export async function runHubTask(input: {
 	}
 }
 
-export async function executePiVerify(
-	rawParams: Record<string, unknown>,
-	reportContent: string,
-	deps: PiVerifierDeps = {},
-): Promise<PiActionOutcome> {
-	const env = deps.env ?? process.env;
-	if (!isPiComsConfigured(env)) return { status: "error", error: "pi-coms hub is not configured" };
-	const parsed = PiVerifyParamsSchema.safeParse(rawParams);
-	if (!parsed.success) return { status: "error", error: "verify-with-pi params invalid: estate is required" };
-	const params = parsed.data;
-	const config = resolvePiComsConfig(env);
-	const outcome = await runHubTask({
-		estate: params.estate,
-		explicitTarget: params.target,
-		prompt: buildVerifyPrompt({ params, report: reportContent }),
-		responseSchema: PI_VERDICT_RESPONSE_SCHEMA,
-		budgetMs: config.verifyTimeoutMs,
-		config,
-		deps,
-	});
-	if (outcome.kind === "failed") return { status: "error", error: outcome.error };
-	if (outcome.kind === "queued") {
-		return {
-			status: "success",
-			result: { kind: "queued", target: outcome.target, estate: params.estate, msg_id: outcome.msg_id },
-		};
+// SIO-1778: the send half on its own, for the fleet-pane execution path. The sender
+// deregisters before the reply exists; awaiting by id needs only the token, which is
+// how the pane's own re-poll already works (apps/web pi-fleet.ts awaitFleetMessage).
+export async function startHubTask(
+	input: HubTaskInput,
+): Promise<(HubSend & { hub: PiComsHubConfig }) | { kind: "failed"; error: string }> {
+	const selection = selectHubForEstate(input.estate, input.config);
+	if (!selection.ok) return { kind: "failed", error: selection.error };
+	const client = new PiComsClient(selection.hub, { fetchImpl: input.deps.fetchImpl, now: input.deps.now });
+	try {
+		const sent = await sendViaHub(client, selection.hubKey, input, selection.hub.fallbackTarget);
+		return { ...sent, hub: selection.hub };
+	} catch (error) {
+		return { kind: "failed", error: error instanceof Error ? error.message : String(error) };
+	} finally {
+		await client.deregister();
 	}
-	const verdict = PiVerdictSchema.safeParse(outcome.response);
-	if (!verdict.success) {
-		logger.warn({ target: outcome.target, msg_id: outcome.msg_id }, "pi verdict did not match schema");
-		return { status: "error", error: `pi agent ${outcome.target} replied with an unusable verdict (schema mismatch)` };
-	}
-	// SIO-1651: remember the verdict as structured fields (enums, counts, ids).
-	// The workflow path writes through the same builder, so a verdict is
-	// remembered identically however it was asked for. Never throws.
-	recordVerdictDecision({
-		estate: params.estate,
-		target: outcome.target,
-		msgId: outcome.msg_id,
-		requestId: outcome.msg_id,
-		verdict: verdict.data,
-	});
-	const result: PiActionOutcome = {
-		status: "success",
-		result: {
-			kind: "verdict",
-			target: outcome.target,
-			estate: params.estate,
-			msg_id: outcome.msg_id,
-			verdict: verdict.data,
-		},
-	};
-	if (needsInvestigation(verdict.data)) {
-		result.followUpActions = [buildInvestigateFollowUp(params, verdict.data, outcome.target, outcome.msg_id)];
-	}
-	return result;
 }
 
-export async function executePiInvestigate(
+type PiTool = "verify-with-pi" | "investigate-with-pi";
+
+type PreparedPiAction =
+	| { ok: false; error: string }
+	| {
+			ok: true;
+			tool: PiTool;
+			params: PiVerifyParams | PiInvestigateParams;
+			task: HubTaskInput & { budgetMs: number };
+	  };
+
+// Params parse + prompt build, once, for both the one-shot and the start/poll shapes.
+function preparePiAction(
+	tool: PiTool,
 	rawParams: Record<string, unknown>,
 	reportContent: string,
-	deps: PiVerifierDeps = {},
-): Promise<PiActionOutcome> {
+	deps: PiVerifierDeps,
+): PreparedPiAction {
 	const env = deps.env ?? process.env;
-	if (!isPiComsConfigured(env)) return { status: "error", error: "pi-coms hub is not configured" };
-	const parsed = PiInvestigateParamsSchema.safeParse(rawParams);
-	if (!parsed.success)
-		return { status: "error", error: "investigate-with-pi params invalid: estate and focus are required" };
-	const params = parsed.data;
+	if (!isPiComsConfigured(env)) return { ok: false, error: "pi-coms hub is not configured" };
 	const config = resolvePiComsConfig(env);
-	const outcome = await runHubTask({
-		estate: params.estate,
-		explicitTarget: params.target,
-		prompt: buildInvestigatePrompt({ params, report: reportContent }),
-		responseSchema: PI_INVESTIGATION_RESPONSE_SCHEMA,
-		budgetMs: config.investigateTimeoutMs,
-		conversationId: params.conversation_id,
-		config,
-		deps,
-	});
-	if (outcome.kind === "failed") return { status: "error", error: outcome.error };
-	if (outcome.kind === "queued") {
+	if (tool === "verify-with-pi") {
+		const parsed = PiVerifyParamsSchema.safeParse(rawParams);
+		if (!parsed.success) return { ok: false, error: "verify-with-pi params invalid: estate is required" };
+		const params = parsed.data;
 		return {
-			status: "success",
-			result: { kind: "queued", target: outcome.target, estate: params.estate, msg_id: outcome.msg_id },
+			ok: true,
+			tool,
+			params,
+			task: {
+				estate: params.estate,
+				explicitTarget: params.target,
+				prompt: buildVerifyPrompt({ params, report: reportContent }),
+				responseSchema: PI_VERDICT_RESPONSE_SCHEMA,
+				budgetMs: config.verifyTimeoutMs,
+				config,
+				deps,
+			},
 		};
 	}
-	const investigation = PiInvestigationSchema.safeParse(outcome.response);
+	const parsed = PiInvestigateParamsSchema.safeParse(rawParams);
+	if (!parsed.success) return { ok: false, error: "investigate-with-pi params invalid: estate and focus are required" };
+	const params = parsed.data;
+	return {
+		ok: true,
+		tool,
+		params,
+		task: {
+			estate: params.estate,
+			explicitTarget: params.target,
+			prompt: buildInvestigatePrompt({ params, report: reportContent }),
+			responseSchema: PI_INVESTIGATION_RESPONSE_SCHEMA,
+			budgetMs: config.investigateTimeoutMs,
+			conversationId: params.conversation_id,
+			config,
+			deps,
+		},
+	};
+}
+
+function queuedOutcome(estate: string, target: string, msgId: string): PiActionOutcome {
+	return { status: "success", result: { kind: "queued", target, estate, msg_id: msgId } };
+}
+
+// The reply half: validate against the analyzer's OWN schema, remember a verdict as
+// structured fields, and propose the investigate follow-up. One implementation for
+// both execution shapes.
+function finalizePiAction(
+	tool: PiTool,
+	params: PiVerifyParams | PiInvestigateParams,
+	reply: { target: string; msg_id: string; response: unknown },
+): PiActionOutcome {
+	if (tool === "verify-with-pi") {
+		const verdict = PiVerdictSchema.safeParse(reply.response);
+		if (!verdict.success) {
+			logger.warn({ target: reply.target, msg_id: reply.msg_id }, "pi verdict did not match schema");
+			return { status: "error", error: `pi agent ${reply.target} replied with an unusable verdict (schema mismatch)` };
+		}
+		// SIO-1651: remember the verdict as structured fields (enums, counts, ids).
+		// The workflow path writes through the same builder, so a verdict is
+		// remembered identically however it was asked for. Never throws.
+		recordVerdictDecision({
+			estate: params.estate,
+			target: reply.target,
+			msgId: reply.msg_id,
+			requestId: reply.msg_id,
+			verdict: verdict.data,
+		});
+		const result: PiActionOutcome = {
+			status: "success",
+			result: {
+				kind: "verdict",
+				target: reply.target,
+				estate: params.estate,
+				msg_id: reply.msg_id,
+				verdict: verdict.data,
+			},
+		};
+		if (needsInvestigation(verdict.data)) {
+			result.followUpActions = [
+				buildInvestigateFollowUp(params as PiVerifyParams, verdict.data, reply.target, reply.msg_id),
+			];
+		}
+		return result;
+	}
+	const investigation = PiInvestigationSchema.safeParse(reply.response);
 	if (!investigation.success) {
-		logger.warn({ target: outcome.target, msg_id: outcome.msg_id }, "pi investigation did not match schema");
+		logger.warn({ target: reply.target, msg_id: reply.msg_id }, "pi investigation did not match schema");
 		return {
 			status: "error",
-			error: `pi agent ${outcome.target} replied with an unusable investigation (schema mismatch)`,
+			error: `pi agent ${reply.target} replied with an unusable investigation (schema mismatch)`,
 		};
 	}
 	return {
 		status: "success",
 		result: {
 			kind: "investigation",
-			target: outcome.target,
+			target: reply.target,
 			estate: params.estate,
-			msg_id: outcome.msg_id,
+			msg_id: reply.msg_id,
 			investigation: investigation.data,
 		},
 	};
+}
+
+async function executePiAction(
+	tool: PiTool,
+	rawParams: Record<string, unknown>,
+	reportContent: string,
+	deps: PiVerifierDeps,
+): Promise<PiActionOutcome> {
+	const prepared = preparePiAction(tool, rawParams, reportContent, deps);
+	if (!prepared.ok) return { status: "error", error: prepared.error };
+	const outcome = await runHubTask(prepared.task);
+	if (outcome.kind === "failed") return { status: "error", error: outcome.error };
+	if (outcome.kind === "queued") return queuedOutcome(prepared.params.estate, outcome.target, outcome.msg_id);
+	return finalizePiAction(tool, prepared.params, outcome);
+}
+
+export function executePiVerify(
+	rawParams: Record<string, unknown>,
+	reportContent: string,
+	deps: PiVerifierDeps = {},
+): Promise<PiActionOutcome> {
+	return executePiAction("verify-with-pi", rawParams, reportContent, deps);
+}
+
+export function executePiInvestigate(
+	rawParams: Record<string, unknown>,
+	reportContent: string,
+	deps: PiVerifierDeps = {},
+): Promise<PiActionOutcome> {
+	return executePiAction("investigate-with-pi", rawParams, reportContent, deps);
+}
+
+// SIO-1778: start/poll execution, so the fleet pane can show a card-originated send
+// live instead of the card holding one 5-15 minute request open.
+//
+// What a started message is allowed to become is recorded HERE, server-side. A poll
+// names only a msg id; the tool, params and target it is finalized with come from
+// this registry, never from the browser. Without it a caller could point a poll at
+// any message on the hub and have its reply parsed as a verdict and written to
+// memory under a target string of its choosing.
+type StartedPiAction = {
+	actionId: string;
+	tool: PiTool;
+	params: PiVerifyParams | PiInvestigateParams;
+	hub: PiComsHubConfig;
+	target: string;
+	deadline: number;
+};
+const MAX_STARTED = 200;
+const started = new Map<string, StartedPiAction>();
+
+export type PiActionStart =
+	| { status: "error"; error: string }
+	| { status: "queued"; outcome: PiActionOutcome; hubKey: string; target: string; msgId: string; prompt: string }
+	| { status: "sent"; hubKey: string; target: string; msgId: string; prompt: string; budgetMs: number };
+
+export async function startPiAction(
+	action: { id: string; tool: string; params: Record<string, unknown> },
+	reportContent: string,
+	deps: PiVerifierDeps = {},
+): Promise<PiActionStart> {
+	if (action.tool !== "verify-with-pi" && action.tool !== "investigate-with-pi") {
+		return { status: "error", error: `not a pi action: ${action.tool}` };
+	}
+	const prepared = preparePiAction(action.tool, action.params, reportContent, deps);
+	if (!prepared.ok) return { status: "error", error: prepared.error };
+	const sent = await startHubTask(prepared.task);
+	if (sent.kind === "failed") return { status: "error", error: sent.error };
+	const common = { hubKey: sent.hubKey, target: sent.target, msgId: sent.msg_id, prompt: prepared.task.prompt };
+	if (sent.kind === "queued") {
+		return { status: "queued", outcome: queuedOutcome(prepared.params.estate, sent.target, sent.msg_id), ...common };
+	}
+	// ponytail: in-memory, per process. A server restart mid-wait loses the entry and the
+	// poll answers "unknown" -- the same exposure as the single long request this replaces.
+	if (started.size >= MAX_STARTED) started.delete(started.keys().next().value as string);
+	started.set(sent.msg_id, {
+		actionId: action.id,
+		tool: action.tool,
+		params: prepared.params,
+		hub: sent.hub,
+		target: sent.target,
+		deadline: (deps.now ?? Date.now)() + prepared.task.budgetMs,
+	});
+	return { status: "sent", budgetMs: prepared.task.budgetMs, ...common };
+}
+
+export type PiActionPoll =
+	| { pending: true; status: string }
+	| { pending: false; actionId: string; tool: PiTool; outcome: PiActionOutcome };
+
+// One hub await slice. Pending until the message is terminal or its budget is spent.
+export async function pollPiAction(msgId: string, deps: PiVerifierDeps = {}): Promise<PiActionPoll | null> {
+	const entry = started.get(msgId);
+	if (!entry) return null;
+	const done = (outcome: PiActionOutcome): PiActionPoll => {
+		started.delete(msgId);
+		return { pending: false, actionId: entry.actionId, tool: entry.tool, outcome };
+	};
+	const now = (deps.now ?? Date.now)();
+	const remaining = entry.deadline - now;
+	if (remaining <= 0) {
+		return done({ status: "error", error: `pi agent ${entry.target} did not reply within its budget` });
+	}
+	const client = new PiComsClient(entry.hub, { fetchImpl: deps.fetchImpl, now: deps.now });
+	const reply = await client.awaitReply(msgId, Math.min(PI_COMS_AWAIT_SLICE_MS, remaining));
+	if (reply.status === "budget_exhausted") return { pending: true, status: "waiting" };
+	if (reply.status !== "complete") {
+		return done({
+			status: "error",
+			error: `pi agent ${entry.target} did not complete (${reply.status}): ${reply.error ?? "no detail"}`,
+		});
+	}
+	return done(
+		finalizePiAction(entry.tool, entry.params, { target: entry.target, msg_id: msgId, response: reply.response }),
+	);
 }

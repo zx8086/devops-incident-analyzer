@@ -396,13 +396,29 @@ function onKeydown(event: KeyboardEvent) {
           <div class="flex items-center gap-2 text-xs">
             <span class="text-[10px] text-gray-500 truncate">{entry.hubKey}</span>
             <span class="font-medium text-tommy-navy">{entry.target}</span>
+            {#if entry.label}
+              <!-- SIO-1778: sent by a verify/investigate card, not typed here. -->
+              <span class="px-1.5 py-0.5 rounded border border-tommy-navy/30 bg-tommy-navy/5 text-tommy-navy">{entry.label}</span>
+            {/if}
             <span class="ml-auto px-1.5 py-0.5 rounded border {entryChip[entry.status] ?? 'bg-gray-100 text-gray-600 border-gray-200'}">{entry.status}</span>
           </div>
-          <p class="mt-2 text-sm text-gray-700 whitespace-pre-wrap">{entry.prompt}</p>
+          {#if entry.label}
+            <!-- The card prompt carries the report (up to 12k chars): collapsed by default. -->
+            <details class="mt-2 text-xs text-gray-600">
+              <summary class="cursor-pointer select-none">Prompt sent by the {entry.label} card</summary>
+              <p class="mt-1 text-sm text-gray-700 whitespace-pre-wrap">{entry.prompt}</p>
+            </details>
+          {:else}
+            <p class="mt-2 text-sm text-gray-700 whitespace-pre-wrap">{entry.prompt}</p>
+          {/if}
           {#if !isTerminal(entry.status)}
             <p class="mt-2 text-xs text-gray-500 flex items-center gap-1">
               <Icon name="spinner" class="w-3 h-3 animate-spin motion-reduce:animate-none" />
-              Waiting for {entry.target} (up to {budgetSeconds} s)
+              {#if entry.label}
+                Waiting for {entry.target}. The result also lands on the card.
+              {:else}
+                Waiting for {entry.target} (up to {budgetSeconds} s)
+              {/if}
             </p>
           {:else}
             {#if entry.error}

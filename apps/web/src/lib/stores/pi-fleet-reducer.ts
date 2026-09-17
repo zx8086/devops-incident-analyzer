@@ -34,6 +34,9 @@ export type PiFleetEntry = {
 	status: PiFleetEntryStatus;
 	response: unknown;
 	error: string | null;
+	// SIO-1778: set when the entry was sent by a verify/investigate card rather than
+	// typed into the pane. The card keeps the structured result; the pane shows the send.
+	label?: "verify" | "investigate";
 };
 
 export type PiFleetState = {
@@ -106,7 +109,7 @@ export function applyMailbox(state: PiFleetState, response: PiFleetMailboxRespon
 
 export function startEntry(
 	state: PiFleetState,
-	input: { id: string; hubKey: string; target: string; prompt: string; sentAt: number },
+	input: { id: string; hubKey: string; target: string; prompt: string; sentAt: number; label?: PiFleetEntry["label"] },
 ): PiFleetState {
 	const entry: PiFleetEntry = {
 		...input,
@@ -119,12 +122,12 @@ export function startEntry(
 	return { ...state, entries: [entry, ...state.entries] };
 }
 
-function updateEntry(state: PiFleetState, id: string, patch: Partial<PiFleetEntry>): PiFleetState {
+export function patchEntry(state: PiFleetState, id: string, patch: Partial<PiFleetEntry>): PiFleetState {
 	return { ...state, entries: state.entries.map((e) => (e.id === id ? { ...e, ...patch } : e)) };
 }
 
 export function applySendResult(state: PiFleetState, id: string, response: PiFleetMessageResponse): PiFleetState {
-	return updateEntry(state, id, {
+	return patchEntry(state, id, {
 		msgId: response.msgId,
 		sender: response.sender,
 		status: response.status,
@@ -134,17 +137,46 @@ export function applySendResult(state: PiFleetState, id: string, response: PiFle
 }
 
 export function applyStatus(state: PiFleetState, id: string, response: PiFleetMessageStatusResponse): PiFleetState {
-	return updateEntry(state, id, { status: response.status, response: response.response, error: response.error });
+	return patchEntry(state, id, { status: response.status, response: response.response, error: response.error });
+}
+
+// SIO-1778: a card-originated send. The route has already validated the reply against
+// the analyzer's schema, so what lands here is the parsed payload, shown as data.
+export function applyActionStart(state: PiFleetState, id: string, msgId: string): PiFleetState {
+	return patchEntry(state, id, { msgId, status: "delivered" });
+}
+
+export function applyActionResult(
+	state: PiFleetState,
+	id: string,
+	result: { status: "success" | "error"; result?: Record<string, unknown>; error?: string },
+): PiFleetState {
+	if (result.status === "error") return patchEntry(state, id, { status: "error", error: result.error ?? "failed" });
+	const payload = result.result ?? {};
+	// The estate agent was offline: nothing will answer this send in the pane. "stored"
+	// is non-terminal here (a typed prompt keeps polling it), so say so as a finished row.
+	if (payload.kind === "queued") {
+		return patchEntry(state, id, {
+			status: "complete",
+			response: `Queued to the ${String(payload.target ?? "ops")} mailbox: the estate agent is offline, so the reply will arrive there.`,
+			error: null,
+		});
+	}
+	return patchEntry(state, id, {
+		status: "complete",
+		response: payload.verdict ?? payload.investigation ?? payload,
+		error: null,
+	});
 }
 
 export function failEntry(state: PiFleetState, id: string, message: string): PiFleetState {
-	return updateEntry(state, id, { status: "failed", error: message });
+	return patchEntry(state, id, { status: "failed", error: message });
 }
 
 export function expireEntry(state: PiFleetState, id: string, totalBudgetMs: number): PiFleetState {
 	const entry = state.entries.find((e) => e.id === id);
 	const target = entry?.target ?? "the spoke";
-	return updateEntry(state, id, {
+	return patchEntry(state, id, {
 		status: "expired",
 		error: `no reply from ${target} within ${Math.round(totalBudgetMs / 1000)} s`,
 	});
