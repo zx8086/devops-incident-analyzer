@@ -14,6 +14,7 @@ import {
 	withTransformParam,
 } from "./evidence-exec.ts";
 import {
+	awsEcsAbsenceBlocker,
 	awsEcsAbsenceProven,
 	consumeAbsenceExitLog,
 	consumeEmptyAwsResultsAdvice,
@@ -144,7 +145,7 @@ export interface InstrumentContext {
 	// SIO-1777: out-param (same escape pattern as rawOutputs). The ECS absence proof lives
 	// in this module's per-run closure; without this it was only ever logged, so the pi
 	// card proposer kept offering cards for estates the run had proven irrelevant.
-	runSignals?: { serviceAbsent: boolean };
+	runSignals?: { serviceAbsent: boolean; absenceBlockedBy?: string | null };
 	// SIO-1688: when provided, an oversized result is indexed at FULL fidelity before
 	// the LLM-facing copy is truncated, and the truncated copy gains a line naming
 	// search_evidence. Indexing happens HERE rather than at the SIO-1248 persist site
@@ -269,12 +270,17 @@ function instrumentTool(
 						const observed = isObservedTool(tool.name);
 						const signature = toolCallSignature(tool.name, arg);
 						if (shouldShortCircuit(runState.loopGuard, tool.name, signature, arg)) {
-							// SIO-1268: a STOPPED ECS list call means that page/cluster was never walked, so
-							// enumeration is permanently unprovable for this estate. Mark it before any
-							// later absence check can treat a guard-truncated sweep as complete.
-							if (tool.name === "aws_ecs_list_clusters" || tool.name === "aws_ecs_list_services") {
-								runState.loopGuard.awsEcs.failed = true;
-							}
+							// SIO-1783: a stopped ECS list call deliberately does NOT latch awsEcs.failed.
+							// SIO-1268 latched it here on the reasoning that a stopped page was never walked.
+							// Since SIO-1272 exempted these tools from the counter-driven caps, only two stops
+							// can reach them, and neither loses a page: an exact duplicate (the identical call
+							// already ran -- only calls that really run reserve a signature) and the absence
+							// block (the proof already holds). Live, a model emitted aws_ecs_list_clusters five
+							// times in ONE turn; the four duplicate stops latched `failed`, permanently
+							// destroying a proof the first call had fully earned, and a pi verify card was
+							// proposed for an estate the report called a confirmed negative.
+							// The ledger is safe without the latch: a page that is never walked never reaches
+							// clusterPagesComplete / servicesComplete, so the proof cannot hold for it.
 							// SIO-1268: log the decision ONCE, with the evidence behind it, so a replay can
 							// audit why this estate stopped early.
 							const absence = awsEcsAbsenceProven(runState.loopGuard)
@@ -352,7 +358,10 @@ function instrumentTool(
 							// SIO-1777: re-evaluated (not latched) after every observed result, so the
 							// signal is set even when the model stops calling tools right after the
 							// last ECS page and no short-circuit ever logs the exit.
-							if (ctx.runSignals) ctx.runSignals.serviceAbsent = awsEcsAbsenceProven(runState.loopGuard);
+							if (ctx.runSignals) {
+								ctx.runSignals.serviceAbsent = awsEcsAbsenceProven(runState.loopGuard);
+								ctx.runSignals.absenceBlockedBy = awsEcsAbsenceBlocker(runState.loopGuard);
+							}
 						}
 						// SIO-1248: capture BEFORE processResult so the persisted payload is the full
 						// upstream response, independent of whatever cap the LLM copy gets. Also before

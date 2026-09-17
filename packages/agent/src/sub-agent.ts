@@ -1776,7 +1776,7 @@ ${state.correlationFetchDirective}`
 		// salvage) because the instrumented tool instances are shared with agent.stream().
 		const rawOutputs: RawToolOutput[] = [];
 		// SIO-1777: set by the instrumentation when a complete ECS sweep matches no focus service.
-		const runSignals = { serviceAbsent: false };
+		const runSignals: { serviceAbsent: boolean; absenceBlockedBy?: string | null } = { serviceAbsent: false };
 		// SIO-1688: a per-run FTS5 index over the SAME pre-truncation bytes, so the
 		// parts the cap removes stay reachable through search_evidence for the rest
 		// of the run. Only built when the cap is active: with no cap nothing is cut,
@@ -1993,6 +1993,15 @@ ${state.correlationFetchDirective}`
 			},
 			truncated ? "Sub-agent completed (truncated at recursion limit; partial results)" : "Sub-agent completed",
 		);
+		// SIO-1783: an AWS run that hunted a focus service and could NOT prove it absent says which
+		// clause refused. Without this a verify card proposed for an estate the report calls a
+		// confirmed negative is undiagnosable after the fact.
+		if (runSignals.absenceBlockedBy) {
+			log.info(
+				{ event: "subagent.aws_absence_not_proven", deploymentId, blockedBy: runSignals.absenceBlockedBy },
+				"ECS absence could not be proven for this estate",
+			);
+		}
 
 		// SIO-1043: cap toolOutputs[].rawJson at creation so the persisted checkpoint state
 		// doesn't grow unboundedly. SIO-1159: typed-finding tools are EXEMPT, mirroring the

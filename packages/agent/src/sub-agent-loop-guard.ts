@@ -123,8 +123,9 @@ const AWS_ECS_LIST_SERVICES = "aws_ecs_list_services";
 // classified PRODUCTIVE and must stay so (see recordResult below) -- so being blocked BY a counter
 // they cannot raise is incoherent, and the trigger is always ANOTHER tool's runaway.
 //
-// Worse than incoherent here, it is self-amplifying. A backstop stop on an ECS list latches
-// awsEcs.failed (sub-agent-instrumentation.ts), and awsEcsAbsenceProven returns false forever once
+// Worse than incoherent here, it was self-amplifying. A backstop stop on an ECS list used to latch
+// awsEcs.failed (sub-agent-instrumentation.ts; that latch is gone since SIO-1783, which found the
+// same destruction caused by duplicate stops), and awsEcsAbsenceProven returns false forever once
 // failed is set -- so the SIO-1268 exit is not merely delayed but PERMANENTLY destroyed for that
 // estate, and the agent keeps hunting, raising totalUnproductive further. Observed live on run
 // eaebc62b: aws_ecs_list_clusters stopped with reason "unproductive-streak" and
@@ -795,6 +796,20 @@ export function awsEcsAbsenceProven(state: LoopGuardState): boolean {
 		if (!e.servicesComplete.has(c)) return false;
 	}
 	return true;
+}
+
+// SIO-1783: WHY the proof does not hold, as one word per clause, in the order awsEcsAbsenceProven
+// tests them. null when the ledger is off or the proof holds. A live replay ended with a
+// complete, error-free enumeration and no proof, and nothing recorded which clause refused it.
+export function awsEcsAbsenceBlocker(state: LoopGuardState): string | null {
+	const e = state.awsEcs;
+	if (!e.enabled) return null;
+	if (e.failed) return "failed";
+	if (e.matched) return "matched";
+	if (!e.clusterPagesComplete) return "cluster-pages-incomplete";
+	if (e.clusters.size === 0) return "zero-clusters";
+	const unwalked = [...e.clusters].filter((c) => !e.servicesComplete.has(c));
+	return unwalked.length > 0 ? `services-incomplete:${unwalked.join(",")}` : null;
 }
 
 // Exposed so the instrumentation layer can log the evidence behind the decision exactly once.
