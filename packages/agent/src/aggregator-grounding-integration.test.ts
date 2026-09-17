@@ -3,8 +3,15 @@
 // Mirrors the mock seam from aggregator.test.ts. The describe block is gated
 // on hasRunbooks because aggregate() calls buildOrchestratorPrompt(), which
 // calls loadAgent() — requires the real agents/incident-analyzer directory.
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
+import * as realSharedNs from "@devops-agent/shared";
 import { CAVEATS_HEADING } from "./confidence-policy.ts";
+
+// See aggregator.test.ts: the identity redactPiiContent stub below must not outlive this file.
+const realShared = { ...realSharedNs };
+afterAll(() => {
+	mock.module("@devops-agent/shared", () => realShared);
+});
 
 // SIO-1120: the mock LLM emits BOTH failure shapes at once:
 //   1. logs:DescribeLogGroups "not permitted" -- no auth error will be observed for it (fabricated).

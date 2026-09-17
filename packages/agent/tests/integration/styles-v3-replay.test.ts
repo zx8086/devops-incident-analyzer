@@ -1,6 +1,13 @@
 // packages/agent/tests/integration/styles-v3-replay.test.ts
-import { describe, expect, mock, test } from "bun:test";
+import { afterAll, describe, expect, mock, test } from "bun:test";
+import * as realSharedNs from "@devops-agent/shared";
 import type { BaseMessage } from "@langchain/core/messages";
+
+// See src/aggregator.test.ts: the identity redactPiiContent stub below must not outlive this file.
+const realShared = { ...realSharedNs };
+afterAll(() => {
+	mock.module("@devops-agent/shared", () => realShared);
+});
 
 // Module-level mock: minimal LLM that returns a styles-v3-shaped aggregator output
 // (defensive prose, multi-bullet Gaps section, low-information Confidence line).

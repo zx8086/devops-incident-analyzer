@@ -1,7 +1,18 @@
 // packages/agent/src/aggregator.test.ts
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import * as realSharedNs from "@devops-agent/shared";
 import type { BaseMessage } from "@langchain/core/messages";
 import type { AgentStateType } from "./state.ts";
+
+// mock.module() is process-global and nothing undoes it between test FILES. The stub below turns
+// redactPiiContent into the identity function; left registered, every later file that relies on
+// real PII redaction (iac/gitlab-import.test.ts) runs with redaction silently off. Snapshot the real
+// exports by VALUE before the stub is registered (a namespace import is a live view and would be
+// patched along with everything else) and put them back when this file is done.
+const realShared = { ...realSharedNs };
+afterAll(() => {
+	mock.module("@devops-agent/shared", () => realShared);
+});
 
 // SIO-640, SIO-635: Network-boundary mocks only. We cannot mock
 // @devops-agent/gitagent-bridge or ./prompt-context.ts without causing

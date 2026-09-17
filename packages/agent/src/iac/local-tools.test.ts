@@ -15,7 +15,14 @@
 // everything (so runMemorySearch's real logic + the real searchAgentMemory/selectedBackend behavior
 // is exercised), with per-test control only where a test needs to observe/stub the network boundary.
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import * as realKnowledgeGraphNs from "@devops-agent/knowledge-graph";
 import * as realMemoryBackendNs from "../memory-backend.ts";
+
+// Same snapshot rule for the knowledge-graph package. The runFleetUpgradeHistory block below replaces
+// it with three-export stubs; left in place, every later test file that uses the REAL
+// _setGraphStoreForTesting / InMemoryGraphStore (graph-knowledge.test.ts and others) silently writes
+// to nothing.
+const realKnowledgeGraph = { ...realKnowledgeGraphNs };
 
 // SIO-1045: a namespace import (`import * as ns`) is a LIVE VIEW -- when any file registers a
 // mock.module() for this path, bun live-patches every existing namespace binding, INCLUDING this
@@ -146,6 +153,10 @@ describe("runFleetUpgradeHistory (SIO-1664)", () => {
 		{ deployment: "us-cld", version: "9.5.3", outcome: "applied", summary: "", createdAt: "2026-09-08T09:00:00.000Z" },
 		{ deployment: "eu-cld", version: "9.5.3", outcome: "proposed", summary: "", createdAt: "2026-09-08T08:00:00.000Z" },
 	];
+
+	afterEach(() => {
+		mock.module("@devops-agent/knowledge-graph", () => realKnowledgeGraph);
+	});
 
 	test("renders EVERY upgrade as its own line, never collapsing to one", async () => {
 		mock.module("@devops-agent/knowledge-graph", () => ({

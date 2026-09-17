@@ -1971,6 +1971,10 @@ describe("triggerRenovateUpdate sets renovateInFlightMarker (SIO-1475)", () => {
 });
 
 describe("watchRenovateMr falls back to renovateInFlightMarker (SIO-1475)", () => {
+	afterEach(() => {
+		restoreRealMemoryMocks();
+	});
+
 	test("uses renovateInFlightMarker when renovateMarker is null (a re-check turn)", async () => {
 		mockRenovateTools({
 			gitlab_list_merge_requests_by_source_branch: () => "[200] []",
