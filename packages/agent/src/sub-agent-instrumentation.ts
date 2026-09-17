@@ -371,9 +371,16 @@ function instrumentTool(
 						// upstream response, independent of whatever cap the LLM copy gets. Also before
 						// the aws_logs_get_query_results advice append below -- that advice steers the
 						// model and is not part of the tool's data.
+						// SIO-1790: capture the tool's PAYLOAD, not the adapter's { type, text,
+						// structuredContent } wrapper. A raw adapter tool also carries the structured
+						// copy as an artifact, so the wrapper never mattered there. The AWS and elastic
+						// tools are re-created by createTool (responseFormat "content") and lose that
+						// artifact, leaving the wrapper as the only thing persisted: extractFindings
+						// then parsed { type, text, structuredContent } and found no MetricAlarms.
+						const rawContent = extractContent(result);
 						ctx.rawOutputs?.push({
 							toolName: tool.name,
-							content: extractContent(result),
+							content: dropDuplicateStructuredContent(rawContent) ?? rawContent,
 							structuredContent: extractStructuredContent(result),
 						});
 						// SIO-1776: taken HERE, synchronously with the push. Tool calls from one
