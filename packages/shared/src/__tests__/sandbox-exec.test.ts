@@ -241,7 +241,10 @@ test.skipIf(!nodeAvailable())(
 				spinInterrupted: true,
 			});
 			// A spinning guest in a worker must not stall the main loop (in-thread it blocks ~2 s).
-			expect(out.maxLagMs as number).toBeLessThan(250);
+			// 1000, not 250: a shared CI runner compiling WASM in the worker measured 272 ms of lag
+			// with the loop NOT blocked (PR #815). Blocked means the 2 s guest deadline, and the
+			// in-thread fallback is ruled out by workerMode above, so 1000 still discriminates.
+			expect(out.maxLagMs as number).toBeLessThan(1000);
 		}
 	},
 	20_000,

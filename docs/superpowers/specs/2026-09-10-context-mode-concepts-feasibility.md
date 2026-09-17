@@ -314,6 +314,9 @@ applied at the instrumentation boundary, and a `run_js_on_evidence` tool), both
 behind the opt-in `EVIDENCE_EXEC_ENABLED`. Whether that flag ever defaults ON is
 decided by the SIO-1775 A/B, not assumed.
 
+Superseded 2026-09-17: both entry points shipped in SIO-1776 and the flag defaults ON since
+SIO-1775. See section 15.
+
 ## 14. Addendum 2026-09-17: where the fat tool results really came from (SIO-1774)
 
 Run `f77ce7dd` (LangSmith root run `01a0aed1-e2c4-736a-80e8-9216afe54d48`) had four results
@@ -338,3 +341,106 @@ LangSmith trace (`POST /api/v1/runs/query` with `trace` = the root run id and `r
 the app log has sizes only. `langsmith-fetch traces` returns root messages, not child runs, and
 the `runId` in the app log is not the LangSmith trace id: find the root run by project session
 and time window.
+
+## 15. Addendum 2026-09-17: per-result cap A/B, live (SIO-1775)
+
+Closes open questions 3, 6 and 8 of section 8.
+
+### Method
+
+Tier-2 `eval:single-agent-probe` (one sub-agent against the live elastic MCP server and live
+Bedrock, `eu.anthropic.claude-sonnet-4-6`), the same method and scenario as section 12: "High
+error rate on the styles service in the last 24 hours". `EVIDENCE_INDEX_ENABLED=true` in every
+arm. One run per arm. Arms: `SUBAGENT_TOOL_RESULT_CAP_BYTES` at 131072 (today), 49152 and 24576,
+each with `EVIDENCE_EXEC_ENABLED` off and on.
+
+The 0.78 baseline is not used. Section 12 already records that it was a single manual run that
+cannot be reproduced, so there is nothing to compare against.
+
+### What the A/B found before it measured anything
+
+The first run could not be used as a baseline, because the truncator was broken for the very
+results the cap applies to. Both defects are fixed (SIO-1782, PRs #814 and #815) and every
+figure below was taken after the first fix.
+
+1. A result made of several text blocks was serialized as a block ARRAY before truncation. The
+   truncator kept the header block and dropped the payload block whole: a 760 KB
+   service-discovery aggregation reached the model as 139 bytes, at any cap. The aggregation
+   reducer written for that payload (SIO-1283) never ran, and when it did run it still missed,
+   because `elasticsearch_search` emits the bare aggregation map without an `aggregations`
+   wrapper. After the fix the same result arrives as 19 KB with every bucket key and
+   `sum_other_doc_count`.
+2. One text block per hit, newline- and quote-heavy: JSON escaping pushed the serialized array
+   over a 24576 cap while the texts themselves fit. A 26.6 KB hits result reached the model as
+   138 bytes. After the fix the same shape arrives whole, or as a head of real hits.
+
+Effect of defect 1 alone, cap 131072, sandbox on, one run each:
+
+| state | discovery result | turns | input tokens | answer |
+|---|---|---|---|---|
+| before | 760178 -> 139 | 20 | 477k | inconclusive, "enumeration incomplete" |
+| after | 694716 -> 19250 | 14 | 438k | definitive |
+
+### Arms
+
+| cap | sandbox | turns | input tokens | cache read | peak turn | results cut | search_evidence (with hits) | run_js_on_evidence |
+|---|---|---|---|---|---|---|---|---|
+| 131072 | off | 14 | 799k | 88% | 95.9k | 1 | 5 (5) | - |
+| 131072 | off (repeat) | 13 | 508k | 86% | 68.8k | 1 | 4 (4) | - |
+| 131072 | on | 14 | 438k | 95% | 38.5k | 1 | 2 (2) | 4 |
+| 49152 | off | 16 | 506k | 91% | 59.7k | 1 | 4 (3) | - |
+| 49152 | on | 20 | 821k | 92% | 68.9k | 4 | 1 (0) | 7 |
+| 24576 | off | 16 | 538k | 93% | 52.8k | 4 | 4 (4) | - |
+| 24576 | on | 20 | 776k | 94% | 63.1k | 4 | 4 (4) | 5 |
+| 24576 | on (after fix 2) | 18 | 642k | 94% | 59.2k | 2 | 2 (1) | 2 |
+
+All eight runs ended `success` and reached the same conclusion (no service of that name exists
+in the cluster), so answer quality did not separate the arms.
+
+### Reading it honestly
+
+- **Run-to-run noise is larger than any cap effect.** The two identical 131072/off runs differ
+  by 36% in input tokens (799k against 508k), because the agent picks a different trajectory
+  each time. No difference between arms in this table is distinguishable from that. A cap
+  decision cannot rest on n=1 per arm, and this scenario has an absence answer, which is a weak
+  discriminator for quality.
+- **What is established**, because it held in every run: recovery works. `search_evidence`
+  returned hits in 23 of 26 calls and all 18 `run_js_on_evidence` runs in the table succeeded
+  (worker mode, 53 to 157 ms over up to 965 KB); the run taken before the fix added 3 in-call
+  `_transform` runs, also all successful. No run lost
+  the answer when the cap cut four results instead of one. The model used all three recovery
+  paths without being told to in the scenario. Section 12 recorded that it never called
+  `search_evidence`; with the truncation pointer naming the tool, it now does.
+- **The economic case for a lower cap is much weaker than when SIO-1775 was written.** The
+  rolling cache point (SIO-1773) serves 86 to 95% of input tokens from cache in every arm, so a
+  carried byte costs roughly a tenth of what it did. The large wins measured in this work came
+  from fixing truncation and from caching, not from the cap value.
+- A lower cap did bound the worst case: the peak turn was 96k tokens at 131072 and 53k to 69k
+  at the lower caps. Across the 85 tool results observed, 68% were under 8 KB and 11% were over
+  131 KB; a 49152 cap would carry at most 51% of the bytes today's cap carries, a 24576 cap
+  33%. That is an upper bound: structured reducers usually cut far below the cap (695 KB to
+  19 KB above).
+
+### Decisions
+
+1. `SUBAGENT_TOOL_RESULT_CAP_BYTES` stays at 131072. Nothing here justifies a change, and the
+   section 3 rule (no default change without a measurement that supports it) holds. Revisit
+   only with several runs per arm on a scenario that has a ground-truth answer.
+2. `EVIDENCE_EXEC_ENABLED` defaults ON, kill-switch semantics. It was verified live before the
+   flip: Bedrock accepts the bound tool schemas with `_transform` added, and the model uses the
+   sandbox correctly. The sandbox-on runs at the lower caps took more turns (20 against 16);
+   with n=1 that is a thing to watch, not a finding.
+3. Results over 8192 bytes are indexed, not only results the cap cuts, and the context-budget
+   elision marker names `search_evidence` / `run_js_on_evidence` instead of telling the model
+   to re-query.
+
+### Open questions closed
+
+- **3** (Bun or Node in production): moot. SIO-1772 made the evidence store open under both
+  through `openSqlite`, and it is covered by a test that runs under real Node.
+- **6** (which dataset A/Bs against 0.78): none. The baseline is not reproducible (section 12);
+  the tier-2 probe against live systems is the method.
+- **8** (A/B through both truncation paths): done live rather than on the 233 KB fixture, and
+  it found the two truncation defects above, which a fixture fed straight to
+  `truncateToolOutput` as a string would not have: the defects were in how block content was
+  handed to the truncator.

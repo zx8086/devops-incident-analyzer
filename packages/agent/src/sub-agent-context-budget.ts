@@ -72,12 +72,25 @@ function contentBytes(content: unknown): number {
 	}
 }
 
-function elisionMarker(toolName: string | undefined, bytes: number): string {
+// SIO-1775: `recovery` names the tools that can still reach the elided bytes (search_evidence,
+// run_js_on_evidence) when the run has them. Without it the only advice was "re-query", which
+// costs a datasource round trip and a second copy of the same fat result. It is asked PER
+// RESULT, by size: search_evidence only holds results that were large enough to index, and a
+// marker that says "do not re-query" about a result no tool can reach loses it for good
+// (Greptile, PR #816).
+export type ElisionRecovery = (bytes: number) => string | undefined;
+
+function elisionMarker(toolName: string | undefined, bytes: number, recovery?: ElisionRecovery): string {
 	const who = toolName ?? "tool";
-	return `[elided: ${bytes} bytes from an earlier ${who} result, dropped to stay within the sub-agent context budget. The full result was captured for analysis; re-query only if you still need these specifics.]`;
+	const how = recovery?.(bytes) ?? "re-query only if you still need these specifics.";
+	return `[elided: ${bytes} bytes from an earlier ${who} result, dropped to stay within the sub-agent context budget. The full result was captured for analysis; ${how}]`;
 }
 
-export function applyContextBudget(messages: BaseMessage[], budgetBytes: number): ContextBudgetResult {
+export function applyContextBudget(
+	messages: BaseMessage[],
+	budgetBytes: number,
+	recovery?: ElisionRecovery,
+): ContextBudgetResult {
 	const toolIndexes: number[] = [];
 	let totalBytes = 0;
 	for (let i = 0; i < messages.length; i += 1) {
@@ -122,7 +135,7 @@ export function applyContextBudget(messages: BaseMessage[], budgetBytes: number)
 	const out = messages.map((m, i) => {
 		if (!(m instanceof ToolMessage) || keepWhole.has(i)) return m;
 		const bytes = contentBytes(m.content);
-		const marker = elisionMarker(m.name, bytes);
+		const marker = elisionMarker(m.name, bytes, recovery);
 		const markerBytes = Buffer.byteLength(marker, "utf8");
 		// Never "elide" something already smaller than its own marker.
 		if (bytes <= markerBytes) return m;

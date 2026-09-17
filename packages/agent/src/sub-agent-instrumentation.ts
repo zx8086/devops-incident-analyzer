@@ -153,7 +153,7 @@ export interface InstrumentContext {
 	evidenceIndex?: EvidenceIndexSink;
 	// SIO-1776: when provided, every tool's model-facing schema gains an optional
 	// `_transform` and a call that carries one returns only the sandbox's derived output.
-	// Absent (the default, EVIDENCE_EXEC_ENABLED off) nothing in this module changes.
+	// Absent (EVIDENCE_EXEC_ENABLED=false) nothing in this module changes.
 	sandbox?: SandboxRunner;
 }
 
@@ -370,14 +370,15 @@ function instrumentTool(
 						const evidenceId = `e${ctx.rawOutputs?.length ?? 1}`;
 						// SIO-1688: index the SAME pre-truncation bytes so whatever the cap
 						// below removes stays reachable through search_evidence for the rest
-						// of the run. Only oversized results are indexed: a result the model
-						// receives whole needs no recovery path. Awaited so a search issued on
+						// of the run. SIO-1775: anything over EVIDENCE_INDEX_MIN_BYTES is indexed,
+						// not only what the cap cuts -- the context budget can elide a result the
+						// model once received whole, and its marker points here. Awaited so a search issued on
 						// the next iteration cannot race the write, and soft-failing inside
 						// EvidenceIndex so a broken index never breaks a tool call.
 						let indexedRows = 0;
 						if (ctx.evidenceIndex && ctx.capBytes != null && ctx.capBytes > 0) {
 							const rawText = stringifyContent(extractContent(result));
-							if (Buffer.byteLength(rawText, "utf8") > ctx.capBytes) {
+							if (Buffer.byteLength(rawText, "utf8") > Math.min(ctx.capBytes, EVIDENCE_INDEX_MIN_BYTES)) {
 								try {
 									indexedRows = await ctx.evidenceIndex.index(tool.name, rawText);
 								} catch (error) {
@@ -634,6 +635,9 @@ function extractStructuredContent(result: unknown): unknown | undefined {
 	}
 	return undefined;
 }
+
+// SIO-1775: results smaller than this are cheap enough to re-read that indexing them is noise.
+export const EVIDENCE_INDEX_MIN_BYTES = 8192;
 
 // SIO-1782: an MCP result made of several text blocks (elasticsearch_search returns a header
 // block plus the payload block) must be truncated by its TEXTS. Serialized as a block array the

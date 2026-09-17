@@ -16,11 +16,11 @@ import { createHash } from "node:crypto";
 import { tool as createTool, type StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 
-// Opt-in, not the kill-switch default: a feature genuinely awaiting live verification
-// (CLAUDE.md, capability flags). Whether it ever defaults ON is decided by SIO-1775.
+// SIO-1775: defaults ON, kill-switch semantics like every other capability flag
+// (CLAUDE.md). Shipped opt-in in SIO-1776; flipped once verified against live Bedrock.
 export function isEvidenceExecEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 	const v = env.EVIDENCE_EXEC_ENABLED?.toLowerCase();
-	return v === "true" || v === "1";
+	return v !== "false" && v !== "0";
 }
 
 // Structural, so this module and the instrumentation carry no static dependency on the
