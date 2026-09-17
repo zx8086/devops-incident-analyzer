@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	buildSearchEvidenceTool,
 	chunkToolOutput,
+	type EvidenceDb,
 	EvidenceIndex,
 	isEvidenceIndexEnabled,
 	sanitizeQuery,
@@ -201,6 +202,36 @@ describe("search_evidence tool stops a fruitless search", () => {
 		expect(answer).toContain("incomplete");
 		expect(answer).not.toContain("already in your context in full");
 		index.close();
+	});
+
+	// Greptile, PR #810. One result indexed fine, a later one failed: rowCount stays positive
+	// while search() answers [] forever after, so a plain "no match" would be a lie.
+	test("an index that failed AFTER storing rows reports itself unavailable, not a miss", async () => {
+		let inserts = 0;
+		const rows: Array<{ title: string; content: string; tool: string }> = [];
+		const flaky: EvidenceDb = {
+			run() {},
+			insert(batch) {
+				inserts += 1;
+				if (inserts > 1) throw new Error("disk full");
+				rows.push(...batch);
+			},
+			search: () => [],
+			close() {},
+			count: () => rows.length,
+		};
+		const index = new EvidenceIndex(async () => flaky);
+		expect(
+			await index.index("elasticsearch_search", JSON.stringify({ hits: [{ message: "first result" }] })),
+		).toBeGreaterThan(0);
+		expect(await index.index("elasticsearch_search", JSON.stringify({ hits: [{ message: "second result" }] }))).toBe(0);
+		expect(index.rowCount).toBeGreaterThan(0);
+		expect(index.unavailable).toBe(true);
+
+		const answer = await ask(buildSearchEvidenceTool(index), "second");
+		expect(answer).toContain("WAS truncated");
+		expect(answer).toContain("incomplete");
+		expect(answer).not.toContain("No indexed evidence matches");
 	});
 
 	test("the third consecutive miss tells the model to stop; a hit resets the count", async () => {

@@ -164,7 +164,7 @@ export function sanitizeQuery(query: string): string {
 	return terms.join(" OR ");
 }
 
-interface EvidenceDb {
+export interface EvidenceDb {
 	run(sql: string): void;
 	insert(rows: Array<{ title: string; content: string; tool: string }>): void;
 	search(match: string, tool: string | undefined, limit: number): EvidenceHit[];
@@ -234,6 +234,13 @@ export class EvidenceIndex {
 	// oversized (truncated), so attempts > 0 with zero rows means "something WAS cut and is
 	// not searchable", which is the opposite of "nothing was cut".
 	#attempts = 0;
+	readonly #open: () => Promise<EvidenceDb>;
+
+	// The opener is injectable only so a test can make a LATER insert fail; production
+	// always uses the real SQLite-backed one.
+	constructor(open: () => Promise<EvidenceDb> = openDb) {
+		this.#open = open;
+	}
 
 	async index(toolName: string, text: string): Promise<number> {
 		this.#attempts += 1;
@@ -244,7 +251,7 @@ export class EvidenceIndex {
 		const rows = chunkToolOutput(text);
 		if (rows.length === 0) return 0;
 		try {
-			if (!this.#db) this.#db = await openDb();
+			if (!this.#db) this.#db = await this.#open();
 			this.#db.insert(rows.map((r) => ({ ...r, tool: toolName })));
 			this.#rows += rows.length;
 			return rows.length;
@@ -303,6 +310,12 @@ export class EvidenceIndex {
 		return this.#attempts;
 	}
 
+	// True once an insert has failed: search() answers [] from then on, whatever was
+	// indexed before, so "no hits" stops meaning "not in the evidence".
+	get unavailable(): boolean {
+		return this.#failed;
+	}
+
 	close(): void {
 		try {
 			this.#db?.close();
@@ -326,6 +339,9 @@ const DEFAULT_HIT_LIMIT = 3;
 // sub-agent had nothing truncated (an empty index), was refused its real tools by the loop
 // guard, and spent 11 turns searching an index with zero rows -- each answer ending "re-run
 // with a different query". An empty index and a run of misses now say plainly to stop.
+const EVIDENCE_UNAVAILABLE_MESSAGE =
+	"A tool result in this run WAS truncated, but the evidence index is unavailable, so the part that was cut cannot be searched. Do not call search_evidence again. What you were shown is incomplete: if you need the part that was cut, re-run the original tool with a narrower query (a tighter time window, fewer fields, or a filter), and otherwise report it as a gap.";
+
 export const SEARCH_EVIDENCE_TOOL_NAME = "search_evidence";
 const MAX_CONSECUTIVE_MISSES = 3;
 
@@ -333,6 +349,10 @@ export function buildSearchEvidenceTool(index: EvidenceIndex): StructuredToolInt
 	let consecutiveMisses = 0;
 	return createTool(
 		({ query, tool }: { query: string; tool?: string }) => {
+			// Checked BEFORE rowCount (Greptile, PR #810): an index that stored one result and
+			// then failed on a later one keeps rowCount > 0 while search() returns nothing, so
+			// without this the model would read an unsearchable, truncated result as "absent".
+			if (index.unavailable) return EVIDENCE_UNAVAILABLE_MESSAGE;
 			if (index.rowCount === 0) {
 				// Two very different reasons for an empty index, and conflating them is dangerous
 				// (Greptile, PR #810): run f77ce7dd had results truncated AND a dead index. Telling
@@ -340,7 +360,7 @@ export function buildSearchEvidenceTool(index: EvidenceIndex): StructuredToolInt
 				// complete.
 				return index.attempts === 0
 					? "Nothing is indexed in this run: no tool result was truncated, so every result you received is already in your context in full. search_evidence cannot return anything you do not already have. Do not call it again; write your findings from the results above."
-					: "A tool result in this run WAS truncated, but the evidence index is unavailable, so the part that was cut cannot be searched. Do not call search_evidence again. What you were shown is incomplete: if you need the part that was cut, re-run the original tool with a narrower query (a tighter time window, fewer fields, or a filter), and otherwise report it as a gap.";
+					: EVIDENCE_UNAVAILABLE_MESSAGE;
 			}
 			const hits = index.search(query, { tool, limit: DEFAULT_HIT_LIMIT });
 			if (hits.length === 0) {
