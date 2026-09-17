@@ -282,7 +282,8 @@ function trimKeyListsToFit(candidate: Record<string, unknown>, capBytes: number)
 		const slim = agg as { _keys: unknown[]; _bucketCount: number };
 		const others = serializedBytes({ ...candidate, aggregations: { ...next, [name]: { ...slim, _keys: [] } } });
 		const keep = fitCount(slim._keys, capBytes - others - MARKER_BYTE_RESERVE);
-		next[name] = { _keys: slim._keys.slice(0, keep), _bucketCount: slim._bucketCount, _keptKeys: keep };
+		// Spread first: the scalar siblings kept by slimAggregationBuckets must survive a trim too.
+		next[name] = { ...slim, _keys: slim._keys.slice(0, keep), _keptKeys: keep };
 		const attempt = { ...candidate, aggregations: next };
 		if (serializedBytes(attempt) <= capBytes) return attempt;
 	}

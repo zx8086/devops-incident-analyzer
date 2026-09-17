@@ -54,4 +54,13 @@ describe("SIO-1782: multi-block text results are truncated by their texts", () =
 		const twoHuge = [{ type: "text", text: "a".repeat(CAP) }, blocks[1]];
 		expect(truncateTextBlocks(twoHuge, CAP)).toBeNull();
 	});
+	// Greptile, PR #814: at a cap small enough that the key list itself is trimmed, the entry was
+	// rebuilt from _keys/_bucketCount alone and the scalars were lost again.
+	test("scalar siblings survive when the key list has to be trimmed to fit", () => {
+		const r = truncateToolOutput(aggregationPayload(), 4096);
+		expect(r.strategy).toBe("json-agg-keys");
+		expect(r.finalBytes).toBeLessThanOrEqual(4096);
+		expect(r.content).toContain("_keptKeys");
+		expect(r.content).toContain("6674009748");
+	});
 });
