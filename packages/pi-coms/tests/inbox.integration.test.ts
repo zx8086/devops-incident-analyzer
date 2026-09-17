@@ -108,10 +108,25 @@ describe("shared inbox", () => {
 	});
 
 	test("a conversation leaves hub memory after the message TTL but stays on disk until the retention window (SIO-1620)", async () => {
+		// SIO-1785: PI_COMS_NET_MESSAGE_TTL_MS governs two things in the hub. It is how long a
+		// COMPLETED conversation stays in memory (what this test is about), and it is also how
+		// long an UNANSWERED message lives before ttlScanTick marks it `expired`. The second one
+		// applies to this test's own round trip: send, read the prompt off SSE, POST the response.
+		// At the old 200 ms a CI runner took longer than that, the message expired first, the
+		// response was refused, and the inbox row carried `response: null` (PR #817, run
+		// 35238949885). The hub is a spawned process on real timers, so there is no clock to
+		// inject; the margin has to be real. The round trip exceeded 200 ms on the failing
+		// runner, so 2000 ms leaves roughly an order of magnitude. Retention is set well clear of
+		// it so "out of memory, still on disk" is a window the assertions can land in, not an
+		// instant.
+		const MESSAGE_TTL_MS = 2000;
+		const SCAN_MS = 100;
+		const RETAIN_MS = 4000;
+		const POLL_MS = 100;
 		const hub = await startHub(undefined, {
-			PI_COMS_NET_MESSAGE_TTL_MS: "200",
-			PI_COMS_NET_TTL_SCAN_MS: "200",
-			PI_COMS_NET_HISTORY_RETAIN_MS: "1500",
+			PI_COMS_NET_MESSAGE_TTL_MS: String(MESSAGE_TTL_MS),
+			PI_COMS_NET_TTL_SCAN_MS: String(SCAN_MS),
+			PI_COMS_NET_HISTORY_RETAIN_MS: String(RETAIN_MS),
 		});
 		await register(hub, "SENDER", "monitor");
 		const sseUrl = await register(hub, "TGT", "helper");
@@ -119,33 +134,40 @@ describe("shared inbox", () => {
 		await Bun.sleep(100);
 		await send(hub, "SENDER", "helper", "remember me");
 		const [prompt] = await readSseEvents(resp, "prompt", 1);
-		await api(hub, "POST", `/v1/messages/${prompt.msg_id}/response`, {
+		const answered = await api(hub, "POST", `/v1/messages/${prompt.msg_id}/response`, {
 			project: "default",
 			responder_session: "TGT",
 			response: "kept",
 			error: null,
 		});
+		// Fail HERE if the race ever comes back, not two assertions later on a null response.
+		expect(answered.status).toBe(200);
 		await resp.body?.cancel();
 
-		// past the message TTL: gone from the live message map, present in the inbox
+		// Still in memory right after completion: eviction is the TTL, not the completion.
+		expect((await api(hub, "GET", `/v1/messages/${prompt.msg_id}`)).status).toBe(200);
+
+		// past the message TTL: gone from the live message map, present in the inbox.
+		// Eviction lands at most one scan after the TTL; the bound is twice that.
 		let inMemory = 200;
-		for (let i = 0; i < 20 && inMemory !== 404; i++) {
-			await Bun.sleep(100);
+		for (let i = 0; i < (2 * (MESSAGE_TTL_MS + SCAN_MS)) / POLL_MS && inMemory !== 404; i++) {
+			await Bun.sleep(POLL_MS);
 			inMemory = (await api(hub, "GET", `/v1/messages/${prompt.msg_id}`)).status;
 		}
 		expect(inMemory).toBe(404);
 		let r = await api(hub, "GET", "/v1/mailbox?project=default&name=helper&limit=10");
 		expect(((await r.json()) as InboxListing).messages.map((m) => m.response)).toEqual(["kept"]);
 
-		// past the retention window: purged
+		// past the retention window: purged. Retention counts from completion, so the wait
+		// left is RETAIN_MS minus what the loop above already spent; the full window bounds it.
 		let left = 1;
-		for (let i = 0; i < 30 && left !== 0; i++) {
-			await Bun.sleep(100);
+		for (let i = 0; i < (RETAIN_MS + SCAN_MS) / POLL_MS && left !== 0; i++) {
+			await Bun.sleep(POLL_MS);
 			r = await api(hub, "GET", "/v1/mailbox?project=default&name=helper&limit=10");
 			left = ((await r.json()) as InboxListing).messages.length;
 		}
 		expect(left).toBe(0);
-	});
+	}, 20_000);
 
 	test("mailbox endpoint requires auth and a name", async () => {
 		const hub = await startHub();
