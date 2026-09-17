@@ -6,7 +6,7 @@
 | Tickets | [SIO-1786](https://linear.app/siobytes/issue/SIO-1786) Done (one user-side item open, see below), [SIO-1787](https://linear.app/siobytes/issue/SIO-1787) In Review, [SIO-1788](https://linear.app/siobytes/issue/SIO-1788) Done |
 | Related | [SIO-1726](https://linear.app/siobytes/issue/SIO-1726), [SIO-1734](https://linear.app/siobytes/issue/SIO-1734) (spoke context-mode, shipped earlier), [SIO-1774](https://linear.app/siobytes/issue/SIO-1774) (the change the AgentCore deploy shipped), [SIO-1784](https://linear.app/siobytes/issue/SIO-1784) (separate, own handover: `experiments/HANDOFF-2026-09-17-SIO-1784.md`) |
 | PRs | #819 merged as `798e9b29`, #820 merged as `61b43f87` |
-| Repo state | `origin/main` at `61b43f87`. No branch is open. The session worktree is clean. |
+| Repo state | `origin/main` at `61b43f87` when written; `37bf49d2` after the follow-up session (PR #821). No branch is open. |
 | Deployed state | Fleet bundle `61b43f87` on all 8 spokes and both hubs. AWS AgentCore runtime on v16. |
 | Nature | Nothing here is in progress. This is a list of loose ends, each small and independent. None has a ticket unless one is named. |
 
@@ -62,9 +62,94 @@ real finding to be implemented.
 All three AgentCore lessons are in `docs/runbooks/mcp-agentcore-image-deployment.md` (step 5, step 6
 and the 2026-09-17 entry) and in memory `reference_agentcore_proxy_sticky_session_tests_old_image`.
 
+## Update, 2026-09-17 late evening (follow-up session): what changed since this was written
+
+Read this first. It supersedes the matching parts of "What is still open" below, which are kept as
+written so the reasoning stays visible.
+
+| Item below | Status now |
+|---|---|
+| 1. SIO-1786 replay | DONE. Every checklist item passed; scorecard posted on [SIO-1786](https://linear.app/siobytes/issue/SIO-1786). Two things remain unproven, see below. |
+| 2. Twenty-four local-only failures | EXPLAINED, not a defect. Wrong command. See below. |
+| 3. `ajv` CI flake | Unchanged. Did not recur on the two CI runs of PR #821. |
+| 4. `just fleet status` hang | Ticketed as [SIO-1792](https://linear.app/siobytes/issue/SIO-1792) (Backlog). Cause of the original hang still not reproduced. |
+| 5. SIO-1788 acceptance gaps | The offline half is ticketed as [SIO-1793](https://linear.app/siobytes/issue/SIO-1793) (Backlog). The live hub message per environment is still the user's. |
+
+**The replay (item 1).** Web app restarted, full replay on all six datasources with estates
+`eu-oit-prd` + `eu-shared-services-prd`. Truncation logged `indexedRows: 400`, no
+`evidence_index.unavailable`, `cacheReadTokens` grew turn over turn on every sub-agent, and the
+SIO-1774 slimming showed in a real run (`capella_get_completed_requests` 37 KB against 745 KB,
+`aws_cloudwatch_describe_alarms` 18 KB and 26 KB against 78 KB and 118 KB). `pi verification cards
+proposed` was 2: one estate logged `blockedBy: matched` (the service runs there, that card is
+correct, it was approved and came back `confirmed`), the other logged
+`services-incomplete:<one cluster>`, which is exactly the [SIO-1784](https://linear.app/siobytes/issue/SIO-1784)
+case and is recorded there as its second live data point. Approve opened a `verify` entry in the
+fleet pane and the verdict arrived.
+
+Still unproven after the replay, noted and not chased: `subagent.final_turn_forced` (SIO-1779) did
+not fire, which is expected, because `shouldForceFinalTurn` in `packages/agent/src/sub-agent.ts`
+needs three consecutive rounds in which EVERY tool result is a refusal. And the key-decision write
+after a pi verdict (`recordVerdictDecision` in `packages/agent/src/pi-verdict-memory.ts`): memory was
+on and a verdict came back, but the captured log stopped before it. The proof is a
+`Recorded key decision` line whose `requestId` is the pi message id rather than an incident request
+id.
+
+**The 24 failures (item 2) were the command, not the worktree and not the code.** Reproduced in a
+fresh worktree with `bun install --frozen-lockfile`, on code identical to main:
+
+```
+cd packages/agent && bun test             4616 pass, 69 skip, 24 fail   (the numbers in item 2, exactly)
+cd packages/agent && bun test --isolate   4709 pass, 0 fail
+```
+
+The package script is `bun test --isolate` (`packages/agent/package.json`), and CI runs that script.
+The eight failing suites all live in `packages/agent/src/iac/*.test.ts` and share a process-global
+`mock.module("../memory-backend.ts")`, last registration wins; without `--isolate` it leaks across
+files. The "about 50 fewer tests" were the 69 skips, not uncollected files: 4616 + 69 + 24 = 4709.
+This is already in memory as `reference_bun_test_isolate_kills_mock_module_pollution`. Rule: run a
+package's tests with `bun run test` (or its exact script), never bare `bun test`. A fresh worktree
+also needs `bunx svelte-kit sync` before `apps/web` tests, or `$lib` does not resolve; the web
+package script does that too.
+
+**New from the replay:**
+
+- [SIO-1789](https://linear.app/siobytes/issue/SIO-1789), merged as PR #821 (`37bf49d2`): the fleet
+  pane now renders a pi verdict or investigation (chip, summary, claims with evidence) with the JSON
+  under a collapsed "Raw reply", and the verify / investigate cards only send and show a one-line
+  status. With no pane configured the card still renders the result itself. Not yet exercised
+  against a live hub: pull main in the main checkout so the running web app picks it up, then
+  approve one verify card.
+- [SIO-1790](https://linear.app/siobytes/issue/SIO-1790) (Backlog): `AWSFindingsCard` logged
+  `rawCount: 0` although `aws_cloudwatch_describe_alarms` returned results in both estates.
+  `rawCount` is measured with empty focus, so nothing parsed at all. SIO-1774's slimming is ruled
+  out: it keeps every field the extractor reads. Reproduce from the persisted `toolOutputs` before
+  changing code.
+- [SIO-1791](https://linear.app/siobytes/issue/SIO-1791) (Backlog): `subagent.loop_guard_stop` logs
+  `unproductiveSearches`, a counter only the `elasticsearch_search` path increments, so it reads 0
+  for every other tool; and `reason: unproductive-streak` also covers the run-wide backstop.
+- Checked and NOT bugs: the Couchbase and Elastic findings cards at `rawCount: 0` (their source
+  tools were not called, or did not match), one AWS sub-agent turn at 165k input tokens (two results
+  just under the 131072-byte cap set by `SUBAGENT_TOOL_RESULT_CAP_BYTES`; the cap bounds a result,
+  not a conversation), and the `AWS estate config drift` warning (the local `AWS_ESTATES` lists an
+  estate the AgentCore runtime does not carry; routing already filters it out).
+
+**For item 4, what the code verifiably allows** (detail in SIO-1792): both defects named below are
+confirmed, and there is a real forever-blocker next to them. The `/health` fetch in `withHubTunnel`
+and the `listAgents` fetch in `packages/pi-coms/scripts/fleet/hub.ts` have no `AbortSignal`, so one
+connect that neither resolves nor rejects hangs the command. `runShellOutput` is correctly bounded.
+`withHubTunnel`, `runStatus` and `runRollout` have no test coverage.
+
+**For item 5** (detail in SIO-1793): the `else` branch that removes `mcp.json` has no test, and the
+one existing test injects its own `CTX_SERVER` and asserts that same string, so a wrong path on the
+script's `CTX_SERVER=` line would still pass. An operator sends a hub message with
+`just hub-tunnel <env>`, then `just coms <hub> <cname>`, then `coms_net_send` from that console;
+there is no `fleet` subcommand for it.
+
+SIO-1787 is still In Review with nothing left to do, waiting on the user to close it.
+
 ## What is still open
 
-### 1. SIO-1786: the user-side verification (no code)
+### 1. SIO-1786: the user-side verification (no code) [DONE, see the update above]
 
 Linear moved SIO-1786 to Done automatically when PR #819 merged. One item from its handover
 (`experiments/HANDOFF-2026-09-17-SIO-1786.md`, last paragraph of Verification) was never done,
@@ -82,7 +167,7 @@ Two things from the earlier 2026-09-17 session are still unconfirmed live and ha
 after a pi verdict was never checked because the replay ran with memory off. Note them if the replay
 shows either; do not chase them.
 
-### 2. Twenty-four local-only failures in `packages/agent` (unexplained)
+### 2. Twenty-four local-only failures in `packages/agent` [EXPLAINED: bare `bun test` without `--isolate`, see the update above]
 
 In this session's worktree, `cd packages/agent && bun test` gives `4616 pass, 24 fail`, identically
 sandboxed and unsandboxed, on a branch that differed from main by one markdown file. CI on the same
@@ -111,7 +196,7 @@ base commit, it was the only failed CI run in the last 40, three local runs did 
 and the re-run passed with no change. Treated as a flake and NOT ticketed. If it recurs, that is the
 signal to look at how that test file builds its ajv validators.
 
-### 4. `just fleet status` hung, cause NOT established
+### 4. `just fleet status` hung, cause NOT established [ticketed: SIO-1792]
 
 During SIO-1787, `just fleet status --operator simon` did not return within 5 minutes and left one
 orphaned dev tunnel on 8787 (proven mine by parent chain, killed by PID). At the time the prd hub's
@@ -147,7 +232,7 @@ memory `reference_fleet_cli_orphans_ssm_tunnels` describes. The output was also 
 which buffers until exit, so the run may simply have been slow rather than hung. Reproduce before
 concluding anything. No ticket exists.
 
-### 5. SIO-1788: two acceptance items met by a different route than the ticket named
+### 5. SIO-1788: two acceptance items met by a different route than the ticket named [offline half ticketed: SIO-1793]
 
 - The ticket said "a hub message". The probes actually ran as a separate Pi print-mode process on
   each host (deployed `mcp.json`, real adapter, the host's own model, persona loaded). That proves
@@ -223,7 +308,7 @@ shows the old 78 KB, reset the proxy session first (runbook step 6) before suspe
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| The 24 local failures get "fixed" in code when the cause is the worktree's environment | Medium | Run the same command in the main checkout first; CI is green on the same commits |
+| The 24 local failures get "fixed" in code | Low now | Explained: bare `bun test` leaks `mock.module` across files. Use the package script (`bun test --isolate`) |
 | A future AgentCore deploy is judged failed, or good, off the pinned proxy session | Medium | Runbook step 6: wait for the endpoint's `liveVersion`, check the proxy is idle, `DELETE /mcp`, then verify by behaviour |
 | `DELETE /mcp` aborts someone's in-flight analysis | Low | `activeSseConnections: 0` on `/health` is necessary, not sufficient; stop your own probes and confirm nobody else uses the proxy |
 | A spoke model wants `ctx_purge` or `ctx_upgrade` and cannot find it | Low | Intended. Operators run those by hand on the host |
