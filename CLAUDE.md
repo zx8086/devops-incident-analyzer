@@ -150,8 +150,20 @@ root `plan` is not a no-op. `apply` replaces instances
 (`user_data_replace_on_change = true`), and production spokes require `--yes`.
 
 Note `bun test` at the repo root can crash the Bun runner mid-suite; run per
-package (`cd packages/<name> && bun test`), which is also how `apps/web` tests
-must be run.
+package, and run the package's SCRIPT, not bare `bun test`:
+`cd packages/<name> && bun run test` (same for `apps/web`). The script is not a
+synonym. `packages/agent` and `apps/web` run `bun test --isolate`, which gives
+every test file a fresh global and module registry; `apps/web` also runs
+`svelte-kit sync` first, and `packages/pi-coms` installs its nested monitor deps.
+Without `--isolate` a `mock.module()` stub registered by one file leaks into
+every file that runs after it, and Bun picks the file order from the filesystem,
+so the damage differs per machine (SIO-1795, measured on one commit: bare
+`bun test` fails 24 in `packages/agent` and 17 plus 12 errors in `apps/web`;
+`bun run test` is 0 and 0, which is what CI runs). "Passes alone, fails in the
+suite, green on CI" means you dropped the flag; do not go hunting for a polluter.
+Adding a path filter keeps the flag: `bun run test src/iac`. There is no
+`bunfig.toml` key for isolation, so it cannot be made the default for bare
+`bun test`.
 
 ## Linear Project
 
