@@ -241,6 +241,17 @@ tool_mapping:
       - guardduty
       - security hub
       - securityhub
+    # SIO-1781: an incident pasted with its SQS envelope names the queue machinery in the
+    # payload field names even when the prose never says "SQS".
+    messaging_state:
+      - sqs
+      - sns
+      - receipthandle
+      - approximatereceivecount
+      - dead letter queue
+      - eventbridge
+      - step function
+      - state machine
     list_estates:
       - which estates
       - list estates

@@ -1510,17 +1510,25 @@ export function inferClusterHealthActions(query: string, dataSourceId: string): 
 //
 // This also normalises away resolveActionTools' ordering, which follows the requested-actions array
 // -- i.e. LLM output order, a second non-deterministic input to the belt that nothing tracked.
+//
+// SIO-1781: tools of a PRIORITY action sort ahead of everything else, keeping declaration order
+// among themselves. A priority action is one the deterministic keyword pass matched in the
+// user's own words -- the strongest relevance signal the belt has. Without this, declaration
+// rank alone decided the cut: run f77ce7dd was triggered by an SQS message, and both aws_sqs_*
+// tools fell off because messaging_state is declared ~63rd of 68.
 function orderByDeclaration(
 	names: Iterable<string>,
 	toolDef: ToolDefinition,
 	allTools: StructuredToolInterface[],
+	priorityActions: string[] = [],
 ): StructuredToolInterface[] {
 	const declarationRank = new Map(getAllActionToolNames(toolDef).map((name, i) => [name, i] as const));
 	const byName = new Map(allTools.map((t) => [t.name, t] as const));
 	const unranked = declarationRank.size;
+	const priority = new Set(resolveActionTools(toolDef, priorityActions).toolNames);
 	return [...new Set(names)]
-		.map((name, i) => ({ name, rank: declarationRank.get(name) ?? unranked + i }))
-		.sort((a, b) => a.rank - b.rank)
+		.map((name, i) => ({ name, rank: declarationRank.get(name) ?? unranked + i, first: priority.has(name) }))
+		.sort((a, b) => Number(b.first) - Number(a.first) || a.rank - b.rank)
 		.map((entry) => byName.get(entry.name))
 		.filter((tool): tool is StructuredToolInterface => tool !== undefined);
 }
@@ -1534,6 +1542,8 @@ export function selectToolsByAction(
 	// resolved here so this stays a pure function -- reaching for getAgent() would make
 	// every caller mock prompt-context, which pollutes other tests in this package.
 	skillToolNames?: string[],
+	// SIO-1781: actions matched by the deterministic keyword pass; their tools survive the cut first.
+	priorityActions?: string[],
 ): { tools: StructuredToolInterface[]; filtered: boolean } {
 	if (allTools.length <= MAX_TOOLS_PER_AGENT) {
 		return { tools: allTools, filtered: false };
@@ -1552,7 +1562,7 @@ export function selectToolsByAction(
 	if (actions && actions.length > 0) {
 		const { toolNames } = resolveActionTools(toolDef, actions);
 		if (toolNames.length > 0) {
-			const selected = orderByDeclaration(toolNames, toolDef, allTools);
+			const selected = orderByDeclaration(toolNames, toolDef, allTools, priorityActions);
 			if (selected.length >= MIN_FILTERED_TOOLS) {
 				return { tools: bindTools(selected, allTools, dataSourceId, skillToolNames), filtered: true };
 			}
@@ -1561,7 +1571,7 @@ export function selectToolsByAction(
 
 	const allActionNames = getAllActionToolNames(toolDef);
 	if (allActionNames.length > 0) {
-		const selected = orderByDeclaration(allActionNames, toolDef, allTools);
+		const selected = orderByDeclaration(allActionNames, toolDef, allTools, priorityActions);
 		if (selected.length >= MIN_FILTERED_TOOLS) {
 			return { tools: bindTools(selected, allTools, dataSourceId, skillToolNames), filtered: true };
 		}
@@ -1712,6 +1722,7 @@ ${state.correlationFetchDirective}`
 			augmentedToolActions,
 			toolDef,
 			skillToolNames,
+			keywordActions,
 		);
 		log.info(
 			{ toolCount: tools.length, totalTools: allTools.length, filtered, deploymentId },
