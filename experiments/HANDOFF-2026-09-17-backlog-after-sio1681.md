@@ -45,7 +45,36 @@ ops-not-code. Nothing is blocked.
 
 SIO-1681 is **Done** (the Linear PR automation moved it on merge, not a human).
 
-### The one thing SIO-1681 did NOT verify
+### The one thing SIO-1681 did NOT verify -- DONE 2026-09-17
+
+> **RESOLVED.** Both probes below were run against the real fleet after bundle
+> `12a7be86` was published and rolled out to all 8 spokes and both hubs.
+> **8/8 spokes report `consecutive_run_errors=0`** -- present, not absent -- and
+> the healthy-fleet check found **zero** `spoke-health` findings and zero monitor
+> errors. Full evidence in a comment on SIO-1681.
+>
+> **Two traps found while doing it, both worth knowing before any future rollout:**
+>
+> 1. **`just fleet rollout` does NOT update the hub host.** `runRollout` iterates
+>    `spokeNames` only (`scripts/fleet.ts:298`). After a *successful* dev rollout
+>    the hub was still on the old bundle with ZERO references to
+>    `consecutive_run_errors` in `contracts/wire.ts` and `coms-net-server.ts` --
+>    spokes reporting a field into a hub that could not store it. Dispatch
+>    `/usr/local/bin/pi-coms-update` to each hub host explicitly
+>    (`deployment.md:116`); State Manager converges it within 30 min anyway, but a
+>    rollout reporting success over a stale hub is a real trap.
+> 2. **The agent-restart dance was NOT needed** even though `extensions/` changed.
+>    `pi-coms-update` had already relaunched the agent (`operations-gotchas.md:64-65`
+>    is the accurate page; `deployment.md:118-122` reads as mandatory). Check
+>    whether the agent process restarted BEFORE reaching for `pkill`.
+>
+> Also note `just fleet status` needs `--operator <principal>` just as `rollout`
+> does; without it it fails after printing the credential rows.
+>
+> Still open: a spoke whose model is **genuinely failing**. The counter has only
+> been observed at `0`; reaching `>= 3` needs a real provider outage and is not
+> worth manufacturing.
+
 
 **No live run against a spoke whose model is actually failing.** Every hop is
 covered by tests, including one that spawns a real hub process, but the
@@ -166,10 +195,18 @@ done   # -> no output, 8/8
 The ticket says 9 hosts; `eu-b2bonboarding-prd` is a governance account with no
 agent host, so 8/8 is complete, not 8/9.
 
-What remains is **`just fleet apply` per host**, which replaces the instance
-(`user_data_replace_on_change = true`), so it wants deliberate scheduling rather
-than being a side effect. **This is also the natural moment to do the SIO-1681
-live verification in §1** -- the same apply carries both.
+~~What remains is `just fleet apply` per host~~ -- **NOTHING REMAINS (verified
+2026-09-17).** `just fleet preflight` passes on all 8 spokes and `just fleet plan`
+reports **`No changes`** on every one; the live dev host registers
+`daily 15 8 * * *; tz Europe/Amsterdam`, this ticket's exact payload. The schedule
+was already applied. See the comment on SIO-1744.
+
+One trap: the values are hardcoded in each rendered root's `main.tf:123-124`, NOT
+in `terraform.tfvars` (module defaults are `""`), so grepping the tfvars returns
+ABSENT on all 8 and means nothing. Grep `main.tf`.
+
+**The SIO-1681 live check did NOT need this apply** and was done via bundle
+publish + rollout instead -- see §1, now resolved.
 
 **The ticket's "worth considering" CI drift gate cannot be built as described.**
 Three verified blockers, recorded so nobody spends a day rediscovering them:
