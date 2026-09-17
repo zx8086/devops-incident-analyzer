@@ -6,7 +6,7 @@
 | Tickets | [SIO-1786](https://linear.app/siobytes/issue/SIO-1786) Done (its user-side replay has since been run, see the update), [SIO-1787](https://linear.app/siobytes/issue/SIO-1787) Done (closed by the user 2026-09-17, was In Review when this was written), [SIO-1788](https://linear.app/siobytes/issue/SIO-1788) Done |
 | Related | [SIO-1726](https://linear.app/siobytes/issue/SIO-1726), [SIO-1734](https://linear.app/siobytes/issue/SIO-1734) (spoke context-mode, shipped earlier), [SIO-1774](https://linear.app/siobytes/issue/SIO-1774) (the change the AgentCore deploy shipped), [SIO-1784](https://linear.app/siobytes/issue/SIO-1784) (separate, own handover: `experiments/HANDOFF-2026-09-17-SIO-1784.md`) |
 | PRs | #819 merged as `798e9b29`, #820 merged as `61b43f87` |
-| Repo state | `origin/main` at `61b43f87` when written; `37bf49d2` after the follow-up session (PR #821). No branch is open. |
+| Repo state | `origin/main` at `61b43f87` when written; `4426ae7d` after the follow-up session (PRs #821, #822, #823). No branch is open. |
 | Deployed state | Fleet bundle `61b43f87` on all 8 spokes and both hubs. AWS AgentCore runtime on v16. |
 | Nature | Nothing here is in progress. This is a list of loose ends, each small and independent. None has a ticket unless one is named. |
 
@@ -88,11 +88,14 @@ fleet pane and the verdict arrived.
 
 Still unproven after the replay, noted and not chased: `subagent.final_turn_forced` (SIO-1779) did
 not fire, which is expected, because `shouldForceFinalTurn` in `packages/agent/src/sub-agent.ts`
-needs three consecutive rounds in which EVERY tool result is a refusal. And the key-decision write
-after a pi verdict (`recordVerdictDecision` in `packages/agent/src/pi-verdict-memory.ts`): memory was
-on and a verdict came back, but the captured log stopped before it. The proof is a
-`Recorded key decision` line whose `requestId` is the pi message id rather than an incident request
-id.
+needs three consecutive rounds in which EVERY tool result is a refusal.
+
+The other item that was open here, the key-decision write after a pi verdict
+(`recordVerdictDecision` in `packages/agent/src/pi-verdict-memory.ts`), is now PROVEN. On a second
+live run the same evening a verify card was approved, and in the same second the hub reported the
+message `complete`, the log carried `Recorded key decision` with `requestId` equal to the pi message
+id rather than an incident request id, `backend: agent-memory`. That `requestId` is the signature
+of this write. Recorded on SIO-1786.
 
 **The 24 failures (item 2) were the command, not the worktree and not the code.** Reproduced in a
 fresh worktree with `bun install --frozen-lockfile`, on code identical to main:
@@ -114,16 +117,35 @@ package script does that too.
 **New from the replay:**
 
 - [SIO-1789](https://linear.app/siobytes/issue/SIO-1789), merged as PR #821 (`37bf49d2`): the fleet
-  pane now renders a pi verdict or investigation (chip, summary, claims with evidence) with the JSON
-  under a collapsed "Raw reply", and the verify / investigate cards only send and show a one-line
-  status. With no pane configured the card still renders the result itself. Not yet exercised
-  against a live hub: pull main in the main checkout so the running web app picks it up, then
-  approve one verify card.
-- [SIO-1790](https://linear.app/siobytes/issue/SIO-1790) (Backlog): `AWSFindingsCard` logged
-  `rawCount: 0` although `aws_cloudwatch_describe_alarms` returned results in both estates.
-  `rawCount` is measured with empty focus, so nothing parsed at all. SIO-1774's slimming is ruled
-  out: it keeps every field the extractor reads. Reproduce from the persisted `toolOutputs` before
-  changing code.
+  pane now renders a pi verdict or investigation (chip, summary, claims with evidence), and the
+  verify / investigate cards only send and show a one-line status. With no pane configured the card
+  still renders the result itself. EXERCISED LIVE against the prd hub the same evening: a
+  `partially confirmed` verdict rendered in the pane and the card collapsed to its status line.
+- [SIO-1794](https://linear.app/siobytes/issue/SIO-1794), merged as PR #823 (`4426ae7d`), two
+  follow-ups from that live use. Pane entries now run oldest first (`startEntry` in
+  `apps/web/src/lib/stores/pi-fleet-reducer.ts` appends; it used to prepend, so the investigate card
+  a verify raised landed ABOVE the finished verify), and `PiFleetPane.svelte` scrolls the newest
+  entry into view when the entry count grows, and only then. The collapsed "Raw reply" block under a
+  rendered result is removed; an object reply that is neither a verdict nor an investigation still
+  renders as raw JSON. The scroll is browser-only and has no unit test: not yet looked at live.
+- [SIO-1790](https://linear.app/siobytes/issue/SIO-1790), merged as PR #822 (`a8ec01cc`):
+  `AWSFindingsCard` logged `rawCount: 0` on every run although `aws_cloudwatch_describe_alarms`
+  returned alarms in both estates. Root cause, reproduced live: the tool declares an `outputSchema`,
+  so `@langchain/mcp-adapters` returns content `{ type, text, structuredContent }` and files the
+  structured copy as an artifact; `wrapAwsToolsWithEstate`
+  (`packages/agent/src/aws-tool-estate-wrapper.ts`) re-creates each AWS tool with `createTool` and
+  calls the inner tool with plain args, which DROPS the artifact; the wrapper object was then
+  persisted as `rawJson`, and `DescribeAlarmsResponseSchema` (all keys optional) accepted it and
+  read no `MetricAlarms`. SIO-1774 had unwrapped that shape for the model-facing copy only, and its
+  test supplied an artifact an AWS tool never has. Fix: the capture in
+  `packages/agent/src/sub-agent-instrumentation.ts` reuses `dropDuplicateStructuredContent`. Live
+  before and after: persisted keys `type,text,structuredContent` and 0 alarms, then
+  `CompositeAlarms,MetricAlarms,$metadata` and 26 alarms. Not yet seen in a full run: the next one
+  that calls the tool should log `rawCount` above 0. Only this tool was affected (the two kafka and
+  one atlassian tools with an `outputSchema` are raw adapter tools and keep their artifact), but any
+  AWS or elastic tool that gains an `outputSchema` is covered too. Seen in passing and NOT
+  investigated: with focus `pvh-services-styles-v3`, 25 of 26 alarms counted as in focus although no
+  alarm exists for that service, so `matchesFocus` may be matching on shared name fragments.
 - [SIO-1791](https://linear.app/siobytes/issue/SIO-1791) (Backlog): `subagent.loop_guard_stop` logs
   `unproductiveSearches`, a counter only the `elasticsearch_search` path increments, so it reads 0
   for every other tool; and `reason: unproductive-streak` also covers the run-wide backstop.
@@ -144,6 +166,14 @@ one existing test injects its own `CTX_SERVER` and asserts that same string, so 
 script's `CTX_SERVER=` line would still pass. An operator sends a hub message with
 `just hub-tunnel <env>`, then `just coms <hub> <cname>`, then `coms_net_send` from that console;
 there is no `fleet` subcommand for it.
+
+**Seen on the second live run, not ticketed and not investigated:** while a verify waits, every
+25-second poll slice logs `pi.hub.call.failed` for `POST /v1/agents/<id>/heartbeat` with
+`404 agent_not_found`, a different agent id each time (10 warnings for one verify), next to a
+`pi.hub.await.exhausted` warning per slice. The analyzer registers, sends, and deregisters at once,
+so the heartbeats have nothing to hit. The verdict still arrived, so it looks like warn-level noise
+in the same class as SIO-1791. Confirm in `packages/agent/src/action-tools/pi-coms-client.ts` before
+ticketing.
 
 SIO-1787 is Done: the user closed it on 2026-09-17. Its one follow-up, `fleet status` / `rollout`
 failing fast instead of hanging, is SIO-1792 and the two tickets are linked.
