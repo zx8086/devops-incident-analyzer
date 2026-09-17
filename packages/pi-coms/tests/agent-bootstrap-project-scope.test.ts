@@ -55,3 +55,31 @@ describe("agent-bootstrap.sh project scoping", () => {
 		expect(SCRIPT).toContain('--project "COMS_PROJECT_PLACEHOLDER"');
 	});
 });
+
+// SIO-1788: the launcher writes mcp.json as a hand-escaped JSON string inside a
+// printf. A quoting slip there yields a file the adapter cannot parse, and the
+// spoke silently starts with no ctx_* tools at all. So run the real line through
+// bash and parse what it prints, rather than matching the source text.
+describe("agent-bootstrap.sh mcp.json entry", () => {
+	const line = SCRIPT.split("\n").find((l) => l.includes("printf") && l.includes('\\"mcpServers\\"'));
+
+	test("the printf line renders valid JSON that hides the four maintenance tools", () => {
+		expect(line).toBeDefined();
+		// Drop the trailing line continuation: the redirect to mcp.json is on the next line.
+		const command = (line ?? "").trim().replace(/\\$/, "");
+		const out = Bun.spawnSync(["bash", "-c", command], {
+			env: {
+				HOME: "/home/piagent",
+				CTX_SERVER: "/home/piagent/.pi-ctx/server.bundle.mjs",
+				PATH: process.env.PATH ?? "",
+			},
+		});
+		expect(out.exitCode).toBe(0);
+		const ctx = JSON.parse(out.stdout.toString()).mcpServers.ctx;
+		expect(ctx.excludeTools).toEqual(["ctx_upgrade", "ctx_purge", "ctx_doctor", "ctx_insight"]);
+		// The names the aws-spoke RULES.md tells the model to use must stay reachable.
+		for (const kept of ["ctx_batch_execute", "ctx_execute", "ctx_search"]) expect(ctx.excludeTools).not.toContain(kept);
+		expect(ctx).toMatchObject({ lifecycle: "keep-alive", directTools: true, toolPrefix: "none" });
+		expect(ctx.args).toEqual(["/home/piagent/.pi-ctx/server.bundle.mjs"]);
+	});
+});
