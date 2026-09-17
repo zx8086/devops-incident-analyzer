@@ -21,7 +21,11 @@ safety rules and environment facts that source does not reveal.
 | Index | Covers |
 |-------|--------|
 | `docs/README.md` | The monorepo: architecture, configuration, deployment (AgentCore/Docker), development, operations, runbooks, reference |
-| `packages/pi-coms/docs/README.md` | pi-coms hub, spoke extension, monitor, and **all fleet deployment procedure** |
+| `packages/pi-coms/docs/README.md` | pi-coms hub, spoke extension, monitor, and the primary fleet deployment procedure |
+
+`packages/pi-coms/docs/deployment/deploying-from-a-worktree.md` is **not linked
+from either index** (SIO-1768), so the index path alone misses it. Open it
+directly when working from a worktree.
 
 **Before any `just fleet plan`/`apply`/`deploy`, read
 `packages/pi-coms/docs/deployment/deployment.md`** (the ten subcommands, the
@@ -141,8 +145,12 @@ just fleet preflight                                   # read-only; touches noth
 Fleet deployment (`just fleet <preflight|tokens|render|backend-init|plan|apply|publish|rollout|status|deploy>`)
 is documented in `packages/pi-coms/docs/deployment/deployment.md` -- read it rather
 than `scripts/fleet.ts`, and read `deploying-from-a-worktree.md` first from a
-worktree (see Architecture > Documentation). `preflight`, `plan` and `status` touch
-nothing and are the way to establish state; `apply` replaces instances
+worktree (see Architecture > Documentation). `preflight`, `plan` and `status` do
+not modify deployed INFRASTRUCTURE and are the way to establish state -- but note
+`plan` runs `terraform init` first, and a root still holding a local
+`terraform.tfstate` gets `-migrate-state -force-copy`, which writes that state into
+the S3 backend (`scripts/fleet/terraform.ts:19`). That is one-way, so on a legacy
+root `plan` is not a no-op. `apply` replaces instances
 (`user_data_replace_on_change = true`), and production spokes require `--yes`.
 
 Note `bun test` at the repo root can crash the Bun runner mid-suite; run per
