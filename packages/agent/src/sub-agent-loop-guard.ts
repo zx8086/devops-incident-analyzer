@@ -50,6 +50,12 @@ export const DUPLICATE_CALL_STOP_MESSAGE =
 	"having returned nothing. If you need different information, call it with MATERIALLY different " +
 	"arguments; otherwise synthesize your findings from what you already have.";
 
+// SIO-1779: stamped on every loop-guard stop ToolMessage (additional_kwargs, so it never
+// reaches the model). There are five differently-worded stop messages and they are tuned
+// for the model, not for matching; a marker lets the run-level check below recognise a
+// stop without coupling to any of that wording.
+export const LOOP_GUARD_STOP_MARKER = "loopGuardStop";
+
 export const GENERIC_LOOP_GUARD_STOP_MESSAGE =
 	"This tool has returned nothing useful several times in a row. Do not call it again with these " +
 	"or similar arguments. Synthesize your findings from the data you already have, and report what " +

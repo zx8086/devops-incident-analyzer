@@ -1,6 +1,7 @@
 <script lang="ts">
 // apps/web/src/lib/components/ActionConfirmationCard.svelte
 import type { ActionResult, PendingAction, PiActionResultPayload } from "@devops-agent/shared";
+import { isPiActionTool } from "@devops-agent/shared/src/pi-coms-types.ts";
 import Icon from "./Icon.svelte";
 
 let {
@@ -286,7 +287,7 @@ async function handleApprove() {
 				disabled={isExecuting}
 				class="px-3 py-1 text-xs font-medium rounded bg-tommy-navy text-white hover:bg-tommy-navy/90 disabled:opacity-50 transition-colors"
 			>
-				{isExecuting ? "Executing..." : "Approve"}
+				{isExecuting ? (isPiActionTool(action.tool) ? "Running in fleet pane..." : "Executing...") : "Approve"}
 			</button>
 			<button
 				onclick={() => onDismiss(action.id)}

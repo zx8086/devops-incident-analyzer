@@ -339,6 +339,60 @@ describe("SIO-1161: Metrics Insights tool selection with the real aws-introspect
 	});
 });
 
+// SIO-1781: run f77ce7dd was triggered by an SQS message, and both aws_sqs_* tools fell off the
+// 25-tool belt because messaging_state is declared near the end of the action map and nothing in
+// the keyword table could ever match it.
+describe("SIO-1781: keyword-matched actions survive the belt cut first", () => {
+	// Same per-describe helper as the SIO-1161 and SIO-1234 blocks: the REAL aws-introspect.yaml.
+	function loadAwsDef(): ToolDefinition {
+		const agent = loadAgent(join(import.meta.dir, "../../../agents/incident-analyzer"));
+		const awsDef = agent.tools.find((t) => t.name === "aws-introspect");
+		if (!awsDef) throw new Error("aws-introspect tool definition not found");
+		return awsDef;
+	}
+
+	// The shape the user pasted: prose that never says "SQS", plus the SQS envelope field names.
+	const SQS_INCIDENT =
+		"Please investigate the root cause of this error. Message: { ReceiptHandle: 'AQEB...', " +
+		"Attributes: { ApproximateReceiveCount: '3' }, body: { documentType: 'SIMPLE_PDF' } }";
+
+	test("the SQS envelope keyword-matches messaging_state; ordinary prose does not", () => {
+		const awsDef = loadAwsDef();
+		expect(matchActionsByKeywords(SQS_INCIDENT, awsDef)).toContain("messaging_state");
+		expect(matchActionsByKeywords("the sns topic stopped fanning out", awsDef)).toContain("messaging_state");
+		expect(matchActionsByKeywords("why is the ecs service returning 500s", awsDef)).not.toContain("messaging_state");
+	});
+
+	test("with every action requested, the matched action's tools are bound instead of cut", () => {
+		const awsDef = loadAwsDef();
+		const allTools = fakeTools(getAllActionToolNames(awsDef));
+		const everyAction = Object.keys(awsDef.tool_mapping?.action_tool_map ?? {});
+
+		const before = selectToolsByAction(allTools, "aws", { aws: everyAction }, awsDef).tools.map((t) => t.name);
+		expect(before).not.toContain("aws_sqs_list_queues"); // the live failure, reproduced
+
+		const priority = matchActionsByKeywords(SQS_INCIDENT, awsDef);
+		const after = selectToolsByAction(allTools, "aws", { aws: everyAction }, awsDef, undefined, priority).tools.map(
+			(t) => t.name,
+		);
+		expect(after).toContain("aws_sqs_list_queues");
+		expect(after).toContain("aws_sqs_get_queue_attributes");
+		expect(after.length).toBeLessThanOrEqual(25);
+		// The forced resolution head is untouched: promotion reorders the TAIL only.
+		expect(after).toContain("aws_ecs_list_clusters");
+		expect(after).toContain("aws_logs_start_query");
+	});
+
+	test("no priority actions means the belt is byte-identical to before", () => {
+		const awsDef = loadAwsDef();
+		const allTools = fakeTools(getAllActionToolNames(awsDef));
+		const actions = ["cloudwatch_metrics", "ec2_state", "logs_insights", "ecs_state"];
+		const names = (p?: string[]) =>
+			selectToolsByAction(allTools, "aws", { aws: actions }, awsDef, undefined, p).tools.map((t) => t.name);
+		expect(names([])).toEqual(names(undefined));
+	});
+});
+
 // SIO-1234: aws was absent from RESOLUTION_TOOLS_BY_DATASOURCE entirely and aws-agent declares
 // no `skills:` block, so nothing was force-bound for it at all -- with 70 tools loaded against a
 // 25 cap, the model followed its 32.7KB RULES.md and repeatedly called unbound tools.

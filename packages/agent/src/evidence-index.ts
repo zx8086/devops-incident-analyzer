@@ -26,6 +26,7 @@
 // index would be unreadable by the next turn's container anyway.
 
 import { getLogger } from "@devops-agent/observability";
+import { openSqlite } from "@devops-agent/shared";
 import { tool as createTool, type StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 
@@ -172,31 +173,30 @@ interface EvidenceDb {
 	count(): number;
 }
 
-// bun:sqlite is imported lazily and with @vite-ignore: packages/agent is bundled
-// as source into the web app's Vite SSR build, where a top-level "bun:" specifier
-// is unresolvable (same constraint as tool-call-metrics.ts).
+// SIO-1772: opened through the shared dual-driver opener. This used to import
+// bun:sqlite directly, which throws under `vite dev` (a Node host): the index was
+// silently unavailable there and every truncation logged indexedRows 0.
 async function openDb(): Promise<EvidenceDb> {
-	const { Database } = await import(/* @vite-ignore */ "bun:sqlite");
-	const db = new Database(":memory:");
-	db.run(
+	const db = await openSqlite(":memory:");
+	db.exec(
 		`CREATE VIRTUAL TABLE evidence USING fts5(
 			title, content, tool UNINDEXED, tokenize='porter unicode61'
 		)`,
 	);
-	const insertStmt = db.query("INSERT INTO evidence (title, content, tool) VALUES ($title, $content, $tool)");
+	const insertStmt = db.prepare("INSERT INTO evidence (title, content, tool) VALUES ($title, $content, $tool)");
 	return {
 		run(sql) {
-			db.run(sql);
+			db.exec(sql);
 		},
 		insert(rows) {
 			// One transaction per tool call: a per-row commit is what makes SQLite
 			// slow, and this runs on the tool-result path.
-			db.run("BEGIN");
+			db.exec("BEGIN");
 			try {
 				for (const r of rows) insertStmt.run({ $title: r.title, $content: r.content, $tool: r.tool });
-				db.run("COMMIT");
+				db.exec("COMMIT");
 			} catch (error) {
-				db.run("ROLLBACK");
+				db.exec("ROLLBACK");
 				throw error;
 			}
 		},
@@ -212,13 +212,13 @@ async function openDb(): Promise<EvidenceDb> {
 					ORDER BY bm25(evidence, 5.0, 1.0) LIMIT $limit`;
 			const params: Record<string, string | number> = { $match: match, $limit: limit };
 			if (tool) params.$tool = tool;
-			return db.query<EvidenceHit, typeof params>(sql).all(params);
+			return db.prepare(sql).all<EvidenceHit>(params);
 		},
 		count() {
-			return db.query<{ n: number }, []>("SELECT count(*) AS n FROM evidence").get()?.n ?? 0;
+			return db.prepare("SELECT count(*) AS n FROM evidence").all<{ n: number }>()[0]?.n ?? 0;
 		},
 		close() {
-			db.close(false);
+			db.close();
 		},
 	};
 }

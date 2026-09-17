@@ -12,7 +12,7 @@ import {
 	ToolErrorKindSchema,
 } from "@devops-agent/shared";
 import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch";
-import { type BaseMessage, HumanMessage } from "@langchain/core/messages";
+import { AIMessage, type BaseMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
@@ -25,12 +25,13 @@ import { createLlm, type InvokableLlm } from "./llm.ts";
 import { getToolsForDataSource, withAwsEstate, withElasticDeployment } from "./mcp-bridge.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import { fetchNetworkBaseline, isNetworkBaselineEnabled } from "./network-baseline.ts";
-import { buildCachedSystemMessage } from "./prompt-cache.ts";
+import { buildCachedSystemMessage, withRollingCachePoints } from "./prompt-cache.ts";
 import { buildSubAgentPrompt, getSkillToolNames, getToolDefinitionForDataSource } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
 import { applyContextBudget, getSubAgentContextBudgetBytes } from "./sub-agent-context-budget.ts";
 import { buildFocusBlock } from "./sub-agent-focus-block.ts";
 import { instrumentTools, type RawToolOutput, TYPED_FINDING_TOOLS } from "./sub-agent-instrumentation.ts";
+import { LOOP_GUARD_STOP_MARKER } from "./sub-agent-loop-guard.ts";
 import {
 	getSubAgentStateOutputCapBytes,
 	getSubAgentToolCapBytes,
@@ -131,6 +132,53 @@ const CYCLE_SUPER_STEPS = 3;
 export function shouldReserveFinalTurn(llmTurns: number, recursionLimit: number): boolean {
 	const stepsConsumed = CYCLE_SUPER_STEPS * llmTurns - (CYCLE_SUPER_STEPS - 1);
 	return recursionLimit - stepsConsumed <= FINAL_TURN_RESERVE_STEPS;
+}
+
+// SIO-1779: a second trigger for FINAL_TURN_DIRECTIVE. The loop guard refuses calls one at a
+// time and its stop text already says "synthesize now", but nothing counted the refusals: on
+// run f77ce7dd the gitlab sub-agent kept issuing blocked calls for ~17 LLM turns (12:04:52 to
+// 12:05:23) until the recursion-limit reservation above finally fired. Once every tool result
+// of the last BLOCKED_ROUNDS_BEFORE_FORCE rounds is a refusal, no further call can add
+// evidence, so the write-up is forced instead of waited for.
+//
+// A refusal is a loop-guard stop (marked, see LOOP_GUARD_STOP_MARKER) or LangGraph's
+// `Tool "X" not found` -- the unbound-tool error never reaches the instrumentation, which is
+// why this reads the messages rather than the guard's own ledger. One real result anywhere in
+// the window resets it, so a sparse-but-productive datasource is never cut short.
+const BLOCKED_ROUNDS_BEFORE_FORCE = 3;
+// ToolNode's exact shape for an unknown tool (tool_node.js): status "error" and content
+// `Error: Tool "X" not found.\n Please fix your mistakes.` Both are required and the pattern
+// is anchored: a gitlab code search or a log query can legitimately RETURN the words
+// `Tool "x" not found` as evidence, and a productive result must never count as a refusal
+// (Greptile, PR #808).
+const UNBOUND_TOOL_ERROR = /^Error: Tool "[^"]*" not found\./;
+
+function isRefusal(m: ToolMessage): boolean {
+	if (m.additional_kwargs?.[LOOP_GUARD_STOP_MARKER] === true) return true;
+	return m.status === "error" && typeof m.content === "string" && UNBOUND_TOOL_ERROR.test(m.content);
+}
+
+export function shouldForceFinalTurn(messages: BaseMessage[]): boolean {
+	let rounds = 0;
+	let sawToolMessage = false;
+	for (let i = messages.length - 1; i >= 0; i -= 1) {
+		const m = messages[i];
+		if (m instanceof ToolMessage) {
+			if (!isRefusal(m)) return false;
+			sawToolMessage = true;
+			continue;
+		}
+		if (m instanceof AIMessage) {
+			// An AIMessage with no tool results after it is not a tool round.
+			if (!sawToolMessage) return false;
+			rounds += 1;
+			if (rounds >= BLOCKED_ROUNDS_BEFORE_FORCE) return true;
+			sawToolMessage = false;
+			continue;
+		}
+		return false;
+	}
+	return false;
 }
 
 // SIO-1279: which elastic deployments this turn fans out across, in precedence order.
@@ -1463,17 +1511,25 @@ export function inferClusterHealthActions(query: string, dataSourceId: string): 
 //
 // This also normalises away resolveActionTools' ordering, which follows the requested-actions array
 // -- i.e. LLM output order, a second non-deterministic input to the belt that nothing tracked.
+//
+// SIO-1781: tools of a PRIORITY action sort ahead of everything else, keeping declaration order
+// among themselves. A priority action is one the deterministic keyword pass matched in the
+// user's own words -- the strongest relevance signal the belt has. Without this, declaration
+// rank alone decided the cut: run f77ce7dd was triggered by an SQS message, and both aws_sqs_*
+// tools fell off because messaging_state is declared ~63rd of 68.
 function orderByDeclaration(
 	names: Iterable<string>,
 	toolDef: ToolDefinition,
 	allTools: StructuredToolInterface[],
+	priorityActions: string[] = [],
 ): StructuredToolInterface[] {
 	const declarationRank = new Map(getAllActionToolNames(toolDef).map((name, i) => [name, i] as const));
 	const byName = new Map(allTools.map((t) => [t.name, t] as const));
 	const unranked = declarationRank.size;
+	const priority = new Set(resolveActionTools(toolDef, priorityActions).toolNames);
 	return [...new Set(names)]
-		.map((name, i) => ({ name, rank: declarationRank.get(name) ?? unranked + i }))
-		.sort((a, b) => a.rank - b.rank)
+		.map((name, i) => ({ name, rank: declarationRank.get(name) ?? unranked + i, first: priority.has(name) }))
+		.sort((a, b) => Number(b.first) - Number(a.first) || a.rank - b.rank)
 		.map((entry) => byName.get(entry.name))
 		.filter((tool): tool is StructuredToolInterface => tool !== undefined);
 }
@@ -1487,6 +1543,8 @@ export function selectToolsByAction(
 	// resolved here so this stays a pure function -- reaching for getAgent() would make
 	// every caller mock prompt-context, which pollutes other tests in this package.
 	skillToolNames?: string[],
+	// SIO-1781: actions matched by the deterministic keyword pass; their tools survive the cut first.
+	priorityActions?: string[],
 ): { tools: StructuredToolInterface[]; filtered: boolean } {
 	if (allTools.length <= MAX_TOOLS_PER_AGENT) {
 		return { tools: allTools, filtered: false };
@@ -1505,7 +1563,7 @@ export function selectToolsByAction(
 	if (actions && actions.length > 0) {
 		const { toolNames } = resolveActionTools(toolDef, actions);
 		if (toolNames.length > 0) {
-			const selected = orderByDeclaration(toolNames, toolDef, allTools);
+			const selected = orderByDeclaration(toolNames, toolDef, allTools, priorityActions);
 			if (selected.length >= MIN_FILTERED_TOOLS) {
 				return { tools: bindTools(selected, allTools, dataSourceId, skillToolNames), filtered: true };
 			}
@@ -1514,7 +1572,7 @@ export function selectToolsByAction(
 
 	const allActionNames = getAllActionToolNames(toolDef);
 	if (allActionNames.length > 0) {
-		const selected = orderByDeclaration(allActionNames, toolDef, allTools);
+		const selected = orderByDeclaration(allActionNames, toolDef, allTools, priorityActions);
 		if (selected.length >= MIN_FILTERED_TOOLS) {
 			return { tools: bindTools(selected, allTools, dataSourceId, skillToolNames), filtered: true };
 		}
@@ -1665,6 +1723,7 @@ ${state.correlationFetchDirective}`
 			augmentedToolActions,
 			toolDef,
 			skillToolNames,
+			keywordActions,
 		);
 		log.info(
 			{ toolCount: tools.length, totalTools: allTools.length, filtered, deploymentId },
@@ -1691,6 +1750,8 @@ ${state.correlationFetchDirective}`
 		// ToolMessages. Populated on every path (normal, loop-guard stop, recursion-limit
 		// salvage) because the instrumented tool instances are shared with agent.stream().
 		const rawOutputs: RawToolOutput[] = [];
+		// SIO-1777: set by the instrumentation when a complete ECS sweep matches no focus service.
+		const runSignals = { serviceAbsent: false };
 		// SIO-1688: a per-run FTS5 index over the SAME pre-truncation bytes, so the
 		// parts the cap removes stay reachable through search_evidence for the rest
 		// of the run. Only built when the cap is active: with no cap nothing is cut,
@@ -1713,6 +1774,7 @@ ${state.correlationFetchDirective}`
 			// SIO-1268: AWS-only. Scoped by dataSourceId here rather than inside the guard so the
 			// ledger cannot be built at all for elastic/gitlab/kafka runs.
 			awsAbsenceEarlyExit: dataSourceId === "aws" && isAwsAbsenceEarlyExitEnabled(),
+			runSignals,
 			focusServices: focus?.services ?? [],
 			...(sandbox && { sandbox }),
 		});
@@ -1782,6 +1844,24 @@ ${state.correlationFetchDirective}`
 				}
 
 				const stepsLeft = recursionLimit - (CYCLE_SUPER_STEPS * llmTurns - (CYCLE_SUPER_STEPS - 1));
+				// SIO-1779: evaluated on canonical messages -- elision swaps content but keeps
+				// additional_kwargs only on the originals.
+				const forced = !shouldReserveFinalTurn(llmTurns, recursionLimit) && shouldForceFinalTurn(hookState.messages);
+				if (forced) {
+					log.info(
+						{
+							event: "subagent.final_turn_forced",
+							deploymentId,
+							dataSourceId,
+							llmTurns,
+							stepsLeft,
+							reason: "blocked-rounds",
+							blockedRounds: BLOCKED_ROUNDS_BEFORE_FORCE,
+						},
+						"Every tool result in the last rounds was a refusal; directing the sub-agent to write findings now",
+					);
+					outgoing = [...outgoing, new HumanMessage(FINAL_TURN_DIRECTIVE)];
+				}
 				if (shouldReserveFinalTurn(llmTurns, recursionLimit)) {
 					log.info(
 						{ event: "subagent.final_turn_reserved", deploymentId, dataSourceId, llmTurns, stepsLeft, recursionLimit },
@@ -1789,6 +1869,10 @@ ${state.correlationFetchDirective}`
 					);
 					outgoing = [...outgoing, new HumanMessage(FINAL_TURN_DIRECTIVE)];
 				}
+
+				// SIO-1773: last, so the points sit on exactly what is sent (after any elision
+				// and after the final-turn directive).
+				outgoing = withRollingCachePoints(outgoing);
 
 				// Always return llmInputMessages -- see SIO-1250 above: omitting the key leaves the
 				// PREVIOUS step's value in place and the model would reason on a stale history.
@@ -2211,6 +2295,7 @@ ${state.correlationFetchDirective}`
 			isAlignmentRetry: isRetry,
 			messageCount: response.messages.length,
 			...(deploymentId && { deploymentId }),
+			...(runSignals.serviceAbsent && { serviceAbsent: true }),
 			...(toolErrors.length > 0 && { toolErrors }),
 			...(outcome.error !== undefined && { error: outcome.error }),
 		};

@@ -15,6 +15,7 @@ import {
 	consumeInvalidQueryIdAdvice,
 	createLoopGuardState,
 	isObservedTool,
+	LOOP_GUARD_STOP_MARKER,
 	type LoopGuardState,
 	recordResult,
 	reserveSignature,
@@ -133,6 +134,10 @@ export interface InstrumentContext {
 	awsAbsenceEarlyExit?: boolean;
 	// SIO-1268: investigation focus service names, for matchesFocus in the ECS ledger.
 	focusServices?: string[];
+	// SIO-1777: out-param (same escape pattern as rawOutputs). The ECS absence proof lives
+	// in this module's per-run closure; without this it was only ever logged, so the pi
+	// card proposer kept offering cards for estates the run had proven irrelevant.
+	runSignals?: { serviceAbsent: boolean };
 	// SIO-1688: when provided, an oversized result is indexed at FULL fidelity before
 	// the LLM-facing copy is truncated, and the truncated copy gains a line naming
 	// search_evidence. Indexing happens HERE rather than at the SIO-1248 persist site
@@ -337,6 +342,10 @@ function instrumentTool(
 
 						if (observed) {
 							recordResult(runState.loopGuard, tool.name, signature, extractContent(result), arg);
+							// SIO-1777: re-evaluated (not latched) after every observed result, so the
+							// signal is set even when the model stops calling tools right after the
+							// last ECS page and no short-circuit ever logs the exit.
+							if (ctx.runSignals) ctx.runSignals.serviceAbsent = awsEcsAbsenceProven(runState.loopGuard);
 						}
 						// SIO-1248: capture BEFORE processResult so the persisted payload is the full
 						// upstream response, independent of whatever cap the LLM copy gets. Also before
@@ -502,7 +511,11 @@ function buildStopResult(arg: unknown, toolName: string, state: LoopGuardState, 
 		arg && typeof arg === "object" && "id" in arg && typeof (arg as { id: unknown }).id === "string"
 			? (arg as { id: string }).id
 			: "loop-guard-stop";
-	return new ToolMessage({ content: stopMessageFor(toolName, state, signature), tool_call_id: toolCallId });
+	return new ToolMessage({
+		content: stopMessageFor(toolName, state, signature),
+		tool_call_id: toolCallId,
+		additional_kwargs: { [LOOP_GUARD_STOP_MARKER]: true },
+	});
 }
 
 function processResult(

@@ -326,6 +326,7 @@ export {
 	runWithRequestContext,
 } from "./request-context.ts";
 export { getRetentionExpiresAt, parseRetentionPeriod } from "./retention.ts";
+export { type OpenSqliteOptions, openSqlite, type SqliteDb, type SqliteStatement } from "./sqlite-open.ts";
 export {
 	buildTelemetryConfig,
 	getTracer,

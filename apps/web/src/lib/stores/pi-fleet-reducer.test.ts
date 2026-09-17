@@ -3,6 +3,8 @@
 import { describe, expect, test } from "bun:test";
 import type { PiFleetAgentsResponse } from "../pi-fleet-types.ts";
 import {
+	applyActionResult,
+	applyActionStart,
 	applyAgents,
 	applyLoadError,
 	applySendResult,
@@ -178,6 +180,42 @@ describe("entries", () => {
 		const failed = failEntry(started, "e1", "hub unreachable");
 		expect(failed.entries[0]).toMatchObject({ status: "failed", error: "hub unreachable" });
 		expect(isTerminal("failed")).toBe(true);
+	});
+});
+
+// SIO-1778: a verify/investigate card's send, shown in the pane.
+describe("card-originated entries", () => {
+	const started = startEntry(initialPiFleetState(), {
+		id: "a1",
+		hubKey: "eu-shared-services-prd",
+		target: "eu-oit-prd",
+		prompt: "verify these claims",
+		sentAt: 1_000,
+		label: "verify",
+	});
+
+	test("carry their label and become pollable once the send returns a msg id", () => {
+		expect(started.entries[0]?.label).toBe("verify");
+		const sent = applyActionStart(started, "a1", "m1");
+		expect(sent.entries[0]).toMatchObject({ msgId: "m1", status: "delivered" });
+		expect(isTerminal(sent.entries[0]?.status ?? "sending")).toBe(false);
+	});
+
+	test("a verdict result completes the entry with the validated payload as its reply", () => {
+		const verdict = { verdict: "confirmed", claims: [] };
+		const done = applyActionResult(started, "a1", { status: "success", result: { kind: "verdict", verdict } });
+		expect(done.entries[0]).toMatchObject({ status: "complete", response: verdict, error: null });
+	});
+
+	test("a mailbox send is a finished row that says nothing will answer here", () => {
+		const done = applyActionResult(started, "a1", { status: "success", result: { kind: "queued", target: "ops" } });
+		expect(isTerminal(done.entries[0]?.status ?? "sending")).toBe(true);
+		expect(String(done.entries[0]?.response)).toContain("ops mailbox");
+	});
+
+	test("an action error is terminal and keeps its message", () => {
+		const done = applyActionResult(started, "a1", { status: "error", error: "schema mismatch" });
+		expect(done.entries[0]).toMatchObject({ status: "error", error: "schema mismatch" });
 	});
 });
 
