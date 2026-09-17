@@ -27,12 +27,13 @@ const HITS = Array.from({ length: 900 }, (_, i) => ({
 }));
 
 describe("isEvidenceExecEnabled", () => {
-	test("is opt-in: only an explicit true/1 turns it on", () => {
-		expect(isEvidenceExecEnabled({})).toBe(false);
-		expect(isEvidenceExecEnabled({ EVIDENCE_EXEC_ENABLED: "false" })).toBe(false);
-		expect(isEvidenceExecEnabled({ EVIDENCE_EXEC_ENABLED: "yes" })).toBe(false);
+	test("defaults ON: only an explicit false/0 turns it off (kill-switch)", () => {
+		expect(isEvidenceExecEnabled({})).toBe(true);
 		expect(isEvidenceExecEnabled({ EVIDENCE_EXEC_ENABLED: "true" })).toBe(true);
-		expect(isEvidenceExecEnabled({ EVIDENCE_EXEC_ENABLED: "1" })).toBe(true);
+		expect(isEvidenceExecEnabled({ EVIDENCE_EXEC_ENABLED: "yes" })).toBe(true);
+		expect(isEvidenceExecEnabled({ EVIDENCE_EXEC_ENABLED: "false" })).toBe(false);
+		expect(isEvidenceExecEnabled({ EVIDENCE_EXEC_ENABLED: "FALSE" })).toBe(false);
+		expect(isEvidenceExecEnabled({ EVIDENCE_EXEC_ENABLED: "0" })).toBe(false);
 	});
 });
 

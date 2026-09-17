@@ -153,7 +153,7 @@ export interface InstrumentContext {
 	evidenceIndex?: EvidenceIndexSink;
 	// SIO-1776: when provided, every tool's model-facing schema gains an optional
 	// `_transform` and a call that carries one returns only the sandbox's derived output.
-	// Absent (the default, EVIDENCE_EXEC_ENABLED off) nothing in this module changes.
+	// Absent (EVIDENCE_EXEC_ENABLED=false) nothing in this module changes.
 	sandbox?: SandboxRunner;
 }
 

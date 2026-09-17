@@ -1777,9 +1777,9 @@ ${state.correlationFetchDirective}`
 		// of the run. Only built when the cap is active: with no cap nothing is cut,
 		// so there is nothing to recover. Closed in the finally below.
 		evidenceIndex = isEvidenceIndexEnabled() && capBytes != null && capBytes > 0 ? new EvidenceIndex() : null;
-		// SIO-1776: opt-in. The engine is loaded only when the flag is on, through a deep
-		// import -- it is deliberately not on the shared barrel, so nothing else pays for
-		// QuickJS. Off (the default) leaves every line below behaving exactly as before.
+		// SIO-1776: on unless EVIDENCE_EXEC_ENABLED is false/0 (SIO-1775). The engine is
+		// loaded through a deep import -- it is deliberately not on the shared barrel, so
+		// nothing else pays for QuickJS. Off leaves every line below behaving as before.
 		const sandbox: SandboxRunner | undefined = isEvidenceExecEnabled()
 			? (await import("@devops-agent/shared/src/sandbox-exec.ts")).runInSandbox
 			: undefined;
