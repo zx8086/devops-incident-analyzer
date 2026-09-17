@@ -42,7 +42,7 @@ Project-specific documentation for pi-coms: peer-to-peer messaging between Pi Co
 | Document | Description |
 |----------|-------------|
 | [deployment.md](deployment/deployment.md) | Corp hub and agents, per-account Terraform roots, fleet bundle distribution, boot sequence, verification |
-| [deploying-from-a-worktree.md](deployment/deploying-from-a-worktree.md) | Deploying from a git worktree: the gitignored deploy config lives only in the main checkout, where `terraform` actually is, and the other assumptions that cost SIO-1745 two hours |
+| [deploying-from-a-worktree.md](deployment/deploying-from-a-worktree.md) | Deploying from a git worktree: the gitignored deploy config lives only in the main checkout, `terraform` lives at `~/bin/terraform` and not on the sandboxed PATH, and the other assumptions that cost SIO-1745 two hours |
 | [operations-gotchas.md](deployment/operations-gotchas.md) | Operational gotchas once the fleet is running |
 
 ### Development
