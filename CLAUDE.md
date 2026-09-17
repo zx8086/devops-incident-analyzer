@@ -12,6 +12,29 @@ Fully implemented monorepo: 19 packages, 7 MCP servers, the 32-node LangGraph pi
 
 ## Architecture
 
+### Documentation: start at an index, not at source (SIO-1768)
+
+Two indexes cover everything. **Read the relevant one before reconstructing a
+procedure from `justfile`, a `scripts/*.ts` CLI, or Terraform** -- the docs carry
+safety rules and environment facts that source does not reveal.
+
+| Index | Covers |
+|-------|--------|
+| `docs/README.md` | The monorepo: architecture, configuration, deployment (AgentCore/Docker), development, operations, runbooks, reference |
+| `packages/pi-coms/docs/README.md` | pi-coms hub, spoke extension, monitor, and **all fleet deployment procedure** |
+
+**Before any `just fleet plan`/`apply`/`deploy`, read
+`packages/pi-coms/docs/deployment/deployment.md`** (the ten subcommands, the
+per-account roots, the bundle, the boot sequence, verification), and read
+`packages/pi-coms/docs/deployment/deploying-from-a-worktree.md` FIRST when working
+from a worktree. That page exists because SIO-1745 turned a twenty-minute deploy
+into two hours; its rule is "validate before acting". Facts you will not find in
+the CLI source: a worktree has none of the gitignored deploy config (it lives only
+in the main checkout), `terraform` is at `~/bin/terraform` and not on the sandboxed
+PATH, a fresh production spoke must plan as `1 to import, 13 to add, 1 to change,
+0 to destroy` (anything destroyed means the wrong mode), and a Bedrock agreement
+must read `AVAILABLE` rather than merely visible (SIO-1678).
+
 ### Monorepo Structure
 
 Layout is discoverable via `ls packages/ apps/ agents/`. Non-obvious facts about
@@ -27,7 +50,7 @@ individual packages:
 - `mcp-server-aws/` -- multi-estate via cross-account AssumeRole
 - `shared/` -- cross-package types, Zod schemas, unified bootstrap, AgentCore proxy, Agent Memory REST client (SIO-938)
 - `checkpointer/` -- **transient** per-thread LangGraph state only (memory + bun:sqlite)
-- `pi-coms/` -- the pi-coms hub, Pi extension, fleet monitor, Terraform and deploy scripts (SIO-1654 subtree import, layout intact). Its monitor deps live in a nested NON-workspace `scripts/package.json` (never move them into the package manifest: Pi reads that file on install, SIO-1632); the package-local CLAUDE.md and AGENTS.md are read by Pi and stay there. Hub wire types: `packages/pi-coms/contracts/`. Bundle staging: `packages/pi-coms/deploy/publish-fleet.sh --stage-only` (a `git archive`; `.pi` is `export-ignore` per SIO-1733 or every spoke parks at Pi's trust prompt). Fleet deploy (SIO-1653): `just fleet <cmd>` over the gitignored `packages/pi-coms/deploy/fleet.yaml`; rendered Terraform roots carry no identifiers. Spokes get `ctx_*` via `pi-mcp-adapter` + `~/.pi/agent/mcp.json` written by the bootstrap launcher under the `CTX_MODE_ENABLED` kill-switch (SIO-1734), not via context-mode's Pi extension.
+- `pi-coms/` -- the pi-coms hub, Pi extension, fleet monitor, Terraform and deploy scripts (SIO-1654 subtree import, layout intact). **Documented in `packages/pi-coms/docs/` (index: `docs/README.md`); deployment procedure in `docs/deployment/deployment.md` -- read it before any fleet command rather than reading `scripts/fleet.ts`.** Its monitor deps live in a nested NON-workspace `scripts/package.json` (never move them into the package manifest: Pi reads that file on install, SIO-1632); the package-local CLAUDE.md and AGENTS.md are read by Pi and stay there. Hub wire types: `packages/pi-coms/contracts/`. Bundle staging: `packages/pi-coms/deploy/publish-fleet.sh --stage-only` (a `git archive`; `.pi` is `export-ignore` per SIO-1733 or every spoke parks at Pi's trust prompt). Fleet deploy (SIO-1653): `just fleet <cmd>` over the gitignored `packages/pi-coms/deploy/fleet.yaml`; rendered Terraform roots carry no identifiers. Spokes get `ctx_*` via `pi-mcp-adapter` + `~/.pi/agent/mcp.json` written by the bootstrap launcher under the `CTX_MODE_ENABLED` kill-switch (SIO-1734), not via context-mode's Pi extension.
 
 ### Agent Pipeline (32-node LangGraph StateGraph: 22 base + 4 gated KG + 6 gated HIL-learning)
 
@@ -112,7 +135,15 @@ bun run --filter '@devops-agent/gitagent-bridge' test  # Single package
 just coms laptop                                       # pi-coms console, LOCAL hub (root justfile delegates to packages/pi-coms/justfile)
 just hub-tunnel eu-shared-services-prd 8787            # SSM tunnel to that account's hub (local port auto-assigned)
 just coms eu-shared-services-prd simon                 # pi-coms console against a DEPLOYED hub (needs that tunnel up)
+just fleet preflight                                   # read-only; touches nothing. See the deployment docs BEFORE plan/apply
 ```
+
+Fleet deployment (`just fleet <preflight|tokens|render|backend-init|plan|apply|publish|rollout|status|deploy>`)
+is documented in `packages/pi-coms/docs/deployment/deployment.md` -- read it rather
+than `scripts/fleet.ts`, and read `deploying-from-a-worktree.md` first from a
+worktree (see Architecture > Documentation). `preflight`, `plan` and `status` touch
+nothing and are the way to establish state; `apply` replaces instances
+(`user_data_replace_on_change = true`), and production spokes require `--yes`.
 
 Note `bun test` at the repo root can crash the Bun runner mid-suite; run per
 package (`cd packages/<name> && bun test`), which is also how `apps/web` tests
