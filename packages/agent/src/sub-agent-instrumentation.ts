@@ -132,6 +132,10 @@ export interface InstrumentContext {
 	awsAbsenceEarlyExit?: boolean;
 	// SIO-1268: investigation focus service names, for matchesFocus in the ECS ledger.
 	focusServices?: string[];
+	// SIO-1777: out-param (same escape pattern as rawOutputs). The ECS absence proof lives
+	// in this module's per-run closure; without this it was only ever logged, so the pi
+	// card proposer kept offering cards for estates the run had proven irrelevant.
+	runSignals?: { serviceAbsent: boolean };
 	// SIO-1688: when provided, an oversized result is indexed at FULL fidelity before
 	// the LLM-facing copy is truncated, and the truncated copy gains a line naming
 	// search_evidence. Indexing happens HERE rather than at the SIO-1248 persist site
@@ -327,6 +331,10 @@ function instrumentTool(
 
 						if (observed) {
 							recordResult(runState.loopGuard, tool.name, signature, extractContent(result), arg);
+							// SIO-1777: re-evaluated (not latched) after every observed result, so the
+							// signal is set even when the model stops calling tools right after the
+							// last ECS page and no short-circuit ever logs the exit.
+							if (ctx.runSignals) ctx.runSignals.serviceAbsent = awsEcsAbsenceProven(runState.loopGuard);
 						}
 						// SIO-1248: capture BEFORE processResult so the persisted payload is the full
 						// upstream response, independent of whatever cap the LLM copy gets. Also before

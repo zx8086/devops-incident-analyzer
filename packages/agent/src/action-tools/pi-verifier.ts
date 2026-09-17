@@ -164,15 +164,22 @@ export function resolvePiTarget(
 
 // Estates the report actually assessed: the router's list, or the per-estate
 // deploymentId tags the AWS sub-agent stamps on its results.
+//
+// SIO-1777: minus estates where a complete ECS enumeration proved the focus service is
+// not deployed. The router's list is intent, set before any tool ran; a card (or an
+// inbox fetch) for an estate the report itself ruled out is noise.
 export function estatesFromState(state: Pick<AgentStateType, "awsTargetEstates" | "dataSourceResults">): string[] {
-	if (state.awsTargetEstates.length > 0) return [...new Set(state.awsTargetEstates)];
-	const seen = new Set<string>();
+	const assessed = new Set<string>();
+	const absent = new Set<string>();
 	for (const r of state.dataSourceResults) {
 		if (r.dataSourceId !== "aws" || !r.deploymentId?.startsWith(ESTATE_DEPLOYMENT_PREFIX)) continue;
 		const estate = r.deploymentId.slice(ESTATE_DEPLOYMENT_PREFIX.length);
-		if (estate) seen.add(estate);
+		if (!estate) continue;
+		assessed.add(estate);
+		if (r.serviceAbsent) absent.add(estate);
 	}
-	return [...seen];
+	const estates = state.awsTargetEstates.length > 0 ? new Set(state.awsTargetEstates) : assessed;
+	return [...estates].filter((e) => !absent.has(e));
 }
 
 function firstParagraph(report: string): string {
