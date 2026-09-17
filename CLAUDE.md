@@ -21,11 +21,7 @@ safety rules and environment facts that source does not reveal.
 | Index | Covers |
 |-------|--------|
 | `docs/README.md` | The monorepo: architecture, configuration, deployment (AgentCore/Docker), development, operations, runbooks, reference |
-| `packages/pi-coms/docs/README.md` | pi-coms hub, spoke extension, monitor, and the primary fleet deployment procedure |
-
-`packages/pi-coms/docs/deployment/deploying-from-a-worktree.md` is **not linked
-from either index** (SIO-1768), so the index path alone misses it. Open it
-directly when working from a worktree.
+| `packages/pi-coms/docs/README.md` | pi-coms hub, spoke extension, monitor, and all fleet deployment procedures |
 
 **Before any `just fleet plan`/`apply`/`deploy`, read
 `packages/pi-coms/docs/deployment/deployment.md`** (the ten subcommands, the

@@ -13,6 +13,7 @@ Project-specific documentation for pi-coms: peer-to-peer messaging between Pi Co
 | See why the monitor checks what it checks | [Estate Watch](architecture/estate-watch.md) |
 | Review trust boundaries and IAM | [Security Model](security/security-model.md) |
 | Deploy the hub or an AWS agent | [Deployment](deployment/deployment.md) |
+| Deploy from a git worktree | [Deploying from a worktree](deployment/deploying-from-a-worktree.md) -- read FIRST; a worktree has none of the gitignored deploy config |
 | Run and address the fleet | [Usage](development/usage.md) |
 | Let the incident analyzer verify reports through the fleet | [Incident analyzer as a hub client](integrations/incident-analyzer.md) |
 
@@ -41,6 +42,8 @@ Project-specific documentation for pi-coms: peer-to-peer messaging between Pi Co
 | Document | Description |
 |----------|-------------|
 | [deployment.md](deployment/deployment.md) | Corp hub and agents, per-account Terraform roots, fleet bundle distribution, boot sequence, verification |
+| [deploying-from-a-worktree.md](deployment/deploying-from-a-worktree.md) | Deploying from a git worktree: the gitignored deploy config lives only in the main checkout, `terraform` lives at `~/bin/terraform` and not on the sandboxed PATH, and the other assumptions that cost SIO-1745 two hours |
+| [operations-gotchas.md](deployment/operations-gotchas.md) | Operational gotchas once the fleet is running |
 
 ### Development
 

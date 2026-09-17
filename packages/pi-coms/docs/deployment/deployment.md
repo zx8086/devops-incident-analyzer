@@ -257,6 +257,10 @@ is a plain file copy inside another repo's checkout -- never run git there.
 
 ## See Also
 
+- [Deploying from a worktree](deploying-from-a-worktree.md) -- read this FIRST when
+  deploying from a git worktree: the gitignored deploy config exists only in the
+  main checkout, and an `ls` in the worktree "proves" it missing
+- [Operations gotchas](operations-gotchas.md) -- once the fleet is running
 - [System Overview](../architecture/overview.md)
 - [Networking](../architecture/networking.md)
 - [Monitoring](../architecture/monitoring.md) -- what `pi-monitor.service` does once installed
