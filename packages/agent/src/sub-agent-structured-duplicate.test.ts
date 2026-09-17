@@ -3,6 +3,8 @@ import { describe, expect, test } from "bun:test";
 import { ToolMessage } from "@langchain/core/messages";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
+import { extractAwsFindings } from "./correlation/extractors/aws.ts";
+import { buildPersistedToolOutput } from "./sub-agent.ts";
 import { dropDuplicateStructuredContent, instrumentTools, type RawToolOutput } from "./sub-agent-instrumentation.ts";
 
 // SIO-1774. Fixture shape taken from the LangSmith trace of run f77ce7dd (root run 01a0aed1):
@@ -72,12 +74,52 @@ describe("instrumentTools with a structured-output tool", () => {
 		expect(String(out.content).length).toBeLessThan(wrapperString.length * 0.55);
 		expect(out.tool_call_id).toBe("c1");
 		expect(out.artifact).toEqual(artifact);
-		// Persistence and the typed-finding path see exactly what they saw before.
-		expect(rawOutputs[0]?.content).toBe(wrapperString);
+		// SIO-1790: the capture is the tool's payload too, never the adapter's wrapper. The
+		// structured copy from the artifact is untouched.
+		expect(rawOutputs[0]?.content).toBe(text);
 		expect(rawOutputs[0]?.structuredContent).toEqual({ MetricAlarms: alarms });
 		// And the log says it happened, with the size the MODEL actually received.
 		const observed = entries.find((e) => e.event === "subagent.tool_result");
 		expect(observed?.structuredDuplicateDropped).toBe(true);
 		expect(observed?.bytes).toBe(Buffer.byteLength(text, "utf8"));
+	});
+});
+
+// SIO-1790. The test above hands instrumentTools an artifact, which is what a RAW adapter tool
+// carries. The AWS tools never do: wrapAwsToolsWithEstate re-creates each one with createTool
+// (responseFormat "content") and calls the inner tool with plain args, so the artifact is dropped
+// and the ToolMessage holds only the wrapper string. Reproduced live against
+// aws_cloudwatch_describe_alarms: content string, artifact undefined, and the persisted rawJson
+// was the wrapper { type, text, structuredContent } -- which DescribeAlarmsResponseSchema accepts
+// (every key is optional) and reads as zero alarms. AWSFindingsCard rawCount 0 on run b6c66945.
+describe("instrumentTools with a structured-output tool behind a createTool wrapper", () => {
+	test("the persisted payload is the tool's payload, not the adapter's wrapper", async () => {
+		const describeAlarms = tool(async () => wrapperString, {
+			name: "aws_cloudwatch_describe_alarms",
+			description: "x",
+			schema: z.object({ StateValue: z.string().optional() }),
+		});
+		const rawOutputs: RawToolOutput[] = [];
+		const log = { info: () => {}, warn: () => {} };
+		const [wrapped] = instrumentTools([describeAlarms], { dataSourceId: "aws", log, rawOutputs, capBytes: 131_072 });
+		await wrapped?.invoke({
+			id: "c1",
+			name: "aws_cloudwatch_describe_alarms",
+			args: { StateValue: "ALARM" },
+			type: "tool_call",
+		});
+
+		const captured = rawOutputs[0];
+		expect(captured?.structuredContent).toBeUndefined();
+		expect(captured?.content).toBe(text);
+
+		const persisted = buildPersistedToolOutput(
+			"aws_cloudwatch_describe_alarms",
+			String(captured?.content),
+			65_536,
+			captured?.structuredContent,
+		);
+		const findings = extractAwsFindings([{ toolName: "aws_cloudwatch_describe_alarms", rawJson: persisted.rawJson }]);
+		expect(findings.alarms?.length).toBe(alarms.length);
 	});
 });
