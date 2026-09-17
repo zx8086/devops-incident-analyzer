@@ -24,7 +24,7 @@ import { createLlm, type InvokableLlm } from "./llm.ts";
 import { getToolsForDataSource, withAwsEstate, withElasticDeployment } from "./mcp-bridge.ts";
 import { extractTextFromContent } from "./message-utils.ts";
 import { fetchNetworkBaseline, isNetworkBaselineEnabled } from "./network-baseline.ts";
-import { buildCachedSystemMessage } from "./prompt-cache.ts";
+import { buildCachedSystemMessage, withRollingCachePoints } from "./prompt-cache.ts";
 import { buildSubAgentPrompt, getSkillToolNames, getToolDefinitionForDataSource } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
 import { applyContextBudget, getSubAgentContextBudgetBytes } from "./sub-agent-context-budget.ts";
@@ -1777,6 +1777,10 @@ ${state.correlationFetchDirective}`
 					);
 					outgoing = [...outgoing, new HumanMessage(FINAL_TURN_DIRECTIVE)];
 				}
+
+				// SIO-1773: last, so the points sit on exactly what is sent (after any elision
+				// and after the final-turn directive).
+				outgoing = withRollingCachePoints(outgoing);
 
 				// Always return llmInputMessages -- see SIO-1250 above: omitting the key leaves the
 				// PREVIOUS step's value in place and the model would reason on a stale history.
