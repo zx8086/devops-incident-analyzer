@@ -101,7 +101,9 @@ describe("entries", () => {
 		sentAt: 1_000,
 	});
 
-	test("startEntry prepends a sending entry", () => {
+	// SIO-1794: send order, oldest first. The pane renders the full result now, so it reads as
+	// a conversation: a second send sits under the first instead of pushing it down.
+	test("startEntry appends a sending entry", () => {
 		expect(started.entries[0]).toMatchObject({ id: "e1", status: "sending", msgId: null, response: null, error: null });
 		const second = startEntry(started, {
 			id: "e2",
@@ -110,7 +112,7 @@ describe("entries", () => {
 			prompt: "pong",
 			sentAt: 2_000,
 		});
-		expect(second.entries.map((e) => e.id)).toEqual(["e2", "e1"]);
+		expect(second.entries.map((e) => e.id)).toEqual(["e1", "e2"]);
 	});
 
 	test("applySendResult records the hub ids and a terminal reply", () => {

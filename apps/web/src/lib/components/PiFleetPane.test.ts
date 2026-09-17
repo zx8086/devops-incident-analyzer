@@ -835,7 +835,7 @@ describe("PiFleetPane", () => {
 		});
 	}
 
-	test("a verify card's verdict renders as a verdict, with the JSON one click away", () => {
+	test("a verify card's verdict renders as a verdict, with no raw JSON beside it", () => {
 		const done = applyActionResult(cardEntry("verify"), "c1", {
 			status: "success",
 			result: {
@@ -861,10 +861,9 @@ describe("PiFleetPane", () => {
 		expect(body).toContain("Evidence: no deregistrations");
 		expect(body).toContain("ECS deploy at 10:00");
 		expect(body).toContain("Check ECS service events.");
-		// The raw payload survives, but only inside the collapsed details.
-		const details = body.slice(body.indexOf("Raw reply"));
-		expect(details).toContain('"verdict": "partially_confirmed"');
-		expect(body.slice(0, body.indexOf("Raw reply"))).not.toContain("<pre");
+		// SIO-1794: the rendered view is the whole reply; no raw JSON copy beside it.
+		expect(body).not.toContain("Raw reply");
+		expect(body).not.toContain('"verdict": "partially_confirmed"');
 	});
 
 	test("an investigate card's result renders hypothesis, evidence and actions", () => {
@@ -895,5 +894,20 @@ describe("PiFleetPane", () => {
 		const body = renderPane(cardEntry("verify"));
 		expect(body).toContain("The result appears here.");
 		expect(body).not.toContain("lands on the card");
+	});
+
+	// SIO-1794: a second send sits under the first.
+	test("entries render in send order, oldest first", () => {
+		const base = applyAgents(initialPiFleetState(), listing);
+		const entry = (id: string, prompt: string) => ({
+			id,
+			hubKey: "eu-shared-services-dev",
+			target: "alpha-dev",
+			prompt,
+			sentAt: 0,
+		});
+		const body = renderPane(startEntry(startEntry(base, entry("e1", "first-prompt")), entry("e2", "second-prompt")));
+		expect(body.indexOf("first-prompt")).toBeGreaterThan(-1);
+		expect(body.indexOf("second-prompt")).toBeGreaterThan(body.indexOf("first-prompt"));
 	});
 });
