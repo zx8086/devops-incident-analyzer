@@ -64,14 +64,32 @@ export const GENERIC_LOOP_GUARD_STOP_MESSAGE =
 // SIO-1267: which branch of the generic path fired. Used both to pick the stop message and to tag
 // the subagent.loop_guard_stop log, so a replay can tell a duplicate stop from a streak stop
 // without inferring it from `unproductiveSearches: 0`.
-export type LoopGuardStopReason = "duplicate-call" | "unproductive-streak";
+// SIO-1791: "run-backstop" is the generic path's run-wide cap (MAX_UNPRODUCTIVE_PER_RUN). It used
+// to be reported as "unproductive-streak", which it is not: the stopped tool may never have come
+// back empty itself. It selects NO new message -- stopMessageFor only special-cases
+// "duplicate-call" -- so the wording project-resolution/SKILL.md STEP 3 keys on is untouched.
+export type LoopGuardStopReason = "duplicate-call" | "unproductive-streak" | "run-backstop";
 
 // Mirrors shouldShortCircuit's precedence: the duplicate check runs FIRST, so a call that is both a
 // duplicate and over the streak cap is attributed to the duplicate. Safe to evaluate at stop time
 // because reserveSignature runs BEFORE tool invocation and recordResult never runs for a
 // short-circuited call -- the signature of an earlier successful call is still present.
-export function stopReasonFor(state?: LoopGuardState, signature?: string): LoopGuardStopReason {
+//
+// SIO-1791: `toolName` separates the two generic caps, in shouldShortCircuit's order (per-tool
+// first). Generic path only: elasticsearch_search and aws_logs_start_query are stopped by their own
+// caps, and the generic counters say nothing about those stops. Without a toolName the answer is
+// the pre-SIO-1791 one.
+export function stopReasonFor(state?: LoopGuardState, signature?: string, toolName?: string): LoopGuardStopReason {
 	if (state && signature !== undefined && state.seenSignatures.has(signature)) return "duplicate-call";
+	if (
+		state &&
+		toolName !== undefined &&
+		!GUARDED_TOOLS.has(toolName) &&
+		(state.unproductiveByTool.get(toolName) ?? 0) < MAX_UNPRODUCTIVE_PER_TOOL &&
+		state.totalUnproductive >= MAX_UNPRODUCTIVE_PER_RUN
+	) {
+		return "run-backstop";
+	}
 	return "unproductive-streak";
 }
 

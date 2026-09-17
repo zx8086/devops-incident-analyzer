@@ -1016,6 +1016,28 @@ describe("SIO-1259: prose 'nothing found' results reach the generic guard", () =
 		expect(stop?.reason).toBe("duplicate-call");
 		expect(stop?.unproductiveSearches).toBe(0);
 	});
+
+	// SIO-1791: the run b6c66945 shape. gitlab_search came back empty three times and the fourth
+	// call was stopped with `unproductiveSearches: 0` next to `reason: "unproductive-streak"` --
+	// a streak of zero. unproductiveSearches is the elasticsearch_search counter; the generic path
+	// counts in unproductiveByTool / totalUnproductive, which the log never showed.
+	test("a generic streak stop logs the counters that actually drove it", async () => {
+		const { logger, entries } = makeLog();
+		const { tool: fake } = buildCountingTool("gitlab_search", "[]", ["search", "scope"]);
+		const wrapped = instrumentTools([fake], { dataSourceId: "gitlab", log: logger })[0];
+		if (!wrapped) throw new Error("instrumentTools returned empty array");
+
+		for (const search of ["a", "b", "c", "d"]) {
+			await wrapped.invoke({ id: search, name: "gitlab_search", args: { scope: "blobs", search }, type: "tool_call" });
+		}
+
+		const stop = entries.find((e) => e.event === "subagent.loop_guard_stop");
+		expect(stop?.reason).toBe("unproductive-streak");
+		expect(stop?.unproductiveForTool).toBe(3);
+		expect(stop?.totalUnproductive).toBe(3);
+		// Still logged, still zero: it is the elastic counter and says nothing about this stop.
+		expect(stop?.unproductiveSearches).toBe(0);
+	});
 });
 
 // SIO-1268: end-to-end through instrumentTools -- the deterministic exit fires only after a
