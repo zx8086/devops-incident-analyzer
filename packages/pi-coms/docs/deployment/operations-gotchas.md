@@ -118,7 +118,34 @@ remove an entry when the underlying behavior changes.
   spoke whose model call fails.** Before SIO-1678 the extension posted the
   failed run's empty text as a `complete` reply, so the hub, `fleet status` and
   the monitor all looked healthy while schema-free prompts came back blank and
-  investigations read `response not valid JSON`. First check CloudWatch
+  investigations read `response not valid JSON`.
+
+  **Look at the spoke's own failure count first (SIO-1681).** Each spoke counts
+  its consecutive provider failures and reports the count on every heartbeat, so
+  the hub already knows before anyone prompts it:
+
+  ```bash
+  curl -s -H "authorization: Bearer $PI_COMS_NET_AUTH_TOKEN" \
+    "$PI_COMS_NET_SERVER_URL/v1/agents?project=$PI_COMS_NET_PROJECT&include_explicit=true" \
+    | jq '.agents[] | {name, status, consecutive_run_errors, last_run_error}'
+  ```
+
+  A non-zero `consecutive_run_errors` on an `online` spoke IS this failure, and
+  `last_run_error` carries the provider message without a host login. **The hub
+  is where you read that message**: the monitor finding deliberately carries only
+  its class (`access-denied`, `throttled`, `timeout`, ...), because a monitor
+  finding can end up inside an investigation prompt and provider text must not.
+  The
+  console shows the same thing (`fleet_list_agents` renders
+  `online (9 consecutive model errors)`), and the monitor raises a
+  `spoke-health` warn at three, within two cycles, with no operator prompt.
+  `status` stays `online` on purpose: it means reachable, not working, and the
+  hub derives it from heartbeat age.
+
+  Note the counter only moves on runs that actually happen. A spoke nothing is
+  prompting accumulates nothing, so a zero count on an idle spoke is not proof
+  of health. To confirm the older way, or when the count is zero, check
+  CloudWatch
   `AWS/Bedrock` `InvocationClientErrors` for the spoke's model id in that
   account, then the newest Pi session jsonl on the host
   (`/home/piagent/.pi/agent/sessions/*/*.jsonl`, grep `"stopReason":"error"`)

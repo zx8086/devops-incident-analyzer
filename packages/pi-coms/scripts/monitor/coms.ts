@@ -1,6 +1,7 @@
 // scripts/monitor/coms.ts
 
 import * as crypto from "node:crypto";
+import type { AgentCard, AgentListing } from "../../contracts/wire.ts";
 import { errorMessage } from "./errors.ts";
 import { PendingReplies, type ReplyResult } from "./pending.ts";
 
@@ -225,6 +226,17 @@ export class MonitorComs {
 		} catch {
 			// message may have expired
 		}
+	}
+
+	// SIO-1681: the hub's view of every agent in this project. `include_explicit`
+	// because account spokes register with --explicit and would otherwise be
+	// absent from the listing -- the very agents this is read for.
+	async listAgents(): Promise<AgentCard[]> {
+		const reply = await this.http<AgentListing>(
+			"GET",
+			`/v1/agents?project=${encodeURIComponent(this.opts.project)}&include_explicit=true`,
+		);
+		return Array.isArray(reply?.agents) ? reply.agents : [];
 	}
 
 	// Fire-and-forget sends (reports, digests) must not park a pending entry:

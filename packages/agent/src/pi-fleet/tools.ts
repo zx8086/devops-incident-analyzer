@@ -116,7 +116,18 @@ function renderAgents(agents: PiAgentCard[]): string {
 	if (agents.length === 0) return "No agents are registered on this hub.";
 	// Names and statuses are hub-controlled identifiers, not spoke prose, so they
 	// need no untrusted wrapper. `purpose` IS agent-authored, so it is omitted.
-	return agents.map((a) => `${a.name}: ${a.status}`).join("\n");
+	// SIO-1681: a spoke whose model is failing still reports "online" -- status is
+	// liveness, not health -- so the failure count is shown beside it, or the
+	// model reads a 403ing spoke as able to answer. Only the COUNT is rendered:
+	// it is a hub-validated integer, whereas `last_run_error` is provider text
+	// reaching the console through the spoke, which is the boundary this file
+	// otherwise wraps. An operator reads the message from the pane or the hub.
+	return agents
+		.map((a) => {
+			const errors = a.consecutive_run_errors ?? 0;
+			return errors > 0 ? `${a.name}: ${a.status} (${errors} consecutive model errors)` : `${a.name}: ${a.status}`;
+		})
+		.join("\n");
 }
 
 function renderInbox(estate: string, messages: PiInboxMessage[]): string {

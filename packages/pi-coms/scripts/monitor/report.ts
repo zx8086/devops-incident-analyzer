@@ -29,6 +29,10 @@ export const FamilySchema = z.enum([
 	// SIO-1750: families unlocked by the WorkloadStateReads IAM addition.
 	"nodegroups",
 	"quotas",
+	// SIO-1681: the only family that reads the HUB rather than AWS. The monitor
+	// has no model of its own, so it can still report a spoke whose model is
+	// failing -- which is exactly when the spoke cannot report for itself.
+	"spoke-health",
 ]);
 export type Family = z.infer<typeof FamilySchema>;
 
