@@ -156,6 +156,19 @@ for (const { name, options } of MODES) {
 			expect(r.stdout).toMatch(/line \d+\n\[output truncated\]$/);
 		});
 
+		// Greptile, PR #811: a byte-index cut inside a multi-byte code point decoded to U+FFFD
+		// (3 bytes), so one long non-ASCII line came out corrupted AND up to 2 bytes over the cap.
+		test("the cap holds for multi-byte output and never splits a code point", async () => {
+			for (const ch of ["é", "€", "😀"]) {
+				for (const pad of [0, 1, 2, 3]) {
+					const r = await run(`return "a".repeat(${pad}) + ${JSON.stringify(ch)}.repeat(5000);`);
+					expect(r.truncated).toBe(true);
+					expect(Buffer.byteLength(r.stdout, "utf8")).toBeLessThanOrEqual(WORKER_LIMITS.stdoutBytes);
+					expect(r.stdout).not.toContain("\uFFFD");
+				}
+			}
+		}, 30_000);
+
 		test("nothing survives between calls: not a global, not a mutation of the evidence", async () => {
 			expect(
 				(await run(`globalThis.leak = 1; evidence.get("e1").hits.hits.length = 0; return "mutated";`)).stdout,

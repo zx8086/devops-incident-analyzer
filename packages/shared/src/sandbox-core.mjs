@@ -29,7 +29,14 @@ globalThis.evidence = Object.freeze({
 function capOutput(text, maxBytes) {
 	if (Buffer.byteLength(text, "utf8") <= maxBytes) return { stdout: text, truncated: false };
 	const budget = Math.max(0, maxBytes - Buffer.byteLength(TRUNCATION_MARKER, "utf8"));
-	let cut = Buffer.from(text, "utf8").subarray(0, budget).toString("utf8");
+	const bytes = Buffer.from(text, "utf8");
+	// Back off to a UTF-8 boundary. A byte-index cut can land inside a multi-byte code point;
+	// decoding the partial sequence yields U+FFFD, which is THREE bytes, so the output was both
+	// corrupted and up to 2 bytes over the cap (Greptile, PR #811; reproduced with 5000 x "é").
+	// 0b10xxxxxx marks a continuation byte: step back until the cut sits on a lead byte.
+	let end = Math.min(budget, bytes.length);
+	while (end > 0 && end < bytes.length && (bytes[end] & 0xc0) === 0x80) end -= 1;
+	let cut = bytes.subarray(0, end).toString("utf8");
 	// Prefer a line boundary; a half line of JSON reads as a complete value to a model.
 	const lastNewline = cut.lastIndexOf("\n");
 	if (lastNewline > 0) cut = cut.slice(0, lastNewline);
