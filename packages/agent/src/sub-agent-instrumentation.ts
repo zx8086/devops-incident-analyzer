@@ -5,6 +5,7 @@ import { ToolMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
+import { describeRun, evidenceText, type SandboxRunner, splitTransform, withTransformParam } from "./evidence-exec.ts";
 import {
 	awsEcsAbsenceProven,
 	consumeAbsenceExitLog,
@@ -138,6 +139,10 @@ export interface InstrumentContext {
 	// because the loop must be able to search evidence during the run; the persist
 	// site only runs once the loop has already finished.
 	evidenceIndex?: EvidenceIndexSink;
+	// SIO-1776: when provided, every tool's model-facing schema gains an optional
+	// `_transform` and a call that carries one returns only the sandbox's derived output.
+	// Absent (the default, EVIDENCE_EXEC_ENABLED off) nothing in this module changes.
+	sandbox?: SandboxRunner;
 }
 
 // The subset of EvidenceIndex this module needs. Structural so the instrumentation
@@ -216,8 +221,13 @@ function instrumentTool(
 
 	const handler: ProxyHandler<StructuredToolInterface> = {
 		get(target, prop, receiver) {
+			// SIO-1776: only the MODEL-FACING schema changes. The target keeps its own, and
+			// never sees the parameter -- it is stripped below before anything else looks at
+			// the argument, so the loop-guard signature and the real call are untouched.
+			if (prop === "schema" && ctx.sandbox) return withTransformParam(target.schema);
 			if (prop === "invoke") {
-				return async (arg: unknown, configArg?: unknown) => {
+				return async (rawArg: unknown, configArg?: unknown) => {
+					const { arg, transform } = ctx.sandbox ? splitTransform(rawArg) : { arg: rawArg, transform: undefined };
 					runState.iteration += 1;
 					const iteration = runState.iteration;
 					// Recorded before the guard check so a short-circuited call still counts
@@ -367,7 +377,41 @@ function instrumentTool(
 								}
 							}
 						}
-						const processed = processResult(result, tool.name, iteration, ctx, indexedRows);
+						// SIO-1776: the full result is already captured above. With a transform the
+						// model gets only what its code derived; on any failure it gets exactly what it
+						// would have got without one, plus the reason, so a bad transform never
+						// costs the call.
+						let transformNote = "";
+						if (transform !== undefined && ctx.sandbox) {
+							const rawText = evidenceText(extractContent(result));
+							const evidenceId = `e${ctx.rawOutputs?.length ?? 1}`;
+							const run = await ctx.sandbox(
+								`const result = evidence.get(${JSON.stringify(evidenceId)});\n${transform}`,
+								[{ id: evidenceId, tool: tool.name, json: rawText }],
+							);
+							const originalBytes = Buffer.byteLength(rawText, "utf8");
+							ctx.log.info(
+								{
+									...describeRun(tool.name, transform, originalBytes, run),
+									dataSourceId: ctx.dataSourceId,
+									deploymentId: ctx.deploymentId,
+									iteration,
+								},
+								"Tool result transformed in the sandbox",
+							);
+							if (run.error === undefined && run.stdout !== "") {
+								return rebuildResult(
+									result,
+									`${run.stdout}\n\n[transformed from ${originalBytes} bytes by your _transform; the full result is evidence id ${evidenceId}]`,
+								);
+							}
+							transformNote = `\n\n[_transform was not applied: ${run.error ?? "it returned nothing"}. The result above is the tool's normal output.]`;
+						}
+						const processedRaw = processResult(result, tool.name, iteration, ctx, indexedRows);
+						const processed =
+							transformNote === ""
+								? processedRaw
+								: rebuildResult(processedRaw, `${stringifyContent(extractContent(processedRaw))}${transformNote}`);
 						// SIO-1159: a successful-but-empty CloudWatch result never errors, so
 						// nothing steers the LLM off a too-narrow window (run 270378e0: a 24h
 						// window silently missed a 2-day-old incident). After consecutive

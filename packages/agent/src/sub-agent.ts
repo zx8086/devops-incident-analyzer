@@ -18,6 +18,7 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { fetchAppMapBaseline, isAppMapBaselineEnabled } from "./app-map-baseline.ts";
 import { hasDestinationAggregation } from "./application-topology.ts";
+import { buildRunJsOnEvidenceTool, isEvidenceExecEnabled, type SandboxRunner } from "./evidence-exec.ts";
 import { buildSearchEvidenceTool, EvidenceIndex, isEvidenceIndexEnabled } from "./evidence-index.ts";
 import { capSubAgentTimeoutMs, getGraphDeadlineAt } from "./graph-budget.ts";
 import { createLlm, type InvokableLlm } from "./llm.ts";
@@ -1695,6 +1696,12 @@ ${state.correlationFetchDirective}`
 		// of the run. Only built when the cap is active: with no cap nothing is cut,
 		// so there is nothing to recover. Closed in the finally below.
 		evidenceIndex = isEvidenceIndexEnabled() && capBytes != null && capBytes > 0 ? new EvidenceIndex() : null;
+		// SIO-1776: opt-in. The engine is loaded only when the flag is on, through a deep
+		// import -- it is deliberately not on the shared barrel, so nothing else pays for
+		// QuickJS. Off (the default) leaves every line below behaving exactly as before.
+		const sandbox: SandboxRunner | undefined = isEvidenceExecEnabled()
+			? (await import("@devops-agent/shared/src/sandbox-exec.ts")).runInSandbox
+			: undefined;
 		const instrumentedTools = instrumentTools(tools, {
 			dataSourceId,
 			deploymentId,
@@ -1707,6 +1714,7 @@ ${state.correlationFetchDirective}`
 			// ledger cannot be built at all for elastic/gitlab/kafka runs.
 			awsAbsenceEarlyExit: dataSourceId === "aws" && isAwsAbsenceEarlyExitEnabled(),
 			focusServices: focus?.services ?? [],
+			...(sandbox && { sandbox }),
 		});
 
 		// SIO-1250: bound the CUMULATIVE loop context. The per-result cap above cannot do
@@ -1740,9 +1748,13 @@ ${state.correlationFetchDirective}`
 		// SIO-1688: search_evidence is bound alongside the datasource tools so the
 		// model can recover truncated content mid-loop. It reads only what this run
 		// already fetched -- it cannot reach the network or another run's evidence.
-		const loopTools = evidenceIndex
-			? [...instrumentedTools, buildSearchEvidenceTool(evidenceIndex)]
-			: instrumentedTools;
+		const loopTools = [
+			...instrumentedTools,
+			...(evidenceIndex ? [buildSearchEvidenceTool(evidenceIndex)] : []),
+			// SIO-1776: like search_evidence it sits outside the 25-tool belt and reads only
+			// what this run already fetched.
+			...(sandbox ? [buildRunJsOnEvidenceTool(() => rawOutputs, sandbox, log)] : []),
+		];
 		const agent = createReactAgent({
 			llm,
 			tools: loopTools,
