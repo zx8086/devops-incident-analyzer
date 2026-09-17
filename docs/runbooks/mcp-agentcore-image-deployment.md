@@ -17,7 +17,7 @@
 | Network mode | **VPC** (MSK subnets + SG — see the VPC gotcha below) | PUBLIC |
 | SigV4 proxy port (local) | 3000 | 3001 |
 | CloudWatch log group | `/aws/bedrock-agentcore/runtimes/kafka_mcp_server-7RjmF16MqA-DEFAULT` | `/aws/bedrock-agentcore/runtimes/aws_mcp_server-iM1Cnu3VtR-DEFAULT` |
-| Boot toolCount canary | **61** (confirmed 2026-08-07; unchanged since 2026-07-19) | **70** (confirmed 2026-08-07; was 63 pre-SIO-1420/1421, 61 pre-SIO-1161) |
+| Boot toolCount canary | **61** (confirmed 2026-08-07; unchanged since 2026-07-19) | **70** (confirmed 2026-09-17; was 63 pre-SIO-1420/1421, 61 pre-SIO-1161) |
 | Image architecture | linux/arm64 — never push amd64 | same |
 
 **Do not assume — verify the account before every deploy.** `eu-shared-services-prd` is account `399987695868`. Profile stanzas in `~/.aws/credentials` are hand-pasted SSO keys and have held the wrong account's keys before; the stanza header comment controls nothing. Run `aws sts get-caller-identity --profile eu-shared-services-prd` and confirm the account id before touching ECR or the runtime.
@@ -114,6 +114,15 @@ aws bedrock-agentcore-control get-agent-runtime --agent-runtime-id <id> \
   --profile eu-shared-services-prd --region eu-central-1 --query status
 ```
 
+**Runtime READY is not "the new version is live".** The runtime and its DEFAULT endpoint update separately, and traffic follows the endpoint. On 2026-09-17 the runtime reported READY at v16 within 20 seconds of the update (16:14:07), while the endpoint's `liveVersion` only moved to 16 at 16:14:53. A verification call made in between can land on the previous version. Wait for the endpoint before step 6:
+
+```bash
+aws bedrock-agentcore-control get-agent-runtime-endpoint --agent-runtime-id <id> --endpoint-name DEFAULT \
+  --profile eu-shared-services-prd --region eu-central-1 \
+  --query '{live:liveVersion,target:targetVersion,status:status,lastUpdatedAt:lastUpdatedAt}'
+# done when live == the new agentRuntimeVersion, target is null and status is READY
+```
+
 Each update creates a new immutable version (v10, v11, v12...). Immediately re-fetch the config and diff against the captured one — confirm the only differences are `containerUri` plus the expected metadata churn (`agentRuntimeVersion`, timestamps, `status`); any other delta means a field was dropped or retyped.
 
 ### 6. Verify — the step that has gone wrong before
@@ -133,6 +142,31 @@ aws logs filter-log-events \
   --query 'events[*].message' --output text
 ```
 
+**Reset the proxy's session before you verify, or you will test the OLD image (2026-09-17).** The SigV4 proxy keeps ONE process-wide `mcpSessionId` (`packages/shared/src/agentcore-proxy.ts`) and reuses it for every client that connects, and an AgentCore session stays pinned to the microVM, and therefore the image version, it started on. After an update the runtime boots fresh microVMs on the new image, but a proxy that was already running keeps routing to its pre-update microVM: the toolCount still matches (it is the same when no tool was added) and a behavioural check reports the old behaviour, which reads exactly like "the update did not take". Reset the session with the proxy's own endpoint, then verify:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X DELETE http://localhost:3001/mcp   # 3000 for kafka; expect 200
+```
+
+**The proxy must be idle when you do this.** The DELETE aborts the session's `AbortController`, and that signal is attached to the upstream `fetch` itself as well as to the retry sleep, so EVERY request in flight through that proxy fails, not only one that is waiting to retry. `activeSseConnections: 0` on the web app's `/health` is necessary but not sufficient: it counts the web app's streams only, and says nothing about another client of the same proxy (an eval run, a probe of your own, a second session). Stop your own probes first and make sure nobody else is using the proxy.
+
+**The proof that the new image is serving is the new BEHAVIOUR, seen after the endpoint has switched.** Log streams cannot prove it, only disprove it. When a behavioural check still shows the old behaviour, use the streams to find out whether your call was pinned to a microVM that predates the update. List boots and tool calls per stream from a few minutes BEFORE the update:
+
+```bash
+RUNTIME=aws_mcp_server-iM1Cnu3VtR   # or kafka_mcp_server-7RjmF16MqA
+SINCE_MS=<epoch ms, about 10 minutes before update-agent-runtime>
+aws logs filter-log-events \
+  --log-group-name "/aws/bedrock-agentcore/runtimes/${RUNTIME}-DEFAULT" \
+  --start-time "$SINCE_MS" \
+  --filter-pattern '?"Starting AWS MCP Server" ?"Starting Kafka MCP Server" ?"tools/call ok"' \
+  --profile eu-shared-services-prd --region eu-central-1 \
+  --query 'events[*].[timestamp,logStreamName,message]' --output text \
+  | awk -F'\t' '{ kind = ($3 ~ /Starting/) ? "BOOT" : "CALL"; print $1, substr($2, length($2)-11), kind }' \
+  | sort -n
+```
+
+Read it in one direction only. A `CALL` on a stream whose `BOOT` is earlier than the update, or that has no `BOOT` in the window at all, ran on the OLD image for certain and tested nothing: reset the session and call again. A `BOOT` after the update is NOT proof of the new image. The runtime boots a fresh microVM about once a minute on whatever version is live (16:11:35, 16:12:35 and 16:13:35 on the old image, before the 16:14:04 update), so an old-image microVM can boot after any cutoff you note by hand and before the endpoint switches. On the 2026-09-17 deploy the query showed three `CALL` lines on a stream with no `BOOT` in the window (the pinned pre-update microVM) and, after the reset, one on a stream that booted at 16:14:24; what proved the image was that call returning the new behaviour.
+
 A hand-rolled `invoke-agent-runtime` JSON-RPC probe can misreport a 400 from an incomplete MCP session handshake — weight the three signals above over it.
 
 ### 7. Rollback
@@ -140,6 +174,18 @@ A hand-rolled `invoke-agent-runtime` JSON-RPC probe can misreport a 400 from an 
 No image is deleted from ECR by a normal deploy, so rollback is always available: edit `containerUri` back to the previous known-good digest and re-run step 5. This creates a new version pointing at the old image, READY within a minute.
 
 ## Lessons learned
+
+**2026-09-17 (aws v15 -> v16, SIO-1774 via SIO-1786; kafka NOT redeployed):**
+
+- Rebuilt the aws image from main `68f670f2` to ship SIO-1774's `aws_cloudwatch_describe_alarms` change (PR #813): the six notification and raw-state fields are omitted unless `includeNotificationConfig: true`. It adds a parameter, not a tool. Image tag `sio-1774`. Live digest after this deploy:
+  - aws: `399987695868.dkr.ecr.eu-central-1.amazonaws.com/aws-mcp-agentcore@sha256:390b78bce8bd5493c2e2d2dc86eaf16eeb31832124661f20bbc4515ddaf0bd6c`
+  - rollback target (previous live): the 2026-08-07 aws digest below.
+- First image build since SIO-1776 added `quickjs-emscripten-core` and `@jitl/quickjs-singlefile-cjs-release-sync` to `packages/shared`. `bun install --frozen-lockfile --production` passed inside the container (651 packages); the `Dockerfile.agentcore` COPY list needed no change because these are dependencies of an existing workspace member, not a new member. Image 321 MB in ECR against 316 MB before.
+- The push failed twice, and NOT with the 403 seen on earlier deploys: `failed commit on ref "layer-sha256:..."` with `net/http: timeout awaiting response headers` on the 1.23 GB `node_modules` layer. Re-login and retry failed the same way once; the third `docker push` completed in one second with every layer `already exists`. The layer had landed and only ECR's response to the commit had timed out. So: on this error retry the same push again before suspecting the network or IAM, and confirm with `aws ecr describe-images --image-ids imageTag=<tag>`.
+- Config diff after the update: only `containerUri`, `agentRuntimeVersion` and `lastUpdatedAt`. Three env vars carried unchanged; `MCP_TOOL_METRICS_DB_PATH` still absent. UPDATING to READY in under 20 seconds.
+- toolCount canary unchanged: aws 70.
+- The DEFAULT endpoint went live on v16 at 16:14:53, 46 seconds after the runtime's own `lastUpdatedAt` (16:14:07). The first verification call (16:14:25) was therefore made before the switch and proves nothing either way; the two that followed (16:15:11, 16:15:19) were after it and still returned the old payload, which is what isolates the pinned session as the cause rather than the endpoint lag. Step 5 now says to wait for the endpoint.
+- **The first three verification calls tested the old image.** They returned the old 78 KB payload with every noise field present, which looked like a failed deploy. The cause was the proxy's pinned session (see the session reset note in step 6): all of them, and the "before" call made ahead of the update, were served by the same pre-update log stream. After `DELETE /mcp` on the proxy the same call was served by a stream that booted after the update and returned 36186 bytes against 78618, none of the six noise fields, all 25 alarms. Zero error lines in the log group since the update. The payload is still delivered as `text` plus `structuredContent`, so both halves shrink; the agent drops the duplicate on its side (`dropDuplicateStructuredContent`).
 
 **2026-08-07 (kafka v17 -> v18, aws v14 -> v15, SIO-1420/1421/1422/1423):**
 
