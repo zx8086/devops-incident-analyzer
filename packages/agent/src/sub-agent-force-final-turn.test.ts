@@ -16,8 +16,10 @@ const stop = (id: string) =>
 		tool_call_id: id,
 		additional_kwargs: { [LOOP_GUARD_STOP_MARKER]: true },
 	});
+// ToolNode's exact unknown-tool message: status "error" plus this content.
 const unbound = (id: string) =>
 	new ToolMessage({
+		status: "error",
 		content: 'Error: Tool "gitlab_get_commit_diff" not found.\n Please fix your mistakes.',
 		tool_call_id: id,
 	});
@@ -74,6 +76,23 @@ describe("shouldForceFinalTurn (SIO-1779)", () => {
 			tool_call_id: "x",
 		});
 		expect(shouldForceFinalTurn([q, call("a"), stop("a"), call("b"), stop("b"), call("x"), lookalike])).toBe(false);
+	});
+
+	// Greptile, PR #808: a code search or log query can legitimately return these words.
+	test("a successful result that merely CONTAINS the not-found text is evidence, not a refusal", () => {
+		const evidence = new ToolMessage({
+			status: "success",
+			name: "gitlab_search",
+			content: '[{"path":"src/agent.ts","data":"throw new Error(`Tool \\"x\\" not found.`)"}]',
+			tool_call_id: "x",
+		});
+		const leading = new ToolMessage({
+			status: "success",
+			content: 'Error: Tool "x" not found. (quoted from a log line)',
+			tool_call_id: "y",
+		});
+		expect(shouldForceFinalTurn([q, call("a"), stop("a"), call("b"), stop("b"), call("x"), evidence])).toBe(false);
+		expect(shouldForceFinalTurn([q, call("a"), stop("a"), call("b"), stop("b"), call("y"), leading])).toBe(false);
 	});
 
 	// The marker has to actually be on what the instrumentation emits, or the predicate is inert.

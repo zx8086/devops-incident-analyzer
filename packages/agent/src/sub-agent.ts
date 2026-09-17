@@ -145,11 +145,16 @@ export function shouldReserveFinalTurn(llmTurns: number, recursionLimit: number)
 // why this reads the messages rather than the guard's own ledger. One real result anywhere in
 // the window resets it, so a sparse-but-productive datasource is never cut short.
 const BLOCKED_ROUNDS_BEFORE_FORCE = 3;
-const UNBOUND_TOOL_ERROR = /Tool "[^"]*" not found/;
+// ToolNode's exact shape for an unknown tool (tool_node.js): status "error" and content
+// `Error: Tool "X" not found.\n Please fix your mistakes.` Both are required and the pattern
+// is anchored: a gitlab code search or a log query can legitimately RETURN the words
+// `Tool "x" not found` as evidence, and a productive result must never count as a refusal
+// (Greptile, PR #808).
+const UNBOUND_TOOL_ERROR = /^Error: Tool "[^"]*" not found\./;
 
 function isRefusal(m: ToolMessage): boolean {
 	if (m.additional_kwargs?.[LOOP_GUARD_STOP_MARKER] === true) return true;
-	return typeof m.content === "string" && UNBOUND_TOOL_ERROR.test(m.content);
+	return m.status === "error" && typeof m.content === "string" && UNBOUND_TOOL_ERROR.test(m.content);
 }
 
 export function shouldForceFinalTurn(messages: BaseMessage[]): boolean {
