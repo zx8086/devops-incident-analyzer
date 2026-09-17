@@ -139,7 +139,24 @@ aws logs filter-log-events \
 curl -s -o /dev/null -w '%{http_code}\n' -X DELETE http://localhost:3001/mcp   # 3000 for kafka; expect 200
 ```
 
-Check `activeSseConnections` on the web app's `/health` is 0 first: the DELETE aborts a retry loop that is mid-flight. To prove which image served a call, compare the `logStreamName` of its `tools/call ok` line with the streams that logged `Starting AWS MCP Server` after the update; a call served by a stream that booted before the update tested nothing.
+**The proxy must be idle when you do this.** The DELETE aborts the session's `AbortController`, and that signal is attached to the upstream `fetch` itself as well as to the retry sleep, so EVERY request in flight through that proxy fails, not only one that is waiting to retry. `activeSseConnections: 0` on the web app's `/health` is necessary but not sufficient: it counts the web app's streams only, and says nothing about another client of the same proxy (an eval run, a probe of your own, a second session). Stop your own probes first and make sure nobody else is using the proxy.
+
+To prove which image served a call, note the time just before `update-agent-runtime` as epoch milliseconds and list boots and tool calls per log stream since then. A call served by a stream with no boot line after the cutoff ran on the OLD image and tested nothing:
+
+```bash
+RUNTIME=aws_mcp_server-iM1Cnu3VtR   # or kafka_mcp_server-7RjmF16MqA
+SINCE_MS=<epoch ms noted just before update-agent-runtime>
+aws logs filter-log-events \
+  --log-group-name "/aws/bedrock-agentcore/runtimes/${RUNTIME}-DEFAULT" \
+  --start-time "$SINCE_MS" \
+  --filter-pattern '?"Starting AWS MCP Server" ?"Starting Kafka MCP Server" ?"tools/call ok"' \
+  --profile eu-shared-services-prd --region eu-central-1 \
+  --query 'events[*].[timestamp,logStreamName,message]' --output text \
+  | awk -F'\t' '{ kind = ($3 ~ /Starting/) ? "BOOT" : "CALL"; print $1, substr($2, length($2)-11), kind }' \
+  | sort -n
+```
+
+On the 2026-09-17 deploy this printed three `CALL` lines on a stream that had no `BOOT` line (the pre-update microVM) and then, after the session reset, one `CALL` on a stream that did. The runtime keeps booting further microVMs about once a minute, so expect many `BOOT` lines; only the stream of your `CALL` matters.
 
 A hand-rolled `invoke-agent-runtime` JSON-RPC probe can misreport a 400 from an incomplete MCP session handshake — weight the three signals above over it.
 
