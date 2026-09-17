@@ -18,6 +18,7 @@ import type { AttachmentBlock } from "@devops-agent/shared/src/attachments.ts";
 // import of the @devops-agent/shared index drags server-only modules
 // (request-context's AsyncLocalStorage, telemetry, MCP server code) into the
 // client bundle, crashing the app at load (white screen).
+import { isPiActionTool } from "@devops-agent/shared/src/pi-coms-types.ts";
 import { type CreatedTicket, TicketProviderInfoSchema } from "@devops-agent/shared/src/ticket-types.ts";
 import { z } from "zod";
 import {
@@ -42,6 +43,7 @@ import {
 	type SyntheticsPushResultRow,
 	type TopicShiftPrompt,
 } from "./agent-reducer.ts";
+import { piFleetStore } from "./pi-fleet.svelte.ts";
 import { parseSseChunks } from "./sse-buffer.ts";
 
 // SIO-1655: the union moved to lib/agent-ids.ts (runtime-free, so server code
@@ -491,16 +493,22 @@ function createAgentStore() {
 
 	async function executeAction(action: PendingAction, reportContent: string) {
 		try {
-			const res = await fetch("/api/agent/actions", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					action,
-					reportContent,
-					threadId,
-				}),
-			});
-			const result: ActionResult = await res.json();
+			// SIO-1778: the pi cards run through the fleet pane store -- a send plus short
+			// polls shown live on the right -- instead of one 5-15 minute request here.
+			// Everything below (result view, follow-up cards) is the same for both.
+			const result: ActionResult = isPiActionTool(action.tool)
+				? await piFleetStore.runAction(action, reportContent)
+				: await (
+						await fetch("/api/agent/actions", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({
+								action,
+								reportContent,
+								threadId,
+							}),
+						})
+					).json();
 			actionResults = [...actionResults, result];
 			// SIO-1635: keep the executed action so its card can switch to the result
 			// view (the verdict IS the deliverable), and surface any follow-up cards

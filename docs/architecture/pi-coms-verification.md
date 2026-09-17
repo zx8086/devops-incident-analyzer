@@ -18,16 +18,18 @@ aggregateMitigation
   -> proposePiVerification(state)          one verify-with-pi card per assessed estate (max 3)
   -> pendingActions                        rendered by ActionConfirmationCard
 
-user approves "Verify with pi agent"
-  -> POST /api/agent/actions               executeAction -> executePiVerify
+user approves "Verify with pi agent"            (SIO-1778: start, then short polls, shown in the fleet pane)
+  -> POST /api/pi/actions                  startPiAction
      -> hub: register short-lived sender   POST /v1/agents/register (name incident-analyzer-<8 hex>, explicit)
      -> hub: list agents                   GET  /v1/agents?include_explicit=true
      -> route: estate agent status online? yes: send to it   no: send to fallback inbox with 24 h ttl (queued)
      -> hub: send                          POST /v1/messages  { prompt, response_schema, conversation_id }
-     -> hub: await                         GET  /v1/messages/:id/await?timeout_ms=25000  (sliced, heartbeat between slices)
+     -> hub: deregister                    DELETE /v1/agents/:sid (always, in finally; BEFORE the reply exists)
+  <- { started, hubKey, target, msgId, prompt, budgetMs }     or the ActionResult at once when queued/refused
+  -> GET /api/pi/actions?msgId=            pollPiAction, repeated by the browser
+     -> hub: await                         GET  /v1/messages/:id/await?timeout_ms=25000  (ONE slice, unregistered client)
      -> Zod-validate the reply             PiVerdictSchema
-     -> hub: deregister                    DELETE /v1/agents/:sid (always, in finally)
-  <- ActionResult { result: { kind: "verdict", ... }, followUpActions?: [investigate-with-pi] }
+  <- { pending: true } | { pending: false, result: ActionResult { kind: "verdict", followUpActions? } }
 
 user approves "Launch pi investigation"
   -> same path with PI_INVESTIGATION_RESPONSE_SCHEMA, the longer budget, and
@@ -51,13 +53,14 @@ user approves "Launch pi investigation"
 
 ## Routing rule
 
-0. The estate name suffix (`-dev`, `-stg`, `-prd`; `-prod` is read as prd)
-   selects the hub before any online check (no cross-environment access, user
-   decision 2026-09-06). An unknown suffix, or an environment without a hub in
-   `PI_COMS_HUBS`, is a readable error on the card; the analyzer never falls
-   back to another environment's hub, and `proposePiVerification` emits no card
-   for such an estate (it logs the skip). Cards are ordered by environment, then
-   estate.
+0. An estate is bound to a hub EXPLICITLY, by that hub's `estates` list in
+   `PI_COMS_HUBS` (SIO-1666; this replaced routing by the `-dev`/`-stg`/`-prd`
+   name suffix, which stopped identifying a hub once two hubs shared an
+   environment). `selectHubForEstate` requires exactly one match: an estate no
+   hub claims, or one claimed by two, is a readable error on the card. The
+   analyzer never falls back to another hub, and `proposePiVerification` emits
+   no card for such an estate (it logs the skip). Cards are ordered by
+   environment, then estate.
 1. `PI_COMS_ESTATE_AGENT_MAP[estate]` when set, otherwise the estate id itself
    is the agent name (estate ids and pi agent names share the account-alias
    naming convention).
@@ -91,7 +94,24 @@ mid-wait. A slice that expires answers `status: "timeout"` from the awaiter, not
 the message, so the client confirms against `GET /v1/messages/:id` before
 treating it as terminal. The overall budgets are `PI_COMS_VERIFY_TIMEOUT_MS`
 (default 5 min) and `PI_COMS_INVESTIGATE_TIMEOUT_MS` (default 15 min); the
-action route stays synchronous for the whole budget.
+budget is enforced server-side as a deadline recorded when the action starts.
+
+Since SIO-1778 no request holds that budget open. `POST /api/pi/actions` returns
+as soon as the hub has accepted the send; the browser then polls
+`GET /api/pi/actions?msgId=`, each poll being one await slice, and the fleet pane
+shows the entry live. The sender deregisters before the reply exists: awaiting by
+id needs only the bearer token, which is how the pane's own re-poll already
+worked, and it was re-verified against a local hub for this change. `executePiVerify`
+and `executePiInvestigate` keep the one-shot shape (the SIO-1651 workflow uses
+`runHubTask`); both shapes share `sendViaHub` and `finalizePiAction`, so routing,
+validation, verdict memory and the follow-up card have one implementation.
+
+What a started message may be finalized AS (tool, params, target, hub, deadline)
+is held in a per-process registry keyed by msg id. A poll names only the msg id;
+nothing the browser sends decides how a reply is parsed or what target string
+reaches verdict memory, and a msg id this process did not start answers 404. The
+registry is in memory: a server restart mid-wait loses the entry, the same
+exposure the single long request had.
 
 ## Configuration
 

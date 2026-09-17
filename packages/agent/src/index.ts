@@ -35,7 +35,11 @@ export {
 	environmentForEstate,
 	estatesFromState,
 	type HubSelection,
+	type PiActionPoll,
+	type PiActionStart,
+	pollPiAction,
 	selectHubForEstate,
+	startPiAction,
 } from "./action-tools/pi-verifier.ts";
 export { installAgentMemory } from "./agent-memory-install.ts";
 export { aggregate } from "./aggregator.ts";
