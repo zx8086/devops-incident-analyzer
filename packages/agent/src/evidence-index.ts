@@ -312,15 +312,32 @@ const DEFAULT_HIT_LIMIT = 3;
 
 // The sub-agent's recovery tool. Bound only when an index exists for the run, so
 // the model is never offered a search over nothing.
+//
+// SIO-1780: it is NOT instrumented, so nothing else bounds it. On run f77ce7dd the gitlab
+// sub-agent had nothing truncated (an empty index), was refused its real tools by the loop
+// guard, and spent 11 turns searching an index with zero rows -- each answer ending "re-run
+// with a different query". An empty index and a run of misses now say plainly to stop.
+export const SEARCH_EVIDENCE_TOOL_NAME = "search_evidence";
+const MAX_CONSECUTIVE_MISSES = 3;
+
 export function buildSearchEvidenceTool(index: EvidenceIndex): StructuredToolInterface {
+	let consecutiveMisses = 0;
 	return createTool(
 		({ query, tool }: { query: string; tool?: string }) => {
+			if (index.rowCount === 0) {
+				return "Nothing is indexed in this run: no tool result was truncated, so every result you received is already in your context in full. search_evidence cannot return anything you do not already have. Do not call it again; write your findings from the results above.";
+			}
 			const hits = index.search(query, { tool, limit: DEFAULT_HIT_LIMIT });
 			if (hits.length === 0) {
+				consecutiveMisses += 1;
+				if (consecutiveMisses >= MAX_CONSECUTIVE_MISSES) {
+					return `No indexed evidence matches "${query}", and neither did your previous ${consecutiveMisses - 1} searches. The stored tool output does not contain what you are looking for; more searches will not change that. Do not call search_evidence again; write your findings and report this as something the evidence did not show.`;
+				}
 				// Absence here is about the INDEX, not about the world. Saying so keeps
 				// the model from reporting "no such errors exist" on a failed search.
 				return `No indexed evidence matches "${query}"${tool ? ` for tool ${tool}` : ""}. This means the stored tool output does not contain those terms; it is not evidence that the underlying system lacks them. Re-run the tool with a different query if you need to widen the search.`;
 			}
+			consecutiveMisses = 0;
 			return hits
 				.map((h) => {
 					const snippet = h.snippet.length > SNIPPET_MAX ? `${h.snippet.slice(0, SNIPPET_MAX)}...` : h.snippet;
@@ -329,7 +346,7 @@ export function buildSearchEvidenceTool(index: EvidenceIndex): StructuredToolInt
 				.join("\n\n");
 		},
 		{
-			name: "search_evidence",
+			name: SEARCH_EVIDENCE_TOOL_NAME,
 			description:
 				"Search the FULL text of tool results already returned in this run, including the parts that were truncated out of the conversation. Use this when a result says it was truncated and you need a part that was cut, or to check whether a term appears anywhere in what a tool already returned, instead of re-running the tool. Returns the best-matching sections with the tool and key path each came from.",
 			schema: z.object({

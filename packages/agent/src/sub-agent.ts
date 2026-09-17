@@ -18,7 +18,12 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { fetchAppMapBaseline, isAppMapBaselineEnabled } from "./app-map-baseline.ts";
 import { hasDestinationAggregation } from "./application-topology.ts";
-import { buildSearchEvidenceTool, EvidenceIndex, isEvidenceIndexEnabled } from "./evidence-index.ts";
+import {
+	buildSearchEvidenceTool,
+	EvidenceIndex,
+	isEvidenceIndexEnabled,
+	SEARCH_EVIDENCE_TOOL_NAME,
+} from "./evidence-index.ts";
 import { capSubAgentTimeoutMs, getGraphDeadlineAt } from "./graph-budget.ts";
 import { createLlm, type InvokableLlm } from "./llm.ts";
 import { getToolsForDataSource, withAwsEstate, withElasticDeployment } from "./mcp-bridge.ts";
@@ -130,6 +135,16 @@ const CYCLE_SUPER_STEPS = 3;
 export function shouldReserveFinalTurn(llmTurns: number, recursionLimit: number): boolean {
 	const stepsConsumed = CYCLE_SUPER_STEPS * llmTurns - (CYCLE_SUPER_STEPS - 1);
 	return recursionLimit - stepsConsumed <= FINAL_TURN_RESERVE_STEPS;
+}
+
+// SIO-1780: for the raw_output_count_mismatch warning. A loop-guard stop ToolMessage carries
+// no name, so it counts as "unnamed" on the message side and under its tool on the raw side;
+// the diff is a pointer for a human, not an exact reconciliation.
+export function suspectToolNames(raw: Array<{ toolName: string }>, messages: Array<{ name?: string }>): string[] {
+	const counts = new Map<string, number>();
+	for (const m of messages) counts.set(m.name ?? "unnamed", (counts.get(m.name ?? "unnamed") ?? 0) + 1);
+	for (const r of raw) counts.set(r.toolName, (counts.get(r.toolName) ?? 0) - 1);
+	return [...counts].filter(([, n]) => n > 0).map(([name]) => name);
 }
 
 // SIO-1279: which elastic deployments this turn fans out across, in precedence order.
@@ -1878,13 +1893,22 @@ ${state.correlationFetchDirective}`
 		// loop-guard stop and throw all record), but a future path that yields a ToolMessage
 		// without going through the instrumented invoke would regress this silently. Surface
 		// the divergence rather than quietly degrading persisted findings.
-		if (rawOutputs.length > 0 && rawOutputs.length !== toolMessages.length) {
+		//
+		// SIO-1780: search_evidence is deliberately NOT instrumented and NOT persisted -- it
+		// re-serves text this run already captured, so persisting it would duplicate evidence.
+		// Counting its ToolMessages made this warning fire on every run that used the tool
+		// (run f77ce7dd: 22 raw vs 33 messages, the 11 extra all search_evidence, confirmed in
+		// the LangSmith trace), which is exactly how a real divergence would get ignored.
+		const capturedToolMessages = toolMessages.filter((m: { name?: string }) => m.name !== SEARCH_EVIDENCE_TOOL_NAME);
+		if (rawOutputs.length > 0 && rawOutputs.length !== capturedToolMessages.length) {
 			log.warn(
 				{
 					event: "subagent.raw_output_count_mismatch",
 					deploymentId,
 					rawOutputCount: rawOutputs.length,
-					toolMessageCount: toolMessages.length,
+					toolMessageCount: capturedToolMessages.length,
+					// Names with MORE messages than raw captures: where to look first.
+					suspectToolNames: suspectToolNames(rawOutputs, capturedToolMessages),
 				},
 				"Raw tool-output capture diverged from tool messages; persisted findings may be incomplete",
 			);

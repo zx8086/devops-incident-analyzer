@@ -1,6 +1,12 @@
 // agent/src/evidence-index.test.ts
 import { describe, expect, test } from "bun:test";
-import { chunkToolOutput, EvidenceIndex, isEvidenceIndexEnabled, sanitizeQuery } from "./evidence-index.ts";
+import {
+	buildSearchEvidenceTool,
+	chunkToolOutput,
+	EvidenceIndex,
+	isEvidenceIndexEnabled,
+	sanitizeQuery,
+} from "./evidence-index.ts";
 
 describe("isEvidenceIndexEnabled", () => {
 	test("defaults ON and is disabled only by an explicit kill-switch value", () => {
@@ -165,5 +171,37 @@ describe("EvidenceIndex", () => {
 		await index.index("t", JSON.stringify({ a: "alpha" }));
 		index.close();
 		expect(index.search("alpha")).toEqual([]);
+	});
+});
+
+// SIO-1780: search_evidence is not instrumented, so nothing else bounds it. On run f77ce7dd
+// the gitlab sub-agent searched an index with ZERO rows 11 times, each answer ending
+// "re-run with a different query".
+describe("search_evidence tool stops a fruitless search", () => {
+	const ask = async (t: ReturnType<typeof buildSearchEvidenceTool>, query: string) => String(await t.invoke({ query }));
+
+	test("an empty index says nothing was truncated and not to call again", async () => {
+		const index = new EvidenceIndex();
+		const answer = await ask(buildSearchEvidenceTool(index), "PdfExportService");
+		expect(answer).toContain("Nothing is indexed in this run");
+		expect(answer).toContain("Do not call it again");
+		expect(answer).not.toContain("Re-run");
+		index.close();
+	});
+
+	test("the third consecutive miss tells the model to stop; a hit resets the count", async () => {
+		const index = new EvidenceIndex();
+		await index.index(
+			"elasticsearch_search",
+			JSON.stringify({ hits: [{ message: "FOP ValidationException overflow" }] }),
+		);
+		const t = buildSearchEvidenceTool(index);
+		expect(await ask(t, "kubernetes")).toContain("Re-run the tool");
+		expect(await ask(t, "terraform")).toContain("Re-run the tool");
+		expect(await ask(t, "ansible")).toContain("Do not call search_evidence again");
+		// A hit resets it, so a productive search is never penalised for earlier misses.
+		expect(await ask(t, "ValidationException")).toContain("FOP");
+		expect(await ask(t, "kubernetes")).toContain("Re-run the tool");
+		index.close();
 	});
 });
