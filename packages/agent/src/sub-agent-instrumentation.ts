@@ -574,6 +574,9 @@ function processResult(
 	// context and overflowed the 200k window.
 	const truncated = truncateTextBlocks(content, ctx.capBytes) ?? truncateToolOutput(text, ctx.capBytes);
 	if (truncated.strategy === "none") return result;
+	// Nothing was cut: the texts fit, only their serialized form did not. No truncation event and
+	// no recovery pointer, which would claim bytes were removed.
+	if (truncated.strategy === "text-blocks") return rebuildResult(result, truncated.content);
 
 	ctx.log.info(
 		{
@@ -641,8 +644,8 @@ export const EVIDENCE_INDEX_MIN_BYTES = 8192;
 // truncator sees a 2-element array, keeps the header, and drops the payload whole: a 760 KB
 // discovery aggregation reached the model as 139 bytes, and the JSON-aware reducers built for
 // that payload never ran. The largest block is reduced into whatever the others leave of the
-// budget. Returns null for anything that is not all text blocks, or that does not fit this way,
-// so the caller falls back to the serialized path.
+// budget. Returns null only for content that is not all text blocks; all-text content never
+// falls back to the serialized path.
 export function truncateTextBlocks(content: unknown, capBytes: number): TruncationResult | null {
 	if (!Array.isArray(content) || content.length === 0) return null;
 	const texts: string[] = [];
@@ -653,22 +656,31 @@ export function truncateTextBlocks(content: unknown, capBytes: number): Truncati
 		texts.push(text);
 	}
 	const sizes = texts.map((t) => Buffer.byteLength(t, "utf8"));
-	const largest = sizes.indexOf(Math.max(...sizes));
 	const separators = texts.length - 1;
-	const others = sizes.reduce((sum, n, i) => (i === largest ? sum : sum + n), 0) + separators;
-	if (others >= capBytes) return null;
+	const originalBytes = sizes.reduce((sum, n) => sum + n, 0) + separators;
+	const joined = texts.join("\n");
 
-	const inner = truncateToolOutput(texts[largest] ?? "", capBytes - others);
-	if (inner.strategy === "none") return null;
-	const joined = texts.map((t, i) => (i === largest ? inner.content : t)).join("\n");
-	const finalBytes = Buffer.byteLength(joined, "utf8");
-	if (finalBytes > capBytes) return null;
-	return {
-		content: joined,
-		originalBytes: sizes.reduce((sum, n) => sum + n, 0) + separators,
-		finalBytes,
-		strategy: inner.strategy,
-	};
+	// The serialized block array can exceed the cap while the texts themselves fit: JSON escaping
+	// of newlines and quotes inflated a 22.6 KB hit to 29 KB. Nothing needs cutting then, but the
+	// caller must still get the texts -- returning null here sent them down the block-array path,
+	// which kept 121 bytes.
+	if (originalBytes <= capBytes) {
+		return { content: joined, originalBytes, finalBytes: originalBytes, strategy: "text-blocks" };
+	}
+
+	const largest = sizes.indexOf(Math.max(...sizes));
+	const others = originalBytes - (sizes[largest] ?? 0);
+	if (others < capBytes) {
+		const inner = truncateToolOutput(texts[largest] ?? "", capBytes - others);
+		const reduced = texts.map((t, i) => (i === largest ? inner.content : t)).join("\n");
+		const finalBytes = Buffer.byteLength(reduced, "utf8");
+		if (inner.strategy !== "none" && finalBytes <= capBytes) {
+			return { content: reduced, originalBytes, finalBytes, strategy: inner.strategy };
+		}
+	}
+	// Several oversize blocks (one block per hit): cut the joined text. A head of real hits beats
+	// the block-array path, which drops everything when the first block alone is over the cap.
+	return truncateToolOutput(joined, capBytes);
 }
 
 function stringifyContent(content: unknown): string {

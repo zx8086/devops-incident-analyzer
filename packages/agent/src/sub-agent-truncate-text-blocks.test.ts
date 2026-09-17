@@ -47,13 +47,42 @@ describe("SIO-1782: multi-block text results are truncated by their texts", () =
 		expect(r?.content).toContain("service-999");
 	});
 
-	test("falls back (null) for non-text blocks, non-arrays, and blocks that cannot fit", () => {
+	test("returns null only for content that is not all text blocks", () => {
 		expect(truncateTextBlocks("plain string", CAP)).toBeNull();
 		expect(truncateTextBlocks([], CAP)).toBeNull();
 		expect(truncateTextBlocks([{ type: "image_url", image_url: "x" }, blocks[1]], CAP)).toBeNull();
-		const twoHuge = [{ type: "text", text: "a".repeat(CAP) }, blocks[1]];
-		expect(truncateTextBlocks(twoHuge, CAP)).toBeNull();
 	});
+
+	// Live, SIO-1775 arm C: a 26.6 KB hits result reached the model as 138 bytes under a 24576 cap.
+	// search.ts renders one text block per hit, newline- and quote-heavy, so JSON escaping pushed
+	// the SERIALIZED array over the cap while the texts fit. Nothing needed cutting.
+	test("texts that fit are returned whole even when their serialized form is over the cap", () => {
+		const cap = 24576;
+		const hit = `Document ID: abc\nScore: 1\n\n${Array.from({ length: 400 }, (_, i) => `field_${i}: {\n  "k": "v${i}",\n  "msg": "line \\"quoted\\""\n}`).join("\n")}`;
+		const hits = [
+			{ type: "text", text: "Total results: 1, showing 1 from position 0" },
+			{ type: "text", text: hit },
+		];
+		expect(Buffer.byteLength(JSON.stringify(hits), "utf8")).toBeGreaterThan(cap);
+		expect(truncateToolOutput(JSON.stringify(hits), cap).finalBytes).toBeLessThan(200);
+
+		const r = truncateTextBlocks(hits, cap);
+		expect(r?.strategy).toBe("text-blocks");
+		expect(r?.content).toContain("field_399");
+		expect(r?.finalBytes).toBe(r?.originalBytes);
+	});
+
+	test("several oversize blocks keep a head of real content instead of nothing", () => {
+		const twoHuge = [
+			{ type: "text", text: `first-hit ${"a".repeat(CAP)}` },
+			{ type: "text", text: `second-hit ${"b".repeat(CAP)}` },
+		];
+		const r = truncateTextBlocks(twoHuge, CAP);
+		expect(r?.content).toContain("first-hit");
+		expect(r?.finalBytes).toBeLessThanOrEqual(CAP);
+		expect(r?.finalBytes).toBeGreaterThan(CAP / 4);
+	});
+
 	// Greptile, PR #814: at a cap small enough that the key list itself is trimmed, the entry was
 	// rebuilt from _keys/_bucketCount alone and the scalars were lost again.
 	test("scalar siblings survive when the key list has to be trimmed to fit", () => {

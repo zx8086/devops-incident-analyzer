@@ -18,6 +18,7 @@ export type TruncationStrategy =
 	| "json-hits"
 	| "json-nodes"
 	| "json-array"
+	| "text-blocks"
 	| "json-rows"
 	| "json-agg-keys"
 	| "markdown-json"
