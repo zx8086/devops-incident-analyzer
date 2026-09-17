@@ -527,11 +527,22 @@ function processResult(
 	// index is off or the result was small enough to pass through whole.
 	indexedRows = 0,
 ): unknown {
+	// SIO-1774: a tool that declares an outputSchema reaches the model TWICE. For a result with
+	// one text block plus structuredContent, @langchain/mcp-adapters (1.1.3, tools.js
+	// _convertCallToolResult) returns the content as { type, text, structuredContent } and ALSO
+	// files the structured copy under artifact. On run f77ce7dd aws_cloudwatch_describe_alarms
+	// was 78.6 KB = 37.3 KB of text + 38.6 KB of the same alarms again, and that one result
+	// lifted every later turn from 22k to 70k tokens. The model gets the text only; the
+	// structured copy is untouched where it is actually consumed (rawOutputs.structuredContent,
+	// read from the artifact before this function runs).
+	const deduped = dropDuplicateStructuredContent(extractContent(result));
+	if (deduped !== null) result = rebuildResult(result, deduped);
 	const content = extractContent(result);
 	const { bytes, shape } = describeToolResult(content);
 	ctx.log.info(
 		{
 			event: "subagent.tool_result",
+			...(deduped !== null && { structuredDuplicateDropped: true }),
 			dataSourceId: ctx.dataSourceId,
 			deploymentId: ctx.deploymentId,
 			toolName,
@@ -581,6 +592,28 @@ function processResult(
 			? `${truncated.content}\n\n[Truncated for context: ${truncated.originalBytes} bytes cut to ${truncated.finalBytes}. The full result is searchable: call search_evidence with a query and tool="${toolName}" to retrieve any part of it, including what was cut.]`
 			: truncated.content;
 	return rebuildResult(result, cappedContent);
+}
+
+// Returns the text when `content` is exactly the adapter's text+structuredContent wrapper
+// (as an object, or as the JSON string a ToolMessage carries it in); null for anything else,
+// including a tool whose own payload merely happens to have a `text` key.
+const STRUCTURED_WRAPPER_KEYS = new Set(["type", "text", "structuredContent", "meta"]);
+export function dropDuplicateStructuredContent(content: unknown): string | null {
+	let candidate: unknown = content;
+	if (typeof content === "string") {
+		// Cheap reject before parsing what may be hundreds of KB.
+		if (!content.startsWith("{") || !content.includes('"structuredContent"')) return null;
+		try {
+			candidate = JSON.parse(content);
+		} catch {
+			return null;
+		}
+	}
+	if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+	const wrapper = candidate as Record<string, unknown>;
+	if (wrapper.type !== "text" || typeof wrapper.text !== "string" || !("structuredContent" in wrapper)) return null;
+	if (!Object.keys(wrapper).every((k) => STRUCTURED_WRAPPER_KEYS.has(k))) return null;
+	return wrapper.text;
 }
 
 function extractContent(result: unknown): unknown {

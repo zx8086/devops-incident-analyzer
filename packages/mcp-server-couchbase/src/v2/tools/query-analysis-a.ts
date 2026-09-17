@@ -44,7 +44,6 @@ import {
 	detailedIndexesQuery,
 	detailedPreparedStatementsQuery,
 	documentTypeExamples,
-	n1qlCompletedRequests,
 	n1qlIndexAdvisor,
 	n1qlIndexesToDrop,
 	n1qlLargestResultCountQueries,
@@ -52,6 +51,12 @@ import {
 	n1qlLongestRunningQueries,
 	n1qlQueryFatalRequests,
 } from "../../tools/queryAnalysis/analysisQueries";
+import {
+	buildQuery as buildCompletedRequestsQuery,
+	COMPLETED_REQUESTS_DESCRIPTION,
+	COMPLETED_REQUESTS_LIMIT_DESCRIPTION,
+	COMPLETED_REQUESTS_PLAN_DESCRIPTION,
+} from "../../tools/queryAnalysis/getCompletedRequests";
 import { formatAdvisorResult } from "../../tools/queryAnalysis/getIndexAdvisor";
 import {
 	buildAnalysisErrorResponse,
@@ -124,41 +129,29 @@ export function registerQueryAnalysisToolsAV2(server: McpServer, tools: Map<stri
 	);
 	tools.set("capella_analyze_document_structure", analyzeDocumentStructure);
 
-	// capella_get_completed_requests -- ported verbatim from getCompletedRequests.ts.
+	// capella_get_completed_requests. SIO-1774: no longer a verbatim port -- the query is built
+	// by the one buildQuery in getCompletedRequests.ts, so the slim projection, the duration
+	// ordering and the status mapping cannot drift between the two registrations.
 	const getCompletedRequests = server.registerTool(
 		"capella_get_completed_requests",
 		{
-			description: "Get recent completed query requests with detailed execution information",
+			description: COMPLETED_REQUESTS_DESCRIPTION,
 			inputSchema: z.object({
-				limit: z.number().int().positive().optional().describe("Optional limit for the number of results to return"),
+				limit: z.number().int().positive().optional().describe(COMPLETED_REQUESTS_LIMIT_DESCRIPTION),
 				period: z
 					.enum(["day", "week", "month", "quarter"])
 					.optional()
 					.describe("Time period to analyze (day, week, month, quarter)"),
 				status: z.enum(["success", "fatal", "timeout", "all"]).optional().describe("Filter by request status"),
+				includePlan: z.boolean().optional().describe(COMPLETED_REQUESTS_PLAN_DESCRIPTION),
 			}),
 			annotations: READ_ONLY_ANNOTATIONS,
 		},
 		async (input) => {
 			logger.info(input, "Getting completed requests");
 			const bucket = await connectionManager.getConnection();
-			const { limit, period, status } = input;
-			const parameters: Record<string, unknown> = {};
-			let query = applyPeriod(n1qlCompletedRequests, period);
-
-			if (status && status !== "all") {
-				query = query.includes("WHERE")
-					? query.replace(/WHERE/, "WHERE state = $status AND")
-					: query.replace(/ORDER BY/, "WHERE state = $status ORDER BY");
-				parameters.status = status;
-			}
-
-			const effectiveLimit = limit && Number.isInteger(limit) && limit > 0 ? limit : DEFAULT_ANALYSIS_LIMIT;
-			query = query.includes("LIMIT")
-				? query.replace(/LIMIT \d+/i, `LIMIT ${effectiveLimit}`)
-				: `${query.replace(";", "")} LIMIT ${effectiveLimit};`;
-
-			return executeAnalysisQuery(bucket, query, "Completed Query Requests", limit, parameters);
+			const { query, parameters } = buildCompletedRequestsQuery(input);
+			return executeAnalysisQuery(bucket, query, "Completed Query Requests", input.limit, parameters);
 		},
 	);
 	tools.set("capella_get_completed_requests", getCompletedRequests);

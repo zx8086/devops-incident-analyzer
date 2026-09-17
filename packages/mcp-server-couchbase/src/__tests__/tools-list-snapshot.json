@@ -57,7 +57,7 @@
 			}
 		},
 		"capella_get_completed_requests": {
-			"surfaceHash": "df993c874513601abc9dfbd18aceec6be9c1cbdb6384982949948c9f26c1a016",
+			"surfaceHash": "8fd63820b7122972fa0c56d0f538af49d9a4a9e7395bb611482c7f0552b185e0",
 			"annotations": {
 				"readOnlyHint": true,
 				"destructiveHint": false

@@ -11,7 +11,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Bucket } from "couchbase";
 import { createMcpServerFactory } from "../server.ts";
-import { DEFAULT_ANALYSIS_LIMIT } from "../tools/queryAnalysis/analysisQueries.ts";
+import { COMPLETED_REQUESTS_DEFAULT_LIMIT, DEFAULT_ANALYSIS_LIMIT } from "../tools/queryAnalysis/analysisQueries.ts";
 import { buildQuery as buildCompletedRequestsQuery } from "../tools/queryAnalysis/getCompletedRequests.ts";
 import { buildQuery as buildFatalRequestsQuery } from "../tools/queryAnalysis/getFatalRequests.ts";
 
@@ -77,7 +77,8 @@ describe("SIO-1430: queryAnalysis limit must be a positive integer", () => {
 	// instead of splicing "LIMIT 0.5" into SQL.
 	test("exported builders fall back to the default for non-integer limits", () => {
 		for (const limit of [0.5, 0, -3]) {
-			expect(buildCompletedRequestsQuery({ limit }).query).toContain(`LIMIT ${DEFAULT_ANALYSIS_LIMIT}`);
+			// SIO-1774: completed requests has its own, smaller default.
+			expect(buildCompletedRequestsQuery({ limit }).query).toContain(`LIMIT ${COMPLETED_REQUESTS_DEFAULT_LIMIT}`);
 			expect(buildFatalRequestsQuery({ limit }).query).toContain(`LIMIT ${DEFAULT_ANALYSIS_LIMIT}`);
 		}
 		expect(buildCompletedRequestsQuery({ limit: 7 }).query).toContain("LIMIT 7");
