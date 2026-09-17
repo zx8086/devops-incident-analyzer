@@ -35,7 +35,7 @@ export type PiFleetEntry = {
 	response: unknown;
 	error: string | null;
 	// SIO-1778: set when the entry was sent by a verify/investigate card rather than
-	// typed into the pane. The card keeps the structured result; the pane shows the send.
+	// typed into the pane. SIO-1789: the pane renders the structured result; the card only sends.
 	label?: "verify" | "investigate";
 };
 

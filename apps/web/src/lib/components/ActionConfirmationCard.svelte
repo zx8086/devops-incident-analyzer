@@ -3,26 +3,27 @@
 import type { ActionResult, PendingAction, PiActionResultPayload } from "@devops-agent/shared";
 import { isPiActionTool } from "@devops-agent/shared/src/pi-coms-types.ts";
 import Icon from "./Icon.svelte";
+import PiReplyBody, { verdictColors } from "./PiReplyBody.svelte";
 
 let {
 	action,
 	onApprove,
 	onDismiss,
 	result,
+	resultInPane = true,
 }: {
 	action: PendingAction;
 	onApprove: (action: PendingAction) => void;
 	onDismiss: (actionId: string) => void;
 	result?: ActionResult;
+	// SIO-1789: the fleet pane renders the pi verdict / investigation; this card only
+	// sends it there and reports that it finished. False when no pane is configured:
+	// the pane entry is never shown then, so the card is the only place left for a
+	// result that took 5 to 15 minutes to get.
+	resultInPane?: boolean;
 } = $props();
 
 let isExecuting = $state(false);
-
-// SIO-1696: a verdict card carries every claim with its evidence line, and an
-// investigation card every evidence block -- enough to swamp the chat column.
-// Expanded on arrival (the verdict IS the deliverable), collapsible to a header
-// that still shows the verdict/confidence badge and the estate.
-let expanded = $state(true);
 
 const toolLabels: Record<string, string> = {
 	"notify-slack": "Send Slack Notification",
@@ -54,20 +55,6 @@ const severityColors: Record<string, string> = {
 	info: "bg-gray-100 text-gray-600 border-gray-200",
 };
 
-// SIO-1635: claim and verdict chips. Hub replies are data: rendered, never executed.
-const claimColors: Record<string, string> = {
-	confirmed: "bg-green-100 text-green-800 border-green-200",
-	contradicted: "bg-red-100 text-red-800 border-red-200",
-	unverifiable: "bg-yellow-100 text-yellow-800 border-yellow-200",
-};
-
-const verdictColors: Record<string, string> = {
-	confirmed: "bg-green-100 text-green-800 border-green-200",
-	partially_confirmed: "bg-yellow-100 text-yellow-800 border-yellow-200",
-	contradicted: "bg-red-100 text-red-800 border-red-200",
-	unverifiable: "bg-gray-100 text-gray-600 border-gray-200",
-};
-
 function getSeverity(): string {
 	return String(action.params.severity ?? "medium");
 }
@@ -91,10 +78,6 @@ function piPayload(): PiActionResultPayload | null {
 	return null;
 }
 
-function humanize(s: string): string {
-	return s.replace(/_/g, " ");
-}
-
 async function handleApprove() {
 	isExecuting = true;
 	onApprove(action);
@@ -113,101 +96,29 @@ async function handleApprove() {
 				No pi agent for estate {pi.estate} is online. The task is parked in the hub mailbox and will be picked up when the agent connects (message {pi.msg_id}).
 			</p>
 		</div>
-	{:else if result.status === "success" && pi?.kind === "verdict"}
-		<div class="rounded-lg border border-gray-200 bg-white px-3 py-3 mt-2 shadow-sm">
-			<button
-				type="button"
-				onclick={() => (expanded = !expanded)}
-				aria-expanded={expanded}
-				class="w-full flex items-center gap-2 text-left {expanded ? 'mb-2' : ''}"
-			>
-				<Icon name="bot" class="w-4 h-4 text-tommy-navy" />
-				<span class="text-sm font-semibold text-tommy-navy">{toolLabels[action.tool] ?? action.tool}</span>
-				<span class="text-xs px-2 py-0.5 rounded-full border {verdictColors[pi.verdict.verdict] ?? verdictColors.unverifiable}">
-					{humanize(pi.verdict.verdict)}
-				</span>
+	{:else if result.status === "success" && (pi?.kind === "verdict" || pi?.kind === "investigation")}
+		<div class="rounded-lg border border-gray-200 bg-white px-3 py-2 mt-2 shadow-sm">
+			<div class="flex items-center gap-2 text-sm">
+				<Icon name={pi.kind === "verdict" ? "bot" : "zoom-in"} class="w-4 h-4 text-tommy-navy" />
+				<span class="font-semibold text-tommy-navy">{toolLabels[action.tool] ?? action.tool}</span>
+				{#if pi.kind === "verdict"}
+					<span class="text-xs px-2 py-0.5 rounded-full border {verdictColors[pi.verdict.verdict] ?? verdictColors.unverifiable}">
+						{pi.verdict.verdict.replace(/_/g, " ")}
+					</span>
+				{/if}
+				{#if resultInPane}
+					<span class="text-xs text-gray-600">Result in the fleet pane</span>
+				{/if}
 				<span class="text-xs text-gray-500 ml-auto">{pi.target} / {pi.estate}</span>
-				<Icon
-					name="chevron-down"
-					class="w-3 h-3 text-gray-400 shrink-0 transition-transform {expanded ? 'rotate-180' : ''}"
-				/>
-			</button>
-			{#if expanded}
-			<div class="animate-slide-up-fade">
-			<p class="text-sm text-gray-800 mb-2">{pi.verdict.summary}</p>
-			{#if pi.verdict.claims.length > 0}
-				<ul class="space-y-1 mb-2">
-					{#each pi.verdict.claims as claim, i (i)}
-						<li class="text-xs bg-gray-50 rounded p-2">
-							<div class="flex items-start gap-2">
-								<span class="px-1.5 py-0.5 rounded-full border shrink-0 {claimColors[claim.status] ?? claimColors.unverifiable}">{claim.status}</span>
-								<span class="text-gray-800">{claim.claim}</span>
-							</div>
-							<div class="text-gray-500 mt-1 pl-1">Evidence: {claim.evidence}</div>
-						</li>
-					{/each}
-				</ul>
-			{/if}
-			{#if pi.verdict.additional_observations && pi.verdict.additional_observations.length > 0}
-				<div class="text-xs text-gray-700 mb-1">
-					<span class="font-medium">Also observed:</span>
-					<ul class="list-disc pl-5">
-						{#each pi.verdict.additional_observations as obs, i (i)}
-							<li>{obs}</li>
-						{/each}
-					</ul>
-				</div>
-			{/if}
-			{#if pi.verdict.recommended_investigation}
-				<p class="text-xs text-gray-700"><span class="font-medium">Recommended next step:</span> {pi.verdict.recommended_investigation}</p>
-			{/if}
 			</div>
-			{/if}
-		</div>
-	{:else if result.status === "success" && pi?.kind === "investigation"}
-		<div class="rounded-lg border border-gray-200 bg-white px-3 py-3 mt-2 shadow-sm">
-			<button
-				type="button"
-				onclick={() => (expanded = !expanded)}
-				aria-expanded={expanded}
-				class="w-full flex items-center gap-2 text-left {expanded ? 'mb-2' : ''}"
-			>
-				<Icon name="zoom-in" class="w-4 h-4 text-tommy-navy" />
-				<span class="text-sm font-semibold text-tommy-navy">{toolLabels[action.tool] ?? action.tool}</span>
-				<span class="text-xs px-2 py-0.5 rounded-full border bg-gray-100 text-gray-600 border-gray-200">
-					confidence {Math.round(pi.investigation.confidence * 100)}%
-				</span>
-				<span class="text-xs text-gray-500 ml-auto">{pi.target} / {pi.estate}</span>
-				<Icon
-					name="chevron-down"
-					class="w-3 h-3 text-gray-400 shrink-0 transition-transform {expanded ? 'rotate-180' : ''}"
-				/>
-			</button>
-			{#if expanded}
-			<div class="animate-slide-up-fade">
-			<p class="text-sm text-gray-800 mb-2">{pi.investigation.summary}</p>
-			<p class="text-xs text-gray-700 mb-2"><span class="font-medium">Root cause hypothesis:</span> {pi.investigation.root_cause_hypothesis}</p>
-			{#if pi.investigation.evidence.length > 0}
-				<ul class="space-y-1 mb-2">
-					{#each pi.investigation.evidence as row, i (i)}
-						<li class="text-xs bg-gray-50 rounded p-2">
-							<span class="font-mono text-gray-600">{row.resource}</span>
-							<span class="text-gray-800"> {row.observation}</span>
-						</li>
-					{/each}
-				</ul>
-			{/if}
-			{#if pi.investigation.suggested_actions.length > 0}
-				<div class="text-xs text-gray-700">
-					<span class="font-medium">Suggested actions:</span>
-					<ul class="list-disc pl-5">
-						{#each pi.investigation.suggested_actions as step, i (i)}
-							<li>{step}</li>
-						{/each}
-					</ul>
+			{#if !resultInPane}
+				<div class="mt-2">
+					{#if pi.kind === "verdict"}
+						<PiReplyBody verdict={pi.verdict} />
+					{:else}
+						<PiReplyBody investigation={pi.investigation} />
+					{/if}
 				</div>
-			{/if}
-			</div>
 			{/if}
 		</div>
 	{:else}

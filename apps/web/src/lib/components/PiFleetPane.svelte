@@ -9,12 +9,19 @@
 // browser and SSR (isomorphic-dompurify, markdown.ts) -- this pane server-renders
 // agent-authored text about production accounts, so a browser-only guard would
 // leave untrusted input on an unsanitized path.
+import {
+	type PiInvestigation,
+	PiInvestigationSchema,
+	type PiVerdict,
+	PiVerdictSchema,
+} from "@devops-agent/shared/src/pi-coms-types.ts";
 import type { PiFleetEnvironment } from "$lib/pi-fleet-types";
 import { formatReply, isTerminal, type PiFleetSelection, type PiFleetState } from "$lib/stores/pi-fleet-reducer";
 import { emphasiseDigest } from "../digest-emphasis.ts";
 import { isNotableStatus, messageAge } from "../message-age.ts";
 import Icon from "./Icon.svelte";
 import MarkdownRenderer from "./MarkdownRenderer.svelte";
+import PiReplyBody from "./PiReplyBody.svelte";
 
 let {
 	pane,
@@ -44,6 +51,16 @@ let {
 } = $props();
 
 let prompt = $state("");
+
+// SIO-1789: a verify / investigate card's reply is a schema-constrained object. When it
+// parses as one of the two known shapes the pane renders it; anything else stays raw JSON.
+// Verdict first: the two schemas share only `summary`, so the order cannot misfile a reply.
+function structuredReply(response: unknown): { verdict?: PiVerdict; investigation?: PiInvestigation } | null {
+	const verdict = PiVerdictSchema.safeParse(response);
+	if (verdict.success) return { verdict: verdict.data };
+	const investigation = PiInvestigationSchema.safeParse(response);
+	return investigation.success ? { investigation: investigation.data } : null;
+}
 
 // SIO-1702: the console can only ask spokes it can reach. `consoleAvailable`
 // upstream is a DEPLOYMENT fact (flag + configured hub, both server-side); it
@@ -415,7 +432,7 @@ function onKeydown(event: KeyboardEvent) {
             <p class="mt-2 text-xs text-gray-500 flex items-center gap-1">
               <Icon name="spinner" class="w-3 h-3 animate-spin motion-reduce:animate-none" />
               {#if entry.label}
-                Waiting for {entry.target}. The result also lands on the card.
+                Waiting for {entry.target}. The result appears here.
               {:else}
                 Waiting for {entry.target} (up to {budgetSeconds} s)
               {/if}
@@ -426,14 +443,24 @@ function onKeydown(event: KeyboardEvent) {
             {/if}
             {#if formatReply(entry.response).trim() !== ""}
               <!-- SIO-1709: a STRING reply is the agent's prose and is markdown; an
-                   OBJECT reply is a schema-constrained payload that formatReply
-                   JSON-stringifies, and markdown would eat its braces and
-                   indentation. The reply type decides, so neither is mangled to
-                   suit the other. -->
+                   OBJECT reply is a schema-constrained payload, and markdown would
+                   eat its braces and indentation. The reply type decides.
+                   SIO-1789: an object that IS a pi verdict or investigation renders
+                   as one (this pane owns that view now, not the chat card), with the
+                   JSON one click away. Any other object stays raw JSON. -->
+              {@const structured = typeof entry.response === "string" ? null : structuredReply(entry.response)}
               {#if typeof entry.response === "string"}
                 <div class="mt-2 text-xs bg-tommy-offwhite rounded p-2 overflow-x-auto break-words">
                   <MarkdownRenderer content={entry.response} />
                 </div>
+              {:else if structured}
+                <div class="mt-2 bg-tommy-offwhite rounded p-2 break-words">
+                  <PiReplyBody verdict={structured.verdict} investigation={structured.investigation} />
+                </div>
+                <details class="mt-1 text-xs text-gray-600">
+                  <summary class="cursor-pointer select-none">Raw reply</summary>
+                  <pre class="mt-1 bg-tommy-offwhite rounded p-2 overflow-x-auto whitespace-pre-wrap break-words">{formatReply(entry.response)}</pre>
+                </details>
               {:else}
                 <pre class="mt-2 text-xs bg-tommy-offwhite rounded p-2 overflow-x-auto whitespace-pre-wrap break-words">{formatReply(entry.response)}</pre>
               {/if}

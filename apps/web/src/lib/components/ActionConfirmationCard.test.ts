@@ -41,7 +41,7 @@ describe("ActionConfirmationCard pi-coms", () => {
 		expect(body).toContain("recommended: check ECS events");
 	});
 
-	test("verdict result renders the verdict chip, claims and evidence", () => {
+	test("verdict result is a status line pointing at the fleet pane; the body only without a pane", () => {
 		const result: ActionResult = {
 			actionId: "a1",
 			tool: "verify-with-pi",
@@ -63,23 +63,30 @@ describe("ActionConfirmationCard pi-coms", () => {
 				},
 			},
 		};
+		// SIO-1789: the fleet pane renders the verdict. The card only reports that it
+		// finished: the chip and where to look, none of the claims.
 		const { body } = render(ActionConfirmationCard, {
 			props: { action: verifyAction, onApprove: noop, onDismiss: noop, result },
 		});
 		expect(body).toContain("partially confirmed");
-		expect(body).toContain("Spike confirmed, cause not observed.");
-		expect(body).toContain("contradicted");
-		expect(body).toContain("no deregistrations");
-		expect(body).toContain("ECS deploy at 10:00");
-		expect(body).toContain("Check ECS service events.");
+		expect(body).toContain("Result in the fleet pane");
+		expect(body).toContain("estate-1-agent / estate-1");
+		expect(body).not.toContain("Spike confirmed, cause not observed.");
+		expect(body).not.toContain("no deregistrations");
 		expect(body).not.toContain("Approve");
-		// SIO-1696: the card is collapsible but arrives expanded -- the body above
-		// is present on first render, and the header carries the toggle.
-		expect(body).toContain('aria-expanded="true"');
-		expect(body).toContain("transition-transform rotate-180");
+
+		// No pane configured: the entry is never shown, so the card keeps the result.
+		const fallback = render(ActionConfirmationCard, {
+			props: { action: verifyAction, onApprove: noop, onDismiss: noop, result, resultInPane: false },
+		}).body;
+		expect(fallback).not.toContain("Result in the fleet pane");
+		expect(fallback).toContain("Spike confirmed, cause not observed.");
+		expect(fallback).toContain("no deregistrations");
+		expect(fallback).toContain("ECS deploy at 10:00");
+		expect(fallback).toContain("Check ECS service events.");
 	});
 
-	test("investigation result renders hypothesis, evidence and actions", () => {
+	test("investigation result is a status line; hypothesis, evidence and actions only without a pane", () => {
 		const action: PendingAction = {
 			id: "a2",
 			tool: "investigate-with-pi",
@@ -105,12 +112,17 @@ describe("ActionConfirmationCard pi-coms", () => {
 			},
 		};
 		const { body } = render(ActionConfirmationCard, { props: { action, onApprove: noop, onDismiss: noop, result } });
-		expect(body).toContain("confidence 80%");
-		expect(body).toContain("minimumHealthyPercent 0");
-		expect(body).toContain("ecs:service/checkout");
-		expect(body).toContain("Set minimumHealthyPercent to 100");
-		expect(body).toContain('aria-expanded="true"');
-		expect(body).toContain("transition-transform rotate-180");
+		expect(body).toContain("Launch pi investigation");
+		expect(body).toContain("Result in the fleet pane");
+		expect(body).not.toContain("minimumHealthyPercent 0");
+
+		const fallback = render(ActionConfirmationCard, {
+			props: { action, onApprove: noop, onDismiss: noop, result, resultInPane: false },
+		}).body;
+		expect(fallback).toContain("confidence 80%");
+		expect(fallback).toContain("minimumHealthyPercent 0");
+		expect(fallback).toContain("ecs:service/checkout");
+		expect(fallback).toContain("Set minimumHealthyPercent to 100");
 	});
 
 	test("queued result explains the mailbox fallback", () => {

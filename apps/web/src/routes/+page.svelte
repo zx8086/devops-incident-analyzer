@@ -447,6 +447,7 @@ function handleSuggestionClick(suggestion: string) {
             onFeedback={(idx, score) => agentStore.setFeedback(idx, score)}
             pendingActions={i === agentStore.messages.length - 1 ? agentStore.pendingActions : []}
             actionResults={i === agentStore.messages.length - 1 ? agentStore.actionResults : []}
+            piResultInPane={piFleetStore.configured}
             onActionApprove={(action) => agentStore.executeAction(action, msg.content)}
             onActionDismiss={(id) => agentStore.dismissAction(id)}
             ticketProviders={ticketProviders}
@@ -521,6 +522,7 @@ function handleSuggestionClick(suggestion: string) {
               onFeedback={(idx, score) => agentStore.setFeedback(idx, score)}
               pendingActions={agentStore.pendingActions}
               actionResults={agentStore.actionResults}
+              piResultInPane={piFleetStore.configured}
               onActionApprove={(action) => agentStore.executeAction(action, summaryMsg.content)}
               onActionDismiss={(id) => agentStore.dismissAction(id)}
               ticketProviders={ticketProviders}
@@ -554,6 +556,7 @@ function handleSuggestionClick(suggestion: string) {
               onFeedback={(idx, score) => agentStore.setFeedback(idx, score)}
               pendingActions={agentStore.pendingActions}
               actionResults={agentStore.actionResults}
+              piResultInPane={piFleetStore.configured}
               onActionApprove={(action) => agentStore.executeAction(action, synthSummaryMsg.content)}
               onActionDismiss={(id) => agentStore.dismissAction(id)}
               ticketProviders={ticketProviders}

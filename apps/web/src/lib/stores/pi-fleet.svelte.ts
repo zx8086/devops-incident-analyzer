@@ -142,9 +142,10 @@ function createPiFleetStore() {
 	}
 
 	// SIO-1778: a verify/investigate card's Approve. The send and the wait happen here,
-	// visibly, in short requests; the card gets the validated result back and renders
-	// it exactly as before. Works without pane tokens: the action route sends as the
-	// analyzer principal, so an unconfigured pane only means the entry is not shown.
+	// visibly, in short requests. SIO-1789: the pane entry renders the validated result;
+	// the card gets it back only to show a status line and raise follow-up cards. Works
+	// without pane tokens: the action route sends as the analyzer principal, so an
+	// unconfigured pane means the entry is not shown and the card renders the result itself.
 	async function runAction(action: PendingAction, reportContent: string): Promise<ActionResult> {
 		const id = crypto.randomUUID();
 		const label = action.tool === "investigate-with-pi" ? "investigate" : "verify";

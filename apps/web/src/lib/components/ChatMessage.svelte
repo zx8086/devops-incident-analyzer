@@ -35,6 +35,7 @@ let {
 	onFeedback,
 	pendingActions = [],
 	actionResults = [],
+	piResultInPane = true,
 	onActionApprove,
 	onActionDismiss,
 	ticketProviders = [],
@@ -50,6 +51,8 @@ let {
 	onFeedback?: (index: number, score: "up" | "down") => void;
 	pendingActions?: PendingAction[];
 	actionResults?: ActionResult[];
+	// SIO-1789: false when no fleet pane is configured, so the pi cards keep their result.
+	piResultInPane?: boolean;
 	onActionApprove?: (action: PendingAction) => void;
 	onActionDismiss?: (actionId: string) => void;
 	ticketProviders?: TicketProviderInfo[];
@@ -187,6 +190,7 @@ const commentMode = $derived(canCommentOnThreadTicket && threadTicket !== null);
               onApprove={onActionApprove}
               onDismiss={onActionDismiss}
               result={actionResults.find((r) => r.actionId === action.id)}
+              resultInPane={piResultInPane}
             />
           {/each}
         {/if}
