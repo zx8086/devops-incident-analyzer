@@ -6,7 +6,7 @@
 | Tickets | [SIO-1786](https://linear.app/siobytes/issue/SIO-1786) Done (its user-side replay has since been run, see the update), [SIO-1787](https://linear.app/siobytes/issue/SIO-1787) Done (closed by the user 2026-09-17, was In Review when this was written), [SIO-1788](https://linear.app/siobytes/issue/SIO-1788) Done |
 | Related | [SIO-1726](https://linear.app/siobytes/issue/SIO-1726), [SIO-1734](https://linear.app/siobytes/issue/SIO-1734) (spoke context-mode, shipped earlier), [SIO-1774](https://linear.app/siobytes/issue/SIO-1774) (the change the AgentCore deploy shipped), [SIO-1784](https://linear.app/siobytes/issue/SIO-1784) (separate, own handover: `experiments/HANDOFF-2026-09-17-SIO-1784.md`) |
 | PRs | #819 merged as `798e9b29`, #820 merged as `61b43f87` |
-| Repo state | `origin/main` at `61b43f87` when written; `4426ae7d` after the follow-up session (PRs #821, #822, #823). No branch is open. |
+| Repo state | `origin/main` at `61b43f87` when written; `7a77c575` after the follow-up session (PRs #821, #822, #823, #824). No branch is open. |
 | Deployed state | Fleet bundle `61b43f87` on all 8 spokes and both hubs. AWS AgentCore runtime on v16. |
 | Nature | Nothing here is in progress. This is a list of loose ends, each small and independent. None has a ticket unless one is named. |
 
@@ -146,9 +146,24 @@ package script does that too.
   AWS or elastic tool that gains an `outputSchema` is covered too. Seen in passing and NOT
   investigated: with focus `pvh-services-styles-v3`, 25 of 26 alarms counted as in focus although no
   alarm exists for that service, so `matchesFocus` may be matching on shared name fragments.
-- [SIO-1791](https://linear.app/siobytes/issue/SIO-1791) (Backlog): `subagent.loop_guard_stop` logs
-  `unproductiveSearches`, a counter only the `elasticsearch_search` path increments, so it reads 0
-  for every other tool; and `reason: unproductive-streak` also covers the run-wide backstop.
+- [SIO-1791](https://linear.app/siobytes/issue/SIO-1791), merged as PR #824 (`7a77c575`):
+  `subagent.loop_guard_stop` logged `unproductiveSearches: 0` next to `reason: unproductive-streak`
+  for `gitlab_search` on both live runs. The REASON was right both times (three empty results in a
+  row, per-tool cap 3); the line was not. `unproductiveSearches` is a counter only the
+  `elasticsearch_search` path increments, so it reads 0 for every other tool. The line now also logs
+  `unproductiveForTool` and `totalUnproductive`, and the run-wide cap (`MAX_UNPRODUCTIVE_PER_RUN`),
+  which used to be reported as a streak although it can stop a tool that never came back empty
+  itself, is `reason: run-backstop`. `stopReasonFor` in `packages/agent/src/sub-agent-loop-guard.ts`
+  takes an optional tool name and follows `shouldShortCircuit`'s order, per-tool cap first.
+  Deliberately unchanged: the text the model reads. The reason also selects the stop message and
+  `gitlab-agent`'s project-resolution skill keys on that wording; `stopMessageFor` only
+  special-cases `duplicate-call`, so the new value selects no new message (pinned by a test). The
+  split is generic-path only, so `elasticsearch_search` and `aws_logs_start_query`, which have their
+  own caps, are never labelled from the generic counters. Left alone on purpose: on a run-wide stop
+  the model still reads that the tool "has returned nothing useful several times in a row", which
+  may not be true of that tool; changing it is a model-behaviour change and a separate decision.
+  Not yet seen in a run: whether the running web app picked the agent package change up by hot
+  reload, or needs a restart, was not checked.
 - Checked and NOT bugs: the Couchbase and Elastic findings cards at `rawCount: 0` (their source
   tools were not called, or did not match), one AWS sub-agent turn at 165k input tokens (two results
   just under the 131072-byte cap set by `SUBAGENT_TOOL_RESULT_CAP_BYTES`; the cap bounds a result,
