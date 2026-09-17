@@ -1783,6 +1783,12 @@ ${state.correlationFetchDirective}`
 		const sandbox: SandboxRunner | undefined = isEvidenceExecEnabled()
 			? (await import("@devops-agent/shared/src/sandbox-exec.ts")).runInSandbox
 			: undefined;
+		// SIO-1775: what an elided result can still be reached with, named in the elision marker.
+		const recoveryTools = [evidenceIndex && SEARCH_EVIDENCE_TOOL_NAME, sandbox && RUN_JS_TOOL_NAME].filter(Boolean);
+		const elisionRecovery =
+			recoveryTools.length > 0
+				? `do not re-query for it: call ${recoveryTools.join(" or ")} to read any part of it.`
+				: undefined;
 		const instrumentedTools = instrumentTools(tools, {
 			dataSourceId,
 			deploymentId,
@@ -1846,7 +1852,7 @@ ${state.correlationFetchDirective}`
 				let outgoing = hookState.messages;
 
 				if (contextBudgetBytes != null) {
-					const budgeted = applyContextBudget(outgoing, contextBudgetBytes);
+					const budgeted = applyContextBudget(outgoing, contextBudgetBytes, elisionRecovery);
 					if (budgeted.elidedCount > 0) {
 						log.warn(
 							{

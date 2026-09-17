@@ -166,3 +166,22 @@ describe("applyContextBudget", () => {
 		expect(String(result.messages[1]?.content)).toBe("investigate");
 	});
 });
+
+describe("SIO-1775: the elision marker names the recovery tools the run has", () => {
+	const loop = () => buildLoop([60_000, 60_000, 60_000]);
+
+	test("without a recovery hint the marker still says re-query", () => {
+		const out = applyContextBudget(loop(), 100_000);
+		expect(out.elidedCount).toBeGreaterThan(0);
+		const marker = String(out.messages.find((m) => String(m.content).startsWith("[elided:"))?.content);
+		expect(marker).toContain("re-query only if");
+	});
+
+	test("with a recovery hint the marker replaces the re-query advice", () => {
+		const hint = "do not re-query for it: call search_evidence or run_js_on_evidence to read any part of it.";
+		const out = applyContextBudget(loop(), 100_000, hint);
+		const marker = String(out.messages.find((m) => String(m.content).startsWith("[elided:"))?.content);
+		expect(marker).toContain(hint);
+		expect(marker).not.toContain("re-query only if");
+	});
+});

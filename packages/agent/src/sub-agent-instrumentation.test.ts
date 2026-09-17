@@ -1267,6 +1267,27 @@ describe("SIO-1688 evidence index integration", () => {
 		expect(text).not.toContain("search_evidence");
 	});
 
+	// SIO-1775: the context budget can later elide a result the model received whole, and its
+	// marker points at search_evidence -- so a result over EVIDENCE_INDEX_MIN_BYTES is indexed
+	// even when the cap leaves it untouched. It is NOT annotated: nothing was cut.
+	test("a result over 8 KB but under the cap is indexed and not annotated", async () => {
+		const { logger } = makeLog();
+		const { calls, sink } = recordingIndex();
+		const payload = bigHitsPayload(40);
+		expect(Buffer.byteLength(payload, "utf8")).toBeGreaterThan(8192);
+		const wrapped = wrapOne(payload, {
+			dataSourceId: "elastic",
+			log: logger,
+			capBytes: 1_000_000,
+			evidenceIndex: sink,
+		});
+
+		const result = (await wrapped.invoke({ q: "errors" })) as ToolMessage | string;
+		const text = typeof result === "string" ? result : String(result.content);
+		expect(calls.length).toBe(1);
+		expect(text).not.toContain("search_evidence");
+	});
+
 	// The pointer must never name a search that would come back empty.
 	test("no pointer is appended when the index stored no rows", async () => {
 		const { logger } = makeLog();
