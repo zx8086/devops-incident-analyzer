@@ -76,7 +76,18 @@ export function shouldSuppressNodeWarning(
 
 type EmitWarning = typeof process.emitWarning;
 
-async function openNodeSqlite(dbPath: string, bare: boolean): Promise<SqliteDb> {
+type NodeSqlite = typeof import("node:sqlite");
+
+// Memoized, so the process-wide emitWarning swap below happens at most once. Done per
+// call it raced: concurrent first opens (per-run evidence indexes open lazily while the
+// aws and elastic sub-agents run in parallel) each saved whatever handler was current,
+// so a later caller captured an earlier caller's filter as "the original" and restored
+// that -- leaving SQLite warnings suppressed for the life of the web process
+// (Greptile, PR #805; reproduced under node with three concurrent opens).
+let nodeSqliteImport: Promise<NodeSqlite> | undefined;
+
+function importNodeSqlite(): Promise<NodeSqlite> {
+	if (nodeSqliteImport) return nodeSqliteImport;
 	// Node calls emitWarning synchronously while loading the builtin, so swapping it
 	// for the duration of the import covers the whole window; `finally` restores it
 	// even if the import throws (e.g. Node < 22.5 without node:sqlite).
@@ -86,12 +97,14 @@ async function openNodeSqlite(dbPath: string, bare: boolean): Promise<SqliteDb> 
 		Reflect.apply(originalEmitWarning, process, [warning, typeOrOptions, ...rest]);
 	};
 	process.emitWarning = filtered as unknown as EmitWarning;
-	let DatabaseSync: typeof import("node:sqlite")["DatabaseSync"];
-	try {
-		({ DatabaseSync } = await import(/* @vite-ignore */ "node:sqlite"));
-	} finally {
+	nodeSqliteImport = import(/* @vite-ignore */ "node:sqlite").finally(() => {
 		process.emitWarning = originalEmitWarning;
-	}
+	});
+	return nodeSqliteImport;
+}
+
+async function openNodeSqlite(dbPath: string, bare: boolean): Promise<SqliteDb> {
+	const { DatabaseSync } = await importNodeSqlite();
 	const db = new DatabaseSync(dbPath);
 	return {
 		exec(sql) {

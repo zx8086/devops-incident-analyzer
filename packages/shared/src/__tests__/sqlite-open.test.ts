@@ -1,10 +1,24 @@
 // shared/src/__tests__/sqlite-open.test.ts
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { openSqlite } from "../sqlite-open.ts";
 
+// node:sqlite needs Node >= 22.5. Absent or older node skips rather than fails: the
+// repo's runtime is Bun, and node is only the web app's dev host.
+function nodeHasSqlite(): boolean {
+	const node = Bun.which("node");
+	if (!node) return false;
+	const version = Bun.spawnSync([node, "--version"]).stdout.toString().trim().replace(/^v/, "");
+	const [major = 0, minor = 0] = version.split(".").map(Number);
+	return major > 22 || (major === 22 && minor >= 5);
+}
+
 // SIO-1772: both consumers' binding styles, plus the FTS5 features the evidence
-// index depends on. The node:sqlite half cannot run under `bun test`; it is proven
-// by bundling for node (see the PR), and both halves implement this same surface.
+// index depends on. The first two tests exercise the bun:sqlite half; the last one
+// bundles a probe and runs it under a real `node`, because the node:sqlite half is
+// the whole point of the module and cannot execute inside `bun test`.
 describe("openSqlite", () => {
 	test("prefixed params (default) with FTS5 porter, snippet and bm25", async () => {
 		const db = await openSqlite(":memory:");
@@ -27,4 +41,30 @@ describe("openSqlite", () => {
 		expect(db.prepare("SELECT name, n FROM t").all<{ name: string; n: number }>()).toEqual([{ name: "a", n: 2 }]);
 		db.close();
 	});
+
+	test.skipIf(!nodeHasSqlite())(
+		"node:sqlite half: same surface, and concurrent first opens restore emitWarning",
+		async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sqlite-open-node-"));
+			try {
+				const built = await Bun.build({
+					entrypoints: [join(import.meta.dir, "fixtures/sqlite-open-node-probe.ts")],
+					target: "node",
+					outdir: dir,
+				});
+				expect(built.success).toBe(true);
+				const run = Bun.spawnSync(["node", join(dir, "sqlite-open-node-probe.js")]);
+				expect(run.stderr.toString()).toBe("");
+				expect(JSON.parse(run.stdout.toString())).toEqual({
+					runtime: "node",
+					// Greptile, PR #805: per-call swapping raced and left the filter installed.
+					emitWarningRestored: true,
+					snippets: [{ s: "response was [cached] twice" }],
+					rows: [{ name: "a", n: 2 }],
+				});
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		},
+	);
 });
