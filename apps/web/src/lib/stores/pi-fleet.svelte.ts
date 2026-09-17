@@ -32,6 +32,9 @@ import {
 } from "./pi-fleet-reducer.ts";
 
 const PANE_OPEN_STORAGE_KEY = "pi-fleet-pane-open";
+// SIO-1778: pause between retries of a FAILED action poll (a successful poll already
+// blocks for one hub await slice, so it needs none).
+const POLL_RETRY_DELAY_MS = 3_000;
 
 async function readJson(res: Response): Promise<unknown> {
 	const body: unknown = await res.json().catch(() => null);
@@ -173,18 +176,30 @@ function createPiFleetStore() {
 			}
 			fleet = applyActionStart(fleet, id, start.msgId);
 			const deadline = Date.now() + start.budgetMs;
-			// The route waits one hub slice per request, so no client-side sleep.
+			// The route waits one hub slice per request, so no client-side sleep on the
+			// happy path. A failed poll is NOT terminal: the server keeps the started
+			// action until it finalizes, so a tunnel blip or one 502 from the hub must not
+			// throw away a 15-minute investigation that is still running (Greptile, PR #807).
+			// Only a 404 ends it -- the server no longer knows this message.
+			let lastError = "no reply within the action budget";
 			while (Date.now() < deadline) {
-				const polled = PiActionPollResponseSchema.safeParse(
-					await readJson(await fetch(`/api/pi/actions?msgId=${encodeURIComponent(start.msgId)}`)),
-				);
+				let polled: ReturnType<typeof PiActionPollResponseSchema.safeParse>;
+				try {
+					const res = await fetch(`/api/pi/actions?msgId=${encodeURIComponent(start.msgId)}`);
+					if (res.status === 404) return failed("the server no longer tracks this action (it may have restarted)");
+					polled = PiActionPollResponseSchema.safeParse(await readJson(res));
+				} catch (error) {
+					lastError = error instanceof Error ? error.message : String(error);
+					await new Promise((resolve) => setTimeout(resolve, POLL_RETRY_DELAY_MS));
+					continue;
+				}
 				if (!polled.success) return failed("unexpected /api/pi/actions poll response shape");
 				if (polled.data.pending) continue;
 				fleet = applyActionResult(fleet, id, polled.data.result);
 				return polled.data.result;
 			}
 			fleet = expireEntry(fleet, id, start.budgetMs);
-			return { actionId: action.id, tool: action.tool, status: "error", error: "no reply within the action budget" };
+			return { actionId: action.id, tool: action.tool, status: "error", error: lastError };
 		} catch (error) {
 			return failed(error instanceof Error ? error.message : String(error));
 		}

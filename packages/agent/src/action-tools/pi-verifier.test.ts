@@ -516,6 +516,17 @@ describe("startPiAction / pollPiAction", () => {
 		expect(done && !done.pending && done.outcome.status).toBe("error");
 	});
 
+	// Greptile, PR #807: the browser retries a failed poll, which is only sound if a hub
+	// failure mid-poll leaves the started action in place rather than consuming it.
+	test("a hub failure during a poll throws and keeps the action pollable", async () => {
+		const hub = scriptedHub({ agents: online, reply: confirmedVerdict });
+		await startPiAction(verify, report, { env, fetchImpl: hub.fetchImpl });
+		const down = async () => new Response(JSON.stringify({ ok: false, error: "bad_gateway" }), { status: 502 });
+		await expect(pollPiAction("m1", { env, fetchImpl: down })).rejects.toThrow();
+		const done = await pollPiAction("m1", { env, fetchImpl: hub.fetchImpl });
+		expect(done && !done.pending && done.outcome.result?.kind).toBe("verdict");
+	});
+
 	test("a msg id this process never started cannot be finalized", async () => {
 		const hub = scriptedHub({ agents: online, reply: confirmedVerdict });
 		expect(await pollPiAction("someone-elses-message", { env, fetchImpl: hub.fetchImpl })).toBeNull();
