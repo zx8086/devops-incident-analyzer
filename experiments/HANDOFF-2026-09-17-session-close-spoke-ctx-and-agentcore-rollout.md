@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Date | 2026-09-17 (session ran about 15:45 to 17:45 UTC) |
-| Tickets | [SIO-1786](https://linear.app/siobytes/issue/SIO-1786) Done (one user-side item open, see below), [SIO-1787](https://linear.app/siobytes/issue/SIO-1787) In Review, [SIO-1788](https://linear.app/siobytes/issue/SIO-1788) Done |
+| Tickets | [SIO-1786](https://linear.app/siobytes/issue/SIO-1786) Done (its user-side replay has since been run, see the update), [SIO-1787](https://linear.app/siobytes/issue/SIO-1787) Done (closed by the user 2026-09-17, was In Review when this was written), [SIO-1788](https://linear.app/siobytes/issue/SIO-1788) Done |
 | Related | [SIO-1726](https://linear.app/siobytes/issue/SIO-1726), [SIO-1734](https://linear.app/siobytes/issue/SIO-1734) (spoke context-mode, shipped earlier), [SIO-1774](https://linear.app/siobytes/issue/SIO-1774) (the change the AgentCore deploy shipped), [SIO-1784](https://linear.app/siobytes/issue/SIO-1784) (separate, own handover: `experiments/HANDOFF-2026-09-17-SIO-1784.md`) |
 | PRs | #819 merged as `798e9b29`, #820 merged as `61b43f87` |
 | Repo state | `origin/main` at `61b43f87` when written; `37bf49d2` after the follow-up session (PR #821). No branch is open. |
@@ -145,7 +145,8 @@ script's `CTX_SERVER=` line would still pass. An operator sends a hub message wi
 `just hub-tunnel <env>`, then `just coms <hub> <cname>`, then `coms_net_send` from that console;
 there is no `fleet` subcommand for it.
 
-SIO-1787 is still In Review with nothing left to do, waiting on the user to close it.
+SIO-1787 is Done: the user closed it on 2026-09-17. Its one follow-up, `fleet status` / `rollout`
+failing fast instead of hanging, is SIO-1792 and the two tickets are linked.
 
 ## What is still open
 
@@ -247,7 +248,8 @@ Also noted, no action needed: the fleet pins `pi-mcp-adapter@2.33.0` and npm lat
 pin already supports everything in use. Bump only through the canary procedure (memory
 `reference_pi_version_upgrade_procedure`).
 
-SIO-1787 is In Review and has nothing left to do; it is waiting on the user to close it.
+SIO-1787 is Done (closed by the user on 2026-09-17; it was In Review with nothing left to do when
+this was written).
 
 ## Where things stand, precisely
 
