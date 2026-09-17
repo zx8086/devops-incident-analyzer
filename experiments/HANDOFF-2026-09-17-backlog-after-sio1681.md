@@ -22,9 +22,17 @@ consecutive model failures, and the monitor warns on them without an operator.
 **One live verification is outstanding** and needs a real deploy; it is the only
 thing this session left unfinished.
 
-Otherwise the backlog is unchanged from the predecessor: **SIO-1240** is parked
-on production traces, **SIO-1744** is ops-not-code, and three items are decisions
-rather than work. Nothing is blocked.
+Otherwise: **SIO-1240** is parked on production traces and **SIO-1744** is
+ops-not-code. Nothing is blocked.
+
+> **UPDATE 2026-09-17 (same day, later session).** The three §5 decisions are all
+> RESOLVED -- SIO-1455 no action, SIO-1099 canceled as obsolete, and **SIO-1143
+> fixed, merged (PR #801, `bca0eed6`) and verified against two live dev servers**.
+> §5 carries the detail. **Two of the three judgements this document originally
+> made were wrong**; the corrections are recorded there rather than silently
+> edited away. The remaining open work is unchanged: SIO-1240 (needs production
+> traffic) and SIO-1744's `just fleet apply`, which also carries the §1 SIO-1681
+> live check.
 
 ---
 
@@ -182,34 +190,80 @@ the fixture first -- exactly the step SIO-1737 proved gets skipped.
 
 ---
 
-## 5. Decisions, not work
+## 5. Decisions, not work -- ALL THREE RESOLVED 2026-09-17
 
-Three items need five minutes of judgement each, not implementation. Unchanged
-from the predecessor.
+> **This section is CLOSED.** All three were worked on 2026-09-17 and the full
+> analysis lives in a decision comment on each Linear ticket. **Two of the three
+> judgements below were WRONG**, and they are preserved with their corrections
+> rather than deleted, because the errors are instructive: both came from reading
+> a file's shape rather than measuring it. Nothing here is outstanding.
 
-**SIO-1455 -- re-scope or close.** There is no size-management node in `graph.ts`,
-but size management *does* exist out of band:
-`packages/agent/src/kg-retention.ts:14` (`DEFAULT_RETENTION_DAYS = 30`,
-overridable via `KG_UNCURATED_RETENTION_DAYS`) feeding `purgeUncuratedIncidents`,
-scheduled by `schedules/kg-purge-sweep.yaml`. Re-scope against that before anyone
-builds a redundant node.
+**SIO-1455 -- resolved: NO ACTION, left in Backlog with tripwires.**
 
-**SIO-1099 -- outcomes or the regex?** The benign not-found half shipped
-(`aggregator.ts:586-587` STRONG/WEAK split). The regex the ticket names is
-untouched -- `aggregator.ts:908-910`, still a bare unscoped
-`never (?:populated|written|loaded)` -- but it is vetoed at runtime by an LLM
-judge (`aggregator.ts:1903-1908`, `absence-judge.ts:47`) that
-`ABSENCE_JUDGE_ENABLED=false` switches off. If the ticket was about outcomes,
-close it. If it was about the regex, narrow the scope to the regex alone.
+~~Re-scope against `packages/agent/src/kg-retention.ts:14`~~ -- **WRONG COMPARAND,
+do not spend time on it.** `kg-retention` purges knowledge-*graph* incident rows
+from the DB on a cron. SIO-1455 is about the knowledge-*tree* markdown
+concatenated into a prompt. Different subsystem, different failure mode, no
+overlap.
 
-**SIO-1143 -- confirm intent.** `apps/web/vite.config.ts:9,14` resolve to `../..`,
-which is fixed exactly as the ticket words it. But `resolve(__dirname, "../..")`
-is relative to the config file, so **in a worktree it resolves to the worktree
-root**, where no `.env` exists. Fixed-as-written, broken-in-practice. If the
-intent was "worktrees inherit the main checkout's .env" it needs
-`git rev-parse --path-format=absolute --git-common-dir` and is still open. The fix
-also predates the ticket (`2e6c8349`), so it may have been filed against stale
-behaviour.
+Measured on `08ac44c3` instead of reasoned about, and the premise inverts: the
+unfiltered categories the ticket worries about (`systems-map` + `slo-policies`)
+are **3,827 bytes = 3.1%** of the tree, while `runbooks-*` is **115,338 bytes =
+93.6%** and is ALREADY filtered per-turn by SIO-640 (`filterAgentRunbooks`,
+`orchestrator-prompt-assembly.ts:44-51`). Tree grew 112 KB -> 120.3 KB in 13
+months (~7%); elastic-iac, which genuinely needed `selectIacKnowledge`, is
+535.5 KB. Re-open only if `systems-map`+`slo-policies` exceed ~25 KB or a new
+always-on non-`runbooks-*` category is added.
+
+**SIO-1099 -- resolved: CANCELED as obsolete** (Canceled, not Done -- nobody
+implemented it; the problems were overtaken by other work).
+
+The "outcomes or the regex?" framing was a **false dichotomy**: the ticket's own
+CRITICAL section says the two caps OR-combine, so it was never separable. All
+three of its load-bearing claims are now obsolete:
+
+1. `min(score, 0.59)` is gone -- SIO-1155/SIO-1195 replaced the boolean OR with
+   named `capReasons` + a two-class policy that soft-caps ABOVE the gate
+   (`aggregator.ts:2037-2082`).
+2. Problem 1 SHIPPED as the prompt rule the ticket prescribed --
+   `healthCheckGapRule` (`aggregator.ts:361`) now names "a not-found for a named
+   document/index/log-group/topic" explicitly.
+3. Problem 2's trigger NO LONGER FIRES. The regex is untouched
+   (`aggregator.ts:908`) but SIO-1198 added a conjunction gate at `:1229`
+   requiring absence vocabulary alongside it. Verified by live repro: the
+   ticket's actual failing line, `"The data was never loaded"`, is now
+   **not flagged**.
+
+Carried forward deliberately: the `never (?:populated|written|loaded)` branch
+still fires on GROUNDED absences when absence vocabulary is present, and the
+judge vetoes on scoping, not corroboration. If that recurs in production it is a
+fresh narrow ticket, not a revival of this one.
+
+**SIO-1143 -- resolved: FIXED, SHIPPED AND VERIFIED LIVE.** PR #801, merged as
+`bca0eed6`.
+
+~~"fixed exactly as the ticket words it"~~ and ~~"the fix predates the ticket
+(`2e6c8349`)"~~ -- **BOTH WRONG.** The code was character-for-character the
+snippet the ticket quotes as the BUG, and `2e6c8349` (2026-03-22) is the commit
+that INTRODUCED the frontend, not a fix. The ticket was filed against live
+behaviour that still shipped.
+
+`findRepoRoot` (`apps/web/src/lib/repo-root.ts`) resolves via
+`git rev-parse --path-format=absolute --git-common-dir`, whose parent is the true
+root for a main checkout and every worktree alike. `startDir` is explicit (never
+cwd) so a tarball inside another repo cannot resolve to that repo's root, and the
+git call is not load-bearing -- any failure returns the historical `../..` path.
+
+**Verified with two live dev servers, not a probe:** a worktree server (no `.env`
+of its own) returned **7 populated AWS estates** and all four MCP env-presence
+flags `true`, and its output was **identical** to a main-checkout server's. The
+old `envDir` target holds no `.env`, so all five variables would have been unset
+before.
+
+Greptile found two real P1/P2 issues on the first round, both verified before
+applying and both correct; fixing the P1 also exposed a latent depth bug in the
+test (`../../..` from `src/lib` is `apps/`, not the checkout root). Final round
+5/5, 7/7 checks.
 
 ---
 
