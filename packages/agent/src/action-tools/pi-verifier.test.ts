@@ -16,11 +16,13 @@ import {
 	MAX_VERIFY_CARDS,
 	needsInvestigation,
 	PI_MAILBOX_TTL_MS,
+	pollPiAction,
 	proposePiVerification,
 	REPORT_CHAR_BUDGET,
 	resolvePiComsConfig,
 	resolvePiTarget,
 	selectHubForEstate,
+	startPiAction,
 } from "./pi-verifier.ts";
 
 // Single-hub form: the hub serves prd, where the fixtures' estates live.
@@ -440,6 +442,91 @@ describe("executePiInvestigate", () => {
 		const out = await executePiInvestigate({ estate: "e" }, report, { env });
 		expect(out.status).toBe("error");
 		expect(out.error).toContain("focus");
+	});
+});
+
+// SIO-1778: the same action split into a send and N short polls, so the fleet pane can
+// show it live instead of the card holding one 5-15 minute request open.
+describe("startPiAction / pollPiAction", () => {
+	const verify = { id: "act-1", tool: "verify-with-pi", params: { estate: "eu-oit-prd" } };
+
+	// The scripted hub always answers msg id "m1" and the started-action registry is
+	// per process, so drain it: a finalizing poll removes the entry.
+	afterEach(async () => {
+		const drain = scriptedHub({ agents: online, reply: confirmedVerdict });
+		await pollPiAction("m1", { env, fetchImpl: drain.fetchImpl });
+	});
+
+	test("start sends with the response schema, deregisters at once, and hands back the prompt", async () => {
+		const hub = scriptedHub({ agents: online });
+		const start = await startPiAction(verify, report, { env, fetchImpl: hub.fetchImpl });
+		expect(start.status).toBe("sent");
+		if (start.status !== "sent") return;
+		expect(start).toMatchObject({ target: "eu-oit-prd", msgId: "m1" });
+		expect(start.prompt).toContain("eu-oit-prd");
+		expect(start.budgetMs).toBeGreaterThan(0);
+		const paths = hub.calls.map((c) => `${c.method} ${c.path.split("?")[0]}`);
+		// No await on the start request: that is the whole point.
+		expect(paths.some((p) => p.includes("/await"))).toBe(false);
+		expect(paths.at(-1)?.startsWith("DELETE /v1/agents/")).toBe(true);
+		expect(hub.calls.find((c) => c.path === "/v1/messages")?.body?.response_schema).toBeDefined();
+	});
+
+	test("an offline estate agent resolves at start as a mailbox send, with nothing to poll", async () => {
+		const hub = scriptedHub({ agents: [] });
+		const start = await startPiAction(verify, report, { env, fetchImpl: hub.fetchImpl });
+		expect(start.status).toBe("queued");
+		if (start.status !== "queued") return;
+		expect(start.outcome.result?.kind).toBe("queued");
+		expect(hub.calls.find((c) => c.path === "/v1/messages")?.body?.ttl_ms).toBe(PI_MAILBOX_TTL_MS);
+		expect(await pollPiAction(start.msgId, { env, fetchImpl: hub.fetchImpl })).toBeNull();
+	});
+
+	test("poll is pending while the slice times out, then finalizes exactly like the one-shot path", async () => {
+		const waiting = scriptedHub({ agents: online, replyStatus: "timeout" });
+		const start = await startPiAction(verify, report, { env, fetchImpl: waiting.fetchImpl });
+		expect(start.status).toBe("sent");
+		// A frozen clock makes awaitReply spend its whole slice on the first scripted timeout.
+		let t = 0;
+		const now = () => {
+			t += 30_000;
+			return t;
+		};
+		expect(await pollPiAction("m1", { env, fetchImpl: waiting.fetchImpl, now })).toEqual({
+			pending: true,
+			status: "waiting",
+		});
+
+		const answered = scriptedHub({ agents: online, reply: partialVerdict });
+		const done = await pollPiAction("m1", { env, fetchImpl: answered.fetchImpl });
+		expect(done?.pending).toBe(false);
+		if (!done || done.pending) return;
+		expect(done.actionId).toBe("act-1");
+		expect(done.outcome.result?.kind).toBe("verdict");
+		// The follow-up card survives the split.
+		expect(done.outcome.followUpActions?.[0]?.tool).toBe("investigate-with-pi");
+		// Finalized once: the registry entry is gone.
+		expect(await pollPiAction("m1", { env, fetchImpl: answered.fetchImpl })).toBeNull();
+	});
+
+	test("a reply that misses the analyzer's schema is an action error, not a crash", async () => {
+		const hub = scriptedHub({ agents: online, reply: { verdict: "maybe" } });
+		await startPiAction(verify, report, { env, fetchImpl: hub.fetchImpl });
+		const done = await pollPiAction("m1", { env, fetchImpl: hub.fetchImpl });
+		expect(done && !done.pending && done.outcome.status).toBe("error");
+	});
+
+	test("a msg id this process never started cannot be finalized", async () => {
+		const hub = scriptedHub({ agents: online, reply: confirmedVerdict });
+		expect(await pollPiAction("someone-elses-message", { env, fetchImpl: hub.fetchImpl })).toBeNull();
+		expect(hub.calls).toHaveLength(0);
+	});
+
+	test("refuses non-pi tools and invalid params", async () => {
+		expect((await startPiAction({ id: "x", tool: "notify-slack", params: {} }, report, { env })).status).toBe("error");
+		expect((await startPiAction({ id: "x", tool: "verify-with-pi", params: {} }, report, { env })).status).toBe(
+			"error",
+		);
 	});
 });
 
