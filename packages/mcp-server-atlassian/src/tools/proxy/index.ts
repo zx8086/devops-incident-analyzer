@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { AtlassianMcpProxy, ProxyToolInfo } from "../../atlassian-client/index.js";
 import { createContextLogger } from "../../utils/logger.js";
 import { traceToolCall } from "../../utils/tracing.js";
+import { DESCRIPTION_TRUNCATE_BYTES, truncateLongString } from "../custom/get-jira-issue.js";
 import { CUSTOM_OVERRIDDEN_UPSTREAM_TOOLS } from "../custom/index.js";
 import { toolErrorResult } from "../error-envelope.js";
 import { isWriteTool } from "./write-tools.js";
@@ -81,6 +82,65 @@ export function cqlIssueTypeRejection(
 			"Confluence CQL `type` accepts only: space, user, page, blogpost, comment, attachment. " +
 			"Jira issues are searched with JQL -- use atlassian_searchJiraIssuesUsingJql (or free-text atlassian_search) instead.",
 	});
+}
+
+// SIO-1774: a JQL search returns every matching issue's FULL description. On run f77ce7dd a
+// well-formed search (maxResults 10, 8 issues) came back at 127 KB, because four of the hits were
+// this agent's own earlier incident reports filed as tickets, 16-22 KB of markdown each. The
+// single-issue tool has capped descriptions at 4 KB since SIO-706; search went through this
+// generic proxy and never got the same treatment. A search result is a list to pick from: the
+// head of each description is enough to choose, and atlassian_getJiraIssue returns the whole one.
+// Anything that is not the expected JSON shape passes through untouched. Exported for tests.
+export function slimJqlSearchText(toolName: string, text: string): string {
+	if (toolName !== "searchJiraIssuesUsingJql") return text;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text);
+	} catch {
+		return text;
+	}
+	const issues = (parsed as { issues?: unknown } | null)?.issues;
+	if (!Array.isArray(issues)) return text;
+	const truncated: string[] = [];
+	let strippedKeys = 0;
+	for (const issue of issues as Array<{ key?: unknown; fields?: Record<string, unknown> }>) {
+		strippedKeys += stripUiMetadata(issue);
+		const description = issue?.fields?.description;
+		if (!issue.fields || typeof description !== "string") continue;
+		const slim = truncateLongString(description, DESCRIPTION_TRUNCATE_BYTES);
+		if (slim === description) continue;
+		issue.fields.description = slim;
+		truncated.push(typeof issue.key === "string" ? issue.key : "?");
+	}
+	if (truncated.length === 0 && strippedKeys === 0) return text;
+	return JSON.stringify({
+		...(parsed as Record<string, unknown>),
+		_projection: {
+			descriptionTruncatedToBytes: DESCRIPTION_TRUNCATE_BYTES,
+			truncatedIssues: truncated,
+			droppedUiKeys: [...UI_METADATA_KEYS],
+			hint: 'Descriptions are cut to their head in search results. Call atlassian_getJiraIssue with fields="*" for a full one.',
+		},
+	});
+}
+
+// Keys that exist for a browser, not a reader: on the real payload reporter, project, status and
+// issuetype were ~3 KB per issue, nearly all of it avatar URL sets, icon URLs and REST self-links.
+const UI_METADATA_KEYS = new Set(["avatarUrls", "iconUrl", "self", "expand"]);
+function stripUiMetadata(node: unknown): number {
+	if (!node || typeof node !== "object") return 0;
+	if (Array.isArray(node)) return node.reduce<number>((n, child) => n + stripUiMetadata(child), 0);
+	let removed = 0;
+	const record = node as Record<string, unknown>;
+	for (const key of Object.keys(record)) {
+		if (UI_METADATA_KEYS.has(key)) {
+			delete record[key];
+			removed += 1;
+		} else {
+			removed += stripUiMetadata(record[key]);
+		}
+	}
+	return removed;
 }
 
 // SIO-1183: a Jira issue key fed to the Confluence page reader guarantees an upstream 400
@@ -178,7 +238,7 @@ export function registerProxyTools(
 					const result = (await proxy.callTool(tool.name, args)) as ProxyCallResult;
 					const content = (result.content ?? []).map((c) => ({
 						type: "text" as const,
-						text: typeof c.text === "string" ? c.text : JSON.stringify(c),
+						text: slimJqlSearchText(tool.name, typeof c.text === "string" ? c.text : JSON.stringify(c)),
 					}));
 					// Upstream isError prose passes through UNWRAPPED (SIO-1181 runbook): we cannot
 					// classify upstream prose better than the agent's fallback.

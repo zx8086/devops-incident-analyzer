@@ -313,3 +313,28 @@ Not yet built: the two sub-agent entry points (an in-call `_transform` parameter
 applied at the instrumentation boundary, and a `run_js_on_evidence` tool), both
 behind the opt-in `EVIDENCE_EXEC_ENABLED`. Whether that flag ever defaults ON is
 decided by the SIO-1775 A/B, not assumed.
+
+## 14. Addendum 2026-09-17: where the fat tool results really came from (SIO-1774)
+
+Run `f77ce7dd` (LangSmith root run `01a0aed1-e2c4-736a-80e8-9216afe54d48`) had four results
+large enough to dominate a sub-agent's context. The ticket opened with a hypothesis for each.
+Every one was checked against the trace or the live system before anything changed, and three
+of the four hypotheses were wrong about the cause.
+
+| Tool | Size | Hypothesis | What it actually was | After |
+|---|---|---|---|---|
+| `capella_get_completed_requests` | 745 KB (645 KB compact), 50 rows | `SELECT *, meta().plan` | Correct, plus two defects found on the way: `ORDER BY elapsedTime` sorted a duration STRING (live: a 9.99 s request ranked first while 1m12 s and 44.9 s requests existed), and `status: "success"` bound a state that does not exist (live: completed 7995, fatal 3, closed 1, stopped 1) | 26 KB, 20 rows, slowest first |
+| `aws_cloudwatch_describe_alarms` | 78.6 KB and 118.7 KB | The model called it unfiltered | Wrong. It passed `StateValue: "ALARM"` as its rules say. The payload reached the model TWICE: `@langchain/mcp-adapters` 1.1.3 returns a one-text-block result that also has `structuredContent` as `{ type, text, structuredContent }`. 37.3 KB + 38.6 KB of the same 26 alarms. On top of that each alarm carried 21 fields, 60 percent of it ARNs, action lists and a `StateReasonData` blob restating `StateReason` | about 16 KB (26 alarms: 39.1 KB to 15.7 KB live, and no second copy) |
+| `atlassian_searchJiraIssuesUsingJql` | 127.6 KB, 8 issues | Missing `fields` / `maxResults` | Wrong. The model passed `maxResults: 10`. Four hits were this agent's own earlier incident reports filed as tickets, 16 to 22 KB of markdown each; the single-issue tool has capped descriptions at 4 KB since SIO-706 but search went through the generic proxy. The rest was avatar URL sets, icon URLs and self-links | 32.4 KB (measured on the real traced payload) |
+| `elasticsearch_search` | 327 KB and 188 KB | Missing `_source` filtering | Wrong, and left alone. 10 hits at about 32 KB each because they hold full Java stack traces, which were the evidence for this incident; the second call already used `_source`. This is the case the evidence index (SIO-1772) and the sandbox `_transform` (SIO-1776) exist for |
+
+The duplicate-payload defect is the general one. It affects every tool that declares an
+`outputSchema` (SIO-1422): in this run also `kafka_list_consumer_groups` and
+`findLinkedIncidents`. The fix is at the agent's instrumentation boundary and touches only the
+model-facing copy; `rawOutputs` and the artifact the typed-finding path reads are unchanged.
+
+Method note for the next review of this kind: tool-call ARGUMENTS and payload SHAPE are in the
+LangSmith trace (`POST /api/v1/runs/query` with `trace` = the root run id and `run_type: "tool"`);
+the app log has sizes only. `langsmith-fetch traces` returns root messages, not child runs, and
+the `runId` in the app log is not the LangSmith trace id: find the root run by project session
+and time window.

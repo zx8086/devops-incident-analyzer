@@ -42,7 +42,7 @@ export const TRIAGE_FIELDS = [
 	"description",
 ] as const;
 
-const DESCRIPTION_TRUNCATE_BYTES = 4_096;
+export const DESCRIPTION_TRUNCATE_BYTES = 4_096;
 
 export const InputSchema = z.object({
 	issueIdOrKey: z.string().describe("Jira issue key (e.g. INC-123) or numeric ID"),
@@ -81,13 +81,20 @@ function normalizeFields(input: GetJiraIssueInput["fields"]): string[] | "*" {
 
 // Truncate a string field to a byte budget with a visible marker. Used for
 // `description` which can be many KB of free-form text.
-function truncateLongString(value: unknown, byteBudget: number): unknown {
+//
+// SIO-1774 (Greptile, PR #813): this used to measure in BYTES and then slice in CHARACTERS
+// (`value.slice(0, byteBudget - 80)`), so the budget only held for ASCII. 20,000 CJK characters
+// came back at 12,083 bytes against the 4,096 cap, and emoji at 8,067. It now cuts the encoded
+// bytes, backing off to a UTF-8 lead byte so a code point is never split.
+export function truncateLongString(value: unknown, byteBudget: number): unknown {
 	if (typeof value !== "string") return value;
-	const bytes = Buffer.byteLength(value, "utf8");
-	if (bytes <= byteBudget) return value;
-	// Slice in characters, leave ~80 bytes of marker space.
-	const head = value.slice(0, byteBudget - 80);
-	return `${head}\n... [truncated, ${bytes} bytes total]`;
+	const encoded = Buffer.from(value, "utf8");
+	if (encoded.length <= byteBudget) return value;
+	const marker = `\n... [truncated, ${encoded.length} bytes total]`;
+	let end = Math.max(0, byteBudget - Buffer.byteLength(marker, "utf8"));
+	// 0b10xxxxxx is a continuation byte: step back until the cut sits on a lead byte.
+	while (end > 0 && ((encoded[end] ?? 0) & 0xc0) === 0x80) end -= 1;
+	return `${encoded.subarray(0, end).toString("utf8")}${marker}`;
 }
 
 // Project the upstream response onto the requested field set. When fields="*"

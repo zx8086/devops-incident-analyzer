@@ -18,9 +18,43 @@ export const describeAlarmsSchema = z.object({
 		.string()
 		.optional()
 		.describe("Canonical pagination-token alias (-> NextToken). Pass _truncated.cursor here."),
+	// SIO-1774: off by default because these fields are ~60% of every alarm.
+	includeNotificationConfig: z
+		.boolean()
+		.optional()
+		.describe(
+			"Also return each alarm's notification wiring and raw state data: ActionsEnabled, AlarmActions, OKActions, InsufficientDataActions, AlarmArn, StateReasonData. Ask for it only when the question is why an alarm did or did not notify; pair it with AlarmNames or AlarmNamePrefix, as it more than doubles the response.",
+		),
 });
 
 export type DescribeAlarmsParams = WithEstate<z.infer<typeof describeAlarmsSchema>>;
+
+// SIO-1774: fields that say nothing about WHY an alarm fired. Measured on the 26 ALARM-state
+// alarms of eu-oit-prd (2026-09-17): the list was 39.1 KB with them and 15.7 KB without.
+// StateReasonData alone was 9.3 KB -- a raw JSON blob restating StateReason -- and the three
+// action lists plus the ARN another 8.4 KB of SNS topic and resource ARNs. An OMIT list, not an
+// allow list, so a diagnostic field AWS adds later (or one only some alarm types carry, like
+// Metrics on a metric-math alarm) is never silently dropped.
+//
+// Greptile, PR #813: the first cut also dropped AlarmConfigurationUpdatedTimestamp and
+// StateTransitionedTimestamp. Those are small (3.5 KB of the 39 KB) and they answer a real
+// question -- "did it transition before or after the config change?" -- so they stay. The
+// notification wiring answers another one ("why did this alarm not page?"), so it is opt-in
+// through `includeNotificationConfig` rather than gone.
+const ALARM_NOISE_FIELDS = [
+	"AlarmArn",
+	"ActionsEnabled",
+	"OKActions",
+	"AlarmActions",
+	"InsufficientDataActions",
+	"StateReasonData",
+] as const;
+
+export function omitAlarmNoise<T extends object>(alarm: T): Omit<T, (typeof ALARM_NOISE_FIELDS)[number]> {
+	const slim = { ...alarm } as Record<string, unknown>;
+	for (const field of ALARM_NOISE_FIELDS) delete slim[field];
+	return slim as Omit<T, (typeof ALARM_NOISE_FIELDS)[number]>;
+}
 
 export function describeAlarms(config: AwsConfig) {
 	return wrapListTool({
@@ -28,7 +62,7 @@ export function describeAlarms(config: AwsConfig) {
 		listField: "MetricAlarms",
 		fn: async (params: DescribeAlarmsParams) => {
 			const client = getCloudWatchClient(config, params.estate);
-			return client.send(
+			const response = await client.send(
 				new DescribeAlarmsCommand({
 					AlarmNames: params.AlarmNames,
 					AlarmNamePrefix: params.AlarmNamePrefix,
@@ -37,6 +71,8 @@ export function describeAlarms(config: AwsConfig) {
 					NextToken: preferSdkParam(params.NextToken, params.cursor),
 				}),
 			);
+			if (params.includeNotificationConfig === true) return response;
+			return { ...response, MetricAlarms: response.MetricAlarms?.map(omitAlarmNoise) };
 		},
 		// SIO-833: project EVERY alarm to the fields the findings extractor reads
 		// (packages/agent/src/correlation/extractors/aws.ts). When the full MetricAlarms list

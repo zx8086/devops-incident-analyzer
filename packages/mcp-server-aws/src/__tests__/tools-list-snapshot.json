@@ -42,7 +42,7 @@
 		}
 	},
 	"aws_cloudwatch_describe_alarms": {
-		"surfaceHash": "0e01ddc42a4d5d98da37f78ba625a5fb70e425e80b26561844a4134589ed11ae",
+		"surfaceHash": "76c39ac21e5e52ee53b350345f271d1f34fccc8ee01990fc50e6bb71fbd8242d",
 		"annotations": {
 			"readOnlyHint": true,
 			"destructiveHint": false
