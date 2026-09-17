@@ -238,6 +238,49 @@ describe("_transform does not bypass the rest of the instrumentation", () => {
 	}, 20_000);
 });
 
+// Found by test-merging SIO-1774 with this branch: for a tool that declares an outputSchema the
+// raw content is the adapter's { type, text, structuredContent } wrapper, so a transform written
+// against the tool's real payload saw only those three keys.
+describe("structured-output tools reach the sandbox as their payload, not the adapter wrapper", () => {
+	const alarms = [{ AlarmName: "a-cpu" }, { AlarmName: "b-mem" }];
+	const payload = JSON.stringify({ MetricAlarms: alarms });
+	const wrapper = JSON.stringify({ type: "text", text: payload, structuredContent: { MetricAlarms: alarms } });
+
+	test("evidenceText unwraps the wrapper and leaves ordinary content alone", () => {
+		expect(evidenceText(wrapper)).toBe(payload);
+		expect(evidenceText(payload)).toBe(payload);
+	});
+
+	test("_transform sees result.MetricAlarms", async () => {
+		const describeAlarms = tool(
+			async () => new ToolMessage({ content: wrapper, tool_call_id: "c1", name: "aws_cloudwatch_describe_alarms" }),
+			{ name: "aws_cloudwatch_describe_alarms", description: "x", schema: z.object({}).passthrough() },
+		);
+		const [wrapped] = instrumentTools([describeAlarms], {
+			dataSourceId: "aws",
+			log: silent,
+			rawOutputs: [],
+			sandbox: runInSandbox,
+		});
+		const out = await wrapped?.invoke({
+			id: "c1",
+			name: "aws_cloudwatch_describe_alarms",
+			type: "tool_call",
+			args: { [TRANSFORM_PARAM]: "return result.MetricAlarms.map((a) => a.AlarmName);" },
+		});
+		expect(String(out instanceof ToolMessage ? out.content : out).split("\n")[0]).toBe('["a-cpu","b-mem"]');
+	}, 15_000);
+
+	test("run_js_on_evidence sees it too", async () => {
+		const t = buildRunJsOnEvidenceTool(
+			() => [{ toolName: "aws_cloudwatch_describe_alarms", content: wrapper }],
+			runInSandbox,
+			silent,
+		);
+		expect(String(await t.invoke({ code: 'return evidence.get("e1").MetricAlarms.length;' }))).toBe("2");
+	}, 15_000);
+});
+
 describe("run_js_on_evidence", () => {
 	const captured = [
 		{ toolName: "elasticsearch_search", content: JSON.stringify({ hits: { hits: HITS.slice(0, 50) } }) },

@@ -5,7 +5,14 @@ import { ToolMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
-import { describeRun, evidenceText, type SandboxRunner, splitTransform, withTransformParam } from "./evidence-exec.ts";
+import {
+	describeRun,
+	dropDuplicateStructuredContent,
+	evidenceText,
+	type SandboxRunner,
+	splitTransform,
+	withTransformParam,
+} from "./evidence-exec.ts";
 import {
 	awsEcsAbsenceProven,
 	consumeAbsenceExitLog,
@@ -594,27 +601,10 @@ function processResult(
 	return rebuildResult(result, cappedContent);
 }
 
-// Returns the text when `content` is exactly the adapter's text+structuredContent wrapper
-// (as an object, or as the JSON string a ToolMessage carries it in); null for anything else,
-// including a tool whose own payload merely happens to have a `text` key.
-const STRUCTURED_WRAPPER_KEYS = new Set(["type", "text", "structuredContent", "meta"]);
-export function dropDuplicateStructuredContent(content: unknown): string | null {
-	let candidate: unknown = content;
-	if (typeof content === "string") {
-		// Cheap reject before parsing what may be hundreds of KB.
-		if (!content.startsWith("{") || !content.includes('"structuredContent"')) return null;
-		try {
-			candidate = JSON.parse(content);
-		} catch {
-			return null;
-		}
-	}
-	if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
-	const wrapper = candidate as Record<string, unknown>;
-	if (wrapper.type !== "text" || typeof wrapper.text !== "string" || !("structuredContent" in wrapper)) return null;
-	if (!Object.keys(wrapper).every((k) => STRUCTURED_WRAPPER_KEYS.has(k))) return null;
-	return wrapper.text;
-}
+// SIO-1776: lives in evidence-exec.ts so evidenceText can unwrap the same shape for the
+// sandbox without an import cycle (this module imports that one). Re-exported because it is
+// part of this module's tested surface.
+export { dropDuplicateStructuredContent };
 
 function extractContent(result: unknown): unknown {
 	if (result && typeof result === "object" && "content" in result) {

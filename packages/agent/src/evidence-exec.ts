@@ -80,7 +80,35 @@ export function splitTransform(arg: unknown): { arg: unknown; transform?: string
 	return { arg: isToolCall ? { ...outer, args: rest } : rest, transform };
 }
 
+// Returns the text when `content` is exactly the adapter's text+structuredContent wrapper
+// (as an object, or as the JSON string a ToolMessage carries it in); null for anything else,
+// including a tool whose own payload merely happens to have a `text` key.
+const STRUCTURED_WRAPPER_KEYS = new Set(["type", "text", "structuredContent", "meta"]);
+export function dropDuplicateStructuredContent(content: unknown): string | null {
+	let candidate: unknown = content;
+	if (typeof content === "string") {
+		// Cheap reject before parsing what may be hundreds of KB.
+		if (!content.startsWith("{") || !content.includes('"structuredContent"')) return null;
+		try {
+			candidate = JSON.parse(content);
+		} catch {
+			return null;
+		}
+	}
+	if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+	const wrapper = candidate as Record<string, unknown>;
+	if (wrapper.type !== "text" || typeof wrapper.text !== "string" || !("structuredContent" in wrapper)) return null;
+	if (!Object.keys(wrapper).every((k) => STRUCTURED_WRAPPER_KEYS.has(k))) return null;
+	return wrapper.text;
+}
+
+// What the sandbox is given as a result. Unwraps the adapter's duplicated wrapper FIRST: for a
+// tool with an outputSchema the raw content is { type, text, structuredContent }, and a
+// transform written against the tool's real payload (`result.MetricAlarms.length`) would
+// otherwise see only those three keys. Found by test-merging SIO-1774 with this branch.
 export function evidenceText(content: unknown): string {
+	const unwrapped = dropDuplicateStructuredContent(content);
+	if (unwrapped !== null) return unwrapped;
 	if (typeof content === "string") return content;
 	// MCP multi-block content: the text blocks ARE the payload.
 	if (Array.isArray(content)) {
