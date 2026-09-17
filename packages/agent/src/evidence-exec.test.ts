@@ -165,6 +165,79 @@ describe("_transform through instrumentTools", () => {
 	});
 });
 
+// Greptile, PR #812: two ways the first version was wrong.
+describe("_transform does not bypass the rest of the instrumentation", () => {
+	test("recovery advice is still appended to a transformed result", async () => {
+		// An EMPTY ~24h deploy window must carry the 30-day escalation advice (SIO-1298). A
+		// transform that reduces it to "0" would otherwise look like a conclusive negative.
+		const deploys = tool(async () => JSON.stringify({ row_count: 0, result: [] }), {
+			name: "gitlab_recent_deploys",
+			description: "x",
+			schema: z.object({ since: z.string() }).passthrough(),
+		});
+		const [wrapped] = instrumentTools([deploys], {
+			dataSourceId: "gitlab",
+			log: silent,
+			rawOutputs: [],
+			sandbox: runInSandbox,
+		});
+		const out = await wrapped?.invoke({
+			id: "c1",
+			name: "gitlab_recent_deploys",
+			type: "tool_call",
+			args: { since: new Date(Date.now() - 3_600_000).toISOString(), [TRANSFORM_PARAM]: "return result.row_count" },
+		});
+		const shown = String(out instanceof ToolMessage ? out.content : out);
+		expect(shown).toContain("transformed from"); // the transform DID apply
+		expect(shown.startsWith("0")).toBe(true);
+		expect(shown).toContain("30"); // ...and the 30-day escalation advice is still there
+		expect(shown.length).toBeGreaterThan(200);
+	}, 15_000);
+
+	test("concurrent calls from one round each keep their OWN evidence id", async () => {
+		// Tool calls from one AIMessage run in parallel. The id used to be read from
+		// rawOutputs.length after an await, so a sibling's push could shift it.
+		const rawOutputs: RawToolOutput[] = [];
+		const slow = tool(
+			async ({ n, wait }: { n: number; wait: number }) => {
+				await Bun.sleep(wait);
+				return JSON.stringify({ n });
+			},
+			{ name: "probe", description: "x", schema: z.object({ n: z.number(), wait: z.number() }).passthrough() },
+		);
+		// A slow index sink plus a tiny cap put an await between the push and the transform,
+		// which is the window the old code read the id in.
+		const [wrapped] = instrumentTools([slow], {
+			dataSourceId: "aws",
+			log: silent,
+			rawOutputs,
+			sandbox: runInSandbox,
+			capBytes: 4,
+			evidenceIndex: {
+				index: async () => {
+					await Bun.sleep(40);
+					return 1;
+				},
+			},
+		});
+		const call = (id: string, n: number, wait: number) =>
+			wrapped?.invoke({
+				id,
+				name: "probe",
+				type: "tool_call",
+				args: { n, wait, [TRANSFORM_PARAM]: "return result.n" },
+			});
+		const outs = await Promise.all([call("a", 1, 60), call("b", 2, 5), call("c", 3, 30)]);
+		for (const out of outs) {
+			const shown = String(out instanceof ToolMessage ? out.content : out);
+			const value = Number(shown.split("\n")[0]);
+			const id = Number(/evidence id e(\d+)/.exec(shown)?.[1]);
+			// The id in the message must address the entry holding THIS call's result.
+			expect(JSON.parse(String(rawOutputs[id - 1]?.content))).toEqual({ n: value });
+		}
+	}, 20_000);
+});
+
 describe("run_js_on_evidence", () => {
 	const captured = [
 		{ toolName: "elasticsearch_search", content: JSON.stringify({ hits: { hits: HITS.slice(0, 50) } }) },

@@ -347,6 +347,11 @@ function instrumentTool(
 							content: extractContent(result),
 							structuredContent: extractStructuredContent(result),
 						});
+						// SIO-1776: taken HERE, synchronously with the push. Tool calls from one
+						// AIMessage run concurrently and the evidence indexing below awaits, so reading
+						// rawOutputs.length any later can name ANOTHER call's entry (Greptile, PR #812)
+						// -- and run_js_on_evidence would then fetch the wrong result by that id.
+						const evidenceId = `e${ctx.rawOutputs?.length ?? 1}`;
 						// SIO-1688: index the SAME pre-truncation bytes so whatever the cap
 						// below removes stays reachable through search_evidence for the rest
 						// of the run. Only oversized results are indexed: a result the model
@@ -381,10 +386,15 @@ function instrumentTool(
 						// model gets only what its code derived; on any failure it gets exactly what it
 						// would have got without one, plus the reason, so a bad transform never
 						// costs the call.
+						// It does NOT return early: a transformed result still has to pass through the
+						// CloudWatch and GitLab recovery advice below. That advice is driven by the
+						// loop guard's view of the RAW result, so a transform that reduced an empty or
+						// failed query to "0" would otherwise reach the model looking conclusive
+						// (Greptile, PR #812).
 						let transformNote = "";
+						let transformed: unknown = null;
 						if (transform !== undefined && ctx.sandbox) {
 							const rawText = evidenceText(extractContent(result));
-							const evidenceId = `e${ctx.rawOutputs?.length ?? 1}`;
 							const run = await ctx.sandbox(
 								`const result = evidence.get(${JSON.stringify(evidenceId)});\n${transform}`,
 								[{ id: evidenceId, tool: tool.name, json: rawText }],
@@ -400,14 +410,15 @@ function instrumentTool(
 								"Tool result transformed in the sandbox",
 							);
 							if (run.error === undefined && run.stdout !== "") {
-								return rebuildResult(
+								transformed = rebuildResult(
 									result,
 									`${run.stdout}\n\n[transformed from ${originalBytes} bytes by your _transform; the full result is evidence id ${evidenceId}]`,
 								);
+							} else {
+								transformNote = `\n\n[_transform was not applied: ${run.error ?? "it returned nothing"}. The result above is the tool's normal output.]`;
 							}
-							transformNote = `\n\n[_transform was not applied: ${run.error ?? "it returned nothing"}. The result above is the tool's normal output.]`;
 						}
-						const processedRaw = processResult(result, tool.name, iteration, ctx, indexedRows);
+						const processedRaw = transformed ?? processResult(result, tool.name, iteration, ctx, indexedRows);
 						const processed =
 							transformNote === ""
 								? processedRaw
