@@ -181,7 +181,8 @@ function createPiFleetStore() {
 			// action until it finalizes, so a tunnel blip or one 502 from the hub must not
 			// throw away a 15-minute investigation that is still running (Greptile, PR #807).
 			// Only a 404 ends it -- the server no longer knows this message.
-			let lastError = "no reply within the action budget";
+			const NO_REPLY = "no reply within the action budget";
+			let lastError = NO_REPLY;
 			while (Date.now() < deadline) {
 				let polled: ReturnType<typeof PiActionPollResponseSchema.safeParse>;
 				try {
@@ -194,7 +195,13 @@ function createPiFleetStore() {
 					continue;
 				}
 				if (!polled.success) return failed("unexpected /api/pi/actions poll response shape");
-				if (polled.data.pending) continue;
+				if (polled.data.pending) {
+					// A poll that got through supersedes an earlier transport error: if the
+					// deadline passes now, the reason is "no reply", not a blip that recovered
+					// (Greptile, PR #807 -- the card and the pane would otherwise disagree).
+					lastError = NO_REPLY;
+					continue;
+				}
 				fleet = applyActionResult(fleet, id, polled.data.result);
 				return polled.data.result;
 			}
