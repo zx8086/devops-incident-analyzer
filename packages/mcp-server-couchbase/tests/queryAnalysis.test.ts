@@ -385,13 +385,49 @@ describe("getCompletedRequests.buildQuery", () => {
 	test("empty input applies the default LIMIT (full 8-week scan+sort otherwise)", () => {
 		const { query, parameters } = buildCompletedRequests({});
 		expect(parameters).toEqual({});
-		expect(query).toMatch(/LIMIT 50;?\s*$/);
+		// SIO-1774: this tool's own default (20), not the shared 50 -- see the ordering test below.
+		expect(query).toMatch(/LIMIT 20;?\s*$/);
 	});
 
 	test("explicit limit overrides the default", () => {
 		const { query } = buildCompletedRequests({ limit: 7 });
 		expect(query).toMatch(/LIMIT 7;?\s*$/);
-		expect(query).not.toMatch(/LIMIT 50/);
+		expect(query).not.toMatch(/LIMIT 20/);
+	});
+
+	// SIO-1774. Each of these was confirmed against the live cluster before the fix.
+	test("orders by the DURATION, not the duration string", () => {
+		// As text "9.99s" sorts above "44.8s" and "1m12s": live, the old query put a 9.99 s
+		// request first while 1m12 s and 44.9 s requests existed, so "slowest N" dropped the slowest.
+		const { query } = buildCompletedRequests({});
+		expect(query).toContain("ORDER BY STR_TO_DURATION(elapsedTime) DESC");
+		expect(query).not.toMatch(/ORDER BY elapsedTime/);
+	});
+
+	test("projects the fields a latency diagnosis needs and leaves the execution plan out", () => {
+		const { query } = buildCompletedRequests({});
+		expect(query).not.toMatch(/SELECT \*/);
+		expect(query).not.toContain("meta().plan");
+		for (const field of ["statement", "elapsedTime", "phaseTimes", "errors", "`~analysis` AS analysis"]) {
+			expect(query).toContain(field);
+		}
+		// Connection metadata that made up much of the old ~15 KB per row.
+		for (const dropped of ["clientContextID", "remoteAddr", "userAgent", "n1qlFeatCtrl"]) {
+			expect(query).not.toContain(dropped);
+		}
+	});
+
+	test("includePlan opts the execution plan back in", () => {
+		expect(buildCompletedRequests({ includePlan: true }).query).toContain("meta().plan AS plan");
+		expect(buildCompletedRequests({ includePlan: false }).query).not.toContain("meta().plan");
+	});
+
+	test("status: 'success' binds the state Couchbase actually uses", () => {
+		// system:completed_requests has no "success" state (live: completed 7995, fatal 3,
+		// closed 1, stopped 1), so binding the enum value matched nothing.
+		const { query, parameters } = buildCompletedRequests({ status: "success" });
+		expect(query).toContain("state = $status");
+		expect(parameters.status).toBe("completed");
 	});
 
 	test("status: 'fatal' binds as $status -- raw value not spliced", () => {
@@ -424,7 +460,7 @@ describe("getCompletedRequests.buildQuery", () => {
 		expect(query).toContain("$status");
 		expect(query).toContain("DATE_ADD_STR(NOW_STR(), -1, 'week')");
 		expect(query).toMatch(/LIMIT 100/);
-		expect(parameters.status).toBe("success");
+		expect(parameters.status).toBe("completed");
 	});
 });
 

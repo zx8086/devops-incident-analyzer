@@ -22,13 +22,36 @@ export const describeAlarmsSchema = z.object({
 
 export type DescribeAlarmsParams = WithEstate<z.infer<typeof describeAlarmsSchema>>;
 
+// SIO-1774: fields that say nothing about WHY an alarm fired. Measured on the 26 ALARM-state
+// alarms of eu-oit-prd (2026-09-17): the list was 39.1 KB with them and 15.7 KB without.
+// StateReasonData alone was 9.3 KB -- a raw JSON blob restating StateReason -- and the three
+// action lists plus the ARN another 8.4 KB of SNS topic and resource ARNs. An OMIT list, not an
+// allow list, so a diagnostic field AWS adds later (or one only some alarm types carry, like
+// Metrics on a metric-math alarm) is never silently dropped.
+const ALARM_NOISE_FIELDS = [
+	"AlarmArn",
+	"AlarmConfigurationUpdatedTimestamp",
+	"ActionsEnabled",
+	"OKActions",
+	"AlarmActions",
+	"InsufficientDataActions",
+	"StateReasonData",
+	"StateTransitionedTimestamp",
+] as const;
+
+export function omitAlarmNoise<T extends object>(alarm: T): Omit<T, (typeof ALARM_NOISE_FIELDS)[number]> {
+	const slim = { ...alarm } as Record<string, unknown>;
+	for (const field of ALARM_NOISE_FIELDS) delete slim[field];
+	return slim as Omit<T, (typeof ALARM_NOISE_FIELDS)[number]>;
+}
+
 export function describeAlarms(config: AwsConfig) {
 	return wrapListTool({
 		name: "aws_cloudwatch_describe_alarms",
 		listField: "MetricAlarms",
 		fn: async (params: DescribeAlarmsParams) => {
 			const client = getCloudWatchClient(config, params.estate);
-			return client.send(
+			const response = await client.send(
 				new DescribeAlarmsCommand({
 					AlarmNames: params.AlarmNames,
 					AlarmNamePrefix: params.AlarmNamePrefix,
@@ -37,6 +60,7 @@ export function describeAlarms(config: AwsConfig) {
 					NextToken: preferSdkParam(params.NextToken, params.cursor),
 				}),
 			);
+			return { ...response, MetricAlarms: response.MetricAlarms?.map(omitAlarmNoise) };
 		},
 		// SIO-833: project EVERY alarm to the fields the findings extractor reads
 		// (packages/agent/src/correlation/extractors/aws.ts). When the full MetricAlarms list

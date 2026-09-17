@@ -119,14 +119,60 @@ t.*
 FROM system:indexes t /* WHERE_CLAUSES */;
 `;
 
-// LIMIT-free base: getCompletedRequests.buildQuery ALWAYS appends a LIMIT
-// (caller value or DEFAULT_ANALYSIS_LIMIT) -- an unbounded 8-week scan+sort
-// with meta().plan per row took ~3.7s and bloated responses.
-export const n1qlCompletedRequests: string = `
-SELECT *, meta().plan FROM system:completed_requests
+// LIMIT-free base: getCompletedRequests.buildQuery ALWAYS appends a LIMIT -- an unbounded
+// 8-week scan+sort took ~3.7s and bloated responses.
+//
+// SIO-1774: three defects fixed here, each confirmed against the live cluster first.
+//
+// 1. `SELECT *, meta().plan` returned ~15 KB per row: one run got 745 KB for 50 rows, of which
+//    the execution plan (an escaped JSON string) was the bulk and a dozen fields were connection
+//    metadata (clientContextID, node, remoteAddr, userAgent, n1qlFeatCtrl ...). Nothing reads
+//    this tool's output but the model -- no typed-finding extractor consumes it -- so the
+//    projection is what a latency diagnosis needs, and the plan is opt-in.
+// 2. `ORDER BY elapsedTime` sorted a duration STRING: "9.99s" ranks above "44.8s" and above
+//    "1m12s", so the "slowest N" window silently dropped the slowest queries. Live: the top row
+//    was 9.99 s while 1m12 s and 44.9 s requests existed.
+// 3. See COMPLETED_REQUEST_STATES in getCompletedRequests.ts for the status filter.
+const COMPLETED_REQUEST_FIELDS = [
+	"requestId",
+	"requestTime",
+	"state",
+	"statementType",
+	"statement",
+	"queryContext",
+	"users",
+	"elapsedTime",
+	"serviceTime",
+	"cpuTime",
+	"ioTime",
+	"waitTime",
+	"resultCount",
+	"resultSize",
+	"usedMemory",
+	"errorCount",
+	"errors",
+	"phaseCounts",
+	"phaseTimes",
+	// Couchbase's own diagnosis ("High primary scan count", "Filter eliminating over 90%").
+	"`~analysis` AS analysis",
+];
+
+export function completedRequestsQuery(includePlan = false): string {
+	const fields = includePlan ? [...COMPLETED_REQUEST_FIELDS, "meta().plan AS plan"] : COMPLETED_REQUEST_FIELDS;
+	return `
+SELECT ${fields.join(", ")}
+FROM system:completed_requests
 WHERE requestTime >= DATE_ADD_STR(NOW_STR(), -8, 'week')
-ORDER BY elapsedTime DESC;
+ORDER BY STR_TO_DURATION(elapsedTime) DESC;
 `;
+}
+
+// Kept for importers that want the default (plan-free) statement.
+export const n1qlCompletedRequests: string = completedRequestsQuery();
+
+// With the ordering fixed the head of the list IS the slowest, so fewer rows answer the
+// question. ~2 KB per row: 20 rows is ~40 KB where the old default was ~750 KB.
+export const COMPLETED_REQUESTS_DEFAULT_LIMIT = 20;
 
 // Default row cap for the completed/fatal request-history tools when the
 // caller passes no limit. Keeps the ORDER BY sort bounded server-side.

@@ -42,7 +42,7 @@ export const TRIAGE_FIELDS = [
 	"description",
 ] as const;
 
-const DESCRIPTION_TRUNCATE_BYTES = 4_096;
+export const DESCRIPTION_TRUNCATE_BYTES = 4_096;
 
 export const InputSchema = z.object({
 	issueIdOrKey: z.string().describe("Jira issue key (e.g. INC-123) or numeric ID"),
@@ -81,7 +81,7 @@ function normalizeFields(input: GetJiraIssueInput["fields"]): string[] | "*" {
 
 // Truncate a string field to a byte budget with a visible marker. Used for
 // `description` which can be many KB of free-form text.
-function truncateLongString(value: unknown, byteBudget: number): unknown {
+export function truncateLongString(value: unknown, byteBudget: number): unknown {
 	if (typeof value !== "string") return value;
 	const bytes = Buffer.byteLength(value, "utf8");
 	if (bytes <= byteBudget) return value;
