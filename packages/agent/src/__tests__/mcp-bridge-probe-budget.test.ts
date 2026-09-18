@@ -283,15 +283,30 @@ describe("SIO-1811: getServerStatesForUi debounces unready", () => {
 	test("holds unready back until the streak reaches the threshold", async () => {
 		await seedThenFail(fixtureCard(), unreadyResponse);
 
-		// Cycles 1 and 2: a starved probe. The UI must not repaint.
+		// Cycles 1 and 2: a starved probe. The key is OMITTED rather than reported
+		// as "ready" -- a suppressed observation must not manufacture a readiness
+		// result the probe never returned (Greptile, PR #842). The chip falls back
+		// to connectivity, which we did observe.
 		await _pollServerHealthForTest();
-		expect(getServerStatesForUi()["konnect-mcp"]).toBe("ready");
+		expect(getServerStatesForUi()).not.toHaveProperty("konnect-mcp");
 		await _pollServerHealthForTest();
-		expect(getServerStatesForUi()["konnect-mcp"]).toBe("ready");
+		expect(getServerStatesForUi()).not.toHaveProperty("konnect-mcp");
 
 		// Cycle 3 crosses UNREADY_WARN_THRESHOLD: sustained, so now it shows.
 		await _pollServerHealthForTest();
 		expect(getServerStatesForUi()["konnect-mcp"]).toBe("unready");
+	});
+
+	// The cold-start case Greptile named: a server unready from its FIRST probe has
+	// no earlier healthy state, so rewriting it to "ready" would invent a recovery.
+	test("a server unready from the first probe is omitted, never reported ready", async () => {
+		await seedThenFail(fixtureCard(), unreadyResponse);
+
+		await _pollServerHealthForTest();
+
+		const ui = getServerStatesForUi();
+		expect(ui).not.toHaveProperty("konnect-mcp");
+		expect(Object.values(ui)).not.toContain("ready");
 	});
 
 	// The guard on the sibling consumer: /health derives `degraded` from the raw
@@ -302,7 +317,7 @@ describe("SIO-1811: getServerStatesForUi debounces unready", () => {
 		await _pollServerHealthForTest();
 
 		expect(getServerStates()["konnect-mcp"]).toBe("unready");
-		expect(getServerStatesForUi()["konnect-mcp"]).toBe("ready");
+		expect(getServerStatesForUi()).not.toHaveProperty("konnect-mcp");
 	});
 
 	test("a probe timeout is debounced the same as a real 503", async () => {
@@ -312,7 +327,7 @@ describe("SIO-1811: getServerStatesForUi debounces unready", () => {
 
 		await _pollServerHealthForTest();
 
-		expect(getServerStatesForUi()["konnect-mcp"]).toBe("ready");
+		expect(getServerStatesForUi()).not.toHaveProperty("konnect-mcp");
 		expect(getServerStates()["konnect-mcp"]).toBe("unready");
 	});
 

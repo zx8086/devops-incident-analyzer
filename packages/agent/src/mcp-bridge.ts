@@ -647,12 +647,18 @@ export function getServerStates(): Record<string, ProbeState> {
 // `replaced` in particular shares the amber fill with `unready` but means the
 // process actually restarted (see probeServer's instanceId/fingerprint checks)
 // and drives a reconnect, so holding it back would hide a real event.
+//
+// A suppressed observation is OMITTED, never rewritten to "ready" (Greptile, PR
+// #842). Reporting `ready` would manufacture a readiness result we do not have:
+// a server unready from its very first probe has no earlier healthy state to fall
+// back on, so claiming one shows a false recovery. Omitting the key instead lets
+// DataSourceSelector's own fallback speak -- `connected.includes(id) ? "ready" :
+// "down"` -- which answers from connectivity, something we actually observed,
+// rather than from a readiness verdict we are deliberately withholding.
 export function getServerStatesForUi(): Record<string, ProbeState> {
 	return Object.fromEntries(
-		[...lastProbeState.entries()].map(([name, state]) =>
-			state === "unready" && (unreadyStreak.get(name) ?? 0) < UNREADY_WARN_THRESHOLD
-				? [name, "ready" as ProbeState]
-				: [name, state],
+		[...lastProbeState.entries()].filter(
+			([name, state]) => !(state === "unready" && (unreadyStreak.get(name) ?? 0) < UNREADY_WARN_THRESHOLD),
 		),
 	);
 }
