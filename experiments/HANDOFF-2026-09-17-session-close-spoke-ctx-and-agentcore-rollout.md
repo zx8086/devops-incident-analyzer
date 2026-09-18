@@ -286,11 +286,18 @@ open on 8788, which is the exact scenario that hung during SIO-1787: rc 0 in 10 
 credentials, the real `aws` CLI failed in 2 s with the clear message and nothing was left
 listening. The original 5-minute hang was never reproduced; the code path it took is gone.
 
-**Now the only open things from this document**, none ticketed: the heartbeat `404
-agent_not_found` warnings during a pi verify (first update, "Seen on the second live run"), the
-possible `matchesFocus` false positives on shared name fragments (first update, SIO-1790 bullet),
-the `ajv` CI flake seen once, the `PiFleetPane` scroll not yet looked at live, and the live hub
-message to one spoke per environment (still user-driven, per SIO-1793's scope).
+**Now the only open things from this document**, each ticketed on 2026-09-18 (all Backlog,
+unassigned; nothing is in progress):
+
+| Observation | Ticket |
+|---|---|
+| possible `matchesFocus` false positives on shared name fragments, 25 of 26 alarms in focus (first update, SIO-1790 bullet) | [SIO-1797](https://linear.app/siobytes/issue/SIO-1797), Medium |
+| heartbeat `404 agent_not_found` warnings on every poll slice during a pi verify (first update, "Seen on the second live run") | [SIO-1798](https://linear.app/siobytes/issue/SIO-1798), Low |
+| the `ajv` CI flake seen once (item 3) | [SIO-1799](https://linear.app/siobytes/issue/SIO-1799), Low, a place for a recurrence to land |
+| the `PiFleetPane` scroll not yet looked at live (first update, SIO-1794 bullet) | [SIO-1800](https://linear.app/siobytes/issue/SIO-1800), Low, live check with four steps |
+| the live hub message to one spoke per environment (item 5, user-driven) | [SIO-1801](https://linear.app/siobytes/issue/SIO-1801), Low, operator recipe on the ticket |
+
+With that, nothing in this document is untracked.
 
 ## What is still open
 
