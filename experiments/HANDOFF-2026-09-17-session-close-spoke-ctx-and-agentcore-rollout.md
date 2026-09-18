@@ -552,13 +552,16 @@ shipped as PR #834 (`296b9f84`). Done.**
 | SIO-1801 | Done, both environments, both counts verified |
 | SIO-1799 | Backlog ON PURPOSE. It is a landing place for a recurrence of a CI flake seen once; its own acceptance is "fixed with a test, or closed as not reproducible after 60 days". No recurrence in 45 CI runs. Closing it before 2026-11-16 would contradict the ticket, so it was left. |
 
-**Nothing else is left.** Seen in passing during the whole session and NOT ticketed, in case any
-is wanted: a verify to `eu-shared-services-prd` once ended `error: response not valid JSON`
-(spoke-side, intermittent; the next one returned a verdict); `findLinkedIncidents`' `resolvedAt` /
-`mttrMinutes` are probably always null because the upstream default field set has no
-`resolutiondate`; `get-runbook-for-alert.ts` builds Confluence CQL with the same unquoted
-multi-word `text ~` that SIO-1802 fixed for Jira; `packages/knowledge-graph`'s suite segfaults the
-Bun runner locally (rc 139, identical on base content; CI runs it).
+**Nothing else is left from the tickets above.** The four things seen in passing during the session
+were ticketed afterwards at the owner's request, each checked against the code first. All four
+are Backlog, unassigned, nothing in progress:
+
+| Observation | Ticket |
+|---|---|
+| A verify to `eu-shared-services-prd` once ended `error: response not valid JSON`; the next one, 100 minutes later, returned a verdict. Checking the code corrected how this document described it earlier: the error is raised by the SPOKE extension (`packages/pi-coms/extensions/turnReply.ts`, `buildTurnReplies`), not by the hub, and the model's text is discarded when extraction fails, so the failure cannot be diagnosed. SIO-1580 already made the extractor lenient; this gets past it | [SIO-1804](https://linear.app/siobytes/issue/SIO-1804), Medium. Make it diagnosable first, then fix the shape that shows up |
+| Atlassian MTTR is probably always null. BOTH `findLinkedIncidents` and `getIncidentHistory` compute it from `resolutiondate`, neither search call passes a `fields` list, and the upstream default set does not include that field (seen absent on a live response). Wider than first noted: it empties the MTTR / recurrence half of the incident-history findings, and the fixtures supply the field directly, so no test can see it | [SIO-1805](https://linear.app/siobytes/issue/SIO-1805), Medium. Confirm read-only on resolved tickets before changing the request |
+| `get-runbook-for-alert.ts` builds Confluence CQL with unquoted multi-word `text ~` and `title ~` terms, the shape SIO-1802 fixed for Jira. NOT confirmed that CQL behaves like JQL, and this tool already ranks with `scorePage`, so it is a milder case | [SIO-1806](https://linear.app/siobytes/issue/SIO-1806), Low. Measure first; it may close with no code change |
+| `packages/knowledge-graph`: `bun run test` segfaults the Bun runner locally (rc 139, zero tests executed, Bun 1.4.2, identical with a touched file restored to base content; CI is green). Not tried: main checkout vs worktree, sandboxed vs not. The native `lbug` library is the obvious suspect (SIO-1129, SIO-1165, SIO-1236 were lbug crashes) | [SIO-1807](https://linear.app/siobytes/issue/SIO-1807), Low. The package cannot be verified locally before a push |
 
 State at close: `origin/main` at the commit that adds this section, on top of `296b9f84`. No
 branch from this session is open, locally or on origin. Every process the session started is
