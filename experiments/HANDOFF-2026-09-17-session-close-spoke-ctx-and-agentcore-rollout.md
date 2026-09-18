@@ -5,10 +5,10 @@
 | Date | 2026-09-17 (session ran about 15:45 to 17:45 UTC) |
 | Tickets | [SIO-1786](https://linear.app/siobytes/issue/SIO-1786) Done (its user-side replay has since been run, see the update), [SIO-1787](https://linear.app/siobytes/issue/SIO-1787) Done (closed by the user 2026-09-17, was In Review when this was written), [SIO-1788](https://linear.app/siobytes/issue/SIO-1788) Done |
 | Related | [SIO-1726](https://linear.app/siobytes/issue/SIO-1726), [SIO-1734](https://linear.app/siobytes/issue/SIO-1734) (spoke context-mode, shipped earlier), [SIO-1774](https://linear.app/siobytes/issue/SIO-1774) (the change the AgentCore deploy shipped), [SIO-1784](https://linear.app/siobytes/issue/SIO-1784) (separate, own handover: `experiments/HANDOFF-2026-09-17-SIO-1784.md`) |
-| PRs | #819 merged as `798e9b29`, #820 merged as `61b43f87`; follow-up session #821 to #824; second update #826 merged as `cf5ba637`, #825 closed unmerged; third update #827 merged as `09781ab9`, #828 merged as `95433027`; fourth update #830 merged as `adde28a3`, #829 merged as `3dccce03`, #831 merged as `dfabe40a`; fifth update #832 merged as `4df76f04` |
-| Repo state | `origin/main` at `61b43f87` when written; `7a77c575` after the follow-up session (PRs #821, #822, #823, #824); `cf5ba637` after the second update (PR #826); `95433027` after the third update (PRs #827, #828); `dfabe40a` after the fourth update (PRs #829, #830, #831); `4df76f04` after the fifth update (PR #832). No branch is open. |
+| PRs | #819 merged as `798e9b29`, #820 merged as `61b43f87`; follow-up session #821 to #824; second update #826 merged as `cf5ba637`, #825 closed unmerged; third update #827 merged as `09781ab9`, #828 merged as `95433027`; fourth update #830 merged as `adde28a3`, #829 merged as `3dccce03`, #831 merged as `dfabe40a`; fifth update #832 merged as `4df76f04`; sixth update #833 merged as `c3c1d7d0` |
+| Repo state | `origin/main` at `61b43f87` when written; `7a77c575` after the follow-up session (PRs #821, #822, #823, #824); `cf5ba637` after the second update (PR #826); `95433027` after the third update (PRs #827, #828); `dfabe40a` after the fourth update (PRs #829, #830, #831); `4df76f04` after the fifth update (PR #832); `c3c1d7d0` after the sixth update (PR #833). No branch is open. |
 | Deployed state | Fleet bundle `61b43f87` on all 8 spokes and both hubs. AWS AgentCore runtime on v16. The SIO-1792 change is to the operator-side fleet CLI and needs no deploy; the SIO-1793 change is tests only. |
-| Nature | Nothing here is in progress. Every item under "What is still open" is now closed or ticketed; see the third update for the tickets and the FOURTH update for what happened to them: three are merged, and three small things still need the owner. |
+| Nature | Nothing here is in progress. Every item under "What is still open" is now closed or ticketed; see the third update for the tickets, the fourth and fifth for what happened to them, and the SIXTH update for the current list of what is left: two no-code items that need the owner (the dev half of SIO-1801, check 2 of SIO-1800). |
 
 ## TL;DR
 
@@ -432,7 +432,7 @@ the service name as a keyword), and two generic words satisfy the extractor's tw
 card explains why it is there, which is what the ticket asked for, but it is unrelated. The cleaner
 fix is the prompt: `agents/incident-analyzer/agents/atlassian-agent/SOUL.md` tells the model to
 pass "the cited error phrase plus key entities", and it decomposes the phrase into single words.
-Not done; detail and both options are on the ticket.
+Not done when this was written; DONE since, as SIO-1803, see the sixth update.
 
 **Two operational facts worth keeping:** the Atlassian MCP runs `bun --hot`, so a `git pull` in the
 main checkout reloads it in place with the SAME pid and start time (an unchanged pid is not "not
@@ -443,6 +443,66 @@ moved to Done again by #832.
 State at close: `origin/main` at the commit that adds this section, on top of `4df76f04`. No branch
 from this session is open. Port 5174 free; the operator's tunnel (8788) and the Atlassian MCP
 (9085) were never touched. Nothing deployed.
+
+## Sixth update, 2026-09-18 08:25 to 08:45 UTC (same session): SIO-1803, the prompt fix, and what is left overall
+
+**[SIO-1803](https://linear.app/siobytes/issue/SIO-1803), PR #833, merged as `c3c1d7d0`.** Created
+as the follow-up the fifth update called for, related to SIO-1802. Prompt only: one section of
+`agents/incident-analyzer/agents/atlassian-agent/SOUL.md`. The old text said WHAT to pass as
+`errorKeywords` and nothing about FORM, and its `atlassian_search` example is a run of loose words,
+right for one free-text query and wrong for a list whose every entry becomes its own search
+clause. The section now gives the form rules: keep a phrase whole, prefer distinctive identifiers
+(exception class, request type, error code, business term), never a generic single word or an
+estate-wide technology on its own, never the service name, 2 to 5 entries, with the styles-v3
+incident as the worked wrong/right example. No `agent.yaml` bump, matching the last three edits of
+that file. Greptile 5/5 on the first round, no findings. Linear moved it to Done on merge.
+
+The RIGHT example was run against Jira BEFORE it went into the prompt (11 returned: the 10 related
+tickets plus one keyword-only hit the card drops; the WRONG list pulled in five junk tickets).
+
+Live, isolated instance on 5174 loading the new prompt, Atlassian only:
+
+| Incident | `errorKeywords` the model passed | Result |
+|---|---|---|
+| styles-v3, twice | UnambiguousTimeoutException, GetRequest, `kv timeout`, styles-v3 | `rawCount: 11`, `filteredCount: 11`; 11 rows, all incident tickets, the exact prior incidents first, NO unrelated ticket |
+| PDF rendering on another service, shares no words with the example | SIMPLE_PDF, fo:table-columns, TransformerException, `PDF generation failed` | 5 returned; the day before the same incident got FOP and `PDF generation` and returned 10 mostly unrelated |
+
+Before the change the same styles-v3 incident got `TIMEOUT, article, styles, kv` and even the
+service name. The same disciplined lists also reached `getIncidentHistory`. Limits, stated on the
+ticket: the first two runs are the incident used as the worked example, so the third run is the
+evidence that the rule generalises; `styles-v3` is the application's alias from the log line, not
+the normalised service name; prompt behaviour is probabilistic, so this is three runs and not a
+guarantee. If generic words reappear, the backstop is the rule-side option recorded on SIO-1802
+(count only multi-word or distinctive keywords towards the two-keyword threshold). The prompt
+takes effect on the next web app restart: agent definitions are cached in memory
+(`agentCache`, `packages/agent/src/llm.ts`). No MCP restart is needed.
+
+**With that, SIO-1802's acceptance is met in full:** related tickets only, keyword-found tickets
+still arrive, and every row says why it is there.
+
+**What is left from this whole document, as of this update.** Two items, both need the owner, and
+neither needs code:
+
+1. **[SIO-1801](https://linear.app/siobytes/issue/SIO-1801), the dev half** (In Progress). One
+   real hub message to one DEV spoke with the two prompts on the ticket. It cannot go through the
+   fleet pane, which lists prd hubs only by design (SIO-1696); it needs the operator console route
+   (`just hub-tunnel` for dev, then `just coms <hub> <cname>`). The prd half passed.
+2. **[SIO-1800](https://linear.app/siobytes/issue/SIO-1800), check 2** (In Review). "The
+   investigate entry lands below the finished verify" could not be exercised, because the verify in
+   the live run ended `error: response not valid JSON` on the spoke side and so raised no
+   investigate card. It needs one verify that returns a verdict. Checks 1, 3 and 4 passed.
+
+Not work, but a decision waiting on the owner, recorded on SIO-1800: a reply that arrives after its
+pane entry was added lands partly below the fold (108 px and 81 px measured). That is the
+documented intent of SIO-1794, so it was not changed.
+
+[SIO-1799](https://linear.app/siobytes/issue/SIO-1799) stays in Backlog by its own rule (no
+recurrence in 45 CI runs; close as not reproducible after 2026-11-16).
+
+State at close: `origin/main` at the commit that adds this section, on top of `c3c1d7d0`. This
+worktree and the main checkout are level with it. No branch from this session is open, locally or
+on origin. Port 5174 free; the operator's tunnel (8788) and the Atlassian MCP (9085) were never
+touched. Nothing deployed: fleet bundle `61b43f87`, AWS AgentCore runtime v16.
 
 ## What is still open
 
