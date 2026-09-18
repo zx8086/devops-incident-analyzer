@@ -48,7 +48,12 @@ function classFor(id: string, isSelected: boolean): string {
 			: "bg-yellow-50 text-yellow-900 border border-yellow-500 hover:border-yellow-600 font-medium";
 	}
 	if (s === "replaced") {
-		return "bg-yellow-100 text-yellow-900 border border-yellow-500 animate-pulse font-medium";
+		// A datasource stays selected while its process reconnects, so this branch
+		// carries the weight cue too -- without it a selected chip is
+		// indistinguishable from an unselected one for the whole reload.
+		return isSelected
+			? "bg-yellow-100 text-yellow-900 border border-yellow-600 animate-pulse font-semibold"
+			: "bg-yellow-100 text-yellow-900 border border-yellow-500 animate-pulse font-medium";
 	}
 	// ready
 	return isSelected
