@@ -442,6 +442,25 @@ describe("SIO-1815: incident time and the window to query first", () => {
 		expect(block).toContain("never report it as the incident");
 	});
 
+	// Greptile, PR #846: the window came from incidentAnchors[0] alone, so a pasted excerpt that
+	// opens with an older line aimed the incident query at history.
+	test("several timestamps far apart each get a window, earliest first", () => {
+		const block = buildFocusBlock(
+			{
+				...ANCHORED,
+				incidentAnchors: [
+					{ raw: "2026-09-15 23:33:56", utc: "2026-09-15T23:33:56.000Z", timeZone: "UTC", assumed: true },
+					...(ANCHORED.incidentAnchors ?? []),
+				],
+			},
+			RUN_NOW,
+		);
+		expect(block).toContain("Incident windows (2, one per timestamp the user gave, earliest first)");
+		expect(block).toContain("1. ISO 2026-09-15T21:33:56.000Z to 2026-09-16T00:33:56.000Z");
+		expect(block).toContain("2. ISO 2026-09-17T17:10:42.707Z to 2026-09-17T20:10:42.707Z");
+		expect(block).toContain("restricted to EACH of these windows");
+	});
+
 	test("an assumed zone is said to be assumed, not presented as fact", () => {
 		const block = buildFocusBlock(
 			{

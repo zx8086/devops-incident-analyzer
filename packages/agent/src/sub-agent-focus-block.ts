@@ -1,6 +1,6 @@
 // packages/agent/src/sub-agent-focus-block.ts
 import type { IncidentAnchor, InvestigationFocus, ResolvedIdentifiers } from "@devops-agent/shared";
-import { incidentQueryWindow } from "./incident-time.ts";
+import { incidentQueryWindows } from "./incident-time.ts";
 
 // SIO-1815: the incident time, already converted, and the window to query first -- in
 // every form a tool takes, computed here so the model does no date arithmetic (SIO-1091
@@ -25,16 +25,31 @@ export function describeIncidentAnchors(anchors: IncidentAnchor[] | undefined): 
 }
 
 function buildIncidentTimeBlock(focus: InvestigationFocus, nowIso: string): string {
-	const first = focus.incidentAnchors?.[0];
-	if (!first) return "";
+	const anchors = focus.incidentAnchors ?? [];
+	if (anchors.length === 0) return "";
 	const lines = [
-		`- Incident time (UTC, authoritative): ${describeIncidentAnchors(focus.incidentAnchors)}. Never re-read the user's local time as UTC.`,
+		`- Incident time (UTC, authoritative): ${describeIncidentAnchors(anchors)}. Never re-read the user's local time as UTC.`,
 	];
-	const w = incidentQueryWindow(first.utc, nowIso);
-	if (w) {
+	// Every timestamp the user gave gets a window, overlapping ones merged: text order says
+	// nothing about which line is the incident (Greptile, PR #846).
+	const windows = incidentQueryWindows(
+		anchors.map((a) => a.utc),
+		nowIso,
+	);
+	const render = (w: (typeof windows)[number]) =>
+		`ISO ${w.fromIso} to ${w.toIso}; relative ${w.fromRelative} to ${w.toRelative}; epoch seconds ${w.fromEpochSeconds} to ${w.toEpochSeconds}`;
+	const [only] = windows;
+	if (windows.length === 1 && only) {
+		lines.push(`- Incident window, computed for you -- paste, do not recompute: ${render(only)}.`);
+	} else if (windows.length > 1) {
 		lines.push(
-			`- Incident window, computed for you -- paste, do not recompute: ISO ${w.fromIso} to ${w.toIso}; relative ${w.fromRelative} to ${w.toRelative}; epoch seconds ${w.fromEpochSeconds} to ${w.toEpochSeconds}.`,
-			"- IN ADDITION to the wide (now-30d) discovery, absence and recurrence queries your rules require, run the query that establishes what happened AT the incident restricted to THIS window. A wide query sorted newest-first returns the most recent rows, not the incident's. A row from outside the incident window is history or recurrence: never report it as the incident, and date it explicitly when you cite it.",
+			`- Incident windows (${windows.length}, one per timestamp the user gave, earliest first), computed for you -- paste, do not recompute:`,
+			...windows.map((w, i) => `    ${i + 1}. ${render(w)}`),
+		);
+	}
+	if (windows.length > 0) {
+		lines.push(
+			`- IN ADDITION to the wide (now-30d) discovery, absence and recurrence queries your rules require, run the query that establishes what happened AT the incident restricted to ${windows.length === 1 ? "THIS window" : "EACH of these windows"}. A wide query sorted newest-first returns the most recent rows, not the incident's. A row from outside ${windows.length === 1 ? "the incident window" : "every incident window"} is history or recurrence: never report it as the incident, and date it explicitly when you cite it.`,
 		);
 	}
 	return `${lines.join("\n")}\n`;

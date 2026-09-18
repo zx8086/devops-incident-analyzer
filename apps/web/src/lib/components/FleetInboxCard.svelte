@@ -55,6 +55,9 @@ function when(iso: string): string {
         {#each entry.findings as finding, i (i)}
           <span class="px-1.5 py-0.5 rounded border break-all {finding.focus ? 'bg-tommy-navy border-tommy-navy text-white' : 'bg-white border-gray-200 text-gray-600'}">{finding.family}: {finding.resource}</span>
         {/each}
+        {#if entry.findingCount !== null && entry.findingCount > entry.findings.length}
+          <span class="px-1.5 py-0.5 rounded border bg-white border-gray-200 text-gray-400">+{entry.findingCount - entry.findings.length} more</span>
+        {/if}
       </p>
     {/if}
     <p class="mt-1 text-gray-700 whitespace-pre-wrap break-words">{entry.excerpt}</p>
@@ -104,6 +107,9 @@ function when(iso: string): string {
             <span class="px-1.5 py-0.5 rounded border bg-tommy-offwhite border-gray-200 text-tommy-navy">{name}</span>
           {/each}
         </p>
+      {/if}
+      {#if estate.entries.length < estate.counts.total}
+        <p class="mt-1 text-xs text-gray-500">Showing {estate.entries.length} of {estate.counts.total} reports (focus reports first, then newest). Counts and categories cover all of them.</p>
       {/if}
       {#if estate.entries.length === 0 && !estate.error}
         <p class="mt-1 text-xs text-gray-400">No monitor reports in the window.</p>

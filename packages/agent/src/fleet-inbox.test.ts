@@ -17,6 +17,7 @@ import {
 	incidentWindow,
 	isExcludedSender,
 	isFleetInboxEnabled,
+	MAX_ENTRIES_PER_ESTATE,
 	type MonitorFinding,
 	parseMonitorReport,
 	summarizeFleetInboxForPrompt,
@@ -452,5 +453,53 @@ describe("SIO-1815: the digest is scoped to the focus services", () => {
 		const json = JSON.stringify(digestFor(FOCUS).entries.map((e) => e.findings));
 		expect(json).not.toContain("SECRET-CAUSE-MARKER");
 		expect(json).not.toContain("deadlock");
+	});
+
+	// Greptile, PR #846: totals cover every report, details are capped at 20 entries and 8
+	// prompt lines. "5 naming a focus service" must not read as "and here are all five".
+	test("caps are stated, not silent", () => {
+		const reports = Array.from({ length: MAX_ENTRIES_PER_ESTATE + 5 }, (_, i) => ({
+			inbox: "ops",
+			message: message({
+				msg_id: `m${String(i).padStart(2, "0")}`,
+				created_at: `2026-09-06T10:${String(i).padStart(2, "0")}:00.000Z`,
+				prompt: [
+					"[warn] aws-111122223333: 1 finding(s)",
+					"",
+					`- (warn/logs) /ecs/fargate/group-${i}: feed-service errors`,
+				].join("\n"),
+			}),
+		}));
+		const estate = buildEstateDigest({
+			estate: "eu-oit-prd",
+			environment: "prd",
+			inboxes: ["ops"],
+			focusServices: FOCUS,
+			error: null,
+			messages: reports,
+		});
+		expect(estate.counts.total).toBe(MAX_ENTRIES_PER_ESTATE + 5);
+		expect(estate.entries).toHaveLength(MAX_ENTRIES_PER_ESTATE);
+		const summary = summarizeFleetInboxForPrompt({
+			windowFrom: "a",
+			windowTo: "b",
+			generatedAt: "c",
+			focusServices: FOCUS,
+			estates: [estate],
+		});
+		expect(summary).toContain(`detail is from ${MAX_ENTRIES_PER_ESTATE} of ${MAX_ENTRIES_PER_ESTATE + 5} reports`);
+		expect(summary).toContain(`focus findings (top 8 of ${MAX_ENTRIES_PER_ESTATE} distinct)`);
+	});
+
+	test("an uncapped digest carries no truncation note (no prompt tax)", () => {
+		const summary = summarizeFleetInboxForPrompt({
+			windowFrom: "a",
+			windowTo: "b",
+			generatedAt: "c",
+			focusServices: FOCUS,
+			estates: [digestFor(FOCUS)],
+		});
+		expect(summary).not.toContain("detail is from");
+		expect(summary).not.toContain("distinct)");
 	});
 });

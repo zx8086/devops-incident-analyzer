@@ -302,7 +302,9 @@ const PROMPT_RESOURCE_MAX = 120;
 
 // "(warn/logs) /ecs/fargate/shop-prd-log-group x5", most frequent first. The key is
 // severity + family + resource: all three are the monitor's structured fields.
-function focusFindingLines(estate: FleetInboxEstate): string[] {
+// Returns the lines AND how many distinct focus findings there were, so a cap is stated
+// rather than silent (Greptile, PR #846): totals cover every report, details do not.
+function focusFindingLines(estate: FleetInboxEstate): { lines: string[]; distinct: number } {
 	const tally = new Map<string, number>();
 	for (const entry of estate.entries) {
 		for (const f of entry.findings) {
@@ -311,10 +313,11 @@ function focusFindingLines(estate: FleetInboxEstate): string[] {
 			tally.set(key, (tally.get(key) ?? 0) + 1);
 		}
 	}
-	return [...tally.entries()]
+	const lines = [...tally.entries()]
 		.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
 		.slice(0, MAX_FOCUS_FINDINGS_IN_PROMPT)
 		.map(([key, n]) => `${key} x${n}`);
+	return { lines, distinct: tally.size };
 }
 
 // Prompt summary: counts, severities, categories, resource and alarm names, timestamps.
@@ -341,9 +344,19 @@ export function summarizeFleetInboxForPrompt(digest: FleetInboxDigest): string {
 			);
 			lines.push(`  finding categories: ${parts.join(", ")}`);
 		}
-		const focusLines = focusFindingLines(estate);
-		if (focusLines.length > 0) lines.push(`  focus findings: ${focusLines.join("; ")}`);
-		else if (scoped && c.total > 0) lines.push("  focus findings: none of these reports names a focus service");
+		const focus = focusFindingLines(estate);
+		if (focus.lines.length > 0) {
+			const capped =
+				focus.distinct > focus.lines.length ? ` (top ${focus.lines.length} of ${focus.distinct} distinct)` : "";
+			lines.push(`  focus findings${capped}: ${focus.lines.join("; ")}`);
+		} else if (scoped && c.total > 0) lines.push("  focus findings: none of these reports names a focus service");
+		// The counts above cover every report in the window; the per-report details are
+		// capped. Say so, or "5 naming a focus service" reads as "and here are all five".
+		if (estate.entries.length < c.total) {
+			lines.push(
+				`  detail is from ${estate.entries.length} of ${c.total} reports (focus reports first, then newest); counts and categories cover all ${c.total}`,
+			);
+		}
 		if (estate.alarmNames.length > 0) lines.push(`  alarms: ${estate.alarmNames.join(", ")}`);
 		if (estate.error) lines.push(`  partial: ${estate.error}`);
 	}

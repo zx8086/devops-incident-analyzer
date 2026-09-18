@@ -106,6 +106,28 @@ describe("FleetInboxCard", () => {
 		expect(body.indexOf("OTHER-EXCERPT")).toBeGreaterThan(body.indexOf("<details"));
 	});
 
+	// Greptile, PR #846: counts cover every report while details are capped; the card says so.
+	test("a capped digest says how much of it is shown", () => {
+		const base = digest.estates[0] as FleetInboxDigest["estates"][number];
+		const report = base.entries[0] as (typeof base.entries)[number];
+		const capped: FleetInboxDigest = {
+			...digest,
+			estates: [{ ...base, counts: { ...base.counts, total: 25 }, entries: [{ ...report, findingCount: 15 }] }],
+		};
+		const { body } = render(FleetInboxCard, { props: { digest: capped } });
+		expect(body).toContain("Showing 1 of 25 reports");
+		expect(body).toContain("+14 more");
+	});
+
+	test("an uncapped digest shows neither note", () => {
+		const base = digest.estates[0] as FleetInboxDigest["estates"][number];
+		const report = base.entries[0] as (typeof base.entries)[number];
+		const exact: FleetInboxDigest = { ...digest, estates: [{ ...base, entries: [{ ...report, findingCount: 1 }] }] };
+		const { body } = render(FleetInboxCard, { props: { digest: exact } });
+		expect(body).not.toContain("Showing 1 of");
+		expect(body).not.toContain("more</span>");
+	});
+
 	test("unscoped, nothing is folded away", () => {
 		const { body } = render(FleetInboxCard, { props: { digest } });
 		expect(body).not.toContain("<details");

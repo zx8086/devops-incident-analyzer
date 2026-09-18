@@ -903,9 +903,7 @@ function extractStructuredToolError(content: unknown): {
 // SIO-728: parses ---STRUCTURED--- sentinel to populate hostname/upstreamContentType/statusCode
 // when the MCP server emitted them. Redaction runs on the human part only -- hostnames in the
 // structured JSON would otherwise be scrubbed.
-export function extractToolErrors(
-	messages: Array<{ _getType(): string; content: unknown; name?: string; status?: string }>,
-): ToolError[] {
+export function extractToolErrors(messages: TrajectoryMessage[]): ToolError[] {
 	const errors: ToolError[] = [];
 	for (const msg of messages) {
 		if (msg._getType() !== "tool") continue;
@@ -1008,26 +1006,83 @@ function isToolSuccessMessage(msg: { _getType(): string; content: unknown; statu
 	return extractStructuredToolError(msg.content) === null && extractAwsError(msg.content) === null;
 }
 
-// SIO-1164: marks each ToolError `recovered: true` when a LATER message in the trajectory is a
-// successful call to the same tool name. Tool name is the only "category of intent" signal
-// available without inspecting heterogeneous per-datasource arguments (raw SQL, log-group names,
-// query DSL), so any later same-tool success recovers all earlier same-tool errors -- this
-// reflects normal self-correction (retried query, retried after a timeout) rather than an
-// unrecovered malfunction. Ordering matters: a success that occurred BEFORE an error (e.g. an
-// early schema check succeeds, then the actual investigative query on the same tool fails) must
-// NOT excuse that later, distinct failure -- CodeRabbit caught this in review.
-function markRecoveredToolErrors(
-	errors: ToolError[],
-	messages: Array<{ _getType(): string; content: unknown; name?: string; status?: string }>,
-): ToolError[] {
-	// Highest message index, per tool name, at which a success occurred.
-	const lastSuccessIndexByTool = new Map<string, number>();
-	messages.forEach((msg, index) => {
-		if (isToolSuccessMessage(msg)) lastSuccessIndexByTool.set(msg.name ?? "unknown", index);
-	});
-	if (lastSuccessIndexByTool.size === 0) return errors;
+// SIO-1815 (Greptile, PR #846; reproduced): which arguments say WHAT a call was for, as
+// opposed to how it asked. Judged by key name -- an id, a name, a path, an arn, an index --
+// so a rewritten query string, a different time window or a smaller limit is still a retry
+// of the same thing, while another merge request, file or log group is a different target.
+const ENTITY_KEY_RE =
+	/(?:^|_)(?:id|iid|ids|name|names|key|keys|path|paths|arn|arns|identifier|identifiers|index|cluster|topic|group|bucket|scope|collection|estate|deployment|service|project)$/;
+const ENTITY_VALUE_MAX = 200;
 
-	// Errors are produced by the loop above in the same left-to-right order as `messages`, one
+function entityArgs(args: unknown): Map<string, string> {
+	const out = new Map<string, string>();
+	if (!args || typeof args !== "object") return out;
+	for (const [key, value] of Object.entries(args as Record<string, unknown>)) {
+		const snake = key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+		if (!ENTITY_KEY_RE.test(snake)) continue;
+		const scalar = (v: unknown) => typeof v === "string" || typeof v === "number" || typeof v === "boolean";
+		if (scalar(value)) out.set(snake, String(value).slice(0, ENTITY_VALUE_MAX));
+		else if (Array.isArray(value) && value.every(scalar)) {
+			out.set(snake, value.map(String).sort().join(",").slice(0, ENTITY_VALUE_MAX));
+		}
+	}
+	return out;
+}
+
+// True when both calls name the same kind of entity and name a DIFFERENT one.
+function targetsDiffer(failed: Map<string, string>, succeeded: Map<string, string>): boolean {
+	for (const [key, value] of failed) {
+		const other = succeeded.get(key);
+		if (other !== undefined && other !== value) return true;
+	}
+	return false;
+}
+
+type TrajectoryMessage = {
+	_getType(): string;
+	content: unknown;
+	name?: string;
+	status?: string;
+	tool_call_id?: string;
+	tool_calls?: Array<{ id?: string; args?: unknown }>;
+};
+
+// SIO-1164: marks each ToolError `recovered: true` when a LATER message in the trajectory is a
+// successful call to the same tool -- normal self-correction (retried query, retried after a
+// timeout) rather than an unrecovered malfunction. Ordering matters: a success that occurred
+// BEFORE an error (e.g. an early schema check succeeds, then the actual investigative query on
+// the same tool fails) must NOT excuse that later, distinct failure -- CodeRabbit caught this.
+//
+// SIO-1815: and it must be a success FOR THE SAME THING. Tool name alone let a lookup of
+// merge request A that failed be excused by a later lookup of merge request B; once the
+// Gaps filter, the aggregator input and the daily log all trusted the flag, that hid a
+// genuine gap. The call's arguments come from the AIMessage tool_call the ToolMessage
+// answers. When they cannot be found (a trajectory with no call ids) the name-only rule
+// still applies: refusing recovery there would re-cap every self-corrected run.
+function markRecoveredToolErrors(errors: ToolError[], messages: TrajectoryMessage[]): ToolError[] {
+	const argsByCallId = new Map<string, unknown>();
+	for (const msg of messages) {
+		for (const call of msg.tool_calls ?? []) {
+			if (call.id) argsByCallId.set(call.id, call.args);
+		}
+	}
+	const entityOf = (msg: TrajectoryMessage): Map<string, string> | undefined =>
+		msg.tool_call_id !== undefined && argsByCallId.has(msg.tool_call_id)
+			? entityArgs(argsByCallId.get(msg.tool_call_id))
+			: undefined;
+
+	// Every success per tool, in order, with what it was for.
+	const successesByTool = new Map<string, Array<{ index: number; entity: Map<string, string> | undefined }>>();
+	messages.forEach((msg, index) => {
+		if (!isToolSuccessMessage(msg)) return;
+		const name = msg.name ?? "unknown";
+		const list = successesByTool.get(name) ?? [];
+		list.push({ index, entity: entityOf(msg) });
+		successesByTool.set(name, list);
+	});
+	if (successesByTool.size === 0) return errors;
+
+	// Errors are produced by extractToolErrors in the same left-to-right order as `messages`, one
 	// per erroring tool message, so replaying that same classification here recovers each error's
 	// original message index without needing to thread it through the ToolError object.
 	let errorCursor = 0;
@@ -1039,9 +1094,16 @@ function markRecoveredToolErrors(
 			errorCursor++;
 		}
 		const errorIndex = errorCursor;
+		const failedMsg = messages[errorIndex];
 		errorCursor++;
-		const lastSuccessIndex = lastSuccessIndexByTool.get(error.toolName);
-		return lastSuccessIndex !== undefined && lastSuccessIndex > errorIndex ? { ...error, recovered: true } : error;
+		const failedEntity = failedMsg ? entityOf(failedMsg) : undefined;
+		const recovered = (successesByTool.get(error.toolName) ?? []).some(
+			(s) =>
+				s.index > errorIndex &&
+				// Unknown on either side: nothing to compare, the SIO-1164 name-only rule stands.
+				(failedEntity === undefined || s.entity === undefined || !targetsDiffer(failedEntity, s.entity)),
+		);
+		return recovered ? { ...error, recovered: true } : error;
 	});
 }
 

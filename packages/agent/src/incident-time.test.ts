@@ -4,6 +4,7 @@ import {
 	applyIncidentAnchors,
 	extractIncidentAnchors,
 	incidentQueryWindow,
+	incidentQueryWindows,
 	investigationWindowFor,
 	isValidTimeZone,
 	wallTimeToUtcMs,
@@ -209,5 +210,71 @@ describe("applyIncidentAnchors", () => {
 		const incident = { severity: "medium" as const, timeWindow: modelWindow };
 		const out = applyIncidentAnchors(incident, "orders are slow in the last 30 min", "Europe/Amsterdam", now);
 		expect(out).toBe(incident);
+	});
+});
+
+// Greptile, PR #846, both reproduced before fixing.
+describe("a timestamp that cannot exist is not an anchor", () => {
+	// Date.UTC never rejects: 2026-02-31 became March 3 and would have been handed to every
+	// sub-agent as the authoritative incident time, replacing the investigation window.
+	test("an impossible calendar date is dropped, in every shape", () => {
+		expect(extractIncidentAnchors("failed at 2026-02-31T10:00:00Z", "Europe/Amsterdam")).toEqual([]);
+		expect(extractIncidentAnchors("Feb 31, 2026 @ 10:00:00.000", "Europe/Amsterdam")).toEqual([]);
+		expect(extractIncidentAnchors("2026-04-31 10:00:00", "Europe/Amsterdam")).toEqual([]);
+		expect(extractIncidentAnchors("2025-02-29T10:00:00Z", undefined)).toEqual([]);
+	});
+
+	test("a real leap day and a real month end still parse", () => {
+		expect(extractIncidentAnchors("2028-02-29T10:00:00Z", undefined)[0]?.utc).toBe("2028-02-29T10:00:00.000Z");
+		expect(extractIncidentAnchors("Jan 31, 2026 @ 23:59:59.999", "Europe/Amsterdam")[0]?.utc).toBe(
+			"2026-01-31T22:59:59.999Z",
+		);
+	});
+
+	// 02:30 does not exist in Amsterdam on 2026-03-29 (02:00 jumps to 03:00). It converted to
+	// 01:30Z, an instant the user never wrote. The hours either side are real and must stay.
+	test("a local time inside the spring-forward gap is dropped; its neighbours are kept", () => {
+		expect(extractIncidentAnchors("Mar 29, 2026 @ 02:30:00.000", "Europe/Amsterdam")).toEqual([]);
+		expect(extractIncidentAnchors("Mar 29, 2026 @ 01:30:00.000", "Europe/Amsterdam")[0]?.utc).toBe(
+			"2026-03-29T00:30:00.000Z",
+		);
+		expect(extractIncidentAnchors("Mar 29, 2026 @ 03:30:00.000", "Europe/Amsterdam")[0]?.utc).toBe(
+			"2026-03-29T01:30:00.000Z",
+		);
+		// The same wall time is real in a zone with no change that night.
+		expect(extractIncidentAnchors("Mar 29, 2026 @ 02:30:00.000", "UTC")[0]?.utc).toBe("2026-03-29T02:30:00.000Z");
+	});
+
+	// The autumn hour happens twice; it exists, so it is kept rather than dropped.
+	test("an ambiguous autumn time is still an anchor", () => {
+		expect(extractIncidentAnchors("Oct 25, 2026 @ 02:30:00.000", "Europe/Amsterdam")).toHaveLength(1);
+	});
+});
+
+describe("incidentQueryWindows: one per timestamp, not just the first", () => {
+	const now = "2026-09-18T17:50:22.000Z";
+
+	// A pasted log excerpt: lines seconds apart are one event and one window.
+	test("timestamps close together merge into a single window spanning them", () => {
+		const w = incidentQueryWindows(["2026-09-17T19:10:42.707Z", "2026-09-17T19:09:37.000Z"], now);
+		expect(w).toHaveLength(1);
+		expect(w[0]?.fromIso).toBe("2026-09-17T17:09:37.000Z");
+		expect(w[0]?.toIso).toBe("2026-09-17T20:10:42.707Z");
+	});
+
+	// The case the first-anchor rule got wrong: the excerpt OPENS with an older line.
+	test("an older line first in the text does not take the incident's window away", () => {
+		const w = incidentQueryWindows(["2026-09-15T23:33:56.974Z", "2026-09-17T19:10:42.707Z"], now);
+		expect(w.map((x) => [x.fromIso, x.toIso])).toEqual([
+			["2026-09-15T21:33:56.974Z", "2026-09-16T00:33:56.974Z"],
+			["2026-09-17T17:10:42.707Z", "2026-09-17T20:10:42.707Z"],
+		]);
+	});
+
+	test("is capped, earliest first, and skips what cannot be parsed or is in the future", () => {
+		const many = ["2026-09-01", "2026-09-03", "2026-09-05", "2026-09-07"].map((d) => `${d}T00:00:00.000Z`);
+		const w = incidentQueryWindows([...many, "nope", "2027-01-01T00:00:00.000Z"], now);
+		expect(w).toHaveLength(3);
+		expect(w[0]?.fromIso).toBe("2026-08-31T22:00:00.000Z");
 	});
 });

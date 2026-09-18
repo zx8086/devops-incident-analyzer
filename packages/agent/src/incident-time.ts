@@ -63,8 +63,21 @@ export function wallTimeToUtcMs(wall: WallTime, timeZone: string): number {
 	return naive - zoneOffsetMs(first, timeZone);
 }
 
-function inRange(w: WallTime): boolean {
-	return w.month >= 1 && w.month <= 12 && w.day >= 1 && w.day <= 31 && w.hour <= 23 && w.minute <= 59 && w.second <= 59;
+// Date.UTC never rejects: 2026-02-31 silently becomes March 3, and that would then be
+// handed to every sub-agent as the AUTHORITATIVE incident time (Greptile, PR #846;
+// reproduced). A reading is real only if the calendar gives the same components back.
+function isRealWallTime(w: WallTime): boolean {
+	if (w.hour > 23 || w.minute > 59 || w.second > 59) return false;
+	const d = new Date(Date.UTC(w.year, w.month - 1, w.day));
+	return d.getUTCFullYear() === w.year && d.getUTCMonth() === w.month - 1 && d.getUTCDate() === w.day;
+}
+
+// A wall time that does not exist in the zone (02:30 on the night the clocks go forward)
+// converts to SOME instant, just not the one written. Reading the result back in the zone
+// exposes it: the hour comes back different.
+function existsInZone(w: WallTime, utcMs: number, timeZone: string): boolean {
+	const back = new Date(utcMs + zoneOffsetMs(utcMs, timeZone));
+	return back.getUTCHours() === w.hour && back.getUTCMinutes() === w.minute && back.getUTCDate() === w.day;
 }
 
 const padMs = (frac: string | undefined) => Number((frac ?? "0").padEnd(3, "0"));
@@ -89,10 +102,12 @@ export function extractIncidentAnchors(text: string, timeZone: string | undefine
 			second: Number(m[6]),
 			ms: padMs(m[7]),
 		};
-		if (month === 0 || !inRange(wall)) continue;
+		if (month === 0 || !isRealWallTime(wall)) continue;
+		const kibanaUtcMs = wallTimeToUtcMs(wall, zone);
+		if (!existsInZone(wall, kibanaUtcMs, zone)) continue;
 		found.push({
 			raw: m[0],
-			utc: new Date(wallTimeToUtcMs(wall, zone)).toISOString(),
+			utc: new Date(kibanaUtcMs).toISOString(),
 			timeZone: zone,
 			assumed,
 			index: m.index ?? 0,
@@ -109,7 +124,7 @@ export function extractIncidentAnchors(text: string, timeZone: string | undefine
 			second: Number(m[6]),
 			ms: padMs(m[7]),
 		};
-		if (!inRange(wall)) continue;
+		if (!isRealWallTime(wall)) continue;
 		const offset = m[8];
 		if (offset) {
 			// Already absolute: the zone is in the text, so nothing is assumed.
@@ -178,13 +193,35 @@ export type IncidentQueryWindow = {
 	toRelative: string;
 };
 
-export function incidentQueryWindow(anchorUtc: string, nowIso: string): IncidentQueryWindow | undefined {
-	const at = Date.parse(anchorUtc);
+const MAX_INCIDENT_WINDOWS = 3;
+
+// One window per timestamp the user gave, overlapping ones merged. NOT just the first
+// (Greptile, PR #846): a pasted log excerpt often opens with an older line, and a window
+// built from text order alone would aim the incident query at history. Lines seconds
+// apart merge into one window; events days apart each get their own, earliest first.
+export function incidentQueryWindows(anchorUtcs: string[], nowIso: string): IncidentQueryWindow[] {
 	const now = Date.parse(nowIso);
-	if (!Number.isFinite(at) || !Number.isFinite(now)) return undefined;
-	const from = at - INCIDENT_BEFORE_MS;
-	const to = Math.min(now, at + INCIDENT_AFTER_MS);
-	if (to <= from) return undefined;
+	if (!Number.isFinite(now)) return [];
+	const spans = anchorUtcs
+		.map((utc) => Date.parse(utc))
+		.filter(Number.isFinite)
+		.map((at) => ({ from: at - INCIDENT_BEFORE_MS, to: Math.min(now, at + INCIDENT_AFTER_MS) }))
+		.filter((s) => s.to > s.from)
+		.sort((a, b) => a.from - b.from);
+	const merged: Array<{ from: number; to: number }> = [];
+	for (const span of spans) {
+		const last = merged.at(-1);
+		if (last && span.from <= last.to) last.to = Math.max(last.to, span.to);
+		else merged.push({ ...span });
+	}
+	return merged.slice(0, MAX_INCIDENT_WINDOWS).map((s) => formatWindow(s.from, s.to, now));
+}
+
+export function incidentQueryWindow(anchorUtc: string, nowIso: string): IncidentQueryWindow | undefined {
+	return incidentQueryWindows([anchorUtc], nowIso)[0];
+}
+
+function formatWindow(from: number, to: number, now: number): IncidentQueryWindow {
 	// Round the relative start OUT (ceil) and the end OUT (floor), so the relative form
 	// never excludes a second the absolute form includes.
 	const minutesAgo = (ms: number, round: (n: number) => number) => Math.max(0, round((now - ms) / 60_000));
