@@ -5,6 +5,7 @@ import type { InvestigationFocus, NormalizedIncident } from "@devops-agent/share
 import { DATA_SOURCE_IDS } from "@devops-agent/shared";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
+import { applyIncidentAnchors } from "./incident-time.ts";
 import { createStructuredLlm } from "./llm.ts";
 import { withKeyAliases } from "./llm-json.ts";
 import { extractTextFromContent } from "./message-utils.ts";
@@ -193,6 +194,7 @@ export function buildInvestigationFocus(
 		timeWindow: incident.timeWindow,
 		summary,
 		establishedAtTurn: state.messages.length,
+		...(incident.incidentAnchors && { incidentAnchors: incident.incidentAnchors }),
 	};
 }
 
@@ -243,7 +245,22 @@ export async function normalizeIncident(
 			config,
 		);
 
-		const incident: NormalizedIncident = { ...parsed };
+		// SIO-1815: an explicit timestamp in the query decides the window, in code. The model
+		// returned its default now-24h for `@timestamp - Sep 17, 2026 @ 21:10:42.707`, so that
+		// incident was in scope by luck and an older one would not have been; and with no zone
+		// the report read 21:10 CEST as 21:10Z. A relative phrase ("last 30 min") has no
+		// anchor and stays with the model's window.
+		const incident: NormalizedIncident = applyIncidentAnchors({ ...parsed }, query, state.clientTimeZone, now);
+		if (incident.incidentAnchors) {
+			logger.info(
+				{
+					anchors: incident.incidentAnchors.map((x) => ({ utc: x.utc, timeZone: x.timeZone, assumed: x.assumed })),
+					modelWindow: parsed.timeWindow,
+					anchoredWindow: incident.timeWindow,
+				},
+				"Incident time anchored from an explicit timestamp in the query",
+			);
+		}
 
 		// SIO-1233: the silent-failure catch. A drift that this all-nullish schema accepts
 		// produces a perfectly valid incident with no services, which then makes

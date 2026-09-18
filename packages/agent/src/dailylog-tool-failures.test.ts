@@ -36,6 +36,20 @@ describe("collectToolFailures", () => {
 		expect(tags).toEqual(["capella:auth"]);
 	});
 
+	// SIO-1815: the 2026-09-18 run wrote "gitlab:unknown" into recalled memory for a call that
+	// succeeded on its retry 5s later. An unrecovered error of the same kind still tags.
+	test("skips an error a later same-tool call recovered from, keeps an unrecovered one", () => {
+		const recovered = { toolName: "gitlab_get_merge_request", category: "unknown", message: "x", retryable: false };
+		expect(
+			collectToolFailures(stateWith([{ dataSourceId: "gitlab", toolErrors: [{ ...recovered, recovered: true }] }])),
+		).toEqual([]);
+		expect(
+			collectToolFailures(
+				stateWith([{ dataSourceId: "gitlab", toolErrors: [{ ...recovered, recovered: true }, recovered] }]),
+			),
+		).toEqual(["gitlab:unknown"]);
+	});
+
 	test("dedupes repeats of the same datasource and category", () => {
 		const tags = collectToolFailures(
 			stateWith([

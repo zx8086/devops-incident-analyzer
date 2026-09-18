@@ -3,7 +3,7 @@
 import type { ToolDefinition } from "@devops-agent/gitagent-bridge";
 import { getAllActionToolNames, matchActionsByKeywords, resolveActionTools } from "@devops-agent/gitagent-bridge";
 import { getLogger } from "@devops-agent/observability";
-import type { DataSourceResult, ToolError, ToolErrorCategory, ToolErrorKind } from "@devops-agent/shared";
+import type { DataSourceResult, ToolError, ToolErrorCategory, ToolErrorKind, ToolOutput } from "@devops-agent/shared";
 import {
 	isRetryableCategory,
 	redactPiiContent,
@@ -1988,6 +1988,9 @@ ${state.correlationFetchDirective}`
 						toolName: e.toolName,
 						category: e.category,
 						message: e.message,
+						// SIO-1815: the log said "1 tool error" for a call that was retried and
+						// succeeded 5s later, and only a LangSmith trace could tell the two apart.
+						...(e.recovered && { recovered: true }),
 					})),
 				}),
 			},
@@ -2045,11 +2048,22 @@ ${state.correlationFetchDirective}`
 				"Raw tool-output capture diverged from tool messages; persisted findings may be incomplete",
 			);
 		}
-		const persistSource: Array<{ name?: string; content: unknown; structuredContent?: unknown }> =
+		type PersistSource = {
+			name?: string;
+			content: unknown;
+			structuredContent?: unknown;
+			toolArgs?: Record<string, string | number | boolean>;
+		};
+		const persistSource: PersistSource[] =
 			rawOutputs.length > 0
-				? rawOutputs.map((o) => ({ name: o.toolName, content: o.content, structuredContent: o.structuredContent }))
+				? rawOutputs.map((o) => ({
+						name: o.toolName,
+						content: o.content,
+						structuredContent: o.structuredContent,
+						toolArgs: o.toolArgs,
+					}))
 				: toolMessages.map((m: { name?: string; content: unknown }) => ({ name: m.name, content: m.content }));
-		const toolOutputs = persistSource.map((m: { name?: string; content: unknown; structuredContent?: unknown }) => {
+		const toolOutputs: ToolOutput[] = persistSource.map((m) => {
 			const toolName = m.name ?? "unknown";
 			const out = buildPersistedToolOutput(
 				toolName,
@@ -2069,7 +2083,9 @@ ${state.correlationFetchDirective}`
 					"Persisted tool output truncated",
 				);
 			}
-			return { toolName, rawJson: out.rawJson };
+			// SIO-1815: the elastic extractor routes on toolArgs.index; without it the logs
+			// branch never ran and the card was empty on every production turn.
+			return { toolName, rawJson: out.rawJson, ...(m.toolArgs && { toolArgs: m.toolArgs }) };
 		});
 
 		// SIO-1208: deterministic placement baseline for the network map. The SIO-1204

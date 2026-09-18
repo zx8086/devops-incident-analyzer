@@ -1,5 +1,6 @@
 <script lang="ts">
 // apps/web/src/lib/components/GraphTriagePanel.svelte
+import { untrack } from "svelte";
 import { computeLayout, END_NODE, type GraphLayout, START_NODE, type Topology } from "$lib/graph-layout";
 import { ALL_NODE_LABELS } from "$lib/node-labels";
 import { runningFingerprint, shouldRevealRunning } from "./graph-triage-scroll";
@@ -61,7 +62,11 @@ let seenRunning = "";
 // Explicit follow-state, not a bottom test: this pane CENTRES a node, so after the first
 // reveal the scroller sits mid-content and any at-bottom check would read false and switch
 // following off for the rest of the turn (Greptile, PR #843).
-let following = true;
+// $state because the header shows a Follow control while it is off: bottom-parking was the
+// only way back, nothing on screen said so, and one wheel nudge ended following for the
+// rest of a five-minute turn. Read untracked in the reveal effect -- a re-arm from the
+// scroll handler must not replay a reveal on its own.
+let following = $state(true);
 // Who moved the scroller is decided by INPUT events, not by inspecting scroll events
 // (Greptile, PR #843, three rounds on this). Scroll events cannot answer it: one smooth
 // scrollTo emits ~31 of them, measured in this pane, and they are indistinguishable from
@@ -86,37 +91,51 @@ function onScroll() {
 	if (!following && scroller && isAtBottom(scroller)) following = true;
 }
 
+// Returns whether the node was brought into view; false while the topology is loading.
+function revealNode(id: string): boolean {
+	// A node's y is in viewBox units, and the SVG is scaled to fit the pane (w-full,
+	// clamped by max-width), so convert with the ratio the browser ACTUALLY rendered
+	// at rather than deriving it -- p-3 padding and that max-width clamp both make a
+	// computed ratio wrong. Scrolling the container by number needs no per-node element ref.
+	const node = layout?.nodes.find((n) => n.id === id);
+	const svg = scroller?.querySelector("svg");
+	if (!node || !scroller || !layout || !svg) return false;
+	// Offset of the svg box within the scroller's content, padding included, read
+	// from the live boxes instead of recomputed from the class list.
+	const svgBox = svg.getBoundingClientRect();
+	const scrollerBox = scroller.getBoundingClientRect();
+	const svgTop = svgBox.top - scrollerBox.top + scroller.scrollTop;
+	const scale = svgBox.width / layout.width;
+	const centre = svgTop + (node.y + node.height / 2) * scale;
+	scroller.scrollTo({ top: Math.max(0, centre - scroller.clientHeight / 2), behavior: "smooth" });
+	return true;
+}
+
+function resumeFollowing() {
+	following = true;
+	const running = runningFingerprint(activeNodes);
+	if (running !== "" && revealNode(running)) seenRunning = running;
+}
+
 $effect(() => {
 	const running = runningFingerprint(activeNodes);
+	// A blank graph is the start of a turn: whoever scrolled away during the LAST turn
+	// has not asked to sit this one out. Without this, one wheel nudge switched
+	// following off for every later turn too (measured: scrollTop 0 from classify to
+	// aggregate on the turn after a single wheel event).
+	if (activeNodes.size === 0 && completedNodes.size === 0) following = true;
 	if (
 		shouldRevealRunning({
 			runningChanged: running !== seenRunning,
 			hasRunning: running !== "",
-			following,
+			following: untrack(() => following),
 		})
 	) {
-		// A node's y is in viewBox units, and the SVG is scaled to fit the pane (w-full,
-		// clamped by max-width), so convert with the ratio the browser ACTUALLY rendered
-		// at rather than deriving it -- p-3 padding and that max-width clamp both make a
-		// computed ratio wrong. offsetTop carries the padding, so it is added, not
-		// guessed. Scrolling the container by number needs no per-node element ref.
-		const node = layout?.nodes.find((n) => n.id === running);
-		const svg = scroller?.querySelector("svg");
-		if (node && scroller && layout && svg) {
-			// Offset of the svg box within the scroller's content, padding included, read
-			// from the live boxes instead of recomputed from the class list.
-			const svgBox = svg.getBoundingClientRect();
-			const scrollerBox = scroller.getBoundingClientRect();
-			const svgTop = svgBox.top - scrollerBox.top + scroller.scrollTop;
-			const scale = svgBox.width / layout.width;
-			const centre = svgTop + (node.y + node.height / 2) * scale;
-			scroller.scrollTo({ top: Math.max(0, centre - scroller.clientHeight / 2), behavior: "smooth" });
-			// Only now is this node actually revealed. Marking it seen when the layout was
-			// still loading would leave the CURRENT node unrevealed forever, because the
-			// fingerprint would never change again (Greptile, PR #843): opening the pane
-			// mid-turn is exactly when topology has not arrived yet.
-			seenRunning = running;
-		}
+		// Only a node that was actually revealed is marked seen. Marking it while the
+		// layout was still loading would leave the CURRENT node unrevealed forever,
+		// because the fingerprint would never change again (Greptile, PR #843): opening
+		// the pane mid-turn is exactly when topology has not arrived yet.
+		if (revealNode(running)) seenRunning = running;
 		return;
 	}
 	seenRunning = running;
@@ -195,6 +214,15 @@ const statusLine = $derived.by(() => {
       <h2 class="text-sm font-semibold text-tommy-navy leading-tight">Live graph triage</h2>
       <p class="text-[0.625rem] text-gray-500 truncate">{agent} &middot; {statusLine}</p>
     </div>
+    {#if isStreaming && !following}
+      <button
+        type="button"
+        onclick={resumeFollowing}
+        class="shrink-0 rounded border border-tommy-navy px-2 py-0.5 text-[0.625rem] font-medium text-tommy-navy hover:bg-tommy-navy hover:text-white"
+      >
+        Follow
+      </button>
+    {/if}
     {#if isStreaming}
       <span class="relative flex h-2 w-2 shrink-0">
         <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-tommy-accent-blue opacity-75"></span>

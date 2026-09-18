@@ -811,6 +811,36 @@ describe("filterStructurallyBenignGapBullets (SIO-1162 structured reconciliation
 		expect(kept).toHaveLength(0);
 	});
 
+	// SIO-1815, live run 2026-09-18: gitlab_get_merge_request was refused for a two-facet
+	// `include`, succeeded 5s later, and the report's bullet for it was still upheld as a
+	// genuine unrecovered failure. The verbatim bullet from that run.
+	const MR_BULLET =
+		'- gitlab_get_merge_request returned a validation error ("include cannot contain more than 1 items") during this investigation; the affected merge-request detail lookup was not completed via this tool call.';
+	const MR_ERROR = {
+		toolName: "gitlab_get_merge_request",
+		category: "unknown" as const,
+		message: "Validation error: include cannot contain more than 1 items",
+		retryable: false,
+	};
+
+	test("suppresses a bullet for an error the sub-agent already recovered from", () => {
+		const { kept, suppressed } = filterStructurallyBenignGapBullets(
+			[MR_BULLET],
+			resultWith([{ ...MR_ERROR, recovered: true }]),
+		);
+		expect(suppressed).toEqual([MR_BULLET]);
+		expect(kept).toHaveLength(0);
+	});
+
+	// The other direction: the same error NOT followed by a success is a real malfunction,
+	// and one recovered call must not excuse a second, unrecovered failure of the same tool.
+	test("keeps the same bullet when the error was not recovered, or only some were", () => {
+		expect(filterStructurallyBenignGapBullets([MR_BULLET], resultWith([MR_ERROR])).kept).toEqual([MR_BULLET]);
+		expect(
+			filterStructurallyBenignGapBullets([MR_BULLET], resultWith([{ ...MR_ERROR, recovered: true }, MR_ERROR])).kept,
+		).toEqual([MR_BULLET]);
+	});
+
 	test("suppresses a benign not-found bullet", () => {
 		const results = resultWith([
 			{

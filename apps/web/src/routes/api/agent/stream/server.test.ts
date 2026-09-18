@@ -336,6 +336,33 @@ describe("POST /api/agent/stream — validation", () => {
 	});
 });
 
+// SIO-1815: the browser's zone rides the request so a pasted Kibana timestamp is converted
+// rather than re-read as UTC. It is a hint: a value that is not zone-shaped must degrade to
+// "unknown", never fail the turn.
+describe("POST /api/agent/stream -- clientTimeZone", () => {
+	const lastOptions = () =>
+		(invokeAgentMock.mock.calls.at(-1) as unknown[] | undefined)?.[1] as { clientTimeZone?: string } | undefined;
+	const send = async (clientTimeZone: unknown) => {
+		const response = await POST(makeRequest({ messages: [{ role: "user", content: "hi" }], clientTimeZone }));
+		await collectSse(response);
+		return response.status;
+	};
+
+	test("a zone from the browser reaches the agent", async () => {
+		expect(await send("Europe/Amsterdam")).toBe(200);
+		expect(lastOptions()?.clientTimeZone).toBe("Europe/Amsterdam");
+		expect(await send("Etc/GMT+2")).toBe(200);
+		expect(lastOptions()?.clientTimeZone).toBe("Etc/GMT+2");
+	});
+
+	test("an unusable value is dropped and the request still runs", async () => {
+		for (const bad of ["<script>", "x".repeat(65), 42, ""]) {
+			expect(await send(bad)).toBe(200);
+			expect(lastOptions()?.clientTimeZone).toBeUndefined();
+		}
+	});
+});
+
 describe("POST /api/agent/stream — SSE stream", () => {
 	test("emits run_id, forwards aggregator chunks, then done", async () => {
 		invokeAgentMock.mockImplementationOnce(async () => ({

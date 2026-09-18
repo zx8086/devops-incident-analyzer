@@ -5,6 +5,7 @@ import { AGENT_CHOICES, type AgentId, agentChoice, DEFAULT_AGENT_ID, isAgentId }
 import AwsEstateSelector from "$lib/components/AwsEstateSelector.svelte";
 import ChatInput from "$lib/components/ChatInput.svelte";
 import ChatMessage from "$lib/components/ChatMessage.svelte";
+import { followAfterScroll } from "$lib/components/chat-follow";
 import DataSourceSelector from "$lib/components/DataSourceSelector.svelte";
 import DriftReportCard from "$lib/components/DriftReportCard.svelte";
 import ElasticDeploymentSelector from "$lib/components/ElasticDeploymentSelector.svelte";
@@ -287,16 +288,41 @@ onDestroy(() => {
 	agentStore.stopHealthPolling();
 });
 
+// Keep the newest content in view until the reader scrolls up. The rule (and why the
+// "within 100px of the end" test it replaces stopped following mid-turn) is in chat-follow.ts.
+let followingChat = true;
+let lastChatTop = 0;
+
+function scrollChatToEnd() {
+	if (messagesContainer) messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+function onChatScroll() {
+	followingChat = followAfterScroll(followingChat, lastChatTop, messagesContainer);
+	lastChatTop = messagesContainer.scrollTop;
+}
+
+// Sending is the reader asking to see the new turn, wherever they had scrolled to.
 $effect(() => {
-	agentStore.messages;
-	agentStore.currentContent;
-	if (messagesContainer) {
-		const nearBottom =
-			messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < 100;
-		if (nearBottom) {
-			messagesContainer.scrollTop = messagesContainer.scrollHeight;
-		}
+	if (agentStore.isStreaming) {
+		followingChat = true;
+		scrollChatToEnd();
 	}
+});
+
+// Driven by the content's SIZE, not by a list of store fields: tokens, the progress rows,
+// findings cards, action cards and follow-ups all grow the column, and the old effect
+// tracked only two of them. The container is observed too because the HITL gate region
+// beneath it takes height away from the viewport.
+$effect(() => {
+	const content = messagesContainer?.firstElementChild;
+	if (!content) return;
+	const observer = new ResizeObserver(() => {
+		if (followingChat) scrollChatToEnd();
+	});
+	observer.observe(content);
+	observer.observe(messagesContainer);
+	return () => observer.disconnect();
 });
 
 function handleSend(content: string) {
@@ -432,7 +458,7 @@ function handleSuggestionClick(suggestion: string) {
        pane's controls off-screen on a narrower viewport (Greptile, PR #843). Below xl
        everything falls back to min-w-0 and shrinks as it did before this ticket. -->
   <div class="flex-1 flex flex-col min-w-0 xl:min-w-[420px] min-h-0 bg-white">
-  <div bind:this={messagesContainer} class="flex-1 overflow-y-auto min-h-0">
+  <div bind:this={messagesContainer} onscroll={onChatScroll} class="flex-1 overflow-y-auto min-h-0">
     <div class="max-w-4xl mx-auto py-4">
       {#if agentStore.messages.length === 0 && !agentStore.isStreaming}
         <div class="flex flex-col items-center justify-center py-20 text-center animate-fade-in">

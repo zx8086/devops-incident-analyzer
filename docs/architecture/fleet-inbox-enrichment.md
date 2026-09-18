@@ -63,10 +63,46 @@ the header and the `- (<sev>/<family>) <resource>: <summary>` lines: kind
 `alarm` findings). A terminal row (`complete`, `error`, `timeout`) is a
 `conversation`; anything else is `other`.
 
+Only `monitor-report` rows enter the digest: `buildEstateDigest` drops the other
+two kinds. An estate inbox is mostly the monitor's own requests to its spoke (one
+per report, the diagnose prompt and none of the findings), which doubled the card
+and used up the per-estate entry cap without adding a fact. The classification
+is kept because it is how those rows are recognised.
+
+## Scoping to the focus services (SIO-1815)
+
+The hub's mailbox read has no filter, so scoping happens over the rows already
+read. Every monitor finding carries a `family` (the monitor's category: `alarm`,
+`logs`, `health`, `drift`, `tasks`, ... 21 today, kept as a string so a newer
+monitor's families are not dropped, SIO-1814) and a `resource` (an AWS
+identifier). Both are carried into the digest per report; the finding's summary
+and the spoke's diagnosis are free text and are not.
+
+A finding is a **focus finding** when `matchesFocus` (the predicate every
+findings card scopes with) matches the incident's focus services against
+everything the monitor wrote about it: resource, summary and continuation lines.
+The resource alone is not enough. `feed-service` logs to the shared
+`/ecs/fargate/shop-prd-log-group`, and only the summary and the spoke's
+`cause:` line name it. That text is matched and then discarded.
+
+When focus services exist:
+
+- reports naming one lead the entry list, ahead of newer reports about other
+  services, so the 20-entry cap never cuts them;
+- `counts.focus`, per-family `focus` counts and `digest.focusServices` record the
+  scope;
+- the card shows the focus reports and folds the rest of the account's inbox
+  under one `<details>`;
+- the prompt lists the focus findings as `(severity/family) resource xN`.
+
+With no focus services the digest is unscoped: newest first, nothing marked.
+A monitor-side `service` tag would make this exact rather than textual; it ships
+in the fleet bundle and is not part of this change.
+
 ## What reaches the prompt
 
-Only `summarizeFleetInboxForPrompt` output: per estate, message counts by kind
-and severity, alarm names, the latest timestamp, and any read error. It never
+Only `summarizeFleetInboxForPrompt` output: per estate, monitor report counts by
+severity, finding categories, the focus findings' category and resource, alarm names, the latest timestamp, and any read error. It never
 reads `excerpt`, `sender` or a body. Inbox bodies are untrusted input (spoke
 model output, operator free text); the capped excerpt reaches the browser only,
 rendered as inert text by `FleetInboxCard`. The section tells the model the

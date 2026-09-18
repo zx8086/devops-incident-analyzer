@@ -8,16 +8,23 @@ import type {
 	FleetInboxDigest,
 	FleetInboxEntry,
 	FleetInboxEstate,
+	FleetInboxFamilyCount,
+	FleetInboxFinding,
 	FleetInboxKind,
 	FleetInboxSeverity,
 	PiComsEnvironment,
 } from "@devops-agent/shared";
+import { matchesFocus } from "@devops-agent/shared";
 import { MONITOR_NAME_PREFIX, type PiInboxMessage } from "./action-tools/pi-coms-client.ts";
 import { readPiComsCapability } from "./action-tools/pi-verifier.ts";
 import type { AgentStateType } from "./state.ts";
 
 export const EXCERPT_MAX = 280;
 export const MAX_ENTRIES_PER_ESTATE = 20;
+// A logs-overflow report can list dozens of signatures; the card and the prompt need the
+// shape of a report, not every line of it.
+export const MAX_FINDINGS_PER_ENTRY = 12;
+export const MAX_FOCUS_FINDINGS_IN_PROMPT = 8;
 // The hub caps a mailbox listing at 100; without `since` it returns the newest.
 export const MAILBOX_READ_LIMIT = 100;
 export const DEFAULT_FLEET_INBOX_TIMEOUT_MS = 5000;
@@ -91,7 +98,17 @@ export function incidentWindow(
 	return { from: new Date(now.getTime() - DEFAULT_WINDOW_MS).toISOString(), to: now.toISOString() };
 }
 
-export type MonitorFinding = { severity: FleetInboxSeverity; family: string; resource: string; summary: string };
+// `detail` is the finding's indented continuation lines (evidence, and the spoke's
+// "cause:" once it has diagnosed the finding). It exists to be MATCHED against the focus
+// services and goes nowhere else: it is the one place a shared log group's finding names
+// the service it is about, and it is free text that must never reach a prompt.
+export type MonitorFinding = {
+	severity: FleetInboxSeverity;
+	family: string;
+	resource: string;
+	summary: string;
+	detail: string;
+};
 export type MonitorReport = {
 	accountId: string;
 	topSeverity: FleetInboxSeverity;
@@ -112,12 +129,18 @@ export function parseMonitorReport(text: string): MonitorReport | undefined {
 	const findings: MonitorFinding[] = [];
 	for (const line of lines.slice(1)) {
 		const m = FINDING_LINE_RE.exec(line);
-		if (!m) continue;
+		if (!m) {
+			// Continuation lines are indented under their finding (report.ts).
+			const open = findings.at(-1);
+			if (open && /^\s+\S/.test(line)) open.detail += `${open.detail ? " " : ""}${line.trim()}`;
+			continue;
+		}
 		findings.push({
 			severity: m[1] as FleetInboxSeverity,
 			family: m[2] ?? "",
 			resource: m[3] ?? "",
 			summary: m[4] ?? "",
+			detail: "",
 		});
 	}
 	return {
@@ -133,9 +156,21 @@ export type ClassifiedMessage = {
 	severity: FleetInboxSeverity | null;
 	findingCount: number | null;
 	alarmNames: string[];
+	findings: FleetInboxFinding[];
 };
 
-export function classifyMessage(message: PiInboxMessage): ClassifiedMessage {
+// SIO-1815: does this finding name one of the incident's focus services? Same predicate
+// every findings card scopes with (matchesFocus, SIO-1030), over everything the monitor
+// wrote about the finding. The resource alone is not enough: feed-service logs to
+// the shared /ecs/fargate/shop-prd-log-group, and only the summary and the spoke's
+// cause line name it. Empty focus = unscoped, which here means NOT a focus match --
+// matchesFocus's show-all default would otherwise mark every finding as relevant.
+export function findingNamesFocus(finding: MonitorFinding, focusServices: string[]): boolean {
+	if (focusServices.length === 0) return false;
+	return matchesFocus(`${finding.resource} ${finding.summary} ${finding.detail}`, focusServices);
+}
+
+export function classifyMessage(message: PiInboxMessage, focusServices: string[] = []): ClassifiedMessage {
 	const report = parseMonitorReport(message.prompt);
 	if (report) {
 		return {
@@ -143,13 +178,19 @@ export function classifyMessage(message: PiInboxMessage): ClassifiedMessage {
 			severity: report.topSeverity,
 			findingCount: report.findingCount,
 			alarmNames: [...new Set(report.findings.filter((f) => f.family === "alarm").map((f) => f.resource))],
+			findings: report.findings.map((f) => ({
+				severity: f.severity,
+				family: f.family,
+				resource: f.resource,
+				focus: findingNamesFocus(f, focusServices),
+			})),
 		};
 	}
 	// A terminal row on an estate inbox is a completed exchange with that spoke.
 	if (TERMINAL_STATUSES.has(message.status)) {
-		return { kind: "conversation", severity: null, findingCount: null, alarmNames: [] };
+		return { kind: "conversation", severity: null, findingCount: null, alarmNames: [], findings: [] };
 	}
-	return { kind: "other", severity: null, findingCount: null, alarmNames: [] };
+	return { kind: "other", severity: null, findingCount: null, alarmNames: [], findings: [] };
 }
 
 export function withinWindow(message: Pick<PiInboxMessage, "created_at">, window: IncidentWindow): boolean {
@@ -175,8 +216,10 @@ export function excerptOf(text: string): string {
 	return `${collapsed.slice(0, EXCERPT_MAX - 3)}...`;
 }
 
-export function toEntry(inbox: string, message: PiInboxMessage): FleetInboxEntry {
-	const classified = classifyMessage(message);
+export function toEntry(inbox: string, message: PiInboxMessage, focusServices: string[] = []): FleetInboxEntry {
+	const classified = classifyMessage(message, focusServices);
+	// Focus findings first, so the per-entry cap never cuts the ones the turn is about.
+	const findings = [...classified.findings].sort((a, b) => Number(b.focus) - Number(a.focus));
 	return {
 		msgId: message.msg_id,
 		inbox,
@@ -186,6 +229,8 @@ export function toEntry(inbox: string, message: PiInboxMessage): FleetInboxEntry
 		severity: classified.severity,
 		findingCount: classified.findingCount,
 		alarmNames: classified.alarmNames,
+		findings: findings.slice(0, MAX_FINDINGS_PER_ENTRY),
+		focus: findings.some((f) => f.focus),
 		createdAt: message.created_at,
 		completedAt: message.completed_at,
 		excerpt: excerptOf(message.prompt),
@@ -193,7 +238,7 @@ export function toEntry(inbox: string, message: PiInboxMessage): FleetInboxEntry
 }
 
 function emptyCounts(): FleetInboxCounts {
-	return { total: 0, monitorReports: 0, conversations: 0, other: 0, critical: 0, warn: 0 };
+	return { total: 0, focus: 0, critical: 0, warn: 0 };
 }
 
 export function buildEstateDigest(input: {
@@ -202,20 +247,40 @@ export function buildEstateDigest(input: {
 	inboxes: string[];
 	messages: { inbox: string; message: PiInboxMessage }[];
 	error: string | null;
+	focusServices?: string[];
 }): FleetInboxEstate {
+	const focusServices = input.focusServices ?? [];
+	// Monitor reports only. An estate inbox is mostly the monitor's own requests to its
+	// spoke ("You are the read-only devops agent for AWS account ... diagnose each one"):
+	// one per report, carrying the prompt and none of the findings, so they doubled the
+	// card and pushed real reports out of the entry cap without adding a fact.
 	const all = input.messages
-		.map(({ inbox, message }) => toEntry(inbox, message))
-		.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.msgId.localeCompare(a.msgId));
+		.map(({ inbox, message }) => toEntry(inbox, message, focusServices))
+		.filter((entry) => entry.kind === "monitor-report")
+		// SIO-1815: reports naming a focus service first, newest first within each group.
+		// An estate inbox holds a day of reports for every service in the account; ordering
+		// by time alone let an unrelated account's-worth push the relevant ones past the cap.
+		.sort(
+			(a, b) =>
+				Number(b.focus) - Number(a.focus) || b.createdAt.localeCompare(a.createdAt) || b.msgId.localeCompare(a.msgId),
+		);
 	const counts = emptyCounts();
 	const alarmNames = new Set<string>();
+	const families = new Map<string, FleetInboxFamilyCount>();
+	let latestAt: string | null = null;
 	for (const entry of all) {
 		counts.total += 1;
-		if (entry.kind === "monitor-report") counts.monitorReports += 1;
-		else if (entry.kind === "conversation") counts.conversations += 1;
-		else counts.other += 1;
+		if (entry.focus) counts.focus += 1;
 		if (entry.severity === "critical") counts.critical += 1;
 		if (entry.severity === "warn") counts.warn += 1;
 		for (const name of entry.alarmNames) alarmNames.add(name);
+		for (const f of entry.findings) {
+			const row = families.get(f.family) ?? { family: f.family, count: 0, focus: 0 };
+			row.count += 1;
+			if (f.focus) row.focus += 1;
+			families.set(f.family, row);
+		}
+		if (latestAt === null || entry.createdAt > latestAt) latestAt = entry.createdAt;
 	}
 	return {
 		estate: input.estate,
@@ -223,26 +288,62 @@ export function buildEstateDigest(input: {
 		inboxes: input.inboxes,
 		entries: all.slice(0, MAX_ENTRIES_PER_ESTATE),
 		counts,
+		families: [...families.values()].sort(
+			(a, b) => b.focus - a.focus || b.count - a.count || a.family.localeCompare(b.family),
+		),
 		alarmNames: [...alarmNames].sort(),
-		latestAt: all[0]?.createdAt ?? null,
+		// No longer all[0]: the list is focus-first, so the newest report may not lead it.
+		latestAt,
 		error: input.error,
 	};
 }
 
-// Prompt summary: counts, severities, alarm names and timestamps only. It never
-// reads `excerpt`, `sender` or any body, so untrusted text cannot reach the LLM.
+const PROMPT_RESOURCE_MAX = 120;
+
+// "(warn/logs) /ecs/fargate/shop-prd-log-group x5", most frequent first. The key is
+// severity + family + resource: all three are the monitor's structured fields.
+function focusFindingLines(estate: FleetInboxEstate): string[] {
+	const tally = new Map<string, number>();
+	for (const entry of estate.entries) {
+		for (const f of entry.findings) {
+			if (!f.focus) continue;
+			const key = `(${f.severity}/${f.family}) ${f.resource.slice(0, PROMPT_RESOURCE_MAX)}`;
+			tally.set(key, (tally.get(key) ?? 0) + 1);
+		}
+	}
+	return [...tally.entries()]
+		.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+		.slice(0, MAX_FOCUS_FINDINGS_IN_PROMPT)
+		.map(([key, n]) => `${key} x${n}`);
+}
+
+// Prompt summary: counts, severities, categories, resource and alarm names, timestamps.
+// It never reads `excerpt`, `sender`, a finding's summary or any body, so untrusted text
+// cannot reach the LLM.
 export function summarizeFleetInboxForPrompt(digest: FleetInboxDigest): string {
 	if (digest.estates.length === 0) return "";
 	const lines = [`Fleet inbox (pi-coms hubs, window ${digest.windowFrom} to ${digest.windowTo}):`];
+	const scoped = digest.focusServices.length > 0;
+	if (scoped) lines.push(`Scoped to the focus services: ${digest.focusServices.join(", ")}`);
 	for (const estate of digest.estates) {
 		if (estate.error && estate.counts.total === 0) {
 			lines.push(`- ${estate.estate} (${estate.environment}): read failed (${estate.error})`);
 			continue;
 		}
 		const c = estate.counts;
-		let line = `- ${estate.estate} (${estate.environment}): ${c.total} message(s): ${c.monitorReports} monitor report(s), ${c.conversations} conversation(s), ${c.other} other; critical=${c.critical} warn=${c.warn}`;
+		const focusPart = scoped ? `, ${c.focus} naming a focus service` : "";
+		let line = `- ${estate.estate} (${estate.environment}): ${c.total} monitor report(s)${focusPart}; critical=${c.critical} warn=${c.warn}`;
 		if (estate.latestAt) line += `; latest ${estate.latestAt}`;
 		lines.push(line);
+		if (estate.families.length > 0) {
+			const parts = estate.families.map((f) =>
+				scoped && f.focus > 0 ? `${f.family}=${f.count} (focus ${f.focus})` : `${f.family}=${f.count}`,
+			);
+			lines.push(`  finding categories: ${parts.join(", ")}`);
+		}
+		const focusLines = focusFindingLines(estate);
+		if (focusLines.length > 0) lines.push(`  focus findings: ${focusLines.join("; ")}`);
+		else if (scoped && c.total > 0) lines.push("  focus findings: none of these reports names a focus service");
 		if (estate.alarmNames.length > 0) lines.push(`  alarms: ${estate.alarmNames.join(", ")}`);
 		if (estate.error) lines.push(`  partial: ${estate.error}`);
 	}

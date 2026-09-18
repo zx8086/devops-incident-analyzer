@@ -187,7 +187,7 @@ function parseSyntheticMonitorsFromText(content: string): ElasticSyntheticMonito
 function looksLikeSyntheticIndex(o: ToolOutput): boolean {
 	// SIO-717: the SOUL pattern is `synthetics-*`. Soft-detect via the index
 	// or query arg if the agent included it in toolArgs (typical via MCP).
-	const args = (o as unknown as { toolArgs?: Record<string, unknown> }).toolArgs;
+	const args = o.toolArgs;
 	if (args && typeof args === "object") {
 		const index = (args as { index?: unknown }).index;
 		if (typeof index === "string" && /synthetics?/i.test(index)) return true;
@@ -225,7 +225,7 @@ const ApmAggregationSchema = z.object({
 });
 
 function looksLikeApmIndex(o: ToolOutput): boolean {
-	const args = (o as unknown as { toolArgs?: Record<string, unknown> }).toolArgs;
+	const args = o.toolArgs;
 	if (args && typeof args === "object") {
 		const index = (args as { index?: unknown }).index;
 		if (typeof index === "string" && /traces-apm/i.test(index)) return true;
@@ -322,7 +322,7 @@ const LogsHitSourceSchema = z.object({
 });
 
 function looksLikeLogsIndex(o: ToolOutput): boolean {
-	const args = (o as unknown as { toolArgs?: Record<string, unknown> }).toolArgs;
+	const args = o.toolArgs;
 	if (args && typeof args === "object") {
 		const index = (args as { index?: unknown }).index;
 		if (typeof index === "string" && /logs-/i.test(index)) return true;
@@ -334,7 +334,7 @@ function looksLikeNonLogsIndex(o: ToolOutput): boolean {
 	// Strict exclusion: if the index hint clearly points to APM or synthetics,
 	// the logs branch must not fire even if a hits-level-error majority would
 	// otherwise trip the detector.
-	const args = (o as unknown as { toolArgs?: Record<string, unknown> }).toolArgs;
+	const args = o.toolArgs;
 	if (!args || typeof args !== "object") return false;
 	const index = (args as { index?: unknown }).index;
 	if (typeof index !== "string") return false;

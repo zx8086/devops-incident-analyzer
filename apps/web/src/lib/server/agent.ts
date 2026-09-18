@@ -299,6 +299,8 @@ export async function invokeAgent(
 		// SIO-836: AWS estate IDs the user explicitly selected; awsEstateRouter prefers these over the LLM classifier.
 		uiAwsEstates?: string[];
 		isFollowUp?: boolean;
+		// SIO-1815: browser IANA zone, for converting a pasted local timestamp to UTC.
+		clientTimeZone?: string;
 		dataSourceContext?: DataSourceContext;
 		attachmentContentBlocks?: MessageContentComplex[];
 		attachmentMeta?: AttachmentMeta[];
@@ -371,6 +373,7 @@ export async function invokeAgent(
 			targetDeployments: options.targetDeployments ?? [],
 			uiAwsEstates: options.uiAwsEstates ?? [],
 			isFollowUp: options.isFollowUp ?? false,
+			...(options.clientTimeZone && { clientTimeZone: options.clientTimeZone }),
 			requestId,
 			attachmentMeta: options.attachmentMeta ?? [],
 			...(options.dataSourceContext && { dataSourceContext: options.dataSourceContext }),

@@ -178,6 +178,14 @@ export const AgentState = Annotation.Root({
 		default: () => false,
 	}),
 
+	// SIO-1815: the browser's IANA zone, so a pasted local timestamp (Kibana renders in the
+	// viewer's zone) is converted rather than re-read as UTC. Undefined for callers that do
+	// not send one; incident-time.ts then assumes UTC and marks the anchor `assumed`.
+	clientTimeZone: Annotation<string | undefined>({
+		reducer: (prev, next) => next ?? prev,
+		default: () => undefined,
+	}),
+
 	finalAnswer: Annotation<string>({
 		reducer: (_, next) => next,
 		default: () => "",

@@ -57,6 +57,16 @@ const StreamRequestSchema = z.object({
 	attachments: z.array(AttachmentBlockSchema).max(10).optional(),
 	isFollowUp: z.boolean().optional(),
 	dataSourceContext: DataSourceContextSchema.optional(),
+	// SIO-1815: the browser's IANA zone ("Europe/Amsterdam"). Shape-checked here; whether it
+	// names a real zone is decided where it is used (incident-time.ts falls back to UTC and
+	// says so), so a stale or exotic value can never fail the request.
+	clientTimeZone: z
+		.string()
+		.max(64)
+		.regex(/^[A-Za-z0-9_+\-/]+$/)
+		.optional()
+		// A timezone hint is never worth a failed turn: anything unusable becomes "unknown".
+		.catch(undefined),
 });
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -134,6 +144,7 @@ export const POST: RequestHandler = async ({ request }) => {
 									targetDeployments: body.targetDeployments,
 									uiAwsEstates: body.uiAwsEstates,
 									isFollowUp: body.isFollowUp,
+									clientTimeZone: body.clientTimeZone,
 									dataSourceContext: body.dataSourceContext,
 									attachmentContentBlocks: processedAttachments?.contentBlocks,
 									attachmentMeta: processedAttachments?.metadata,

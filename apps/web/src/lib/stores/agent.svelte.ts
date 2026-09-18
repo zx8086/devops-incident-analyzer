@@ -317,6 +317,9 @@ function createAgentStore() {
 					...(includeAwsEstates && { uiAwsEstates: selectedAwsEstates.filter((id) => knownEstateIds.has(id)) }),
 					...(attachmentsToSend && { attachments: attachmentsToSend }),
 					...(followUpContext?.isFollowUp && { isFollowUp: true }),
+					// SIO-1815: a pasted Kibana timestamp is in THIS zone. Without it the agent
+					// read 21:10 CEST as 21:10Z and reported the incident two hours late.
+					clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
 					...(followUpContext?.dataSourceContext && { dataSourceContext: followUpContext.dataSourceContext }),
 				}),
 				signal: abortController.signal,

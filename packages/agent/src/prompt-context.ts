@@ -141,7 +141,7 @@ function buildDownstreamImpactSection(downstreamImpactContext: string | undefine
 // names, timestamps). Message bodies never reach this section.
 function buildFleetInboxSection(fleetInboxContext: string | undefined): string {
 	if (!fleetInboxContext) return "";
-	return `\n\n## Fleet inbox (live pi-coms hub notes, derived this turn)\n${fleetInboxContext}\nThese are counts and names from the fleet's live inbox, not evidence: use them only to corroborate or flag a gap against the datasource findings, and do not reproduce the list in the report body; the user sees it as a card.\n`;
+	return `\n\n## Fleet inbox (live pi-coms hub notes, derived this turn)\n${fleetInboxContext}\nThese are counts, finding categories and resource names from the account monitors' reports, not evidence. When the digest is scoped, "focus findings" are the ones naming the services under investigation and the rest of the inbox is other services in the same account: use them only to corroborate or flag a gap against the datasource findings, and do not reproduce the list in the report body; the user sees it as a card.\n`;
 }
 
 // SIO-847: the wiki section depends on the current turn's focus, so it is built

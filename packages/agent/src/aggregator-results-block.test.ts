@@ -38,6 +38,26 @@ describe("buildResultsBlock", () => {
 		expect(block).toContain("gitlab_search [auth]: 401 Unauthorized");
 	});
 
+	// SIO-1815: the model only ever saw the failure, so it reported a recovered call as a gap.
+	test("marks an error a later same-tool call recovered from, and leaves the others bare", () => {
+		const block = buildResultsBlock([
+			result({
+				toolErrors: [
+					{
+						toolName: "gitlab_get_merge_request",
+						category: "unknown",
+						message: "include",
+						retryable: false,
+						recovered: true,
+					},
+					{ toolName: "gitlab_search", category: "auth", message: "401 Unauthorized", retryable: false },
+				],
+			}),
+		]);
+		expect(block).toContain("gitlab_get_merge_request [unknown]: include [a later call to this tool SUCCEEDED");
+		expect(block).toContain("gitlab_search [auth]: 401 Unauthorized\n");
+	});
+
 	test("omits the tool-errors block entirely when there are no tool errors", () => {
 		const block = buildResultsBlock([result({})]);
 		expect(block).not.toContain("Tool errors");

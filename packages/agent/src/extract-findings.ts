@@ -33,10 +33,14 @@ function logCard(
 	rawCount: number,
 	filteredCount: number,
 	extra: Record<string, unknown> = {},
-	opts: { droppedAllLevel?: "warn" | "info" } = {},
+	// otherRows: rows the card renders that rawCount/filteredCount do not measure. SIO-1815:
+	// the Kafka counts are consumer groups only, so a card showing 5 DLQ topics was logged
+	// at warn as "scoped to empty" on the 2026-09-18 run -- a false alarm in a log whose
+	// whole job is to flag a blank card.
+	opts: { droppedAllLevel?: "warn" | "info"; otherRows?: number } = {},
 ): void {
 	const filterMode = focusServices.length === 0 ? "show-all" : "scoped";
-	const droppedAll = filterMode === "scoped" && rawCount > 0 && filteredCount === 0;
+	const droppedAll = filterMode === "scoped" && rawCount > 0 && filteredCount === 0 && (opts.otherRows ?? 0) === 0;
 	const payload = {
 		tag,
 		focusServices,
@@ -61,7 +65,9 @@ function logCard(
 // SIO-785: union of service names from the investigation context. Used by every
 // extractor (SIO-1030) to filter findings to those related to what the user is
 // investigating. Empty union = show-all (first-turn / unfocused investigations).
-function collectFocusServices(state: AgentStateType): string[] {
+export function collectFocusServices(
+	state: Pick<AgentStateType, "investigationFocus" | "normalizedIncident">,
+): string[] {
 	const set = new Set<string>();
 	for (const s of state.investigationFocus?.services ?? []) {
 		if (s) set.add(s);
@@ -148,10 +154,14 @@ export async function extractFindings(state: AgentStateType): Promise<Partial<Ag
 					"findings card fell back to unscoped top-N",
 				);
 			} else {
-				logCard("KafkaFindingsCard", focusServices, raw.count, kafkaFindings.consumerGroups?.length ?? 0, {
-					dlqTopics: kafkaFindings.dlqTopics?.length ?? 0,
-					sampleRawIds: raw.sampleIds,
-				});
+				logCard(
+					"KafkaFindingsCard",
+					focusServices,
+					raw.count,
+					kafkaFindings.consumerGroups?.length ?? 0,
+					{ dlqTopics: kafkaFindings.dlqTopics?.length ?? 0, sampleRawIds: raw.sampleIds },
+					{ otherRows: kafkaFindings.dlqTopics?.length ?? 0 },
+				);
 			}
 			return { kafkaFindings };
 		},

@@ -88,6 +88,14 @@ describe("SIO-1812: following is driven by operator input, not by scroll events"
 			scrolled() {
 				if (!following && atBottom()) following = true;
 			},
+			// The reveal effect's first line: a blank graph is the start of a turn.
+			graphCleared() {
+				following = true;
+			},
+			// The header's Follow control.
+			resume() {
+				following = true;
+			},
 			get following() {
 				return following;
 			},
@@ -127,6 +135,29 @@ describe("SIO-1812: following is driven by operator input, not by scroll events"
 		const p = makePanel(MID_CONTENT);
 		p.operatorInput();
 		for (let i = 0; i < SMOOTH_FRAMES; i++) p.scrolled();
+		expect(p.following).toBe(false);
+	});
+
+	// Measured live: one wheel event, then the NEXT turn sat at scrollTop 0 from classify
+	// to aggregate. Scrolling away during one turn is not opting out of the next.
+	test("a new turn resumes following after the operator scrolled away in the last one", () => {
+		const p = makePanel(MID_CONTENT);
+		p.operatorInput();
+		expect(p.following).toBe(false);
+		p.graphCleared();
+		for (let i = 0; i < SMOOTH_FRAMES; i++) p.scrolled();
+		expect(p.following).toBe(true);
+	});
+
+	// Mid-turn the only way back used to be parking at the very bottom, which nothing on
+	// screen said. The Follow control is the explicit one, and the operator still wins after it.
+	test("the Follow control resumes mid-turn, and a later wheel spin still takes over", () => {
+		const p = makePanel(MID_CONTENT);
+		p.operatorInput();
+		p.resume();
+		for (let i = 0; i < SMOOTH_FRAMES; i++) p.scrolled();
+		expect(p.following).toBe(true);
+		p.operatorInput();
 		expect(p.following).toBe(false);
 	});
 
