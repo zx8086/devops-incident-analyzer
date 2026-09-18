@@ -1,5 +1,6 @@
 // scripts/monitor/report.ts
 import { z } from "zod";
+import { formatFindingLine } from "../../contracts/report.ts";
 
 export const SeveritySchema = z.enum(["info", "warn", "critical"]);
 export type Severity = z.infer<typeof SeveritySchema>;
@@ -173,7 +174,7 @@ export function formatIncidentReport(
 	const top = sorted[0]?.finding.severity ?? "info";
 	const lines: string[] = [`[${top}] aws-${accountId}: ${sorted.length} finding(s)`, ""];
 	for (const { finding, diagnosis, skipped, reusedFrom } of sorted) {
-		lines.push(`- (${finding.severity}/${finding.family}) ${finding.resource}: ${finding.summary}`);
+		lines.push(formatFindingLine(finding));
 		if (diagnosis) {
 			lines.push(`  cause: ${diagnosis.probable_cause}`);
 			if (diagnosis.affected_resources.length > 0) {

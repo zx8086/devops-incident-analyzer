@@ -1,10 +1,12 @@
 // tests/report.test.ts
 import { describe, expect, test } from "bun:test";
+import { FINDING_LINE_RE } from "../contracts/report.ts";
 import {
 	checkErrorCountsFromJournal,
 	DIAGNOSIS_RESPONSE_SCHEMA,
 	DiagnosisSchema,
 	type DigestNotable,
+	FamilySchema,
 	FindingSchema,
 	findingCountsFromJournal,
 	formatDigest,
@@ -62,6 +64,29 @@ describe("report", () => {
 		expect(text.startsWith("[critical]")).toBe(true);
 		expect(text).toContain("cpu-high");
 		expect(text).toContain("load spike");
+	});
+
+	// SIO-1814: the analyzer's inbox parser reads finding lines with
+	// FINDING_LINE_RE (packages/agent/src/fleet-inbox.ts). It once kept its own
+	// regex, which stopped matching when db-events and spoke-health arrived, and
+	// nothing failed. Every family goes through the real formatter here, so a
+	// family the shared shape cannot carry fails at the producer.
+	test("every family's finding line is readable by the shared line contract", () => {
+		const families = FamilySchema.options;
+		const text = formatIncidentReport(
+			"111122223333",
+			families.map((family) => ({
+				finding: { ...finding, family, resource: `res-${family}`, dedup_key: `k:${family}` },
+				diagnosis: null,
+			})),
+		);
+		const read = text.split("\n").flatMap((line) => {
+			const m = FINDING_LINE_RE.exec(line);
+			return m ? [{ family: m[2], resource: m[3] }] : [];
+		});
+		expect(read).toEqual(families.map((family) => ({ family, resource: `res-${family}` })));
+		expect(read.map((r) => r.family)).toContain("db-events");
+		expect(read.map((r) => r.family)).toContain("spoke-health");
 	});
 
 	test("uninvestigated findings carry a marker", () => {

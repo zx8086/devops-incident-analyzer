@@ -2,6 +2,7 @@
 // SIO-1652: pure helpers behind the fetchFleetInbox node. Bodies are untrusted
 // input, so the prompt summary is asserted to carry none of them.
 import { describe, expect, test } from "bun:test";
+import { formatFindingLine } from "@devops-agent/pi-coms/contracts";
 import type { PiInboxMessage } from "./action-tools/pi-coms-client.ts";
 import {
 	accountIdForEstate,
@@ -15,6 +16,7 @@ import {
 	incidentWindow,
 	isExcludedSender,
 	isFleetInboxEnabled,
+	type MonitorFinding,
 	parseMonitorReport,
 	summarizeFleetInboxForPrompt,
 	withinWindow,
@@ -147,6 +149,38 @@ describe("parseMonitorReport and classifyMessage", () => {
 			],
 		});
 		expect(parseMonitorReport("please check the ALB")).toBeUndefined();
+	});
+
+	// SIO-1814: the fixture above is hand-written, which is how the parser drifted
+	// from the producer unnoticed. This one is written by the monitor's own line
+	// emitter; packages/pi-coms/tests/report.test.ts proves formatIncidentReport
+	// emits through it for every family.
+	test("reads hyphenated families written by the monitor's own emitter", () => {
+		const findings: MonitorFinding[] = [
+			{ severity: "critical", family: "db-events", resource: "orders-db", summary: "RDS failover: started" },
+			{ severity: "warn", family: "spoke-health", resource: "aws-eu-oit-prd", summary: "3 model failures" },
+			{ severity: "info", family: "alarm", resource: "orders-lag", summary: "entered INSUFFICIENT_DATA" },
+		];
+		const text = [
+			"[critical] aws-111122223333: 3 finding(s)",
+			"",
+			...findings.flatMap((f) => [formatFindingLine(f), "  evidence: {}"]),
+		].join("\n");
+		const report = parseMonitorReport(text);
+		expect(report?.findings).toEqual(findings);
+		expect(report?.findings.length).toBe(report?.findingCount);
+	});
+
+	// The digest's notable lines share the "(sev/family)" shape behind a two-space
+	// indent, but they are a 24 h rollup of findings already reported one by one.
+	test("an indented notable line is not a finding", () => {
+		const text = [
+			"[warn] aws-111122223333: 1 finding(s)",
+			"",
+			formatFindingLine({ severity: "warn", family: "logs", resource: "/aws/lambda/x", summary: "errors" }),
+			`  ${formatFindingLine({ severity: "warn", family: "db-events", resource: "orders-db", summary: "failover" })}`,
+		].join("\n");
+		expect(parseMonitorReport(text)?.findings.map((f) => f.family)).toEqual(["logs"]);
 	});
 
 	test("classifies reports, completed conversations and the rest", () => {

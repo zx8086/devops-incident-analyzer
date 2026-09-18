@@ -2,6 +2,7 @@
 // SIO-1652: pure helpers behind the fetchFleetInbox node. Inbox bodies are
 // untrusted input (spoke model output, operator free text): they are classified
 // and excerpted for the card, and only structured facts reach the prompt.
+import { FINDING_LINE_RE } from "@devops-agent/pi-coms/contracts";
 import type {
 	FleetInboxCounts,
 	FleetInboxDigest,
@@ -99,10 +100,10 @@ export type MonitorReport = {
 };
 
 // The monitor's own wire format (packages/pi-coms/scripts/monitor/report.ts,
-// formatIncidentReport): a header line, then one "- (sev/family) resource: summary"
-// line per finding with indented continuation lines.
+// formatIncidentReport): a header line, then one finding line per finding with
+// indented continuation lines. SIO-1814: the finding line's shape is the
+// monitor's shared contract, not a second regex kept in step by hand.
 const REPORT_HEADER_RE = /^\[(info|warn|critical)\] aws-(\d+): (\d+) finding\(s\)/;
-const REPORT_FINDING_RE = /^- \((info|warn|critical)\/([a-z]+)\) (.+?): (.+)$/;
 
 export function parseMonitorReport(text: string): MonitorReport | undefined {
 	const lines = text.split("\n");
@@ -110,7 +111,7 @@ export function parseMonitorReport(text: string): MonitorReport | undefined {
 	if (!header) return undefined;
 	const findings: MonitorFinding[] = [];
 	for (const line of lines.slice(1)) {
-		const m = REPORT_FINDING_RE.exec(line);
+		const m = FINDING_LINE_RE.exec(line);
 		if (!m) continue;
 		findings.push({
 			severity: m[1] as FleetInboxSeverity,
