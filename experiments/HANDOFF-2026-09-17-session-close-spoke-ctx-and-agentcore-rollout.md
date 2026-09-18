@@ -5,10 +5,10 @@
 | Date | 2026-09-17 (session ran about 15:45 to 17:45 UTC) |
 | Tickets | [SIO-1786](https://linear.app/siobytes/issue/SIO-1786) Done (its user-side replay has since been run, see the update), [SIO-1787](https://linear.app/siobytes/issue/SIO-1787) Done (closed by the user 2026-09-17, was In Review when this was written), [SIO-1788](https://linear.app/siobytes/issue/SIO-1788) Done |
 | Related | [SIO-1726](https://linear.app/siobytes/issue/SIO-1726), [SIO-1734](https://linear.app/siobytes/issue/SIO-1734) (spoke context-mode, shipped earlier), [SIO-1774](https://linear.app/siobytes/issue/SIO-1774) (the change the AgentCore deploy shipped), [SIO-1784](https://linear.app/siobytes/issue/SIO-1784) (separate, own handover: `experiments/HANDOFF-2026-09-17-SIO-1784.md`) |
-| PRs | #819 merged as `798e9b29`, #820 merged as `61b43f87`; follow-up session #821 to #824; second update #826 merged as `cf5ba637`, #825 closed unmerged; third update #827 merged as `09781ab9`, #828 merged as `95433027` |
-| Repo state | `origin/main` at `61b43f87` when written; `7a77c575` after the follow-up session (PRs #821, #822, #823, #824); `cf5ba637` after the second update (PR #826); `95433027` after the third update (PRs #827, #828). No branch is open. |
+| PRs | #819 merged as `798e9b29`, #820 merged as `61b43f87`; follow-up session #821 to #824; second update #826 merged as `cf5ba637`, #825 closed unmerged; third update #827 merged as `09781ab9`, #828 merged as `95433027`; fourth update #830 merged as `adde28a3`, #829 merged as `3dccce03`, #831 merged as `dfabe40a` |
+| Repo state | `origin/main` at `61b43f87` when written; `7a77c575` after the follow-up session (PRs #821, #822, #823, #824); `cf5ba637` after the second update (PR #826); `95433027` after the third update (PRs #827, #828); `dfabe40a` after the fourth update (PRs #829, #830, #831). No branch is open. |
 | Deployed state | Fleet bundle `61b43f87` on all 8 spokes and both hubs. AWS AgentCore runtime on v16. The SIO-1792 change is to the operator-side fleet CLI and needs no deploy; the SIO-1793 change is tests only. |
-| Nature | Nothing here is in progress. Every item under "What is still open" is now closed or ticketed; see the third update for the final state. |
+| Nature | Nothing here is in progress. Every item under "What is still open" is now closed or ticketed; see the third update for the tickets and the FOURTH update for what happened to them: three are merged, and three small things still need the owner. |
 
 ## TL;DR
 
@@ -306,6 +306,97 @@ SIO-1802). `origin/main` is at the commit that adds this paragraph. Deployed sta
 since the third update: fleet bundle `61b43f87` on all 8 spokes and both hubs, AWS AgentCore
 runtime v16. No branch is open, no process the sessions started is running, both tunnel ports
 are free of anything the sessions opened.
+
+## Fourth update, 2026-09-18 06:00 to 07:45 UTC (a new session): the six Backlog tickets worked through
+
+A fresh session read this document, planned all six tickets as one piece of work, and executed the
+plan. Three code tickets are merged; the three no-code tickets are recorded on Linear. Detail, with
+commands and outputs, is in each ticket's comments; this is the summary and what is left.
+
+| Ticket | Outcome | State on Linear |
+|---|---|---|
+| [SIO-1797](https://linear.app/siobytes/issue/SIO-1797) | PR #830, `adde28a3`. Verified live | Done (moved by the merged PR link) |
+| [SIO-1798](https://linear.app/siobytes/issue/SIO-1798) | PR #829, `3dccce03`. Verified live | Done (moved by the merged PR link) |
+| [SIO-1802](https://linear.app/siobytes/issue/SIO-1802) | PR #831, `dfabe40a`. ONE live check left, see below | Done (moved by the merged PR link, NOT by a person) |
+| [SIO-1799](https://linear.app/siobytes/issue/SIO-1799) | No recurrence in 45 CI runs since the flake | Backlog, by its own 60-day rule |
+| [SIO-1800](https://linear.app/siobytes/issue/SIO-1800) | 3 of 4 checks pass live, 1 not exercisable, no code change, one finding for a decision | In Review |
+| [SIO-1801](https://linear.app/siobytes/issue/SIO-1801) | prd half passed; dev half not done | In Progress |
+
+**SIO-1797: the ticket's hypothesis was half wrong.** `pvh` and `v3` are under `MIN_TOKEN_LENGTH`
+and can never match. The whole false-positive surface was ONE token, `service`: `SUFFIX_PATTERN`
+strips `-service` only at end of string, a focus ending in `-v3` keeps it, and an alarm haystack
+never ends in `-service`. Reproduced with the 26 live alarm names (read-only `DescribeAlarms`):
+25 of 26 scoped, every one via `service`; 0 of 26 after. `matchesFocus` now skips `GENERIC_TOKENS`
+in its overlap loop only. `tokenize()` is untouched because `focus-match.test.ts` pins its output,
+`normalize()` because its output is persisted knowledge-graph identity (SIO-1103). Live:
+`AWSFindingsCard` `rawCount: 64` (26 + 38, the two estates, counted independently),
+`filterMode: unscoped-fallback`, `fallbackCount: 5`.
+
+**SIO-1798: not a reap race.** `pollPiAction` builds a fresh `PiComsClient` per slice (random
+`sessionId`, never registered) and `awaitReply` heartbeated unconditionally, so the hub answered 404
+every slice. One guard in the shared client (`if (this.registered)`) fixes that path and
+`awaitFleetMessage`, which had the same defect. Greptile round 1 caught a real flaw in my first
+version: it demoted `pi.hub.await.exhausted` by budget size, but `fleet_await_reply` and `runHubTask`
+pass the operator-configurable `verifyTimeoutMs` and never re-poll, so a short
+`PI_COMS_VERIFY_TIMEOUT_MS` would have hidden a genuine final timeout. `awaitReply` now takes
+`{ partial?: boolean }` and only the three callers that really re-poll pass it. Live: a whole verify
+through the pane, six slices, zero `pi.hub.call.failed`, no heartbeat POST in the log.
+
+**SIO-1802: the evidence changed the fix.** The offending runs were pulled from LangSmith first. On
+the styles-v3 run all 15 returned tickets were unrelated, and re-running its JQL live showed why:
+**JQL `text ~ "a b"` is a stemmed bag of words, not a phrase.** `styles scope` matched a ticket
+saying "Style" and "out of scope". Results are capped by recency, so junk filled every slot and the
+exact prior incidents were never retrieved; a post-filter alone would have produced an EMPTY card.
+Same run with only the multi-word keywords phrase-quoted: 88 matches to 36, and 0 to 5 of the top
+15 about the incident's own service. Also corrected: the upstream already returns `description`,
+`labels` and `components` by default; `shapeIssue` discarded them. Shipped: phrase-quoting in
+`buildJql`, `matchedBy` + `score` per ticket, a per-issue keep rule in the extractor (structural
+hit or two keyword phrases; no `matchedBy` keeps the SIO-1244 provenance rule), and a chip on the
+card. Three Greptile rounds, both findings reproduced before fixing (a literal substring misses a
+phrase split by a newline or `**bold**`; then my fix anchored a term only at its start, so `api`
+hit `apiary`). End to end on the live top 15: 15 unrelated before, 5 kept after, all incidents of
+the focus service.
+
+**What is left, all three need the owner:**
+
+1. **SIO-1802, the tool inside the running server.** Restart the Atlassian MCP (9085) and the web
+   app on merged `main`, replay the styles-v3 incident, and expect the logged `jql` to carry
+   `\"kv timeout\"` phrase-quoted, the card to list the `pvh-services-styles-v3` incident reports
+   with chips such as `service + 2 keywords`, and `AtlassianFindingsCard` `filteredCount` below
+   `rawCount`. A second instance was deliberately NOT started from the worktree: it would share the
+   OAuth token store with the running server, and a refresh by either can invalidate the other
+   (memory `reference_atlassian_oauth_refresh_race_root_cause`). Linear shows this ticket Done
+   because the PR merged; that is the integration, not a verdict.
+2. **SIO-1801, the dev half.** It cannot go through the fleet pane, which lists prd hubs only by
+   design (SIO-1696, `apps/web/src/lib/server/pi-fleet.ts`). Operator console route on the ticket.
+   prd half: spoke `eu-oit-prd`, exactly the seven `ctx_` tools, and `INSTANCES=2` matching an
+   independent `DescribeInstances`.
+3. **SIO-1800, a decision.** The pane scrolls a new entry into view when it is ADDED (a short
+   "Waiting" stub). When the reply arrives the entry grows and nothing scrolls, so the reply lands
+   partly below the fold: 108 px and 81 px hidden, measured twice. This is the documented intent of
+   SIO-1794 ("an arriving result must not move the reader"), and check 3 shows that intent working,
+   so it was NOT changed. Recommendation on the ticket: stick to the bottom only when the reader
+   was already there.
+
+**Seen in passing, none ticketed:** the verify in the live run ended `error: response not valid
+JSON` (the hub rejecting the spoke's reply against the verify schema; spoke-side, intermittent,
+yesterday's verifies returned verdicts); `findLinkedIncidents`' `resolvedAt` / `mttrMinutes` are
+probably always null, because the upstream default field set has no `resolutiondate`;
+`get-runbook-for-alert.ts` builds Confluence CQL with the same unquoted multi-word `text ~`; and
+`packages/knowledge-graph`'s suite segfaults the Bun runner locally (rc 139, zero tests run,
+identical on base content; CI runs it).
+
+**State at close.** `origin/main` at the commit that adds this section, on top of `dfabe40a`. No
+branch is open, locally or on origin, from this session. The isolated web instance on 5174 was
+stopped by its server id and the port proven free; the operator's prd tunnel on 8788 was left
+untouched. Deployed state is unchanged: fleet bundle `61b43f87`, AWS AgentCore runtime v16. The
+three merged changes load on the next restart of the web app (agent and web packages) and of the
+Atlassian MCP. A gitignored `.claude/launch.json` with the 5174 replay recipe was left in the
+worktree on purpose, for check 1 above.
+
+New memory from this session: `reference_jql_text_tilde_is_bag_of_words`,
+`feedback_git_switch_no_track_and_never_tail_git`; extended:
+`reference_sandbox_blocks_listen_fake_eaddrinuse`.
 
 ## What is still open
 
