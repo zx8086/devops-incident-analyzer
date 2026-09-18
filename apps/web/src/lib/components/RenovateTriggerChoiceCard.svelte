@@ -25,7 +25,7 @@ const changelogCount = $derived(prompt.changelog?.length ?? 0);
 </script>
 
 <div
-  class="border-t border-tommy-accent-blue/40 bg-blue-50 px-4 py-3"
+  class="border-t border-gray-200 bg-gray-50 px-4 py-3"
   role="dialog"
   aria-labelledby="renovate-trigger-heading"
 >
@@ -151,7 +151,7 @@ const changelogCount = $derived(prompt.changelog?.length ?? 0);
         type="button"
         onclick={() => onDecline()}
         {disabled}
-        class="px-3 py-1.5 text-sm font-medium rounded-md bg-white text-tommy-navy border border-tommy-navy hover:bg-tommy-cream disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        class="px-3 py-1.5 text-sm font-medium rounded-md bg-white text-tommy-navy border border-tommy-navy hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
       >
         Decline
       </button>

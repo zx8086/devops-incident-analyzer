@@ -304,7 +304,7 @@ function handleSuggestionClick(suggestion: string) {
 <!-- SIO-1572: h-screen (was min-h-screen) so the split row is viewport-bound and
      both the chat column and the graph pane scroll internally; min-h-screen let a
      tall graph SVG push the chat input below the fold. -->
-<div class="h-screen bg-tommy-cream flex flex-col">
+<div class="h-screen bg-white flex flex-col">
   <header class="bg-tommy-navy text-white px-6 py-4 flex items-center justify-between">
     <div class="flex items-center gap-3">
       <button
@@ -375,7 +375,7 @@ function handleSuggestionClick(suggestion: string) {
   </header>
 
   {#if isIac}
-    <div class="bg-blue-50 border-b border-tommy-accent-blue/30 px-6 py-2 text-xs text-tommy-navy/80">
+    <div class="bg-gray-50 border-b border-gray-200 px-6 py-2 text-xs text-tommy-navy/80">
       Elastic Cloud IaC maker. For config changes I propose a diff and open a GitLab MR for your review &mdash; CI computes the plan and you merge; I never apply those. A Fleet agent <strong>binary</strong> upgrade has no config file, so on your explicit approval it runs an imperative bulk_upgrade via CI (a live change you can track here).
     </div>
   {:else}
@@ -606,7 +606,7 @@ function handleSuggestionClick(suggestion: string) {
             type="button"
             onclick={() => agentStore.resolveTopicShift("fresh")}
             disabled={agentStore.isStreaming}
-            class="px-3 py-1.5 text-sm font-medium bg-white text-tommy-navy border border-tommy-navy rounded-md hover:bg-tommy-cream disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            class="px-3 py-1.5 text-sm font-medium bg-white text-tommy-navy border border-tommy-navy rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             Start fresh
           </button>
@@ -646,7 +646,7 @@ function handleSuggestionClick(suggestion: string) {
 
   {#if agentStore.iacClarify}
     <!-- elastic-iac clarify gate: the planner needs one direct answer to proceed. -->
-    <div class="border-t border-tommy-accent-blue/40 bg-blue-50 px-4 py-3" role="dialog" aria-labelledby="iac-clarify-heading">
+    <div class="border-t border-gray-200 bg-gray-50 px-4 py-3" role="dialog" aria-labelledby="iac-clarify-heading">
       <div class="max-w-4xl mx-auto">
         <h3 id="iac-clarify-heading" class="text-sm font-semibold text-tommy-navy">One quick question</h3>
         <p class="text-sm text-tommy-navy/80 mt-1">{agentStore.iacClarify.question}</p>
@@ -722,7 +722,7 @@ function handleSuggestionClick(suggestion: string) {
 
   <!-- SIO-1665: triageOffered, not just showGraphPane -- same gate as the toggle. -->
   {#if triageOffered && showGraphPane}
-    <div class="w-2/5 max-w-xl shrink-0 border-l border-gray-200 bg-tommy-cream overflow-hidden">
+    <div class="w-2/5 max-w-xl shrink-0 border-l border-gray-200 bg-white overflow-hidden">
       <GraphTriagePanel
         agent={agentStore.currentAgent}
         activeNodes={agentStore.activeNodes}
@@ -738,7 +738,7 @@ function handleSuggestionClick(suggestion: string) {
        has to match its toggle's, or switching to the IaC agent leaves the pane on
        screen with no control to close it. -->
   {#if fleetOffered && piFleetStore.open}
-    <div class="w-2/5 max-w-xl shrink-0 border-l border-gray-200 bg-tommy-cream overflow-hidden">
+    <div class="w-2/5 max-w-xl shrink-0 border-l border-gray-200 bg-white overflow-hidden">
       <!-- SIO-1703: scoping an investigation to one estate scopes the spokes too.
            Addressing an account outside the investigation is almost always a
            mistake, and the estate selector is the operator's statement of scope. -->

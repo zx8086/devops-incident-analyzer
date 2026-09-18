@@ -12,7 +12,6 @@ import ApplicationTopologyCard from "./ApplicationTopologyCard.svelte";
 import AtlassianFindingsCard from "./AtlassianFindingsCard.svelte";
 import AWSFindingsCard from "./AWSFindingsCard.svelte";
 import CompletedProgress from "./CompletedProgress.svelte";
-import ConfidenceBadge from "./ConfidenceBadge.svelte";
 import CouchbaseFindingsCard from "./CouchbaseFindingsCard.svelte";
 import CreateTicketCard from "./CreateTicketCard.svelte";
 import ElasticFindingsCard from "./ElasticFindingsCard.svelte";
@@ -104,18 +103,11 @@ const commentMode = $derived(canCommentOnThreadTicket && threadTicket !== null);
           {/if}
         </div>
 
-        {#if !isStreaming}
-          <!-- SIO-1211: rendered directly under the answer bubble (not after the
-               network map/findings cards) so it visually reads as elaborating
-               the answer's own "Confidence: ... (capped from ...)" line rather
-               than as a second, disconnected repetition of it. -->
-          <ConfidenceBadge
-            confidence={message.confidence}
-            confidencePreCap={message.confidencePreCap}
-            capReasons={message.capReasons}
-            lowConfidence={message.lowConfidence}
-          />
-        {/if}
+        <!-- SIO-1810: the confidence badge is gone. SIO-1211 placed it here to
+             elaborate the answer's own "Confidence: ..." line, but on screen it
+             read as the same number printed twice. The aggregator's line is the
+             one that survives a copy into a ticket (SIO-860 rewrites it post-cap
+             and ~15 tests assert it), so the badge was the removable half. -->
 
         {#if !isStreaming && message.dataSourceFindings}
           {@const kafkaFindings = message.dataSourceFindings.get("kafka")?.kafkaFindings}

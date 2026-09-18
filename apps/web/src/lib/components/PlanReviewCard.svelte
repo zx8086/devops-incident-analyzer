@@ -25,7 +25,7 @@ const diffLabel = "Config change";
 const planLabel = "How this applies";
 </script>
 
-<div class="border-t border-tommy-accent-blue/40 bg-blue-50 px-4 py-3" role="dialog" aria-labelledby="iac-plan-heading">
+<div class="border-t border-gray-200 bg-gray-50 px-4 py-3" role="dialog" aria-labelledby="iac-plan-heading">
   <div class="max-w-4xl mx-auto">
     <div class="flex items-center justify-between gap-2">
       <h3 id="iac-plan-heading" class="text-sm font-semibold text-tommy-navy">
@@ -43,9 +43,12 @@ const planLabel = "How this applies";
       </div>
 
       {#if review.risks.length > 0}
-        <div class="mt-2">
-          <p class="text-xs font-semibold text-yellow-900">Risks</p>
-          <ul class="list-disc list-inside text-xs text-yellow-900">
+        <!-- SIO-1810: the risks were amber text sitting directly on the card,
+             which read as a colour clash rather than a warning. Give them a
+             real amber container so the emphasis is deliberate. -->
+        <div class="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5">
+          <p class="text-xs font-semibold text-amber-900">Risks</p>
+          <ul class="list-disc list-inside text-xs text-amber-900">
             {#each review.risks as risk}
               <li>{risk}</li>
             {/each}
@@ -59,7 +62,7 @@ const planLabel = "How this applies";
       {#if review.recentChangesStatus && review.recentChangesStatus !== "off"}
         <details class="mt-2" open>
           <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">Recent changes (knowledge graph)</summary>
-          <div class="mt-1 rounded bg-white border border-tommy-accent-blue/30 px-2 py-1 text-xs text-tommy-navy">
+          <div class="mt-1 rounded bg-white border border-gray-200 px-2 py-1 text-xs text-tommy-navy">
             {#if review.recentChanges}
               <MarkdownRenderer content={review.recentChanges} />
             {:else}
@@ -75,7 +78,7 @@ const planLabel = "How this applies";
       {#if review.priorLearningsStatus && review.priorLearningsStatus !== "off"}
         <details class="mt-2" open>
           <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">Prior learnings (memory)</summary>
-          <div class="mt-1 rounded bg-white border border-tommy-accent-blue/30 px-2 py-1 text-xs text-tommy-navy">
+          <div class="mt-1 rounded bg-white border border-gray-200 px-2 py-1 text-xs text-tommy-navy">
             {#if review.priorLearnings}
               <MarkdownRenderer content={review.priorLearnings} />
             {:else}
@@ -117,7 +120,7 @@ const planLabel = "How this applies";
 
       <details class="mt-2" open>
         <summary class="text-xs font-semibold text-tommy-navy cursor-pointer">{diffLabel}</summary>
-        <pre class="mt-1 max-h-48 overflow-auto rounded bg-gray-900 text-gray-100 text-xs p-2 whitespace-pre-wrap">{review.diff || "(no diff)"}</pre>
+        <pre class="mt-1 max-h-48 overflow-auto rounded bg-tommy-navy text-tommy-cream text-xs p-2 whitespace-pre-wrap">{review.diff || "(no diff)"}</pre>
       </details>
     {/if}
 
@@ -126,7 +129,7 @@ const planLabel = "How this applies";
         type="button"
         onclick={onApprove}
         {disabled}
-        class="px-3 py-1.5 text-sm font-medium bg-tommy-navy text-white rounded-md hover:bg-tommy-navy/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        class="px-3 py-1.5 text-sm font-medium bg-tommy-navy text-white rounded-lg hover:bg-tommy-navy/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
       >
         Approve and open MR
       </button>
@@ -134,7 +137,7 @@ const planLabel = "How this applies";
         type="button"
         onclick={onReject}
         {disabled}
-        class="px-3 py-1.5 text-sm font-medium bg-white text-tommy-navy border border-tommy-navy rounded-md hover:bg-tommy-cream disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        class="px-3 py-1.5 text-sm font-medium bg-white text-tommy-navy border border-tommy-navy rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
       >
         Reject
       </button>

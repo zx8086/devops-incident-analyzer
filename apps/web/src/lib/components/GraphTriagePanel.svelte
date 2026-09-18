@@ -121,7 +121,7 @@ const statusLine = $derived.by(() => {
   <div class="flex items-center gap-2 px-4 py-3 border-b border-gray-200 bg-white">
     <Icon name="graph" class="w-4 h-4 text-tommy-navy" />
     <div class="flex-1 min-w-0">
-      <h2 class="text-xs font-semibold text-tommy-navy leading-tight">Live graph triage</h2>
+      <h2 class="text-sm font-semibold text-tommy-navy leading-tight">Live graph triage</h2>
       <p class="text-[0.625rem] text-gray-500 truncate">{agent} &middot; {statusLine}</p>
     </div>
     {#if isStreaming}
@@ -195,7 +195,7 @@ const statusLine = $derived.by(() => {
               y={node.y}
               width={node.width}
               height={node.height}
-              rx={node.height / 2}
+              rx="4"
               class={visual === "done"
                 ? "fill-green-100 stroke-green-500 stroke-1"
                 : "fill-white stroke-gray-300 stroke-1"}
@@ -214,7 +214,7 @@ const statusLine = $derived.by(() => {
               y={node.y}
               width={node.width}
               height={node.height}
-              rx="8"
+              rx="4"
               class={visual === "running"
                 ? "fill-tommy-offwhite stroke-tommy-accent-blue stroke-2 animate-pulse"
                 : visual === "done"

@@ -20,7 +20,7 @@ let {
 const LABELS = RECONCILE_DIRECTION_LABELS;
 </script>
 
-<div class="border-t border-tommy-accent-blue/40 bg-blue-50 px-4 py-3" role="dialog" aria-labelledby="iac-reconcile-heading">
+<div class="border-t border-gray-200 bg-gray-50 px-4 py-3" role="dialog" aria-labelledby="iac-reconcile-heading">
   <div class="max-w-4xl mx-auto">
     <div class="flex items-center justify-between gap-2">
       <h3 id="iac-reconcile-heading" class="text-sm font-semibold text-tommy-navy">Reconcile stack: {prompt.stack}</h3>
@@ -71,7 +71,7 @@ const LABELS = RECONCILE_DIRECTION_LABELS;
           type="button"
           onclick={() => onChoose(direction)}
           {disabled}
-          class="px-3 py-1.5 text-sm font-medium rounded-md disabled:opacity-50 disabled:cursor-not-allowed transition-colors {direction === 'skip' ? 'bg-white text-tommy-navy border border-tommy-navy hover:bg-tommy-cream' : 'bg-tommy-navy text-white hover:bg-tommy-navy/90'}"
+          class="px-3 py-1.5 text-sm font-medium rounded-md disabled:opacity-50 disabled:cursor-not-allowed transition-colors {direction === 'skip' ? 'bg-white text-tommy-navy border border-tommy-navy hover:bg-gray-50' : 'bg-tommy-navy text-white hover:bg-tommy-navy/90'}"
         >
           {LABELS[direction]}
         </button>
