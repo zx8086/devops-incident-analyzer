@@ -68,6 +68,13 @@ interface RawIssueForHistory {
 	};
 }
 
+// SIO-1805: the only two fields aggregate() reads, requested EXPLICITLY. With `fields`
+// omitted the upstream default set has no `resolutiondate` (checked live on resolved
+// tickets), so every bucket reported resolvedCount 0 and mttrMinutes null: "nothing was
+// ever resolved", when the truth was "not measured". It also stops this call from pulling
+// up to 100 full descriptions it never looks at.
+export const INCIDENT_HISTORY_FIELDS = ["created", "resolutiondate"] as const;
+
 export function bucketKey(date: Date, groupBy: "week" | "month"): string {
 	if (groupBy === "month") {
 		const year = date.getUTCFullYear();
@@ -182,6 +189,7 @@ export async function getIncidentHistory(
 		// SIO-1116: upstream now requires searchResultMode (see find-linked-incidents.ts).
 		// "issues" returns the issues array aggregate() consumes.
 		searchResultMode: "issues",
+		fields: [...INCIDENT_HISTORY_FIELDS],
 	});
 
 	const parsed = parseAtlassianTextContent<JiraSearchResponse>(result as { content?: unknown }, {

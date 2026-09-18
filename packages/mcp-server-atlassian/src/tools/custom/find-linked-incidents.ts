@@ -147,6 +147,24 @@ export interface JiraIssueRaw {
 	};
 }
 
+// SIO-1805: every field shapeIssue and attributeMatch read, requested EXPLICITLY. With
+// `fields` omitted the upstream returns a default set that has `resolution` but NOT
+// `resolutiondate` (checked live on resolved tickets: the key is absent), so resolvedAt and
+// mttrMinutes were null for every ticket, resolved or not. An explicit list REPLACES that
+// default, so anything read from `fields` must be named here; the test pins that.
+// `customfield_severity` is deliberately not requested: no such field exists on the site
+// (204 fields checked), so `priority` is the only severity signal the fallback ever sees.
+export const LINKED_INCIDENT_FIELDS = [
+	"summary",
+	"status",
+	"priority",
+	"created",
+	"resolutiondate",
+	"labels",
+	"components",
+	"description",
+] as const;
+
 // What the JQL was built from, so each returned ticket can be attributed to a clause.
 export interface MatchTerms {
 	service: string;
@@ -417,6 +435,7 @@ async function searchIssues(
 		// SIO-1802: description as plain text so attributeMatch can look for the keywords
 		// in it. It is read for attribution only and never returned, so the result stays small.
 		responseContentFormat: "markdown",
+		fields: [...LINKED_INCIDENT_FIELDS],
 	});
 
 	return parseAtlassianTextContent<JiraSearchResponse>(result as { content?: unknown }, {
