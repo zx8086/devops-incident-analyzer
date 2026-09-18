@@ -5,8 +5,8 @@
 | Date | 2026-09-17 (session ran about 15:45 to 17:45 UTC) |
 | Tickets | [SIO-1786](https://linear.app/siobytes/issue/SIO-1786) Done (its user-side replay has since been run, see the update), [SIO-1787](https://linear.app/siobytes/issue/SIO-1787) Done (closed by the user 2026-09-17, was In Review when this was written), [SIO-1788](https://linear.app/siobytes/issue/SIO-1788) Done |
 | Related | [SIO-1726](https://linear.app/siobytes/issue/SIO-1726), [SIO-1734](https://linear.app/siobytes/issue/SIO-1734) (spoke context-mode, shipped earlier), [SIO-1774](https://linear.app/siobytes/issue/SIO-1774) (the change the AgentCore deploy shipped), [SIO-1784](https://linear.app/siobytes/issue/SIO-1784) (separate, own handover: `experiments/HANDOFF-2026-09-17-SIO-1784.md`) |
-| PRs | #819 merged as `798e9b29`, #820 merged as `61b43f87` |
-| Repo state | `origin/main` at `61b43f87` when written; `7a77c575` after the follow-up session (PRs #821, #822, #823, #824). No branch is open. |
+| PRs | #819 merged as `798e9b29`, #820 merged as `61b43f87`; follow-up session #821 to #824; second update #826 merged as `cf5ba637`, #825 closed unmerged |
+| Repo state | `origin/main` at `61b43f87` when written; `7a77c575` after the follow-up session (PRs #821, #822, #823, #824); `cf5ba637` after the second update (PR #826). No branch is open. |
 | Deployed state | Fleet bundle `61b43f87` on all 8 spokes and both hubs. AWS AgentCore runtime on v16. |
 | Nature | Nothing here is in progress. This is a list of loose ends, each small and independent. None has a ticket unless one is named. |
 
@@ -16,10 +16,11 @@ Three things shipped and were verified live: the AWS MCP AgentCore runtime went 
 SIO-1774's `describe_alarms` slimming (78618 to 36186 bytes, toolCount still 70); the fleet was found
 already current, then re-rolled for SIO-1788; and SIO-1788 itself, which hides four context-mode
 maintenance tools from the spokes and fixes the spoke persona's self-description. What is left is
-five loose ends, listed under "What is still open". The two that matter most: the user still has to
-restart the web app and run the full incident replay that closes SIO-1786, and 24 tests in
-`packages/agent` fail in this session's worktree on code identical to main, for a reason nobody has
-established.
+five loose ends, listed under "What is still open". Both of the two that mattered most have since
+closed: the SIO-1786 replay was run and passed (first update), and the 24 `packages/agent` failures
+were the command, bare `bun test` without `--isolate`, not the code (first update; a second session
+then re-derived it the hard way and fixed the CLAUDE.md instruction that caused it, second update).
+What remains open is SIO-1792, SIO-1793 and the untriaged observations listed in the two updates.
 
 ## Session summary
 
@@ -192,6 +193,55 @@ ticketing.
 
 SIO-1787 is Done: the user closed it on 2026-09-17. Its one follow-up, `fleet status` / `rollout`
 failing fast instead of hanging, is SIO-1792 and the two tickets are linked.
+
+## Second update, 2026-09-17 21:00 to 21:20 UTC (the original session, resumed): SIO-1795, a wrong investigation and its correction
+
+The session that wrote this document was resumed after the follow-up session above had already
+landed on main, and was asked to investigate the 24 failures (item 2). It did not read the update
+above or the memory it cites, ran bare `bun test` throughout, and reached the wrong conclusion
+before finding the right one. Recorded here because the artefacts of the wrong path exist and a
+reader may meet them.
+
+**What it got right:** without `--isolate`, `mock.module()` is process-global, nothing undoes it
+between test files, and Bun chooses the file order from the filesystem (on bun 1.4.2 a JUnit report
+showed it ignoring the order of paths given on the command line). Real leaked stubs were found by
+pairwise bisection: `iac/renovate-integration.test.ts` (one describe with no restore, a
+`memory-backend` stub whose search returns nothing), `iac/local-tools.test.ts` (a
+`@devops-agent/knowledge-graph` stub, only `memory-backend` restored), and three files that replace
+the whole `@devops-agent/shared` package with `redactPiiContent` as the identity function
+(`aggregator.test.ts`, `aggregator-grounding-integration.test.ts`,
+`tests/integration/styles-v3-replay.test.ts`). Fourteen files stub `prompt-context.ts` partially
+with no restore. None of this matters under `--isolate`, which is what the package script and CI run.
+
+**What it got wrong:** "CI is green only because its file order happens to avoid the damage" and
+"CI is one directory-order change away from red". Both rested on bare `bun test`, including a
+Linux-container cross-check that was also bare. On a pristine copy of main, `bun test --isolate`
+was `4714 pass, 0 fail`.
+
+**Artefacts and their state:**
+
+- [SIO-1795](https://linear.app/siobytes/issue/SIO-1795): created with the wrong analysis, then
+  retitled and given a correction banner at the top; the wrong text is kept underneath, marked as
+  wrong. Done, via PR #826.
+- PR #826 (`cf5ba637`, merged): one paragraph of `CLAUDE.md`. It used to say `cd packages/<name>
+  && bun test` and that this is how `apps/web` "must be run". It now says `bun run test`, and why:
+  `packages/agent` and `apps/web` isolate, `apps/web` also runs `svelte-kit sync`, `pi-coms`
+  installs its nested deps. Measured on one commit: `packages/agent` bare 24 fail vs script 0;
+  `apps/web` bare 17 fail plus 12 errors vs script 0. A path filter keeps the flag (`bun run test
+  src/iac`). There is no `bunfig.toml` key for isolation (checked against the Bun docs, and
+  `[test] isolate = true` was tried and is ignored) and a preload cannot see the flag, so bare
+  `bun test` cannot be made safe; the instruction had to change.
+- [SIO-1796](https://linear.app/siobytes/issue/SIO-1796) and PR #825 (five test files restoring
+  the leaked stubs): the user closed the PR unmerged and cancelled the ticket on the advice above.
+  The patch was correct and harmless, but it fixed a problem the script already avoids, and would
+  not have made bare `bun test` reliable anyway (the fourteen `prompt-context.ts` stubbers).
+- Memory: the duplicate memory the session wrote was deleted; the lesson was folded into the
+  existing `reference_bun_test_isolate_kills_mock_module_pollution`, whose stale line ("packages/agent
+  does NOT isolate") is corrected, and that memory is now linked from `MEMORY.md` directly.
+
+**The lesson, for the next person who sees "passes alone, fails in the suite, green on CI":** compare
+your command with the package's `"test"` script and with what CI runs before anything else. The
+answer was on main (the update above) and in memory two hours before the investigation started.
 
 ## What is still open
 
