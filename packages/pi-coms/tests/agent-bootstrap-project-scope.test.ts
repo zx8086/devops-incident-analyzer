@@ -111,11 +111,18 @@ describe("agent-bootstrap.sh mcp.json entry", () => {
 		expect(ctx).toMatchObject({ lifecycle: "keep-alive", directTools: true, toolPrefix: "none" });
 	});
 
-	test.each(["false", "0"])("CTX_MODE_ENABLED=%s removes a pre-existing mcp.json even though the bundle is present", (v) => {
-		const r = runLauncherBlock({ ctxModeEnabled: v, serverPresent: true, existingMcpJson: '{"mcpServers":{"ctx":{}}}' });
-		expect(r.exitCode).toBe(0);
-		expect(r.mcpJson).toBeNull();
-	});
+	test.each(["false", "0"])(
+		"CTX_MODE_ENABLED=%s removes a pre-existing mcp.json even though the bundle is present",
+		(v) => {
+			const r = runLauncherBlock({
+				ctxModeEnabled: v,
+				serverPresent: true,
+				existingMcpJson: '{"mcpServers":{"ctx":{}}}',
+			});
+			expect(r.exitCode).toBe(0);
+			expect(r.mcpJson).toBeNull();
+		},
+	);
 
 	test("enabled but the bundle is missing: removes a pre-existing mcp.json rather than pointing Pi at a file that is not there", () => {
 		const r = runLauncherBlock({ serverPresent: false, existingMcpJson: '{"mcpServers":{"ctx":{}}}' });
