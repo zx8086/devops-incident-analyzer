@@ -192,6 +192,40 @@ describe("findLinkedIncidents.attributeMatch (SIO-1802)", () => {
 		expect(out).toEqual({ matchedBy: [], score: 0 });
 	});
 
+	// Greptile, PR #831: Jira matches a phrase across whatever separates its words, so a
+	// literal substring test missed real hits and, with attribution now a filter, a missed hit
+	// can drop a relevant ticket. Reproduced before fixing: the first three lost `kv timeout`.
+	test("a phrase is found across a newline, Markdown emphasis, repeated spaces and code ticks", () => {
+		for (const description of [
+			"GetRequest failed with a kv\ntimeout on the bucket",
+			"GetRequest failed with a **kv** timeout on the bucket",
+			"GetRequest failed with a kv  timeout on the bucket",
+			"`GetRequest` failed with a `kv timeout`",
+		]) {
+			const out = attributeMatch(issue({ description }), {
+				service: "styles-service",
+				errorKeywords: ["kv timeout", "GetRequest"],
+			});
+			expect(out.matchedBy).toEqual(["keyword:kv timeout", "keyword:GetRequest"]);
+		}
+	});
+
+	test("terms match at a word start only, and a plural still counts", () => {
+		const t = { service: "api", errorKeywords: ["timeout"] };
+		expect(attributeMatch(issue({ summary: "capital expenditure report" }), t).matchedBy).toEqual([]);
+		expect(attributeMatch(issue({ summary: "three timeouts on the api gateway" }), t).matchedBy).toEqual([
+			"service-text",
+			"keyword:timeout",
+		]);
+	});
+
+	test("a hyphenated service name is found however the ticket punctuates it", () => {
+		const out = attributeMatch(issue({ summary: "Incident Report: pvh_services.styles-v3 down" }), {
+			service: "pvh-services-styles-v3",
+		});
+		expect(out.matchedBy).toEqual(["service-text"]);
+	});
+
 	test("a null or non-text description does not throw", () => {
 		expect(attributeMatch(issue({ description: null }), terms).score).toBe(0);
 		expect(attributeMatch(issue({ description: { type: "doc", content: [] } }), terms).score).toBe(0);

@@ -149,6 +149,25 @@ const SCORE_STRUCTURAL = 3;
 const SCORE_SERVICE_TEXT = 2;
 const SCORE_KEYWORD = 1;
 
+// SIO-1802 (Greptile, PR #831): Jira matches a phrase across whatever separates its words --
+// a newline, `**bold**`, a double space -- so a literal substring test missed hits Jira had
+// made ("kv\ntimeout", "**kv** timeout"), and a missed hit can drop a relevant ticket now
+// that attribution filters. Compare word sequences instead: lowercase, every run of
+// non-alphanumerics becomes one space. The leading space anchors a term at a word start
+// ("api" does not hit "capital"); the open end lets "timeout" hit "timeouts", roughly what
+// Jira's stemming does. Still an approximation of `text ~`, and documented as one.
+function wordSequence(s: string): string {
+	return ` ${s
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}]+/gu, " ")
+		.trim()}`;
+}
+
+function containsTerm(haystack: string, term: string): boolean {
+	const needle = wordSequence(term);
+	return needle.length > 1 && haystack.includes(needle);
+}
+
 // SIO-1802: deterministic attribution, no second Jira call and no LLM. Mirrors the additive
 // scoring of the sibling scorePage (get-runbook-for-alert.ts).
 export function attributeMatch(raw: JiraIssueRaw, terms: MatchTerms): { matchedBy: string[]; score: number } {
@@ -157,7 +176,7 @@ export function attributeMatch(raw: JiraIssueRaw, terms: MatchTerms): { matchedB
 	const components = (fields.components ?? []).map((c) => (c.name ?? "").toLowerCase());
 	const description =
 		typeof fields.description === "string" ? fields.description : JSON.stringify(fields.description ?? "");
-	const text = `${fields.summary} ${description}`.toLowerCase();
+	const text = wordSequence(`${fields.summary} ${description}`);
 	const service = terms.service.trim().toLowerCase();
 	const component = terms.componentLabel?.trim().toLowerCase();
 
@@ -171,12 +190,12 @@ export function attributeMatch(raw: JiraIssueRaw, terms: MatchTerms): { matchedB
 		matchedBy.push("component");
 		score += SCORE_STRUCTURAL;
 	}
-	if (service && text.includes(service)) {
+	if (containsTerm(text, service)) {
 		matchedBy.push("service-text");
 		score += SCORE_SERVICE_TEXT;
 	}
 	for (const keyword of sanitizeErrorKeywords(terms.errorKeywords)) {
-		if (!text.includes(keyword.toLowerCase())) continue;
+		if (!containsTerm(text, keyword)) continue;
 		matchedBy.push(`keyword:${keyword}`);
 		score += SCORE_KEYWORD;
 	}
