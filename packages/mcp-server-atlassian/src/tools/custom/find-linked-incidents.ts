@@ -153,19 +153,23 @@ const SCORE_KEYWORD = 1;
 // a newline, `**bold**`, a double space -- so a literal substring test missed hits Jira had
 // made ("kv\ntimeout", "**kv** timeout"), and a missed hit can drop a relevant ticket now
 // that attribution filters. Compare word sequences instead: lowercase, every run of
-// non-alphanumerics becomes one space. The leading space anchors a term at a word start
-// ("api" does not hit "capital"); the open end lets "timeout" hit "timeouts", roughly what
-// Jira's stemming does. Still an approximation of `text ~`, and documented as one.
+// non-alphanumerics becomes one space, padded with a space at both ends so every word has
+// a boundary on each side. Still an approximation of `text ~`, and documented as one.
 function wordSequence(s: string): string {
 	return ` ${s
 		.toLowerCase()
 		.replace(/[^\p{L}\p{N}]+/gu, " ")
-		.trim()}`;
+		.trim()} `;
 }
 
+// Greptile, PR #831 round 2: a term anchored only at its START let service `api` hit
+// `apiary`, and a false `service-text` is structural, so it walked past the weak-hit
+// filter. A term now needs a boundary on BOTH sides; the only slack is a plural on its last
+// word (`timeout` hits `timeouts`), the part of Jira's stemming worth having. wordSequence
+// leaves only letters, digits and spaces, so the term needs no regex escaping.
 function containsTerm(haystack: string, term: string): boolean {
-	const needle = wordSequence(term);
-	return needle.length > 1 && haystack.includes(needle);
+	const words = wordSequence(term).trim();
+	return words.length > 0 && new RegExp(` ${words}(?:s|es)? `, "u").test(haystack);
 }
 
 // SIO-1802: deterministic attribution, no second Jira call and no LLM. Mirrors the additive

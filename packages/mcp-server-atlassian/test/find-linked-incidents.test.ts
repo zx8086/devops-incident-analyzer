@@ -210,9 +210,16 @@ describe("findLinkedIncidents.attributeMatch (SIO-1802)", () => {
 		}
 	});
 
-	test("terms match at a word start only, and a plural still counts", () => {
+	// Greptile, PR #831 round 2: anchoring only the START let `api` hit `apiary`, and a false
+	// service-text hit is structural, so it bypassed the weak-hit filter entirely.
+	test("a term needs a word boundary on both sides; only a plural is tolerated", () => {
 		const t = { service: "api", errorKeywords: ["timeout"] };
 		expect(attributeMatch(issue({ summary: "capital expenditure report" }), t).matchedBy).toEqual([]);
+		expect(attributeMatch(issue({ summary: "apiary docs and a timeoutless retry" }), t).matchedBy).toEqual([]);
+		expect(
+			attributeMatch(issue({ summary: "kv timeout", description: "x" }), { service: "s", errorKeywords: ["kv time"] })
+				.matchedBy,
+		).toEqual([]);
 		expect(attributeMatch(issue({ summary: "three timeouts on the api gateway" }), t).matchedBy).toEqual([
 			"service-text",
 			"keyword:timeout",
