@@ -22,6 +22,22 @@ function shortSummary(s: string | undefined): string {
 	return s.length > 80 ? `${s.slice(0, 77)}…` : s;
 }
 
+// SIO-1802: why the search returned this ticket, short enough for a row. The full clause
+// list is the chip's title, so a false positive can be explained from the card.
+const KEYWORD_PREFIX = "keyword:";
+const STRUCTURAL_LABEL: Record<string, string> = {
+	"service-label": "label",
+	"service-text": "service",
+	component: "component",
+};
+
+function matchLabel(matchedBy: string[]): string {
+	const keywords = matchedBy.filter((m) => m.startsWith(KEYWORD_PREFIX)).length;
+	const parts = matchedBy.filter((m) => !m.startsWith(KEYWORD_PREFIX)).map((m) => STRUCTURAL_LABEL[m] ?? m);
+	if (keywords > 0) parts.push(`${keywords} keyword${keywords === 1 ? "" : "s"}`);
+	return parts.length > 0 ? parts.join(" + ") : "no visible match";
+}
+
 const linkedIssues = $derived(findings.linkedIssues ?? []);
 // SIO-1338: a configWarning (SIO-1184 dead-project config, SIO-1337 pagination truncation) can
 // arrive even when linkedIssues is empty -- e.g. truncation on a call whose page happened to
@@ -57,6 +73,12 @@ const hasContent = $derived(linkedIssues.length > 0 || Boolean(findings.configWa
               <span class="text-[0.5625rem] uppercase tracking-wider text-gray-500 shrink-0 ml-auto">{issue.status}</span>
               {#if issue.severity}
                 <span class="text-[0.5625rem] uppercase tracking-wider text-gray-500 shrink-0">{issue.severity}</span>
+              {/if}
+              {#if issue.matchedBy}
+                <span
+                  class="text-[0.5625rem] font-medium text-blue-700 bg-blue-100 uppercase tracking-wider rounded px-1 shrink-0"
+                  title={issue.matchedBy.length > 0 ? `Matched by: ${issue.matchedBy.join(", ")}` : "Matched only in text this card cannot see (for example a comment)"}
+                >{matchLabel(issue.matchedBy)}</span>
               {/if}
             </div>
           {/each}

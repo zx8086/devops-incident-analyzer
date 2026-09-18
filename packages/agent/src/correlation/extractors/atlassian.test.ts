@@ -324,3 +324,73 @@ describe("extractAtlassianFindings provenance scoping (SIO-1244)", () => {
 		expect(out.linkedIssues).toHaveLength(1);
 	});
 });
+
+// SIO-1802: provenance trusted whatever the OR query returned; on the run behind the ticket
+// all 15 linked issues were unrelated. The tool now attributes each ticket (`matchedBy`), and
+// a focus-scoped envelope keeps a ticket only on a structural hit or two keyword phrases.
+describe("extractAtlassianFindings weak-hit drop (SIO-1802)", () => {
+	const envelope = (service: string, rows: Array<Record<string, unknown>>): ToolOutput => ({
+		toolName: "findLinkedIncidents",
+		rawJson: { service, jql: "...", count: rows.length, issues: rows },
+	});
+	const FOCUS = ["prana-order-service"];
+
+	// SIO-1244's case, now WITH attribution: DEVOPS-1405 was found by keyword, its summary is
+	// business language and it carries no service label. Two keyword phrases keep it.
+	test("a keyword-found ticket with two keyword hits and no service label survives", () => {
+		const out = extractAtlassianFindings(
+			[
+				envelope("prana-order-service", [
+					{
+						key: "DEVOPS-1405",
+						summary: "AFS season code mismatch on THE1",
+						status: "Open",
+						matchedBy: ["keyword:AFS season code", "keyword:THE1"],
+						score: 2,
+					},
+				]),
+			],
+			FOCUS,
+		);
+		expect(out.linkedIssues?.map((i) => i.key)).toEqual(["DEVOPS-1405"]);
+		expect(out.linkedIssues?.[0]?.matchedBy).toEqual(["keyword:AFS season code", "keyword:THE1"]);
+	});
+
+	test("one structural hit is enough; one keyword or nothing visible is dropped", () => {
+		const out = extractAtlassianFindings(
+			[
+				envelope("prana-order-service", [
+					{ key: "K-LABEL", summary: "opaque", status: "Open", matchedBy: ["service-label"], score: 3 },
+					{ key: "K-TEXT", summary: "opaque", status: "Open", matchedBy: ["service-text"], score: 2 },
+					{ key: "K-COMP", summary: "opaque", status: "Open", matchedBy: ["component"], score: 3 },
+					{ key: "K-ONE", summary: "Filter setup", status: "Open", matchedBy: ["keyword:Bloomreach"], score: 1 },
+					{ key: "K-NONE", summary: "Identify AI-Generated Assets on Style", status: "Open", matchedBy: [], score: 0 },
+				]),
+			],
+			FOCUS,
+		);
+		expect(out.linkedIssues?.map((i) => i.key)).toEqual(["K-LABEL", "K-TEXT", "K-COMP"]);
+	});
+
+	test("empty focus stays show-all: weak hits are kept", () => {
+		const out = extractAtlassianFindings(
+			[envelope("prana-order-service", [{ key: "K-NONE", summary: "x", status: "Open", matchedBy: [], score: 0 }])],
+			[],
+		);
+		expect(out.linkedIssues?.map((i) => i.key)).toEqual(["K-NONE"]);
+	});
+
+	// An off-focus envelope's matchedBy describes a DIFFERENT query. A ticket whose own summary
+	// names the focus service must not be dropped for scoring 0 against that other query.
+	test("an off-focus envelope is judged on naming the focus, not on its matchedBy", () => {
+		const out = extractAtlassianFindings(
+			[
+				envelope("billing-service", [
+					{ key: "INC-1", summary: "prana-order-service returning 500s", status: "Open", matchedBy: [], score: 0 },
+				]),
+			],
+			FOCUS,
+		);
+		expect(out.linkedIssues?.map((i) => i.key)).toEqual(["INC-1"]);
+	});
+});

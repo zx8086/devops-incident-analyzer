@@ -445,6 +445,11 @@ export const AtlassianLinkedIssueSchema = z.object({
 	resolvedAt: z.string().nullable().optional(),
 	mttrMinutes: z.number().nullable().optional(),
 	url: z.string().optional(),
+	// SIO-1802: why the search returned this ticket (service-label, service-text, component,
+	// keyword:<term>) and the additive score it was ranked by. Optional: envelopes recorded
+	// before SIO-1802 carry neither, and the extractor then falls back to provenance.
+	matchedBy: z.array(z.string()).optional(),
+	score: z.number().optional(),
 });
 export type AtlassianLinkedIssue = z.infer<typeof AtlassianLinkedIssueSchema>;
 

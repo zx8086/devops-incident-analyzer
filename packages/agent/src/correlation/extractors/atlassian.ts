@@ -46,6 +46,24 @@ const EnvelopeSchema = z.object({
 // without it this degenerates into "scoping off", which is precisely what SIO-1030 prevents.
 // Envelopes failing that guard (a stale or unrelated probe) still get per-issue matching, now
 // over `key + summary` so a ticket naming the service in either one survives.
+//
+// SIO-1802: provenance alone trusted whatever the OR query returned. On the run behind that
+// ticket all 15 linked issues were unrelated (the search matched "Style" + "out of scope"
+// for the keyword "styles scope"). The tool now says WHY each ticket matched (`matchedBy`),
+// so inside a focus-scoped envelope a ticket needs a structural hit (label, component, or
+// the service named in its text) or two keyword phrases; one keyword, or nothing visible,
+// is weak evidence and is dropped. An issue WITHOUT `matchedBy` (an envelope recorded
+// before SIO-1802) keeps the provenance rule exactly, which is what holds SIO-1244's case.
+const KEYWORD_PREFIX = "keyword:";
+const MIN_KEYWORD_HITS = 2;
+
+function isWeakHit(issue: AtlassianLinkedIssue): boolean {
+	if (issue.matchedBy === undefined) return false;
+	const keywordHits = issue.matchedBy.filter((m) => m.startsWith(KEYWORD_PREFIX)).length;
+	const structural = issue.matchedBy.length > keywordHits;
+	return !structural && keywordHits < MIN_KEYWORD_HITS;
+}
+
 export function extractAtlassianFindings(outputs: ToolOutput[], focusServices: string[] = []): AtlassianFindings {
 	const linkedIssues: AtlassianLinkedIssue[] = [];
 	// SIO-1338 (CodeRabbit, PR #564): two findLinkedIncidents calls probing different services can
@@ -68,7 +86,15 @@ export function extractAtlassianFindings(outputs: ToolOutput[], focusServices: s
 		for (const raw of env.data.issues ?? []) {
 			const parsed = AtlassianLinkedIssueSchema.safeParse(raw);
 			if (!parsed.success) continue;
-			if (!envelopeInFocus && !matchesFocus(`${parsed.data.key} ${parsed.data.summary}`, focusServices)) continue;
+			if (envelopeInFocus) {
+				// Provenance admits the envelope; SIO-1802 then asks each ticket why it is here.
+				// Empty focus stays show-all (the SIO-1030 guardrail): the drop is for focused runs.
+				if (focusServices.length > 0 && isWeakHit(parsed.data)) continue;
+			} else if (!matchesFocus(`${parsed.data.key} ${parsed.data.summary}`, focusServices)) {
+				// A stale or unrelated probe: its matchedBy describes a different query, so the
+				// ticket stands or falls on naming the focus itself.
+				continue;
+			}
 			if (seenKeys.has(parsed.data.key)) continue;
 			seenKeys.add(parsed.data.key);
 			linkedIssues.push(parsed.data);
