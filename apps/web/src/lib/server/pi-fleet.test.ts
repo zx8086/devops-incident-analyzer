@@ -416,6 +416,30 @@ describe("awaitFleetMessage", () => {
 		expect(calls.map((c) => c.method)).toEqual(["GET"]);
 		expect(calls[0]?.url).toBe("http://dev.hub.test/v1/messages/m3/await?timeout_ms=25000");
 	});
+
+	// SIO-1798: the re-poll's client never registered, so the hub answers its heartbeat
+	// 404 agent_not_found (this fake's default). The slice must not send one.
+	test("a slice that times out sends no heartbeat from the unregistered client", async () => {
+		let clock = 0;
+		const { calls, fetchImpl } = hubFake((call) => {
+			if (call.path.startsWith("/v1/messages/m4/await")) {
+				clock += 25_000;
+				return { body: { msg_id: "m4", status: "timeout", response: null, error: null } };
+			}
+			if (call.path === "/v1/messages/m4")
+				return { body: { msg_id: "m4", status: "delivered", response: null, error: null } };
+			return undefined;
+		});
+		const out = await awaitFleetMessage(
+			{ hubKey: "eu-shared-services-dev", msgId: "m4" },
+			{ env, fetchImpl, now: () => clock },
+		);
+		expect(out.status).toBe("budget_exhausted");
+		expect(calls.map((c) => `${c.method} ${c.path.split("?")[0]}`)).toEqual([
+			"GET /v1/messages/m4/await",
+			"GET /v1/messages/m4",
+		]);
+	});
 });
 
 describe("readFleetMailbox", () => {

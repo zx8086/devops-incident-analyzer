@@ -174,6 +174,7 @@ describe("PiComsClient", () => {
 	test("awaitReply treats a slice timeout as in-flight, heartbeats, and keeps polling", async () => {
 		let clock = 0;
 		const { calls, fetchImpl } = scripted([
+			() => ({ body: { ok: true } }), // register: only a registered sender heartbeats (SIO-1798)
 			// slice 1 expires at the awaiter, message still delivered
 			() => {
 				clock += PI_COMS_AWAIT_SLICE_MS;
@@ -185,10 +186,12 @@ describe("PiComsClient", () => {
 			() => ({ body: { msg_id: "m1", status: "complete", response: "done", error: null } }),
 		]);
 		const client = new PiComsClient(hub, { fetchImpl, sessionId: "sid-1", now: () => clock });
+		await client.register();
 		const reply = await client.awaitReply("m1", 60_000);
 		expect(reply.status).toBe("complete");
 		expect(reply.response).toBe("done");
 		expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+			"POST /v1/agents/register",
 			`GET /v1/messages/m1/await?timeout_ms=${PI_COMS_AWAIT_SLICE_MS}`,
 			"GET /v1/messages/m1",
 			"POST /v1/agents/sid-1/heartbeat",
@@ -204,6 +207,29 @@ describe("PiComsClient", () => {
 		const client = new PiComsClient(hub, { fetchImpl });
 		const reply = await client.awaitReply("m1", 60_000);
 		expect(reply.status).toBe("timeout");
+	});
+
+	// SIO-1798: a re-poll by message id runs on a fresh client. The hub has no card for
+	// its random session id, so a heartbeat could only 404; asserted on the recorded
+	// calls because heartbeat() swallows the harness's unexpected-call throw.
+	test("awaitReply on an unregistered client never heartbeats between slices", async () => {
+		let clock = 0;
+		const { calls, fetchImpl } = scripted([
+			() => {
+				clock += PI_COMS_AWAIT_SLICE_MS;
+				return { body: { msg_id: "m1", status: "timeout", response: null, error: "timeout" } };
+			},
+			() => ({ body: { msg_id: "m1", status: "delivered", response: null, error: null } }),
+			() => ({ body: { msg_id: "m1", status: "complete", response: "done", error: null } }),
+		]);
+		const client = new PiComsClient(hub, { fetchImpl, now: () => clock });
+		const reply = await client.awaitReply("m1", 60_000);
+		expect(reply.status).toBe("complete");
+		expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+			`GET /v1/messages/m1/await?timeout_ms=${PI_COMS_AWAIT_SLICE_MS}`,
+			"GET /v1/messages/m1",
+			`GET /v1/messages/m1/await?timeout_ms=${PI_COMS_AWAIT_SLICE_MS}`,
+		]);
 	});
 
 	test("awaitReply gives up when the budget is spent and caps the last slice", async () => {

@@ -3,7 +3,7 @@
 // flows, with the hub scripted at the fetch boundary.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { PiVerdict } from "@devops-agent/shared";
-import type { PiAgentCard } from "./pi-coms-client.ts";
+import { PI_COMS_AWAIT_SLICE_MS, type PiAgentCard } from "./pi-coms-client.ts";
 import {
 	buildInvestigateFollowUp,
 	buildInvestigatePrompt,
@@ -524,6 +524,27 @@ describe("startPiAction / pollPiAction", () => {
 		expect(done.outcome.followUpActions?.[0]?.tool).toBe("investigate-with-pi");
 		// Finalized once: the registry entry is gone.
 		expect(await pollPiAction("m1", { env, fetchImpl: answered.fetchImpl })).toBeNull();
+	});
+
+	// SIO-1798: each poll runs on a fresh client that never registered, so the hub answers
+	// its heartbeat 404 agent_not_found -- ten warnings per verify. scriptedHub answers
+	// /heartbeat 200, which is why this was invisible; assert the request is never made.
+	// The clock moves only when the await slice is served, so the slice really runs (the
+	// test above jumps 30 s per now() call and never reaches a slice).
+	test("a poll slice that times out sends no heartbeat from its unregistered client", async () => {
+		const hub = scriptedHub({ agents: online, replyStatus: "timeout" });
+		await startPiAction(verify, report, { env, fetchImpl: hub.fetchImpl });
+		let t = Date.now();
+		const fetchImpl = async (input: string, init?: RequestInit): Promise<Response> => {
+			if (input.includes("/await")) t += PI_COMS_AWAIT_SLICE_MS;
+			return hub.fetchImpl(input, init);
+		};
+		const before = hub.calls.length;
+		expect(await pollPiAction("m1", { env, fetchImpl, now: () => t })).toEqual({ pending: true, status: "waiting" });
+		expect(hub.calls.slice(before).map((c) => `${c.method} ${c.path.split("?")[0]}`)).toEqual([
+			"GET /v1/messages/m1/await",
+			"GET /v1/messages/m1",
+		]);
 	});
 
 	test("a reply that misses the analyzer's schema is an action error, not a crash", async () => {

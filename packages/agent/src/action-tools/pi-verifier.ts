@@ -672,7 +672,7 @@ export async function pollPiAction(msgId: string, deps: PiVerifierDeps = {}): Pr
 		return done({ status: "error", error: `pi agent ${entry.target} did not reply within its budget` });
 	}
 	const client = new PiComsClient(entry.hub, { fetchImpl: deps.fetchImpl, now: deps.now });
-	const reply = await client.awaitReply(msgId, Math.min(PI_COMS_AWAIT_SLICE_MS, remaining));
+	const reply = await client.awaitReply(msgId, Math.min(PI_COMS_AWAIT_SLICE_MS, remaining), { partial: true });
 	if (reply.status === "budget_exhausted") return { pending: true, status: "waiting" };
 	if (reply.status !== "complete") {
 		return done({
