@@ -22,9 +22,15 @@ function escapeJqlString(value: string): string {
 // (results are capped by recency, so junk fills every slot). A phrase needs inner quotes.
 // Same run, measured: 88 matches -> 36, and 0 -> 5 of the top 15 about the incident's own
 // service. A single word stays unquoted so stemming (timeout/timeouts) still helps it.
+// SIO-1806: the one rule for "is this keyword a phrase", shared with the Confluence CQL builder
+// (measured there too: CQL `text ~ "a b"` is the same stemmed bag of words).
+export function isPhraseKeyword(keyword: string): boolean {
+	return /\s/.test(keyword);
+}
+
 function keywordTextClause(keyword: string): string {
 	const escaped = escapeJqlString(keyword);
-	return /\s/.test(keyword) ? `text ~ "\\"${escaped}\\""` : `text ~ "${escaped}"`;
+	return isPhraseKeyword(keyword) ? `text ~ "\\"${escaped}\\""` : `text ~ "${escaped}"`;
 }
 
 // SIO-1093 (CodeRabbit): bound domain-term input so a large/duplicated list can't blow up the JQL/CQL
