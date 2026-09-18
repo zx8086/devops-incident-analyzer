@@ -239,6 +239,84 @@ describe("findLinkedIncidents.attributeMatch (SIO-1802)", () => {
 	});
 });
 
+// SIO-1802, found on the live replay AFTER the first fix merged: the model passed generic
+// single-word keywords (`article`, `styles`, `kv`). In one OR under `created DESC` they
+// matched 1,043 tickets, today's junk took all 10 slots, the focus service's own incidents
+// never came back, and the card (correctly) dropped all 10 and showed nothing. The service
+// query alone returned exactly the related tickets, so the two halves are searched apart.
+describe("findLinkedIncidents searches service and keywords separately (SIO-1802)", () => {
+	const args = { service: "styles-service", componentLabel: undefined, withinDays: 90, incidentProjects: [] };
+
+	test("buildJql can emit each half; the default is still the SIO-1093 OR of both", () => {
+		const keywords = ["article", "kv timeout"];
+		const service = buildJql({ ...args, errorKeywords: keywords, match: "service" });
+		expect(service).toContain('labels = "styles-service"');
+		expect(service).not.toContain("article");
+		const kw = buildJql({ ...args, errorKeywords: keywords, match: "keywords" });
+		expect(kw).toContain('text ~ "article"');
+		expect(kw).toContain('text ~ "\\"kv timeout\\""');
+		expect(kw).not.toContain("labels =");
+		const all = buildJql({ ...args, errorKeywords: keywords });
+		expect(all).toContain('labels = "styles-service"');
+		expect(all).toContain('text ~ "article"');
+		// "keywords" with nothing to search falls back to the full shape rather than `()`.
+		expect(buildJql({ ...args, match: "keywords" })).toContain('labels = "styles-service"');
+	});
+
+	const row = (key: string, summary: string) => ({
+		key,
+		fields: { summary, status: { name: "Open" }, created: "2026-04-10T10:00:00Z" },
+	});
+	const proxyFor = (calls: string[]) =>
+		({
+			callTool: async (_name: string, a: Record<string, unknown>) => {
+				const jql = String(a.jql);
+				calls.push(jql);
+				const issues = jql.includes("labels =")
+					? [row("SVC-1", "Incident Report: styles-service kv timeout"), row("SVC-2", "styles-service 404")]
+					: Array.from({ length: 10 }, (_, i) => row(`JUNK-${i}`, `Article Master routing ${i}`));
+				return {
+					content: [
+						{ type: "text", text: JSON.stringify({ issues, isLast: !jql.includes("labels =") ? false : true }) },
+					],
+				};
+			},
+		}) as unknown as Parameters<typeof findLinkedIncidents>[0];
+
+	test("generic keyword hits cannot crowd the service's own incidents out of the limit", async () => {
+		const calls: string[] = [];
+		const out = await findLinkedIncidents(proxyFor(calls), {
+			service: "styles-service",
+			errorKeywords: ["article", "kv timeout"],
+			withinDays: 90,
+			limit: 10,
+			incidentProjects: [],
+		});
+		expect(calls).toHaveLength(2);
+		expect(out.jql).toContain('labels = "styles-service"');
+		expect(out.keywordJql).toContain('text ~ "article"');
+		expect(out.issues).toHaveLength(10);
+		expect(out.issues.slice(0, 2).map((i) => i.key)).toEqual(["SVC-1", "SVC-2"]);
+		expect(out.issues[0]?.matchedBy).toEqual(["service-text", "keyword:kv timeout"]);
+		expect(out.issues.slice(2).every((i) => i.matchedBy.join() === "keyword:article")).toBe(true);
+		// The keyword query was truncated upstream, and that still surfaces.
+		expect(out.configWarning).toContain("truncated");
+	});
+
+	test("without keywords there is one query and no keywordJql", async () => {
+		const calls: string[] = [];
+		const out = await findLinkedIncidents(proxyFor(calls), {
+			service: "styles-service",
+			withinDays: 90,
+			limit: 10,
+			incidentProjects: [],
+		});
+		expect(calls).toHaveLength(1);
+		expect(out.keywordJql).toBeUndefined();
+		expect(out.issues.map((i) => i.key)).toEqual(["SVC-1", "SVC-2"]);
+	});
+});
+
 describe("findLinkedIncidents ranking (SIO-1802)", () => {
 	test("best-attributed first, recency kept as the tie-break, markdown requested", async () => {
 		let capturedArgs: Record<string, unknown> | undefined;
@@ -249,23 +327,19 @@ describe("findLinkedIncidents ranking (SIO-1802)", () => {
 		const fakeProxy = {
 			callTool: async (_name: string, args: Record<string, unknown>) => {
 				capturedArgs = args;
-				return {
-					content: [
-						{
-							type: "text",
-							text: JSON.stringify({
-								// upstream order: created DESC
-								issues: [
-									row("NEW-1", "unrelated marketing story"),
-									row("NEW-2", "another unrelated story"),
-									row("OLD-1", "Incident Report: styles-service -- kv timeout"),
-									row("OLD-2", "labelled only", ["styles-service"]),
-								],
-								isLast: true,
-							}),
-						},
-					],
-				};
+				// Each query's own upstream order is created DESC. The keyword query also
+				// returns OLD-1, which must not appear twice.
+				const issues = String(args.jql).includes("labels =")
+					? [
+							row("OLD-1", "Incident Report: styles-service -- kv timeout"),
+							row("OLD-2", "labelled only", ["styles-service"]),
+						]
+					: [
+							row("NEW-1", "unrelated marketing story"),
+							row("NEW-2", "another unrelated story"),
+							row("OLD-1", "Incident Report: styles-service -- kv timeout"),
+						];
+				return { content: [{ type: "text", text: JSON.stringify({ issues, isLast: true }) }] };
 			},
 		} as unknown as Parameters<typeof findLinkedIncidents>[0];
 		const out = await findLinkedIncidents(fakeProxy, {
@@ -283,6 +357,76 @@ describe("findLinkedIncidents ranking (SIO-1802)", () => {
 			["NEW-2", 0],
 		]);
 		expect(out.issues[0]?.matchedBy).toEqual(["service-text", "keyword:kv timeout"]);
+	});
+});
+
+// Greptile, PR #832: both findings were about the split itself.
+describe("findLinkedIncidents: the two queries fail independently and service hits lead (SIO-1802)", () => {
+	const row = (key: string, summary: string) => ({
+		key,
+		fields: { summary, status: { name: "Open" }, created: "2026-04-10T10:00:00Z" },
+	});
+	const ok = (issues: unknown[]) => ({ content: [{ type: "text", text: JSON.stringify({ issues, isLast: true }) }] });
+	type Reply = ReturnType<typeof ok> | Error;
+	const proxyWith = (service: Reply, keywords: Reply) =>
+		({
+			callTool: async (_name: string, a: Record<string, unknown>) => {
+				const reply = String(a.jql).includes("labels =") ? service : keywords;
+				if (reply instanceof Error) throw reply;
+				return reply;
+			},
+		}) as unknown as Parameters<typeof findLinkedIncidents>[0];
+	const ctx = {
+		service: "styles-service",
+		errorKeywords: ["article", "styles", "kv"],
+		withinDays: 90,
+		limit: 3,
+		incidentProjects: [],
+	};
+
+	test("a keyword-only ticket with three generic keywords never outranks a service hit", async () => {
+		const out = await findLinkedIncidents(
+			proxyWith(
+				ok([row("SVC-1", "styles-service 404"), row("SVC-2", "styles-service slow")]),
+				ok([row("JUNK-1", "article styles kv migration"), row("JUNK-2", "article kv")]),
+			),
+			ctx,
+		);
+		// JUNK-1 scores 3, the service hits 2 and 3; with limit 3 a global sort would have
+		// put JUNK-1 first and could cut a service hit.
+		expect(out.issues.map((i) => i.key)).toEqual(["SVC-1", "SVC-2", "JUNK-1"]);
+	});
+
+	test("a service hit whose match is invisible to attribution is still marked, not scored 0", async () => {
+		const out = await findLinkedIncidents(
+			proxyWith(ok([row("SVC-9", "opaque summary, service named only in a comment")]), ok([])),
+			ctx,
+		);
+		expect(out.issues[0]).toMatchObject({ key: "SVC-9", matchedBy: ["service-text"], score: 2 });
+	});
+
+	test("a throwing keyword query keeps the service hits and says so", async () => {
+		const out = await findLinkedIncidents(
+			proxyWith(ok([row("SVC-1", "styles-service 404")]), new Error("upstream 503")),
+			ctx,
+		);
+		expect(out.issues.map((i) => i.key)).toEqual(["SVC-1"]);
+		expect(out.configWarning).toContain("keyword search failed");
+	});
+
+	test("an unusable service query is never a silent keyword-only result", async () => {
+		const unparseable = { content: [{ type: "text", text: "<html>gateway timeout</html>" }] } as unknown as Reply;
+		for (const service of [new Error("upstream 503"), unparseable]) {
+			const out = await findLinkedIncidents(proxyWith(service, ok([row("KW-1", "article kv")])), ctx);
+			expect(out.issues.map((i) => i.key)).toEqual(["KW-1"]);
+			expect(out.configWarning).toContain("naming styles-service failed");
+		}
+	});
+
+	test("both queries throwing stays loud, as the single query was (SIO-1116)", async () => {
+		await expect(
+			findLinkedIncidents(proxyWith(new Error("service down"), new Error("keywords down")), ctx),
+		).rejects.toThrow("service down");
 	});
 });
 

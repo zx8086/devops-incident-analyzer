@@ -90,6 +90,12 @@ const ShapedIssueSchema = z.object({
 export const OutputSchema = z.object({
 	service: z.string(),
 	jql: z.string(),
+	keywordJql: z
+		.string()
+		.optional()
+		.describe(
+			"SIO-1802: the separate keyword query, present when errorKeywords were supplied. `jql` is the service query.",
+		),
 	count: z.number(),
 	issues: z.array(ShapedIssueSchema),
 	configWarning: z
@@ -119,6 +125,9 @@ export interface BuildJqlArgs {
 	errorKeywords?: string[];
 	withinDays: number;
 	incidentProjects: string[];
+	// SIO-1802: which clauses to OR together. "all" (default) is the SIO-1093 shape and what
+	// get-incident-history uses; findLinkedIncidents asks for the two halves separately.
+	match?: "all" | "service" | "keywords";
 }
 
 export interface JiraIssueRaw {
@@ -212,6 +221,7 @@ export function buildJql({
 	errorKeywords,
 	withinDays,
 	incidentProjects,
+	match = "all",
 }: BuildJqlArgs): string {
 	const parts: string[] = [];
 
@@ -226,14 +236,20 @@ export function buildJql({
 	// AFS case: `labels = "order-service"` returned 0 while the tickets exist under AFS/FMS/season
 	// text). Build an OR across the label, a free-text match on the service, and a free-text match
 	// on each supplied error keyword so a ticket is found by any of them.
-	const matchClauses = [
+	const structuralClauses = [
 		`labels = "${escapeJqlString(service)}"`,
 		`text ~ "${escapeJqlString(service)}"`,
 		...(componentLabel
 			? [`component = "${escapeJqlString(componentLabel)}"`, `labels = "${escapeJqlString(componentLabel)}"`]
 			: []),
-		...sanitizeErrorKeywords(errorKeywords).map(keywordTextClause),
 	];
+	const keywordClauses = sanitizeErrorKeywords(errorKeywords).map(keywordTextClause);
+	const matchClauses =
+		match === "service"
+			? structuralClauses
+			: match === "keywords" && keywordClauses.length > 0
+				? keywordClauses
+				: [...structuralClauses, ...keywordClauses];
 	parts.push(`(${matchClauses.join(" OR ")})`);
 
 	parts.push(`created >= -${withinDays}d`);
@@ -283,19 +299,115 @@ export async function findLinkedIncidents(
 	proxy: AtlassianMcpProxy,
 	ctx: FindLinkedIncidentsContext,
 ): Promise<FindLinkedIncidentsOutput> {
-	const jql = buildJql({
+	// SIO-1802: the service clauses and the keyword clauses are searched SEPARATELY. In one
+	// OR they compete for the same `limit` slots under `ORDER BY created DESC`, and a generic
+	// single-word keyword wins that race every time: live, keywords `article`/`styles`/`kv`
+	// matched 1,043 tickets in 90 days, today's junk filled all 10 slots, and the focus
+	// service's own incidents never came back (the card then correctly dropped all 10 and
+	// showed nothing). The service query alone returned exactly the 10 related tickets.
+	const base = {
 		service: ctx.service,
 		componentLabel: ctx.componentLabel,
 		errorKeywords: ctx.errorKeywords,
 		withinDays: ctx.withinDays,
 		incidentProjects: ctx.incidentProjects,
-	});
+	};
+	const jql = buildJql({ ...base, match: "service" });
+	const keywordJql =
+		sanitizeErrorKeywords(ctx.errorKeywords).length > 0 ? buildJql({ ...base, match: "keywords" }) : undefined;
 
-	log.info({ service: ctx.service, jql }, "Searching for linked incidents");
+	log.info({ service: ctx.service, jql, keywordJql }, "Searching for linked incidents");
 
+	// Greptile, PR #832: the two halves must fail independently. With Promise.all a throwing
+	// keyword query discarded good service hits, and an unparseable service response became a
+	// silent keyword-only result. allSettled keeps whichever half worked and SAYS which did not.
+	const [serviceResult, keywordResult] = await Promise.allSettled([
+		searchIssues(proxy, jql, ctx.limit),
+		keywordJql ? searchIssues(proxy, keywordJql, ctx.limit) : Promise.resolve(null),
+	]);
+	const serviceHits = serviceResult.status === "fulfilled" ? serviceResult.value : null;
+	const keywordHits = keywordResult.status === "fulfilled" ? keywordResult.value : null;
+	if (!serviceHits && !keywordHits) {
+		// Nothing usable. A thrown service query stays loud (SIO-1116), as it was with one query.
+		if (serviceResult.status === "rejected") throw serviceResult.reason;
+		if (keywordResult.status === "rejected") throw keywordResult.reason;
+		return { service: ctx.service, jql, count: 0, issues: [] };
+	}
+	const warnings: string[] = [];
+	if (!serviceHits) {
+		log.warn(
+			{ service: ctx.service, reason: describeFailure(serviceResult) },
+			"Service query failed; keyword hits only",
+		);
+		warnings.push(
+			`The search for tickets naming ${ctx.service} failed; the results below come from the keyword search only and may miss that service's own incidents.`,
+		);
+	}
+	if (keywordJql && !keywordHits) {
+		log.warn(
+			{ service: ctx.service, reason: describeFailure(keywordResult) },
+			"Keyword query failed; service hits only",
+		);
+		warnings.push("The keyword search failed; the results below are tickets naming the service only.");
+	}
+
+	const terms: MatchTerms = {
+		service: ctx.service,
+		componentLabel: ctx.componentLabel,
+		errorKeywords: ctx.errorKeywords,
+	};
+	const byScore = (a: { score: number }, b: { score: number }) => b.score - a.score;
+	// A ticket the SERVICE query returned matched a service clause by construction. When
+	// attribution cannot see where (a comment, a field this tool does not read), say so rather
+	// than score it 0: otherwise it sinks below every keyword hit and the extractor drops it.
+	const serviceIssues = (serviceHits?.issues ?? [])
+		.map((raw) => {
+			const shaped = shapeIssue(raw, ctx.siteUrl, terms);
+			if (shaped.matchedBy.some((m) => !m.startsWith("keyword:"))) return shaped;
+			return { ...shaped, matchedBy: ["service-text", ...shaped.matchedBy], score: shaped.score + SCORE_SERVICE_TEXT };
+		})
+		.sort(byScore);
+	const serviceKeys = new Set(serviceIssues.map((i) => i.key));
+	const keywordIssues = (keywordHits?.issues ?? [])
+		.filter((raw) => !serviceKeys.has(raw.key))
+		.map((raw) => shapeIssue(raw, ctx.siteUrl, terms))
+		.sort(byScore);
+	// Greptile, PR #832: one global score sort let a ticket with three generic keywords (3)
+	// outrank a real service hit (2) and push it past `limit`. Service hits are ranked among
+	// themselves and ALWAYS come first; keyword-only hits fill what is left.
+	const issues = [...serviceIssues, ...keywordIssues].slice(0, ctx.limit);
+
+	// SIO-1336: isLast:false means more matches exist beyond this page than `count` reports --
+	// without this, count reads as the total that matched (it is only the total returned).
+	if (serviceHits?.isLast === false || keywordHits?.isLast === false) {
+		warnings.push(
+			`More than ${issues.length} incidents matched within ${ctx.withinDays}d; results were truncated to the requested limit. Increase limit or narrow withinDays to see the full set.`,
+		);
+	}
+
+	return {
+		service: ctx.service,
+		jql,
+		...(keywordJql ? { keywordJql } : {}),
+		count: issues.length,
+		issues,
+		...(warnings.length > 0 ? { configWarning: warnings.join(" ") } : {}),
+	};
+}
+
+function describeFailure(result: PromiseSettledResult<unknown>): string {
+	if (result.status === "fulfilled") return "unparseable response";
+	return result.reason instanceof Error ? result.reason.message : String(result.reason);
+}
+
+async function searchIssues(
+	proxy: AtlassianMcpProxy,
+	jql: string,
+	maxResults: number,
+): Promise<JiraSearchResponse | null> {
 	const result = await proxy.callTool("searchJiraIssuesUsingJql", {
 		jql,
-		maxResults: ctx.limit,
+		maxResults,
 		// SIO-1116: the Rovo upstream now REQUIRES searchResultMode (values "issues" | "count"
 		// | "all", listed in its `required` array despite a documented default of "issues").
 		// Omitting it made the upstream reject with -32602, which parseAtlassianTextContent
@@ -307,42 +419,11 @@ export async function findLinkedIncidents(
 		responseContentFormat: "markdown",
 	});
 
-	const parsed = parseAtlassianTextContent<JiraSearchResponse>(result as { content?: unknown }, {
+	return parseAtlassianTextContent<JiraSearchResponse>(result as { content?: unknown }, {
 		upstreamTool: "searchJiraIssuesUsingJql",
 		context: { jql },
 		log,
 	});
-	if (!parsed) {
-		return { service: ctx.service, jql, count: 0, issues: [] };
-	}
-
-	const rawIssues = parsed.issues ?? [];
-	// SIO-1802: best-attributed first. Array.prototype.sort is stable, so the JQL's
-	// `created DESC` order survives as the tie-break.
-	const issues = rawIssues
-		.map((raw) =>
-			shapeIssue(raw, ctx.siteUrl, {
-				service: ctx.service,
-				componentLabel: ctx.componentLabel,
-				errorKeywords: ctx.errorKeywords,
-			}),
-		)
-		.sort((a, b) => b.score - a.score);
-
-	// SIO-1336: isLast:false means more matches exist beyond this page than `count` reports --
-	// without this, count reads as the total that matched (it is only the total returned).
-	const truncationWarning =
-		parsed.isLast === false
-			? `More than ${issues.length} incidents matched within ${ctx.withinDays}d; results were truncated to the requested limit. Increase limit or narrow withinDays to see the full set.`
-			: undefined;
-
-	return {
-		service: ctx.service,
-		jql,
-		count: issues.length,
-		issues,
-		...(truncationWarning ? { configWarning: truncationWarning } : {}),
-	};
 }
 
 export function registerFindLinkedIncidents(
