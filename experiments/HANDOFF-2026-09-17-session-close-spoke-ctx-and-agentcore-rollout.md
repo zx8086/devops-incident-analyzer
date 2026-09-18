@@ -571,6 +571,63 @@ touched. Nothing deployed: fleet bundle `61b43f87`, AWS AgentCore runtime v16. T
 web changes (SIO-1797, SIO-1798, SIO-1800, SIO-1803) load on the next web app restart; the
 Atlassian MCP already hot-reloaded SIO-1802.
 
+## Eighth update, 2026-09-18 09:20 to 09:45 UTC (same session): SIO-1805 done and live, SIO-1804 merged but NOT deployed
+
+Two of the four follow-up tickets from the seventh update were worked. SIO-1806 and SIO-1807 are
+untouched, Backlog.
+
+**[SIO-1805](https://linear.app/siobytes/issue/SIO-1805), PR #835 (`98904cf6`): Done, live.**
+Confirmed read-only on RESOLVED tickets first (the original observation was on unresolved ones,
+which proved less than it seemed): with `fields` omitted the upstream returns `resolution: Done`
+and NO `resolutiondate` key; with an explicit list, real timestamps. So `findLinkedIncidents` and
+`getIncidentHistory` had reported no resolution time for anything, and the history's MTTR read
+"nothing was ever resolved". Both calls now pass an explicit, exported field list
+(`LINKED_INCIDENT_FIELDS`, `INCIDENT_HISTORY_FIELDS`); an explicit list REPLACES the upstream
+default, so everything a tool reads must be named. No `customfield_severity` exists on the site
+(204 fields checked), so `priority` is the only severity signal. The tests could not see the
+defect because their fixtures supply `resolutiondate` directly; the new
+`test/upstream-field-shape.test.ts` uses a fake that returns only the requested fields, and the
+real default set when none are requested (mutation-checked, 3 tests fail without the params).
+Verified in the RUNNING server after it hot-reloaded: 2 resolved tickets with an MTTR (was 0);
+history 20 incidents, 17 unresolved, an overall MTTR, 3 of 7 monthly buckets with one (was none).
+The history call also stopped pulling up to 100 descriptions it never reads.
+
+**[SIO-1804](https://linear.app/siobytes/issue/SIO-1804), PR #836 (`d35c1e80`): merged, NOT
+deployed, In Review.** Linear closed it on merge and it was reopened by hand, because only half
+its acceptance is met.
+
+- Diagnosable: the spoke's "response not valid JSON" now carries the text's length, its stop
+  reason and a bounded head and tail, on one line under 450 characters. It already reaches the
+  spoke's `coms-net-log` entry, the hub message, the sender's card and the monitor's
+  `(uninvestigated: ...)` digest line.
+- Two real defects in `packages/pi-coms/extensions/jsonPayload.ts`, each reproduced before it
+  was changed. (a) A candidate that failed to parse was DESCENDED INTO: the first `{...}` failing
+  sent a second pass to the first `[...]`, which for a verdict is the `claims` array inside the
+  broken object, returned as if it were the whole reply; four of six realistic shapes yielded
+  that fragment. A failed span is now skipped whole and an unbalanced one stops the scan.
+  (b) Raw control characters inside a string are invalid JSON and the models emit them
+  (SIO-1219); each candidate is retried with those escaped, mirroring
+  `packages/agent/src/llm-json.ts` locally because the extension is bundled standalone for Pi.
+  Trailing commas, single quotes and comments are deliberately not repaired.
+- This supports a hypothesis, no more: a broken verdict used to surface as "misses the schema"
+  (the fragment) and as "not valid JSON" only when the inner array failed too, which a raw
+  newline inside a claim's evidence text does.
+
+**What SIO-1804 still needs, and it is the owner's call:** the extension runs on the spokes, so
+nothing changes in production until a fleet bundle is published and rolled out. That is a
+deployment and was NOT started. Standing procedure: canary on a dev spoke first, then host by
+host over SSM (memory `reference_fleet_rollout_host_by_host_over_ssm`). After it, the next
+failure carries its own evidence; if none occurs for a while, the control-character repair was
+probably the cause and the ticket can close. Checked with
+`git diff --stat 61b43f87 origin/main -- packages/pi-coms agents/pi-fleet`: against the deployed
+bundle, the only files that RUN ON A HOST and differ are `extensions/jsonPayload.ts` and
+`extensions/turnReply.ts`; the rest is the operator-side fleet CLI (SIO-1792) and tests. So the
+next publish is NOT a functionally empty one, and it carries exactly this change to the spokes.
+
+State at close: `origin/main` at the commit that adds this section, on top of `d35c1e80`. No
+branch from this session is open. No process was started in this round except read-only calls to
+the running Atlassian MCP. Nothing deployed.
+
 ## What is still open
 
 ### 1. SIO-1786: the user-side verification (no code) [DONE, see the update above]
