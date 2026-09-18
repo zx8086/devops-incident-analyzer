@@ -73,3 +73,6 @@ packages/agent/src/eval/fixtures/*
 
 # SIO-1400: local MCP tool-call metrics DB (MCP_TOOL_METRICS_DB_PATH) + WAL/SHM sidecars
 data/*.sqlite*
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
