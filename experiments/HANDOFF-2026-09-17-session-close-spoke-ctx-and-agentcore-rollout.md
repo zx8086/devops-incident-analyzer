@@ -5,8 +5,8 @@
 | Date | 2026-09-17 (session ran about 15:45 to 17:45 UTC) |
 | Tickets | [SIO-1786](https://linear.app/siobytes/issue/SIO-1786) Done (its user-side replay has since been run, see the update), [SIO-1787](https://linear.app/siobytes/issue/SIO-1787) Done (closed by the user 2026-09-17, was In Review when this was written), [SIO-1788](https://linear.app/siobytes/issue/SIO-1788) Done |
 | Related | [SIO-1726](https://linear.app/siobytes/issue/SIO-1726), [SIO-1734](https://linear.app/siobytes/issue/SIO-1734) (spoke context-mode, shipped earlier), [SIO-1774](https://linear.app/siobytes/issue/SIO-1774) (the change the AgentCore deploy shipped), [SIO-1784](https://linear.app/siobytes/issue/SIO-1784) (separate, own handover: `experiments/HANDOFF-2026-09-17-SIO-1784.md`) |
-| PRs | #819 merged as `798e9b29`, #820 merged as `61b43f87`; follow-up session #821 to #824; second update #826 merged as `cf5ba637`, #825 closed unmerged; third update #827 merged as `09781ab9`, #828 merged as `95433027`; fourth update #830 merged as `adde28a3`, #829 merged as `3dccce03`, #831 merged as `dfabe40a` |
-| Repo state | `origin/main` at `61b43f87` when written; `7a77c575` after the follow-up session (PRs #821, #822, #823, #824); `cf5ba637` after the second update (PR #826); `95433027` after the third update (PRs #827, #828); `dfabe40a` after the fourth update (PRs #829, #830, #831). No branch is open. |
+| PRs | #819 merged as `798e9b29`, #820 merged as `61b43f87`; follow-up session #821 to #824; second update #826 merged as `cf5ba637`, #825 closed unmerged; third update #827 merged as `09781ab9`, #828 merged as `95433027`; fourth update #830 merged as `adde28a3`, #829 merged as `3dccce03`, #831 merged as `dfabe40a`; fifth update #832 merged as `4df76f04` |
+| Repo state | `origin/main` at `61b43f87` when written; `7a77c575` after the follow-up session (PRs #821, #822, #823, #824); `cf5ba637` after the second update (PR #826); `95433027` after the third update (PRs #827, #828); `dfabe40a` after the fourth update (PRs #829, #830, #831); `4df76f04` after the fifth update (PR #832). No branch is open. |
 | Deployed state | Fleet bundle `61b43f87` on all 8 spokes and both hubs. AWS AgentCore runtime on v16. The SIO-1792 change is to the operator-side fleet CLI and needs no deploy; the SIO-1793 change is tests only. |
 | Nature | Nothing here is in progress. Every item under "What is still open" is now closed or ticketed; see the third update for the tickets and the FOURTH update for what happened to them: three are merged, and three small things still need the owner. |
 
@@ -397,6 +397,52 @@ worktree on purpose, for check 1 above.
 New memory from this session: `reference_jql_text_tilde_is_bag_of_words`,
 `feedback_git_switch_no_track_and_never_tail_git`; extended:
 `reference_sandbox_blocks_listen_fake_eaddrinuse`.
+
+## Fifth update, 2026-09-18 07:45 to 08:20 UTC (same session): the SIO-1802 replay failed, was fixed, and passed
+
+This supersedes item 1 of "What is left" in the fourth update. Items 2 and 3 there are unchanged.
+
+The main checkout was fast-forwarded and the replay run. **It failed the acceptance: the card was
+EMPTY** (`rawCount: 10`, `filteredCount: 0`, `droppedAll: true`). The sub-agent had passed generic
+SINGLE-word keywords (`TIMEOUT`, `article`, `styles`, `kv`). PR #831's phrase-quoting only helps
+multi-word keywords, so the one OR matched 1,043 tickets in 90 days, today's "Article Master"
+tickets took all 10 recency-capped slots, and #831's attribution then correctly dropped all 10.
+Honest, but the focus service's incidents were never retrieved. Measured live: the service clauses
+alone return exactly the 10 related tickets.
+
+**PR #832, merged as `4df76f04`:** `findLinkedIncidents` searches the service and the keywords
+SEPARATELY, in parallel, and service hits always lead; keyword-only hits fill what is left of
+`limit`. `buildJql` takes `match: all | service | keywords` with the default unchanged, so
+`get-incident-history` is untouched. Greptile went 3/5 then 5/5, and both findings were real flaws
+in the split: `Promise.all` tied the halves together (now `allSettled`, with a `configWarning`
+naming the half that failed), and a global score sort let three generic keywords outrank a service
+hit. Verified live against Jira before the PR and again after the review fixes, by running the new
+function locally with its upstream calls routed through the running server's own proxied search
+(no second OAuth client).
+
+**Replay on `4df76f04`, run `d0fbb492`: passed.** `rawCount: 15`, `filteredCount: 12`. The card
+shows 12 rows, the two exact prior incidents first with the chip `service + 5 keywords`, then the
+rest of that service's incidents, each chip's title listing every clause. On the first turn of
+that thread the sub-agent never called `findLinkedIncidents` at all (`rawCount: 0`, no card): the
+card is fed only by that one tool, so its absence on some runs is normal.
+
+**Still open on SIO-1802, one false positive from a known limit.** An unrelated ticket is kept at
+the bottom of the card on the chip `2 keywords`: the model passes generic single words (and even
+the service name as a keyword), and two generic words satisfy the extractor's two-keyword rule. The
+card explains why it is there, which is what the ticket asked for, but it is unrelated. The cleaner
+fix is the prompt: `agents/incident-analyzer/agents/atlassian-agent/SOUL.md` tells the model to
+pass "the cited error phrase plus key entities", and it decomposes the phrase into single words.
+Not done; detail and both options are on the ticket.
+
+**Two operational facts worth keeping:** the Atlassian MCP runs `bun --hot`, so a `git pull` in the
+main checkout reloads it in place with the SAME pid and start time (an unchanged pid is not "not
+restarted"; prove the running code by calling the tool on `:9085/mcp`). And Linear moves a ticket
+to Done whenever a linked PR merges: SIO-1802 was reopened by hand after the failed replay and was
+moved to Done again by #832.
+
+State at close: `origin/main` at the commit that adds this section, on top of `4df76f04`. No branch
+from this session is open. Port 5174 free; the operator's tunnel (8788) and the Atlassian MCP
+(9085) were never touched. Nothing deployed.
 
 ## What is still open
 
