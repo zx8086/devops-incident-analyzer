@@ -22,6 +22,7 @@ import { isNotableStatus, messageAge } from "../message-age.ts";
 import Icon from "./Icon.svelte";
 import MarkdownRenderer from "./MarkdownRenderer.svelte";
 import PiReplyBody from "./PiReplyBody.svelte";
+import { isAtBottom, newestFingerprint, shouldRevealNewest } from "./pi-fleet-scroll.ts";
 
 let {
 	pane,
@@ -57,12 +58,31 @@ let prompt = $state("");
 // status patch or an arriving result must not move the reader. The entries are the last
 // children of this section, so its last element is the newest entry. No smooth behaviour:
 // an instant jump needs no reduced-motion branch.
+//
+// SIO-1800: with one addition. An entry is ADDED as a short "Waiting" stub, so that scroll
+// fired before the reply existed and the reply then landed below the fold (108 px and
+// 81 px hidden, measured live). A reader who was AT THE BOTTOM is waiting for that reply
+// and follows it; a reader who scrolled up is still never moved. "Was at the bottom" has
+// to be read BEFORE the DOM grows, hence $effect.pre. `nearest` on an entry taller than
+// the pane aligns its top, so a long verdict opens at its start. The rule itself is in
+// pi-fleet-scroll.ts, where it can be tested.
 let entriesSection = $state<HTMLElement | null>(null);
+let scroller = $state<HTMLElement | null>(null);
 let seenEntries = 0;
+let seenNewest = "";
+let wasAtBottom = true;
+$effect.pre(() => {
+	newestFingerprint(pane.entries);
+	if (scroller) wasAtBottom = isAtBottom(scroller);
+});
 $effect(() => {
 	const count = pane.entries.length;
-	if (count > seenEntries) entriesSection?.lastElementChild?.scrollIntoView({ block: "nearest" });
+	const newest = newestFingerprint(pane.entries);
+	if (shouldRevealNewest({ countGrew: count > seenEntries, newestChanged: newest !== seenNewest, wasAtBottom })) {
+		entriesSection?.lastElementChild?.scrollIntoView({ block: "nearest" });
+	}
 	seenEntries = count;
+	seenNewest = newest;
 });
 
 // SIO-1789: a verify / investigate card's reply is a schema-constrained object. When it
@@ -212,7 +232,7 @@ function onKeydown(event: KeyboardEvent) {
        Inbox button stay reachable however far the report is scrolled.
        Deliberately uncapped (operator decision): on a short pane the picker can
        take most of the scroll area while pinned. -->
-  <div class="flex-1 min-h-0 overflow-y-auto">
+  <div bind:this={scroller} class="flex-1 min-h-0 overflow-y-auto">
     <div class="sticky top-0 z-20 bg-tommy-cream border-b border-gray-200">
     <section class="px-4 pt-2 pb-3">
       {#if pane.hubs.length === 0}
