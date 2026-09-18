@@ -365,6 +365,48 @@ describe("LadybugStore corruption-window hardening (SIO-1236)", () => {
 		}));
 });
 
+// SIO-1807: close() skips the native close because lbug's Database destructor segfaults Bun
+// (SIO-954). Dropping the references instead made the handle collectable, so the garbage
+// collector ran that same destructor mid-run and the NEXT store a process opened crashed. This
+// pins the property the fix rests on, without the native module: a closed store's handles stay
+// strongly reachable. The real-engine proof is ladybug.integration.test.ts (ten stores, one
+// process), which cannot run in CI.
+describe("LadybugStore.close() keeps the native handles reachable (SIO-1807)", () => {
+	afterAll(() => _setLbugLoaderForTesting(undefined));
+
+	test("a closed store's Database and Connection survive a full garbage collection", async () =>
+		withTempDir(async (dir) => {
+			const refs: WeakRef<object>[] = [];
+			const base = mockLbug({});
+			_setLbugLoaderForTesting(async () => {
+				const mod = await base.loader();
+				const track = <C extends new (...a: never[]) => object>(Ctor: C): C =>
+					new Proxy(Ctor, {
+						construct(target, args, newTarget) {
+							const instance = Reflect.construct(target, args, newTarget) as object;
+							refs.push(new WeakRef(instance));
+							return instance;
+						},
+					});
+				return { ...mod, Database: track(mod.Database), Connection: track(mod.Connection) } as LbugModule;
+			});
+
+			await (async () => {
+				const store = new LadybugStore(join(dir, "db"));
+				await store.init();
+				await store.close();
+			})();
+			// WeakRef targets are pinned until the current job ends; yield, then collect.
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			Bun.gc(true);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			Bun.gc(true);
+
+			expect(refs).toHaveLength(2);
+			for (const ref of refs) expect(ref.deref()).toBeDefined();
+		}));
+});
+
 describe("getGraphStore process-wide slot (survives a re-evaluated module graph)", () => {
 	// Restore the real factory once this suite finishes.
 	afterAll(() => _setGraphStoreFactoryForTesting(undefined));

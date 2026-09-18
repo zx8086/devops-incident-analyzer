@@ -365,9 +365,35 @@ export class LadybugStore implements GraphStore {
 		// it). Dropping the references is enough; the OS reclaims the file handle on
 		// process exit. Re-introducing db.close() crashes the migrate CLI and any
 		// process that opens the graph -- this is why the feature stays usable.
+		//
+		// SIO-1807: and do NOT merely drop the references either. An unreferenced native
+		// Database is collectable, and the garbage collector then runs that same
+		// destructor MID-RUN: the next store a process opened segfaulted at address 0x8.
+		// Measured on raw lbug, 4 databases in one process: references kept, never a
+		// crash; references dropped plus enough work to trigger a collection, a crash on
+		// the next open, every time. So the handles are parked where the collector
+		// cannot reach them, for the life of the process.
+		// ponytail: one parked handle pair per close(). Only CLIs and tests close a
+		// store (the app holds one store forever), so this is bounded in practice; a
+		// long-lived process that opens and closes stores in a loop would need lbug's
+		// destructor fixed upstream instead.
+		if (this.db) parkedNativeHandles().push(this.db, this.conn);
 		this.db = null;
 		this.conn = null;
 	}
+}
+
+// On globalThis, not module scope: `bun test --isolate` and Vite SSR re-evaluate this
+// module, and a parked handle must outlive the module graph that parked it.
+const PARKED_HANDLES_KEY = Symbol.for("devops-agent.knowledge-graph.parkedNativeHandles");
+function parkedNativeHandles(): unknown[] {
+	const g = globalThis as Record<symbol, unknown>;
+	let parked = g[PARKED_HANDLES_KEY] as unknown[] | undefined;
+	if (!parked) {
+		parked = [];
+		g[PARKED_HANDLES_KEY] = parked;
+	}
+	return parked;
 }
 
 // --- In-memory recording fake (tests / disabled fallback) -------------------
