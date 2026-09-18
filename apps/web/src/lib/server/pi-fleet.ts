@@ -376,7 +376,8 @@ export async function sendFleetMessage(
 	try {
 		// No response_schema: the operator reads a free-form reply, no LLM parses it.
 		const sent = await client.send(input.target, input.prompt);
-		const reply = await client.awaitReply(sent.msg_id, pane.awaitMs);
+		// partial: the browser re-polls by message id up to pane.totalBudgetMs.
+		const reply = await client.awaitReply(sent.msg_id, pane.awaitMs, { partial: true });
 		// Reply TEXT is never logged: it is spoke-authored and stays data.
 		log.info(
 			{ hubKey: paneHub.hubKey, target: input.target, msg_id: sent.msg_id, status: reply.status },
@@ -394,14 +395,14 @@ export async function sendFleetMessage(
 }
 
 // Re-await by id from a fresh, unregistered client: /await needs only the token,
-// and the heartbeat between slices is swallowed by the client when it 404s.
+// and an unregistered client sends no heartbeat between slices (SIO-1798).
 export async function awaitFleetMessage(
 	input: { hubKey: string; msgId: string },
 	deps: PiFleetDeps = {},
 ): Promise<PiFleetMessageStatusResponse> {
 	const pane = requirePane(deps);
 	const paneHub = requireHub(pane, input.hubKey);
-	const reply = await clientFor(paneHub, pane, deps).awaitReply(input.msgId, pane.awaitMs);
+	const reply = await clientFor(paneHub, pane, deps).awaitReply(input.msgId, pane.awaitMs, { partial: true });
 	return statusOf(paneHub, input.msgId, reply);
 }
 
