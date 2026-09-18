@@ -8,11 +8,22 @@ import type { AgentCard, AgentListing } from "../../contracts/wire.ts";
 // per-environment project the rollout poll read an empty namespace and waited
 // out its 10-minute deadline reporting "not registered" for agents that were
 // online the whole time. Defaults to "default" for fleets that never set one.
+//
+// SIO-1792: bounded. This runs through an SSM port-forward, where a dropped session can leave a
+// connect that neither resolves nor rejects; without a signal that hung `fleet status` and every
+// poll of `fleet rollout`.
+const LIST_AGENTS_TIMEOUT_MS = 15_000;
+
+// The hub ANSWERED, and said no (bad token, 5xx). Distinct from a transport failure so the rollout
+// poll can retry a stall but still fail fast on an answer that retrying will not change.
+export class HubHttpError extends Error {}
+
 export async function listAgents(baseUrl: string, token: string, project = "default"): Promise<AgentCard[]> {
 	const resp = await fetch(`${baseUrl}/v1/agents?project=${encodeURIComponent(project)}&include_explicit=true`, {
 		headers: { authorization: `Bearer ${token}` },
+		signal: AbortSignal.timeout(LIST_AGENTS_TIMEOUT_MS),
 	});
-	if (!resp.ok) throw new Error(`GET /v1/agents: ${resp.status} ${await resp.text()}`);
+	if (!resp.ok) throw new HubHttpError(`GET /v1/agents: ${resp.status} ${await resp.text()}`);
 	const listing = (await resp.json()) as AgentListing;
 	return listing.agents ?? [];
 }

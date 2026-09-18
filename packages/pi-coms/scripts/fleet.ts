@@ -28,7 +28,7 @@ import {
 	parseRemoteRead,
 	READ_LOCAL_ENV_COMMAND,
 } from "./fleet/config-drift.ts";
-import { listAgents, missingOnHub, personaVersion } from "./fleet/hub.ts";
+import { HubHttpError, listAgents, missingOnHub, personaVersion } from "./fleet/hub.ts";
 import {
 	DEFAULT_AUTH_PATH,
 	DEFAULT_HUB_PORT,
@@ -43,6 +43,7 @@ import { renderRoot, stateBucketName } from "./fleet/render.ts";
 import { HUB_INSTANCE_TAG, triggerRollout } from "./fleet/rollout.ts";
 import { terraformApply, terraformInit, terraformPlan } from "./fleet/terraform.ts";
 import { ensureToken } from "./fleet/tokens.ts";
+import { withTunnel } from "./fleet/tunnel.ts";
 
 const PKG_ROOT = path.resolve(import.meta.dir, "..");
 const ACCOUNTS_DIR = path.join(PKG_ROOT, "deploy", "accounts");
@@ -218,40 +219,30 @@ async function withHubTunnel<T>(
 	const hubId = await aws.instanceIdByName(hub.profile, hub.region, HUB_INSTANCE_TAG);
 	if (!hubId) throw new Error(`${hubKey}: no running hub instance tagged Name=${HUB_INSTANCE_TAG}`);
 	const port = hub.port ?? DEFAULT_HUB_PORT;
-	const tunnel = Bun.spawn(
-		[
-			"aws",
-			"ssm",
-			"start-session",
-			"--profile",
-			hub.profile,
-			"--region",
-			hub.region,
-			"--target",
-			hubId,
-			"--document-name",
-			"AWS-StartPortForwardingSession",
-			"--parameters",
-			JSON.stringify({ portNumber: [String(port)], localPortNumber: [String(localPort)] }),
-		],
-		{ stdout: "ignore", stderr: "inherit" },
+	// SIO-1792: bounded waits, a clear error instead of running `fn` against a tunnel that never
+	// opened, and a teardown that takes session-manager-plugin down with `aws` (fleet/tunnel.ts).
+	return withTunnel(
+		{
+			label: hubKey,
+			baseUrl: `http://127.0.0.1:${localPort}`,
+			command: [
+				"aws",
+				"ssm",
+				"start-session",
+				"--profile",
+				hub.profile,
+				"--region",
+				hub.region,
+				"--target",
+				hubId,
+				"--document-name",
+				"AWS-StartPortForwardingSession",
+				"--parameters",
+				JSON.stringify({ portNumber: [String(port)], localPortNumber: [String(localPort)] }),
+			],
+		},
+		fn,
 	);
-	try {
-		const baseUrl = `http://127.0.0.1:${localPort}`;
-		for (let i = 0; i < 30; i++) {
-			try {
-				const r = await fetch(`${baseUrl}/health`);
-				if (r.ok) break;
-			} catch {
-				// tunnel not up yet
-			}
-			await Bun.sleep(1000);
-		}
-		return await fn(baseUrl);
-	} finally {
-		tunnel.kill();
-		await tunnel.exited;
-	}
 }
 
 // SIO-1666: token_env is required per hub. The old
@@ -327,7 +318,21 @@ async function runRollout(
 			const deadline = Date.now() + 10 * 60_000;
 			let pending = envNames;
 			while (pending.length > 0 && Date.now() < deadline) {
-				const agents = await listAgents(baseUrl, token, hubFor(manifest, hubKey).project);
+				// SIO-1792: listAgents is bounded now, so a stalled poll THROWS instead of hanging.
+				// The updates above are already dispatched and re-running `rollout` would dispatch
+				// them again, so one stalled attempt must not end the poll: retry until the deadline.
+				// An HTTP answer (bad token, 5xx) still fails fast, as it always did.
+				let agents: Awaited<ReturnType<typeof listAgents>>;
+				try {
+					agents = await listAgents(baseUrl, token, hubFor(manifest, hubKey).project);
+				} catch (error) {
+					if (error instanceof HubHttpError) throw error;
+					console.log(
+						`${hubKey}: hub poll failed (${error instanceof Error ? error.message : String(error)}); retrying`,
+					);
+					await Bun.sleep(15_000);
+					continue;
+				}
 				pending = pending.filter((name) => {
 					const problems = missingOnHub(agents, name, persona ? { persona } : {});
 					if (problems.length === 0) {
