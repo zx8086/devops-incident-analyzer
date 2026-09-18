@@ -4,9 +4,28 @@ import type { ASTNode, SQLPPParser } from "../types";
 import { logger } from "../utils/logger";
 
 export class SQLPPParserImpl implements SQLPPParser {
-	private readonly dataModificationKeywords = new Set(["INSERT", "UPDATE", "DELETE", "UPSERT", "MERGE"]);
+	// SIO-1813: PREPARE and EXECUTE are refused wholesale. EXECUTE runs a server-side
+	// prepared statement or a UDF this gate cannot inspect, and PREPARE has no use without it.
+	private readonly dataModificationKeywords = new Set([
+		"INSERT",
+		"UPDATE",
+		"DELETE",
+		"UPSERT",
+		"MERGE",
+		"PREPARE",
+		"EXECUTE",
+	]);
 
-	private readonly structureModificationKeywords = new Set(["CREATE", "DROP", "ALTER", "GRANT", "REVOKE"]);
+	// SIO-1813: ANALYZE is the synonym of UPDATE STATISTICS, which UPDATE already refuses.
+	private readonly structureModificationKeywords = new Set([
+		"CREATE",
+		"DROP",
+		"ALTER",
+		"GRANT",
+		"REVOKE",
+		"BUILD",
+		"ANALYZE",
+	]);
 
 	private readonly queryKeywords = new Set([
 		"SELECT",
@@ -46,58 +65,81 @@ export class SQLPPParserImpl implements SQLPPParser {
 	}
 
 	modifiesData(parsedQuery: ASTNode): boolean {
-		if (!parsedQuery.rawQuery) return false;
+		const operation = this.statementHeads(parsedQuery).find((head) => this.dataModificationKeywords.has(head));
 
-		const query = parsedQuery.rawQuery.toUpperCase();
-		const firstToken = this.tokenize(query)[0];
-
-		// Check if the first token is a data modification keyword
-		const result = firstToken !== undefined && this.dataModificationKeywords.has(firstToken);
-
-		if (result) {
-			logger.debug(
-				{
-					operation: firstToken,
-				},
-				"Query identified as data modification query",
-			);
+		if (operation) {
+			logger.debug({ operation }, "Query identified as data modification query");
 		}
 
-		return result;
+		return operation !== undefined;
 	}
 
 	modifiesStructure(parsedQuery: ASTNode): boolean {
-		if (!parsedQuery.rawQuery) return false;
+		const operation = this.statementHeads(parsedQuery).find((head) => this.structureModificationKeywords.has(head));
 
-		const query = parsedQuery.rawQuery.toUpperCase();
-		const firstToken = this.tokenize(query)[0];
-
-		// Check if the first token is a structure modification keyword
-		const result = firstToken !== undefined && this.structureModificationKeywords.has(firstToken);
-
-		if (result) {
-			logger.debug(
-				{
-					operation: firstToken,
-				},
-				"Query identified as structure modification query",
-			);
+		if (operation) {
+			logger.debug({ operation }, "Query identified as structure modification query");
 		}
 
-		return result;
+		return operation !== undefined;
+	}
+
+	// SIO-1813: this is the read-only boundary for the server, so it must read a statement's
+	// leading keyword the way the query service does. One head per ";"-separated statement,
+	// past any opening parentheses, cut at the first non-letter ("UPDATE`c`" is UPDATE).
+	//
+	// Deliberately NOT refused:
+	// - EXPLAIN / ADVISE <mutation>: they plan the statement and never run it (SIO-1107).
+	// - BEGIN / START / COMMIT / ROLLBACK / SAVEPOINT / SET: they mutate nothing themselves,
+	//   and every DML inside a transaction is its own request through this gate.
+	//
+	// The heads after the first are defense in depth: the query service grammar is
+	// `input: stmt_body opt_trailer` with opt_trailer being only ";" (couchbase/query
+	// parser/n1ql/n1ql.y), so a request carrying a second statement is a syntax error there.
+	private statementHeads(parsedQuery: ASTNode): string[] {
+		if (!parsedQuery.rawQuery) return [];
+
+		const heads: string[] = [];
+		let atStatementStart = true;
+
+		for (const token of this.tokenize(parsedQuery.rawQuery.toUpperCase())) {
+			if (token === ";") {
+				atStatementStart = true;
+				continue;
+			}
+			if (!atStatementStart) continue;
+
+			const unwrapped = token.replace(/^\(+/, "");
+			if (!unwrapped) continue;
+
+			heads.push(unwrapped.match(/^[A-Z_]+/)?.[0] ?? "");
+			atStatementStart = false;
+		}
+
+		return heads;
 	}
 
 	private tokenize(query: string): string[] {
-		// Split on whitespace but preserve quoted strings
+		// Split on any whitespace, and emit ";" as its own token, but preserve quoted strings
 		const tokens: string[] = [];
 		let currentToken = "";
 		let inQuotes = false;
 		let quoteChar = "";
 
 		for (let i = 0; i < query.length; i++) {
-			const char = query[i];
+			const char = query.charAt(i);
 
-			if ((char === '"' || char === "'" || char === "`") && (i === 0 || query[i - 1] !== "\\")) {
+			// SIO-1813: quoting follows the query service lexer (couchbase/query parser/n1ql/n1ql.nex),
+			// which has one rule for "...", '...' and `...` alike: a backslash consumes the next
+			// character. So "\\\\" is a pair and the quote after it still closes, while \' and \`
+			// do not close. A doubled quote is the other escape, and the toggle below handles it.
+			if (inQuotes && char === "\\") {
+				currentToken += char + query.charAt(i + 1);
+				i++;
+				continue;
+			}
+
+			if (char === '"' || char === "'" || char === "`") {
 				if (!inQuotes) {
 					inQuotes = true;
 					quoteChar = char;
@@ -106,11 +148,12 @@ export class SQLPPParserImpl implements SQLPPParser {
 				}
 			}
 
-			if (char === " " && !inQuotes) {
+			if (!inQuotes && (char === ";" || /\s/.test(char))) {
 				if (currentToken) {
 					tokens.push(currentToken);
 					currentToken = "";
 				}
+				if (char === ";") tokens.push(";");
 			} else {
 				currentToken += char;
 			}
@@ -168,8 +211,10 @@ export class SQLPPParserImpl implements SQLPPParser {
 	}
 
 	private removeComments(query: string): string {
-		let cleaned = query.replace(/--.*$/gm, ""); // Remove single-line comments
-		cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, ""); // Remove multi-line comments
+		// SIO-1813: a comment separates tokens, so it becomes a space. Replacing it with ""
+		// glued "DELETE/**/FROM" into "DELETEFROM", which the gate did not recognise.
+		let cleaned = query.replace(/--.*$/gm, " ");
+		cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, " ");
 		return cleaned.trim();
 	}
 }
