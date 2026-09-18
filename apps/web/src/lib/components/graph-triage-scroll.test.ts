@@ -65,35 +65,28 @@ describe("shouldRevealRunning", () => {
 	});
 });
 
-// Greptile PR #843, second round. The follow flag was right; the GUARD around our own
-// scroll was not. A native smooth scrollTo emits many events -- 31 measured live in this
-// pane for a single call -- and the first version cleared the guard on the first one, so
-// frames 2..N were read as operator input and switched following off mid-animation. This
-// models the panel's guard (an event while self-scrolling extends it; the flag clears only
-// once events stop) and fails against the consume-one-event version.
-describe("SIO-1812: the self-scroll guard spans a whole smooth animation", () => {
-	// Mirrors GraphTriagePanel's onScroll/endSelfScroll pair, minus the DOM.
-	function makeGuard(atBottom: () => boolean) {
+// Greptile PR #843, rounds 2 and 3 -- the two halves of the same question, which is why
+// they are tested together: a fix for either one alone reintroduces the other.
+//
+// Scroll events cannot answer "who moved the view". One smooth scrollTo emits ~31 of them
+// (measured live in this pane) and they are identical to the operator's. Round 2 consumed
+// one event, so the animation's remaining frames looked like the operator and following
+// died mid-turn. Round 3 swallowed them all, so a wheel spin DURING the animation looked
+// like the animation and the operator was dragged back to the node they had just left.
+//
+// The panel therefore decides from INPUT events -- wheel/touchmove, which fire
+// independently of any animation -- and uses scroll only to re-arm when the operator
+// parks at the bottom. This models that pair.
+describe("SIO-1812: following is driven by operator input, not by scroll events", () => {
+	// Mirrors GraphTriagePanel's onOperatorInput/onScroll pair, minus the DOM.
+	function makePanel(atBottom: () => boolean) {
 		let following = true;
-		let selfScrolling = false;
-		let pending = 0; // stands in for the settle timer
 		return {
-			startSelfScroll() {
-				selfScrolling = true;
-				pending = 1;
+			operatorInput() {
+				following = false;
 			},
-			onScroll() {
-				if (selfScrolling) {
-					pending = 1; // extend, do NOT consume
-					return;
-				}
-				following = atBottom();
-			},
-			settle() {
-				if (pending) {
-					pending = 0;
-					selfScrolling = false;
-				}
+			scrolled() {
+				if (!following && atBottom()) following = true;
 			},
 			get following() {
 				return following;
@@ -101,46 +94,49 @@ describe("SIO-1812: the self-scroll guard spans a whole smooth animation", () =>
 		};
 	}
 
-	// The animation parks the node mid-content, so every frame reports "not at bottom".
+	// A reveal parks the node mid-content, so every frame reports "not at bottom".
 	const MID_CONTENT = () => false;
+	const SMOOTH_FRAMES = 31;
 
-	test("31 events from one reveal do not switch following off", () => {
-		const g = makeGuard(MID_CONTENT);
-		g.startSelfScroll();
-		for (let i = 0; i < 31; i++) g.onScroll();
-		g.settle();
-		expect(g.following).toBe(true);
+	// Round 2's bug.
+	test("an animation's own frames never switch following off", () => {
+		const p = makePanel(MID_CONTENT);
+		for (let i = 0; i < SMOOTH_FRAMES; i++) p.scrolled();
+		expect(p.following).toBe(true);
 	});
 
-	test("consecutive reveals keep following, each with its own event burst", () => {
-		const g = makeGuard(MID_CONTENT);
+	test("consecutive reveals keep following, each with its own frame burst", () => {
+		const p = makePanel(MID_CONTENT);
 		for (let node = 0; node < 5; node++) {
-			g.startSelfScroll();
-			for (let i = 0; i < 31; i++) g.onScroll();
-			g.settle();
-			expect(g.following).toBe(true);
+			for (let i = 0; i < SMOOTH_FRAMES; i++) p.scrolled();
+			expect(p.following).toBe(true);
 		}
 	});
 
-	test("an operator scroll after the animation settles still stops following", () => {
-		const g = makeGuard(MID_CONTENT);
-		g.startSelfScroll();
-		for (let i = 0; i < 31; i++) g.onScroll();
-		g.settle();
-		g.onScroll(); // theirs: no self-scroll in flight
-		expect(g.following).toBe(false);
+	// Round 3's bug: the operator interrupting mid-animation must win immediately, even
+	// though frames are still arriving around their input.
+	test("a wheel spin DURING an animation stops following at once", () => {
+		const p = makePanel(MID_CONTENT);
+		for (let i = 0; i < 10; i++) p.scrolled();
+		p.operatorInput();
+		for (let i = 0; i < 21; i++) p.scrolled();
+		expect(p.following).toBe(false);
 	});
 
-	test("and returning to the bottom resumes following", () => {
+	test("and the next reveal does not reclaim the view", () => {
+		const p = makePanel(MID_CONTENT);
+		p.operatorInput();
+		for (let i = 0; i < SMOOTH_FRAMES; i++) p.scrolled();
+		expect(p.following).toBe(false);
+	});
+
+	test("parking at the bottom resumes following", () => {
 		let parked = false;
-		const g = makeGuard(() => parked);
-		g.startSelfScroll();
-		for (let i = 0; i < 31; i++) g.onScroll();
-		g.settle();
-		g.onScroll();
-		expect(g.following).toBe(false);
-		parked = true; // scrolled back to the end
-		g.onScroll();
-		expect(g.following).toBe(true);
+		const p = makePanel(() => parked);
+		p.operatorInput();
+		expect(p.following).toBe(false);
+		parked = true;
+		p.scrolled();
+		expect(p.following).toBe(true);
 	});
 });
