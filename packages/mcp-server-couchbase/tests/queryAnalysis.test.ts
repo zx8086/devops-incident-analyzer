@@ -732,6 +732,13 @@ describe("sqlppParser read-only gate whitespace and evasion regression (SIO-1813
 		"SELECT 1; DELETE FROM c",
 		"SELECT 1;DELETE FROM c",
 		"SELECT ';' ;\nUPSERT INTO c VALUES ('k', {})",
+		// A backslash must never keep the tokenizer inside a quote the server has closed:
+		// backticks have no backslash escape, and "\\\\" is an escaped backslash, not an escaped quote.
+		"SELECT `field\\` FROM c; DELETE FROM c",
+		"SELECT 'a\\\\' ; DELETE FROM c",
+		'SELECT "a\\\\" ; DELETE FROM c',
+		// Whether \' escapes the quote is read both ways, and either reading exposing a mutation refuses.
+		"SELECT 'a\\' ; DELETE FROM c",
 		// PREPARE and EXECUTE are refused wholesale: EXECUTE runs a server-side statement
 		// (or a UDF) this gate cannot inspect, and PREPARE has no use without it.
 		"PREPARE p FROM DELETE FROM c",
@@ -760,6 +767,9 @@ describe("sqlppParser read-only gate whitespace and evasion regression (SIO-1813
 		"SELECT * FROM c WHERE note = 'x; DELETE FROM c'",
 		'SELECT * FROM c WHERE note = "x;\nDROP INDEX idx ON c"',
 		"SELECT `delete`, `drop` FROM c",
+		"SELECT * FROM c WHERE note = 'it''s; DELETE FROM c'",
+		'SELECT * FROM c WHERE note = "say \\"hi\\"; DELETE FROM c"',
+		"SELECT * FROM c WHERE path = 'C:\\\\tmp' AND note = 'x; DROP INDEX idx ON c'",
 		"SELECT * FROM c WHERE verb IN ['DELETE', 'CREATE']",
 	])("%j passes modifiesData and modifiesStructure", (q) => {
 		const parsed = sqlppParser.parse(q);

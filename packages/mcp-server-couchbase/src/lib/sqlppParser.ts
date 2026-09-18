@@ -92,30 +92,38 @@ export class SQLPPParserImpl implements SQLPPParser {
 	// - EXPLAIN / ADVISE <mutation>: they plan the statement and never run it (SIO-1107).
 	// - BEGIN / START / COMMIT / ROLLBACK / SAVEPOINT / SET: they mutate nothing themselves,
 	//   and every DML inside a transaction is its own request through this gate.
+	//
+	// Fails closed on quoting: whether a backslash escapes the closing quote of a string is
+	// read BOTH ways, and a mutation head under either reading refuses. A reading that keeps
+	// the tokenizer inside a quote the server has closed would hide a following "; DELETE".
 	private statementHeads(parsedQuery: ASTNode): string[] {
 		if (!parsedQuery.rawQuery) return [];
 
+		const query = parsedQuery.rawQuery.toUpperCase();
 		const heads: string[] = [];
-		let atStatementStart = true;
 
-		for (const token of this.tokenize(parsedQuery.rawQuery.toUpperCase())) {
-			if (token === ";") {
-				atStatementStart = true;
-				continue;
+		for (const backslashEscapes of [true, false]) {
+			let atStatementStart = true;
+
+			for (const token of this.tokenize(query, backslashEscapes)) {
+				if (token === ";") {
+					atStatementStart = true;
+					continue;
+				}
+				if (!atStatementStart) continue;
+
+				const unwrapped = token.replace(/^\(+/, "");
+				if (!unwrapped) continue;
+
+				heads.push(unwrapped.match(/^[A-Z_]+/)?.[0] ?? "");
+				atStatementStart = false;
 			}
-			if (!atStatementStart) continue;
-
-			const unwrapped = token.replace(/^\(+/, "");
-			if (!unwrapped) continue;
-
-			heads.push(unwrapped.match(/^[A-Z_]+/)?.[0] ?? "");
-			atStatementStart = false;
 		}
 
 		return heads;
 	}
 
-	private tokenize(query: string): string[] {
+	private tokenize(query: string, backslashEscapes = true): string[] {
 		// Split on any whitespace, and emit ";" as its own token, but preserve quoted strings
 		const tokens: string[] = [];
 		let currentToken = "";
@@ -125,7 +133,16 @@ export class SQLPPParserImpl implements SQLPPParser {
 		for (let i = 0; i < query.length; i++) {
 			const char = query.charAt(i);
 
-			if ((char === '"' || char === "'" || char === "`") && (i === 0 || query[i - 1] !== "\\")) {
+			// SIO-1813: inside a string a backslash consumes the next character, so "\\\\" is a
+			// pair and the quote after it still closes. Backtick identifiers have no backslash
+			// escape (a backtick is escaped by doubling, which the toggle below already handles).
+			if (backslashEscapes && inQuotes && quoteChar !== "`" && char === "\\") {
+				currentToken += char + query.charAt(i + 1);
+				i++;
+				continue;
+			}
+
+			if (char === '"' || char === "'" || char === "`") {
 				if (!inQuotes) {
 					inQuotes = true;
 					quoteChar = char;
