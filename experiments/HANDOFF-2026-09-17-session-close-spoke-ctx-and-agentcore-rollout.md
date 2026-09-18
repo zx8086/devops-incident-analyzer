@@ -296,8 +296,16 @@ unassigned; nothing is in progress):
 | the `ajv` CI flake seen once (item 3) | [SIO-1799](https://linear.app/siobytes/issue/SIO-1799), Low, a place for a recurrence to land |
 | the `PiFleetPane` scroll not yet looked at live (first update, SIO-1794 bullet) | [SIO-1800](https://linear.app/siobytes/issue/SIO-1800), Low, live check with four steps |
 | the live hub message to one spoke per environment (item 5, user-driven) | [SIO-1801](https://linear.app/siobytes/issue/SIO-1801), Low, operator recipe on the ticket |
+| NEW, raised by the user on 2026-09-18: the Atlassian findings card lists tickets unrelated to the incident. Mechanism read from the code: `findLinkedIncidents` builds a JQL that ORs `text ~ "<service>"` with `text ~ "<every error keyword>"` ordered by recency (SIO-1093 broadened it on purpose), and the extractor's SIO-1244 provenance rule then treats every hit of a focus-scoped envelope as in focus. Keyword retrieval where relevance is the question; same family as SIO-1797 | [SIO-1802](https://linear.app/siobytes/issue/SIO-1802), Medium. Four options weighed on the ticket (tighter JQL, clause scoring, a Rovo `atlassian_search` semantic pass, a relevance judge); the SIO-1244 fixture (DEVOPS-1405 on run 43796e9f) must keep passing |
 
 With that, nothing in this document is untracked.
+
+**Session close, 2026-09-18 05:45 UTC.** Everything this document tracks is either Done (SIO-1786,
+SIO-1787, SIO-1788, SIO-1792, SIO-1793, SIO-1795) or in Backlog with a ticket (SIO-1797 to
+SIO-1802). `origin/main` is at the commit that adds this paragraph. Deployed state is unchanged
+since the third update: fleet bundle `61b43f87` on all 8 spokes and both hubs, AWS AgentCore
+runtime v16. No branch is open, no process the sessions started is running, both tunnel ports
+are free of anything the sessions opened.
 
 ## What is still open
 
