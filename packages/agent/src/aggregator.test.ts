@@ -1302,15 +1302,28 @@ describe("confidence line is guaranteed (SIO-1810)", () => {
 		expect(rewriteConfidenceInAnswer(noLine, 0.4)).toBe(noLine);
 	});
 
-	test("the guaranteed line is appended above the Request-Id footer", () => {
-		// Mirrors the aggregate node's composition order (SIO-632: confidence last,
-		// then the footer) so a report always carries a score for the operator.
-		const answer = "# Report\n\nThe service looks degraded.";
-		const guaranteed =
-			findConfidenceScore(answer) === null ? `${answer.trimEnd()}\n\nConfidence: ${(0).toFixed(2)}` : answer;
-		const out = appendRequestIdFooter(guaranteed, "1f5b2c8a-0d3e-4a9b-8c7d-2e6f4a1b9c0d");
-		expect(findConfidenceScore(out)).toBe(0);
-		expect(out.indexOf("Confidence:")).toBeLessThan(out.indexOf("**Request-Id:**"));
+	// Greptile #841: exercise the real aggregate path rather than rebuilding the
+	// expression here -- a test that reimplements the production logic keeps passing
+	// when that logic is deleted, which is precisely the regression it must catch.
+	test("aggregate appends the line when the model omits it, above the Request-Id footer", async () => {
+		mockLlmContent = "# Incident Report\n\nRoot cause: connection timeout. No score was given.";
+		const result = await aggregate(makeState());
+		const answer = result.finalAnswer ?? "";
+		expect(answer).toContain("Root cause: connection timeout.");
+		// The operator sees a score rather than nothing at all.
+		expect(findConfidenceScore(answer)).not.toBeNull();
+		// SIO-632 order survives: confidence last, then the footer.
+		expect(answer.indexOf("Confidence:")).toBeLessThan(answer.indexOf("**Request-Id:**"));
+	});
+
+	test("aggregate leaves the model's own confidence line alone", async () => {
+		// The guarantee must not fire when a line is already present, or it would
+		// stamp a second one under the model's.
+		mockLlmContent = "# Incident Report\n\nRoot cause: disk pressure.\n\nConfidence: 0.73";
+		const result = await aggregate(makeState());
+		const answer = result.finalAnswer ?? "";
+		expect(answer.match(/^Confidence:/gm)?.length).toBe(1);
+		expect(findConfidenceScore(answer)).toBe(0.73);
 	});
 });
 
