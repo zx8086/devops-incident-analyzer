@@ -5,10 +5,10 @@
 | Date | 2026-09-17 (session ran about 15:45 to 17:45 UTC) |
 | Tickets | [SIO-1786](https://linear.app/siobytes/issue/SIO-1786) Done (its user-side replay has since been run, see the update), [SIO-1787](https://linear.app/siobytes/issue/SIO-1787) Done (closed by the user 2026-09-17, was In Review when this was written), [SIO-1788](https://linear.app/siobytes/issue/SIO-1788) Done |
 | Related | [SIO-1726](https://linear.app/siobytes/issue/SIO-1726), [SIO-1734](https://linear.app/siobytes/issue/SIO-1734) (spoke context-mode, shipped earlier), [SIO-1774](https://linear.app/siobytes/issue/SIO-1774) (the change the AgentCore deploy shipped), [SIO-1784](https://linear.app/siobytes/issue/SIO-1784) (separate, own handover: `experiments/HANDOFF-2026-09-17-SIO-1784.md`) |
-| PRs | #819 merged as `798e9b29`, #820 merged as `61b43f87`; follow-up session #821 to #824; second update #826 merged as `cf5ba637`, #825 closed unmerged |
-| Repo state | `origin/main` at `61b43f87` when written; `7a77c575` after the follow-up session (PRs #821, #822, #823, #824); `cf5ba637` after the second update (PR #826). No branch is open. |
-| Deployed state | Fleet bundle `61b43f87` on all 8 spokes and both hubs. AWS AgentCore runtime on v16. |
-| Nature | Nothing here is in progress. This is a list of loose ends, each small and independent. None has a ticket unless one is named. |
+| PRs | #819 merged as `798e9b29`, #820 merged as `61b43f87`; follow-up session #821 to #824; second update #826 merged as `cf5ba637`, #825 closed unmerged; third update #827 merged as `09781ab9`, #828 merged as `95433027` |
+| Repo state | `origin/main` at `61b43f87` when written; `7a77c575` after the follow-up session (PRs #821, #822, #823, #824); `cf5ba637` after the second update (PR #826); `95433027` after the third update (PRs #827, #828). No branch is open. |
+| Deployed state | Fleet bundle `61b43f87` on all 8 spokes and both hubs. AWS AgentCore runtime on v16. The SIO-1792 change is to the operator-side fleet CLI and needs no deploy; the SIO-1793 change is tests only. |
+| Nature | Nothing here is in progress. Every item under "What is still open" is now closed or ticketed; see the third update for the final state. |
 
 ## TL;DR
 
@@ -20,7 +20,8 @@ five loose ends, listed under "What is still open". Both of the two that mattere
 closed: the SIO-1786 replay was run and passed (first update), and the 24 `packages/agent` failures
 were the command, bare `bun test` without `--isolate`, not the code (first update; a second session
 then re-derived it the hard way and fixed the CLAUDE.md instruction that caused it, second update).
-What remains open is SIO-1792, SIO-1793 and the untriaged observations listed in the two updates.
+SIO-1792 and SIO-1793 are also Done (third update). What remains is the untriaged observations
+listed in the first update, none of which has a ticket.
 
 ## Session summary
 
@@ -243,6 +244,54 @@ was `4714 pass, 0 fail`.
 your command with the package's `"test"` script and with what CI runs before anything else. The
 answer was on main (the update above) and in memory two hours before the investigation started.
 
+## Third update, 2026-09-18 05:00 to 05:50 UTC (the original session, resumed again): SIO-1793 and SIO-1792 done
+
+Both tickets the first update opened for items 4 and 5 are implemented, merged and Done.
+
+**SIO-1793, PR #827 (`09781ab9`), tests only.** `tests/agent-bootstrap-project-scope.test.ts`
+now slices the launcher's whole `mcp.json` block (`CTX_SERVER=` through `fi`; the launcher heredoc
+is quoted, so `$HOME` expands at run time) and runs it under `bash -euo pipefail` in a `mkdtemp`
+HOME with a stand-in bundle file, then inspects the file left behind. Covered: enabled with the
+bundle present (valid JSON, `args` equal to the script's OWN `CTX_SERVER` path, the four
+maintenance tools excluded, the documented ones not); `CTX_MODE_ENABLED=false` and `=0` remove a
+pre-existing file; enabled but bundle missing removes it; an unrelated value counts as enabled.
+Mutation-checked against the real script: a wrong `CTX_SERVER` path fails 2 tests (the old test
+passed it), swapping one excluded tool for a documented one fails 1. Greptile 5/5, no findings.
+
+**SIO-1792, PR #828 (`95433027`).** The other session had left substantive uncommitted work in
+worktree `sio-1792-fleet-tunnel`; with the user's go-ahead it was reviewed, tested and committed
+as found on that session's branch, then finished from this worktree (the harness refuses writes to
+another worktree, so the clean, pushed worktree was removed and its branch checked out here). The
+tunnel now lives in `packages/pi-coms/scripts/fleet/tunnel.ts` with injectable deps: every
+`/health` attempt carries `AbortSignal.timeout`; after the attempts it throws
+`tunnel to <hub> did not answer /health`; a tunnel process that exits early fails fast and names
+the likely cause; the process is spawned `detached` in its own group and teardown signals the
+GROUP (SIGTERM, then SIGKILL, bounded waits), with SIGINT/SIGTERM handlers because `finally` does
+not run when the CLI is signalled; a hub already answering on the hub's `local_port` (the
+operator's own `just hub-tunnel`) is reused and left alone. `listAgents` in `scripts/fleet/hub.ts`
+has a 15 s timeout, and `HubHttpError` marks an answer retrying will not change (HTTP refusal, or a
+2xx whose body is not JSON), which the rollout poll fails fast on while retrying transport stalls.
+
+Greptile round 1 was 4/5 with two findings, both verified and fixed: the reuse probe accepted any
+2xx on `/health` (an unrelated local service would have been taken for a hub; it now requires the
+hub's real payload, `ok === true` plus `server_id`, per `handleHealth` in
+`scripts/coms-net-server.ts`), and an unparseable listing was retried to the ten-minute deadline.
+Round 2: 5/5. 14 tunnel tests, one with real processes proving the spawned command's child dies
+on teardown (which also proves Bun 1.4.2 honours `detached: true`); pi-coms 578 pass.
+
+**Live acceptance, credentials refreshed by the user:** `just fleet status` on the two dev spokes,
+rc 0 in 12 s, nothing left on 8787; on the two prd spokes WITH the operator's prd tunnel already
+open on 8788, which is the exact scenario that hung during SIO-1787: rc 0 in 10 s, logged
+`using the tunnel already open`, the operator's tunnel survived. Before that, with expired
+credentials, the real `aws` CLI failed in 2 s with the clear message and nothing was left
+listening. The original 5-minute hang was never reproduced; the code path it took is gone.
+
+**Now the only open things from this document**, none ticketed: the heartbeat `404
+agent_not_found` warnings during a pi verify (first update, "Seen on the second live run"), the
+possible `matchesFocus` false positives on shared name fragments (first update, SIO-1790 bullet),
+the `ajv` CI flake seen once, the `PiFleetPane` scroll not yet looked at live, and the live hub
+message to one spoke per environment (still user-driven, per SIO-1793's scope).
+
 ## What is still open
 
 ### 1. SIO-1786: the user-side verification (no code) [DONE, see the update above]
@@ -292,7 +341,7 @@ base commit, it was the only failed CI run in the last 40, three local runs did 
 and the re-run passed with no change. Treated as a flake and NOT ticketed. If it recurs, that is the
 signal to look at how that test file builds its ajv validators.
 
-### 4. `just fleet status` hung, cause NOT established [ticketed: SIO-1792]
+### 4. `just fleet status` hung, cause NOT established [SIO-1792 DONE via PR #828, see the third update]
 
 During SIO-1787, `just fleet status --operator simon` did not return within 5 minutes and left one
 orphaned dev tunnel on 8787 (proven mine by parent chain, killed by PID). At the time the prd hub's
@@ -328,7 +377,7 @@ memory `reference_fleet_cli_orphans_ssm_tunnels` describes. The output was also 
 which buffers until exit, so the run may simply have been slow rather than hung. Reproduce before
 concluding anything. No ticket exists.
 
-### 5. SIO-1788: two acceptance items met by a different route than the ticket named [offline half ticketed: SIO-1793]
+### 5. SIO-1788: two acceptance items met by a different route than the ticket named [offline half: SIO-1793 DONE via PR #827; the live hub message stays user-driven]
 
 - The ticket said "a hub message". The probes actually ran as a separate Pi print-mode process on
   each host (deployed `mcp.json`, real adapter, the host's own model, persona loaded). That proves
