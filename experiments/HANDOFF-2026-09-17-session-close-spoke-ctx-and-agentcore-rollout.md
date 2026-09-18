@@ -8,7 +8,7 @@
 | PRs | #819 merged as `798e9b29`, #820 merged as `61b43f87`; follow-up session #821 to #824; second update #826 merged as `cf5ba637`, #825 closed unmerged; third update #827 merged as `09781ab9`, #828 merged as `95433027`; fourth update #830 merged as `adde28a3`, #829 merged as `3dccce03`, #831 merged as `dfabe40a`; fifth update #832 merged as `4df76f04`; sixth update #833 merged as `c3c1d7d0`; seventh update #834 merged as `296b9f84`; eighth update #835 merged as `98904cf6`, #836 merged as `d35c1e80`; tenth update #837 merged as `dd9ca382`, #838 merged as `796193bd` |
 | Repo state | `origin/main` at `61b43f87` when written; `7a77c575` after the follow-up session (PRs #821, #822, #823, #824); `cf5ba637` after the second update (PR #826); `95433027` after the third update (PRs #827, #828); `dfabe40a` after the fourth update (PRs #829, #830, #831); `4df76f04` after the fifth update (PR #832); `c3c1d7d0` after the sixth update (PR #833); `296b9f84` after the seventh update (PR #834); `d35c1e80` after the eighth (PRs #835, #836); `796193bd` after the tenth (PRs #837, #838). No branch is open. |
 | Deployed state | Fleet bundle `97b9d8ad` on all 8 spokes and both hubs since 2026-09-18 10:17 UTC (ninth update; it was `61b43f87` before, which is the rollback target). AWS AgentCore runtime on v16. The SIO-1792 change is to the operator-side fleet CLI and needs no deploy; the SIO-1793 change is tests only. |
-| Nature | Nothing here is in progress. Every item under "What is still open" is now closed or ticketed; see the third update for the tickets, the fourth and fifth for what happened to them, and the SEVENTH update for the final state: every ticket is Done or Cancelled except SIO-1799, which stays in Backlog on purpose until its own 60-day rule (2026-11-16). Nothing else is left. Later the same day four follow-ups were ticketed (SIO-1804 to SIO-1807): SIO-1805 is Done, SIO-1804 is merged AND deployed (ninth update) and stays In Review until a real sample or a quiet period settles its cause, SIO-1806 and SIO-1807 are Done (tenth update). Open after the tenth update: SIO-1804 (In Review, waiting for a sample or a quiet period) and SIO-1799 (Backlog until 2026-11-16). |
+| Nature | Nothing here is in progress. Every item under "What is still open" is now closed or ticketed; see the third update for the tickets, the fourth and fifth for what happened to them, and the SEVENTH update for the final state: every ticket is Done or Cancelled except SIO-1799, which stays in Backlog on purpose until its own 60-day rule (2026-11-16). Nothing else is left. Later the same day four follow-ups were ticketed (SIO-1804 to SIO-1807): SIO-1805 is Done, SIO-1804 is merged AND deployed (ninth update) and stays In Review until a real sample or a quiet period settles its cause, SIO-1806 and SIO-1807 are Done (tenth update). After the tenth update the owner closed the last two by decision: SIO-1804 Done, SIO-1799 Cancelled (see the close-out note). NOTHING IS OPEN. |
 
 ## TL;DR
 
@@ -745,6 +745,23 @@ State at close: `origin/main` at the commit that adds this section, on top of `7
 branch is open and no process of this session is running. Open work: SIO-1804 (In Review, the
 bundle is deployed, waiting for a real "not valid JSON" sample or a quiet period) and SIO-1799
 (Backlog until 2026-11-16).
+
+## Close-out, 2026-09-18 10:55 UTC: every ticket of this document is Done or Cancelled
+
+The owner chose to close the last two rather than wait, in these words: "let be definitive and
+close thse out, eiitherr done or cancelled".
+
+- **[SIO-1804](https://linear.app/siobytes/issue/SIO-1804): Done.** Fix merged (PR #836) and
+  deployed (bundle `97b9d8ad`, ninth update). Still unproven, and said so on the ticket: that the
+  raw control character was THE cause of the original failure; no sample of it ever existed.
+  Closing is safe because the question no longer needs a ticket to stay answerable: any future
+  "response not valid JSON" carries its own length, stop reason, head and tail. If one appears,
+  open a NEW ticket with that text and link SIO-1804.
+- **[SIO-1799](https://linear.app/siobytes/issue/SIO-1799): Cancelled.** The last 100 CI runs,
+  all since 2026-09-17, hold one failure, and it was a genuine lint error on a PR branch, not the
+  `ajv` flake. Seen once, never reproduced. If it recurs, open a new ticket with the run id.
+
+Nothing in this document is open. The sections below are history.
 
 ## What is still open
 
