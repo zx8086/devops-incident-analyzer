@@ -24,10 +24,16 @@ function fakeProcess(exitCode?: number): TunnelProcess & { resolveExit: (code: n
 	return { pid: 4242, exited, resolveExit };
 }
 
-// A fetch stand-in: each call answers with the next value (the last one repeats).
+// A fetch stand-in: each call answers with the next value (the last one repeats). `true` answers
+// the way a real hub does ({ ok, server_id, ... }); `false` refuses the connection.
+const HUB_HEALTH = { ok: true, version: 1, server_id: "srv-1", started_at: "2026-09-18T00:00:00Z" };
 function answers(...oks: boolean[]): TunnelDeps["fetch"] {
 	let i = 0;
-	return async () => ({ ok: oks[Math.min(i++, oks.length - 1)] ?? false });
+	return async () => {
+		const ok = oks[Math.min(i++, oks.length - 1)] ?? false;
+		if (!ok) throw new TypeError("Unable to connect");
+		return { ok: true, json: async () => HUB_HEALTH };
+	};
 }
 
 type Harness = TunnelDeps & { killed: number[]; signals: string[]; spawned: number };
@@ -96,7 +102,7 @@ describe("withTunnel", () => {
 			spawn: () => fakeProcess(255),
 			fetch: async () => {
 				attempts += 1;
-				return { ok: false };
+				throw new TypeError("Unable to connect");
 			},
 		});
 		await expect(withTunnel({ ...opts, attempts: 30 }, async () => 1, d)).rejects.toThrow(
@@ -112,6 +118,28 @@ describe("withTunnel", () => {
 		expect(d.spawned).toBe(0);
 		// The operator's own tunnel must survive this command.
 		expect(d.killed).toEqual([]);
+	});
+
+	// Greptile, PR #828: local_port is a plain local port. Something else answering 2xx on /health
+	// there is not a hub, and must not be reused as one.
+	test("a 2xx on /health that is not the hub's payload is not mistaken for an open hub tunnel", async () => {
+		const notAHub: TunnelDeps["fetch"] = async () => ({ ok: true, json: async () => ({ status: "healthy" }) });
+		const d = deps({ fetch: notAHub });
+		await expect(withTunnel(opts, async () => "ran", d)).rejects.toThrow(/did not answer \/health/);
+		// It went on to open its own tunnel (which also never became a hub) and tore it down.
+		expect(d.spawned).toBe(1);
+		expect(d.killed).toEqual([4242]);
+	});
+
+	test("a /health body that is not JSON counts as not answering", async () => {
+		const garbage: TunnelDeps["fetch"] = async () => ({
+			ok: true,
+			json: async () => {
+				throw new SyntaxError("Unexpected token");
+			},
+		});
+		const d = deps({ fetch: garbage });
+		await expect(withTunnel(opts, async () => "ran", d)).rejects.toThrow(/did not answer \/health/);
 	});
 
 	test("the happy path runs fn once the hub answers, then tears the tunnel down", async () => {
@@ -214,6 +242,18 @@ describe("listAgents", () => {
 		await withFetch(stalled, async () => {
 			const error = await listAgents("http://127.0.0.1:1", "t").catch((e: unknown) => e);
 			expect(error).not.toBeInstanceOf(HubHttpError);
+		});
+	});
+
+	// Greptile, PR #828: a 2xx whose body is not JSON is an answer retrying will not change (the
+	// port is not serving a hub). Left as a SyntaxError it would be retried until the rollout
+	// poll's ten-minute deadline.
+	test("a 2xx with a body that is not JSON is a HubHttpError, not a retryable transport failure", async () => {
+		const html = (async () => new Response("<html>not a hub</html>", { status: 200 })) as unknown as typeof fetch;
+		await withFetch(html, async () => {
+			const error = await listAgents("http://127.0.0.1:1", "t").catch((e: unknown) => e);
+			expect(error).toBeInstanceOf(HubHttpError);
+			expect(String((error as Error).message)).toContain("not JSON");
 		});
 	});
 });

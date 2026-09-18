@@ -11,7 +11,7 @@ export type TunnelProcess = { pid: number; exited: Promise<number> };
 
 export type TunnelDeps = {
 	spawn: (command: string[]) => TunnelProcess;
-	fetch: (url: string, init?: { signal?: AbortSignal }) => Promise<{ ok: boolean }>;
+	fetch: (url: string, init?: { signal?: AbortSignal }) => Promise<{ ok: boolean; json: () => Promise<unknown> }>;
 	sleep: (ms: number) => Promise<void>;
 	killGroup: (pid: number, signal: "SIGTERM" | "SIGKILL") => void;
 	log: (line: string) => void;
@@ -26,6 +26,15 @@ export type TunnelOptions = {
 };
 
 const TEARDOWN_GRACE_MS = 5_000;
+
+// The hub's handleHealth (scripts/coms-net-server.ts) answers { ok: true, version, server_id,
+// started_at }. local_port is a plain local port, so a 2xx alone is not proof of a hub: an
+// unrelated service answering /health there would be reused and run against (Greptile, PR #828).
+export function isHubHealth(body: unknown): boolean {
+	if (!body || typeof body !== "object") return false;
+	const b = body as { ok?: unknown; server_id?: unknown };
+	return b.ok === true && typeof b.server_id === "string" && b.server_id.length > 0;
+}
 
 const realDeps: TunnelDeps = {
 	// detached: the tunnel leads its OWN process group, so the whole group (aws + the plugin it
@@ -57,7 +66,8 @@ export async function withTunnel<T>(
 	// Bounded per attempt: Bun.sleep between attempts bounds the GAP, not the attempt.
 	const healthy = async (): Promise<boolean> => {
 		try {
-			return (await deps.fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(attemptTimeoutMs) })).ok;
+			const resp = await deps.fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(attemptTimeoutMs) });
+			return resp.ok && isHubHealth(await resp.json());
 		} catch {
 			return false;
 		}

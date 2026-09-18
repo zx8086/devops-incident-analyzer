@@ -14,8 +14,10 @@ import type { AgentCard, AgentListing } from "../../contracts/wire.ts";
 // poll of `fleet rollout`.
 const LIST_AGENTS_TIMEOUT_MS = 15_000;
 
-// The hub ANSWERED, and said no (bad token, 5xx). Distinct from a transport failure so the rollout
-// poll can retry a stall but still fail fast on an answer that retrying will not change.
+// The hub ANSWERED, and the answer is one retrying will not change: it said no (bad token, 5xx),
+// or it said something that is not a listing (a 2xx with a body that is not JSON, which means the
+// port is not serving a hub). Distinct from a transport failure so the rollout poll can retry a
+// stall but still fail fast on these (Greptile, PR #828, for the unparseable case).
 export class HubHttpError extends Error {}
 
 export async function listAgents(baseUrl: string, token: string, project = "default"): Promise<AgentCard[]> {
@@ -24,7 +26,13 @@ export async function listAgents(baseUrl: string, token: string, project = "defa
 		signal: AbortSignal.timeout(LIST_AGENTS_TIMEOUT_MS),
 	});
 	if (!resp.ok) throw new HubHttpError(`GET /v1/agents: ${resp.status} ${await resp.text()}`);
-	const listing = (await resp.json()) as AgentListing;
+	const text = await resp.text();
+	let listing: AgentListing;
+	try {
+		listing = JSON.parse(text) as AgentListing;
+	} catch {
+		throw new HubHttpError(`GET /v1/agents: ${resp.status} with a body that is not JSON (${text.slice(0, 80)})`);
+	}
 	return listing.agents ?? [];
 }
 
