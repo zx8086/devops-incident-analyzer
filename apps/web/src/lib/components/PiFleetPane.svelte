@@ -68,6 +68,7 @@ let prompt = $state("");
 // pi-fleet-scroll.ts, where it can be tested.
 let entriesSection = $state<HTMLElement | null>(null);
 let scroller = $state<HTMLElement | null>(null);
+let pickerHeight = $state(0);
 let seenEntries = 0;
 let seenNewest = "";
 let wasAtBottom = true;
@@ -232,8 +233,13 @@ function onKeydown(event: KeyboardEvent) {
        Inbox button stay reachable however far the report is scrolled.
        Deliberately uncapped (operator decision): on a short pane the picker can
        take most of the scroll area while pinned. -->
-  <div bind:this={scroller} class="flex-1 min-h-0 overflow-y-auto">
-    <div class="sticky top-0 z-20 bg-tommy-cream border-b border-gray-200">
+  <!-- SIO-1800: the pinned picker covers the top of this scroller, so an entry taller than
+       the pane, which `nearest` aligns by its TOP, opened with its status and the start of
+       its summary underneath the picker (127 px hidden, measured live on a 1,882 px
+       verdict). scroll-padding-top keeps scrollIntoView clear of the picker; its height is
+       measured because the picker is sized to its content (SIO-1721). -->
+  <div bind:this={scroller} class="flex-1 min-h-0 overflow-y-auto" style:scroll-padding-top="{pickerHeight}px">
+    <div bind:offsetHeight={pickerHeight} class="sticky top-0 z-20 bg-tommy-cream border-b border-gray-200">
     <section class="px-4 pt-2 pb-3">
       {#if pane.hubs.length === 0}
         <p class="text-xs text-gray-500">No spokes are registered on any configured hub.</p>
