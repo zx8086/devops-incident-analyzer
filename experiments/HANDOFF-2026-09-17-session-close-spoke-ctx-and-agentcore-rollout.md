@@ -5,10 +5,10 @@
 | Date | 2026-09-17 (session ran about 15:45 to 17:45 UTC) |
 | Tickets | [SIO-1786](https://linear.app/siobytes/issue/SIO-1786) Done (its user-side replay has since been run, see the update), [SIO-1787](https://linear.app/siobytes/issue/SIO-1787) Done (closed by the user 2026-09-17, was In Review when this was written), [SIO-1788](https://linear.app/siobytes/issue/SIO-1788) Done |
 | Related | [SIO-1726](https://linear.app/siobytes/issue/SIO-1726), [SIO-1734](https://linear.app/siobytes/issue/SIO-1734) (spoke context-mode, shipped earlier), [SIO-1774](https://linear.app/siobytes/issue/SIO-1774) (the change the AgentCore deploy shipped), [SIO-1784](https://linear.app/siobytes/issue/SIO-1784) (separate, own handover: `experiments/HANDOFF-2026-09-17-SIO-1784.md`) |
-| PRs | #819 merged as `798e9b29`, #820 merged as `61b43f87`; follow-up session #821 to #824; second update #826 merged as `cf5ba637`, #825 closed unmerged; third update #827 merged as `09781ab9`, #828 merged as `95433027`; fourth update #830 merged as `adde28a3`, #829 merged as `3dccce03`, #831 merged as `dfabe40a`; fifth update #832 merged as `4df76f04`; sixth update #833 merged as `c3c1d7d0`; seventh update #834 merged as `296b9f84` |
-| Repo state | `origin/main` at `61b43f87` when written; `7a77c575` after the follow-up session (PRs #821, #822, #823, #824); `cf5ba637` after the second update (PR #826); `95433027` after the third update (PRs #827, #828); `dfabe40a` after the fourth update (PRs #829, #830, #831); `4df76f04` after the fifth update (PR #832); `c3c1d7d0` after the sixth update (PR #833); `296b9f84` after the seventh update (PR #834). No branch is open. |
+| PRs | #819 merged as `798e9b29`, #820 merged as `61b43f87`; follow-up session #821 to #824; second update #826 merged as `cf5ba637`, #825 closed unmerged; third update #827 merged as `09781ab9`, #828 merged as `95433027`; fourth update #830 merged as `adde28a3`, #829 merged as `3dccce03`, #831 merged as `dfabe40a`; fifth update #832 merged as `4df76f04`; sixth update #833 merged as `c3c1d7d0`; seventh update #834 merged as `296b9f84`; eighth update #835 merged as `98904cf6`, #836 merged as `d35c1e80`; tenth update #837 merged as `dd9ca382`, #838 merged as `796193bd` |
+| Repo state | `origin/main` at `61b43f87` when written; `7a77c575` after the follow-up session (PRs #821, #822, #823, #824); `cf5ba637` after the second update (PR #826); `95433027` after the third update (PRs #827, #828); `dfabe40a` after the fourth update (PRs #829, #830, #831); `4df76f04` after the fifth update (PR #832); `c3c1d7d0` after the sixth update (PR #833); `296b9f84` after the seventh update (PR #834); `d35c1e80` after the eighth (PRs #835, #836); `796193bd` after the tenth (PRs #837, #838). No branch is open. |
 | Deployed state | Fleet bundle `97b9d8ad` on all 8 spokes and both hubs since 2026-09-18 10:17 UTC (ninth update; it was `61b43f87` before, which is the rollback target). AWS AgentCore runtime on v16. The SIO-1792 change is to the operator-side fleet CLI and needs no deploy; the SIO-1793 change is tests only. |
-| Nature | Nothing here is in progress. Every item under "What is still open" is now closed or ticketed; see the third update for the tickets, the fourth and fifth for what happened to them, and the SEVENTH update for the final state: every ticket is Done or Cancelled except SIO-1799, which stays in Backlog on purpose until its own 60-day rule (2026-11-16). Nothing else is left. Later the same day four follow-ups were ticketed (SIO-1804 to SIO-1807): SIO-1805 is Done, SIO-1804 is merged AND deployed (ninth update) and stays In Review until a real sample or a quiet period settles its cause, SIO-1806 and SIO-1807 are Backlog. |
+| Nature | Nothing here is in progress. Every item under "What is still open" is now closed or ticketed; see the third update for the tickets, the fourth and fifth for what happened to them, and the SEVENTH update for the final state: every ticket is Done or Cancelled except SIO-1799, which stays in Backlog on purpose until its own 60-day rule (2026-11-16). Nothing else is left. Later the same day four follow-ups were ticketed (SIO-1804 to SIO-1807): SIO-1805 is Done, SIO-1804 is merged AND deployed (ninth update) and stays In Review until a real sample or a quiet period settles its cause, SIO-1806 and SIO-1807 are Done (tenth update). Open after the tenth update: SIO-1804 (In Review, waiting for a sample or a quiet period) and SIO-1799 (Backlog until 2026-11-16). |
 
 ## TL;DR
 
@@ -689,6 +689,62 @@ investigate traffic, the repair was probably the cause. Closing it is the owner'
 State at close: `origin/main` at the commit that adds this section, on top of `97b9d8ad`. No
 branch is open, no process of this session is running, and the operator's own production tunnel
 on 8788 was left alone and is still listening.
+
+## Tenth update, 2026-09-18 10:20 to 10:50 UTC (same session): SIO-1806 and SIO-1807 done. Both tickets' premises were wrong, and measuring found the real defects
+
+**[SIO-1806](https://linear.app/siobytes/issue/SIO-1806), PR #837 (`dd9ca382`): Done, live.**
+The ticket asked whether Confluence CQL treats `~ "a b"` as a bag of words like JQL. It does. But
+measured on a real incident, phrase-quoting moved the match count from 3376 to 3369, and no
+expected runbook was in the 25 results the tool saw either way. Three real defects:
+
+- `ORDER BY lastModified DESC` plus the default page of 25 handed `scorePage` the most recently
+  EDITED matches (sprint retrospectives scoring 0). Removed; Confluence then ranks by relevance.
+- Single-word keywords OR-ed over full text swamp the query. Now: query 1 is runbook-LIKE pages
+  (Confluence's own blueprint labels `kb-how-to-article` and `kb-troubleshooting-article`,
+  `runbook`, or a title word) about the service or citing a keyword; query 2 is pages citing the
+  error, where a phrase stands alone and a single word must co-occur with the service; the old
+  broad query runs only as a fallback. The only label the scorer rewarded, `runbook`, is on one
+  page of the whole site.
+- The tool read `id`, `spaceKey`, `labels` and `lastUpdated` off the top level of a search result,
+  where none exist, so every link was `/wiki/spaces/undefined/pages/undefined` and the freshness
+  and label scores never applied. The SIO-1805 class of defect again: the fixtures supplied the
+  imagined shape. They now carry the captured one. Labels need `expand: "content.metadata.labels"`.
+
+The service is NEVER phrase-quoted (a full deployment name matched 0 pages as a phrase, 45 as
+words); multi-word keywords are, through `isPhraseKeyword`, shared with the Jira tool. Verified in
+the RUNNING server after it hot-reloaded: the service's support notes and support guide come first,
+then troubleshooting guides and a runbook, all with real ids, spaces, dates and links. A second
+real incident returns the datastore troubleshooting page. 205 package tests, mutation-checked.
+
+**[SIO-1807](https://linear.app/siobytes/issue/SIO-1807), PR #838 (`796193bd`): Done.** The
+knowledge-graph package's local segfault was NOT environmental, and this document and a memory
+note said it was. Cause: `LadybugStore.close()` skips the native close because lbug's Database
+destructor segfaults Bun (SIO-954), then nulled `db` and `conn`. That made the native objects
+collectable, so the garbage collector ran the same destructor MID-RUN and the next store the
+process opened crashed at `0x8`. The app never saw it (one store, never closed);
+`ladybug.integration.test.ts` opens ten, and CI skips that file (SIO-1100), which is the whole
+reason CI was green. `close()` now parks the handles on `globalThis` for the life of the process.
+
+The deciding measurement, on raw lbug with four databases in one process: references KEPT, never
+a crash in any init-stage combination; references DROPPED plus enough work to trigger a
+collection, a crash on the next open every time. Worth knowing for next time:
+
+- "Zero tests executed" was false. `bun test` buffers its `(pass)` lines when piped and a crash
+  loses them.
+- Every test passed ALONE with exit 0. "Crashes only with several stores in one process" means a
+  collected handle, not a handle cap.
+- My first GC test refuted the true hypothesis: it retained the `LadybugStore` objects, which
+  does not retain the native handles once `close()` has nulled them.
+- The integration file's old rule, "hold the file's total at three stores", was a workaround for
+  this without knowing the cause. That comment is corrected.
+
+`cd packages/knowledge-graph && bun run test` now gives 195 pass, sandboxed, on merged `main`. A
+segfault there is from now on a real regression.
+
+State at close: `origin/main` at the commit that adds this section, on top of `796193bd`. No
+branch is open and no process of this session is running. Open work: SIO-1804 (In Review, the
+bundle is deployed, waiting for a real "not valid JSON" sample or a quiet period) and SIO-1799
+(Backlog until 2026-11-16).
 
 ## What is still open
 
