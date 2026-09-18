@@ -76,7 +76,7 @@ export interface GetRunbookContext {
 }
 
 // SIO-1806: CQL `~ "a b"` is a stemmed bag of words, as in JQL (measured: `title ~ "AFS season
-// code"` matched "AFS vs FMS season coding"; `text ~ "styles scope"` matched 317 pages, 0 as a
+// code"` matched a title saying "season coding"; `text ~ "styles scope"` matched 317 pages, 0 as a
 // phrase). A keyword with whitespace is searched as a phrase. The SERVICE never is: a deployment
 // name like `a-b-c-v3` matches 0 pages as a phrase and 45 as words, and words is what finds it.
 function clause(field: "text" | "title", term: string, phrase: boolean): string {
