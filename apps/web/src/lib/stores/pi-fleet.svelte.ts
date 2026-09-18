@@ -284,9 +284,17 @@ function createPiFleetStore() {
 			if (startedIn !== generation) return;
 			fleet = applyLoadError(fleet, describeLoadFailure(error, `read the ${hubKey} inbox`));
 		} finally {
-			// Always released: this read is finished either way, and a stale flag would
-			// leave the refresh button spinning forever after a clear.
-			mailboxBusy = null;
+			// mailboxBusy is ONE shared slot holding the hub currently loading, and the
+			// pane disables that hub's Inbox button on it. So release it only while it
+			// is still ours (Greptile, PR #842): an older read settling after a newer
+			// one started would otherwise blank the newer request's flag, re-enabling
+			// its button mid-flight and inviting a duplicate refresh.
+			//
+			// This cannot strand the flag the way a generation check here would. The
+			// guard is ownership, not freshness: whichever read claimed the slot last
+			// is the one that clears it, and every path through this function reaches
+			// this block.
+			if (mailboxBusy === hubKey) mailboxBusy = null;
 		}
 	}
 
