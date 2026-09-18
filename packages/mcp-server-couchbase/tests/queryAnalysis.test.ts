@@ -673,3 +673,104 @@ describe("sqlppParser read-only gate regression (SIO-1107)", () => {
 		expect(sqlppParser.modifiesStructure(parsed)).toBe(true);
 	});
 });
+
+// SIO-1813: this gate IS the read-only boundary for the server, and it used to split
+// on the space character only, so "DELETE\nFROM c" produced a first token of
+// "DELETE\nFROM" and passed. Every shape the query service reads as one statement
+// keyword must be read the same way here.
+describe("sqlppParser read-only gate whitespace and evasion regression (SIO-1813)", () => {
+	const variants = (keyword: string, rest: string): string[] => [
+		`${keyword}\n${rest}`,
+		`${keyword}\t${rest}`,
+		`${keyword}\r\n${rest}`,
+		`\n\t ${keyword} ${rest}`,
+		`-- leading comment\n${keyword} ${rest}`,
+		`-- leading comment\r\n${keyword}\t${rest}`,
+		`/* leading comment */${keyword} ${rest}`,
+		`/* multi\nline */\r\n${keyword}\n${rest}`,
+		// A comment is a token separator to the server; stripping it to "" glued the keyword to the next word.
+		`${keyword}/**/${rest}`,
+		`${keyword.toLowerCase()}\n${rest}`,
+	];
+
+	const dataStatements: [string, string][] = [
+		["INSERT", "INTO c VALUES ('k', {})"],
+		["UPDATE", "c SET a = 1"],
+		["DELETE", "FROM c WHERE a = 1"],
+		["UPSERT", "INTO c VALUES ('k', {})"],
+		["MERGE", "INTO c USING d ON c.id = d.id WHEN MATCHED THEN DELETE"],
+	];
+
+	const structureStatements: [string, string][] = [
+		["CREATE", "INDEX idx ON c(a)"],
+		["DROP", "INDEX idx ON c"],
+		["ALTER", "INDEX idx ON c WITH {}"],
+		["BUILD", "INDEX ON c(idx)"],
+		["ANALYZE", "KEYSPACE c(a)"],
+	];
+
+	test.each(dataStatements.flatMap(([keyword, rest]) => variants(keyword, rest)))(
+		"%j is caught as data modification",
+		(q) => {
+			expect(sqlppParser.modifiesData(sqlppParser.parse(q))).toBe(true);
+		},
+	);
+
+	test.each(structureStatements.flatMap(([keyword, rest]) => variants(keyword, rest)))(
+		"%j is caught as structure modification",
+		(q) => {
+			expect(sqlppParser.modifiesStructure(sqlppParser.parse(q))).toBe(true);
+		},
+	);
+
+	test.each([
+		"(DELETE FROM c)",
+		"( DELETE FROM c )",
+		"((UPDATE c SET a = 1))",
+		// No whitespace is needed between a keyword and a backtick identifier.
+		"UPDATE`c` SET a = 1",
+		"SELECT 1; DELETE FROM c",
+		"SELECT 1;DELETE FROM c",
+		"SELECT ';' ;\nUPSERT INTO c VALUES ('k', {})",
+		// PREPARE and EXECUTE are refused wholesale: EXECUTE runs a server-side statement
+		// (or a UDF) this gate cannot inspect, and PREPARE has no use without it.
+		"PREPARE p FROM DELETE FROM c",
+		"PREPARE p AS SELECT 1",
+		"EXECUTE p",
+		"EXECUTE FUNCTION f()",
+	])("%j is caught as data modification", (q) => {
+		expect(sqlppParser.modifiesData(sqlppParser.parse(q))).toBe(true);
+	});
+
+	test.each(["(DROP INDEX idx ON c)", "SELECT 1;\nDROP INDEX idx ON c", "EXPLAIN SELECT 1; CREATE INDEX idx ON c(a)"])(
+		"%j is caught as structure modification",
+		(q) => {
+			expect(sqlppParser.modifiesStructure(sqlppParser.parse(q))).toBe(true);
+		},
+	);
+
+	test.each([
+		// EXPLAIN and ADVISE plan a statement without running it, so they stay allowed (SIO-1107).
+		"EXPLAIN DELETE FROM c WHERE a = 1",
+		"EXPLAIN\nSELECT * FROM c",
+		"ADVISE SELECT * FROM c WHERE a = 1",
+		"SELECT\n*\nFROM c\nWHERE a = 1",
+		"(SELECT 1)",
+		"SELECT 1;",
+		"SELECT * FROM c WHERE note = 'x; DELETE FROM c'",
+		'SELECT * FROM c WHERE note = "x;\nDROP INDEX idx ON c"',
+		"SELECT `delete`, `drop` FROM c",
+		"SELECT * FROM c WHERE verb IN ['DELETE', 'CREATE']",
+	])("%j passes modifiesData and modifiesStructure", (q) => {
+		const parsed = sqlppParser.parse(q);
+		expect(sqlppParser.modifiesData(parsed)).toBe(false);
+		expect(sqlppParser.modifiesStructure(parsed)).toBe(false);
+	});
+
+	// Same root cause: "\nLIMIT" was never its own token, so runSqlPlusPlusQuery appended a second LIMIT.
+	test("clause flags survive non-space whitespace", () => {
+		const parsed = sqlppParser.parse("SELECT *\nFROM c\nWHERE a = 1\r\nLIMIT\t5");
+		expect(parsed.hasWhere).toBe(true);
+		expect(parsed.hasLimit).toBe(true);
+	});
+});
