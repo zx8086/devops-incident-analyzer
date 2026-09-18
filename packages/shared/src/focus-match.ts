@@ -16,6 +16,15 @@
 const SUFFIX_PATTERN = /-?(consumer|sink|eventing|prod|stg|dev|svc|service)$/g;
 const MIN_TOKEN_LENGTH = 4;
 
+// SIO-1797: tokens that name no service, so sharing one proves nothing. SUFFIX_PATTERN
+// strips `-service` only at END of string: a focus like `pvh-services-styles-v3` keeps
+// the token (it ends in `-v3`), and an alarm haystack `<name>-service-CPU-... AWS/ECS`
+// keeps it too. One shared `service` then scoped 25 of an estate's 26 alarms to a focus
+// none of them names. Skipped in matchesFocus's overlap path ONLY: tokenize() output is
+// pinned by tests, and normalize() output is persisted graph identity (SIO-1103).
+// Only the reproduced token is listed; add another when a run shows it, not before.
+const GENERIC_TOKENS = new Set(["service"]);
+
 export function normalize(s: string): string {
 	let result = s.toLowerCase();
 	// Strip suffix tokens iteratively (a group can be e.g. `notifications-service-consumer`).
@@ -98,7 +107,7 @@ export function matchesFocus(haystack: string, focusServices: string[]): boolean
 		}
 		const sTokens = tokenize(svc);
 		for (const t of sTokens) {
-			if (hTokens.has(t)) return true;
+			if (!GENERIC_TOKENS.has(t) && hTokens.has(t)) return true;
 		}
 	}
 	return false;
