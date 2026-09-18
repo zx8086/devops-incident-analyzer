@@ -139,6 +139,15 @@ export const ToolErrorSchema = z.object({
 	// succeeded after this error -- the sub-agent self-corrected. Optional for backward-compat
 	// with any persisted/replayed state predating this field.
 	recovered: z.boolean().nullish(),
+	// SIO-1815: PROVEN recovery -- a later successful call of the same tool that names the
+	// SAME entity (a shared id/name/path/arn/index with an equal value, and none that
+	// differs). `recovered` above is deliberately lenient: it only keeps a self-corrected
+	// run out of the degraded-rate cap, where a false positive costs a little confidence
+	// headroom. Anything that HIDES a failure from the report -- the Gaps filter, the
+	// "not a gap" label on the aggregator's input, the daily log -- must use this one,
+	// because "no conflict was found" is not proof: a query tool has no entity arguments at
+	// all, so nothing about it can conflict (Greptile, PR #846).
+	recoveredSameTarget: z.boolean().nullish(),
 });
 export type ToolError = z.infer<typeof ToolErrorSchema>;
 
@@ -147,6 +156,12 @@ export type ToolError = z.infer<typeof ToolErrorSchema>;
 // reflects normal self-correction, not a malfunction.
 export function countsTowardDegradedRate(e: Pick<ToolError, "category" | "recovered">): boolean {
 	return isDegradingCategory(e.category) && !e.recovered;
+}
+
+// SIO-1815: whether an error may be presented as a NON-gap. Stricter than the rate rule
+// above on purpose; see `recoveredSameTarget`.
+export function isBenignForGaps(e: Pick<ToolError, "category" | "recoveredSameTarget">): boolean {
+	return !isDegradingCategory(e.category) || e.recoveredSameTarget === true;
 }
 
 // SIO-764: Per-domain structured findings derived from toolOutputs[] by the

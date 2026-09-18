@@ -3,6 +3,7 @@ import { getLogger } from "@devops-agent/observability";
 import {
 	countsTowardDegradedRate,
 	type DataSourceResult,
+	isBenignForGaps,
 	type ReportCaveat,
 	redactPiiContent,
 } from "@devops-agent/shared";
@@ -143,7 +144,7 @@ export function buildResultsBlock(results: DataSourceResult[]): string {
 							// upheld. Same wording the absence judge is given (SIO-1164).
 							.map(
 								(e) =>
-									`- ${e.toolName} [${e.category}]: ${e.message}${e.recovered ? " [a later call to this tool SUCCEEDED -- recovered, not a gap]" : ""}`,
+									`- ${e.toolName} [${e.category}]: ${e.message}${e.recoveredSameTarget ? " [a later call to this tool for the SAME target SUCCEEDED -- recovered, not a gap]" : ""}`,
 							)
 							.join("\n")}`
 					: "";
@@ -275,7 +276,7 @@ export function buildAggregatorMessages(
 	// When tool errors indicate connectivity problems, instruct the LLM to lead with that
 	// SIO-1815: only errors that still count. A benign no-data outcome or a call the sub-agent
 	// already retried successfully is not a reason to lead the report with a connectivity problem.
-	const failedSources = state.dataSourceResults.filter((r) => (r.toolErrors ?? []).some(countsTowardDegradedRate));
+	const failedSources = state.dataSourceResults.filter((r) => (r.toolErrors ?? []).some((e) => !isBenignForGaps(e)));
 	const connectivityGuidance =
 		failedSources.length > 0
 			? `\n\nTOOL FAILURE GUIDANCE: ${failedSources.length} datasource(s) reported tool errors. When tool errors show repeated metadata/connection failures, the report summary must lead with the infrastructure connectivity problem (e.g. "brokers are unreachable") as the primary finding. Do not present connectivity failure as one possibility among equals -- state it as the leading diagnosis and list other causes as secondary.`
@@ -677,7 +678,10 @@ function toolNamesInBullet(line: string): string[] {
 // not count toward the cap -- iff it names one or more investigation tools, EVERY named tool
 // has at least one structured toolError this turn, AND every one of those errors is
 // NON-degrading (no-data/not-found, e.g. couchbase no-index or a document not-found) or was
-// RECOVERED by a later successful call of the same tool (SIO-1815). The structured layer
+// PROVABLY recovered: a later successful call of the same tool for the SAME target
+// (`recoveredSameTarget`, SIO-1815). The lenient `recovered` flag is NOT enough here -- it only
+// means nothing conflicted, which is always true of a query tool with no entity arguments,
+// and this filter removes a failure from the report (Greptile, PR #846). The structured layer
 // (isDegradingCategory, SIO-1087) already deemed those benign; the prose bullet is merely
 // narrating the same benign discovery outcome, so it must not cap confidence. This closes
 // the mismatch where a "capella_run_sql_plus_plus_query returned planning failure" bullet
@@ -698,16 +702,15 @@ export function filterStructurallyBenignGapBullets(
 	// Index every observed toolError by toolName -> the categories seen for it. toolName is
 	// the bare MCP tool name (ToolMessage.name), which matches the snake_case token the LLM
 	// writes in prose -- so exact-equality lookup is correct (no namespacing).
-	// SIO-1815: the value is "does this error still count", from the shared predicate the
-	// degraded-rate cap already uses, not the bare category. SIO-1164 taught that cap about
-	// `recovered` and missed this sibling, so a retried-and-recovered call was excluded from
-	// the rate and still upheld here as a degrading bullet.
-	const countsByTool = new Map<string, boolean[]>();
+	// SIO-1815: the value is "may this error be presented as a non-gap" (isBenignForGaps),
+	// not the bare category: a call that was retried and provably recovered used to be
+	// excluded from the rate cap and still upheld here as a degrading bullet.
+	const benignByTool = new Map<string, boolean[]>();
 	for (const r of results) {
 		for (const e of r.toolErrors ?? []) {
-			const list = countsByTool.get(e.toolName) ?? [];
-			list.push(countsTowardDegradedRate(e));
-			countsByTool.set(e.toolName, list);
+			const list = benignByTool.get(e.toolName) ?? [];
+			list.push(isBenignForGaps(e));
+			benignByTool.set(e.toolName, list);
 		}
 	}
 
@@ -724,10 +727,10 @@ export function filterStructurallyBenignGapBullets(
 		const allBenign =
 			names.length > 0 &&
 			names.every((n) => {
-				const counts = countsByTool.get(n);
-				// A named tool with NO structured error (counts === undefined) fails this predicate,
+				const benign = benignByTool.get(n);
+				// A named tool with NO structured error (benign === undefined) fails this predicate,
 				// so the bullet is kept -- suppression needs every named tool matched-and-benign.
-				return counts?.every((c) => !c) ?? false;
+				return benign?.every(Boolean) ?? false;
 			});
 		if (allBenign) suppressed.push(line);
 		else kept.push(line);

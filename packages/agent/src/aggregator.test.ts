@@ -823,13 +823,25 @@ describe("filterStructurallyBenignGapBullets (SIO-1162 structured reconciliation
 		retryable: false,
 	};
 
-	test("suppresses a bullet for an error the sub-agent already recovered from", () => {
+	test("suppresses a bullet for an error PROVABLY recovered (same target)", () => {
+		const { kept, suppressed } = filterStructurallyBenignGapBullets(
+			[MR_BULLET],
+			resultWith([{ ...MR_ERROR, recovered: true, recoveredSameTarget: true }]),
+		);
+		expect(suppressed).toEqual([MR_BULLET]);
+		expect(kept).toHaveLength(0);
+	});
+
+	// Greptile, PR #846: the lenient flag only means "nothing conflicted", which is always true
+	// of a query tool with no entity arguments. It keeps a run out of the rate cap; it must
+	// not remove a failure from the report.
+	test("the lenient `recovered` flag alone does NOT suppress the bullet", () => {
 		const { kept, suppressed } = filterStructurallyBenignGapBullets(
 			[MR_BULLET],
 			resultWith([{ ...MR_ERROR, recovered: true }]),
 		);
-		expect(suppressed).toEqual([MR_BULLET]);
-		expect(kept).toHaveLength(0);
+		expect(kept).toEqual([MR_BULLET]);
+		expect(suppressed).toHaveLength(0);
 	});
 
 	// The other direction: the same error NOT followed by a success is a real malfunction,
@@ -837,7 +849,10 @@ describe("filterStructurallyBenignGapBullets (SIO-1162 structured reconciliation
 	test("keeps the same bullet when the error was not recovered, or only some were", () => {
 		expect(filterStructurallyBenignGapBullets([MR_BULLET], resultWith([MR_ERROR])).kept).toEqual([MR_BULLET]);
 		expect(
-			filterStructurallyBenignGapBullets([MR_BULLET], resultWith([{ ...MR_ERROR, recovered: true }, MR_ERROR])).kept,
+			filterStructurallyBenignGapBullets(
+				[MR_BULLET],
+				resultWith([{ ...MR_ERROR, recovered: true, recoveredSameTarget: true }, MR_ERROR]),
+			).kept,
 		).toEqual([MR_BULLET]);
 	});
 

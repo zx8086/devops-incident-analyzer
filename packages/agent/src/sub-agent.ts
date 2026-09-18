@@ -1038,6 +1038,20 @@ function targetsDiffer(failed: Map<string, string>, succeeded: Map<string, strin
 	return false;
 }
 
+// True only on POSITIVE evidence: at least one entity both calls name, with the same
+// value, and none that differs. "Nothing conflicted" is not this -- a query tool has no
+// entity arguments, and two calls can name entirely different kinds of thing.
+function sameTarget(failed: Map<string, string>, succeeded: Map<string, string>): boolean {
+	let shared = 0;
+	for (const [key, value] of failed) {
+		const other = succeeded.get(key);
+		if (other === undefined) continue;
+		if (other !== value) return false;
+		shared++;
+	}
+	return shared > 0;
+}
+
 type TrajectoryMessage = {
 	_getType(): string;
 	content: unknown;
@@ -1097,13 +1111,19 @@ function markRecoveredToolErrors(errors: ToolError[], messages: TrajectoryMessag
 		const failedMsg = messages[errorIndex];
 		errorCursor++;
 		const failedEntity = failedMsg ? entityOf(failedMsg) : undefined;
-		const recovered = (successesByTool.get(error.toolName) ?? []).some(
-			(s) =>
-				s.index > errorIndex &&
-				// Unknown on either side: nothing to compare, the SIO-1164 name-only rule stands.
-				(failedEntity === undefined || s.entity === undefined || !targetsDiffer(failedEntity, s.entity)),
+		const later = (successesByTool.get(error.toolName) ?? []).filter((s) => s.index > errorIndex);
+		// LENIENT (SIO-1164, rate cap only): any later success that does not name a different
+		// entity. Unknown on either side means nothing to compare, and the name-only rule stands.
+		const recovered = later.some(
+			(s) => failedEntity === undefined || s.entity === undefined || !targetsDiffer(failedEntity, s.entity),
 		);
-		return recovered ? { ...error, recovered: true } : error;
+		// STRICT (what may hide a gap): positive proof it was the same thing. Never true for a
+		// call with no entity arguments, or a trajectory with no call ids -- those stay visible.
+		const recoveredSameTarget = later.some(
+			(s) => failedEntity !== undefined && s.entity !== undefined && sameTarget(failedEntity, s.entity),
+		);
+		if (!recovered) return error;
+		return { ...error, recovered: true, ...(recoveredSameTarget && { recoveredSameTarget: true }) };
 	});
 }
 
@@ -2053,6 +2073,7 @@ ${state.correlationFetchDirective}`
 						// SIO-1815: the log said "1 tool error" for a call that was retried and
 						// succeeded 5s later, and only a LangSmith trace could tell the two apart.
 						...(e.recovered && { recovered: true }),
+						...(e.recoveredSameTarget && { recoveredSameTarget: true }),
 					})),
 				}),
 			},

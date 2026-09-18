@@ -80,7 +80,9 @@ export function collectToolFailures(state: AgentStateType): string[] {
 			// SIO-1815: a call the sub-agent retried successfully is not a failure OF THE TURN.
 			// This line is recalled into later sessions, where "gitlab:unknown" read as a
 			// broken datasource for a lookup that completed 5s later.
-			if (r.dataSourceId && e.category && !e.recovered) tags.add(`${r.dataSourceId}:${e.category}`);
+			// Proven recovery only (recoveredSameTarget): the lenient flag would also drop a
+			// failed query that a later, unrelated query happened to follow.
+			if (r.dataSourceId && e.category && !e.recoveredSameTarget) tags.add(`${r.dataSourceId}:${e.category}`);
 		}
 	}
 	return [...tags].sort().slice(0, MAX_TOOL_FAILURE_TAGS);

@@ -406,6 +406,55 @@ describe("extractToolErrors SIO-1164 recovery detection", () => {
 		expect(same[0]?.recovered).toBe(true);
 	});
 
+	// Greptile, PR #846, second round: "nothing conflicted" is not proof. These are the two
+	// holes the conflict-only rule left, plus the no-call-id fallback. All three stay LENIENTLY
+	// recovered (SIO-1164: out of the rate cap) and none is PROVEN, so none may hide a gap.
+	test("proven recovery needs positive evidence; leniency alone never hides a gap", () => {
+		const flags = (errors: ReturnType<typeof extractToolErrors>) =>
+			errors.map((e) => [e.recovered ?? false, e.recoveredSameTarget ?? false]);
+
+		// A query tool has no entity arguments: a failed query on one keyspace followed by a
+		// successful query on another conflicts on nothing.
+		const SQL = "capella_run_sql_plus_plus_query";
+		expect(
+			flags(
+				extractToolErrors([
+					call("s1", { query: "SELECT * FROM `shop`.`inventory`.`a` WHERE x = 1" }),
+					answer("s1", SQL, "syntax error"),
+					call("s2", { query: "SELECT * FROM `shop`.`styles`.`b` LIMIT 1" }),
+					answer("s2", SQL, "[]", "success"),
+				]),
+			),
+		).toEqual([[true, false]]);
+
+		// The two calls name different KINDS of thing: nothing shared, nothing proven.
+		expect(
+			flags(
+				extractToolErrors([
+					call("f1", { file_path: "src/A.java" }),
+					answer("f1", "gitlab_get_file_content", "Error: 500"),
+					call("f2", { project_id: 1 }),
+					answer("f2", "gitlab_get_file_content", "{}", "success"),
+				]),
+			),
+		).toEqual([[true, false]]);
+
+		// No call ids at all (the shape of the SIO-1164 tests above).
+		expect(flags(extractToolErrors([toolMsg("timeout", SQL), toolMsg("[]", SQL, "success")]))).toEqual([[true, false]]);
+
+		// And the live case IS proven: same project, same merge request.
+		expect(
+			flags(
+				extractToolErrors([
+					call("c1", { project_id: 1, merge_request_iid: 883, include: ["diffs", "pipelines"] }),
+					answer("c1", MR, "Validation error: include cannot contain more than 1 items"),
+					call("c2", { merge_request_iid: 883, project_id: "1", include: ["diffs"] }),
+					answer("c2", MR, '{"iid":883}', "success"),
+				]),
+			),
+		).toEqual([[true, true]]);
+	});
+
 	test("one failure recovered and one not, on the same tool, are told apart", () => {
 		const errors = extractToolErrors([
 			call("c1", { merge_request_iid: 1 }),

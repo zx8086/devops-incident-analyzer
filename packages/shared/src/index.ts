@@ -69,6 +69,7 @@ export {
 	IncidentAnchorSchema,
 	type InvestigationFocus,
 	InvestigationFocusSchema,
+	isBenignForGaps,
 	isDegradingCategory,
 	isRetryableCategory,
 	type KafkaFindings,
