@@ -187,6 +187,14 @@ const statusLine = $derived.by(() => {
           />
         {/each}
 
+        <!-- SIO-1811: vector-effect="non-scaling-stroke" on both rects. A running
+             node is stroke-2 while every other state is stroke-1, and an SVG
+             stroke straddles the path -- so without this the running box paints
+             ~1px proud of the geometry computeLayout gave it, and since the chart
+             is scaled to fit the pane that lands on fractional device pixels and
+             reads as a misaligned node. Both rects carry it, not just the running
+             one, so the START/END pills do not scale their strokes differently
+             from the nodes. -->
         {#each layout.nodes as node (node.id)}
           {@const visual = nodeVisual(node.id)}
           {#if node.id === START_NODE || node.id === END_NODE}
@@ -196,6 +204,7 @@ const statusLine = $derived.by(() => {
               width={node.width}
               height={node.height}
               rx="4"
+              vector-effect="non-scaling-stroke"
               class={visual === "done"
                 ? "fill-green-100 stroke-green-500 stroke-1"
                 : "fill-white stroke-gray-300 stroke-1"}
@@ -215,6 +224,7 @@ const statusLine = $derived.by(() => {
               width={node.width}
               height={node.height}
               rx="4"
+              vector-effect="non-scaling-stroke"
               class={visual === "running"
                 ? "fill-tommy-offwhite stroke-tommy-accent-blue stroke-2 animate-pulse"
                 : visual === "done"

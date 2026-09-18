@@ -8,6 +8,8 @@ import {
 	_resetExpectedIdentityForTest,
 	_resetUnreadyStreakForTest,
 	_setServerUrlsForTest,
+	getServerStates,
+	getServerStatesForUi,
 } from "../mcp-bridge.ts";
 
 type LogCall = { fields: Record<string, unknown>; msg: string };
@@ -239,5 +241,151 @@ describe("SIO-782: unreadyStreak debounce", () => {
 
 		const degradedWarns = captured.warn.filter((c) => c.msg.includes("upstream degraded"));
 		expect(degradedWarns.length).toBe(0);
+	});
+});
+
+// SIO-1811: the chip flapped navy -> amber -> navy mid-run because the UI read the
+// raw probe verdict, which SIO-782 had already judged too noisy to even warn about
+// on a single cycle. getServerStatesForUi() applies that same threshold; /health
+// keeps reading getServerStates() raw so a real degradation still surfaces at once.
+describe("SIO-1811: getServerStatesForUi debounces unready", () => {
+	const URL_KONNECT = "http://localhost:9083/mcp";
+
+	// Seed expectedIdentity with a healthy probe, then point the bridge at a
+	// /ready that fails the way the argument to `ready` describes.
+	async function seedThenFail(card: IdentityCard, ready: () => Response): Promise<void> {
+		global.fetch = mock(async (input) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.endsWith("/health")) return new Response("ok");
+			if (url.endsWith("/identity")) return Response.json(card);
+			if (url.endsWith("/ready")) return Response.json({ ready: true, components: {}, cachedAt: "" });
+			return new Response("404", { status: 404 });
+		}) as unknown as typeof fetch;
+		await _probeServerForTest("konnect-mcp", URL_KONNECT);
+		resetCapture();
+
+		_setServerUrlsForTest([["konnect-mcp", URL_KONNECT]]);
+		global.fetch = mock(async (input) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.endsWith("/health")) return new Response("ok");
+			if (url.endsWith("/identity")) return Response.json(card);
+			if (url.endsWith("/ready")) return ready();
+			return new Response("404", { status: 404 });
+		}) as unknown as typeof fetch;
+	}
+
+	const unreadyResponse = () =>
+		Response.json(
+			{ ready: false, components: { upstream: "unreachable" }, errors: { upstream: "503" }, cachedAt: "" },
+			{ status: 503 },
+		);
+
+	test("holds unready back until the streak reaches the threshold", async () => {
+		await seedThenFail(fixtureCard(), unreadyResponse);
+
+		// Cycles 1 and 2: a starved probe. The UI must not repaint.
+		await _pollServerHealthForTest();
+		expect(getServerStatesForUi()["konnect-mcp"]).toBe("ready");
+		await _pollServerHealthForTest();
+		expect(getServerStatesForUi()["konnect-mcp"]).toBe("ready");
+
+		// Cycle 3 crosses UNREADY_WARN_THRESHOLD: sustained, so now it shows.
+		await _pollServerHealthForTest();
+		expect(getServerStatesForUi()["konnect-mcp"]).toBe("unready");
+	});
+
+	// The guard on the sibling consumer: /health derives `degraded` from the raw
+	// getter and must not inherit the debounce if someone later "simplifies" this.
+	test("getServerStates stays raw -- unready on the very first cycle", async () => {
+		await seedThenFail(fixtureCard(), unreadyResponse);
+
+		await _pollServerHealthForTest();
+
+		expect(getServerStates()["konnect-mcp"]).toBe("unready");
+		expect(getServerStatesForUi()["konnect-mcp"]).toBe("ready");
+	});
+
+	test("a probe timeout is debounced the same as a real 503", async () => {
+		await seedThenFail(fixtureCard(), () => {
+			throw new Error("simulated probe abort");
+		});
+
+		await _pollServerHealthForTest();
+
+		expect(getServerStatesForUi()["konnect-mcp"]).toBe("ready");
+		expect(getServerStates()["konnect-mcp"]).toBe("unready");
+	});
+
+	// down/replaced/misidentified are identity and connectivity verdicts, not
+	// readiness -- each is actionable on first sight and must never be held back.
+	test("replaced surfaces immediately despite sharing the amber chip with unready", async () => {
+		const card = fixtureCard();
+		global.fetch = mock(async (input) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.endsWith("/health")) return new Response("ok");
+			if (url.endsWith("/identity")) return Response.json(card);
+			if (url.endsWith("/ready")) return Response.json({ ready: true, components: {}, cachedAt: "" });
+			return new Response("404", { status: 404 });
+		}) as unknown as typeof fetch;
+		await _probeServerForTest("konnect-mcp", URL_KONNECT);
+		resetCapture();
+
+		// Same role, new instanceId: the process restarted under us.
+		_setServerUrlsForTest([["konnect-mcp", URL_KONNECT]]);
+		global.fetch = mock(async (input) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.endsWith("/health")) return new Response("ok");
+			if (url.endsWith("/identity")) return Response.json(fixtureCard({ instanceId: "restarted-id" }));
+			if (url.endsWith("/ready")) return Response.json({ ready: true, components: {}, cachedAt: "" });
+			return new Response("404", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		await _pollServerHealthForTest();
+
+		expect(getServerStatesForUi()["konnect-mcp"]).toBe("replaced");
+	});
+
+	test("down surfaces immediately", async () => {
+		const card = fixtureCard();
+		global.fetch = mock(async (input) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.endsWith("/health")) return new Response("ok");
+			if (url.endsWith("/identity")) return Response.json(card);
+			if (url.endsWith("/ready")) return Response.json({ ready: true, components: {}, cachedAt: "" });
+			return new Response("404", { status: 404 });
+		}) as unknown as typeof fetch;
+		await _probeServerForTest("konnect-mcp", URL_KONNECT);
+		resetCapture();
+
+		_setServerUrlsForTest([["konnect-mcp", URL_KONNECT]]);
+		global.fetch = mock(async () => {
+			throw new Error("connection refused");
+		}) as unknown as typeof fetch;
+
+		await _pollServerHealthForTest();
+
+		expect(getServerStatesForUi()["konnect-mcp"]).toBe("down");
+	});
+
+	test("a recovered server reports ready through both accessors", async () => {
+		await seedThenFail(fixtureCard(), unreadyResponse);
+		await _pollServerHealthForTest();
+		await _pollServerHealthForTest();
+		await _pollServerHealthForTest();
+		expect(getServerStatesForUi()["konnect-mcp"]).toBe("unready");
+
+		// Recovery clears the streak, so a later starved probe starts fresh.
+		global.fetch = mock(async (input) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.endsWith("/health")) return new Response("ok");
+			if (url.endsWith("/identity")) return Response.json(fixtureCard());
+			if (url.endsWith("/ready")) return Response.json({ ready: true, components: {}, cachedAt: "" });
+			return new Response("404", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		await _pollServerHealthForTest();
+
+		expect(getServerStatesForUi()["konnect-mcp"]).toBe("ready");
+		expect(getServerStates()["konnect-mcp"]).toBe("ready");
 	});
 });

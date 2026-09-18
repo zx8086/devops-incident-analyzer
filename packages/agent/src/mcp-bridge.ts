@@ -628,8 +628,33 @@ export function _resetExpectedIdentityForTest(): void {
 }
 
 // Read-only snapshot of the most recent probe state per server, for the dashboard endpoint (Task C4).
+// RAW, deliberately: /health derives its `degraded` flag from this and must report a real
+// degradation on the first observation. UI surfaces want getServerStatesForUi() instead.
 export function getServerStates(): Record<string, ProbeState> {
 	return Object.fromEntries(lastProbeState.entries());
+}
+
+// SIO-1811: UI-facing view of the probe state. A single unready cycle is usually
+// probe-timeout noise -- under load a long tool call starves the server's own
+// /ready probe (the same mechanism probeServer documents one tier up, where a
+// 136s GitLab call had a server reported "down" while it served traffic fine
+// either side). SIO-782 already encoded that judgement for the log warn; before
+// this, the UI was held to a weaker standard than the logger and repainted a chip
+// on a tick the logs considered too noisy to mention.
+//
+// Only `unready` is debounced. down/replaced/misidentified are identity and
+// connectivity verdicts rather than readiness, each actionable on first sight --
+// `replaced` in particular shares the amber fill with `unready` but means the
+// process actually restarted (see probeServer's instanceId/fingerprint checks)
+// and drives a reconnect, so holding it back would hide a real event.
+export function getServerStatesForUi(): Record<string, ProbeState> {
+	return Object.fromEntries(
+		[...lastProbeState.entries()].map(([name, state]) =>
+			state === "unready" && (unreadyStreak.get(name) ?? 0) < UNREADY_WARN_THRESHOLD
+				? [name, "ready" as ProbeState]
+				: [name, state],
+		),
+	);
 }
 
 export interface EmbeddingsNotReadyProject {

@@ -7,8 +7,10 @@ import {
 	applyActionStart,
 	applyAgents,
 	applyLoadError,
+	applyMailbox,
 	applySendResult,
 	applyStatus,
+	clearConversation,
 	expireEntry,
 	failEntry,
 	formatReply,
@@ -227,5 +229,50 @@ describe("formatReply", () => {
 		expect(formatReply(null)).toBe("");
 		expect(formatReply(undefined)).toBe("");
 		expect(formatReply({ a: 1 })).toBe('{\n  "a": 1\n}');
+	});
+});
+
+describe("SIO-1811: clearConversation", () => {
+	test("drops entries and mailboxes but keeps the roster and selection", () => {
+		// Build the roster the way the app does, so the fixture cannot drift from the
+		// real state shape.
+		const withRoster = selectPeer(applyAgents(initialPiFleetState(), listing), {
+			hubKey: "eu-shared-services-prd",
+			name: "eu-oit-prd",
+		});
+		const withMailbox = applyMailbox(withRoster, {
+			hubKey: "eu-shared-services-prd",
+			environment: "prd",
+			name: "ops-prd",
+			missingDigest: [],
+			windowTruncated: false,
+			messages: [],
+		});
+		const seeded = startEntry(withMailbox, {
+			id: "e1",
+			hubKey: "eu-shared-services-prd",
+			target: "eu-oit-prd",
+			prompt: "verify the report",
+			sentAt: 1,
+		});
+		expect(seeded.entries).toHaveLength(1);
+		expect(Object.keys(seeded.mailboxes)).toHaveLength(1);
+
+		const cleared = clearConversation(seeded);
+
+		// The conversation goes.
+		expect(cleared.entries).toEqual([]);
+		expect(cleared.mailboxes).toEqual({});
+		// The roster stays, so the pane needs no refetch to remain usable.
+		expect(cleared.configured).toBe(true);
+		expect(cleared.loaded).toBe(true);
+		expect(cleared.peers).toEqual(seeded.peers);
+		expect(cleared.selected).toEqual({ hubKey: "eu-shared-services-prd", name: "eu-oit-prd" });
+		expect(cleared.totalBudgetMs).toBe(seeded.totalBudgetMs);
+	});
+
+	test("is a no-op on an already-empty board", () => {
+		const base = initialPiFleetState();
+		expect(clearConversation(base)).toEqual(base);
 	});
 });

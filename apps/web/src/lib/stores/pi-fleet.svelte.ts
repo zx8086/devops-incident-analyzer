@@ -19,6 +19,7 @@ import {
 	applyMailbox,
 	applySendResult,
 	applyStatus,
+	clearConversation,
 	expireEntry,
 	failEntry,
 	initialPiFleetState,
@@ -78,6 +79,14 @@ function createPiFleetStore() {
 
 	function select(selection: PiFleetSelection | null) {
 		fleet = selectPeer(fleet, selection);
+	}
+
+	// SIO-1811: called by the header's clear button, so the pane beside the answer
+	// is cleared with it. Any in-flight poll stops on its own -- pollUntilTerminal
+	// returns as soon as its entry is no longer in state -- so a reply that lands
+	// after the clear cannot reappear on the fresh board.
+	function clear() {
+		fleet = clearConversation(fleet);
 	}
 
 	async function pollUntilTerminal(id: string) {
@@ -275,6 +284,7 @@ function createPiFleetStore() {
 		},
 		load,
 		select,
+		clear,
 		send,
 		runAction,
 		loadMailbox,

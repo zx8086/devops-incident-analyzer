@@ -210,16 +210,20 @@ const triageOffered = $derived(triageIds.includes(agentStore.currentAgent));
 const onContextualAgent = $derived(!modeIds.includes(agentStore.currentAgent));
 
 // Cycles the header's modes, in registry order.
+// SIO-1811: switching agents starts a fresh conversation (switchAgent calls
+// clearChat), so the fleet pane is cleared with it for the same reason the clear
+// button does -- entries belong to the turn that produced them. switchAgent
+// no-ops while streaming and on a same-agent click, so mirror both guards here
+// rather than clearing the pane on a switch that never happened.
 function cycleAgent() {
 	const ids = modeIds;
 	if (ids.length === 0) return;
 	// From a contextual agent (the fleet console) the control is a way back.
-	if (onContextualAgent) {
-		agentStore.switchAgent(ids.includes(DEFAULT_AGENT_ID) ? DEFAULT_AGENT_ID : (ids[0] as AgentId));
-		return;
-	}
-	const next = ids[(ids.indexOf(agentStore.currentAgent) + 1) % ids.length];
-	if (next) agentStore.switchAgent(next);
+	const fallback = ids.includes(DEFAULT_AGENT_ID) ? DEFAULT_AGENT_ID : (ids[0] as AgentId);
+	const target = onContextualAgent ? fallback : ids[(ids.indexOf(agentStore.currentAgent) + 1) % ids.length];
+	if (!target || target === agentStore.currentAgent || agentStore.isStreaming) return;
+	agentStore.switchAgent(target);
+	piFleetStore.clear();
 }
 
 function submitClarify() {
@@ -365,8 +369,15 @@ function handleSuggestionClick(suggestion: string) {
           <Icon name="pi" class="w-5 h-5" />
         </button>
       {/if}
+      <!-- SIO-1811: clear the board, not just the chat column. The fleet pane's
+           replies belong to the turn that produced them, so leaving them beside a
+           cleared conversation reads as a reply to the next question. The page
+           owns both stores, so it clears both rather than coupling them. -->
       <button
-        onclick={() => agentStore.clearChat()}
+        onclick={() => {
+          agentStore.clearChat();
+          piFleetStore.clear();
+        }}
         class="min-w-[44px] min-h-[44px] p-2 text-red-500 hover:text-white hover:bg-red-500 bg-transparent border-2 border-transparent hover:border-red-500 rounded-lg transition-all disabled:text-gray-300"
       >
         <Icon name="clear" class="w-5 h-5" />

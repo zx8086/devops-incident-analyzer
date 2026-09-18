@@ -70,6 +70,16 @@ export function initialPiFleetState(): PiFleetState {
 	};
 }
 
+// SIO-1811: clearing the chat clears the fleet pane's conversation too. The pane
+// sits beside the answer and its entries are about the turn that produced it, so
+// leaving a spoke reply behind on a cleared board reads as a reply to the NEXT
+// question. Only the conversation goes: the roster (configured/hubs/peers), the
+// operator's selected spoke and the budgets survive, so the pane stays usable
+// without a refetch.
+export function clearConversation(state: PiFleetState): PiFleetState {
+	return { ...state, entries: [], mailboxes: {} };
+}
+
 export function applyAgents(state: PiFleetState, response: PiFleetAgentsResponse): PiFleetState {
 	const peers: PiFleetPeerRow[] = response.hubs
 		.flatMap((hub) =>

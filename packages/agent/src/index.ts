@@ -137,6 +137,7 @@ export {
 	getConnectedServers,
 	getGitlabSemanticSearchStatus,
 	getServerStates,
+	getServerStatesForUi,
 	getToolsForDataSource,
 	type McpReplacedEvent,
 	mcpEvents,
