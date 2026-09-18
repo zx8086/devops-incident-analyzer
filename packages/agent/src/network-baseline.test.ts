@@ -58,6 +58,67 @@ describe("gates", () => {
 });
 
 describe("fetchNetworkBaseline", () => {
+	// SIO-1815: every other test here hands the baseline parsed objects. Production never
+	// does: sub-agent.ts wires invoke as normalizeToolContent(await tool.invoke(args)), which
+	// is the JSON TEXT. With that form every probe used to parse as empty, so on the
+	// 2026-09-18 run three RUNNING tasks read as none and describe_tasks was never called.
+	test("works on the form production actually supplies: JSON text, not objects", async () => {
+		const existing: ToolOutput[] = [
+			{
+				toolName: "aws_ecs_describe_services",
+				rawJson: {
+					services: [{ serviceName: "feed-service", clusterArn: "arn:aws:ecs:eu-central-1:1:cluster/shop-prd" }],
+				},
+			},
+		];
+		const calls: Call[] = [];
+		const asText = (v: unknown) => JSON.stringify(v);
+		const { outputs, diagnostics } = await fetchNetworkBaseline({
+			invoke: makeInvoke(
+				{
+					aws_ecs_list_tasks: asText({ taskArns: ["arn:aws:ecs:eu-central-1:1:task/shop-prd/0e26"] }),
+					aws_ecs_describe_tasks: asText(TASKS_JSON),
+					aws_ec2_describe_subnets: asText(SUBNETS_JSON),
+					aws_ec2_describe_vpcs: asText({ Vpcs: [{ VpcId: "vpc-1", CidrBlock: "10.35.0.0/16" }] }),
+				},
+				calls,
+			),
+			hasTool: (n) => ALL_TOOLS.has(n),
+			existingOutputs: existing,
+			focusServices: ["feed-service"],
+		});
+		expect(calls.map((c) => c.toolName)).toEqual([
+			"aws_ecs_list_tasks",
+			"aws_ecs_describe_tasks",
+			"aws_ec2_describe_subnets",
+			"aws_ec2_describe_vpcs",
+		]);
+		expect(outputs.map((o) => o.toolName)).toContain("aws_ecs_describe_tasks");
+		// Recorded parsed, so the topology builder reads it the same way as a loop output.
+		expect(typeof outputs[0]?.rawJson).toBe("object");
+		expect(diagnostics.skippedReason).toBeUndefined();
+	});
+
+	// The same bug's other face: list_clusters text read as "no clusters", so an ECS estate
+	// was treated as EKS and the EC2 fallback fired.
+	test("an ECS estate enumerated as text does not fall through to the EC2 fallback", async () => {
+		const calls: Call[] = [];
+		await fetchNetworkBaseline({
+			invoke: makeInvoke(
+				{
+					aws_ecs_list_clusters: JSON.stringify({ clusterArns: ["arn:aws:ecs:eu-central-1:1:cluster/gateway-prd"] }),
+					aws_ecs_list_services: JSON.stringify({ serviceArns: [] }),
+					aws_ec2_describe_instances: JSON.stringify({ Reservations: [] }),
+				},
+				calls,
+			),
+			hasTool: (n) => ALL_TOOLS.has(n) || n === "aws_ec2_describe_instances",
+			existingOutputs: [],
+			focusServices: ["feed-service"],
+		});
+		expect(calls.map((c) => c.toolName)).toEqual(["aws_ecs_list_clusters", "aws_ecs_list_services"]);
+	});
+
 	test("derives targets from the loop's describe_services output and fetches the placement chain", async () => {
 		const existing: ToolOutput[] = [
 			{

@@ -12,10 +12,12 @@ import {
 	EXCERPT_MAX,
 	excerptOf,
 	excludedSenderPrefixes,
+	findingNamesFocus,
 	fleetInboxTimeoutMs,
 	incidentWindow,
 	isExcludedSender,
 	isFleetInboxEnabled,
+	MAX_ENTRIES_PER_ESTATE,
 	type MonitorFinding,
 	parseMonitorReport,
 	summarizeFleetInboxForPrompt,
@@ -138,13 +140,21 @@ describe("parseMonitorReport and classifyMessage", () => {
 					family: "alarm",
 					resource: "checkout-alb-5xx",
 					summary: "Alarm checkout-alb-5xx entered ALARM",
+					detail: "cause: SECRET-BODY-MARKER the model thinks the target group is unhealthy",
 				},
-				{ severity: "warn", family: "logs", resource: "/aws/lambda/checkout", summary: "42 ERROR lines in 5m" },
+				{
+					severity: "warn",
+					family: "logs",
+					resource: "/aws/lambda/checkout",
+					summary: "42 ERROR lines in 5m",
+					detail: "",
+				},
 				{
 					severity: "info",
 					family: "alarm",
 					resource: "orders-lag",
 					summary: "Alarm orders-lag entered INSUFFICIENT_DATA",
+					detail: "",
 				},
 			],
 		});
@@ -160,7 +170,7 @@ describe("parseMonitorReport and classifyMessage", () => {
 			{ severity: "critical", family: "db-events", resource: "orders-db", summary: "RDS failover: started" },
 			{ severity: "warn", family: "spoke-health", resource: "aws-eu-oit-prd", summary: "3 model failures" },
 			{ severity: "info", family: "alarm", resource: "orders-lag", summary: "entered INSUFFICIENT_DATA" },
-		];
+		].map((f) => ({ ...f, severity: f.severity as MonitorFinding["severity"], detail: "evidence: {}" }));
 		const text = [
 			"[critical] aws-111122223333: 3 finding(s)",
 			"",
@@ -189,15 +199,22 @@ describe("parseMonitorReport and classifyMessage", () => {
 			severity: "critical",
 			findingCount: 3,
 			alarmNames: ["checkout-alb-5xx", "orders-lag"],
+			// Structured fields only: no summary, no detail.
+			findings: [
+				{ severity: "critical", family: "alarm", resource: "checkout-alb-5xx", focus: false },
+				{ severity: "warn", family: "logs", resource: "/aws/lambda/checkout", focus: false },
+				{ severity: "info", family: "alarm", resource: "orders-lag", focus: false },
+			],
 		});
 		expect(
 			classifyMessage(message({ prompt: "is the ALB healthy?", status: "complete", response: { verdict: "ok" } })),
-		).toEqual({ kind: "conversation", severity: null, findingCount: null, alarmNames: [] });
+		).toEqual({ kind: "conversation", severity: null, findingCount: null, alarmNames: [], findings: [] });
 		expect(classifyMessage(message({ prompt: "hello", status: "queued" }))).toEqual({
 			kind: "other",
 			severity: null,
 			findingCount: null,
 			alarmNames: [],
+			findings: [],
 		});
 	});
 });
@@ -260,12 +277,15 @@ describe("buildEstateDigest and summarizeFleetInboxForPrompt", () => {
 		error: null,
 	});
 
-	test("orders entries newest first with counts, alarm names and the latest timestamp", () => {
-		expect(estate.entries.map((e) => e.msgId)).toEqual(["01K", "01J", "01H"]);
-		expect(estate.counts).toEqual({ total: 3, monitorReports: 1, conversations: 1, other: 1, critical: 1, warn: 0 });
+	// The estate inbox is mostly the monitor asking its spoke to diagnose a report: a
+	// prompt, no findings. Those rows and operator chatter doubled the card in the live
+	// run of 2026-09-18, so only the reports themselves survive.
+	test("keeps monitor reports only: conversations and other rows are dropped, not counted", () => {
+		expect(estate.entries.map((e) => [e.msgId, e.kind])).toEqual([["01J", "monitor-report"]]);
+		expect(estate.counts).toEqual({ total: 1, focus: 0, critical: 1, warn: 0 });
 		expect(estate.alarmNames).toEqual(["checkout-alb-5xx", "orders-lag"]);
-		expect(estate.latestAt).toBe("2026-09-06T10:30:00.000Z");
-		expect(estate.entries[0]?.excerpt).toContain("why is checkout slow?");
+		expect(estate.latestAt).toBe(estate.entries[0]?.createdAt ?? "");
+		expect(JSON.stringify(estate)).not.toContain("why is checkout slow");
 	});
 
 	test("the prompt summary carries structured facts only, never a body", () => {
@@ -273,6 +293,7 @@ describe("buildEstateDigest and summarizeFleetInboxForPrompt", () => {
 			windowFrom: "2026-09-06T09:00:00.000Z",
 			windowTo: "2026-09-06T11:00:00.000Z",
 			generatedAt: "2026-09-06T11:00:01.000Z",
+			focusServices: [],
 			estates: [
 				estate,
 				{
@@ -280,18 +301,18 @@ describe("buildEstateDigest and summarizeFleetInboxForPrompt", () => {
 					estate: "eu-b2b-dev",
 					environment: "dev",
 					entries: [],
-					counts: { total: 0, monitorReports: 0, conversations: 0, other: 0, critical: 0, warn: 0 },
+					counts: { total: 0, focus: 0, critical: 0, warn: 0 },
+					families: [],
 					alarmNames: [],
 					latestAt: null,
 					error: "hub timed out",
 				},
 			],
 		});
-		expect(summary).toContain("eu-oit-prd (prd): 3 message(s)");
-		expect(summary).toContain("1 monitor report(s), 1 conversation(s), 1 other");
+		expect(summary).toContain("eu-oit-prd (prd): 1 monitor report(s); critical=1 warn=0");
 		expect(summary).toContain("critical=1 warn=0");
 		expect(summary).toContain("alarms: checkout-alb-5xx, orders-lag");
-		expect(summary).toContain("latest 2026-09-06T10:30:00.000Z");
+		expect(summary).toContain(`latest ${estate.latestAt}`);
 		expect(summary).toContain("eu-b2b-dev (dev): read failed (hub timed out)");
 		expect(summary).not.toContain("SECRET-BODY-MARKER");
 		expect(summary).not.toContain("why is checkout slow");
@@ -299,6 +320,186 @@ describe("buildEstateDigest and summarizeFleetInboxForPrompt", () => {
 	});
 
 	test("an empty digest renders nothing", () => {
-		expect(summarizeFleetInboxForPrompt({ windowFrom: "a", windowTo: "b", generatedAt: "c", estates: [] })).toBe("");
+		expect(
+			summarizeFleetInboxForPrompt({
+				windowFrom: "a",
+				windowTo: "b",
+				generatedAt: "c",
+				focusServices: [],
+				estates: [],
+			}),
+		).toBe("");
+	});
+});
+
+// SIO-1815. Shapes taken from the 2026-09-18 live run: the service logs to a
+// log group it SHARES with the rest of the cluster, so the resource never names it; only
+// the finding's summary and the spoke's "cause:" line do.
+describe("SIO-1815: the digest is scoped to the focus services", () => {
+	const FOCUS = ["feed-service", "Vendor Data Hub"];
+	const FEED_REPORT = [
+		"[warn] aws-111122223333: 2 finding(s)",
+		"",
+		"- (warn/logs) /ecs/fargate/shop-prd-log-group: 2 error-pattern event(s): Caused by: jakarta.ws.rs.InternalServerErrorException",
+		"  cause: feed-service's nightly stock sync job SECRET-CAUSE-MARKER",
+		"- (warn/alarm) shop-prd-db-cpu-high: entered ALARM",
+	].join("\n");
+	const ORDERS_REPORT = [
+		"[warn] aws-111122223333: 1 finding(s)",
+		"",
+		"- (warn/logs) /ecs/fargate/checkout-prd-log-group: 63 error-pattern event(s): deadlock detected",
+		"  cause: A storm of PostgreSQL deadlocks on the order table in checkout-service",
+	].join("\n");
+	const LAMBDA_REPORT = [
+		"[warn] aws-111122223333: 12 finding(s)",
+		"",
+		"- (warn/health) LAMBDA/eu-central-1: AWS Health scheduledChange AWS_LAMBDA_PLANNED_LIFECYCLE_EVENT",
+	].join("\n");
+
+	function digestFor(focusServices: string[]) {
+		return buildEstateDigest({
+			estate: "eu-oit-prd",
+			environment: "prd",
+			inboxes: ["eu-oit-prd", "ops"],
+			focusServices,
+			error: null,
+			messages: [
+				// Newest first is orders, then lambda; the feed-service report is the OLDEST.
+				{
+					inbox: "ops",
+					message: message({ msg_id: "03", prompt: ORDERS_REPORT, created_at: "2026-09-06T11:00:00.000Z" }),
+				},
+				{
+					inbox: "ops",
+					message: message({ msg_id: "02", prompt: LAMBDA_REPORT, created_at: "2026-09-06T10:30:00.000Z" }),
+				},
+				{
+					inbox: "ops",
+					message: message({ msg_id: "01", prompt: FEED_REPORT, created_at: "2026-09-06T10:00:00.000Z" }),
+				},
+			],
+		});
+	}
+
+	test("a finding is matched on what the monitor wrote about it, not on its resource alone", () => {
+		const [logs, alarm] = parseMonitorReport(FEED_REPORT)?.findings ?? [];
+		if (!logs || !alarm) throw new Error("fixture did not parse");
+		expect(logs.resource).not.toContain("feed-service");
+		expect(findingNamesFocus(logs, FOCUS)).toBe(true);
+		expect(findingNamesFocus(alarm, FOCUS)).toBe(false);
+		// matchesFocus treats an empty focus as show-all; here unscoped must mean no match.
+		expect(findingNamesFocus(logs, [])).toBe(false);
+	});
+
+	test("reports naming a focus service lead, ahead of newer reports about other services", () => {
+		const estate = digestFor(FOCUS);
+		expect(estate.entries.map((e) => [e.msgId, e.focus])).toEqual([
+			["01", true],
+			["03", false],
+			["02", false],
+		]);
+		expect(estate.counts).toEqual({ total: 3, focus: 1, critical: 0, warn: 3 });
+		// Focus-first ordering must not turn latestAt into "the focus report's time".
+		expect(estate.latestAt).toBe("2026-09-06T11:00:00.000Z");
+	});
+
+	test("counts findings per monitor category, with the focus share of each", () => {
+		expect(digestFor(FOCUS).families).toEqual([
+			{ family: "logs", count: 2, focus: 1 },
+			{ family: "alarm", count: 1, focus: 0 },
+			{ family: "health", count: 1, focus: 0 },
+		]);
+	});
+
+	test("unscoped (no focus services) keeps plain newest-first and marks nothing", () => {
+		const estate = digestFor([]);
+		expect(estate.entries.map((e) => e.msgId)).toEqual(["03", "02", "01"]);
+		expect(estate.counts.focus).toBe(0);
+		expect(estate.entries.every((e) => !e.focus)).toBe(true);
+	});
+
+	test("the prompt names the focus findings by category and resource, and still never a body", () => {
+		const summary = summarizeFleetInboxForPrompt({
+			windowFrom: "2026-09-06T09:00:00.000Z",
+			windowTo: "2026-09-06T12:00:00.000Z",
+			generatedAt: "2026-09-06T12:00:01.000Z",
+			focusServices: FOCUS,
+			estates: [digestFor(FOCUS)],
+		});
+		expect(summary).toContain("Scoped to the focus services: feed-service, Vendor Data Hub");
+		expect(summary).toContain("3 monitor report(s), 1 naming a focus service");
+		expect(summary).toContain("finding categories: logs=2 (focus 1), alarm=1, health=1");
+		expect(summary).toContain("focus findings: (warn/logs) /ecs/fargate/shop-prd-log-group x1");
+		// The other service's log group is in the inbox but is not a focus finding.
+		expect(summary).not.toContain("checkout-prd-log-group");
+		expect(summary).not.toContain("SECRET-CAUSE-MARKER");
+		expect(summary).not.toContain("deadlock");
+		expect(summary).not.toContain("InternalServerErrorException");
+	});
+
+	test("a scoped digest with no match says so instead of implying relevance", () => {
+		const summary = summarizeFleetInboxForPrompt({
+			windowFrom: "a",
+			windowTo: "b",
+			generatedAt: "c",
+			focusServices: ["payments-gateway"],
+			estates: [digestFor(["payments-gateway"])],
+		});
+		expect(summary).toContain("0 naming a focus service");
+		expect(summary).toContain("none of these reports names a focus service");
+	});
+
+	test("the digest never carries a finding's free text", () => {
+		const json = JSON.stringify(digestFor(FOCUS).entries.map((e) => e.findings));
+		expect(json).not.toContain("SECRET-CAUSE-MARKER");
+		expect(json).not.toContain("deadlock");
+	});
+
+	// Greptile, PR #846: totals cover every report, details are capped at 20 entries and 8
+	// prompt lines. "5 naming a focus service" must not read as "and here are all five".
+	test("caps are stated, not silent", () => {
+		const reports = Array.from({ length: MAX_ENTRIES_PER_ESTATE + 5 }, (_, i) => ({
+			inbox: "ops",
+			message: message({
+				msg_id: `m${String(i).padStart(2, "0")}`,
+				created_at: `2026-09-06T10:${String(i).padStart(2, "0")}:00.000Z`,
+				prompt: [
+					"[warn] aws-111122223333: 1 finding(s)",
+					"",
+					`- (warn/logs) /ecs/fargate/group-${i}: feed-service errors`,
+				].join("\n"),
+			}),
+		}));
+		const estate = buildEstateDigest({
+			estate: "eu-oit-prd",
+			environment: "prd",
+			inboxes: ["ops"],
+			focusServices: FOCUS,
+			error: null,
+			messages: reports,
+		});
+		expect(estate.counts.total).toBe(MAX_ENTRIES_PER_ESTATE + 5);
+		expect(estate.entries).toHaveLength(MAX_ENTRIES_PER_ESTATE);
+		const summary = summarizeFleetInboxForPrompt({
+			windowFrom: "a",
+			windowTo: "b",
+			generatedAt: "c",
+			focusServices: FOCUS,
+			estates: [estate],
+		});
+		expect(summary).toContain(`detail is from ${MAX_ENTRIES_PER_ESTATE} of ${MAX_ENTRIES_PER_ESTATE + 5} reports`);
+		expect(summary).toContain(`focus findings (top 8 of ${MAX_ENTRIES_PER_ESTATE} distinct)`);
+	});
+
+	test("an uncapped digest carries no truncation note (no prompt tax)", () => {
+		const summary = summarizeFleetInboxForPrompt({
+			windowFrom: "a",
+			windowTo: "b",
+			generatedAt: "c",
+			focusServices: FOCUS,
+			estates: [digestFor(FOCUS)],
+		});
+		expect(summary).not.toContain("detail is from");
+		expect(summary).not.toContain("distinct)");
 	});
 });

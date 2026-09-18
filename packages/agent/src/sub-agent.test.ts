@@ -343,6 +343,130 @@ describe("extractToolErrors SIO-1164 recovery detection", () => {
 		expect(errors[0]?.recovered).toBe(true);
 	});
 
+	// SIO-1815 (Greptile, PR #846; reproduced): the tests above carry no call ids, which no
+	// production trajectory does. With the arguments known, a later success only recovers an
+	// error when it was FOR THE SAME THING.
+	const call = (id: string, args: Record<string, unknown>) => ({
+		_getType: () => "ai",
+		content: "",
+		tool_calls: [{ id, args }],
+	});
+	const answer = (id: string, name: string, content: string, status: "error" | "success" = "error") => ({
+		...toolMsg(content, name, status),
+		tool_call_id: id,
+	});
+	const MR = "gitlab_get_merge_request";
+
+	test("a later success for a DIFFERENT entity does not recover the failure", () => {
+		const errors = extractToolErrors([
+			call("c1", { project_id: 1, merge_request_iid: 883 }),
+			answer("c1", MR, "Error: upstream 500"),
+			call("c2", { project_id: 1, merge_request_iid: 12 }),
+			answer("c2", MR, '{"iid":12}', "success"),
+		]);
+		expect(errors[0]?.recovered).toBeFalsy();
+	});
+
+	// The live run this rule came from: same merge request, the rejected two-facet `include`
+	// re-issued with one facet. `include` is HOW it asked, not what for, so it is ignored --
+	// as are a rewritten query, a narrower window and a smaller limit.
+	test("a retry of the same entity with different options or query text still recovers", () => {
+		const retried = extractToolErrors([
+			call("c1", { project_id: 1, merge_request_iid: 883, include: ["diffs", "pipelines"], detail: "full_patch" }),
+			answer("c1", MR, "Validation error: include cannot contain more than 1 items"),
+			call("c2", { merge_request_iid: 883, project_id: "1", include: ["diffs"], detail: "full_patch" }),
+			answer("c2", MR, '{"iid":883}', "success"),
+		]);
+		expect(retried[0]?.recovered).toBe(true);
+
+		const requeried = extractToolErrors([
+			call("q1", { logGroupNames: ["/ecs/shop"], queryString: "fields @message | fliter x", startRelative: "now-30d" }),
+			answer("q1", "aws_logs_start_query", "MalformedQueryException"),
+			call("q2", { logGroupNames: ["/ecs/shop"], queryString: "fields @message | limit 20", startRelative: "now-7d" }),
+			answer("q2", "aws_logs_start_query", '{"queryId":"abc"}', "success"),
+		]);
+		expect(requeried[0]?.recovered).toBe(true);
+	});
+
+	test("an array-valued entity (log groups) is compared too, order-insensitively", () => {
+		const other = extractToolErrors([
+			call("q1", { logGroupNames: ["/ecs/shop"], queryString: "x" }),
+			answer("q1", "aws_logs_start_query", "AccessDeniedException"),
+			call("q2", { logGroupNames: ["/ecs/other"], queryString: "x" }),
+			answer("q2", "aws_logs_start_query", '{"queryId":"abc"}', "success"),
+		]);
+		expect(other[0]?.recovered).toBeFalsy();
+
+		const same = extractToolErrors([
+			call("q1", { logGroupNames: ["/a", "/b"], queryString: "x" }),
+			answer("q1", "aws_logs_start_query", "ThrottlingException"),
+			call("q2", { logGroupNames: ["/b", "/a"], queryString: "x" }),
+			answer("q2", "aws_logs_start_query", '{"queryId":"abc"}', "success"),
+		]);
+		expect(same[0]?.recovered).toBe(true);
+	});
+
+	// Greptile, PR #846, second round: "nothing conflicted" is not proof. These are the two
+	// holes the conflict-only rule left, plus the no-call-id fallback. All three stay LENIENTLY
+	// recovered (SIO-1164: out of the rate cap) and none is PROVEN, so none may hide a gap.
+	test("proven recovery needs positive evidence; leniency alone never hides a gap", () => {
+		const flags = (errors: ReturnType<typeof extractToolErrors>) =>
+			errors.map((e) => [e.recovered ?? false, e.recoveredSameTarget ?? false]);
+
+		// A query tool has no entity arguments: a failed query on one keyspace followed by a
+		// successful query on another conflicts on nothing.
+		const SQL = "capella_run_sql_plus_plus_query";
+		expect(
+			flags(
+				extractToolErrors([
+					call("s1", { query: "SELECT * FROM `shop`.`inventory`.`a` WHERE x = 1" }),
+					answer("s1", SQL, "syntax error"),
+					call("s2", { query: "SELECT * FROM `shop`.`styles`.`b` LIMIT 1" }),
+					answer("s2", SQL, "[]", "success"),
+				]),
+			),
+		).toEqual([[true, false]]);
+
+		// The two calls name different KINDS of thing: nothing shared, nothing proven.
+		expect(
+			flags(
+				extractToolErrors([
+					call("f1", { file_path: "src/A.java" }),
+					answer("f1", "gitlab_get_file_content", "Error: 500"),
+					call("f2", { project_id: 1 }),
+					answer("f2", "gitlab_get_file_content", "{}", "success"),
+				]),
+			),
+		).toEqual([[true, false]]);
+
+		// No call ids at all (the shape of the SIO-1164 tests above).
+		expect(flags(extractToolErrors([toolMsg("timeout", SQL), toolMsg("[]", SQL, "success")]))).toEqual([[true, false]]);
+
+		// And the live case IS proven: same project, same merge request.
+		expect(
+			flags(
+				extractToolErrors([
+					call("c1", { project_id: 1, merge_request_iid: 883, include: ["diffs", "pipelines"] }),
+					answer("c1", MR, "Validation error: include cannot contain more than 1 items"),
+					call("c2", { merge_request_iid: 883, project_id: "1", include: ["diffs"] }),
+					answer("c2", MR, '{"iid":883}', "success"),
+				]),
+			),
+		).toEqual([[true, true]]);
+	});
+
+	test("one failure recovered and one not, on the same tool, are told apart", () => {
+		const errors = extractToolErrors([
+			call("c1", { merge_request_iid: 1 }),
+			answer("c1", MR, "Error: 500"),
+			call("c2", { merge_request_iid: 2 }),
+			answer("c2", MR, "Error: 500"),
+			call("c3", { merge_request_iid: 2 }),
+			answer("c3", MR, '{"iid":2}', "success"),
+		]);
+		expect(errors.map((e) => e.recovered ?? false)).toEqual([false, true]);
+	});
+
 	test("error with no later call at all -> recovered stays falsy", () => {
 		const errors = extractToolErrors([
 			toolMsg("no queryable index for that predicate", "capella_run_sql_plus_plus_query"),

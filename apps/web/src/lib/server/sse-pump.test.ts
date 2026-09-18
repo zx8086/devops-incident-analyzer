@@ -859,12 +859,13 @@ describe("pumpEventStream fleet_inbox", () => {
 		environment: "prd",
 		inboxes: ["eu-oit-prd", "ops"],
 		entries: [],
-		counts: { total: 0, monitorReports: 0, conversations: 0, other: 0, critical: 0, warn: 0 },
+		counts: { total: 0, focus: 0, critical: 0, warn: 0 },
+		families: [],
 		alarmNames: [],
 		latestAt: null,
 		error: null,
 	};
-	const digest = { windowFrom: "a", windowTo: "b", generatedAt: "c", estates: [estate] };
+	const digest = { windowFrom: "a", windowTo: "b", generatedAt: "c", focusServices: [], estates: [estate] };
 
 	async function run(output: Record<string, unknown>) {
 		const captured: Array<Record<string, unknown>> = [];

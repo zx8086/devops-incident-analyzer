@@ -16,6 +16,7 @@ import {
 	resolvePiComsConfig,
 } from "./action-tools/pi-coms-client.ts";
 import { estatesFromState, selectHubForEstate } from "./action-tools/pi-verifier.ts";
+import { collectFocusServices } from "./extract-findings.ts";
 import {
 	accountIdForEstate,
 	attributableToEstate,
@@ -96,6 +97,8 @@ export async function runFetchFleetInbox(
 	const window = incidentWindow(state, new Date(now()));
 	const budgetMs = fleetInboxTimeoutMs(env);
 	const excluded = excludedSenderPrefixes(env);
+	// SIO-1815: the same union every findings card is scoped with.
+	const focusServices = collectFocusServices(state);
 
 	// One client per environment hub; the ops inbox is read once per hub and
 	// then attributed per estate. An estate whose environment has no hub gets an
@@ -169,17 +172,32 @@ export async function runFetchFleetInbox(
 			inboxes: [...new Set(inboxes)],
 			messages: kept,
 			error: errors.length > 0 ? errors.join("; ") : null,
+			focusServices,
 		});
 	});
 
 	for (const estate of digestEstates) {
 		if (estate.error) logger.warn({ estate: estate.estate, error: estate.error }, "fetchFleetInbox: partial read");
 	}
+	// Counts and the monitor's own category names only; never a body (SIO-1660).
+	logger.info(
+		{
+			focusServices,
+			estates: digestEstates.map((e) => ({
+				estate: e.estate,
+				reports: e.counts.total,
+				focusReports: e.counts.focus,
+				families: e.families.map((f) => `${f.family}=${f.count}/${f.focus}`),
+			})),
+		},
+		"fetchFleetInbox: digest built",
+	);
 	return {
 		fleetInboxDigest: {
 			windowFrom: window.from,
 			windowTo: window.to,
 			generatedAt: new Date(now()).toISOString(),
+			focusServices,
 			estates: digestEstates,
 		},
 	};

@@ -164,10 +164,8 @@ describe("runFetchFleetInbox", () => {
 			["eu-oit-prd", "prd", ["eu-oit-prd", "ops"]],
 		]);
 		const prd = digest?.estates[1];
-		expect(prd?.entries.map((e) => [e.msgId, e.inbox, e.kind])).toEqual([
-			["01K", "eu-oit-prd", "conversation"],
-			["01R", "ops", "monitor-report"],
-		]);
+		// 01K is a completed conversation on the estate inbox: read, then dropped.
+		expect(prd?.entries.map((e) => [e.msgId, e.inbox, e.kind])).toEqual([["01R", "ops", "monitor-report"]]);
 		expect(prd?.alarmNames).toEqual(["checkout-alb-5xx"]);
 		expect(prd?.error).toBeNull();
 		expect(digest?.estates[0]?.counts.total).toBe(0);
@@ -185,7 +183,8 @@ describe("runFetchFleetInbox", () => {
 			if (url.host === "dev.hub.test") return "hang";
 			if (url.host === "prd.hub.test" && url.searchParams.get("name") === "ops")
 				return { status: 500, body: { error: "boom" } };
-			if (url.host === "prd.hub.test") return { body: { ok: true, name: "eu-oit-prd", messages: [row({})] } };
+			if (url.host === "prd.hub.test")
+				return { body: { ok: true, name: "eu-oit-prd", messages: [row({ prompt: REPORT })] } };
 			return undefined;
 		});
 		const out = await runFetchFleetInbox(state, { env, fetchImpl, now });

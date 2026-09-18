@@ -3,10 +3,9 @@ import { getLogger } from "@devops-agent/observability";
 import {
 	countsTowardDegradedRate,
 	type DataSourceResult,
-	isDegradingCategory,
+	isBenignForGaps,
 	type ReportCaveat,
 	redactPiiContent,
-	type ToolErrorCategory,
 } from "@devops-agent/shared";
 // SIO-1194: subpath import (not the barrel) so aggregator.test.ts's minimal
 // mock.module("@devops-agent/shared") namespace does not have to re-export it.
@@ -56,6 +55,7 @@ import { buildNetworkTopology, summarizeNetworkTopologyForPrompt } from "./netwo
 import { buildCachedSystemMessage } from "./prompt-cache.ts";
 import { buildOrchestratorPromptParts, getActiveSkillNames } from "./prompt-context.ts";
 import type { AgentStateType } from "./state.ts";
+import { describeIncidentAnchors } from "./sub-agent-focus-block.ts";
 import { truncateToolOutput } from "./sub-agent-truncate-tool-output.ts";
 
 interface AggregatorLogSink {
@@ -137,7 +137,15 @@ export function buildResultsBlock(results: DataSourceResult[]): string {
 			const toolErrorBlock =
 				r.toolErrors && r.toolErrors.length > 0
 					? `\n\nTool errors (${r.toolErrors.length} failures):\n${r.toolErrors
-							.map((e) => `- ${e.toolName} [${e.category}]: ${e.message}`)
+							// SIO-1815: say so when the sub-agent already recovered. Without the marker
+							// the model saw only the failure and wrote it up as an incomplete lookup --
+							// live run 2026-09-18: gitlab_get_merge_request failed on a two-facet
+							// `include`, succeeded 5s later, and still became a Gaps bullet the judge
+							// upheld. Same wording the absence judge is given (SIO-1164).
+							.map(
+								(e) =>
+									`- ${e.toolName} [${e.category}]: ${e.message}${e.recoveredSameTarget ? " [a later call to this tool for the SAME target SUCCEEDED -- recovered, not a gap]" : ""}`,
+							)
 							.join("\n")}`
 					: "";
 
@@ -266,7 +274,9 @@ export function buildAggregatorMessages(
 		: `\n\nTIMELINE GUIDANCE: The queried datasources (${queriedSources.join(", ")}) return infrastructure state snapshots, not timestamped event logs. A correlated timeline is not expected for these sources. Do not penalize the confidence score for the absence of timestamps or timeline data. If no event-log datasources (e.g. elastic) were queried, omit the correlated timeline section entirely.`;
 
 	// When tool errors indicate connectivity problems, instruct the LLM to lead with that
-	const failedSources = state.dataSourceResults.filter((r) => r.toolErrors && r.toolErrors.length > 0);
+	// SIO-1815: only errors that still count. A benign no-data outcome or a call the sub-agent
+	// already retried successfully is not a reason to lead the report with a connectivity problem.
+	const failedSources = state.dataSourceResults.filter((r) => (r.toolErrors ?? []).some((e) => !isBenignForGaps(e)));
 	const connectivityGuidance =
 		failedSources.length > 0
 			? `\n\nTOOL FAILURE GUIDANCE: ${failedSources.length} datasource(s) reported tool errors. When tool errors show repeated metadata/connection failures, the report summary must lead with the infrastructure connectivity problem (e.g. "brokers are unreachable") as the primary finding. Do not present connectivity failure as one possibility among equals -- state it as the leading diagnosis and list other causes as secondary.`
@@ -401,9 +411,20 @@ export function buildAggregatorMessages(
 				? `\n\nAnswer the current query; reference prior findings where relevant without repeating the full prior report.`
 				: "";
 
+	// SIO-1815: the report's "incident anchor" used to be the model's own reading of the
+	// user's text, so 21:10 CEST was printed as 21:10Z and the two-hour difference then
+	// surfaced as an unexplained gap between the last poll and the exception. The anchor is
+	// converted in code (incident-time.ts); the report states it, it does not derive it.
+	const incidentAnchorText = describeIncidentAnchors(
+		focus?.incidentAnchors ?? state.normalizedIncident.incidentAnchors,
+	);
+	const incidentTimeRule = incidentAnchorText
+		? `\n\nINCIDENT TIME: ${incidentAnchorText}. Use this UTC value as the incident anchor timestamp in the report header and timeline. Do NOT re-derive it from the user's message: a time the user pasted is in their local zone and the conversion is already done. Datasource timestamps are UTC; compare them to this value. A finding dated outside the incident is history or recurrence -- date it explicitly and never present it as the incident itself.`
+		: "";
+
 	messages.push(
 		new HumanMessage(
-			`Aggregate these datasource findings into a unified incident report. Only reference data present below -- do not fabricate metrics or timestamps.${scopeNote}${unavailableNote}${timelineGuidance}${connectivityGuidance}${perDeploymentGuidance}${awsEstateScopeGuidance}${crossEstateAbsenceRule}${gapsAuthoringRule}${confidenceFormatRule}${confidenceRubricRule}${defensiveProseRule}${groundedBlockerRule}${healthCheckGapRule}${numericGroundingRule}${causalGroundingRule}${verbatimDdlRule}\n\nReport generation timestamp: ${new Date().toISOString()}. Use this exact value as the "Generated" date in the report header. Do not invent a different timestamp.\n\nIf no specific timestamps are available from the datasource findings (i.e., all observations are current-state snapshots rather than timestamped events), use "Current State Assessment" as the section heading instead of "Correlated Timeline", and use "Current" in the time column instead of fabricating timestamps.\n\n${resultsBlock}\n\nProvide: summary, ${hasEventSources ? "correlated timeline (markdown table), " : ""}findings per datasource${elasticDeployments.length > 1 ? " (with per-deployment sub-sections for elastic)" : ""}, root cause (under a "## Root Cause" heading, naming the datasource(s) whose returned evidence supports it), confidence score (0.0-1.0), and any gaps.${continuationGuidance}`,
+			`Aggregate these datasource findings into a unified incident report. Only reference data present below -- do not fabricate metrics or timestamps.${incidentTimeRule}${scopeNote}${unavailableNote}${timelineGuidance}${connectivityGuidance}${perDeploymentGuidance}${awsEstateScopeGuidance}${crossEstateAbsenceRule}${gapsAuthoringRule}${confidenceFormatRule}${confidenceRubricRule}${defensiveProseRule}${groundedBlockerRule}${healthCheckGapRule}${numericGroundingRule}${causalGroundingRule}${verbatimDdlRule}\n\nReport generation timestamp: ${new Date().toISOString()}. Use this exact value as the "Generated" date in the report header. Do not invent a different timestamp.\n\nIf no specific timestamps are available from the datasource findings (i.e., all observations are current-state snapshots rather than timestamped events), use "Current State Assessment" as the section heading instead of "Correlated Timeline", and use "Current" in the time column instead of fabricating timestamps.\n\n${resultsBlock}\n\nProvide: summary, ${hasEventSources ? "correlated timeline (markdown table), " : ""}findings per datasource${elasticDeployments.length > 1 ? " (with per-deployment sub-sections for elastic)" : ""}, root cause (under a "## Root Cause" heading, naming the datasource(s) whose returned evidence supports it), confidence score (0.0-1.0), and any gaps.${continuationGuidance}`,
 		),
 	);
 
@@ -656,7 +677,11 @@ function toolNamesInBullet(line: string): string[] {
 // A Gaps bullet regex-flagged as degrading (isDegradingGapBullet) is SUPPRESSED -- it does
 // not count toward the cap -- iff it names one or more investigation tools, EVERY named tool
 // has at least one structured toolError this turn, AND every one of those errors is
-// NON-degrading (no-data/not-found, e.g. couchbase no-index or a document not-found). The structured layer
+// NON-degrading (no-data/not-found, e.g. couchbase no-index or a document not-found) or was
+// PROVABLY recovered: a later successful call of the same tool for the SAME target
+// (`recoveredSameTarget`, SIO-1815). The lenient `recovered` flag is NOT enough here -- it only
+// means nothing conflicted, which is always true of a query tool with no entity arguments,
+// and this filter removes a failure from the report (Greptile, PR #846). The structured layer
 // (isDegradingCategory, SIO-1087) already deemed those benign; the prose bullet is merely
 // narrating the same benign discovery outcome, so it must not cap confidence. This closes
 // the mismatch where a "capella_run_sql_plus_plus_query returned planning failure" bullet
@@ -677,12 +702,15 @@ export function filterStructurallyBenignGapBullets(
 	// Index every observed toolError by toolName -> the categories seen for it. toolName is
 	// the bare MCP tool name (ToolMessage.name), which matches the snake_case token the LLM
 	// writes in prose -- so exact-equality lookup is correct (no namespacing).
-	const categoriesByTool = new Map<string, ToolErrorCategory[]>();
+	// SIO-1815: the value is "may this error be presented as a non-gap" (isBenignForGaps),
+	// not the bare category: a call that was retried and provably recovered used to be
+	// excluded from the rate cap and still upheld here as a degrading bullet.
+	const benignByTool = new Map<string, boolean[]>();
 	for (const r of results) {
 		for (const e of r.toolErrors ?? []) {
-			const list = categoriesByTool.get(e.toolName) ?? [];
-			list.push(e.category);
-			categoriesByTool.set(e.toolName, list);
+			const list = benignByTool.get(e.toolName) ?? [];
+			list.push(isBenignForGaps(e));
+			benignByTool.set(e.toolName, list);
 		}
 	}
 
@@ -699,10 +727,10 @@ export function filterStructurallyBenignGapBullets(
 		const allBenign =
 			names.length > 0 &&
 			names.every((n) => {
-				const cats = categoriesByTool.get(n);
-				// A named tool with NO structured error (cats === undefined) fails this predicate,
+				const benign = benignByTool.get(n);
+				// A named tool with NO structured error (benign === undefined) fails this predicate,
 				// so the bullet is kept -- suppression needs every named tool matched-and-benign.
-				return cats?.every((c) => !isDegradingCategory(c)) ?? false;
+				return benign?.every(Boolean) ?? false;
 			});
 		if (allBenign) suppressed.push(line);
 		else kept.push(line);

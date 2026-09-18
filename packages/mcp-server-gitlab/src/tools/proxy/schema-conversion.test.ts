@@ -64,6 +64,25 @@ describe("SIO-1656 array parameters on proxied tools", () => {
 		expect(shape.labels?.safeParse("a").success).toBe(false);
 	});
 
+	// Live run 2026-09-18: the model sent include ["diffs","pipelines"] and GitLab answered
+	// "Validation error: include cannot contain more than 1 items". The docs state the
+	// limit ("Limited to one facet per call"); when the schema declares it, keep it.
+	test("an array's item bounds are enforced, so a two-facet include is refused locally", () => {
+		const shape = buildZodShapeFromJsonSchema({
+			type: "object" as const,
+			properties: {
+				include: { ...GET_MERGE_REQUEST_SCHEMA.properties.include, maxItems: 1 },
+				labels: { type: "array", items: { type: "string" }, minItems: 1 },
+			},
+		});
+		expect(shape.include?.safeParse(["diffs"]).success).toBe(true);
+		expect(shape.include?.safeParse(["diffs", "pipelines"]).success).toBe(false);
+		expect(shape.labels?.safeParse([]).success).toBe(false);
+		// No bound declared, no bound invented.
+		const unbounded = buildZodShapeFromJsonSchema(GET_MERGE_REQUEST_SCHEMA);
+		expect(unbounded.include?.safeParse(["diffs", "pipelines"]).success).toBe(true);
+	});
+
 	test("required vs optional is preserved", () => {
 		const shape = buildZodShapeFromJsonSchema(GET_MERGE_REQUEST_SCHEMA);
 		expect(shape.id?.safeParse(undefined).success).toBe(false);

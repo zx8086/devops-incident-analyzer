@@ -1,5 +1,59 @@
 // packages/agent/src/sub-agent-focus-block.ts
-import type { InvestigationFocus, ResolvedIdentifiers } from "@devops-agent/shared";
+import type { IncidentAnchor, InvestigationFocus, ResolvedIdentifiers } from "@devops-agent/shared";
+import { incidentQueryWindows } from "./incident-time.ts";
+
+// SIO-1815: the incident time, already converted, and the window to query first -- in
+// every form a tool takes, computed here so the model does no date arithmetic (SIO-1091
+// removed absolute epochs from its hands for exactly that reason). Exported for the
+// aggregator, which needs the same "this UTC value is authoritative" line.
+//
+// Live run 2026-09-18: both AWS log queries ran `now-30d | sort desc | limit 50`, so they
+// returned the newest 50 rows instead of the incident's. A duplicate-key line from
+// two days earlier was then reported as the incident (that day's logs hold a different key), and
+// the report's own Gaps section noted job ids that did not match.
+export function describeIncidentAnchors(anchors: IncidentAnchor[] | undefined): string {
+	if (!anchors || anchors.length === 0) return "";
+	return anchors
+		.map((a) =>
+			a.assumed
+				? `${a.utc} (the user wrote "${a.raw}" with no time zone; read as UTC because the zone is unknown -- say so if timing matters)`
+				: a.timeZone === "UTC"
+					? `${a.utc} (the user wrote "${a.raw}")`
+					: `${a.utc} (the user wrote "${a.raw}", which is ${a.timeZone} local time)`,
+		)
+		.join("; ");
+}
+
+function buildIncidentTimeBlock(focus: InvestigationFocus, nowIso: string): string {
+	const anchors = focus.incidentAnchors ?? [];
+	if (anchors.length === 0) return "";
+	const lines = [
+		`- Incident time (UTC, authoritative): ${describeIncidentAnchors(anchors)}. Never re-read the user's local time as UTC.`,
+	];
+	// Every timestamp the user gave gets a window, overlapping ones merged: text order says
+	// nothing about which line is the incident (Greptile, PR #846).
+	const windows = incidentQueryWindows(
+		anchors.map((a) => a.utc),
+		nowIso,
+	);
+	const render = (w: (typeof windows)[number]) =>
+		`ISO ${w.fromIso} to ${w.toIso}; relative ${w.fromRelative} to ${w.toRelative}; epoch seconds ${w.fromEpochSeconds} to ${w.toEpochSeconds}`;
+	const [only] = windows;
+	if (windows.length === 1 && only) {
+		lines.push(`- Incident window, computed for you -- paste, do not recompute: ${render(only)}.`);
+	} else if (windows.length > 1) {
+		lines.push(
+			`- Incident windows (${windows.length}, one per timestamp the user gave, earliest first), computed for you -- paste, do not recompute:`,
+			...windows.map((w, i) => `    ${i + 1}. ${render(w)}`),
+		);
+	}
+	if (windows.length > 0) {
+		lines.push(
+			`- IN ADDITION to the wide (now-30d) discovery, absence and recurrence queries your rules require, run the query that establishes what happened AT the incident restricted to ${windows.length === 1 ? "THIS window" : "EACH of these windows"}. A wide query sorted newest-first returns the most recent rows, not the incident's. A row from outside ${windows.length === 1 ? "the incident window" : "every incident window"} is history or recurrence: never report it as the incident, and date it explicitly when you cite it.`,
+		);
+	}
+	return `${lines.join("\n")}\n`;
+}
 
 // SIO-1079: the per-turn, volatile block appended to a sub-agent's system prompt. It
 // carries (a) a real current-time anchor and (b) the investigation focus. The clock is a
@@ -31,7 +85,8 @@ export function buildFocusBlock(
 		`${timeAnchor}\n\n---\n\nINVESTIGATION FOCUS (continuing across turns):\n` +
 		`- Summary: ${focus.summary}\n` +
 		`- Anchored services: ${focus.services.join(", ") || "(none)"}\n` +
-		`- Anchored time window: ${focus.timeWindow ? `${focus.timeWindow.from} to ${focus.timeWindow.to}` : "(none)"}\n\n` +
+		`- Anchored time window: ${focus.timeWindow ? `${focus.timeWindow.from} to ${focus.timeWindow.to}` : "(none)"}\n` +
+		`${buildIncidentTimeBlock(focus, nowIso)}\n` +
 		"Stay scoped to this investigation: do not investigate UNRELATED services, clusters, " +
 		"or time ranges. Resolving an anchored service's real identifier IS in scope -- you MAY " +
 		"enumerate all service.names / log groups / scopes/collections / topics to find the " +

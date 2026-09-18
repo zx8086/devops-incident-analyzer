@@ -7,6 +7,11 @@ import { FleetInboxDigestSchema } from "./pi-coms-types.ts";
 export const ToolOutputSchema = z.object({
 	toolName: z.string(),
 	rawJson: z.unknown(),
+	// SIO-1815: the call's scalar arguments (index, cluster, queryId, ...). The elastic
+	// extractor has routed on `toolArgs.index` since SIO-787/788, but nothing ever set it
+	// and the schema had no such field, so the logs branch could not fire in production.
+	// Scalars only, length-capped: a query body does not belong in checkpoint state.
+	toolArgs: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
 });
 export type ToolOutput = z.infer<typeof ToolOutputSchema>;
 
@@ -134,6 +139,15 @@ export const ToolErrorSchema = z.object({
 	// succeeded after this error -- the sub-agent self-corrected. Optional for backward-compat
 	// with any persisted/replayed state predating this field.
 	recovered: z.boolean().nullish(),
+	// SIO-1815: PROVEN recovery -- a later successful call of the same tool that names the
+	// SAME entity (a shared id/name/path/arn/index with an equal value, and none that
+	// differs). `recovered` above is deliberately lenient: it only keeps a self-corrected
+	// run out of the degraded-rate cap, where a false positive costs a little confidence
+	// headroom. Anything that HIDES a failure from the report -- the Gaps filter, the
+	// "not a gap" label on the aggregator's input, the daily log -- must use this one,
+	// because "no conflict was found" is not proof: a query tool has no entity arguments at
+	// all, so nothing about it can conflict (Greptile, PR #846).
+	recoveredSameTarget: z.boolean().nullish(),
 });
 export type ToolError = z.infer<typeof ToolErrorSchema>;
 
@@ -142,6 +156,12 @@ export type ToolError = z.infer<typeof ToolErrorSchema>;
 // reflects normal self-correction, not a malfunction.
 export function countsTowardDegradedRate(e: Pick<ToolError, "category" | "recovered">): boolean {
 	return isDegradingCategory(e.category) && !e.recovered;
+}
+
+// SIO-1815: whether an error may be presented as a NON-gap. Stricter than the rate rule
+// above on purpose; see `recoveredSameTarget`.
+export function isBenignForGaps(e: Pick<ToolError, "category" | "recoveredSameTarget">): boolean {
+	return !isDegradingCategory(e.category) || e.recoveredSameTarget === true;
 }
 
 // SIO-764: Per-domain structured findings derived from toolOutputs[] by the
@@ -539,6 +559,18 @@ export const ExtractedEntitiesSchema = z.object({
 export type ExtractedEntities = z.infer<typeof ExtractedEntitiesSchema>;
 
 // SIO-630: Structured incident data produced by the normalize node
+// SIO-1815: an explicit timestamp the user pasted, converted to UTC by code (never by a
+// model). `raw` is what they wrote, `timeZone` the zone it was read in, and `assumed` is
+// true when no zone was known and UTC was taken -- a consumer must say so, not present it
+// as fact. Produced by packages/agent/src/incident-time.ts.
+export const IncidentAnchorSchema = z.object({
+	raw: z.string(),
+	utc: z.string(),
+	timeZone: z.string(),
+	assumed: z.boolean(),
+});
+export type IncidentAnchor = z.infer<typeof IncidentAnchorSchema>;
+
 export const NormalizedIncidentSchema = z.object({
 	severity: z.enum(["critical", "high", "medium", "low"]).optional(),
 	timeWindow: z.object({ from: z.string(), to: z.string() }).optional(),
@@ -548,6 +580,7 @@ export const NormalizedIncidentSchema = z.object({
 	extractedMetrics: z
 		.array(z.object({ name: z.string(), value: z.string().optional(), threshold: z.string().optional() }))
 		.optional(),
+	incidentAnchors: z.array(IncidentAnchorSchema).optional(),
 });
 export type NormalizedIncident = z.infer<typeof NormalizedIncidentSchema>;
 
@@ -568,6 +601,9 @@ export const InvestigationFocusSchema = z.object({
 		.optional(),
 	summary: z.string(),
 	establishedAtTurn: z.number(),
+	// SIO-1815: carried on the focus because the sub-agents and the aggregator read the
+	// user's raw text too; without the converted value they re-read a local time as UTC.
+	incidentAnchors: z.array(IncidentAnchorSchema).optional(),
 });
 export type InvestigationFocus = z.infer<typeof InvestigationFocusSchema>;
 

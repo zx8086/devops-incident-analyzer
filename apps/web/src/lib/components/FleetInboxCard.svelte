@@ -24,6 +24,10 @@ const kindLabel: Record<FleetInboxEntry["kind"], string> = {
 	other: "message",
 };
 
+// SIO-1815: when the digest is scoped, the reports naming a focus service are the card;
+// the rest of the account's inbox is one click away rather than in the way.
+const scoped = $derived(digest.focusServices.length > 0);
+
 function senderLine(entry: FleetInboxEntry): string {
 	return entry.target ? `${entry.sender} to ${entry.target}` : entry.sender;
 }
@@ -33,23 +37,68 @@ function when(iso: string): string {
 }
 </script>
 
+{#snippet reportRow(entry: FleetInboxEntry)}
+  <li class="border-t border-gray-100 py-2 text-xs">
+    <div class="flex flex-wrap items-center gap-2">
+      <span class="px-1.5 py-0.5 rounded border bg-gray-100 text-gray-600 border-gray-200">{kindLabel[entry.kind]}</span>
+      {#if entry.severity}
+        <span class="px-1.5 py-0.5 rounded border {severityChip[entry.severity]}">{entry.severity}</span>
+      {/if}
+      <span class="text-gray-500">{senderLine(entry)}</span>
+      {#if entry.findingCount !== null}
+        <span class="text-gray-400">{entry.findingCount} finding(s)</span>
+      {/if}
+      <span class="ml-auto text-gray-400">{when(entry.createdAt)}</span>
+    </div>
+    {#if entry.findings.length > 0}
+      <p class="mt-1 flex flex-wrap gap-1">
+        {#each entry.findings as finding, i (i)}
+          <span class="px-1.5 py-0.5 rounded border break-all {finding.focus ? 'bg-tommy-navy border-tommy-navy text-white' : 'bg-white border-gray-200 text-gray-600'}">{finding.family}: {finding.resource}</span>
+        {/each}
+        {#if entry.findingCount !== null && entry.findingCount > entry.findings.length}
+          <span class="px-1.5 py-0.5 rounded border bg-white border-gray-200 text-gray-400">+{entry.findingCount - entry.findings.length} more</span>
+        {/if}
+      </p>
+    {/if}
+    <p class="mt-1 text-gray-700 whitespace-pre-wrap break-words">{entry.excerpt}</p>
+  </li>
+{/snippet}
+
 <div class="mt-3 rounded-lg border border-gray-200 bg-white p-4">
   <div class="flex items-center justify-between gap-2 mb-1">
     <h3 class="text-sm font-semibold text-tommy-navy">Fleet inbox</h3>
     <span class="text-xs text-gray-500">{when(digest.windowFrom)} to {when(digest.windowTo)}</span>
   </div>
-  <p class="text-xs text-gray-500 mb-3">Live pi-coms hub notes for the assessed estates, shown as data. Not evidence.</p>
+  <p class="text-xs text-gray-500 mb-3">Account monitor reports from the pi-coms hubs for the assessed estates, shown as data. Not evidence.</p>
+  {#if scoped}
+    <p class="text-xs text-gray-600 mb-3 flex flex-wrap items-center gap-1">
+      <span>Scoped to:</span>
+      {#each digest.focusServices as service (service)}
+        <span class="px-1.5 py-0.5 rounded border bg-tommy-navy border-tommy-navy text-white">{service}</span>
+      {/each}
+    </p>
+  {/if}
 
   {#each digest.estates as estate (estate.estate)}
+    {@const lead = scoped ? estate.entries.filter((e) => e.focus) : estate.entries}
+    {@const rest = scoped ? estate.entries.filter((e) => !e.focus) : []}
     <section class="mb-3 last:mb-0">
       <div class="flex flex-wrap items-center gap-2 text-xs">
         <span class="text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded border {envBadge[estate.environment] ?? 'bg-gray-100 text-gray-600 border-gray-200'}">{estate.environment}</span>
         <span class="font-medium text-tommy-navy">{estate.estate}</span>
         <span class="text-gray-400">inboxes: {estate.inboxes.join(", ")}</span>
-        <span class="ml-auto text-gray-500">{estate.counts.total} message(s): {estate.counts.monitorReports} monitor report(s), {estate.counts.conversations} conversation(s); critical {estate.counts.critical}, warn {estate.counts.warn}</span>
+        <span class="ml-auto text-gray-500">{estate.counts.total} monitor report(s){scoped ? `, ${estate.counts.focus} naming a focus service` : ""}; critical {estate.counts.critical}, warn {estate.counts.warn}</span>
       </div>
       {#if estate.error}
         <p class="mt-1 text-xs text-red-700">{estate.error}</p>
+      {/if}
+      {#if estate.families.length > 0}
+        <p class="mt-1 text-xs text-gray-600 flex flex-wrap items-center gap-1">
+          <span>Categories:</span>
+          {#each estate.families as family (family.family)}
+            <span class="px-1.5 py-0.5 rounded border {family.focus > 0 ? 'bg-tommy-navy border-tommy-navy text-white' : 'bg-tommy-offwhite border-gray-200 text-tommy-navy'}">{family.family} {family.count}{family.focus > 0 ? ` (${family.focus} focus)` : ""}</span>
+          {/each}
+        </p>
       {/if}
       {#if estate.alarmNames.length > 0}
         <p class="mt-1 text-xs text-gray-600 flex flex-wrap items-center gap-1">
@@ -59,27 +108,30 @@ function when(iso: string): string {
           {/each}
         </p>
       {/if}
+      {#if estate.entries.length < estate.counts.total}
+        <p class="mt-1 text-xs text-gray-500">Showing {estate.entries.length} of {estate.counts.total} reports (focus reports first, then newest). Counts and categories cover all of them.</p>
+      {/if}
       {#if estate.entries.length === 0 && !estate.error}
-        <p class="mt-1 text-xs text-gray-400">No messages in the window.</p>
+        <p class="mt-1 text-xs text-gray-400">No monitor reports in the window.</p>
+      {/if}
+      {#if scoped && lead.length === 0 && estate.entries.length > 0}
+        <p class="mt-1 text-xs text-gray-400">No monitor report in the window names a focus service.</p>
       {/if}
       <ul>
-        {#each estate.entries as entry (entry.msgId)}
-          <li class="border-t border-gray-100 py-2 text-xs">
-            <div class="flex flex-wrap items-center gap-2">
-              <span class="px-1.5 py-0.5 rounded border bg-gray-100 text-gray-600 border-gray-200">{kindLabel[entry.kind]}</span>
-              {#if entry.severity}
-                <span class="px-1.5 py-0.5 rounded border {severityChip[entry.severity]}">{entry.severity}</span>
-              {/if}
-              <span class="text-gray-500">{senderLine(entry)}</span>
-              {#if entry.findingCount !== null}
-                <span class="text-gray-400">{entry.findingCount} finding(s)</span>
-              {/if}
-              <span class="ml-auto text-gray-400">{when(entry.createdAt)}</span>
-            </div>
-            <p class="mt-1 text-gray-700 whitespace-pre-wrap break-words">{entry.excerpt}</p>
-          </li>
+        {#each lead as entry (entry.msgId)}
+          {@render reportRow(entry)}
         {/each}
       </ul>
+      {#if rest.length > 0}
+        <details class="mt-1 text-xs">
+          <summary class="cursor-pointer text-gray-500">{rest.length} report(s) about other services in this account</summary>
+          <ul>
+            {#each rest as entry (entry.msgId)}
+              {@render reportRow(entry)}
+            {/each}
+          </ul>
+        </details>
+      {/if}
     </section>
   {/each}
 </div>

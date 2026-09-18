@@ -36,6 +36,21 @@ describe("collectToolFailures", () => {
 		expect(tags).toEqual(["capella:auth"]);
 	});
 
+	// SIO-1815: the 2026-09-18 run wrote "gitlab:unknown" into recalled memory for a call that
+	// succeeded on its retry 5s later. An unrecovered error of the same kind still tags.
+	test("skips an error PROVABLY recovered (same target), keeps everything else", () => {
+		const err = { toolName: "gitlab_get_merge_request", category: "unknown", message: "x", retryable: false };
+		const proven = { ...err, recovered: true, recoveredSameTarget: true };
+		expect(collectToolFailures(stateWith([{ dataSourceId: "gitlab", toolErrors: [proven] }]))).toEqual([]);
+		expect(collectToolFailures(stateWith([{ dataSourceId: "gitlab", toolErrors: [proven, err] }]))).toEqual([
+			"gitlab:unknown",
+		]);
+		// Lenient only ("nothing conflicted") is not proof: it still records.
+		expect(
+			collectToolFailures(stateWith([{ dataSourceId: "gitlab", toolErrors: [{ ...err, recovered: true }] }])),
+		).toEqual(["gitlab:unknown"]);
+	});
+
 	test("dedupes repeats of the same datasource and category", () => {
 		const tags = collectToolFailures(
 			stateWith([

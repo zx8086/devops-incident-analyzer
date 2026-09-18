@@ -132,6 +132,20 @@ describe("_transform through instrumentTools", () => {
 		expect(seenArgs[0]).toEqual({ index: "logs-*" });
 	}, 15_000);
 
+	// SIO-1815: the elastic extractor has routed on toolArgs.index since SIO-787/788 and nothing
+	// ever captured it, so the card was empty on every production turn while tests that
+	// hand-built toolArgs stayed green. This goes through the real capture path.
+	test("the capture carries the call's scalar arguments, without the query body or the transform", async () => {
+		const { call, rawOutputs } = harness(true);
+		await call("c1", {
+			index: "logs-*,logs-apm.*",
+			size: 10,
+			queryBody: { query: { match_all: {} } },
+			[TRANSFORM_PARAM]: "return 1",
+		});
+		expect(rawOutputs[0]?.toolArgs).toEqual({ index: "logs-*,logs-apm.*", size: 10 });
+	}, 15_000);
+
 	test("the loop-guard signature ignores the transform: same args, different code, is a duplicate", async () => {
 		const { call, seenArgs } = harness(true);
 		await call("c1", { index: "logs-*", [TRANSFORM_PARAM]: "return result.hits.hits.length" });
@@ -326,6 +340,18 @@ describe("run_js_on_evidence", () => {
 		expect(await ask(t, "return 1")).toContain("No tool results have been captured");
 		live.push(captured[0] as (typeof captured)[number]);
 		expect(await ask(t, "return evidence.list().length")).toBe("1");
+	}, 15_000);
+
+	// SIO-1815, live run 2026-09-18: the model addressed the wrong id (it took the first
+	// result for the CloudWatch one), saw only a TypeError, and needed a separate
+	// evidence.list() call to recover. The failure now carries the index itself.
+	test("a failure names the captured results by id, so a wrong id is a one-step fix", async () => {
+		const t = buildRunJsOnEvidenceTool(() => captured, runInSandbox, silent);
+		const out = await ask(t, `return evidence.get("e1").results[0].count;`);
+		expect(out).toContain("The code failed");
+		expect(out).toContain("Captured results by id: e1=elasticsearch_search, e2=aws_logs_get_query_results");
+		// Ids and tool names only: never a payload.
+		expect(out).not.toContain("hits");
 	}, 15_000);
 
 	test("the third failure in a row tells the model to stop; a success resets it", async () => {

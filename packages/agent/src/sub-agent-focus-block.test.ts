@@ -396,3 +396,88 @@ describe("SIO-1258: project-resolution prose matches the strings the code emits"
 		expect(skill).toContain("NEVER pass a bare");
 	});
 });
+
+// SIO-1815. Live run 2026-09-18: both AWS log queries ran `now-30d | sort desc | limit 50`
+// and returned the newest 50 rows, so a duplicate-key line from two days earlier was reported as the
+// incident. The sub-agents also re-read the user's 21:10 (CEST) as UTC. The block now hands
+// them the converted time and the window to query first, precomputed in every form a tool
+// takes, so no model does date arithmetic (the reason SIO-1091 made the window relative).
+describe("SIO-1815: incident time and the window to query first", () => {
+	const RUN_NOW = "2026-09-18T17:50:22.000Z";
+	const ANCHORED: InvestigationFocus = {
+		...FOCUS,
+		timeWindow: { from: "2026-09-16T19:10:42.707Z", to: "2026-09-18T17:49:36.162Z" },
+		incidentAnchors: [
+			{
+				raw: "Sep 17, 2026 @ 21:10:42.707",
+				utc: "2026-09-17T19:10:42.707Z",
+				timeZone: "Europe/Amsterdam",
+				assumed: false,
+			},
+		],
+	};
+
+	test("states the UTC incident time and where the user's local reading came from", () => {
+		const block = buildFocusBlock(ANCHORED, RUN_NOW);
+		expect(block).toContain("Incident time (UTC, authoritative): 2026-09-17T19:10:42.707Z");
+		expect(block).toContain('the user wrote "Sep 17, 2026 @ 21:10:42.707", which is Europe/Amsterdam local time');
+		expect(block).toContain("Never re-read the user's local time as UTC");
+	});
+
+	test("gives the incident window precomputed as ISO, relative tokens and epoch seconds", () => {
+		const block = buildFocusBlock(ANCHORED, RUN_NOW);
+		expect(block).toContain("ISO 2026-09-17T17:10:42.707Z to 2026-09-17T20:10:42.707Z");
+		// The form aws_logs_start_query takes (startRelative / endRelative).
+		expect(block).toContain("relative now-1480m to now-1299m");
+		expect(block).toContain(`epoch seconds ${Math.floor(Date.parse("2026-09-17T17:10:42.707Z") / 1000)}`);
+		expect(block).toContain("paste, do not recompute");
+	});
+
+	test("adds an incident-window query to the wide ones and never passes history off as the incident", () => {
+		const block = buildFocusBlock(ANCHORED, RUN_NOW);
+		// Additive on purpose: the elastic and aws rules are "wide by default, never narrow"
+		// for absence proofs and recurrence, and this must not read as overriding them.
+		expect(block).toContain("IN ADDITION to the wide (now-30d) discovery, absence and recurrence queries");
+		expect(block).toContain("restricted to THIS window");
+		expect(block).toContain("never report it as the incident");
+	});
+
+	// Greptile, PR #846: the window came from incidentAnchors[0] alone, so a pasted excerpt that
+	// opens with an older line aimed the incident query at history.
+	test("several timestamps far apart each get a window, earliest first", () => {
+		const block = buildFocusBlock(
+			{
+				...ANCHORED,
+				incidentAnchors: [
+					{ raw: "2026-09-15 23:33:56", utc: "2026-09-15T23:33:56.000Z", timeZone: "UTC", assumed: true },
+					...(ANCHORED.incidentAnchors ?? []),
+				],
+			},
+			RUN_NOW,
+		);
+		expect(block).toContain("Incident windows (2, one per timestamp the user gave, earliest first)");
+		expect(block).toContain("1. ISO 2026-09-15T21:33:56.000Z to 2026-09-16T00:33:56.000Z");
+		expect(block).toContain("2. ISO 2026-09-17T17:10:42.707Z to 2026-09-17T20:10:42.707Z");
+		expect(block).toContain("restricted to EACH of these windows");
+	});
+
+	test("an assumed zone is said to be assumed, not presented as fact", () => {
+		const block = buildFocusBlock(
+			{
+				...ANCHORED,
+				incidentAnchors: [
+					{ raw: "2026-09-17 19:10:42", utc: "2026-09-17T19:10:42.000Z", timeZone: "UTC", assumed: true },
+				],
+			},
+			RUN_NOW,
+		);
+		expect(block).toContain("read as UTC because the zone is unknown");
+	});
+
+	test("a focus with no explicit timestamp is unchanged: no incident lines at all", () => {
+		const block = buildFocusBlock({ ...FOCUS, timeWindow: ANCHORED.timeWindow }, RUN_NOW);
+		expect(block).not.toContain("Incident time");
+		expect(block).not.toContain("Incident window");
+		expect(block).toContain("Anchored time window: 2026-09-16T19:10:42.707Z to 2026-09-18T17:49:36.162Z");
+	});
+});

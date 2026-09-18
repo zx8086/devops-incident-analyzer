@@ -115,9 +115,29 @@ interface InstrumentLogger {
 // normalizeToolContent it already uses -- elasticsearch_search returns multi-block MCP
 // content (SIO-786) and normalising here would both duplicate that logic and create an
 // import cycle back into sub-agent.ts.
+const TOOL_ARG_VALUE_MAX = 200;
+
+// SIO-1815: the scalar arguments of a call, for extractors that route on them (elastic
+// reads `index`). `arg` is either the bare args object or a LangGraph tool call
+// ({ name, args, id, type }). Objects and arrays are dropped on purpose: that is the query
+// body, which can be large and is already in LangSmith.
+export function scalarToolArgs(arg: unknown): Record<string, string | number | boolean> | undefined {
+	if (!arg || typeof arg !== "object") return undefined;
+	const wrapped = arg as { args?: unknown; type?: unknown };
+	const source = wrapped.type === "tool_call" && wrapped.args && typeof wrapped.args === "object" ? wrapped.args : arg;
+	const out: Record<string, string | number | boolean> = {};
+	for (const [key, value] of Object.entries(source as Record<string, unknown>)) {
+		if (typeof value === "string") out[key] = value.slice(0, TOOL_ARG_VALUE_MAX);
+		else if (typeof value === "number" || typeof value === "boolean") out[key] = value;
+	}
+	return Object.keys(out).length > 0 ? out : undefined;
+}
+
 export interface RawToolOutput {
 	toolName: string;
 	content: unknown;
+	// SIO-1815: see scalarToolArgs.
+	toolArgs?: Record<string, string | number | boolean>;
 	// SIO-1425/1437: the tool's MCP structuredContent payload, when the underlying MCP
 	// tool declared an outputSchema and the client (@langchain/mcp-adapters) routed it to
 	// ToolMessage.artifact's "mcp_structured_content" entry. Undefined for every tool that
@@ -332,7 +352,7 @@ function instrumentTool(
 							// SIO-1248: capture short-circuits too. toolOutputs[] used to be derived from
 							// response.messages, which includes the stop ToolMessage, so skipping it here
 							// would silently drop an entry the persistence path previously had.
-							ctx.rawOutputs?.push({ toolName: tool.name, content: stop.content });
+							ctx.rawOutputs?.push({ toolName: tool.name, content: stop.content, toolArgs: scalarToolArgs(arg) });
 							return stop;
 						}
 
@@ -358,6 +378,7 @@ function instrumentTool(
 							ctx.rawOutputs?.push({
 								toolName: tool.name,
 								content: error instanceof Error ? error.message : String(error),
+								toolArgs: scalarToolArgs(arg),
 							});
 							throw error;
 						}
@@ -387,6 +408,7 @@ function instrumentTool(
 							toolName: tool.name,
 							content: dropDuplicateStructuredContent(rawContent) ?? rawContent,
 							structuredContent: extractStructuredContent(result),
+							toolArgs: scalarToolArgs(arg),
 						});
 						// SIO-1776: taken HERE, synchronously with the push. Tool calls from one
 						// AIMessage run concurrently and the evidence indexing below awaits, so reading

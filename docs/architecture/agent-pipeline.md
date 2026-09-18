@@ -220,6 +220,38 @@ The `AgentState` is defined in `packages/agent/src/state.ts` using LangGraph's `
 
 ---
 
+### normalize: incident time (SIO-1815)
+
+An explicit timestamp in the query decides the time window, in code. The rule lives
+in `packages/agent/src/incident-time.ts` and is pure, so it is tested without an LLM.
+
+- **Why.** A pasted Kibana timestamp (`Sep 17, 2026 @ 21:10:42.707`) is in the
+  viewer's zone. With no zone known the pipeline read 21:10 CEST as 21:10Z, the
+  report's anchor was two hours late, and the difference surfaced as an "unexplained
+  interval" in its own Gaps section. The model's window is not reliable either: on one
+  run it returned the default now-24h, on the next a ten-minute window around the
+  misread hour that excluded the real incident.
+- **Zone.** The browser sends `clientTimeZone` (IANA) with the request; it rides state
+  as `clientTimeZone`. It applies to the Kibana shape only. An unzoned ISO timestamp is
+  what a pasted log line carries, which is the server's clock, so it is read as UTC and
+  marked `assumed`; so is everything when no usable zone was sent. A zoned ISO
+  timestamp is already absolute.
+- **Anchors.** `normalizedIncident.incidentAnchors` and
+  `investigationFocus.incidentAnchors` carry `{ raw, utc, timeZone, assumed }`. They
+  are on the focus because the sub-agents and the aggregator read the user's raw text
+  too and would otherwise re-read the local time as UTC.
+- **Windows.** The investigation window (`timeWindow`) is a day either side of the
+  anchors, never past now. The incident window is two hours before to one hour after
+  the first anchor; `buildFocusBlock` hands it to every sub-agent precomputed as ISO,
+  relative tokens (`now-<n>m`, the form `aws_logs_start_query` takes) and epoch
+  seconds, so no model does date arithmetic (SIO-1091).
+- **Rule for sub-agents.** The incident-window query is IN ADDITION to the wide
+  (`now-30d`) discovery, absence and recurrence queries their rules require. A wide
+  query sorted newest-first returns the most recent rows, not the incident's: that is
+  how a duplicate-key line from two days earlier was reported as the incident. A row
+  from outside the incident window is history and is dated when cited.
+- **Aggregator.** It is told the converted anchor and must state it, not derive one.
+
 ### selectRunbooks (optional;)
 
 **Source:** `packages/agent/src/runbook-selector.ts`

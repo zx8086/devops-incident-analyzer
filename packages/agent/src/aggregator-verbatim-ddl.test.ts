@@ -360,3 +360,41 @@ describe("verbatimDdlRule prompt trigger (SIO-1169)", () => {
 		expect(getHumanPromptText(messages)).not.toContain("VERBATIM DDL REQUIREMENT");
 	});
 });
+
+// SIO-1815: the report's incident anchor used to be the model's own reading of the user's
+// text, so 21:10 CEST was printed as 21:10Z on the 2026-09-18 run. The converted value is
+// now stated to the aggregator; it no longer derives one.
+describe("INCIDENT TIME rule (SIO-1815)", () => {
+	const anchor = {
+		raw: "Sep 17, 2026 @ 21:10:42.707",
+		utc: "2026-09-17T19:10:42.707Z",
+		timeZone: "Europe/Amsterdam",
+		assumed: false,
+	};
+	const results = [result({ data: "Cluster is healthy." })];
+
+	test("states the UTC anchor from the focus and forbids re-deriving it", () => {
+		const state = makeState({
+			dataSourceResults: results,
+			investigationFocus: {
+				services: ["feed-service"],
+				datasources: [],
+				summary: "high investigation of feed-service",
+				establishedAtTurn: 1,
+				incidentAnchors: [anchor],
+			},
+		});
+		const prompt = getHumanPromptText(buildAggregatorMessages(state, "irrelevant block", results));
+		expect(prompt).toContain("INCIDENT TIME: 2026-09-17T19:10:42.707Z");
+		expect(prompt).toContain("Europe/Amsterdam local time");
+		expect(prompt).toContain("Do NOT re-derive it from the user's message");
+		expect(prompt).toContain("never present it as the incident itself");
+	});
+
+	test("adds nothing when the query named no explicit time (no prompt tax)", () => {
+		const prompt = getHumanPromptText(
+			buildAggregatorMessages(makeState({ dataSourceResults: results }), "irrelevant block", results),
+		);
+		expect(prompt).not.toContain("INCIDENT TIME");
+	});
+});

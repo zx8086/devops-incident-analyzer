@@ -110,7 +110,15 @@ function jsonSchemaTypeToZod(key: string, prop: Record<string, unknown>): z.ZodT
 						// rather than reject the call outright. GitLab shipped tools without
 						// `items` before gitlab-org/gitlab!211286 added it.
 						z.unknown();
-			return z.array(element).describe(description);
+			// Same contract, the other half: GitLab caps some arrays (`include` on
+			// get_merge_request and get_pipeline is one facet per call, the work-item
+			// filters 100). Dropping the bound let the model send ["diffs","pipelines"],
+			// which GitLab refused mid-investigation with "include cannot contain more
+			// than 1 items"; carried through, the bound is in the schema the model reads.
+			let array = z.array(element);
+			if (typeof prop.minItems === "number") array = array.min(prop.minItems);
+			if (typeof prop.maxItems === "number") array = array.max(prop.maxItems);
+			return array.describe(description);
 		}
 		default:
 			return z.unknown().describe(description);

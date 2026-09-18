@@ -127,6 +127,27 @@ export type FleetInboxKind = z.infer<typeof FleetInboxKindSchema>;
 export const FleetInboxSeveritySchema = z.enum(["info", "warn", "critical"]);
 export type FleetInboxSeverity = z.infer<typeof FleetInboxSeveritySchema>;
 
+// SIO-1815: one finding of a monitor report, as structured facts. `family` is the
+// monitor's own category (alarm, logs, health, drift, tasks, ...) and stays a string, not
+// an enum: the monitor ships in the fleet bundle on its own cadence (SIO-1814), so a
+// reader pinned to today's families would drop a newer monitor's findings. `resource` is
+// an AWS identifier (alarm name, log group, security group id). The finding's summary
+// and the spoke's diagnosis are free text and are deliberately NOT carried.
+export const FleetInboxFindingSchema = z.object({
+	severity: FleetInboxSeveritySchema,
+	family: z.string(),
+	resource: z.string(),
+	focus: z.boolean().describe("Whether this finding names one of the incident's focus services"),
+});
+export type FleetInboxFinding = z.infer<typeof FleetInboxFindingSchema>;
+
+export const FleetInboxFamilyCountSchema = z.object({
+	family: z.string(),
+	count: z.number().int().nonnegative(),
+	focus: z.number().int().nonnegative(),
+});
+export type FleetInboxFamilyCount = z.infer<typeof FleetInboxFamilyCountSchema>;
+
 export const FleetInboxEntrySchema = z.object({
 	msgId: z.string(),
 	inbox: z.string(),
@@ -136,6 +157,8 @@ export const FleetInboxEntrySchema = z.object({
 	severity: FleetInboxSeveritySchema.nullable(),
 	findingCount: z.number().int().nonnegative().nullable(),
 	alarmNames: z.array(z.string()),
+	findings: z.array(FleetInboxFindingSchema),
+	focus: z.boolean().describe("Whether any finding in this report names a focus service"),
 	createdAt: z.string(),
 	completedAt: z.string().nullable(),
 	excerpt: z.string(),
@@ -143,10 +166,10 @@ export const FleetInboxEntrySchema = z.object({
 export type FleetInboxEntry = z.infer<typeof FleetInboxEntrySchema>;
 
 export const FleetInboxCountsSchema = z.object({
+	// Monitor reports only: buildEstateDigest drops every other row, so there is
+	// no per-kind breakdown left to count.
 	total: z.number().int().nonnegative(),
-	monitorReports: z.number().int().nonnegative(),
-	conversations: z.number().int().nonnegative(),
-	other: z.number().int().nonnegative(),
+	focus: z.number().int().nonnegative().describe("Reports naming a focus service"),
 	critical: z.number().int().nonnegative(),
 	warn: z.number().int().nonnegative(),
 });
@@ -158,6 +181,7 @@ export const FleetInboxEstateSchema = z.object({
 	inboxes: z.array(z.string()),
 	entries: z.array(FleetInboxEntrySchema),
 	counts: FleetInboxCountsSchema,
+	families: z.array(FleetInboxFamilyCountSchema),
 	alarmNames: z.array(z.string()),
 	latestAt: z.string().nullable(),
 	error: z.string().nullable(),
@@ -168,6 +192,7 @@ export const FleetInboxDigestSchema = z.object({
 	windowFrom: z.string(),
 	windowTo: z.string(),
 	generatedAt: z.string(),
+	focusServices: z.array(z.string()).describe("What the digest was scoped to; empty = unscoped"),
 	estates: z.array(FleetInboxEstateSchema),
 });
 export type FleetInboxDigest = z.infer<typeof FleetInboxDigestSchema>;

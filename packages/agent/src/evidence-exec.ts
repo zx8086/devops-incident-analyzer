@@ -151,6 +151,8 @@ export function describeRun(toolName: string, code: string, originalBytes: numbe
 }
 
 const MAX_CONSECUTIVE_FAILURES = 3;
+// The most recent captures: a wrong id is almost always for something just fetched.
+const MAX_INDEX_ENTRIES = 40;
 
 interface ExecLogger {
 	info: (...args: unknown[]) => unknown;
@@ -182,7 +184,16 @@ export function buildRunJsOnEvidenceTool(
 					consecutiveFailures >= MAX_CONSECUTIVE_FAILURES
 						? ` This is failure ${consecutiveFailures} in a row. Do not call ${RUN_JS_TOOL_NAME} again; write your findings from the results you already have.`
 						: " Fix the code and try once more, or answer from the results you already have.";
-				return `The code failed: ${run.error}.${stop}${run.stdout ? `\nOutput before the failure:\n${run.stdout}` : ""}`;
+				// SIO-1815: ids are assigned in capture order, which the model cannot see, so it
+				// guesses. Live run 2026-09-18: it took e3 for the metric data (e3 was
+				// describe_log_groups, the metrics were e6), got a bare TypeError twice, and spent a
+				// third call on evidence.list() before the fourth worked. The index costs a line
+				// and turns a wrong id into a one-step fix.
+				const index = evidence
+					.slice(-MAX_INDEX_ENTRIES)
+					.map((e) => `${e.id}=${e.tool}`)
+					.join(", ");
+				return `The code failed: ${run.error}.${stop}\nCaptured results by id: ${index}${run.stdout ? `\nOutput before the failure:\n${run.stdout}` : ""}`;
 			}
 			consecutiveFailures = 0;
 			return run.stdout === "" ? "(the code returned nothing; `return` a value or call print())" : run.stdout;

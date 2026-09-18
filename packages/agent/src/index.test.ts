@@ -37,6 +37,7 @@ function makeState(overrides: Record<string, unknown> = {}) {
 		alignmentHints: [] as string[],
 		skippedDataSources: [] as string[],
 		isFollowUp: false,
+		clientTimeZone: undefined,
 		finalAnswer: "",
 		graphContext: "",
 		graphBlastRadius: [],

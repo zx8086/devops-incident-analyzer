@@ -22,6 +22,11 @@ in order; every id comes from the PREVIOUS call's response, never guessed.
    the incident as candidates. For each candidate:
    `gitlab_get_merge_request` -> `gitlab_get_merge_request_diffs` (what changed)
    and `gitlab_get_merge_request_pipelines` (capture the pipeline id).
+   `gitlab_get_merge_request`'s `include` takes ONE facet per call (GitLab
+   rejects `["diffs","pipelines"]` with "include cannot contain more than 1
+   items"). If a combined call is rejected, re-issue it ONCE PER FACET --
+   retrying with only the first facet silently drops the other, and the
+   pipeline id is what step 4 needs.
 3. Pick the STRONGEST candidate from step 2 (changed files overlap the
    incident surface, or its pipeline is failing) and name it explicitly before
    continuing -- everything below runs against that one MR:

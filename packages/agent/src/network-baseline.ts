@@ -244,7 +244,19 @@ export async function fetchNetworkBaseline(opts: {
 	const probe = async (toolName: string, args: Record<string, unknown>): Promise<unknown> => {
 		if (Date.now() > deadline || !hasTool(toolName)) return undefined;
 		try {
-			return await invoke(toolName, args);
+			// SIO-1815: the sub-agent's invoke returns normalizeToolContent(...), i.e. the JSON
+			// TEXT, and every schema below is an object schema -- so each probe parsed as empty.
+			// Live run 2026-09-18: list_tasks returned 3 RUNNING task ARNs for the focus service,
+			// read as none, and describe_tasks was never called ("no-tasks-running"); in the
+			// other estate list_clusters returned 5 clusters, read as none, and the EKS/EC2
+			// fallback fired against an ECS estate. The tests passed objects, production never did.
+			const result = await invoke(toolName, args);
+			if (typeof result !== "string") return result;
+			try {
+				return JSON.parse(result);
+			} catch {
+				return result;
+			}
 		} catch {
 			return undefined;
 		}

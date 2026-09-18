@@ -38,6 +38,38 @@ describe("buildResultsBlock", () => {
 		expect(block).toContain("gitlab_search [auth]: 401 Unauthorized");
 	});
 
+	// SIO-1815: the model only ever saw the failure, so it reported a recovered call as a gap.
+	test("labels only a PROVEN recovery; a lenient one and a plain failure stay bare", () => {
+		const block = buildResultsBlock([
+			result({
+				toolErrors: [
+					{
+						toolName: "gitlab_get_merge_request",
+						category: "unknown",
+						message: "include",
+						retryable: false,
+						recovered: true,
+						recoveredSameTarget: true,
+					},
+					// Lenient only ("nothing conflicted"): not proof, so it reads as a plain failure.
+					{
+						toolName: "capella_run_sql_plus_plus_query",
+						category: "bad-query",
+						message: "syntax",
+						retryable: false,
+						recovered: true,
+					},
+					{ toolName: "gitlab_search", category: "auth", message: "401 Unauthorized", retryable: false },
+				],
+			}),
+		]);
+		expect(block).toContain(
+			"gitlab_get_merge_request [unknown]: include [a later call to this tool for the SAME target SUCCEEDED",
+		);
+		expect(block).toContain("capella_run_sql_plus_plus_query [bad-query]: syntax\n");
+		expect(block).toContain("gitlab_search [auth]: 401 Unauthorized\n");
+	});
+
 	test("omits the tool-errors block entirely when there are no tool errors", () => {
 		const block = buildResultsBlock([result({})]);
 		expect(block).not.toContain("Tool errors");
