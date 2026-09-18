@@ -19,6 +19,7 @@ import {
 	applyMailbox,
 	applySendResult,
 	applyStatus,
+	clearConversation,
 	expireEntry,
 	failEntry,
 	initialPiFleetState,
@@ -64,6 +65,10 @@ function createPiFleetStore() {
 	let open = $state(false);
 	let busy = $state(false);
 	let mailboxBusy = $state<string | null>(null);
+	// SIO-1811: bumped by clear(). Async work captures it at start and drops its
+	// result if it no longer matches, so a late reply cannot land on a board the
+	// operator has since cleared. Plain `let`, not $state -- nothing renders it.
+	let generation = 0;
 
 	async function load() {
 		try {
@@ -80,8 +85,29 @@ function createPiFleetStore() {
 		fleet = selectPeer(fleet, selection);
 	}
 
-	async function pollUntilTerminal(id: string) {
+	// SIO-1811: called by the header's clear button, so the pane beside the answer
+	// is cleared with it.
+	//
+	// The generation counter is what makes a clear stick (Greptile, PR #842). Async
+	// work started by the old conversation can finish after it: pollUntilTerminal
+	// and applyStatus/applyActionResult are safe on their own, because patchEntry
+	// maps over existing entries and a removed one is simply not found -- but
+	// applyMailbox SPREADS into the record, so a mailbox read in flight across a
+	// clear puts the old listing back on the fresh board. Measured, not assumed:
+	// a probe over the reducers confirmed entries stay at 0 while mailboxes
+	// returned to 1. Every write below is now gated on the generation it started
+	// in, which also stops runAction's poll loop, the one loop with no
+	// entry-existence check of its own.
+	function clear() {
+		generation += 1;
+		fleet = clearConversation(fleet);
+	}
+
+	async function pollUntilTerminal(id: string, startedIn: number) {
 		while (true) {
+			// The entry check alone already stops this loop after a clear; the
+			// generation check makes that explicit rather than incidental.
+			if (startedIn !== generation) return;
 			const entry = fleet.entries.find((e) => e.id === id);
 			if (!entry) return;
 			if (isTerminal(entry.status)) return;
@@ -103,6 +129,7 @@ function createPiFleetStore() {
 	// failing leaves the others' cards intact.
 	async function sendOne(target: PiFleetSelection, text: string) {
 		const id = crypto.randomUUID();
+		const startedIn = generation;
 		fleet = startEntry(fleet, { id, ...target, target: target.name, prompt: text, sentAt: Date.now() });
 		try {
 			const body = await readJson(
@@ -114,9 +141,11 @@ function createPiFleetStore() {
 			);
 			const parsed = PiFleetMessageResponseSchema.safeParse(body);
 			if (!parsed.success) throw new Error("unexpected /api/pi/messages response shape");
+			if (startedIn !== generation) return;
 			fleet = applySendResult(fleet, id, parsed.data);
-			await pollUntilTerminal(id);
+			await pollUntilTerminal(id, startedIn);
 		} catch (error) {
+			if (startedIn !== generation) return;
 			fleet = failEntry(fleet, id, error instanceof Error ? error.message : String(error));
 		}
 	}
@@ -148,8 +177,19 @@ function createPiFleetStore() {
 	// unconfigured pane means the entry is not shown and the card renders the result itself.
 	async function runAction(action: PendingAction, reportContent: string): Promise<ActionResult> {
 		const id = crypto.randomUUID();
+		const startedIn = generation;
 		const label = action.tool === "investigate-with-pi" ? "investigate" : "verify";
+		// SIO-1811: this loop runs to its own deadline (up to 300 s) and, unlike
+		// pollUntilTerminal, never checks that its entry still exists. Abandoned once
+		// the board it belongs to has been cleared.
+		const abandoned = (): ActionResult => ({
+			actionId: action.id,
+			tool: action.tool,
+			status: "error",
+			error: "the conversation was cleared while this action was running",
+		});
 		const failed = (message: string): ActionResult => {
+			if (startedIn !== generation) return abandoned();
 			fleet = failEntry(fleet, id, message);
 			return { actionId: action.id, tool: action.tool, status: "error", error: message };
 		};
@@ -174,6 +214,7 @@ function createPiFleetStore() {
 				),
 			);
 			if (!started.success) return failed("unexpected /api/pi/actions response shape");
+			if (startedIn !== generation) return abandoned();
 			const start = started.data;
 			if (start.hubKey !== undefined) {
 				fleet = patchEntry(fleet, id, { hubKey: start.hubKey, target: start.target, prompt: start.prompt });
@@ -193,6 +234,9 @@ function createPiFleetStore() {
 			const NO_REPLY = "no reply within the action budget";
 			let lastError = NO_REPLY;
 			while (Date.now() < deadline) {
+				// Stop the moment the board this action belongs to is cleared, rather
+				// than polling on for the rest of the budget against a gone entry.
+				if (startedIn !== generation) return abandoned();
 				let polled: ReturnType<typeof PiActionPollResponseSchema.safeParse>;
 				try {
 					const res = await fetch(`/api/pi/actions?msgId=${encodeURIComponent(start.msgId)}`);
@@ -211,10 +255,12 @@ function createPiFleetStore() {
 					lastError = NO_REPLY;
 					continue;
 				}
+				if (startedIn !== generation) return abandoned();
 				if (!revealedAtStart) reveal();
 				fleet = applyActionResult(fleet, id, polled.data.result);
 				return polled.data.result;
 			}
+			if (startedIn !== generation) return abandoned();
 			fleet = expireEntry(fleet, id, start.budgetMs);
 			return { actionId: action.id, tool: action.tool, status: "error", error: lastError };
 		} catch (error) {
@@ -223,6 +269,7 @@ function createPiFleetStore() {
 	}
 
 	async function loadMailbox(hubKey: string, estates: string[]) {
+		const startedIn = generation;
 		mailboxBusy = hubKey;
 		try {
 			// SIO-1705: the scope travels with the request so the hub-side read is anchored
@@ -231,11 +278,23 @@ function createPiFleetStore() {
 			const body = await readJson(await fetch(`/api/pi/mailbox?hubKey=${encodeURIComponent(hubKey)}${scope}`));
 			const parsed = PiFleetMailboxResponseSchema.safeParse(body);
 			if (!parsed.success) throw new Error("unexpected /api/pi/mailbox response shape");
+			if (startedIn !== generation) return;
 			fleet = applyMailbox(fleet, parsed.data);
 		} catch (error) {
+			if (startedIn !== generation) return;
 			fleet = applyLoadError(fleet, describeLoadFailure(error, `read the ${hubKey} inbox`));
 		} finally {
-			mailboxBusy = null;
+			// mailboxBusy is ONE shared slot holding the hub currently loading, and the
+			// pane disables that hub's Inbox button on it. So release it only while it
+			// is still ours (Greptile, PR #842): an older read settling after a newer
+			// one started would otherwise blank the newer request's flag, re-enabling
+			// its button mid-flight and inviting a duplicate refresh.
+			//
+			// This cannot strand the flag the way a generation check here would. The
+			// guard is ownership, not freshness: whichever read claimed the slot last
+			// is the one that clears it, and every path through this function reaches
+			// this block.
+			if (mailboxBusy === hubKey) mailboxBusy = null;
 		}
 	}
 
@@ -275,6 +334,7 @@ function createPiFleetStore() {
 		},
 		load,
 		select,
+		clear,
 		send,
 		runAction,
 		loadMailbox,

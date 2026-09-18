@@ -19,9 +19,18 @@ mock.module("@devops-agent/agent", () => ({
 	// (process-global mock cache must stay link-compatible across sibling files).
 	iacTurnOutcome: () => "completed",
 	getConnectedServers: () => ["elastic-mcp", "kafka-mcp"],
+	// SIO-1811: the raw getter stays mocked for sibling files (/health reads it), but
+	// this route must read the debounced UI view. The two return DIFFERENT values here
+	// on purpose: if the route regresses to the raw getter, kafka reads "unready" and
+	// the assertion below fails.
 	getServerStates: () => ({
 		"elastic-mcp": "ready",
 		"kafka-mcp": "unready",
+		"konnect-mcp": "down",
+	}),
+	getServerStatesForUi: () => ({
+		"elastic-mcp": "ready",
+		"kafka-mcp": "ready",
 		"konnect-mcp": "down",
 	}),
 	processAttachments: () => Promise.resolve({ contentBlocks: [], metadata: [], warnings: [] }),
@@ -91,9 +100,12 @@ describe("GET /api/datasources", () => {
 
 		expect(body.dataSources).toEqual(expect.arrayContaining(["elastic", "kafka", "konnect"]));
 		expect(body.connected).toEqual(expect.arrayContaining(["elastic", "kafka"]));
+		// SIO-1811: kafka is "ready" here, not "unready" -- the route reads the
+		// debounced UI view, so a single starved /ready probe cannot repaint a chip.
+		// `down` is not debounced and still comes straight through.
 		expect(body.states).toEqual({
 			elastic: "ready",
-			kafka: "unready",
+			kafka: "ready",
 			konnect: "down",
 		});
 	});

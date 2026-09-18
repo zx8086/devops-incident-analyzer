@@ -1,5 +1,5 @@
 // apps/web/src/routes/api/datasources/+server.ts
-import { getConnectedServers, getServerStates } from "@devops-agent/agent";
+import { getConnectedServers, getServerStatesForUi } from "@devops-agent/agent";
 import { json } from "@sveltejs/kit";
 import { ensureMcpConnected } from "$lib/server/agent";
 import type { RequestHandler } from "./$types";
@@ -30,8 +30,10 @@ export const GET: RequestHandler = async () => {
 		.map((s) => SERVER_TO_DATASOURCE[s])
 		.filter(Boolean);
 
-	// SIO-780 Phase C: surface five-state probe results for the UI
-	const rawStates = getServerStates();
+	// SIO-780 Phase C: surface five-state probe results for the UI.
+	// SIO-1811: the UI accessor, not the raw one -- a single starved /ready probe
+	// must not repaint a chip. /health keeps using getServerStates().
+	const rawStates = getServerStatesForUi();
 	const states: Record<string, string> = {};
 	for (const [serverName, state] of Object.entries(rawStates)) {
 		const dsId = SERVER_TO_DATASOURCE[serverName];

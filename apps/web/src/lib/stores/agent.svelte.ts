@@ -584,9 +584,14 @@ function createAgentStore() {
 				const prevConnected = connectedDataSources;
 
 				connectedDataSources = newConnected;
-				stateDataSources = data.states ?? {};
-
+				// SIO-1811: hold the health colour steady for the duration of a turn. A
+				// run is exactly when the AgentCore-hosted probes are most likely to be
+				// starved by the run's own tool calls, so mid-turn is the worst moment to
+				// trust a readiness verdict. Same !isStreaming guard the auto-select and
+				// auto-deselect below already use; connectedDataSources keeps updating.
 				if (!isStreaming) {
+					stateDataSources = data.states ?? {};
+
 					// Auto-deselect datasources that went offline
 					const wentOffline = prevConnected.filter((ds) => !newConnected.includes(ds));
 					if (wentOffline.length > 0) {

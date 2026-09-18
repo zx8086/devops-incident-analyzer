@@ -7,8 +7,10 @@ import {
 	applyActionStart,
 	applyAgents,
 	applyLoadError,
+	applyMailbox,
 	applySendResult,
 	applyStatus,
+	clearConversation,
 	expireEntry,
 	failEntry,
 	formatReply,
@@ -227,5 +229,96 @@ describe("formatReply", () => {
 		expect(formatReply(null)).toBe("");
 		expect(formatReply(undefined)).toBe("");
 		expect(formatReply({ a: 1 })).toBe('{\n  "a": 1\n}');
+	});
+});
+
+describe("SIO-1811: clearConversation", () => {
+	test("drops entries and mailboxes but keeps the roster and selection", () => {
+		// Build the roster the way the app does, so the fixture cannot drift from the
+		// real state shape.
+		const withRoster = selectPeer(applyAgents(initialPiFleetState(), listing), {
+			hubKey: "eu-shared-services-prd",
+			name: "eu-oit-prd",
+		});
+		const withMailbox = applyMailbox(withRoster, {
+			hubKey: "eu-shared-services-prd",
+			environment: "prd",
+			name: "ops-prd",
+			missingDigest: [],
+			windowTruncated: false,
+			messages: [],
+		});
+		const seeded = startEntry(withMailbox, {
+			id: "e1",
+			hubKey: "eu-shared-services-prd",
+			target: "eu-oit-prd",
+			prompt: "verify the report",
+			sentAt: 1,
+		});
+		expect(seeded.entries).toHaveLength(1);
+		expect(Object.keys(seeded.mailboxes)).toHaveLength(1);
+
+		const cleared = clearConversation(seeded);
+
+		// The conversation goes.
+		expect(cleared.entries).toEqual([]);
+		expect(cleared.mailboxes).toEqual({});
+		// The roster stays, so the pane needs no refetch to remain usable.
+		expect(cleared.configured).toBe(true);
+		expect(cleared.loaded).toBe(true);
+		expect(cleared.peers).toEqual(seeded.peers);
+		expect(cleared.selected).toEqual({ hubKey: "eu-shared-services-prd", name: "eu-oit-prd" });
+		expect(cleared.totalBudgetMs).toBe(seeded.totalBudgetMs);
+	});
+
+	test("is a no-op on an already-empty board", () => {
+		const base = initialPiFleetState();
+		expect(clearConversation(base)).toEqual(base);
+	});
+});
+
+// SIO-1811 / Greptile PR #842: which late writes can resurrect a cleared board.
+// This is the measurement the store's generation guard is built on -- entries are
+// safe by construction, mailboxes are not, so the guard is not optional.
+describe("SIO-1811: late writes against a cleared board", () => {
+	const cleared = clearConversation(
+		startEntry(initialPiFleetState(), {
+			id: "e1",
+			hubKey: "eu-shared-services-prd",
+			target: "eu-oit-prd",
+			prompt: "verify",
+			sentAt: 1,
+		}),
+	);
+
+	test("a late entry write is a no-op -- patchEntry maps over entries that exist", () => {
+		const lateResult = applyActionResult(cleared, "e1", {
+			status: "success",
+			result: { kind: "verdict", verdict: { verdict: "confirmed", claims: [] } },
+		});
+		expect(lateResult.entries).toEqual([]);
+		const lateStatus = applyStatus(cleared, "e1", {
+			hubKey: "eu-shared-services-prd",
+			environment: "prd",
+			msgId: "m1",
+			status: "complete",
+			response: { summary: "late" },
+			error: null,
+		});
+		expect(lateStatus.entries).toEqual([]);
+	});
+
+	// The half that IS unsafe: applyMailbox spreads into the record, so it reinserts
+	// a hub the clear removed. The store gates this call on its generation counter.
+	test("a late mailbox write DOES resurrect, which is why the store guards it", () => {
+		const late = applyMailbox(cleared, {
+			hubKey: "eu-shared-services-prd",
+			environment: "prd",
+			name: "ops-prd",
+			missingDigest: [],
+			windowTruncated: false,
+			messages: [],
+		});
+		expect(Object.keys(late.mailboxes)).toEqual(["eu-shared-services-prd"]);
 	});
 });
