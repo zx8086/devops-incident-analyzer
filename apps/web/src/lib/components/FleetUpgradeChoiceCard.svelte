@@ -53,7 +53,7 @@ const skippedByLabel = $derived.by(() => {
       <h3 id="fleet-upgrade-heading" class="text-sm font-semibold text-tommy-navy">
         Fleet upgrade: {prompt.deployment}
       </h3>
-      <span class="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-700">target: {prompt.targetVersion}</span>
+      <span class="text-xs px-2 py-0.5 rounded bg-gray-200 text-gray-700">target: {prompt.targetVersion}</span>
     </div>
     <p class="text-sm text-tommy-navy/80 mt-1">{prompt.message}</p>
 

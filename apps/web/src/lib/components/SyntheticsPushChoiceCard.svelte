@@ -26,7 +26,7 @@ let {
         Push synthetics: {prompt.deployment}
       </h3>
       {#if prompt.kibanaSpace}
-        <span class="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-700">space: {prompt.kibanaSpace}</span>
+        <span class="text-xs px-2 py-0.5 rounded bg-gray-200 text-gray-700">space: {prompt.kibanaSpace}</span>
       {/if}
     </div>
     <p class="text-sm text-tommy-navy/80 mt-1">{prompt.message}</p>

@@ -30,7 +30,7 @@ const showEvidence = $derived(
     {#if capped}
       <button
         type="button"
-        class="inline-flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-0.5 font-medium text-amber-800 hover:bg-amber-100"
+        class="inline-flex items-center gap-1.5 rounded border border-amber-300 bg-amber-50 px-2.5 py-0.5 font-medium text-amber-800 hover:bg-amber-100"
         onclick={() => (expanded = !expanded)}
         aria-expanded={expanded}
         title={capReasons.map(capReasonLabel).join(", ")}
@@ -63,14 +63,14 @@ const showEvidence = $derived(
       {/if}
     {:else if lowConfidence}
       <span
-        class="inline-flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-0.5 font-medium text-amber-800"
+        class="inline-flex items-center gap-1.5 rounded border border-amber-300 bg-amber-50 px-2.5 py-0.5 font-medium text-amber-800"
       >
         Confidence {confidence}
         <span class="font-normal text-amber-700">below review threshold</span>
       </span>
     {:else}
       <span
-        class="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-2.5 py-0.5 font-medium text-gray-600"
+        class="inline-flex items-center rounded border border-gray-200 bg-gray-50 px-2.5 py-0.5 font-medium text-gray-600"
       >
         Confidence {confidence}
       </span>
