@@ -156,6 +156,40 @@ describe("extractAwsFindings focus scoping (SIO-1030)", () => {
 		);
 		expect(out.alarms).toHaveLength(1);
 	});
+
+	// SIO-1797: the live shape. An estate of 26 ALARM-state ECS alarms, 25 named
+	// `<name>-service-<metric>`, none for the focus service. The focus ends in `-v3`, so it
+	// keeps a `service` token, and that one shared token used to scope 25 of 26. Synthetic
+	// names, real shape; `_summary` because that is what a live run carries (wrapListTool).
+	test("a focus no alarm names scopes 0 of an estate's *-service-* alarms, then falls back flagged", () => {
+		const rows = Array.from({ length: 25 }, (_, i) => ({
+			AlarmName: `svc${String(i).padStart(2, "0")}-service-CPU-Utilization-Low-20`,
+			StateValue: "ALARM",
+			MetricName: "CPUUtilization",
+			Namespace: "AWS/ECS",
+		}));
+		rows.push({
+			AlarmName: "edge-bff-CPU-Utilization-Low-20",
+			StateValue: "ALARM",
+			MetricName: "CPUUtilization",
+			Namespace: "AWS/ECS",
+		});
+		const output: ToolOutput = { toolName: "aws_cloudwatch_describe_alarms", rawJson: { _summary: rows } };
+		const out = extractAwsFindings([output], ["pvh-services-styles-v3"]);
+		expect(out.unscoped).toBe(true);
+		expect(out.alarms).toHaveLength(5);
+
+		// An alarm that does name the focus service still scopes, and suppresses the fallback.
+		rows.push({
+			AlarmName: "styles-v3-service-CPU-Utilization-Low-20",
+			StateValue: "ALARM",
+			MetricName: "CPUUtilization",
+			Namespace: "AWS/ECS",
+		});
+		const named = extractAwsFindings([output], ["pvh-services-styles-v3"]);
+		expect(named.unscoped).toBeUndefined();
+		expect(named.alarms?.map((a) => a.name)).toEqual(["styles-v3-service-CPU-Utilization-Low-20"]);
+	});
 });
 
 // SIO-1159: unscoped top-N fallback (mirrors couchbase SIO-1138). Run 270378e0:

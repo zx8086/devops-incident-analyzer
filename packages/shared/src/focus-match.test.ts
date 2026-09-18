@@ -118,6 +118,25 @@ describe("matchesFocus", () => {
 		expect(matchesFocus("bitly-service-Memory-Utilization", ["prices-api-v2-service"])).toBe(false);
 	});
 
+	// SIO-1797: focus `pvh-services-styles-v3` tokenizes to {service, style} (`pvh` and `v3`
+	// are under MIN_TOKEN_LENGTH; the focus ends in `-v3`, so SUFFIX_PATTERN never strips
+	// `service`). Live, one shared `service` scoped 25 of an estate's 26 alarms to it.
+	test("a shared 'service' token alone is not a match (SIO-1797)", () => {
+		const focus = ["pvh-services-styles-v3"];
+		expect(matchesFocus("orders-service-CPU-Utilization-Low-20 CPUUtilization AWS/ECS", focus)).toBe(false);
+		expect(matchesFocus("kong-admin-api-service-CPU-Utilization-Low-20 CPUUtilization AWS/ECS", focus)).toBe(false);
+		// The focus's distinctive token still scopes an alarm that names it.
+		expect(matchesFocus("styles-v3-service-CPU-Utilization-Low-20 CPUUtilization AWS/ECS", focus)).toBe(true);
+		expect(matchesFocus("styles-import-lag ApproximateAgeOfOldestMessage AWS/SQS", focus)).toBe(true);
+	});
+
+	test("skipping 'service' leaves tokenize output and the exact path alone (SIO-1797)", () => {
+		// tokenize still reports the token; only matchesFocus's overlap loop ignores it.
+		expect(tokenize("pvh-services-styles-v3")).toEqual(new Set(["service", "style"]));
+		// A name that IS the generic word still matches itself through exact equality.
+		expect(matchesFocus("service", ["service"])).toBe(true);
+	});
+
 	test("any-of: matches if any focus service matches", () => {
 		expect(matchesFocus("orders-service-sink", ["prices-api-v2-service", "orders-service"])).toBe(true);
 	});
