@@ -16,7 +16,8 @@
 // to project pi-coms-dev: the hub listed both agents online while systemd
 // reported the unit failed.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const SCRIPT = readFileSync(join(import.meta.dir, "../deploy/bootstrap/agent-bootstrap.sh"), "utf-8");
@@ -56,30 +57,82 @@ describe("agent-bootstrap.sh project scoping", () => {
 	});
 });
 
-// SIO-1788: the launcher writes mcp.json as a hand-escaped JSON string inside a
-// printf. A quoting slip there yields a file the adapter cannot parse, and the
-// spoke silently starts with no ctx_* tools at all. So run the real line through
-// bash and parse what it prints, rather than matching the source text.
+// SIO-1788 / SIO-1793: the launcher writes mcp.json as a hand-escaped JSON string
+// inside a printf, behind the CTX_MODE_ENABLED kill-switch and a check that the
+// server bundle exists. A quoting slip yields a file the adapter cannot parse; a
+// wrong CTX_SERVER path makes the `-f` test fail and the else branch delete the
+// file; either way the spoke silently starts with no ctx_* tools. So run the
+// whole block (CTX_SERVER= through fi, exactly as the launcher carries it: the
+// heredoc is quoted, so $HOME expands at run time) through bash in a temp HOME
+// and inspect the file it leaves behind, rather than matching source text or
+// injecting the path under test.
 describe("agent-bootstrap.sh mcp.json entry", () => {
-	const line = SCRIPT.split("\n").find((l) => l.includes("printf") && l.includes('\\"mcpServers\\"'));
+	const lines = SCRIPT.split("\n");
+	const start = lines.findIndex((l) => l.startsWith('CTX_SERVER="$HOME/'));
+	const end = lines.findIndex((l, i) => i > start && l === "fi");
+	const block = lines.slice(start, end + 1).join("\n");
+	const SERVER_REL = ".pi-ctx/node_modules/context-mode/server.bundle.mjs";
 
-	test("the printf line renders valid JSON that hides the four maintenance tools", () => {
-		expect(line).toBeDefined();
-		// Drop the trailing line continuation: the redirect to mcp.json is on the next line.
-		const command = (line ?? "").trim().replace(/\\$/, "");
-		const out = Bun.spawnSync(["bash", "-c", command], {
-			env: {
-				HOME: "/home/piagent",
-				CTX_SERVER: "/home/piagent/.pi-ctx/server.bundle.mjs",
-				PATH: process.env.PATH ?? "",
-			},
-		});
-		expect(out.exitCode).toBe(0);
-		const ctx = JSON.parse(out.stdout.toString()).mcpServers.ctx;
+	function runLauncherBlock(opts: { ctxModeEnabled?: string; serverPresent: boolean; existingMcpJson?: string }) {
+		const home = mkdtempSync(join(tmpdir(), "sio-1793-home-"));
+		mkdirSync(join(home, ".pi/agent"), { recursive: true });
+		if (opts.serverPresent) {
+			mkdirSync(join(home, ".pi-ctx/node_modules/context-mode"), { recursive: true });
+			writeFileSync(join(home, SERVER_REL), "// stand-in bundle\n");
+		}
+		if (opts.existingMcpJson !== undefined) writeFileSync(join(home, ".pi/agent/mcp.json"), opts.existingMcpJson);
+		const env: Record<string, string> = { HOME: home, PATH: process.env.PATH ?? "" };
+		if (opts.ctxModeEnabled !== undefined) env.CTX_MODE_ENABLED = opts.ctxModeEnabled;
+		const out = Bun.spawnSync(["bash", "-euo", "pipefail", "-c", block], { env });
+		const path = join(home, ".pi/agent/mcp.json");
+		const mcpJson = existsSync(path) ? readFileSync(path, "utf-8") : null;
+		rmSync(home, { recursive: true, force: true });
+		return { exitCode: out.exitCode, stderr: out.stderr.toString(), mcpJson, home };
+	}
+
+	test("the block was found and is the launcher's, not some other CTX_SERVER line", () => {
+		expect(start).toBeGreaterThan(0);
+		expect(end).toBeGreaterThan(start);
+		expect(block).toContain('> "$HOME/.pi/agent/mcp.json"');
+		expect(block).toContain('rm -f "$HOME/.pi/agent/mcp.json"');
+	});
+
+	test("enabled with the bundle present: writes valid JSON pointing at the script's own path, hiding the four maintenance tools", () => {
+		const r = runLauncherBlock({ serverPresent: true });
+		expect(r.exitCode).toBe(0);
+		expect(r.mcpJson).not.toBeNull();
+		const ctx = JSON.parse(r.mcpJson ?? "").mcpServers.ctx;
+		// The path is asserted from the SCRIPT's CTX_SERVER= line, not one the test supplied.
+		expect(ctx.args).toEqual([join(r.home, SERVER_REL)]);
+		expect(ctx.command).toBe(join(r.home, ".bun/bin/bun"));
 		expect(ctx.excludeTools).toEqual(["ctx_upgrade", "ctx_purge", "ctx_doctor", "ctx_insight"]);
 		// The names the aws-spoke RULES.md tells the model to use must stay reachable.
 		for (const kept of ["ctx_batch_execute", "ctx_execute", "ctx_search"]) expect(ctx.excludeTools).not.toContain(kept);
 		expect(ctx).toMatchObject({ lifecycle: "keep-alive", directTools: true, toolPrefix: "none" });
-		expect(ctx.args).toEqual(["/home/piagent/.pi-ctx/server.bundle.mjs"]);
+	});
+
+	test.each(["false", "0"])(
+		"CTX_MODE_ENABLED=%s removes a pre-existing mcp.json even though the bundle is present",
+		(v) => {
+			const r = runLauncherBlock({
+				ctxModeEnabled: v,
+				serverPresent: true,
+				existingMcpJson: '{"mcpServers":{"ctx":{}}}',
+			});
+			expect(r.exitCode).toBe(0);
+			expect(r.mcpJson).toBeNull();
+		},
+	);
+
+	test("enabled but the bundle is missing: removes a pre-existing mcp.json rather than pointing Pi at a file that is not there", () => {
+		const r = runLauncherBlock({ serverPresent: false, existingMcpJson: '{"mcpServers":{"ctx":{}}}' });
+		expect(r.exitCode).toBe(0);
+		expect(r.mcpJson).toBeNull();
+	});
+
+	test("an unrelated CTX_MODE_ENABLED value counts as enabled (kill-switch is false/0 only)", () => {
+		const r = runLauncherBlock({ ctxModeEnabled: "no", serverPresent: true });
+		expect(r.exitCode).toBe(0);
+		expect(r.mcpJson).not.toBeNull();
 	});
 });
