@@ -264,8 +264,8 @@ export function isMonitorAgentName(name: string): boolean {
 export function spokesOnly<T extends { name: string }>(agents: readonly T[]): T[] {
 	return agents.filter((a) => !isMonitorAgentName(a.name));
 }
-// Under the hub's 30 s default await and its 30 s stale threshold: each slice is
-// followed by a heartbeat so the sender stays online for the whole budget.
+// Under the hub's 30 s default await and its 30 s stale threshold: a REGISTERED
+// sender heartbeats after each slice so it stays online for the whole budget.
 export const PI_COMS_AWAIT_SLICE_MS = 25_000;
 const FETCH_GRACE_MS = 5_000;
 
@@ -499,11 +499,18 @@ export class PiComsClient {
 				logger.info({ msg_id: msgId, status: reply.status, duration_ms: this.now() - start }, "pi.hub.await.done");
 				return { status: reply.status, response: reply.response ?? null, error: reply.error ?? null };
 			}
-			await this.heartbeat();
+			// SIO-1798: a re-poll by message id runs on a fresh client that never
+			// registered; the hub has no card for it, so the beat could only 404
+			// (agent_not_found). /await and the target's reply never consult the sender.
+			if (this.registered) await this.heartbeat();
 		}
 		// A spoke that never answers within budget is the common "it just hangs"
-		// report; without this it looked identical to a silent success.
-		logger.warn({ msg_id: msgId, budget_ms: budgetMs, duration_ms: this.now() - start }, "pi.hub.await.exhausted");
+		// report; without this it looked identical to a silent success. SIO-1798: a
+		// budget of one slice is a caller that re-polls by design and reports the
+		// overall expiry itself, so its per-slice exhaustion is not a warning.
+		const exhausted = { msg_id: msgId, budget_ms: budgetMs, duration_ms: this.now() - start };
+		if (budgetMs <= PI_COMS_AWAIT_SLICE_MS) logger.debug(exhausted, "pi.hub.await.exhausted");
+		else logger.warn(exhausted, "pi.hub.await.exhausted");
 		return { status: "budget_exhausted", response: null, error: `no reply within ${budgetMs} ms` };
 	}
 

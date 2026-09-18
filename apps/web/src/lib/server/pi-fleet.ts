@@ -394,7 +394,7 @@ export async function sendFleetMessage(
 }
 
 // Re-await by id from a fresh, unregistered client: /await needs only the token,
-// and the heartbeat between slices is swallowed by the client when it 404s.
+// and an unregistered client sends no heartbeat between slices (SIO-1798).
 export async function awaitFleetMessage(
 	input: { hubKey: string; msgId: string },
 	deps: PiFleetDeps = {},
