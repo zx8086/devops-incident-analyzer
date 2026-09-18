@@ -472,7 +472,9 @@ export class PiComsClient {
 	// Long-polls in slices until the message is terminal or the budget is spent.
 	// A slice that expires answers status "timeout" from the awaiter, not the
 	// message, so it is confirmed against the non-blocking status endpoint.
-	async awaitReply(msgId: string, budgetMs: number): Promise<PiReply> {
+	// `partial`: this await is one request of a wait the CALLER spans over several
+	// (it re-polls by message id and reports the overall expiry itself).
+	async awaitReply(msgId: string, budgetMs: number, opts: { partial?: boolean } = {}): Promise<PiReply> {
 		const start = this.now();
 		const path = `/v1/messages/${encodeURIComponent(msgId)}`;
 		while (true) {
@@ -506,10 +508,12 @@ export class PiComsClient {
 		}
 		// A spoke that never answers within budget is the common "it just hangs"
 		// report; without this it looked identical to a silent success. SIO-1798: a
-		// budget of one slice is a caller that re-polls by design and reports the
-		// overall expiry itself, so its per-slice exhaustion is not a warning.
+		// partial await exhausts on every request of a slow wait by design, so it is
+		// not a warning. The caller says so explicitly: budget size is no proxy, since
+		// a one-shot caller (fleet_await_reply, runHubTask) can be configured with a
+		// short PI_COMS_VERIFY_TIMEOUT_MS and its exhaustion IS the final timeout.
 		const exhausted = { msg_id: msgId, budget_ms: budgetMs, duration_ms: this.now() - start };
-		if (budgetMs <= PI_COMS_AWAIT_SLICE_MS) logger.debug(exhausted, "pi.hub.await.exhausted");
+		if (opts.partial) logger.debug(exhausted, "pi.hub.await.exhausted");
 		else logger.warn(exhausted, "pi.hub.await.exhausted");
 		return { status: "budget_exhausted", response: null, error: `no reply within ${budgetMs} ms` };
 	}
