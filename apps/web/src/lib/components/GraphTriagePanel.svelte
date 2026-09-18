@@ -62,15 +62,30 @@ let seenRunning = "";
 // reveal the scroller sits mid-content and any at-bottom check would read false and switch
 // following off for the rest of the turn (Greptile, PR #843).
 let following = true;
-// Set around our own scrollTo so the scroll event it fires is not mistaken for the
-// operator's. Cleared on the next scroll event, or by the timer if smooth scrolling
-// coalesced it away and no event ever arrives.
+// Set around our own scrollTo so the events it fires are not mistaken for the operator's.
+// It stays set for the WHOLE animation, not just the first event: one smooth scrollTo
+// emits ~31 scroll events (measured in this pane), so clearing on the first would hand the
+// remaining 30 to the operator branch and switch following off mid-flight -- the very bug
+// the follow flag exists to prevent, back through another door (Greptile, PR #843).
+// There is no scrollend in every browser we target, so the end of the animation is
+// inferred: each event pushes the deadline out, and the flag clears once the events stop.
 let selfScrolling = false;
 let selfScrollTimer: ReturnType<typeof setTimeout> | undefined;
+// Longer than the gap between two frames of a smooth scroll, short enough that an operator
+// scrolling immediately after one settles is still read as theirs.
+const SELF_SCROLL_SETTLE_MS = 150;
+
+function endSelfScroll() {
+	clearTimeout(selfScrollTimer);
+	selfScrollTimer = setTimeout(() => {
+		selfScrolling = false;
+	}, SELF_SCROLL_SETTLE_MS);
+}
 
 function onScroll() {
 	if (selfScrolling) {
-		selfScrolling = false;
+		// Ours, and more frames are probably coming: hold the guard open.
+		endSelfScroll();
 		return;
 	}
 	// A scroll WE did not cause is the operator taking over: stop following, and resume
@@ -108,13 +123,10 @@ $effect(() => {
 			const scale = svgBox.width / layout.width;
 			const centre = svgTop + (node.y + node.height / 2) * scale;
 			selfScrolling = true;
-			clearTimeout(selfScrollTimer);
-			// Smooth scrolling can coalesce several moves into one event, or fire none at
-			// all when the target equals the current position. Without this the flag would
-			// stay set and the operator's NEXT real scroll would be swallowed.
-			selfScrollTimer = setTimeout(() => {
-				selfScrolling = false;
-			}, 1000);
+			// Arm the settle timer BEFORE scrolling, so the flag still clears when the
+			// target equals the current position and no scroll event ever fires --
+			// otherwise it would stay set and swallow the operator's next real scroll.
+			endSelfScroll();
 			scroller.scrollTo({ top: Math.max(0, centre - scroller.clientHeight / 2), behavior: "smooth" });
 			// Only now is this node actually revealed. Marking it seen when the layout was
 			// still loading would leave the CURRENT node unrevealed forever, because the

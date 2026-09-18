@@ -64,3 +64,83 @@ describe("shouldRevealRunning", () => {
 		expect(revealed).toEqual(nodes);
 	});
 });
+
+// Greptile PR #843, second round. The follow flag was right; the GUARD around our own
+// scroll was not. A native smooth scrollTo emits many events -- 31 measured live in this
+// pane for a single call -- and the first version cleared the guard on the first one, so
+// frames 2..N were read as operator input and switched following off mid-animation. This
+// models the panel's guard (an event while self-scrolling extends it; the flag clears only
+// once events stop) and fails against the consume-one-event version.
+describe("SIO-1812: the self-scroll guard spans a whole smooth animation", () => {
+	// Mirrors GraphTriagePanel's onScroll/endSelfScroll pair, minus the DOM.
+	function makeGuard(atBottom: () => boolean) {
+		let following = true;
+		let selfScrolling = false;
+		let pending = 0; // stands in for the settle timer
+		return {
+			startSelfScroll() {
+				selfScrolling = true;
+				pending = 1;
+			},
+			onScroll() {
+				if (selfScrolling) {
+					pending = 1; // extend, do NOT consume
+					return;
+				}
+				following = atBottom();
+			},
+			settle() {
+				if (pending) {
+					pending = 0;
+					selfScrolling = false;
+				}
+			},
+			get following() {
+				return following;
+			},
+		};
+	}
+
+	// The animation parks the node mid-content, so every frame reports "not at bottom".
+	const MID_CONTENT = () => false;
+
+	test("31 events from one reveal do not switch following off", () => {
+		const g = makeGuard(MID_CONTENT);
+		g.startSelfScroll();
+		for (let i = 0; i < 31; i++) g.onScroll();
+		g.settle();
+		expect(g.following).toBe(true);
+	});
+
+	test("consecutive reveals keep following, each with its own event burst", () => {
+		const g = makeGuard(MID_CONTENT);
+		for (let node = 0; node < 5; node++) {
+			g.startSelfScroll();
+			for (let i = 0; i < 31; i++) g.onScroll();
+			g.settle();
+			expect(g.following).toBe(true);
+		}
+	});
+
+	test("an operator scroll after the animation settles still stops following", () => {
+		const g = makeGuard(MID_CONTENT);
+		g.startSelfScroll();
+		for (let i = 0; i < 31; i++) g.onScroll();
+		g.settle();
+		g.onScroll(); // theirs: no self-scroll in flight
+		expect(g.following).toBe(false);
+	});
+
+	test("and returning to the bottom resumes following", () => {
+		let parked = false;
+		const g = makeGuard(() => parked);
+		g.startSelfScroll();
+		for (let i = 0; i < 31; i++) g.onScroll();
+		g.settle();
+		g.onScroll();
+		expect(g.following).toBe(false);
+		parked = true; // scrolled back to the end
+		g.onScroll();
+		expect(g.following).toBe(true);
+	});
+});
