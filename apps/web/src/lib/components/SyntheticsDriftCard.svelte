@@ -33,7 +33,7 @@ function fmtVal(v: unknown): string {
       <h3 class="text-sm font-semibold text-tommy-navy">Synthetics drift: {report.deployment}</h3>
       <div class="flex items-center gap-2">
         {#if report.kibanaSpace}
-          <span class="text-xs px-1.5 py-0.5 rounded-full bg-gray-200 text-gray-700">space: {report.kibanaSpace}</span>
+          <span class="text-xs px-1.5 py-0.5 rounded bg-gray-200 text-gray-700">space: {report.kibanaSpace}</span>
         {/if}
         {#if report.kibanaUrl}
           <a
@@ -79,13 +79,13 @@ function fmtVal(v: unknown): string {
         <span class="text-tommy-navy/70">{report.totals.monitorsInSource} in source</span>
         <span class="text-tommy-navy/70">{report.totals.monitorsInKibana} in Kibana</span>
         {#if report.totals.changed > 0}
-          <span class="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800">changed: {report.totals.changed}</span>
+          <span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">changed: {report.totals.changed}</span>
         {/if}
         {#if report.totals.missingInKibana > 0}
-          <span class="px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-800">missing: {report.totals.missingInKibana}</span>
+          <span class="px-1.5 py-0.5 rounded bg-blue-100 text-blue-800">missing: {report.totals.missingInKibana}</span>
         {/if}
         {#if report.totals.extraInKibana > 0}
-          <span class="px-1.5 py-0.5 rounded-full bg-gray-200 text-gray-700">extra: {report.totals.extraInKibana}</span>
+          <span class="px-1.5 py-0.5 rounded bg-gray-200 text-gray-700">extra: {report.totals.extraInKibana}</span>
         {/if}
       </div>
 

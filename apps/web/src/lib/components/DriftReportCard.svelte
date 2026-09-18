@@ -47,7 +47,7 @@ const clean = $derived(report.stacks.filter((s) => !s.drifted && !s.planError));
             <div class="flex items-center gap-2">
               <span class="inline-block w-1.5 h-1.5 rounded-full bg-amber-500"></span>
               <span class="font-medium text-tommy-navy">{s.stack}</span>
-              <span class="px-1.5 py-0.5 rounded-full bg-gray-200 text-gray-700">{s.kind}</span>
+              <span class="px-1.5 py-0.5 rounded bg-gray-200 text-gray-700">{s.kind}</span>
               <span class="font-mono text-tommy-navy/80">+{s.create} ~{s.update} -{s.delete}</span>
             </div>
             <!-- SIO-886: surface WHAT drifted (reason + changed keys per resource). -->

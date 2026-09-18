@@ -102,7 +102,7 @@ async function handleApprove() {
 				<Icon name={pi.kind === "verdict" ? "bot" : "zoom-in"} class="w-4 h-4 text-tommy-navy" />
 				<span class="font-semibold text-tommy-navy">{toolLabels[action.tool] ?? action.tool}</span>
 				{#if pi.kind === "verdict"}
-					<span class="text-xs px-2 py-0.5 rounded-full border {verdictColors[pi.verdict.verdict] ?? verdictColors.unverifiable}">
+					<span class="text-xs px-2 py-0.5 rounded border {verdictColors[pi.verdict.verdict] ?? verdictColors.unverifiable}">
 						{pi.verdict.verdict.replace(/_/g, " ")}
 					</span>
 				{/if}
@@ -144,7 +144,7 @@ async function handleApprove() {
 		<div class="flex items-center gap-2 mb-2">
 			<Icon name={getToolIcon()} class="w-4 h-4 text-tommy-navy" />
 			<span class="text-sm font-semibold text-tommy-navy">{toolLabels[action.tool] ?? action.tool}</span>
-			<span class="text-xs px-2 py-0.5 rounded-full border {severityColors[getSeverity()] ?? severityColors.medium}">
+			<span class="text-xs px-2 py-0.5 rounded border {severityColors[getSeverity()] ?? severityColors.medium}">
 				{getSeverity()}
 			</span>
 		</div>

@@ -295,7 +295,7 @@ $effect(() => {
 				<label for="ticket-project" class="block text-xs font-medium text-gray-600 mb-1">Project</label>
 				{#if selectedProject}
 					<div class="flex items-center gap-2">
-						<span class="text-xs px-2 py-0.5 rounded-full border border-tommy-accent-blue/40 bg-blue-50 text-tommy-navy">
+						<span class="text-xs px-2 py-0.5 rounded border border-tommy-accent-blue/40 bg-blue-50 text-tommy-navy">
 							{selectedProject.name} ({selectedProject.key})
 						</span>
 						<button onclick={clearProject} class="text-xs text-gray-500 hover:text-gray-700 underline">
@@ -376,7 +376,7 @@ $effect(() => {
 			<div>
 				<label for="ticket-assignee" class="block text-xs font-medium text-gray-600 mb-1">Assignee</label>
 				<div class="flex items-center gap-2 mb-1">
-					<span class="text-xs px-2 py-0.5 rounded-full border {selectedAssignee ? 'border-tommy-accent-blue/40 bg-blue-50 text-tommy-navy' : 'border-gray-200 bg-gray-50 text-gray-600'}">
+					<span class="text-xs px-2 py-0.5 rounded border {selectedAssignee ? 'border-tommy-accent-blue/40 bg-blue-50 text-tommy-navy' : 'border-gray-200 bg-gray-50 text-gray-600'}">
 						{selectedAssignee ? selectedAssignee.displayName : "Unassigned"}
 					</span>
 					{#if selectedAssignee}

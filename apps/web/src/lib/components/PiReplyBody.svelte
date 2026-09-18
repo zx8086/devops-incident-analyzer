@@ -26,7 +26,7 @@ const claimColors: Record<string, string> = {
 
 {#if verdict}
 	<p class="mb-2">
-		<span class="text-xs px-2 py-0.5 rounded-full border {verdictColors[verdict.verdict] ?? verdictColors.unverifiable}">
+		<span class="text-xs px-2 py-0.5 rounded border {verdictColors[verdict.verdict] ?? verdictColors.unverifiable}">
 			{verdict.verdict.replace(/_/g, " ")}
 		</span>
 	</p>
@@ -36,7 +36,7 @@ const claimColors: Record<string, string> = {
 			{#each verdict.claims as claim, i (i)}
 				<li class="text-xs bg-gray-50 rounded p-2">
 					<div class="flex items-start gap-2">
-						<span class="px-1.5 py-0.5 rounded-full border shrink-0 {claimColors[claim.status] ?? claimColors.unverifiable}">{claim.status}</span>
+						<span class="px-1.5 py-0.5 rounded border shrink-0 {claimColors[claim.status] ?? claimColors.unverifiable}">{claim.status}</span>
 						<span class="text-gray-800">{claim.claim}</span>
 					</div>
 					<div class="text-gray-500 mt-1 pl-1">Evidence: {claim.evidence}</div>
@@ -59,7 +59,7 @@ const claimColors: Record<string, string> = {
 	{/if}
 {:else if investigation}
 	<p class="mb-2">
-		<span class="text-xs px-2 py-0.5 rounded-full border bg-gray-100 text-gray-600 border-gray-200">
+		<span class="text-xs px-2 py-0.5 rounded border bg-gray-100 text-gray-600 border-gray-200">
 			confidence {Math.round(investigation.confidence * 100)}%
 		</span>
 	</p>

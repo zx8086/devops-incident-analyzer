@@ -94,7 +94,7 @@ function pillClass(nodeId: string): string {
 	const completed = completedNodes.has(nodeId);
 	const active = activeNodes.has(nodeId);
 	const base =
-		"inline-flex items-center gap-1 py-1 px-2 rounded-full text-[0.625rem] font-medium transition-all duration-200";
+		"inline-flex items-center gap-1 py-1 px-2 rounded text-[0.625rem] font-medium transition-all duration-200";
 	if (completed) return `${base} bg-green-100 text-green-700`;
 	if (active) return `${base} bg-tommy-offwhite text-tommy-accent-blue ring-2 ring-tommy-accent-blue`;
 	return `${base} bg-gray-100 text-gray-400`;

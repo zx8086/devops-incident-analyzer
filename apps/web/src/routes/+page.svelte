@@ -315,7 +315,7 @@ function handleSuggestionClick(suggestion: string) {
         aria-label={onContextualAgent
           ? "Back to the Incident Analyzer"
           : `Switch mode (current: ${agentTitle})`}
-        class="w-7 h-7 rounded-full flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed {agentStore.currentAgent === DEFAULT_AGENT_ID ? 'bg-tommy-navy hover:bg-tommy-accent-blue' : 'bg-tommy-accent-blue ring-2 ring-white/70'}"
+        class="w-7 h-7 rounded-lg flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed {agentStore.currentAgent === DEFAULT_AGENT_ID ? 'bg-tommy-navy hover:bg-tommy-accent-blue' : 'bg-tommy-accent-blue ring-2 ring-white/70'}"
       >
         <Icon name="bot" class="w-4 h-4 text-white" />
       </button>

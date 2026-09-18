@@ -42,7 +42,7 @@ function classFor(id: string, isSelected: boolean): string {
 	}
 	if (s === "unready") {
 		return isSelected
-			? "bg-tommy-accent-blue text-white border border-yellow-500"
+			? "bg-tommy-navy/5 text-tommy-navy border border-yellow-500"
 			: "bg-yellow-50 text-yellow-900 border border-yellow-500 hover:border-yellow-600";
 	}
 	if (s === "replaced") {
@@ -50,7 +50,7 @@ function classFor(id: string, isSelected: boolean): string {
 	}
 	// ready
 	return isSelected
-		? "bg-tommy-accent-blue text-white"
+		? "bg-tommy-navy/5 text-tommy-navy border border-tommy-navy/30"
 		: "bg-white text-gray-600 border border-gray-300 hover:border-tommy-accent-blue";
 }
 
@@ -90,7 +90,7 @@ function selectNone() {
         <button
           onclick={() => toggle(ds)}
           disabled={!isInteractive(ds)}
-          class="px-2.5 py-1 rounded-full text-xs font-medium transition-colors {classFor(ds, selected.includes(ds))}"
+          class="px-2.5 py-1 rounded text-xs font-medium transition-colors {classFor(ds, selected.includes(ds))}"
           title={titleFor(ds)}
         >
           {labels[ds] ?? ds}

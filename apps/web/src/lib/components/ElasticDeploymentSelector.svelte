@@ -33,9 +33,9 @@ function selectNone() {
       {#each deployments as id}
         <button
           onclick={() => toggle(id)}
-          class="px-2.5 py-1 rounded-full text-xs font-medium transition-colors
+          class="px-2.5 py-1 rounded text-xs font-medium transition-colors
             {selected.includes(id)
-              ? 'bg-tommy-accent-blue text-white'
+              ? 'bg-tommy-navy/5 text-tommy-navy border border-tommy-navy/30'
               : 'bg-white text-gray-600 border border-gray-300 hover:border-tommy-accent-blue'
             }"
           title={id}

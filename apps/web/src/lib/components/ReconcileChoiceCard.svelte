@@ -24,7 +24,7 @@ const LABELS = RECONCILE_DIRECTION_LABELS;
   <div class="max-w-4xl mx-auto">
     <div class="flex items-center justify-between gap-2">
       <h3 id="iac-reconcile-heading" class="text-sm font-semibold text-tommy-navy">Reconcile stack: {prompt.stack}</h3>
-      <span class="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-700">{prompt.kind}</span>
+      <span class="text-xs px-2 py-0.5 rounded bg-gray-200 text-gray-700">{prompt.kind}</span>
     </div>
     <p class="text-sm text-tommy-navy/80 mt-1">{prompt.message}</p>
     <p class="mt-1 text-xs font-mono text-tommy-navy/70">Drift: {prompt.summary}</p>

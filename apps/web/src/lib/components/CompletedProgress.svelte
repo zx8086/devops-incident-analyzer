@@ -201,7 +201,7 @@ function statusDotClass(status: string): string {
             <span class="text-[0.5625rem] font-medium text-gray-500 uppercase tracking-wider">Pipeline</span>
             <div class="flex flex-wrap gap-1.5 mt-1">
               {#each [...completedNodes.entries()] as [nodeId, data]}
-                <span class="inline-flex items-center gap-1 py-0.5 px-2 rounded-full bg-green-100 text-green-700 text-[0.625rem] font-medium">
+                <span class="inline-flex items-center gap-1 py-0.5 px-2 rounded bg-green-100 text-green-700 text-[0.625rem] font-medium">
                   <Icon name="check" class="w-2.5 h-2.5" />
                   {ALL_NODE_LABELS[nodeId]?.completeLabel ?? nodeId}
                   <span class="text-green-500 text-[0.5rem]">{(data.duration / 1000).toFixed(1)}s</span>
@@ -234,7 +234,7 @@ function statusDotClass(status: string): string {
             <span class="text-[0.5625rem] font-medium text-gray-500 uppercase tracking-wider">Tools</span>
             <div class="flex flex-wrap gap-1 mt-1">
               {#each toolsUsed as tool}
-                <span class="inline-flex items-center py-0.5 px-1.5 rounded-full bg-amber-100 text-amber-700 text-[0.5625rem] font-medium">
+                <span class="inline-flex items-center py-0.5 px-1.5 rounded bg-amber-100 text-amber-700 text-[0.5625rem] font-medium">
                   <Icon name="tool" class="w-2 h-2 mr-0.5" />
                   {tool}
                 </span>

@@ -34,9 +34,9 @@ function selectNone() {
       {#each estates as estate}
         <button
           onclick={() => toggle(estate.id)}
-          class="px-2.5 py-1 rounded-full text-xs font-medium transition-colors
+          class="px-2.5 py-1 rounded text-xs font-medium transition-colors
             {selected.includes(estate.id)
-              ? 'bg-tommy-accent-blue text-white'
+              ? 'bg-tommy-navy/5 text-tommy-navy border border-tommy-navy/30'
               : 'bg-white text-gray-600 border border-gray-300 hover:border-tommy-accent-blue'
             }"
           title={estate.region ? `${estate.id} (${estate.region})` : estate.id}
