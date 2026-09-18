@@ -25,22 +25,42 @@ describe("runningFingerprint", () => {
 });
 
 describe("shouldRevealRunning", () => {
-	test("follows a new running node while the operator is at the bottom", () => {
-		expect(shouldRevealRunning({ runningChanged: true, hasRunning: true, atBottom: true })).toBe(true);
+	test("follows a new running node while the operator is still following", () => {
+		expect(shouldRevealRunning({ runningChanged: true, hasRunning: true, following: true })).toBe(true);
 	});
 
-	// The whole point of the atBottom gate: never take the view from someone reading.
-	test("leaves a reader who scrolled up alone", () => {
-		expect(shouldRevealRunning({ runningChanged: true, hasRunning: true, atBottom: false })).toBe(false);
+	// The whole point of the gate: never take the view from someone reading.
+	test("leaves a reader who scrolled away alone", () => {
+		expect(shouldRevealRunning({ runningChanged: true, hasRunning: true, following: false })).toBe(false);
 	});
 
 	test("does not re-scroll while the same node keeps running", () => {
-		expect(shouldRevealRunning({ runningChanged: false, hasRunning: true, atBottom: true })).toBe(false);
+		expect(shouldRevealRunning({ runningChanged: false, hasRunning: true, following: true })).toBe(false);
 	});
 
 	// Between nodes, and before the turn starts, there is nothing to follow -- moving the
 	// view to "nothing" would yank it for no reason.
 	test("does not move when nothing is running", () => {
-		expect(shouldRevealRunning({ runningChanged: true, hasRunning: false, atBottom: true })).toBe(false);
+		expect(shouldRevealRunning({ runningChanged: true, hasRunning: false, following: true })).toBe(false);
+	});
+
+	// Greptile PR #843: the bug this predicate's first version shipped with. `following`
+	// used to be "is the scroller near the bottom", borrowed from the fleet pane -- but
+	// that pane APPENDS while this one CENTRES, so one reveal left the scroller mid-content
+	// and the next transition read not-at-bottom and stopped following for the whole turn.
+	// Following is now panel-owned state that a programmatic centre does not disturb, so
+	// consecutive nodes keep being revealed.
+	test("keeps following across consecutive nodes, which centring used to break", () => {
+		const nodes = ["classify", "normalize", "selectRunbooks", "entityExtractor", "queryDataSource"];
+		let seen = "";
+		const revealed: string[] = [];
+		for (const id of nodes) {
+			// `following` stays true because nothing but an operator scroll clears it.
+			if (shouldRevealRunning({ runningChanged: id !== seen, hasRunning: true, following: true })) {
+				revealed.push(id);
+			}
+			seen = id;
+		}
+		expect(revealed).toEqual(nodes);
 	});
 });

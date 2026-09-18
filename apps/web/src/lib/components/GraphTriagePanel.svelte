@@ -58,15 +58,29 @@ const layout = $derived<GraphLayout | null>(topology ? computeLayout(topology) :
 // scroll by hand to watch the thing this panel exists to show.
 let scroller = $state<HTMLElement | null>(null);
 let seenRunning = "";
-// Sampled BEFORE the DOM updates, because scrollIntoView moves the scroller and would
-// otherwise make every subsequent check read "at bottom" (the same ordering pi-fleet-scroll
-// relies on).
-let wasAtBottom = true;
+// Explicit follow-state, not a bottom test: this pane CENTRES a node, so after the first
+// reveal the scroller sits mid-content and any at-bottom check would read false and switch
+// following off for the rest of the turn (Greptile, PR #843).
+let following = true;
+// Set around our own scrollTo so the scroll event it fires is not mistaken for the
+// operator's. Cleared on the next scroll event, or by the timer if smooth scrolling
+// coalesced it away and no event ever arrives.
+let selfScrolling = false;
+let selfScrollTimer: ReturnType<typeof setTimeout> | undefined;
 
-$effect.pre(() => {
-	// Touch activeNodes so this re-runs on every node change, not just the first.
-	void activeNodes.size;
-	if (scroller) wasAtBottom = isAtBottom(scroller);
+function onScroll() {
+	if (selfScrolling) {
+		selfScrolling = false;
+		return;
+	}
+	// A scroll WE did not cause is the operator taking over: stop following, and resume
+	// only when they come back to the bottom. isAtBottom is the right question here --
+	// this is about where the reader parked, not where we centred.
+	following = scroller ? isAtBottom(scroller) : following;
+}
+
+$effect(() => {
+	return () => clearTimeout(selfScrollTimer);
 });
 
 $effect(() => {
@@ -75,7 +89,7 @@ $effect(() => {
 		shouldRevealRunning({
 			runningChanged: running !== seenRunning,
 			hasRunning: running !== "",
-			atBottom: wasAtBottom,
+			following,
 		})
 	) {
 		// A node's y is in viewBox units, and the SVG is scaled to fit the pane (w-full,
@@ -93,8 +107,22 @@ $effect(() => {
 			const svgTop = svgBox.top - scrollerBox.top + scroller.scrollTop;
 			const scale = svgBox.width / layout.width;
 			const centre = svgTop + (node.y + node.height / 2) * scale;
+			selfScrolling = true;
+			clearTimeout(selfScrollTimer);
+			// Smooth scrolling can coalesce several moves into one event, or fire none at
+			// all when the target equals the current position. Without this the flag would
+			// stay set and the operator's NEXT real scroll would be swallowed.
+			selfScrollTimer = setTimeout(() => {
+				selfScrolling = false;
+			}, 1000);
 			scroller.scrollTo({ top: Math.max(0, centre - scroller.clientHeight / 2), behavior: "smooth" });
+			// Only now is this node actually revealed. Marking it seen when the layout was
+			// still loading would leave the CURRENT node unrevealed forever, because the
+			// fingerprint would never change again (Greptile, PR #843): opening the pane
+			// mid-turn is exactly when topology has not arrived yet.
+			seenRunning = running;
 		}
+		return;
 	}
 	seenRunning = running;
 });
@@ -180,7 +208,7 @@ const statusLine = $derived.by(() => {
     {/if}
   </div>
 
-  <div bind:this={scroller} class="flex-1 overflow-auto p-3">
+  <div bind:this={scroller} onscroll={onScroll} class="flex-1 overflow-auto p-3">
     {#if loadError}
       <div class="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg p-3">
         Failed to load the graph topology: {loadError}

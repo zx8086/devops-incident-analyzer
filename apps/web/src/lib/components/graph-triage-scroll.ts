@@ -18,16 +18,23 @@ export function runningFingerprint(activeNodes: ReadonlyMap<string, number>): st
 
 // Follow the turn, but never take the view from someone who is reading.
 //
-// `atBottom` is deliberately the same question pi-fleet-scroll.ts asks, and this module
-// reuses its isAtBottom/BOTTOM_SLACK_PX rather than restating the tolerance: a reader
-// within the slack of the end is following the pane, anyone further up is reading
-// something older and is left alone until they come back.
+// `following` is explicit state, NOT "is the scroller near the bottom" (Greptile, PR
+// #843). Borrowing pi-fleet-scroll's isAtBottom looked right -- same question, same
+// tolerance -- but the fleet pane APPENDS, so there "following" and "at the bottom" are
+// the same position. This pane CENTRES a node in a 32-node graph, so right after the very
+// first reveal the scroller sits mid-content and an at-bottom test reads false. Following
+// would switch itself off after one node and stay off for the rest of the turn. Measured,
+// not reasoned: centring node 5 of 32 leaves scrollTop 120 in a 2400px scroller, which
+// isAtBottom rejects.
+//
+// The panel owns the flag: it starts true, a scroll the panel did not cause clears it, and
+// returning to the bottom sets it again.
 //
 // Nothing running (between nodes, or before the turn starts) is not a reason to move.
 export function shouldRevealRunning(change: {
 	runningChanged: boolean;
 	hasRunning: boolean;
-	atBottom: boolean;
+	following: boolean;
 }): boolean {
-	return change.hasRunning && change.runningChanged && change.atBottom;
+	return change.hasRunning && change.runningChanged && change.following;
 }

@@ -422,12 +422,16 @@ function handleSuggestionClick(suggestion: string) {
        split row, so they spanned the whole page width and ran underneath the
        triage and fleet panes. Nesting them here bounds them to the chat
        column, so a card grows downward and never covers a pane. -->
-  <!-- SIO-1812: min-w floor. The prompt bar now lives in this column (see below), so with
-       both panes open the column was the thing that gave: at 1440px it fell to 288px and
-       the prompt was unusable. The panes are w-2/5 capped at max-w-xl, so they have slack
-       to yield; the column, which holds the conversation AND the input, does not. Panes
-       shrink first. -->
-  <div class="flex-1 flex flex-col min-w-[420px] min-h-0 bg-white">
+  <!-- SIO-1812: min-w floor, from xl (1280px) up only. The prompt bar now lives in this
+       column, so with both panes open the column was the thing that gave: at 1440px it
+       fell to 288px and the prompt was unusable. The panes are w-2/5 capped at max-w-xl so
+       they have slack to yield; the column, holding the conversation AND the input, does
+       not -- panes shrink first.
+       The floors are gated on xl because they total ~1062px with both panes open, and the
+       row neither wraps nor scrolls: applied unconditionally they clipped the trailing
+       pane's controls off-screen on a narrower viewport (Greptile, PR #843). Below xl
+       everything falls back to min-w-0 and shrinks as it did before this ticket. -->
+  <div class="flex-1 flex flex-col min-w-0 xl:min-w-[420px] min-h-0 bg-white">
   <div bind:this={messagesContainer} class="flex-1 overflow-y-auto min-h-0">
     <div class="max-w-4xl mx-auto py-4">
       {#if agentStore.messages.length === 0 && !agentStore.isStreaming}
@@ -767,7 +771,7 @@ function handleSuggestionClick(suggestion: string) {
 
   <!-- SIO-1665: triageOffered, not just showGraphPane -- same gate as the toggle. -->
   {#if triageOffered && showGraphPane}
-    <div class="w-2/5 max-w-xl min-w-[320px] border-l border-gray-200 bg-white overflow-hidden">
+    <div class="w-2/5 max-w-xl min-w-0 xl:min-w-[320px] border-l border-gray-200 bg-white overflow-hidden">
       <GraphTriagePanel
         agent={agentStore.currentAgent}
         activeNodes={agentStore.activeNodes}
@@ -783,7 +787,7 @@ function handleSuggestionClick(suggestion: string) {
        has to match its toggle's, or switching to the IaC agent leaves the pane on
        screen with no control to close it. -->
   {#if fleetOffered && piFleetStore.open}
-    <div class="w-2/5 max-w-xl min-w-[320px] border-l border-gray-200 bg-white overflow-hidden">
+    <div class="w-2/5 max-w-xl min-w-0 xl:min-w-[320px] border-l border-gray-200 bg-white overflow-hidden">
       <!-- SIO-1703: scoping an investigation to one estate scopes the spokes too.
            Addressing an account outside the investigation is almost always a
            mistake, and the estate selector is the operator's statement of scope. -->
