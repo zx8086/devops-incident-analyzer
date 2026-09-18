@@ -2,7 +2,9 @@
 // apps/web/src/lib/components/GraphTriagePanel.svelte
 import { computeLayout, END_NODE, type GraphLayout, START_NODE, type Topology } from "$lib/graph-layout";
 import { ALL_NODE_LABELS } from "$lib/node-labels";
+import { runningFingerprint, shouldRevealRunning } from "./graph-triage-scroll";
 import Icon from "./Icon.svelte";
+import { isAtBottom } from "./pi-fleet-scroll";
 
 let {
 	agent,
@@ -50,6 +52,52 @@ $effect(() => {
 });
 
 const layout = $derived<GraphLayout | null>(topology ? computeLayout(topology) : null);
+
+// SIO-1812: follow the running node down the graph. The incident pipeline is 32 nodes
+// tall, so without this the turn walks off the bottom of the pane and the operator has to
+// scroll by hand to watch the thing this panel exists to show.
+let scroller = $state<HTMLElement | null>(null);
+let seenRunning = "";
+// Sampled BEFORE the DOM updates, because scrollIntoView moves the scroller and would
+// otherwise make every subsequent check read "at bottom" (the same ordering pi-fleet-scroll
+// relies on).
+let wasAtBottom = true;
+
+$effect.pre(() => {
+	// Touch activeNodes so this re-runs on every node change, not just the first.
+	void activeNodes.size;
+	if (scroller) wasAtBottom = isAtBottom(scroller);
+});
+
+$effect(() => {
+	const running = runningFingerprint(activeNodes);
+	if (
+		shouldRevealRunning({
+			runningChanged: running !== seenRunning,
+			hasRunning: running !== "",
+			atBottom: wasAtBottom,
+		})
+	) {
+		// A node's y is in viewBox units, and the SVG is scaled to fit the pane (w-full,
+		// clamped by max-width), so convert with the ratio the browser ACTUALLY rendered
+		// at rather than deriving it -- p-3 padding and that max-width clamp both make a
+		// computed ratio wrong. offsetTop carries the padding, so it is added, not
+		// guessed. Scrolling the container by number needs no per-node element ref.
+		const node = layout?.nodes.find((n) => n.id === running);
+		const svg = scroller?.querySelector("svg");
+		if (node && scroller && layout && svg) {
+			// Offset of the svg box within the scroller's content, padding included, read
+			// from the live boxes instead of recomputed from the class list.
+			const svgBox = svg.getBoundingClientRect();
+			const scrollerBox = scroller.getBoundingClientRect();
+			const svgTop = svgBox.top - scrollerBox.top + scroller.scrollTop;
+			const scale = svgBox.width / layout.width;
+			const centre = svgTop + (node.y + node.height / 2) * scale;
+			scroller.scrollTo({ top: Math.max(0, centre - scroller.clientHeight / 2), behavior: "smooth" });
+		}
+	}
+	seenRunning = running;
+});
 
 const runStarted = $derived(activeNodes.size > 0 || completedNodes.size > 0);
 // END lights only for a SUCCESSFUL finish: paused turns (HITL gates) and every
@@ -132,7 +180,7 @@ const statusLine = $derived.by(() => {
     {/if}
   </div>
 
-  <div class="flex-1 overflow-auto p-3">
+  <div bind:this={scroller} class="flex-1 overflow-auto p-3">
     {#if loadError}
       <div class="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg p-3">
         Failed to load the graph topology: {loadError}

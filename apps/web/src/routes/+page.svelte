@@ -209,6 +209,17 @@ const triageOffered = $derived(triageIds.includes(agentStore.currentAgent));
 // one-way trip; while it is current the control returns to the default agent.
 const onContextualAgent = $derived(!modeIds.includes(agentStore.currentAgent));
 
+// SIO-1812: the header button row is ONE family -- the two pane toggles and clear. They
+// were three visual languages: two solid tommy-accent-blue blocks and a bare uncontained
+// icon, all on the navy header. Per SIO-1810's rule a binary state gets a binary cue, so
+// active/inactive differ by FILL and icon opacity, never by hue: a white overlay reads as
+// "pressed" on navy without the accent's weight. Clear keeps the same shape and reserves
+// red for its hover, since destructive is about the action, not a third toggle state.
+// Shared string = shared family: change one branch here and change all of them.
+const HEADER_BUTTON = "min-w-[44px] min-h-[44px] p-2 rounded-lg transition-colors border-2 border-transparent";
+const HEADER_BUTTON_ON = "bg-white/15 text-white";
+const HEADER_BUTTON_OFF = "text-white/60 hover:text-white hover:bg-white/10";
+
 // Cycles the header's modes, in registry order.
 // SIO-1811: switching agents starts a fresh conversation (switchAgent calls
 // clearChat), so the fleet pane is cleared with it for the same reason the clear
@@ -342,7 +353,7 @@ function handleSuggestionClick(suggestion: string) {
           title="Live graph triage"
           aria-label="Toggle live graph triage pane"
           aria-pressed={showGraphPane}
-          class="min-w-[44px] min-h-[44px] p-2 rounded-lg transition-all border-2 border-transparent {showGraphPane ? 'bg-tommy-accent-blue text-white' : 'text-white/70 hover:text-white hover:bg-white/10'}"
+          class="{HEADER_BUTTON} {showGraphPane ? HEADER_BUTTON_ON : HEADER_BUTTON_OFF}"
         >
           <Icon name="graph" class="w-5 h-5" />
         </button>
@@ -361,7 +372,7 @@ function handleSuggestionClick(suggestion: string) {
           title="Fleet spokes"
           aria-label="Toggle the fleet spokes pane"
           aria-pressed={piFleetStore.open}
-          class="min-w-[44px] min-h-[44px] p-2 rounded-lg transition-all border-2 border-transparent {piFleetStore.open ? 'bg-tommy-accent-blue text-white' : 'text-white/70 hover:text-white hover:bg-white/10'}"
+          class="{HEADER_BUTTON} {piFleetStore.open ? HEADER_BUTTON_ON : HEADER_BUTTON_OFF}"
         >
           <!-- SIO-1706: these are pi agents, so the toggle carries the Pi mark
                rather than a generic chat bubble. This button IS the fleet console:
@@ -374,11 +385,14 @@ function handleSuggestionClick(suggestion: string) {
            cleared conversation reads as a reply to the next question. The page
            owns both stores, so it clears both rather than coupling them. -->
       <button
+        type="button"
         onclick={() => {
           agentStore.clearChat();
           piFleetStore.clear();
         }}
-        class="min-w-[44px] min-h-[44px] p-2 text-red-500 hover:text-white hover:bg-red-500 bg-transparent border-2 border-transparent hover:border-red-500 rounded-lg transition-all disabled:text-gray-300"
+        title="Clear the conversation"
+        aria-label="Clear the conversation and the fleet pane"
+        class="{HEADER_BUTTON} text-white/60 hover:bg-red-500 hover:text-white"
       >
         <Icon name="clear" class="w-5 h-5" />
       </button>
@@ -408,7 +422,12 @@ function handleSuggestionClick(suggestion: string) {
        split row, so they spanned the whole page width and ran underneath the
        triage and fleet panes. Nesting them here bounds them to the chat
        column, so a card grows downward and never covers a pane. -->
-  <div class="flex-1 flex flex-col min-w-0 min-h-0 bg-white">
+  <!-- SIO-1812: min-w floor. The prompt bar now lives in this column (see below), so with
+       both panes open the column was the thing that gave: at 1440px it fell to 288px and
+       the prompt was unusable. The panes are w-2/5 capped at max-w-xl, so they have slack
+       to yield; the column, which holds the conversation AND the input, does not. Panes
+       shrink first. -->
+  <div class="flex-1 flex flex-col min-w-[420px] min-h-0 bg-white">
   <div bind:this={messagesContainer} class="flex-1 overflow-y-auto min-h-0">
     <div class="max-w-4xl mx-auto py-4">
       {#if agentStore.messages.length === 0 && !agentStore.isStreaming}
@@ -729,11 +748,26 @@ function handleSuggestionClick(suggestion: string) {
     />
   {/if}
   </div>
+
+  <!-- SIO-1812: the prompt bar belongs to the CHAT COLUMN, not the page. It used to sit
+       below the whole split row, so it ran the full width under the panes: the panes
+       stopped short of the viewport bottom, and the bar's own max-w-4xl centred on the
+       page while the messages above it centred on the column -- two different axes, which
+       is what read as misaligned. Inside the column it shares one axis with the messages
+       and the panes run the full height beside it. -->
+  <div class="border-t border-gray-200 bg-white shrink-0">
+    <ChatInput
+      onSend={handleSend}
+      onStop={() => agentStore.cancelStream()}
+      isStreaming={agentStore.isStreaming}
+      bind:attachments={agentStore.pendingAttachments}
+    />
+  </div>
   </div>
 
   <!-- SIO-1665: triageOffered, not just showGraphPane -- same gate as the toggle. -->
   {#if triageOffered && showGraphPane}
-    <div class="w-2/5 max-w-xl shrink-0 border-l border-gray-200 bg-white overflow-hidden">
+    <div class="w-2/5 max-w-xl min-w-[320px] border-l border-gray-200 bg-white overflow-hidden">
       <GraphTriagePanel
         agent={agentStore.currentAgent}
         activeNodes={agentStore.activeNodes}
@@ -749,7 +783,7 @@ function handleSuggestionClick(suggestion: string) {
        has to match its toggle's, or switching to the IaC agent leaves the pane on
        screen with no control to close it. -->
   {#if fleetOffered && piFleetStore.open}
-    <div class="w-2/5 max-w-xl shrink-0 border-l border-gray-200 bg-white overflow-hidden">
+    <div class="w-2/5 max-w-xl min-w-[320px] border-l border-gray-200 bg-white overflow-hidden">
       <!-- SIO-1703: scoping an investigation to one estate scopes the spokes too.
            Addressing an account outside the investigation is almost always a
            mistake, and the estate selector is the operator's statement of scope. -->
@@ -767,12 +801,4 @@ function handleSuggestionClick(suggestion: string) {
   {/if}
   </div>
 
-  <div class="border-t border-gray-200 bg-white">
-    <ChatInput
-      onSend={handleSend}
-      onStop={() => agentStore.cancelStream()}
-      isStreaming={agentStore.isStreaming}
-      bind:attachments={agentStore.pendingAttachments}
-    />
-  </div>
 </div>
