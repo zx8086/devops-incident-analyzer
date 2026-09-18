@@ -203,9 +203,11 @@ describe.skipIf(!available)("LadybugStore (real embedded engine)", () => {
 	// SIO-954/SIO-965: IaC round-trips against the real engine. Both share ONE store
 	// (db3) deliberately -- the embedded lbug Database is never close()d (its native
 	// finalizer segfaults Bun at teardown; see store.ts), so each extra Database
-	// instance leaks a handle that is finalized at process exit. Keeping the IaC
-	// round-trips on a single DB holds the file's total at three and avoids tipping
-	// that finalizer over. SIO-965 additionally exercises the ALTER_MIGRATIONS outcome
+	// instance leaks a handle. SIO-1807 corrected the theory that used to stand here
+	// ("hold the file's total at three"): the count never mattered. A closed store's
+	// handle was collectable, and the collector ran the crashing destructor mid-run;
+	// close() now parks the handles, and this file opens ten stores in one process.
+	// SIO-965 additionally exercises the ALTER_MIGRATIONS outcome
 	// column and the new blast-radius Cypher on the real binder.
 	test("IaC change-history + three-layer round-trip", async () => {
 		const store = new LadybugStore(join(dir, "db3"));
