@@ -8,12 +8,31 @@ import type { AgentCard, AgentListing } from "../../contracts/wire.ts";
 // per-environment project the rollout poll read an empty namespace and waited
 // out its 10-minute deadline reporting "not registered" for agents that were
 // online the whole time. Defaults to "default" for fleets that never set one.
+//
+// SIO-1792: bounded. This runs through an SSM port-forward, where a dropped session can leave a
+// connect that neither resolves nor rejects; without a signal that hung `fleet status` and every
+// poll of `fleet rollout`.
+const LIST_AGENTS_TIMEOUT_MS = 15_000;
+
+// The hub ANSWERED, and the answer is one retrying will not change: it said no (bad token, 5xx),
+// or it said something that is not a listing (a 2xx with a body that is not JSON, which means the
+// port is not serving a hub). Distinct from a transport failure so the rollout poll can retry a
+// stall but still fail fast on these (Greptile, PR #828, for the unparseable case).
+export class HubHttpError extends Error {}
+
 export async function listAgents(baseUrl: string, token: string, project = "default"): Promise<AgentCard[]> {
 	const resp = await fetch(`${baseUrl}/v1/agents?project=${encodeURIComponent(project)}&include_explicit=true`, {
 		headers: { authorization: `Bearer ${token}` },
+		signal: AbortSignal.timeout(LIST_AGENTS_TIMEOUT_MS),
 	});
-	if (!resp.ok) throw new Error(`GET /v1/agents: ${resp.status} ${await resp.text()}`);
-	const listing = (await resp.json()) as AgentListing;
+	if (!resp.ok) throw new HubHttpError(`GET /v1/agents: ${resp.status} ${await resp.text()}`);
+	const text = await resp.text();
+	let listing: AgentListing;
+	try {
+		listing = JSON.parse(text) as AgentListing;
+	} catch {
+		throw new HubHttpError(`GET /v1/agents: ${resp.status} with a body that is not JSON (${text.slice(0, 80)})`);
+	}
 	return listing.agents ?? [];
 }
 
