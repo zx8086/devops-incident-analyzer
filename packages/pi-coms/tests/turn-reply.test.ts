@@ -1,6 +1,6 @@
 // tests/turn-reply.test.ts
 import { expect, test } from "bun:test";
-import { buildTurnReplies, nextRunHealth, outboundHops, type RunHealth } from "../extensions/turnReply";
+import { buildTurnReplies, nextRunHealth, notJsonError, outboundHops, type RunHealth } from "../extensions/turnReply";
 
 const text = "Investigation complete: no observed WAF changes in the last 72h.";
 
@@ -85,7 +85,30 @@ test("schema inbound with non-JSON text reports the extraction error", () => {
 		[{ msg_id: "m1", fulfilled: false, response_schema: { type: "object" } }],
 		"sorry, plain prose only",
 	);
-	expect(replies).toEqual([{ msg_id: "m1", response: null, error: "response not valid JSON" }]);
+	// SIO-1804: the error keeps its prefix and now says what the spoke's model actually said.
+	expect(replies).toEqual([
+		{
+			msg_id: "m1",
+			response: null,
+			error: "response not valid JSON (23 chars, stop=unknown; text: sorry, plain prose only)",
+		},
+	]);
+});
+
+// SIO-1804: a live failure could only be called "intermittent" because the text was thrown
+// away. The error must be enough to tell prose from a payload and a clean end from a cut
+// one, and must stay bounded: it travels on the hub message, onto the sender's card and
+// into the monitor's one-line "(uninvestigated: ...)" digest entry.
+test("a long unparseable reply is reported by its length, stop reason, head and tail", () => {
+	const text = `Here is the verdict:\n{"verdict":"confirmed","summary":"${"x".repeat(5000)}\nEND OF TEXT, never closed`;
+	const error = notJsonError({ text, stopReason: "stop" });
+	expect(error.startsWith("response not valid JSON (")).toBe(true);
+	expect(error).toContain(`${text.trim().length} chars, stop=stop`);
+	expect(error).toContain('starts: Here is the verdict: {"verdict":"confirmed"');
+	expect(error).toContain("ends: ");
+	expect(error.endsWith("END OF TEXT, never closed)")).toBe(true);
+	expect(error.includes("\n")).toBe(false);
+	expect(error.length).toBeLessThan(450);
 });
 
 test("mixed schema and plain inbounds each get their own treatment", () => {
