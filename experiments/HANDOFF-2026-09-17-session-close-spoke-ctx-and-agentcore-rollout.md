@@ -5,10 +5,10 @@
 | Date | 2026-09-17 (session ran about 15:45 to 17:45 UTC) |
 | Tickets | [SIO-1786](https://linear.app/siobytes/issue/SIO-1786) Done (its user-side replay has since been run, see the update), [SIO-1787](https://linear.app/siobytes/issue/SIO-1787) Done (closed by the user 2026-09-17, was In Review when this was written), [SIO-1788](https://linear.app/siobytes/issue/SIO-1788) Done |
 | Related | [SIO-1726](https://linear.app/siobytes/issue/SIO-1726), [SIO-1734](https://linear.app/siobytes/issue/SIO-1734) (spoke context-mode, shipped earlier), [SIO-1774](https://linear.app/siobytes/issue/SIO-1774) (the change the AgentCore deploy shipped), [SIO-1784](https://linear.app/siobytes/issue/SIO-1784) (separate, own handover: `experiments/HANDOFF-2026-09-17-SIO-1784.md`) |
-| PRs | #819 merged as `798e9b29`, #820 merged as `61b43f87`; follow-up session #821 to #824; second update #826 merged as `cf5ba637`, #825 closed unmerged; third update #827 merged as `09781ab9`, #828 merged as `95433027`; fourth update #830 merged as `adde28a3`, #829 merged as `3dccce03`, #831 merged as `dfabe40a`; fifth update #832 merged as `4df76f04`; sixth update #833 merged as `c3c1d7d0` |
-| Repo state | `origin/main` at `61b43f87` when written; `7a77c575` after the follow-up session (PRs #821, #822, #823, #824); `cf5ba637` after the second update (PR #826); `95433027` after the third update (PRs #827, #828); `dfabe40a` after the fourth update (PRs #829, #830, #831); `4df76f04` after the fifth update (PR #832); `c3c1d7d0` after the sixth update (PR #833). No branch is open. |
+| PRs | #819 merged as `798e9b29`, #820 merged as `61b43f87`; follow-up session #821 to #824; second update #826 merged as `cf5ba637`, #825 closed unmerged; third update #827 merged as `09781ab9`, #828 merged as `95433027`; fourth update #830 merged as `adde28a3`, #829 merged as `3dccce03`, #831 merged as `dfabe40a`; fifth update #832 merged as `4df76f04`; sixth update #833 merged as `c3c1d7d0`; seventh update #834 merged as `296b9f84` |
+| Repo state | `origin/main` at `61b43f87` when written; `7a77c575` after the follow-up session (PRs #821, #822, #823, #824); `cf5ba637` after the second update (PR #826); `95433027` after the third update (PRs #827, #828); `dfabe40a` after the fourth update (PRs #829, #830, #831); `4df76f04` after the fifth update (PR #832); `c3c1d7d0` after the sixth update (PR #833); `296b9f84` after the seventh update (PR #834). No branch is open. |
 | Deployed state | Fleet bundle `61b43f87` on all 8 spokes and both hubs. AWS AgentCore runtime on v16. The SIO-1792 change is to the operator-side fleet CLI and needs no deploy; the SIO-1793 change is tests only. |
-| Nature | Nothing here is in progress. Every item under "What is still open" is now closed or ticketed; see the third update for the tickets, the fourth and fifth for what happened to them, and the SIXTH update for the current list of what is left: two no-code items that need the owner (the dev half of SIO-1801, check 2 of SIO-1800). |
+| Nature | Nothing here is in progress. Every item under "What is still open" is now closed or ticketed; see the third update for the tickets, the fourth and fifth for what happened to them, and the SEVENTH update for the final state: every ticket is Done or Cancelled except SIO-1799, which stays in Backlog on purpose until its own 60-day rule (2026-11-16). Nothing else is left. |
 
 ## TL;DR
 
@@ -503,6 +503,70 @@ State at close: `origin/main` at the commit that adds this section, on top of `c
 worktree and the main checkout are level with it. No branch from this session is open, locally or
 on origin. Port 5174 free; the operator's tunnel (8788) and the Atlassian MCP (9085) were never
 touched. Nothing deployed: fleet bundle `61b43f87`, AWS AgentCore runtime v16.
+
+## Seventh update, 2026-09-18 08:50 to 09:30 UTC (same session): SIO-1800 and SIO-1801 finished. Nothing is left but SIO-1799's waiting period
+
+The owner asked for the SIO-1800 recommendation to be implemented and every ticket finished. This
+supersedes the "what is left" list in the sixth update: both of its items are done.
+
+**[SIO-1801](https://linear.app/siobytes/issue/SIO-1801), the dev half: done, Done.** No operator
+console was needed after all. The pane UI hides dev hubs by design (SIO-1696), but its send path
+resolves EVERY configured hub, so `POST /api/pi/messages` with `hubKey: eu-shared-services-dev`
+is the same hub client and a real hub message to the live dev spoke. The session opened the dev
+tunnel itself (`just hub-tunnel eu-shared-services-dev 8787`, from the main checkout) and closed
+it afterwards by pid, checking the command line first. Spoke `eu-shared-services-dev`: exactly the
+seven `ctx_` tools, then `TOOLS_USED=ctx_batch_execute,ctx_execute; INSTANCES=3`, which matches an
+independent read-only `DescribeInstances` on that account. The same two prompts on `eu-oit-dev`
+answered correctly too, but that count could not be verified (no AWS profile for that account), so
+it is recorded as unverified. Closed by hand on the owner's instruction; there is no PR to do it.
+
+**[SIO-1800](https://linear.app/siobytes/issue/SIO-1800): check 2 passed, and the recommendation
+shipped as PR #834 (`296b9f84`). Done.**
+
+- Check 2: on an AWS replay the verify for `eu-shared-services-prd` returned a real verdict this
+  time (`partially confirmed`), which raised an investigate card. Read from the DOM: the
+  investigate entry landed BELOW the finished verify and was scrolled into view. All four checks
+  on the ticket have now passed live.
+- The change: a reader who was AT THE BOTTOM now follows an arriving reply; a reader who scrolled
+  up is still never moved, so SIO-1794's rule stands. The decision is a pure function in
+  `apps/web/src/lib/components/pi-fleet-scroll.ts` (9 tests); "was at the bottom" is captured in
+  `$effect.pre`, before the DOM grows. Live: 12 px left below the fold after a reply (the section's
+  own padding) instead of 108 and 81; a reader parked at `scrollTop` 30 stayed at 30.
+- **A flaw in the first commit, found by measuring it live and not by review (Greptile had given
+  it 5/5).** `nearest` aligns an entry taller than the pane by its TOP, which is the intended "a
+  long verdict opens at its start"; but the top of the scroller is covered by the pinned spoke
+  picker, so a 1,882 px verdict opened with 127 px of it, the status and the start of the summary,
+  UNDER the picker. The old scroll-on-add never hit this because it only scrolled to short stubs.
+  Fixed in a second commit: the scroller carries `scroll-padding-top` equal to the picker's
+  measured `offsetHeight` (measured because the picker is sized to its content, SIO-1721). Live
+  after it: a 1,300 px reply opens with 0 px under the picker.
+
+**Final state of every ticket this document tracks:**
+
+| Ticket | State |
+|---|---|
+| SIO-1786, SIO-1787, SIO-1788, SIO-1792, SIO-1793, SIO-1795 | Done (earlier updates) |
+| SIO-1796 | Cancelled (second update) |
+| SIO-1797, SIO-1798, SIO-1802, SIO-1803 | Done, merged, verified live |
+| SIO-1800 | Done, PR #834 |
+| SIO-1801 | Done, both environments, both counts verified |
+| SIO-1799 | Backlog ON PURPOSE. It is a landing place for a recurrence of a CI flake seen once; its own acceptance is "fixed with a test, or closed as not reproducible after 60 days". No recurrence in 45 CI runs. Closing it before 2026-11-16 would contradict the ticket, so it was left. |
+
+**Nothing else is left.** Seen in passing during the whole session and NOT ticketed, in case any
+is wanted: a verify to `eu-shared-services-prd` once ended `error: response not valid JSON`
+(spoke-side, intermittent; the next one returned a verdict); `findLinkedIncidents`' `resolvedAt` /
+`mttrMinutes` are probably always null because the upstream default field set has no
+`resolutiondate`; `get-runbook-for-alert.ts` builds Confluence CQL with the same unquoted
+multi-word `text ~` that SIO-1802 fixed for Jira; `packages/knowledge-graph`'s suite segfaults the
+Bun runner locally (rc 139, identical on base content; CI runs it).
+
+State at close: `origin/main` at the commit that adds this section, on top of `296b9f84`. No
+branch from this session is open, locally or on origin. Every process the session started is
+stopped and proven so: the web instance on 5174 (by server id, port free) and the dev tunnel on
+8787 (by pid, port free). The operator's prd tunnel (8788) and the Atlassian MCP (9085) were never
+touched. Nothing deployed: fleet bundle `61b43f87`, AWS AgentCore runtime v16. The merged agent and
+web changes (SIO-1797, SIO-1798, SIO-1800, SIO-1803) load on the next web app restart; the
+Atlassian MCP already hot-reloaded SIO-1802.
 
 ## What is still open
 
