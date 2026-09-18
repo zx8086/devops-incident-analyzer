@@ -82,6 +82,29 @@ export function nextRunHealth(prev: RunHealth, turn: FinalAssistant): RunHealth 
 	return { consecutive_run_errors: 0 };
 }
 
+// SIO-1804: a schema-bound reply that would not parse used to be answered with the fixed
+// string "response not valid JSON" and the model's text was thrown away, so a live failure
+// (eu-shared-services-prd, 2026-09-18) could only be called "intermittent": there was no
+// record anywhere of what the spoke had said. The error now says how long the text was, how
+// the run stopped, and shows a bounded head and tail, which is enough to tell prose from a
+// payload, a fence from none, and a clean end from a cut one. It is bounded because it
+// travels on the hub message and onto the sender's card, and it is spoke-authored text:
+// rendered as data by the sender, never fed to a model (the PR #682 invariant).
+const NOT_JSON_EDGE_CHARS = 160;
+
+function oneLine(s: string): string {
+	return s.replace(/\s+/g, " ").trim();
+}
+
+export function notJsonError(turn: FinalAssistant): string {
+	const text = turn.text.trim();
+	const facts = `${text.length} chars, stop=${turn.stopReason ?? "unknown"}`;
+	if (text.length <= NOT_JSON_EDGE_CHARS * 2) return `response not valid JSON (${facts}; text: ${oneLine(text)})`;
+	const head = oneLine(text.slice(0, NOT_JSON_EDGE_CHARS));
+	const tail = oneLine(text.slice(-NOT_JSON_EDGE_CHARS));
+	return `response not valid JSON (${facts}; starts: ${head} ... ends: ${tail})`;
+}
+
 // One turn can cover several stacked inbound prompts (followUps merge into the
 // running turn), so every unfulfilled inbound gets the turn's final assistant
 // text as its reply -- oldest first, each under its own response_schema rule.
@@ -97,7 +120,7 @@ export function buildTurnReplies(inbounds: TurnReplyInbound[], turn: string | Fi
 		} else if (inbound.response_schema && typeof inbound.response_schema === "object") {
 			const parsed = extractJsonPayload(lastAssistantText);
 			if (parsed === undefined) {
-				replies.push({ msg_id: inbound.msg_id, response: null, error: "response not valid JSON" });
+				replies.push({ msg_id: inbound.msg_id, response: null, error: notJsonError(final) });
 			} else {
 				replies.push({ msg_id: inbound.msg_id, response: parsed, error: null });
 			}
