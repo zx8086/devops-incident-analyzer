@@ -35,23 +35,30 @@ function isInteractive(id: string): boolean {
 function classFor(id: string, isSelected: boolean): string {
 	const s = stateFor(id);
 	if (s === "down") {
-		return "bg-red-50 text-gray-400 border border-red-300 cursor-not-allowed line-through decoration-red-300";
+		return "bg-red-50 text-gray-400 border border-red-300 cursor-not-allowed line-through decoration-red-300 font-medium";
 	}
 	if (s === "misidentified") {
-		return "bg-red-100 text-red-900 border border-red-700 cursor-not-allowed";
+		return "bg-red-100 text-red-900 border border-red-700 cursor-not-allowed font-medium";
 	}
 	if (s === "unready") {
+		// SIO-1809: both branches kept border-yellow-500, so a selected unready
+		// datasource had no border cue at all -- only the faint tint separated it.
 		return isSelected
-			? "bg-tommy-navy/5 text-tommy-navy border border-yellow-500"
-			: "bg-yellow-50 text-yellow-900 border border-yellow-500 hover:border-yellow-600";
+			? "bg-tommy-navy/10 text-tommy-navy border border-yellow-600 font-semibold"
+			: "bg-yellow-50 text-yellow-900 border border-yellow-500 hover:border-yellow-600 font-medium";
 	}
 	if (s === "replaced") {
-		return "bg-yellow-100 text-yellow-900 border border-yellow-500 animate-pulse";
+		// A datasource stays selected while its process reconnects, so this branch
+		// carries the weight cue too -- without it a selected chip is
+		// indistinguishable from an unselected one for the whole reload.
+		return isSelected
+			? "bg-yellow-100 text-yellow-900 border border-yellow-600 animate-pulse font-semibold"
+			: "bg-yellow-100 text-yellow-900 border border-yellow-500 animate-pulse font-medium";
 	}
 	// ready
 	return isSelected
-		? "bg-tommy-navy/5 text-tommy-navy border border-tommy-navy/30"
-		: "bg-white text-gray-600 border border-gray-300 hover:border-tommy-accent-blue";
+		? "bg-tommy-navy/10 text-tommy-navy border border-tommy-navy/40 font-semibold"
+		: "bg-white text-gray-600 border border-gray-300 hover:border-tommy-accent-blue font-medium";
 }
 
 function titleFor(id: string): string {
@@ -90,7 +97,7 @@ function selectNone() {
         <button
           onclick={() => toggle(ds)}
           disabled={!isInteractive(ds)}
-          class="px-2.5 py-1 rounded text-xs font-medium transition-colors {classFor(ds, selected.includes(ds))}"
+          class="px-2.5 py-1 rounded text-xs transition-colors {classFor(ds, selected.includes(ds))}"
           title={titleFor(ds)}
         >
           {labels[ds] ?? ds}
