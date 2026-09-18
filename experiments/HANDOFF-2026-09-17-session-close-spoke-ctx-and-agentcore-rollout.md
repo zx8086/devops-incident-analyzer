@@ -7,8 +7,8 @@
 | Related | [SIO-1726](https://linear.app/siobytes/issue/SIO-1726), [SIO-1734](https://linear.app/siobytes/issue/SIO-1734) (spoke context-mode, shipped earlier), [SIO-1774](https://linear.app/siobytes/issue/SIO-1774) (the change the AgentCore deploy shipped), [SIO-1784](https://linear.app/siobytes/issue/SIO-1784) (separate, own handover: `experiments/HANDOFF-2026-09-17-SIO-1784.md`) |
 | PRs | #819 merged as `798e9b29`, #820 merged as `61b43f87`; follow-up session #821 to #824; second update #826 merged as `cf5ba637`, #825 closed unmerged; third update #827 merged as `09781ab9`, #828 merged as `95433027`; fourth update #830 merged as `adde28a3`, #829 merged as `3dccce03`, #831 merged as `dfabe40a`; fifth update #832 merged as `4df76f04`; sixth update #833 merged as `c3c1d7d0`; seventh update #834 merged as `296b9f84` |
 | Repo state | `origin/main` at `61b43f87` when written; `7a77c575` after the follow-up session (PRs #821, #822, #823, #824); `cf5ba637` after the second update (PR #826); `95433027` after the third update (PRs #827, #828); `dfabe40a` after the fourth update (PRs #829, #830, #831); `4df76f04` after the fifth update (PR #832); `c3c1d7d0` after the sixth update (PR #833); `296b9f84` after the seventh update (PR #834). No branch is open. |
-| Deployed state | Fleet bundle `61b43f87` on all 8 spokes and both hubs. AWS AgentCore runtime on v16. The SIO-1792 change is to the operator-side fleet CLI and needs no deploy; the SIO-1793 change is tests only. |
-| Nature | Nothing here is in progress. Every item under "What is still open" is now closed or ticketed; see the third update for the tickets, the fourth and fifth for what happened to them, and the SEVENTH update for the final state: every ticket is Done or Cancelled except SIO-1799, which stays in Backlog on purpose until its own 60-day rule (2026-11-16). Nothing else is left. |
+| Deployed state | Fleet bundle `97b9d8ad` on all 8 spokes and both hubs since 2026-09-18 10:17 UTC (ninth update; it was `61b43f87` before, which is the rollback target). AWS AgentCore runtime on v16. The SIO-1792 change is to the operator-side fleet CLI and needs no deploy; the SIO-1793 change is tests only. |
+| Nature | Nothing here is in progress. Every item under "What is still open" is now closed or ticketed; see the third update for the tickets, the fourth and fifth for what happened to them, and the SEVENTH update for the final state: every ticket is Done or Cancelled except SIO-1799, which stays in Backlog on purpose until its own 60-day rule (2026-11-16). Nothing else is left. Later the same day four follow-ups were ticketed (SIO-1804 to SIO-1807): SIO-1805 is Done, SIO-1804 is merged AND deployed (ninth update) and stays In Review until a real sample or a quiet period settles its cause, SIO-1806 and SIO-1807 are Backlog. |
 
 ## TL;DR
 
@@ -627,6 +627,68 @@ next publish is NOT a functionally empty one, and it carries exactly this change
 State at close: `origin/main` at the commit that adds this section, on top of `d35c1e80`. No
 branch from this session is open. No process was started in this round except read-only calls to
 the running Atlassian MCP. Nothing deployed.
+
+## Ninth update, 2026-09-18 09:55 to 10:20 UTC (same session): the SIO-1804 bundle is deployed, dev canary first, then production
+
+The owner approved it in these words: "go ahead, canary on dev then roll out to prd". Fleet bundle
+`97b9d8ad` (`origin/main`, carries PR #836) is now on all 8 spokes and both hubs. Rollback target:
+`61b43f87`, by republishing it from a detached checkout of that commit and running
+`pi-coms-update` per host.
+
+Done host by host over SSM with `pi-coms-update` per instance id, no fleet CLI and no tunnel
+(memory `reference_fleet_rollout_host_by_host_over_ssm`), from a worktree detached at
+`origin/main` with a clean tree:
+
+1. `publish-fleet.sh --stage-only` first: the stage held the new `extensions/jsonPayload.ts` and
+   `extensions/turnReply.ts`, no `.pi` dir, the right `.bundle-version`.
+2. Dev: baseline read, publish to the dev hub's bucket, canary `eu-shared-services-dev`, then
+   `eu-oit-dev`, then the dev hub. After the hub restart all four dev peers (two spokes, two
+   monitors) re-registered within 2 seconds and neither Pi relaunched.
+3. Production: baseline read of all seven hosts, publish to the production hub's bucket, canary
+   `eu-shared-services-prd`, then the rest one at a time with a halt on the first failed verify,
+   production hub last. 12 peers plus the operator console re-registered, 0 errors in the hub
+   journal.
+
+Verified on every spoke: `.bundle-version`, a new Pi pid with its context-mode server child,
+`agent registered with the hub as <name>`, `pi-agent`, `pi-monitor` and `herdr` active with
+`NRestarts=0`, `mcp.json` still excluding the four ctx maintenance tools (SIO-1788), no `.pi` dir.
+A final sweep 4 to 17 minutes after each relaunch showed the same Pi pid and exactly one relaunch
+per host.
+
+Functional probe on the dev canary and the production canary, importing the DEPLOYED files with
+the host's own bun as the `piagent` user: a verdict with a raw newline inside a string parses with
+the newline preserved; a broken verdict returns `undefined` rather than the inner `claims` array;
+the error reads `response not valid JSON (19 chars, stop=stop; text: I could not finish.)`.
+
+Two things learned, both worth keeping:
+
+- **A publish starts the clock for every host of that hub, not only the canary.** The State
+  Manager association runs `pi-coms-update` every 30 minutes on its own schedule. Two production
+  spokes converged by themselves within a minute of the production publish, before the loop
+  reached them. So "canary" after a publish means "the first host I look at", not "the only host
+  that changes"; the real gate is the DEV environment, which has its own bucket. If a production
+  canary fails, republish the old bundle at once rather than investigating first.
+- **The halt check fired falsely on the first self-converged host.** Its `pi-coms-update` was a
+  no-op and its "registered" line was older than the 3 minute journal window the verify read. A
+  verify script must anchor on the Pi process start time, not on a fixed recent window. Re-read
+  with a 25 minute window: clean. (A second probe then failed because zsh does not word-split an
+  unquoted variable; run such loops under `bash` or pass arguments explicitly.)
+
+Not done: an end to end schema-bound hub message after the rollout. No dev tunnel was up, and a
+production send needs its own approval. The on-host probe plus the hub registrations stand in.
+
+**[SIO-1804](https://linear.app/siobytes/issue/SIO-1804) stays In Review on purpose.** The
+diagnosability half of its acceptance is live. The cause (a raw control character inside a
+claim's evidence text) is still a hypothesis: the next "not valid JSON" from any spoke now carries
+its own length, stop reason, head and tail; if none occurs over a period of normal verify and
+investigate traffic, the repair was probably the cause. Closing it is the owner's call.
+[SIO-1806](https://linear.app/siobytes/issue/SIO-1806) and
+[SIO-1807](https://linear.app/siobytes/issue/SIO-1807) are untouched, Backlog.
+[SIO-1799](https://linear.app/siobytes/issue/SIO-1799) waits for 2026-11-16.
+
+State at close: `origin/main` at the commit that adds this section, on top of `97b9d8ad`. No
+branch is open, no process of this session is running, and the operator's own production tunnel
+on 8788 was left alone and is still listening.
 
 ## What is still open
 
