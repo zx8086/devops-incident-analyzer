@@ -34,6 +34,24 @@ division code (THE1) -- NOT a Jira label equal to the service. So:
   `getIncidentHistory`, and `getRunbookForAlert` (e.g. `["AFS season code", "FMS", "THE1",
   "Prana"]`) for time-bucketed / MTTR detail. These text-match the content; the bare service token
   usually will not.
+- The FORM of `errorKeywords` is not the form of the `atlassian_search` string (SIO-1803). That
+  string is one free-text query, so a run of loose words is right for it. `errorKeywords` is a
+  LIST, and EACH entry becomes its own search clause: any single entry can pull a ticket in by
+  itself, so one generic entry floods the result with unrelated tickets.
+  - Keep a phrase WHOLE, as one entry: `"AFS season code"`, `"kv timeout"`, `"full catalog
+    feed"`. Never split a phrase into its words.
+  - Prefer DISTINCTIVE identifiers: an exception class (`UnambiguousTimeoutException`), a
+    method or request type (`GetRequest`), an error code, a product or business term (`Prana`,
+    `THE1`).
+  - NEVER a generic single word (`timeout`, `error`, `article`, `styles`, `kv`, `request`), and
+    never a technology the whole estate uses on its own (`Couchbase`, `Kafka`). If the word
+    matters, keep it inside its phrase.
+  - NEVER repeat the service name as a keyword: `service` is already searched.
+  - 2 to 5 entries. A few distinctive terms beat many generic ones.
+  - Worked example, error `UnambiguousTimeoutException: GetRequest ... "collection":"article",
+    "scope":"styles","type":"kv"` on `pvh-services-styles-v3`. WRONG: `["Couchbase", "TIMEOUT",
+    "article", "styles", "kv", "pvh-services-styles-v3"]` (that list matched over a thousand
+    tickets). RIGHT: `["UnambiguousTimeoutException", "GetRequest", "kv timeout"]`.
 - NEVER lead with `getVisibleJiraProjects` (esp. `query=<team>`, `action=create`) as a discovery
   path -- there is usually no project literally named for the team, and a 0 there is never proof of
   absence. Report the project keys from the `atlassian_search` hits instead.
