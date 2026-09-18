@@ -327,23 +327,19 @@ describe("findLinkedIncidents ranking (SIO-1802)", () => {
 		const fakeProxy = {
 			callTool: async (_name: string, args: Record<string, unknown>) => {
 				capturedArgs = args;
-				return {
-					content: [
-						{
-							type: "text",
-							text: JSON.stringify({
-								// upstream order: created DESC
-								issues: [
-									row("NEW-1", "unrelated marketing story"),
-									row("NEW-2", "another unrelated story"),
-									row("OLD-1", "Incident Report: styles-service -- kv timeout"),
-									row("OLD-2", "labelled only", ["styles-service"]),
-								],
-								isLast: true,
-							}),
-						},
-					],
-				};
+				// Each query's own upstream order is created DESC. The keyword query also
+				// returns OLD-1, which must not appear twice.
+				const issues = String(args.jql).includes("labels =")
+					? [
+							row("OLD-1", "Incident Report: styles-service -- kv timeout"),
+							row("OLD-2", "labelled only", ["styles-service"]),
+						]
+					: [
+							row("NEW-1", "unrelated marketing story"),
+							row("NEW-2", "another unrelated story"),
+							row("OLD-1", "Incident Report: styles-service -- kv timeout"),
+						];
+				return { content: [{ type: "text", text: JSON.stringify({ issues, isLast: true }) }] };
 			},
 		} as unknown as Parameters<typeof findLinkedIncidents>[0];
 		const out = await findLinkedIncidents(fakeProxy, {
@@ -361,6 +357,76 @@ describe("findLinkedIncidents ranking (SIO-1802)", () => {
 			["NEW-2", 0],
 		]);
 		expect(out.issues[0]?.matchedBy).toEqual(["service-text", "keyword:kv timeout"]);
+	});
+});
+
+// Greptile, PR #832: both findings were about the split itself.
+describe("findLinkedIncidents: the two queries fail independently and service hits lead (SIO-1802)", () => {
+	const row = (key: string, summary: string) => ({
+		key,
+		fields: { summary, status: { name: "Open" }, created: "2026-04-10T10:00:00Z" },
+	});
+	const ok = (issues: unknown[]) => ({ content: [{ type: "text", text: JSON.stringify({ issues, isLast: true }) }] });
+	type Reply = ReturnType<typeof ok> | Error;
+	const proxyWith = (service: Reply, keywords: Reply) =>
+		({
+			callTool: async (_name: string, a: Record<string, unknown>) => {
+				const reply = String(a.jql).includes("labels =") ? service : keywords;
+				if (reply instanceof Error) throw reply;
+				return reply;
+			},
+		}) as unknown as Parameters<typeof findLinkedIncidents>[0];
+	const ctx = {
+		service: "styles-service",
+		errorKeywords: ["article", "styles", "kv"],
+		withinDays: 90,
+		limit: 3,
+		incidentProjects: [],
+	};
+
+	test("a keyword-only ticket with three generic keywords never outranks a service hit", async () => {
+		const out = await findLinkedIncidents(
+			proxyWith(
+				ok([row("SVC-1", "styles-service 404"), row("SVC-2", "styles-service slow")]),
+				ok([row("JUNK-1", "article styles kv migration"), row("JUNK-2", "article kv")]),
+			),
+			ctx,
+		);
+		// JUNK-1 scores 3, the service hits 2 and 3; with limit 3 a global sort would have
+		// put JUNK-1 first and could cut a service hit.
+		expect(out.issues.map((i) => i.key)).toEqual(["SVC-1", "SVC-2", "JUNK-1"]);
+	});
+
+	test("a service hit whose match is invisible to attribution is still marked, not scored 0", async () => {
+		const out = await findLinkedIncidents(
+			proxyWith(ok([row("SVC-9", "opaque summary, service named only in a comment")]), ok([])),
+			ctx,
+		);
+		expect(out.issues[0]).toMatchObject({ key: "SVC-9", matchedBy: ["service-text"], score: 2 });
+	});
+
+	test("a throwing keyword query keeps the service hits and says so", async () => {
+		const out = await findLinkedIncidents(
+			proxyWith(ok([row("SVC-1", "styles-service 404")]), new Error("upstream 503")),
+			ctx,
+		);
+		expect(out.issues.map((i) => i.key)).toEqual(["SVC-1"]);
+		expect(out.configWarning).toContain("keyword search failed");
+	});
+
+	test("an unusable service query is never a silent keyword-only result", async () => {
+		const unparseable = { content: [{ type: "text", text: "<html>gateway timeout</html>" }] } as unknown as Reply;
+		for (const service of [new Error("upstream 503"), unparseable]) {
+			const out = await findLinkedIncidents(proxyWith(service, ok([row("KW-1", "article kv")])), ctx);
+			expect(out.issues.map((i) => i.key)).toEqual(["KW-1"]);
+			expect(out.configWarning).toContain("naming styles-service failed");
+		}
+	});
+
+	test("both queries throwing stays loud, as the single query was (SIO-1116)", async () => {
+		await expect(
+			findLinkedIncidents(proxyWith(new Error("service down"), new Error("keywords down")), ctx),
+		).rejects.toThrow("service down");
 	});
 });
 

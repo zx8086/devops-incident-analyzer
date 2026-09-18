@@ -318,40 +318,72 @@ export async function findLinkedIncidents(
 
 	log.info({ service: ctx.service, jql, keywordJql }, "Searching for linked incidents");
 
-	const [serviceHits, keywordHits] = await Promise.all([
+	// Greptile, PR #832: the two halves must fail independently. With Promise.all a throwing
+	// keyword query discarded good service hits, and an unparseable service response became a
+	// silent keyword-only result. allSettled keeps whichever half worked and SAYS which did not.
+	const [serviceResult, keywordResult] = await Promise.allSettled([
 		searchIssues(proxy, jql, ctx.limit),
 		keywordJql ? searchIssues(proxy, keywordJql, ctx.limit) : Promise.resolve(null),
 	]);
+	const serviceHits = serviceResult.status === "fulfilled" ? serviceResult.value : null;
+	const keywordHits = keywordResult.status === "fulfilled" ? keywordResult.value : null;
 	if (!serviceHits && !keywordHits) {
+		// Nothing usable. A thrown service query stays loud (SIO-1116), as it was with one query.
+		if (serviceResult.status === "rejected") throw serviceResult.reason;
+		if (keywordResult.status === "rejected") throw keywordResult.reason;
 		return { service: ctx.service, jql, count: 0, issues: [] };
 	}
+	const warnings: string[] = [];
+	if (!serviceHits) {
+		log.warn(
+			{ service: ctx.service, reason: describeFailure(serviceResult) },
+			"Service query failed; keyword hits only",
+		);
+		warnings.push(
+			`The search for tickets naming ${ctx.service} failed; the results below come from the keyword search only and may miss that service's own incidents.`,
+		);
+	}
+	if (keywordJql && !keywordHits) {
+		log.warn(
+			{ service: ctx.service, reason: describeFailure(keywordResult) },
+			"Keyword query failed; service hits only",
+		);
+		warnings.push("The keyword search failed; the results below are tickets naming the service only.");
+	}
 
-	// Service hits first, then keyword hits not already present.
-	const seen = new Set<string>();
-	const rawIssues = [...(serviceHits?.issues ?? []), ...(keywordHits?.issues ?? [])].filter((raw) => {
-		if (seen.has(raw.key)) return false;
-		seen.add(raw.key);
-		return true;
-	});
-	// Best-attributed first. Array.prototype.sort is stable, so within a score the order above
-	// (service hits, then each query's `created DESC`) survives as the tie-break.
-	const issues = rawIssues
-		.map((raw) =>
-			shapeIssue(raw, ctx.siteUrl, {
-				service: ctx.service,
-				componentLabel: ctx.componentLabel,
-				errorKeywords: ctx.errorKeywords,
-			}),
-		)
-		.sort((a, b) => b.score - a.score)
-		.slice(0, ctx.limit);
+	const terms: MatchTerms = {
+		service: ctx.service,
+		componentLabel: ctx.componentLabel,
+		errorKeywords: ctx.errorKeywords,
+	};
+	const byScore = (a: { score: number }, b: { score: number }) => b.score - a.score;
+	// A ticket the SERVICE query returned matched a service clause by construction. When
+	// attribution cannot see where (a comment, a field this tool does not read), say so rather
+	// than score it 0: otherwise it sinks below every keyword hit and the extractor drops it.
+	const serviceIssues = (serviceHits?.issues ?? [])
+		.map((raw) => {
+			const shaped = shapeIssue(raw, ctx.siteUrl, terms);
+			if (shaped.matchedBy.some((m) => !m.startsWith("keyword:"))) return shaped;
+			return { ...shaped, matchedBy: ["service-text", ...shaped.matchedBy], score: shaped.score + SCORE_SERVICE_TEXT };
+		})
+		.sort(byScore);
+	const serviceKeys = new Set(serviceIssues.map((i) => i.key));
+	const keywordIssues = (keywordHits?.issues ?? [])
+		.filter((raw) => !serviceKeys.has(raw.key))
+		.map((raw) => shapeIssue(raw, ctx.siteUrl, terms))
+		.sort(byScore);
+	// Greptile, PR #832: one global score sort let a ticket with three generic keywords (3)
+	// outrank a real service hit (2) and push it past `limit`. Service hits are ranked among
+	// themselves and ALWAYS come first; keyword-only hits fill what is left.
+	const issues = [...serviceIssues, ...keywordIssues].slice(0, ctx.limit);
 
 	// SIO-1336: isLast:false means more matches exist beyond this page than `count` reports --
 	// without this, count reads as the total that matched (it is only the total returned).
-	const truncated = serviceHits?.isLast === false || keywordHits?.isLast === false;
-	const truncationWarning = truncated
-		? `More than ${issues.length} incidents matched within ${ctx.withinDays}d; results were truncated to the requested limit. Increase limit or narrow withinDays to see the full set.`
-		: undefined;
+	if (serviceHits?.isLast === false || keywordHits?.isLast === false) {
+		warnings.push(
+			`More than ${issues.length} incidents matched within ${ctx.withinDays}d; results were truncated to the requested limit. Increase limit or narrow withinDays to see the full set.`,
+		);
+	}
 
 	return {
 		service: ctx.service,
@@ -359,8 +391,13 @@ export async function findLinkedIncidents(
 		...(keywordJql ? { keywordJql } : {}),
 		count: issues.length,
 		issues,
-		...(truncationWarning ? { configWarning: truncationWarning } : {}),
+		...(warnings.length > 0 ? { configWarning: warnings.join(" ") } : {}),
 	};
+}
+
+function describeFailure(result: PromiseSettledResult<unknown>): string {
+	if (result.status === "fulfilled") return "unparseable response";
+	return result.reason instanceof Error ? result.reason.message : String(result.reason);
 }
 
 async function searchIssues(
