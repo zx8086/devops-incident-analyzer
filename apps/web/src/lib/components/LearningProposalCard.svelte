@@ -149,7 +149,7 @@ const approvedCount = $derived(itemIds.filter((id) => decided[id] === "approve")
 {/snippet}
 
 <div
-  class="border-t border-tommy-accent-blue/40 bg-blue-50 px-4 py-3"
+  class="border-t border-gray-200 bg-gray-50 px-4 py-3"
   role="dialog"
   aria-labelledby="hil-review-heading"
 >
@@ -355,7 +355,7 @@ const approvedCount = $derived(itemIds.filter((id) => decided[id] === "approve")
         type="button"
         onclick={() => onApply(decisions(true), {})}
         {disabled}
-        class="px-3 py-1.5 text-sm font-medium bg-white text-tommy-navy border border-tommy-navy rounded-md hover:bg-tommy-cream disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        class="px-3 py-1.5 text-sm font-medium bg-white text-tommy-navy border border-tommy-navy rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
       >
         Reject all
       </button>

@@ -26,7 +26,7 @@ const statusLabel: Record<string, string> = {
 };
 </script>
 
-<div class="border-t border-tommy-accent-blue/40 bg-blue-50 px-4 py-3" role="status" aria-labelledby="hil-outcome-heading">
+<div class="border-t border-gray-200 bg-gray-50 px-4 py-3" role="status" aria-labelledby="hil-outcome-heading">
   <div class="max-w-4xl mx-auto">
     <div class="rounded-lg border px-3 py-2 {anyApplied ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-gray-50'}">
       <h3 id="hil-outcome-heading" class="text-sm font-semibold {anyApplied ? 'text-green-800' : 'text-gray-700'}">

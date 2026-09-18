@@ -28,7 +28,7 @@ function fmtVal(v: unknown): string {
 </script>
 
 <div class="px-4 py-2 max-w-4xl mx-auto">
-  <div class="rounded-lg border border-tommy-accent-blue/30 bg-blue-50/60 p-3">
+  <div class="rounded-lg border border-gray-200 bg-gray-50 p-3">
     <div class="flex items-center justify-between gap-2">
       <h3 class="text-sm font-semibold text-tommy-navy">Synthetics drift: {report.deployment}</h3>
       <div class="flex items-center gap-2">
@@ -53,7 +53,7 @@ function fmtVal(v: unknown): string {
             type="button"
             onclick={() => onRecheck?.()}
             disabled={recheckDisabled}
-            class="text-xs px-2 py-0.5 rounded-md border border-tommy-navy text-tommy-navy hover:bg-tommy-cream disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            class="text-xs px-2 py-0.5 rounded-md border border-tommy-navy text-tommy-navy hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             Re-check
           </button>

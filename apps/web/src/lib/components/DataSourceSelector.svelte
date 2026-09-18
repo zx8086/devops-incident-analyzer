@@ -32,33 +32,36 @@ function isInteractive(id: string): boolean {
 	return s === "ready" || s === "unready" || s === "replaced";
 }
 
+// SIO-1810: selection is binary, so it gets a binary cue -- solid fill when
+// selected, outline when not. Health (down / misidentified / unready /
+// replaced) owns the red and yellow families; selection never recolours a
+// chip, it only fills it. Every branch carries an explicit border so the box
+// is the same size either way.
 function classFor(id: string, isSelected: boolean): string {
 	const s = stateFor(id);
 	if (s === "down") {
-		return "bg-red-50 text-gray-400 border border-red-300 cursor-not-allowed line-through decoration-red-300 font-medium";
+		return "bg-red-50 text-gray-400 border border-red-300 cursor-not-allowed line-through decoration-red-300";
 	}
 	if (s === "misidentified") {
-		return "bg-red-100 text-red-900 border border-red-700 cursor-not-allowed font-medium";
+		return "bg-red-100 text-red-900 border border-red-700 cursor-not-allowed";
 	}
+	// The fill carries the selection; the FOREGROUND stays dark, because white on
+	// yellow-500 is 1.92:1 -- under the 4.5:1 floor for text this small. Dark
+	// yellow-900 on the same fill is 4.52:1 and keeps fill-vs-outline intact.
 	if (s === "unready") {
-		// SIO-1809: both branches kept border-yellow-500, so a selected unready
-		// datasource had no border cue at all -- only the faint tint separated it.
 		return isSelected
-			? "bg-tommy-navy/10 text-tommy-navy border border-yellow-600 font-semibold"
-			: "bg-yellow-50 text-yellow-900 border border-yellow-500 hover:border-yellow-600 font-medium";
+			? "bg-yellow-500 text-yellow-900 border border-yellow-600"
+			: "bg-yellow-50 text-yellow-900 border border-yellow-500 hover:border-yellow-600";
 	}
 	if (s === "replaced") {
-		// A datasource stays selected while its process reconnects, so this branch
-		// carries the weight cue too -- without it a selected chip is
-		// indistinguishable from an unselected one for the whole reload.
 		return isSelected
-			? "bg-yellow-100 text-yellow-900 border border-yellow-600 animate-pulse font-semibold"
-			: "bg-yellow-100 text-yellow-900 border border-yellow-500 animate-pulse font-medium";
+			? "bg-yellow-500 text-yellow-900 border border-yellow-600 animate-pulse"
+			: "bg-yellow-100 text-yellow-900 border border-yellow-500 animate-pulse";
 	}
 	// ready
 	return isSelected
-		? "bg-tommy-navy/10 text-tommy-navy border border-tommy-navy/40 font-semibold"
-		: "bg-white text-gray-600 border border-gray-300 hover:border-tommy-accent-blue font-medium";
+		? "bg-tommy-navy text-white border border-tommy-navy"
+		: "bg-white text-gray-600 border border-gray-300 hover:border-tommy-accent-blue";
 }
 
 function titleFor(id: string): string {
@@ -97,7 +100,7 @@ function selectNone() {
         <button
           onclick={() => toggle(ds)}
           disabled={!isInteractive(ds)}
-          class="px-2.5 py-1 rounded text-xs transition-colors {classFor(ds, selected.includes(ds))}"
+          class="px-2.5 py-1 rounded text-xs font-medium transition-colors {classFor(ds, selected.includes(ds))}"
           title={titleFor(ds)}
         >
           {labels[ds] ?? ds}

@@ -69,6 +69,15 @@ function inboxMessage(msgId: string, senderName: string, prompt: string, isDiges
 	};
 }
 
+// SIO-1810 (Greptile #841): assert the digest carries a real SURFACE, not just the
+// `digest-body` marker -- that marker only drives list spacing in MarkdownRenderer
+// and paints nothing, so asserting it alone would pass with the background deleted.
+// Matching "a bg-* on the same element as the marker" survives a repaint while still
+// failing if the surface is removed.
+function digestSurfaceClass(body: string): string | undefined {
+	return body.match(/class="[^"]*digest-body[^"]*"/)?.[0];
+}
+
 function renderPane(state: PiFleetState, busy = false, scopeEstates: string[] = ALL_FIXTURE_ESTATES): string {
 	return render(PiFleetPane, {
 		props: { pane: state, busy, mailboxBusy: null, ...handlers, scopeEstates },
@@ -161,8 +170,10 @@ describe("PiFleetPane", () => {
 	test("the spoke picker is sticky, so a long digest cannot scroll it away", () => {
 		const body = renderPane(applyAgents(initialPiFleetState(), listing));
 		expect(body).toContain("sticky top-0 z-20");
-		// Opaque, or the digest shows through it while scrolling.
-		expect(body).toContain("bg-tommy-cream border-b");
+		// Opaque, or the digest shows through it while scrolling. SIO-1810 moved the
+		// pane onto the white plane; what matters is that the band has a background,
+		// not which token supplies it.
+		expect(body).toContain("bg-white border-b");
 	});
 
 	// SIO-1721: the cap/floor/shrink machinery is GONE. Each of these was a fix for
@@ -211,8 +222,10 @@ describe("PiFleetPane", () => {
 		});
 		const body = renderPane(state);
 		expect(body).toContain("text-gray-700");
-		// SIO-1719: the DIGEST body is cool mist now; offwhite stays for spoke replies.
-		expect(body).toContain("bg-tommy-mist");
+		// SIO-1719/SIO-1810: the digest body gets its own surface plus an accent rule,
+		// so it reads apart from the card and from plain replies.
+		expect(body).toContain("border-l-2 border-tommy-accent-blue");
+		expect(digestSurfaceClass(body)).toMatch(/\bbg-\S+/);
 		expect(body).not.toContain("text-gray-400");
 	});
 
@@ -249,8 +262,9 @@ describe("PiFleetPane", () => {
 		// The follow-up is indented under a rule; the digest is not.
 		expect(body).toContain("ml-3 border-l border-gray-200 pl-3");
 		// The digest keeps the surfaced treatment.
-		// SIO-1719: the digest body is cool mist; offwhite remains for spoke replies.
-		expect(body).toContain("bg-tommy-mist p-2");
+		// SIO-1719/SIO-1810: the digest keeps a distinct surface plus the accent rule.
+		expect(body).toContain("border-l-2 border-tommy-accent-blue");
+		expect(digestSurfaceClass(body)).toMatch(/\bbg-\S+/);
 		// Both bodies stay legible: subordination is position, never dimming.
 		expect(body).not.toContain("text-gray-400");
 	});
@@ -313,8 +327,8 @@ describe("PiFleetPane", () => {
 		]);
 		// The header row pins to the top of the scrolling picker.
 		expect(body).toContain("sticky top-0");
-		// Opaque, or the rows scroll visibly underneath it.
-		expect(body).toContain("bg-tommy-cream");
+		// Opaque, or the rows scroll visibly underneath it (SIO-1810: white plane).
+		expect(body).toContain("bg-white");
 		// All six are still rendered -- the fix is what stays put, not what is shown.
 		expect(body).toContain("eu-b2b-ecom-prd");
 		expect(body).toContain("eu-shared-services-prd");
@@ -358,7 +372,7 @@ describe("PiFleetPane", () => {
 	// SIO-1719: cream pane, white card and offwhite body are all warm and nearly
 	// the same value, so the digest -- the most important thing here -- had the
 	// weakest separation. A cool surface plus an accent rule ties it to its chip.
-	test("the digest body uses the cool mist surface, not the warm reply offwhite", () => {
+	test("the digest body gets its own surface and accent rule, apart from plain replies", () => {
 		const state = applyMailbox(applyAgents(initialPiFleetState(), listing), {
 			hubKey: "eu-shared-services-dev",
 			environment: "dev",
@@ -371,8 +385,10 @@ describe("PiFleetPane", () => {
 			],
 		});
 		const body = renderPane(state);
-		expect(body).toContain("bg-tommy-mist");
+		expect(body).toContain("digest-body");
 		expect(body).toContain("border-l-2 border-tommy-accent-blue");
+		// The marker alone paints nothing; the surface must actually be there.
+		expect(digestSurfaceClass(body)).toMatch(/\bbg-\S+/);
 	});
 
 	// SIO-1720: six spokes must fit BESIDE an open digest on a normal window.

@@ -1284,6 +1284,49 @@ describe("findConfidenceScore distinguishes absent from zero (SIO-1273)", () => 
 
 // SIO-1133: the Request-Id footer is stamped DETERMINISTICALLY (== state.requestId), so a
 // report pasted into a Jira ticket carries the machine key the learn-from lane scans for.
+// SIO-1810: the model is asked for a confidence line but can omit it, and
+// rewriteConfidenceInAnswer only EDITS an existing line -- it never inserts one.
+// The web confidence badge used to cover that gap on screen; it was removed as a
+// duplicate of this very line, so the aggregator now guarantees the line itself.
+// These lock the two properties that guarantee depends on.
+describe("confidence line is guaranteed (SIO-1810)", () => {
+	test("findConfidenceScore distinguishes an absent line from a genuine zero", () => {
+		expect(findConfidenceScore("# Report\n\nNo measurement here.")).toBeNull();
+		expect(findConfidenceScore("# Report\n\nConfidence: 0.00")).toBe(0);
+	});
+
+	test("rewriteConfidenceInAnswer does NOT insert a line when none exists", () => {
+		// This is the gap the aggregator compensates for; if this ever starts
+		// inserting, the guarantee in the aggregate node becomes redundant.
+		const noLine = "# Report\n\nThe service looks degraded.";
+		expect(rewriteConfidenceInAnswer(noLine, 0.4)).toBe(noLine);
+	});
+
+	// Greptile #841: exercise the real aggregate path rather than rebuilding the
+	// expression here -- a test that reimplements the production logic keeps passing
+	// when that logic is deleted, which is precisely the regression it must catch.
+	test("aggregate appends the line when the model omits it, above the Request-Id footer", async () => {
+		mockLlmContent = "# Incident Report\n\nRoot cause: connection timeout. No score was given.";
+		const result = await aggregate(makeState());
+		const answer = result.finalAnswer ?? "";
+		expect(answer).toContain("Root cause: connection timeout.");
+		// The operator sees a score rather than nothing at all.
+		expect(findConfidenceScore(answer)).not.toBeNull();
+		// SIO-632 order survives: confidence last, then the footer.
+		expect(answer.indexOf("Confidence:")).toBeLessThan(answer.indexOf("**Request-Id:**"));
+	});
+
+	test("aggregate leaves the model's own confidence line alone", async () => {
+		// The guarantee must not fire when a line is already present, or it would
+		// stamp a second one under the model's.
+		mockLlmContent = "# Incident Report\n\nRoot cause: disk pressure.\n\nConfidence: 0.73";
+		const result = await aggregate(makeState());
+		const answer = result.finalAnswer ?? "";
+		expect(answer.match(/^Confidence:/gm)?.length).toBe(1);
+		expect(findConfidenceScore(answer)).toBe(0.73);
+	});
+});
+
 describe("appendRequestIdFooter (SIO-1133)", () => {
 	const REQ = "1f5b2c8a-0d3e-4a9b-8c7d-2e6f4a1b9c0d";
 

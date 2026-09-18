@@ -239,7 +239,7 @@ function onKeydown(event: KeyboardEvent) {
        verdict). scroll-padding-top keeps scrollIntoView clear of the picker; its height is
        measured because the picker is sized to its content (SIO-1721). -->
   <div bind:this={scroller} class="flex-1 min-h-0 overflow-y-auto" style:scroll-padding-top="{pickerHeight}px">
-    <div bind:offsetHeight={pickerHeight} class="sticky top-0 z-20 bg-tommy-cream border-b border-gray-200">
+    <div bind:offsetHeight={pickerHeight} class="sticky top-0 z-20 bg-white border-b border-gray-200">
     <section class="px-4 pt-2 pb-3">
       {#if pane.hubs.length === 0}
         <p class="text-xs text-gray-500">No spokes are registered on any configured hub.</p>
@@ -305,7 +305,7 @@ function onKeydown(event: KeyboardEvent) {
                   type="button"
                   onclick={() => toggleSelect(hub.hubKey, peer.name)}
                   aria-pressed={isSelected(hub.hubKey, peer.name)}
-                  class="w-full text-left flex items-center gap-2 px-2 py-1 rounded-lg border transition-colors {isSelected(hub.hubKey, peer.name) ? 'border-tommy-accent-blue bg-white' : 'border-transparent hover:bg-white/60'}"
+                  class="w-full text-left flex items-center gap-2 px-2 py-1 rounded-lg border transition-colors {isSelected(hub.hubKey, peer.name) ? 'border-tommy-accent-blue bg-gray-50' : 'border-transparent hover:bg-gray-50'}"
                 >
                   <!-- The row is a target picker: the spoke name and whether it can
                        answer. `purpose` is agent-authored prose of unbounded length, and
@@ -342,7 +342,7 @@ function onKeydown(event: KeyboardEvent) {
       {#each scoped as hub (hub.hubKey)}
         {#if pane.mailboxes[hub.hubKey]}
           {@const mailbox = pane.mailboxes[hub.hubKey]}
-          <details open class="group rounded-lg border border-gray-200 bg-white p-3">
+          <details open class="group rounded-lg border border-gray-200 bg-gray-50 p-3">
             <summary class="flex items-center gap-2 text-xs cursor-pointer list-none [&::-webkit-details-marker]:hidden">
               <span class="text-[10px] text-gray-500 truncate">{hub.hubKey}</span>
               <span class="font-medium text-tommy-navy">Inbox {mailbox?.name}</span>
@@ -428,7 +428,7 @@ function onKeydown(event: KeyboardEvent) {
                          value, so the most important thing in the pane had the weakest
                          separation. The accent-blue left border ties the body to the
                          DAILY DIGEST chip, so the anchor reads as one unit. -->
-                    <div class="mt-1 text-gray-700 overflow-x-auto break-words {message.isDigest ? 'digest-body rounded border-l-2 border-tommy-accent-blue bg-tommy-mist p-2' : 'px-0.5'}">
+                    <div class="mt-1 text-gray-700 overflow-x-auto break-words {message.isDigest ? 'digest-body rounded border-l-2 border-tommy-accent-blue bg-white p-2' : 'px-0.5'}">
                       <!-- SIO-1720: the family tag and the summary labels are bolded so
                            the eye can find the class and the heading in a wall of
                            same-weight lines. Only `**` markers are inserted; the text
@@ -448,7 +448,7 @@ function onKeydown(event: KeyboardEvent) {
         <p class="text-xs text-gray-500">Select a spoke and send it a prompt. The reply appears here, next to the incident analysis.</p>
       {/if}
       {#each pane.entries as entry (entry.id)}
-        <article class="rounded-lg border border-gray-200 bg-white p-3">
+        <article class="rounded-lg border border-gray-200 bg-gray-50 p-3">
           <div class="flex items-center gap-2 text-xs">
             <span class="text-[10px] text-gray-500 truncate">{entry.hubKey}</span>
             <span class="font-medium text-tommy-navy">{entry.target}</span>
@@ -490,15 +490,15 @@ function onKeydown(event: KeyboardEvent) {
                    schemas. Any other object stays raw JSON. -->
               {@const structured = typeof entry.response === "string" ? null : structuredReply(entry.response)}
               {#if typeof entry.response === "string"}
-                <div class="mt-2 text-xs bg-tommy-offwhite rounded p-2 overflow-x-auto break-words">
+                <div class="mt-2 text-xs bg-white border border-gray-200 rounded p-2 overflow-x-auto break-words">
                   <MarkdownRenderer content={entry.response} />
                 </div>
               {:else if structured}
-                <div class="mt-2 bg-tommy-offwhite rounded p-2 break-words">
+                <div class="mt-2 bg-white border border-gray-200 rounded p-2 break-words">
                   <PiReplyBody verdict={structured.verdict} investigation={structured.investigation} />
                 </div>
               {:else}
-                <pre class="mt-2 text-xs bg-tommy-offwhite rounded p-2 overflow-x-auto whitespace-pre-wrap break-words">{formatReply(entry.response)}</pre>
+                <pre class="mt-2 text-xs bg-white border border-gray-200 rounded p-2 overflow-x-auto whitespace-pre-wrap break-words">{formatReply(entry.response)}</pre>
               {/if}
             {:else if entry.status === "complete" && !entry.error}
               <!-- SIO-1678: a completed reply with no text is a failed turn, not a

@@ -21,7 +21,7 @@ const selected = $derived(picked === undefined ? (prompt.candidates[0]?.id ?? nu
 </script>
 
 <div
-  class="border-t border-tommy-accent-blue/40 bg-blue-50 px-4 py-3"
+  class="border-t border-gray-200 bg-gray-50 px-4 py-3"
   role="dialog"
   aria-labelledby="hil-match-heading"
 >
