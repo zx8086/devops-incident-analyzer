@@ -1,7 +1,7 @@
 # Session summary: couchbase read-only gate bypass (SIO-1813)
 
 **Date:** 2026-09-18
-**Repo state at end:** `main` = `1716d43e` plus this document; working tree clean apart from two untracked files that predate the session (`.mcp.json`, `packages/pi-coms/deploy/fleet.yaml.bak-sio1741`).
+**Repo state at end:** this session's work is `1716d43e` on `main`. Another session merged SIO-1814 (#845, `b8572e1c`) during close-out, so this document sits on top of that. Working tree clean apart from two untracked files that predate the session (`.mcp.json`, `packages/pi-coms/deploy/fleet.yaml.bak-sio1741`).
 **Started from:** `bac18241`.
 
 | Ticket | PR | Merged as | Status |
