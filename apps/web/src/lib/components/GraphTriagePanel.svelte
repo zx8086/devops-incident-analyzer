@@ -2,7 +2,9 @@
 // apps/web/src/lib/components/GraphTriagePanel.svelte
 import { computeLayout, END_NODE, type GraphLayout, START_NODE, type Topology } from "$lib/graph-layout";
 import { ALL_NODE_LABELS } from "$lib/node-labels";
+import { runningFingerprint, shouldRevealRunning } from "./graph-triage-scroll";
 import Icon from "./Icon.svelte";
+import { isAtBottom } from "./pi-fleet-scroll";
 
 let {
 	agent,
@@ -50,6 +52,75 @@ $effect(() => {
 });
 
 const layout = $derived<GraphLayout | null>(topology ? computeLayout(topology) : null);
+
+// SIO-1812: follow the running node down the graph. The incident pipeline is 32 nodes
+// tall, so without this the turn walks off the bottom of the pane and the operator has to
+// scroll by hand to watch the thing this panel exists to show.
+let scroller = $state<HTMLElement | null>(null);
+let seenRunning = "";
+// Explicit follow-state, not a bottom test: this pane CENTRES a node, so after the first
+// reveal the scroller sits mid-content and any at-bottom check would read false and switch
+// following off for the rest of the turn (Greptile, PR #843).
+let following = true;
+// Who moved the scroller is decided by INPUT events, not by inspecting scroll events
+// (Greptile, PR #843, three rounds on this). Scroll events cannot answer it: one smooth
+// scrollTo emits ~31 of them, measured in this pane, and they are indistinguishable from
+// the operator's. Guessing from them fails in one direction or the other -- consume one
+// event and the animation's own frames look like the operator (following dies mid-turn);
+// swallow them all and a wheel spin DURING the animation looks like the animation (the
+// operator is dragged back to the node they just scrolled away from).
+//
+// wheel/touchmove/keydown fire independently of any animation -- verified live: a wheel
+// spin mid-scroll arrives as exactly 1 wheel event alongside the 31 scroll events. So they
+// are the operator, unambiguously, whatever else is in flight.
+function onOperatorInput() {
+	// They have taken the wheel. Stop following now; the scroll handler below decides
+	// whether their final position counts as coming back.
+	following = false;
+}
+
+function onScroll() {
+	// Only meaningful once the operator has taken over: it re-arms following when they
+	// park at the bottom. While `following` is true this is our own animation and the
+	// position mid-flight means nothing.
+	if (!following && scroller && isAtBottom(scroller)) following = true;
+}
+
+$effect(() => {
+	const running = runningFingerprint(activeNodes);
+	if (
+		shouldRevealRunning({
+			runningChanged: running !== seenRunning,
+			hasRunning: running !== "",
+			following,
+		})
+	) {
+		// A node's y is in viewBox units, and the SVG is scaled to fit the pane (w-full,
+		// clamped by max-width), so convert with the ratio the browser ACTUALLY rendered
+		// at rather than deriving it -- p-3 padding and that max-width clamp both make a
+		// computed ratio wrong. offsetTop carries the padding, so it is added, not
+		// guessed. Scrolling the container by number needs no per-node element ref.
+		const node = layout?.nodes.find((n) => n.id === running);
+		const svg = scroller?.querySelector("svg");
+		if (node && scroller && layout && svg) {
+			// Offset of the svg box within the scroller's content, padding included, read
+			// from the live boxes instead of recomputed from the class list.
+			const svgBox = svg.getBoundingClientRect();
+			const scrollerBox = scroller.getBoundingClientRect();
+			const svgTop = svgBox.top - scrollerBox.top + scroller.scrollTop;
+			const scale = svgBox.width / layout.width;
+			const centre = svgTop + (node.y + node.height / 2) * scale;
+			scroller.scrollTo({ top: Math.max(0, centre - scroller.clientHeight / 2), behavior: "smooth" });
+			// Only now is this node actually revealed. Marking it seen when the layout was
+			// still loading would leave the CURRENT node unrevealed forever, because the
+			// fingerprint would never change again (Greptile, PR #843): opening the pane
+			// mid-turn is exactly when topology has not arrived yet.
+			seenRunning = running;
+		}
+		return;
+	}
+	seenRunning = running;
+});
 
 const runStarted = $derived(activeNodes.size > 0 || completedNodes.size > 0);
 // END lights only for a SUCCESSFUL finish: paused turns (HITL gates) and every
@@ -132,7 +203,23 @@ const statusLine = $derived.by(() => {
     {/if}
   </div>
 
-  <div class="flex-1 overflow-auto p-3">
+  <!-- SIO-1812: wheel/touch/key say the operator moved the view; onscroll only re-arms
+       following when they park at the bottom. See the handlers for why scroll events alone
+       cannot tell the two apart. -->
+  <!-- SIO-1812: wheel/touch say the operator moved the view; onscroll only re-arms
+       following when they park at the bottom. See the handlers for why scroll events alone
+       cannot tell our animation from their input. -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -- these handlers OBSERVE scrolling
+       to decide whether to keep auto-following; they add no behaviour a keyboard user would
+       otherwise miss. Keyboard scrolling still reaches onscroll, which re-arms following the
+       same way. A role/tabindex here would announce an interactive widget that is not one. -->
+  <div
+    bind:this={scroller}
+    onscroll={onScroll}
+    onwheel={onOperatorInput}
+    ontouchmove={onOperatorInput}
+    class="flex-1 overflow-auto p-3"
+  >
     {#if loadError}
       <div class="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg p-3">
         Failed to load the graph topology: {loadError}
