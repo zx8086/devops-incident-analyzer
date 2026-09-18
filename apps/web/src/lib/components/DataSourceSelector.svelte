@@ -45,14 +45,17 @@ function classFor(id: string, isSelected: boolean): string {
 	if (s === "misidentified") {
 		return "bg-red-100 text-red-900 border border-red-700 cursor-not-allowed";
 	}
+	// The fill carries the selection; the FOREGROUND stays dark, because white on
+	// yellow-500 is 1.92:1 -- under the 4.5:1 floor for text this small. Dark
+	// yellow-900 on the same fill is 4.52:1 and keeps fill-vs-outline intact.
 	if (s === "unready") {
 		return isSelected
-			? "bg-yellow-500 text-white border border-yellow-600"
+			? "bg-yellow-500 text-yellow-900 border border-yellow-600"
 			: "bg-yellow-50 text-yellow-900 border border-yellow-500 hover:border-yellow-600";
 	}
 	if (s === "replaced") {
 		return isSelected
-			? "bg-yellow-500 text-white border border-yellow-600 animate-pulse"
+			? "bg-yellow-500 text-yellow-900 border border-yellow-600 animate-pulse"
 			: "bg-yellow-100 text-yellow-900 border border-yellow-500 animate-pulse";
 	}
 	// ready

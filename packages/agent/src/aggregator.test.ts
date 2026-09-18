@@ -1284,6 +1284,36 @@ describe("findConfidenceScore distinguishes absent from zero (SIO-1273)", () => 
 
 // SIO-1133: the Request-Id footer is stamped DETERMINISTICALLY (== state.requestId), so a
 // report pasted into a Jira ticket carries the machine key the learn-from lane scans for.
+// SIO-1810: the model is asked for a confidence line but can omit it, and
+// rewriteConfidenceInAnswer only EDITS an existing line -- it never inserts one.
+// The web confidence badge used to cover that gap on screen; it was removed as a
+// duplicate of this very line, so the aggregator now guarantees the line itself.
+// These lock the two properties that guarantee depends on.
+describe("confidence line is guaranteed (SIO-1810)", () => {
+	test("findConfidenceScore distinguishes an absent line from a genuine zero", () => {
+		expect(findConfidenceScore("# Report\n\nNo measurement here.")).toBeNull();
+		expect(findConfidenceScore("# Report\n\nConfidence: 0.00")).toBe(0);
+	});
+
+	test("rewriteConfidenceInAnswer does NOT insert a line when none exists", () => {
+		// This is the gap the aggregator compensates for; if this ever starts
+		// inserting, the guarantee in the aggregate node becomes redundant.
+		const noLine = "# Report\n\nThe service looks degraded.";
+		expect(rewriteConfidenceInAnswer(noLine, 0.4)).toBe(noLine);
+	});
+
+	test("the guaranteed line is appended above the Request-Id footer", () => {
+		// Mirrors the aggregate node's composition order (SIO-632: confidence last,
+		// then the footer) so a report always carries a score for the operator.
+		const answer = "# Report\n\nThe service looks degraded.";
+		const guaranteed =
+			findConfidenceScore(answer) === null ? `${answer.trimEnd()}\n\nConfidence: ${(0).toFixed(2)}` : answer;
+		const out = appendRequestIdFooter(guaranteed, "1f5b2c8a-0d3e-4a9b-8c7d-2e6f4a1b9c0d");
+		expect(findConfidenceScore(out)).toBe(0);
+		expect(out.indexOf("Confidence:")).toBeLessThan(out.indexOf("**Request-Id:**"));
+	});
+});
+
 describe("appendRequestIdFooter (SIO-1133)", () => {
 	const REQ = "1f5b2c8a-0d3e-4a9b-8c7d-2e6f4a1b9c0d";
 

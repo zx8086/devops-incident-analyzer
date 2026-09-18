@@ -69,6 +69,15 @@ function inboxMessage(msgId: string, senderName: string, prompt: string, isDiges
 	};
 }
 
+// SIO-1810 (Greptile #841): assert the digest carries a real SURFACE, not just the
+// `digest-body` marker -- that marker only drives list spacing in MarkdownRenderer
+// and paints nothing, so asserting it alone would pass with the background deleted.
+// Matching "a bg-* on the same element as the marker" survives a repaint while still
+// failing if the surface is removed.
+function digestSurfaceClass(body: string): string | undefined {
+	return body.match(/class="[^"]*digest-body[^"]*"/)?.[0];
+}
+
 function renderPane(state: PiFleetState, busy = false, scopeEstates: string[] = ALL_FIXTURE_ESTATES): string {
 	return render(PiFleetPane, {
 		props: { pane: state, busy, mailboxBusy: null, ...handlers, scopeEstates },
@@ -213,9 +222,10 @@ describe("PiFleetPane", () => {
 		});
 		const body = renderPane(state);
 		expect(body).toContain("text-gray-700");
-		// SIO-1719/SIO-1810: the digest body still gets its own surface plus an accent
-		// rule, so it reads apart from the gray-50 card and from plain replies.
+		// SIO-1719/SIO-1810: the digest body gets its own surface plus an accent rule,
+		// so it reads apart from the card and from plain replies.
 		expect(body).toContain("border-l-2 border-tommy-accent-blue");
+		expect(digestSurfaceClass(body)).toMatch(/\bbg-\S+/);
 		expect(body).not.toContain("text-gray-400");
 	});
 
@@ -254,6 +264,7 @@ describe("PiFleetPane", () => {
 		// The digest keeps the surfaced treatment.
 		// SIO-1719/SIO-1810: the digest keeps a distinct surface plus the accent rule.
 		expect(body).toContain("border-l-2 border-tommy-accent-blue");
+		expect(digestSurfaceClass(body)).toMatch(/\bbg-\S+/);
 		// Both bodies stay legible: subordination is position, never dimming.
 		expect(body).not.toContain("text-gray-400");
 	});
@@ -376,6 +387,8 @@ describe("PiFleetPane", () => {
 		const body = renderPane(state);
 		expect(body).toContain("digest-body");
 		expect(body).toContain("border-l-2 border-tommy-accent-blue");
+		// The marker alone paints nothing; the surface must actually be there.
+		expect(digestSurfaceClass(body)).toMatch(/\bbg-\S+/);
 	});
 
 	// SIO-1720: six spokes must fit BESIDE an open digest on a normal window.

@@ -2236,11 +2236,24 @@ export async function aggregate(state: AgentStateType, config?: RunnableConfig):
 					"flagged claims were corrected inline and do not support the root cause; confidence was moderated rather than capped below the review threshold.",
 				)
 			: withCoverageNote;
+	// SIO-1810: the model is ASKED for a confidence line but can omit it, and
+	// rewriteConfidenceInAnswer only edits a line that already exists -- it never
+	// inserts one. That used to be survivable because the web badge rendered the
+	// structured score alongside; with the badge gone (it duplicated this line on
+	// screen) an unmeasured report would reach an operator with no confidence value
+	// and no low-confidence warning at all. Guarantee the line instead of restoring
+	// the badge: this is the half that survives a copy into a ticket, and
+	// findConfidenceScore distinguishes absent (null) from a genuine zero.
+	const withGuaranteedConfidence =
+		findConfidenceScore(withIntegrityNote) === null
+			? `${withIntegrityNote.trimEnd()}\n\nConfidence: ${cappedScore.toFixed(2)}`
+			: withIntegrityNote;
+
 	// SIO-1133: stamp the Request-Id LAST so it sits at the very bottom of the report,
 	// after every content/confidence rewrite. Deterministic (not a prompt field); post
 	// PII redaction (redactPiiContent ran on the raw LLM output far upstream), so the
 	// UUID is never mangled. This is the machine key the learn-from lane scans for.
-	const finalAnswer = appendRequestIdFooter(withIntegrityNote, state.requestId);
+	const finalAnswer = appendRequestIdFooter(withGuaranteedConfidence, state.requestId);
 
 	logger.info(
 		{ duration: Date.now() - startTime, answerLength: finalAnswer.length, confidenceScore: cappedScore },
