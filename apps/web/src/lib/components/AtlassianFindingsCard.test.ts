@@ -79,6 +79,42 @@ describe("AtlassianFindingsCard.svelte", () => {
 		expect(body).toContain("bg-red-500");
 	});
 
+	// SIO-1802: the card says WHY each ticket is there, so a false positive can be explained
+	// from the card rather than from the JQL.
+	describe("matched-by chip (SIO-1802)", () => {
+		const row = (matchedBy: string[] | undefined) => ({
+			linkedIssues: [{ key: "INC-1", summary: "s", status: "Open", ...(matchedBy ? { matchedBy } : {}) }],
+		});
+
+		test("summarises structural hits and counts keywords; the title lists every clause", () => {
+			const { body } = render(AtlassianFindingsCard, {
+				props: { findings: row(["service-text", "keyword:UnambiguousTimeoutException", "keyword:kv timeout"]) },
+			});
+			expect(body).toContain("service + 2 keywords");
+			expect(body).toContain("Matched by: service-text, keyword:UnambiguousTimeoutException, keyword:kv timeout");
+		});
+
+		test("names a label hit and a single keyword in the singular", () => {
+			const { body } = render(AtlassianFindingsCard, {
+				props: { findings: row(["service-label", "keyword:THE1"]) },
+			});
+			expect(body).toContain("label + 1 keyword");
+			expect(body).not.toContain("1 keywords");
+		});
+
+		test("an empty attribution is shown as such, not hidden (empty-focus runs keep weak hits)", () => {
+			const { body } = render(AtlassianFindingsCard, { props: { findings: row([]) } });
+			expect(body).toContain("no visible match");
+		});
+
+		test("an issue recorded before SIO-1802 renders no chip", () => {
+			const { body } = render(AtlassianFindingsCard, { props: { findings: row(undefined) } });
+			expect(body).toContain("INC-1");
+			expect(body).not.toContain("Matched");
+			expect(body).not.toContain("no visible match");
+		});
+	});
+
 	// SIO-1338: configWarning (SIO-1184 dead-project config, SIO-1337 pagination truncation)
 	// must render even without linkedIssues -- the pre-fix `hasContent` gate on linkedIssues.length
 	// alone would have made this warning invisible.

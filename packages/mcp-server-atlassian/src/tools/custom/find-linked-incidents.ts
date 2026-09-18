@@ -16,6 +16,17 @@ function escapeJqlString(value: string): string {
 	return value.replace(/[\\"]/g, "\\$&");
 }
 
+// SIO-1802: JQL `text ~ "a b"` is a stemmed BAG OF WORDS, not a phrase. Live, the keyword
+// "styles scope" matched a ticket saying "Style" and "out of scope", and the run's 15
+// results were all unrelated while the two exact prior incidents were never retrieved
+// (results are capped by recency, so junk fills every slot). A phrase needs inner quotes.
+// Same run, measured: 88 matches -> 36, and 0 -> 5 of the top 15 about the incident's own
+// service. A single word stays unquoted so stemming (timeout/timeouts) still helps it.
+function keywordTextClause(keyword: string): string {
+	const escaped = escapeJqlString(keyword);
+	return /\s/.test(keyword) ? `text ~ "\\"${escaped}\\""` : `text ~ "${escaped}"`;
+}
+
 // SIO-1093 (CodeRabbit): bound domain-term input so a large/duplicated list can't blow up the JQL/CQL
 // OR-clause count or query length. Trim, drop blanks, cap per-term length, dedupe, cap total count.
 export const MAX_ERROR_KEYWORDS = 8;
@@ -66,6 +77,14 @@ const ShapedIssueSchema = z.object({
 	resolvedAt: z.string().nullable(),
 	mttrMinutes: z.number().nullable(),
 	url: z.string().optional(),
+	matchedBy: z
+		.array(z.string())
+		.describe(
+			"SIO-1802: which search clauses this ticket visibly satisfies -- service-label, service-text, component, keyword:<term>. Labels and components are exact; text clauses are checked against summary + description only, an approximation of JQL `text ~` (which also reads comments), so an empty list means 'matched somewhere this tool cannot see', not 'did not match'.",
+		),
+	score: z
+		.number()
+		.describe("SIO-1802: label/component hit 3, service named in the text 2, each keyword 1. Issues are sorted by it."),
 });
 
 export const OutputSchema = z.object({
@@ -111,7 +130,80 @@ export interface JiraIssueRaw {
 		customfield_severity?: { value: string } | null;
 		created: string;
 		resolutiondate?: string | null;
+		// SIO-1802: the upstream returns these by default (no `fields` needed); they were
+		// simply never read. description is a string only because the call asks for markdown.
+		labels?: string[] | null;
+		components?: Array<{ name?: string }> | null;
+		description?: unknown;
 	};
+}
+
+// What the JQL was built from, so each returned ticket can be attributed to a clause.
+export interface MatchTerms {
+	service: string;
+	componentLabel?: string;
+	errorKeywords?: string[];
+}
+
+const SCORE_STRUCTURAL = 3;
+const SCORE_SERVICE_TEXT = 2;
+const SCORE_KEYWORD = 1;
+
+// SIO-1802 (Greptile, PR #831): Jira matches a phrase across whatever separates its words --
+// a newline, `**bold**`, a double space -- so a literal substring test missed hits Jira had
+// made ("kv\ntimeout", "**kv** timeout"), and a missed hit can drop a relevant ticket now
+// that attribution filters. Compare word sequences instead: lowercase, every run of
+// non-alphanumerics becomes one space, padded with a space at both ends so every word has
+// a boundary on each side. Still an approximation of `text ~`, and documented as one.
+function wordSequence(s: string): string {
+	return ` ${s
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}]+/gu, " ")
+		.trim()} `;
+}
+
+// Greptile, PR #831 round 2: a term anchored only at its START let service `api` hit
+// `apiary`, and a false `service-text` is structural, so it walked past the weak-hit
+// filter. A term now needs a boundary on BOTH sides; the only slack is a plural on its last
+// word (`timeout` hits `timeouts`), the part of Jira's stemming worth having. wordSequence
+// leaves only letters, digits and spaces, so the term needs no regex escaping.
+function containsTerm(haystack: string, term: string): boolean {
+	const words = wordSequence(term).trim();
+	return words.length > 0 && new RegExp(` ${words}(?:s|es)? `, "u").test(haystack);
+}
+
+// SIO-1802: deterministic attribution, no second Jira call and no LLM. Mirrors the additive
+// scoring of the sibling scorePage (get-runbook-for-alert.ts).
+export function attributeMatch(raw: JiraIssueRaw, terms: MatchTerms): { matchedBy: string[]; score: number } {
+	const { fields } = raw;
+	const labels = (fields.labels ?? []).map((l) => l.toLowerCase());
+	const components = (fields.components ?? []).map((c) => (c.name ?? "").toLowerCase());
+	const description =
+		typeof fields.description === "string" ? fields.description : JSON.stringify(fields.description ?? "");
+	const text = wordSequence(`${fields.summary} ${description}`);
+	const service = terms.service.trim().toLowerCase();
+	const component = terms.componentLabel?.trim().toLowerCase();
+
+	const matchedBy: string[] = [];
+	let score = 0;
+	if (service && labels.includes(service)) {
+		matchedBy.push("service-label");
+		score += SCORE_STRUCTURAL;
+	}
+	if (component && (components.includes(component) || labels.includes(component))) {
+		matchedBy.push("component");
+		score += SCORE_STRUCTURAL;
+	}
+	if (containsTerm(text, service)) {
+		matchedBy.push("service-text");
+		score += SCORE_SERVICE_TEXT;
+	}
+	for (const keyword of sanitizeErrorKeywords(terms.errorKeywords)) {
+		if (!containsTerm(text, keyword)) continue;
+		matchedBy.push(`keyword:${keyword}`);
+		score += SCORE_KEYWORD;
+	}
+	return { matchedBy, score };
 }
 
 export function buildJql({
@@ -140,7 +232,7 @@ export function buildJql({
 		...(componentLabel
 			? [`component = "${escapeJqlString(componentLabel)}"`, `labels = "${escapeJqlString(componentLabel)}"`]
 			: []),
-		...sanitizeErrorKeywords(errorKeywords).map((k) => `text ~ "${escapeJqlString(k)}"`),
+		...sanitizeErrorKeywords(errorKeywords).map(keywordTextClause),
 	];
 	parts.push(`(${matchClauses.join(" OR ")})`);
 
@@ -149,8 +241,9 @@ export function buildJql({
 	return `${parts.join(" AND ")} ORDER BY created DESC`;
 }
 
-export function shapeIssue(raw: JiraIssueRaw, siteUrl?: string): z.infer<typeof ShapedIssueSchema> {
+export function shapeIssue(raw: JiraIssueRaw, siteUrl?: string, terms?: MatchTerms): z.infer<typeof ShapedIssueSchema> {
 	const { key, fields } = raw;
+	const { matchedBy, score } = terms ? attributeMatch(raw, terms) : { matchedBy: [], score: 0 };
 
 	const severity = fields.priority?.name ?? fields.customfield_severity?.value ?? null;
 
@@ -171,6 +264,8 @@ export function shapeIssue(raw: JiraIssueRaw, siteUrl?: string): z.infer<typeof 
 		resolvedAt,
 		mttrMinutes,
 		url: siteUrl ? `${siteUrl}/browse/${key}` : undefined,
+		matchedBy,
+		score,
 	};
 }
 
@@ -207,6 +302,9 @@ export async function findLinkedIncidents(
 		// could not JSON-parse -> null -> a silent count:0. "issues" returns the issues array
 		// this tool reads; "count" would return no issues and break it.
 		searchResultMode: "issues",
+		// SIO-1802: description as plain text so attributeMatch can look for the keywords
+		// in it. It is read for attribution only and never returned, so the result stays small.
+		responseContentFormat: "markdown",
 	});
 
 	const parsed = parseAtlassianTextContent<JiraSearchResponse>(result as { content?: unknown }, {
@@ -219,7 +317,17 @@ export async function findLinkedIncidents(
 	}
 
 	const rawIssues = parsed.issues ?? [];
-	const issues = rawIssues.map((raw) => shapeIssue(raw, ctx.siteUrl));
+	// SIO-1802: best-attributed first. Array.prototype.sort is stable, so the JQL's
+	// `created DESC` order survives as the tie-break.
+	const issues = rawIssues
+		.map((raw) =>
+			shapeIssue(raw, ctx.siteUrl, {
+				service: ctx.service,
+				componentLabel: ctx.componentLabel,
+				errorKeywords: ctx.errorKeywords,
+			}),
+		)
+		.sort((a, b) => b.score - a.score);
 
 	// SIO-1336: isLast:false means more matches exist beyond this page than `count` reports --
 	// without this, count reads as the total that matched (it is only the total returned).
