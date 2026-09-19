@@ -73,16 +73,6 @@ variable "dist_bucket" {
   type        = string
 }
 
-// SIO-1821: the hub account's report topic, which lives in another account.
-// Cross-account, so it is a value in terraform.tfvars rather than a reference --
-// the same shape as dist_bucket above. Read it from the hub root's
-// monitor_report_sns_topic_arn output.
-variable "monitor_report_sns_topic_arn" {
-  description = "SNS topic in the dev hub account that monitor reports are mailed to (terraform.tfvars)."
-  type        = string
-  default     = ""
-}
-
 variable "org_tags" {
   description = "Organization-required tags applied to every resource (terraform.tfvars)."
   type        = map(string)
@@ -116,25 +106,24 @@ variable "repo_url" {
 module "agent" {
   source = "../../modules/agent"
 
-  hub_url                      = var.hub_url
-  coms_auth_token              = var.coms_auth_token
-  repo_url                     = var.repo_url
-  agent_name                   = var.agent_name
-  coms_project                 = "pi-coms-dev"
-  monitor_tz                   = "Europe/Amsterdam"
-  monitor_daily_cron           = "15 8 * * *"
-  monitor_report_sns_topic_arn = var.monitor_report_sns_topic_arn
-  subnet_id                    = var.agent_subnet_id
-  associate_public_ip          = false
-  instance_type                = "t4g.small"
-  pi_model                     = var.pi_model
-  pi_provider                  = "amazon-bedrock"
-  enable_bedrock               = true
-  readonly_role                = true
-  readonly_role_mode           = "create"
-  readonly_external_id         = var.readonly_external_id
-  bundle_s3_uri                = "s3://${var.dist_bucket}/fleet"
-  dist_bucket_arn              = "arn:aws:s3:::${var.dist_bucket}"
+  hub_url              = var.hub_url
+  coms_auth_token      = var.coms_auth_token
+  repo_url             = var.repo_url
+  agent_name           = var.agent_name
+  coms_project         = "pi-coms-dev"
+  monitor_tz           = "Europe/Amsterdam"
+  monitor_daily_cron   = "15 8 * * *"
+  subnet_id            = var.agent_subnet_id
+  associate_public_ip  = false
+  instance_type        = "t4g.small"
+  pi_model             = var.pi_model
+  pi_provider          = "amazon-bedrock"
+  enable_bedrock       = true
+  readonly_role        = true
+  readonly_role_mode   = "create"
+  readonly_external_id = var.readonly_external_id
+  bundle_s3_uri        = "s3://${var.dist_bucket}/fleet"
+  dist_bucket_arn      = "arn:aws:s3:::${var.dist_bucket}"
 }
 
 // Every 30 minutes each tagged host compares its bundle version against S3 and
