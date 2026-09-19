@@ -5,6 +5,7 @@ import { ToolMessage } from "@langchain/core/messages";
 import { type RunnableConfig, RunnableLambda } from "@langchain/core/runnables";
 import { type StructuredToolInterface, tool } from "@langchain/core/tools";
 import { z } from "zod";
+import { completeEcsEnumeration } from "./aws-absence-completion.ts";
 import { type InstrumentContext, instrumentTools, type RawToolOutput } from "./sub-agent-instrumentation.ts";
 
 interface CapturedLog {
@@ -1184,6 +1185,63 @@ describe("SIO-1268 AWS absence early exit (end to end)", () => {
 			?.invoke({ id: "s", name: "aws_ecs_list_services", args: { cluster: "shared-a" }, type: "tool_call" });
 		expect(runSignals.serviceAbsent).toBe(false);
 		expect(runSignals.absenceBlockedBy).toBe("services-incomplete:shared-b");
+	});
+
+	// SIO-1784, end to end through the real proxies: the gap the previous test leaves open is
+	// closed by the post-loop completion, and it is closed through the observeEcsPage seam rather
+	// than by calling the instrumented tool again.
+	test("the completion seam finishes an enumeration the loop left unwalked", async () => {
+		const runSignals: {
+			serviceAbsent: boolean;
+			absenceBlockedBy?: string | null;
+			observeEcsPage?: (toolName: string, content: unknown, arg: unknown) => void;
+		} = { serviceAbsent: false };
+		const { byName } = harness({ runSignals });
+
+		await byName
+			.get("aws_ecs_list_clusters")
+			?.invoke({ id: "c", name: "aws_ecs_list_clusters", args: {}, type: "tool_call" });
+		await byName
+			.get("aws_ecs_list_services")
+			?.invoke({ id: "s", name: "aws_ecs_list_services", args: { cluster: "shared-a" }, type: "tool_call" });
+		expect(runSignals.absenceBlockedBy).toBe("services-incomplete:shared-b");
+		expect(runSignals.observeEcsPage).toBeDefined();
+
+		// The completion's transport is the UNINSTRUMENTED tool, so the page never passes the
+		// duplicate check; only its result is folded back in here.
+		const walked = await completeEcsEnumeration({
+			invoke: async () => JSON.stringify({ serviceArns: [] }),
+			observe: (tool, content, arg) => runSignals.observeEcsPage?.(tool, content, arg),
+			blocker: () => runSignals.absenceBlockedBy,
+		});
+
+		expect(walked).toEqual(["shared-b"]);
+		expect(runSignals.absenceBlockedBy).toBeNull();
+		expect(runSignals.serviceAbsent).toBe(true);
+	});
+
+	// The reason the completion may not reuse the instrumented tool: re-listing a cluster the
+	// model already touched is an exact duplicate, and the duplicate check binds the ECS list
+	// tools (it sits BEFORE the RUN_BACKSTOP_EXEMPT_TOOLS carve-out). Asserted here so a later
+	// refactor that "simplifies" the completion back onto the proxies fails loudly.
+	test("re-listing an already-listed cluster through the proxy is refused as a duplicate", async () => {
+		const runSignals: { serviceAbsent: boolean; absenceBlockedBy?: string | null } = { serviceAbsent: false };
+		const { byName, services } = harness({ runSignals });
+		await byName
+			.get("aws_ecs_list_clusters")
+			?.invoke({ id: "c", name: "aws_ecs_list_clusters", args: {}, type: "tool_call" });
+		await byName
+			.get("aws_ecs_list_services")
+			?.invoke({ id: "s1", name: "aws_ecs_list_services", args: { cluster: "shared-a" }, type: "tool_call" });
+		const before = services.getCalls();
+		const second = await byName
+			.get("aws_ecs_list_services")
+			?.invoke({ id: "s2", name: "aws_ecs_list_services", args: { cluster: "shared-a" }, type: "tool_call" });
+		expect(services.getCalls()).toBe(before);
+		// The refusal reaches the model as prose, not as the marker: what matters is that the
+		// transport never ran and the model is told to reuse the earlier result.
+		const body = second instanceof ToolMessage ? String(second.content) : String(second);
+		expect(body).toContain("already made this exact call");
 	});
 
 	test("names the clause that blocks the proof, and clears it once the proof holds", async () => {

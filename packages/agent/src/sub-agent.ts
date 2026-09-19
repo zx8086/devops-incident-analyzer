@@ -18,6 +18,7 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { fetchAppMapBaseline, isAppMapBaselineEnabled } from "./app-map-baseline.ts";
 import { hasDestinationAggregation } from "./application-topology.ts";
+import { completeEcsEnumeration, unwalkedClustersFrom } from "./aws-absence-completion.ts";
 import {
 	buildRunJsOnEvidenceTool,
 	isEvidenceExecEnabled,
@@ -1858,7 +1859,13 @@ ${state.correlationFetchDirective}`
 		// salvage) because the instrumented tool instances are shared with agent.stream().
 		const rawOutputs: RawToolOutput[] = [];
 		// SIO-1777: set by the instrumentation when a complete ECS sweep matches no focus service.
-		const runSignals: { serviceAbsent: boolean; absenceBlockedBy?: string | null } = { serviceAbsent: false };
+		// SIO-1784: observeEcsPage is attached by instrumentTools, which owns the ledger; it is
+		// how the post-loop completion feeds pages back in without re-entering the proxies.
+		const runSignals: {
+			serviceAbsent: boolean;
+			absenceBlockedBy?: string | null;
+			observeEcsPage?: (toolName: string, content: unknown, arg: unknown) => void;
+		} = { serviceAbsent: false };
 		// SIO-1688: a per-run FTS5 index over the SAME pre-truncation bytes, so the
 		// parts the cap removes stay reachable through search_evidence for the rest
 		// of the run. Only built when the cap is active: with no cap nothing is cut,
@@ -2079,6 +2086,55 @@ ${state.correlationFetchDirective}`
 			},
 			truncated ? "Sub-agent completed (truncated at recursion limit; partial results)" : "Sub-agent completed",
 		);
+		// SIO-1784: the model's thoroughness decided whether a pi verify card was suppressed --
+		// one replay walked 1 of 5 clusters and proposed a card for an estate the report called a
+		// confirmed negative; the next walked all 5 and suppressed it. If unwalked clusters are
+		// the ONLY thing standing between this run and a proof, finish the enumeration with a
+		// bounded set of list calls. Runs BEFORE the not-proven log and before the result row, so
+		// both report the state after completion.
+		//
+		// Uninstrumented on purpose: a partly paginated cluster's page 1 is already a seen
+		// signature, and the duplicate check binds the ECS list tools (see the module header).
+		// Soft-failing: a throw here must never cost the run its results.
+		if (
+			dataSourceId === "aws" &&
+			runSignals.observeEcsPage &&
+			unwalkedClustersFrom(runSignals.absenceBlockedBy) !== null
+		) {
+			const observeEcsPage = runSignals.observeEcsPage;
+			const startedAt = Date.now();
+			try {
+				const toolsByName = new Map(allTools.map((t) => [t.name, t]));
+				const walked = await completeEcsEnumeration({
+					invoke: async (toolName, args) => {
+						const tool = toolsByName.get(toolName);
+						if (!tool) throw new Error(`tool unavailable: ${toolName}`);
+						return normalizeToolContent(await tool.invoke(args));
+					},
+					observe: observeEcsPage,
+					blocker: () => runSignals.absenceBlockedBy,
+				});
+				if (walked.length > 0) {
+					log.info(
+						{
+							event: "subagent.aws_absence_completed",
+							deploymentId,
+							clustersWalked: walked,
+							durationMs: Date.now() - startedAt,
+							provenAfter: runSignals.serviceAbsent,
+							blockedByAfter: runSignals.absenceBlockedBy,
+						},
+						"Completed the ECS enumeration the model left unfinished",
+					);
+				}
+			} catch (error) {
+				log.warn(
+					{ deploymentId, error: error instanceof Error ? error.message : String(error) },
+					"ECS enumeration completion failed; continuing without it",
+				);
+			}
+		}
+
 		// SIO-1783: an AWS run that hunted a focus service and could NOT prove it absent says which
 		// clause refused. Without this a verify card proposed for an estate the report calls a
 		// confirmed negative is undiagnosable after the fact.
