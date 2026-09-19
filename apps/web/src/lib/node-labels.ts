@@ -25,7 +25,10 @@ export const INCIDENT_NODES: readonly NodeLabel[] = [
 	{ id: "queryDataSource", activeLabel: "Querying", completeLabel: "Queried" },
 	{ id: "align", activeLabel: "Aligning", completeLabel: "Aligned" },
 	{ id: "fetchFleetInbox", activeLabel: "Reading fleet inbox", completeLabel: "Fleet inbox read" },
-	{ id: "aggregate", activeLabel: "Analyzing", completeLabel: "Analyzed" },
+	// SIO-1824: "Analyzing" read as stale -- this node IS the report writer (the only
+	// token-streaming incident node, sse-pump.ts OUTPUT_NODES), so it stays lit while
+	// the report visibly streams. The analysis proper is queryDataSource ("Querying").
+	{ id: "aggregate", activeLabel: "Writing report", completeLabel: "Report written" },
 	{ id: "extractFindings", activeLabel: "Extracting findings", completeLabel: "Findings" },
 	{ id: "checkConfidence", activeLabel: "Checking confidence", completeLabel: "Confidence checked" },
 	{ id: "validate", activeLabel: "Validating", completeLabel: "Validated" },
