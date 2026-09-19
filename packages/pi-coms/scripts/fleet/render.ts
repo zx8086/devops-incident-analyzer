@@ -111,8 +111,8 @@ variable "dist_bucket" {
   description = "Fleet distribution bucket of the ${spoke.env} hub account (terraform.tfvars)."
   type        = string
 }${
-	manifest.defaults.monitor_report_email
-		? `
+		manifest.defaults.monitor_report_email
+			? `
 
 // SIO-1821: the hub account's report topic, which lives in another account.
 // Cross-account, so it is a value in terraform.tfvars rather than a reference --
@@ -123,8 +123,8 @@ variable "monitor_report_sns_topic_arn" {
   type        = string
   default     = ""
 }`
-		: ""
-}
+			: ""
+	}
 
 variable "org_tags" {
   description = "Organization-required tags applied to every resource (terraform.tfvars)."
@@ -200,8 +200,8 @@ resource "aws_s3_bucket_public_access_block" "dist" {
   ignore_public_acls      = true
   restrict_public_buckets = true
 }${
-	manifest.defaults.monitor_report_email
-		? `
+			manifest.defaults.monitor_report_email
+				? `
 
 // SIO-1821: the topic every monitor in this environment mails its daily digest
 // and weekly suppression review to. Project-owned on purpose -- the estate
@@ -273,8 +273,8 @@ output "monitor_report_sns_topic_arn" {
   description = "SIO-1821: pass this to each spoke root's monitor_report_sns_topic_arn."
   value       = aws_sns_topic.monitor_reports.arn
 }`
-		: ""
-}
+				: ""
+		}
 
 // SIO-1745: superseded checkpoint bodies. Each changed checkpoint writes a new
 // content-addressed object and the manifest names only the latest, so the old
