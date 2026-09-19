@@ -53,6 +53,19 @@ variable "monitor_daily_cron" {
   default     = ""
 }
 
+variable "monitor_report_sns_topic_arn" {
+  description = "SIO-1821: SNS topic the daily digest and weekly suppression review are ALSO published to, for email delivery. Empty (the default) disables the fan-out entirely; the hub mailbox stays the system of record either way. Granting sns:Publish is keyed off this being set, so an empty value also leaves the read-only role unchanged."
+  type        = string
+  default     = ""
+
+  validation {
+    // A SUBSCRIPTION arn has a sixth field and would pass a looser check, then
+    // fail on every publish. Catch it at plan time instead.
+    condition     = var.monitor_report_sns_topic_arn == "" || can(regex("^arn:aws[a-z-]*:sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]+$", var.monitor_report_sns_topic_arn))
+    error_message = "monitor_report_sns_topic_arn must be empty or an SNS TOPIC arn (arn:aws:sns:<region>:<account>:<name>), not a subscription arn."
+  }
+}
+
 variable "coms_project" {
   description = "coms-net project namespace. Keep all accounts in one project so the laptop sees every agent; names distinguish accounts."
   type        = string

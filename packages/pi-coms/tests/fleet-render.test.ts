@@ -147,6 +147,55 @@ describe("fleet root renderer (SIO-1653)", () => {
 		expect(renderRoot(parseManifest(text), "eu-oit-prd")["terraform.tfvars"]).toContain('"BlueprintID" = ""');
 	});
 
+	// SIO-1821: the report topic renders only when the manifest asks for it, so
+	// an unset manifest produces exactly today's roots.
+	test("no monitor_report_email renders no SNS topic anywhere", () => {
+		for (const name of Object.keys(manifest.spokes)) {
+			const root = renderRoot(manifest, name);
+			expect(root["main.tf"]).not.toContain("aws_sns_topic");
+			expect(root["main.tf"]).not.toContain("monitor_report_sns_topic_arn");
+		}
+	});
+
+	test("monitor_report_email renders the topic in EVERY hub root, and a tfvar elsewhere", () => {
+		const text = EXAMPLE.replace(/^(defaults:\n)/m, "$1  monitor_report_email: true\n");
+		const tagged = parseManifest(text);
+		// The example manifest has one hub-hosting spoke per ENVIRONMENT, so this
+		// must hold for each of them, not just the first one found.
+		const hubRoots = Object.keys(tagged.spokes).filter((n) => tagged.spokes[n]?.hosts_hub === true);
+		expect(hubRoots.length).toBeGreaterThan(0);
+
+		for (const name of hubRoots) {
+			const hub = renderRoot(tagged, name)["main.tf"];
+			expect(hub).toContain('resource "aws_sns_topic" "monitor_reports"');
+			expect(hub).toContain('resource "aws_sns_topic_policy" "monitor_reports"');
+			// In the hub account the agent gets the topic by REFERENCE, not a tfvar.
+			expect(hub).toContain("monitor_report_sns_topic_arn = aws_sns_topic.monitor_reports.arn");
+		}
+
+		for (const name of Object.keys(tagged.spokes)) {
+			if (hubRoots.includes(name)) continue;
+			const spoke = renderRoot(tagged, name)["main.tf"];
+			// Cross-account: a value from tfvars, never a reference into another
+			// account's state.
+			expect(spoke).not.toContain('resource "aws_sns_topic"');
+			expect(spoke).toContain("monitor_report_sns_topic_arn = var.monitor_report_sns_topic_arn");
+			expect(spoke).toContain('variable "monitor_report_sns_topic_arn"');
+		}
+	});
+
+	// The topic name must never carry an account id or address: committed roots
+	// are identifier-free by design (the IDENTIFIER guard below covers this too,
+	// but naming it here says why).
+	test("the rendered topic carries no identifiers", () => {
+		const text = EXAMPLE.replace(/^(defaults:\n)/m, "$1  monitor_report_email: true\n");
+		const tagged = parseManifest(text);
+		const hubRoot = Object.keys(tagged.spokes).find((n) => tagged.spokes[n]?.hosts_hub === true);
+		if (!hubRoot) throw new Error("the example manifest has no hosts_hub spoke");
+		const hub = renderRoot(tagged, hubRoot)["main.tf"];
+		expect(hub).toContain('name = "pi-coms-monitor-reports"');
+	});
+
 	test("org_tags may not override a pi-coms tag", () => {
 		const text = EXAMPLE.replace(/^(defaults:\n)/m, "$1  org_tags:\n    Project: hijacked\n");
 		expect(() => parseManifest(text)).toThrow("org_tags must not set a pi-coms tag");

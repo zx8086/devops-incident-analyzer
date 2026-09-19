@@ -325,6 +325,11 @@ ENV_FILE="$AGENT_HOME/.coms-env"
   if [ -n "${BUNDLE_S3_URI:-}" ]; then echo "export BUNDLE_S3_URI='$BUNDLE_S3_URI'"; fi
   if [ -n "${MONITOR_TZ:-}" ]; then echo "export PI_MONITOR_TZ='$MONITOR_TZ'"; fi
   if [ -n "${MONITOR_DAILY_CRON:-}" ]; then echo "export PI_MONITOR_DAILY_CRON='$MONITOR_DAILY_CRON'"; fi
+  # SIO-1821: the SNS topic the digest and suppression review are also mailed
+  # to. Empty stays unset, which disables the fan-out in the monitor, so a host
+  # without a topic behaves exactly as before. The mailbox remains the system of
+  # record either way -- this variable only adds a second, best-effort sink.
+  if [ -n "${MONITOR_REPORT_SNS_TOPIC_ARN:-}" ]; then echo "export PI_MONITOR_REPORT_SNS_TOPIC_ARN='$MONITOR_REPORT_SNS_TOPIC_ARN'"; fi
   # Route the whole piagent workload (agent, monitor, aws CLI) through the
   # account's DevOpsAgentReadOnly when configured; the ini profile below
   # chains from the instance role with auto-refresh.

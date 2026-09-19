@@ -111,6 +111,21 @@ variable "dist_bucket" {
   description = "Fleet distribution bucket of the ${spoke.env} hub account (terraform.tfvars)."
   type        = string
 }
+${
+	manifest.defaults.monitor_report_email
+		? `
+// SIO-1821: the hub account's report topic, which lives in another account.
+// Cross-account, so it is a value in terraform.tfvars rather than a reference --
+// the same shape as dist_bucket above. Read it from the hub root's
+// monitor_report_sns_topic_arn output.
+variable "monitor_report_sns_topic_arn" {
+  description = "SNS topic in the ${spoke.env} hub account that monitor reports are mailed to (terraform.tfvars)."
+  type        = string
+  default     = ""
+}
+`
+		: ""
+}
 
 variable "org_tags" {
   description = "Organization-required tags applied to every resource (terraform.tfvars)."
@@ -185,6 +200,64 @@ resource "aws_s3_bucket_public_access_block" "dist" {
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
+}
+${
+	manifest.defaults.monitor_report_email
+		? `
+// SIO-1821: the topic every monitor in this environment mails its daily digest
+// and weekly suppression review to. Project-owned on purpose -- the estate
+// already carries SNS topics belonging to other teams, and their default
+// policies would accept a publish from any principal in the account. Publishing
+// fleet digests there would put operational detail about these accounts into a
+// channel someone else is on call for.
+//
+// The org's required tags arrive through the provider's default_tags, so this
+// topic is born compliant with the required-tags Config rule.
+//
+// No retention is set because the attribute does not exist on a standard topic:
+// SNS is a fan-out bus, and the 14-day guarantee lives on the hub mailbox via
+// REPORT_TTL_MS. The email copy is strictly best-effort.
+resource "aws_sns_topic" "monitor_reports" {
+  name = "pi-coms-monitor-reports"
+}
+
+// Only the spoke roles of this environment may publish. The SNS default policy
+// allows any principal in the account, which is exactly the looseness that made
+// the other teams' topics publishable by us -- not a property worth inheriting.
+resource "aws_sns_topic_policy" "monitor_reports" {
+  arn = aws_sns_topic.monitor_reports.arn
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid    = "SpokeMonitorsPublish"
+      Effect = "Allow"
+      Principal = {
+        AWS = var.monitor_report_publisher_arns
+      }
+      Action   = "sns:Publish"
+      Resource = aws_sns_topic.monitor_reports.arn
+    }]
+  })
+}
+
+// The email subscription is deliberately NOT declared here. SNS requires the
+// recipient to confirm it out of band, and a Terraform-declared subscription
+// sits "pending confirmation" in state forever until they click -- which reads
+// as drift on every plan. Subscribe once by hand:
+//   aws sns subscribe --topic-arn <arn> --protocol email --notification-endpoint <address>
+variable "monitor_report_publisher_arns" {
+  description = "SIO-1821: role ARNs allowed to publish monitor reports to the topic (the spokes' DevOpsAgentReadOnly roles). aws:PrincipalArn is the ROLE arn, never the assumed-role session arn."
+  type        = list(string)
+  default     = []
+}
+
+output "monitor_report_sns_topic_arn" {
+  description = "SIO-1821: pass this to each spoke root's monitor_report_sns_topic_arn."
+  value       = aws_sns_topic.monitor_reports.arn
+}
+`
+		: ""
 }
 
 // SIO-1745: superseded checkpoint bodies. Each changed checkpoint writes a new
@@ -293,26 +366,51 @@ import {
 	const bundleUri = hostsHub ? '"s3://${aws_s3_bucket.dist.bucket}/fleet"' : '"s3://${var.dist_bucket}/fleet"';
 	// biome-ignore lint/suspicious/noTemplateCurlyInString: SIO-1653 - HCL interpolation, not a JS template
 	const bucketArn = hostsHub ? "aws_s3_bucket.dist.arn" : '"arn:aws:s3:::${var.dist_bucket}"';
+	// SIO-1821: the module's arguments are ALIGNED, and terraform fmt aligns a
+	// block on its longest key. `monitor_report_sns_topic_arn` is longer than
+	// every key that was here, so hard-coded padding made all eight rendered
+	// roots fail `terraform fmt -check` the moment it appeared -- the exact
+	// gotcha docs/deployment/deploying-from-a-worktree.md warns about. Computing
+	// the padding keeps the output formatted whichever optional keys are present,
+	// and stays correct if a longer key is added later.
+	const agentArgs: [string, string][] = [
+		["hub_url", hostsHub ? "module.hub.hub_url" : "var.hub_url"],
+		["coms_auth_token", "var.coms_auth_token"],
+		["repo_url", "var.repo_url"],
+		["agent_name", "var.agent_name"],
+		["coms_project", hcl(hub.project ?? "default")],
+		...(manifest.defaults.monitor_tz
+			? ([["monitor_tz", hcl(manifest.defaults.monitor_tz)]] as [string, string][])
+			: []),
+		...(manifest.defaults.monitor_daily_cron
+			? ([["monitor_daily_cron", hcl(manifest.defaults.monitor_daily_cron)]] as [string, string][])
+			: []),
+		...(manifest.defaults.monitor_report_email
+			? ([
+					[
+						"monitor_report_sns_topic_arn",
+						hostsHub ? "aws_sns_topic.monitor_reports.arn" : "var.monitor_report_sns_topic_arn",
+					],
+				] as [string, string][])
+			: []),
+		["subnet_id", "var.agent_subnet_id"],
+		["associate_public_ip", "false"],
+		["instance_type", hcl(spoke.instance_type ?? manifest.defaults.instance_type)],
+		["pi_model", "var.pi_model"],
+		["pi_provider", '"amazon-bedrock"'],
+		["enable_bedrock", "true"],
+		["readonly_role", mode === "none" ? "false" : "true"],
+		["readonly_role_mode", hcl(mode)],
+		["readonly_external_id", "var.readonly_external_id"],
+		["bundle_s3_uri", bundleUri],
+		["dist_bucket_arn", bucketArn],
+	];
+	const agentPad = Math.max(...agentArgs.map(([k]) => k.length));
 	parts.push(`
 module "agent" {
   source = "../../modules/agent"
 
-  hub_url              = ${hostsHub ? "module.hub.hub_url" : "var.hub_url"}
-  coms_auth_token      = var.coms_auth_token
-  repo_url             = var.repo_url
-  agent_name           = var.agent_name
-  coms_project         = ${hcl(hub.project ?? "default")}
-${manifest.defaults.monitor_tz ? `  monitor_tz           = ${hcl(manifest.defaults.monitor_tz)}\n` : ""}${manifest.defaults.monitor_daily_cron ? `  monitor_daily_cron   = ${hcl(manifest.defaults.monitor_daily_cron)}\n` : ""}  subnet_id            = var.agent_subnet_id
-  associate_public_ip  = false
-  instance_type        = ${hcl(spoke.instance_type ?? manifest.defaults.instance_type)}
-  pi_model             = var.pi_model
-  pi_provider          = "amazon-bedrock"
-  enable_bedrock       = true
-  readonly_role        = ${mode === "none" ? "false" : "true"}
-  readonly_role_mode   = ${hcl(mode)}
-  readonly_external_id = var.readonly_external_id
-  bundle_s3_uri        = ${bundleUri}
-  dist_bucket_arn      = ${bucketArn}
+${agentArgs.map(([k, v]) => `  ${k.padEnd(agentPad)} = ${v}`).join("\n")}
 }
 
 // Every 30 minutes each tagged host compares its bundle version against S3 and
