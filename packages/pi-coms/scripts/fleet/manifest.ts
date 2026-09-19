@@ -70,9 +70,15 @@ export const HubSchema = z.object({
 	// environments never cross (tokens, buckets and CIDRs are all per hub for
 	// the same reason). Cross-account, so non-hub spokes need the VALUE while
 	// the hub-hosting root gets the topic by Terraform reference.
+	// An EMPTY string is the deliberate "this hub wants email, the topic is not
+	// applied yet" state: render then writes a placeholder that the module's
+	// variable validation rejects, so the gap fails at plan time instead of
+	// booting every host with no email. Absent means this hub does not use it.
 	monitor_report_sns_topic_arn: z
 		.string()
-		.regex(/^arn:aws[a-z-]*:sns:[a-z0-9-]+:\d{12}:[\w-]+$/, "must be an SNS TOPIC arn, not a subscription arn")
+		.refine((v) => v === "" || /^arn:aws[a-z-]*:sns:[a-z0-9-]+:\d{12}:[\w-]+$/.test(v), {
+			message: "must be an SNS TOPIC arn (or empty until the hub root is applied), not a subscription arn",
+		})
 		.optional(),
 });
 export type Hub = z.infer<typeof HubSchema>;

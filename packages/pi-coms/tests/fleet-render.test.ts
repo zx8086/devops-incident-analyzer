@@ -278,8 +278,10 @@ describe("fleet root renderer (SIO-1653)", () => {
 			const boundToPrdHub = spoke.hub === "eu-shared-services-prd";
 			if (spoke.hosts_hub || !boundToPrdHub) {
 				// The hub root gets it by Terraform reference; a spoke on ANOTHER hub
-				// must never see this hub's topic -- environments never cross.
-				expect({ name, has: tfvars.includes("monitor_report_sns_topic_arn") }).toEqual({ name, has: false });
+				// must never see this hub's ARN -- environments never cross. It may
+				// carry the placeholder, which is the "enabled but not yet applied"
+				// state and is what the next test covers.
+				expect({ name, leaked: tfvars.includes(PRD_ARN) }).toEqual({ name, leaked: false });
 			} else {
 				expect(tfvars).toContain(`monitor_report_sns_topic_arn = "${PRD_ARN}"`);
 			}
@@ -294,7 +296,7 @@ describe("fleet root renderer (SIO-1653)", () => {
 			(n) => !tagged.spokes[n]?.hosts_hub && tagged.spokes[n]?.hub !== "eu-shared-services-prd",
 		);
 		if (!devSpoke) throw new Error("the example manifest has no non-hub spoke on another hub");
-		expect(renderRoot(tagged, devSpoke)["terraform.tfvars"]).not.toContain("monitor_report_sns_topic_arn");
+		expect(renderRoot(tagged, devSpoke)["terraform.tfvars"]).not.toContain(PRD_ARN);
 	});
 
 	test("re-rendering keeps the topic arn (the hand-edit failure mode)", () => {
@@ -312,11 +314,38 @@ describe("fleet root renderer (SIO-1653)", () => {
 		expect(renderTfvars(tagged, spoke, withToken)).toContain('coms_auth_token = "MINTED"');
 	});
 
-	test("no topic arn in the manifest renders no tfvar line", () => {
-		const text = EXAMPLE.replace(/^(defaults:\n)/m, "$1  monitor_report_email: true\n");
+	// SIO-1821 follow-up (Greptile P1, verified): enabling the feature without
+	// the hub arn parsed happily, created the topic, and left every spoke with an
+	// empty env var -- reporting silently off. The ARN genuinely does not exist
+	// until the hub root is applied once, so this cannot be a hard error; it
+	// renders the same visible placeholder org_id uses, which shows up in the
+	// tfvars and fails loudly at apply rather than shipping a dead feature.
+	test("monitor_report_email without a hub arn renders a visible placeholder", () => {
+		// Empty on the hub = "this hub wants email, topic not applied yet".
+		const text = EXAMPLE.replace(/^(defaults:\n)/m, "$1  monitor_report_email: true\n").replace(
+			/^( {2}eu-shared-services-prd:\n)/m,
+			'$1    monitor_report_sns_topic_arn: ""\n',
+		);
 		const tagged = parseManifest(text);
-		for (const name of Object.keys(tagged.spokes)) {
-			expect(renderRoot(tagged, name)["terraform.tfvars"]).not.toContain("monitor_report_sns_topic_arn");
+		const spoke = Object.keys(tagged.spokes).find(
+			(n) => !tagged.spokes[n]?.hosts_hub && tagged.spokes[n]?.hub === "eu-shared-services-prd",
+		);
+		if (!spoke) throw new Error("no non-hub prd spoke in the example manifest");
+		const tfvars = renderRoot(tagged, spoke)["terraform.tfvars"];
+		expect(tfvars).toContain("<set:");
+
+		// And a hub that never asked for email leaves its spokes alone, rather
+		// than blocking their plan for a feature that environment does not use.
+		const devSpoke = Object.keys(tagged.spokes).find(
+			(n) => !tagged.spokes[n]?.hosts_hub && tagged.spokes[n]?.hub !== "eu-shared-services-prd",
+		);
+		if (!devSpoke) throw new Error("no non-hub spoke on another hub");
+		expect(renderRoot(tagged, devSpoke)["terraform.tfvars"]).not.toContain("monitor_report_sns_topic_arn");
+	});
+
+	test("no monitor_report_email renders no tfvar line at all", () => {
+		for (const name of Object.keys(manifest.spokes)) {
+			expect(renderRoot(manifest, name)["terraform.tfvars"]).not.toContain("monitor_report_sns_topic_arn");
 		}
 	});
 

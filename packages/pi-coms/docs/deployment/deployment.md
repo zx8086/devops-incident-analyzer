@@ -153,6 +153,13 @@ hubs:
 Render then writes the value into the tfvars of the non-hub spokes bound to
 **that** hub, and leaves every other spoke untouched.
 
+Chicken-and-egg: the ARN does not exist until the hub root is applied once. Set
+the key to `""` for that first pass -- render then writes a deliberately invalid
+placeholder that the module's variable validation rejects, so a forgotten ARN
+stops the plan instead of booting every host with no email. Fill it in from
+`terraform output -raw monitor_report_sns_topic_arn` in the hub root and
+re-render.
+
 Miss it and you get a green apply, a healthy host, and a silently disabled
 feature: the userdata carries `VAR=''`, the bootstrap correctly skips an empty
 value, and nothing anywhere reports a problem. Verify on the host rather than
