@@ -580,6 +580,16 @@ describe("getLowSelectivityQueries.buildQuery (SIO-1107)", () => {
 		expect(parameters).toEqual({});
 	});
 
+	// SIO-1823 (review, PR #852 P2): the caller forwards appliedLimit to executeAnalysisQuery,
+	// which only emits its "Limit Application" section for a defined limit. Returning the raw
+	// `limit` left it undefined when omitted, so a result capped at 50 read as complete.
+	test("buildQuery reports the applied limit, defaulted or explicit", () => {
+		expect(buildLowSelectivity({}).appliedLimit).toBe(DEFAULT_ANALYSIS_LIMIT);
+		expect(buildLowSelectivity({ limit: 7 }).appliedLimit).toBe(7);
+		expect(buildNonCovering({}).appliedLimit).toBe(DEFAULT_ANALYSIS_LIMIT);
+		expect(buildNonCovering({ limit: 7 }).appliedLimit).toBe(7);
+	});
+
 	test("limit splices LIMIT N at the end", () => {
 		const { query } = buildLowSelectivity({ limit: 7 });
 		expect(query).toMatch(/LIMIT 7;$/);

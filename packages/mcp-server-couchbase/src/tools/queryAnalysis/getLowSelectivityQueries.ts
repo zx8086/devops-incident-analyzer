@@ -15,12 +15,17 @@ export type LowSelectivityQueriesInput = {
 export function buildQuery(input: LowSelectivityQueriesInput): {
 	query: string;
 	parameters: Record<string, unknown>;
+	appliedLimit: number;
 } {
 	// LIMIT is zod-validated as a positive integer before this splice (SIO-667 posture:
 	// values bind as $named params; LIMIT cannot be parameterized in N1QL). SIO-1822: an
 	// omitted limit now falls back to DEFAULT_ANALYSIS_LIMIT rather than returning every row.
-	const { query } = applyAnalysisLimit(n1qlLowSelectivityQueries, input.limit);
-	return { query, parameters: {} };
+	//
+	// appliedLimit is returned so the caller can report it (review): passing the raw `limit`
+	// on to executeAnalysisQuery leaves it undefined when omitted, which suppresses the
+	// "Limit Application" section -- so a result capped at 50 would read as complete.
+	const { query, appliedLimit } = applyAnalysisLimit(n1qlLowSelectivityQueries, input.limit);
+	return { query, parameters: {}, appliedLimit };
 }
 
 export default (server: McpServer, bucket: Bucket) => {
@@ -36,8 +41,8 @@ export default (server: McpServer, bucket: Bucket) => {
 		},
 		async ({ limit }) => {
 			logger.info({ limit }, "Getting low selectivity queries");
-			const { query } = buildQuery({ limit });
-			return executeAnalysisQuery(bucket, query, "Queries With Low Index Selectivity", limit);
+			const { query, appliedLimit } = buildQuery({ limit });
+			return executeAnalysisQuery(bucket, query, "Queries With Low Index Selectivity", appliedLimit);
 		},
 	);
 };

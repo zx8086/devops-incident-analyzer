@@ -63,3 +63,75 @@ describe("FTS tools reject scope_name without bucket_name (SIO-1823)", () => {
 		expect(parseErrorEnvelope(result)._error.kind).toBe("bad-input");
 	});
 });
+
+// SIO-1823 (review, PR #852 P1): walking a bucket's scopes swallows per-scope errors so one
+// unreadable scope cannot lose the rest. But when EVERY scope fails, the old code returned
+// `indexes: []` with isError false -- which the agent cannot distinguish from "this bucket
+// has no Search indexes". Reporting absence when the lookup failed is the worse error, and
+// it is exactly the shape this repo treats as a defect.
+describe("capella_list_fts_indexes bucket-wide enumeration (SIO-1823)", () => {
+	// `name` must be set: resolveBucket returns the default bucket only when the requested
+	// name matches it, otherwise it reaches for defaultBucket.cluster.bucket(name).
+	const bucketWith = (scopes: string[], failing: Set<string>): Bucket =>
+		({
+			name: "default",
+			collections: () => ({ getAllScopes: async () => scopes.map((name) => ({ name })) }),
+			scope: (name: string) => ({
+				searchIndexes: () => ({
+					getAllIndexes: async () => {
+						if (failing.has(name)) throw new Error("authorization failed");
+						// Shape taken from the live cluster.
+						return [
+							{
+								uuid: "10a9ba93b240b58a",
+								name: `${name}Index`,
+								sourceName: "default",
+								type: "fulltext-index",
+							},
+						];
+					},
+				}),
+			}),
+		}) as unknown as Bucket;
+
+	test("every scope unreadable is an ERROR, not an empty success", async () => {
+		const all = new Set(["styles", "styles_stibo"]);
+		const result = await listFtsIndexes({ bucket_name: "default" }, bucketWith([...all], all));
+
+		expect(result.isError).toBe(true);
+		const { _error } = parseErrorEnvelope(result);
+		// server-error, NOT not-found: not-found would assert the indexes are absent, which
+		// is precisely the false conclusion this branch exists to prevent.
+		expect(_error.kind).toBe("server-error");
+		expect(_error.message).toContain("NOT evidence");
+	});
+
+	// The other half of the contract: a partial failure must still return what was read,
+	// because those indexes are real. Erroring here would lose good data.
+	test("a partial failure still returns the readable indexes", async () => {
+		const result = await listFtsIndexes(
+			{ bucket_name: "default" },
+			bucketWith(["styles", "styles_stibo"], new Set(["styles_stibo"])),
+		);
+
+		expect(result.isError).toBe(false);
+		const body = JSON.parse(result.content[0].text) as {
+			indexes: Array<{ name: string }>;
+			unreadableScopes: string[];
+		};
+		expect(body.indexes).toHaveLength(1);
+		expect(body.indexes[0].name).toBe("stylesIndex");
+		expect(body.unreadableScopes).toEqual(["styles_stibo"]);
+	});
+
+	test("a bucket with no Search indexes anywhere is a genuine empty success", async () => {
+		const result = await listFtsIndexes({ bucket_name: "default" }, {
+			name: "default",
+			collections: () => ({ getAllScopes: async () => [{ name: "orders" }] }),
+			scope: () => ({ searchIndexes: () => ({ getAllIndexes: async () => [] }) }),
+		} as unknown as Bucket);
+
+		expect(result.isError).toBe(false);
+		expect((JSON.parse(result.content[0].text) as { indexes: unknown[] }).indexes).toEqual([]);
+	});
+});

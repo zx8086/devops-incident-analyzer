@@ -43,6 +43,26 @@ export const listFtsIndexes = async (params: { bucket_name?: string; scope_name?
 					logger.warn({ error: summarizeCouchbaseError(error), scope: scope.name }, "Scope index listing failed");
 				}
 			}
+			// SIO-1823 (review): a TOTAL enumeration failure must not read as success. With
+			// every scope unreadable -- Search authorization revoked, the service down -- the
+			// loop above would otherwise return `indexes: []` with isError false, which the
+			// agent cannot tell from "this bucket genuinely has no Search indexes". Reporting
+			// absence when the lookup failed is the worse of the two errors.
+			//
+			// A PARTIAL failure still returns what was read: those indexes are real, and
+			// naming the unreadable scopes lets the agent qualify the answer.
+			if (skipped.length > 0 && indexes.length === 0) {
+				const envelope = buildToolErrorEnvelope({
+					// "server-error", not "not-found": the distinction is the whole point of this
+					// branch. not-found would tell the agent the indexes are absent, which is the
+					// false conclusion being prevented.
+					kind: "server-error",
+					message: `Could not read Search indexes from any scope in "${bucket_name}" (${skipped.length} of ${scopes.length} scopes failed). This is a lookup failure, NOT evidence that the bucket has no Search indexes.`,
+					advice:
+						'Check the Search service is running and the credentials carry Search permissions on this bucket. capella_get_cluster_health with service_types ["search"] shows whether the service answers at all.',
+				});
+				return { content: [{ type: "text" as const, text: JSON.stringify(envelope) }], isError: true };
+			}
 			if (skipped.length > 0) {
 				return {
 					content: [{ type: "text" as const, text: JSON.stringify({ indexes, unreadableScopes: skipped }, null, 2) }],
