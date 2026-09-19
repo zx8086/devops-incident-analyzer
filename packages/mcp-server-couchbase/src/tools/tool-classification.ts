@@ -14,9 +14,16 @@ const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 	"capella_ping",
 	"capella_get_buckets",
 	"capella_get_cluster_health",
+	// SIO-1823: reads the SDK's CACHED connection state, no network I/O at all.
+	"capella_get_cluster_diagnostics_report",
 	"capella_get_scopes_and_collections",
 	"capella_get_schema_for_collection",
 	"capella_get_document_by_id",
+	// SIO-1823: Search (FTS) readers. run_fts_query executes a query but mutates nothing --
+	// the Search service has no write path through these tools.
+	"capella_list_fts_indexes",
+	"capella_get_fts_index_definition",
+	"capella_run_fts_query",
 	// query analysis (system:completed_requests + system:indexes readers)
 	"capella_analyze_document_structure",
 	"capella_explain_sql_plus_plus_query",

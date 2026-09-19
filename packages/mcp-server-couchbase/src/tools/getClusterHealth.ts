@@ -2,6 +2,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Bucket } from "couchbase";
+import { ServiceType } from "couchbase";
 import { z } from "zod";
 import { resolveBucket } from "../lib/resolveBucket";
 import { logger } from "../utils/logger";
@@ -59,10 +60,15 @@ export function withLatencyMs(raw: unknown): unknown {
 // Couchbase MCP server's get_cluster_health_and_services). With bucket_name the
 // ping runs against that bucket's services; without it, against the cluster.
 // capella_ping remains the cheap text-only liveness check.
-export const getClusterHealthHandler = async (params: { bucket_name?: string }, bucket: Bucket) => {
+export const getClusterHealthHandler = async (
+	params: { bucket_name?: string; service_types?: ServiceType[] },
+	bucket: Bucket,
+) => {
 	try {
 		const target = params.bucket_name ? resolveBucket(bucket, params.bucket_name) : bucket.cluster;
-		const pingResult = await target.ping();
+		// SIO-1823: an empty array would ask the SDK to ping nothing, so treat it as absent.
+		const serviceTypes = params.service_types?.length ? params.service_types : undefined;
+		const pingResult = await (serviceTypes ? target.ping({ serviceTypes }) : target.ping());
 		// PingResult has toJSON() in the SDK; fall back to the raw object for mocks.
 		const raw =
 			typeof (pingResult as { toJSON?: () => unknown }).toJSON === "function"
@@ -91,6 +97,10 @@ export default (server: McpServer, bucket: Bucket) => {
 				"Get cluster health and running services with per-service ping latency. Each service entry reports latencyMs (MILLISECONDS -- use this one) and latencyNs (nanoseconds, same value). Do not rescale them. Typical healthy values are single-digit to low-hundreds of ms for a remote cluster. Optionally scoped to a bucket.",
 			inputSchema: {
 				bucket_name: z.string().optional().describe("Optional bucket to ping instead of the cluster"),
+				service_types: z
+					.array(z.nativeEnum(ServiceType))
+					.optional()
+					.describe("Limit the ping to these services (e.g. [\"query\",\"search\"]). Omit to ping every service."),
 			},
 			annotations: couchbaseToolAnnotations("capella_get_cluster_health"),
 		},

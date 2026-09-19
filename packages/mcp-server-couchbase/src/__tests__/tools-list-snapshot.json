@@ -49,8 +49,15 @@
 				"destructiveHint": false
 			}
 		},
+		"capella_get_cluster_diagnostics_report": {
+			"surfaceHash": "1ddb440279695a500d0ccd0120bb6682bc6f5c5c1eb83de0530a496e9f43eadf",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
 		"capella_get_cluster_health": {
-			"surfaceHash": "e34dbcf1505366591d7eeb40e24b523bf82e559a50cc8822a689dd97be1f5b89",
+			"surfaceHash": "4c05ee35f2c7922b7a92389a36a8f87e179af3ac78a2a86fc92f7e9f3d7a9420",
 			"annotations": {
 				"readOnlyHint": true,
 				"destructiveHint": false
@@ -93,6 +100,13 @@
 		},
 		"capella_get_fatal_requests": {
 			"surfaceHash": "9f2101d32cd9601f3c8d72df522a72cf6c55e5fe7a358c68481590919fb45b0d",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_get_fts_index_definition": {
+			"surfaceHash": "f61c3cad65cf2fb8a030c3ab33c9576355cfe585a0928cffa0800caca9674937",
 			"annotations": {
 				"readOnlyHint": true,
 				"destructiveHint": false
@@ -224,6 +238,13 @@
 				"destructiveHint": false
 			}
 		},
+		"capella_list_fts_indexes": {
+			"surfaceHash": "bb5a555a9079d877a60c141ca8762be91a9e084a3f5507de52b49e551401b170",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
 		"capella_list_playbooks": {
 			"surfaceHash": "632762fd54b950219fe261bc896f307fcd44a9f3352a6e3d9f2c9f75f95060fe",
 			"annotations": {
@@ -240,6 +261,13 @@
 		},
 		"capella_read_documentation": {
 			"surfaceHash": "0da3ed390d2153958c8b2dafa6d25dece55b28c9eeea8ffdfa7fa87a18f6dbfa",
+			"annotations": {
+				"readOnlyHint": true,
+				"destructiveHint": false
+			}
+		},
+		"capella_run_fts_query": {
+			"surfaceHash": "4a803ce6d4cc69954ddc57938520cf7e8d0f7a77e3e825c6e4f7b525540c7c13",
 			"annotations": {
 				"readOnlyHint": true,
 				"destructiveHint": false
