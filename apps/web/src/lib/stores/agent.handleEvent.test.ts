@@ -648,7 +648,7 @@ describe("fleet_inbox (SIO-1652)", () => {
 			environment: "prd" as const,
 			inboxes: ["eu-oit-prd", "ops"],
 			entries: [],
-			counts: { total: 0, focus: 0, critical: 0, warn: 0 },
+			counts: { total: 0, focus: 0, critical: 0, warn: 0, incidentReports: 0, dailyDigests: 0, suppressionReviews: 0 },
 			families: [],
 			alarmNames: [],
 			latestAt: null,

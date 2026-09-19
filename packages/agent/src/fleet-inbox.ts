@@ -2,7 +2,7 @@
 // SIO-1652: pure helpers behind the fetchFleetInbox node. Inbox bodies are
 // untrusted input (spoke model output, operator free text): they are classified
 // and excerpted for the card, and only structured facts reach the prompt.
-import { FINDING_LINE_RE } from "@devops-agent/pi-coms/contracts";
+import { FINDING_LINE_RE, type MonitorMessageKind, parseMonitorHeader } from "@devops-agent/pi-coms/contracts";
 import type {
 	FleetInboxCounts,
 	FleetInboxDigest,
@@ -14,7 +14,7 @@ import type {
 	FleetInboxSeverity,
 	PiComsEnvironment,
 } from "@devops-agent/shared";
-import { matchesFocus } from "@devops-agent/shared";
+import { MONITOR_INBOX_KINDS, matchesFocus } from "@devops-agent/shared";
 import { MONITOR_NAME_PREFIX, type PiInboxMessage } from "./action-tools/pi-coms-client.ts";
 import { readPiComsCapability } from "./action-tools/pi-verifier.ts";
 import type { AgentStateType } from "./state.ts";
@@ -110,46 +110,66 @@ export type MonitorFinding = {
 	detail: string;
 };
 export type MonitorReport = {
+	kind: MonitorMessageKind;
 	accountId: string;
 	topSeverity: FleetInboxSeverity;
-	findingCount: number;
+	// Incident reports only: the count the header states. null for a digest (its
+	// counts are a 24 h rollup) and a suppression review (it has none).
+	findingCount: number | null;
 	findings: MonitorFinding[];
 };
 
-// The monitor's own wire format (packages/pi-coms/scripts/monitor/report.ts,
-// formatIncidentReport): a header line, then one finding line per finding with
-// indented continuation lines. SIO-1814: the finding line's shape is the
-// monitor's shared contract, not a second regex kept in step by hand.
-const REPORT_HEADER_RE = /^\[(info|warn|critical)\] aws-(\d+): (\d+) finding\(s\)/;
-
+// The monitor's own wire format (packages/pi-coms/scripts/monitor/report.ts): a
+// header line, then one finding line per finding with indented continuation
+// lines. SIO-1814 put the finding line's shape in the monitor's shared contract;
+// SIO-1825 put the four HEADER shapes there too, after the analyzer's
+// incident-only header regex silently dropped every daily digest and suppression
+// review (they parsed as undefined and were filtered out as conversations).
 export function parseMonitorReport(text: string): MonitorReport | undefined {
 	const lines = text.split("\n");
-	const header = REPORT_HEADER_RE.exec(lines[0] ?? "");
+	const header = parseMonitorHeader(lines[0] ?? "");
 	if (!header) return undefined;
 	const findings: MonitorFinding[] = [];
-	for (const line of lines.slice(1)) {
-		const m = FINDING_LINE_RE.exec(line);
-		if (!m) {
-			// Continuation lines are indented under their finding (report.ts).
-			const open = findings.at(-1);
-			if (open && /^\s+\S/.test(line)) open.detail += `${open.detail ? " " : ""}${line.trim()}`;
-			continue;
+	// A digest's notable lines carry the same "(sev/family) resource: summary"
+	// shape behind a two-space indent, and are a 24 h rollup of findings already
+	// reported. FINDING_LINE_RE is anchored at column 0 so they never match here;
+	// skipping the whole loop makes that explicit rather than incidental, and
+	// keeps a digest's findings[] empty so nothing double-counts them.
+	if (header.kind === "incident-report") {
+		for (const line of lines.slice(1)) {
+			const m = FINDING_LINE_RE.exec(line);
+			if (!m) {
+				// Continuation lines are indented under their finding (report.ts).
+				const open = findings.at(-1);
+				if (open && /^\s+\S/.test(line)) open.detail += `${open.detail ? " " : ""}${line.trim()}`;
+				continue;
+			}
+			findings.push({
+				severity: m[1] as FleetInboxSeverity,
+				family: m[2] ?? "",
+				resource: m[3] ?? "",
+				summary: m[4] ?? "",
+				detail: "",
+			});
 		}
-		findings.push({
-			severity: m[1] as FleetInboxSeverity,
-			family: m[2] ?? "",
-			resource: m[3] ?? "",
-			summary: m[4] ?? "",
-			detail: "",
-		});
 	}
 	return {
-		accountId: header[2] ?? "",
-		topSeverity: header[1] as FleetInboxSeverity,
-		findingCount: Number(header[3]),
+		kind: header.kind,
+		accountId: header.accountId,
+		topSeverity: header.severity as FleetInboxSeverity,
+		findingCount: header.findingCount,
 		findings,
 	};
 }
+
+// The monitor kind as the inbox labels it. Kept as a mapping rather than reusing
+// the contract's names directly: `monitor-report` predates SIO-1825 and is
+// persisted in checkpointed state, so renaming it would break a resumed thread.
+const INBOX_KIND_BY_MONITOR_KIND: Record<MonitorMessageKind, FleetInboxKind> = {
+	"incident-report": "monitor-report",
+	"daily-digest": "daily-digest",
+	"suppression-review": "suppression-review",
+};
 
 export type ClassifiedMessage = {
 	kind: FleetInboxKind;
@@ -174,7 +194,7 @@ export function classifyMessage(message: PiInboxMessage, focusServices: string[]
 	const report = parseMonitorReport(message.prompt);
 	if (report) {
 		return {
-			kind: "monitor-report",
+			kind: INBOX_KIND_BY_MONITOR_KIND[report.kind],
 			severity: report.topSeverity,
 			findingCount: report.findingCount,
 			alarmNames: [...new Set(report.findings.filter((f) => f.family === "alarm").map((f) => f.resource))],
@@ -238,7 +258,7 @@ export function toEntry(inbox: string, message: PiInboxMessage, focusServices: s
 }
 
 function emptyCounts(): FleetInboxCounts {
-	return { total: 0, focus: 0, critical: 0, warn: 0 };
+	return { total: 0, focus: 0, critical: 0, warn: 0, incidentReports: 0, dailyDigests: 0, suppressionReviews: 0 };
 }
 
 export function buildEstateDigest(input: {
@@ -250,19 +270,29 @@ export function buildEstateDigest(input: {
 	focusServices?: string[];
 }): FleetInboxEstate {
 	const focusServices = input.focusServices ?? [];
-	// Monitor reports only. An estate inbox is mostly the monitor's own requests to its
-	// spoke ("You are the read-only devops agent for AWS account ... diagnose each one"):
+	// The monitor's own messages only. An estate inbox is mostly the monitor's requests to
+	// its spoke ("You are the read-only devops agent for AWS account ... diagnose each one"):
 	// one per report, carrying the prompt and none of the findings, so they doubled the
 	// card and pushed real reports out of the entry cap without adding a fact.
+	// SIO-1825: all THREE monitor kinds, not just incident reports. The daily digest is the
+	// monitor's report of record and its dead-man signal -- it ships for every account every
+	// day, and dropping it left the card reading "0 monitor report(s)" on a live account.
+	const monitorKinds = new Set<FleetInboxKind>(MONITOR_INBOX_KINDS);
 	const all = input.messages
 		.map(({ inbox, message }) => toEntry(inbox, message, focusServices))
-		.filter((entry) => entry.kind === "monitor-report")
+		.filter((entry) => monitorKinds.has(entry.kind))
 		// SIO-1815: reports naming a focus service first, newest first within each group.
 		// An estate inbox holds a day of reports for every service in the account; ordering
 		// by time alone let an unrelated account's-worth push the relevant ones past the cap.
+		// SIO-1825: then incident reports ahead of digests at equal focus. A digest is a 24 h
+		// rollup that ships daily whatever happens; an incident report is a fresh finding, so
+		// when the entry cap bites it is the incident reports that must survive it.
 		.sort(
 			(a, b) =>
-				Number(b.focus) - Number(a.focus) || b.createdAt.localeCompare(a.createdAt) || b.msgId.localeCompare(a.msgId),
+				Number(b.focus) - Number(a.focus) ||
+				Number(b.kind === "monitor-report") - Number(a.kind === "monitor-report") ||
+				b.createdAt.localeCompare(a.createdAt) ||
+				b.msgId.localeCompare(a.msgId),
 		);
 	const counts = emptyCounts();
 	const alarmNames = new Set<string>();
@@ -270,6 +300,9 @@ export function buildEstateDigest(input: {
 	let latestAt: string | null = null;
 	for (const entry of all) {
 		counts.total += 1;
+		if (entry.kind === "monitor-report") counts.incidentReports += 1;
+		else if (entry.kind === "daily-digest") counts.dailyDigests += 1;
+		else if (entry.kind === "suppression-review") counts.suppressionReviews += 1;
 		if (entry.focus) counts.focus += 1;
 		if (entry.severity === "critical") counts.critical += 1;
 		if (entry.severity === "warn") counts.warn += 1;
@@ -335,7 +368,16 @@ export function summarizeFleetInboxForPrompt(digest: FleetInboxDigest): string {
 		}
 		const c = estate.counts;
 		const focusPart = scoped ? `, ${c.focus} naming a focus service` : "";
-		let line = `- ${estate.estate} (${estate.environment}): ${c.total} monitor report(s)${focusPart}; critical=${c.critical} warn=${c.warn}`;
+		// SIO-1825: name the kinds. "3 monitor message(s)" covering one incident report and
+		// two daily digests is not three findings: a digest is a 24 h rollup that ships every
+		// day whatever happens, and reading it as an incident overstates the account's state.
+		const kindParts = [
+			c.incidentReports > 0 ? `${c.incidentReports} incident report(s)` : "",
+			c.dailyDigests > 0 ? `${c.dailyDigests} daily digest(s)` : "",
+			c.suppressionReviews > 0 ? `${c.suppressionReviews} suppression review(s)` : "",
+		].filter((p) => p !== "");
+		const breakdown = kindParts.length > 0 ? ` (${kindParts.join(", ")})` : "";
+		let line = `- ${estate.estate} (${estate.environment}): ${c.total} monitor message(s)${breakdown}${focusPart}; critical=${c.critical} warn=${c.warn}`;
 		if (estate.latestAt) line += `; latest ${estate.latestAt}`;
 		lines.push(line);
 		if (estate.families.length > 0) {
@@ -349,12 +391,12 @@ export function summarizeFleetInboxForPrompt(digest: FleetInboxDigest): string {
 			const capped =
 				focus.distinct > focus.lines.length ? ` (top ${focus.lines.length} of ${focus.distinct} distinct)` : "";
 			lines.push(`  focus findings${capped}: ${focus.lines.join("; ")}`);
-		} else if (scoped && c.total > 0) lines.push("  focus findings: none of these reports names a focus service");
+		} else if (scoped && c.total > 0) lines.push("  focus findings: none of these messages names a focus service");
 		// The counts above cover every report in the window; the per-report details are
 		// capped. Say so, or "5 naming a focus service" reads as "and here are all five".
 		if (estate.entries.length < c.total) {
 			lines.push(
-				`  detail is from ${estate.entries.length} of ${c.total} reports (focus reports first, then newest); counts and categories cover all ${c.total}`,
+				`  detail is from ${estate.entries.length} of ${c.total} messages (focus first, then incident reports, then newest); counts and categories cover all ${c.total}`,
 			);
 		}
 		if (estate.alarmNames.length > 0) lines.push(`  alarms: ${estate.alarmNames.join(", ")}`);

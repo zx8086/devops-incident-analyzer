@@ -121,8 +121,26 @@ export type PiActionResultPayload = z.infer<typeof PiActionResultPayloadSchema>;
 // facts (kind, severity, counts, alarm names, timestamps) feed the aggregator
 // prompt and the card; `excerpt` is display-only untrusted text (spoke model
 // output or operator free text), capped, and never enters a prompt.
-export const FleetInboxKindSchema = z.enum(["monitor-report", "conversation", "other"]);
+// SIO-1825: `daily-digest` and `suppression-review` are the monitor's other two
+// message kinds. They used to parse as nothing and be dropped, so the inbox read
+// empty on accounts the monitor reports on every day. `monitor-report` keeps its
+// meaning -- an INCIDENT report, the only kind carrying a fresh finding count.
+export const FleetInboxKindSchema = z.enum([
+	"monitor-report",
+	"daily-digest",
+	"suppression-review",
+	"conversation",
+	"other",
+]);
 export type FleetInboxKind = z.infer<typeof FleetInboxKindSchema>;
+
+// The monitor's own kinds, kept by buildEstateDigest. Everything else is a spoke
+// conversation or an operator note and stays out of the digest.
+export const MONITOR_INBOX_KINDS = [
+	"monitor-report",
+	"daily-digest",
+	"suppression-review",
+] as const satisfies readonly FleetInboxKind[];
 
 export const FleetInboxSeveritySchema = z.enum(["info", "warn", "critical"]);
 export type FleetInboxSeverity = z.infer<typeof FleetInboxSeveritySchema>;
@@ -166,12 +184,18 @@ export const FleetInboxEntrySchema = z.object({
 export type FleetInboxEntry = z.infer<typeof FleetInboxEntrySchema>;
 
 export const FleetInboxCountsSchema = z.object({
-	// Monitor reports only: buildEstateDigest drops every other row, so there is
-	// no per-kind breakdown left to count.
+	// Every monitor message kept for this estate, across all three monitor kinds.
 	total: z.number().int().nonnegative(),
 	focus: z.number().int().nonnegative().describe("Reports naming a focus service"),
 	critical: z.number().int().nonnegative(),
 	warn: z.number().int().nonnegative(),
+	// SIO-1825: per-kind, so a reader is never told "3 monitor report(s)" when the
+	// estate had one incident report and two daily digests. They answer different
+	// questions: an incident report is a fresh finding, a digest is a 24 h rollup
+	// and the monitor's dead-man signal.
+	incidentReports: z.number().int().nonnegative(),
+	dailyDigests: z.number().int().nonnegative(),
+	suppressionReviews: z.number().int().nonnegative(),
 });
 export type FleetInboxCounts = z.infer<typeof FleetInboxCountsSchema>;
 

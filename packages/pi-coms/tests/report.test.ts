@@ -1,12 +1,13 @@
 // tests/report.test.ts
 import { describe, expect, test } from "bun:test";
-import { FINDING_LINE_RE } from "../contracts/report.ts";
+import { FINDING_LINE_RE, parseMonitorHeader } from "../contracts/report.ts";
 import {
 	checkErrorCountsFromJournal,
 	DIAGNOSIS_RESPONSE_SCHEMA,
 	DiagnosisSchema,
 	type DigestNotable,
 	FamilySchema,
+	type Finding,
 	FindingSchema,
 	findingCountsFromJournal,
 	formatDigest,
@@ -656,4 +657,66 @@ test("SIO-1754: scaling triggers in ALARM are counted, not listed", () => {
 	const onlyScaling = formatDigest({ ...base, activeAlarms: [], scalingTriggersInAlarm: 26 });
 	expect(onlyScaling).toContain("- alarms: none in ALARM (26 autoscaling trigger(s) in ALARM not listed)");
 	expect(formatDigest({ ...base, activeAlarms: [] })).toContain("- alarms: none in ALARM\n");
+});
+
+// SIO-1825: the analyzer reads every monitor message through parseMonitorHeader. It used
+// to match only formatIncidentReport's header, so formatDigest's and
+// formatSuppressionReview's output parsed as nothing and the fleet inbox dropped them --
+// an account the monitor reported on daily read "0 monitor report(s)". This is a
+// PRODUCER-CONSUMER round trip: the header is written by the formatters below and read by
+// the shared contract, so a header change fails here instead of silently emptying the card.
+describe("SIO-1825: every formatter's header parses through the shared contract", () => {
+	const digestBase = {
+		accountId: "111122223333",
+		since: "2026-08-29T00:00:00Z",
+		findingCounts: { logs: 2 },
+		checkErrors: 0,
+		activeAlarms: [],
+		yesterdayUsd: null,
+		baselineUsd: null,
+	};
+
+	test("an incident report parses as incident-report and keeps its finding count", () => {
+		const finding: Finding = {
+			family: "logs",
+			severity: "warn",
+			resource: "/aws/lambda/x",
+			summary: "errors",
+			dedup_key: "logs:x",
+			evidence: {},
+			at: "2026-08-29T00:00:00Z",
+		};
+		const header = parseMonitorHeader(
+			formatIncidentReport("111122223333", [{ finding, diagnosis: null }]).split("\n")[0] ?? "",
+		);
+		expect(header).toEqual({ kind: "incident-report", severity: "warn", accountId: "111122223333", findingCount: 1 });
+	});
+
+	test.each([
+		["a quiet digest", () => formatDigest(digestBase)],
+		["a degraded digest", () => formatDigest({ ...digestBase, checkErrors: 2 })],
+		[
+			"a paused digest",
+			() => formatDigest({ ...digestBase, paused: { reason: "maintenance", since: "2026-08-29T00:00:00Z" } }),
+		],
+	])("%s parses as daily-digest and carries no finding count", (_label, make) => {
+		const header = parseMonitorHeader(make().split("\n")[0] ?? "");
+		expect(header?.kind).toBe("daily-digest");
+		expect(header?.accountId).toBe("111122223333");
+		// A digest's counts are a 24 h rollup, never a fresh finding count.
+		expect(header?.findingCount).toBeNull();
+	});
+
+	test("a suppression review parses as suppression-review", () => {
+		const text = formatSuppressionReview({ accountId: "111122223333", windowDays: 7, entries: [] });
+		const header = parseMonitorHeader(text.split("\n")[0] ?? "");
+		expect(header?.kind).toBe("suppression-review");
+		expect(header?.accountId).toBe("111122223333");
+		expect(header?.findingCount).toBeNull();
+	});
+
+	test("a spoke conversation is not a monitor header", () => {
+		expect(parseMonitorHeader("please check the ALB")).toBeUndefined();
+		expect(parseMonitorHeader("[warn] something else entirely")).toBeUndefined();
+	});
 });

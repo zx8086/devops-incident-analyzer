@@ -135,8 +135,26 @@ describe("extractServiceCandidates (SIO-1233)", () => {
 		["a bare json filename", "dump.json is huge"],
 		["a purely numeric token", "check 1-2-3 now"],
 		["an IP address", "traffic from 10.0.0.1 spiked"],
+		// SIO-1826: ECS/APM field names pasted from Kibana. On a live run "service.name" and
+		// "service.environment" became the focus, which emptied the Atlassian card
+		// (droppedAll) and dropped GitLab to an unscoped fallback.
+		["an ECS service field", "service.name is missing"],
+		["an ECS environment field", "filter on service.environment"],
+		["an ECS host field", "group by host.name"],
+		["a nested ECS error field", "error.exception.type was IllegalStateException"],
+		["an ECS log field", "log.level is ERROR"],
 	])("rejects %s", (_label, query) => {
 		expect(extractServiceCandidates(query)).toEqual([]);
+	});
+
+	// SIO-1826, the reported query verbatim: the real service must survive alongside the
+	// field names it was pasted with, or the fix trades one wrong focus for an empty one.
+	test("keeps the real service when a Kibana query carries field names too", () => {
+		expect(
+			extractServiceCandidates(
+				"Investigate the issue and the offending application code:-\n\n@timestamp - Sep 17, 2026 @ 21:10:42.707 service.name localcore-service service.environment production",
+			),
+		).toEqual(["localcore-service"]);
 	});
 
 	// The rejections above must not over-reach: these are real service names that merely

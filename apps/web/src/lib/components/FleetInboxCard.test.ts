@@ -32,7 +32,7 @@ const digest: FleetInboxDigest = {
 					excerpt: "[critical] aws-111122223333: 3 finding(s) - (critical/alarm) checkout-alb-5xx: Alarm entered ALARM",
 				},
 			],
-			counts: { total: 1, focus: 0, critical: 1, warn: 0 },
+			counts: { total: 1, focus: 0, critical: 1, warn: 0, incidentReports: 1, dailyDigests: 0, suppressionReviews: 0 },
 			families: [{ family: "alarm", count: 1, focus: 0 }],
 			alarmNames: ["checkout-alb-5xx"],
 			latestAt: "2026-09-06T10:00:00.000Z",
@@ -43,7 +43,7 @@ const digest: FleetInboxDigest = {
 			environment: "dev",
 			inboxes: ["eu-b2b-dev", "ops"],
 			entries: [],
-			counts: { total: 0, focus: 0, critical: 0, warn: 0 },
+			counts: { total: 0, focus: 0, critical: 0, warn: 0, incidentReports: 0, dailyDigests: 0, suppressionReviews: 0 },
 			families: [],
 			alarmNames: [],
 			latestAt: null,
@@ -58,9 +58,9 @@ describe("FleetInboxCard", () => {
 		expect(body).toContain("Fleet inbox");
 		expect(body).toContain("eu-oit-prd");
 		expect(body).toContain("prd");
-		expect(body).toContain("1 monitor report(s); critical 1, warn 0");
+		expect(body).toContain("1 monitor message(s); critical 1, warn 0");
 		expect(body).toContain("checkout-alb-5xx");
-		expect(body).toContain("monitor report");
+		expect(body).toContain("incident report");
 		expect(body).toContain("monitor-aws-111122223333 to ops");
 		expect(body).toContain("3 finding(s)");
 		expect(body).toContain("Alarm entered ALARM");
@@ -78,7 +78,15 @@ describe("FleetInboxCard", () => {
 			estates: [
 				{
 					...base,
-					counts: { total: 2, focus: 1, critical: 1, warn: 1 },
+					counts: {
+						total: 2,
+						focus: 1,
+						critical: 1,
+						warn: 1,
+						incidentReports: 2,
+						dailyDigests: 0,
+						suppressionReviews: 0,
+					},
 					families: [{ family: "logs", count: 2, focus: 1 }],
 					entries: [
 						{
@@ -97,7 +105,7 @@ describe("FleetInboxCard", () => {
 		};
 		const { body } = render(FleetInboxCard, { props: { digest: scopedDigest } });
 		expect(body).toContain("Scoped to:");
-		expect(body).toContain("2 monitor report(s), 1 naming a focus service");
+		expect(body).toContain("2 monitor message(s), 1 naming a focus service");
 		expect(body).toContain("logs 2 (1 focus)");
 		expect(body).toContain("logs: /ecs/fargate/shop-prd-log-group");
 		expect(body).toContain("1 report(s) about other services in this account");
@@ -115,7 +123,7 @@ describe("FleetInboxCard", () => {
 			estates: [{ ...base, counts: { ...base.counts, total: 25 }, entries: [{ ...report, findingCount: 15 }] }],
 		};
 		const { body } = render(FleetInboxCard, { props: { digest: capped } });
-		expect(body).toContain("Showing 1 of 25 reports");
+		expect(body).toContain("Showing 1 of 25 messages");
 		expect(body).toContain("+14 more");
 	});
 
@@ -140,6 +148,6 @@ describe("FleetInboxCard", () => {
 			estates: [{ ...(digest.estates[1] as FleetInboxDigest["estates"][number]), error: null }],
 		};
 		const { body } = render(FleetInboxCard, { props: { digest: quiet } });
-		expect(body).toContain("No monitor reports in the window.");
+		expect(body).toContain("No monitor messages in the window.");
 	});
 });
